@@ -1,7 +1,71 @@
+import type { NativeBodyFacts } from "./native-body-facts.ts";
 import { validateNativeVirtualValue } from "./native-virtual-value.ts";
 import type { VmStringSpanRegion } from "./program-image.ts";
-import { vmInstructionReadRegisters } from "./runtime-image.ts";
+import {
+	vmInstructionReadRegisters,
+	vmInstructionWriteRegisters,
+} from "./runtime-image.ts";
 import type { BytecodeInstruction } from "./runtime-image.ts";
+
+export function nativeSpanCharacterCall(
+	instructions: ReadonlyArray<BytecodeInstruction>,
+	ip: number,
+	strings: ReadonlyArray<ReadonlyArray<number>>,
+	body: Pick<NativeBodyFacts, "branchSources" | "externalEntries">,
+): "charCodeAtCall" | "codePointAtCall" | undefined {
+	const call = instructions[ip];
+	if (call?.opcode === "CALL_KNOWN")
+		return call.operation === "String.prototype.charCodeAt"
+			? "charCodeAtCall"
+			: call.operation === "String.prototype.codePointAt"
+				? "codePointAtCall"
+				: undefined;
+	if (call?.opcode !== "CALL") return undefined;
+	type Kind = "charCodeAtCall" | "codePointAtCall";
+	const visiting = new Set<number>(),
+		completed = new Map<number, Kind | undefined>();
+	let work = 0;
+	const visit = (use: number): Kind | undefined => {
+		if (completed.has(use)) return completed.get(use);
+		if (++work > 64 || visiting.has(use) || body.externalEntries.has(use))
+			return undefined;
+		visiting.add(use);
+		const previous = instructions[use - 1];
+		const predecessors = [...(body.branchSources.get(use) ?? [])];
+		if (
+			previous !== undefined &&
+			previous.opcode !== "JUMP" &&
+			previous.opcode !== "RETURN" &&
+			previous.opcode !== "THROW"
+		)
+			predecessors.push(use - 1);
+		let method: Kind | undefined;
+		for (const definition of predecessors) {
+			if (++work > 64) return undefined;
+			const op = instructions[definition]!;
+			let found: Kind | undefined;
+			if (vmInstructionWriteRegisters(op).includes(call.callee)) {
+				const name =
+					op.opcode === "LOAD_PROPERTY_STATIC"
+						? String.fromCharCode(...(strings[op.stringIndex] ?? []))
+						: undefined;
+				found =
+					name === "charCodeAt"
+						? "charCodeAtCall"
+						: name === "codePointAt"
+							? "codePointAtCall"
+							: undefined;
+			} else found = visit(definition);
+			if (found === undefined || (method !== undefined && method !== found))
+				return undefined;
+			method = found;
+		}
+		visiting.delete(use);
+		completed.set(use, method);
+		return method;
+	};
+	return visit(ip);
+}
 
 export function validateNativeStringSpan(
 	instructions: ReadonlyArray<BytecodeInstruction>,
@@ -48,6 +112,9 @@ export function validateNativeStringSpan(
 		region.claimedIps.some((ip) => !payload.has(ip))
 	)
 		fail();
+	let characterBody:
+		| Pick<NativeBodyFacts, "branchSources" | "externalEntries">
+		| undefined;
 	for (const consumer of region.consumers) {
 		const instruction = instructions[consumer.ip];
 		if (
@@ -70,24 +137,52 @@ export function validateNativeStringSpan(
 		)
 			fail();
 		if (
-			consumer.kind === "charCodeAtProperty" &&
+			(consumer.kind === "charCodeAtProperty" ||
+				consumer.kind === "codePointAtProperty") &&
 			(instruction.opcode !== "LOAD_PROPERTY_STATIC" ||
 				instruction.object !== consumer.value ||
-				String.fromCharCode(...(strings[instruction.stringIndex] ?? [])) !== "charCodeAt")
+				String.fromCharCode(...(strings[instruction.stringIndex] ?? [])) !==
+					(consumer.kind === "codePointAtProperty" ? "codePointAt" : "charCodeAt"))
 		)
 			fail();
 		if (
-			consumer.kind === "charCodeAtCall" &&
+			(consumer.kind === "charCodeAtCall" || consumer.kind === "codePointAtCall") &&
 			((instruction.opcode !== "CALL" && instruction.opcode !== "CALL_KNOWN") ||
 				instruction.thisValue !== consumer.value ||
 				instruction.arguments.length > 1 ||
 				instruction.arguments[0] === consumer.value ||
 				(instruction.opcode === "CALL_KNOWN" &&
-					(instruction.operation !== "String.prototype.charCodeAt" ||
+					(instruction.operation !==
+						(consumer.kind === "codePointAtCall"
+							? "String.prototype.codePointAt"
+							: "String.prototype.charCodeAt") ||
 						instruction.construct ||
 						instruction.argumentMode !== undefined)))
 		)
 			fail();
+		if (consumer.kind === "charCodeAtCall" || consumer.kind === "codePointAtCall") {
+			if (characterBody === undefined) {
+				const branchSources = new Map<number, Array<number>>();
+				for (const [source, op] of instructions.entries()) {
+					if (op.opcode === "JUMP" || op.opcode === "JUMP_IF") {
+						const sources = branchSources.get(op.targetIp) ?? [];
+						sources.push(source);
+						branchSources.set(op.targetIp, sources);
+					}
+				}
+				characterBody = {
+					branchSources,
+					externalEntries: new Set(region.controlFlow.exceptionalHandlerIps),
+				};
+			}
+			const method = nativeSpanCharacterCall(
+				instructions,
+				consumer.ip,
+				strings,
+				characterBody,
+			);
+			if (method !== undefined && method !== consumer.kind) fail();
+		}
 		if (
 			consumer.kind === "number" &&
 			((instruction.opcode !== "CALL" && instruction.opcode !== "CALL_KNOWN") ||

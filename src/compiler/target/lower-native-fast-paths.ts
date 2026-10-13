@@ -187,6 +187,8 @@ export type NativeNumericLoopRegionPlan = NativeNumericLoopRegionBase &
 				readonly views: ReadonlyArray<{
 					readonly object: number;
 					readonly writable: boolean;
+					readonly minOffset: number;
+					readonly maxOffset: number;
 				}>;
 		  }
 	);
@@ -1479,9 +1481,118 @@ export function numericLoopOrder(
 		: undefined;
 }
 
+type NumericLoopIndexFact = {
+	readonly base: "constant" | "index";
+	readonly offset: number;
+};
+
+function numericLoopOffset(value: number): boolean {
+	return Number.isInteger(value) && value >= -0x80000000 && value <= 0x7fffffff;
+}
+
+function numericLoopIndexFacts(
+	fn: BytecodeFunction,
+	body: NativeBodyFacts,
+	shape: NativeNumericLoopShape,
+	index: number,
+): {
+	readonly offsets: ReadonlyMap<number, number>;
+	readonly increments: ReadonlyArray<number>;
+} {
+	const written = new Set(
+		shape.order.flatMap((ip) => vmInstructionWriteRegisters(fn.instructions[ip]!)),
+	);
+	const initial = new Map<number, NumericLoopIndexFact>([
+		[index, { base: "index", offset: 0 }],
+	]);
+	const seen = new Set(written);
+	let cursor = shape.entryIp;
+	const visited = new Set<number>();
+	// Only a unique predecessor chain proves hoisted constants on every entry path.
+	for (let work = 0; work < NUMERIC_LOOP_INSTRUCTION_LIMIT; work++) {
+		if (body.externalEntries.has(cursor)) break;
+		const predecessors = bytecodePredecessors(fn, body, cursor);
+		if (predecessors.length !== 1) break;
+		const ip = predecessors[0]!;
+		if (shape.members.has(ip) || visited.has(ip)) break;
+		visited.add(ip);
+		const op = fn.instructions[ip]!;
+		for (const register of vmInstructionWriteRegisters(op)) {
+			if (seen.has(register)) continue;
+			seen.add(register);
+			if (
+				(op.opcode === "CREATE_NUMBER" || op.opcode === "CREATE_F64") &&
+				numericLoopOffset(op.value)
+			)
+				initial.set(register, { base: "constant", offset: op.value });
+		}
+		cursor = ip;
+	}
+	const before = new Map<number, Map<number, NumericLoopIndexFact>>([
+		[shape.order[0]!, initial],
+	]);
+	const offsets = new Map<number, number>();
+	const increments: Array<number> = [];
+	for (const ip of shape.order) {
+		const facts = new Map(before.get(ip));
+		const op = fn.instructions[ip]!;
+		if (op.opcode === "LOAD_PROPERTY" || op.opcode === "STORE_PROPERTY") {
+			const key = facts.get(op.key);
+			if (key?.base === "index") offsets.set(ip, key.offset);
+		}
+		if (op.opcode === "UNARY" && op.operator === "increment") {
+			const source = facts.get(op.src);
+			if (source?.base === "index" && source.offset === 0) increments.push(ip);
+		}
+		let result: NumericLoopIndexFact | undefined;
+		if (
+			(op.opcode === "CREATE_NUMBER" || op.opcode === "CREATE_F64") &&
+			numericLoopOffset(op.value)
+		)
+			result = { base: "constant", offset: op.value };
+		else if (
+			op.opcode === "MOVE" ||
+			(op.opcode === "UNARY" && (op.operator === "tonumeric" || op.operator === "+"))
+		)
+			result = facts.get(op.src);
+		else if (op.opcode === "BINARY" && (op.operator === "+" || op.operator === "-")) {
+			const left = facts.get(op.left),
+				right = facts.get(op.right);
+			if (
+				left !== undefined &&
+				right !== undefined &&
+				(right.base === "constant" || (left.base === "constant" && op.operator === "+"))
+			) {
+				const offset =
+					op.operator === "+" ? left.offset + right.offset : left.offset - right.offset;
+				if (numericLoopOffset(offset))
+					result = {
+						base: left.base === "index" || right.base === "index" ? "index" : "constant",
+						offset,
+					};
+			}
+		}
+		for (const register of vmInstructionWriteRegisters(op)) facts.delete(register);
+		if (result !== undefined && "dst" in op) facts.set(op.dst, result);
+		for (const successor of numberRecordSuccessors(op, ip)) {
+			if (successor === shape.order[0] || !shape.members.has(successor)) continue;
+			const incoming = before.get(successor);
+			if (incoming === undefined) before.set(successor, new Map(facts));
+			else
+				for (const [register, fact] of incoming) {
+					const other = facts.get(register);
+					if (other?.base !== fact.base || other.offset !== fact.offset)
+						incoming.delete(register);
+				}
+		}
+	}
+	return { offsets, increments };
+}
+
 function fixedNumericLoopStorage(
 	fn: BytecodeFunction,
 	shape: NativeNumericLoopShape,
+	body: NativeBodyFacts,
 ):
 	| Pick<
 			Extract<NativeNumericLoopRegionPlan, { kind: "fixed-numeric" }>,
@@ -1500,15 +1611,9 @@ function fixedNumericLoopStorage(
 		!memory.some(({ op }) => op.opcode === "STORE_PROPERTY")
 	)
 		return undefined;
-	const index = memory[0]!.op.key;
-	if (memory.some(({ op }) => op.key !== index)) return undefined;
 	const comparison = fn.instructions[shape.order[0]!]!;
-	if (
-		comparison.opcode !== "BINARY" ||
-		comparison.operator !== "<" ||
-		comparison.left !== index
-	)
-		return undefined;
+	if (comparison.opcode !== "BINARY" || comparison.operator !== "<") return undefined;
+	const index = comparison.left;
 	const bound = comparison.right;
 	const branch = fn.instructions[shape.order[0]! + 1];
 	if (
@@ -1518,10 +1623,7 @@ function fixedNumericLoopStorage(
 		shape.members.has(shape.order[0]! + 2)
 	)
 		return undefined;
-	const increments = shape.order.filter((ip) => {
-		const op = fn.instructions[ip]!;
-		return op.opcode === "UNARY" && op.operator === "increment" && op.src === index;
-	});
+	const { offsets, increments } = numericLoopIndexFacts(fn, body, shape, index);
 	if (increments.length !== 1) return undefined;
 	const increment = fn.instructions[increments[0]!]!;
 	if (increment.opcode !== "UNARY" || increment.dst === index) return undefined;
@@ -1533,6 +1635,7 @@ function fixedNumericLoopStorage(
 	if (
 		update.opcode !== "MOVE" ||
 		update.src !== increment.dst ||
+		shape.order.indexOf(indexWrites[0]!) <= shape.order.indexOf(increments[0]!) ||
 		shape.order.indexOf(increments[0]!) <
 			Math.max(...memory.map(({ ip }) => shape.order.indexOf(ip)))
 	)
@@ -1556,9 +1659,20 @@ function fixedNumericLoopStorage(
 			pending.push(...numberRecordSuccessors(fn.instructions[ip]!, ip));
 		}
 	}
-	const views = new Map<number, boolean>();
-	for (const { op } of memory)
-		views.set(op.object, views.get(op.object) === true || op.opcode === "STORE_PROPERTY");
+	const views = new Map<
+		number,
+		{ writable: boolean; minOffset: number; maxOffset: number }
+	>();
+	for (const { ip, op } of memory) {
+		const offset = offsets.get(ip);
+		if (offset === undefined) return undefined;
+		const previous = views.get(op.object);
+		views.set(op.object, {
+			writable: previous?.writable === true || op.opcode === "STORE_PROPERTY",
+			minOffset: Math.min(previous?.minOffset ?? offset, offset),
+			maxOffset: Math.max(previous?.maxOffset ?? offset, offset),
+		});
+	}
 	if (views.size < 2 || views.size > 4 || views.has(index) || views.has(bound))
 		return undefined;
 	for (const ip of shape.order) {
@@ -1581,7 +1695,7 @@ function fixedNumericLoopStorage(
 	return {
 		index,
 		bound,
-		views: [...views].map(([object, writable]) => ({ object, writable })),
+		views: [...views].map(([object, window]) => ({ object, ...window })),
 	};
 }
 
@@ -1593,7 +1707,8 @@ function lowerNumericLoopRegion(
 	conflicts: (ip: number) => boolean,
 ): NativeNumericLoopRegionPlan | undefined {
 	const shape = numericLoopShape(fn, body, header);
-	const storage = shape === undefined ? undefined : fixedNumericLoopStorage(fn, shape);
+	const storage =
+		shape === undefined ? undefined : fixedNumericLoopStorage(fn, shape, body);
 	if (
 		shape === undefined ||
 		conflicts(shape.entryIp) ||
@@ -2566,6 +2681,7 @@ export function selectNativeFastPaths(
 	}
 	const spanContinuations = selectNativeSpanContinuations(
 		native,
+		body,
 		stringConstants,
 		(ip) => unavailable(ip) || fusions.has(ip),
 	);

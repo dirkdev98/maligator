@@ -36,6 +36,60 @@ for (const source of [
 	rows.push(inspect(regexp, source, true, 0, collect));
 }
 rows.push(inspect(/x(?:\|([^|]*)\|)?/g, "x", false, 0, collect));
+function codePoint(source, position) {
+	const match = /x(?:\|([^|]*)\|)?/.exec(source);
+	if (match === null) return "miss";
+	const part = match[1];
+	collect();
+	if (part === undefined) return "absent";
+	const point = part.codePointAt(position);
+	return [
+		point === undefined,
+		point,
+		part.codePointAt(),
+		part.charCodeAt(position),
+		part.length,
+	];
+}
+function codePointBoundary(source, position) {
+	const part = /(\ud800)\udc00/.exec(source)[1];
+	collect();
+	return [part.codePointAt(position), part.length];
+}
+rows.push(["x|😀|z", "x|\ud800|z", "x|\udc00|z", "x||z", "x", "missing"].map(codePoint));
+rows.push(["\ud800\udc00", "x\ud800\udc00"].map(codePointBoundary));
+for (const position of [
+	undefined,
+	-0,
+	-0.5,
+	0,
+	1,
+	1.9,
+	2,
+	-1,
+	NaN,
+	-Infinity,
+	Infinity,
+	"1",
+	null,
+])
+	rows.push(codePoint("x|😀|z", position));
+for (const position of [
+	Symbol("position"),
+	1n,
+	{
+		valueOf() {
+			collect();
+			throw new RangeError("position");
+		},
+	},
+]) {
+	try {
+		codePoint("x|😀|z", position);
+	} catch (error) {
+		rows.push(error.name);
+	}
+}
 function required(source) {
 	const part = /x(?:\|([^|]*)\|)?/.exec(source)[1];
 	return part.length + part.charCodeAt(0);
@@ -61,7 +115,7 @@ function scan(regexp, source) {
 		if (match === null) continue;
 		const part = match[1];
 		collect();
-		total += part.length + Number(part);
+		total += part.length + Number(part) + part.codePointAt(0);
 	}
 	return [total, regexp.lastIndex];
 }
@@ -216,6 +270,28 @@ if (typeof process !== "undefined" && process.env.MAL_SPAN_MUTABLE === "mutable"
 	const inheritedCapture = missingIndex(/(12)/g, "12");
 	delete Array.prototype[2];
 	rows.push(inheritedCapture, missingReads, missingReceiver);
+	const savedPoint = Object.getOwnPropertyDescriptor(String.prototype, "codePointAt"),
+		pointEvents = [];
+	Object.defineProperty(String.prototype, "codePointAt", {
+		configurable: true,
+		get() {
+			pointEvents.push(String(this));
+			collect();
+			return savedPoint.value;
+		},
+	});
+	rows.push(codePoint("x|😀|z", 0), pointEvents);
+	Object.defineProperty(String.prototype, "codePointAt", savedPoint);
+	rows.push(
+		codePoint("x|😀|z", {
+			valueOf() {
+				String.prototype.codePointAt = () => 321;
+				collect();
+				return 0;
+			},
+		}),
+	);
+	Object.defineProperty(String.prototype, "codePointAt", savedPoint);
 	const savedCharacter = Object.getOwnPropertyDescriptor(String.prototype, "charCodeAt");
 	const receiverEvents = [];
 	Object.defineProperty(String.prototype, "charCodeAt", {

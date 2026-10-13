@@ -78,7 +78,7 @@ describe("span continuations from split projections", () => {
 		expect(chain.methodIdentity).toBe("authority-invariant");
 		const emitted = emitCompiledFunction(native, 1, "", false)!.source;
 		expect(emitted).toContain(
-			"mal_builtin_string_span_char_code_at(MAL_VALUE_UNDEFINED, true,",
+			"mal_builtin_string_span_character(MAL_VALUE_UNDEFINED, true,",
 		);
 		expect(emitted).toContain(`__string_char_code_at_${chain.callIp}_captured = true;`);
 	});
@@ -108,6 +108,8 @@ describe("span continuations from split projections", () => {
 		["charCodeAtProperty", "charCodeAtCall"],
 		["charCodeAtCall", "charCodeAtProperty"],
 		["number", "charCodeAtCall"],
+		["charCodeAtProperty", "codePointAtProperty"],
+		["charCodeAtCall", "codePointAtCall"],
 	] as const)("rejects a %s continuation forged as %s", (original, kind) => {
 		const image = compile(
 			"const part=source.split('|')[1]; return part.charCodeAt(escape)+Number(part);",
@@ -138,6 +140,20 @@ describe("span continuations from split projections", () => {
 			}),
 		).toThrow(/invalid or stale storage plan/);
 	});
+
+	it.each(["escape ? 0 : 1", "observe()"])(
+		"retains captured code-point identity across argument evaluation: %s",
+		(argument) => {
+			const image = compile(
+				`const part=source.split('|')[1]; return [part.codePointAt(${argument}),part.length];`,
+			);
+			const [plan] = image.native.functions[1]!.storage!.spanContinuations;
+			expect(plan!.consumers.map((c) => c.kind)).toContain("codePointAtCall");
+			expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+				image,
+			);
+		},
+	);
 	it("materializes before an observing store while retaining projected reads", () => {
 		const image = compile(
 			"const part=source.split('|')[1];observe.saved=part;return part.length;",
@@ -160,6 +176,31 @@ describe("span continuations from split projections", () => {
 });
 
 describe("span continuations from regexp captures", () => {
+	it.each(["mutable", "locked"] as const)(
+		"shares code-point consumers across split and capture spans under %s primordials",
+		(mode) => {
+			for (const producer of ["source.split('|')[1]", "observe.exec(source)[1]"]) {
+				const image = compile(
+					`const part=${producer}; if(part===undefined)return -1;
+ const point=part.codePointAt(escape); if(point===undefined)return part; return point+part.length+part.charCodeAt(0);`,
+					mode,
+				);
+				const native = image.native.functions[1]!;
+				const [plan] = native.storage!.spanContinuations;
+				expect(plan).toBeDefined();
+				expect(plan!.consumers.map((consumer) => consumer.kind)).toContain(
+					"codePointAtCall",
+				);
+				const emitted = emitCompiledFunction(native, 1, "", false)!.source;
+				expect(emitted).toContain("MAL_STRING_CHARACTER_CODE_POINT_AT");
+				expect(emitted).toContain("mal_builtin_string_span_character(");
+				expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+					image,
+				);
+			}
+		},
+	);
+
 	const capture = `const match=observe.exec(source); if(match===null)return -1;
  const part=match[1]; if(part===undefined)return 0; const size=part.length;
  if(escape)return part; return part.charCodeAt(0)+Number(part)+size;`;

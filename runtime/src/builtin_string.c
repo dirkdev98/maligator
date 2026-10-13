@@ -1105,14 +1105,8 @@ static MalValue mal_builtin_string_prototype_code_point_at(MalVm *vm, MalValue t
 
     // Repeated reads of a rope receiver would each descend it; flatten once.
     if (string->storage == MAL_STRING_STORAGE_CONS) mal_string_flat_segment(string);
-    usize index = (usize) position;
-    c16 first = mal_string_code_unit_at(string, index);
-    u32 code_point = first;
-    if (mal_utf16_is_lead_surrogate(first) && index + 1 < mal_string_length(string)) {
-        c16 second = mal_string_code_unit_at(string, index + 1);
-        if (mal_utf16_is_trail_surrogate(second)) code_point = mal_utf16_compose_pair(first, second);
-    }
-    MalValue result = mal_value_from_i32((i32) code_point);
+    MalValue result = mal_value_from_i32((i32) mal_builtin_string_code_point_in_range(
+        string, (usize) position, mal_string_length(string)));
     mal_builtin_string_root_dispose(&string_root);
     return result;
 }
@@ -1737,17 +1731,28 @@ bool mal_builtin_string_range_span_init(
     return true;
 }
 
-bool mal_builtin_string_span_char_code_at(
+bool mal_builtin_string_span_character(
     MalValue callee, bool locked, MalValue subject, usize start, usize end,
-    MalValue position, f64 *out
+    MalValue position, MalStringCharacterOp operation, MalValue *out
 ) {
-    if ((!locked && (!mal_value_is_native_function_object(callee) ||
-        mal_native_function_object_callback(mal_value_to_native_function_object(callee)) != mal_builtin_string_prototype_char_code_at)) ||
+    if ((operation != MAL_STRING_CHARACTER_CHAR_CODE_AT && operation != MAL_STRING_CHARACTER_CODE_POINT_AT) ||
+        (!locked && (!mal_value_is_native_function_object(callee) ||
+         mal_native_function_object_callback(mal_value_to_native_function_object(callee)) !=
+            (operation == MAL_STRING_CHARACTER_CODE_POINT_AT
+                ? mal_builtin_string_prototype_code_point_at : mal_builtin_string_prototype_char_code_at))) ||
         (!mal_value_is_undefined(position) && !mal_ops_is_number(position))) return false;
     f64 index = mal_value_is_undefined(position) ? 0 : mal_ops_number_to_integer_or_infinity(mal_ops_number_as_f64(position));
-    *out = index < 0 || index >= (f64) (end - start) ? NAN :
-        (f64) mal_string_code_unit_at(mal_value_to_string(subject), start + (usize) index);
-    MAL_PERF_COUNT(string_span_character_reads);
+    if (index < 0 || index >= (f64) (end - start)) {
+        *out = operation == MAL_STRING_CHARACTER_CODE_POINT_AT ? MAL_VALUE_UNDEFINED : mal_ops_number_value(NAN);
+    } else {
+        MalString *string = mal_value_to_string(subject);
+        usize absolute = start + (usize) index;
+        *out = mal_value_from_i32((i32) (operation == MAL_STRING_CHARACTER_CODE_POINT_AT
+            ? mal_builtin_string_code_point_in_range(string, absolute, end)
+            : mal_string_code_unit_at(string, absolute)));
+    }
+    if (operation == MAL_STRING_CHARACTER_CODE_POINT_AT) MAL_PERF_COUNT(string_span_code_point_reads);
+    else MAL_PERF_COUNT(string_span_character_reads);
     return true;
 }
 

@@ -1,3 +1,5 @@
+import type { NativeBodyFacts } from "./native-body-facts.ts";
+import { nativeSpanCharacterCall } from "./native-string-span.ts";
 import {
 	nativeVirtualValueFlow,
 	validateNativeVirtualValue,
@@ -16,6 +18,7 @@ export interface NativeSpanContinuation {
 
 export function selectNativeSpanContinuations(
 	native: NativeFunctionPlan,
+	body: NativeBodyFacts,
 	strings: ReadonlyArray<ReadonlyArray<number>>,
 	unavailable: (ip: number) => boolean,
 ): Array<NativeSpanContinuation> {
@@ -75,6 +78,7 @@ export function selectNativeSpanContinuations(
 					break;
 				}
 				const value = reads[0]!;
+				const characterCall = nativeSpanCharacterCall(fn.instructions, ip, strings, body);
 				const callee = fn.instructions[ip - 1];
 				const numberCallee =
 					op.opcode === "CALL" &&
@@ -91,21 +95,26 @@ export function selectNativeSpanContinuations(
 				else if (
 					op.opcode === "LOAD_PROPERTY_STATIC" &&
 					op.object === value &&
-					String.fromCharCode(...(strings[op.stringIndex] ?? [])) === "charCodeAt"
+					["charCodeAt", "codePointAt"].includes(
+						String.fromCharCode(...(strings[op.stringIndex] ?? [])),
+					)
 				)
-					kind = "charCodeAtProperty";
+					kind =
+						String.fromCharCode(...(strings[op.stringIndex] ?? [])) === "codePointAt"
+							? "codePointAtProperty"
+							: "charCodeAtProperty";
 				else if (
 					(op.opcode === "CALL" || op.opcode === "CALL_KNOWN") &&
 					op.thisValue === value &&
 					op.arguments.length <= 1 &&
 					op.arguments[0] !== value &&
 					(op.opcode === "CALL_KNOWN"
-						? op.operation === "String.prototype.charCodeAt" &&
+						? characterCall !== undefined &&
 							!op.construct &&
 							op.argumentMode === undefined
-						: materializingObservers.has(ip))
+						: characterCall !== undefined || materializingObservers.has(ip))
 				)
-					kind = "charCodeAtCall";
+					kind = characterCall ?? "charCodeAtCall";
 				else if (
 					(op.opcode === "CALL" || op.opcode === "CALL_KNOWN") &&
 					op.arguments.length === 1 &&

@@ -6,6 +6,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../../src/build-config.ts";
 import {
 	buildBackendPairFromOneProgramImage,
+	buildNativeBinaryResult,
 	HOST_MAIN,
 	runToStdout,
 	STRESS_ENV,
@@ -16,6 +17,34 @@ const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-string-span-"));
 afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 
 describe("composable string spans", () => {
+	it("retains captured code-point method realms during coercing fallback", () => {
+		const realmFixture = "tests/local/string-span-code-points-realms.js";
+		const expected = execFileSync(
+			process.execPath,
+			[
+				"-e",
+				`globalThis.$262 = { createRealm() { return { global: require("node:vm").runInNewContext("globalThis") }; } }; require(${JSON.stringify(path.resolve(realmFixture))});`,
+			],
+			{ encoding: "utf8" },
+		);
+		for (const compiled of [true, false]) {
+			const built = buildNativeBinaryResult({
+				fixture: realmFixture,
+				name: `span-code-points-realms-${compiled}`,
+				compiled,
+				mainFile: "runtime/test262_main.c",
+				outDir,
+				config: resolveBuildConfig({ engine: { primordials: "mutable", realms: true } }),
+			});
+			for (const stress of [{}, STRESS_ENV])
+				expect(
+					runToStdout(built.binaryPath, {
+						env: { MAL_TEST262: "1", MAL_HOST_GC: "1", ...stress },
+						timeoutMs: 60_000,
+					}),
+				).toBe(expected);
+		}
+	}, 600_000);
 	it.each(["mutable", "locked"] as const)(
 		"preserves projections, escaping branches, effects, and rooted sources under %s primordials",
 		(primordials) => {
@@ -80,6 +109,11 @@ describe("composable string spans", () => {
 			);
 			expect(characters).not.toBeNull();
 			expect(Number(characters![1])).toBeGreaterThan(0);
+			const codePoints = measured.stderr.match(
+				/\[perf-string-span-code-point-stats\] reads=(\d+)/,
+			);
+			expect(codePoints).not.toBeNull();
+			expect(Number(codePoints![1])).toBeGreaterThan(0);
 			const substring = measured.stderr.match(
 				/\[perf-string-span-substring-stats\] admissions=(\d+)/,
 			);

@@ -110,6 +110,7 @@
 				"src/compiler/core/compiler-site-facts.ts",
 				"src/compiler/core/core-analysis-manager.ts",
 				"src/compiler/core/core-analysis-scratch.ts",
+				"src/compiler/core/core-array-initialization.ts",
 				"src/compiler/core/core-array-iteration.ts",
 				"src/compiler/core/core-builder.ts",
 				"src/compiler/core/core-call-graph.ts",

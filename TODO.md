@@ -435,7 +435,7 @@ numeric sorting, stack objects, and string projections.
       control-flow escapes and missing locked character-method authority; both are
       repaired, with 71 focused span/Core and 16 regexp emission checks passing.
       Regexp and slice Linux ASan/UBSan checks pass. Split native checks pass after
-      adding an executed numeric callback path; its sanitizer rerun remains pending.
+      adding an executed numeric callback path; both sanitizer rerun modes pass.
 - [ ] Broaden numeric comparator invocation to fixed argument snapshots, missing
       and default parameters, bounded rest, and comparator-owned captured locals.
       Implemented through the existing two-number callback ABI and per-activation
@@ -474,13 +474,30 @@ numeric sorting, stack objects, and string projections.
       effects, and generic BigInt fallback. Implemented through explicit guarded
       invocation families and the shared VM callback entry; fixed argument snapshots,
       rest, every numeric element kind, and generic resizable/shared inputs are covered
-      by the new fixture. Focused units pass; native verification remains pending.
+      by the new fixture. Focused units and all three Linux ASan/UBSan checks pass,
+      including foreign realms; measurement remains pending.
 - [ ] Admit `substring` as a shared span producer using its own swap/clamp bounds
       normalization and the existing rooted lifetime and consumer contract. Implemented
       with one shared range normalizer and validated producer metadata; 78 focused
-      compiler and 11 emission checks pass. Native verification remains pending.
+      compiler and 11 emission checks pass. Both mutable/locked Linux ASan/UBSan checks
+      pass; measurement remains pending.
 - [ ] Widen fixed numeric storage regions to bounded affine index windows such as
       `i + constant`; validate each view's full window once and preserve overlap order.
+      Implemented with bounded reaching facts, unanimous joins, dynamic numeric start
+      admission, and per-view offsets rederived by artifact validation. The existing
+      instruction/view budgets and two loop bodies remain; 91 focused plan, integer-loop,
+      and codec checks pass. Expanded native verification and measurement remain pending.
+- [ ] Apply the storage contract to Int8, Uint8, Uint8Clamped, Int16, and Uint16 views.
+      Runtime admission and byte-safe numeric transport are implemented; the existing
+      clamping and integer conversion helpers retain store semantics. All nine numeric
+      kinds pass a Node-derived conversion and guard probe under ASan/UBSan; full
+      compiled/interpreted fixture verification and measurement remain pending.
+- [ ] Compose `codePointAt` with range, split, and regexp spans; keep surrogate-pair
+      reads within the retained span and preserve undefined results and late observers.
+      Implemented through the shared numeric-character helper and bounded captured-method
+      proof; 76 focused compiler checks, Node oracles, and C syntax checks pass. Actual
+      regions are selected for all producers in both primordial modes; expanded native
+      verification, foreign-realm fallback, and measurement remain pending.
 
 | Order | Slice                        | Owning work and exit condition                                                                                                                                  |
 | ----- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |

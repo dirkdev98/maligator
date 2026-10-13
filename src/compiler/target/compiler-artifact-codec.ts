@@ -95,7 +95,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 204;
+export const COMPILER_ARTIFACT_VERSION = 205;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -843,6 +843,8 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 			for (const view of plan.views) {
 				w.i32(view.object);
 				w.u8(view.writable ? 1 : 0);
+				w.i32(view.minOffset);
+				w.i32(view.maxOffset);
 			}
 		}
 		w.i32(plan.id);
@@ -1007,6 +1009,8 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 					"materialize",
 					"charCodeAtProperty",
 					"charCodeAtCall",
+					"codePointAtProperty",
+					"codePointAtCall",
 				].indexOf(consumer.kind),
 			);
 		}
@@ -1287,11 +1291,16 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 						kind: "fixed-numeric" as const,
 						index: r.i32(),
 						bound: r.i32(),
-						views: Array.from({ length: r.count(5) }, () => {
+						views: Array.from({ length: r.count(13) }, () => {
 							const object = r.i32(),
 								writable = r.u8();
 							if (writable > 1) throw new RangeError("Invalid numeric loop view");
-							return { object, writable: writable === 1 };
+							return {
+								object,
+								writable: writable === 1,
+								minOffset: r.i32(),
+								maxOffset: r.i32(),
+							};
 						}),
 					};
 		const id = r.i32(),
@@ -1520,6 +1529,8 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 							"materialize",
 							"charCodeAtProperty",
 							"charCodeAtCall",
+							"codePointAtProperty",
+							"codePointAtCall",
 						] as const
 					)[r.u8()];
 				if (kind === undefined)
@@ -2413,6 +2424,8 @@ function writeCompilerArtifact(
 								"materialize",
 								"charCodeAtProperty",
 								"charCodeAtCall",
+								"codePointAtProperty",
+								"codePointAtCall",
 							].indexOf(consumer.kind),
 						);
 					}
@@ -5207,6 +5220,8 @@ function readCompilerArtifact(
 								"materialize",
 								"charCodeAtProperty",
 								"charCodeAtCall",
+								"codePointAtProperty",
+								"codePointAtCall",
 							] as const
 						)[tag];
 						if (kind === undefined)

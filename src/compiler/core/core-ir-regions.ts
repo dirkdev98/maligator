@@ -156,6 +156,8 @@ export interface CoreStringSpanConsumer {
 		| "number"
 		| "charCodeAtProperty"
 		| "charCodeAtCall"
+		| "codePointAtProperty"
+		| "codePointAtCall"
 		| "materialize";
 }
 

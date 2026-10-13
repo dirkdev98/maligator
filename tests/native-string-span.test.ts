@@ -41,6 +41,33 @@ const branching = `const part = value.slice(start, end); const length = part.len
 
 describe("composable string spans", () => {
 	it.each(["mutable", "locked"] as const)(
+		"composes code points with both range producers under %s primordials",
+		(mode) => {
+			for (const operation of ["slice", "substring"]) {
+				const image = compile(
+					`const part=value.${operation}(start,end); observer();
+ if(escape)return part; return [part.codePointAt(0),part.codePointAt(),part.charCodeAt(1),part.length,Number(part)];`,
+					mode,
+				);
+				const [region] = spans(image);
+				expect(region).toBeDefined();
+				expect(region!.consumers.map((consumer) => consumer.kind)).toEqual(
+					expect.arrayContaining([
+						"codePointAtCall",
+						"charCodeAtCall",
+						"length",
+						"number",
+						"materialize",
+					]),
+				);
+				expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+					image,
+				);
+			}
+		},
+	);
+
+	it.each(["mutable", "locked"] as const)(
 		"shares substring bounds with the span consumers under %s primordials",
 		(mode) => {
 			const image = compile(branching.replace(".slice(", ".substring("), mode);
@@ -93,6 +120,27 @@ describe("composable string spans", () => {
 					},
 				}),
 			).toThrow(/string-span/i);
+		},
+	);
+
+	it.each(["mutable", "locked"] as const)(
+		"retains undefined in code-point result storage under %s primordials",
+		(mode) => {
+			const image = compile(
+				"const part=value.substring(start,end); const point=part.codePointAt(escape); return [point===undefined,point,part.length];",
+				mode,
+			);
+			const region = spans(image)[0]!;
+			const native = image.native.functions.find((fn) =>
+				fn.specializations.includes(region),
+			)!;
+			const call =
+				native.body.instructions[
+					region.consumers.find((c) => c.kind === "codePointAtCall")!.ip
+				]!;
+			if (call.opcode !== "CALL" && call.opcode !== "CALL_KNOWN")
+				throw new Error("Missing code-point call");
+			expect(native.registerRepresentations[call.dst]).toBe("boxed");
 		},
 	);
 	it.each(["mutable", "locked"] as const)(
@@ -191,6 +239,8 @@ describe("composable string spans", () => {
 		["charCodeAtCall", "charCodeAtProperty"],
 		["length", "charCodeAtProperty"],
 		["number", "charCodeAtCall"],
+		["charCodeAtProperty", "codePointAtProperty"],
+		["charCodeAtCall", "codePointAtCall"],
 	] as const)("rejects a %s consumer forged as %s", (original, kind) => {
 		const image = compile(
 			"const part=value.slice(start,end); return part.charCodeAt(escape)+part.length+Number(part);",

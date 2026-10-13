@@ -3728,9 +3728,12 @@ function stringSpanCandidates(
 			else if (
 				opcode === "loadPropertyStatic" &&
 				use.position === 0 &&
-				staticPropertyNamed(program, fn, instruction, "charCodeAt")
+				(staticPropertyNamed(program, fn, instruction, "charCodeAt") ||
+					staticPropertyNamed(program, fn, instruction, "codePointAt"))
 			)
-				kind = "charCodeAtProperty";
+				kind = staticPropertyNamed(program, fn, instruction, "codePointAt")
+					? "codePointAtProperty"
+					: "charCodeAtProperty";
 			else if (
 				(opcode === "call" &&
 					use.position === 1 &&
@@ -3750,10 +3753,16 @@ function stringSpanCandidates(
 					callAttrs.argumentMode === undefined &&
 					(position === undefined || root(position) !== resultRoot) &&
 					(opcode === "callKnown"
-						? callAttrs.operation === "String.prototype.charCodeAt"
-						: staticPropertyNamed(program, fn, method, "charCodeAt"))
+						? callAttrs.operation === "String.prototype.charCodeAt" ||
+							callAttrs.operation === "String.prototype.codePointAt"
+						: staticPropertyNamed(program, fn, method, "charCodeAt") ||
+							staticPropertyNamed(program, fn, method, "codePointAt"))
 				)
-					kind = "charCodeAtCall";
+					kind =
+						callAttrs.operation === "String.prototype.codePointAt" ||
+						staticPropertyNamed(program, fn, method, "codePointAt")
+							? "codePointAtCall"
+							: "charCodeAtCall";
 			} else if (
 				opcode === "binary" &&
 				(fn.instructionAttributes(instruction).operator === "===" ||

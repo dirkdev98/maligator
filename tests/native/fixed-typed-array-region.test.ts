@@ -59,7 +59,7 @@ describe("fixed TypedArray storage regions", () => {
 			expect(measured.status, measured.stderr).toBe(0);
 			expect(measured.stdout).toBe(expected);
 			const stats = measured.stderr.match(
-				/\[perf-typed-array-region-stats\] admissions=(\d+) i32_views=(\d+) u32_views=(\d+) f32_views=(\d+) f64_views=(\d+) f64_regions=(\d+)/,
+				/\[perf-typed-array-region-stats\] admissions=(\d+) i32_views=(\d+) u32_views=(\d+) f32_views=(\d+) f64_views=(\d+) f64_regions=(\d+) i8_views=(\d+) u8_views=(\d+) u8c_views=(\d+) i16_views=(\d+) u16_views=(\d+) affine_regions=(\d+)/,
 			);
 			expect(stats).not.toBeNull();
 			for (const count of stats!.slice(1)) expect(Number(count)).toBeGreaterThan(0);

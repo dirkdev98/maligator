@@ -33,6 +33,24 @@ function characters(value, start, end, position, effect) {
 	effect();
 	return [length, part.charCodeAt(position), part.charCodeAt(), part.length];
 }
+function codePoints(value, start, end, position, effect) {
+	const part = value.slice(start, end);
+	effect();
+	const point = part.codePointAt(position);
+	return [
+		point === undefined,
+		point,
+		part.codePointAt(),
+		part.charCodeAt(position),
+		part.length,
+	];
+}
+function substringPoints(value, position) {
+	const part = value.substring(3, 1);
+	collect();
+	const point = part.codePointAt(position);
+	return [point === undefined, point, part.codePointAt(), part.length];
+}
 function substring(value, start, end, escape, observer) {
 	const part = value.substring(start, end);
 	const length = part.length;
@@ -77,10 +95,58 @@ for (const value of ["xabz", "x12z", "x-0z", "xInfinityz", "x😀z", "", "x 7 z"
 	}
 }
 observations.push(["xabz", "😀", "12"].map(substringMissing));
+observations.push(["x😀z", "x\ud800z", "x\udc00z", "x12z"].map(substringPoints));
+for (const value of ["x😀z", "x\ud800z", "x\udc00z", "x\ud800az", "x\udc00\ud800z", ""]) {
+	for (const bounds of [
+		[1, 3],
+		[1, 2],
+		[2, 3],
+		[0, 0],
+		[0, value.length],
+	]) {
+		for (const position of [
+			undefined,
+			-0,
+			-0.5,
+			0,
+			1,
+			1.9,
+			2,
+			-1,
+			NaN,
+			-Infinity,
+			Infinity,
+			"1",
+			null,
+		])
+			observations.push(codePoints(value, bounds[0], bounds[1], position, collect));
+	}
+}
+for (const position of [
+	Symbol("position"),
+	1n,
+	{
+		valueOf() {
+			collect();
+			throw new RangeError("position");
+		},
+	},
+]) {
+	try {
+		codePoints("x😀z", 1, 3, position, collect);
+	} catch (error) {
+		observations.push(error.name);
+	}
+}
+
 let rope = "";
 for (let index = 0; index < 100; index++) rope += index % 2 ? "😀" : "ab";
 observations.push(inspect(rope, 1, 190, true, consume), unicode(rope, 2, 4));
-observations.push(characters(rope, 1, 190, 2, collect));
+observations.push(
+	characters(rope, 1, 190, 2, collect),
+	codePoints(rope, 1, 190, 2, collect),
+	codePoints(rope, 2, 3, 0, collect),
+);
 observations.push(substring(rope, 190, 1, true, consume));
 for (const position of [
 	"1",
@@ -213,6 +279,41 @@ if (typeof process !== "undefined" && process.env.MAL_STRING_SPAN_MUTABLE === "m
 	observations.push(substring("xabz", 3, 1, true, consume));
 	String.prototype.substring = savedSubstring;
 	observations.push(substringEvents);
+	const savedPoint = Object.getOwnPropertyDescriptor(String.prototype, "codePointAt");
+	const pointEvents = [];
+	Object.defineProperty(String.prototype, "codePointAt", {
+		configurable: true,
+		get() {
+			pointEvents.push(String(this));
+			collect();
+			return function (position) {
+				pointEvents.push("call", String(this));
+				return savedPoint.value.call(this, position);
+			};
+		},
+	});
+	observations.push(codePoints("x😀z", 1, 2, 0, collect), pointEvents);
+	Object.defineProperty(String.prototype, "codePointAt", savedPoint);
+	observations.push(
+		codePoints(
+			"x😀z",
+			1,
+			3,
+			{
+				valueOf() {
+					pointEvents.push("coerce");
+					String.prototype.codePointAt = () => 321;
+					collect();
+					return 0;
+				},
+			},
+			collect,
+		),
+	);
+	Object.defineProperty(String.prototype, "codePointAt", savedPoint);
+	String.prototype.codePointAt = String.prototype.charCodeAt;
+	observations.push(codePoints("x😀z", 1, 3, 0, collect));
+	Object.defineProperty(String.prototype, "codePointAt", savedPoint);
 	const savedCharacter = Object.getOwnPropertyDescriptor(String.prototype, "charCodeAt");
 	const methodEvents = [];
 	Object.defineProperty(String.prototype, "charCodeAt", {

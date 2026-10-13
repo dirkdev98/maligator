@@ -2825,6 +2825,45 @@
 			"fixture": "cases/fresh-numeric-values.mjs"
 		},
 		{
+			"id": "typed-array-affine-window",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "TypedArray storage regions",
+			"category": "object-array-representation",
+			"mechanisms": ["typed-arrays-numeric-loops"],
+			"inputShape": "Fixed Float64Array views with distinct index-minus-one and index-plus-one windows admitted once for a three-view kernel.",
+			"unit": "element",
+			"sourceSeam": "src/compiler/target/lower-native-fast-paths.ts",
+			"fixture": "cases/typed-array-affine-window.mjs",
+			"controls": ["typed-array-three-view", "typed-array-three-view-mixed"]
+		},
+		{
+			"id": "typed-array-three-view-bytes",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "TypedArray storage regions",
+			"category": "object-array-representation",
+			"mechanisms": ["typed-arrays-numeric-loops"],
+			"inputShape": "Fixed Int16Array and Uint8Array inputs with Uint8ClampedArray output, exercising mixed byte widths and clamped stores.",
+			"unit": "element",
+			"sourceSeam": "src/compiler/target/lower-native-fast-paths.ts",
+			"fixture": "cases/typed-array-three-view-bytes.mjs",
+			"controls": ["typed-array-three-view", "typed-array-three-view-mixed"]
+		},
+		{
+			"id": "string-span-code-points",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Shared string spans",
+			"category": "memory-layout-usage",
+			"mechanisms": ["string-allocation", "string-traversal"],
+			"inputShape": "Prepared UTF-16 ranges with surrogate pairs, lone surrogates, empty spans, codePointAt and charCodeAt consumers, and sparse string observations.",
+			"unit": "token",
+			"sourceSeam": "runtime/src/builtin_string.c",
+			"fixture": "cases/string-span-code-points.mjs",
+			"controls": ["substring-span-classify", "string-span-classify"]
+		},
+		{
 			"id": "method-name-unique",
 			"group": "runtime",
 			"suite": "runtime",

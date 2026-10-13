@@ -760,10 +760,18 @@ function emitNumericLoopRegion(
 			`${local(plan.bound)} <= UINT32_MAX`,
 			`${local(plan.bound)} == trunc(${local(plan.bound)})`,
 		);
-		for (const view of plan.views)
+		for (const view of plan.views) {
+			const low = `(${local(plan.index)} + ${cF64Literal(view.minOffset)})`;
+			const high =
+				view.maxOffset === 0
+					? local(plan.bound)
+					: `(${local(plan.bound)} + ${cF64Literal(view.maxOffset)})`;
+			if (view.minOffset !== 0) guards.push(`${low} >= 0.0`);
+			if (view.maxOffset !== 0) guards.push(`${high} >= 0.0`, `${high} <= UINT32_MAX`);
 			guards.push(
-				`mal_vm_fixed_numeric_storage(r${view.object}, (u32) ${local(plan.bound)}, ${view.writable}, &${id}_v${view.object})`,
+				`mal_vm_fixed_numeric_storage(r${view.object}, (u32) ${high}, ${view.writable}, &${id}_v${view.object})`,
 			);
+		}
 	}
 	const materialize = (register: number, value: string) => {
 		const representation = reps[register];
@@ -959,9 +967,12 @@ function emitNumericLoopRegion(
 		...(plan.kind === "fixed-numeric"
 			? [
 					"    MAL_PERF_COUNT(fixed_typed_array_region_admissions);",
+					...(plan.views.some((view) => view.minOffset !== 0 || view.maxOffset !== 0)
+						? ["    MAL_PERF_COUNT(fixed_typed_array_affine_regions);"]
+						: []),
 					...plan.views.map(
 						(view) =>
-							`    MAL_PERF_COUNT(fixed_typed_array_region_views[${id}_v${view.object}.kind - MAL_TA_INT32]);`,
+							`    MAL_PERF_COUNT(fixed_typed_array_region_views[${id}_v${view.object}.kind]);`,
 					),
 					// One bounded specialization keeps kind dispatch out of the established Float64 loop.
 					`    if (${plan.views.map((view) => `${id}_v${view.object}.kind == MAL_TA_FLOAT64`).join(" && ")}) {`,
@@ -6237,7 +6248,7 @@ function emitInstruction(
 				instruction.operator === "!==" ? `!${equal}` : equal,
 			);
 		} else if (
-			role === "charCodeAtProperty" &&
+			(role === "charCodeAtProperty" || role === "codePointAtProperty") &&
 			instruction.opcode === "LOAD_PROPERTY_STATIC"
 		) {
 			const chain = nativeStringCharCodeAtChainAction?.chain;
@@ -6258,11 +6269,11 @@ function emitInstruction(
 				projected = `${resetCapture}r${instruction.dst} = ${callValue(instruction.dst, method)};`;
 			}
 		} else if (
-			role === "charCodeAtCall" &&
+			(role === "charCodeAtCall" || role === "codePointAtCall") &&
 			(instruction.opcode === "CALL" || instruction.opcode === "CALL_KNOWN")
 		) {
 			const result = `${prefix}_code_${ip}`;
-			declarations.push(`f64 ${result};`);
+			declarations.push(`MalValue ${result};`);
 			const locked =
 				instruction.opcode === "CALL_KNOWN" ||
 				nativeStringCharCodeAtChainAction?.chain.methodIdentity === "authority-invariant";
@@ -6270,8 +6281,8 @@ function emitInstruction(
 				instruction.arguments[0] === undefined
 					? "MAL_VALUE_UNDEFINED"
 					: boxedOperand(instruction.arguments[0]);
-			guard += ` && mal_builtin_string_span_char_code_at(${locked ? "MAL_VALUE_UNDEFINED" : boxedOperand(instruction.callee)}, ${locked}, ${source}, ${prefix}_start, ${prefix}_end, ${position}, &${result})`;
-			projected = storeNumber(instruction.dst, result);
+			guard += ` && mal_builtin_string_span_character(${locked ? "MAL_VALUE_UNDEFINED" : boxedOperand(instruction.callee)}, ${locked}, ${source}, ${prefix}_start, ${prefix}_end, ${position}, MAL_STRING_CHARACTER_${role === "codePointAtCall" ? "CODE_POINT_AT" : "CHAR_CODE_AT"}, &${result})`;
+			projected = `r${instruction.dst} = ${callValue(instruction.dst, result)};`;
 		} else if (
 			role === "number" &&
 			(instruction.opcode === "CALL" || instruction.opcode === "CALL_KNOWN")
@@ -6291,7 +6302,11 @@ function emitInstruction(
 			`  ${projected}`,
 			`  ${poll()}`,
 			`} else {`,
-			...(role === "number" || role === "charCodeAtProperty" || role === "charCodeAtCall"
+			...(role === "number" ||
+			role === "charCodeAtProperty" ||
+			role === "charCodeAtCall" ||
+			role === "codePointAtProperty" ||
+			role === "codePointAtCall"
 				? materialize.map((line) => `  ${line}`)
 				: []),
 			...ordinary.map((line) => `  ${line}`),

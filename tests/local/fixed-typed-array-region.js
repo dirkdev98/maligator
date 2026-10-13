@@ -17,8 +17,18 @@ function values(array) {
 						: value,
 	);
 }
-const numericKinds = [Float64Array, Float32Array, Int32Array, Uint32Array];
-for (const Ctor of [...numericKinds, Uint8Array]) {
+const numericKinds = [
+	Float64Array,
+	Float32Array,
+	Int32Array,
+	Uint32Array,
+	Int8Array,
+	Uint8Array,
+	Uint8ClampedArray,
+	Int16Array,
+	Uint16Array,
+];
+for (const Ctor of numericKinds) {
 	const left = new Ctor([1, 2, 3, 4]),
 		right = new Ctor([10, 20, 30, 40]);
 	for (const count of [0, 1, 4, 6, 2.5, -1, NaN])
@@ -50,6 +60,20 @@ const extremes = new Float64Array([
 	2 ** -150,
 	3.4028234663852886e38,
 	-3.4028234663852886e38,
+	0.5,
+	2.5,
+	3.5,
+	-129.5,
+	127.5,
+	128.5,
+	254.5,
+	255.5,
+	256.5,
+	-32769.5,
+	32767.5,
+	32768.5,
+	65535.5,
+	65536.5,
 ]);
 const additions = new Float64Array(extremes.length);
 additions.fill(-0);
@@ -199,4 +223,149 @@ for (const Ctor of numericKinds.slice(1)) {
 	}
 	results.push(values(data.slice(0, 8)), values(data.slice(-8)));
 }
+function affineKernel(left, right, output, start, count) {
+	for (let i = start; i < count; i++) {
+		output[i - 1] = left[i - 1] + right[i + 1];
+		right[i] = output[i - 1] - left[i];
+	}
+	return output;
+}
+function branchAffine(left, right, output, start, count) {
+	for (let i = start; i < count; i++) {
+		if (i & 1) output[i - 1] = left[i] + right[i + 1];
+		else output[i] = left[i - 1] + right[i];
+	}
+	return output;
+}
+function changingOffset(left, right, output, count) {
+	let offset = 1;
+	for (let i = 0; i < count; i++) {
+		output[i + offset] = left[i] + right[i];
+		offset = 2;
+	}
+	return output;
+}
+function previousKey(left, right, output, count) {
+	let key = 0;
+	for (let i = 0; i < count; i++) {
+		output[key] = left[i] + right[i];
+		key = i + 2;
+	}
+	return output;
+}
+for (const Ctor of numericKinds) {
+	for (const [start, count] of [
+		[1, 5],
+		[1, 2],
+		[2, 5],
+		[0, 3],
+		[-1, 3],
+		[0.5, 3],
+		[1, 7],
+		[1, 2.5],
+		[2, 2],
+		[3, 1],
+		[NaN, 4],
+		[1, NaN],
+		[Infinity, Infinity],
+	]) {
+		const a = new Float64Array([16777216, 2.5, 4, 8, 16, 32]);
+		const b = new Float64Array([1, 2, 3, 4, 5, 6]);
+		results.push(values(affineKernel(a, b, new Ctor(6), start, count)), values(b));
+		results.push(values(branchAffine(a, b, new Ctor(6), start, count)));
+	}
+	const all = new Ctor([1, 2, 3, 4, 5, 6]);
+	results.push(values(affineKernel(all, all, all, 1, 5)));
+	results.push(values(changingOffset(all, all, new Ctor(6), 4)));
+	results.push(values(previousKey(all, all, new Ctor(6), 4)));
+}
+for (const offsets of [
+	[0, 1, 2],
+	[2, 1, 0],
+]) {
+	const buffer = new ArrayBuffer(8 * 12),
+		whole = new Float64Array(buffer);
+	for (let i = 0; i < whole.length; i++) whole[i] = i + 0.25;
+	affineKernel(
+		new Float64Array(buffer, offsets[0] * 8, 8),
+		new Float64Array(buffer, offsets[1] * 8, 8),
+		new Float64Array(buffer, offsets[2] * 8, 8),
+		1,
+		7,
+	);
+	results.push(values(whole));
+}
+for (const Ctor of numericKinds) {
+	const buffer = new ArrayBuffer(8 * 12),
+		whole = new Float64Array(buffer);
+	for (let i = 0; i < whole.length; i++) whole[i] = i + 0.25;
+	affineKernel(
+		new Float64Array(buffer, 0, 8),
+		new Float32Array(buffer, 4, 8),
+		new Ctor(buffer, Ctor.BYTES_PER_ELEMENT * 2, 8),
+		1,
+		7,
+	);
+	results.push(values(new Uint32Array(buffer)));
+}
+const affineOrder = [];
+const affineSource = new Proxy(
+	{ 0: 2, 1: 3, 2: 4, 3: 5 },
+	{
+		get(target, key) {
+			affineOrder.push(`get:${key}`);
+			return target[key];
+		},
+	},
+);
+const affineDestination = new Proxy(
+	{},
+	{
+		set(target, key, value) {
+			affineOrder.push(`set:${key}:${value}`);
+			target[key] = value;
+			return true;
+		},
+	},
+);
+affineKernel(
+	affineSource,
+	[2, 3, 4, 5],
+	affineDestination,
+	{
+		valueOf() {
+			affineOrder.push("start");
+			return 1;
+		},
+	},
+	{
+		valueOf() {
+			affineOrder.push("bound");
+			return 3;
+		},
+	},
+);
+results.push(affineOrder, affineDestination[0], affineDestination[1]);
+const affineDetached = new Float64Array([1, 2, 3, 4]);
+affineDetached.buffer.transfer();
+results.push(
+	values(
+		affineKernel(
+			affineDetached,
+			new Float64Array([1, 2, 3, 4]),
+			new Float64Array(4),
+			1,
+			3,
+		),
+	),
+);
+results.push(values(affineKernel(fixed, tracking, new Float64Array(4), 1, 3)));
+results.push(values(affineKernel(shared, shared, new Float64Array(3), 1, 2)));
+const affineLarge = new Float64Array(4096);
+affineLarge.fill(0.25);
+for (let round = 0; round < 12; round++) {
+	affineKernel(affineLarge, affineLarge, affineLarge, 1, affineLarge.length - 1);
+	gc?.();
+}
+results.push(values(affineLarge.slice(0, 8)), values(affineLarge.slice(-8)));
 console.log(JSON.stringify(results));

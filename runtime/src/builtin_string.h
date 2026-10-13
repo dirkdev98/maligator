@@ -197,7 +197,18 @@ typedef enum MalStringCharacterOp {
     MAL_STRING_CHARACTER_AT,
     MAL_STRING_CHARACTER_CHAR_AT,
     MAL_STRING_CHARACTER_CODE_POINT_AT,
+    MAL_STRING_CHARACTER_CHAR_CODE_AT,
 } MalStringCharacterOp;
+
+// The end belongs to the logical string, which may stop inside a source surrogate pair.
+static inline u32 mal_builtin_string_code_point_in_range(MalString *string, usize index, usize end) {
+    c16 first = mal_string_code_unit_at(string, index);
+    if (mal_utf16_is_lead_surrogate(first) && index + 1 < end) {
+        c16 second = mal_string_code_unit_at(string, index + 1);
+        if (mal_utf16_is_trail_surrogate(second)) return mal_utf16_compose_pair(first, second);
+    }
+    return first;
+}
 
 // Character positions remain UTF-16 code-unit offsets for every physical encoding.
 static inline MalValue mal_builtin_string_character_numeric(
@@ -207,21 +218,15 @@ static inline MalValue mal_builtin_string_character_numeric(
     position = mal_ops_number_to_integer_or_infinity(position);
     if (operation == MAL_STRING_CHARACTER_AT && position < 0) position += (f64) length;
     if (position < 0 || position >= (f64) length) {
+        if (operation == MAL_STRING_CHARACTER_CHAR_CODE_AT) return mal_ops_number_value(NAN);
         return operation == MAL_STRING_CHARACTER_CHAR_AT
             ? mal_value_from_string(mal_intrinsic_ascii(vm, "")) : mal_value_new_undefined();
     }
     usize index = (usize) position;
+    if (operation == MAL_STRING_CHARACTER_CODE_POINT_AT)
+        return mal_value_from_i32((i32) mal_builtin_string_code_point_in_range(string, index, length));
     c16 unit = mal_string_code_unit_at(string, index);
-    if (operation == MAL_STRING_CHARACTER_CODE_POINT_AT) {
-        u32 code_point = unit;
-        if (index + 1 < length && mal_utf16_is_lead_surrogate(unit)) {
-            c16 trail = mal_string_code_unit_at(string, index + 1);
-            if (mal_utf16_is_trail_surrogate(trail)) {
-                code_point = mal_utf16_compose_pair(unit, trail);
-            }
-        }
-        return mal_value_from_i32((i32) code_point);
-    }
+    if (operation == MAL_STRING_CHARACTER_CHAR_CODE_AT) return mal_value_from_i32((i32) unit);
     return mal_value_from_string(mal_intrinsic_code_unit(vm, unit));
 }
 
@@ -276,9 +281,9 @@ bool mal_builtin_string_range_span_init(
 );
 bool mal_builtin_string_span_equal(MalValue subject, usize start, usize end, MalValue other);
 
-bool mal_builtin_string_span_char_code_at(
+bool mal_builtin_string_span_character(
     MalValue callee, bool locked, MalValue subject, usize start, usize end,
-    MalValue position, f64 *out
+    MalValue position, MalStringCharacterOp operation, MalValue *out
 );
 
 #define MAL_STRING_SPLIT_PROJECTION_MAX_OUTPUTS 8u
