@@ -12,20 +12,57 @@
 #include "mal_number_format.h"
 #include "number_text.h"
 #include "primitive_wrapper_object.h"
+#include "perf_stats.h"
 #include "value_ops.h"
 #include "vm.h"
 #include "vm_ops.h"
 
-static f64 mal_builtin_parse_int_units(const MalStringSegment *units, f64 raw_radix) {
+typedef struct MalBuiltinNumberInput {
+    const MalString *source;
+    usize offset, length, segment_start;
+    bool contiguous;
+    MalStringSegment segment;
+    MalStringIterator iterator;
+} MalBuiltinNumberInput;
+
+static void mal_builtin_number_input_init(
+    MalBuiltinNumberInput *input, const MalString *source, usize offset, usize length
+) {
+    *input = (MalBuiltinNumberInput) {.source = source, .offset = offset, .length = length};
+    input->contiguous = mal_string_try_get_segment(source, offset, length, &input->segment);
+    if (!input->contiguous) mal_string_iterator_init(&input->iterator, source, offset, length);
+}
+
+// Prefix lookahead can rewind, but borrowed rope leaves never cross collection or JS reentry.
+static c16 mal_builtin_number_input_at(MalBuiltinNumberInput *input, usize index) {
+    if (input->contiguous) return mal_string_segment_code_unit_at(&input->segment, index);
+    if (index < input->segment_start) {
+        mal_string_iterator_dispose(&input->iterator);
+        mal_string_iterator_init(&input->iterator, input->source, input->offset + index, input->length - index);
+        input->segment_start = index;
+        input->segment.length = 0;
+    }
+    while (index >= input->segment_start + input->segment.length) {
+        input->segment_start += input->segment.length;
+        if (!mal_string_iterator_next(&input->iterator, &input->segment)) abort();
+    }
+    return mal_string_segment_code_unit_at(&input->segment, index - input->segment_start);
+}
+
+static void mal_builtin_number_input_dispose(MalBuiltinNumberInput *input) {
+    if (!input->contiguous) mal_string_iterator_dispose(&input->iterator);
+}
+
+static f64 mal_builtin_parse_int_units(MalBuiltinNumberInput *units, f64 raw_radix) {
     usize length = units->length;
     usize i = 0;
-    while (i < length && mal_ecma_is_string_whitespace(mal_string_segment_code_unit_at(units, i))) {
+    while (i < length && mal_ecma_is_string_whitespace(mal_builtin_number_input_at(units, i))) {
         i++;
     }
 
     f64 sign = 1;
     if (i < length) {
-        c16 unit = mal_string_segment_code_unit_at(units, i);
+        c16 unit = mal_builtin_number_input_at(units, i);
         if (unit == '+' || unit == '-') {
             sign = unit == '-' ? -1 : 1;
             i++;
@@ -43,8 +80,8 @@ static f64 mal_builtin_parse_int_units(const MalStringSegment *units, f64 raw_ra
         radix = 10;
     }
 
-    if (strip_prefix && i + 1 < length && mal_string_segment_code_unit_at(units, i) == '0') {
-        c16 marker = mal_string_segment_code_unit_at(units, i + 1);
+    if (strip_prefix && i + 1 < length && mal_builtin_number_input_at(units, i) == '0') {
+        c16 marker = mal_builtin_number_input_at(units, i + 1);
         if (marker == 'x' || marker == 'X') {
             i += 2;
             radix = 16;
@@ -59,7 +96,7 @@ static f64 mal_builtin_parse_int_units(const MalStringSegment *units, f64 raw_ra
     bool overflowed = false;
     bool any_digit = false;
     for (; i < length; i++) {
-        c16 code_unit = mal_string_segment_code_unit_at(units, i);
+        c16 code_unit = mal_builtin_number_input_at(units, i);
         i32 digit;
         if (code_unit >= '0' && code_unit <= '9') {
             digit = code_unit - '0';
@@ -88,17 +125,17 @@ static f64 mal_builtin_parse_int_units(const MalStringSegment *units, f64 raw_ra
     return any_digit ? sign * (overflowed ? value : (f64) exact) : NAN;
 }
 
-static f64 mal_builtin_parse_float_units(const MalStringSegment *units) {
+static f64 mal_builtin_parse_float_units(MalBuiltinNumberInput *units) {
     usize length = units->length;
     usize start = 0;
-    while (start < length && mal_ecma_is_string_whitespace(mal_string_segment_code_unit_at(units, start))) {
+    while (start < length && mal_ecma_is_string_whitespace(mal_builtin_number_input_at(units, start))) {
         start++;
     }
     if (start == length) return NAN;
 
     usize cursor = start;
     if (cursor < length) {
-        c16 unit = mal_string_segment_code_unit_at(units, cursor);
+        c16 unit = mal_builtin_number_input_at(units, cursor);
         if (unit == '+' || unit == '-') cursor++;
     }
 
@@ -106,20 +143,20 @@ static f64 mal_builtin_parse_float_units(const MalStringSegment *units) {
     if (length - cursor >= sizeof(infinity) - 1) {
         bool matches = true;
         for (usize i = 0; i < sizeof(infinity) - 1; i++) {
-            if (mal_string_segment_code_unit_at(units, cursor + i) != (c16) infinity[i]) {
+            if (mal_builtin_number_input_at(units, cursor + i) != (c16) infinity[i]) {
                 matches = false;
                 break;
             }
         }
         if (matches) {
-            return cursor > start && mal_string_segment_code_unit_at(units, start) == '-'
+            return cursor > start && mal_builtin_number_input_at(units, start) == '-'
                 ? -INFINITY
                 : INFINITY;
         }
     }
 
-    if (units->latin1) {
-        const byte *text = (const byte *) units->latin1_units + start;
+    if (units->contiguous && units->segment.latin1) {
+        const byte *text = (const byte *) units->segment.latin1_units + start;
         usize prefix = mal_number_decimal_prefix_length(text, length - start);
         return prefix == 0 ? NAN : mal_number_parse_decimal(text, prefix);
     }
@@ -130,7 +167,7 @@ static f64 mal_builtin_parse_float_units(const MalStringSegment *units) {
     usize capacity = sizeof(stack_buffer);
     usize token_length = 0;
     for (usize i = start; i < length; i++) {
-        c16 unit = mal_string_segment_code_unit_at(units, i);
+        c16 unit = mal_builtin_number_input_at(units, i);
         if (!((unit >= '0' && unit <= '9') || unit == '.' || unit == 'e' || unit == 'E' ||
               unit == '+' || unit == '-')) {
             break;
@@ -302,22 +339,49 @@ bool mal_builtin_number_predicate_try_direct(
     return true;
 }
 
-f64 mal_builtin_parse_int_string(MalValue source, f64 radix) {
+f64 mal_builtin_parse_int_range(MalValue source, usize offset, usize length, f64 radix) {
     MalRootSpan root;
     mal_gc_root(&root, &source, 1);
-    MalStringSegment units = mal_string_flat_segment(mal_value_to_string(source));
+    MalBuiltinNumberInput units;
+    mal_builtin_number_input_init(&units, mal_value_to_string(source), offset, length);
     f64 result = mal_builtin_parse_int_units(&units, radix);
+    mal_builtin_number_input_dispose(&units);
     mal_gc_unroot(&root);
     return result;
 }
 
-f64 mal_builtin_parse_float_string(MalValue source) {
+f64 mal_builtin_parse_float_range(MalValue source, usize offset, usize length) {
     MalRootSpan root;
     mal_gc_root(&root, &source, 1);
-    MalStringSegment units = mal_string_flat_segment(mal_value_to_string(source));
+    MalBuiltinNumberInput units;
+    mal_builtin_number_input_init(&units, mal_value_to_string(source), offset, length);
     f64 result = mal_builtin_parse_float_units(&units);
+    mal_builtin_number_input_dispose(&units);
     mal_gc_unroot(&root);
     return result;
+}
+
+f64 mal_builtin_parse_int_string(MalValue source, f64 radix) {
+    return mal_builtin_parse_int_range(source, 0, mal_string_length(mal_value_to_string(source)), radix);
+}
+
+f64 mal_builtin_parse_float_string(MalValue source) {
+    return mal_builtin_parse_float_range(source, 0, mal_string_length(mal_value_to_string(source)));
+}
+
+bool mal_builtin_number_span_parse(
+    MalVm *vm, MalValue callee, bool locked, MalValue source, usize start, usize end,
+    MalValue radix, bool integer, f64 *result
+) {
+    if (!mal_value_is_string(source) || start > end || end > mal_string_length(mal_value_to_string(source)) ||
+        (!locked && callee != vm->intrinsics[integer ? MAL_INTRINSIC_PARSE_INT : MAL_INTRINSIC_PARSE_FLOAT])) return false;
+    f64 number = 0;
+    if (integer && !mal_ops_try_primitive_to_number(radix, &number)) return false;
+    *result = integer ? mal_builtin_parse_int_range(source, start, end - start, number)
+                      : mal_builtin_parse_float_range(source, start, end - start);
+    if (integer) MAL_PERF_COUNT(string_span_parse_int_calls);
+    else MAL_PERF_COUNT(string_span_parse_float_calls);
+    return true;
 }
 
 static MalValue mal_builtin_parse_int(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {

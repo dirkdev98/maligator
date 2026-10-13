@@ -185,6 +185,8 @@ export interface CoreStringSpanConsumer {
 		| "length"
 		| "equal"
 		| "number"
+		| "parseInt"
+		| "parseFloat"
 		| "charCodeAtProperty"
 		| "charCodeAtCall"
 		| "codePointAtProperty"

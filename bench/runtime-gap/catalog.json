@@ -858,7 +858,7 @@
 			"owner": "short string concatenation",
 			"category": "memory-layout-usage",
 			"mechanisms": ["string-allocation", "string-concatenation"],
-			"inputShape": "18–23-unit dynamic template keys through 17–20-unit intermediates",
+			"inputShape": "18\u201323-unit dynamic template keys through 17\u201320-unit intermediates",
 			"unit": "concatenation chain",
 			"sourceSeam": "runtime/src/heap_string.c",
 			"controls": [
@@ -5860,6 +5860,35 @@
 			"sourceSeam": "runtime/src/heap_string.h",
 			"controls": ["string-concatenation"],
 			"fixture": "cases/string-cons-full-scan-32.mjs"
+		},
+		{
+			"id": "object-from-entries-map-pairs",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Object.fromEntries borrowed entry pairs",
+			"category": "api-builtins",
+			"mechanisms": ["object-from-entries", "iterator-entry-pair-virtualization"],
+			"inputShape": "Eight distinct string-key Map entries with retained output objects",
+			"unit": "constructed object",
+			"sourceSeam": "runtime/src/builtin_object.c",
+			"controls": [
+				"object-from-entries-small-builtin-distinct-8",
+				"object-from-entries-small-indexed-distinct-8"
+			],
+			"fixture": "cases/object-from-entries-map-pairs.mjs"
+		},
+		{
+			"id": "string-span-parsers",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Composable string span numeric parsers",
+			"category": "memory-layout-usage",
+			"mechanisms": ["string-spans", "numeric-prefix-parsing", "delayed-materialization"],
+			"inputShape": "Split and trimmed numeric prefixes with radix input and occasional string escape",
+			"unit": "classified field",
+			"sourceSeam": "runtime/src/builtin_number.c",
+			"controls": ["string-span-trim-search", "string-span-nested"],
+			"fixture": "cases/string-span-parsers.mjs"
 		}
 	]
 }

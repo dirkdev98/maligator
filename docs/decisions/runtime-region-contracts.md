@@ -36,6 +36,10 @@ own bounds and observation state. Non-observable primitive position conversions
 share the canonical number parser. Arguments that invoke JavaScript or throw, and
 unsupported observers, materialize before the original operation. Search helpers
 honor both window boundaries, including when traversing ropes in reverse.
+Numeric prefix parsing shares the ordinary parseInt/parseFloat algorithms through
+a bounded segment reader. Borrowed leaves remain within a non-collecting parse;
+the source stays rooted and unrelated rope ranges need not be flattened. Radix
+conversion that can execute user code falls back before parsing begins.
 
 Enumeration snapshots retain the sequence produced by the original operation.
 Keys can be counted without loading values; values must be copied eagerly into
@@ -70,6 +74,12 @@ windows. Polling publishes completed-iteration state before resumption. Fresh Ar
 plans use the shared builder's root and publication contract: only effect-free
 initializer work can move before allocation, and references remain rooted until
 the completed result is published.
+
+Entry-pair consumers may reuse keys and values from an exact captured builtin
+iterator without constructing an otherwise unobservable pair Array. Both values
+must be rooted before key coercion or callbacks can mutate the collection. A
+failed Array entry step may already have advanced and thrown; only a clean
+admission miss permits the original step, while abrupt completion propagates.
 
 ## Bounded expansion
 

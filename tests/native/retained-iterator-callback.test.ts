@@ -65,7 +65,8 @@ describe("retained lazy Iterator callback contracts", () => {
 				"fallbacks",
 			]) {
 				const env = { ITERATOR_LAZY_KIND: kind, MAL_HOST_GC: "1" };
-				const expected = nodeOracle(fixture, env);
+				// Node24 lacks Iterator.concat; this mode asserts the native concat/GC contract itself.
+				const expected = kind === "roots" ? "roots retained\n" : nodeOracle(fixture, env);
 				const measured = spawnSync(pair.compiled, [], {
 					encoding: "utf8",
 					timeout: 60_000,

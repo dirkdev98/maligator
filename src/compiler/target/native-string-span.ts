@@ -13,25 +13,23 @@ import {
 } from "./runtime-image.ts";
 import type { BytecodeInstruction } from "./runtime-image.ts";
 
-export function nativeSpanMethodCall(
+function nativeSpanCalleeName<T extends string>(
 	instructions: ReadonlyArray<BytecodeInstruction>,
 	ip: number,
 	strings: ReadonlyArray<ReadonlyArray<number>>,
 	body: Pick<NativeBodyFacts, "branchSources" | "externalEntries">,
-): `${(typeof CORE_STRING_SPAN_METHODS)[number]}Call` | undefined {
+	names: ReadonlyArray<T>,
+	operationPrefix: string,
+): T | undefined {
 	const call = instructions[ip];
 	if (call?.opcode === "CALL_KNOWN") {
-		const method = CORE_STRING_SPAN_METHODS.find(
-			(name) => call.operation === `String.prototype.${name}`,
-		);
-		return method === undefined ? undefined : `${method}Call`;
+		return names.find((name) => call.operation === `${operationPrefix}${name}`);
 	}
 	if (call?.opcode !== "CALL") return undefined;
-	type Kind = `${(typeof CORE_STRING_SPAN_METHODS)[number]}Call`;
 	const visiting = new Set<number>(),
-		completed = new Map<number, Kind | undefined>();
+		completed = new Map<number, T | undefined>();
 	let work = 0;
-	const visit = (use: number): Kind | undefined => {
+	const visit = (use: number): T | undefined => {
 		if (completed.has(use)) return completed.get(use);
 		if (++work > 64 || visiting.has(use) || body.externalEntries.has(use))
 			return undefined;
@@ -45,19 +43,20 @@ export function nativeSpanMethodCall(
 			previous.opcode !== "THROW"
 		)
 			predecessors.push(use - 1);
-		let method: Kind | undefined;
+		let method: T | undefined;
 		for (const definition of predecessors) {
 			if (++work > 64) return undefined;
 			const op = instructions[definition]!;
-			let found: Kind | undefined;
+			let found: T | undefined;
 			if (vmInstructionWriteRegisters(op).includes(call.callee)) {
-				const method =
+				found = names.find((name) =>
 					op.opcode === "LOAD_PROPERTY_STATIC"
-						? CORE_STRING_SPAN_METHODS.find((value) =>
-								stringConstantEquals(strings[op.stringIndex], value),
-							)
-						: undefined;
-				found = method === undefined ? undefined : `${method}Call`;
+						? stringConstantEquals(strings[op.stringIndex], name)
+						: operationPrefix === "" &&
+							(op.opcode === "LOAD_GLOBAL_PROPERTY"
+								? stringConstantEquals(strings[op.nameStringIndex], name)
+								: op.opcode === "LOAD_INTRINSIC" && op.intrinsic === name),
+				);
 			} else found = visit(definition);
 			if (found === undefined || (method !== undefined && method !== found))
 				return undefined;
@@ -68,6 +67,40 @@ export function nativeSpanMethodCall(
 		return method;
 	};
 	return visit(ip);
+}
+
+export function nativeSpanMethodCall(
+	instructions: ReadonlyArray<BytecodeInstruction>,
+	ip: number,
+	strings: ReadonlyArray<ReadonlyArray<number>>,
+	body: Pick<NativeBodyFacts, "branchSources" | "externalEntries">,
+): `${(typeof CORE_STRING_SPAN_METHODS)[number]}Call` | undefined {
+	const method = nativeSpanCalleeName(
+		instructions,
+		ip,
+		strings,
+		body,
+		CORE_STRING_SPAN_METHODS,
+		"String.prototype.",
+	);
+	return method === undefined ? undefined : `${method}Call`;
+}
+
+export function nativeSpanNumericCall(
+	instructions: ReadonlyArray<BytecodeInstruction>,
+	ip: number,
+	strings: ReadonlyArray<ReadonlyArray<number>>,
+	body: Pick<NativeBodyFacts, "branchSources" | "externalEntries">,
+): "number" | "parseInt" | "parseFloat" | undefined {
+	const name = nativeSpanCalleeName(
+		instructions,
+		ip,
+		strings,
+		body,
+		["Number", "parseInt", "parseFloat"] as const,
+		"",
+	);
+	return name === "Number" ? "number" : name;
 }
 
 export function validateNativeStringSpan(
@@ -162,7 +195,11 @@ export function validateNativeStringSpan(
 						instruction.argumentMode !== undefined)))
 		)
 			fail();
-		if (methodCall !== undefined) {
+		if (
+			methodCall !== undefined ||
+			consumer.kind === "parseInt" ||
+			consumer.kind === "parseFloat"
+		) {
 			if (methodBody === undefined) {
 				const branchSources = new Map<number, Array<number>>();
 				for (const [source, op] of instructions.entries()) {
@@ -177,17 +214,29 @@ export function validateNativeStringSpan(
 					externalEntries: new Set(region.controlFlow.exceptionalHandlerIps),
 				};
 			}
-			const method = nativeSpanMethodCall(instructions, consumer.ip, strings, methodBody);
-			if (method !== undefined && method !== consumer.kind) fail();
+			const method =
+				methodCall !== undefined
+					? nativeSpanMethodCall(instructions, consumer.ip, strings, methodBody)
+					: nativeSpanNumericCall(instructions, consumer.ip, strings, methodBody);
+			if ((methodCall === undefined || method !== undefined) && method !== consumer.kind)
+				fail();
 		}
 		if (
-			consumer.kind === "number" &&
+			(consumer.kind === "number" ||
+				consumer.kind === "parseInt" ||
+				consumer.kind === "parseFloat") &&
 			((instruction.opcode !== "CALL" && instruction.opcode !== "CALL_KNOWN") ||
 				(instruction.opcode === "CALL_KNOWN" &&
 					(instruction.construct || instruction.argumentMode !== undefined)) ||
-				instruction.arguments.length !== 1 ||
+				instruction.arguments.length < 1 ||
+				instruction.arguments.length > (consumer.kind === "parseInt" ? 2 : 1) ||
+				instruction.arguments.slice(1).includes(consumer.value) ||
+				instruction.thisValue === consumer.value ||
+				(instruction.opcode === "CALL" && instruction.callee === consumer.value) ||
 				instruction.arguments[0] !== consumer.value ||
-				(instruction.opcode === "CALL_KNOWN" && instruction.operation !== "Number"))
+				(instruction.opcode === "CALL_KNOWN" &&
+					instruction.operation !==
+						(consumer.kind === "number" ? "Number" : consumer.kind)))
 		)
 			fail();
 	}

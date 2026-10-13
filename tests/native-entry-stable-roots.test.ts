@@ -55,6 +55,58 @@ function emit(body: BytecodeFunction): string {
 	return emitCompiledFunction(native, 0, "", false)!.source;
 }
 describe("entry-stable private roots", () => {
+	it.each([false, true])(
+		"retains the activation receiver before a collecting call (strict=%s)",
+		(strict) => {
+			const body = {
+				...fn([
+					{
+						opcode: "CALL",
+						dst: 1,
+						callee: 0,
+						thisValue: -1,
+						arguments: [],
+						argumentCount: 0,
+					},
+					{ opcode: "LOAD_THIS", dst: 2 },
+					{ opcode: "RETURN", value: 2 },
+				]),
+				strict,
+			};
+			const source = emit(body);
+			const receiver = source.match(/__gc_slots\[(\d+)\] = this_value;/);
+			expect(receiver).not.toBeNull();
+			const receiverSlot = Number(receiver![1]);
+			const slots = Number(source.match(/\.slot_count = (\d+)/)?.[1]);
+			expect(receiverSlot).toBeGreaterThanOrEqual(0);
+			expect(receiverSlot).toBeLessThan(slots);
+			expect(source.indexOf(receiver![0])).toBeLessThan(
+				source.indexOf("vm->root_frame_head = &__gc_frame;"),
+			);
+			const registerSlots = [
+				...source.matchAll(/#define r\d+ \(__gc_slots\[(\d+)\]\)/g),
+			].map((match) => Number(match[1]));
+			expect(registerSlots).not.toContain(receiverSlot);
+		},
+	);
+	it("needs no persistent receiver root for a noncollecting body or an unused receiver", () => {
+		const leaf = createConservativeNativePlan([
+			fn([
+				{ opcode: "LOAD_THIS", dst: 1 },
+				{ opcode: "RETURN", value: 1 },
+			]),
+		]).functions[0]!;
+		const source = emitCompiledFunction(
+			{ ...leaf, gc: { safepoints: [] } },
+			0,
+			"",
+			false,
+		)!.source;
+		expect(source).not.toMatch(/__gc_slots\[\d+\] = this_value;/);
+		expect(emit(fn([call, { opcode: "RETURN", value: 2 }]))).not.toMatch(
+			/__gc_slots\[\d+\] = this_value;/,
+		);
+	});
 	it("recognizes unchanged private parameters, not locals or unpublished registers", () => {
 		const body = fn([load, call, { opcode: "RETURN", value: 2 }]);
 		expect([...nativeEntryStableRootRegisters(body, new Set([0, 1, 2]))]).toEqual([0]);

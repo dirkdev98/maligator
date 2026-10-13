@@ -14,6 +14,8 @@
 MalString *mal_ops_to_string(MalHeap *heap, MalValue value);
 
 f64 mal_ops_to_number(MalValue value);
+// Converts nonthrowing primitives without collection or user code; false leaves coercion to the caller.
+bool mal_ops_try_primitive_to_number(MalValue value, f64 *number_out);
 
 /** StringToNumber over an already selected UTF-16 span. */
 MalValue mal_ops_string_units_to_number(const c16 *code_units, usize length);

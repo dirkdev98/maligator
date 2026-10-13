@@ -3823,14 +3823,12 @@ function stringSpanCandidates(
 				if (other !== undefined && fn.instructionOpcodeName(other) === "createString")
 					kind = "equal";
 			} else if (
-				(opcode === "call" &&
-					use.position === 2 &&
-					instructionOperandCount(fn, instruction) === 3) ||
-				(opcode === "callKnown" &&
-					use.position === 1 &&
-					instructionOperandCount(fn, instruction) === 2)
+				(opcode === "call" && use.position === 2) ||
+				(opcode === "callKnown" && use.position === 1)
 			) {
 				const callAttrs = fn.instructionAttributes(instruction);
+				const offset = opcode === "call" ? 2 : 1;
+				const argumentCount = instructionOperandCount(fn, instruction) - offset;
 				const callee =
 					opcode === "call"
 						? specializationDefinition(fn, roots, instructionOperand(fn, instruction, 0)!)
@@ -3838,19 +3836,28 @@ function stringSpanCandidates(
 				const calleeAttrs =
 					callee === undefined ? undefined : fn.instructionAttributes(callee);
 				const globalName = calleeAttrs?.nameStringIndex;
-				const numberCallee =
-					callee !== undefined &&
-					((fn.instructionOpcodeName(callee) === "loadIntrinsic" &&
-						calleeAttrs?.intrinsic === "Number") ||
-						(fn.instructionOpcodeName(callee) === "loadGlobalProperty" &&
-							typeof globalName === "number" &&
-							stringConstantEquals(program.stringConstants[globalName], "Number")));
+				const operation = (["Number", "parseInt", "parseFloat"] as const).find((name) =>
+					opcode === "callKnown"
+						? callAttrs.operation === name
+						: callee !== undefined &&
+							((fn.instructionOpcodeName(callee) === "loadIntrinsic" &&
+								calleeAttrs?.intrinsic === name) ||
+								(fn.instructionOpcodeName(callee) === "loadGlobalProperty" &&
+									typeof globalName === "number" &&
+									stringConstantEquals(program.stringConstants[globalName], name)) ||
+								(name !== "Number" && staticPropertyNamed(program, fn, callee, name))),
+				);
 				if (
 					!callAttrs.construct &&
 					callAttrs.argumentMode === undefined &&
-					(opcode === "callKnown" ? callAttrs.operation === "Number" : numberCallee)
+					operation !== undefined &&
+					argumentCount >= 1 &&
+					argumentCount <= (operation === "parseInt" ? 2 : 1) &&
+					Array.from({ length: argumentCount - 1 }, (_, index) =>
+						instructionOperand(fn, instruction, offset + index + 1)!,
+					).every((argument) => root(argument) !== resultRoot)
 				)
-					kind = "number";
+					kind = operation === "Number" ? "number" : operation;
 			}
 			if (
 				kind === "materialize" &&

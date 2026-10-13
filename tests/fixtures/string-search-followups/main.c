@@ -5,6 +5,7 @@
 
 #include "array_object.h"
 #include "builtin_string.h"
+#include "builtin_number.h"
 #include "function_object.h"
 #include "gc.h"
 #include "heap_bigint.h"
@@ -640,6 +641,47 @@ static bool replacement_templates_stream_across_leaves(MalVm *vm) {
     return true;
 }
 
+static bool numeric_parsers_respect_rope_windows(MalVm *vm) {
+    c16 units[1024];
+    for (usize i = 0; i < countof(units); i++) units[i] = '9';
+    static const c16 token[] = {0xfeff, 0x2003, '-', '1', '.', '2', '5', 'e', '+', '2', 'x'};
+    usize start = 44;
+    memcpy(units + start, token, sizeof(token));
+    for (usize direction = 0; direction < 2; direction++) {
+        MalString *rope = rope_from_units(vm, units, countof(units), direction != 0);
+        MalValue source = mal_value_from_string(rope);
+        MalRootSpan root;
+        mal_gc_root(&root, &source, 1);
+        CHECK(mal_string_storage(rope) == MAL_STRING_STORAGE_CONS);
+        CHECK(mal_builtin_parse_float_range(source, start, countof(token)) == -125);
+        CHECK(mal_builtin_parse_float_range(source, start, 8) == -1.25);
+        CHECK(mal_builtin_parse_int_range(source, start, countof(token), 10) == -1);
+        CHECK(mal_builtin_parse_int_range(source, start, 4, 4294967306.0) == -1);
+        CHECK(mal_string_storage(mal_value_to_string(source)) == MAL_STRING_STORAGE_CONS);
+        MalValue reference = mal_value_from_string(mal_string_new_copy(&vm->heap, token, countof(token)));
+        CHECK(mal_builtin_parse_int_range(source, start, countof(token), 10) == mal_builtin_parse_int_string(reference, 10));
+        CHECK(mal_builtin_parse_float_range(source, start, countof(token)) == mal_builtin_parse_float_string(reference));
+        mal_gc_unroot(&root);
+    }
+    static const c16 infinity[] = {'-', 'I', 'n', 'f', 'i', 'n', 'i', 't', 'y', 'x'};
+    memcpy(units + start, infinity, sizeof(infinity));
+    MalString *lookahead = rope_from_units(vm, units, countof(units), false);
+    CHECK(mal_builtin_parse_float_range(mal_value_from_string(lookahead), start, countof(infinity)) == -INFINITY);
+    CHECK(isnan(mal_builtin_parse_float_range(mal_value_from_string(lookahead), start, countof(infinity) - 2)));
+    CHECK(mal_string_storage(lookahead) == MAL_STRING_STORAGE_CONS);
+    static const char *const tokens[] = {"-0", "-Infinitytail", "1e+", "+0x10tail", "0.5"};
+    for (usize i = 0; i < countof(tokens); i++) {
+        MalValue source = mal_value_from_string(mal_intrinsic_ascii(vm, tokens[i]));
+        f64 parsed = mal_builtin_parse_float_range(source, 0, strlen(tokens[i]));
+        if (i == 0) CHECK(parsed == 0 && signbit(parsed));
+        if (i == 1) CHECK(parsed == -INFINITY);
+        if (i == 2) CHECK(parsed == 1);
+        if (i == 3) CHECK(mal_builtin_parse_int_range(source, 0, strlen(tokens[i]), 0) == 16);
+        if (i == 4) CHECK(parsed == 0.5);
+    }
+    return true;
+}
+
 int main(void) {
     mal_perf_stats_init();
 #if MAL_PERF_STATS
@@ -650,7 +692,7 @@ int main(void) {
 #endif
     MalVm vm;
     mal_vm_init(&vm, &mal_runtime_image);
-    bool passed = search_matches_reference(&vm) && bounded_windows_match_reference(&vm) && reverse_windows_do_not_scan_prefix(&vm) && trim_windows_preserve_sources(&vm) && substr_windows_keep_relative_count(&vm) && compact_single_unit_search(&vm)
+    bool passed = numeric_parsers_respect_rope_windows(&vm) && search_matches_reference(&vm) && bounded_windows_match_reference(&vm) && reverse_windows_do_not_scan_prefix(&vm) && trim_windows_preserve_sources(&vm) && substr_windows_keep_relative_count(&vm) && compact_single_unit_search(&vm)
         && long_prefix_work_is_bounded(&vm)
         && short_rope_search_work_is_bounded(&vm)
         && split_and_replace_keep_sequential_state(&vm)

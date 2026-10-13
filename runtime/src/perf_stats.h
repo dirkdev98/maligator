@@ -244,6 +244,7 @@ typedef struct MalPerfStats {
     u64 object_entries_snapshot_admissions;
     u64 object_entries_snapshot_materializations;
     u64 object_entries_snapshot_pair_materializations;
+    u64 object_from_entries_borrowed_pairs;
     u64 string_span_character_reads;
     u64 string_span_code_point_reads;
     u64 string_span_char_at_reads;
@@ -268,6 +269,12 @@ typedef struct MalPerfStats {
     u64 string_span_split_searches;
     u64 string_span_regexp_searches;
     u64 string_span_nested_searches;
+    u64 string_span_parse_int_calls;
+    u64 string_span_parse_float_calls;
+    u64 string_span_range_parses;
+    u64 string_span_split_parses;
+    u64 string_span_regexp_parses;
+    u64 string_span_nested_parses;
     u64 shape_case_probes;
     u64 shape_case_hits;
     u64 shape_case_fallbacks;

@@ -94,20 +94,6 @@ static f64 mal_builtin_string_arg_to_number(MalVm *vm, MalValue value) {
     return number;
 }
 
-// Primitive parsing cannot reenter or collect; Symbol/BigInt require the throwing VM path.
-static bool mal_builtin_string_primitive_number(MalValue value, f64 *number_out) {
-    if (mal_ops_is_number(value)) {
-        *number_out = mal_ops_number_as_f64(value);
-        return true;
-    }
-    if (mal_value_is_undefined(value) || mal_value_is_null(value) ||
-        mal_value_is_boolean(value) || mal_value_is_string(value)) {
-        *number_out = mal_ops_to_number(value);
-        return true;
-    }
-    return false;
-}
-
 static bool mal_builtin_string_primitive_number_arg(
     const MalValue *args,
     i32 arg_count,
@@ -119,7 +105,7 @@ static bool mal_builtin_string_primitive_number_arg(
         *number_out = missing;
         return true;
     }
-    return mal_builtin_string_primitive_number(args[index], number_out);
+    return mal_ops_try_primitive_to_number(args[index], number_out);
 }
 
 static bool mal_builtin_string_is_flat_value(MalValue value) {
@@ -1565,7 +1551,7 @@ static MalValue mal_builtin_string_prototype_ends_with(MalVm *vm, MalValue this_
     f64 primitive_position = INFINITY;
     MalValue primitive_result;
     if (arg_count >= 1 && (arg_count < 2 || mal_value_is_undefined(args[1]) ||
-            mal_builtin_string_primitive_number(args[1], &primitive_position)) &&
+            mal_ops_try_primitive_to_number(args[1], &primitive_position)) &&
         mal_builtin_string_search_direct(this_value, args[0], primitive_position,
             MAL_STRING_SEARCH_ENDS_WITH, &primitive_result)) {
         return primitive_result;
@@ -1704,7 +1690,7 @@ bool mal_builtin_string_span_character(
     f64 offset;
     if ((!locked && (!mal_value_is_native_function_object(callee) ||
          mal_native_function_object_callback(mal_value_to_native_function_object(callee)) != expected)) ||
-        !mal_builtin_string_primitive_number(position, &offset)) return false;
+        !mal_ops_try_primitive_to_number(position, &offset)) return false;
     *out = mal_builtin_string_character_numeric(vm, mal_value_to_string(subject), start, end,
         offset, operation);
     switch (operation) {
@@ -1733,7 +1719,7 @@ bool mal_builtin_string_span_search(
     if ((!locked && (!mal_value_is_native_function_object(callee) ||
          mal_native_function_object_callback(mal_value_to_native_function_object(callee)) != expected)) ||
         !mal_value_is_string(needle) ||
-        !mal_builtin_string_primitive_number(position, &offset)) return false;
+        !mal_ops_try_primitive_to_number(position, &offset)) return false;
     if (mal_value_is_undefined(position)) {
         offset = operation == MAL_STRING_SEARCH_ENDS_WITH || operation == MAL_STRING_SEARCH_LAST_INDEX_OF
             ? INFINITY : 0;
@@ -2418,8 +2404,8 @@ bool mal_builtin_string_range_span_init(
     } else {
         usize length = source_end - source_start;
         f64 start_number, end_number;
-        if (!mal_builtin_string_primitive_number(start_value, &start_number) ||
-            !mal_builtin_string_primitive_number(end_value, &end_number)) return false;
+        if (!mal_ops_try_primitive_to_number(start_value, &start_number) ||
+            !mal_ops_try_primitive_to_number(end_value, &end_number)) return false;
         if (mal_value_is_undefined(end_value)) end_number = (f64) length;
         mal_builtin_string_range_bounds(length, start_number, end_number, operation, start_out, end_out);
         *start_out += source_start;

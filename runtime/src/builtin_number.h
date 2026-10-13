@@ -4,7 +4,12 @@
 #include "intrinsics.h"
 #include "value_ops.h"
 
-// Requires primitive strings; roots their backing storage through flattening.
+// Requires primitive strings and valid UTF-16 ranges; parsing cannot collect or reenter.
+f64 mal_builtin_parse_int_range(MalValue source, usize offset, usize length, f64 radix);
+f64 mal_builtin_parse_float_range(MalValue source, usize offset, usize length);
+bool mal_builtin_number_span_parse(
+    MalVm *vm, MalValue callee, bool locked, MalValue source, usize start, usize end,
+    MalValue radix, bool integer, f64 *result);
 f64 mal_builtin_parse_int_string(MalValue source, f64 radix);
 f64 mal_builtin_parse_float_string(MalValue source);
 

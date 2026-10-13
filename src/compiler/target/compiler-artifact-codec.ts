@@ -96,7 +96,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 217;
+export const COMPILER_ARTIFACT_VERSION = 219;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -1040,6 +1040,8 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 					"length",
 					"equal",
 					"number",
+					"parseInt",
+					"parseFloat",
 					"materialize",
 					"charCodeAtProperty",
 					"charCodeAtCall",
@@ -1584,6 +1586,8 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 							"length",
 							"equal",
 							"number",
+							"parseInt",
+							"parseFloat",
 							"materialize",
 							"charCodeAtProperty",
 							"charCodeAtCall",
@@ -2502,6 +2506,8 @@ function writeCompilerArtifact(
 								"length",
 								"equal",
 								"number",
+								"parseInt",
+								"parseFloat",
 								"materialize",
 								"charCodeAtProperty",
 								"charCodeAtCall",
@@ -5312,6 +5318,8 @@ function readCompilerArtifact(
 								"length",
 								"equal",
 								"number",
+								"parseInt",
+								"parseFloat",
 								"materialize",
 								"charCodeAtProperty",
 								"charCodeAtCall",

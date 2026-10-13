@@ -6,7 +6,7 @@ import {
 } from "../core/core-ir-regions.ts";
 import { stringConstantEquals } from "../shared/string-constant.ts";
 import type { NativeBodyFacts } from "./native-body-facts.ts";
-import { nativeSpanMethodCall } from "./native-string-span.ts";
+import { nativeSpanMethodCall, nativeSpanNumericCall } from "./native-string-span.ts";
 import {
 	nativeVirtualValueFlow,
 	validateNativeVirtualValue,
@@ -196,12 +196,7 @@ export function selectNativeSpanContinuations(
 			}
 			const value = reads[0]!;
 			const methodCall = nativeSpanMethodCall(fn.instructions, ip, strings, body);
-			const callee = fn.instructions[ip - 1];
-			const numberCallee =
-				op.opcode === "CALL" &&
-				callee?.opcode === "LOAD_GLOBAL_PROPERTY" &&
-				callee.dst === op.callee &&
-				stringConstantEquals(strings[callee.nameStringIndex], "Number");
+			const numericCall = nativeSpanNumericCall(fn.instructions, ip, strings, body);
 			let kind: NativeSpanConsumer["kind"];
 			const methodProperty =
 				op.opcode === "LOAD_PROPERTY_STATIC"
@@ -250,15 +245,16 @@ export function selectNativeSpanContinuations(
 				kind = methodCall ?? "charCodeAtCall";
 			else if (
 				(op.opcode === "CALL" || op.opcode === "CALL_KNOWN") &&
-				op.arguments.length === 1 &&
+				numericCall !== undefined &&
+				op.arguments.length >= 1 &&
+				op.arguments.length <= (numericCall === "parseInt" ? 2 : 1) &&
 				op.arguments[0] === value &&
-				(numberCallee ||
-					(op.opcode === "CALL_KNOWN" &&
-						op.operation === "Number" &&
-						!op.construct &&
-						op.argumentMode === undefined))
+				!op.arguments.slice(1).includes(value) &&
+				op.thisValue !== value &&
+				(op.opcode !== "CALL" || op.callee !== value) &&
+				(op.opcode !== "CALL_KNOWN" || (!op.construct && op.argumentMode === undefined))
 			)
-				kind = "number";
+				kind = numericCall;
 			else if (
 				op.opcode === "BINARY" &&
 				(op.operator === "===" || op.operator === "!==") &&

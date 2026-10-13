@@ -906,6 +906,8 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.object_entries_snapshot_admissions,
         (unsigned long long) mal_perf_stats.object_entries_snapshot_materializations,
         (unsigned long long) mal_perf_stats.object_entries_snapshot_pair_materializations);
+    fprintf(stderr, "[perf-object-from-entries-stats] borrowed_pairs=%llu\n",
+        (unsigned long long) mal_perf_stats.object_from_entries_borrowed_pairs);
     fprintf(stderr, "[perf-string-span-character-stats] reads=%llu\n",
         (unsigned long long) mal_perf_stats.string_span_character_reads);
     fprintf(stderr, "[perf-string-span-string-character-stats] char_at=%llu at=%llu\n",
@@ -930,6 +932,14 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.string_span_split_searches,
         (unsigned long long) mal_perf_stats.string_span_regexp_searches,
         (unsigned long long) mal_perf_stats.string_span_nested_searches);
+    fprintf(stderr, "[perf-string-span-parse-stats] parse_int=%llu parse_float=%llu\n",
+        (unsigned long long) mal_perf_stats.string_span_parse_int_calls,
+        (unsigned long long) mal_perf_stats.string_span_parse_float_calls);
+    fprintf(stderr, "[perf-string-span-parse-source-stats] range=%llu split=%llu regexp=%llu nested=%llu\n",
+        (unsigned long long) mal_perf_stats.string_span_range_parses,
+        (unsigned long long) mal_perf_stats.string_span_split_parses,
+        (unsigned long long) mal_perf_stats.string_span_regexp_parses,
+        (unsigned long long) mal_perf_stats.string_span_nested_parses);
     fprintf(stderr, "[perf-string-span-trim-source-stats] direct=%llu range=%llu split=%llu regexp=%llu\n",
         (unsigned long long) mal_perf_stats.string_span_trim_direct_admissions,
         (unsigned long long) mal_perf_stats.string_span_trim_range_admissions,

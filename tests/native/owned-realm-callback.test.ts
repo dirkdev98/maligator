@@ -21,6 +21,7 @@ describe("VM-owned foreign callback realms", () => {
 			const expected = execFileSync(
 				process.execPath,
 				[
+					"--expose-gc",
 					"-e",
 					`globalThis.$262={createRealm(){return {global:require("node:vm").runInNewContext("globalThis")}}};require("node:vm").runInThisContext(require("node:fs").readFileSync(${JSON.stringify(fixture)},"utf8"));`,
 				],
@@ -85,8 +86,11 @@ describe("VM-owned foreign callback realms", () => {
 				engine: { primordials: "mutable", eval: false, realms: true },
 			}),
 		});
-		expect(runToStdout(built.binaryPath, { env: STRESS_ENV, timeoutMs: 60_000 })).toBe(
-			"owned-realm-callback PASS\n",
-		);
+		expect(
+			runToStdout(built.binaryPath, {
+				env: { ...STRESS_ENV, MAL_HOST_GC: "1" },
+				timeoutMs: 60_000,
+			}),
+		).toBe("owned-realm-callback PASS\n");
 	}, 600_000);
 });

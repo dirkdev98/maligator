@@ -2038,12 +2038,16 @@ static MalValue mal_builtin_object_from_entries(MalVm *vm, MalValue this_value, 
 
     while (true) {
         bool done;
-        bool stepped = dense_array_cursor != nullptr
-            ? mal_vm_iterator_step_dense_array_cursor(
-                vm, dense_array_cursor, &record, &roots[1], &done)
-            : mal_vm_iterator_step(vm, &record, &roots[1], &done);
-        if (!stepped) {
-            goto done;
+        bool borrowed_pair = mal_vm_iterator_step_entry_pair_protocol_cursor(
+            vm, &record, &roots[2], &roots[3], &done);
+        if (!borrowed_pair) {
+            // An Array entries getter can throw after advancing; never replay that step.
+            if (vm->completion.kind != MAL_COMPLETION_NORMAL) goto done;
+            bool stepped = dense_array_cursor != nullptr
+                ? mal_vm_iterator_step_dense_array_cursor(
+                    vm, dense_array_cursor, &record, &roots[1], &done)
+                : mal_vm_iterator_step(vm, &record, &roots[1], &done);
+            if (!stepped) goto done;
         }
 
         if (done) {
@@ -2051,22 +2055,26 @@ static MalValue mal_builtin_object_from_entries(MalVm *vm, MalValue this_value, 
             goto done;
         }
 
-        if (!mal_value_is_object(roots[1])) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Iterator value is not an entry object");
-            mal_vm_iterator_close(vm, &record);
-            goto done;
-        }
-
-        bool dense_pair = mal_value_is_array_object(roots[1]) &&
-            mal_array_object_dense_pair(
-                mal_value_to_array_object(roots[1]), &roots[2], &roots[3]);
-        if (!dense_pair) {
-            if (!mal_vm_get_property(
-                    vm, roots[1], mal_key_index(0), &roots[2]) ||
-                !mal_vm_get_property(
-                    vm, roots[1], mal_key_index(1), &roots[3])) {
+        if (borrowed_pair) {
+            MAL_PERF_COUNT(object_from_entries_borrowed_pairs);
+        } else {
+            if (!mal_value_is_object(roots[1])) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Iterator value is not an entry object");
                 mal_vm_iterator_close(vm, &record);
                 goto done;
+            }
+
+            bool dense_pair = mal_value_is_array_object(roots[1]) &&
+                mal_array_object_dense_pair(
+                    mal_value_to_array_object(roots[1]), &roots[2], &roots[3]);
+            if (!dense_pair) {
+                if (!mal_vm_get_property(
+                        vm, roots[1], mal_key_index(0), &roots[2]) ||
+                    !mal_vm_get_property(
+                        vm, roots[1], mal_key_index(1), &roots[3])) {
+                    mal_vm_iterator_close(vm, &record);
+                    goto done;
+                }
             }
         }
 

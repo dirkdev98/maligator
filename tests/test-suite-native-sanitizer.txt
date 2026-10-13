@@ -19,6 +19,7 @@ tests/native/forwarded-callback.test.ts
 tests/native/forwarded-sort-callback.test.ts
 tests/native/functional-replacer-callback.test.ts
 tests/native/forwarded-from-mapper.test.ts
+tests/native/from-entries-borrowed-pairs.test.ts
 tests/native/forwarded-group-by.test.ts
 tests/native/forwarded-iterator-terminal.test.ts
 tests/native/retained-iterator-callback.test.ts
@@ -61,6 +62,7 @@ tests/native/numeric-reduce-region.test.ts
 tests/native/typed-array-reduce-region.test.ts
 tests/native/typed-array-callback-families.test.ts
 tests/native/string-span-region.test.ts
+tests/native/string-span-parsers.test.ts
 tests/native/observed-object-region.test.ts
 tests/native/known-object-observation.test.ts
 tests/native/native-property-read-regions.test.ts

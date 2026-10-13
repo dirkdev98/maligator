@@ -1489,7 +1489,12 @@ function emitCompiledVariant(
 	// bound instance is live across the rest of the body), initialized from the
 	// EMPTY parameter and read through the TDZ-checked LOAD_THIS / RETURN forms.
 	const thisSlot = fn.isDerivedConstructor ? slotCount : -1;
-	const stackSlotsBase = slotCount + (fn.isDerivedConstructor ? 1 : 0);
+	const retainsThis =
+		!fn.isDerivedConstructor &&
+		nativeContract.gc.safepoints.length > 0 &&
+		fn.instructions.some((instruction) => instruction.opcode === "LOAD_THIS");
+	const receiverSlot = retainsThis ? slotCount : -1;
+	const stackSlotsBase = slotCount + (fn.isDerivedConstructor || retainsThis ? 1 : 0);
 	const topology = analysis.regionTopology(
 		nativeContract.specializations,
 		nativeContract.regionActions,
@@ -2020,6 +2025,10 @@ function emitCompiledVariant(
 	// A derived constructor's rooted `this` slot starts as the (EMPTY) parameter.
 	if (thisSlot >= 0) {
 		lines.push(`    __gc_slots[${thisSlot}] = this_value;`);
+	}
+	// Sloppy binding can box this after the caller roots its inputs; later LOAD_THIS still needs that box.
+	if (receiverSlot >= 0) {
+		lines.push(`    __gc_slots[${receiverSlot}] = this_value;`);
 	}
 	// Stack-object slots are roots, not heap-object edges: initialize every slot
 	// before publishing the frame, then keep the entire run rooted for the whole
@@ -6423,6 +6432,21 @@ function emitInstruction(
 				site.parent !== undefined ? "nested" : (site.projection?.kind ?? "range");
 			projected = `MAL_PERF_COUNT(string_span_${sourceKind}_searches); r${instruction.dst} = ${callValue(instruction.dst, result)};`;
 		} else if (
+			(role === "parseInt" || role === "parseFloat") &&
+			(instruction.opcode === "CALL" || instruction.opcode === "CALL_KNOWN")
+		) {
+			const result = `${prefix}_parse_${ip}`;
+			declarations.push(`f64 ${result};`);
+			const locked = instruction.opcode === "CALL_KNOWN";
+			const radix =
+				instruction.arguments[1] === undefined
+					? "MAL_VALUE_UNDEFINED"
+					: boxedOperand(instruction.arguments[1]);
+			guard += ` && mal_builtin_number_span_parse(vm, ${locked ? "MAL_VALUE_UNDEFINED" : boxedOperand(instruction.callee)}, ${locked}, ${source}, ${prefix}_start, ${prefix}_end, ${radix}, ${role === "parseInt"}, &${result})`;
+			const sourceKind =
+				site.parent !== undefined ? "nested" : (site.projection?.kind ?? "range");
+			projected = `MAL_PERF_COUNT(string_span_${sourceKind}_parses); ${storeNumber(instruction.dst, result)}`;
+		} else if (
 			role === "number" &&
 			(instruction.opcode === "CALL" || instruction.opcode === "CALL_KNOWN")
 		) {
@@ -6442,6 +6466,8 @@ function emitInstruction(
 			`  ${poll()}`,
 			`} else {`,
 			...(role === "number" ||
+			role === "parseInt" ||
+			role === "parseFloat" ||
 			methodProperty !== undefined ||
 			characterCall !== undefined ||
 			searchCall !== undefined ||

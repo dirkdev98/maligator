@@ -13,6 +13,19 @@
 #include "number_text.h"
 #include "vm.h"
 
+bool mal_ops_try_primitive_to_number(MalValue value, f64 *number_out) {
+    if (mal_ops_is_number(value)) {
+        *number_out = mal_ops_number_as_f64(value);
+        return true;
+    }
+    if (mal_value_is_undefined(value) || mal_value_is_null(value) ||
+        mal_value_is_boolean(value) || mal_value_is_string(value)) {
+        *number_out = mal_ops_to_number(value);
+        return true;
+    }
+    return false;
+}
+
 f64 mal_ops_number_clamp_relative(f64 number, f64 length) {
     f64 relative = mal_ops_number_to_integer_or_infinity(number);
     if (relative < 0.0) {

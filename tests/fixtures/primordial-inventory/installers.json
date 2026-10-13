@@ -89,11 +89,11 @@
 	},
 	{
 		"file": "builtin_number.c",
-		"sha256": "e7477129e2a1c2ff8fed7be00371444d87e46f200d2cb06d03c1e358bb91a08c"
+		"sha256": "e278581dccaa30820b733fc9ea565e0ca055023f68ab5b1bf725a9d39726dd1b"
 	},
 	{
 		"file": "builtin_object.c",
-		"sha256": "8c4d39acd8e740cadadfa4bea2fbb9c48535776a2ef822a5e14508f65af5b3a2"
+		"sha256": "a8ddd6d8c74bc45fcb2b23b4422b15d3233c2f3d342acba361f23c8665222752"
 	},
 	{
 		"file": "builtin_promise.c",
@@ -125,7 +125,7 @@
 	},
 	{
 		"file": "builtin_string.c",
-		"sha256": "eecb1741882bd3cdc3a448bc68ae4542f01be34c641b3c80c1bb63bae6f7aaac"
+		"sha256": "22d435f9342e2e1606036e54adf17cb69cea0504bf694545ea1aa0c8708dbd04"
 	},
 	{
 		"file": "builtin_symbol.c",

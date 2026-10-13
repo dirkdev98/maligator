@@ -1,9 +1,25 @@
 const foreign = $262.createRealm().global;
-const collectGarbage = globalThis.__mal_collect_garbage ?? globalThis.gc ?? (() => {});
+const collectGarbage =
+	globalThis.__mal_collect_garbage ?? globalThis.$262?.gc ?? globalThis.gc ?? (() => {});
 function check(ok, message) {
 	if (!ok) throw new Error(message);
 }
 const marker = {};
+function boxedAcrossCollection() {
+	collectGarbage();
+	const prototype = Object.getPrototypeOf(this);
+	collectGarbage();
+	check(
+		prototype === Number.prototype && this.valueOf() === 29,
+		"receiver survives repeated reads",
+	);
+	return this;
+}
+check(boxedAcrossCollection.call(29).valueOf() === 29, "direct boxed call");
+check(
+	Reflect.apply(boxedAcrossCollection, 29, []).valueOf() === 29,
+	"generic boxed call",
+);
 let calls = 0;
 function sloppy(value, index) {
 	check(

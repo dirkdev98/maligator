@@ -760,15 +760,33 @@ The shared lifetime and fallback rules are recorded in
       exclusions and retain existing lifetime guards. Freeze, seal, defineProperty,
       assign, result aliases, and mixed proxy inputs select actual plans in both
       modes. All 153 focused tests, four Node cases and four frontend/artifact/C
-      checks pass; native execution and measurement remain pending.
+      checks pass. Both new native cases and both existing observation controls pass
+      under Linux ASan/UBSan; measurement remains pending.
 - [ ] Admit canonical compiled callbacks from other realms owned by the same VM.
       Validate realm membership before using the shared function-index space and
       preserve per-invocation realm switching, restoration, this boxing, and generic
       eval-callback fallback. Retained lazy contexts use the same ownership proof.
       All 43 focused checks, sixteen Node oracles, sixteen frontend/artifact/C
       checks, and runtime/C-driver syntax checks pass. A worker-thread VM exercises
-      same-index rejection without sharing GC thread state; native verification
-      remains pending.
+      same-index rejection without sharing GC thread state and passes Linux ASan/UBSan.
+      Six existing eager callback realm controls pass. The new realm fixture exposed
+      an unrooted freshly boxed sloppy this value at compiled entry. Collecting bodies
+      that read this now retain an activation root, including generic and direct calls;
+      33 focused checks and six frontend/artifact/C checks pass. Native rerun pending.
+
+- [ ] Parse numeric prefixes directly from range, split, capture, and nested string
+      spans using the canonical parseInt/parseFloat algorithms. Preserve captured
+      callee identity, radix coercion order, Unicode bounds, signed zero, and the
+      existing materialization fallback. A bounded canonical parser reader traverses
+      rope leaves without flattening the source. All 188 focused checks, eleven Node
+      oracles, five frontend/artifact/C checks, and runtime C syntax checks pass; native
+      verification and measurement remain pending.
+- [ ] Reuse builtin Map/Set/Array entry cursors in Object.fromEntries while retaining
+      eager key/value capture, property-key conversion, result realms, and iterator
+      completion behavior. Implemented through the existing rooted traversal;
+      twelve focused checks, Node oracles, and eight frontend/artifact/C checks pass.
+      Six Node oracles exercise the explicit GC hook. Native verification and
+      measurement remain pending.
 
 | Order | Slice                        | Owning work and exit condition                                                                                                                                  |
 | ----- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
