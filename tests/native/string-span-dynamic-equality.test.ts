@@ -7,6 +7,7 @@ import { resolveBuildConfig } from "../../src/build-config.ts";
 import {
 	buildBackendPairFromOneProgramImage,
 	HOST_MAIN,
+	resolveHarnessExecutionInvocation,
 	runToStdout,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
@@ -39,28 +40,39 @@ describe("string span strict equality with dynamic inputs", () => {
 				span?.consumers.filter((consumer) => consumer.kind === "equal"),
 			).toHaveLength(2);
 			for (const mode of ["values", "fallback"]) {
+				const context = `${primordials} ${mode}`;
 				const env = { MAL_HOST_GC: "1", SPAN_EQUAL_KIND: mode };
 				const expected = execFileSync(process.execPath, ["--expose-gc", fixture], {
 					encoding: "utf8",
+					timeout: 10_000,
 					env: { ...process.env, ...env },
 				});
-				for (const binary of [pair.compiled, pair.interpreted])
+				for (const [backend, binary] of [
+					["compiled", pair.compiled],
+					["interpreted", pair.interpreted],
+				] as const)
 					expect(
 						runToStdout(binary, { env: { ...env, ...STRESS_ENV }, timeoutMs: 60000 }),
+						`${context} ${backend} GC stress`,
 					).toBe(expected);
-				const measured = spawnSync(pair.compiled, [], {
+				const invocation = resolveHarnessExecutionInvocation(pair.compiled);
+				const measured = spawnSync(invocation.executable, invocation.args, {
 					encoding: "utf8",
 					timeout: 60000,
 					env: { ...process.env, ...env, MAL_PERF_STATS: "1" },
 				});
-				expect(measured.status, measured.stderr).toBe(0);
-				expect(measured.stdout).toBe(expected);
-				expect(
-					Number(
-						measured.stderr.match(/\[perf-string-span-equal-stats\] calls=(\d+)/)?.[1] ??
-							0,
-					),
-				).toBeGreaterThan(0);
+				expect(measured.status, `${context} compiled counters: ${measured.stderr}`).toBe(
+					0,
+				);
+				expect(measured.stdout, `${context} compiled counters`).toBe(expected);
+				const stats = measured.stderr.match(
+					/\[perf-string-span-equal-stats\] calls=(\d+)/,
+				);
+				expect(stats, `${context}: ${measured.stderr}`).not.toBeNull();
+				const calls = Number(stats![1]);
+				if (mode === "values")
+					expect(calls, `${context} admitted comparisons`).toBeGreaterThan(0);
+				else expect(calls, `${context} generic or folded comparisons`).toBe(0);
 			}
 		},
 		600000,
