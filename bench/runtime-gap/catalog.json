@@ -3072,6 +3072,32 @@
 			"controls": ["forwarded-array-callback", "typed-array-bigint-sort-callback"]
 		},
 		{
+			"id": "forwarded-regexp-replacer",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "functional RegExp replacement",
+			"category": "api-builtins",
+			"mechanisms": ["canonical-callback", "string-replacement"],
+			"inputShape": "128 global capture matches, selected forwarded callbacks with numeric captures",
+			"unit": "replaced match",
+			"sourceSeam": "runtime/src/builtin_regexp.c",
+			"fixture": "cases/forwarded-regexp-replacer.mjs",
+			"controls": ["forwarded-array-callback", "forwarded-typed-sort-callback"]
+		},
+		{
+			"id": "fresh-handler-bigint",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Fresh Array publication after exception handling",
+			"category": "object-array-representation",
+			"mechanisms": ["allocation-gc"],
+			"inputShape": "Nine prepared mixed reference and BigInt elements after a try/catch, retained in a rolling result window.",
+			"unit": "published array",
+			"sourceSeam": "src/compiler/core/core-array-initialization.ts",
+			"fixture": "cases/fresh-handler-bigint.mjs",
+			"controls": ["fresh-mixed-values-32", "fresh-three-values"]
+		},
+		{
 			"id": "method-name-unique",
 			"group": "runtime",
 			"suite": "runtime",

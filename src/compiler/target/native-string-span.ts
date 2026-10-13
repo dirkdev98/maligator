@@ -3,6 +3,7 @@ import {
 	CORE_STRING_SPAN_RANGE_METHODS,
 	CORE_STRING_SPAN_SEARCH_METHODS,
 } from "../core/core-ir-regions.ts";
+import { stringConstantEquals } from "../shared/string-constant.ts";
 import type { NativeBodyFacts } from "./native-body-facts.ts";
 import { validateNativeVirtualValue } from "./native-virtual-value.ts";
 import type { VmStringSpanRegion } from "./program-image.ts";
@@ -50,11 +51,12 @@ export function nativeSpanMethodCall(
 			const op = instructions[definition]!;
 			let found: Kind | undefined;
 			if (vmInstructionWriteRegisters(op).includes(call.callee)) {
-				const name =
+				const method =
 					op.opcode === "LOAD_PROPERTY_STATIC"
-						? String.fromCharCode(...(strings[op.stringIndex] ?? []))
+						? CORE_STRING_SPAN_METHODS.find((value) =>
+								stringConstantEquals(strings[op.stringIndex], value),
+							)
 						: undefined;
-				const method = CORE_STRING_SPAN_METHODS.find((value) => value === name);
 				found = method === undefined ? undefined : `${method}Call`;
 			} else found = visit(definition);
 			if (found === undefined || (method !== undefined && method !== found))
@@ -90,8 +92,7 @@ export function validateNativeStringSpan(
 			? producer.operation !== `String.prototype.${region.rangeOperation}` ||
 				region.propertyIp !== -1
 			: property?.opcode !== "LOAD_PROPERTY_STATIC" ||
-				String.fromCharCode(...(strings[property.stringIndex] ?? [])) !==
-					region.rangeOperation ||
+				!stringConstantEquals(strings[property.stringIndex], region.rangeOperation) ||
 				property.dst !== producer.callee ||
 				property.object !== producer.thisValue) ||
 		region.consumers.length === 0 ||
@@ -132,7 +133,7 @@ export function validateNativeStringSpan(
 			consumer.kind === "length" &&
 			(instruction.opcode !== "LOAD_PROPERTY_STATIC" ||
 				instruction.object !== consumer.value ||
-				String.fromCharCode(...(strings[instruction.stringIndex] ?? [])) !== "length")
+				!stringConstantEquals(strings[instruction.stringIndex], "length"))
 		)
 			fail();
 		if (
@@ -145,8 +146,7 @@ export function validateNativeStringSpan(
 			methodProperty !== undefined &&
 			(instruction.opcode !== "LOAD_PROPERTY_STATIC" ||
 				instruction.object !== consumer.value ||
-				String.fromCharCode(...(strings[instruction.stringIndex] ?? [])) !==
-					methodProperty)
+				!stringConstantEquals(strings[instruction.stringIndex], methodProperty))
 		)
 			fail();
 		if (

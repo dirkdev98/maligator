@@ -1,4 +1,5 @@
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
+import { stringConstantEquals } from "../shared/string-constant.ts";
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
 import {
 	CORE_CANONICAL_VALUE_ROOTS_ANALYSIS,
@@ -1811,11 +1812,6 @@ function indexedOpcodeInstructions(
 	return index.opcodes[fn.registry.require(opcode).id] ?? [];
 }
 
-function decodeCoreString(program: CoreProgram, index: number): string | undefined {
-	const units = program.stringConstants[index];
-	return units === undefined ? undefined : String.fromCodePoint(...units);
-}
-
 export function buildCoreLocalFactIndex(
 	fn: CoreFunctionStore,
 	roots: ReadonlyMap<CoreValueId, CoreValueId>,
@@ -1958,7 +1954,8 @@ function staticPropertyNamed(
 		return false;
 	const stringIndex = fn.instructionAttributes(instruction).stringIndex;
 	return (
-		typeof stringIndex === "number" && decodeCoreString(program, stringIndex) === name
+		typeof stringIndex === "number" &&
+		stringConstantEquals(program.stringConstants[stringIndex], name)
 	);
 }
 
@@ -3358,7 +3355,7 @@ function iteratorEntryPairVirtualizationCandidates(
 					: undefined;
 			arrayEntries =
 				typeof stringIndex === "number" &&
-				decodeCoreString(program, stringIndex) === "entries";
+				stringConstantEquals(program.stringConstants[stringIndex], "entries");
 		}
 		// Construction bounds candidate search; the runtime cursor guard proves the collection kind.
 		if (
@@ -3555,7 +3552,7 @@ function stringSplitProjectionCandidates(
 		const separatorStringIndex = fn.instructionAttributes(separator).stringIndex;
 		if (
 			typeof separatorStringIndex !== "number" ||
-			(decodeCoreString(program, separatorStringIndex)?.length ?? 0) === 0
+			(program.stringConstants[separatorStringIndex]?.length ?? 0) === 0
 		)
 			continue;
 		if (property !== undefined) {
@@ -3836,7 +3833,7 @@ function stringSpanCandidates(
 						calleeAttrs?.intrinsic === "Number") ||
 						(fn.instructionOpcodeName(callee) === "loadGlobalProperty" &&
 							typeof globalName === "number" &&
-							decodeCoreString(program, globalName) === "Number"));
+							stringConstantEquals(program.stringConstants[globalName], "Number")));
 				if (
 					!callAttrs.construct &&
 					callAttrs.argumentMode === undefined &&

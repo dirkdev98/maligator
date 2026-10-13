@@ -10,7 +10,12 @@ import { CORE_O2_PASS_BUDGETS } from "./core-optimization-families.ts";
 import type { CoreFunctionPass } from "./core-pass.ts";
 import type { CoreFunctionStore } from "./core-store.ts";
 
-const IMMUTABLE_LITERALS = new Set(["createString", "createNull", "createUndefined"]);
+const IMMUTABLE_LITERALS = new Set([
+	"createString",
+	"createBigint",
+	"createNull",
+	"createUndefined",
+]);
 
 const SCALAR_PRODUCERS = new Set([
 	"createNumber",

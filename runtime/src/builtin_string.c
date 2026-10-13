@@ -3615,6 +3615,8 @@ MalValue mal_builtin_string_replace_known(MalVm *vm, MalString *string, MalStrin
     u32 inline_matches[MAL_STRING_SPLIT_MATCH_PLAN_CAPACITY];
     u32 *matches = inline_matches;
     usize match_count = 0, match_capacity = countof(inline_matches);
+    MalExactScriptCall runtime_callback;
+    bool nominated = false;
 
     bool functional = mal_value_is_callable(roots[2]);
     MalString *replacement = nullptr;
@@ -3677,6 +3679,14 @@ MalValue mal_builtin_string_replace_known(MalVm *vm, MalString *string, MalStrin
         }
     }
 
+    nominated = functional && (vm->exact_script_call == nullptr ||
+        vm->exact_script_call->callee != roots[2]) &&
+        mal_vm_prepare_builtin_callback(vm, roots[2], &runtime_callback);
+    if (nominated) {
+        vm->exact_script_call = &runtime_callback;
+        MAL_PERF_COUNT(string_replace_runtime_callback_nominations);
+    }
+
     usize seg_start = 0;
     usize position = 0;
     usize next_match = 0;
@@ -3705,7 +3715,7 @@ MalValue mal_builtin_string_replace_known(MalVm *vm, MalString *string, MalStrin
             MalValue call_args[3] = {
                 roots[1], mal_value_from_f64((f64) position), roots[0]
             };
-            MalCompletion completion = mal_vm_call_value(
+            MalCompletion completion = mal_vm_call_builtin_callback(
                 vm, roots[2], mal_value_new_undefined(), call_args, 3);
             if (completion.kind == MAL_COMPLETION_THROW) {
                 goto done;
@@ -3759,6 +3769,7 @@ MalValue mal_builtin_string_replace_known(MalVm *vm, MalString *string, MalStrin
     result = mal_builtin_string_finish_text(vm, &out);
 
 done:
+    if (nominated) vm->exact_script_call = runtime_callback.previous;
     if (match_cursor_active) mal_builtin_string_search_cursor_dispose(&match_cursor);
     if (matches != inline_matches) free(matches);
     mal_text_buffer_dispose(&out);

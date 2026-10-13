@@ -8,6 +8,7 @@ import {
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
 import { emitProgramImage } from "../src/compiler/target/emit-program-image.ts";
+import { validateNativeStorage } from "../src/compiler/target/lower-native-storage.ts";
 import { selectNativeArrayInitializations } from "../src/compiler/target/native-array-initialization.ts";
 import { analyzeNativeBodyFacts } from "../src/compiler/target/native-body-facts.ts";
 import { decodeVmValueOperand } from "../src/compiler/target/runtime-image.ts";
@@ -17,7 +18,7 @@ function compile(body: string, primordials: "mutable" | "locked" = "mutable") {
 	return compileSemanticProgramToProgramImage(
 		analyzeSourceAndRunSemanticAnalysis(
 			`globalThis.classify=function classify(source,escape,observe){${body}};`,
-			"/split-span.js",
+			"/array-initialization.js",
 		),
 		{
 			facts: compilerProgramFactsFromConfig(
@@ -38,6 +39,106 @@ function classify(image: ReturnType<typeof compile>) {
 }
 
 describe("fresh Array initialization regions", () => {
+	it.each(["mutable", "locked"] as const)(
+		"prepares immutable BigInt values after handlers and in catch bodies under %s primordials",
+		(mode) => {
+			for (const body of [
+				'try{observe();}catch(error){escape(error);}return [source,123456789012345678901234567890n,"tag",null,undefined,true,0n,escape,source];',
+				'try{observe();}catch(error){return [source,error,123456789012345678901234567890n,"tag",null];}',
+				'return [source,123456789012345678901234567890n,"tag",null];',
+			]) {
+				const image = compile(body, mode);
+				const native = classify(image);
+				const [plan] = native.storage!.arrayInitializations;
+				expect(plan, body).toBeDefined();
+				const constants = native.body.instructions.flatMap((op, ip) =>
+					op.opcode === "CREATE_BIGINT" ? [ip] : [],
+				);
+				expect(constants.length).toBeGreaterThan(0);
+				expect(constants.every((ip) => ip < plan!.allocationIp)).toBe(true);
+				const facts = analyzeNativeBodyFacts(native.body);
+				expect(
+					plan!.stores.every(
+						(ip) => facts.handlerTargets[ip] === facts.handlerTargets[plan!.allocationIp],
+					),
+				).toBe(true);
+				expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+					image,
+				);
+				expect(() => emitProgramImage(image, {})).not.toThrow();
+			}
+		},
+	);
+	it("declines protected-range crossings, effectful initializers, and BigInt arithmetic", () => {
+		for (const body of [
+			'try{return [source,123n,"tag"]; }catch(error){return error;}',
+			'try{return [source,123n,"tag"]; }finally{observe();}',
+			"try{observe();}catch(error){escape(error);}return [source,observe(),123n];",
+			'try{observe();}catch(error){escape(error);}return [source,source+123n,"tag"];',
+			'try{observe();}catch(error){escape(error);}return [source,123n,,"tag"];',
+		])
+			expect(classify(compile(body)).storage!.arrayInitializations, body).toEqual([]);
+	});
+	it("requires one effective handler through prepared keys, allocation, and all stores", () => {
+		const image = compile("source=+source;return [source+1,escape,observe];");
+		const native = classify(image);
+		const plan = native.storage!.arrayInitializations[0]!;
+		const handlerIp = native.body.instructions.length - 1;
+		for (const [startIp, endIp, admitted] of [
+			[0, handlerIp, true],
+			[plan.allocationIp, handlerIp, false],
+			[plan.stores[0]!, handlerIp, false],
+			[0, plan.stores.at(-1)!, false],
+		] as const) {
+			const body = {
+				...native.body,
+				handlers: [{ startIp, endIp, handlerIp }],
+			};
+			const selected = selectNativeArrayInitializations(
+				{ ...native, body },
+				analyzeNativeBodyFacts(body),
+				image.runtime.stringConstants,
+				() => false,
+			);
+			expect(selected, `${startIp}:${endIp}`).toEqual(admitted ? [plan] : []);
+		}
+	});
+	it("rejects external entries into a protected initialization range", () => {
+		const image = compile("return [source,escape,observe];");
+		const native = classify(image);
+		const plan = native.storage!.arrayInitializations[0]!;
+		const body = {
+			...native.body,
+			handlers: [{ startIp: 0, endIp: 1, handlerIp: plan.stores[1]! }],
+		};
+		expect(
+			selectNativeArrayInitializations(
+				{ ...native, body },
+				analyzeNativeBodyFacts(body),
+				image.runtime.stringConstants,
+				() => false,
+			),
+		).toEqual([]);
+	});
+	it("independently rejects a transported plan after its handler boundary changes", () => {
+		const image = compile("return [source,escape,observe];");
+		const native = classify(image);
+		const plan = native.storage!.arrayInitializations[0]!;
+		const handlerIp = native.body.instructions.length - 1;
+		expect(() =>
+			validateNativeStorage(
+				{
+					...native,
+					body: {
+						...native.body,
+						handlers: [{ startIp: plan.stores[0]!, endIp: handlerIp, handlerIp }],
+					},
+				},
+				undefined,
+				image.runtime.stringConstants,
+			),
+		).toThrow(/invalid or stale storage plan/);
+	});
 	it.each(["mutable", "locked"] as const)(
 		"initializes prepared values under %s primordials",
 		(mode) => {

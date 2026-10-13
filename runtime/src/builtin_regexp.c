@@ -1705,6 +1705,8 @@ static MalValue regexp_proto_replace(MalVm *vm, MalValue this_value, const MalVa
     RegexpBuilder accumulated = {0};
     MalValue *captures = nullptr;
     MalValue ret = mal_value_new_undefined();
+    MalExactScriptCall runtime_callback;
+    bool nominated = false;
 
     MalValue s_roots[2] = {mal_value_from_string(s), functional ? mal_value_new_undefined() : mal_value_from_string(replace_string)};
     MalValue pr_roots[3] = {mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined()};
@@ -1762,6 +1764,14 @@ static MalValue regexp_proto_replace(MalVm *vm, MalValue this_value, const MalVa
                 goto done;
             }
         }
+    }
+
+    nominated = functional && results_len > 0 &&
+        (vm->exact_script_call == nullptr || vm->exact_script_call->callee != replace_value) &&
+        mal_vm_prepare_builtin_callback(vm, replace_value, &runtime_callback);
+    if (nominated) {
+        vm->exact_script_call = &runtime_callback;
+        MAL_PERF_COUNT(regexp_replace_runtime_callback_nominations);
     }
 
     i64 next_source_position = 0;
@@ -1875,13 +1885,14 @@ static MalValue regexp_proto_replace(MalVm *vm, MalValue this_value, const MalVa
             }
             MalRootSpan call_span;
             mal_gc_root(&call_span, call_args, (i32) argc);
-            MalCompletion completion = mal_vm_call_value(vm, replace_value, mal_value_new_undefined(), call_args, (i32) argc);
+            MalCompletion completion = mal_vm_call_builtin_callback(vm, replace_value, mal_value_new_undefined(), call_args, (i32) argc);
             mal_gc_unroot(&call_span);
             free(call_args);
             if (completion.kind == MAL_COMPLETION_THROW) {
                 goto done;
             }
-            if (!mal_vm_to_string(vm, completion.value, &replacement_str)) {
+            pr_roots[2] = completion.value;
+            if (!mal_vm_to_string(vm, pr_roots[2], &replacement_str)) {
                 goto done;
             }
             pr_roots[2] = mal_value_from_string(replacement_str);
@@ -1921,6 +1932,7 @@ static MalValue regexp_proto_replace(MalVm *vm, MalValue this_value, const MalVa
     ret = regexp_builder_finish(vm, &accumulated);
 
 done:
+    if (nominated) vm->exact_script_call = runtime_callback.previous;
     mal_gc_native_rooted_end(vm);
     mal_gc_unroot(&caps_span);
     mal_gc_unroot(&pr_span);

@@ -1,3 +1,4 @@
+import { stringConstantEquals } from "../shared/string-constant.ts";
 import type { NativeBodyFacts } from "./native-body-facts.ts";
 import {
 	nativeVirtualValueFlow,
@@ -35,13 +36,8 @@ export function selectNativeObjectEnumerationSnapshots(
 		fn.instructions.length > 4096
 	)
 		return plans;
-	const named = (index: number, name: string): boolean => {
-		const units = strings[index];
-		return (
-			units?.length === name.length &&
-			units.every((unit, offset) => unit === name.charCodeAt(offset))
-		);
-	};
+	const named = (index: number, name: string): boolean =>
+		stringConstantEquals(strings[index], name);
 	let candidates = 0;
 	for (const [ip, call] of fn.instructions.entries()) {
 		if (plans.length === 8) break;

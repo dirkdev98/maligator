@@ -8,6 +8,9 @@ import {
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
 import { emitProgramImage } from "../src/compiler/target/emit-program-image.ts";
+import { analyzeNativeBodyFacts } from "../src/compiler/target/native-body-facts.ts";
+import { selectNativeSpanContinuations } from "../src/compiler/target/native-span-continuation.ts";
+import { nativeSpanMethodCall } from "../src/compiler/target/native-string-span.ts";
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
 
 function compile(body: string, primordials: "mutable" | "locked" = "mutable") {
@@ -26,6 +29,73 @@ function compile(body: string, primordials: "mutable" | "locked" = "mutable") {
 const body = `const part=source.split('|')[1]; const size=part.length;
  if(part==='if')return size+10; if(escape)return observe(part); return size;`;
 describe("span continuations from split projections", () => {
+	it("compiles an unrelated large property observation beside a span consumer", () => {
+		const key = "x".repeat(150000);
+		const image = compile(
+			`const part=source.split('|')[1];return [part[${JSON.stringify(key)}],part.length];`,
+		);
+		const [plan] = image.native.functions[1]!.storage!.spanContinuations;
+		expect(plan?.consumers.map((consumer) => consumer.kind)).toEqual([
+			"materialize",
+			"length",
+		]);
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
+	});
+	it.each(["charCodeAt", "Number", "length"])(
+		"materializes an unrelated large %s name without decoding it during discovery",
+		(name) => {
+			const image = compile(
+				"const part=source.split('|')[1];return part.charCodeAt(escape)+Number(part)+part.length;",
+			);
+			const native = image.native.functions[1]!;
+			const index = image.runtime.stringConstants.findIndex(
+				(units) => String.fromCharCode(...units) === name,
+			);
+			expect(index).toBeGreaterThanOrEqual(0);
+			const strings = image.runtime.stringConstants.with(
+				index,
+				Array.from({ length: 150000 }, () => 120),
+			);
+			const body = analyzeNativeBodyFacts(native.body);
+			const plans = selectNativeSpanContinuations(native, body, strings, () => false);
+			expect(plans).toHaveLength(1);
+			if (name === "charCodeAt") {
+				const call = native.storage!.spanContinuations[0]!.consumers.find(
+					(consumer) => consumer.kind === "charCodeAtCall",
+				)!;
+				expect(
+					nativeSpanMethodCall(native.body.instructions, call.ip, strings, body),
+				).toBeUndefined();
+			} else {
+				expect(
+					plans[0]!.consumers.some((consumer) => consumer.kind === "materialize"),
+				).toBe(true);
+			}
+		},
+	);
+	it("declines a large unrelated parent range method during nested span discovery", () => {
+		const image = compile(
+			"const parent=source.slice(1,-1);const child=parent.substring(0,2);return [child.length,parent.length];",
+		);
+		const native = image.native.functions[1]!;
+		expect(native.storage!.spanContinuations).toHaveLength(1);
+		const index = image.runtime.stringConstants.findIndex(
+			(units) => String.fromCharCode(...units) === "slice",
+		);
+		expect(index).toBeGreaterThanOrEqual(0);
+		const strings = image.runtime.stringConstants.with(
+			index,
+			Array.from({ length: 150000 }, () => 120),
+		);
+		expect(
+			selectNativeSpanContinuations(
+				native,
+				analyzeNativeBodyFacts(native.body),
+				strings,
+				() => false,
+			),
+		).toEqual([]);
+	});
 	it.each(["mutable", "locked"] as const)(
 		"composes substr and reverse search across every projection under %s primordials",
 		(mode) => {

@@ -626,16 +626,17 @@ The shared lifetime and fallback rules are recorded in
       and completed-iteration state when polling. Implemented with a positive i32
       stride and up to twelve accesses for four interleaved lanes, within the existing
       instruction and view budgets. All 107 focused checks, actual bundled frontend
-      selection, artifact roundtrips, Node oracles, and C syntax checks pass. Native
-      execution and measurement remain pending.
+      selection, artifact roundtrips, Node oracles, and C syntax checks pass. All four
+      Linux ASan/UBSan checks pass across backends, primordial modes, and GC stress;
+      measurement remains pending.
 - [ ] Widen fresh Array output plans beyond eight prepared elements and accept
       mixed immutable literals. Share bounded discovery limits between preparation
       and target selection; preserve initializer effects, roots, holes, and the
       existing builder publication contract. Implemented with a shared 32-value bound
       and bounded cached key discovery. Immutable string loads now carry their actual
       GC-free effect contract. Focused Core/root/codec checks, actual bundled selection,
-      Node oracles, and emitted C syntax checks pass. Native execution and measurement
-      remain pending.
+      Node oracles, and emitted C syntax checks pass. Both mutable/locked Linux
+      ASan/UBSan checks pass across backends and GC stress; measurement remains pending.
 
 - [ ] Reuse canonical runtime callback nomination for forwarded Array and TypedArray
       `sort`/`toSorted` comparators. Preserve selected numeric adapters, eager element
@@ -650,6 +651,22 @@ The shared lifetime and fallback rules are recorded in
       rooted elements. All 211 focused checks, Node oracles, seven actual bundled
       programs, artifact roundtrips, and C syntax checks pass. Native execution
       and measurement remain pending.
+
+- [ ] Reuse canonical callback contexts for functional String and RegExp replacers.
+      Preserve eager match collection, variable callback arguments, result coercion,
+      captured environments, nested contexts, and restoration after abrupt completion.
+      Implemented through the shared nomination helper; RegExp callback results remain
+      rooted during conversion. All 43 focused checks, Node oracles, eleven frontend
+      artifact roundtrips, and runtime/generated C syntax checks pass. Native
+      execution and measurement remain pending.
+- [ ] Admit fresh Array regions inside handler-bearing functions when their local
+      allocation and initialization range has one exception target and no external
+      entry. Accept immutable BigInt literals through the existing rooted builder;
+      continue declining effectful initializers and protected-range crossings.
+      Implemented with the existing local body facts and GC-free constant loads.
+      All 195 focused checks, Node oracles, four actual bundled programs, byte-identical
+      artifact roundtrips, and emitted C syntax checks pass. Native execution and
+      measurement remain pending.
 
 | Order | Slice                        | Owning work and exit condition                                                                                                                                  |
 | ----- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |

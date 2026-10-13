@@ -4,6 +4,7 @@ import {
 	CORE_STRING_SPAN_RANGE_METHODS,
 	CORE_STRING_SPAN_SEARCH_METHODS,
 } from "../core/core-ir-regions.ts";
+import { stringConstantEquals } from "../shared/string-constant.ts";
 import type { NativeBodyFacts } from "./native-body-facts.ts";
 import { nativeSpanMethodCall } from "./native-string-span.ts";
 import {
@@ -117,11 +118,8 @@ export function selectNativeSpanContinuations(
 							definition.opcode === "LOAD_PROPERTY_STATIC" &&
 							definition.object === call.thisValue
 						) {
-							const name = String.fromCharCode(
-								...(strings[definition.stringIndex] ?? []),
-							);
-							const method = CORE_STRING_SPAN_RANGE_METHODS.find(
-								(method) => method === name,
+							const method = CORE_STRING_SPAN_RANGE_METHODS.find((method) =>
+								stringConstantEquals(strings[definition.stringIndex], method),
 							);
 							if (method !== undefined) {
 								operation = method;
@@ -203,13 +201,12 @@ export function selectNativeSpanContinuations(
 				op.opcode === "CALL" &&
 				callee?.opcode === "LOAD_GLOBAL_PROPERTY" &&
 				callee.dst === op.callee &&
-				String.fromCharCode(...(strings[callee.nameStringIndex] ?? [])) === "Number";
+				stringConstantEquals(strings[callee.nameStringIndex], "Number");
 			let kind: NativeSpanConsumer["kind"];
 			const methodProperty =
 				op.opcode === "LOAD_PROPERTY_STATIC"
-					? CORE_STRING_SPAN_METHODS.find(
-							(method) =>
-								method === String.fromCharCode(...(strings[op.stringIndex] ?? [])),
+					? CORE_STRING_SPAN_METHODS.find((method) =>
+							stringConstantEquals(strings[op.stringIndex], method),
 						)
 					: undefined;
 			if (
@@ -229,7 +226,7 @@ export function selectNativeSpanContinuations(
 			else if (
 				op.opcode === "LOAD_PROPERTY_STATIC" &&
 				op.object === value &&
-				String.fromCharCode(...(strings[op.stringIndex] ?? [])) === "length"
+				stringConstantEquals(strings[op.stringIndex], "length")
 			)
 				kind = "length";
 			else if (

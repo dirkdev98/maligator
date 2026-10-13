@@ -195,6 +195,7 @@ const GC_FREE = new Set<CoreOpcode>([
 	"readServiceEpoch",
 	"probeRead",
 	"baseConstructResult",
+	"createBigint",
 	"createBoolean",
 	"createEmpty",
 	"createF64",
@@ -230,7 +231,6 @@ const NO_THROW = new Set<CoreOpcode>([
 	// executing synchronously and cannot surface a JavaScript throw.
 	"asyncStart",
 	"createArray",
-	"createBigint",
 	"createFunction",
 	"createModuleNamespace",
 	"createTemplateObject",

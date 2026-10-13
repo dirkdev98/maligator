@@ -26,6 +26,12 @@ own bounds and observation state. Coercing arguments and unsupported observers
 materialize before the original operation. Search helpers honor both window
 boundaries, including when traversing ropes in reverse.
 
+Enumeration snapshots retain the sequence produced by the original operation.
+Keys can be counted without loading values; values must be copied eagerly into
+root slots before any consumer runs. Enumerable accessors and unsupported storage
+fall back before user code runs. Indexed observations share one cached Array
+materialization, so later reads see mutations made through that Array.
+
 ## Effects and continuation
 
 Virtual state follows allocation identity and control flow. Unreachable uses do

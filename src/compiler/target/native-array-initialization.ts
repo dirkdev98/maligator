@@ -32,7 +32,6 @@ export function selectNativeArrayInitializations(
 		plans: Array<NativeArrayInitialization> = [];
 	if (
 		native.mode !== "direct" ||
-		fn.handlers.length ||
 		fn.isAsync ||
 		fn.isGenerator ||
 		fn.profileSiteIds !== undefined ||
@@ -49,7 +48,8 @@ export function selectNativeArrayInitializations(
 		)
 			continue;
 		if (++attempted > ARRAY_INITIALIZATION_LIMITS.maximumCandidates) break;
-		const keys = new Map<number, string>(),
+		const handlerTarget = body.handlerTargets[allocationIp],
+			keys = new Map<number, string>(),
 			writes = new Set([allocation.dst]);
 		let preparedKeys: Map<number, string> | undefined;
 		const preparedKey = (register: number): string | undefined => {
@@ -68,6 +68,7 @@ export function selectNativeArrayInitializations(
 				) {
 					const op = fn.instructions[ip]!;
 					if (
+						body.handlerTargets[ip] !== handlerTarget ||
 						op.opcode === "JUMP" ||
 						op.opcode === "JUMP_IF" ||
 						op.opcode === "RETURN" ||
@@ -101,7 +102,12 @@ export function selectNativeArrayInitializations(
 			);
 			ip++
 		) {
-			if (body.jumpTargets.has(ip) || unavailable(ip)) break;
+			if (
+				body.handlerTargets[ip] !== handlerTarget ||
+				body.jumpTargets.has(ip) ||
+				unavailable(ip)
+			)
+				break;
 			const op = fn.instructions[ip]!;
 			if (
 				op.opcode === "CREATE_STRING" ||
