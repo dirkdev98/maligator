@@ -4335,7 +4335,8 @@ MalCompletion mal_vm_call_value(
     return completion;
 }
 
-MalCompletion mal_vm_call_cached(
+// Native callee roots stay out of the compiled-call frame used by recursive JS middleware.
+__attribute__((noinline)) static MalCompletion mal_vm_call_cached_fallback(
     MalVm *vm,
     MalCallCache *cc,
     MalValue callee,
@@ -4343,29 +4344,9 @@ MalCompletion mal_vm_call_cached(
     const MalValue *args,
     i32 arg_count
 ) {
-    if (vm->completion.kind == MAL_COMPLETION_THROW) {
-        return vm->completion;
-    }
-    MAL_PERF_COUNT(call_cache_probes);
-
-    MalFunctionObject *function_object = nullptr;
-    const MalFunction *function = nullptr;
-    i32 function_index = -1;
-
-    if (mal_value_is_function_object(callee)) {
-        function_object = mal_value_to_function_object(callee);
-        function_index = mal_function_object_function_index(function_object);
-        if (function_index >= 0 && function_index < vm->runtime_image->function_count) {
-            const MalFunction *candidate = &vm->runtime_image->functions[function_index];
-            if (candidate->compiled != nullptr && !candidate->is_class_constructor) {
-                function = candidate;
-                MAL_PERF_COUNT(call_cache_compiled_dispatches);
-                goto call_compiled;
-            }
-        }
-    } else if (cc->heap_identity == vm->heap.identity &&
-               cc->epoch == vm->heap.epoch &&
-               mal_value_is_native_function_object(callee)) {
+    if (cc->heap_identity == vm->heap.identity &&
+        cc->epoch == vm->heap.epoch &&
+        mal_value_is_native_function_object(callee)) {
         // Native callbacks are cacheable only by exact object identity. The
         // cached pointer must never be reused outside its heap lifetime/epoch.
         for (u32 v = 0; v < cc->count; v++) {
@@ -4433,6 +4414,38 @@ MalCompletion mal_vm_call_cached(
         }
     }
     return completion;
+}
+
+MalCompletion mal_vm_call_cached(
+    MalVm *vm,
+    MalCallCache *cc,
+    MalValue callee,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count
+) {
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return vm->completion;
+    }
+    MAL_PERF_COUNT(call_cache_probes);
+
+    MalFunctionObject *function_object = nullptr;
+    const MalFunction *function = nullptr;
+    i32 function_index = -1;
+
+    if (mal_value_is_function_object(callee)) {
+        function_object = mal_value_to_function_object(callee);
+        function_index = mal_function_object_function_index(function_object);
+        if (function_index >= 0 && function_index < vm->runtime_image->function_count) {
+            const MalFunction *candidate = &vm->runtime_image->functions[function_index];
+            if (candidate->compiled != nullptr && !candidate->is_class_constructor) {
+                function = candidate;
+                MAL_PERF_COUNT(call_cache_compiled_dispatches);
+                goto call_compiled;
+            }
+        }
+    }
+    return mal_vm_call_cached_fallback(vm, cc, callee, this_value, args, arg_count);
 
 call_compiled:
 #if MAL_PROFILE && MAL_PERF_STATS
