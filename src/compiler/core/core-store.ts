@@ -13,6 +13,7 @@ import {
 } from "./core-ir.ts";
 import type {
 	CoreAttributeValue,
+	CoreAttributeObject,
 	CoreAttributeRelocation,
 	CoreBlockId,
 	CoreBlockParameterSpec,
@@ -364,8 +365,7 @@ function freezeImmediate(value: CoreImmediate): CoreImmediate {
 	return Object.freeze({ ...value });
 }
 
-// Attribute data enters the store only through this copy, so it is where the data
-// must prove to be acyclic plain records and arrays; verification relies on that.
+// Verification relies on this ownership boundary admitting only acyclic data records and arrays.
 function freezeAttribute(
 	value: CoreAttributeValue,
 	ancestors: Set<object>,
@@ -385,21 +385,34 @@ function freezeAttribute(
 	ancestors.add(value);
 	let copy: CoreAttributeValue;
 	if (Array.isArray(value)) {
-		copy = (value as ReadonlyArray<CoreAttributeValue>).map((entry) =>
-			freezeAttribute(entry, ancestors),
-		);
+		const input = value as ReadonlyArray<CoreAttributeValue>;
+		const array = new Array<CoreAttributeValue>(input.length);
+		for (let index = 0; index < array.length; index++) {
+			if (index in input) array[index] = freezeAttribute(input[index], ancestors);
+		}
+		copy = array;
 	} else {
 		const prototype = Object.getPrototypeOf(value) as unknown;
 		if (prototype !== Object.prototype && prototype !== null) {
 			throw new Error("Core instruction attributes contain a non-data object");
 		}
-		// Assignment would send an own `__proto__` key to the inherited setter.
-		copy = Object.fromEntries(
-			Object.entries(value).map(([key, entry]) => [
-				key,
-				freezeAttribute(entry, ancestors),
-			]),
-		);
+		const record: Record<string, CoreAttributeValue> = {};
+		const keys = Object.keys(value);
+		// Snapshot siblings before traversing nested accessors that can mutate the input.
+		for (const key of keys) {
+			const entry = (value as CoreAttributeObject)[key];
+			// Assignment would send an own `__proto__` key to the inherited setter.
+			if (key === "__proto__") {
+				Object.defineProperty(record, key, {
+					value: entry,
+					enumerable: true,
+					writable: true,
+					configurable: true,
+				});
+			} else record[key] = entry;
+		}
+		for (const key of keys) record[key] = freezeAttribute(record[key], ancestors);
+		copy = record;
 	}
 	ancestors.delete(value);
 	return Object.freeze(copy);
@@ -408,6 +421,7 @@ function freezeAttribute(
 function freezeAttributes(
 	attributes: CoreInstructionAttributes,
 ): CoreInstructionAttributes {
+	if (attributes === EMPTY_CORE_INSTRUCTION_ATTRIBUTES) return attributes;
 	return freezeAttribute(attributes, new Set()) as CoreInstructionAttributes;
 }
 

@@ -196,56 +196,23 @@ function definedVariables(instruction: CompilerInstruction): Array<number> {
 		.filter((register) => register >= 0);
 }
 
-function cloneCoreAttribute(
-	value: unknown,
-	path: string,
-	ancestors: ReadonlySet<object> = new Set(),
-): unknown {
-	if (
-		value === undefined ||
-		value === null ||
-		typeof value === "boolean" ||
-		typeof value === "number" ||
-		typeof value === "string"
-	) {
-		return value;
-	}
-	if (typeof value !== "object") {
-		throw new Error(`Unsupported Core attribute ${path}: ${typeof value}`);
-	}
-	if (ancestors.has(value)) throw new Error(`Cyclic Core attribute ${path}`);
-	const nextAncestors = new Set(ancestors).add(value);
-	if (Array.isArray(value)) {
-		return Array.from(value as ReadonlyArray<unknown>, (entry, index) =>
-			cloneCoreAttribute(entry, `${path}[${index}]`, nextAncestors),
-		);
-	}
-	const prototype = Object.getPrototypeOf(value) as unknown;
-	if (prototype !== Object.prototype && prototype !== null) {
-		throw new Error(`Unsupported Core attribute object ${path}`);
-	}
-	const result: Record<string, unknown> = {};
-	for (const [key, entry] of Object.entries(value)) {
-		result[key] = cloneCoreAttribute(entry, `${path}.${key}`, nextAncestors);
-	}
-	return result;
-}
-
 function instructionAttributes(
 	instruction: CompilerInstruction,
 	expandImmediateOperands: boolean,
 ): CoreInstructionAttributes {
-	const attributes: Record<string, unknown> = {};
-	for (const [key, value] of Object.entries(instruction)) {
+	const attributes = Object.create(null) as Record<string, unknown>;
+	const input = instruction as unknown as Readonly<Record<string, unknown>>;
+	for (const key of Object.keys(instruction)) {
 		if (
 			key !== "type" &&
 			key !== "registers" &&
 			key !== "blocks" &&
 			!(expandImmediateOperands && key === "immediateValues")
 		) {
-			attributes[key] = cloneCoreAttribute(value, `${instruction.type}.${key}`);
+			attributes[key] = input[key];
 		}
 	}
+	// CoreStore validates and snapshots these borrowed values when the operation enters it.
 	return attributes as CoreInstructionAttributes;
 }
 

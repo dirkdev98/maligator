@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
+import {
+	emitCoreEntryInstructions,
+	finishDirectCoreFunction,
+	initializeDirectCoreFunction,
+} from "../src/compiler/core/core-frontend-construction.ts";
+import type { CoreConstructionFunction } from "../src/compiler/core/core-frontend-construction.ts";
 import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
 import type {
@@ -55,6 +61,60 @@ function targetBlocks(payload: CoreTerminatorPayload): Array<CoreBlockId> {
 }
 
 describe("Core construction", () => {
+	it("snapshots frontend attributes at store entry and preserves own prototype-named keys", () => {
+		const semantic = analyzeSourceAndRunSemanticAnalysis("", "core-attributes.js");
+		const program = new CoreProgram(coreOpcodeRegistry, { stringConstants: [[]] });
+		const fn: CoreConstructionFunction = {
+			semanticFile: semantic.files[0]!,
+			functionIndex: 0,
+			nameStringIndex: 0,
+			parameterCount: 0,
+			length: 0,
+			nextCapturedIndex: 0,
+			blocks: [],
+		};
+		initializeDirectCoreFunction(program, fn);
+		const metadata = JSON.parse('{"__proto__":{"bits":[1,2]}}') as {
+			__proto__: { bits: Array<number> };
+		};
+		const instruction = {
+			type: "createNumber" as const,
+			registers: [0] as [number],
+			value: 4,
+			metadata,
+		};
+		emitCoreEntryInstructions(fn, instruction);
+		metadata.__proto__.bits[0] = 9;
+		fn.blocks.push({
+			emitter: {
+				emit() {
+					throw new Error("Unbound construction block");
+				},
+				emitLiteralSwitch() {
+					throw new Error("Unbound construction block");
+				},
+				last() {
+					return undefined;
+				},
+			},
+		});
+		fn.blocks[0]!.emitter.emit({ type: "return", registers: [0] });
+		const stored = program.function(finishDirectCoreFunction(fn));
+		const number = [...stored.instructionIds()].find(
+			(id) =>
+				stored.instructionKind(id) === "operation" &&
+				stored.instructionOpcodeName(id) === "createNumber",
+		)!;
+		const attributes = stored.instructionAttributes(number);
+		expect(attributes).toEqual({
+			value: 4,
+			metadata: { ["__proto__"]: { bits: [1, 2] } },
+		});
+		expect(Object.getPrototypeOf(attributes.metadata)).toBe(Object.prototype);
+		expect(Object.isFrozen(attributes.metadata)).toBe(true);
+		expect((attributes.metadata as typeof metadata).__proto__.bits).toEqual([1, 2]);
+	});
+
 	it("keeps bare array spread as one semantic Core operation", () => {
 		const bare = compile("function copy(source) { return [...source]; }");
 		const bareOperations = [...bare.program.functionIds()].flatMap((functionId) =>

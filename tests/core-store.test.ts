@@ -1041,6 +1041,95 @@ describe("Core store", () => {
 		expect("unexpected" in stored).toBe(false);
 	});
 
+	it("isolates appended and replacement attributes from caller mutation", () => {
+		const program = new CoreProgram(registry());
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const rows = [{ bits: [1, undefined, null] }];
+		const attributes = Object.freeze({ rows });
+		const inserted = builder.editor.appendInstruction(entry, "constant", [], {
+			attributes,
+		});
+		builder.setTerminator(entry, { kind: "return", value: inserted.outputs[0]! });
+		const fn = program.function(builder.finish(entry).function);
+		const appended = fn.instructionAttributes(inserted.instruction);
+		rows[0]!.bits[0] = 9;
+		rows.push({ bits: [2] });
+		expect(appended).toEqual({ rows: [{ bits: [1, undefined, null] }] });
+		expect(Object.isFrozen(appended)).toBe(true);
+		expect(Object.isFrozen(appended.rows)).toBe(true);
+		expect(Object.isFrozen((appended.rows as typeof rows)[0]!.bits)).toBe(true);
+
+		const replacement = { rows: [{ bits: [3] }] };
+		const editor = CoreEditor.open(program, fn.id);
+		editor.replaceInstruction(inserted.instruction, "constant", [], {
+			attributes: replacement,
+		});
+		editor.commit();
+		replacement.rows[0]!.bits[0] = 8;
+		expect(fn.instructionAttributes(inserted.instruction)).toEqual({
+			rows: [{ bits: [3] }],
+		});
+		expect(appended.rows).toEqual([{ bits: [1, undefined, null] }]);
+		verifyCoreProgram(program);
+	});
+
+	it("snapshots null-prototype records and sparse arrays without admitting frozen invalid data", () => {
+		const program = new CoreProgram(registry());
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const record = Object.create(null) as Record<string, number>;
+		record.answer = 42;
+		const rows = new Array<number>(3);
+		rows[2] = 7;
+		const inserted = builder.editor.appendInstruction(entry, "constant", [], {
+			attributes: { record, rows },
+		});
+		const stored = builder.editor.function.instructionAttributes(inserted.instruction);
+		expect(stored.record).toEqual({ answer: 42 });
+		expect(Object.getPrototypeOf(stored.record)).toBe(Object.prototype);
+		expect(stored.rows).toEqual(rows);
+		expect(0 in (stored.rows as Array<number>)).toBe(false);
+		const cycle: Record<string, unknown> = {};
+		cycle.back = cycle;
+		for (const [invalid, message] of [
+			[Object.freeze(cycle), /cyclic data/],
+			[Object.freeze(new Map()), /non-data object/],
+		] as const) {
+			expect(() =>
+				builder.editor.appendInstruction(entry, "constant", [], {
+					attributes: invalid as never,
+				}),
+			).toThrow(message);
+		}
+	});
+
+	it("snapshots sibling values before nested accessors can replace them", () => {
+		const program = new CoreProgram(registry());
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		let reads = 0;
+		const attributes = {
+			child: {
+				get value() {
+					reads++;
+					attributes.sibling = { value: 9 };
+					return 1;
+				},
+			},
+			sibling: { value: 2 },
+		};
+		const inserted = builder.editor.appendInstruction(entry, "constant", [], {
+			attributes,
+		});
+		expect(builder.editor.function.instructionAttributes(inserted.instruction)).toEqual({
+			child: { value: 1 },
+			sibling: { value: 2 },
+		});
+		expect(reads).toBe(1);
+		expect(attributes.sibling).toEqual({ value: 9 });
+	});
+
 	it.each([
 		["function", () => 1],
 		["symbol", Symbol("attribute")],
