@@ -2723,19 +2723,30 @@ MalValue mal_builtin_string_case_known(MalVm *vm, MalString *string, bool upper,
     return mal_builtin_string_case_range(vm, string, 0, mal_string_length(string), upper, locale);
 }
 
+static MalValue mal_builtin_string_locale_case_range(
+    MalVm *vm, MalString *string, usize start, usize length, bool upper, MalValue locales
+) {
+    MalValue roots[2] = {mal_value_from_string(string), locales};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 2);
+    MalUnicodeLocale locale;
+    // Locale resolution retains temporary tags under the native builtin's GC suppression.
+    vm->gc_native_frames++;
+    bool resolved = mal_intl_case_locale(vm, roots[1], &locale);
+    vm->gc_native_frames--;
+    MalValue result = resolved
+        ? mal_builtin_string_case_range_impl(vm, mal_value_to_string(roots[0]), start, length, upper, locale)
+        : MAL_VALUE_UNDEFINED;
+    mal_gc_unroot(&span);
+    return result;
+}
+
 static MalValue mal_builtin_string_case_impl(MalVm *vm, MalValue receiver, bool upper, bool localized, MalValue locales) {
     MalString *string = mal_builtin_string_this_to_string(vm, receiver);
     if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
-    MalBuiltinRootedString root;
-    mal_builtin_string_root_init(&root, string);
-    MalUnicodeLocale locale = MAL_UNICODE_LOCALE_ROOT;
-    if (localized && !mal_intl_case_locale(vm, locales, &locale)) {
-        mal_builtin_string_root_dispose(&root);
-        return mal_value_new_undefined();
-    }
-    MalValue result = mal_builtin_string_case_known(vm, mal_builtin_string_root_get(&root), upper, locale);
-    mal_builtin_string_root_dispose(&root);
-    return result;
+    return localized
+        ? mal_builtin_string_locale_case_range(vm, string, 0, mal_string_length(string), upper, locales)
+        : mal_builtin_string_case_known(vm, string, upper, MAL_UNICODE_LOCALE_ROOT);
 }
 
 static MalValue mal_builtin_string_prototype_to_locale_upper_case(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -2774,6 +2785,25 @@ bool mal_builtin_string_span_case(
     if (upper) MAL_PERF_COUNT(string_span_upper_case_calls);
     else MAL_PERF_COUNT(string_span_lower_case_calls);
     *out = mal_builtin_string_case_range(vm, mal_value_to_string(subject), start, end - start, upper, MAL_UNICODE_LOCALE_ROOT);
+    return true;
+}
+
+bool mal_builtin_string_span_locale_case(
+    MalVm *vm, MalValue callee, bool locked, MalValue subject, usize start, usize end,
+    MalValue locales, bool upper, MalValue *out
+) {
+    MalNativeFunctionCallback expected = upper
+        ? mal_builtin_string_prototype_to_locale_upper_case : mal_builtin_string_prototype_to_locale_lower_case;
+    if (!locked && (!mal_value_is_native_function_object(callee) ||
+        mal_native_function_object_callback(mal_value_to_native_function_object(callee)) != expected)) return false;
+#if MAL_REALMS
+    if (!locked && mal_vm_callee_realm(vm, callee) != vm->current_realm) return false;
+#endif
+    if (!mal_value_is_string(subject) || start > end ||
+        end > mal_string_length(mal_value_to_string(subject))) return false;
+    if (upper) MAL_PERF_COUNT(string_span_locale_upper_case_calls);
+    else MAL_PERF_COUNT(string_span_locale_lower_case_calls);
+    *out = mal_builtin_string_locale_case_range(vm, mal_value_to_string(subject), start, end - start, upper, locales);
     return true;
 }
 

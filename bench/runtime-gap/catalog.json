@@ -6253,6 +6253,32 @@
 			"sourceSeam": "runtime/src/builtin_string.c",
 			"fixture": "cases/string-span-well-formed.mjs",
 			"controls": ["string-span-normalize", "string-span-case"]
+		},
+		{
+			"id": "number-record-math",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Numeric record regions",
+			"category": "memory-layout-usage",
+			"mechanisms": ["numeric-record-storage", "numeric-builtin-bodies"],
+			"inputShape": "Record field updates retain numeric state through clamps, half rounding, integer multiplication and absolute values.",
+			"unit": "record",
+			"sourceSeam": "src/compiler/target/lower-native-fast-paths.ts",
+			"fixture": "cases/number-record-math.mjs",
+			"controls": ["typed-array-math-kernels"]
+		},
+		{
+			"id": "string-span-locale-case",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Composable string spans",
+			"category": "memory-layout-usage",
+			"mechanisms": ["string-spans", "delayed-materialization"],
+			"inputShape": "Locale-aware case conversion from retained range, split, capture and nested spans with canonical locale resolution.",
+			"unit": "token",
+			"sourceSeam": "runtime/src/builtin_string.c",
+			"fixture": "cases/string-span-locale-case.mjs",
+			"controls": ["string-span-case", "string-span-normalize"]
 		}
 	]
 }

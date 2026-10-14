@@ -47,7 +47,7 @@ import type {
 import type { NativeCaptureAccessPlan } from "./lower-native-captures.ts";
 import {
 	numericLoopOrder,
-	numericLoopMathInstruction,
+	nativeNumericMathInstruction,
 	lowerNativeFastPaths,
 	numberRecordDataflow,
 	numberRecordOrder,
@@ -882,7 +882,7 @@ function emitNumericLoopRegion(
 			case "CALL_KNOWN":
 			case "MATH_UNARY_NUMBER":
 			case "MATH_BINARY_NUMBER": {
-				const math = floating ? numericLoopMathInstruction(op) : undefined;
+				const math = floating ? nativeNumericMathInstruction(op) : undefined;
 				if (math === undefined) throw new Error("Invalid numeric loop Math operation");
 				const arguments_ = math.arguments.map((argument) =>
 					argument.kind === "number"
@@ -1135,6 +1135,21 @@ function emitNumberRecordRegion(
 	const statement = (ip: number): string => {
 		const op = fn.instructions[ip]!;
 		switch (op.opcode) {
+			case "CALL_KNOWN":
+			case "MATH_UNARY_NUMBER":
+			case "MATH_BINARY_NUMBER": {
+				const math = nativeNumericMathInstruction(op);
+				if (math === undefined) throw new Error("Invalid numeric record Math operation");
+				const arguments_ = math.arguments.map((argument) =>
+					argument.kind === "number"
+						? cF64Literal(argument.value)
+						: local(argument.register),
+				);
+				const expression = nativeMathNumberExpr(math.operation, arguments_);
+				if (expression === null)
+					throw new Error("Invalid numeric record Math expression");
+				return `${local(op.dst)} = ${expression};`;
+			}
 			case "LOAD_PROPERTY_STATIC":
 				return `${local(op.dst)} = ${field(op.stringIndex)};`;
 			case "STORE_PROPERTY_STATIC":
@@ -6507,6 +6522,19 @@ function emitInstruction(
 			guard += ` && mal_builtin_string_span_well_formed(vm, ${locked ? "MAL_VALUE_UNDEFINED" : boxedOperand(instruction.callee)}, ${locked}, ${source}, ${prefix}_start, ${prefix}_end, ${role === "toWellFormedCall"}, &${result})`;
 			projected = `${throwCheck()} r${instruction.dst} = ${callValue(instruction.dst, result)};`;
 		} else if (
+			(role === "toLocaleLowerCaseCall" || role === "toLocaleUpperCaseCall") &&
+			(instruction.opcode === "CALL" || instruction.opcode === "CALL_KNOWN")
+		) {
+			const result = `${prefix}_locale_case_${ip}`;
+			declarations.push(`MalValue ${result};`);
+			const locked = instruction.opcode === "CALL_KNOWN";
+			const locales =
+				instruction.arguments[0] === undefined
+					? "MAL_VALUE_UNDEFINED"
+					: boxedOperand(instruction.arguments[0]);
+			guard += ` && mal_builtin_string_span_locale_case(vm, ${locked ? "MAL_VALUE_UNDEFINED" : boxedOperand(instruction.callee)}, ${locked}, ${source}, ${prefix}_start, ${prefix}_end, ${locales}, ${role === "toLocaleUpperCaseCall"}, &${result})`;
+			projected = `${throwCheck()} r${instruction.dst} = ${callValue(instruction.dst, result)};`;
+		} else if (
 			characterCall !== undefined &&
 			(instruction.opcode === "CALL" || instruction.opcode === "CALL_KNOWN")
 		) {
@@ -6599,6 +6627,8 @@ function emitInstruction(
 			role === "toLowerCaseCall" ||
 			role === "toUpperCaseCall" ||
 			role === "normalizeCall" ||
+			role === "toLocaleLowerCaseCall" ||
+			role === "toLocaleUpperCaseCall" ||
 			role === "isWellFormedCall" ||
 			role === "toWellFormedCall" ||
 			methodProperty !== undefined ||

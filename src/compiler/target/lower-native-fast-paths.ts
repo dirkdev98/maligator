@@ -985,6 +985,18 @@ function numberRecordInstruction(
 	object: number,
 ): boolean {
 	switch (instruction.opcode) {
+		case "CALL_KNOWN":
+		case "MATH_UNARY_NUMBER":
+		case "MATH_BINARY_NUMBER": {
+			const math = nativeNumericMathInstruction(instruction);
+			return (
+				math !== undefined &&
+				instruction.dst !== object &&
+				math.arguments.every(
+					(argument) => argument.kind === "number" || argument.register !== object,
+				)
+			);
+		}
 		case "LOAD_PROPERTY_STATIC":
 			return instruction.object === object && instruction.dst !== object;
 		case "STORE_PROPERTY_STATIC":
@@ -1115,7 +1127,7 @@ export function numberRecordDataflow(
 			case "CALL_KNOWN":
 			case "MATH_UNARY_NUMBER":
 			case "MATH_BINARY_NUMBER": {
-				const math = indexed ? numericLoopMathInstruction(instruction) : undefined;
+				const math = nativeNumericMathInstruction(instruction);
 				admitted =
 					math !== undefined &&
 					math.arguments.every(
@@ -1635,7 +1647,7 @@ function numericLoopIndexFacts(
 }
 
 /** Only proven builtin identities whose numeric bodies cannot call user code or collect. */
-export function numericLoopMathInstruction(instruction: BytecodeInstruction):
+export function nativeNumericMathInstruction(instruction: BytecodeInstruction):
 	| {
 			readonly operation: string;
 			readonly arguments: ReadonlyArray<
@@ -1803,7 +1815,7 @@ function fixedNumericLoopStorage(
 			(op.opcode !== "CREATE_NUMBER" &&
 				op.opcode !== "CREATE_F64" &&
 				!integerLoopInstruction(op) &&
-				numericLoopMathInstruction(op) === undefined) ||
+				nativeNumericMathInstruction(op) === undefined) ||
 			vmInstructionReadRegisters(op).some((register) => views.has(register))
 		)
 			return undefined;
@@ -2848,10 +2860,18 @@ export function selectNativeFastPaths(
 				ip,
 				native.registerRepresentations,
 				body,
-				(candidate) =>
-					unavailable(candidate) ||
-					native.instructions[candidate] !== undefined ||
-					fusions.has(candidate),
+				(candidate) => {
+					const kind = native.instructions[candidate]?.kind;
+					return (
+						unavailable(candidate) ||
+						fusions.has(candidate) ||
+						(kind !== undefined &&
+							!(
+								kind === "exact-builtin-input-kinds" &&
+								nativeNumericMathInstruction(fn.instructions[candidate]!) !== undefined
+							))
+					);
+				},
 			);
 			if (plan === undefined) continue;
 			numberRecordRegions.push(plan);
@@ -2875,7 +2895,7 @@ export function selectNativeFastPaths(
 							kind !== "unsigned-arithmetic" &&
 							!(
 								kind === "exact-builtin-input-kinds" &&
-								numericLoopMathInstruction(fn.instructions[candidate]!) !== undefined
+								nativeNumericMathInstruction(fn.instructions[candidate]!) !== undefined
 							))
 					);
 				},

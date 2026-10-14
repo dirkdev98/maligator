@@ -978,6 +978,9 @@ static void mal_perf_stats_print(void) {
     fprintf(stderr, "[perf-string-span-case-stats] lower=%llu upper=%llu\n",
         (unsigned long long) mal_perf_stats.string_span_lower_case_calls,
         (unsigned long long) mal_perf_stats.string_span_upper_case_calls);
+    fprintf(stderr, "[perf-string-span-locale-case-stats] lower=%llu upper=%llu\n",
+        (unsigned long long) mal_perf_stats.string_span_locale_lower_case_calls,
+        (unsigned long long) mal_perf_stats.string_span_locale_upper_case_calls);
     fprintf(stderr, "[perf-string-span-normalize-stats] calls=%llu\n",
         (unsigned long long) mal_perf_stats.string_span_normalize_calls);
     fprintf(stderr, "[perf-string-span-well-formed-stats] is_well_formed=%llu to_well_formed=%llu\n",

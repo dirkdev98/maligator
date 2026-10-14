@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { resolveBuildConfig } from "../src/build-config.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
+import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
 import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
@@ -11,12 +13,17 @@ import type { ProgramImage } from "../src/compiler/target/program-image.ts";
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
 import { mergeProgramImages } from "../src/test262/program-image-merge.ts";
 
-function compile(body: string) {
+function compile(body: string, primordials: "mutable" | "locked" = "mutable") {
 	return compileSemanticProgramToProgramImage(
 		analyzeSourceAndRunSemanticAnalysis(
 			`globalThis.step = function step(record, scale) { ${body} };`,
 			"/number-record-plan.js",
 		),
+		{
+			facts: compilerProgramFactsFromConfig(
+				resolveBuildConfig({ engine: { primordials } }),
+			),
+		},
 	);
 }
 
@@ -39,6 +46,73 @@ function fieldNames(image: ProgramImage, plan: NativeNumberRecordRegionPlan) {
 }
 
 describe("native number record regions", () => {
+	it.each([
+		"Math.abs(record.x)",
+		"Math.round(record.x)",
+		"Math.f16round(record.x)",
+		"Math.imul(record.x, scale)",
+		"Math.pow(record.x, scale)",
+		"Math.atan2(record.x, scale)",
+		"Math.min(record.x, scale, 9)",
+		"Math.max(record.x, scale, -9)",
+		"Math.hypot(record.x, scale, record.y)",
+		"Math.imul(record.x)",
+		"record.x + Math.min()",
+	])("retains field state through proven %s", (expression) => {
+		const image = compile(
+			`record.x = ${expression}; record.y = record.x + record.y; return record.y;`,
+			"locked",
+		);
+		const [plan] = regions(image);
+		expect(plan).toBeDefined();
+		expect(fieldNames(image, plan!)).toEqual(["x=", "y="]);
+		expect(image.native.functions[1]!.body.instructions[plan!.exitIp]!.opcode).toBe(
+			"RETURN",
+		);
+		expect(
+			regions(deserializeCompilerArtifact(serializeCompilerArtifact(image))),
+		).toEqual(regions(image));
+		expect(emitCompiledFunction(image.native.functions[1]!, 1, "", false)).not.toBeNull();
+	});
+
+	it("guards a dynamic Math operand before changing any fields", () => {
+		const [plan] = regions(
+			compile(
+				"record.x = Math.max(record.x, scale); record.y = record.x + record.y;",
+				"locked",
+			),
+		);
+		expect(plan!.inputs).toHaveLength(1);
+	});
+
+	it("keeps receiver coercion outside a numeric record region", () => {
+		const image = compile(
+			"record.x = Math.max(record.x, record); record.y = record.x + record.y;",
+			"locked",
+		);
+		for (const plan of regions(image))
+			expect(
+				plan.claimedIps.every(
+					(ip) =>
+						image.native.functions[1]!.body.instructions[ip]!.opcode !== "CALL_KNOWN",
+				),
+			).toBe(true);
+	});
+
+	it("preserves mutable Math lookup and ignored argument effects", () => {
+		for (const [body, primordials] of [
+			["record.x = Math.abs(record.x); record.y = record.x + record.y;", "mutable"],
+			[
+				"record.x = Math.abs(record.x, scale()); record.y = record.x + record.y;",
+				"locked",
+			],
+		] as const) {
+			const image = compile(body, primordials);
+			for (const plan of regions(image))
+				expect(fieldNames(image, plan)).not.toContain("x=");
+		}
+	});
+
 	it("admits a branching update through to the return and materializes its result", () => {
 		const image = compile(PARTICLE);
 		const [plan] = regions(image);

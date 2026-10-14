@@ -419,6 +419,11 @@ bool mal_builtin_string_span_case(
     MalVm *vm, MalValue callee, bool locked, MalValue subject, usize start, usize end,
     bool upper, MalValue *out
 );
+// Guard misses have no effects; locale resolution may re-enter or throw before any case conversion.
+bool mal_builtin_string_span_locale_case(
+    MalVm *vm, MalValue callee, bool locked, MalValue subject, usize start, usize end,
+    MalValue locales, bool upper, MalValue *out
+);
 MalValue mal_builtin_string_case_known(MalVm *vm, MalString *string, bool upper, MalUnicodeLocale locale);
 // Guard misses have no effects; admitted form conversion may re-enter, allocate or throw.
 bool mal_builtin_string_span_normalize(

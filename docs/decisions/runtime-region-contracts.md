@@ -113,6 +113,12 @@ store. Collecting initializers retain the owner as an ordinary rooted value and
 use per-store barriers; no backing pointer survives their calls. A handler that
 could observe partially changed Array length prevents that admission.
 
+Numeric record regions carry guarded field values through the same certified
+numeric builtin bodies as fixed storage loops. Every consumed dynamic operand is
+a Number before execution; admitted bodies neither allocate nor invoke user code.
+The original field and writable-store guards remain valid until final publication.
+Unknown methods and coercions end the region before their original observation.
+
 Property-read regions can retain a receiver through must-alias register moves
 and effect-free forward branches. Every incoming edge preserves that identity.
 The first property-cache miss ends the borrowed shape and field-pointer lifetime
@@ -132,6 +138,11 @@ An Array entry cursor with a foreign captured next method takes that original ca
 so an element access throws in the method's realm. Fresh collection constructors
 root their receiver and captured adder before acquiring the iterator, since either
 getter can explicitly collect.
+
+Locale-aware span case conversion resolves the full locale list before empty or
+unchanged output shortcuts. Its shared helper roots the source and locale input;
+only locale resolution owns a balanced native-frame contribution. The bounded
+Unicode builder resumes with the caller's original frame count and span context.
 
 ## Bounded expansion
 

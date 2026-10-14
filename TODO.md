@@ -995,6 +995,19 @@ The shared lifetime and fallback rules are recorded in
       artifact/C captures and four runtime C configurations pass. Native and
       performance verification remain pending.
 
+- [ ] Carry numeric record fields through certified Math bodies, including variadic
+      clamps, integer kernels, half rounding, powers and norms. Preserve field and
+      numeric-input guards before effects and canonical fallback for accessors,
+      coercion, exceptions, mutable methods and non-writable fields. All149 compiler
+      contracts, fourteen Node GC modes and four frontend/artifact/C captures pass.
+      Native and performance verification remain pending.
+- [ ] Convert locale-aware case directly over retained string spans through canonical
+      locale resolution and the shared bounded Unicode case builder. Preserve all
+      locale-list observations, invalid-tag errors, captured-method identity, source
+      roots and balanced native-frame ownership. All249 focused checks, eleven Node
+      GC modes, five frontend/artifact/C captures and eight runtime C configurations
+      pass. Native and performance verification remain pending.
+
 | Order | Slice                        | Owning work and exit condition                                                                                                                                  |
 | ----- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1     | Callback invocation          | The tasks above; remove measured repeated invocation work for a numeric reduction with captures.                                                                |
