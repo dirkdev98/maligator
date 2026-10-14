@@ -2559,6 +2559,12 @@ mal_vm_property_try_load_static_remaining(
             mal_vm_inherited_stub_try_load_static(vm, receiver, object, ic, &value);
     } else {
         const MalObject *own = object != nullptr ? object : mal_vm_as_own_slot_object(receiver);
+        // Named own fields on builtin receivers carry the same immutable shape proof.
+        if (object == nullptr && own != nullptr &&
+            (mal_vm_object_try_load_monomorphic(own, ic->key, ic, &value) ||
+             mal_vm_object_try_load_polymorphic(own, ic->key, ic, &value))) {
+            return (MalStaticPropertyProbeResult) {.hit = true, .value = value};
+        }
         hit = (own != nullptr && ic->mode == MAL_IC_MODE_OWN_TABLE &&
                mal_vm_own_table_try_load(own, ic->key, ic, &value)) ||
             mal_vm_watched_try_load_static(receiver, ic, &value) ||

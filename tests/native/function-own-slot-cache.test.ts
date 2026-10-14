@@ -35,7 +35,7 @@ describe("function own-slot property cache", () => {
 		).toBe(expected);
 	});
 
-	it("serves script, native, and bound function properties from shape slots", () => {
+	it("serves script, native, and bound function properties through noncollecting shape hits", () => {
 		const result = spawnSync(compiled, [], {
 			env: { ...process.env, MAL_HOST_GC: "1", MAL_PERF_STATS: "1" },
 			encoding: "utf-8",
@@ -46,6 +46,6 @@ describe("function own-slot property cache", () => {
 			.split("\n")
 			.find((candidate) => candidate.startsWith("[perf-ic-stats]"));
 		expect(line).toBeDefined();
-		expect(field(line ?? "", "load_slow_mono_hits")).toBeGreaterThan(5_900);
+		expect(field(line ?? "", "load_mono_hits")).toBeGreaterThan(5_900);
 	});
 });
