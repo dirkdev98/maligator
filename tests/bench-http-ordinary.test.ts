@@ -21,25 +21,22 @@ const fs = require("node:fs");
 const http = require("node:http");
 const port = Number(process.env.PORT || 3111);
 fs.writeFileSync(process.env.TEST_ENV_LOG, JSON.stringify({ gc: process.env.MAL_GC_STATS, control: process.env.MAL_GC_CONTROL, perf: process.env.MAL_PERF_STATS }));
-let statsRequested = false;
 let statsCount = 0;
 let requestCount = 0;
 if (process.env.TEST_DIAGNOSTIC_MODE) {
   process.on("SIGUSR1", () => {
     if (process.env.TEST_DIAGNOSTIC_MODE === "exit") process.exit(9);
-    statsRequested = true;
+    if (process.env.TEST_DIAGNOSTIC_MODE === "no-ack") return;
+    statsCount++;
+    const line = "[gc-stats] collections=" + statsCount + " allocated_bytes=" + (requestCount * 16) + " total_ms=" + statsCount + " max_pause_ms=" + (3 - statsCount) + "\\n";
+    process.stderr.write(line.slice(0, 24));
+    setTimeout(() => process.stderr.write(line.slice(24)), 2);
   });
   const originalCreateServer = http.createServer;
   http.createServer = (...args) => {
     const server = originalCreateServer(...args);
     server.on("request", () => {
       requestCount++;
-      if (!statsRequested || process.env.TEST_DIAGNOSTIC_MODE === "no-ack") return;
-      statsRequested = false;
-      statsCount++;
-      const line = "[gc-stats] collections=" + statsCount + " allocated_bytes=" + (requestCount * 16) + " total_ms=" + statsCount + " max_pause_ms=" + (3 - statsCount) + "\\n";
-      process.stderr.write(line.slice(0, 24));
-      setTimeout(() => process.stderr.write(line.slice(24)), 2);
     });
     return server;
   };

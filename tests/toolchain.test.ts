@@ -993,6 +993,7 @@ printf '!<arch>\\n' > "$2"
 
 	it("keeps development at O2 unstripped and falls back when production options fail probes", () => {
 		const fake = createFakeToolchain({ lto: false, strip: false });
+		const runtimeDirectory = createMinimalRuntime(fake);
 		const report = inspectToolchain({
 			rootDir: fake.root,
 			rustDir: fake.rustDir,
@@ -1012,6 +1013,7 @@ printf '!<arch>\\n' > "$2"
 		writeFileSync(fake.logPath, "");
 		const developmentContext = resolveNativeBuildContext({
 			toolchain,
+			runtimeDirectory,
 			plan: development,
 			cacheDirectory: path.join(fake.root, "development-cache"),
 			features: { evalEnabled: false, webPlatformEnabled: false },
@@ -1031,6 +1033,7 @@ printf '!<arch>\\n' > "$2"
 		writeFileSync(fake.logPath, "");
 		const productionContext = resolveNativeBuildContext({
 			toolchain,
+			runtimeDirectory,
 			plan: production,
 			cacheDirectory: path.join(fake.root, "production-cache"),
 			features: { evalEnabled: false, webPlatformEnabled: false },
@@ -1413,10 +1416,14 @@ printf '!<arch>\\n' > "$2"
 	it("invalidates changed and incomplete runtime artifacts", () => {
 		const fake = createFakeToolchain();
 		const runtimeDirectory = createMinimalRuntime(fake);
+		const environment = {
+			...fake.env,
+			CARGO_HOME: path.join(fake.root, "cargo-home"),
+		};
 		const toolchain = inspectToolchain({
 			rootDir: fake.root,
 			rustDir: path.join(runtimeDirectory, "rust"),
-			env: fake.env,
+			env: environment,
 			needsCxx: false,
 			platform: "linux",
 		}).toolchain!;
@@ -1426,6 +1433,7 @@ printf '!<arch>\\n' > "$2"
 			toolchain,
 			runtimeDirectory,
 			cacheDirectory,
+			environment,
 			features: {
 				evalEnabled: false,
 				webPlatformEnabled: false,
@@ -1448,7 +1456,7 @@ printf '!<arch>\\n' > "$2"
 		const first = ensureNativeArtifacts(context);
 		expect(first.c.runtime).toContain(cacheDirectory);
 		expect(readFileSync(fake.logPath, "utf-8")).toContain(
-			`cargo-home ${cargoCacheDirectory(fake.env)}`,
+			`cargo-home ${cargoCacheDirectory(environment)}`,
 		);
 		const afterFirst = compileInvocationCount(fake.logPath);
 		expect(ensureNativeArtifacts(context).c.runtime).toBe(first.c.runtime);

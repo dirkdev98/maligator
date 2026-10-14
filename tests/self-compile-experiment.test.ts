@@ -458,9 +458,13 @@ it.each(["SIGINT", "SIGTERM"] as const)(
 			await closed;
 		});
 		const pidFile = path.join(test.root, "descendant.pid");
-		await expect.poll(() => existsSync(pidFile)).toBe(true);
+		await expect
+			.poll(() => (existsSync(pidFile) ? Number(readFileSync(pidFile, "utf8")) : 0), {
+				timeout: 10_000,
+			})
+			.toBeGreaterThan(0);
 		const pid = Number(readFileSync(pidFile, "utf8"));
-		child.kill(signal);
+		expect(child.kill(signal)).toBe(true);
 		const code = await closed;
 		expect(code, stderr).toBe(2);
 		expect(test.report()).toMatchObject({
