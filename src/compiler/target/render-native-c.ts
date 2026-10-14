@@ -1214,7 +1214,7 @@ function emitNumberRecordRegion(
 				`  MalNumberRecordField ${id}_f${index} = {0}; f64 ${id}_v${index} = 0.0;`,
 		),
 		`  if (${guards.join(" && ")}) {`,
-		"    mal_vm_number_record_admitted();",
+		`    mal_vm_number_record_admitted(&${id});`,
 		...[...flow.kinds].map(
 			([register, kind]) =>
 				`    ${kind === "boolean" ? "bool" : "f64"} ${local(register)} = ${initial.get(register) ?? (kind === "boolean" ? "false" : "0.0")};`,
@@ -6478,6 +6478,17 @@ function emitInstruction(
 				projected = `${resetCapture}r${instruction.dst} = ${callValue(instruction.dst, method)};`;
 			}
 		} else if (
+			role === "concatCall" &&
+			(instruction.opcode === "CALL" || instruction.opcode === "CALL_KNOWN")
+		) {
+			const result = `${prefix}_concat_${ip}`;
+			declarations.push(`MalValue ${result};`);
+			const locked = instruction.opcode === "CALL_KNOWN";
+			const args = instruction.arguments.map((argument) => boxedOperand(argument));
+			const values = args.length ? `(const MalValue[]){ ${args.join(", ")} }` : "nullptr";
+			guard += ` && mal_builtin_string_span_concat(vm, ${locked ? "MAL_VALUE_UNDEFINED" : boxedOperand(instruction.callee)}, ${locked}, ${source}, ${prefix}_start, ${prefix}_end, ${values}, ${args.length}, &${result})`;
+			projected = `${throwCheck()} r${instruction.dst} = ${callValue(instruction.dst, result)};`;
+		} else if (
 			role === "repeatCall" &&
 			(instruction.opcode === "CALL" || instruction.opcode === "CALL_KNOWN")
 		) {
@@ -6657,6 +6668,7 @@ function emitInstruction(
 			role === "parseFloat" ||
 			role === "isFinite" ||
 			role === "isNaN" ||
+			role === "concatCall" ||
 			role === "repeatCall" ||
 			role === "padStartCall" ||
 			role === "padEndCall" ||

@@ -1033,13 +1033,14 @@ The shared lifetime and fallback rules are recorded in
       callable own slots and alternate shape-cache rows. The first generic miss
       ends borrowed storage before accessors, proxies or collection can run.
       All55 focused contracts, eighteen Node GC modes and eight frontend/artifact/C
-      captures pass. Native and performance verification remain pending.
+      captures and all six Linux ASan/UBSan property/predicate cases pass.
+      Performance verification remains pending.
 - [ ] Carry Number predicate Boolean results through numeric record and fixed
       TypedArray branches. Preserve no-coercion semantics, missing arguments,
       ignored argument effects and original builtin authority; numeric stores
       still require Number results. All235 focused checks, twenty Node GC modes
-      and four frontend/artifact/C captures pass. Native and performance
-      verification remain pending.
+      and four frontend/artifact/C captures pass. Both Linux ASan/UBSan predicate
+      cases pass; performance verification remains pending.
 
 - [ ] Carry numeric record fields from alternate inline-cache layouts with their
       admitted logical ordinal and current physical token. Preserve ordered stores,
@@ -1054,6 +1055,19 @@ The shared lifetime and fallback rules are recorded in
       thirteen Node GC modes, five frontend/artifact/C captures and eight runtime
       C configurations pass. Native sanitizer and performance verification remain
       pending.
+
+- [ ] Keep numeric updates admitted after ordinary objects grow into external
+      field storage. Preserve embedded-object, callable, prototype, watched and
+      locked writable exclusions and the existing physical-widening writeback.
+      All60 focused checks, ten Node GC modes, six frontend/artifact/C captures
+      and the small C field contract pass. Native sanitizer verification and
+      performance measurement remain pending.
+- [ ] Build concat results directly from retained range, split, regexp and nested
+      spans. Share the canonical ranged output builder, retain source and primitive
+      argument roots, and preserve ordered coercion and original calls for observable
+      arguments. All230 focused contracts, eleven Node GC modes, five frontend/
+      artifact/C captures and eight runtime C configurations pass. Native and
+      performance verification remain pending.
 
 | Order | Slice                        | Owning work and exit condition                                                                                                                                  |
 | ----- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |

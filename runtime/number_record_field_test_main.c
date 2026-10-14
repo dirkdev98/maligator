@@ -33,7 +33,16 @@ int main(void) {
     };
     CHECK(mal_vm_number_record_begin(mal_value_from_object(&external.object), false, &admitted));
     CHECK(admitted.fields == values);
+    CHECK(mal_vm_number_record_begin(mal_value_from_object(&external.object), true, &admitted));
+    external.object.is_prototype = true;
     CHECK(!mal_vm_number_record_begin(mal_value_from_object(&external.object), true, &admitted));
+    external.object.is_prototype = false;
+    external.object.watched_method_proto = true;
+    CHECK(!mal_vm_number_record_begin(mal_value_from_object(&external.object), true, &admitted));
+    external.object.watched_method_proto = false;
+    external.object.primordial_locked = true;
+    CHECK(!mal_vm_number_record_begin(mal_value_from_object(&external.object), true, &admitted));
+    external.object.primordial_locked = false;
     MalNumberRecord record = {.shape = &alternate, .fields = values};
     MalInlineCache cache = {.mode = MAL_IC_MODE_SHAPE, .shape = &primary, .slot = 0,
                            .field = primary_props[0].field, .poly_count = 1,

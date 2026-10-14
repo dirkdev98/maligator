@@ -510,6 +510,8 @@ export type VmStringSpanRegion = VmRegionEnvelope<
 			| "parseFloat"
 			| "isFinite"
 			| "isNaN"
+			| "concatProperty"
+			| "concatCall"
 			| "repeatProperty"
 			| "repeatCall"
 			| "padStartProperty"
@@ -805,6 +807,8 @@ export interface NativePlan {
 }
 
 export type VmRegionActionRole =
+	| "concatProperty"
+	| "concatCall"
 	| "repeatProperty"
 	| "repeatCall"
 	| "padStartProperty"

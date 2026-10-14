@@ -39,7 +39,7 @@ describe("numeric record storage across alternate logical and physical layouts",
 				)
 				.sort();
 			expect(selected).toEqual(["total", "update"]);
-			for (const mode of ["update", "readonly", "callable", "fallback"]) {
+			for (const mode of ["update", "grown", "readonly", "callable", "fallback"]) {
 				const env = {
 					NUMBER_LAYOUT_MODE: mode,
 					MAL_PRIMORDIALS: primordials,
@@ -66,12 +66,13 @@ describe("numeric record storage across alternate logical and physical layouts",
 					expect(result.stdout, context).toBe(expected);
 					if (backend === "compiled" && mode !== "fallback") {
 						const stats = result.stderr.match(
-							/\[perf-number-record\] attempts=\d+ admissions=(\d+) field_checks=\d+ slow_stores=(\d+) poly_fields=(\d+)/,
+							/\[perf-number-record\] attempts=\d+ admissions=(\d+) field_checks=\d+ slow_stores=(\d+) poly_fields=(\d+) external=(\d+)/,
 						);
 						expect(stats, context).not.toBeNull();
 						expect(Number(stats![1]), context).toBeGreaterThan(0);
 						expect(Number(stats![3]), context).toBeGreaterThan(0);
 						if (mode === "update") expect(Number(stats![2]), context).toBeGreaterThan(0);
+						if (mode === "grown") expect(Number(stats![4]), context).toBeGreaterThan(0);
 					}
 				}
 			}

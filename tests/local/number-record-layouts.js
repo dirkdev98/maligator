@@ -109,6 +109,12 @@ if (mode === "fallback") {
 } else {
 	for (let index = 0; index < 18; index++) {
 		let record = make(index % 3, index % 4);
+		if (mode === "grown") {
+			const grown = {};
+			Object.assign(grown, record);
+			for (let extra = 0; extra < 40; extra++) grown[`extra${extra}`] = extra;
+			record = grown;
+		}
 		if (mode === "readonly") Object.freeze(record);
 		if (mode === "callable")
 			Object.assign((record = function holder() {}), make(index % 3, index % 4));

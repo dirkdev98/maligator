@@ -415,6 +415,11 @@ bool mal_builtin_string_span_pad(
 );
 // A guard miss has no effects; a hit may allocate or leave a pending throw.
 bool mal_builtin_string_concat_direct(MalVm *vm, MalValue receiver, const MalValue *arguments, i32 argument_count, MalValue *result);
+// A miss has no effects; primitive arguments and source remain rooted through conversion and output.
+bool mal_builtin_string_span_concat(
+    MalVm *vm, MalValue callee, bool locked, MalValue subject, usize start, usize end,
+    const MalValue *arguments, i32 argument_count, MalValue *result
+);
 
 // A miss has no effects; admitted Unicode conversion may allocate or throw.
 bool mal_builtin_string_span_case(

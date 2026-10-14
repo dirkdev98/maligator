@@ -6357,6 +6357,32 @@
 			"sourceSeam": "runtime/src/builtin_string.c",
 			"fixture": "cases/string-span-identity.mjs",
 			"controls": ["string-span-locale-compare", "string-span-case"]
+		},
+		{
+			"id": "number-record-grown",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Numeric record regions",
+			"category": "memory-layout-usage",
+			"mechanisms": ["numeric-record-storage", "polymorphic-layouts"],
+			"inputShape": "Ordinary numeric records alternate layouts after growth into external field storage; ordered updates preserve physical widening.",
+			"unit": "record",
+			"sourceSeam": "runtime/src/vm_ops.h",
+			"fixture": "cases/number-record-grown.mjs",
+			"controls": ["number-record-layouts", "number-record-math"]
+		},
+		{
+			"id": "string-span-concat",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Composable string spans",
+			"category": "memory-layout-usage",
+			"mechanisms": ["string-spans", "bounded-output"],
+			"inputShape": "Retained range, split and regexp spans concatenate primitive arguments through a shared output builder without an intermediate substring.",
+			"unit": "token",
+			"sourceSeam": "runtime/src/builtin_string.c",
+			"fixture": "cases/string-span-concat.mjs",
+			"controls": ["string-span-identity", "string-span-pad"]
 		}
 	]
 }

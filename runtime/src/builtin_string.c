@@ -1960,10 +1960,13 @@ bool mal_builtin_string_span_normalize(
     return true;
 }
 
-bool mal_builtin_string_concat_direct(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue *result) {
-    if (!mal_value_is_string(this_value)) return false;
-    usize total_length = mal_string_length(mal_value_to_string(this_value));
-    MalValue nonempty = this_value;
+static bool mal_builtin_string_concat_range_direct(
+    MalVm *vm, MalString *source, usize start, usize length,
+    const MalValue *args, i32 arg_count, MalValue *result
+) {
+    MalValue this_value = mal_value_from_string(source);
+    usize total_length = length;
+    MalValue nonempty = MAL_VALUE_UNDEFINED;
     usize nonempty_count = total_length != 0;
     for (i32 i = 0; i < arg_count; i++) {
         if (!mal_value_is_string(args[i])) return false;
@@ -1975,14 +1978,15 @@ bool mal_builtin_string_concat_direct(MalVm *vm, MalValue this_value, const MalV
         }
     }
     if (nonempty_count <= 1) {
-        *result = nonempty;
+        *result = mal_value_is_undefined(nonempty)
+            ? mal_builtin_string_slice(vm, source, start, length) : nonempty;
         return true;
     }
     if (total_length <= MAL_STRING_INLINE_LATIN1_CODE_UNITS) {
         c16 units[MAL_STRING_INLINE_LATIN1_CODE_UNITS];
-        MalString *part = mal_value_to_string(this_value);
-        usize offset = mal_string_length(part);
-        mal_string_copy_range_to(part, 0, offset, units);
+        MalString *part;
+        usize offset = length;
+        mal_string_copy_range_to(source, start, offset, units);
         for (i32 i = 0; i < arg_count; i++) {
             part = mal_value_to_string(args[i]);
             usize length = mal_string_length(part);
@@ -1992,7 +1996,7 @@ bool mal_builtin_string_concat_direct(MalVm *vm, MalValue this_value, const MalV
         *result = mal_builtin_string_from_units(vm, units, total_length);
         return true;
     }
-    if (arg_count == 1) {
+    if (arg_count == 1 && start == 0 && length == mal_string_length(source)) {
         MalString *concatenated;
         if (!mal_string_new_cons_checked(&vm->heap, mal_value_to_string(this_value),
                 mal_value_to_string(args[0]), &concatenated)) abort();
@@ -2001,12 +2005,24 @@ bool mal_builtin_string_concat_direct(MalVm *vm, MalValue this_value, const MalV
     }
     MalTextBuffer output = {.heap = &vm->heap};
     mal_text_buffer_hint_capacity(&output, total_length);
-    mal_text_buffer_append_string(&output, mal_value_to_string(this_value));
+    mal_text_buffer_append_range(&output, source, start, length);
     for (i32 i = 0; i < arg_count; i++) {
         mal_text_buffer_append_string(&output, mal_value_to_string(args[i]));
     }
     *result = mal_builtin_string_finish_text(vm, &output);
     return true;
+}
+
+bool mal_builtin_string_concat_direct(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue *result) {
+    if (!mal_value_is_string(this_value)) return false;
+    MalRootSpan source_root, args_root;
+    mal_gc_root(&source_root, &this_value, 1);
+    mal_gc_root(&args_root, (MalValue *) args, arg_count);
+    MalString *source = mal_value_to_string(this_value);
+    bool admitted = mal_builtin_string_concat_range_direct(vm, source, 0, mal_string_length(source), args, arg_count, result);
+    mal_gc_unroot(&args_root);
+    mal_gc_unroot(&source_root);
+    return admitted;
 }
 
 static MalValue mal_builtin_string_prototype_concat(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -2064,6 +2080,47 @@ done:
     mal_gc_native_rooted_end(vm);
     mal_rooted_string_parts_dispose(&parts);
     return result;
+}
+
+#define MAL_STRING_SPAN_CONCAT_MAX_ARGUMENTS 8
+
+bool mal_builtin_string_span_concat(
+    MalVm *vm, MalValue callee, bool locked, MalValue subject, usize start, usize end,
+    const MalValue *args, i32 arg_count, MalValue *out
+) {
+    if (!locked && (!mal_value_is_native_function_object(callee) ||
+        mal_native_function_object_callback(mal_value_to_native_function_object(callee)) != mal_builtin_string_prototype_concat)) return false;
+#if MAL_REALMS
+    if (!locked && mal_vm_callee_realm(vm, callee) != vm->current_realm) return false;
+#endif
+    if (!mal_value_is_string(subject) || start > end ||
+        end > mal_string_length(mal_value_to_string(subject)) ||
+        arg_count < 0 || arg_count > MAL_STRING_SPAN_CONCAT_MAX_ARGUMENTS) return false;
+    for (i32 i = 0; i < arg_count; i++) {
+        if (mal_value_is_object(args[i]) || mal_value_is_symbol(args[i])) return false;
+    }
+    MalValue roots[MAL_STRING_SPAN_CONCAT_MAX_ARGUMENTS + 1];
+    roots[0] = subject;
+    for (i32 i = 0; i < arg_count; i++) roots[i + 1] = args[i];
+    MalRootSpan span;
+    mal_gc_root(&span, roots, arg_count + 1);
+    MAL_PERF_COUNT(string_span_concat_calls);
+    *out = MAL_VALUE_UNDEFINED;
+    usize total = end - start;
+    for (i32 i = 0; i < arg_count; i++) {
+        MalString *part = mal_builtin_string_coerce(vm, roots[i + 1]);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
+        roots[i + 1] = mal_value_from_string(part);
+        if (!mal_checked_size_add(total, mal_string_length(part), MAL_STRING_MAX_CODE_UNITS, &total)) {
+            mal_builtin_string_throw_length(vm);
+            goto done;
+        }
+    }
+    if (!mal_builtin_string_concat_range_direct(vm, mal_value_to_string(roots[0]), start, end - start, roots + 1, arg_count, out))
+        mal_builtin_string_throw_length(vm);
+done:
+    mal_gc_unroot(&span);
+    return true;
 }
 
 MalValue mal_builtin_string_html_known(

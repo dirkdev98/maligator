@@ -57,6 +57,9 @@ empty or already-normalized shortcuts, and an admitted exception never replays.
 String toString and valueOf retain the same span after primitive-brand and captured
 native-method validation. Their ignored arguments still finish evaluation, but are
 never coerced by the identity operation. Wrappers retain the original branded call.
+Concatenation shares a ranged output builder with ordinary String concat. Bounded
+primitive arguments are rooted and converted in order; observable conversions
+retain the original call before any work. Partial spans copy only their range.
 Well-formedness uses the same segmented UTF16 scanner for canonical strings and
 retained ranges. A surrogate can pair across rope segments inside the range, but
 never across its boundary; repair copies only the selected units.
@@ -134,7 +137,9 @@ Read-only admission supports compact, embedded and external own-slot storage.
 Alternate cache layouts carry both the current physical token and its logical slot;
 slow writeback must use that admitted slot after widening, not the primary cache's
 slot for another layout. Any widening replays all final stored fields because a
-physical transition may have moved fields already written.
+physical transition may have moved fields already written. Ordinary writable
+records retain admission after growth into external storage; embedded objects
+remain excluded from writeback.
 
 Property-read regions can retain a receiver through must-alias register moves
 and effect-free forward branches. Every incoming edge preserves that identity.

@@ -2200,7 +2200,7 @@ static inline __attribute__((always_inline)) bool mal_vm_number_record_begin(
     MalObject *object = writable ? mal_vm_as_object(receiver) : mal_vm_as_own_slot_object(receiver);
     // Write-back skips the prototype-epoch and watched-method notifications.
     if (object == nullptr ||
-        (writable && (object->storage_kind != MAL_OBJECT_COMPACT ||
+        (writable && (object->storage_kind == MAL_OBJECT_EMBEDDED ||
                       object->is_prototype || object->watched_method_proto ||
                       object->primordial_locked))) {
         return false;
@@ -2260,8 +2260,11 @@ static inline __attribute__((always_inline)) bool mal_vm_number_record_field(
     return true;
 }
 
-static inline void mal_vm_number_record_admitted(void) {
+static inline void mal_vm_number_record_admitted(const MalNumberRecord *record) {
     MAL_PERF_COUNT(number_record_admissions);
+    if (record->object->storage_kind == MAL_OBJECT_EXTERNAL) {
+        MAL_PERF_COUNT(number_record_external_admissions);
+    }
 }
 
 /** Writes only a value the admitted layout holds unchanged; false leaves the field untouched. */

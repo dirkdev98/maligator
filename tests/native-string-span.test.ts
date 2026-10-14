@@ -42,6 +42,34 @@ const branching = `const part = value.slice(start, end); const length = part.len
 
 describe("composable string spans", () => {
 	it.each(["mutable", "locked"] as const)(
+		"selects bounded concat output and materializes aliased arguments under %s primordials",
+		(mode) => {
+			for (const args of ["", "observer", "start,end,0,true,null,undefined,1n,'tail'"]) {
+				const image = compile(
+					`const part=value.slice(start,end);const out=part.concat(${args});if(escape)observer(part);return out;`,
+					mode,
+				);
+				expect(spans(image)[0]?.consumers.map((c) => c.kind)).toContain("concatCall");
+				expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+					image,
+				);
+			}
+			for (const args of ["part", "1,2,3,4,5,6,7,8,9"]) {
+				const image = compile(
+					`const part=value.slice(start,end);const out=part.concat(${args});return [part.length,out];`,
+					mode,
+				);
+				expect(spans(image).flatMap((p) => p.consumers.map((c) => c.kind))).not.toContain(
+					"concatCall",
+				);
+				expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+					image,
+				);
+			}
+		},
+	);
+
+	it.each(["mutable", "locked"] as const)(
 		"retains String identity ranges and evaluated ignored arguments under %s primordials",
 		(mode) => {
 			for (const method of ["toString", "valueOf"])
