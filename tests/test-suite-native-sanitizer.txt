@@ -212,3 +212,5 @@ tests/native/native-number-record-readonly.test.ts
 tests/native/string-span-locale-compare.test.ts
 tests/native/property-read-wide.test.ts
 tests/native/number-predicate-regions.test.ts
+tests/native/number-record-layouts.test.ts
+tests/native/string-span-identity.test.ts

@@ -6331,6 +6331,32 @@
 			"sourceSeam": "src/compiler/target/lower-native-fast-paths.ts",
 			"fixture": "cases/number-predicate-storage.mjs",
 			"controls": ["typed-array-math-regions", "number-record-math"]
+		},
+		{
+			"id": "number-record-layouts",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Numeric record regions",
+			"category": "memory-layout-usage",
+			"mechanisms": ["numeric-record-storage", "polymorphic-layouts"],
+			"inputShape": "Numeric record updates alternate three property orders while retaining admitted logical slots and physical field representations.",
+			"unit": "record",
+			"sourceSeam": "runtime/src/vm_ops.h",
+			"fixture": "cases/number-record-layouts.mjs",
+			"controls": ["number-record-math", "number-record-reduction"]
+		},
+		{
+			"id": "string-span-identity",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Composable string spans",
+			"category": "memory-layout-usage",
+			"mechanisms": ["string-spans", "delayed-materialization"],
+			"inputShape": "Primitive toString and valueOf preserve retained range bounds through nested identity operations and consumers.",
+			"unit": "token",
+			"sourceSeam": "runtime/src/builtin_string.c",
+			"fixture": "cases/string-span-identity.mjs",
+			"controls": ["string-span-locale-compare", "string-span-case"]
 		}
 	]
 }

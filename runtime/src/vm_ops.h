@@ -2187,14 +2187,21 @@ typedef struct MalNumberRecord {
     void *fields;
 } MalNumberRecord;
 
+typedef struct MalNumberRecordField {
+    u16 token;
+    // Widening preserves this ordinal; the primary cache row may describe another layout.
+    u8 slot;
+} MalNumberRecordField;
+
 static inline __attribute__((always_inline)) bool mal_vm_number_record_begin(
     MalValue receiver, bool writable, MalNumberRecord *record
 ) {
     MAL_PERF_COUNT(number_record_attempts);
     MalObject *object = writable ? mal_vm_as_object(receiver) : mal_vm_as_own_slot_object(receiver);
     // Write-back skips the prototype-epoch and watched-method notifications.
-    if (object == nullptr || object->storage_kind != MAL_OBJECT_COMPACT ||
-        (writable && (object->is_prototype || object->watched_method_proto ||
+    if (object == nullptr ||
+        (writable && (object->storage_kind != MAL_OBJECT_COMPACT ||
+                      object->is_prototype || object->watched_method_proto ||
                       object->primordial_locked))) {
         return false;
     }
@@ -2211,19 +2218,31 @@ static inline __attribute__((always_inline)) bool mal_vm_number_record_begin(
  * shape, and a store row also proves it writable. Admits only a Number value.
  */
 static inline __attribute__((always_inline)) bool mal_vm_number_record_field(
-    const MalNumberRecord *record, const MalInlineCache *ic, u16 *field, f64 *value
+    const MalNumberRecord *record, const MalInlineCache *ic, MalNumberRecordField *field, f64 *value
 ) {
     MAL_PERF_COUNT(number_record_field_checks);
     if (ic->mode != MAL_IC_MODE_SHAPE || ic->slot == MAL_IC_VALUE_SLOT || ic->shape == nullptr) {
         return false;
     }
     u16 token;
+    u8 slot = ic->slot;
+    bool polymorphic = false;
     if (__builtin_expect(ic->shape == record->shape, 1)) {
         token = ic->field;
     } else if (mal_shape_same_logical(ic->shape, record->shape)) {
         token = record->shape->props[ic->slot].field;
     } else {
-        return false;
+        bool found = false;
+        for (u8 index = 0; index < ic->poly_count; index++) {
+            if (mal_shape_same_logical(record->shape, ic->poly_shape[index])) {
+                slot = mal_ic_poly_slot(ic, index);
+                found = true;
+                break;
+            }
+        }
+        if (!found) return false;
+        token = record->shape->props[slot].field;
+        polymorphic = true;
     }
     switch (mal_shape_field_representation(token)) {
         case MAL_FIELD_I32:
@@ -2236,7 +2255,8 @@ static inline __attribute__((always_inline)) bool mal_vm_number_record_field(
         default:
             if (!mal_shape_field_try_load_number(record->fields, token, value)) return false;
     }
-    *field = token;
+    *field = (MalNumberRecordField) {.token = token, .slot = slot};
+    if (polymorphic) MAL_PERF_COUNT(number_record_poly_fields);
     return true;
 }
 
@@ -2246,10 +2266,10 @@ static inline void mal_vm_number_record_admitted(void) {
 
 /** Writes only a value the admitted layout holds unchanged; false leaves the field untouched. */
 static inline __attribute__((always_inline)) bool mal_vm_number_record_try_store(
-    const MalNumberRecord *record, u16 field, f64 value
+    const MalNumberRecord *record, MalNumberRecordField field, f64 value
 ) {
-    u8 *address = (u8 *) record->fields + mal_shape_field_offset(field);
-    MalFieldRepresentation representation = mal_shape_field_representation(field);
+    u8 *address = (u8 *) record->fields + mal_shape_field_offset(field.token);
+    MalFieldRepresentation representation = mal_shape_field_representation(field.token);
     if (__builtin_expect(representation == MAL_FIELD_F64, 1)) {
         memcpy(address, &value, sizeof(value));
         return true;
@@ -2269,7 +2289,7 @@ static inline __attribute__((always_inline)) bool mal_vm_number_record_try_store
  * stored field after any failed try-store because widening can move fields.
  */
 __attribute__((noinline)) void mal_vm_number_record_store_slow(
-    MalObject *object, const MalInlineCache *ic, f64 value
+    MalObject *object, u8 slot, f64 value
 );
 
 /**

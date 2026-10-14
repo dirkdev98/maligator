@@ -280,6 +280,8 @@ typedef struct MalPerfStats {
     u64 string_span_trim_split_admissions;
     u64 string_span_trim_regexp_admissions;
     u64 string_span_nested_admissions;
+    u64 string_span_to_string_admissions;
+    u64 string_span_value_of_admissions;
     u64 string_span_deep_admissions;
     u64 string_span_index_of_searches;
     u64 string_span_last_index_of_searches;
@@ -645,6 +647,7 @@ typedef struct MalPerfStats {
     u64 number_record_admissions;
     u64 number_record_field_checks;
     u64 number_record_slow_stores;
+    u64 number_record_poly_fields;
 
     u64 ic_mode_replacements[MAL_PERF_IC_MODE_COUNT][MAL_PERF_IC_MODE_COUNT];
 

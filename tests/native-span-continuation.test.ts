@@ -30,6 +30,49 @@ const body = `const part=source.split('|')[1]; const size=part.length;
  if(part==='if')return size+10; if(escape)return observe(part); return size;`;
 describe("span continuations from split projections", () => {
 	it.each(["mutable", "locked"] as const)(
+		"carries identity children over range, split and capture bounds under %s primordials",
+		(mode) => {
+			for (const root of [
+				"source.slice(1,-1)",
+				"source.split('|')[1]",
+				"/(.*)/.exec(source)[1]",
+			]) {
+				const image = compile(
+					`const parent=${root};const part=parent.toString(observe(1),observe(2),observe(3));const child=part.valueOf();observe();if(escape)return child;return [child.length,child.at(-1),parent.length];`,
+					mode,
+				);
+				const fn = image.native.functions[1]!;
+				const plans = [
+					...fn.specializations.filter((p) => p.kind === "string-span"),
+					...fn.storage!.spanContinuations,
+				];
+				expect(plans.map((p) => p.rangeOperation)).toEqual(
+					expect.arrayContaining(["toString", "valueOf"]),
+				);
+				expect(
+					plans.filter((p) => p.consumers.some((c) => c.kind === "rangeCall")).length,
+				).toBeGreaterThanOrEqual(2);
+				expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+					image,
+				);
+				expect(() => emitProgramImage(image)).not.toThrow();
+			}
+		},
+	);
+	it("materializes a parent passed as an ignored identity argument", () => {
+		const image = compile(
+			"const parent=source.split('|')[1];const child=parent.toString(parent);return child.length;",
+		);
+		const fn = image.native.functions[1]!;
+		expect(
+			fn.storage!.spanContinuations.some(
+				(p) =>
+					p.sourceKind === "split" && p.consumers.some((c) => c.kind === "rangeCall"),
+			),
+		).toBe(false);
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
+	});
+	it.each(["mutable", "locked"] as const)(
 		"retains collation across split, regexp and nested producers under %s primordials",
 		(mode) => {
 			for (const producer of [

@@ -2448,11 +2448,11 @@ bool mal_vm_inherited_stub_try_load_static(
 }
 
 __attribute__((noinline)) void mal_vm_number_record_store_slow(
-    MalObject *object, const MalInlineCache *ic, f64 value
+    MalObject *object, u8 slot, f64 value
 ) {
     MAL_PERF_COUNT(number_record_slow_stores);
     // Widening allocates only off-heap payloads, so the admission still holds no GC hazard.
-    mal_object_field_store(object, ic->slot, mal_ops_number_value(value));
+    mal_object_field_store(object, slot, mal_ops_number_value(value));
 }
 
 MalValue mal_vm_indexed_load_keyed(

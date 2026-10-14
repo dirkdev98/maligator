@@ -54,6 +54,9 @@ callers retain cached flattening, while partial ropes copy only the required ran
 Normalization shares this bounded input preparation and canonical Unicode builder.
 The source and form stay rooted through form coercion; validation occurs before
 empty or already-normalized shortcuts, and an admitted exception never replays.
+String toString and valueOf retain the same span after primitive-brand and captured
+native-method validation. Their ignored arguments still finish evaluation, but are
+never coerced by the identity operation. Wrappers retain the original branded call.
 Well-formedness uses the same segmented UTF16 scanner for canonical strings and
 retained ranges. A surrogate can pair across rope segments inside the range, but
 never across its boundary; repair copies only the selected units.
@@ -127,6 +130,11 @@ and callable objects with the existing ordinary-slot layout. Stores retain the
 stricter receiver guard and writable cache rows. Larger plans keep bounded prefixes
 and may cover complete numeric fusions; no fusion temporary crosses their boundary.
 Small linear read-only arithmetic stays with the existing pair/triple/quad projections.
+Read-only admission supports compact, embedded and external own-slot storage.
+Alternate cache layouts carry both the current physical token and its logical slot;
+slow writeback must use that admitted slot after widening, not the primary cache's
+slot for another layout. Any widening replays all final stored fields because a
+physical transition may have moved fields already written.
 
 Property-read regions can retain a receiver through must-alias register moves
 and effect-free forward branches. Every incoming edge preserves that identity.

@@ -2441,6 +2441,21 @@ static MalValue mal_builtin_string_prototype_trim_end(MalVm *vm, MalValue this_v
     return mal_builtin_string_trim_impl(vm, this_value, false, true);
 }
 
+// These methods unwrap only String values; they never coerce other receivers.
+static MalValue mal_builtin_string_prototype_to_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) args;
+    (void) arg_count;
+    if (mal_value_is_string(this_value)) {
+        return this_value;
+    }
+    MalValue primitive;
+    if (!mal_value_this_string_value(this_value, &primitive)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "String.prototype.toString called on incompatible receiver");
+        return mal_value_new_undefined();
+    }
+    return primitive;
+}
+
 bool mal_builtin_string_range_span_init(
     MalValue callee, MalValue receiver, usize source_start, usize source_end,
     MalValue start_value, MalValue end_value, MalStringRangeOp operation, bool identity_locked,
@@ -2455,6 +2470,8 @@ bool mal_builtin_string_range_span_init(
         case MAL_STRING_RANGE_TRIM: expected = mal_builtin_string_prototype_trim; trim = true; break;
         case MAL_STRING_RANGE_TRIM_START: expected = mal_builtin_string_prototype_trim_start; trim = true; break;
         case MAL_STRING_RANGE_TRIM_END: expected = mal_builtin_string_prototype_trim_end; trim = true; break;
+        case MAL_STRING_RANGE_TO_STRING:
+        case MAL_STRING_RANGE_VALUE_OF: expected = mal_builtin_string_prototype_to_string; break;
         default: return false;
     }
     if (!mal_value_is_string(receiver) ||
@@ -2465,7 +2482,12 @@ bool mal_builtin_string_range_span_init(
     bool nested = source_end != SIZE_MAX;
     if (!nested) source_end = source_length;
     if (source_start > source_end || source_end > source_length) return false;
-    if (trim) {
+    if (operation == MAL_STRING_RANGE_TO_STRING || operation == MAL_STRING_RANGE_VALUE_OF) {
+        *start_out = source_start;
+        *end_out = source_end;
+        if (operation == MAL_STRING_RANGE_TO_STRING) MAL_PERF_COUNT(string_span_to_string_admissions);
+        else MAL_PERF_COUNT(string_span_value_of_admissions);
+    } else if (trim) {
         mal_builtin_string_trim_bounds(subject, source_start, source_end,
             operation != MAL_STRING_RANGE_TRIM_END, operation != MAL_STRING_RANGE_TRIM_START,
             start_out, end_out);
@@ -4093,26 +4115,6 @@ bool mal_builtin_string_span_pad(
     else MAL_PERF_COUNT(string_span_pad_end_calls);
     *out = mal_builtin_string_pad_range_numeric(vm, mal_value_to_string(subject), start, end, target, filler, pad_start);
     return true;
-}
-
-/**
- * String.prototype.{toString,valueOf}: spec thisStringValue. A String primitive
- * or String wrapper unwraps to its [[StringData]]; any other receiver is a
- * TypeError (unlike the other prototype methods, these do not ToString a
- * foreign receiver).
- */
-static MalValue mal_builtin_string_prototype_to_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
-    (void) args;
-    (void) arg_count;
-    if (mal_value_is_string(this_value)) {
-        return this_value;
-    }
-    MalValue primitive;
-    if (!mal_value_this_string_value(this_value, &primitive)) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "String.prototype.toString called on incompatible receiver");
-        return mal_value_new_undefined();
-    }
-    return primitive;
 }
 
 static MalValue mal_builtin_string_prototype_iterator(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {

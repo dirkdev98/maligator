@@ -274,6 +274,8 @@ typedef enum MalStringRangeOp {
     MAL_STRING_RANGE_TRIM,
     MAL_STRING_RANGE_TRIM_START,
     MAL_STRING_RANGE_TRIM_END,
+    MAL_STRING_RANGE_TO_STRING,
+    MAL_STRING_RANGE_VALUE_OF,
 } MalStringRangeOp;
 
 // SIZE_MAX selects the full receiver; other source bounds delimit a rooted parent span.

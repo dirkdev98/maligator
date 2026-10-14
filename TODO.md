@@ -1017,14 +1017,17 @@ The shared lifetime and fallback rules are recorded in
       Read-only guards cover frozen objects, prototype objects and function own
       fields; writable regions retain the original object and notification guards.
       All208 focused contracts, twenty Node GC modes and eight frontend/artifact/C
-      captures pass. Native and performance verification remain pending.
+      captures pass. Linux ASan/UBSan exposed a compact-only admission guard that
+      excluded embedded and external read-only storage. Its owning-layer repair
+      preserves writable restrictions; the strict admission-counter rerun is pending.
 - [ ] Feed ordinary and prepared localeCompare directly from retained string spans.
       Reuse canonical locale/options effects and collation with bounded UTF16 input
       preparation shared by case conversion and normalization. Preserve source and
       argument roots, original exception order, prepared-cache identity and foreign
       method fallback. All256 focused checks, fifteen Node GC modes, ten frontend/
-      artifact/C captures and24 runtime C configurations pass. Native and
-      performance verification remain pending.
+      artifact/C captures and24 runtime C configurations pass. All five locale-compare
+      and nine case/normalization controls pass under Linux ASan/UBSan; performance
+      verification remains pending.
 
 - [ ] Retain up to32 reference property reads over128 instructions, including
       callable own slots and alternate shape-cache rows. The first generic miss
@@ -1037,6 +1040,20 @@ The shared lifetime and fallback rules are recorded in
       still require Number results. All235 focused checks, twenty Node GC modes
       and four frontend/artifact/C captures pass. Native and performance
       verification remain pending.
+
+- [ ] Carry numeric record fields from alternate inline-cache layouts with their
+      admitted logical ordinal and current physical token. Preserve ordered stores,
+      physical widening and complete slow writeback. Read-only records now admit
+      embedded and external storage, including callable own fields; writable guards
+      remain unchanged. All51 focused checks, eight Node GC modes, eight actual
+      frontend/artifact/C captures and the small C field contract pass. Native
+      sanitizer verification and performance measurement remain pending.
+- [ ] Compose String toString and valueOf with range, split and regexp spans.
+      Preserve primitive branding, captured native identity, ignored argument
+      evaluation and cached materialization at observers. All226 focused checks,
+      thirteen Node GC modes, five frontend/artifact/C captures and eight runtime
+      C configurations pass. Native sanitizer and performance verification remain
+      pending.
 
 | Order | Slice                        | Owning work and exit condition                                                                                                                                  |
 | ----- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |

@@ -97,7 +97,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 234;
+export const COMPILER_ARTIFACT_VERSION = 235;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -204,6 +204,8 @@ const TAGGED_GUARDED_BUILTIN_OPERATIONS = [
 	"String.prototype.trimEnd",
 	"String.prototype.trimLeft",
 	"String.prototype.trimRight",
+	"String.prototype.toString",
+	"String.prototype.valueOf",
 	"String.prototype.slice",
 	"String.prototype.substring",
 	"String.prototype.substr",

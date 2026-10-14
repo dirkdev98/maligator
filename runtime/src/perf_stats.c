@@ -955,6 +955,9 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.string_span_code_point_reads);
     fprintf(stderr, "[perf-string-span-nested-stats] admissions=%llu\n",
         (unsigned long long) mal_perf_stats.string_span_nested_admissions);
+    fprintf(stderr, "[perf-string-span-identity-stats] to_string=%llu value_of=%llu\n",
+        (unsigned long long) mal_perf_stats.string_span_to_string_admissions,
+        (unsigned long long) mal_perf_stats.string_span_value_of_admissions);
     fprintf(stderr, "[perf-string-span-deep-stats] admissions=%llu\n",
         (unsigned long long) mal_perf_stats.string_span_deep_admissions);
     fprintf(stderr, "[perf-string-span-reverse-stats] substr=%llu last_index_of=%llu\n",
@@ -1577,11 +1580,12 @@ static void mal_perf_stats_print(void) {
     fprintf(
         stderr,
         "[perf-number-record] attempts=%llu admissions=%llu field_checks=%llu "
-        "slow_stores=%llu\n",
+        "slow_stores=%llu poly_fields=%llu\n",
         (unsigned long long) mal_perf_stats.number_record_attempts,
         (unsigned long long) mal_perf_stats.number_record_admissions,
         (unsigned long long) mal_perf_stats.number_record_field_checks,
-        (unsigned long long) mal_perf_stats.number_record_slow_stores
+        (unsigned long long) mal_perf_stats.number_record_slow_stores,
+        (unsigned long long) mal_perf_stats.number_record_poly_fields
     );
     u64 replacements = 0;
     u64 cross_mode = 0;

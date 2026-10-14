@@ -462,6 +462,8 @@ const STRING_SPAN_RANGE_KERNELS: Readonly<Record<CoreStringSpanRangeOperation, s
 		trimEnd: "TRIM_END",
 		trimLeft: "TRIM_START",
 		trimRight: "TRIM_END",
+		toString: "TO_STRING",
+		valueOf: "VALUE_OF",
 	};
 
 const STRING_CHARACTER_KERNELS: Readonly<Record<string, string>> = {
@@ -1208,7 +1210,8 @@ function emitNumberRecordRegion(
 		"{",
 		`  MalNumberRecord ${id};`,
 		...plan.fields.map(
-			(_, index) => `  u16 ${id}_f${index} = 0; f64 ${id}_v${index} = 0.0;`,
+			(_, index) =>
+				`  MalNumberRecordField ${id}_f${index} = {0}; f64 ${id}_v${index} = 0.0;`,
 		),
 		`  if (${guards.join(" && ")}) {`,
 		"    mal_vm_number_record_admitted();",
@@ -1239,7 +1242,7 @@ function emitNumberRecordRegion(
 			`    if (__builtin_expect(!(${stored.map((index) => `mal_vm_number_record_try_store(&${id}, ${id}_f${index}, ${id}_v${index})`).join(" & ")}), 0)) {`,
 			...stored.map(
 				(index) =>
-					`      mal_vm_number_record_store_slow(${id}.object, &${propertyCache}[${plan.fields[index]!.icIndex}], ${id}_v${index});`,
+					`      mal_vm_number_record_store_slow(${id}.object, ${id}_f${index}.slot, ${id}_v${index});`,
 			),
 			"    }",
 		);

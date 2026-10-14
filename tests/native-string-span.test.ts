@@ -42,6 +42,42 @@ const branching = `const part = value.slice(start, end); const length = part.len
 
 describe("composable string spans", () => {
 	it.each(["mutable", "locked"] as const)(
+		"retains String identity ranges and evaluated ignored arguments under %s primordials",
+		(mode) => {
+			for (const method of ["toString", "valueOf"])
+				for (const args of ["", "start,end,observer(),observer()"]) {
+					const image = compile(
+						`const part=value.${method}(${args});observer();if(escape)return observer(part);return [part.length,part==="x",part.charCodeAt(0)];`,
+						mode,
+					);
+					expect(spans(image)).toHaveLength(1);
+					expect(spans(image)[0]!.rangeOperation).toBe(method);
+					expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+						image,
+					);
+				}
+		},
+	);
+	it("rejects identity range metadata for a different captured method", () => {
+		const image = compile("const part=value.toString();return part.length;"),
+			fn = image.native.functions[1]!;
+		const region = spans(image)[0]!;
+		expect(() =>
+			serializeCompilerArtifact({
+				...image,
+				native: {
+					...image.native,
+					functions: image.native.functions.with(1, {
+						...fn,
+						specializations: fn.specializations.map((plan) =>
+							plan === region ? { ...region, rangeOperation: "valueOf" } : plan,
+						),
+					}),
+				},
+			}),
+		).toThrow();
+	});
+	it.each(["mutable", "locked"] as const)(
 		"compares retained left ranges through dynamic and prepared collation under %s primordials",
 		(mode) => {
 			for (const [args, prepared] of [
