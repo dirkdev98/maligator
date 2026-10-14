@@ -285,8 +285,9 @@ bool mal_builtin_string_range_span_init(
     MalValue start_value, MalValue end_value, MalStringRangeOp operation, bool identity_locked,
     MalValue *subject_out, usize *start_out, usize *end_out
 );
+// Guard misses precede effects; admitted primitive needle conversion may allocate or throw.
 bool mal_builtin_string_span_search(
-    MalValue callee, bool locked, MalValue subject, usize start, usize end,
+    MalVm *vm, MalValue callee, bool locked, MalValue subject, usize start, usize end,
     MalValue needle, MalValue position, MalStringSearchOp operation, MalValue *out
 );
 

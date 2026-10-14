@@ -6409,6 +6409,32 @@
 			"sourceSeam": "runtime/src/builtin_string.c",
 			"fixture": "cases/string-span-replace.mjs",
 			"controls": ["string-span-concat", "string-span-pad"]
+		},
+		{
+			"id": "own-slot-builtins",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Named own-field regions",
+			"category": "memory-layout-usage",
+			"mechanisms": ["property-read-regions", "numeric-record-storage"],
+			"inputShape": "Date, RegExp, Promise, ArrayBuffer and DataView carry named reference and numeric fields through existing readonly regions.",
+			"unit": "record",
+			"sourceSeam": "runtime/src/vm_ops.h",
+			"fixture": "cases/own-slot-builtins.mjs",
+			"controls": ["own-slot-collections", "number-record-reduction"]
+		},
+		{
+			"id": "string-span-search-primitives",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Composable string spans",
+			"category": "memory-layout-usage",
+			"mechanisms": ["string-spans", "primitive-coercion"],
+			"inputShape": "Five search consumers retain bounded source spans while converting primitive search needles in the canonical order.",
+			"unit": "token",
+			"sourceSeam": "runtime/src/builtin_string.c",
+			"fixture": "cases/string-span-search-primitives.mjs",
+			"controls": ["string-span-search", "string-span-replace"]
 		}
 	]
 }

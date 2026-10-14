@@ -1084,6 +1084,18 @@ The shared lifetime and fallback rules are recorded in
       C configurations pass; native sanitizer and performance verification remain
       pending.
 
+- [ ] Extend named own-field regions to Date, RegExp, Promise, ArrayBuffer and
+      DataView while preserving internal properties, detachment, accessor effects
+      and the ordinary-only writable guard. All45 focused contracts, twenty-four
+      Node GC modes and four actual frontend/artifact/C captures pass; native
+      sanitizer and performance verification remain pending.
+- [ ] Search retained range, split, regexp and nested spans using primitive needles
+      across indexOf, lastIndexOf, includes, startsWith and endsWith. Preserve
+      conversion order, roots, omitted arguments, captured callees and error realms.
+      All238 focused contracts, eleven Node GC modes, five actual frontend/artifact/C
+      captures and eight runtime C configurations pass; native sanitizer and
+      performance verification remain pending.
+
 | Order | Slice                        | Owning work and exit condition                                                                                                                                  |
 | ----- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1     | Callback invocation          | The tasks above; remove measured repeated invocation work for a numeric reduction with captures.                                                                |

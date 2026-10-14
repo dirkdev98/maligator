@@ -13,9 +13,9 @@ import {
 const fixture = "tests/local/own-slot-collections.js";
 const outDir = mkdtempSync(join(tmpdir(), "mal-own-slot-"));
 afterAll(() => rmSync(outDir, { recursive: true, force: true }));
-describe("named own-field regions over collection receivers", () => {
+describe("named own-field regions over builtin receivers", () => {
 	it.each(["mutable", "locked"] as const)(
-		"preserves collection named fields, internal properties and collecting fallbacks with %s primordials",
+		"preserves builtin named fields, internal properties and collecting fallbacks with %s primordials",
 		(primordials) => {
 			const pair = buildBackendPairFromOneProgramImage({
 				fixture,
@@ -38,7 +38,7 @@ describe("named own-field regions over collection receivers", () => {
 						),
 					);
 			expect(names("propertyReadRegions")).toEqual(
-				expect.arrayContaining(["references", "extent"]),
+				expect.arrayContaining(["references", "extent", "internals"]),
 			);
 			expect(names("numberRecordRegions")).toContain("sum");
 			for (const mode of [
@@ -46,6 +46,11 @@ describe("named own-field regions over collection receivers", () => {
 				"typed",
 				"map",
 				"set",
+				"date",
+				"regexp",
+				"promise",
+				"buffer",
+				"view",
 				"mixed",
 				"dictionary",
 				"fallback",

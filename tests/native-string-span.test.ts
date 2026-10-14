@@ -42,6 +42,40 @@ const branching = `const part = value.slice(start, end); const length = part.len
 
 describe("composable string spans", () => {
 	it.each(["mutable", "locked"] as const)(
+		"publishes search arguments before allocating primitive needle conversion under %s primordials",
+		(mode) => {
+			for (const method of [
+				"indexOf",
+				"lastIndexOf",
+				"includes",
+				"startsWith",
+				"endsWith",
+			]) {
+				const image = compile(
+					`const part=value.slice(start,end);const result=part.${method}(observer,escape);return result;`,
+					mode,
+				);
+				const fn = image.native.functions.find((f) =>
+					f.specializations.some((p) => p.kind === "string-span"),
+				)!;
+				const plan = fn.specializations.find((p) => p.kind === "string-span")!;
+				const consumer = plan.consumers.find((c) => c.kind === `${method}Call`)!;
+				expect(consumer).toBeDefined();
+				const call = fn.body.instructions[consumer.ip]!;
+				if (call.opcode !== "CALL" && call.opcode !== "CALL_KNOWN")
+					throw new Error("Expected search call");
+				const point = fn.gc.safepoints.find((p) => p.instructionIp === consumer.ip)!;
+				expect(point).toBeDefined();
+				for (const argument of call.arguments)
+					if (argument >= 0) expect(point.incomingRootRegisters).toContain(argument);
+				expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+					image,
+				);
+			}
+		},
+	);
+
+	it.each(["mutable", "locked"] as const)(
 		"retains replacement consumers and evaluated ignored arguments under %s primordials",
 		(mode) => {
 			for (const method of ["replace", "replaceAll"])

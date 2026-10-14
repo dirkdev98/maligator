@@ -1088,6 +1088,41 @@ describe("bounded bottom-up span composition", () => {
 
 describe("shared search span continuations", () => {
 	it.each(["mutable", "locked"] as const)(
+		"retains primitive-needle searches from every producer under %s primordials",
+		(mode) => {
+			for (const producer of [
+				"source.split('|')[1]",
+				"/\\|([^|]*)\\|/.exec(source)[1]",
+				"source.slice(1,-1).trim()",
+			])
+				for (const method of [
+					"indexOf",
+					"lastIndexOf",
+					"includes",
+					"startsWith",
+					"endsWith",
+				]) {
+					const image = compile(
+						`const part=${producer};const result=part.${method}(12345678901234567890n,escape);if(escape)observe(part);return result;`,
+						mode,
+					);
+					const plans = image.native.functions.flatMap((f) => [
+						...f.specializations.filter((p) => p.kind === "string-span"),
+						...(f.storage?.spanContinuations ?? []),
+					]);
+					expect(
+						plans.flatMap((p) => p.consumers.map((c) => c.kind)),
+						producer,
+					).toContain(`${method}Call`);
+					expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+						image,
+					);
+					expect(() => emitProgramImage(image)).not.toThrow();
+				}
+		},
+	);
+
+	it.each(["mutable", "locked"] as const)(
 		"selects searches after projections and nested ranges under %s primordials",
 		(mode) => {
 			for (const producer of [

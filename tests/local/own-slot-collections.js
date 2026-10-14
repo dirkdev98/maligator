@@ -17,10 +17,29 @@ function extent(record) {
 	const size = record.size;
 	return [left, length, right, size];
 }
+function internals(record) {
+	const left = record.left;
+	const bytes = record.byteLength;
+	const right = record.right;
+	const index = record.lastIndex;
+	const tail = record.tail;
+	return [left, bytes, right, index, tail];
+}
 globalThis.readCollectionReferences = references;
 globalThis.sumCollectionNumbers = sum;
 globalThis.readCollectionExtent = extent;
-const kinds = ["array", "typed", "map", "set"];
+globalThis.readBuiltinInternals = internals;
+const kinds = [
+	"array",
+	"typed",
+	"map",
+	"set",
+	"date",
+	"regexp",
+	"promise",
+	"buffer",
+	"view",
+];
 function make(kind) {
 	if (kind === "array") return [11, 22, 33];
 	if (kind === "typed") return new Uint16Array([11, 22, 33]);
@@ -30,7 +49,12 @@ function make(kind) {
 			[2, 22],
 			[3, 33],
 		]);
-	return new Set([11, 22, 33]);
+	if (kind === "set") return new Set([11, 22, 33]);
+	if (kind === "date") return new Date(0);
+	if (kind === "regexp") return /x/g;
+	if (kind === "promise") return Promise.resolve(11);
+	if (kind === "buffer") return new ArrayBuffer(8);
+	return new DataView(new ArrayBuffer(8));
 }
 const marker = { marker: "retained" };
 function fill(record, reverse) {
@@ -115,6 +139,41 @@ if (mode === "fallback") {
 			throw new Error("stale collection size");
 		rows.push("cleared");
 	}
+	const regexp = fill(/x/g, false);
+	for (let i = 0; i < 6; i++) globalThis.readBuiltinInternals(regexp);
+	regexp.exec("x x");
+	if (globalThis.readBuiltinInternals(regexp)[3] !== 1)
+		throw new Error("stale regexp index");
+	regexp.exec("x x");
+	if (globalThis.readBuiltinInternals(regexp)[3] !== 3)
+		throw new Error("second regexp index lost");
+	rows.push("regexp advanced");
+	const backing = fill(new ArrayBuffer(8), false);
+	const view = fill(new DataView(backing), false);
+	for (let i = 0; i < 6; i++) {
+		globalThis.readBuiltinInternals(backing);
+		globalThis.readBuiltinInternals(view);
+	}
+	if (typeof backing.transfer === "function") {
+		backing.transfer();
+		if (globalThis.readBuiltinInternals(backing)[1] !== 0)
+			throw new Error("stale buffer length");
+		let caught = false;
+		try {
+			globalThis.readBuiltinInternals(view);
+		} catch (error) {
+			caught = error instanceof TypeError;
+		}
+		if (!caught || globalThis.sumCollectionNumbers(view) !== 15)
+			throw new Error("detached view fallback lost");
+		rows.push("view detached");
+	}
+	const date = fill(new Date(0), false);
+	for (let i = 0; i < 6; i++) globalThis.sumCollectionNumbers(date);
+	date.setTime(1234);
+	if (date.getTime() !== 1234 || globalThis.sumCollectionNumbers(date) !== 15)
+		throw new Error("date state confused with own fields");
+	rows.push("date changed");
 } else {
 	const selected = mode === "mixed" || mode === "dictionary" ? kinds : [mode];
 	for (let round = 0; round < 5; round++)
@@ -135,6 +194,13 @@ if (mode === "fallback") {
 				const expectedSize = kind === "map" || kind === "set" ? 3 : undefined;
 				if (dimensions[1] !== expectedLength || dimensions[3] !== expectedSize)
 					throw new Error("internal property lost");
+				const state = globalThis.readBuiltinInternals(record);
+				if (state[0] !== marker || state[2] !== marker || state[4] !== "tail")
+					throw new Error("internal continuation root lost");
+				const bytes =
+					kind === "typed" ? 6 : kind === "buffer" || kind === "view" ? 8 : undefined;
+				if (state[1] !== bytes || state[3] !== (kind === "regexp" ? 0 : undefined))
+					throw new Error("internal state lost");
 				rows.push([kind, number, dimensions[1], dimensions[3]]);
 				collect();
 			}

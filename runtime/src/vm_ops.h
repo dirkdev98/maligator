@@ -1190,6 +1190,11 @@ static inline MalObject *mal_vm_as_own_slot_object(MalValue v) {
         case MAL_HEAP_TYPED_ARRAY_OBJECT:
         case MAL_HEAP_MAP_OBJECT:
         case MAL_HEAP_SET_OBJECT:
+        case MAL_HEAP_DATE_OBJECT:
+        case MAL_HEAP_REGEXP_OBJECT:
+        case MAL_HEAP_PROMISE_OBJECT:
+        case MAL_HEAP_ARRAY_BUFFER_OBJECT:
+        case MAL_HEAP_DATA_VIEW_OBJECT:
             return (MalObject *) mal_value_to_heap(v);
         default:
             return nullptr;

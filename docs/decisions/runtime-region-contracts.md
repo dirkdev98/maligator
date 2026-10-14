@@ -152,7 +152,8 @@ each cached field token is interpreted against the retained logical shape and
 field storage. Inherited constant rows retain their ordinary-object receiver guard.
 An unmaterialized scalar-backed stack object may have a shape without a field
 buffer; it cannot enter a borrowed-field region.
-Named own slots of Arrays, TypedArrays, Maps and Sets share this storage contract.
+Named own slots of Arrays, TypedArrays, Maps, Sets, Dates, RegExps, Promises,
+ArrayBuffers and DataViews share this storage contract.
 Their indexed or internal properties still require the original admission; an own
 shape row never licenses element storage, collection size or a buffer extent.
 The first property-cache miss ends the borrowed shape and field-pointer lifetime
@@ -196,3 +197,8 @@ paths. Semantic and memory checks establish correctness; retained matched timing
 evidence is still required before claiming a performance improvement. Wider
 regions must account for discovery cost, root slots, retained state, and generated
 code as well as the work removed from their successful path.
+
+String span searches convert primitive needles through canonical ToString while
+rooting the source and arguments. Position conversion follows needle conversion.
+Observable coercions, symbols and foreign-realm methods take the original call;
+admitted allocation failures retain normal completion handling.

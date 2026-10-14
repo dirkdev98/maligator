@@ -1703,7 +1703,7 @@ bool mal_builtin_string_span_character(
 }
 
 bool mal_builtin_string_span_search(
-    MalValue callee, bool locked, MalValue subject, usize start, usize end,
+    MalVm *vm, MalValue callee, bool locked, MalValue subject, usize start, usize end,
     MalValue needle, MalValue position, MalStringSearchOp operation, MalValue *out
 ) {
     MalNativeFunctionCallback expected;
@@ -1715,17 +1715,33 @@ bool mal_builtin_string_span_search(
         case MAL_STRING_SEARCH_ENDS_WITH: expected = mal_builtin_string_prototype_ends_with; break;
         default: return false;
     }
-    f64 offset;
-    if ((!locked && (!mal_value_is_native_function_object(callee) ||
-         mal_native_function_object_callback(mal_value_to_native_function_object(callee)) != expected)) ||
-        !mal_value_is_string(needle) ||
-        !mal_ops_try_primitive_to_number(position, &offset)) return false;
+    if (!locked && (!mal_value_is_native_function_object(callee) ||
+        mal_native_function_object_callback(mal_value_to_native_function_object(callee)) != expected)) return false;
+#if MAL_REALMS
+    if (!locked && mal_vm_callee_realm(vm, callee) != vm->current_realm) return false;
+#endif
+    if (!mal_value_is_string(subject) || start > end ||
+        end > mal_string_length(mal_value_to_string(subject)) ||
+        mal_value_is_object(needle) || mal_value_is_symbol(needle) ||
+        mal_value_is_object(position) || mal_value_is_symbol(position) || mal_value_is_bigint(position)) return false;
+    MalValue roots[3] = {subject, needle, position};
+    MalRootSpan span;
+    bool converting = !mal_value_is_string(needle);
+    if (converting) mal_gc_root(&span, roots, 3);
+    *out = MAL_VALUE_UNDEFINED;
+    if (converting) {
+        MalString *search = mal_builtin_string_coerce(vm, roots[1]);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
+        roots[1] = mal_value_from_string(search);
+    }
+    // Primitive needle conversion precedes position conversion even when it allocates.
+    f64 offset = mal_ops_to_number(roots[2]);
     if (mal_value_is_undefined(position)) {
         offset = operation == MAL_STRING_SEARCH_ENDS_WITH || operation == MAL_STRING_SEARCH_LAST_INDEX_OF
             ? INFINITY : 0;
     }
-    *out = mal_builtin_string_search_impl(mal_value_to_string(subject), start, end,
-        mal_value_to_string(needle), offset, operation);
+    *out = mal_builtin_string_search_impl(mal_value_to_string(roots[0]), start, end,
+        mal_value_to_string(roots[1]), offset, operation);
     switch (operation) {
         case MAL_STRING_SEARCH_INDEX_OF: MAL_PERF_COUNT(string_span_index_of_searches); break;
         case MAL_STRING_SEARCH_LAST_INDEX_OF: MAL_PERF_COUNT(string_span_last_index_of_searches); break;
@@ -1734,6 +1750,8 @@ bool mal_builtin_string_span_search(
         case MAL_STRING_SEARCH_ENDS_WITH: MAL_PERF_COUNT(string_span_ends_with_searches); break;
         default: abort();
     }
+done:
+    if (converting) mal_gc_unroot(&span);
     return true;
 }
 

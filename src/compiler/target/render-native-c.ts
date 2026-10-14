@@ -6629,10 +6629,10 @@ function emitInstruction(
 				instruction.arguments[index] === undefined
 					? "MAL_VALUE_UNDEFINED"
 					: boxedOperand(instruction.arguments[index]);
-			guard += ` && mal_builtin_string_span_search(${locked ? "MAL_VALUE_UNDEFINED" : boxedOperand(instruction.callee)}, ${locked}, ${source}, ${prefix}_start, ${prefix}_end, ${argument(0)}, ${argument(1)}, MAL_STRING_SEARCH_${operation[0]}, &${result})`;
+			guard += ` && mal_builtin_string_span_search(vm, ${locked ? "MAL_VALUE_UNDEFINED" : boxedOperand(instruction.callee)}, ${locked}, ${source}, ${prefix}_start, ${prefix}_end, ${argument(0)}, ${argument(1)}, MAL_STRING_SEARCH_${operation[0]}, &${result})`;
 			const sourceKind =
 				site.parent !== undefined ? "nested" : (site.projection?.kind ?? "range");
-			projected = `MAL_PERF_COUNT(string_span_${sourceKind}_searches); r${instruction.dst} = ${callValue(instruction.dst, result)};`;
+			projected = `${throwCheck()} MAL_PERF_COUNT(string_span_${sourceKind}_searches); r${instruction.dst} = ${callValue(instruction.dst, result)};`;
 		} else if (
 			(role === "parseInt" || role === "parseFloat") &&
 			(instruction.opcode === "CALL" || instruction.opcode === "CALL_KNOWN")
