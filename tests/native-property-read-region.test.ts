@@ -362,11 +362,16 @@ describe("bounded native property read regions", () => {
 		).toHaveLength(0);
 	});
 
-	it("bounds admissions to sixteen loads and ninety-six instructions", () => {
-		const many = lower(Array.from({ length: 18 }, (_, index) => load(index + 1)));
+	it("bounds admissions to thirty-two loads and 128 instructions", () => {
+		const many = lower(
+			Array.from({ length: 34 }, (_, index) => load(index + 1)),
+			{
+				representations: Array.from({ length: 35 }, () => "boxed"),
+			},
+		);
 		expect(many.propertyReadRegions).toHaveLength(1);
-		expect(many.propertyReadRegions[0]!.loads).toHaveLength(16);
-		const gap: Array<BytecodeInstruction> = Array.from({ length: 94 }, () => ({
+		expect(many.propertyReadRegions[0]!.loads).toHaveLength(32);
+		const gap: Array<BytecodeInstruction> = Array.from({ length: 126 }, () => ({
 			opcode: "CREATE_NUMBER",
 			dst: 20,
 			value: 3,
