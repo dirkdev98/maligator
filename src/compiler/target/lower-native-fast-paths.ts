@@ -955,8 +955,8 @@ function lowerPropertyReadRegion(
 	});
 }
 
-const NUMBER_RECORD_INSTRUCTION_LIMIT = 96;
-const NUMBER_RECORD_FIELD_LIMIT = 16;
+const NUMBER_RECORD_INSTRUCTION_LIMIT = 128;
+const NUMBER_RECORD_FIELD_LIMIT = 32;
 const NUMBER_RECORD_UNARY_OPERATORS = new Set([
 	"+",
 	"-",
@@ -1263,11 +1263,22 @@ function numberRecordFields(
 				});
 		}
 	}
-	return accesses < 4 ||
-		fields.size > NUMBER_RECORD_FIELD_LIMIT ||
-		![...fields.values()].some((field) => field.stored)
-		? undefined
-		: Object.freeze([...fields.values()]);
+	if (accesses < 4 || fields.size > NUMBER_RECORD_FIELD_LIMIT) return undefined;
+	if (![...fields.values()].some((field) => field.stored)) {
+		const math = order.some(
+			(ip) => nativeNumericMathInstruction(fn.instructions[ip]!) !== undefined,
+		);
+		const arithmetic = order.some((ip) => {
+			const instruction = fn.instructions[ip]!;
+			return (
+				instruction.opcode === "BINARY" &&
+				NATIVE_NUMBER_BINARY_OPERATORS.has(instruction.operator)
+			);
+		});
+		// Existing pair/triple/quad projections already cover small linear read-only arithmetic.
+		if (!math && (accesses <= 4 || !arithmetic)) return undefined;
+	}
+	return Object.freeze([...fields.values()]);
 }
 
 function admitNumberRecordRegion(
@@ -1359,7 +1370,7 @@ function lowerNumberRecordRegion(
 		closure.add(ip);
 		pending.push(...numberRecordSuccessors(fn.instructions[ip]!, ip));
 	}
-	if (numberRecordFields(fn, [...closure]) === undefined) return undefined;
+	if (closure.size < 4) return undefined;
 	// Any member or closure exit can serve as the single exit of a smaller region.
 	const candidates: Array<{
 		readonly order: ReadonlyArray<number>;
@@ -2864,7 +2875,6 @@ export function selectNativeFastPaths(
 					const kind = native.instructions[candidate]?.kind;
 					return (
 						unavailable(candidate) ||
-						fusions.has(candidate) ||
 						(kind !== undefined &&
 							!(
 								kind === "exact-builtin-input-kinds" &&
@@ -2874,6 +2884,18 @@ export function selectNativeFastPaths(
 				},
 			);
 			if (plan === undefined) continue;
+			const members = new Set(plan.claimedIps);
+			// Fallback fusion temporaries cannot enter or leave the admitted record state.
+			if (
+				plan.claimedIps.some((ip) => {
+					const fusion = fusions.get(ip);
+					return (
+						fusion !== undefined &&
+						(!members.has(fusion.id) || !members.has(fusion.finishIp))
+					);
+				})
+			)
+				continue;
 			numberRecordRegions.push(plan);
 			for (const claimedIp of plan.claimedIps) blocked.add(claimedIp);
 		}

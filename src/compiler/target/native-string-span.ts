@@ -176,6 +176,13 @@ export function validateNativeStringSpan(
 		)
 			fail();
 		if (
+			consumer.kind === "localeComparePrepared" &&
+			(instruction.opcode !== "PREPARED_STRING_COMPARE" ||
+				instruction.left !== consumer.value ||
+				instruction.right === consumer.value)
+		)
+			fail();
+		if (
 			consumer.kind === "equal" &&
 			(instruction.opcode !== "BINARY" ||
 				(instruction.operator !== "===" && instruction.operator !== "!=="))

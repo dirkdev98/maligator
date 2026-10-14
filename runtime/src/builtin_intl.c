@@ -32,28 +32,24 @@
 #if !MAL_INTL_HAS_COLLATOR
 // localeCompare → UTF-16 code-unit ordering. `this_string` is already a String
 // (the caller coerced it); ToString `that_value` (may throw on a Symbol).
-static MalValue intl_fallback_locale_compare(MalVm *vm, MalValue this_string, MalValue that_value) {
-    MalValue roots[2] = {this_string, mal_value_new_undefined()};
+static MalValue intl_fallback_locale_compare(MalVm *vm, MalValue this_string, usize start, usize length, MalValue that_value) {
+    MalValue roots[2] = {this_string, that_value};
     MalRootSpan root_span;
     mal_gc_root(&root_span, roots, 2);
 
     MalString *b = nullptr;
-    if (!mal_vm_to_string(vm, that_value, &b)) {
+    if (!mal_vm_to_string(vm, roots[1], &b)) {
         mal_gc_unroot(&root_span);
         return mal_value_new_undefined();
     }
     roots[1] = mal_value_from_string(b);
-    MalString *a = mal_value_to_string(roots[0]);
-    (void) mal_string_code_units(a);
+    (void) mal_string_code_units(mal_value_to_string(roots[1]));
+    c16 stack[MAL_STRING_UTF16_SCRATCH_UNITS];
+    c16 *scratch;
+    const c16 *ua = mal_string_range_utf16(mal_value_to_string(roots[0]), start, length, stack, &scratch);
     b = mal_value_to_string(roots[1]);
-    (void) mal_string_code_units(b);
-    // Either flatten above can allocate. Reacquire both rooted cells before
-    // taking the stable contiguous views used by the comparison loop.
-    a = mal_value_to_string(roots[0]);
-    b = mal_value_to_string(roots[1]);
-    usize la = mal_string_length(a);
+    usize la = length;
     usize lb = mal_string_length(b);
-    const c16 *ua = mal_string_code_units(a);
     const c16 *ub = mal_string_code_units(b);
     usize n = la < lb ? la : lb;
     i32 comparison = la == lb ? 0 : (la < lb ? -1 : 1);
@@ -63,6 +59,7 @@ static MalValue intl_fallback_locale_compare(MalVm *vm, MalValue this_string, Ma
             break;
         }
     }
+    free(scratch);
     mal_gc_unroot(&root_span);
     return mal_value_from_i32(comparison);
 }
@@ -1215,30 +1212,21 @@ static MalValue intl_collator_supported_locales_of(MalVm *vm, MalValue this_valu
     return intl_supported_locales_of_impl(vm, args, arg_count);
 }
 
-/**
- * String.prototype.localeCompare's collation, exposed for builtin_string.c: a
- * Collator over (locales, options) comparing two already-resolved strings. The
- * default plan uses Rust's thread-local flat primitive; explicit locales/options
- * retain the full constructor path. Returns a Number (-1/0/1), or undefined with
- * a pending throw.
- */
 #endif // MAL_INTL_HAS_COLLATOR — collator service statics
 
 // String.prototype.localeCompare: a real Collator when the service is present,
 // else the UTF-16 code-unit fallback. Always defined (builtin_string.c calls it).
-MalValue mal_intl_locale_compare(MalVm *vm, MalValue this_string, MalValue that_value, MalValue locales, MalValue options) {
+MalValue mal_intl_locale_compare_range(MalVm *vm, MalValue this_string, usize start, usize length, MalValue that_value, MalValue locales, MalValue options) {
 #if MAL_INTL_HAS_COLLATOR
     MalValue roots[5] = {
-        this_string,
-        mal_value_new_undefined(),
+        this_string, that_value,
         mal_value_new_undefined(), locales, options,
     };
     MalRootSpan root_span;
     mal_gc_root(&root_span, roots, countof(roots));
     // builtin_string.c already performed the receiver's observable ToString.
-    MalString *self = mal_value_to_string(roots[0]);
     MalString *that;
-    if (!mal_vm_to_string(vm, that_value, &that)) {
+    if (!mal_vm_to_string(vm, roots[1], &that)) {
         mal_gc_unroot(&root_span);
         return mal_value_new_undefined();
     }
@@ -1248,9 +1236,12 @@ MalValue mal_intl_locale_compare(MalVm *vm, MalValue this_string, MalValue that_
     void *compare_handle = nullptr;
     if (!use_default) {
         MalValue ctor_args[2] = {roots[3], roots[4]};
+        // Preserve the constructor's native-frame contract while retaining all observable inputs.
+        vm->gc_native_frames++;
         roots[2] = intl_collator_constructor(
             vm, mal_value_new_undefined(), ctor_args, 2,
             mal_value_new_undefined(), mal_value_new_undefined());
+        vm->gc_native_frames--;
         if (!mal_value_is_intl_object(roots[2])) {
             mal_gc_unroot(&root_span);
             return mal_value_new_undefined(); // a pending throw from the constructor
@@ -1258,22 +1249,21 @@ MalValue mal_intl_locale_compare(MalVm *vm, MalValue this_string, MalValue that_
         compare_handle = mal_value_to_intl_object(roots[2])->handle;
     }
 
-    // Either input can be a cons string. Flatten both while rooted, then reacquire
-    // both pointers so no allocation can leave a stale moving-heap address.
-    self = mal_value_to_string(roots[0]);
-    (void) mal_string_code_units(self);
-    that = mal_value_to_string(roots[1]);
-    (void) mal_string_code_units(that);
-    self = mal_value_to_string(roots[0]);
+    // Finish all flattening that may allocate before borrowing the bounded source view.
+    (void) mal_string_code_units(mal_value_to_string(roots[1]));
+    c16 stack[MAL_STRING_UTF16_SCRATCH_UNITS];
+    c16 *scratch;
+    const c16 *left_units = mal_string_range_utf16(mal_value_to_string(roots[0]), start, length, stack, &scratch);
     that = mal_value_to_string(roots[1]);
     i32 result = use_default
         ? mal_i18n_default_collator_compare_utf16(
-            (const uint16_t *) mal_string_code_units(self), mal_string_length(self),
+            (const uint16_t *) left_units, length,
             (const uint16_t *) mal_string_code_units(that), mal_string_length(that))
         : mal_i18n_collator_compare_utf16(
             compare_handle,
-            (const uint16_t *) mal_string_code_units(self), mal_string_length(self),
+            (const uint16_t *) left_units, length,
             (const uint16_t *) mal_string_code_units(that), mal_string_length(that));
+    free(scratch);
     if (result < -1 || result > 1) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "could not create collator for locale");
         mal_gc_unroot(&root_span);
@@ -1284,7 +1274,7 @@ MalValue mal_intl_locale_compare(MalVm *vm, MalValue this_string, MalValue that_
 #else
     (void) locales;
     (void) options;
-    return intl_fallback_locale_compare(vm, this_string, that_value);
+    return intl_fallback_locale_compare(vm, this_string, start, length, that_value);
 #endif
 }
 
@@ -3599,10 +3589,10 @@ void mal_builtin_intl_install(MalVm *vm) {
     (void) vm; // no Intl namespace in this build
 }
 
-MalValue mal_intl_locale_compare(MalVm *vm, MalValue this_string, MalValue that_value, MalValue locales, MalValue options) {
+MalValue mal_intl_locale_compare_range(MalVm *vm, MalValue this_string, usize start, usize length, MalValue that_value, MalValue locales, MalValue options) {
     (void) locales;
     (void) options;
-    return intl_fallback_locale_compare(vm, this_string, that_value);
+    return intl_fallback_locale_compare(vm, this_string, start, length, that_value);
 }
 
 MalValue mal_intl_number_to_locale_string(MalVm *vm, f64 number, MalValue locales, MalValue options) {
@@ -3621,7 +3611,7 @@ MalValue mal_intl_date_to_locale_string(MalVm *vm, f64 time_value, MalValue loca
 
 #include "generated/known_native_builtin_intl_c.inc"
 
-MalValue mal_intl_locale_compare_prepared(MalVm *vm, MalValue this_string, MalValue that, const byte *locale, usize locale_length, u8 options) {
+MalValue mal_intl_locale_compare_prepared_range(MalVm *vm, MalValue this_string, usize start, usize length, MalValue that, const byte *locale, usize locale_length, u8 options) {
 #if MAL_INTL_HAS_COLLATOR
     MalValue roots[2] = {this_string, that};
     MalRootSpan root_span;
@@ -3630,15 +3620,17 @@ MalValue mal_intl_locale_compare_prepared(MalVm *vm, MalValue this_string, MalVa
     MalString *right;
     if (!mal_vm_to_string(vm, roots[1], &right)) goto done;
     roots[1] = mal_value_from_string(right);
-    (void) mal_string_code_units(mal_value_to_string(roots[0]));
     (void) mal_string_code_units(mal_value_to_string(roots[1]));
-    MalString *left = mal_value_to_string(roots[0]);
+    c16 stack[MAL_STRING_UTF16_SCRATCH_UNITS];
+    c16 *scratch;
+    const c16 *left_units = mal_string_range_utf16(mal_value_to_string(roots[0]), start, length, stack, &scratch);
     right = mal_value_to_string(roots[1]);
     u8 hit = 0;
     i32 order = mal_i18n_prepared_collator_compare_utf16(
         (const uint8_t *) locale, locale_length, options,
-        (const uint16_t *) mal_string_code_units(left), mal_string_length(left),
+        (const uint16_t *) left_units, length,
         (const uint16_t *) mal_string_code_units(right), mal_string_length(right), &hit);
+    free(scratch);
     if (hit) MAL_PERF_COUNT(intl_collation_cache_hits);
     else MAL_PERF_COUNT(intl_collation_cache_misses);
     if (order < -1 || order > 1) {
@@ -3653,6 +3645,14 @@ MalValue mal_intl_locale_compare_prepared(MalVm *vm, MalValue this_string, MalVa
     (void) locale;
     (void) locale_length;
     (void) options;
-    return intl_fallback_locale_compare(vm, this_string, that);
+    return intl_fallback_locale_compare(vm, this_string, start, length, that);
 #endif
+}
+
+MalValue mal_intl_locale_compare(MalVm *vm, MalValue this_string, MalValue that, MalValue locales, MalValue options) {
+    return mal_intl_locale_compare_range(vm, this_string, 0, mal_string_length(mal_value_to_string(this_string)), that, locales, options);
+}
+
+MalValue mal_intl_locale_compare_prepared(MalVm *vm, MalValue this_string, MalValue that, const byte *locale, usize locale_length, u8 options) {
+    return mal_intl_locale_compare_prepared_range(vm, this_string, 0, mal_string_length(mal_value_to_string(this_string)), that, locale, locale_length, options);
 }

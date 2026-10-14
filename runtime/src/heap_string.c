@@ -1647,3 +1647,47 @@ i32 mal_string_compare(const MalString *left, const MalString *right) {
 
     return 0;
 }
+
+const c16 *mal_string_segment_utf16(
+    const MalStringSegment *segment, c16 stack[MAL_STRING_UTF16_SCRATCH_UNITS], c16 **scratch
+) {
+    *scratch = nullptr;
+    if (!segment->latin1) return segment->utf16_units;
+    c16 *units = stack;
+    if (segment->length > MAL_STRING_UTF16_SCRATCH_UNITS) {
+        units = malloc(sizeof(c16) * segment->length);
+        if (units == nullptr) abort();
+        *scratch = units;
+    }
+    for (usize i = 0; i < segment->length; i++) units[i] = segment->latin1_units[i];
+    return units;
+}
+
+MalStringSegment mal_string_range_segment(
+    MalString *string, usize start, usize length,
+    c16 stack[MAL_STRING_UTF16_SCRATCH_UNITS], c16 **scratch
+) {
+    *scratch = nullptr;
+    // Preserve cached flattening for canonical whole-string callers.
+    if (start == 0 && length == mal_string_length(string)) return mal_string_flat_segment(string);
+    MalStringSegment segment;
+    if (mal_string_try_get_segment(string, start, length, &segment)) return segment;
+    c16 *units = stack;
+    if (length > MAL_STRING_UTF16_SCRATCH_UNITS) {
+        units = malloc(length * sizeof(c16));
+        if (units == nullptr) abort();
+        *scratch = units;
+    }
+    // Unicode context and composition cannot consume code units outside this range.
+    mal_string_copy_range_to(string, start, length, units);
+    return (MalStringSegment) {.latin1 = false, .utf16_units = units, .length = length};
+}
+
+
+const c16 *mal_string_range_utf16(MalString *string, usize start, usize length, c16 stack[MAL_STRING_UTF16_SCRATCH_UNITS], c16 **scratch) {
+    *scratch = nullptr;
+    if (start == 0 && length == mal_string_length(string)) return mal_string_code_units(string);
+    MalStringSegment segment = mal_string_range_segment(string, start, length, stack, scratch);
+    if (!segment.latin1) return segment.utf16_units;
+    return mal_string_segment_utf16(&segment, stack, scratch);
+}

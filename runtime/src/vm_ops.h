@@ -2176,14 +2176,14 @@ typedef struct MalNumberRecord {
 } MalNumberRecord;
 
 static inline __attribute__((always_inline)) bool mal_vm_number_record_begin(
-    MalValue receiver, MalNumberRecord *record
+    MalValue receiver, bool writable, MalNumberRecord *record
 ) {
     MAL_PERF_COUNT(number_record_attempts);
-    MalObject *object = mal_vm_as_object(receiver);
+    MalObject *object = writable ? mal_vm_as_object(receiver) : mal_vm_as_own_slot_object(receiver);
     // Write-back skips the prototype-epoch and watched-method notifications.
     if (object == nullptr || object->storage_kind != MAL_OBJECT_COMPACT ||
-        object->is_prototype || object->watched_method_proto ||
-        object->primordial_locked) {
+        (writable && (object->is_prototype || object->watched_method_proto ||
+                      object->primordial_locked))) {
         return false;
     }
     *record = (MalNumberRecord) {

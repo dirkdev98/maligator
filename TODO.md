@@ -974,26 +974,28 @@ The shared lifetime and fallback rules are recorded in
       Guard consumed numeric inputs before memory operations and reuse canonical
       signed-zero, NaN and rounding semantics without per-call transport. Mutable
       lookups, coercion and ignored-argument effects preserve their original path.
-      All111 loop contracts, eighteen Node GC modes and four frontend/artifact/C
-      captures pass. Native and performance verification remain pending.
+      All111 loop contracts, eighteen Node GC modes, four frontend/artifact/C
+      captures and both Linux ASan/UBSan cases pass. Performance verification remains
+      pending.
 - [ ] Normalize retained range, split, capture and nested spans through the shared
       canonical Unicode builder, preserving form coercion, invalid-form errors,
       source roots and bounded normalization context. All237 focused checks, eleven
-      Node GC modes, six frontend/artifact/C captures and four runtime C syntax
-      configurations pass. Native and performance verification remain pending.
+      Node GC modes, six frontend/artifact/C captures, four runtime C syntax
+      configurations and all three Linux ASan/UBSan cases pass. Performance
+      verification remains pending.
 
 - [ ] Extend fixed TypedArray regions across canonical integer, half-rounding,
       power and angle kernels, plus bounded variadic min/max/hypot. Carry known
       primitive defaults into numeric bodies while guarding dynamic consumed
       arguments; no admitted body collects or invokes user code. All128 loop
-      contracts, sixteen Node GC modes and four frontend/artifact/C captures pass.
-      Native and performance verification remain pending.
+      contracts, sixteen Node GC modes, four frontend/artifact/C captures and both
+      Linux ASan/UBSan cases pass. Performance verification remains pending.
 - [ ] Validate and repair UTF16 directly over retained string spans, reusing the
       canonical segmented scan with range-relative surrogate boundaries. Preserve
       captured methods, ignored argument effects, output roots and cached original
       materialization. All229 focused checks, eleven Node GC modes, five frontend/
-      artifact/C captures and four runtime C configurations pass. Native and
-      performance verification remain pending.
+      artifact/C captures, four runtime C configurations and all three Linux
+      ASan/UBSan cases pass. Performance verification remains pending.
 
 - [ ] Carry numeric record fields through certified Math bodies, including variadic
       clamps, integer kernels, half rounding, powers and norms. Preserve field and
@@ -1007,6 +1009,21 @@ The shared lifetime and fallback rules are recorded in
       roots and balanced native-frame ownership. All249 focused checks, eleven Node
       GC modes, five frontend/artifact/C captures and eight runtime C configurations
       pass. Native and performance verification remain pending.
+
+- [ ] Admit read-only numeric record reductions and bounded larger field groups.
+      Keep existing small projections, compose complete numeric fusions, allow
+      32 fields and128 instructions, and retain valid prefixes of larger records.
+      Read-only guards cover frozen objects, prototype objects and function own
+      fields; writable regions retain the original object and notification guards.
+      All208 focused contracts, twenty Node GC modes and eight frontend/artifact/C
+      captures pass. Native and performance verification remain pending.
+- [ ] Feed ordinary and prepared localeCompare directly from retained string spans.
+      Reuse canonical locale/options effects and collation with bounded UTF16 input
+      preparation shared by case conversion and normalization. Preserve source and
+      argument roots, original exception order, prepared-cache identity and foreign
+      method fallback. All256 focused checks, fifteen Node GC modes, ten frontend/
+      artifact/C captures and24 runtime C configurations pass. Native and
+      performance verification remain pending.
 
 | Order | Slice                        | Owning work and exit condition                                                                                                                                  |
 | ----- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |

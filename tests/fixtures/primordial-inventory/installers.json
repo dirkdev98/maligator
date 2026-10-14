@@ -65,7 +65,7 @@
 	},
 	{
 		"file": "builtin_intl.c",
-		"sha256": "32ff702b47c7e491b923f1f936246451f473b1e377f0483ba0ac4b527dea8f75"
+		"sha256": "a796741f62e141c14d3da16c2219354380f3e2659463b844eccc99ae4c4321ac"
 	},
 	{
 		"file": "builtin_iterator.c",
@@ -125,7 +125,7 @@
 	},
 	{
 		"file": "builtin_string.c",
-		"sha256": "713c64816f7fb1210164637e997c6c344c0b03c74b19bd6d70fd8b88b4ec9003"
+		"sha256": "03d87503acf189727a817c63b5e797ebea2a24599601f7d0ceace3fbbcfbd6b7"
 	},
 	{
 		"file": "builtin_symbol.c",
@@ -729,6 +729,6 @@
 	},
 	{
 		"file": "vm_ops.h",
-		"sha256": "ef761f2da0a86f41a3feede4956b68c409886888fa687807721abad76042f8c5"
+		"sha256": "1099cc344816f9c9fe9a11f7c1088f61950dd78deadf58c8d05167f949b713ea"
 	}
 ]

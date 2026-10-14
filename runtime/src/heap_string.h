@@ -307,3 +307,13 @@ bool mal_string_equals(const MalString *left, const MalString *right);
  * Lexicographically compare two strings by UTF-16 code units.
  */
 i32 mal_string_compare(const MalString *left, const MalString *right);
+
+#define MAL_STRING_UTF16_SCRATCH_UNITS ((usize) 128)
+
+// Caller roots the valid source range; whole-string flattening may allocate. Free returned scratch.
+MalStringSegment mal_string_range_segment(MalString *string, usize start, usize length, c16 stack[MAL_STRING_UTF16_SCRATCH_UNITS], c16 **scratch);
+// Latin1 widening borrows stack or malloc scratch instead of permanently widening the string.
+const c16 *mal_string_segment_utf16(const MalStringSegment *segment, c16 stack[MAL_STRING_UTF16_SCRATCH_UNITS], c16 **scratch);
+
+// Caller roots the valid range across cached whole-string bridging; partial input uses scratch to free.
+const c16 *mal_string_range_utf16(MalString *string, usize start, usize length, c16 stack[MAL_STRING_UTF16_SCRATCH_UNITS], c16 **scratch);

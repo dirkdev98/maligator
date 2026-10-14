@@ -6279,6 +6279,32 @@
 			"sourceSeam": "runtime/src/builtin_string.c",
 			"fixture": "cases/string-span-locale-case.mjs",
 			"controls": ["string-span-case", "string-span-normalize"]
+		},
+		{
+			"id": "number-record-reduction",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Numeric record regions",
+			"category": "memory-layout-usage",
+			"mechanisms": ["numeric-record-storage", "numeric-builtin-bodies"],
+			"inputShape": "Twenty-four numeric own fields on frozen records reduce under one guarded region without per-field transport.",
+			"unit": "record",
+			"sourceSeam": "src/compiler/target/lower-native-fast-paths.ts",
+			"fixture": "cases/number-record-reduction.mjs",
+			"controls": ["number-record-math", "typed-array-reduction-regions"]
+		},
+		{
+			"id": "string-span-locale-compare",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Composable string spans",
+			"category": "memory-layout-usage",
+			"mechanisms": ["string-spans", "delayed-materialization"],
+			"inputShape": "Retained string ranges feed canonical locale collation and prepared comparisons without materializing the left token.",
+			"unit": "token",
+			"sourceSeam": "runtime/src/builtin_intl.c",
+			"fixture": "cases/string-span-locale-compare.mjs",
+			"controls": ["string-span-locale-case", "string-span-case"]
 		}
 	]
 }

@@ -36,3 +36,6 @@ MalValue mal_intl_date_to_locale_string(MalVm *vm, f64 time_value, MalValue loca
 bool mal_intl_case_locale(MalVm *vm, MalValue locales, MalUnicodeLocale *locale);
 
 MalValue mal_intl_locale_compare_prepared(MalVm *vm, MalValue this_string, MalValue that, const byte *locale, usize locale_length, u8 options);
+
+MalValue mal_intl_locale_compare_range(MalVm *vm, MalValue source, usize start, usize length, MalValue that, MalValue locales, MalValue options);
+MalValue mal_intl_locale_compare_prepared_range(MalVm *vm, MalValue source, usize start, usize length, MalValue that, const byte *locale, usize locale_length, u8 options);

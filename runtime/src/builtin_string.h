@@ -447,3 +447,6 @@ MalValue mal_builtin_string_html_known(MalVm *vm, MalString *string, MalValue at
 
 // Primitive locale/options data are prepared; receiver and comparison coercions still run in order.
 MalValue mal_builtin_string_locale_compare_prepared(MalVm *vm, MalValue receiver, MalValue that, const byte *locale, usize locale_length, u8 options);
+
+bool mal_builtin_string_span_locale_compare(MalVm *vm, MalValue callee, bool locked, MalValue subject, usize start, usize end, MalValue that, MalValue locales, MalValue options, MalValue *out);
+bool mal_builtin_string_span_locale_compare_prepared(MalVm *vm, MalValue subject, usize start, usize end, MalValue that, const byte *locale, usize locale_length, u8 options, MalValue *out);

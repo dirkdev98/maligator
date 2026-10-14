@@ -42,6 +42,60 @@ const branching = `const part = value.slice(start, end); const length = part.len
 
 describe("composable string spans", () => {
 	it.each(["mutable", "locked"] as const)(
+		"compares retained left ranges through dynamic and prepared collation under %s primordials",
+		(mode) => {
+			for (const [args, prepared] of [
+				["observer", true],
+				["observer,'en'", true],
+				["observer,start,end,escape()", false],
+			] as const) {
+				const image = compile(
+					`const part=String(value).slice(start,end);const result=part.localeCompare(${args});if(escape)observer(part);return result;`,
+					mode,
+				);
+				expect(spans(image)[0]?.consumers.map((c) => c.kind)).toContain(
+					mode === "locked" && prepared ? "localeComparePrepared" : "localeCompareCall",
+				);
+				expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+					image,
+				);
+			}
+			for (const args of ["part", "observer,part", "observer,start,part"]) {
+				const image = compile(
+					`const part=value.slice(start,end);return [part.length,part.localeCompare(${args})];`,
+					mode,
+				);
+				expect(spans(image).flatMap((r) => r.consumers.map((c) => c.kind))).not.toEqual(
+					expect.arrayContaining(["localeCompareCall"]),
+				);
+				expect(spans(image).flatMap((r) => r.consumers.map((c) => c.kind))).not.toContain(
+					"localeComparePrepared",
+				);
+			}
+		},
+	);
+
+	it("rejects a forged prepared comparison whose retained span is the right input", () => {
+		const image = compile(
+			"const part=String(value).slice(start,end);return part.localeCompare(observer);",
+			"locked",
+		);
+		const region = spans(image)[0]!;
+		const consumer = region.consumers.find((c) => c.kind === "localeComparePrepared")!;
+		const fn = image.native.functions.find((f) => f.specializations.includes(region))!;
+		const op = fn.body.instructions[consumer.ip]!;
+		if (op.opcode !== "PREPARED_STRING_COMPARE")
+			throw new Error("missing prepared comparison");
+		const forged = structuredClone(image);
+		const target =
+			forged.native.functions[image.native.functions.indexOf(fn)]!.body.instructions[
+				consumer.ip
+			]!;
+		Object.assign(target, { left: op.right, right: op.left });
+		expect(() => serializeCompilerArtifact(forged)).toThrow();
+	});
+
+	it.each(["mutable", "locked"] as const)(
 		"carries rooted locale inputs and ignored effects to case conversion under %s primordials",
 		(mode) => {
 			for (const method of ["toLocaleLowerCase", "toLocaleUpperCase"]) {
@@ -216,6 +270,7 @@ describe("composable string spans", () => {
 		"toLowerCaseCall",
 		"toUpperCaseCall",
 		"normalizeCall",
+		"localeCompareCall",
 		"toLocaleLowerCaseCall",
 		"toLocaleUpperCaseCall",
 		"isWellFormedCall",

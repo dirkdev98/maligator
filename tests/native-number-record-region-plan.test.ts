@@ -46,6 +46,64 @@ function fieldNames(image: ProgramImage, plan: NativeNumberRecordRegionPlan) {
 }
 
 describe("native number record regions", () => {
+	it("retains read-only record fields through a numeric reduction", () => {
+		const image = compile("return record.x + record.y + record.z + record.w + record.v;");
+		const [plan] = regions(image);
+		expect(fieldNames(image, plan!)).toEqual(["x", "y", "z", "w", "v"]);
+		expect(plan!.outputs).toHaveLength(1);
+		expect(
+			regions(deserializeCompilerArtifact(serializeCompilerArtifact(image))),
+		).toEqual(regions(image));
+	});
+
+	it.each([24, 32, 40])("selects bounded prefixes from %i numeric fields", (count) => {
+		const image = compile(
+			`return ${Array.from({ length: count }, (_, i) => `record.f${i}`).join("+")};`,
+		);
+		const plans = regions(image);
+		expect(plans.length).toBeGreaterThan(0);
+		expect(plans[0]!.fields).toHaveLength(Math.min(count, 32));
+		for (const plan of plans) {
+			expect(plan.fields.length).toBeLessThanOrEqual(32);
+			expect(plan.claimedIps.length).toBeLessThanOrEqual(128);
+		}
+		expect(
+			regions(deserializeCompilerArtifact(serializeCompilerArtifact(image))),
+		).toEqual(plans);
+		expect(emitCompiledFunction(image.native.functions[1]!, 1, "", false)).not.toBeNull();
+	});
+
+	it("keeps a larger field update within one numeric region", () => {
+		const image = compile(
+			Array.from(
+				{ length: 24 },
+				(_, i) => `record.f${i} = (record.f${i} + scale) * scale - scale;`,
+			).join(""),
+		);
+		const [plan] = regions(image);
+		expect(plan!.fields).toHaveLength(24);
+		expect(plan!.claimedIps.length).toBeGreaterThan(96);
+	});
+
+	it("carries Math results through both sides of a read-only branch", () => {
+		const image = compile(
+			"let value; if(record.x < record.y) value=Math.hypot(record.x,record.y,record.z,record.w); else value=Math.max(record.x,record.y,record.z,record.w); return value;",
+			"locked",
+		);
+		const [plan] = regions(image);
+		expect(plan!.fields.every((field) => !field.stored)).toBe(true);
+		expect(image.native.functions[1]!.body.instructions[plan!.exitIp]!.opcode).toBe(
+			"RETURN",
+		);
+		expect(
+			regions(deserializeCompilerArtifact(serializeCompilerArtifact(image))),
+		).toEqual(regions(image));
+	});
+
+	it("does not speculate numeric fields solely to copy values", () => {
+		expect(regions(compile("return [record.x,record.y,record.z,record.w];"))).toEqual([]);
+	});
+
 	it.each([
 		"Math.abs(record.x)",
 		"Math.round(record.x)",

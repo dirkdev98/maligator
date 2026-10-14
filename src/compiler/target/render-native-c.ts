@@ -1089,7 +1089,10 @@ function emitNumberRecordRegion(
 		if (index === undefined) throw new Error("Native number record field is unadmitted");
 		return `${id}_v${index}`;
 	};
-	const guards = [`mal_vm_number_record_begin(r${plan.object}, &${id})`];
+	const stored = plan.fields.flatMap((entry, index) => (entry.stored ? [index] : []));
+	const guards = [
+		`mal_vm_number_record_begin(r${plan.object}, ${stored.length > 0}, &${id})`,
+	];
 	for (const [index, { icIndex }] of plan.fields.entries())
 		guards.push(
 			`mal_vm_number_record_field(&${id}, &${propertyCache}[${icIndex}], &${id}_f${index}, &${id}_v${index})`,
@@ -1224,15 +1227,15 @@ function emitNumberRecordRegion(
 		}
 		lines.push("    }");
 	}
-	const stored = plan.fields.flatMap((entry, index) => (entry.stored ? [index] : []));
-	lines.push(
-		`    if (__builtin_expect(!(${stored.map((index) => `mal_vm_number_record_try_store(&${id}, ${id}_f${index}, ${id}_v${index})`).join(" & ")}), 0)) {`,
-		...stored.map(
-			(index) =>
-				`      mal_vm_number_record_store_slow(${id}.object, &${propertyCache}[${plan.fields[index]!.icIndex}], ${id}_v${index});`,
-		),
-		"    }",
-	);
+	if (stored.length > 0)
+		lines.push(
+			`    if (__builtin_expect(!(${stored.map((index) => `mal_vm_number_record_try_store(&${id}, ${id}_f${index}, ${id}_v${index})`).join(" & ")}), 0)) {`,
+			...stored.map(
+				(index) =>
+					`      mal_vm_number_record_store_slow(${id}.object, &${propertyCache}[${plan.fields[index]!.icIndex}], ${id}_v${index});`,
+			),
+			"    }",
+		);
 	for (const register of plan.outputs) {
 		const value = local(register);
 		const representation = reps[register];
@@ -6522,6 +6525,29 @@ function emitInstruction(
 			guard += ` && mal_builtin_string_span_well_formed(vm, ${locked ? "MAL_VALUE_UNDEFINED" : boxedOperand(instruction.callee)}, ${locked}, ${source}, ${prefix}_start, ${prefix}_end, ${role === "toWellFormedCall"}, &${result})`;
 			projected = `${throwCheck()} r${instruction.dst} = ${callValue(instruction.dst, result)};`;
 		} else if (
+			role === "localeComparePrepared" &&
+			instruction.opcode === "PREPARED_STRING_COMPARE"
+		) {
+			const result = `${prefix}_locale_compare_${ip}`;
+			const bytes = context.stringConstants[instruction.stringIndex]!;
+			declarations.push(`MalValue ${result};`);
+			guard += ` && mal_builtin_string_span_locale_compare_prepared(vm, ${source}, ${prefix}_start, ${prefix}_end, ${boxed(instruction.right)}, (const byte[]){ ${bytes.length === 0 ? "0" : bytes.join(", ")} }, ${bytes.length}, ${instruction.options}, &${result})`;
+			projected = `${throwCheck()} r${instruction.dst} = ${callValue(instruction.dst, result)};`;
+		} else if (
+			role === "localeCompareCall" &&
+			(instruction.opcode === "CALL" || instruction.opcode === "CALL_KNOWN")
+		) {
+			const result = `${prefix}_locale_compare_${ip}`;
+			declarations.push(`MalValue ${result};`);
+			const locked = instruction.opcode === "CALL_KNOWN";
+			const args = [0, 1, 2].map((index) =>
+				instruction.arguments[index] === undefined
+					? "MAL_VALUE_UNDEFINED"
+					: boxedOperand(instruction.arguments[index]),
+			);
+			guard += ` && mal_builtin_string_span_locale_compare(vm, ${locked ? "MAL_VALUE_UNDEFINED" : boxedOperand(instruction.callee)}, ${locked}, ${source}, ${prefix}_start, ${prefix}_end, ${args.join(", ")}, &${result})`;
+			projected = `${throwCheck()} r${instruction.dst} = ${callValue(instruction.dst, result)};`;
+		} else if (
 			(role === "toLocaleLowerCaseCall" || role === "toLocaleUpperCaseCall") &&
 			(instruction.opcode === "CALL" || instruction.opcode === "CALL_KNOWN")
 		) {
@@ -6627,6 +6653,8 @@ function emitInstruction(
 			role === "toLowerCaseCall" ||
 			role === "toUpperCaseCall" ||
 			role === "normalizeCall" ||
+			role === "localeCompareCall" ||
+			role === "localeComparePrepared" ||
 			role === "toLocaleLowerCaseCall" ||
 			role === "toLocaleUpperCaseCall" ||
 			role === "isWellFormedCall" ||

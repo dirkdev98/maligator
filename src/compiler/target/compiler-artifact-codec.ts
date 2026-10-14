@@ -97,7 +97,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 232;
+export const COMPILER_ARTIFACT_VERSION = 233;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -1060,6 +1060,9 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 					"toUpperCaseCall",
 					"normalizeProperty",
 					"normalizeCall",
+					"localeCompareProperty",
+					"localeCompareCall",
+					"localeComparePrepared",
 					"toLocaleLowerCaseProperty",
 					"toLocaleLowerCaseCall",
 					"toLocaleUpperCaseProperty",
@@ -1629,6 +1632,9 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 							"toUpperCaseCall",
 							"normalizeProperty",
 							"normalizeCall",
+							"localeCompareProperty",
+							"localeCompareCall",
+							"localeComparePrepared",
 							"toLocaleLowerCaseProperty",
 							"toLocaleLowerCaseCall",
 							"toLocaleUpperCaseProperty",
@@ -2577,6 +2583,9 @@ function writeCompilerArtifact(
 								"toUpperCaseCall",
 								"normalizeProperty",
 								"normalizeCall",
+								"localeCompareProperty",
+								"localeCompareCall",
+								"localeComparePrepared",
 								"toLocaleLowerCaseProperty",
 								"toLocaleLowerCaseCall",
 								"toLocaleUpperCaseProperty",
@@ -5411,6 +5420,9 @@ function readCompilerArtifact(
 								"toUpperCaseCall",
 								"normalizeProperty",
 								"normalizeCall",
+								"localeCompareProperty",
+								"localeCompareCall",
+								"localeComparePrepared",
 								"toLocaleLowerCaseProperty",
 								"toLocaleLowerCaseCall",
 								"toLocaleUpperCaseProperty",

@@ -278,6 +278,12 @@ export function selectNativeSpanContinuations(
 			)
 				kind = numericCall;
 			else if (
+				op.opcode === "PREPARED_STRING_COMPARE" &&
+				op.left === value &&
+				op.right !== value
+			)
+				kind = "localeComparePrepared";
+			else if (
 				op.opcode === "BINARY" &&
 				(op.operator === "===" || op.operator === "!==") &&
 				op.left !== op.right

@@ -3811,6 +3811,12 @@ function stringSpanCandidates(
 				)
 					kind = `${methodName}Call`;
 			} else if (
+				opcode === "preparedStringCompare" &&
+				use.position === 0 &&
+				root(instructionOperand(fn, instruction, 1)!) !== resultRoot
+			)
+				kind = "localeComparePrepared";
+			else if (
 				opcode === "binary" &&
 				(fn.instructionAttributes(instruction).operator === "===" ||
 					fn.instructionAttributes(instruction).operator === "!==")

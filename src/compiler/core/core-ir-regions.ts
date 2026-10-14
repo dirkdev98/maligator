@@ -183,6 +183,7 @@ export const CORE_STRING_SPAN_SEARCH_METHODS = [
 ] as const;
 
 export const CORE_STRING_SPAN_METHODS = [
+	"localeCompare",
 	"toLocaleLowerCase",
 	"toLocaleUpperCase",
 	"isWellFormed",
@@ -201,6 +202,7 @@ export function coreStringSpanMethodArgumentLimit(
 	method: (typeof CORE_STRING_SPAN_METHODS)[number],
 ): number {
 	if (
+		method === "localeCompare" ||
 		method === "toLowerCase" ||
 		method === "toUpperCase" ||
 		method === "normalize" ||
@@ -240,6 +242,9 @@ export interface CoreStringSpanConsumer {
 		| "toUpperCaseCall"
 		| "normalizeProperty"
 		| "normalizeCall"
+		| "localeCompareProperty"
+		| "localeCompareCall"
+		| "localeComparePrepared"
 		| "toLocaleLowerCaseProperty"
 		| "toLocaleLowerCaseCall"
 		| "toLocaleUpperCaseProperty"

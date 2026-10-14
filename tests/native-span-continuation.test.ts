@@ -30,6 +30,56 @@ const body = `const part=source.split('|')[1]; const size=part.length;
  if(part==='if')return size+10; if(escape)return observe(part); return size;`;
 describe("span continuations from split projections", () => {
 	it.each(["mutable", "locked"] as const)(
+		"retains collation across split, regexp and nested producers under %s primordials",
+		(mode) => {
+			for (const producer of [
+				"source.split('|')[1]",
+				"/\\|([^|]*)\\|/.exec(source)[1]",
+				"source.slice(1,-1).trim()",
+			]) {
+				const image = compile(
+					`const part=${producer};const a=part.localeCompare('a','en');const b=part.localeCompare(escape,observe(),escape);observe(part);return [a,b];`,
+					mode,
+				);
+				const kinds = image.native.functions.flatMap((fn) => [
+					...fn.specializations.flatMap((p) =>
+						p.kind === "string-span" ? p.consumers.map((c) => c.kind) : [],
+					),
+					...(fn.storage?.spanContinuations.flatMap((p) =>
+						p.consumers.map((c) => c.kind),
+					) ?? []),
+				]);
+				expect(kinds, producer).toContain("localeCompareCall");
+
+				expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+					image,
+				);
+				expect(emitProgramImage(image)).toBeTruthy();
+			}
+		},
+	);
+
+	it("carries prepared builtin authority through split and regexp continuations", () => {
+		for (const producer of ["source.split('|')[1]", "/\\|([^|]*)\\|/.exec(source)[1]"]) {
+			const image = compile(
+				`const part=${producer};return String.prototype.localeCompare.call(part,escape,'en');`,
+				"locked",
+			);
+			const consumers = image.native.functions.flatMap(
+				(fn) => fn.storage?.spanContinuations.flatMap((p) => p.consumers) ?? [],
+			);
+			expect(
+				consumers.map((c) => c.kind),
+				producer,
+			).toContain("localeComparePrepared");
+			expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+				image,
+			);
+			expect(emitProgramImage(image)).toBeTruthy();
+		}
+	});
+
+	it.each(["mutable", "locked"] as const)(
 		"resolves locale case for split, regexp and nested ranges under %s primordials",
 		(mode) => {
 			for (const producer of [

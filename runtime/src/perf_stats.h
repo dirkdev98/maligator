@@ -304,6 +304,8 @@ typedef struct MalPerfStats {
     u64 string_span_to_well_formed_calls;
     u64 string_span_locale_lower_case_calls;
     u64 string_span_locale_upper_case_calls;
+    u64 string_span_locale_compare_calls;
+    u64 string_span_locale_compare_prepared_calls;
     u64 string_span_range_parses;
     u64 string_span_split_parses;
     u64 string_span_regexp_parses;

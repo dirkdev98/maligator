@@ -1772,10 +1772,6 @@ static MalValue mal_builtin_string_prototype_substr(MalVm *vm, MalValue this_val
     return mal_builtin_string_range(vm, this_value, args, arg_count, MAL_STRING_RANGE_SUBSTR);
 }
 
-/**
- * String.prototype.localeCompare(that, locales, options): RequireObjectCoercible
- * + ToString the receiver, then defer to Intl.Collator-backed collation.
- */
 static MalValue mal_builtin_string_prototype_locale_compare(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
     (void) callee;
@@ -1802,6 +1798,29 @@ MalValue mal_builtin_string_locale_compare_prepared(MalVm *vm, MalValue receiver
     return result;
 }
 
+bool mal_builtin_string_span_locale_compare(
+    MalVm *vm, MalValue callee, bool locked, MalValue subject, usize start, usize end,
+    MalValue that, MalValue locales, MalValue options, MalValue *out) {
+    if (!locked && (!mal_value_is_native_function_object(callee) ||
+        mal_native_function_object_callback(mal_value_to_native_function_object(callee)) != mal_builtin_string_prototype_locale_compare)) return false;
+#if MAL_REALMS
+    if (!locked && mal_vm_callee_realm(vm, callee) != vm->current_realm) return false;
+#endif
+    if (!mal_value_is_string(subject) || start > end || end > mal_string_length(mal_value_to_string(subject))) return false;
+    MAL_PERF_COUNT(string_span_locale_compare_calls);
+    *out = mal_intl_locale_compare_range(vm, subject, start, end - start, that, locales, options);
+    return true;
+}
+
+bool mal_builtin_string_span_locale_compare_prepared(
+    MalVm *vm, MalValue subject, usize start, usize end, MalValue that,
+    const byte *locale, usize locale_length, u8 options, MalValue *out) {
+    if (!mal_value_is_string(subject) || start > end || end > mal_string_length(mal_value_to_string(subject))) return false;
+    MAL_PERF_COUNT(string_span_locale_compare_prepared_calls);
+    *out = mal_intl_locale_compare_prepared_range(vm, subject, start, end - start, that, locale, locale_length, options);
+    return true;
+}
+
 static bool mal_builtin_string_ascii_units(const c16 *source, usize length) {
     usize index = 0;
     while (length - index >= 4) {
@@ -1812,45 +1831,6 @@ static bool mal_builtin_string_ascii_units(const c16 *source, usize length) {
     }
     while (index < length) if (source[index++] > 0x7f) return false;
     return true;
-}
-
-/** Unicode transforms read UTF-16. Widen compact input into scratch instead of
- * bridging, which would double the receiver's storage permanently. */
-#define MAL_STRING_TRANSFORM_STACK_UNITS ((usize) 128)
-
-static const c16 *mal_builtin_string_transform_input(
-    const MalStringSegment *segment, c16 stack[MAL_STRING_TRANSFORM_STACK_UNITS], c16 **scratch
-) {
-    *scratch = nullptr;
-    if (!segment->latin1) return segment->utf16_units;
-    c16 *units = stack;
-    if (segment->length > MAL_STRING_TRANSFORM_STACK_UNITS) {
-        units = malloc(sizeof(c16) * segment->length);
-        if (units == nullptr) abort();
-        *scratch = units;
-    }
-    for (usize i = 0; i < segment->length; i++) units[i] = segment->latin1_units[i];
-    return units;
-}
-
-static MalStringSegment mal_builtin_string_transform_range(
-    MalString *string, usize start, usize length,
-    c16 stack[MAL_STRING_TRANSFORM_STACK_UNITS], c16 **scratch
-) {
-    *scratch = nullptr;
-    // Preserve cached flattening for canonical whole-string callers.
-    if (start == 0 && length == mal_string_length(string)) return mal_string_flat_segment(string);
-    MalStringSegment segment;
-    if (mal_string_try_get_segment(string, start, length, &segment)) return segment;
-    c16 *units = stack;
-    if (length > MAL_STRING_TRANSFORM_STACK_UNITS) {
-        units = malloc(length * sizeof(c16));
-        if (units == nullptr) abort();
-        *scratch = units;
-    }
-    // Unicode context and composition cannot consume code units outside this range.
-    mal_string_copy_range_to(string, start, length, units);
-    return (MalStringSegment) {.latin1 = false, .utf16_units = units, .length = length};
 }
 
 static bool mal_builtin_string_segment_equals_units(
@@ -1890,9 +1870,9 @@ static MalValue mal_builtin_string_normalize_range_impl(
     // Latin-1 has no canonical decomposition that NFC retains.
     if (string->latin1 && compose && !compatibility)
         return mal_builtin_string_slice(vm, string, start, length);
-    c16 stack[MAL_STRING_TRANSFORM_STACK_UNITS];
+    c16 stack[MAL_STRING_UTF16_SCRATCH_UNITS];
     c16 *range_scratch;
-    MalStringSegment segment = mal_builtin_string_transform_range(string, start, length, stack, &range_scratch);
+    MalStringSegment segment = mal_string_range_segment(string, start, length, stack, &range_scratch);
     bool ascii;
     if (segment.latin1) {
         u8 aggregate = 0;
@@ -1906,7 +1886,7 @@ static MalValue mal_builtin_string_normalize_range_impl(
         return mal_builtin_string_slice(vm, string, start, length);
     }
     c16 *wide_scratch;
-    const c16 *source = mal_builtin_string_transform_input(&segment, stack, &wide_scratch);
+    const c16 *source = mal_string_segment_utf16(&segment, stack, &wide_scratch);
     c16 *output = nullptr;
     usize output_length = 0;
     MalUnicodeStatus status = mal_unicode_normalize(source, length, compatibility, compose, &output, &output_length);
@@ -2667,10 +2647,10 @@ static MalValue mal_builtin_string_case_range_impl(MalVm *vm, MalString *string,
         if (mal_builtin_string_latin1_upper_expanding(vm, string, start, length, &expanded)) return expanded;
     }
     if (!mappable) {
-        c16 stack[MAL_STRING_TRANSFORM_STACK_UNITS];
+        c16 stack[MAL_STRING_UTF16_SCRATCH_UNITS];
         c16 *range_scratch, *wide_scratch;
-        MalStringSegment segment = mal_builtin_string_transform_range(string, start, length, stack, &range_scratch);
-        const c16 *source = mal_builtin_string_transform_input(&segment, stack, &wide_scratch);
+        MalStringSegment segment = mal_string_range_segment(string, start, length, stack, &range_scratch);
+        const c16 *source = mal_string_segment_utf16(&segment, stack, &wide_scratch);
         c16 *output = nullptr;
         usize output_length = 0;
         MalUnicodeStatus status = mal_unicode_case(source, length, to_upper, locale, &output, &output_length);

@@ -118,6 +118,11 @@ numeric builtin bodies as fixed storage loops. Every consumed dynamic operand is
 a Number before execution; admitted bodies neither allocate nor invoke user code.
 The original field and writable-store guards remain valid until final publication.
 Unknown methods and coercions end the region before their original observation.
+Read-only reductions may borrow numeric own fields from frozen or prototype objects
+and callable objects with the existing ordinary-slot layout. Stores retain the
+stricter receiver guard and writable cache rows. Larger plans keep bounded prefixes
+and may cover complete numeric fusions; no fusion temporary crosses their boundary.
+Small linear read-only arithmetic stays with the existing pair/triple/quad projections.
 
 Property-read regions can retain a receiver through must-alias register moves
 and effect-free forward branches. Every incoming edge preserves that identity.
@@ -143,6 +148,12 @@ Locale-aware span case conversion resolves the full locale list before empty or
 unchanged output shortcuts. Its shared helper roots the source and locale input;
 only locale resolution owns a balanced native-frame contribution. The bounded
 Unicode builder resumes with the caller's original frame count and span context.
+Ordinary and prepared locale comparisons retain that same bounded input through
+canonical collation. The right operand is converted before locale/options effects;
+all observable inputs stay rooted, and borrowed segments begin after callbacks.
+Whole-string callers preserve cached UTF16 bridges; partial inputs share bounded
+preparation owned by heap strings. Only Collator construction owns a temporary
+native-frame contribution, and prepared collators keep their existing cache identity.
 
 ## Bounded expansion
 
