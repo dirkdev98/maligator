@@ -41,6 +41,7 @@ import {
 } from "./core-platform-constants.ts";
 import { pruneUnusedPlatformModuleInitializers } from "./core-platform-modules.ts";
 import { CORE_PROGRAM_FLOW_ANALYSIS } from "./core-program-flow-analysis.ts";
+import { deferCapturedRestMaterialization } from "./core-rest-materialization.ts";
 import {
 	CORE_SPECIALIZATION_EXPANSIONS_PER_FUNCTION,
 	coreProgramTransformBudgets,
@@ -232,6 +233,8 @@ export function optimizeCore(
 	pruneUnusedPlatformAliases(compilation);
 	pruneUnusedPlatformModuleInitializers(compilation);
 	if (ablatedFamily !== "inlining-cross-call") liftLocalCaptureArguments(compilation);
+	if (ablatedFamily !== "provenance-escape-scalar-replacement")
+		deferCapturedRestMaterialization(compilation);
 	measurePhase(
 		"dense-generation-barrier",
 		() => compilation.program.finalizeConstructionGeneration(),

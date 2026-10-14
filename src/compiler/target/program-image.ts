@@ -1165,6 +1165,9 @@ export function nativeInstructionEffects(
 ): NativeEdgeEffects {
 	switch (instruction.opcode) {
 		case "MOVE":
+		case "LOAD_CALLEE":
+		case "LOAD_ARGUMENT":
+		case "LOAD_ARGUMENT_COUNT":
 		case "CREATE_UNDEFINED":
 		case "CREATE_NULL":
 		case "CREATE_EMPTY":

@@ -242,6 +242,46 @@ interface NativeBodyAnalysis {
 	readonly writeRegistersAt: (instructionIp: number) => ReadonlyArray<number>;
 }
 
+function deferredRestArgumentRootIp(native: NativeFunctionPlan): number | undefined {
+	const fn = native.body;
+	const materializations = fn.instructions.flatMap((instruction, ip) =>
+		instruction.opcode === "CREATE_REST_ARGUMENTS" &&
+		native.instructions[ip]?.kind !== "virtual-packed-rest-array"
+			? [ip]
+			: [],
+	);
+	if (materializations.length !== 1 || fn.isAsync || fn.isGenerator) return undefined;
+	const materialization = materializations[0]!;
+	const safepoints = new Map(
+		native.gc.safepoints.map((point) => [point.instructionIp, point.kind]),
+	);
+	const handlers =
+		fn.handlers.length === 0
+			? []
+			: exceptionHandlerTargets(fn.instructions.length, fn.handlers);
+	const pending = [0];
+	const seen = new Uint8Array(fn.instructions.length);
+	while (pending.length > 0) {
+		const ip = pending.pop()!;
+		if (ip === materialization || ip < 0 || ip >= seen.length || seen[ip] !== 0) continue;
+		seen[ip] = 1;
+		const instruction = fn.instructions[ip]!;
+		const effects = nativeInstructionEffects(instruction);
+		if (
+			safepoints.get(ip) === "loop-backedge" ||
+			(safepoints.has(ip) && (effects.collection || effects.reentry))
+		)
+			return materialization;
+		const handler = handlers[ip];
+		if (handler !== undefined) pending.push(handler);
+		if (instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF")
+			pending.push(instruction.targetIp);
+		if (!["JUMP", "RETURN", "THROW", "LOAD_UNDECLARED"].includes(instruction.opcode))
+			pending.push(ip + 1);
+	}
+	return undefined;
+}
+
 function analyzeNativeBody(
 	fn: BytecodeFunction,
 	captures: NativeCaptureAccessPlan,
@@ -1843,9 +1883,21 @@ function emitCompiledVariant(
 	const retainsForwardedArguments = fn.instructions.some(
 		(instruction) => instruction.opcode === "CALL_REST_ARGUMENTS",
 	);
+	const deferredRestRootIp = retainsForwardedArguments
+		? undefined
+		: deferredRestArgumentRootIp(nativeContract);
+	const retainsArguments = retainsForwardedArguments || deferredRestRootIp !== undefined;
+	const restArgumentRootReleaseIp = fn.instructions.some(
+		(instruction) =>
+			instruction.opcode === "LOAD_ARGUMENT" ||
+			instruction.opcode === "LOAD_STATIC_ARGUMENT" ||
+			instruction.opcode === "CREATE_ARGUMENTS_OBJECT",
+	)
+		? undefined
+		: deferredRestRootIp;
+	const argumentUnlink = retainsArguments ? "mal_gc_unroot(&__argument_roots); " : "";
 	const gcUnlink =
-		(retainsForwardedArguments ? "mal_gc_unroot(&__argument_roots); " : "") +
-		(needsRootFrame ? "vm->root_frame_head = __gc_frame.prev; " : "");
+		argumentUnlink + (needsRootFrame ? "vm->root_frame_head = __gc_frame.prev; " : "");
 
 	const profileDecisions: Array<BackendProfileDecision> = [];
 	const expressionIps = new Set([
@@ -1921,6 +1973,7 @@ function emitCompiledVariant(
 		storage.callbackTransports,
 		new Set(storage.rootPublicationContinuations),
 		maxCodeUnits,
+		restArgumentRootReleaseIp,
 	);
 	if (body === null) {
 		return null;
@@ -2119,8 +2172,8 @@ function emitCompiledVariant(
 		);
 	}
 
-	if (retainsForwardedArguments) {
-		// Elided rest arrays no longer root their elements across intervening calls.
+	if (retainsArguments) {
+		// Deferred and elided rest arrays cannot root incoming values across earlier safepoints.
 		lines.push(
 			"    MalRootSpan __argument_roots;",
 			"    mal_gc_root(&__argument_roots, (MalValue *) args, arg_count);",
@@ -4062,6 +4115,7 @@ function emitBody(
 	callbackTransports: ReadonlyArray<NativeCallbackTransportPlan> = [],
 	rootPublicationContinuations: ReadonlySet<number> = new Set(),
 	maxCodeUnits = Infinity,
+	restArgumentRootReleaseIp?: number,
 ): EmittedBody | null {
 	const callTransportByIp = new Map(
 		callTransports.map((plan) => [plan.instructionIp, plan]),
@@ -5344,6 +5398,8 @@ function emitBody(
 			lines.push(`    ${line}`);
 		}
 		for (const line of rootedOutputReloads) lines.push(`    ${line}`);
+		// The array now owns these values; keep an empty span linked until the ordinary exit.
+		if (ip === restArgumentRootReleaseIp) lines.push("    __argument_roots.count = 0;");
 		for (const register of rootedOutputs) {
 			lines.push(`#undef r${register}`);
 			lines.push(`#define r${register} (__private_r${register})`);

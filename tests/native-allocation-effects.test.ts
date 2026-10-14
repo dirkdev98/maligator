@@ -6,6 +6,18 @@ import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts"
 import { vmExceptionHandlerTargets } from "../src/compiler/target/runtime-image.ts";
 
 describe("native fallible shaped allocation", () => {
+	it.each(["LOAD_CALLEE", "LOAD_ARGUMENT", "LOAD_ARGUMENT_COUNT"] as const)(
+		"treats %s as noncollecting argument transport",
+		(opcode) => {
+			expect(nativeInstructionEffects({ opcode, dst: 0, index: 0 })).toEqual({
+				allocation: false,
+				collection: false,
+				reentry: false,
+				throwing: false,
+				invalidation: false,
+			});
+		},
+	);
 	it.each(["empty", "shaped"])(
 		"routes a noncollecting %s allocation error to the owning handler",
 		(kind) => {
