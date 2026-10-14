@@ -1,5 +1,6 @@
 const foreign = $262.createRealm().global;
-const collectGarbage = typeof globalThis.gc === "function" ? globalThis.gc : () => {};
+const collectGarbage =
+	globalThis.__mal_collect_garbage ?? globalThis.gc ?? globalThis.$262?.gc ?? (() => {});
 function forward(receiver, callback, context) {
 	return receiver.map(callback, context);
 }

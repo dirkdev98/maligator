@@ -61,6 +61,7 @@ describe("runtime nomination of forwarded callbacks", () => {
 				const expected = execFileSync(
 					process.execPath,
 					[
+						"--expose-gc",
 						"-e",
 						`require("node:vm").runInThisContext(require("node:fs").readFileSync(${JSON.stringify(fixture)}, "utf8"), { filename: ${JSON.stringify(fixture)} });`,
 					],
@@ -105,6 +106,7 @@ describe("runtime nomination of forwarded callbacks", () => {
 		const expected = execFileSync(
 			process.execPath,
 			[
+				"--expose-gc",
 				"-e",
 				`globalThis.$262={createRealm(){return {global:require("node:vm").runInNewContext("globalThis")};}};require(${JSON.stringify(join(process.cwd(), realmFixture))});`,
 			],

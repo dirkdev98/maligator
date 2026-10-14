@@ -1,5 +1,6 @@
 const mode = process.env.FORWARDED_CALLBACK_KIND || "all";
-const collectGarbage = typeof globalThis.gc === "function" ? globalThis.gc : () => {};
+const collectGarbage =
+	globalThis.__mal_collect_garbage ?? globalThis.gc ?? globalThis.$262?.gc ?? (() => {});
 
 function check(value, message) {
 	if (!value) throw new Error(message);
