@@ -11,6 +11,13 @@ import {
 } from "../../src/test-harness.ts";
 
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-realms-"));
+// Only runtime compilation uses a reduced cadence; realm code retains every-safepoint stress.
+const realmStressEnv = {
+	...process.env,
+	...STRESS_ENV,
+	MAL_EVAL_GC_STRESS_INTERVAL: "1000",
+	MAL_TEST262: "1",
+};
 
 describe("generic realm runtime API", () => {
 	let bin: string;
@@ -87,13 +94,13 @@ describe("generic realm runtime API", () => {
 		(_name, binary) => {
 			assertPassLine(
 				runToStdout(binary(), {
-					env: { ...STRESS_ENV, MAL_TEST262: "1" },
+					env: realmStressEnv,
 					timeoutMs: 60_000,
 				}),
 				"array-of-cross-realm",
 			);
 		},
-		scaledNativeRunTimeoutMs(60_000),
+		scaledNativeRunTimeoutMs(60_000, realmStressEnv) + 5_000,
 	);
 
 	it.each([
@@ -109,20 +116,17 @@ describe("generic realm runtime API", () => {
 	it.each([
 		["compiled", () => dynamicCompiled],
 		["interpreted", () => dynamicInterpreted],
-	] as const)("roots %s dynamic-function realms under GC stress", (_name, binary) => {
-		assertPassLine(
-			runToStdout(binary(), {
-				env: {
-					...STRESS_ENV,
-					// The self-hosted compiler has thousands of safepoints. A
-					// bounded interval still collects repeatedly throughout every
-					// dynamic-function family without turning this focused realm
-					// test into a compiler stress benchmark.
-					MAL_GC_STRESS: "10",
-					MAL_TEST262: "1",
-				},
-			}),
-			"dynamic-function-cross-realm",
-		);
-	});
+	] as const)(
+		"roots %s dynamic-function realms under GC stress",
+		(_name, binary) => {
+			assertPassLine(
+				runToStdout(binary(), {
+					env: realmStressEnv,
+					timeoutMs: 20_000,
+				}),
+				"dynamic-function-cross-realm",
+			);
+		},
+		scaledNativeRunTimeoutMs(20_000, realmStressEnv) + 5_000,
+	);
 });
