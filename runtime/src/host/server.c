@@ -826,11 +826,8 @@ static void conn_read_cb(void *data) {
     MalHttpConn *c = data;
     usize turn = 0;
 
-    // Drain the socket (one-shot op fired: read until EAGAIN or the turn budget).
-    // rbuf is staging, never a message accumulator: the codec consumes and
-    // conn_consume_read compacts every turn, so a full buffer means the codec is
-    // credit-blocked and we simply stop reading until credit is granted. The
-    // reactor op is level-triggered one-shot, so unread bytes re-fire on re-arm.
+    // A short read can yield to the codec: level-triggered re-arming still
+    // reports unread bytes. Full staging buffers wait for codec read credit.
     while (turn < MAL_HTTP_READ_TURN) {
         if (c->rlen == c->rcap && c->rcap < MAL_HTTP_READ_TURN) {
             usize ncap = c->rcap * 2;
@@ -856,6 +853,7 @@ static void conn_read_cb(void *data) {
             }
             c->rlen += count;
             turn += count;
+            if (count < available) break;
             continue;
         }
         if (n == 0) { // peer finished its request side
