@@ -665,10 +665,15 @@ describe("node:http request bridge", () => {
 		expect(field(line, "request_copy_bytes")).toBeGreaterThan(
 			field(line, "request_copy_operations"),
 		);
-		expect(field(line, "bulk_shaped_objects")).toBe(86);
-		expect(field(line, "bulk_shaped_slots")).toBe(1118);
-		expect(field(line, "property_definitions_avoided")).toBe(1118);
-		expect(field(line, "shape_transitions_avoided")).toBe(1118);
+		const sockets = field(line, "socket_context_creations");
+		expect(sockets).toBeGreaterThan(0);
+		expect(sockets).toBeLessThan(field(line, "request_state_allocations"));
+		expect(field(line, "socket_context_reuses")).toBeGreaterThan(0);
+		expect(field(line, "socket_context_releases")).toBe(sockets);
+		expect(field(line, "bulk_shaped_objects")).toBe(sockets);
+		expect(field(line, "bulk_shaped_slots")).toBe(sockets * 13);
+		expect(field(line, "property_definitions_avoided")).toBe(sockets * 13);
+		expect(field(line, "shape_transitions_avoided")).toBe(sockets * 13);
 		expect(field(line, "incoming_message_shape_append_batches")).toBe(85);
 		expect(field(line, "incoming_message_shape_append_slots")).toBe(1190);
 		expect(field(line, "incoming_message_shape_append_fallbacks")).toBe(1);

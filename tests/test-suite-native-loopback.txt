@@ -11,6 +11,7 @@ tests/native/node-http-limits.test.ts
 tests/native/node-http-listen.test.ts
 tests/native/node-http-ready-queues.test.ts
 tests/native/node-http-request.test.ts
+tests/native/node-http-socket-identity.test.ts
 tests/native/node-http.test.ts
 tests/native/node-net.test.ts
 tests/native/node-process-events.test.ts

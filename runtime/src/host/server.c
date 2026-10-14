@@ -122,6 +122,8 @@ typedef struct MalHttpConn {
     MalHttpResponseWriteCallback write_callback;
     void *write_data;
     MalHttpServer *server;
+    void *context;
+    MalHttpConnectionCloseCallback context_close;
     struct MalHttpConn *next;
     // A connected socket keeps its endpoints, yet every keep-alive request asks again.
     MalNetEndpoint local_endpoint;
@@ -129,6 +131,19 @@ typedef struct MalHttpConn {
     bool local_endpoint_known;
     bool remote_endpoint_known;
 } MalHttpConn;
+
+void *mal_http_conn_context(const MalHttpConn *conn) {
+    return conn == nullptr ? nullptr : conn->context;
+}
+
+bool mal_http_conn_attach_context(
+    MalHttpConn *conn, void *context, MalHttpConnectionCloseCallback close) {
+    if (conn == nullptr || conn->context != nullptr || context == nullptr || close == nullptr)
+        return false;
+    conn->context = context;
+    conn->context_close = close;
+    return true;
+}
 
 bool mal_http_conn_local_endpoint(MalHttpConn *conn, MalNetEndpoint *out) {
     if (conn == nullptr) return false;
@@ -241,11 +256,14 @@ static void conn_close(MalHttpConn *c) {
     void *request_data = c->request_data;
     bool request_stream_open = c->request_stream_open;
     bool finish_server = server->closing && server->connection_count == 0;
+    MalHttpConnectionCloseCallback context_close = c->context_close;
+    void *context = c->context;
     free(c);
     if (request_stream_open && request_end_callback != nullptr) {
         request_end_callback(request_data, false);
     }
     if (response_callback != nullptr) response_callback(response_data, false);
+    if (context_close != nullptr) context_close(context);
     if (finish_server) server_finish_close(server);
 }
 

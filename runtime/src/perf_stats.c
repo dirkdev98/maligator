@@ -1241,6 +1241,7 @@ static void mal_perf_stats_print(void) {
         "request_packed_headers=%llu request_copy_operations=%llu "
         "request_copy_bytes=%llu request_body_transfers=%llu "
         "request_state_direct_frees=%llu request_body_direct_frees=%llu "
+        "socket_context_creations=%llu socket_context_reuses=%llu socket_context_releases=%llu "
         "bulk_shaped_objects=%llu bulk_shaped_slots=%llu "
         "property_definitions_avoided=%llu shape_transitions_avoided=%llu "
         "incoming_message_shape_append_batches=%llu "
@@ -1294,6 +1295,9 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.http_request_body_transfers,
         (unsigned long long) mal_perf_stats.http_request_state_direct_frees,
         (unsigned long long) mal_perf_stats.http_request_body_direct_frees,
+        (unsigned long long) mal_perf_stats.http_socket_context_creations,
+        (unsigned long long) mal_perf_stats.http_socket_context_reuses,
+        (unsigned long long) mal_perf_stats.http_socket_context_releases,
         (unsigned long long) mal_perf_stats.http_bulk_shaped_objects,
         (unsigned long long) mal_perf_stats.http_bulk_shaped_slots,
         (unsigned long long) mal_perf_stats.http_property_definitions_avoided,

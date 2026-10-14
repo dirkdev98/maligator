@@ -21,6 +21,7 @@ typedef struct MalHttpConn MalHttpConn;
 
 typedef struct MalHttpServer MalHttpServer;
 typedef void (*MalHttpServerCloseCallback)(void *data);
+typedef void (*MalHttpConnectionCloseCallback)(void *data);
 typedef void (*MalHttpResponseCompleteCallback)(void *data, bool success);
 typedef void (*MalHttpResponseWriteCallback)(void *data, u64 token);
 typedef void (*MalHttpRequestDataCallback)(
@@ -144,6 +145,12 @@ bool mal_http_conn_request_read_credit(MalHttpConn *conn, usize bytes);
 void mal_http_conn_request_autoread(MalHttpConn *conn);
 void mal_http_conn_request_discard(MalHttpConn *conn);
 void mal_http_conn_request_release(MalHttpConn *conn);
+
+/* One handler-owned context per live connection; its close callback runs once
+ * after request/response transport callbacks and must not enter JavaScript. */
+void *mal_http_conn_context(const MalHttpConn *conn);
+bool mal_http_conn_attach_context(
+    MalHttpConn *conn, void *context, MalHttpConnectionCloseCallback close);
 
 /* Numeric endpoints captured from the accepted socket. */
 bool mal_http_conn_local_endpoint(MalHttpConn *conn, MalNetEndpoint *out);

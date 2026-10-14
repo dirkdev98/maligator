@@ -131,6 +131,13 @@ typedef struct MalNodeHttpServerState {
     struct MalNodeHttpServerState *next;
 } MalNodeHttpServerState;
 
+typedef struct MalNodeHttpSocketState {
+    MalVm *vm;
+    MalValue receiver;
+    struct MalNodeHttpSocketState *previous;
+    struct MalNodeHttpSocketState *next;
+} MalNodeHttpSocketState;
+
 typedef struct MalNodeHttpCopiedHeader {
     char *name;
     usize name_len;
@@ -296,8 +303,9 @@ typedef struct MalNodeHttpClientState {
     struct MalNodeHttpClientState *next;
 } MalNodeHttpClientState;
 
-// Value-holding operation lists are rooted by, and mutated on, their isolate's mutator.
+// Value-holding lists belong to, and are traced on, their isolate's mutator.
 static MAL_ISOLATE_LOCAL MalNodeHttpServerState *http_servers;
+static MAL_ISOLATE_LOCAL MalNodeHttpSocketState *http_sockets;
 static MAL_ISOLATE_LOCAL MalNodeHttpRequestState *http_requests;
 static MAL_ISOLATE_LOCAL MalNodeHttpRequestState *http_requests_tail;
 static MAL_ISOLATE_LOCAL MalNodeHttpRequestState **http_response_index;
@@ -949,7 +957,21 @@ static MalValue http_endpoint_family(MalVm *vm, MalNetAddressFamily family) {
         : mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) name));
 }
 
+static void http_socket_release(void *data) {
+    MalNodeHttpSocketState *state = data;
+    if (state->previous == nullptr) http_sockets = state->next;
+    else state->previous->next = state->next;
+    if (state->next != nullptr) state->next->previous = state->previous;
+    MAL_PERF_COUNT(http_socket_context_releases);
+    free(state);
+}
+
 static MalValue http_server_socket_facade(MalVm *vm, MalHttpConn *conn) {
+    MalNodeHttpSocketState *state = mal_http_conn_context(conn);
+    if (state != nullptr) {
+        MAL_PERF_COUNT(http_socket_context_reuses);
+        return state->receiver;
+    }
     MalNetEndpoint local_endpoint;
     MalNetEndpoint remote_endpoint;
     bool have_local = mal_http_conn_local_endpoint(conn, &local_endpoint);
@@ -1036,6 +1058,27 @@ static MalValue http_server_socket_facade(MalVm *vm, MalHttpConn *conn) {
         http_define_own(vm, roots[0], "localPort", values[10]);
         http_define_own(vm, roots[0], "localFamily", values[11]);
         http_define_own(vm, roots[0], "address", values[12]);
+    }
+    if (conn != nullptr) {
+        state = malloc(sizeof(*state));
+        if (state == nullptr) {
+            mal_gc_unroot(&root);
+            mal_vm_throw_allocation_error(vm);
+            return mal_value_new_undefined();
+        }
+        *state = (MalNodeHttpSocketState) {
+            .vm = vm, .receiver = roots[0], .next = http_sockets,
+        };
+        if (!mal_http_conn_attach_context(conn, state, http_socket_release)) {
+            free(state);
+            mal_gc_unroot(&root);
+            mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+                               "Failed to initialize HTTP connection");
+            return mal_value_new_undefined();
+        }
+        if (http_sockets != nullptr) http_sockets->previous = state;
+        http_sockets = state;
+        MAL_PERF_COUNT(http_socket_context_creations);
     }
     mal_gc_unroot(&root);
     return roots[0];
@@ -3242,6 +3285,11 @@ static MalValue http_response_end(
 
 static void http_scan_roots(MalVm *vm, void *data) {
     (void) data;
+    // Keep the socket and its listeners alive between requests until transport close.
+    for (MalNodeHttpSocketState *state = http_sockets; state != nullptr;
+         state = state->next) {
+        if (state->vm == vm) mal_gc_mark_value(state->receiver);
+    }
     for (MalNodeHttpServerState *state = http_servers; state != nullptr;
          state = state->next) {
         if (state->vm == vm) {
@@ -3504,6 +3552,10 @@ static void http_request_dispatch(MalVm *vm, MalNodeHttpRequestState *state) {
         goto fail;
     }
     roots[4] = http_server_socket_facade(vm, state->conn);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        mal_gc_unroot(&root);
+        goto fail;
+    }
     roots[5] = mal_value_from_object(mal_intrinsic_new_object(vm));
     roots[6] = mal_value_from_array_object(mal_intrinsic_new_dense_array(vm, 0));
 

@@ -540,6 +540,9 @@ typedef struct MalPerfStats {
     u64 http_request_body_transfers;
     u64 http_request_state_direct_frees;
     u64 http_request_body_direct_frees;
+    u64 http_socket_context_creations;
+    u64 http_socket_context_reuses;
+    u64 http_socket_context_releases;
     u64 http_bulk_shaped_objects;
     u64 http_bulk_shaped_slots;
     u64 http_property_definitions_avoided;
