@@ -692,6 +692,7 @@ static void mal_vm_init_execution_state(MalVm *vm, const MalRuntimeImage *progra
     vm->node_http_server_response_root_append_plan = (MalShapeAppendPlan) {0};
     vm->node_http_server_response_constructor_append_plan = (MalShapeAppendPlan) {0};
     vm->node_http_server_response_dispatch_append_plan = (MalShapeAppendPlan) {0};
+    vm->node_url_instance_shape = nullptr;
     vm->node_sqlite_run_result_shape = nullptr;
     vm->interp_call_cache = nullptr;
     vm->global_property_cache = nullptr;

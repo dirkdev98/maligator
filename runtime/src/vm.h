@@ -1602,6 +1602,8 @@ typedef struct MalVm {
     MalShapeAppendPlan node_http_server_response_constructor_append_plan;
     MalShapeAppendPlan node_http_server_response_dispatch_append_plan;
 
+    struct MalShape *node_url_instance_shape;
+
     /** Canonical null-prototype `{ changes, lastInsertRowid }` result layout. */
     struct MalShape *node_sqlite_run_result_shape;
 

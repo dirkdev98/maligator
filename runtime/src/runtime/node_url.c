@@ -43,24 +43,43 @@ static void url_set(MalVm *vm, MalValue object, const char *name, MalValue value
                               (const byte *) name, value, URL_VISIBLE);
 }
 
+static const char *const url_field_names[] = {
+    "protocol", "slashes", "auth", "host", "port", "hostname", "hash",
+    "search", "query", "pathname", "path", "href",
+};
+
+static_assert(countof(url_field_names) <= MAL_SHAPE_MAX_INLINE_SLOTS,
+              "Legacy URL fields exceed inline shape capacity");
+
 static void url_initialize(MalVm *vm, MalValue object) {
-    static const char *names[] = {
-        "protocol", "slashes", "auth", "host", "port", "hostname", "hash",
-        "search", "query", "pathname", "path", "href",
-    };
-    for (usize i = 0; i < countof(names); i++) {
-        url_set(vm, object, names[i], mal_value_new_null());
+    for (usize i = 0; i < countof(url_field_names); i++) {
+        url_set(vm, object, url_field_names[i], mal_value_new_null());
     }
 }
 
+static MalShape *url_instance_shape(MalVm *vm) {
+    if (vm->node_url_instance_shape == nullptr) {
+        MalShape *shape = mal_shape_root(&vm->heap);
+        for (usize i = 0; i < countof(url_field_names); i++) {
+            shape = mal_shape_add_property(
+                shape, mal_intrinsic_string_key(vm, (const byte *) url_field_names[i]),
+                URL_VISIBLE);
+        }
+        vm->node_url_instance_shape = shape;
+    }
+    return vm->node_url_instance_shape;
+}
+
 static MalValue url_new_instance(MalVm *vm, MalValue prototype) {
-    MalObject *parent = mal_value_is_object(prototype)
-        ? mal_value_to_object(prototype)
-        : mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
-    MalValue object = mal_value_from_object(mal_object_new(&vm->heap, parent));
+    MalValue parent = mal_value_is_object(prototype)
+        ? prototype : vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE];
     MalRootSpan root;
-    mal_gc_root(&root, &object, 1);
-    url_initialize(vm, object);
+    mal_gc_root(&root, &parent, 1);
+    MalShape *shape = url_instance_shape(vm);
+    MalValue values[countof(url_field_names)];
+    for (usize i = 0; i < countof(values); i++) values[i] = mal_value_new_null();
+    MalValue object = mal_value_from_object(mal_object_new_shaped_tagged(
+        &vm->heap, mal_value_to_object(parent), shape, values, countof(values)));
     mal_gc_unroot(&root);
     return object;
 }
@@ -75,7 +94,12 @@ static MalValue url_constructor(
         return receiver;
     }
     MalValue target = mal_value_is_undefined(new_target) ? callee : new_target;
-    return url_new_instance(vm, mal_vm_function_prototype(vm, target));
+    MalObject *prototype;
+    if (!mal_vm_get_prototype_from_constructor(
+            vm, target, MAL_INTRINSIC_OBJECT_PROTOTYPE, &prototype)) {
+        return mal_value_new_undefined();
+    }
+    return url_new_instance(vm, mal_value_from_object(prototype));
 }
 
 static bool url_protocol_char(c16 unit, bool first) {
@@ -646,6 +670,7 @@ void mal_host_install_node_url(
             mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
             mal_intrinsic_ascii(vm, (const byte *) "Url"), 0, url_constructor);
         mal_native_function_object_set_constructor(constructor);
+        mal_native_function_object_set_handles_new_target_prototype(constructor);
         roots[2] = mal_value_from_native_function_object(constructor);
         mal_intrinsic_define_data(vm, (MalObject *) constructor,
                                   (const byte *) "prototype", roots[1], MAL_PROPERTY_WRITABLE);
