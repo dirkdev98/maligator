@@ -1,0 +1,80 @@
+name: Native primordial audit
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Native target to capture for descriptor audit review
+        type: choice
+        required: true
+        default: linux-x64
+        options:
+          - linux-x64
+          - darwin-arm64
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    name: ${{ inputs.platform }} audit shard ${{ matrix.shard }}
+    runs-on: ${{ inputs.platform == 'darwin-arm64' && 'macos-15' || 'ubuntu-24.04' }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - name: Require the main branch
+        if: github.ref != 'refs/heads/main'
+        run: exit 1
+
+      - name: Check out the captured revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Linux
+        if: inputs.platform == 'linux-x64'
+        uses: ./.github/actions/setup-linux
+
+      - name: Set up macOS
+        if: inputs.platform == 'darwin-arm64'
+        uses: ./.github/actions/setup-macos
+
+      - name: Check the runner environment
+        run: npm run env:check -- --json
+
+      - name: Capture native descriptors
+        env:
+          AUDIT_TARGET: ${{ inputs.platform }}
+          AUDIT_SHARD: ${{ matrix.shard }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { spawnSync } from 'node:child_process';
+          import { primordialInventoryModes } from './scripts/primordial-inventory-config.ts';
+          if (`${process.platform}-${process.arch}` !== process.env.AUDIT_TARGET)
+            throw new Error('Runner target differs from the requested audit target');
+          const modes = primordialInventoryModes.filter((_, index) => index % 4 === Number(process.env.AUDIT_SHARD));
+          let failed = false;
+          for (const mode of modes) {
+            console.log(`Capturing ${mode}`);
+            const result = spawnSync(process.execPath, ['scripts/primordial-inventory.ts', mode, '.cache/primordial-audit'], { stdio: 'inherit' });
+            if (result.status !== 0) failed = true;
+          }
+          process.exitCode = failed ? 1 : 0;
+          NODE
+
+      - name: Retain native audit evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: primordial-audit-${{ inputs.platform }}-${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .cache/primordial-audit/inventory-*.json
+            .cache/primordial-audit/inventory-*.jsonl
+            .cache/primordial-audit/native-bindings.json
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 14

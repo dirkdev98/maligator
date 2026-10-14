@@ -1,18 +1,21 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { primordialInventoryDigest } from "../scripts/primordial-catalog-data.ts";
+import {
+	readPrimordialInventoryConfigurations,
+	requirePrimordialInventoryAudit,
+} from "../scripts/primordial-inventory-audit.ts";
 import { primordialInventoryModes } from "../scripts/primordial-inventory-config.ts";
 import { capturePrimordialInventory } from "../scripts/primordial-inventory.ts";
 
-const expected = JSON.parse(
-	readFileSync("tests/fixtures/primordial-inventory/configurations.json", "utf8"),
-) as {
-	platform: string;
-	arch: string;
-	modes: Array<{ mode: string; sha256: string }>;
-};
+const expected = requirePrimordialInventoryAudit(
+	readPrimordialInventoryConfigurations(
+		"tests/fixtures/primordial-inventory/configurations.json",
+	),
+	{ platform: process.platform, arch: process.arch },
+);
 
 describe("native primordial installation matrix", () => {
 	it.each(primordialInventoryModes)(
@@ -21,17 +24,22 @@ describe("native primordial installation matrix", () => {
 			const directory = mkdtempSync(path.join(os.tmpdir(), "mal-primordials-"));
 			try {
 				const { phases } = capturePrimordialInventory(mode, directory);
-				expect(
-					{ platform: process.platform, arch: process.arch },
-					"Regenerate the target-specific host descriptor audit on a new platform",
-				).toEqual({ platform: expected.platform, arch: expected.arch });
 				const digest = primordialInventoryDigest(phases);
 				let mismatchMessage = "Descriptor audit digest changed";
 				if (digest !== expected.modes.find((entry) => entry.mode === mode)?.sha256) {
-					const evidence = path.resolve(".cache/primordial-inventory-failures");
+					const evidence = path.resolve(
+						".cache/primordial-inventory-failures",
+						`${process.platform}-${process.arch}`,
+						`${mode}-${Date.now()}`,
+					);
 					mkdirSync(evidence, { recursive: true });
-					const file = path.join(evidence, `${mode}-${Date.now()}.json`);
+					const file = path.join(evidence, `inventory-${mode}.json`);
 					writeFileSync(file, JSON.stringify(phases));
+					for (const suffix of [".jsonl", "-metadata.json", "-config.json"])
+						copyFileSync(
+							path.join(directory, `inventory-${mode}${suffix}`),
+							path.join(evidence, `inventory-${mode}${suffix}`),
+						);
 					mismatchMessage = `Descriptor audit mismatch: ${file}`;
 				}
 				expect(digest, mismatchMessage).toBe(

@@ -4,11 +4,17 @@ import * as path from "node:path";
 import {
 	packPrimordialCatalog,
 	mergePrimordialInventories,
-	primordialInventoryDigest,
 	primordialInstallerSourceInventory,
 } from "./primordial-catalog-data.ts";
+import {
+	primordialInstallerFingerprint,
+	primordialInventoryAudit,
+	readPrimordialInventoryCaptures,
+	readPrimordialInventoryConfigurations,
+	requirePrimordialInventoryAudit,
+	withPrimordialInventoryAudit,
+} from "./primordial-inventory-audit.ts";
 import { primordialInventoryModes } from "./primordial-inventory-config.ts";
-import type { PrimordialInventoryPhase } from "./primordial-inventory-data.ts";
 
 const directory = path.resolve(process.argv[2] ?? ".cache/primordial-inventory");
 const selection = process.argv[3];
@@ -24,19 +30,18 @@ if (
 	modes.some((mode) => !primordialInventoryModes.includes(mode))
 )
 	throw new Error("Catalog inputs must include full and contain valid unique modes");
-const phases = JSON.parse(
-	readFileSync(path.join(directory, "inventory-full.json"), "utf8"),
-) as Array<PrimordialInventoryPhase>;
+const matrix = readPrimordialInventoryCaptures(directory, [
+	"full",
+	...modes.filter((mode) => mode !== "full"),
+]);
+if (matrix[0]!.metadata.source.installerSha256 !== primordialInstallerFingerprint())
+	throw new Error("Captured primordial installer inventory differs from current sources");
+const phases = matrix[0]!.phases;
 const language = phases.find((phase) => phase.phase === "language-initialized");
 const installed = phases.find((phase) => phase.phase === "host-installed");
 if (language === undefined || installed === undefined)
 	throw new Error("Both installation phases are required");
-const matrix = ["full", ...modes.filter((mode) => mode !== "full")].map((mode) => ({
-	mode,
-	phases: JSON.parse(
-		readFileSync(path.join(directory, `inventory-${mode}.json`), "utf8"),
-	) as Array<PrimordialInventoryPhase>,
-}));
+JSON.parse(readFileSync(path.join(directory, "native-bindings.json"), "utf8"));
 const catalog = packPrimordialCatalog(
 	mergePrimordialInventories(
 		matrix.map(({ phases }) => phases.find((phase) => phase.phase === "host-installed")!),
@@ -69,23 +74,30 @@ const literalMethods = receivers.flatMap((receiver) => {
 		});
 });
 const fixtureDirectory = "tests/fixtures/primordial-inventory";
-const previousConfigurations = JSON.parse(
-	readFileSync(`${fixtureDirectory}/configurations.json`, "utf8"),
-) as {
-	platform: string;
-	arch: string;
-	modes: Array<{ mode: string; sha256: string }>;
-	availability: Array<[string, { string: string } | { symbol: string }, Array<string>]>;
-};
+const previousConfigurations = readPrimordialInventoryConfigurations(
+	`${fixtureDirectory}/configurations.json`,
+);
 const pendingModes = primordialInventoryModes.filter((mode) => !modes.includes(mode));
+const audit = primordialInventoryAudit(matrix);
 if (
 	pendingModes.length > 0 &&
-	(previousConfigurations.platform !== process.platform ||
-		previousConfigurations.arch !== process.arch)
+	(previousConfigurations.catalogTarget.platform !== audit.platform ||
+		previousConfigurations.catalogTarget.arch !== audit.arch)
 )
 	throw new Error(
 		"Partial capture inputs must share the historical platform and architecture",
 	);
+if (pendingModes.length > 0) {
+	const previousAudit = requirePrimordialInventoryAudit(previousConfigurations, audit);
+	audit.modes.push(...previousAudit.modes.filter(({ mode }) => !modes.includes(mode)));
+	// The retained rows were captured separately and have no shared source identity.
+	delete audit.source;
+}
+audit.modes.sort(
+	(left, right) =>
+		primordialInventoryModes.indexOf(left.mode) -
+		primordialInventoryModes.indexOf(right.mode),
+);
 const output = "src/compiler/shared/primordial-catalog-data.ts";
 writeFileSync(
 	output,
@@ -147,30 +159,10 @@ console.log(output);
 writeFileSync(
 	`${fixtureDirectory}/configurations.json`,
 	`${JSON.stringify({
-		platform: process.platform,
-		arch: process.arch,
+		...withPrimordialInventoryAudit(previousConfigurations, audit),
+		catalogTarget: { platform: audit.platform, arch: audit.arch },
 		pendingModes,
 		pendingAvailability: pendingModes.length > 0 ? "last-captured" : undefined,
-		modes: [
-			...previousConfigurations.modes.filter(({ mode }) => !modes.includes(mode)),
-			...matrix.map(({ mode, phases }) => ({
-				mode,
-				sha256: primordialInventoryDigest(phases),
-				phases: phases.map((phase) => ({
-					phase: phase.phase,
-					nodes: phase.nodes.length,
-					descriptors: phase.nodes.reduce(
-						(sum, node) => sum + node.descriptors.length,
-						0,
-					),
-					repeatedOwnKeys: phase.repeatedOwnKeys,
-				})),
-			})),
-		].sort(
-			(left, right) =>
-				primordialInventoryModes.indexOf(left.mode) -
-				primordialInventoryModes.indexOf(right.mode),
-		),
 		availability: catalog.nodes.flatMap((node) =>
 			node[4].map((property) => {
 				const key =

@@ -413,6 +413,25 @@ primitive values are runtime data, not compiler constants. Host graph snapshots 
 target-specific; a new target needs a native audit. Source installer fingerprints
 make an unaudited installer edit fail the normal unit lane.
 
+`configurations.json` keeps separate native audits for each platform and architecture.
+The native matrix requires a complete audit for its target before starting builds;
+descriptor mismatches retain normalized records, raw JSONL and capture identity under
+`.cache/primordial-inventory-failures/`.
+
+The manual **Native primordial audit** workflow captures all modes on Linux x64 or
+macOS ARM in four shards. Download and combine its artifacts into one directory,
+review the descriptor changes, then import that target's audit:
+
+```sh
+node scripts/primordial-inventory-audit.ts .cache/primordial-audit
+```
+
+The importer verifies complete mode coverage, matching source and installer identities,
+resolved configurations, target identity and descriptor digests. It uses the captured
+target even when importing on another host. Importing an audit preserves other targets
+and does not regenerate the compiler catalog or its availability ledger; catalog
+regeneration remains the separate command above.
+
 Every discovered descriptor receives a coverage row and an owning later slice.
 Every axis/profile cell remains pending until it has the appropriate positive and
 negative witnesses. Resolved/direct dispatch does not prove input allocation

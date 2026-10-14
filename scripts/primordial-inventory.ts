@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { parseCliArgs } from "../src/cli.ts";
 import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
 import { HOST_MODULES } from "../src/compiler/frontend/host-modules.ts";
@@ -9,12 +10,19 @@ import { PLATFORM_MODULES } from "../src/platform/catalog.ts";
 import { hostExecutionTarget, resolveExecution } from "../src/platform/execution.ts";
 import { buildNativeProgramImage } from "../src/test-harness.ts";
 import { writePrimordialInventoryDriver } from "../tests/helpers/primordial-inventory.ts";
+import { primordialInventoryDigest } from "./primordial-catalog-data.ts";
+import { capturePrimordialInventorySource } from "./primordial-inventory-audit.ts";
+import type { PrimordialInventoryMetadata } from "./primordial-inventory-audit.ts";
 import { primordialInventoryConfig } from "./primordial-inventory-config.ts";
 import { normalizePrimordialInventory } from "./primordial-inventory-data.ts";
 
 export function capturePrimordialInventory(mode: string, outDir: string) {
 	mkdirSync(outDir, { recursive: true });
 	const config = primordialInventoryConfig(mode);
+	const metadataFile = path.join(outDir, `inventory-${mode}-metadata.json`);
+	// A failed recapture must not retain an earlier completion certificate.
+	rmSync(metadataFile, { force: true });
+	const source = capturePrimordialInventorySource(process.cwd());
 	const modules = [
 		...(config.surface.node ? HOST_MODULES.keys() : []),
 		// Public source namespaces retain their private native substrate without exposing reserved imports.
@@ -122,13 +130,10 @@ export function capturePrimordialInventory(mode: string, outDir: string) {
 			)}\n`,
 		);
 	}
+	const phases = normalizePrimordialInventory(jsonl, image.runtime.hostInstalls);
 	writeFileSync(
 		path.join(outDir, `inventory-${mode}.json`),
-		`${JSON.stringify(
-			normalizePrimordialInventory(jsonl, image.runtime.hostInstalls),
-			null,
-			2,
-		)}\n`,
+		`${JSON.stringify(phases, null, 2)}\n`,
 	);
 	writeFileSync(
 		path.join(outDir, `inventory-${mode}-config.json`),
@@ -138,9 +143,22 @@ export function capturePrimordialInventory(mode: string, outDir: string) {
 			2,
 		)}\n`,
 	);
-	return {
-		phases: normalizePrimordialInventory(jsonl, image.runtime.hostInstalls),
+	if (!isDeepStrictEqual(source, capturePrimordialInventorySource(process.cwd())))
+		throw new Error("Source changed during primordial inventory capture");
+	const metadata: PrimordialInventoryMetadata = {
+		schemaVersion: 1,
+		platform: process.platform,
+		arch: process.arch,
+		mode,
 		config,
+		source,
+		phaseDigest: primordialInventoryDigest(phases),
+	};
+	writeFileSync(metadataFile, `${JSON.stringify(metadata, null, 2)}\n`);
+	return {
+		phases,
+		config,
+		metadata,
 	};
 }
 

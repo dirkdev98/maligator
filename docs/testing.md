@@ -243,6 +243,13 @@ partial full-tier evidence. Optional external-service tests retain their prerequ
 the slow unit, Wasm, self-hosting, and full standards dimensions still belong to their
 own verification commands.
 
+The manual **Native primordial audit** workflow captures every descriptor inventory
+mode for one selected native target, using four shards. It retains raw records,
+normalized graphs and source metadata for fourteen days. These are inputs for a
+reviewed target audit, not a passing verification gate. See the
+[inventory workflow](decisions/static-value-foundations.md#native-inventory-and-coverage)
+for import and matrix verification.
+
 The workflows use four workers per Linux job and three macOS workers
 to match the hosted CPU allocations. External actions are pinned to immutable commit
 SHAs; local setup actions install Node 24, the repository-pinned Rust toolchain, and
