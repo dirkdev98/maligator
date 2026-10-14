@@ -147,6 +147,51 @@ function runtimeFixture(): RuntimeImage {
 }
 
 describe("RuntimeImage constant compaction", () => {
+	it.each([false, true])(
+		"preserves constructor layout keys and optional method names: %s",
+		(hasMethod) => {
+			const runtime = runtimeFixture();
+			runtime.stringConstants = [units("dead"), units("key"), units("method")];
+			runtime.literalTemplateData = [];
+			runtime.bigintConstants = [];
+			runtime.precompiledLiteralShapes = [];
+			const fn = vmFunction([
+				{
+					opcode: "GUARD_BASE_CONSTRUCTOR_LAYOUT",
+					dst: 0,
+					callee: 1,
+					functionIndex: 0,
+					keyStringIndices: [1],
+					methodStringIndex: hasMethod ? 2 : -1,
+					methodFunctionIndex: hasMethod ? 0 : -1,
+					icIndex: 0,
+				},
+				{ opcode: "RETURN", value: 0 },
+			]);
+			fn.nameStringIndex = -1;
+			runtime.functions = [fn];
+			const result = compactRuntimeImageConstants(runtime);
+			expect(result.runtime.stringConstants).toEqual(
+				(hasMethod ? ["key", "method"] : ["key"]).map(units),
+			);
+			expect(result.runtime.functions[0]!.instructions[0]).toMatchObject({
+				keyStringIndices: [0],
+				methodStringIndex: hasMethod ? 1 : -1,
+			});
+		},
+	);
+
+	it("reports the precise instruction path for an invalid constant array element", () => {
+		const runtime = runtimeFixture();
+		const instruction = runtime.functions[0]!.instructions[7]!;
+		if (instruction.opcode !== "CREATE_TEMPLATE_OBJECT")
+			throw new Error("Missing template");
+		instruction.rawIndices[1] = runtime.stringConstants.length;
+		expect(() => compactRuntimeImageConstants(runtime)).toThrow(
+			"function 0 instruction 7 CREATE_TEMPLATE_OBJECT.rawIndices[1]",
+		);
+	});
+
 	it.each(["distinct", "same"] as const)(
 		"preserves native instruction ownership and root aliasing for %s targets",
 		(target) => {

@@ -2246,21 +2246,27 @@ export interface RuntimeImageConstantCompactionResult {
 	readonly templateOldToNew: ReadonlyMap<number, number>;
 }
 
-const RUNTIME_STRING_INDEX_KEYS: ReadonlySet<string> = new Set([
+const RUNTIME_STRING_INDEX_KEY_NAMES = [
 	"keyStringIndex",
 	"methodStringIndex",
 	"nameStringIndex",
 	"separatorStringIndex",
 	"stringIndex",
-]);
+] as const;
+const RUNTIME_STRING_INDEX_KEYS: ReadonlySet<string> = new Set(
+	RUNTIME_STRING_INDEX_KEY_NAMES,
+);
 
-const RUNTIME_STRING_INDEX_ARRAY_KEYS: ReadonlySet<string> = new Set([
+const RUNTIME_STRING_INDEX_ARRAY_KEY_NAMES = [
 	"cookedIndices",
 	"keyStringIndices",
 	"nameIndices",
 	"nameStringIndices",
 	"rawIndices",
-]);
+] as const;
+const RUNTIME_STRING_INDEX_ARRAY_KEYS: ReadonlySet<string> = new Set(
+	RUNTIME_STRING_INDEX_ARRAY_KEY_NAMES,
+);
 
 function addRuntimeConstantRetentionReason(
 	reasons: Map<number, Set<string>>,
@@ -2649,6 +2655,146 @@ function visitRuntimeConstantIndices(
 		visitRuntimeConstantIndices(entry, note, entryKey);
 }
 
+type RuntimeScalarStringIndexKey = (typeof RUNTIME_STRING_INDEX_KEY_NAMES)[number];
+type RuntimeArrayStringIndexKey = (typeof RUNTIME_STRING_INDEX_ARRAY_KEY_NAMES)[number];
+type RuntimeConstantIndexKey =
+	| RuntimeScalarStringIndexKey
+	| RuntimeArrayStringIndexKey
+	| "bigintIndex"
+	| "templateOffset";
+type HasRuntimeConstantReference<Value> =
+	Value extends ReadonlyArray<infer Element>
+		? HasRuntimeConstantReference<Element>
+		: Value extends object
+			? true extends {
+					[Key in keyof Value]-?: Key extends RuntimeConstantIndexKey
+						? true
+						: HasRuntimeConstantReference<Value[Key]>;
+				}[keyof Value]
+				? true
+				: false
+			: false;
+type RuntimeConstantReferenceFields<Instruction> = {
+	[Key in keyof Instruction]-?: Key extends RuntimeConstantIndexKey
+		? Key
+		: true extends HasRuntimeConstantReference<Instruction[Key]>
+			? Key
+			: never;
+}[keyof Instruction];
+type RuntimeConstantFieldKind<Key> = Key extends "bigintIndex"
+	? "bigint"
+	: Key extends "templateOffset"
+		? "template"
+		: Key extends "methodStringIndex"
+			? "optional-string"
+			: Key extends "cookedIndices"
+				? "optional-strings"
+				: Key extends RuntimeArrayStringIndexKey
+					? "strings"
+					: Key extends RuntimeScalarStringIndexKey
+						? "string"
+						: "nested";
+// New constant-bearing instruction fields must acquire a visit plan at compile time.
+type RuntimeInstructionConstantSchema = {
+	[
+		Instruction in BytecodeInstruction as RuntimeConstantReferenceFields<Instruction> extends never
+			? never
+			: Instruction["opcode"]
+	]: {
+		[Key in RuntimeConstantReferenceFields<Instruction>]-?: RuntimeConstantFieldKind<Key>;
+	};
+};
+
+const RUNTIME_INSTRUCTION_CONSTANT_SCHEMA = {
+	CREATE_STRING: { stringIndex: "string" },
+	CREATE_BIGINT: { bigintIndex: "bigint" },
+	CREATE_OBJECT_SHAPED: { keyStringIndices: "strings" },
+	INSTANTIATE_LITERAL_TEMPLATE: { templateOffset: "template" },
+	QUERY_STATIC_DATA: { templateOffset: "template" },
+	CREATE_MODULE_NAMESPACE: { nameIndices: "strings" },
+	CREATE_TEMPLATE_OBJECT: { cookedIndices: "optional-strings", rawIndices: "strings" },
+	PREPARED_STRING_COMPARE: { stringIndex: "string" },
+	GUARD_BASE_CONSTRUCTOR_LAYOUT: {
+		keyStringIndices: "strings",
+		methodStringIndex: "optional-string",
+	},
+	LOAD_PROPERTY_STATIC: { stringIndex: "string" },
+	LOAD_PROPERTY_STATIC_ARRAY_LENGTH: { stringIndex: "string" },
+	LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT: { stringIndex: "string" },
+	LOAD_PROPERTY_STATIC_SHAPE_CASE: { stringIndex: "string" },
+	STORE_PROPERTY_STATIC: { stringIndex: "string" },
+	STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT: { stringIndex: "string" },
+	PROBE_READ: { stringIndex: "string" },
+	LOAD_UNDECLARED: { nameStringIndex: "string" },
+	LOAD_GLOBAL_PROPERTY: { nameStringIndex: "string" },
+	STORE_GLOBAL_PROPERTY: { nameStringIndex: "string" },
+	DECLARE_GLOBAL_LEXICAL: { nameStringIndex: "string" },
+	GLOBAL_BINDING_QUERY: { nameStringIndex: "string" },
+	INIT_GLOBAL_VARS: { nameStringIndices: "strings" },
+	THROW_IF_TDZ: { nameStringIndex: "string" },
+	WITH_GET: { nameStringIndex: "string" },
+	WITH_RESOLVE_BASE: { nameStringIndex: "string" },
+	WITH_SET: { nameStringIndex: "string" },
+} as const satisfies RuntimeInstructionConstantSchema;
+
+interface RuntimeConstantFieldPlan {
+	readonly key: string;
+	readonly kind:
+		| "string"
+		| "optional-string"
+		| "strings"
+		| "optional-strings"
+		| "bigint"
+		| "template"
+		| "nested";
+}
+
+const RUNTIME_INSTRUCTION_CONSTANT_FIELDS = new Map<
+	string,
+	ReadonlyArray<RuntimeConstantFieldPlan>
+>(
+	Object.entries(RUNTIME_INSTRUCTION_CONSTANT_SCHEMA).map(
+		([opcode, fields]) =>
+			[opcode, Object.entries(fields).map(([key, kind]) => ({ key, kind }))] as const,
+	),
+);
+
+function visitRuntimeInstructionConstantIndices(
+	instruction: BytecodeInstruction,
+	note: (kind: "string" | "bigint" | "template", index: number) => void,
+): void {
+	const fields = RUNTIME_INSTRUCTION_CONSTANT_FIELDS.get(instruction.opcode);
+	if (fields === undefined) return;
+	const row = instruction as unknown as Record<string, unknown>;
+	for (let fieldIndex = 0; fieldIndex < fields.length; fieldIndex++) {
+		const field = fields[fieldIndex]!;
+		if (!Object.hasOwn(row, field.key)) continue;
+		const value = row[field.key];
+		switch (field.kind) {
+			case "string":
+			case "bigint":
+			case "template":
+				if (typeof value === "number") note(field.kind, value);
+				break;
+			case "optional-string":
+				if (typeof value === "number" && value >= 0) note("string", value);
+				break;
+			case "strings":
+			case "optional-strings":
+				if (!Array.isArray(value)) break;
+				for (let index = 0; index < value.length; index++) {
+					const entry: unknown = value[index];
+					if (typeof entry !== "number") note("string", Number.NaN);
+					else if (field.kind === "strings" || entry >= 0) note("string", entry);
+				}
+				break;
+			case "nested":
+				visitRuntimeConstantIndices(value, note, field.key);
+				break;
+		}
+	}
+}
+
 export function compactRuntimeImageConstants(
 	definition: RuntimeImage,
 ): RuntimeImageConstantCompactionResult {
@@ -2672,7 +2818,7 @@ export function compactRuntimeImageConstants(
 	for (const fn of definition.functions) {
 		if (fn.nameStringIndex >= 0) note("string", fn.nameStringIndex);
 		for (const instruction of fn.instructions) {
-			visitRuntimeConstantIndices(instruction, note);
+			visitRuntimeInstructionConstantIndices(instruction, note);
 			if (!isVmCallInstruction(instruction)) continue;
 			for (const { operand } of vmValueOperandEntries(instruction)) {
 				const decoded = decodeVmValueOperand(operand);
