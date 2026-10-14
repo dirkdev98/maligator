@@ -6,7 +6,10 @@ import {
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
 import type { NativeNumericLoopRegionPlan } from "../src/compiler/target/lower-native-fast-paths.ts";
+import { numericLoopShape } from "../src/compiler/target/lower-native-fast-paths.ts";
+import { analyzeNativeBodyFacts } from "../src/compiler/target/native-body-facts.ts";
 import type { ProgramImage } from "../src/compiler/target/program-image.ts";
+import type { BytecodeInstruction } from "../src/compiler/target/runtime-image.ts";
 
 function compile(body: string) {
 	return compileSemanticProgramToProgramImage(
@@ -32,6 +35,48 @@ function regions(image: ProgramImage): ReadonlyArray<NativeNumericLoopRegionPlan
 }
 
 describe("native safe-integer loop regions", () => {
+	it("preserves terminating and cyclic outside paths when proving the loop entry", () => {
+		const body = compile(COLLATZ).native.functions[1]!.body;
+		for (const terminal of [
+			{ opcode: "RETURN", value: 0 },
+			{ opcode: "THROW", value: 0 },
+			{ opcode: "JUMP", targetIp: 2 },
+		] satisfies Array<BytecodeInstruction>) {
+			const fn = {
+				...body,
+				instructions: [
+					{ opcode: "JUMP_IF", cond: 2, targetIp: 2 },
+					{ opcode: "JUMP", targetIp: 3 },
+					terminal,
+					{ opcode: "BINARY", operator: "<", left: 0, right: 1, dst: 2 },
+					{ opcode: "JUMP_IF", cond: 2, targetIp: 6 },
+					{ opcode: "RETURN", value: 0 },
+					{ opcode: "BINARY", operator: "%", left: 0, right: 1, dst: 0 },
+					{ opcode: "JUMP", targetIp: 3 },
+				] satisfies Array<BytecodeInstruction>,
+			};
+			const facts = analyzeNativeBodyFacts(fn);
+			const shape = numericLoopShape(fn, facts, 3);
+			expect(shape?.entryIp).toBe(1);
+			expect(shape?.order).toEqual([3, 4, 6, 7]);
+			expect(
+				numericLoopShape(fn, { ...facts, externalEntries: new Set([6]) }, 3),
+			).toBeUndefined();
+			const bypass = {
+				...fn,
+				instructions: fn.instructions.with(2, { opcode: "JUMP", targetIp: 6 }),
+			};
+			expect(numericLoopShape(bypass, analyzeNativeBodyFacts(bypass), 3)).toBeUndefined();
+			const unreachable = {
+				...bypass,
+				instructions: bypass.instructions.with(0, { opcode: "JUMP", targetIp: 3 }),
+			};
+			expect(
+				numericLoopShape(unreachable, analyzeNativeBodyFacts(unreachable), 3),
+			).toBeUndefined();
+		}
+	});
+
 	it("restores the loop-carried values and continues at the loop exit", () => {
 		const image = compile(COLLATZ);
 		const [plan] = regions(image);

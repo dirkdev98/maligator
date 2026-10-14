@@ -1476,12 +1476,17 @@ export function numericLoopShape(
 	const outside = new Uint8Array(fn.instructions.length);
 	const pending = [0, ...body.externalEntries];
 	while (pending.length > 0) {
-		const ip = pending.pop()!;
-		if (ip === header || ip >= fn.instructions.length || outside[ip] === 1) continue;
-		outside[ip] = 1;
-		const instruction = fn.instructions[ip]!;
-		if (instruction.opcode === "RETURN" || instruction.opcode === "THROW") continue;
-		pending.push(...numberRecordSuccessors(instruction, ip));
+		let ip = pending.pop()!;
+		while (ip !== header && ip < fn.instructions.length && outside[ip] !== 1) {
+			outside[ip] = 1;
+			const instruction = fn.instructions[ip]!;
+			if (instruction.opcode === "RETURN" || instruction.opcode === "THROW") break;
+			if (instruction.opcode === "JUMP") ip = instruction.targetIp;
+			else {
+				if (instruction.opcode === "JUMP_IF") pending.push(instruction.targetIp);
+				ip++;
+			}
+		}
 	}
 	const members = new Set([header]);
 	const backward = predecessors.filter((source) => outside[source] === 0);
@@ -1861,17 +1866,17 @@ function lowerNumericLoopRegion(
 	body: NativeBodyFacts,
 	conflicts: (ip: number) => boolean,
 ): NativeNumericLoopRegionPlan | undefined {
+	const first = fn.instructions[header];
+	// Fixed-storage headers are comparisons; both loop contracts require an integer-loop header.
+	if (first === undefined || !integerLoopInstruction(first) || conflicts(header))
+		return undefined;
 	const shape = numericLoopShape(fn, body, header);
-	const storage =
-		shape === undefined ? undefined : fixedNumericLoopStorage(fn, shape, body);
+	if (shape === undefined || conflicts(shape.entryIp) || shape.order.some(conflicts))
+		return undefined;
+	const storage = fixedNumericLoopStorage(fn, shape, body);
 	if (
-		shape === undefined ||
-		conflicts(shape.entryIp) ||
-		shape.order.some(
-			(ip) =>
-				conflicts(ip) ||
-				(storage === undefined && !integerLoopInstruction(fn.instructions[ip]!)),
-		) ||
+		(storage === undefined &&
+			shape.order.some((ip) => !integerLoopInstruction(fn.instructions[ip]!))) ||
 		(storage === undefined &&
 			!shape.order.some((ip) => {
 				const instruction = fn.instructions[ip]!;
