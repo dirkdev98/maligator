@@ -132,6 +132,27 @@ starts and after each pair; `status` distinguishes `running`, `complete`,
 The base revision must contain the paired-runner support; use a recent checkpoint
 when investigating older history.
 
+For Express JavaScript profiles without sockets or HTTP parsing, run
+`bench/http/express-in-process.cjs`. It calls the existing Express fixture through
+`app.handle()`, checks response bodies and statuses on every request, and prints
+JSON timings and response oracles. The mix is 60% routes, 20% JSON, and 20% forms.
+
+```sh
+node src/index.ts build bench/http/express-in-process.cjs --production \
+  --config bench/http/express.config.mts --artifact .cache/express-in-process
+EXPRESS_REQUESTS=100000 node bench/http/express-in-process.cjs
+EXPRESS_REQUESTS=100000 .cache/express-in-process/bin/maligator
+EXPRESS_IN_PROCESS_MODE=raw EXPRESS_REQUESTS=100000 .cache/express-in-process/bin/maligator
+```
+
+The default `parsed` mode supplies pre-parsed bodies; `raw` feeds JSON and form
+payloads through in-memory Readable streams and the real body parsers. Neither
+mode opens a listener. `EXPRESS_ADAPTER_CONTROL=1` measures the same request and
+response adapters without Express; raw controls drain the body stream. Keep this
+control separate rather than subtracting it from Express timings. Runs warm 10,000
+requests before timing; alternate repeated production runs and compare identical
+response oracles. `EXPRESS_DURATION_MS` extends a run for physical stack sampling.
+
 Inspect all planned work before a time-sensitive experiment:
 
 ```sh
