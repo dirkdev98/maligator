@@ -44,6 +44,11 @@ jobs:
           ln -s "$(command -v ld.lld-19)" "$RUNNER_TEMP/benchmark-bin/ld.lld"
           echo "$RUNNER_TEMP/benchmark-bin" >> "$GITHUB_PATH"
 
+      - name: Install the pinned HTTP load generator
+        run: |
+          cargo install oha --version 1.14.0 --locked
+          test "$(oha --version)" = "oha 1.14.0"
+
       - name: Check the runner and record the complete plan
         run: |
           set -o pipefail
@@ -51,6 +56,9 @@ jobs:
           git rev-parse HEAD > .cache/benchmark-baseline/revision.txt
           uname -a > .cache/benchmark-baseline/host.txt
           node --version >> .cache/benchmark-baseline/host.txt
+          oha --version >> .cache/benchmark-baseline/host.txt
+          rustc --version >> .cache/benchmark-baseline/host.txt
+          "$CC" --version >> .cache/benchmark-baseline/host.txt
           npm run env:check -- --json | tee .cache/benchmark-baseline/environment.log
           node ./src/index.ts cache status | tee .cache/benchmark-baseline/cache-before.log
           npm run bench -- --full --update --plan=json > .cache/benchmark-baseline/plan.json

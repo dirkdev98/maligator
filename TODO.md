@@ -430,8 +430,8 @@ The shared lifetime and fallback rules are recorded in
 - [ ] Broaden shared span consumers beyond length, equality, and numeric conversion;
       preserve method identity, UTF-16 behavior, and materialization at observers.
       Slice and split spans now support guarded `charCodeAt`, and split spans share
-      numeric conversion. Focused unit checks pass; native execution and measurement
-      are pending. Regexp captures now use the same consumer and lazy materialization
+      numeric conversion. Focused unit checks pass; measurement remains pending.
+      Regexp captures now use the same consumer and lazy materialization
       contract, preserving missing captures and rejecting stale lifetimes across
       repeated execution. Sanitizer failures exposed retained capture/case-result
       control-flow escapes and missing locked character-method authority; both are
@@ -608,9 +608,11 @@ The shared lifetime and fallback rules are recorded in
       preserve invocation order and fallback for unsupported callable kinds.
       Implemented through one runtime nomination after builtin identity validation.
       All 64 focused checks, Node oracles, both-mode frontend/codec checks, and runtime
-      and generated C syntax checks pass. All three Linux ASan/UBSan checks pass across
-      both backends, primordial modes, GC stress, and realm fallbacks; measurement
-      remains pending. Foreign-realm callbacks conservatively retain generic invocation.
+      and generated C syntax checks pass. All three earlier Linux ASan/UBSan checks
+      pass across both backends, primordial modes, GC stress, and realm fallbacks.
+      The explicit-GC hook repair in c0b9efd8 awaits a native rerun; measurement
+      remains pending. Owned-realm ordinary compiled callbacks use the shared
+      invocation contract; unsupported callable kinds retain generic invocation.
 - [ ] Compose `substr` with existing span lifetimes and consume spans through
       bounded `lastIndexOf`. Reuse the canonical relative-index normalization and
       reverse search machinery, including its lower window boundary; preserve
@@ -795,14 +797,15 @@ The shared lifetime and fallback rules are recorded in
       eager key/value capture, property-key conversion, result realms, and iterator
       completion behavior. Implemented through the existing rooted traversal;
       twelve focused checks, Node oracles, and eight frontend/artifact/C checks pass.
-      Six Node oracles exercise the explicit GC hook. Native verification and
-      measurement remain pending.
+      Six Node oracles exercise the explicit GC hook. All three borrowed-pair Linux
+      ASan/UBSan cases pass; measurement remains pending.
 
 - [ ] Retain several Map lookup indices for arbitrary keys and reference values,
       including unprotected regions in functions with handlers. Revalidate current
       storage, live entry and canonical key before using the existing barrier-aware
       updater. Eight focused checks, six frontend/artifact/C captures and forced-GC
-      Node oracles pass; native verification and measurement remain pending.
+      Node oracles pass. Both Map-region Linux ASan/UBSan cases pass; measurement
+      remains pending.
 - [ ] Root fresh collection constructors before adder and iterator acquisition;
       reuse one captured compiled-adder contract through Map, WeakMap, Set and
       WeakSet population. Reuse borrowed entry pairs without replay after an abrupt
@@ -812,8 +815,8 @@ The shared lifetime and fallback rules are recorded in
       both main-mode constructor sanitizer cases pass. The realm case exposed a
       shared iterator-step boundary that discarded captured next realm; its runtime
       and compiler-cursor callers are repaired with 178 focused checks and new
-      cross-realm error and pair-prototype coverage. Native repair verification and
-      measurement remain pending.
+      cross-realm error and pair-prototype coverage. All four constructor Linux
+      ASan/UBSan cases pass; measurement remains pending.
 
 - [ ] Extend fixed TypedArray regions to two-access copies and single-view updates,
       including ordered overlapping shifts and contained numeric-fusion operations.
@@ -856,8 +859,8 @@ The shared lifetime and fallback rules are recorded in
       per invocation and restore them before suspension. Root setup state, acquired
       iterator records and original errors throughout user-code boundaries. All 24
       callback checks, seven forced-GC Node oracles and six actual frontend/artifact/C
-      captures pass. All three initial Linux ASan/UBSan cases pass; the wider
-      async-close and Number-index implementation below is still awaiting verification.
+      captures pass. All five Linux ASan/UBSan cases pass, including awaited close,
+      Number-index boundaries and realms.
 - [ ] Extend keys, values and entries snapshots to ordinary indexed records and
       arrays, including holes, sparse storage and non-enumerable own properties.
       Preserve property order and eager values; reject observable accessors before
@@ -1067,47 +1070,51 @@ The shared lifetime and fallback rules are recorded in
 - [ ] Build concat results directly from retained range, split, regexp and nested
       spans. Share the canonical ranged output builder, retain source and primitive
       argument roots, and preserve ordered coercion and original calls for observable
-      arguments. The packet now admits32 primitive arguments. The earlier native
+      arguments. The packet now admits 32 primitive arguments. The earlier native
       harness accidentally repeated the range mode; corrected mode selection covers
-      split, regexp, nesting,9/16/32 arguments and33-argument fallback. Expanded
-      native sanitizer verification and performance measurement remain pending.
+      split, regexp, nesting, 9/16/32 arguments and 33-argument fallback. All three
+      corrected Linux ASan/UBSan cases pass; performance measurement remains pending.
 
 - [ ] Read named own fields from Array, TypedArray, Map and Set storage through
       the shared property and read-only numeric region contracts. Keep indexed,
       length/size and inherited semantics in their existing guarded paths; the first
       generic continuation ends borrowed storage. All45 focused contracts, fourteen
-      Node GC modes and four frontend/artifact/C captures pass. Native sanitizer
-      verification and performance measurement remain pending.
+      Node GC modes and four frontend/artifact/C captures pass. Both own-slot Linux
+      ASan/UBSan cases pass across backends and primordial modes; performance
+      measurement remains pending.
 - [ ] Replace primitive string patterns directly within retained spans through
       the canonical replace/replaceAll builder, preserving relative substitution
       contexts and original protocol/coercion fallbacks. All234 focused contracts,
       eleven Node GC modes, five frontend/artifact/C captures and eight runtime
-      C configurations pass; native sanitizer and performance verification remain
-      pending.
+      C configurations pass. All three replacement Linux ASan/UBSan cases pass;
+      performance verification remains pending.
 
 - [ ] Extend named own-field regions to Date, RegExp, Promise, ArrayBuffer and
       DataView while preserving internal properties, detachment, accessor effects
       and the ordinary-only writable guard. All45 focused contracts, twenty-four
-      Node GC modes and four actual frontend/artifact/C captures pass; native
-      sanitizer and performance verification remain pending.
+      Node GC modes and four actual frontend/artifact/C captures pass. Both expanded
+      own-slot Linux ASan/UBSan cases pass; performance verification remains pending.
 - [ ] Search retained range, split, regexp and nested spans using primitive needles
       across indexOf, lastIndexOf, includes, startsWith and endsWith. Preserve
       conversion order, roots, omitted arguments, captured callees and error realms.
       All238 focused contracts, eleven Node GC modes, five actual frontend/artifact/C
-      captures and eight runtime C configurations pass; native sanitizer and
-      performance verification remain pending.
+      captures and eight runtime C configurations pass. All three primitive-search
+      Linux ASan/UBSan cases pass after aligning BigInt fixture inputs with the
+      documented signed-128-bit domain; performance verification remains pending.
 
 - [ ] Apply the named own-slot contract to existing two-to-four-field projections,
       preserving Number encodings, output ordering and null-buffer declines. All53
       focused contracts, a Node oracle, the C admission contract across eleven
-      receiver brands and four actual frontend/artifact/C captures pass. Native
-      sanitizer and performance verification remain pending.
+      receiver brands and four actual frontend/artifact/C captures pass. All three
+      projection Linux ASan/UBSan cases pass; performance verification remains pending.
 - [ ] Convert primitive search and replacement inputs for retained-span replace and
       replaceAll through the canonical rooted builder. Preserve protocol fallback,
       no-match conversion, omitted arguments, substitution context and foreign
       method errors. All240 focused contracts, nineteen Node GC modes, five actual
-      frontend/artifact/C captures and eight runtime C configurations pass; native
-      sanitizer and performance verification remain pending.
+      frontend/artifact/C captures and eight runtime C configurations pass. All three
+      primitive-replacement Linux ASan/UBSan cases pass after aligning BigInt fixture
+      inputs with the documented signed-128-bit domain; performance verification
+      remains pending.
 
 | Order | Slice                        | Owning work and exit condition                                                                                                                                  |
 | ----- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
