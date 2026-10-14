@@ -1,11 +1,24 @@
 import { describe, expect, it } from "vitest";
+import {
+	finishDirectCoreFunction,
+	initializeDirectCoreFunction,
+} from "../src/compiler/core/core-frontend-construction.ts";
+import type {
+	CoreConstructionBlock,
+	CoreConstructionFunction,
+	CoreInstructionEmitter,
+} from "../src/compiler/core/core-frontend-construction.ts";
 import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.ts";
+import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
 import { verifyCoreFunction } from "../src/compiler/core/core-ir-verifier.ts";
+import { coreInstructionId } from "../src/compiler/core/core-ir.ts";
+import { CoreProgram } from "../src/compiler/core/core-store.ts";
 import { optimizeCore } from "../src/compiler/core/optimize.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import {
 	inspectCoreBlockHandler,
 	inspectCoreBlockParameters,
+	inspectCoreTerminatorPayload,
 } from "./helpers/core-inspection.ts";
 
 function construct(source: string, evalDirect = false) {
@@ -19,7 +32,97 @@ function construct(source: string, evalDirect = false) {
 	return compilation;
 }
 
+const unboundEmitter: CoreInstructionEmitter = {
+	emit() {
+		throw new Error("Unbound construction block");
+	},
+	emitLiteralSwitch() {
+		throw new Error("Unbound construction block");
+	},
+	last() {
+		return undefined;
+	},
+};
+
+function directConstruction(blockCount: number) {
+	const semantic = analyzeSourceAndRunSemanticAnalysis("", "core-chain.js");
+	const program = new CoreProgram(coreOpcodeRegistry, { stringConstants: [[]] });
+	const fn: CoreConstructionFunction = {
+		semanticFile: semantic.files[0]!,
+		functionIndex: 0,
+		nameStringIndex: 0,
+		parameterCount: 1,
+		length: 1,
+		nextCapturedIndex: 0,
+		blocks: [],
+	};
+	initializeDirectCoreFunction(program, fn);
+	const blocks: Array<CoreConstructionBlock> = Array.from({ length: blockCount }, () => ({
+		emitter: unboundEmitter,
+	}));
+	fn.blocks.push(...blocks);
+	return { program, fn, blocks };
+}
+
 describe("pruned SSA construction", () => {
+	it("bypasses long single-predecessor chains without recursive walks or extra phis", () => {
+		const { program, fn, blocks } = directConstruction(5_000);
+		for (const [index, block] of blocks.entries()) {
+			if (index + 1 < blocks.length)
+				block.emitter.emit({ type: "jump", blocks: [index + 1] });
+			else block.emitter.emit({ type: "return", registers: [0] });
+		}
+		const id = finishDirectCoreFunction(fn);
+		verifyCoreFunction(program, id);
+		const stored = program.function(id);
+		const last = [...stored.blockIds()].at(-1)!;
+		const returned = inspectCoreTerminatorPayload(stored, stored.blockTerminator(last));
+		expect(returned).toEqual({
+			kind: "return",
+			value: inspectCoreBlockParameters(stored, stored.entry)[0]!.value,
+		});
+		expect(program.constructionStatistics.virtualPhisCreated).toBe(1);
+		expect(program.constructionStatistics.materializedBlockParameters).toBe(0);
+	});
+
+	it("stops a predecessor walk at the last reaching definition", () => {
+		const { program, fn, blocks } = directConstruction(64);
+		for (const [index, block] of blocks.entries()) {
+			if (index === 32)
+				block.emitter.emit({ type: "createNumber", registers: [0], value: 9 });
+			if (index + 1 < blocks.length)
+				block.emitter.emit({ type: "jump", blocks: [index + 1] });
+			else block.emitter.emit({ type: "return", registers: [0] });
+		}
+		const id = finishDirectCoreFunction(fn);
+		verifyCoreFunction(program, id);
+		const stored = program.function(id);
+		const last = [...stored.blockIds()].at(-1)!;
+		const returned = inspectCoreTerminatorPayload(stored, stored.blockTerminator(last));
+		if (returned.kind !== "return") throw new Error("Missing return");
+		const definition = coreInstructionId(
+			stored.kernel.valueDefinitionOwner(returned.value),
+		);
+		expect(stored.instructionOpcodeName(definition)).toBe("createNumber");
+		expect(stored.instructionAttributes(definition)).toEqual({ value: 9 });
+		expect(program.constructionStatistics.virtualPhisCreated).toBe(1);
+	});
+
+	it("anchors disconnected single-predecessor cycles when they feed a join", () => {
+		const { program, fn, blocks } = directConstruction(4);
+		blocks[0]!.emitter.emit({ type: "jump", blocks: [3] });
+		blocks[1]!.emitter.emit({ type: "jump", blocks: [2] });
+		blocks[2]!.emitter.emit(
+			{ type: "createBoolean", registers: [1], value: true },
+			{ type: "jumpIf", registers: [1], blocks: [1] },
+			{ type: "jump", blocks: [3] },
+		);
+		blocks[3]!.emitter.emit({ type: "return", registers: [0] });
+		const id = finishDirectCoreFunction(fn);
+		expect(() => verifyCoreFunction(program, id)).not.toThrow();
+		expect(program.constructionStatistics.virtualPhisCreated).toBe(2);
+	});
+
 	it("collapses an unchanged diamond and materializes a genuinely differing value", () => {
 		const unchanged = construct(`
 			function choose(flag) {

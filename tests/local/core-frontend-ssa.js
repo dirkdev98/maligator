@@ -101,6 +101,30 @@ function capturedAcrossCall() {
 	return cell;
 }
 
+function exceptionalSnapshot(throwAt) {
+	let value = 1;
+	try {
+		value = 2;
+		if (throwAt === 1) throw new Error("first");
+		value = 3;
+		if (throwAt === 2) throw new Error("second");
+		value = 4;
+	} catch {
+		return value;
+	}
+	return value;
+}
+
+function predecessorLoop(left, right, count) {
+	while (count > 0) {
+		const previous = left;
+		left = right;
+		right = previous;
+		count--;
+	}
+	return left;
+}
+
 assert(numericLoop(1000) === 499500, "numeric induction variable");
 assert(denseFill(100) === 9900, "dense indexed fill");
 assert(exceptionLocal(null) === 2, "exception-edge local");
@@ -121,6 +145,19 @@ assert(getterReads === 2, "accessor reads are not shared");
 assert(
 	capturedAcrossCall() === 12,
 	"call between store and load mutates the captured cell",
+);
+assert(exceptionalSnapshot(1) === 2, "first exceptional edge keeps its earlier write");
+assert(exceptionalSnapshot(2) === 3, "second exceptional edge keeps its earlier write");
+assert(exceptionalSnapshot(0) === 4, "normal edge reaches the final write");
+const left = {};
+const right = {};
+assert(
+	predecessorLoop(left, right, 5) === right,
+	"odd cyclic dependency preserves identity",
+);
+assert(
+	predecessorLoop(left, right, 6) === left,
+	"even cyclic dependency preserves identity",
 );
 
 console.log("core-frontend-ssa PASS");

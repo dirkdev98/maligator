@@ -100,6 +100,7 @@ interface ConstructionState {
 	readonly definitions: DefinitionTable;
 	readonly entryValues: Map<number, ConstructionValue>;
 	readonly materializedPhis: Array<VirtualPhiId>;
+	entryReadEpoch: number;
 	terminator?: TerminatorDraft;
 	handler?: HandlerDraft;
 	exceptionValue?: CoreValueId;
@@ -374,6 +375,7 @@ export class DirectCoreFunctionConstruction {
 	#aliasResolutions = 0;
 	#maximumUnresolvedPhiDepth = 0;
 	#sourcePosition: number | undefined;
+	#entryReadEpoch = 0;
 
 	constructor(program: CoreProgram, fn: CoreConstructionFunction) {
 		this.#fn = fn;
@@ -628,6 +630,7 @@ export class DirectCoreFunctionConstruction {
 			definitions: new DefinitionTable(),
 			entryValues: new Map(),
 			materializedPhis: [],
+			entryReadEpoch: 0,
 		};
 		this.#states.push(state);
 		return state;
@@ -869,6 +872,51 @@ export class DirectCoreFunctionConstruction {
 		);
 	}
 
+	#resolveIncomingEnvironment(
+		environment: ValueEnvironment,
+		variable: number,
+		incoming: ReadonlyMap<ConstructionState, ReadonlyArray<ValueEnvironment>>,
+		path: Array<ConstructionState>,
+	): ConstructionValue {
+		const defined = environment.state.definitions.get(variable, environment.version);
+		if (defined !== undefined) return defined;
+		const existing = environment.state.entryValues.get(variable);
+		if (existing !== undefined) return existing;
+		if (this.#entryReadEpoch === Number.MAX_SAFE_INTEGER) {
+			for (const state of this.#states) state.entryReadEpoch = 0;
+			this.#entryReadEpoch = 0;
+		}
+		const epoch = ++this.#entryReadEpoch;
+		let state = environment.state;
+		let value: ConstructionValue;
+		for (;;) {
+			const cached = state.entryValues.get(variable);
+			if (cached !== undefined) {
+				value = cached;
+				break;
+			}
+			const predecessors = incoming.get(state);
+			// A closed single-predecessor cycle still needs one anchor for the SCC resolver.
+			if (state.isEntry || predecessors?.length !== 1 || state.entryReadEpoch === epoch) {
+				value = this.#readEntry(state, variable);
+				break;
+			}
+			state.entryReadEpoch = epoch;
+			path.push(state);
+			const predecessor = predecessors[0]!;
+			// Exceptional edges must retain the definition version captured at their throw site.
+			const definition = predecessor.state.definitions.get(variable, predecessor.version);
+			if (definition !== undefined) {
+				value = definition;
+				break;
+			}
+			state = predecessor.state;
+		}
+		for (const bypassed of path) bypassed.entryValues.set(variable, value);
+		path.length = 0;
+		return value;
+	}
+
 	#allEdgeDrafts(): Array<{
 		readonly target: ConstructionState;
 		readonly environment: ValueEnvironment;
@@ -924,11 +972,19 @@ export class DirectCoreFunctionConstruction {
 		}
 		const mutableIncomingStarts: Array<number> = [];
 		const incomingValues: Array<ConstructionValue> = [];
+		const entryPath: Array<ConstructionState> = [];
 		for (let index = 0; index < this.#virtualPhis.length; index++) {
 			const phi = this.#virtualPhis[index]!;
 			mutableIncomingStarts[index] = incomingValues.length;
 			for (const environment of incoming.get(phi.state) ?? []) {
-				incomingValues.push(this.#resolveEnvironment(environment, phi.variable));
+				incomingValues.push(
+					this.#resolveIncomingEnvironment(
+						environment,
+						phi.variable,
+						incoming,
+						entryPath,
+					),
+				);
 			}
 		}
 		const count = this.#virtualPhis.length;
