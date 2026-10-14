@@ -1,5 +1,6 @@
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import { CoreEditor } from "./core-editor.ts";
+import { removeCoreInstructions } from "./core-instruction-removal.ts";
 import { coreFunctionId } from "./core-ir.ts";
 import type { CoreFunctionId } from "./core-ir.ts";
 import type { CoreProgramFlowState } from "./core-program-flow-analysis.ts";
@@ -53,10 +54,11 @@ export function pruneCoreCaptureLiveness(
 			continue;
 		const body = fn.bodyEntry ?? fn.entry;
 		if (body !== fn.entry && fn.kernel.blockParameterCount(body) !== 0) continue;
-		const instructions = [
-			...fn.bodyInstructionIds(fn.entry),
-			...(body === fn.entry ? [] : fn.bodyInstructionIds(body)),
-		];
+		const blocks = [...fn.blockIds()];
+		const instructions = blocks.flatMap((block) => [
+			...fn.bodyInstructionIds(block),
+			...(block === fn.entry || block === body ? [] : [fn.blockTerminator(block)]),
+		]);
 		const editor = CoreEditor.open(program, id);
 		const {
 			outputs: [value],
@@ -67,13 +69,11 @@ export function pruneCoreCaptureLiveness(
 				edge: { block: body, arguments: [] },
 			});
 		editor.replaceTerminator(body, { kind: "return", value: value! });
-		editor.clearHandler(fn.entry);
-		editor.clearHandler(body);
-		for (const block of [...fn.blockIds()]) {
+		for (const block of blocks) editor.clearHandler(block);
+		removeCoreInstructions(editor, instructions);
+		for (const block of blocks) {
 			if (block !== fn.entry && block !== body) editor.removeBlock(block);
 		}
-		for (const instruction of instructions.toReversed())
-			editor.removeInstruction(instruction);
 		changed.set(id, editor.commit());
 	}
 	const readers = new Set<string>();

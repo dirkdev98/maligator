@@ -33,6 +33,7 @@ import {
 } from "./core-compilation.ts";
 import { CoreEditor } from "./core-editor.ts";
 import { CORE_FUNCTION_HAS_EDGE_ARGUMENTS } from "./core-function-features.ts";
+import { removeCoreInstructions } from "./core-instruction-removal.ts";
 import {
 	CORE_CANONICAL_VALUE_ROOTS_ANALYSIS,
 	CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
@@ -112,18 +113,6 @@ function copyInstructionOperands(
 	const start = fn.kernel.instructionOperandStart(instruction);
 	const count = fn.kernel.instructionOperandCount(instruction);
 	return Array.from({ length: count }, (_, index) => fn.kernel.operandAt(start + index));
-}
-
-function instructionResultsHaveUses(
-	fn: CoreFunctionStore,
-	instruction: CoreInstructionId,
-): boolean {
-	const start = fn.kernel.instructionResultStart(instruction);
-	const count = fn.kernel.instructionResultCount(instruction);
-	for (let index = 0; index < count; index++) {
-		if (valueHasUses(fn, fn.kernel.resultAt(start + index))) return true;
-	}
-	return false;
 }
 
 function isFunctionParameter(fn: CoreFunctionStore, value: CoreValueId): boolean {
@@ -1982,35 +1971,7 @@ function removeUnreachableControlFlow(
 		// Execution blocks require a control transfer even after an operation that always throws.
 		editor.replaceTerminator(block, { kind: "return", value: tail.result });
 	}
-	const queue = new Array<CoreInstructionId>();
-	const queued = new Set<CoreInstructionId>();
-	const enqueueIfDead = (instruction: CoreInstructionId): void => {
-		if (
-			!pending.has(instruction) ||
-			queued.has(instruction) ||
-			instructionResultsHaveUses(fn, instruction)
-		) {
-			return;
-		}
-		queued.add(instruction);
-		queue.push(instruction);
-	};
-	for (const instruction of pending) enqueueIfDead(instruction);
-	for (let cursor = 0; cursor < queue.length; cursor++) {
-		const instruction = queue[cursor]!;
-		queued.delete(instruction);
-		if (!pending.has(instruction)) continue;
-		if (instructionResultsHaveUses(fn, instruction)) continue;
-		const dependencies = copyInstructionOperands(fn, instruction).flatMap((value) => {
-			const definition = definingInstruction(fn, value);
-			return definition === undefined ? [] : [definition];
-		});
-		editor.removeInstruction(instruction);
-		pending.delete(instruction);
-		for (const dependency of dependencies) enqueueIfDead(dependency);
-	}
-	if (pending.size > 0)
-		throw new Error("Unreachable Core instructions retain external uses");
+	removeCoreInstructions(editor, pending);
 	for (const block of blocks) editor.removeBlock(block);
 	for (const fact of removedGuardFacts) editor.removeFact(fact);
 	return editor.commit();
