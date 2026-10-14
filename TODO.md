@@ -953,21 +953,22 @@ The shared lifetime and fallback rules are recorded in
       Keep repeat's shared allocating helper frame-neutral; only its native wrapper
       owns suppression, and long builders poll with completed prefixes rooted.
       Focused compiler, Node, frontend/C and all three JavaScript ASan/UBSan cases
-      pass. The C polling driver now enables collection statistics and cleans up on
-      assertion failure; its corrected native rerun and measurement remain pending.
+      pass. The corrected C polling driver also passes with collection statistics enabled
+      and balanced cleanup on failure. Measurement remains pending.
 
 - [ ] Widen fixed TypedArray storage regions to read-only sums and dot products,
       up to eight view owners,32 ordered accesses and128 instructions. Retain exact
       view bounds, numeric admission, overlap order, rounding and poll continuation;
       immutable inputs remain readable, while immutable outputs preserve fallback.
-      All72 loop contracts, four Node GC modes and six actual frontend/artifact/C
-      captures pass. Native and performance verification remain pending.
+      All72 loop contracts, four Node GC modes, six actual frontend/artifact/C
+      captures and both Linux ASan/UBSan cases pass. Performance verification remains
+      pending.
 - [ ] Produce lower- and uppercase output directly from retained range, split,
       capture and nested spans. Bound the canonical Latin-1 scans and Unicode
       conversion context to the original span, retaining source roots and final
       unchanged-output materialization. All196 span/codec contracts, eleven Node GC
-      modes and five actual frontend/artifact/C captures pass. Native and performance
-      verification remain pending.
+      modes, five actual frontend/artifact/C captures and all three Linux ASan/UBSan
+      cases pass. Performance verification remains pending.
 
 - [ ] Retain fixed TypedArray storage across certified Math unary and binary bodies.
       Guard consumed numeric inputs before memory operations and reuse canonical
@@ -980,6 +981,19 @@ The shared lifetime and fallback rules are recorded in
       source roots and bounded normalization context. All237 focused checks, eleven
       Node GC modes, six frontend/artifact/C captures and four runtime C syntax
       configurations pass. Native and performance verification remain pending.
+
+- [ ] Extend fixed TypedArray regions across canonical integer, half-rounding,
+      power and angle kernels, plus bounded variadic min/max/hypot. Carry known
+      primitive defaults into numeric bodies while guarding dynamic consumed
+      arguments; no admitted body collects or invokes user code. All128 loop
+      contracts, sixteen Node GC modes and four frontend/artifact/C captures pass.
+      Native and performance verification remain pending.
+- [ ] Validate and repair UTF16 directly over retained string spans, reusing the
+      canonical segmented scan with range-relative surrogate boundaries. Preserve
+      captured methods, ignored argument effects, output roots and cached original
+      materialization. All229 focused checks, eleven Node GC modes, five frontend/
+      artifact/C captures and four runtime C configurations pass. Native and
+      performance verification remain pending.
 
 | Order | Slice                        | Owning work and exit condition                                                                                                                                  |
 | ----- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |

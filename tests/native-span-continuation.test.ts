@@ -30,6 +30,36 @@ const body = `const part=source.split('|')[1]; const size=part.length;
  if(part==='if')return size+10; if(escape)return observe(part); return size;`;
 describe("span continuations from split projections", () => {
 	it.each(["mutable", "locked"] as const)(
+		"checks and repairs split, regexp and nested UTF-16 ranges under %s primordials",
+		(mode) => {
+			for (const producer of [
+				"source.split('|')[1]",
+				"/\\|([^|]*)\\|/.exec(source)[1]",
+				"source.slice(1,-1).trim()",
+			]) {
+				const image = compile(
+					`const part=${producer};const a=part.isWellFormed(observe());const b=part.toWellFormed(escape,null,undefined);observe(part);return [a,b];`,
+					mode,
+				);
+				const kinds = image.native.functions.flatMap((fn) => [
+					...fn.specializations.flatMap((p) =>
+						p.kind === "string-span" ? p.consumers.map((c) => c.kind) : [],
+					),
+					...(fn.storage?.spanContinuations.flatMap((p) =>
+						p.consumers.map((c) => c.kind),
+					) ?? []),
+				]);
+				expect(kinds, producer).toEqual(
+					expect.arrayContaining(["isWellFormedCall", "toWellFormedCall"]),
+				);
+				expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+					image,
+				);
+			}
+		},
+	);
+
+	it.each(["mutable", "locked"] as const)(
 		"normalizes split, regexp and nested ranges under %s primordials",
 		(mode) => {
 			for (const producer of [

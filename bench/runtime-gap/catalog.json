@@ -6227,6 +6227,32 @@
 			"sourceSeam": "runtime/src/builtin_string.c",
 			"fixture": "cases/string-span-normalize.mjs",
 			"controls": ["string-span-case", "string-span-classify"]
+		},
+		{
+			"id": "typed-array-math-kernels",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Fixed TypedArray regions",
+			"category": "memory-layout-usage",
+			"mechanisms": ["fixed-typed-array-storage", "numeric-builtin-bodies"],
+			"inputShape": "Locked integer multiplication, bit counting, half rounding and variadic clamps retain typed storage.",
+			"unit": "element",
+			"sourceSeam": "src/compiler/target/lower-native-fast-paths.ts",
+			"fixture": "cases/typed-array-math-kernels.mjs",
+			"controls": ["typed-array-math-regions", "typed-array-reduction-regions"]
+		},
+		{
+			"id": "string-span-well-formed",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Composable string spans",
+			"category": "memory-layout-usage",
+			"mechanisms": ["string-spans", "delayed-materialization"],
+			"inputShape": "UTF16 validation and repair from retained range, split, capture and nested spans, including surrogate pairs at rope and range boundaries.",
+			"unit": "token",
+			"sourceSeam": "runtime/src/builtin_string.c",
+			"fixture": "cases/string-span-well-formed.mjs",
+			"controls": ["string-span-normalize", "string-span-case"]
 		}
 	]
 }

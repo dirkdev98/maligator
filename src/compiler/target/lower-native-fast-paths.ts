@@ -16,6 +16,7 @@ import {
 	MATH_UNARY_NATIVE_CALL,
 	MATH_BINARY_OPERATIONS,
 	NUMBER_PREDICATES,
+	nativeMathNumberArity,
 } from "./native-scalar-operators.ts";
 import { selectNativeSpanContinuations } from "./native-span-continuation.ts";
 import type { NativeSpanContinuation } from "./native-span-continuation.ts";
@@ -1662,14 +1663,25 @@ export function numericLoopMathInstruction(instruction: BytecodeInstruction):
 		instruction.specialized !== undefined
 	)
 		return undefined;
-	const arity = MATH_UNARY_NATIVE_CALL.has(instruction.operation)
-		? 1
-		: MATH_BINARY_OPERATIONS.has(instruction.operation) &&
-			  instruction.arguments.length === 2
-			? 2
-			: undefined;
-	if (arity === undefined || instruction.arguments.length < arity) return undefined;
-	const arguments_ = instruction.arguments.slice(0, arity).map(decodeVmValueOperand);
+	const arity = nativeMathNumberArity(
+		instruction.operation,
+		instruction.arguments.length,
+	);
+	if (arity === undefined) return undefined;
+	const arguments_ = Array.from({ length: arity }, (_, index) => {
+		const operand = instruction.arguments[index];
+		const value =
+			operand === undefined
+				? { kind: "undefined" as const }
+				: decodeVmValueOperand(operand);
+		if (value.kind === "undefined") return { kind: "number" as const, value: NaN };
+		if (value.kind === "null" || value.kind === "boolean")
+			return {
+				kind: "number" as const,
+				value: value.kind === "boolean" && value.value ? 1 : 0,
+			};
+		return value;
+	});
 	return arguments_.every(
 		(argument) => argument.kind === "register" || argument.kind === "number",
 	)

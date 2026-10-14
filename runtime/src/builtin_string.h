@@ -428,6 +428,11 @@ bool mal_builtin_string_span_normalize(
 MalValue mal_builtin_string_normalize_known(MalVm *vm, MalString *string, bool compatibility, bool compose);
 
 MalValue mal_builtin_string_trim_known(MalVm *vm, MalString *string, bool start, bool end);
+// Guard misses are effect-free; repair roots the source through result allocation.
+bool mal_builtin_string_span_well_formed(
+    MalVm *vm, MalValue callee, bool locked, MalValue subject, usize start, usize end,
+    bool repair, MalValue *out
+);
 MalValue mal_builtin_string_is_well_formed_known(MalString *string);
 MalValue mal_builtin_string_to_well_formed_known(MalVm *vm, MalString *string);
 

@@ -35,6 +35,24 @@ function compile(
 }
 const body = "for(let i=0;i<count;i++){output[i]=left[i]+right[i];}return output;";
 describe("fixed TypedArray loop storage", () => {
+	it.each([64, 65])("bounds variadic numeric calls at %i arguments", (arity) => {
+		const arguments_ = Array.from({ length: arity }, () => "value").join(",");
+		const image = compile(
+			`for(let i=0;i<count;i++){const value=left[i];output[i]=Math.hypot(${arguments_});}return output;`,
+			undefined,
+			"locked",
+		);
+		const native = image.native.functions[1]!;
+		expect(native.storage!.numericLoopRegions.map((plan) => plan.kind)).toEqual(
+			arity === 64 ? ["fixed-numeric"] : [],
+		);
+		expect(emitCompiledFunction(native, 1, "", false)).not.toBeNull();
+		expect(
+			serializeCompilerArtifact(
+				deserializeCompilerArtifact(serializeCompilerArtifact(image)),
+			),
+		).toEqual(serializeCompilerArtifact(image));
+	});
 	it.each(VM_MATH_UNARY_NUMBER_OPERATIONS)(
 		"carries numeric storage across the certified %s body",
 		(operation) => {
@@ -65,6 +83,21 @@ describe("fixed TypedArray loop storage", () => {
 		"Math.max(left[i],right[i])",
 		"Math.min(left[i],3)",
 		"Math.abs(left[i],hook)",
+		"Math.clz32(left[i])",
+		"Math.f16round(left[i])",
+		"Math.imul(left[i],right[i])",
+		"Math.pow(left[i],right[i])",
+		"Math.atan2(left[i],right[i])",
+		"Math.hypot(left[i],right[i])",
+		"Math.hypot(left[i],right[i],3)",
+		"Math.min(left[i],right[i],3)",
+		"Math.max(left[i],right[i],3,hook)",
+		"Math.min(left[i])",
+		"Math.imul(left[i])",
+		"Math.pow(left[i],undefined)",
+		"Math.min(left[i],null,true)",
+		"Math.imul(left[i],true,hook)",
+		"Math.clz32(left[i],hook)",
 	])(
 		"retains primitive Math operations, literals and ignored operands: %s",
 		(expression) => {

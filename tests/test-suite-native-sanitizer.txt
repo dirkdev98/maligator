@@ -204,3 +204,5 @@ tests/native/fixed-typed-array-reductions.test.ts
 tests/native/string-span-case.test.ts
 tests/native/fixed-typed-array-math.test.ts
 tests/native/string-span-normalize.test.ts
+tests/native/fixed-typed-array-math-kernels.test.ts
+tests/native/string-span-well-formed.test.ts

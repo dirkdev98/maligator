@@ -84,6 +84,8 @@ import {
 	NATIVE_BITWISE,
 	NATIVE_COMPARE,
 	MATH_UNARY_NATIVE_CALL,
+	MATH_NUMBER_KERNELS,
+	MATH_VARIADIC_OPERATIONS,
 	MATH_BINARY_OPERATIONS,
 	NUMBER_PREDICATES,
 	boxedNumberPredicateExpression,
@@ -468,14 +470,6 @@ const STRING_CHARACTER_KERNELS: Readonly<Record<string, string>> = {
 	"String.prototype.codePointAt": "CODE_POINT_AT",
 };
 
-const MATH_NUMBER_KERNELS: Readonly<Record<string, readonly [string, number]>> = {
-	"Math.clz32": ["mal_builtin_math_clz32_number", 1],
-	"Math.f16round": ["mal_builtin_math_f16round_number", 1],
-	"Math.imul": ["mal_builtin_math_imul_number", 2],
-	"Math.pow": ["mal_builtin_math_pow_number", 2],
-	"Math.atan2": ["atan2", 2],
-};
-
 function nativeMathBinaryExpr(
 	operation: string,
 	left: string,
@@ -483,6 +477,25 @@ function nativeMathBinaryExpr(
 ): string | null {
 	if (!MATH_BINARY_OPERATIONS.has(operation)) return null;
 	return `mal_number_min_max(${left}, ${right}, ${operation === "Math.max"})`;
+}
+
+function nativeMathNumberExpr(
+	operation: string,
+	arguments_: ReadonlyArray<string>,
+): string | null {
+	if (arguments_.length === 1 && MATH_UNARY_NATIVE_CALL.has(operation))
+		return nativeMathUnaryExpr(operation, arguments_[0]!);
+	if (arguments_.length === 2 && MATH_BINARY_OPERATIONS.has(operation))
+		return nativeMathBinaryExpr(operation, arguments_[0]!, arguments_[1]!);
+	const kernel = MATH_NUMBER_KERNELS[operation];
+	if (kernel !== undefined && arguments_.length === kernel[1])
+		return `${kernel[0]}(${arguments_.join(", ")})`;
+	if (!MATH_VARIADIC_OPERATIONS.has(operation) || arguments_.length > 64) return null;
+	const values =
+		arguments_.length === 0 ? "nullptr" : `((f64[]){ ${arguments_.join(", ")} })`;
+	return operation === "Math.hypot"
+		? `mal_builtin_math_hypot_numbers(${values}, ${arguments_.length})`
+		: `mal_builtin_math_min_max_numbers(${values}, ${arguments_.length}, ${operation === "Math.max"})`;
 }
 
 interface NativeCallCoverage {
@@ -876,10 +889,7 @@ function emitNumericLoopRegion(
 						? cF64Literal(argument.value)
 						: local(argument.register),
 				);
-				const expression =
-					arguments_.length === 1
-						? nativeMathUnaryExpr(math.operation, arguments_[0]!)
-						: nativeMathBinaryExpr(math.operation, arguments_[0]!, arguments_[1]!);
+				const expression = nativeMathNumberExpr(math.operation, arguments_);
 				if (expression === null) throw new Error("Invalid numeric loop Math expression");
 				return `${local(op.dst)} = ${expression};`;
 			}
@@ -6488,6 +6498,15 @@ function emitInstruction(
 			guard += ` && mal_builtin_string_span_normalize(vm, ${locked ? "MAL_VALUE_UNDEFINED" : boxedOperand(instruction.callee)}, ${locked}, ${source}, ${prefix}_start, ${prefix}_end, ${form}, &${result})`;
 			projected = `${throwCheck()} r${instruction.dst} = ${callValue(instruction.dst, result)};`;
 		} else if (
+			(role === "isWellFormedCall" || role === "toWellFormedCall") &&
+			(instruction.opcode === "CALL" || instruction.opcode === "CALL_KNOWN")
+		) {
+			const result = `${prefix}_well_formed_${ip}`;
+			declarations.push(`MalValue ${result};`);
+			const locked = instruction.opcode === "CALL_KNOWN";
+			guard += ` && mal_builtin_string_span_well_formed(vm, ${locked ? "MAL_VALUE_UNDEFINED" : boxedOperand(instruction.callee)}, ${locked}, ${source}, ${prefix}_start, ${prefix}_end, ${role === "toWellFormedCall"}, &${result})`;
+			projected = `${throwCheck()} r${instruction.dst} = ${callValue(instruction.dst, result)};`;
+		} else if (
 			characterCall !== undefined &&
 			(instruction.opcode === "CALL" || instruction.opcode === "CALL_KNOWN")
 		) {
@@ -6580,6 +6599,8 @@ function emitInstruction(
 			role === "toLowerCaseCall" ||
 			role === "toUpperCaseCall" ||
 			role === "normalizeCall" ||
+			role === "isWellFormedCall" ||
+			role === "toWellFormedCall" ||
 			methodProperty !== undefined ||
 			characterCall !== undefined ||
 			searchCall !== undefined ||

@@ -42,6 +42,33 @@ const branching = `const part = value.slice(start, end); const length = part.len
 
 describe("composable string spans", () => {
 	it.each(["mutable", "locked"] as const)(
+		"checks and repairs bounded UTF-16 with ignored argument effects under %s primordials",
+		(mode) => {
+			for (const method of ["isWellFormed", "toWellFormed"]) {
+				for (const args of ["", "observer(),start,end,escape"]) {
+					const image = compile(
+						`const part=value.slice(start,end);const result=part.${method}(${args});if(escape)observer(part);return result;`,
+						mode,
+					);
+					expect(spans(image)[0]?.consumers.map((c) => c.kind)).toContain(
+						`${method}Call`,
+					);
+					expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+						image,
+					);
+				}
+				const image = compile(
+					`const part=value.slice(start,end);return [part.length,part.${method}(part)];`,
+					mode,
+				);
+				expect(spans(image).flatMap((r) => r.consumers.map((c) => c.kind))).not.toContain(
+					`${method}Call`,
+				);
+			}
+		},
+	);
+
+	it.each(["mutable", "locked"] as const)(
 		"normalizes ranges with dynamic forms and ignored argument effects under %s primordials",
 		(mode) => {
 			for (const args of [
@@ -162,6 +189,8 @@ describe("composable string spans", () => {
 		"toLowerCaseCall",
 		"toUpperCaseCall",
 		"normalizeCall",
+		"isWellFormedCall",
+		"toWellFormedCall",
 	] as const)("rejects a forged %s with another captured method", (kind) => {
 		const image = compile("const part=value.slice(start,end);return part.charAt(start);");
 		const owner = image.native.functions.find((fn) =>

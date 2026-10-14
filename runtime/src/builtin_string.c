@@ -2857,10 +2857,9 @@ bool mal_builtin_string_ascii_case_chain_length_span_locked(
         true);
 }
 
-static usize mal_builtin_string_find_invalid_utf16(const MalString *string) {
+static usize mal_builtin_string_find_invalid_utf16(const MalString *string, usize start, usize length) {
     MalStringIterator iterator;
-    usize length = mal_string_length(string);
-    mal_string_iterator_init(&iterator, string, 0, length);
+    mal_string_iterator_init(&iterator, string, start, length);
     MalStringSegment segment;
     usize position = 0, invalid = length;
     bool pending_lead = false;
@@ -2897,19 +2896,21 @@ done:
 
 MalValue mal_builtin_string_is_well_formed_known(MalString *string) {
     return mal_value_new_boolean(
-        mal_builtin_string_find_invalid_utf16(string) == mal_string_length(string));
+        mal_builtin_string_find_invalid_utf16(string, 0, mal_string_length(string)) == mal_string_length(string));
 }
 
-MalValue mal_builtin_string_to_well_formed_known(MalVm *vm, MalString *string) {
-    usize length = mal_string_length(string);
-    usize first_invalid = mal_builtin_string_find_invalid_utf16(string);
-    if (first_invalid == length) return mal_value_from_string(string);
-
+static MalValue mal_builtin_string_to_well_formed_range(MalVm *vm, MalString *string, usize start, usize length) {
     MalBuiltinRootedString root;
     mal_builtin_string_root_init(&root, string);
+    usize first_invalid = mal_builtin_string_find_invalid_utf16(string, start, length);
+    if (first_invalid == length) {
+        MalValue result = mal_builtin_string_slice(vm, string, start, length);
+        mal_builtin_string_root_dispose(&root);
+        return result;
+    }
     c16 *units = mal_heap_alloc_raw_profiled(
         &vm->heap, sizeof(c16) * length, MAL_PROFILE_ALLOCATION_FAMILY_STRING);
-    mal_string_copy_range_to(mal_builtin_string_root_get(&root), 0, length, units);
+    mal_string_copy_range_to(mal_builtin_string_root_get(&root), start, length, units);
     for (usize i = first_invalid; i < length;) {
         usize width;
         if (!mal_utf16_read_scalar(units, length, i, nullptr, &width)) units[i] = 0xfffd;
@@ -2918,6 +2919,10 @@ MalValue mal_builtin_string_to_well_formed_known(MalVm *vm, MalString *string) {
     MalValue result = mal_value_from_string(mal_string_new_owned(&vm->heap, units, length));
     mal_builtin_string_root_dispose(&root);
     return result;
+}
+
+MalValue mal_builtin_string_to_well_formed_known(MalVm *vm, MalString *string) {
+    return mal_builtin_string_to_well_formed_range(vm, string, 0, mal_string_length(string));
 }
 
 static MalValue mal_builtin_string_prototype_is_well_formed(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -2930,6 +2935,29 @@ static MalValue mal_builtin_string_prototype_to_well_formed(MalVm *vm, MalValue 
     MalString *string = mal_builtin_string_this_to_string(vm, this_value);
     if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
     return mal_builtin_string_to_well_formed_known(vm, string);
+}
+
+bool mal_builtin_string_span_well_formed(
+    MalVm *vm, MalValue callee, bool locked, MalValue subject, usize start, usize end,
+    bool repair, MalValue *out
+) {
+    if (!locked && (!mal_value_is_native_function_object(callee) ||
+        mal_native_function_object_callback(mal_value_to_native_function_object(callee)) !=
+            (repair ? mal_builtin_string_prototype_to_well_formed : mal_builtin_string_prototype_is_well_formed))) return false;
+#if MAL_REALMS
+    if (!locked && mal_vm_callee_realm(vm, callee) != vm->current_realm) return false;
+#endif
+    if (!mal_value_is_string(subject) || start > end ||
+        end > mal_string_length(mal_value_to_string(subject))) return false;
+    MalString *string = mal_value_to_string(subject);
+    if (repair) {
+        MAL_PERF_COUNT(string_span_to_well_formed_calls);
+        *out = mal_builtin_string_to_well_formed_range(vm, string, start, end - start);
+    } else {
+        MAL_PERF_COUNT(string_span_is_well_formed_calls);
+        *out = mal_value_new_boolean(mal_builtin_string_find_invalid_utf16(string, start, end - start) == end - start);
+    }
+    return true;
 }
 
 // For an Object argument, GetMethod(arg, @@symbol) and, when present,

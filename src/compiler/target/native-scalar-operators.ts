@@ -56,6 +56,26 @@ export const MATH_UNARY_NATIVE_CALL: ReadonlyMap<string, string | null> = new Ma
 
 export const MATH_BINARY_OPERATIONS = new Set(["Math.min", "Math.max"]);
 
+export const MATH_NUMBER_KERNELS: Readonly<Record<string, readonly [string, number]>> = {
+	"Math.clz32": ["mal_builtin_math_clz32_number", 1],
+	"Math.f16round": ["mal_builtin_math_f16round_number", 1],
+	"Math.imul": ["mal_builtin_math_imul_number", 2],
+	"Math.pow": ["mal_builtin_math_pow_number", 2],
+	"Math.atan2": ["atan2", 2],
+};
+
+export const MATH_VARIADIC_OPERATIONS = new Set(["Math.min", "Math.max", "Math.hypot"]);
+
+/** The consumed numeric arguments; other arguments have already finished evaluation. */
+export function nativeMathNumberArity(
+	operation: string,
+	argumentCount: number,
+): number | undefined {
+	if (MATH_VARIADIC_OPERATIONS.has(operation))
+		return argumentCount <= 64 ? argumentCount : undefined;
+	return MATH_UNARY_NATIVE_CALL.has(operation) ? 1 : MATH_NUMBER_KERNELS[operation]?.[1];
+}
+
 export const NUMBER_PREDICATES: ReadonlyMap<string, string> = new Map([
 	["Number.isNaN", "MAL_NUMBER_PREDICATE_IS_NAN"],
 	["Number.isFinite", "MAL_NUMBER_PREDICATE_IS_FINITE"],

@@ -980,6 +980,9 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.string_span_upper_case_calls);
     fprintf(stderr, "[perf-string-span-normalize-stats] calls=%llu\n",
         (unsigned long long) mal_perf_stats.string_span_normalize_calls);
+    fprintf(stderr, "[perf-string-span-well-formed-stats] is_well_formed=%llu to_well_formed=%llu\n",
+        (unsigned long long) mal_perf_stats.string_span_is_well_formed_calls,
+        (unsigned long long) mal_perf_stats.string_span_to_well_formed_calls);
     fprintf(stderr, "[perf-string-span-repeat-stats] calls=%llu\n",
         (unsigned long long) mal_perf_stats.string_span_repeat_calls);
     fprintf(stderr, "[perf-string-span-global-number-stats] is_finite=%llu is_nan=%llu\n",

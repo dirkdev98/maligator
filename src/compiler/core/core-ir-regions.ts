@@ -183,6 +183,8 @@ export const CORE_STRING_SPAN_SEARCH_METHODS = [
 ] as const;
 
 export const CORE_STRING_SPAN_METHODS = [
+	"isWellFormed",
+	"toWellFormed",
 	"normalize",
 	"toLowerCase",
 	"toUpperCase",
@@ -196,7 +198,13 @@ export const CORE_STRING_SPAN_METHODS = [
 export function coreStringSpanMethodArgumentLimit(
 	method: (typeof CORE_STRING_SPAN_METHODS)[number],
 ): number {
-	if (method === "toLowerCase" || method === "toUpperCase" || method === "normalize")
+	if (
+		method === "toLowerCase" ||
+		method === "toUpperCase" ||
+		method === "normalize" ||
+		method === "isWellFormed" ||
+		method === "toWellFormed"
+	)
 		return Infinity;
 	return method === "padStart" ||
 		method === "padEnd" ||
@@ -228,6 +236,10 @@ export interface CoreStringSpanConsumer {
 		| "toUpperCaseCall"
 		| "normalizeProperty"
 		| "normalizeCall"
+		| "isWellFormedProperty"
+		| "isWellFormedCall"
+		| "toWellFormedProperty"
+		| "toWellFormedCall"
 		| "charCodeAtProperty"
 		| "charCodeAtCall"
 		| "codePointAtProperty"
