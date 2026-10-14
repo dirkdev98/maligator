@@ -39,7 +39,7 @@ function arityAccepts(
 	arity: { readonly minimum: number; readonly maximum: number },
 	count: number,
 ): boolean {
-	return count >= arity.minimum && count <= arity.maximum;
+	return Number.isSafeInteger(count) && count >= arity.minimum && count <= arity.maximum;
 }
 
 function payloadWithoutSourcePosition(input: CoreTerminatorInput): {
@@ -387,7 +387,9 @@ export class CoreEditor {
 		const created = this.function._createBlock(this.#mutation, parameters);
 		this.#touchBlock(created.block);
 		this.#touchValues(created.values);
-		this.#mark("body", "cfg", "specializationInputs");
+		this.#domains.add("body");
+		this.#domains.add("cfg");
+		this.#domains.add("specializationInputs");
 		this.#edits++;
 		return created.block;
 	}
@@ -413,7 +415,9 @@ export class CoreEditor {
 		);
 		this.#touchBlock(block);
 		this.#touchValues(values);
-		this.#mark("body", "cfg", "specializationInputs");
+		this.#domains.add("body");
+		this.#domains.add("cfg");
+		this.#domains.add("specializationInputs");
 		this.#edits++;
 		return values;
 	}
@@ -430,7 +434,9 @@ export class CoreEditor {
 		const value = this.function._removeBlockParameter(this.#mutation, block, index);
 		this.#touchBlock(block);
 		this.#values.add(value);
-		this.#mark("body", "cfg", "specializationInputs");
+		this.#domains.add("body");
+		this.#domains.add("cfg");
+		this.#domains.add("specializationInputs");
 		this.#edits++;
 	}
 
@@ -465,10 +471,13 @@ export class CoreEditor {
 			before,
 			descriptor.id,
 			inputs,
-			Array.from(
-				{ length: outputCount },
-				(_, index) => options.outputRepresentations?.[index] ?? "boxed",
-			),
+			outputCount,
+			options.outputRepresentations === undefined
+				? undefined
+				: Array.from(
+						{ length: outputCount },
+						(_, index) => options.outputRepresentations![index] ?? "boxed",
+					),
 			options.attributes ?? {},
 			options.sourcePosition,
 			options.effectRefinement,
@@ -476,10 +485,10 @@ export class CoreEditor {
 		this.#touchBlock(block);
 		this.#instructions.add(created.instruction);
 		this.#touchValues(inputs);
-		this.#touchValues(created.results);
+		this.#touchValues(created.outputs);
 		this.#markForOperation(created.instruction, descriptor, options.effectRefinement);
 		this.#edits++;
-		return { instruction: created.instruction, outputs: created.results };
+		return created;
 	}
 
 	replaceInstruction(
@@ -574,7 +583,9 @@ export class CoreEditor {
 		this.#touchInstructionResults(instruction);
 		this.#touchRefinement(previous);
 		this.#touchRefinement(refinement);
-		this.#mark("memoryEffects", "facts", "specializationInputs");
+		this.#domains.add("memoryEffects");
+		this.#domains.add("facts");
+		this.#domains.add("specializationInputs");
 		this.#edits++;
 	}
 
@@ -599,10 +610,12 @@ export class CoreEditor {
 		this.#instructions.add(instruction);
 		this.#touchBlock(block);
 		if (descriptor === undefined) {
-			this.#mark("body", "cfg", "specializationInputs");
+			this.#domains.add("body");
+			this.#domains.add("cfg");
+			this.#domains.add("specializationInputs");
 			if (guardFact !== undefined) {
 				this.#facts.add(guardFact);
-				this.#mark("facts");
+				this.#domains.add("facts");
 			}
 		} else {
 			this.#markForOperation(instruction, descriptor, refinement);
@@ -739,12 +752,15 @@ export class CoreEditor {
 			const fact = this.function.kernel.terminatorFact(instruction);
 			if (fact !== undefined) {
 				this.#facts.add(fact);
-				this.#mark("facts");
+				this.#domains.add("facts");
 			}
 		}
 		this.function._removeBlock(this.#mutation, block);
 		this.#blocks.add(block);
-		this.#mark("body", "cfg", "exceptionFlow", "specializationInputs");
+		this.#domains.add("body");
+		this.#domains.add("cfg");
+		this.#domains.add("exceptionFlow");
+		this.#domains.add("specializationInputs");
 		this.#edits++;
 	}
 
@@ -754,7 +770,8 @@ export class CoreEditor {
 			return;
 		}
 		this.#values.add(value);
-		this.#mark("representations", "specializationInputs");
+		this.#domains.add("representations");
+		this.#domains.add("specializationInputs");
 		this.#edits++;
 	}
 
@@ -771,7 +788,8 @@ export class CoreEditor {
 			block: handlerBlock,
 			arguments: [...arguments_],
 		});
-		this.#mark("exceptionFlow", "specializationInputs");
+		this.#domains.add("exceptionFlow");
+		this.#domains.add("specializationInputs");
 		this.#edits++;
 	}
 
@@ -780,7 +798,8 @@ export class CoreEditor {
 		this.#assertLiveBlock(block);
 		if (!this.#touchStoredHandler(block)) return;
 		this.function._setHandler(this.#mutation, block, undefined);
-		this.#mark("exceptionFlow", "specializationInputs");
+		this.#domains.add("exceptionFlow");
+		this.#domains.add("specializationInputs");
 		this.#edits++;
 	}
 
@@ -796,10 +815,12 @@ export class CoreEditor {
 		this.#touchBlock(block);
 		this.#instructions.add(instruction);
 		this.#touchTerminator(block, payload);
-		this.#mark("body", "cfg", "specializationInputs");
+		this.#domains.add("body");
+		this.#domains.add("cfg");
+		this.#domains.add("specializationInputs");
 		if (payload.kind === "guard") {
 			this.#facts.add(payload.fact);
-			this.#mark("facts");
+			this.#domains.add("facts");
 		}
 		this.#edits++;
 		return instruction;
@@ -815,10 +836,12 @@ export class CoreEditor {
 		this.function._replaceTerminatorPayload(this.#mutation, instruction, payload);
 		this.#touchTerminator(block, payload);
 		this.#instructions.add(instruction);
-		this.#mark("body", "cfg", "specializationInputs");
+		this.#domains.add("body");
+		this.#domains.add("cfg");
+		this.#domains.add("specializationInputs");
 		if (previousFact !== undefined) this.#facts.add(previousFact);
 		if (payload.kind === "guard") this.#facts.add(payload.fact);
-		if (previousKind === "guard" || payload.kind === "guard") this.#mark("facts");
+		if (previousKind === "guard" || payload.kind === "guard") this.#domains.add("facts");
 		this.#edits++;
 	}
 
@@ -853,7 +876,10 @@ export class CoreEditor {
 			success: input.success,
 			fallback: input.fallback,
 		});
-		this.#mark("body", "cfg", "facts", "specializationInputs");
+		this.#domains.add("body");
+		this.#domains.add("cfg");
+		this.#domains.add("facts");
+		this.#domains.add("specializationInputs");
 		this.#edits++;
 		return created;
 	}
@@ -870,10 +896,12 @@ export class CoreEditor {
 		this.function._replaceTerminatorPayload(this.#mutation, terminator, after);
 		this.#touchTerminator(block, after);
 		this.#instructions.add(terminator);
-		this.#mark("body", "cfg", "specializationInputs");
+		this.#domains.add("body");
+		this.#domains.add("cfg");
+		this.#domains.add("specializationInputs");
 		if (fact !== undefined) {
 			this.#facts.add(fact);
-			this.#mark("facts");
+			this.#domains.add("facts");
 		}
 		this.#edits++;
 	}
@@ -882,7 +910,8 @@ export class CoreEditor {
 		this.#assertActive();
 		const id = this.function._addFact(this.#mutation, fact);
 		this.#facts.add(id);
-		this.#mark("facts", "specializationInputs");
+		this.#domains.add("facts");
+		this.#domains.add("specializationInputs");
 		this.#edits++;
 		return id;
 	}
@@ -891,7 +920,8 @@ export class CoreEditor {
 		this.#assertActive();
 		this.function._replaceFact(this.#mutation, fact, replacement);
 		this.#facts.add(fact);
-		this.#mark("facts", "specializationInputs");
+		this.#domains.add("facts");
+		this.#domains.add("specializationInputs");
 		this.#edits++;
 	}
 
@@ -917,7 +947,8 @@ export class CoreEditor {
 		}
 		this.function._removeFact(this.#mutation, fact);
 		this.#facts.add(fact);
-		this.#mark("facts", "specializationInputs");
+		this.#domains.add("facts");
+		this.#domains.add("specializationInputs");
 		this.#edits++;
 	}
 
@@ -943,7 +974,8 @@ export class CoreEditor {
 			return;
 		}
 		this.function._configureFunction(this.#mutation, options);
-		this.#mark("body", "specializationInputs");
+		this.#domains.add("body");
+		this.#domains.add("specializationInputs");
 		this.#edits++;
 	}
 
@@ -969,7 +1001,8 @@ export class CoreEditor {
 		this.function._finishFunction(this.#mutation, entry, bodyEntry);
 		this.#touchBlock(entry);
 		if (bodyEntry !== undefined) this.#touchBlock(bodyEntry);
-		this.#mark("body", "specializationInputs");
+		this.#domains.add("body");
+		this.#domains.add("specializationInputs");
 		this.#edits++;
 	}
 
@@ -1027,7 +1060,9 @@ export class CoreEditor {
 		);
 		this.#touchBlock(block);
 		this.#values.add(value);
-		this.#mark("body", "cfg", "specializationInputs");
+		this.#domains.add("body");
+		this.#domains.add("cfg");
+		this.#domains.add("specializationInputs");
 		this.#edits++;
 		return value;
 	}
@@ -1057,9 +1092,10 @@ export class CoreEditor {
 		descriptor: CoreOpcodeDescriptor,
 		refinement: CoreEffectRefinement | undefined,
 	): void {
-		this.#mark("body", "specializationInputs");
+		this.#domains.add("body");
+		this.#domains.add("specializationInputs");
 		if (descriptor.callTransfer !== undefined) {
-			this.#mark("calls");
+			this.#domains.add("calls");
 			this.#calls.add(instruction);
 		}
 		if (
@@ -1071,14 +1107,10 @@ export class CoreEditor {
 			descriptor.effects.callsUserCode ||
 			refinement !== undefined
 		) {
-			this.#mark("memoryEffects");
+			this.#domains.add("memoryEffects");
 		}
-		if (refinement !== undefined) this.#mark("facts");
+		if (refinement !== undefined) this.#domains.add("facts");
 		this.#touchRefinement(refinement);
-	}
-
-	#mark(...domains: ReadonlyArray<CoreChangeDomain>): void {
-		for (const domain of domains) this.#domains.add(domain);
 	}
 
 	#touchBlock(block: CoreBlockId): void {
@@ -1086,7 +1118,7 @@ export class CoreEditor {
 	}
 
 	#touchValues(values: ReadonlyArray<CoreValueId>): void {
-		for (const value of values) this.#values.add(value);
+		for (let index = 0; index < values.length; index++) this.#values.add(values[index]!);
 	}
 
 	#nextReplacementEpoch(): number {
@@ -1136,7 +1168,7 @@ export class CoreEditor {
 		) {
 			const fact = this.function.kernel.terminatorFact(instruction);
 			if (fact !== undefined) this.#facts.add(fact);
-			this.#mark("facts");
+			this.#domains.add("facts");
 		}
 		this.function._replaceUseValue(this.#mutation, use, replacement);
 	}
@@ -1147,7 +1179,8 @@ export class CoreEditor {
 			const block = this.function.instructionBlock(instruction);
 			if (this.function.kernel.instructionOpcode(instruction) < 0) {
 				this.#touchStoredTerminator(block, instruction);
-				this.#mark("body", "specializationInputs");
+				this.#domains.add("body");
+				this.#domains.add("specializationInputs");
 			} else {
 				const descriptor = this.program.registry.byId(
 					this.function.instructionOpcode(instruction),
@@ -1179,7 +1212,8 @@ export class CoreEditor {
 
 	#finishHandlerUseReplacement(changedBlocks: ReadonlyArray<CoreBlockId>): void {
 		if (changedBlocks.length === 0) return;
-		this.#mark("exceptionFlow", "specializationInputs");
+		this.#domains.add("exceptionFlow");
+		this.#domains.add("specializationInputs");
 		this.#edits += changedBlocks.length;
 	}
 

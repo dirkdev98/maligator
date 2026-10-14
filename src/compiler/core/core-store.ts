@@ -2,6 +2,7 @@ import { scanLiteralTemplateSegment } from "../shared/literal-template-data.ts";
 import { StaticDescriptionInterner } from "../shared/static-values.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import { CoreEditor } from "./core-editor.ts";
+import type { CoreInsertedInstruction } from "./core-editor.ts";
 import { CoreFunctionKernel } from "./core-function-kernel.ts";
 import {
 	coreBlockId,
@@ -426,6 +427,7 @@ function freezeAttributes(
 }
 
 const EMPTY_CORE_INSTRUCTION_ATTRIBUTES: CoreInstructionAttributes = Object.freeze({});
+const EMPTY_CORE_INSTRUCTION_OUTPUTS: ReadonlyArray<CoreValueId> = Object.freeze([]);
 
 function freezeEffects(effects: CoreInstructionEffects): CoreInstructionEffects {
 	return Object.freeze({
@@ -1414,6 +1416,7 @@ export class CoreFunctionStore {
 				Array.from({ length: operandCount }, (_, index) =>
 					mappedValue(this.#operands[operandStart + index]!),
 				),
+				resultCount,
 				Array.from({ length: resultCount }, (_, index) =>
 					this.valueRepresentation(this.#results[resultStart + index]!),
 				),
@@ -1425,7 +1428,7 @@ export class CoreFunctionStore {
 			);
 			instructionMap[instruction] = created.instruction;
 			for (let index = 0; index < resultCount; index++) {
-				valueMap[this.#results[resultStart + index]!] = created.results[index]!;
+				valueMap[this.#results[resultStart + index]!] = created.outputs[index]!;
 			}
 			relocatedOperations++;
 			for (const dependent of dependents[instruction] ?? []) {
@@ -1796,14 +1799,12 @@ export class CoreFunctionStore {
 		before: CoreInstructionId | undefined,
 		opcode: CoreOpcodeId,
 		operands: ReadonlyArray<CoreValueId>,
-		outputRepresentations: ReadonlyArray<CoreRepresentation>,
+		outputCount: number,
+		outputRepresentations: ReadonlyArray<CoreRepresentation> | undefined,
 		attributes: CoreInstructionAttributes,
 		sourcePosition: number | undefined,
 		effectRefinement: CoreEffectRefinement | undefined,
-	): {
-		readonly instruction: CoreInstructionId;
-		readonly results: ReadonlyArray<CoreValueId>;
-	} {
+	): CoreInsertedInstruction {
 		this.#assertEditing(mutation);
 		this.#requireBlock(block);
 		if (before !== undefined && this.instructionBlock(before) !== block) {
@@ -1816,19 +1817,20 @@ export class CoreFunctionStore {
 				insertionPoint = coreInstructionId(last);
 			}
 		}
+		const outputs = outputCount === 0 ? undefined : new Array<CoreValueId>(outputCount);
 		const instruction = this.#allocateInstruction(
 			block,
 			opcode,
 			operands,
+			outputCount,
 			outputRepresentations,
 			freezeAttributes(attributes),
 			sourcePosition,
 			effectRefinement,
 			insertionPoint,
+			outputs,
 		);
-		const start = this.#instructionResultStart[instruction]!;
-		const count = this.#instructionResultCount[instruction]!;
-		return { instruction, results: this.#results.slice(start, start + count) };
+		return { instruction, outputs: outputs ?? EMPTY_CORE_INSTRUCTION_OUTPUTS };
 	}
 
 	_setTerminator(
@@ -1847,7 +1849,8 @@ export class CoreFunctionStore {
 			block,
 			TERMINATOR_CODES[payload.kind],
 			terminatorOperands(payload),
-			[],
+			0,
+			undefined,
 			undefined,
 			sourcePosition,
 			undefined,
@@ -2302,11 +2305,13 @@ export class CoreFunctionStore {
 		block: CoreBlockId,
 		opcode: CoreOpcodeId | number,
 		operands: ReadonlyArray<CoreValueId>,
-		outputRepresentations: ReadonlyArray<CoreRepresentation>,
+		outputCount: number,
+		outputRepresentations: ReadonlyArray<CoreRepresentation> | undefined,
 		payload: CoreInstructionAttributes | undefined,
 		sourcePosition: number | undefined,
 		effectRefinement: CoreEffectRefinement | undefined,
 		before: CoreInstructionId | undefined,
+		outputs?: Array<CoreValueId>,
 	): CoreInstructionId {
 		const instruction = coreInstructionId(this.#instructionLive.length);
 		const beforeIndex = before ?? -1;
@@ -2323,8 +2328,8 @@ export class CoreFunctionStore {
 		this.#instructionOperandStart.push(0);
 		this.#instructionOperandCount.push(0);
 		this.#instructionResultStart.push(this.#results.length);
-		this.#instructionResultCount.push(outputRepresentations.length);
-		this.#liveInstructionResults += outputRepresentations.length;
+		this.#instructionResultCount.push(outputCount);
+		this.#liveInstructionResults += outputCount;
 		this.#instructionSourcePosition.push(sourcePosition ?? -1);
 		this.#instructionEffectRefinementRef.push(
 			this.#appendEffectRefinement(effectRefinement),
@@ -2338,8 +2343,15 @@ export class CoreFunctionStore {
 		if (beforeIndex < 0) this.#blockLastInstruction[block] = instruction;
 		else this.#instructionPrevious[beforeIndex] = instruction;
 		this.#writeOperandRange(instruction, operands);
-		for (const [index, representation] of outputRepresentations.entries()) {
-			this.#results.push(this.#createValue(representation, 1, instruction, index));
+		for (let index = 0; index < outputCount; index++) {
+			const value = this.#createValue(
+				outputRepresentations?.[index] ?? "boxed",
+				1,
+				instruction,
+				index,
+			);
+			this.#results.push(value);
+			if (outputs !== undefined) outputs[index] = value;
 		}
 		return instruction;
 	}
@@ -2504,7 +2516,8 @@ export class CoreFunctionStore {
 		this.#liveOperands += operands.length - oldCount;
 		if (oldCount === operands.length) {
 			let unchanged = true;
-			for (const [operand, value] of operands.entries()) {
+			for (let operand = 0; operand < operands.length; operand++) {
+				const value = operands[operand]!;
 				this.#requireValue(value);
 				if (this.#operands[oldStart + operand] !== value) unchanged = false;
 			}
@@ -2512,7 +2525,8 @@ export class CoreFunctionStore {
 			for (let index = 0; index < oldCount; index++) {
 				this.#deactivateUse(this.#operandUses[oldStart + index]!);
 			}
-			for (const [operand, value] of operands.entries()) {
+			for (let operand = 0; operand < operands.length; operand++) {
+				const value = operands[operand]!;
 				const index = oldStart + operand;
 				this.#operands[index] = value;
 				this.#operandUses[index] = this.#allocateUse(value, instruction, operand);
@@ -2526,7 +2540,8 @@ export class CoreFunctionStore {
 		const start = this.#allocateOperandRange(operands.length);
 		this.#instructionOperandStart[instruction] = start;
 		this.#instructionOperandCount[instruction] = operands.length;
-		for (const [operand, value] of operands.entries()) {
+		for (let operand = 0; operand < operands.length; operand++) {
+			const value = operands[operand]!;
 			this.#requireValue(value);
 			this.#operands[start + operand] = value;
 			this.#operandUses[start + operand] = this.#allocateUse(value, instruction, operand);

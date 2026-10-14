@@ -1245,6 +1245,110 @@ describe("Core store", () => {
 		expect(fn.valueUseCount(parameter)).toBe(1);
 	});
 
+	it("owns multiple result IDs and snapshots explicit representations before attribute accessors", () => {
+		const opcodes = registry();
+		opcodes.define({
+			opcode: "pair",
+			inputs: coreArity(0),
+			outputs: coreArity(2),
+			effects: CORE_NO_EFFECTS,
+			discardable: true,
+			attributeRelocations: [],
+		});
+		const program = new CoreProgram(opcodes);
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const defaults = builder.editor.appendInstruction(entry, "pair", []);
+		const representations = ["i32", "f64"] as const;
+		const mutable = [...representations];
+		const explicit = builder.editor.appendInstruction(entry, "pair", [], {
+			outputRepresentations: mutable,
+			attributes: {
+				get value() {
+					mutable[0] = "f64";
+					return 7;
+				},
+			},
+		});
+		mutable[1] = "i32";
+		builder.setTerminator(entry, { kind: "return", value: explicit.outputs[0]! });
+		const fn = program.function(builder.finish(entry).function);
+		expect(defaults.outputs.map((value) => fn.valueRepresentation(value))).toEqual([
+			"boxed",
+			"boxed",
+		]);
+		expect(explicit.outputs.map((value) => fn.valueRepresentation(value))).toEqual([
+			"i32",
+			"f64",
+		]);
+		const retained = [...explicit.outputs];
+		(explicit.outputs as Array<CoreValueId>)[0] = defaults.outputs[0]!;
+		expect(inspectCoreInstructionResults(fn, explicit.instruction)).toEqual(retained);
+		verifyCoreProgram(program);
+	});
+
+	it("rejects fractional result counts before creating an instruction", () => {
+		const opcodes = registry();
+		opcodes.define({
+			opcode: "many",
+			inputs: coreArity(0),
+			outputs: coreArity(0, 4),
+			effects: CORE_NO_EFFECTS,
+			discardable: true,
+			attributeRelocations: [],
+		});
+		const builder = new CoreFunctionBuilder(new CoreProgram(opcodes));
+		const entry = builder.createBlock();
+		expect(() =>
+			builder.editor.appendInstruction(entry, "many", [], {
+				outputCount: 1.5,
+			}),
+		).toThrow(/outputs/);
+		expect([...builder.editor.function.instructionIds(entry)]).toEqual([]);
+	});
+
+	it("retains exact duplicate-use slots across shrinking and growing operand ranges", () => {
+		const opcodes = registry();
+		opcodes.define({
+			opcode: "combine",
+			inputs: coreArity(0, 4),
+			outputs: coreArity(1),
+			effects: CORE_NO_EFFECTS,
+			discardable: true,
+			attributeRelocations: [],
+		});
+		const program = new CoreProgram(opcodes);
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 2 });
+		const entry = builder.createBlock([{}, {}]);
+		const left = builder.blockParameterValue(entry, 0);
+		const right = builder.blockParameterValue(entry, 1);
+		const inserted = builder.editor.appendInstruction(entry, "combine", [
+			left,
+			left,
+			right,
+		]);
+		builder.setTerminator(entry, { kind: "return", value: inserted.outputs[0]! });
+		const fn = program.function(builder.finish(entry).function);
+		for (const operands of [
+			[right, left, right],
+			[left, right, left, right],
+			[right],
+			[],
+		]) {
+			const edit = CoreEditor.open(program, fn.id);
+			edit.replaceOperands(inserted.instruction, operands);
+			edit.commit();
+			expect(inspectCoreInstructionOperands(fn, inserted.instruction)).toEqual(operands);
+			for (const value of [left, right]) {
+				const slots = [...inspectCoreUses(fn, value)].map((use) => use.operand).sort();
+				expect(slots).toEqual(
+					operands.flatMap((operand, slot) => (operand === value ? [slot] : [])),
+				);
+			}
+			verifyCoreProgram(program);
+		}
+	});
+
 	it("keeps scalar traversal and intrusive use storage bounded across rewrites", () => {
 		const { program, fn, entry, constant, parameter } = oneFunction();
 		const identity = [...fn.bodyInstructionIds(entry)][1]!;
