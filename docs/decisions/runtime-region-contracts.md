@@ -118,6 +118,10 @@ numeric builtin bodies as fixed storage loops. Every consumed dynamic operand is
 a Number before execution; admitted bodies neither allocate nor invoke user code.
 The original field and writable-store guards remain valid until final publication.
 Unknown methods and coercions end the region before their original observation.
+Certified Number predicates produce Boolean locals without coercing inputs.
+Dynamic operands use the region's Number guards; non-number immediate operands
+produce false. Boolean branches preserve that kind, and numeric stores still
+require Number values.
 Read-only reductions may borrow numeric own fields from frozen or prototype objects
 and callable objects with the existing ordinary-slot layout. Stores retain the
 stricter receiver guard and writable cache rows. Larger plans keep bounded prefixes
@@ -126,6 +130,9 @@ Small linear read-only arithmetic stays with the existing pair/triple/quad proje
 
 Property-read regions can retain a receiver through must-alias register moves
 and effect-free forward branches. Every incoming edge preserves that identity.
+Own-slot admission also covers callable objects and alternate shape-cache rows;
+each cached field token is interpreted against the retained logical shape and
+field storage. Inherited constant rows retain their ordinary-object receiver guard.
 The first property-cache miss ends the borrowed shape and field-pointer lifetime
 before the generic load can invoke user code; later reads never readmit that region.
 

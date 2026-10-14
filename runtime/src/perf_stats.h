@@ -333,6 +333,7 @@ typedef struct MalPerfStats {
     u64 property_read_region_admissions;
     u64 property_read_region_hits;
     u64 property_read_region_continuations;
+    u64 property_read_region_poly_hits;
     u64 map_region_entry_hits;
     u64 map_region_entry_misses;
     u64 map_get_set_cache_checks;

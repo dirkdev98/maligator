@@ -1001,14 +1001,15 @@ The shared lifetime and fallback rules are recorded in
       clamps, integer kernels, half rounding, powers and norms. Preserve field and
       numeric-input guards before effects and canonical fallback for accessors,
       coercion, exceptions, mutable methods and non-writable fields. All149 compiler
-      contracts, fourteen Node GC modes and four frontend/artifact/C captures pass.
-      Native and performance verification remain pending.
+      contracts, fourteen Node GC modes, four frontend/artifact/C captures and both
+      Linux ASan/UBSan cases pass. Performance verification remains pending.
 - [ ] Convert locale-aware case directly over retained string spans through canonical
       locale resolution and the shared bounded Unicode case builder. Preserve all
       locale-list observations, invalid-tag errors, captured-method identity, source
       roots and balanced native-frame ownership. All249 focused checks, eleven Node
-      GC modes, five frontend/artifact/C captures and eight runtime C configurations
-      pass. Native and performance verification remain pending.
+      GC modes, five frontend/artifact/C captures, eight runtime C configurations
+      and all three Linux ASan/UBSan cases pass. Performance verification remains
+      pending.
 
 - [ ] Admit read-only numeric record reductions and bounded larger field groups.
       Keep existing small projections, compose complete numeric fusions, allow
@@ -1024,6 +1025,18 @@ The shared lifetime and fallback rules are recorded in
       method fallback. All256 focused checks, fifteen Node GC modes, ten frontend/
       artifact/C captures and24 runtime C configurations pass. Native and
       performance verification remain pending.
+
+- [ ] Retain up to32 reference property reads over128 instructions, including
+      callable own slots and alternate shape-cache rows. The first generic miss
+      ends borrowed storage before accessors, proxies or collection can run.
+      All55 focused contracts, eighteen Node GC modes and eight frontend/artifact/C
+      captures pass. Native and performance verification remain pending.
+- [ ] Carry Number predicate Boolean results through numeric record and fixed
+      TypedArray branches. Preserve no-coercion semantics, missing arguments,
+      ignored argument effects and original builtin authority; numeric stores
+      still require Number results. All235 focused checks, twenty Node GC modes
+      and four frontend/artifact/C captures pass. Native and performance
+      verification remain pending.
 
 | Order | Slice                        | Owning work and exit condition                                                                                                                                  |
 | ----- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |

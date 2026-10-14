@@ -92,7 +92,7 @@ describe("persisted native property read regions", () => {
 		);
 		expect(image.native.functions[1]!.storage!.propertyReadRegions).toHaveLength(0);
 	});
-	it.each([3, 8, 16])(
+	it.each([3, 8, 16, 24, 32])(
 		"round-trips a %i-load continuation without replaying admission selection",
 		(count) => {
 			const image = compile(count);
@@ -135,6 +135,18 @@ describe("persisted native property read regions", () => {
 			expect(emitted.source).toContain("mal_vm_op_load_property_ic_static_miss(");
 		},
 	);
+	it("retains bounded continuations across more than32 reference fields", () => {
+		const image = compile(40);
+		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(image));
+		const fn = restored.native.functions[1]!;
+		const plans = fn.storage!.propertyReadRegions;
+		expect(plans.map((plan) => plan.loads.length)).toEqual([32, 8]);
+		expect(new Set(plans.flatMap((plan) => plan.loads.map((load) => load.ip))).size).toBe(
+			40,
+		);
+		expect(plans.every((plan) => plan.endIp - plan.id < 128)).toBe(true);
+		expect(fn.storage).toEqual(image.native.functions[1]!.storage);
+	});
 
 	it("rejects forged cache, ownership and continuation metadata at serialization", () => {
 		const image = compile();

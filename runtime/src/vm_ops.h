@@ -1850,7 +1850,7 @@ typedef struct MalNativePropertyReadRegion {
 
 static inline __attribute__((always_inline)) MalNativePropertyReadRegion
 mal_vm_property_read_region_begin(MalValue receiver) {
-    const MalObject *object = mal_vm_as_object(receiver);
+    const MalObject *object = mal_vm_as_own_slot_object(receiver);
     if (object == nullptr) {
         return (MalNativePropertyReadRegion) {0};
     }
@@ -1883,13 +1883,25 @@ static inline __attribute__((always_inline)) bool mal_vm_property_read_region_tr
                 return true;
             }
         } else if (ic->mode == MAL_IC_MODE_INHERITED_VALUE && ic->poly_count > 0 &&
-            ic->receiver_type == MAL_HEAP_OBJECT &&
+            ic->receiver_type == MAL_HEAP_OBJECT && region->object->header.type == MAL_HEAP_OBJECT &&
             !mal_object_has_public_overflow(region->object) &&
             mal_object_prototype(region->object) == ic->proto_object[0]) {
             *out = ic->value;
             MAL_PERF_COUNT(property_read_region_hits);
             mal_perf_ic_load_inherited_hit();
             return true;
+        }
+    }
+    if (ic->mode == MAL_IC_MODE_SHAPE && ic->slot != MAL_IC_VALUE_SLOT) {
+        for (u8 index = 0; index < ic->poly_count; index++) {
+            if (region->shape == ic->poly_shape[index]) {
+                u16 field = region->shape->props[mal_ic_poly_slot(ic, index)].field;
+                *out = mal_shape_field_load(region->fields, field);
+                MAL_PERF_COUNT(property_read_region_hits);
+                MAL_PERF_COUNT(property_read_region_poly_hits);
+                MAL_PERF_COUNT(ic_load_poly_hits);
+                return true;
+            }
         }
     }
     region->active = false;

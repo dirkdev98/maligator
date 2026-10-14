@@ -6305,6 +6305,32 @@
 			"sourceSeam": "runtime/src/builtin_intl.c",
 			"fixture": "cases/string-span-locale-compare.mjs",
 			"controls": ["string-span-locale-case", "string-span-case"]
+		},
+		{
+			"id": "property-read-wide",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Property-read regions",
+			"category": "memory-layout-usage",
+			"mechanisms": ["native-property-regions"],
+			"inputShape": "Twenty-four reference-valued own fields on callable objects share a retained layout admission before comparison.",
+			"unit": "record",
+			"sourceSeam": "runtime/src/vm_ops.h",
+			"fixture": "cases/property-read-wide.mjs",
+			"controls": ["number-record-reduction", "native-property-owned-6"]
+		},
+		{
+			"id": "number-predicate-storage",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Numeric storage regions",
+			"category": "memory-layout-usage",
+			"mechanisms": ["numeric-builtin-bodies", "typed-array-storage"],
+			"inputShape": "Fixed numeric views retain unboxed Number predicate results through conditional output without repeating storage admission.",
+			"unit": "element",
+			"sourceSeam": "src/compiler/target/lower-native-fast-paths.ts",
+			"fixture": "cases/number-predicate-storage.mjs",
+			"controls": ["typed-array-math-regions", "number-record-math"]
 		}
 	]
 }

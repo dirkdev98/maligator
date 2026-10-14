@@ -705,10 +705,11 @@ static void mal_perf_stats_print(void) {
     fprintf(stderr, "[perf-map-region-stats] hits=%llu misses=%llu\n",
         (unsigned long long) mal_perf_stats.map_region_entry_hits,
         (unsigned long long) mal_perf_stats.map_region_entry_misses);
-    fprintf(stderr, "[perf-property-read-region-stats] admissions=%llu hits=%llu continuations=%llu\n",
+    fprintf(stderr, "[perf-property-read-region-stats] admissions=%llu hits=%llu continuations=%llu poly=%llu\n",
         (unsigned long long) mal_perf_stats.property_read_region_admissions,
         (unsigned long long) mal_perf_stats.property_read_region_hits,
-        (unsigned long long) mal_perf_stats.property_read_region_continuations);
+        (unsigned long long) mal_perf_stats.property_read_region_continuations,
+        (unsigned long long) mal_perf_stats.property_read_region_poly_hits);
     fprintf(
         stderr,
         "[perf-map-stats] get_set_cache_checks=%llu get_set_cache_hits=%llu "

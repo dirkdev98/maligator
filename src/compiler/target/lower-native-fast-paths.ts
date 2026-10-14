@@ -857,7 +857,7 @@ function lowerPropertyReadRegion(
 	const loads = [{ ip: firstIp, instruction: first }];
 	const admitted = new Map([[firstIp, new Set([first.object])]]);
 	const claimed = [firstIp];
-	const limit = Math.min(fn.instructions.length, firstIp + 96);
+	const limit = Math.min(fn.instructions.length, firstIp + 128);
 	for (let ip = firstIp + 1; ip < limit; ip++) {
 		const sources = body.branchSources.get(ip) ?? [];
 		const previous = fn.instructions[ip - 1]!;
@@ -888,7 +888,7 @@ function lowerPropertyReadRegion(
 		) {
 			loads.push({ ip, instruction });
 			claimed.push(ip);
-			if (loads.length === 16) break;
+			if (loads.length === 32) break;
 			aliases.delete(instruction.dst);
 			if (aliases.size > 0) admitted.set(ip, aliases);
 			continue;
@@ -988,11 +988,11 @@ function numberRecordInstruction(
 		case "CALL_KNOWN":
 		case "MATH_UNARY_NUMBER":
 		case "MATH_BINARY_NUMBER": {
-			const math = nativeNumericMathInstruction(instruction);
+			const builtin = nativeNumericBuiltinInstruction(instruction);
 			return (
-				math !== undefined &&
+				builtin !== undefined &&
 				instruction.dst !== object &&
-				math.arguments.every(
+				builtin.arguments.every(
 					(argument) => argument.kind === "number" || argument.register !== object,
 				)
 			);
@@ -1127,13 +1127,13 @@ export function numberRecordDataflow(
 			case "CALL_KNOWN":
 			case "MATH_UNARY_NUMBER":
 			case "MATH_BINARY_NUMBER": {
-				const math = nativeNumericMathInstruction(instruction);
+				const builtin = nativeNumericBuiltinInstruction(instruction);
 				admitted =
-					math !== undefined &&
-					math.arguments.every(
+					builtin !== undefined &&
+					builtin.arguments.every(
 						(argument) => argument.kind === "number" || read(argument.register, "number"),
 					) &&
-					write(instruction.dst, "number");
+					write(instruction.dst, builtin.resultKind);
 				break;
 			}
 			case "LOAD_PROPERTY":
@@ -1265,8 +1265,8 @@ function numberRecordFields(
 	}
 	if (accesses < 4 || fields.size > NUMBER_RECORD_FIELD_LIMIT) return undefined;
 	if (![...fields.values()].some((field) => field.stored)) {
-		const math = order.some(
-			(ip) => nativeNumericMathInstruction(fn.instructions[ip]!) !== undefined,
+		const builtin = order.some(
+			(ip) => nativeNumericBuiltinInstruction(fn.instructions[ip]!) !== undefined,
 		);
 		const arithmetic = order.some((ip) => {
 			const instruction = fn.instructions[ip]!;
@@ -1276,7 +1276,7 @@ function numberRecordFields(
 			);
 		});
 		// Existing pair/triple/quad projections already cover small linear read-only arithmetic.
-		if (!math && (accesses <= 4 || !arithmetic)) return undefined;
+		if (!builtin && (accesses <= 4 || !arithmetic)) return undefined;
 	}
 	return Object.freeze([...fields.values()]);
 }
@@ -1658,9 +1658,10 @@ function numericLoopIndexFacts(
 }
 
 /** Only proven builtin identities whose numeric bodies cannot call user code or collect. */
-export function nativeNumericMathInstruction(instruction: BytecodeInstruction):
+export function nativeNumericBuiltinInstruction(instruction: BytecodeInstruction):
 	| {
 			readonly operation: string;
+			readonly resultKind: NativeNumberRecordKind;
 			readonly arguments: ReadonlyArray<
 				Extract<DecodedVmValueOperand, { kind: "register" | "number" }>
 			>;
@@ -1669,11 +1670,13 @@ export function nativeNumericMathInstruction(instruction: BytecodeInstruction):
 	if (instruction.opcode === "MATH_UNARY_NUMBER")
 		return {
 			operation: instruction.operation,
+			resultKind: "number",
 			arguments: [{ kind: "register", register: instruction.src }],
 		};
 	if (instruction.opcode === "MATH_BINARY_NUMBER")
 		return {
 			operation: instruction.operation,
+			resultKind: "number",
 			arguments: [
 				{ kind: "register", register: instruction.left },
 				{ kind: "register", register: instruction.right },
@@ -1683,9 +1686,21 @@ export function nativeNumericMathInstruction(instruction: BytecodeInstruction):
 		instruction.opcode !== "CALL_KNOWN" ||
 		instruction.construct ||
 		instruction.argumentMode !== undefined ||
-		instruction.specialized !== undefined
+		(instruction.specialized !== undefined &&
+			(!NUMBER_PREDICATES.has(instruction.operation) ||
+				instruction.specialized !== instruction.operation))
 	)
 		return undefined;
+	if (NUMBER_PREDICATES.has(instruction.operation)) {
+		const first = instruction.arguments[0];
+		const argument = first === undefined ? undefined : decodeVmValueOperand(first);
+		return {
+			operation: instruction.operation,
+			resultKind: "boolean",
+			arguments:
+				argument?.kind === "register" || argument?.kind === "number" ? [argument] : [],
+		};
+	}
 	const arity = nativeMathNumberArity(
 		instruction.operation,
 		instruction.arguments.length,
@@ -1708,7 +1723,7 @@ export function nativeNumericMathInstruction(instruction: BytecodeInstruction):
 	return arguments_.every(
 		(argument) => argument.kind === "register" || argument.kind === "number",
 	)
-		? { operation: instruction.operation, arguments: arguments_ }
+		? { operation: instruction.operation, resultKind: "number", arguments: arguments_ }
 		: undefined;
 }
 
@@ -1826,7 +1841,7 @@ function fixedNumericLoopStorage(
 			(op.opcode !== "CREATE_NUMBER" &&
 				op.opcode !== "CREATE_F64" &&
 				!integerLoopInstruction(op) &&
-				nativeNumericMathInstruction(op) === undefined) ||
+				nativeNumericBuiltinInstruction(op) === undefined) ||
 			vmInstructionReadRegisters(op).some((register) => views.has(register))
 		)
 			return undefined;
@@ -2878,7 +2893,7 @@ export function selectNativeFastPaths(
 						(kind !== undefined &&
 							!(
 								kind === "exact-builtin-input-kinds" &&
-								nativeNumericMathInstruction(fn.instructions[candidate]!) !== undefined
+								nativeNumericBuiltinInstruction(fn.instructions[candidate]!) !== undefined
 							))
 					);
 				},
@@ -2917,7 +2932,7 @@ export function selectNativeFastPaths(
 							kind !== "unsigned-arithmetic" &&
 							!(
 								kind === "exact-builtin-input-kinds" &&
-								nativeNumericMathInstruction(fn.instructions[candidate]!) !== undefined
+								nativeNumericBuiltinInstruction(fn.instructions[candidate]!) !== undefined
 							))
 					);
 				},

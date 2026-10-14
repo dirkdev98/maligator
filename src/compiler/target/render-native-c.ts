@@ -47,7 +47,7 @@ import type {
 import type { NativeCaptureAccessPlan } from "./lower-native-captures.ts";
 import {
 	numericLoopOrder,
-	nativeNumericMathInstruction,
+	nativeNumericBuiltinInstruction,
 	lowerNativeFastPaths,
 	numberRecordDataflow,
 	numberRecordOrder,
@@ -479,10 +479,16 @@ function nativeMathBinaryExpr(
 	return `mal_number_min_max(${left}, ${right}, ${operation === "Math.max"})`;
 }
 
-function nativeMathNumberExpr(
+function nativeNumericBuiltinExpr(
 	operation: string,
 	arguments_: ReadonlyArray<string>,
 ): string | null {
+	if (NUMBER_PREDICATES.has(operation))
+		return arguments_.length === 0
+			? "false"
+			: arguments_.length === 1
+				? nativeNumberPredicateExpression(operation, arguments_[0]!)
+				: null;
 	if (arguments_.length === 1 && MATH_UNARY_NATIVE_CALL.has(operation))
 		return nativeMathUnaryExpr(operation, arguments_[0]!);
 	if (arguments_.length === 2 && MATH_BINARY_OPERATIONS.has(operation))
@@ -882,15 +888,16 @@ function emitNumericLoopRegion(
 			case "CALL_KNOWN":
 			case "MATH_UNARY_NUMBER":
 			case "MATH_BINARY_NUMBER": {
-				const math = floating ? nativeNumericMathInstruction(op) : undefined;
-				if (math === undefined) throw new Error("Invalid numeric loop Math operation");
-				const arguments_ = math.arguments.map((argument) =>
+				const builtin = floating ? nativeNumericBuiltinInstruction(op) : undefined;
+				if (builtin === undefined) throw new Error("Invalid numeric loop builtin");
+				const arguments_ = builtin.arguments.map((argument) =>
 					argument.kind === "number"
 						? cF64Literal(argument.value)
 						: local(argument.register),
 				);
-				const expression = nativeMathNumberExpr(math.operation, arguments_);
-				if (expression === null) throw new Error("Invalid numeric loop Math expression");
+				const expression = nativeNumericBuiltinExpr(builtin.operation, arguments_);
+				if (expression === null)
+					throw new Error("Invalid numeric loop builtin expression");
 				return `${local(op.dst)} = ${expression};`;
 			}
 			case "LOAD_PROPERTY":
@@ -1141,16 +1148,16 @@ function emitNumberRecordRegion(
 			case "CALL_KNOWN":
 			case "MATH_UNARY_NUMBER":
 			case "MATH_BINARY_NUMBER": {
-				const math = nativeNumericMathInstruction(op);
-				if (math === undefined) throw new Error("Invalid numeric record Math operation");
-				const arguments_ = math.arguments.map((argument) =>
+				const builtin = nativeNumericBuiltinInstruction(op);
+				if (builtin === undefined) throw new Error("Invalid numeric record builtin");
+				const arguments_ = builtin.arguments.map((argument) =>
 					argument.kind === "number"
 						? cF64Literal(argument.value)
 						: local(argument.register),
 				);
-				const expression = nativeMathNumberExpr(math.operation, arguments_);
+				const expression = nativeNumericBuiltinExpr(builtin.operation, arguments_);
 				if (expression === null)
-					throw new Error("Invalid numeric record Math expression");
+					throw new Error("Invalid numeric record builtin expression");
 				return `${local(op.dst)} = ${expression};`;
 			}
 			case "LOAD_PROPERTY_STATIC":
