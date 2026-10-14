@@ -227,6 +227,32 @@ static bool check_registry_and_sources(MalVm *vm) {
     return true;
 }
 
+static bool check_static_intrinsic_keys(MalVm *vm) {
+    static const byte name[] = "static-intrinsic-property-key-abcdefghijklmnop";
+    static const byte equal[] = "static-intrinsic-property-key-abcdefghijklmnop";
+    MalKey first = mal_intrinsic_static_string_key(vm, name);
+    CHECK(first.kind == MAL_KEY_STRING);
+    CHECK(mal_intrinsic_static_string_key(vm, name).value == first.value);
+    CHECK(mal_intrinsic_static_string_key(vm, equal).value == first.value);
+    char mutable_name[sizeof(name)];
+    memcpy(mutable_name, name, sizeof(name));
+    CHECK(mal_intrinsic_string_key(vm, mutable_name).value == first.value);
+    mutable_name[0] = 'S';
+    MalKey changed = mal_intrinsic_string_key(vm, mutable_name);
+    CHECK(changed.value != first.value);
+    CHECK(mal_string_equals_ascii(mal_value_to_string(changed.value), mutable_name));
+    memcpy(mutable_name, name, sizeof(name));
+    CHECK(mal_intrinsic_string_key(vm, mutable_name).value == first.value);
+    collect_young(vm);
+    mal_gc_collect(vm);
+    CHECK(mal_intrinsic_static_string_key(vm, name).value == first.value);
+    CHECK(mal_intrinsic_static_string_key(vm, equal).value == first.value);
+    CHECK(mal_string_equals_ascii(mal_value_to_string(first.value), name));
+    CHECK(mal_intrinsic_static_string_key(vm, "").value ==
+        mal_intrinsic_string_key(vm, "").value);
+    return true;
+}
+
 static bool check_storage_charge_and_release(MalVm *vm) {
     MalAtomStore atoms = {0};
     MalSymbolRegistry registry = {0};
@@ -278,7 +304,8 @@ int main(void) {
     mal_vm_init(&vm, &mal_runtime_image);
     vm.heap.next_gc_at = SIZE_MAX;
     bool ok = check_incremental_growth(&vm) && check_atoms(&vm)
-        && check_registry_and_sources(&vm) && check_storage_charge_and_release(&vm);
+        && check_registry_and_sources(&vm) && check_static_intrinsic_keys(&vm)
+        && check_storage_charge_and_release(&vm);
     if (vm.completion.kind != MAL_COMPLETION_NORMAL) ok = false;
     mal_vm_free(&vm);
     if (ok) puts("intern-stores PASS");

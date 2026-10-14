@@ -28,8 +28,8 @@
     (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE)
 #define STREAM_METHOD (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE)
 
-static MalKey stream_key(MalVm *vm, const char *name) {
-    return mal_intrinsic_string_key(vm, (const byte *) name);
+static MalKey stream_static_key(MalVm *vm, const char *name) {
+    return mal_intrinsic_static_string_key(vm, (const byte *) name);
 }
 
 static MalValue stream_own(MalVm *vm, MalValue object, const char *name) {
@@ -37,12 +37,12 @@ static MalValue stream_own(MalVm *vm, MalValue object, const char *name) {
         return mal_value_new_undefined();
     }
     MalPropertyLookup lookup =
-        mal_object_get_own(mal_value_to_object(object), stream_key(vm, name));
+        mal_object_get_own(mal_value_to_object(object), stream_static_key(vm, name));
     return lookup.present ? lookup.desc.value : mal_value_new_undefined();
 }
 
 static void stream_set(MalVm *vm, MalValue object, const char *name, MalValue value) {
-    mal_object_set(mal_value_to_object(object), stream_key(vm, name), value);
+    mal_object_set(mal_value_to_object(object), stream_static_key(vm, name), value);
 }
 
 static bool stream_truthy_own(MalVm *vm, MalValue object, const char *name) {
@@ -61,7 +61,7 @@ static MalValue stream_new_array(MalVm *vm) {
 }
 
 static bool stream_get(MalVm *vm, MalValue object, const char *name, MalValue *out) {
-    return mal_vm_get_property(vm, object, stream_key(vm, name), out);
+    return mal_vm_get_property(vm, object, stream_static_key(vm, name), out);
 }
 
 static MalCompletion stream_call_method(

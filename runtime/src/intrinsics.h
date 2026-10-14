@@ -526,10 +526,10 @@ MalString *mal_intrinsic_code_unit(MalVm *vm, c16 code_unit);
 /** Return a measured hot atom directly by its compile-time identifier. */
 MalString *mal_intrinsic_hot_ascii(MalVm *vm, MalHotIntrinsicKey key);
 
-/**
- * Build a string property key from a NUL-terminated ASCII name.
- */
 MalKey mal_intrinsic_string_key(MalVm *vm, const byte *name);
+
+/** name is immutable, NUL-terminated ASCII storage that outlives this VM. */
+MalKey mal_intrinsic_static_string_key(MalVm *vm, const byte *name);
 
 /** Build a string property key directly from a measured hot-key identifier. */
 MalKey mal_intrinsic_hot_string_key(MalVm *vm, MalHotIntrinsicKey key);
