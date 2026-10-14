@@ -52,7 +52,7 @@ from that context with the matching Docker platform. Container preparation does 
 publish or deploy it.
 
 The manual **Prepare website container** GitHub Actions workflow runs this build on
-Linux with the pinned WASI SDK and complete chart history. It checks the native
+Linux with pinned Zig and WASI SDK toolchains and complete chart history. It checks the native
 Overview, Compatibility and Explorer responses, then retains the executable,
 prepared assets, generated patch, source revision and checksums in
 `website-build-<run-id>`. Verify and apply the generated patch before committing

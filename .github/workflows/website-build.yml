@@ -24,6 +24,17 @@ jobs:
       - name: Set up Linux
         uses: ./.github/actions/setup-linux
 
+      - name: Install the pinned cross compiler
+        run: |
+          archive="$RUNNER_TEMP/zig.tar.xz"
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+            https://ziglang.org/download/0.15.2/zig-x86_64-linux-0.15.2.tar.xz \
+            --output "$archive"
+          echo "02aa270f183da276e5b5920b1dac44a63f1a49e55050ebde3aecc9eb82f93239  $archive" | sha256sum --check
+          tar -xJf "$archive" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/zig-x86_64-linux-0.15.2" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/zig-x86_64-linux-0.15.2/zig" version
+
       - name: Install the pinned WASI toolchain
         run: |
           archive="$RUNNER_TEMP/wasi-sdk.tar.gz"
