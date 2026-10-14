@@ -82,7 +82,160 @@ globalThis.concatEffect = effect;
 globalThis.concatMissing = missing;
 globalThis.concatOptional = optional;
 globalThis.concatEmpty = empty;
-if (mode !== "fallback") {
+function wide9(source, last) {
+	const part = source.slice(1, -1);
+	const output = part.concat(0, false, null, undefined, 1n, 0, false, null, last);
+	collect();
+	return output;
+}
+globalThis.concatWide9 = wide9;
+function wide16(source, last) {
+	const part = source.split("|")[1];
+	const output = part.concat(
+		0,
+		false,
+		null,
+		undefined,
+		1n,
+		0,
+		false,
+		null,
+		undefined,
+		1n,
+		0,
+		false,
+		null,
+		undefined,
+		1n,
+		last,
+	);
+	collect();
+	return output;
+}
+globalThis.concatWide16 = wide16;
+function wide32(source, last) {
+	const part = /\|([^|]*)\|/.exec(source)[1];
+	const output = part.concat(
+		0,
+		false,
+		null,
+		undefined,
+		1n,
+		0,
+		false,
+		null,
+		undefined,
+		1n,
+		0,
+		false,
+		null,
+		undefined,
+		1n,
+		0,
+		false,
+		null,
+		undefined,
+		1n,
+		0,
+		false,
+		null,
+		undefined,
+		1n,
+		0,
+		false,
+		null,
+		undefined,
+		1n,
+		0,
+		last,
+	);
+	collect();
+	return output;
+}
+globalThis.concatWide32 = wide32;
+function wide33(source, last) {
+	const part = source.slice(1, -1);
+	const output = part.concat(
+		0,
+		false,
+		null,
+		undefined,
+		1n,
+		0,
+		false,
+		null,
+		undefined,
+		1n,
+		0,
+		false,
+		null,
+		undefined,
+		1n,
+		0,
+		false,
+		null,
+		undefined,
+		1n,
+		0,
+		false,
+		null,
+		undefined,
+		1n,
+		0,
+		false,
+		null,
+		undefined,
+		1n,
+		0,
+		false,
+		last,
+	);
+	collect();
+	return output;
+}
+globalThis.concatWide33 = wide33;
+if (mode.startsWith("wide")) {
+	const count = Number(mode.slice(4));
+	const visit =
+		count === 9
+			? globalThis.concatWide9
+			: count === 16
+				? globalThis.concatWide16
+				: count === 32
+					? globalThis.concatWide32
+					: globalThis.concatWide33;
+	const source = count === 16 || count === 32 ? "left|a😀b|right" : "La😀bR";
+	const events = [];
+	for (const last of [
+		undefined,
+		null,
+		false,
+		true,
+		NaN,
+		-0,
+		1.25,
+		123456789012345678901234567890n,
+		"é",
+	])
+		rows.push(visit(source, last));
+	rows.push(
+		visit(source, {
+			toString() {
+				events.push("late fill");
+				collect();
+				return "object";
+			},
+		}),
+	);
+	try {
+		visit(source, Symbol("late"));
+		throw new Error("missing late Symbol");
+	} catch (error) {
+		if (!(error instanceof TypeError)) throw error;
+		events.push("TypeError");
+	}
+	rows.push(events);
+} else if (mode !== "fallback") {
 	const visit =
 		mode === "range"
 			? globalThis.concatRange

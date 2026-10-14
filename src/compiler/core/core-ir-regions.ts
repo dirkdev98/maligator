@@ -211,7 +211,7 @@ export const CORE_STRING_SPAN_METHODS = [
 export function coreStringSpanMethodArgumentLimit(
 	method: (typeof CORE_STRING_SPAN_METHODS)[number],
 ): number {
-	if (method === "concat") return 8;
+	if (method === "concat") return 32;
 	if (
 		method === "replace" ||
 		method === "replaceAll" ||

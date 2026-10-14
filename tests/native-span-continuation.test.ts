@@ -67,7 +67,7 @@ describe("span continuations from split projections", () => {
 				"source.slice(1,-1).trim()",
 			]) {
 				const image = compile(
-					`const part=${producer};const out=part.concat(escape,observe());if(escape)observe(part);return out;`,
+					`const part=${producer};const out=part.concat(${Array.from({ length: 30 }, (_, i) => String(i)).join(",")},escape,observe());if(escape)observe(part);return out;`,
 					mode,
 				);
 				const plans = image.native.functions.flatMap((f) => [

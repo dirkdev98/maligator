@@ -1019,9 +1019,9 @@ The shared lifetime and fallback rules are recorded in
       All208 focused contracts, twenty Node GC modes and eight frontend/artifact/C
       captures pass. Linux ASan/UBSan exposed a compact-only admission guard that
       excluded embedded and external read-only storage. Its owning-layer repair
-      preserves writable restrictions. The rerun passes read-only modes, then exposes
-      update admission after growth; its ordinary external-storage repair is queued
-      with the same strict counters.
+      preserves writable restrictions. The repair and ordinary
+      external-storage update admission now pass all five read-only/layout Linux
+      ASan/UBSan cases with the original strict counters. Performance remains pending.
 - [ ] Feed ordinary and prepared localeCompare directly from retained string spans.
       Reuse canonical locale/options effects and collation with bounded UTF16 input
       preparation shared by case conversion and normalization. Preserve source and
@@ -1062,14 +1062,15 @@ The shared lifetime and fallback rules are recorded in
       field storage. Preserve embedded-object, callable, prototype, watched and
       locked writable exclusions and the existing physical-widening writeback.
       All60 focused checks, ten Node GC modes, six frontend/artifact/C captures
-      and the small C field contract pass. Native sanitizer verification and
-      performance measurement remain pending.
+      and the small C field contract pass. Both Linux ASan/UBSan read-only cases
+      and all three alternate-layout cases pass; performance remains pending.
 - [ ] Build concat results directly from retained range, split, regexp and nested
       spans. Share the canonical ranged output builder, retain source and primitive
       argument roots, and preserve ordered coercion and original calls for observable
-      arguments. All230 focused contracts, eleven Node GC modes, five frontend/
-      artifact/C captures and eight runtime C configurations pass. Native and
-      performance verification remain pending.
+      arguments. The packet now admits32 primitive arguments. The earlier native
+      harness accidentally repeated the range mode; corrected mode selection covers
+      split, regexp, nesting,9/16/32 arguments and33-argument fallback. Expanded
+      native sanitizer verification and performance measurement remain pending.
 
 - [ ] Read named own fields from Array, TypedArray, Map and Set storage through
       the shared property and read-only numeric region contracts. Keep indexed,

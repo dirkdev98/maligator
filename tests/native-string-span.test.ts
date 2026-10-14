@@ -141,7 +141,16 @@ describe("composable string spans", () => {
 	it.each(["mutable", "locked"] as const)(
 		"selects bounded concat output and materializes aliased arguments under %s primordials",
 		(mode) => {
-			for (const args of ["", "observer", "start,end,0,true,null,undefined,1n,'tail'"]) {
+			for (const args of [
+				"",
+				"observer",
+				"start,end,0,true,null,undefined,1n,'tail'",
+				...[9, 16, 32].map((count) =>
+					Array.from({ length: count }, (_, i) =>
+						i === count - 1 ? "observer" : String(i),
+					).join(","),
+				),
+			]) {
 				const image = compile(
 					`const part=value.slice(start,end);const out=part.concat(${args});if(escape)observer(part);return out;`,
 					mode,
@@ -151,7 +160,43 @@ describe("composable string spans", () => {
 					image,
 				);
 			}
-			for (const args of ["part", "1,2,3,4,5,6,7,8,9"]) {
+			const bounded = compile(
+				`const part=value.slice(start,end);return part.concat(${Array.from({ length: 32 }, (_, i) => String(i)).join(",")});`,
+				mode,
+			);
+			const index = bounded.native.functions.findIndex((fn) =>
+				fn.specializations.some((plan) => plan.kind === "string-span"),
+			);
+			const fn = bounded.native.functions[index]!;
+			const region = fn.specializations.find((plan) => plan.kind === "string-span")!;
+			const callIp = region.consumers.find(
+				(consumer) => consumer.kind === "concatCall",
+			)!.ip;
+			const call = fn.body.instructions[callIp]!;
+			if (call.opcode !== "CALL" && call.opcode !== "CALL_KNOWN")
+				throw new Error("Expected concat call");
+			expect(() =>
+				serializeCompilerArtifact({
+					...bounded,
+					native: {
+						...bounded.native,
+						functions: bounded.native.functions.with(index, {
+							...fn,
+							body: {
+								...fn.body,
+								instructions: fn.body.instructions.with(callIp, {
+									...call,
+									arguments: [...call.arguments, call.arguments[0]!],
+								}),
+							},
+						}),
+					},
+				}),
+			).toThrow();
+			for (const args of [
+				"part",
+				Array.from({ length: 33 }, (_, i) => String(i)).join(","),
+			]) {
 				const image = compile(
 					`const part=value.slice(start,end);const out=part.concat(${args});return [part.length,out];`,
 					mode,

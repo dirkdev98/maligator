@@ -48,10 +48,20 @@ describe("concat output from rooted string spans", () => {
 					expect.arrayContaining(["concatCall"]),
 				);
 			}
-			for (const mode of ["range", "split", "regexp", "nested", "fallback"]) {
+			for (const mode of [
+				"range",
+				"split",
+				"regexp",
+				"nested",
+				"wide9",
+				"wide16",
+				"wide32",
+				"wide33",
+				"fallback",
+			]) {
 				const env = {
-					SPAN_REPEAT_MODE: mode,
-					SPAN_REPEAT_PRIMORDIALS: primordials,
+					SPAN_CONCAT_MODE: mode,
+					SPAN_CONCAT_PRIMORDIALS: primordials,
 					MAL_HOST_GC: "1",
 				};
 				const expected = execFileSync(process.execPath, ["--expose-gc", fixture], {
@@ -78,7 +88,8 @@ describe("concat output from rooted string spans", () => {
 					);
 					expect(counts, `${context}: ${result.stderr}`).not.toBeNull();
 					for (const value of counts!.slice(1))
-						expect(Number(value), `${context}: ${counts![0]}`).toBeGreaterThan(0);
+						if (mode === "wide33") expect(Number(value), context).toBe(0);
+						else expect(Number(value), `${context}: ${counts![0]}`).toBeGreaterThan(0);
 				}
 			}
 		},

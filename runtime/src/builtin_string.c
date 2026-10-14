@@ -2100,7 +2100,7 @@ done:
     return result;
 }
 
-#define MAL_STRING_SPAN_CONCAT_MAX_ARGUMENTS 8
+#define MAL_STRING_SPAN_CONCAT_MAX_ARGUMENTS 32
 
 bool mal_builtin_string_span_concat(
     MalVm *vm, MalValue callee, bool locked, MalValue subject, usize start, usize end,
