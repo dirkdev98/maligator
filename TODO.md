@@ -32,11 +32,10 @@ rooting, and resource-safety defects can interrupt that order.
 
 ## Verification workflow
 
-- [ ] Restore a portable full gate on Linux: derive native-entry audit targets from
-      the probed toolchain.
-      Verify the repaired Cargo-cache, subprocess-readiness and HTTP snapshot
-      fixtures on Linux; their focused laptop checks pass. Resolve
-      cold-build timeouts in remaining native/sanitizer suites, the asynchronous
+- [ ] Complete Linux full-gate verification. Verify the repaired Cargo-cache,
+      subprocess-readiness and HTTP snapshot fixtures on Linux; their focused
+      laptop checks pass. Resolve cold-build timeouts in remaining native/sanitizer
+      suites, the asynchronous
       crypto event-loop tick assertion, and the compiled WPT harness failure.
 
 - [ ] Resolve the remaining concatenation, typed-array, and retained-graph costs
