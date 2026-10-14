@@ -960,6 +960,9 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.string_span_value_of_admissions);
     fprintf(stderr, "[perf-string-span-concat-stats] calls=%llu\n",
         (unsigned long long) mal_perf_stats.string_span_concat_calls);
+    fprintf(stderr, "[perf-string-span-replace-stats] replace=%llu replace_all=%llu\n",
+        (unsigned long long) mal_perf_stats.string_span_replace_calls,
+        (unsigned long long) mal_perf_stats.string_span_replace_all_calls);
     fprintf(stderr, "[perf-string-span-deep-stats] admissions=%llu\n",
         (unsigned long long) mal_perf_stats.string_span_deep_admissions);
     fprintf(stderr, "[perf-string-span-reverse-stats] substr=%llu last_index_of=%llu\n",

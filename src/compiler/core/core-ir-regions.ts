@@ -190,6 +190,8 @@ export const CORE_STRING_SPAN_SEARCH_METHODS = [
 ] as const;
 
 export const CORE_STRING_SPAN_METHODS = [
+	"replace",
+	"replaceAll",
 	"concat",
 	"localeCompare",
 	"toLocaleLowerCase",
@@ -211,6 +213,8 @@ export function coreStringSpanMethodArgumentLimit(
 ): number {
 	if (method === "concat") return 8;
 	if (
+		method === "replace" ||
+		method === "replaceAll" ||
 		method === "localeCompare" ||
 		method === "toLowerCase" ||
 		method === "toUpperCase" ||
@@ -239,6 +243,10 @@ export interface CoreStringSpanConsumer {
 		| "parseFloat"
 		| "isFinite"
 		| "isNaN"
+		| "replaceProperty"
+		| "replaceCall"
+		| "replaceAllProperty"
+		| "replaceAllCall"
 		| "concatProperty"
 		| "concatCall"
 		| "repeatProperty"

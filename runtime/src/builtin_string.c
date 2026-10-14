@@ -516,9 +516,9 @@ typedef struct MalBuiltinStringCopyCursor {
 } MalBuiltinStringCopyCursor;
 
 static void mal_builtin_string_copy_cursor_init(
-    MalBuiltinStringCopyCursor *cursor, const MalString *string
+    MalBuiltinStringCopyCursor *cursor, const MalString *string, usize start, usize length
 ) {
-    mal_string_iterator_init(&cursor->iterator, string, 0, mal_string_length(string));
+    mal_string_iterator_init(&cursor->iterator, string, start, length);
     cursor->segment.length = 0;
     cursor->local = 0;
     cursor->position = 0;
@@ -3683,13 +3683,12 @@ static bool strbuf_range(
 // String searches have no captures, so only $$, $&, $` and $' substitute.
 static bool mal_builtin_string_append_substitution(
     MalVm *vm, StrBuf *out, MalString *replacement, MalString *matched, MalString *string,
-    usize match_start, usize match_end
+    usize source_start, usize source_length, usize match_start, usize match_end
 ) {
     usize length = mal_string_length(replacement);
-    usize source_length = mal_string_length(string);
     MalBuiltinStringCopyCursor scan, copy;
-    mal_builtin_string_copy_cursor_init(&scan, replacement);
-    mal_builtin_string_copy_cursor_init(&copy, replacement);
+    mal_builtin_string_copy_cursor_init(&scan, replacement, 0, length);
+    mal_builtin_string_copy_cursor_init(&copy, replacement, 0, length);
     while (scan.position < length && out->status == MAL_TEXT_BUFFER_OK) {
         usize index = scan.position;
         c16 unit = mal_builtin_string_copy_cursor_read(&scan);
@@ -3704,9 +3703,9 @@ static bool mal_builtin_string_append_substitution(
         } else if (next == '&') {
             mal_text_buffer_append_string(out, matched);
         } else if (next == '`') {
-            mal_text_buffer_append_range(out, string, 0, match_start);
+            mal_text_buffer_append_range(out, string, source_start, match_start);
         } else {
-            mal_text_buffer_append_range(out, string, match_end, source_length - match_end);
+            mal_text_buffer_append_range(out, string, source_start + match_end, source_length - match_end);
         }
     }
     if (out->status == MAL_TEXT_BUFFER_OK) {
@@ -3735,21 +3734,19 @@ static bool mal_builtin_string_replacement_is_literal(const MalString *replaceme
     return literal;
 }
 
-/** Exact native replacement for the common non-callable, no-$ template case.
- * All observable receiver/search/replacement coercions have already completed. */
+// Coercions have completed; this path sizes literal replacement output before copying.
 static MalValue mal_builtin_string_replace_literal(
     MalVm *vm,
-    MalString *string,
+    MalString *string, usize source_start, usize length,
     MalString *search,
     MalString *replacement,
     usize first_match,
     bool all
 ) {
-    usize length = mal_string_length(string);
     usize search_length = mal_string_length(search);
     usize replacement_length = mal_string_length(replacement);
     if (mal_string_equals(search, replacement)) {
-        return mal_value_from_string(string);
+        return mal_builtin_string_slice(vm, string, source_start, length);
     }
 
     usize match_count = 1;
@@ -3759,7 +3756,7 @@ static MalValue mal_builtin_string_replace_literal(
         } else {
             MalBuiltinStringSearch cursor;
             mal_builtin_string_search_cursor_init(
-                &cursor, string, search, first_match + search_length, false, 0, SIZE_MAX);
+                &cursor, string, search, source_start + first_match + search_length, false, 0, source_start + length);
             for (;;) {
                 i64 match = mal_builtin_string_search_cursor_next(&cursor);
                 if (match < 0) break;
@@ -3782,11 +3779,11 @@ static MalValue mal_builtin_string_replace_literal(
     usize source_position = 0;
     usize match_position = first_match;
     MalBuiltinStringCopyCursor source_cursor;
-    mal_builtin_string_copy_cursor_init(&source_cursor, string);
+    mal_builtin_string_copy_cursor_init(&source_cursor, string, source_start, length);
     MalBuiltinStringSearch cursor;
     if (search_length != 0 && match_count > 1) {
         mal_builtin_string_search_cursor_init(
-            &cursor, string, search, first_match + search_length, false, 0, SIZE_MAX);
+            &cursor, string, search, source_start + first_match + search_length, false, 0, source_start + length);
     }
     for (usize match_index = 0; match_index < match_count && output.status == MAL_TEXT_BUFFER_OK; match_index++) {
         mal_builtin_string_copy_cursor_advance(&source_cursor, match_position, &output);
@@ -3802,7 +3799,7 @@ static MalValue mal_builtin_string_replace_literal(
             else {
                 i64 next = mal_builtin_string_search_cursor_next(&cursor);
                 if (next < 0) abort();
-                match_position = (usize) next;
+                match_position = (usize) next - source_start;
             }
         }
     }
@@ -3816,7 +3813,10 @@ static MalValue mal_builtin_string_replace_literal(
     return mal_builtin_string_finish_text(vm, &output);
 }
 
-MalValue mal_builtin_string_replace_known(MalVm *vm, MalString *string, MalString *search, MalValue replace_value, bool all) {
+static MalValue mal_builtin_string_replace_range_known(
+    MalVm *vm, MalString *string, usize source_start, usize length,
+    MalString *search, MalValue replace_value, bool all
+) {
     MalValue roots[4] = {
         mal_value_from_string(string),
         mal_value_from_string(search),
@@ -3836,6 +3836,8 @@ MalValue mal_builtin_string_replace_known(MalVm *vm, MalString *string, MalStrin
     bool nominated = false;
 
     bool functional = mal_value_is_callable(roots[2]);
+    // Functional replacers observe the actual source String, so only whole-source callers admit them.
+    assert(!functional || (source_start == 0 && length == mal_string_length(string)));
     MalString *replacement = nullptr;
     if (!functional) {
         replacement = mal_builtin_string_coerce(vm, roots[2]);
@@ -3847,28 +3849,28 @@ MalValue mal_builtin_string_replace_known(MalVm *vm, MalString *string, MalStrin
 
     string = mal_value_to_string(roots[0]);
     search = mal_value_to_string(roots[1]);
-    usize length = mal_string_length(string);
     usize search_length = mal_string_length(search);
 
     i64 first_match = -1;
     if (search_length != 0) {
-        first_match = mal_builtin_string_find(string, search, 0, mal_string_length(string));
+        first_match = mal_builtin_string_find(string, search, source_start, source_start + length);
         if (first_match < 0) {
-            result = roots[0];
+            result = mal_builtin_string_slice(vm, string, source_start, length);
             goto done;
         }
+        first_match -= (i64) source_start;
     }
 
     if (!functional && mal_builtin_string_replacement_is_literal(replacement)) {
         result = mal_builtin_string_replace_literal(
-            vm, string, search, replacement,
+            vm, string, source_start, length, search, replacement,
             first_match < 0 ? 0 : (usize) first_match, all);
         goto done;
     }
 
     if (search_length != 0 && all) {
         mal_builtin_string_search_cursor_init(
-            &match_cursor, string, search, (usize) first_match + search_length, false, 0, SIZE_MAX);
+            &match_cursor, string, search, source_start + (usize) first_match + search_length, false, 0, source_start + length);
         match_cursor_active = true;
         if (functional) {
             // The spec collects positions before calling the replacer. Keeping
@@ -3889,7 +3891,7 @@ MalValue mal_builtin_string_replace_known(MalVm *vm, MalString *string, MalStrin
                     matches = grown;
                     match_capacity = capacity;
                 }
-                matches[match_count++] = (u32) match;
+                matches[match_count++] = (u32) ((usize) match - source_start);
             }
             mal_builtin_string_search_cursor_dispose(&match_cursor);
             match_cursor_active = false;
@@ -3921,11 +3923,11 @@ MalValue mal_builtin_string_replace_known(MalVm *vm, MalString *string, MalStrin
                 if (match_position < 0) {
                     break;
                 }
-                position = (usize) match_position;
+                position = (usize) match_position - (functional ? 0 : source_start);
             }
         }
 
-        if (position > seg_start && !strbuf_range(vm, &out, string, seg_start, position - seg_start)) {
+        if (position > seg_start && !strbuf_range(vm, &out, string, source_start + seg_start, position - seg_start)) {
             goto done;
         }
         if (functional) {
@@ -3952,7 +3954,7 @@ MalValue mal_builtin_string_replace_known(MalVm *vm, MalString *string, MalStrin
             search = mal_value_to_string(roots[1]);
             string = mal_value_to_string(roots[0]);
             if (!mal_builtin_string_append_substitution(
-                    vm, &out, replacement, search, string, position, position + search_length)) {
+                    vm, &out, replacement, search, string, source_start, length, position, position + search_length)) {
                 goto done;
             }
             string = mal_value_to_string(roots[0]);
@@ -3963,7 +3965,7 @@ MalValue mal_builtin_string_replace_known(MalVm *vm, MalString *string, MalStrin
             // Empty match: copy the straddled code unit and advance one, or we'd
             // loop forever.
             if (position < length) {
-                if (!strbuf_range(vm, &out, string, position, 1)) {
+                if (!strbuf_range(vm, &out, string, source_start + position, 1)) {
                     goto done;
                 }
             }
@@ -3978,7 +3980,7 @@ MalValue mal_builtin_string_replace_known(MalVm *vm, MalString *string, MalStrin
     }
 
     if (seg_start < length) {
-        if (!strbuf_range(vm, &out, string, seg_start, length - seg_start)) {
+        if (!strbuf_range(vm, &out, string, source_start + seg_start, length - seg_start)) {
             goto done;
         }
     }
@@ -3992,6 +3994,10 @@ done:
     mal_text_buffer_dispose(&out);
     mal_gc_unroot(&root_span);
     return result;
+}
+
+MalValue mal_builtin_string_replace_known(MalVm *vm, MalString *string, MalString *search, MalValue replace_value, bool all) {
+    return mal_builtin_string_replace_range_known(vm, string, 0, mal_string_length(string), search, replace_value, all);
 }
 
 static MalValue mal_builtin_string_replace_impl(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, bool all) {
@@ -4071,6 +4077,26 @@ static MalValue mal_builtin_string_prototype_replace_all(MalVm *vm, MalValue thi
         }
     }
     return mal_builtin_string_replace_impl(vm, this_value, args, arg_count, true);
+}
+
+bool mal_builtin_string_span_replace(
+    MalVm *vm, MalValue callee, bool locked, MalValue subject, usize start, usize end,
+    MalValue search, MalValue replacement, bool all, MalValue *out
+) {
+    if (!locked && (!mal_value_is_native_function_object(callee) ||
+        mal_native_function_object_callback(mal_value_to_native_function_object(callee)) !=
+            (all ? mal_builtin_string_prototype_replace_all : mal_builtin_string_prototype_replace))) return false;
+#if MAL_REALMS
+    if (!locked && mal_vm_callee_realm(vm, callee) != vm->current_realm) return false;
+#endif
+    if (!mal_value_is_string(subject) || !mal_value_is_string(search) ||
+        !mal_value_is_string(replacement) || start > end ||
+        end > mal_string_length(mal_value_to_string(subject))) return false;
+    if (all) MAL_PERF_COUNT(string_span_replace_all_calls);
+    else MAL_PERF_COUNT(string_span_replace_calls);
+    *out = mal_builtin_string_replace_range_known(vm, mal_value_to_string(subject), start, end - start,
+        mal_value_to_string(search), replacement, all);
+    return true;
 }
 
 static MalValue mal_builtin_string_pad_impl(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, bool pad_start) {

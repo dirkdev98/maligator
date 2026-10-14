@@ -21,6 +21,10 @@ int main(void) {
     MalNumberRecord admitted;
     CHECK(mal_vm_number_record_begin(mal_value_from_function_object(&callable), false, &admitted));
     CHECK(admitted.fields == values && admitted.shape == &alternate);
+    callable.object_storage.fields = nullptr;
+    CHECK(!mal_vm_number_record_begin(mal_value_from_function_object(&callable), false, &admitted));
+    CHECK(!mal_vm_property_read_region_begin(mal_value_from_function_object(&callable)).active);
+    callable.object_storage.fields = values;
     CHECK(!mal_vm_number_record_begin(mal_value_from_function_object(&callable), true, &admitted));
     callable.object.header.type = MAL_HEAP_OBJECT;
     CHECK(mal_vm_number_record_begin(mal_value_from_object(&callable.object), false, &admitted));

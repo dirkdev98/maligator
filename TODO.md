@@ -1019,7 +1019,9 @@ The shared lifetime and fallback rules are recorded in
       All208 focused contracts, twenty Node GC modes and eight frontend/artifact/C
       captures pass. Linux ASan/UBSan exposed a compact-only admission guard that
       excluded embedded and external read-only storage. Its owning-layer repair
-      preserves writable restrictions; the strict admission-counter rerun is pending.
+      preserves writable restrictions. The rerun passes read-only modes, then exposes
+      update admission after growth; its ordinary external-storage repair is queued
+      with the same strict counters.
 - [ ] Feed ordinary and prepared localeCompare directly from retained string spans.
       Reuse canonical locale/options effects and collation with bounded UTF16 input
       preparation shared by case conversion and normalization. Preserve source and
@@ -1047,14 +1049,14 @@ The shared lifetime and fallback rules are recorded in
       physical widening and complete slow writeback. Read-only records now admit
       embedded and external storage, including callable own fields; writable guards
       remain unchanged. All51 focused checks, eight Node GC modes, eight actual
-      frontend/artifact/C captures and the small C field contract pass. Native
-      sanitizer verification and performance measurement remain pending.
+      frontend/artifact/C captures and the small C field contract pass. All three alternate-layout Linux
+      ASan/UBSan cases pass; performance measurement remains pending.
 - [ ] Compose String toString and valueOf with range, split and regexp spans.
       Preserve primitive branding, captured native identity, ignored argument
       evaluation and cached materialization at observers. All226 focused checks,
       thirteen Node GC modes, five frontend/artifact/C captures and eight runtime
-      C configurations pass. Native sanitizer and performance verification remain
-      pending.
+      C configurations pass. All three Linux ASan/UBSan identity cases pass;
+      performance verification remains pending.
 
 - [ ] Keep numeric updates admitted after ordinary objects grow into external
       field storage. Preserve embedded-object, callable, prototype, watched and
@@ -1068,6 +1070,19 @@ The shared lifetime and fallback rules are recorded in
       arguments. All230 focused contracts, eleven Node GC modes, five frontend/
       artifact/C captures and eight runtime C configurations pass. Native and
       performance verification remain pending.
+
+- [ ] Read named own fields from Array, TypedArray, Map and Set storage through
+      the shared property and read-only numeric region contracts. Keep indexed,
+      length/size and inherited semantics in their existing guarded paths; the first
+      generic continuation ends borrowed storage. All45 focused contracts, fourteen
+      Node GC modes and four frontend/artifact/C captures pass. Native sanitizer
+      verification and performance measurement remain pending.
+- [ ] Replace primitive string patterns directly within retained spans through
+      the canonical replace/replaceAll builder, preserving relative substitution
+      contexts and original protocol/coercion fallbacks. All234 focused contracts,
+      eleven Node GC modes, five frontend/artifact/C captures and eight runtime
+      C configurations pass; native sanitizer and performance verification remain
+      pending.
 
 | Order | Slice                        | Owning work and exit condition                                                                                                                                  |
 | ----- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |

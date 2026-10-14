@@ -30,6 +30,35 @@ const body = `const part=source.split('|')[1]; const size=part.length;
  if(part==='if')return size+10; if(escape)return observe(part); return size;`;
 describe("span continuations from split projections", () => {
 	it.each(["mutable", "locked"] as const)(
+		"replaces within retained split, capture and nested ranges under %s primordials",
+		(mode) => {
+			for (const producer of [
+				"source.split('|')[1]",
+				"/\\|([^|]*)\\|/.exec(source)[1]",
+				"source.slice(1,-1).trim()",
+			])
+				for (const method of ["replace", "replaceAll"]) {
+					const image = compile(
+						`const part=${producer};const out=part.${method}('a', '$&', observe());if(escape)observe(part);return out;`,
+						mode,
+					);
+					const plans = image.native.functions.flatMap((f) => [
+						...f.specializations.filter((p) => p.kind === "string-span"),
+						...(f.storage?.spanContinuations ?? []),
+					]);
+					expect(
+						plans.flatMap((p) => p.consumers.map((c) => c.kind)),
+						producer,
+					).toContain(`${method}Call`);
+					expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+						image,
+					);
+					expect(() => emitProgramImage(image)).not.toThrow();
+				}
+		},
+	);
+
+	it.each(["mutable", "locked"] as const)(
 		"concatenates retained split, capture and nested ranges under %s primordials",
 		(mode) => {
 			for (const producer of [

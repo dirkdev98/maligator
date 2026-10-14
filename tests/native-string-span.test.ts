@@ -42,6 +42,37 @@ const branching = `const part = value.slice(start, end); const length = part.len
 
 describe("composable string spans", () => {
 	it.each(["mutable", "locked"] as const)(
+		"retains replacement consumers and evaluated ignored arguments under %s primordials",
+		(mode) => {
+			for (const method of ["replace", "replaceAll"])
+				for (const args of ["start,end", "start,end,observer(),observer()"]) {
+					const image = compile(
+						`const part=value.slice(start,end);const out=part.${method}(${args});if(escape)observer(part);return out;`,
+						mode,
+					);
+					expect(spans(image)[0]?.consumers.map((c) => c.kind)).toContain(
+						`${method}Call`,
+					);
+					expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+						image,
+					);
+				}
+			for (const args of ["part,'x'", "'x',part"]) {
+				const image = compile(
+					`const part=value.slice(start,end);const out=part.replaceAll(${args});return [part.length,out];`,
+					mode,
+				);
+				expect(spans(image).flatMap((p) => p.consumers.map((c) => c.kind))).not.toContain(
+					"replaceAllCall",
+				);
+				expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+					image,
+				);
+			}
+		},
+	);
+
+	it.each(["mutable", "locked"] as const)(
 		"selects bounded concat output and materializes aliased arguments under %s primordials",
 		(mode) => {
 			for (const args of ["", "observer", "start,end,0,true,null,undefined,1n,'tail'"]) {

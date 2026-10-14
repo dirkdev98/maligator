@@ -60,6 +60,10 @@ never coerced by the identity operation. Wrappers retain the original branded ca
 Concatenation shares a ranged output builder with ordinary String concat. Bounded
 primitive arguments are rooted and converted in order; observable conversions
 retain the original call before any work. Partial spans copy only their range.
+Primitive string replacement reuses the canonical replacement parser and bounded
+search. Match, prefix and suffix substitutions refer to the retained range, not
+its source's surrounding text. Object search protocols and functional replacement
+keep the original call, including its callback roots and effects.
 Well-formedness uses the same segmented UTF16 scanner for canonical strings and
 retained ranges. A surrogate can pair across rope segments inside the range, but
 never across its boundary; repair copies only the selected units.
@@ -146,6 +150,11 @@ and effect-free forward branches. Every incoming edge preserves that identity.
 Own-slot admission also covers callable objects and alternate shape-cache rows;
 each cached field token is interpreted against the retained logical shape and
 field storage. Inherited constant rows retain their ordinary-object receiver guard.
+An unmaterialized scalar-backed stack object may have a shape without a field
+buffer; it cannot enter a borrowed-field region.
+Named own slots of Arrays, TypedArrays, Maps and Sets share this storage contract.
+Their indexed or internal properties still require the original admission; an own
+shape row never licenses element storage, collection size or a buffer extent.
 The first property-cache miss ends the borrowed shape and field-pointer lifetime
 before the generic load can invoke user code; later reads never readmit that region.
 

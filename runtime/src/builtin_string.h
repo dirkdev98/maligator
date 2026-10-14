@@ -450,6 +450,11 @@ MalValue mal_builtin_string_to_well_formed_known(MalVm *vm, MalString *string);
 
 // Canonical primitive-string calls; replacement and attribute coercion remain observable.
 MalValue mal_builtin_string_replace_known(MalVm *vm, MalString *string, MalString *search, MalValue replacement, bool all);
+// Guard misses precede effects; admitted string replacement uses span-relative substitution contexts.
+bool mal_builtin_string_span_replace(
+    MalVm *vm, MalValue callee, bool locked, MalValue subject, usize start, usize end,
+    MalValue search, MalValue replacement, bool all, MalValue *out
+);
 MalValue mal_builtin_string_html_known(MalVm *vm, MalString *string, MalValue attribute_value, const byte *tag, const byte *attribute);
 
 // Primitive locale/options data are prepared; receiver and comparison coercions still run in order.

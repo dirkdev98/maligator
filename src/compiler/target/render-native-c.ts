@@ -6478,6 +6478,19 @@ function emitInstruction(
 				projected = `${resetCapture}r${instruction.dst} = ${callValue(instruction.dst, method)};`;
 			}
 		} else if (
+			(role === "replaceCall" || role === "replaceAllCall") &&
+			(instruction.opcode === "CALL" || instruction.opcode === "CALL_KNOWN")
+		) {
+			const result = `${prefix}_replace_${ip}`;
+			declarations.push(`MalValue ${result};`);
+			const locked = instruction.opcode === "CALL_KNOWN";
+			const argument = (index: number) =>
+				instruction.arguments[index] === undefined
+					? "MAL_VALUE_UNDEFINED"
+					: boxedOperand(instruction.arguments[index]);
+			guard += ` && mal_builtin_string_span_replace(vm, ${locked ? "MAL_VALUE_UNDEFINED" : boxedOperand(instruction.callee)}, ${locked}, ${source}, ${prefix}_start, ${prefix}_end, ${argument(0)}, ${argument(1)}, ${role === "replaceAllCall"}, &${result})`;
+			projected = `${throwCheck()} r${instruction.dst} = ${callValue(instruction.dst, result)};`;
+		} else if (
 			role === "concatCall" &&
 			(instruction.opcode === "CALL" || instruction.opcode === "CALL_KNOWN")
 		) {
@@ -6668,6 +6681,8 @@ function emitInstruction(
 			role === "parseFloat" ||
 			role === "isFinite" ||
 			role === "isNaN" ||
+			role === "replaceCall" ||
+			role === "replaceAllCall" ||
 			role === "concatCall" ||
 			role === "repeatCall" ||
 			role === "padStartCall" ||

@@ -97,7 +97,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 236;
+export const COMPILER_ARTIFACT_VERSION = 237;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -1050,6 +1050,10 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 					"isFinite",
 					"isNaN",
 					"materialize",
+					"replaceProperty",
+					"replaceCall",
+					"replaceAllProperty",
+					"replaceAllCall",
 					"concatProperty",
 					"concatCall",
 					"repeatProperty",
@@ -1624,6 +1628,10 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 							"isFinite",
 							"isNaN",
 							"materialize",
+							"replaceProperty",
+							"replaceCall",
+							"replaceAllProperty",
+							"replaceAllCall",
 							"concatProperty",
 							"concatCall",
 							"repeatProperty",
@@ -2577,6 +2585,10 @@ function writeCompilerArtifact(
 								"isFinite",
 								"isNaN",
 								"materialize",
+								"replaceProperty",
+								"replaceCall",
+								"replaceAllProperty",
+								"replaceAllCall",
 								"concatProperty",
 								"concatCall",
 								"repeatProperty",
@@ -5416,6 +5428,10 @@ function readCompilerArtifact(
 								"isFinite",
 								"isNaN",
 								"materialize",
+								"replaceProperty",
+								"replaceCall",
+								"replaceAllProperty",
+								"replaceAllCall",
 								"concatProperty",
 								"concatCall",
 								"repeatProperty",

@@ -6383,6 +6383,32 @@
 			"sourceSeam": "runtime/src/builtin_string.c",
 			"fixture": "cases/string-span-concat.mjs",
 			"controls": ["string-span-identity", "string-span-pad"]
+		},
+		{
+			"id": "own-slot-collections",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Named own-field regions",
+			"category": "memory-layout-usage",
+			"mechanisms": ["property-read-regions", "numeric-record-storage"],
+			"inputShape": "Arrays, TypedArrays, Maps and Sets carry named reference and numeric fields through existing readonly regions.",
+			"unit": "record",
+			"sourceSeam": "runtime/src/vm_ops.h",
+			"fixture": "cases/own-slot-collections.mjs",
+			"controls": ["property-read-wide", "number-record-reduction"]
+		},
+		{
+			"id": "string-span-replace",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Composable string spans",
+			"category": "memory-layout-usage",
+			"mechanisms": ["string-spans", "bounded-output"],
+			"inputShape": "Primitive string replace and replaceAll consume retained ranges and preserve substitution contexts without an intermediate substring.",
+			"unit": "token",
+			"sourceSeam": "runtime/src/builtin_string.c",
+			"fixture": "cases/string-span-replace.mjs",
+			"controls": ["string-span-concat", "string-span-pad"]
 		}
 	]
 }

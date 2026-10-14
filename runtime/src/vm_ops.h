@@ -1178,12 +1178,22 @@ static inline MalObject *mal_vm_as_object(MalValue v) {
     return mal_value_is_heap_type(v, MAL_HEAP_OBJECT) ? (MalObject *) mal_value_to_heap(v) : nullptr;
 }
 
-/** Function objects embed MalObject and use ordinary own-property shape slots. */
+// Named own slots use MalObject storage; indexed and internal properties require their original lookup.
 static inline MalObject *mal_vm_as_own_slot_object(MalValue v) {
     if ((v & MAL_VALUE_CLASS_MASK) == MAL_VALUE_CALLABLE) {
         return (MalObject *) mal_value_to_heap(v);
     }
-    return mal_vm_as_object(v);
+    if (!mal_value_is_object(v)) return nullptr;
+    switch (mal_value_heap_type(v)) {
+        case MAL_HEAP_OBJECT:
+        case MAL_HEAP_ARRAY_OBJECT:
+        case MAL_HEAP_TYPED_ARRAY_OBJECT:
+        case MAL_HEAP_MAP_OBJECT:
+        case MAL_HEAP_SET_OBJECT:
+            return (MalObject *) mal_value_to_heap(v);
+        default:
+            return nullptr;
+    }
 }
 
 /** Return the exact precompiled literal-shape case for a plain object, or -1. */
@@ -1854,11 +1864,16 @@ mal_vm_property_read_region_begin(MalValue receiver) {
     if (object == nullptr) {
         return (MalNativePropertyReadRegion) {0};
     }
+    const void *fields = mal_object_fields(object);
+    // Scalar-backed stack objects have no field buffer until materialization.
+    if (fields == nullptr && object->shape->inline_count != 0) {
+        return (MalNativePropertyReadRegion) {0};
+    }
     MAL_PERF_COUNT(property_read_region_admissions);
     return (MalNativePropertyReadRegion) {
         .object = object,
         .shape = object->shape,
-        .fields = mal_object_fields(object),
+        .fields = fields,
         .active = true,
     };
 }
@@ -2205,10 +2220,12 @@ static inline __attribute__((always_inline)) bool mal_vm_number_record_begin(
                       object->primordial_locked))) {
         return false;
     }
+    void *fields = mal_object_fields_nonempty(object);
+    if (fields == nullptr) return false;
     *record = (MalNumberRecord) {
         .object = object,
         .shape = object->shape,
-        .fields = mal_object_fields_nonempty(object),
+        .fields = fields,
     };
     return true;
 }

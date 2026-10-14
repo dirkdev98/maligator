@@ -6259,9 +6259,7 @@ static MalValue mal_vm_op_load_property_ic_keyed(
             }
             return result;
         }
-        // Functions given many own properties, such as debug's `enabled` or an Express
-        // app's methods, are dictionaries. A data row in their own table is exact: a
-        // function's synthetic `prototype` applies only while the table lacks one.
+        // Indexed and internal fields never occupy these named data rows.
         if (object->header.type != MAL_HEAP_OBJECT && object->shape->inline_count == 0 &&
             mal_object_overflow(object) != nullptr && key.kind == MAL_KEY_STRING &&
             mal_ic_key_is_stable_string(key_value)) {
