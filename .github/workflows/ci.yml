@@ -46,7 +46,7 @@ jobs:
           path: |
             .cache/mal-build/test-suite/runs/*/report.json
             .cache/mal-build/test262*/report-*.json
-            .cache/mal-build/wpt*/report-*.json
+            .cache/wpt/runs/*/results.json
           if-no-files-found: ignore
           include-hidden-files: true
           retention-days: 7
@@ -118,7 +118,7 @@ jobs:
           path: |
             .cache/mal-build/test-suite/runs/*/report.json
             .cache/mal-build/test262*/report-*.json
-            .cache/mal-build/wpt*/report-*.json
+            .cache/wpt/runs/*/results.json
           if-no-files-found: ignore
           include-hidden-files: true
           retention-days: 7

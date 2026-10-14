@@ -2,16 +2,17 @@
 
 `npm run test:wpt` runs the small server-runtime-relevant corpus in
 `curated.json` through Maligator's native web-platform host. Schema-2 results
-are written to `.cache/wpt/results.json` with explicit path, variant, backend,
-mode, harness status, subtest ID, resolved name, and occurrence dimensions. The
+are written to `.cache/wpt/runs/<run-id>/results.json` with explicit path, variant,
+backend, mode, harness status, subtest ID, resolved name, and occurrence dimensions. The
 command exits non-zero for a harness/setup error, malformed or incomplete
 transport, missing subtest, stale expectation, unexpected failure, or
 unexpected pass.
+The command prints the retained report path; later selections preserve earlier reports.
 
 The repository smoke and check tiers run deterministic compiled/normal
-partitions of this corpus. The full tier adds compiled GC verification and both
-interpreted modes. See [`docs/testing.md`](../../docs/testing.md) for tier and
-test-placement policy.
+partitions of this corpus. The full tier runs the full compiled/normal selection
+and focused GC verification through the wire backend. See
+[`docs/testing.md`](../../docs/testing.md) for tier and test-placement policy.
 
 The corpus is pinned to web-platform-tests/wpt revision
 `f0b30d60daf6a64a3b087d66732c54c8e5273dbd`. A minimal fixture tree containing

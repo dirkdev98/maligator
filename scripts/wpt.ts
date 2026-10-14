@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { buildDerivationFromConfig, resolveBuildConfig } from "../src/build-config.ts";
@@ -48,7 +49,8 @@ const buildRoot = path.join(
 	"wpt",
 	String(process.pid),
 );
-const resultsPath = path.join(outputRoot, "results.json");
+const runDirectory = path.join(outputRoot, "runs", randomUUID());
+const resultsPath = path.join(runDirectory, "results.json");
 
 const requestedPaths: Array<string> = [];
 const requestedModes: Array<string> = [];
@@ -196,7 +198,7 @@ interface ExecutionReport extends WptExecutionKey {
 
 rmSync(buildRoot, { recursive: true, force: true });
 mkdirSync(buildRoot, { recursive: true });
-mkdirSync(outputRoot, { recursive: true });
+mkdirSync(runDirectory, { recursive: true });
 if (!keepArtifacts) {
 	process.once("exit", () => rmSync(buildRoot, { recursive: true, force: true }));
 }
@@ -388,6 +390,7 @@ const report = {
 	},
 };
 writeFileSync(resultsPath, `${JSON.stringify(report, null, 2)}\n`);
+console.log(`WPT report: ${resultsPath}`);
 
 console.log(
 	`WPT: ${report.summary.completedExecutions}/${report.summary.plannedExecutions} executions, ${report.summary.subtests} subtests, ${report.summary.unexpected} unexpected, ${report.summary.missingExpectations} stale expectations, ${report.summary.harnessErrors} harness errors${aborted ? " (aborted)" : ""}`,
