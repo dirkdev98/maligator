@@ -35,11 +35,16 @@ static bool string_iteration(MalVm *vm, usize leaves, bool materialize) {
     units[123] = 0xd800;
     units[200] = 0x100;
     units[201] = 0xff;
-    MalValue roots[2] = {mal_value_from_string(rope(vm, units, length)), MAL_VALUE_UNDEFINED};
+    MalValue roots[3] = {mal_value_from_string(rope(vm, units, length)),
+        MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED};
     MalRootSpan span;
-    mal_gc_root(&span, roots, 2);
-    roots[1] = mal_vm_new_builtin_iterator(vm, MAL_ITERATOR_STRING_VALUES, roots[0]);
-    MalIteratorObject *iterator = mal_value_to_iterator_object(roots[1]);
+    mal_gc_root(&span, roots, countof(roots));
+    MalIteratorRecord record;
+    CHECK(mal_vm_get_iterator(vm, roots[0], &record));
+    roots[1] = record.iterator;
+    roots[2] = record.next_method;
+    MalIteratorObject *iterator = mal_vm_iterator_protocol_cursor(&record, MAL_ITERATOR_CURSOR_STRING_VALUES);
+    CHECK(iterator != nullptr);
     mal_gc_collect(vm);
     u64 before = mal_perf_stats.string_iterator_nodes;
     usize position = 0;
@@ -57,7 +62,7 @@ static bool string_iteration(MalVm *vm, usize leaves, bool materialize) {
         } else {
             CHECK(iterator->index == position && iterator->string_cursor == cursor);
             CHECK(cursor == nullptr || (cursor->local == local && cursor->position == cursor_position));
-            CHECK(mal_vm_iterator_step_protocol_cursor(vm, iterator, &value, &done));
+            CHECK(mal_vm_iterator_step_protocol_cursor(vm, iterator, &record, &value, &done));
         }
         CHECK(!done && mal_value_is_string(value));
         usize count = position == 92 ? 2 : 1;
@@ -85,7 +90,7 @@ static bool string_iteration(MalVm *vm, usize leaves, bool materialize) {
     }
     MalValue value;
     bool done;
-    CHECK(mal_vm_iterator_step_protocol_cursor(vm, iterator, &value, &done) && done);
+    CHECK(mal_vm_iterator_step_protocol_cursor(vm, iterator, &record, &value, &done) && done);
     CHECK(iterator->string_cursor == nullptr);
     CHECK(hits > 0);
     u64 visited = mal_perf_stats.string_iterator_nodes - before;

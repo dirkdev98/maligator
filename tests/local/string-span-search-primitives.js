@@ -129,7 +129,10 @@ if (mode !== "fallback") {
 		1e21,
 		1e-7,
 		0n,
-		1234567890123456789012345678901234567890n,
+		170141183460469231731687303715884105727n,
+		-170141183460469231731687303715884105728n,
+		// Node parity requires the same signed 128-bit BigInt input domain as the runtime.
+		BigInt.asIntN(128, 1234567890123456789012345678901234567890n),
 	]) {
 		const text = String(needle);
 		for (const position of [
@@ -157,7 +160,7 @@ if (mode !== "fallback") {
 			);
 		rows.push(visit(wrap(""), needle, undefined, null));
 	}
-	const huge = BigInt("7".repeat(350));
+	const huge = BigInt.asIntN(128, BigInt("7".repeat(350)));
 	rows.push(
 		visit(
 			wrap("x".repeat(1200) + String(huge) + "y".repeat(1200) + String(huge)),

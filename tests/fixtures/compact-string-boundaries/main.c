@@ -205,7 +205,7 @@ static bool string_iteration_reacquires_leaf_storage(MalVm *vm, usize leaves, bo
     while (index < source->length) {
         bool done;
         CHECK(index % 2 == 0
-            ? mal_vm_iterator_step_protocol_cursor(vm, cursor, &roots[4], &done)
+            ? mal_vm_iterator_step_protocol_cursor(vm, cursor, &record, &roots[4], &done)
             : mal_vm_iterator_step(vm, &record, &roots[4], &done));
         CHECK(!done && mal_value_is_string(roots[4]));
         MalString *item = mal_value_to_string(roots[4]);
@@ -229,7 +229,7 @@ static bool string_iteration_reacquires_leaf_storage(MalVm *vm, usize leaves, bo
         if (index % 256 == 0) mal_gc_collect(vm);
     }
     bool done;
-    CHECK(mal_vm_iterator_step_protocol_cursor(vm, cursor, &roots[4], &done));
+    CHECK(mal_vm_iterator_step_protocol_cursor(vm, cursor, &record, &roots[4], &done));
     CHECK(done && cursor->string_cursor == nullptr);
     mal_gc_unroot(&span);
     return true;
