@@ -443,6 +443,455 @@
 					]
 				}
 			]
+		},
+		{
+			"platform": "linux",
+			"arch": "x64",
+			"source": {
+				"revision": "faac5129064911ab84cd6a42dfa94ed655021be5",
+				"digest": "59dca166dea1a33ab87be9d17bbd501ac20ac8f23b5cde8ca00c7012ff8b25e5",
+				"dirty": false,
+				"files": 3451,
+				"installerSha256": "548a1df24b9e425e6165afb6178b188d40f5e1518b51fa6f725f8de8c7972188"
+			},
+			"modes": [
+				{
+					"mode": "minimal",
+					"sha256": "05eb135668490497dbbf97c88f99c8b476cd8440398279b26fdaccd0ab43836c",
+					"phases": [
+						{
+							"phase": "language-initialized",
+							"nodes": 627,
+							"descriptors": 1879,
+							"repeatedOwnKeys": [
+								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
+							]
+						},
+						{
+							"phase": "host-installed",
+							"nodes": 709,
+							"descriptors": 2147,
+							"repeatedOwnKeys": [
+								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
+							]
+						}
+					]
+				},
+				{
+					"mode": "full",
+					"sha256": "e1c6dfeaa2fbbbd2c75105e863d9471e789d3fd7e08a93fa8126342f214d1bcc",
+					"phases": [
+						{
+							"phase": "language-initialized",
+							"nodes": 997,
+							"descriptors": 2992,
+							"repeatedOwnKeys": [
+								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
+							]
+						},
+						{
+							"phase": "host-installed",
+							"nodes": 1936,
+							"descriptors": 5889,
+							"repeatedOwnKeys": [
+								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
+							]
+						}
+					]
+				},
+				{
+					"mode": "mutable",
+					"sha256": "19966aa83c2fcc5955b52225fb6a594479fcf9ed5658df24d11840b1397833cc",
+					"phases": [
+						{
+							"phase": "language-initialized",
+							"nodes": 993,
+							"descriptors": 2983,
+							"repeatedOwnKeys": []
+						},
+						{
+							"phase": "host-installed",
+							"nodes": 1932,
+							"descriptors": 5880,
+							"repeatedOwnKeys": []
+						}
+					]
+				},
+				{
+					"mode": "node",
+					"sha256": "ecd90642a7fe33fe971fa8b130bc204862bbf6f716d912783867d72928e7885f",
+					"phases": [
+						{
+							"phase": "language-initialized",
+							"nodes": 631,
+							"descriptors": 1888,
+							"repeatedOwnKeys": [
+								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
+							]
+						},
+						{
+							"phase": "host-installed",
+							"nodes": 1463,
+							"descriptors": 4490,
+							"repeatedOwnKeys": [
+								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
+							]
+						}
+					]
+				},
+				{
+					"mode": "web",
+					"sha256": "f2f1e86e37a3d0a13d51894398399f2e9af1de58d94a2bc370e2e978e4ae004b",
+					"phases": [
+						{
+							"phase": "language-initialized",
+							"nodes": 627,
+							"descriptors": 1879,
+							"repeatedOwnKeys": [
+								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
+							]
+						},
+						{
+							"phase": "host-installed",
+							"nodes": 946,
+							"descriptors": 2817,
+							"repeatedOwnKeys": [
+								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
+							]
+						}
+					]
+				},
+				{
+					"mode": "diagnostic",
+					"sha256": "9a6ac6e954879b4d2da86bb91d45a9a2b63ffaa434ce53417cce1e10994d4685",
+					"phases": [
+						{
+							"phase": "language-initialized",
+							"nodes": 1003,
+							"descriptors": 3010,
+							"repeatedOwnKeys": [
+								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
+							]
+						},
+						{
+							"phase": "host-installed",
+							"nodes": 1944,
+							"descriptors": 5919,
+							"repeatedOwnKeys": [
+								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
+							]
+						}
+					]
+				},
+				{
+					"mode": "no-eval",
+					"sha256": "e1c6dfeaa2fbbbd2c75105e863d9471e789d3fd7e08a93fa8126342f214d1bcc",
+					"phases": [
+						{
+							"phase": "language-initialized",
+							"nodes": 997,
+							"descriptors": 2992,
+							"repeatedOwnKeys": [
+								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
+							]
+						},
+						{
+							"phase": "host-installed",
+							"nodes": 1936,
+							"descriptors": 5889,
+							"repeatedOwnKeys": [
+								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
+							]
+						}
+					]
+				},
+				{
+					"mode": "no-realms",
+					"sha256": "b14c9a9594ebbebae3d2efb94d1ed0b5acea84cda749a1525d674d6821d01503",
+					"phases": [
+						{
+							"phase": "language-initialized",
+							"nodes": 993,
+							"descriptors": 2980,
+							"repeatedOwnKeys": [
+								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
+							]
+						},
+						{
+							"phase": "host-installed",
+							"nodes": 1932,
+							"descriptors": 5877,
+							"repeatedOwnKeys": [
+								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
+							]
+						}
+					]
+				},
+				{
+					"mode": "no-regexp",
+					"sha256": "52b41e11bdaca9c6af80eb56c90b08934572ed3ed178572b722795ce5df97010",
+					"phases": [
+						{
+							"phase": "language-initialized",
+							"nodes": 951,
+							"descriptors": 2839,
+							"repeatedOwnKeys": [
+								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
+							]
+						},
+						{
+							"phase": "host-installed",
+							"nodes": 1890,
+							"descriptors": 5736,
+							"repeatedOwnKeys": [
+								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
+							]
+						}
+					]
+				},
+				{
+					"mode": "no-temporal",
+					"sha256": "9a22ad3104f75b2771d723ab9c3b9c510d8d8163d38501615925f316557c4932",
+					"phases": [
+						{
+							"phase": "language-initialized",
+							"nodes": 754,
+							"descriptors": 2265,
+							"repeatedOwnKeys": [
+								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
+							]
+						},
+						{
+							"phase": "host-installed",
+							"nodes": 1693,
+							"descriptors": 5162,
+							"repeatedOwnKeys": [
+								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
+							]
+						}
+					]
+				},
+				{
+					"mode": "no-intl",
+					"sha256": "32a13dc3056eeb047438736def77fb528b70430a9b930c0e2684cd429c7e2b94",
+					"phases": [
+						{
+							"phase": "language-initialized",
+							"nodes": 924,
+							"descriptors": 2780,
+							"repeatedOwnKeys": [
+								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
+							]
+						},
+						{
+							"phase": "host-installed",
+							"nodes": 1863,
+							"descriptors": 5677,
+							"repeatedOwnKeys": [
+								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
+							]
+						}
+					]
+				},
+				{
+					"mode": "intl-collator",
+					"sha256": "3326589e148556fe6507ff28142ed716b51649da22d7697c50e8812190a87aad",
+					"phases": [
+						{
+							"phase": "language-initialized",
+							"nodes": 947,
+							"descriptors": 2847,
+							"repeatedOwnKeys": [
+								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
+							]
+						},
+						{
+							"phase": "host-installed",
+							"nodes": 1886,
+							"descriptors": 5745,
+							"repeatedOwnKeys": [
+								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
+							]
+						}
+					]
+				},
+				{
+					"mode": "intl-number-format",
+					"sha256": "d03c129d8c0814ecac4016af921d81833226298c2c3710971568500e10b4606f",
+					"phases": [
+						{
+							"phase": "language-initialized",
+							"nodes": 947,
+							"descriptors": 2847,
+							"repeatedOwnKeys": [
+								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
+							]
+						},
+						{
+							"phase": "host-installed",
+							"nodes": 1886,
+							"descriptors": 5745,
+							"repeatedOwnKeys": [
+								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
+							]
+						}
+					]
+				},
+				{
+					"mode": "intl-date-time-format",
+					"sha256": "1e25b0628ffb752e14873a9bc1ab060fa32cd51f412f7eebef3146d3cfce9c51",
+					"phases": [
+						{
+							"phase": "language-initialized",
+							"nodes": 949,
+							"descriptors": 2853,
+							"repeatedOwnKeys": [
+								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
+							]
+						},
+						{
+							"phase": "host-installed",
+							"nodes": 1888,
+							"descriptors": 5751,
+							"repeatedOwnKeys": [
+								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
+							]
+						}
+					]
+				},
+				{
+					"mode": "intl-plural-rules",
+					"sha256": "cbd8357d0682071147c8beb6fd49c8648f84519030541278b985ea19971ea6c5",
+					"phases": [
+						{
+							"phase": "language-initialized",
+							"nodes": 947,
+							"descriptors": 2847,
+							"repeatedOwnKeys": [
+								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
+							]
+						},
+						{
+							"phase": "host-installed",
+							"nodes": 1886,
+							"descriptors": 5745,
+							"repeatedOwnKeys": [
+								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
+							]
+						}
+					]
+				},
+				{
+					"mode": "intl-list-format",
+					"sha256": "02f060d1cd6f11463c234111f408d626bdf97e5d1ea174a13f2393dc5667b4e9",
+					"phases": [
+						{
+							"phase": "language-initialized",
+							"nodes": 948,
+							"descriptors": 2850,
+							"repeatedOwnKeys": [
+								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
+							]
+						},
+						{
+							"phase": "host-installed",
+							"nodes": 1887,
+							"descriptors": 5748,
+							"repeatedOwnKeys": [
+								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
+							]
+						}
+					]
+				},
+				{
+					"mode": "intl-segmenter",
+					"sha256": "5ae76fa125fb664e7cc93f4f1d4b7e85359384eb8a28a2f96e6051eaa192edc2",
+					"phases": [
+						{
+							"phase": "language-initialized",
+							"nodes": 952,
+							"descriptors": 2857,
+							"repeatedOwnKeys": [
+								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
+							]
+						},
+						{
+							"phase": "host-installed",
+							"nodes": 1891,
+							"descriptors": 5755,
+							"repeatedOwnKeys": [
+								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
+							]
+						}
+					]
+				},
+				{
+					"mode": "intl-display-names",
+					"sha256": "c13715b29ea82ad6a959047283f796fdd98f31169681346f7dcba2a041da2c5f",
+					"phases": [
+						{
+							"phase": "language-initialized",
+							"nodes": 947,
+							"descriptors": 2847,
+							"repeatedOwnKeys": [
+								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
+							]
+						},
+						{
+							"phase": "host-installed",
+							"nodes": 1886,
+							"descriptors": 5745,
+							"repeatedOwnKeys": [
+								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
+							]
+						}
+					]
+				},
+				{
+					"mode": "intl-relative-time-format",
+					"sha256": "0cd184843c695dc472cd6f35866ed099d40d27e7b082f234e393fa2bee0e269c",
+					"phases": [
+						{
+							"phase": "language-initialized",
+							"nodes": 948,
+							"descriptors": 2850,
+							"repeatedOwnKeys": [
+								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
+							]
+						},
+						{
+							"phase": "host-installed",
+							"nodes": 1887,
+							"descriptors": 5748,
+							"repeatedOwnKeys": [
+								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
+							]
+						}
+					]
+				},
+				{
+					"mode": "intl-duration-format",
+					"sha256": "929f260b419446b56d8c963fa46103e054ebb2b1b4f60c389a3c35e5125637ec",
+					"phases": [
+						{
+							"phase": "language-initialized",
+							"nodes": 948,
+							"descriptors": 2850,
+							"repeatedOwnKeys": [
+								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
+							]
+						},
+						{
+							"phase": "host-installed",
+							"nodes": 1887,
+							"descriptors": 5748,
+							"repeatedOwnKeys": [
+								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
+							]
+						}
+					]
+				}
+			]
 		}
 	],
 	"availability": [

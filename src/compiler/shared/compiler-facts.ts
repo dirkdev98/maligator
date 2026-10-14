@@ -274,6 +274,7 @@ export interface WorldFacts {
 	readonly primordialPolicy: "locked" | "mutable";
 	readonly eval: "disabled" | "runtime" | "compile-check";
 	readonly realms: boolean;
+	readonly nodeSurface: boolean;
 	readonly ecmaFeatures: {
 		readonly regexp: boolean;
 		readonly temporal: boolean;
@@ -296,6 +297,7 @@ export function worldFactsFromConfig(config: ResolvedBuildConfig): WorldFacts {
 		primordialPolicy: config.engine.primordials,
 		eval: evalMode,
 		realms: config.engine.realms,
+		nodeSurface: config.surface.node,
 		ecmaFeatures: {
 			regexp: config.engine.regexp,
 			temporal: config.engine.temporal,
@@ -546,6 +548,7 @@ export function conservativeCompilerProgramFacts(): CompilerProgramFacts {
 			primordialPolicy: "mutable",
 			eval: "runtime",
 			realms: true,
+			nodeSurface: false,
 			ecmaFeatures: { regexp: true, temporal: true, intl: true },
 			protectedSurface: "ecmascript",
 		},

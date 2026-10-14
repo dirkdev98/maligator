@@ -111,6 +111,11 @@ calls use root rules and ignore locale values, while retaining argument evaluati
 Generic locale calls retain full locale-list
 validation and receiver coercion order. Catalog proofs separately check the target's
 feature availability, including the value reached through a protected global binding.
+The same check covers accessor targets and methods installed on otherwise available
+objects, such as `Date.prototype.toTemporalInstant`. World facts carry the configured
+Node surface because it changes the Error constructor's descriptors. The captured
+Node accessors are authoritative only with that surface enabled; non-Node Error
+properties retain ordinary lookup.
 
 String collation plans retain their raw locale tag and flat ICU option bits in the
 shared runtime image. They require a constant locale and complete private option data;

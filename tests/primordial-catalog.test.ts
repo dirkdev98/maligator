@@ -103,6 +103,98 @@ describe("shared primordial catalog and coverage obligations", () => {
 		).toBeUndefined();
 	});
 
+	it.each([false, true])(
+		"requires enabled optional features for attached methods and realm aliases: %s",
+		(enabled) => {
+			const world = worldFactsFromConfig(
+				resolveBuildConfig({
+					engine: { primordials: "locked", temporal: enabled, realms: enabled },
+				}),
+			);
+			for (const [id, key, value] of [
+				["Date.prototype", "toTemporalInstant", "Date.prototype.toTemporalInstant"],
+				[
+					"MAL_INTRINSIC_DATE_PROTOTYPE",
+					"toTemporalInstant",
+					"Date.prototype.toTemporalInstant",
+				],
+				["globalThis", "ShadowRealm", "ShadowRealm"],
+				["ShadowRealm.prototype", "evaluate", "ShadowRealm.prototype.evaluate"],
+			] as const) {
+				const proof = provePrimordialAccess(
+					world,
+					{ kind: "intrinsic", id, realm: "current" },
+					key,
+				);
+				if (enabled) expect(proof?.resolution?.value?.[0]).toBe(value);
+				else expect(proof).toBeUndefined();
+			}
+			for (const id of [
+				"Date.prototype.toTemporalInstant",
+				"MAL_INTRINSIC_SHADOW_REALM_CONSTRUCTOR",
+			]) {
+				const proof = provePrimordialAccess(
+					world,
+					{ kind: "intrinsic", id, realm: "current" },
+					"name",
+				);
+				if (enabled) expect(proof?.kind).toBe("descriptor");
+				else expect(proof).toBeUndefined();
+			}
+			expect(
+				provePrimordialAccess(
+					world,
+					{ kind: "intrinsic", id: "Date.prototype", realm: "current" },
+					"toISOString",
+				)?.resolution?.value?.[0],
+			).toBe("Date.prototype.toISOString");
+		},
+	);
+	it.each([false, true])(
+		"proves Node Error accessors only with their configured surface: %s",
+		(node) => {
+			const world = worldFactsFromConfig(
+				resolveBuildConfig({
+					engine: { primordials: "locked" },
+					surface: { node },
+				}),
+			);
+			for (const id of ["Error", "TypeError"])
+				for (const key of ["prepareStackTrace", "stackTraceLimit"]) {
+					const proof = provePrimordialAccess(
+						world,
+						{ kind: "intrinsic", id, realm: "current" },
+						key,
+					);
+					if (node) {
+						expect(proof?.resolution?.owner[0]).toBe("Error");
+						expect(proof?.resolution?.getter?.[0]).toBe(`Error.${key}<get>`);
+						expect(proof?.resolution?.setter?.[0]).toBe(`Error.${key}<set>`);
+					} else expect(proof).toBeUndefined();
+					for (const accessor of ["get", "set"]) {
+						const accessorProof = provePrimordialAccess(
+							world,
+							{
+								kind: "intrinsic",
+								id: `Error.${key}<${accessor}>`,
+								realm: "current",
+							},
+							"name",
+						);
+						if (node) expect(accessorProof?.kind).toBe("descriptor");
+						else expect(accessorProof).toBeUndefined();
+					}
+				}
+			expect(
+				provePrimordialAccess(
+					world,
+					{ kind: "intrinsic", id: "Error", realm: "current" },
+					"captureStackTrace",
+				)?.resolution?.value?.[0],
+			).toBe("Error.captureStackTrace");
+		},
+	);
+
 	it("requires an audited source inventory whenever an installer changes", () => {
 		expect(primordialInstallerSourceInventory()).toEqual(
 			JSON.parse(

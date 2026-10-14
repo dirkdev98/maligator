@@ -173,9 +173,16 @@ export interface PrimordialAccessProof {
 export function primordialNodeAvailable(world: WorldFacts, id: string): boolean {
 	const resolved = primordialNode(id)?.[0];
 	if (resolved === undefined) return false;
-	if (resolved.startsWith("Temporal")) return world.ecmaFeatures.temporal;
+	if (resolved.startsWith("Temporal") || resolved === "Date.prototype.toTemporalInstant")
+		return world.ecmaFeatures.temporal;
 	if (resolved.startsWith("RegExp")) return world.ecmaFeatures.regexp;
-	if (resolved.startsWith("Realm")) return world.realms;
+	if (resolved.startsWith("Realm") || resolved.startsWith("ShadowRealm"))
+		return world.realms;
+	if (
+		resolved.startsWith("Error.prepareStackTrace<") ||
+		resolved.startsWith("Error.stackTraceLimit<")
+	)
+		return world.nodeSurface;
 	if (!resolved.startsWith("Intl")) return true;
 	if (!world.ecmaFeatures.intl) return false;
 	const name = resolved.split(".")[1];
@@ -221,8 +228,12 @@ export function provePrimordialAccess(
 	if (!primordialNodeAvailable(world, id)) return undefined;
 	const resolution = resolvePrimordialProperty(id, key);
 	if (
-		resolution?.value !== undefined &&
-		!primordialNodeAvailable(world, resolution.value[0])
+		(resolution?.value !== undefined &&
+			!primordialNodeAvailable(world, resolution.value[0])) ||
+		(resolution?.getter !== undefined &&
+			!primordialNodeAvailable(world, resolution.getter[0])) ||
+		(resolution?.setter !== undefined &&
+			!primordialNodeAvailable(world, resolution.setter[0]))
 	)
 		return undefined;
 	let node = primordialNode(id);
