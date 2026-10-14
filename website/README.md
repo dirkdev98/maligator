@@ -51,6 +51,14 @@ container. The prepared Docker context is printed at completion. Build the image
 from that context with the matching Docker platform. Container preparation does not
 publish or deploy it.
 
+The manual **Prepare website container** GitHub Actions workflow runs this build on
+Linux with the pinned WASI SDK and complete chart history. It checks the native
+Overview, Compatibility and Explorer responses, then retains the executable,
+prepared assets, generated patch, source revision and checksums in
+`website-build-<run-id>`. Verify and apply the generated patch before committing
+the final website metadata. The workflow does not deploy or receive Cloudflare
+credentials.
+
 `npm run site:build` builds a plain native website for the host. It does not run
 Pagefind or Shiki. The build config selects processed assets only when the container
 build command sets `MALIGATOR_SITE_CONTAINER=1`. Generated code/search assets never

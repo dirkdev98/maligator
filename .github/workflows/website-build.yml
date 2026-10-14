@@ -1,0 +1,79 @@
+name: Prepare website container
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: website-build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Check out the selected revision and chart history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Linux
+        uses: ./.github/actions/setup-linux
+
+      - name: Install the pinned WASI toolchain
+        run: |
+          archive="$RUNNER_TEMP/wasi-sdk.tar.gz"
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+            https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/wasi-sdk-34.0-x86_64-linux.tar.gz \
+            --output "$archive"
+          echo "b761e3a0721dbae9c09a0059e5fdb2bf917d1b4a8a7b430fb3b5aafb0984b2c4  $archive" | sha256sum --check
+          tar -xzf "$archive" -C "$RUNNER_TEMP"
+          echo "WASI_SDK_PATH=$RUNNER_TEMP/wasi-sdk-34.0-x86_64-linux" >> "$GITHUB_ENV"
+          rustup target add wasm32-wasip1
+
+      - name: Check the runner environment
+        run: npm run env:check -- --json
+
+      - name: Build the production website and Explorer
+        run: npm run site:container
+
+      - name: Check native page responses
+        run: |
+          mkdir -p .cache/website-build
+          PORT=38080 .cache/site-container/current/maligator-site > .cache/website-build/server.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --connect-timeout 2 --max-time 10 http://127.0.0.1:38080/ --output .cache/website-build/index.html; then break; fi
+            kill -0 "$server_pid"
+            sleep 1
+          done
+          cmp website/index.html .cache/website-build/index.html
+          curl --fail --silent --max-time 30 http://127.0.0.1:38080/compatibility --output .cache/website-build/compatibility.html
+          cmp website/compatibility.html .cache/website-build/compatibility.html
+          curl --fail --silent --max-time 30 http://127.0.0.1:38080/explorer --output .cache/website-build/explorer.html
+          cmp .cache/explorer-site/current/index.html .cache/website-build/explorer.html
+
+      - name: Record source, generated changes and artifact integrity
+        run: |
+          git rev-parse HEAD > .cache/website-build/revision.txt
+          git diff --binary > .cache/website-build/generated.patch
+          sha256sum .cache/site-container/current/maligator-site .cache/explorer-site/current/manifest.json \
+            .cache/documentation/container/manifest.json website/index.html website/site-meta.json \
+            > .cache/website-build/SHA256SUMS
+          tar -czf "$RUNNER_TEMP/website-build.tar.gz" .cache/site-container/current \
+            .cache/explorer-site/current .cache/documentation/container .cache/website-build \
+            website/index.html website/compatibility.html website/explorer.html website/site-meta.json
+
+      - name: Retain the reviewed deployment inputs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: website-build-${{ github.run_id }}
+          path: ${{ runner.temp }}/website-build.tar.gz
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7

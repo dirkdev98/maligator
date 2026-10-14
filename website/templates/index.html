@@ -874,14 +874,14 @@
 									<table>
 										<thead>
 											<tr>
-												<th>Date</th>
+												<th>Record date</th>
 												<th>Closed compiled</th>
 												<th>Open compiled</th>
 												<th>Closed interpreted</th>
 												<th>Open interpreted</th>
 												<th>Runs</th>
 												<th>Target</th>
-												<th>Commit</th>
+												<th>Source / record</th>
 											</tr>
 										</thead>
 										<tbody id="javascript-table"></tbody>
@@ -920,12 +920,12 @@
 									<table>
 										<thead>
 											<tr>
-												<th>Date</th>
+												<th>Record date</th>
 												<th>Maligator</th>
 												<th>Node.js</th>
 												<th>Runs</th>
 												<th>Environment</th>
-												<th>Commit</th>
+												<th>Source / record</th>
 											</tr>
 										</thead>
 										<tbody id="self-table"></tbody>
@@ -1155,6 +1155,14 @@ Mal.serve({
 								char
 							],
 					);
+				const benchmarkIdentity = (point) => {
+					const source = point.source;
+					const measured = source
+						? `<code title="${html(source.commit)}">${html(source.commit.slice(0, 8))}</code>${source.dirty === true ? " + working-tree changes" : source.dirty === false ? "" : " (working-tree state unrecorded)"}`
+						: "unrecorded";
+					const record = point.preview ? "Local preview at" : "Baseline record";
+					return `Measured source: ${measured}<br>${record}: <code>${html(point.commit)}</code>`;
+				};
 				const duration = (milliseconds) =>
 					milliseconds >= 60000
 						? `${Math.floor(milliseconds / 60000)}m ${Math.round((milliseconds % 60000) / 1000)}s`
@@ -1499,12 +1507,12 @@ Mal.serve({
 					],
 					tickFormat: duration,
 					tooltip: (point, item) =>
-						`<strong>${html(item.label)} · ${duration(point[item.key])}</strong><br>${html(shortDate(point.date))}<br>median of ${point.runs} fresh-process runs · production native<br>${html(point.nativeBuild.target)} · ${html(point.nativeBuild.compilerVersion)}<br>commit ${html(point.commit)}${point.preview ? " · local preview" : ""}`,
+						`<strong>${html(item.label)} · ${duration(point[item.key])}</strong><br>Recorded ${html(shortDate(point.date))}<br>median of ${point.runs} fresh-process runs · production native<br>${html(point.nativeBuild.target)} · ${html(point.nativeBuild.compilerVersion)}<br>${benchmarkIdentity(point)}`,
 				});
 				document.getElementById("javascript-table").innerHTML = javascript
 					.map(
 						(point) =>
-							`<tr><td>${html(shortDate(point.date))}</td><td>${duration(point.closedCompiledMs)}</td><td>${duration(point.openCompiledMs)}</td><td>${duration(point.closedInterpretedMs)}</td><td>${duration(point.openInterpretedMs)}</td><td>${point.runs}</td><td>${html(point.nativeBuild.target)}</td><td>${html(point.commit)}${point.preview ? " (preview)" : ""}</td></tr>`,
+							`<tr><td>${html(shortDate(point.date))}</td><td>${duration(point.closedCompiledMs)}</td><td>${duration(point.openCompiledMs)}</td><td>${duration(point.closedInterpretedMs)}</td><td>${duration(point.openInterpretedMs)}</td><td>${point.runs}</td><td>${html(point.nativeBuild.target)}</td><td>${benchmarkIdentity(point)}</td></tr>`,
 					)
 					.join("");
 
@@ -1528,12 +1536,12 @@ Mal.serve({
 					series: [{ key: "maligatorMs" }, { key: "nodeMs" }],
 					tickFormat: duration,
 					tooltip: (point) =>
-						`<strong>${html(shortDate(point.date))}</strong><br>Maligator ${duration(point.maligatorMs)}<br>Node.js ${duration(point.nodeMs)}<br>median of ${point.runs} · ${html(point.platform)}-${html(point.arch)} · ${html(point.nodeVersion)}<br>${point.units} C units · ${fmt.format(point.maligatorCodeUnits)} / ${fmt.format(point.nodeCodeUnits)} C bytes<br>commit ${html(point.commit)}${point.preview ? " · local preview" : ""}`,
+						`<strong>Recorded ${html(shortDate(point.date))}</strong><br>Maligator ${duration(point.maligatorMs)}<br>Node.js ${duration(point.nodeMs)}<br>median of ${point.runs} · ${html(point.platform)}-${html(point.arch)} · ${html(point.nodeVersion)}<br>${point.units} C units · ${fmt.format(point.maligatorCodeUnits)} / ${fmt.format(point.nodeCodeUnits)} C bytes<br>${benchmarkIdentity(point)}`,
 				});
 				document.getElementById("self-table").innerHTML = self
 					.map(
 						(point) =>
-							`<tr><td>${html(shortDate(point.date))}</td><td>${duration(point.maligatorMs)}</td><td>${duration(point.nodeMs)}</td><td>${point.runs}</td><td>${html(`${point.platform}-${point.arch} / ${point.nodeVersion}`)}</td><td>${html(point.commit)}${point.preview ? " (preview)" : ""}</td></tr>`,
+							`<tr><td>${html(shortDate(point.date))}</td><td>${duration(point.maligatorMs)}</td><td>${duration(point.nodeMs)}</td><td>${point.runs}</td><td>${html(`${point.platform}-${point.arch} / ${point.nodeVersion}`)}</td><td>${benchmarkIdentity(point)}</td></tr>`,
 					)
 					.join("");
 			})();

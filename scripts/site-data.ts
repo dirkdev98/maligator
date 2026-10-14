@@ -61,7 +61,13 @@ export interface JavascriptSiteMetrics {
 
 export interface JavascriptPoint extends DatedPoint, JavascriptSiteMetrics {
 	commit: string;
+	source?: BenchmarkSource;
 	preview?: boolean;
+}
+
+interface BenchmarkSource {
+	commit: string;
+	dirty?: boolean;
 }
 
 export interface SelfCompileMetrics {
@@ -97,6 +103,7 @@ interface SelfCompilePhases {
 
 export interface SelfCompilePoint extends DatedPoint, SelfCompileMetrics {
 	commit: string;
+	source?: BenchmarkSource;
 	preview?: boolean;
 }
 
@@ -119,6 +126,7 @@ function selfCompileMetrics(point: SelfCompileMetrics): SelfCompileMetrics {
 
 interface BenchmarkFile {
 	schema?: number;
+	source?: unknown;
 	javascript?: unknown;
 	selfCompile?: SelfCompileMetrics;
 }
@@ -251,6 +259,17 @@ function record(value: unknown): Record<string, unknown> | undefined {
 		: undefined;
 }
 
+function benchmarkSource(value: unknown): BenchmarkSource | undefined {
+	const source = record(record(value)?.source);
+	if (typeof source?.commit !== "string" || !/^[a-f0-9]{40}$/i.test(source.commit)) {
+		return undefined;
+	}
+	return {
+		commit: source.commit,
+		...(typeof source.dirty === "boolean" ? { dirty: source.dirty } : {}),
+	};
+}
+
 export function javascriptMetricsForSite(
 	value: unknown,
 ): JavascriptSiteMetrics | undefined {
@@ -308,7 +327,13 @@ export function javascriptMetricsForSite(
 }
 
 function javascriptSiteMetrics(point: JavascriptPoint): JavascriptSiteMetrics {
-	const { commit: _commit, date: _date, preview: _preview, ...metrics } = point;
+	const {
+		commit: _commit,
+		date: _date,
+		source: _source,
+		preview: _preview,
+		...metrics
+	} = point;
 	return metrics;
 }
 
@@ -323,7 +348,14 @@ export function collectJavascriptHistory(
 			const metrics = javascriptMetricsForSite(value);
 			return metrics === undefined
 				? []
-				: [{ commit: commit.slice(0, 8), date, ...metrics }];
+				: [
+						{
+							commit: commit.slice(0, 8),
+							date,
+							source: benchmarkSource(value),
+							...metrics,
+						},
+					];
 		}),
 		javascriptSiteMetrics,
 	);
@@ -338,6 +370,7 @@ export function collectJavascriptHistory(
 			commit: previewCommit,
 			date: previewDate.toISOString(),
 			preview: true,
+			source: benchmarkSource(current),
 			...currentMetrics,
 		});
 	}
@@ -356,11 +389,14 @@ export function javascriptHistory(
 	);
 }
 
-export function selfCompileHistory(
-	previewDate = statSync(BENCH_FILE).mtime,
+export function collectSelfCompileHistory(
+	revisions: ReadonlyArray<GitRevision<BenchmarkFile>>,
+	current: BenchmarkFile,
+	previewCommit: string,
+	previewDate: Date,
 ): Array<SelfCompilePoint> {
 	const committed: Array<SelfCompilePoint> = changesOnly(
-		history<BenchmarkFile>(BENCH_FILE)
+		revisions
 			.filter(
 				(
 					revision,
@@ -370,25 +406,39 @@ export function selfCompileHistory(
 			.map(({ commit, date, value }) => ({
 				commit: commit.slice(0, 8),
 				date,
+				source: benchmarkSource(value),
 				...value.selfCompile,
 			})),
 		selfCompileMetrics,
 	);
-	const current = (JSON.parse(readFileSync(BENCH_FILE, "utf8")) as BenchmarkFile)
-		.selfCompile;
-	if (current !== undefined) {
+	const currentMetrics = current.selfCompile;
+	if (currentMetrics !== undefined) {
 		const latest = committed.at(-1);
 		const comparable = latest === undefined ? undefined : selfCompileMetrics(latest);
-		if (JSON.stringify(comparable) !== JSON.stringify(selfCompileMetrics(current))) {
+		if (
+			JSON.stringify(comparable) !== JSON.stringify(selfCompileMetrics(currentMetrics))
+		) {
 			committed.push({
-				commit: currentCommit(),
+				commit: previewCommit,
 				date: previewDate.toISOString(),
 				preview: true,
-				...current,
+				source: benchmarkSource(current),
+				...currentMetrics,
 			});
 		}
 	}
 	return committed;
+}
+
+export function selfCompileHistory(
+	previewDate = statSync(BENCH_FILE).mtime,
+): Array<SelfCompilePoint> {
+	return collectSelfCompileHistory(
+		history<BenchmarkFile>(BENCH_FILE),
+		JSON.parse(readFileSync(BENCH_FILE, "utf8")) as BenchmarkFile,
+		currentCommit(),
+		previewDate,
+	);
 }
 
 function replaceRegion(

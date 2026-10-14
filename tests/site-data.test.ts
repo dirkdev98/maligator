@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
 import {
 	collectJavascriptHistory,
+	collectSelfCompileHistory,
 	changesOnly,
 	isoWeekKey,
 	javascriptMetricsForSite,
@@ -8,6 +9,7 @@ import {
 	since,
 	summarizeTest262,
 } from "../scripts/site-data.ts";
+import type { SelfCompileMetrics } from "../scripts/site-data.ts";
 
 function javascriptBaseline(
 	closedCompiledMs: number,
@@ -121,6 +123,140 @@ test("JavaScript history skips unchanged snapshots and appends a changed preview
 		closedCompiledMs: 1_050,
 		date: "2026-08-28T10:00:00.000Z",
 		preview: true,
+	});
+});
+
+test("JavaScript history distinguishes measured sources from baseline records without moving unchanged points", () => {
+	const source = { commit: "1".repeat(40), dirty: false };
+	const first = javascriptBaseline(1_300);
+	const measured = javascriptBaseline(1_100, { source });
+	const revisions = [
+		{ commit: "aaaaaaaa1111", date: "2026-08-25T10:00:00Z", value: first },
+		{
+			commit: "bbbbbbbb2222",
+			date: "2026-08-26T10:00:00Z",
+			value: javascriptBaseline(1_300, { source }),
+		},
+		{ commit: "cccccccc3333", date: "2026-08-27T10:00:00Z", value: measured },
+	];
+	const points = collectJavascriptHistory(
+		revisions,
+		javascriptBaseline(1_100, { source: { commit: "2".repeat(40), dirty: true } }),
+		"dddddddd",
+		new Date("2026-08-28T10:00:00Z"),
+	);
+	expect(
+		points.map(({ commit, date, source, preview }) => ({
+			commit,
+			date,
+			source,
+			preview,
+		})),
+	).toEqual([
+		{
+			commit: "aaaaaaaa",
+			date: "2026-08-25T10:00:00Z",
+			source: undefined,
+			preview: undefined,
+		},
+		{ commit: "cccccccc", date: "2026-08-27T10:00:00Z", source, preview: undefined },
+	]);
+	const preview = collectJavascriptHistory(
+		revisions,
+		javascriptBaseline(1_050, { source: { commit: "2".repeat(40), dirty: true } }),
+		"dddddddd",
+		new Date("2026-08-28T10:00:00Z"),
+	).at(-1);
+	expect(preview).toMatchObject({
+		commit: "dddddddd",
+		source: { commit: "2".repeat(40), dirty: true },
+		preview: true,
+		closedCompiledMs: 1_050,
+	});
+});
+
+test("benchmark history does not infer measured source or clean state from incomplete provenance", () => {
+	for (const [source, expected] of [
+		[undefined, undefined],
+		[{ commit: null, dirty: false }, undefined],
+		[{ commit: "not-a-commit" }, undefined],
+		[{ commit: "1".repeat(40) }, { commit: "1".repeat(40) }],
+	] as const) {
+		const points = collectJavascriptHistory(
+			[],
+			javascriptBaseline(1_300, { source }),
+			"aaaaaaaa",
+			new Date("2026-08-25T10:00:00Z"),
+		);
+		expect(points[0]?.source).toEqual(expected);
+	}
+});
+
+test("self-compile history carries measured source only on its unchanged metric identity", () => {
+	const metrics: SelfCompileMetrics = {
+		world: "closed",
+		maligatorMs: 1_000,
+		nodeMs: 800,
+		maligatorPhases: { graphMs: 10, semanticMs: 20, emitMs: 30, writeMs: 40 },
+		nodePhases: { graphMs: 5, semanticMs: 10, emitMs: 15, writeMs: 20 },
+		runs: 5,
+		units: 3,
+		maligatorCodeUnits: 100,
+		nodeCodeUnits: 100,
+		platform: "darwin",
+		arch: "arm64",
+		nodeVersion: "v26.10.0",
+	};
+	const source = { commit: "1".repeat(40), dirty: false };
+	const measured = { selfCompile: { ...metrics, maligatorMs: 900 }, source };
+	const revisions = [
+		{
+			commit: "aaaaaaaa1111",
+			date: "2026-08-25T10:00:00Z",
+			value: { selfCompile: metrics },
+		},
+		{
+			commit: "bbbbbbbb2222",
+			date: "2026-08-26T10:00:00Z",
+			value: { selfCompile: metrics, source },
+		},
+		{ commit: "cccccccc3333", date: "2026-08-27T10:00:00Z", value: measured },
+	];
+	const points = collectSelfCompileHistory(
+		revisions,
+		{ ...measured, source: { commit: "2".repeat(40), dirty: true } },
+		"dddddddd",
+		new Date("2026-08-28T10:00:00Z"),
+	);
+	expect(
+		points.map(({ commit, date, source, preview }) => ({
+			commit,
+			date,
+			source,
+			preview,
+		})),
+	).toEqual([
+		{
+			commit: "aaaaaaaa",
+			date: "2026-08-25T10:00:00Z",
+			source: undefined,
+			preview: undefined,
+		},
+		{ commit: "cccccccc", date: "2026-08-27T10:00:00Z", source, preview: undefined },
+	]);
+	expect(
+		collectSelfCompileHistory(
+			revisions,
+			{ selfCompile: { ...metrics, maligatorMs: 850 }, source },
+			"dddddddd",
+			new Date("2026-08-28T10:00:00Z"),
+		).at(-1),
+	).toMatchObject({
+		commit: "dddddddd",
+		date: "2026-08-28T10:00:00.000Z",
+		preview: true,
+		source,
+		maligatorMs: 850,
 	});
 });
 
