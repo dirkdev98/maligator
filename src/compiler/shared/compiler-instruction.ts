@@ -754,16 +754,15 @@ type CompilerOperation =
 	  }
 	| {
 			type: "callRestArguments";
-			registers: [number, number, number, number];
+			// [result, callee, this, receiver, memoized rest state, ...prefix]
+			registers: [number, number, number, number, number, ...Array<number>];
 			startIndex: number;
 			apply: boolean;
 	  }
 	| {
 			type: "callSpreadIterable";
-
-			// [destination, callee, this, iterable] — used when the entire
-			// argument list is one spread element.
-			registers: [number, number, number, number];
+			// The iterable stays at a fixed operand; prefix expressions are evaluated first.
+			registers: [number, number, number, number, ...Array<number>];
 	  }
 	| {
 			type: "constructSpread";
@@ -1051,6 +1050,11 @@ type CompilerOperation =
 			type: "checkSuperClass";
 
 			// [parent]
+			registers: [number];
+	  }
+	| {
+			// The private state memoizes one Array if a forwarding guard fails.
+			type: "createRestArgumentsState";
 			registers: [number];
 	  }
 	| {

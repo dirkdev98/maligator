@@ -725,13 +725,9 @@ typedef struct MalInstruction {
             i32 dst, callee, this_value, arguments_array;
         } call_spread;
 
-        /**
-         * A call whose argument list is exactly one spread iterable. The runtime
-         * can marshal a proven builtin dense Array iterator directly and falls
-         * back to materialization for every observable/custom iterator case.
-         */
         struct {
-            i32 dst, callee, this_value, iterable;
+            // Side data retains [iterable, prefix count, prefix registers] within the opcode ABI.
+            i32 dst, callee, this_value, data_offset;
         } call_spread_iterable;
 
         struct {

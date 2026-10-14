@@ -75,6 +75,7 @@ function helperBody(
 				opcode === "createFunction" ||
 				opcode === "createArgumentsObject" ||
 				opcode === "createRestArguments" ||
+				opcode === "createRestArgumentsState" ||
 				opcode === "callRestArguments" ||
 				opcode === "storeCaptured" ||
 				opcode === "createPrivateNames" ||

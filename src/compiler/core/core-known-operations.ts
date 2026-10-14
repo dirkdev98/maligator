@@ -305,7 +305,9 @@ export const resolveKnownOperations: CoreFunctionPass = {
 				let receiver: Argument = construct ? args[0]! : invocation[0]!;
 				let arguments_: ReadonlyArray<Argument> = construct
 					? invocation
-					: invocation.slice(1);
+					: opcode === "callSpreadIterable"
+						? [...args.slice(3), args[2]!]
+						: invocation.slice(1);
 				const directCall = opcode === "call" || knownAdapter !== undefined;
 				let argumentMode: KnownArgumentMode | undefined =
 					opcode === "callSpreadIterable"

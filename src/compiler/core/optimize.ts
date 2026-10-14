@@ -1,9 +1,11 @@
 import { CoreAnalysisManager } from "./core-analysis-manager.ts";
+import { pruneCoreCaptureLiveness } from "./core-capture-liveness.ts";
 import type { ConstructedCoreCompilation, CoreCompilation } from "./core-compilation.ts";
 import {
 	emptyCoreCrossCallTransformResult,
 	runCoreCrossCallTransforms,
 } from "./core-cross-call-transforms.ts";
+import { CoreEditor } from "./core-editor.ts";
 import {
 	CoreFunctionOptimizationResources,
 	CoreFunctionOptimizationSession,
@@ -350,6 +352,31 @@ export function optimizeCore(
 		crossCall.statistics.considered,
 	);
 	reportBuilder.recordCheckpoint("after-cross-call-transforms", compilation.program);
+	const captureCallers =
+		ablatedFamily === "program-flow"
+			? []
+			: pruneCoreCaptureLiveness(
+					compilation.program,
+					compilation.context,
+					analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, { scope: "program" }),
+				);
+	const captureInputs = captureCallers.map(
+		(change) =>
+			new CoreFunctionOptimizationSession(
+				compilation.program,
+				compilation.context,
+				reportBuilder,
+				functionResources,
+				change.function,
+				{
+					verification: options.verification,
+					optionalMaxRunsPerWorkItem: profile.optionalMaxRunsPerWorkItem,
+					benchmarkAblation: ablatedPassFamily,
+					crossCallWave: crossCall.statistics.waves + 1,
+				},
+			).optimizeCrossCall(CoreEditor.open(compilation.program, change.function), [change])
+				.localPlanInput,
+	);
 	const memoryCallers = measurePhase(
 		"cross-call-memory-forwarding",
 		() =>
@@ -376,6 +403,7 @@ export function optimizeCore(
 	for (const input of crossCall.localPlanInputs) {
 		finalLocalPlanInputs.set(input.function, input);
 	}
+	for (const input of captureInputs) finalLocalPlanInputs.set(input.function, input);
 	for (const functionId of memoryCallers) {
 		finalLocalPlanInputs.set(
 			functionId,

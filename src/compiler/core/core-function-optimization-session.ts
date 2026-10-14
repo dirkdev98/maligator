@@ -239,7 +239,10 @@ export class CoreFunctionOptimizationSession {
 		);
 	}
 
-	optimizeCrossCall(editor: CoreEditor): CoreCrossCallFunctionOptimizationResult {
+	optimizeCrossCall(
+		editor: CoreEditor,
+		initialChanges: ReadonlyArray<CoreChangeSet> = [],
+	): CoreCrossCallFunctionOptimizationResult {
 		if (!this.#crossCall) {
 			throw new Error(`Core function ${this.functionId} is a primary session`);
 		}
@@ -273,8 +276,14 @@ export class CoreFunctionOptimizationSession {
 				functionIndex: this.functionId,
 			});
 		}
-		if (result.changes !== undefined && result.changes.edits > 0) {
-			const initial = [result.changes];
+		if (
+			initialChanges.length > 0 ||
+			(result.changes !== undefined && result.changes.edits > 0)
+		) {
+			const initial = [
+				...initialChanges,
+				...(result.changes === undefined ? [] : [result.changes]),
+			];
 			this.#passes.runComponent("control-flow", CORE_CONTROL_FLOW_PASSES, initial, {
 				seedLocalFromInitialChanges: false,
 			});
@@ -302,7 +311,7 @@ export class CoreFunctionOptimizationSession {
 			this.#passes.runComponent(
 				"canonicalize",
 				CORE_LATE_CANONICALIZATION_PASSES,
-				[...memoryChanges, ...representationChanges, ...proofChanges],
+				[...initial, ...memoryChanges, ...representationChanges, ...proofChanges],
 				{ seedLocalFromInitialChanges: false },
 			);
 		}

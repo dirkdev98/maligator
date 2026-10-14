@@ -3437,18 +3437,30 @@ void mal_op_call_spread_iterable(
     MalValue this_value =
         callable->registers[
             instruction->as.call_spread_iterable.this_value];
-    MalValue iterable =
-        callable->registers[
-            instruction->as.call_spread_iterable.iterable];
+    const i32 *data = mal_op_instruction_data(callable,
+        instruction->as.call_spread_iterable.data_offset);
+    MalValue iterable = callable->registers[data[0]];
+    i32 prefix_count = data[1];
     i32 dst = instruction->as.call_spread_iterable.dst;
 
     i32 base = vm->value_stack_size;
+    if (prefix_count > vm->value_stack_capacity - base) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            "Maximum call stack size exceeded");
+        return;
+    }
+    for (i32 i = 0; i < prefix_count; i++)
+        vm->value_stack[base + i] = callable->registers[data[2 + i]];
+    vm->value_stack_size = base + prefix_count;
     i32 argument_count =
         mal_vm_marshal_spread_iterable(vm, iterable);
-    if (argument_count < 0) return;
+    if (argument_count < 0) {
+        vm->value_stack_size = base;
+        return;
+    }
 
     mal_vm_call_dispatch(
-        vm, callee, this_value, base, argument_count, dst);
+        vm, callee, this_value, base, prefix_count + argument_count, dst);
 }
 
 // Shared spread call/construct for the native backend: marshal the spread array's
@@ -3473,15 +3485,23 @@ MalCompletion mal_vm_op_call_spread(
 
 MalCompletion mal_vm_op_call_spread_iterable(
     MalVm *vm, MalValue callee, MalValue this_value,
-    MalValue iterable) {
+    MalValue iterable, const MalValue *prefix, i32 prefix_count) {
     i32 base = vm->value_stack_size;
+    if (prefix_count > vm->value_stack_capacity - base) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            "Maximum call stack size exceeded");
+        return vm->completion;
+    }
+    MalCalleeRoots roots;
+    mal_gc_callee_roots_begin(&roots, this_value, callee, iterable, prefix, prefix_count);
+    for (i32 i = 0; i < prefix_count; i++) vm->value_stack[base + i] = prefix[i];
+    vm->value_stack_size = base + prefix_count;
     i32 argument_count =
         mal_vm_marshal_spread_iterable(vm, iterable);
-    if (argument_count < 0) return vm->completion;
-    MalCompletion completion = mal_vm_call_value(
-        vm, callee, this_value, &vm->value_stack[base],
-        argument_count);
+    MalCompletion completion = argument_count < 0 ? vm->completion : mal_vm_call_value(
+        vm, callee, this_value, &vm->value_stack[base], prefix_count + argument_count);
     vm->value_stack_size = base;
+    mal_gc_callee_roots_end(&roots);
     return completion;
 }
 
@@ -3501,27 +3521,46 @@ static bool mal_vm_rest_arguments_can_forward(
 
 MalCompletion mal_vm_op_call_rest_arguments(
     MalVm *vm, MalValue callee, MalValue this_value, MalValue receiver,
-    const MalValue *args, i32 arg_count, i32 start, bool apply) {
+    const MalValue *args, i32 arg_count, i32 start, bool apply,
+    MalValue *state, const MalValue *prefix, i32 prefix_count) {
     i32 count = arg_count > start ? arg_count - start : 0;
-    if (count <= vm->value_stack_capacity - vm->value_stack_size
+    i32 base = vm->value_stack_size;
+    if (mal_value_is_undefined(*state)
+        && prefix_count <= vm->value_stack_capacity - base
+        && count <= vm->value_stack_capacity - base - prefix_count
         && mal_vm_rest_arguments_can_forward(vm, callee, this_value, apply)) {
         MAL_PERF_COUNT(rest_forward_calls);
         MAL_PERF_ADD(rest_forward_values, count);
-        return mal_vm_call_value(vm, apply ? this_value : callee,
+        if (prefix_count == 0) return mal_vm_call_value(vm, apply ? this_value : callee,
             apply ? receiver : this_value, count > 0 ? args + start : nullptr, count);
+        MAL_PERF_ADD(rest_forward_copies, count);
+        for (i32 i = 0; i < prefix_count; i++) vm->value_stack[base + i] = prefix[i];
+        if (count > 0) memcpy(&vm->value_stack[base + prefix_count], args + start,
+            (usize) count * sizeof(MalValue));
+        vm->value_stack_size = base + prefix_count + count;
+        MalCompletion completion = mal_vm_call_value(vm, callee, this_value,
+            &vm->value_stack[base], prefix_count + count);
+        vm->value_stack_size = base;
+        return completion;
     }
 
-    MalValue roots[4] = {callee, this_value, receiver, mal_value_new_undefined()};
-    MalRootSpan root;
+    MalValue roots[3] = {callee, this_value, receiver};
+    MalRootSpan root, state_root, prefix_root;
     mal_gc_root(&root, roots, countof(roots));
-    roots[3] = mal_create_rest_arguments(vm, args, arg_count, start);
+    mal_gc_root(&state_root, state, 1);
+    mal_gc_root(&prefix_root, (MalValue *) prefix, prefix_count);
+    // Once observable, the same Array remains authoritative even if the guard recovers.
+    if (mal_value_is_undefined(*state))
+        *state = mal_create_rest_arguments(vm, args, arg_count, start);
     MalCompletion completion;
     if (apply) {
-        MalValue call_args[2] = {receiver, roots[3]};
+        MalValue call_args[2] = {receiver, *state};
         completion = mal_vm_call_value(vm, callee, this_value, call_args, 2);
     } else {
-        completion = mal_vm_op_call_spread_iterable(vm, callee, this_value, roots[3]);
+        completion = mal_vm_op_call_spread_iterable(vm, callee, this_value, *state, prefix, prefix_count);
     }
+    mal_gc_unroot(&prefix_root);
+    mal_gc_unroot(&state_root);
     mal_gc_unroot(&root);
     return completion;
 }
@@ -3530,52 +3569,58 @@ void mal_op_call_rest_arguments(MalCallable *callable, const MalInstruction *ins
     MalVm *vm = callable->vm;
     MalValue callee = callable->registers[instruction->as.call_rest_arguments.callee];
     MalValue this_value = callable->registers[instruction->as.call_rest_arguments.this_value];
-    const i32 *data = mal_op_instruction_data(
-        callable, instruction->as.call_rest_arguments.data_offset);
+    const i32 *data = mal_op_instruction_data(callable, instruction->as.call_rest_arguments.data_offset);
     MalValue receiver = callable->registers[data[0]];
     i32 start = data[1];
     bool apply = data[2] != 0;
+    MalValue *state = &callable->registers[data[3]];
+    i32 prefix_count = data[4];
     i32 count = callable->argument_count > start ? callable->argument_count - start : 0;
     i32 base = vm->value_stack_size;
-    if (count <= vm->value_stack_capacity - base
+    if (mal_value_is_undefined(*state)
+        && prefix_count <= vm->value_stack_capacity - base
+        && count <= vm->value_stack_capacity - base - prefix_count
         && mal_vm_rest_arguments_can_forward(vm, callee, this_value, apply)) {
         MAL_PERF_COUNT(rest_forward_calls);
         MAL_PERF_ADD(rest_forward_values, count);
         MAL_PERF_ADD(rest_forward_copies, count);
-        // Retain the iterative dispatcher so forwarded calls do not grow the C stack.
-        if (count > 0) {
-            memcpy(&vm->value_stack[base], callable->arguments + start,
-                (usize) count * sizeof(MalValue));
-        }
+        for (i32 i = 0; i < prefix_count; i++)
+            vm->value_stack[base + i] = callable->registers[data[5 + i]];
+        if (count > 0) memcpy(&vm->value_stack[base + prefix_count], callable->arguments + start,
+            (usize) count * sizeof(MalValue));
+        count += prefix_count;
         vm->value_stack_size = base + count;
         if (apply) {
             callee = this_value;
             this_value = receiver;
         }
     } else {
-        MalValue rest = mal_create_rest_arguments(
-            vm, callable->arguments, callable->argument_count, start);
-        MalRootSpan root;
-        mal_gc_root(&root, &rest, 1);
+        if (mal_value_is_undefined(*state))
+            *state = mal_create_rest_arguments(vm, callable->arguments, callable->argument_count, start);
         if (apply) {
             if (vm->value_stack_capacity - base < 2) {
-                mal_gc_unroot(&root);
-                mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
-                    "Maximum call stack size exceeded");
+                mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Maximum call stack size exceeded");
                 return;
             }
             vm->value_stack[base] = receiver;
-            vm->value_stack[base + 1] = rest;
+            vm->value_stack[base + 1] = *state;
             count = 2;
             vm->value_stack_size = base + count;
         } else {
-            count = mal_vm_marshal_spread_iterable(vm, rest);
+            if (prefix_count > vm->value_stack_capacity - base) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Maximum call stack size exceeded");
+                return;
+            }
+            for (i32 i = 0; i < prefix_count; i++)
+                vm->value_stack[base + i] = callable->registers[data[5 + i]];
+            vm->value_stack_size = base + prefix_count;
+            count = mal_vm_marshal_spread_iterable(vm, *state);
+            if (count < 0) { vm->value_stack_size = base; return; }
+            count += prefix_count;
         }
-        mal_gc_unroot(&root);
-        if (count < 0) return;
     }
-    mal_vm_call_dispatch(
-        vm, callee, this_value, base, count, instruction->as.call_rest_arguments.dst);
+    // The iterative dispatcher preserves interpreter stack depth for repeated forwarding.
+    mal_vm_call_dispatch(vm, callee, this_value, base, count, instruction->as.call_rest_arguments.dst);
 }
 
 MalCompletion mal_vm_op_construct_spread(MalVm *vm, MalValue callee, MalValue arguments_array) {

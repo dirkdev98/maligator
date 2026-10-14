@@ -1052,12 +1052,23 @@ function coreInitializedModuleGlobalSlots(program: CoreFrontendContext): Array<n
 	return [...slots].sort((left, right) => left - right);
 }
 
-/** Bindings that the statements before the first possible user-code call initialize. */
+/** Bindings initialized by module instantiation or before the first possible user-code call. */
 function moduleInitializationPrefix(
 	file: SemanticFile,
 	lockedPrimordials: boolean,
 ): ReadonlySet<Binding> {
 	const initialized = new Set<Binding>();
+	// Module function declarations are initialized before any body statement can re-enter user code.
+	for (const statement of file.ast.body) {
+		const declaration =
+			statement.type === "ExportNamedDeclaration" ||
+			statement.type === "ExportDefaultDeclaration"
+				? statement.declaration
+				: statement;
+		if (declaration?.type !== "FunctionDeclaration" || declaration.id === null) continue;
+		const binding = file.nodeToBinding.get(declaration.id);
+		if (binding !== undefined) initialized.add(binding);
+	}
 	const primitives = new Set<Binding>();
 	const classes = new Set<Binding>();
 	const readable = (node: ESTree.Identifier): boolean => {
@@ -10100,17 +10111,17 @@ function compileChainElement(
 		}
 
 		if (node.arguments.some((arg) => arg.type === "SpreadElement")) {
-			if (node.arguments.length === 1 && node.arguments[0]?.type === "SpreadElement") {
-				const iterable = compileExpression(
-					program,
-					fn,
-					cursor,
-					node.arguments[0].argument,
-				);
+			const trailing = compileTrailingSpreadArguments(
+				program,
+				fn,
+				cursor,
+				node.arguments,
+			);
+			if (trailing !== undefined) {
 				const destination = nextCoreVariable(fn);
 				emitSourceCall(program, fn, cursor, node, {
 					type: "callSpreadIterable",
-					registers: [destination, callee, thisRegister, iterable],
+					registers: [destination, callee, thisRegister, ...trailing],
 				});
 				return destination;
 			}
@@ -12320,10 +12331,24 @@ function compileStaticString(
 	return destination;
 }
 
-/**
- * Materialize a spread-bearing argument list into an array register, plain
- * arguments appended directly and spreads drained through their iterators.
- */
+function compileTrailingSpreadArguments(
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
+	args: Array<ESTree.Expression | ESTree.SpreadElement>,
+): [number, ...Array<number>] | undefined {
+	const last = args.at(-1);
+	const prefixArgs = args.slice(0, -1);
+	if (
+		last?.type !== "SpreadElement" ||
+		!prefixArgs.every((arg): arg is ESTree.Expression => arg.type !== "SpreadElement")
+	)
+		return undefined;
+	const prefix = prefixArgs.map((arg) => compileExpression(program, fn, cursor, arg));
+	const iterable = compileExpression(program, fn, cursor, last.argument);
+	return [iterable, ...prefix];
+}
+
 function compileSpreadArgumentsArray(
 	program: CoreFrontendContext,
 	fn: CoreFrontendFunction,
@@ -13340,20 +13365,17 @@ function compileCall(
 		thisRegister = compileUndefined(fn, cursor);
 	}
 	if (callExpression.arguments.some((arg) => arg.type === "SpreadElement")) {
-		if (
-			callExpression.arguments.length === 1 &&
-			callExpression.arguments[0]?.type === "SpreadElement"
-		) {
-			const iterable = compileExpression(
-				program,
-				fn,
-				cursor,
-				callExpression.arguments[0].argument,
-			);
+		const trailing = compileTrailingSpreadArguments(
+			program,
+			fn,
+			cursor,
+			callExpression.arguments,
+		);
+		if (trailing !== undefined) {
 			const destination = nextCoreVariable(fn);
 			emitSourceCall(program, fn, cursor, callExpression, {
 				type: "callSpreadIterable",
-				registers: [destination, callee, thisRegister, iterable],
+				registers: [destination, callee, thisRegister, ...trailing],
 			});
 			return destination;
 		}

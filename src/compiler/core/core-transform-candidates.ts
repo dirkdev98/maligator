@@ -3,6 +3,7 @@ import type { CoreReadAccessorRegionPlan } from "./core-read-accessor-expansion.
 
 export type CoreTransformKind =
 	| "static-argument-specialization"
+	| "synchronous-callback-inline"
 	| "finite-dispatch"
 	| "inline"
 	| "guarded-inline"
@@ -129,6 +130,7 @@ interface CallerConsumption {
 function transformKindCounts(): Record<CoreTransformKind, number> {
 	return {
 		"static-argument-specialization": 0,
+		"synchronous-callback-inline": 0,
 		"finite-dispatch": 0,
 		inline: 0,
 		"guarded-inline": 0,

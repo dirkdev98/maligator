@@ -854,7 +854,7 @@ function deriveSummary(
 	for (const site of callSites) {
 		if (site.targets.opaque || (!targets.sourceClosed && site.targets.anyScript)) {
 			effects = joinEffectSummaries(effects, EVERY_EFFECT_SUMMARY);
-			for (const argument of site.arguments ?? []) {
+			for (const argument of site.arguments ?? site.argumentPrefix ?? []) {
 				noteCallFact(argument, "retained", "unknown");
 			}
 			noteCallFact(site.receiver, "retained", "unknown");
@@ -865,7 +865,11 @@ function deriveSummary(
 				throw new Error("Missing AnyScriptAggregate summary");
 			}
 			effects = joinEffectSummaries(effects, anyScriptSummary.effects);
-			for (const [index, argument] of (site.arguments ?? []).entries()) {
+			for (const [index, argument] of (
+				site.arguments ??
+				site.argumentPrefix ??
+				[]
+			).entries()) {
 				noteCallFact(
 					argument,
 					anyScriptSummary.parameterEscape[index] ?? "retained",
@@ -886,7 +890,11 @@ function deriveSummary(
 				continue;
 			}
 			effects = joinEffectSummaries(effects, calleeSummary.effects);
-			for (const [index, argument] of (site.arguments ?? []).entries()) {
+			for (const [index, argument] of (
+				site.arguments ??
+				site.argumentPrefix ??
+				[]
+			).entries()) {
 				noteCallFact(
 					argument,
 					calleeSummary.parameterEscape[index] ?? calleeSummary.restParameterEscape,

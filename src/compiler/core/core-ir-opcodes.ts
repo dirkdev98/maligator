@@ -64,6 +64,7 @@ export const CORE_OPCODES = [
 	"createPrivateName",
 	"createPrivateNames",
 	"createRestArguments",
+	"createRestArgumentsState",
 	"createString",
 	"createTemplateObject",
 	"createUndefined",
@@ -191,6 +192,7 @@ const TWO_OUTPUTS = new Set<CoreOpcode>([
 ]);
 
 const GC_FREE = new Set<CoreOpcode>([
+	"createRestArgumentsState",
 	"guardServiceEpoch",
 	"readServiceEpoch",
 	"probeRead",
@@ -354,6 +356,7 @@ const write = (
  * whole-family partitioning.
  */
 const OPCODE_ACCESSES = {
+	createRestArgumentsState: [write("object-slot")],
 	createArrayFromIterable: [read("object-slot", { baseOperand: 0 })],
 	createBaseConstructReceiver: [read("object-slot", { baseOperand: 0 })],
 	guardBaseConstructorLayout: [
@@ -532,7 +535,7 @@ const OPCODE_CALL_TRANSFERS = {
 		result: "call-completion",
 		invocation: "call",
 		receiverOperand: 1,
-		arguments: { kind: "aggregate", operand: 2 },
+		arguments: { kind: "aggregate", operand: 2, prefixFirstOperand: 3 },
 	},
 	construct: {
 		calleeOperand: 0,
@@ -650,8 +653,8 @@ const INPUT_ARITIES = {
 	call: [2, 65_535],
 	callKnown: [1, 65_535],
 	callSpread: [3, 3],
-	callSpreadIterable: [3, 3],
-	callRestArguments: [3, 3],
+	callSpreadIterable: [3, 65_535],
+	callRestArguments: [4, 65_535],
 	checkSuperClass: [1, 1],
 	construct: [1, 65_535],
 	constructSpread: [2, 2],
@@ -675,6 +678,7 @@ const INPUT_ARITIES = {
 	createPrivateName: [0, 0],
 	createPrivateNames: [0, 0],
 	createRestArguments: [0, 0],
+	createRestArgumentsState: [0, 0],
 	createString: [0, 0],
 	createTemplateObject: [0, 0],
 	createUndefined: [0, 0],

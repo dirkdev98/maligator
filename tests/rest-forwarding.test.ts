@@ -354,6 +354,9 @@ describe("rest forwarding allocation contract", () => {
 
 	for (const source of [
 		"function forward(...args) { return target(...args); }",
+		"function forward(first, ...rest) { return target(first, ...rest); }",
+		"function forward(...args) { let result; for (let i = 0; i < 2; i++) result = target(...args); return result; }",
+		"function forward(fn, receiver, ...args) { fn.apply(receiver, args); return fn.apply(receiver, args); }",
 		"function forward(fn, ...args) { return fn(...args); }",
 		"function forward(...args) { return target.apply(this, args); }",
 		"function forward(fn, receiver, ...args) { return fn.apply(receiver, args); }",
@@ -383,8 +386,7 @@ describe("rest forwarding allocation contract", () => {
 		"function forward(...args) { return () => target(...args); }",
 		"function* forward(...args) { yield 1; return target(...args); }",
 		"async function forward(...args) { await 1; return target(...args); }",
-		"function forward(first, ...rest) { return target(first, ...rest); }",
-		"function forward(...args) { let result; for (let i = 0; i < 2; i++) result = target(...args); return result; }",
+
 		'function forward(...args) { eval("args[0] = 7"); return target(...args); }',
 	]) {
 		it(`retains ordinary array construction for ${source}`, () => {

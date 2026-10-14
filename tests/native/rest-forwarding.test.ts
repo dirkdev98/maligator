@@ -81,7 +81,7 @@ describe("rest forwarding allocation counters", () => {
 			expect(run.status, run.stderr).toBe(0);
 			expect(run.stdout.trim()).toBe("rest-forwarding-mechanism PASS");
 			expect(run.stderr).toContain(
-				"[perf-rest-stats] arrays=0 array_values=0 forwards=40 forwarded_values=90 forward_copies=0",
+				"[perf-rest-stats] arrays=0 array_values=0 forwards=70 forwarded_values=150 forward_copies=60",
 			);
 		});
 	}

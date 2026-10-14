@@ -20,6 +20,7 @@ import {
 } from "./core-ir-call-targets.ts";
 import {
 	CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
+	buildCoreControlFlow,
 	coreTerminatorInput,
 } from "./core-ir-control-flow.ts";
 import {
@@ -67,6 +68,8 @@ import {
 import type { CoreReadAccessorWork } from "./core-read-accessor-expansion.ts";
 import { specializeCoreStaticArguments } from "./core-static-value-calls.ts";
 import type { CoreChangeSet, CoreFunctionStore, CoreProgram } from "./core-store.ts";
+import { coreSynchronousCallbackConsumer } from "./core-synchronous-callbacks.ts";
+import type { CoreSynchronousCallbackConsumer } from "./core-synchronous-callbacks.ts";
 import {
 	CoreTransformCandidateService,
 	DEFAULT_CORE_TRANSFORM_BUDGETS,
@@ -114,6 +117,7 @@ const readAccessorInputs = new WeakMap<
 >();
 
 interface InlineTarget {
+	readonly captureValues: ReadonlyMap<CoreInstructionId, CoreValueId>;
 	readonly argumentSnapshots: boolean;
 	readonly construction: boolean;
 	readonly linear: boolean;
@@ -198,6 +202,7 @@ function inlineSourcePositions(
 const INLINE_UNSUPPORTED_OPCODES = new Set([
 	"createArgumentsObject",
 	"createRestArguments",
+	"createRestArgumentsState",
 	"callRestArguments",
 	"loadArgumentCount",
 	"loadCallee",
@@ -211,9 +216,55 @@ interface InlineCaptureContext {
 	readonly site: CoreInstructionId;
 }
 
+function immutableCaptureValue(
+	program: CoreProgram,
+	context: InlineCaptureContext,
+	owner: unknown,
+	index: unknown,
+): CoreValueId | undefined {
+	const caller = context.caller;
+	const cells = discoveredCapturedCellWrites.get(program);
+	if (
+		owner !== caller.id ||
+		typeof index !== "number" ||
+		cells === undefined ||
+		!cells.sourceClosed ||
+		cells.rebinding.has(caller.id) ||
+		caller.metadata.mappedArgumentSlots.includes(index)
+	)
+		return undefined;
+	const writes = cells.writes.get(`${caller.id}:${index}`);
+	if (writes?.length !== 1 || writes[0]!.function !== caller.id) return undefined;
+	const store = writes[0]!.instruction;
+	if (caller.instructionOpcodeName(store) !== "storeCaptured") return undefined;
+	const from = caller.instructionBlock(store),
+		to = caller.instructionBlock(context.site);
+	if (
+		caller.handlerBlockCount !== 0 &&
+		(from !== caller.entry || caller.kernel.blockHandlerBlock(from) !== undefined)
+	)
+		return undefined;
+	const flow = buildCoreControlFlow(program, caller.id, { exceptions: true });
+	if (
+		flow.loops.some((loop) => loop.blocks.has(from)) ||
+		flow.irreducibleCycles.some((cycle) => cycle.blocks.has(from))
+	)
+		return undefined;
+	if (from === to) {
+		let precedes = false;
+		for (const instruction of caller.instructionIds(from)) {
+			if (instruction === context.site) break;
+			if (instruction === store) precedes = true;
+		}
+		if (!precedes) return undefined;
+	} else if (!flow.instructionDominatesBlock(from, to)) return undefined;
+	return caller.kernel.operandAt(caller.kernel.instructionOperandStart(store));
+}
+
 const CAPTURE_ENVIRONMENT_REBINDS = new Set(["envPush", "envCopy", "envPop"]);
 
 interface CapturedCellWrites {
+	readonly sourceClosed: boolean;
 	readonly writes: ReadonlyMap<
 		string,
 		ReadonlyArray<{
@@ -227,7 +278,10 @@ interface CapturedCellWrites {
 // Each discovery resets this; a wave's inlines never add captured-cell writers.
 const discoveredCapturedCellWrites = new WeakMap<CoreProgram, CapturedCellWrites>();
 
-function capturedCellWrites(program: CoreProgram): CapturedCellWrites {
+function capturedCellWrites(
+	program: CoreProgram,
+	sourceClosed: boolean,
+): CapturedCellWrites {
 	const writes = new Map<
 		string,
 		Array<{ function: CoreFunctionId; instruction: CoreInstructionId }>
@@ -261,7 +315,7 @@ function capturedCellWrites(program: CoreProgram): CapturedCellWrites {
 			else if (CAPTURE_ENVIRONMENT_REBINDS.has(opcode)) rebinding.add(functionId);
 		}
 	}
-	return { writes, rebinding };
+	return { writes, rebinding, sourceClosed };
 }
 
 /**
@@ -427,8 +481,16 @@ function directCaptureContext(
 			caller.instructionAttributes(instruction)[
 				CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE
 			] !== true
-		)
+		) {
+			if (
+				caller.instructionKind(instruction) === "operation" &&
+				caller.instructionOpcodeName(instruction) === "call" &&
+				caller.kernel.useOperand(use) === 0 &&
+				captureEnvironmentIsStable(caller, creation, instruction)
+			)
+				continue;
 			return undefined;
+		}
 		const descriptor = caller.registry.byId(caller.instructionOpcode(instruction));
 		if (descriptor.callTransfer?.arguments.kind !== "positional") return undefined;
 		const position = caller.kernel.useOperand(use);
@@ -443,8 +505,12 @@ function inlineTarget(
 	target: CoreFunctionId,
 	invocation: "call" | "construct",
 	captureContext?: InlineCaptureContext,
+	synchronousCallback?: CoreSynchronousCallbackConsumer,
 ): InlineTarget | undefined {
 	const fn = program.function(target);
+	const callbackConsumer =
+		synchronousCallback?.function === fn &&
+		synchronousCallback.bodyVersion === fn.version("body");
 	if (
 		fn.isGenerator ||
 		fn.isAsync ||
@@ -477,16 +543,22 @@ function inlineTarget(
 	let linear = true;
 	let instructionCount = 0;
 	const visit = (block: CoreBlockId): boolean => {
-		if (active.has(block)) return false;
+		if (active.has(block)) {
+			linear = false;
+			return callbackConsumer;
+		}
 		if (visited.has(block)) return true;
-		if (visited.size >= 8 || fn.kernel.blockHandlerBlock(block) !== undefined)
+		if (
+			visited.size >= (callbackConsumer ? 64 : 8) ||
+			(!callbackConsumer && fn.kernel.blockHandlerBlock(block) !== undefined)
+		)
 			return false;
 		visited.add(block);
 		active.add(block);
 		for (const instruction of fn.bodyInstructionIds(block)) {
 			const opcode = fn.instructionOpcodeName(instruction);
 			if (
-				++instructionCount > 48 ||
+				++instructionCount > (callbackConsumer ? 128 : 48) ||
 				INLINE_UNSUPPORTED_OPCODES.has(opcode) ||
 				(invocation !== "construct" && opcode === "loadNewTarget") ||
 				(invocation === "construct" &&
@@ -508,6 +580,11 @@ function inlineTarget(
 			}
 		}
 		const terminator = fn.blockTerminator(block);
+		const handler = fn.kernel.blockHandlerBlock(block);
+		if (handler !== undefined) {
+			linear = false;
+			if (!visit(handler)) return false;
+		}
 		const kind = fn.instructionKind(terminator);
 		if (kind === "return")
 			returns.push(fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator)));
@@ -557,7 +634,23 @@ function inlineTarget(
 			parameters,
 		});
 	}
+	const captureValues = new Map<CoreInstructionId, CoreValueId>();
+	if (captureContext !== undefined) {
+		for (const block of blocks)
+			for (const instruction of block.instructions) {
+				if (fn.instructionOpcodeName(instruction) !== "loadCaptured") continue;
+				const attributes = fn.instructionAttributes(instruction);
+				const value = immutableCaptureValue(
+					program,
+					captureContext,
+					attributes.functionIndex,
+					attributes.index,
+				);
+				if (value !== undefined) captureValues.set(instruction, value);
+			}
+	}
 	return {
+		captureValues,
 		argumentSnapshots: hasArgumentSnapshots,
 		construction: invocation === "construct",
 		function: fn,
@@ -1541,12 +1634,44 @@ function offerFunctionCandidates(
 						site.instruction,
 						exactTarget,
 					));
-		const inline = inlineTarget(program, target, invocation, captureContext);
+		if (localCaptureContext !== undefined) capturedCells();
+		const consumerProof =
+			exactTarget === undefined || open || invocation !== "call"
+				? undefined
+				: coreSynchronousCallbackConsumer(
+						program,
+						summaries,
+						fn,
+						site.instruction,
+						target,
+					);
+		const callbackContext =
+			consumerProof === undefined
+				? undefined
+				: directCaptureContext(
+						fn,
+						consumerProof.argument,
+						site.instruction,
+						consumerProof.callback,
+					);
+		const callbackInline =
+			callbackContext === undefined
+				? undefined
+				: inlineTarget(program, consumerProof!.callback, "call", callbackContext);
+		const synchronousCallback = callbackInline?.linear ? consumerProof : undefined;
+		const inline = inlineTarget(
+			program,
+			target,
+			invocation,
+			captureContext,
+			synchronousCallback,
+		);
 		const singleUseGlobal =
 			coreValueIsLoadedGlobalProperty(fn, site.callee) &&
 			(globalTargetUses.get(target) ?? 0) < 2;
 		if (
 			singleUseGlobal &&
+			synchronousCallback === undefined &&
 			(!inLoop ||
 				(!inline?.argumentSnapshots &&
 					!callCarriesDirectCreatedFunction(fn, site.instruction)))
@@ -1575,6 +1700,9 @@ function offerFunctionCandidates(
 		const generatedCodeCost =
 			(inline?.instructions.length ?? 0) +
 			(inline?.linear === false ? inline.blocks.length : 0) +
+			(synchronousCallback === undefined
+				? 0
+				: synchronousCallback.invocations * callbackInline!.instructions.length) +
 			consumerDuplication +
 			(open ? 1 : 0);
 		const regionCost = readAccessor
@@ -1601,17 +1729,21 @@ function offerFunctionCandidates(
 			continue;
 		const offered = service.offer(
 			Object.freeze({
-				kind: readAccessor
-					? open
-						? "guarded-read-accessor"
-						: "read-accessor"
-					: open
-						? "guarded-inline"
-						: "inline",
+				kind:
+					synchronousCallback !== undefined && inline !== undefined
+						? "synchronous-callback-inline"
+						: readAccessor
+							? open
+								? "guarded-read-accessor"
+								: "read-accessor"
+							: open
+								? "guarded-inline"
+								: "inline",
 				caller: functionId,
 				site: site.instruction,
 				revision: summaries.version(target),
-				priorityClass: hintedTarget !== undefined ? 3 : 2,
+				priorityClass:
+					synchronousCallback !== undefined ? 1 : hintedTarget !== undefined ? 3 : 2,
 				priorityScore: inlinePriorityScore(
 					loopFrequency * (regionCost?.sites.length ?? 1),
 					regionCost?.generatedCode ?? generatedCodeCost,
@@ -1626,6 +1758,11 @@ function offerFunctionCandidates(
 					regionCost?.compilerWork ??
 					(inline?.instructions.length ?? 0) +
 						(inline?.function.valueCapacity ?? 0) +
+						(synchronousCallback === undefined
+							? 0
+							: synchronousCallback.invocations *
+								(callbackInline!.instructions.length +
+									callbackInline!.function.valueCapacity)) +
 						consumerDuplication +
 						(open ? 4 : 1),
 				expansive: localCaptureContext === undefined,
@@ -1673,7 +1810,7 @@ export function discoverCoreCrossCallCandidates(
 	const capturedCells = () => {
 		let cells = discoveredCapturedCellWrites.get(program);
 		if (cells === undefined) {
-			cells = capturedCellWrites(program);
+			cells = capturedCellWrites(program, summaries.targets.sourceClosed);
 			discoveredCapturedCellWrites.set(program, cells);
 		}
 		return cells;
@@ -1822,6 +1959,19 @@ function applyLinearInline(
 		}
 		for (const instruction of inlineBlock.instructions) {
 			const opcode = inline.function.instructionOpcodeName(instruction);
+			const captured = inline.captureValues.get(instruction);
+			if (captured !== undefined) {
+				const output = materializeInstructionResults(inline.function, instruction)[0]!;
+				values.set(
+					output,
+					bridgeValue(
+						captured,
+						inline.function.valueRepresentation(output),
+						sourcePositions.get(instruction),
+					),
+				);
+				continue;
+			}
 			if (opcode === "loadArgument") {
 				const output = materializeInstructionResults(inline.function, instruction)[0];
 				const index = inline.function.instructionAttributes(instruction).index;
@@ -1937,6 +2087,7 @@ function applyGuardedInline(
 	candidate: CoreTransformCandidate,
 	editor: CoreEditor,
 	guarded = true,
+	synchronousCallback?: CoreSynchronousCallbackConsumer,
 ): AppliedTransform | undefined {
 	const target = candidate.targets[0];
 	if (target === undefined) return undefined;
@@ -1960,6 +2111,7 @@ function applyGuardedInline(
 		target,
 		descriptor.callTransfer.invocation,
 		applicationCaptureContext(program, caller, callee, candidate.site, target),
+		synchronousCallback,
 	);
 	if (inline === undefined) return undefined;
 	if (
@@ -2166,8 +2318,11 @@ function applyGuardedInline(
 				(_, index) => inline.function.kernel.blockParameterValue(start + index),
 			);
 			const created = editor.createBlock(
-				parameters.map((value) => ({
+				parameters.map((value, index) => ({
 					representation: inline.function.valueRepresentation(value),
+					role: inline.function.blockParameterRole(
+						inline.function.kernel.blockParameterStart(inlineBlock.id) + index,
+					),
 				})),
 			);
 			clonedBlocks.set(inlineBlock.id, created);
@@ -2297,6 +2452,20 @@ function applyGuardedInline(
 		}
 		for (const instruction of inlineBlock.instructions) {
 			const opcode = inline.function.instructionOpcodeName(instruction);
+			const captured = inline.captureValues.get(instruction);
+			if (captured !== undefined) {
+				const output = materializeInstructionResults(inline.function, instruction)[0]!;
+				values.set(
+					output,
+					bridgeValue(
+						destination,
+						captured,
+						inline.function.valueRepresentation(output),
+						sourcePositions.get(instruction),
+					),
+				);
+				continue;
+			}
 			if (
 				scalarLayout !== undefined &&
 				(scalarizedReceiver || receiverStoresElided) &&
@@ -2484,6 +2653,25 @@ function applyGuardedInline(
 		])
 			editor.setHandler(guardedBlock, handlerBlock, handlerArguments);
 	}
+	for (const inlineBlock of inline.blocks) {
+		const handler = inline.function.kernel.blockHandlerBlock(inlineBlock.id);
+		if (handler === undefined) continue;
+		const start = inline.function.kernel.blockHandlerArgumentStart(inlineBlock.id);
+		const args = Array.from(
+			{ length: inline.function.kernel.blockHandlerArgumentCount(inlineBlock.id) },
+			(_, index) => {
+				const value = values.get(inline.function.kernel.handlerArgumentAt(start + index));
+				if (value === undefined)
+					throw new Error("Validated inline handler has no caller value");
+				return value;
+			},
+		);
+		editor.setHandler(
+			clonedBlocks.get(inlineBlock.id)!,
+			clonedBlocks.get(handler)!,
+			args,
+		);
+	}
 	return {
 		instructionsIntroduced: introduced,
 		blocksIntroduced: clonedBlocks.size + 1 + (guarded ? 1 : 0),
@@ -2599,6 +2787,64 @@ function applyCandidate(
 			return applyFiniteDispatch(program, candidate, editor);
 		case "inline":
 			return applyLinearInline(program, candidate, editor);
+		case "synchronous-callback-inline": {
+			const target = candidate.targets[0];
+			if (target === undefined) return undefined;
+			const proof = coreSynchronousCallbackConsumer(
+				program,
+				summaries,
+				editor.function,
+				candidate.site,
+				target,
+			);
+			if (proof === undefined) return undefined;
+			const context = directCaptureContext(
+				editor.function,
+				proof.argument,
+				candidate.site,
+				proof.callback,
+			);
+			if (context === undefined) return undefined;
+			const callback = inlineTarget(program, proof.callback, "call", context);
+			if (!callback?.linear) return undefined;
+			const firstNewInstruction = editor.function.instructionCapacity;
+			const applied = applyGuardedInline(program, candidate, editor, false, proof);
+			if (applied === undefined) return undefined;
+			const calls = new Set<CoreInstructionId>();
+			for (
+				let use = editor.function.kernel.valueFirstUse(proof.argument);
+				use >= 0;
+				use = editor.function.kernel.useNext(use)
+			) {
+				if (
+					editor.function.kernel.useLive(use) === 0 ||
+					editor.function.kernel.useOperand(use) !== 0
+				)
+					continue;
+				const instruction = coreInstructionId(editor.function.kernel.useInstruction(use));
+				if (instruction < firstNewInstruction) continue;
+				if (
+					editor.function.instructionKind(instruction) === "operation" &&
+					editor.function.instructionOpcodeName(instruction) === "call"
+				)
+					calls.add(instruction);
+			}
+			if (calls.size !== proof.invocations)
+				throw new Error("Validated callback consumer lost an invocation");
+			let introduced = applied.instructionsIntroduced;
+			for (const site of calls) {
+				const inlined = applyLinearInline(
+					program,
+					{ ...candidate, kind: "inline", site, targets: [proof.callback] },
+					editor,
+					callback,
+				);
+				if (inlined === undefined)
+					throw new Error("Validated synchronous callback became inapplicable");
+				introduced += inlined.instructionsIntroduced;
+			}
+			return { ...applied, instructionsIntroduced: introduced };
+		}
 		case "guarded-inline":
 			return applyGuardedInline(program, candidate, editor);
 		case "read-accessor":
@@ -2853,6 +3099,7 @@ export function runCoreCrossCallTransforms(
 			blocksIntroduced += applied.blocksIntroduced;
 			if (
 				candidate.kind === "inline" ||
+				candidate.kind === "synchronous-callback-inline" ||
 				candidate.kind === "guarded-inline" ||
 				candidate.kind === "read-accessor" ||
 				candidate.kind === "guarded-read-accessor" ||

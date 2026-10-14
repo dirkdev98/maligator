@@ -51,6 +51,16 @@ function validBranchProgram() {
 }
 
 describe("Core verification", () => {
+	it("rejects rest forwarding state used as a JavaScript value", () => {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const [state] = builder.appendInstruction(entry, "createRestArgumentsState", []);
+		builder.setTerminator(entry, { kind: "return", value: state! });
+		builder.finish(entry);
+		expect(() => verifyCoreProgram(program)).toThrow(/Rest state escapes/);
+	});
+
 	it("verifies repeated uses of value zero after operand replacement and row deletion", () => {
 		const { program, fn, entry, condition } = validBranchProgram();
 		const editor = CoreEditor.open(program, fn.id);

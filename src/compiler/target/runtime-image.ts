@@ -1162,6 +1162,8 @@ export type BytecodeInstruction =
 			receiver: number;
 			startIndex: number;
 			apply: boolean;
+			state: number;
+			prefixArguments: Array<number>;
 	  }
 	| {
 			opcode: "CALL_SPREAD_ITERABLE";
@@ -1169,6 +1171,7 @@ export type BytecodeInstruction =
 			callee: number;
 			thisValue: number;
 			iterable: number;
+			prefixArguments: Array<number>;
 	  }
 	| {
 			opcode: "CONSTRUCT_SPREAD";
@@ -1420,6 +1423,8 @@ export function vmInstructionWriteRegisters(
 			return [instruction.dst, instruction.success];
 		case "WITH_SET":
 			return [instruction.found];
+		case "CALL_REST_ARGUMENTS":
+			return [instruction.dst, instruction.state];
 		default: {
 			const dst = (instruction as { readonly dst?: number }).dst;
 			return dst === undefined ? [] : [dst];
@@ -1428,6 +1433,7 @@ export function vmInstructionWriteRegisters(
 }
 
 const VM_REGISTER_USE_FIELDS = [
+	"state",
 	"epoch",
 	"prefixLength",
 	"part",
@@ -1463,6 +1469,7 @@ const VM_REGISTER_USE_FIELDS = [
 ] as const;
 
 const VM_REGISTER_USE_ARRAY_FIELDS = [
+	"prefixArguments",
 	"arguments",
 	"valueRegisters",
 	"keyRegisters",
@@ -4119,6 +4126,8 @@ function lowerInstructionToBytecodeInstruction(
 				receiver: instruction.registers[3],
 				startIndex: instruction.startIndex,
 				apply: instruction.apply,
+				state: instruction.registers[4],
+				prefixArguments: instruction.registers.slice(5),
 			};
 		case "callSpreadIterable":
 			return {
@@ -4127,6 +4136,7 @@ function lowerInstructionToBytecodeInstruction(
 				callee: instruction.registers[1],
 				thisValue: instruction.registers[2],
 				iterable: instruction.registers[3],
+				prefixArguments: instruction.registers.slice(4),
 			};
 		case "constructSpread":
 			return {
@@ -4352,6 +4362,8 @@ function lowerInstructionToBytecodeInstruction(
 				opcode: "CHECK_SUPER_CLASS",
 				parent: instruction.registers[0],
 			};
+		case "createRestArgumentsState":
+			return { opcode: "CREATE_UNDEFINED", dst: instruction.registers[0] };
 		case "createRestArguments":
 			return {
 				opcode: "CREATE_REST_ARGUMENTS",

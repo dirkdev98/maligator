@@ -433,7 +433,7 @@ void mal_op_call_known(MalCallable *callable, const MalInstruction *instruction)
 
 void mal_op_call_spread(MalCallable *callable, const MalInstruction *instruction);
 void mal_op_call_rest_arguments(MalCallable *callable, const MalInstruction *instruction);
-MalCompletion mal_vm_op_call_rest_arguments(MalVm *vm, MalValue callee, MalValue this_value, MalValue receiver, const MalValue *args, i32 arg_count, i32 start, bool apply);
+MalCompletion mal_vm_op_call_rest_arguments(MalVm *vm, MalValue callee, MalValue this_value, MalValue receiver, const MalValue *args, i32 arg_count, i32 start, bool apply, MalValue *state, const MalValue *prefix, i32 prefix_count);
 
 void mal_op_call_spread_iterable(
     MalCallable *callable, const MalInstruction *instruction);
@@ -3660,12 +3660,10 @@ MalCompletion mal_vm_op_call_spread(
     MalVm *vm, MalValue callee, MalValue this_value, MalValue arguments_array
 );
 
-/**
- * Single-spread call `f(...iterable)`: observe the iterable protocol, marshal a
- * proven builtin dense Array directly, and materialize every other case.
- */
+/** Prefix values precede iterable expansion; iterator access may re-enter JS before dispatch. */
 MalCompletion mal_vm_op_call_spread_iterable(
-    MalVm *vm, MalValue callee, MalValue this_value, MalValue iterable
+    MalVm *vm, MalValue callee, MalValue this_value, MalValue iterable,
+    const MalValue *prefix, i32 prefix_count
 );
 
 /** Spread construct `new C(...args)` for the native backend; see call_spread. */

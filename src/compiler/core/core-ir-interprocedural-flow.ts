@@ -16,6 +16,7 @@ export interface CoreLocalCallSite {
 	readonly receiver?: CoreValueId;
 	readonly arguments?: ReadonlyArray<CoreValueId>;
 	readonly aggregateArguments?: CoreValueId;
+	readonly argumentPrefix?: ReadonlyArray<CoreValueId>;
 	readonly transfer: CoreOpcodeCallTransfer;
 }
 
@@ -97,6 +98,18 @@ export function analyzeCoreInterproceduralValueFlow(
 			);
 		} else {
 			aggregateCalls++;
+			const prefixFirst =
+				transfer.arguments.kind === "aggregate"
+					? transfer.arguments.prefixFirstOperand
+					: undefined;
+			const argumentPrefix =
+				prefixFirst === undefined
+					? undefined
+					: Object.freeze(
+							Array.from({ length: operandCount - prefixFirst }, (_, index) =>
+								fn.kernel.operandAt(operandStart + prefixFirst + index),
+							),
+						);
 			const aggregateArguments =
 				transfer.arguments.kind === "aggregate"
 					? operand(transfer.arguments.operand)
@@ -108,6 +121,7 @@ export function analyzeCoreInterproceduralValueFlow(
 					callee,
 					...(receiver === undefined ? {} : { receiver }),
 					...(aggregateArguments === undefined ? {} : { aggregateArguments }),
+					...(argumentPrefix === undefined ? {} : { argumentPrefix }),
 					transfer,
 				}),
 			);

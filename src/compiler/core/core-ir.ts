@@ -202,6 +202,7 @@ export interface CoreOpcodeCallTransfer {
 		| {
 				readonly kind: "aggregate";
 				readonly operand: number;
+				readonly prefixFirstOperand?: number;
 		  }
 		| { readonly kind: "activation" };
 }
@@ -394,6 +395,19 @@ function validateCallTransfer(descriptor: CoreOpcodeDefinition): void {
 		throw new Error(`${opcode} declares a receiver operand for [[Construct]]`);
 	}
 	if (transfer.arguments.kind === "activation") return;
+	if (
+		transfer.arguments.kind === "aggregate" &&
+		transfer.arguments.prefixFirstOperand !== undefined
+	) {
+		const first = transfer.arguments.prefixFirstOperand;
+		if (
+			!Number.isSafeInteger(first) ||
+			first < descriptor.inputs.minimum ||
+			first > descriptor.inputs.maximum
+		) {
+			throw new Error(`${opcode} declares an invalid argument prefix`);
+		}
+	}
 	const argumentOperand =
 		transfer.arguments.kind === "positional"
 			? transfer.arguments.firstOperand

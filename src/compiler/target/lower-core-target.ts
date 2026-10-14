@@ -153,6 +153,7 @@ const RAW_ARGUMENT_OPCODES: ReadonlySet<string> = new Set([
 	"loadStaticArgument",
 	"createArgumentsObject",
 	"createRestArguments",
+	"createRestArgumentsState",
 	"callRestArguments",
 ]);
 

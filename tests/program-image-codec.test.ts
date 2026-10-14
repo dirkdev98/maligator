@@ -237,6 +237,18 @@ const instructions: Array<BytecodeInstruction> = [
 		callee: 5,
 		thisValue: 10,
 		iterable: 12,
+		prefixArguments: [3, 7],
+	},
+	{
+		opcode: "CALL_REST_ARGUMENTS",
+		dst: 11,
+		callee: 5,
+		thisValue: 10,
+		receiver: 10,
+		startIndex: 2,
+		apply: false,
+		state: 12,
+		prefixArguments: [3, 7],
 	},
 	{
 		opcode: "CONSTRUCT_SUPER_EXPLICIT",

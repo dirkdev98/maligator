@@ -249,6 +249,85 @@ try {
 		configurable: true,
 	});
 }
+function repeatedPrefix(fn, first, ...rest) {
+	let total = 0;
+	for (let i = 0; i < 3; i++) total += fn(first, ...rest);
+	return total;
+}
+let firstArray;
+let iteratorCalls = 0;
+try {
+	Array.prototype[Symbol.iterator] = function () {
+		check(firstArray === undefined || firstArray === this, "one rest Array across calls");
+		firstArray = this;
+		this[0] += 10;
+		iteratorCalls++;
+		if (iteratorCalls === 2) Array.prototype[Symbol.iterator] = iterator;
+		return iterator.call(this);
+	};
+	check(repeatedPrefix(sum, 1, 2, 3) === 68, "mutation survives restored iterator guard");
+	check(firstArray[0] === 22 && iteratorCalls === 2, "iterator identity and mutation");
+} finally {
+	Array.prototype[Symbol.iterator] = iterator;
+}
+let applyArray;
+function repeatedApply(fn, ...args) {
+	let total = 0;
+	for (let i = 0; i < 3; i++) total += fn.apply(null, args);
+	return total;
+}
+function applyTarget(a) {
+	return a;
+}
+applyTarget.apply = function (receiver, values) {
+	check(
+		applyArray === undefined || applyArray === values,
+		"one apply Array across calls",
+	);
+	applyArray = values;
+	values[0] += 10;
+	applyTarget.apply = Function.prototype.apply;
+	return Function.prototype.apply.call(this, receiver, values);
+};
+check(
+	repeatedApply(applyTarget, 2) === 36 && applyArray[0] === 12,
+	"apply fallback mutation survives guard recovery",
+);
+function caughtRepeat(fn, ...args) {
+	let total = 0;
+	for (let i = 0; i < 2; i++) {
+		try {
+			total += fn(...args);
+		} catch (error) {
+			check(error === object, "iterator error identity");
+		}
+	}
+	return total;
+}
+let throwArray;
+try {
+	let once = true;
+	Array.prototype[Symbol.iterator] = function () {
+		check(
+			throwArray === undefined || throwArray === this,
+			"state survives exceptional edge",
+		);
+		throwArray = this;
+		this[0]++;
+		if (once) {
+			once = false;
+			throw object;
+		}
+		return iterator.call(this);
+	};
+	check(
+		caughtRepeat(sum, 2) === 4 && throwArray[0] === 4,
+		"caught iterator throw reuses materialization",
+	);
+} finally {
+	Array.prototype[Symbol.iterator] = iterator;
+}
+check(repeatedPrefix(take, object) !== undefined, "empty rest prefix and GC");
 function* generator(...args) {
 	yield 1;
 	return sum(...args);

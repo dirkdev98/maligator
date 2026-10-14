@@ -1189,6 +1189,10 @@ function callSiteEqual(left: CoreIndexedCallSite, right: CoreIndexedCallSite): b
 		left.callee === right.callee &&
 		left.receiver === right.receiver &&
 		left.aggregateArguments === right.aggregateArguments &&
+		(left.argumentPrefix?.length ?? 0) === (right.argumentPrefix?.length ?? 0) &&
+		(left.argumentPrefix ?? []).every(
+			(argument, index) => argument === right.argumentPrefix?.[index],
+		) &&
 		left.transfer === right.transfer &&
 		(left.arguments?.length ?? 0) === (right.arguments?.length ?? 0) &&
 		(left.arguments ?? []).every(
@@ -1218,6 +1222,12 @@ export const CORE_PROGRAM_FLOW_CALL_TARGET_SEMANTICS: CoreProgramFlowCallTargetS
 		const cells = new Set<CoreCellId>();
 		for (const index of context?.data.singleAssignmentGlobalSlots ?? []) {
 			cells.add(globalCellId(identities, index));
+		}
+		if (context?.facts.closure.sourceClosure.kind === "known") {
+			// Private module slots have no host aliases; later rebindings remain visible Core stores.
+			for (const index of context.data.initializedModuleGlobalSlots ?? []) {
+				cells.add(globalCellId(identities, index));
+			}
 		}
 		for (const { owner, index } of coreClosedCapturedValueSlots(program, context)) {
 			cells.add(capturedCellId(identities, owner, index));

@@ -1177,6 +1177,49 @@ function verifyFunction(
 	verifyFacts(fn);
 	const cfg = verifyControlFlow(fn, program);
 	verifyFactUses(fn, cfg);
+	for (const instruction of fn.instructionIds()) {
+		if (fn.instructionKind(instruction) !== "operation") continue;
+		if (fn.instructionOpcodeName(instruction) === "createRestArgumentsState") {
+			const state = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
+			if (fn.kernel.valueHandlerUseCount(state) !== 0)
+				fail("Rest state escapes through a handler argument");
+			for (
+				let use = fn.kernel.valueFirstUse(state);
+				use >= 0;
+				use = fn.kernel.useNext(use)
+			) {
+				if (fn.kernel.useLive(use) === 0) continue;
+				const consumer = coreInstructionId(fn.kernel.useInstruction(use));
+				if (
+					fn.instructionKind(consumer) !== "operation" ||
+					fn.instructionOpcodeName(consumer) !== "callRestArguments" ||
+					fn.kernel.useOperand(use) !== 3
+				)
+					fail("Rest state escapes its forwarding calls");
+			}
+		}
+		if (fn.instructionOpcodeName(instruction) !== "callRestArguments") continue;
+		const state = fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction) + 3);
+		const definition = fn.kernel.valueDefinitionOwner(state);
+		if (
+			fn.kernel.valueDefinitionKind(state) !== 1 ||
+			fn.instructionOpcodeName(coreInstructionId(definition)) !==
+				"createRestArgumentsState" ||
+			fn.isAsync ||
+			fn.isGenerator ||
+			fn.metadata.mappedArguments
+		)
+			fail("Invalid rest forwarding state");
+		const { startIndex, apply } = fn.instructionAttributes(instruction);
+		if (
+			typeof startIndex !== "number" ||
+			!Number.isSafeInteger(startIndex) ||
+			startIndex < 0 ||
+			typeof apply !== "boolean" ||
+			(apply && fn.kernel.instructionOperandCount(instruction) !== 4)
+		)
+			fail("Invalid rest forwarding arguments");
+	}
 }
 
 function verifyProgramTables(program: CoreProgram): void {

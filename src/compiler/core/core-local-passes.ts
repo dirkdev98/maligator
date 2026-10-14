@@ -2619,59 +2619,83 @@ const forwardRestArguments: CoreFunctionPass = {
 				continue;
 			const rest = instructionResult(fn, producer, 0)!;
 			if (fn.kernel.valueHandlerUseCount(rest) !== 0) continue;
-			let use = fn.kernel.valueFirstUse(rest);
-			let consumer: CoreInstructionId | undefined;
-			let useCount = 0;
-			while (use >= 0) {
-				if (fn.kernel.useLive(use) !== 0) {
-					consumer = fn.kernel.useInstruction(use);
-					useCount++;
+			const consumers: Array<{
+				instruction: CoreInstructionId;
+				inputs: Array<CoreValueId>;
+				apply: boolean;
+			}> = [];
+			let valid = true;
+			for (
+				let use = fn.kernel.valueFirstUse(rest);
+				use >= 0;
+				use = fn.kernel.useNext(use)
+			) {
+				if (fn.kernel.useLive(use) === 0) continue;
+				const consumer = coreInstructionId(fn.kernel.useInstruction(use));
+				if (fn.instructionKind(consumer) !== "operation") {
+					valid = false;
+					break;
 				}
-				use = fn.kernel.useNext(use);
-			}
-			if (
-				useCount !== 1 ||
-				consumer === undefined ||
-				fn.instructionKind(consumer) !== "operation"
-			)
-				continue;
-			const opcode = fn.instructionOpcodeName(consumer);
-			const inputs = copyInstructionOperands(fn, consumer);
-			const apply = opcode === "call" && inputs.length === 4 && inputs[3] === rest;
-			if (!apply && !(opcode === "callSpreadIterable" && inputs[2] === rest)) continue;
-			if (apply) {
-				const property = definingInstruction(fn, inputs[0]!);
+				const opcode = fn.instructionOpcodeName(consumer);
+				const inputs = copyInstructionOperands(fn, consumer);
+				const apply = opcode === "call" && inputs.length === 4 && inputs[3] === rest;
 				if (
-					property === undefined ||
-					fn.instructionOpcodeName(property) !== "loadPropertyStatic" ||
-					instructionOperand(fn, property, 0) !== inputs[1]
-				)
-					continue;
-				const key = fn.instructionAttributes(property).stringIndex;
-				if (typeof key !== "number" || decodeString(program, key) !== "apply") continue;
+					fn.instructionKind(consumer) !== "operation" ||
+					(!apply && !(opcode === "callSpreadIterable" && inputs[2] === rest)) ||
+					inputs.filter((input) => input === rest).length !== 1
+				) {
+					valid = false;
+					break;
+				}
+				if (apply) {
+					const property = definingInstruction(fn, inputs[0]!);
+					if (
+						property === undefined ||
+						fn.instructionOpcodeName(property) !== "loadPropertyStatic" ||
+						instructionOperand(fn, property, 0) !== inputs[1]
+					) {
+						valid = false;
+						break;
+					}
+					const key = fn.instructionAttributes(property).stringIndex;
+					if (typeof key !== "number" || decodeString(program, key) !== "apply") {
+						valid = false;
+						break;
+					}
+				}
+				consumers.push({ instruction: consumer, inputs, apply });
 			}
+			if (!valid || consumers.length === 0) continue;
 			const startIndex = fn.instructionAttributes(producer).startIndex;
 			if (typeof startIndex !== "number") continue;
 			const control = context.analysis(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS).exceptional();
-			const block = fn.instructionBlock(consumer);
-			// A repeated fallback must reuse the same Array, which this representation does not retain.
 			if (
-				!control.dominates(fn.instructionBlock(producer), block) ||
-				control.loops.some((loop) => loop.blocks.has(block)) ||
-				control.irreducibleCycles.some((cycle) => cycle.blocks.has(block))
+				consumers.some(
+					({ instruction }) =>
+						!control.dominates(
+							fn.instructionBlock(producer),
+							fn.instructionBlock(instruction),
+						),
+				)
 			)
 				continue;
 			editor ??= CoreEditor.open(program, item.function);
-			editor.replaceInstruction(
-				consumer,
-				"callRestArguments",
-				apply ? inputs.slice(0, 3) : [inputs[0]!, inputs[1]!, inputs[1]!],
-				{
-					attributes: { startIndex, apply },
-					sourcePosition: fn.instructionSourcePosition(consumer),
-				},
-			);
-			editor.removeInstruction(producer);
+			editor.replaceInstruction(producer, "createRestArgumentsState", [], {
+				sourcePosition: fn.instructionSourcePosition(producer),
+			});
+			for (const { instruction: consumer, inputs, apply } of consumers) {
+				editor.replaceInstruction(
+					consumer,
+					"callRestArguments",
+					apply
+						? [...inputs.slice(0, 3), rest]
+						: [inputs[0]!, inputs[1]!, inputs[1]!, rest, ...inputs.slice(3)],
+					{
+						attributes: { startIndex, apply },
+						sourcePosition: fn.instructionSourcePosition(consumer),
+					},
+				);
+			}
 		}
 		return editor?.commit();
 	},
@@ -3208,6 +3232,7 @@ export const CORE_CONSTRUCTION_NORMALIZATION_PASSES: ReadonlyArray<CoreFunctionP
 ];
 
 export const CORE_LATE_CANONICALIZATION_PASSES: ReadonlyArray<CoreFunctionPass> = [
+	forwardRestArguments,
 	rewriteExactBuiltinCalls,
 	foldPrimitiveCoercions,
 	foldValueKindObservations,

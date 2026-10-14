@@ -14,6 +14,34 @@ import {
 } from "./helpers/core-program-analysis.ts";
 
 describe("incremental Core program summaries", () => {
+	it("preserves escape effects for the positional prefix of an iterable call", () => {
+		const program = analysisProgram();
+		const builder = new CoreFunctionBuilder(program, {
+			parameterCount: 3,
+			metadata: { strict: true, sourcePath: "/entry.js" },
+		});
+		const entry = builder.createBlock([{}, {}, {}]);
+		const callee = builder.blockParameterValue(entry, 0);
+		const prefix = builder.blockParameterValue(entry, 1);
+		const iterable = builder.blockParameterValue(entry, 2);
+		const [receiver] = builder.appendInstruction(entry, "createUndefined", []);
+		const [result] = builder.appendInstruction(entry, "callSpreadIterable", [
+			callee,
+			receiver!,
+			iterable,
+			prefix,
+		]);
+		builder.setTerminator(entry, { kind: "return", value: result! });
+		const functionId = builder.finish(entry).function;
+		const manager = new CoreAnalysisManager(
+			program,
+			programAnalysisContext(),
+			new CoreOptimizationReportBuilder(program),
+		);
+		const summaries = manager.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, { scope: "program" });
+		expect(summaries.summary(functionId)?.parameterEscape[1]).toBe("retained");
+	});
+
 	it("compares production summaries without serializing them", () => {
 		const source = readFileSync(
 			new URL("../src/compiler/core/core-ir-summaries.ts", import.meta.url),

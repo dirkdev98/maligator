@@ -11864,19 +11864,31 @@ function emitInstruction(
 		}
 		case "CALL_REST_ARGUMENTS": {
 			const tmp = `call_rest_${ip}`;
+			const prefix = instruction.prefixArguments;
+			const prefixName = prefix.length === 0 ? "NULL" : `rest_prefix_${ip}`;
 			return [
-				`MalCompletion ${tmp} = mal_vm_op_call_rest_arguments(vm, ${boxed(instruction.callee)}, ${boxed(instruction.thisValue)}, ${boxed(instruction.receiver)}, args, arg_count, ${instruction.startIndex}, ${instruction.apply});`,
+				...(prefix.length === 0
+					? []
+					: [
+							`MalValue ${prefixName}[${prefix.length}] = { ${prefix.map(boxed).join(", ")} };`,
+						]),
+				`MalCompletion ${tmp} = mal_vm_op_call_rest_arguments(vm, ${boxed(instruction.callee)}, ${boxed(instruction.thisValue)}, ${boxed(instruction.receiver)}, args, arg_count, ${instruction.startIndex}, ${instruction.apply}, &r${instruction.state}, ${prefixName}, ${prefix.length});`,
 				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 				`r${instruction.dst} = ${tmp}.value;`,
 				poll(),
 			];
 		}
 		case "CALL_SPREAD_ITERABLE": {
-			// `f(...iterable)` with no other arguments: observe GetIterator,
-			// then let the runtime use its guarded dense-Array path.
 			const tmp = `call_spread_iterable_${ip}`;
+			const prefix = instruction.prefixArguments;
+			const prefixName = prefix.length === 0 ? "NULL" : `spread_prefix_${ip}`;
 			return [
-				`MalCompletion ${tmp} = mal_vm_op_call_spread_iterable(vm, ${boxed(instruction.callee)}, ${boxed(instruction.thisValue)}, ${boxed(instruction.iterable)});`,
+				...(prefix.length === 0
+					? []
+					: [
+							`MalValue ${prefixName}[${prefix.length}] = { ${prefix.map(boxed).join(", ")} };`,
+						]),
+				`MalCompletion ${tmp} = mal_vm_op_call_spread_iterable(vm, ${boxed(instruction.callee)}, ${boxed(instruction.thisValue)}, ${boxed(instruction.iterable)}, ${prefixName}, ${prefix.length});`,
 				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 				`r${instruction.dst} = ${tmp}.value;`,
 				poll(),
