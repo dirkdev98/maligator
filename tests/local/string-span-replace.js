@@ -61,7 +61,75 @@ globalThis.replaceEffect = effect;
 globalThis.replaceAlias = alias;
 globalThis.replaceMissing = missing;
 globalThis.replaceOptional = optional;
-if (mode !== "fallback") {
+function absent(source) {
+	const part = source.slice(1, -1);
+	return [part.replace(), part.replaceAll()];
+}
+function omitted(source, search) {
+	const part = source.slice(1, -1);
+	return [part.replace(search), part.replaceAll(search)];
+}
+globalThis.replaceAbsent = absent;
+globalThis.replaceOmitted = omitted;
+if (mode.startsWith("primitive-")) {
+	const family = mode.slice(10);
+	const visit =
+		family === "range"
+			? globalThis.replaceRange
+			: family === "split"
+				? globalThis.replaceSplit
+				: family === "regexp"
+					? globalThis.replaceCapture
+					: globalThis.replaceNested;
+	const wrap = (text) =>
+		family === "split" || family === "regexp"
+			? "left|" + text + "|right"
+			: "L" + text + "R";
+	const primitives = [
+		undefined,
+		null,
+		false,
+		true,
+		0,
+		-0,
+		1.25,
+		-1.25,
+		NaN,
+		Infinity,
+		-Infinity,
+		1e21,
+		1e-7,
+		0n,
+		1234567890123456789012345678901234567890n,
+	];
+	for (const search of primitives) {
+		const text = String(search);
+		for (const replacement of primitives)
+			rows.push(
+				visit(
+					wrap(text + "😀" + text),
+					search,
+					replacement,
+					replacement === true ? observe : null,
+				),
+			);
+		rows.push(visit(wrap(text + "x" + text), search, "[$`][$&][$']", observe));
+		rows.push(visit(wrap("no match"), search, 12345678901234567890n, null));
+	}
+	for (const replacement of primitives)
+		rows.push(visit(wrap("a😀a"), "a", replacement, null));
+	const huge = BigInt("7".repeat(350));
+	rows.push(
+		visit(
+			wrap("x".repeat(1200) + huge + "é" + huge + "y".repeat(1200)),
+			huge,
+			12345678901234567890n,
+			observe,
+		),
+	);
+	rows.push(globalThis.replaceAbsent("LundefinedR"));
+	rows.push(globalThis.replaceOmitted("L1212R", 12));
+} else if (mode !== "fallback") {
 	const visit =
 		mode === "range"
 			? globalThis.replaceRange
@@ -105,6 +173,41 @@ if (mode !== "fallback") {
 	rows.push(visit(wrap(rope), "😀", "[$`][$']", null));
 } else {
 	const visit = globalThis.replaceRange;
+	rows.push(
+		visit(
+			"L12😀12R",
+			12,
+			function (match, index, source) {
+				collect();
+				events.push(["primitive callback", match, index, source]);
+				return index;
+			},
+			null,
+		),
+	);
+	rows.push(
+		visit(
+			"L12R",
+			{
+				[Symbol.replace](source, replacement) {
+					collect();
+					events.push(["raw replacement", typeof replacement]);
+					return source;
+				},
+			},
+			Symbol("raw"),
+			null,
+		),
+	);
+	const missingReplacement = {
+		toString() {
+			events.push("no-match replacement");
+			collect();
+			return "x";
+		},
+	};
+	rows.push(visit("LtextR", 123, missingReplacement, null));
+
 	rows.push(
 		visit(
 			{
@@ -216,6 +319,7 @@ if (mode !== "fallback") {
 			}),
 		() => visit("LabR", Symbol("bad"), "!", null),
 		() => visit("LabR", "a", Symbol("bad"), null),
+		() => visit("LabR", 123, Symbol("no-match"), null),
 		() =>
 			globalThis.replaceMissing("missing", () => {
 				events.push("missing arg");

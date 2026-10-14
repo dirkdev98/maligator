@@ -4107,13 +4107,27 @@ bool mal_builtin_string_span_replace(
 #if MAL_REALMS
     if (!locked && mal_vm_callee_realm(vm, callee) != vm->current_realm) return false;
 #endif
-    if (!mal_value_is_string(subject) || !mal_value_is_string(search) ||
-        !mal_value_is_string(replacement) || start > end ||
-        end > mal_string_length(mal_value_to_string(subject))) return false;
+    if (!mal_value_is_string(subject) || start > end ||
+        end > mal_string_length(mal_value_to_string(subject)) ||
+        mal_value_is_object(search) || mal_value_is_symbol(search) ||
+        mal_value_is_object(replacement) || mal_value_is_symbol(replacement)) return false;
     if (all) MAL_PERF_COUNT(string_span_replace_all_calls);
     else MAL_PERF_COUNT(string_span_replace_calls);
-    *out = mal_builtin_string_replace_range_known(vm, mal_value_to_string(subject), start, end - start,
-        mal_value_to_string(search), replacement, all);
+    MalValue roots[3] = {subject, search, replacement};
+    MalRootSpan span;
+    bool converting = !mal_value_is_string(search);
+    if (converting) mal_gc_root(&span, roots, 3);
+    *out = MAL_VALUE_UNDEFINED;
+    if (converting) {
+        MalString *string = mal_builtin_string_coerce(vm, roots[1]);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
+        roots[1] = mal_value_from_string(string);
+    }
+    // The canonical body roots and converts replacement before testing for any match.
+    *out = mal_builtin_string_replace_range_known(vm, mal_value_to_string(roots[0]), start, end - start,
+        mal_value_to_string(roots[1]), roots[2], all);
+done:
+    if (converting) mal_gc_unroot(&span);
     return true;
 }
 

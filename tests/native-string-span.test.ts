@@ -42,6 +42,32 @@ const branching = `const part = value.slice(start, end); const length = part.len
 
 describe("composable string spans", () => {
 	it.each(["mutable", "locked"] as const)(
+		"roots both primitive replacement operands before conversion under %s primordials",
+		(mode) => {
+			for (const method of ["replace", "replaceAll"]) {
+				const image = compile(
+					`const part=value.slice(start,end);const out=part.${method}(observer,escape);return out;`,
+					mode,
+				);
+				const fn = image.native.functions.find((f) =>
+					f.specializations.some((p) => p.kind === "string-span"),
+				)!;
+				const plan = fn.specializations.find((p) => p.kind === "string-span")!;
+				const consumer = plan.consumers.find((c) => c.kind === `${method}Call`)!;
+				const call = fn.body.instructions[consumer.ip]!;
+				if (call.opcode !== "CALL" && call.opcode !== "CALL_KNOWN")
+					throw new Error("Expected replacement call");
+				const point = fn.gc.safepoints.find((p) => p.instructionIp === consumer.ip)!;
+				for (const argument of call.arguments)
+					if (argument >= 0) expect(point.incomingRootRegisters).toContain(argument);
+				expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+					image,
+				);
+			}
+		},
+	);
+
+	it.each(["mutable", "locked"] as const)(
 		"publishes search arguments before allocating primitive needle conversion under %s primordials",
 		(mode) => {
 			for (const method of [
@@ -79,7 +105,13 @@ describe("composable string spans", () => {
 		"retains replacement consumers and evaluated ignored arguments under %s primordials",
 		(mode) => {
 			for (const method of ["replace", "replaceAll"])
-				for (const args of ["start,end", "start,end,observer(),observer()"]) {
+				for (const args of [
+					"start,end",
+					"start,end,observer(),observer()",
+					"",
+					"undefined,null",
+					"12345678901234567890n,false",
+				]) {
 					const image = compile(
 						`const part=value.slice(start,end);const out=part.${method}(${args});if(escape)observer(part);return out;`,
 						mode,

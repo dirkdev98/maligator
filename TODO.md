@@ -1096,6 +1096,18 @@ The shared lifetime and fallback rules are recorded in
       captures and eight runtime C configurations pass; native sanitizer and
       performance verification remain pending.
 
+- [ ] Apply the named own-slot contract to existing two-to-four-field projections,
+      preserving Number encodings, output ordering and null-buffer declines. All53
+      focused contracts, a Node oracle, the C admission contract across eleven
+      receiver brands and four actual frontend/artifact/C captures pass. Native
+      sanitizer and performance verification remain pending.
+- [ ] Convert primitive search and replacement inputs for retained-span replace and
+      replaceAll through the canonical rooted builder. Preserve protocol fallback,
+      no-match conversion, omitted arguments, substitution context and foreign
+      method errors. All240 focused contracts, nineteen Node GC modes, five actual
+      frontend/artifact/C captures and eight runtime C configurations pass; native
+      sanitizer and performance verification remain pending.
+
 | Order | Slice                        | Owning work and exit condition                                                                                                                                  |
 | ----- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1     | Callback invocation          | The tasks above; remove measured repeated invocation work for a numeric reduction with captures.                                                                |

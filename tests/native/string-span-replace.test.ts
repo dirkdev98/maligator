@@ -48,7 +48,17 @@ describe("replace output from rooted string spans", () => {
 					expect.arrayContaining(["replaceCall", "replaceAllCall"]),
 				);
 			}
-			for (const mode of ["range", "split", "regexp", "nested", "fallback"]) {
+			for (const mode of [
+				"range",
+				"split",
+				"regexp",
+				"nested",
+				"primitive-range",
+				"primitive-split",
+				"primitive-regexp",
+				"primitive-nested",
+				"fallback",
+			]) {
 				const env = {
 					SPAN_REPLACE_MODE: mode,
 					SPAN_REPLACE_PRIMORDIALS: primordials,

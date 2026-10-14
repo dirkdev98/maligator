@@ -39,7 +39,7 @@ describe("span continuations from split projections", () => {
 			])
 				for (const method of ["replace", "replaceAll"]) {
 					const image = compile(
-						`const part=${producer};const out=part.${method}('a', '$&', observe());if(escape)observe(part);return out;`,
+						`const part=${producer};const out=part.${method}(12345678901234567890n, false, observe());if(escape)observe(part);return out;`,
 						mode,
 					);
 					const plans = image.native.functions.flatMap((f) => [

@@ -30,11 +30,11 @@ describe("native static-property projections", () => {
 		}).binaryPath;
 	}, 600_000);
 
-	it("preserves Number encodings and untouched outputs on projection misses", () => {
+	it("preserves builtin field encodings and untouched outputs on projection misses", () => {
 		assertExactLines(runToStdout(contractBinary), ["numeric-projection-contract PASS"]);
 	});
 
-	it("shares the warmed shape guard for adjacent own-slot reads", () => {
+	it("shares the warmed shape guard for adjacent ordinary and builtin own-slot reads", () => {
 		expect(source).toContain("mal_vm_property_try_load_static_number_pair(");
 		expect(source).toContain("mal_vm_property_try_load_static_number_triple(");
 		expect(source).toContain("mal_vm_property_try_load_static_number_quad(");

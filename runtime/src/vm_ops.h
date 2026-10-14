@@ -1937,7 +1937,7 @@ static inline __attribute__((always_inline)) bool mal_vm_property_try_load_stati
     MalValue *first_out,
     MalValue *second_out
 ) {
-    MalObject *object = mal_vm_as_object(receiver);
+    MalObject *object = mal_vm_as_own_slot_object(receiver);
     if (object == nullptr ||
         first->mode != MAL_IC_MODE_SHAPE ||
         second->mode != MAL_IC_MODE_SHAPE ||
@@ -1948,6 +1948,7 @@ static inline __attribute__((always_inline)) bool mal_vm_property_try_load_stati
         return false;
     }
     const void *fields = mal_object_fields_nonempty(object);
+    if (fields == nullptr) return false;
     *first_out = mal_shape_field_load(fields, first->field);
     *second_out = mal_shape_field_load(fields, second->field);
     mal_perf_ic_load_mono_hit();
@@ -1963,7 +1964,7 @@ static inline __attribute__((always_inline)) bool mal_vm_property_try_load_stati
     f64 *first_out,
     f64 *second_out
 ) {
-    MalObject *object = mal_vm_as_object(receiver);
+    MalObject *object = mal_vm_as_own_slot_object(receiver);
     if (object == nullptr ||
         first->mode != MAL_IC_MODE_SHAPE ||
         second->mode != MAL_IC_MODE_SHAPE ||
@@ -1974,6 +1975,7 @@ static inline __attribute__((always_inline)) bool mal_vm_property_try_load_stati
         return false;
     }
     const void *fields = mal_object_fields_nonempty(object);
+    if (fields == nullptr) return false;
     f64 first_value;
     f64 second_value;
     MalFieldRepresentation first_rep = mal_shape_field_representation(first->field);
@@ -2012,7 +2014,7 @@ static inline __attribute__((always_inline)) bool mal_vm_property_try_load_stati
     f64 *second_out,
     f64 *third_out
 ) {
-    MalObject *object = mal_vm_as_object(receiver);
+    MalObject *object = mal_vm_as_own_slot_object(receiver);
     if (object == nullptr ||
         first->mode != MAL_IC_MODE_SHAPE ||
         second->mode != MAL_IC_MODE_SHAPE ||
@@ -2026,6 +2028,7 @@ static inline __attribute__((always_inline)) bool mal_vm_property_try_load_stati
         return false;
     }
     const void *fields = mal_object_fields_nonempty(object);
+    if (fields == nullptr) return false;
     f64 first_value;
     f64 second_value;
     f64 third_value;
@@ -2060,7 +2063,7 @@ static inline __attribute__((always_inline)) bool mal_vm_property_try_load_stati
     f64 *third_out,
     f64 *fourth_out
 ) {
-    MalObject *object = mal_vm_as_object(receiver);
+    MalObject *object = mal_vm_as_own_slot_object(receiver);
     if (object == nullptr ||
         first->mode != MAL_IC_MODE_SHAPE ||
         second->mode != MAL_IC_MODE_SHAPE ||
@@ -2077,6 +2080,7 @@ static inline __attribute__((always_inline)) bool mal_vm_property_try_load_stati
         return false;
     }
     const void *fields = mal_object_fields_nonempty(object);
+    if (fields == nullptr) return false;
     f64 first_value;
     f64 second_value;
     f64 third_value;

@@ -94,47 +94,69 @@ int main(void) {
         ic[i].field = props[i].field;
         ic[i].mode = MAL_IC_MODE_SHAPE;
     }
-    MalValue receiver = mal_value_from_object(&object.object);
-    for (int count = 2; count <= 4; count++) {
-        for (int changed = 0; changed < count; changed++) {
-            for (unsigned choice = 0; choice < sizeof(cases) / sizeof(cases[0]); choice++) {
-                for (int i = 0; i < 4; i++) {
-                    values[i] = MAL_VALUE_INT32 | (i + 1);
-                    expected[i] = i + 1;
+    const MalHeapType receiver_types[] = {
+        MAL_HEAP_OBJECT, MAL_HEAP_ARRAY_OBJECT, MAL_HEAP_TYPED_ARRAY_OBJECT,
+        MAL_HEAP_MAP_OBJECT, MAL_HEAP_SET_OBJECT, MAL_HEAP_DATE_OBJECT,
+        MAL_HEAP_REGEXP_OBJECT, MAL_HEAP_PROMISE_OBJECT,
+        MAL_HEAP_ARRAY_BUFFER_OBJECT, MAL_HEAP_DATA_VIEW_OBJECT,
+        MAL_HEAP_FUNCTION_OBJECT,
+    };
+    for (usize type_index = 0; type_index < countof(receiver_types); type_index++) {
+        object.object.header.type = receiver_types[type_index];
+        MalValue receiver = receiver_types[type_index] == MAL_HEAP_FUNCTION_OBJECT
+            ? mal_value_from_function_object((MalFunctionObject *) &object)
+            : mal_value_from_object(&object.object);
+        for (int count = 2; count <= 4; count++) {
+            for (int changed = 0; changed < count; changed++) {
+                for (unsigned choice = 0; choice < sizeof(cases) / sizeof(cases[0]); choice++) {
+                    for (int i = 0; i < 4; i++) {
+                        values[i] = MAL_VALUE_INT32 | (i + 1);
+                        expected[i] = i + 1;
+                    }
+                    values[changed] = cases[choice].boxed;
+                    expected[changed] = cases[choice].expected;
+                    CHECK(check_projection(count, receiver, ic, expected, cases[choice].numeric));
                 }
-                values[changed] = cases[choice].boxed;
-                expected[changed] = cases[choice].expected;
-                CHECK(check_projection(count, receiver, ic, expected, cases[choice].numeric));
+                for (int i = 0; i < 4; i++) values[i] = MAL_VALUE_INT32 | (i + 1);
+                ic[changed].mode = MAL_IC_MODE_INHERITED_VALUE;
+                CHECK(check_projection(count, receiver, ic, expected, false));
+                ic[changed].mode = MAL_IC_MODE_SHAPE;
+                ic[changed].slot = MAL_IC_VALUE_SLOT;
+                CHECK(check_projection(count, receiver, ic, expected, false));
+                ic[changed].slot = changed;
+                ic[changed].shape = &other;
+                CHECK(check_projection(count, receiver, ic, expected, false));
+                ic[changed].shape = &shape;
             }
-            for (int i = 0; i < 4; i++) values[i] = MAL_VALUE_INT32 | (i + 1);
-            ic[changed].mode = MAL_IC_MODE_INHERITED_VALUE;
+            CHECK(check_projection(count, MAL_VALUE_NULL, ic, expected, false));
+            object.object.shape = &other;
             CHECK(check_projection(count, receiver, ic, expected, false));
-            ic[changed].mode = MAL_IC_MODE_SHAPE;
-            ic[changed].slot = MAL_IC_VALUE_SLOT;
+            object.object.shape = &shape;
+            object.storage.fields = nullptr;
             CHECK(check_projection(count, receiver, ic, expected, false));
-            ic[changed].slot = changed;
-            ic[changed].shape = &other;
-            CHECK(check_projection(count, receiver, ic, expected, false));
-            ic[changed].shape = &shape;
-        }
-        CHECK(check_projection(count, MAL_VALUE_NULL, ic, expected, false));
-        object.object.shape = &other;
-        CHECK(check_projection(count, receiver, ic, expected, false));
-        object.object.shape = &shape;
-        object.object.header.type = MAL_HEAP_ARRAY_OBJECT;
-        CHECK(check_projection(count, receiver, ic, expected, false));
-        object.object.header.type = MAL_HEAP_OBJECT;
+            MalValue first = MAL_VALUE_TRUE, second = MAL_VALUE_FALSE;
+            CHECK(!mal_vm_property_try_load_static_pair(receiver, &ic[0], &ic[1], &first, &second));
+            CHECK(first == MAL_VALUE_TRUE && second == MAL_VALUE_FALSE);
+            object.storage.fields = values;
+            CHECK(mal_vm_property_try_load_static_pair(receiver, &ic[0], &ic[1], &first, &second));
+            CHECK(first == values[0] && second == values[1]);
 
-        // Successful stores retain argument order even when caller outputs alias.
-        f64 shared = 13.5;
-        f64 *aliased[4] = {&shared, &shared, &shared, &shared};
-        CHECK(project(count, receiver, ic, aliased));
-        CHECK(shared == count);
-        // A late miss must leave even aliased outputs untouched.
-        shared = 13.5;
-        values[count - 1] = MAL_VALUE_UNDEFINED;
-        CHECK(!project(count, receiver, ic, aliased));
-        CHECK(shared == 13.5);
+            // Successful stores retain argument order even when caller outputs alias.
+            f64 shared = 13.5;
+            f64 *aliased[4] = {&shared, &shared, &shared, &shared};
+            CHECK(project(count, receiver, ic, aliased));
+            CHECK(shared == count);
+            // A late miss must leave even aliased outputs untouched.
+            shared = 13.5;
+            values[count - 1] = MAL_VALUE_UNDEFINED;
+            CHECK(!project(count, receiver, ic, aliased));
+            CHECK(shared == 13.5);
+        }
+    }
+    object.object.header.type = MAL_HEAP_PROXY_OBJECT;
+    MalValue proxy = mal_value_from_object(&object.object);
+    for (int count = 2; count <= 4; count++) {
+        CHECK(check_projection(count, proxy, ic, expected, false));
     }
     puts("numeric-projection-contract PASS");
     return 0;

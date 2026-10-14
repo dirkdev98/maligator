@@ -154,7 +154,9 @@ An unmaterialized scalar-backed stack object may have a shape without a field
 buffer; it cannot enter a borrowed-field region.
 Named own slots of Arrays, TypedArrays, Maps, Sets, Dates, RegExps, Promises,
 ArrayBuffers and DataViews share this storage contract.
-Their indexed or internal properties still require the original admission; an own
+The two-to-four-field projections use the same receiver and backing-buffer
+admission as larger property regions. Their indexed or internal properties still
+require the original admission; an own
 shape row never licenses element storage, collection size or a buffer extent.
 The first property-cache miss ends the borrowed shape and field-pointer lifetime
 before the generic load can invoke user code; later reads never readmit that region.
@@ -202,3 +204,7 @@ String span searches convert primitive needles through canonical ToString while
 rooting the source and arguments. Position conversion follows needle conversion.
 Observable coercions, symbols and foreign-realm methods take the original call;
 admitted allocation failures retain normal completion handling.
+
+Span replacement converts primitive search and replacement values in the canonical
+order, retaining source and argument roots until conversion completes. The existing
+replacement builder owns no-match conversion and range-relative substitutions.

@@ -6435,6 +6435,32 @@
 			"sourceSeam": "runtime/src/builtin_string.c",
 			"fixture": "cases/string-span-search-primitives.mjs",
 			"controls": ["string-span-search", "string-span-replace"]
+		},
+		{
+			"id": "own-slot-projections",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Named own-field regions",
+			"category": "memory-layout-usage",
+			"mechanisms": ["property-read-regions", "numeric-property-projection"],
+			"inputShape": "Two-, three- and four-field numeric projections share own-slot storage admission across ordinary, builtin and callable receivers.",
+			"unit": "projection",
+			"sourceSeam": "runtime/src/vm_ops.h",
+			"fixture": "cases/own-slot-projections.mjs",
+			"controls": ["own-slot-builtins", "own-slot-collections"]
+		},
+		{
+			"id": "string-span-replace-primitives",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "Composable string spans",
+			"category": "memory-layout-usage",
+			"mechanisms": ["string-spans", "bounded-output", "primitive-coercion"],
+			"inputShape": "Primitive search and replacement values use canonical ordered conversion while replacing within retained string ranges.",
+			"unit": "token",
+			"sourceSeam": "runtime/src/builtin_string.c",
+			"fixture": "cases/string-span-replace-primitives.mjs",
+			"controls": ["string-span-replace", "string-span-search-primitives"]
 		}
 	]
 }

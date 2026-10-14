@@ -157,4 +157,56 @@ if (
 	throw new Error("projection dropped a fused numeric operand");
 }
 
+globalThis.projectBuiltinPair = projectPairNumbers;
+globalThis.projectBuiltinThree = projectThree;
+globalThis.projectBuiltinFour = projectFour;
+const builtinReceivers = [
+	[],
+	new Float64Array(2),
+	new Map(),
+	new Set(),
+	new Date(0),
+	/x/g,
+	Promise.resolve(1),
+	new ArrayBuffer(8),
+	new DataView(new ArrayBuffer(8)),
+	function callable() {},
+	(() => {}).bind(null),
+];
+for (const receiver of builtinReceivers) {
+	Object.assign(receiver, { left: 1, right: 2, kind: 3, tag: 4 });
+	for (let visit = 0; visit < 12; visit++) {
+		if (
+			globalThis.projectBuiltinPair(receiver) !== 3 ||
+			globalThis.projectBuiltinThree(receiver) !== 6 ||
+			globalThis.projectBuiltinFour(receiver) !== 10
+		)
+			throw new Error("builtin field projection lost");
+	}
+	for (const value of [-0, NaN, Infinity, -Infinity, 0.25]) {
+		receiver.left = value;
+		receiver.right = value;
+		receiver.kind = value;
+		receiver.tag = value;
+		if (
+			!Object.is(globalThis.projectBuiltinPair(receiver), value + value) ||
+			!Object.is(globalThis.projectBuiltinThree(receiver), value + value + value) ||
+			!Object.is(globalThis.projectBuiltinFour(receiver), value + value + value + value)
+		)
+			throw new Error("builtin Number encoding changed");
+	}
+	Object.assign(receiver, { left: 1, right: 2, kind: 3, tag: 4 });
+	let reads = 0;
+	Object.defineProperty(receiver, "right", {
+		configurable: true,
+		get() {
+			reads++;
+			receiver.kind = 17;
+			return 2;
+		},
+	});
+	if (globalThis.projectBuiltinFour(receiver) !== 24 || reads !== 1)
+		throw new Error("builtin accessor order changed");
+}
+
 console.log("static-property-projection PASS");
