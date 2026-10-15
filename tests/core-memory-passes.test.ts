@@ -91,6 +91,18 @@ function forwardMemoryLoads(core: CoreProgram, fn: CoreFunctionStore): void {
 	}).runComponent("memory", [pass]);
 }
 
+function refineStackCells(core: CoreProgram, fn: CoreFunctionStore) {
+	const report = new CoreOptimizationReportBuilder(core);
+	const analyses = new CoreAnalysisManager(core, lockedContext, report);
+	const pass = CORE_MEMORY_PASSES.find(
+		({ name }) => name === "refine-stack-object-cell-representations",
+	)!;
+	new CoreFunctionPassScheduler(core, lockedContext, analyses, report, fn.id, {
+		verification: "per-pass",
+	}).runComponent("memory", [pass]);
+	return report.finish(core, { directEntries: [], specializations: [] });
+}
+
 describe("Core local memory, provenance, and escape optimization", () => {
 	it.each([false, true])(
 		"bounds non-observable probe reuse at collection: %s",
@@ -1266,36 +1278,154 @@ describe("Core local memory, provenance, and escape optimization", () => {
 		);
 	});
 
-	it("does not solve value kinds for a stack object requiring materialization", () => {
+	it.each(["return", "move-return", "call", "store-global"] as const)(
+		"does not construct stack proofs for a same-block %s escape",
+		(escape) => {
+			const core = program();
+			const builder = new CoreFunctionBuilder(core, { parameterCount: 1 });
+			const entry = builder.createBlock([{}]);
+			const callee = builder.blockParameterValue(entry, 0);
+			const [value] = builder.appendInstruction(entry, "createNumber", [], {
+				attributes: { value: 7.5 },
+			});
+			const [object] = builder.appendInstruction(entry, "createObjectShaped", [value!], {
+				attributes: { keyStringIndices: [0] },
+			});
+			const [loaded] = builder.appendInstruction(entry, "loadPropertyStatic", [object!], {
+				attributes: { stringIndex: 0 },
+			});
+			let returned = escape === "return" ? object! : loaded!;
+			if (escape === "move-return")
+				returned = builder.appendInstruction(entry, "move", [object!])[0]!;
+			else if (escape === "call") {
+				const [receiver] = builder.appendInstruction(entry, "createUndefined", []);
+				builder.appendInstruction(entry, "call", [callee, receiver!, object!]);
+			} else if (escape === "store-global")
+				builder.appendInstruction(entry, "storeGlobal", [object!], {
+					attributes: { index: 0 },
+					outputCount: 0,
+				});
+			builder.setTerminator(entry, { kind: "return", value: returned });
+			const id = builder.finish(entry).function;
+			const result = refineStackCells(core, core.function(id));
+			expect(result.passes).toEqual([]);
+			expect(
+				result.analyses.find(({ analysis }) => analysis === "local-stack-object-proofs"),
+			).toBeUndefined();
+			expect(
+				result.analyses.find(({ analysis }) => analysis === "local-value-kinds"),
+			).toBeUndefined();
+			expect(core.function(id).valueRepresentation(value!)).toBe("boxed");
+		},
+	);
+
+	it.each(["move", "block-parameter", "branch-argument"] as const)(
+		"retains initial stack-cell refinements through a %s alias",
+		(alias) => {
+			const core = program();
+			const builder = new CoreFunctionBuilder(core);
+			const entry = builder.createBlock();
+			const [value] = builder.appendInstruction(entry, "createNumber", [], {
+				attributes: { value: 7.5 },
+			});
+			const [object] = builder.appendInstruction(entry, "createObjectShaped", [value!], {
+				attributes: { keyStringIndices: [0] },
+			});
+			let block = entry;
+			let receiver = object!;
+			if (alias === "move")
+				receiver = builder.appendInstruction(entry, "move", [object!])[0]!;
+			else {
+				block = builder.createBlock([{}]);
+				receiver = builder.blockParameterValue(block, 0);
+				if (alias === "branch-argument") {
+					const [condition] = builder.appendInstruction(entry, "createBoolean", [], {
+						attributes: { value: true },
+					});
+					builder.setTerminator(entry, {
+						kind: "branch",
+						condition: condition!,
+						consequent: { block, arguments: [object!] },
+						alternate: { block, arguments: [object!] },
+					});
+				} else
+					builder.setTerminator(entry, {
+						kind: "jump",
+						edge: { block, arguments: [object!] },
+					});
+			}
+			const [loaded] = builder.appendInstruction(
+				block,
+				"loadPropertyStatic",
+				[receiver],
+				{
+					attributes: { stringIndex: 0 },
+				},
+			);
+			builder.setTerminator(block, { kind: "return", value: loaded! });
+			const fn = core.function(builder.finish(entry).function);
+			refineStackCells(core, fn);
+			expect(fn.valueRepresentation(value!)).toBe("f64");
+			expect(fn.valueRepresentation(loaded!)).toBe("f64");
+		},
+	);
+
+	it("keeps handler aliases eligible for the complete stack proof", () => {
 		const core = program();
 		const builder = new CoreFunctionBuilder(core);
 		const entry = builder.createBlock();
+		const handler = builder.createBlock([{ role: "exception" }, {}]);
 		const [value] = builder.appendInstruction(entry, "createNumber", [], {
 			attributes: { value: 7.5 },
 		});
 		const [object] = builder.appendInstruction(entry, "createObjectShaped", [value!], {
 			attributes: { keyStringIndices: [0] },
 		});
-		builder.appendInstruction(entry, "loadPropertyStatic", [object!], {
+		builder.setHandler(entry, handler, [object!]);
+		const [loaded] = builder.appendInstruction(entry, "loadPropertyStatic", [object!], {
 			attributes: { stringIndex: 0 },
 		});
-		builder.setTerminator(entry, { kind: "return", value: object! });
-		const id = builder.finish(entry).function;
-		const report = new CoreOptimizationReportBuilder(core);
-		const analyses = new CoreAnalysisManager(core, lockedContext, report);
-		const pass = CORE_MEMORY_PASSES.find(
-			({ name }) => name === "refine-stack-object-cell-representations",
-		)!;
-		new CoreFunctionPassScheduler(core, lockedContext, analyses, report, id).runComponent(
-			"memory",
-			[pass],
+		builder.setTerminator(entry, { kind: "return", value: loaded! });
+		const receiver = builder.blockParameterValue(handler, 1);
+		const [handled] = builder.appendInstruction(
+			handler,
+			"loadPropertyStatic",
+			[receiver],
+			{
+				attributes: { stringIndex: 0 },
+			},
 		);
-		const result = report.finish(core, { directEntries: [], specializations: [] });
-		expect(result.passes.find(({ pass: name }) => name === pass.name)?.runs).toBe(1);
+		builder.setTerminator(handler, { kind: "return", value: handled! });
+		const fn = core.function(builder.finish(entry).function);
+		const result = refineStackCells(core, fn);
 		expect(
-			result.analyses.find(({ analysis }) => analysis === "local-value-kinds"),
-		).toBeUndefined();
-		expect(core.function(id).valueRepresentation(value!)).toBe("boxed");
+			result.analyses.find(({ analysis }) => analysis === "local-stack-object-proofs"),
+		).toBeDefined();
+		expect(fn.valueRepresentation(value!)).toBe("boxed");
+	});
+
+	it("retains initial stack fields when only object identity is observed", () => {
+		const core = program();
+		const builder = new CoreFunctionBuilder(core, { parameterCount: 1 });
+		const entry = builder.createBlock([{}]);
+		const external = builder.blockParameterValue(entry, 0);
+		const [value] = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 7.5 },
+		});
+		const [object] = builder.appendInstruction(entry, "createObjectShaped", [value!], {
+			attributes: { keyStringIndices: [0] },
+		});
+		builder.appendInstruction(entry, "binary", [object!, object!], {
+			attributes: { operator: "===" },
+		});
+		const [loaded] = builder.appendInstruction(entry, "loadPropertyStatic", [external], {
+			attributes: { stringIndex: 0 },
+		});
+		builder.setTerminator(entry, { kind: "return", value: loaded! });
+		const fn = core.function(builder.finish(entry).function);
+		refineStackCells(core, fn);
+		expect(fn.valueRepresentation(value!)).toBe("f64");
+		expect(fn.valueRepresentation(loaded!)).toBe("boxed");
 	});
 
 	it.each(["binary", "unary"] as const)(
