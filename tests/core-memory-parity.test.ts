@@ -22,7 +22,8 @@ import { coreFunctionNamed, coreOperations } from "./helpers/core-inspection.ts"
 import { programAnalysisContext } from "./helpers/core-program-analysis.ts";
 
 function optimize(program: CoreProgram): CoreProgram {
-	return optimizeCore({ program, context: programAnalysisContext() }).compilation.program;
+	return optimizeCore({ program, context: programAnalysisContext(false) }).compilation
+		.program;
 }
 
 function operationCount(fn: CoreFunctionStore, opcode: string): number {

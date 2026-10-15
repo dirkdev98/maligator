@@ -180,7 +180,7 @@ describe("connected native entry contracts", () => {
 		);
 	});
 
-	it("connects the declaration benchmark through guarded numeric leaf entries", () => {
+	it("connects the declaration benchmark through exact numeric leaf entries", () => {
 		const image = deserializeCompilerArtifact(
 			serializeCompilerArtifact(
 				compileEntrypoint(
@@ -207,16 +207,14 @@ describe("connected native entry contracts", () => {
 				resultRepresentation: "number",
 			}),
 		);
-		// The branching helper is inlined in visitor. Its two leaf calls still
-		// load a mutable declaration, so only the guarded branch has a typed ABI.
 		expect(entry).toMatchObject({
 			parameterRepresentations: ["number", "number"],
-			resultRepresentation: "boxed",
+			resultRepresentation: "number",
 		});
 		expect(entry.callOverrides).toHaveLength(2);
 		for (const call of entry.callOverrides!) {
-			expect(call).toMatchObject({ functionIndex: leaf, guarded: true });
-			// The generic body knows only that the first argument is a Number.
+			expect(call).toMatchObject({ functionIndex: leaf });
+			expect(call.guarded).toBeUndefined();
 			const genericEntry =
 				image.native.functions[visitor]!.instructions[call.instructionIp];
 			if (genericEntry?.kind === "call" && genericEntry.directEntryId !== undefined)
@@ -228,7 +226,7 @@ describe("connected native entry contracts", () => {
 				image.native.functions[visitor]!.body.instructions[call.instructionIp]!;
 			expect(instruction.opcode).toBe("CALL");
 			if (instruction.opcode === "CALL")
-				expect(entry.registerRepresentations[instruction.dst]).toBe("boxed");
+				expect(entry.registerRepresentations[instruction.dst]).toBe("number");
 		}
 	});
 
@@ -328,8 +326,7 @@ describe("connected native entry contracts", () => {
 		);
 	});
 
-	it("charges boxed-input variant result proofs as discovery across cells and callbacks", () => {
-		let resultOnlyEntries = 0;
+	it("reuses canonical boxed-input scalar proofs across cells and callbacks", () => {
 		let canonicalScalarEntries = 0;
 		for (const fixture of ["exact-cell-value-kinds", "captured-callback-inlining"]) {
 			compileEntrypoint(resolve(`tests/local/${fixture}.js`), {
@@ -343,19 +340,14 @@ describe("connected native entry contracts", () => {
 							entry.parameterRepresentations.every((value) => value === "boxed") &&
 							entry.resultRepresentation !== "boxed"
 						) {
-							if (entry.valueRepresentations !== undefined) {
-								expect(entry.cost.compilerWork).toBe(0);
-								resultOnlyEntries++;
-							} else {
-								expect(entry.cost.compilerWork).toBeGreaterThan(0);
-								canonicalScalarEntries++;
-							}
+							expect(entry.valueRepresentations).toBeUndefined();
+							expect(entry.cost.compilerWork).toBeGreaterThan(0);
+							canonicalScalarEntries++;
 						}
 					}
 				},
 			});
 		}
-		expect(resultOnlyEntries).toBeGreaterThan(0);
 		expect(canonicalScalarEntries).toBeGreaterThan(0);
 	});
 

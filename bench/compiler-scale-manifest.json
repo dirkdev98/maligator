@@ -204,7 +204,11 @@
 				"src/compiler/core/core-transform-candidates.ts",
 				"src/compiler/core/core-typed-array-bounds.ts",
 				"src/compiler/core/optimize.ts",
-				"src/compiler/core/semantic-lowering.ts"
+				"src/compiler/core/semantic-lowering.ts",
+				"src/compiler/core/core-capture-liveness.ts",
+				"src/compiler/core/core-instruction-removal.ts",
+				"src/compiler/core/core-rest-materialization.ts",
+				"src/compiler/core/core-synchronous-callbacks.ts"
 			]
 		},
 		{

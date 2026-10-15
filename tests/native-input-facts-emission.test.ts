@@ -237,7 +237,7 @@ function mathCallSource(stable: boolean, binary: boolean): string {
 
 describe("boxed Math result identity admission", () => {
 	it.each([false, true])(
-		"requires stable identity before eliminating the runtime guard (binary: %s)",
+		"keeps loaded-callee guards in locked and mutable worlds (binary: %s)",
 		(binary) => {
 			const guarded = mathCallSource(false, binary),
 				stable = mathCallSource(true, binary);
@@ -247,8 +247,12 @@ describe("boxed Math result identity admission", () => {
 					: "mal_builtin_math_unary_callee_matches",
 			);
 			expect(guarded).toContain("mal_vm_call_cached");
-			expect(stable).not.toContain("mal_builtin_math_");
-			expect(stable).not.toContain("mal_vm_call_cached");
+			expect(stable).toContain(
+				binary
+					? "mal_builtin_math_binary_callee_matches"
+					: "mal_builtin_math_unary_callee_matches",
+			);
+			expect(stable).toContain("mal_vm_call_cached");
 			expect(stable).toContain("mal_gc_safepoint");
 		},
 	);

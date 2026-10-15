@@ -22,8 +22,10 @@ function loadCount(fn: CoreFunctionStore): number {
 
 describe("Core memory joins", () => {
 	it("reuses a partitioned load only when every incoming path preserves it", () => {
-		const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 2 });
-		const build = (clobber: boolean): CoreFunctionId => {
+		const build = (
+			clobber: boolean,
+		): { program: CoreProgram; function: CoreFunctionId } => {
+			const program = new CoreProgram(coreOpcodeRegistry, { globalCount: 2 });
 			const builder = new CoreFunctionBuilder(program, { parameterCount: 3 });
 			const entry = builder.createBlock([
 				{ representation: "boxed" },
@@ -61,27 +63,24 @@ describe("Core memory joins", () => {
 				attributes: { index: 0 },
 			});
 			builder.setTerminator(join, { kind: "return", value: loaded! });
-			return builder.finish(entry).function;
+			return { program, function: builder.finish(entry).function };
 		};
-		const clean = build(false);
-		const clobbered = build(true);
-
-		const optimized = optimizeCore(
-			{ program, context: programAnalysisContext() },
-			{ verification: "per-pass" },
-		).compilation.program;
-		expect(loadCount(optimized.function(clean))).toBe(0);
-		expect(loadCount(optimized.function(clobbered))).toBe(1);
+		const optimize = (input: ReturnType<typeof build>): CoreFunctionStore =>
+			optimizeCore(
+				{ program: input.program, context: programAnalysisContext() },
+				{ verification: "per-pass" },
+			).compilation.program.function(input.function);
+		const clean = optimize(build(false));
+		const clobbered = optimize(build(true));
+		expect(loadCount(clean)).toBe(0);
+		expect(loadCount(clobbered)).toBe(1);
 		expect(
-			[...optimized.function(clean).blockIds()].map((block) =>
-				inspectCoreTerminatorPayload(
-					optimized.function(clean),
-					optimized.function(clean).blockTerminator(block),
-				),
+			[...clean.blockIds()].map((block) =>
+				inspectCoreTerminatorPayload(clean, clean.blockTerminator(block)),
 			),
 		).toContainEqual({
 			kind: "return",
-			value: inspectCoreFunctionParameters(optimized.function(clean))[0],
+			value: inspectCoreFunctionParameters(clean)[0],
 		});
 	});
 
