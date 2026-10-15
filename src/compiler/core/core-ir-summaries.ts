@@ -771,7 +771,8 @@ function summarizeAnyScriptCallees(
 	let receiverEscape: ValueEscapeFact = "none";
 	let receiverContainment: ValueContainmentFact = "preserved";
 	for (const summary of current.values()) {
-		effects = joinEffectSummaries(effects, summary.effects);
+		if (effects !== EVERY_EFFECT_SUMMARY)
+			effects = joinEffectSummaries(effects, summary.effects);
 		for (let index = 0; index < parameterCount; index++) {
 			parameterEscape[index] = joinValueEscape(
 				parameterEscape[index]!,
@@ -853,7 +854,7 @@ function deriveSummary(
 	const callSites = includeCalls ? targets.outgoing(functionId) : [];
 	for (const site of callSites) {
 		if (site.targets.opaque || (!targets.sourceClosed && site.targets.anyScript)) {
-			effects = joinEffectSummaries(effects, EVERY_EFFECT_SUMMARY);
+			effects = EVERY_EFFECT_SUMMARY;
 			for (const argument of site.arguments ?? site.argumentPrefix ?? []) {
 				noteCallFact(argument, "retained", "unknown");
 			}
@@ -864,7 +865,8 @@ function deriveSummary(
 			if (anyScriptSummary === undefined) {
 				throw new Error("Missing AnyScriptAggregate summary");
 			}
-			effects = joinEffectSummaries(effects, anyScriptSummary.effects);
+			if (effects !== EVERY_EFFECT_SUMMARY)
+				effects = joinEffectSummaries(effects, anyScriptSummary.effects);
 			for (const [index, argument] of (
 				site.arguments ??
 				site.argumentPrefix ??
@@ -886,10 +888,11 @@ function deriveSummary(
 		for (const callee of site.targets.functions) {
 			const calleeSummary = current.get(callee);
 			if (calleeSummary === undefined) {
-				effects = joinEffectSummaries(effects, EVERY_EFFECT_SUMMARY);
+				effects = EVERY_EFFECT_SUMMARY;
 				continue;
 			}
-			effects = joinEffectSummaries(effects, calleeSummary.effects);
+			if (effects !== EVERY_EFFECT_SUMMARY)
+				effects = joinEffectSummaries(effects, calleeSummary.effects);
 			for (const [index, argument] of (
 				site.arguments ??
 				site.argumentPrefix ??
@@ -963,8 +966,10 @@ function moduleSummaries(
 	const result = new Map<string, ModuleEffectSummary>();
 	for (const [id, summaries] of grouped) {
 		let effects = NO_EFFECT_SUMMARY;
-		for (const summary of summaries)
+		for (const summary of summaries) {
 			effects = joinEffectSummaries(effects, summary.effects);
+			if (effects === EVERY_EFFECT_SUMMARY) break;
+		}
 		const sourcePath = program.function(summaries[0]!.functionIndex as CoreFunctionId)
 			.metadata.sourcePath;
 		result.set(

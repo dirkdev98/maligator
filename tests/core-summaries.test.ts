@@ -5,6 +5,7 @@ import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import { CORE_PROGRAM_SUMMARIES_ANALYSIS } from "../src/compiler/core/core-program-flow-analysis.ts";
+import { EVERY_EFFECT_SUMMARY } from "../src/compiler/shared/effect-summary.ts";
 import { inspectCoreBlockParameters } from "./helpers/core-inspection.ts";
 import {
 	analysisProgram,
@@ -14,6 +15,57 @@ import {
 } from "./helpers/core-program-analysis.ts";
 
 describe("incremental Core program summaries", () => {
+	it("retains later callee escapes and module members after effects reach top", () => {
+		const program = analysisProgram();
+		const caller = new CoreFunctionBuilder(program, {
+			parameterCount: 2,
+			metadata: { strict: true, sourcePath: "/entry.js" },
+		});
+		const entry = caller.createBlock([{}, {}]);
+		const opaque = caller.blockParameterValue(entry, 0);
+		const argument = caller.blockParameterValue(entry, 1);
+		const [receiver] = caller.appendInstruction(entry, "createUndefined", []);
+		caller.appendInstruction(entry, "call", [opaque, receiver!]);
+		const [callee] = caller.appendInstruction(entry, "createFunction", [], {
+			attributes: { functionIndex: 1 },
+		});
+		const [result] = caller.appendInstruction(entry, "call", [
+			callee!,
+			receiver!,
+			argument,
+		]);
+		caller.setTerminator(entry, { kind: "return", value: result! });
+		const callerId = caller.finish(entry).function;
+
+		const retaining = new CoreFunctionBuilder(program, {
+			parameterCount: 1,
+			metadata: { strict: true, sourcePath: "/entry.js" },
+		});
+		const retainingEntry = retaining.createBlock([{}]);
+		retaining.appendInstruction(
+			retainingEntry,
+			"storeGlobal",
+			[retaining.blockParameterValue(retainingEntry, 0)],
+			{ attributes: { index: 0 } },
+		);
+		const [returned] = retaining.appendInstruction(retainingEntry, "createUndefined", []);
+		retaining.setTerminator(retainingEntry, { kind: "return", value: returned! });
+		const retainingId = retaining.finish(retainingEntry).function;
+		const manager = new CoreAnalysisManager(
+			program,
+			programAnalysisContext(),
+			new CoreOptimizationReportBuilder(program),
+		);
+		const summaries = manager.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, { scope: "program" });
+		const summary = summaries.summary(callerId)!;
+		expect(summary.effects).toEqual(EVERY_EFFECT_SUMMARY);
+		expect(summary.parameterEscape[1]).toBe("retained");
+		expect(summary.parameterContainment[1]).toBe("unknown");
+		expect(summaries.moduleEffects.get(summary.module)?.functions).toEqual(
+			[summary.id, summaries.summary(retainingId)!.id].sort(),
+		);
+	});
+
 	it("preserves escape effects for the positional prefix of an iterable call", () => {
 		const program = analysisProgram();
 		const builder = new CoreFunctionBuilder(program, {
