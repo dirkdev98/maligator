@@ -1272,6 +1272,104 @@ describe("late Core specialization plan", () => {
 		verifyCoreOptimizationPlan(program.seal(), plan, context);
 	});
 
+	it("retains independent iterator plans before one ready guarded call", () => {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 2 });
+		const entry = builder.createBlock([{}, {}]);
+		const source = builder.blockParameterValue(entry, 0);
+		const condition = builder.blockParameterValue(entry, 1);
+		const [callee] = builder.appendInstruction(entry, "createFunction", [], {
+			attributes: { functionIndex: 1 },
+		});
+		const [receiver] = builder.appendInstruction(entry, "createUndefined", []);
+		const outer = builder.createBlock();
+		const inner = builder.createBlock();
+		const afterInner = builder.createBlock();
+		const exit = builder.createBlock();
+		builder.setTerminator(entry, {
+			kind: "jump",
+			edge: { block: outer, arguments: [] },
+		});
+		builder.setTerminator(outer, {
+			kind: "jump",
+			edge: { block: inner, arguments: [] },
+		});
+		const values = Array.from({ length: 2 }, () => {
+			const [iterator, next] = builder.appendInstruction(inner, "getIterator", [source]);
+			const [value] = builder.appendInstruction(inner, "iteratorStep", [
+				iterator!,
+				next!,
+			]);
+			return value!;
+		});
+		const [result] = builder.appendInstruction(inner, "call", [
+			callee!,
+			receiver!,
+			...values,
+		]);
+		const call = [...builder.bodyInstructionIds(inner)].at(-1)!;
+		builder.setTerminator(inner, {
+			kind: "branch",
+			condition,
+			consequent: { block: inner, arguments: [] },
+			alternate: { block: afterInner, arguments: [] },
+		});
+		builder.setTerminator(afterInner, {
+			kind: "branch",
+			condition,
+			consequent: { block: outer, arguments: [] },
+			alternate: { block: exit, arguments: [] },
+		});
+		builder.setTerminator(exit, { kind: "return", value: result! });
+		const caller = builder.finish(entry).function;
+		const target = new CoreFunctionBuilder(program, { parameterCount: 2 });
+		const targetEntry = target.createBlock([{}, {}]);
+		target.setTerminator(targetEntry, {
+			kind: "return",
+			value: target.blockParameterValue(targetEntry, 0),
+		});
+		const calleeId = target.finish(targetEntry).function;
+		const prepared = planning(program, [caller, calleeId]);
+		const iteratorPlans = planSpecializations(prepared.plan).filter(
+			({ kind }) => kind === "array-values-iterator-cursor",
+		);
+		expect(iteratorPlans).toHaveLength(2);
+		expect(planSpecializations(prepared.plan)).toContainEqual(
+			expect.objectContaining({ kind: "guarded-direct-call", anchors: [call] }),
+		);
+		const generatedCode = iteratorPlans.reduce(
+			(sum, iterator) => sum + iterator.cost.generatedCode,
+			0,
+		);
+		const plan = buildCoreOptimizationPlan(
+			program,
+			new CoreAnalysisManager(
+				program,
+				prepared.context,
+				new CoreOptimizationReportBuilder(program),
+			),
+			prepared.summaries,
+			[caller, calleeId],
+			{
+				context: prepared.context,
+				budgets: {
+					...DEFAULT_CORE_SPECIALIZATION_BUDGETS,
+					perCallerGeneratedCode: generatedCode,
+					programGeneratedCode: generatedCode,
+				},
+			},
+		);
+		expect(
+			planSpecializations(plan).filter(
+				({ kind }) => kind === "array-values-iterator-cursor",
+			),
+		).toHaveLength(2);
+		expect(
+			planSpecializations(plan).some(({ kind }) => kind === "guarded-direct-call"),
+		).toBe(false);
+		verifyCoreOptimizationPlan(program.seal(), plan, prepared.context);
+	});
+
 	it("binds native-body omission to the proved calls and preserves it through verification", () => {
 		const { program, caller, callee } = directEntryProgram(2);
 		const { plan, context } = planning(program, [caller, callee]);

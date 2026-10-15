@@ -1081,7 +1081,7 @@ export function buildCoreLocalOptimizationPlanInput(
 	let priorityScore = 0;
 	let operationCount = 0;
 	if (scanned) {
-		// A single hot instruction estimates benefit, but discovery must scan the whole function.
+		// Whole-function discovery can expose several independent local candidates.
 		const loopWeights = new Uint8Array(fn.blockCapacity);
 		for (const loop of cfg.loops) {
 			for (const block of loop.blocks)
@@ -1103,10 +1103,8 @@ export function buildCoreLocalOptimizationPlanInput(
 							: opcode === "binary"
 								? 2
 								: 0;
-			priorityScore = Math.min(
-				priorityScore,
-				-benefit * Math.max(1, loopWeights[fn.instructionBlock(instruction)]!),
-			);
+			priorityScore -=
+				benefit * Math.max(1, loopWeights[fn.instructionBlock(instruction)]!);
 		}
 	}
 	const blocks = Object.freeze([...cfg.reversePostorder]);
