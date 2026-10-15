@@ -144,6 +144,15 @@ describe("node:util/types", () => {
 		const expected = JSON.parse(
 			execFileSync(process.execPath, [fixture], { encoding: "utf8" }),
 		) as TypeResults;
+		// The audited surface follows Node 26 wrappers; Node 24 differs in metadata and constructors.
+		const node26Wrappers = new Set(["isDataView", "isKeyObject", "isCryptoKey"]);
+		for (const row of expected.results) {
+			if (node26Wrappers.has(row[0])) {
+				row[2] = row[0];
+				row[3] = 1;
+			}
+		}
+		for (const row of expected.construct) if (node26Wrappers.has(row[0])) row[1] = true;
 		const pair = buildBackendPairFromOneProgramImage({
 			fixture,
 			name: "node-util-types",
