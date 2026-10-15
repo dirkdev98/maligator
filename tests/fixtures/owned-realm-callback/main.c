@@ -113,7 +113,16 @@ int main(void) {
     bool first = run_entry(&vm);
     ForeignVm foreign = {.mutex=PTHREAD_MUTEX_INITIALIZER,.condition=PTHREAD_COND_INITIALIZER};
     pthread_t thread;
-    if (pthread_create(&thread, nullptr, foreign_vm_main, &foreign) != 0) {
+    pthread_attr_t attributes;
+    if (pthread_attr_init(&attributes) != 0) {
+        mal_vm_free(&vm);
+        return 1;
+    }
+    // The VM's native-stack reserve consumes macOS's default pthread stack.
+    int spawn = pthread_attr_setstacksize(&attributes, 16u << 20);
+    if (spawn == 0) spawn = pthread_create(&thread, &attributes, foreign_vm_main, &foreign);
+    pthread_attr_destroy(&attributes);
+    if (spawn != 0) {
         mal_vm_free(&vm);
         return 1;
     }
