@@ -199,14 +199,16 @@ function cases(): Array<Test262File> {
 	];
 }
 
-describe("Test262 native execution contract", () => {
-	it.each(["compiled", "interpreted", "wire"] as const)(
-		"preserves source boundaries and verdicts on %s",
-		async (backend) => {
+describe.each(["compiled", "interpreted", "wire"] as const)(
+	"Test262 native execution contract on %s",
+	(backend) => {
+		beforeAll(() => {
 			vi.stubEnv("MAL_INTERP", backend === "interpreted" ? "1" : "0");
 			vi.stubEnv("T262_WIRE", backend === "wire" ? "1" : "0");
 			vi.stubEnv("T262_OBJCACHE", "1");
 			runner.test262PrepareBuild();
+		}, 1_200_000);
+		it("preserves source boundaries and verdicts", async () => {
 			for (const variant of ["strict", "sloppy"] as const) {
 				vi.stubEnv("T262_VARIANT", variant);
 				const files = cases();
@@ -249,7 +251,6 @@ describe("Test262 native execution contract", () => {
 					files.find((input) => input.path.endsWith("renamed-error.js"))!.result,
 				).toBe("PASSED");
 			}
-		},
-		300_000,
-	);
-});
+		}, 300_000);
+	},
+);
