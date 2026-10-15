@@ -45,24 +45,29 @@ function decodeString(units: ReadonlyArray<number>): string {
 	return String.fromCharCode(...units);
 }
 
+// Compiler output must keep the same ordering when Intl is unavailable.
+function compareText(left: string, right: string): number {
+	return left < right ? -1 : left > right ? 1 : 0;
+}
+
 export function stableValue(value: unknown): unknown {
 	if (typeof value === "bigint") return `${value}n`;
 	if (value instanceof Map) {
 		return [...value.entries()]
 			.map(([key, entry]) => [stableValue(key), stableValue(entry)])
-			.sort(([left], [right]) => String(left).localeCompare(String(right)));
+			.sort(([left], [right]) => compareText(String(left), String(right)));
 	}
 	if (value instanceof Set) {
 		return [...value]
 			.map(stableValue)
-			.sort((left, right) => String(left).localeCompare(String(right)));
+			.sort((left, right) => compareText(String(left), String(right)));
 	}
 	if (Array.isArray(value)) return value.map(stableValue);
 	if (value !== null && typeof value === "object") {
 		return Object.fromEntries(
 			Object.entries(value)
 				.filter(([, entry]) => entry !== undefined)
-				.sort(([left], [right]) => left.localeCompare(right))
+				.sort(([left], [right]) => compareText(left, right))
 				.map(([key, entry]) => [key, stableValue(entry)]),
 		);
 	}

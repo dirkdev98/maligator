@@ -4,7 +4,7 @@ import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.t
 import { analyzeEntrypoint } from "../src/compiler/pipeline/compile-program-common.ts";
 import { compileExplorer, compileExplorerRequest } from "../src/explorer/api.ts";
 import type { ExplorerResponse } from "../src/explorer/api.ts";
-import { compileExplorerCore } from "../src/explorer/compiler.ts";
+import { compileExplorerCore, stableJson } from "../src/explorer/compiler.ts";
 import {
 	EXPLORER_LIMITS,
 	EXPLORER_SCHEMA,
@@ -21,6 +21,30 @@ function request(source: string, config: unknown = {}): ExplorerResponse {
 }
 
 describe("explorer compilation", () => {
+	it("orders artifact keys, maps, and sets by code units across engines", () => {
+		expect(
+			stableJson({
+				callbackTransports: new Map([
+					["callbackTransports", 2],
+					["callTransports", 1],
+				]),
+				callTransports: new Set(["callbackTransports", "callTransports"]),
+			}),
+		).toBe(
+			JSON.stringify(
+				{
+					callTransports: ["callTransports", "callbackTransports"],
+					callbackTransports: [
+						["callTransports", 1],
+						["callbackTransports", 2],
+					],
+				},
+				null,
+				2,
+			),
+		);
+	});
+
 	it("compiles every builtin through both lowerings without executing source", () => {
 		for (const sample of SAMPLES) {
 			const result = compileExplorer(sample.source, sample.config ?? {});
