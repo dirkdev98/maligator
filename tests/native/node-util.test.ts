@@ -156,7 +156,8 @@ describe("node:util/types", () => {
 				const actual = JSON.parse(runToStdout(binary, { env })) as TypeResults;
 				expect(actual.identity).toBe(expected.identity);
 				expect(actual.arrayBufferView).toBe(expected.arrayBufferView);
-				expect(actual.touched).toBe(expected.touched);
+				// Older Node crypto predicates read proxy properties; our brand checks must not.
+				expect(actual.touched).toBe(false);
 				expect(actual.construct).toEqual(expected.construct);
 				expect(actual.results).toHaveLength(expected.results.length);
 				for (const [index, row] of actual.results.entries())

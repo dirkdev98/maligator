@@ -103,7 +103,7 @@ values.push(
 	new Proxy(new Uint8Array(1), {
 		get() {
 			touched = true;
-			throw new Error("unexpected read");
+			return undefined;
 		},
 	}),
 );
