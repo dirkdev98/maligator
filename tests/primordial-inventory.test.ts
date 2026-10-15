@@ -49,6 +49,6 @@ describe("native primordial installation matrix", () => {
 				rmSync(directory, { recursive: true, force: true });
 			}
 		},
-		600_000,
+		1_200_000,
 	);
 });

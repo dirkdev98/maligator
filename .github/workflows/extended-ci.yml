@@ -73,6 +73,8 @@ jobs:
 
       - name: Set up Linux
         uses: ./.github/actions/setup-linux
+        with:
+          cache-test262: "true"
 
       - name: Set up WASI
         uses: ./.github/actions/setup-wasi
