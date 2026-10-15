@@ -496,12 +496,9 @@ function stackCellAllocationMayStayLocal(
 	if (result === undefined) return true;
 	const block = fn.instructionBlock(allocation);
 	const pending = [result];
-	const visited = new Set<CoreValueId>();
 	let work = 0;
 	for (let cursor = 0; cursor < pending.length; cursor++) {
 		const value = pending[cursor]!;
-		if (visited.has(value)) continue;
-		visited.add(value);
 		for (
 			let use = fn.kernel.valueFirstUse(value);
 			use >= 0;
@@ -517,7 +514,7 @@ function stackCellAllocationMayStayLocal(
 			if (kind === "operation" && opcode === "move" && position === 0) {
 				const alias = instructionResultAt(fn, instruction, 0);
 				if (alias === undefined) return true;
-				pending.push(alias);
+				if (!pending.includes(alias)) pending.push(alias);
 				continue;
 			}
 			// Only the allocation's block is known reachable without constructing a CFG.
@@ -550,13 +547,12 @@ function stackCellAllocationMayStayLocal(
 
 function hasStackCellRepresentationConsumer(fn: CoreFunctionStore): boolean {
 	if (fn.isAsync || fn.isGenerator) return false;
-	let shapedAllocation = false;
+	let firstAllocation: CoreInstructionId | undefined;
 	let scalarCell = false;
 	for (const instruction of fn.instructionIds()) {
 		if (fn.instructionKind(instruction) !== "operation") continue;
 		const opcode = fn.instructionOpcodeName(instruction);
-		if (opcode === "createObjectShaped" && !shapedAllocation)
-			shapedAllocation = stackCellAllocationMayStayLocal(fn, instruction);
+		if (opcode === "createObjectShaped") firstAllocation ??= instruction;
 		if (opcode === "storePropertyStatic") {
 			const value = instructionOperandAt(fn, instruction, 1);
 			if (value !== undefined && fn.valueRepresentation(value) === "boxed") {
@@ -568,7 +564,18 @@ function hasStackCellRepresentationConsumer(fn: CoreFunctionStore): boolean {
 				scalarCell = true;
 			}
 		}
-		if (shapedAllocation && scalarCell) return true;
+		if (firstAllocation !== undefined && scalarCell) break;
+	}
+	if (firstAllocation === undefined || !scalarCell) return false;
+	if (stackCellAllocationMayStayLocal(fn, firstAllocation)) return true;
+	for (const instruction of fn.instructionIds()) {
+		if (
+			instruction !== firstAllocation &&
+			fn.instructionKind(instruction) === "operation" &&
+			fn.instructionOpcodeName(instruction) === "createObjectShaped" &&
+			stackCellAllocationMayStayLocal(fn, instruction)
+		)
+			return true;
 	}
 	return false;
 }

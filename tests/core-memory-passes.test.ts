@@ -1278,6 +1278,48 @@ describe("Core local memory, provenance, and escape optimization", () => {
 		);
 	});
 
+	it.each(["none", "scalar-load", "scalar-store"] as const)(
+		"does not walk allocation uses without a boxed slot consumer: %s",
+		(consumer) => {
+			const core = program();
+			const builder = new CoreFunctionBuilder(core);
+			const entry = builder.createBlock();
+			const [value] = builder.appendInstruction(entry, "createNumber", [], {
+				attributes: { value: 7.5 },
+				outputRepresentations: ["f64"],
+			});
+			const [object] = builder.appendInstruction(entry, "createObjectShaped", [value!], {
+				attributes: { keyStringIndices: [0] },
+			});
+			const [identity] = builder.appendInstruction(entry, "binary", [object!, object!], {
+				attributes: { operator: "===" },
+			});
+			if (consumer === "scalar-load")
+				builder.appendInstruction(entry, "loadPropertyStatic", [object!], {
+					attributes: { stringIndex: 0 },
+					outputRepresentations: ["f64"],
+				});
+			else if (consumer === "scalar-store")
+				builder.appendInstruction(entry, "storePropertyStatic", [object!, value!], {
+					attributes: { stringIndex: 0 },
+				});
+			builder.setTerminator(entry, { kind: "return", value: identity! });
+			const fn = core.function(builder.finish(entry).function);
+			const pass = CORE_MEMORY_PASSES.find(
+				({ name }) => name === "refine-stack-object-cell-representations",
+			)!;
+			fn.configureUseTraversalStatistics(true);
+			expect(
+				pass.admission!.hasOpportunity({
+					program: core,
+					compilationContext: lockedContext,
+					function: fn.id,
+				}),
+			).toBe(false);
+			expect(fn.useTraversalStatistics().liveVisits).toBe(0);
+		},
+	);
+
 	it.each(["return", "move-return", "call", "store-global"] as const)(
 		"does not construct stack proofs for a same-block %s escape",
 		(escape) => {
@@ -1319,7 +1361,7 @@ describe("Core local memory, provenance, and escape optimization", () => {
 		},
 	);
 
-	it.each(["move", "block-parameter", "branch-argument"] as const)(
+	it.each(["move", "block-parameter", "branch-argument", "following-escape"] as const)(
 		"retains initial stack-cell refinements through a %s alias",
 		(alias) => {
 			const core = program();
@@ -1328,6 +1370,18 @@ describe("Core local memory, provenance, and escape optimization", () => {
 			const [value] = builder.appendInstruction(entry, "createNumber", [], {
 				attributes: { value: 7.5 },
 			});
+			if (alias === "following-escape") {
+				const [escaped] = builder.appendInstruction(
+					entry,
+					"createObjectShaped",
+					[value!],
+					{ attributes: { keyStringIndices: [0] } },
+				);
+				builder.appendInstruction(entry, "storeGlobal", [escaped!], {
+					attributes: { index: 0 },
+					outputCount: 0,
+				});
+			}
 			const [object] = builder.appendInstruction(entry, "createObjectShaped", [value!], {
 				attributes: { keyStringIndices: [0] },
 			});
@@ -1335,7 +1389,7 @@ describe("Core local memory, provenance, and escape optimization", () => {
 			let receiver = object!;
 			if (alias === "move")
 				receiver = builder.appendInstruction(entry, "move", [object!])[0]!;
-			else {
+			else if (alias !== "following-escape") {
 				block = builder.createBlock([{}]);
 				receiver = builder.blockParameterValue(block, 0);
 				if (alias === "branch-argument") {

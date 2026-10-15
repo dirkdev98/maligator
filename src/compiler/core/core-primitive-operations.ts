@@ -26,7 +26,7 @@ import { coreStaticNumberSum } from "./core-static-number-sum.ts";
 import { coreStaticConstantOperation } from "./core-static-value-selection.ts";
 import type { CoreStaticMemberOperation } from "./core-static-value-selection.ts";
 import { CORE_STATIC_VALUE_ANALYSIS } from "./core-static-values.ts";
-import type { CoreStaticValue, CoreStaticValueAnalysis } from "./core-static-values.ts";
+import type { CoreStaticValueAnalysis } from "./core-static-values.ts";
 import { coreStringCollationPlan } from "./core-string-collation.ts";
 import {
 	coreStaticStringRawParts,
@@ -66,20 +66,6 @@ const wrapperPayloadMethods = new Set([
 	"Symbol.prototype[%Symbol.toPrimitive%]",
 	"Symbol.prototype.description<get>",
 ]);
-
-type StaticIdentityFact =
-	| Pick<CoreStaticValue, "kind" | "brand" | "identity">
-	| { readonly kind: "unknown" };
-
-function staticIdentityAt(
-	analysis: CoreStaticValueAnalysis,
-	value: CoreValueId,
-	consumer: CoreInstructionId,
-): StaticIdentityFact {
-	// Property mutation changes contents, never the producer's brand or identity.
-	const initial = analysis.query(value);
-	return initial.kind === "unknown" ? analysis.queryAt(value, consumer) : initial;
-}
 
 function primitivePrototypePayload(
 	analysis: CoreStaticValueAnalysis,
@@ -390,7 +376,7 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 				)
 					continue;
 				const input = fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction)),
-					fact = staticIdentityAt(analysis, input, instruction);
+					fact = analysis.identityAt(input, instruction);
 				if (fact.kind === "known" && fact.brand === "string") {
 					const value = analysis.constant(input, instruction);
 					if (value?.kind === "string")
@@ -418,7 +404,7 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 				)
 			) {
 				const start = fn.kernel.instructionOperandStart(instruction);
-				const left = staticIdentityAt(analysis, fn.kernel.operandAt(start), instruction);
+				const left = analysis.identityAt(fn.kernel.operandAt(start), instruction);
 				if (
 					left.kind !== "known" ||
 					(left.brand !== "symbol" &&
@@ -429,11 +415,7 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 					)
 				)
 					continue;
-				const right = staticIdentityAt(
-					analysis,
-					fn.kernel.operandAt(start + 1),
-					instruction,
-				);
+				const right = analysis.identityAt(fn.kernel.operandAt(start + 1), instruction);
 				if (
 					right.kind === "known" &&
 					((left.brand === "symbol" && right.brand === "symbol") ||
@@ -768,7 +750,7 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 				continue;
 			}
 			if (operation === "Object.prototype.toString") {
-				const fact = staticIdentityAt(analysis, inputs[0]!, instruction);
+				const fact = analysis.identityAt(inputs[0]!, instruction);
 				if (
 					fact.kind === "known" &&
 					[
@@ -1257,7 +1239,7 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 				operation === "String.prototype.toString" ||
 				operation === "Symbol.prototype[%Symbol.toPrimitive%]"
 			) {
-				const fact = staticIdentityAt(analysis, inputs[0]!, instruction);
+				const fact = analysis.identityAt(inputs[0]!, instruction);
 				if (
 					fact.kind === "known" &&
 					fact.brand === operation.slice(0, operation.indexOf(".")).toLowerCase()
@@ -1270,7 +1252,7 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 				(operation === "Number" || operation === "String") &&
 				inputs[1] !== undefined
 			) {
-				const fact = staticIdentityAt(analysis, inputs[1], instruction);
+				const fact = analysis.identityAt(inputs[1], instruction);
 				if (fact.kind === "known" && fact.brand === operation.toLowerCase())
 					plans.push({
 						instruction,

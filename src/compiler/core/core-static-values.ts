@@ -351,6 +351,10 @@ export type CoreStaticValueResult =
 				| "work-limit";
 	  };
 
+export type CoreStaticIdentityResult =
+	| Pick<CoreStaticValue, "kind" | "brand" | "identity">
+	| Extract<CoreStaticValueResult, { readonly kind: "unknown" }>;
+
 export interface CoreStaticValueStatistics {
 	queries: number;
 	visits: number;
@@ -561,10 +565,16 @@ export class CoreStaticValueAnalysis {
 		return this.#queryAt(value, consumer, demand?.property);
 	}
 
+	/** Brands and identities remain valid independently of mutable property contents. */
+	identityAt(value: CoreValueId, consumer: CoreInstructionId): CoreStaticIdentityResult {
+		return this.#queryAt(value, consumer, undefined, true);
+	}
+
 	#queryAt(
 		value: CoreValueId,
 		consumer: CoreInstructionId,
 		requestedKey?: string,
+		identityOnly = false,
 	): CoreStaticValueResult {
 		this.assertCurrent();
 		this.#refreshCells();
@@ -577,12 +587,17 @@ export class CoreStaticValueAnalysis {
 		const cached =
 			property?.kind === "known" ? property : full?.kind === "known" ? full : property;
 		if (cached !== undefined) return cached;
+		const initial = identityOnly ? this.#query(value) : undefined;
+		if (initial?.kind === "known") {
+			// Producer recursion may have installed a cycle-widened observation.
+			return this.#observations.get(key) ?? initial;
+		}
 		// Recursive control flow widens before following backedges.
 		(requestedKey === undefined
 			? this.#observations
 			: this.#propertyObservationsFor(requestedKey)
 		).set(key, { kind: "unknown", reason: "cycle-widening" });
-		const result = this.#observe(value, consumer, requestedKey);
+		const result = this.#observe(value, consumer, requestedKey, initial);
 		(requestedKey === undefined
 			? this.#observations
 			: this.#propertyObservationsFor(requestedKey)
@@ -654,8 +669,9 @@ export class CoreStaticValueAnalysis {
 		value: CoreValueId,
 		consumer: CoreInstructionId,
 		requestedKey?: string,
+		producer?: CoreStaticValueResult,
 	): CoreStaticValueResult {
-		const initial = this.#query(value, requestedKey);
+		const initial = producer ?? this.#query(value, requestedKey);
 		if (
 			initial.kind === "unknown" &&
 			this.#cells !== undefined &&
