@@ -3,10 +3,14 @@ const observations = [];
 function collect() {
 	if (typeof gc === "function") gc();
 }
+// A callable proxy preserves the callee's span path when locked calls inline through Reflect.apply.
+const searchSplitCallback = new Proxy(searchSplit, {});
 ["x|😀|z", "x|abab|z", "x||z"].forEach((source) => {
 	observations.push(searchRange(source, "a", 0, false, collect));
 	observations.push(searchNested(source, "a", 0, collect));
-	observations.push(searchSplit(source, "a", 0, collect));
+	observations.push(
+		Reflect.apply(searchSplitCallback, undefined, [source, "a", 0, collect]),
+	);
 	observations.push(searchCapture(source, "a", 0, collect));
 });
 function inspect(value, start, end, escape, observer) {

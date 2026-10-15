@@ -178,10 +178,15 @@ if (["range", "split", "regexp", "nested"].includes(mode)) {
 			},
 		},
 	);
-	const result = extra("xIY", locales, () => {
-		events.push("extra");
-		collectGarbage();
-	});
+	// A callable proxy preserves the span path when locked calls inline through Reflect.apply.
+	const result = Reflect.apply(new Proxy(extra, {}), undefined, [
+		"xIY",
+		locales,
+		() => {
+			events.push("extra");
+			collectGarbage();
+		},
+	]);
 	const once = "extra,length,length number,has:0,zero,tag,has:1,has:2,two";
 	if (result[0] !== "ı" || result[1] !== "I" || events.join() !== once + "," + once)
 		throw new Error("locale list observation");
