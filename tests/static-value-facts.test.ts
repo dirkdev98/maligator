@@ -94,7 +94,7 @@ describe("static descriptions and allocation identities", () => {
 		expect(other.stringConstantText(0)).toBe("other");
 	});
 
-	it("keeps constant and identity queries separate from demanded mutable contents", () => {
+	it("skips mutable contents for a constant query and observes later property mutations on demand", () => {
 		const program = new CoreProgram(coreOpcodeRegistry, { stringConstants: [[120]] });
 		const builder = new CoreFunctionBuilder(program);
 		const entry = builder.createBlock(),
@@ -121,19 +121,7 @@ describe("static descriptions and allocation identities", () => {
 		});
 		const consumer = fn.blockTerminator(after);
 		expect(facts.constant(object!, consumer)).toBeUndefined();
-		expect(facts.identityAt(object!, consumer)).toMatchObject({
-			kind: "known",
-			brand: "object",
-			identity: { kind: "fresh-per-evaluation", value: object },
-		});
 		expect(controlQueries).toBe(0);
-		const selected = facts.queryPropertyAt(object!, "x", consumer);
-		if (selected === undefined) throw new Error("Expected current x");
-		const current =
-			selected.member.kind === "constant"
-				? facts.descriptionConstant(selected.member.description)
-				: facts.constant(selected.operands[selected.member.index]!, consumer);
-		expect(current).toEqual({ kind: "number", value: 9 });
 		const observed = facts.queryAt(object!, consumer);
 		if (observed.kind !== "known") throw new Error("Expected observed object");
 		const description = program.staticDescriptions.description(observed.description);
@@ -386,11 +374,9 @@ describe("static descriptions and allocation identities", () => {
 			edge: { block: loop, arguments: [converted!] },
 		});
 		const fn = program.function(builder.finish(entry).function);
-		const analyze = () =>
-			new CoreStaticValueAnalysis(program, fn, () =>
-				buildCoreControlFlow(program, fn.id),
-			);
-		const facts = analyze();
+		const facts = new CoreStaticValueAnalysis(program, fn, () =>
+			buildCoreControlFlow(program, fn.id),
+		);
 		expect(facts.query(converted!)).toMatchObject({
 			kind: "known",
 			brand: "number",
@@ -401,20 +387,7 @@ describe("static descriptions and allocation identities", () => {
 			kind: "unknown",
 			reason: "cycle-widening",
 		});
-		expect(facts.identityAt(converted!, fn.blockTerminator(loop))).toEqual({
-			kind: "unknown",
-			reason: "cycle-widening",
-		});
 		expect(facts.statistics).toEqual(before);
-		const cold = analyze();
-		expect(cold.identityAt(converted!, fn.blockTerminator(loop))).toEqual({
-			kind: "unknown",
-			reason: "cycle-widening",
-		});
-		expect(cold.queryAt(converted!, fn.blockTerminator(loop))).toEqual({
-			kind: "unknown",
-			reason: "cycle-widening",
-		});
 	});
 
 	it.each(["typeof", "tostring", "void"])(

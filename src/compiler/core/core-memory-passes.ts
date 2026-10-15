@@ -488,71 +488,13 @@ function hasUnrefinedTypedArrayAccess(
 	return false;
 }
 
-function stackCellAllocationMayStayLocal(
-	fn: CoreFunctionStore,
-	allocation: CoreInstructionId,
-): boolean {
-	const result = instructionResultAt(fn, allocation, 0);
-	if (result === undefined) return true;
-	const block = fn.instructionBlock(allocation);
-	const pending = [result];
-	let work = 0;
-	for (let cursor = 0; cursor < pending.length; cursor++) {
-		const value = pending[cursor]!;
-		for (
-			let use = fn.kernel.valueFirstUse(value);
-			use >= 0;
-			use = fn.kernel.useNext(use)
-		) {
-			if (fn.kernel.useLive(use) === 0) continue;
-			if (++work > 64) return true;
-			const instruction = coreInstructionId(fn.kernel.useInstruction(use));
-			const position = fn.kernel.useOperand(use);
-			const kind = fn.instructionKind(instruction);
-			const opcode =
-				kind === "operation" ? fn.instructionOpcodeName(instruction) : undefined;
-			if (kind === "operation" && opcode === "move" && position === 0) {
-				const alias = instructionResultAt(fn, instruction, 0);
-				if (alias === undefined) return true;
-				if (!pending.includes(alias)) pending.push(alias);
-				continue;
-			}
-			// Only the allocation's block is known reachable without constructing a CFG.
-			if (fn.instructionBlock(instruction) !== block) continue;
-			if (kind !== "operation") {
-				if (
-					kind === "return" ||
-					kind === "throw" ||
-					(position === 0 && (kind === "branch" || kind === "guard" || kind === "switch"))
-				)
-					return false;
-				continue;
-			}
-			const operator = fn.instructionAttributes(instruction).operator;
-			if (
-				(opcode === "throwIfTdz" && position === 0) ||
-				opcode === "rootUse" ||
-				(opcode === "binary" && (operator === "===" || operator === "!==")) ||
-				((opcode === "loadPrototype" || opcode === "typeofCompare") && position === 0) ||
-				(opcode === "unary" && operator === "typeof" && position === 0) ||
-				((opcode === "loadPropertyStatic" || opcode === "storePropertyStatic") &&
-					position === 0)
-			)
-				continue;
-			return false;
-		}
-	}
-	return true;
-}
-
 function hasStackCellRepresentationConsumer(fn: CoreFunctionStore): boolean {
-	if (fn.isAsync || fn.isGenerator) return false;
-	let firstAllocation: CoreInstructionId | undefined;
+	let shapedAllocation = false;
 	let scalarCell = false;
 	for (const instruction of fn.instructionIds()) {
 		if (fn.instructionKind(instruction) !== "operation") continue;
 		const opcode = fn.instructionOpcodeName(instruction);
-		if (opcode === "createObjectShaped") firstAllocation ??= instruction;
+		if (opcode === "createObjectShaped") shapedAllocation = true;
 		if (opcode === "storePropertyStatic") {
 			const value = instructionOperandAt(fn, instruction, 1);
 			if (value !== undefined && fn.valueRepresentation(value) === "boxed") {
@@ -564,18 +506,7 @@ function hasStackCellRepresentationConsumer(fn: CoreFunctionStore): boolean {
 				scalarCell = true;
 			}
 		}
-		if (firstAllocation !== undefined && scalarCell) break;
-	}
-	if (firstAllocation === undefined || !scalarCell) return false;
-	if (stackCellAllocationMayStayLocal(fn, firstAllocation)) return true;
-	for (const instruction of fn.instructionIds()) {
-		if (
-			instruction !== firstAllocation &&
-			fn.instructionKind(instruction) === "operation" &&
-			fn.instructionOpcodeName(instruction) === "createObjectShaped" &&
-			stackCellAllocationMayStayLocal(fn, instruction)
-		)
-			return true;
+		if (shapedAllocation && scalarCell) return true;
 	}
 	return false;
 }
@@ -2138,8 +2069,7 @@ const refineStackObjectCellRepresentations: CoreFunctionPass = {
 	requiredFunctionFeatures: CORE_FUNCTION_HAS_ALLOCATIONS,
 	requiredFunctionOpcodesAny: ["createObjectShaped"],
 	admission: {
-		predicate:
-			"potentially unmaterialized shaped allocation and a boxed static-slot consumer",
+		predicate: "shaped allocation with a boxed static-slot load or store consumer",
 		hasOpportunity({ program, function: functionId }) {
 			return hasStackCellRepresentationConsumer(program.function(functionId));
 		},

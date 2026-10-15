@@ -376,7 +376,7 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 				)
 					continue;
 				const input = fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction)),
-					fact = analysis.identityAt(input, instruction);
+					fact = analysis.queryAt(input, instruction);
 				if (fact.kind === "known" && fact.brand === "string") {
 					const value = analysis.constant(input, instruction);
 					if (value?.kind === "string")
@@ -404,7 +404,7 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 				)
 			) {
 				const start = fn.kernel.instructionOperandStart(instruction);
-				const left = analysis.identityAt(fn.kernel.operandAt(start), instruction);
+				const left = analysis.queryAt(fn.kernel.operandAt(start), instruction);
 				if (
 					left.kind !== "known" ||
 					(left.brand !== "symbol" &&
@@ -415,7 +415,7 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 					)
 				)
 					continue;
-				const right = analysis.identityAt(fn.kernel.operandAt(start + 1), instruction);
+				const right = analysis.queryAt(fn.kernel.operandAt(start + 1), instruction);
 				if (
 					right.kind === "known" &&
 					((left.brand === "symbol" && right.brand === "symbol") ||
@@ -750,7 +750,7 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 				continue;
 			}
 			if (operation === "Object.prototype.toString") {
-				const fact = analysis.identityAt(inputs[0]!, instruction);
+				const fact = analysis.queryAt(inputs[0]!, instruction);
 				if (
 					fact.kind === "known" &&
 					[
@@ -1239,7 +1239,7 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 				operation === "String.prototype.toString" ||
 				operation === "Symbol.prototype[%Symbol.toPrimitive%]"
 			) {
-				const fact = analysis.identityAt(inputs[0]!, instruction);
+				const fact = analysis.queryAt(inputs[0]!, instruction);
 				if (
 					fact.kind === "known" &&
 					fact.brand === operation.slice(0, operation.indexOf(".")).toLowerCase()
@@ -1252,7 +1252,7 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 				(operation === "Number" || operation === "String") &&
 				inputs[1] !== undefined
 			) {
-				const fact = analysis.identityAt(inputs[1], instruction);
+				const fact = analysis.queryAt(inputs[1], instruction);
 				if (fact.kind === "known" && fact.brand === operation.toLowerCase())
 					plans.push({
 						instruction,

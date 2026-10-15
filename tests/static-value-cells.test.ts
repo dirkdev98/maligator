@@ -208,24 +208,6 @@ describe("demanded private-cell contents", () => {
 		});
 	});
 
-	it("queries an unknown cell producer once before recovering its observed identity", () => {
-		const f = fixture("primitive");
-		const load = coreInstructionId(f.readerFn.kernel.valueDefinitionOwner(f.loaded));
-		expect(f.readerFacts.identityAt(f.loaded, load).kind).toBe("unknown");
-		const before = f.readerFacts.statistics.queries;
-		const identity = f.readerFacts.identityAt(f.loaded, f.consumer);
-		expect(identity).toMatchObject({ kind: "known", brand: "number" });
-		expect(f.readerFacts.statistics.queries - before).toBe(1);
-		const queried = f.readerFacts.statistics.queries;
-		expect(f.readerFacts.queryAt(f.loaded, f.consumer)).toBe(identity);
-		expect(f.readerFacts.identityAt(f.loaded, f.consumer)).toBe(identity);
-		expect(f.readerFacts.statistics.queries).toBe(queried);
-		expect(f.readerFacts.constant(f.loaded, f.consumer)).toEqual({
-			kind: "number",
-			value: 7,
-		});
-	});
-
 	it.each(["alias-write", "self", "early-getter"] as const)(
 		"does not hide a mutable alias from %s",
 		(scenario) => {
