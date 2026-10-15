@@ -1,5 +1,4 @@
 import { coreDirectCreatedFunction } from "./core-ir-call-targets.ts";
-import type { CoreCallGraphIndex } from "./core-ir-call-targets.ts";
 import type { CoreFunctionId, CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
@@ -114,95 +113,35 @@ function directFunctionPrototypeOwner(
 	return owner === undefined ? undefined : coreDirectCreatedFunction(fn, owner);
 }
 
-function collectMethodHints(
-	program: CoreProgram,
-	callTargets?: CoreCallGraphIndex,
-): ReadonlyMap<number, ReadonlyArray<CoreFunctionId>> {
-	const hints = new Map<number, Array<CoreFunctionId>>();
-	const literalHints =
-		callTargets === undefined ? undefined : new Map<number, Array<CoreFunctionId>>();
-	const add = (key: number, target: CoreFunctionId, literal = false): void => {
-		const destination = literal ? literalHints! : hints;
-		const targets = destination.get(key) ?? [];
-		if (targets.includes(target) || (literal && targets.length === 4)) return;
-		targets.push(target);
-		destination.set(key, targets);
-	};
-	const addValue = (fn: CoreFunctionStore, key: number, value: CoreValueId): void => {
-		for (const target of callTargets!.targets(fn.id, value).functions) {
-			if (!program.function(target).metadata.isClassConstructor) add(key, target, true);
-		}
-	};
-	for (const functionId of program.functionIds()) {
-		const fn = program.function(functionId);
-		for (const instruction of fn.instructionIds()) {
-			if (fn.instructionKind(instruction) !== "operation") continue;
-			const opcode = fn.instructionOpcodeName(instruction);
-			if (opcode === "createObjectShaped" && callTargets !== undefined) {
-				const keys = fn.instructionAttributes(instruction).keyStringIndices;
-				if (!Array.isArray(keys)) continue;
-				const values = materializeInstructionOperands(fn, instruction);
-				for (const [index, key] of keys.entries()) {
-					const value = values[index];
-					if (typeof key === "number" && value !== undefined) addValue(fn, key, value);
-				}
-				continue;
-			}
-			if (opcode !== "defineProperty") continue;
-			if (
-				callTargets === undefined &&
-				fn.instructionAttributes(instruction).enumerable !== false
-			)
-				continue;
-			const [receiver, key, value] = materializeInstructionOperands(fn, instruction);
-			if (receiver === undefined || key === undefined || value === undefined) continue;
-			const stringIndex = directStringIndex(fn, key);
-			if (stringIndex === undefined) continue;
-			if (fn.instructionAttributes(instruction).enumerable === false) {
-				const owner = directFunctionPrototypeOwner(program, fn, receiver);
-				if (owner !== undefined && program.function(owner).metadata.isClassConstructor) {
-					const target = coreDirectCreatedFunction(fn, value);
-					if (target !== undefined) add(stringIndex, target);
-					continue;
-				}
-			}
-			if (callTargets === undefined) continue;
-			const root = canonicalMoveRoot(fn, receiver);
-			if (fn.kernel.valueDefinitionKind(root) !== 1) continue;
-			const allocation = coreInstructionId(fn.kernel.valueDefinitionOwner(root));
-			if (fn.instructionOpcodeName(allocation) === "createObject")
-				addValue(fn, stringIndex, value);
-		}
-	}
-	if (literalHints !== undefined) {
-		for (const [key, literals] of literalHints) {
-			const prior = hints.get(key);
-			const targets = prior === undefined || prior.length > 4 ? [] : prior;
-			// Guarded misses remain canonical, so retain existing class nominees before new literals.
-			for (const target of literals)
-				if (targets.length < 4 && !targets.includes(target)) targets.push(target);
-			hints.set(key, targets);
-		}
-		for (const [key, targets] of hints) {
-			if (targets.length > 4) hints.delete(key);
-			else targets.sort((left, right) => left - right);
-		}
-	}
-	return hints;
-}
-
 export function coreInstanceMethodHints(
 	program: CoreProgram,
 ): ReadonlyMap<number, ReadonlyArray<CoreFunctionId>> {
-	return collectMethodHints(program);
-}
-
-// Literal members nominate bodies only; each use must guard the actual loaded closure.
-export function coreGuardedMethodHints(
-	program: CoreProgram,
-	callTargets: CoreCallGraphIndex,
-): ReadonlyMap<number, ReadonlyArray<CoreFunctionId>> {
-	return collectMethodHints(program, callTargets);
+	const hints = new Map<number, Array<CoreFunctionId>>();
+	for (const functionId of program.functionIds()) {
+		const fn = program.function(functionId);
+		for (const instruction of fn.instructionIds()) {
+			if (
+				fn.instructionKind(instruction) !== "operation" ||
+				fn.instructionOpcodeName(instruction) !== "defineProperty" ||
+				fn.instructionAttributes(instruction).enumerable !== false
+			) {
+				continue;
+			}
+			const [receiver, key, value] = materializeInstructionOperands(fn, instruction);
+			if (receiver === undefined || key === undefined || value === undefined) continue;
+			const owner = directFunctionPrototypeOwner(program, fn, receiver);
+			if (owner === undefined || !program.function(owner).metadata.isClassConstructor) {
+				continue;
+			}
+			const stringIndex = directStringIndex(fn, key);
+			const target = coreDirectCreatedFunction(fn, value);
+			if (stringIndex === undefined || target === undefined) continue;
+			const targets = hints.get(stringIndex) ?? [];
+			if (!targets.includes(target)) targets.push(target);
+			hints.set(stringIndex, targets);
+		}
+	}
+	return hints;
 }
 
 export function coreInstanceMethodTargets(

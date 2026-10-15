@@ -18,7 +18,7 @@ import {
 	CoreFunctionFeatureIndex,
 } from "./core-function-features.ts";
 import {
-	coreGuardedMethodHints,
+	coreInstanceMethodHints,
 	coreInstanceMethodTargets,
 } from "./core-instance-method-hints.ts";
 import { CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE } from "./core-internal-attributes.ts";
@@ -1081,7 +1081,7 @@ export function buildCoreLocalOptimizationPlanInput(
 	let priorityScore = 0;
 	let operationCount = 0;
 	if (scanned) {
-		// Whole-function discovery can expose several independent local candidates.
+		// This only orders function scans; proved candidates still use the full cost model.
 		const loopWeights = new Uint8Array(fn.blockCapacity);
 		for (const loop of cfg.loops) {
 			for (const block of loop.blocks)
@@ -1103,8 +1103,10 @@ export function buildCoreLocalOptimizationPlanInput(
 							: opcode === "binary"
 								? 2
 								: 0;
-			priorityScore -=
-				benefit * Math.max(1, loopWeights[fn.instructionBlock(instruction)]!);
+			priorityScore = Math.min(
+				priorityScore,
+				-benefit * Math.max(1, loopWeights[fn.instructionBlock(instruction)]!),
+			);
 		}
 	}
 	const blocks = Object.freeze([...cfg.reversePostorder]);
@@ -1115,10 +1117,7 @@ export function buildCoreLocalOptimizationPlanInput(
 		context,
 		discovery:
 			scanned && priorityScore < 0
-				? Object.freeze({
-						priorityScore: priorityScore / (operationCount + 1),
-						compilerWorkCost: operationCount,
-					})
+				? Object.freeze({ priorityScore, compilerWorkCost: operationCount })
 				: undefined,
 		operatorInputs: coreOperatorInputPlans(program, analyses, [functionId]),
 		builtinInputs: coreBuiltinInputPlans(program, analyses, [functionId]),
@@ -1163,7 +1162,7 @@ function guardedCallOpportunities(
 	analyses: CoreAnalysisManager,
 ): ReadonlyArray<CorePlanningOpportunity> {
 	const candidates: Array<CorePlanningOpportunity> = [];
-	const instanceMethodHints = coreGuardedMethodHints(program, summaries.targets);
+	const instanceMethodHints = coreInstanceMethodHints(program);
 	for (const caller of liveFunctions) {
 		const fn = program.function(caller);
 		const targetSites = summaries.targets.outgoing(caller);
