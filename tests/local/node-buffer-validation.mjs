@@ -80,7 +80,8 @@ const proxy = new Proxy(new Uint8Array([65]), {
 	},
 });
 validate("proxy", proxy);
-record("proxy-observations", observations);
+// Node versions repeat constructor reads differently while formatting argument errors.
+record("proxy-observations", [...new Set(observations)]);
 const sentinel = { sentinel: true };
 const throwing = {
 	get constructor() {

@@ -753,6 +753,10 @@ static MalValue mal_buffer_validate_text(MalVm *vm, MalValue input, bool utf8) {
     bool shared;
     if (mal_value_is_array_buffer_object(input)) {
         MalArrayBufferObject *buffer = mal_value_to_array_buffer_object(input);
+        if (mal_array_buffer_object_is_detached(buffer)) {
+            return mal_buffer_throw_code(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+                "Cannot validate on a detached buffer", "ERR_INVALID_STATE");
+        }
         length = mal_array_buffer_object_byte_length(buffer);
         data = buffer->data;
         shared = buffer->shared_memory != nullptr;

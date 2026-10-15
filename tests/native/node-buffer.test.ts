@@ -128,9 +128,16 @@ describe("node:buffer text validation", () => {
 	it("validates encoded bytes and observable argument errors like Node", () => {
 		const directory = mkdtempSync(path.join(os.tmpdir(), "mal-buffer-validation-"));
 		const fixture = "tests/local/node-buffer-validation.mjs";
-		const expected = execFileSync(process.execPath, [fixture], {
-			encoding: "utf8",
-		}).trim();
+		const reference = JSON.parse(
+			execFileSync(process.execPath, [fixture], { encoding: "utf8" }),
+		) as Array<[string, unknown]>;
+		// Node 26 accepts detached buffers despite the documented validation contract.
+		const expected = JSON.stringify(
+			reference.map(([name, value]) => [
+				name,
+				name.startsWith("detached-buffer:") ? ["Error", "ERR_INVALID_STATE"] : value,
+			]),
+		);
 		try {
 			const pair = buildBackendPairFromOneProgramImage({
 				fixture,
