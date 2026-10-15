@@ -563,7 +563,9 @@ function inlineTarget(
 				(invocation !== "construct" && opcode === "loadNewTarget") ||
 				(invocation === "construct" &&
 					["createFunction", "envCopy", "envPop", "envPush"].includes(opcode)) ||
-				(opcode === "loadCaptured" && captureContext === undefined) ||
+				// Creating a descendant closure also binds the callee's lexical environment.
+				(["loadCaptured", "createFunction"].includes(opcode) &&
+					captureContext === undefined) ||
 				(opcode === "loadThis" && !fn.metadata.strict)
 			)
 				return false;

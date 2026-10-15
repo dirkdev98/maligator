@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
@@ -31,6 +32,7 @@ import type {
 import { optimizeCore } from "../src/compiler/core/optimize.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
+import { compileEntrypoint } from "../src/compiler/pipeline/compile-program.ts";
 import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
 import {
 	inspectCoreBlockHandler,
@@ -1542,6 +1544,33 @@ describe("bounded Core cross-call transforms", () => {
 		);
 		const run = coreFunctionNamed(optimized, "run")!;
 		expect(coreOperations(run).some(({ opcode }) => opcode === "call")).toBe(true);
+	});
+
+	it("keeps returned private-name closures in the callee's lexical environment", () => {
+		let optimized: CoreProgram | undefined;
+		compileEntrypoint(resolve("tests/local/closure-state-sharing.js"), {
+			buildConfig: resolveBuildConfig({
+				engine: { primordials: "locked", eval: false, realms: false },
+			}),
+			coreVerification: "per-pass",
+			afterCoreOptimization(program) {
+				optimized = program;
+			},
+		});
+		const reader = coreFunctionNamed(optimized!, "reader")!;
+		const closure = coreOperations(reader).find(
+			({ opcode }) => opcode === "createFunction",
+		);
+		expect(closure).toBeDefined();
+		expect(
+			[...optimized!.functionIds()].filter((id) =>
+				coreOperations(optimized!.function(id)).some(
+					({ opcode, attributes }) =>
+						opcode === "createFunction" &&
+						attributes.functionIndex === closure!.attributes.functionIndex,
+				),
+			),
+		).toEqual([reader.id]);
 	});
 
 	it("bridges scalar arguments into guarded non-linear callees", () => {
