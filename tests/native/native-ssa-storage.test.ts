@@ -711,7 +711,7 @@ describe("independent native SSA storage", () => {
 					(plan) =>
 						plan?.kind === "call" &&
 						plan.directEntryId === returnedEntry.id &&
-						plan.guardedFunctionIndices?.includes(returned.functionIndex),
+						plan.directFunctionIndex === returned.functionIndex,
 				),
 			),
 		).toBe(true);

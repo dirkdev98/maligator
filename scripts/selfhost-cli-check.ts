@@ -1,4 +1,4 @@
-import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -23,7 +23,7 @@ import { CommandProgress } from "../src/command-progress.ts";
 import { buildProductCli } from "../src/product-builder.ts";
 import { parseProfileCapture, profileCaptureIdentity } from "../src/profile-artifact.ts";
 import type { PreparedProfile, ProfileManifest } from "../src/profile-artifact.ts";
-import { resolvePathExecutable } from "../src/toolchain.ts";
+import { requireToolchain, resolvePathExecutable } from "../src/toolchain.ts";
 import { requireHeapLimit } from "./heap-limit.ts";
 
 requireHeapLimit(8192);
@@ -94,23 +94,15 @@ symlinkSync(
 );
 
 if (!supervisorOnly) {
-	const rustup = resolvePathExecutable("rustup", originalPath);
-	const selectedCargo = execFileSync(rustup, ["which", "cargo"], {
-		cwd: path.join(repositoryRoot, "runtime/rust"),
-		encoding: "utf-8",
-	}).trim();
-	const selectedRustc = execFileSync(rustup, ["which", "rustc"], {
-		cwd: path.join(repositoryRoot, "runtime/rust"),
-		encoding: "utf-8",
-	}).trim();
+	const selected = requireToolchain({ rootDir: repositoryRoot }).tools;
 	const requestedTools: Array<[string, string, boolean]> = [
-		["cc", process.env.CC?.trim() || "cc", true],
-		["c++", process.env.CXX?.trim() || "c++", true],
-		["ar", "ar", true],
+		["cc", selected.cc.path, true],
+		["c++", selected.cxx!.path, true],
+		["ar", selected.ar.path, true],
 		["ld", "ld", true],
-		["rustup", rustup, true],
-		["cargo", selectedCargo, true],
-		["rustc", selectedRustc, true],
+		["rustup", selected.rustup.path, true],
+		["cargo", selected.cargo.path, true],
+		["rustc", selected.rustc.path, true],
 		["strip", "strip", false],
 		["make", "make", false],
 		["ninja", "ninja", false],
