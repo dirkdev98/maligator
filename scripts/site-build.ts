@@ -8,6 +8,7 @@ import { buildExplorerSite } from "./build-explorer-site.ts";
 import { generateSite } from "./generate-site.ts";
 import { prepareContainerDocumentation } from "./prepare-site-container.ts";
 import { formatSiteFiles, updateSite } from "./site-data.ts";
+import { writeSiteDeployment } from "./site-deployment.ts";
 
 const META_FILE = "website/site-meta.json";
 const container = process.argv.includes("--container");
@@ -49,6 +50,7 @@ let binary = "";
 let stabilized = false;
 const progress = new CommandProgress("site-build");
 progress.start("update generated site data and build the native server");
+writeSiteDeployment();
 await generateSite();
 if (container) await prepareContainerDocumentation();
 await buildExplorerSite();

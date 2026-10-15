@@ -1,0 +1,8 @@
+{
+	"name": "maligator-site-deployment",
+	"private": true,
+	"type": "module",
+	"devDependencies": {
+		"wrangler": "4.129.0"
+	}
+}

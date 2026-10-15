@@ -5,6 +5,13 @@ import type { ExplorerAsset, SiteResource } from "./responses.ts";
 const explorerRoot = mal.assets.materialize("explorer");
 const pages = new Map<string, SiteResource>([
 	[
+		"/.well-known/maligator-site.json",
+		{
+			body: readFileSync(mal.assets.materialize("deployment"), "utf8"),
+			type: "application/json",
+		},
+	],
+	[
 		"/favicon.ico",
 		{
 			body: readFileSync(mal.assets.materialize("favicon")),

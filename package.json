@@ -89,6 +89,7 @@
 	},
 	"devDependencies": {
 		"@bjorn3/browser_wasi_shim": "0.4.2",
+		"@cloudflare/containers": "0.3.7",
 		"@types/node": "26.6.2",
 		"@vitest/coverage-v8": "5.0.1",
 		"drizzle-orm": "1.0.0-rc.4",

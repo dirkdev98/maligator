@@ -18,3 +18,4 @@ tests/compiler-root-common-flow.test.ts
 tests/core-kernel-structure.test.ts
 tests/root-compiler-transport.test.ts
 tests/documentation-container.test.ts
+tests/site-deployment.test.ts

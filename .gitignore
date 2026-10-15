@@ -4,6 +4,8 @@
 coverage
 dist
 node_modules
+website/cloudflare/.wrangler
+!/website/cloudflare/wrangler.jsonc
 runtime/build*
 
 local*.js

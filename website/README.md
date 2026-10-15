@@ -51,13 +51,45 @@ container. The prepared Docker context is printed at completion. Build the image
 from that context with the matching Docker platform. Container preparation does not
 publish or deploy it.
 
-The manual **Prepare website container** GitHub Actions workflow runs this build on
-Linux with pinned Zig and WASI SDK toolchains and complete chart history. It checks the native
-Overview, Compatibility and Explorer responses, then retains the executable,
-prepared assets, generated patch, source revision and checksums in
-`website-build-<run-id>`. Verify and apply the generated patch before committing
-the final website metadata. The workflow does not deploy or receive Cloudflare
-credentials.
+The [**Deploy website** workflow](../.github/workflows/website-build.yml) checks
+pushes to `main` that change website inputs. It fingerprints
+website sources, compiler/runtime sources (including Explorer), build scripts,
+dependencies, toolchain configuration, compatibility data, and complete chart history.
+It compares that fingerprint with `/.well-known/maligator-site.json`, served by the
+production container. Unchanged inputs skip the build. A missing marker bootstraps
+deployment; other HTTP errors fail the check.
+
+Changed inputs run the Linux build with pinned Zig and WASI SDK toolchains. Before
+deployment, every native page and manifest asset is compared with the prepared files.
+The workflow deploys through the versioned [Cloudflare configuration](cloudflare/wrangler.jsonc),
+then waits up to 15 minutes for the container to serve the new fingerprint and compares
+all live response bodies, decoding compression. Wrangler starts a rollout before all
+instances have been replaced, so command success alone does not complete verification.
+The existing single-instance name and Durable Object binding remain fixed across releases.
+
+Configure repository Actions secrets `CLOUDFLARE_API_TOKEN` and
+`CLOUDFLARE_ACCOUNT_ID` before enabling deployment. Recommended token permissions:
+
+| Scope   | Permission       | Access |
+| ------- | ---------------- | ------ |
+| Account | Workers Scripts  | Edit   |
+| Account | Containers       | Edit   |
+| Account | Account Settings | Read   |
+| Zone    | Workers Routes   | Edit   |
+| Zone    | Zone             | Read   |
+
+Restrict Account Resources to the account hosting Maligator and Zone Resources to
+`ddv.tools`. Use Cloudflare's
+[CI authentication instructions](https://developers.cloudflare.com/workers/ci-cd/external-cicd/github-actions/)
+and [token permissions reference](https://developers.cloudflare.com/fundamentals/api/reference/permissions/)
+when scoping it. Credentials are passed only to the deployment step.
+
+Manual runs always build and verify the selected revision. Leave **deploy** unchecked
+to prepare an artifact only; check it to deploy from `main`. Runs are serialized so
+deployments do not overlap. The workflow retains the executable, prepared assets,
+generated patch, source revision and checksums in `website-build-<run-id>`, plus
+response verification reports in `website-verification-<run-id>-<attempt>` for seven
+days. Generated metadata stays in the artifact; the workflow does not commit it.
 
 `npm run site:build` builds a plain native website for the host. It does not run
 Pagefind or Shiki. The build config selects processed assets only when the container
