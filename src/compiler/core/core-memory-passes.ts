@@ -1428,11 +1428,11 @@ const rewriteContainedFreshArrayBuiltins: CoreFunctionPass = {
 			});
 		}
 		if (candidates.length === 0) return undefined;
-		const handlerEscapes = new Set<CoreInstructionId>();
+		const contained = new Set(candidates.map((candidate) => candidate.allocation));
 		for (const value of fn.valueIds()) {
 			if (fn.kernel.valueHandlerUseCount(value) === 0) continue;
 			const allocation = provenance.allocationOf(value);
-			if (allocation !== undefined) handlerEscapes.add(allocation.instruction);
+			if (allocation !== undefined) contained.delete(allocation.instruction);
 		}
 		const byCall = new Map(candidates.map((candidate) => [candidate.call, candidate]));
 		const byProperty = new Map(
@@ -1442,80 +1442,75 @@ const rewriteContainedFreshArrayBuiltins: CoreFunctionPass = {
 					: [[candidate.property, candidate] as const],
 			),
 		);
-		const contained = new Set<CoreInstructionId>();
-		for (const allocation of new Set(
-			candidates.map((candidate) => candidate.allocation),
-		)) {
-			if (handlerEscapes.has(allocation)) continue;
-			let valid = true;
-			for (const instruction of fn.instructionIds()) {
-				const edgeStart = fn.kernel.terminatorEdgeStart(instruction);
-				for (let index = 0; index < fn.kernel.terminatorEdgeCount(instruction); index++) {
-					const edge = edgeStart + index;
-					const target = fn.kernel.terminatorEdgeBlock(edge);
-					const argumentsStart = fn.kernel.terminatorEdgeArgumentStart(edge);
-					const parametersStart = fn.kernel.blockParameterStart(target);
-					for (
-						let argument = 0;
-						argument < fn.kernel.terminatorEdgeArgumentCount(edge);
-						argument++
-					) {
-						const value = fn.kernel.operandAt(argumentsStart + argument);
-						if (provenance.allocationOf(value)?.instruction !== allocation) continue;
-						const parameter = fn.kernel.blockParameterValue(parametersStart + argument);
-						if (provenance.allocationOf(parameter)?.instruction !== allocation)
-							valid = false;
-					}
-				}
-				const operandStart = fn.kernel.instructionOperandStart(instruction);
-				const operandCount = fn.kernel.instructionOperandCount(instruction);
-				for (let operandIndex = 0; operandIndex < operandCount; operandIndex++) {
-					const operand = fn.kernel.operandAt(operandStart + operandIndex);
-					if (provenance.allocationOf(operand)?.instruction !== allocation) continue;
-					const opcode =
-						fn.instructionKind(instruction) === "operation"
-							? fn.instructionOpcodeName(instruction)
-							: undefined;
-					const candidateCall = byCall.get(instruction);
-					const candidateProperty = byProperty.get(instruction);
-					const finishesWithArray =
-						fn.instructionKind(instruction) === "return" ||
-						((opcode === "createObject" || opcode === "createObjectShaped") &&
-							fn.instructionKind(fn.blockTerminator(fn.instructionBlock(instruction))) ===
-								"return" &&
-							(() => {
-								for (
-									let next = fn.instructionNext(instruction);
-									next !== undefined;
-									next = fn.instructionNext(next)
-								)
-									if (byCall.get(next)?.allocation === allocation) return false;
-								return true;
-							})());
-					const allowed =
-						finishesWithArray ||
-						(candidateProperty?.allocation === allocation && operandIndex === 0) ||
-						(candidateCall?.allocation === allocation &&
-							operandIndex === candidateCall.receiverPosition) ||
-						(opcode === "loadProperty" &&
-							operandIndex === 0 &&
-							(() => {
-								const key = instructionOperandAt(fn, instruction, 1);
-								if (key === undefined) return false;
-								const representation = fn.valueRepresentation(key);
-								return representation === "f64" || representation === "i32";
-							})()) ||
-						(opcode === "loadPropertyStatic" &&
-							operandIndex === 0 &&
-							typeof fn.instructionAttributes(instruction).stringIndex === "number" &&
-							isLengthString(
-								program,
-								fn.instructionAttributes(instruction).stringIndex as number,
-							));
-					if (!allowed) valid = false;
+		for (const instruction of fn.instructionIds()) {
+			if (contained.size === 0) break;
+			const edgeStart = fn.kernel.terminatorEdgeStart(instruction);
+			for (let index = 0; index < fn.kernel.terminatorEdgeCount(instruction); index++) {
+				const edge = edgeStart + index;
+				const target = fn.kernel.terminatorEdgeBlock(edge);
+				const argumentsStart = fn.kernel.terminatorEdgeArgumentStart(edge);
+				const parametersStart = fn.kernel.blockParameterStart(target);
+				for (
+					let argument = 0;
+					argument < fn.kernel.terminatorEdgeArgumentCount(edge);
+					argument++
+				) {
+					const value = fn.kernel.operandAt(argumentsStart + argument);
+					const allocation = provenance.allocationOf(value)?.instruction;
+					if (allocation === undefined || !contained.has(allocation)) continue;
+					const parameter = fn.kernel.blockParameterValue(parametersStart + argument);
+					if (provenance.allocationOf(parameter)?.instruction !== allocation)
+						contained.delete(allocation);
 				}
 			}
-			if (valid) contained.add(allocation);
+			const operandStart = fn.kernel.instructionOperandStart(instruction);
+			const operandCount = fn.kernel.instructionOperandCount(instruction);
+			for (let operandIndex = 0; operandIndex < operandCount; operandIndex++) {
+				const operand = fn.kernel.operandAt(operandStart + operandIndex);
+				const allocation = provenance.allocationOf(operand)?.instruction;
+				if (allocation === undefined || !contained.has(allocation)) continue;
+				const opcode =
+					fn.instructionKind(instruction) === "operation"
+						? fn.instructionOpcodeName(instruction)
+						: undefined;
+				const candidateCall = byCall.get(instruction);
+				const candidateProperty = byProperty.get(instruction);
+				const finishesWithArray =
+					fn.instructionKind(instruction) === "return" ||
+					((opcode === "createObject" || opcode === "createObjectShaped") &&
+						fn.instructionKind(fn.blockTerminator(fn.instructionBlock(instruction))) ===
+							"return" &&
+						(() => {
+							for (
+								let next = fn.instructionNext(instruction);
+								next !== undefined;
+								next = fn.instructionNext(next)
+							)
+								if (byCall.get(next)?.allocation === allocation) return false;
+							return true;
+						})());
+				const allowed =
+					finishesWithArray ||
+					(candidateProperty?.allocation === allocation && operandIndex === 0) ||
+					(candidateCall?.allocation === allocation &&
+						operandIndex === candidateCall.receiverPosition) ||
+					(opcode === "loadProperty" &&
+						operandIndex === 0 &&
+						(() => {
+							const key = instructionOperandAt(fn, instruction, 1);
+							if (key === undefined) return false;
+							const representation = fn.valueRepresentation(key);
+							return representation === "f64" || representation === "i32";
+						})()) ||
+					(opcode === "loadPropertyStatic" &&
+						operandIndex === 0 &&
+						typeof fn.instructionAttributes(instruction).stringIndex === "number" &&
+						isLengthString(
+							program,
+							fn.instructionAttributes(instruction).stringIndex as number,
+						));
+				if (!allowed) contained.delete(allocation);
+			}
 		}
 		const retained = candidates.filter((candidate) =>
 			contained.has(candidate.allocation),

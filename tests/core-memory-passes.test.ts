@@ -31,6 +31,11 @@ import {
 	CoreOpcodeRegistry,
 	coreArity,
 } from "../src/compiler/core/core-ir.ts";
+import type {
+	CoreAttributeValue,
+	CoreBlockId,
+	CoreValueId,
+} from "../src/compiler/core/core-ir.ts";
 import { CORE_MEMORY_PASSES } from "../src/compiler/core/core-memory-passes.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import { CoreFunctionPassScheduler } from "../src/compiler/core/core-pass-manager.ts";
@@ -42,6 +47,7 @@ import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/se
 import { optimizeSemanticProgramToCore } from "../src/compiler/pipeline/compile-core-common.ts";
 import { builtinWorldAssumptions } from "../src/compiler/shared/builtin-assumptions.ts";
 import { conservativeCompilerProgramFacts } from "../src/compiler/shared/compiler-facts.ts";
+import { knownOperationCall } from "../src/compiler/shared/known-operations.ts";
 import {
 	inspectCoreBlockParameters,
 	inspectCoreInstructionOperands,
@@ -91,7 +97,169 @@ function forwardMemoryLoads(core: CoreProgram, fn: CoreFunctionStore): void {
 	}).runComponent("memory", [pass]);
 }
 
+function appendArrayBuiltin(
+	builder: CoreFunctionBuilder,
+	block: CoreBlockId,
+	receiver: CoreValueId,
+	operation: "Array.prototype.push" | "Array.prototype.pop",
+	arguments_: ReadonlyArray<CoreValueId> = [],
+): CoreValueId {
+	return builder.appendInstruction(block, "callKnown", [receiver, ...arguments_], {
+		attributes: {
+			operation,
+			worldAssumptions: { ...builtinWorldAssumptions(operation, "literal-allocation") },
+			knownBuiltinCall: knownOperationCall(
+				operation,
+				builder.functionId,
+			) as unknown as CoreAttributeValue,
+		},
+	})[0]!;
+}
+
+function rewriteFreshArrayBuiltins(core: CoreProgram, fn: CoreFunctionStore): void {
+	const report = new CoreOptimizationReportBuilder(core);
+	const analyses = new CoreAnalysisManager(core, lockedContext, report);
+	const pass = CORE_MEMORY_PASSES.find(
+		({ name }) => name === "rewrite-contained-fresh-array-builtins",
+	)!;
+	new CoreFunctionPassScheduler(core, lockedContext, analyses, report, fn.id, {
+		optionalMaxRunsPerWorkItem: 1,
+		verification: "per-pass",
+	}).runComponent("memory", [pass]);
+}
+
 describe("Core local memory, provenance, and escape optimization", () => {
+	it.each(["store-alias", "handler", "mixed-join", "push-argument"] as const)(
+		"keeps fresh-array containment separate across candidates: %s",
+		(escape) => {
+			const core = new CoreProgram(coreOpcodeRegistry, { globalCount: 1 });
+			const builder = new CoreFunctionBuilder(core, { parameterCount: 1 });
+			const entry = builder.createBlock([{}]);
+			const flag = builder.blockParameterValue(entry, 0);
+			const [contained] = builder.appendInstruction(entry, "createArray", [], {
+				attributes: { length: 0 },
+			});
+			const [escaped] = builder.appendInstruction(entry, "createArray", [], {
+				attributes: { length: 0 },
+			});
+			const body = escape === "handler" ? builder.createBlock() : entry;
+			if (body !== entry)
+				builder.setTerminator(entry, {
+					kind: "jump",
+					edge: { block: body, arguments: [] },
+				});
+			const localPush = appendArrayBuiltin(
+				builder,
+				body,
+				contained!,
+				"Array.prototype.push",
+				escape === "push-argument" ? [escaped!] : [flag],
+			);
+			const escapedPush = appendArrayBuiltin(
+				builder,
+				body,
+				escaped!,
+				"Array.prototype.push",
+				[flag],
+			);
+			const localPop = appendArrayBuiltin(
+				builder,
+				body,
+				contained!,
+				"Array.prototype.pop",
+			);
+			if (escape === "store-alias") {
+				const [alias] = builder.appendInstruction(entry, "move", [escaped!]);
+				builder.appendInstruction(entry, "storeGlobal", [alias!], {
+					attributes: { index: 0 },
+				});
+			}
+			if (escape === "handler") {
+				const handler = builder.createBlock([{ role: "exception" }, {}]);
+				builder.setHandler(body, handler, [escaped!]);
+				builder.setTerminator(handler, {
+					kind: "return",
+					value: builder.blockParameterValue(handler, 1),
+				});
+			}
+			if (escape === "mixed-join") {
+				const [other] = builder.appendInstruction(entry, "createArray", [], {
+					attributes: { length: 0 },
+				});
+				const merge = builder.createBlock([{}]);
+				builder.setTerminator(entry, {
+					kind: "branch",
+					condition: flag,
+					consequent: { block: merge, arguments: [escaped!] },
+					alternate: { block: merge, arguments: [other!] },
+				});
+				builder.setTerminator(merge, {
+					kind: "return",
+					value: builder.blockParameterValue(merge, 0),
+				});
+			} else builder.setTerminator(body, { kind: "return", value: localPop });
+			const fn = core.function(builder.finish(entry).function);
+			rewriteFreshArrayBuiltins(core, fn);
+			for (const [value, operation] of [
+				[localPush, "Array.prototype.push"],
+				[localPop, "Array.prototype.pop"],
+				[escapedPush, undefined],
+			] as const) {
+				const definition = inspectCoreValueDefinition(fn, value);
+				if (definition.kind !== "instruction") throw new Error("Expected array call");
+				expect(fn.instructionAttributes(definition.instruction).specialized).toBe(
+					operation,
+				);
+			}
+		},
+	);
+
+	it.each(["before", "after"] as const)(
+		"checks return-wrapper publication against each array's last call: %s",
+		(publication) => {
+			const core = program();
+			const builder = new CoreFunctionBuilder(core);
+			const entry = builder.createBlock();
+			const [first] = builder.appendInstruction(entry, "createArray", [], {
+				attributes: { length: 0 },
+			});
+			const [second] = builder.appendInstruction(entry, "createArray", [], {
+				attributes: { length: 0 },
+			});
+			const firstPush = appendArrayBuiltin(
+				builder,
+				entry,
+				first!,
+				"Array.prototype.push",
+			);
+			const wrap = () =>
+				builder.appendInstruction(entry, "createObjectShaped", [first!, second!], {
+					attributes: { keyStringIndices: [0, 1] },
+				})[0]!;
+			let wrapper = publication === "before" ? wrap() : undefined;
+			const secondPush = appendArrayBuiltin(
+				builder,
+				entry,
+				second!,
+				"Array.prototype.push",
+			);
+			wrapper ??= wrap();
+			builder.setTerminator(entry, { kind: "return", value: wrapper });
+			const fn = core.function(builder.finish(entry).function);
+			rewriteFreshArrayBuiltins(core, fn);
+			for (const [value, specializes] of [
+				[firstPush, true],
+				[secondPush, publication === "after"],
+			] as const) {
+				const definition = inspectCoreValueDefinition(fn, value);
+				if (definition.kind !== "instruction") throw new Error("Expected array call");
+				expect(fn.instructionAttributes(definition.instruction).specialized).toBe(
+					specializes ? "Array.prototype.push" : undefined,
+				);
+			}
+		},
+	);
+
 	it.each([false, true])(
 		"bounds non-observable probe reuse at collection: %s",
 		(collects) => {
