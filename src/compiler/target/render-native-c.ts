@@ -4252,9 +4252,7 @@ function emitBody(
 	const mathCalleeRegisters = new Set(
 		fastPathPlans.mathCalls.flatMap((plan) => {
 			const call = fn.instructions[plan.instructionIp];
-			return plan.mode === "guarded-boxed" && call?.opcode === "CALL"
-				? [call.callee]
-				: [];
+			return call?.opcode === "CALL" ? [call.callee] : [];
 		}),
 	);
 	const numberPredicates = new Map(
@@ -11263,14 +11261,6 @@ function emitInstruction(
 						? nativeMathUnaryExpr(operation, values[0]!)
 						: nativeMathBinaryExpr(operation, values[0]!, values[1]!);
 				const nativeOperands = instruction.arguments.map(nativeNumberOperand);
-				if (mathCall.mode === "number") {
-					const expression = nativeOperands.every((value) => value !== null)
-						? kernel(nativeOperands)
-						: null;
-					if (expression === null)
-						throw new Error("Native Math plan lacks numeric operands");
-					return [storeNumber(instruction.dst, expression), mathPoll()];
-				}
 				const expression = kernel(
 					instruction.arguments.map(
 						(operand, index) =>
@@ -11279,8 +11269,7 @@ function emitInstruction(
 				);
 				if (expression === null)
 					throw new Error(`Native Math plan has no kernel for ${operation}`);
-				// The callback identity proves the callee is the Math builtin even after
-				// reassignment, so Number arguments can skip the call and its coercions.
+				// Locked primordials do not prove a loaded callee belongs to Math.
 				const arity = mathCall.arity === 1 ? "UNARY" : "BINARY";
 				const guards = [
 					`mal_builtin_math_${arity.toLowerCase()}_callee_matches(MAL_MATH_${arity}_${operation.slice("Math.".length).toUpperCase()}, ${boxedOperand(instruction.callee)})`,
@@ -11297,7 +11286,7 @@ function emitInstruction(
 					...mathFallbackRootPublication(),
 					`  MalCompletion ${tmp} = ${profileCall("call", `mal_vm_call_cached(vm, ${nativeCallCacheReference(context, ip)}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length})`)};`,
 					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
-					`  r${instruction.dst} = ${tmp}.value;`,
+					`  r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
 					`}`,
 					mathPoll(),
 				];

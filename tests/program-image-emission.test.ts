@@ -3517,7 +3517,7 @@ describe("native update-expression representation", () => {
 		expect(lockedOutput).not.toContain("mal_builtin_math_binary_number_known");
 	});
 
-	it("publishes locked Math root masks only when polling and forgets conditional state", () => {
+	it("guards locked numeric Math calls and publishes fallback and polling roots", () => {
 		const exactMathFunction: BytecodeFunction = {
 			...fn,
 			capturedCount: 0,
@@ -3601,12 +3601,16 @@ describe("native update-expression representation", () => {
 			}),
 		);
 		expect(image.native.functions[0]!.storage!.mathCalls).toEqual([
-			{ instructionIp: 4, operation: "Math.floor", arity: 1, mode: "number" },
+			{ instructionIp: 4, operation: "Math.floor", arity: 1 },
 		]);
 		const output = emitProgramImage(image, { compiled: true });
 
+		expect(output).toContain(
+			"mal_builtin_math_unary_callee_matches(MAL_MATH_UNARY_FLOOR, r0)",
+		);
+		expect(output).toMatch(/r3 = mal_ops_number_as_f64\(call_result_4.value\);/);
 		expect(output).toMatch(
-			/MAL_ROOT_MASK\(0x1\);[\s\S]*?r3 = floor\(r2\);\n\s+if \(mal_gc_poll\) \{ MAL_ROOT_MASK\(0x2\); mal_gc_safepoint\(vm\); if \(mal_gc_poll_termination\(vm\)\) goto __throw_exit; \}\n\s+MAL_ROOT_MASK\(0x1\);/,
+			/\} else \{\n\s+MAL_ROOT_MASK\(0x2\);[\s\S]*?mal_vm_call_cached[\s\S]*?if \(mal_gc_poll\) \{ MAL_ROOT_MASK\(0x2\);/,
 		);
 	});
 

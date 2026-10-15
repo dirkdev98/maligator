@@ -245,7 +245,6 @@ export interface NativeMathCallPlan {
 	readonly instructionIp: number;
 	readonly operation: string;
 	readonly arity: 1 | 2;
-	readonly mode: "number" | "guarded-boxed";
 }
 
 export const NATIVE_NUMBER_PREDICATE_MODES = [
@@ -2673,14 +2672,6 @@ export function selectNativeFastPaths(
 	const mathCalls: Array<NativeMathCallPlan> = [];
 	const numberPredicates: Array<NativeNumberPredicatePlan> = [];
 	const stringTransforms: Array<NativeStringTransformPlan> = [];
-	const numericOperand = (operand: number): boolean => {
-		const decoded = decodeVmValueOperand(operand);
-		return (
-			decoded.kind === "number" ||
-			(decoded.kind === "register" &&
-				isNumericRepresentation(native.registerRepresentations[decoded.register]!))
-		);
-	};
 	for (const [ip, op] of fn.instructions.entries()) {
 		if (op.opcode === "CALL_KNOWN") {
 			const transform = selectNativeStringTransform(native, ip, stringConstants);
@@ -2744,19 +2735,10 @@ export function selectNativeFastPaths(
 					? 2
 					: undefined;
 		if (arity === undefined) continue;
-		const numeric =
-			op.arguments.every(numericOperand) &&
-			(native.registerRepresentations[op.dst] === "number" ||
-				(builtin.guard.dependencies.length > 0 &&
-					builtin.guard.dependencies.every(
-						(dependency) =>
-							dependency.kind === "world" && dependency.fact === "primordials.locked",
-					)));
 		mathCalls.push({
 			instructionIp: ip,
 			operation: builtin.operation,
 			arity,
-			mode: numeric ? "number" : "guarded-boxed",
 		});
 	}
 	const transparent = new Set<number>();

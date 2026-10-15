@@ -1661,8 +1661,7 @@ export function validateNativeStorage(
 				return (
 					plan.instructionIp === expected.instructionIp &&
 					plan.operation === expected.operation &&
-					plan.arity === expected.arity &&
-					plan.mode === expected.mode
+					plan.arity === expected.arity
 				);
 			}) &&
 			stored.numberPredicates.length === selected.numberPredicates.length &&

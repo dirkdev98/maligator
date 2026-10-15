@@ -25,9 +25,14 @@ it.each([false, true])(
 				config: resolveBuildConfig({}),
 				outDir,
 			});
-			for (const binary of [pair.compiled, pair.interpreted]) {
-				expect(runToStdout(binary)).toBe(expected);
-				expect(runToStdout(binary, { env: STRESS_ENV })).toBe(expected);
+			for (const [backend, binary] of [
+				["compiled", pair.compiled],
+				["interpreted", pair.interpreted],
+			] as const) {
+				expect(runToStdout(binary), `${backend} normal`).toBe(expected);
+				expect(runToStdout(binary, { env: STRESS_ENV }), `${backend} GC stress`).toBe(
+					expected,
+				);
 			}
 		} finally {
 			rmSync(outDir, { recursive: true, force: true });

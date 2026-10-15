@@ -117,18 +117,17 @@ describe("persisted literal and Math call choices", () => {
 		expect(changed.native.functions[0]!.storage!.literalPropertyDefinitions).toEqual([]);
 	});
 
-	it("persists guarded unary and binary modes and rejects a forged numeric mode", () => {
+	it("persists guarded unary and binary calls and rejects a mismatched arity", () => {
 		const image = mathImage();
 		const native = image.native.functions[1]!;
 		expect(
-			native.storage!.mathCalls.map(({ operation, arity, mode }) => ({
+			native.storage!.mathCalls.map(({ operation, arity }) => ({
 				operation,
 				arity,
-				mode,
 			})),
 		).toEqual([
-			{ operation: "Math.round", arity: 1, mode: "guarded-boxed" },
-			{ operation: "Math.max", arity: 2, mode: "guarded-boxed" },
+			{ operation: "Math.round", arity: 1 },
+			{ operation: "Math.max", arity: 2 },
 		]);
 		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
 		expect(() =>
@@ -139,7 +138,7 @@ describe("persisted literal and Math call choices", () => {
 						...native.storage!,
 						mathCalls: native.storage!.mathCalls.map((plan) => ({
 							...plan,
-							mode: "number",
+							arity: plan.arity === 1 ? 2 : 1,
 						})),
 					},
 				},

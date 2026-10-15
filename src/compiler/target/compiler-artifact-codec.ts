@@ -97,7 +97,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 242;
+export const COMPILER_ARTIFACT_VERSION = 243;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -1017,7 +1017,6 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 			(VM_GUARDED_BUILTIN_OPERATIONS as ReadonlyArray<string>).indexOf(plan.operation),
 		);
 		w.u8(plan.arity);
-		w.u8(plan.mode === "number" ? 0 : 1);
 	}
 	w.u32(storage.numberPredicates.length);
 	for (const plan of storage.numberPredicates) {
@@ -1574,18 +1573,16 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 			instructionIp: r.i32(),
 			stringIndex: r.i32(),
 		}));
-	const mathCalls: Array<NativeMathCallPlan> = Array.from({ length: r.count(7) }, () => {
+	const mathCalls: Array<NativeMathCallPlan> = Array.from({ length: r.count(6) }, () => {
 		const instructionIp = r.i32(),
 			operation = VM_GUARDED_BUILTIN_OPERATIONS[r.u8()],
-			arity = r.u8(),
-			mode = r.u8();
-		if (operation === undefined || (arity !== 1 && arity !== 2) || mode > 1)
+			arity = r.u8();
+		if (operation === undefined || (arity !== 1 && arity !== 2))
 			throw new Error("program-image-codec: invalid Math call plan");
 		return {
 			instructionIp,
 			operation,
 			arity,
-			mode: mode === 0 ? "number" : "guarded-boxed",
 		};
 	});
 	const numberPredicates: Array<NativeNumberPredicatePlan> = Array.from(
