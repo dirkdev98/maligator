@@ -53,6 +53,7 @@ function runTransforms(
 		functionId: CoreFunctionId,
 		editor: CoreEditor,
 	) => void,
+	beforeFinishCaller?: (wave: number, functionId: CoreFunctionId) => void,
 ) {
 	const context = programAnalysisContext();
 	const report = new CoreOptimizationReportBuilder(program);
@@ -64,14 +65,18 @@ function runTransforms(
 		analyses,
 		(wave, functionId, editor) => {
 			beforeOptimizeCaller?.(wave, functionId, editor);
-			return new CoreFunctionOptimizationSession(
+			const finish = new CoreFunctionOptimizationSession(
 				program,
 				context,
 				report,
 				resources,
 				functionId,
 				{ crossCallWave: wave },
-			).optimizeCrossCall(editor);
+			).prepareCrossCall(editor);
+			return () => {
+				beforeFinishCaller?.(wave, functionId);
+				return finish();
+			};
 		},
 		limits,
 		undefined,
@@ -393,6 +398,23 @@ describe("bounded Core cross-call transforms", () => {
 		expect(result.statistics.callerEditSessions).toBe(
 			result.statistics.callerLocalOptimizations,
 		);
+	});
+
+	it("publishes every caller's rewrites before shared analysis resumes", () => {
+		const program = analysisProgram();
+		appendCaller(program, 1);
+		appendCaller(program, 2);
+		appendLeaf(program);
+		const callers = [0, 1].map((id) => program.function(id as CoreFunctionId));
+		const versions = callers.map((fn) => fn.version("body"));
+		let observed = false;
+		runTransforms(program, undefined, undefined, (wave) => {
+			if (wave !== 0) return;
+			for (const [index, fn] of callers.entries())
+				expect(fn.version("body")).toBeGreaterThan(versions[index]!);
+			observed = true;
+		});
+		expect(observed).toBe(true);
 	});
 
 	it("spends a tight caller budget on the loop call before an earlier cold call", () => {

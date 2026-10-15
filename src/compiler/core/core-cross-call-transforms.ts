@@ -2870,11 +2870,11 @@ interface CoreValueKindFold {
 	readonly result: boolean;
 }
 
-export type CoreCrossCallCallerOptimizer = (
+export type CoreCrossCallCallerPreparation = (
 	wave: number,
 	functionId: CoreFunctionId,
 	editor: CoreEditor,
-) => CoreCrossCallFunctionOptimizationResult;
+) => () => CoreCrossCallFunctionOptimizationResult;
 
 export interface CoreCrossCallTransformResult {
 	readonly summaries: CoreProgramSummaries;
@@ -2976,7 +2976,7 @@ function discoverProgramValueKindObservations(
 export function runCoreCrossCallTransforms(
 	program: CoreProgram,
 	analyses: CoreAnalysisManager,
-	optimizeCaller: CoreCrossCallCallerOptimizer,
+	prepareCaller: CoreCrossCallCallerPreparation,
 	limits?: CoreTransformBudgetLimits,
 	initialFlow?: CoreProgramFlowState,
 	candidateService?: CoreTransformCandidateService,
@@ -3124,6 +3124,10 @@ export function runCoreCrossCallTransforms(
 			}
 		}
 		const waveChanges: Array<CoreChangeSet> = [];
+		const finishCallers: Array<{
+			function: CoreFunctionId;
+			finish: () => CoreCrossCallFunctionOptimizationResult;
+		}> = [];
 		for (const [functionId, editor] of [...editors].sort(
 			([left], [right]) => left - right,
 		)) {
@@ -3140,14 +3144,21 @@ export function runCoreCrossCallTransforms(
 			if (virtualCapture !== undefined) {
 				instructionsIntroduced += virtualCapture.instructionsIntroduced;
 			}
-			const optimized = optimizeCaller(wave, functionId, editor);
+			finishCallers.push({
+				function: functionId,
+				finish: prepareCaller(wave, functionId, editor),
+			});
+			callerLocalOptimizations++;
+		}
+		// Shared facts must not observe another caller's uncommitted rewrites.
+		for (const { function: functionId, finish } of finishCallers) {
+			const optimized = finish();
 			if (optimized.localPlanInput.function !== functionId) {
 				throw new Error(
 					`Cross-call session for function ${functionId} returned function ${optimized.localPlanInput.function}`,
 				);
 			}
 			localPlanInputs.set(functionId, optimized.localPlanInput);
-			callerLocalOptimizations++;
 			if (optimized.changes !== undefined && optimized.changes.edits > 0) {
 				waveChanges.push(optimized.changes);
 			}

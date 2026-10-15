@@ -239,10 +239,10 @@ export class CoreFunctionOptimizationSession {
 		);
 	}
 
-	optimizeCrossCall(
+	prepareCrossCall(
 		editor: CoreEditor,
 		initialChanges: ReadonlyArray<CoreChangeSet> = [],
-	): CoreCrossCallFunctionOptimizationResult {
+	): () => CoreCrossCallFunctionOptimizationResult {
 		if (!this.#crossCall) {
 			throw new Error(`Core function ${this.functionId} is a primary session`);
 		}
@@ -276,56 +276,58 @@ export class CoreFunctionOptimizationSession {
 				functionIndex: this.functionId,
 			});
 		}
-		if (
-			initialChanges.length > 0 ||
-			(result.changes !== undefined && result.changes.edits > 0)
-		) {
-			const initial = [
-				...initialChanges,
-				...(result.changes === undefined ? [] : [result.changes]),
-			];
-			this.#passes.runComponent("control-flow", CORE_CONTROL_FLOW_PASSES, initial, {
-				seedLocalFromInitialChanges: false,
+		return () => {
+			if (
+				initialChanges.length > 0 ||
+				(result.changes !== undefined && result.changes.edits > 0)
+			) {
+				const initial = [
+					...initialChanges,
+					...(result.changes === undefined ? [] : [result.changes]),
+				];
+				this.#passes.runComponent("control-flow", CORE_CONTROL_FLOW_PASSES, initial, {
+					seedLocalFromInitialChanges: false,
+				});
+				this.#passes.runComponent("proofs", CORE_PROOF_PASSES, initial, {
+					seedLocalFromInitialChanges: false,
+				});
+				const memoryChanges = this.#passes.runComponent(
+					"memory",
+					CORE_MEMORY_PASSES,
+					initial,
+					{ seedLocalFromInitialChanges: false },
+				);
+				const representationChanges = this.#passes.runComponent(
+					"control-flow",
+					CORE_LATE_REPRESENTATION_PASSES,
+					memoryChanges,
+					{ seedLocalFromInitialChanges: false },
+				);
+				const proofChanges =
+					memoryChanges.length === 0
+						? []
+						: this.#passes.runComponent("proofs", CORE_LATE_PROOF_PASSES, memoryChanges, {
+								seedLocalFromInitialChanges: false,
+							});
+				this.#passes.runComponent(
+					"canonicalize",
+					CORE_LATE_CANONICALIZATION_PASSES,
+					[...initial, ...memoryChanges, ...representationChanges, ...proofChanges],
+					{ seedLocalFromInitialChanges: false },
+				);
+			}
+			return Object.freeze({
+				changes: result.changes,
+				localPlanInput: buildCoreLocalOptimizationPlanInput(
+					this.#program,
+					this.#analyses,
+					this.#specializationFeatureIndex,
+					this.functionId,
+					this.#context,
+					!this.#ablates("late-specialization-direct-entry"),
+				),
 			});
-			this.#passes.runComponent("proofs", CORE_PROOF_PASSES, initial, {
-				seedLocalFromInitialChanges: false,
-			});
-			const memoryChanges = this.#passes.runComponent(
-				"memory",
-				CORE_MEMORY_PASSES,
-				initial,
-				{ seedLocalFromInitialChanges: false },
-			);
-			const representationChanges = this.#passes.runComponent(
-				"control-flow",
-				CORE_LATE_REPRESENTATION_PASSES,
-				memoryChanges,
-				{ seedLocalFromInitialChanges: false },
-			);
-			const proofChanges =
-				memoryChanges.length === 0
-					? []
-					: this.#passes.runComponent("proofs", CORE_LATE_PROOF_PASSES, memoryChanges, {
-							seedLocalFromInitialChanges: false,
-						});
-			this.#passes.runComponent(
-				"canonicalize",
-				CORE_LATE_CANONICALIZATION_PASSES,
-				[...initial, ...memoryChanges, ...representationChanges, ...proofChanges],
-				{ seedLocalFromInitialChanges: false },
-			);
-		}
-		return Object.freeze({
-			changes: result.changes,
-			localPlanInput: buildCoreLocalOptimizationPlanInput(
-				this.#program,
-				this.#analyses,
-				this.#specializationFeatureIndex,
-				this.functionId,
-				this.#context,
-				!this.#ablates("late-specialization-direct-entry"),
-			),
-		});
+		};
 	}
 
 	#ablates(family: CoreOptimizationFamily): boolean {

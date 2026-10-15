@@ -340,7 +340,7 @@ export function optimizeCore(
 									crossCallWave: wave,
 									benchmarkAblation: ablatedPassFamily,
 								},
-							).optimizeCrossCall(editor),
+							).prepareCrossCall(editor),
 						crossCallBudgets,
 						initialFlow,
 						o3Candidates,
@@ -377,8 +377,9 @@ export function optimizeCore(
 					benchmarkAblation: ablatedPassFamily,
 					crossCallWave: crossCall.statistics.waves + 1,
 				},
-			).optimizeCrossCall(CoreEditor.open(compilation.program, change.function), [change])
-				.localPlanInput,
+			).prepareCrossCall(CoreEditor.open(compilation.program, change.function), [
+				change,
+			])().localPlanInput,
 	);
 	const memoryCallers = measurePhase(
 		"cross-call-memory-forwarding",
