@@ -363,6 +363,134 @@ describe("Core control-flow analyses and passes", () => {
 		expect(refinedExceptional.instructionDominatesBlock(entry, normal)).toBe(true);
 	});
 
+	it("retains exceptional topology and dominance until the last throwing operation changes", () => {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock([{}, {}]);
+		const normal = builder.createBlock();
+		const handler = builder.createBlock([{ role: "exception" }]);
+		const callee = builder.blockParameterValue(entry, 0);
+		const receiver = builder.blockParameterValue(entry, 1);
+		builder.appendInstruction(entry, "call", [callee, callee]);
+		builder.appendInstruction(entry, "call", [callee, callee]);
+		builder.setHandler(entry, handler);
+		builder.setTerminator(entry, {
+			kind: "jump",
+			edge: { block: normal, arguments: [] },
+		});
+		builder.setTerminator(normal, { kind: "return", value: callee });
+		builder.setTerminator(handler, {
+			kind: "jump",
+			edge: { block: normal, arguments: [] },
+		});
+		const functionId = builder.finish(entry).function;
+		const fn = program.function(functionId);
+		const [firstCall, lastCall] = [...fn.bodyInstructionIds(entry)];
+		const analyses = new CoreAnalysisManager(
+			program,
+			context,
+			new CoreOptimizationReportBuilder(program),
+		);
+		const bundle = analyses.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
+			scope: "function",
+			function: functionId,
+		});
+		const initial = bundle.exceptional();
+		const dominators = initial.immediateDominators;
+		expect(initial.instructionDominatesBlock(entry, normal)).toBe(false);
+
+		const operands = CoreEditor.open(program, functionId);
+		operands.replaceOperands(firstCall!, [callee, receiver]);
+		expect(operands.commit().domains).toContain("memoryEffects");
+		expect(bundle.exceptional()).toBe(initial);
+		expect(bundle.exceptional().immediateDominators).toBe(dominators);
+		const remove = CoreEditor.open(program, functionId);
+		remove.removeInstruction(firstCall!);
+		remove.commit();
+		expect(bundle.exceptional()).toBe(initial);
+
+		const refine = CoreEditor.open(program, functionId);
+		const proof = refine.addFact({
+			kind: "test-nonthrowing-call",
+			value: true,
+			claims: [{ kind: "effect", instruction: lastCall!, effects: CORE_NO_EFFECTS }],
+			validity: { kind: "summary", digest: "test-nonthrowing-call" },
+			obligations: [],
+			origin: "test",
+		});
+		refine.setInstructionEffectRefinement(lastCall!, { effects: CORE_NO_EFFECTS, proof });
+		refine.commit();
+		const nonthrowing = bundle.exceptional();
+		expect(nonthrowing.reachable.has(handler)).toBe(false);
+		expect(nonthrowing.instructionDominatesBlock(entry, normal)).toBe(true);
+		expect(initial.reachable.has(handler)).toBe(true);
+		expect(initial.instructionDominatesBlock(entry, normal)).toBe(false);
+
+		const restore = CoreEditor.open(program, functionId);
+		restore.clearInstructionEffectRefinement(lastCall!);
+		restore.commit();
+		const throwing = bundle.exceptional();
+		expect(throwing.reachable.has(handler)).toBe(true);
+		expect(throwing.instructionDominatesBlock(entry, normal)).toBe(false);
+		expect(throwing.successors).toEqual(
+			buildCoreControlFlow(program, functionId).successors,
+		);
+	});
+
+	it("moves exceptional exits with throwing instructions between protected blocks", () => {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock([{}]);
+		const callee = builder.blockParameterValue(entry, 0);
+		const source = builder.createBlock();
+		const destination = builder.createBlock();
+		const handler = builder.createBlock([{ role: "exception" }]);
+		builder.appendInstruction(source, "call", [callee, callee]);
+		builder.setTerminator(entry, {
+			kind: "jump",
+			edge: { block: source, arguments: [] },
+		});
+		builder.setTerminator(source, {
+			kind: "jump",
+			edge: { block: destination, arguments: [] },
+		});
+		builder.setTerminator(destination, { kind: "return", value: callee });
+		builder.setTerminator(handler, {
+			kind: "jump",
+			edge: { block: destination, arguments: [] },
+		});
+		builder.setHandler(source, handler);
+		builder.setHandler(destination, handler);
+		const functionId = builder.finish(entry).function;
+		const analyses = new CoreAnalysisManager(
+			program,
+			context,
+			new CoreOptimizationReportBuilder(program),
+		);
+		const bundle = analyses.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
+			scope: "function",
+			function: functionId,
+		});
+		const before = bundle.exceptional();
+		expect(before.instructionDominatesBlock(source, destination)).toBe(false);
+		const editor = CoreEditor.open(program, functionId);
+		editor.moveInstruction(
+			[...program.function(functionId).bodyInstructionIds(source)][0]!,
+			destination,
+		);
+		editor.commit();
+		const after = bundle.exceptional();
+		expect(after.successors[source]!.map((edge) => edge.kind)).toEqual(["ordinary"]);
+		expect(after.successors[destination]).toMatchObject([
+			{ to: handler, kind: "exceptional" },
+		]);
+		expect(after.instructionDominatesBlock(source, destination)).toBe(true);
+		expect(before.instructionDominatesBlock(source, destination)).toBe(false);
+		expect(after.successors).toEqual(
+			buildCoreControlFlow(program, functionId).successors,
+		);
+	});
+
 	it("does not reuse a protected-block value after an exceptional join", () => {
 		const program = new CoreProgram(coreOpcodeRegistry);
 		const builder = new CoreFunctionBuilder(program);

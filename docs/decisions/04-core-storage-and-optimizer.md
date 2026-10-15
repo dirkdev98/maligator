@@ -139,6 +139,10 @@ recomputations, invalidations, and elapsed time for every analysis.
 
 Demand-driven products stay within that versioned lifetime. Structural CFG queries
 need no dominators; dominance products are computed on the first dominance query.
+After a memory-effect edit, the exceptional CFG first checks whether any protected
+block gained or lost a throwing exit. Unchanged exits preserve the structural graph
+and its derived dominance; handler or handler-argument changes still invalidate it
+through the exception-flow version.
 Packed-rest consumers request value kinds and CFG only after finding a relevant
 access. A memory-version handle initially builds no graph. Its first proof query
 indexes raw memory accesses and writers; each requested partition then builds its
@@ -198,6 +202,10 @@ A function publishes a new summary version only when its semantic summary change
 Only affected callers, SCC members, and registered consumers are then woken. An
 unchanged summary does not propagate work, and an edit cannot cause every function to
 be revisited merely because the program changed.
+
+Effect-domain unions use bounded bit masks and interned immutable domain lists.
+Joins reuse an input summary when it already covers the result, and reuse the top
+summary only after both memory dimensions and every independent flag reach top.
 
 ### Late specialization
 

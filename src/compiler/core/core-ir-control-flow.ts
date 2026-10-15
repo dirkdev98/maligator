@@ -185,6 +185,19 @@ function blockHasExceptionalExit(fn: CoreFunctionStore, block: CoreBlockId): boo
 	return false;
 }
 
+function exceptionalExitsMatch(
+	fn: CoreFunctionStore,
+	structural: CoreStructuralControlFlow,
+): boolean {
+	for (let index = 0; index < fn.handlerBlockCount; index++) {
+		const block = fn.handlerBlockAt(index);
+		const outgoing = structural.successors[block]!;
+		const hadExit = outgoing.at(-1)?.kind === "exceptional";
+		if (hadExit !== blockHasExceptionalExit(fn, block)) return false;
+	}
+	return true;
+}
+
 function buildEdges(fn: CoreFunctionStore): {
 	readonly successors: Array<Array<CoreControlEdge>>;
 	readonly predecessors: Array<Array<CoreControlEdge>>;
@@ -870,13 +883,14 @@ function buildControlFlowBundle(
 		if (
 			structural === undefined ||
 			structuralExceptionFlowVersion !== exceptionFlowVersion ||
-			structuralMemoryEffectsVersion !== memoryEffectsVersion
+			(structuralMemoryEffectsVersion !== memoryEffectsVersion &&
+				!exceptionalExitsMatch(fn, structural))
 		) {
 			structural = buildExceptionalStructural(fn, currentOrdinary, runOwner);
 			exceptional = undefined;
 			structuralExceptionFlowVersion = exceptionFlowVersion;
-			structuralMemoryEffectsVersion = memoryEffectsVersion;
 		}
+		structuralMemoryEffectsVersion = memoryEffectsVersion;
 		return structural;
 	};
 	return Object.freeze({

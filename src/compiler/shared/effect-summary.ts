@@ -34,9 +34,9 @@ export const EFFECT_DOMAINS = [
 
 export type EffectDomain = (typeof EFFECT_DOMAINS)[number];
 
-const DOMAIN_ORDER: ReadonlyMap<EffectDomain, number> = new Map(
-	EFFECT_DOMAINS.map((domain, index) => [domain, index]),
-);
+const DOMAIN_BITS = Object.fromEntries(
+	EFFECT_DOMAINS.map((domain, index) => [domain, 1 << index]),
+) as Readonly<Record<EffectDomain, number>>;
 
 /**
  * What an operation, or a whole function's transitive execution, may do.
@@ -122,6 +122,22 @@ export const EVERY_EFFECT_SUMMARY: EffectSummary = Object.freeze({
 	callsUserCode: true,
 });
 
+const DOMAIN_SETS: Array<ReadonlyArray<EffectDomain> | undefined> = [];
+DOMAIN_SETS[0] = NO_DOMAINS;
+DOMAIN_SETS[(1 << EFFECT_DOMAINS.length) - 1] = EVERY_EFFECT_SUMMARY.reads;
+
+function effectDomainMask(domains: ReadonlyArray<EffectDomain>): number {
+	let mask = 0;
+	for (const domain of domains) mask |= DOMAIN_BITS[domain];
+	return mask;
+}
+
+function effectDomainsForMask(mask: number): ReadonlyArray<EffectDomain> {
+	return (DOMAIN_SETS[mask] ??= Object.freeze(
+		EFFECT_DOMAINS.filter((domain) => (mask & DOMAIN_BITS[domain]) !== 0),
+	));
+}
+
 /** Deduplicated, in declaration order, so equal content is structurally equal. */
 export function normalizeEffectDomains(
 	domains: ReadonlyArray<EffectDomain>,
@@ -129,22 +145,24 @@ export function normalizeEffectDomains(
 	if (domains.length <= 1) return domains.length === 0 ? NO_DOMAINS : domains;
 	let ordered = true;
 	for (let index = 1; index < domains.length; index += 1) {
-		if (DOMAIN_ORDER.get(domains[index - 1]!)! >= DOMAIN_ORDER.get(domains[index]!)!) {
+		if (DOMAIN_BITS[domains[index - 1]!] >= DOMAIN_BITS[domains[index]!]) {
 			ordered = false;
 			break;
 		}
 	}
 	if (ordered) return domains;
-	const seen = new Set(domains);
-	return EFFECT_DOMAINS.filter((domain) => seen.has(domain));
+	return effectDomainsForMask(effectDomainMask(domains));
 }
 
 /** Canonical form of an arbitrarily built summary. */
 export function normalizeEffectSummary(effects: EffectSummary): EffectSummary {
+	const reads = normalizeEffectDomains(effects.reads);
+	const writes = normalizeEffectDomains(effects.writes);
+	if (reads === effects.reads && writes === effects.writes) return effects;
 	return {
 		...effects,
-		reads: normalizeEffectDomains(effects.reads),
-		writes: normalizeEffectDomains(effects.writes),
+		reads,
+		writes,
 	};
 }
 
@@ -175,25 +193,52 @@ export function joinEffectSummaries(
 	right: EffectSummary,
 ): EffectSummary {
 	if (left === right) return left;
-	const reads =
-		right.reads.length === 0
-			? normalizeEffectDomains(left.reads)
-			: left.reads.length === 0
-				? normalizeEffectDomains(right.reads)
-				: normalizeEffectDomains([...left.reads, ...right.reads]);
-	const writes =
-		right.writes.length === 0
-			? normalizeEffectDomains(left.writes)
-			: left.writes.length === 0
-				? normalizeEffectDomains(right.writes)
-				: normalizeEffectDomains([...left.writes, ...right.writes]);
+	if (left === EVERY_EFFECT_SUMMARY || right === EVERY_EFFECT_SUMMARY)
+		return EVERY_EFFECT_SUMMARY;
+	if (left === NO_EFFECT_SUMMARY) return normalizeEffectSummary(right);
+	if (right === NO_EFFECT_SUMMARY) return normalizeEffectSummary(left);
+	const readMask = effectDomainMask(left.reads) | effectDomainMask(right.reads);
+	const writeMask = effectDomainMask(left.writes) | effectDomainMask(right.writes);
+	const reads = effectDomainsForMask(readMask);
+	const writes = effectDomainsForMask(writeMask);
+	const mayThrow = left.mayThrow || right.mayThrow;
+	const maySuspend = left.maySuspend || right.maySuspend;
+	const mayGc = left.mayGc || right.mayGc;
+	const callsUserCode = left.callsUserCode || right.callsUserCode;
+	if (
+		mayThrow &&
+		maySuspend &&
+		mayGc &&
+		callsUserCode &&
+		reads.length === EFFECT_DOMAINS.length &&
+		writes.length === EFFECT_DOMAINS.length
+	)
+		return EVERY_EFFECT_SUMMARY;
+	if (
+		left.mayThrow === mayThrow &&
+		left.maySuspend === maySuspend &&
+		left.mayGc === mayGc &&
+		left.callsUserCode === callsUserCode &&
+		domainsEqual(left.reads, reads) &&
+		domainsEqual(left.writes, writes)
+	)
+		return left;
+	if (
+		right.mayThrow === mayThrow &&
+		right.maySuspend === maySuspend &&
+		right.mayGc === mayGc &&
+		right.callsUserCode === callsUserCode &&
+		domainsEqual(right.reads, reads) &&
+		domainsEqual(right.writes, writes)
+	)
+		return right;
 	return {
 		reads,
 		writes,
-		mayThrow: left.mayThrow || right.mayThrow,
-		maySuspend: left.maySuspend || right.maySuspend,
-		mayGc: left.mayGc || right.mayGc,
-		callsUserCode: left.callsUserCode || right.callsUserCode,
+		mayThrow,
+		maySuspend,
+		mayGc,
+		callsUserCode,
 	};
 }
 
