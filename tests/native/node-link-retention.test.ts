@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { HOST_MODULES } from "../../src/compiler/frontend/host-modules.ts";
 import { buildNativeBinary, HOST_MAIN } from "../../src/test-harness.ts";
 
@@ -24,6 +24,12 @@ const HOST_MAIN_INSTALLERS = [
 ];
 
 describe("node host installer link retention", () => {
+	let pathInstallers: Array<string>;
+	let processInstallers: Array<string>;
+	let deadPathInstallers: Array<string>;
+	let bufferInstallers: Array<string>;
+	let deadBufferInstallers: Array<string>;
+
 	function installers(fixture: string, name: string): Array<string> {
 		const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-node-link-retention-"));
 		try {
@@ -41,15 +47,34 @@ describe("node host installer link retention", () => {
 		}
 	}
 
-	it("retains only the node:path installer for a path-only program", () => {
-		expect(installers("tests/local/node-link-path.mjs", "node-link-path")).toEqual([
+	beforeAll(() => {
+		pathInstallers = installers("tests/local/node-link-path.mjs", "node-link-path");
+		processInstallers = installers(
+			"tests/local/node-link-process.mjs",
+			"node-link-process",
+		);
+		deadPathInstallers = installers(
+			"tests/local/node-link-dead-path.mjs",
+			"node-link-dead-path",
+		);
+		bufferInstallers = installers("tests/local/node-link-buffer.mjs", "node-link-buffer");
+		deadBufferInstallers = installers(
+			"tests/local/node-link-dead-buffer.mjs",
+			"node-link-dead-buffer",
+		);
+	}, 1_200_000);
+
+	it("retains only the path installer object for a path-only program", () => {
+		expect(pathInstallers).toEqual([
 			...HOST_MAIN_INSTALLERS,
 			"mal_host_install_node_path",
+			// Both path installers belong to the same runtime archive member.
+			"mal_host_install_node_path_posix",
 		]);
 	});
 
 	it("retains dynamic builtin installers when process.getBuiltinModule is available", () => {
-		expect(installers("tests/local/node-link-process.mjs", "node-link-process")).toEqual(
+		expect(processInstallers).toEqual(
 			[
 				...new Set([
 					...HOST_MAIN_INSTALLERS,
@@ -60,21 +85,17 @@ describe("node host installer link retention", () => {
 	});
 
 	it("omits the path installer when its only read is optimized away", () => {
-		expect(
-			installers("tests/local/node-link-dead-path.mjs", "node-link-dead-path"),
-		).toEqual(HOST_MAIN_INSTALLERS);
+		expect(deadPathInstallers).toEqual(HOST_MAIN_INSTALLERS);
 	});
 
 	it("retains Buffer for a reachable free global", () => {
-		expect(installers("tests/local/node-link-buffer.mjs", "node-link-buffer")).toEqual([
+		expect(bufferInstallers).toEqual([
 			...HOST_MAIN_INSTALLERS,
 			"mal_host_install_node_buffer",
 		]);
 	});
 
 	it("omits the Buffer installer when its imported read is optimized away", () => {
-		expect(
-			installers("tests/local/node-link-dead-buffer.mjs", "node-link-dead-buffer"),
-		).toEqual(HOST_MAIN_INSTALLERS);
+		expect(deadBufferInstallers).toEqual(HOST_MAIN_INSTALLERS);
 	});
 });
