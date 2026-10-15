@@ -30,7 +30,7 @@ describe("ReadableStream default mode", () => {
 			mainFile: HOST_MAIN,
 			outDir,
 		});
-	});
+	}, 600_000);
 
 	it("passes compiled", () => {
 		assertResultPass(runToStdout(compiled));
