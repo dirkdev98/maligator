@@ -54,11 +54,22 @@ function captureSubstr(source) {
 	collect();
 	return [part.lastIndexOf("a"), part.length, parent.length, observe(part)];
 }
+// Callable proxies preserve each callee's span path independently of caller inlining.
+const splitCallback = new Proxy(split, {});
+const captureCallback = new Proxy(capture, {});
 ["x|ababa|z", "x|😀a\ud800|z", "x||z"].forEach((source) => {
 	rows.push(range(source, 1, 7, "a", Infinity, collect, false));
 	rows.push(nested(source, "a", Infinity, collect, false));
-	rows.push(split(source, "a", Infinity, collect));
-	rows.push(capture(/\|([^|]*)\|/g, source, "a", Infinity, collect));
+	rows.push(Reflect.apply(splitCallback, undefined, [source, "a", Infinity, collect]));
+	rows.push(
+		Reflect.apply(captureCallback, undefined, [
+			/\|([^|]*)\|/g,
+			source,
+			"a",
+			Infinity,
+			collect,
+		]),
+	);
 	rows.push(splitSubstr(source), captureSubstr(source));
 });
 const words = [

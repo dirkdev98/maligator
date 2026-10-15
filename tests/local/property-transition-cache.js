@@ -183,8 +183,10 @@ class PublicFields {
 	second = 2;
 }
 
+// A constructor proxy keeps field definitions on the generic compiled entry's cache path.
+const PublicFieldsCallback = new Proxy(PublicFields, {});
 for (let i = 0; i < 16; i++) {
-	const instance = new PublicFields();
+	const instance = new PublicFieldsCallback();
 	assert(instance.first + instance.second === 3, "cached public fields");
 }
 
