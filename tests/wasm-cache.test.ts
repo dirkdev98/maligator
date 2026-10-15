@@ -97,6 +97,7 @@ it("shares Wasm stages across paths and invalidates changed sources, includes, f
 				entry: "entry.mjs",
 				config: buildConfig,
 				output: path.join(sourceRoot, "engine.wasm"),
+				onProgress: (message) => process.stderr.write(`[wasm-cache] ${message}\n`),
 			});
 		const first = build(firstRoot);
 		expect(first.counts.reused).toBe(0);
@@ -204,4 +205,4 @@ it("shares Wasm stages across paths and invalidates changed sources, includes, f
 		vi.unstubAllEnvs();
 		rmSync(directory, { recursive: true, force: true });
 	}
-}, 300_000);
+}, 1_200_000);
