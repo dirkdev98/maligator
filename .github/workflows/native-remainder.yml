@@ -1,6 +1,8 @@
-name: Weekly native remainder
+name: Native remainder
 
 on:
+  push:
+    branches: [main]
   schedule:
     - cron: "43 2 * * 6"
   workflow_dispatch:

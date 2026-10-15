@@ -1,0 +1,214 @@
+name: Extended CI
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: extended-ci
+  cancel-in-progress: false
+
+env:
+  MALIGATOR_WORKERS: "4"
+
+jobs:
+  compiler:
+    name: ${{ matrix.check }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        check:
+          - selfhost-frontend-check
+          - selfhost-native-build-check
+          - selfhost-cli-check
+          - eval-selfhost-check
+          - eval-strip-check
+          - eval-phase2-check
+    steps:
+      - name: Check out the tested revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Linux
+        uses: ./.github/actions/setup-linux
+
+      - name: Check the runner environment
+        run: npm run env:check -- --json
+
+      - name: Verify compiler behavior
+        shell: bash
+        run: |
+          mkdir -p .cache/extended-ci
+          git rev-parse HEAD > .cache/extended-ci/revision.txt
+          node scripts/${{ matrix.check }}.ts 2>&1 | tee .cache/extended-ci/execution.log
+
+      - name: Retain compiler evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: compiler-${{ matrix.check }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .cache/extended-ci
+            .cache/selfhost-cli/**/*.json
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 7
+
+  slow-units:
+    name: Slow unit integration
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Check out the tested revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Linux
+        uses: ./.github/actions/setup-linux
+
+      - name: Set up WASI
+        uses: ./.github/actions/setup-wasi
+
+      - name: Check the runner environment
+        run: npm run env:check -- --json
+
+      - name: Run slow unit integration tests
+        run: npm run test:unit:full-only
+
+  rust:
+    name: Rust runtime
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out the tested revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Linux
+        uses: ./.github/actions/setup-linux
+
+      - name: Check the runner environment
+        run: npm run env:check -- --json
+
+      - name: Run Rust runtime tests
+        run: npm run test:rust
+
+  wasm:
+    name: Wasm parity
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Check out the tested revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Linux
+        uses: ./.github/actions/setup-linux
+
+      - name: Set up WASI
+        uses: ./.github/actions/setup-wasi
+
+      - name: Check the runner environment
+        run: npm run env:check -- --json
+
+      - name: Build the Wasm runtime
+        run: npm run wasm:build
+
+      - name: Check Wasm behavior
+        run: npm run wasm:check
+
+      - name: Retain Wasm parity evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wasm-parity-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/explorer-parity*.json
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 7
+
+  web-standards:
+    name: Compiled WPT
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Check out the tested revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Linux
+        uses: ./.github/actions/setup-linux
+
+      - name: Check the runner environment
+        run: npm run env:check -- --json
+
+      - name: Run compiled web-platform tests
+        run: npm run test:wpt -- --canonical --mode normal --backend compiled --policy complete
+
+      - name: Retain WPT reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: compiled-wpt-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/wpt/runs/*/results.json
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 7
+
+  gc-standards:
+    name: Standards GC stress
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Check out the tested revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Linux
+        uses: ./.github/actions/setup-linux
+        with:
+          cache-test262: "true"
+
+      - name: Check the runner environment
+        run: npm run env:check -- --json
+
+      - name: Run strict Test262 GC coverage
+        run: >-
+          node scripts/test262.ts --canonical --backend wire --mode gc-stress
+          --manifest tests/test-suite-test262-gc.txt --variant strict --check --policy complete
+
+      - name: Run sloppy Test262 GC coverage
+        if: success() || failure()
+        run: >-
+          node scripts/test262.ts --canonical --backend wire --mode gc-stress
+          --manifest tests/test-suite-test262-gc-sloppy.txt --variant sloppy --check --policy complete
+
+      - name: Run focused WPT GC coverage
+        if: success() || failure()
+        run: >-
+          npm run test:wpt -- --canonical --test dom/abort/AbortSignal.any.js
+          --mode gc-stress --backend wire --policy complete
+
+      - name: Retain GC standards reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: gc-standards-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .cache/mal-build/test262*/report-*.json
+            .cache/wpt/runs/*/results.json
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 7

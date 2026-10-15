@@ -18,6 +18,7 @@ on:
       - tests/wpt/expectations.json
       - .github/workflows/website-build.yml
       - .github/actions/setup-linux/action.yml
+      - .github/actions/setup-wasi/action.yml
   workflow_dispatch:
     inputs:
       deploy:
@@ -88,15 +89,7 @@ jobs:
           "$RUNNER_TEMP/zig-x86_64-linux-0.15.2/zig" version
 
       - name: Install the pinned WASI toolchain
-        run: |
-          archive="$RUNNER_TEMP/wasi-sdk.tar.gz"
-          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
-            https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/wasi-sdk-34.0-x86_64-linux.tar.gz \
-            --output "$archive"
-          echo "b761e3a0721dbae9c09a0059e5fdb2bf917d1b4a8a7b430fb3b5aafb0984b2c4  $archive" | sha256sum --check
-          tar -xzf "$archive" -C "$RUNNER_TEMP"
-          echo "WASI_SDK_PATH=$RUNNER_TEMP/wasi-sdk-34.0-x86_64-linux" >> "$GITHUB_ENV"
-          rustup target add wasm32-wasip1
+        uses: ./.github/actions/setup-wasi
 
       - name: Check the runner environment
         run: npm run env:check -- --json

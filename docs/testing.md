@@ -226,8 +226,8 @@ plan exactly. Missing, duplicate, failed, or incomplete reports fail aggregation
 selecting a lane absent from a tier fails before execution. Partial smoke selections
 never publish the full smoke cache stamp.
 
-The weekly native-remainder workflow runs Saturdays at 02:43 UTC and can also be
-dispatched from `main`. Its four independent jobs cover Linux x64 and macOS ARM,
+The native-remainder workflow runs on pushes to `main`, Saturdays at 02:43 UTC,
+and manual dispatch. Its four independent jobs cover Linux x64 and macOS ARM,
 with separate normal and sanitizer dimensions and a four-hour limit per job:
 
 ```sh
@@ -239,9 +239,15 @@ This derives the remaining native files from the same manifests as the full gate
 without repeating check's fixtures, quality, or standards. macOS also runs its leak
 audit in the normal dimension. The runner completes every selected stage to collect
 failures and retains source-bound reports for fourteen days. These reports remain
-partial full-tier evidence. Optional external-service tests retain their prerequisites;
-the slow unit, Wasm, self-hosting, and full standards dimensions still belong to their
-own verification commands.
+partial full-tier evidence. Optional external-service tests retain their prerequisites.
+
+Extended CI also runs on pushes to `main` and manual dispatch. Independent Linux
+jobs exercise the full-only unit manifest, Rust runtime tests, Wasm build and parity,
+all three self-hosted checks, the three eval/strip/wire differential checks, compiled
+WPT, and the focused Test262 and WPT GC dimensions. The slow-unit and Wasm jobs
+install WASI SDK 34. Compiler logs, CLI acceptance records, parity output, and
+standards reports remain tied to the tested revision. The full Test262 corpus keeps
+its separate weekly/manual workflow; these jobs do not update either baseline.
 
 The manual **Native primordial audit** workflow captures every descriptor inventory
 mode for one selected native target, using four shards. It retains raw records,

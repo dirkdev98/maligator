@@ -20,8 +20,8 @@ rooting, and resource-safety defects can interrupt that order.
 4. Use those foundations for scalar materialization and virtual iteration, then
    source-closure reduction and profitability-aware specialization. These are
    dependency-ordered workstreams, not parallel requirements for the next session.
-5. Resolve known reliability findings, including the intermittent DNS gate failure;
-   stabilize alpha releases and recoverable resource handling.
+5. Resolve known reliability findings, including the intermittent DNS gate failure,
+   and complete recoverable resource handling.
 6. Advance ECMAScript, WinterTC, Node, and ecosystem correctness. Their existing
    backlog below remains in scope; it is not replaced by the performance programme.
 7. Recover throughput and bound latency in the concurrent generational collector.
@@ -547,28 +547,11 @@ and completed/rejected experiment history outside this unfinished-work roadmap;
 retain reproduction sources and helpers with their evidence instead of deleting the
 only reproducible input.
 
-# Release and product readiness
+# Release artifact size
 
-## Cross-platform native binaries
-
-- [ ] Validate and document minimum supported macOS and glibc-based Linux versions for
-      arm64 and x64 artifacts. Windows remains deferred until deliberately selected.
-
-- [ ] Build the product CLI natively for every supported target in CI. Keep
-      target-specific runtime and archive inputs attributable in the artifact manifest.
-
-- [ ] Run the release smoke test against every artifact, including a clean host with
-      only documented toolchains. Exercise installation, diagnostics, project creation,
-      production building, and execution outside the repository.
-
-## Release operations
-
-- [ ] Run npm run test:full:report for release candidates and resolve or record every
-      result. This gate and the full Test262 corpus remain approval-only.
-
-- [ ] Define a failed-release procedure that stops the workflow, deprecates broken
-      versions, fixes forward, and publishes a new alpha. Never reuse a published
-      version.
+- [ ] Reduce compiler duplication in the released CLI. The alpha.28 ARM64 executable
+      is 297 MB, with about 150 MB of compiled code in three worker images; preserve
+      worker isolation and the runtime assets needed to build outside the checkout.
 
 # Runtime safety and allocation
 
@@ -997,54 +980,6 @@ remains a Maligator extension and does not count as global fetch conformance.
 - [ ] Exercise postgres.js logical replication, prepared transactions, negotiated TLS,
       and primary or standby selection against a dedicated topology. Keep
       topology-dependent tests separate from the deterministic local baseline.
-
-# Testing, profiling, and developer tooling
-
-## Product profiling
-
-- [ ] Add repeat, warmup, or minimum-duration handling for short profiled commands and
-      a CLI for rendering existing captures. Document interval overrides as expert
-      diagnostics requiring overhead revalidation.
-
-- [ ] Harden the authenticated Claude and Fable review harness with a small read-only
-      smoke, bounded cleanup, and explicit external-disclosure approval. Never expose
-      or persist authentication material.
-
-## First-class testing
-
-- [ ] Add snapshots, fake timers, and mocking when their semantics can remain
-      deterministic in compiled and interpreted tests. Keep the unit loop fast.
-
-- [ ] Add coverage, browser environments, and process-per-file isolation
-      independently. Fresh-isolate watch reruns and explicit file scheduling are
-      available; define cache, port, temporary-directory, and failure-reporting
-      behavior for the remaining modes.
-
-- [ ] Add benchmark, fuzzing, and test-plugin support after stable extension points
-      exist. Plugins must not silently broaden sandbox, host, or network capabilities.
-
-## Test262 throughput
-
-- [ ] Capture and analyze a current cold compiled-suite profile without updating the
-      verdict baseline. Re-rank work from current phase, RSS, object-size, and link
-      evidence.
-
-- [ ] Evaluate resumable static call tables and adopt them only if they materially
-      reduce generated C or object size. Preserve resumability, identity, and debugging.
-
-- [ ] Merge additional byte-identical immutable helpers, constants, and debug tables
-      without merging JavaScript identity or mutable state. Report size and compile-time
-      effects.
-
-- [ ] Measure lower literal-template thresholds on medium definitions and select a cost
-      model rather than fixture-specific cutoffs. Include runtime allocation, output
-      size, and compilation time.
-
-- [ ] Use worker controls and batch reports to measure C compilation and link
-      contention. Limit concurrent links only when attribution confirms contention.
-
-- [ ] Add bounded targeted profiling flags for timeout, RSS, CPU, GC statistics, and
-      phase markers. Require a filter or manifest and retain both watchdog deadlines.
 
 # Actors, SMP, and embedding
 
