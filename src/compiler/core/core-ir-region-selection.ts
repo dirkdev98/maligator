@@ -18,7 +18,7 @@ import {
 	CoreFunctionFeatureIndex,
 } from "./core-function-features.ts";
 import {
-	coreInstanceMethodHints,
+	coreGuardedMethodHints,
 	coreInstanceMethodTargets,
 } from "./core-instance-method-hints.ts";
 import { CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE } from "./core-internal-attributes.ts";
@@ -1081,7 +1081,7 @@ export function buildCoreLocalOptimizationPlanInput(
 	let priorityScore = 0;
 	let operationCount = 0;
 	if (scanned) {
-		// This only orders function scans; proved candidates still use the full cost model.
+		// A single hot instruction estimates benefit, but discovery must scan the whole function.
 		const loopWeights = new Uint8Array(fn.blockCapacity);
 		for (const loop of cfg.loops) {
 			for (const block of loop.blocks)
@@ -1117,7 +1117,10 @@ export function buildCoreLocalOptimizationPlanInput(
 		context,
 		discovery:
 			scanned && priorityScore < 0
-				? Object.freeze({ priorityScore, compilerWorkCost: operationCount })
+				? Object.freeze({
+						priorityScore: priorityScore / (operationCount + 1),
+						compilerWorkCost: operationCount,
+					})
 				: undefined,
 		operatorInputs: coreOperatorInputPlans(program, analyses, [functionId]),
 		builtinInputs: coreBuiltinInputPlans(program, analyses, [functionId]),
@@ -1162,7 +1165,7 @@ function guardedCallOpportunities(
 	analyses: CoreAnalysisManager,
 ): ReadonlyArray<CorePlanningOpportunity> {
 	const candidates: Array<CorePlanningOpportunity> = [];
-	const instanceMethodHints = coreInstanceMethodHints(program);
+	const instanceMethodHints = coreGuardedMethodHints(program, summaries.targets);
 	for (const caller of liveFunctions) {
 		const fn = program.function(caller);
 		const targetSites = summaries.targets.outgoing(caller);

@@ -1177,6 +1177,101 @@ describe("late Core specialization plan", () => {
 		verifyCoreOptimizationPlan(program.seal(), plan, context);
 	});
 
+	it("admits a ready guarded member before an expensive local proof scan", () => {
+		const program = new CoreProgram(coreOpcodeRegistry, {
+			stringConstants: [[..."update"].map((character) => character.charCodeAt(0))],
+		});
+		const callerBuilder = new CoreFunctionBuilder(program, { parameterCount: 2 });
+		const entry = callerBuilder.createBlock([{}, {}]);
+		const receiver = callerBuilder.blockParameterValue(entry, 0);
+		const condition = callerBuilder.blockParameterValue(entry, 1);
+		for (let index = 0; index < 128; index++)
+			callerBuilder.appendInstruction(entry, "createNumber", [], {
+				attributes: { value: index },
+			});
+		const loop = callerBuilder.createBlock();
+		const exit = callerBuilder.createBlock();
+		callerBuilder.setTerminator(entry, {
+			kind: "jump",
+			edge: { block: loop, arguments: [] },
+		});
+		callerBuilder.appendInstruction(loop, "createArray", []);
+		const [callee] = callerBuilder.appendInstruction(
+			loop,
+			"loadPropertyStatic",
+			[receiver],
+			{
+				attributes: { stringIndex: 0 },
+			},
+		);
+		const [result] = callerBuilder.appendInstruction(loop, "call", [callee!, receiver]);
+		const call = [...callerBuilder.bodyInstructionIds(loop)].at(-1)!;
+		callerBuilder.setTerminator(loop, {
+			kind: "branch",
+			condition,
+			consequent: { block: loop, arguments: [] },
+			alternate: { block: exit, arguments: [] },
+		});
+		callerBuilder.setTerminator(exit, { kind: "return", value: result! });
+		const caller = callerBuilder.finish(entry).function;
+		const producer = new CoreFunctionBuilder(program);
+		const producerEntry = producer.createBlock();
+		const [method] = producer.appendInstruction(producerEntry, "createFunction", [], {
+			attributes: { functionIndex: 2 },
+		});
+		const [record] = producer.appendInstruction(
+			producerEntry,
+			"createObjectShaped",
+			[method!],
+			{
+				attributes: { keyStringIndices: [0] },
+			},
+		);
+		producer.setTerminator(producerEntry, { kind: "return", value: record! });
+		const producerId = producer.finish(producerEntry).function;
+		const target = new CoreFunctionBuilder(program);
+		const targetEntry = target.createBlock();
+		const [value] = target.appendInstruction(targetEntry, "createUndefined", []);
+		target.setTerminator(targetEntry, { kind: "return", value: value! });
+		const methodId = target.finish(targetEntry).function;
+		const context = programAnalysisContext();
+		const report = new CoreOptimizationReportBuilder(program);
+		const analyses = new CoreAnalysisManager(program, context, report);
+		const summaries = analyses.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, { scope: "program" });
+		const proofBudget = program.function(caller).liveStorageCounts().instructions + 1;
+		let callerScans = 0;
+		const plan = buildCoreOptimizationPlan(
+			program,
+			analyses,
+			summaries,
+			[caller, producerId, methodId],
+			{
+				context,
+				onLocalCandidates(functionId) {
+					if (functionId === caller) callerScans++;
+				},
+				budgets: {
+					perSiteExpansions: 1,
+					perCallerExpansions: 4,
+					perCallerGeneratedCode: 8,
+					perCallerCompilerWork: proofBudget,
+					programGeneratedCode: 8,
+					programCompilerWork: proofBudget,
+				},
+			},
+		);
+		expect(planSpecializations(plan)).toContainEqual(
+			expect.objectContaining({
+				kind: "guarded-direct-call",
+				function: caller,
+				anchors: [call],
+				targetFunctions: [methodId],
+			}),
+		);
+		expect(callerScans).toBe(0);
+		verifyCoreOptimizationPlan(program.seal(), plan, context);
+	});
+
 	it("binds native-body omission to the proved calls and preserves it through verification", () => {
 		const { program, caller, callee } = directEntryProgram(2);
 		const { plan, context } = planning(program, [caller, callee]);

@@ -196,4 +196,99 @@ try {
 	);
 }
 
+function makeRecord(seed) {
+	let state = seed;
+	const updateRecord = function (value) {
+		state += value;
+		if (typeof globalThis.gc === "function") globalThis.gc();
+		return state + this.bias;
+	};
+	return {
+		bias: 10,
+		updateRecord,
+		get current() {
+			return state;
+		},
+	};
+}
+
+function invokeRecord(record, count) {
+	let total = 0;
+	for (let index = 0; index < count; index++) total += record.updateRecord(1);
+	return total;
+}
+
+const firstRecord = makeRecord(1);
+const secondRecord = makeRecord(100);
+check(
+	invokeRecord(firstRecord, 3) === 39,
+	"record member captures its first environment",
+);
+check(
+	invokeRecord(secondRecord, 3) === 336,
+	"record member captures its second environment",
+);
+firstRecord.updateRecord = secondRecord.updateRecord;
+firstRecord.bias = 20;
+check(
+	invokeRecord(firstRecord, 2) === 249 &&
+		firstRecord.current === 4 &&
+		secondRecord.current === 105,
+	"same-body record replacement keeps the loaded environment and original this",
+);
+
+const leftRecord = makeRecord(1000);
+const rightRecord = makeRecord(2000);
+let recordGets = 0;
+const accessorRecord = {
+	bias: 5,
+	get updateRecord() {
+		recordGets++;
+		return recordGets & 1 ? leftRecord.updateRecord : rightRecord.updateRecord;
+	},
+};
+check(
+	invokeRecord(accessorRecord, 3) === 4019 && recordGets === 3,
+	"record getter runs once per call and can change same-body closure environments",
+);
+
+let throwingRecordGets = 0;
+const recordError = new Error("record getter");
+const throwingRecord = {
+	bias: 5,
+	get updateRecord() {
+		if (++throwingRecordGets === 2) throw recordError;
+		return leftRecord.updateRecord;
+	},
+};
+try {
+	invokeRecord(throwingRecord, 3);
+	check(false, "record getter must throw");
+} catch (error) {
+	check(
+		error === recordError && throwingRecordGets === 2,
+		"record getter throw is preserved",
+	);
+}
+
+firstRecord.updateRecord = (value) => value + 500;
+check(invokeRecord(firstRecord, 2) === 1002, "unknown record replacement falls back");
+firstRecord.updateRecord = secondRecord.updateRecord.bind({ bias: 40 });
+check(invokeRecord(firstRecord, 2) === 293, "bound record replacement keeps bound this");
+
+let recordProxyCalls = 0;
+const proxyRecord = {
+	bias: 7,
+	updateRecord: new Proxy(leftRecord.updateRecord, {
+		apply(target, receiver, arguments_) {
+			recordProxyCalls++;
+			return Reflect.apply(target, receiver, arguments_);
+		},
+	}),
+};
+check(
+	invokeRecord(proxyRecord, 2) === 2023 && recordProxyCalls === 2,
+	"record callable proxy keeps apply traps and receiver",
+);
+
 console.log("guarded-method-devirtualization PASS " + checks);
