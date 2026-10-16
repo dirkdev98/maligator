@@ -10,10 +10,11 @@ import { getPrimordialCatalog } from "../src/compiler/shared/primordial-catalog-
 const guards = new Map<string, ReadonlyArray<string>>();
 const active: Array<string> = [];
 for (const line of readFileSync("runtime/src/intrinsics.h", "utf8").split("\n")) {
-	if (line.startsWith("#if ")) active.push(line.slice(4));
-	else if (line === "#endif") active.pop();
-	else if (/^#(?:else|elif)/.test(line))
-		throw new Error("Unsupported intrinsic feature branch");
+	const requires = /^\s*\/\* requires (MAL_\w+) \*\/$/.exec(line)?.[1];
+	if (requires !== undefined) active.push(requires);
+	else if (/^\s*\/\* end requires \*\/$/.test(line)) active.pop();
+	else if (/^#(?:if|else|elif)/.test(line))
+		throw new Error("Intrinsic numbering must not depend on preprocessor features");
 	const intrinsic = /^\s*(MAL_INTRINSIC_\w+)(?:\s*=\s*[^,]+)?,/.exec(line)?.[1];
 	if (intrinsic !== undefined) guards.set(intrinsic, [...active]);
 }

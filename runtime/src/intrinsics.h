@@ -251,7 +251,13 @@ typedef enum MalIntrinsic {
     MAL_INTRINSIC_PROXY_CONSTRUCTOR,
     MAL_INTRINSIC_DATE_CONSTRUCTOR,
     MAL_INTRINSIC_DATE_PROTOTYPE,
-#if MAL_TEMPORAL
+    /*
+     * Feature-gated slots are declared in every build, so the numbering, and every
+     * object compiled against it, is the same for all feature sets. Disabled slots
+     * stay undefined; scripts/generate-known-operations.ts reads availability from
+     * these `requires` markers.
+     */
+    /* requires MAL_TEMPORAL */
     MAL_INTRINSIC_TEMPORAL,
     MAL_INTRINSIC_TEMPORAL_DURATION_CONSTRUCTOR,
     MAL_INTRINSIC_TEMPORAL_DURATION_PROTOTYPE,
@@ -269,7 +275,7 @@ typedef enum MalIntrinsic {
     MAL_INTRINSIC_TEMPORAL_PLAIN_YEAR_MONTH_PROTOTYPE,
     MAL_INTRINSIC_TEMPORAL_ZONED_DATE_TIME_CONSTRUCTOR,
     MAL_INTRINSIC_TEMPORAL_ZONED_DATE_TIME_PROTOTYPE,
-#endif
+    /* end requires */
     MAL_INTRINSIC_REGEXP_CONSTRUCTOR,
     MAL_INTRINSIC_REGEXP_PROTOTYPE,
     /** Per-realm Annex B RegExp input/match/capture state. */
@@ -490,10 +496,10 @@ typedef enum MalIntrinsic {
     MAL_INTRINSIC_NODE_SQLITE_DATABASE_PROTOTYPE,
     MAL_INTRINSIC_NODE_SQLITE_STATEMENT_CONSTRUCTOR,
     MAL_INTRINSIC_NODE_SQLITE_STATEMENT_PROTOTYPE,
-#if MAL_REALMS
+    /* requires MAL_REALMS */
     MAL_INTRINSIC_SHADOW_REALM_CONSTRUCTOR,
     MAL_INTRINSIC_SHADOW_REALM_PROTOTYPE,
-#endif
+    /* end requires */
     /* Per-realm Node Error stack customization state. */
     MAL_INTRINSIC_ERROR_PREPARE_STACK_TRACE_VALUE,
     MAL_INTRINSIC_ERROR_STACK_TRACE_LIMIT_VALUE,
