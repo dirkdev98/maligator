@@ -1,0 +1,200 @@
+name: Compare CLI package size
+
+on:
+  workflow_dispatch:
+    inputs:
+      baseline:
+        description: Full commit SHA to compare with this workflow revision
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: package-size
+  cancel-in-progress: false
+
+env:
+  MALIGATOR_WORKERS: "3"
+
+jobs:
+  build:
+    name: Build ${{ matrix.variant }} ARM64 package
+    runs-on: macos-15
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [before, after]
+    env:
+      SOURCE_REVISION: ${{ matrix.variant == 'before' && inputs.baseline || github.sha }}
+      VARIANT: ${{ matrix.variant }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-macos
+
+      - name: Capture the selected source without changing the checkout
+        shell: bash
+        run: |
+          [[ "$SOURCE_REVISION" =~ ^[0-9a-f]{40}$ ]]
+          git cat-file -e "$SOURCE_REVISION^{commit}"
+          mkdir -p .cache/package-size/source .cache/package-size/result
+          git archive "$SOURCE_REVISION" | tar -x -C .cache/package-size/source
+          cmp package-lock.json .cache/package-size/source/package-lock.json
+          ln -s "$GITHUB_WORKSPACE/node_modules" .cache/package-size/source/node_modules
+          git rev-parse "$SOURCE_REVISION^{tree}" > .cache/package-size/result/source-tree.txt
+
+      - name: Check the build environment
+        working-directory: .cache/package-size/source
+        run: npm run env:check -- --json
+
+      - name: Build the production ARM64 release
+        working-directory: .cache/package-size/source
+        timeout-minutes: 40
+        run: npm run release:build -- --target aarch64-apple-darwin
+
+      - name: Pack and check the installed launcher
+        working-directory: .cache/package-size/source
+        timeout-minutes: 5
+        run: npm run release:pack -- --target aarch64-apple-darwin
+
+      - name: Retain comparable artifact and toolchain measurements
+        run: |
+          node --input-type=module <<'NODE'
+          import { execFileSync } from "node:child_process";
+          import { hash } from "node:crypto";
+          import { cpSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+          import path from "node:path";
+          import { requireToolchain } from "./src/toolchain.ts";
+
+          const root = path.resolve(".cache/package-size/source");
+          const output = path.resolve(".cache/package-size/result");
+          const release = path.join(root, "dist/release");
+          const version = JSON.parse(readFileSync(path.join(root, "package.json"))).version;
+          const target = "aarch64-apple-darwin";
+          const name = `maligator-v${version}-${target}`;
+          const toolchain = requireToolchain({ target, rustDir: path.join(root, "runtime/rust"), needsCxx: true });
+          const describe = (file) => ({ bytes: statSync(file).size, sha256: hash("sha256", readFileSync(file), "hex") });
+          const packages = JSON.parse(readFileSync(path.join(release, "packs/packages.json")));
+          const report = {
+            schema: 1,
+            variant: process.env.VARIANT,
+            sourceCommit: process.env.SOURCE_REVISION,
+            sourceTree: readFileSync(path.join(output, "source-tree.txt"), "utf8").trim(),
+            target, version,
+            node: process.version,
+            npm: execFileSync("npm", ["--version"], { encoding: "utf8" }).trim(),
+            sdk: execFileSync("xcrun", ["--show-sdk-version"], { encoding: "utf8" }).trim(),
+            workers: process.env.MALIGATOR_WORKERS,
+            tools: Object.fromEntries(Object.entries(toolchain.tools).filter(([, tool]) => tool !== undefined).map(([name, tool]) => [name, { version: tool.version, args: tool.args ?? [] }])),
+            probes: toolchain.probes,
+            binary: describe(path.join(release, "artifacts", name, "bin/maligator")),
+            archive: describe(path.join(release, "artifacts", `${name}.tar.gz`)),
+            packages: packages.packages.map((entry) => ({ ...entry, ...describe(path.join(release, "packs", entry.file)) })),
+          };
+          mkdirSync(path.join(output, "release"), { recursive: true });
+          for (const directory of ["artifacts", "packs"])
+            cpSync(path.join(release, directory), path.join(output, "release", directory), { recursive: true });
+          writeFileSync(path.join(output, "measurement.json"), JSON.stringify(report, null, 2) + "\n");
+          console.log(JSON.stringify(report, null, 2));
+          NODE
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: package-size-${{ matrix.variant }}-${{ github.run_id }}
+          path: .cache/package-size/result
+          include-hidden-files: true
+          compression-level: 0
+          retention-days: 7
+
+  smoke:
+    name: Smoke ${{ matrix.variant }} packaged CLI
+    needs: build
+    runs-on: macos-15
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [before, after]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-macos
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: package-size-${{ matrix.variant }}-${{ github.run_id }}
+          path: .cache/package-size/result
+
+      - name: Restore the measured release artifact
+        run: |
+          mkdir -p dist/release
+          cp -R .cache/package-size/result/release/artifacts dist/release/artifacts
+          chmod +x dist/release/artifacts/*/bin/maligator
+
+      - name: Check the runner environment
+        run: npm run env:check -- --json
+
+      - name: Build and run outside the checkout
+        run: npm run release:smoke
+
+      - name: Exercise packaged compiler workers, assets and CLI commands
+        run: |
+          binary="$(find "$GITHUB_WORKSPACE/dist/release/artifacts" -path '*/bin/maligator' -type f)"
+          test -x "$binary"
+          npm run selfhost:cli -- --cli "$binary"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: package-smoke-${{ matrix.variant }}-${{ github.run_id }}
+          path: .cache/selfhost-cli
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 7
+
+  compare:
+    needs: [build, smoke]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.14.1
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: package-size-*-${{ github.run_id }}
+          path: measurements
+
+      - name: Compare sizes under the same toolchain and build settings
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from "node:assert/strict";
+          import { appendFileSync, readFileSync } from "node:fs";
+          const read = (variant) => JSON.parse(readFileSync(`measurements/package-size-${variant}-${process.env.GITHUB_RUN_ID}/measurement.json`));
+          const before = read("before");
+          const after = read("after");
+          for (const key of ["target", "version", "node", "npm", "sdk", "workers", "tools", "probes"])
+            assert.deepEqual(after[key], before[key], `unmatched ${key}`);
+          const lines = ["| Artifact | Before bytes | After bytes | Saved bytes |", "| --- | ---: | ---: | ---: |"];
+          for (const key of ["binary", "archive"]) {
+            assert(after[key].bytes < before[key].bytes, `${key} did not shrink`);
+            lines.push(`| ${key} | ${before[key].bytes} | ${after[key].bytes} | ${before[key].bytes - after[key].bytes} |`);
+          }
+          for (const item of after.packages) {
+            const previous = before.packages.find((entry) => entry.name === item.name);
+            assert(previous, `missing baseline package ${item.name}`);
+            if (item.name !== "@maligator/cli") assert(item.bytes < previous.bytes, `${item.name} did not shrink`);
+            lines.push(`| ${item.name} | ${previous.bytes} | ${item.bytes} | ${previous.bytes - item.bytes} |`);
+          }
+          appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join("\n") + "\n");
+          console.log(lines.join("\n"));
+          NODE

@@ -1,3 +1,4 @@
+import type { WorkerEntryDeclaration } from "../frontend/worker-entries.ts";
 import type { CompiledWorkerImage } from "../pipeline/compile-worker-images.ts";
 import { cEscapeString, emitProgramTranslationUnits } from "./emit-program-image.ts";
 import type { EmitOptions, GeneratedTranslationUnit } from "./emit-program-image.ts";
@@ -12,17 +13,34 @@ export function emitWorkerImageTranslationUnits(
 			symbolSuffix: `_worker_${worker.id}`,
 		}).map((unit) => ({ ...unit, id: `worker-${worker.id}-${unit.id}` })),
 	);
+	units.push(
+		emitWorkerRegistryTranslationUnit(
+			workers.map((worker) => ({
+				entry: worker.entry,
+				imageSymbol: `mal_runtime_image_worker_${worker.id}`,
+			})),
+		),
+	);
+	return units;
+}
+
+export function emitWorkerRegistryTranslationUnit(
+	workers: ReadonlyArray<{
+		readonly entry: WorkerEntryDeclaration;
+		readonly imageSymbol: string;
+	}>,
+): GeneratedTranslationUnit {
 	const lines = [
 		'#include "workers.h"',
-		...workers.map(
-			(worker) => `extern const MalRuntimeImage mal_runtime_image_worker_${worker.id};`,
+		...[...new Set(workers.map((worker) => worker.imageSymbol))].map(
+			(symbol) => `extern const MalRuntimeImage ${symbol};`,
 		),
 	];
 	if (workers.length > 0) {
 		lines.push("static const MalWorkerEntry mal_compiled_worker_entries[] = {");
 		for (const worker of workers)
 			lines.push(
-				`    { .href = "${cEscapeString(worker.entry.href)}", .image = &mal_runtime_image_worker_${worker.id}, .wire = nullptr, .wire_size = 0, .resolve_installer = nullptr },`,
+				`    { .href = "${cEscapeString(worker.entry.href)}", .image = &${worker.imageSymbol}, .wire = nullptr, .wire_size = 0, .resolve_installer = nullptr },`,
 			);
 		lines.push("};");
 	}
@@ -38,12 +56,11 @@ export function emitWorkerImageTranslationUnits(
 		"}",
 		"",
 	);
-	units.push({
+	return {
 		id: "worker-registry",
 		kind: "data",
 		source: lines.join("\n"),
 		headerFiles: ["workers.h"],
 		definitions: [],
-	});
-	return units;
+	};
 }

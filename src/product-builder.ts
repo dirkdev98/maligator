@@ -11,10 +11,10 @@ import { stripCompactTypes } from "./compiler/frontend/compact-type-strip.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "./compiler/frontend/semantic-program.ts";
 import { compileSemanticProgramToProgramImage } from "./compiler/pipeline/compile-core.ts";
 import { compileEntrypointToBuffer } from "./compiler/pipeline/compile-program.ts";
-import { compileWorkerImages } from "./compiler/pipeline/compile-worker-images.ts";
+import { workerRootEntries } from "./compiler/pipeline/compile-worker-images.ts";
 import { compilerProgramFactsFromConfig } from "./compiler/shared/compiler-facts.ts";
 import { emitProgramTranslationUnits } from "./compiler/target/emit-program-image.ts";
-import { emitWorkerImageTranslationUnits } from "./compiler/target/emit-worker-images.ts";
+import { emitWorkerRegistryTranslationUnit } from "./compiler/target/emit-worker-images.ts";
 import { buildDevelopmentRunner, buildLocalBinary } from "./local-build.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
 import { nativeSourcePath } from "./native-source-path.ts";
@@ -170,15 +170,12 @@ export function buildProductCli(options: BuildProductCliOptions): string {
 		throw new Error("Product compilerWire asset must contain exactly one file");
 	}
 	compilerWire.files[0]!.embeddedSymbol = "mal_compiler_wire_data";
-	const cli = emitProductCliTranslationUnits(repositoryRoot, config, assets, progress);
-	// The worker roots compile the compiler again, so they start only after the CLI's
-	// own program image is emitted and released, and leave only their C behind.
-	const cSource = [
-		...cli.units,
-		...(cli.workerGraph === undefined
-			? []
-			: emitProductWorkerTranslationUnits(cli.workerGraph, config)),
-	];
+	const cSource = emitProductCliTranslationUnits(
+		repositoryRoot,
+		config,
+		assets,
+		progress,
+	);
 	progress("product CLI translation units ready");
 	const derivation = buildDerivationFromConfig(config);
 	const context = resolveNativeBuildContext({
@@ -222,10 +219,7 @@ function emitProductCliTranslationUnits(
 	config: ResolvedBuildConfig,
 	assets: ReturnType<typeof includeConfiguredAssets>,
 	progress: (message: string) => void,
-): {
-	units: ReturnType<typeof emitProgramTranslationUnits>;
-	workerGraph: Parameters<typeof compileWorkerImages>[0] | undefined;
-} {
+): ReturnType<typeof emitProgramTranslationUnits> {
 	progress("analyzing and compiling the product CLI");
 	const semanticProgram = loadEntrypointAndRunSemanticAnalysis(
 		path.join(repositoryRoot, "src/product-cli-entry.mts"),
@@ -242,36 +236,18 @@ function emitProductCliTranslationUnits(
 	});
 	progress("emitting the product CLI translation units");
 	const graph = semanticProgram.graph;
-	return {
-		units: emitProgramTranslationUnits(definition, {
+	return [
+		...emitProgramTranslationUnits(definition, {
 			sourcePath: nativeSourcePath,
 			compiled: true,
 			assets,
 			maligatorSurface: config.surface.maligator,
 		}),
-		workerGraph:
-			graph === undefined
-				? undefined
-				: {
-						workerEntries: graph.workerEntries,
-						dynamicImportCandidates: graph.dynamicImportCandidates,
-					},
-	};
-}
-
-function emitProductWorkerTranslationUnits(
-	workerGraph: Parameters<typeof compileWorkerImages>[0],
-	config: ResolvedBuildConfig,
-): ReturnType<typeof emitWorkerImageTranslationUnits> {
-	const workerImages = compileWorkerImages(workerGraph, {
-		buildConfig: config,
-		stripTypes: stripCompactTypes,
-	});
-	return workerImages.length === 0
-		? []
-		: emitWorkerImageTranslationUnits(workerImages, {
-				sourcePath: nativeSourcePath,
-				compiled: true,
-				maligatorSurface: config.surface.maligator,
-			});
+		emitWorkerRegistryTranslationUnit(
+			workerRootEntries(graph ?? {}).map((entry) => ({
+				entry,
+				imageSymbol: "mal_runtime_image",
+			})),
+		),
+	];
 }
