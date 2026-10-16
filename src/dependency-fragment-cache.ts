@@ -25,14 +25,21 @@ import type { CompilerDiagnostic } from "./compiler/shared/compiler-diagnostics.
 import { compilerProgramFactsFromConfig } from "./compiler/shared/compiler-facts.ts";
 import type { CompilerProgramFacts } from "./compiler/shared/compiler-facts.ts";
 import {
+	COMPILER_ARTIFACT_VERSION,
+	serializeCompilerArtifact,
+} from "./compiler/target/compiler-artifact-codec.ts";
+import {
 	serializeRuntimeImage,
 	WIRE_VERSION,
 } from "./compiler/target/program-image-codec.ts";
 import {
+	cacheFrontendCompilerArtifact,
 	cacheFrontendWire,
 	frontendArtifactCacheRoot,
 	frontendArtifactIdentity,
 	frontendArtifactUnchanged,
+	frontendCompilerArtifactIdentity,
+	frontendCompilerArtifactUnchanged,
 	frontendDigest,
 } from "./frontend-cache.ts";
 import type { FrontendArtifactIdentity } from "./frontend-cache.ts";
@@ -69,6 +76,8 @@ export interface DependencyFragmentArtifact extends FrontendArtifactIdentity {
 	key: string;
 	targets: Array<string>;
 	wire: Uint8Array;
+	/** The island's native plans, which development fragment builds emit from. */
+	compilerArtifact: FrontendArtifactIdentity;
 	diagnostics: Array<CompilerDiagnostic>;
 	cache: "hit" | "miss";
 }
@@ -118,6 +127,7 @@ function environmentIdentity(options: CompileDependencyFragmentsOptions): string
 				DEPENDENCY_FRAGMENT_SCHEMA,
 			),
 			wireVersion: WIRE_VERSION,
+			compilerArtifactVersion: COMPILER_ARTIFACT_VERSION,
 			stripper: options.stripperIdentity,
 			optimization: "development",
 			configuration: compilerConfigurationIdentity(options.config),
@@ -269,13 +279,16 @@ function loadIsland(
 		const reference = JSON.parse(readFileSync(mappingPath, "utf-8")) as {
 			schema?: number;
 			artifact?: FrontendArtifactIdentity;
+			compilerArtifact?: FrontendArtifactIdentity;
 			diagnostics?: Array<CompilerDiagnostic>;
 		};
 		if (
-			reference.schema !== 2 ||
+			reference.schema !== 3 ||
 			reference.artifact === undefined ||
+			reference.compilerArtifact === undefined ||
 			!Array.isArray(reference.diagnostics) ||
-			!frontendArtifactUnchanged(reference.artifact, artifactRoot)
+			!frontendArtifactUnchanged(reference.artifact, artifactRoot) ||
+			!frontendCompilerArtifactUnchanged(reference.compilerArtifact, artifactRoot)
 		) {
 			throw new Error("invalid dependency artifact reference");
 		}
@@ -284,6 +297,7 @@ function loadIsland(
 			key,
 			targets,
 			...reference.artifact,
+			compilerArtifact: reference.compilerArtifact,
 			diagnostics: reference.diagnostics,
 			get wire() {
 				if (wire !== undefined) return wire;
@@ -339,18 +353,32 @@ function compileIsland(
 	});
 	const serializeStartedAt = Date.now();
 	const wire = serializeRuntimeImage(definition.runtime);
+	const compilerWire = serializeCompilerArtifact(definition);
 	options.phases.serializeMs += Date.now() - serializeStartedAt;
 	const wireDigest = frontendDigest(wire);
 	cacheFrontendWire(wire, artifactRoot);
+	cacheFrontendCompilerArtifact(compilerWire, artifactRoot);
 	const artifact = frontendArtifactIdentity(wireDigest, artifactRoot);
-	if (artifact === undefined) {
+	const compilerArtifact = frontendCompilerArtifactIdentity(
+		frontendDigest(compilerWire),
+		artifactRoot,
+	);
+	if (artifact === undefined || compilerArtifact === undefined) {
 		throw new Error(`dependency artifact is missing after publication: ${wireDigest}`);
 	}
 	writeFileAtomically(
 		mappingPath,
-		`${JSON.stringify({ schema: 2, artifact, diagnostics })}\n`,
+		`${JSON.stringify({ schema: 3, artifact, compilerArtifact, diagnostics })}\n`,
 	);
-	return { key, targets, ...artifact, wire, diagnostics, cache: "miss" };
+	return {
+		key,
+		targets,
+		...artifact,
+		compilerArtifact,
+		wire,
+		diagnostics,
+		cache: "miss",
+	};
 }
 
 function requestPath(root: string, request: DependencyFragmentRequest): string {

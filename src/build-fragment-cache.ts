@@ -115,6 +115,8 @@ export interface BuildFragmentArtifact {
 export interface CompiledBuildFragments {
 	wires: Array<Uint8Array>;
 	runtimeArtifacts: Array<BuildFragmentArtifact>;
+	/** Each image's compiler artifact, parallel to `runtimeArtifacts`. */
+	fragmentCompilerArtifacts: Array<BuildFragmentArtifact>;
 	compilerArtifact: BuildFragmentArtifact;
 	programImage: ReturnType<typeof compileSemanticProgramToProgramImage>;
 	diagnostics: Array<CompilerDiagnostic>;
@@ -891,6 +893,9 @@ export function compileBuildFragments(
 		},
 		runtimeArtifacts: compiledArtifacts.map((artifact) =>
 			"runtimeArtifact" in artifact ? artifact.runtimeArtifact : artifact,
+		),
+		fragmentCompilerArtifacts: compiledArtifacts.map(
+			(artifact) => artifact.compilerArtifact,
 		),
 		compilerArtifact: applicationArtifact.compilerArtifact,
 		programImage: applicationArtifact.programImage,

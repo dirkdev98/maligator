@@ -1006,6 +1006,7 @@ function prepareCommandState(
 			developmentFragments
 				? developmentFragmentUnits(
 						frontend.runtimeArtifacts,
+						frontend.fragmentCompilerArtifacts,
 						entrypointPath,
 						maligatorCacheDirectory(),
 					)

@@ -97,7 +97,7 @@ import {
 } from "./worker-image-cache.ts";
 import type { WorkerImageArtifact } from "./worker-image-cache.ts";
 
-const BUILD_FRONTEND_CACHE_SCHEMA = 6;
+const BUILD_FRONTEND_CACHE_SCHEMA = 7;
 const BUILD_FRONTEND_PIPELINE_VERSION = 6;
 const BUILD_FRONTEND_CACHE_DIRECTORY = path.join(
 	maligatorCacheDirectory(),
@@ -108,12 +108,14 @@ const NODE_GLOBALS_MODULE_ID = "maligator-internal:node-globals";
 export type BuildDependencyIdentity = FrontendDependencyIdentity;
 
 interface BuildFrontendManifest {
-	schema: 6;
+	schema: 7;
 	packageAbsences: Array<string>;
 	workerArtifacts: Array<WorkerImageArtifact>;
 	identity: string;
 	contentKey: string;
 	runtimeArtifacts: Array<BuildFrontendArtifactIdentity>;
+	/** Each fragment's compiler artifact, parallel to `runtimeArtifacts`. */
+	fragmentCompilerArtifacts?: Array<BuildFrontendArtifactIdentity>;
 	compilerArtifact: BuildFrontendArtifactIdentity;
 	imageStats: ProgramImageStats;
 	entrypoint: string;
@@ -158,6 +160,8 @@ export interface CompiledBuildFrontend {
 	fileDigests: { hits: number; misses: number };
 	/** Runtime-only MALW images in splice order. */
 	runtimeArtifacts: Array<BuildFrontendArtifact>;
+	/** Compiler artifacts of the relocatable fragments, parallel to `runtimeArtifacts`. */
+	fragmentCompilerArtifacts?: Array<BuildFrontendArtifact>;
 	imageStats: ProgramImageStats;
 	diagnostics: Array<CompilerDiagnostic>;
 	optimizationReport?: CoreOptimizationReport;
@@ -379,6 +383,7 @@ function loadCached(
 			wire: Uint8Array;
 			wires: Array<Uint8Array>;
 			runtimeArtifacts: Array<BuildFrontendArtifact>;
+			fragmentCompilerArtifacts?: Array<BuildFrontendArtifact>;
 			imageStats: ProgramImageStats;
 			dependencies: Array<BuildDependencyIdentity>;
 			diagnostics: Array<CompilerDiagnostic>;
@@ -403,6 +408,14 @@ function loadCached(
 		) ||
 		!artifactsUnchanged(manifest.runtimeArtifacts, artifactRoot) ||
 		!compilerArtifactUnchanged(manifest.compilerArtifact, artifactRoot) ||
+		(manifest.fragmentCompilerArtifacts !== undefined &&
+			(!Array.isArray(manifest.fragmentCompilerArtifacts) ||
+				manifest.fragmentCompilerArtifacts.length !== manifest.runtimeArtifacts.length ||
+				!manifest.fragmentCompilerArtifacts.every(
+					(artifact) =>
+						validArtifactIdentity(artifact) &&
+						compilerArtifactUnchanged(artifact, artifactRoot),
+				))) ||
 		!dependenciesUnchanged(manifest.dependencies, session)
 	) {
 		return undefined;
@@ -443,6 +456,17 @@ function loadCached(
 				path: frontendWirePath(artifact.digest, artifactRoot),
 				size: artifact.size,
 			})),
+			...(manifest.fragmentCompilerArtifacts === undefined
+				? {}
+				: {
+						fragmentCompilerArtifacts: manifest.fragmentCompilerArtifacts.map(
+							(artifact) => ({
+								digest: artifact.digest,
+								path: frontendCompilerArtifactPath(artifact.digest, artifactRoot),
+								size: artifact.size,
+							}),
+						),
+					}),
 			imageStats: manifest.imageStats,
 			dependencies: manifest.dependencies,
 			diagnostics: manifest.diagnostics,
@@ -706,6 +730,9 @@ function prepareBuildFrontend(
 					moduleParses: moduleParseStats(),
 					fileDigests: fileDigestStats(),
 					runtimeArtifacts: cached.runtimeArtifacts,
+					...(cached.fragmentCompilerArtifacts === undefined
+						? {}
+						: { fragmentCompilerArtifacts: cached.fragmentCompilerArtifacts }),
 					imageStats: cached.imageStats,
 					diagnostics: cached.diagnostics,
 				},
@@ -779,6 +806,9 @@ function prepareBuildFrontend(
 	let compilerWire: Uint8Array | undefined;
 	let runtimeArtifactIdentities: Array<BuildFrontendArtifactIdentity> | undefined;
 	let compilerArtifactIdentity: BuildFrontendArtifactIdentity | undefined;
+	let fragmentCompilerArtifactIdentities:
+		| Array<BuildFrontendArtifactIdentity>
+		| undefined;
 	let loadFragmentWires: (() => Array<Uint8Array>) | undefined;
 	let fragmentArtifacts: { hits: number; misses: number } | undefined;
 	let fragmentFallback: string | undefined;
@@ -850,6 +880,16 @@ function prepareBuildFrontend(
 					ino,
 					dev,
 				};
+				fragmentCompilerArtifactIdentities = fragments.fragmentCompilerArtifacts.map(
+					({ digest: artifactDigest, size, mtimeMs, ctimeMs, ino, dev }) => ({
+						digest: artifactDigest,
+						size,
+						mtimeMs,
+						ctimeMs,
+						ino,
+						dev,
+					}),
+				);
 				loadFragmentWires = () => fragments.wires;
 				fragmentArtifacts = {
 					hits: fragments.artifactHits,
@@ -959,6 +999,10 @@ function prepareBuildFrontend(
 				const { digest: artifactDigest, size, mtimeMs, ctimeMs, ino, dev } = artifact;
 				return { digest: artifactDigest, size, mtimeMs, ctimeMs, ino, dev };
 			})();
+		// A whole-program fallback compiles one image, which its compiler artifact describes.
+		const fragmentCompilerArtifacts =
+			fragmentCompilerArtifactIdentities ??
+			(runtimeArtifacts.length === 1 ? [compilerArtifact] : undefined);
 		const imageStats = programImageStats(programImage);
 		publish(
 			manifestPath(root, entrypoint, identity),
@@ -967,6 +1011,7 @@ function prepareBuildFrontend(
 				identity,
 				contentKey: key,
 				runtimeArtifacts,
+				...(fragmentCompilerArtifacts === undefined ? {} : { fragmentCompilerArtifacts }),
 				workerArtifacts,
 				compilerArtifact,
 				imageStats,
@@ -999,6 +1044,15 @@ function prepareBuildFrontend(
 				path: frontendWirePath(artifact.digest, artifactRoot),
 				size: artifact.size,
 			})),
+			...(fragmentCompilerArtifacts === undefined
+				? {}
+				: {
+						fragmentCompilerArtifacts: fragmentCompilerArtifacts.map((artifact) => ({
+							digest: artifact.digest,
+							path: frontendCompilerArtifactPath(artifact.digest, artifactRoot),
+							size: artifact.size,
+						})),
+					}),
 			imageStats,
 			diagnostics,
 			...(optimizationReport === undefined ? {} : { optimizationReport }),

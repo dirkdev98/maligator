@@ -54,17 +54,16 @@ rooting, and resource-safety defects can interrupt that order.
 
 - [ ] Make fragmented development builds the default. With
       `MALIGATOR_DEVELOPMENT_FRAGMENTS=1` a development `build` links the images
-      `run` loads, each with its own relocatable native overlay, and a runner that
-      splices them at startup. On an Express and Valibot app (216 dependencies) a
-      rebuild after an edit drops from 4.4 s to 0.8 s and adding a function no longer
-      recompiles dependency objects (4 of 31 units). The overlays come from decoded
-      wires with conservative native plans, so `bench/javascript.mjs` runs 1.5x
-      slower than the whole-program development binary (3.73 s against 2.47 s; the
-      interpreter takes 8.59 s). Before switching the default: persist each
-      fragment's optimized native plan next to its wire and emit from it, make
-      generators, async functions and direct entries relocatable (the overlay leaves
-      them interpreted), and support worker images and assets, which the mode
-      rejects today. Production builds stay whole-program.
+      `run` loads, each with its own relocatable native overlay emitted from the
+      fragment's compiler artifact, and a runner that splices them at startup. On an
+      Express and Valibot app (216 dependencies) a rebuild after an edit drops from
+      4.4 s to 0.7 s and adding a function no longer recompiles dependency objects.
+      `bench/javascript.mjs` runs 1.16x slower than the whole-program development
+      binary (2.62 s against 2.25 s), mostly because relocatable emission leaves
+      generators, async functions and direct entries interpreted. Before switching
+      the default: make those relocatable, support worker images and assets, which
+      the mode rejects today, and compare the native suite and the JavaScript
+      family in both modes. Production builds stay whole-program.
 
 - [ ] Run the live Postgres suites somewhere hosted. The native remainder is green on
       Linux and macOS, but `postgres-live`, `postgres-query-api-live`,
