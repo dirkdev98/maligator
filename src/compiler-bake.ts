@@ -1,4 +1,4 @@
-import { hash } from "node:crypto";
+import { createHash, hash } from "node:crypto";
 import {
 	mkdirSync,
 	mkdtempSync,
@@ -212,7 +212,7 @@ function compilerNativeSourceKey(
 		directories: [path.join(sourceDirectory, "compiler")],
 		include: (entry) => isCompilerSource(entry.name),
 		prefix: [
-			"compiler-native-overlay-v3\0",
+			"compiler-native-overlay-v4\0",
 			String(COMPILER_NATIVE_TRANSLATION_UNIT_CODE_UNITS),
 			"\0",
 			String(COMPILER_NATIVE_TRANSLATION_UNIT_TARGET_CODE_UNITS),
@@ -288,12 +288,15 @@ function sourceManifest(root: string, sourceKey: string): SourceManifest | undef
 	}
 }
 
-function nativeArtifactDigest(sources: ReadonlyArray<string>): string {
-	return hash(
-		"sha256",
-		sources.flatMap((source) => [String(source.length), "\0", source, "\0"]).join(""),
-		"hex",
-	);
+// Every eval-enabled build revalidates the overlay; hashing bytes avoids decoding ~100 MB.
+function nativeArtifactDigest(sources: ReadonlyArray<Uint8Array>): string {
+	const digest = createHash("sha256");
+	for (const source of sources)
+		digest
+			.update(`${String(source.byteLength)}\0`)
+			.update(source)
+			.update("\0");
+	return digest.digest("hex");
 }
 
 function validNativeSources(
@@ -303,9 +306,7 @@ function validNativeSources(
 ): boolean {
 	if (native.key !== key || native.files.length === 0) return false;
 	try {
-		const sources = native.files.map((name) =>
-			readFileSync(path.join(directory, name), "utf-8"),
-		);
+		const sources = native.files.map((name) => readFileSync(path.join(directory, name)));
 		return nativeArtifactDigest(sources) === native.digest;
 	} catch {
 		return false;
@@ -384,21 +385,18 @@ function ensureSourceArtifacts(
 				`cached compiler wire disagrees with native compiler program: ${wirePath}`,
 			);
 		}
-		const sources = emitRelocatableNativeOverlayTranslationUnits(
+		const units = emitRelocatableNativeOverlayTranslationUnits(
 			image,
 			outputDigest,
 			COMPILER_NATIVE_TRANSLATION_UNIT_CODE_UNITS,
 			COMPILER_NATIVE_TRANSLATION_UNIT_TARGET_CODE_UNITS,
 		);
-		const files = sources.map((unit) => `compiler-${unit.id}.c`);
-		for (const [index, unit] of sources.entries()) {
-			publishFile(directory, files[index]!, unit.source);
+		const files = units.map((unit) => `compiler-${unit.id}.c`);
+		const sources = units.map((unit) => Buffer.from(unit.source));
+		for (const [index, source] of sources.entries()) {
+			publishFile(directory, files[index]!, source);
 		}
-		native = {
-			key: nativeKey,
-			digest: nativeArtifactDigest(sources.map((unit) => unit.source)),
-			files,
-		};
+		native = { key: nativeKey, digest: nativeArtifactDigest(sources), files };
 	}
 	requireNonemptyWire(bytes);
 	const outputDigest = hash("sha256", bytes, "hex");
