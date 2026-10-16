@@ -18,14 +18,14 @@ import { maligatorCacheDirectory } from "../src/cache-root.ts";
 const usage = `usage: node scripts/ci-native-cache.ts import|export DIRECTORY
 
 Moves completed Rust library, compiler overlay, runtime C, generated C and Wasm
-actions, then ThinLTO cache entries, between the Maligator cache and a GitHub Actions
-cache directory. Actions and ThinLTO entries are content-addressed: a restored entry
-whose inputs no longer match is never read, so a stale snapshot only costs its
-download. import verifies every blob and ThinLTO entry before publishing it and keeps
-each one's last-use time; export keeps what was read within 14 days of the most
-recent use, within 2 GiB: first the actions this job read, then ThinLTO entries, then
-older actions, each in stage order and newest first. It reports a digest so
-unchanged snapshots are not saved again.`;
+actions, eval-compiler bakes, then ThinLTO cache entries, between the Maligator cache
+and a GitHub Actions cache directory. All of them are content-addressed: a restored
+entry whose inputs no longer match is never read, so a stale snapshot only costs its
+download. import verifies every blob, bake file and ThinLTO entry before publishing it
+and keeps each one's last-use time; export keeps what was read within 14 days of the
+most recent use, within 2 GiB: first the actions and bakes this job read, then ThinLTO
+entries, then older actions, each in stage order and newest first. It reports a digest
+so unchanged snapshots are not saved again.`;
 
 // Earlier stages are costlier to rebuild and are read first in a job, so a full
 // snapshot keeps them before the many cheap fixture objects that follow.
@@ -44,6 +44,23 @@ const STAGES = [
 // Linkers write these and never touch them on a hit, so recency is their write time.
 const THINLTO = "thinlto";
 const THINLTO_MANIFEST = "thinlto.json";
+// Bake directories are named by their compiler source key and validated on every read;
+// a hit touches `artifact.json`, so its time is the bake's last use.
+const BAKES = "compiler-wire";
+const BAKE_RECORD = "artifact.json";
+const BAKES_MANIFEST = "compiler-wire.json";
+
+interface BakeFile {
+	name: string;
+	digest: string;
+	size: number;
+}
+
+interface Bake {
+	directory: string;
+	mtimeMs: number;
+	files: Array<BakeFile>;
+}
 
 interface ThinLtoEntry {
 	file: string;
@@ -115,6 +132,7 @@ function readEntries(root: string): Array<Entry> {
 function snapshotDigest(
 	entries: ReadonlyArray<Entry>,
 	thinLto: ReadonlyArray<ThinLtoEntry> = [],
+	bakes: ReadonlyArray<Bake> = [],
 ): string {
 	return hash(
 		"sha256",
@@ -125,9 +143,63 @@ function snapshotDigest(
 			...thinLto
 				.map((entry) => [entry.file, entry.digest])
 				.sort((left, right) => (left[0]! < right[0]! ? -1 : 1)),
+			...bakes
+				.map((bake) => [bake.directory, ...bake.files.map((file) => file.digest)])
+				.sort((left, right) => (left[0]! < right[0]! ? -1 : 1)),
 		]),
 		"hex",
 	);
+}
+
+/** Complete bake directories, newest use first, without file digests. */
+function readBakes(root: string): Array<Omit<Bake, "files"> & { files: Array<string> }> {
+	let directories: Array<string>;
+	try {
+		directories = readdirSync(path.join(root, BAKES));
+	} catch {
+		return [];
+	}
+	return directories
+		.filter((directory) => /^[0-9a-f]{64}$/.test(directory))
+		.flatMap((directory) => {
+			try {
+				const files = readdirSync(path.join(root, BAKES, directory)).filter(
+					(name) => !name.startsWith("."),
+				);
+				const record = statSync(path.join(root, BAKES, directory, BAKE_RECORD));
+				return files.includes(BAKE_RECORD)
+					? [{ directory, mtimeMs: record.mtimeMs, files }]
+					: [];
+			} catch {
+				return [];
+			}
+		})
+		.sort((left, right) => right.mtimeMs - left.mtimeMs);
+}
+
+function readBakesManifest(directory: string): Array<Bake> {
+	try {
+		const bakes = JSON.parse(
+			readFileSync(path.join(directory, BAKES_MANIFEST), "utf8"),
+		) as Array<Bake>;
+		return bakes.filter(
+			(bake) =>
+				/^[0-9a-f]{64}$/.test(bake.directory) &&
+				Number.isFinite(bake.mtimeMs) &&
+				Array.isArray(bake.files) &&
+				bake.files.some((file) => file.name === BAKE_RECORD) &&
+				bake.files.every(
+					(file) =>
+						typeof file.name === "string" &&
+						/^[\w.-]+$/.test(file.name) &&
+						!file.name.startsWith(".") &&
+						/^[0-9a-f]{64}$/.test(file.digest) &&
+						Number.isSafeInteger(file.size),
+				),
+		);
+	} catch {
+		return [];
+	}
 }
 
 /** ThinLTO cache files as `<cache key directory>/<entry>`, newest first. */
@@ -241,16 +313,40 @@ export function importSnapshot(directory: string, root: string): void {
 		utimesSync(destination, lastUse, lastUse);
 		thinLto.push(entry);
 	}
-	const bytes = [...imported, ...thinLto.map((entry) => ({ bytes: entry.size }))].reduce(
-		(total, entry) => total + entry.bytes,
-		0,
-	);
+	const bakes: Array<Bake> = [];
+	for (const bake of readBakesManifest(directory)) {
+		const source = path.join(directory, BAKES, bake.directory);
+		if (
+			!bake.files.every((file) =>
+				validBlob(path.join(source, file.name), file.digest, file.size),
+			)
+		) {
+			console.warn(`[ci-native-cache] skipped corrupt compiler bake ${bake.directory}`);
+			continue;
+		}
+		const destination = path.join(root, BAKES, bake.directory);
+		// The record goes last, so a partly copied bake is never read as complete.
+		const ordered = [
+			...bake.files.filter((file) => file.name !== BAKE_RECORD),
+			...bake.files.filter((file) => file.name === BAKE_RECORD),
+		];
+		for (const file of ordered)
+			copyAtomically(path.join(source, file.name), path.join(destination, file.name));
+		const lastUse = new Date(bake.mtimeMs);
+		utimesSync(path.join(destination, BAKE_RECORD), lastUse, lastUse);
+		bakes.push(bake);
+	}
+	const bytes = [
+		...imported,
+		...thinLto.map((entry) => ({ bytes: entry.size })),
+		...bakes.flatMap((bake) => bake.files.map((file) => ({ bytes: file.size }))),
+	].reduce((total, entry) => total + entry.bytes, 0);
 	console.log(
-		`[ci-native-cache] imported ${imported.length} actions and ${thinLto.length} ThinLTO entries (${(bytes / 1024 ** 2).toFixed(1)} MiB) into ${root}`,
+		`[ci-native-cache] imported ${imported.length} actions, ${bakes.length} compiler bakes and ${thinLto.length} ThinLTO entries (${(bytes / 1024 ** 2).toFixed(1)} MiB) into ${root}`,
 	);
 	appendGitHubFile(
 		process.env.GITHUB_ENV,
-		`MALIGATOR_NATIVE_CACHE_RESTORED=${imported.length + thinLto.length === 0 ? "" : snapshotDigest(imported, thinLto)}`,
+		`MALIGATOR_NATIVE_CACHE_RESTORED=${imported.length + thinLto.length + bakes.length === 0 ? "" : snapshotDigest(imported, thinLto, bakes)}`,
 	);
 	// Restored manifests keep older times, so anything newer was read or built by this job.
 	appendGitHubFile(
@@ -260,9 +356,9 @@ export function importSnapshot(directory: string, root: string): void {
 }
 
 /**
- * Snapshot what this job used first: actions it read since `usedSinceMs`, then ThinLTO
- * entries, then older actions, so a line at the cap drops what the job did not need.
- * Without a start time every action counts as used.
+ * Snapshot what this job used first: actions and bakes it read since `usedSinceMs`,
+ * then ThinLTO entries, then older actions, so a line at the cap drops what the job did
+ * not need. Without a start time every action and bake counts as used.
  */
 export function exportSnapshot(
 	directory: string,
@@ -305,6 +401,29 @@ export function exportSnapshot(
 		}
 	};
 	exportActions(entries.filter(used));
+	const bakes: Array<Bake> = [];
+	for (const bake of readBakes(root)) {
+		if (usedSinceMs !== undefined && bake.mtimeMs < usedSinceMs) continue;
+		const source = path.join(root, BAKES, bake.directory);
+		const sizes = bake.files.map((name) => statSync(path.join(source, name)).size);
+		const size = sizes.reduce((total, fileSize) => total + fileSize, 0);
+		if (bytes + size > maxBytes) continue;
+		const destination = path.join(directory, BAKES, bake.directory);
+		const files = bake.files.map((name, index) => {
+			copyAtomically(path.join(source, name), path.join(destination, name));
+			return {
+				name,
+				digest: hash("sha256", readFileSync(path.join(destination, name)), "hex"),
+				size: sizes[index]!,
+			};
+		});
+		bakes.push({ directory: bake.directory, mtimeMs: bake.mtimeMs, files });
+		bytes += size;
+	}
+	if (bakes.length > 0) {
+		mkdirSync(directory, { recursive: true });
+		writeFileSync(path.join(directory, BAKES_MANIFEST), JSON.stringify(bakes));
+	}
 	const thinLtoFiles = readThinLtoFiles(root);
 	const thinLtoCutoff = (thinLtoFiles[0]?.mtimeMs ?? 0) - RETENTION_MS;
 	const thinLto: Array<ThinLtoEntry> = [];
@@ -324,9 +443,11 @@ export function exportSnapshot(
 	}
 	exportActions(entries.filter((entry) => !used(entry)));
 	const digest =
-		exported.length + thinLto.length === 0 ? "" : snapshotDigest(exported, thinLto);
+		exported.length + thinLto.length + bakes.length === 0
+			? ""
+			: snapshotDigest(exported, thinLto, bakes);
 	console.log(
-		`[ci-native-cache] exported ${exported.length} actions and ${thinLto.length} ThinLTO entries (${(bytes / 1024 ** 2).toFixed(1)} MiB) to ${directory}${digest === "" ? "" : ` · ${digest}`}`,
+		`[ci-native-cache] exported ${exported.length} actions, ${bakes.length} compiler bakes and ${thinLto.length} ThinLTO entries (${(bytes / 1024 ** 2).toFixed(1)} MiB) to ${directory}${digest === "" ? "" : ` · ${digest}`}`,
 	);
 	appendGitHubFile(process.env.GITHUB_OUTPUT, `digest=${digest}`);
 }

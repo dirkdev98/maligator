@@ -5,6 +5,8 @@ import {
 	readFileSync,
 	readdirSync,
 	rmSync,
+	statSync,
+	utimesSync,
 	writeFileSync,
 } from "node:fs";
 import * as os from "node:os";
@@ -207,6 +209,24 @@ describe("compiler wire provisioning", () => {
 		writeFileSync(unrelated, "export const unrelated = 3;\n");
 		expect(ensureCompilerWire(sourceInput())).not.toBe(helperChanged);
 		expect(bakeCount).toBe(3);
+	});
+
+	it("records each source bake hit as the bake's last use", () => {
+		const fixture = compilerFixture();
+		const input = {
+			kind: "source" as const,
+			sourceDirectory: fixture.sourceDirectory,
+			entrypoint: fixture.entrypoint,
+			cacheRoot: path.join(fixture.root, "wire-cache"),
+			bake: () => new Uint8Array([0x4d, 1]),
+		};
+		const record = path.join(path.dirname(ensureCompilerWire(input)), "artifact.json");
+		const earlier = new Date(Date.now() - 86_400_000);
+		utimesSync(record, earlier, earlier);
+
+		ensureCompilerWire(input);
+
+		expect(statSync(record).mtimeMs).toBeGreaterThan(earlier.getTime());
 	});
 
 	it("does not key source bakes to modules reached only through type imports", () => {

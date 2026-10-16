@@ -6,6 +6,7 @@ import {
 	renameSync,
 	rmSync,
 	statSync,
+	utimesSync,
 	writeFileSync,
 } from "node:fs";
 import * as path from "node:path";
@@ -318,6 +319,13 @@ function ensureSourceArtifacts(
 				current.native !== undefined &&
 				validNativeSources(directory, current.native, nativeKey)))
 	) {
+		// CI native cache lines carry the bakes a job used, as recorded by this time.
+		try {
+			const now = new Date();
+			utimesSync(path.join(directory, SOURCE_MANIFEST), now, now);
+		} catch {
+			// A read-only cache still serves the bake.
+		}
 		return {
 			wirePath,
 			wireDigest: current.outputDigest,

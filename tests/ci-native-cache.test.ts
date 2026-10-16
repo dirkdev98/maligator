@@ -3,6 +3,7 @@ import {
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
+	readFileSync,
 	rmSync,
 	statSync,
 	utimesSync,
@@ -141,6 +142,42 @@ describe("CI native cache snapshots", () => {
 		importSnapshot(snapshot, restored);
 		expect(existsSync(path.join(restored, newest))).toBe(false);
 		expect(statSync(path.join(restored, intact)).mtimeMs).toBe(now - 2_000);
+	});
+
+	it("carries the compiler bakes this job used and restores only intact ones", () => {
+		const root = path.join(directory, "cache");
+		const now = Date.now();
+		const bake = (key: string, lastUsedMs: number) => {
+			const bakeDirectory = path.join(root, "compiler-wire", key.repeat(64));
+			mkdirSync(bakeDirectory, { recursive: true });
+			writeFileSync(path.join(bakeDirectory, "compiler.malw"), `wire ${key}`);
+			writeFileSync(path.join(bakeDirectory, "compiler-native-overlay-table.c"), key);
+			writeFileSync(path.join(bakeDirectory, "artifact.json"), `{"key":"${key}"}`);
+			const lastUse = new Date(lastUsedMs);
+			utimesSync(path.join(bakeDirectory, "artifact.json"), lastUse, lastUse);
+			return path.join("compiler-wire", key.repeat(64));
+		};
+		const used = bake("a", now - 1_000);
+		const tampered = bake("b", now - 2_000);
+		const unused = bake("c", now - DAY_MS);
+		mkdirSync(path.join(root, "compiler-wire", ".source-cones"), { recursive: true });
+
+		const snapshot = path.join(directory, "snapshot");
+		exportSnapshot(snapshot, root, undefined, now - 10_000);
+		expect(existsSync(path.join(snapshot, unused))).toBe(false);
+		expect(existsSync(path.join(snapshot, "compiler-wire", ".source-cones"))).toBe(false);
+		writeFileSync(path.join(snapshot, tampered, "compiler.malw"), "tampered");
+		vi.spyOn(console, "warn").mockImplementation(() => {});
+
+		const restored = path.join(directory, "restored");
+		importSnapshot(snapshot, restored);
+		expect(readFileSync(path.join(restored, used, "compiler.malw"), "utf8")).toBe(
+			"wire a",
+		);
+		expect(statSync(path.join(restored, used, "artifact.json")).mtimeMs).toBe(
+			now - 1_000,
+		);
+		expect(existsSync(path.join(restored, tampered))).toBe(false);
 	});
 
 	it("restores verified actions with their last-use time and skips corrupt blobs", () => {
