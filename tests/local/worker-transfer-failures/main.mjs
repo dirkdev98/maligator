@@ -195,8 +195,11 @@ async function asyncErrors() {
 		const expected = mode.startsWith("handled-")
 			? ["recovered", "exit:0"]
 			: ["before", `error:${mode}-failure`, "exit:1"];
+		// Node delivers port messages and the error event on separate channels, so a
+		// loaded host can report the failure first; only exit follows everything else.
+		const unordered = (list) => JSON.stringify([...list.slice(0, -1)].sort());
 		check(
-			JSON.stringify(events) === JSON.stringify(expected),
+			events.at(-1) === expected.at(-1) && unordered(events) === unordered(expected),
 			`${mode}: ${JSON.stringify(events)}`,
 		);
 	}
