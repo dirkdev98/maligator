@@ -39,6 +39,7 @@ const STAGES = [
 	"generated-unit-slice",
 	"generated-object",
 	"wasm-link",
+	"test262-input-index",
 ];
 // Linkers write these and never touch them on a hit, so recency is their write time.
 const THINLTO = "thinlto";

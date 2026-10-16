@@ -282,8 +282,8 @@ the platform compiler before running `env:check`.
 
 CI caches npm downloads, the pinned Test262 corpus, and the content-addressed native
 actions a job built: Rust runtime libraries, eval-compiler overlay objects, runtime C
-objects, generated C objects, and the Wasm runtime's Rust library, objects, archive
-and link. The ThinLTO cache rides along after them, newest entries first, because a
+objects, generated C objects, the Wasm runtime's Rust library, objects, archive
+and link, and the Test262 input index. The ThinLTO cache rides along after them, newest entries first, because a
 production link otherwise recompiles every module. The Rust sources rarely change
 while every native job otherwise rebuilds each Cargo feature set with fat LTO. The
 overlay is quite large (about 370 translation units), but each unit only holds its own
