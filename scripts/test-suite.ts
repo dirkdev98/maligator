@@ -755,16 +755,22 @@ function testFiles(command: Command): Array<string> {
 /** Split the selected stages' test files, keeping each file-less stage whole. */
 function shardCommands(commands: Array<Command>, request: ShardRequest): Array<Command> {
 	const durations = readShardDurations(root);
-	const known = [...durations.values()].sort((left, right) => left - right);
+	const known = [...durations.files.values()].sort((left, right) => left - right);
 	const fallbackSeconds = known[Math.floor(known.length / 2)] ?? 0;
 	const items: Array<ShardItem> = commands.flatMap((command, stage) => {
 		const files = testFiles(command);
 		if (files.length === 0) {
-			return [{ id: `${stage}`, seconds: fallbackSeconds, preparations: [] }];
+			return [
+				{
+					id: `${stage}`,
+					seconds: durations.stages.get(command.name) ?? fallbackSeconds,
+					preparations: [],
+				},
+			];
 		}
 		return files.map((file) => ({
 			id: `${stage}:${file}`,
-			seconds: durations.get(file) ?? fallbackSeconds,
+			seconds: durations.files.get(file) ?? fallbackSeconds,
 			preparations: file.startsWith("tests/native/")
 				? nativePreparations(root, file)
 				: [],

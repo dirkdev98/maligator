@@ -88,20 +88,48 @@ export function partitionShards(
 	return shards.map((shard) => shard.items);
 }
 
-/** Recorded wall seconds per native test file, used only to balance shards. */
-export function readShardDurations(root: string): Map<string, number> {
-	const document = JSON.parse(
-		readFileSync(path.join(root, "tests/test-suite-durations.json"), "utf8"),
-	) as { schema?: unknown; seconds?: Record<string, unknown> };
-	if (document.schema !== 1 || document.seconds === undefined) {
-		throw new Error("tests/test-suite-durations.json must use schema 1");
+export interface ShardDurations {
+	/** Recorded wall seconds per test file. */
+	files: Map<string, number>;
+	/** Recorded wall seconds per stage without test files, such as the leak audit. */
+	stages: Map<string, number>;
+}
+
+function durationMap(label: string, value: unknown): Map<string, number> {
+	if (value === undefined) return new Map();
+	if (value === null || typeof value !== "object") {
+		throw new Error(`tests/test-suite-durations.json has invalid ${label}`);
 	}
 	return new Map(
-		Object.entries(document.seconds).map(([file, seconds]) => {
+		Object.entries(value).map(([name, seconds]) => {
 			if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds < 0) {
-				throw new Error(`invalid recorded duration for ${file}`);
+				throw new Error(`invalid recorded duration for ${name}`);
 			}
-			return [file, seconds];
+			return [name, seconds];
 		}),
 	);
+}
+
+/**
+ * Recorded durations for one host platform, used only to balance shards. Hosts
+ * differ in relative cost, so a platform without its own table borrows Linux's.
+ */
+export function readShardDurations(
+	root: string,
+	platform: NodeJS.Platform = process.platform,
+): ShardDurations {
+	const document = JSON.parse(
+		readFileSync(path.join(root, "tests/test-suite-durations.json"), "utf8"),
+	) as {
+		schema?: unknown;
+		platforms?: Record<string, { files?: unknown; stages?: unknown }>;
+	};
+	if (document.schema !== 2 || document.platforms === undefined) {
+		throw new Error("tests/test-suite-durations.json must use schema 2");
+	}
+	const table = document.platforms[platform] ?? document.platforms.linux ?? {};
+	return {
+		files: durationMap(`${platform} files`, table.files),
+		stages: durationMap(`${platform} stages`, table.stages),
+	};
 }

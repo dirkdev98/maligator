@@ -1,5 +1,12 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseShard, partitionShards } from "../scripts/test-suite-shards.ts";
+import {
+	parseShard,
+	partitionShards,
+	readShardDurations,
+} from "../scripts/test-suite-shards.ts";
 import type { ShardItem } from "../scripts/test-suite-shards.ts";
 
 function item(id: string, seconds: number, preparations: Array<string> = []): ShardItem {
@@ -81,5 +88,53 @@ describe("test suite shards", () => {
 
 	it("parses a shard request", () => {
 		expect(parseShard("2/5")).toEqual({ index: 2, count: 5 });
+	});
+
+	function withTable<T>(document: unknown, read: (root: string) => T): T {
+		const root = mkdtempSync(path.join(os.tmpdir(), "maligator-shard-durations-"));
+		try {
+			mkdirSync(path.join(root, "tests"));
+			writeFileSync(
+				path.join(root, "tests/test-suite-durations.json"),
+				JSON.stringify(document),
+			);
+			return read(root);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	}
+
+	it("reads the host platform's files and file-less stage weights", () => {
+		const durations = withTable(
+			{
+				schema: 2,
+				platforms: {
+					darwin: { files: { "a.test.ts": 3 }, stages: { "full: leak audit": 500 } },
+					linux: { files: { "a.test.ts": 1 }, stages: {} },
+				},
+			},
+			(root) => readShardDurations(root, "darwin"),
+		);
+		expect(durations.files.get("a.test.ts")).toBe(3);
+		expect(durations.stages.get("full: leak audit")).toBe(500);
+	});
+
+	it("balances an unrecorded platform with the Linux weights", () => {
+		const durations = withTable(
+			{ schema: 2, platforms: { linux: { files: { "a.test.ts": 1 } } } },
+			(root) => readShardDurations(root, "win32"),
+		);
+		expect(durations.files.get("a.test.ts")).toBe(1);
+		expect(durations.stages.size).toBe(0);
+	});
+
+	it.each([
+		{ schema: 1, seconds: {} },
+		{ schema: 2, platforms: { linux: { files: { "a.test.ts": -1 } } } },
+		{ schema: 2, platforms: { linux: { files: "a.test.ts" } } },
+	])("rejects an invalid duration table %j", (document) => {
+		expect(() =>
+			withTable(document, (root) => readShardDurations(root, "linux")),
+		).toThrow();
 	});
 });
