@@ -2229,8 +2229,33 @@ export function emitBatch(
 	images: Array<ProgramImage>,
 	options: Pick<EmitOptions, "compiled"> = {},
 ): string {
+	return emitBatchUnits(images, options, 0).body;
+}
+
+/**
+ * Emit a batch whose first image starts with `sharedFunctionCount` functions that
+ * every batch of a run carries identically. Their compiled bodies move to `shared`,
+ * whose text depends only on those functions, so one object can serve every batch
+ * that emits the same text. Both units use external linkage for compiled symbols.
+ */
+export function emitBatchWithSharedPrefix(
+	images: Array<ProgramImage>,
+	options: Pick<EmitOptions, "compiled">,
+	sharedFunctionCount: number,
+): { body: string; shared: string } {
+	if (!Number.isSafeInteger(sharedFunctionCount) || sharedFunctionCount < 1)
+		throw new RangeError("a shared batch prefix needs at least one function");
+	return emitBatchUnits(images, options, sharedFunctionCount);
+}
+
+function emitBatchUnits(
+	images: Array<ProgramImage>,
+	options: Pick<EmitOptions, "compiled">,
+	sharedFunctionCount: number,
+): { body: string; shared: string } {
 	const useCompiled = options.compiled !== false;
 	const lines: Array<string> = [];
+	const sharedLines: Array<string> = [];
 
 	// content -> shared symbol, for each kind of array. `body` is the element
 	// list (no surrounding braces); intern wraps it in the array initializer.
@@ -2275,8 +2300,10 @@ export function emitBatch(
 			lines.push("};", "");
 		}
 
+		const sharedPrefix = d === 0 ? sharedFunctionCount : 0;
+		const storage = sharedPrefix > 0 ? "" : "static ";
 		if (runtime.bigintConstants.length > 0) {
-			lines.push(`static MalBigInt mal_bigints${suffix}[] = {`);
+			lines.push(`${storage}MalBigInt mal_bigints${suffix}[] = {`);
 			for (const value of runtime.bigintConstants) {
 				lines.push(
 					`    { .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_BIGINT), .value = ${emitBigintValue(value)} },`,
@@ -2292,35 +2319,51 @@ export function emitBatch(
 			useCompiled,
 			suffix,
 			debug: false,
-			linkage: "static",
+			linkage: sharedPrefix > 0 ? "external" : "static",
 		});
 		const { compiled } = nativeEmission;
-		for (const functionIndex of nativeEmission.availability.directCompiledTargets) {
-			const fn = compiled[functionIndex];
-			if (fn !== undefined && fn !== null && fn.source.length > 0) {
-				lines.push(`static MalValue ${fn.symbol}${COMPILED_FUNCTION_DECLARATION};`);
-			}
+		const declarations = (fn: CompiledFunction, canonical: boolean): Array<string> => [
+			...(canonical && fn.source.length > 0
+				? [`${storage}MalValue ${fn.symbol}${COMPILED_FUNCTION_DECLARATION};`]
+				: []),
+			...fn.directEntries.flatMap((entry) => [
+				`${storage}${directEntryDeclaration(entry)};`,
+				...(entry.callbackSymbol === undefined
+					? []
+					: [
+							`${storage}MalValue ${entry.callbackSymbol}${COMPILED_FUNCTION_DECLARATION};`,
+						]),
+				...(entry.reductionSymbol === undefined
+					? []
+					: [`${storage}${numericReductionDeclaration(entry.reductionSymbol)};`]),
+				...(entry.sortSymbol === undefined
+					? []
+					: [`${storage}${numericSortKernelDeclaration(entry.sortSymbol)};`]),
+			]),
+		];
+		const directTargets = nativeEmission.availability.directCompiledTargets;
+		const declared = compiled.flatMap((fn, index) =>
+			fn === null
+				? []
+				: declarations(fn, directTargets.has(index) || index < sharedPrefix),
+		);
+		lines.push(...declared);
+		if (declared.length > 0) lines.push("");
+		if (sharedPrefix > 0) {
+			const shared = compiled.slice(0, sharedPrefix);
+			const sharedDeclarations = shared.flatMap((fn, index) =>
+				fn === null ? [] : declarations(fn, directTargets.has(index)),
+			);
+			const sharedBodies = shared.flatMap((fn) =>
+				fn === null
+					? []
+					: [fn.source, ...fn.directEntries.flatMap((entry) => ["", entry.source]), ""],
+			);
+			if (sharedBodies.some((source) => source.includes(`mal_bigints${suffix}[`)))
+				sharedLines.push(`extern MalBigInt mal_bigints${suffix}[];`);
+			sharedLines.push(...sharedDeclarations, "", ...sharedBodies);
 		}
-		for (const fn of compiled) {
-			for (const entry of fn?.directEntries ?? []) {
-				lines.push(`static ${directEntryDeclaration(entry)};`);
-				if (entry.callbackSymbol !== undefined)
-					lines.push(
-						`static MalValue ${entry.callbackSymbol}${COMPILED_FUNCTION_DECLARATION};`,
-					);
-				if (entry.reductionSymbol !== undefined)
-					lines.push(`static ${numericReductionDeclaration(entry.reductionSymbol)};`);
-				if (entry.sortSymbol !== undefined)
-					lines.push(`static ${numericSortKernelDeclaration(entry.sortSymbol)};`);
-			}
-		}
-		if (
-			nativeEmission.availability.directCompiledTargets.size > 0 ||
-			compiled.some((fn) => (fn?.directEntries.length ?? 0) > 0)
-		) {
-			lines.push("");
-		}
-		for (const fn of compiled) {
+		for (const fn of compiled.slice(sharedPrefix)) {
 			if (fn !== null) {
 				lines.push(
 					fn.source,
@@ -2478,7 +2521,7 @@ export function emitBatch(
 		lines.push("");
 	}
 
-	return lines.join("\n");
+	return { body: lines.join("\n"), shared: sharedLines.join("\n") };
 }
 
 function emitInstruction(instruction: BytecodeInstruction, dataOffset?: number) {

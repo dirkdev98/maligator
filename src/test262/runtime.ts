@@ -1,14 +1,18 @@
 import { execFile, execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
+	existsSync,
 	mkdirSync,
 	readFileSync,
 	readdirSync,
+	renameSync,
 	rmSync,
 	statSync,
 	writeFileSync,
 } from "node:fs";
 import * as path from "node:path";
 import { promisify } from "node:util";
+import { threadId } from "node:worker_threads";
 import { buildDerivationFromConfig, resolveBuildConfig } from "../build-config.ts";
 import {
 	buildSuffix,
@@ -25,6 +29,7 @@ import {
 } from "../compiler/pipeline/compile-program.ts";
 import {
 	emitBatch,
+	emitBatchWithSharedPrefix,
 	NATIVE_C_HEADER_LINES,
 } from "../compiler/target/emit-program-image.ts";
 import { serializeRuntimeImage } from "../compiler/target/program-image-codec.ts";
@@ -195,7 +200,57 @@ function interpreterOnly(): boolean {
 function emitMode(): string {
 	return interpreterOnly()
 		? "merged-helper-plans-nocompiled-v1"
-		: "merged-helper-plans-v1";
+		: "merged-helper-plans-v2-shared-harness";
+}
+
+/**
+ * Harness files most tests include. Every compiled batch carries them first, in this
+ * order and whether or not its tests run them, so their compiled C is the same in
+ * every batch and one object serves the run. A batch only runs its tests' helpers.
+ */
+const SHARED_HARNESS = [
+	"assert.js",
+	"sta.js",
+	"propertyHelper.js",
+	"compareArray.js",
+	"doneprintHandle.js",
+];
+
+/** Compile one shared harness unit once per content, racing workers included. */
+async function ensureSharedHarnessObject(
+	source: string,
+	useCache: boolean,
+): Promise<{ key: string; path: string }> {
+	const key = createHash("sha256")
+		.update(
+			buildFingerprint(
+				[...CC_COMPILE_FLAGS, ...CC_LINK_FLAGS],
+				test262Toolchain().fingerprint,
+			),
+		)
+		.update(`\0${emitMode()}\0shared-harness\0`)
+		.update(source)
+		.digest("hex");
+	const objectPath = useCache
+		? objectCachePath(key)
+		: path.join(WORK_PATH, `shared-${key}.o`);
+	if (useCache) USED_CACHE_KEYS.add(key);
+	if (existsSync(objectPath)) return { key, path: objectPath };
+	const scratch = path.join(WORK_PATH, `shared-${key}-${process.pid}-${threadId}`);
+	writeFileSync(`${scratch}.c`, source);
+	try {
+		if (useCache) ensureCacheDir();
+		await execFileAsync(
+			test262Toolchain().tools.cc.path,
+			[...CC_COMPILE_FLAGS, "-c", `${scratch}.c`, "-o", `${scratch}.o`],
+			{ timeout: TEST262_METADATA.compileTimeoutMs },
+		);
+		renameSync(`${scratch}.o`, objectPath);
+	} finally {
+		rmSync(`${scratch}.c`, { force: true });
+		rmSync(`${scratch}.o`, { force: true });
+	}
+	return { key, path: objectPath };
 }
 
 /** Keys touched this run, so stale cache entries can be pruned at the end. */
@@ -836,7 +891,11 @@ async function test262RunWireBatch(files: Array<Test262File>, workerId: number) 
 }
 
 /** Link a compiled batch object against the parent-selected artifacts. Cheap (~3% of cc). */
-async function linkBatch(objectPath: string, binPath: string): Promise<number> {
+async function linkBatch(
+	objectPath: string,
+	binPath: string,
+	sharedObjectPath: string | undefined,
+): Promise<number> {
 	const startedAt = performance.now();
 	const artifacts = test262NativeArtifacts();
 	await execFileAsync(
@@ -844,6 +903,7 @@ async function linkBatch(objectPath: string, binPath: string): Promise<number> {
 		[
 			...CC_LINK_FLAGS,
 			objectPath,
+			...(sharedObjectPath === undefined ? [] : [sharedObjectPath]),
 			`${WORK_PATH}/test262_batch.o`,
 			artifacts.c.engine,
 			...artifacts.rust.linkArgs,
@@ -1020,10 +1080,18 @@ export async function test262RunBatch(
 		USED_CACHE_KEYS.add(cacheKey);
 
 		const cached = loadArtifact(cacheKey);
-		if (cached) {
+		const sharedKey = cached?.manifest.sharedObjectKey;
+		const sharedObjectPath =
+			sharedKey === undefined ? undefined : objectCachePath(sharedKey);
+		if (cached && (sharedObjectPath === undefined || existsSync(sharedObjectPath))) {
+			if (sharedKey !== undefined) USED_CACHE_KEYS.add(sharedKey);
 			const entries = applyManifest(files, cached.manifest, includeStats);
 			if (cached.objectPath !== undefined && entries.length > 0) {
-				timings.linkMs = await linkBatch(cached.objectPath, `${baseName}.bin`);
+				timings.linkMs = await linkBatch(
+					cached.objectPath,
+					`${baseName}.bin`,
+					sharedObjectPath,
+				);
 				const runStartedAt = performance.now();
 				await runBatchBinary(`${baseName}.bin`, entries, workerId, retryUnreported);
 				timings.runMs = performance.now() - runStartedAt;
@@ -1050,6 +1118,17 @@ export async function test262RunBatch(
 	for (const plan of plans) {
 		for (const helper of plan.helpers) helpers.set(helper.id, helper);
 	}
+	const sharedHarness = interpreterOnly()
+		? []
+		: SHARED_HARNESS.filter((name) =>
+				existsSync(path.join(TEST262_METADATA.path, "harness", name)),
+			).map((name) => ({
+				id: name,
+				path: `harness/${name}`,
+				source: loadHarnessFile(`harness/${name}`),
+			}));
+	for (const helper of sharedHarness)
+		if (!helpers.has(helper.id)) helpers.set(helper.id, helper);
 	const helperOutcomes = new Map(
 		[...helpers].map(([id, helper]) => [id, compileHelper(helper)]),
 	);
@@ -1097,15 +1176,27 @@ export async function test262RunBatch(
 
 	const physicalImages: Array<ProgramImage> = [];
 	const usedHelperIds = new Set(entries.flatMap((entry) => entry.helperIds));
-	const usedHelpers = [...helpers.values()].filter((helper) =>
-		usedHelperIds.has(helper.id),
-	);
+	const sharedPrefix =
+		sharedHarness.length > 0 &&
+		sharedHarness.every((helper) => helperOutcomes.get(helper.id)?.image !== undefined)
+			? sharedHarness
+			: [];
+	const sharedIds = new Set(sharedPrefix.map((helper) => helper.id));
+	const usedHelpers = [
+		...sharedPrefix,
+		...[...helpers.values()].filter(
+			(helper) => usedHelperIds.has(helper.id) && !sharedIds.has(helper.id),
+		),
+	];
+	let sharedFunctionCount = 0;
 	if (entries.length > 0) {
 		const merged = mergeProgramImages([
 			...usedHelpers.map((helper) => helperOutcomes.get(helper.id)!.image!),
 			...entries.map((entry) => entry.image),
 		]);
 		physicalImages.push(merged.image);
+		if (sharedPrefix.length > 0)
+			sharedFunctionCount = merged.functionBases[sharedPrefix.length]!;
 		const helperBases = new Map(
 			usedHelpers.map(
 				(helper, index) => [helper.id, merged.functionBases[index]!] as const,
@@ -1151,7 +1242,11 @@ export async function test262RunBatch(
 	// Emit the batch's C as one shared translation unit (deduping the harness),
 	// headers prepended once.
 	const compiled = !interpreterOnly();
-	const body = emitBatch(physicalImages, { compiled });
+	const emitted =
+		sharedFunctionCount > 0
+			? emitBatchWithSharedPrefix(physicalImages, { compiled }, sharedFunctionCount)
+			: { body: emitBatch(physicalImages, { compiled }), shared: "" };
+	const body = emitted.body;
 	const helperIndices = entries.flatMap((entry) => entry.helperFunctionIndices);
 	const helperOffsets = [0];
 	for (const entry of entries) {
@@ -1177,22 +1272,32 @@ export async function test262RunBatch(
 	const generatedC = sources.join("\n");
 	manifest.generatedCBytes = Buffer.byteLength(generatedC);
 	const artifacts = test262NativeArtifacts();
-	const ccArgs = useCache
-		? [...CC_COMPILE_FLAGS, "-c", `${baseName}.c`, "-o", objectCachePath(cacheKey)]
-		: [
-				...CC_COMPILE_FLAGS,
-				`${baseName}.c`,
-				`${WORK_PATH}/test262_batch.o`,
-				artifacts.c.engine,
-				...artifacts.rust.linkArgs,
-				"-o",
-				`${baseName}.bin`,
-			];
+	let sharedObject: { key: string; path: string } | undefined;
+	const ccArgs = (): Array<string> =>
+		useCache
+			? [...CC_COMPILE_FLAGS, "-c", `${baseName}.c`, "-o", objectCachePath(cacheKey)]
+			: [
+					...CC_COMPILE_FLAGS,
+					`${baseName}.c`,
+					...(sharedObject === undefined ? [] : [sharedObject.path]),
+					`${WORK_PATH}/test262_batch.o`,
+					artifacts.c.engine,
+					...artifacts.rust.linkArgs,
+					"-o",
+					`${baseName}.bin`,
+				];
 	const ccStartedAt = performance.now();
 	try {
+		if (emitted.shared !== "") {
+			sharedObject = await ensureSharedHarnessObject(
+				[...NATIVE_C_HEADER_LINES, emitted.shared].join("\n"),
+				useCache,
+			);
+			manifest.sharedObjectKey = sharedObject.key;
+		}
 		writeFileSync(`${baseName}.c`, generatedC);
 		if (useCache) ensureCacheDir();
-		await execFileAsync(test262Toolchain().tools.cc.path, ccArgs, {
+		await execFileAsync(test262Toolchain().tools.cc.path, ccArgs(), {
 			timeout: TEST262_METADATA.compileTimeoutMs,
 		});
 	} catch (e) {
@@ -1204,7 +1309,7 @@ export async function test262RunBatch(
 			paths,
 			workerId,
 			command: test262Toolchain().tools.cc.path,
-			args: ccArgs,
+			args: ccArgs(),
 			error: e,
 		});
 		recordBatch(manifest, useCache ? "miss" : "disabled", null, failureArtifact);
@@ -1250,7 +1355,7 @@ export async function test262RunBatch(
 		storeManifest(cacheKey, manifest);
 		const objectPath = objectCachePath(cacheKey);
 		objectBytes = statSync(objectPath).size;
-		timings.linkMs = await linkBatch(objectPath, `${baseName}.bin`);
+		timings.linkMs = await linkBatch(objectPath, `${baseName}.bin`, sharedObject?.path);
 	}
 
 	const runStartedAt = performance.now();

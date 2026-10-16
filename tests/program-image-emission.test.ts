@@ -14,6 +14,7 @@ import {
 	DEFAULT_TRANSLATION_UNIT_POLICY,
 	NATIVE_C_HEADER_LINES,
 	emitBatch,
+	emitBatchWithSharedPrefix,
 	emitProgramImage,
 	emitProgramTranslationUnits,
 	emitRelocatableNativeOverlayTranslationUnits,
@@ -35,6 +36,7 @@ import type {
 	BytecodeInstruction,
 } from "../src/compiler/target/runtime-image.ts";
 import { vmSafepointRootMapsAreTrusted } from "../src/compiler/target/runtime-image.ts";
+import { mergeProgramImages } from "../src/test262/program-image-merge.ts";
 import { privateRootRegisters, rootMaskBits } from "./helpers/native-c-source.ts";
 import {
 	resolveNativeLinks,
@@ -785,6 +787,48 @@ describe("emit-program-image instruction packing", () => {
 				row.instruction_data?.startsWith("mal_shared_insn_data_"),
 			),
 		).toHaveLength(2);
+	});
+
+	it("emits a shared batch prefix that depends only on the prefix", () => {
+		const script = (source: string, file: string) =>
+			compileSemanticProgramToProgramImage(
+				analyzeSourceAndRunSemanticAnalysis(
+					source,
+					file,
+					parseScript(source, { strict: false }),
+				),
+			);
+		const harness = script(
+			"function check(value, expected) { if (value !== expected) throw new Error(String(value)); }",
+			"harness.js",
+		);
+		const batch = (test: string) => {
+			const merged = mergeProgramImages([harness, script(test, "test.js")]);
+			return emitBatchWithSharedPrefix(
+				[merged.image],
+				{ compiled: true },
+				merged.functionBases[1]!,
+			);
+		};
+		const first = batch("check([1, 2].length, 2);");
+		const second = batch(
+			"let total = 0; for (const x of [1, 2, 3]) total += x; check(total, 6);",
+		);
+
+		expect(first.shared).toBe(second.shared);
+		const definitions = (source: string) =>
+			[
+				...source.matchAll(
+					/^(?:__attribute__\S* )?MalValue (mal_compiled_\d+_0)\(.*\{$/gm,
+				),
+			].map((match) => match[1]!);
+		const prefixSymbols = definitions(first.shared);
+		expect(prefixSymbols.length).toBeGreaterThan(0);
+		expect(definitions(first.body).length).toBeGreaterThan(0);
+		for (const symbol of prefixSymbols) {
+			expect(definitions(first.body)).not.toContain(symbol);
+			expect(first.body).toMatch(new RegExp(`^MalValue ${symbol}\\([^{]*\\);$`, "m"));
+		}
 	});
 
 	it("shares immutable capture descriptors in ordinary and batch function tables", () => {

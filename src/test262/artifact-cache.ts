@@ -55,6 +55,8 @@ export interface BatchManifest {
 	hasBinary: boolean;
 	/** UTF-8 byte length of the emitted translation unit, or null when no C was emitted. */
 	generatedCBytes: number | null;
+	/** Cache key of the shared harness object the batch object links against. */
+	sharedObjectKey?: string;
 	/** Tests that produced C, in driver index order. */
 	entries: Array<{
 		path: string;
