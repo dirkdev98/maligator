@@ -1,12 +1,16 @@
 import { spawn } from "node:child_process";
 import {
 	chmodSync,
+	copyFileSync,
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
+	readdirSync,
 	readFileSync,
 	realpathSync,
+	renameSync,
 	rmSync,
+	utimesSync,
 	writeFileSync,
 } from "node:fs";
 import * as os from "node:os";
@@ -514,6 +518,30 @@ exit 7
 		expect(invalidated.cacheHit).toBe(false);
 		expect(invalidated.fingerprint).not.toBe(first.fingerprint);
 		expect(compileInvocationCount(fake.logPath)).toBeGreaterThan(afterFirst);
+	});
+
+	it("keeps the fingerprint and probes when identical tools are reinstalled", () => {
+		const fake = createFakeToolchain();
+		const options = {
+			rootDir: fake.root,
+			rustDir: fake.rustDir,
+			env: fake.env,
+			platform: "linux" as const,
+			arch: "x64",
+		};
+		const first = inspectToolchain(options);
+		const afterFirst = compileInvocationCount(fake.logPath);
+		for (const name of readdirSync(fake.bin)) {
+			const installed = path.join(fake.bin, name);
+			const reinstalled = `${installed}.reinstalled`;
+			copyFileSync(installed, reinstalled);
+			utimesSync(reinstalled, new Date(2001, 0, 1), new Date(2001, 0, 1));
+			renameSync(reinstalled, installed);
+		}
+		const reinstalled = inspectToolchain(options);
+		expect(reinstalled.fingerprint).toBe(first.fingerprint);
+		expect(reinstalled.cacheHit).toBe(true);
+		expect(compileInvocationCount(fake.logPath)).toBe(afterFirst);
 	});
 
 	it("selects the matching LLVM archiver for Clang on Linux", () => {

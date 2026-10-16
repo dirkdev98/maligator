@@ -6,6 +6,7 @@ import {
 	mkdtempSync,
 	readFileSync,
 	realpathSync,
+	renameSync,
 	rmSync,
 	statSync,
 	writeFileSync,
@@ -216,7 +217,9 @@ export function requireWasmToolchain(rootDir: string, env = process.env): WasmTo
 				schema: 2,
 				target: "wasm32-wasip1",
 				sdkMetadata,
-				tools: Object.values(tools).map(executableIdentity),
+				tools: Object.values(tools).map((tool) =>
+					executableIdentity(tool, maligatorCacheDirectory()),
+				),
 			}),
 			"hex",
 		),
@@ -379,17 +382,45 @@ function selectedRustTool(
 	return inspectExecutable(selectedPath, env.PATH ?? "", rustDir, env);
 }
 
-function executableIdentity(tool: ToolExecutable): object {
-	const stats = statSync(tool.path);
+// Hosted CI installs toolchains per job, so inode and mtime cannot identify a tool
+// across runs; its content can, and the stat tuple only memoizes that digest.
+function executableIdentity(tool: ToolExecutable, cacheDirectory: string): object {
+	const resolved = realpathSync(tool.path);
 	return {
-		path: realpathSync(tool.path),
+		path: resolved,
 		version: tool.version,
 		args: tool.args ?? [],
-		dev: stats.dev,
-		ino: stats.ino,
-		size: stats.size,
-		mtimeMs: stats.mtimeMs,
+		digest: executableDigest(resolved, cacheDirectory),
 	};
+}
+
+function executableDigest(file: string, cacheDirectory: string): string {
+	const stats = statSync(file);
+	const directory = path.join(cacheDirectory, "toolchains", "executables");
+	const memo = path.join(
+		directory,
+		hash(
+			"sha256",
+			JSON.stringify([file, stats.dev, stats.ino, stats.size, stats.mtimeMs]),
+			"hex",
+		),
+	);
+	try {
+		const cached = readFileSync(memo, "utf8");
+		if (/^[0-9a-f]{64}$/.test(cached)) return cached;
+	} catch {
+		// A missing or damaged memo only costs rehashing the executable.
+	}
+	const digest = hash("sha256", readFileSync(file), "hex");
+	try {
+		mkdirSync(directory, { recursive: true });
+		const temporary = `${memo}.${String(process.pid)}.tmp`;
+		writeFileSync(temporary, digest);
+		renameSync(temporary, memo);
+	} catch {
+		// An unwritable cache keeps the identity exact; later resolutions rehash.
+	}
+	return digest;
 }
 
 function fingerprintFor(
@@ -399,6 +430,7 @@ function fingerprintFor(
 	platform: NodeJS.Platform,
 	arch: string,
 	needsCxx: boolean,
+	cacheDirectory: string,
 ): string {
 	const testedFlags = {
 		c2x: C2X_FLAGS,
@@ -414,7 +446,7 @@ function fingerprintFor(
 	const identities = Object.fromEntries(
 		Object.entries(tools)
 			.filter((entry): entry is [string, ToolExecutable] => entry[1] !== undefined)
-			.map(([name, tool]) => [name, executableIdentity(tool)]),
+			.map(([name, tool]) => [name, executableIdentity(tool, cacheDirectory)]),
 	);
 	return hash(
 		"sha256",
@@ -904,6 +936,7 @@ export function inspectToolchain(options: InspectToolchainOptions = {}): Toolcha
 		platform,
 		arch,
 		needsCxx,
+		cacheDirectory,
 	);
 	report.fingerprint = fingerprint;
 	const cacheDir = path.join(cacheDirectory, "toolchains");
