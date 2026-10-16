@@ -54,8 +54,8 @@ describe("GitHub Actions", () => {
 		).toEqual([
 			"macos-15/native",
 			"macos-15/sanitizer",
-			"ubuntu-24.04/native",
-			"ubuntu-24.04/sanitizer",
+			"ubuntu-26.04/native",
+			"ubuntu-26.04/sanitizer",
 		]);
 		for (const [key, shards] of dimensions) {
 			const count = Number(key.split("/")[2]);

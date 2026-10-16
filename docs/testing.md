@@ -267,9 +267,10 @@ reviewed target audit, not a passing verification gate. See the
 [inventory workflow](decisions/static-value-foundations.md#native-inventory-and-coverage)
 for import and matrix verification.
 
-The workflows use four workers per Linux job and three macOS workers
+Linux jobs run on Ubuntu 26.04 with its Clang 21, the compiler the remote verification
+host uses. The workflows use four workers per Linux job and three macOS workers
 to match the hosted CPU allocations. External actions are pinned to immutable commit
-SHAs; local setup actions install Node 24, the repository-pinned Rust toolchain, and
+SHAs; local setup actions install Node 26, the repository-pinned Rust toolchain, and
 the platform compiler before running `env:check`.
 
 CI caches npm downloads, the pinned Test262 corpus, and completed Rust runtime

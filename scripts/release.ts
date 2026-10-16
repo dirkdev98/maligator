@@ -15,7 +15,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { PLATFORM_MODULES } from "../src/platform/catalog.ts";
 import { buildProductCli } from "../src/product-builder.ts";
-import { resolvePathExecutable } from "../src/toolchain.ts";
+import { clangMajorVersion, resolvePathExecutable } from "../src/toolchain.ts";
 import { requireHeapLimit } from "./heap-limit.ts";
 import { createReleaseArchive } from "./release-archive.ts";
 import { nextAlphaVersion } from "./release-version.ts";
@@ -423,9 +423,23 @@ function smokeRelease(): void {
 			}).trim(),
 		],
 	];
-	// The isolated Linux smoke needs Clang 19's matching archiver to index LTO bitcode.
+	// The isolated Linux smoke needs the selected Clang's matching archiver to index LTO bitcode.
 	if (process.platform === "linux") {
-		requiredTools.push(["as", "as"], ["ld", "ld"], ["llvm-ar-19", "llvm-ar-19"]);
+		const cc = requiredTools[0]![1];
+		const major = clangMajorVersion(
+			execFileSync(
+				cc.includes(path.sep) ? cc : resolvePathExecutable(cc, originalPath),
+				["--version"],
+				{ encoding: "utf-8" },
+			),
+		);
+		if (major === undefined)
+			throw new Error(`the Linux release smoke requires clang: ${cc}`);
+		requiredTools.push(
+			["as", "as"],
+			["ld", "ld"],
+			[`llvm-ar-${major}`, `llvm-ar-${major}`],
+		);
 	}
 	for (const [name, executable] of requiredTools) {
 		const source = executable.includes(path.sep)

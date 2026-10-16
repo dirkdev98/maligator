@@ -5,7 +5,7 @@ inputs:
   node-version:
     description: Exact Node.js version used by Maligator CI.
     required: false
-    default: 24.14.1
+    default: 26.12.0
   cache-test262:
     description: Restore and save the pinned Test262 corpus.
     required: false

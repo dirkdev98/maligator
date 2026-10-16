@@ -18,7 +18,7 @@ permissions:
 jobs:
   capture:
     name: ${{ inputs.platform }} audit shard ${{ matrix.shard }}
-    runs-on: ${{ inputs.platform == 'darwin-arm64' && 'macos-15' || 'ubuntu-24.04' }}
+    runs-on: ${{ inputs.platform == 'darwin-arm64' && 'macos-15' || 'ubuntu-26.04' }}
     timeout-minutes: 120
     strategy:
       fail-fast: false

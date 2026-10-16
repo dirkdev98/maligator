@@ -18,7 +18,7 @@ env:
 jobs:
   compiler:
     name: ${{ matrix.check }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 120
     strategy:
       fail-fast: false
@@ -67,7 +67,7 @@ jobs:
   # Short checks share one runner so the sharded lanes fit the hosted concurrency limit.
   quick-checks:
     name: Compiler, Rust and GC standards checks
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 90
     steps:
       - name: Check out the tested revision
@@ -143,7 +143,7 @@ jobs:
 
   slow-units:
     name: Slow unit integration (${{ matrix.part }})
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 120
     strategy:
       fail-fast: false
@@ -192,7 +192,7 @@ jobs:
 
   wasm:
     name: Wasm parity
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 90
     steps:
       - name: Check out the tested revision
@@ -233,7 +233,7 @@ jobs:
 
   web-standards:
     name: Compiled WPT
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 120
     steps:
       - name: Check out the tested revision

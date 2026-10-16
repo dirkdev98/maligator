@@ -16,7 +16,7 @@ concurrency:
 jobs:
   test262:
     name: Full Test262
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 300
     steps:
       - name: Require the main branch

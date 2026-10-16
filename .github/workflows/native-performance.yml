@@ -18,7 +18,7 @@ jobs:
       contains(github.event.pull_request.labels.*.name, 'native-performance') &&
       (github.event.action == 'synchronize' || github.event.label.name == 'native-performance')
     name: JavaScript ${{ matrix.mode }} / ${{ matrix.comparison }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 55
     strategy:
       fail-fast: false
@@ -58,10 +58,10 @@ jobs:
       - name: Select matching LLVM archive and link tools
         if: steps.baseline.outputs.skip != 'true'
         run: |
-          sudo apt-get install --yes llvm-19 lld-19
+          sudo apt-get install --yes llvm-21 lld-21
           mkdir -p "$RUNNER_TEMP/native-performance-bin"
-          ln -s "$(command -v llvm-ar-19)" "$RUNNER_TEMP/native-performance-bin/ar"
-          ln -s "$(command -v ld.lld-19)" "$RUNNER_TEMP/native-performance-bin/ld.lld"
+          ln -s "$(command -v llvm-ar-21)" "$RUNNER_TEMP/native-performance-bin/ar"
+          ln -s "$(command -v ld.lld-21)" "$RUNNER_TEMP/native-performance-bin/ld.lld"
           echo "$RUNNER_TEMP/native-performance-bin" >> "$GITHUB_PATH"
 
       - name: Check the runner environment
@@ -115,7 +115,7 @@ jobs:
       contains(github.event.pull_request.labels.*.name, 'native-micro-performance') &&
       (github.event.action == 'synchronize' || github.event.label.name == 'native-micro-performance')
     name: Native micro / ${{ matrix.comparison }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 55
     strategy:
       fail-fast: false
@@ -154,7 +154,7 @@ jobs:
       - name: Select matching LLVM archive and link tools
         if: steps.baseline.outputs.skip != 'true'
         run: |
-          sudo apt-get install --yes llvm-19 lld-19 linux-tools-generic
+          sudo apt-get install --yes llvm-21 lld-21 linux-tools-generic
           for candidate in /usr/lib/linux-tools/*/perf; do
             if [ -x "$candidate" ]; then
               echo "NATIVE_MICRO_PERF=$candidate" >> "$GITHUB_ENV"
@@ -162,8 +162,8 @@ jobs:
             fi
           done
           mkdir -p "$RUNNER_TEMP/native-performance-bin"
-          ln -s "$(command -v llvm-ar-19)" "$RUNNER_TEMP/native-performance-bin/ar"
-          ln -s "$(command -v ld.lld-19)" "$RUNNER_TEMP/native-performance-bin/ld.lld"
+          ln -s "$(command -v llvm-ar-21)" "$RUNNER_TEMP/native-performance-bin/ar"
+          ln -s "$(command -v ld.lld-21)" "$RUNNER_TEMP/native-performance-bin/ld.lld"
           echo "$RUNNER_TEMP/native-performance-bin" >> "$GITHUB_PATH"
 
       - name: Check environment and inspect the micro plan
@@ -386,7 +386,7 @@ jobs:
       contains(github.event.pull_request.labels.*.name, 'native-compiler-performance') &&
       (github.event.action == 'synchronize' || github.event.label.name == 'native-compiler-performance')
     name: Frozen compiler slices / ${{ matrix.comparison }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 70
     strategy:
       fail-fast: false
@@ -425,10 +425,10 @@ jobs:
       - name: Select matching LLVM archive and link tools
         if: steps.baseline.outputs.skip != 'true'
         run: |
-          sudo apt-get install --yes llvm-19 lld-19
+          sudo apt-get install --yes llvm-21 lld-21
           mkdir -p "$RUNNER_TEMP/native-performance-bin"
-          ln -s "$(command -v llvm-ar-19)" "$RUNNER_TEMP/native-performance-bin/ar"
-          ln -s "$(command -v ld.lld-19)" "$RUNNER_TEMP/native-performance-bin/ld.lld"
+          ln -s "$(command -v llvm-ar-21)" "$RUNNER_TEMP/native-performance-bin/ar"
+          ln -s "$(command -v ld.lld-21)" "$RUNNER_TEMP/native-performance-bin/ld.lld"
           echo "$RUNNER_TEMP/native-performance-bin" >> "$GITHUB_PATH"
 
       - name: Check environment and freeze the compiler program

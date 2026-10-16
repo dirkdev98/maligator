@@ -5,7 +5,7 @@ inputs:
   node-version:
     description: Exact Node.js version used by Maligator CI.
     required: false
-    default: 24.14.1
+    default: 26.12.0
   cache-test262:
     description: Restore and save the pinned Test262 corpus.
     required: false
@@ -25,15 +25,15 @@ runs:
         cache: npm
         cache-dependency-path: package-lock.json
 
-    - name: Select Clang 19
+    - name: Select Clang 21
       shell: bash
       run: |
-        if ! command -v clang-19 >/dev/null || ! command -v clang++-19 >/dev/null || ! command -v llvm-ar-19 >/dev/null; then
+        if ! command -v clang-21 >/dev/null || ! command -v clang++-21 >/dev/null || ! command -v llvm-ar-21 >/dev/null; then
           sudo apt-get update
-          sudo apt-get install --yes clang-19 llvm-19
+          sudo apt-get install --yes clang-21 llvm-21
         fi
-        echo "CC=clang-19" >> "$GITHUB_ENV"
-        echo "CXX=clang++-19" >> "$GITHUB_ENV"
+        echo "CC=clang-21" >> "$GITHUB_ENV"
+        echo "CXX=clang++-21" >> "$GITHUB_ENV"
 
     - name: Select the pinned Rust toolchain
       shell: bash

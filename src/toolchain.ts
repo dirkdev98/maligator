@@ -318,6 +318,11 @@ function resolveExecutable(
 }
 
 /** Resolve an executable from exactly the supplied PATH. */
+/** Major version from a clang `--version` banner; other compilers return undefined. */
+export function clangMajorVersion(banner: string): string | undefined {
+	return /\bclang version (\d+)/.exec(banner)?.[1];
+}
+
 export function resolvePathExecutable(
 	name: string,
 	searchPath = process.env.PATH ?? "",
@@ -782,7 +787,7 @@ export function inspectToolchain(options: InspectToolchainOptions = {}): Toolcha
 			} else tools.cxx = cxx;
 		}
 
-		const clangMajor = /\bclang version (\d+)/.exec(cc?.version ?? "")?.[1];
+		const clangMajor = clangMajorVersion(cc?.version ?? "");
 		const llvmAr =
 			platform === "linux" && clangMajor !== undefined
 				? inspectExecutable(`llvm-ar-${clangMajor}`, searchPath, rootDir, env)

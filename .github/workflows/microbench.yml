@@ -42,7 +42,7 @@ jobs:
       (github.event_name == 'issue_comment' && github.event.issue.pull_request &&
        contains(github.event.comment.body, '/microbench'))
     name: Authorize request and pin revisions
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
       contents: read
@@ -67,7 +67,7 @@ jobs:
       - name: Set up Node.js without shared caches
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 24.14.1
+          node-version: 26.12.0
           package-manager-cache: false
 
       - name: Check current writer permission and resolve main and candidate
@@ -80,7 +80,7 @@ jobs:
     name: Compare with main
     needs: request
     if: needs.request.outputs.requested == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 65
     permissions:
       contents: read
@@ -126,19 +126,19 @@ jobs:
       - name: Set up Node.js without shared caches
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 24.14.1
+          node-version: 26.12.0
           package-manager-cache: false
 
       - name: Install the native toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install --yes clang-19 llvm-19 lld-19 linux-tools-generic
+          sudo apt-get install --yes clang-21 llvm-21 lld-21 linux-tools-generic
           mkdir -p "$RUNNER_TEMP/microbench-bin"
-          ln -s "$(command -v llvm-ar-19)" "$RUNNER_TEMP/microbench-bin/ar"
-          ln -s "$(command -v ld.lld-19)" "$RUNNER_TEMP/microbench-bin/ld.lld"
+          ln -s "$(command -v llvm-ar-21)" "$RUNNER_TEMP/microbench-bin/ar"
+          ln -s "$(command -v ld.lld-21)" "$RUNNER_TEMP/microbench-bin/ld.lld"
           echo "$RUNNER_TEMP/microbench-bin" >> "$GITHUB_PATH"
-          echo 'CC=clang-19' >> "$GITHUB_ENV"
-          echo 'CXX=clang++-19' >> "$GITHUB_ENV"
+          echo 'CC=clang-21' >> "$GITHUB_ENV"
+          echo 'CXX=clang++-21' >> "$GITHUB_ENV"
           for candidate in /usr/lib/linux-tools/*/perf; do
             if [ -x "$candidate" ]; then
               echo "NATIVE_MICRO_PERF=$candidate" >> "$GITHUB_ENV"
@@ -222,7 +222,7 @@ jobs:
     if: >-
       always() && github.event_name == 'issue_comment' &&
       needs.request.outputs.requested == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     permissions:
       actions: read

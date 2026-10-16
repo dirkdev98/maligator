@@ -33,11 +33,11 @@ jobs:
         # Shard counts follow each dimension's recorded duration; macOS keeps the
         # hosted five-runner cap together with the CI smoke job.
         include:
-          - { os: ubuntu-24.04, lane: native, shard: 1, shards: 3 }
-          - { os: ubuntu-24.04, lane: native, shard: 2, shards: 3 }
-          - { os: ubuntu-24.04, lane: native, shard: 3, shards: 3 }
-          - { os: ubuntu-24.04, lane: sanitizer, shard: 1, shards: 2 }
-          - { os: ubuntu-24.04, lane: sanitizer, shard: 2, shards: 2 }
+          - { os: ubuntu-26.04, lane: native, shard: 1, shards: 3 }
+          - { os: ubuntu-26.04, lane: native, shard: 2, shards: 3 }
+          - { os: ubuntu-26.04, lane: native, shard: 3, shards: 3 }
+          - { os: ubuntu-26.04, lane: sanitizer, shard: 1, shards: 2 }
+          - { os: ubuntu-26.04, lane: sanitizer, shard: 2, shards: 2 }
           - { os: macos-15, lane: native, shard: 1, shards: 2 }
           - { os: macos-15, lane: native, shard: 2, shards: 2 }
           - { os: macos-15, lane: sanitizer, shard: 1, shards: 2 }

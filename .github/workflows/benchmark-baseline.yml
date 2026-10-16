@@ -17,7 +17,7 @@ defaults:
 jobs:
   baseline:
     name: Measure all benchmark families
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 360
     steps:
       - name: Require the main branch
@@ -38,10 +38,10 @@ jobs:
 
       - name: Select matching LLVM archive and link tools
         run: |
-          sudo apt-get install --yes llvm-19 lld-19
+          sudo apt-get install --yes llvm-21 lld-21
           mkdir -p "$RUNNER_TEMP/benchmark-bin"
-          ln -s "$(command -v llvm-ar-19)" "$RUNNER_TEMP/benchmark-bin/ar"
-          ln -s "$(command -v ld.lld-19)" "$RUNNER_TEMP/benchmark-bin/ld.lld"
+          ln -s "$(command -v llvm-ar-21)" "$RUNNER_TEMP/benchmark-bin/ar"
+          ln -s "$(command -v ld.lld-21)" "$RUNNER_TEMP/benchmark-bin/ld.lld"
           echo "$RUNNER_TEMP/benchmark-bin" >> "$GITHUB_PATH"
 
       - name: Install the pinned HTTP load generator
