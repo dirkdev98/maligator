@@ -52,18 +52,38 @@ rooting, and resource-safety defects can interrupt that order.
       current 128-bit storage, and input-size scaling. Keep conversion costs separate
       from traversal and checksum work.
 
-- [ ] Apply the overlay's stable emission to ordinary programs. The eval-compiler
-      overlay names functions by a stable stem and reads image indices from link
-      tables, but the self-hosted product CLI (about 30 minutes to build) and
-      `maligator build` still use index-named symbols and immediate indices, so any
-      edit recompiles every unit. ThinLTO should fold the link loads; matched
-      benchmarks have to confirm that before ordinary programs switch.
-- [ ] Trim the eval-compiler overlay's header includes. Each overlay unit includes
-      the full native C header set, so a runtime header edit (28% of recent commits)
-      still changes every unit's preprocessed digest and recompiles all of them.
-      Realms, perf counters, and Temporal also select distinct overlay
-      preprocessing, so each of those builds compiles its own copy.
+- [ ] Carry generated and runtime C objects in the CI native cache. Only Rust
+      libraries and eval-compiler overlay objects survive between runs, so a warm
+      gate shard still compiles its test fixtures' generated C (about 500 s of summed
+      process time, 35% hits within the job) and its runtime C objects (about 160 s).
+      Fixture C only changes when its emitted code does, so commits that touch
+      neither the compiler nor the runtime (43% of recent ones) should hit fully.
+      Measure what a job's objects add to its line against the 1 GiB snapshot cap and
+      the repository's 10 GB Actions allowance; linked binaries are too large to carry.
+- [ ] Stop runtime header edits from invalidating every generated object. Generated
+      and overlay units are keyed on a hash of their included header files, so any
+      header edit (28% of recent commits) recompiles all of them locally and in CI;
+      runtime objects already key on their preprocessed text. Key generated and
+      overlay units on their expanded input as well, and trim the overlay's includes
+      to what it uses. Realms, perf counters, and Temporal also select distinct
+      overlay preprocessing, so each of those builds compiles its own copy.
+- [ ] Keep parse and semantic results between `run` processes. After a one-line edit
+      `run` takes 4.2 s on an Express and Valibot app (216 dependencies) while the
+      `dev` watcher recompiles the same edit in 0.54 s: each `run` process reparses
+      and analyses the whole graph before it reuses the cached dependency fragments.
+      File digests already persist; module parses and semantic facts do not.
+- [ ] Persist Core per module so whole-program builds stop recompiling the entire
+      program after an edit. On the same app a one-line edit costs `build` 9.2 s and
+      `build --production` 12.6 s although 13 of 14 generated objects are reused; the
+      rest is the whole-program frontend and the relink. This is the persistent Core
+      pilot from [profile-guided and incremental optimization](docs/decisions/08-profile-guided-and-incremental-optimization.md).
 
+- [ ] Rebalance the CI shards once the native caches are warm. The duration table
+      was recorded on cold runs: with warm overlay, Rust and runtime objects the
+      4ee54135 gate ran sanitizer 2/3 for 13 minutes and sanitizer 1/3 for 6. After
+      about five consecutive warm `main` runs of CI, Extended CI and the native
+      remainder, refresh `tests/test-suite-durations.json` from their logs with
+      `scripts/test-suite-durations.ts` and review the modelled shard times.
 - [ ] Get the hosted native-remainder workflow green on Linux and macOS. The first
       run exposed cold feature-profile builds and aggregate GC-stress deadlines;
       verify their corrected preparation and budgets on both hosts. Inspect skipped
