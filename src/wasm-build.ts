@@ -1,11 +1,13 @@
 import { execFileSync } from "node:child_process";
 import {
 	copyFileSync,
+	existsSync,
 	mkdirSync,
 	mkdtempSync,
 	readdirSync,
 	readFileSync,
 	rmSync,
+	statSync,
 	writeFileSync,
 } from "node:fs";
 import path from "node:path";
@@ -28,6 +30,7 @@ import {
 } from "./compiler/target/emit-program-image.ts";
 import { hashDirectoryTrees } from "./file-tree.ts";
 import { normalizeRuntimeBuildArgument } from "./native-cache-identity.ts";
+import { nativeBuildJobs } from "./native-command.ts";
 import { generatedHeaderDependencyHash } from "./runtime-build.ts";
 import { rustSourceDigest } from "./rust-build.ts";
 import { requireWasmToolchain, toolArguments } from "./toolchain.ts";
@@ -37,6 +40,18 @@ import { buildWorkerCount } from "./worker-budget.ts";
 
 export const WASM_ABI_VERSION = 1;
 type ArtifactAction = ReturnType<typeof publishArtifactAction>;
+
+interface WasmObjectRequest {
+	file: string;
+	digest: string;
+	identity: string;
+	dependencies: string;
+}
+
+function shellQuote(argument: string): string {
+	return `'${argument.replaceAll("'", `'\\''`)}'`;
+}
+
 export const WASM_EXPORTS = [
 	"mal_wasm_abi_version",
 	"mal_wasm_init",
@@ -242,65 +257,139 @@ export function buildWasmEngine(options: WasmBuildOptions) {
 				});
 			},
 		);
-		log(`Compiling ${generated.outputs.length} generated C units and the engine runtime`);
-		const compileObject = (
-			file: string,
-			digest: string,
-			identity: string,
-			dependencies: string,
-		) =>
-			artifactOutput(
-				action(
-					"wasm-object",
-					{
-						digest,
-						headerDependencies: dependencies,
-						identity,
-						toolchain: toolchain.fingerprint,
-						command: [...identityFlags, "-x", "c", "-c", "<source>", "-o", "<object>"],
-					},
-					(directory) => {
-						const output = path.join(directory, "object.o");
-						run(
-							directory,
-							toolchain.tools.cc.path,
-							[...flags, "-x", "c", "-c", file, "-o", output],
-							env,
-							1_800_000,
-						);
-						return [{ name: "object.o", file: output }];
-					},
-				),
-				"object.o",
+		const objectRequests: Array<WasmObjectRequest> = [
+			...generated.outputs.map((output) => {
+				const unitId = output.name.slice("unit-".length, -".c".length);
+				return {
+					file: output.path,
+					digest: output.digest,
+					identity: unitId,
+					dependencies: unitId.startsWith("code-")
+						? generatedHeaderHashes.code
+						: generatedHeaderHashes.data,
+				};
+			}),
+			...[
+				...readdirSync(path.join(runtime, "src"))
+					.filter((name) => name.endsWith(".c"))
+					.sort()
+					.map((name) => path.join(runtime, "src", name)),
+				path.join(runtime, "embedding/wasm.c"),
+			].map((file) => ({
+				file,
+				digest: artifactDigest(readFileSync(file)),
+				identity: normalizeRuntimeBuildArgument(runtime, file),
+				dependencies: headerHash,
+			})),
+		];
+		const objectProducer = producers["wasm-object"];
+		const objectStage = (stages["wasm-object"] ??= { built: 0, reused: 0 });
+		const objectKeys = objectRequests.map((request) =>
+			artifactActionKey(objectProducer, {
+				digest: request.digest,
+				headerDependencies: request.dependencies,
+				identity: request.identity,
+				toolchain: toolchain.fingerprint,
+				command: [...identityFlags, "-x", "c", "-c", "<source>", "-o", "<object>"],
+			}),
+		);
+		const objectActions = new Map<string, ArtifactAction>();
+		const pendingObjects = new Map<
+			string,
+			{ request: WasmObjectRequest; directory: string }
+		>();
+		for (const [index, key] of objectKeys.entries()) {
+			if (objectActions.has(key) || pendingObjects.has(key)) continue;
+			const cached = readArtifactAction(cache, "wasm-object", objectProducer, key);
+			if (cached !== undefined) objectActions.set(key, cached);
+			else
+				pendingObjects.set(key, {
+					request: objectRequests[index]!,
+					directory: mkdtempSync(path.join(workRoot, "wasm-object-")),
+				});
+		}
+		counts.reused += objectActions.size;
+		objectStage.reused += objectActions.size;
+		log(
+			`Compiling ${pendingObjects.size} of ${objectActions.size + pendingObjects.size} C objects`,
+		);
+		let failed: string | undefined;
+		try {
+			const jobs = Math.max(1, Math.min(pendingObjects.size, nativeBuildJobs(env)));
+			// Largest sources first, so the dynamic queue does not end on one long unit.
+			const ordered = [...pendingObjects.values()].sort(
+				(left, right) =>
+					statSync(right.request.file).size - statSync(left.request.file).size,
 			);
-		const objects = generated.outputs.map((output, index) => {
-			const unitId = output.name.slice("unit-".length, -".c".length);
-			const object = compileObject(
-				output.path,
-				output.digest,
-				unitId,
-				unitId.startsWith("code-")
-					? generatedHeaderHashes.code
-					: generatedHeaderHashes.data,
-			);
-			if ((index + 1) % 10 === 0)
-				log(`Generated C: ${index + 1}/${generated.outputs.length}`);
-			return object;
-		});
-		const runtimeObjects = readdirSync(path.join(runtime, "src"))
-			.filter((name) => name.endsWith(".c"))
-			.sort()
-			.map((name, index) => {
-				const file = path.join(runtime, "src", name);
-				const object = compileObject(
-					file,
-					artifactDigest(readFileSync(file)),
-					normalizeRuntimeBuildArgument(runtime, file),
-					headerHash,
+			for (const { request, directory } of ordered) {
+				const args = [
+					...flags,
+					"-x",
+					"c",
+					"-c",
+					request.file,
+					"-o",
+					path.join(directory, "object.o"),
+				];
+				writeFileSync(
+					path.join(directory, "command.json"),
+					JSON.stringify({ tool: toolchain.tools.cc.path, args }),
 				);
-				if ((index + 1) % 20 === 0) log(`Engine C: ${index + 1} units`);
-				return object;
-			});
+				writeFileSync(
+					path.join(directory, "command.sh"),
+					`exec ${[toolchain.tools.cc.path, ...args].map(shellQuote).join(" ")}\n`,
+				);
+			}
+			if (ordered.length > 0)
+				execFileSync(
+					"/bin/sh",
+					[
+						"-c",
+						`xargs -0 -n 1 -P ${jobs} sh -c 'sh "$1/command.sh" >"$1/command.log" 2>&1; echo $? >"$1/status"' sh`,
+					],
+					{
+						cwd: root,
+						env,
+						input: ordered.map(({ directory }) => directory).join("\0"),
+						stdio: ["pipe", "ignore", "pipe"],
+						timeout: 1_800_000 * Math.ceil(ordered.length / jobs),
+					},
+				);
+			for (const [key, { directory }] of pendingObjects) {
+				const status = path.join(directory, "status");
+				if (!existsSync(status) || readFileSync(status, "utf8").trim() !== "0") {
+					failed = directory;
+					throw new Error(
+						`Wasm build failed; see ${path.join(directory, "command.log")}`,
+					);
+				}
+				objectActions.set(
+					key,
+					withArtifactActionLock(
+						cache,
+						"wasm-object",
+						objectProducer,
+						key,
+						() =>
+							readArtifactAction(cache, "wasm-object", objectProducer, key) ??
+							publishArtifactAction(cache, "wasm-object", objectProducer, key, [
+								{ name: "object.o", file: path.join(directory, "object.o") },
+							]),
+					),
+				);
+			}
+			counts.built += pendingObjects.size;
+			objectStage.built += pendingObjects.size;
+		} finally {
+			for (const { directory } of pendingObjects.values())
+				if (directory !== failed) rmSync(directory, { recursive: true, force: true });
+		}
+		const compiledObjects = objectKeys.map((key) =>
+			artifactOutput(objectActions.get(key)!, "object.o"),
+		);
+		const objects = compiledObjects.slice(0, generated.outputs.length);
+		const runtimeObjects = compiledObjects.slice(generated.outputs.length, -1);
+		const bridge = compiledObjects.at(-1)!;
 		const engine = artifactOutput(
 			action(
 				"wasm-archive",
@@ -396,13 +485,6 @@ export function buildWasmEngine(options: WasmBuildOptions) {
 					),
 			),
 			"rust.a",
-		);
-		const bridgePath = path.join(runtime, "embedding/wasm.c");
-		const bridge = compileObject(
-			bridgePath,
-			artifactDigest(readFileSync(bridgePath)),
-			normalizeRuntimeBuildArgument(runtime, bridgePath),
-			headerHash,
 		);
 		const linkFlags = [
 			"-mexec-model=reactor",
