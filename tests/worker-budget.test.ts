@@ -59,6 +59,12 @@ describe("worker allocation", () => {
 		).toEqual(workerEnvironment(2));
 	});
 
+	it("keeps live-service opt-ins when canonical runners remove runtime overrides", () => {
+		expect(cleanTestEnvironment({}, { MAL_POSTGRES_LIVE: "1", MAL_INTERP: "1" })).toEqual(
+			{ MAL_POSTGRES_LIVE: "1" },
+		);
+	});
+
 	it("keeps worker allocation out of native artifact identity", () => {
 		expect(nativeBuildEnvironmentFingerprint(workerEnvironment(1))).toBe(
 			nativeBuildEnvironmentFingerprint(workerEnvironment(4)),

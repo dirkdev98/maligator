@@ -66,12 +66,6 @@ rooting, and resource-safety defects can interrupt that order.
       benchmark family and the HTTP benchmarks in both modes. Production builds stay
       whole-program.
 
-- [ ] Run the live Postgres suites somewhere hosted. The native remainder is green on
-      Linux and macOS, but `postgres-live`, `postgres-query-api-live`,
-      `postgres-features-live`, and `postgres-types-large-live` skip on every runner
-      because no server is reachable, so their discovery is not executed coverage.
-      Either provide a Postgres service to the remainder jobs or record them as
-      laptop-only coverage.
 - [ ] Track configured asset-directory topology in `dev`. Publication validates
       consumed file identities, but adding a file or renaming a previously unwatched
       path does not change that file set. Capture recursive directory membership and

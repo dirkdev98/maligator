@@ -252,7 +252,10 @@ This derives the remaining native files from the same manifests as the full gate
 without repeating check's fixtures, quality, or standards. macOS also runs its leak
 audit in the normal dimension. The runner completes every selected stage to collect
 failures and retains source-bound reports for fourteen days. These reports remain
-partial full-tier evidence. Optional external-service tests retain their prerequisites.
+partial full-tier evidence. Optional external-service tests retain their prerequisites:
+the Linux normal shards start a PostgreSQL 17 container and set the
+`MAL_POSTGRES_*_LIVE` opt-ins, which canonical runners keep, so the live postgres.js
+suites run there; macOS shards skip them.
 
 Extended CI also runs on pushes to `main` and manual dispatch. Independent Linux
 jobs exercise the full-only unit manifest (the two primordial inventory files and the

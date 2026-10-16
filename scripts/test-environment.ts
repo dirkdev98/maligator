@@ -20,7 +20,9 @@ export function cleanTestEnvironment(
 			([name]) =>
 				(!name.startsWith("MAL_") ||
 					name === "MAL_BUILD_JOBS" ||
-					name === "MAL_SANITIZER_WORKERS") &&
+					name === "MAL_SANITIZER_WORKERS" ||
+					// Live-service opt-ins describe the host, not the runtime under test.
+					name.startsWith("MAL_POSTGRES_")) &&
 				(!name.startsWith("T262_") ||
 					name === "T262_COMPILE_WORKERS" ||
 					name === "T262_OBJCACHE") &&
