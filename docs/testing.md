@@ -283,9 +283,10 @@ native job otherwise rebuilds each Cargo feature set with fat LTO. The overlay i
 quite large (about 370 translation units), but each unit only holds its own
 functions: image indices live in separate link-table units, so a compiler edit
 recompiles the units it touches. `scripts/ci-native-cache.ts` moves only those
-content-addressed actions, one cache line per platform and sanitizer mode: jobs
-restore the newest snapshot, import verifies every blob, and `main` saves the
-recently read set when it changed, within 1 GiB. A restored action that no longer
+content-addressed actions, one cache line per job: each job restores the newest
+snapshot of its own line, because a snapshot holds only the overlay variants that
+job built. Import verifies every blob, and `main` saves the recently read set when
+it changed, within 1 GiB. A restored action that no longer
 matches is simply never read; the weekly native-remainder run stays cold so cache
 identity defects still surface. The rest of the Maligator blob store, runtime and
 generated objects, Zig outputs, and the managed cache are not stored: they change

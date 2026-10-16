@@ -36,7 +36,7 @@ jobs:
       - name: Set up Linux
         uses: ./.github/actions/setup-linux
         with:
-          native-cache: linux
+          native-cache: linux-${{ matrix.check }}
 
       - name: Check the runner environment
         run: npm run env:check -- --json
@@ -79,7 +79,7 @@ jobs:
         uses: ./.github/actions/setup-linux
         with:
           cache-test262: "true"
-          native-cache: linux
+          native-cache: linux-quick-checks
 
       - name: Check the runner environment
         shell: bash
@@ -152,10 +152,13 @@ jobs:
         # beside the rest of the full-only manifest instead of after it.
         include:
           - part: inventory
+            cache: inventory
             files: tests/primordial-inventory.test.ts
           - part: Intl inventory
+            cache: intl-inventory
             files: tests/primordial-inventory-intl.test.ts
           - part: integration
+            cache: integration
             exclude: tests/primordial-inventory
     steps:
       - name: Check out the tested revision
@@ -167,7 +170,7 @@ jobs:
         uses: ./.github/actions/setup-linux
         with:
           cache-test262: "true"
-          native-cache: linux
+          native-cache: linux-slow-${{ matrix.cache }}
 
       - name: Set up WASI
         uses: ./.github/actions/setup-wasi
@@ -203,7 +206,7 @@ jobs:
       - name: Set up Linux
         uses: ./.github/actions/setup-linux
         with:
-          native-cache: linux
+          native-cache: linux-wasm
 
       - name: Set up WASI
         uses: ./.github/actions/setup-wasi
@@ -244,7 +247,7 @@ jobs:
       - name: Set up Linux
         uses: ./.github/actions/setup-linux
         with:
-          native-cache: linux
+          native-cache: linux-web-standards
 
       - name: Check the runner environment
         run: npm run env:check -- --json

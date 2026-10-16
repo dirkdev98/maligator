@@ -22,12 +22,14 @@ jobs:
       matrix:
         include:
           - lane: quality
-          - { lane: standards, cache: linux }
-          - { lane: native, cache: linux, shard: 1, shards: 2 }
-          - { lane: native, cache: linux, shard: 2, shards: 2 }
-          - { lane: sanitizer, cache: linux-sanitizer, shard: 1, shards: 3 }
-          - { lane: sanitizer, cache: linux-sanitizer, shard: 2, shards: 3 }
-          - { lane: sanitizer, cache: linux-sanitizer, shard: 3, shards: 3 }
+          # Each job keeps its own cache line: a snapshot holds only the overlay variants
+          # its job built, and restore picks the newest snapshot of the line.
+          - { lane: standards, cache: linux-standards }
+          - { lane: native, cache: linux-native-1, shard: 1, shards: 2 }
+          - { lane: native, cache: linux-native-2, shard: 2, shards: 2 }
+          - { lane: sanitizer, cache: linux-sanitizer-1, shard: 1, shards: 3 }
+          - { lane: sanitizer, cache: linux-sanitizer-2, shard: 2, shards: 3 }
+          - { lane: sanitizer, cache: linux-sanitizer-3, shard: 3, shards: 3 }
     steps:
       - name: Check out the tested revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -117,7 +119,7 @@ jobs:
         uses: ./.github/actions/setup-macos
         with:
           cache-test262: "true"
-          native-cache: macos
+          native-cache: macos-smoke
 
       - name: Check the runner environment
         run: npm run env:check -- --json

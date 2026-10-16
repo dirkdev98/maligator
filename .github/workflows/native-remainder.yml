@@ -24,9 +24,8 @@ jobs:
       REMAINDER_WORKERS: ${{ startsWith(matrix.os, 'macos') && '3' || '4' }}
       # The weekly run stays cold so cache-identity defects still surface.
       NATIVE_CACHE: >-
-        ${{ github.event_name != 'schedule' && format('{0}{1}',
-        startsWith(matrix.os, 'macos') && 'macos' || 'linux',
-        matrix.lane == 'sanitizer' && '-sanitizer' || '') || '' }}
+        ${{ github.event_name != 'schedule' && format('{0}-remaining-{1}-{2}',
+        startsWith(matrix.os, 'macos') && 'macos' || 'linux', matrix.lane, matrix.shard) || '' }}
     strategy:
       fail-fast: false
       matrix:
