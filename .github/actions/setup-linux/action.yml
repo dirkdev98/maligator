@@ -49,8 +49,19 @@ runs:
     - name: Configure the bounded Maligator cache
       shell: bash
       run: |
-        echo "MALIGATOR_CACHE_DIR=$RUNNER_TEMP/maligator-cache" >> "$GITHUB_ENV"
-        mkdir -p "$RUNNER_TEMP/maligator-cache"
+        cache="$RUNNER_TEMP/maligator-cache"
+        # Native lanes write tens of gigabytes of objects and eval-enabled binaries, more
+        # than the hosted root disk holds; its larger ephemeral disk keeps the same paths.
+        if mountpoint -q /mnt &&
+          (( $(df --output=avail -B1 /mnt | tail -1) > $(df --output=avail -B1 "$RUNNER_TEMP" | tail -1) )); then
+          sudo install -d -o "$(id -u)" -g "$(id -g)" /mnt/maligator-cache /mnt/maligator-tmp
+          ln -sfn /mnt/maligator-cache "$cache"
+          echo "TMPDIR=/mnt/maligator-tmp" >> "$GITHUB_ENV"
+        else
+          mkdir -p "$cache"
+        fi
+        echo "MALIGATOR_CACHE_DIR=$cache" >> "$GITHUB_ENV"
+        df -h / /mnt 2>/dev/null || df -h /
 
     - name: Restore the pinned Test262 corpus
       if: inputs.cache-test262 == 'true'
