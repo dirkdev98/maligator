@@ -8,7 +8,9 @@ export function writePrimordialInventoryDriver(outDir: string): string {
 		?.split("} MalIntrinsic;")[0];
 	if (enumeration === undefined) throw new Error("Missing intrinsic enum");
 	const roots = enumeration.split("\n").flatMap((line) => {
-		if (/^#(?:if|elif|else|endif)/.test(line)) return [line];
+		const requires = /^\s*\/\* requires (MAL_\w+) \*\/$/.exec(line)?.[1];
+		if (requires !== undefined) return [`#if ${requires}`];
+		if (/^\s*\/\* end requires \*\/$/.test(line)) return ["#endif"];
 		const name = /^\s*(MAL_INTRINSIC_\w+)(?:\s*=\s*[^,]+)?,/.exec(line)?.[1];
 		return name === undefined || name === "MAL_INTRINSIC_COUNT"
 			? []
