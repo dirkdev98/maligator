@@ -1,5 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+	copyFileSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -42,12 +49,12 @@ function writeApplication(extra: string): void {
 	);
 }
 
-function build(): string {
+function build(cwd = project): string {
 	const result = spawnSync(
 		process.execPath,
 		[path.join(repositoryRoot, "src/index.ts"), "build", "--verbose"],
 		{
-			cwd: project,
+			cwd,
 			env: { ...process.env, MALIGATOR_DEVELOPMENT_FRAGMENTS: "1" },
 			encoding: "utf-8",
 			maxBuffer: 64 * 1024 * 1024,
@@ -58,10 +65,10 @@ function build(): string {
 	return `${result.stdout}\n${result.stderr}`;
 }
 
-function runBinary(): string {
-	const directory = path.join(project, ".cache/mal-build/development");
-	const binary = readdirSync(directory).find((name) =>
-		/^fragments-[0-9a-f]+$/.test(name),
+function runBinary(cwd = project, name = "fragments"): string {
+	const directory = path.join(cwd, ".cache/mal-build/development");
+	const binary = readdirSync(directory).find((file) =>
+		new RegExp(`^${name}-[0-9a-f]+$`).test(file),
 	);
 	expect(binary).toBeDefined();
 	const result = spawnSync(path.join(directory, binary!), [], {
@@ -99,5 +106,21 @@ describe("development builds from relocatable fragments", () => {
 		expect(compiled).toContain("development-fragment-images");
 		expect([...fragments]).toHaveLength(1);
 		expect(fragments.has(undefined)).toBe(false);
+	});
+
+	it("runs worker roots through the compiled worker registry", () => {
+		const workers = path.join(project, "workers");
+		mkdirSync(workers, { recursive: true });
+		for (const file of ["main.mjs", "jobs.mjs"])
+			copyFileSync(
+				path.join(repositoryRoot, "tests/local/worker-math-cache", file),
+				path.join(workers, file),
+			);
+		writeFileSync(
+			path.join(workers, "maligator.build.ts"),
+			'export default { entry: "main.mjs", outputName: "workers", engine: { primordials: "mutable" } };\n',
+		);
+		build(workers);
+		expect(runBinary(workers, "workers")).toBe("worker-math-cache PASS\n");
 	});
 });

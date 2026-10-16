@@ -1002,18 +1002,23 @@ function prepareCommandState(
 		}
 
 		const programImage = frontend.programImage;
-		if (developmentFragments && frontend.workerImages.length > 0)
-			commandError(
-				"error: development fragments do not support worker roots yet; unset MALIGATOR_DEVELOPMENT_FRAGMENTS",
-			);
 		const output = reporter.phase("Generate native code", () =>
 			developmentFragments
-				? developmentFragmentUnits(
-						frontend.runtimeArtifacts,
-						frontend.fragmentCompilerArtifacts,
-						entrypointPath,
-						maligatorCacheDirectory(),
-					)
+				? [
+						...developmentFragmentUnits(
+							frontend.runtimeArtifacts,
+							frontend.fragmentCompilerArtifacts,
+							entrypointPath,
+							maligatorCacheDirectory(),
+						),
+						// Worker roots stay whole-program images behind the compiled registry.
+						...emitWorkerImageTranslationUnits(frontend.workerImages, {
+							sourcePath: nativeSourcePath,
+							compiled: compiledNativeOutput,
+							assets,
+							maligatorSurface: buildConfig.surface.maligator,
+						}),
+					]
 				: [
 						...emitProgramTranslationUnits(programImage, {
 							sourcePath: nativeSourcePath,
