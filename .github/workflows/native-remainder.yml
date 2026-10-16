@@ -72,6 +72,16 @@ jobs:
           npm run test:native:remainder -- --workers "$REMAINDER_WORKERS" --lane ${{ matrix.lane }}
           --shard ${{ matrix.shard }}/${{ matrix.shards }}
 
+      # A Linux shard without /mnt filled 87 GB of free root disk; record where it goes.
+      - name: Report disk usage
+        if: always()
+        shell: bash
+        run: |
+          df -h / "${TMPDIR:-/tmp}" "$MALIGATOR_CACHE_DIR/" 2>/dev/null || true
+          du -sh "$MALIGATOR_CACHE_DIR"/v1/* "$MALIGATOR_CACHE_DIR"/v1/blobs/* 2>/dev/null | sort -h | tail -15 || true
+          echo "temporary directories: $(find "${TMPDIR:-/tmp}" -mindepth 1 -maxdepth 1 | wc -l)"
+          du -sh "${TMPDIR:-/tmp}"/* 2>/dev/null | sort -h | tail -15 || true
+
       - name: Retain native libraries for later runs
         if: always()
         uses: ./.github/actions/save-native-cache
