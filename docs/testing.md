@@ -85,9 +85,11 @@ cache probe sequence. Semantic output checks already verify loop results.
 
 Native global setup prepares the shared eval runtimes before timed hooks, including
 the web-disabled variant only when its fixture is selected. Specialized runtimes
-belong in preparation rather than consuming an execution timeout. Child execution
-deadlines stay bounded and scale for sanitizer and GC stress; distinguish runtime
-preparation, fixture compilation, and execution in failure reports.
+belong in preparation rather than consuming an execution timeout. Native Vitest tests
+and hooks default to a 20-minute cold-build budget, because which file first builds a
+runtime variant depends on scheduling and sharding. Child execution deadlines stay
+bounded and scale for sanitizer and GC stress; distinguish runtime preparation,
+fixture compilation, and execution in failure reports.
 
 Do not guess when a regression plausibly belongs in more than one lane, such as
 Test262 versus native or WPT versus native. Ask the user which acceptance boundary

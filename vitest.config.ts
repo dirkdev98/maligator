@@ -70,8 +70,11 @@ export default defineConfig({
 					pool: "forks",
 					maxWorkers: nativeForks,
 					sequence: { groupOrder: 1 },
-					testTimeout: 60000,
-					hookTimeout: 180000,
+					// Which file first builds a runtime variant depends on scheduling and
+					// sharding, so tests and hooks get the cold-build budget; runToStdout
+					// deadlines still bound every child execution.
+					testTimeout: 1_200_000,
+					hookTimeout: 1_200_000,
 				},
 			},
 		],
