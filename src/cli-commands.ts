@@ -150,6 +150,8 @@ export interface DevelopmentWatchHost {
 interface DevelopmentBuildCache {
 	toolchains: Map<string, { toolchain: Toolchain; plan: NativeBuildPlan }>;
 	runners: Map<string, string>;
+	/** The previous build's compiler warnings for each entrypoint. */
+	warnings: Map<string, ReadonlySet<string>>;
 }
 
 export interface DevelopmentProcessHost {
@@ -718,12 +720,16 @@ function prepareCommandState(
 	const finish = (frontend: CompiledBuildFrontend): BuildCommandResult => {
 		validatePreparedInputs();
 		reporter.detail("Frontend cache", `${frontend.cache} (${frontend.frontendMs}ms)`);
-		for (const diagnostic of frontend.diagnostics) {
-			reporter.warning(
+		const warnings = frontend.diagnostics.map(
+			(diagnostic) =>
 				`${diagnostic.path}:${diagnostic.line}:${diagnostic.column} ` +
-					`[${diagnostic.code}] ${diagnostic.message}`,
-			);
-		}
+				`[${diagnostic.code}] ${diagnostic.message}`,
+		);
+		// A watched rebuild replays unchanged dependencies' warnings; repeat none of them.
+		const previousWarnings = context.developmentCache?.warnings.get(entrypointPath);
+		for (const warning of warnings)
+			if (previousWarnings?.has(warning) !== true) reporter.warning(warning);
+		context.developmentCache?.warnings.set(entrypointPath, new Set(warnings));
 		reporter.detail(
 			frontend.phases.workerOverlap ? "Owner module parses" : "Module parses",
 			`${frontend.moduleParses.hits} reused, ${frontend.moduleParses.misses} parsed`,
@@ -1476,6 +1482,7 @@ export async function devCommand(
 		developmentCache: context.developmentCache ?? {
 			toolchains: new Map(),
 			runners: new Map(),
+			warnings: new Map(),
 		},
 	};
 	const initialBuildStartedAt = Date.now();

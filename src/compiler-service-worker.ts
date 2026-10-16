@@ -37,7 +37,11 @@ function compilationContext(
 				installation: request.installation,
 				stripTypes: stripCompactTypes,
 				frontendSession: new FrontendCompilationSession(),
-				developmentCache: { toolchains: new Map(), runners: new Map() },
+				developmentCache: {
+					toolchains: new Map(),
+					runners: new Map(),
+					warnings: new Map(),
+				},
 			},
 		};
 	}

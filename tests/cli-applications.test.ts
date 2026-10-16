@@ -240,6 +240,69 @@ describe("CLI application images", () => {
 			rmSync(directory, { recursive: true, force: true });
 		}
 	});
+	it("prints each watched rebuild's compiler warnings only when they are new", () => {
+		const directory = mkdtempSync(path.join(os.tmpdir(), "mal-rebuild-warnings-"));
+		const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+		try {
+			const entry = path.join(directory, "entry.mts");
+			const config = path.join(directory, "maligator.build.mts");
+			const mutation = (name: string) =>
+				`Object.defineProperty(Function.prototype, "${name}", { value: 1 });`;
+			writeFileSync(entry, `${mutation("first")}\nconsole.log(1);\n`);
+			writeFileSync(
+				config,
+				"export default { surface: { node: false, webPlatform: false }, engine: { eval: false, realms: false, regexp: false, temporal: false, intl: { enabled: false } } };\n",
+			);
+			const context = {
+				stripTypes: stripCompactTypes,
+				installation: productCompilerInstallation(
+					directory,
+					"compiler.malw",
+					"test.mjs",
+					undefined,
+					"/runner",
+				),
+				frontendSession: new FrontendCompilationSession(),
+				developmentCache: {
+					toolchains: new Map(),
+					runners: new Map(),
+					warnings: new Map(),
+				},
+			};
+			const command = {
+				kind: "run" as const,
+				entry,
+				configPath: config,
+				verbose: false,
+				profile: false,
+				programArgs: [],
+			};
+			const warningsOf = (build: () => void) => {
+				stderr.mockClear();
+				build();
+				return stderr.mock.calls
+					.map(([text]) => String(text))
+					.filter((text) => text.startsWith("warning: "));
+			};
+
+			const first = warningsOf(() => prepareCommand(command, context));
+			expect(first).toHaveLength(1);
+			expect(first[0]).toContain("Function.prototype");
+			expect(warningsOf(() => prepareCommand(command, context))).toEqual([]);
+
+			writeFileSync(
+				entry,
+				`${mutation("first")}\nconsole.log(2);\n${mutation("second")}\n`,
+			);
+			context.frontendSession.invalidate(entry);
+			const edited = warningsOf(() => prepareCommand(command, context));
+			expect(edited).toHaveLength(1);
+			expect(edited[0]).toContain(":3:");
+		} finally {
+			stderr.mockRestore();
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
 	it("waits for evaluation and joined exit, preserves argv, and releases even completed images", async () => {
 		const images = imageHarness();
 		const image = descriptor("/app.mts");
