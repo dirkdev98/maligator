@@ -172,7 +172,7 @@ describe("functional replacer callback nomination", () => {
 				timeoutMs: 60_000,
 			}),
 		).toBe(expected);
-	}, 600_000);
+	});
 
 	it("keeps eval callbacks generic and nominates compiled callbacks across owned realms", () => {
 		const realmFixture = "tests/local/functional-replacer-realms.js";
@@ -217,5 +217,5 @@ describe("functional replacer callback nomination", () => {
 				),
 			).toBe(compiled ? 2 : 0);
 		}
-	}, 600_000);
+	});
 });

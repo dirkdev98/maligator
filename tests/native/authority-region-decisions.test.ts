@@ -37,7 +37,7 @@ describe("Core-owned guarded-region authority decisions", () => {
 				);
 			}
 		}
-	}, 600_000);
+	});
 
 	it("preserves locked, mutable, eval, and cross-Realm behavior", () => {
 		for (const binary of binaries) assertResultPass(runToStdout(binary));

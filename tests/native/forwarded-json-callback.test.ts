@@ -179,7 +179,7 @@ describe("forwarded JSON callback nomination", () => {
 				timeoutMs: 60_000,
 			}),
 		).toBe(expected);
-	}, 600_000);
+	});
 
 	it("keeps eval callbacks generic and nominates compiled callbacks across owned realms", () => {
 		const realmFixture = "tests/local/forwarded-json-callback-realms.js";
@@ -224,5 +224,5 @@ describe("forwarded JSON callback nomination", () => {
 				),
 			).toBe(compiled ? 2 : 0);
 		}
-	}, 600_000);
+	});
 });

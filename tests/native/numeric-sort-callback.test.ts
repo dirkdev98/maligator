@@ -30,7 +30,7 @@ describe("numeric sort callback specialization through both emitters", () => {
 				expected,
 			);
 		}
-	}, 600_000);
+	});
 
 	it("preserves an overridden call property on the canonical sort builtin", () => {
 		const overrideFixture = "tests/local/numeric-sort-call-override.mjs";
@@ -48,7 +48,7 @@ describe("numeric sort callback specialization through both emitters", () => {
 		});
 		for (const binary of [pair.compiled, pair.interpreted])
 			expect(runToStdout(binary, { env: STRESS_ENV }).trim()).toBe(expectedOverride);
-	}, 600_000);
+	});
 
 	it.each(["mutable", "locked"] as const)(
 		"preserves ordering, callbacks, and fallback behavior with %s primordials",

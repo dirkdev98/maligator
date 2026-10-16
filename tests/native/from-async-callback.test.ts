@@ -137,7 +137,7 @@ describe("retained Array.fromAsync callback contracts", () => {
 				`realms compiled=${compiled}`,
 			);
 		}
-	}, 600_000);
+	});
 	it.each([true, false])(
 		"uses Number indices, proxy definitions, and an awaited safe-index close (compiled=%s)",
 		(compiled) => {

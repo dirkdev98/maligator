@@ -90,5 +90,5 @@ describe("VM-owned foreign callback realms", () => {
 				timeoutMs: 60_000,
 			}),
 		).toBe("owned-realm-callback PASS\n");
-	}, 600_000);
+	});
 });

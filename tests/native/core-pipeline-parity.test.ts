@@ -62,7 +62,7 @@ describe("optimized Core through compiled and interpreted lowering", () => {
 			outDir,
 			config: configFor("locked"),
 		});
-	}, 600_000);
+	});
 
 	it("agrees in the mutable world", () => {
 		expect(stdoutLine(mutable.compiled)).toBe(mutableLine);

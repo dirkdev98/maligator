@@ -178,7 +178,7 @@ describe("forwarded from mapper nomination", () => {
 				timeoutMs: 60_000,
 			}),
 		).toBe(expected);
-	}, 600_000);
+	});
 
 	it("keeps eval callbacks generic and nominates compiled callbacks across owned realms", () => {
 		const realmFixture = "tests/local/forwarded-from-realms.js";
@@ -223,5 +223,5 @@ describe("forwarded from mapper nomination", () => {
 				),
 			).toBe(compiled ? 2 : 0);
 		}
-	}, 600_000);
+	});
 });

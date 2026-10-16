@@ -181,7 +181,7 @@ describe("forwarded sort comparator nomination", () => {
 				timeoutMs: 60_000,
 			}),
 		).toBe(expected);
-	}, 600_000);
+	});
 
 	it("keeps eval comparators generic and preserves owned foreign builtin result realms", () => {
 		const realmFixture = "tests/local/forwarded-sort-realms.js";
@@ -226,5 +226,5 @@ describe("forwarded sort comparator nomination", () => {
 				),
 			).toBe(compiled ? 2 : 0);
 		}
-	}, 600_000);
+	});
 });

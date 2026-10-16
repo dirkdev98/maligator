@@ -163,7 +163,7 @@ describe("retained lazy Iterator callback contracts", () => {
 				timeoutMs: 60_000,
 			}),
 		).toBe(expected);
-	}, 600_000);
+	});
 	it("retains owned cross-realm callbacks while eval callbacks remain generic", () => {
 		const realmFixture = "tests/local/retained-iterator-callback-realms.js";
 		const expected = nodeOracle(realmFixture, {}, true);
@@ -207,7 +207,7 @@ describe("retained lazy Iterator callback contracts", () => {
 				),
 			).toBe(compiled ? 1 : 0);
 		}
-	}, 600_000);
+	});
 	it.each([true, false])(
 		"uses Number counters and stable IDs across relocation (compiled=%s)",
 		(compiled) => {

@@ -70,7 +70,7 @@ try { mal.assets.materialize("missing"); } catch (error) { console.log(error.mes
 			outDir,
 			config,
 		});
-	}, 600_000);
+	});
 
 	function assertRun(env?: NodeJS.ProcessEnv): void {
 		const lines = runToStdout(binary, { env }).trim().split("\n");
