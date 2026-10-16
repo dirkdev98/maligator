@@ -65,6 +65,7 @@ export function capturePrimordialInventory(mode: string, outDir: string) {
 	const jsonl = execFileSync(binary, {
 		encoding: "utf8",
 		maxBuffer: 64 * 1024 * 1024,
+		timeout: 60_000,
 		env: {
 			PATH: "/usr/bin:/bin",
 			LANG: "C",
@@ -86,6 +87,7 @@ export function capturePrimordialInventory(mode: string, outDir: string) {
 		const symbols = execFileSync("nm", ["-n", binary], {
 			encoding: "utf8",
 			maxBuffer: 16 * 1024 * 1024,
+			timeout: 60_000,
 		})
 			.split("\n")
 			.flatMap((line) => {
