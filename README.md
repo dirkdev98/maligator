@@ -1,331 +1,97 @@
+<img src="website/mascot.webp" alt="The Maligator mascot" width="112" align="right">
+
 # Maligator
 
-A lean ahead-of-time JavaScript-to-C compiler and runtime. Maligator produces a
-standalone native executable and keeps optional engine and host surfaces out of
-builds that do not request them.
+An ahead-of-time JavaScript compiler and native runtime. Maligator compiles
+JavaScript and erasable TypeScript to C and links it with its runtime into a
+standalone executable. Engine features and host APIs are selected per build, so a
+program that does not ask for `eval`, Intl, or the Node.js surface does not carry
+them.
 
-## Quick Start
+Maligator is an experimental alpha. Check
+[compatibility](https://maligator.ddv.tools/compatibility) before relying on a Web
+API, Node.js module, or language feature.
 
-Run commands from the project root:
+## Install
+
+```shell
+npm install --global @maligator/cli@alpha
+```
+
+Prebuilt packages cover macOS and glibc-based Linux on arm64 and x64. The npm launcher
+needs Node.js 20 or newer; the CLI itself and the executables it builds do not.
+
+## Quick start
+
+From the root of an application project:
 
 ```shell
 maligator init
-maligator doctor
-maligator build
-maligator run -- first-argument "two words"
+maligator run
+maligator build --production
 ```
 
-`init` creates `maligator.build.ts` without overwriting an existing file. It selects
-the first entry that exists from `src/index.ts`, `src/main.ts`, `index.ts`, and
-`main.ts`; if none exists, it writes `src/index.ts` as the starting point.
+`init` creates `maligator.build.ts` and, when no entry point exists yet, a starter
+`src/index.ts`. `run` compiles a development image and executes it. `build` produces
+a native executable and prints its path. See
+[Getting started](https://maligator.ddv.tools/guides/getting-started) for the full
+walkthrough.
 
-The source-built CLI resolves its runtime tree and eval compiler from its own module
-installation, not from the working directory. The distributed product CLI instead
-embeds and materializes those resources, so it is self-contained. In both cases the
-working directory remains the application project root for config, entries, assets,
-and output caches. Compiler installation roots are explicit absolute paths passed into
-the command layer; native stages do not infer runtime ownership from the application.
+## Native toolchain
+
+`run` and `test` use the runtime embedded in the CLI for ordinary configurations.
+Native builds compile the runtime on your machine and need:
+
+- A C compiler and archive tool with C23 support: Apple clang, clang 19 or newer, or
+  gcc 15 or newer.
+- Rustup, for the Rust toolchain pinned by the runtime.
+- A C++ compiler, only when `surface.webPlatform` is enabled.
+
+`maligator doctor --verbose` checks all of it.
+[Set up native builds](https://maligator.ddv.tools/guides/native-toolchain) covers
+installation per host and cross-builds through Zig.
+
+## Status
+
+What works today:
+
+- Standalone native executables, with optional embedded files and an HTTP server.
+- A runtime shaped per build: eval, Realms, RegExp, Temporal, Intl, Web APIs, and a
+  curated Node.js surface are each opt-in or opt-out.
+- Isolated workers with shared memory, transferable ports, and task pools.
+- More than fifty thousand Test262 tests pass in the compiled baseline.
+
+What does not, yet:
+
+- Real project use has only just started and keeps exposing rough edges.
+- The Node.js surface is curated, not complete.
+- Some paths are quick; ordinary constructs can still be much slower.
+- Windows is not supported, and the alpha binaries are unsigned and not notarized.
 
 ## Documentation
 
-Start with the [documentation home](https://maligator.ddv.tools/docs). Guides cover
-application tasks; the API reference lists signatures, defaults, and failure behavior.
+The [documentation](https://maligator.ddv.tools/docs) has task guides and an API
+reference with signatures, defaults, and failure behavior. Good places to start:
 
 - [Develop an application](https://maligator.ddv.tools/guides/development) and
-  [load TypeScript declarations](https://maligator.ddv.tools/guides/typescript).
-- [Test an application](https://maligator.ddv.tools/guides/testing).
-- [Run tasks in workers](https://maligator.ddv.tools/guides/workers),
-  [transfer values](https://maligator.ddv.tools/guides/workers/messages), and
-  [cancel work](https://maligator.ddv.tools/guides/workers/cancellation).
-- [Configure a build](https://maligator.ddv.tools/guides/build-configuration),
-  [embed files](https://maligator.ddv.tools/guides/assets), and
+  [test it](https://maligator.ddv.tools/guides/testing).
+- [Configure a build](https://maligator.ddv.tools/guides/build-configuration) and
+  [build for production](https://maligator.ddv.tools/guides/production).
+- [Run tasks in workers](https://maligator.ddv.tools/guides/workers) and
   [serve HTTP](https://maligator.ddv.tools/guides/http).
-- [Build for production](https://maligator.ddv.tools/guides/production) and
-  [profile an application](https://maligator.ddv.tools/guides/profiling).
-- [Look up the API](https://maligator.ddv.tools/api),
-  [CLI flags](https://maligator.ddv.tools/api/cli), or
-  [compatibility](https://maligator.ddv.tools/compatibility).
+- [Troubleshooting](https://maligator.ddv.tools/guides/troubleshooting) and the
+  [CLI reference](https://maligator.ddv.tools/api/cli).
 
-Every documentation page has a Markdown copy. The
-[public symbol index](https://maligator.ddv.tools/reference.json) includes direct
-links, signatures, and availability.
+Every page has a Markdown copy, and the
+[public symbol index](https://maligator.ddv.tools/reference.json) lists every symbol
+with its signature and availability.
 
-For source-checkout workflows, use the repository sections below and
-[docs/testing.md](docs/testing.md). Application tests use `maligator test`;
-repository tests use the npm commands in Development.
+## Contributing
 
-## Native Toolchain
+[CONTRIBUTING.md](CONTRIBUTING.md) covers setting up the checkout, running the
+compiler from source, and verifying a change. Coding agents follow
+[AGENTS.md](AGENTS.md).
 
-The distributed CLI runs development images and application tests without these
-tools. They are required when producing a standalone native binary with `build`.
+## License
 
-Every native build performs the same discovery and capability checks used by
-`doctor`; running `doctor` first is optional. Runtime translation units are compiled
-directly with `CC` and collected into three static archives with `ar`. Maligator
-requires:
-
-- A C compiler and archive tool with real C23 support — the runtime uses the
-  `bool`/`true`/`false` keywords (no `<stdbool.h>`), `nullptr`, and `#embed`, so
-  Apple clang, clang >= 19, or gcc >= 15 works; gcc <= 14 accepts `-std=c2x` but
-  lacks `#embed` and is rejected by the `doctor` C2x probe
-- Rustup and the `cargo`/`rustc` selected by `runtime/rust/rust-toolchain.toml`
-- A C++ compiler/runtime only when `surface.webPlatform` is enabled
-
-`CC` and `CXX` override compiler selection. Otherwise tools are resolved strictly
-from `PATH`. `maligator doctor --verbose` reports resolved paths, versions, C and
-Rust targets, tested capabilities, and probe-cache status.
-
-An explicit `build --target <rust-triple>` cross-builds through a detected Zig
-installation. The initial supported targets are:
-
-- `aarch64-apple-darwin`
-- `x86_64-apple-darwin`
-- `aarch64-unknown-linux-gnu`
-- `x86_64-unknown-linux-gnu`
-
-Maligator maps the Rust triple to Zig's target syntax and consistently uses `zig
-cc`, `zig c++`, and `zig ar` for the C runtime, Cargo native dependencies, and final
-link; optional production stripping is applied by `zig cc` during that link. Install
-the matching Rust standard library first with `rustup target add <rust-triple>`. Use
-`maligator doctor --target <rust-triple> --verbose` to validate both halves of the
-cross toolchain. Cross-built outputs live under
-`.cache/mal-build/<mode>/<rust-triple>/`; `maligator run` remains a native-host
-command.
-
-Discovery, normalized feature booleans, build plan, installation roots, environment
-snapshot, and cache root are frozen into one `NativeBuildContext`. The C archive,
-Rust archive, and final linker consume that same context. The final linker returns a
-typed result containing the executable path, exact artifact bundle, and context, so
-callers such as size tracking cannot accidentally resolve and measure a different
-build.
-
-On macOS, install Apple build tools with `xcode-select --install`. On Linux, install
-a C23-capable compiler and select it: on Debian/Ubuntu the stock `build-essential`
-(gcc 12) is too old, so `sudo apt install clang-19` and build with
-`CC=clang-19 CXX=clang++-19` (or use gcc >= 15 where available). Install Rust through
-Rustup, then enter `runtime/rust` and run `rustup show` to install/select the pinned
-toolchain.
-
-The distributed self-hosted CLI embeds the runtime C sources, Rust crate, and a
-prebuilt eval compiler wire. It materializes those content-addressed assets on
-startup, so the copied compiler can run the full native pipeline outside a Maligator
-checkout and without Node.js. `npm run selfhost:cli` exercises that transfer path.
-
-## Alpha releases
-
-The initial npm support matrix is macOS and glibc-based Linux on arm64 and x64.
-Windows is deferred because the native host/runtime currently depends on POSIX APIs.
-The first alpha binaries are unsigned; macOS artifacts are not notarized. Minimum OS
-versions will be fixed after the release artifacts have run on the clean-host
-validation matrix.
-
-`@maligator/cli` is a small Node.js launcher with exact-version optional dependencies
-on these native packages:
-
-- `@maligator/cli-darwin-arm64`
-- `@maligator/cli-darwin-x64`
-- `@maligator/cli-linux-arm64`
-- `@maligator/cli-linux-x64`
-
-There is no source-build fallback. An unsupported host or installation without its
-optional platform package fails with an actionable message.
-
-`package.json` is the release version source of truth; `src/version.ts` is generated
-and checked before building or publishing. Every prerelease is published explicitly
-under the npm `alpha` dist-tag. The release automation does not attempt to change or
-remove the registry's `latest` tag.
-
-`release:publish` verifies every selected tarball against `packages.json`, publishes
-the platform packages first, and publishes `@maligator/cli` last under the `alpha`
-dist-tag. Each publish is a plain synchronous `npm publish` with the terminal's
-stdin/stdout/stderr inherited, so enter the OTP directly when npm prompts. Build,
-pack, and publish log per-target progress and elapsed time.
-
-The `Prepare release packages` GitHub Actions workflow is the preferred packaging
-path. Dispatch it on the exact release commit. It cross-builds all four targets on
-macOS ARM, executes the native binary and installed npm launcher on every supported
-host, and retains the validated tarballs plus `packages.json` for seven days. The
-intermediate multi-target workspace is deleted after the smoke matrix passes.
-
-Prepare the next numeric alpha with `npm run version:alpha`, commit the release
-preparation, and push that exact commit to `main` before dispatching the workflow.
-
-Download the successful run's `maligator-<version>-packages` artifact into
-`dist/release/packs` in a clean checkout. `release:create-github` then verifies the
-commit and tarball checksums, creates the exact `v<package.json version>` tag and a
-draft GitHub prerelease, uploads every npm tarball plus `packages.json`, verifies the
-complete draft, and publishes the GitHub release. Publishing the prerelease triggers
-the separate `Publish npm alpha` workflow.
-
-```shell
-gh workflow run release-packages.yml --ref main
-run_id="$(gh run list --workflow release-packages.yml --commit "$(git rev-parse HEAD)" --event workflow_dispatch --status success --limit 1 --json databaseId --jq '.[0].databaseId')"
-version="$(node -p 'require("./package.json").version')"
-gh run download "$run_id" --name "maligator-$version-packages" --dir dist/release/packs
-npm run release:create-github -- --confirm "$(node -p "require('./package.json').version")"
-```
-
-The local single-target build remains available as a fallback:
-
-```shell
-npm run release:build -- --target aarch64-apple-darwin
-npm run release:smoke
-npm run release:pack -- --target aarch64-apple-darwin
-git push origin main
-npm run release:create-github -- --confirm "$(node -p "require('./package.json').version")"
-```
-
-The publish workflow only checks out the tagged commit, validates its ancestry and
-exact version tag, downloads the prepared assets, rechecks their manifest and
-checksums, and publishes through npm trusted publishing. It has `id-token: write`
-permission but no stored npm token. `--trusted-publishing` is accepted only for the
-matching tag in a GitHub Actions OIDC environment; local publishing continues to
-require web authentication. If draft creation or asset verification fails, the
-GitHub release remains unpublished and the npm workflow does not run.
-
-GitHub release immutability is a required one-time repository setting. Once the
-draft is published, GitHub then prevents replacement or deletion of its tag and
-assets. Enable it with an administrative GitHub credential before the first release:
-
-```shell
-gh api --method PUT -H "X-GitHub-Api-Version: 2026-03-10" \
-  repos/dirkdev98/maligator/immutable-releases
-```
-
-If publishing fails after an immutable release is created, repair and push `main`,
-then retry that same release without replacing its tag or assets:
-
-```shell
-gh workflow run npm-release.yml --ref main -f release_tag=v0.1.0-alpha.8
-```
-
-The retry path accepts only the exact version in `package.json`, checks that the
-release is an immutable prerelease whose tag commit is contained in `main`, and
-revalidates every downloaded tarball before publishing.
-
-Before the first workflow release, configure every npm package once for repository
-`dirkdev98/maligator`, workflow filename `npm-release.yml`, and the `npm publish`
-permission. The CLI equivalent for each package is:
-
-```shell
-npm trust github @maligator/cli --repo dirkdev98/maligator --file npm-release.yml --allow-publish --yes
-```
-
-Repeat that command for the four `@maligator/cli-<platform>-<arch>` packages listed
-above. npm protects this one-time trust change with 2FA; subsequent workflow
-publishes use short-lived OIDC credentials and require neither an npm token nor an
-OTP.
-
-`release:build` and `release:pack` default to `aarch64-apple-darwin` so a local
-release only builds Apple Silicon macOS. Pass `-- --all-targets` for the complete
-matrix or `-- --target <rust-triple>` for one explicit target. Build and pack must
-use the same selection. Packing a native-host target also installs the two tarballs
-into a clean temporary project and verifies the installed launcher.
-
-Applications with `surface.webPlatform: true` link `host_main.c`, which installs the
-web globals and drives the host event loop. Non-web applications retain the lean
-synchronous `test262_main.c` driver; the product CLI itself uses `host_main.c` for its
-hosted command surface.
-
-## Build Modes
-
-Development builds use `-O2`, keep symbols, and do not use LTO. They are intended
-for normal iteration and useful native crash diagnostics.
-
-`maligator build --production` still uses `-O2`, adds compile/archive/link LTO when
-the selected toolchain passes the LTO probe, and strips native symbols after linking
-when the host strip probe succeeds. Unsupported LTO or stripping emits a warning and
-continues with a valid `-O2` executable. Missing required C2x or C++ link capability
-is a hard error. Stripping does not remove Maligator's own JavaScript source-position
-tables.
-
-## Cache Layout
-
-Maligator keeps reusable inputs separate from project outputs:
-
-```text
-<user-cache>/maligator/v1/actions/       producer/action result manifests
-<user-cache>/maligator/v1/blobs/sha256/  immutable content-addressed outputs
-<user-cache>/maligator/v1/frontend/      serialized VM definitions
-<user-cache>/maligator/v1/toolchains/    tool identity and capability probes
-<user-cache>/maligator/v1/work/          disposable compiler/Cargo scratch
-<project>/.cache/mal-build/development/  generated C and development executables
-<project>/.cache/mal-build/production/   generated C and production executables
-```
-
-The user cache follows the platform convention (`~/Library/Caches` on macOS,
-`$XDG_CACHE_HOME` on Linux, and LocalAppData on Windows); `MALIGATOR_CACHE_DIR`
-overrides its base. Cache keys include relevant source content, producer protocol,
-normalized feature config, target, selected toolchain identity, build environment,
-and exact compile or Cargo arguments. Package semver is recorded as metadata, not
-used as a blanket invalidation key.
-Normal builds restore cached VM definitions before generated-C emission, skipping
-unchanged graph, semantic, optimization, allocation, and lowering work while
-preserving native-code metadata. Generated translation units and the driver are
-then compiled to independently content-addressed objects; unchanged objects are
-relinked without invoking their C compilation again. Definitions are assigned to
-deterministic, edit-local hash partitions with a 2 MiB soft target and an 8 MiB hard
-limit for an indivisible definition; code and data units remain separate, and worker
-count affects only scheduling. Normal output reports
-frontend, generated-C, toolchain, and native cache hit/miss status plus the final
-executable path. Removing
-`.cache/mal-build` forces project output materialization without discarding reusable
-artifacts. Use `maligator cache clear --all` for an intentional full cache reset.
-
-C and Rust outputs are published as immutable blobs only after compilation succeeds;
-an atomic action manifest makes the result visible. Runtime GC stress/verification
-flags are execution inputs and reuse the same binary. Build-affecting sanitizer, GC,
-feature, backend, optimization, target, and toolchain dimensions get distinct action
-keys. Within those dimensions, each runtime C object is keyed by its actual
-preprocessed input, so a feature change recompiles only translation units whose
-code changed. Feature-specific Rust archives share a serialized Cargo target tree
-and therefore reuse unaffected dependency work. Final products stay statically
-linked and self-contained. Test/program verdicts and benchmark measurements are
-always executed and are never cache entries.
-
-## Troubleshooting
-
-- `no entrypoint ... run 'maligator init'`: add `entry` to the config or pass an explicit entry.
-- `config file not found`: `--config` is relative to the current project root; no ancestor search occurs.
-- `node:* ... surface.node is disabled`: set `surface.node: true` only for programs needing the curated Node surface.
-- `eval is disabled`: the default `engine.eval: false` compiles the call site but throws if it executes. Set `true` to embed the runtime compiler, or `"compile-check"` to reject statically visible uses during the build.
-- `RegExp is disabled`: remove `engine.regexp: false` or avoid regular expressions.
-- `Toolchain is not ready`: run `maligator doctor --verbose`, check `CC`/`CXX`, `PATH`, and the platform-specific installation suggestions.
-- A stale or suspect artifact: inspect with `maligator cache status`, preview `maligator cache prune --dry-run`, or deliberately reset with `maligator cache clear --all`; normal identity changes invalidate affected actions automatically.
-- A custom self-hosted CLI reports a missing `runtime` or `compilerWire` asset: build it with the source-tree and prebuilt-wire asset set shown above.
-
-## Development
-
-Source tooling needs Node.js 24 or newer; native work also needs the
-[toolchain above](#native-toolchain). Read [AGENTS.md](AGENTS.md) for working policy.
-
-```shell
-npm ci
-npm run env:check -- --json
-node ./src/index.ts build path/to/entry.ts
-npm run test:unit -- tests/platform-catalog.test.ts
-```
-
-Choose affected tests while editing, then batch `npm run type-check` and
-`npm run lint:ci` after cohesive work. Unit commands run once by default; use
-`--watch` for an explicit watch loop. CI supplies broad acceptance at authorized
-checkpoints; [verification policy](AGENTS.md#verification) defines local fallbacks.
-
-Use [testing.md](docs/testing.md) for selections, tiers, and test placement,
-[benchmarking.md](docs/benchmarking.md) for performance comparisons, and
-[profiling.md](docs/profiling.md) for application investigation. Website changes
-follow [website/README.md](website/README.md). `test:full`, full Test262, and baseline
-replacement require explicit authorization.
-
-## Structure
-
-- `docs/decisions`: architecture decisions
-- `runtime`: C runtime and Rust FFI shim
-- `src/compiler/pipeline/compile-core.ts`: host-independent semantic-program to VM-definition compiler core
-- `src/compiler/pipeline/compile-program.ts`: module loading and compiler entrypoint orchestration
-- `src/native-build-context.ts`, `src/runtime-build.ts`, `src/local-build.ts`: explicit native context, atomic reusable artifacts, and final linking
-- `src/cli-commands.ts`: installation-aware command orchestration and web/non-web driver selection
-- `src`: remaining compiler, CLI, and build tooling
-- `tests`: unit and native integration coverage
-
-ECMAScript reference: [ECMA-262](https://tc39.es/ecma262/multipage/).
+[MIT](LICENSE)

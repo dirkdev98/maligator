@@ -99,6 +99,8 @@ maligator cache clear --all
 
 `status` reports Maligator-owned cache usage. `prune` removes eligible stale, rebuildable entries while preserving live leases and protected recent entries. The default target is 15 GiB and minimum age is 1 day; protections can leave more than the target. Use `--dry-run` to inspect candidates and `--verbose` for each entry. `clear --all` explicitly removes rebuildable cache entries. See [Troubleshooting](/guides/troubleshooting#inspect-cache-usage).
 
+The user cache lives in `~/Library/Caches/maligator` on macOS and `$XDG_CACHE_HOME/maligator` (default `~/.cache/maligator`) on Linux. `MALIGATOR_CACHE_DIR` replaces that directory. Project outputs live under `.cache/mal-build` in the project root; removing it keeps the reusable user cache.
+
 ## Diagnostic build options {#diagnostic-build-options}
 
 `build --serialize <file>` writes a portable program image for toolchain diagnostics. It cannot carry configured filesystem assets. Native builds use the compiled backend by default. `build --no-compiled` selects the interpreted native diagnostic backend. `--render-native-c` (alias `--print`) emits C for inspection, and `--dump-core` adds Core diagnostics. These diagnostics are separate from a deployable production artifact.

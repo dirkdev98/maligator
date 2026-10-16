@@ -1,6 +1,6 @@
 Install the CLI, create an entry point, and run it from your project root. The npm launcher needs Node.js 20 or newer. The installed native CLI and the executables it produces do not need Node.js.
 
-The current prebuilt package targets Apple Silicon macOS. Check the [package release instructions](https://github.com/dirkdev98/maligator/tree/main/npm/cli) for other targets and source builds.
+Prebuilt packages cover macOS and glibc-based Linux on arm64 and x64. Windows is not supported yet.
 
 ## Install the CLI
 
@@ -43,7 +43,7 @@ maligator doctor --verbose
 maligator build --production
 ```
 
-`doctor` checks the native toolchain. If it reports missing components, install those before using `build`. A successful build prints the executable path; launch that path directly. Native builds require a C/C++ compiler and Rust toolchain. Cross-builds also require the matching target tools.
+`doctor` checks the native toolchain. If it reports missing components, install those before using `build`; [Set up native builds](/guides/native-toolchain) lists the requirements per host. A successful build prints the executable path; launch that path directly.
 
 If `run` reports a missing entry, check `entry` in `maligator.build.ts` or pass it explicitly: `maligator run src/index.ts`.
 

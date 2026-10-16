@@ -10,11 +10,15 @@ Run `maligator init` to create a config, or pass an existing entry explicitly: `
 maligator doctor --verbose
 ```
 
-Check resolved `CC`/`CXX`, `PATH`, Rust, and the requested target. Ordinary development execution with Intl disabled can use the distributed embedded runtime; native builds and profiling still need the toolchain. For a cross-build, run `doctor --target <rust-triple> --verbose` before compiling.
+Check resolved `CC`/`CXX`, `PATH`, Rust, and the requested target against [the requirements](/guides/native-toolchain). Ordinary development execution with Intl disabled can use the distributed embedded runtime; native builds and profiling still need the toolchain. For a cross-build, run `doctor --target <rust-triple> --verbose` before compiling.
 
 ## Unknown import or missing global
 
 If the editor cannot resolve `maligator:workers`, load [the package types](/guides/typescript). If the compiler rejects a `node:` or Web API, enable its surface and check [Compatibility](/compatibility). Enabling a surface does not add an unsupported API. `Mal` uses `surface.webPlatform`; `mal` uses `surface.maligator`.
+
+## Eval or RegExp is disabled
+
+`eval is disabled in this build` means a dynamic compilation call ran under the default `engine.eval: false`. Set `engine.eval: true` to embed the runtime compiler, or `"compile-check"` to reject statically visible calls during the build instead. `RegExp is disabled by your build config` lists the regular expressions in an `engine.regexp: false` build; remove the setting or the expressions. See [engine choices](/guides/build-configuration).
 
 ## Import syntax is rejected
 

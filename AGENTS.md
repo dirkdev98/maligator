@@ -4,8 +4,11 @@ Maligator is an ahead-of-time JavaScript compiler and native runtime. Use curren
 source, command help, and test manifests to establish behavior. Saved memories,
 design documents, and old reports provide context, not proof about the current tree.
 [TODO.md](TODO.md) owns unfinished project work. Read topic references when needed:
+[contributing](CONTRIBUTING.md) for setup and the repository layout,
 [testing](docs/testing.md) for runner details and evidence,
-[benchmarking](docs/benchmarking.md) for performance, and
+[benchmarking](docs/benchmarking.md) for performance,
+[native builds](docs/native-builds.md) for toolchain and cache internals,
+[releasing](docs/releasing.md) for the release runbook, and
 [website](website/README.md) for documentation generation and previews.
 
 ## Scope and authority

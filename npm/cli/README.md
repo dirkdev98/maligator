@@ -94,7 +94,7 @@ defaults, availability, and direct links.
 
 `maligator test` and supported `maligator run` profiles use the development runtime
 embedded in the platform CLI and do not require a native toolchain. Native `build`
-commands—and development runs using Intl—require:
+commands and development runs using Intl require:
 
 - A C23 compiler and archive tool: Apple clang, clang 19 or newer, or GCC 15 or
   newer
@@ -104,15 +104,14 @@ commands—and development runs using Intl—require:
 On macOS, install Apple command-line tools with `xcode-select --install`. On Linux,
 install a recent compiler and set `CC` and `CXX` when it is not your system default.
 Run `maligator doctor --verbose` for resolved tool paths, versions, capabilities,
-and installation hints. The
-[native toolchain guide](https://github.com/dirkdev98/maligator#native-toolchain)
-has the full requirements and cross-compilation instructions.
+and installation hints.
+[Set up native builds](https://maligator.ddv.tools/guides/native-toolchain) has the
+full requirements and cross-compilation instructions.
 
 ## Alpha support
 
-`0.1.0-alpha.1` provides native packages for macOS and glibc-based Linux on arm64
-and x64. Later alpha releases currently default to Apple Silicon macOS; consult the
-release notes before upgrading on another host. Windows is not supported.
+Native packages cover macOS and glibc-based Linux on arm64 and x64. Windows is not
+supported.
 
 There is no source-build fallback for the CLI package. The alpha binaries are
 unsigned, and macOS binaries are not notarized. APIs, configuration, and supported

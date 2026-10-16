@@ -72,6 +72,11 @@ export const guides = [
 	],
 	["http", "Serve HTTP", "Start a listener and return responses."],
 	[
+		"native-toolchain",
+		"Set up native builds",
+		"Install the C and Rust toolchains and cross-build for another target.",
+	],
+	[
 		"production",
 		"Build for production",
 		"Create a native executable or deployable artifact.",

@@ -7,7 +7,9 @@ maligator doctor --verbose
 maligator build --production
 ```
 
-Native compilation needs a C/C++ compiler and Rust. `doctor` reports resolved paths, versions, target capabilities, and probe-cache status. On macOS, install Apple build tools with `xcode-select --install`; see the [repository toolchain instructions](https://github.com/dirkdev98/maligator#native-toolchain) for the complete host setup.
+Native compilation needs a C/C++ compiler and Rust. `doctor` reports resolved paths, versions, target capabilities, and probe-cache status. [Set up native builds](/guides/native-toolchain) lists the requirements and installation per host.
+
+Development builds keep native symbols and skip link-time optimization for useful crash diagnostics. `--production` adds link-time optimization when the toolchain supports it and strips native symbols after linking. When either step is unavailable, the build prints a warning and still produces a valid executable. Stripping keeps Maligator's JavaScript source positions.
 
 The output name comes from `outputName`, the unscoped package name, or the project directory. Production binaries are placed under the project build cache; use the path the command prints rather than guessing its cache identity.
 
@@ -39,7 +41,7 @@ maligator doctor --target x86_64-unknown-linux-gnu --verbose
 maligator build --production --target x86_64-unknown-linux-gnu
 ```
 
-Cross-builds use detected Zig tools for C/C++ and the matching Rust target for the runtime. Install and validate both halves. A target triple does not guarantee that every target host, operating-system version, or optional runtime feature is supported; test the artifact on its intended host.
+Cross-builds use detected Zig tools for C/C++ and the matching Rust target for the runtime. Install and validate both halves as described in [cross-build for another target](/guides/native-toolchain#cross-build-for-another-target). A target triple does not guarantee that every target host, operating-system version, or optional runtime feature is supported; test the artifact on its intended host.
 
 ## Bound worker-image compilation
 
