@@ -53,4 +53,5 @@ argon2Sync("argon2id", { ...parameters(9), tagLength: 64 });
 
 process.on("exit", () => {
 	if (outstanding !== 0) throw new Error("callbacks outstanding: " + outstanding);
+	console.log("leakargon2-ok");
 });

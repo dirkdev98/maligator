@@ -21,6 +21,8 @@ const fixtures = [
 		fixture: "tests/local/leakargon2.mjs",
 		nodeEnabled: true,
 		mainFile: HOST_MAIN,
+		// Node 24 can attempt the deliberately oversized request instead of rejecting it.
+		expectedOutput: "leakargon2-ok\n",
 	},
 ];
 const binaries = new Map<
@@ -34,7 +36,9 @@ beforeAll(() => {
 		binaries.set(
 			fixture.name,
 			buildBackendPairFromOneProgramImage({
-				...fixture,
+				fixture: fixture.fixture,
+				nodeEnabled: fixture.nodeEnabled,
+				mainFile: fixture.mainFile,
 				name: `leakcheck-${fixture.name}`,
 				outDir,
 			}),
@@ -54,7 +58,7 @@ function parseLeaks(output: string): { leaks: number; bytes: number } {
 
 function auditLeaks(binary: string): Promise<string> {
 	return new Promise((resolve, reject) => {
-		const child = spawn("leaks", ["--groupByType", "--atExit", "--", binary], {
+		const child = spawn("/usr/bin/leaks", ["--groupByType", "--atExit", "--", binary], {
 			env: { ...process.env, MAL_GC_AT_EXIT: "1" },
 			detached: true,
 			stdio: ["ignore", "pipe", "pipe"],
@@ -62,6 +66,14 @@ function auditLeaks(binary: string): Promise<string> {
 		let stdout = "";
 		let stderr = "";
 		let failure: Error | undefined;
+		function stopGroup(): void {
+			if (child.pid === undefined) return;
+			try {
+				process.kill(-child.pid, "SIGKILL");
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+			}
+		}
 		function abort(message: string): void {
 			if (failure !== undefined) return;
 			failure = new Error(message);
@@ -73,14 +85,7 @@ function auditLeaks(binary: string): Promise<string> {
 			process.stderr.write(
 				`[leak-audit] stalled process sample: ${binary}\n${sample.stdout ?? ""}\n${sample.stderr ?? ""}\n`,
 			);
-			if (child.pid !== undefined) {
-				try {
-					// The tool launches the audited process; terminate both on failure.
-					process.kill(-child.pid, "SIGKILL");
-				} catch (error) {
-					if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
-				}
-			}
+			stopGroup();
 		}
 		const timer = setTimeout(
 			() => abort(`leaks timed out after ${auditTimeoutMs}ms: ${binary}`),
@@ -98,6 +103,8 @@ function auditLeaks(binary: string): Promise<string> {
 			clearTimeout(timer);
 			reject(error);
 		});
+		// At-exit inspection can leave its stopped target holding the capture pipes open.
+		child.once("exit", stopGroup);
 		child.once("close", (code, signal) => {
 			clearTimeout(timer);
 			if (failure !== undefined || signal !== null || code !== 0) {
@@ -116,10 +123,12 @@ describe("leak fixture shutdown", () => {
 		it(
 			`preserves output and exits after finalizing ${fixture.name} in both backends`,
 			() => {
-				const expected = execFileSync(process.execPath, [fixture.fixture], {
-					encoding: "utf8",
-					timeout: 30_000,
-				});
+				const expected =
+					fixture.expectedOutput ??
+					execFileSync(process.execPath, [fixture.fixture], {
+						encoding: "utf8",
+						timeout: 30_000,
+					});
 				const pair = binaries.get(fixture.name)!;
 				for (const [backend, binary] of Object.entries({
 					compiled: pair.compiled,
