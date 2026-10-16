@@ -97,7 +97,7 @@ import {
 } from "./worker-image-cache.ts";
 import type { WorkerImageArtifact } from "./worker-image-cache.ts";
 
-const BUILD_FRONTEND_CACHE_SCHEMA = 7;
+const BUILD_FRONTEND_CACHE_SCHEMA = 8;
 const BUILD_FRONTEND_PIPELINE_VERSION = 6;
 const BUILD_FRONTEND_CACHE_DIRECTORY = path.join(
 	maligatorCacheDirectory(),
@@ -108,7 +108,7 @@ const NODE_GLOBALS_MODULE_ID = "maligator-internal:node-globals";
 export type BuildDependencyIdentity = FrontendDependencyIdentity;
 
 interface BuildFrontendManifest {
-	schema: 7;
+	schema: 8;
 	packageAbsences: Array<string>;
 	workerArtifacts: Array<WorkerImageArtifact>;
 	identity: string;
@@ -740,6 +740,10 @@ function prepareBuildFrontend(
 		}
 	}
 
+	const fragmentsApply =
+		options.relocatable === true &&
+		options.optimization === "development" &&
+		options.enforcePolicies !== false;
 	const graphStartedAt = Date.now();
 	const builtGraph = buildModuleGraph(entrypoint, {
 		buildConfig: options.config,
@@ -829,13 +833,7 @@ function prepareBuildFrontend(
 		const hasWorkers = (workerRoots.workerEntries?.length ?? 0) !== 0;
 		if (hasWorkers && options.relocatable)
 			fragmentFallback = "worker roots use independent whole-program images";
-		if (
-			!hasWorkers &&
-			options.relocatable === true &&
-			options.forceCompile !== true &&
-			options.optimization === "development" &&
-			options.enforcePolicies !== false
-		) {
+		if (!hasWorkers && fragmentsApply && options.forceCompile !== true) {
 			try {
 				const fragments = compileBuildFragments({
 					graph: currentGraph(),
@@ -1004,23 +1002,28 @@ function prepareBuildFrontend(
 			fragmentCompilerArtifactIdentities ??
 			(runtimeArtifacts.length === 1 ? [compilerArtifact] : undefined);
 		const imageStats = programImageStats(programImage);
-		publish(
-			manifestPath(root, entrypoint, identity),
-			`${JSON.stringify({
-				schema: BUILD_FRONTEND_CACHE_SCHEMA,
-				identity,
-				contentKey: key,
-				runtimeArtifacts,
-				...(fragmentCompilerArtifacts === undefined ? {} : { fragmentCompilerArtifacts }),
-				workerArtifacts,
-				compilerArtifact,
-				imageStats,
-				entrypoint,
-				packageAbsences,
-				dependencies,
-				diagnostics,
-			} satisfies BuildFrontendManifest)}\n`,
-		);
+		// A forced compile builds one image where fragments apply; publishing it would
+		// hand later unforced builds a different program shape under the same identity.
+		if (options.forceCompile !== true || !fragmentsApply)
+			publish(
+				manifestPath(root, entrypoint, identity),
+				`${JSON.stringify({
+					schema: BUILD_FRONTEND_CACHE_SCHEMA,
+					identity,
+					contentKey: key,
+					runtimeArtifacts,
+					...(fragmentCompilerArtifacts === undefined
+						? {}
+						: { fragmentCompilerArtifacts }),
+					workerArtifacts,
+					compilerArtifact,
+					imageStats,
+					entrypoint,
+					packageAbsences,
+					dependencies,
+					diagnostics,
+				} satisfies BuildFrontendManifest)}\n`,
+			);
 
 		const materializeWires = () => (wires ??= loadFragmentWires!());
 		return {

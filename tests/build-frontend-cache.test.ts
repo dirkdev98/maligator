@@ -513,6 +513,42 @@ describe("normal build frontend cache", () => {
 		expect(changedDependency.wires![1]).toEqual(changed.wires![1]);
 	});
 
+	it("keeps dependency fragments for an unforced build after a forced whole-image compile", () => {
+		const root = temporaryDirectory();
+		const entrypoint = path.join(root, "entry.mjs");
+		const dependencyDirectory = path.join(root, "node_modules/example-dependency");
+		mkdirSync(dependencyDirectory, { recursive: true });
+		write(path.join(root, "package.json"), `{"type":"module"}\n`);
+		write(
+			path.join(dependencyDirectory, "package.json"),
+			`{"type":"module","exports":"./index.mjs"}\n`,
+		);
+		write(
+			path.join(dependencyDirectory, "index.mjs"),
+			`export let answer = 41;\nanswer++;\n`,
+		);
+		write(
+			entrypoint,
+			`import { answer } from "example-dependency";\nconsole.log(answer);\n`,
+		);
+		const options = {
+			entrypoint,
+			config: resolveBuildConfig({}),
+			stripTypes: stripCompactTypes,
+			stripperIdentity: "build-fragment-cache-test",
+			cacheDirectory: path.join(root, "cache"),
+			optimization: "development" as const,
+			relocatable: true,
+		};
+
+		const forced = compileBuildFrontend({ ...options, forceCompile: true });
+		expect(forced.runtimeArtifacts).toHaveLength(1);
+		const unforced = compileBuildFrontend(options);
+
+		expect(unforced.runtimeArtifacts).toHaveLength(2);
+		expect(unforced.fragmentArtifacts).toEqual({ hits: 0, misses: 2 });
+	});
+
 	it("reuses the Node prelude and fragment diagnostics across application edits", () => {
 		const root = temporaryDirectory();
 		const cacheDirectory = path.join(root, "cache");

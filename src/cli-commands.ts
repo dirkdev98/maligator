@@ -631,6 +631,8 @@ function prepareCommandState(
 				: hostExecutionTarget(process.platform, process.arch),
 	});
 	const compilerDiagnostics = command.kind === "build" && command.internal.dumpCore;
+	const relocatable =
+		(command.kind !== "build" && !command.profile) || developmentFragments;
 	const compilerPhases: Array<{ phase: string; durationMs: number }> = [];
 	const frontendOptions: CompileBuildFrontendOptions = {
 		platformSourceRoot:
@@ -660,9 +662,14 @@ function prepareCommandState(
 		// Profile metadata is derived from the optimized semantic program and is
 		// not part of the portable wire schema yet. Do not accept a definition-only
 		// frontend cache hit that would discard its source-site identities.
+		// Verbose output recompiles for the optimizer report, but a forced compile also
+		// replaces dependency fragments with one image, which would change what is built.
 		forceCompile:
-			debugEnabled || compilerDiagnostics || command.profile || reporter.verbose,
-		relocatable: (command.kind !== "build" && !command.profile) || developmentFragments,
+			debugEnabled ||
+			compilerDiagnostics ||
+			command.profile ||
+			(reporter.verbose && !relocatable),
+		relocatable,
 		onCompilePhase: (phase, durationMs) => {
 			context.checkpoint?.();
 			compilerPhases.push({ phase, durationMs });

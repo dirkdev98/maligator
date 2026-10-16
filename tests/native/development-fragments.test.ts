@@ -95,8 +95,11 @@ describe("development builds from relocatable fragments", () => {
 
 	it("recompiles only the edited application's image after a function is added", () => {
 		writeApplication("const extra = (value) => value * 4;\nconsole.log(extra(5));");
-		const compiled = compiledUnits(build());
+		const output = build();
+		const compiled = compiledUnits(output);
 		expect(runBinary()).toBe("14 2 42\n20\n");
+
+		expect(output).toMatch(/Development fragments: [1-9]\d* reused, 1 compiled/);
 
 		const fragments = new Set(
 			compiled
