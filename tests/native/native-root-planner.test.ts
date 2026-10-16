@@ -49,8 +49,11 @@ describe("native-host physical root planner", () => {
 		"preserves root boundaries, collision rejection and growing suspension transports when %s",
 		(backend) => {
 			const binary = backend === "compiled" ? compiled : interpreted;
-			for (const env of [{}, STRESS_ENV])
-				assertExactLines(runToStdout(binary, { env }), ["native-root-planner PASS"]);
+			assertExactLines(runToStdout(binary), ["native-root-planner PASS"]);
+			// Collecting at every safepoint brings the interpreted run near the 60 s default on macOS runners.
+			assertExactLines(runToStdout(binary, { env: STRESS_ENV, timeoutMs: 180_000 }), [
+				"native-root-planner PASS",
+			]);
 		},
 	);
 });
