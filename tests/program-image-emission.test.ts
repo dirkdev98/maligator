@@ -1100,6 +1100,59 @@ describe("emit-program-image instruction packing", () => {
 		expect(stable.length).toBeGreaterThan(following.length / 2);
 	});
 
+	it("keeps dependency units byte-identical when an application function changes", () => {
+		const files = ["/app/main.mjs", "/app/node_modules/pkg/index.js", "internal:globals"];
+		const functions = Array.from({ length: 48 }, (_, index) => ({
+			...fn,
+			fileIndex: index % files.length,
+			instructions: [...fn.instructions],
+		}));
+		const imageWith = (body: ReadonlyArray<BytecodeFunction>): ProgramImage => ({
+			...definition,
+			runtime: {
+				...definition.runtime,
+				files,
+				functionCount: body.length,
+				functions: [...body],
+			},
+			native: createConservativeNativePlan([...body]),
+		});
+		const grown = functions.with(9, {
+			...functions[9]!,
+			registerCount: 3,
+			instructions: [
+				...Array.from({ length: 20 }, () => ({
+					opcode: "CALL" as const,
+					dst: 0,
+					callee: 1,
+					thisValue: 2,
+					argumentCount: 0,
+					arguments: [],
+				})),
+				{ opcode: "RETURN" as const, value: 0 },
+			],
+		});
+		const policy = { targetCodeUnits: 16_000, hardMaximumCodeUnits: 200_000 };
+		const codeUnits = (value: ProgramImage) =>
+			emitProgramTranslationUnits(value, {}, policy).filter(
+				(unit) => unit.kind === "code",
+			);
+		const ownedByApplication = (symbol: string) =>
+			Number(/^mal_compiled_(\d+)$/.exec(symbol)?.[1]) % files.length === 0;
+		const before = codeUnits(imageWith(functions));
+		const after = new Map(
+			codeUnits(imageWith(grown)).map((unit) => [unit.id, unit.source]),
+		);
+		const changed = before.filter((unit) => after.get(unit.id) !== unit.source);
+
+		expect(changed.length).toBeGreaterThan(0);
+		for (const unit of changed)
+			expect(unit.definitions.map((item) => item.symbol).every(ownedByApplication)).toBe(
+				true,
+			);
+		expect(before.length).toBeGreaterThan(changed.length);
+	});
+
 	it("keeps named function partition identities local across an insertion", () => {
 		const firstNameIndex = definition.runtime.stringConstants.length;
 		const names = Array.from({ length: 64 }, (_, index) => `function_${String(index)}`);

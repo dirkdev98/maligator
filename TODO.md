@@ -52,12 +52,20 @@ rooting, and resource-safety defects can interrupt that order.
       current 128-bit storage, and input-size scaling. Keep conversion costs separate
       from traversal and checksum work.
 
-- [ ] Persist Core per module so whole-program builds stop recompiling the entire
-      program after an edit. On an Express and Valibot app (216 dependencies) a
-      one-line edit costs `build` 9.2 s and `build --production` 12.6 s although 13
-      of 14 generated objects are reused; the rest is the whole-program frontend and
-      the relink. This is the persistent Core
-      pilot from [profile-guided and incremental optimization](docs/decisions/08-profile-guided-and-incremental-optimization.md).
+- [ ] Build development binaries from the dependency fragments `run` already uses.
+      On an Express and Valibot app (216 dependencies) a one-line body edit costs
+      `build` 4.4 s, 3.4 s of it the whole-program frontend, and adding two
+      functions costs 10.4 s: program code units embed image-wide function indices,
+      so the insertion shifts every later dependency function and recompiles 13 of
+      15 objects. `run` reuses dependency fragments behind the boxed boundary, and
+      the released CLI reruns the same edit in 0.4 s. Emit each fragment's native
+      code in the eval-compiler overlay's relocatable form (stable symbol stems,
+      link tables against per-image bases) and install every fragment's entries at
+      startup, so a development build compiles only the application fragment. This
+      requires relocatable generators, async functions and direct entries, which
+      the overlay leaves interpreted. Production builds stay whole-program. Measure
+      the edit loop, cold builds, binary size and the development runtime ratio
+      before and after.
 
 - [ ] Rebalance the CI shards once the native caches are warm. The duration table
       was recorded on cold runs: with warm overlay, Rust and runtime objects the

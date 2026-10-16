@@ -1445,6 +1445,17 @@ function generatedHeaderFiles(lines: ReadonlyArray<string>): Array<string> {
 
 const MAX_STABLE_PARTITION_HASH_BITS = 64;
 
+/**
+ * Functions from absolute source paths outside `node_modules`. Internal modules and
+ * packages change only with the toolchain or a dependency update.
+ */
+function applicationFunctions(image: ProgramImage): Array<boolean> {
+	return image.runtime.functions.map((fn) => {
+		const file = image.runtime.files[fn.fileIndex] ?? "";
+		return /^(?:\/|[A-Za-z]:[\\/])/.test(file) && !/[\\/]node_modules[\\/]/.test(file);
+	});
+}
+
 function compiledFunctionPartitionKeys(image: ProgramImage): Array<string> {
 	const occurrences = new Map<string, number>();
 	return image.runtime.functions.map((fn) => {
@@ -1676,6 +1687,7 @@ export function emitProgramTranslationUnits(
 		kind: "data" | "code",
 		headerLines: ReadonlyArray<string>,
 		inputs: Array<Omit<TranslationUnitPart, "declarationIndices" | "partitionHashes">>,
+		group = "",
 	): Array<GeneratedTranslationUnit> => {
 		const units: Array<GeneratedTranslationUnit> = [];
 		const headerSourceCodeUnits = headerLines.reduce(
@@ -1705,7 +1717,7 @@ export function emitProgramTranslationUnits(
 					);
 				}
 				units.push({
-					id: `${kind}-${prefix || "root"}`,
+					id: `${kind}-${group}${prefix || "root"}`,
 					kind,
 					source,
 					headerFiles: generatedHeaderFiles(headerLines),
@@ -1759,12 +1771,15 @@ export function emitProgramTranslationUnits(
 		partitionKey: data.source,
 		source: data.source,
 	}));
-	const codeParts: Array<
+	const dependencyCode: Array<
 		Omit<TranslationUnitPart, "declarationIndices" | "partitionHashes">
 	> = [];
+	const applicationCode: typeof dependencyCode = [];
 	const functionPartitionKeys = compiledFunctionPartitionKeys(image);
+	const application = applicationFunctions(image);
 	for (const [functionIndex, fn] of emitted.compiled.entries()) {
 		if (fn === null) continue;
+		const codeParts = application[functionIndex] ? applicationCode : dependencyCode;
 		if (fn.source.length > 0)
 			codeParts.push({
 				kind: "compiled function",
@@ -1790,7 +1805,9 @@ export function emitProgramTranslationUnits(
 			definitions: [],
 		},
 		...partition("data", GENERATED_DATA_C_HEADER_LINES, dataParts),
-		...partition("code", NATIVE_C_HEADER_LINES, codeParts),
+		...partition("code", NATIVE_C_HEADER_LINES, dependencyCode),
+		// Separate units keep an application edit from recompiling dependency code.
+		...partition("code", NATIVE_C_HEADER_LINES, applicationCode, "app-"),
 	];
 }
 

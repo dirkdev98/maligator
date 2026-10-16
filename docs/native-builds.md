@@ -102,7 +102,9 @@ warm build never preprocesses its units.
 
 Definitions are assigned to deterministic, edit-local hash partitions with a 2 MiB
 soft target and an 8 MiB hard limit for an indivisible definition. Code and data
-units remain separate, and worker count affects only scheduling. Normal output
+units remain separate, and worker count affects only scheduling. Application
+functions (absolute sources outside `node_modules`) get their own code units, so an
+edit to an application function body leaves the dependency objects cached. Normal output
 reports frontend, generated-C, toolchain, and native cache hit/miss status plus the
 final executable path.
 
