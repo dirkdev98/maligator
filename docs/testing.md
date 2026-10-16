@@ -279,31 +279,37 @@ the platform compiler before running `env:check`.
 
 CI caches npm downloads, the pinned Test262 corpus, and the content-addressed native
 actions a job built: Rust runtime libraries, eval-compiler overlay objects, runtime C
-objects, and generated C objects. The Rust sources rarely change while every native
-job otherwise rebuilds each Cargo feature set with fat LTO. The overlay is quite
-large (about 370 translation units), but each unit only holds its own functions:
-image indices live in separate link-table units, so a compiler edit recompiles the
-units it touches. Test fixtures emit the same C until the compiler changes what
-they compile to, so their objects survive most commits as well.
-`scripts/ci-native-cache.ts` moves only those actions, one cache line per job: each
+objects, generated C objects, and the Wasm runtime's Rust library, objects, archive
+and link. The ThinLTO cache rides along after them, newest entries first, because a
+production link otherwise recompiles every module. The Rust sources rarely change
+while every native job otherwise rebuilds each Cargo feature set with fat LTO. The
+overlay is quite large (about 370 translation units), but each unit only holds its own
+functions: image indices live in separate link-table units, so a compiler edit
+recompiles the units it touches. Test fixtures emit the same C until the compiler
+changes what they compile to, so their objects survive most commits as well.
+`scripts/ci-native-cache.ts` moves only those entries, one cache line per job: each
 job restores the newest snapshot of its own line, because a snapshot holds only the
-variants that job built. Import verifies every blob, and `main` saves the recently
-read set when it changed, within 2 GiB; a full snapshot keeps Rust, overlay and
-runtime actions before the many fixture objects. A restored action that no longer
-matches is simply never read; the weekly native-remainder run stays cold so cache
-identity defects still surface. Linked binaries, frontend artifacts, Zig outputs,
-and the managed cache are not stored: a test binary is tens of megabytes, and a
-developer cache can exceed the repository's 10 GB Actions allowance.
+variants that job built. Import verifies every blob and ThinLTO entry, and `main`
+saves the recently read set when it changed, within 2 GiB; a full snapshot keeps Rust,
+overlay and runtime actions before the many fixture objects. A restored action that no
+longer matches is simply never read; the weekly native-remainder run stays cold so
+cache identity defects still surface. Native linked binaries, frontend artifacts, Zig
+outputs, and the managed cache are not stored: a test binary is tens of megabytes, and
+a developer cache can exceed the repository's 10 GB Actions allowance.
 Gate reports are retained on success and failure for seven days,
 including their tested source identity. The standards lane alone prepares the
 Test262 corpus. Release workflows remain separate.
 
-The weekly and manually dispatched Test262 workflow runs the complete canonical
-compiled/normal report on `main` and retains its reports for fourteen days. It
-restores the standards lane's native cache line without saving its own, because
-that lane prepares the same eval-enabled runtime, and it uses every runner core
-instead of the default half. Manual runs check the existing baseline without
-changing it or posting regression issues. Scheduled runs commit
+Every push to `main` also runs the complete compiled/normal Test262 corpus in the
+Test262 workflow: four jobs, one per language variant and half of the corpus
+(`scripts/test262.ts --shard INDEX/COUNT` interleaves the selection), each checking
+its quarter against the committed baseline without changing it. The weekly and
+manually dispatched Test262 workflow runs the complete canonical compiled/normal
+report on `main` and retains its reports for fourteen days. Both restore the
+standards lane's native cache line without saving their own, because that lane
+prepares the same eval-enabled runtime, and both use every runner core instead of
+the default half. Manual runs check the existing baseline without changing it or
+posting regression issues. Scheduled runs commit
 `scripts/test262.json` only when the complete report has no regressions and the
 baseline changed. Regressions are never accepted into the baseline; scheduled runs
 maintain one issue named `Automated Test262 regressions`, closing it after the next

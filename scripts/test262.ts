@@ -56,6 +56,7 @@ interface Test262Arguments {
 	mode?: string;
 	policy?: string;
 	random: boolean;
+	shard?: string;
 	variant?: string;
 }
 
@@ -75,6 +76,7 @@ Options:
   --from-report <file>         import a complete report with --update-baseline
   --policy bail|complete       stop on a regression or complete the selection
   --random                     run a non-baseline random sample
+  --shard INDEX/COUNT          run every COUNT-th selected test starting at INDEX
   -h, --help                   show this help`;
 
 function parseArguments(): Test262Arguments {
@@ -113,6 +115,7 @@ function parseArguments(): Test262Arguments {
 			else if (option === "--exclude-manifest") result.excludeManifests.push(value);
 			else if (option === "--filter") result.filter = value;
 			else if (option === "--variant") result.variant = value;
+			else if (option === "--shard") result.shard = value;
 			else if (option === "--policy") result.policy = value;
 			else if (option === "--baseline") result.baseline = nodePath.resolve(value);
 			else if (option === "--from-report") result.fromReport = nodePath.resolve(value);
@@ -134,6 +137,7 @@ if (
 	(!arguments_.canonical ||
 		arguments_.variant !== undefined ||
 		arguments_.random ||
+		arguments_.shard !== undefined ||
 		arguments_.filter !== undefined ||
 		arguments_.manifests.length > 0 ||
 		arguments_.excludeManifests.length > 0 ||
@@ -323,6 +327,17 @@ if (random) {
 	selection = selection.filter(() => Math.random() < 0.05);
 	test262Log(`Sampled ${selection.length} files.`);
 }
+const shard =
+	arguments_.shard === undefined ? undefined : /^(\d+)\/(\d+)$/.exec(arguments_.shard);
+if (arguments_.shard !== undefined) {
+	const index = Number(shard?.[1]);
+	const count = Number(shard?.[2]);
+	if (shard === null || !(count >= 1 && index >= 1 && index <= count))
+		throw new Error("--shard requires INDEX/COUNT with 1 <= INDEX <= COUNT");
+	// Interleaving keeps each shard's mix of directories, and therefore its cost, even.
+	selection = selection.filter((_file, position) => position % count === index - 1);
+	test262Log(`Shard ${index}/${count}: ${selection.length} files.`);
+}
 if (selection.length === 0) {
 	throw new Error("Test262 selection is empty");
 }
@@ -333,7 +348,8 @@ const isPartialRun =
 	Boolean(filter) ||
 	manifestPaths.length > 0 ||
 	excludeManifestPaths.length > 0 ||
-	random;
+	random ||
+	arguments_.shard !== undefined;
 test262SetReportSelection(isPartialRun ? selection.map((file) => file.path) : undefined);
 const explicitObjectCache = process.env.T262_OBJCACHE;
 process.env.T262_OBJCACHE = resolveTest262ObjectCache(explicitObjectCache, isPartialRun);

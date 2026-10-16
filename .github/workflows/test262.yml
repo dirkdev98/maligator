@@ -1,0 +1,56 @@
+name: Test262
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test262
+  cancel-in-progress: false
+
+jobs:
+  test262:
+    name: Test262 ${{ matrix.variant }} ${{ matrix.shard }}/2
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [strict, sloppy]
+        shard: [1, 2]
+    steps:
+      - name: Check out the tested revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Linux
+        uses: ./.github/actions/setup-linux
+        with:
+          cache-test262: "true"
+          # Restore only: the standards lane prepares the same eval-enabled Test262 runtime.
+          native-cache: linux-standards
+
+      - name: Check the runner environment
+        run: npm run env:check -- --json
+
+      # The weekly workflow owns the baseline; each shard checks its quarter against it.
+      - name: Run the Test262 shard
+        env:
+          T262_OBJCACHE: "0"
+        run: >-
+          MALIGATOR_WORKERS="$(nproc)" node scripts/test262.ts --canonical --backend compiled
+          --mode normal --variant ${{ matrix.variant }} --shard ${{ matrix.shard }}/2
+          --check --policy complete
+
+      - name: Retain Test262 reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test262-${{ matrix.variant }}-${{ matrix.shard }}-of-2-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/mal-build/test262/report-*.json
+          if-no-files-found: ignore
+          retention-days: 7
