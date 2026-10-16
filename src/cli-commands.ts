@@ -54,7 +54,6 @@ import type {
 	TestCommand,
 } from "./cli.ts";
 import { CommandProgress, formatCommandDuration } from "./command-progress.ts";
-import { compilerEntrypointSourceFiles } from "./compiler-bake.ts";
 import type { CompilationPhase, CompilerService } from "./compiler-service.ts";
 import { formatCoreProgram } from "./compiler/core/core-ir.ts";
 import { formatCoreOptimizationReport } from "./compiler/core/core-optimization-report.ts";
@@ -856,11 +855,6 @@ function prepareCommandState(
 						kind: "source" as const,
 						sourceDirectory: evalCompiler.sourceDirectory,
 						entrypoint: evalCompiler.entrypoint,
-						sourceFiles: compilerEntrypointSourceFiles(
-							evalCompiler.sourceDirectory,
-							evalCompiler.entrypoint,
-							context.stripTypes,
-						),
 						bake: () =>
 							compileEntrypointToBuffer(evalCompiler.entrypoint, {
 								intrinsicGlobalReads: true,
@@ -1991,11 +1985,6 @@ function executeProfiledTests(
 					kind: "source" as const,
 					sourceDirectory: evalCompiler.sourceDirectory,
 					entrypoint: evalCompiler.entrypoint,
-					sourceFiles: compilerEntrypointSourceFiles(
-						evalCompiler.sourceDirectory,
-						evalCompiler.entrypoint,
-						context.stripTypes,
-					),
 					bake: () =>
 						compileEntrypointToBuffer(evalCompiler.entrypoint, {
 							intrinsicGlobalReads: true,

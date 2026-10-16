@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../../src/build-config.ts";
-import { compilerEntrypointSourceFiles } from "../../src/compiler-bake.ts";
 import { stripCompactTypes } from "../../src/compiler/frontend/compact-type-strip.ts";
 import {
 	compileEntrypoint,
@@ -95,11 +94,6 @@ describe("wire loader side-data validation", () => {
 			kind: "source",
 			sourceDirectory,
 			entrypoint,
-			sourceFiles: compilerEntrypointSourceFiles(
-				sourceDirectory,
-				entrypoint,
-				stripCompactTypes,
-			),
 			bake: () =>
 				compileEntrypointToBuffer(entrypoint, {
 					intrinsicGlobalReads: true,

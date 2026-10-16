@@ -18,7 +18,6 @@ import {
 	runEnv,
 	sanitizerCcFlags,
 } from "../build-flags.ts";
-import { compilerEntrypointSourceFiles } from "../compiler-bake.ts";
 import { stripCompactTypes } from "../compiler/frontend/compact-type-strip.ts";
 import {
 	compileEntrypoint,
@@ -379,11 +378,6 @@ export function test262PrepareBuild() {
 			kind: "source",
 			sourceDirectory: compilerSourceDirectory,
 			entrypoint: compilerEntrypoint,
-			sourceFiles: compilerEntrypointSourceFiles(
-				compilerSourceDirectory,
-				compilerEntrypoint,
-				stripCompactTypes,
-			),
 			bake: () =>
 				compileEntrypointToBuffer(compilerEntrypoint, {
 					intrinsicGlobalReads: true,

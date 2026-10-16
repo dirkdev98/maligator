@@ -52,23 +52,11 @@ rooting, and resource-safety defects can interrupt that order.
       current 128-bit storage, and input-size scaling. Keep conversion costs separate
       from traversal and checksum work.
 
-- [ ] Carry generated and runtime C objects in the CI native cache. Only Rust
-      libraries and eval-compiler overlay objects survive between runs, so a warm
-      gate shard still compiles its test fixtures' generated C (about 500 s of summed
-      process time, 35% hits within the job) and its runtime C objects (about 160 s).
-      Fixture C only changes when its emitted code does, so commits that touch
-      neither the compiler nor the runtime (43% of recent ones) should hit fully.
-      Measure what a job's objects add to its line against the 1 GiB snapshot cap and
-      the repository's 10 GB Actions allowance; linked binaries are too large to carry.
-- [ ] Keep parse and semantic results between `run` processes. After a one-line edit
-      `run` takes 4.2 s on an Express and Valibot app (216 dependencies) while the
-      `dev` watcher recompiles the same edit in 0.54 s: each `run` process reparses
-      and analyses the whole graph before it reuses the cached dependency fragments.
-      File digests already persist; module parses and semantic facts do not.
 - [ ] Persist Core per module so whole-program builds stop recompiling the entire
-      program after an edit. On the same app a one-line edit costs `build` 9.2 s and
-      `build --production` 12.6 s although 13 of 14 generated objects are reused; the
-      rest is the whole-program frontend and the relink. This is the persistent Core
+      program after an edit. On an Express and Valibot app (216 dependencies) a
+      one-line edit costs `build` 9.2 s and `build --production` 12.6 s although 13
+      of 14 generated objects are reused; the rest is the whole-program frontend and
+      the relink. This is the persistent Core
       pilot from [profile-guided and incremental optimization](docs/decisions/08-profile-guided-and-incremental-optimization.md).
 
 - [ ] Rebalance the CI shards once the native caches are warm. The duration table

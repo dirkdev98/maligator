@@ -22,7 +22,7 @@ import type { ResolvedBuildConfig } from "./build-config.ts";
 import { normalizeNativeFeatures } from "./build-flags.ts";
 import { compileBuildFrontend } from "./build-frontend-cache.ts";
 import { maligatorCacheDirectory } from "./cache-root.ts";
-import { compilerEntrypointSourceFiles, ensureCompilerWire } from "./compiler-bake.ts";
+import { ensureCompilerWire } from "./compiler-bake.ts";
 import type { CompilerBakeInput } from "./compiler-bake.ts";
 import type { CoreOptimizationBenchmarkAblation } from "./compiler/core/core-optimization-families.ts";
 import {
@@ -82,7 +82,6 @@ export const CRYPTO_START_FAILURE_MAIN = "runtime/crypto_start_failure_test_main
 
 const compilerSourceDirectory = path.resolve("src");
 const compilerEntrypoint = path.resolve("src/compiler/pipeline/eval-compiler-entry.mts");
-let compilerSourceFiles: Array<string> | undefined;
 let harnessArtifactDirectory: string | undefined;
 
 function defaultHarnessArtifactDirectory(): string {
@@ -99,17 +98,10 @@ function defaultHarnessArtifactDirectory(): string {
 }
 
 function defaultCompilerBake(): CompilerBakeInput {
-	// Harness-only edits must not rebake the eval compiler; key its actual import cone.
-	compilerSourceFiles ??= compilerEntrypointSourceFiles(
-		compilerSourceDirectory,
-		compilerEntrypoint,
-		stripCompactTypes,
-	);
 	return {
 		kind: "source",
 		sourceDirectory: compilerSourceDirectory,
 		entrypoint: compilerEntrypoint,
-		sourceFiles: compilerSourceFiles,
 		bake: () =>
 			compileEntrypointToBuffer(compilerEntrypoint, {
 				intrinsicGlobalReads: true,

@@ -11,15 +11,13 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
-import {
-	compilerEntrypointSourceFiles,
-	ensureCompilerArtifacts,
-	ensureCompilerWire,
-} from "../src/compiler-bake.ts";
+import { ensureCompilerArtifacts, ensureCompilerWire } from "../src/compiler-bake.ts";
 import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
+import { buildModuleGraph } from "../src/compiler/frontend/module-graph.ts";
 import { parseScript } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
+import { relativeImportCone } from "../src/source-import-cone.ts";
 
 /**
  * The stripper module is keyed by name, not by import: it erases every compiler
@@ -38,7 +36,10 @@ function compilerFixture(meriyah = "7.1.0"): {
 	const entrypoint = path.join(sourceDirectory, "entry.mts");
 	const stripper = path.join(sourceDirectory, stripperModule);
 	mkdirSync(path.dirname(stripper), { recursive: true });
-	writeFileSync(entrypoint, "export const compiler = 1;\n");
+	writeFileSync(
+		entrypoint,
+		'import { helper } from "./helper.ts";\nexport const compiler = helper;\n',
+	);
 	writeFileSync(path.join(sourceDirectory, "helper.ts"), "export const helper = 1;\n");
 	writeFileSync(stripper, "export const stripCompactTypes = (source) => source;\n");
 	writeFileSync(
@@ -169,37 +170,25 @@ describe("compiler wire provisioning", () => {
 		const alternateEntrypoint = path.join(fixture.sourceDirectory, "alternate.mts");
 		writeFileSync(alternateEntrypoint, "export const compiler = 2;\n");
 		const primaryWithAlternatePresent = ensureCompilerWire(sourceInput());
+		expect(primaryWithAlternatePresent).toBe(entrypointSourceChanged);
 		const entrypointChanged = ensureCompilerWire({
 			...sourceInput(),
 			entrypoint: alternateEntrypoint,
 		});
 		expect(entrypointChanged).not.toBe(primaryWithAlternatePresent);
-		expect(bakeCount).toBe(7);
+		expect(bakeCount).toBe(6);
 	});
 
-	it("can key source bakes to the imported compiler cone", () => {
+	it("keys source bakes to the imported compiler cone", () => {
 		const fixture = compilerFixture();
 		const cacheRoot = path.join(fixture.root, "wire-cache");
-		const helper = path.join(fixture.sourceDirectory, "cone-helper.mts");
 		const unrelated = path.join(fixture.sourceDirectory, "unrelated.ts");
-		writeFileSync(
-			fixture.entrypoint,
-			'import { helper } from "./cone-helper.mts";\nexport const compiler = helper;\n',
-		);
-		writeFileSync(helper, "export const helper = 1;\n");
 		writeFileSync(unrelated, "export const unrelated = 1;\n");
-		const sourceFiles = compilerEntrypointSourceFiles(
-			fixture.sourceDirectory,
-			fixture.entrypoint,
-			stripCompactTypes,
-		);
-		expect(sourceFiles).toContain(fixture.stripper);
 		let bakeCount = 0;
 		const sourceInput = () => ({
 			kind: "source" as const,
 			sourceDirectory: fixture.sourceDirectory,
 			entrypoint: fixture.entrypoint,
-			sourceFiles,
 			cacheRoot,
 			bake: () => new Uint8Array([++bakeCount]),
 		});
@@ -209,17 +198,46 @@ describe("compiler wire provisioning", () => {
 		expect(ensureCompilerWire(sourceInput())).toBe(first);
 		expect(bakeCount).toBe(1);
 
-		writeFileSync(helper, "export const helper = 2;\n");
+		writeFileSync(
+			path.join(fixture.sourceDirectory, "helper.ts"),
+			'import { unrelated } from "./unrelated.ts";\nexport const helper = unrelated;\n',
+		);
 		const helperChanged = ensureCompilerWire(sourceInput());
 		expect(helperChanged).not.toBe(first);
-		expect(bakeCount).toBe(2);
-
-		writeFileSync(
-			fixture.stripper,
-			"export const stripCompactTypes = (source) => source.trim();\n",
-		);
+		writeFileSync(unrelated, "export const unrelated = 3;\n");
 		expect(ensureCompilerWire(sourceInput())).not.toBe(helperChanged);
 		expect(bakeCount).toBe(3);
+	});
+
+	it("keys every compiler-owned module the eval compiler graph loads", () => {
+		const sourceDirectory = path.resolve("src");
+		const entrypoints = [
+			"compiler/pipeline/eval-compiler-entry.mts",
+			"compiler/frontend/compact-type-strip.ts",
+		];
+		const manifest = path.join(
+			mkdtempSync(path.join(os.tmpdir(), "mal-compiler-cone-")),
+			"cone.json",
+		);
+		try {
+			const keyed = new Set(
+				relativeImportCone(sourceDirectory, entrypoints, manifest).map(([file]) => file),
+			);
+			const loaded = entrypoints.flatMap((entrypoint) => [
+				...buildModuleGraph(path.join(sourceDirectory, entrypoint), {
+					stripTypes: stripCompactTypes,
+					entryGoal: "module",
+				}).modules.values(),
+			]);
+			const unkeyed = loaded
+				.filter((module) => !module.host && !module.virtual)
+				.map((module) => path.relative(sourceDirectory, module.path))
+				.filter((file) => !file.startsWith("..") && !keyed.has(file));
+			expect(loaded.length).toBeGreaterThan(100);
+			expect(unkeyed).toEqual([]);
+		} finally {
+			rmSync(path.dirname(manifest), { recursive: true, force: true });
+		}
 	});
 
 	it("deduplicates equivalent bytes and prebuilt content", () => {
@@ -268,7 +286,6 @@ describe("compiler wire provisioning", () => {
 			kind: "source" as const,
 			sourceDirectory: fixture.sourceDirectory,
 			entrypoint: fixture.entrypoint,
-			sourceFiles: [fixture.entrypoint, fixture.stripper],
 			cacheRoot,
 			bake: () => {
 				throw new Error("wire-only bake should not run");
@@ -282,7 +299,6 @@ describe("compiler wire provisioning", () => {
 			kind: "source",
 			sourceDirectory: fixture.sourceDirectory,
 			entrypoint: fixture.entrypoint,
-			sourceFiles: [fixture.entrypoint, fixture.stripper],
 			cacheRoot,
 			bake: () => new Uint8Array([0x4d, 0x41, 0x4c]),
 		});

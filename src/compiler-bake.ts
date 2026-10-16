@@ -9,13 +9,12 @@ import {
 	writeFileSync,
 } from "node:fs";
 import * as path from "node:path";
-import type { BuildConfigTypeStripper } from "./build-config.ts";
 import { maligatorCacheDirectory } from "./cache-root.ts";
-import { buildModuleGraph } from "./compiler/frontend/module-graph.ts";
 import { emitRelocatableNativeOverlayTranslationUnits } from "./compiler/target/emit-program-image.ts";
 import { serializeRuntimeImage } from "./compiler/target/program-image-codec.ts";
 import type { ProgramImage } from "./compiler/target/program-image.ts";
 import { hashDirectoryTrees } from "./file-tree.ts";
+import { relativeImportCone } from "./source-import-cone.ts";
 
 const COMPILER_WIRE_CACHE = path.join(maligatorCacheDirectory(), "compiler-wire");
 const SOURCE_MANIFEST = "artifact.json";
@@ -44,8 +43,6 @@ export type CompilerBakeInput =
 			sourceDirectory: string;
 			/** Absolute source entrypoint compiled by bake. */
 			entrypoint: string;
-			/** Exact compiler-owned source cone; omitted for conservative tree hashing. */
-			sourceFiles?: ReadonlyArray<string>;
 			/** Called only when this source identity has no valid cached wire. */
 			bake: () => Uint8Array;
 			/** Produces the wire and its reusable relocation-aware native companion together. */
@@ -122,85 +119,35 @@ function isWithin(directory: string, target: string): boolean {
 	);
 }
 
-/** Resolve the compiler-owned static dependency cone for a source bake. */
-export function compilerEntrypointSourceFiles(
-	sourceDirectory: string,
-	entrypoint: string,
-	stripTypes: BuildConfigTypeStripper,
-): Array<string> {
-	const root = requireAbsolute("compiler source directory", sourceDirectory);
-	const entry = requireAbsolute("compiler source entrypoint", entrypoint);
-	const graphs = [
-		buildModuleGraph(entry, { stripTypes }),
-		// Compiler-owned ESM, so its goal must not depend on a package.json lookup.
-		buildModuleGraph(path.join(root, TYPE_STRIPPER_MODULE), {
-			stripTypes,
-			entryGoal: "module",
-		}),
-	];
-	const files = new Set<string>();
-	for (const graph of graphs) {
-		for (const module of graph.modules.values()) {
-			if (module.host || module.virtual || !isWithin(root, module.path)) continue;
-			files.add(module.path);
-		}
-	}
-	return [...files].sort(compareNames);
-}
-
+/** Identity of the compiler source cone a bake compiles, memoized under file stats in `root`. */
 function compilerSourceHash(
+	root: string,
 	sourceDirectory: string,
 	entrypoint: string,
-	sourceFiles?: ReadonlyArray<string>,
 ): string {
-	if (sourceFiles !== undefined) {
-		const files = [
-			...new Set([...sourceFiles, entrypoint].map((file) => path.resolve(file))),
-		]
-			.map((file) => {
-				if (!isWithin(sourceDirectory, file)) {
-					throw new Error(`compiler source file is outside source directory: ${file}`);
-				}
-				return file;
-			})
-			.sort((left, right) =>
-				compareNames(
-					path.relative(sourceDirectory, left),
-					path.relative(sourceDirectory, right),
-				),
-			);
-		return hash(
-			"sha256",
-			[
-				"compiler-source-files-v1\0",
-				compilerDependencyIdentity(sourceDirectory),
-				"entrypoint\0",
-				path.relative(sourceDirectory, entrypoint),
-				"\0",
-				...files.flatMap((file) => [
-					path.relative(sourceDirectory, file),
-					"\0",
-					hash("sha256", readFileSync(file), "hex"),
-					"\0",
-				]),
-			].join(""),
-			"hex",
-		);
+	if (!isWithin(sourceDirectory, entrypoint)) {
+		throw new Error(`compiler entrypoint is outside source directory: ${entrypoint}`);
 	}
-	return hashDirectoryTrees({
-		root: sourceDirectory,
-		directories: [sourceDirectory],
-		include: (entry) => isCompilerSource(entry.name),
-		prefix: [
+	const relativeEntrypoint = path.relative(sourceDirectory, entrypoint);
+	const checkoutKey = hash("sha256", `${sourceDirectory}\0${relativeEntrypoint}`, "hex");
+	const cone = relativeImportCone(
+		sourceDirectory,
+		[relativeEntrypoint, TYPE_STRIPPER_MODULE],
+		// Hidden so cache pruning, which keeps only the newest wires, never counts it as one.
+		path.join(root, ".source-cones", `${checkoutKey.slice(0, 20)}.json`),
+	);
+	return hash(
+		"sha256",
+		[
+			"compiler-source-files-v1\0",
 			compilerDependencyIdentity(sourceDirectory),
 			"entrypoint\0",
-			path.relative(sourceDirectory, entrypoint),
+			relativeEntrypoint,
 			"\0",
-			hash("sha256", readFileSync(entrypoint), "hex"),
-			"\0",
-		],
-		compareNames,
-	});
+			...cone.flatMap(([file, digest]) => [file, "\0", digest, "\0"]),
+		].join(""),
+		"hex",
+	);
 }
 
 function compilerNativeSourceKey(
@@ -453,11 +400,7 @@ export function ensureCompilerArtifacts(input: CompilerBakeInput): CompilerArtif
 		input.sourceDirectory,
 	);
 	const entrypoint = requireAbsolute("compiler source entrypoint", input.entrypoint);
-	const sourceIdentity = compilerSourceHash(
-		sourceDirectory,
-		entrypoint,
-		input.sourceFiles,
-	);
+	const sourceIdentity = compilerSourceHash(root, sourceDirectory, entrypoint);
 	const nativeKey =
 		input.bakeProgram === undefined
 			? undefined

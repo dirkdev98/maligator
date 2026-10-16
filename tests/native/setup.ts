@@ -3,7 +3,6 @@ import type { TestProject } from "vitest/node";
 import { buildDerivationFromConfig } from "../../src/build-config.ts";
 import { perfStatsEnabled } from "../../src/build-flags.ts";
 import { CommandProgress } from "../../src/command-progress.ts";
-import { compilerEntrypointSourceFiles } from "../../src/compiler-bake.ts";
 import { stripCompactTypes } from "../../src/compiler/frontend/compact-type-strip.ts";
 import {
 	compileEntrypoint,
@@ -20,11 +19,6 @@ const compilerBake = {
 	kind: "source" as const,
 	sourceDirectory: compilerSourceDirectory,
 	entrypoint: compilerEntrypoint,
-	sourceFiles: compilerEntrypointSourceFiles(
-		compilerSourceDirectory,
-		compilerEntrypoint,
-		stripCompactTypes,
-	),
 	bake: () =>
 		compileEntrypointToBuffer(compilerEntrypoint, {
 			intrinsicGlobalReads: true,
