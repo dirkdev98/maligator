@@ -11,6 +11,7 @@ import {
 	utimesSync,
 	writeFileSync,
 } from "node:fs";
+import type { Stats } from "node:fs";
 import * as path from "node:path";
 import { writeFileAtomically } from "./atomic-file.ts";
 import { processIsAlive } from "./process-state.ts";
@@ -129,12 +130,35 @@ function fileDigest(file: string): string {
 	return artifactDigest(readFileSync(file));
 }
 
+// Same-size writes can share timestamps on filesystems with a coarse clock, so a stat
+// identity stands for hashed content only once the clock has moved past its last change,
+// as Git treats racily clean index entries.
+const SETTLED_TIMESTAMP_MS = 3_000;
+
+/** Stat identity that a later write changes, unless it lands in the same timestamp tick. */
+export function fileIdentity(stats: Stats): string {
+	return `${stats.dev}:${stats.ino}:${stats.size}:${stats.mtimeMs}:${stats.ctimeMs}`;
+}
+
+/** Whether `fileIdentity` may stand for content hashed at `hashedAtMs`. */
+export function settledFileIdentity(stats: Stats, hashedAtMs: number): boolean {
+	return hashedAtMs - Math.max(stats.mtimeMs, stats.ctimeMs) > SETTLED_TIMESTAMP_MS;
+}
+
+// Every action read validates its blobs, and a process reads the runtime archive and
+// Rust library for each build, so settled blobs are hashed once per process.
+const hashedBlobs = new Map<string, string>();
+
 function validBlob(file: string, digest: string, size: number): boolean {
 	try {
 		const stats = statSync(file);
 		if (!stats.isFile() || stats.size !== size) return false;
-		// Same-size writes can share timestamps on filesystems with a coarse clock.
-		return fileDigest(file) === digest;
+		const identity = `${digest}:${fileIdentity(stats)}`;
+		if (hashedBlobs.get(file) === identity) return true;
+		const hashedAt = Date.now();
+		if (fileDigest(file) !== digest) return false;
+		if (settledFileIdentity(stats, hashedAt)) hashedBlobs.set(file, identity);
+		return true;
 	} catch {
 		return false;
 	}

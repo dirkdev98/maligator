@@ -9,6 +9,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import * as path from "node:path";
+import { fileIdentity, settledFileIdentity } from "./artifact-store.ts";
 import { maligatorCacheDirectory } from "./cache-root.ts";
 import { emitRelocatableNativeOverlayTranslationUnits } from "./compiler/target/emit-program-image.ts";
 import { serializeRuntimeImage } from "./compiler/target/program-image-codec.ts";
@@ -246,18 +247,8 @@ function nativeArtifactDigest(sources: ReadonlyArray<Uint8Array>): string {
 	return digest.digest("hex");
 }
 
-// Publication replaces files by rename, so a source set this process hashed stays valid
-// while every file keeps its identity; the overlay is about 40 MiB per check.
-const validatedNativeSources = new Map<string, string>();
-
-function nativeSourceStamps(directory: string, files: ReadonlyArray<string>): string {
-	return JSON.stringify(
-		files.map((name) => {
-			const stats = statSync(path.join(directory, name));
-			return [stats.dev, stats.ino, stats.size, stats.mtimeMs];
-		}),
-	);
-}
+// A process validates the eval compiler's 40 MiB overlay source set for every build.
+const hashedNativeSources = new Map<string, string>();
 
 function validNativeSources(
 	directory: string,
@@ -267,12 +258,14 @@ function validNativeSources(
 	if (native.key !== key || native.files.length === 0) return false;
 	const memo = JSON.stringify([directory, native.digest, native.files]);
 	try {
-		if (validatedNativeSources.get(memo) === nativeSourceStamps(directory, native.files))
-			return true;
-		const stamps = nativeSourceStamps(directory, native.files);
+		const stats = native.files.map((name) => statSync(path.join(directory, name)));
+		const identity = JSON.stringify(stats.map(fileIdentity));
+		if (hashedNativeSources.get(memo) === identity) return true;
+		const hashedAt = Date.now();
 		const sources = native.files.map((name) => readFileSync(path.join(directory, name)));
 		if (nativeArtifactDigest(sources) !== native.digest) return false;
-		validatedNativeSources.set(memo, stamps);
+		if (stats.every((entry) => settledFileIdentity(entry, hashedAt)))
+			hashedNativeSources.set(memo, identity);
 		return true;
 	} catch {
 		return false;

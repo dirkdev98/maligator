@@ -1017,7 +1017,14 @@ function toolStamps(toolchain: Toolchain): string {
 			.filter((tool): tool is ToolExecutable => tool !== undefined)
 			.map((tool) => {
 				const stats = statSync(tool.path);
-				return [tool.path, stats.dev, stats.ino, stats.size, stats.mtimeMs];
+				return [
+					tool.path,
+					stats.dev,
+					stats.ino,
+					stats.size,
+					stats.mtimeMs,
+					stats.ctimeMs,
+				];
 			}),
 	);
 }
