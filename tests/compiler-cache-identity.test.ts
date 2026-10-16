@@ -178,7 +178,7 @@ describe("compiler cache identity", () => {
 		).not.toBe(initial);
 	});
 
-	it("tracks real imports through templates while ignoring documentation and stale manifests", () => {
+	it("tracks real imports through templates while ignoring type-only imports, documentation and stale manifests", () => {
 		const fixture = compilerFixture();
 		const source = [
 			'import { n } from "./compiler/compile.ts";',
@@ -226,9 +226,7 @@ describe("compiler cache identity", () => {
 			path.join(fixture.sourceRoot, "types.ts"),
 			"export type Shape = { count: 2 };\n",
 		);
-		const changedType = digest();
-		expect(changedType).not.toBe(previous);
-		previous = changedType;
+		expect(digest()).toBe(previous);
 		for (const dependency of ["side.ts", "exported.ts", "dynamic.ts"]) {
 			writeFileSync(
 				path.join(fixture.sourceRoot, dependency),
