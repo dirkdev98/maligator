@@ -9,13 +9,16 @@ import type {
 } from "../src/compiler/target/runtime-image.ts";
 import { inputFactsFixture } from "./helpers/native-input-facts.ts";
 
+// Only the function's metadata is reused; building the whole fixture costs ~90 ms.
+let baseFunction: BytecodeFunction | undefined;
+
 function emitInputContract(
 	instructions: Array<BytecodeInstruction>,
 	representations: Array<VmRegisterRepresentation>,
 	options: Partial<BytecodeFunction> = {},
 ): string {
 	const fn: BytecodeFunction = {
-		...inputFactsFixture().image.runtime.functions[0]!,
+		...(baseFunction ??= inputFactsFixture().image.runtime.functions[0]!),
 		...options,
 		registerCount: representations.length,
 		instructions,
