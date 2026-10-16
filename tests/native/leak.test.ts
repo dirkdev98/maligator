@@ -1,89 +1,155 @@
-import { execFileSync } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { describe, it } from "vitest";
-import { buildNativeBinary, HOST_MAIN } from "../../src/test-harness.ts";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import {
+	buildBackendPairFromOneProgramImage,
+	HOST_MAIN,
+	runToStdout,
+	scaledNativeRunTimeoutMs,
+} from "../../src/test-harness.ts";
 
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-leak-"));
+const auditEnabled = os.platform() === "darwin" && process.env.MAL_LEAKCHECK === "1";
+const auditTimeoutMs = 300_000;
+const fixtures = [
+	{ name: "leakaudit", fixture: "tests/local/leakaudit.js" },
+	{ name: "leakmodule", fixture: "tests/local/leakmodule.mjs" },
+	{
+		name: "leakargon2",
+		fixture: "tests/local/leakargon2.mjs",
+		nodeEnabled: true,
+		mainFile: HOST_MAIN,
+	},
+];
+const binaries = new Map<
+	string,
+	ReturnType<typeof buildBackendPairFromOneProgramImage>
+>();
 
-// `leaks` is macOS-only and slow, so this is opt-in (MAL_LEAKCHECK=1 — see the
-// test:leak npm script), never part of bare `npm test`. The teardown
-// (test262_main under MAL_GC_AT_EXIT) forces a final full GC and frees every
-// reclaimable allocation, so a leak the tool reports is a genuine finalizer gap.
-const enabled = os.platform() === "darwin" && process.env.MAL_LEAKCHECK === "1";
+beforeAll(() => {
+	for (const fixture of fixtures) {
+		process.stderr.write(`[leak-audit] preparing ${fixture.name}\n`);
+		binaries.set(
+			fixture.name,
+			buildBackendPairFromOneProgramImage({
+				...fixture,
+				name: `leakcheck-${fixture.name}`,
+				outDir,
+			}),
+		);
+	}
+}, 1_200_000);
 
-/** Parse the "Process N: K leaks for M total leaked bytes." line from `leaks`. */
+afterAll(() => {
+	rmSync(outDir, { recursive: true, force: true });
+});
+
 function parseLeaks(output: string): { leaks: number; bytes: number } {
 	const match = output.match(/(\d+) leaks for (\d+) total leaked bytes/);
-	if (!match) {
-		throw new Error(`could not parse leaks output:\n${output.slice(0, 2000)}`);
-	}
+	if (!match) throw new Error(`could not parse leaks output:\n${output.slice(0, 4000)}`);
 	return { leaks: Number(match[1]), bytes: Number(match[2]) };
 }
 
-/**
- * Run `leaks --groupByType` against a binary under MAL_GC_AT_EXIT and assert zero
- * leaks. `--groupByType` clusters the report by the leaked C allocation's type, so
- * on failure the surfaced backtrace names the owned-allocation kind that leaked
- * (e.g. `MalMapEntry`, `MalModuleNamespaceExport`, the owned-concat `malloc`).
- */
-function assertNoLeaks(
-	fixture: string,
-	name: string,
-	extra: { nodeEnabled?: boolean; mainFile?: string } = {},
-): void {
-	const binary = buildNativeBinary({ fixture, name, outDir, ...extra });
-
-	let output = "";
-	try {
-		output = execFileSync("leaks", ["--atExit", "--groupByType", "--", binary], {
+function auditLeaks(binary: string): Promise<string> {
+	return new Promise((resolve, reject) => {
+		const child = spawn("leaks", ["--groupByType", "--atExit", "--", binary], {
 			env: { ...process.env, MAL_GC_AT_EXIT: "1" },
-			encoding: "utf-8",
-			maxBuffer: 64 * 1024 * 1024,
+			detached: true,
+			stdio: ["ignore", "pipe", "pipe"],
 		});
-	} catch (error) {
-		// `leaks` exits non-zero when it finds leaks; its report is still on stdout.
-		output = (error as { stdout?: string }).stdout ?? "";
-	}
-
-	const { leaks, bytes } = parseLeaks(output);
-	if (leaks !== 0 || bytes !== 0) {
-		// Surface the grouped report so the failure names the leaking kind directly.
-		const detail = output.slice(output.indexOf("leaks for") - 40).slice(0, 4000);
-		throw new Error(
-			`${name}: expected 0 leaks, got ${leaks} (${bytes} bytes):\n${detail}`,
+		let stdout = "";
+		let stderr = "";
+		let failure: Error | undefined;
+		function abort(message: string): void {
+			if (failure !== undefined) return;
+			failure = new Error(message);
+			const sample = spawnSync(
+				"/usr/bin/sample",
+				[path.basename(binary), "1", "-mayDie", "-file", "/dev/stdout"],
+				{ encoding: "utf8", timeout: 10_000, maxBuffer: 1024 * 1024 },
+			);
+			process.stderr.write(
+				`[leak-audit] stalled process sample: ${binary}\n${sample.stdout ?? ""}\n${sample.stderr ?? ""}\n`,
+			);
+			if (child.pid !== undefined) {
+				try {
+					// The tool launches the audited process; terminate both on failure.
+					process.kill(-child.pid, "SIGKILL");
+				} catch (error) {
+					if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+				}
+			}
+		}
+		const timer = setTimeout(
+			() => abort(`leaks timed out after ${auditTimeoutMs}ms: ${binary}`),
+			auditTimeoutMs,
 		);
-	}
+		child.stdout.setEncoding("utf8").on("data", (data: string) => {
+			stdout += data;
+			if (stdout.length > 64 * 1024 * 1024) abort("leaks stdout exceeded 64 MiB");
+		});
+		child.stderr.setEncoding("utf8").on("data", (data: string) => {
+			stderr += data;
+			if (stderr.length > 64 * 1024 * 1024) abort("leaks stderr exceeded 64 MiB");
+		});
+		child.once("error", (error) => {
+			clearTimeout(timer);
+			reject(error);
+		});
+		child.once("close", (code, signal) => {
+			clearTimeout(timer);
+			if (failure !== undefined || signal !== null || code !== 0) {
+				reject(
+					new Error(
+						`${failure?.message ?? `leaks exited ${code} (${signal})`}:\n${stdout.slice(-8000)}\n${stderr.slice(-8000)}`,
+					),
+				);
+			} else resolve(stdout);
+		});
+	});
 }
 
-describe.skipIf(!enabled)("GC leak audit (macOS `leaks`)", () => {
-	// Every §A–D owned-allocation kind: object property tables (shaped + dictionary),
-	// dense array element vectors, string code units (incl owned-concat), Map/Set
-	// entry tables, ArrayBuffer backing stores, MalEnv closures + bound args,
-	// generator/async-generator frame buffers, promise reaction lists, and the Rust
-	// FFI handles (RegExp matcher, Intl Collator/PluralRules).
-	it("leaks zero bytes at shutdown (object/array/string/map/set/buffer/closure/coroutine/promise/ffi)", () => {
-		assertNoLeaks("tests/local/leakaudit.js", "leakcheck-leakaudit");
-	});
+describe("leak fixture shutdown", () => {
+	for (const fixture of fixtures) {
+		it(
+			`preserves output and exits after finalizing ${fixture.name} in both backends`,
+			() => {
+				const expected = execFileSync(process.execPath, [fixture.fixture], {
+					encoding: "utf8",
+					timeout: 30_000,
+				});
+				const pair = binaries.get(fixture.name)!;
+				for (const [backend, binary] of Object.entries({
+					compiled: pair.compiled,
+					interpreted: pair.interpreted,
+				})) {
+					process.stderr.write(`[leak-audit] shutdown ${fixture.name} ${backend}\n`);
+					expect(
+						runToStdout(binary, {
+							env: { MAL_GC_AT_EXIT: "1" },
+							timeoutMs: 30_000,
+						}),
+					).toBe(expected);
+				}
+			},
+			2 * scaledNativeRunTimeoutMs(30_000) + 30_000,
+		);
+	}
+});
 
-	// The one kind leakaudit.js cannot reach from a single file: a module namespace's
-	// malloc'd exports array (freed by the MAL_HEAP_MODULE_NAMESPACE_OBJECT finalizer).
-	it("leaks zero bytes at shutdown (module-namespace exports)", () => {
-		assertNoLeaks("tests/local/leakmodule.mjs", "leakcheck-leakmodule");
-	});
-
-	// Argon2 is the one path that hands allocations across a thread boundary: the
-	// job's copied inputs, its tag buffer, the posted result, and the per-call
-	// async state all have to survive the round trip and then be freed. A worker
-	// that posts after shutdown, or a drain that forgets the taken payload, shows
-	// up here and nowhere else.
-	// The host entry rather than test262_main: the callback forms deliver through
-	// the event loop, which only the host entry runs.
-	it("leaks zero bytes at shutdown (argon2 worker jobs)", () => {
-		assertNoLeaks("tests/local/leakargon2.mjs", "leakcheck-leakargon2", {
-			nodeEnabled: true,
-			mainFile: HOST_MAIN,
-		});
-	});
+describe.skipIf(!auditEnabled)("GC leak audit (macOS `leaks`)", () => {
+	for (const fixture of fixtures) {
+		it(
+			`leaks zero bytes after finalizing ${fixture.name}`,
+			async () => {
+				process.stderr.write(`[leak-audit] leaks ${fixture.name}\n`);
+				const output = await auditLeaks(binaries.get(fixture.name)!.compiled);
+				const result = parseLeaks(output);
+				expect(result, output).toEqual({ leaks: 0, bytes: 0 });
+			},
+			auditTimeoutMs + 20_000,
+		);
+	}
 });

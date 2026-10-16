@@ -671,6 +671,7 @@ const fullCommands: Array<Command> = [
 	node("full: source strip differential", milestoneScripts[1]!),
 	node("full: wire loader differential", milestoneScripts[2]!),
 	npm("full: Rust runtime unit suite", "test:rust"),
+	...leakCommands,
 	...remainingNativeCommands,
 	npm("full: WPT compiled normal", "test:wpt", [
 		"--canonical",
@@ -690,7 +691,6 @@ const fullCommands: Array<Command> = [
 		...runnerPolicy,
 	]),
 	...test262FullMatrix,
-	...leakCommands,
 ];
 
 const allLaterCommands =
