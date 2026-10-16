@@ -60,6 +60,13 @@ link. Cross-built outputs live under `.cache/mal-build/<mode>/<rust-triple>/`;
 Development builds use `-O2`, keep symbols, and do not use LTO. They are intended for
 normal iteration and useful native crash diagnostics.
 
+With `MALIGATOR_DEVELOPMENT_FRAGMENTS=1` (experimental), a development build links
+the same ordered images `run` loads instead of one whole program. Each image gets a
+relocatable native overlay that depends only on that image, and the binary splices
+the embedded images at startup, so an application edit recompiles only the
+application's objects. Code does not optimize across images, and programs with
+configured assets take the ordinary build.
+
 `maligator build --production` still uses `-O2`, adds compile/archive/link LTO when
 the selected toolchain passes the LTO probe, and strips native symbols after linking
 when the host strip probe succeeds. Unsupported LTO or stripping emits a warning and
