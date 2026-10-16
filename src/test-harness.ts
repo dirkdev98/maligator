@@ -132,8 +132,17 @@ export function prebuiltCompilerBake(): CompilerBakeInput {
  * Collect at every safepoint + poison freed cells: GCs land while callbacks,
  * suspended fibers, and in-flight promise reactions are live, so a missed root
  * corrupts loudly. The near-universal second run for every native test.
+ *
+ * Runtime compilation (eval, Function, ShadowRealm) runs the embedded compiler,
+ * where verifying the whole heap at each of its safepoints costs minutes per eval;
+ * it collects every 1000 safepoints instead, as in the Test262 GC dimension. The
+ * dedicated compiler root-safety test owns that boundary.
  */
-export const STRESS_ENV: NodeJS.ProcessEnv = { MAL_GC_STRESS: "1", MAL_GC_VERIFY: "1" };
+export const STRESS_ENV: NodeJS.ProcessEnv = {
+	MAL_GC_STRESS: "1",
+	MAL_GC_VERIFY: "1",
+	MAL_EVAL_GC_STRESS_INTERVAL: "1000",
+};
 
 export interface BuildOptions {
 	/** Path to the JS/TS entry fixture. */

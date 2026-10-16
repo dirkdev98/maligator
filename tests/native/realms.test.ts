@@ -11,13 +11,7 @@ import {
 } from "../../src/test-harness.ts";
 
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-realms-"));
-// Only runtime compilation uses a reduced cadence; realm code retains every-safepoint stress.
-const realmStressEnv = {
-	...process.env,
-	...STRESS_ENV,
-	MAL_EVAL_GC_STRESS_INTERVAL: "1000",
-	MAL_TEST262: "1",
-};
+const realmStressEnv = { ...process.env, ...STRESS_ENV, MAL_TEST262: "1" };
 
 describe("generic realm runtime API", () => {
 	let bin: string;

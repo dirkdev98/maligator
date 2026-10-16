@@ -11,8 +11,6 @@ import {
 } from "../../src/test-harness.ts";
 const outDir = mkdtempSync(join(tmpdir(), "mal-owned-realm-callback-"));
 afterAll(() => rmSync(outDir, { recursive: true, force: true }));
-// Program callbacks keep every-safepoint stress; only runtime compilation uses its own cadence.
-const callbackStressEnv = { ...STRESS_ENV, MAL_EVAL_GC_STRESS_INTERVAL: "1000" };
 describe("VM-owned foreign callback realms", () => {
 	it.each(["mutable", "locked"] as const)(
 		"preserves callback and builtin realms under %s primordials",
@@ -49,7 +47,7 @@ describe("VM-owned foreign callback realms", () => {
 						MAL_TEST262: "1",
 						MAL_HOST_GC: "1",
 						MAL_PERF_STATS: "1",
-						...callbackStressEnv,
+						...STRESS_ENV,
 					},
 				});
 				expect(

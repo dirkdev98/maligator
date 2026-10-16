@@ -12,9 +12,6 @@ import {
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
 
-// Callback code keeps every-safepoint stress; runtime compilation uses its dedicated cadence.
-const callbackStressEnv = { ...STRESS_ENV, MAL_EVAL_GC_STRESS_INTERVAL: "1000" };
-
 const fixture = "tests/local/functional-replacer-callback.js";
 const outDir = mkdtempSync(join(tmpdir(), "mal-functional-replacer-"));
 afterAll(() => rmSync(outDir, { recursive: true, force: true }));
@@ -112,7 +109,7 @@ describe("functional replacer callback nomination", () => {
 				for (const binary of [pair.compiled, pair.interpreted])
 					expect(
 						runToStdout(binary, {
-							env: { ...env, ...callbackStressEnv },
+							env: { ...env, ...STRESS_ENV },
 							timeoutMs: 60_000,
 						}),
 					).toBe(expected);
@@ -154,7 +151,7 @@ describe("functional replacer callback nomination", () => {
 		const measured = spawnSync(pair.compiled, [], {
 			encoding: "utf8",
 			timeout: 60_000,
-			env: { ...process.env, ...env, MAL_PERF_STATS: "1", ...callbackStressEnv },
+			env: { ...process.env, ...env, MAL_PERF_STATS: "1", ...STRESS_ENV },
 		});
 		expect(measured.status, measured.stderr).toBe(0);
 		expect(measured.stdout).toBe(expected);
@@ -171,7 +168,7 @@ describe("functional replacer callback nomination", () => {
 		);
 		expect(
 			runToStdout(pair.interpreted, {
-				env: { ...env, ...callbackStressEnv },
+				env: { ...env, ...STRESS_ENV },
 				timeoutMs: 60_000,
 			}),
 		).toBe(expected);
@@ -202,7 +199,7 @@ describe("functional replacer callback nomination", () => {
 					MAL_TEST262: "1",
 					MAL_HOST_GC: "1",
 					MAL_PERF_STATS: "1",
-					...callbackStressEnv,
+					...STRESS_ENV,
 				},
 			});
 			expect(measured.status, measured.stderr).toBe(0);

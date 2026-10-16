@@ -133,7 +133,7 @@ describe("retained Array.fromAsync callback contracts", () => {
 				built.binaryPath,
 				expected,
 				compiled ? [1, 3] : [0, 0],
-				{ MAL_TEST262: "1", MAL_EVAL_GC_STRESS_INTERVAL: "1000" },
+				{ MAL_TEST262: "1" },
 				`realms compiled=${compiled}`,
 			);
 		}

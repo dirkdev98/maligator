@@ -12,9 +12,6 @@ import {
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
 
-// Callback code keeps every-safepoint stress; runtime compilation uses its dedicated cadence.
-const callbackStressEnv = { ...STRESS_ENV, MAL_EVAL_GC_STRESS_INTERVAL: "1000" };
-
 const fixture = "tests/local/retained-iterator-callback.js";
 const outDir = mkdtempSync(join(tmpdir(), "mal-retained-iterator-callback-"));
 afterAll(() => rmSync(outDir, { recursive: true, force: true }));
@@ -192,7 +189,7 @@ describe("retained lazy Iterator callback contracts", () => {
 					MAL_TEST262: "1",
 					MAL_HOST_GC: "1",
 					MAL_PERF_STATS: "1",
-					...callbackStressEnv,
+					...STRESS_ENV,
 				},
 			});
 			expect(measured.status, measured.stderr).toBe(0);
