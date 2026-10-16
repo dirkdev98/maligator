@@ -22,6 +22,8 @@ describe("Express and Valibot product build", () => {
 					cwd: repositoryRoot,
 					env: process.env,
 					encoding: "utf-8",
+					// Verbose output lists every native command, hundreds for the eval overlay.
+					maxBuffer: 64 * 1024 * 1024,
 					timeout: buildTimeoutMs,
 				},
 			);
