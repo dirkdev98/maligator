@@ -23,9 +23,9 @@ and a GitHub Actions cache directory. All of them are content-addressed: a resto
 entry whose inputs no longer match is never read, so a stale snapshot only costs its
 download. import verifies every blob, bake file and ThinLTO entry before publishing it
 and keeps each one's last-use time; export keeps what was read within 14 days of the
-most recent use, within 2 GiB: first the actions and bakes this job read, then ThinLTO
-entries, then older actions, each in stage order and newest first. It reports a digest
-so unchanged snapshots are not saved again.`;
+most recent use, within 2 GiB: first the bakes and then the actions this job read, then
+ThinLTO entries, then older actions, each in stage order and newest first. It reports
+a digest so unchanged snapshots are not saved again.`;
 
 // Earlier stages are costlier to rebuild and are read first in a job, so a full
 // snapshot keeps them before the many cheap fixture objects that follow.
@@ -356,9 +356,10 @@ export function importSnapshot(directory: string, root: string): void {
 }
 
 /**
- * Snapshot what this job used first: actions and bakes it read since `usedSinceMs`,
+ * Snapshot what this job used first: bakes, then actions it read since `usedSinceMs`,
  * then ThinLTO entries, then older actions, so a line at the cap drops what the job did
- * not need. Without a start time every action and bake counts as used.
+ * not need. A bake replaces about a minute of compilation per job, more than any equal
+ * share of fixture objects. Without a start time every action and bake counts as used.
  */
 export function exportSnapshot(
 	directory: string,
@@ -400,7 +401,6 @@ export function exportSnapshot(
 			bytes += entry.bytes;
 		}
 	};
-	exportActions(entries.filter(used));
 	const bakes: Array<Bake> = [];
 	for (const bake of readBakes(root)) {
 		if (usedSinceMs !== undefined && bake.mtimeMs < usedSinceMs) continue;
@@ -424,6 +424,7 @@ export function exportSnapshot(
 		mkdirSync(directory, { recursive: true });
 		writeFileSync(path.join(directory, BAKES_MANIFEST), JSON.stringify(bakes));
 	}
+	exportActions(entries.filter(used));
 	const thinLtoFiles = readThinLtoFiles(root);
 	const thinLtoCutoff = (thinLtoFiles[0]?.mtimeMs ?? 0) - RETENTION_MS;
 	const thinLto: Array<ThinLtoEntry> = [];
