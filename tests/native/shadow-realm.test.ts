@@ -21,6 +21,7 @@ describe("ShadowRealm", () => {
 	let evalDisabled: string;
 	let disabled: string;
 
+	// A shard can be the first to need these realm runtimes, so their cold builds land here.
 	beforeAll(() => {
 		compiled = buildNativeBinary({
 			fixture: "tests/local/shadow-realm.js",
@@ -49,7 +50,7 @@ describe("ShadowRealm", () => {
 			outDir,
 			realmsEnabled: false,
 		});
-	});
+	}, 1_200_000);
 
 	it("passes compiled", () => {
 		assertExactLines(runToStdout(compiled), ["shadow-realm PASS"]);
