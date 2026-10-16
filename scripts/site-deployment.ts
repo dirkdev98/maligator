@@ -173,6 +173,10 @@ async function main(): Promise<void> {
 					throw new Error("Timed out waiting for the website container rollout");
 				await setTimeout(10_000);
 			}
+			// The marker flips on the first new container; the rest of the rollout can
+			// still answer a page with HTTP 500 for a few seconds.
+			console.log("[site-deployment] Marker matches; letting the rollout settle for 30s");
+			await setTimeout(30_000);
 		}
 		await verifySiteResponses(origin);
 	} else {
