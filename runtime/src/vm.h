@@ -1651,7 +1651,8 @@ typedef struct MalVm {
     /** Preallocated, permanently rooted exception used when allocation cannot continue. */
     MalValue allocation_error;
 
-#if MAL_NODE
+    // Present without MAL_NODE so Node and non-Node runtimes share one MalVm layout,
+    // and with it the compiled eval-compiler overlay objects built against vm.h.
     /**
      * Current immutable AsyncLocalStorage binding chain. It belongs to the
      * executing fiber and is captured by async resources at creation time.
@@ -1659,7 +1660,6 @@ typedef struct MalVm {
     struct MalAsyncContext *async_context;
     /** Whether node:v8 requested explicit GC exposure for future VM contexts. */
     bool node_v8_expose_gc;
-#endif
 
     /**
      * PromiseJobs microtask queue (singly-linked FIFO). Settling a promise and
