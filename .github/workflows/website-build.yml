@@ -76,6 +76,8 @@ jobs:
 
       - name: Set up Linux
         uses: ./.github/actions/setup-linux
+        with:
+          native-cache: linux-website
 
       - name: Install the pinned cross compiler
         run: |
@@ -96,6 +98,10 @@ jobs:
 
       - name: Build the production website and Explorer
         run: npm run site:container
+
+      - name: Retain native libraries for later runs
+        if: always()
+        uses: ./.github/actions/save-native-cache
 
       - name: Check native page responses
         run: |

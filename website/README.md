@@ -59,7 +59,8 @@ It compares that fingerprint with `/.well-known/maligator-site.json`, served by 
 production container. Unchanged inputs skip the build. A missing marker bootstraps
 deployment; other HTTP errors fail the check.
 
-Changed inputs run the Linux build with pinned Zig and WASI SDK toolchains. Before
+Changed inputs run the Linux build with pinned Zig and WASI SDK toolchains, restoring
+and saving the `linux-website` native cache line like the CI lanes. Before
 deployment, every native page and manifest asset is compared with the prepared files.
 The workflow deploys through the versioned [Cloudflare configuration](cloudflare/wrangler.jsonc),
 then waits up to 15 minutes for the container to serve the new fingerprint and compares
