@@ -41,6 +41,7 @@ import { privateRootRegisters, rootMaskBits } from "./helpers/native-c-source.ts
 import {
 	resolveNativeLinks,
 	resolveOverlayUnitLinks,
+	TEST_RELOCATION,
 } from "./helpers/native-relocation.ts";
 import { testPropertyCacheCount } from "./helpers/program-image.ts";
 import { testProgramImage, withNativeFunctionPlan } from "./helpers/program-image.ts";
@@ -1564,6 +1565,40 @@ describe("emit-program-image instruction packing", () => {
 		});
 	});
 
+	it("addresses a relocated sloppy direct callee's frame and function at its relocated index", () => {
+		const image = nativeEntryBudgetImage();
+		const entry = image.native.functions[1]!.directEntries[0]!;
+		const emit = (directEntries: ReadonlyMap<string, typeof entry>) =>
+			resolveNativeLinks(
+				emitCompiledFunction(
+					image.native.functions[0]!,
+					0,
+					"_eval_compiler",
+					false,
+					"external",
+					new Set([1]),
+					[],
+					directEntries,
+					{ ...TEST_RELOCATION, symbolStems: ["caller", "callee"] },
+				)!,
+			);
+		const typed = emit(new Map([[directCompiledEntryKey(1, entry.id), entry]]));
+		const canonical = emit(new Map());
+
+		expect(typed).toContain("mal_direct_callee_0_eval_compiler(vm,");
+		expect(canonical).toContain("mal_compiled_callee_eval_compiler(vm,");
+		for (const source of [typed, canonical]) {
+			expect(source).toMatch(
+				/mal_vm_enter_(?:compiled|leaf_checked)\(vm, \(__mal_relocation->function_base \+ 1\)\)/,
+			);
+			expect(source).not.toMatch(/mal_vm_enter_(?:compiled|leaf_checked)\(vm, \d/);
+			expect(source).toContain(
+				"&vm->runtime_image->functions[(__mal_relocation->function_base + 1)]",
+			);
+			expect(source).not.toMatch(/runtime_image->functions\[\d/);
+		}
+	});
+
 	it("rejects an invalid translation-unit budget", () => {
 		expect(() => emitProgramTranslationUnitSources(definition, {}, 0)).toThrow(
 			/positive integer/,
@@ -1654,7 +1689,7 @@ describe("emit-program-image instruction packing", () => {
 		expect(relocated).toContain("(__mal_relocation->function_base + 7)");
 	});
 
-	it("renders relocatable generators and async functions independently of their index", () => {
+	it("renders relocatable resumable, capturing and calling bodies independently of their index", () => {
 		const relocated = (source: string, name: string) => {
 			const image = compileSemanticProgramToProgramImage(
 				analyzeSourceAndRunSemanticAnalysis(
@@ -1663,12 +1698,12 @@ describe("emit-program-image instruction packing", () => {
 					parseScript(source, { strict: false }),
 				),
 			);
-			const index = image.runtime.functions.findIndex(
-				(candidate) =>
-					String.fromCharCode(
-						...(image.runtime.stringConstants[candidate.nameStringIndex] ?? []),
-					) === name,
+			const names = image.runtime.functions.map((candidate) =>
+				String.fromCharCode(
+					...(image.runtime.stringConstants[candidate.nameStringIndex] ?? []),
+				),
 			);
+			const index = names.indexOf(name);
 			const emitted = emitCompiledFunction(
 				image.native.functions[index]!,
 				index,
@@ -1678,7 +1713,12 @@ describe("emit-program-image instruction packing", () => {
 				new Set(),
 				image.native.semanticProtectors,
 				new Map(),
-				{ symbolStem: "stable", relocation: "&vm->compiler_native_relocation" },
+				{
+					symbolStem: "stable",
+					relocation: "&vm->compiler_native_relocation",
+					// Overlay stems come from partition keys, which an insertion elsewhere keeps.
+					symbolStems: names.map((functionName) => `named_${functionName || "script"}`),
+				},
 			);
 			expect(emitted, name).not.toBeNull();
 			return { index, emitted: emitted! };
@@ -1689,6 +1729,14 @@ describe("emit-program-image instruction packing", () => {
 				"function* pairs(limit) { for (let i = 0; i < limit; i++) yield [i, i * i]; }",
 			],
 			["later", "async function later(value) { await null; return value * 2; }"],
+			[
+				"bump",
+				"function counter() { let count = 0; return function bump() { count += 1; return count; }; }",
+			],
+			[
+				"caller",
+				"function frame(value) { return new Error(String(value)).stack; } function caller(value) { return frame(value) + frame(value + 1); }",
+			],
 		] as const) {
 			const first = relocated(declaration, name);
 			const shifted = relocated(

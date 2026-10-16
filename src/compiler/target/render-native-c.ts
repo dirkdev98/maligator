@@ -354,6 +354,14 @@ function analyzeNativeBody(
 	};
 }
 
+// Named by stem so an overlay body's text survives index shifts elsewhere in its image.
+function captureOwnerName(
+	relocation: NativeRelocationExpressions,
+	owner: number,
+): string {
+	return `__capture_owner_${relocation.stem(owner)}`;
+}
+
 function initializeFixedCaptureOwners(
 	fn: BytecodeFunction,
 	captures: NativeCaptureAccessPlan,
@@ -369,7 +377,7 @@ function initializeFixedCaptureOwners(
 		const incoming = fn.capturedCount > 0 ? "env->parent" : "env";
 		if (layout.length === 1)
 			return [
-				`${binding}__capture_owner_${owners[0]} = mal_env_untag_single_owner(${incoming});`,
+				`${binding}${captureOwnerName(relocation, owners[0]!)} = mal_env_untag_single_owner(${incoming});`,
 			];
 		const selected = new Set(owners);
 		const chain: Array<string> = [];
@@ -378,18 +386,20 @@ function initializeFixedCaptureOwners(
 			const owner = layout[index]!;
 			if (selected.has(owner))
 				chain.push(
-					`  __capture_owner_${owner} = ${index === 0 ? "mal_env_untag_single_owner(__capture_scope)" : "__capture_scope"};`,
+					`  ${captureOwnerName(relocation, owner)} = ${index === 0 ? "mal_env_untag_single_owner(__capture_scope)" : "__capture_scope"};`,
 				);
 			if (index > last) chain.push("  __capture_scope = __capture_scope->parent;");
 		}
 		return [
-			...(declare ? owners.map((owner) => `MalEnv *__capture_owner_${owner};`) : []),
+			...(declare
+				? owners.map((owner) => `MalEnv *${captureOwnerName(relocation, owner)};`)
+				: []),
 			`MalEnv *const __closure_captures = ${incoming};`,
 			"if (__closure_captures->function_index == MAL_ENV_CAPTURE_VECTOR) {",
 			"  MalEnv **const __capture_scopes = mal_env_capture_scopes(__closure_captures);",
 			...owners.map(
 				(owner) =>
-					`  __capture_owner_${owner} = __capture_scopes[${layout.indexOf(owner)}];`,
+					`  ${captureOwnerName(relocation, owner)} = __capture_scopes[${layout.indexOf(owner)}];`,
 			),
 			"} else {",
 			"  MalEnv *__capture_scope = __closure_captures;",
@@ -404,7 +414,7 @@ function initializeFixedCaptureOwners(
 			`mal_vm_capture_owners(env, __capture_owner_ids, ${owners.length}, __capture_owner_scopes);`,
 			...owners.map(
 				(owner, index) =>
-					`${binding}__capture_owner_${owner} = __capture_owner_scopes[${index}];`,
+					`${binding}${captureOwnerName(relocation, owner)} = __capture_owner_scopes[${index}];`,
 			),
 		];
 	}
@@ -414,7 +424,7 @@ function initializeFixedCaptureOwners(
 				captureIndex < 0
 					? `mal_vm_capture_owner(env, ${relocation.ownerFunctionIndex(owner)})`
 					: `mal_vm_capture_owner_at(env, ${relocation.ownerFunctionIndex(owner)}, ${captureIndex})`;
-			return `${binding}__capture_owner_${owner} = ${lookup};`;
+			return `${binding}${captureOwnerName(relocation, owner)} = ${lookup};`;
 		},
 	);
 }
@@ -3118,7 +3128,7 @@ function emitResumableFunction(
 		`    MalGeneratorObject *resume_state = (MalGeneratorObject *) entry_state;`,
 	);
 	for (const owner of analysis.captureOwners) {
-		lines.push(`    MalEnv *__capture_owner_${owner};`);
+		lines.push(`    MalEnv *${captureOwnerName(relocation, owner)};`);
 	}
 	lines.push(`    MalGeneratorObject *__coro = resume_state;`);
 	lines.push(`    (void) __coro;`);
@@ -7654,7 +7664,7 @@ function emitInstruction(
 			if (copied !== undefined)
 				return [`r${instruction.dst} = __capture_value_${copied};`];
 			if (context.fixedCaptureOwners?.has(instruction.ownerFunctionIndex)) {
-				const owner = `__capture_owner_${instruction.ownerFunctionIndex}`;
+				const owner = captureOwnerName(relocation, instruction.ownerFunctionIndex);
 				if (context.requiredCaptureOwners?.has(instruction.ownerFunctionIndex))
 					return [`r${instruction.dst} = ${owner}->slots[${instruction.index}];`];
 				return [
@@ -7669,7 +7679,7 @@ function emitInstruction(
 		}
 		case "STORE_CAPTURED": {
 			if (context.fixedCaptureOwners?.has(instruction.ownerFunctionIndex)) {
-				const owner = `__capture_owner_${instruction.ownerFunctionIndex}`;
+				const owner = captureOwnerName(relocation, instruction.ownerFunctionIndex);
 				const primitive =
 					reps[instruction.src] === "number" ||
 					reps[instruction.src] === "int32" ||
@@ -11235,7 +11245,7 @@ function emitInstruction(
 						const value = `__guarded_entry_value_${ip}`;
 						const receiver = context.strictCompiledTargets.has(target)
 							? boxedOperand(instruction.thisValue)
-							: `mal_vm_callee_this(vm, &vm->runtime_image->functions[${target}], ${boxedOperand(instruction.thisValue)})`;
+							: `mal_vm_callee_this(vm, &vm->runtime_image->functions[${relocation.functionIndex(target)}], ${boxedOperand(instruction.thisValue)})`;
 						const restoreRealm = [
 							"#if MAL_REALMS",
 							"  mal_vm_realm_switch_to(vm, __entry_realm);",
@@ -11247,7 +11257,7 @@ function emitInstruction(
 							"  MalRealm *__entry_realm = vm->current_realm;",
 							`  mal_vm_realm_switch_to(vm, mal_vm_callee_realm(vm, ${guardedCallee}));`,
 							"#endif",
-							`  if (!${entry.leaf ? "mal_vm_enter_leaf_checked" : "mal_vm_enter_compiled"}(vm, ${target})) {`,
+							`  if (!${entry.leaf ? "mal_vm_enter_leaf_checked" : "mal_vm_enter_compiled"}(vm, ${relocation.functionIndex(target)})) {`,
 							...restoreRealm,
 							`    ${onThrow()}`,
 							"  }",
@@ -11299,7 +11309,7 @@ function emitInstruction(
 				const functionDeclaration = targetIsStrict
 					? []
 					: [
-							`const MalFunction *${directFunction} = &vm->runtime_image->functions[${target}];`,
+							`const MalFunction *${directFunction} = &vm->runtime_image->functions[${relocation.functionIndex(target)}];`,
 						];
 				const transport = context.callTransport?.targets.find(
 					(candidate) => candidate.functionIndex === target,
@@ -11320,7 +11330,7 @@ function emitInstruction(
 					return [
 						`MalValue ${directCallee} = ${boxedOperand(instruction.callee)};`,
 						`MAL_PERF_COUNT(direct_entry_hits);`,
-						`if (!${directEntry.leaf ? "mal_vm_enter_leaf_checked" : "mal_vm_enter_compiled"}(vm, ${target})) ${onThrow()}`,
+						`if (!${directEntry.leaf ? "mal_vm_enter_leaf_checked" : "mal_vm_enter_compiled"}(vm, ${relocation.functionIndex(target)})) ${onThrow()}`,
 						...functionDeclaration,
 						`${cTypeOf(directEntry.resultRepresentation)} ${directValue} = mal_direct_${relocation.stem(target)}_${directEntry.id}${suffix}(vm, ${thisArgument}${parameters.length === 0 ? "" : `, ${parameters.join(", ")}`}, mal_value_to_function_object(${directCallee})->creation_env, ${directCallee});`,
 						`${directEntry.leaf ? "mal_vm_leave_leaf_checked" : "mal_vm_leave_compiled"}(vm);`,
@@ -11335,7 +11345,7 @@ function emitInstruction(
 					const directValue = `__direct_value_${ip}`;
 					return [
 						`MalValue ${directCallee} = ${boxedOperand(instruction.callee)};`,
-						`if (!mal_vm_enter_compiled(vm, ${target})) ${onThrow()}`,
+						`if (!mal_vm_enter_compiled(vm, ${relocation.functionIndex(target)})) ${onThrow()}`,
 						...functionDeclaration,
 						`MalValue ${directValue} = mal_compiled_${relocation.stem(target)}${suffix}(vm, ${thisArgument}, ${argsExpr}, ${args.length}, MAL_VALUE_UNDEFINED, mal_value_to_function_object(${directCallee})->creation_env, ${directCallee}, nullptr);`,
 						`mal_vm_leave_compiled(vm);`,
