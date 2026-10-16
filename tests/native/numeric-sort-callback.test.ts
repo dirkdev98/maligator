@@ -83,6 +83,5 @@ describe("numeric sort callback specialization through both emitters", () => {
 				);
 			}
 		},
-		600_000,
 	);
 });

@@ -113,7 +113,6 @@ describe("forwarded groupBy callback nomination", () => {
 				}
 			}
 		},
-		600_000,
 	);
 
 	it("falls back from a matching outer typed callback when groupBy receives only two arguments", () => {

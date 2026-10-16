@@ -121,7 +121,6 @@ describe("forwarded JSON callback nomination", () => {
 				}
 			}
 		},
-		600_000,
 	);
 
 	it("falls back from a matching outer typed callback when JSON callbacks receive two or three arguments", () => {

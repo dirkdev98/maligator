@@ -120,7 +120,6 @@ describe("forwarded from mapper nomination", () => {
 				}
 			}
 		},
-		600_000,
 	);
 
 	it("falls back from a matching outer typed callback when the mapper receives only two arguments", () => {

@@ -102,7 +102,6 @@ describe("retained lazy Iterator callback contracts", () => {
 				}
 			}
 		},
-		600_000,
 	);
 	it("rebuilds the canonical entry after an outer typed context expires", () => {
 		const pair = buildBackendPairFromOneProgramImage({
@@ -225,6 +224,5 @@ describe("retained lazy Iterator callback contracts", () => {
 				"iterator-callback-boundaries PASS\n",
 			);
 		},
-		600_000,
 	);
 });

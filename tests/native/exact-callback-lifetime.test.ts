@@ -90,6 +90,5 @@ describe("exact callback contexts across runtime compilation", () => {
 					}),
 				).toBe(expected);
 		},
-		600_000,
 	);
 });

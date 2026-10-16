@@ -123,7 +123,6 @@ describe("forwarded sort comparator nomination", () => {
 				}
 			}
 		},
-		600_000,
 	);
 
 	it("falls back from a matching three-argument typed adapter inside a nested sort", () => {

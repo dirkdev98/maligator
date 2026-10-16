@@ -110,7 +110,6 @@ describe("retained Array.fromAsync callback contracts", () => {
 					);
 			}
 		},
-		600_000,
 	);
 	it("retains owned foreign mapper identity across awaits and runtime compilation", () => {
 		const fixture = "tests/local/from-async-callback-realms.js";
@@ -162,6 +161,5 @@ describe("retained Array.fromAsync callback contracts", () => {
 			expect(run.status, run.stderr).toBe(0);
 			expect(run.stdout).toBe("from-async-boundaries PASS\n");
 		},
-		600_000,
 	);
 });

@@ -69,7 +69,6 @@ describe("VM-owned foreign callback realms", () => {
 				expect(lazy!.slice(1).map(Number)).toEqual(compiled ? [1, 3] : [0, 0]);
 			}
 		},
-		600_000,
 	);
 	it("rejects same-index closures from another VM and executes owned second-realm compiled closures", () => {
 		const built = buildNativeBinaryResult({

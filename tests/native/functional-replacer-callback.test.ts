@@ -115,7 +115,6 @@ describe("functional replacer callback nomination", () => {
 					).toBe(expected);
 			}
 		},
-		600_000,
 	);
 
 	it("preserves a matching outer typed callback with different replacer argument roles", () => {

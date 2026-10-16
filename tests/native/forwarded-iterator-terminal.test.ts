@@ -114,7 +114,6 @@ describe("forwarded Iterator terminal callback nomination", () => {
 				}
 			}
 		},
-		600_000,
 	);
 
 	it("falls back from a matching outer typed callback when iterator terminals receive two or three arguments", () => {
