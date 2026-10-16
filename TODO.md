@@ -58,12 +58,13 @@ rooting, and resource-safety defects can interrupt that order.
       fragment's compiler artifact, and a runner that splices them at startup. On an
       Express and Valibot app (216 dependencies) a rebuild after an edit drops from
       4.4 s to 0.7 s and adding a function no longer recompiles dependency objects.
-      `bench/javascript.mjs` runs 1.16x slower than the whole-program development
-      binary (2.62 s against 2.25 s), mostly because relocatable emission leaves
-      generators, async functions and direct entries interpreted. Before switching
-      the default: make those relocatable, support worker images and assets, which
-      the mode rejects today, and compare the native suite and the JavaScript
-      family in both modes. Production builds stay whole-program.
+      `bench/javascript.mjs` runs 1.14x slower than the whole-program development
+      binary (2.68 s against 2.35 s), mostly in its allocation and object phases:
+      relocatable emission has no direct calls or typed direct entries between an
+      overlay's functions. Before switching the default: name call targets by their
+      stems so overlays keep direct calls and entries, support worker images and
+      assets, which the mode rejects today, and compare the native suite and the
+      JavaScript family in both modes. Production builds stay whole-program.
 
 - [ ] Run the live Postgres suites somewhere hosted. The native remainder is green on
       Linux and macOS, but `postgres-live`, `postgres-query-api-live`,

@@ -697,7 +697,8 @@ function nativePositionEntry(
 interface CoroutineContext {
 	readonly suspension: NativeSuspensionPlan;
 	positionEntry(ip: number): number;
-	functionIndex: number;
+	/** C expression for the function's index, relocated in an overlay. */
+	functionIndex: string;
 	selfSlot: number;
 	/** Runtime condition for copying call arguments into the suspended frame. */
 	retainArguments: string;
@@ -1538,7 +1539,7 @@ function emitCompiledVariant(
 	// function (a heap register frame + entry dispatch to the saved resume point)
 	// rather than the straight-line shape below (see emitResumableFunction).
 	if (fn.isGenerator || fn.isAsync) {
-		if (directEntry !== undefined || relocatable !== false) return null;
+		if (directEntry !== undefined) return null;
 		return emitResumableFunction(
 			fn,
 			analysis,
@@ -1553,6 +1554,7 @@ function emitCompiledVariant(
 			directCompiledEntries,
 			strictCompiledTargets,
 			maxCodeUnits,
+			relocatable,
 		);
 	}
 	if (directEntry !== undefined) validateNativeDirectEntry(fn, directEntry);
@@ -2929,9 +2931,14 @@ function emitResumableFunction(
 	directCompiledEntries: DirectCompiledEntries,
 	strictCompiledTargets: ReadonlySet<number>,
 	maxCodeUnits: number,
+	relocatable: NativeRelocatableEmission | false = false,
 ): CompiledFunction | null {
 	nativeFrameRootRegisters(fn, native);
 	const isAsyncFunction = fn.isAsync && !fn.isGenerator;
+	const symbol = `mal_compiled_${relocatable === false ? index : relocatable.symbolStem}${suffix}`;
+	const relocation = nativeRelocationExpressions(
+		relocatable === false ? undefined : `${symbol}_link`,
+	);
 	const isAsyncGenerator = fn.isAsync && fn.isGenerator;
 
 	const reps = [...native.registerRepresentations];
@@ -2968,7 +2975,7 @@ function emitResumableFunction(
 			const pos = fn.positions[ip] ?? -1;
 			return debug === false || pos < 0 ? -1 : nativePositionEntry(debug, index, pos);
 		},
-		functionIndex: index,
+		functionIndex: relocation.functionIndex(index),
 		selfSlot,
 		retainArguments,
 		isAsyncFunction,
@@ -2981,13 +2988,7 @@ function emitResumableFunction(
 			if (!("dst" in op)) throw new Error("Native expression lacks a destination");
 			return [
 				op.dst,
-				renderScalarExpression(
-					op,
-					reps,
-					native.instructions[ip],
-					UNRELOCATED_NATIVE_EXPRESSIONS,
-					suffix,
-				),
+				renderScalarExpression(op, reps, native.instructions[ip], relocation, suffix),
 			];
 		}),
 	);
@@ -3024,7 +3025,7 @@ function emitResumableFunction(
 		undefined,
 		vmSemanticProtectorGuard(semanticProtectors, "watched-methods"),
 		profileDecisions,
-		undefined,
+		relocation,
 		strictCompiledTargets,
 		undefined,
 		undefined,
@@ -3052,7 +3053,7 @@ function emitResumableFunction(
 	const resumablePreamble = body.invocationPreamble;
 
 	const resumePoints = resumePointsOf(fn);
-	const symbol = `mal_compiled_${index}${suffix}`;
+	const self = relocation.functionIndex(index);
 
 	const lines: Array<string> = [];
 
@@ -3060,34 +3061,38 @@ function emitResumableFunction(
 		`${linkage === "static" ? "static " : ""}__attribute__((aligned(64))) MalValue ${symbol}(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, void *entry_state) {`,
 	);
 	lines.push("#pragma STDC FP_CONTRACT OFF");
+	if (relocatable !== false)
+		lines.push(
+			`    const MalNativeProgramRelocation *__mal_relocation = ${relocatable.relocation};`,
+		);
 	lines.push(...rootMaskStatements.declarations);
 	lines.push(`    (void) this_value;`);
 	lines.push(`    (void) new_target;`);
 	if (body.resources.has("propertyCache") || body.resources.has("literalShapes")) {
 		const cacheMisses = [
 			body.resources.has("propertyCache")
-				? `vm->property_cache[${index}].sites == nullptr`
+				? `vm->property_cache[${self}].sites == nullptr`
 				: undefined,
 			body.resources.has("literalShapes")
-				? `vm->literal_shape_cache[${index}] == nullptr`
+				? `vm->literal_shape_cache[${self}] == nullptr`
 				: undefined,
 		].filter((condition) => condition !== undefined);
 		lines.push(
 			`    if (__builtin_expect(${cacheMisses.join(" || ")}, 0)) {`,
-			`        mal_vm_ensure_function_caches(vm, ${index});`,
+			`        mal_vm_ensure_function_caches(vm, ${self});`,
 			`    }`,
 		);
 	}
 	if (body.resources.has("propertyCache")) {
-		lines.push(`    MalInlineCache *__property_ic = vm->property_cache[${index}].sites;`);
+		lines.push(`    MalInlineCache *__property_ic = vm->property_cache[${self}].sites;`);
 	}
 	if (body.resources.has("callCaches")) {
 		lines.push(
-			`    MalCallCache *__call_caches = mal_vm_function_call_caches(vm, ${index}, ${body.callCacheCount});`,
+			`    MalCallCache *__call_caches = mal_vm_function_call_caches(vm, ${self}, ${body.callCacheCount});`,
 		);
 	}
 	if (body.resources.has("literalShapes")) {
-		lines.push(`    MalShape **__literal_shapes = vm->literal_shape_cache[${index}];`);
+		lines.push(`    MalShape **__literal_shapes = vm->literal_shape_cache[${self}];`);
 	}
 	lines.push(...resumablePreamble);
 
@@ -3124,7 +3129,8 @@ function emitResumableFunction(
 	}
 
 	lines.push(
-		`    static const MalFrameDescriptor __gc_desc = { .function_index = ${index}, .slot_count = ${totalSlots} };`,
+		// A relocated index is only known at run time, so its descriptor lives on the stack.
+		`    ${relocatable === false ? "static " : ""}const MalFrameDescriptor __gc_desc = { .function_index = ${self}, .slot_count = ${totalSlots} };`,
 		`    MalRootFrame __gc_frame;`,
 	);
 
@@ -3144,7 +3150,7 @@ function emitResumableFunction(
 	for (const line of initializeFixedCaptureOwners(
 		fn,
 		analysis.captures,
-		UNRELOCATED_NATIVE_EXPRESSIONS,
+		relocation,
 		false,
 	)) {
 		lines.push(`        ${line}`);
@@ -3181,7 +3187,7 @@ function emitResumableFunction(
 	lines.push(`        vm->root_frame_head = &__gc_frame;`);
 	if (capturesEnv) {
 		lines.push(
-			`        env = ${fn.closureCaptureOwners === undefined ? "mal_env_new" : "mal_env_new_compact"}(vm, env, ${index}, ${fn.capturedCount});`,
+			`        env = ${fn.closureCaptureOwners === undefined ? "mal_env_new" : "mal_env_new_compact"}(vm, env, ${self}, ${fn.capturedCount});`,
 			`        __gc_frame.env = env;`,
 		);
 	}
@@ -3200,7 +3206,7 @@ function emitResumableFunction(
 	for (const line of initializeFixedCaptureOwners(
 		fn,
 		analysis.captures,
-		UNRELOCATED_NATIVE_EXPRESSIONS,
+		relocation,
 		false,
 	)) {
 		lines.push(`        ${line}`);
@@ -3231,11 +3237,13 @@ function emitResumableFunction(
 	for (let i = 0; i < fn.registerCount; i++) {
 		lines.push(`#undef r${i}`);
 	}
+	if (relocation.link.length > 0) lines.unshift(`extern const i32 ${symbol}_link[];`);
 	if (joinedCodeUnits(lines) > maxCodeUnits) return null;
 
 	return {
 		symbol,
 		source: lines.join("\n"),
+		...(relocatable === false ? {} : { link: relocation.link }),
 		profileDecisions,
 		emittedInstructions: body.emittedInstructions,
 		directEntryCalls: body.directEntryCalls,

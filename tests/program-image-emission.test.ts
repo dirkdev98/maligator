@@ -1654,6 +1654,55 @@ describe("emit-program-image instruction packing", () => {
 		expect(relocated).toContain("(__mal_relocation->function_base + 7)");
 	});
 
+	it("renders relocatable generators and async functions independently of their index", () => {
+		const relocated = (source: string, name: string) => {
+			const image = compileSemanticProgramToProgramImage(
+				analyzeSourceAndRunSemanticAnalysis(
+					source,
+					"resumable.js",
+					parseScript(source, { strict: false }),
+				),
+			);
+			const index = image.runtime.functions.findIndex(
+				(candidate) =>
+					String.fromCharCode(
+						...(image.runtime.stringConstants[candidate.nameStringIndex] ?? []),
+					) === name,
+			);
+			const emitted = emitCompiledFunction(
+				image.native.functions[index]!,
+				index,
+				"_eval_compiler",
+				false,
+				"external",
+				new Set(),
+				image.native.semanticProtectors,
+				new Map(),
+				{ symbolStem: "stable", relocation: "&vm->compiler_native_relocation" },
+			);
+			expect(emitted, name).not.toBeNull();
+			return { index, emitted: emitted! };
+		};
+		for (const [name, declaration] of [
+			[
+				"pairs",
+				"function* pairs(limit) { for (let i = 0; i < limit; i++) yield [i, i * i]; }",
+			],
+			["later", "async function later(value) { await null; return value * 2; }"],
+		] as const) {
+			const first = relocated(declaration, name);
+			const shifted = relocated(
+				`function pad() { return 0; } function other() { return 1; } ${declaration}`,
+				name,
+			);
+			expect(shifted.index).not.toBe(first.index);
+			expect(shifted.emitted.source).toBe(first.emitted.source);
+			expect(resolveNativeLinks(shifted.emitted)).toContain(
+				`(__mal_relocation->function_base + ${shifted.index})`,
+			);
+		}
+	});
+
 	it("keeps native-overlay code units byte-identical across an unrelated insertion", () => {
 		const firstNameIndex = definition.runtime.stringConstants.length;
 		const names = Array.from({ length: 64 }, (_, index) => `overlay_${String(index)}`);
