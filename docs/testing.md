@@ -253,9 +253,9 @@ without repeating check's fixtures, quality, or standards. macOS also runs its l
 audit in the normal dimension. The runner completes every selected stage to collect
 failures and retains source-bound reports for fourteen days. These reports remain
 partial full-tier evidence. Optional external-service tests retain their prerequisites:
-the Linux normal shards start a PostgreSQL 17 container and set the
-`MAL_POSTGRES_*_LIVE` opt-ins, which canonical runners keep, so the live postgres.js
-suites run there; macOS shards skip them.
+the Linux shards of both dimensions start a PostgreSQL 17 container and set the
+`MAL_POSTGRES_*LIVE` opt-ins, which canonical runners keep, so the live postgres.js
+suites run there (the large-types suite under the sanitizers); macOS shards skip them.
 
 Extended CI also runs on pushes to `main` and manual dispatch. Independent Linux
 jobs exercise the full-only unit manifest (the two primordial inventory files and the

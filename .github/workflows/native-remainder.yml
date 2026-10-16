@@ -67,8 +67,9 @@ jobs:
         run: npm run env:check -- --json
 
       # The live postgres.js suites skip without a server; Linux runners can host one.
+      # The large-types suite runs in the sanitizer lane.
       - name: Start PostgreSQL for the live suites
-        if: runner.os == 'Linux' && matrix.lane == 'native'
+        if: runner.os == 'Linux'
         shell: bash
         run: |
           docker run --detach --name maligator-postgres --publish 127.0.0.1:5432:5432 \
