@@ -67,12 +67,6 @@ rooting, and resource-safety defects can interrupt that order.
       the edit loop, cold builds, binary size and the development runtime ratio
       before and after.
 
-- [ ] Rebalance the CI shards once the native caches are warm. The duration table
-      was recorded on cold runs: with warm overlay, Rust and runtime objects the
-      4ee54135 gate ran sanitizer 2/3 for 13 minutes and sanitizer 1/3 for 6. After
-      about five consecutive warm `main` runs of CI, Extended CI and the native
-      remainder, refresh `tests/test-suite-durations.json` from their logs with
-      `scripts/test-suite-durations.ts` and review the modelled shard times.
 - [ ] Run the live Postgres suites somewhere hosted. The native remainder is green on
       Linux and macOS, but `postgres-live`, `postgres-query-api-live`,
       `postgres-features-live`, and `postgres-types-large-live` skip on every runner
