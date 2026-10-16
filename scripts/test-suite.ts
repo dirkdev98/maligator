@@ -26,6 +26,7 @@ import {
 	workerCount,
 	workerEnvironment,
 } from "../src/worker-budget.ts";
+import { nativePreparations } from "../tests/helpers/native-preparations.ts";
 import {
 	commandEnvironmentPlan,
 	mergeCommandRequirements,
@@ -33,6 +34,8 @@ import {
 } from "./command-requirements.ts";
 import type { CommandKind, CommandRequirements } from "./command-requirements.ts";
 import { cleanTestEnvironment } from "./test-environment.ts";
+import { parseShard, partitionShards, readShardDurations } from "./test-suite-shards.ts";
+import type { ShardItem, ShardRequest } from "./test-suite-shards.ts";
 import {
 	captureVerificationSource,
 	captureVerificationEnvironment,
@@ -57,6 +60,8 @@ interface Command {
 	args: Array<string>;
 	requirements: CommandRequirements;
 	env?: NodeJS.ProcessEnv;
+	/** Canonical stage whose selection this shard stage partitions. */
+	parent?: string;
 }
 
 interface StageReport {
@@ -81,6 +86,8 @@ const NOMINAL_SMOKE_WORKERS = 4;
 const WARM_SMOKE_FUSE_MS = 20_000;
 // Cold CI builds both the development runtime and the eval-enabled Test262 runtime.
 const COLD_SMOKE_FUSE_MS = 900_000;
+// One optional prepared eval runtime compiles the native compiler overlay on a CI runner.
+const SHARD_PREPARATION_SECONDS = 300;
 
 function smokeBudgetForWorkers(workers: number): { warmMs: number; coldMs: number } {
 	const divisor = Math.min(workers, NOMINAL_SMOKE_WORKERS);
@@ -117,6 +124,7 @@ Options:
   --exclude-quality       omit type-check/lint and report the excluded coverage
   --lane NAME             run one disjoint lane: quality, native, sanitizer, standards, compiler, rust
   --native-remainder      full tier's native complement only, including macOS leak checks
+  --shard INDEX/COUNT     run one duration-balanced part of the selected --lane
   --test262-baseline PATH  explicit Test262 comparison input for every standards stage
   --workers N             total worker budget (default: half the available CPUs)
   --list                  print the exact commands without running them
@@ -139,6 +147,7 @@ function parseArguments(): {
 	excludeQuality: boolean;
 	nativeRemainder: boolean;
 	lane?: Lane;
+	shard?: ShardRequest;
 	test262Baseline?: string;
 	workers: number;
 } {
@@ -151,6 +160,7 @@ function parseArguments(): {
 	let excludeQuality = false;
 	let nativeRemainder = false;
 	let lane: Lane | undefined;
+	let shard: ShardRequest | undefined;
 	let test262Baseline: string | undefined;
 	let workers: number | undefined;
 	for (let index = 2; index < process.argv.length; index++) {
@@ -183,6 +193,15 @@ function parseArguments(): {
 				exitWithUsage(`--lane requires one of: ${lanes.join(", ")}`);
 			}
 			lane = value as Lane;
+			continue;
+		}
+		if (argument === "--shard") {
+			if (shard !== undefined) exitWithUsage("--shard may only be specified once");
+			try {
+				shard = parseShard(process.argv[++index]);
+			} catch (error) {
+				exitWithUsage(error instanceof Error ? error.message : String(error));
+			}
 			continue;
 		}
 		if (argument === "--native-remainder") {
@@ -225,6 +244,7 @@ function parseArguments(): {
 	if (nativeRemainder && tier !== "full") {
 		exitWithUsage("--native-remainder requires the full tier");
 	}
+	if (shard !== undefined && lane === undefined) exitWithUsage("--shard requires --lane");
 	return {
 		tier,
 		policy,
@@ -233,6 +253,7 @@ function parseArguments(): {
 		excludeQuality,
 		nativeRemainder,
 		lane,
+		shard,
 		test262Baseline,
 		workers: workers ?? workerBudget(process.env.MALIGATOR_WORKERS),
 	};
@@ -437,6 +458,7 @@ const {
 	excludeQuality,
 	nativeRemainder,
 	lane,
+	shard,
 	test262Baseline,
 	workers,
 } = parseArguments();
@@ -726,14 +748,75 @@ const included = (command: Command) =>
 		remainingNativeCommands.includes(command) ||
 		leakCommands.includes(command)) &&
 	(lane === undefined || commandLane(command) === lane);
-const smokeCommands = allSmokeCommands.filter(included);
-const laterCommands = allLaterCommands.filter(included);
+function testFiles(command: Command): Array<string> {
+	return command.args.filter((argument) => argument.endsWith(".test.ts"));
+}
+
+/** Split the selected stages' test files, keeping each file-less stage whole. */
+function shardCommands(commands: Array<Command>, request: ShardRequest): Array<Command> {
+	const durations = readShardDurations(root);
+	const known = [...durations.values()].sort((left, right) => left - right);
+	const fallbackSeconds = known[Math.floor(known.length / 2)] ?? 0;
+	const items: Array<ShardItem> = commands.flatMap((command, stage) => {
+		const files = testFiles(command);
+		if (files.length === 0) {
+			return [{ id: `${stage}`, seconds: fallbackSeconds, preparations: [] }];
+		}
+		return files.map((file) => ({
+			id: `${stage}:${file}`,
+			seconds: durations.get(file) ?? fallbackSeconds,
+			preparations: file.startsWith("tests/native/")
+				? nativePreparations(root, file)
+				: [],
+		}));
+	});
+	const selected = new Set(
+		partitionShards(items, request.count, () => SHARD_PREPARATION_SECONDS)[
+			request.index - 1
+		],
+	);
+	return commands.flatMap((command, stage) => {
+		const files = testFiles(command);
+		const kept = files.filter((file) => selected.has(`${stage}:${file}`));
+		if (files.length === 0 ? !selected.has(`${stage}`) : kept.length === 0) return [];
+		const keptFiles = new Set(kept);
+		return [
+			{
+				...command,
+				name: `${command.name} · shard ${request.index}/${request.count}`,
+				args: command.args.filter(
+					(argument) => !argument.endsWith(".test.ts") || keptFiles.has(argument),
+				),
+				parent: command.name,
+			},
+		];
+	});
+}
+
+const laneSmokeCommands = allSmokeCommands.filter(included);
+const laneLaterCommands = allLaterCommands.filter(included);
+const shardedCommands =
+	shard === undefined
+		? undefined
+		: shardCommands([...laneSmokeCommands, ...laneLaterCommands], shard);
+const laneSmokeNames = new Set(laneSmokeCommands.map((command) => command.name));
+const smokeCommands =
+	shardedCommands?.filter((command) => laneSmokeNames.has(command.parent!)) ??
+	laneSmokeCommands;
+const laterCommands =
+	shardedCommands?.filter((command) => !laneSmokeNames.has(command.parent!)) ??
+	laneLaterCommands;
 const excludedStages = [...allSmokeCommands, ...allLaterCommands]
 	.filter((command) => !included(command))
 	.map((command) => command.name);
-const scope = { coversEntireTier: excludedStages.length === 0, excludedStages };
+const scope = {
+	coversEntireTier: excludedStages.length === 0 && shard === undefined,
+	excludedStages,
+};
 if (smokeCommands.length + laterCommands.length === 0) {
-	exitWithUsage(`no ${tier} stages selected`);
+	exitWithUsage(
+		`no ${tier} stages selected${shard === undefined ? "" : ` for shard ${shard.index}/${shard.count}`}`,
+	);
 }
 
 async function exitAfterPrinting(output: string): Promise<never> {
@@ -766,6 +849,7 @@ if (jsonPlan) {
 				tier,
 				nativeRemainder,
 				lane,
+				shard: shard ?? null,
 				policy,
 				scope,
 				test262Baseline,
@@ -778,6 +862,8 @@ if (jsonPlan) {
 					kind: command.kind,
 					lane: commandLane(command),
 					name: command.name,
+					parent: command.parent ?? command.name,
+					files: testFiles(command),
 					invocation: formatCommand(command),
 					requirements: command.requirements,
 					workers: stageWorkers(command),
@@ -798,7 +884,7 @@ const telemetryRoot = path.join(runDirectory, "telemetry");
 const suiteReportPath = path.join(runDirectory, "report.json");
 const latestReportPath = path.join(
 	suiteReportDirectory,
-	`report-${tier}${nativeRemainder ? "-native-remainder" : ""}${lane === undefined ? "" : `-${lane}`}.json`,
+	`report-${tier}${nativeRemainder ? "-native-remainder" : ""}${lane === undefined ? "" : `-${lane}`}${shard === undefined ? "" : `-shard-${shard.index}-of-${shard.count}`}.json`,
 );
 mkdirSync(telemetryRoot, { recursive: true });
 const sourceBefore = captureVerificationSource(root);
@@ -816,6 +902,7 @@ function persistSuiteReport(complete: boolean): void {
 			tier,
 			nativeRemainder,
 			lane,
+			shard: shard ?? null,
 			policy,
 			scope,
 			test262Baseline,

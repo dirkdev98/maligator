@@ -242,27 +242,85 @@ describe("test suite planner", () => {
 		expect(full.approval).toBe("explicit");
 	});
 
-	it("partitions check into disjoint lanes with complete canonical coverage", () => {
+	it("partitions check into disjoint CI lanes and shards with complete canonical coverage", () => {
 		const workflow = parse(
 			readFileSync(path.join(root, ".github/workflows/ci.yml"), "utf8"),
 		) as {
-			jobs: { "linux-lanes": { strategy: { matrix: { lane: Array<string> } } } };
+			jobs: {
+				"linux-lanes": {
+					strategy: {
+						matrix: { include: Array<{ lane: string; shard?: number; shards?: number }> };
+					};
+				};
+			};
+		};
+		type PlannedStage = {
+			name: string;
+			parent: string;
+			files: Array<string>;
+			invocation: string;
 		};
 		const complete = JSON.parse(runSuite("check", "--plan=json")) as {
-			stages: Array<{ name: string; invocation: string }>;
+			stages: Array<PlannedStage>;
 		};
-		const selected = workflow.jobs["linux-lanes"].strategy.matrix.lane.flatMap((lane) => {
-			const plan = JSON.parse(runSuite("check", "--lane", lane, "--plan=json")) as {
-				scope: { coversEntireTier: boolean };
-				stages: typeof complete.stages;
-			};
-			expect(plan.scope.coversEntireTier).toBe(false);
-			return plan.stages;
-		});
-		expect(new Set(selected.map((stage) => stage.name)).size).toBe(selected.length);
-		expect(selected.map((stage) => stage.invocation).sort()).toEqual(
-			complete.stages.map((stage) => stage.invocation).sort(),
+		const selected = workflow.jobs["linux-lanes"].strategy.matrix.include.flatMap(
+			({ lane, shard, shards }) => {
+				const plan = JSON.parse(
+					runSuite(
+						"check",
+						"--lane",
+						lane,
+						...(shards === undefined ? [] : ["--shard", `${shard}/${shards}`]),
+						"--plan=json",
+					),
+				) as { scope: { coversEntireTier: boolean }; stages: Array<PlannedStage> };
+				expect(plan.scope.coversEntireTier).toBe(false);
+				return plan.stages;
+			},
 		);
+		expect(new Set(selected.map((stage) => stage.name)).size).toBe(selected.length);
+		for (const stage of complete.stages) {
+			const parts = selected.filter((candidate) => candidate.parent === stage.name);
+			expect(parts.length, stage.name).toBeGreaterThan(0);
+			expect(parts.flatMap((part) => part.files).sort(), stage.name).toEqual(
+				[...stage.files].sort(),
+			);
+			if (stage.files.length === 0)
+				expect(parts.map((part) => part.invocation)).toEqual([stage.invocation]);
+		}
+		expect(new Set(selected.map((stage) => stage.parent))).toEqual(
+			new Set(complete.stages.map((stage) => stage.name)),
+		);
+	});
+
+	it("divides a lane's test files across shards without changing the stage commands", () => {
+		const plan = (...args: Array<string>) =>
+			JSON.parse(runSuite("full", "--native-remainder", ...args, "--plan=json")) as {
+				shard: { index: number; count: number } | null;
+				stages: Array<{
+					name: string;
+					parent: string;
+					files: Array<string>;
+					invocation: string;
+				}>;
+			};
+		const whole = plan("--lane", "sanitizer");
+		const shards = [1, 2, 3].map((index) =>
+			plan("--lane", "sanitizer", "--shard", `${index}/3`),
+		);
+		expect(shards.map((shard) => shard.shard)).toEqual([
+			{ index: 1, count: 3 },
+			{ index: 2, count: 3 },
+			{ index: 3, count: 3 },
+		]);
+		const files = shards.flatMap((shard) => shard.stages.flatMap((stage) => stage.files));
+		expect(new Set(files).size).toBe(files.length);
+		expect(files.sort()).toEqual(whole.stages.flatMap((stage) => stage.files).sort());
+		for (const stage of shards.flatMap((shard) => shard.stages)) {
+			expect(stage.name.startsWith(`${stage.parent} · shard `)).toBe(true);
+			expect(stage.invocation).toContain("npm run test:sanitize");
+		}
+		expect(plan("--lane", "sanitizer", "--shard", "2/3")).toEqual(shards[1]);
 	});
 
 	it("selects the complete native remainder without repeating check or standards coverage", () => {
@@ -321,6 +379,9 @@ describe("test suite planner", () => {
 		["--lane", "quality", "--lane", "native"],
 		["--lane", "sanitizer"],
 		["--native-remainder"],
+		["--shard", "1/2"],
+		["--lane", "quality", "--shard", "3/2"],
+		["--lane", "quality", "--shard", "1/2", "--shard", "2/2"],
 	])("rejects invalid or empty smoke selections %j", (...args) => {
 		expect(() => runSuite("smoke", ...args, "--plan=json")).toThrow();
 	});

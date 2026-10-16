@@ -18,13 +18,29 @@ import {
 } from "../scripts/verification-source.ts";
 
 const root = path.resolve(import.meta.dirname, "..");
-const plan = JSON.parse(
-	execFileSync(
-		process.execPath,
-		["scripts/test-suite.ts", "check", "--workers", "4", "--plan=json"],
-		{ cwd: root, encoding: "utf8" },
-	),
-) as Parameters<typeof combineCheckReports>[1];
+type Plan = Parameters<typeof combineCheckReports>[1];
+type Shard = { index: number; count: number };
+function planFor(...args: Array<string>): Plan {
+	return JSON.parse(
+		execFileSync(
+			process.execPath,
+			["scripts/test-suite.ts", "check", "--workers", "4", ...args, "--plan=json"],
+			{ cwd: root, encoding: "utf8" },
+		),
+	) as Plan;
+}
+const plan = planFor();
+const shardPlans = new Map<string, Plan["stages"]>();
+function shardPlan(lane: string, shard: Shard): Plan["stages"] {
+	const key = `${lane} ${shard.index}/${shard.count}`;
+	if (!shardPlans.has(key)) {
+		shardPlans.set(
+			key,
+			planFor("--lane", lane, "--shard", `${shard.index}/${shard.count}`).stages,
+		);
+	}
+	return shardPlans.get(key)!;
+}
 const source = { revision: "1234", digest: "a".repeat(64), dirty: false, files: 1 };
 const environment = {
 	platform: process.platform,
@@ -37,29 +53,43 @@ const environment = {
 function reports(
 	identity: Parameters<typeof combineCheckReports>[2] = source,
 	toolchain: Parameters<typeof combineCheckReports>[3] = environment,
+	shards: Partial<Record<string, number>> = {},
 ): Array<Parameters<typeof combineCheckReports>[0][number]> {
-	return ["quality", "native", "sanitizer", "standards"].map((lane) => {
-		const selection = plan.stages
-			.filter((stage) => stage.lane === lane)
-			.map(({ name, invocation, lane }) => ({ name, invocation, lane }));
-		return {
-			schemaVersion: 4,
-			runId: lane,
-			tier: "check",
-			lane,
-			complete: true,
-			passed: true,
-			startedAt: new Date().toISOString(),
-			source: { before: { ...identity }, after: { ...identity }, consistent: true },
-			environment: structuredClone(toolchain),
-			selection,
-			stages: selection.map(({ name, invocation }) => ({
+	return ["quality", "native", "sanitizer", "standards"].flatMap((lane) => {
+		const count = shards[lane];
+		const parts =
+			count === undefined
+				? [{ shard: null, stages: plan.stages.filter((stage) => stage.lane === lane) }]
+				: Array.from({ length: count }, (_, index) => {
+						const shard = { index: index + 1, count };
+						return { shard, stages: shardPlan(lane, shard) };
+					});
+		return parts.map(({ shard, stages }) => {
+			const selection = stages.map(({ name, invocation, lane }) => ({
 				name,
 				invocation,
-				status: 0,
-				signal: null,
-			})),
-		};
+				lane,
+			}));
+			return {
+				schemaVersion: 4,
+				runId: shard === null ? lane : `${lane}-${shard.index}`,
+				tier: "check",
+				lane,
+				shard,
+				complete: true,
+				passed: true,
+				startedAt: new Date().toISOString(),
+				source: { before: { ...identity }, after: { ...identity }, consistent: true },
+				environment: structuredClone(toolchain),
+				selection,
+				stages: selection.map(({ name, invocation }) => ({
+					name,
+					invocation,
+					status: 0,
+					signal: null,
+				})),
+			};
+		});
 	});
 }
 
@@ -89,10 +119,10 @@ describe("CI check coverage aggregation", () => {
 			const identity = captureVerificationSource(directory);
 			const toolchain = captureVerificationEnvironment(directory);
 			const artifacts = path.join(directory, ".cache/ci-lane-reports");
-			for (const report of reports(identity, toolchain)) {
+			for (const report of reports(identity, toolchain, { native: 2, sanitizer: 3 })) {
 				const lane = path.join(
 					artifacts,
-					`linux-${report.lane}-reports-123-1`,
+					`linux-${report.runId}-reports-123-1`,
 					"test-suite/runs",
 					report.runId,
 				);
@@ -123,7 +153,7 @@ describe("CI check coverage aggregation", () => {
 					"utf8",
 				),
 			).toBe(latest);
-			rmSync(path.join(artifacts, "linux-native-reports-123-1"), { recursive: true });
+			rmSync(path.join(artifacts, "linux-quality-reports-123-1"), { recursive: true });
 			const incomplete = run();
 			expect(incomplete.error).toBeUndefined();
 			expect(incomplete.status).not.toBe(0);
@@ -192,6 +222,53 @@ describe("CI check coverage aggregation", () => {
 		all[0]!.stages[0]!.status = 1;
 		expect(() => combineCheckReports(all, plan, source, environment)).toThrow(
 			"failed, duplicate or unexpected stage",
+		);
+	});
+
+	it("combines complete shard sets into the canonical stages", () => {
+		const combined = combineCheckReports(
+			reports(source, environment, { native: 2, sanitizer: 3 }),
+			plan,
+			source,
+			environment,
+			shardPlan,
+		);
+		expect(combined.stages.map((stage) => stage.invocation)).toEqual(
+			plan.stages.map((stage) => stage.invocation),
+		);
+		const sanitizer = combined.stages.find(
+			(stage) => stage.name === "check: native sanitizer-primary",
+		);
+		expect(sanitizer?.shards).toHaveLength(3);
+	});
+
+	it("rejects a lane missing one of its shards", () => {
+		const all = reports(source, environment, { sanitizer: 3 }).filter(
+			(report) => report.runId !== "sanitizer-2",
+		);
+		expect(() => combineCheckReports(all, plan, source, environment, shardPlan)).toThrow(
+			"incomplete shard set",
+		);
+	});
+
+	it("rejects duplicate shards and lanes that mix sharded and unsharded reports", () => {
+		const sharded = reports(source, environment, { sanitizer: 3 });
+		const duplicate = sharded.find((report) => report.runId === "sanitizer-1")!;
+		expect(() =>
+			combineCheckReports([...sharded, duplicate], plan, source, environment, shardPlan),
+		).toThrow("duplicate or inconsistent shard");
+		const whole = reports().find((report) => report.lane === "sanitizer")!;
+		expect(() =>
+			combineCheckReports([...sharded, whole], plan, source, environment, shardPlan),
+		).toThrow("lane mixes sharded and unsharded reports");
+	});
+
+	it("rejects a shard whose selection differs from the planner's", () => {
+		const all = reports(source, environment, { native: 2 });
+		const shard = all.find((report) => report.runId === "native-1")!;
+		shard.selection[0]!.invocation = `${shard.selection[0]!.invocation} tests/extra.test.ts`;
+		expect(() => combineCheckReports(all, plan, source, environment, shardPlan)).toThrow(
+			"selection mismatch",
 		);
 	});
 

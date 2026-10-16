@@ -16,11 +16,22 @@ interface Selection {
 	lane: string;
 }
 
+interface PlanStage extends Selection {
+	parent?: string;
+	files?: Array<string>;
+}
+
+interface Shard {
+	index: number;
+	count: number;
+}
+
 interface LaneReport {
 	schemaVersion: number;
 	runId: string;
 	tier: string;
 	lane: string;
+	shard?: Shard | null;
 	complete: boolean;
 	passed: boolean;
 	startedAt: string;
@@ -39,18 +50,54 @@ interface LaneReport {
 	}>;
 }
 
+type LaneStage = LaneReport["stages"][number];
+
+function selectionOf(stages: ReadonlyArray<PlanStage>): Array<Selection> {
+	return stages.map(({ name, invocation, lane }) => ({ name, invocation, lane }));
+}
+
+function assertPassedStages(
+	report: LaneReport,
+	selection: ReadonlyArray<Selection>,
+): void {
+	if (
+		selection.length === 0 ||
+		!Array.isArray(report.stages) ||
+		!isDeepStrictEqual(report.selection, selection) ||
+		report.stages.length !== selection.length
+	) {
+		throw new Error(`selection mismatch: ${report.runId}`);
+	}
+	for (const [index, stage] of report.stages.entries()) {
+		if (
+			stage.status !== 0 ||
+			stage.signal !== null ||
+			stage.name !== selection[index]?.name ||
+			stage.invocation !== selection[index]?.invocation
+		) {
+			throw new Error(`failed, duplicate or unexpected stage: ${stage.name}`);
+		}
+	}
+}
+
+/**
+ * A lane contributes either one unsharded report or a complete shard set whose
+ * planner-derived test files exactly partition each canonical stage of the lane.
+ */
 export function combineCheckReports(
 	reports: ReadonlyArray<LaneReport>,
-	plan: { stages: Array<Selection> },
+	plan: { stages: Array<PlanStage> },
 	source: VerificationSource,
 	environment: ReturnType<typeof captureVerificationEnvironment>,
+	shardPlan: (lane: string, shard: Shard) => Array<PlanStage> = () => {
+		throw new Error("sharded reports require the planner's shard selection");
+	},
 ) {
 	if (!environment.cc?.version || !environment.rustc?.version) {
 		throw new Error("missing verification toolchain identity");
 	}
-	const expected = new Map(plan.stages.map((stage) => [stage.name, stage]));
-	const completed = new Map<string, LaneReport["stages"][number]>();
-	const lanes = new Set<string>();
+	const completed = new Map<string, LaneStage & { shards?: Array<LaneStage> }>();
+	const byLane = new Map<string, Array<LaneReport>>();
 	for (const report of reports) {
 		if (
 			report?.schemaVersion !== 4 ||
@@ -70,33 +117,73 @@ export function combineCheckReports(
 		) {
 			throw new Error(`source or environment mismatch: ${report.runId}`);
 		}
-		if (lanes.has(report.lane)) throw new Error(`duplicate lane: ${report.lane}`);
-		lanes.add(report.lane);
-		const selection = plan.stages
-			.filter((stage) => stage.lane === report.lane)
-			.map(({ name, invocation, lane }) => ({ name, invocation, lane }));
-		if (
-			selection.length === 0 ||
-			!Array.isArray(report.stages) ||
-			!isDeepStrictEqual(report.selection, selection) ||
-			report.stages.length !== selection.length
-		) {
-			throw new Error(`selection mismatch: ${report.runId}`);
+		byLane.set(report.lane, [...(byLane.get(report.lane) ?? []), report]);
+	}
+	for (const [lane, laneReports] of byLane) {
+		const canonical = plan.stages.filter((stage) => stage.lane === lane);
+		const sharded = laneReports.filter((report) => (report.shard ?? null) !== null);
+		if (sharded.length === 0) {
+			if (laneReports.length !== 1) throw new Error(`duplicate lane: ${lane}`);
+			const report = laneReports[0]!;
+			assertPassedStages(report, selectionOf(canonical));
+			for (const stage of report.stages) completed.set(stage.name, stage);
+			continue;
 		}
-		for (const [index, stage] of report.stages.entries()) {
-			if (
-				stage.status !== 0 ||
-				stage.signal !== null ||
-				stage.name !== selection[index]?.name ||
-				stage.invocation !== selection[index]?.invocation ||
-				completed.has(stage.name)
-			) {
-				throw new Error(`failed, duplicate or unexpected stage: ${stage.name}`);
+		if (sharded.length !== laneReports.length) {
+			throw new Error(`lane mixes sharded and unsharded reports: ${lane}`);
+		}
+		const count = sharded[0]!.shard!.count;
+		const indices = new Set(sharded.map((report) => report.shard!.index));
+		if (
+			sharded.some((report) => report.shard!.count !== count) ||
+			indices.size !== sharded.length
+		) {
+			throw new Error(`duplicate or inconsistent shard: ${lane}`);
+		}
+		if (
+			sharded.length !== count ||
+			[...indices].some((index) => !Number.isInteger(index) || index < 1 || index > count)
+		) {
+			throw new Error(`incomplete shard set: ${lane}`);
+		}
+		const files = new Map<string, Array<string>>();
+		const parts = new Map<string, Array<LaneStage>>();
+		for (const report of sharded) {
+			const expected = shardPlan(lane, report.shard!);
+			assertPassedStages(report, selectionOf(expected));
+			for (const [index, stage] of expected.entries()) {
+				const parent = stage.parent ?? stage.name;
+				files.set(parent, [...(files.get(parent) ?? []), ...(stage.files ?? [])]);
+				parts.set(parent, [...(parts.get(parent) ?? []), report.stages[index]!]);
 			}
-			completed.set(stage.name, stage);
+		}
+		for (const parent of parts.keys()) {
+			if (!canonical.some((stage) => stage.name === parent)) {
+				throw new Error(`failed, duplicate or unexpected stage: ${parent}`);
+			}
+		}
+		for (const stage of canonical) {
+			const shardStages = parts.get(stage.name);
+			if (shardStages === undefined) continue;
+			const expectedFiles = [...(stage.files ?? [])].sort();
+			if (
+				!isDeepStrictEqual([...(files.get(stage.name) ?? [])].sort(), expectedFiles) ||
+				(expectedFiles.length === 0 && shardStages.length !== 1)
+			) {
+				throw new Error(`shards do not partition ${stage.name}`);
+			}
+			completed.set(stage.name, {
+				name: stage.name,
+				invocation: stage.invocation,
+				status: 0,
+				signal: null,
+				shards: shardStages,
+			});
 		}
 	}
-	const missing = [...expected.keys()].filter((name) => !completed.has(name));
+	const missing = plan.stages
+		.map((stage) => stage.name)
+		.filter((name) => !completed.has(name));
 	if (missing.length > 0)
 		throw new Error(`missing check coverage: ${missing.join(", ")}`);
 	return {
@@ -107,13 +194,13 @@ export function combineCheckReports(
 		scope: { coversEntireTier: true, excludedStages: [] },
 		source: { before: source, after: source, consistent: true },
 		environment,
-		selection: plan.stages.map(({ name, invocation, lane }) => ({
-			name,
-			invocation,
-			lane,
-		})),
+		selection: selectionOf(plan.stages),
 		stages: plan.stages.map((stage) => completed.get(stage.name)!),
-		contributingRuns: reports.map(({ lane, runId }) => ({ lane, runId })),
+		contributingRuns: reports.map(({ lane, runId, shard }) => ({
+			lane,
+			runId,
+			shard: shard ?? null,
+		})),
 	};
 }
 
@@ -136,21 +223,24 @@ if (
 	if (input === undefined || process.argv.length !== 3)
 		throw new Error("usage: node scripts/test-suite-ci.ts REPORT_DIRECTORY");
 	const root = path.resolve(import.meta.dirname, "..");
-	const plan = JSON.parse(
-		execFileSync(
-			process.execPath,
-			["scripts/test-suite.ts", "check", "--workers", "4", "--plan=json"],
-			{ cwd: root, encoding: "utf8" },
-		),
-	) as { stages: Array<Selection> };
+	const planFor = (...args: Array<string>) =>
+		JSON.parse(
+			execFileSync(
+				process.execPath,
+				["scripts/test-suite.ts", "check", "--workers", "4", ...args, "--plan=json"],
+				{ cwd: root, encoding: "utf8" },
+			),
+		) as { stages: Array<PlanStage> };
 	const reports = reportFiles(input).map(
 		(file) => JSON.parse(readFileSync(file, "utf8")) as LaneReport,
 	);
 	const report = combineCheckReports(
 		reports,
-		plan,
+		planFor(),
 		captureVerificationSource(root),
 		captureVerificationEnvironment(root),
+		(lane, shard) =>
+			planFor("--lane", lane, "--shard", `${shard.index}/${shard.count}`).stages,
 	);
 	const runId = `${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID()}`;
 	const directory = path.join(root, ".cache/mal-build/test-suite/runs", runId);

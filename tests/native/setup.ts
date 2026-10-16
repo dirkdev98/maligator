@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import type { TestProject } from "vitest/node";
 import { buildDerivationFromConfig } from "../../src/build-config.ts";
@@ -13,16 +12,10 @@ import {
 import { resolveNativeBuildContext } from "../../src/native-build-context.ts";
 import { ensureNativeArtifacts } from "../../src/runtime-build.ts";
 import { preparedNativeEvalConfig } from "../helpers/native-eval-config.ts";
+import { nativePreparations } from "../helpers/native-preparations.ts";
 
 const compilerSourceDirectory = path.resolve("src");
 const compilerEntrypoint = path.resolve("src/compiler/pipeline/eval-compiler-entry.mts");
-const perfTests = new Set(
-	readFileSync(new URL("../test-suite-native-perf.txt", import.meta.url), "utf8")
-		.split("\n")
-		.map((line) => line.trim())
-		.filter((line) => line.length > 0 && !line.startsWith("#"))
-		.map((file) => path.resolve(file)),
-);
 const compilerBake = {
 	kind: "source" as const,
 	sourceDirectory: compilerSourceDirectory,
@@ -65,30 +58,26 @@ export function setup(project: TestProject): void {
 		{ environment, node: false, webPlatform: true },
 		{ environment, node: true, webPlatform: true },
 	];
-	const selectedPaths = new Set(
-		project.vitest.state.getPaths().map((file) => path.resolve(file)),
+	// Vitest records selected paths before global setup; collected files are still empty.
+	const required = new Set(
+		project.vitest.state
+			.getPaths()
+			.flatMap((file) => nativePreparations(process.cwd(), path.resolve(file))),
 	);
-	if (selectedPaths.has(path.resolve("tests/native/web-disabled.test.ts"))) {
+	if (required.has("web-disabled")) {
 		variants.push({ environment, node: false, webPlatform: false });
 	}
-	if (selectedPaths.has(path.resolve("tests/native/realms-disabled.test.ts"))) {
+	if (required.has("realms-disabled")) {
 		variants.push({ environment, node: false, webPlatform: true, realms: false });
 	}
-	// Vitest records selected paths before global setup; collected files are still empty.
-	if (
-		!perfStatsEnabled(environment) &&
-		[...selectedPaths].some((file) => perfTests.has(file))
-	) {
+	if (!perfStatsEnabled(environment) && required.has("perf-stats")) {
 		variants.push({
 			environment: { ...environment, MAL_PERF_STATS: "1" },
 			node: false,
 			webPlatform: true,
 		});
 	}
-	if (
-		!perfStatsEnabled(environment) &&
-		selectedPaths.has(path.resolve("tests/native/node-http-ready-queues.test.ts"))
-	) {
+	if (!perfStatsEnabled(environment) && required.has("node-perf-stats")) {
 		variants.push({
 			environment: { ...environment, MAL_PERF_STATS: "1" },
 			node: true,
