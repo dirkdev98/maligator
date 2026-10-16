@@ -540,12 +540,6 @@ and completed/rejected experiment history outside this unfinished-work roadmap;
 retain reproduction sources and helpers with their evidence instead of deleting the
 only reproducible input.
 
-# Release artifact size
-
-- [ ] Reduce compiler duplication in the released CLI. The alpha.28 ARM64 executable
-      is 297 MB, with about 150 MB of compiled code in three worker images; preserve
-      worker isolation and the runtime assets needed to build outside the checkout.
-
 # Runtime safety and allocation
 
 - [ ] Complete recoverable allocation failure for CELL, RAW, LOS, GC-internal,
