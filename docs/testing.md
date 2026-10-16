@@ -300,16 +300,16 @@ Gate reports are retained on success and failure for seven days,
 including their tested source identity. The standards lane alone prepares the
 Test262 corpus. Release workflows remain separate.
 
-Every push to `main` also runs the complete compiled/normal Test262 corpus in the
-Test262 workflow: four jobs, one per language variant and half of the corpus
-(`scripts/test262.ts --shard INDEX/COUNT` interleaves the selection), each checking
-its quarter against the committed baseline without changing it. The weekly and
-manually dispatched Test262 workflow runs the complete canonical compiled/normal
-report on `main` and retains its reports for fourteen days. Both restore the
-standards lane's native cache line without saving their own, because that lane
-prepares the same eval-enabled runtime, and both use every runner core instead of
-the default half. Manual runs check the existing baseline without changing it or
-posting regression issues. Scheduled runs commit
+Every push to `main` whose CI run passes also runs the complete compiled/normal
+Test262 corpus in the Test262 workflow, started after CI so its four jobs never queue
+the gate: one per language variant and half of the corpus (`scripts/test262.ts --shard
+INDEX/COUNT` interleaves the selection), each checking its quarter against the
+committed baseline without changing it. The weekly and manually dispatched Test262
+workflow runs the complete canonical compiled/normal report on `main` and retains its
+reports for fourteen days. Both restore the standards lane's native cache line without
+saving their own, because that lane prepares the same eval-enabled runtime, and both
+use every runner core instead of the default half. Manual runs check the existing
+baseline without changing it or posting regression issues. Scheduled runs commit
 `scripts/test262.json` only when the complete report has no regressions and the
 baseline changed. Regressions are never accepted into the baseline; scheduled runs
 maintain one issue named `Automated Test262 regressions`, closing it after the next

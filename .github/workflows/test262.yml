@@ -1,7 +1,10 @@
 name: Test262
 
+# Starting after CI keeps these four jobs from queueing the gate behind them.
 on:
-  push:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [main]
 
 permissions:
@@ -14,6 +17,7 @@ concurrency:
 jobs:
   test262:
     name: Test262 ${{ matrix.variant }} ${{ matrix.shard }}/2
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
     runs-on: ubuntu-26.04
     timeout-minutes: 60
     strategy:
@@ -25,6 +29,7 @@ jobs:
       - name: Check out the tested revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event.workflow_run.head_sha }}
           persist-credentials: false
 
       - name: Set up Linux
