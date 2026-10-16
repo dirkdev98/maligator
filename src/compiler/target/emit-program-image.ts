@@ -3,6 +3,7 @@ import { knownOperationFlags } from "../shared/known-operations.ts";
 import { knownOperationIndex } from "../shared/known-operations.ts";
 import { staticDataQueryTag } from "../shared/static-data-query.ts";
 import { generatedDeclarationReferences } from "./generated-declaration-references.ts";
+import { GENERATED_PRELUDE_END } from "./generated-prelude.ts";
 import { validateNativeProgramStorage } from "./lower-native-storage.ts";
 import { finalizeCompilerRemarks } from "./profile-metadata.ts";
 import type { ProgramImage } from "./program-image.ts";
@@ -169,6 +170,7 @@ export const NATIVE_C_HEADER_LINES = [
 	"#endif",
 	MAL_FUNCTION_ROW_MACRO,
 	"",
+	GENERATED_PRELUDE_END,
 ];
 
 export const GENERATED_DATA_C_HEADER_LINES = [
@@ -188,6 +190,7 @@ export const GENERATED_DATA_C_HEADER_LINES = [
 	"#endif",
 	MAL_FUNCTION_ROW_MACRO,
 	"",
+	GENERATED_PRELUDE_END,
 ];
 
 export type GeneratedTranslationUnitKind = "runtime-image" | "data" | "code";

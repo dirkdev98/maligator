@@ -846,7 +846,7 @@ printf '!<arch>\\n' > "$2"
 		expect(events.map((event) => event.cache)).toEqual(["hit", "miss", "hit"]);
 	});
 
-	it("keeps generated object cache reuse local to stable typed unit identities", () => {
+	it("keys generated objects by stable unit identities and their expanded input", () => {
 		const fake = createFakeToolchain();
 		const runtimeDirectory = createMinimalRuntime(fake);
 		writeFileSync(
@@ -913,13 +913,14 @@ printf '!<arch>\\n' > "$2"
 			"#define CODE_ONLY_ABI 2\n",
 		);
 		build("int changed_code_value;");
+		// This fake compiler's -E copies the unit, so the header edit leaves both expanded inputs unchanged.
 		expect(
 			events
 				.filter((event) => event.role === "generated")
 				.map((event) => [event.unit, event.cache]),
 		).toEqual([
 			["data-010", "hit"],
-			["code-101", "miss"],
+			["code-101", "hit"],
 		]);
 	});
 

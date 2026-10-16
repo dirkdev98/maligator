@@ -31,6 +31,7 @@ const STAGES = [
 	"rust-library",
 	"compiler-overlay-object",
 	"runtime-object",
+	"generated-unit-slice",
 	"generated-object",
 ];
 const RETENTION_MS = 14 * 24 * 60 * 60 * 1000;

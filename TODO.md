@@ -60,13 +60,6 @@ rooting, and resource-safety defects can interrupt that order.
       neither the compiler nor the runtime (43% of recent ones) should hit fully.
       Measure what a job's objects add to its line against the 1 GiB snapshot cap and
       the repository's 10 GB Actions allowance; linked binaries are too large to carry.
-- [ ] Stop runtime header edits from invalidating every generated object. Generated
-      and overlay units are keyed on a hash of their included header files, so any
-      header edit (28% of recent commits) recompiles all of them locally and in CI;
-      runtime objects already key on their preprocessed text. Key generated and
-      overlay units on their expanded input as well, and trim the overlay's includes
-      to what it uses. Realms, perf counters, and Temporal also select distinct
-      overlay preprocessing, so each of those builds compiles its own copy.
 - [ ] Keep parse and semantic results between `run` processes. After a one-line edit
       `run` takes 4.2 s on an Express and Valibot app (216 dependencies) while the
       `dev` watcher recompiles the same edit in 0.54 s: each `run` process reparses

@@ -20,6 +20,11 @@ import {
 	withArtifactActionLock,
 } from "./artifact-store.ts";
 import { ccExtraFlags, sanitizerMode } from "./build-flags.ts";
+import {
+	compileArgumentsEmitDebugInfo,
+	expandedGeneratedUnitDigest,
+} from "./c-declaration-slice.ts";
+import type { PreludeDeclarations } from "./c-declaration-slice.ts";
 import { ensureCompilerArtifacts } from "./compiler-bake.ts";
 import {
 	hashDirectoryTrees,
@@ -463,9 +468,16 @@ function projectRuntimeSources(
 		})),
 		{ verbose },
 	);
+	// Overlay units are generated like program units, so they are keyed by the prelude
+	// declarations they reach; handwritten runtime sources keep their whole expansion.
+	const sliced = !compileArgumentsEmitDebugInfo(layout.flags);
+	const preludes = new Map<string, PreludeDeclarations>();
 	const projected = outputs.map(({ source, path: output }) => ({
 		source,
-		digest: artifactDigest(new Uint8Array(readFileSync(output))),
+		digest:
+			source.objectStage === "compiler-overlay-object" && sliced
+				? expandedGeneratedUnitDigest(readFileSync(output, "utf8"), preludes)
+				: artifactDigest(new Uint8Array(readFileSync(output))),
 	}));
 	context.onBuildPhase?.({
 		phase: "runtime C projection",

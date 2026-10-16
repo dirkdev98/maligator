@@ -23,6 +23,11 @@ import {
 	withArtifactActionLock,
 } from "./artifact-store.ts";
 import { buildSuffix, ccExtraFlags } from "./build-flags.ts";
+import {
+	compileArgumentsEmitDebugInfo,
+	expandedGeneratedUnitDigest,
+} from "./c-declaration-slice.ts";
+import type { PreludeDeclarations } from "./c-declaration-slice.ts";
 import { maligatorBuildDirectory } from "./cache-root.ts";
 import type { CompilerBakeInput } from "./compiler-bake.ts";
 import type {
@@ -42,7 +47,12 @@ import { toolArguments } from "./toolchain.ts";
 
 const BUILD_DIRECTORY = maligatorBuildDirectory();
 const RUNNER_WORK_ID = randomUUID();
-const GENERATED_OBJECT_PRODUCER = artifactProducer("generated-object", 4, "cc");
+const GENERATED_OBJECT_PRODUCER = artifactProducer("generated-object", 5, "cc");
+const GENERATED_UNIT_SLICE_PRODUCER = artifactProducer(
+	"generated-unit-slice",
+	1,
+	"cc-preprocess",
+);
 const GENERATED_OBJECT_COST_PRODUCER = artifactProducer(
 	"generated-object-cost",
 	1,
@@ -172,6 +182,92 @@ interface GeneratedObjectInput {
 	definitions?: ReadonlyArray<GeneratedTranslationUnitDefinition>;
 }
 
+function logicalSourcePath(input: GeneratedObjectInput): string {
+	return input.role === "generated" ? `<generated>/${input.unitId}.c` : input.unitId;
+}
+
+/**
+ * What each unit's object can depend on: its expanded body plus the prelude
+ * declarations that body reaches, so header edits elsewhere keep its object. Digests
+ * are memoized under the raw source and header contents; only units whose text or
+ * headers changed are preprocessed again.
+ */
+function generatedUnitDigests(
+	context: NativeBuildContext,
+	inputs: ReadonlyArray<GeneratedObjectInput>,
+	compileArguments: ReadonlyArray<string>,
+	normalizedCompileArguments: ReadonlyArray<string>,
+	headerHash: (input: GeneratedObjectInput) => string,
+	directory: string,
+	verbose: boolean,
+): Array<string> {
+	const memoKeys = inputs.map((input) =>
+		artifactActionKey(GENERATED_UNIT_SLICE_PRODUCER, {
+			logicalSourcePath: logicalSourcePath(input),
+			source: artifactDigest(input.source),
+			compileArguments: normalizedCompileArguments,
+			headerDependencies: headerHash(input),
+			environment: context.environmentFingerprint,
+			toolchain: context.toolchain.fingerprint,
+			target: context.toolchain.target,
+		}),
+	);
+	const digests = new Array<string | undefined>(inputs.length);
+	const pending: Array<number> = [];
+	for (const [index, key] of memoKeys.entries()) {
+		const cached = readArtifactAction(
+			context.cacheDirectory,
+			"generated-unit-slice",
+			GENERATED_UNIT_SLICE_PRODUCER,
+			key,
+		);
+		const digest =
+			cached === undefined
+				? undefined
+				: readFileSync(artifactOutput(cached, "digest").path, "utf8");
+		if (digest !== undefined && /^[0-9a-f]{64}$/.test(digest)) digests[index] = digest;
+		else pending.push(index);
+	}
+	if (pending.length > 0) {
+		const expanded = pending.map((index) => path.join(directory, `${String(index)}.i`));
+		runNativeCommands(
+			context,
+			pending.map((index, position) => ({
+				tool: context.toolchain.tools.cc.path,
+				args: toolArguments(context.toolchain.tools.cc, [
+					...compileArguments,
+					`-ffile-prefix-map=${inputs[index]!.sourcePath}=${logicalSourcePath(inputs[index]!)}`,
+					"-E",
+					"-P",
+					inputs[index]!.sourcePath,
+					"-o",
+					expanded[position]!,
+				]),
+			})),
+			{ verbose },
+		);
+		const sliced = !compileArgumentsEmitDebugInfo(compileArguments);
+		const preludes = new Map<string, PreludeDeclarations>();
+		for (const [position, index] of pending.entries()) {
+			const text = readFileSync(expanded[position]!, "utf8");
+			const digest = sliced
+				? expandedGeneratedUnitDigest(text, preludes)
+				: artifactDigest(`expanded\0${text}`);
+			digests[index] = digest;
+			const digestPath = `${expanded[position]!}.digest`;
+			writeFileSync(digestPath, digest);
+			publishArtifactAction(
+				context.cacheDirectory,
+				"generated-unit-slice",
+				GENERATED_UNIT_SLICE_PRODUCER,
+				memoKeys[index]!,
+				[{ name: "digest", file: digestPath }],
+			);
+		}
+	}
+	return digests.map((digest) => digest!);
+}
+
 interface PendingGeneratedObject {
 	index: number;
 	key: string;
@@ -223,14 +319,28 @@ function ensureGeneratedObjects(
 		headerHashes.set(identity, digest);
 		return digest;
 	};
+	let unitDigests: Array<string>;
+	try {
+		unitDigests = generatedUnitDigests(
+			context,
+			inputs,
+			compileArguments,
+			normalizedCompileArguments,
+			headerHash,
+			temporaryDirectory,
+			verbose,
+		);
+	} catch (error) {
+		rmSync(temporaryDirectory, { recursive: true, force: true });
+		throw error;
+	}
 	for (const [index, input] of inputs.entries()) {
 		const headerDependencies = headerHash(input);
 		const key = artifactActionKey(GENERATED_OBJECT_PRODUCER, {
 			cacheVariant,
 			unitId: input.unitId,
-			source: artifactDigest(input.source),
+			unit: unitDigests[index],
 			compileArguments: normalizedCompileArguments,
-			headerDependencies,
 			environment: context.environmentFingerprint,
 			toolchain: context.toolchain.fingerprint,
 			target: context.toolchain.target,
@@ -304,8 +414,7 @@ function ensureGeneratedObjects(
 			costKey,
 			temporaryObject: path.join(temporaryDirectory, `${String(index)}.o`),
 			sourcePath: input.sourcePath,
-			logicalSourcePath:
-				input.role === "generated" ? `<generated>/${input.unitId}.c` : input.unitId,
+			logicalSourcePath: logicalSourcePath(input),
 			sourceBytes,
 			scheduleCost: scheduledCompileDurationMs ?? sourceBytes,
 			...(scheduledCompileDurationMs === undefined ? {} : { scheduledCompileDurationMs }),

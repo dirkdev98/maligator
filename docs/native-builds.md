@@ -92,7 +92,13 @@ Normal builds restore cached VM definitions before generated-C emission, skippin
 unchanged graph, semantic, optimization, allocation, and lowering work while
 preserving native-code metadata. Generated translation units and the driver are then
 compiled to independently content-addressed objects; unchanged objects are relinked
-without invoking their C compilation again.
+without invoking their C compilation again. A generated unit (including the eval
+compiler overlay) is keyed by its expanded body plus the expanded header
+declarations that body can reach, so a runtime header edit only recompiles units
+that use what changed. Pragmas, emitted definitions, and anything the slicer cannot
+classify are always part of the key, and builds that emit debug line tables key the
+whole expansion instead. A memo keyed by the raw unit and header contents means a
+warm build never preprocesses its units.
 
 Definitions are assigned to deterministic, edit-local hash partitions with a 2 MiB
 soft target and an 8 MiB hard limit for an indivisible definition. Code and data
