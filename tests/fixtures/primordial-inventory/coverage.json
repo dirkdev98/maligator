@@ -107864,7 +107864,7 @@
 					"state": "not-applicable",
 					"reason": "For BigInt.asIntN with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -107888,7 +107888,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -108517,7 +108517,7 @@
 					"state": "not-applicable",
 					"reason": "For BigInt.asUintN with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -108541,7 +108541,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -110945,7 +110945,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -110963,7 +110963,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -110981,7 +110981,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -111001,7 +111001,7 @@
 					"state": "not-applicable",
 					"reason": "For Boolean with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -112000,7 +112000,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -112018,7 +112018,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -112036,7 +112036,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -112056,7 +112056,7 @@
 					"state": "not-applicable",
 					"reason": "For Boolean.prototype.toString with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -113080,7 +113080,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -113098,7 +113098,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -113118,7 +113118,7 @@
 					"state": "not-applicable",
 					"reason": "For Boolean.prototype.valueOf with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -119156,7 +119156,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -119174,7 +119174,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -119194,7 +119194,7 @@
 					"state": "not-applicable",
 					"reason": "For Math.abs with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -119218,7 +119218,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -119848,7 +119848,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -119866,7 +119866,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -119886,7 +119886,7 @@
 					"state": "not-applicable",
 					"reason": "For Math.acos with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -119910,7 +119910,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -120503,7 +120503,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -120521,7 +120521,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -120541,7 +120541,7 @@
 					"state": "not-applicable",
 					"reason": "For Math.acosh with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -120565,7 +120565,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -121158,7 +121158,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -121176,7 +121176,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -121196,7 +121196,7 @@
 					"state": "not-applicable",
 					"reason": "For Math.asin with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -121220,7 +121220,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -121813,7 +121813,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -121831,7 +121831,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -121851,7 +121851,7 @@
 					"state": "not-applicable",
 					"reason": "For Math.asinh with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -121875,7 +121875,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -122468,7 +122468,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -122486,7 +122486,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -122506,7 +122506,7 @@
 					"state": "not-applicable",
 					"reason": "For Math.atan with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -122530,7 +122530,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -123156,7 +123156,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -123174,7 +123174,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -123194,7 +123194,7 @@
 					"state": "not-applicable",
 					"reason": "For Math.atan2 with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -123218,7 +123218,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -123811,7 +123811,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -123829,7 +123829,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -123849,7 +123849,7 @@
 					"state": "not-applicable",
 					"reason": "For Math.atanh with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -123873,7 +123873,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -124466,7 +124466,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -124484,7 +124484,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -124504,7 +124504,7 @@
 					"state": "not-applicable",
 					"reason": "For Math.cbrt with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -124528,7 +124528,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -125121,7 +125121,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -125139,7 +125139,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -125159,7 +125159,7 @@
 					"state": "not-applicable",
 					"reason": "For Math.ceil with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -125183,7 +125183,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -125776,7 +125776,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -125794,7 +125794,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -125814,7 +125814,7 @@
 					"state": "not-applicable",
 					"reason": "For Math.clz32 with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -125838,7 +125838,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -126431,7 +126431,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -126449,7 +126449,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -126469,7 +126469,7 @@
 					"state": "not-applicable",
 					"reason": "For Math.cos with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -126493,7 +126493,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -127086,7 +127086,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -127104,7 +127104,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -127124,7 +127124,7 @@
 					"state": "not-applicable",
 					"reason": "For Math.cosh with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -127148,7 +127148,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -127741,7 +127741,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -127759,7 +127759,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -127779,7 +127779,7 @@
 					"state": "not-applicable",
 					"reason": "For Math.exp with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -127803,7 +127803,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -128396,7 +128396,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -128414,7 +128414,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -128434,7 +128434,7 @@
 					"state": "not-applicable",
 					"reason": "For Math.expm1 with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -128458,7 +128458,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -129051,7 +129051,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -129069,7 +129069,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -129089,7 +129089,7 @@
 					"state": "not-applicable",
 					"reason": "For Math.f16round with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -129113,7 +129113,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -129706,7 +129706,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -129724,7 +129724,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -129744,7 +129744,7 @@
 					"state": "not-applicable",
 					"reason": "For Math.floor with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -129768,7 +129768,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -130361,7 +130361,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -130379,7 +130379,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -130399,7 +130399,7 @@
 					"state": "not-applicable",
 					"reason": "For Math.fround with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -130423,7 +130423,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -131069,7 +131069,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -131087,7 +131087,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -131107,7 +131107,7 @@
 					"state": "not-applicable",
 					"reason": "For Math.hypot with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -131131,7 +131131,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -131724,7 +131724,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -131742,7 +131742,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -131762,7 +131762,7 @@
 					"state": "not-applicable",
 					"reason": "For Math.imul with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -131786,7 +131786,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -132379,7 +132379,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -132397,7 +132397,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -132417,7 +132417,7 @@
 					"state": "not-applicable",
 					"reason": "For Math.log with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -132441,7 +132441,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -133034,7 +133034,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -133052,7 +133052,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -133072,7 +133072,7 @@
 					"state": "not-applicable",
 					"reason": "For Math.log10 with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -133096,7 +133096,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -133689,7 +133689,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -133707,7 +133707,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -133727,7 +133727,7 @@
 					"state": "not-applicable",
 					"reason": "For Math.log1p with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -133751,7 +133751,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -134344,7 +134344,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -134362,7 +134362,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -134382,7 +134382,7 @@
 					"state": "not-applicable",
 					"reason": "For Math.log2 with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -134406,7 +134406,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -135052,7 +135052,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -135070,7 +135070,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -135090,7 +135090,7 @@
 					"state": "not-applicable",
 					"reason": "For Math.max with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -135114,7 +135114,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -135740,7 +135740,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -135758,7 +135758,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -135778,7 +135778,7 @@
 					"state": "not-applicable",
 					"reason": "For Math.min with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -135802,7 +135802,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -136448,7 +136448,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -136466,7 +136466,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -136486,7 +136486,7 @@
 					"state": "not-applicable",
 					"reason": "For Math.pow with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -136510,7 +136510,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -137576,7 +137576,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -137594,7 +137594,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -137614,7 +137614,7 @@
 					"state": "not-applicable",
 					"reason": "For Math.round with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -137638,7 +137638,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -138231,7 +138231,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -138249,7 +138249,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -138269,7 +138269,7 @@
 					"state": "not-applicable",
 					"reason": "For Math.sign with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -138293,7 +138293,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -138906,7 +138906,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -138924,7 +138924,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -138944,7 +138944,7 @@
 					"state": "not-applicable",
 					"reason": "For Math.sin with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -138968,7 +138968,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -139561,7 +139561,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -139579,7 +139579,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -139599,7 +139599,7 @@
 					"state": "not-applicable",
 					"reason": "For Math.sinh with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -139623,7 +139623,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -140216,7 +140216,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -140234,7 +140234,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -140254,7 +140254,7 @@
 					"state": "not-applicable",
 					"reason": "For Math.sqrt with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -140278,7 +140278,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -141443,7 +141443,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -141461,7 +141461,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -141481,7 +141481,7 @@
 					"state": "not-applicable",
 					"reason": "For Math.tan with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -141505,7 +141505,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -142098,7 +142098,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -142116,7 +142116,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -142136,7 +142136,7 @@
 					"state": "not-applicable",
 					"reason": "For Math.tanh with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -142160,7 +142160,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -142753,7 +142753,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -142771,7 +142771,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -142791,7 +142791,7 @@
 					"state": "not-applicable",
 					"reason": "For Math.trunc with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -142815,7 +142815,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -143465,7 +143465,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -143483,7 +143483,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -143501,7 +143501,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -143521,7 +143521,7 @@
 					"state": "not-applicable",
 					"reason": "For Number with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -144036,7 +144036,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -144054,7 +144054,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -144074,7 +144074,7 @@
 					"state": "not-applicable",
 					"reason": "For Number.isFinite with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -144098,7 +144098,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -144732,7 +144732,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -144750,7 +144750,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -144770,7 +144770,7 @@
 					"state": "not-applicable",
 					"reason": "For Number.isInteger with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -144794,7 +144794,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -145389,7 +145389,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -145407,7 +145407,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -145425,7 +145425,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -145445,7 +145445,7 @@
 					"state": "not-applicable",
 					"reason": "For Number.isNaN with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -146079,7 +146079,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -146097,7 +146097,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -146117,7 +146117,7 @@
 					"state": "not-applicable",
 					"reason": "For Number.isSafeInteger with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -146141,7 +146141,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -147107,7 +147107,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -147125,7 +147125,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -147145,7 +147145,7 @@
 					"state": "not-applicable",
 					"reason": "For Number.prototype.toExponential with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -147163,7 +147163,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -148148,7 +148148,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -148166,7 +148166,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -148186,7 +148186,7 @@
 					"state": "not-applicable",
 					"reason": "For Number.prototype.toFixed with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -148204,7 +148204,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -149190,7 +149190,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -149208,7 +149208,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -149228,7 +149228,7 @@
 					"state": "not-applicable",
 					"reason": "For Number.prototype.toPrecision with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -149246,7 +149246,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -150267,7 +150267,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -150285,7 +150285,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -150305,7 +150305,7 @@
 					"state": "not-applicable",
 					"reason": "For Number.prototype.toString with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -150323,7 +150323,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -151247,7 +151247,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -151265,7 +151265,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -151285,7 +151285,7 @@
 					"state": "not-applicable",
 					"reason": "For Number.prototype.valueOf with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -211999,7 +211999,7 @@
 					"state": "not-applicable",
 					"reason": "For isFinite with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -212023,7 +212023,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -212597,7 +212597,7 @@
 					"state": "not-applicable",
 					"reason": "For isNaN with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -212621,7 +212621,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
@@ -213841,7 +213841,7 @@
 					"state": "not-applicable",
 					"reason": "For parseInt with the witnessed primitive receiver and numeric/string/BigInt argument kinds, the operation updates no JavaScript receiver or result state and accepts no callback or ECMAScript iterator protocol. Engine loops over its numeric argument list are not user iteration. The preceding input conversion, reflective list evaluation, escaping callback, caller loop and suspension retain their effects; mutable targets and unproved coercible arguments have separate obligations.",
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "semantic-boundary"
@@ -213865,7 +213865,7 @@
 						"test": "resolves %s through ${profile} after one conversion"
 					},
 					"negative": {
-						"file": "tests/native/static-primitive-operations.test.ts",
+						"file": "tests/native/numeric-call-profiles.test.ts",
 						"test": "preserves partially static numeric calls across coercion, loop joins and suspension with %s primordials"
 					},
 					"lowering": "specialized"
