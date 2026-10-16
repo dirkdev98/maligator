@@ -351,15 +351,16 @@ export function buildSuffix(
  * Optimisation/debug flags for the current mode. Normal: -O2 -g0. The explicit
  * debug disable keeps cross builds from inheriting Zig's DWARF default; generated
  * production units can otherwise spend minutes building metadata that the final
- * strip discards. Under a sanitizer: -O1 -g (the sanitizer is slow, and -g + a
- * non-zero -O keeps frames + symbols).
+ * strip discards. Under a sanitizer: -O1 -gline-tables-only (the sanitizer is
+ * slow; a non-zero -O with line tables keeps frames and file:line symbolization,
+ * while full DWARF would only slow every instrumented compile).
  */
 export function optFlags(
 	plan?: NativeBuildPlan,
 	env: NodeJS.ProcessEnv = process.env,
 ): Array<string> {
 	if (sanitizerMode(env) !== "none") {
-		return ["-O1", "-g"];
+		return ["-O1", "-gline-tables-only"];
 	}
 	return plan?.lto === true ? ["-O2", "-g0", ...plan.ltoFlags] : ["-O2", "-g0"];
 }
