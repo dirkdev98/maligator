@@ -166,7 +166,8 @@ describe("CI check coverage aggregation", () => {
 			vi.unstubAllEnvs();
 			rmSync(directory, { recursive: true, force: true });
 		}
-	});
+		// The CLI derives every shard's selection with its own planner process.
+	}, 60_000);
 
 	it("combines all canonical stages in plan order", () => {
 		const combined = combineCheckReports(reports(), plan, source, environment);
