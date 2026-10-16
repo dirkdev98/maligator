@@ -611,11 +611,13 @@ function prepareCommandState(
 
 	const compiledNativeOutput = command.kind !== "build" || command.internal.compiled;
 	// Experimental: link `run`'s relocatable images, each with its own native overlay.
+	// Embedded assets still need the whole-program image that carries them.
 	const developmentFragments =
 		command.kind === "build" &&
 		!production &&
 		command.internal.compiled &&
 		command.internal.serializePath === undefined &&
+		assets.length === 0 &&
 		process.env.MALIGATOR_DEVELOPMENT_FRAGMENTS === "1";
 	const execution = resolveExecution(command, buildConfig, {
 		compiled:
@@ -1000,8 +1002,10 @@ function prepareCommandState(
 		}
 
 		const programImage = frontend.programImage;
-		if (developmentFragments && (frontend.workerImages.length > 0 || assets.length > 0))
-			commandError("error: development fragments do not support workers or assets yet");
+		if (developmentFragments && frontend.workerImages.length > 0)
+			commandError(
+				"error: development fragments do not support worker roots yet; unset MALIGATOR_DEVELOPMENT_FRAGMENTS",
+			);
 		const output = reporter.phase("Generate native code", () =>
 			developmentFragments
 				? developmentFragmentUnits(

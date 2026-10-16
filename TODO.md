@@ -60,10 +60,10 @@ rooting, and resource-safety defects can interrupt that order.
       4.4 s to 0.7 s and adding a function no longer recompiles dependency objects.
       `bench/javascript.mjs` runs within 3% of the whole-program development binary
       (2.42 s against 2.35 s); what is left is cross-fragment calls through the
-      boxed boundary and link-table loads. Before switching the default: support
-      worker images and assets, which the mode rejects today, and run the native
-      suite and the JavaScript family in both modes. Production builds stay
-      whole-program.
+      boxed boundary and link-table loads. Programs with assets fall back to the
+      whole-program build. Before switching the default: support worker roots, which
+      the mode rejects today, and run the native suite and the JavaScript family in
+      both modes. Production builds stay whole-program.
 
 - [ ] Run the live Postgres suites somewhere hosted. The native remainder is green on
       Linux and macOS, but `postgres-live`, `postgres-query-api-live`,
