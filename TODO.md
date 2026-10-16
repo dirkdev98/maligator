@@ -84,11 +84,12 @@ rooting, and resource-safety defects can interrupt that order.
       about five consecutive warm `main` runs of CI, Extended CI and the native
       remainder, refresh `tests/test-suite-durations.json` from their logs with
       `scripts/test-suite-durations.ts` and review the modelled shard times.
-- [ ] Get the hosted native-remainder workflow green on Linux and macOS. The first
-      run exposed cold feature-profile builds and aggregate GC-stress deadlines;
-      verify their corrected preparation and budgets on both hosts. Inspect skipped
-      external-service cases rather than treating discovery as executed coverage.
-      Slow unit and Wasm coverage remains separate; Wasm needs WASI SDK 34 on the host.
+- [ ] Run the live Postgres suites somewhere hosted. The native remainder is green on
+      Linux and macOS, but `postgres-live`, `postgres-query-api-live`,
+      `postgres-features-live`, and `postgres-types-large-live` skip on every runner
+      because no server is reachable, so their discovery is not executed coverage.
+      Either provide a Postgres service to the remainder jobs or record them as
+      laptop-only coverage.
 - [ ] Track configured asset-directory topology in `dev`. Publication validates
       consumed file identities, but adding a file or renaming a previously unwatched
       path does not change that file set. Capture recursive directory membership and
