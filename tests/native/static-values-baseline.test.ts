@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../../src/build-config.ts";
 import {
 	buildBackendPairFromOneProgramImage,
@@ -38,10 +38,12 @@ describe("static-value baseline differential", () => {
 		},
 		600_000,
 	);
-	it("preserves eval escapes and cross-realm borrowing", () => {
-		const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-static-worlds-"));
-		try {
-			const binaries = [true, false].map((compiled) =>
+	describe("eval and realm boundaries", () => {
+		let outDir = "";
+		let binaries: Array<string>;
+		beforeAll(() => {
+			outDir = mkdtempSync(path.join(os.tmpdir(), "mal-static-worlds-"));
+			binaries = [true, false].map((compiled) =>
 				buildNativeBinary({
 					fixture: "tests/local/static-values-worlds.js",
 					name: `worlds-${compiled ? "compiled" : "interpreted"}`,
@@ -55,8 +57,17 @@ describe("static-value baseline differential", () => {
 						},
 					}),
 					outDir,
+					onNativeBuildPhase: (event) =>
+						process.stderr.write(
+							`[static-worlds] ${event.phase} ${event.durationMs}ms\n`,
+						),
 				}),
 			);
+		}, 1_200_000);
+		afterAll(() => {
+			if (outDir !== "") rmSync(outDir, { recursive: true, force: true });
+		});
+		it("preserves eval escapes and cross-realm borrowing", () => {
 			for (const binary of binaries) {
 				expect(runToStdout(binary, { env: { MAL_TEST262: "1" } })).toBe(
 					"static value world boundaries passed\n",
@@ -68,8 +79,6 @@ describe("static-value baseline differential", () => {
 					}),
 				).toBe("static value world boundaries passed\n");
 			}
-		} finally {
-			rmSync(outDir, { recursive: true, force: true });
-		}
-	}, 600_000);
+		}, 600_000);
+	});
 });
