@@ -79,6 +79,26 @@ describe("CI native cache snapshots", () => {
 		expect(existsSync(path.join(snapshot, older))).toBe(false);
 	});
 
+	it("keeps what this job read, then ThinLTO entries, ahead of older actions", () => {
+		const root = path.join(directory, "cache");
+		const now = Date.now();
+		const importedAt = now - 10_000;
+		const read = publishAction(root, "generated-object", "read", 100, now);
+		const older = publishAction(root, "rust-library", "older", 100, importedAt - 1_000);
+		const thinLto = path.join(root, "thinlto", "0123abcd", "llvmcache-entry");
+		mkdirSync(path.dirname(thinLto), { recursive: true });
+		writeFileSync(thinLto, Buffer.alloc(100, "t"));
+
+		const snapshot = path.join(directory, "snapshot");
+		exportSnapshot(snapshot, root, 200, importedAt);
+
+		expect(existsSync(path.join(snapshot, read))).toBe(true);
+		expect(
+			existsSync(path.join(snapshot, "thinlto", "0123abcd", "llvmcache-entry")),
+		).toBe(true);
+		expect(existsSync(path.join(snapshot, older))).toBe(false);
+	});
+
 	it("carries only listed stages read within the retention window", () => {
 		const root = path.join(directory, "cache");
 		const now = Date.now();

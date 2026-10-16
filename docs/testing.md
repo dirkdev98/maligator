@@ -290,12 +290,13 @@ changes what they compile to, so their objects survive most commits as well.
 `scripts/ci-native-cache.ts` moves only those entries, one cache line per job: each
 job restores the newest snapshot of its own line, because a snapshot holds only the
 variants that job built. Import verifies every blob and ThinLTO entry, and `main`
-saves the recently read set when it changed, within 2 GiB; a full snapshot keeps Rust,
-overlay and runtime actions before the many fixture objects. A restored action that no
-longer matches is simply never read; the weekly native-remainder run stays cold so
-cache identity defects still surface. Native linked binaries, frontend artifacts, Zig
-outputs, and the managed cache are not stored: a test binary is tens of megabytes, and
-a developer cache can exceed the repository's 10 GB Actions allowance.
+saves the recently read set when it changed, within 2 GiB; a full snapshot keeps what
+the job itself read first, then ThinLTO entries, then older entries, each in the order
+Rust, overlay, runtime, fixture objects. A restored action that no longer matches is
+simply never read; the weekly native-remainder run stays cold so cache identity
+defects still surface. Native linked binaries, frontend artifacts, Zig outputs, and
+the managed cache are not stored: a test binary is tens of megabytes, and a developer
+cache can exceed the repository's 10 GB Actions allowance.
 Gate reports are retained on success and failure for seven days,
 including their tested source identity. The standards lane alone prepares the
 Test262 corpus. Release workflows remain separate.

@@ -23,8 +23,9 @@ cache directory. Actions and ThinLTO entries are content-addressed: a restored e
 whose inputs no longer match is never read, so a stale snapshot only costs its
 download. import verifies every blob and ThinLTO entry before publishing it and keeps
 each one's last-use time; export keeps what was read within 14 days of the most
-recent use, within 2 GiB, in stage order and newest first within a stage, and
-reports a digest so unchanged snapshots are not saved again.`;
+recent use, within 2 GiB: first the actions this job read, then ThinLTO entries, then
+older actions, each in stage order and newest first. It reports a digest so
+unchanged snapshots are not saved again.`;
 
 // Earlier stages are costlier to rebuild and are read first in a job, so a full
 // snapshot keeps them before the many cheap fixture objects that follow.
@@ -250,12 +251,23 @@ export function importSnapshot(directory: string, root: string): void {
 		process.env.GITHUB_ENV,
 		`MALIGATOR_NATIVE_CACHE_RESTORED=${imported.length + thinLto.length === 0 ? "" : snapshotDigest(imported, thinLto)}`,
 	);
+	// Restored manifests keep older times, so anything newer was read or built by this job.
+	appendGitHubFile(
+		process.env.GITHUB_ENV,
+		`MALIGATOR_NATIVE_CACHE_IMPORTED_AT=${Date.now()}`,
+	);
 }
 
+/**
+ * Snapshot what this job used first: actions it read since `usedSinceMs`, then ThinLTO
+ * entries, then older actions, so a line at the cap drops what the job did not need.
+ * Without a start time every action counts as used.
+ */
 export function exportSnapshot(
 	directory: string,
 	root: string,
 	maxBytes = MAX_BYTES,
+	usedSinceMs?: number,
 ): void {
 	rmSync(directory, { recursive: true, force: true });
 	const entries = readEntries(root).sort(
@@ -263,30 +275,35 @@ export function exportSnapshot(
 	);
 	const cutoff =
 		entries.reduce((newest, entry) => Math.max(newest, entry.mtimeMs), 0) - RETENTION_MS;
+	const used = (entry: Entry) =>
+		usedSinceMs === undefined || entry.mtimeMs >= usedSinceMs;
 	const exported: Array<Entry> = [];
 	let bytes = 0;
-	for (const entry of entries) {
-		if (entry.mtimeMs < cutoff || bytes + entry.bytes > maxBytes) continue;
-		const sources = entry.outputs.map((output) => blob(root, output.digest));
-		if (
-			sources.some(
-				(source, index) =>
-					statSync(source, { throwIfNoEntry: false })?.size !==
-					entry.outputs[index]!.size,
-			)
-		) {
-			continue;
+	const exportActions = (selected: ReadonlyArray<Entry>) => {
+		for (const entry of selected) {
+			if (entry.mtimeMs < cutoff || bytes + entry.bytes > maxBytes) continue;
+			const sources = entry.outputs.map((output) => blob(root, output.digest));
+			if (
+				sources.some(
+					(source, index) =>
+						statSync(source, { throwIfNoEntry: false })?.size !==
+						entry.outputs[index]!.size,
+				)
+			) {
+				continue;
+			}
+			for (const [index, source] of sources.entries()) {
+				copyAtomically(source, blob(directory, entry.outputs[index]!.digest));
+			}
+			const manifest = path.join(directory, entry.manifest);
+			copyAtomically(path.join(root, entry.manifest), manifest);
+			const lastUse = new Date(entry.mtimeMs);
+			utimesSync(manifest, lastUse, lastUse);
+			exported.push(entry);
+			bytes += entry.bytes;
 		}
-		for (const [index, source] of sources.entries()) {
-			copyAtomically(source, blob(directory, entry.outputs[index]!.digest));
-		}
-		const manifest = path.join(directory, entry.manifest);
-		copyAtomically(path.join(root, entry.manifest), manifest);
-		const lastUse = new Date(entry.mtimeMs);
-		utimesSync(manifest, lastUse, lastUse);
-		exported.push(entry);
-		bytes += entry.bytes;
-	}
+	};
+	exportActions(entries.filter(used));
 	const thinLtoFiles = readThinLtoFiles(root);
 	const thinLtoCutoff = (thinLtoFiles[0]?.mtimeMs ?? 0) - RETENTION_MS;
 	const thinLto: Array<ThinLtoEntry> = [];
@@ -304,6 +321,7 @@ export function exportSnapshot(
 		mkdirSync(directory, { recursive: true });
 		writeFileSync(path.join(directory, THINLTO_MANIFEST), JSON.stringify(thinLto));
 	}
+	exportActions(entries.filter((entry) => !used(entry)));
 	const digest =
 		exported.length + thinLto.length === 0 ? "" : snapshotDigest(exported, thinLto);
 	console.log(
@@ -328,7 +346,15 @@ function main(): void {
 	}
 	const root = maligatorCacheDirectory();
 	if (command === "import") importSnapshot(path.resolve(directory), root);
-	else exportSnapshot(path.resolve(directory), root);
+	else {
+		const importedAt = Number(process.env.MALIGATOR_NATIVE_CACHE_IMPORTED_AT);
+		exportSnapshot(
+			path.resolve(directory),
+			root,
+			MAX_BYTES,
+			Number.isFinite(importedAt) && importedAt > 0 ? importedAt : undefined,
+		);
+	}
 }
 
 if (
