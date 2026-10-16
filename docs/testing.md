@@ -207,32 +207,41 @@ deadline uses the same factors. Outer test and queue job budgets remain separate
 Pull requests and pushes to `main` run the canonical check tier on Linux x64 and the
 smoke tier on macOS ARM. The active `main` gate finishes while the newest push waits;
 newer pushes replace its pending successor. Pull request updates cancel superseded
-runs. Linux runs four jobs in parallel using the runner's own four-worker budget:
+runs. Linux runs seven jobs in parallel using the runner's own four-worker budget,
+splitting the native dimensions into shards:
 
 ```sh
 npm run test:check -- --workers 4 --lane quality
-npm run test:check -- --workers 4 --lane native
-npm run test:check -- --workers 4 --lane sanitizer
 npm run test:check -- --workers 4 --lane standards
+npm run test:check -- --workers 4 --lane native --shard 1/2     # and 2/2
+npm run test:check -- --workers 4 --lane sanitizer --shard 1/3  # and 2/3, 3/3
 ```
 
 `quality` includes type-check, lint, and both unit selections. `native` and `sanitizer`
 run their owning dimensions; `standards` includes Test262 and WPT. Each lane records
-its excluded coverage and cannot stand in for the complete gate. The `Linux check`
-job requires all jobs to succeed, then combines their retained reports only when
-source, environment, selections, and executed stages match the current canonical
-plan exactly. Missing, duplicate, failed, or incomplete reports fail aggregation.
+its excluded coverage and cannot stand in for the complete gate. `--shard INDEX/COUNT`
+divides a selected lane's test files by the recorded wall time in
+`tests/test-suite-durations.json` and keeps files that need the same optional
+prepared runtime (perf counters, disabled web or realms) together, so only one shard
+pays for that preparation. Stages without test files stay whole. The table only
+affects balance; refresh it from downloaded run logs with
+`node scripts/test-suite-durations.ts <log>...`. The `Linux check` job requires all
+jobs to succeed, then combines their retained reports only when source, environment,
+selections, and executed stages match the current canonical plan exactly. A sharded
+lane must contribute every shard, each matching the planner's shard selection, and
+their files must partition each canonical stage. Missing, duplicate, failed, or
+incomplete reports fail aggregation.
 `--lane compiler` and `--lane rust` select those full-tier dimensions when authorized;
 selecting a lane absent from a tier fails before execution. Partial smoke selections
 never publish the full smoke cache stamp.
 
 The native-remainder workflow runs on pushes to `main`, Saturdays at 02:43 UTC,
-and manual dispatch. Its four independent jobs cover Linux x64 and macOS ARM,
-with separate normal and sanitizer dimensions and a four-hour limit per job:
+and manual dispatch. Its nine independent jobs cover Linux x64 (three normal and two
+sanitizer shards) and macOS ARM (two of each), with a three-hour limit per job:
 
 ```sh
-npm run test:native:remainder -- --workers 4 --lane native
-npm run test:native:remainder -- --workers 4 --lane sanitizer
+npm run test:native:remainder -- --workers 4 --lane native --shard 1/3
+npm run test:native:remainder -- --workers 4 --lane sanitizer --shard 1/2
 ```
 
 This derives the remaining native files from the same manifests as the full gate,
@@ -242,10 +251,12 @@ failures and retains source-bound reports for fourteen days. These reports remai
 partial full-tier evidence. Optional external-service tests retain their prerequisites.
 
 Extended CI also runs on pushes to `main` and manual dispatch. Independent Linux
-jobs exercise the full-only unit manifest, Rust runtime tests, Wasm build and parity,
-all three self-hosted checks, the three eval/strip/wire differential checks, compiled
-WPT, and the focused Test262 and WPT GC dimensions. The slow-unit and Wasm jobs
-install WASI SDK 34. Compiler logs, CLI acceptance records, parity output, and
+jobs exercise the full-only unit manifest (the two primordial inventory files and the
+rest in three jobs), Wasm build and parity, the self-hosted native-build and CLI
+checks, the self-hosted compiler differential, and compiled WPT. One job runs the
+short checks in sequence: the self-hosted frontend, strip and wire differentials,
+Rust runtime tests, and the focused Test262 and WPT GC dimensions. The slow-unit and
+Wasm jobs install WASI SDK 34. Compiler logs, CLI acceptance records, parity output, and
 standards reports remain tied to the tested revision. The full Test262 corpus keeps
 its separate weekly/manual workflow; these jobs do not update either baseline.
 
@@ -261,10 +272,17 @@ to match the hosted CPU allocations. External actions are pinned to immutable co
 SHAs; local setup actions install Node 24, the repository-pinned Rust toolchain, and
 the platform compiler before running `env:check`.
 
-CI caches npm downloads and the pinned Test262 corpus only. The generated Maligator
-blob store, native objects, Zig outputs, and whole managed cache are deliberately not
-stored because a normal developer cache can exceed the repository's 10 GB Actions
-cache allowance. Gate reports are retained on success and failure for seven days,
+CI caches npm downloads, the pinned Test262 corpus, and completed Rust runtime
+libraries. The Rust sources rarely change while every native job otherwise rebuilds
+each Cargo feature set with fat LTO. `scripts/ci-native-cache.ts` moves only those
+content-addressed actions, one cache line per platform and sanitizer mode: jobs
+restore the newest snapshot, import verifies every blob, and `main` saves the
+recently read set when it changed, within 1 GiB. A restored action that no longer
+matches is simply never read; the weekly native-remainder run stays cold so cache
+identity defects still surface. The rest of the Maligator blob store, native and
+generated objects, Zig outputs, and the managed cache are not stored: they change
+with most commits and a developer cache can exceed the repository's 10 GB Actions
+allowance. Gate reports are retained on success and failure for seven days,
 including their tested source identity. The standards lane alone prepares the
 Test262 corpus. Release workflows remain separate.
 
@@ -474,9 +492,10 @@ not the complete browser WPT repository.
 
 The Test262 GC dimensions preserve collection at every gated safepoint in the
 selected program. While that program invokes runtime compilation, the self-hosted
-compiler uses `MAL_EVAL_GC_STRESS_INTERVAL=1000`; its dedicated native root-safety
-test uses the same cadence. This avoids thousands of full heap verifications per
-eval without weakening stress once the generated entry starts executing.
+compiler uses `MAL_EVAL_GC_STRESS_INTERVAL=1000`; native fixtures inherit the same
+cadence from the harness `STRESS_ENV`, and the dedicated native root-safety test
+uses it too. This avoids thousands of full heap verifications per eval without
+weakening stress once the generated entry starts executing.
 
 Test262 stores one integrity-checked, backend-neutral ProgramImage for each
 source, corpus revision, strictness, semantic configuration, and compiler identity.

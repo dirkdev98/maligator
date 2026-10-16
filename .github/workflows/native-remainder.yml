@@ -16,29 +16,32 @@ concurrency:
 
 jobs:
   native-remainder:
-    name: ${{ matrix.platform }} remaining ${{ matrix.lane }}
+    name: ${{ startsWith(matrix.os, 'macos') && 'macOS ARM' || 'Linux' }} remaining ${{ matrix.lane }} ${{ matrix.shard }}/${{ matrix.shards }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 240
+    timeout-minutes: 180
+    env:
+      # Hosted Linux runners have four CPUs; macOS ARM runners have three.
+      REMAINDER_WORKERS: ${{ startsWith(matrix.os, 'macos') && '3' || '4' }}
+      # The weekly run stays cold so cache-identity defects still surface.
+      NATIVE_CACHE: >-
+        ${{ github.event_name != 'schedule' && format('{0}{1}',
+        startsWith(matrix.os, 'macos') && 'macos' || 'linux',
+        matrix.lane == 'sanitizer' && '-sanitizer' || '') || '' }}
     strategy:
       fail-fast: false
       matrix:
+        # Shard counts follow each dimension's recorded duration; macOS keeps the
+        # hosted five-runner cap together with the CI smoke job.
         include:
-          - platform: Linux
-            os: ubuntu-24.04
-            workers: 4
-            lane: native
-          - platform: Linux
-            os: ubuntu-24.04
-            workers: 4
-            lane: sanitizer
-          - platform: macOS ARM
-            os: macos-15
-            workers: 3
-            lane: native
-          - platform: macOS ARM
-            os: macos-15
-            workers: 3
-            lane: sanitizer
+          - { os: ubuntu-24.04, lane: native, shard: 1, shards: 3 }
+          - { os: ubuntu-24.04, lane: native, shard: 2, shards: 3 }
+          - { os: ubuntu-24.04, lane: native, shard: 3, shards: 3 }
+          - { os: ubuntu-24.04, lane: sanitizer, shard: 1, shards: 2 }
+          - { os: ubuntu-24.04, lane: sanitizer, shard: 2, shards: 2 }
+          - { os: macos-15, lane: native, shard: 1, shards: 2 }
+          - { os: macos-15, lane: native, shard: 2, shards: 2 }
+          - { os: macos-15, lane: sanitizer, shard: 1, shards: 2 }
+          - { os: macos-15, lane: sanitizer, shard: 2, shards: 2 }
     steps:
       - name: Require the main branch
         if: github.ref != 'refs/heads/main'
@@ -50,24 +53,34 @@ jobs:
           persist-credentials: false
 
       - name: Set up Linux
-        if: matrix.platform == 'Linux'
+        if: runner.os == 'Linux'
         uses: ./.github/actions/setup-linux
+        with:
+          native-cache: ${{ env.NATIVE_CACHE }}
 
       - name: Set up macOS
-        if: matrix.platform == 'macOS ARM'
+        if: runner.os == 'macOS'
         uses: ./.github/actions/setup-macos
+        with:
+          native-cache: ${{ env.NATIVE_CACHE }}
 
       - name: Check the runner environment
         run: npm run env:check -- --json
 
       - name: Run the remaining native dimension
-        run: npm run test:native:remainder -- --workers ${{ matrix.workers }} --lane ${{ matrix.lane }}
+        run: >-
+          npm run test:native:remainder -- --workers "$REMAINDER_WORKERS" --lane ${{ matrix.lane }}
+          --shard ${{ matrix.shard }}/${{ matrix.shards }}
+
+      - name: Retain native libraries for later runs
+        if: always()
+        uses: ./.github/actions/save-native-cache
 
       - name: Retain verification reports
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: native-remainder-${{ matrix.os }}-${{ matrix.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: native-remainder-${{ matrix.os }}-${{ matrix.lane }}-${{ matrix.shard }}-of-${{ matrix.shards }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: .cache/mal-build/test-suite/runs/*/report.json
           if-no-files-found: ignore
           include-hidden-files: true

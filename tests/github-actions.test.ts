@@ -31,7 +31,11 @@ describe("GitHub Actions", () => {
 			permissions: Record<string, string>;
 			jobs: {
 				"native-remainder": {
-					strategy: { matrix: { include: Array<{ os: string; lane: string }> } };
+					strategy: {
+						matrix: {
+							include: Array<{ os: string; lane: string; shard: number; shards: number }>;
+						};
+					};
 					steps: Array<{ run?: string }>;
 				};
 			};
@@ -40,14 +44,25 @@ describe("GitHub Actions", () => {
 		expect(workflow.on).toHaveProperty("workflow_dispatch");
 		expect(workflow.permissions).toEqual({ contents: "read" });
 		const job = workflow.jobs["native-remainder"];
+		const dimensions = new Map<string, Array<number>>();
+		for (const { os, lane, shard, shards } of job.strategy.matrix.include) {
+			const key = `${os}/${lane}/${shards}`;
+			dimensions.set(key, [...(dimensions.get(key) ?? []), shard]);
+		}
 		expect(
-			job.strategy.matrix.include.map(({ os, lane }) => `${os}/${lane}`).sort(),
+			[...dimensions.keys()].map((key) => key.split("/").slice(0, 2).join("/")).sort(),
 		).toEqual([
 			"macos-15/native",
 			"macos-15/sanitizer",
 			"ubuntu-24.04/native",
 			"ubuntu-24.04/sanitizer",
 		]);
+		for (const [key, shards] of dimensions) {
+			const count = Number(key.split("/")[2]);
+			expect(shards.sort(), key).toEqual(
+				Array.from({ length: count }, (_, index) => index + 1),
+			);
+		}
 		expect(
 			job.steps.some((step) => step.run?.startsWith("npm run test:native:remainder -- ")),
 		).toBe(true);
@@ -83,6 +98,31 @@ describe("GitHub Actions", () => {
 			),
 		).toBe(true);
 		expect(workflow.jobs["linux-lanes"]?.strategy?.["fail-fast"]).toBe(false);
+	});
+
+	it("splits the full-only unit manifest across Extended CI jobs without gaps", () => {
+		const workflow = parse(
+			readFileSync(path.join(githubRoot, "workflows/extended-ci.yml"), "utf8"),
+		) as {
+			jobs: {
+				"slow-units": {
+					strategy: { matrix: { include: Array<{ files?: string; exclude?: string }> } };
+				};
+			};
+		};
+		const manifest = readFileSync(
+			path.join(githubRoot, "../tests/test-suite-unit-full-only.txt"),
+			"utf8",
+		)
+			.split("\n")
+			.map((line) => line.trim())
+			.filter((line) => line.length > 0 && !line.startsWith("#"));
+		const selected = workflow.jobs["slow-units"].strategy.matrix.include.flatMap(
+			({ files, exclude }) =>
+				files?.split(" ") ??
+				manifest.filter((file) => exclude === undefined || !file.includes(exclude)),
+		);
+		expect(selected.sort()).toEqual([...manifest].sort());
 	});
 
 	it("does not use runner-local contexts in job-level environment expressions", () => {

@@ -24,12 +24,9 @@ jobs:
       fail-fast: false
       matrix:
         check:
-          - selfhost-frontend-check
           - selfhost-native-build-check
           - selfhost-cli-check
           - eval-selfhost-check
-          - eval-strip-check
-          - eval-phase2-check
     steps:
       - name: Check out the tested revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -38,6 +35,8 @@ jobs:
 
       - name: Set up Linux
         uses: ./.github/actions/setup-linux
+        with:
+          native-cache: linux
 
       - name: Check the runner environment
         run: npm run env:check -- --json
@@ -48,6 +47,10 @@ jobs:
           mkdir -p .cache/extended-ci
           git rev-parse HEAD > .cache/extended-ci/revision.txt
           node scripts/${{ matrix.check }}.ts 2>&1 | tee .cache/extended-ci/execution.log
+
+      - name: Retain native libraries for later runs
+        if: always()
+        uses: ./.github/actions/save-native-cache
 
       - name: Retain compiler evidence
         if: always()
@@ -61,10 +64,11 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-  slow-units:
-    name: Slow unit integration
+  # Short checks share one runner so the sharded lanes fit the hosted concurrency limit.
+  quick-checks:
+    name: Compiler, Rust and GC standards checks
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 90
     steps:
       - name: Check out the tested revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -75,20 +79,84 @@ jobs:
         uses: ./.github/actions/setup-linux
         with:
           cache-test262: "true"
-
-      - name: Set up WASI
-        uses: ./.github/actions/setup-wasi
+          native-cache: linux
 
       - name: Check the runner environment
-        run: npm run env:check -- --json
+        shell: bash
+        run: |
+          npm run env:check -- --json
+          mkdir -p .cache/extended-ci
+          git rev-parse HEAD > .cache/extended-ci/revision.txt
 
-      - name: Run slow unit integration tests
-        run: npm run test:unit:full-only
+      - name: Verify the self-hosted frontend
+        shell: bash
+        run: node scripts/selfhost-frontend-check.ts 2>&1 | tee .cache/extended-ci/selfhost-frontend-check.log
 
-  rust:
-    name: Rust runtime
+      - name: Verify the source strip differential
+        if: success() || failure()
+        shell: bash
+        run: node scripts/eval-strip-check.ts 2>&1 | tee .cache/extended-ci/eval-strip-check.log
+
+      - name: Verify the wire loader differential
+        if: success() || failure()
+        shell: bash
+        run: node scripts/eval-phase2-check.ts 2>&1 | tee .cache/extended-ci/eval-phase2-check.log
+
+      - name: Run Rust runtime tests
+        if: success() || failure()
+        run: npm run test:rust
+
+      - name: Run strict Test262 GC coverage
+        if: success() || failure()
+        run: >-
+          node scripts/test262.ts --canonical --backend wire --mode gc-stress
+          --manifest tests/test-suite-test262-gc.txt --variant strict --check --policy complete
+
+      - name: Run sloppy Test262 GC coverage
+        if: success() || failure()
+        run: >-
+          node scripts/test262.ts --canonical --backend wire --mode gc-stress
+          --manifest tests/test-suite-test262-gc-sloppy.txt --variant sloppy --check --policy complete
+
+      - name: Run focused WPT GC coverage
+        if: success() || failure()
+        run: >-
+          npm run test:wpt -- --canonical --test dom/abort/AbortSignal.any.js
+          --mode gc-stress --backend wire --policy complete
+
+      - name: Retain native libraries for later runs
+        if: always()
+        uses: ./.github/actions/save-native-cache
+
+      - name: Retain check evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: quick-checks-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .cache/extended-ci
+            .cache/mal-build/test262*/report-*.json
+            .cache/wpt/runs/*/results.json
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 7
+
+  slow-units:
+    name: Slow unit integration (${{ matrix.part }})
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        # The primordial inventory builds one runtime per mode; its two files run
+        # beside the rest of the full-only manifest instead of after it.
+        include:
+          - part: inventory
+            files: tests/primordial-inventory.test.ts
+          - part: Intl inventory
+            files: tests/primordial-inventory-intl.test.ts
+          - part: integration
+            exclude: tests/primordial-inventory
     steps:
       - name: Check out the tested revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -97,12 +165,30 @@ jobs:
 
       - name: Set up Linux
         uses: ./.github/actions/setup-linux
+        with:
+          cache-test262: "true"
+          native-cache: linux
+
+      - name: Set up WASI
+        uses: ./.github/actions/setup-wasi
 
       - name: Check the runner environment
         run: npm run env:check -- --json
 
-      - name: Run Rust runtime tests
-        run: npm run test:rust
+      - name: Run slow unit integration tests
+        shell: bash
+        env:
+          FILES: ${{ matrix.files }}
+          EXCLUDE: ${{ matrix.exclude }}
+        run: |
+          if [ -z "$FILES" ]; then
+            FILES="$(grep -vE '^[[:space:]]*(#|$)' tests/test-suite-unit-full-only.txt | grep -vF "$EXCLUDE" | tr '\n' ' ')"
+          fi
+          npm run test:unit:full-only -- $FILES
+
+      - name: Retain native libraries for later runs
+        if: always()
+        uses: ./.github/actions/save-native-cache
 
   wasm:
     name: Wasm parity
@@ -116,6 +202,8 @@ jobs:
 
       - name: Set up Linux
         uses: ./.github/actions/setup-linux
+        with:
+          native-cache: linux
 
       - name: Set up WASI
         uses: ./.github/actions/setup-wasi
@@ -128,6 +216,10 @@ jobs:
 
       - name: Check Wasm behavior
         run: npm run wasm:check
+
+      - name: Retain native libraries for later runs
+        if: always()
+        uses: ./.github/actions/save-native-cache
 
       - name: Retain Wasm parity evidence
         if: always()
@@ -151,6 +243,8 @@ jobs:
 
       - name: Set up Linux
         uses: ./.github/actions/setup-linux
+        with:
+          native-cache: linux
 
       - name: Check the runner environment
         run: npm run env:check -- --json
@@ -158,59 +252,16 @@ jobs:
       - name: Run compiled web-platform tests
         run: npm run test:wpt -- --canonical --mode normal --backend compiled --policy complete
 
+      - name: Retain native libraries for later runs
+        if: always()
+        uses: ./.github/actions/save-native-cache
+
       - name: Retain WPT reports
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: compiled-wpt-${{ github.run_id }}-${{ github.run_attempt }}
           path: .cache/wpt/runs/*/results.json
-          include-hidden-files: true
-          if-no-files-found: ignore
-          retention-days: 7
-
-  gc-standards:
-    name: Standards GC stress
-    runs-on: ubuntu-24.04
-    timeout-minutes: 90
-    steps:
-      - name: Check out the tested revision
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Set up Linux
-        uses: ./.github/actions/setup-linux
-        with:
-          cache-test262: "true"
-
-      - name: Check the runner environment
-        run: npm run env:check -- --json
-
-      - name: Run strict Test262 GC coverage
-        run: >-
-          node scripts/test262.ts --canonical --backend wire --mode gc-stress
-          --manifest tests/test-suite-test262-gc.txt --variant strict --check --policy complete
-
-      - name: Run sloppy Test262 GC coverage
-        if: success() || failure()
-        run: >-
-          node scripts/test262.ts --canonical --backend wire --mode gc-stress
-          --manifest tests/test-suite-test262-gc-sloppy.txt --variant sloppy --check --policy complete
-
-      - name: Run focused WPT GC coverage
-        if: success() || failure()
-        run: >-
-          npm run test:wpt -- --canonical --test dom/abort/AbortSignal.any.js
-          --mode gc-stress --backend wire --policy complete
-
-      - name: Retain GC standards reports
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: gc-standards-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            .cache/mal-build/test262*/report-*.json
-            .cache/wpt/runs/*/results.json
           include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 7

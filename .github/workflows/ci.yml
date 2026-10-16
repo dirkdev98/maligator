@@ -14,13 +14,20 @@ concurrency:
 
 jobs:
   linux-lanes:
-    name: Linux ${{ matrix.lane }}
+    name: Linux ${{ matrix.lane }}${{ matrix.shards && format(' {0}/{1}', matrix.shard, matrix.shards) || '' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        lane: [quality, native, sanitizer, standards]
+        include:
+          - lane: quality
+          - { lane: standards, cache: linux }
+          - { lane: native, cache: linux, shard: 1, shards: 2 }
+          - { lane: native, cache: linux, shard: 2, shards: 2 }
+          - { lane: sanitizer, cache: linux-sanitizer, shard: 1, shards: 3 }
+          - { lane: sanitizer, cache: linux-sanitizer, shard: 2, shards: 3 }
+          - { lane: sanitizer, cache: linux-sanitizer, shard: 3, shards: 3 }
     steps:
       - name: Check out the tested revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -31,18 +38,25 @@ jobs:
         uses: ./.github/actions/setup-linux
         with:
           cache-test262: ${{ matrix.lane == 'standards' && 'true' || 'false' }}
+          native-cache: ${{ matrix.cache }}
 
       - name: Check the runner environment
         run: npm run env:check -- --json
 
       - name: Run the selected check lane
-        run: npm run test:check -- --workers 4 --lane ${{ matrix.lane }}
+        run: >-
+          npm run test:check -- --workers 4 --lane ${{ matrix.lane }}
+          ${{ matrix.shards && format('--shard {0}/{1}', matrix.shard, matrix.shards) || '' }}
+
+      - name: Retain native libraries for later runs
+        if: always()
+        uses: ./.github/actions/save-native-cache
 
       - name: Retain verification reports
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: linux-${{ matrix.lane }}-reports-${{ github.run_id }}-${{ github.run_attempt }}
+          name: linux-${{ matrix.lane }}${{ matrix.shards && format('-{0}-of-{1}', matrix.shard, matrix.shards) || '' }}-reports-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             .cache/mal-build/test-suite/runs/*/report.json
             .cache/mal-build/test262*/report-*.json
@@ -103,12 +117,17 @@ jobs:
         uses: ./.github/actions/setup-macos
         with:
           cache-test262: "true"
+          native-cache: macos
 
       - name: Check the runner environment
         run: npm run env:check -- --json
 
       - name: Run smoke tests
         run: npm run test:smoke -- --workers 3
+
+      - name: Retain native libraries for later runs
+        if: always()
+        uses: ./.github/actions/save-native-cache
 
       - name: Retain verification reports
         if: always()

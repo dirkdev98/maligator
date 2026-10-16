@@ -10,6 +10,10 @@ inputs:
     description: Restore and save the pinned Test262 corpus.
     required: false
     default: "false"
+  native-cache:
+    description: Cache line for completed Rust runtime libraries, or empty to build them cold.
+    required: false
+    default: ""
 
 runs:
   using: composite
@@ -80,6 +84,30 @@ runs:
     - name: Install JavaScript dependencies
       shell: bash
       run: npm ci --no-audit --no-fund
+
+    - name: Select the native library cache
+      id: native-cache
+      if: inputs.native-cache != ''
+      shell: bash
+      env:
+        NATIVE_CACHE: ${{ inputs.native-cache }}
+      run: |
+        prefix="maligator-native-v1-$RUNNER_OS-$RUNNER_ARCH-$ImageOS-$NATIVE_CACHE-"
+        echo "prefix=$prefix" >> "$GITHUB_OUTPUT"
+        echo "MALIGATOR_NATIVE_CACHE_PREFIX=$prefix" >> "$GITHUB_ENV"
+
+    - name: Restore the native library cache
+      if: inputs.native-cache != ''
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/maligator-native-cache
+        key: ${{ steps.native-cache.outputs.prefix }}${{ github.run_id }}
+        restore-keys: ${{ steps.native-cache.outputs.prefix }}
+
+    - name: Import the native library cache
+      if: inputs.native-cache != ''
+      shell: bash
+      run: node scripts/ci-native-cache.ts import "$RUNNER_TEMP/maligator-native-cache"
 
     - name: Prepare the pinned Test262 corpus
       if: inputs.cache-test262 == 'true'

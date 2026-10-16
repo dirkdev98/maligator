@@ -1,0 +1,18 @@
+name: Save the native library cache
+description: Publish the Rust runtime libraries a main-branch job used, when the set changed.
+
+runs:
+  using: composite
+  steps:
+    - name: Export the native library cache
+      id: export
+      if: always() && env.MALIGATOR_NATIVE_CACHE_PREFIX != '' && github.ref == 'refs/heads/main'
+      shell: bash
+      run: node scripts/ci-native-cache.ts export "$RUNNER_TEMP/maligator-native-cache"
+
+    - name: Save the native library cache
+      if: always() && steps.export.outputs.digest != '' && steps.export.outputs.digest != env.MALIGATOR_NATIVE_CACHE_RESTORED
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/maligator-native-cache
+        key: ${{ env.MALIGATOR_NATIVE_CACHE_PREFIX }}${{ steps.export.outputs.digest }}
