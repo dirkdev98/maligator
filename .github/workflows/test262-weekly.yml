@@ -36,6 +36,8 @@ jobs:
         uses: ./.github/actions/setup-linux
         with:
           cache-test262: "true"
+          # Restore only: the standards lane prepares the same eval-enabled Test262 runtime.
+          native-cache: linux-standards
 
       - name: Check the runner environment
         run: npm run env:check -- --json
@@ -43,7 +45,8 @@ jobs:
       - name: Run the complete Test262 report
         id: test262
         continue-on-error: true
-        run: npm run test262:report
+        # The default budget leaves half the cores free for interactive machines.
+        run: MALIGATOR_WORKERS="$(nproc)" npm run test262:report
 
       - name: Summarize the complete report
         id: summary
