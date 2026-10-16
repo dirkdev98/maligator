@@ -12,6 +12,20 @@ export function explorerLicenses(toolchain: WasmToolchain): string {
 			"node_modules/@bjorn3/browser_wasi_shim/LICENSE-MIT",
 		],
 	];
+	const cargoEnvironment = { ...process.env, RUSTC: toolchain.tools.rustc.path };
+	// The notices are read from crate sources, which a cached Rust library never downloads.
+	execFileSync(
+		toolchain.tools.cargo.path,
+		[
+			"fetch",
+			"--manifest-path",
+			"runtime/rust/Cargo.toml",
+			"--locked",
+			"--target",
+			"wasm32-wasip1",
+		],
+		{ stdio: ["ignore", "ignore", "inherit"], env: cargoEnvironment },
+	);
 	const metadata = JSON.parse(
 		execFileSync(
 			toolchain.tools.cargo.path,
@@ -29,7 +43,7 @@ export function explorerLicenses(toolchain: WasmToolchain): string {
 				"--filter-platform",
 				"wasm32-wasip1",
 			],
-			{ encoding: "utf8", env: { ...process.env, RUSTC: toolchain.tools.rustc.path } },
+			{ encoding: "utf8", env: cargoEnvironment },
 		),
 	) as {
 		packages: Array<{
