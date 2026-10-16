@@ -887,6 +887,7 @@ function emitNativeFunctions(
 				: {
 						symbolStem: options.symbolStems[functionIndex]!,
 						relocation: options.relocation ?? "&vm->compiler_native_relocation",
+						symbolStems: options.symbolStems,
 					},
 			strictCompiledTargets,
 			image.runtime.stringConstants,
@@ -938,9 +939,6 @@ function emitNativeFunctions(
 		directCompiledEntries: new Map(),
 	};
 	let compiled = image.runtime.functions.map((_fn, index) => emit(index, unavailable));
-	if (options.symbolStems !== undefined) {
-		return { compiled, availability: unavailable };
-	}
 	for (let iteration = 0; iteration <= image.runtime.functions.length + 1; iteration++) {
 		const availability = nativeCompilationAvailability(image, compiled);
 		const next = image.runtime.functions.map((_fn, index) =>
@@ -1461,6 +1459,53 @@ function applicationFunctions(image: ProgramImage): Array<boolean> {
 	});
 }
 
+/** Prototypes for every compiled body and direct entry a unit may reference. */
+function compiledFunctionDeclarations(
+	compiled: ReadonlyArray<CompiledFunction | null>,
+): Array<GeneratedDeclaration> {
+	return [
+		...compiled.flatMap((fn): Array<GeneratedDeclaration> =>
+			fn === null || fn.source.length === 0
+				? []
+				: [
+						{
+							symbol: fn.symbol,
+							source: `MalValue ${fn.symbol}${COMPILED_FUNCTION_DECLARATION};`,
+						},
+					],
+		),
+		...compiled.flatMap((fn) =>
+			(fn?.directEntries ?? []).flatMap((entry) => [
+				{ symbol: entry.symbol, source: `${directEntryDeclaration(entry)};` },
+				...(entry.callbackSymbol === undefined
+					? []
+					: [
+							{
+								symbol: entry.callbackSymbol,
+								source: `MalValue ${entry.callbackSymbol}${COMPILED_FUNCTION_DECLARATION};`,
+							},
+						]),
+				...(entry.reductionSymbol === undefined
+					? []
+					: [
+							{
+								symbol: entry.reductionSymbol,
+								source: `${numericReductionDeclaration(entry.reductionSymbol)};`,
+							},
+						]),
+				...(entry.sortSymbol === undefined
+					? []
+					: [
+							{
+								symbol: entry.sortSymbol,
+								source: `${numericSortKernelDeclaration(entry.sortSymbol)};`,
+							},
+						]),
+			]),
+		),
+	];
+}
+
 function compiledFunctionPartitionKeys(image: ProgramImage): Array<string> {
 	const occurrences = new Map<string, number>();
 	return image.runtime.functions.map((fn) => {
@@ -1550,50 +1595,8 @@ export function emitProgramTranslationUnits(
 			);
 		}
 
-		const generatedDeclarations: Array<GeneratedDeclaration> = splitData.declarations
-			.concat(
-				emitted.compiled.flatMap((fn): Array<GeneratedDeclaration> =>
-					fn === null || fn.source.length === 0
-						? []
-						: [
-								{
-									symbol: fn.symbol,
-									source: `MalValue ${fn.symbol}${COMPILED_FUNCTION_DECLARATION};`,
-								},
-							],
-				),
-			)
-			.concat(
-				emitted.compiled.flatMap((fn) =>
-					(fn?.directEntries ?? []).flatMap((entry) => [
-						{ symbol: entry.symbol, source: `${directEntryDeclaration(entry)};` },
-						...(entry.callbackSymbol === undefined
-							? []
-							: [
-									{
-										symbol: entry.callbackSymbol,
-										source: `MalValue ${entry.callbackSymbol}${COMPILED_FUNCTION_DECLARATION};`,
-									},
-								]),
-						...(entry.reductionSymbol === undefined
-							? []
-							: [
-									{
-										symbol: entry.reductionSymbol,
-										source: `${numericReductionDeclaration(entry.reductionSymbol)};`,
-									},
-								]),
-						...(entry.sortSymbol === undefined
-							? []
-							: [
-									{
-										symbol: entry.sortSymbol,
-										source: `${numericSortKernelDeclaration(entry.sortSymbol)};`,
-									},
-								]),
-					]),
-				),
-			);
+		const generatedDeclarations: Array<GeneratedDeclaration> =
+			splitData.declarations.concat(compiledFunctionDeclarations(emitted.compiled));
 		const declarationIndicesBySymbol = new Map<string, Array<number>>();
 		for (const [index, declaration] of generatedDeclarations.entries()) {
 			const indices = declarationIndicesBySymbol.get(declaration.symbol);
@@ -1905,8 +1908,11 @@ export function emitRelocatableNativeOverlayTranslationUnits(
 				? `&${relocationCell}`
 				: "&vm->compiler_native_relocation",
 	});
-	const declarations = compiled.flatMap((fn) =>
-		fn === null ? [] : [`MAL_DECLARE_COMPILED(${fn.symbol});`],
+	const installed = compiled.map((fn) =>
+		fn === null || fn.source.length === 0 ? undefined : fn.symbol,
+	);
+	const declarations = installed.flatMap((symbol) =>
+		symbol === undefined ? [] : [`MAL_DECLARE_COMPILED(${symbol});`],
 	);
 	const table = [
 		...NATIVE_C_HEADER_LINES,
@@ -1915,7 +1921,7 @@ export function emitRelocatableNativeOverlayTranslationUnits(
 		...declarations,
 		"",
 		`static const MalCompiledFunction mal_${name}_native_entries[] = {`,
-		...compiled.map((fn) => `    ${fn?.symbol ?? "nullptr"},`),
+		...installed.map((symbol) => `    ${symbol ?? "nullptr"},`),
 		"};",
 		"",
 		...(target.kind === "fragment"
@@ -1973,8 +1979,11 @@ export function emitRelocatableNativeOverlayTranslationUnits(
 		links = [];
 		linkCodeUnits = linkHeader.length;
 	};
-	for (const fn of compiled) {
-		if (fn?.link === undefined || fn.link.length === 0) continue;
+	const linked = compiled.flatMap((fn) =>
+		fn === null ? [] : [...(fn.source.length === 0 ? [] : [fn]), ...fn.directEntries],
+	);
+	for (const fn of linked) {
+		if (fn.link === undefined || fn.link.length === 0) continue;
 		const definition = `const i32 ${fn.symbol}_link[] = { ${fn.link.map((slot) => slot.index).join(", ")} };`;
 		if (linkHeader.length + 1 + definition.length > maxCodeUnits)
 			throw new RangeError(
@@ -1987,13 +1996,31 @@ export function emitRelocatableNativeOverlayTranslationUnits(
 	flushLinks();
 	type NativeOverlayFunction = {
 		fn: CompiledFunction;
+		source: string;
 		partitionKey: string;
 		partitionHashes: Array<number | undefined>;
 	};
+	// Direct calls cross units, so each unit declares the overlay symbols its bodies name.
+	const overlayDeclarations = compiledFunctionDeclarations(compiled);
+	const overlayDeclarationIndices = new Map<string, Array<number>>();
+	for (const [index, declaration] of overlayDeclarations.entries())
+		overlayDeclarationIndices.set(declaration.symbol, [
+			...(overlayDeclarationIndices.get(declaration.symbol) ?? []),
+			index,
+		]);
 	const bodies: Array<NativeOverlayFunction> = compiled.flatMap((fn, index) =>
 		fn === null
 			? []
-			: [{ fn, partitionKey: functionPartitionKeys[index]!, partitionHashes: [] }],
+			: [
+					{
+						fn,
+						source: [fn.source, ...fn.directEntries.map((entry) => entry.source)]
+							.filter((part) => part.length > 0)
+							.join("\n"),
+						partitionKey: functionPartitionKeys[index]!,
+						partitionHashes: [],
+					},
+				],
 	);
 	const visit = (
 		functions: Array<NativeOverlayFunction>,
@@ -2002,11 +2029,20 @@ export function emitRelocatableNativeOverlayTranslationUnits(
 	): void => {
 		if (functions.length === 0) return;
 		const sourceCodeUnits = functions.reduce(
-			(total, { fn }) => total + 1 + fn.source.length,
+			(total, { source }) => total + 1 + source.length,
 			header.length,
 		);
 		if (sourceCodeUnits <= targetCodeUnits || functions.length === 1) {
-			const source = [header, ...functions.map(({ fn }) => fn.source)].join("\n");
+			const bodiesSource = functions.map(({ source }) => source);
+			const referenced = generatedDeclarationReferences(
+				bodiesSource.join("\n"),
+				overlayDeclarationIndices,
+			).sort((left, right) => left - right);
+			const source = [
+				header,
+				...referenced.map((index) => overlayDeclarations[index]!.source),
+				...bodiesSource,
+			].join("\n");
 			if (source.length > maxCodeUnits) {
 				throw new RangeError(
 					`generated compiled function '${functions[0]!.fn.symbol}' requires ${source.length} code units; translation-unit maximum is ${maxCodeUnits}`,
@@ -2017,11 +2053,13 @@ export function emitRelocatableNativeOverlayTranslationUnits(
 				kind: "code",
 				source,
 				headerFiles,
-				definitions: functions.map(({ fn }) => ({
-					kind: "compiled function",
-					symbol: fn.symbol,
-					sourceCodeUnits: fn.source.length,
-				})),
+				definitions: functions.flatMap(({ fn }) =>
+					[...(fn.source.length === 0 ? [] : [fn]), ...fn.directEntries].map((part) => ({
+						kind: "compiled function" as const,
+						symbol: part.symbol,
+						sourceCodeUnits: part.source.length,
+					})),
+				),
 			});
 			return;
 		}

@@ -67,7 +67,16 @@ function emit(
 		relocatable ? TEST_RELOCATION : false,
 	);
 	expect(emitted).not.toBeNull();
-	return relocatable ? { ...emitted!, source: resolveNativeLinks(emitted!) } : emitted!;
+	return relocatable
+		? {
+				...emitted!,
+				source: resolveNativeLinks(emitted!),
+				directEntries: emitted!.directEntries.map((entry) => ({
+					...entry,
+					source: resolveNativeLinks(entry),
+				})),
+			}
+		: emitted!;
 }
 
 describe("native lexical owner lookup contract", () => {

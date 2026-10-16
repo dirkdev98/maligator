@@ -554,12 +554,13 @@ interface NativeCallCoverage {
 export const COMPILED_FUNCTION_DECLARATION =
 	"(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, void *entry_state)";
 
+/** `name` is the function's index, or its stem in a relocatable overlay. */
 export function nativeCallbackSymbol(
-	index: number,
+	name: number | string,
 	entryId: number,
 	suffix: string,
 ): string {
-	return `mal_callback_${index}_${entryId}${suffix}`;
+	return `mal_callback_${name}_${entryId}${suffix}`;
 }
 
 export interface CompiledFunction extends NativeCallCoverage {
@@ -577,6 +578,8 @@ export interface CompiledFunction extends NativeCallCoverage {
 		directEntryCalls: ReadonlyMap<number, ReadonlySet<number>>;
 		id: number;
 		symbol: string;
+		/** A relocatable entry's own link table, like `CompiledFunction.link`. */
+		link?: ReadonlyArray<NativeLinkSlot>;
 		/**
 		 * Independently emitted definition so an optional ABI sibling cannot evict the canonical body.
 		 */
@@ -617,10 +620,14 @@ export interface NativeRelocatableEmission {
 	readonly symbolStem: string;
 	/** C expression for the overlay's `const MalNativeProgramRelocation *`. */
 	readonly relocation: string;
+	/** Every overlay function's stem, which names direct call and entry targets. */
+	readonly symbolStems?: ReadonlyArray<string>;
 }
 
 interface NativeRelocationExpressions {
 	readonly enabled: boolean;
+	/** Symbol-name component of a function: its stem in an overlay, else its index. */
+	stem(index: number): string;
 	/** Slots in first-use order, referenced as `<link symbol>[slot]`. */
 	readonly link: ReadonlyArray<NativeLinkSlot>;
 	functionIndex(index: number): string;
@@ -635,6 +642,7 @@ interface NativeRelocationExpressions {
 
 function nativeRelocationExpressions(
 	linkSymbol: string | undefined,
+	symbolStems?: ReadonlyArray<string>,
 ): NativeRelocationExpressions {
 	const link: Array<NativeLinkSlot> = [];
 	const slots = new Map<string, number>();
@@ -651,6 +659,13 @@ function nativeRelocationExpressions(
 	const enabled = linkSymbol !== undefined;
 	return {
 		enabled,
+		stem: (index) => {
+			if (symbolStems === undefined) return String(index);
+			const stem = symbolStems[index];
+			if (stem === undefined)
+				throw new Error(`native overlay has no stem for function ${index}`);
+			return stem;
+		},
 		link,
 		functionIndex: (index) => indexed("function_base", index),
 		ownerFunctionIndex: (index) =>
@@ -1603,12 +1618,14 @@ function emitCompiledVariant(
 		throw new Error(`Invalid register representations for function ${index}`);
 	}
 	const reps = [...nativeContract.registerRepresentations];
+	const name = relocatable === false ? index : relocatable.symbolStem;
 	const symbol =
 		directEntry !== undefined
-			? `mal_direct_${index}_${directEntry.id}${suffix}`
-			: `mal_compiled_${relocatable === false ? index : relocatable.symbolStem}${suffix}`;
+			? `mal_direct_${name}_${directEntry.id}${suffix}`
+			: `mal_compiled_${name}${suffix}`;
 	const relocation = nativeRelocationExpressions(
 		relocatable === false ? undefined : `${symbol}_link`,
+		relocatable === false ? undefined : relocatable.symbolStems,
 	);
 
 	const valueRegs = [...storage.rootRegisters];
@@ -2077,16 +2094,11 @@ function emitCompiledVariant(
 	if (directEntry === undefined) lines.push(`    (void) new_target;`);
 	lines.push(`    (void) env;`);
 	lines.push(`    (void) callee;`);
-	if (directEntry === undefined) {
-		if (relocatable !== false) {
-			lines.push(
-				`    const MalNativeProgramRelocation *__mal_relocation = ${relocatable.relocation};`,
-				`    (void) entry_state;`,
-			);
-		} else {
-			lines.push(`    (void) entry_state;`);
-		}
-	}
+	if (relocatable !== false)
+		lines.push(
+			`    const MalNativeProgramRelocation *__mal_relocation = ${relocatable.relocation};`,
+		);
+	if (directEntry === undefined) lines.push(`    (void) entry_state;`);
 	if (directEntry !== undefined && body.resources.has("newTarget")) {
 		lines.push(`    const MalValue new_target = MAL_VALUE_UNDEFINED;`);
 	}
@@ -2688,8 +2700,8 @@ function renderCompiledFunction(
 		maxCodeUnits,
 		splitPolicy,
 	);
-	if (relocatable !== false) return canonical;
 	if (canonical === null) return null;
+	const name = relocatable === false ? index : relocatable.symbolStem;
 	const variants = native.directEntries.flatMap<{
 		entry: NativeDirectEntryPlan;
 		emitted: CompiledFunction;
@@ -2707,7 +2719,7 @@ function renderCompiledFunction(
 			directCompiledTargets,
 			semanticProtectors,
 			directCompiledEntries,
-			false,
+			relocatable,
 			entry,
 			strictCompiledTargets,
 			stringConstants,
@@ -2756,19 +2768,20 @@ function renderCompiledFunction(
 			directEntryCalls: emitted.directEntryCalls,
 			id: entry.id,
 			symbol: emitted.symbol,
+			...(emitted.link === undefined ? {} : { link: emitted.link }),
 			source:
 				emitted.source +
 				(callbackEntries.has(directCompiledEntryKey(index, entry.id))
-					? `\n${renderCallbackAdapter(entry, index, suffix, linkage)}`
+					? `\n${renderCallbackAdapter(entry, name, suffix, linkage)}`
 					: "") +
 				(reductionEntries.has(directCompiledEntryKey(index, entry.id))
-					? `\n${renderReductionAdapter(entry, index, suffix, linkage)}`
+					? `\n${renderReductionAdapter(entry, name, suffix, linkage)}`
 					: ""),
 			...(reductionEntries.has(directCompiledEntryKey(index, entry.id))
-				? { reductionSymbol: `${nativeCallbackSymbol(index, entry.id, suffix)}_reduce` }
+				? { reductionSymbol: `${nativeCallbackSymbol(name, entry.id, suffix)}_reduce` }
 				: {}),
 			...(callbackEntries.has(directCompiledEntryKey(index, entry.id))
-				? { callbackSymbol: nativeCallbackSymbol(index, entry.id, suffix) }
+				? { callbackSymbol: nativeCallbackSymbol(name, entry.id, suffix) }
 				: {}),
 			parameterRepresentations: [
 				...(entry.argumentRepresentations ?? entry.parameterRepresentations),
@@ -2825,7 +2838,7 @@ export function numericSortKernelDeclaration(symbol: string): string {
 
 function renderCallbackAdapter(
 	entry: NativeDirectEntryPlan,
-	index: number,
+	name: number | string,
 	suffix: string,
 	linkage: "static" | "external",
 ): string {
@@ -2859,13 +2872,13 @@ function renderCallbackAdapter(
 					: "value";
 	// The runtime callback path owns activation, realm, receiver adjustment, and argument roots.
 	return [
-		`${linkage === "static" ? "static " : ""}MalValue ${nativeCallbackSymbol(index, entry.id, suffix)}${COMPILED_FUNCTION_DECLARATION} {`,
+		`${linkage === "static" ? "static " : ""}MalValue ${nativeCallbackSymbol(name, entry.id, suffix)}${COMPILED_FUNCTION_DECLARATION} {`,
 		`    if (!(${guards.map((guard) => `(${guard})`).join(" && ")})) {`,
 		"        MAL_PERF_COUNT(array_iteration_typed_callback_fallbacks);",
-		`        return mal_compiled_${index}${suffix}(vm, this_value, args, arg_count, new_target, env, callee, entry_state);`,
+		`        return mal_compiled_${name}${suffix}(vm, this_value, args, arg_count, new_target, env, callee, entry_state);`,
 		"    }",
 		"    MAL_PERF_COUNT(array_iteration_typed_callback_hits);",
-		`    ${cTypeOf(entry.resultRepresentation)} value = mal_direct_${index}_${entry.id}${suffix}(vm, this_value${values.length ? `, ${values.join(", ")}` : ""}, env, callee);`,
+		`    ${cTypeOf(entry.resultRepresentation)} value = mal_direct_${name}_${entry.id}${suffix}(vm, this_value${values.length ? `, ${values.join(", ")}` : ""}, env, callee);`,
 		"    if (MAL_THREW()) return MAL_VALUE_UNDEFINED;",
 		`    return ${result};`,
 		"}",
@@ -2878,7 +2891,7 @@ export function numericReductionDeclaration(symbol: string): string {
 
 function renderReductionAdapter(
 	entry: NativeDirectEntryPlan,
-	index: number,
+	name: number | string,
 	suffix: string,
 	linkage: "static" | "external",
 ): string {
@@ -2887,8 +2900,8 @@ function renderReductionAdapter(
 		(entry.argumentRepresentations ?? entry.parameterRepresentations).length,
 	);
 	return [
-		`${linkage === "static" ? "static " : ""}${numericReductionDeclaration(`${nativeCallbackSymbol(index, entry.id, suffix)}_reduce`)} {`,
-		`    return mal_direct_${index}_${entry.id}${suffix}(vm, this_value, ${values.join(", ")}, env, callee);`,
+		`${linkage === "static" ? "static " : ""}${numericReductionDeclaration(`${nativeCallbackSymbol(name, entry.id, suffix)}_reduce`)} {`,
+		`    return mal_direct_${name}_${entry.id}${suffix}(vm, this_value, ${values.join(", ")}, env, callee);`,
 		"}",
 	].join("\n");
 }
@@ -2938,6 +2951,7 @@ function emitResumableFunction(
 	const symbol = `mal_compiled_${relocatable === false ? index : relocatable.symbolStem}${suffix}`;
 	const relocation = nativeRelocationExpressions(
 		relocatable === false ? undefined : `${symbol}_link`,
+		relocatable === false ? undefined : relocatable.symbolStems,
 	);
 	const isAsyncGenerator = fn.isAsync && fn.isGenerator;
 
@@ -10720,7 +10734,7 @@ function emitInstruction(
 					directCompiledEntryKey(numericCallback.functionIndex, numericCallback.entryId),
 				);
 				if (entry !== undefined && numericSortKernelEntry(entry)) {
-					const comparator = `mal_direct_${numericCallback.functionIndex}_${numericCallback.entryId}${suffix}`;
+					const comparator = `mal_direct_${relocation.stem(numericCallback.functionIndex)}_${numericCallback.entryId}${suffix}`;
 					return [
 						`MalCompletion ${tmp} = mal_builtin_sort_numeric(vm, ${nativeCallCacheReference(context, ip)}, ${numericCallback.operation === "toSorted" ? "true" : "false"}, ${numericCallback.viaCall ? "true" : "false"}, ${relocation.functionIndex(numericCallback.functionIndex)}, ${comparator}, ${entry.leaf ? `${comparator}_sort` : "nullptr"}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 						`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
@@ -10964,8 +10978,12 @@ function emitInstruction(
 							directCompiledEntries.has(
 								directCompiledEntryKey(callbackTarget, callbackEntry.entryId),
 							)
-							? nativeCallbackSymbol(callbackTarget, callbackEntry.entryId, suffix)
-							: `mal_compiled_${callbackTarget}${suffix}`
+							? nativeCallbackSymbol(
+									relocation.stem(callbackTarget),
+									callbackEntry.entryId,
+									suffix,
+								)
+							: `mal_compiled_${relocation.stem(callbackTarget)}${suffix}`
 						: "nullptr";
 				const numericReduction =
 					callbackEntry?.numericReduction === true &&
@@ -11148,7 +11166,7 @@ function emitInstruction(
 				const target = callPlan.directCallTargetFunctionIndex;
 				const compiled = target !== undefined && directCompiledTargets.has(target);
 				return [
-					`MalCompletion ${tmp} = mal_vm_call_function_call_direct${compiled ? "_compiled" : ""}(vm, ${nativeCallCacheReference(context, ip)}, ${target === undefined ? -1 : relocation.functionIndex(target)}, ${compiled ? `mal_compiled_${target}${suffix}, ` : ""}${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+					`MalCompletion ${tmp} = mal_vm_call_function_call_direct${compiled ? "_compiled" : ""}(vm, ${nativeCallCacheReference(context, ip)}, ${target === undefined ? -1 : relocation.functionIndex(target)}, ${compiled ? `mal_compiled_${relocation.stem(target)}${suffix}, ` : ""}${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
 					poll(),
@@ -11234,7 +11252,7 @@ function emitInstruction(
 							`    ${onThrow()}`,
 							"  }",
 							"  MAL_PERF_COUNT(direct_entry_hits);",
-							`  ${cTypeOf(transport.resultRepresentation)} ${value} = mal_direct_${target}_${entry.id}${suffix}(vm, ${receiver}${parameters.length === 0 ? "" : `, ${parameters.join(", ")}`}, mal_value_to_function_object(${guardedCallee})->creation_env, ${guardedCallee});`,
+							`  ${cTypeOf(transport.resultRepresentation)} ${value} = mal_direct_${relocation.stem(target)}_${entry.id}${suffix}(vm, ${receiver}${parameters.length === 0 ? "" : `, ${parameters.join(", ")}`}, mal_value_to_function_object(${guardedCallee})->creation_env, ${guardedCallee});`,
 							`  ${entry.leaf ? "mal_vm_leave_leaf_checked" : "mal_vm_leave_compiled"}(vm);`,
 							...restoreRealm,
 							`  ${throwCheck()}`,
@@ -11248,7 +11266,7 @@ function emitInstruction(
 						`  MalCompletion ${tmp};`,
 						...(directCompiledTargets.has(target)
 							? [
-									`  const MalExactScriptCall ${exact} = { .callee = ${guardedCallee}, .function_index = ${target}, .compiled_callback = mal_compiled_${target}${suffix}, .env = mal_value_to_function_object(${guardedCallee})->creation_env };`,
+									`  const MalExactScriptCall ${exact} = { .callee = ${guardedCallee}, .function_index = ${relocation.functionIndex(target)}, .compiled_callback = mal_compiled_${relocation.stem(target)}${suffix}, .env = mal_value_to_function_object(${guardedCallee})->creation_env };`,
 									`  ${tmp} = mal_vm_call_exact_script_compiled_callback(vm, &${exact}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 								]
 							: [
@@ -11304,7 +11322,7 @@ function emitInstruction(
 						`MAL_PERF_COUNT(direct_entry_hits);`,
 						`if (!${directEntry.leaf ? "mal_vm_enter_leaf_checked" : "mal_vm_enter_compiled"}(vm, ${target})) ${onThrow()}`,
 						...functionDeclaration,
-						`${cTypeOf(directEntry.resultRepresentation)} ${directValue} = mal_direct_${target}_${directEntry.id}${suffix}(vm, ${thisArgument}${parameters.length === 0 ? "" : `, ${parameters.join(", ")}`}, mal_value_to_function_object(${directCallee})->creation_env, ${directCallee});`,
+						`${cTypeOf(directEntry.resultRepresentation)} ${directValue} = mal_direct_${relocation.stem(target)}_${directEntry.id}${suffix}(vm, ${thisArgument}${parameters.length === 0 ? "" : `, ${parameters.join(", ")}`}, mal_value_to_function_object(${directCallee})->creation_env, ${directCallee});`,
 						`${directEntry.leaf ? "mal_vm_leave_leaf_checked" : "mal_vm_leave_compiled"}(vm);`,
 						`if (MAL_THREW()) ${onThrow()}`,
 						`r${instruction.dst} = ${directResult};`,
@@ -11319,7 +11337,7 @@ function emitInstruction(
 						`MalValue ${directCallee} = ${boxedOperand(instruction.callee)};`,
 						`if (!mal_vm_enter_compiled(vm, ${target})) ${onThrow()}`,
 						...functionDeclaration,
-						`MalValue ${directValue} = mal_compiled_${target}${suffix}(vm, ${thisArgument}, ${argsExpr}, ${args.length}, MAL_VALUE_UNDEFINED, mal_value_to_function_object(${directCallee})->creation_env, ${directCallee}, nullptr);`,
+						`MalValue ${directValue} = mal_compiled_${relocation.stem(target)}${suffix}(vm, ${thisArgument}, ${argsExpr}, ${args.length}, MAL_VALUE_UNDEFINED, mal_value_to_function_object(${directCallee})->creation_env, ${directCallee}, nullptr);`,
 						`mal_vm_leave_compiled(vm);`,
 						`if (MAL_THREW()) ${onThrow()}`,
 						`r${instruction.dst} = ${callResult(directValue)};`,
