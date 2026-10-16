@@ -282,7 +282,7 @@ the platform compiler before running `env:check`.
 
 CI caches npm downloads, the pinned Test262 corpus, and the content-addressed native
 actions a job built: Rust runtime libraries, eval-compiler overlay objects, runtime C
-objects, generated C objects, the Wasm runtime's Rust library, objects, archive
+objects and the archives linked from them, generated C objects, the Wasm runtime's Rust library, objects, archive
 and link, and the Test262 input index. Eval-compiler bakes travel with them: a bake
 is keyed by its compiler sources and costs about a minute per job to redo, so a
 commit that leaves the compiler alone reuses it. The ThinLTO cache rides along after

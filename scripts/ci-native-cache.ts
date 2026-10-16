@@ -17,15 +17,16 @@ import { maligatorCacheDirectory } from "../src/cache-root.ts";
 
 const usage = `usage: node scripts/ci-native-cache.ts import|export DIRECTORY
 
-Moves completed Rust library, compiler overlay, runtime C, generated C and Wasm
-actions, eval-compiler bakes, then ThinLTO cache entries, between the Maligator cache
-and a GitHub Actions cache directory. All of them are content-addressed: a restored
-entry whose inputs no longer match is never read, so a stale snapshot only costs its
-download. import verifies every blob, bake file and ThinLTO entry before publishing it
-and keeps each one's last-use time; export keeps what was read within 14 days of the
-most recent use, within 2 GiB: first the bakes and then the actions this job read, then
-ThinLTO entries, then older actions, each in stage order and newest first. It reports
-a digest so unchanged snapshots are not saved again.`;
+Moves completed Rust library, compiler overlay, runtime C objects and archives,
+generated C and Wasm actions, eval-compiler bakes, then ThinLTO cache entries,
+between the Maligator cache and a GitHub Actions cache directory. All of them are
+content-addressed: a restored entry whose inputs no longer match is never read, so a
+stale snapshot only costs its download. import verifies every blob, bake file and
+ThinLTO entry before publishing it and keeps each one's last-use time; export keeps
+what was read within 14 days of the most recent use, within 2 GiB: first the bakes
+and then the actions this job read, then ThinLTO entries, then older actions, each
+in stage order and newest first. It reports a digest so unchanged snapshots are not
+saved again.`;
 
 // Earlier stages are costlier to rebuild and are read first in a job, so a full
 // snapshot keeps them before the many cheap fixture objects that follow.
@@ -34,6 +35,7 @@ const STAGES = [
 	"wasm-rust",
 	"compiler-overlay-object",
 	"runtime-object",
+	"runtime-archive",
 	"wasm-object",
 	"wasm-archive",
 	"generated-unit-slice",
