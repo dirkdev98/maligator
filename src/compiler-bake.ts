@@ -246,15 +246,34 @@ function nativeArtifactDigest(sources: ReadonlyArray<Uint8Array>): string {
 	return digest.digest("hex");
 }
 
+// Publication replaces files by rename, so a source set this process hashed stays valid
+// while every file keeps its identity; the overlay is about 40 MiB per check.
+const validatedNativeSources = new Map<string, string>();
+
+function nativeSourceStamps(directory: string, files: ReadonlyArray<string>): string {
+	return JSON.stringify(
+		files.map((name) => {
+			const stats = statSync(path.join(directory, name));
+			return [stats.dev, stats.ino, stats.size, stats.mtimeMs];
+		}),
+	);
+}
+
 function validNativeSources(
 	directory: string,
 	native: NonNullable<SourceManifest["native"]>,
 	key: string,
 ): boolean {
 	if (native.key !== key || native.files.length === 0) return false;
+	const memo = JSON.stringify([directory, native.digest, native.files]);
 	try {
+		if (validatedNativeSources.get(memo) === nativeSourceStamps(directory, native.files))
+			return true;
+		const stamps = nativeSourceStamps(directory, native.files);
 		const sources = native.files.map((name) => readFileSync(path.join(directory, name)));
-		return nativeArtifactDigest(sources) === native.digest;
+		if (nativeArtifactDigest(sources) !== native.digest) return false;
+		validatedNativeSources.set(memo, stamps);
+		return true;
 	} catch {
 		return false;
 	}

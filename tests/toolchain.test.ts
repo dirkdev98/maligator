@@ -39,6 +39,7 @@ import { runToStdout } from "../src/test-harness.ts";
 import {
 	formatToolchainReport,
 	inspectToolchain,
+	requireToolchain,
 	requireWasmToolchain,
 } from "../src/toolchain.ts";
 import type { ToolchainReport } from "../src/toolchain.ts";
@@ -518,6 +519,30 @@ exit 7
 		expect(invalidated.cacheHit).toBe(false);
 		expect(invalidated.fingerprint).not.toBe(first.fingerprint);
 		expect(compileInvocationCount(fake.logPath)).toBeGreaterThan(afterFirst);
+	});
+
+	it("reuses a required toolchain until a selected executable changes", () => {
+		const fake = createFakeToolchain();
+		const options = {
+			rootDir: fake.root,
+			rustDir: fake.rustDir,
+			env: fake.env,
+			platform: "linux" as const,
+			arch: "x64",
+		};
+		const versionQueries = () =>
+			readFileSync(fake.logPath, "utf-8")
+				.split("\n")
+				.filter((line) => line === "--version").length;
+		const first = requireToolchain(options);
+		const queried = versionQueries();
+		requireToolchain(options);
+		expect(versionQueries()).toBe(queried);
+
+		executable(path.join(fake.bin, "fake-cc"), compilerScript("fake cc 2", fake.logPath));
+		const replaced = requireToolchain(options);
+		expect(replaced.tools.cc.version).toBe("fake cc 2");
+		expect(replaced.fingerprint).not.toBe(first.fingerprint);
 	});
 
 	it("keeps the fingerprint and probes when identical tools are reinstalled", () => {

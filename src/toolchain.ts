@@ -1007,7 +1007,39 @@ export function inspectToolchain(options: InspectToolchainOptions = {}): Toolcha
 	return report;
 }
 
+// Inspection spawns about ten version queries and every build in a process repeats it,
+// so a process reuses a toolchain while each selected executable is unchanged on disk.
+const requiredToolchains = new Map<string, { toolchain: Toolchain; stamps: string }>();
+
+function toolStamps(toolchain: Toolchain): string {
+	return JSON.stringify(
+		Object.values(toolchain.tools)
+			.filter((tool): tool is ToolExecutable => tool !== undefined)
+			.map((tool) => {
+				const stats = statSync(tool.path);
+				return [tool.path, stats.dev, stats.ino, stats.size, stats.mtimeMs];
+			}),
+	);
+}
+
 export function requireToolchain(options: InspectToolchainOptions = {}): Toolchain {
+	const key = JSON.stringify([
+		path.resolve(options.rootDir ?? process.cwd()),
+		options.cacheDirectory,
+		options.rustDir,
+		options.platform,
+		options.arch,
+		options.needsCxx,
+		options.target,
+		options.env ?? process.env,
+	]);
+	const required = requiredToolchains.get(key);
+	try {
+		if (required !== undefined && toolStamps(required.toolchain) === required.stamps)
+			return required.toolchain;
+	} catch {
+		// A removed executable falls through to a fresh inspection.
+	}
 	const report = inspectToolchain(options);
 	if (report.toolchain === undefined) {
 		throw new ToolchainError(
@@ -1015,6 +1047,10 @@ export function requireToolchain(options: InspectToolchainOptions = {}): Toolcha
 			report.platform ?? options.platform ?? process.platform,
 		);
 	}
+	requiredToolchains.set(key, {
+		toolchain: report.toolchain,
+		stamps: toolStamps(report.toolchain),
+	});
 	return report.toolchain;
 }
 
