@@ -37,9 +37,15 @@ vi.mock("../scripts/bench-http-ordinary.ts", () => ({
 	},
 }));
 
-import { runBenchmarkComparison } from "../scripts/bench-compare.ts";
+// Unit files share module graphs, so an earlier file may already hold the real
+// HTTP owner inside bench-compare; reload it under this file's mock.
+async function mockedBenchmarkComparison() {
+	vi.resetModules();
+	return (await import("../scripts/bench-compare.ts")).runBenchmarkComparison;
+}
 
 test("a failed HTTP GC diagnostic preserves and resumes the complete ordinary comparison", async () => {
+	const runBenchmarkComparison = await mockedBenchmarkComparison();
 	const root = mkdtempSync(path.join(os.tmpdir(), "mal-http-comparison-"));
 	onTestFinished(() => rmSync(root, { recursive: true, force: true }));
 	const repository = path.join(root, "repository");
