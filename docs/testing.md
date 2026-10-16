@@ -277,21 +277,24 @@ to match the hosted CPU allocations. External actions are pinned to immutable co
 SHAs; local setup actions install Node 26, the repository-pinned Rust toolchain, and
 the platform compiler before running `env:check`.
 
-CI caches npm downloads, the pinned Test262 corpus, completed Rust runtime libraries
-and compiled eval-compiler overlay objects. The Rust sources rarely change while every
-native job otherwise rebuilds each Cargo feature set with fat LTO. The overlay is
-quite large (about 370 translation units), but each unit only holds its own
-functions: image indices live in separate link-table units, so a compiler edit
-recompiles the units it touches. `scripts/ci-native-cache.ts` moves only those
-content-addressed actions, one cache line per job: each job restores the newest
-snapshot of its own line, because a snapshot holds only the overlay variants that
-job built. Import verifies every blob, and `main` saves the recently read set when
-it changed, within 1 GiB. A restored action that no longer
+CI caches npm downloads, the pinned Test262 corpus, and the content-addressed native
+actions a job built: Rust runtime libraries, eval-compiler overlay objects, runtime C
+objects, and generated C objects. The Rust sources rarely change while every native
+job otherwise rebuilds each Cargo feature set with fat LTO. The overlay is quite
+large (about 370 translation units), but each unit only holds its own functions:
+image indices live in separate link-table units, so a compiler edit recompiles the
+units it touches. Test fixtures emit the same C until the compiler changes what
+they compile to, so their objects survive most commits as well.
+`scripts/ci-native-cache.ts` moves only those actions, one cache line per job: each
+job restores the newest snapshot of its own line, because a snapshot holds only the
+variants that job built. Import verifies every blob, and `main` saves the recently
+read set when it changed, within 2 GiB; a full snapshot keeps Rust, overlay and
+runtime actions before the many fixture objects. A restored action that no longer
 matches is simply never read; the weekly native-remainder run stays cold so cache
-identity defects still surface. The rest of the Maligator blob store, runtime and
-generated objects, Zig outputs, and the managed cache are not stored: they change
-with most commits and a developer cache can exceed the repository's 10 GB Actions
-allowance. Gate reports are retained on success and failure for seven days,
+identity defects still surface. Linked binaries, frontend artifacts, Zig outputs,
+and the managed cache are not stored: a test binary is tens of megabytes, and a
+developer cache can exceed the repository's 10 GB Actions allowance.
+Gate reports are retained on success and failure for seven days,
 including their tested source identity. The standards lane alone prepares the
 Test262 corpus. Release workflows remain separate.
 
