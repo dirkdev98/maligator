@@ -1,5 +1,5 @@
 name: Save the native library cache
-description: Publish the Rust runtime libraries a main-branch job used, when the set changed.
+description: Publish the Rust libraries and overlay objects a main-branch job used, when the set changed.
 
 runs:
   using: composite

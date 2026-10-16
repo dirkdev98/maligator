@@ -868,7 +868,6 @@ typedef struct MalNativeProgramRelocation {
     i32 string_base;
     i32 bigint_base;
     i32 literal_template_base;
-    i32 source_position_base;
 } MalNativeProgramRelocation;
 
 enum {
@@ -1280,15 +1279,16 @@ static inline MalEnv *mal_vm_capture_owner_at(MalEnv *env, i32 owner_function_in
  * interpreter's frames live in MalVm.frames; compiled functions run on the C
  * stack and are not there, so each compiled invocation records a lightweight
  * frame here (pushed in mal_vm_enter_compiled, popped in mal_vm_leave_compiled).
- * The compiled function writes its current source position into `pos_id` as it
- * runs (statement-granular). `hidden` is set when the function bailed to the
+ * The compiled function writes its current entry in the function's position table
+ * into `position_entry` as it runs (statement-granular), so generated code never
+ * names an image-wide position id. `hidden` is set when the function bailed to the
  * interpreter — its interpreted frame then represents it, so a capture skips the
  * duplicate. A capture orders this stack against the interpreted frames by
  * `enter_seq`.
  */
 typedef struct MalNativeFrame {
     i32 function_index;
-    i32 pos_id;
+    i32 position_entry;
 #if MAL_PROFILE
     i32 site_id;
 #endif
@@ -2105,7 +2105,7 @@ static inline bool mal_vm_enter_compiled(MalVm *vm, i32 function_index) {
     }
     vm->native_frames[vm->native_frame_count++] = (MalNativeFrame) {
         .function_index = function_index,
-        .pos_id = -1,
+        .position_entry = -1,
 #if MAL_PROFILE
         .site_id = -1,
 #endif
@@ -2113,6 +2113,16 @@ static inline bool mal_vm_enter_compiled(MalVm *vm, i32 function_index) {
         .hidden = false,
     };
     return true;
+}
+
+/** Source position id of entry `entry` in a function's position table, or -1 outside it. */
+static inline i32 mal_function_position_entry_id(const MalFunction *function, i32 entry) {
+    return entry >= 0 && entry < function->position_count ? function->positions[entry].pos_id : -1;
+}
+
+static inline i32 mal_vm_native_frame_pos_id(const MalVm *vm, const MalNativeFrame *frame) {
+    return mal_function_position_entry_id(
+        &vm->runtime_image->functions[frame->function_index], frame->position_entry);
 }
 
 static inline void mal_vm_leave_compiled(MalVm *vm) {
@@ -2264,7 +2274,8 @@ typedef struct MalVmFrame {
         };
         struct {
             i32 compiled_register_count;
-            i32 compiled_suspend_position;
+            /** One past the suspending site's entry in the function's position table. */
+            i32 compiled_suspend_position_entry;
         };
     };
     bool is_compiled;

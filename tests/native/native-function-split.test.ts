@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { ProgramImage } from "../../src/compiler/target/program-image.ts";
 import { emitCompiledFunction } from "../../src/compiler/target/render-native-c.ts";
+import { positionTableEntries } from "../../src/compiler/target/runtime-image.ts";
 import {
 	buildNativeBinaryResult,
 	runToStdout,
@@ -52,7 +53,7 @@ describe("outlined native function parts", () => {
 				native,
 				native.functionIndex,
 				"",
-				true,
+				positionTableEntries(image.runtime.functions[native.functionIndex]!),
 				"static",
 				new Set(),
 				image.native.semanticProtectors,

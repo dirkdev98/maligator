@@ -20,6 +20,8 @@ import { hashDirectoryTrees } from "./file-tree.ts";
 const COMPILER_WIRE_CACHE = path.join(maligatorCacheDirectory(), "compiler-wire");
 const SOURCE_MANIFEST = "artifact.json";
 const COMPILER_NATIVE_TRANSLATION_UNIT_CODE_UNITS = 1024 * 1024;
+// Smaller units confine an edit's recompilation; the maximum still admits large functions.
+const COMPILER_NATIVE_TRANSLATION_UNIT_TARGET_CODE_UNITS = 512 * 1024;
 
 /**
  * Type erasure runs over every compiler source before a bake, so the stripper is
@@ -213,6 +215,8 @@ function compilerNativeSourceKey(
 			"compiler-native-overlay-v3\0",
 			String(COMPILER_NATIVE_TRANSLATION_UNIT_CODE_UNITS),
 			"\0",
+			String(COMPILER_NATIVE_TRANSLATION_UNIT_TARGET_CODE_UNITS),
+			"\0",
 			sourceIdentity,
 			"\0",
 		],
@@ -384,6 +388,7 @@ function ensureSourceArtifacts(
 			image,
 			outputDigest,
 			COMPILER_NATIVE_TRANSLATION_UNIT_CODE_UNITS,
+			COMPILER_NATIVE_TRANSLATION_UNIT_TARGET_CODE_UNITS,
 		);
 		const files = sources.map((unit) => `compiler-${unit.id}.c`);
 		for (const [index, unit] of sources.entries()) {

@@ -49,7 +49,7 @@
 	},
 	{
 		"file": "builtin_eval.c",
-		"sha256": "08a56e73917efab266ba2840ebd9292b52d01bdb6e7522a039e7076a9f935f25"
+		"sha256": "5f1405997b43e2e42b39fc07092149d5c6e49de773d8ed3f50e6fe4dd9ed3588"
 	},
 	{
 		"file": "builtin_finalization_registry.c",
@@ -717,18 +717,18 @@
 	},
 	{
 		"file": "vm.c",
-		"sha256": "b1e0df7a3cc7d2fae2a7e983286af7befd3d37aaa4a38f4cf3237cdcf3edfd09"
+		"sha256": "efaf33f55ac7eccfa15313723e758882dc9588761cd4070d4de503538b2a8f19"
 	},
 	{
 		"file": "vm.h",
-		"sha256": "ad341a0922b35d4559845aa8110662d448093fe9c413000d0c54e55c91abeccd"
+		"sha256": "999cc49917130e55462af50e56eb36292c2f43318cbf71f3551f3bc052bc153d"
 	},
 	{
 		"file": "vm_ops.c",
-		"sha256": "58d5f7a7e8a1675865b4ddd2609f1dcd003c5790396d2caf2c3f1a84052c1324"
+		"sha256": "4950e4ca2ef68ac55a8f8b29d7778e353592fbbe1479c31c0416e63ced50dffa"
 	},
 	{
 		"file": "vm_ops.h",
-		"sha256": "82ccf5f9e2b26423f93f05f34b8ce41ccd1037eb4fb59f96a2ea52091e2f641d"
+		"sha256": "e9273b6ee1bf7a633684f07ae73cf4760beefa7a9ef5bc03d45c05da98eceaf5"
 	}
 ]

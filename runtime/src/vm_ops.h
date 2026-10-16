@@ -3831,7 +3831,7 @@ MalObject *mal_vm_generator_instance_prototype(
 // generator) settle the front request. The compiled body then returns.
 void mal_vm_op_yield_compiled(
     MalVm *vm, MalGeneratorObject *generator, MalValue yielded, i32 value_dst,
-    i32 mode_dst, i32 resume_ip, i32 suspend_position, MalEnv *env);
+    i32 mode_dst, i32 resume_ip, i32 suspend_position_entry, MalEnv *env);
 
 // TERMINAL_YIELD (compiled): preserve a final done:false result while completing
 // the generator. The emitted caller unlinks its root frame, then releases storage.
@@ -3859,7 +3859,7 @@ MalGeneratorObject *mal_vm_op_async_start_compiled(
 // generators; the compiled body returns immediately after.
 void mal_vm_op_await_compiled(
     MalVm *vm, MalGeneratorObject *state, MalValue awaited, i32 value_dst, i32 mode_dst,
-    i32 resume_ip, i32 suspend_position, MalEnv *env);
+    i32 resume_ip, i32 suspend_position_entry, MalEnv *env);
 
 // Coroutine uncaught throw (compiled): the body threw past its own handlers. Mark
 // COMPLETED and free the register buffer; a plain generator leaves the THROW

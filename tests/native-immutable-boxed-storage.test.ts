@@ -9,6 +9,7 @@ import {
 } from "../src/compiler/target/lower-native-storage.ts";
 import { lowerNativeSuspension } from "../src/compiler/target/lower-native-suspension.ts";
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
+import { resolveNativeLinks, TEST_RELOCATION } from "./helpers/native-relocation.ts";
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 function literal(
@@ -72,17 +73,19 @@ describe("immutable boxed native storage", () => {
 		expect(c).toContain(
 			`mal_value_from_bigint(&mal_bigints_pool[${out.op.bigintIndex}])`,
 		);
-		const relocated = emitCompiledFunction(
-			out.native,
-			out.native.functionIndex,
-			"",
-			false,
-			"external",
-			new Set(),
-			[],
-			new Map(),
-			true,
-		)!.source;
+		const relocated = resolveNativeLinks(
+			emitCompiledFunction(
+				out.native,
+				out.native.functionIndex,
+				"",
+				false,
+				"external",
+				new Set(),
+				[],
+				new Map(),
+				TEST_RELOCATION,
+			)!,
+		);
 		expect(relocated).toContain(
 			`runtime_image->bigint_constants[(__mal_relocation->bigint_base + ${out.op.bigintIndex})]`,
 		);

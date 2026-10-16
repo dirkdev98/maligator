@@ -260,7 +260,7 @@ static MalProfileStackCopy mal_profile_copy_stack(MalProfileState *state, MalVm 
         } else {
             MalNativeFrame *frame = &vm->native_frames[native++];
             function_index = frame->function_index;
-            position_id = frame->pos_id;
+            position_id = mal_vm_native_frame_pos_id(vm, frame);
             site_id = frame->site_id;
         }
         if (seen++ < skip) continue;

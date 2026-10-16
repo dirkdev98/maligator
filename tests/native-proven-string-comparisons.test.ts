@@ -9,6 +9,7 @@ import {
 } from "../src/compiler/target/compiler-artifact-codec.ts";
 import { lowerNativeStorage } from "../src/compiler/target/lower-native-storage.ts";
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
+import { positionTableEntries } from "../src/compiler/target/runtime-image.ts";
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 describe("proven String operations in boxed storage", () => {
@@ -66,7 +67,7 @@ describe("proven String operations in boxed storage", () => {
 				fn,
 				index,
 				"",
-				true,
+				positionTableEntries((profile ? image : restored).runtime.functions[index]!),
 				"static",
 				new Set(),
 				[],

@@ -7,6 +7,8 @@ import {
 } from "../src/compiler/target/compiler-artifact-codec.ts";
 import type { ProgramImage } from "../src/compiler/target/program-image.ts";
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
+import { positionTableEntries } from "../src/compiler/target/runtime-image.ts";
+import { TEST_RELOCATION } from "./helpers/native-relocation.ts";
 
 function compileDispatch(labels: ReadonlyArray<string>, profile = false) {
 	const source = `function dispatch(value) { switch (value) { ${labels.map((label, index) => `case ${JSON.stringify(label)}: return ${index};`).join(" ")} default: return -1; } } globalThis.result = dispatch(globalThis.value);`;
@@ -37,12 +39,12 @@ function emitDispatch(image: ProgramImage, relocatable = false) {
 		native,
 		index,
 		"",
-		true,
+		positionTableEntries(image.runtime.functions[index]!),
 		"static",
 		undefined,
 		undefined,
 		undefined,
-		relocatable,
+		relocatable ? TEST_RELOCATION : false,
 		undefined,
 		image.runtime.stringConstants,
 	)!;

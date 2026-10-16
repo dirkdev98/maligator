@@ -52,13 +52,17 @@ rooting, and resource-safety defects can interrupt that order.
       current 128-bit storage, and input-size scaling. Keep conversion costs separate
       from traversal and checksum work.
 
-- [ ] Reuse generated native objects across compiler revisions. The eval-compiler
-      overlay (157 units, ~97 MB of C) and the self-hosted product CLI recompile in
-      full after any compiler edit because emitted C uses image-global source
-      position, global, and function indices and index-named symbols. Per-function
-      relative relocation would keep unchanged units byte-identical, so the object
-      cache and the CI native cache could cover them. Realms, perf counters, and
-      Temporal still select distinct overlay preprocessing.
+- [ ] Apply the overlay's stable emission to ordinary programs. The eval-compiler
+      overlay names functions by a stable stem and reads image indices from link
+      tables, but the self-hosted product CLI (about 30 minutes to build) and
+      `maligator build` still use index-named symbols and immediate indices, so any
+      edit recompiles every unit. ThinLTO should fold the link loads; matched
+      benchmarks have to confirm that before ordinary programs switch.
+- [ ] Trim the eval-compiler overlay's header includes. Each overlay unit includes
+      the full native C header set, so a runtime header edit (28% of recent commits)
+      still changes every unit's preprocessed digest and recompiles all of them.
+      Realms, perf counters, and Temporal also select distinct overlay
+      preprocessing, so each of those builds compiles its own copy.
 
 - [ ] Get the hosted native-remainder workflow green on Linux and macOS. The first
       run exposed cold feature-profile builds and aggregate GC-stress deadlines;

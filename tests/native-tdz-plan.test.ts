@@ -15,6 +15,7 @@ import type {
 	VmRegisterRepresentation,
 } from "../src/compiler/target/program-image.ts";
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
+import { positionTableEntries } from "../src/compiler/target/runtime-image.ts";
 import type { BytecodeInstruction } from "../src/compiler/target/runtime-image.ts";
 
 const ROTATION = `function rotate(left, right, count) {
@@ -114,7 +115,12 @@ describe("native TDZ emission plans", () => {
 			const native = primitiveContract(representation, true);
 			const ip = native.body.instructions.findIndex((op) => op.opcode === "THROW_IF_TDZ");
 			expect(native.storage!.elidedTdzIps).toContain(ip);
-			const emitted = emitCompiledFunction(native, 0, "", true)!;
+			const emitted = emitCompiledFunction(
+				native,
+				0,
+				"",
+				positionTableEntries(native.body),
+			)!;
 			expect(emitted.emittedInstructions.has(ip)).toBe(true);
 			expect(emitted.source).toContain(`L${ip}:;`);
 			expect(emitted.source).toContain(

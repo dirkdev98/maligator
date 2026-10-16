@@ -123,7 +123,6 @@ static bool ensure_compiler(MalVm *vm) {
         .string_base = vm->runtime_image->string_constant_count,
         .bigint_base = vm->runtime_image->bigint_constant_count,
         .literal_template_base = vm->runtime_image->literal_template_data_count,
-        .source_position_base = vm->runtime_image->source_position_count,
     };
     i32 entry = mal_vm_splice_runtime_image(vm, compiler_image);
     if (entry < 0) {

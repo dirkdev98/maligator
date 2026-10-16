@@ -9,6 +9,7 @@ import {
 } from "../src/compiler/target/lower-native-storage.ts";
 import { lowerNativeSuspension } from "../src/compiler/target/lower-native-suspension.ts";
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
+import { resolveNativeLinks, TEST_RELOCATION } from "./helpers/native-relocation.ts";
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 function literal(
@@ -54,17 +55,19 @@ describe("immutable native string storage", () => {
 
 	it("uses string-base relocation for an immutable literal expression", () => {
 		const out = literal();
-		const source = emitCompiledFunction(
-			out.native,
-			out.native.functionIndex,
-			"",
-			false,
-			"external",
-			new Set(),
-			[],
-			new Map(),
-			true,
-		)!.source;
+		const source = resolveNativeLinks(
+			emitCompiledFunction(
+				out.native,
+				out.native.functionIndex,
+				"",
+				false,
+				"external",
+				new Set(),
+				[],
+				new Map(),
+				TEST_RELOCATION,
+			)!,
+		);
 		expect(source).toContain(
 			`vm->runtime_image->string_constants[(__mal_relocation->string_base + ${out.op.stringIndex})]`,
 		);

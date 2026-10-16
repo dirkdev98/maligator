@@ -197,6 +197,8 @@ interface RuntimeSource {
 	layerDirectory: string;
 	logicalPath: string;
 	includeArguments?: Array<string>;
+	/** Overlay objects churn with compiler edits, so CI carries them without runtime objects. */
+	objectStage?: "compiler-overlay-object";
 }
 
 export function compilerNativeOverlayEnabled(
@@ -367,6 +369,7 @@ function runtimeSources(
 			layer: "engine",
 			layerDirectory: sourceRoot,
 			logicalPath: path.posix.join("<eval-compiler>", name),
+			objectStage: "compiler-overlay-object",
 		});
 	}
 	return sources;
@@ -486,7 +489,7 @@ function ensureRuntimeObjects(
 		const action = objectActionKey(context, layout, source, digest);
 		const cached = readArtifactAction(
 			context.cacheDirectory,
-			"runtime-object",
+			source.objectStage ?? "runtime-object",
 			RUNTIME_OBJECT_PRODUCER,
 			action,
 		);
@@ -538,7 +541,7 @@ function ensureRuntimeObjects(
 	for (const { source, action, output } of pending) {
 		const published = publishArtifactAction(
 			context.cacheDirectory,
-			"runtime-object",
+			source.objectStage ?? "runtime-object",
 			RUNTIME_OBJECT_PRODUCER,
 			action,
 			[{ name: "object.o", file: output }],

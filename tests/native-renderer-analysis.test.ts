@@ -4,6 +4,8 @@ import {
 	directCompiledEntryKey,
 	emitCompiledFunction,
 } from "../src/compiler/target/render-native-c.ts";
+import { positionTableEntries } from "../src/compiler/target/runtime-image.ts";
+import { TEST_RELOCATION } from "./helpers/native-relocation.ts";
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 const cases = [
@@ -74,12 +76,14 @@ describe("native rendering analysis lifetime", () => {
 					native,
 					native.functionIndex,
 					suffix,
-					debug,
+					debug
+						? positionTableEntries(image.runtime.functions[native.functionIndex]!)
+						: false,
 					"static",
 					available ? targets : new Set(),
 					image.native.semanticProtectors,
 					available ? entries : new Map(),
-					relocatable,
+					relocatable ? TEST_RELOCATION : false,
 					targets,
 					image.runtime.stringConstants,
 				];

@@ -11,6 +11,7 @@ import {
 } from "../src/compiler/target/lower-native-storage.ts";
 import { createConservativeNativePlan } from "../src/compiler/target/program-image.ts";
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
+import { positionTableEntries } from "../src/compiler/target/runtime-image.ts";
 
 function compile(expression = "value.count++") {
 	return compileSemanticProgramToProgramImage(
@@ -88,7 +89,8 @@ describe("native SSA property update plans", () => {
 	});
 
 	it("preserves profile events and rejects adjacent polling edges", () => {
-		const original = compile().native.functions[1]!;
+		const image = compile();
+		const original = image.native.functions[1]!;
 		const profiled = lowerNativeFunctionStorage({
 			...original,
 			body: {
@@ -98,7 +100,12 @@ describe("native SSA property update plans", () => {
 		});
 		const plan = profiled.storage!.propertyNumericUpdates[0]!;
 		expect(plan.materializations.length).toBeGreaterThan(1);
-		const emitted = emitCompiledFunction(profiled, 1, "", true)!;
+		const emitted = emitCompiledFunction(
+			profiled,
+			1,
+			"",
+			positionTableEntries(image.runtime.functions[1]!),
+		)!;
 		for (const ip of plan.claimedIps)
 			expect(emitted.source).toContain(
 				`MAL_PROFILE_SITE_EVENT(vm, ${profiled.body.profileSiteIds![ip]}, MAL_PROFILE_SITE_EXECUTION, 1)`,

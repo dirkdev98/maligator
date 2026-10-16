@@ -15,15 +15,15 @@ import { maligatorCacheDirectory } from "../src/cache-root.ts";
 
 const usage = `usage: node scripts/ci-native-cache.ts import|export DIRECTORY
 
-Moves completed Rust library actions between the Maligator cache and a GitHub
-Actions cache directory. Actions are content-addressed: a restored action whose
-sources, features, toolchain or environment no longer match is never read, so a
-stale snapshot only costs its download. import verifies every blob before
-publishing it and keeps each manifest's last-use time; export keeps the actions
-read within 14 days of the most recent one, newest first, within 1 GiB, and
+Moves completed Rust library and compiler overlay object actions between the
+Maligator cache and a GitHub Actions cache directory. Actions are content-addressed:
+a restored action whose sources, features, toolchain or environment no longer match
+is never read, so a stale snapshot only costs its download. import verifies every
+blob before publishing it and keeps each manifest's last-use time; export keeps the
+actions read within 14 days of the most recent one, newest first, within 1 GiB, and
 reports a digest so unchanged snapshots are not saved again.`;
 
-const STAGES = ["rust-library"];
+const STAGES = ["rust-library", "compiler-overlay-object"];
 const RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
 const MAX_BYTES = 1024 ** 3;
 

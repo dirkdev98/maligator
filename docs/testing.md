@@ -277,14 +277,17 @@ to match the hosted CPU allocations. External actions are pinned to immutable co
 SHAs; local setup actions install Node 26, the repository-pinned Rust toolchain, and
 the platform compiler before running `env:check`.
 
-CI caches npm downloads, the pinned Test262 corpus, and completed Rust runtime
-libraries. The Rust sources rarely change while every native job otherwise rebuilds
-each Cargo feature set with fat LTO. `scripts/ci-native-cache.ts` moves only those
+CI caches npm downloads, the pinned Test262 corpus, completed Rust runtime libraries
+and compiled eval-compiler overlay objects. The Rust sources rarely change while every
+native job otherwise rebuilds each Cargo feature set with fat LTO. The overlay is
+quite large (about 370 translation units), but each unit only holds its own
+functions: image indices live in separate link-table units, so a compiler edit
+recompiles the units it touches. `scripts/ci-native-cache.ts` moves only those
 content-addressed actions, one cache line per platform and sanitizer mode: jobs
 restore the newest snapshot, import verifies every blob, and `main` saves the
 recently read set when it changed, within 1 GiB. A restored action that no longer
 matches is simply never read; the weekly native-remainder run stays cold so cache
-identity defects still surface. The rest of the Maligator blob store, native and
+identity defects still surface. The rest of the Maligator blob store, runtime and
 generated objects, Zig outputs, and the managed cache are not stored: they change
 with most commits and a developer cache can exceed the repository's 10 GB Actions
 allowance. Gate reports are retained on success and failure for seven days,

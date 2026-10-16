@@ -8721,7 +8721,7 @@ MalGeneratorObject *mal_vm_op_generator_start_compiled(
     generator->frame.function = &vm->live_runtime_image.functions[function_index];
     generator->frame.registers = registers;
     generator->frame.compiled_register_count = register_count;
-    generator->frame.compiled_suspend_position = 0;
+    generator->frame.compiled_suspend_position_entry = 0;
     generator->frame.is_compiled = true;
     generator->frame.arguments = owned_arguments;
     generator->frame.argument_count = generator->frame.function->needs_arguments
@@ -8750,7 +8750,7 @@ MalGeneratorObject *mal_vm_op_generator_start_compiled(
 
 void mal_vm_op_yield_compiled(
     MalVm *vm, MalGeneratorObject *generator, MalValue yielded, i32 value_dst,
-    i32 mode_dst, i32 resume_ip, i32 suspend_position, MalEnv *env) {
+    i32 mode_dst, i32 resume_ip, i32 suspend_position_entry, MalEnv *env) {
     // The caller completes its snapshot and unlinks before this helper can resume or free it.
     MalValue roots[] = {mal_value_from_object((MalObject *) generator), yielded};
     MalRootSpan root_span;
@@ -8762,7 +8762,7 @@ void mal_vm_op_yield_compiled(
     generator->resume_mode_register = mode_dst;
     generator->state = MAL_GENERATOR_SUSPENDED_YIELD;
     generator->frame.instruction_pointer = resume_ip;
-    generator->frame.compiled_suspend_position = suspend_position + 1;
+    generator->frame.compiled_suspend_position_entry = suspend_position_entry + 1;
     if (generator->frame.env != nullptr) {
         mal_gc_write_barrier_env(generator->frame.env);
     }
@@ -8880,7 +8880,7 @@ MalGeneratorObject *mal_vm_op_async_start_compiled(
     state->frame.function = &vm->live_runtime_image.functions[function_index];
     state->frame.registers = registers;
     state->frame.compiled_register_count = register_count;
-    state->frame.compiled_suspend_position = 0;
+    state->frame.compiled_suspend_position_entry = 0;
     state->frame.is_compiled = true;
     state->frame.arguments = owned_arguments;
     state->frame.argument_count = state->frame.function->needs_arguments
@@ -8909,7 +8909,7 @@ MalGeneratorObject *mal_vm_op_async_start_compiled(
 
 void mal_vm_op_await_compiled(
     MalVm *vm, MalGeneratorObject *state, MalValue awaited, i32 value_dst, i32 mode_dst,
-    i32 resume_ip, i32 suspend_position, MalEnv *env) {
+    i32 resume_ip, i32 suspend_position_entry, MalEnv *env) {
     MalValue roots[] = {mal_value_from_object((MalObject *) state), awaited};
     MalRootSpan root_span;
     mal_gc_root(&root_span, roots, 2);
@@ -8917,7 +8917,7 @@ void mal_vm_op_await_compiled(
     state->resume_mode_register = mode_dst;
     state->state = MAL_GENERATOR_SUSPENDED_YIELD;
     state->frame.instruction_pointer = resume_ip;
-    state->frame.compiled_suspend_position = suspend_position + 1;
+    state->frame.compiled_suspend_position_entry = suspend_position_entry + 1;
     // SATB: frame.env is a traced heap field being overwritten; shade the previous env.
     if (state->frame.env != nullptr) {
         mal_gc_write_barrier_env(state->frame.env);

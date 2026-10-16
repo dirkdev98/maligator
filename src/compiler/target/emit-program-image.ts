@@ -19,6 +19,7 @@ import type { CompiledFunction } from "./render-native-c.ts";
 import {
 	compressPositions,
 	computeArgumentRetentionLimit,
+	positionTableEntries,
 	validateRuntimeImageMetadata,
 	vmGuardedCallSideTag,
 	vmSafepointRootMapsAreTrusted,
@@ -156,7 +157,7 @@ export const NATIVE_C_HEADER_LINES = [
 	"#define MAL_ROOT_MASK(mask) (__gc_frame.inactive_slots = UINT64_C(mask))",
 	"#define MAL_ROOT_MASK_ROW(row) mal_gc_root_frame_set_inactive(&__gc_frame, __gc_inactive_rows[row][0], &__gc_inactive_rows[row][1], countof(__gc_inactive_rows[0]) - 1)",
 	"#define MAL_THREW() (vm->completion.kind == MAL_COMPLETION_THROW)",
-	"#define MAL_FRAME_POS(pos) (vm->native_frames[vm->native_frame_count - 1].pos_id = (pos))",
+	"#define MAL_FRAME_POS(entry) (vm->native_frames[vm->native_frame_count - 1].position_entry = (entry))",
 	"#define MAL_STRING_ROW(code_units_value, length_value) { .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_STRING), .storage = MAL_STRING_STORAGE_EXTERNAL, .hash = 0, .length = length_value, .code_units = code_units_value }",
 	"#define MAL_LATIN1_STRING_ROW(units_value, length_value) { .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_STRING), .storage = MAL_STRING_STORAGE_EXTERNAL, .latin1 = 1, .hash = 0, .length = length_value, .latin1_units = units_value }",
 	"#define MAL_LINE_ENTRY(start_ip_value, pos_id_value) { .start_ip = start_ip_value, .pos_id = pos_id_value }",
@@ -762,7 +763,8 @@ function emitNativeFunctions(
 		maxCodeUnits?: number;
 		/** Definitions that do not fit one translation unit with their declarations. */
 		excludedSymbols?: ReadonlySet<string>;
-		relocatable?: boolean;
+		/** Relocatable overlay emission, naming each function by its stable stem. */
+		symbolStems?: ReadonlyArray<string>;
 		nativeFunctionSplit?: NativeSplitPolicy;
 	},
 ): {
@@ -858,6 +860,9 @@ function emitNativeFunctions(
 	const strictCompiledTargets = new Set(
 		image.runtime.functions.flatMap((fn, index) => (fn.strict ? [index] : [])),
 	);
+	const framePositions = image.runtime.functions.map((fn) =>
+		options.debug ? positionTableEntries(fn) : false,
+	);
 	const render = (
 		functionIndex: number,
 		availability: NativeCompilationAvailability,
@@ -867,12 +872,14 @@ function emitNativeFunctions(
 			image.native.functions[functionIndex]!,
 			functionIndex,
 			options.suffix,
-			options.debug,
+			framePositions[functionIndex]!,
 			options.linkage,
 			availability.directCompiledTargets,
 			image.native.semanticProtectors,
 			availability.directCompiledEntries,
-			options.relocatable === true,
+			options.symbolStems === undefined
+				? false
+				: { symbolStem: options.symbolStems[functionIndex]! },
 			strictCompiledTargets,
 			image.runtime.stringConstants,
 			callbackEntries,
@@ -923,7 +930,7 @@ function emitNativeFunctions(
 		directCompiledEntries: new Map(),
 	};
 	let compiled = image.runtime.functions.map((_fn, index) => emit(index, unavailable));
-	if (options.relocatable === true) {
+	if (options.symbolStems !== undefined) {
 		return { compiled, availability: unavailable };
 	}
 	for (let iteration = 0; iteration <= image.runtime.functions.length + 1; iteration++) {
@@ -1784,11 +1791,36 @@ export function emitProgramTranslationUnits(
 	];
 }
 
-/** Emit only relocation-aware native entries for a runtime image loaded from wire. */
+/** Symbol stems that survive unrelated image edits; the partition key is the identity. */
+function nativeOverlaySymbolStems(partitionKeys: ReadonlyArray<string>): Array<string> {
+	const owners = new Map<string, string>();
+	return partitionKeys.map((key) => {
+		const stem = [0, 1]
+			.map((round) =>
+				stablePartitionHash(key, round, "symbol:").toString(16).padStart(8, "0"),
+			)
+			.join("");
+		const owner = owners.get(stem);
+		if (owner !== undefined)
+			throw new Error(
+				`native overlay symbol stem ${stem} is shared by ${JSON.stringify(owner)} and ${JSON.stringify(key)}`,
+			);
+		owners.set(stem, key);
+		return stem;
+	});
+}
+
+/**
+ * Emit only relocation-aware native entries for a runtime image loaded from wire.
+ *
+ * A code unit's text depends only on its functions, so its object survives image
+ * edits elsewhere. Every image index lives in link arrays in separate data units.
+ */
 export function emitRelocatableNativeOverlayTranslationUnits(
 	image: ProgramImage,
 	wireDigest: string,
 	maxCodeUnits = TRANSLATION_UNIT_HARD_MAXIMUM_CODE_UNITS,
+	targetCodeUnits = maxCodeUnits,
 ): Array<GeneratedTranslationUnit> {
 	if (!/^[0-9a-f]{64}$/.test(wireDigest)) {
 		throw new Error(
@@ -1798,15 +1830,25 @@ export function emitRelocatableNativeOverlayTranslationUnits(
 	if (!Number.isSafeInteger(maxCodeUnits) || maxCodeUnits <= 0) {
 		throw new RangeError("translation-unit code-unit budget must be a positive integer");
 	}
+	if (
+		!Number.isSafeInteger(targetCodeUnits) ||
+		targetCodeUnits <= 0 ||
+		targetCodeUnits > maxCodeUnits
+	) {
+		throw new RangeError(
+			"translation-unit code-unit target must be a positive integer within the maximum",
+		);
+	}
 	validateImageForEmission(image);
 	const suffix = "_eval_compiler";
+	const functionPartitionKeys = compiledFunctionPartitionKeys(image);
 	const { compiled } = emitNativeFunctions(image, {
 		useCompiled: true,
 		suffix,
 		debug: true,
 		linkage: "external",
 		maxCodeUnits,
-		relocatable: true,
+		symbolStems: nativeOverlaySymbolStems(functionPartitionKeys),
 	});
 	const declarations = compiled.flatMap((fn) =>
 		fn === null ? [] : [`MAL_DECLARE_COMPILED(${fn.symbol});`],
@@ -1847,12 +1889,39 @@ export function emitRelocatableNativeOverlayTranslationUnits(
 			definitions: [],
 		},
 	];
+	const linkHeaderLines = ['#include "defaults.h"'];
+	const linkHeader = linkHeaderLines.join("\n");
+	let links: Array<string> = [];
+	let linkCodeUnits = linkHeader.length;
+	const flushLinks = () => {
+		if (links.length === 0) return;
+		units.push({
+			id: `native-overlay-links-${String(units.length)}`,
+			kind: "data",
+			source: [linkHeader, ...links].join("\n"),
+			headerFiles: generatedHeaderFiles(linkHeaderLines),
+			definitions: [],
+		});
+		links = [];
+		linkCodeUnits = linkHeader.length;
+	};
+	for (const fn of compiled) {
+		if (fn?.link === undefined || fn.link.length === 0) continue;
+		const definition = `const i32 ${fn.symbol}_link[] = { ${fn.link.map((slot) => slot.index).join(", ")} };`;
+		if (linkHeader.length + 1 + definition.length > maxCodeUnits)
+			throw new RangeError(
+				`native overlay link table '${fn.symbol}_link' requires ${definition.length} code units; translation-unit maximum is ${maxCodeUnits}`,
+			);
+		if (linkCodeUnits + 1 + definition.length > targetCodeUnits) flushLinks();
+		links.push(definition);
+		linkCodeUnits += 1 + definition.length;
+	}
+	flushLinks();
 	type NativeOverlayFunction = {
 		fn: CompiledFunction;
 		partitionKey: string;
 		partitionHashes: Array<number | undefined>;
 	};
-	const functionPartitionKeys = compiledFunctionPartitionKeys(image);
 	const bodies: Array<NativeOverlayFunction> = compiled.flatMap((fn, index) =>
 		fn === null
 			? []
@@ -1868,7 +1937,7 @@ export function emitRelocatableNativeOverlayTranslationUnits(
 			(total, { fn }) => total + 1 + fn.source.length,
 			header.length,
 		);
-		if (sourceCodeUnits <= maxCodeUnits || functions.length === 1) {
+		if (sourceCodeUnits <= targetCodeUnits || functions.length === 1) {
 			const source = [header, ...functions.map(({ fn }) => fn.source)].join("\n");
 			if (source.length > maxCodeUnits) {
 				throw new RangeError(

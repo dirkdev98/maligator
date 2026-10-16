@@ -18,6 +18,7 @@ import {
 	emitProgramTranslationUnits,
 	emitRelocatableNativeOverlayTranslationUnits,
 } from "../src/compiler/target/emit-program-image.ts";
+import type { GeneratedTranslationUnit } from "../src/compiler/target/emit-program-image.ts";
 import { nativeInactiveRootMasks } from "../src/compiler/target/native-root-masks.ts";
 import {
 	vmRegionLicense,
@@ -35,6 +36,10 @@ import type {
 } from "../src/compiler/target/runtime-image.ts";
 import { vmSafepointRootMapsAreTrusted } from "../src/compiler/target/runtime-image.ts";
 import { privateRootRegisters, rootMaskBits } from "./helpers/native-c-source.ts";
+import {
+	resolveNativeLinks,
+	resolveOverlayUnitLinks,
+} from "./helpers/native-relocation.ts";
 import { testPropertyCacheCount } from "./helpers/program-image.ts";
 import { testProgramImage, withNativeFunctionPlan } from "./helpers/program-image.ts";
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
@@ -1494,9 +1499,11 @@ describe("emit-program-image instruction packing", () => {
 			native: createConservativeNativePlan([relocatableFunction]),
 		};
 		const digest = "a".repeat(64);
-		const output = emitRelocatableNativeOverlayTranslationUnits(relocatable, digest)
-			.map((unit) => unit.source)
-			.join("\n");
+		const output = resolveOverlayUnitLinks(
+			emitRelocatableNativeOverlayTranslationUnits(relocatable, digest).map(
+				(unit) => unit.source,
+			),
+		);
 
 		expect(output).toContain(`.wire_digest = "${digest}"`);
 		expect(output).toContain("mal_eval_compiler_native_entries");
@@ -1508,7 +1515,49 @@ describe("emit-program-image instruction packing", () => {
 		expect(output).not.toContain("mal_direct_");
 	});
 
-	it("keeps native-overlay partition identities local across an insertion", () => {
+	it("renders relocatable bodies independently of their image coordinates", () => {
+		const body = (
+			stringIndex: number,
+			globalIndex: number,
+			functionIndex: number,
+		): BytecodeFunction => ({
+			...fn,
+			registerCount: 3,
+			capturedCount: 1,
+			instructions: [
+				{ opcode: "CREATE_STRING", dst: 0, stringIndex },
+				{ opcode: "LOAD_GLOBAL", dst: 1, index: globalIndex },
+				{ opcode: "CREATE_FUNCTION", dst: 2, functionIndex },
+				{ opcode: "RETURN", value: 1 },
+			],
+			positions: [],
+		});
+		const render = (index: number, value: BytecodeFunction) =>
+			emitCompiledFunction(
+				createConservativeNativePlan([value]).functions[0]!,
+				index,
+				"_eval_compiler",
+				false,
+				"external",
+				new Set(),
+				[],
+				new Map(),
+				{ symbolStem: "stable" },
+			)!;
+		const original = render(3, body(1, 2, 0));
+		const shifted = render(7, body(4, 6, 9));
+
+		expect(shifted.symbol).toBe(original.symbol);
+		expect(shifted.source).toBe(original.source);
+		expect(resolveNativeLinks(original)).toContain("(__mal_relocation->string_base + 1)");
+		const relocated = resolveNativeLinks(shifted);
+		expect(relocated).toContain("(__mal_relocation->string_base + 4)");
+		expect(relocated).toContain("(__mal_relocation->global_base + 6)");
+		expect(relocated).toContain("(__mal_relocation->function_base + 9)");
+		expect(relocated).toContain("(__mal_relocation->function_base + 7)");
+	});
+
+	it("keeps native-overlay code units byte-identical across an unrelated insertion", () => {
 		const firstNameIndex = definition.runtime.stringConstants.length;
 		const names = Array.from({ length: 64 }, (_, index) => `overlay_${String(index)}`);
 		const stringConstants = [
@@ -1550,29 +1599,26 @@ describe("emit-program-image instruction packing", () => {
 			},
 			native: createConservativeNativePlan(insertedFunctions),
 		};
-		const locations = (value: ProgramImage) => {
-			const byName = new Map<string, string>();
-			for (const unit of emitRelocatableNativeOverlayTranslationUnits(
-				value,
-				"a".repeat(64),
-				30_000,
-			)) {
-				for (const item of unit.definitions) {
-					const match = /^mal_compiled_(\d+)_eval_compiler$/.exec(item.symbol);
-					if (match === null) continue;
-					const runtimeFunction = value.runtime.functions[Number(match[1])]!;
-					const codeUnits =
-						value.runtime.stringConstants[runtimeFunction.nameStringIndex]!;
-					byName.set(String.fromCharCode(...codeUnits), unit.id);
-				}
-			}
-			return byName;
-		};
-		const before = locations(image);
-		const after = locations(changed);
-		const stable = names.filter((name) => before.get(name) === after.get(name));
+		const codeUnits = (value: ProgramImage) =>
+			emitRelocatableNativeOverlayTranslationUnits(value, "a".repeat(64), 30_000).filter(
+				(unit) => unit.definitions.length > 0,
+			);
+		const symbols = (units: ReadonlyArray<GeneratedTranslationUnit>) =>
+			units.flatMap((unit) => unit.definitions.map(({ symbol }) => symbol));
+		const before = codeUnits(image);
+		const after = codeUnits(changed);
+		const previous = new Set(symbols(before));
+		const inserted = symbols(after).filter((symbol) => !previous.has(symbol));
+		expect(inserted).toHaveLength(1);
+		const sources = new Map(before.map((unit) => [unit.id, unit.source]));
+		const untouched = after.filter((unit) =>
+			unit.definitions.every(({ symbol }) => symbol !== inserted[0]),
+		);
+		for (const unit of untouched)
+			if (sources.has(unit.id)) expect(unit.source).toBe(sources.get(unit.id));
+		const kept = symbols(untouched.filter((unit) => sources.has(unit.id)));
 
-		expect(stable.length).toBeGreaterThan((names.length * 3) / 4);
+		expect(kept.length).toBeGreaterThan((names.length * 3) / 4);
 	});
 
 	it("emits trusted portable root tables only for verified in-process lowering", () => {

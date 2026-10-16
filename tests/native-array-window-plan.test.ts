@@ -15,6 +15,7 @@ import {
 	validateNativeStorage,
 } from "../src/compiler/target/lower-native-storage.ts";
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
+import { positionTableEntries } from "../src/compiler/target/runtime-image.ts";
 
 function compile(kind: "presence" | "pair") {
 	return compileSemanticProgramToProgramImage(
@@ -135,7 +136,8 @@ describe("persisted array ownership windows", () => {
 	it.each(["presence", "pair"] as const)(
 		"retains profile events at every %s instruction",
 		(kind) => {
-			const original = compile(kind).native.functions[1]!;
+			const image = compile(kind);
+			const original = image.native.functions[1]!;
 			const native = lowerNativeFunctionStorage({
 				...original,
 				body: {
@@ -148,7 +150,12 @@ describe("persisted array ownership windows", () => {
 					? native.storage!.arrayPresence[0]!
 					: native.storage!.arrayPairDestructure[0]!;
 			expect(plan).toBeDefined();
-			const source = emitCompiledFunction(native, 1, "", true)!.source;
+			const source = emitCompiledFunction(
+				native,
+				1,
+				"",
+				positionTableEntries(image.runtime.functions[1]!),
+			)!.source;
 			for (const ip of plan.claimedIps)
 				expect(source).toContain(
 					`MAL_PROFILE_SITE_EVENT(vm, ${100 + ip}, MAL_PROFILE_SITE_EXECUTION, 1)`,

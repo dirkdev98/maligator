@@ -15,6 +15,7 @@ import type {
 	VmRegisterRepresentation,
 } from "../src/compiler/target/program-image.ts";
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
+import { positionTableEntries } from "../src/compiler/target/runtime-image.ts";
 import type { BytecodeInstruction } from "../src/compiler/target/runtime-image.ts";
 
 function compile(properties = "value.left + value.right") {
@@ -124,7 +125,8 @@ describe("persisted native numeric property projections", () => {
 	});
 
 	it("retains projection decisions and execution events in profiled native bodies", () => {
-		const original = compile().native.functions[1]!;
+		const image = compile();
+		const original = image.native.functions[1]!;
 		const fn = lowerNativeFunctionStorage({
 			...original,
 			body: {
@@ -134,7 +136,12 @@ describe("persisted native numeric property projections", () => {
 		});
 		expect(fn.storage!.propertyProjections).toHaveLength(1);
 		expect(fn.storage!.expressionIps).toEqual([]);
-		const emitted = emitCompiledFunction(fn, 1, "", true)!;
+		const emitted = emitCompiledFunction(
+			fn,
+			1,
+			"",
+			positionTableEntries(image.runtime.functions[1]!),
+		)!;
 		for (const ip of fn.storage!.propertyProjections[0]!.claimedIps) {
 			expect(emitted.emittedInstructions.has(ip)).toBe(true);
 			expect(emitted.source).toContain(

@@ -11,6 +11,7 @@ import {
 } from "../src/compiler/target/lower-native-storage.ts";
 import { analyzeNativeBodyFacts } from "../src/compiler/target/native-body-facts.ts";
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
+import { positionTableEntries } from "../src/compiler/target/runtime-image.ts";
 
 function compile(profile = false) {
 	return compileSemanticProgramToProgramImage(
@@ -60,7 +61,8 @@ describe("native root publication across ordinary continuations", () => {
 				expect(targetCall).toBeGreaterThanOrEqual(target);
 				expect(target).toBeGreaterThan(fn.body.instructions.indexOf(branch) + 1);
 				expect(fn.storage!.rootPublicationContinuations).toContain(target);
-				const selected = emitCompiledFunction(fn, fn.functionIndex, "", true)!;
+				const positions = positionTableEntries(image.runtime.functions[1]!);
+				const selected = emitCompiledFunction(fn, fn.functionIndex, "", positions)!;
 				const reset = emitCompiledFunction(
 					{
 						...fn,
@@ -72,7 +74,7 @@ describe("native root publication across ordinary continuations", () => {
 					},
 					fn.functionIndex,
 					"",
-					true,
+					positions,
 				)!;
 				const beforeTargetCall = (source: string) => {
 					const start = source.indexOf(`L${target}:;`);
@@ -158,12 +160,13 @@ describe("native root publication across ordinary continuations", () => {
 			);
 			expect(fn.storage!.rootPublicationContinuations).toContain(target);
 			expect(fn.body.handlers.length).toBeGreaterThan(0);
-			const selected = emitCompiledFunction(fn, fn.functionIndex, "", true)!;
+			const positions = positionTableEntries(image.runtime.functions[1]!);
+			const selected = emitCompiledFunction(fn, fn.functionIndex, "", positions)!;
 			const reset = emitCompiledFunction(
 				{ ...fn, storage: { ...fn.storage!, rootPublicationContinuations: [] } },
 				fn.functionIndex,
 				"",
-				true,
+				positions,
 			)!;
 			const stores = (source: string) =>
 				source.match(/__gc_slots\[\d+\] = r\d+;/g)?.length ?? 0;

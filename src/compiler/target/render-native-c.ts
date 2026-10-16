@@ -569,6 +569,8 @@ export interface CompiledFunction extends NativeCallCoverage {
 	profileDecisions: Array<BackendProfileDecision>;
 	/** The full `static MalValue ...(...) { ... }` definition. */
 	source: string;
+	/** Relocatable bodies read their image indices from `<symbol>_link`, defined elsewhere. */
+	link?: ReadonlyArray<NativeLinkSlot>;
 	/** Additional native-only ordinary-call symbols emitted beside the canonical body. */
 	directEntries: Array<{
 		emittedInstructions: ReadonlySet<number>;
@@ -593,24 +595,61 @@ export type DirectCompiledEntries = ReadonlyMap<
 	NativeDirectEntryPlan & { readonly leaf?: true }
 >;
 
+type NativeRelocationBase =
+	| "function_base"
+	| "global_base"
+	| "string_base"
+	| "bigint_base"
+	| "literal_template_base";
+
+/** One overlay-local index that a relocatable body adds to its runtime relocation base. */
+export interface NativeLinkSlot {
+	readonly base: NativeRelocationBase;
+	readonly index: number;
+}
+
+/**
+ * Relocatable emission for a spliced native overlay. The body is named by a
+ * caller-chosen stem and reads image indices from its link table, so its text
+ * changes only when the function itself does.
+ */
+export interface NativeRelocatableEmission {
+	readonly symbolStem: string;
+}
+
 interface NativeRelocationExpressions {
 	readonly enabled: boolean;
+	/** Slots in first-use order, referenced as `<link symbol>[slot]`. */
+	readonly link: ReadonlyArray<NativeLinkSlot>;
 	functionIndex(index: number): string;
 	ownerFunctionIndex(index: number): string;
 	globalIndex(index: number): string;
 	stringIndex(index: number): string;
 	bigintIndex(index: number): string;
 	templateOffset(index: number): string;
-	sourcePosition(index: number): string;
 	stringValue(index: number): string;
 	bigintValue(index: number, suffix: string): string;
 }
 
-function nativeRelocationExpressions(enabled: boolean): NativeRelocationExpressions {
-	const indexed = (base: string, index: number): string =>
-		enabled ? `(__mal_relocation->${base} + ${index})` : String(index);
+function nativeRelocationExpressions(
+	linkSymbol: string | undefined,
+): NativeRelocationExpressions {
+	const link: Array<NativeLinkSlot> = [];
+	const slots = new Map<string, number>();
+	const indexed = (base: NativeRelocationBase, index: number): string => {
+		if (linkSymbol === undefined) return String(index);
+		const key = `${base}:${index}`;
+		let slot = slots.get(key);
+		if (slot === undefined) {
+			slot = link.push({ base, index }) - 1;
+			slots.set(key, slot);
+		}
+		return `(__mal_relocation->${base} + ${linkSymbol}[${slot}])`;
+	};
+	const enabled = linkSymbol !== undefined;
 	return {
 		enabled,
+		link,
 		functionIndex: (index) => indexed("function_base", index),
 		ownerFunctionIndex: (index) =>
 			index < 0 ? String(index) : indexed("function_base", index),
@@ -618,7 +657,6 @@ function nativeRelocationExpressions(enabled: boolean): NativeRelocationExpressi
 		stringIndex: (index) => indexed("string_base", index),
 		bigintIndex: (index) => indexed("bigint_base", index),
 		templateOffset: (index) => indexed("literal_template_base", index),
-		sourcePosition: (index) => indexed("source_position_base", index),
 		// Widening mutates the row, so literals must use the current VM's copy.
 		stringValue: (index) =>
 			`mal_value_from_string(&vm->runtime_image->string_constants[${indexed("string_base", index)}])`,
@@ -633,11 +671,30 @@ export function directCompiledEntryKey(functionIndex: number, entryId: number): 
 	return `${functionIndex}:${entryId}`;
 }
 
-const UNRELOCATED_NATIVE_EXPRESSIONS = nativeRelocationExpressions(false);
+const UNRELOCATED_NATIVE_EXPRESSIONS = nativeRelocationExpressions(undefined);
+
+/**
+ * Debug emission publishes a frame's source position as the matching entry of the
+ * image function's position table (see `positionTableEntries`).
+ */
+export type NativeFramePositions = ReadonlyMap<number, number>;
+
+function nativePositionEntry(
+	positions: NativeFramePositions,
+	functionIndex: number,
+	pos: number,
+): number {
+	const entry = positions.get(pos);
+	if (entry === undefined)
+		throw new Error(
+			`Native function ${functionIndex} publishes source position ${pos} outside its position table`,
+		);
+	return entry;
+}
 
 interface CoroutineContext {
 	readonly suspension: NativeSuspensionPlan;
-	readonly positions: ReadonlyArray<number>;
+	positionEntry(ip: number): number;
 	functionIndex: number;
 	selfSlot: number;
 	/** Runtime condition for copying call arguments into the suspended frame. */
@@ -1463,12 +1520,12 @@ function emitCompiledVariant(
 	native: NativeFunctionPlan,
 	index: number,
 	suffix: string,
-	debug: boolean,
+	debug: NativeFramePositions | false,
 	linkage: "static" | "external" = "static",
 	directCompiledTargets: ReadonlySet<number> = new Set(),
 	semanticProtectors: ReadonlyArray<VmSemanticProtectorFact> = [],
 	directCompiledEntries: DirectCompiledEntries = new Map(),
-	relocatable = false,
+	relocatable: NativeRelocatableEmission | false = false,
 	directEntry?: NativeDirectEntryPlan,
 	strictCompiledTargets: ReadonlySet<number> = new Set(),
 	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
@@ -1479,7 +1536,7 @@ function emitCompiledVariant(
 	// function (a heap register frame + entry dispatch to the saved resume point)
 	// rather than the straight-line shape below (see emitResumableFunction).
 	if (fn.isGenerator || fn.isAsync) {
-		if (directEntry !== undefined || relocatable) return null;
+		if (directEntry !== undefined || relocatable !== false) return null;
 		return emitResumableFunction(
 			fn,
 			analysis,
@@ -1542,7 +1599,13 @@ function emitCompiledVariant(
 		throw new Error(`Invalid register representations for function ${index}`);
 	}
 	const reps = [...nativeContract.registerRepresentations];
-	const relocation = nativeRelocationExpressions(relocatable);
+	const symbol =
+		directEntry !== undefined
+			? `mal_direct_${index}_${directEntry.id}${suffix}`
+			: `mal_compiled_${relocatable === false ? index : relocatable.symbolStem}${suffix}`;
+	const relocation = nativeRelocationExpressions(
+		relocatable === false ? undefined : `${symbol}_link`,
+	);
 
 	const valueRegs = [...storage.rootRegisters];
 	const slotOf = new Map(
@@ -1987,10 +2050,6 @@ function emitCompiledVariant(
 		return null;
 	}
 
-	const symbol =
-		directEntry === undefined
-			? `mal_compiled_${index}${suffix}`
-			: `mal_direct_${index}_${directEntry.id}${suffix}`;
 	const lines: Array<string> = [];
 
 	const directParameters =
@@ -2015,7 +2074,7 @@ function emitCompiledVariant(
 	lines.push(`    (void) env;`);
 	lines.push(`    (void) callee;`);
 	if (directEntry === undefined) {
-		if (relocatable) {
+		if (relocatable !== false) {
 			lines.push(
 				`    const MalNativeProgramRelocation *__mal_relocation = &vm->compiler_native_relocation;`,
 				`    (void) entry_state;`,
@@ -2166,7 +2225,7 @@ function emitCompiledVariant(
 	// already-published frame afterwards — never held unrooted across a safepoint.
 	if (needsRootFrame) {
 		lines.push(
-			`    ${relocatable ? "" : "static "}const MalFrameDescriptor __gc_desc = { .function_index = ${relocation.functionIndex(index)}, .slot_count = ${totalSlots} };`,
+			`    ${relocatable !== false ? "" : "static "}const MalFrameDescriptor __gc_desc = { .function_index = ${relocation.functionIndex(index)}, .slot_count = ${totalSlots} };`,
 			`    MalRootFrame __gc_frame = { .prev = vm->root_frame_head, .desc = &__gc_desc, .slots = ${totalSlots > 0 ? "__gc_slots" : "nullptr"}, .inactive_slots = 0, .env = ${fn.closureCaptureOwners?.length === 0 ? "nullptr" : "env"} };`,
 			`    vm->root_frame_head = &__gc_frame;`,
 		);
@@ -2257,10 +2316,15 @@ function emitCompiledVariant(
 		"}",
 		...trailer,
 	];
-	if (joinedCodeUnits(definition) > maxCodeUnits) return null;
+	const source = [
+		...(relocation.link.length === 0 ? [] : [`extern const i32 ${symbol}_link[];`]),
+		...definition,
+	];
+	if (joinedCodeUnits(source) > maxCodeUnits) return null;
 	return {
 		symbol,
-		source: definition.join("\n"),
+		source: source.join("\n"),
+		...(relocation.enabled ? { link: relocation.link } : {}),
 		profileDecisions,
 		emittedInstructions: body.emittedInstructions,
 		directEntryCalls: body.directEntryCalls,
@@ -2482,12 +2546,12 @@ export function emitCompiledFunction(
 	native: NativeFunctionPlan,
 	index: number,
 	suffix: string,
-	debug: boolean,
+	debug: NativeFramePositions | false,
 	linkage: "static" | "external" = "static",
 	directCompiledTargets: ReadonlySet<number> = new Set(),
 	semanticProtectors: ReadonlyArray<VmSemanticProtectorFact> = [],
 	directCompiledEntries: DirectCompiledEntries = new Map(),
-	relocatable = false,
+	relocatable: NativeRelocatableEmission | false = false,
 	strictCompiledTargets: ReadonlySet<number> = new Set(),
 	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
 	callbackEntries: ReadonlySet<string> = new Set(),
@@ -2533,12 +2597,12 @@ export function createNativeFunctionRenderer(): typeof emitCompiledFunction {
 		native: NativeFunctionPlan,
 		index: number,
 		suffix: string,
-		debug: boolean,
+		debug: NativeFramePositions | false,
 		linkage: "static" | "external" = "static",
 		directCompiledTargets: ReadonlySet<number> = new Set(),
 		semanticProtectors: ReadonlyArray<VmSemanticProtectorFact> = [],
 		directCompiledEntries: DirectCompiledEntries = new Map(),
-		relocatable = false,
+		relocatable: NativeRelocatableEmission | false = false,
 		strictCompiledTargets: ReadonlySet<number> = new Set(),
 		stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
 		callbackEntries: ReadonlySet<string> = new Set(),
@@ -2587,12 +2651,12 @@ function renderCompiledFunction(
 	native: NativeFunctionPlan,
 	index: number,
 	suffix: string,
-	debug: boolean,
+	debug: NativeFramePositions | false,
 	linkage: "static" | "external" = "static",
 	directCompiledTargets: ReadonlySet<number> = new Set(),
 	semanticProtectors: ReadonlyArray<VmSemanticProtectorFact> = [],
 	directCompiledEntries: DirectCompiledEntries = new Map(),
-	relocatable = false,
+	relocatable: NativeRelocatableEmission | false = false,
 	strictCompiledTargets: ReadonlySet<number> = new Set(),
 	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
 	callbackEntries: ReadonlySet<string> = new Set(),
@@ -2620,7 +2684,7 @@ function renderCompiledFunction(
 		maxCodeUnits,
 		splitPolicy,
 	);
-	if (relocatable) return canonical;
+	if (relocatable !== false) return canonical;
 	if (canonical === null) return null;
 	const variants = native.directEntries.flatMap<{
 		entry: NativeDirectEntryPlan;
@@ -2855,7 +2919,7 @@ function emitResumableFunction(
 	native: NativeFunctionPlan,
 	index: number,
 	suffix: string,
-	debug: boolean,
+	debug: NativeFramePositions | false,
 	linkage: "static" | "external",
 	semanticProtectors: ReadonlyArray<VmSemanticProtectorFact>,
 	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
@@ -2898,7 +2962,10 @@ function emitResumableFunction(
 	const rootMaskStatements = nativeRootMaskStatements(inactiveRootMasks.values());
 	const coro: CoroutineContext = {
 		suspension,
-		positions: fn.positions,
+		positionEntry: (ip) => {
+			const pos = fn.positions[ip] ?? -1;
+			return debug === false || pos < 0 ? -1 : nativePositionEntry(debug, index, pos);
+		},
 		functionIndex: index,
 		selfSlot,
 		retainArguments,
@@ -3075,7 +3142,7 @@ function emitResumableFunction(
 	for (const line of initializeFixedCaptureOwners(
 		fn,
 		analysis.captures,
-		nativeRelocationExpressions(false),
+		UNRELOCATED_NATIVE_EXPRESSIONS,
 		false,
 	)) {
 		lines.push(`        ${line}`);
@@ -3131,7 +3198,7 @@ function emitResumableFunction(
 	for (const line of initializeFixedCaptureOwners(
 		fn,
 		analysis.captures,
-		nativeRelocationExpressions(false),
+		UNRELOCATED_NATIVE_EXPRESSIONS,
 		false,
 	)) {
 		lines.push(`        ${line}`);
@@ -4058,7 +4125,7 @@ function emitBody(
 	>,
 	suffix: string,
 	reps: Array<RegisterRep>,
-	debug: boolean,
+	debug: NativeFramePositions | false,
 	gcUnlink: string,
 	thisSlot: number,
 	coro: CoroutineContext | null,
@@ -4080,7 +4147,7 @@ function emitBody(
 	directResultRepresentation: VmRegisterRepresentation | undefined,
 	watchedMethodsGuard: VmGuardPlan | undefined,
 	profileDecisions: Array<BackendProfileDecision>,
-	relocation: NativeRelocationExpressions = nativeRelocationExpressions(false),
+	relocation: NativeRelocationExpressions = UNRELOCATED_NATIVE_EXPRESSIONS,
 	strictCompiledTargets: ReadonlySet<number> = new Set(),
 	directArgumentRepresentations?: ReadonlyArray<VmRegisterRepresentation>,
 	directConstantBooleans: ReadonlyMap<number, boolean> = new Map(),
@@ -5347,16 +5414,18 @@ function emitBody(
 			// Conditional paths can preserve the old mask or publish the instruction's mask.
 			lastPublishedInactiveRootMask = undefined;
 		}
-		if (debug && nativeInstructionMayCaptureStack(fn.instructions[ip]!, reps)) {
+		if (debug !== false && nativeInstructionMayCaptureStack(fn.instructions[ip]!, reps)) {
 			const pos = fn.positions[ip] ?? -1;
 			if (pos !== -1 && pos !== lastPublishedPos) {
-				lines.push(`    MAL_FRAME_POS(${relocation.sourcePosition(pos)});`);
+				lines.push(
+					`    MAL_FRAME_POS(${nativePositionEntry(debug, functionIndex, pos)});`,
+				);
 				lastPublishedPos = pos;
 			}
 		}
 		const profileSiteId = fn.profileSiteIds?.[ip] ?? -1;
 		if (
-			debug &&
+			debug !== false &&
 			profileSiteId >= 0 &&
 			nativeInstructionMayCaptureStack(fn.instructions[ip]!, reps) &&
 			profileSiteId !== lastPublishedSite
@@ -12049,7 +12118,7 @@ function emitInstruction(
 			return [
 				`MalValue yielded_${ip} = ${boxed(instruction.yieldedSrc)};`,
 				...suspendSnapshot(),
-				`${gcUnlink}mal_vm_op_yield_compiled(vm, __coro, yielded_${ip}, ${coro.suspension.valueSlot}, ${coro.suspension.modeSlot}, ${ip + 1}, ${coro.positions[ip] ?? -1}, env);`,
+				`${gcUnlink}mal_vm_op_yield_compiled(vm, __coro, yielded_${ip}, ${coro.suspension.valueSlot}, ${coro.suspension.modeSlot}, ${ip + 1}, ${coro.positionEntry(ip)}, env);`,
 				`return ${coroReturnValue};`,
 			];
 		}
@@ -12081,7 +12150,7 @@ function emitInstruction(
 			return [
 				`MalValue awaited_${ip} = ${boxed(instruction.awaitedSrc)};`,
 				...suspendSnapshot(),
-				`${gcUnlink}mal_vm_op_await_compiled(vm, __coro, awaited_${ip}, ${coro.suspension.valueSlot}, ${coro.suspension.modeSlot}, ${ip + 1}, ${coro.positions[ip] ?? -1}, env);`,
+				`${gcUnlink}mal_vm_op_await_compiled(vm, __coro, awaited_${ip}, ${coro.suspension.valueSlot}, ${coro.suspension.modeSlot}, ${ip + 1}, ${coro.positionEntry(ip)}, env);`,
 				`return ${coroReturnValue};`,
 			];
 		}

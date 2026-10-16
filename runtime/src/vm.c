@@ -3817,7 +3817,7 @@ MalStackTrace *mal_vm_capture_stack(MalVm *vm) {
             MalNativeFrame *frame = &vm->native_frames[native--];
             trace->frames[trace->frame_count++] = (MalStackFrameRecord) {
                 .function_index = frame->function_index,
-                .pos_id = frame->pos_id,
+                .pos_id = mal_vm_native_frame_pos_id(vm, frame),
             };
         }
     }
@@ -3852,7 +3852,8 @@ MalStackTrace *mal_vm_capture_stack(MalVm *vm) {
         segment->frames[0] = (MalStackFrameRecord) {
             .function_index = parent->frame.function_index,
             .pos_id = parent->frame.is_compiled
-                ? parent->frame.compiled_suspend_position - 1
+                ? mal_function_position_entry_id(
+                      function, parent->frame.compiled_suspend_position_entry - 1)
                 : mal_vm_position_for(function, parent->frame.instruction_pointer - 1),
         };
         segment->async_parent = nullptr;

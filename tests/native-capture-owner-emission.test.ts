@@ -6,6 +6,7 @@ import type {
 	BytecodeFunction,
 	BytecodeInstruction,
 } from "../src/compiler/target/runtime-image.ts";
+import { resolveNativeLinks, TEST_RELOCATION } from "./helpers/native-relocation.ts";
 import { testPropertyCacheCount } from "./helpers/program-image.ts";
 
 function emit(
@@ -63,10 +64,10 @@ function emit(
 		new Set(),
 		[],
 		new Map(),
-		relocatable,
+		relocatable ? TEST_RELOCATION : false,
 	);
 	expect(emitted).not.toBeNull();
-	return emitted!;
+	return relocatable ? { ...emitted!, source: resolveNativeLinks(emitted!) } : emitted!;
 }
 
 describe("native lexical owner lookup contract", () => {

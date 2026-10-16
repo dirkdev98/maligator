@@ -11,6 +11,7 @@ import {
 	validateNativeStorage,
 } from "../src/compiler/target/lower-native-storage.ts";
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
+import { positionTableEntries } from "../src/compiler/target/runtime-image.ts";
 
 function compile() {
 	return compileSemanticProgramToProgramImage(
@@ -87,7 +88,8 @@ describe("persisted native boxed property read pairs", () => {
 	});
 
 	it("preserves execution events at both original loads", () => {
-		const original = compile().native.functions[1]!;
+		const image = compile();
+		const original = image.native.functions[1]!;
 		const fn = lowerNativeFunctionStorage({
 			...original,
 			body: {
@@ -95,7 +97,12 @@ describe("persisted native boxed property read pairs", () => {
 				profileSiteIds: original.body.instructions.map((_, ip) => 10 + ip),
 			},
 		});
-		const emitted = emitCompiledFunction(fn, 1, "", true)!;
+		const emitted = emitCompiledFunction(
+			fn,
+			1,
+			"",
+			positionTableEntries(image.runtime.functions[1]!),
+		)!;
 		for (const { ip } of fn.storage!.propertyReadPairs[0]!.loads)
 			expect(emitted.source).toContain(
 				`MAL_PROFILE_SITE_EVENT(vm, ${fn.body.profileSiteIds![ip]}, MAL_PROFILE_SITE_EXECUTION, 1)`,

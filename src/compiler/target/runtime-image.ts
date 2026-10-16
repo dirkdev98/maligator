@@ -3151,7 +3151,7 @@ function buildKnownShapeLayout(
  * (which pulls node:path + the render-native-c native backend).
  */
 export function compressPositions(
-	positions: Array<number>,
+	positions: ReadonlyArray<number>,
 ): Array<{ startIp: number; posId: number }> {
 	const runs: Array<{ startIp: number; posId: number }> = [];
 	for (let ip = 0; ip < positions.length; ++ip) {
@@ -3161,6 +3161,21 @@ export function compressPositions(
 		}
 	}
 	return runs;
+}
+
+/**
+ * The position-table entry that compiled code publishes for each source position
+ * id of `fn`, so generated C names only function-local indices. Native bodies are
+ * lowered separately from `fn` but from the same Core instructions, so they reuse
+ * its positions.
+ */
+export function positionTableEntries(
+	fn: Pick<BytecodeFunction, "positions">,
+): ReadonlyMap<number, number> {
+	const entries = new Map<number, number>();
+	for (const [entry, { posId }] of compressPositions(fn.positions).entries())
+		if (posId >= 0 && !entries.has(posId)) entries.set(posId, entry);
+	return entries;
 }
 
 export interface RuntimeFunctionLoweringPlan {
