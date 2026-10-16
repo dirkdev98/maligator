@@ -94,6 +94,35 @@ describe("CI native cache snapshots", () => {
 		expect(existsSync(path.join(snapshot, binary))).toBe(false);
 	});
 
+	it("carries ThinLTO entries after actions and restores only intact ones", () => {
+		const root = path.join(directory, "cache");
+		const now = Date.now();
+		const action = publishAction(root, "rust-library", "rust", 100, now);
+		const thinLto = (name: string, bytes: number, lastUsedMs: number) => {
+			const file = path.join(root, "thinlto", "0123abcd", `llvmcache-${name}`);
+			mkdirSync(path.dirname(file), { recursive: true });
+			writeFileSync(file, Buffer.alloc(bytes, name));
+			const lastUse = new Date(lastUsedMs);
+			utimesSync(file, lastUse, lastUse);
+			return path.join("thinlto", "0123abcd", `llvmcache-${name}`);
+		};
+		const newest = thinLto("newest", 50, now - 1_000);
+		const intact = thinLto("intact", 50, now - 2_000);
+		const dropped = thinLto("dropped", 50, now - 3_000);
+
+		const snapshot = path.join(directory, "snapshot");
+		exportSnapshot(snapshot, root, 200);
+		expect(existsSync(path.join(snapshot, action))).toBe(true);
+		expect(existsSync(path.join(snapshot, dropped))).toBe(false);
+		writeFileSync(path.join(snapshot, newest), "tampered");
+		vi.spyOn(console, "warn").mockImplementation(() => {});
+
+		const restored = path.join(directory, "restored");
+		importSnapshot(snapshot, restored);
+		expect(existsSync(path.join(restored, newest))).toBe(false);
+		expect(statSync(path.join(restored, intact)).mtimeMs).toBe(now - 2_000);
+	});
+
 	it("restores verified actions with their last-use time and skips corrupt blobs", () => {
 		const source = path.join(directory, "source");
 		const lastUsedMs = Date.now() - DAY_MS;

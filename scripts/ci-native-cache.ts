@@ -9,6 +9,7 @@ import {
 	rmSync,
 	statSync,
 	utimesSync,
+	writeFileSync,
 } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,24 +17,38 @@ import { maligatorCacheDirectory } from "../src/cache-root.ts";
 
 const usage = `usage: node scripts/ci-native-cache.ts import|export DIRECTORY
 
-Moves completed Rust library, compiler overlay, runtime C and generated C object
-actions between the Maligator cache and a GitHub Actions cache directory. Actions are
-content-addressed: a restored action whose sources, features, toolchain or
-environment no longer match is never read, so a stale snapshot only costs its
-download. import verifies every blob before publishing it and keeps each manifest's
-last-use time; export keeps the actions read within 14 days of the most recent one,
-within 2 GiB, in stage order and newest first within a stage, and reports a digest
-so unchanged snapshots are not saved again.`;
+Moves completed Rust library, compiler overlay, runtime C, generated C and Wasm
+actions, then ThinLTO cache entries, between the Maligator cache and a GitHub Actions
+cache directory. Actions and ThinLTO entries are content-addressed: a restored entry
+whose inputs no longer match is never read, so a stale snapshot only costs its
+download. import verifies every blob and ThinLTO entry before publishing it and keeps
+each one's last-use time; export keeps what was read within 14 days of the most
+recent use, within 2 GiB, in stage order and newest first within a stage, and
+reports a digest so unchanged snapshots are not saved again.`;
 
 // Earlier stages are costlier to rebuild and are read first in a job, so a full
 // snapshot keeps them before the many cheap fixture objects that follow.
 const STAGES = [
 	"rust-library",
+	"wasm-rust",
 	"compiler-overlay-object",
 	"runtime-object",
+	"wasm-object",
+	"wasm-archive",
 	"generated-unit-slice",
 	"generated-object",
+	"wasm-link",
 ];
+// Linkers write these and never touch them on a hit, so recency is their write time.
+const THINLTO = "thinlto";
+const THINLTO_MANIFEST = "thinlto.json";
+
+interface ThinLtoEntry {
+	file: string;
+	digest: string;
+	size: number;
+	mtimeMs: number;
+}
 const RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
 const MAX_BYTES = 2 * 1024 ** 3;
 
@@ -95,16 +110,73 @@ function readEntries(root: string): Array<Entry> {
 	});
 }
 
-function snapshotDigest(entries: ReadonlyArray<Entry>): string {
+function snapshotDigest(
+	entries: ReadonlyArray<Entry>,
+	thinLto: ReadonlyArray<ThinLtoEntry> = [],
+): string {
 	return hash(
 		"sha256",
-		JSON.stringify(
-			entries
+		JSON.stringify([
+			...entries
 				.map((entry) => [entry.manifest, ...entry.outputs.map((output) => output.digest)])
 				.sort((left, right) => (left[0]! < right[0]! ? -1 : 1)),
-		),
+			...thinLto
+				.map((entry) => [entry.file, entry.digest])
+				.sort((left, right) => (left[0]! < right[0]! ? -1 : 1)),
+		]),
 		"hex",
 	);
+}
+
+/** ThinLTO cache files as `<cache key directory>/<entry>`, newest first. */
+function readThinLtoFiles(
+	root: string,
+): Array<{ file: string; size: number; mtimeMs: number }> {
+	let directories: Array<string>;
+	try {
+		directories = readdirSync(path.join(root, THINLTO));
+	} catch {
+		return [];
+	}
+	return directories
+		.flatMap((directory) => {
+			let names: Array<string>;
+			try {
+				names = readdirSync(path.join(root, THINLTO, directory));
+			} catch {
+				return [];
+			}
+			return names
+				.filter((name) => name.startsWith("llvmcache-"))
+				.flatMap((name) => {
+					const file = path.join(directory, name);
+					const stats = statSync(path.join(root, THINLTO, file), {
+						throwIfNoEntry: false,
+					});
+					return stats?.isFile() === true
+						? [{ file, size: stats.size, mtimeMs: stats.mtimeMs }]
+						: [];
+				});
+		})
+		.sort((left, right) => right.mtimeMs - left.mtimeMs);
+}
+
+function readThinLtoManifest(directory: string): Array<ThinLtoEntry> {
+	try {
+		const entries = JSON.parse(
+			readFileSync(path.join(directory, THINLTO_MANIFEST), "utf8"),
+		) as Array<ThinLtoEntry>;
+		return entries.filter(
+			(entry) =>
+				typeof entry.file === "string" &&
+				/^[0-9a-f]+[\\/]llvmcache-[\w-]+$/.test(entry.file) &&
+				/^[0-9a-f]{64}$/.test(entry.digest) &&
+				Number.isSafeInteger(entry.size) &&
+				Number.isFinite(entry.mtimeMs),
+		);
+	} catch {
+		return [];
+	}
 }
 
 function copyAtomically(source: string, destination: string): void {
@@ -154,13 +226,29 @@ export function importSnapshot(directory: string, root: string): void {
 		utimesSync(manifest, lastUse, lastUse);
 		imported.push(entry);
 	}
-	const bytes = imported.reduce((total, entry) => total + entry.bytes, 0);
+	const thinLto: Array<ThinLtoEntry> = [];
+	for (const entry of readThinLtoManifest(directory)) {
+		const source = path.join(directory, THINLTO, entry.file);
+		if (!validBlob(source, entry.digest, entry.size)) {
+			console.warn(`[ci-native-cache] skipped corrupt ThinLTO entry ${entry.file}`);
+			continue;
+		}
+		const destination = path.join(root, THINLTO, entry.file);
+		copyAtomically(source, destination);
+		const lastUse = new Date(entry.mtimeMs);
+		utimesSync(destination, lastUse, lastUse);
+		thinLto.push(entry);
+	}
+	const bytes = [...imported, ...thinLto.map((entry) => ({ bytes: entry.size }))].reduce(
+		(total, entry) => total + entry.bytes,
+		0,
+	);
 	console.log(
-		`[ci-native-cache] imported ${imported.length} actions (${(bytes / 1024 ** 2).toFixed(1)} MiB) into ${root}`,
+		`[ci-native-cache] imported ${imported.length} actions and ${thinLto.length} ThinLTO entries (${(bytes / 1024 ** 2).toFixed(1)} MiB) into ${root}`,
 	);
 	appendGitHubFile(
 		process.env.GITHUB_ENV,
-		`MALIGATOR_NATIVE_CACHE_RESTORED=${imported.length === 0 ? "" : snapshotDigest(imported)}`,
+		`MALIGATOR_NATIVE_CACHE_RESTORED=${imported.length + thinLto.length === 0 ? "" : snapshotDigest(imported, thinLto)}`,
 	);
 }
 
@@ -199,9 +287,27 @@ export function exportSnapshot(
 		exported.push(entry);
 		bytes += entry.bytes;
 	}
-	const digest = exported.length === 0 ? "" : snapshotDigest(exported);
+	const thinLtoFiles = readThinLtoFiles(root);
+	const thinLtoCutoff = (thinLtoFiles[0]?.mtimeMs ?? 0) - RETENTION_MS;
+	const thinLto: Array<ThinLtoEntry> = [];
+	for (const file of thinLtoFiles) {
+		if (file.mtimeMs < thinLtoCutoff || bytes + file.size > maxBytes) continue;
+		const source = path.join(root, THINLTO, file.file);
+		const destination = path.join(directory, THINLTO, file.file);
+		copyAtomically(source, destination);
+		const lastUse = new Date(file.mtimeMs);
+		utimesSync(destination, lastUse, lastUse);
+		thinLto.push({ ...file, digest: hash("sha256", readFileSync(destination), "hex") });
+		bytes += file.size;
+	}
+	if (thinLto.length > 0) {
+		mkdirSync(directory, { recursive: true });
+		writeFileSync(path.join(directory, THINLTO_MANIFEST), JSON.stringify(thinLto));
+	}
+	const digest =
+		exported.length + thinLto.length === 0 ? "" : snapshotDigest(exported, thinLto);
 	console.log(
-		`[ci-native-cache] exported ${exported.length} actions (${(bytes / 1024 ** 2).toFixed(1)} MiB) to ${directory}${digest === "" ? "" : ` · ${digest}`}`,
+		`[ci-native-cache] exported ${exported.length} actions and ${thinLto.length} ThinLTO entries (${(bytes / 1024 ** 2).toFixed(1)} MiB) to ${directory}${digest === "" ? "" : ` · ${digest}`}`,
 	);
 	appendGitHubFile(process.env.GITHUB_OUTPUT, `digest=${digest}`);
 }
