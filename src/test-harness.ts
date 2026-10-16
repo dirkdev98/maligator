@@ -59,7 +59,6 @@ import type {
 	NativeBuildCommandResourceEvent,
 	NativeBuildPhaseEvent,
 } from "./native-build-context.ts";
-import { nativeSourcePath } from "./native-source-path.ts";
 import type { MaligatorIntlFeature } from "./public-api.d.ts";
 import { recordTestTelemetry } from "./test-telemetry.ts";
 import {
@@ -394,8 +393,12 @@ function linkProgramImage(
 	name: string,
 	workerImages: ReadonlyArray<CompiledWorkerImage> = [],
 ): LocalBuildResult {
+	const fixtureDirectory = path.dirname(path.resolve(options.fixture));
 	const emitOptions = {
-		sourcePath: nativeSourcePath,
+		// Fixtures usually live in fresh temporary directories; naming files from there
+		// keeps the source-file table, and so its object, identical between runs.
+		sourcePath: (file: string) =>
+			path.isAbsolute(file) ? path.relative(fixtureDirectory, file) : file,
 		compiled,
 		assets: includeConfiguredAssets(config.assets),
 		maligatorSurface: config.surface.maligator,
