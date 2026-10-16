@@ -33,6 +33,31 @@ describe("native cache identity", () => {
 		expect(nested.PATH).toBe(nestedPath);
 	});
 
+	it("shares the native environment identity between npm and direct node launches", () => {
+		const searchPath = ["/toolchain/bin", "/usr/bin"];
+		const npmPrefix = [
+			"/checkout/node_modules/.bin",
+			"/node_modules/.bin",
+			"/node/lib/node_modules/npm/node_modules/@npmcli/run-script/lib/node-gyp-bin",
+		];
+		expect(
+			nativeBuildEnvironmentFingerprint({
+				PATH: [...npmPrefix, ...searchPath].join(path.delimiter),
+			}),
+		).toBe(nativeBuildEnvironmentFingerprint({ PATH: searchPath.join(path.delimiter) }));
+	});
+
+	it.each(["/toolchain/.bin", "/node_modules/bin", "/checkout/node_modules/.bin/clang"])(
+		"keeps a non-npm directory %j in the environment identity",
+		(entry) => {
+			expect(
+				nativeBuildEnvironmentFingerprint({
+					PATH: [entry, "/usr/bin"].join(path.delimiter),
+				}),
+			).not.toBe(nativeBuildEnvironmentFingerprint({ PATH: "/usr/bin" }));
+		},
+	);
+
 	it("retains the first occurrence and executable search order", () => {
 		const first = { PATH: ["/compiler/a", "/compiler/b"].join(path.delimiter) };
 		const duplicate = {

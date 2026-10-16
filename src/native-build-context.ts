@@ -137,6 +137,28 @@ function isCargoBuildVariable(name: string): boolean {
 	);
 }
 
+/**
+ * npm and npx prepend package-binary directories (every ancestor `node_modules/.bin`
+ * and npm's `node-gyp-bin`). They hold JavaScript package shims, never native build
+ * tools, so a build launched through npm and one launched by `node` share artifacts.
+ */
+function nativeSearchPath(value: string): string {
+	const npmGypBin = path.join("@npmcli", "run-script", "lib", "node-gyp-bin");
+	return [
+		...new Set(
+			value
+				.split(path.delimiter)
+				.filter(
+					(entry) =>
+						!(
+							path.basename(entry) === ".bin" &&
+							path.basename(path.dirname(entry)) === "node_modules"
+						) && !entry.endsWith(npmGypBin),
+				),
+		),
+	].join(path.delimiter);
+}
+
 /** Stable projection of build-affecting native variables without unrelated secrets. */
 export function nativeBuildEnvironmentFingerprint(env: NodeJS.ProcessEnv): string {
 	const filtered = Object.entries(env)
@@ -145,14 +167,11 @@ export function nativeBuildEnvironmentFingerprint(env: NodeJS.ProcessEnv): strin
 				value !== undefined &&
 				(BUILD_ENVIRONMENT_NAMES.has(name) || isCargoBuildVariable(name)),
 		)
-		// Nested npm scripts prepend the same tool directories without changing lookup.
 		.map(
 			([name, value]) =>
 				[
 					name,
-					name === "PATH" && value !== undefined
-						? [...new Set(value.split(path.delimiter))].join(path.delimiter)
-						: value,
+					name === "PATH" && value !== undefined ? nativeSearchPath(value) : value,
 				] as const,
 		)
 		.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
