@@ -405,7 +405,7 @@ coverage ledger:
 node scripts/generate-primordial-catalog.ts .cache/primordial-inventory
 node scripts/generate-static-value-coverage.ts
 npm run test:unit -- --run tests/primordial-catalog.test.ts
-npm run test:unit:full-only -- --run tests/primordial-inventory.test.ts
+npm run test:unit:full-only -- --run tests/primordial-inventory.test.ts tests/primordial-inventory-intl.test.ts
 ```
 
 The tracked coverage ledger owns its seed assignments and expansion obligations, so
