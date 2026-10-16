@@ -1,0 +1,103 @@
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { afterAll, describe, expect, it } from "vitest";
+
+const repositoryRoot = path.resolve(import.meta.dirname, "../..");
+const project = mkdtempSync(path.join(os.tmpdir(), "mal-development-fragments-"));
+afterAll(() => rmSync(project, { recursive: true, force: true }));
+
+const dependency = path.join(project, "node_modules", "tiny-dep");
+mkdirSync(dependency, { recursive: true });
+writeFileSync(
+	path.join(dependency, "package.json"),
+	JSON.stringify({ name: "tiny-dep", type: "module", main: "index.js" }),
+);
+writeFileSync(
+	path.join(dependency, "index.js"),
+	[
+		"export function sum(values) { let total = 0; for (const value of values) total += value; return total; }",
+		"export class Counter { #count = 0; increment() { return ++this.#count; } }",
+		"export async function later(value) { await null; return value * 2; }",
+		"export function* pairs(limit) { for (let i = 0; i < limit; i++) yield [i, i * i]; }",
+	].join("\n"),
+);
+writeFileSync(
+	path.join(project, "maligator.build.ts"),
+	'export default { entry: "main.mjs", outputName: "fragments", surface: { node: true } };\n',
+);
+
+function writeApplication(extra: string): void {
+	writeFileSync(
+		path.join(project, "main.mjs"),
+		[
+			'import { Counter, later, pairs, sum } from "tiny-dep";',
+			"const counter = new Counter();",
+			"counter.increment();",
+			"const squares = [...pairs(4)].map(([, square]) => square);",
+			"console.log(sum(squares), counter.increment(), await later(21));",
+			extra,
+		].join("\n"),
+	);
+}
+
+function build(): string {
+	const result = spawnSync(
+		process.execPath,
+		[path.join(repositoryRoot, "src/index.ts"), "build", "--verbose"],
+		{
+			cwd: project,
+			env: { ...process.env, MALIGATOR_DEVELOPMENT_FRAGMENTS: "1" },
+			encoding: "utf-8",
+			maxBuffer: 64 * 1024 * 1024,
+			timeout: 600_000,
+		},
+	);
+	expect(result.status, result.stderr || result.stdout).toBe(0);
+	return `${result.stdout}\n${result.stderr}`;
+}
+
+function runBinary(): string {
+	const directory = path.join(project, ".cache/mal-build/development");
+	const binary = readdirSync(directory).find((name) =>
+		/^fragments-[0-9a-f]+$/.test(name),
+	);
+	expect(binary).toBeDefined();
+	const result = spawnSync(path.join(directory, binary!), [], {
+		encoding: "utf-8",
+		timeout: 60_000,
+	});
+	expect(result.status, result.stderr).toBe(0);
+	return result.stdout;
+}
+
+/** Generated objects the build compiled instead of reusing. */
+function compiledUnits(output: string): Array<string> {
+	return [...output.matchAll(/Generated C object · \w+ · (\S+): miss/g)].map(
+		(match) => match[1]!,
+	);
+}
+
+describe("development builds from relocatable fragments", () => {
+	it("runs the application with each image's native overlay", () => {
+		writeApplication("");
+		build();
+		expect(runBinary()).toBe("14 2 42\n");
+	});
+
+	it("recompiles only the edited application's image after a function is added", () => {
+		writeApplication("const extra = (value) => value * 4;\nconsole.log(extra(5));");
+		const compiled = compiledUnits(build());
+		expect(runBinary()).toBe("14 2 42\n20\n");
+
+		const fragments = new Set(
+			compiled
+				.filter((unit) => unit !== "development-fragment-images")
+				.map((unit) => /^(fragment_f[0-9a-f]+)-/.exec(unit)?.[1]),
+		);
+		expect(compiled).toContain("development-fragment-images");
+		expect([...fragments]).toHaveLength(1);
+		expect(fragments.has(undefined)).toBe(false);
+	});
+});

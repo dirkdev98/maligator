@@ -3,7 +3,10 @@ import type {
 	NativeRelocatableEmission,
 } from "../../src/compiler/target/render-native-c.ts";
 
-export const TEST_RELOCATION: NativeRelocatableEmission = { symbolStem: "overlay" };
+export const TEST_RELOCATION: NativeRelocatableEmission = {
+	symbolStem: "overlay",
+	relocation: "&vm->compiler_native_relocation",
+};
 
 /** Rewrites link-table reads to the overlay-local index each slot holds. */
 export function resolveNativeLinks(

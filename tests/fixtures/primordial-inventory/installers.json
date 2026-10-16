@@ -345,7 +345,7 @@
 	},
 	{
 		"file": "runtime/dev_runner.c",
-		"sha256": "44a8454cd86cdf43ce244f999ef09acbb4b3fb739f524532a7b7b6379c09c519"
+		"sha256": "792fd012b9bdd473329e707f1ee33026e49f3726216a970dab46e2ed029ebc1f"
 	},
 	{
 		"file": "runtime/host_registry.c",

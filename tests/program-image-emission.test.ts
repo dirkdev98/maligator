@@ -1639,7 +1639,7 @@ describe("emit-program-image instruction packing", () => {
 				new Set(),
 				[],
 				new Map(),
-				{ symbolStem: "stable" },
+				{ symbolStem: "stable", relocation: "&vm->compiler_native_relocation" },
 			)!;
 		const original = render(3, body(1, 2, 0));
 		const shifted = render(7, body(4, 6, 9));

@@ -615,6 +615,8 @@ export interface NativeLinkSlot {
  */
 export interface NativeRelocatableEmission {
 	readonly symbolStem: string;
+	/** C expression for the overlay's `const MalNativeProgramRelocation *`. */
+	readonly relocation: string;
 }
 
 interface NativeRelocationExpressions {
@@ -2076,7 +2078,7 @@ function emitCompiledVariant(
 	if (directEntry === undefined) {
 		if (relocatable !== false) {
 			lines.push(
-				`    const MalNativeProgramRelocation *__mal_relocation = &vm->compiler_native_relocation;`,
+				`    const MalNativeProgramRelocation *__mal_relocation = ${relocatable.relocation};`,
 				`    (void) entry_state;`,
 			);
 		} else {

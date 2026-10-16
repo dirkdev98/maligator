@@ -2,13 +2,34 @@
 
 #include "compiler_native.h"
 
+bool mal_native_overlay_attach_fragment(
+    MalVm *vm,
+    const MalNativeOverlay *overlay,
+    i32 function_count,
+    const MalNativeProgramRelocation *relocation
+) {
+    if (overlay->function_count != function_count || overlay->relocation == nullptr) return false;
+    if (*overlay->relocation_attached) {
+        if (memcmp(overlay->relocation, relocation, sizeof *relocation) != 0) return false;
+    } else {
+        *overlay->relocation = *relocation;
+        *overlay->relocation_attached = true;
+    }
+    MalFunction *functions = (MalFunction *) vm->runtime_image->functions;
+    for (i32 index = 0; index < function_count; index++) {
+        if (overlay->entries[index] == nullptr) continue;
+        functions[relocation->function_base + index].compiled = overlay->entries[index];
+    }
+    return true;
+}
+
 #if MAL_EVAL && defined(MAL_COMPILER_NATIVE)
 
 #ifndef MAL_COMPILER_WIRE_DIGEST
 #error "MAL_COMPILER_WIRE_DIGEST must identify the native compiler wire"
 #endif
 
-extern const MalCompilerNativeOverlay mal_eval_compiler_native_overlay;
+extern const MalNativeOverlay mal_eval_compiler_native_overlay;
 
 bool mal_compiler_native_attach(
     MalVm *vm,
@@ -16,7 +37,7 @@ bool mal_compiler_native_attach(
     i32 function_count,
     const MalNativeProgramRelocation *relocation
 ) {
-    const MalCompilerNativeOverlay *overlay = &mal_eval_compiler_native_overlay;
+    const MalNativeOverlay *overlay = &mal_eval_compiler_native_overlay;
     if (overlay->function_count != function_count ||
         strcmp(overlay->wire_digest, MAL_COMPILER_WIRE_DIGEST) != 0) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_EVAL_ERROR_PROTOTYPE,

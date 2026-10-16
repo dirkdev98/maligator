@@ -52,20 +52,19 @@ rooting, and resource-safety defects can interrupt that order.
       current 128-bit storage, and input-size scaling. Keep conversion costs separate
       from traversal and checksum work.
 
-- [ ] Build development binaries from the dependency fragments `run` already uses.
-      On an Express and Valibot app (216 dependencies) a one-line body edit costs
-      `build` 4.4 s, 3.4 s of it the whole-program frontend, and adding two
-      functions costs 10.4 s: program code units embed image-wide function indices,
-      so the insertion shifts every later dependency function and recompiles 13 of
-      15 objects. `run` reuses dependency fragments behind the boxed boundary, and
-      the released CLI reruns the same edit in 0.4 s. Emit each fragment's native
-      code in the eval-compiler overlay's relocatable form (stable symbol stems,
-      link tables against per-image bases) and install every fragment's entries at
-      startup, so a development build compiles only the application fragment. This
-      requires relocatable generators, async functions and direct entries, which
-      the overlay leaves interpreted. Production builds stay whole-program. Measure
-      the edit loop, cold builds, binary size and the development runtime ratio
-      before and after.
+- [ ] Make fragmented development builds the default. With
+      `MALIGATOR_DEVELOPMENT_FRAGMENTS=1` a development `build` links the images
+      `run` loads, each with its own relocatable native overlay, and a runner that
+      splices them at startup. On an Express and Valibot app (216 dependencies) a
+      rebuild after an edit drops from 4.4 s to 0.8 s and adding a function no longer
+      recompiles dependency objects (4 of 31 units). The overlays come from decoded
+      wires with conservative native plans, so `bench/javascript.mjs` runs 1.5x
+      slower than the whole-program development binary (3.73 s against 2.47 s; the
+      interpreter takes 8.59 s). Before switching the default: persist each
+      fragment's optimized native plan next to its wire and emit from it, make
+      generators, async functions and direct entries relocatable (the overlay leaves
+      them interpreted), and support worker images and assets, which the mode
+      rejects today. Production builds stay whole-program.
 
 - [ ] Run the live Postgres suites somewhere hosted. The native remainder is green on
       Linux and macOS, but `postgres-live`, `postgres-query-api-live`,

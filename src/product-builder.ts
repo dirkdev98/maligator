@@ -23,6 +23,7 @@ import { MALIGATOR_VERSION } from "./version.ts";
 
 export const PRODUCT_RUNTIME_ASSET_INCLUDE = [
 	"dev_main.c",
+	"fragment_main.c",
 	"host_main.c",
 	"test262_main.c",
 	"src/**",

@@ -70,6 +70,10 @@ import { emitWorkerImageTranslationUnits } from "./compiler/target/emit-worker-i
 import { compileDependencyFragmentRequest } from "./dependency-fragment-cache.ts";
 import type { DependencyFragmentWorker } from "./dependency-fragment-cache.ts";
 import { cacheDevelopmentAssets } from "./development-assets.ts";
+import {
+	DEVELOPMENT_FRAGMENT_MAIN,
+	developmentFragmentUnits,
+} from "./development-fragments.ts";
 import { createDevelopmentSession } from "./development-session.ts";
 import {
 	cacheFrontendWire,
@@ -606,9 +610,16 @@ function prepareCommandState(
 	for (const warning of plan?.warnings ?? []) reporter.warning(warning);
 
 	const compiledNativeOutput = command.kind !== "build" || command.internal.compiled;
+	// Experimental: link `run`'s relocatable images, each with its own native overlay.
+	const developmentFragments =
+		command.kind === "build" &&
+		!production &&
+		command.internal.compiled &&
+		command.internal.serializePath === undefined &&
+		process.env.MALIGATOR_DEVELOPMENT_FRAGMENTS === "1";
 	const execution = resolveExecution(command, buildConfig, {
 		compiled:
-			command.kind === "build"
+			command.kind === "build" && !developmentFragments
 				? command.internal.compiled && command.internal.serializePath === undefined
 				: command.profile,
 		optimization: production ? "full" : "development",
@@ -649,7 +660,7 @@ function prepareCommandState(
 		// frontend cache hit that would discard its source-site identities.
 		forceCompile:
 			debugEnabled || compilerDiagnostics || command.profile || reporter.verbose,
-		relocatable: command.kind !== "build" && !command.profile,
+		relocatable: (command.kind !== "build" && !command.profile) || developmentFragments,
 		onCompilePhase: (phase, durationMs) => {
 			context.checkpoint?.();
 			compilerPhases.push({ phase, durationMs });
@@ -989,20 +1000,30 @@ function prepareCommandState(
 		}
 
 		const programImage = frontend.programImage;
-		const output = reporter.phase("Generate native code", () => [
-			...emitProgramTranslationUnits(programImage, {
-				sourcePath: nativeSourcePath,
-				compiled: compiledNativeOutput,
-				assets,
-				maligatorSurface: buildConfig.surface.maligator,
-			}),
-			...emitWorkerImageTranslationUnits(frontend.workerImages, {
-				sourcePath: nativeSourcePath,
-				compiled: compiledNativeOutput,
-				assets,
-				maligatorSurface: buildConfig.surface.maligator,
-			}),
-		]);
+		if (developmentFragments && (frontend.workerImages.length > 0 || assets.length > 0))
+			commandError("error: development fragments do not support workers or assets yet");
+		const output = reporter.phase("Generate native code", () =>
+			developmentFragments
+				? developmentFragmentUnits(
+						frontend.runtimeArtifacts,
+						entrypointPath,
+						maligatorCacheDirectory(),
+					)
+				: [
+						...emitProgramTranslationUnits(programImage, {
+							sourcePath: nativeSourcePath,
+							compiled: compiledNativeOutput,
+							assets,
+							maligatorSurface: buildConfig.surface.maligator,
+						}),
+						...emitWorkerImageTranslationUnits(frontend.workerImages, {
+							sourcePath: nativeSourcePath,
+							compiled: compiledNativeOutput,
+							assets,
+							maligatorSurface: buildConfig.surface.maligator,
+						}),
+					],
+		);
 		if (command.kind === "build" && command.internal.emitC)
 			log.info(output.map((unit) => unit.source).join("\n"));
 		reporter.detail("Translation units", output.length);
@@ -1053,12 +1074,14 @@ function prepareCommandState(
 								.join(" · "),
 						);
 					},
-					mainFile: applicationDriverPath(
-						context.installation,
-						buildConfig.surface.webPlatform,
-						buildConfig.surface.node,
-						frontend.workerImages.length > 0,
-					),
+					mainFile: developmentFragments
+						? path.join(context.installation.runtimeDirectory, DEVELOPMENT_FRAGMENT_MAIN)
+						: applicationDriverPath(
+								context.installation,
+								buildConfig.surface.webPlatform,
+								buildConfig.surface.node,
+								frontend.workerImages.length > 0,
+							),
 					cacheSuffix: derivation.cacheSuffix,
 				}).binaryPath,
 			() => {

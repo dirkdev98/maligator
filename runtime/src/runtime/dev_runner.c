@@ -1,5 +1,6 @@
 #include "dev_runner.h"
 
+#include "compiler_native.h"
 #include "development_assets.h"
 #include "vm.h"
 #include "perf_stats.h"
@@ -48,20 +49,27 @@ static u8 *read_file(const char *path, usize *length_out) {
     return buffer;
 }
 
-static MalLoadedRuntimeImage *load_runtime_image(const char *path) {
-    usize length = 0;
-    u8 *buffer = read_file(path, &length);
-    if (buffer == nullptr) {
-        return nullptr;
-    }
+static MalLoadedRuntimeImage *load_runtime_image(const MalDevelopmentImage *image) {
     const char *error = "ok";
     MalLoadedRuntimeImage *loaded = mal_runtime_image_load_with_host_resolver(
-        buffer, length, &error, mal_host_resolve_installer);
-    free(buffer);
+        image->bytes, image->length, &error, mal_host_resolve_installer);
     if (loaded == nullptr) {
-        fprintf(stderr, "could not load development image %s: %s\n", path, error);
+        fprintf(stderr, "could not load development image %s: %s\n", image->label, error);
     }
     return loaded;
+}
+
+static bool attach_overlay(
+    MalVm *vm,
+    const MalDevelopmentImage *image,
+    const MalRuntimeImage *program,
+    const MalNativeProgramRelocation *relocation) {
+    if (image->overlay == nullptr) return true;
+    if (mal_native_overlay_attach_fragment(vm, image->overlay, program->function_count, relocation)) {
+        return true;
+    }
+    fprintf(stderr, "native code does not match development image %s\n", image->label);
+    return false;
 }
 
 int mal_dev_run_wires(
@@ -74,9 +82,37 @@ int mal_dev_run_wires(
     bool web_platform,
     bool node,
     const char *worker_manifest_path) {
+    if (wire_count < 1) return 2;
+    MalDevelopmentImage *images = calloc((usize) wire_count, sizeof(MalDevelopmentImage));
+    if (images == nullptr) return 2;
+    int code = 2;
+    for (int index = 0; index < wire_count; index++) {
+        u8 *bytes = read_file(wire_paths[index], &images[index].length);
+        if (bytes == nullptr) goto done;
+        images[index].bytes = bytes;
+        images[index].label = wire_paths[index];
+    }
+    code = mal_dev_run_images(images, wire_count, asset_manifest_path, entry_path, argc, argv,
+        web_platform, node, worker_manifest_path);
+done:
+    for (int index = 0; index < wire_count; index++) free((u8 *) images[index].bytes);
+    free(images);
+    return code;
+}
+
+int mal_dev_run_images(
+    const MalDevelopmentImage *images,
+    int wire_count,
+    const char *asset_manifest_path,
+    const char *entry_path,
+    int argc,
+    char **argv,
+    bool web_platform,
+    bool node,
+    const char *worker_manifest_path) {
     setvbuf(stdout, nullptr, _IOLBF, 0);
     if (wire_count < 1) return 2;
-    MalLoadedRuntimeImage *loaded = load_runtime_image(wire_paths[0]);
+    MalLoadedRuntimeImage *loaded = load_runtime_image(&images[0]);
     if (loaded == nullptr) {
         return 2;
     }
@@ -97,6 +133,13 @@ int mal_dev_run_wires(
 
     MalVm vm;
     mal_vm_init(&vm, &root_program);
+    const MalNativeProgramRelocation root_relocation = {0};
+    if (!attach_overlay(&vm, &images[0], vm.runtime_image, &root_relocation)) {
+        mal_vm_free(&vm);
+        mal_development_assets_free(development_assets);
+        mal_loaded_runtime_image_free(loaded);
+        return 2;
+    }
     if (mal_host_attach(&vm) == nullptr) {
         mal_vm_free(&vm);
         mal_development_assets_free(development_assets);
@@ -133,18 +176,29 @@ int mal_dev_run_wires(
         i32 entry = 0;
 		const MalRuntimeImage *program = vm.runtime_image;
         if (index > 0) {
-            MalLoadedRuntimeImage *fragment = load_runtime_image(wire_paths[index]);
+            MalLoadedRuntimeImage *fragment = load_runtime_image(&images[index]);
             if (fragment == nullptr) {
                 vm.completion.kind = MAL_COMPLETION_THROW;
                 break;
             }
             program = mal_loaded_runtime_image_get(fragment);
+            const MalNativeProgramRelocation relocation = {
+                .function_base = vm.runtime_image->function_count,
+                .global_base = vm.runtime_image->global_count,
+                .string_base = vm.runtime_image->string_constant_count,
+                .bigint_base = vm.runtime_image->bigint_constant_count,
+                .literal_template_base = vm.runtime_image->literal_template_data_count,
+            };
             entry = mal_vm_splice_runtime_image(&vm, program);
             if (entry < 0) {
                 mal_loaded_runtime_image_free(fragment);
                 break;
             }
             mal_vm_retain_loaded_runtime_image(&vm, fragment);
+            if (!attach_overlay(&vm, &images[index], program, &relocation)) {
+                vm.completion.kind = MAL_COMPLETION_THROW;
+                break;
+            }
         }
         if (index == 0) mal_vm_run_host_installs(&vm, &launch);
         else mal_vm_run_program_host_installs(&vm, program, &launch);

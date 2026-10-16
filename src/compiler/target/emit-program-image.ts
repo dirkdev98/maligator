@@ -768,6 +768,8 @@ function emitNativeFunctions(
 		excludedSymbols?: ReadonlySet<string>;
 		/** Relocatable overlay emission, naming each function by its stable stem. */
 		symbolStems?: ReadonlyArray<string>;
+		/** C expression for the relocation a symbol-stemmed overlay reads. */
+		relocation?: string;
 		nativeFunctionSplit?: NativeSplitPolicy;
 	},
 ): {
@@ -882,7 +884,10 @@ function emitNativeFunctions(
 			availability.directCompiledEntries,
 			options.symbolStems === undefined
 				? false
-				: { symbolStem: options.symbolStems[functionIndex]! },
+				: {
+						symbolStem: options.symbolStems[functionIndex]!,
+						relocation: options.relocation ?? "&vm->compiler_native_relocation",
+					},
 			strictCompiledTargets,
 			image.runtime.stringConstants,
 			callbackEntries,
@@ -1836,12 +1841,30 @@ function nativeOverlaySymbolStems(partitionKeys: ReadonlyArray<string>): Array<s
  * A code unit's text depends only on its functions, so its object survives image
  * edits elsewhere. Every image index lives in link arrays in separate data units.
  */
+/**
+ * Where an overlay keeps the bases of the image it attaches to. The eval compiler
+ * splices whenever a VM first evaluates code, so each VM holds its own; a program
+ * fragment is spliced at startup in a fixed order, so one process-wide cell serves
+ * every VM and later attaches verify it.
+ */
+export type NativeOverlayTarget =
+	| { readonly kind: "eval-compiler" }
+	| { readonly kind: "fragment"; readonly name: string };
+
+const EVAL_COMPILER_OVERLAY: NativeOverlayTarget = { kind: "eval-compiler" };
+
 export function emitRelocatableNativeOverlayTranslationUnits(
 	image: ProgramImage,
 	wireDigest: string,
 	maxCodeUnits = TRANSLATION_UNIT_HARD_MAXIMUM_CODE_UNITS,
 	targetCodeUnits = maxCodeUnits,
+	target: NativeOverlayTarget = EVAL_COMPILER_OVERLAY,
 ): Array<GeneratedTranslationUnit> {
+	if (target.kind === "fragment" && !/^[a-z][a-z0-9_]*$/.test(target.name)) {
+		throw new Error(
+			`native overlay fragment name must be a C identifier: ${target.name}`,
+		);
+	}
 	if (!/^[0-9a-f]{64}$/.test(wireDigest)) {
 		throw new Error(
 			`native overlay wire digest must be lowercase SHA-256: ${wireDigest}`,
@@ -1860,7 +1883,15 @@ export function emitRelocatableNativeOverlayTranslationUnits(
 		);
 	}
 	validateImageForEmission(image);
-	const suffix = "_eval_compiler";
+	const name = target.kind === "fragment" ? `fragment_${target.name}` : "eval_compiler";
+	const suffix = `_${name}`;
+	const unitPrefix = target.kind === "fragment" ? `${name}-` : "";
+	const relocationCell = `mal_${name}_native_relocation`;
+	// Every code unit reads the cell, so its declaration is part of each unit's header.
+	const relocationDeclaration =
+		target.kind === "fragment"
+			? [`extern MalNativeProgramRelocation ${relocationCell};`]
+			: [];
 	const functionPartitionKeys = compiledFunctionPartitionKeys(image);
 	const { compiled } = emitNativeFunctions(image, {
 		useCompiled: true,
@@ -1869,6 +1900,10 @@ export function emitRelocatableNativeOverlayTranslationUnits(
 		linkage: "external",
 		maxCodeUnits,
 		symbolStems: nativeOverlaySymbolStems(functionPartitionKeys),
+		relocation:
+			target.kind === "fragment"
+				? `&${relocationCell}`
+				: "&vm->compiler_native_relocation",
 	});
 	const declarations = compiled.flatMap((fn) =>
 		fn === null ? [] : [`MAL_DECLARE_COMPILED(${fn.symbol});`],
@@ -1879,14 +1914,27 @@ export function emitRelocatableNativeOverlayTranslationUnits(
 		`#define MAL_DECLARE_COMPILED(name) MalValue name${COMPILED_FUNCTION_DECLARATION}`,
 		...declarations,
 		"",
-		"static const MalCompiledFunction mal_eval_compiler_native_entries[] = {",
+		`static const MalCompiledFunction mal_${name}_native_entries[] = {`,
 		...compiled.map((fn) => `    ${fn?.symbol ?? "nullptr"},`),
 		"};",
 		"",
-		"const MalCompilerNativeOverlay mal_eval_compiler_native_overlay = {",
+		...(target.kind === "fragment"
+			? [
+					`MalNativeProgramRelocation ${relocationCell};`,
+					`static bool ${relocationCell}_attached;`,
+					"",
+				]
+			: []),
+		`const MalNativeOverlay mal_${name}_native_overlay = {`,
 		`    .wire_digest = "${wireDigest}",`,
 		`    .function_count = ${compiled.length},`,
-		"    .entries = mal_eval_compiler_native_entries,",
+		`    .entries = mal_${name}_native_entries,`,
+		...(target.kind === "fragment"
+			? [
+					`    .relocation = &${relocationCell},`,
+					`    .relocation_attached = &${relocationCell}_attached,`,
+				]
+			: []),
 		"};",
 	].join("\n");
 	if (table.length > maxCodeUnits) {
@@ -1895,14 +1943,14 @@ export function emitRelocatableNativeOverlayTranslationUnits(
 		);
 	}
 
-	const header = NATIVE_C_HEADER_LINES.join("\n");
+	const header = [...NATIVE_C_HEADER_LINES, ...relocationDeclaration].join("\n");
 	const headerFiles = generatedHeaderFiles([
 		...NATIVE_C_HEADER_LINES,
 		'#include "compiler_native.h"',
 	]);
 	const units: Array<GeneratedTranslationUnit> = [
 		{
-			id: "native-overlay-table",
+			id: `${unitPrefix}native-overlay-table`,
 			kind: "code",
 			source: table,
 			headerFiles,
@@ -1916,7 +1964,7 @@ export function emitRelocatableNativeOverlayTranslationUnits(
 	const flushLinks = () => {
 		if (links.length === 0) return;
 		units.push({
-			id: `native-overlay-links-${String(units.length)}`,
+			id: `${unitPrefix}native-overlay-links-${String(units.length)}`,
 			kind: "data",
 			source: [linkHeader, ...links].join("\n"),
 			headerFiles: generatedHeaderFiles(linkHeaderLines),
@@ -1965,7 +2013,7 @@ export function emitRelocatableNativeOverlayTranslationUnits(
 				);
 			}
 			units.push({
-				id: `native-overlay-code-${prefix || "root"}`,
+				id: `${unitPrefix}native-overlay-code-${prefix || "root"}`,
 				kind: "code",
 				source,
 				headerFiles,
