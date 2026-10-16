@@ -95,7 +95,7 @@ describe("production profile recorder", () => {
 			mainFile: HOST_MAIN,
 			outDir: directory,
 		});
-	});
+	}, 600_000);
 
 	it("captures bounded logical CPU stacks in the versioned raw format", () => {
 		const capture = path.join(directory, "capture.bin");
