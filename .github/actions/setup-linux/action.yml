@@ -50,15 +50,17 @@ runs:
       shell: bash
       run: |
         cache="$RUNNER_TEMP/maligator-cache"
-        # Native lanes write tens of gigabytes of objects and eval-enabled binaries, more
-        # than the hosted root disk holds; its larger ephemeral disk keeps the same paths.
+        # Native lanes write tens of gigabytes of objects and eval-enabled binaries. Use the
+        # larger ephemeral disk when present, and never the 8 GB tmpfs some images mount on
+        # /tmp: test binaries there filled it mid-link with most of the root disk still free.
         if mountpoint -q /mnt &&
           (( $(df --output=avail -B1 /mnt | tail -1) > $(df --output=avail -B1 "$RUNNER_TEMP" | tail -1) )); then
           sudo install -d -o "$(id -u)" -g "$(id -g)" /mnt/maligator-cache /mnt/maligator-tmp
           ln -sfn /mnt/maligator-cache "$cache"
           echo "TMPDIR=/mnt/maligator-tmp" >> "$GITHUB_ENV"
         else
-          mkdir -p "$cache"
+          mkdir -p "$cache" "$RUNNER_TEMP/maligator-tmp"
+          echo "TMPDIR=$RUNNER_TEMP/maligator-tmp" >> "$GITHUB_ENV"
         fi
         echo "MALIGATOR_CACHE_DIR=$cache" >> "$GITHUB_ENV"
         df -h / /mnt 2>/dev/null || df -h /
