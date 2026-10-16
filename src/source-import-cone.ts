@@ -15,7 +15,7 @@ interface SourceConeEntry {
 }
 
 interface SourceConeManifest {
-	schema: 2;
+	schema: 3;
 	entries: Record<string, SourceConeEntry>;
 }
 
@@ -87,7 +87,13 @@ function relativeSourceImports(source: string, filePath: string): Array<string> 
 			add(tokens[next]);
 			continue;
 		}
-		if (tokens[next]?.text === "type" && tokens[next + 1]?.text !== "from") next++;
+		// Type stripping erases type-only declarations, so they never reach the module graph.
+		if (
+			tokens[next]?.text === "type" &&
+			tokens[next + 1]?.text !== "from" &&
+			tokens[next + 1]?.text !== ","
+		)
+			continue;
 		if (token.text === "export") {
 			if (tokens[next]?.text === "{") next = afterBraces(tokens, next);
 			else if (tokens[next]?.text === "*") {
@@ -110,7 +116,7 @@ function relativeSourceImports(source: string, filePath: string): Array<string> 
 function readSourceConeManifest(file: string): SourceConeManifest | undefined {
 	try {
 		const manifest = JSON.parse(readFileSync(file, "utf8")) as SourceConeManifest;
-		return manifest.schema === 2 ? manifest : undefined;
+		return manifest.schema === 3 ? manifest : undefined;
 	} catch {
 		return undefined;
 	}
@@ -187,7 +193,7 @@ export function relativeImportCone(
 	const files = Object.keys(entries).length;
 	if (reused !== files || Object.keys(previous?.entries ?? {}).length !== files) {
 		try {
-			writeFileAtomically(manifestPath, `${JSON.stringify({ schema: 2, entries })}\n`);
+			writeFileAtomically(manifestPath, `${JSON.stringify({ schema: 3, entries })}\n`);
 		} catch {
 			// A read-only cache must not make compilation unavailable.
 		}

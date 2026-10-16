@@ -209,6 +209,36 @@ describe("compiler wire provisioning", () => {
 		expect(bakeCount).toBe(3);
 	});
 
+	it("does not key source bakes to modules reached only through type imports", () => {
+		const fixture = compilerFixture();
+		const cacheRoot = path.join(fixture.root, "wire-cache");
+		const types = path.join(fixture.sourceDirectory, "types.ts");
+		writeFileSync(types, "export interface Shape { size: number }\n");
+		writeFileSync(
+			path.join(fixture.sourceDirectory, "helper.ts"),
+			[
+				'import type { Shape } from "./types.ts";',
+				'export type { Shape as Exported } from "./types.ts";',
+				"export const helper = (shape: Shape) => shape.size;",
+				"",
+			].join("\n"),
+		);
+		let bakeCount = 0;
+		const sourceInput = () => ({
+			kind: "source" as const,
+			sourceDirectory: fixture.sourceDirectory,
+			entrypoint: fixture.entrypoint,
+			cacheRoot,
+			bake: () => new Uint8Array([++bakeCount]),
+		});
+
+		const first = ensureCompilerWire(sourceInput());
+		writeFileSync(types, "export interface Shape { size: number; name: string }\n");
+
+		expect(ensureCompilerWire(sourceInput())).toBe(first);
+		expect(bakeCount).toBe(1);
+	});
+
 	it("keys every compiler-owned module the eval compiler graph loads", () => {
 		const sourceDirectory = path.resolve("src");
 		const entrypoints = [
