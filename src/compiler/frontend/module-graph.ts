@@ -1,3 +1,4 @@
+import { hash } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -151,11 +152,36 @@ interface CachedModuleParse {
 	dependencies: Array<ExtractedDependency>;
 }
 
-/** Retained, single-revision parse cache keyed by stable module path and goal. */
+/** What a graph walk needs from a parse, kept across processes by the parsed source. */
+export interface PersistedModuleParse {
+	sourceDigest: string;
+	type: ModuleRecord["parsed"]["type"];
+	strict: boolean;
+	dependencies: Array<ExtractedDependency>;
+}
+
+/**
+ * Retained, single-revision parse cache keyed by stable module path and goal. With
+ * persisted parses, a module whose parsed source is unchanged skips parsing; its
+ * AST is parsed only if a consumer such as semantic analysis reads it.
+ */
 export class ModuleParseCache {
 	readonly #records = new Map<string, CachedModuleParse>();
+	#persisted: Map<string, PersistedModuleParse> | undefined;
+	#persistedChanged = false;
 	#hits = 0;
 	#misses = 0;
+
+	usePersisted(parses: Record<string, PersistedModuleParse>): void {
+		this.#persisted = new Map(Object.entries(parses));
+	}
+
+	/** The persisted parses when this cache learned new ones, else undefined. */
+	takePersistedChanges(): Record<string, PersistedModuleParse> | undefined {
+		if (!this.#persistedChanged || this.#persisted === undefined) return undefined;
+		this.#persistedChanged = false;
+		return Object.fromEntries(this.#persisted);
+	}
 
 	invalidate(file?: string): void {
 		if (file === undefined) {
@@ -188,6 +214,29 @@ export class ModuleParseCache {
 			return cached;
 		}
 
+		const persistedParses = this.#persisted;
+		const sourceDigest =
+			persistedParses === undefined ? undefined : hash("sha256", source, "hex");
+		const persisted = persistedParses?.get(key);
+		if (persisted !== undefined && persisted.sourceDigest === sourceDigest) {
+			this.#hits++;
+			let ast: ESTree.Program | undefined;
+			const record: CachedModuleParse = {
+				source,
+				goal,
+				parsed: {
+					type: persisted.type,
+					strict: persisted.strict,
+					get ast() {
+						return (ast ??= compute().parsed.ast);
+					},
+				},
+				dependencies: persisted.dependencies,
+			};
+			this.#records.set(key, record);
+			return record;
+		}
+
 		this.#misses++;
 		const result = compute();
 		this.#records.set(key, {
@@ -195,6 +244,15 @@ export class ModuleParseCache {
 			goal,
 			...result,
 		});
+		if (persistedParses !== undefined && sourceDigest !== undefined) {
+			persistedParses.set(key, {
+				sourceDigest,
+				type: result.parsed.type,
+				strict: result.parsed.strict,
+				dependencies: result.dependencies,
+			});
+			this.#persistedChanged = true;
+		}
 		return result;
 	}
 }

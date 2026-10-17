@@ -11,7 +11,11 @@ import {
 } from "node:fs";
 import * as path from "node:path";
 import { maligatorCacheDirectory } from "./cache-root.ts";
+import { compilerProducerIdentity } from "./compiler-cache-identity.ts";
 import { ModuleParseCache } from "./compiler/frontend/module-graph.ts";
+import type { PersistedModuleParse } from "./compiler/frontend/module-graph.ts";
+
+const MODULE_PARSE_SCHEMA = 1;
 
 export const FRONTEND_CACHE_DIRECTORY = path.join(maligatorCacheDirectory(), "frontend");
 
@@ -39,6 +43,49 @@ interface FileDigestManifest {
 	schema: 1;
 	projectRoot: string;
 	files: Record<string, FrontendDependencyIdentity>;
+}
+
+interface ModuleParseManifest {
+	schema: typeof MODULE_PARSE_SCHEMA;
+	/** The graph walk that extracted these dependencies. */
+	producer: string;
+	projectRoot: string;
+	parses: Record<string, PersistedModuleParse>;
+}
+
+function readModuleParseManifest(
+	file: string,
+	producer: string,
+	projectRoot: string,
+): ModuleParseManifest | undefined {
+	try {
+		const manifest = JSON.parse(readFileSync(file, "utf-8")) as ModuleParseManifest;
+		if (
+			manifest.schema !== MODULE_PARSE_SCHEMA ||
+			manifest.producer !== producer ||
+			manifest.projectRoot !== projectRoot ||
+			typeof manifest.parses !== "object" ||
+			manifest.parses === null
+		) {
+			return undefined;
+		}
+		return manifest;
+	} catch {
+		return undefined;
+	}
+}
+
+function publishManifest(file: string, manifest: object): void {
+	const directory = path.dirname(file);
+	mkdirSync(directory, { recursive: true });
+	const temporaryDirectory = mkdtempSync(path.join(directory, ".publish-"));
+	try {
+		const temporaryPath = path.join(temporaryDirectory, "manifest.json");
+		writeFileSync(temporaryPath, `${JSON.stringify(manifest)}\n`);
+		renameSync(temporaryPath, file);
+	} finally {
+		rmSync(temporaryDirectory, { recursive: true, force: true });
+	}
 }
 
 function validDigest(value: unknown): value is string {
@@ -192,6 +239,7 @@ export class FrontendCompilationSession {
 	readonly moduleParses = new ModuleParseCache();
 	#digestManifestPath: string | undefined;
 	#digestManifest: FileDigestManifest | undefined;
+	#parseManifest: { path: string; producer: string; projectRoot: string } | undefined;
 	#digestManifestDirty = false;
 	#invalidated = new Set<string>();
 	#invalidateAll = false;
@@ -217,6 +265,23 @@ export class FrontendCompilationSession {
 			projectRoot,
 			files: {},
 		};
+		const parseManifest = {
+			path: path.join(
+				root,
+				"module-parses",
+				`${frontendDigest(projectRoot).slice(0, 24)}.json`,
+			),
+			producer: compilerProducerIdentity("build-frontend", MODULE_PARSE_SCHEMA),
+			projectRoot,
+		};
+		this.#parseManifest = parseManifest;
+		this.moduleParses.usePersisted(
+			readModuleParseManifest(
+				parseManifest.path,
+				parseManifest.producer,
+				parseManifest.projectRoot,
+			)?.parses ?? {},
+		);
 	}
 
 	invalidate(file?: string): void {
@@ -295,9 +360,20 @@ export class FrontendCompilationSession {
 		});
 	}
 
-	/** Atomically publish file digests learned during this compilation. */
+	/** Atomically publish file digests and parses learned during this compilation. */
 	flush(): void {
 		this.#invalidateAll = false;
+		const parses = this.moduleParses.takePersistedChanges();
+		if (parses !== undefined && this.#parseManifest !== undefined) {
+			const { path: file, producer, projectRoot } = this.#parseManifest;
+			const current = readModuleParseManifest(file, producer, projectRoot);
+			publishManifest(file, {
+				schema: MODULE_PARSE_SCHEMA,
+				producer,
+				projectRoot,
+				parses: { ...current?.parses, ...parses },
+			} satisfies ModuleParseManifest);
+		}
 		if (
 			!this.#digestManifestDirty ||
 			this.#digestManifestPath === undefined ||
@@ -313,16 +389,7 @@ export class FrontendCompilationSession {
 			...this.#digestManifest,
 			files: { ...current?.files, ...this.#digestManifest.files },
 		};
-		const directory = path.dirname(this.#digestManifestPath);
-		mkdirSync(directory, { recursive: true });
-		const temporaryDirectory = mkdtempSync(path.join(directory, ".publish-"));
-		try {
-			const temporaryPath = path.join(temporaryDirectory, "manifest.json");
-			writeFileSync(temporaryPath, `${JSON.stringify(manifest)}\n`);
-			renameSync(temporaryPath, this.#digestManifestPath);
-		} finally {
-			rmSync(temporaryDirectory, { recursive: true, force: true });
-		}
+		publishManifest(this.#digestManifestPath, manifest);
 		this.#digestManifest = manifest;
 		this.#digestManifestDirty = false;
 	}

@@ -481,6 +481,38 @@ describe("normal build frontend cache", () => {
 		expect(compileBuildFrontend(options).moduleParses).toEqual({ hits: 1, misses: 1 });
 	});
 
+	it("reuses module parses from an earlier command and still compiles their code", () => {
+		const root = temporaryDirectory();
+		const entrypoint = path.join(root, "entry.ts");
+		const dependency = path.join(root, "answer.ts");
+		write(path.join(root, "package.json"), `{"type":"module"}\n`);
+		write(dependency, `export const answer = 41;\n`);
+		write(
+			entrypoint,
+			`import { answer } from "./answer.ts";\nconsole.log(answer + 1);\n`,
+		);
+		const options = {
+			entrypoint,
+			config: resolveBuildConfig({}),
+			stripTypes: stripCompactTypes,
+			stripperIdentity: "build-frontend-cache-test",
+			cacheDirectory: path.join(root, "cache"),
+			forceCompile: true,
+			optimization: "development" as const,
+		};
+
+		const first = compileBuildFrontend(options);
+		expect(first.moduleParses).toEqual({ hits: 0, misses: 2 });
+		const reused = compileBuildFrontend(options);
+		expect(reused.moduleParses).toEqual({ hits: 2, misses: 0 });
+		expect(reused.wire).toEqual(first.wire);
+
+		write(dependency, `export const answer = 1;\n`);
+		const edited = compileBuildFrontend(options);
+		expect(edited.moduleParses).toEqual({ hits: 1, misses: 1 });
+		expect(edited.wire).not.toEqual(first.wire);
+	});
+
 	it("reuses a dependency base while recompiling an edited application fragment", () => {
 		const root = temporaryDirectory();
 		const cacheDirectory = path.join(root, "cache");
