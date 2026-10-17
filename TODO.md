@@ -250,6 +250,19 @@ The independent target boundary and current storage contract are recorded in
       so a dead, half-initialized cell found on the stack would be traced through
       freed edges unless allocation clears payloads and tracers accept null shapes.
 
+- [ ] Shrink the largest inline expansions in generated code. In one 800 KB
+      translation unit of the self-compiler, the inline static load probe is 16%
+      of the text (909 sites at about 140 bytes, most of it the four-way field
+      representation decode), `mal_ops_number_as_f64` is 6.5%, and throw checks,
+      `MAL_FRAME_POS`, root masks and safepoint polls are about 5% each.
+      `MAL_FRAME_POS` reloads `vm->native_frames` and its count at all 5,030 of
+      its sites, because a nested call can reallocate the frame array.
+- [ ] Measure sequentially consistent environment slots on Linux x64. `MalEnv`
+      slots are `_Atomic`, so every captured store compiles to `XCHG` on x86-64.
+      Major-mark workers trace slots while the mutator runs, so stores must stay
+      release, but the mutator's own loads could be relaxed. On Apple Silicon
+      relaxed loads with release stores changed none of six closure workloads.
+
 ## World-knowledge ladder
 
 | Level             | Available knowledge                                                                   | Intended result                                                             |
@@ -434,6 +447,16 @@ iterator cursor is not, by itself, permission to delete its language object.
       single-entry innermost loops, only 15 have one blocking opcode (10 iterator
       steps, 4 keyed loads, 1 static load), so typed-array or property access
       inside such a region needs a consumer outside the compiler first.
+
+- [ ] Keep loop-carried Number accumulators unboxed across field reads. A loop
+      such as `sx += p.x; sy += p.y` over records takes about 8 ns per element
+      against Node's 1.4: each iteration publishes the boxed sums as roots, probes
+      both fields through the cache and adds through the boxed path. Number-record
+      regions need four field accesses and cover a single iteration, so they cannot
+      carry the sums; a loop-level region with a boxed fallback exit could.
+      Frame-local shape snapshots for plain static loads and stores in loops made
+      such a loop about 8% faster but the self-compiler's parser slice 1.7 to 2.6%
+      slower, so they serve number-record regions only.
 
 ## P2: composable temporary values
 
