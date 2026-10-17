@@ -52,7 +52,6 @@ const root = path.join(
 	"selfhost-cli",
 	String(process.pid),
 );
-const tools = path.join(root, "tools");
 const project = path.join(root, "isolated-project");
 const distribution = path.join(root, "distribution");
 const noTools = path.join(root, "no-tools");
@@ -76,7 +75,6 @@ if (spawnSync(process.execPath, ["--version"]).status !== 0) {
 	throw new Error("the Node-hosted bootstrap is unavailable");
 }
 rmSync(root, { recursive: true, force: true });
-mkdirSync(tools, { recursive: true });
 mkdirSync(project, { recursive: true });
 mkdirSync(distribution, { recursive: true });
 mkdirSync(noTools, { recursive: true });
@@ -93,6 +91,7 @@ symlinkSync(
 	process.platform === "win32" ? "junction" : "dir",
 );
 
+const toolLinks: Array<[string, string]> = [];
 if (!supervisorOnly) {
 	const selected = requireToolchain({ rootDir: repositoryRoot }).tools;
 	const requestedTools: Array<[string, string, boolean]> = [
@@ -109,16 +108,37 @@ if (!supervisorOnly) {
 		["ranlib", "ranlib", false],
 	];
 	for (const [name, executable, required] of requestedTools) {
-		let source: string;
 		try {
-			source = executable.includes(path.sep)
-				? executable
-				: resolvePathExecutable(executable, originalPath);
+			toolLinks.push([
+				name,
+				executable.includes(path.sep)
+					? executable
+					: resolvePathExecutable(executable, originalPath),
+			]);
 		} catch (error) {
 			if (required) throw error;
-			continue;
 		}
-		symlinkSync(source, path.join(tools, name));
+	}
+}
+// The build environment fingerprint includes PATH, CC and CXX, so a per-run tools
+// directory would give every native build of the isolated CLI fresh cache keys.
+const tools = path.join(
+	maligatorCacheDirectory(),
+	"work",
+	"selfhost-cli-tools",
+	createHash("sha256").update(JSON.stringify(toolLinks)).digest("hex").slice(0, 16),
+);
+if (!existsSync(tools)) {
+	const staging = `${tools}.${String(process.pid)}`;
+	rmSync(staging, { recursive: true, force: true });
+	mkdirSync(staging, { recursive: true });
+	for (const [name, source] of toolLinks) symlinkSync(source, path.join(staging, name));
+	try {
+		renameSync(staging, tools);
+	} catch (error) {
+		// A concurrent check published the same links first.
+		rmSync(staging, { recursive: true, force: true });
+		if (!existsSync(tools)) throw error;
 	}
 }
 
