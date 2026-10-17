@@ -38,6 +38,8 @@ typedef struct MalRegExpObject {
     MalString *source;    // [[OriginalSource]] (the raw pattern; .source escapes it)
     MalString *flags;     // [[OriginalFlags]] (the flags string as given)
     u32 flag_bits;        // parsed MalRegExpFlag bits (cache of `flags`)
+    // [[LegacyFeaturesEnabled]]: false only for instances of RegExp subclasses.
+    bool legacy_features;
 } MalRegExpObject;
 
 /**

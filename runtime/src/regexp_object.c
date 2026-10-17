@@ -6,6 +6,7 @@ void mal_regexp_object_init(MalHeap *heap, MalRegExpObject *regexp, MalObject *p
     regexp->source = nullptr;
     regexp->flags = nullptr;
     regexp->flag_bits = 0;
+    regexp->legacy_features = true;
 }
 
 MalRegExpObject *mal_regexp_object_new(MalHeap *heap, MalObject *prototype) {

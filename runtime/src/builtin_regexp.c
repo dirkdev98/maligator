@@ -1024,6 +1024,7 @@ static MalValue regexp_constructor(MalVm *vm, MalValue this_value, const MalValu
         return mal_value_new_undefined();
     }
     MalRegExpObject *re = mal_regexp_object_new(&vm->heap, prototype);
+    re->legacy_features = used_new_target == vm->intrinsics[MAL_INTRINSIC_REGEXP_CONSTRUCTOR];
     if (!regexp_initialize(vm, re, p_str, f_str)) {
         return mal_value_new_undefined();
     }
@@ -1041,6 +1042,82 @@ static bool regexp_this(MalVm *vm, MalValue this_value, MalRegExpObject **out) {
     }
     *out = mal_value_to_regexp_object(this_value);
     return true;
+}
+
+// RegExp.prototype.compile (Annex B, with the legacy RegExp features check).
+// Reinitializes the receiver in place: its other properties survive.
+static MalValue regexp_proto_compile(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+    (void) new_target;
+    (void) callee;
+    MalRegExpObject *re;
+    if (!regexp_this(vm, this_value, &re)) {
+        return mal_value_new_undefined();
+    }
+    if (!re->legacy_features) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "RegExp.prototype.compile called on a RegExp subclass instance");
+        return mal_value_new_undefined();
+    }
+    MalValue pattern = arg_count >= 1 ? args[0] : mal_value_new_undefined();
+    MalValue flags = arg_count >= 2 ? args[1] : mal_value_new_undefined();
+    MalString *p_str;
+    MalString *f_str;
+    if (mal_value_is_regexp_object(pattern)) {
+        if (!mal_value_is_undefined(flags)) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "RegExp.prototype.compile: flags must be undefined with a RegExp pattern");
+            return mal_value_new_undefined();
+        }
+        p_str = mal_value_to_regexp_object(pattern)->source;
+        f_str = mal_value_to_regexp_object(pattern)->flags;
+    } else {
+        if (mal_value_is_undefined(pattern)) {
+            p_str = mal_intrinsic_ascii(vm, (const byte *) "");
+        } else if (!mal_vm_to_string(vm, pattern, &p_str)) {
+            return mal_value_new_undefined();
+        }
+        MalValue rooted = mal_value_from_string(p_str);
+        MalRootSpan root;
+        mal_gc_root(&root, &rooted, 1);
+        bool ok = true;
+        if (mal_value_is_undefined(flags)) {
+            f_str = mal_intrinsic_ascii(vm, (const byte *) "");
+        } else {
+            ok = mal_vm_to_string(vm, flags, &f_str);
+        }
+        mal_gc_unroot(&root);
+        if (!ok) {
+            return mal_value_new_undefined();
+        }
+    }
+    u32 bits;
+    if (!regexp_parse_flags(f_str, &bits)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, "invalid regular expression flags");
+        return mal_value_new_undefined();
+    }
+    usize pattern_length = mal_string_length(p_str);
+    c16 stack_units[256];
+    c16 *pattern_units = pattern_length <= countof(stack_units)
+        ? stack_units : malloc(sizeof(c16) * pattern_length);
+    if (pattern_units == nullptr) abort();
+    mal_string_copy_range_to(p_str, 0, pattern_length, pattern_units);
+    void *matcher = mal_regexp_compile(
+        (const uint16_t *) pattern_units, pattern_length, regexp_regress_flags(bits));
+    if (pattern_units != stack_units) free(pattern_units);
+    if (matcher == nullptr) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, "invalid regular expression");
+        return mal_value_new_undefined();
+    }
+    // No exec keeps the old matcher across user code, so it can go right away.
+    mal_regexp_free(re->matcher);
+    re->matcher = matcher;
+    re->source = p_str;
+    re->flags = f_str;
+    re->flag_bits = bits;
+    mal_gc_card(&re->object.header, mal_value_from_string(p_str));
+    mal_gc_card(&re->object.header, mal_value_from_string(f_str));
+    if (!regexp_set_last_index(vm, this_value, 0)) {
+        return mal_value_new_undefined();
+    }
+    return this_value;
 }
 
 static MalValue regexp_proto_exec(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -2586,6 +2663,7 @@ void mal_builtin_regexp_install(MalVm *vm) {
             false);
     }
 
+    mal_intrinsic_define_method_n(vm, prototype, (const byte *) "compile", 2, regexp_proto_compile);
     mal_intrinsic_define_method_n(vm, prototype, (const byte *) "exec", 1, regexp_proto_exec);
     mal_intrinsic_define_method_n(vm, prototype, (const byte *) "test", 1, regexp_proto_test);
     mal_intrinsic_define_method_n(vm, prototype, (const byte *) "toString", 0, regexp_proto_to_string);
