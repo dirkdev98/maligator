@@ -92,6 +92,5 @@ describe("read-only parameter field entries", () => {
 				rmSync(outDir, { recursive: true, force: true });
 			}
 		},
-		600_000,
 	);
 });

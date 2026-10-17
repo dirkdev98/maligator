@@ -34,6 +34,5 @@ describe("primitive numeric conversion through both emitters", () => {
 				);
 			}
 		},
-		600_000,
 	);
 });

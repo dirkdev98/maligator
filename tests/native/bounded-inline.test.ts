@@ -34,6 +34,5 @@ describe("bounded acyclic inlining through both emitters", () => {
 				);
 			}
 		},
-		600_000,
 	);
 });
