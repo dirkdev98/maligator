@@ -52,20 +52,9 @@ rooting, and resource-safety defects can interrupt that order.
       current 128-bit storage, and input-size scaling. Keep conversion costs separate
       from traversal and checksum work.
 
-- [ ] Make fragmented development builds the default. With
-      `MALIGATOR_DEVELOPMENT_FRAGMENTS=1` a development `build` links the images
-      `run` loads, each with its own relocatable native overlay emitted from the
-      fragment's compiler artifact, and a runner that splices them at startup. On an
-      Express and Valibot app (216 dependencies) a rebuild after an edit drops from
-      4.4 s to 0.7 s and adding a function no longer recompiles dependency objects.
-      `bench/javascript.mjs`, a single fragment, runs 2.6% slower than the
-      whole-program development binary (median of 8 interleaved pairs, 2.26 s against
-      2.20 s, equal checksums), so link-table loads alone cost that much; programs with
-      dependencies add cross-fragment calls through the boxed boundary. Programs with assets fall back to the
-      whole-program build, and worker roots link their whole-program images behind
-      the compiled registry. Before switching the default: compare the JavaScript
-      benchmark family and the HTTP benchmarks in both modes. Production builds stay
-      whole-program.
+- [ ] Embed configured assets in fragmented development builds. Programs with
+      assets still link the whole-program development image that carries them, so
+      an application edit recompiles every partition.
 
 - [ ] Track configured asset-directory topology in `dev`. Publication validates
       consumed file identities, but adding a file or renaming a previously unwatched

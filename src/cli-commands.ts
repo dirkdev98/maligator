@@ -612,7 +612,6 @@ function prepareCommandState(
 	for (const warning of plan?.warnings ?? []) reporter.warning(warning);
 
 	const compiledNativeOutput = command.kind !== "build" || command.internal.compiled;
-	// Experimental: link `run`'s relocatable images, each with its own native overlay.
 	// Embedded assets still need the whole-program image that carries them.
 	const developmentFragments =
 		command.kind === "build" &&
@@ -620,7 +619,7 @@ function prepareCommandState(
 		command.internal.compiled &&
 		command.internal.serializePath === undefined &&
 		assets.length === 0 &&
-		process.env.MALIGATOR_DEVELOPMENT_FRAGMENTS === "1";
+		process.env.MALIGATOR_DEVELOPMENT_FRAGMENTS !== "0";
 	const execution = resolveExecution(command, buildConfig, {
 		compiled:
 			command.kind === "build" && !developmentFragments
