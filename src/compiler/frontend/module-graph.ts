@@ -160,13 +160,29 @@ export interface PersistedModuleParse {
 	dependencies: Array<ExtractedDependency>;
 }
 
+/** A module's analysed load and every filesystem observation its resolution made. */
+interface MemoizedModuleLoad {
+	source: string;
+	/** Undefined for a supplied source, which is compared by value instead. */
+	sourceIdentity: string | undefined;
+	sourcePath: string | undefined;
+	parsed: ModuleRecord["parsed"];
+	dependencies: ReadonlyArray<ModuleDependency>;
+	observations: ReadonlyArray<readonly [string, string]>;
+}
+
 /**
  * Retained, single-revision parse cache keyed by stable module path and goal. With
  * persisted parses, a module whose parsed source is unchanged skips parsing; its
- * AST is parsed only if a consumer such as semantic analysis reads it.
+ * AST is parsed only if a consumer such as semantic analysis reads it. A retained
+ * cache also memoizes each module's resolved load, so a later walk only checks the
+ * files that load read.
  */
 export class ModuleParseCache {
 	readonly #records = new Map<string, CachedModuleParse>();
+	readonly #loads = new Map<string, MemoizedModuleLoad>();
+	/** Parsed package.json contents by path, valid while the file keeps its identity. */
+	readonly packageJsons = new Map<string, { identity: string; parsed: unknown }>();
 	#persisted: Map<string, PersistedModuleParse> | undefined;
 	#persistedChanged = false;
 	#hits = 0;
@@ -186,6 +202,7 @@ export class ModuleParseCache {
 	invalidate(file?: string): void {
 		if (file === undefined) {
 			this.#records.clear();
+			this.#loads.clear();
 			return;
 		}
 		const resolved = path.resolve(file);
@@ -198,6 +215,19 @@ export class ModuleParseCache {
 
 	statistics(): { hits: number; misses: number } {
 		return { hits: this.#hits, misses: this.#misses };
+	}
+
+	memoizedLoad(key: string): MemoizedModuleLoad | undefined {
+		return this.#loads.get(key);
+	}
+
+	/** A reused load also reuses its parse. */
+	countReusedLoad(): void {
+		this.#hits++;
+	}
+
+	memoizeLoad(key: string, load: MemoizedModuleLoad): void {
+		this.#loads.set(key, load);
 	}
 
 	parse(
@@ -367,6 +397,45 @@ interface ResolveContext {
 	// Metadata and derived goals share one graph's lifetime, including cached misses.
 	packageJsonCache: Map<string, PackageJson | null>;
 	packageTypeCache: Map<string, ModuleGoal | undefined>;
+	observed: Map<string, string>;
+	/** The observations of the module whose load is being memoized. */
+	recording: Array<[string, string]> | undefined;
+	retainedPackageJsons: Map<string, { identity: string; parsed: unknown }> | undefined;
+}
+
+const platformCatalogs = new Map<
+	string,
+	{ owned: ReadonlySet<string>; sources: ReadonlyMap<string, string> }
+>();
+
+/**
+ * The platform files below a source root: those that may import internal modules,
+ * and the catalog identity of each source module a path import reaches.
+ */
+function platformCatalogFiles(sourceRoot: string): {
+	owned: ReadonlySet<string>;
+	sources: ReadonlyMap<string, string>;
+} {
+	let files = platformCatalogs.get(sourceRoot);
+	if (files === undefined) {
+		const owned = new Set<string>();
+		const sources = new Map<string, string>();
+		for (const platformModule of PLATFORM_MODULES) {
+			if (platformModule.kind === "source") {
+				const file = path.resolve(sourceRoot, platformModule.sourceFile);
+				owned.add(file);
+				if (platformModule.id !== "maligator:test" && !sources.has(file))
+					sources.set(file, platformModule.id);
+			}
+			for (const entry of platformModule.exports) {
+				const workerSource = (entry.contract as { workerSource?: string }).workerSource;
+				if (workerSource !== undefined) owned.add(path.resolve(sourceRoot, workerSource));
+			}
+		}
+		files = { owned, sources };
+		platformCatalogs.set(sourceRoot, files);
+	}
+	return files;
 }
 
 /** Extensions probed when a specifier omits one. */
@@ -388,9 +457,31 @@ export function buildModuleGraph(
 		conditions: exportConditions(nodeEnabled, "import"),
 		packageJsonCache: new Map(),
 		packageTypeCache: new Map(),
+		observed: new Map(),
+		recording: undefined,
+		retainedPackageJsons: options.parseCache?.packageJsons,
 	};
 	const sourceRoot =
 		options.platformSourceRoot ?? fileURLToPath(new URL("../../", import.meta.url));
+	const catalogFiles = platformCatalogFiles(sourceRoot);
+	// A transform may change any module's parse input, so its walks memoize nothing.
+	const memoIdentity =
+		options.parseCache === undefined || options.transformSource !== undefined
+			? undefined
+			: hash(
+					"sha256",
+					JSON.stringify({
+						aliases: options.buildConfig?.modules.aliases ?? {},
+						nodeEnabled,
+						sourceRoot,
+						goalOverride: options.goalOverride,
+						dependencyGoalOverride: options.dependencyGoalOverride,
+						stripTypes: options.stripTypes !== undefined,
+						entryPrelude: options.entryPrelude,
+						virtualModules: [...(options.virtualModules ?? [])],
+					}),
+					"hex",
+				);
 	const catalogSources = new Map<
 		string,
 		{ source: string; goal: "module"; platform: true; sourcePath: string }
@@ -420,6 +511,18 @@ export function buildModuleGraph(
 		return source;
 	};
 
+	let lastObservations: ReadonlyArray<readonly [string, string]> = [];
+	const recordObservations = <T>(record: boolean, analyze: () => T): T => {
+		if (!record) return analyze();
+		const observations: Array<[string, string]> = [];
+		ctx.recording = observations;
+		try {
+			return analyze();
+		} finally {
+			ctx.recording = undefined;
+			lastObservations = observations;
+		}
+	};
 	const load = (
 		filePath: string,
 		goal: ModuleGoal,
@@ -430,184 +533,202 @@ export function buildModuleGraph(
 			return;
 		}
 
-		const source = sourceOverride ?? readFileSync(filePath, "utf-8");
+		const memoKey =
+			memoIdentity === undefined || filePath === entry
+				? undefined
+				: `${memoIdentity}\0${goal}\0${filePath}`;
+		const memo =
+			memoKey === undefined ? undefined : options.parseCache?.memoizedLoad(memoKey);
+		const aliased = (specifier: string) =>
+			options.buildConfig?.modules.aliases[specifier] ?? specifier;
+		const reusable =
+			memo !== undefined &&
+			(sourceOverride === undefined
+				? memo.sourceIdentity !== undefined &&
+					observe("json", filePath, ctx) === memo.sourceIdentity
+				: memo.sourceIdentity === undefined && memo.source === sourceOverride) &&
+			memo.observations.every(
+				([key, observation]) =>
+					observe(key.startsWith("json") ? "json" : "kind", key.slice(5), ctx) ===
+					observation,
+			) &&
+			!memo.dependencies.some(
+				({ specifier }) =>
+					specifier !== null && options.externalModules?.has(aliased(specifier)) === true,
+			);
+		// Observed before reading, so a concurrent edit can only make the memo stale.
+		const sourceIdentity =
+			sourceOverride === undefined ? observe("json", filePath, ctx) : undefined;
+		const source = reusable
+			? memo.source
+			: (sourceOverride ?? readFileSync(filePath, "utf-8"));
 		let analyzed: {
 			sourcePath: string | undefined;
 			parsed: ModuleRecord["parsed"];
 			dependencies: Array<ModuleDependency>;
 		};
+		let resolvedThroughExternal = false;
+		if (reusable) options.parseCache!.countReusedLoad();
 		try {
-			analyzed = (() => {
-				const sourcePath = catalogSources.get(filePath)?.sourcePath;
-				let parseSource = blankHashbang(source);
-				if (path.extname(filePath) === ".json") {
-					// Validate with the JSON grammar now, then parse a CommonJS wrapper that
-					// preserves JSON.parse semantics for keys such as "__proto__".
-					try {
-						JSON.parse(source);
-					} catch (error) {
-						if (error instanceof SyntaxError) {
-							throw new SyntaxDiagnostic(
-								filePath === entry ? "parse" : "resolution",
-								error.message,
-								{ cause: error },
-							);
-						}
-						throw error;
+			analyzed = reusable
+				? {
+						sourcePath: memo.sourcePath,
+						parsed: memo.parsed,
+						dependencies: memo.dependencies.map((dependency) => ({ ...dependency })),
 					}
-					parseSource =
-						goal === "cjs"
-							? `module.exports = JSON.parse(${JSON.stringify(source)});`
-							: `export default JSON.parse(${JSON.stringify(source)});`;
-				}
-				if (TS_EXTENSIONS.has(path.extname(sourcePath ?? filePath))) {
-					if (!options.stripTypes) {
-						throw new Error(
-							`TypeScript module '${filePath}' requires BuildModuleGraphOptions.stripTypes`,
-						);
-					}
-					parseSource = options.stripTypes(parseSource, sourcePath ?? filePath);
-				}
-				if (filePath === entry && options.entryPrelude !== undefined) {
-					const specifier = JSON.stringify(options.entryPrelude.specifier);
-					parseSource =
-						goal === "cjs"
-							? `require(${specifier});\n${parseSource}`
-							: `import ${specifier};\n${parseSource}`;
-				}
-				parseSource = options.transformSource?.(parseSource, filePath) ?? parseSource;
-				const strict = filePath === entry ? (options.entryStrict ?? true) : true;
-				const parse = () => {
-					try {
-						const parsed = parseWithGoal(parseSource, goal, strict);
-						return { parsed, dependencies: extractDependencies(parsed.ast, goal) };
-					} catch (error) {
-						if (error instanceof SyntaxError) {
-							throw new SyntaxDiagnostic(
-								filePath === entry ? "parse" : "resolution",
-								error.message,
-								{ cause: error },
-							);
+				: recordObservations(memoKey !== undefined, () => {
+						const sourcePath = catalogSources.get(filePath)?.sourcePath;
+						let parseSource = blankHashbang(source);
+						if (path.extname(filePath) === ".json") {
+							// Validate with the JSON grammar now, then parse a CommonJS wrapper that
+							// preserves JSON.parse semantics for keys such as "__proto__".
+							try {
+								JSON.parse(source);
+							} catch (error) {
+								if (error instanceof SyntaxError) {
+									throw new SyntaxDiagnostic(
+										filePath === entry ? "parse" : "resolution",
+										error.message,
+										{ cause: error },
+									);
+								}
+								throw error;
+							}
+							parseSource =
+								goal === "cjs"
+									? `module.exports = JSON.parse(${JSON.stringify(source)});`
+									: `export default JSON.parse(${JSON.stringify(source)});`;
 						}
-						throw error;
-					}
-				};
-				const parsedModule =
-					options.parseCache?.parse(filePath, parseSource, goal, parse, strict) ??
-					parse();
-				const parsed = parsedModule.parsed;
-
-				const dependencies = parsedModule.dependencies.map(
-					(dependency): ModuleDependency => {
-						if (dependency.specifier === null) {
-							// A computed import/require cannot be resolved while building the
-							// graph. Preserve the edge for later lowering/runtime handling.
-							return { ...dependency, resolvedPath: null };
-						}
-						const aliasedSpecifier =
-							options.buildConfig?.modules.aliases[dependency.specifier] ??
-							dependency.specifier;
-						const platform = lookupPlatformModule(aliasedSpecifier);
-						const catalogOwned =
-							lookupPlatformModule(filePath)?.kind === "source" ||
-							PLATFORM_MODULES.some(
-								(platformModule) =>
-									(platformModule.kind === "source" &&
-										path.resolve(sourceRoot, platformModule.sourceFile) === filePath) ||
-									platformModule.exports.some((entry) => {
-										const workerSource = (entry.contract as { workerSource?: string })
-											.workerSource;
-										return (
-											workerSource !== undefined &&
-											path.resolve(sourceRoot, workerSource) === filePath
-										);
-									}),
-							);
-						if (
-							(platform as { internal?: boolean } | undefined)?.internal === true &&
-							!catalogOwned
-						) {
-							throw new SyntaxDiagnostic(
-								"resolution",
-								`Internal module '${dependency.specifier}' is reserved for platform sources`,
-							);
-						}
-						// A toolchain module an earlier image owns keeps its specifier identity.
-						if (options.externalModules?.has(aliasedSpecifier)) {
-							return { ...dependency, resolvedPath: aliasedSpecifier };
-						}
-						const toolchainModule = virtualModule(aliasedSpecifier);
-						if (toolchainModule !== undefined) {
-							const entryPreludeRequire =
-								dependency.kind === "require" &&
-								dependency.specifier === options.entryPrelude?.specifier;
-							if (
-								(dependency.kind === "dynamic" &&
-									!(
-										toolchainModule.platform &&
-										lookupPlatformModule(aliasedSpecifier)?.kind === "source"
-									)) ||
-								(dependency.kind === "require" && !entryPreludeRequire)
-							) {
-								throw new SyntaxDiagnostic(
-									"resolution",
-									`Toolchain module '${dependency.specifier}' supports static ESM imports only`,
+						if (TS_EXTENSIONS.has(path.extname(sourcePath ?? filePath))) {
+							if (!options.stripTypes) {
+								throw new Error(
+									`TypeScript module '${filePath}' requires BuildModuleGraphOptions.stripTypes`,
 								);
 							}
-							return { ...dependency, resolvedPath: aliasedSpecifier };
+							parseSource = options.stripTypes(parseSource, sourcePath ?? filePath);
 						}
-						const canonicalHostId = canonicalNodeHostModuleId(aliasedSpecifier);
-						const canonicalBuiltinId = canonicalNodeBuiltinId(aliasedSpecifier);
-						const resolved = resolveSpecifier(
-							canonicalHostId ?? canonicalBuiltinId ?? aliasedSpecifier,
-							sourcePath ?? filePath,
-							{
-								...ctx,
-								conditions: exportConditions(
-									ctx.nodeEnabled,
-									dependency.kind === "require" ? "require" : "import",
-								),
+						if (filePath === entry && options.entryPrelude !== undefined) {
+							const specifier = JSON.stringify(options.entryPrelude.specifier);
+							parseSource =
+								goal === "cjs"
+									? `require(${specifier});\n${parseSource}`
+									: `import ${specifier};\n${parseSource}`;
+						}
+						parseSource = options.transformSource?.(parseSource, filePath) ?? parseSource;
+						const strict = filePath === entry ? (options.entryStrict ?? true) : true;
+						const parse = () => {
+							try {
+								const parsed = parseWithGoal(parseSource, goal, strict);
+								return { parsed, dependencies: extractDependencies(parsed.ast, goal) };
+							} catch (error) {
+								if (error instanceof SyntaxError) {
+									throw new SyntaxDiagnostic(
+										filePath === entry ? "parse" : "resolution",
+										error.message,
+										{ cause: error },
+									);
+								}
+								throw error;
+							}
+						};
+						const parsedModule =
+							options.parseCache?.parse(filePath, parseSource, goal, parse, strict) ??
+							parse();
+						const parsed = parsedModule.parsed;
+
+						const dependencies = parsedModule.dependencies.map(
+							(dependency): ModuleDependency => {
+								if (dependency.specifier === null) {
+									// A computed import/require cannot be resolved while building the
+									// graph. Preserve the edge for later lowering/runtime handling.
+									return { ...dependency, resolvedPath: null };
+								}
+								const aliasedSpecifier =
+									options.buildConfig?.modules.aliases[dependency.specifier] ??
+									dependency.specifier;
+								const platform = lookupPlatformModule(aliasedSpecifier);
+								if (
+									(platform as { internal?: boolean } | undefined)?.internal === true &&
+									lookupPlatformModule(filePath)?.kind !== "source" &&
+									!catalogFiles.owned.has(filePath)
+								) {
+									throw new SyntaxDiagnostic(
+										"resolution",
+										`Internal module '${dependency.specifier}' is reserved for platform sources`,
+									);
+								}
+								// A toolchain module an earlier image owns keeps its specifier identity.
+								if (options.externalModules?.has(aliasedSpecifier)) {
+									resolvedThroughExternal = true;
+									return { ...dependency, resolvedPath: aliasedSpecifier };
+								}
+								const toolchainModule = virtualModule(aliasedSpecifier);
+								if (toolchainModule !== undefined) {
+									const entryPreludeRequire =
+										dependency.kind === "require" &&
+										dependency.specifier === options.entryPrelude?.specifier;
+									if (
+										(dependency.kind === "dynamic" &&
+											!(
+												toolchainModule.platform &&
+												lookupPlatformModule(aliasedSpecifier)?.kind === "source"
+											)) ||
+										(dependency.kind === "require" && !entryPreludeRequire)
+									) {
+										throw new SyntaxDiagnostic(
+											"resolution",
+											`Toolchain module '${dependency.specifier}' supports static ESM imports only`,
+										);
+									}
+									return { ...dependency, resolvedPath: aliasedSpecifier };
+								}
+								const canonicalHostId = canonicalNodeHostModuleId(aliasedSpecifier);
+								const canonicalBuiltinId = canonicalNodeBuiltinId(aliasedSpecifier);
+								const resolved = resolveSpecifier(
+									canonicalHostId ?? canonicalBuiltinId ?? aliasedSpecifier,
+									sourcePath ?? filePath,
+									{
+										...ctx,
+										conditions: exportConditions(
+											ctx.nodeEnabled,
+											dependency.kind === "require" ? "require" : "import",
+										),
+									},
+								);
+								if ("host" in resolved) {
+									// A supported `node:*` built-in: identity is its canonical specifier.
+									return { ...dependency, resolvedPath: resolved.host.id };
+								}
+								if ("error" in resolved) {
+									// A `node:*` error (surface disabled / unknown built-in) is `hard`: it
+									// rejects even a literal dynamic import rather than silently deferring,
+									// so an unsupported host import fails loudly at build time. A plain
+									// dynamic resolution failure (missing file) still defers to the graph.
+									if (dependency.kind === "dynamic" && !resolved.hard) {
+										return { ...dependency, resolvedPath: null };
+									}
+									if (
+										dependency.kind === "require" &&
+										dependency.catchableMissing &&
+										!resolved.hard
+									) {
+										return { ...dependency, resolvedPath: null };
+									}
+									// A static import that cannot resolve fails the graph — the
+									// resolution-phase SyntaxError of 16.2.1.6.1.
+									throw new SyntaxDiagnostic(
+										"resolution",
+										`Cannot resolve '${dependency.specifier}' from ${filePath}: ${resolved.error}`,
+									);
+								}
+
+								const catalogSource = catalogFiles.sources.get(resolved.path);
+								if (catalogSource !== undefined) virtualModule(catalogSource);
+								return { ...dependency, resolvedPath: catalogSource ?? resolved.path };
 							},
 						);
-						if ("host" in resolved) {
-							// A supported `node:*` built-in: identity is its canonical specifier.
-							return { ...dependency, resolvedPath: resolved.host.id };
-						}
-						if ("error" in resolved) {
-							// A `node:*` error (surface disabled / unknown built-in) is `hard`: it
-							// rejects even a literal dynamic import rather than silently deferring,
-							// so an unsupported host import fails loudly at build time. A plain
-							// dynamic resolution failure (missing file) still defers to the graph.
-							if (dependency.kind === "dynamic" && !resolved.hard) {
-								return { ...dependency, resolvedPath: null };
-							}
-							if (
-								dependency.kind === "require" &&
-								dependency.catchableMissing &&
-								!resolved.hard
-							) {
-								return { ...dependency, resolvedPath: null };
-							}
-							// A static import that cannot resolve fails the graph — the
-							// resolution-phase SyntaxError of 16.2.1.6.1.
-							throw new SyntaxDiagnostic(
-								"resolution",
-								`Cannot resolve '${dependency.specifier}' from ${filePath}: ${resolved.error}`,
-							);
-						}
-
-						const catalogSource = PLATFORM_MODULES.find(
-							(module) =>
-								module.kind === "source" &&
-								module.id !== "maligator:test" &&
-								path.resolve(sourceRoot, module.sourceFile) === resolved.path,
-						);
-						if (catalogSource !== undefined) virtualModule(catalogSource.id);
-						return { ...dependency, resolvedPath: catalogSource?.id ?? resolved.path };
-					},
-				);
-				return { sourcePath, parsed, dependencies };
-			})();
+						return { sourcePath, parsed, dependencies };
+					});
 		} catch (error) {
 			// A module the entry reaches only through `import()` fails when that import
 			// runs; the check after loading fails the build for one it imports statically.
@@ -623,6 +744,21 @@ export function buildModuleGraph(
 			return;
 		}
 		const { sourcePath, parsed, dependencies } = analyzed;
+		if (
+			memoKey !== undefined &&
+			!reusable &&
+			!resolvedThroughExternal &&
+			(sourceOverride !== undefined || sourceIdentity !== "-")
+		) {
+			options.parseCache!.memoizeLoad(memoKey, {
+				source,
+				sourceIdentity: sourceOverride === undefined ? sourceIdentity : undefined,
+				sourcePath,
+				parsed,
+				dependencies: dependencies.map((dependency) => ({ ...dependency })),
+				observations: lastObservations,
+			});
+		}
 
 		// Record before recursing so a cyclic back-import finds this module and
 		// stops, rather than looping forever.
@@ -1064,17 +1200,17 @@ function resolveSpecifier(
  * directory (package.json `exports`/`main` or an index file).
  */
 function probePath(target: string, ctx: ResolveContext): string | null {
-	if (isFile(target)) {
+	if (isFile(target, ctx)) {
 		return target;
 	}
 
 	for (const extension of RESOLVE_EXTENSIONS) {
-		if (isFile(target + extension)) {
+		if (isFile(target + extension, ctx)) {
 			return target + extension;
 		}
 	}
 
-	if (isDirectory(target)) {
+	if (isDirectory(target, ctx)) {
 		return loadAsDirectory(target, ctx);
 	}
 
@@ -1103,7 +1239,7 @@ function loadAsDirectory(dir: string, ctx: ResolveContext): string | null {
 
 	for (const extension of RESOLVE_EXTENSIONS) {
 		const indexFile = path.join(dir, `index${extension}`);
-		if (isFile(indexFile)) {
+		if (isFile(indexFile, ctx)) {
 			return indexFile;
 		}
 	}
@@ -1125,7 +1261,7 @@ function resolveBareSpecifier(
 	let dir = importerDir;
 	for (;;) {
 		const packageDir = path.join(dir, "node_modules", packageName);
-		if (isDirectory(packageDir)) {
+		if (isDirectory(packageDir, ctx)) {
 			const resolved = resolveInPackage(packageDir, subpath, ctx);
 			if (resolved) {
 				return { path: resolved };
@@ -1199,7 +1335,7 @@ function resolveExports(
 ): string | null {
 	if (typeof exportsField === "string") {
 		return subpath === "."
-			? resolveExportTarget(exportsField, packageDir, patternMatch)
+			? resolveExportTarget(exportsField, packageDir, ctx, patternMatch)
 			: null;
 	}
 
@@ -1265,6 +1401,7 @@ function resolveExports(
 function resolveExportTarget(
 	target: string,
 	packageDir: string,
+	ctx: ResolveContext,
 	patternMatch?: string,
 ): string | null {
 	if (!target.startsWith("./")) {
@@ -1273,7 +1410,7 @@ function resolveExportTarget(
 	const substituted =
 		patternMatch === undefined ? target : target.replaceAll("*", patternMatch);
 	const resolved = path.resolve(packageDir, substituted);
-	return isFile(resolved) ? resolved : null;
+	return isFile(resolved, ctx) ? resolved : null;
 }
 
 /**
@@ -1394,38 +1531,67 @@ function readPackageJson(
 	packageJsonPath: string,
 	ctx: ResolveContext,
 ): PackageJson | null {
+	// The identity observation makes a memoized load depend on this file's contents.
+	if (!isFile(packageJsonPath, ctx)) return null;
+	const identity = observe("json", packageJsonPath, ctx);
+	if (identity === "-") return null;
 	const cache = ctx.packageJsonCache;
 	if (cache.has(packageJsonPath)) {
 		return cache.get(packageJsonPath)!;
 	}
 
+	const retained = ctx.retainedPackageJsons?.get(packageJsonPath);
 	let parsed: PackageJson | null = null;
-	if (isFile(packageJsonPath)) {
+	if (retained?.identity === identity) {
+		parsed = retained.parsed as PackageJson | null;
+	} else {
 		try {
 			parsed = JSON.parse(readFileSync(packageJsonPath, "utf-8")) as PackageJson;
 		} catch {
 			parsed = null;
 		}
+		ctx.retainedPackageJsons?.set(packageJsonPath, { identity, parsed });
 	}
 
 	cache.set(packageJsonPath, parsed);
 	return parsed;
 }
 
-function isFile(target: string): boolean {
-	try {
-		return statSync(target).isFile();
-	} catch {
-		return false;
+function statObservation(kind: "kind" | "json", target: string): string {
+	const stats = statSync(target, { throwIfNoEntry: false });
+	if (stats === undefined) return "-";
+	if (kind === "json") {
+		return `${stats.dev}:${stats.ino}:${stats.size}:${stats.mtimeMs}:${stats.ctimeMs}`;
 	}
+	return stats.isFile() ? "f" : stats.isDirectory() ? "d" : "o";
 }
 
-function isDirectory(target: string): boolean {
-	try {
-		return statSync(target).isDirectory();
-	} catch {
-		return false;
+/**
+ * What resolution sees of a path, observed once per walk. A module being analysed
+ * records every observation, cached or not, so its memoized load stays valid
+ * exactly while they all repeat.
+ */
+function observe(kind: "kind" | "json", target: string, ctx: ResolveContext): string {
+	const key = `${kind}\0${target}`;
+	let observation = ctx.observed.get(key);
+	if (observation === undefined) {
+		try {
+			observation = statObservation(kind, target);
+		} catch {
+			observation = "-";
+		}
+		ctx.observed.set(key, observation);
 	}
+	ctx.recording?.push([key, observation]);
+	return observation;
+}
+
+function isFile(target: string, ctx: ResolveContext): boolean {
+	return observe("kind", target, ctx) === "f";
+}
+
+function isDirectory(target: string, ctx: ResolveContext): boolean {
+	return observe("kind", target, ctx) === "d";
 }
 
 /**

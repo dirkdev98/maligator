@@ -196,6 +196,73 @@ test("refreshes entry and dependency goals after package type changes with a ret
 	}
 });
 
+test("re-resolves a retained module's import when a file starts shadowing its target", () => {
+	const directory = "shadowed-target";
+	const entry = path.join(root, directory, "entry.mjs");
+	const middle = path.join(root, directory, "middle.mjs");
+	const parseCache = new ModuleParseCache();
+	write(`${directory}/entry.mjs`, `import "./middle.mjs";\n`);
+	write(`${directory}/middle.mjs`, `import "./target";\n`);
+	write(`${directory}/target/index.mjs`, `export {};\n`);
+	const target = () =>
+		buildModuleGraph(entry, { parseCache }).modules.get(middle)!.dependencies[0]!
+			.resolvedPath;
+
+	expect(target()).toBe(path.join(root, directory, "target/index.mjs"));
+	write(`${directory}/target.mjs`, `export {};\n`);
+	expect(target()).toBe(path.join(root, directory, "target.mjs"));
+	rmSync(path.join(root, directory, "target.mjs"));
+	expect(target()).toBe(path.join(root, directory, "target/index.mjs"));
+});
+
+test("re-resolves a retained module's package import after the package exports change", () => {
+	const directory = "retained-package-exports";
+	const entry = path.join(root, directory, "entry.mjs");
+	const middle = path.join(root, directory, "middle.mjs");
+	const packageDirectory = `${directory}/node_modules/retained-exports`;
+	const parseCache = new ModuleParseCache();
+	write(`${directory}/entry.mjs`, `import "./middle.mjs";\n`);
+	write(`${directory}/middle.mjs`, `import "retained-exports";\n`);
+	write(`${packageDirectory}/before.mjs`, `export {};\n`);
+	write(`${packageDirectory}/after.mjs`, `export {};\n`);
+
+	for (const target of ["before", "after", "before"]) {
+		write(
+			`${packageDirectory}/package.json`,
+			JSON.stringify({ type: "module", exports: `./${target}.mjs` }),
+		);
+		const graph = buildModuleGraph(entry, { parseCache });
+		expect(graph.modules.get(middle)!.dependencies[0]!.resolvedPath).toBe(
+			path.join(root, packageDirectory, `${target}.mjs`),
+		);
+		expect(graph.modules.has(path.join(root, packageDirectory, `${target}.mjs`))).toBe(
+			true,
+		);
+	}
+});
+
+test("re-analyses a retained module after its source changes", () => {
+	const directory = "retained-source";
+	const entry = path.join(root, directory, "entry.mjs");
+	const middle = path.join(root, directory, "middle.mjs");
+	const parseCache = new ModuleParseCache();
+	write(`${directory}/entry.mjs`, `import "./middle.mjs";\n`);
+	write(`${directory}/first.mjs`, `export {};\n`);
+	write(`${directory}/second.mjs`, `export {};\n`);
+	write(`${directory}/middle.mjs`, `import "./first.mjs";\n`);
+	expect(
+		buildModuleGraph(entry, { parseCache }).modules.has(
+			path.join(root, directory, "first.mjs"),
+		),
+	).toBe(true);
+
+	write(`${directory}/middle.mjs`, `import "./second.mjs"; // edited\n`);
+	const edited = buildModuleGraph(entry, { parseCache });
+	expect(edited.modules.get(middle)!.source).toContain("second");
+	expect(edited.modules.has(path.join(root, directory, "first.mjs"))).toBe(false);
+	expect(edited.modules.has(path.join(root, directory, "second.mjs"))).toBe(true);
+});
+
 test("refreshes package boundaries after missing, removed and malformed metadata", () => {
 	const directory = "changing-package-boundary";
 	const entry = path.join(root, directory, "nested/entry.js");
