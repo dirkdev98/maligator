@@ -75,7 +75,6 @@ function islandEnvironment(
 	options: Pick<
 		CompileDependencyFragmentsOptions,
 		| "config"
-		| "execution"
 		| "facts"
 		| "stripperIdentity"
 		| "cacheDirectory"
@@ -87,7 +86,6 @@ function islandEnvironment(
 		producer: "dependency-fragment",
 		family: DEPENDENCY_FRAGMENT_FAMILY,
 		config: options.config,
-		execution: options.execution,
 		facts: options.facts,
 		stripperIdentity: options.stripperIdentity,
 		cacheDirectory: options.cacheDirectory,
@@ -229,7 +227,6 @@ export function compileDependencyFragmentRequest(
 	session.useCacheDirectory(request.cacheDirectory);
 	const environment = islandEnvironment({
 		config: request.config,
-		execution: request.execution,
 		facts: compilerProgramFactsFromConfig(request.config),
 		stripperIdentity: request.stripperIdentity,
 		cacheDirectory: request.cacheDirectory,

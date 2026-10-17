@@ -45,8 +45,6 @@ import {
 	frontendDigest as digest,
 } from "./frontend-cache.ts";
 import type { FrontendArtifactIdentity } from "./frontend-cache.ts";
-import { executionIdentity } from "./platform/execution.ts";
-import type { Execution } from "./platform/execution.ts";
 
 const LINKED_IMAGE_SCHEMA = 1;
 
@@ -96,7 +94,6 @@ export interface LinkedImageEnvironmentOptions {
 	/** Cache family directory under the Maligator cache. */
 	family: string;
 	config: ResolvedBuildConfig;
-	execution?: Execution;
 	facts: CompilerProgramFacts;
 	stripperIdentity: string;
 	cacheDirectory?: string;
@@ -119,7 +116,6 @@ export function linkedImageEnvironment(
 				stripper: options.stripperIdentity,
 				optimization: "development",
 				configuration: compilerConfigurationIdentity(options.config),
-				execution: executionIdentity(options.execution),
 				inputs: options.inputs,
 			}),
 		),
@@ -135,6 +131,15 @@ export function linkedImageEnvironment(
 			? {}
 			: { onCompilePhase: options.onCompilePhase }),
 	};
+}
+
+/** Whether compiling the graph bakes in the execution snapshot (`maligator:process`). */
+export function graphReadsExecution(graph: ModuleGraph): boolean {
+	for (const record of graph.modules.values()) {
+		const constants = record.host?.constants;
+		if (constants !== undefined && Object.keys(constants).length > 0) return true;
+	}
+	return false;
 }
 
 /** The interfaces later images import from, keyed by module identity. */
@@ -235,7 +240,11 @@ function imageKey(
 					path: record.path,
 					goal: record.goal,
 					source: digest(record.source),
-					host: record.host?.id,
+					// The execution snapshot reaches an image only through these constants.
+					host:
+						record.host === undefined
+							? undefined
+							: { id: record.host.id, constants: record.host.constants },
 					virtual: record.virtual === true,
 					external: record.external,
 				}))

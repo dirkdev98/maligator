@@ -163,7 +163,6 @@ export function compileBuildFragments(
 		producer: "build-fragment",
 		family: BUILD_FRAGMENT_FAMILY,
 		config: options.config,
-		execution: options.execution,
 		facts: options.facts,
 		stripperIdentity: options.stripperIdentity,
 		cacheDirectory: options.cacheDirectory,

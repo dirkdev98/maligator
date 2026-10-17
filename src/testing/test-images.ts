@@ -25,11 +25,13 @@ import {
 	assertStaticImageBoundary,
 	compileLinkedImage,
 	externalModulesOf,
+	graphReadsExecution,
 	linkedImageEnvironment,
 	moduleImageComponents,
 	UnsupportedLinkedImagesError,
 } from "../linked-images.ts";
 import type { LinkedImageArtifact, LinkedImageEnvironment } from "../linked-images.ts";
+import { executionIdentity } from "../platform/execution.ts";
 import type {
 	CompileTestImageOptions,
 	DependencyIdentity,
@@ -47,7 +49,7 @@ import {
 	wrapTestEntry,
 } from "./cache.ts";
 
-const MANIFEST_SCHEMA = 1;
+const MANIFEST_SCHEMA = 2;
 const TEST_IMAGE_FAMILY = "test";
 
 type TestImageKind = "runtime" | "dependency" | "application" | "entry" | "runner";
@@ -84,6 +86,8 @@ interface TestImageManifest {
 	identity: string;
 	entries: Array<string>;
 	dependencies: Array<DependencyIdentity>;
+	/** The execution snapshot when a module reads it; test options are otherwise runtime data. */
+	execution: string | null;
 	images: Array<ImageReference>;
 }
 
@@ -141,6 +145,7 @@ function referencedWire(reference: ImageReference): LinkedTestWire {
 function manifestHit(
 	artifactRoot: string,
 	identity: string,
+	execution: string,
 	requested: Array<string>,
 	allowSuperset: boolean,
 	manifest: TestImageManifest | undefined,
@@ -149,6 +154,7 @@ function manifestHit(
 	if (
 		manifest?.schema !== MANIFEST_SCHEMA ||
 		manifest.identity !== identity ||
+		(manifest.execution !== null && manifest.execution !== execution) ||
 		!requested.every((entry) => manifest.entries.includes(entry)) ||
 		(!allowSuperset && manifest.entries.length !== requested.length) ||
 		!dependenciesUnchanged(manifest.dependencies, session)
@@ -290,7 +296,6 @@ export function compileLinkedTestImage(
 		producer: "test-fragment",
 		family: TEST_IMAGE_FAMILY,
 		config: options.config,
-		execution: options.execution,
 		facts,
 		stripperIdentity: options.stripperIdentity,
 		cacheDirectory: options.cacheDirectory,
@@ -302,9 +307,11 @@ export function compileLinkedTestImage(
 	const artifactRoot = frontendArtifactCacheRoot(options.cacheDirectory);
 
 	const validationStartedAt = Date.now();
+	const execution = executionIdentity(options.execution);
 	const hit = manifestHit(
 		artifactRoot,
 		identity,
+		execution,
 		entries,
 		options.allowSupersetCache !== false,
 		readManifest(manifestPath(environment.root, entries, identity)),
@@ -448,6 +455,7 @@ export function compileLinkedTestImage(
 		identity,
 		entries,
 		dependencies: fileDependencies,
+		execution: graphReadsExecution(planning) ? execution : null,
 		images: linked.map(({ kind, artifact, file }) => ({
 			kind,
 			...(file === undefined ? {} : { file }),

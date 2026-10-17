@@ -16,14 +16,27 @@ import {
 	BuildCompilationSession,
 	compileBuildFrontend,
 } from "../src/build-frontend-cache.ts";
+import { parseCliArgs } from "../src/cli.ts";
 import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
 import * as executionLowering from "../src/compiler/target/lower-native-execution.ts";
 import { UnsupportedLinkedImagesError } from "../src/linked-images.ts";
+import { hostExecutionTarget, resolveExecution } from "../src/platform/execution.ts";
 import { TestCompilationSession } from "../src/testing/cache.ts";
 import { compileLinkedTestImage } from "../src/testing/test-images.ts";
 
 const temporaryDirectories: Array<string> = [];
 const testModuleSource = readFileSync(path.resolve("src/testing/runtime.mjs"), "utf-8");
+
+/** The execution snapshot of `maligator test <file> --run <filter>`. */
+function testExecution(file: string, filter: string) {
+	const command = parseCliArgs(["test", file, "--run", filter]);
+	if (command.kind !== "test") throw new Error("expected test command");
+	return resolveExecution(command, resolveBuildConfig({}), {
+		compiled: false,
+		optimization: "development",
+		target: hostExecutionTarget(process.platform, process.arch),
+	});
+}
 
 function temporaryDirectory(): string {
 	const directory = mkdtempSync(path.join(os.tmpdir(), "maligator-test-images-"));
@@ -334,5 +347,46 @@ test("missing", () => answer);
 				cacheDirectory: path.join(root, "cache"),
 			}),
 		).toThrow(/does not export 'answer'/);
+	});
+});
+
+describe("linked test images across test options", () => {
+	function project(entrySource: string) {
+		const root = temporaryDirectory();
+		const entry = path.join(root, "options.test.ts");
+		write(path.join(root, "package.json"), `{"type":"module"}\n`);
+		write(path.join(root, "shared.ts"), `export const answer: number = 42;\n`);
+		write(entry, entrySource);
+		return (filter: string) =>
+			compileLinkedTestImage({
+				files: [entry],
+				config: resolveBuildConfig({}),
+				execution: testExecution(entry, filter),
+				stripTypes: stripCompactTypes,
+				stripperIdentity: "test-options-stripper",
+				testModuleSource,
+				cacheDirectory: path.join(root, "cache"),
+			});
+	}
+
+	test("reuses every image when only a runtime test option changes", () => {
+		const compile = project(testSource("options"));
+		expect(compile("first").cache).toBe("miss");
+		const filtered = compile("second");
+		expect(filtered.cache).toBe("hit");
+		expect(filtered.artifactMisses).toBe(0);
+	});
+
+	test("recompiles a test file that reads the execution snapshot", () => {
+		const compile = project(`import { expect, test } from "maligator:test";
+import { execution } from "maligator:process";
+import { answer } from "./shared.ts";
+test("reads its filter", () => expect([answer, execution.command]).toEqual([42, "test"]));
+`);
+		expect(compile("first").cache).toBe("miss");
+		const filtered = compile("second");
+		expect(filtered.cache).toBe("miss");
+		expect(filtered.artifactMisses).toBe(1);
+		expect(filtered.artifactHits).toBe(filtered.wires.length - 1);
 	});
 });

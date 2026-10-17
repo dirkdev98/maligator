@@ -71,3 +71,41 @@ it.each([false, true])(
 		}
 	},
 );
+
+it.each([false, true])(
+	"reuses images across executions when no module reads the snapshot, relocatable=%s",
+	(relocatable) => {
+		const root = mkdtempSync(path.join(os.tmpdir(), "mal-platform-cache-"));
+		try {
+			const dependency = path.join(root, "node_modules/plain-library");
+			mkdirSync(dependency, { recursive: true });
+			writeFileSync(
+				path.join(dependency, "package.json"),
+				'{"type":"module","exports":"./index.mjs"}',
+			);
+			writeFileSync(path.join(dependency, "index.mjs"), "export const answer = 42;");
+			const entrypoint = path.join(root, "entry.mjs");
+			writeFileSync(
+				entrypoint,
+				'import { answer } from "plain-library"; globalThis.answer = answer;',
+			);
+			const options = {
+				entrypoint,
+				config,
+				stripTypes: stripCompactTypes,
+				stripperIdentity: "platform-cache-test",
+				cacheDirectory: path.join(root, "cache"),
+				optimization: "development" as const,
+				relocatable,
+			};
+			expect(compileBuildFrontend({ ...options, execution: context(false) }).cache).toBe(
+				"miss",
+			);
+			expect(compileBuildFrontend({ ...options, execution: context(true) }).cache).toBe(
+				"hit",
+			);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	},
+);

@@ -85,7 +85,7 @@ import {
 	frontendWirePath,
 } from "./frontend-cache.ts";
 import type { FrontendDependencyIdentity } from "./frontend-cache.ts";
-import { UnsupportedLinkedImagesError } from "./linked-images.ts";
+import { graphReadsExecution, UnsupportedLinkedImagesError } from "./linked-images.ts";
 import { executionIdentity } from "./platform/execution.ts";
 import type { Execution } from "./platform/execution.ts";
 import {
@@ -95,7 +95,7 @@ import {
 } from "./worker-image-cache.ts";
 import type { WorkerImageArtifact } from "./worker-image-cache.ts";
 
-const BUILD_FRONTEND_CACHE_SCHEMA = 8;
+const BUILD_FRONTEND_CACHE_SCHEMA = 9;
 const BUILD_FRONTEND_PIPELINE_VERSION = 6;
 const BUILD_FRONTEND_CACHE_DIRECTORY = path.join(
 	maligatorCacheDirectory(),
@@ -106,7 +106,9 @@ const NODE_GLOBALS_MODULE_ID = "maligator-internal:node-globals";
 export type BuildDependencyIdentity = FrontendDependencyIdentity;
 
 interface BuildFrontendManifest {
-	schema: 8;
+	schema: 9;
+	/** The execution snapshot when a module reads it; other commands may reuse the images otherwise. */
+	execution: string | null;
 	packageAbsences: Array<string>;
 	workerArtifacts: Array<WorkerImageArtifact>;
 	identity: string;
@@ -243,7 +245,6 @@ function cacheIdentity(options: CompileBuildFrontendOptions): string {
 			relocatable: options.relocatable === true,
 			enforcePolicies: options.enforcePolicies !== false,
 			configuration: compilerConfigurationIdentity(options.config),
-			execution: executionIdentity(options.execution),
 		}),
 	);
 }
@@ -373,6 +374,7 @@ function loadCached(
 	artifactRoot: string,
 	entrypoint: string,
 	identity: string,
+	execution: string,
 	session: FrontendCompilationSession,
 ):
 	| {
@@ -392,6 +394,7 @@ function loadCached(
 		manifest?.schema !== BUILD_FRONTEND_CACHE_SCHEMA ||
 		manifest.entrypoint !== entrypoint ||
 		manifest.identity !== identity ||
+		(manifest.execution !== null && manifest.execution !== execution) ||
 		!Array.isArray(manifest.runtimeArtifacts) ||
 		manifest.runtimeArtifacts.length === 0 ||
 		!manifest.runtimeArtifacts.every(validArtifactIdentity) ||
@@ -701,7 +704,14 @@ function prepareBuildFrontend(
 
 	if (!options.forceCompile) {
 		const validationStartedAt = Date.now();
-		const cached = loadCached(root, artifactRoot, entrypoint, identity, session);
+		const cached = loadCached(
+			root,
+			artifactRoot,
+			entrypoint,
+			identity,
+			executionIdentity(options.execution),
+			session,
+		);
 		phases.validationMs = Date.now() - validationStartedAt;
 		if (cached !== undefined) {
 			session.flush();
@@ -753,6 +763,9 @@ function prepareBuildFrontend(
 	});
 	phases.graphMs = Date.now() - graphStartedAt;
 	const ownerPackageAbsences = captureRootPackageAbsences(builtGraph);
+	// Worker roots compile from their own graphs, so assume they read the snapshot.
+	const readsExecution =
+		graphReadsExecution(builtGraph) || (builtGraph.workerEntries?.length ?? 0) > 0;
 	const workerRoots = {
 		entry: builtGraph.entry,
 		workerEntries: builtGraph.workerEntries,
@@ -1007,6 +1020,7 @@ function prepareBuildFrontend(
 				manifestPath(root, entrypoint, identity),
 				`${JSON.stringify({
 					schema: BUILD_FRONTEND_CACHE_SCHEMA,
+					execution: readsExecution ? executionIdentity(options.execution) : null,
 					identity,
 					contentKey: key,
 					runtimeArtifacts,
