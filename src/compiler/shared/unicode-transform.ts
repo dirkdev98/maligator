@@ -1,14 +1,4 @@
-import {
-	unicodeCased,
-	unicodeClasses,
-	unicodeComposition,
-	unicodeDecomposition,
-	unicodeIgnorable,
-	unicodeLower,
-	unicodePool,
-	unicodeSoftDotted,
-	unicodeUpper,
-} from "./unicode-data.ts";
+import { unicodeTables } from "./unicode-data.ts";
 
 function row(table: Uint32Array, stride: number, cp: number): number {
 	let low = 0,
@@ -31,8 +21,8 @@ function property(table: Uint32Array, cp: number): boolean {
 	return low * 2 < table.length && table[low * 2]! <= cp;
 }
 function combiningClass(cp: number): number {
-	const index = row(unicodeClasses, 2, cp);
-	return index < 0 ? 0 : unicodeClasses[index + 1]!;
+	const index = row(unicodeTables().classes, 2, cp);
+	return index < 0 ? 0 : unicodeTables().classes[index + 1]!;
 }
 function composite(first: number, second: number): number | undefined {
 	if (first >= 0x1100 && first < 0x1113 && second >= 0x1161 && second < 0x1176)
@@ -46,20 +36,22 @@ function composite(first: number, second: number): number | undefined {
 	)
 		return first + second - 0x11a7;
 	let low = 0,
-		high = unicodeComposition.length / 3;
+		high = unicodeTables().composition.length / 3;
 	while (low < high) {
 		const middle = (low + high) >>> 1,
 			index = middle * 3;
 		if (
-			unicodeComposition[index]! < first ||
-			(unicodeComposition[index] === first && unicodeComposition[index + 1]! < second)
+			unicodeTables().composition[index]! < first ||
+			(unicodeTables().composition[index] === first &&
+				unicodeTables().composition[index + 1]! < second)
 		)
 			low = middle + 1;
 		else high = middle;
 	}
 	const index = low * 3;
-	return unicodeComposition[index] === first && unicodeComposition[index + 1] === second
-		? unicodeComposition[index + 2]
+	return unicodeTables().composition[index] === first &&
+		unicodeTables().composition[index + 1] === second
+		? unicodeTables().composition[index + 2]
 		: undefined;
 }
 
@@ -96,7 +88,7 @@ export function transformUnicodeCase(
 		}
 		return false;
 	}
-	const table = upper ? unicodeUpper : unicodeLower;
+	const table = upper ? unicodeTables().upper : unicodeTables().lower;
 	for (let index = 0; index < points.length; index++) {
 		const cp = points[index]!;
 		let mapped: ReadonlyArray<number> | Uint32Array | undefined;
@@ -106,14 +98,14 @@ export function transformUnicodeCase(
 			context(
 				index,
 				-1,
-				(cp) => property(unicodeCased, cp),
-				(cp) => property(unicodeIgnorable, cp),
+				(cp) => property(unicodeTables().cased, cp),
+				(cp) => property(unicodeTables().ignorable, cp),
 			) &&
 			!context(
 				index,
 				1,
-				(cp) => property(unicodeCased, cp),
-				(cp) => property(unicodeIgnorable, cp),
+				(cp) => property(unicodeTables().cased, cp),
+				(cp) => property(unicodeTables().ignorable, cp),
 			)
 		)
 			mapped = [0x3c2];
@@ -149,7 +141,7 @@ export function transformUnicodeCase(
 				context(
 					index,
 					-1,
-					(cp) => property(unicodeSoftDotted, cp),
+					(cp) => property(unicodeTables().softDotted, cp),
 					(cp) => combiningClass(cp) !== 0 && combiningClass(cp) !== 230,
 				)
 			)
@@ -173,7 +165,10 @@ export function transformUnicodeCase(
 			mapped =
 				found < 0
 					? [cp]
-					: unicodePool.subarray(table[found + 1], table[found + 1]! + table[found + 2]!);
+					: unicodeTables().pool.subarray(
+							table[found + 1],
+							table[found + 1]! + table[found + 2]!,
+						);
 		}
 		for (const scalar of mapped) {
 			work += scalar > 0xffff ? 2 : 1;
@@ -205,15 +200,15 @@ export function normalizeUnicode(
 			if (syllable % 28 !== 0) points.push(0x11a7 + (syllable % 28));
 			return true;
 		}
-		const found = row(unicodeDecomposition, 4, cp);
-		if (found < 0 || (!compatibility && unicodeDecomposition[found + 3] !== 0)) {
+		const found = row(unicodeTables().decomposition, 4, cp);
+		if (found < 0 || (!compatibility && unicodeTables().decomposition[found + 3] !== 0)) {
 			points.push(cp);
 			return true;
 		}
-		const start = unicodeDecomposition[found + 1]!,
-			end = start + unicodeDecomposition[found + 2]!;
+		const start = unicodeTables().decomposition[found + 1]!,
+			end = start + unicodeTables().decomposition[found + 2]!;
 		for (let index = start; index < end; index++)
-			if (!decompose(unicodePool[index]!)) return false;
+			if (!decompose(unicodeTables().pool[index]!)) return false;
 		return true;
 	}
 	for (const character of source)

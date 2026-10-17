@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { format } from "oxfmt";
+import { unicodeTablesModule } from "./unicode-tables-module.ts";
 
 const sources: Readonly<Record<string, string>> = {
 	"UnicodeData.txt": "2e1efc1dcb59c575eedf5ccae60f95229f706ee6d031835247d843c11d96470c",
@@ -158,10 +159,6 @@ function cArray(name: string, type: "u8" | "u32", values: ReadonlyArray<number>)
 	return `static const ${type} mal_unicode_${name}[] = {\n${Array.from({ length: Math.ceil(values.length / 16) }, (_, i) => `    ${values.slice(i * 16, i * 16 + 16).join(", ")},`).join("\n")}\n};`;
 }
 for (const [name, values] of Object.entries(data)) {
-	// Packed text keeps generated data out of the compiler's per-element IR.
-	ts.push(
-		`export const unicode${name[0]!.toUpperCase()}${name.slice(1)} = new Uint32Array("${values.join(",")}".split(",").map(Number));`,
-	);
 	if (name === "classes") {
 		c.push(
 			cArray("class_pages", "u8", classPages),
@@ -176,6 +173,7 @@ for (const [name, values] of Object.entries(data)) {
 			),
 		);
 }
+ts.push(...unicodeTablesModule(data));
 mkdirSync(output, { recursive: true });
 const formatted = await format("unicode-data.ts", `${ts.join("\n")}\n`, {
 	useTabs: true,

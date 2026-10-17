@@ -1,7 +1,7 @@
 import { equal, ok } from "node:assert";
 import { readFileSync } from "node:fs";
 import { describe, it } from "vitest";
-import { unicodeClasses } from "../src/compiler/shared/unicode-data.ts";
+import { unicodeTables } from "../src/compiler/shared/unicode-data.ts";
 
 function table(name: string): Array<number> {
 	const source = readFileSync(
@@ -26,12 +26,13 @@ describe("Native combining-class table layout", () => {
 		ok(values.every((value) => value >= 0 && value <= 255));
 		let entry = 0;
 		for (let cp = 0; cp < 0x110000; cp++) {
-			const expected = unicodeClasses[entry] === cp ? unicodeClasses[entry + 1]! : 0;
-			if (unicodeClasses[entry] === cp) entry += 2;
+			const expected =
+				unicodeTables().classes[entry] === cp ? unicodeTables().classes[entry + 1]! : 0;
+			if (unicodeTables().classes[entry] === cp) entry += 2;
 			const actual = values[pages[cp >>> 8]! * 256 + (cp & 255)];
 			if (actual !== expected)
 				equal(actual, expected, `Combining class U+${cp.toString(16)}`);
 		}
-		equal(entry, unicodeClasses.length);
+		equal(entry, unicodeTables().classes.length);
 	});
 });
