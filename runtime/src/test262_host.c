@@ -152,6 +152,12 @@ static MalValue mal_test262_detach_array_buffer(
     return mal_value_new_null();
 }
 
+static MalTest262HostExtension g_test262_host_extension;
+
+void mal_test262_set_host_extension(MalTest262HostExtension extension) {
+    g_test262_host_extension = extension;
+}
+
 void mal_test262_install(MalVm *vm) {
     MalObject *global = mal_value_to_object(mal_realm_global(vm->current_realm));
     mal_intrinsic_define_method_n(vm, global, "print", 1, mal_test262_print);
@@ -171,6 +177,7 @@ void mal_test262_install(MalVm *vm) {
         "detachArrayBuffer",
         1,
         mal_test262_detach_array_buffer);
+    if (g_test262_host_extension != nullptr) g_test262_host_extension(vm, host);
 }
 
 static void mal_test262_install_realm(MalVm *vm, void *data) {
@@ -207,6 +214,10 @@ static MalValue mal_test262_create_realm(
 
 void mal_test262_install(MalVm *vm) {
     (void) vm;
+}
+
+void mal_test262_set_host_extension(MalTest262HostExtension extension) {
+    (void) extension;
 }
 
 #endif

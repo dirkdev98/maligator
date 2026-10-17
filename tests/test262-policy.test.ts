@@ -169,14 +169,11 @@ describe("Test262 runner policy", () => {
 		).toBe(false);
 	});
 
-	it("reports blocking-host tests as inapplicable", () => {
+	it("runs tests for either [[CanBlock]] by configuring the main agent", () => {
 		for (const variant of ["strict", "sloppy"] as const) {
-			expect(test262SkipReason(file("blocking", ["CanBlockIsTrue"]), variant)).toContain(
-				"CanBlock=false",
-			);
-			expect(
-				test262SkipReason(file("nonblocking", ["CanBlockIsFalse"]), variant),
-			).toBeUndefined();
+			for (const flag of ["CanBlockIsFalse", "CanBlockIsTrue"]) {
+				expect(test262SkipReason(file("blocking", [flag]), variant)).toBeUndefined();
+			}
 		}
 	});
 

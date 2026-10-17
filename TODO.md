@@ -696,9 +696,6 @@ contracts or investigates costs still visible after the string follow-ups.
 - [ ] Implement AbstractModuleSource and source-phase imports. Preserve module identity
       and host loading boundaries across cached and uncached compilation.
 
-- [ ] Add $262.agent and multi-agent Atomics behavior. Define worker lifetime, shared
-      memory, synchronization, cleanup, and harness failure reporting first.
-
 - [ ] Let `require` and `import()` cross linked-image boundaries. A build still
       compiles one whole program for them, and `maligator test` one application image.
       The loader already aliases CommonJS registry entries and namespace slots;

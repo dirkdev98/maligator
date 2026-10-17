@@ -177,9 +177,52 @@ function cases(): Array<Test262File> {
 			'var error = new TypeError("expected"); error.name = "RangeError"; error.stack = "RangeError: misleading"; throw error;',
 			{ negative: { phase: "runtime", type: "TypeError" } },
 		),
-		file("blocking-host", 'throw new Error("inapplicable test executed");', {
-			flags: ["CanBlockIsTrue"],
-		}),
+		file(
+			"nonblocking-host",
+			`
+			const i32a = new Int32Array(new SharedArrayBuffer(4));
+			assert.throws(TypeError, () => Atomics.wait(i32a, 0, 1, 0));
+		`,
+			{ flags: ["CanBlockIsFalse"] },
+		),
+		file(
+			"blocking-host",
+			`
+			const i32a = new Int32Array(new SharedArrayBuffer(4));
+			assert.sameValue(Atomics.wait(i32a, 0, 0, 0), "timed-out");
+		`,
+			{ flags: ["CanBlockIsTrue"] },
+		),
+		file(
+			"agent-broadcast",
+			`
+			$262.agent.start(\`
+				$262.agent.receiveBroadcast(function (sab, value) {
+					const i32a = new Int32Array(sab);
+					Atomics.add(i32a, 1, 1);
+					$262.agent.report(Atomics.wait(i32a, 0, 0) + ":" + value);
+					$262.agent.leaving();
+				});
+			\`);
+			const i32a = new Int32Array(new SharedArrayBuffer(8));
+			$262.agent.broadcast(i32a.buffer, 7);
+			while (Atomics.load(i32a, 1) !== 1) {}
+			while (Atomics.notify(i32a, 0) === 0) $262.agent.sleep(1);
+			let report;
+			while ((report = $262.agent.getReport()) === null) $262.agent.sleep(1);
+			assert.sameValue(report, "ok:7");
+		`,
+		),
+		file(
+			"wait-async-deadline",
+			`
+			const i32a = new Int32Array(new SharedArrayBuffer(4));
+			Atomics.waitAsync(i32a, 0, 0, 10).value
+				.then(outcome => assert.sameValue(outcome, "timed-out"))
+				.then($DONE, $DONE);
+		`,
+			{ flags: ["async"] },
+		),
 		file(
 			"native-call-contracts",
 			`
@@ -214,7 +257,6 @@ describe.each(["compiled", "interpreted", "wire"] as const)(
 				const files = cases();
 				const expected = files.map((input) => {
 					if (
-						input.frontmatter.flags?.includes("CanBlockIsTrue") ||
 						(variant === "strict" &&
 							(input.frontmatter.flags?.includes("raw") ||
 								input.frontmatter.flags?.includes("noStrict"))) ||

@@ -52,11 +52,15 @@ export function test262SkipReason(
 	file: Pick<Test262File, "frontmatter">,
 	variant: Test262Variant,
 ): string | undefined {
-	if (file.frontmatter.flags?.includes("CanBlockIsTrue")) {
-		return "host: CanBlockIsTrue requires a blocking agent; this host has CanBlock=false";
-	}
 	if (!test262RunsInVariant(file, variant)) return `variant: no ${variant} execution`;
 	return undefined;
+}
+
+/** Agent tests rely on a main agent that can block, like the d8 and SpiderMonkey shells. */
+export function test262MainAgentCanBlock(
+	file: Pick<Test262File, "frontmatter">,
+): boolean {
+	return !file.frontmatter.flags?.includes("CanBlockIsFalse");
 }
 
 export function test262ScriptStrictness(

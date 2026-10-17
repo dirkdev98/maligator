@@ -31,8 +31,7 @@ typedef struct AtomicsAsyncRecord {
     // Owner-local id the timeout callback resolves through `pending`, so a
     // late timer never touches a record a notify already settled and freed.
     u64 id;
-    // Unreferenced host timer for a finite timeout (0 = none). Like Node, a
-    // pending waitAsync deadline never keeps the event loop alive by itself.
+    // Host timer for a finite timeout (0 = none).
     i64 timer_id;
 } AtomicsAsyncRecord;
 
@@ -51,6 +50,7 @@ typedef struct {
     AtomicsAsyncMailbox *mailbox;
     AtomicsAsyncRecord *pending;
     u64 next_id;
+    bool deadlines_keep_alive;
 } AtomicsAsyncOwner;
 
 static MAL_ISOLATE_LOCAL AtomicsAsyncOwner *g_owner;
@@ -235,7 +235,7 @@ static bool atomics_async_wait(
             name, atomics_async_timeout, &callback[1], 1));
         record->timer_id = mal_host_set_timeout(vm, callback[0], (i64) ceil(timeout_ms), nullptr, 0);
         mal_gc_unroot(&span);
-        mal_host_timer_set_referenced(vm, record->timer_id, false);
+        mal_host_timer_set_referenced(vm, record->timer_id, owner->deadlines_keep_alive);
     }
     *out_promise = record->promise;
     return true;
@@ -274,7 +274,7 @@ static void atomics_async_free(MalVm *vm) {
     g_owner = nullptr;
 }
 
-bool mal_atomics_async_install(MalVm *vm) {
+bool mal_atomics_async_install(MalVm *vm, bool deadlines_keep_alive) {
     if (g_owner != nullptr) {
         return true;
     }
@@ -293,6 +293,7 @@ bool mal_atomics_async_install(MalVm *vm) {
     pthread_mutex_init(&mailbox->lock, nullptr);
     mailbox->reactor = &host->reactor;
     owner->mailbox = mailbox;
+    owner->deadlines_keep_alive = deadlines_keep_alive;
     if (!mal_vm_register_runtime_cleanup(vm, atomics_async_free)) {
         pthread_mutex_destroy(&mailbox->lock);
         free(mailbox);

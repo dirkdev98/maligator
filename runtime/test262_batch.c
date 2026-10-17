@@ -7,6 +7,7 @@
 #include <unistd.h>
 
 #include "vm.h"
+#include "test262_agent.h"
 #include "test262_host.h"
 
 // Batch driver for generated test262 translation units: every test runs in a
@@ -17,6 +18,7 @@ extern const int mal_test262_plan_image_indices[];
 extern const int mal_test262_plan_entry_indices[];
 extern const int mal_test262_plan_helper_offsets[];
 extern const int mal_test262_plan_helper_indices[];
+extern const unsigned char mal_test262_plan_can_block[];
 extern const int mal_test262_plan_count;
 
 static int mal_test262_run_entry(MalVm *vm, int function_index) {
@@ -27,9 +29,10 @@ static int mal_test262_run_entry(MalVm *vm, int function_index) {
 }
 
 static int mal_test262_run_single(int index) {
+    const MalRuntimeImage *image = mal_test262_artifact_images[mal_test262_plan_image_indices[index]];
     MalVm vm;
-    mal_vm_init(&vm, mal_test262_artifact_images[mal_test262_plan_image_indices[index]]);
-    mal_test262_install(&vm);
+    mal_vm_init(&vm, image);
+    if (!mal_test262_attach_host(&vm, image, mal_test262_plan_can_block[index] != 0)) return 2;
 
     int helper_start = mal_test262_plan_helper_offsets[index];
     int helper_end = mal_test262_plan_helper_offsets[index + 1];
@@ -40,9 +43,10 @@ static int mal_test262_run_single(int index) {
         }
     }
 
-    int code = mal_test262_run_entry(&vm, mal_test262_plan_entry_indices[index]);
+    mal_test262_run_entry(&vm, mal_test262_plan_entry_indices[index]);
+    mal_test262_run_event_loop(&vm);
     mal_test262_report_completion(&vm, "runtime");
-    return code;
+    return vm.completion.kind == MAL_COMPLETION_THROW ? 1 : 0;
 }
 
 static long mal_test262_now_ms(void) {

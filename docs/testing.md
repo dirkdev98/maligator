@@ -503,9 +503,12 @@ records containing the thrown object's constructor name, not its printed stack o
 message. Async success additionally requires normal completion and the success
 sentinel; an uncaught throw still fails after `$DONE()`.
 
-The current host has `CanBlock=false`. Tests requiring `CanBlockIsTrue` are reported
-as `SKIPPED`, with an explicit host-applicability reason in `skips`. Combined skips
-remain visible in the total inventory. The site's percentage is
+The Atomics tests need more of a host than a single VM. `$262.agent` starts every
+agent as a thread with its own VM, and the drivers run an event loop after the test
+body so timers and `Atomics.waitAsync` deadlines settle. Like the d8 and SpiderMonkey
+shells, the main agent can block, except in `CanBlockIsFalse` tests, where the driver
+sets its `[[CanBlock]]` to false. Skipped tests carry their reason in `skips`, and
+combined skips remain visible in the total inventory. The site's percentage is
 `PASSED / (PASSED + FAILED + SKIPPED)`; it does not remove skips from the denominator.
 An ordinary check exits nonzero for regressions from previously passing files;
 known baseline failures can therefore coexist with a successful gate.

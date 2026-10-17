@@ -6,6 +6,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "test262_agent.h"
 #include "test262_host.h"
 #include "vm.h"
 #include "vm_load.h"
@@ -79,7 +80,15 @@ static int mal_test262_run_wire_plan(const char *plan_path) {
         }
     }
 
-    MalLoadedRuntimeImage *loaded = mal_test262_load_wire(wire_paths[0]);
+    // src/test262/runtime.ts writes this directive ahead of the wire paths.
+    bool can_block = true;
+    char **wires = wire_paths;
+    if (wire_count > 1 && strcmp(wires[0], "#can-block=false") == 0) {
+        can_block = false;
+        wires++;
+        wire_count--;
+    }
+    MalLoadedRuntimeImage *loaded = mal_test262_load_wire(wires[0]);
     if (loaded == nullptr) {
         free(wire_paths);
         free(plan_buffer);
@@ -88,7 +97,12 @@ static int mal_test262_run_wire_plan(const char *plan_path) {
 
     MalVm vm;
     mal_vm_init(&vm, mal_loaded_runtime_image_get(loaded));
-    mal_test262_install(&vm);
+    if (!mal_test262_attach_host(&vm, mal_loaded_runtime_image_get(loaded), can_block)) {
+        free(wire_paths);
+        free(plan_buffer);
+        mal_loaded_runtime_image_free(loaded);
+        return 2;
+    }
     MalCallable **callables = calloc((usize) wire_count, sizeof(MalCallable *));
     if (callables == nullptr) {
         free(wire_paths);
@@ -100,7 +114,7 @@ static int mal_test262_run_wire_plan(const char *plan_path) {
     for (int index = 0; index < wire_count; index++) {
         i32 entry = 0;
         if (index > 0) {
-            MalLoadedRuntimeImage *fragment = mal_test262_load_wire(wire_paths[index]);
+            MalLoadedRuntimeImage *fragment = mal_test262_load_wire(wires[index]);
             if (fragment == nullptr) {
                 vm.completion.kind = MAL_COMPLETION_THROW;
                 break;
@@ -118,6 +132,7 @@ static int mal_test262_run_wire_plan(const char *plan_path) {
         completed_index = index;
         if (vm.completion.kind == MAL_COMPLETION_THROW) break;
     }
+    if (completed_index == wire_count - 1) mal_test262_run_event_loop(&vm);
     int code = vm.completion.kind == MAL_COMPLETION_THROW ? 1 : 0;
     mal_test262_report_completion(&vm, completed_index == wire_count - 1 ? "runtime" : "harness");
 
@@ -126,6 +141,7 @@ static int mal_test262_run_wire_plan(const char *plan_path) {
         for (int index = 0; index < wire_count; index++) {
             if (callables[index] != nullptr) mal_vm_free_callable(callables[index]);
         }
+        mal_test262_detach_host(&vm);
         mal_vm_free(&vm);
         mal_loaded_runtime_image_free(loaded);
     }

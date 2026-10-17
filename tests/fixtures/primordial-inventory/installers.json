@@ -17,7 +17,7 @@
 	},
 	{
 		"file": "builtin_atomics.c",
-		"sha256": "a7e8c2e4f55709732f0acb010d25ddd3b40b6fc57ddadc3e0a845447c8e341c9"
+		"sha256": "43ff01c8a4a10a3cb91d16e69bd3559c96c37c6fa8f88450a7ec0b50511a14cf"
 	},
 	{
 		"file": "builtin_bigint.c",
@@ -665,7 +665,11 @@
 	},
 	{
 		"file": "runtime/personality.c",
-		"sha256": "eb77aefb14ac99dfbbd3ae6392e28c5b6120aa8d94f8154ce2c89010cda0239d"
+		"sha256": "d21b9d4bde18644f98e7ac29ed981af50248f37e41d8b19e9ac257deb42a42d9"
+	},
+	{
+		"file": "runtime/test262_agent.c",
+		"sha256": "8a94b5662d0616f015e282c9bf475bf16b66ad1b3dfe18397a816dceba672ffe"
 	},
 	{
 		"file": "runtime/web_events.c",
@@ -713,7 +717,7 @@
 	},
 	{
 		"file": "test262_host.c",
-		"sha256": "f5b909fd7413b977d038c25636f9e4684b4000dd2cfaf3d2c1d28b98b31d89ea"
+		"sha256": "54e3774f044ca4e458010aa6fbb02bf11f10137cc0c567877a4943968afaea32"
 	},
 	{
 		"file": "vm.c",

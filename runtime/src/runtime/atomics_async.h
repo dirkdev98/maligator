@@ -9,5 +9,7 @@
  * reactor; the timeout is a reactor timer; settlement runs as a macrotask.
  * Isolate teardown (registered runtime cleanup) cancels every pending waiter;
  * in-flight cross-thread posts keep the mailbox alive until they land.
+ * Like Node, a pending deadline does not keep the event loop alive unless
+ * `deadlines_keep_alive` asks for shell semantics (d8, the Test262 host).
  */
-bool mal_atomics_async_install(MalVm *vm);
+bool mal_atomics_async_install(MalVm *vm, bool deadlines_keep_alive);

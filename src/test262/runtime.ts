@@ -57,6 +57,7 @@ import { compileTest262ProgramImage } from "./compile.ts";
 import { TEST262_METADATA } from "./constants.ts";
 import { test262Log } from "./log.ts";
 import {
+	test262MainAgentCanBlock,
 	test262RuntimeVerdict,
 	test262ScriptStrictness,
 	test262SkipReason,
@@ -122,10 +123,7 @@ const CC_LINK_FLAGS = [
  * The generated objects and binaries are suffixed per GC/sanitizer build
  * dimension. Reusable runtime archives are content-addressed by runtime-build.ts.
  */
-export type Test262NativeArtifactPaths = {
-	c: Pick<NativeArtifacts["c"], "engine">;
-	rust: Pick<NativeArtifacts["rust"], "linkArgs">;
-};
+export type Test262NativeArtifactPaths = Pick<NativeArtifacts, "linkArgs">;
 
 /** Structured-clone-safe native inputs selected once by the parent thread. */
 export type Test262NativeBuildInputs = {
@@ -136,6 +134,8 @@ export type Test262NativeBuildInputs = {
 
 let nativeBuildInputs: Test262NativeBuildInputs | undefined;
 const REPORT_PATH = `${TEST262_METADATA.reportPath}${buildSuffix()}`;
+// Must match runtime/test262_wire.c.
+const WIRE_PLAN_NONBLOCKING = "#can-block=false";
 const WORK_PATH = path.join(
 	TEST262_METADATA.workPath,
 	`${String(process.pid)}${buildSuffix()}`,
@@ -153,10 +153,7 @@ export function test262SetNativeBuildInputs(inputs: Test262NativeBuildInputs): v
 	nativeBuildInputs = {
 		toolchain: inputs.toolchain,
 		wireRunner: inputs.wireRunner,
-		artifacts: {
-			c: { engine: inputs.artifacts.c.engine },
-			rust: { linkArgs: [...inputs.artifacts.rust.linkArgs] },
-		},
+		artifacts: { linkArgs: [...inputs.artifacts.linkArgs] },
 	};
 }
 
@@ -474,6 +471,8 @@ export function test262PrepareBuild() {
 			"-O1",
 			"-I",
 			"runtime/src",
+			"-I",
+			"runtime/src/runtime",
 			...mainFlags.split(" ").filter(Boolean),
 			"-c",
 			"runtime/test262_batch.c",
@@ -883,7 +882,8 @@ async function test262RunWireBatch(files: Array<Test262File>, workerId: number) 
 			cacheFrontendWire(serializeRuntimeImage(image.runtime)),
 		);
 		const wirePath = path.join(WORK_PATH, `wire${workerId}-${entries.length}.plan`);
-		writeFileSync(wirePath, `${wirePaths.join("\n")}\n`);
+		const directives = test262MainAgentCanBlock(file) ? [] : [WIRE_PLAN_NONBLOCKING];
+		writeFileSync(wirePath, `${[...directives, ...wirePaths].join("\n")}\n`);
 		entries.push({ file, index: entries.length, wirePath });
 	}
 
@@ -905,8 +905,7 @@ async function linkBatch(
 			objectPath,
 			...(sharedObjectPath === undefined ? [] : [sharedObjectPath]),
 			`${WORK_PATH}/test262_batch.o`,
-			artifacts.c.engine,
-			...artifacts.rust.linkArgs,
+			...artifacts.linkArgs,
 			"-o",
 			binPath,
 		],
@@ -1265,6 +1264,7 @@ export async function test262RunBatch(
 		`const int mal_test262_plan_entry_indices[] = { ${entries.map((entry) => entry.entryFunctionIndex).join(", ")} };`,
 		`const int mal_test262_plan_helper_offsets[] = { ${helperOffsets.join(", ")} };`,
 		`const int mal_test262_plan_helper_indices[] = { ${helperIndices.length > 0 ? helperIndices.join(", ") : "0"} };`,
+		`const unsigned char mal_test262_plan_can_block[] = { ${entries.map((entry) => (test262MainAgentCanBlock(entry.file) ? 1 : 0)).join(", ")} };`,
 		`const int mal_test262_plan_count = ${entries.length};`,
 		"",
 	];
@@ -1281,8 +1281,7 @@ export async function test262RunBatch(
 					`${baseName}.c`,
 					...(sharedObject === undefined ? [] : [sharedObject.path]),
 					`${WORK_PATH}/test262_batch.o`,
-					artifacts.c.engine,
-					...artifacts.rust.linkArgs,
+					...artifacts.linkArgs,
 					"-o",
 					`${baseName}.bin`,
 				];

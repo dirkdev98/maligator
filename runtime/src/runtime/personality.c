@@ -42,7 +42,7 @@ void mal_runtime_personality_install(MalVm *vm, bool web_platform, bool node) {
     vm->host_web_platform = web_platform;
     vm->host_node = node;
     MalObject *global_this = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS]);
-    mal_atomics_async_install(vm);
+    mal_atomics_async_install(vm, false);
     if (web_platform || node) {
         if (node) mal_host_timers_install_node(vm, global_this);
         else mal_host_timers_install(vm, global_this);
