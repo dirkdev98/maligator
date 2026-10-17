@@ -51,7 +51,7 @@ export interface NativeBuildPlan {
 	mode: "development" | "production";
 	lto: boolean;
 	ltoFlags: ReadonlyArray<string>;
-	thinLtoCache: "darwin" | "lld" | null;
+	thinLtoCache: "darwin" | "lld" | "plugin" | null;
 	strip: boolean;
 	warnings: Array<string>;
 }

@@ -40,7 +40,7 @@ export interface ToolchainProbes {
 	c2x: boolean;
 	lto: boolean;
 	ltoFlags: Array<string>;
-	thinLtoCache: "darwin" | "lld" | null;
+	thinLtoCache: "darwin" | "lld" | "plugin" | null;
 	strip: boolean;
 	cxxLink: boolean;
 	stripArgs: Array<string>;
@@ -252,7 +252,8 @@ function isCachedProbes(value: unknown, fingerprint: string): value is CachedPro
 		probes.ltoFlags.every((item) => typeof item === "string") &&
 		(probes.thinLtoCache === null ||
 			probes.thinLtoCache === "darwin" ||
-			probes.thinLtoCache === "lld") &&
+			probes.thinLtoCache === "lld" ||
+			probes.thinLtoCache === "plugin") &&
 		typeof probes.strip === "boolean" &&
 		typeof probes.cxxLink === "boolean" &&
 		Array.isArray(probes.stripArgs) &&
@@ -576,6 +577,11 @@ function probeCapabilities(
 			{
 				kind: "lld",
 				argument: (directory) => `-Wl,--thinlto-cache-dir=${directory}`,
+			},
+			// GNU ld and gold run ThinLTO through the LLVM gold plugin, which takes this form.
+			{
+				kind: "plugin",
+				argument: (directory) => `-Wl,-plugin-opt,cache-dir=${directory}`,
 			},
 		];
 		for (const candidate of candidates) {

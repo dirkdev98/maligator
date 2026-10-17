@@ -115,6 +115,7 @@ function compilerScript(
 	lto = true,
 	thinLto = true,
 	readinessFile?: string,
+	lldThinLtoCache = true,
 ): string {
 	return `
 printf '%s\n' "$*" >> '${logPath}'
@@ -122,6 +123,7 @@ printf 'cc-env %s\n' "$MAL_TEST_BUILD_ENV" >> '${logPath}'
 if [ "$1" = "--version" ]; then printf '%s\n' '${version}'; exit 0; fi
 if [ "$1" = "-dumpmachine" ]; then printf '%s\n' 'fake-target'; exit 0; fi
 ${readinessFile === undefined ? "" : `[ -f '${readinessFile}' ] || exit 1`}
+${lldThinLtoCache ? "" : 'case " $* " in *"--thinlto-cache-dir="*) exit 1;; esac'}
 ${thinLto ? "" : 'case " $* " in *" -flto=thin "*) exit 1;; esac'}
 ${lto ? "" : 'case " $* " in *" -flto"*) exit 1;; esac'}
 invocation="$*"
@@ -144,7 +146,12 @@ exit 0
 }
 
 function createFakeToolchain(
-	options: { lto?: boolean; thinLto?: boolean; strip?: boolean } = {},
+	options: {
+		lto?: boolean;
+		thinLto?: boolean;
+		strip?: boolean;
+		lldThinLtoCache?: boolean;
+	} = {},
 ): FakeToolchain {
 	const root = mkdtempSync(path.join(os.tmpdir(), "mal-toolchain-"));
 	const bin = path.join(root, "bin");
@@ -158,7 +165,14 @@ function createFakeToolchain(
 
 	executable(
 		path.join(bin, "fake-cc"),
-		compilerScript("fake cc 1", logPath, options.lto ?? true, options.thinLto ?? true),
+		compilerScript(
+			"fake cc 1",
+			logPath,
+			options.lto ?? true,
+			options.thinLto ?? true,
+			undefined,
+			options.lldThinLtoCache ?? true,
+		),
 	);
 	executable(path.join(bin, "fake-cxx"), compilerScript("fake cxx 1", logPath));
 	executable(
@@ -1104,6 +1118,42 @@ printf '!<arch>\\n' > "$2"
 		expect(invocation).not.toContain("-flto");
 		expect(invocation).not.toContain("strip ");
 	}, 10_000);
+
+	it("caches ThinLTO through the linker plugin when the linker is not lld", () => {
+		const fake = createFakeToolchain({ lldThinLtoCache: false });
+		const report = inspectToolchain({
+			rootDir: fake.root,
+			rustDir: fake.rustDir,
+			env: fake.env,
+			needsCxx: false,
+			platform: "linux",
+		});
+		expect(report.probes).toMatchObject({
+			ltoFlags: ["-flto=thin"],
+			thinLtoCache: "plugin",
+		});
+		const context = resolveNativeBuildContext({
+			toolchain: report.toolchain!,
+			plan: selectNativeBuildPlan(report.toolchain!, true),
+			cacheDirectory: path.join(fake.root, "cache"),
+			features: { evalEnabled: false, webPlatformEnabled: false },
+		});
+		writeFileSync(fake.logPath, "");
+
+		buildLocalBinary({
+			context,
+			name: "plugin-cache",
+			cSource: "int value;",
+			verbose: false,
+			outDir: fake.root,
+		});
+
+		const links = readFileSync(fake.logPath, "utf-8")
+			.split("\n")
+			.filter((line) => line.includes("-o") && !line.includes(" -c "));
+		expect(links.some((line) => line.includes("-Wl,-plugin-opt,cache-dir="))).toBe(true);
+		expect(links.some((line) => line.includes("--thinlto-cache-dir="))).toBe(false);
+	});
 
 	it("falls back to full LTO when ThinLTO is unavailable", () => {
 		const fake = createFakeToolchain({ thinLto: false });

@@ -69,7 +69,10 @@ configured assets take the ordinary build.
 
 `maligator build --production` still uses `-O2`, adds compile/archive/link LTO when
 the selected toolchain passes the LTO probe, and strips native symbols after linking
-when the host strip probe succeeds. Unsupported LTO or stripping emits a warning and
+when the host strip probe succeeds. ThinLTO links keep a code generation cache under
+the Maligator cache through whichever form the linker accepts: `ld64`'s
+`-cache_path_lto`, lld's `--thinlto-cache-dir`, or the LLVM gold plugin's `cache-dir`
+option that GNU ld and gold use. Unsupported LTO or stripping emits a warning and
 continues with a valid `-O2` executable. Missing required C2x or C++ link capability
 is a hard error. Stripping does not remove Maligator's own JavaScript source-position
 tables.

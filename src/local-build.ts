@@ -165,10 +165,13 @@ function thinLtoCacheArguments(
 	);
 	return {
 		directory,
-		arguments:
+		arguments: [
 			context.plan.thinLtoCache === "darwin"
-				? [`-Wl,-cache_path_lto,${directory}`]
-				: [`-Wl,--thinlto-cache-dir=${directory}`],
+				? `-Wl,-cache_path_lto,${directory}`
+				: context.plan.thinLtoCache === "plugin"
+					? `-Wl,-plugin-opt,cache-dir=${directory}`
+					: `-Wl,--thinlto-cache-dir=${directory}`,
+		],
 	};
 }
 
