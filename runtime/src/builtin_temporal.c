@@ -669,6 +669,28 @@ static bool temporal_get_rounding_mode(
     return temporal_rounding_mode_from_string(vm, string, out);
 }
 
+// GetDifferenceSettings. temporal_rs resolves unset and auto units, validates
+// them per type and negates the rounding mode for since.
+static bool temporal_difference_settings(
+    MalVm *vm, MalValue value, DifferenceSettings *settings
+) {
+    *settings = (DifferenceSettings) {0};
+    bool present;
+    if (!temporal_options_object(vm, value, &present)) return false;
+    if (!present) return true;
+    u32 increment;
+    RoundingMode mode;
+    if (!temporal_get_optional_unit_option(vm, value, "largestUnit", true, &settings->largest_unit) ||
+        !temporal_get_rounding_increment(vm, value, &increment) ||
+        !temporal_get_rounding_mode(vm, value, RoundingMode_Trunc, &mode) ||
+        !temporal_get_optional_unit_option(vm, value, "smallestUnit", false, &settings->smallest_unit)) {
+        return false;
+    }
+    settings->rounding_mode = (RoundingMode_option) {.ok = mode, .is_ok = true};
+    settings->increment = (OptionU32) {.ok = increment, .is_ok = true};
+    return true;
+}
+
 static MalValue temporal_write_to_string(MalVm *vm, MalTemporalWrite *write) {
     if (write->diplomat.grow_failed) {
         temporal_write_destroy(write);
@@ -1719,33 +1741,6 @@ static MalValue plain_time_round(
                         : temporal_throw(vm, result.err);
 }
 
-static bool plain_time_difference_settings(
-    MalVm *vm, MalValue value, DifferenceSettings *settings
-) {
-    *settings = (DifferenceSettings) {0};
-    bool present;
-    if (!temporal_options_object(vm, value, &present)) return false;
-    Unit largest = Unit_Hour;
-    Unit smallest = Unit_Nanosecond;
-    RoundingMode mode = RoundingMode_Trunc;
-    u32 increment = 1;
-    if (present &&
-        (!temporal_get_unit_option(
-             vm, value, "largestUnit", true, false, Unit_Auto, &largest) ||
-         !temporal_get_rounding_increment(vm, value, &increment) ||
-         !temporal_get_rounding_mode(vm, value, RoundingMode_Trunc, &mode) ||
-         !temporal_get_unit_option(
-             vm, value, "smallestUnit", false, false, Unit_Nanosecond, &smallest))) {
-        return false;
-    }
-    if (largest == Unit_Auto) largest = Unit_Hour;
-    settings->largest_unit = (Unit_option) {.ok = largest, .is_ok = true};
-    settings->smallest_unit = (Unit_option) {.ok = smallest, .is_ok = true};
-    settings->rounding_mode = (RoundingMode_option) {.ok = mode, .is_ok = true};
-    settings->increment = (OptionU32) {.ok = increment, .is_ok = true};
-    return true;
-}
-
 static MalValue plain_time_difference(
     MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, bool since
 ) {
@@ -1755,7 +1750,7 @@ static MalValue plain_time_difference(
         vm, arg_count > 0 ? args[0] : mal_value_new_undefined(), mal_value_new_undefined());
     if (other == nullptr) return mal_value_new_undefined();
     DifferenceSettings settings;
-    if (!plain_time_difference_settings(
+    if (!temporal_difference_settings(
             vm, arg_count > 1 ? args[1] : mal_value_new_undefined(), &settings)) {
         temporal_rs_PlainTime_destroy(other);
         return mal_value_new_undefined();
@@ -2281,33 +2276,6 @@ static MalValue plain_date_equals(
     return mal_value_new_boolean(equal);
 }
 
-static bool plain_date_difference_settings(
-    MalVm *vm, MalValue value, DifferenceSettings *settings
-) {
-    *settings = (DifferenceSettings) {0};
-    bool present;
-    if (!temporal_options_object(vm, value, &present)) return false;
-    Unit largest = Unit_Day;
-    Unit smallest = Unit_Day;
-    RoundingMode mode = RoundingMode_Trunc;
-    u32 increment = 1;
-    if (present &&
-        (!temporal_get_unit_option(
-             vm, value, "largestUnit", true, false, Unit_Auto, &largest) ||
-         !temporal_get_rounding_increment(vm, value, &increment) ||
-         !temporal_get_rounding_mode(vm, value, RoundingMode_Trunc, &mode) ||
-         !temporal_get_unit_option(
-             vm, value, "smallestUnit", false, false, Unit_Day, &smallest))) {
-        return false;
-    }
-    if (largest == Unit_Auto) largest = Unit_Day;
-    settings->largest_unit = (Unit_option) {.ok = largest, .is_ok = true};
-    settings->smallest_unit = (Unit_option) {.ok = smallest, .is_ok = true};
-    settings->rounding_mode = (RoundingMode_option) {.ok = mode, .is_ok = true};
-    settings->increment = (OptionU32) {.ok = increment, .is_ok = true};
-    return true;
-}
-
 static MalValue plain_date_difference(
     MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, bool since
 ) {
@@ -2317,7 +2285,7 @@ static MalValue plain_date_difference(
         vm, arg_count > 0 ? args[0] : mal_value_new_undefined(), mal_value_new_undefined());
     if (other == nullptr) return mal_value_new_undefined();
     DifferenceSettings settings;
-    if (!plain_date_difference_settings(
+    if (!temporal_difference_settings(
             vm, arg_count > 1 ? args[1] : mal_value_new_undefined(), &settings)) {
         temporal_rs_PlainDate_destroy(other);
         return mal_value_new_undefined();
@@ -2861,31 +2829,12 @@ static MalValue plain_date_time_difference(
     PlainDateTime *other = plain_date_time_from_like(
         vm, arg_count > 0 ? args[0] : mal_value_new_undefined(), mal_value_new_undefined());
     if (other == nullptr) return mal_value_new_undefined();
-    DifferenceSettings settings = {0};
-    bool present;
-    MalValue options = arg_count > 1 ? args[1] : mal_value_new_undefined();
-    if (!temporal_options_object(vm, options, &present)) {
+    DifferenceSettings settings;
+    if (!temporal_difference_settings(
+            vm, arg_count > 1 ? args[1] : mal_value_new_undefined(), &settings)) {
         temporal_rs_PlainDateTime_destroy(other);
         return mal_value_new_undefined();
     }
-    Unit largest = Unit_Day, smallest = Unit_Nanosecond;
-    RoundingMode mode = RoundingMode_Trunc;
-    u32 increment = 1;
-    if (present &&
-        (!temporal_get_unit_option(
-             vm, options, "largestUnit", true, false, Unit_Auto, &largest) ||
-         !temporal_get_rounding_increment(vm, options, &increment) ||
-         !temporal_get_rounding_mode(vm, options, RoundingMode_Trunc, &mode) ||
-         !temporal_get_unit_option(
-             vm, options, "smallestUnit", false, false, Unit_Nanosecond, &smallest))) {
-        temporal_rs_PlainDateTime_destroy(other);
-        return mal_value_new_undefined();
-    }
-    if (largest == Unit_Auto) largest = Unit_Day;
-    settings.largest_unit = (Unit_option) {.ok = largest, .is_ok = true};
-    settings.smallest_unit = (Unit_option) {.ok = smallest, .is_ok = true};
-    settings.rounding_mode = (RoundingMode_option) {.ok = mode, .is_ok = true};
-    settings.increment = (OptionU32) {.ok = increment, .is_ok = true};
     Duration *handle = nullptr;
     TemporalError error = {0};
     bool ok;
@@ -3321,32 +3270,12 @@ static MalValue plain_year_month_difference(
     PlainYearMonth *other = plain_year_month_from_like(
         vm, arg_count > 0 ? args[0] : mal_value_new_undefined(), mal_value_new_undefined());
     if (other == nullptr) return mal_value_new_undefined();
-    MalValue options = arg_count > 1 ? args[1] : mal_value_new_undefined();
-    bool present;
-    if (!temporal_options_object(vm, options, &present)) {
+    DifferenceSettings settings;
+    if (!temporal_difference_settings(
+            vm, arg_count > 1 ? args[1] : mal_value_new_undefined(), &settings)) {
         temporal_rs_PlainYearMonth_destroy(other);
         return mal_value_new_undefined();
     }
-    Unit largest = Unit_Year, smallest = Unit_Month;
-    RoundingMode mode = RoundingMode_Trunc;
-    u32 increment = 1;
-    if (present &&
-        (!temporal_get_unit_option(
-             vm, options, "largestUnit", true, false, Unit_Auto, &largest) ||
-         !temporal_get_rounding_increment(vm, options, &increment) ||
-         !temporal_get_rounding_mode(vm, options, RoundingMode_Trunc, &mode) ||
-         !temporal_get_unit_option(
-             vm, options, "smallestUnit", false, false, Unit_Month, &smallest))) {
-        temporal_rs_PlainYearMonth_destroy(other);
-        return mal_value_new_undefined();
-    }
-    if (largest == Unit_Auto) largest = Unit_Year;
-    DifferenceSettings settings = {
-        .largest_unit = {.ok = largest, .is_ok = true},
-        .smallest_unit = {.ok = smallest, .is_ok = true},
-        .rounding_mode = {.ok = mode, .is_ok = true},
-        .increment = {.ok = increment, .is_ok = true},
-    };
     Duration *handle = nullptr;
     TemporalError error = {0};
     bool ok;
@@ -4104,35 +4033,6 @@ static MalValue instant_equals(
     return mal_value_new_boolean(equal);
 }
 
-static bool instant_difference_settings(
-    MalVm *vm, MalValue value, DifferenceSettings *settings
-) {
-    *settings = (DifferenceSettings) {0};
-    bool present;
-    if (!temporal_options_object(vm, value, &present)) return false;
-    Unit largest = Unit_Second;
-    Unit smallest = Unit_Nanosecond;
-    RoundingMode mode = RoundingMode_Trunc;
-    u32 increment = 1;
-    if (present &&
-        (!temporal_get_unit_option(
-             vm, value, "largestUnit", true, false, Unit_Auto, &largest) ||
-         !temporal_get_rounding_increment(vm, value, &increment) ||
-         !temporal_get_rounding_mode(vm, value, RoundingMode_Trunc, &mode) ||
-         !temporal_get_unit_option(
-             vm, value, "smallestUnit", false, false, Unit_Nanosecond, &smallest))) {
-        return false;
-    }
-    if (largest == Unit_Auto) {
-        largest = smallest > Unit_Second ? smallest : Unit_Second;
-    }
-    settings->largest_unit = (Unit_option) {.ok = largest, .is_ok = true};
-    settings->smallest_unit = (Unit_option) {.ok = smallest, .is_ok = true};
-    settings->rounding_mode = (RoundingMode_option) {.ok = mode, .is_ok = true};
-    settings->increment = (OptionU32) {.ok = increment, .is_ok = true};
-    return true;
-}
-
 static MalValue instant_difference(
     MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, bool since
 ) {
@@ -4142,7 +4042,7 @@ static MalValue instant_difference(
         vm, arg_count > 0 ? args[0] : mal_value_new_undefined());
     if (other == nullptr) return mal_value_new_undefined();
     DifferenceSettings settings;
-    if (!instant_difference_settings(
+    if (!temporal_difference_settings(
             vm, arg_count > 1 ? args[1] : mal_value_new_undefined(), &settings)) {
         temporal_rs_Instant_destroy(other);
         return mal_value_new_undefined();
@@ -4462,11 +4362,16 @@ static bool zoned_date_time_disambiguation_options(
 static ZonedDateTime *zoned_date_time_from_like_options(
     MalVm *vm, MalValue input, MalValue options
 ) {
+    Disambiguation disambiguation;
+    OffsetDisambiguation offset;
+    ArithmeticOverflow overflow;
     if (mal_value_is_temporal_object(input)) {
         MalTemporalObject *object = mal_value_to_temporal_object(input);
         if (object->kind == MAL_TEMPORAL_ZONED_DATE_TIME && object->handle != nullptr) {
-            ArithmeticOverflow overflow;
-            if (!temporal_overflow_option(vm, options, &overflow)) return nullptr;
+            if (!zoned_date_time_disambiguation_options(vm, options, "reject", &disambiguation, &offset) ||
+                !temporal_overflow_option(vm, options, &overflow)) {
+                return nullptr;
+            }
             return temporal_rs_ZonedDateTime_clone(object->handle);
         }
     }
@@ -4476,60 +4381,19 @@ static ZonedDateTime *zoned_date_time_from_like_options(
             .data = (const char16_t *) mal_string_code_units(string),
             .len = mal_string_length(string),
         };
+        // The string is parsed before any option is read.
         temporal_rs_ZonedDateTime_from_utf16_result validated =
             temporal_rs_ZonedDateTime_from_utf16(
-                view, Disambiguation_Compatible, OffsetDisambiguation_Reject);
+                view, Disambiguation_Compatible, OffsetDisambiguation_Ignore);
         if (!validated.is_ok) {
             temporal_throw(vm, validated.err);
             return nullptr;
         }
         temporal_rs_ZonedDateTime_destroy(validated.ok);
-        Disambiguation disambiguation = Disambiguation_Compatible;
-        OffsetDisambiguation offset = OffsetDisambiguation_Reject;
-        ArithmeticOverflow overflow;
-        bool present;
-        if (!temporal_options_object(vm, options, &present)) return nullptr;
-        if (present) {
-            MalValue value;
-            MalString *option;
-            if (!mal_vm_get_property(
-                    vm, options, mal_intrinsic_string_key(vm, "disambiguation"),
-                    &value)) return nullptr;
-            if (!mal_value_is_undefined(value)) {
-                if (!mal_vm_to_string(vm, value, &option)) return nullptr;
-                if (mal_string_equals_ascii(option, "compatible")) {}
-                else if (mal_string_equals_ascii(option, "earlier"))
-                    disambiguation = Disambiguation_Earlier;
-                else if (mal_string_equals_ascii(option, "later"))
-                    disambiguation = Disambiguation_Later;
-                else if (mal_string_equals_ascii(option, "reject"))
-                    disambiguation = Disambiguation_Reject;
-                else {
-                    mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
-                                       "Invalid Temporal disambiguation option");
-                    return nullptr;
-                }
-            }
-            if (!mal_vm_get_property(
-                    vm, options, mal_intrinsic_string_key(vm, "offset"), &value)) {
-                return nullptr;
-            }
-            if (!mal_value_is_undefined(value)) {
-                if (!mal_vm_to_string(vm, value, &option)) return nullptr;
-                if (mal_string_equals_ascii(option, "use")) offset = OffsetDisambiguation_Use;
-                else if (mal_string_equals_ascii(option, "prefer"))
-                    offset = OffsetDisambiguation_Prefer;
-                else if (mal_string_equals_ascii(option, "ignore"))
-                    offset = OffsetDisambiguation_Ignore;
-                else if (mal_string_equals_ascii(option, "reject")) {}
-                else {
-                    mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
-                                       "Invalid Temporal offset option");
-                    return nullptr;
-                }
-            }
+        if (!zoned_date_time_disambiguation_options(vm, options, "reject", &disambiguation, &offset) ||
+            !temporal_overflow_option(vm, options, &overflow)) {
+            return nullptr;
         }
-        if (!temporal_overflow_option(vm, options, &overflow)) return nullptr;
         temporal_rs_ZonedDateTime_from_utf16_result result =
             temporal_rs_ZonedDateTime_from_utf16(view, disambiguation, offset);
         if (!result.is_ok) {
@@ -4553,9 +4417,6 @@ static ZonedDateTime *zoned_date_time_from_like_options(
             TEMPORAL_FIELD(TIME_ZONE), false, &fields)) {
         return nullptr;
     }
-    Disambiguation disambiguation;
-    OffsetDisambiguation offset;
-    ArithmeticOverflow overflow;
     PartialTime time;
     if (!zoned_date_time_disambiguation_options(vm, options, "reject", &disambiguation, &offset) ||
         !temporal_overflow_option(vm, options, &overflow) ||
@@ -4918,30 +4779,6 @@ static MalValue zoned_date_time_equals(
     return mal_value_new_boolean(equal);
 }
 
-static bool zoned_date_time_difference_settings(
-    MalVm *vm, MalValue value, DifferenceSettings *settings
-) {
-    *settings = (DifferenceSettings) {0};
-    bool present;
-    if (!temporal_options_object(vm, value, &present)) return false;
-    Unit largest = Unit_Hour, smallest = Unit_Nanosecond;
-    RoundingMode mode = RoundingMode_Trunc;
-    u32 increment = 1;
-    if (present &&
-        (!temporal_get_unit_option(vm, value, "largestUnit", true, false,
-                                   Unit_Auto, &largest) ||
-         !temporal_get_rounding_increment(vm, value, &increment) ||
-         !temporal_get_rounding_mode(vm, value, RoundingMode_Trunc, &mode) ||
-         !temporal_get_unit_option(vm, value, "smallestUnit", false, false,
-                                   Unit_Nanosecond, &smallest))) return false;
-    if (largest == Unit_Auto) largest = smallest > Unit_Hour ? smallest : Unit_Hour;
-    settings->largest_unit = (Unit_option) {.ok = largest, .is_ok = true};
-    settings->smallest_unit = (Unit_option) {.ok = smallest, .is_ok = true};
-    settings->rounding_mode = (RoundingMode_option) {.ok = mode, .is_ok = true};
-    settings->increment = (OptionU32) {.ok = increment, .is_ok = true};
-    return true;
-}
-
 static MalValue zoned_date_time_difference(
     MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, bool since
 ) {
@@ -4951,7 +4788,7 @@ static MalValue zoned_date_time_difference(
         vm, arg_count > 0 ? args[0] : mal_value_new_undefined());
     if (other == nullptr) return mal_value_new_undefined();
     DifferenceSettings settings;
-    if (!zoned_date_time_difference_settings(
+    if (!temporal_difference_settings(
             vm, arg_count > 1 ? args[1] : mal_value_new_undefined(), &settings)) {
         temporal_rs_ZonedDateTime_destroy(other);
         return mal_value_new_undefined();
