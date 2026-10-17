@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import {
 	copyFileSync,
 	mkdirSync,
@@ -154,9 +155,11 @@ describe("development builds from relocatable fragments", () => {
 		);
 		expect(runWithoutSource()).toBe("hello from an asset\n");
 
-		writeFileSync(greeting, "edited asset\n");
+		// Unique text keeps CI's restored object cache from already holding the edited unit.
+		const edit = `edited asset ${randomUUID()}\n`;
+		writeFileSync(greeting, edit);
 		const edited = build(assets);
 		expect(compiledUnits(edited)).toEqual(["development-fragment-assets"]);
-		expect(runWithoutSource()).toBe("edited asset\n");
+		expect(runWithoutSource()).toBe(edit);
 	});
 });
