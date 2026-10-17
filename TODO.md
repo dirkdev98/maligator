@@ -696,6 +696,13 @@ contracts or investigates costs still visible after the string follow-ups.
 - [ ] Implement AbstractModuleSource and source-phase imports. Preserve module identity
       and host loading boundaries across cached and uncached compilation.
 
+- [ ] Lower `require()` of an ES module when the program entry is an ES module. Only
+      `compileCjsProgram` gives required ES modules a namespace slot, so under an ES
+      entry, which includes every dependency island, the call throws
+      `dynamic require is not supported`. Express's `debug` requires `supports-color`
+      this way and swallows the error. Evaluate the required module at its first
+      `require`, as Node does.
+
 - [ ] Let `require` and `import()` cross linked-image boundaries. A build still
       compiles one whole program for them, and `maligator test` one application image.
       The loader already aliases CommonJS registry entries and namespace slots;
@@ -717,12 +724,6 @@ contracts or investigates costs still visible after the string follow-ups.
       artifacts on ghcr.io, the way Homebrew hosts its bottles. Consumers verify the
       digest, cache the download and link it statically; anything without a match
       still compiles locally.
-
-- [ ] Keep unchanged modules out of the graph walk of one-shot `test` and `run`
-      commands. Each command reparses every reachable module, `node_modules` included,
-      to find its cached images; that is about 70 ms of a 200 ms test edit in
-      `scripts/dx-performance.ts`. Persist dependency extraction by source digest and
-      parse a module only when its image misses.
 
 ## Active correctness clusters
 
