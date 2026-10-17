@@ -96,8 +96,9 @@ test("special and unsupported source calls retain explicit lowering coverage", (
 			.image,
 	);
 	expect(profile.calls).toHaveLength(2);
+	// The eval call site lowers an ordinary call for when `eval` is not %eval%.
 	expect(profile.calls[0]).toMatchObject({
-		lowered: false,
+		lowered: true,
 		identity: { status: "unknown", reason: "dynamic-scope" },
 	});
 	expect(profile.calls[1]).toMatchObject({

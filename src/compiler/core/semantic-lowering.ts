@@ -12939,6 +12939,100 @@ function compileDirectEval(
 	cursor: CoreFrontendCursor,
 	callExpression: ESTree.CallExpression,
 ): number {
+	// The callee is read and every argument evaluated before PerformEval, which
+	// runs only while `eval` still is %eval%; otherwise this is an ordinary call.
+	const evalFunction = compileExpression(
+		program,
+		fn,
+		cursor,
+		callExpression.callee as ESTree.Expression,
+	);
+	const spread = callExpression.arguments.some((arg) => arg.type === "SpreadElement");
+	const argumentsArray = spread
+		? compileSpreadArgumentsArray(program, fn, cursor, callExpression.arguments)
+		: undefined;
+	const args = spread
+		? []
+		: callExpression.arguments.map((arg) => compileExpression(program, fn, cursor, arg));
+	const intrinsicEval = nextCoreVariable(fn);
+	const isIntrinsicEval = nextCoreVariable(fn);
+	cursor.block.emitter.emit(
+		{ type: "loadIntrinsic", registers: [intrinsicEval], intrinsic: "eval" },
+		{
+			type: "binary",
+			registers: [isIntrinsicEval, evalFunction, intrinsicEval],
+			operator: "===",
+		},
+	);
+	const result = nextCoreVariable(fn);
+	const directJump: Extract<CompilerInstruction, { type: "jumpIf" }> = {
+		type: "jumpIf",
+		registers: [isIntrinsicEval],
+		blocks: [-1],
+	};
+	const ordinaryJump: Extract<CompilerInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	cursor.block.emitter.emit(directJump, ordinaryJump);
+
+	ordinaryJump.blocks[0] = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+	cursor.block = fn.blocks[ordinaryJump.blocks[0]]!;
+	const ordinaryThis = compileUndefined(fn, cursor);
+	emitSourceCall(
+		program,
+		fn,
+		cursor,
+		callExpression,
+		argumentsArray === undefined
+			? { type: "call", registers: [result, evalFunction, ordinaryThis, ...args] }
+			: {
+					type: "callSpread",
+					registers: [result, evalFunction, ordinaryThis, argumentsArray],
+				},
+	);
+	const ordinaryJoin: Extract<CompilerInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	cursor.block.emitter.emit(ordinaryJoin);
+
+	directJump.blocks[0] = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+	cursor.block = fn.blocks[directJump.blocks[0]]!;
+	let source: number;
+	if (argumentsArray !== undefined) {
+		source = nextCoreVariable(fn);
+		const first = compileNumberLiteral(fn, cursor, 0);
+		cursor.block.emitter.emit({
+			type: "loadProperty",
+			registers: [source, argumentsArray, first],
+		});
+	} else {
+		source = args[0]!;
+	}
+	const directResult = compileDirectEvalCall(program, fn, cursor, callExpression, source);
+	cursor.block.emitter.emit({ type: "move", registers: [result, directResult] });
+	const directJoin: Extract<CompilerInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	cursor.block.emitter.emit(directJoin);
+
+	const joinIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+	ordinaryJoin.blocks[0] = joinIdx;
+	directJoin.blocks[0] = joinIdx;
+	cursor.block = fn.blocks[joinIdx]!;
+	return result;
+}
+
+/** PerformEval in the caller's scope: marshal its bindings, eval, write them back. */
+function compileDirectEvalCall(
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
+	callExpression: ESTree.CallExpression,
+	source: number,
+): number {
 	const bindings = visibleBindingsForDirectEval(program, fn, callExpression);
 	const inheritedContext = inheritedContextForDirectEval(program, fn, callExpression);
 	const persistentScope =
@@ -13019,12 +13113,6 @@ function compileDirectEval(
 		intrinsic: "__directEval",
 	});
 	const thisRegister = compileUndefined(fn, cursor);
-	const source = compileExpression(
-		program,
-		fn,
-		cursor,
-		callExpression.arguments[0] as ESTree.Expression,
-	);
 	// Direct eval inherits the caller's strictness — pass it so the eval'd code's
 	// strict/sloppy semantics are correct (a "use strict" prologue still promotes).
 	const callerStrict = nextCoreVariable(fn);
@@ -13612,14 +13700,12 @@ function compileCall(
 	// Direct eval — `eval(...)` where `eval` is the global (undeclared) binding.
 	// The eval'd code must resolve free identifiers against the caller's scope, so
 	// we marshal the visible bindings into a scope object and route through the
-	// direct-eval intrinsic (which exposes the object as a with-scope). A spread
-	// argument falls through to the ordinary (indirect-style) call.
+	// direct-eval intrinsic (which exposes the object as a with-scope).
 	if (
 		calleeNode.type === "Identifier" &&
 		calleeNode.name === "eval" &&
 		(fn.semanticFile.nodeToBinding.get(calleeNode)?.undeclared ?? false) &&
-		callExpression.arguments.length > 0 &&
-		!callExpression.arguments.some((arg) => arg.type === "SpreadElement")
+		callExpression.arguments.length > 0
 	) {
 		return compileDirectEval(program, fn, cursor, callExpression);
 	}
