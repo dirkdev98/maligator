@@ -345,8 +345,7 @@ function planningGraph(
 			entryGoal: "module",
 			entrySource: importsOf([...runtimeImports(options), ...entries]),
 			virtualModules: testVirtualModules(options),
-			transformSource: (source, file) =>
-				selected.has(file) ? wrapTestEntry(source, file) : source,
+			transformSource: { files: selected, transform: wrapTestEntry },
 		},
 	);
 	if (graph.workerEntries?.length)
@@ -515,8 +514,7 @@ export function compileLinkedTestImage(
 		const graph = buildModuleGraph(entry, {
 			...graphOptions(options, session),
 			externalModules: external,
-			transformSource: (source, file) =>
-				file === entry ? wrapTestEntry(source, entry) : source,
+			transformSource: { files: new Set([entry]), transform: wrapTestEntry },
 		});
 		phases.graphMs += Date.now() - entryStartedAt;
 		linked.push({

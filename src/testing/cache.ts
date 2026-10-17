@@ -295,9 +295,7 @@ function buildTestGraph(
 		parseCache: session.moduleParses,
 		platformSourceRoot: options.platformSourceRoot,
 		virtualModules: testVirtualModules(options),
-		transformSource(source, filePath) {
-			return entrySet.has(filePath) ? wrapTestEntry(source, filePath) : source;
-		},
+		transformSource: { files: entrySet, transform: wrapTestEntry },
 	});
 }
 

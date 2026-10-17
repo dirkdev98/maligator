@@ -1220,8 +1220,9 @@ test("toolchain source transforms preserve original module identities", () => {
 	const entry = path.join(root, "transformed-entry.mjs");
 	write("transformed-entry.mjs", `globalThis.events.push("body");\n`);
 	const graph = buildModuleGraph(entry, {
-		transformSource(source, filePath) {
-			return filePath === entry ? `globalThis.events.push("before");${source}` : source;
+		transformSource: {
+			files: new Set([entry]),
+			transform: (source) => `globalThis.events.push("before");${source}`,
 		},
 	});
 	const record = graph.modules.get(entry)!;
@@ -1236,8 +1237,9 @@ test("parse caches distinguish transformed source from the on-disk module", () =
 	const plain = buildModuleGraph(entry, { parseCache });
 	const transformed = buildModuleGraph(entry, {
 		parseCache,
-		transformSource(source, filePath) {
-			return filePath === entry ? `globalThis.events.push("before");${source}` : source;
+		transformSource: {
+			files: new Set([entry]),
+			transform: (source) => `globalThis.events.push("before");${source}`,
 		},
 	});
 

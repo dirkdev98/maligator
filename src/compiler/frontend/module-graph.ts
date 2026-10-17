@@ -399,7 +399,11 @@ export interface BuildModuleGraphOptions {
 	 * Toolchain features use this to inject protocol-only evaluation boundaries
 	 * while caches and file watchers fingerprint the original source contents.
 	 */
-	transformSource?: (source: string, filePath: string) => string;
+	transformSource?: {
+		/** The only modules the transform changes; every other module stays reusable. */
+		files: ReadonlySet<string>;
+		transform(source: string, filePath: string): string;
+	};
 
 	/** In-process parse reuse for retained compiler/test sessions. */
 	parseCache?: ModuleParseCache;
@@ -502,7 +506,7 @@ export function buildModuleGraph(
 	const catalogFiles = platformCatalogFiles(sourceRoot);
 	// A transform may change any module's parse input, so its walks memoize nothing.
 	const memoIdentity =
-		options.parseCache === undefined || options.transformSource !== undefined
+		options.parseCache === undefined
 			? undefined
 			: hash(
 					"sha256",
@@ -608,7 +612,9 @@ export function buildModuleGraph(
 		}
 
 		const memoKey =
-			memoIdentity === undefined || filePath === entry
+			memoIdentity === undefined ||
+			filePath === entry ||
+			options.transformSource?.files.has(filePath) === true
 				? undefined
 				: `${memoIdentity}\0${goal}\0${filePath}`;
 		const memo =
@@ -699,7 +705,9 @@ export function buildModuleGraph(
 										: `import ${specifier};\n${parseSource}`;
 							}
 							parseSource =
-								options.transformSource?.(parseSource, filePath) ?? parseSource;
+								options.transformSource?.files.has(filePath) === true
+									? options.transformSource.transform(parseSource, filePath)
+									: parseSource;
 							const strict = filePath === entry ? (options.entryStrict ?? true) : true;
 							const parse = () => {
 								try {
