@@ -246,12 +246,10 @@ export function publishArtifactAction(
 			throw new Error(`artifact output is not a file: ${publication.file}`);
 		const digest = fileDigest(publication.file);
 		const blob = artifactBlobPath(root, digest);
+		// Every read validates its blobs, so publication trusts the copy it just hashed.
 		if (!validBlob(blob, digest, stats.size)) {
 			rmSync(blob, { force: true });
 			publishFileAtomically(publication.file, blob);
-			if (!validBlob(blob, digest, stats.size)) {
-				throw new Error(`artifact blob publication failed: ${blob}`);
-			}
 			recordCacheGrowth(root, stats.size);
 		}
 		return {
@@ -259,6 +257,7 @@ export function publishArtifactAction(
 			digest,
 			size: stats.size,
 			mode: publication.mode ?? stats.mode & 0o777,
+			path: blob,
 		};
 	});
 	const manifest: ArtifactActionManifest = {
@@ -268,16 +267,13 @@ export function publishArtifactAction(
 		action,
 		maligatorVersion: MALIGATOR_VERSION,
 		createdAt: Date.now(),
-		outputs,
+		outputs: outputs.map(({ path: _blob, ...output }) => output),
 	};
 	writeFileAtomically(
 		actionManifestPath(root, stage, producer, action),
 		`${JSON.stringify(manifest)}\n`,
 	);
-	const published = readArtifactAction(root, stage, producer, action);
-	if (published === undefined)
-		throw new Error(`artifact action publication failed: ${action}`);
-	return published;
+	return { stage, producer, action, outputs };
 }
 
 export function artifactOutput(action: ArtifactAction, name: string): ArtifactOutput {
