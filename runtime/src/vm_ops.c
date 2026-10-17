@@ -6791,8 +6791,30 @@ static void mal_vm_op_store_property_keyed(
     }
 
     if (!mal_value_is_object(object_value)) {
-        // Primitives never grow own properties; strict assignments throw.
-        if (strict) {
+        // PutValue runs [[Set]] on the wrapper with the primitive as the receiver,
+        // so inherited setters and proxies observe the write; creating an own
+        // property on the primitive itself always fails.
+        bool stored = false;
+        MalIntrinsic prototype = MAL_INTRINSIC_COUNT;
+        if (mal_value_is_string(object_value)) {
+            bool own = mal_array_key_is_length(key) ||
+                (key.kind == MAL_KEY_INDEX &&
+                 (usize) mal_key_index_value(key) < mal_string_length(mal_value_to_string(object_value)));
+            if (!own) prototype = MAL_INTRINSIC_STRING_PROTOTYPE;
+        } else if (mal_vm_value_is_number(object_value)) {
+            prototype = MAL_INTRINSIC_NUMBER_PROTOTYPE;
+        } else if (mal_value_is_boolean(object_value)) {
+            prototype = MAL_INTRINSIC_BOOLEAN_PROTOTYPE;
+        } else if (mal_value_is_symbol(object_value)) {
+            prototype = MAL_INTRINSIC_SYMBOL_PROTOTYPE;
+        } else if (mal_value_is_bigint(object_value)) {
+            prototype = MAL_INTRINSIC_BIGINT_PROTOTYPE;
+        }
+        if (prototype != MAL_INTRINSIC_COUNT) {
+            stored = mal_vm_set_property(vm, vm->intrinsics[prototype], key, value, object_value);
+            if (vm->completion.kind == MAL_COMPLETION_THROW) return;
+        }
+        if (!stored && strict) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot create property on a primitive");
         }
         return;
