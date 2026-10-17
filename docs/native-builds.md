@@ -63,12 +63,11 @@ normal iteration and useful native crash diagnostics.
 A development build links the same ordered images `run` loads instead of one whole
 program. Each image gets a relocatable native overlay that depends only on that
 image, and the binary splices the embedded images at startup, so an application edit
-recompiles only the application's objects. Code does not optimize across images and
-reaches other images' functions through link tables, which costs a few percent of
-throughput against a whole-program development binary. Programs with configured
-assets, and any build with `MALIGATOR_DEVELOPMENT_FRAGMENTS=0`, link one whole
-program instead. Worker roots always link their whole-program images behind the
-compiled worker registry.
+recompiles only the application's objects. Code does not optimize across images,
+which costs a few percent of throughput against a whole-program development
+binary. Programs with configured assets, and any build with
+`MALIGATOR_DEVELOPMENT_FRAGMENTS=0`, link one whole program instead. Worker roots
+always link their whole-program images behind the compiled worker registry.
 
 `maligator build --production` still uses `-O2`, adds compile/archive/link LTO when
 the selected toolchain passes the LTO probe, and strips native symbols after linking
@@ -116,12 +115,17 @@ instead. A memo keyed by the raw unit and header contents means a
 warm build never preprocesses its units.
 
 Definitions are assigned to deterministic, edit-local hash partitions with a 2 MiB
-soft target and an 8 MiB hard limit for an indivisible definition. Code and data
-units remain separate, and worker count affects only scheduling. Application
-functions (absolute sources outside `node_modules`) get their own code units, so an
-edit to an application function body leaves the dependency objects cached. Normal output
-reports frontend, generated-C, toolchain, and native cache hit/miss status plus the
-final executable path.
+soft target and an 8 MiB hard limit for an indivisible definition. A function's
+partition key names its source file relative to the project directory, so a project
+compiled from another location keeps its units. Code and data units remain separate,
+and worker count affects only scheduling. Application functions (project sources
+outside `node_modules`) get their own code units, so an edit to an application
+function body leaves the dependency objects cached. Compiled bodies are named after
+their partition keys and read every image index (function, global, string, BigInt
+and template) from a link table in separate data units, so adding or removing a
+function recompiles only the code units that hold the changed functions. Normal
+output reports frontend, generated-C, toolchain, and native cache hit/miss status
+plus the final executable path.
 
 C and Rust outputs are published as immutable blobs only after compilation succeeds;
 an atomic action manifest makes the result visible. Runtime GC stress/verification

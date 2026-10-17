@@ -485,21 +485,6 @@ iterator cursor is not, by itself, permission to delete its language object.
       native-C, interpreter, or runtime contracts inconsistent. Callback invocation
       semantics are owned by the P1 callback work above, not a second descriptor set.
 
-- [ ] Keep whole-program generated units stable across unrelated compiler edits.
-      Whole-program emission names bodies `mal_compiled_<index>` and writes function,
-      string and global indices as literals, so adding one function to the compiler
-      shifts most of them: the Wasm engine build recompiles 110 of its 118 generated
-      units, and the Explorer build pays the same on CI for every compiler commit. The
-      self-hosted CLI is the whole compiler program, so its Extended CI check spends
-      about 7.5 minutes rebuilding and linking it after almost any change under `src`. Relocatable overlays already avoid this with stem names and
-      link tables (one added compiler function now recompiles 11 of 370 overlay units).
-      Stem names cost nothing at run time; the index literals are the hard part,
-      because a link-table load in production code blocks constant folding of
-      identity guards. In development builds the loads cost 2.6% on
-      `bench/javascript.mjs` (see the fragment item); measure production builds, or
-      find an emission that keeps literals in the unit that owns them, before
-      choosing.
-
 ## Compiler measurement and diagnostics
 
 - [ ] Close gaps in the existing report's end-to-end cost accounting: cold process

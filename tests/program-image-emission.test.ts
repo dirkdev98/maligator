@@ -41,6 +41,8 @@ import { privateRootRegisters, rootMaskBits } from "./helpers/native-c-source.ts
 import {
 	resolveNativeLinks,
 	resolveOverlayUnitLinks,
+	resolveSplitUnitLinks,
+	splitSymbolFunctionIndex,
 	TEST_RELOCATION,
 } from "./helpers/native-relocation.ts";
 import { testPropertyCacheCount } from "./helpers/program-image.ts";
@@ -52,13 +54,16 @@ function emitProgramTranslationUnitSources(
 	options: Parameters<typeof emitProgramTranslationUnits>[1] = {},
 	maximum?: number,
 ): Array<string> {
-	return emitProgramTranslationUnits(
+	return resolveSplitUnitLinks(
 		image,
-		options,
-		maximum === undefined
-			? undefined
-			: { targetCodeUnits: maximum, hardMaximumCodeUnits: maximum },
-	).map((unit) => unit.source);
+		emitProgramTranslationUnits(
+			image,
+			options,
+			maximum === undefined
+				? undefined
+				: { targetCodeUnits: maximum, hardMaximumCodeUnits: maximum },
+		).map((unit) => unit.source),
+	);
 }
 
 function malFunctionRows(source: string): Array<Record<string, string>> {
@@ -1027,29 +1032,29 @@ describe("emit-program-image instruction packing", () => {
 			{ opcode: "RETURN" as const, value: 0 },
 		];
 		const functions = [{ ...fn, capturedCount: 0, registerCount: 3, instructions }];
+		const image = {
+			...definition,
+			runtime: { ...definition.runtime, functionCount: 1, functions },
+			native: createConservativeNativePlan(functions),
+		};
 		const units = emitProgramTranslationUnits(
-			{
-				...definition,
-				runtime: {
-					...definition.runtime,
-					functionCount: 1,
-					functions,
-				},
-				native: createConservativeNativePlan(functions),
-			},
+			image,
 			{},
 			{ targetCodeUnits: 20_000, hardMaximumCodeUnits: 200_000 },
 		);
 		const compiledUnit = units.find((unit) =>
-			unit.definitions.some((item) => item.symbol === "mal_compiled_0"),
+			unit.definitions.some((item) => splitSymbolFunctionIndex(image, item.symbol) === 0),
 		)!;
 
 		expect(compiledUnit.source.length).toBeGreaterThan(20_000);
 		expect(compiledUnit.definitions).toHaveLength(1);
 		expect(compiledUnit.kind).toBe("code");
-		expect(units.map((unit) => unit.source).join("\n")).toMatch(
-			boxedNativeDefinition(0, "external"),
-		);
+		expect(
+			resolveSplitUnitLinks(
+				image,
+				units.map((unit) => unit.source),
+			).join("\n"),
+		).toMatch(boxedNativeDefinition(0, "external"));
 	});
 
 	it("interprets a function whose unit exceeds the hard maximum by one code unit", () => {
@@ -1078,16 +1083,21 @@ describe("emit-program-image instruction packing", () => {
 			);
 		const compiledUnit = (units: ReturnType<typeof emit>) =>
 			units.find((unit) =>
-				unit.definitions.some((item) => item.symbol === "mal_compiled_0"),
+				unit.definitions.some(
+					(item) => splitSymbolFunctionIndex(image, item.symbol) === 0,
+				),
 			);
 		const unitCodeUnits = compiledUnit(emit(8 * 1024 * 1024))!.source.length;
 
 		expect(compiledUnit(emit(unitCodeUnits))?.source.length).toBe(unitCodeUnits);
 		const interpreted = emit(unitCodeUnits - 1);
 		expect(compiledUnit(interpreted)).toBeUndefined();
-		expect(interpreted.map((unit) => unit.source).join("\n")).not.toContain(
-			"mal_compiled_0",
-		);
+		expect(
+			resolveSplitUnitLinks(
+				image,
+				interpreted.map((unit) => unit.source),
+			).join("\n"),
+		).not.toContain("mal_compiled_0");
 	});
 
 	it("keeps hash-partitioned unit identities local when one function grows", () => {
@@ -1135,10 +1145,11 @@ describe("emit-program-image instruction packing", () => {
 			);
 		const before = locations(image);
 		const after = locations(changed);
-		const following = [...before].filter(([symbol]) => {
-			const match = /^mal_compiled_(\d+)$/.exec(symbol);
-			return match !== null && Number(match[1]) > 10;
-		});
+		const following = [...before].filter(
+			([symbol]) =>
+				symbol.startsWith("mal_compiled_") &&
+				(splitSymbolFunctionIndex(image, symbol) ?? 0) > 10,
+		);
 		const stable = following.filter(([symbol, id]) => after.get(symbol) === id);
 
 		expect(stable.length).toBeGreaterThan(0);
@@ -1156,6 +1167,7 @@ describe("emit-program-image instruction packing", () => {
 			...definition,
 			runtime: {
 				...definition.runtime,
+				entrypointPath: "/app/main.mjs",
 				files,
 				functionCount: body.length,
 				functions: [...body],
@@ -1183,7 +1195,7 @@ describe("emit-program-image instruction packing", () => {
 				(unit) => unit.kind === "code",
 			);
 		const ownedByApplication = (symbol: string) =>
-			Number(/^mal_compiled_(\d+)$/.exec(symbol)?.[1]) % files.length === 0;
+			(splitSymbolFunctionIndex(imageWith(functions), symbol) ?? 1) % files.length === 0;
 		const before = codeUnits(imageWith(functions));
 		const after = new Map(
 			codeUnits(imageWith(grown)).map((unit) => [unit.id, unit.source]),
@@ -1264,12 +1276,12 @@ describe("emit-program-image instruction packing", () => {
 		expect(stable.length).toBeGreaterThan((names.length * 3) / 4);
 	});
 
-	it("emits the same code units for a program compiled from another directory", () => {
+	it("emits the same code units for a program compiled from another directory beside the same toolchain", () => {
 		const firstNameIndex = definition.runtime.stringConstants.length;
 		const names = Array.from({ length: 48 }, (_, index) => `moved_${String(index)}`);
 		const functions = names.map((_name, index) => ({
 			...fn,
-			fileIndex: index % 2,
+			fileIndex: index % 3,
 			nameStringIndex: firstNameIndex + index,
 			instructions: [...fn.instructions],
 		}));
@@ -1277,7 +1289,12 @@ describe("emit-program-image instruction packing", () => {
 			...definition,
 			runtime: {
 				...definition.runtime,
-				files: [`${root}/main.mjs`, `${root}/lib/helpers.mjs`],
+				entrypointPath: `${root}/main.mjs`,
+				files: [
+					`${root}/main.mjs`,
+					`${root}/lib/helpers.mjs`,
+					"/opt/maligator/src/pool.ts",
+				],
 				functionCount: functions.length,
 				functions,
 				stringConstants: [

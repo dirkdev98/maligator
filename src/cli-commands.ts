@@ -1026,6 +1026,7 @@ function prepareCommandState(
 						// Worker roots stay whole-program images behind the compiled registry.
 						...emitWorkerImageTranslationUnits(frontend.workerImages, {
 							sourcePath: nativeSourcePath,
+							partitionRoot: process.cwd(),
 							compiled: compiledNativeOutput,
 							assets,
 							maligatorSurface: buildConfig.surface.maligator,
@@ -1034,12 +1035,14 @@ function prepareCommandState(
 				: [
 						...emitProgramTranslationUnits(programImage, {
 							sourcePath: nativeSourcePath,
+							partitionRoot: process.cwd(),
 							compiled: compiledNativeOutput,
 							assets,
 							maligatorSurface: buildConfig.surface.maligator,
 						}),
 						...emitWorkerImageTranslationUnits(frontend.workerImages, {
 							sourcePath: nativeSourcePath,
+							partitionRoot: process.cwd(),
 							compiled: compiledNativeOutput,
 							assets,
 							maligatorSurface: buildConfig.surface.maligator,

@@ -14,6 +14,7 @@ import type {
 	ProgramImage,
 } from "../src/compiler/target/program-image.ts";
 import { validateNativeNumericSortCallback } from "../src/compiler/target/program-image.ts";
+import { resolveSplitUnits } from "./helpers/native-relocation.ts";
 
 function compile(
 	body = "return a - b;",
@@ -216,7 +217,7 @@ describe("numeric sort callback entries", () => {
 				const symbol = `mal_direct_${callback.functionIndex}_${callback.entryId}`;
 				expect(emitProgramImage(image)).toContain(`double ${symbol}(`);
 				expect(
-					emitProgramTranslationUnits(image).some((unit) =>
+					resolveSplitUnits(image, emitProgramTranslationUnits(image)).some((unit) =>
 						unit.definitions.some((definition) => definition.symbol === symbol),
 					),
 				).toBe(true);

@@ -399,6 +399,7 @@ function linkProgramImage(
 		// keeps the source-file table, and so its object, identical between runs.
 		sourcePath: (file: string) =>
 			path.isAbsolute(file) ? path.relative(fixtureDirectory, file) : file,
+		partitionRoot: fixtureDirectory,
 		compiled,
 		assets: includeConfiguredAssets(config.assets),
 		maligatorSurface: config.surface.maligator,

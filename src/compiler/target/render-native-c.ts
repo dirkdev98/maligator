@@ -622,14 +622,16 @@ export interface NativeLinkSlot {
 }
 
 /**
- * Relocatable emission for a spliced native overlay. The body is named by a
- * caller-chosen stem and reads image indices from its link table, so its text
- * changes only when the function itself does.
+ * Index-stable emission. The body is named by a caller-chosen stem and reads image
+ * indices from its link table, so its text changes only when the function itself does.
  */
 export interface NativeRelocatableEmission {
 	readonly symbolStem: string;
-	/** C expression for the overlay's `const MalNativeProgramRelocation *`. */
-	readonly relocation: string;
+	/**
+	 * C expression for a spliced overlay's `const MalNativeProgramRelocation *`, whose
+	 * bases the link slots are relative to. Without it the slots hold image indices.
+	 */
+	readonly relocation?: string;
 	/** Every overlay function's stem, which names direct call and entry targets. */
 	readonly symbolStems?: ReadonlyArray<string>;
 }
@@ -653,6 +655,7 @@ interface NativeRelocationExpressions {
 function nativeRelocationExpressions(
 	linkSymbol: string | undefined,
 	symbolStems?: ReadonlyArray<string>,
+	relative = false,
 ): NativeRelocationExpressions {
 	const link: Array<NativeLinkSlot> = [];
 	const slots = new Map<string, number>();
@@ -664,7 +667,9 @@ function nativeRelocationExpressions(
 			slot = link.push({ base, index }) - 1;
 			slots.set(key, slot);
 		}
-		return `(__mal_relocation->${base} + ${linkSymbol}[${slot}])`;
+		return relative
+			? `(__mal_relocation->${base} + ${linkSymbol}[${slot}])`
+			: `${linkSymbol}[${slot}]`;
 	};
 	const enabled = linkSymbol !== undefined;
 	return {
@@ -1636,6 +1641,7 @@ function emitCompiledVariant(
 	const relocation = nativeRelocationExpressions(
 		relocatable === false ? undefined : `${symbol}_link`,
 		relocatable === false ? undefined : relocatable.symbolStems,
+		relocatable !== false && relocatable.relocation !== undefined,
 	);
 
 	const valueRegs = [...storage.rootRegisters];
@@ -2104,7 +2110,7 @@ function emitCompiledVariant(
 	if (directEntry === undefined) lines.push(`    (void) new_target;`);
 	lines.push(`    (void) env;`);
 	lines.push(`    (void) callee;`);
-	if (relocatable !== false)
+	if (relocatable !== false && relocatable.relocation !== undefined)
 		lines.push(
 			`    const MalNativeProgramRelocation *__mal_relocation = ${relocatable.relocation};`,
 		);
@@ -2962,6 +2968,7 @@ function emitResumableFunction(
 	const relocation = nativeRelocationExpressions(
 		relocatable === false ? undefined : `${symbol}_link`,
 		relocatable === false ? undefined : relocatable.symbolStems,
+		relocatable !== false && relocatable.relocation !== undefined,
 	);
 	const isAsyncGenerator = fn.isAsync && fn.isGenerator;
 
@@ -3085,7 +3092,7 @@ function emitResumableFunction(
 		`${linkage === "static" ? "static " : ""}__attribute__((aligned(64))) MalValue ${symbol}(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, void *entry_state) {`,
 	);
 	lines.push("#pragma STDC FP_CONTRACT OFF");
-	if (relocatable !== false)
+	if (relocatable !== false && relocatable.relocation !== undefined)
 		lines.push(
 			`    const MalNativeProgramRelocation *__mal_relocation = ${relocatable.relocation};`,
 		);

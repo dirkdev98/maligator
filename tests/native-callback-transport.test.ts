@@ -16,12 +16,24 @@ import {
 	emitProgramTranslationUnits,
 	NATIVE_C_HEADER_LINES,
 } from "../src/compiler/target/emit-program-image.ts";
+import type { GeneratedTranslationUnit } from "../src/compiler/target/emit-program-image.ts";
 import { selectNativeCallbackTransports } from "../src/compiler/target/lower-native-callbacks.ts";
 import { nativeEntryLookup } from "../src/compiler/target/lower-native-calls.ts";
 import { validateNativeStorage } from "../src/compiler/target/lower-native-storage.ts";
 import { validateNativeFieldCalls } from "../src/compiler/target/program-image.ts";
+import type { ProgramImage } from "../src/compiler/target/program-image.ts";
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
 import { mergeProgramImages } from "../src/test262/program-image-merge.ts";
+import { resolveSplitUnits } from "./helpers/native-relocation.ts";
+
+function emitResolvedTranslationUnits(
+	image: ProgramImage,
+	...rest: Parameters<typeof emitProgramTranslationUnits> extends [unknown, ...infer Rest]
+		? Rest
+		: never
+): Array<GeneratedTranslationUnit> {
+	return resolveSplitUnits(image, emitProgramTranslationUnits(image, ...rest));
+}
 
 function callbackImage(body = "return total;", warmArguments = "1, 2") {
 	return compileSemanticProgramToProgramImage(
@@ -90,7 +102,7 @@ describe("native builtin callback transport", () => {
 			});
 			const symbol = `mal_callback_${transport.functionIndex}_${transport.entryId}_reduce`;
 			expect(emitProgramImage(restored)).toContain(`f64 ${symbol}(`);
-			const units = emitProgramTranslationUnits(restored);
+			const units = emitResolvedTranslationUnits(restored);
 			expect(units.some((unit) => unit.source.includes(`f64 ${symbol}(`))).toBe(true);
 			const forged = {
 				...caller,
@@ -172,7 +184,7 @@ describe("native builtin callback transport", () => {
 			(fn) => fn.storage!.callbackTransports,
 		)[0]!;
 		const emit = (maximum: number) =>
-			emitProgramTranslationUnits(
+			emitResolvedTranslationUnits(
 				image,
 				{ debugInfo: false },
 				{
@@ -229,7 +241,7 @@ describe("native builtin callback transport", () => {
 		};
 		for (const output of [
 			emitProgramImage(specialized),
-			emitProgramTranslationUnits(specialized)
+			emitResolvedTranslationUnits(specialized)
 				.map((unit) => unit.source)
 				.join("\n"),
 		]) {
@@ -246,7 +258,7 @@ describe("native builtin callback transport", () => {
 			(fn) => fn.storage!.callbackTransports.length,
 		)!;
 		const transport = caller.storage!.callbackTransports[0]!;
-		const units = emitProgramTranslationUnits(image, { compiled: true });
+		const units = emitResolvedTranslationUnits(image, { compiled: true });
 		const callback = `mal_callback_${transport.functionIndex}_${transport.entryId}`;
 		const unit = units.find((unit) =>
 			unit.source.includes(
@@ -399,7 +411,7 @@ describe("resumable callers of selected native entries", () => {
 				`mal_callback_${callback.functionIndex}_${callback.entryId}`,
 			);
 			expect(
-				emitProgramTranslationUnits(restored, { compiled: true })
+				emitResolvedTranslationUnits(restored, { compiled: true })
 					.map((unit) => unit.source)
 					.join("\n"),
 			).toContain(`mal_callback_${callback.functionIndex}_${callback.entryId}`);

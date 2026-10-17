@@ -12,7 +12,19 @@ import {
 	emitProgramImage,
 	emitProgramTranslationUnits,
 } from "../src/compiler/target/emit-program-image.ts";
+import type { GeneratedTranslationUnit } from "../src/compiler/target/emit-program-image.ts";
 import { lowerNativeStorage } from "../src/compiler/target/lower-native-storage.ts";
+import type { ProgramImage } from "../src/compiler/target/program-image.ts";
+import { resolveSplitUnits } from "./helpers/native-relocation.ts";
+
+function emitResolvedTranslationUnits(
+	image: ProgramImage,
+	...rest: Parameters<typeof emitProgramTranslationUnits> extends [unknown, ...infer Rest]
+		? Rest
+		: never
+): Array<GeneratedTranslationUnit> {
+	return resolveSplitUnits(image, emitProgramTranslationUnits(image, ...rest));
+}
 
 function compile(source: string) {
 	const dir = mkdtempSync(path.join(os.tmpdir(), "mal-native-body-"));
@@ -38,7 +50,7 @@ describe("native body reachability", () => {
 			expect(index).toBeGreaterThan(0);
 			for (const source of [
 				emitProgramImage(image),
-				emitProgramTranslationUnits(image)
+				emitResolvedTranslationUnits(image)
 					.map((unit) => unit.source)
 					.join("\n"),
 			]) {

@@ -42,6 +42,12 @@ export interface EmitOptions {
 	/** Host path normalization for compiled stack traces; virtual paths pass through by default. */
 	sourcePath?: (file: string) => string;
 	/**
+	 * Project directory whose relative paths name source files in function partition
+	 * keys, which name split units and symbols. Defaults to the entrypoint's directory;
+	 * a worker image passes its owner program's, since its entry can be a toolchain file.
+	 */
+	partitionRoot?: string;
+	/**
 	 * Suffix for all emitted symbols, so multiple program images can live in a
 	 * single translation unit (used by the batched test262 runner).
 	 */
@@ -766,9 +772,9 @@ function emitNativeFunctions(
 		maxCodeUnits?: number;
 		/** Definitions that do not fit one translation unit with their declarations. */
 		excludedSymbols?: ReadonlySet<string>;
-		/** Relocatable overlay emission, naming each function by its stable stem. */
+		/** Index-stable emission, naming each function by its stem. */
 		symbolStems?: ReadonlyArray<string>;
-		/** C expression for the relocation a symbol-stemmed overlay reads. */
+		/** C expression for the relocation a spliced overlay's link slots are relative to. */
 		relocation?: string;
 		nativeFunctionSplit?: NativeSplitPolicy;
 	},
@@ -886,7 +892,7 @@ function emitNativeFunctions(
 				? false
 				: {
 						symbolStem: options.symbolStems[functionIndex]!,
-						relocation: options.relocation ?? "&vm->compiler_native_relocation",
+						relocation: options.relocation,
 						symbolStems: options.symbolStems,
 					},
 			strictCompiledTargets,
@@ -1166,6 +1172,11 @@ function emitProgramImageParts(
 		maxCodeUnits: maxCompiledFunctionCodeUnits,
 		excludedSymbols,
 		nativeFunctionSplit: options.nativeFunctionSplit,
+		// Split units are cached objects; stems and link tables keep their text
+		// independent of every other function's image index.
+		...(splitCompiledFunctions
+			? { symbolStems: splitEmissionSymbolStems(image, options.partitionRoot) }
+			: {}),
 	});
 	const compiled = nativeEmission.compiled;
 	{
@@ -1451,13 +1462,23 @@ const MAX_STABLE_PARTITION_HASH_BITS = 64;
 const ABSOLUTE_PATH = /^(?:\/|[A-Za-z]:[\\/])/;
 
 /**
- * Functions from absolute source paths outside `node_modules`. Internal modules and
- * packages change only with the toolchain or a dependency update.
+ * Functions from source files under the partition root outside `node_modules`.
+ * Internal modules, toolchain sources and packages change only with the toolchain or
+ * a dependency update.
  */
-function applicationFunctions(image: ProgramImage): Array<boolean> {
+function applicationFunctions(
+	image: ProgramImage,
+	root: string | undefined,
+): Array<boolean> {
+	const files = partitionFileNames(image, root);
 	return image.runtime.functions.map((fn) => {
-		const file = image.runtime.files[fn.fileIndex] ?? "";
-		return ABSOLUTE_PATH.test(file) && !/[\\/]node_modules[\\/]/.test(file);
+		const original = image.runtime.files[fn.fileIndex] ?? "";
+		const file = files[fn.fileIndex] ?? "";
+		return (
+			ABSOLUTE_PATH.test(original) &&
+			!ABSOLUTE_PATH.test(file) &&
+			!/(?:^|[\\/])node_modules[\\/]/.test(file)
+		);
 	});
 }
 
@@ -1508,28 +1529,53 @@ function compiledFunctionDeclarations(
 	];
 }
 
+const pathSegments = (file: string) => file.split(/[\\/]/);
+
 /**
- * Source paths relative to the deepest directory holding every absolute one, so a
- * program compiled from another location (a temporary fixture, another checkout, a
- * dependency island under a different project) keeps its partition keys.
+ * Source paths under the partition root relative to it, so a program compiled from
+ * another location (a temporary fixture, another checkout) keeps its partition keys.
+ * Paths outside it, such as toolchain sources, stay absolute because they do not move
+ * with the program. Without an absolute root, paths are relative to the deepest
+ * directory holding them all.
  */
-function partitionFileNames(files: ReadonlyArray<string>): Array<string> {
+function partitionFileNames(
+	image: ProgramImage,
+	root: string | undefined,
+): Array<string> {
+	const { files, entrypointPath } = image.runtime;
+	const base =
+		root !== undefined
+			? pathSegments(root).filter((segment, index) => index === 0 || segment !== "")
+			: ABSOLUTE_PATH.test(entrypointPath)
+				? pathSegments(entrypointPath).slice(0, -1)
+				: undefined;
+	if (base !== undefined)
+		return files.map((file) => {
+			if (!ABSOLUTE_PATH.test(file)) return file;
+			const segments = pathSegments(file);
+			return base.every((segment, index) => segments[index] === segment)
+				? segments.slice(base.length).join("/")
+				: file;
+		});
 	const directories = files
 		.filter((file) => ABSOLUTE_PATH.test(file))
-		.map((file) => file.split(/[\\/]/).slice(0, -1));
+		.map((file) => pathSegments(file).slice(0, -1));
 	if (directories.length === 0) return [...files];
 	let depth = directories[0]!.length;
 	for (const directory of directories)
 		for (let index = 0; index < depth; index++)
 			if (directory[index] !== directories[0]![index]) depth = index;
 	return files.map((file) =>
-		ABSOLUTE_PATH.test(file) ? file.split(/[\\/]/).slice(depth).join("/") : file,
+		ABSOLUTE_PATH.test(file) ? pathSegments(file).slice(depth).join("/") : file,
 	);
 }
 
-function compiledFunctionPartitionKeys(image: ProgramImage): Array<string> {
+function compiledFunctionPartitionKeys(
+	image: ProgramImage,
+	root: string | undefined,
+): Array<string> {
 	const occurrences = new Map<string, number>();
-	const files = partitionFileNames(image.runtime.files);
+	const files = partitionFileNames(image, root);
 	return image.runtime.functions.map((fn) => {
 		const name = image.runtime.stringConstants[fn.nameStringIndex] ?? [];
 		const base = JSON.stringify({
@@ -1805,8 +1851,11 @@ export function emitProgramTranslationUnits(
 		Omit<TranslationUnitPart, "declarationIndices" | "partitionHashes">
 	> = [];
 	const applicationCode: typeof dependencyCode = [];
-	const functionPartitionKeys = compiledFunctionPartitionKeys(image);
-	const application = applicationFunctions(image);
+	const functionPartitionKeys = compiledFunctionPartitionKeys(
+		image,
+		options.partitionRoot,
+	);
+	const application = applicationFunctions(image, options.partitionRoot);
 	for (const [functionIndex, fn] of emitted.compiled.entries()) {
 		if (fn === null) continue;
 		const codeParts = application[functionIndex] ? applicationCode : dependencyCode;
@@ -1826,6 +1875,22 @@ export function emitProgramTranslationUnits(
 			});
 		}
 	}
+	const linkParts = emitted.compiled.flatMap((fn, functionIndex) =>
+		fn === null
+			? []
+			: [...(fn.source.length === 0 ? [] : [fn]), ...fn.directEntries].flatMap((part) =>
+					part.link === undefined || part.link.length === 0
+						? []
+						: [
+								{
+									kind: "data array" as const,
+									symbol: `${part.symbol}_link`,
+									partitionKey: functionPartitionKeys[functionIndex]!,
+									source: `const i32 ${part.symbol}_link[] = { ${part.link.map((slot) => slot.index).join(", ")} };`,
+								},
+							],
+				),
+	);
 	return [
 		{
 			id: "runtime-image",
@@ -1835,10 +1900,19 @@ export function emitProgramTranslationUnits(
 			definitions: [],
 		},
 		...partition("data", GENERATED_DATA_C_HEADER_LINES, dataParts),
+		...partition("data", ['#include "defaults.h"'], linkParts, "links-"),
 		...partition("code", NATIVE_C_HEADER_LINES, dependencyCode),
 		// Separate units keep an application edit from recompiling dependency code.
 		...partition("code", NATIVE_C_HEADER_LINES, applicationCode, "app-"),
 	];
+}
+
+/** Each function's symbol stem in split emission: `mal_compiled_<stem>` names its body. */
+export function splitEmissionSymbolStems(
+	image: ProgramImage,
+	partitionRoot?: string,
+): Array<string> {
+	return nativeOverlaySymbolStems(compiledFunctionPartitionKeys(image, partitionRoot));
 }
 
 /** Symbol stems that survive unrelated image edits; the partition key is the identity. */
@@ -1917,7 +1991,7 @@ export function emitRelocatableNativeOverlayTranslationUnits(
 		target.kind === "fragment"
 			? [`extern MalNativeProgramRelocation ${relocationCell};`]
 			: [];
-	const functionPartitionKeys = compiledFunctionPartitionKeys(image);
+	const functionPartitionKeys = compiledFunctionPartitionKeys(image, undefined);
 	const { compiled } = emitNativeFunctions(image, {
 		useCompiled: true,
 		suffix,
