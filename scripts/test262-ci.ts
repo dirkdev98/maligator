@@ -88,7 +88,7 @@ export function summarizeTest262Report(
 	const baseline = report.baseline.commit ?? report.baseline.digest.slice(0, 12);
 	const lines = [
 		"<!-- maligator-test262-regressions -->",
-		"This issue is maintained by the weekly full Test262 workflow.",
+		"This issue is maintained by the Test262 workflow that runs after CI on each push to main.",
 		"",
 		`Latest run: [GitHub Actions](${runUrl})`,
 		`Baseline: \`${escapeHtml(baseline)}\``,

@@ -266,8 +266,8 @@ checks, the self-hosted compiler differential, and compiled WPT. One job runs th
 short checks in sequence: the self-hosted frontend, strip and wire differentials,
 Rust runtime tests, and the focused Test262 and WPT GC dimensions. The slow-unit and
 Wasm jobs install WASI SDK 34. Compiler logs, CLI acceptance records, parity output, and
-standards reports remain tied to the tested revision. The full Test262 corpus keeps
-its separate weekly/manual workflow; these jobs do not update either baseline.
+standards reports remain tied to the tested revision. The full Test262 corpus runs in
+its own workflow after CI; these jobs do not update either baseline.
 
 The manual **Native primordial audit** workflow captures every descriptor inventory
 mode for one selected native target, using four shards. It retains raw records,
@@ -314,19 +314,21 @@ including their tested source identity. The standards lane alone prepares the
 Test262 corpus. Release workflows remain separate.
 
 Every push to `main` whose CI run passes also runs the complete compiled/normal
-Test262 corpus in the Test262 workflow, started after CI so its four jobs never queue
-the gate: one per language variant and half of the corpus (`scripts/test262.ts --shard
-INDEX/COUNT` interleaves the selection), each checking its quarter against the
-committed baseline without changing it. The weekly and manually dispatched Test262
-workflow runs the complete canonical compiled/normal report on `main` and retains its
-reports for fourteen days. Both restore the standards lane's native cache line without
-saving their own, because that lane prepares the same eval-enabled runtime, and both
-use every runner core instead of the default half. Manual runs check the existing
-baseline without changing it or posting regression issues. Scheduled runs commit
-`scripts/test262.json` only when the complete report has no regressions and the
-baseline changed. Regressions are never accepted into the baseline; scheduled runs
-maintain one issue named `Automated Test262 regressions`, closing it after the next
-regression-free scheduled run.
+Test262 corpus in the Test262 workflow, started after CI so its jobs never queue the
+gate. Four jobs each run both language variants over an interleaved quarter of the
+corpus (`scripts/test262.ts --shard INDEX/COUNT`) and check it against the committed
+baseline. A report job then merges the four combined reports with
+`scripts/test262-merge.ts`, which refuses a missing, repeated or overlapping quarter,
+into the same complete report a full run writes, and retains it for fourteen days.
+The shard jobs restore the standards lane's native cache line without saving their
+own, because that lane prepares the same eval-enabled runtime, and use every runner
+core instead of the default half. For push-triggered runs the report job maintains
+one issue named `Automated Test262 regressions`, creating or reopening it while
+regressions remain and closing it after the next regression-free run, and commits
+`scripts/test262.json` when the complete report has no regressions and newly passing
+tests, as long as the tested revision is still `main`. Regressions are never accepted
+into the baseline. Manually dispatched runs check the existing baseline without
+changing it or touching the issue.
 
 ## Worker budgets
 

@@ -327,13 +327,16 @@ if (random) {
 	selection = selection.filter(() => Math.random() < 0.05);
 	test262Log(`Sampled ${selection.length} files.`);
 }
-const shard =
+const shardMatch =
 	arguments_.shard === undefined ? undefined : /^(\d+)\/(\d+)$/.exec(arguments_.shard);
+// A merge of every shard's combined report stands for the run over the whole selection.
+let shard: { index: number; count: number; selectedTests: number } | undefined;
 if (arguments_.shard !== undefined) {
-	const index = Number(shard?.[1]);
-	const count = Number(shard?.[2]);
-	if (shard === null || !(count >= 1 && index >= 1 && index <= count))
+	const index = Number(shardMatch?.[1]);
+	const count = Number(shardMatch?.[2]);
+	if (shardMatch === null || !(count >= 1 && index >= 1 && index <= count))
 		throw new Error("--shard requires INDEX/COUNT with 1 <= INDEX <= COUNT");
+	shard = { index, count, selectedTests: selection.length };
 	// Interleaving keeps each shard's mix of directories, and therefore its cost, even.
 	selection = selection.filter((_file, position) => position % count === index - 1);
 	test262Log(`Shard ${index}/${count}: ${selection.length} files.`);
@@ -730,6 +733,7 @@ function combineRuns(strict: VariantRun, sloppy: VariantRun) {
 				policy,
 				complete: true,
 				selectedTests: selection.length,
+				...(shard === undefined ? {} : { shard }),
 				summary,
 				skips,
 				code,
