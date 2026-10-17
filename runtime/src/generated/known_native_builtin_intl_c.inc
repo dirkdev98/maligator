@@ -287,6 +287,24 @@ MalValue mal_known_native_intl_locale_get_collation(MalVm *vm, MalValue receiver
     return mal_value_new_undefined();
 #endif
 }
+MalValue mal_known_native_intl_locale_get_first_day_of_week(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee) {
+#if (MAL_INTL)
+    return intl_locale_get_first_day_of_week(vm, receiver, args, count, target, callee);
+#else
+    (void) receiver; (void) args; (void) count; (void) target; (void) callee;
+    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Known native operation is unavailable");
+    return mal_value_new_undefined();
+#endif
+}
+MalValue mal_known_native_intl_locale_get_text_info(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee) {
+#if (MAL_INTL)
+    return intl_locale_get_text_info(vm, receiver, args, count, target, callee);
+#else
+    (void) receiver; (void) args; (void) count; (void) target; (void) callee;
+    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Known native operation is unavailable");
+    return mal_value_new_undefined();
+#endif
+}
 MalValue mal_known_native_intl_locale_get_hour_cycle(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee) {
 #if (MAL_INTL)
     return intl_locale_get_hour_cycle(vm, receiver, args, count, target, callee);
@@ -362,6 +380,15 @@ MalValue mal_known_native_intl_locale_get_script(MalVm *vm, MalValue receiver, c
 MalValue mal_known_native_intl_locale_to_string(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee) {
 #if (MAL_INTL)
     return intl_locale_to_string(vm, receiver, args, count, target, callee);
+#else
+    (void) receiver; (void) args; (void) count; (void) target; (void) callee;
+    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Known native operation is unavailable");
+    return mal_value_new_undefined();
+#endif
+}
+MalValue mal_known_native_intl_locale_get_variants(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee) {
+#if (MAL_INTL)
+    return intl_locale_get_variants(vm, receiver, args, count, target, callee);
 #else
     (void) receiver; (void) args; (void) count; (void) target; (void) callee;
     mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Known native operation is unavailable");

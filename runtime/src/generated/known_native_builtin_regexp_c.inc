@@ -44,6 +44,15 @@ MalValue mal_known_native_regexp_escape(MalVm *vm, MalValue receiver, const MalV
     return mal_value_new_undefined();
 #endif
 }
+MalValue mal_known_native_regexp_proto_compile(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee) {
+#if (MAL_REGEXP)
+    return regexp_proto_compile(vm, receiver, args, count, target, callee);
+#else
+    (void) receiver; (void) args; (void) count; (void) target; (void) callee;
+    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Known native operation is unavailable");
+    return mal_value_new_undefined();
+#endif
+}
 MalValue mal_known_native_regexp_proto_get_dot_all(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee) {
 #if (MAL_REGEXP)
     return regexp_proto_get_dot_all(vm, receiver, args, count, target, callee);

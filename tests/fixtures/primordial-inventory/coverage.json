@@ -37044,6 +37044,16 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"Intl.Locale.prototype\",\"getTextInfo\"]",
+			"owner": "Intl.Locale.prototype",
+			"ownerPaths": ["Intl.Locale.prototype", "MAL_INTRINSIC_INTL_LOCALE_PROTOTYPE"],
+			"key": "getTextInfo",
+			"kind": "data",
+			"operations": ["Intl.Locale.prototype.getTextInfo"],
+			"task": "L-02",
+			"decisions": []
+		},
+		{
 			"id": "[\"Intl.Locale.prototype\",\"baseName\"]",
 			"owner": "Intl.Locale.prototype",
 			"ownerPaths": ["Intl.Locale.prototype", "MAL_INTRINSIC_INTL_LOCALE_PROTOTYPE"],
@@ -37080,6 +37090,16 @@
 			"key": "region",
 			"kind": "accessor",
 			"operations": ["Intl.Locale.prototype.region<get>"],
+			"task": "L-02",
+			"decisions": []
+		},
+		{
+			"id": "[\"Intl.Locale.prototype\",\"variants\"]",
+			"owner": "Intl.Locale.prototype",
+			"ownerPaths": ["Intl.Locale.prototype", "MAL_INTRINSIC_INTL_LOCALE_PROTOTYPE"],
+			"key": "variants",
+			"kind": "accessor",
+			"operations": ["Intl.Locale.prototype.variants<get>"],
 			"task": "L-02",
 			"decisions": []
 		},
@@ -37140,6 +37160,16 @@
 			"key": "numberingSystem",
 			"kind": "accessor",
 			"operations": ["Intl.Locale.prototype.numberingSystem<get>"],
+			"task": "L-02",
+			"decisions": []
+		},
+		{
+			"id": "[\"Intl.Locale.prototype\",\"firstDayOfWeek\"]",
+			"owner": "Intl.Locale.prototype",
+			"ownerPaths": ["Intl.Locale.prototype", "MAL_INTRINSIC_INTL_LOCALE_PROTOTYPE"],
+			"key": "firstDayOfWeek",
+			"kind": "accessor",
+			"operations": ["Intl.Locale.prototype.firstDayOfWeek<get>"],
 			"task": "L-02",
 			"decisions": []
 		},
@@ -37227,6 +37257,46 @@
 			"id": "[\"Intl.Locale.prototype.collation<get>\",\"name\"]",
 			"owner": "Intl.Locale.prototype.collation<get>",
 			"ownerPaths": ["Intl.Locale.prototype.collation<get>"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"Intl.Locale.prototype.firstDayOfWeek<get>\",\"length\"]",
+			"owner": "Intl.Locale.prototype.firstDayOfWeek<get>",
+			"ownerPaths": ["Intl.Locale.prototype.firstDayOfWeek<get>"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"Intl.Locale.prototype.firstDayOfWeek<get>\",\"name\"]",
+			"owner": "Intl.Locale.prototype.firstDayOfWeek<get>",
+			"ownerPaths": ["Intl.Locale.prototype.firstDayOfWeek<get>"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"Intl.Locale.prototype.getTextInfo\",\"length\"]",
+			"owner": "Intl.Locale.prototype.getTextInfo",
+			"ownerPaths": ["Intl.Locale.prototype.getTextInfo"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"Intl.Locale.prototype.getTextInfo\",\"name\"]",
+			"owner": "Intl.Locale.prototype.getTextInfo",
+			"ownerPaths": ["Intl.Locale.prototype.getTextInfo"],
 			"key": "name",
 			"kind": "data",
 			"operations": [],
@@ -37407,6 +37477,26 @@
 			"id": "[\"Intl.Locale.prototype.toString\",\"name\"]",
 			"owner": "Intl.Locale.prototype.toString",
 			"ownerPaths": ["Intl.Locale.prototype.toString"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"Intl.Locale.prototype.variants<get>\",\"length\"]",
+			"owner": "Intl.Locale.prototype.variants<get>",
+			"ownerPaths": ["Intl.Locale.prototype.variants<get>"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"Intl.Locale.prototype.variants<get>\",\"name\"]",
+			"owner": "Intl.Locale.prototype.variants<get>",
+			"ownerPaths": ["Intl.Locale.prototype.variants<get>"],
 			"key": "name",
 			"kind": "data",
 			"operations": [],
@@ -53665,6 +53755,16 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"RegExp.prototype\",\"compile\"]",
+			"owner": "RegExp.prototype",
+			"ownerPaths": ["MAL_INTRINSIC_REGEXP_PROTOTYPE", "RegExp.prototype"],
+			"key": "compile",
+			"kind": "data",
+			"operations": ["RegExp.prototype.compile"],
+			"task": "K-02",
+			"decisions": []
+		},
+		{
 			"id": "[\"RegExp.prototype\",\"exec\"]",
 			"owner": "RegExp.prototype",
 			"ownerPaths": ["MAL_INTRINSIC_REGEXP_PROTOTYPE", "RegExp.prototype"],
@@ -53842,6 +53942,26 @@
 			"kind": "data",
 			"operations": ["RegExp.prototype[%Symbol.split%]"],
 			"task": "K-04",
+			"decisions": []
+		},
+		{
+			"id": "[\"RegExp.prototype.compile\",\"length\"]",
+			"owner": "RegExp.prototype.compile",
+			"ownerPaths": ["RegExp.prototype.compile"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"RegExp.prototype.compile\",\"name\"]",
+			"owner": "RegExp.prototype.compile",
+			"ownerPaths": ["RegExp.prototype.compile"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
 			"decisions": []
 		},
 		{
@@ -117537,6 +117657,46 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"Intl.Locale.prototype.firstDayOfWeek<get>\",\"<call>\"]",
+			"owner": "Intl.Locale.prototype.firstDayOfWeek<get>",
+			"ownerPaths": ["Intl.Locale.prototype.firstDayOfWeek<get>"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["Intl.Locale.prototype.firstDayOfWeek<get>"],
+			"task": "L-02",
+			"decisions": []
+		},
+		{
+			"id": "[\"Intl.Locale.prototype.firstDayOfWeek<get>\",\"<construct>\"]",
+			"owner": "Intl.Locale.prototype.firstDayOfWeek<get>",
+			"ownerPaths": ["Intl.Locale.prototype.firstDayOfWeek<get>"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["Intl.Locale.prototype.firstDayOfWeek<get>"],
+			"task": "L-02",
+			"decisions": []
+		},
+		{
+			"id": "[\"Intl.Locale.prototype.getTextInfo\",\"<call>\"]",
+			"owner": "Intl.Locale.prototype.getTextInfo",
+			"ownerPaths": ["Intl.Locale.prototype.getTextInfo"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["Intl.Locale.prototype.getTextInfo"],
+			"task": "L-02",
+			"decisions": []
+		},
+		{
+			"id": "[\"Intl.Locale.prototype.getTextInfo\",\"<construct>\"]",
+			"owner": "Intl.Locale.prototype.getTextInfo",
+			"ownerPaths": ["Intl.Locale.prototype.getTextInfo"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["Intl.Locale.prototype.getTextInfo"],
+			"task": "L-02",
+			"decisions": []
+		},
+		{
 			"id": "[\"Intl.Locale.prototype.hourCycle<get>\",\"<call>\"]",
 			"owner": "Intl.Locale.prototype.hourCycle<get>",
 			"ownerPaths": ["Intl.Locale.prototype.hourCycle<get>"],
@@ -117713,6 +117873,26 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["Intl.Locale.prototype.toString"],
+			"task": "L-02",
+			"decisions": []
+		},
+		{
+			"id": "[\"Intl.Locale.prototype.variants<get>\",\"<call>\"]",
+			"owner": "Intl.Locale.prototype.variants<get>",
+			"ownerPaths": ["Intl.Locale.prototype.variants<get>"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["Intl.Locale.prototype.variants<get>"],
+			"task": "L-02",
+			"decisions": []
+		},
+		{
+			"id": "[\"Intl.Locale.prototype.variants<get>\",\"<construct>\"]",
+			"owner": "Intl.Locale.prototype.variants<get>",
+			"ownerPaths": ["Intl.Locale.prototype.variants<get>"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["Intl.Locale.prototype.variants<get>"],
 			"task": "L-02",
 			"decisions": []
 		},
@@ -154006,6 +154186,26 @@
 			"kind": "construct",
 			"operations": ["RegExp.$1<get>"],
 			"task": "K-03",
+			"decisions": []
+		},
+		{
+			"id": "[\"RegExp.prototype.compile\",\"<call>\"]",
+			"owner": "RegExp.prototype.compile",
+			"ownerPaths": ["RegExp.prototype.compile"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["RegExp.prototype.compile"],
+			"task": "K-02",
+			"decisions": []
+		},
+		{
+			"id": "[\"RegExp.prototype.compile\",\"<construct>\"]",
+			"owner": "RegExp.prototype.compile",
+			"ownerPaths": ["RegExp.prototype.compile"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["RegExp.prototype.compile"],
+			"task": "K-02",
 			"decisions": []
 		},
 		{
@@ -224752,6 +224952,14 @@
 			"identities": ["Intl.Locale.prototype.collation<get>"]
 		},
 		{
+			"id": "Intl.Locale.prototype.firstDayOfWeek<get>",
+			"identities": ["Intl.Locale.prototype.firstDayOfWeek<get>"]
+		},
+		{
+			"id": "Intl.Locale.prototype.getTextInfo",
+			"identities": ["Intl.Locale.prototype.getTextInfo"]
+		},
+		{
 			"id": "Intl.Locale.prototype.hourCycle<get>",
 			"identities": ["Intl.Locale.prototype.hourCycle<get>"]
 		},
@@ -224786,6 +224994,10 @@
 		{
 			"id": "Intl.Locale.prototype.toString",
 			"identities": ["Intl.Locale.prototype.toString"]
+		},
+		{
+			"id": "Intl.Locale.prototype.variants<get>",
+			"identities": ["Intl.Locale.prototype.variants<get>"]
 		},
 		{ "id": "Intl.NumberFormat", "identities": ["Intl.NumberFormat"] },
 		{
@@ -225106,6 +225318,7 @@
 		},
 		{ "id": "RegExp.$_<set>", "identities": ["RegExp.$_<set>", "RegExp.input<set>"] },
 		{ "id": "RegExp.escape", "identities": ["RegExp.escape"] },
+		{ "id": "RegExp.prototype.compile", "identities": ["RegExp.prototype.compile"] },
 		{
 			"id": "RegExp.prototype.dotAll<get>",
 			"identities": ["RegExp.prototype.dotAll<get>"]
@@ -230799,8 +231012,8 @@
 			"owner": "RegExp.prototype",
 			"key": "compile",
 			"task": "K-02",
-			"exposures": [],
-			"state": "not-installed-in-full-inventory"
+			"exposures": ["[\"RegExp.prototype\",\"compile\"]"],
+			"state": "reconciled"
 		},
 		{
 			"owner": "RegExp.prototype",
@@ -232418,8 +232631,8 @@
 			"owner": "Intl.Locale.prototype",
 			"key": "getTextInfo",
 			"task": "L-02",
-			"exposures": [],
-			"state": "not-installed-in-full-inventory"
+			"exposures": ["[\"Intl.Locale.prototype\",\"getTextInfo\"]"],
+			"state": "reconciled"
 		},
 		{
 			"owner": "Intl.Locale.prototype",

@@ -296,6 +296,8 @@ MalValue mal_known_native_intl_locale_get_base_name(MalVm *vm, MalValue receiver
 MalValue mal_known_native_intl_locale_get_calendar(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
 MalValue mal_known_native_intl_locale_get_case_first(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
 MalValue mal_known_native_intl_locale_get_collation(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
+MalValue mal_known_native_intl_locale_get_first_day_of_week(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
+MalValue mal_known_native_intl_locale_get_text_info(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
 MalValue mal_known_native_intl_locale_get_hour_cycle(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
 MalValue mal_known_native_intl_locale_get_language(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
 MalValue mal_known_native_intl_locale_maximize(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
@@ -305,6 +307,7 @@ MalValue mal_known_native_intl_locale_get_numeric(MalVm *vm, MalValue receiver, 
 MalValue mal_known_native_intl_locale_get_region(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
 MalValue mal_known_native_intl_locale_get_script(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
 MalValue mal_known_native_intl_locale_to_string(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
+MalValue mal_known_native_intl_locale_get_variants(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
 MalValue mal_known_native_intl_number_format_constructor(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
 MalValue mal_known_native_intl_number_format_get_format(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
 MalValue mal_known_native_intl_number_format_resolved_options(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
@@ -487,6 +490,7 @@ MalValue mal_known_native_regexp_constructor(MalVm *vm, MalValue receiver, const
 MalValue mal_known_native_regexp_legacy_getter(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
 MalValue mal_known_native_regexp_legacy_input_setter(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
 MalValue mal_known_native_regexp_escape(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
+MalValue mal_known_native_regexp_proto_compile(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
 MalValue mal_known_native_regexp_proto_get_dot_all(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
 MalValue mal_known_native_regexp_proto_exec(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
 MalValue mal_known_native_regexp_proto_get_flags(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);

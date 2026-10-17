@@ -217,7 +217,7 @@
 	},
 	{
 		"file": "generated/known_native_builtin_intl_c.inc",
-		"sha256": "957712a710f93d941f895e71093aed05b46d3e04c435445881ea2f8baaa02cf4"
+		"sha256": "cb5f449dfcd35d0627b427da7f49736536e2749c5b317da940e2cec44ff9894c"
 	},
 	{
 		"file": "generated/known_native_builtin_iterator_c.inc",
@@ -261,7 +261,7 @@
 	},
 	{
 		"file": "generated/known_native_builtin_regexp_c.inc",
-		"sha256": "46ac90b5867a4bb5f1289e954ded4fea9e409c4a6639cea7b8304ca75b7b9e48"
+		"sha256": "9ab5b61883405a590fbf7f0207462d743d0d34e6cc4a269fbc66e908e6323e07"
 	},
 	{
 		"file": "generated/known_native_builtin_set_c.inc",
@@ -297,7 +297,7 @@
 	},
 	{
 		"file": "generated/known_native_entries.inc",
-		"sha256": "7f234995413174a5709586496efd8846459681fa17c2d4b16ed7c1b833d4e7e0"
+		"sha256": "9ad2a2a37e21c02b651a8eed23af7bf9bb66dbf2b69b57090d29572926b7d121"
 	},
 	{
 		"file": "generated/known_native_intrinsics_c.inc",
@@ -305,7 +305,7 @@
 	},
 	{
 		"file": "generated/known_primordials.inc",
-		"sha256": "15fba9c2263562b0ad56ae9f9e2a4528fd8d4b85f7c8c0979b1e4087d1f49e6a"
+		"sha256": "77233e114c14920293db02e19f5601dfb0c7d48c6163b0b44efff82e5f204aa0"
 	},
 	{
 		"file": "generated/node_builtin_installers.inc",
