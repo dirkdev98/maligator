@@ -1,12 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import {
-	mkdirSync,
-	readdirSync,
-	readFileSync,
-	rmSync,
-	symlinkSync,
-	writeFileSync,
-} from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import { maligatorCacheDirectory } from "../src/cache-root.ts";
@@ -25,6 +18,7 @@ import {
 	selfhostNativeTargetConfig,
 } from "../src/selfhost-native-target.ts";
 import { buildNativeBinary, STRESS_ENV } from "../src/test-harness.ts";
+import { isolatedToolsDirectory } from "./isolated-tools.ts";
 
 const root = path.join(
 	maligatorCacheDirectory(),
@@ -32,19 +26,19 @@ const root = path.join(
 	"selfhost-native",
 	String(process.pid),
 );
-const tools = path.join(root, "tools");
 const fixture = path.resolve("tests/fixtures/selfhost-native/entry.mts");
 // Wide private roots, shared slots, collecting getters, exceptions and suspension.
 const storageFixture = path.resolve("tests/fixtures/selfhost-native/storage.mts");
 const progress = new CommandProgress("selfhost-native");
 progress.start("isolate tools, build the compiler, and compare native outputs");
 rmSync(root, { recursive: true, force: true });
-mkdirSync(tools, { recursive: true });
+mkdirSync(root, { recursive: true });
 
 const originalPath = process.env.PATH ?? "";
 const required = ["cc", "ar", "ld", "rustup", "cargo"];
 const optional = ["c++", "clang", "ranlib", "make", "ninja", "vm_stat"];
 const rustup = resolvePathExecutable("rustup", originalPath);
+const toolLinks: Array<[string, string]> = [];
 for (const name of [...required, ...optional]) {
 	const executable =
 		name === "cc"
@@ -67,8 +61,9 @@ for (const name of [...required, ...optional]) {
 		if (required.includes(name)) throw error;
 		continue;
 	}
-	symlinkSync(source, path.join(tools, name));
+	toolLinks.push([name, source]);
 }
+const tools = isolatedToolsDirectory(toolLinks);
 
 const isolatedEnv = {
 	...process.env,

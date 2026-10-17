@@ -25,6 +25,7 @@ import { parseProfileCapture, profileCaptureIdentity } from "../src/profile-arti
 import type { PreparedProfile, ProfileManifest } from "../src/profile-artifact.ts";
 import { requireToolchain, resolvePathExecutable } from "../src/toolchain.ts";
 import { requireHeapLimit } from "./heap-limit.ts";
+import { isolatedToolsDirectory } from "./isolated-tools.ts";
 
 requireHeapLimit(8192);
 const repositoryRoot = path.resolve(import.meta.dirname, "..");
@@ -120,27 +121,7 @@ if (!supervisorOnly) {
 		}
 	}
 }
-// The build environment fingerprint includes PATH, CC and CXX, so a per-run tools
-// directory would give every native build of the isolated CLI fresh cache keys.
-const tools = path.join(
-	maligatorCacheDirectory(),
-	"work",
-	"selfhost-cli-tools",
-	createHash("sha256").update(JSON.stringify(toolLinks)).digest("hex").slice(0, 16),
-);
-if (!existsSync(tools)) {
-	const staging = `${tools}.${String(process.pid)}`;
-	rmSync(staging, { recursive: true, force: true });
-	mkdirSync(staging, { recursive: true });
-	for (const [name, source] of toolLinks) symlinkSync(source, path.join(staging, name));
-	try {
-		renameSync(staging, tools);
-	} catch (error) {
-		// A concurrent check published the same links first.
-		rmSync(staging, { recursive: true, force: true });
-		if (!existsSync(tools)) throw error;
-	}
-}
+const tools = isolatedToolsDirectory(toolLinks);
 
 const isolatedEnv = {
 	...process.env,
