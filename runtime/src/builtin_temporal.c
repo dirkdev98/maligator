@@ -23,6 +23,7 @@
 #include "temporal_rs/AnyCalendarKind.h"
 #include "temporal_rs/Calendar.h"
 #include "temporal_rs/Instant.h"
+#include "temporal_rs/OwnedRelativeTo.h"
 #include "temporal_rs/PlainDate.h"
 #include "temporal_rs/PlainDateTime.h"
 #include "temporal_rs/PlainMonthDay.h"
@@ -606,6 +607,22 @@ static bool temporal_get_unit_option(
     return temporal_unit_from_string(vm, string, allow_auto, out);
 }
 
+// Leaves `out` unset when the option is absent, for algorithms that check presence.
+static bool temporal_get_optional_unit_option(
+    MalVm *vm, MalValue options, const byte *name, bool allow_auto, Unit_option *out
+) {
+    *out = (Unit_option) {.is_ok = false};
+    MalValue value;
+    if (!mal_vm_get_property(vm, options, mal_intrinsic_string_key(vm, name), &value)) {
+        return false;
+    }
+    if (mal_value_is_undefined(value)) return true;
+    MalString *string;
+    if (!mal_vm_to_string(vm, value, &string)) return false;
+    out->is_ok = temporal_unit_from_string(vm, string, allow_auto, &out->ok);
+    return out->is_ok;
+}
+
 static bool temporal_get_rounding_increment(
     MalVm *vm, MalValue options, u32 *out
 ) {
@@ -814,32 +831,17 @@ static bool temporal_display_calendar(
     return true;
 }
 
-static bool duration_relative_to(
-    MalVm *vm, MalValue options, RelativeTo *relative
-) {
-    *relative = (RelativeTo) {0};
-    bool present;
-    if (!temporal_options_object(vm, options, &present)) return false;
-    if (!present) return true;
-    MalValue value;
-    if (!mal_vm_get_property(
-            vm, options, mal_intrinsic_string_key(vm, "relativeTo"), &value)) {
-        return false;
-    }
-    if (mal_value_is_undefined(value)) return true;
-    if (mal_value_is_temporal_object(value)) {
-        MalTemporalObject *object = mal_value_to_temporal_object(value);
-        if (object->kind == MAL_TEMPORAL_PLAIN_DATE) {
-            relative->date = object->handle;
-            return true;
-        }
-        if (object->kind == MAL_TEMPORAL_ZONED_DATE_TIME) {
-            relative->zoned = object->handle;
-            return true;
-        }
-    }
-    temporal_throw_type(vm, "Unsupported Temporal relativeTo value");
-    return false;
+// GetTemporalRelativeToOption. The result owns its handles.
+static bool duration_relative_to(MalVm *vm, MalValue options, OwnedRelativeTo *relative);
+
+static RelativeTo relative_to_view(const OwnedRelativeTo *relative) {
+    return (RelativeTo) {.date = relative->date, .zoned = relative->zoned};
+}
+
+static void relative_to_destroy(OwnedRelativeTo *relative) {
+    if (relative->date != nullptr) temporal_rs_PlainDate_destroy(relative->date);
+    if (relative->zoned != nullptr) temporal_rs_ZonedDateTime_destroy(relative->zoned);
+    *relative = (OwnedRelativeTo) {0};
 }
 
 static MalValue duration_compare(
@@ -854,14 +856,15 @@ static MalValue duration_compare(
     Duration *two_borrowed = temporal_handle_if_kind(
         two_value, MAL_TEMPORAL_DURATION);
     if (one_borrowed != nullptr && two_borrowed != nullptr) {
-        RelativeTo relative;
+        OwnedRelativeTo relative;
         if (!duration_relative_to(
                 vm, arg_count > 2 ? args[2] : mal_value_new_undefined(),
                 &relative)) {
             return mal_value_new_undefined();
         }
-        temporal_rs_Duration_compare_result result =
-            temporal_rs_Duration_compare(one_borrowed, two_borrowed, relative);
+        temporal_rs_Duration_compare_result result = temporal_rs_Duration_compare(
+            one_borrowed, two_borrowed, relative_to_view(&relative));
+        relative_to_destroy(&relative);
         return result.is_ok ? mal_value_from_i32(result.ok)
                             : temporal_throw(vm, result.err);
     }
@@ -872,7 +875,7 @@ static MalValue duration_compare(
         temporal_rs_Duration_destroy(one);
         return mal_value_new_undefined();
     }
-    RelativeTo relative;
+    OwnedRelativeTo relative;
     if (!duration_relative_to(
             vm, arg_count > 2 ? args[2] : mal_value_new_undefined(), &relative)) {
         temporal_rs_Duration_destroy(one);
@@ -880,7 +883,8 @@ static MalValue duration_compare(
         return mal_value_new_undefined();
     }
     temporal_rs_Duration_compare_result result =
-        temporal_rs_Duration_compare(one, two, relative);
+        temporal_rs_Duration_compare(one, two, relative_to_view(&relative));
+    relative_to_destroy(&relative);
     temporal_rs_Duration_destroy(one);
     temporal_rs_Duration_destroy(two);
     return result.is_ok ? mal_value_from_i32(result.ok) : temporal_throw(vm, result.err);
@@ -941,7 +945,7 @@ static MalValue duration_round(
     if (!duration_this(vm, this_value, &object)) return mal_value_new_undefined();
     MalValue value = arg_count > 0 ? args[0] : mal_value_new_undefined();
     RoundingOptions options = {0};
-    RelativeTo relative = {0};
+    OwnedRelativeTo relative = {0};
     if (mal_value_is_string(value)) {
         Unit unit;
         if (!temporal_unit_from_string(
@@ -957,25 +961,24 @@ static MalValue duration_round(
         bool present;
         if (!temporal_options_object(vm, value, &present)) return mal_value_new_undefined();
         if (!present) return temporal_throw_type(vm, "Temporal.Duration.round requires an argument");
-        Unit largest, smallest;
         RoundingMode mode;
         u32 increment;
-        if (!temporal_get_unit_option(
-                vm, value, "largestUnit", true, false, Unit_Auto, &largest) ||
-            !temporal_get_rounding_increment(vm, value, &increment) ||
-            !temporal_get_rounding_mode(vm, value, RoundingMode_HalfExpand, &mode) ||
-            !temporal_get_unit_option(
-                vm, value, "smallestUnit", false, false, Unit_Nanosecond, &smallest) ||
-            !duration_relative_to(vm, value, &relative)) {
+        if (!temporal_get_optional_unit_option(vm, value, "largestUnit", true, &options.largest_unit)) {
             return mal_value_new_undefined();
         }
-        options.largest_unit = (Unit_option) {.ok = largest, .is_ok = true};
-        options.smallest_unit = (Unit_option) {.ok = smallest, .is_ok = true};
+        if (!duration_relative_to(vm, value, &relative)) return mal_value_new_undefined();
+        if (!temporal_get_rounding_increment(vm, value, &increment) ||
+            !temporal_get_rounding_mode(vm, value, RoundingMode_HalfExpand, &mode) ||
+            !temporal_get_optional_unit_option(vm, value, "smallestUnit", false, &options.smallest_unit)) {
+            relative_to_destroy(&relative);
+            return mal_value_new_undefined();
+        }
         options.rounding_mode = (RoundingMode_option) {.ok = mode, .is_ok = true};
         options.increment = (OptionU32) {.ok = increment, .is_ok = true};
     }
     temporal_rs_Duration_round_result result =
-        temporal_rs_Duration_round(object->handle, options, relative);
+        temporal_rs_Duration_round(object->handle, options, relative_to_view(&relative));
+    relative_to_destroy(&relative);
     return result.is_ok ? duration_wrap_intrinsic(vm, result.ok)
                         : temporal_throw(vm, result.err);
 }
@@ -989,7 +992,7 @@ static MalValue duration_total(
     if (!duration_this(vm, this_value, &object)) return mal_value_new_undefined();
     MalValue value = arg_count > 0 ? args[0] : mal_value_new_undefined();
     Unit unit;
-    RelativeTo relative = {0};
+    OwnedRelativeTo relative = {0};
     if (mal_value_is_string(value)) {
         if (!temporal_unit_from_string(vm, mal_value_to_string(value), false, &unit)) {
             return mal_value_new_undefined();
@@ -997,14 +1000,16 @@ static MalValue duration_total(
     } else {
         bool present;
         if (!temporal_options_object(vm, value, &present)) return mal_value_new_undefined();
-        if (!present || !temporal_get_unit_option(
-                vm, value, "unit", false, true, Unit_Auto, &unit) ||
-            !duration_relative_to(vm, value, &relative)) {
+        if (!present) return temporal_throw_type(vm, "Temporal.Duration.total requires an argument");
+        if (!duration_relative_to(vm, value, &relative)) return mal_value_new_undefined();
+        if (!temporal_get_unit_option(vm, value, "unit", false, true, Unit_Auto, &unit)) {
+            relative_to_destroy(&relative);
             return mal_value_new_undefined();
         }
     }
     temporal_rs_Duration_total_result result =
-        temporal_rs_Duration_total(object->handle, unit, relative);
+        temporal_rs_Duration_total(object->handle, unit, relative_to_view(&relative));
+    relative_to_destroy(&relative);
     return result.is_ok ? mal_ops_number_value(result.ok) : temporal_throw(vm, result.err);
 }
 
@@ -3982,6 +3987,112 @@ static bool temporal_time_zone_from_value(
     return true;
 }
 
+// Reads the offset field of a property bag; the caller frees `*data`.
+static bool temporal_offset_field(
+    MalVm *vm, MalValue input, byte **data, OptionStringView *offset
+) {
+    *data = nullptr;
+    *offset = (OptionStringView) {.is_ok = false};
+    MalValue value;
+    if (!mal_vm_get_property(vm, input, mal_intrinsic_string_key(vm, "offset"), &value)) {
+        return false;
+    }
+    if (mal_value_is_undefined(value)) return true;
+    // ToOffsetString: only a string, or an object converting to one, is an offset.
+    if (!mal_vm_to_primitive(vm, value, MAL_TO_PRIMITIVE_STRING, &value)) return false;
+    if (!mal_value_is_string(value)) return temporal_throw_type(vm, "Temporal offset must be a string"), false;
+    usize length;
+    *data = mal_string_to_utf8(mal_value_to_string(value), &length);
+    if (*data == nullptr) return temporal_throw_type(vm, "Unable to encode Temporal offset"), false;
+    *offset = (OptionStringView) {.ok = {.data = (const char *) *data, .len = length}, .is_ok = true};
+    return true;
+}
+
+static bool duration_relative_to_fields(MalVm *vm, MalValue input, OwnedRelativeTo *relative) {
+    PlainDatePartial date;
+    if (!plain_date_partial_from_object_impl(vm, input, &date, false)) return false;
+    PlainTimeFields time_fields;
+    PartialTime time;
+    byte *offset_data = nullptr;
+    OptionStringView offset;
+    MalValue zone_value;
+    bool ok = plain_time_read_fields(vm, input, &time_fields, false) &&
+        plain_time_partial(vm, &time_fields, ArithmeticOverflow_Constrain, &time) &&
+        temporal_offset_field(vm, input, &offset_data, &offset) &&
+        mal_vm_get_property(vm, input, mal_intrinsic_string_key(vm, "timeZone"), &zone_value);
+    TimeZone zone;
+    if (ok && !mal_value_is_undefined(zone_value)) ok = temporal_time_zone_from_value(vm, zone_value, &zone);
+    ArithmeticOverflow_option constrain = {.ok = ArithmeticOverflow_Constrain, .is_ok = true};
+    if (ok && mal_value_is_undefined(zone_value)) {
+        temporal_rs_PlainDate_from_partial_result result =
+            temporal_rs_PlainDate_from_partial(date.partial, constrain);
+        if (result.is_ok) relative->date = result.ok;
+        else ok = (temporal_throw(vm, result.err), false);
+    } else if (ok) {
+        // Without an offset the fields are wall-clock time; with one it must match exactly.
+        PartialZonedDateTime partial = {
+            .date = date.partial, .time = time, .offset = offset,
+            .timezone = {.ok = zone, .is_ok = true},
+        };
+        temporal_rs_ZonedDateTime_from_partial_result result =
+            temporal_rs_ZonedDateTime_from_partial(
+                partial, constrain,
+                (Disambiguation_option) {.ok = Disambiguation_Compatible, .is_ok = true},
+                (OffsetDisambiguation_option) {.ok = OffsetDisambiguation_Reject, .is_ok = true});
+        if (result.is_ok) relative->zoned = result.ok;
+        else ok = (temporal_throw(vm, result.err), false);
+    }
+    free(offset_data);
+    plain_date_partial_destroy(&date);
+    return ok;
+}
+
+static bool duration_relative_to(MalVm *vm, MalValue options, OwnedRelativeTo *relative) {
+    *relative = (OwnedRelativeTo) {0};
+    bool present;
+    if (!temporal_options_object(vm, options, &present)) return false;
+    if (!present) return true;
+    MalValue value;
+    if (!mal_vm_get_property(
+            vm, options, mal_intrinsic_string_key(vm, "relativeTo"), &value)) {
+        return false;
+    }
+    if (mal_value_is_undefined(value)) return true;
+    if (mal_value_is_temporal_object(value)) {
+        MalTemporalObject *object = mal_value_to_temporal_object(value);
+        switch (object->kind) {
+        case MAL_TEMPORAL_ZONED_DATE_TIME:
+            relative->zoned = temporal_rs_ZonedDateTime_clone(object->handle);
+            return true;
+        case MAL_TEMPORAL_PLAIN_DATE:
+            relative->date = temporal_rs_PlainDate_clone(object->handle);
+            return true;
+        case MAL_TEMPORAL_PLAIN_DATE_TIME:
+            relative->date = temporal_rs_PlainDateTime_to_plain_date(object->handle);
+            return true;
+        default:
+            break;
+        }
+    }
+    if (mal_value_is_string(value)) {
+        MalString *string = mal_value_to_string(value);
+        DiplomatString16View view = {
+            .data = (const char16_t *) mal_string_code_units(string),
+            .len = mal_string_length(string),
+        };
+        temporal_rs_OwnedRelativeTo_from_utf16_result result =
+            temporal_rs_OwnedRelativeTo_from_utf16(view);
+        if (!result.is_ok) return temporal_throw(vm, result.err), false;
+        *relative = result.ok;
+        return true;
+    }
+    if (!mal_value_is_object(value)) {
+        temporal_throw_type(vm, "Temporal relativeTo must be a string or object");
+        return false;
+    }
+    return duration_relative_to_fields(vm, value, relative);
+}
+
 static MalValue instant_to_string_impl(
     MalVm *vm, MalValue this_value, MalValue options_value, bool read_options
 ) {
@@ -4192,30 +4303,13 @@ static ZonedDateTime *zoned_date_time_from_like_options(
         plain_date_partial_destroy(&date);
         return nullptr;
     }
-    MalValue value;
-    if (!mal_vm_get_property(
-            vm, input, mal_intrinsic_string_key(vm, "offset"), &value)) {
+    byte *offset_data;
+    OptionStringView offset;
+    if (!temporal_offset_field(vm, input, &offset_data, &offset)) {
         plain_date_partial_destroy(&date);
         return nullptr;
     }
-    byte *offset_data = nullptr;
-    OptionStringView offset = {.is_ok = false};
-    if (!mal_value_is_undefined(value)) {
-        MalString *string;
-        if (!mal_vm_to_string(vm, value, &string)) {
-            plain_date_partial_destroy(&date);
-            return nullptr;
-        }
-        usize length;
-        offset_data = mal_string_to_utf8(string, &length);
-        if (offset_data == nullptr) {
-            plain_date_partial_destroy(&date);
-            temporal_throw_type(vm, "Unable to encode Temporal offset");
-            return nullptr;
-        }
-        offset = (OptionStringView) {
-            .ok = {.data = (const char *) offset_data, .len = length}, .is_ok = true};
-    }
+    MalValue value;
     if (!mal_vm_get_property(
             vm, input, mal_intrinsic_string_key(vm, "timeZone"), &value)) {
         free(offset_data); plain_date_partial_destroy(&date); return nullptr;
