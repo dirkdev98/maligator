@@ -7586,11 +7586,13 @@ void mal_vm_op_store_global_property(
                 vm, "Cannot declare locked primordial binding '", key);
             return;
         }
+        // A failed CanDeclareGlobalFunction or CanDeclareGlobalVar is a TypeError;
+        // only a clash with a lexical declaration is a SyntaxError.
         if (function_check) {
             if (!own.present) {
                 global_object = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS]);
                 if (!mal_object_is_extensible(global_object)) {
-                    mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, "Cannot declare global function");
+                    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot declare global function");
                 }
                 return;
             }
@@ -7600,14 +7602,14 @@ void mal_vm_op_store_global_property(
                     && (own.desc.flags & MAL_PROPERTY_ENUMERABLE))) {
                 return;
             }
-            mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, "Cannot declare global function");
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot declare global function");
             return;
         }
         if (var_check) {
             if (!own.present) {
                 global_object = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS]);
                 if (!mal_object_is_extensible(global_object)) {
-                    mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, "Cannot declare global variable");
+                    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot declare global variable");
                 }
             }
             return;
@@ -7634,7 +7636,7 @@ void mal_vm_op_store_global_property(
         if (mal_object_define_own(global_object, key, &desc) != MAL_DEFINE_OWN_APPLIED) {
             mal_vm_throw_error(
                 vm,
-                MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE,
+                MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
                 function_initialization ? "Cannot declare global function" : "Cannot declare global variable");
         }
         return;
