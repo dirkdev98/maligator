@@ -319,10 +319,11 @@ done
 exit 7
 `,
 		);
+		// A third command may start only once one of the two slots is free again.
 		executable(
 			checker,
-			`[ -f "$1" ] || exit 8
-/usr/bin/touch "$2"
+			`[ -f "$1" ] || [ -f "$2" ] || exit 8
+/usr/bin/touch "$3"
 `,
 		);
 		const commands: Array<string> = [];
@@ -342,8 +343,8 @@ exit 7
 			[
 				{ tool: runner, args: [first, second, firstDone] },
 				{ tool: runner, args: [second, first, secondDone] },
-				{ tool: checker, args: [firstDone, third] },
-				{ tool: checker, args: [secondDone, fourth] },
+				{ tool: checker, args: [firstDone, secondDone, third] },
+				{ tool: checker, args: [firstDone, secondDone, fourth] },
 			],
 			{ verbose: false, env: environment },
 		);

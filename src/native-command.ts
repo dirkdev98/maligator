@@ -1,6 +1,8 @@
 import { execFileSync } from "node:child_process";
+import type { ExecFileSyncOptions } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import type { NativeBuildContext } from "./native-build-context.ts";
 import { buildWorkerCount } from "./worker-budget.ts";
@@ -39,35 +41,51 @@ function shellCommand(command: NativeCommand): string {
 }
 
 /**
- * A POSIX shell script that runs the commands in order on `jobs` slots. A FIFO holds
- * a token per free slot, so each command starts as soon as any earlier one ends.
- * After a failure no further command starts, and the script exits with its status.
+ * Run the commands in order on `jobs` lanes of one POSIX shell, so each command
+ * starts as soon as any lane is free. Lanes claim a command by creating its file
+ * under noclobber, which opens it exclusively. The script uses shell builtins only:
+ * build environments put nothing but the toolchain on PATH. After a failure no
+ * further command starts, and the shell exits with the failing status.
  */
-function parallelShellScript(
+function runParallelShellScript(
 	commands: ReadonlyArray<NativeCommand>,
 	jobs: number,
-): string {
+	options: Pick<ExecFileSyncOptions, "cwd" | "env" | "stdio">,
+): Buffer {
+	const state = mkdtempSync(path.join(os.tmpdir(), "maligator-commands-"));
+	const failed = shellQuote(path.join(state, "failed"));
+	const claims = shellQuote(path.join(state, "claim-"));
 	const functions = commands.map(
 		(command, index) => `mal_command_${index}() {\n${shellCommand(command)}\n}`,
 	);
-	return `${functions.join("\n")}
-state=$(mktemp -d) || exit 1
-trap 'rm -rf "$state"' EXIT
-mkfifo "$state/slots" || exit 1
-exec 3<>"$state/slots"
-slot=0
-while [ "$slot" -lt ${jobs} ]; do echo >&3; slot=$((slot + 1)); done
-index=0
-while [ "$index" -lt ${commands.length} ]; do
-	read -r slot <&3
-	[ -e "$state/failed" ] && break
-	{ "mal_command_$index" || echo "$?" > "$state/failed"; echo >&3; } &
-	index=$((index + 1))
+	const script = `${functions.join("\n")}
+mal_lane() {
+	set -C
+	index=0
+	while [ "$index" -lt ${commands.length} ]; do
+		[ -e ${failed} ] && return
+		if { true > ${claims}"$index"; } 2>/dev/null; then
+			"mal_command_$index" || { echo "$?" > ${failed}; } 2>/dev/null
+		fi
+		index=$((index + 1))
+	done
+}
+lane=0
+while [ "$lane" -lt ${jobs} ]; do
+	mal_lane &
+	lane=$((lane + 1))
 done
 wait
-[ -e "$state/failed" ] && exit "$(cat "$state/failed")"
-exit 0
+if [ -e ${failed} ]; then
+	read -r status < ${failed}
+	exit "$status"
+fi
 `;
+	try {
+		return execFileSync("/bin/sh", [], { ...options, input: script });
+	} finally {
+		rmSync(state, { recursive: true, force: true });
+	}
 }
 
 function resourceReportPath(context: NativeBuildContext): string {
@@ -205,10 +223,9 @@ export function runIndependentCommands(
 		}
 		return;
 	}
-	execFileSync("/bin/sh", [], {
+	runParallelShellScript(commands, jobs, {
 		cwd: options.cwd,
 		env: options.env,
-		input: parallelShellScript(commands, jobs),
 		stdio: options.verbose ? ["pipe", "inherit", "inherit"] : "pipe",
 	});
 }
@@ -261,10 +278,9 @@ export function runNativeCommands(
 				tool: "/usr/bin/time",
 				args: timeArguments(reportPaths[index]!, command),
 			}));
-			const stdout = execFileSync("/bin/sh", [], {
+			const stdout = runParallelShellScript(timedCommands, jobs, {
 				cwd: options.cwd,
 				env: options.env ?? context.environment,
-				input: parallelShellScript(timedCommands, jobs),
 				stdio: options.verbose ? ["pipe", "pipe", "inherit"] : "pipe",
 			});
 			if (options.verbose && stdout.length > 0) process.stderr.write(stdout);
@@ -277,10 +293,9 @@ export function runNativeCommands(
 			for (const reportPath of reportPaths) rmSync(reportPath, { force: true });
 		}
 	}
-	const stdout = execFileSync("/bin/sh", [], {
+	const stdout = runParallelShellScript(commands, jobs, {
 		cwd: options.cwd,
 		env: options.env ?? context.environment,
-		input: parallelShellScript(commands, jobs),
 		stdio: options.verbose ? ["pipe", "pipe", "inherit"] : "pipe",
 	});
 	if (options.verbose && stdout.length > 0) process.stderr.write(stdout);

@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { expect, test } from "vitest";
@@ -7,6 +7,9 @@ import { runIndependentCommands } from "../src/native-command.ts";
 function shell(script: string) {
 	return { tool: "/bin/sh", args: ["-c", script] };
 }
+
+/** What isolated native build checks leave on PATH for the scheduler itself. */
+const emptyPath = { PATH: "" };
 
 function inDirectory(run: (directory: string) => void): void {
 	const directory = mkdtempSync(path.join(os.tmpdir(), "mal-native-command-"));
@@ -35,14 +38,19 @@ test("starts a queued command in whichever slot frees first", () => {
 		// has to start in the slot the second one frees.
 		const commands = [
 			shell(
-				`i=0; while [ ! -e marker ]; do i=$((i + 1)); [ "$i" -gt 1000 ] && exit 1; sleep 0.01; done`,
+				`i=0; while [ ! -e marker ]; do i=$((i + 1)); [ "$i" -gt 1000 ] && exit 1; /bin/sleep 0.01; done`,
 			),
 			shell(":"),
-			shell("touch marker"),
+			shell(": > marker"),
 		];
 
 		expect(() =>
-			runIndependentCommands(commands, { cwd: directory, jobs: 2, verbose: false }),
+			runIndependentCommands(commands, {
+				cwd: directory,
+				env: emptyPath,
+				jobs: 2,
+				verbose: false,
+			}),
 		).not.toThrow();
 	});
 });
@@ -52,7 +60,31 @@ test("a failing command fails the batch with its exit status", () => {
 		const commands = [shell(":"), shell("exit 3"), shell(":")];
 
 		expect(() =>
-			runIndependentCommands(commands, { cwd: directory, jobs: 2, verbose: false }),
+			runIndependentCommands(commands, {
+				cwd: directory,
+				env: emptyPath,
+				jobs: 2,
+				verbose: false,
+			}),
 		).toThrow(expect.objectContaining({ status: 3 }));
+	});
+});
+
+test("runs every command once with nothing but the commands on PATH", () => {
+	inDirectory((directory) => {
+		const commands = Array.from({ length: 12 }, (_, index) =>
+			shell(`set -C; : > ran-${index}`),
+		);
+
+		runIndependentCommands(commands, {
+			cwd: directory,
+			env: emptyPath,
+			jobs: 4,
+			verbose: false,
+		});
+
+		expect(readdirSync(directory).sort()).toEqual(
+			Array.from({ length: 12 }, (_, index) => `ran-${index}`).sort(),
+		);
 	});
 });
