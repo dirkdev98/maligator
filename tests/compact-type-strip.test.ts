@@ -639,6 +639,7 @@ const biased = (limit: number): boolean =>
 		expect(() => parseScript(stripped, { strict: true })).not.toThrow();
 	});
 
+	// Parsing every source file grows with the repository and shares a three-core runner.
 	test("erases every compiler source into parsable JavaScript", () => {
 		const files: Array<string> = [];
 		const walk = (directory: string): void => {
@@ -667,7 +668,7 @@ const biased = (limit: number): boolean =>
 
 		expect(failures).toEqual([]);
 		expect(files.length).toBeGreaterThan(50);
-	});
+	}, 30_000);
 
 	test("stops assertions before runtime operators", () => {
 		const source = `const logical = input as boolean && fallback;
