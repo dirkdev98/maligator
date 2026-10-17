@@ -903,6 +903,17 @@ function createScopesFromNode(
 		return;
 	}
 
+	if (node.type === "SwitchStatement") {
+		// Only the case block is a new scope; the discriminant runs in the enclosing one.
+		createScopesFromNode(node.discriminant, file, parentScope);
+		const switchScope: Scope = { parent: parentScope, node, strict, bindings: [] };
+		file.scopes.push(switchScope);
+		file.nodeToScope.set(node, switchScope);
+		for (const switchCase of node.cases)
+			createScopesFromNode(switchCase, file, switchScope);
+		return;
+	}
+
 	if (node.type === "Program") {
 		// Wrap each program in a scope.
 		// On this we can track global variables and other top-level declarations.
@@ -967,7 +978,6 @@ function createScopesFromNode(
 			"ForStatement",
 			"ForInStatement",
 			"ForOfStatement",
-			"SwitchStatement",
 			"CatchClause",
 
 			"FunctionDeclaration",
@@ -1146,6 +1156,9 @@ function registerAnnexBVarBindings(file: SemanticFile): void {
 				binding.kind !== "let" ||
 				scope.strict ||
 				declaration?.type !== "FunctionDeclaration" ||
+				// Generator and async declarations are other productions than B.3.2's FunctionDeclaration.
+				declaration.generator ||
+				declaration.async ||
 				binding.name === "let" ||
 				binding.annexBVarBinding
 			) {

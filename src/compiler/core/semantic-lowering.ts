@@ -4587,7 +4587,7 @@ function emitThrowError(
 	program: CoreFrontendContext,
 	fn: CoreFrontendFunction,
 	cursor: CoreFrontendCursor,
-	intrinsic: "TypeError" | "SyntaxError",
+	intrinsic: "TypeError" | "SyntaxError" | "ReferenceError",
 	message: string,
 ): number {
 	const constructor = nextCoreVariable(fn);
@@ -8294,6 +8294,7 @@ function compileTryCatch(
 	block: CoreFrontendBlock,
 	statement: ESTree.TryStatement,
 ) {
+	resetEvalCompletion(fn, block);
 	const tryBegin: Extract<CompilerInstruction, { type: "tryBegin" }> = {
 		type: "tryBegin",
 		// Patched below, once the handler and exit blocks exist.
@@ -8343,6 +8344,7 @@ function compileTryCatch(
 				caughtRegister,
 			);
 		}
+		resetEvalCompletion(fn, handlerCursor.block);
 
 		const catchBlock = compileStatementsToBlock(program, fn, [statement.handler.body]);
 		handlerCursor.block.emitter.emit({
@@ -8405,6 +8407,7 @@ function compileTryFinally(
 		);
 
 	// --- protected try body ---
+	resetEvalCompletion(fn, block);
 	const tryBegin: Extract<CompilerInstruction, { type: "tryBegin" }> = {
 		type: "tryBegin",
 		blocks: [-1, -1],
@@ -8446,6 +8449,7 @@ function compileTryFinally(
 				caughtRegister,
 			);
 		}
+		resetEvalCompletion(fn, handlerCursor.block);
 
 		const catchTryBegin: Extract<CompilerInstruction, { type: "tryBegin" }> = {
 			type: "tryBegin",
@@ -8480,8 +8484,31 @@ function compileTryFinally(
 	// --- finalizer body, compiled once with the finally context popped so its
 	// own abrupt completions route to *enclosing* finalizers and override the
 	// pending one. ---
-	const finalizerEntryIdx = compileStatementsToBlock(program, fn, [statement.finalizer!]);
+	// A normal finalizer keeps the try or catch completion value; an abrupt one
+	// replaces it with its own, undefined when empty.
+	let finalizerEntryIdx: number;
+	let savedCompletion: number | undefined;
+	if (fn.completionRegister === undefined) {
+		finalizerEntryIdx = compileStatementsToBlock(program, fn, [statement.finalizer!]);
+	} else {
+		savedCompletion = nextCoreVariable(fn);
+		const prologue: CoreFrontendBlock = { emitter: unboundCoreEmitter };
+		finalizerEntryIdx = fn.blocks.push(prologue) - 1;
+		prologue.emitter.emit({
+			type: "move",
+			registers: [savedCompletion, fn.completionRegister],
+		});
+		resetEvalCompletion(fn, prologue);
+		const bodyIdx = compileStatementsToBlock(program, fn, [statement.finalizer!]);
+		prologue.emitter.emit({ type: "jump", blocks: [bodyIdx] });
+	}
 	const finalizerLastBlock = fn.blocks.at(-1)!;
+	if (savedCompletion !== undefined) {
+		finalizerLastBlock.emitter.emit({
+			type: "move",
+			registers: [fn.completionRegister!, savedCompletion],
+		});
+	}
 	for (const jump of entryJumps) {
 		jump.blocks[0] = finalizerEntryIdx;
 	}
@@ -11249,6 +11276,16 @@ function compileDeleteExpression(
 			cursor,
 			expression.argument,
 		);
+		// The super reference is evaluated in full, without ToPropertyKey, before it is refused.
+		if (expression.argument.object.type === "Super") {
+			return emitThrowError(
+				program,
+				fn,
+				cursor,
+				"ReferenceError",
+				"Unsupported reference to 'super'",
+			);
+		}
 		const destination = nextCoreVariable(fn);
 		cursor.block.emitter.emit({
 			type: "deleteProperty",
