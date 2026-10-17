@@ -23,7 +23,7 @@ between the Maligator cache and a GitHub Actions cache directory. All of them ar
 content-addressed: a restored entry whose inputs no longer match is never read, so a
 stale snapshot only costs its download. import verifies every blob, bake file and
 ThinLTO entry before publishing it and keeps each one's last-use time; export keeps
-what was read within 14 days of the most recent use, within 2 GiB: first the bakes
+what was read within 14 days of the most recent use, within 4 GiB: first the bakes
 and then the actions this job read, then ThinLTO entries, then older actions, each
 in stage order and newest first. It reports a digest so unchanged snapshots are not
 saved again.`;
@@ -71,7 +71,9 @@ interface ThinLtoEntry {
 	mtimeMs: number;
 }
 const RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
-const MAX_BYTES = 2 * 1024 ** 3;
+// Objects compress about sixfold in the Actions cache, so the newest snapshot of every
+// line still fits the repository's 10 GB allowance; macOS runners keep 25 GB free.
+const MAX_BYTES = 4 * 1024 ** 3;
 
 interface Entry {
 	manifest: string;
