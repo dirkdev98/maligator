@@ -376,6 +376,13 @@ export interface BuildModuleGraphOptions {
 	platformSourceRoot?: string;
 
 	/**
+	 * CommonJS modules that join the graph without the entry evaluating them. They
+	 * run when first required, possibly from a later image, exactly as they would
+	 * in a graph that reaches them only through `require`.
+	 */
+	requiredRoots?: ReadonlyArray<string>;
+
+	/**
 	 * The resolved build config, which gates surface-dependent resolution: the
 	 * `node` package export condition and `node:*` host built-in imports are active
 	 * only under `surface.node`. Defaults to the product defaults (node OFF).
@@ -930,6 +937,16 @@ export function buildModuleGraph(
 		options.goalOverride ?? options.entryGoal ?? detectDependencyGoal(entry, ctx),
 		options.entrySource,
 	);
+	for (const root of options.requiredRoots ?? []) {
+		const rootPath = path.resolve(root);
+		const goal = detectDependencyGoal(rootPath, ctx);
+		if (goal !== "cjs") {
+			throw new Error(`a required root must be a CommonJS module: ${rootPath}`);
+		}
+		load(rootPath, goal);
+		const loadError = modules.get(rootPath)?.loadError;
+		if (loadError !== undefined) throw loadError;
+	}
 	for (const candidate of options.dynamicImportCandidates ?? []) {
 		const candidatePath = path.resolve(candidate);
 		if (!modules.has(candidatePath)) {

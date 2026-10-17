@@ -277,7 +277,8 @@ export function packageRootSource(directory: string): string {
 	);
 }
 
-function imageKey(
+/** The identity an image of this graph is cached under, for data derived from it. */
+export function linkedImageIdentity(
 	environment: LinkedImageEnvironment,
 	kind: string,
 	graph: ModuleGraph,
@@ -507,7 +508,7 @@ export function findLinkedImage(
 	exports: "all" | ReadonlySet<string> | undefined,
 	packageRoot?: string,
 ): LinkedImageArtifact | undefined {
-	const key = imageKey(environment, kind, graph, exports, packageRoot);
+	const key = linkedImageIdentity(environment, kind, graph, exports, packageRoot);
 	if (packageRoot === undefined) {
 		const reference = readReference(
 			environment,
@@ -630,7 +631,7 @@ export function compileLinkedImage(
 	writeFileAtomically(
 		referencePath(
 			environment,
-			imageKey(environment, kind, graph, exports, packageRoot),
+			linkedImageIdentity(environment, kind, graph, exports, packageRoot),
 			shared ? undefined : packageRoot,
 		),
 		`${JSON.stringify({

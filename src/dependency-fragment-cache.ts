@@ -4,12 +4,21 @@ import { writeFileAtomically } from "./atomic-file.ts";
 import type { ResolvedBuildConfig } from "./build-config.ts";
 import type {
 	BuildModuleGraphOptions,
+	ExternalModuleInterface,
 	ModuleGraph,
 } from "./compiler/frontend/module-graph.ts";
 import { buildModuleGraph } from "./compiler/frontend/module-graph.ts";
 import type { CompileCorePhase } from "./compiler/pipeline/compile-core.ts";
 import { compilerProgramFactsFromConfig } from "./compiler/shared/compiler-facts.ts";
 import type { CompilerProgramFacts } from "./compiler/shared/compiler-facts.ts";
+import {
+	chunkMatchesPlan,
+	earlierChunkInterfaces,
+	planDependencyChunks,
+	restoreDependencyChunkPlan,
+	storeDependencyChunkPlan,
+} from "./dependency-chunks.ts";
+import type { DependencyChunk, DependencyChunkPlan } from "./dependency-chunks.ts";
 import { frontendDigest } from "./frontend-cache.ts";
 import { FrontendCompilationSession } from "./frontend-cache.ts";
 import {
@@ -17,8 +26,10 @@ import {
 	compileLinkedImage,
 	findLinkedImage,
 	linkedImageEnvironment,
+	linkedImageIdentity,
 	packageRootModule,
 	packageRootSource,
+	UnsupportedLinkedImagesError,
 } from "./linked-images.ts";
 import type {
 	LinkedImageArtifact,
@@ -30,7 +41,9 @@ import type { Execution } from "./platform/execution.ts";
 
 const DEPENDENCY_FRAGMENT_FAMILY = "dependency-fragments";
 const ISLAND_KIND = "dependency-island";
+const CHUNK_KIND = "dependency-chunk";
 const PACKAGE_ROOT_KIND = "package-root";
+const CHUNK_PLAN_SCHEMA = 1;
 
 export interface DependencyFragmentPhases {
 	graphMs: number;
@@ -46,7 +59,7 @@ export interface DependencyFragmentWorker {
 }
 
 export interface DependencyFragmentArtifact extends LinkedImageArtifact {
-	/** The dependency modules the island's image publishes; none for a package root. */
+	/** The island targets this image publishes; none for a package root. */
 	readonly targets: ReadonlyArray<string>;
 }
 
@@ -70,13 +83,37 @@ export interface CompileDependencyFragmentsOptions {
 }
 
 interface DependencyFragmentRequest {
-	schema: 3;
+	schema: 4;
 	target: LinkedImageTarget;
 	targets: Array<string>;
 	config: ResolvedBuildConfig;
 	execution?: Execution;
 	stripperIdentity: string;
 	cacheDirectory?: string;
+	/** Present when the request compiles one chunk of the island of `targets`. */
+	chunk?: SerializedChunk;
+}
+
+interface SerializedChunk {
+	/** The island's package root, which a chunk's own modules may not determine. */
+	packageRoot: string | null;
+	members: Array<string>;
+	imports: Array<string>;
+	requiredRoots: Array<string>;
+	external: Array<[string, ExternalModuleInterface]>;
+}
+
+/** One image to compile: a whole island, or one chunk of a split island. */
+interface DependencyUnit {
+	kind: typeof ISLAND_KIND | typeof CHUNK_KIND;
+	graph: ModuleGraph;
+	exports: "all" | ReadonlySet<string>;
+	packageRoot: string | undefined;
+	/** The island targets the unit's image publishes. */
+	targets: Array<string>;
+	islandTargets: Array<string>;
+	chunk?: SerializedChunk;
+	plan?: DependencyChunkPlan;
 }
 
 export function isExternalModule(file: string): boolean {
@@ -245,6 +282,115 @@ function packageRootGraph(
 	});
 }
 
+/**
+ * A chunk's graph: its entry imports the members it evaluates, its other CommonJS
+ * members join as required roots, and earlier chunks' members are external.
+ */
+function chunkGraph(
+	chunk: DependencyChunk,
+	external: ReadonlyMap<string, ExternalModuleInterface>,
+	options: Pick<
+		CompileDependencyFragmentsOptions,
+		"config" | "execution" | "stripTypes" | "session"
+	>,
+): ModuleGraph {
+	const members = chunk.members;
+	const directory = path.dirname(members[0]!);
+	const relative = (module: string) => {
+		const specifier = path.relative(directory, module).split(path.sep).join("/");
+		return specifier.startsWith("../") ? specifier : `./${specifier}`;
+	};
+	const specifiers = chunk.imports.map(relative);
+	const entry = path.join(
+		directory,
+		`.maligator-dependency-chunk-${frontendDigest(JSON.stringify([specifiers, chunk.requiredRoots.map(relative)])).slice(0, 24)}.mts`,
+	);
+	const graph = buildModuleGraph(entry, {
+		entryGoal: "module",
+		entrySource: specifiers
+			.map((specifier) => `import ${JSON.stringify(specifier)};\n`)
+			.join(""),
+		requiredRoots: chunk.requiredRoots,
+		externalModules: external,
+		stripTypes: options.stripTypes,
+		buildConfig: options.config,
+		execution: options.execution,
+		parseCache: options.session.moduleParses,
+	});
+	const memberSet = new Set(members);
+	const own = [...graph.modules.values()].filter(
+		(record) =>
+			record.path !== entry && record.host === undefined && record.external === undefined,
+	);
+	if (
+		own.length !== memberSet.size ||
+		!own.every((record) => memberSet.has(record.path))
+	) {
+		throw new UnsupportedLinkedImagesError(
+			"a dependency chunk reached modules outside its plan",
+		);
+	}
+	return graph;
+}
+
+interface Island {
+	targets: Array<string>;
+	graph: ModuleGraph;
+	packageRoot: string | undefined;
+}
+
+function chunkPlanFile(environment: LinkedImageEnvironment, island: Island): string {
+	return path.join(
+		environment.root,
+		"chunk-plans",
+		`${linkedImageIdentity(environment, ISLAND_KIND, island.graph, new Set(island.targets), island.packageRoot)}.json`,
+	);
+}
+
+/** Record the island's plan; none keeps it whole until its identity changes. */
+function storeChunkPlan(
+	environment: LinkedImageEnvironment,
+	island: Island,
+	plan: DependencyChunkPlan | undefined,
+): void {
+	writeFileAtomically(
+		chunkPlanFile(environment, island),
+		`${JSON.stringify({
+			schema: CHUNK_PLAN_SCHEMA,
+			plan:
+				plan === undefined ? null : storeDependencyChunkPlan(plan, island.packageRoot),
+		})}\n`,
+	);
+}
+
+/** The island's chunk plan, derived once per island identity. */
+function islandChunkPlan(
+	environment: LinkedImageEnvironment,
+	island: Island,
+	phases: DependencyFragmentPhases,
+): DependencyChunkPlan | undefined {
+	try {
+		const stored = JSON.parse(
+			readFileSync(chunkPlanFile(environment, island), "utf-8"),
+		) as {
+			schema?: number;
+			plan?: Parameters<typeof restoreDependencyChunkPlan>[0] | null;
+		};
+		if (stored.schema === CHUNK_PLAN_SCHEMA && stored.plan !== undefined) {
+			return stored.plan === null
+				? undefined
+				: restoreDependencyChunkPlan(stored.plan, island.packageRoot);
+		}
+	} catch {
+		// A missing or damaged plan is derived again.
+	}
+	const startedAt = Date.now();
+	const plan = planDependencyChunks(island.graph, new Set(island.targets));
+	phases.semanticMs += Date.now() - startedAt;
+	storeChunkPlan(environment, island, plan);
+	return plan;
+}
+
 function compileWithWorkers(
 	root: string,
 	requests: Array<DependencyFragmentRequest>,
@@ -284,7 +430,7 @@ export function compileDependencyFragmentRequest(
 		| DependencyFragmentRequest
 		| undefined;
 	if (
-		request?.schema !== 3 ||
+		request?.schema !== 4 ||
 		!Array.isArray(request.targets) ||
 		request.targets.length === 0
 	) {
@@ -300,19 +446,35 @@ export function compileDependencyFragmentRequest(
 		cacheDirectory: request.cacheDirectory,
 		phases: { graphMs: 0, semanticMs: 0, compileMs: 0, serializeMs: 0, workerMs: 0 },
 	});
-	const graph = islandGraph(request.targets, {
+	const graphOptions = {
 		config: request.config,
 		execution: request.execution,
 		stripTypes,
 		session,
-	});
-	compileLinkedImage(
-		environment,
-		ISLAND_KIND,
-		graph,
-		new Set(request.targets),
-		islandPackageRoot(request.target, graph),
-	);
+	};
+	if (request.chunk === undefined) {
+		const graph = islandGraph(request.targets, graphOptions);
+		compileLinkedImage(
+			environment,
+			ISLAND_KIND,
+			graph,
+			new Set(request.targets),
+			islandPackageRoot(request.target, graph),
+		);
+	} else {
+		const graph = chunkGraph(
+			request.chunk,
+			new Map(request.chunk.external),
+			graphOptions,
+		);
+		compileLinkedImage(
+			environment,
+			CHUNK_KIND,
+			graph,
+			new Set(request.chunk.members),
+			request.chunk.packageRoot ?? undefined,
+		);
+	}
 	session.flush();
 }
 
@@ -322,37 +484,101 @@ export function compileDependencyFragments(
 ): Array<DependencyFragmentArtifact> {
 	const environment = islandEnvironment(options);
 	const graphStartedAt = Date.now();
-	const islands = dependencyIslands(options.graph, options.targets).map(({ targets }) => {
-		const graph = islandGraph(targets, options);
-		return { targets, graph, packageRoot: islandPackageRoot(options.target, graph) };
+	const islands = dependencyIslands(options.graph, options.targets).map(
+		({ targets }): Island => {
+			const graph = islandGraph(targets, options);
+			return { targets, graph, packageRoot: islandPackageRoot(options.target, graph) };
+		},
+	);
+	const islandUnit = (island: Island): DependencyUnit => ({
+		kind: ISLAND_KIND,
+		graph: island.graph,
+		exports: new Set(island.targets),
+		packageRoot: island.packageRoot,
+		targets: island.targets,
+		islandTargets: island.targets,
+	});
+	// Chunks only pay off when workers compile them side by side.
+	const chunking = options.target === "runtime" && options.worker !== undefined;
+	const islandUnits = islands.map((island): Array<DependencyUnit> => {
+		const plan = chunking
+			? islandChunkPlan(environment, island, options.phases)
+			: undefined;
+		if (plan === undefined) return [islandUnit(island)];
+		try {
+			return plan.chunks.map((chunk, index) => {
+				const external = earlierChunkInterfaces(plan, index);
+				const members = new Set(chunk.members);
+				return {
+					kind: CHUNK_KIND,
+					graph: chunkGraph(chunk, external, options),
+					exports: members,
+					packageRoot: island.packageRoot,
+					targets: island.targets.filter((target) => members.has(target)),
+					islandTargets: island.targets,
+					chunk: {
+						packageRoot: island.packageRoot ?? null,
+						members: [...chunk.members],
+						imports: [...chunk.imports],
+						requiredRoots: [...chunk.requiredRoots],
+						external: [...external],
+					},
+					plan,
+				};
+			});
+		} catch (error) {
+			if (!(error instanceof UnsupportedLinkedImagesError)) throw error;
+			storeChunkPlan(environment, island, undefined);
+			return [islandUnit(island)];
+		}
 	});
 	options.phases.graphMs += Date.now() - graphStartedAt;
-	const missing = islands.filter(
-		({ targets, graph, packageRoot }) =>
-			findLinkedImage(environment, ISLAND_KIND, graph, new Set(targets), packageRoot) ===
-			undefined,
+	const units = islandUnits.flat();
+	const missing = units.filter(
+		(unit) =>
+			findLinkedImage(
+				environment,
+				unit.kind,
+				unit.graph,
+				unit.exports,
+				unit.packageRoot,
+			) === undefined,
 	);
 	const tasks = options.parallelTasks ?? [];
 	const worker = missing.length + tasks.length > 1 ? options.worker : undefined;
 	if (worker !== undefined) {
 		options.phases.workerMs += compileWithWorkers(
 			environment.root,
-			missing.map(({ targets }) => ({
-				schema: 3,
+			missing.map((unit) => ({
+				schema: 4,
 				target: options.target,
-				targets,
+				targets: unit.islandTargets,
 				config: options.config,
 				execution: options.execution,
 				stripperIdentity: options.stripperIdentity,
 				...(options.cacheDirectory === undefined
 					? {}
 					: { cacheDirectory: options.cacheDirectory }),
+				...(unit.chunk === undefined ? {} : { chunk: unit.chunk }),
 			})),
 			worker,
 			tasks,
 		);
 	}
 	const compiledByWorkers = new Set(worker === undefined ? [] : missing);
+	const compile = (unit: DependencyUnit): DependencyFragmentArtifact => {
+		const artifact = compileLinkedImage(
+			environment,
+			unit.kind,
+			unit.graph,
+			unit.exports,
+			unit.packageRoot,
+		);
+		return Object.assign(
+			compiledByWorkers.has(unit) ? compiledByWorker(artifact) : artifact,
+			{ targets: unit.targets },
+		);
+	};
 	const packageRoots = [
 		...new Set(islands.flatMap(({ packageRoot }) => packageRoot ?? [])),
 	].sort();
@@ -366,18 +592,18 @@ export function compileDependencyFragments(
 				{ targets: [] },
 			);
 		}),
-		...islands.map((island) => {
-			const artifact = compileLinkedImage(
-				environment,
-				ISLAND_KIND,
-				island.graph,
-				new Set(island.targets),
-				island.packageRoot,
+		...islandUnits.flatMap((unitsOfIsland, index) => {
+			const artifacts = unitsOfIsland.map(compile);
+			// Later chunks compiled against the plan, so a chunk publishing anything else
+			// cannot link to them; the island is then compiled whole.
+			const planned = unitsOfIsland.every(
+				(unit, unitIndex) =>
+					unit.plan === undefined ||
+					chunkMatchesPlan(unit.plan, artifacts[unitIndex]!.interfaces),
 			);
-			return Object.assign(
-				compiledByWorkers.has(island) ? compiledByWorker(artifact) : artifact,
-				{ targets: island.targets },
-			);
+			if (planned) return artifacts;
+			storeChunkPlan(environment, islands[index]!, undefined);
+			return [compile(islandUnit(islands[index]!))];
 		}),
 	];
 }

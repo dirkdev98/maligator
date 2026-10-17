@@ -179,3 +179,94 @@ describe("dependency images across project locations", () => {
 		expect(second.output).toEqual(installedAt("second-location"));
 	}, 120_000);
 });
+
+/**
+ * A CommonJS package large enough to split into chunks, with a require cycle that a
+ * chunk boundary would otherwise cut, JSON data and a lazily required module, logging
+ * when each part runs.
+ */
+function chunkedProject(directory: string): string {
+	write(path.join(directory, "package.json"), `{"type":"module"}\n`);
+	const padding = (kib: number) => `// ${"x".repeat(kib * 1024)}\n`;
+	const packageRoot = path.join(directory, "node_modules/chunked");
+	write(path.join(packageRoot, "package.json"), `{"main":"./index.js"}\n`);
+	write(path.join(packageRoot, "data.json"), `{"answer":42}\n`);
+	const parts = Array.from({ length: 10 }, (_, index) => index);
+	write(
+		path.join(packageRoot, "index.js"),
+		`globalThis.order = ["index"];
+const parts = [${parts.map((index) => `require("./part${index}.js")`).join(", ")}];
+module.exports = { parts, data: require("./data.json"), later: () => require("./later.js") };
+`,
+	);
+	for (const index of parts) {
+		const body =
+			index === 3
+				? `const other = require("./part4.js");\nexports.seen = other.seen;\n`
+				: index === 4
+					? `const other = require("./part3.js");\nexports.seen = typeof other.seen;\n`
+					: index === 8
+						? `exports.answer = require("./data.json").answer;\n`
+						: "";
+		write(
+			path.join(packageRoot, `part${index}.js`),
+			`globalThis.order.push("part${index}");\n${body}exports.index = ${index};\n${padding(index === 3 || index === 4 ? 100 : 20)}`,
+		);
+	}
+	write(
+		path.join(packageRoot, "later.js"),
+		`globalThis.order.push("later");\nmodule.exports = require("./part2.js").index;\n`,
+	);
+	const entrypoint = path.join(directory, "entry.mjs");
+	write(
+		entrypoint,
+		`import chunked from "chunked";
+const before = globalThis.order.join();
+console.log(JSON.stringify({ before, ...chunked, later: chunked.later(), after: globalThis.order.join() }));
+`,
+	);
+	return entrypoint;
+}
+
+describe("dependency island chunks", () => {
+	it("runs an island compiled as chunks in parallel workers like Node runs it", () => {
+		const root = mkdtempSync(path.join(os.tmpdir(), "mal-dependency-chunks-"));
+		roots.push(root);
+		const entrypoint = chunkedProject(root);
+		const config = resolveBuildConfig({ surface: { node: true } });
+		const derivation = buildDerivationFromConfig(config);
+		const runner = buildDevelopmentRunner(
+			resolveNativeBuildContext({ features: derivation.features }),
+			false,
+			derivation.cacheSuffix,
+		).binaryPath;
+		const frontend = compileBuildFrontend({
+			entrypoint,
+			config,
+			stripTypes: stripCompactTypes,
+			stripperIdentity: "dependency-chunk-regression",
+			cacheDirectory: path.join(root, "cache"),
+			optimization: "development",
+			relocatable: true,
+			interpreted: true,
+			dependencyWorker: { tool: process.execPath, args: [path.resolve("src/index.ts")] },
+		});
+		const wirePaths = frontend.runtimeArtifacts.map((artifact) => artifact.path);
+		const result = spawnSync(
+			runner,
+			[
+				"--maligator-internal-run-wires",
+				String(wirePaths.length),
+				entrypoint,
+				...wirePaths,
+			],
+			{ encoding: "utf-8" },
+		);
+		const expected = spawnSync(process.execPath, [entrypoint], { encoding: "utf-8" });
+
+		expect(expected.status, expected.stderr).toBe(0);
+		expect(frontend.fragmentArtifacts!.misses).toBeGreaterThan(3);
+		expect(result.status, result.stderr).toBe(0);
+		expect(JSON.parse(result.stdout)).toEqual(JSON.parse(expected.stdout));
+	}, 120_000);
+});
