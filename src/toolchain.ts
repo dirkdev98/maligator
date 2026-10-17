@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { hash } from "node:crypto";
 import {
 	copyFileSync,
+	lstatSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
@@ -11,10 +12,27 @@ import {
 	statSync,
 	writeFileSync,
 } from "node:fs";
+import { homedir } from "node:os";
 import * as path from "node:path";
 import { maligatorCacheDirectory } from "./cache-root.ts";
 
 const CACHE_SCHEMA = 2;
+const INSPECTION_SCHEMA = 1;
+/** The environment that selects tools or changes what they report. */
+const INSPECTION_ENVIRONMENT = [
+	"PATH",
+	"CC",
+	"CXX",
+	"ZIG",
+	"ZIG_GLOBAL_CACHE_DIR",
+	"ZIG_LOCAL_CACHE_DIR",
+	"HOME",
+	"RUSTUP_HOME",
+	"RUSTUP_TOOLCHAIN",
+	"CARGO_HOME",
+	"DEVELOPER_DIR",
+	"SDKROOT",
+];
 const C2X_FLAGS = ["-std=c2x"];
 const LTO_FLAG_CANDIDATES = [["-flto=thin"], ["-flto"]];
 
@@ -23,6 +41,8 @@ export interface ToolExecutable {
 	version: string;
 	/** Arguments selecting a subcommand/target before invocation-specific arguments. */
 	args?: Array<string>;
+	/** Where a clang driver reports its installation, which a shim like /usr/bin/cc hides. */
+	installedDir?: string;
 }
 
 export interface ToolchainTools {
@@ -359,11 +379,15 @@ function inspectExecutable(
 	if (executable === undefined) return undefined;
 	const result = run(executable, versionArgs, { cwd, env });
 	if (!result.ok && !allowUnknownVersion) return undefined;
+	const installedDir = result.ok
+		? /^InstalledDir: (.+)$/m.exec(result.stdout || result.stderr)?.[1]?.trim()
+		: undefined;
 	return {
 		path: executable,
 		version: result.ok
 			? firstLine(result.stdout || result.stderr)
 			: "version unavailable",
+		...(installedDir === undefined ? {} : { installedDir }),
 	};
 }
 
@@ -726,12 +750,18 @@ function addMissingIssue(
 	issues.push({ tool, message: detail, required });
 }
 
+function toolchainCacheDirectory(
+	options: InspectToolchainOptions,
+	rootDir: string,
+): string {
+	return options.cacheDirectory === undefined && options.rootDir !== undefined
+		? path.join(rootDir, ".cache", "maligator-test")
+		: maligatorCacheDirectory(options.cacheDirectory);
+}
+
 export function inspectToolchain(options: InspectToolchainOptions = {}): ToolchainReport {
 	const rootDir = path.resolve(options.rootDir ?? process.cwd());
-	const cacheDirectory =
-		options.cacheDirectory === undefined && options.rootDir !== undefined
-			? path.join(rootDir, ".cache", "maligator-test")
-			: maligatorCacheDirectory(options.cacheDirectory);
+	const cacheDirectory = toolchainCacheDirectory(options, rootDir);
 	const rustDir = path.resolve(options.rustDir ?? path.join(rootDir, "runtime/rust"));
 	let env = options.env ?? process.env;
 	const searchPath = env.PATH ?? "";
@@ -1013,45 +1043,101 @@ export function inspectToolchain(options: InspectToolchainOptions = {}): Toolcha
 	return report;
 }
 
-// Inspection spawns about ten version queries and every build in a process repeats it,
-// so a process reuses a toolchain while each selected executable is unchanged on disk.
-const requiredToolchains = new Map<string, { toolchain: Toolchain; stamps: string }>();
-
-function toolStamps(toolchain: Toolchain): string {
-	return JSON.stringify(
-		Object.values(toolchain.tools)
-			.filter((tool): tool is ToolExecutable => tool !== undefined)
-			.map((tool) => {
-				const stats = statSync(tool.path);
-				return [
-					tool.path,
-					stats.dev,
-					stats.ino,
-					stats.size,
-					stats.mtimeMs,
-					stats.ctimeMs,
-				];
-			}),
-	);
+interface InspectionMemo {
+	schema: number;
+	key: string;
+	inputs: Array<[string, string | null]>;
+	toolchain: Toolchain;
 }
 
-export function requireToolchain(options: InspectToolchainOptions = {}): Toolchain {
-	const key = JSON.stringify([
-		path.resolve(options.rootDir ?? process.cwd()),
-		options.cacheDirectory,
-		options.rustDir,
-		options.platform,
-		options.arch,
-		options.needsCxx,
-		options.target,
-		options.env ?? process.env,
-	]);
-	const required = requiredToolchains.get(key);
+function fileIdentity(file: string): string | null {
 	try {
-		if (required !== undefined && toolStamps(required.toolchain) === required.stamps)
-			return required.toolchain;
+		const stats = lstatSync(file);
+		return `${stats.dev}:${stats.ino}:${stats.size}:${stats.mtimeMs}:${stats.ctimeMs}`;
 	} catch {
-		// A removed executable falls through to a fresh inspection.
+		return null;
+	}
+}
+
+/**
+ * The files whose identities decide what an inspection reports: the selected
+ * executables, the PATH directories that could shadow them, what rustup selects
+ * by, and the developer directory Apple's compiler shims dispatch through.
+ */
+function inspectionInputs(
+	toolchain: Toolchain,
+	rustDir: string,
+	env: NodeJS.ProcessEnv,
+): Array<string> {
+	const tools = Object.values(toolchain.tools).filter(
+		(tool): tool is ToolExecutable => tool !== undefined,
+	);
+	const rustupHome = env.RUSTUP_HOME ?? path.join(env.HOME ?? homedir(), ".rustup");
+	const toolchainFiles: Array<string> = [];
+	for (let directory = rustDir; ; directory = path.dirname(directory)) {
+		toolchainFiles.push(
+			path.join(directory, "rust-toolchain.toml"),
+			path.join(directory, "rust-toolchain"),
+		);
+		if (path.dirname(directory) === directory) break;
+	}
+	return [
+		...new Set([
+			...tools.map((tool) => tool.path),
+			...tools.flatMap((tool) =>
+				tool.installedDir === undefined ? [] : [path.join(tool.installedDir, "clang")],
+			),
+			...(env.PATH ?? "")
+				.split(path.delimiter)
+				.map((directory) => path.resolve(directory)),
+			...toolchainFiles,
+			path.join(rustupHome, "settings.toml"),
+			path.join(rustupHome, "toolchains"),
+			"/var/db/xcode_select_link",
+		]),
+	];
+}
+
+/**
+ * Inspection spawns about a dozen version queries, which costs a build command
+ * hundreds of milliseconds, so a toolchain is reused while every input that
+ * selected it keeps its identity.
+ */
+export function requireToolchain(options: InspectToolchainOptions = {}): Toolchain {
+	const rootDir = path.resolve(options.rootDir ?? process.cwd());
+	const rustDir = path.resolve(options.rustDir ?? path.join(rootDir, "runtime/rust"));
+	const env = options.env ?? process.env;
+	const key = hash(
+		"sha256",
+		JSON.stringify([
+			INSPECTION_SCHEMA,
+			rootDir,
+			rustDir,
+			options.platform ?? process.platform,
+			options.arch ?? process.arch,
+			options.needsCxx ?? true,
+			options.target ?? null,
+			INSPECTION_ENVIRONMENT.map((name) => env[name] ?? null),
+		]),
+		"hex",
+	);
+	const memoPath = path.join(
+		toolchainCacheDirectory(options, rootDir),
+		"toolchains",
+		"inspections",
+		`${key}.json`,
+	);
+	try {
+		const memo = JSON.parse(readFileSync(memoPath, "utf-8")) as InspectionMemo;
+		if (
+			memo.schema === INSPECTION_SCHEMA &&
+			memo.key === key &&
+			memo.inputs.every(([file, identity]) => fileIdentity(file) === identity)
+		) {
+			return { ...memo.toolchain, cacheHit: true };
+		}
+	} catch {
+		// A missing or damaged memo only costs a fresh inspection.
 	}
 	const report = inspectToolchain(options);
 	if (report.toolchain === undefined) {
@@ -1060,10 +1146,20 @@ export function requireToolchain(options: InspectToolchainOptions = {}): Toolcha
 			report.platform ?? options.platform ?? process.platform,
 		);
 	}
-	requiredToolchains.set(key, {
-		toolchain: report.toolchain,
-		stamps: toolStamps(report.toolchain),
-	});
+	try {
+		mkdirSync(path.dirname(memoPath), { recursive: true });
+		const inputs = inspectionInputs(report.toolchain, rustDir, env).map(
+			(file): [string, string | null] => [file, fileIdentity(file)],
+		);
+		const temporary = `${memoPath}.${String(process.pid)}.tmp`;
+		writeFileSync(
+			temporary,
+			`${JSON.stringify({ schema: INSPECTION_SCHEMA, key, inputs, toolchain: report.toolchain } satisfies InspectionMemo)}\n`,
+		);
+		renameSync(temporary, memoPath);
+	} catch {
+		// An unwritable cache keeps resolution exact; the next command inspects again.
+	}
 	return report.toolchain;
 }
 

@@ -559,6 +559,25 @@ exit 7
 		expect(replaced.fingerprint).not.toBe(first.fingerprint);
 	});
 
+	it("selects a compiler newly installed earlier on the same PATH", () => {
+		const fake = createFakeToolchain();
+		const shadow = path.join(fake.root, "shadow-bin");
+		mkdirSync(shadow);
+		const options = {
+			rootDir: fake.root,
+			rustDir: fake.rustDir,
+			env: { ...fake.env, PATH: `${shadow}${path.delimiter}${fake.bin}` },
+			platform: "linux" as const,
+			arch: "x64",
+		};
+		expect(requireToolchain(options).tools.cc.version).toBe("fake cc 1");
+
+		executable(path.join(shadow, "fake-cc"), compilerScript("shadow cc", fake.logPath));
+		const shadowed = requireToolchain(options);
+		expect(shadowed.tools.cc.path).toBe(realpathSync(path.join(shadow, "fake-cc")));
+		expect(shadowed.tools.cc.version).toBe("shadow cc");
+	});
+
 	it("keeps the fingerprint and probes when identical tools are reinstalled", () => {
 		const fake = createFakeToolchain();
 		const options = {
