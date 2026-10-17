@@ -3593,13 +3593,17 @@ function compileNewFunctionExpression(
 			createSyntheticBinding(program, compiledFn, "__super_new_target");
 	}
 
-	const paramsCursor = compileFunctionParams(program, compiledFn, functionNode);
-
-	// Base constructors run InitializeInstanceElements before the body; derived
-	// constructors run it after super() returns (woven in by compileSuperCall).
-	if (classContext?.isConstructor && !classContext.isDerivedConstructor) {
-		emitInstanceElementInit(program, compiledFn, paramsCursor, classContext);
-	}
+	// Base constructors run InitializeInstanceElements before FunctionDeclarationInstantiation
+	// evaluates parameter defaults; derived constructors run it after super() returns
+	// (woven in by compileSuperCall).
+	const paramsCursor = compileFunctionParams(
+		program,
+		compiledFn,
+		functionNode,
+		classContext?.isConstructor && !classContext.isDerivedConstructor
+			? (cursor) => emitInstanceElementInit(program, compiledFn, cursor, classContext)
+			: undefined,
+	);
 
 	prepareTailCallLoop(compiledFn, functionNode);
 	const bodyBlock = compileStatementsToBlock(
@@ -4980,6 +4984,7 @@ function compileFunctionParams(
 		| ESTree.FunctionDeclaration
 		| ESTree.FunctionExpression
 		| ESTree.ArrowFunctionExpression,
+	beforeParameters?: (cursor: CoreFrontendCursor) => void,
 ): CoreFrontendCursor {
 	const block: CoreFrontendBlock = {
 		emitter: unboundCoreEmitter,
@@ -5171,6 +5176,8 @@ function compileFunctionParams(
 			calleeRegister,
 		);
 	}
+
+	beforeParameters?.(cursor);
 
 	// Parameter TDZ: parameters initialize left to right, so a default that reads
 	// a not-yet-initialized (or its own) parameter is a ReferenceError. Seed
