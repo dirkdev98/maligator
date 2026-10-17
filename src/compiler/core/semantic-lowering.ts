@@ -4287,17 +4287,52 @@ function compileClass(
 	const prototypeKey = compileStaticString(program, fn, cursor, "prototype");
 	let prototype: number;
 	if (parent !== -1) {
+		const loadFunctionPrototype = (block: CoreFrontendBlock, destination: number) => {
+			const functionCtor = nextCoreVariable(fn);
+			block.emitter.emit(
+				{ type: "loadIntrinsic", registers: [functionCtor], intrinsic: "Function" },
+				{ type: "loadProperty", registers: [destination, functionCtor, prototypeKey] },
+			);
+		};
+		// constructorParent: the superclass, or %Function.prototype% when it is null.
 		const parentPrototype = nextCoreVariable(fn);
+		const constructorParent = nextCoreVariable(fn);
 		if (extendsNull) {
-			cursor.block.emitter.emit({
-				type: "createNull",
-				registers: [parentPrototype],
-			});
+			cursor.block.emitter.emit({ type: "createNull", registers: [parentPrototype] });
+			loadFunctionPrototype(cursor.block, constructorParent);
 		} else {
-			cursor.block.emitter.emit({
-				type: "loadProperty",
-				registers: [parentPrototype, parent, prototypeKey],
-			});
+			// A heritage expression may evaluate to null at runtime as well.
+			const nullValue = nextCoreVariable(fn);
+			const isNull = nextCoreVariable(fn);
+			cursor.block.emitter.emit(
+				{ type: "createNull", registers: [nullValue] },
+				{ type: "binary", registers: [isNull, parent, nullValue], operator: "===" },
+			);
+			const nullJump: Extract<CompilerInstruction, { type: "jumpIf" }> = {
+				type: "jumpIf",
+				registers: [isNull],
+				blocks: [-1],
+			};
+			const valueJump: Extract<CompilerInstruction, { type: "jump" }> = {
+				type: "jump",
+				blocks: [-1],
+			};
+			cursor.block.emitter.emit(nullJump, valueJump);
+			const valueBlock: CoreFrontendBlock = { emitter: unboundCoreEmitter };
+			valueJump.blocks[0] = fn.blocks.push(valueBlock) - 1;
+			valueBlock.emitter.emit(
+				{ type: "loadProperty", registers: [parentPrototype, parent, prototypeKey] },
+				{ type: "move", registers: [constructorParent, parent] },
+			);
+			const nullBlock: CoreFrontendBlock = { emitter: unboundCoreEmitter };
+			nullJump.blocks[0] = fn.blocks.push(nullBlock) - 1;
+			nullBlock.emitter.emit({ type: "createNull", registers: [parentPrototype] });
+			loadFunctionPrototype(nullBlock, constructorParent);
+			const join: CoreFrontendBlock = { emitter: unboundCoreEmitter };
+			const joinIdx = fn.blocks.push(join) - 1;
+			valueBlock.emitter.emit({ type: "jump", blocks: [joinIdx] });
+			nullBlock.emitter.emit({ type: "jump", blocks: [joinIdx] });
+			cursor.block = join;
 		}
 
 		prototype = nextCoreVariable(fn);
@@ -4324,21 +4359,6 @@ function compileClass(
 			writable: false,
 			configurable: false,
 		});
-		// constructorParent: the superclass, or %Function.prototype% for extends null.
-		let constructorParent = parent;
-		if (extendsNull) {
-			const functionCtor = nextCoreVariable(fn);
-			cursor.block.emitter.emit({
-				type: "loadIntrinsic",
-				registers: [functionCtor],
-				intrinsic: "Function",
-			});
-			constructorParent = nextCoreVariable(fn);
-			cursor.block.emitter.emit({
-				type: "loadProperty",
-				registers: [constructorParent, functionCtor, prototypeKey],
-			});
-		}
 		cursor.block.emitter.emit({
 			type: "setPrototype",
 			registers: [ctor, constructorParent],
