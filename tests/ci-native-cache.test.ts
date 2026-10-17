@@ -12,7 +12,11 @@ import {
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { exportSnapshot, importSnapshot } from "../scripts/ci-native-cache.ts";
+import {
+	exportSnapshot,
+	importSnapshot,
+	snapshotContents,
+} from "../scripts/ci-native-cache.ts";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -31,6 +35,16 @@ afterEach(() => {
 
 function blobPath(root: string, digest: string): string {
 	return path.join(root, "blobs", "sha256", digest.slice(0, 2), digest.slice(2));
+}
+
+function publishBake(root: string, key: string, lastUsedMs: number): string {
+	const bakeDirectory = path.join(root, "compiler-wire", key.repeat(64));
+	mkdirSync(bakeDirectory, { recursive: true });
+	writeFileSync(path.join(bakeDirectory, "compiler.malw"), `wire ${key}`);
+	writeFileSync(path.join(bakeDirectory, "artifact.json"), `{"key":"${key}"}`);
+	const lastUse = new Date(lastUsedMs);
+	utimesSync(path.join(bakeDirectory, "artifact.json"), lastUse, lastUse);
+	return path.join("compiler-wire", key.repeat(64));
 }
 
 /** Publishes one single-output action the way the artifact store lays it out. */
@@ -72,7 +86,7 @@ describe("CI native cache snapshots", () => {
 		const older = publishAction(root, "generated-object", "older", 100, now - 1_000);
 
 		const snapshot = path.join(directory, "snapshot");
-		exportSnapshot(snapshot, root, 300);
+		exportSnapshot(snapshot, root, { maxBytes: 300 });
 
 		expect(existsSync(path.join(snapshot, rust))).toBe(true);
 		expect(existsSync(path.join(snapshot, overlay))).toBe(true);
@@ -91,7 +105,7 @@ describe("CI native cache snapshots", () => {
 		writeFileSync(thinLto, Buffer.alloc(100, "t"));
 
 		const snapshot = path.join(directory, "snapshot");
-		exportSnapshot(snapshot, root, 200, importedAt);
+		exportSnapshot(snapshot, root, { maxBytes: 200, usedSinceMs: importedAt });
 
 		expect(existsSync(path.join(snapshot, read))).toBe(true);
 		expect(
@@ -132,7 +146,7 @@ describe("CI native cache snapshots", () => {
 		const dropped = thinLto("dropped", 50, now - 3_000);
 
 		const snapshot = path.join(directory, "snapshot");
-		exportSnapshot(snapshot, root, 200);
+		exportSnapshot(snapshot, root, { maxBytes: 200 });
 		expect(existsSync(path.join(snapshot, action))).toBe(true);
 		expect(existsSync(path.join(snapshot, dropped))).toBe(false);
 		writeFileSync(path.join(snapshot, newest), "tampered");
@@ -163,7 +177,7 @@ describe("CI native cache snapshots", () => {
 		mkdirSync(path.join(root, "compiler-wire", ".source-cones"), { recursive: true });
 
 		const snapshot = path.join(directory, "snapshot");
-		exportSnapshot(snapshot, root, undefined, now - 10_000);
+		exportSnapshot(snapshot, root, { usedSinceMs: now - 10_000 });
 		expect(existsSync(path.join(snapshot, unused))).toBe(false);
 		expect(existsSync(path.join(snapshot, "compiler-wire", ".source-cones"))).toBe(false);
 		writeFileSync(path.join(snapshot, tampered, "compiler.malw"), "tampered");
@@ -199,5 +213,70 @@ describe("CI native cache snapshots", () => {
 		expect(statSync(path.join(restored, kept)).mtimeMs).toBe(lastUsedMs);
 		expect(existsSync(path.join(restored, corrupt))).toBe(false);
 		expect(existsSync(blobPath(restored, corruptDigest))).toBe(false);
+	});
+
+	it("keeps only a lane's shared stages and bakes in its shared snapshot", () => {
+		const root = path.join(directory, "cache");
+		const now = Date.now();
+		const rust = publishAction(root, "rust-library", "rust", 10, now - DAY_MS);
+		const archive = publishAction(root, "runtime-archive", "archive", 10, now);
+		const fixture = publishAction(root, "generated-object", "fixture", 10, now);
+		const bake = publishBake(root, "a", now - DAY_MS);
+
+		const shared = path.join(directory, "shared");
+		exportSnapshot(shared, root, { part: "shared", usedSinceMs: now - 1_000 });
+
+		expect(snapshotContents(shared)).toEqual(new Set([rust, archive, bake]));
+		expect(existsSync(path.join(shared, fixture))).toBe(false);
+	});
+
+	it("leaves what the restored shared snapshot holds out of a job line", () => {
+		const now = Date.now();
+		const owner = path.join(directory, "owner");
+		const common = publishAction(owner, "runtime-archive", "common", 10, now);
+		const commonBake = publishBake(owner, "a", now);
+		const shared = path.join(directory, "shared");
+		exportSnapshot(shared, owner, { part: "shared" });
+
+		const root = path.join(directory, "cache");
+		importSnapshot(shared, root, "shared");
+		const variant = publishAction(root, "runtime-archive", "sanitized", 10, now);
+		const variantBake = publishBake(root, "b", now);
+		const fixture = publishAction(root, "generated-object", "fixture", 10, now);
+
+		const line = path.join(directory, "line");
+		exportSnapshot(line, root, { withoutShared: snapshotContents(shared) });
+
+		expect(snapshotContents(line)).toEqual(new Set([variant, variantBake, fixture]));
+		expect(existsSync(path.join(line, common))).toBe(false);
+		expect(existsSync(path.join(line, commonBake))).toBe(false);
+	});
+
+	it("leaves every shared stage out of the line of the job that saves the shared snapshot", () => {
+		const root = path.join(directory, "cache");
+		const now = Date.now();
+		publishAction(root, "rust-library", "rust", 10, now);
+		publishBake(root, "a", now);
+		const fixture = publishAction(root, "generated-object", "fixture", 10, now);
+
+		const line = path.join(directory, "line");
+		exportSnapshot(line, root, { withoutShared: "all" });
+
+		expect(snapshotContents(line)).toEqual(new Set([fixture]));
+	});
+
+	it("reports a restored shared snapshot apart from the job line", () => {
+		const source = path.join(directory, "source");
+		publishAction(source, "runtime-archive", "archive", 10, Date.now());
+		const shared = path.join(directory, "shared");
+		exportSnapshot(shared, source, { part: "shared" });
+		const environment = path.join(directory, "github-env");
+		vi.stubEnv("GITHUB_ENV", environment);
+
+		importSnapshot(shared, path.join(directory, "cache"), "shared");
+
+		const recorded = readFileSync(environment, "utf8");
+		expect(recorded).toMatch(/^MALIGATOR_NATIVE_SHARED_RESTORED=[0-9a-f]{64}$/m);
+		expect(recorded).not.toMatch(/^MALIGATOR_NATIVE_CACHE_RESTORED=/m);
 	});
 });

@@ -43,7 +43,8 @@ jobs:
           - { os: ubuntu-26.04, lane: sanitizer, shard: 2, shards: 2 }
           - { os: macos-15, lane: native, shard: 1, shards: 2 }
           - { os: macos-15, lane: native, shard: 2, shards: 2 }
-          - { os: macos-15, lane: sanitizer, shard: 1, shards: 2 }
+          # CI saves the other lanes' shared snapshots; only macOS sanitizers run here alone.
+          - { os: macos-15, lane: sanitizer, shard: 1, shards: 2, owner: true }
           - { os: macos-15, lane: sanitizer, shard: 2, shards: 2 }
     steps:
       - name: Require the main branch
@@ -66,6 +67,7 @@ jobs:
         uses: ./.github/actions/setup-macos
         with:
           native-cache: ${{ env.NATIVE_CACHE }}
+          native-cache-owner: ${{ matrix.owner == true && 'true' || 'false' }}
 
       - name: Check the runner environment
         run: npm run env:check -- --json

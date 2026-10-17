@@ -14,6 +14,10 @@ inputs:
     description: Cache line for completed Rust runtime libraries, or empty to build them cold.
     required: false
     default: ""
+  native-cache-owner:
+    description: Save the shared snapshot of this line's lane after the job.
+    required: false
+    default: "false"
 
 runs:
   using: composite
@@ -76,16 +80,41 @@ runs:
       shell: bash
       run: npm ci --no-audit --no-fund
 
+    # A sanitizer line shares the sanitized runtime and Rust libraries with the other
+    # sanitizer lines; every other line shares the ordinary ones.
     - name: Select the native library cache
       id: native-cache
       if: inputs.native-cache != ''
       shell: bash
       env:
         NATIVE_CACHE: ${{ inputs.native-cache }}
+        OWNER: ${{ inputs.native-cache-owner }}
       run: |
-        prefix="maligator-native-v1-$RUNNER_OS-$RUNNER_ARCH-$ImageOS-$NATIVE_CACHE-"
-        echo "prefix=$prefix" >> "$GITHUB_OUTPUT"
-        echo "MALIGATOR_NATIVE_CACHE_PREFIX=$prefix" >> "$GITHUB_ENV"
+        base="maligator-native-v1-$RUNNER_OS-$RUNNER_ARCH-$ImageOS"
+        case "$NATIVE_CACHE" in *sanitizer*) lane=sanitizer ;; *) lane=native ;; esac
+        echo "prefix=$base-$NATIVE_CACHE-" >> "$GITHUB_OUTPUT"
+        echo "shared-prefix=$base-shared-$lane-" >> "$GITHUB_OUTPUT"
+        echo "MALIGATOR_NATIVE_CACHE_PREFIX=$base-$NATIVE_CACHE-" >> "$GITHUB_ENV"
+        echo "MALIGATOR_NATIVE_SHARED_PREFIX=$base-shared-$lane-" >> "$GITHUB_ENV"
+        echo "MALIGATOR_NATIVE_SHARED_OWNER=$OWNER" >> "$GITHUB_ENV"
+
+    - name: Restore the shared native library cache
+      id: restore-shared-native-cache
+      if: inputs.native-cache != ''
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/maligator-native-shared
+        key: ${{ steps.native-cache.outputs.shared-prefix }}${{ github.run_id }}
+        restore-keys: ${{ steps.native-cache.outputs.shared-prefix }}
+
+    - name: Import the shared native library cache
+      if: inputs.native-cache != ''
+      shell: bash
+      env:
+        RESTORED_KEY: ${{ steps.restore-shared-native-cache.outputs.cache-matched-key }}
+      run: |
+        node scripts/ci-native-cache.ts import "$RUNNER_TEMP/maligator-native-shared" --shared
+        echo "MALIGATOR_NATIVE_SHARED_RESTORED_KEY=$RESTORED_KEY" >> "$GITHUB_ENV"
 
     - name: Restore the native library cache
       id: restore-native-cache

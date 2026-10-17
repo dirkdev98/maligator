@@ -296,18 +296,24 @@ overlay is quite large (about 370 translation units), but each unit only holds i
 functions: image indices live in separate link-table units, so a compiler edit
 recompiles the units it touches. Test fixtures emit the same C until the compiler
 changes what they compile to, so their objects survive most commits as well.
-`scripts/ci-native-cache.ts` moves only those entries, one cache line per job: each
-job restores the newest snapshot of its own line, because a snapshot holds only the
-variants that job built. Import verifies every blob and ThinLTO entry, and `main`
-saves the recently read set when it changed, within 4 GiB; a full snapshot keeps the
-bakes and then what the job itself read first, then ThinLTO entries, then older
-entries, each in the order Rust, overlay, runtime, fixture objects. Snapshots compress
-about sixfold, so the newest one of every line fits the repository's 10 GB allowance.
+`scripts/ci-native-cache.ts` moves only those entries. The Rust libraries, runtime
+objects and archives, overlay objects and bakes are the same for every job of a lane,
+so each lane (sanitizer or ordinary, per platform) keeps them in one shared snapshot:
+every job restores it, and one job per lane saves it (the first Linux native and
+sanitizer check shards, the macOS smoke job, and the first macOS remainder sanitizer
+shard). Each job also restores the newest snapshot of its own line, which holds only
+what the shared snapshot lacks: fixture objects, Wasm stages, ThinLTO entries, and
+the library variants peculiar to that job. On `main`, a job saves its line when the
+set changed, within 3 GiB, keeping the bakes and then what the job itself read first,
+then ThinLTO entries, then older entries, each in the order Rust, overlay, runtime,
+fixture objects; the export log breaks the bytes down. Snapshots compress about 3.5
+times, and the newest snapshot of every line and lane has to fit the repository's 10 GB
+allowance: when it does not, GitHub evicts whole lines and their jobs start cold.
 After saving, a job deletes the snapshot it restored: GitHub evicts the least recently
 used entries, and that superseded snapshot counts as just used, so keeping it would
-evict the newest snapshot of a line that runs less often. A restored action that no longer matches is
-simply never read; the weekly native-remainder run stays cold so cache identity
-defects still surface. Native linked binaries, frontend artifacts, Zig outputs, and
+evict the newest snapshot of a line that runs less often. Cancelled runs save nothing.
+A restored action that no longer matches is simply never read; the weekly
+native-remainder run stays cold so cache identity defects still surface. Native linked binaries, frontend artifacts, Zig outputs, and
 the managed cache are not stored: a test binary is tens of megabytes, and a developer
 cache can exceed the repository's 10 GB Actions allowance.
 Gate reports are retained on success and failure for seven days,

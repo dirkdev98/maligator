@@ -4,24 +4,55 @@ description: Publish the native actions a main-branch job used, when the set cha
 runs:
   using: composite
   steps:
+    # One job per lane owns the lane's shared snapshot, so a runtime or compiler change
+    # uploads it once instead of from every job that rebuilt the same libraries.
+    - name: Export the shared native library cache
+      id: export-shared
+      if: ${{ !cancelled() && env.MALIGATOR_NATIVE_CACHE_PREFIX != '' && env.MALIGATOR_NATIVE_SHARED_OWNER == 'true' && github.ref == 'refs/heads/main' }}
+      shell: bash
+      run: node scripts/ci-native-cache.ts export "$RUNNER_TEMP/maligator-native-shared-export" --shared
+
+    - name: Save the shared native library cache
+      id: save-shared
+      if: ${{ !cancelled() && steps.export-shared.outputs.digest != '' && steps.export-shared.outputs.digest != env.MALIGATOR_NATIVE_SHARED_RESTORED }}
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/maligator-native-shared-export
+        key: ${{ env.MALIGATOR_NATIVE_SHARED_PREFIX }}${{ steps.export-shared.outputs.digest }}
+
+    # Eviction is least-recently-used, and the snapshot this job restored counts as just
+    # used, so without this the repository allowance evicts other lines' newest snapshots.
+    - name: Drop the shared snapshot this job superseded
+      if: ${{ !cancelled() && steps.save-shared.outcome == 'success' && startsWith(env.MALIGATOR_NATIVE_SHARED_RESTORED_KEY, env.MALIGATOR_NATIVE_SHARED_PREFIX) }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        SUPERSEDED: ${{ env.MALIGATOR_NATIVE_SHARED_RESTORED_KEY }}
+      run: |
+        gh api --method DELETE "repos/$GITHUB_REPOSITORY/actions/caches?key=$SUPERSEDED" >/dev/null \
+          || echo "the superseded snapshot $SUPERSEDED was already gone"
+
     - name: Export the native library cache
       id: export
-      if: always() && env.MALIGATOR_NATIVE_CACHE_PREFIX != '' && github.ref == 'refs/heads/main'
+      if: ${{ !cancelled() && env.MALIGATOR_NATIVE_CACHE_PREFIX != '' && github.ref == 'refs/heads/main' }}
       shell: bash
-      run: node scripts/ci-native-cache.ts export "$RUNNER_TEMP/maligator-native-cache"
+      run: |
+        if [ "$MALIGATOR_NATIVE_SHARED_OWNER" = true ]; then
+          node scripts/ci-native-cache.ts export "$RUNNER_TEMP/maligator-native-cache" --without-shared
+        else
+          node scripts/ci-native-cache.ts export "$RUNNER_TEMP/maligator-native-cache" --without "$RUNNER_TEMP/maligator-native-shared"
+        fi
 
     - name: Save the native library cache
       id: save
-      if: always() && steps.export.outputs.digest != '' && steps.export.outputs.digest != env.MALIGATOR_NATIVE_CACHE_RESTORED
+      if: ${{ !cancelled() && steps.export.outputs.digest != '' && steps.export.outputs.digest != env.MALIGATOR_NATIVE_CACHE_RESTORED }}
       uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ runner.temp }}/maligator-native-cache
         key: ${{ env.MALIGATOR_NATIVE_CACHE_PREFIX }}${{ steps.export.outputs.digest }}
 
-    # Eviction is least-recently-used, and the snapshot this job restored counts as just
-    # used, so without this the repository allowance evicts other lines' newest snapshots.
     - name: Drop the snapshot this job superseded
-      if: always() && steps.save.outcome == 'success' && startsWith(env.MALIGATOR_NATIVE_CACHE_RESTORED_KEY, env.MALIGATOR_NATIVE_CACHE_PREFIX)
+      if: ${{ !cancelled() && steps.save.outcome == 'success' && startsWith(env.MALIGATOR_NATIVE_CACHE_RESTORED_KEY, env.MALIGATOR_NATIVE_CACHE_PREFIX) }}
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}

@@ -26,12 +26,18 @@ jobs:
       matrix:
         include:
           - lane: quality
-          # Each job keeps its own cache line: a snapshot holds only the overlay variants
-          # its job built, and restore picks the newest snapshot of the line.
+          # Each job keeps its own cache line beside its lane's shared snapshot, which
+          # one job per lane saves; restore picks the newest snapshot of each.
           - { lane: standards, cache: linux-standards }
-          - { lane: native, cache: linux-native-1, shard: 1, shards: 2 }
+          - { lane: native, cache: linux-native-1, shard: 1, shards: 2, owner: true }
           - { lane: native, cache: linux-native-2, shard: 2, shards: 2 }
-          - { lane: sanitizer, cache: linux-sanitizer-1, shard: 1, shards: 3 }
+          - {
+              lane: sanitizer,
+              cache: linux-sanitizer-1,
+              shard: 1,
+              shards: 3,
+              owner: true,
+            }
           - { lane: sanitizer, cache: linux-sanitizer-2, shard: 2, shards: 3 }
           - { lane: sanitizer, cache: linux-sanitizer-3, shard: 3, shards: 3 }
     steps:
@@ -45,6 +51,7 @@ jobs:
         with:
           cache-test262: ${{ matrix.lane == 'standards' && 'true' || 'false' }}
           native-cache: ${{ matrix.cache }}
+          native-cache-owner: ${{ matrix.owner == true && 'true' || 'false' }}
 
       - name: Check the runner environment
         run: npm run env:check -- --json
@@ -128,6 +135,7 @@ jobs:
         with:
           cache-test262: "true"
           native-cache: macos-smoke
+          native-cache-owner: "true"
 
       - name: Check the runner environment
         run: npm run env:check -- --json

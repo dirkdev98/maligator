@@ -15,7 +15,9 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { maligatorCacheDirectory } from "../src/cache-root.ts";
 
-const usage = `usage: node scripts/ci-native-cache.ts import|export DIRECTORY
+const usage = `usage: node scripts/ci-native-cache.ts import DIRECTORY [--shared]
+       node scripts/ci-native-cache.ts export DIRECTORY --shared
+       node scripts/ci-native-cache.ts export DIRECTORY [--without-shared | --without SHARED]
 
 Moves completed Rust library, compiler overlay, runtime C objects and archives,
 generated C and Wasm actions, eval-compiler bakes, then ThinLTO cache entries,
@@ -23,10 +25,15 @@ between the Maligator cache and a GitHub Actions cache directory. All of them ar
 content-addressed: a restored entry whose inputs no longer match is never read, so a
 stale snapshot only costs its download. import verifies every blob, bake file and
 ThinLTO entry before publishing it and keeps each one's last-use time; export keeps
-what was read within 14 days of the most recent use, within 4 GiB: first the bakes
-and then the actions this job read, then ThinLTO entries, then older actions, each
-in stage order and newest first. It reports a digest so unchanged snapshots are not
-saved again.`;
+what was read within 14 days of the most recent use: first the bakes and then the
+actions this job read, then ThinLTO entries, then older actions, each in stage order
+and newest first. It reports a digest so unchanged snapshots are not saved again.
+
+The Rust libraries, runtime objects and archives, compiler overlay objects and bakes
+of a lane are the same in all of its jobs, so they travel in one shared snapshot per
+lane. --shared exports only those for the job that owns the lane's shared snapshot;
+a job line leaves out everything the restored shared snapshot holds (--without), or
+every shared stage when its job owns the shared snapshot (--without-shared).`;
 
 // Earlier stages are costlier to rebuild and are read first in a job, so a full
 // snapshot keeps them before the many cheap fixture objects that follow.
@@ -70,14 +77,24 @@ interface ThinLtoEntry {
 	size: number;
 	mtimeMs: number;
 }
+// The stages every job of a lane reads alike; see the usage text.
+const SHARED_STAGES = new Set([
+	"rust-library",
+	"compiler-overlay-object",
+	"runtime-object",
+	"runtime-archive",
+]);
 const RETENTION_MS = 14 * 24 * 60 * 60 * 1000;
-// Objects compress about sixfold in the Actions cache, so the newest snapshot of every
-// line still fits the repository's 10 GB allowance; macOS runners keep 25 GB free.
-const MAX_BYTES = 4 * 1024 ** 3;
+// Snapshots compress about 3.5x in the Actions cache. The newest snapshot of every line
+// and shared snapshot must stay inside the repository's 10 GB allowance, or eviction
+// drops whole lines and their jobs start cold.
+const LINE_MAX_BYTES = 3 * 1024 ** 3;
+const SHARED_MAX_BYTES = 3 * 1024 ** 3;
 
 interface Entry {
 	manifest: string;
 	stage: number;
+	stageName: string;
 	outputs: Array<{ digest: string; size: number }>;
 	mtimeMs: number;
 	bytes: number;
@@ -121,6 +138,7 @@ function readEntries(root: string): Array<Entry> {
 						{
 							manifest,
 							stage: stageIndex,
+							stageName: stage,
 							outputs,
 							mtimeMs: statSync(path.join(root, manifest)).mtimeMs,
 							bytes: outputs.reduce((total, output) => total + output.size, 0),
@@ -282,7 +300,11 @@ function appendGitHubFile(file: string | undefined, line: string): void {
 	if (file !== undefined && file !== "") appendFileSync(file, `${line}\n`);
 }
 
-export function importSnapshot(directory: string, root: string): void {
+export function importSnapshot(
+	directory: string,
+	root: string,
+	part: "shared" | "line" = "line",
+): void {
 	const imported: Array<Entry> = [];
 	for (const entry of readEntries(directory)) {
 		const valid = entry.outputs.every((output) =>
@@ -346,11 +368,11 @@ export function importSnapshot(directory: string, root: string): void {
 		...bakes.flatMap((bake) => bake.files.map((file) => ({ bytes: file.size }))),
 	].reduce((total, entry) => total + entry.bytes, 0);
 	console.log(
-		`[ci-native-cache] imported ${imported.length} actions, ${bakes.length} compiler bakes and ${thinLto.length} ThinLTO entries (${(bytes / 1024 ** 2).toFixed(1)} MiB) into ${root}`,
+		`[ci-native-cache] imported ${imported.length} actions, ${bakes.length} compiler bakes and ${thinLto.length} ThinLTO entries (${mebibytes(bytes)}) from the ${part === "shared" ? "shared" : "job"} snapshot into ${root}`,
 	);
 	appendGitHubFile(
 		process.env.GITHUB_ENV,
-		`MALIGATOR_NATIVE_CACHE_RESTORED=${imported.length + thinLto.length + bakes.length === 0 ? "" : snapshotDigest(imported, thinLto, bakes)}`,
+		`${part === "shared" ? "MALIGATOR_NATIVE_SHARED_RESTORED" : "MALIGATOR_NATIVE_CACHE_RESTORED"}=${imported.length + thinLto.length + bakes.length === 0 ? "" : snapshotDigest(imported, thinLto, bakes)}`,
 	);
 	// Restored manifests keep older times, so anything newer was read or built by this job.
 	appendGitHubFile(
@@ -359,29 +381,67 @@ export function importSnapshot(directory: string, root: string): void {
 	);
 }
 
+function mebibytes(bytes: number): string {
+	return `${(bytes / 1024 ** 2).toFixed(1)} MiB`;
+}
+
+/** The action manifests and bake directories a restored snapshot holds. */
+export function snapshotContents(directory: string): Set<string> {
+	return new Set([
+		...readEntries(directory).map((entry) => entry.manifest),
+		...readBakesManifest(directory).map((bake) => path.join(BAKES, bake.directory)),
+	]);
+}
+
+export interface ExportOptions {
+	maxBytes?: number;
+	/** When this job's imports finished; without it every action and bake counts as used. */
+	usedSinceMs?: number;
+	/** `shared` holds only the shared stages and bakes. */
+	part?: "shared" | "line";
+	/**
+	 * What a job line leaves to the shared snapshot: everything restored from there, or
+	 * every shared stage and bake when this job saves the shared snapshot itself.
+	 */
+	withoutShared?: ReadonlySet<string> | "all";
+}
+
 /**
  * Snapshot what this job used first: bakes, then actions it read since `usedSinceMs`,
- * then ThinLTO entries, then older actions, so a line at the cap drops what the job did
- * not need. A bake replaces about a minute of compilation per job, more than any equal
- * share of fixture objects. Without a start time every action and bake counts as used.
+ * then ThinLTO entries, then older actions, so a snapshot at the cap drops what the job
+ * did not need. A bake replaces about a minute of compilation per job, more than any
+ * equal share of fixture objects.
  */
 export function exportSnapshot(
 	directory: string,
 	root: string,
-	maxBytes = MAX_BYTES,
-	usedSinceMs?: number,
+	options: ExportOptions = {},
 ): void {
+	const part = options.part ?? "line";
+	const maxBytes =
+		options.maxBytes ?? (part === "shared" ? SHARED_MAX_BYTES : LINE_MAX_BYTES);
+	const { usedSinceMs, withoutShared } = options;
 	rmSync(directory, { recursive: true, force: true });
-	const entries = readEntries(root).sort(
-		(left, right) => left.stage - right.stage || right.mtimeMs - left.mtimeMs,
-	);
+	const leftToShared = (key: string, shared: boolean) =>
+		part === "line" &&
+		(withoutShared === "all" ? shared : withoutShared?.has(key) === true);
+	let leftBytes = 0;
+	const entries = readEntries(root)
+		.filter((entry) => {
+			const shared = SHARED_STAGES.has(entry.stageName);
+			if (part === "shared") return shared;
+			if (!leftToShared(entry.manifest, shared)) return true;
+			leftBytes += entry.bytes;
+			return false;
+		})
+		.sort((left, right) => left.stage - right.stage || right.mtimeMs - left.mtimeMs);
 	const cutoff =
 		entries.reduce((newest, entry) => Math.max(newest, entry.mtimeMs), 0) - RETENTION_MS;
-	const used = (entry: Entry) =>
-		usedSinceMs === undefined || entry.mtimeMs >= usedSinceMs;
+	const used = (mtimeMs: number) => usedSinceMs === undefined || mtimeMs >= usedSinceMs;
 	const exported: Array<Entry> = [];
+	const breakdown = { used: 0, older: 0, bakes: 0, thinLto: 0 };
 	let bytes = 0;
-	const exportActions = (selected: ReadonlyArray<Entry>) => {
+	const exportActions = (selected: ReadonlyArray<Entry>, category: "used" | "older") => {
 		for (const entry of selected) {
 			if (entry.mtimeMs < cutoff || bytes + entry.bytes > maxBytes) continue;
 			const sources = entry.outputs.map((output) => blob(root, output.digest));
@@ -403,14 +463,22 @@ export function exportSnapshot(
 			utimesSync(manifest, lastUse, lastUse);
 			exported.push(entry);
 			bytes += entry.bytes;
+			breakdown[category] += entry.bytes;
 		}
 	};
+	const allBakes = readBakes(root);
+	const bakeCutoff = (allBakes[0]?.mtimeMs ?? 0) - RETENTION_MS;
 	const bakes: Array<Bake> = [];
-	for (const bake of readBakes(root)) {
-		if (usedSinceMs !== undefined && bake.mtimeMs < usedSinceMs) continue;
+	for (const bake of allBakes) {
 		const source = path.join(root, BAKES, bake.directory);
 		const sizes = bake.files.map((name) => statSync(path.join(source, name)).size);
 		const size = sizes.reduce((total, fileSize) => total + fileSize, 0);
+		if (leftToShared(path.join(BAKES, bake.directory), true)) {
+			leftBytes += size;
+			continue;
+		}
+		// The shared snapshot keeps bakes other jobs of its lane read; a line only its own.
+		if (part === "line" ? !used(bake.mtimeMs) : bake.mtimeMs < bakeCutoff) continue;
 		if (bytes + size > maxBytes) continue;
 		const destination = path.join(directory, BAKES, bake.directory);
 		const files = bake.files.map((name, index) => {
@@ -423,64 +491,89 @@ export function exportSnapshot(
 		});
 		bakes.push({ directory: bake.directory, mtimeMs: bake.mtimeMs, files });
 		bytes += size;
+		breakdown.bakes += size;
 	}
 	if (bakes.length > 0) {
 		mkdirSync(directory, { recursive: true });
 		writeFileSync(path.join(directory, BAKES_MANIFEST), JSON.stringify(bakes));
 	}
-	exportActions(entries.filter(used));
-	const thinLtoFiles = readThinLtoFiles(root);
-	const thinLtoCutoff = (thinLtoFiles[0]?.mtimeMs ?? 0) - RETENTION_MS;
+	exportActions(
+		entries.filter((entry) => used(entry.mtimeMs)),
+		"used",
+	);
 	const thinLto: Array<ThinLtoEntry> = [];
-	for (const file of thinLtoFiles) {
-		if (file.mtimeMs < thinLtoCutoff || bytes + file.size > maxBytes) continue;
-		const source = path.join(root, THINLTO, file.file);
-		const destination = path.join(directory, THINLTO, file.file);
-		copyAtomically(source, destination);
-		const lastUse = new Date(file.mtimeMs);
-		utimesSync(destination, lastUse, lastUse);
-		thinLto.push({ ...file, digest: hash("sha256", readFileSync(destination), "hex") });
-		bytes += file.size;
+	if (part === "line") {
+		const thinLtoFiles = readThinLtoFiles(root);
+		const thinLtoCutoff = (thinLtoFiles[0]?.mtimeMs ?? 0) - RETENTION_MS;
+		for (const file of thinLtoFiles) {
+			if (file.mtimeMs < thinLtoCutoff || bytes + file.size > maxBytes) continue;
+			const source = path.join(root, THINLTO, file.file);
+			const destination = path.join(directory, THINLTO, file.file);
+			copyAtomically(source, destination);
+			const lastUse = new Date(file.mtimeMs);
+			utimesSync(destination, lastUse, lastUse);
+			thinLto.push({ ...file, digest: hash("sha256", readFileSync(destination), "hex") });
+			bytes += file.size;
+			breakdown.thinLto += file.size;
+		}
+		if (thinLto.length > 0) {
+			mkdirSync(directory, { recursive: true });
+			writeFileSync(path.join(directory, THINLTO_MANIFEST), JSON.stringify(thinLto));
+		}
 	}
-	if (thinLto.length > 0) {
-		mkdirSync(directory, { recursive: true });
-		writeFileSync(path.join(directory, THINLTO_MANIFEST), JSON.stringify(thinLto));
-	}
-	exportActions(entries.filter((entry) => !used(entry)));
+	exportActions(
+		entries.filter((entry) => !used(entry.mtimeMs)),
+		"older",
+	);
 	const digest =
 		exported.length + thinLto.length + bakes.length === 0
 			? ""
 			: snapshotDigest(exported, thinLto, bakes);
 	console.log(
-		`[ci-native-cache] exported ${exported.length} actions, ${bakes.length} compiler bakes and ${thinLto.length} ThinLTO entries (${(bytes / 1024 ** 2).toFixed(1)} MiB) to ${directory}${digest === "" ? "" : ` · ${digest}`}`,
+		`[ci-native-cache] exported ${exported.length} actions, ${bakes.length} compiler bakes and ${thinLto.length} ThinLTO entries (${mebibytes(bytes)} of ${mebibytes(maxBytes)}) to the ${part === "shared" ? "shared" : "job"} snapshot ${directory}${digest === "" ? "" : ` · ${digest}`}`,
+	);
+	console.log(
+		`[ci-native-cache] actions this job read ${mebibytes(breakdown.used)}, older actions ${mebibytes(breakdown.older)}, bakes ${mebibytes(breakdown.bakes)}, ThinLTO ${mebibytes(breakdown.thinLto)}${part === "line" ? `, left to the shared snapshot ${mebibytes(leftBytes)}` : ""}`,
 	);
 	appendGitHubFile(process.env.GITHUB_OUTPUT, `digest=${digest}`);
 }
 
 function main(): void {
-	const [command, directory, ...rest] = process.argv.slice(2);
+	const [command, directory, ...flags] = process.argv.slice(2);
 	if (command === "-h" || command === "--help") {
 		console.log(usage);
 		process.exit(0);
 	}
-	if (
-		(command !== "import" && command !== "export") ||
-		directory === undefined ||
-		rest.length > 0
-	) {
+	if ((command !== "import" && command !== "export") || directory === undefined) {
 		console.error(usage);
 		process.exit(1);
 	}
 	const root = maligatorCacheDirectory();
-	if (command === "import") importSnapshot(path.resolve(directory), root);
-	else {
+	const snapshot = path.resolve(directory);
+	if (command === "import" && flags.length === 0) importSnapshot(snapshot, root);
+	else if (command === "import" && flags.join(" ") === "--shared")
+		importSnapshot(snapshot, root, "shared");
+	else if (command === "export") {
 		const importedAt = Number(process.env.MALIGATOR_NATIVE_CACHE_IMPORTED_AT);
-		exportSnapshot(
-			path.resolve(directory),
-			root,
-			MAX_BYTES,
-			Number.isFinite(importedAt) && importedAt > 0 ? importedAt : undefined,
-		);
+		const usedSinceMs =
+			Number.isFinite(importedAt) && importedAt > 0 ? importedAt : undefined;
+		if (flags.join(" ") === "--shared")
+			exportSnapshot(snapshot, root, { part: "shared", usedSinceMs });
+		else if (flags.join(" ") === "--without-shared")
+			exportSnapshot(snapshot, root, { usedSinceMs, withoutShared: "all" });
+		else if (flags.length === 2 && flags[0] === "--without")
+			exportSnapshot(snapshot, root, {
+				usedSinceMs,
+				withoutShared: snapshotContents(path.resolve(flags[1]!)),
+			});
+		else if (flags.length === 0) exportSnapshot(snapshot, root, { usedSinceMs });
+		else {
+			console.error(usage);
+			process.exit(1);
+		}
+	} else {
+		console.error(usage);
+		process.exit(1);
 	}
 }
 
