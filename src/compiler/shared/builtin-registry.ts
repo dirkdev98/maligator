@@ -26,37 +26,51 @@ export interface LiteralPrototypeMethod {
 	readonly semantics: ReturnType<typeof builtinInvocationSummary>;
 }
 
-export const literalPrototypeMethods: ReadonlyArray<LiteralPrototypeMethod> =
-	literalPrimordialBindings.map(([receiver, key, prototype, id, owner]) => ({
-		receiver: receiver as LiteralReceiverKind,
-		key: key === null ? Symbol.iterator : key,
-		prototype,
-		id,
-		semantics: builtinInvocationSummary(owner, key ?? "Symbol.iterator"),
-	}));
+let literalMethods:
+	| {
+			readonly methods: ReadonlyArray<LiteralPrototypeMethod>;
+			readonly indices: ReadonlyMap<
+				LiteralReceiverKind,
+				Map<LiteralPrototypeKey, number>
+			>;
+	  }
+	| undefined;
 
-const literalMethodIndices = new Map<
-	LiteralReceiverKind,
-	Map<LiteralPrototypeKey, number>
->();
-for (let index = 0; index < literalPrototypeMethods.length; index++) {
-	const method = literalPrototypeMethods[index]!;
-	let indices = literalMethodIndices.get(method.receiver);
-	if (indices === undefined) {
-		indices = new Map();
-		literalMethodIndices.set(method.receiver, indices);
+/** Built on first use: summarising every literal method's semantics is startup work. */
+function literalMethodTable(): NonNullable<typeof literalMethods> {
+	if (literalMethods !== undefined) return literalMethods;
+	const methods = literalPrimordialBindings.map(
+		([receiver, key, prototype, id, owner]): LiteralPrototypeMethod => ({
+			receiver: receiver as LiteralReceiverKind,
+			key: key === null ? Symbol.iterator : key,
+			prototype,
+			id,
+			semantics: builtinInvocationSummary(owner, key ?? "Symbol.iterator"),
+		}),
+	);
+	const indices = new Map<LiteralReceiverKind, Map<LiteralPrototypeKey, number>>();
+	for (let index = 0; index < methods.length; index++) {
+		const method = methods[index]!;
+		let receiverIndices = indices.get(method.receiver);
+		if (receiverIndices === undefined) {
+			receiverIndices = new Map();
+			indices.set(method.receiver, receiverIndices);
+		}
+		receiverIndices.set(method.key, index);
 	}
-	indices.set(method.key, index);
+	return (literalMethods = { methods, indices });
+}
+
+export function literalPrototypeMethods(): ReadonlyArray<LiteralPrototypeMethod> {
+	return literalMethodTable().methods;
 }
 
 export function literalPrototypeMethodIndex(
 	receiver: LiteralReceiverKind,
 	key: LiteralPrototypeKey,
 ): number | undefined {
-	return (
-		literalMethodIndices.get(receiver)?.get(key) ??
-		literalMethodIndices.get("object")?.get(key)
-	);
+	const { indices } = literalMethodTable();
+	return indices.get(receiver)?.get(key) ?? indices.get("object")?.get(key);
 }
 
 export type BuiltinFeature =

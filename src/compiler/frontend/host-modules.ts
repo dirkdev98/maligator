@@ -48,22 +48,7 @@ export interface HostModuleSpec {
  * host-module layer.
  */
 export function hostInstallerSymbol(specifier: string): string {
-	let suffix = "";
-	let separator = false;
-	for (const char of specifier) {
-		const alphanumeric =
-			(char >= "a" && char <= "z") ||
-			(char >= "A" && char <= "Z") ||
-			(char >= "0" && char <= "9");
-		if (alphanumeric) {
-			suffix += char;
-			separator = false;
-		} else if (!separator) {
-			suffix += "_";
-			separator = true;
-		}
-	}
-	return `mal_host_install_${suffix}`;
+	return `mal_host_install_${specifier.replaceAll(/[^A-Za-z0-9]+/g, "_")}`;
 }
 
 /**

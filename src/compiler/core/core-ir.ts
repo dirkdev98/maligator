@@ -476,10 +476,27 @@ function validateAttributeRelocations(descriptor: CoreOpcodeDefinition): void {
 export class CoreOpcodeRegistry {
 	readonly #descriptors = new Map<string, CoreOpcodeDescriptor>();
 	readonly #descriptorsById: Array<CoreOpcodeDescriptor> = [];
+	#pendingDefinitions: ((registry: CoreOpcodeRegistry) => void) | undefined;
+
+	/**
+	 * `definitions` run before the first use of the registry, so a process that
+	 * never compiles does not build and validate every opcode at startup.
+	 */
+	constructor(definitions?: (registry: CoreOpcodeRegistry) => void) {
+		this.#pendingDefinitions = definitions;
+	}
+
+	#define(): void {
+		const definitions = this.#pendingDefinitions;
+		if (definitions === undefined) return;
+		this.#pendingDefinitions = undefined;
+		definitions(this);
+	}
 
 	define<const Name extends string>(
 		descriptor: CoreOpcodeDefinition<Name>,
 	): CoreOpcodeDescriptor<Name> {
+		this.#define();
 		if (descriptor.opcode.length === 0) throw new Error("Core opcode cannot be empty");
 		if (this.#descriptors.has(descriptor.opcode)) {
 			throw new Error(`Duplicate Core opcode ${descriptor.opcode}`);
@@ -535,6 +552,7 @@ export class CoreOpcodeRegistry {
 	}
 
 	get(opcode: string): CoreOpcodeDescriptor | undefined {
+		this.#define();
 		return this.#descriptors.get(opcode);
 	}
 
@@ -545,6 +563,7 @@ export class CoreOpcodeRegistry {
 	}
 
 	byId(id: CoreOpcodeId): CoreOpcodeDescriptor {
+		this.#define();
 		const descriptor = this.#descriptorsById[id];
 		if (descriptor === undefined || descriptor.id !== id) {
 			throw new Error(`Unknown Core opcode id ${id}`);
@@ -553,6 +572,7 @@ export class CoreOpcodeRegistry {
 	}
 
 	entries(): ReadonlyArray<CoreOpcodeDescriptor> {
+		this.#define();
 		return [...this.#descriptorsById];
 	}
 }

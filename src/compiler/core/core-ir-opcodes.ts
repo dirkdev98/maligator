@@ -806,29 +806,30 @@ function effectsFor(opcode: CoreOpcode): CoreInstructionEffects {
 	};
 }
 
-export const coreOpcodeRegistry = new CoreOpcodeRegistry();
-for (const opcode of CORE_OPCODES) {
-	const outputs = NO_OUTPUT.has(opcode) ? 0 : TWO_OUTPUTS.has(opcode) ? 2 : 1;
-	const [minimumInputs, maximumInputs] = INPUT_ARITIES[opcode];
-	const accesses = opcodeAccesses(opcode);
-	const allocation = opcodeAllocation(opcode);
-	const callTransfer = opcodeCallTransfer(opcode);
-	coreOpcodeRegistry.define({
-		opcode,
-		inputs: coreArity(minimumInputs, maximumInputs),
-		outputs: coreArity(outputs),
-		effects: effectsFor(opcode),
-		discardable: DISCARDABLE.has(opcode),
-		attributeRelocations: [],
-		...(accesses.length === 0 ? {} : { accesses }),
-		...(allocation === undefined ? {} : { allocation }),
-		...(callTransfer === undefined ? {} : { callTransfer }),
-		...(OBSERVES_OPERANDS.has(opcode) ? { observesOperands: true } : {}),
-		...(RESULT_CANNOT_BE_HELD_WEAKLY.has(opcode)
-			? { resultCannotBeHeldWeakly: true }
-			: {}),
-	});
-}
+export const coreOpcodeRegistry = new CoreOpcodeRegistry((registry) => {
+	for (const opcode of CORE_OPCODES) {
+		const outputs = NO_OUTPUT.has(opcode) ? 0 : TWO_OUTPUTS.has(opcode) ? 2 : 1;
+		const [minimumInputs, maximumInputs] = INPUT_ARITIES[opcode];
+		const accesses = opcodeAccesses(opcode);
+		const allocation = opcodeAllocation(opcode);
+		const callTransfer = opcodeCallTransfer(opcode);
+		registry.define({
+			opcode,
+			inputs: coreArity(minimumInputs, maximumInputs),
+			outputs: coreArity(outputs),
+			effects: effectsFor(opcode),
+			discardable: DISCARDABLE.has(opcode),
+			attributeRelocations: [],
+			...(accesses.length === 0 ? {} : { accesses }),
+			...(allocation === undefined ? {} : { allocation }),
+			...(callTransfer === undefined ? {} : { callTransfer }),
+			...(OBSERVES_OPERANDS.has(opcode) ? { observesOperands: true } : {}),
+			...(RESULT_CANNOT_BE_HELD_WEAKLY.has(opcode)
+				? { resultCannotBeHeldWeakly: true }
+				: {}),
+		});
+	}
+});
 
 /**
  * Effects an instruction actually has: its opcode's baseline, narrowed by a

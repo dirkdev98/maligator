@@ -115,8 +115,17 @@ function createCoreTargetOperationContracts(
 	);
 }
 
-export const coreTargetOperationContracts =
-	createCoreTargetOperationContracts(coreOpcodeRegistry);
+let targetOperationContracts:
+	| ReturnType<typeof createCoreTargetOperationContracts>
+	| undefined;
+
+/** Derived on first use, like the opcode registry it reads. */
+export function coreTargetOperationContracts(): ReturnType<
+	typeof createCoreTargetOperationContracts
+> {
+	return (targetOperationContracts ??=
+		createCoreTargetOperationContracts(coreOpcodeRegistry));
+}
 
 export function verifyCoreTargetOperationContracts(
 	registry: CoreOpcodeRegistry = coreOpcodeRegistry,
@@ -130,7 +139,7 @@ export function requireCoreTargetOperationContract(
 	if (!isCoreOpcode(opcode)) {
 		throw new Error(`Core target contract has no lowering for ${opcode}`);
 	}
-	return coreTargetOperationContracts.get(opcode)!;
+	return coreTargetOperationContracts().get(opcode)!;
 }
 
 /** A typed entry whose ABI supplies its arguments reads them by copying parameters. */

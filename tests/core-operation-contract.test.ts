@@ -48,18 +48,18 @@ describe("Core target operation contract", () => {
 		});
 	});
 	it("publishes lowering, representation, and safepoint ownership for every Core opcode", () => {
-		expect([...coreTargetOperationContracts.keys()]).toEqual(CORE_OPCODES);
-		expect(coreTargetOperationContracts.get("createF64")).toMatchObject({
+		expect([...coreTargetOperationContracts().keys()]).toEqual(CORE_OPCODES);
+		expect(coreTargetOperationContracts().get("createF64")).toMatchObject({
 			targetType: "createF64",
 			outputCount: 1,
 			representation: "core-value-register",
 			safepoint: "instruction-effects",
 		});
-		expect(coreTargetOperationContracts.get("asyncStart")).toMatchObject({
+		expect(coreTargetOperationContracts().get("asyncStart")).toMatchObject({
 			outputCount: 0,
 			representation: "none",
 		});
-		expect(coreTargetOperationContracts.get("rootUse")).toMatchObject({
+		expect(coreTargetOperationContracts().get("rootUse")).toMatchObject({
 			targetType: "rootUse",
 			outputCount: 0,
 			representation: "none",

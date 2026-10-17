@@ -117,7 +117,7 @@ export function inspectStaticValueFunctions(
 					structure: {
 						operations: fn.instructions.flatMap((instruction) =>
 							instruction.opcode === "CALL_KNOWN"
-								? literalPrototypeMethods
+								? literalPrototypeMethods()
 										.filter((method) => method.id === instruction.operation)
 										.slice(0, 1)
 								: [],

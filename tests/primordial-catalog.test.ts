@@ -492,7 +492,7 @@ describe("shared primordial catalog and coverage obligations", () => {
 		).toBeUndefined();
 	});
 	it("retains the literal surface and all exact builtin identities", () => {
-		expect(literalPrototypeMethods).toHaveLength(117);
+		expect(literalPrototypeMethods()).toHaveLength(117);
 		for (const operation of Object.keys(exactBuiltinCallDescriptors)) {
 			const dot = operation.lastIndexOf(".");
 			expect(
