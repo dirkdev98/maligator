@@ -12,18 +12,24 @@ export function runSemanticAnalysisForGraph(graph: ModuleGraph): SemanticProgram
 	};
 
 	// Host built-ins and modules owned by earlier images carry no user source — the
-	// linker binds their exports from an interface — so they are not analyzed.
+	// linker binds their exports from an interface — so they are not analyzed, and
+	// neither is a module that failed to load, whose `import()` only rejects.
 	const analyzed = new Set<string>();
 	for (const modulePath of graph.evaluationOrder) {
 		const record = graph.modules.get(modulePath)!;
-		if (record.host || record.external) {
+		if (record.host || record.external || record.loadError !== undefined) {
 			continue;
 		}
 		program.files.push(analyzeModuleRecord(record));
 		analyzed.add(modulePath);
 	}
 	for (const [modulePath, record] of graph.modules) {
-		if (record.host || record.external || analyzed.has(modulePath)) {
+		if (
+			record.host ||
+			record.external ||
+			record.loadError !== undefined ||
+			analyzed.has(modulePath)
+		) {
 			continue;
 		}
 		program.files.push(analyzeModuleRecord(record));

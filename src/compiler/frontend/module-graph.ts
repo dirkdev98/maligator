@@ -16,6 +16,7 @@ import {
 	lookupHostModule,
 	supportedHostModuleIds,
 } from "./host-modules.ts";
+import { staticModuleClosure } from "./module-closure.ts";
 import { parseModule, parseScript } from "./parser.ts";
 import type { SemanticFile } from "./semantic-analysis.ts";
 import { SyntaxDiagnostic } from "./syntax-diagnostic.ts";
@@ -98,6 +99,12 @@ export interface ModuleRecord {
 	 * loader resolves against that image's published exports.
 	 */
 	external?: ExternalModuleInterface;
+	/**
+	 * Why the module could not be loaded. Only a module the entry reaches through
+	 * `import()` keeps one: importing it rejects with this error at run time, while a
+	 * static import of it fails the build.
+	 */
+	loadError?: SyntaxDiagnostic;
 }
 
 /** The linkable surface an earlier image publishes for one of its modules. */
@@ -366,168 +373,195 @@ export function buildModuleGraph(
 		}
 
 		const source = sourceOverride ?? readFileSync(filePath, "utf-8");
-		const sourcePath = catalogSources.get(filePath)?.sourcePath;
-		let parseSource = blankHashbang(source);
-		if (path.extname(filePath) === ".json") {
-			// Validate with the JSON grammar now, then parse a CommonJS wrapper that
-			// preserves JSON.parse semantics for keys such as "__proto__".
-			try {
-				JSON.parse(source);
-			} catch (error) {
-				if (error instanceof SyntaxError) {
-					throw new SyntaxDiagnostic(
-						filePath === entry ? "parse" : "resolution",
-						error.message,
-						{ cause: error },
-					);
-				}
-				throw error;
-			}
-			parseSource = `module.exports = JSON.parse(${JSON.stringify(source)});`;
-		}
-		if (TS_EXTENSIONS.has(path.extname(sourcePath ?? filePath))) {
-			if (!options.stripTypes) {
-				throw new Error(
-					`TypeScript module '${filePath}' requires BuildModuleGraphOptions.stripTypes`,
-				);
-			}
-			parseSource = options.stripTypes(parseSource, sourcePath ?? filePath);
-		}
-		if (filePath === entry && options.entryPrelude !== undefined) {
-			const specifier = JSON.stringify(options.entryPrelude.specifier);
-			parseSource =
-				goal === "cjs"
-					? `require(${specifier});\n${parseSource}`
-					: `import ${specifier};\n${parseSource}`;
-		}
-		parseSource = options.transformSource?.(parseSource, filePath) ?? parseSource;
-		const strict = filePath === entry ? (options.entryStrict ?? true) : true;
-		const parse = () => {
-			try {
-				const parsed = parseWithGoal(parseSource, goal, strict);
-				return { parsed, dependencies: extractDependencies(parsed.ast, goal) };
-			} catch (error) {
-				if (error instanceof SyntaxError) {
-					throw new SyntaxDiagnostic(
-						filePath === entry ? "parse" : "resolution",
-						error.message,
-						{ cause: error },
-					);
-				}
-				throw error;
-			}
+		let analyzed: {
+			sourcePath: string | undefined;
+			parsed: ModuleRecord["parsed"];
+			dependencies: Array<ModuleDependency>;
 		};
-		const parsedModule =
-			options.parseCache?.parse(filePath, parseSource, goal, parse, strict) ?? parse();
-		const parsed = parsedModule.parsed;
-
-		const dependencies = parsedModule.dependencies.map((dependency): ModuleDependency => {
-			if (dependency.specifier === null) {
-				// A computed import/require cannot be resolved while building the
-				// graph. Preserve the edge for later lowering/runtime handling.
-				return { ...dependency, resolvedPath: null };
-			}
-			const aliasedSpecifier =
-				options.buildConfig?.modules.aliases[dependency.specifier] ??
-				dependency.specifier;
-			const platform = lookupPlatformModule(aliasedSpecifier);
-			const catalogOwned =
-				lookupPlatformModule(filePath)?.kind === "source" ||
-				PLATFORM_MODULES.some(
-					(platformModule) =>
-						(platformModule.kind === "source" &&
-							path.resolve(sourceRoot, platformModule.sourceFile) === filePath) ||
-						platformModule.exports.some((entry) => {
-							const workerSource = (entry.contract as { workerSource?: string })
-								.workerSource;
-							return (
-								workerSource !== undefined &&
-								path.resolve(sourceRoot, workerSource) === filePath
+		try {
+			analyzed = (() => {
+				const sourcePath = catalogSources.get(filePath)?.sourcePath;
+				let parseSource = blankHashbang(source);
+				if (path.extname(filePath) === ".json") {
+					// Validate with the JSON grammar now, then parse a CommonJS wrapper that
+					// preserves JSON.parse semantics for keys such as "__proto__".
+					try {
+						JSON.parse(source);
+					} catch (error) {
+						if (error instanceof SyntaxError) {
+							throw new SyntaxDiagnostic(
+								filePath === entry ? "parse" : "resolution",
+								error.message,
+								{ cause: error },
 							);
-						}),
-				);
-			if (
-				(platform as { internal?: boolean } | undefined)?.internal === true &&
-				!catalogOwned
-			) {
-				throw new SyntaxDiagnostic(
-					"resolution",
-					`Internal module '${dependency.specifier}' is reserved for platform sources`,
-				);
-			}
-			// A toolchain module an earlier image owns keeps its specifier identity.
-			if (options.externalModules?.has(aliasedSpecifier)) {
-				return { ...dependency, resolvedPath: aliasedSpecifier };
-			}
-			const toolchainModule = virtualModule(aliasedSpecifier);
-			if (toolchainModule !== undefined) {
-				const entryPreludeRequire =
-					dependency.kind === "require" &&
-					dependency.specifier === options.entryPrelude?.specifier;
-				if (
-					(dependency.kind === "dynamic" &&
-						!(
-							toolchainModule.platform &&
-							lookupPlatformModule(aliasedSpecifier)?.kind === "source"
-						)) ||
-					(dependency.kind === "require" && !entryPreludeRequire)
-				) {
-					throw new SyntaxDiagnostic(
-						"resolution",
-						`Toolchain module '${dependency.specifier}' supports static ESM imports only`,
-					);
+						}
+						throw error;
+					}
+					parseSource = `module.exports = JSON.parse(${JSON.stringify(source)});`;
 				}
-				return { ...dependency, resolvedPath: aliasedSpecifier };
-			}
-			const canonicalHostId = canonicalNodeHostModuleId(aliasedSpecifier);
-			const canonicalBuiltinId = canonicalNodeBuiltinId(aliasedSpecifier);
-			const resolved = resolveSpecifier(
-				canonicalHostId ?? canonicalBuiltinId ?? aliasedSpecifier,
-				sourcePath ?? filePath,
-				{
-					...ctx,
-					conditions: exportConditions(
-						ctx.nodeEnabled,
-						dependency.kind === "require" ? "require" : "import",
-					),
-				},
-			);
-			if ("host" in resolved) {
-				// A supported `node:*` built-in: identity is its canonical specifier.
-				return { ...dependency, resolvedPath: resolved.host.id };
-			}
-			if ("error" in resolved) {
-				// A `node:*` error (surface disabled / unknown built-in) is `hard`: it
-				// rejects even a literal dynamic import rather than silently deferring,
-				// so an unsupported host import fails loudly at build time. A plain
-				// dynamic resolution failure (missing file) still defers to the graph.
-				if (dependency.kind === "dynamic" && !resolved.hard) {
-					return { ...dependency, resolvedPath: null };
+				if (TS_EXTENSIONS.has(path.extname(sourcePath ?? filePath))) {
+					if (!options.stripTypes) {
+						throw new Error(
+							`TypeScript module '${filePath}' requires BuildModuleGraphOptions.stripTypes`,
+						);
+					}
+					parseSource = options.stripTypes(parseSource, sourcePath ?? filePath);
 				}
-				if (
-					dependency.kind === "require" &&
-					dependency.catchableMissing &&
-					!resolved.hard
-				) {
-					return { ...dependency, resolvedPath: null };
+				if (filePath === entry && options.entryPrelude !== undefined) {
+					const specifier = JSON.stringify(options.entryPrelude.specifier);
+					parseSource =
+						goal === "cjs"
+							? `require(${specifier});\n${parseSource}`
+							: `import ${specifier};\n${parseSource}`;
 				}
-				// A static import that cannot resolve fails the graph — the
-				// resolution-phase SyntaxError of 16.2.1.6.1.
-				throw new SyntaxDiagnostic(
-					"resolution",
-					`Cannot resolve '${dependency.specifier}' from ${filePath}: ${resolved.error}`,
-				);
-			}
+				parseSource = options.transformSource?.(parseSource, filePath) ?? parseSource;
+				const strict = filePath === entry ? (options.entryStrict ?? true) : true;
+				const parse = () => {
+					try {
+						const parsed = parseWithGoal(parseSource, goal, strict);
+						return { parsed, dependencies: extractDependencies(parsed.ast, goal) };
+					} catch (error) {
+						if (error instanceof SyntaxError) {
+							throw new SyntaxDiagnostic(
+								filePath === entry ? "parse" : "resolution",
+								error.message,
+								{ cause: error },
+							);
+						}
+						throw error;
+					}
+				};
+				const parsedModule =
+					options.parseCache?.parse(filePath, parseSource, goal, parse, strict) ??
+					parse();
+				const parsed = parsedModule.parsed;
 
-			const catalogSource = PLATFORM_MODULES.find(
-				(module) =>
-					module.kind === "source" &&
-					module.id !== "maligator:test" &&
-					path.resolve(sourceRoot, module.sourceFile) === resolved.path,
-			);
-			if (catalogSource !== undefined) virtualModule(catalogSource.id);
-			return { ...dependency, resolvedPath: catalogSource?.id ?? resolved.path };
-		});
+				const dependencies = parsedModule.dependencies.map(
+					(dependency): ModuleDependency => {
+						if (dependency.specifier === null) {
+							// A computed import/require cannot be resolved while building the
+							// graph. Preserve the edge for later lowering/runtime handling.
+							return { ...dependency, resolvedPath: null };
+						}
+						const aliasedSpecifier =
+							options.buildConfig?.modules.aliases[dependency.specifier] ??
+							dependency.specifier;
+						const platform = lookupPlatformModule(aliasedSpecifier);
+						const catalogOwned =
+							lookupPlatformModule(filePath)?.kind === "source" ||
+							PLATFORM_MODULES.some(
+								(platformModule) =>
+									(platformModule.kind === "source" &&
+										path.resolve(sourceRoot, platformModule.sourceFile) === filePath) ||
+									platformModule.exports.some((entry) => {
+										const workerSource = (entry.contract as { workerSource?: string })
+											.workerSource;
+										return (
+											workerSource !== undefined &&
+											path.resolve(sourceRoot, workerSource) === filePath
+										);
+									}),
+							);
+						if (
+							(platform as { internal?: boolean } | undefined)?.internal === true &&
+							!catalogOwned
+						) {
+							throw new SyntaxDiagnostic(
+								"resolution",
+								`Internal module '${dependency.specifier}' is reserved for platform sources`,
+							);
+						}
+						// A toolchain module an earlier image owns keeps its specifier identity.
+						if (options.externalModules?.has(aliasedSpecifier)) {
+							return { ...dependency, resolvedPath: aliasedSpecifier };
+						}
+						const toolchainModule = virtualModule(aliasedSpecifier);
+						if (toolchainModule !== undefined) {
+							const entryPreludeRequire =
+								dependency.kind === "require" &&
+								dependency.specifier === options.entryPrelude?.specifier;
+							if (
+								(dependency.kind === "dynamic" &&
+									!(
+										toolchainModule.platform &&
+										lookupPlatformModule(aliasedSpecifier)?.kind === "source"
+									)) ||
+								(dependency.kind === "require" && !entryPreludeRequire)
+							) {
+								throw new SyntaxDiagnostic(
+									"resolution",
+									`Toolchain module '${dependency.specifier}' supports static ESM imports only`,
+								);
+							}
+							return { ...dependency, resolvedPath: aliasedSpecifier };
+						}
+						const canonicalHostId = canonicalNodeHostModuleId(aliasedSpecifier);
+						const canonicalBuiltinId = canonicalNodeBuiltinId(aliasedSpecifier);
+						const resolved = resolveSpecifier(
+							canonicalHostId ?? canonicalBuiltinId ?? aliasedSpecifier,
+							sourcePath ?? filePath,
+							{
+								...ctx,
+								conditions: exportConditions(
+									ctx.nodeEnabled,
+									dependency.kind === "require" ? "require" : "import",
+								),
+							},
+						);
+						if ("host" in resolved) {
+							// A supported `node:*` built-in: identity is its canonical specifier.
+							return { ...dependency, resolvedPath: resolved.host.id };
+						}
+						if ("error" in resolved) {
+							// A `node:*` error (surface disabled / unknown built-in) is `hard`: it
+							// rejects even a literal dynamic import rather than silently deferring,
+							// so an unsupported host import fails loudly at build time. A plain
+							// dynamic resolution failure (missing file) still defers to the graph.
+							if (dependency.kind === "dynamic" && !resolved.hard) {
+								return { ...dependency, resolvedPath: null };
+							}
+							if (
+								dependency.kind === "require" &&
+								dependency.catchableMissing &&
+								!resolved.hard
+							) {
+								return { ...dependency, resolvedPath: null };
+							}
+							// A static import that cannot resolve fails the graph — the
+							// resolution-phase SyntaxError of 16.2.1.6.1.
+							throw new SyntaxDiagnostic(
+								"resolution",
+								`Cannot resolve '${dependency.specifier}' from ${filePath}: ${resolved.error}`,
+							);
+						}
+
+						const catalogSource = PLATFORM_MODULES.find(
+							(module) =>
+								module.kind === "source" &&
+								module.id !== "maligator:test" &&
+								path.resolve(sourceRoot, module.sourceFile) === resolved.path,
+						);
+						if (catalogSource !== undefined) virtualModule(catalogSource.id);
+						return { ...dependency, resolvedPath: catalogSource?.id ?? resolved.path };
+					},
+				);
+				return { sourcePath, parsed, dependencies };
+			})();
+		} catch (error) {
+			// A module the entry reaches only through `import()` fails when that import
+			// runs; the check after loading fails the build for one it imports statically.
+			if (filePath === entry || !(error instanceof SyntaxDiagnostic)) throw error;
+			modules.set(filePath, {
+				path: filePath,
+				goal,
+				source,
+				parsed: parseWithGoal("", goal, true),
+				dependencies: [],
+				loadError: error,
+			});
+			return;
+		}
+		const { sourcePath, parsed, dependencies } = analyzed;
 
 		// Record before recursing so a cyclic back-import finds this module and
 		// stops, rather than looping forever.
@@ -648,6 +682,11 @@ export function buildModuleGraph(
 			loaded = true;
 		}
 		if (!loaded) break;
+	}
+
+	for (const modulePath of staticModuleClosure(modules, entry)) {
+		const loadError = modules.get(modulePath)?.loadError;
+		if (loadError !== undefined) throw loadError;
 	}
 
 	return {

@@ -220,6 +220,9 @@ interface CoreFrontendContext {
 		}>
 	>;
 	moduleNamespaces: Map<string, Array<{ name: string; exporter: Binding }>>;
+	/** Modules whose `import()` rejects because they failed to load or link. */
+	failedModules: ReadonlyMap<string, SyntaxDiagnostic>;
+	failedModuleInitializers: Map<string, number>;
 	dynamicModuleStatusSlot: Map<string, number>;
 	moduleEvaluationErrorSlot: Map<string, number>;
 	moduleEvaluationRecordSlot: Map<string, number>;
@@ -852,6 +855,8 @@ export function constructSemanticProgramCore(
 		moduleDefaultBinding: new Map(),
 		namespaceImports: new Map(),
 		moduleNamespaces: new Map(),
+		failedModules: new Map(),
+		failedModuleInitializers: new Map(),
 		dynamicModuleStatusSlot: new Map(),
 		moduleEvaluationErrorSlot: new Map(),
 		moduleEvaluationRecordSlot: new Map(),
@@ -904,6 +909,7 @@ export function constructSemanticProgramCore(
 	for (const [path, exports] of linkage.moduleNamespaces) {
 		program.moduleNamespaces.set(path, exports);
 	}
+	program.failedModules = linkage.failedModules;
 	for (const [path, imports] of linkage.cjsImports) {
 		program.cjsImports.set(path, imports);
 	}
@@ -4522,11 +4528,21 @@ function emitThrowTypeError(
 	cursor: CoreFrontendCursor,
 	message: string,
 ): number {
+	return emitThrowError(program, fn, cursor, "TypeError", message);
+}
+
+function emitThrowError(
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
+	intrinsic: "TypeError" | "SyntaxError",
+	message: string,
+): number {
 	const constructor = nextCoreVariable(fn);
 	cursor.block.emitter.emit({
 		type: "loadIntrinsic",
 		registers: [constructor],
-		intrinsic: "TypeError",
+		intrinsic,
 	});
 	const messageRegister = compileStaticString(program, fn, cursor, message);
 	const error = nextCoreVariable(fn);
@@ -13145,19 +13161,17 @@ function dynamicImportCandidates(
 	const files = new Map(program.semantic.files.map((file) => [file.path, file]));
 	const candidates = new Map<string, DynamicImportCandidate>();
 	for (const targetPath of program.semantic.graph?.dynamicImportCandidates ?? []) {
-		const targetFile = files.get(targetPath);
-		if (targetFile === undefined) continue;
+		if (!files.has(targetPath) && !program.failedModules.has(targetPath)) continue;
 		for (const specifier of [targetPath, importMetaUrl(targetPath)]) {
 			candidates.set(`${specifier}\0${targetPath}`, { specifier, targetPath });
 		}
 	}
 	for (const dependency of record?.dependencies ?? []) {
-		const targetFile =
-			dependency.resolvedPath === null ? undefined : files.get(dependency.resolvedPath);
 		if (
 			dependency.kind !== "dynamic" ||
 			dependency.resolvedPath === null ||
-			targetFile === undefined
+			(!files.has(dependency.resolvedPath) &&
+				!program.failedModules.has(dependency.resolvedPath))
 		) {
 			continue;
 		}
@@ -13220,6 +13234,39 @@ function compileCjsDynamicInitializer(
 	return fn.functionIndex;
 }
 
+/**
+ * The initializer of a module that failed to load or link throws its SyntaxError, so
+ * `import()` rejects with it as with any evaluation error. It belongs to the importing
+ * file: a module that does not parse has no semantic file of its own.
+ */
+function compileFailedModuleInitializer(
+	program: CoreFrontendContext,
+	importer: SemanticFile,
+	modulePath: string,
+	failure: SyntaxDiagnostic,
+): number {
+	const existing = program.failedModuleInitializers.get(modulePath);
+	if (existing !== undefined) return existing;
+	const fn: CoreFrontendFunction = {
+		semanticFile: importer,
+		functionIndex: program.nextFunctionIndex,
+		nameStringIndex: getOrCreateStringConstant(program, ""),
+		blocks: [],
+		parameterCount: 0,
+		length: 0,
+		nextCoreVariable: 0,
+		nextLocalIndex: 0,
+		nextCapturedIndex: 0,
+	};
+	registerCoreFunction(program, fn);
+	program.failedModuleInitializers.set(modulePath, fn.functionIndex);
+	const block: CoreFrontendBlock = { emitter: unboundCoreEmitter };
+	fn.blocks.push(block);
+	emitThrowError(program, fn, { block }, "SyntaxError", failure.message);
+	endFunction(program, fn);
+	return fn.functionIndex;
+}
+
 function emitDynamicImportCall(
 	program: CoreFrontendContext,
 	fn: CoreFrontendFunction,
@@ -13229,14 +13276,19 @@ function emitDynamicImportCall(
 	candidates: ReadonlyArray<DynamicImportCandidate> = [],
 ): number {
 	const emitTarget = (path: string | undefined): Array<number> => {
-		const targetFile = path
-			? program.semantic.files.find((file) => file.path === path)
-			: undefined;
-		const targetInitIndex = targetFile?.commonjs
-			? compileCjsDynamicInitializer(program, targetFile)
-			: targetFile
-				? compileFileInit(program, targetFile)
-				: -1;
+		const failure = path === undefined ? undefined : program.failedModules.get(path);
+		const targetFile =
+			path && failure === undefined
+				? program.semantic.files.find((file) => file.path === path)
+				: undefined;
+		const targetInitIndex =
+			failure !== undefined
+				? compileFailedModuleInitializer(program, fn.semanticFile, path!, failure)
+				: targetFile?.commonjs
+					? compileCjsDynamicInitializer(program, targetFile)
+					: targetFile
+						? compileFileInit(program, targetFile)
+						: -1;
 		const namespaceExports = path ? program.moduleNamespaces.get(path) : undefined;
 		const initFn =
 			targetInitIndex >= 0 ? nextCoreVariable(fn) : compileUndefined(fn, cursor);

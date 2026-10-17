@@ -375,3 +375,42 @@ test("does not treat a locally-declared `process` as the host global", () => {
 	// `process` resolves to the top-level const, never an undeclared global.
 	expect(linkage.hostProcess).toBeUndefined();
 });
+
+test("defers load and link errors of modules reached only through import()", () => {
+	const root = tree({
+		"main.mjs": `import("./unparsable.mjs");\nimport("./ambiguous.mjs");\nimport("./importer.mjs");\n`,
+		"unparsable.mjs": `export const = 1;\n`,
+		"ambiguous.mjs": `export { x } from "./self-loop.mjs";\n`,
+		"self-loop.mjs": `export { x } from "./ambiguous.mjs";\n`,
+		"importer.mjs": `import "./unparsable.mjs";\nexport const fine = 1;\n`,
+	});
+
+	const linkage = linkModules(
+		loadEntrypointAndRunSemanticAnalysis(path.join(root, "main.mjs")),
+	);
+
+	expect(
+		[...linkage.failedModules.keys()].map((file) => path.basename(file)).sort(),
+	).toEqual(["ambiguous.mjs", "importer.mjs", "self-loop.mjs", "unparsable.mjs"]);
+	for (const failure of linkage.failedModules.values())
+		expect(failure).toBeInstanceOf(SyntaxError);
+});
+
+test("fails the build for a load or link error behind a static import", () => {
+	const unparsable = tree({
+		"main.mjs": `import("./importer.mjs");\nimport "./unparsable.mjs";\n`,
+		"importer.mjs": `import "./unparsable.mjs";\n`,
+		"unparsable.mjs": `export const = 1;\n`,
+	});
+	const unlinkable = tree({
+		"main.mjs": `import { x } from "./empty.mjs";\nglobalThis.sink = x;\n`,
+		"empty.mjs": `export const y = 1;\n`,
+	});
+
+	expect(() =>
+		loadEntrypointAndRunSemanticAnalysis(path.join(unparsable, "main.mjs")),
+	).toThrow(SyntaxError);
+	expect(() =>
+		linkModules(loadEntrypointAndRunSemanticAnalysis(path.join(unlinkable, "main.mjs"))),
+	).toThrow("does not export 'x'");
+});

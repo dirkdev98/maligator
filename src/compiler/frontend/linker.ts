@@ -4,6 +4,7 @@ import { detectCjsExports } from "./cjs-exports.ts";
 import type { CjsExportInfo } from "./cjs-exports.ts";
 import { traverseEstree } from "./estree-traversal.ts";
 import { BUFFER_INSTALLER_SYMBOL, PROCESS_INSTALLER_SYMBOL } from "./host-modules.ts";
+import { staticModuleClosure } from "./module-closure.ts";
 import type { Binding, SemanticFile, SemanticProgram } from "./semantic-analysis.ts";
 import { SyntaxDiagnostic } from "./syntax-diagnostic.ts";
 
@@ -103,6 +104,13 @@ export interface ModuleLinkage {
 
 	/** Statically detected `module.exports` names of a CommonJS module, sorted. */
 	commonJsExportNames: (modulePath: string) => ReadonlyArray<string>;
+
+	/**
+	 * Modules the entry reaches only through `import()` that cannot be loaded or
+	 * linked, with the SyntaxError an `import()` of them rejects with. They are not
+	 * compiled; a module the entry imports statically fails the build instead.
+	 */
+	failedModules: Map<string, SyntaxDiagnostic>;
 }
 
 type ExportEntry =
@@ -130,12 +138,23 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 		cjsImports: new Map(),
 		hostModules: [],
 		commonJsExportNames: () => [],
+		failedModules: new Map(),
 	};
 
 	const graph = program.graph;
 	if (!graph) {
 		return linkage;
 	}
+	const staticModules = staticModuleClosure(graph.modules, graph.entry);
+	for (const [modulePath, record] of graph.modules)
+		if (record.loadError !== undefined)
+			linkage.failedModules.set(modulePath, record.loadError);
+	const fail = (modulePath: string, diagnostic: SyntaxDiagnostic) => {
+		if (staticModules.has(modulePath)) throw diagnostic;
+		if (!linkage.failedModules.has(modulePath))
+			linkage.failedModules.set(modulePath, diagnostic);
+	};
+
 	// Note: we link even a single-module graph — a module can import itself
 	// (`export default x; import d from "./self"`), which still needs aliasing
 	// and default-binding synthesis.
@@ -590,16 +609,24 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 	for (const { file, binding, module, name } of importsToAlias) {
 		const exporter = resolveExport(module, name);
 		if (exporter === "ambiguous") {
-			throw new SyntaxDiagnostic(
-				"resolution",
-				`Linker: ambiguous import '${name}' from ${module} (imported by ${file.path})`,
+			fail(
+				file.path,
+				new SyntaxDiagnostic(
+					"resolution",
+					`Linker: ambiguous import '${name}' from ${module} (imported by ${file.path})`,
+				),
 			);
+			continue;
 		}
 		if (!exporter) {
-			throw new SyntaxDiagnostic(
-				"resolution",
-				`Linker: ${module} does not export '${name}' (imported by ${file.path})`,
+			fail(
+				file.path,
+				new SyntaxDiagnostic(
+					"resolution",
+					`Linker: ${module} does not export '${name}' (imported by ${file.path})`,
+				),
 			);
+			continue;
 		}
 		const writeTargets = writeTargetsFor(file);
 		for (const usage of binding.usageNodes) {
@@ -630,17 +657,41 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 			}
 			const resolved = resolveExport(entry.module, entry.name);
 			if (resolved === "ambiguous") {
-				throw new SyntaxDiagnostic(
-					"resolution",
-					`Linker: ambiguous re-export '${name}' from ${entry.module} (re-exported by ${modulePath})`,
+				fail(
+					modulePath,
+					new SyntaxDiagnostic(
+						"resolution",
+						`Linker: ambiguous re-export '${name}' from ${entry.module} (re-exported by ${modulePath})`,
+					),
+				);
+			} else if (resolved === null) {
+				fail(
+					modulePath,
+					new SyntaxDiagnostic(
+						"resolution",
+						`Linker: ${entry.module} does not export '${entry.name}' (re-exported by ${modulePath})`,
+					),
 				);
 			}
-			if (resolved === null) {
-				throw new SyntaxDiagnostic(
-					"resolution",
-					`Linker: ${entry.module} does not export '${entry.name}' (re-exported by ${modulePath})`,
-				);
-			}
+		}
+	}
+
+	// Linking a module links everything it imports statically, so a failure spreads
+	// to every importer, which by then is reached only through `import()` as well.
+	for (let spread = true; spread;) {
+		spread = false;
+		for (const [modulePath, record] of graph.modules) {
+			if (linkage.failedModules.has(modulePath)) continue;
+			const failed = record.dependencies.find(
+				(dependency) =>
+					dependency.resolvedPath !== null &&
+					dependency.kind !== "dynamic" &&
+					dependency.kind !== "worker" &&
+					linkage.failedModules.has(dependency.resolvedPath),
+			);
+			if (failed === undefined) continue;
+			fail(modulePath, linkage.failedModules.get(failed.resolvedPath!)!);
+			spread = true;
 		}
 	}
 
