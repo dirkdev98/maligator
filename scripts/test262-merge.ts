@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 
 type Verdict = "FAILED" | "PASSED" | "SKIPPED";
@@ -160,6 +161,7 @@ function main(): void {
 	const merged = mergeTest262ShardReports(
 		inputs.map((input) => JSON.parse(readFileSync(input, "utf8")) as unknown),
 	);
+	mkdirSync(path.dirname(output), { recursive: true });
 	writeFileSync(output, `${JSON.stringify(merged, null, 2)}\n`);
 	console.log(
 		`[test262-merge] ${inputs.length} shards, ${merged.selectedTests} tests, ${merged.regressions.length} regressions, ${merged.improvements.length} improvements: ${output}`,
