@@ -1678,29 +1678,30 @@ static MalValue mal_promise_try(MalVm *vm, MalValue this_value, const MalValue *
         return mal_value_new_undefined();
     }
 
-    MalValue cap_promise;
-    MalValue cap_resolve;
-    MalValue cap_reject;
-    if (!mal_promise_new_capability(vm, this_value, &cap_promise, &cap_resolve, &cap_reject)) {
-        return mal_value_new_undefined();
-    }
-
+    // The callback runs before any capability exists; a normal result goes through
+    // PromiseResolve, so a promise of this constructor is returned unwrapped.
     MalValue callback = arg_count >= 1 ? args[0] : mal_value_new_undefined();
     const MalValue *call_args = arg_count > 1 ? &args[1] : nullptr;
     i32 call_arg_count = arg_count > 1 ? arg_count - 1 : 0;
     MalCompletion result = mal_vm_call_value(vm, callback, mal_value_new_undefined(), call_args, call_arg_count);
-
-    if (result.kind == MAL_COMPLETION_THROW) {
-        MalValue error = result.value;
-        vm->completion = mal_promise_normal();
-        mal_vm_call_value(vm, cap_reject, mal_value_new_undefined(), &error, 1);
+    MalValue value = result.value;
+    MalRootSpan root;
+    mal_gc_root(&root, &value, 1);
+    MalValue promise = mal_value_new_undefined();
+    if (result.kind != MAL_COMPLETION_THROW) {
+        promise = mal_promise_resolve_static(
+            vm, this_value, &value, 1, mal_value_new_undefined(), mal_value_new_undefined());
     } else {
-        mal_vm_call_value(vm, cap_resolve, mal_value_new_undefined(), &result.value, 1);
+        vm->completion = mal_promise_normal();
+        MalValue cap_resolve;
+        MalValue cap_reject;
+        if (mal_promise_new_capability(vm, this_value, &promise, &cap_resolve, &cap_reject)) {
+            mal_vm_call_value(vm, cap_reject, mal_value_new_undefined(), &value, 1);
+        }
+        if (vm->completion.kind == MAL_COMPLETION_THROW) promise = mal_value_new_undefined();
     }
-    if (vm->completion.kind == MAL_COMPLETION_THROW) {
-        return mal_value_new_undefined();
-    }
-    return cap_promise;
+    mal_gc_unroot(&root);
+    return promise;
 }
 
 // --- allKeyed / allSettledKeyed (await-dictionary proposal) ------------------

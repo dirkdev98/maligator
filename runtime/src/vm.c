@@ -4871,10 +4871,7 @@ static MalCompletion mal_vm_construct_with_native_target(MalVm *vm, MalValue cal
         inline_args, countof(inline_args));
     MalCompletion completion = {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
 
-    // BoundFunctionCreate [[Construct]]: a new.target that is the bound function
-    // itself becomes the (unwrapped) target. This also yields new.target = the
-    // resolved constructor for the default `new callee()` case.
-    MalValue effective_new_target = new_target == callee ? resolution.callee : new_target;
+    MalValue effective_new_target = mal_bound_function_object_new_target(callee, new_target);
 
     // EvaluateNew's IsConstructor failure belongs to the caller's running
     // execution context. Validate before crossing into a stamped callee realm.

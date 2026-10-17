@@ -61,6 +61,15 @@ void mal_bound_function_object_init_metadata(
     mal_gc_card(&object->header, name);
 }
 
+MalValue mal_bound_function_object_new_target(MalValue callee, MalValue new_target) {
+    while (mal_value_is_bound_function_object(callee)) {
+        MalValue target = mal_value_to_bound_function_object(callee)->target;
+        if (new_target == callee) new_target = target;
+        callee = target;
+    }
+    return new_target;
+}
+
 MalBoundResolution mal_bound_function_object_resolve(
     MalValue callee,
     MalValue this_value,

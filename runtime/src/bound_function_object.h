@@ -74,3 +74,9 @@ MalBoundResolution mal_bound_function_object_resolve(
     MalValue *inline_args,
     i32 inline_capacity
 );
+
+/**
+ * The new.target that a bound chain's [[Construct]] forwards to its final target:
+ * each level whose bound function equals new.target replaces it with that level's target.
+ */
+MalValue mal_bound_function_object_new_target(MalValue callee, MalValue new_target);

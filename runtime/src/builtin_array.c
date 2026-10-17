@@ -1998,8 +1998,8 @@ static MalValue mal_builtin_array_includes(MalVm *vm, MalValue this_value, const
     if (!mal_builtin_array_to_object(vm, &this_value)) {
         return mal_value_new_undefined();
     }
-    u32 length;
-    if (!mal_builtin_array_this_length(vm, this_value, &length)) {
+    f64 length;
+    if (!mal_builtin_array_length_of_array_like(vm, this_value, &length)) {
         return mal_value_new_undefined();
     }
     // Spec returns false for an empty array *before* ToIntegerOrInfinity(fromIndex),
@@ -2007,19 +2007,19 @@ static MalValue mal_builtin_array_includes(MalVm *vm, MalValue this_value, const
     if (length == 0) {
         return mal_value_new_boolean(false);
     }
-    u32 start = arg_count >= 2 ? mal_builtin_array_clamp_relative(vm, args[1], 0, length) : 0;
+    f64 start = arg_count >= 2 ? mal_builtin_array_clamp_relative_wide(vm, args[1], 0, length) : 0;
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         return mal_value_new_undefined();
     }
 
     MalArrayObject *dense = mal_builtin_array_clean_dense(vm, this_value);
-    if (dense != nullptr && dense->length == length) {
+    if (dense != nullptr && (f64) dense->length == length) {
         if (mal_ops_is_number(search)) {
             return mal_value_new_boolean(
                 mal_builtin_array_dense_numeric_includes(
-                    dense, search, start));
+                    dense, search, (u32) start));
         }
-        for (u32 index = start; index < length; index++) {
+        for (u32 index = (u32) start; index < dense->length; index++) {
             MalValue element;
             if (!mal_array_object_dense_get(dense, index, &element)) {
                 element = mal_value_new_undefined();
@@ -2031,9 +2031,14 @@ static MalValue mal_builtin_array_includes(MalVm *vm, MalValue this_value, const
         return mal_value_new_boolean(false);
     }
 
-    for (u32 index = start; index < length; index++) {
+    // An array-like's length can exceed 2^32, up to 2^53-1.
+    for (f64 index = start; index < length; index++) {
         // Holes compare as undefined for includes.
-        if (mal_builtin_array_same_value_zero(mal_builtin_array_get(vm, this_value, index), search)) {
+        MalValue element = mal_builtin_array_get_wide(vm, this_value, index);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            return mal_value_new_undefined();
+        }
+        if (mal_builtin_array_same_value_zero(element, search)) {
             return mal_value_new_boolean(true);
         }
     }
@@ -3278,16 +3283,17 @@ static MalValue mal_builtin_array_find_last(MalVm *vm, MalValue this_value, cons
     MalRootSpan this_span;
     mal_gc_root(&this_span, &this_value, 1);
     MalValue ret = mal_value_new_undefined();
-    u32 length;
-    if (!mal_builtin_array_this_length(vm, this_value, &length) || !mal_builtin_array_callback_arg(vm, args, arg_count)) {
+    f64 length;
+    if (!mal_builtin_array_length_of_array_like(vm, this_value, &length) || !mal_builtin_array_callback_arg(vm, args, arg_count)) {
         goto done;
     }
     mal_gc_native_rooted_begin(vm);
-    for (u32 index = length; index-- > 0;) {
-        MalValue element = mal_builtin_array_get(vm, this_value, index);
+    // The length can exceed 2^32 for an array-like, up to 2^53-1.
+    for (f64 index = length - 1; index >= 0; index--) {
+        MalValue element = mal_builtin_array_get_wide(vm, this_value, index);
 
         MalValue matched;
-        if (!mal_builtin_array_invoke(vm, args[0], mal_builtin_array_this_arg(args, arg_count), element, index, this_value, &matched)) {
+        if (!mal_builtin_array_invoke_wide(vm, args[0], mal_builtin_array_this_arg(args, arg_count), element, index, this_value, &matched)) {
             goto loop_done;
         }
 
@@ -3310,21 +3316,22 @@ static MalValue mal_builtin_array_find_last_index(MalVm *vm, MalValue this_value
     MalRootSpan this_span;
     mal_gc_root(&this_span, &this_value, 1);
     MalValue ret = mal_value_new_undefined();
-    u32 length;
-    if (!mal_builtin_array_this_length(vm, this_value, &length) || !mal_builtin_array_callback_arg(vm, args, arg_count)) {
+    f64 length;
+    if (!mal_builtin_array_length_of_array_like(vm, this_value, &length) || !mal_builtin_array_callback_arg(vm, args, arg_count)) {
         goto done;
     }
     mal_gc_native_rooted_begin(vm);
-    for (u32 index = length; index-- > 0;) {
-        MalValue element = mal_builtin_array_get(vm, this_value, index);
+    // The length can exceed 2^32 for an array-like, up to 2^53-1.
+    for (f64 index = length - 1; index >= 0; index--) {
+        MalValue element = mal_builtin_array_get_wide(vm, this_value, index);
 
         MalValue matched;
-        if (!mal_builtin_array_invoke(vm, args[0], mal_builtin_array_this_arg(args, arg_count), element, index, this_value, &matched)) {
+        if (!mal_builtin_array_invoke_wide(vm, args[0], mal_builtin_array_this_arg(args, arg_count), element, index, this_value, &matched)) {
             goto loop_done;
         }
 
         if (mal_value_is_truthy(matched)) {
-            ret = mal_value_from_i32((i32) index);
+            ret = mal_ops_number_value(index);
             goto loop_done;
         }
     }
