@@ -792,6 +792,43 @@ static bool temporal_calendar_from_like(
     return true;
 }
 
+// ToTemporalTimeZoneIdentifier.
+static bool temporal_time_zone_from_value(
+    MalVm *vm, MalValue value, TimeZone *zone
+) {
+    if (mal_value_is_temporal_object(value) &&
+        mal_value_to_temporal_object(value)->kind == MAL_TEMPORAL_ZONED_DATE_TIME) {
+        *zone = temporal_rs_ZonedDateTime_timezone(mal_value_to_temporal_object(value)->handle);
+        return true;
+    }
+    if (!mal_value_is_string(value)) {
+        temporal_throw_type(vm, "Temporal time zone must be a string");
+        return false;
+    }
+    MalString *string = mal_value_to_string(value);
+    usize length;
+    byte *utf8 = mal_string_to_utf8(string, &length);
+    if (utf8 == nullptr) return temporal_throw_type(vm, "Unable to encode time zone"), false;
+    temporal_rs_TimeZone_try_from_str_result result = temporal_rs_TimeZone_try_from_str(
+        (DiplomatStringView) {.data = (const char *) utf8, .len = length});
+    free(utf8);
+    if (!result.is_ok) {
+        temporal_throw(vm, result.err);
+        return false;
+    }
+    *zone = result.ok;
+    return true;
+}
+
+// ToOffsetString; the caller frees `*data`.
+static bool temporal_offset_string(MalVm *vm, MalValue value, byte **data, usize *length) {
+    if (!mal_vm_to_primitive(vm, value, MAL_TO_PRIMITIVE_STRING, &value)) return false;
+    if (!mal_value_is_string(value)) return temporal_throw_type(vm, "Temporal offset must be a string"), false;
+    *data = mal_string_to_utf8(mal_value_to_string(value), length);
+    if (*data == nullptr) return temporal_throw_type(vm, "Unable to encode Temporal offset"), false;
+    return true;
+}
+
 static MalValue temporal_calendar_identifier(MalVm *vm, const Calendar *calendar) {
     DiplomatStringView identifier = temporal_rs_Calendar_identifier(calendar);
     if (identifier.len < 32) {
@@ -1161,6 +1198,262 @@ static bool plain_time_partial(
     return true;
 }
 
+// Property keys in code unit order, the order PrepareCalendarFields reads them in.
+typedef enum TemporalField {
+    TEMPORAL_FIELD_DAY,
+    TEMPORAL_FIELD_ERA,
+    TEMPORAL_FIELD_ERA_YEAR,
+    TEMPORAL_FIELD_HOUR,
+    TEMPORAL_FIELD_MICROSECOND,
+    TEMPORAL_FIELD_MILLISECOND,
+    TEMPORAL_FIELD_MINUTE,
+    TEMPORAL_FIELD_MONTH,
+    TEMPORAL_FIELD_MONTH_CODE,
+    TEMPORAL_FIELD_NANOSECOND,
+    TEMPORAL_FIELD_OFFSET,
+    TEMPORAL_FIELD_SECOND,
+    TEMPORAL_FIELD_TIME_ZONE,
+    TEMPORAL_FIELD_YEAR,
+    TEMPORAL_FIELD_COUNT,
+} TemporalField;
+
+static const byte *const temporal_field_keys[TEMPORAL_FIELD_COUNT] = {
+    "day", "era", "eraYear", "hour", "microsecond", "millisecond", "minute",
+    "month", "monthCode", "nanosecond", "offset", "second", "timeZone", "year",
+};
+
+#define TEMPORAL_FIELD(field) (1u << TEMPORAL_FIELD_##field)
+#define TEMPORAL_YEAR_MONTH_FIELDS \
+    (TEMPORAL_FIELD(YEAR) | TEMPORAL_FIELD(MONTH) | TEMPORAL_FIELD(MONTH_CODE))
+#define TEMPORAL_DATE_FIELDS (TEMPORAL_YEAR_MONTH_FIELDS | TEMPORAL_FIELD(DAY))
+#define TEMPORAL_TIME_FIELDS                                                  \
+    (TEMPORAL_FIELD(HOUR) | TEMPORAL_FIELD(MINUTE) | TEMPORAL_FIELD(SECOND) | \
+     TEMPORAL_FIELD(MILLISECOND) | TEMPORAL_FIELD(MICROSECOND) | TEMPORAL_FIELD(NANOSECOND))
+
+typedef struct TemporalFields {
+    AnyCalendarKind calendar;
+    u32 present;
+    // Integral fields, truncated but not yet range-checked.
+    f64 numbers[TEMPORAL_FIELD_COUNT];
+    byte *era;
+    usize era_length;
+    byte month_code[4];
+    usize month_code_length;
+    byte *offset;
+    usize offset_length;
+    TimeZone time_zone;
+} TemporalFields;
+
+static void temporal_fields_destroy(TemporalFields *fields) {
+    free(fields->era);
+    free(fields->offset);
+    fields->era = nullptr;
+    fields->offset = nullptr;
+}
+
+// CalendarExtraFields adds era and eraYear wherever year is read.
+static bool temporal_calendar_has_eras(AnyCalendarKind calendar) {
+    switch (calendar) {
+        case AnyCalendarKind_Buddhist:
+        case AnyCalendarKind_Coptic:
+        case AnyCalendarKind_Ethiopian:
+        case AnyCalendarKind_EthiopianAmeteAlem:
+        case AnyCalendarKind_Gregorian:
+        case AnyCalendarKind_Hebrew:
+        case AnyCalendarKind_Indian:
+        case AnyCalendarKind_HijriTabularTypeIIFriday:
+        case AnyCalendarKind_HijriTabularTypeIIThursday:
+        case AnyCalendarKind_HijriUmmAlQura:
+        case AnyCalendarKind_Japanese:
+        case AnyCalendarKind_Persian:
+        case AnyCalendarKind_Roc:
+            return true;
+        default:
+            return false;
+    }
+}
+
+// The to-month-code conversion checks only the syntax; suitability for the
+// calendar is validated later, after every field has been read.
+static bool temporal_month_code_field(MalVm *vm, MalValue value, TemporalFields *fields) {
+    if (!mal_vm_to_primitive(vm, value, MAL_TO_PRIMITIVE_STRING, &value)) return false;
+    if (!mal_value_is_string(value)) return temporal_throw_type(vm, "Temporal monthCode must be a string"), false;
+    MalString *string = mal_value_to_string(value);
+    usize length = mal_string_length(string);
+    const c16 *units = length > 0 ? mal_string_code_units(string) : nullptr;
+    bool valid = (length == 3 || length == 4) && units[0] == 'M' &&
+        units[1] >= '0' && units[1] <= '9' && units[2] >= '0' && units[2] <= '9' &&
+        (length == 3 || units[3] == 'L') && !(length == 3 && units[1] == '0' && units[2] == '0');
+    if (!valid) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid Temporal monthCode");
+        return false;
+    }
+    for (usize i = 0; i < length; ++i) fields->month_code[i] = (byte) units[i];
+    fields->month_code_length = length;
+    return true;
+}
+
+static bool temporal_field_convert(
+    MalVm *vm, TemporalField field, MalValue value, TemporalFields *fields
+) {
+    switch (field) {
+        case TEMPORAL_FIELD_ERA: {
+            MalString *string;
+            if (!mal_vm_to_string(vm, value, &string)) return false;
+            fields->era = mal_string_to_utf8(string, &fields->era_length);
+            return fields->era != nullptr ||
+                (temporal_throw_type(vm, "Unable to encode Temporal era"), false);
+        }
+        case TEMPORAL_FIELD_MONTH_CODE:
+            return temporal_month_code_field(vm, value, fields);
+        case TEMPORAL_FIELD_OFFSET:
+            return temporal_offset_string(vm, value, &fields->offset, &fields->offset_length);
+        case TEMPORAL_FIELD_TIME_ZONE:
+            return temporal_time_zone_from_value(vm, value, &fields->time_zone);
+        default: {
+            f64 number;
+            if (!mal_vm_to_number(vm, value, &number)) return false;
+            number = trunc(number);
+            bool positive = field == TEMPORAL_FIELD_MONTH || field == TEMPORAL_FIELD_DAY;
+            if (!isfinite(number) || (positive && number < 1)) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                                   "Temporal field is out of range");
+                return false;
+            }
+            fields->numbers[field] = number;
+            return true;
+        }
+    }
+}
+
+// PrepareCalendarFields. `required` names fields that must be present; `partial`
+// instead requires at least one field, as the `with` methods do.
+static bool temporal_prepare_fields(
+    MalVm *vm, MalValue bag, AnyCalendarKind calendar, u32 names, u32 required, bool partial,
+    TemporalFields *fields
+) {
+    *fields = (TemporalFields) {.calendar = calendar};
+    if ((names & TEMPORAL_FIELD(YEAR)) && temporal_calendar_has_eras(calendar)) {
+        names |= TEMPORAL_FIELD(ERA) | TEMPORAL_FIELD(ERA_YEAR);
+    }
+    for (i32 field = 0; field < TEMPORAL_FIELD_COUNT; ++field) {
+        if (!(names & (1u << field))) continue;
+        MalValue value;
+        if (!mal_vm_get_property(vm, bag, mal_intrinsic_string_key(vm, temporal_field_keys[field]), &value)) {
+            temporal_fields_destroy(fields);
+            return false;
+        }
+        if (mal_value_is_undefined(value)) {
+            if (required & (1u << field)) {
+                temporal_fields_destroy(fields);
+                return temporal_throw_type(vm, "Temporal property bag is missing a required field"), false;
+            }
+            continue;
+        }
+        if (!temporal_field_convert(vm, (TemporalField) field, value, fields)) {
+            temporal_fields_destroy(fields);
+            return false;
+        }
+        fields->present |= 1u << field;
+    }
+    if (partial && fields->present == 0) {
+        return temporal_throw_type(vm, "Temporal property bag has no recognized fields"), false;
+    }
+    return true;
+}
+
+static bool temporal_fields_has(const TemporalFields *fields, TemporalField field) {
+    return (fields->present & (1u << field)) != 0;
+}
+
+// Saturating keeps out-of-range values out of range, so temporal_rs still
+// constrains or rejects them as the overflow option asks.
+static OptionI32 temporal_fields_i32(const TemporalFields *fields, TemporalField field) {
+    if (!temporal_fields_has(fields, field)) return (OptionI32) {.is_ok = false};
+    f64 number = fields->numbers[field];
+    return (OptionI32) {
+        .ok = number < INT32_MIN ? INT32_MIN : number > INT32_MAX ? INT32_MAX : (i32) number,
+        .is_ok = true,
+    };
+}
+
+static OptionU8 temporal_fields_u8(const TemporalFields *fields, TemporalField field) {
+    if (!temporal_fields_has(fields, field)) return (OptionU8) {.is_ok = false};
+    f64 number = fields->numbers[field];
+    return (OptionU8) {.ok = number > UINT8_MAX ? UINT8_MAX : (u8) number, .is_ok = true};
+}
+
+// The view borrows the fields' strings.
+static PartialDate temporal_fields_date(const TemporalFields *fields) {
+    PartialDate date = {
+        .year = temporal_fields_i32(fields, TEMPORAL_FIELD_YEAR),
+        .month = temporal_fields_u8(fields, TEMPORAL_FIELD_MONTH),
+        .day = temporal_fields_u8(fields, TEMPORAL_FIELD_DAY),
+        .era_year = temporal_fields_i32(fields, TEMPORAL_FIELD_ERA_YEAR),
+        .calendar = fields->calendar,
+    };
+    if (temporal_fields_has(fields, TEMPORAL_FIELD_MONTH_CODE)) {
+        date.month_code = (DiplomatStringView) {
+            .data = (const char *) fields->month_code, .len = fields->month_code_length};
+    }
+    if (temporal_fields_has(fields, TEMPORAL_FIELD_ERA)) {
+        date.era = (DiplomatStringView) {.data = (const char *) fields->era, .len = fields->era_length};
+    }
+    return date;
+}
+
+static bool temporal_fields_time(
+    MalVm *vm, const TemporalFields *fields, ArithmeticOverflow overflow, PartialTime *time
+) {
+    static const TemporalField order[6] = {
+        TEMPORAL_FIELD_HOUR, TEMPORAL_FIELD_MINUTE, TEMPORAL_FIELD_SECOND,
+        TEMPORAL_FIELD_MILLISECOND, TEMPORAL_FIELD_MICROSECOND, TEMPORAL_FIELD_NANOSECOND,
+    };
+    PlainTimeFields time_fields = {0};
+    for (usize slot = 0; slot < countof(order); ++slot) {
+        if (!temporal_fields_has(fields, order[slot])) continue;
+        time_fields.values[slot] = fields->numbers[order[slot]];
+        time_fields.present[slot] = true;
+        time_fields.any = true;
+    }
+    return plain_time_partial(vm, &time_fields, overflow, time);
+}
+
+static OptionStringView temporal_fields_offset(const TemporalFields *fields) {
+    if (!temporal_fields_has(fields, TEMPORAL_FIELD_OFFSET)) return (OptionStringView) {.is_ok = false};
+    return (OptionStringView) {
+        .ok = {.data = (const char *) fields->offset, .len = fields->offset_length}, .is_ok = true};
+}
+
+// GetTemporalCalendarIdentifierWithISODefault.
+static bool temporal_bag_calendar(MalVm *vm, MalValue bag, AnyCalendarKind *calendar) {
+    MalValue value;
+    if (!mal_vm_get_property(vm, bag, mal_intrinsic_string_key(vm, "calendar"), &value)) return false;
+    if (mal_value_is_undefined(value)) {
+        *calendar = AnyCalendarKind_Iso;
+        return true;
+    }
+    return temporal_calendar_from_like(vm, value, calendar);
+}
+
+// IsPartialTemporalObject, throwing where the `with` methods would.
+static bool temporal_partial_object(MalVm *vm, MalValue value) {
+    if (!mal_value_is_object(value) || mal_value_is_temporal_object(value)) {
+        return temporal_throw_type(vm, "Temporal with() requires a property bag"), false;
+    }
+    const byte *rejected[] = {"calendar", "timeZone"};
+    for (usize i = 0; i < countof(rejected); ++i) {
+        MalValue property;
+        if (!mal_vm_get_property(vm, value, mal_intrinsic_string_key(vm, rejected[i]), &property)) {
+            return false;
+        }
+        if (!mal_value_is_undefined(property)) {
+            return temporal_throw_type(vm, "Temporal with() rejects calendar and timeZone"), false;
+        }
+    }
+    return true;
+}
+
 static PlainTime *plain_time_from_like(
     MalVm *vm, MalValue input, MalValue options
 ) {
@@ -1350,24 +1643,7 @@ static MalValue plain_time_with(
     MalTemporalObject *object;
     if (!plain_time_this(vm, this_value, &object)) return mal_value_new_undefined();
     MalValue fields_value = arg_count > 0 ? args[0] : mal_value_new_undefined();
-    if (!mal_value_is_object(fields_value) || mal_value_is_temporal_object(fields_value)) {
-        return temporal_throw_type(vm, "Temporal.PlainTime.with requires a property bag");
-    }
-    MalValue rejected;
-    if (!mal_vm_get_property(
-            vm, fields_value, mal_intrinsic_string_key(vm, "calendar"), &rejected)) {
-        return mal_value_new_undefined();
-    }
-    if (!mal_value_is_undefined(rejected)) {
-        return temporal_throw_type(vm, "Temporal.PlainTime.with rejects calendar");
-    }
-    if (!mal_vm_get_property(
-            vm, fields_value, mal_intrinsic_string_key(vm, "timeZone"), &rejected)) {
-        return mal_value_new_undefined();
-    }
-    if (!mal_value_is_undefined(rejected)) {
-        return temporal_throw_type(vm, "Temporal.PlainTime.with rejects timeZone");
-    }
+    if (!temporal_partial_object(vm, fields_value)) return mal_value_new_undefined();
     PlainTimeFields fields;
     if (!plain_time_read_fields(vm, fields_value, &fields, true)) {
         return mal_value_new_undefined();
@@ -1716,93 +1992,6 @@ static MalValue plain_date_constructor(
     return plain_date_wrap(vm, result.ok, prototype);
 }
 
-typedef struct PlainDatePartial {
-    PartialDate partial;
-    byte *month_code;
-    byte *era;
-} PlainDatePartial;
-
-static void plain_date_partial_destroy(PlainDatePartial *fields) {
-    free(fields->month_code);
-    free(fields->era);
-}
-
-static bool plain_date_partial_from_object_impl(
-    MalVm *vm, MalValue input, PlainDatePartial *fields, bool require_field
-) {
-    *fields = (PlainDatePartial) {0};
-    fields->partial.calendar = AnyCalendarKind_Iso;
-    MalValue value;
-    if (!mal_vm_get_property(
-            vm, input, mal_intrinsic_string_key(vm, "calendar"), &value) ||
-        (!mal_value_is_undefined(value) &&
-         !temporal_calendar_from_like(vm, value, &fields->partial.calendar))) {
-        return false;
-    }
-    const byte *names[] = {"day", "era", "eraYear", "month", "monthCode", "year"};
-    bool any = false;
-    for (usize i = 0; i < countof(names); ++i) {
-        if (!mal_vm_get_property(vm, input, mal_intrinsic_string_key(vm, names[i]), &value)) {
-            plain_date_partial_destroy(fields);
-            return false;
-        }
-        if (mal_value_is_undefined(value)) continue;
-        any = true;
-        if (i == 1 || i == 4) {
-            MalString *string;
-            if (!mal_vm_to_string(vm, value, &string)) {
-                plain_date_partial_destroy(fields);
-                return false;
-            }
-            usize length;
-            byte *utf8 = mal_string_to_utf8(string, &length);
-            if (utf8 == nullptr) {
-                plain_date_partial_destroy(fields);
-                return temporal_throw_type(vm, "Unable to encode Temporal field"), false;
-            }
-            if (i == 1) {
-                fields->era = utf8;
-                fields->partial.era =
-                    (DiplomatStringView) {.data = (const char *) utf8, .len = length};
-            } else {
-                fields->month_code = utf8;
-                fields->partial.month_code =
-                    (DiplomatStringView) {.data = (const char *) utf8, .len = length};
-            }
-        } else if (i == 0 || i == 3) {
-            u16 number;
-            if (!temporal_u16_integer(vm, value, UINT8_MAX, &number)) {
-                plain_date_partial_destroy(fields);
-                return false;
-            }
-            OptionU8 option = {.ok = (u8) number, .is_ok = true};
-            if (i == 0) fields->partial.day = option;
-            else fields->partial.month = option;
-        } else {
-            i32 number;
-            if (!temporal_i32_integer(vm, value, &number)) {
-                plain_date_partial_destroy(fields);
-                return false;
-            }
-            OptionI32 option = {.ok = number, .is_ok = true};
-            if (i == 2) fields->partial.era_year = option;
-            else fields->partial.year = option;
-        }
-    }
-    if (require_field && !any) {
-        plain_date_partial_destroy(fields);
-        temporal_throw_type(vm, "Temporal.PlainDate property bag has no date fields");
-        return false;
-    }
-    return true;
-}
-
-static bool plain_date_partial_from_object(
-    MalVm *vm, MalValue input, PlainDatePartial *fields
-) {
-    return plain_date_partial_from_object_impl(vm, input, fields, true);
-}
-
 static PlainDate *plain_date_from_like(
     MalVm *vm, MalValue input, MalValue options
 ) {
@@ -1847,18 +2036,22 @@ static PlainDate *plain_date_from_like(
         temporal_throw_type(vm, "Temporal.PlainDate.from requires a string or object");
         return nullptr;
     }
-    PlainDatePartial fields;
-    if (!plain_date_partial_from_object(vm, input, &fields)) return nullptr;
+    AnyCalendarKind calendar;
+    TemporalFields fields;
+    if (!temporal_bag_calendar(vm, input, &calendar) ||
+        !temporal_prepare_fields(vm, input, calendar, TEMPORAL_DATE_FIELDS, 0, false, &fields)) {
+        return nullptr;
+    }
     ArithmeticOverflow overflow;
     if (!temporal_overflow_option(vm, options, &overflow)) {
-        plain_date_partial_destroy(&fields);
+        temporal_fields_destroy(&fields);
         return nullptr;
     }
     temporal_rs_PlainDate_from_partial_result result =
         temporal_rs_PlainDate_from_partial(
-            fields.partial,
+            temporal_fields_date(&fields),
             (ArithmeticOverflow_option) {.ok = overflow, .is_ok = true});
-    plain_date_partial_destroy(&fields);
+    temporal_fields_destroy(&fields);
     if (!result.is_ok) {
         temporal_throw(vm, result.err);
         return nullptr;
@@ -2169,23 +2362,23 @@ static MalValue plain_date_with(
     MalTemporalObject *object;
     if (!plain_date_this(vm, this_value, &object)) return mal_value_new_undefined();
     MalValue fields_value = arg_count > 0 ? args[0] : mal_value_new_undefined();
-    if (!mal_value_is_object(fields_value) || mal_value_is_temporal_object(fields_value)) {
-        return temporal_throw_type(vm, "Temporal.PlainDate.with requires a property bag");
-    }
-    PlainDatePartial fields;
-    if (!plain_date_partial_from_object(vm, fields_value, &fields)) {
+    AnyCalendarKind calendar;
+    TemporalFields fields;
+    if (!temporal_partial_object(vm, fields_value) ||
+        !temporal_calendar_kind(vm, this_value, &calendar) ||
+        !temporal_prepare_fields(vm, fields_value, calendar, TEMPORAL_DATE_FIELDS, 0, true, &fields)) {
         return mal_value_new_undefined();
     }
     ArithmeticOverflow overflow;
     if (!temporal_overflow_option(
             vm, arg_count > 1 ? args[1] : mal_value_new_undefined(), &overflow)) {
-        plain_date_partial_destroy(&fields);
+        temporal_fields_destroy(&fields);
         return mal_value_new_undefined();
     }
     temporal_rs_PlainDate_with_result result = temporal_rs_PlainDate_with(
-        object->handle, fields.partial,
+        object->handle, temporal_fields_date(&fields),
         (ArithmeticOverflow_option) {.ok = overflow, .is_ok = true});
-    plain_date_partial_destroy(&fields);
+    temporal_fields_destroy(&fields);
     return result.is_ok ? plain_date_wrap_intrinsic(vm, result.ok)
                         : temporal_throw(vm, result.err);
 }
@@ -2411,28 +2604,25 @@ static PlainDateTime *plain_date_time_from_like(
         temporal_throw_type(vm, "Temporal.PlainDateTime.from requires a string or object");
         return nullptr;
     }
-    PlainDatePartial date;
-    if (!plain_date_partial_from_object(vm, input, &date)) return nullptr;
-    PlainTimeFields time_fields;
-    if (!plain_time_read_fields(vm, input, &time_fields, false)) {
-        plain_date_partial_destroy(&date);
+    AnyCalendarKind calendar;
+    TemporalFields fields;
+    if (!temporal_bag_calendar(vm, input, &calendar) ||
+        !temporal_prepare_fields(
+            vm, input, calendar, TEMPORAL_DATE_FIELDS | TEMPORAL_TIME_FIELDS, 0, false, &fields)) {
         return nullptr;
     }
     ArithmeticOverflow overflow;
-    if (!temporal_overflow_option(vm, options, &overflow)) {
-        plain_date_partial_destroy(&date);
-        return nullptr;
-    }
     PartialTime time;
-    if (!plain_time_partial(vm, &time_fields, overflow, &time)) {
-        plain_date_partial_destroy(&date);
+    if (!temporal_overflow_option(vm, options, &overflow) ||
+        !temporal_fields_time(vm, &fields, overflow, &time)) {
+        temporal_fields_destroy(&fields);
         return nullptr;
     }
-    PartialDateTime partial = {.date = date.partial, .time = time};
+    PartialDateTime partial = {.date = temporal_fields_date(&fields), .time = time};
     temporal_rs_PlainDateTime_from_partial_result result =
         temporal_rs_PlainDateTime_from_partial(
             partial, (ArithmeticOverflow_option) {.ok = overflow, .is_ok = true});
-    plain_date_partial_destroy(&date);
+    temporal_fields_destroy(&fields);
     if (!result.is_ok) {
         temporal_throw(vm, result.err);
         return nullptr;
@@ -2746,6 +2936,38 @@ static MalValue plain_date_time_round(
                         : temporal_throw(vm, result.err);
 }
 
+static MalValue plain_date_time_with(
+    MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
+    MalValue new_target, MalValue callee
+) {
+    (void) new_target; (void) callee;
+    MalTemporalObject *object;
+    if (!plain_date_time_this(vm, this_value, &object)) return mal_value_new_undefined();
+    MalValue input = arg_count > 0 ? args[0] : mal_value_new_undefined();
+    AnyCalendarKind calendar;
+    TemporalFields fields;
+    if (!temporal_partial_object(vm, input) ||
+        !temporal_calendar_kind(vm, this_value, &calendar) ||
+        !temporal_prepare_fields(
+            vm, input, calendar, TEMPORAL_DATE_FIELDS | TEMPORAL_TIME_FIELDS, 0, true, &fields)) {
+        return mal_value_new_undefined();
+    }
+    ArithmeticOverflow overflow;
+    PartialTime time;
+    if (!temporal_overflow_option(
+            vm, arg_count > 1 ? args[1] : mal_value_new_undefined(), &overflow) ||
+        !temporal_fields_time(vm, &fields, overflow, &time)) {
+        temporal_fields_destroy(&fields);
+        return mal_value_new_undefined();
+    }
+    PartialDateTime partial = {.date = temporal_fields_date(&fields), .time = time};
+    temporal_rs_PlainDateTime_with_result result = temporal_rs_PlainDateTime_with(
+        object->handle, partial, (ArithmeticOverflow_option) {.ok = overflow, .is_ok = true});
+    temporal_fields_destroy(&fields);
+    return result.is_ok ? plain_date_time_wrap_intrinsic(vm, result.ok)
+                        : temporal_throw(vm, result.err);
+}
+
 static MalValue plain_date_time_with_calendar(
     MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
     MalValue new_target, MalValue callee
@@ -2955,18 +3177,22 @@ static PlainYearMonth *plain_year_month_from_like(
         temporal_throw_type(vm, "Temporal.PlainYearMonth.from requires a string or object");
         return nullptr;
     }
-    PlainDatePartial fields;
-    if (!plain_date_partial_from_object(vm, input, &fields)) return nullptr;
+    AnyCalendarKind calendar;
+    TemporalFields fields;
+    if (!temporal_bag_calendar(vm, input, &calendar) ||
+        !temporal_prepare_fields(vm, input, calendar, TEMPORAL_YEAR_MONTH_FIELDS, 0, false, &fields)) {
+        return nullptr;
+    }
     ArithmeticOverflow overflow;
     if (!temporal_overflow_option(vm, options, &overflow)) {
-        plain_date_partial_destroy(&fields);
+        temporal_fields_destroy(&fields);
         return nullptr;
     }
     temporal_rs_PlainYearMonth_from_partial_result result =
         temporal_rs_PlainYearMonth_from_partial(
-            fields.partial,
+            temporal_fields_date(&fields),
             (ArithmeticOverflow_option) {.ok = overflow, .is_ok = true});
-    plain_date_partial_destroy(&fields);
+    temporal_fields_destroy(&fields);
     if (!result.is_ok) {
         temporal_throw(vm, result.err);
         return nullptr;
@@ -3161,21 +3387,23 @@ static MalValue plain_year_month_with(
     MalTemporalObject *object;
     if (!plain_year_month_this(vm, this_value, &object)) return mal_value_new_undefined();
     MalValue input = arg_count > 0 ? args[0] : mal_value_new_undefined();
-    if (!mal_value_is_object(input) || mal_value_is_temporal_object(input)) {
-        return temporal_throw_type(vm, "Temporal.PlainYearMonth.with requires a property bag");
+    AnyCalendarKind calendar;
+    TemporalFields fields;
+    if (!temporal_partial_object(vm, input) ||
+        !temporal_calendar_kind(vm, this_value, &calendar) ||
+        !temporal_prepare_fields(vm, input, calendar, TEMPORAL_YEAR_MONTH_FIELDS, 0, true, &fields)) {
+        return mal_value_new_undefined();
     }
-    PlainDatePartial fields;
-    if (!plain_date_partial_from_object(vm, input, &fields)) return mal_value_new_undefined();
     ArithmeticOverflow overflow;
     if (!temporal_overflow_option(
             vm, arg_count > 1 ? args[1] : mal_value_new_undefined(), &overflow)) {
-        plain_date_partial_destroy(&fields);
+        temporal_fields_destroy(&fields);
         return mal_value_new_undefined();
     }
     temporal_rs_PlainYearMonth_with_result result = temporal_rs_PlainYearMonth_with(
-        object->handle, fields.partial,
+        object->handle, temporal_fields_date(&fields),
         (ArithmeticOverflow_option) {.ok = overflow, .is_ok = true});
-    plain_date_partial_destroy(&fields);
+    temporal_fields_destroy(&fields);
     return result.is_ok ? plain_year_month_wrap_intrinsic(vm, result.ok)
                         : temporal_throw(vm, result.err);
 }
@@ -3191,17 +3419,17 @@ static MalValue plain_year_month_to_plain_date(
     if (!mal_value_is_object(input)) {
         return temporal_throw_type(vm, "Temporal.PlainYearMonth.toPlainDate requires an object");
     }
-    MalValue value;
-    if (!mal_vm_get_property(vm, input, mal_intrinsic_string_key(vm, "day"), &value)) {
+    AnyCalendarKind calendar;
+    TemporalFields fields;
+    if (!temporal_calendar_kind(vm, this_value, &calendar) ||
+        !temporal_prepare_fields(vm, input, calendar, TEMPORAL_FIELD(DAY), 0, false, &fields)) {
         return mal_value_new_undefined();
     }
-    u16 day;
-    if (!temporal_u16_integer(vm, value, UINT8_MAX, &day)) return mal_value_new_undefined();
-    PartialDate partial = {.calendar = AnyCalendarKind_Iso,
-                           .day = {.ok = (u8) day, .is_ok = true}};
     temporal_rs_PlainYearMonth_to_plain_date_result result =
         temporal_rs_PlainYearMonth_to_plain_date(
-            object->handle, (PartialDate_option) {.ok = partial, .is_ok = true});
+            object->handle,
+            (PartialDate_option) {.ok = temporal_fields_date(&fields), .is_ok = true});
+    temporal_fields_destroy(&fields);
     return result.is_ok ? plain_date_wrap_intrinsic(vm, result.ok)
                         : temporal_throw(vm, result.err);
 }
@@ -3424,18 +3652,22 @@ static PlainMonthDay *plain_month_day_from_like(
         temporal_throw_type(vm, "Temporal.PlainMonthDay.from requires a string or object");
         return nullptr;
     }
-    PlainDatePartial fields;
-    if (!plain_date_partial_from_object(vm, input, &fields)) return nullptr;
+    AnyCalendarKind calendar;
+    TemporalFields fields;
+    if (!temporal_bag_calendar(vm, input, &calendar) ||
+        !temporal_prepare_fields(vm, input, calendar, TEMPORAL_DATE_FIELDS, 0, false, &fields)) {
+        return nullptr;
+    }
     ArithmeticOverflow overflow;
     if (!temporal_overflow_option(vm, options, &overflow)) {
-        plain_date_partial_destroy(&fields);
+        temporal_fields_destroy(&fields);
         return nullptr;
     }
     temporal_rs_PlainMonthDay_from_partial_result result =
         temporal_rs_PlainMonthDay_from_partial(
-            fields.partial,
+            temporal_fields_date(&fields),
             (ArithmeticOverflow_option) {.ok = overflow, .is_ok = true});
-    plain_date_partial_destroy(&fields);
+    temporal_fields_destroy(&fields);
     if (!result.is_ok) {
         temporal_throw(vm, result.err);
         return nullptr;
@@ -3520,21 +3752,23 @@ static MalValue plain_month_day_with(
     MalTemporalObject *object;
     if (!plain_month_day_this(vm, this_value, &object)) return mal_value_new_undefined();
     MalValue input = arg_count > 0 ? args[0] : mal_value_new_undefined();
-    if (!mal_value_is_object(input) || mal_value_is_temporal_object(input)) {
-        return temporal_throw_type(vm, "Temporal.PlainMonthDay.with requires a property bag");
+    AnyCalendarKind calendar;
+    TemporalFields fields;
+    if (!temporal_partial_object(vm, input) ||
+        !temporal_calendar_kind(vm, this_value, &calendar) ||
+        !temporal_prepare_fields(vm, input, calendar, TEMPORAL_DATE_FIELDS, 0, true, &fields)) {
+        return mal_value_new_undefined();
     }
-    PlainDatePartial fields;
-    if (!plain_date_partial_from_object(vm, input, &fields)) return mal_value_new_undefined();
     ArithmeticOverflow overflow;
     if (!temporal_overflow_option(
             vm, arg_count > 1 ? args[1] : mal_value_new_undefined(), &overflow)) {
-        plain_date_partial_destroy(&fields);
+        temporal_fields_destroy(&fields);
         return mal_value_new_undefined();
     }
     temporal_rs_PlainMonthDay_with_result result = temporal_rs_PlainMonthDay_with(
-        object->handle, fields.partial,
+        object->handle, temporal_fields_date(&fields),
         (ArithmeticOverflow_option) {.ok = overflow, .is_ok = true});
-    plain_date_partial_destroy(&fields);
+    temporal_fields_destroy(&fields);
     return result.is_ok ? plain_month_day_wrap_intrinsic(vm, result.ok)
                         : temporal_throw(vm, result.err);
 }
@@ -3550,17 +3784,17 @@ static MalValue plain_month_day_to_plain_date(
     if (!mal_value_is_object(input)) {
         return temporal_throw_type(vm, "Temporal.PlainMonthDay.toPlainDate requires an object");
     }
-    MalValue value;
-    if (!mal_vm_get_property(vm, input, mal_intrinsic_string_key(vm, "year"), &value)) {
+    AnyCalendarKind calendar;
+    TemporalFields fields;
+    if (!temporal_calendar_kind(vm, this_value, &calendar) ||
+        !temporal_prepare_fields(vm, input, calendar, TEMPORAL_FIELD(YEAR), 0, false, &fields)) {
         return mal_value_new_undefined();
     }
-    i32 year;
-    if (!temporal_i32_integer(vm, value, &year)) return mal_value_new_undefined();
-    PartialDate partial = {.calendar = AnyCalendarKind_Iso,
-                           .year = {.ok = year, .is_ok = true}};
     temporal_rs_PlainMonthDay_to_plain_date_result result =
         temporal_rs_PlainMonthDay_to_plain_date(
-            object->handle, (PartialDate_option) {.ok = partial, .is_ok = true});
+            object->handle,
+            (PartialDate_option) {.ok = temporal_fields_date(&fields), .is_ok = true});
+    temporal_fields_destroy(&fields);
     return result.is_ok ? plain_date_wrap_intrinsic(vm, result.ok)
                         : temporal_throw(vm, result.err);
 }
@@ -3965,85 +4199,46 @@ static MalValue instant_round(
                         : temporal_throw(vm, result.err);
 }
 
-static bool temporal_time_zone_from_value(
-    MalVm *vm, MalValue value, TimeZone *zone
-) {
-    if (!mal_value_is_string(value)) {
-        temporal_throw_type(vm, "Temporal time zone must be a string");
-        return false;
-    }
-    MalString *string = mal_value_to_string(value);
-    usize length;
-    byte *utf8 = mal_string_to_utf8(string, &length);
-    if (utf8 == nullptr) return temporal_throw_type(vm, "Unable to encode time zone"), false;
-    temporal_rs_TimeZone_try_from_str_result result = temporal_rs_TimeZone_try_from_str(
-        (DiplomatStringView) {.data = (const char *) utf8, .len = length});
-    free(utf8);
-    if (!result.is_ok) {
-        temporal_throw(vm, result.err);
-        return false;
-    }
-    *zone = result.ok;
-    return true;
-}
-
-// Reads the offset field of a property bag; the caller frees `*data`.
-static bool temporal_offset_field(
-    MalVm *vm, MalValue input, byte **data, OptionStringView *offset
-) {
-    *data = nullptr;
-    *offset = (OptionStringView) {.is_ok = false};
-    MalValue value;
-    if (!mal_vm_get_property(vm, input, mal_intrinsic_string_key(vm, "offset"), &value)) {
-        return false;
-    }
-    if (mal_value_is_undefined(value)) return true;
-    // ToOffsetString: only a string, or an object converting to one, is an offset.
-    if (!mal_vm_to_primitive(vm, value, MAL_TO_PRIMITIVE_STRING, &value)) return false;
-    if (!mal_value_is_string(value)) return temporal_throw_type(vm, "Temporal offset must be a string"), false;
-    usize length;
-    *data = mal_string_to_utf8(mal_value_to_string(value), &length);
-    if (*data == nullptr) return temporal_throw_type(vm, "Unable to encode Temporal offset"), false;
-    *offset = (OptionStringView) {.ok = {.data = (const char *) *data, .len = length}, .is_ok = true};
-    return true;
-}
-
 static bool duration_relative_to_fields(MalVm *vm, MalValue input, OwnedRelativeTo *relative) {
-    PlainDatePartial date;
-    if (!plain_date_partial_from_object_impl(vm, input, &date, false)) return false;
-    PlainTimeFields time_fields;
-    PartialTime time;
-    byte *offset_data = nullptr;
-    OptionStringView offset;
-    MalValue zone_value;
-    bool ok = plain_time_read_fields(vm, input, &time_fields, false) &&
-        plain_time_partial(vm, &time_fields, ArithmeticOverflow_Constrain, &time) &&
-        temporal_offset_field(vm, input, &offset_data, &offset) &&
-        mal_vm_get_property(vm, input, mal_intrinsic_string_key(vm, "timeZone"), &zone_value);
-    TimeZone zone;
-    if (ok && !mal_value_is_undefined(zone_value)) ok = temporal_time_zone_from_value(vm, zone_value, &zone);
-    ArithmeticOverflow_option constrain = {.ok = ArithmeticOverflow_Constrain, .is_ok = true};
-    if (ok && mal_value_is_undefined(zone_value)) {
-        temporal_rs_PlainDate_from_partial_result result =
-            temporal_rs_PlainDate_from_partial(date.partial, constrain);
-        if (result.is_ok) relative->date = result.ok;
-        else ok = (temporal_throw(vm, result.err), false);
-    } else if (ok) {
-        // Without an offset the fields are wall-clock time; with one it must match exactly.
-        PartialZonedDateTime partial = {
-            .date = date.partial, .time = time, .offset = offset,
-            .timezone = {.ok = zone, .is_ok = true},
-        };
-        temporal_rs_ZonedDateTime_from_partial_result result =
-            temporal_rs_ZonedDateTime_from_partial(
-                partial, constrain,
-                (Disambiguation_option) {.ok = Disambiguation_Compatible, .is_ok = true},
-                (OffsetDisambiguation_option) {.ok = OffsetDisambiguation_Reject, .is_ok = true});
-        if (result.is_ok) relative->zoned = result.ok;
-        else ok = (temporal_throw(vm, result.err), false);
+    AnyCalendarKind calendar;
+    TemporalFields fields;
+    if (!temporal_bag_calendar(vm, input, &calendar) ||
+        !temporal_prepare_fields(
+            vm, input, calendar,
+            TEMPORAL_DATE_FIELDS | TEMPORAL_TIME_FIELDS | TEMPORAL_FIELD(OFFSET) |
+                TEMPORAL_FIELD(TIME_ZONE),
+            0, false, &fields)) {
+        return false;
     }
-    free(offset_data);
-    plain_date_partial_destroy(&date);
+    ArithmeticOverflow_option constrain = {.ok = ArithmeticOverflow_Constrain, .is_ok = true};
+    bool ok;
+    if (!temporal_fields_has(&fields, TEMPORAL_FIELD_TIME_ZONE)) {
+        temporal_rs_PlainDate_from_partial_result result =
+            temporal_rs_PlainDate_from_partial(temporal_fields_date(&fields), constrain);
+        ok = result.is_ok;
+        if (ok) relative->date = result.ok;
+        else temporal_throw(vm, result.err);
+    } else {
+        PartialTime time;
+        ok = temporal_fields_time(vm, &fields, ArithmeticOverflow_Constrain, &time);
+        if (ok) {
+            // Without an offset the fields are wall-clock time; with one it must match exactly.
+            PartialZonedDateTime partial = {
+                .date = temporal_fields_date(&fields), .time = time,
+                .offset = temporal_fields_offset(&fields),
+                .timezone = {.ok = fields.time_zone, .is_ok = true},
+            };
+            temporal_rs_ZonedDateTime_from_partial_result result =
+                temporal_rs_ZonedDateTime_from_partial(
+                    partial, constrain,
+                    (Disambiguation_option) {.ok = Disambiguation_Compatible, .is_ok = true},
+                    (OffsetDisambiguation_option) {.ok = OffsetDisambiguation_Reject, .is_ok = true});
+            ok = result.is_ok;
+            if (ok) relative->zoned = result.ok;
+            else temporal_throw(vm, result.err);
+        }
+    }
+    temporal_fields_destroy(&fields);
     return ok;
 }
 
@@ -4205,6 +4400,65 @@ static MalValue zoned_date_time_wrap_intrinsic(MalVm *vm, ZonedDateTime *handle)
             vm->intrinsics[MAL_INTRINSIC_TEMPORAL_ZONED_DATE_TIME_PROTOTYPE]));
 }
 
+static bool zoned_date_time_option_string(
+    MalVm *vm, MalValue options, const byte *name, const byte *fallback,
+    MalString **out
+) {
+    bool present;
+    if (!temporal_options_object(vm, options, &present)) return false;
+    if (!present) {
+        *out = mal_intrinsic_ascii(vm, fallback);
+        return true;
+    }
+    MalValue value;
+    if (!mal_vm_get_property(vm, options, mal_intrinsic_string_key(vm, name), &value)) {
+        return false;
+    }
+    if (mal_value_is_undefined(value)) {
+        *out = mal_intrinsic_ascii(vm, fallback);
+        return true;
+    }
+    return mal_vm_to_string(vm, value, out);
+}
+
+static bool zoned_date_time_disambiguation_options(
+    MalVm *vm, MalValue options, const byte *offset_fallback, Disambiguation *disambiguation,
+    OffsetDisambiguation *offset
+) {
+    MalString *string;
+    if (!zoned_date_time_option_string(
+            vm, options, "disambiguation", "compatible", &string)) return false;
+    if (mal_string_equals_ascii(string, "compatible")) {
+        *disambiguation = Disambiguation_Compatible;
+    } else if (mal_string_equals_ascii(string, "earlier")) {
+        *disambiguation = Disambiguation_Earlier;
+    } else if (mal_string_equals_ascii(string, "later")) {
+        *disambiguation = Disambiguation_Later;
+    } else if (mal_string_equals_ascii(string, "reject")) {
+        *disambiguation = Disambiguation_Reject;
+    } else {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                           "Invalid Temporal disambiguation option");
+        return false;
+    }
+    if (!zoned_date_time_option_string(vm, options, "offset", offset_fallback, &string)) {
+        return false;
+    }
+    if (mal_string_equals_ascii(string, "use")) *offset = OffsetDisambiguation_Use;
+    else if (mal_string_equals_ascii(string, "prefer")) {
+        *offset = OffsetDisambiguation_Prefer;
+    } else if (mal_string_equals_ascii(string, "ignore")) {
+        *offset = OffsetDisambiguation_Ignore;
+    } else if (mal_string_equals_ascii(string, "reject")) {
+        *offset = OffsetDisambiguation_Reject;
+    } else {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                           "Invalid Temporal offset option");
+        return false;
+    }
+    return true;
+}
+
 static ZonedDateTime *zoned_date_time_from_like_options(
     MalVm *vm, MalValue input, MalValue options
 ) {
@@ -4289,103 +4543,37 @@ static ZonedDateTime *zoned_date_time_from_like_options(
         return nullptr;
     }
 
-    ArithmeticOverflow overflow = ArithmeticOverflow_Constrain;
-
-    PlainDatePartial date;
-    if (!plain_date_partial_from_object(vm, input, &date)) return nullptr;
-    PlainTimeFields time_fields;
-    if (!plain_time_read_fields(vm, input, &time_fields, false)) {
-        plain_date_partial_destroy(&date);
+    AnyCalendarKind calendar;
+    TemporalFields fields;
+    if (!temporal_bag_calendar(vm, input, &calendar) ||
+        !temporal_prepare_fields(
+            vm, input, calendar,
+            TEMPORAL_DATE_FIELDS | TEMPORAL_TIME_FIELDS | TEMPORAL_FIELD(OFFSET) |
+                TEMPORAL_FIELD(TIME_ZONE),
+            TEMPORAL_FIELD(TIME_ZONE), false, &fields)) {
         return nullptr;
     }
+    Disambiguation disambiguation;
+    OffsetDisambiguation offset;
+    ArithmeticOverflow overflow;
     PartialTime time;
-    if (!plain_time_partial(vm, &time_fields, overflow, &time)) {
-        plain_date_partial_destroy(&date);
+    if (!zoned_date_time_disambiguation_options(vm, options, "reject", &disambiguation, &offset) ||
+        !temporal_overflow_option(vm, options, &overflow) ||
+        !temporal_fields_time(vm, &fields, overflow, &time)) {
+        temporal_fields_destroy(&fields);
         return nullptr;
-    }
-    byte *offset_data;
-    OptionStringView offset;
-    if (!temporal_offset_field(vm, input, &offset_data, &offset)) {
-        plain_date_partial_destroy(&date);
-        return nullptr;
-    }
-    MalValue value;
-    if (!mal_vm_get_property(
-            vm, input, mal_intrinsic_string_key(vm, "timeZone"), &value)) {
-        free(offset_data); plain_date_partial_destroy(&date); return nullptr;
-    }
-    TimeZone zone;
-    if (!temporal_time_zone_from_value(vm, value, &zone)) {
-        free(offset_data); plain_date_partial_destroy(&date); return nullptr;
-    }
-    Disambiguation disambiguation = Disambiguation_Compatible;
-    OffsetDisambiguation offset_option = OffsetDisambiguation_Reject;
-    bool options_present;
-    if (!temporal_options_object(vm, options, &options_present)) {
-        free(offset_data); plain_date_partial_destroy(&date); return nullptr;
-    }
-    if (options_present) {
-        MalValue option_value;
-        MalString *string;
-        if (!mal_vm_get_property(
-                vm, options, mal_intrinsic_string_key(vm, "disambiguation"),
-                &option_value)) {
-            free(offset_data); plain_date_partial_destroy(&date); return nullptr;
-        }
-        if (!mal_value_is_undefined(option_value)) {
-            if (!mal_vm_to_string(vm, option_value, &string)) {
-                free(offset_data); plain_date_partial_destroy(&date); return nullptr;
-            }
-            if (mal_string_equals_ascii(string, "compatible")) {}
-            else if (mal_string_equals_ascii(string, "earlier"))
-                disambiguation = Disambiguation_Earlier;
-            else if (mal_string_equals_ascii(string, "later"))
-                disambiguation = Disambiguation_Later;
-            else if (mal_string_equals_ascii(string, "reject"))
-                disambiguation = Disambiguation_Reject;
-            else {
-                free(offset_data); plain_date_partial_destroy(&date);
-                mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
-                                   "Invalid Temporal disambiguation option");
-                return nullptr;
-            }
-        }
-        if (!mal_vm_get_property(
-                vm, options, mal_intrinsic_string_key(vm, "offset"), &option_value)) {
-            free(offset_data); plain_date_partial_destroy(&date); return nullptr;
-        }
-        if (!mal_value_is_undefined(option_value)) {
-            if (!mal_vm_to_string(vm, option_value, &string)) {
-                free(offset_data); plain_date_partial_destroy(&date); return nullptr;
-            }
-            if (mal_string_equals_ascii(string, "use")) offset_option = OffsetDisambiguation_Use;
-            else if (mal_string_equals_ascii(string, "prefer"))
-                offset_option = OffsetDisambiguation_Prefer;
-            else if (mal_string_equals_ascii(string, "ignore"))
-                offset_option = OffsetDisambiguation_Ignore;
-            else if (mal_string_equals_ascii(string, "reject")) {}
-            else {
-                free(offset_data); plain_date_partial_destroy(&date);
-                mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
-                                   "Invalid Temporal offset option");
-                return nullptr;
-            }
-        }
-    }
-    if (!temporal_overflow_option(vm, options, &overflow)) {
-        free(offset_data); plain_date_partial_destroy(&date); return nullptr;
     }
     PartialZonedDateTime partial = {
-        .date = date.partial, .time = time, .offset = offset,
-        .timezone = {.ok = zone, .is_ok = true},
+        .date = temporal_fields_date(&fields), .time = time,
+        .offset = temporal_fields_offset(&fields),
+        .timezone = {.ok = fields.time_zone, .is_ok = true},
     };
     temporal_rs_ZonedDateTime_from_partial_result result =
         temporal_rs_ZonedDateTime_from_partial(
             partial, (ArithmeticOverflow_option) {.ok = overflow, .is_ok = true},
             (Disambiguation_option) {.ok = disambiguation, .is_ok = true},
-            (OffsetDisambiguation_option) {.ok = offset_option, .is_ok = true});
-    free(offset_data);
-    plain_date_partial_destroy(&date);
+            (OffsetDisambiguation_option) {.ok = offset, .is_ok = true});
+    temporal_fields_destroy(&fields);
     if (!result.is_ok) {
         temporal_throw(vm, result.err);
         return nullptr;
@@ -4918,65 +5106,6 @@ static MalValue zoned_date_time_with_time_zone(
                         : temporal_throw(vm, result.err);
 }
 
-static bool zoned_date_time_option_string(
-    MalVm *vm, MalValue options, const byte *name, const byte *fallback,
-    MalString **out
-) {
-    bool present;
-    if (!temporal_options_object(vm, options, &present)) return false;
-    if (!present) {
-        *out = mal_intrinsic_ascii(vm, fallback);
-        return true;
-    }
-    MalValue value;
-    if (!mal_vm_get_property(vm, options, mal_intrinsic_string_key(vm, name), &value)) {
-        return false;
-    }
-    if (mal_value_is_undefined(value)) {
-        *out = mal_intrinsic_ascii(vm, fallback);
-        return true;
-    }
-    return mal_vm_to_string(vm, value, out);
-}
-
-static bool zoned_date_time_disambiguation_options(
-    MalVm *vm, MalValue options, Disambiguation *disambiguation,
-    OffsetDisambiguation *offset
-) {
-    MalString *string;
-    if (!zoned_date_time_option_string(
-            vm, options, "disambiguation", "compatible", &string)) return false;
-    if (mal_string_equals_ascii(string, "compatible")) {
-        *disambiguation = Disambiguation_Compatible;
-    } else if (mal_string_equals_ascii(string, "earlier")) {
-        *disambiguation = Disambiguation_Earlier;
-    } else if (mal_string_equals_ascii(string, "later")) {
-        *disambiguation = Disambiguation_Later;
-    } else if (mal_string_equals_ascii(string, "reject")) {
-        *disambiguation = Disambiguation_Reject;
-    } else {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
-                           "Invalid Temporal disambiguation option");
-        return false;
-    }
-    if (!zoned_date_time_option_string(vm, options, "offset", "prefer", &string)) {
-        return false;
-    }
-    if (mal_string_equals_ascii(string, "use")) *offset = OffsetDisambiguation_Use;
-    else if (mal_string_equals_ascii(string, "prefer")) {
-        *offset = OffsetDisambiguation_Prefer;
-    } else if (mal_string_equals_ascii(string, "ignore")) {
-        *offset = OffsetDisambiguation_Ignore;
-    } else if (mal_string_equals_ascii(string, "reject")) {
-        *offset = OffsetDisambiguation_Reject;
-    } else {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
-                           "Invalid Temporal offset option");
-        return false;
-    }
-    return true;
-}
-
 static MalValue zoned_date_time_with(
     MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count,
     MalValue new_target, MalValue callee
@@ -4985,84 +5114,37 @@ static MalValue zoned_date_time_with(
     MalTemporalObject *object;
     if (!zoned_date_time_this(vm, this_value, &object)) return mal_value_new_undefined();
     MalValue input = arg_count > 0 ? args[0] : mal_value_new_undefined();
-    if (!mal_value_is_object(input) || mal_value_is_temporal_object(input)) {
-        return temporal_throw_type(vm, "Temporal.ZonedDateTime.with requires a property bag");
-    }
-    MalValue value;
-    if (!mal_vm_get_property(
-            vm, input, mal_intrinsic_string_key(vm, "calendar"), &value)) {
+    AnyCalendarKind calendar;
+    TemporalFields fields;
+    if (!temporal_partial_object(vm, input) ||
+        !temporal_calendar_kind(vm, this_value, &calendar) ||
+        !temporal_prepare_fields(
+            vm, input, calendar,
+            TEMPORAL_DATE_FIELDS | TEMPORAL_TIME_FIELDS | TEMPORAL_FIELD(OFFSET), 0, true,
+            &fields)) {
         return mal_value_new_undefined();
-    }
-    if (!mal_value_is_undefined(value)) {
-        return temporal_throw_type(vm, "Temporal.ZonedDateTime.with rejects calendar");
-    }
-    PlainDatePartial date;
-    if (!plain_date_partial_from_object_impl(vm, input, &date, false)) {
-        return mal_value_new_undefined();
-    }
-    PlainTimeFields time_fields;
-    if (!plain_time_read_fields(vm, input, &time_fields, false)) {
-        plain_date_partial_destroy(&date);
-        return mal_value_new_undefined();
-    }
-    PartialTime time;
-    if (!plain_time_partial(
-            vm, &time_fields, ArithmeticOverflow_Constrain, &time)) {
-        plain_date_partial_destroy(&date);
-        return mal_value_new_undefined();
-    }
-    if (!mal_vm_get_property(
-            vm, input, mal_intrinsic_string_key(vm, "offset"), &value)) {
-        plain_date_partial_destroy(&date);
-        return mal_value_new_undefined();
-    }
-    byte *offset_data = nullptr;
-    OptionStringView offset_string = {.is_ok = false};
-    if (!mal_value_is_undefined(value)) {
-        MalString *string;
-        if (!mal_vm_to_string(vm, value, &string)) {
-            plain_date_partial_destroy(&date);
-            return mal_value_new_undefined();
-        }
-        usize length;
-        offset_data = mal_string_to_utf8(string, &length);
-        if (offset_data == nullptr) {
-            plain_date_partial_destroy(&date);
-            return temporal_throw_type(vm, "Unable to encode Temporal offset");
-        }
-        offset_string = (OptionStringView) {
-            .ok = {.data = (const char *) offset_data, .len = length}, .is_ok = true};
-    }
-    if (!mal_vm_get_property(
-            vm, input, mal_intrinsic_string_key(vm, "timeZone"), &value)) {
-        free(offset_data); plain_date_partial_destroy(&date);
-        return mal_value_new_undefined();
-    }
-    if (!mal_value_is_undefined(value)) {
-        free(offset_data); plain_date_partial_destroy(&date);
-        return temporal_throw_type(vm, "Temporal.ZonedDateTime.with rejects timeZone");
     }
     MalValue options = arg_count > 1 ? args[1] : mal_value_new_undefined();
     Disambiguation disambiguation;
     OffsetDisambiguation offset;
     ArithmeticOverflow overflow;
-    if (!zoned_date_time_disambiguation_options(
-            vm, options, &disambiguation, &offset) ||
-        !temporal_overflow_option(vm, options, &overflow)) {
-        free(offset_data); plain_date_partial_destroy(&date);
+    PartialTime time;
+    if (!zoned_date_time_disambiguation_options(vm, options, "prefer", &disambiguation, &offset) ||
+        !temporal_overflow_option(vm, options, &overflow) ||
+        !temporal_fields_time(vm, &fields, overflow, &time)) {
+        temporal_fields_destroy(&fields);
         return mal_value_new_undefined();
     }
     PartialZonedDateTime partial = {
-        .date = date.partial, .time = time, .offset = offset_string,
-        .timezone = {.is_ok = false},
+        .date = temporal_fields_date(&fields), .time = time,
+        .offset = temporal_fields_offset(&fields), .timezone = {.is_ok = false},
     };
     temporal_rs_ZonedDateTime_with_result result = temporal_rs_ZonedDateTime_with(
         object->handle, partial,
         (Disambiguation_option) {.ok = disambiguation, .is_ok = true},
         (OffsetDisambiguation_option) {.ok = offset, .is_ok = true},
         (ArithmeticOverflow_option) {.ok = overflow, .is_ok = true});
-    free(offset_data);
-    plain_date_partial_destroy(&date);
+    temporal_fields_destroy(&fields);
     return result.is_ok ? zoned_date_time_wrap_intrinsic(vm, result.ok)
                         : temporal_throw(vm, result.err);
 }
@@ -5572,6 +5654,7 @@ static void temporal_install_plain_date_time(MalVm *vm, MalObject *temporal) {
     mal_intrinsic_define_method_n(vm, prototype, "until", 1, plain_date_time_until);
     mal_intrinsic_define_method_n(vm, prototype, "valueOf", 0,
                                   plain_date_time_value_of);
+    mal_intrinsic_define_method_n(vm, prototype, "with", 1, plain_date_time_with);
     mal_intrinsic_define_method_n(vm, prototype, "withCalendar", 1,
                                   plain_date_time_with_calendar);
     mal_intrinsic_define_method_n(vm, prototype, "withPlainTime", 0,
