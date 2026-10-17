@@ -3,6 +3,7 @@ import { dirname } from "node:path";
 import { capabilities } from "maligator:workers";
 import { createApplicationImageHost } from "./application-images.ts";
 import type { NativeApplicationBridge } from "./application-images.ts";
+import { setCacheMaintenanceCommand } from "./cache-management.ts";
 import { productCompilerInstallation, runCli } from "./cli-commands.ts";
 import { installCompilerProducerDigests } from "./compiler-cache-identity.ts";
 import type { CompilerProducerStage } from "./compiler-cache-identity.ts";
@@ -52,6 +53,8 @@ const installation = productCompilerInstallation(
 	mutableDevelopmentRunner,
 	assets.materialize("platformSources"),
 );
+
+setCacheMaintenanceCommand([process.argv[0]!]);
 
 await runCli(process.argv.slice(2), {
 	stripTypes: stripCompactTypes,

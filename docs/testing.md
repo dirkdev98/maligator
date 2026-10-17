@@ -619,25 +619,44 @@ Reports and the shared build cache remain outside that disposable directory.
 
 Maligator bounds its shared user-cache artifacts without touching project source,
 committed baselines, or user output. Shared Test262 snapshots are rebuildable cache
-entries; pruning retains the two most recently used corpus revisions. Inspect usage
-with `maligator cache status`; preview or apply reclamation with
-`maligator cache prune --dry-run` and `maligator cache prune`. Explicit prune
-targets 15 GiB and normally considers entries unused for at least one day. Above
-twice the target it applies the per-family retention floors immediately, which
-prevents a burst of content-addressed artifacts from filling the disk.
-Eligible Rust work and Rust library artifacts are pruned after compiler work and
-other action artifacts, so stable Cargo products survive when the target can be
-met from shorter-lived entries.
+entries; pruning retains the two most recently used corpus revisions.
 
-Build, test, standards, benchmark, and quality commands hold process leases.
-Pruning refuses to run while any live lease exists, removes stale lease files
-only after confirming their process is gone, and never caches test verdicts.
-Cache hits touch their artifact directory so retention follows actual reuse.
-Normal commands never inventory or evict the shared cache: a first build, run, dev,
-or test therefore cannot inherit the cost of a recursive maintenance scan. Use
+Commands keep the cache within a budget on their own. When a command ends it compares
+the last measured size plus the bytes it published since against the budget, which
+costs a free-space query and two small reads, never a scan. When the cache is over
+budget, was last measured a day ago, or its volume has less than 10 GiB free, the
+command starts `maligator cache maintain` detached and at low priority, so nobody waits
+for the scan. A volume short of space also starts maintenance when a command begins.
+The budget is 20 GiB, pruned back to 15 GiB. With at least 200 GiB available to the
+cache (free space plus its own size) it is 100 GiB, pruned back to 40 GiB.
+`MALIGATOR_CACHE_MAX_GB` fixes the limit and prunes back to three quarters of it;
+`MALIGATOR_CACHE_MAINTENANCE=off` turns automatic maintenance off. CI runners
+(`CI=true`) skip it, since they are discarded after each job and save their cache
+explicitly.
+
+Maintenance runs beside other commands, including long-running `dev` and `run`
+processes in other projects. It never removes an entry used in the last hour (ten
+minutes on a nearly full volume) or scratch that belongs to a running process, and a
+read that races a removal sees an ordinary cache miss. Scratch left behind by a
+finished process is removed regardless of the budget. The linker's ThinLTO cache is a
+managed family like the others.
+
+Inspect usage, the budget and the last maintenance with `maligator cache status`;
+preview or apply reclamation with `maligator cache prune --dry-run` and
+`maligator cache prune`. Explicit prune targets the budget's prune-back size and
+normally considers entries unused for at least one day. Above twice the target it
+applies the per-family retention floors immediately, which prevents a burst of
+content-addressed artifacts from filling the disk. Eligible Rust work and Rust library
+artifacts are pruned after compiler work and other action artifacts, so stable Cargo
+products survive when the target can be met from shorter-lived entries. Use
 `--max-gb`, `--min-age-days`, and `--verbose` to tune or audit an explicit prune.
-`maligator cache clear --all` removes every Maligator cache-layout generation
-after the same live-command safety check, without retaining readers for old formats.
+
+Build, test, standards, benchmark, and quality commands hold process leases, which
+`maligator cache status` lists. Stale lease files are removed only after confirming
+their process is gone, and test verdicts are never cached. Cache hits touch their
+artifact directory so retention follows actual reuse. `maligator cache clear --all`
+removes every Maligator cache-layout generation, refuses to run while a command holds
+a lease, and retains no readers for old formats.
 WPT removes its per-run native scratch tree on exit; pass
 `--keep-artifacts` only when debugging generated sources or binaries.
 

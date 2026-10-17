@@ -67,7 +67,7 @@ export interface TestCommand {
 
 export interface CacheCommand {
 	kind: "cache";
-	action: "status" | "prune" | "clear";
+	action: "status" | "prune" | "clear" | "maintain";
 	dryRun: boolean;
 	verbose: boolean;
 	maxBytes?: number;
@@ -123,7 +123,7 @@ Options:
   --shuffle [seed]             Shuffle deterministically and print the seed
   --repeat <count>             Repeat selected tests without recompiling
   --bail                       Stop after the first failure
-  --max-gb <number>            Cache prune target in GiB (default: 15)
+  --max-gb <number>            Cache prune target in GiB (default: the cache budget's)
   --min-age-days <number>      Youngest cache age eligible for prune (default: 1)
   --dry-run                    Show what cache prune would remove
   -h, --help                   Show help
@@ -355,7 +355,12 @@ function positiveNumber(value: string, option: string): number {
 function parseCache(args: Array<string>): CliCommand {
 	const action = args[1];
 	if (action === "--help" || action === "-h") return { kind: "help" };
-	if (action !== "status" && action !== "prune" && action !== "clear") {
+	if (
+		action !== "status" &&
+		action !== "prune" &&
+		action !== "clear" &&
+		action !== "maintain"
+	) {
 		throw new CliUsageError("cache requires 'status', 'prune', or 'clear'");
 	}
 	let clearConfirmed = false;

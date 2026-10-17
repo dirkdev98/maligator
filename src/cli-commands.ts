@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import type {
 	ApplicationExit,
@@ -33,13 +34,16 @@ import type {
 } from "./build-frontend-cache.ts";
 import { BuildReporter } from "./build-progress.ts";
 import {
+	cacheBudget,
 	clearAllMaligatorCaches,
 	createCacheLease,
-	DEFAULT_CACHE_MAX_BYTES,
 	DEFAULT_CACHE_MIN_AGE_MS,
 	formatCacheBytes,
 	inspectMaligatorCache,
+	maintainMaligatorCache,
 	pruneMaligatorCache,
+	readCacheUsage,
+	volumeFreeBytes,
 } from "./cache-management.ts";
 import { maligatorCacheDirectory, MaligatorCacheRootError } from "./cache-root.ts";
 import { BUILD_CONFIG_NAME, initProject, InitError } from "./cli-init.ts";
@@ -2312,9 +2316,16 @@ function cacheSummaryLines(): Array<string> {
 		families.set(entry.family, (families.get(entry.family) ?? 0) + entry.bytes);
 	}
 	const now = Date.now();
+	const freeBytes = volumeFreeBytes(status.root);
+	const budget = cacheBudget(freeBytes + status.totalBytes);
+	const usage = readCacheUsage(status.root);
 	return [
 		`Root: ${status.root}`,
 		`Total: ${formatCacheBytes(status.totalBytes)} (${formatCacheBytes(status.managedBytes)} managed)`,
+		`Budget: prunes at ${formatCacheBytes(budget.maxBytes)} back to ${formatCacheBytes(budget.targetBytes)} (${formatCacheBytes(freeBytes)} free on its volume)`,
+		usage === undefined
+			? "Maintenance: not yet run"
+			: `Maintenance: ${formatCommandDuration(now - usage.measuredAt)} ago, measured ${formatCacheBytes(usage.bytes)}, removed ${formatCacheBytes(usage.removedBytes)}`,
 		...[...families.entries()]
 			.sort((left, right) => right[1] - left[1])
 			.map(([family, bytes]) => `  ${family}: ${formatCacheBytes(bytes)}`),
@@ -2327,6 +2338,16 @@ function cacheSummaryLines(): Array<string> {
 }
 
 function runCacheCommand(command: CacheCommand): void {
+	if (command.action === "maintain") {
+		// Started detached after other commands; nobody reads its output.
+		try {
+			os.setPriority(os.constants.priority.PRIORITY_LOW);
+		} catch {
+			// Hosts without process priorities run it at normal priority.
+		}
+		maintainMaligatorCache();
+		return;
+	}
 	const progress = new CommandProgress("cache", { cacheLease: false });
 	if (command.action === "status") {
 		progress.start("inspect Maligator-owned cache");
@@ -2350,17 +2371,14 @@ function runCacheCommand(command: CacheCommand): void {
 		return;
 	}
 
-	const maxBytes = command.maxBytes ?? DEFAULT_CACHE_MAX_BYTES;
 	const minAgeMs = command.minAgeMs ?? DEFAULT_CACHE_MIN_AGE_MS;
-	progress.start(
-		`${command.dryRun ? "preview" : "prune"} stale rebuildable entries · target ${formatCacheBytes(maxBytes)}`,
-	);
+	progress.start(`${command.dryRun ? "preview" : "prune"} stale rebuildable entries`);
 	const maintenanceLabel = command.dryRun
 		? "scan eligible entries"
 		: "remove stale entries";
 	progress.stage(1, 2, maintenanceLabel);
 	const result = pruneMaligatorCache({
-		maxBytes,
+		maxBytes: command.maxBytes,
 		minAgeMs,
 		dryRun: command.dryRun,
 	});
@@ -2394,7 +2412,7 @@ function runCacheCommand(command: CacheCommand): void {
 		2,
 		2,
 		command.dryRun ? "report preview" : "report result",
-		`${formatCacheBytes(result.totalBytes)} remain`,
+		`${formatCacheBytes(result.totalBytes)} remain · target ${formatCacheBytes(result.targetBytes)}`,
 	);
 	progress.complete();
 }

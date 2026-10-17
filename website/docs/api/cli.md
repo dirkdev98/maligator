@@ -97,7 +97,9 @@ maligator cache prune [--max-gb number] [--min-age-days number]
 maligator cache clear --all
 ```
 
-`status` reports Maligator-owned cache usage. `prune` removes eligible stale, rebuildable entries while preserving live leases and protected recent entries. The default target is 15 GiB and minimum age is 1 day; protections can leave more than the target. Use `--dry-run` to inspect candidates and `--verbose` for each entry. `clear --all` explicitly removes rebuildable cache entries. See [Troubleshooting](/guides/troubleshooting#inspect-cache-usage).
+The cache keeps itself within a budget: after a command, Maligator trims it in the background once it passes 20 GiB, back to 15 GiB. On a volume with at least 200 GiB available to the cache the limit is 100 GiB, trimmed back to 40 GiB. `MALIGATOR_CACHE_MAX_GB` fixes the limit and `MALIGATOR_CACHE_MAINTENANCE=off` turns the background trim off; CI runners (`CI=true`) skip it. Entries used in the last hour and scratch of running commands are never removed, so other projects keep working while it runs.
+
+`status` reports Maligator-owned cache usage, the budget and the last trim. `prune` removes eligible stale, rebuildable entries right away. Its default target is the budget's trim-back size and its minimum age is 1 day; protections can leave more than the target. Use `--dry-run` to inspect candidates and `--verbose` for each entry. `clear --all` explicitly removes rebuildable cache entries. See [Troubleshooting](/guides/troubleshooting#inspect-cache-usage).
 
 The user cache lives in `~/Library/Caches/maligator` on macOS and `$XDG_CACHE_HOME/maligator` (default `~/.cache/maligator`) on Linux. `MALIGATOR_CACHE_DIR` replaces that directory. Project outputs live under `.cache/mal-build` in the project root; removing it keeps the reusable user cache.
 

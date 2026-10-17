@@ -14,6 +14,7 @@ import {
 import type { Stats } from "node:fs";
 import * as path from "node:path";
 import { writeFileAtomically } from "./atomic-file.ts";
+import { recordCacheGrowth } from "./cache-management.ts";
 import { processIsAlive } from "./process-state.ts";
 import { MALIGATOR_VERSION } from "./version.ts";
 
@@ -251,6 +252,7 @@ export function publishArtifactAction(
 			if (!validBlob(blob, digest, stats.size)) {
 				throw new Error(`artifact blob publication failed: ${blob}`);
 			}
+			recordCacheGrowth(root, stats.size);
 		}
 		return {
 			name: publication.name,

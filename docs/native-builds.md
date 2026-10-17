@@ -88,6 +88,7 @@ Maligator keeps reusable inputs separate from project outputs:
 <user-cache>/maligator/v1/actions/       producer/action result manifests
 <user-cache>/maligator/v1/blobs/sha256/  immutable content-addressed outputs
 <user-cache>/maligator/v1/frontend/      serialized VM definitions
+<user-cache>/maligator/v1/thinlto/       the linker's ThinLTO code generation cache
 <user-cache>/maligator/v1/toolchains/    tool identity and capability probes
 <user-cache>/maligator/v1/work/          disposable compiler/Cargo scratch
 <project>/.cache/mal-build/development/  generated C and development executables

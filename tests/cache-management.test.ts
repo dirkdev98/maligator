@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import {
 	existsSync,
 	mkdirSync,
@@ -10,19 +11,40 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
+	cacheBudget,
 	clearAllMaligatorCaches,
 	createCacheLease,
+	estimateCacheBytes,
 	inspectMaligatorCache,
+	maintainMaligatorCache,
 	pruneMaligatorCache,
+	readCacheUsage,
+	recordCacheGrowth,
+	setCacheMaintenanceCommand,
+	startCacheMaintenanceIfDue,
 } from "../src/cache-management.ts";
+import { maligatorCacheDirectory } from "../src/cache-root.ts";
 import { CommandProgress } from "../src/command-progress.ts";
 
 const DAY = 24 * 60 * 60 * 1000;
+const GIB = 1024 ** 3;
 // Fixture ages must follow the real creation time, which utimes cannot backdate on Linux.
 const pruneNowMs = Date.now() + 30 * DAY;
 
 function cacheRoot(): string {
 	return mkdtempSync(path.join(os.tmpdir(), "mal-cache-management-"));
+}
+
+/** A user cache root that automatic maintenance treats as the default one. */
+function defaultCacheRoot(): { root: string; environment: NodeJS.ProcessEnv } {
+	const environment = { MALIGATOR_CACHE_DIR: cacheRoot() };
+	const root = maligatorCacheDirectory(undefined, environment);
+	mkdirSync(root, { recursive: true });
+	return { root, environment };
+}
+
+function finishedProcessId(): number {
+	return spawnSync(process.execPath, ["-e", ""]).pid;
 }
 
 function artifact(
@@ -78,7 +100,7 @@ describe("Maligator cache management", () => {
 		expect(status.totalBytes).toBe(140);
 	});
 
-	it("previews without deleting and refuses to race an active command", () => {
+	it("previews without deleting", () => {
 		const root = cacheRoot();
 		const smokeStamp = path.join(root, "test-suite-smoke.json");
 		mkdirSync(path.dirname(smokeStamp), { recursive: true });
@@ -97,21 +119,192 @@ describe("Maligator cache management", () => {
 		expect(preview.removed.map((entry) => entry.path)).toContain(old);
 		expect(existsSync(old)).toBe(true);
 		expect(existsSync(smokeStamp)).toBe(true);
+	});
 
-		const lease = createCacheLease("test", root);
+	it("prunes beside a running command but keeps what it may still be using", () => {
+		const root = cacheRoot();
+		const old = artifact(root, "thinlto/toolchain", "old", 100, 10);
+		const recent = artifact(root, "thinlto/toolchain", "in-use", 100, 10 / (24 * 60));
+		const lease = createCacheLease("dev", root);
 		try {
-			expect(() =>
-				pruneMaligatorCache({
-					cacheRoot: root,
-					maxBytes: 1,
-					minAgeMs: 0,
-					nowMs: pruneNowMs,
-				}),
-			).toThrow("Refusing to prune while 1 Maligator command is active");
+			const result = pruneMaligatorCache({
+				cacheRoot: root,
+				maxBytes: 1,
+				minAgeMs: 0,
+				nowMs: pruneNowMs,
+			});
+			expect(result.removed.map((entry) => entry.path)).toEqual([old]);
+			expect(existsSync(recent)).toBe(true);
 		} finally {
 			lease.release();
 		}
-		expect(inspectMaligatorCache(root).activeLeases).toBe(0);
+	});
+
+	it("keeps a live process's scratch and collects a finished one's within budget", () => {
+		const root = cacheRoot();
+		const live = artifact(root, "work/local-runner", `${process.pid}-live`, 100, 10);
+		const dead = artifact(
+			root,
+			"work/local-runner",
+			`${finishedProcessId()}-dead`,
+			100,
+			10,
+		);
+
+		const result = pruneMaligatorCache({
+			cacheRoot: root,
+			maxBytes: 10_000,
+			minAgeMs: DAY,
+			nowMs: pruneNowMs,
+		});
+
+		expect(result.removed.map((entry) => entry.path)).toEqual([dead]);
+		expect(existsSync(live)).toBe(true);
+	});
+
+	it("manages the linker's ThinLTO cache files", () => {
+		const root = cacheRoot();
+		const old = artifact(root, "thinlto/toolchain-a", "llvmcache-old", 100, 10);
+		const recent = artifact(root, "thinlto/toolchain-b", "llvmcache-recent", 100, 0);
+
+		const result = pruneMaligatorCache({
+			cacheRoot: root,
+			maxBytes: 150,
+			minAgeMs: DAY,
+			nowMs: pruneNowMs,
+		});
+
+		expect(result.removed.map((entry) => entry.path)).toEqual([old]);
+		expect(existsSync(recent)).toBe(true);
+	});
+
+	it("lets a volume with room to spare hold more before pruning", () => {
+		expect(cacheBudget(500 * GIB, {})).toEqual({
+			maxBytes: 100 * GIB,
+			targetBytes: 40 * GIB,
+		});
+		expect(cacheBudget(150 * GIB, {})).toEqual({
+			maxBytes: 20 * GIB,
+			targetBytes: 15 * GIB,
+		});
+		expect(cacheBudget(500 * GIB, { MALIGATOR_CACHE_MAX_GB: "8" })).toEqual({
+			maxBytes: 8 * GIB,
+			targetBytes: 6 * GIB,
+		});
+		expect(() => cacheBudget(500 * GIB, { MALIGATOR_CACHE_MAX_GB: "lots" })).toThrow(
+			"MALIGATOR_CACHE_MAX_GB",
+		);
+	});
+
+	it("estimates growth since the last measurement without scanning", () => {
+		const root = cacheRoot();
+		artifact(root, "compiler-wire", "measured", 100, 0);
+		expect(estimateCacheBytes(root)).toBeUndefined();
+
+		maintainMaligatorCache({ cacheRoot: root, freeBytes: 500 * GIB, environment: {} });
+		recordCacheGrowth(root, 40);
+		recordCacheGrowth(root, 2);
+
+		expect(readCacheUsage(root)?.bytes).toBe(100);
+		expect(estimateCacheBytes(root)).toBe(142);
+		maintainMaligatorCache({ cacheRoot: root, freeBytes: 500 * GIB, environment: {} });
+		expect(estimateCacheBytes(root)).toBe(100);
+	});
+
+	it("maintains an over-budget cache back to its target", () => {
+		const root = cacheRoot();
+		const old = artifact(root, "thinlto/toolchain", "old", 1000, 10);
+		const recent = artifact(root, "thinlto/toolchain", "recent", 1000, 0);
+
+		const result = maintainMaligatorCache({
+			cacheRoot: root,
+			nowMs: pruneNowMs,
+			freeBytes: 500 * GIB,
+			environment: { MALIGATOR_CACHE_MAX_GB: String(1500 / GIB) },
+		});
+
+		expect(result?.pruned?.removed.map((entry) => entry.path)).toEqual([old]);
+		expect(existsSync(recent)).toBe(true);
+		expect(readCacheUsage(root)).toMatchObject({ bytes: 1000, removedBytes: 1000 });
+	});
+
+	it("leaves a cache within budget untouched", () => {
+		const root = cacheRoot();
+		const old = artifact(root, "compiler-wire", "old", 1000, 10);
+
+		const result = maintainMaligatorCache({
+			cacheRoot: root,
+			nowMs: pruneNowMs,
+			freeBytes: 500 * GIB,
+			environment: {},
+		});
+
+		expect(result?.pruned).toBeUndefined();
+		expect(existsSync(old)).toBe(true);
+	});
+
+	it("starts background maintenance only when it is due", () => {
+		setCacheMaintenanceCommand([process.execPath, "-e", ""]);
+		const { root, environment } = defaultCacheRoot();
+		const plenty = { freeBytes: 500 * GIB, environment };
+
+		expect(startCacheMaintenanceIfDue(root, plenty)).toBe(true);
+		expect(startCacheMaintenanceIfDue(root, plenty)).toBe(false);
+
+		rmSync(path.join(root, ".maintenance-started"));
+		maintainMaligatorCache({ cacheRoot: root, ...plenty });
+		expect(startCacheMaintenanceIfDue(root, plenty)).toBe(false);
+		recordCacheGrowth(root, 101 * GIB);
+		expect(startCacheMaintenanceIfDue(root, plenty)).toBe(true);
+	});
+
+	it("starts maintenance at once on a nearly full volume", () => {
+		setCacheMaintenanceCommand([process.execPath, "-e", ""]);
+		const { root, environment } = defaultCacheRoot();
+		maintainMaligatorCache({ cacheRoot: root, freeBytes: 500 * GIB, environment });
+
+		expect(
+			startCacheMaintenanceIfDue(root, {
+				lowDiskOnly: true,
+				freeBytes: 50 * GIB,
+				environment,
+			}),
+		).toBe(false);
+		expect(
+			startCacheMaintenanceIfDue(root, {
+				lowDiskOnly: true,
+				freeBytes: GIB,
+				environment,
+			}),
+		).toBe(true);
+	});
+
+	it("leaves CI runners, opted-out users and other cache roots alone", () => {
+		setCacheMaintenanceCommand([process.execPath, "-e", ""]);
+		const { root, environment } = defaultCacheRoot();
+		for (const override of [{ CI: "true" }, { MALIGATOR_CACHE_MAINTENANCE: "off" }])
+			expect(
+				startCacheMaintenanceIfDue(root, {
+					freeBytes: GIB,
+					environment: { ...environment, ...override },
+				}),
+			).toBe(false);
+		expect(startCacheMaintenanceIfDue(cacheRoot(), { freeBytes: GIB, environment })).toBe(
+			false,
+		);
+	});
+
+	it("lets commands start while maintenance holds the cache", () => {
+		const root = cacheRoot();
+		mkdirSync(path.join(root, ".prune-lock"));
+
+		const lease = createCacheLease("build", root);
+
+		expect(lease.path).toBeDefined();
+		expect(
+			maintainMaligatorCache({ cacheRoot: root, freeBytes: 500 * GIB }),
+		).toBeUndefined();
+		lease.release();
 	});
 
 	it("retains a complete Test262 ProgramImage compiler generation", () => {

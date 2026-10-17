@@ -47,4 +47,4 @@ maligator cache status
 maligator cache prune --dry-run
 ```
 
-Normal source and configuration identity changes invalidate affected work automatically. Use the dry run before pruning. `cache clear --all` deliberately removes rebuildable cache entries; it is not a routine fix for a compilation error. Include a small reproducer when [filing an issue](https://github.com/dirkdev98/maligator/issues).
+Normal source and configuration identity changes invalidate affected work automatically, and the cache trims itself in the background once it passes its budget (see [cache](/api/cli#cache)). Use the dry run before pruning by hand. `cache clear --all` deliberately removes rebuildable cache entries; it is not a routine fix for a compilation error. Include a small reproducer when [filing an issue](https://github.com/dirkdev98/maligator/issues).
