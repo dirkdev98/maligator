@@ -18,7 +18,7 @@ import {
 } from "../src/build-frontend-cache.ts";
 import { parseCliArgs } from "../src/cli.ts";
 import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
-import * as executionLowering from "../src/compiler/target/lower-native-execution.ts";
+import * as executionLowering from "../src/compiler/target/lower-execution.ts";
 import { UnsupportedLinkedImagesError } from "../src/linked-images.ts";
 import { hostExecutionTarget, resolveExecution } from "../src/platform/execution.ts";
 import { TestCompilationSession } from "../src/testing/cache.ts";
@@ -119,7 +119,10 @@ describe("linked test images", () => {
 
 	test("keeps a cold Drizzle table graph on the linear development path", () => {
 		const root = temporaryDirectory();
-		const lowering = vi.spyOn(executionLowering, "lowerCoreCompilationToExecution");
+		const lowering = vi.spyOn(
+			executionLowering,
+			"lowerCoreCompilationToRuntimeExecution",
+		);
 		onTestFinished(() => lowering.mockRestore());
 		const compiled = compileLinkedTestImage({
 			files: [path.resolve("tests/fixtures/drizzle-simple-table.test.ts")],
@@ -172,6 +175,7 @@ describe("linked test images", () => {
 			session: new BuildCompilationSession(),
 			optimization: "development",
 			relocatable: true,
+			interpreted: true,
 		});
 		expect(build.fragmentArtifacts).toEqual({ hits: 0, misses: 2 });
 

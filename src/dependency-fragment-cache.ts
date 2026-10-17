@@ -18,7 +18,11 @@ import {
 	findLinkedImage,
 	linkedImageEnvironment,
 } from "./linked-images.ts";
-import type { LinkedImageArtifact, LinkedImageEnvironment } from "./linked-images.ts";
+import type {
+	LinkedImageArtifact,
+	LinkedImageEnvironment,
+	LinkedImageTarget,
+} from "./linked-images.ts";
 import { nativeBuildJobs, runIndependentCommands } from "./native-command.ts";
 import type { Execution } from "./platform/execution.ts";
 
@@ -44,6 +48,7 @@ export interface DependencyFragmentArtifact extends LinkedImageArtifact {
 }
 
 export interface CompileDependencyFragmentsOptions {
+	target: LinkedImageTarget;
 	graph: ModuleGraph;
 	/** Dependency modules imported from outside `node_modules`. */
 	targets: ReadonlyArray<string>;
@@ -62,7 +67,8 @@ export interface CompileDependencyFragmentsOptions {
 }
 
 interface DependencyFragmentRequest {
-	schema: 2;
+	schema: 3;
+	target: LinkedImageTarget;
 	targets: Array<string>;
 	config: ResolvedBuildConfig;
 	execution?: Execution;
@@ -77,6 +83,7 @@ export function isExternalModule(file: string): boolean {
 function islandEnvironment(
 	options: Pick<
 		CompileDependencyFragmentsOptions,
+		| "target"
 		| "config"
 		| "facts"
 		| "stripperIdentity"
@@ -88,6 +95,7 @@ function islandEnvironment(
 	return linkedImageEnvironment({
 		producer: "dependency-fragment",
 		family: DEPENDENCY_FRAGMENT_FAMILY,
+		target: options.target,
 		config: options.config,
 		facts: options.facts,
 		stripperIdentity: options.stripperIdentity,
@@ -223,7 +231,7 @@ export function compileDependencyFragmentRequest(
 		| DependencyFragmentRequest
 		| undefined;
 	if (
-		request?.schema !== 2 ||
+		request?.schema !== 3 ||
 		!Array.isArray(request.targets) ||
 		request.targets.length === 0
 	) {
@@ -232,6 +240,7 @@ export function compileDependencyFragmentRequest(
 	const session = new FrontendCompilationSession();
 	session.useCacheDirectory(request.cacheDirectory);
 	const environment = islandEnvironment({
+		target: request.target,
 		config: request.config,
 		facts: compilerProgramFactsFromConfig(request.config),
 		stripperIdentity: request.stripperIdentity,
@@ -271,7 +280,8 @@ export function compileDependencyFragments(
 		options.phases.workerMs += compileWithWorkers(
 			environment.root,
 			missing.map(({ targets }) => ({
-				schema: 2,
+				schema: 3,
+				target: options.target,
 				targets,
 				config: options.config,
 				execution: options.execution,

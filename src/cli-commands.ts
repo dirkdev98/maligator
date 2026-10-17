@@ -634,8 +634,8 @@ function prepareCommandState(
 				: hostExecutionTarget(process.platform, process.arch),
 	});
 	const compilerDiagnostics = command.kind === "build" && command.internal.dumpCore;
-	const relocatable =
-		(command.kind !== "build" && !command.profile) || developmentFragments;
+	const interpreted = command.kind !== "build" && !command.profile;
+	const relocatable = interpreted || developmentFragments;
 	const compilerPhases: Array<{ phase: string; durationMs: number }> = [];
 	const frontendOptions: CompileBuildFrontendOptions = {
 		platformSourceRoot:
@@ -673,6 +673,7 @@ function prepareCommandState(
 			command.profile ||
 			(reporter.verbose && !relocatable),
 		relocatable,
+		interpreted,
 		onCompilePhase: (phase, durationMs) => {
 			context.checkpoint?.();
 			compilerPhases.push({ phase, durationMs });
@@ -962,7 +963,7 @@ function prepareCommandState(
 				);
 			},
 		});
-		if (command.kind !== "build" && !command.profile) {
+		if (interpreted) {
 			const wirePaths = reporter.phase("Cache development image", () =>
 				frontend.runtimeArtifacts.map((artifact) => artifact.path),
 			);

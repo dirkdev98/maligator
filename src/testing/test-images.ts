@@ -322,6 +322,7 @@ function testImageEnvironment(
 	return linkedImageEnvironment({
 		producer: "test-fragment",
 		family: TEST_IMAGE_FAMILY,
+		target: "runtime",
 		config: options.config,
 		facts: compilerProgramFactsFromConfig(options.config),
 		stripperIdentity: options.stripperIdentity,
@@ -445,6 +446,7 @@ export function compileLinkedTestImage(
 			: [testRuntimeTask(environment.root, options)];
 
 	const dependencies = compileDependencyFragments({
+		target: "runtime",
 		graph: planning,
 		targets: dependencyTargets(planning),
 		config: options.config,

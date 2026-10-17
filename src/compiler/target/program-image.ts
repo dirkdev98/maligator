@@ -2092,13 +2092,17 @@ export interface ProgramImageStats {
 }
 
 export function programImageStats(definition: ProgramImage): ProgramImageStats {
+	return runtimeImageStats(definition.runtime);
+}
+
+export function runtimeImageStats(runtime: RuntimeImage): ProgramImageStats {
 	let instructionCount = 0;
-	for (const fn of definition.runtime.functions) {
+	for (const fn of runtime.functions) {
 		instructionCount += fn.instructions.length;
 	}
 
 	return {
-		functionCount: definition.runtime.functions.length,
+		functionCount: runtime.functions.length,
 		instructionCount,
 	};
 }

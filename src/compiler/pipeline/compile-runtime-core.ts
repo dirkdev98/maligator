@@ -1,3 +1,4 @@
+import type { CoreModuleInterface } from "../core/core-compilation.ts";
 import type { SemanticProgram } from "../frontend/semantic-analysis.ts";
 import { lowerCoreCompilationToRuntimeExecution } from "../target/lower-execution.ts";
 import { lowerExecutionToRuntimeImage } from "../target/runtime-image.ts";
@@ -16,6 +17,14 @@ export function compileSemanticProgramToRuntimeImage(
 	semantic: SemanticProgram,
 	options: CompileCoreOptions = {},
 ): RuntimeImage {
+	return compileSemanticProgramToLinkedRuntimeImage(semantic, options).runtime;
+}
+
+/** The runtime pipeline for an image of a relocatable program that is only interpreted. */
+export function compileSemanticProgramToLinkedRuntimeImage(
+	semantic: SemanticProgram,
+	options: CompileCoreOptions = {},
+): { runtime: RuntimeImage; interfaces: ReadonlyArray<CoreModuleInterface> } {
 	const runPhase =
 		options.runPhase ?? (<T>(_phase: CompileCorePhase, run: () => T): T => run());
 	const optimized = optimizeSemanticProgramToCore(semantic, options, runPhase);
@@ -24,5 +33,8 @@ export function compileSemanticProgramToRuntimeImage(
 			reuseRegisters: options.optimization !== "development",
 		}),
 	);
-	return runPhase("execution to image", () => lowerExecutionToRuntimeImage(lowered));
+	return {
+		runtime: runPhase("execution to image", () => lowerExecutionToRuntimeImage(lowered)),
+		interfaces: optimized.context.data.moduleLinks?.interfaces ?? [],
+	};
 }

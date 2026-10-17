@@ -1,4 +1,5 @@
 import {
+	existsSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
@@ -749,6 +750,44 @@ describe("normal build frontend cache", () => {
 
 		expect(compiled.fragmentFallback).toBeUndefined();
 		expect(compiled.wires).toHaveLength(2);
+	});
+
+	it("keeps interpreted images free of native plans and out of native builds", () => {
+		const root = temporaryDirectory();
+		const cacheDirectory = path.join(root, "cache");
+		const entrypoint = path.join(root, "entry.mjs");
+		const dependencyDirectory = path.join(root, "node_modules/example-dependency");
+		mkdirSync(dependencyDirectory, { recursive: true });
+		write(path.join(root, "package.json"), `{"type":"module"}\n`);
+		write(
+			path.join(dependencyDirectory, "package.json"),
+			`{"type":"module","exports":"./index.mjs"}\n`,
+		);
+		write(path.join(dependencyDirectory, "index.mjs"), `export const answer = 42;\n`);
+		write(
+			entrypoint,
+			`import { answer } from "example-dependency";\nconsole.log(answer);\n`,
+		);
+		const options = {
+			entrypoint,
+			config: resolveBuildConfig({}),
+			stripTypes: stripCompactTypes,
+			stripperIdentity: "build-fragment-interpreted-test",
+			cacheDirectory,
+			optimization: "development" as const,
+			relocatable: true,
+		};
+		const compilerArtifacts = path.join(cacheDirectory, "frontend/compiler-artifacts");
+
+		const interpreted = compileBuildFrontend({ ...options, interpreted: true });
+		expect(interpreted.fragmentArtifacts).toEqual({ hits: 0, misses: 2 });
+		expect(existsSync(compilerArtifacts)).toBe(false);
+		expect(compileBuildFrontend({ ...options, interpreted: true }).cache).toBe("hit");
+
+		const native = compileBuildFrontend(options);
+		expect(native.fragmentArtifacts).toEqual({ hits: 0, misses: 2 });
+		expect(native.fragmentCompilerArtifacts).toHaveLength(2);
+		expect(native.programImage.native.functions.length).toBeGreaterThan(0);
 	});
 
 	it("links a dependency export that a dependency function reassigns", () => {

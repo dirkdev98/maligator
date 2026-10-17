@@ -95,7 +95,7 @@ import {
 } from "./worker-image-cache.ts";
 import type { WorkerImageArtifact } from "./worker-image-cache.ts";
 
-const BUILD_FRONTEND_CACHE_SCHEMA = 9;
+const BUILD_FRONTEND_CACHE_SCHEMA = 10;
 const BUILD_FRONTEND_PIPELINE_VERSION = 6;
 const BUILD_FRONTEND_CACHE_DIRECTORY = path.join(
 	maligatorCacheDirectory(),
@@ -106,7 +106,7 @@ const NODE_GLOBALS_MODULE_ID = "maligator-internal:node-globals";
 export type BuildDependencyIdentity = FrontendDependencyIdentity;
 
 interface BuildFrontendManifest {
-	schema: 9;
+	schema: 10;
 	/** The execution snapshot when a module reads it; other commands may reuse the images otherwise. */
 	execution: string | null;
 	packageAbsences: Array<string>;
@@ -116,7 +116,8 @@ interface BuildFrontendManifest {
 	runtimeArtifacts: Array<BuildFrontendArtifactIdentity>;
 	/** Each fragment's compiler artifact, parallel to `runtimeArtifacts`. */
 	fragmentCompilerArtifacts?: Array<BuildFrontendArtifactIdentity>;
-	compilerArtifact: BuildFrontendArtifactIdentity;
+	/** Absent when interpreted fragments skipped native planning. */
+	compilerArtifact?: BuildFrontendArtifactIdentity;
 	imageStats: ProgramImageStats;
 	entrypoint: string;
 	dependencies: Array<BuildDependencyIdentity>;
@@ -202,6 +203,8 @@ export interface CompileBuildFrontendOptions {
 	forceCompile?: boolean;
 	/** Split stable package dependencies into a separately cached development image. */
 	relocatable?: boolean;
+	/** The relocatable images are only interpreted, so they skip native planning. */
+	interpreted?: boolean;
 	afterCoreOptimization?: (
 		program: SealedCoreProgram,
 		context: CoreCompilationContext,
@@ -243,6 +246,7 @@ function cacheIdentity(options: CompileBuildFrontendOptions): string {
 				nodeGlobalsSource === undefined ? undefined : digest(nodeGlobalsSource),
 			optimization: options.optimization ?? "full",
 			relocatable: options.relocatable === true,
+			interpreted: options.interpreted === true,
 			enforcePolicies: options.enforcePolicies !== false,
 			configuration: compilerConfigurationIdentity(options.config),
 		}),
@@ -369,6 +373,10 @@ function materializedArtifacts(
 	});
 }
 
+function interpretedFrontendError(): Error {
+	return new Error("an interpreted development frontend has no native program image");
+}
+
 function loadCached(
 	root: string,
 	artifactRoot: string,
@@ -398,7 +406,9 @@ function loadCached(
 		!Array.isArray(manifest.runtimeArtifacts) ||
 		manifest.runtimeArtifacts.length === 0 ||
 		!manifest.runtimeArtifacts.every(validArtifactIdentity) ||
-		!validArtifactIdentity(manifest.compilerArtifact) ||
+		(manifest.compilerArtifact !== undefined &&
+			(!validArtifactIdentity(manifest.compilerArtifact) ||
+				!compilerArtifactUnchanged(manifest.compilerArtifact, artifactRoot))) ||
 		!workerImageArtifactsUnchanged(manifest.workerArtifacts, artifactRoot) ||
 		!validImageStats(manifest.imageStats) ||
 		!Array.isArray(manifest.diagnostics) ||
@@ -408,7 +418,6 @@ function loadCached(
 			(file) => typeof file !== "string" || existsSync(file),
 		) ||
 		!artifactsUnchanged(manifest.runtimeArtifacts, artifactRoot) ||
-		!compilerArtifactUnchanged(manifest.compilerArtifact, artifactRoot) ||
 		(manifest.fragmentCompilerArtifacts !== undefined &&
 			(!Array.isArray(manifest.fragmentCompilerArtifacts) ||
 				manifest.fragmentCompilerArtifacts.length !== manifest.runtimeArtifacts.length ||
@@ -429,12 +438,12 @@ function loadCached(
 			(runtimeWires ??= materializedArtifacts(manifest.runtimeArtifacts, artifactRoot));
 		const loadCompilerArtifact = () => {
 			if (compilerWire !== undefined) return compilerWire;
+			const compilerArtifact = manifest.compilerArtifact;
+			if (compilerArtifact === undefined) throw interpretedFrontendError();
 			compilerWire = new Uint8Array(
-				readFileSync(
-					frontendCompilerArtifactPath(manifest.compilerArtifact.digest, artifactRoot),
-				),
+				readFileSync(frontendCompilerArtifactPath(compilerArtifact.digest, artifactRoot)),
 			);
-			if (digest(compilerWire) !== manifest.compilerArtifact.digest) {
+			if (digest(compilerWire) !== compilerArtifact.digest) {
 				throw new Error("frontend compiler artifact digest mismatch");
 			}
 			return compilerWire;
@@ -817,7 +826,8 @@ function prepareBuildFrontend(
 				})
 			: [];
 	let diagnostics: Array<CompilerDiagnostic> = [];
-	let programImage: ProgramImage;
+	let loadProgramImage: (() => ProgramImage) | undefined;
+	let imageStats: ProgramImageStats;
 	let wires: Array<Uint8Array> | undefined;
 	let compilerWire: Uint8Array | undefined;
 	let runtimeArtifactIdentities: Array<BuildFrontendArtifactIdentity> | undefined;
@@ -848,6 +858,7 @@ function prepareBuildFrontend(
 		if (!hasWorkers && fragmentsApply && options.forceCompile !== true) {
 			try {
 				const fragments = compileBuildFragments({
+					target: options.interpreted === true ? "runtime" : "native",
 					graph: currentGraph(),
 					config: options.config,
 					execution: options.execution,
@@ -861,7 +872,9 @@ function prepareBuildFrontend(
 					dependencyWorker: options.dependencyWorker,
 					entryPrelude,
 				});
-				programImage = fragments.programImage;
+				const native = fragments.native;
+				if (native !== undefined) loadProgramImage = () => native.programImage;
+				imageStats = fragments.imageStats;
 				diagnostics = fragments.diagnostics;
 				runtimeArtifactIdentities = fragments.runtimeArtifacts.map(
 					({ digest: artifactDigest, size, mtimeMs, ctimeMs, ino, dev }) => ({
@@ -873,32 +886,34 @@ function prepareBuildFrontend(
 						dev,
 					}),
 				);
-				const {
-					digest: compilerDigest,
-					size,
-					mtimeMs,
-					ctimeMs,
-					ino,
-					dev,
-				} = fragments.compilerArtifact;
-				compilerArtifactIdentity = {
-					digest: compilerDigest,
-					size,
-					mtimeMs,
-					ctimeMs,
-					ino,
-					dev,
-				};
-				fragmentCompilerArtifactIdentities = fragments.fragmentCompilerArtifacts.map(
-					({ digest: artifactDigest, size, mtimeMs, ctimeMs, ino, dev }) => ({
-						digest: artifactDigest,
+				if (native !== undefined) {
+					const {
+						digest: compilerDigest,
 						size,
 						mtimeMs,
 						ctimeMs,
 						ino,
 						dev,
-					}),
-				);
+					} = native.compilerArtifact;
+					compilerArtifactIdentity = {
+						digest: compilerDigest,
+						size,
+						mtimeMs,
+						ctimeMs,
+						ino,
+						dev,
+					};
+					fragmentCompilerArtifactIdentities = native.fragmentCompilerArtifacts.map(
+						({ digest: artifactDigest, size, mtimeMs, ctimeMs, ino, dev }) => ({
+							digest: artifactDigest,
+							size,
+							mtimeMs,
+							ctimeMs,
+							ino,
+							dev,
+						}),
+					);
+				}
 				loadFragmentWires = () => fragments.wires;
 				fragmentArtifacts = {
 					hits: fragments.artifactHits,
@@ -907,39 +922,30 @@ function prepareBuildFrontend(
 			} catch (error) {
 				if (!(error instanceof UnsupportedLinkedImagesError)) throw error;
 				fragmentFallback = error.message;
-				prepareMain();
-				programImage = compileProgramImage(
-					takeSemantic,
-					facts,
-					options,
-					phases,
-					(report, plan) => {
-						optimizationReport = report;
-						optimizationPlan = plan;
-					},
-				);
-				const serializeStartedAt = Date.now();
-				compilerWire = serializeCompilerArtifact(programImage);
-				wires = [serializeRuntimeImage(programImage.runtime)];
-				phases.serializeMs += Date.now() - serializeStartedAt;
+				compileWholeImage();
 			}
 		} else {
-			prepareMain();
-			programImage = compileProgramImage(
-				takeSemantic,
-				facts,
-				options,
-				phases,
-				(report, plan) => {
-					optimizationReport = report;
-					optimizationPlan = plan;
-				},
-			);
-			const serializeStartedAt = Date.now();
-			compilerWire = serializeCompilerArtifact(programImage);
-			wires = [serializeRuntimeImage(programImage.runtime)];
-			phases.serializeMs = Date.now() - serializeStartedAt;
+			compileWholeImage();
 		}
+	};
+	const compileWholeImage = () => {
+		prepareMain();
+		const programImage = compileProgramImage(
+			takeSemantic,
+			facts,
+			options,
+			phases,
+			(report, plan) => {
+				optimizationReport = report;
+				optimizationPlan = plan;
+			},
+		);
+		loadProgramImage = () => programImage;
+		imageStats = programImageStats(programImage);
+		const serializeStartedAt = Date.now();
+		compilerWire = serializeCompilerArtifact(programImage);
+		wires = [serializeRuntimeImage(programImage.runtime)];
+		phases.serializeMs += Date.now() - serializeStartedAt;
 	};
 	const workerOptions: CompileEntrypointOptions = {
 		enforcePolicies: options.enforcePolicies,
@@ -996,23 +1002,29 @@ function prepareBuildFrontend(
 			});
 		const compilerArtifact =
 			compilerArtifactIdentity ??
-			(() => {
-				const compilerDigest = digest(compilerWire!);
-				cacheFrontendCompilerArtifact(compilerWire!, artifactRoot);
-				const artifact = frontendCompilerArtifactIdentity(compilerDigest, artifactRoot);
-				if (artifact === undefined) {
-					throw new Error(
-						`frontend compiler artifact is missing after publication: ${compilerDigest}`,
-					);
-				}
-				const { digest: artifactDigest, size, mtimeMs, ctimeMs, ino, dev } = artifact;
-				return { digest: artifactDigest, size, mtimeMs, ctimeMs, ino, dev };
-			})();
+			(compilerWire === undefined
+				? undefined
+				: (() => {
+						const compilerDigest = digest(compilerWire);
+						cacheFrontendCompilerArtifact(compilerWire, artifactRoot);
+						const artifact = frontendCompilerArtifactIdentity(
+							compilerDigest,
+							artifactRoot,
+						);
+						if (artifact === undefined) {
+							throw new Error(
+								`frontend compiler artifact is missing after publication: ${compilerDigest}`,
+							);
+						}
+						const { digest: artifactDigest, size, mtimeMs, ctimeMs, ino, dev } = artifact;
+						return { digest: artifactDigest, size, mtimeMs, ctimeMs, ino, dev };
+					})());
 		// A whole-program fallback compiles one image, which its compiler artifact describes.
 		const fragmentCompilerArtifacts =
 			fragmentCompilerArtifactIdentities ??
-			(runtimeArtifacts.length === 1 ? [compilerArtifact] : undefined);
-		const imageStats = programImageStats(programImage);
+			(runtimeArtifacts.length === 1 && compilerArtifact !== undefined
+				? [compilerArtifact]
+				: undefined);
 		// A forced compile builds one image where fragments apply; publishing it would
 		// hand later unforced builds a different program shape under the same identity.
 		if (options.forceCompile !== true || !fragmentsApply)
@@ -1028,7 +1040,7 @@ function prepareBuildFrontend(
 						? {}
 						: { fragmentCompilerArtifacts }),
 					workerArtifacts,
-					compilerArtifact,
+					...(compilerArtifact === undefined ? {} : { compilerArtifact }),
 					imageStats,
 					entrypoint,
 					packageAbsences,
@@ -1038,9 +1050,13 @@ function prepareBuildFrontend(
 			);
 
 		const materializeWires = () => (wires ??= loadFragmentWires!());
+		const nativeProgramImage = loadProgramImage;
 		return {
 			workerImages,
-			programImage,
+			get programImage() {
+				if (nativeProgramImage === undefined) throw interpretedFrontendError();
+				return nativeProgramImage();
+			},
 			get wire() {
 				return materializeWires().at(-1)!;
 			},

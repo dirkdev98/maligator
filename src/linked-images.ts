@@ -20,8 +20,10 @@ import {
 	collectDisallowedEvalUsage,
 	collectDisallowedRegexpUsage,
 } from "./compiler/frontend/semantic-analysis.ts";
+import type { CompileCoreOptions } from "./compiler/pipeline/compile-core-common.ts";
 import { compileSemanticProgramToProgramImage } from "./compiler/pipeline/compile-core.ts";
 import type { CompileCorePhase } from "./compiler/pipeline/compile-core.ts";
+import { compileSemanticProgramToLinkedRuntimeImage } from "./compiler/pipeline/compile-runtime-core.ts";
 import type { CompilerDiagnostic } from "./compiler/shared/compiler-diagnostics.ts";
 import type { CompilerProgramFacts } from "./compiler/shared/compiler-facts.ts";
 import {
@@ -33,7 +35,8 @@ import {
 	serializeRuntimeImage,
 	WIRE_VERSION,
 } from "./compiler/target/program-image-codec.ts";
-import type { ProgramImage } from "./compiler/target/program-image.ts";
+import { runtimeImageStats } from "./compiler/target/program-image.ts";
+import type { ProgramImage, ProgramImageStats } from "./compiler/target/program-image.ts";
 import {
 	cacheFrontendCompilerArtifact,
 	cacheFrontendWire,
@@ -46,18 +49,30 @@ import {
 } from "./frontend-cache.ts";
 import type { FrontendArtifactIdentity } from "./frontend-cache.ts";
 
-const LINKED_IMAGE_SCHEMA = 1;
+const LINKED_IMAGE_SCHEMA = 2;
+
+/**
+ * What an image is compiled for. Interpreted images take the canonical runtime
+ * pipeline; native development builds also need the native plans of each image.
+ */
+export type LinkedImageTarget = "runtime" | "native";
 
 /** One compiled image of a relocatable program; later images link against it. */
 export interface LinkedImageArtifact {
 	readonly wire: Uint8Array;
-	readonly programImage: ProgramImage;
 	readonly runtimeArtifact: FrontendArtifactIdentity;
-	readonly compilerArtifact: FrontendArtifactIdentity;
+	/** Present for the `native` target. */
+	readonly native?: LinkedNativeImage;
 	readonly diagnostics: ReadonlyArray<CompilerDiagnostic>;
 	/** What later images compile against for each module this image publishes. */
 	readonly interfaces: ReadonlyArray<CoreModuleInterface>;
+	readonly stats: ProgramImageStats;
 	readonly cache: "hit" | "miss";
+}
+
+export interface LinkedNativeImage {
+	readonly compilerArtifact: FrontendArtifactIdentity;
+	readonly programImage: ProgramImage;
 }
 
 /** A program shape a linked image cannot express; callers compile one whole image. */
@@ -79,6 +94,7 @@ export interface LinkedImagePhases {
 
 /** Shared inputs of every image one relocatable program compiles. */
 export interface LinkedImageEnvironment {
+	readonly target: LinkedImageTarget;
 	readonly identity: string;
 	readonly root: string;
 	readonly artifactRoot: string;
@@ -93,6 +109,7 @@ export interface LinkedImageEnvironmentOptions {
 	producer: CompilerProducerStage;
 	/** Cache family directory under the Maligator cache. */
 	family: string;
+	target: LinkedImageTarget;
 	config: ResolvedBuildConfig;
 	facts: CompilerProgramFacts;
 	stripperIdentity: string;
@@ -107,9 +124,11 @@ export function linkedImageEnvironment(
 	options: LinkedImageEnvironmentOptions,
 ): LinkedImageEnvironment {
 	return {
+		target: options.target,
 		identity: digest(
 			JSON.stringify({
 				schema: LINKED_IMAGE_SCHEMA,
+				target: options.target,
 				producer: compilerProducerIdentity(options.producer, LINKED_IMAGE_SCHEMA),
 				wireVersion: WIRE_VERSION,
 				compilerArtifactVersion: COMPILER_ARTIFACT_VERSION,
@@ -139,13 +158,11 @@ export function compiledByWorker(artifact: LinkedImageArtifact): LinkedImageArti
 		get wire() {
 			return artifact.wire;
 		},
-		get programImage() {
-			return artifact.programImage;
-		},
 		runtimeArtifact: artifact.runtimeArtifact,
-		compilerArtifact: artifact.compilerArtifact,
+		...(artifact.native === undefined ? {} : { native: artifact.native }),
 		diagnostics: artifact.diagnostics,
 		interfaces: artifact.interfaces,
+		stats: artifact.stats,
 		cache: "miss",
 	};
 }
@@ -272,6 +289,24 @@ function imageKey(
 	);
 }
 
+function storedNativeImage(
+	compilerArtifact: FrontendArtifactIdentity,
+): LinkedNativeImage {
+	let programImage: ProgramImage | undefined;
+	return {
+		compilerArtifact,
+		get programImage() {
+			if (programImage !== undefined) return programImage;
+			const compilerWire = new Uint8Array(readFileSync(compilerArtifact.path));
+			if (digest(compilerWire) !== compilerArtifact.digest) {
+				throw new Error(`corrupt linked image: ${compilerArtifact.path}`);
+			}
+			programImage = deserializeCompilerArtifact(compilerWire);
+			return programImage;
+		},
+	};
+}
+
 /** The cached image for this graph, without compiling on a miss. */
 export function findLinkedImage(
 	environment: LinkedImageEnvironment,
@@ -291,24 +326,24 @@ export function findLinkedImage(
 			compilerArtifact?: FrontendArtifactIdentity;
 			diagnostics?: Array<CompilerDiagnostic>;
 			interfaces?: Array<CoreModuleInterface>;
+			stats?: ProgramImageStats;
 		};
+		const compilerArtifact = reference.compilerArtifact;
 		if (
 			reference.schema !== LINKED_IMAGE_SCHEMA ||
 			reference.runtimeArtifact === undefined ||
-			reference.compilerArtifact === undefined ||
+			(environment.target === "native") !== (compilerArtifact !== undefined) ||
 			!Array.isArray(reference.diagnostics) ||
 			!Array.isArray(reference.interfaces) ||
+			reference.stats === undefined ||
 			!frontendArtifactUnchanged(reference.runtimeArtifact, environment.artifactRoot) ||
-			!frontendCompilerArtifactUnchanged(
-				reference.compilerArtifact,
-				environment.artifactRoot,
-			)
+			(compilerArtifact !== undefined &&
+				!frontendCompilerArtifactUnchanged(compilerArtifact, environment.artifactRoot))
 		) {
 			return undefined;
 		}
-		const { runtimeArtifact, compilerArtifact, diagnostics, interfaces } = reference;
+		const { runtimeArtifact, diagnostics, interfaces, stats } = reference;
 		let wire: Uint8Array | undefined;
-		let programImage: ProgramImage | undefined;
 		return {
 			get wire() {
 				if (wire !== undefined) return wire;
@@ -318,19 +353,13 @@ export function findLinkedImage(
 				}
 				return wire;
 			},
-			get programImage() {
-				if (programImage !== undefined) return programImage;
-				const compilerWire = new Uint8Array(readFileSync(compilerArtifact.path));
-				if (digest(compilerWire) !== compilerArtifact.digest) {
-					throw new Error(`corrupt linked image: ${compilerArtifact.path}`);
-				}
-				programImage = deserializeCompilerArtifact(compilerWire);
-				return programImage;
-			},
 			runtimeArtifact,
-			compilerArtifact,
+			...(compilerArtifact === undefined
+				? {}
+				: { native: storedNativeImage(compilerArtifact) }),
 			diagnostics,
 			interfaces,
+			stats,
 			cache: "hit",
 		};
 	} catch {
@@ -363,7 +392,7 @@ export function compileLinkedImage(
 				})
 			: [];
 	phases.semanticMs += Date.now() - semanticStartedAt;
-	const programImage = compileSemanticProgramToProgramImage(semantic, {
+	const compileOptions: CompileCoreOptions = {
 		facts,
 		optimization: "development",
 		...(exports === undefined ? {} : { semanticLowering: { moduleExports: exports } }),
@@ -377,25 +406,44 @@ export function compileLinkedImage(
 				environment.onCompilePhase?.(phase, durationMs);
 			}
 		},
-	});
-	const serializeStartedAt = Date.now();
-	const compilerWire = serializeCompilerArtifact(programImage);
-	const wire = serializeRuntimeImage(programImage.runtime);
-	phases.serializeMs += Date.now() - serializeStartedAt;
+	};
+	let wire: Uint8Array;
+	let interfaces: ReadonlyArray<CoreModuleInterface>;
+	let stats: ProgramImageStats;
+	let native: LinkedNativeImage | undefined;
+	if (environment.target === "runtime") {
+		const compiled = compileSemanticProgramToLinkedRuntimeImage(semantic, compileOptions);
+		interfaces = compiled.interfaces;
+		stats = runtimeImageStats(compiled.runtime);
+		const serializeStartedAt = Date.now();
+		wire = serializeRuntimeImage(compiled.runtime);
+		phases.serializeMs += Date.now() - serializeStartedAt;
+	} else {
+		const programImage = compileSemanticProgramToProgramImage(semantic, compileOptions);
+		interfaces = programImage.moduleInterfaces ?? [];
+		stats = runtimeImageStats(programImage.runtime);
+		const serializeStartedAt = Date.now();
+		const compilerWire = serializeCompilerArtifact(programImage);
+		wire = serializeRuntimeImage(programImage.runtime);
+		phases.serializeMs += Date.now() - serializeStartedAt;
+		cacheFrontendCompilerArtifact(compilerWire, environment.artifactRoot);
+		const compilerArtifact = frontendCompilerArtifactIdentity(
+			digest(compilerWire),
+			environment.artifactRoot,
+		);
+		if (compilerArtifact === undefined) {
+			throw new Error("linked image compiler artifact is missing after publication");
+		}
+		native = { compilerArtifact, programImage };
+	}
 	cacheFrontendWire(wire, environment.artifactRoot);
-	cacheFrontendCompilerArtifact(compilerWire, environment.artifactRoot);
 	const runtimeArtifact = frontendArtifactIdentity(
 		digest(wire),
 		environment.artifactRoot,
 	);
-	const compilerArtifact = frontendCompilerArtifactIdentity(
-		digest(compilerWire),
-		environment.artifactRoot,
-	);
-	if (runtimeArtifact === undefined || compilerArtifact === undefined) {
-		throw new Error("linked image artifacts are missing after publication");
+	if (runtimeArtifact === undefined) {
+		throw new Error("linked image runtime artifact is missing after publication");
 	}
-	const interfaces = programImage.moduleInterfaces ?? [];
 	writeFileAtomically(
 		path.join(
 			environment.root,
@@ -405,18 +453,19 @@ export function compileLinkedImage(
 		`${JSON.stringify({
 			schema: LINKED_IMAGE_SCHEMA,
 			runtimeArtifact,
-			compilerArtifact,
+			...(native === undefined ? {} : { compilerArtifact: native.compilerArtifact }),
 			diagnostics,
 			interfaces,
+			stats,
 		})}\n`,
 	);
 	return {
 		wire,
-		programImage,
 		runtimeArtifact,
-		compilerArtifact,
+		...(native === undefined ? {} : { native }),
 		diagnostics,
 		interfaces,
+		stats,
 		cache: "miss",
 	};
 }

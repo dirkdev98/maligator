@@ -9,7 +9,7 @@ import type { CompileCorePhase } from "./compiler/pipeline/compile-core.ts";
 import { compareCompilerDiagnostics } from "./compiler/shared/compiler-diagnostics.ts";
 import type { CompilerDiagnostic } from "./compiler/shared/compiler-diagnostics.ts";
 import type { CompilerProgramFacts } from "./compiler/shared/compiler-facts.ts";
-import type { ProgramImage } from "./compiler/target/program-image.ts";
+import type { ProgramImage, ProgramImageStats } from "./compiler/target/program-image.ts";
 import {
 	compileDependencyFragments,
 	isExternalModule,
@@ -27,7 +27,11 @@ import {
 	linkedImageEnvironment,
 	UnsupportedLinkedImagesError,
 } from "./linked-images.ts";
-import type { LinkedImageArtifact } from "./linked-images.ts";
+import type {
+	LinkedImageArtifact,
+	LinkedImageTarget,
+	LinkedNativeImage,
+} from "./linked-images.ts";
 import type { Execution } from "./platform/execution.ts";
 
 const BUILD_FRAGMENT_FAMILY = "build-fragments";
@@ -35,16 +39,22 @@ const BUILD_FRAGMENT_FAMILY = "build-fragments";
 export interface CompiledBuildFragments {
 	wires: Array<Uint8Array>;
 	runtimeArtifacts: Array<FrontendArtifactIdentity>;
-	/** Each image's compiler artifact, parallel to `runtimeArtifacts`. */
-	fragmentCompilerArtifacts: Array<FrontendArtifactIdentity>;
-	compilerArtifact: FrontendArtifactIdentity;
-	programImage: ProgramImage;
+	/** The application image's statistics. */
+	imageStats: ProgramImageStats;
+	/** Present for the `native` target. */
+	native?: {
+		/** Each image's compiler artifact, parallel to `runtimeArtifacts`. */
+		fragmentCompilerArtifacts: Array<FrontendArtifactIdentity>;
+		compilerArtifact: FrontendArtifactIdentity;
+		programImage: ProgramImage;
+	};
 	diagnostics: Array<CompilerDiagnostic>;
 	artifactHits: number;
 	artifactMisses: number;
 }
 
 export interface CompileBuildFragmentsOptions {
+	target: LinkedImageTarget;
 	graph: ModuleGraph;
 	entryPrelude?: BuildModuleGraphOptions["entryPrelude"];
 	config: ResolvedBuildConfig;
@@ -149,6 +159,14 @@ export function preludeGraph(
 	};
 }
 
+function nativeImage(artifact: LinkedImageArtifact): LinkedNativeImage {
+	if (artifact.native === undefined)
+		throw new Error(
+			"a native development build linked an image compiled for the runtime",
+		);
+	return artifact.native;
+}
+
 /** Split stable dependencies from project code into independently cached VM images. */
 export function compileBuildFragments(
 	options: CompileBuildFragmentsOptions,
@@ -162,6 +180,7 @@ export function compileBuildFragments(
 	const environment = linkedImageEnvironment({
 		producer: "build-fragment",
 		family: BUILD_FRAGMENT_FAMILY,
+		target: options.target,
 		config: options.config,
 		facts: options.facts,
 		stripperIdentity: options.stripperIdentity,
@@ -177,6 +196,7 @@ export function compileBuildFragments(
 					},
 	});
 	const dependencyArtifacts = compileDependencyFragments({
+		target: options.target,
 		graph: options.graph,
 		targets,
 		config: options.config,
@@ -225,11 +245,20 @@ export function compileBuildFragments(
 			return images.map((artifact) => artifact.wire);
 		},
 		runtimeArtifacts: images.map((artifact) => artifact.runtimeArtifact),
-		fragmentCompilerArtifacts: images.map((artifact) => artifact.compilerArtifact),
-		compilerArtifact: applicationArtifact.compilerArtifact,
-		get programImage() {
-			return applicationArtifact.programImage;
-		},
+		imageStats: applicationArtifact.stats,
+		...(applicationArtifact.native === undefined
+			? {}
+			: {
+					native: {
+						fragmentCompilerArtifacts: images.map(
+							(artifact) => nativeImage(artifact).compilerArtifact,
+						),
+						compilerArtifact: applicationArtifact.native.compilerArtifact,
+						get programImage() {
+							return nativeImage(applicationArtifact).programImage;
+						},
+					},
+				}),
 		diagnostics: images
 			.flatMap((artifact) => artifact.diagnostics)
 			.sort(compareCompilerDiagnostics),
