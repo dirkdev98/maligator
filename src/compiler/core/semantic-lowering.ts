@@ -13812,6 +13812,16 @@ function compileCall(
 		const member = compileMemberObjectAndKey(program, fn, cursor, calleeNode);
 		thisRegister = member.receiver ?? member.object;
 		callee = compileMemberLoad(fn, cursor, member);
+	} else if (
+		calleeNode.type === "Identifier" &&
+		fn.semanticFile.withDynamicNodes.has(calleeNode)
+	) {
+		({ callee, thisRegister } = compileWithDynamicCallee(
+			program,
+			fn,
+			cursor,
+			calleeNode,
+		));
 	} else {
 		callee = compileExpression(
 			program,
@@ -14157,6 +14167,74 @@ function compileWithDynamicRead(
 	cursor.block = fn.blocks[joinIdx]!;
 
 	return result;
+}
+
+/**
+ * A `with`-intercepted callee: when a with-object provides the name, the call
+ * reads the function from it and passes it as `this` (WithBaseObject); a miss
+ * calls the static binding with an undefined `this`.
+ */
+function compileWithDynamicCallee(
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
+	identifier: ESTree.Identifier,
+): { callee: number; thisRegister: number } {
+	const nameStringIndex = getOrCreateStringConstant(program, identifier.name);
+	const base = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
+		type: "withResolveBase",
+		registers: [base],
+		nameStringIndex,
+	});
+	const emptyFlag = nextCoreVariable(fn);
+	cursor.block.emitter.emit({ type: "isEmpty", registers: [emptyFlag, base] });
+	const callee = nextCoreVariable(fn);
+	const thisRegister = nextCoreVariable(fn);
+	const missJump: Extract<CompilerInstruction, { type: "jumpIf" }> = {
+		type: "jumpIf",
+		registers: [emptyFlag],
+		blocks: [-1],
+	};
+	const foundJump: Extract<CompilerInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	cursor.block.emitter.emit(missJump, foundJump);
+
+	foundJump.blocks[0] = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+	cursor.block = fn.blocks[foundJump.blocks[0]]!;
+	const key = nextCoreVariable(fn);
+	cursor.block.emitter.emit(
+		{ type: "createString", registers: [key], stringIndex: nameStringIndex },
+		{ type: "loadProperty", registers: [callee, base, key] },
+		{ type: "move", registers: [thisRegister, base] },
+	);
+	const foundJoin: Extract<CompilerInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	cursor.block.emitter.emit(foundJoin);
+
+	missJump.blocks[0] = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+	cursor.block = fn.blocks[missJump.blocks[0]]!;
+	const staticValue = compileStaticIdentifier(program, fn, cursor, identifier);
+	const undefinedThis = compileUndefined(fn, cursor);
+	cursor.block.emitter.emit(
+		{ type: "move", registers: [callee, staticValue] },
+		{ type: "move", registers: [thisRegister, undefinedThis] },
+	);
+	const missJoin: Extract<CompilerInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	cursor.block.emitter.emit(missJoin);
+
+	const joinIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+	foundJoin.blocks[0] = joinIdx;
+	missJoin.blocks[0] = joinIdx;
+	cursor.block = fn.blocks[joinIdx]!;
+	return { callee, thisRegister };
 }
 
 function compileWithDynamicTypeof(
