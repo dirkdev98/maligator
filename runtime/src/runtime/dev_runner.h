@@ -14,11 +14,14 @@ typedef struct MalDevelopmentImage {
     const MalNativeOverlay *overlay;
 } MalDevelopmentImage;
 
-/** Load and execute ordered development images in a fresh host VM. */
+typedef struct MalAsset MalAsset;
+
+/** Load and execute ordered development images in a fresh host VM with these assets. */
 int mal_dev_run_images(
     const MalDevelopmentImage *images,
     int image_count,
-    const char *asset_manifest_path,
+    const MalAsset *assets,
+    i32 asset_count,
     const char *entry_path,
     int argc,
     char **argv,

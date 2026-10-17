@@ -65,8 +65,9 @@ program. Each image gets a relocatable native overlay that depends only on that
 image, and the binary splices the embedded images at startup, so an application edit
 recompiles only the application's objects. Code does not optimize across images,
 which costs a few percent of throughput against a whole-program development
-binary. Programs with configured assets, and any build with
-`MALIGATOR_DEVELOPMENT_FRAGMENTS=0`, link one whole program instead. Worker roots
+binary. Configured assets are embedded in a translation unit of their own, so an asset
+edit and an application edit never recompile each other's objects. A build with
+`MALIGATOR_DEVELOPMENT_FRAGMENTS=0` links one whole program instead. Worker roots
 always link their whole-program images behind the compiled worker registry.
 
 `maligator build --production` still uses `-O2`, adds compile/archive/link LTO when

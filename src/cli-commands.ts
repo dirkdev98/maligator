@@ -612,13 +612,11 @@ function prepareCommandState(
 	for (const warning of plan?.warnings ?? []) reporter.warning(warning);
 
 	const compiledNativeOutput = command.kind !== "build" || command.internal.compiled;
-	// Embedded assets still need the whole-program image that carries them.
 	const developmentFragments =
 		command.kind === "build" &&
 		!production &&
 		command.internal.compiled &&
 		command.internal.serializePath === undefined &&
-		assets.length === 0 &&
 		process.env.MALIGATOR_DEVELOPMENT_FRAGMENTS !== "0";
 	const execution = resolveExecution(command, buildConfig, {
 		compiled:
@@ -1022,6 +1020,7 @@ function prepareCommandState(
 							frontend.fragmentCompilerArtifacts,
 							entrypointPath,
 							maligatorCacheDirectory(),
+							assets,
 						),
 						// Worker roots stay whole-program images behind the compiled registry.
 						...emitWorkerImageTranslationUnits(frontend.workerImages, {

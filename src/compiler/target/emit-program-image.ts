@@ -2197,6 +2197,64 @@ export function emitRelocatableNativeOverlayTranslationUnits(
 	return units;
 }
 
+/** Defines `mal_assets<suffix>`, the table a runtime image's `assets` field points at. */
+export function assetTableLines(
+	assets: ReadonlyArray<IncludedAsset>,
+	suffix: string,
+): Array<string> {
+	const lines: Array<string> = [];
+	const embeddedAssetSymbols = new Set(
+		assets.flatMap((asset) =>
+			asset.files.flatMap((file) =>
+				file.embeddedSymbol === undefined ? [] : [file.embeddedSymbol],
+			),
+		),
+	);
+	for (const symbol of embeddedAssetSymbols) {
+		lines.push(`extern const u8 ${symbol}[];`);
+	}
+	if (embeddedAssetSymbols.size > 0) lines.push("");
+
+	for (let assetIndex = 0; assetIndex < assets.length; assetIndex++) {
+		const asset = assets[assetIndex]!;
+		for (let fileIndex = 0; fileIndex < asset.files.length; fileIndex++) {
+			const file = asset.files[fileIndex]!;
+			if (file.embeddedSymbol !== undefined) continue;
+			const symbol = `mal_asset_${assetIndex}_file_${fileIndex}_data${suffix}`;
+			if (file.size === 0) {
+				lines.push(`static const u8 ${symbol}[] = { 0 };`);
+			} else {
+				lines.push(
+					`static const u8 ${symbol}[] = {`,
+					`#embed "${cEscapeString(file.sourcePath)}"`,
+					"};",
+				);
+			}
+		}
+		lines.push(`static const MalAssetFile mal_asset_${assetIndex}_files${suffix}[] = {`);
+		for (let fileIndex = 0; fileIndex < asset.files.length; fileIndex++) {
+			const file = asset.files[fileIndex]!;
+			const symbol =
+				file.embeddedSymbol ?? `mal_asset_${assetIndex}_file_${fileIndex}_data${suffix}`;
+			lines.push(
+				`    { .path = "${cEscapeString(file.path)}", .data = ${symbol}, .source_path = nullptr, .length = ${file.size} },`,
+			);
+		}
+		lines.push("};", "");
+	}
+	if (assets.length > 0) {
+		lines.push(`static const MalAsset mal_assets${suffix}[] = {`);
+		for (let assetIndex = 0; assetIndex < assets.length; assetIndex++) {
+			const asset = assets[assetIndex]!;
+			lines.push(
+				`    { .name = "${cEscapeString(asset.name)}", .hash = "${asset.hash}", .version = "${asset.version}", .directory = ${asset.type === "directory"}, .file_count = ${asset.files.length}, .files = mal_asset_${assetIndex}_files${suffix} },`,
+			);
+		}
+		lines.push("};", "");
+	}
+	return lines;
+}
+
 function malRuntimeImageStruct(
 	runtime: RuntimeImage,
 	suffix: string,
@@ -2267,55 +2325,7 @@ function malRuntimeImageStruct(
 		lines.push("};", "");
 	}
 
-	const embeddedAssetSymbols = new Set(
-		assets.flatMap((asset) =>
-			asset.files.flatMap((file) =>
-				file.embeddedSymbol === undefined ? [] : [file.embeddedSymbol],
-			),
-		),
-	);
-	for (const symbol of embeddedAssetSymbols) {
-		lines.push(`extern const u8 ${symbol}[];`);
-	}
-	if (embeddedAssetSymbols.size > 0) lines.push("");
-
-	for (let assetIndex = 0; assetIndex < assets.length; assetIndex++) {
-		const asset = assets[assetIndex]!;
-		for (let fileIndex = 0; fileIndex < asset.files.length; fileIndex++) {
-			const file = asset.files[fileIndex]!;
-			if (file.embeddedSymbol !== undefined) continue;
-			const symbol = `mal_asset_${assetIndex}_file_${fileIndex}_data${suffix}`;
-			if (file.size === 0) {
-				lines.push(`static const u8 ${symbol}[] = { 0 };`);
-			} else {
-				lines.push(
-					`static const u8 ${symbol}[] = {`,
-					`#embed "${cEscapeString(file.sourcePath)}"`,
-					"};",
-				);
-			}
-		}
-		lines.push(`static const MalAssetFile mal_asset_${assetIndex}_files${suffix}[] = {`);
-		for (let fileIndex = 0; fileIndex < asset.files.length; fileIndex++) {
-			const file = asset.files[fileIndex]!;
-			const symbol =
-				file.embeddedSymbol ?? `mal_asset_${assetIndex}_file_${fileIndex}_data${suffix}`;
-			lines.push(
-				`    { .path = "${cEscapeString(file.path)}", .data = ${symbol}, .source_path = nullptr, .length = ${file.size} },`,
-			);
-		}
-		lines.push("};", "");
-	}
-	if (assets.length > 0) {
-		lines.push(`static const MalAsset mal_assets${suffix}[] = {`);
-		for (let assetIndex = 0; assetIndex < assets.length; assetIndex++) {
-			const asset = assets[assetIndex]!;
-			lines.push(
-				`    { .name = "${cEscapeString(asset.name)}", .hash = "${asset.hash}", .version = "${asset.version}", .directory = ${asset.type === "directory"}, .file_count = ${asset.files.length}, .files = mal_asset_${assetIndex}_files${suffix} },`,
-			);
-		}
-		lines.push("};", "");
-	}
+	lines.push(...assetTableLines(assets, suffix));
 
 	// Host-install manifest: direct references to the native installers of the
 	// host built-ins (and `process`) the program actually reached. Only reachable

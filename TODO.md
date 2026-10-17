@@ -52,10 +52,6 @@ rooting, and resource-safety defects can interrupt that order.
       current 128-bit storage, and input-size scaling. Keep conversion costs separate
       from traversal and checksum work.
 
-- [ ] Embed configured assets in fragmented development builds. Programs with
-      assets still link the whole-program development image that carries them, so
-      an application edit recompiles every partition.
-
 - [ ] Track configured asset-directory topology in `dev`. Publication validates
       consumed file identities, but adding a file or renaming a previously unwatched
       path does not change that file set. Capture recursive directory membership and

@@ -8,10 +8,12 @@ import {
 	publishArtifactAction,
 	readArtifactAction,
 } from "./artifact-store.ts";
+import type { IncludedAsset } from "./assets.ts";
 import type { BuildFrontendArtifact } from "./build-frontend-cache.ts";
 import { compilerImplementationDigest } from "./compiler-cache-identity.ts";
 import { deserializeCompilerArtifact } from "./compiler/target/compiler-artifact-codec.ts";
 import {
+	assetTableLines,
 	DEFAULT_TRANSLATION_UNIT_POLICY,
 	emitRelocatableNativeOverlayTranslationUnits,
 } from "./compiler/target/emit-program-image.ts";
@@ -57,13 +59,15 @@ function overlayImage(
 /**
  * Translation units for a development binary built from the same ordered images that
  * `run` loads. Each image gets a relocatable overlay that depends only on that image,
- * so an application edit leaves every dependency fragment's objects reusable.
+ * so an application edit leaves every dependency fragment's objects reusable. Assets
+ * get a unit of their own, so editing either never recompiles the other.
  */
 export function developmentFragmentUnits(
 	artifacts: ReadonlyArray<BuildFrontendArtifact>,
 	compilerArtifacts: ReadonlyArray<BuildFrontendArtifact> | undefined,
 	entrypoint: string,
 	cacheDirectory: string,
+	assets: ReadonlyArray<IncludedAsset>,
 ): Array<GeneratedTranslationUnit> {
 	if (artifacts.length === 0) throw new Error("a development program needs an image");
 	if (compilerArtifacts !== undefined && compilerArtifacts.length !== artifacts.length)
@@ -135,6 +139,13 @@ export function developmentFragmentUnits(
 		`const int mal_fragment_image_count = ${artifacts.length};`,
 		`const char mal_fragment_entry_path[] = ${JSON.stringify(entrypoint)};`,
 	].join("\n");
+	const assetTable = [
+		'#include "vm.h"',
+		"",
+		...assetTableLines(assets, "_fragment"),
+		`const MalAsset *const mal_fragment_assets = ${assets.length === 0 ? "nullptr" : "mal_assets_fragment"};`,
+		`const i32 mal_fragment_asset_count = ${assets.length};`,
+	].join("\n");
 	return [
 		...overlays,
 		{
@@ -142,6 +153,13 @@ export function developmentFragmentUnits(
 			kind: "data",
 			source: table,
 			headerFiles: ["compiler_native.h", "dev_runner.h"],
+			definitions: [],
+		},
+		{
+			id: "development-fragment-assets",
+			kind: "data",
+			source: assetTable,
+			headerFiles: ["vm.h"],
 			definitions: [],
 		},
 	];

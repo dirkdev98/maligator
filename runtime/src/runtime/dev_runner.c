@@ -83,27 +83,44 @@ int mal_dev_run_wires(
     bool node,
     const char *worker_manifest_path) {
     if (wire_count < 1) return 2;
+    MalDevelopmentAssets *development_assets = nullptr;
+    const MalAsset *assets = nullptr;
+    i32 asset_count = 0;
+    if (asset_manifest_path != nullptr) {
+        const char *asset_error = "unknown error";
+        development_assets = mal_development_assets_load(asset_manifest_path, &asset_error);
+        if (development_assets == nullptr) {
+            fprintf(stderr, "could not load development assets %s: %s\n",
+                asset_manifest_path, asset_error);
+            return 2;
+        }
+        assets = mal_development_assets_get(development_assets, &asset_count);
+    }
     MalDevelopmentImage *images = calloc((usize) wire_count, sizeof(MalDevelopmentImage));
-    if (images == nullptr) return 2;
     int code = 2;
+    if (images == nullptr) goto done;
     for (int index = 0; index < wire_count; index++) {
         u8 *bytes = read_file(wire_paths[index], &images[index].length);
         if (bytes == nullptr) goto done;
         images[index].bytes = bytes;
         images[index].label = wire_paths[index];
     }
-    code = mal_dev_run_images(images, wire_count, asset_manifest_path, entry_path, argc, argv,
+    code = mal_dev_run_images(images, wire_count, assets, asset_count, entry_path, argc, argv,
         web_platform, node, worker_manifest_path);
 done:
-    for (int index = 0; index < wire_count; index++) free((u8 *) images[index].bytes);
+    if (images != nullptr) {
+        for (int index = 0; index < wire_count; index++) free((u8 *) images[index].bytes);
+    }
     free(images);
+    mal_development_assets_free(development_assets);
     return code;
 }
 
 int mal_dev_run_images(
     const MalDevelopmentImage *images,
     int wire_count,
-    const char *asset_manifest_path,
+    const MalAsset *assets,
+    i32 asset_count,
     const char *entry_path,
     int argc,
     char **argv,
@@ -116,19 +133,10 @@ int mal_dev_run_images(
     if (loaded == nullptr) {
         return 2;
     }
-    MalDevelopmentAssets *development_assets = nullptr;
     MalRuntimeImage root_program = *mal_loaded_runtime_image_get(loaded);
-    if (asset_manifest_path != nullptr) {
-        const char *asset_error = "unknown error";
-        development_assets = mal_development_assets_load(asset_manifest_path, &asset_error);
-        if (development_assets == nullptr) {
-            fprintf(stderr, "could not load development assets %s: %s\n",
-                asset_manifest_path, asset_error);
-            mal_loaded_runtime_image_free(loaded);
-            return 2;
-        }
-        root_program.assets = mal_development_assets_get(
-            development_assets, &root_program.asset_count);
+    if (assets != nullptr) {
+        root_program.assets = assets;
+        root_program.asset_count = asset_count;
     }
 
     MalVm vm;
@@ -136,20 +144,17 @@ int mal_dev_run_images(
     const MalNativeProgramRelocation root_relocation = {0};
     if (!attach_overlay(&vm, &images[0], vm.runtime_image, &root_relocation)) {
         mal_vm_free(&vm);
-        mal_development_assets_free(development_assets);
         mal_loaded_runtime_image_free(loaded);
         return 2;
     }
     if (mal_host_attach(&vm) == nullptr) {
         mal_vm_free(&vm);
-        mal_development_assets_free(development_assets);
         mal_loaded_runtime_image_free(loaded);
         return 2;
     }
     if (worker_manifest_path != nullptr && !mal_worker_manifest_register(&vm, worker_manifest_path)) {
         mal_host_detach(&vm);
         mal_vm_free(&vm);
-        mal_development_assets_free(development_assets);
         mal_loaded_runtime_image_free(loaded);
         return 2;
     }
@@ -160,7 +165,7 @@ int mal_dev_run_images(
         .argv = argv,
         .script_path = entry_path != nullptr ? entry_path : root_program.entry_path,
     };
-    if (development_assets != nullptr) {
+    if (assets != nullptr) {
         mal_host_install_maligator(&vm, nullptr, 0, &launch);
     }
     mal_perf_stats_reset();
@@ -168,7 +173,6 @@ int mal_dev_run_images(
     if (callables == nullptr) {
         mal_host_detach(&vm);
         mal_vm_free(&vm);
-        mal_development_assets_free(development_assets);
         mal_loaded_runtime_image_free(loaded);
         return 2;
     }
@@ -224,7 +228,6 @@ int mal_dev_run_images(
     mal_host_detach(&vm);
     mal_vm_free(&vm);
     free(callables);
-    mal_development_assets_free(development_assets);
     mal_loaded_runtime_image_free(loaded);
     return code;
 }

@@ -4,6 +4,7 @@ import {
 	mkdirSync,
 	mkdtempSync,
 	readdirSync,
+	renameSync,
 	rmSync,
 	writeFileSync,
 } from "node:fs";
@@ -124,5 +125,38 @@ describe("development builds from relocatable fragments", () => {
 		);
 		build(workers);
 		expect(runBinary(workers, "workers")).toBe("worker-math-cache PASS\n");
+	});
+
+	it("embeds configured assets in a unit an asset edit alone recompiles", () => {
+		const assets = path.join(project, "assets");
+		mkdirSync(assets, { recursive: true });
+		const greeting = path.join(assets, "greeting.txt");
+		writeFileSync(greeting, "hello from an asset\n");
+		writeFileSync(
+			path.join(assets, "main.mjs"),
+			'import { readFileSync } from "node:fs";\nprocess.stdout.write(readFileSync(mal.assets.materialize("greeting"), "utf-8"));\n',
+		);
+		writeFileSync(
+			path.join(assets, "maligator.build.ts"),
+			'export default { entry: "main.mjs", outputName: "assets", surface: { node: true }, assets: { greeting: { type: "file", path: "greeting.txt" } } };\n',
+		);
+		const runWithoutSource = () => {
+			renameSync(greeting, `${greeting}.hidden`);
+			try {
+				return runBinary(assets, "assets");
+			} finally {
+				renameSync(`${greeting}.hidden`, greeting);
+			}
+		};
+
+		expect(build(assets)).toMatch(
+			/Generated C object · data · development-fragment-assets: (?:hit|miss)/,
+		);
+		expect(runWithoutSource()).toBe("hello from an asset\n");
+
+		writeFileSync(greeting, "edited asset\n");
+		const edited = build(assets);
+		expect(compiledUnits(edited)).toEqual(["development-fragment-assets"]);
+		expect(runWithoutSource()).toBe("edited asset\n");
 	});
 });
