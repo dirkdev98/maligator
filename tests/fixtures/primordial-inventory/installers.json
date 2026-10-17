@@ -5,7 +5,7 @@
 	},
 	{
 		"file": "builtin_array.c",
-		"sha256": "c2ea778b2787260c32bbc80358dd8cd17e6ea05f0bc2c126652ae6d6d0447e13"
+		"sha256": "e7bb56f0772dad2022d4de977df92ea1257541186af95baf97d7c6efee043d13"
 	},
 	{
 		"file": "builtin_array_buffer.c",
@@ -73,7 +73,7 @@
 	},
 	{
 		"file": "builtin_iterator_helpers.c",
-		"sha256": "d80e9b4643e46c60035b6ed8ce5ad37cf473c00261d75e5c2a2323d115d29c8e"
+		"sha256": "4282a5dea40d3eed2aa907334f9b96701917e0e4eaef9d5f6e340081b33bc329"
 	},
 	{
 		"file": "builtin_json.c",

@@ -1444,7 +1444,6 @@ static MalValue mal_iterator_constructor(MalVm *vm, MalValue this_value, const M
     return mal_value_from_object(mal_object_new(&vm->heap, prototype));
 }
 
-/** Whether value's [[Prototype]] chain includes %IteratorPrototype% (≈ instanceof %Iterator%). */
 // OrdinaryHasInstance(%Iterator%, value): a proxy observes the prototype walk,
 // and a throwing getPrototypeOf trap leaves its completion on the vm.
 static bool mal_ih_is_iterator_instance(MalVm *vm, MalValue value) {

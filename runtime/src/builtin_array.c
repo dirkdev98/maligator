@@ -356,8 +356,8 @@ static bool mal_builtin_array_delete_index_or_throw(MalVm *vm, MalValue receiver
  * Call a (element, index, array) style callback on the given this, propagating
  * abnormal completions to the VM.
  */
-static bool mal_builtin_array_invoke(MalVm *vm, MalValue callback, MalValue this_arg, MalValue element, u32 index, MalValue this_value, MalValue *out) {
-    MalValue args[] = {element, mal_ops_number_value((f64) index), this_value};
+static bool mal_builtin_array_invoke_wide(MalVm *vm, MalValue callback, MalValue this_arg, MalValue element, f64 index, MalValue this_value, MalValue *out) {
+    MalValue args[] = {element, mal_ops_number_value(index), this_value};
     // The callback can trigger a collection (directly, or via a getter/coercion
     // it performs); `element` may be a fresh getter result the caller no longer
     // roots, so make the argument buffer a scanned root across the call.
@@ -375,20 +375,8 @@ static bool mal_builtin_array_invoke(MalVm *vm, MalValue callback, MalValue this
     return true;
 }
 
-static bool mal_builtin_array_invoke_wide(MalVm *vm, MalValue callback, MalValue this_arg, MalValue element, f64 index, MalValue this_value, MalValue *out) {
-    MalValue args[] = {element, mal_ops_number_value(index), this_value};
-    MalRootSpan span;
-    mal_gc_root(&span, args, 3);
-    MalCompletion completion = mal_vm_call_builtin_callback(
-        vm, callback, this_arg, args, 3);
-    mal_gc_unroot(&span);
-    if (completion.kind != MAL_COMPLETION_NORMAL) {
-        vm->completion = completion;
-        return false;
-    }
-
-    *out = completion.value;
-    return true;
+static bool mal_builtin_array_invoke(MalVm *vm, MalValue callback, MalValue this_arg, MalValue element, u32 index, MalValue this_value, MalValue *out) {
+    return mal_builtin_array_invoke_wide(vm, callback, this_arg, element, (f64) index, this_value, out);
 }
 
 /**
