@@ -705,6 +705,19 @@ contracts or investigates costs still visible after the string follow-ups.
       module, as `maligator test` does. Measure native development builds first: every
       image adds an overlay table and link units.
 
+- [ ] Download prebuilt images and native libraries instead of compiling them into an
+      empty cache. A fresh install compiles the `maligator test` runtime image (about
+      650 ms of a 750 ms first test), every dependency island (6.3 s for an empty-cache
+      `run` of express, drizzle and valibot, while reusing a cached island from another
+      location costs about 230 ms) and, for a first build, the runtime C and Rust
+      libraries (35 s). Ship the toolchain images in the npm platform packages. Publish
+      dependency images keyed by package version and compiler identity, and static
+      runtime libraries for the common build-setting combinations (eval, Intl, web and
+      node surface, primordial policy, target), as GitHub release assets or as OCI
+      artifacts on ghcr.io, the way Homebrew hosts its bottles. Consumers verify the
+      digest, cache the download and link it statically; anything without a match
+      still compiles locally.
+
 - [ ] Keep unchanged modules out of the graph walk of one-shot `test` and `run`
       commands. Each command reparses every reachable module, `node_modules` included,
       to find its cached images; that is about 70 ms of a 200 ms test edit in
