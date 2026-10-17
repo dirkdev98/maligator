@@ -547,9 +547,22 @@ export function compileDependencyFragments(
 	const tasks = options.parallelTasks ?? [];
 	const worker = missing.length + tasks.length > 1 ? options.worker : undefined;
 	if (worker !== undefined) {
+		const sourceBytes = (unit: DependencyUnit) =>
+			[...unit.graph.modules.values()].reduce(
+				(sum, record) =>
+					record.external === undefined && record.host === undefined
+						? sum + record.source.length
+						: sum,
+				0,
+			);
+		// Largest first, so a large image does not start after the pool has drained.
+		const queued = missing
+			.map((unit) => ({ unit, bytes: sourceBytes(unit) }))
+			.sort((left, right) => right.bytes - left.bytes)
+			.map(({ unit }) => unit);
 		options.phases.workerMs += compileWithWorkers(
 			environment.root,
-			missing.map((unit) => ({
+			queued.map((unit) => ({
 				schema: 4,
 				target: options.target,
 				targets: unit.islandTargets,

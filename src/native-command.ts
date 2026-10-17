@@ -38,20 +38,36 @@ function shellCommand(command: NativeCommand): string {
 	return [command.tool, ...command.args].map(shellQuote).join(" ");
 }
 
+/**
+ * A POSIX shell script that runs the commands in order on `jobs` slots. A FIFO holds
+ * a token per free slot, so each command starts as soon as any earlier one ends.
+ * After a failure no further command starts, and the script exits with its status.
+ */
 function parallelShellScript(
 	commands: ReadonlyArray<NativeCommand>,
 	jobs: number,
 ): string {
-	const workers = Array.from({ length: jobs }, () => new Array<NativeCommand>());
-	for (const [index, command] of commands.entries()) workers[index % jobs]!.push(command);
-	const starts = workers.map((worker, index) => {
-		const body = worker
-			.map((command) => `${shellCommand(command)} || exit $?`)
-			.join("\n");
-		return `(\n${body}\n) & p${index}=$!`;
-	});
-	const waits = workers.map((_worker, index) => `wait "$p${index}" || status=$?`);
-	return `${starts.join("\n")}\nstatus=0\n${waits.join("\n")}\nexit "$status"\n`;
+	const functions = commands.map(
+		(command, index) => `mal_command_${index}() {\n${shellCommand(command)}\n}`,
+	);
+	return `${functions.join("\n")}
+state=$(mktemp -d) || exit 1
+trap 'rm -rf "$state"' EXIT
+mkfifo "$state/slots" || exit 1
+exec 3<>"$state/slots"
+slot=0
+while [ "$slot" -lt ${jobs} ]; do echo >&3; slot=$((slot + 1)); done
+index=0
+while [ "$index" -lt ${commands.length} ]; do
+	read -r slot <&3
+	[ -e "$state/failed" ] && break
+	{ "mal_command_$index" || echo "$?" > "$state/failed"; echo >&3; } &
+	index=$((index + 1))
+done
+wait
+[ -e "$state/failed" ] && exit "$(cat "$state/failed")"
+exit 0
+`;
 }
 
 function resourceReportPath(context: NativeBuildContext): string {
