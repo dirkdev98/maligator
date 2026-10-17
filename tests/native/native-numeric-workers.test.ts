@@ -11,6 +11,7 @@ import {
 	runToStdout,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
+import { resolveSplitUnitLinks } from "../helpers/native-relocation.ts";
 
 describe("polling numeric C workers", () => {
 	it("preserves IEEE results, caller roots, sticky termination and activation balance with and without observation tables", () => {
@@ -67,12 +68,16 @@ describe("polling numeric C workers", () => {
 				compiled: true,
 				debugInfo: false,
 			});
-			const emitted = source.map((unit) => unit.source).join("\n");
-			const observed = emitProgramTranslationUnits(built.programImage, {
-				compiled: true,
-			})
-				.map((unit) => unit.source)
-				.join("\n");
+			const emitted = resolveSplitUnitLinks(
+				built.programImage,
+				source.map((unit) => unit.source),
+			).join("\n");
+			const observed = resolveSplitUnitLinks(
+				built.programImage,
+				emitProgramTranslationUnits(built.programImage, { compiled: true }).map(
+					(unit) => unit.source,
+				),
+			).join("\n");
 			expect(observed).not.toMatch(/mal_direct_\d+_\d+_worker\(/);
 			expect(emitted).toContain(`mal_direct_${spin.functionIndex}_${target.entryId}(vm,`);
 			expect(emitted).not.toMatch(/mal_direct_\d+_\d+_worker\(/);
