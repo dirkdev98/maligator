@@ -13,7 +13,6 @@ import {
 import {
 	compileWorkerImages,
 	developmentWorkerManifest,
-	workerRootEntries,
 } from "../../src/compiler/pipeline/compile-worker-images.ts";
 import type { CompilerDiagnostic } from "../../src/compiler/shared/compiler-diagnostics.ts";
 import { serializeCompilerArtifact } from "../../src/compiler/target/compiler-artifact-codec.ts";
@@ -21,6 +20,10 @@ import { emitProgramTranslationUnits } from "../../src/compiler/target/emit-prog
 import { buildLocalBinary } from "../../src/local-build.ts";
 import { resolveNativeBuildContext } from "../../src/native-build-context.ts";
 import { nativeSourcePath } from "../../src/native-source-path.ts";
+import {
+	captureRootInputs,
+	startNodeRootCompilation,
+} from "../../src/node-root-compiler.ts";
 import { scaledNativeRunTimeoutMs } from "../../src/test-harness.ts";
 
 const fixtures = path.resolve("tests/fixtures/root-compiler");
@@ -39,47 +42,25 @@ const hostConfig = resolveBuildConfig({
 	surface: { node: true, webPlatform: true, maligator: true },
 });
 
-function fixtureWorkerDeclarations(entrypoint: string) {
+// Both large worker roots and the owner wire hold the whole compiler. Building the graph
+// here keeps its ASTs unreachable while the roots compile on helper threads and the owner
+// compiles on this one, so the test takes about as long as the largest of the three.
+function startFixtureRoots(entrypoint: string) {
 	const graph = buildModuleGraph(entrypoint, {
 		buildConfig: hostConfig,
 		stripTypes: stripCompactTypes,
 	});
-	// Worker root compilation must not retain the discovery graph's ASTs at its optimizer peak.
-	return {
-		workerEntries: graph.workerEntries,
-		dynamicImportCandidates: graph.dynamicImportCandidates,
-	};
-}
-
-function prepareFixtureWorkerManifest(
-	entrypoint: string,
-	directory: string,
-	runPhase: <T>(phase: string, run: () => T) => T,
-): string {
-	const declarations = fixtureWorkerDeclarations(entrypoint);
-	const workers = workerRootEntries(declarations).map((entry) => ({
-		entry,
-		wire: compileEntrypointToBuffer(entry.path, {
-			buildConfig: hostConfig,
-			stripTypes: stripCompactTypes,
-			entryStrict: true,
-			dynamicImportCandidates: declarations.dynamicImportCandidates ?? [],
-			runPhase: (phase, run) => runPhase(`${entry.path}: ${phase}`, run),
-		}),
-	}));
-	const manifest = developmentWorkerManifest(workers, (bytes, digest) => {
-		const file = path.join(directory, `${digest}.malw`);
-		writeFileSync(file, bytes);
-		return file;
-	});
-	const file = path.join(directory, "workers.json");
-	writeFileSync(file, JSON.stringify(manifest));
-	return file;
+	return startNodeRootCompilation(
+		graph,
+		{ buildConfig: hostConfig, stripTypes: stripCompactTypes },
+		captureRootInputs(graph),
+		{ concurrency: 2 },
+	);
 }
 
 it(
 	"shares the native root kernel, transfers 35 MiB and joins every outcome",
-	() => {
+	async () => {
 		const evidenceRoot = path.resolve(".cache/root-compiler-failures");
 		mkdirSync(evidenceRoot, { recursive: true });
 		const directory = mkdtempSync(path.join(evidenceRoot, "run-"));
@@ -128,20 +109,32 @@ it(
 				diagnostics,
 			});
 			const fixture = path.join(fixtures, "main.mts");
-			const workerManifest = prepareFixtureWorkerManifest(
-				fixture,
-				directory,
-				phaseFor("worker images"),
-			);
+			const roots = startFixtureRoots(fixture);
 			const ownerWire = path.join(directory, "owner.malw");
-			writeFileSync(
-				ownerWire,
-				compileEntrypointToBuffer(fixture, {
-					buildConfig: hostConfig,
-					stripTypes: stripCompactTypes,
-					runPhase: phaseFor("owner wire"),
-				}),
-			);
+			const workerManifest = path.join(directory, "workers.json");
+			try {
+				writeFileSync(
+					ownerWire,
+					compileEntrypointToBuffer(fixture, {
+						buildConfig: hostConfig,
+						stripTypes: stripCompactTypes,
+						runPhase: phaseFor("owner wire"),
+					}),
+				);
+				const { workers } = await roots.result;
+				writeFileSync(
+					workerManifest,
+					JSON.stringify(
+						developmentWorkerManifest(workers, (bytes, digest) => {
+							const file = path.join(directory, `${digest}.malw`);
+							writeFileSync(file, bytes);
+							return file;
+						}),
+					),
+				);
+			} finally {
+				await roots.close();
+			}
 			const assets = path.join(directory, "empty.mala");
 			writeFileSync(assets, Buffer.from([77, 65, 76, 65, 1, 0, 0, 0, 0, 0, 0, 0]));
 			const bootstrap = compileEntrypoint(path.join(fixtures, "bootstrap.mts"), {
