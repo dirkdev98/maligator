@@ -24,6 +24,9 @@ MalValue mal_builtin_object_keys_known(
     MalVm *vm, const MalValue *args, i32 arg_count
 );
 
+/** EnumerableOwnProperties(target, key+value) as an array of [key, value] arrays. */
+MalValue mal_builtin_object_enumerable_entries(MalVm *vm, MalValue target);
+
 typedef enum MalObjectEnumerationKind {
     MAL_OBJECT_ENUMERATION_KEYS,
     MAL_OBJECT_ENUMERATION_VALUES,

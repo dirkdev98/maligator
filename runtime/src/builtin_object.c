@@ -1400,6 +1400,12 @@ static MalValue mal_builtin_object_entries(MalVm *vm, MalValue this_value, const
     );
 }
 
+MalValue mal_builtin_object_enumerable_entries(MalVm *vm, MalValue target) {
+    return mal_builtin_object_collect(
+        vm, target, MAL_PROPERTY_ITER_ENUMERABLE_OWN_PROPERTY_ORDER,
+        MAL_BUILTIN_OBJECT_COLLECT_ENTRIES);
+}
+
 static MalValue mal_builtin_object_get_own_property_names(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
     return mal_builtin_object_collect(

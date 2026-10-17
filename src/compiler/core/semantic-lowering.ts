@@ -13128,14 +13128,21 @@ function compileImportExpression(
 ): number {
 	const targetPath = dynamicImportTargetPath(program, fn, source);
 	const specifier = compileExpression(program, fn, cursor, source);
-	if (options) {
-		compileExpression(program, fn, cursor, options);
-	}
+	const optionsRegister = options
+		? compileExpression(program, fn, cursor, options)
+		: compileUndefined(fn, cursor);
 	if (targetPath) {
-		return emitDynamicImportCall(program, fn, cursor, specifier, targetPath);
+		return emitDynamicImportCall(
+			program,
+			fn,
+			cursor,
+			specifier,
+			optionsRegister,
+			targetPath,
+		);
 	}
 	if (source.type === "Literal") {
-		return emitDynamicImportCall(program, fn, cursor, specifier);
+		return emitDynamicImportCall(program, fn, cursor, specifier, optionsRegister);
 	}
 
 	return emitDynamicImportCall(
@@ -13143,6 +13150,7 @@ function compileImportExpression(
 		fn,
 		cursor,
 		specifier,
+		optionsRegister,
 		undefined,
 		dynamicImportCandidates(program, fn),
 	);
@@ -13272,6 +13280,7 @@ function emitDynamicImportCall(
 	fn: CoreFrontendFunction,
 	cursor: CoreFrontendCursor,
 	specifier: number,
+	options: number,
 	targetPath?: string,
 	candidates: ReadonlyArray<DynamicImportCandidate> = [],
 ): number {
@@ -13357,6 +13366,7 @@ function emitDynamicImportCall(
 			callee,
 			thisRegister,
 			specifier,
+			options,
 			...targetArguments,
 			...candidateArguments,
 		],

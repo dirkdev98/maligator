@@ -49,7 +49,7 @@
 	},
 	{
 		"file": "builtin_eval.c",
-		"sha256": "5f1405997b43e2e42b39fc07092149d5c6e49de773d8ed3f50e6fe4dd9ed3588"
+		"sha256": "6cff61db9800fa11665947d187adc51aece485a62f638be01ff7496c23069c8d"
 	},
 	{
 		"file": "builtin_finalization_registry.c",
@@ -93,7 +93,7 @@
 	},
 	{
 		"file": "builtin_object.c",
-		"sha256": "72fa1c7829d4f2972430fa12611c9f597391c3657d491b442ecbe710f455a971"
+		"sha256": "dcc324eb4cb8663f3bd93c7a30bdd96b4fa35c08af47b43843b6999097e26149"
 	},
 	{
 		"file": "builtin_promise.c",

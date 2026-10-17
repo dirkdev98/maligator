@@ -6,6 +6,8 @@
 #include "array_buffer_object.h"
 #include "builtin_promise.h"
 #include "builtin_data_view.h"
+#include "ascii.h"
+#include "builtin_object.h"
 #include "builtin_eval.h"
 #include "builtin_regexp.h"
 #include "compiler_wire.h"
@@ -666,6 +668,59 @@ static MalValue mal_dynamic_import_evaluate(MalVm *vm, MalValue receiver,
     return mal_value_new_undefined();
 }
 
+/* EvaluateImportCall steps 7-9: options may carry only string-valued, supported
+ * attributes; every failure rejects the import's promise. */
+static bool mal_dynamic_import_options(MalVm *vm, MalValue options) {
+    if (mal_value_is_undefined(options)) return true;
+    if (!mal_value_is_object(options)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "The options of import() must be an object");
+        return false;
+    }
+    MalValue roots[5] = {options, mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan span;
+    mal_gc_root(&span, roots, 5);
+    bool valid = false;
+    if (!mal_vm_get_property(vm, roots[0], mal_intrinsic_string_key(vm, (const byte *) "with"),
+            &roots[1]))
+        goto done;
+    if (mal_value_is_undefined(roots[1])) {
+        valid = true;
+        goto done;
+    }
+    if (!mal_value_is_object(roots[1])) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "The 'with' option of import() must be an object");
+        goto done;
+    }
+    roots[2] = mal_builtin_object_enumerable_entries(vm, roots[1]);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
+    u32 count = mal_array_object_length(mal_value_to_array_object(roots[2]));
+    bool supported = true;
+    for (u32 index = 0; index < count; index++) {
+        if (!mal_vm_get_property(vm, roots[2], mal_key_index(index), &roots[3]) ||
+            !mal_vm_get_property(vm, roots[3], mal_key_index(0), &roots[4]) ||
+            !mal_vm_get_property(vm, roots[3], mal_key_index(1), &roots[3]))
+            goto done;
+        if (!mal_value_is_string(roots[3])) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                "Import attribute values must be strings");
+            goto done;
+        }
+        if (!mal_string_equals_ascii(mal_value_to_string(roots[4]), "type")) supported = false;
+    }
+    if (!supported) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE,
+            "Unsupported import attribute");
+        goto done;
+    }
+    valid = true;
+done:
+    mal_gc_unroot(&span);
+    return valid;
+}
+
 static MalValue mal_builtin_dynamic_import(MalVm *vm, MalValue this_value, const MalValue *args,
     i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value; (void) new_target; (void) callee;
@@ -677,9 +732,12 @@ static MalValue mal_builtin_dynamic_import(MalVm *vm, MalValue this_value, const
     MalString *specifier_string = nullptr;
     if (!mal_vm_to_string(vm, arg_count > 0 ? args[0] : mal_value_new_undefined(), &specifier_string))
         goto reject_completion;
-    /* Each target has init, namespace, status, error, record and evaluation-context cells. */
-    i32 target = 1;
-    for (i32 index = 7; index + 6 < arg_count; index += 7) {
+    if (!mal_dynamic_import_options(vm, arg_count > 1 ? args[1] : mal_value_new_undefined()))
+        goto reject_completion;
+    /* After the specifier and options, each target has init, namespace, status, error,
+     * record and evaluation-context cells. */
+    i32 target = 2;
+    for (i32 index = 8; index + 6 < arg_count; index += 7) {
         if (mal_value_is_string(args[index]) &&
             mal_string_equals(specifier_string, mal_value_to_string(args[index]))) {
             target = index + 1;
