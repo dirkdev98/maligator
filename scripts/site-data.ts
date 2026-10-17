@@ -479,7 +479,6 @@ const SHAPE_ONLY_NODE_MODULES = new Set([
 const SHAPE_ONLY_NODE_APIS = new Set([
 	"node:child_process#exec",
 	"node:child_process#execFile",
-	"node:child_process#spawn",
 	"node:crypto#X509Certificate",
 	"node:crypto#createSign",
 	"node:crypto#createVerify",

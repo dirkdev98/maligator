@@ -296,6 +296,9 @@ static void mal_proc_child(
     if (req->cwd != NULL && chdir(req->cwd) != 0) {
         mal_proc_child_fail(errpipe);
     }
+    if (req->detached && setsid() < 0) {
+        mal_proc_child_fail(errpipe);
+    }
 
     mal_proc_child_exec(req, envp);
     /* exec returned => it failed; errno is set. */

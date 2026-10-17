@@ -46,6 +46,17 @@ typedef struct MalPosixStat {
     u32 type;     // MalPosixFileType (follows symlinks, like stat(2))
 } MalPosixStat;
 
+/* Volume statistics in the shape of Node's fs.StatFs; block counts are in `bsize` units. */
+typedef struct MalPosixStatFs {
+    f64 type;
+    f64 bsize;
+    f64 blocks;
+    f64 bfree;
+    f64 bavail;
+    f64 files;
+    f64 ffree;
+} MalPosixStatFs;
+
 typedef struct MalPosixDirent {
     char *name; // owned, NUL-terminated UTF-8; free via mal_posix_fs_free_dirents
     u32 type;   // MalPosixFileType of the entry itself (does NOT follow symlinks)
@@ -137,6 +148,9 @@ int mal_posix_fs_truncate_fd(int fd, i64 length);
 
 /* stat(2) `path` into `*out` (follows symlinks). Returns 0 or an errno. */
 int mal_posix_fs_stat(const char *path, MalPosixStat *out);
+
+/* Statistics of the volume holding `path`. */
+int mal_posix_fs_statfs(const char *path, MalPosixStatFs *out);
 
 /* fstat(2) an open descriptor into `*out`. */
 int mal_posix_fs_fstat(int fd, MalPosixStat *out);

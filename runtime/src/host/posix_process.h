@@ -45,6 +45,7 @@ typedef struct MalProcRequest {
     MalProcStdio stderr_mode;
     const byte *input;   /* bytes fed to stdin when stdin_mode is PIPE (may be NULL) */
     usize input_len;
+    bool detached;       /* lead a new session, so the child outlives the parent's terminal */
 } MalProcRequest;
 
 /* How the child terminated plus any captured output. */

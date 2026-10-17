@@ -19,6 +19,11 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#if defined(__APPLE__)
+#include <sys/mount.h>
+#else
+#include <sys/vfs.h>
+#endif
 
 static u32 mal_posix_ft_from_mode(mode_t m) {
     if (S_ISREG(m)) {
@@ -481,6 +486,21 @@ int mal_posix_fs_stat(const char *path, MalPosixStat *out) {
     struct stat st;
     if (stat(path, &st) != 0) return errno;
     mal_posix_fs_copy_stat(&st, out);
+    return 0;
+}
+
+int mal_posix_fs_statfs(const char *path, MalPosixStatFs *out) {
+    struct statfs st;
+    if (statfs(path, &st) != 0) return errno;
+    *out = (MalPosixStatFs) {
+        .type = (f64) st.f_type,
+        .bsize = (f64) st.f_bsize,
+        .blocks = (f64) st.f_blocks,
+        .bfree = (f64) st.f_bfree,
+        .bavail = (f64) st.f_bavail,
+        .files = (f64) st.f_files,
+        .ffree = (f64) st.f_ffree,
+    };
     return 0;
 }
 

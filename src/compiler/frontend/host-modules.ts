@@ -147,6 +147,7 @@ const FS: HostModuleSpec = {
 		"rmSync",
 		"rmdirSync",
 		"statSync",
+		"statfsSync",
 		"stat",
 		"symlink",
 		"symlinkSync",

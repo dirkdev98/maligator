@@ -1493,6 +1493,40 @@ static MalValue node_fs_stat_sync(
     return node_fs_make_stats(vm, node_fs_slot_proto(vm, callee), &st);
 }
 
+static MalValue node_fs_statfs_sync(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    (void) callee;
+    char *path = node_fs_path_cstr(vm, argc >= 1 ? args[0] : mal_value_new_undefined());
+    if (path == nullptr) return mal_value_new_undefined();
+    MalPosixStatFs st;
+    int err = mal_posix_fs_statfs(path, &st);
+    if (err != 0) {
+        node_fs_throw_errno(vm, err, "statfs", path);
+        free(path);
+        return mal_value_new_undefined();
+    }
+    free(path);
+    MalObject *object = mal_intrinsic_new_object(vm);
+    MalValue value = mal_value_from_object(object);
+    MalRootSpan root;
+    mal_gc_root(&root, &value, 1);
+    const struct {
+        const char *name;
+        f64 number;
+    } fields[] = {
+        {"type", st.type}, {"bsize", st.bsize}, {"blocks", st.blocks}, {"bfree", st.bfree},
+        {"bavail", st.bavail}, {"files", st.files}, {"ffree", st.ffree},
+    };
+    for (usize i = 0; i < countof(fields); i++) {
+        mal_intrinsic_define_data(vm, object, (const byte *) fields[i].name,
+            mal_value_from_f64(fields[i].number), NODE_FS_VISIBLE);
+    }
+    mal_gc_unroot(&root);
+    return value;
+}
+
 static MalValue node_fs_fstat_sync(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc,
     MalValue nt, MalValue callee) {
@@ -4072,6 +4106,9 @@ static MalValue node_fs_export(
         return node_fs_make_fn_slot(
             vm, fn_proto, "statSync", 1, node_fs_stat_sync, protos[0]);
     }
+    if (strcmp(name, "statfsSync") == 0) {
+        return node_fs_make_fn(vm, fn_proto, "statfsSync", 1, node_fs_statfs_sync);
+    }
     if (strcmp(name, "fstatSync") == 0) {
         return node_fs_make_fn_slot(
             vm, fn_proto, "fstatSync", 1, node_fs_fstat_sync, protos[0]);
@@ -4266,7 +4303,7 @@ void mal_host_install_node_fs(
     static const char *names[] = {
 		"Stats", "access", "accessSync", "appendFileSync", "chmodSync", "closeSync", "copyFileSync", "createReadStream", "existsSync", "fdatasync", "fdatasyncSync", "fstatSync", "fsync", "fsyncSync", "ftruncateSync", "link", "linkSync", "lstatSync", "mkdirSync",
 		"mkdtemp", "mkdtempSync", "openSync", "readFile", "readFileSync", "readlink", "readlinkSync", "readSync", "readdir", "readdirSync", "realpathSync", "rename", "renameSync",
-        "rmSync", "rmdirSync", "statSync", "stat", "symlink", "symlinkSync", "unlink", "unlinkSync", "utimesSync", "write", "writeFileSync", "writeSync",
+        "rmSync", "rmdirSync", "statSync", "stat", "statfsSync", "symlink", "symlinkSync", "unlink", "unlinkSync", "utimesSync", "write", "writeFileSync", "writeSync",
     };
     MalValue module = mal_value_from_object(mal_intrinsic_new_object(vm));
     MalRootSpan module_root;

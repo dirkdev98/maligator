@@ -312,6 +312,7 @@ static MalValue mal_node_process_command(
     MalProcStdio in_mode = MAL_PROC_STDIO_PIPE;
     MalProcStdio out_mode = MAL_PROC_STDIO_PIPE;
     MalProcStdio err_mode = MAL_PROC_STDIO_PIPE;
+    bool detached = false;
 
     if (argc < 1) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "The \"file\" argument must be a string");
@@ -365,6 +366,11 @@ static MalValue mal_node_process_command(
             goto cleanup;
         }
     }
+
+    if (!mal_ncp_option(vm, opts_val, "detached", &tmp)) {
+        goto cleanup;
+    }
+    detached = mal_value_is_truthy(tmp);
 
     // stdio: a single string covers all three streams; a 3-element array is per-stream.
     if (!mal_ncp_option(vm, opts_val, "stdio", &tmp)) {
@@ -529,6 +535,7 @@ static MalValue mal_node_process_command(
         .stderr_mode = err_mode,
         .input = input_c,
         .input_len = input_len,
+        .detached = detached,
     };
 
     if (asynchronous) {
@@ -599,8 +606,16 @@ typedef struct MalNodeChild {
     MalProcChild process;
     char *file;
     bool spawn_emitted;
+    /* An unreferenced child's poll timer does not keep the event loop alive. */
+    bool referenced;
+    i64 poll_timer;
     struct MalNodeChild *next;
 } MalNodeChild;
+
+static void mal_node_child_arm(MalVm *vm, MalNodeChild *child, MalValue poll, i64 delay_ms) {
+    child->poll_timer = mal_host_set_timeout(vm, poll, delay_ms, nullptr, 0);
+    if (!child->referenced) mal_host_timer_set_referenced(vm, child->poll_timer, false);
+}
 
 // Child handles hold JS objects and are drained by the spawning isolate's mutator.
 static MAL_ISOLATE_LOCAL MalNodeChild *mal_node_children;
@@ -655,7 +670,7 @@ static MalValue mal_node_child_poll_task(
     }
     bool listener_threw = vm->completion.kind == MAL_COMPLETION_THROW;
     if (!finished) {
-        if (!listener_threw) mal_host_set_timeout(vm, callee, 5, nullptr, 0);
+        if (!listener_threw) mal_node_child_arm(vm, child, callee, 5);
         return mal_value_new_undefined();
     }
     link = &mal_node_children;
@@ -729,6 +744,29 @@ static MalValue mal_node_child_kill(
     return mal_value_new_boolean(false);
 }
 
+static MalValue mal_node_child_set_referenced(MalVm *vm, MalValue self, bool referenced) {
+    for (MalNodeChild *child = mal_node_children; child != nullptr; child = child->next) {
+        if (child->vm == vm && child->object == self) {
+            child->referenced = referenced;
+            mal_host_timer_set_referenced(vm, child->poll_timer, referenced);
+            break;
+        }
+    }
+    return mal_value_new_undefined();
+}
+
+static MalValue mal_node_child_ref(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) args; (void) argc; (void) nt; (void) callee;
+    return mal_node_child_set_referenced(vm, self, true);
+}
+
+static MalValue mal_node_child_unref(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) args; (void) argc; (void) nt; (void) callee;
+    return mal_node_child_set_referenced(vm, self, false);
+}
+
 static MalValue mal_node_spawn_request(MalVm *vm, const MalProcRequest *request) {
     MalNodeChild *child = calloc(1, sizeof(*child));
     if (child == nullptr) {
@@ -756,6 +794,7 @@ static MalValue mal_node_spawn_request(MalVm *vm, const MalProcRequest *request)
     mal_gc_root(&root, roots, countof(roots));
     child->vm = vm;
     child->object = roots[0];
+    child->referenced = true;
     mal_proc_spawn(request, &child->process);
     child->next = mal_node_children;
     mal_node_children = child;
@@ -771,10 +810,12 @@ static MalValue mal_node_spawn_request(MalVm *vm, const MalProcRequest *request)
     mal_intrinsic_define_data(vm, object, (const byte *) "killed", mal_value_new_boolean(false),
         MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
     mal_intrinsic_define_method_n(vm, object, (const byte *) "kill", 1, mal_node_child_kill);
+    mal_intrinsic_define_method_n(vm, object, (const byte *) "ref", 0, mal_node_child_ref);
+    mal_intrinsic_define_method_n(vm, object, (const byte *) "unref", 0, mal_node_child_unref);
     roots[1] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots(
         &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
         mal_intrinsic_ascii(vm, (const byte *) "childProcessPoll"), mal_node_child_poll_task, roots, 1));
-    mal_host_set_timeout(vm, roots[1], 0, nullptr, 0);
+    mal_node_child_arm(vm, child, roots[1], 0);
     mal_gc_unroot(&root);
     return roots[0];
 }
