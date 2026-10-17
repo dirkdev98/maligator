@@ -107,7 +107,7 @@ describe("test suite shards", () => {
 	it("reads the host platform's files and file-less stage weights", () => {
 		const durations = withTable(
 			{
-				schema: 2,
+				schema: 3,
 				platforms: {
 					darwin: { files: { "a.test.ts": 3 }, stages: { "full: leak audit": 500 } },
 					linux: { files: { "a.test.ts": 1 }, stages: {} },
@@ -121,17 +121,39 @@ describe("test suite shards", () => {
 
 	it("balances an unrecorded platform with the Linux weights", () => {
 		const durations = withTable(
-			{ schema: 2, platforms: { linux: { files: { "a.test.ts": 1 } } } },
+			{ schema: 3, platforms: { linux: { files: { "a.test.ts": 1 } } } },
 			(root) => readShardDurations(root, "win32"),
 		);
 		expect(durations.files.get("a.test.ts")).toBe(1);
 		expect(durations.stages.size).toBe(0);
 	});
 
+	it("weights each file from the most specific table that recorded it", () => {
+		const document = {
+			schema: 3,
+			platforms: {
+				darwin: { files: { "a.test.ts": 3 } },
+				linux: { files: { "a.test.ts": 1, "b.test.ts": 2 } },
+				"linux-sanitizer": { files: { "a.test.ts": 9 } },
+			},
+		};
+		const weight = (platform: NodeJS.Platform, lane?: string, file = "a.test.ts") =>
+			withTable(document, (root) => readShardDurations(root, platform, lane)).files.get(
+				file,
+			);
+
+		expect(weight("linux", "sanitizer")).toBe(9);
+		expect(weight("darwin", "sanitizer")).toBe(9);
+		expect(weight("linux", "native")).toBe(1);
+		expect(weight("darwin")).toBe(3);
+		expect(weight("linux", "sanitizer", "b.test.ts")).toBe(2);
+		expect(weight("darwin", undefined, "b.test.ts")).toBe(2);
+	});
+
 	it.each([
-		{ schema: 1, seconds: {} },
-		{ schema: 2, platforms: { linux: { files: { "a.test.ts": -1 } } } },
-		{ schema: 2, platforms: { linux: { files: "a.test.ts" } } },
+		{ schema: 2, platforms: { linux: { files: { "a.test.ts": 1 } } } },
+		{ schema: 3, platforms: { linux: { files: { "a.test.ts": -1 } } } },
+		{ schema: 3, platforms: { linux: { files: "a.test.ts" } } },
 	])("rejects an invalid duration table %j", (document) => {
 		expect(() =>
 			withTable(document, (root) => readShardDurations(root, "linux")),

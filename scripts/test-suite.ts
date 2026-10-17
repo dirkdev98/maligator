@@ -86,8 +86,8 @@ const NOMINAL_SMOKE_WORKERS = 4;
 const WARM_SMOKE_FUSE_MS = 20_000;
 // Cold CI builds both the development runtime and the eval-enabled Test262 runtime.
 const COLD_SMOKE_FUSE_MS = 900_000;
-// One optional prepared eval runtime compiles the native compiler overlay on a CI runner.
-const SHARD_PREPARATION_SECONDS = 300;
+// An optional eval runtime links from the overlay objects and bake a CI cache line carries.
+const SHARD_PREPARATION_SECONDS = 20;
 
 function smokeBudgetForWorkers(workers: number): { warmMs: number; coldMs: number } {
 	const divisor = Math.min(workers, NOMINAL_SMOKE_WORKERS);
@@ -754,7 +754,7 @@ function testFiles(command: Command): Array<string> {
 
 /** Split the selected stages' test files, keeping each file-less stage whole. */
 function shardCommands(commands: Array<Command>, request: ShardRequest): Array<Command> {
-	const durations = readShardDurations(root);
+	const durations = readShardDurations(root, process.platform, lane);
 	const known = [...durations.files.values()].sort((left, right) => left - right);
 	const fallbackSeconds = known[Math.floor(known.length / 2)] ?? 0;
 	const items: Array<ShardItem> = commands.flatMap((command, stage) => {

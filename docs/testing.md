@@ -227,10 +227,12 @@ divides a selected lane's test files by the recorded wall time in
 prepared runtime (perf counters, disabled web or realms) together, so only one shard
 pays for that preparation. Stages without test files, such as the macOS leak audit,
 stay whole and carry their own recorded duration. The table holds separate Linux and
-macOS weights because the hosts differ in relative cost; other hosts use Linux's. It
-only affects balance; refresh it from downloaded run logs of recent passing runs with
-`node scripts/test-suite-durations.ts <log>...`, which keeps each median. The `Linux check` job requires all
-jobs to succeed, then combines their retained reports only when source, environment,
+macOS weights because the hosts differ in relative cost, and separate sanitizer
+weights because the sanitizers slow files unevenly; a file takes its weight from the
+most specific table that recorded it, and other hosts use Linux's. It only affects
+balance; refresh it from downloaded run logs of recent passing runs with
+`node scripts/test-suite-durations.ts <log>...`, which keeps each median. The
+`Linux check` job requires all jobs to succeed, then combines their retained reports only when source, environment,
 selections, and executed stages match the current canonical plan exactly. A sharded
 lane must contribute every shard, each matching the planner's shard selection, and
 their files must partition each canonical stage. Missing, duplicate, failed, or

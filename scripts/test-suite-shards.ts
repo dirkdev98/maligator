@@ -111,12 +111,14 @@ function durationMap(label: string, value: unknown): Map<string, number> {
 }
 
 /**
- * Recorded durations for one host platform, used only to balance shards. Hosts
- * differ in relative cost, so a platform without its own table borrows Linux's.
+ * Recorded durations for one host platform and lane, used only to balance shards.
+ * Sanitizers slow files unevenly, so their lane keeps its own table. Hosts differ in
+ * relative cost, so a platform without its own table borrows Linux's.
  */
 export function readShardDurations(
 	root: string,
 	platform: NodeJS.Platform = process.platform,
+	lane?: string,
 ): ShardDurations {
 	const document = JSON.parse(
 		readFileSync(path.join(root, "tests/test-suite-durations.json"), "utf8"),
@@ -124,12 +126,22 @@ export function readShardDurations(
 		schema?: unknown;
 		platforms?: Record<string, { files?: unknown; stages?: unknown }>;
 	};
-	if (document.schema !== 2 || document.platforms === undefined) {
-		throw new Error("tests/test-suite-durations.json must use schema 2");
+	if (document.schema !== 3 || document.platforms === undefined) {
+		throw new Error("tests/test-suite-durations.json must use schema 3");
 	}
-	const table = document.platforms[platform] ?? document.platforms.linux ?? {};
-	return {
-		files: durationMap(`${platform} files`, table.files),
-		stages: durationMap(`${platform} stages`, table.stages),
-	};
+	const tables = [
+		"linux",
+		platform,
+		...(lane === "sanitizer" ? ["linux-sanitizer", `${platform}-sanitizer`] : []),
+	].filter((name, index, names) => names.indexOf(name) === index);
+	const durations: ShardDurations = { files: new Map(), stages: new Map() };
+	for (const name of tables) {
+		const table = document.platforms[name];
+		if (table === undefined) continue;
+		for (const entry of durationMap(`${name} files`, table.files))
+			durations.files.set(...entry);
+		for (const entry of durationMap(`${name} stages`, table.stages))
+			durations.stages.set(...entry);
+	}
+	return durations;
 }

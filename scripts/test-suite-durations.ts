@@ -6,9 +6,10 @@ const usage = `usage: node scripts/test-suite-durations.ts RUN_LOG...
 
 Rebuilds tests/test-suite-durations.json from GitHub Actions logs, either
 \`gh run view RUN_ID --log\` output or per-job logs prefixed with "JOB<TAB>STEP<TAB>".
-Jobs named "Linux ..." record the linux table and "macOS ..." the darwin table.
-Each file and stage keeps the median of its observations. The table only balances
-CI shards; stage entries weight stages that run without test files.`;
+Jobs named "Linux ..." record the linux table and "macOS ..." the darwin table;
+sanitizer jobs record a separate "-sanitizer" table for that platform. Each file and
+stage keeps the median of its observations. The tables only balance CI shards; stage
+entries weight stages that run without test files.`;
 
 const logs = process.argv.slice(2);
 if (logs.length === 0 || logs.includes("-h") || logs.includes("--help")) {
@@ -44,8 +45,9 @@ function observe(table: Observations, name: string, value: number): void {
 for (const log of logs) {
 	for (const line of readFileSync(log, "utf8").split("\n")) {
 		const [job, , raw] = line.split("\t", 3);
-		const platform = platforms.find(([pattern]) => pattern.test(job ?? ""))?.[1];
-		if (platform === undefined || raw === undefined) continue;
+		const host = platforms.find(([pattern]) => pattern.test(job ?? ""))?.[1];
+		if (host === undefined || raw === undefined) continue;
+		const platform = /\bsanitizer\b/.test(job!) ? `${host}-sanitizer` : host;
 		const message = stripVTControlCharacters(raw).replace(caretColour, "").trimEnd();
 		const table = tables.get(platform) ?? { files: new Map(), stages: new Map() };
 		tables.set(platform, table);
@@ -76,7 +78,7 @@ function medians(observations: Observations): Record<string, number> {
 
 const output = path.resolve(import.meta.dirname, "../tests/test-suite-durations.json");
 const document = {
-	schema: 2,
+	schema: 3,
 	platforms: Object.fromEntries(
 		[...tables]
 			.sort(([left], [right]) => (left < right ? -1 : 1))
