@@ -547,7 +547,27 @@ test("canonicalizes bare tty to the node:tty host module", () => {
 	]);
 });
 
-test("loads JSON dependencies as CommonJS modules", () => {
+test("loads JSON an ES module imports as a module whose only export is its value", () => {
+	write(
+		"json-import.mjs",
+		`import data from "./imported.json" with { type: "json" };\nglobalThis.sink = data;\n`,
+	);
+	write("imported.json", `{"answer":42}\n`);
+	write(
+		"json-named.mjs",
+		`import { answer } from "./imported.json" with { type: "json" };\nglobalThis.sink = answer;\n`,
+	);
+	const jsonPath = path.join(root, "imported.json");
+
+	const graph = buildModuleGraph(path.join(root, "json-import.mjs"));
+
+	expect(graph.modules.get(jsonPath)?.goal).toBe("module");
+	expect(() =>
+		linkModules(loadEntrypointAndRunSemanticAnalysis(path.join(root, "json-named.mjs"))),
+	).toThrow("does not export 'answer'");
+});
+
+test("loads JSON a CommonJS module requires as a CommonJS module", () => {
 	write("cjs-json.cjs", `module.exports = require("./data.json");\n`);
 	write("data.json", `{"answer":42,"__proto__":{"own":true}}\n`);
 	const graph = buildModuleGraph(path.join(root, "cjs-json.cjs"));

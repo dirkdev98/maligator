@@ -397,7 +397,10 @@ export function buildModuleGraph(
 						}
 						throw error;
 					}
-					parseSource = `module.exports = JSON.parse(${JSON.stringify(source)});`;
+					parseSource =
+						goal === "cjs"
+							? `module.exports = JSON.parse(${JSON.stringify(source)});`
+							: `export default JSON.parse(${JSON.stringify(source)});`;
 				}
 				if (TS_EXTENSIONS.has(path.extname(sourcePath ?? filePath))) {
 					if (!options.stripTypes) {
@@ -605,11 +608,17 @@ export function buildModuleGraph(
 				);
 				continue;
 			}
+			// A JSON module exports only its parsed value as the default (ParseJSONModule);
+			// `require()` reads the same value as `module.exports`.
 			load(
 				resolvedPath,
-				options.goalOverride ??
-					options.dependencyGoalOverride ??
-					detectDependencyGoal(resolvedPath, ctx),
+				path.extname(resolvedPath) === ".json"
+					? dependency.kind === "require"
+						? "cjs"
+						: "module"
+					: (options.goalOverride ??
+							options.dependencyGoalOverride ??
+							detectDependencyGoal(resolvedPath, ctx)),
 			);
 		}
 	};
