@@ -1,6 +1,7 @@
 import { chmodSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { capabilities } from "maligator:workers";
+import { capabilities, createPool, createWorkerUrl } from "maligator:workers";
+import type { WorkerPool } from "maligator:workers";
 import { createApplicationImageHost } from "./application-images.ts";
 import type { NativeApplicationBridge } from "./application-images.ts";
 import { setCacheMaintenanceCommand } from "./cache-management.ts";
@@ -8,6 +9,7 @@ import { productCompilerInstallation, runCli } from "./cli-commands.ts";
 import { installCompilerProducerDigests } from "./compiler-cache-identity.ts";
 import type { CompilerProducerStage } from "./compiler-cache-identity.ts";
 import { stripCompactTypes } from "./compiler/frontend/compact-type-strip.ts";
+import type { waitForChange } from "./development-watch-worker.ts";
 import { createNativeCompilerService } from "./native-compiler-service.ts";
 import {
 	startNativeRootCompilation,
@@ -22,8 +24,13 @@ const mal = Reflect.get(globalThis, "mal") as unknown as NativeApplicationBridge
 	_spawnDevelopmentProcess(executablePath: string, args: Array<string>): number;
 	_killDevelopmentProcess(handle: number, force: boolean): void;
 	_developmentProcessStatus(handle: number): number | undefined;
-	_waitDevelopmentChange(directories: Array<string>, timeoutMs: number): void;
 };
+
+type DevelopmentWatchWorker = { waitForChange: typeof waitForChange };
+const developmentWatchEntry = createWorkerUrl<DevelopmentWatchWorker>(
+	"./development-watch-worker.ts",
+	import.meta.url,
+);
 
 const producerDigests = JSON.parse(
 	readFileSync(assets.materialize("compilerProducerDigests"), "utf8"),
@@ -34,6 +41,7 @@ chmodSync(mutableDevelopmentRunner, 0o755);
 
 interface ProductDevelopmentWatcher {
 	directories: Array<string>;
+	waits: WorkerPool<DevelopmentWatchWorker> | undefined;
 }
 
 function updateDevelopmentDirectories(
@@ -75,23 +83,26 @@ await runCli(process.argv.slice(2), {
 	},
 	developmentWatcher: {
 		create(files) {
-			const handle: ProductDevelopmentWatcher = { directories: [] };
+			const handle: ProductDevelopmentWatcher = { directories: [], waits: undefined };
 			updateDevelopmentDirectories(handle, files);
 			return handle;
 		},
 		update(handle, files) {
 			updateDevelopmentDirectories(handle as ProductDevelopmentWatcher, files);
 		},
-		wait(handle, timeoutMs) {
-			mal._waitDevelopmentChange(
-				(handle as ProductDevelopmentWatcher).directories,
-				timeoutMs,
-			);
-			return new Promise<void>((resolve) => {
-				setTimeout(resolve, 0);
-			});
+		async wait(opaqueHandle, timeoutMs) {
+			const handle = opaqueHandle as ProductDevelopmentWatcher;
+			handle.waits ??= createPool(developmentWatchEntry, {
+				size: 1,
+				name: "development-watch",
+			}).unref();
+			await handle.waits.run("waitForChange", [handle.directories, timeoutMs]);
 		},
-		close() {},
+		close(opaqueHandle) {
+			const handle = opaqueHandle as ProductDevelopmentWatcher;
+			void handle.waits?.close();
+			handle.waits = undefined;
+		},
 	},
 	dependencyWorker,
 });
