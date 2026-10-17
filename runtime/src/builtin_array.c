@@ -146,9 +146,22 @@ static bool mal_builtin_array_try_get_wide(MalVm *vm, MalValue this_value, f64 i
     return mal_vm_get_property(vm, this_value, index_key, out);
 }
 
+// Get(O, index): unlike try_get_wide, a missing element is not probed with HasProperty first.
 static MalValue mal_builtin_array_get_wide(MalVm *vm, MalValue this_value, f64 index) {
     MalValue element = mal_value_new_undefined();
-    mal_builtin_array_try_get_wide(vm, this_value, index, &element);
+    if (mal_value_is_array_object(this_value) && index >= 0 && index < (f64) UINT32_MAX &&
+        (f64) (u32) index == index) {
+        if (mal_array_object_dense_get(mal_value_to_array_object(this_value), (u32) index, &element)) {
+            return element;
+        }
+        if (mal_builtin_array_clean_dense(vm, this_value) != nullptr) {
+            return element;
+        }
+    }
+    MalKey index_key;
+    if (mal_builtin_array_numeric_key(vm, index, &index_key)) {
+        mal_vm_get_property(vm, this_value, index_key, &element);
+    }
     return element;
 }
 
@@ -199,9 +212,7 @@ bool mal_builtin_array_try_get(MalVm *vm, MalValue this_value, u32 index, MalVal
 }
 
 static MalValue mal_builtin_array_get(MalVm *vm, MalValue this_value, u32 index) {
-    MalValue element = mal_value_new_undefined();
-    mal_builtin_array_try_get(vm, this_value, index, &element);
-    return element;
+    return mal_builtin_array_get_wide(vm, this_value, (f64) index);
 }
 
 static bool mal_builtin_array_try_store_dense_index(
