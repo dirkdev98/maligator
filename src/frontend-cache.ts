@@ -13,9 +13,12 @@ import * as path from "node:path";
 import { maligatorCacheDirectory } from "./cache-root.ts";
 import { compilerProducerIdentity } from "./compiler-cache-identity.ts";
 import { ModuleParseCache } from "./compiler/frontend/module-graph.ts";
-import type { PersistedModuleParse } from "./compiler/frontend/module-graph.ts";
+import type {
+	PersistedModuleLoad,
+	PersistedModuleParse,
+} from "./compiler/frontend/module-graph.ts";
 
-const MODULE_PARSE_SCHEMA = 1;
+const MODULE_PARSE_SCHEMA = 2;
 
 export const FRONTEND_CACHE_DIRECTORY = path.join(maligatorCacheDirectory(), "frontend");
 
@@ -51,6 +54,7 @@ interface ModuleParseManifest {
 	producer: string;
 	projectRoot: string;
 	parses: Record<string, PersistedModuleParse>;
+	loads: Record<string, PersistedModuleLoad>;
 }
 
 function readModuleParseManifest(
@@ -65,7 +69,9 @@ function readModuleParseManifest(
 			manifest.producer !== producer ||
 			manifest.projectRoot !== projectRoot ||
 			typeof manifest.parses !== "object" ||
-			manifest.parses === null
+			manifest.parses === null ||
+			typeof manifest.loads !== "object" ||
+			manifest.loads === null
 		) {
 			return undefined;
 		}
@@ -275,13 +281,12 @@ export class FrontendCompilationSession {
 			projectRoot,
 		};
 		this.#parseManifest = parseManifest;
-		this.moduleParses.usePersisted(
-			readModuleParseManifest(
-				parseManifest.path,
-				parseManifest.producer,
-				parseManifest.projectRoot,
-			)?.parses ?? {},
+		const persisted = readModuleParseManifest(
+			parseManifest.path,
+			parseManifest.producer,
+			parseManifest.projectRoot,
 		);
+		this.moduleParses.usePersisted(persisted?.parses ?? {}, persisted?.loads ?? {});
 	}
 
 	invalidate(file?: string): void {
@@ -363,15 +368,16 @@ export class FrontendCompilationSession {
 	/** Atomically publish file digests and parses learned during this compilation. */
 	flush(): void {
 		this.#invalidateAll = false;
-		const parses = this.moduleParses.takePersistedChanges();
-		if (parses !== undefined && this.#parseManifest !== undefined) {
+		const learned = this.moduleParses.takePersistedChanges();
+		if (learned !== undefined && this.#parseManifest !== undefined) {
 			const { path: file, producer, projectRoot } = this.#parseManifest;
 			const current = readModuleParseManifest(file, producer, projectRoot);
 			publishManifest(file, {
 				schema: MODULE_PARSE_SCHEMA,
 				producer,
 				projectRoot,
-				parses: { ...current?.parses, ...parses },
+				parses: { ...current?.parses, ...learned.parses },
+				loads: { ...current?.loads, ...learned.loads },
 			} satisfies ModuleParseManifest);
 		}
 		if (

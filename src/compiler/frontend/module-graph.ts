@@ -160,6 +160,19 @@ export interface PersistedModuleParse {
 	dependencies: Array<ExtractedDependency>;
 }
 
+/**
+ * A memoized load kept across processes. Its source is read again and must match
+ * `sourceDigest`; the AST is parsed only if a consumer reads it.
+ */
+export interface PersistedModuleLoad {
+	sourceDigest: string;
+	sourcePath?: string;
+	type: ModuleRecord["parsed"]["type"];
+	strict: boolean;
+	dependencies: Array<ModuleDependency>;
+	observations: Array<[string, string]>;
+}
+
 /** A module's analysed load and every filesystem observation its resolution made. */
 interface MemoizedModuleLoad {
 	source: string;
@@ -184,19 +197,42 @@ export class ModuleParseCache {
 	/** Parsed package.json contents by path, valid while the file keeps its identity. */
 	readonly packageJsons = new Map<string, { identity: string; parsed: unknown }>();
 	#persisted: Map<string, PersistedModuleParse> | undefined;
+	#persistedLoads: Map<string, PersistedModuleLoad> | undefined;
 	#persistedChanged = false;
 	#hits = 0;
 	#misses = 0;
 
-	usePersisted(parses: Record<string, PersistedModuleParse>): void {
+	usePersisted(
+		parses: Record<string, PersistedModuleParse>,
+		loads: Record<string, PersistedModuleLoad>,
+	): void {
 		this.#persisted = new Map(Object.entries(parses));
+		this.#persistedLoads = new Map(Object.entries(loads));
 	}
 
-	/** The persisted parses when this cache learned new ones, else undefined. */
-	takePersistedChanges(): Record<string, PersistedModuleParse> | undefined {
+	/** The persisted parses and loads when this cache learned new ones, else undefined. */
+	takePersistedChanges():
+		| {
+				parses: Record<string, PersistedModuleParse>;
+				loads: Record<string, PersistedModuleLoad>;
+		  }
+		| undefined {
 		if (!this.#persistedChanged || this.#persisted === undefined) return undefined;
 		this.#persistedChanged = false;
-		return Object.fromEntries(this.#persisted);
+		return {
+			parses: Object.fromEntries(this.#persisted),
+			loads: Object.fromEntries(this.#persistedLoads ?? []),
+		};
+	}
+
+	persistedLoad(key: string): PersistedModuleLoad | undefined {
+		return this.#persistedLoads?.get(key);
+	}
+
+	persistLoad(key: string, load: PersistedModuleLoad): void {
+		if (this.#persistedLoads === undefined) return;
+		this.#persistedLoads.set(key, load);
+		this.#persistedChanged = true;
 	}
 
 	invalidate(file?: string): void {
@@ -511,6 +547,44 @@ export function buildModuleGraph(
 		return source;
 	};
 
+	/** A module's parse input before the entry's prelude and any source transform. */
+	const baseParseSource = (
+		filePath: string,
+		source: string,
+		goal: ModuleGoal,
+		sourcePath: string | undefined,
+	): string => {
+		let parseSource = blankHashbang(source);
+		if (path.extname(filePath) === ".json") {
+			// Validate with the JSON grammar now, then parse a CommonJS wrapper that
+			// preserves JSON.parse semantics for keys such as "__proto__".
+			try {
+				JSON.parse(source);
+			} catch (error) {
+				if (error instanceof SyntaxError) {
+					throw new SyntaxDiagnostic(
+						filePath === entry ? "parse" : "resolution",
+						error.message,
+						{ cause: error },
+					);
+				}
+				throw error;
+			}
+			parseSource =
+				goal === "cjs"
+					? `module.exports = JSON.parse(${JSON.stringify(source)});`
+					: `export default JSON.parse(${JSON.stringify(source)});`;
+		}
+		if (TS_EXTENSIONS.has(path.extname(sourcePath ?? filePath))) {
+			if (!options.stripTypes) {
+				throw new Error(
+					`TypeScript module '${filePath}' requires BuildModuleGraphOptions.stripTypes`,
+				);
+			}
+			parseSource = options.stripTypes(parseSource, sourcePath ?? filePath);
+		}
+		return parseSource;
+	};
 	let lastObservations: ReadonlyArray<readonly [string, string]> = [];
 	const recordObservations = <T>(record: boolean, analyze: () => T): T => {
 		if (!record) return analyze();
@@ -541,34 +615,51 @@ export function buildModuleGraph(
 			memoKey === undefined ? undefined : options.parseCache?.memoizedLoad(memoKey);
 		const aliased = (specifier: string) =>
 			options.buildConfig?.modules.aliases[specifier] ?? specifier;
-		const reusable =
-			memo !== undefined &&
-			(sourceOverride === undefined
-				? memo.sourceIdentity !== undefined &&
-					observe("json", filePath, ctx) === memo.sourceIdentity
-				: memo.sourceIdentity === undefined && memo.source === sourceOverride) &&
-			memo.observations.every(
+		const observationsHold = (observations: ReadonlyArray<readonly [string, string]>) =>
+			observations.every(
 				([key, observation]) =>
 					observe(key.startsWith("json") ? "json" : "kind", key.slice(5), ctx) ===
 					observation,
-			) &&
-			!memo.dependencies.some(
+			);
+		const resolvesLocally = (dependencies: ReadonlyArray<ModuleDependency>) =>
+			!dependencies.some(
 				({ specifier }) =>
 					specifier !== null && options.externalModules?.has(aliased(specifier)) === true,
 			);
 		// Observed before reading, so a concurrent edit can only make the memo stale.
 		const sourceIdentity =
 			sourceOverride === undefined ? observe("json", filePath, ctx) : undefined;
+		const reusable =
+			memo !== undefined &&
+			(sourceOverride === undefined
+				? memo.sourceIdentity !== undefined && sourceIdentity === memo.sourceIdentity
+				: memo.sourceIdentity === undefined && memo.source === sourceOverride) &&
+			observationsHold(memo.observations) &&
+			resolvesLocally(memo.dependencies);
+		const persisted =
+			reusable || memoKey === undefined || sourceOverride !== undefined
+				? undefined
+				: options.parseCache?.persistedLoad(memoKey);
 		const source = reusable
 			? memo.source
 			: (sourceOverride ?? readFileSync(filePath, "utf-8"));
+		const sourceDigest =
+			memoKey === undefined || reusable ? undefined : hash("sha256", source, "hex");
+		// The digest, not the identity, ties a persisted load to the source just read.
+		const restored =
+			persisted !== undefined &&
+			persisted.sourceDigest === sourceDigest &&
+			observationsHold(persisted.observations) &&
+			resolvesLocally(persisted.dependencies)
+				? persisted
+				: undefined;
 		let analyzed: {
 			sourcePath: string | undefined;
 			parsed: ModuleRecord["parsed"];
 			dependencies: Array<ModuleDependency>;
 		};
 		let resolvedThroughExternal = false;
-		if (reusable) options.parseCache!.countReusedLoad();
+		if (reusable || restored !== undefined) options.parseCache!.countReusedLoad();
 		try {
 			analyzed = reusable
 				? {
@@ -576,159 +667,153 @@ export function buildModuleGraph(
 						parsed: memo.parsed,
 						dependencies: memo.dependencies.map((dependency) => ({ ...dependency })),
 					}
-				: recordObservations(memoKey !== undefined, () => {
-						const sourcePath = catalogSources.get(filePath)?.sourcePath;
-						let parseSource = blankHashbang(source);
-						if (path.extname(filePath) === ".json") {
-							// Validate with the JSON grammar now, then parse a CommonJS wrapper that
-							// preserves JSON.parse semantics for keys such as "__proto__".
-							try {
-								JSON.parse(source);
-							} catch (error) {
-								if (error instanceof SyntaxError) {
-									throw new SyntaxDiagnostic(
-										filePath === entry ? "parse" : "resolution",
-										error.message,
-										{ cause: error },
-									);
-								}
-								throw error;
+				: restored !== undefined
+					? (() => {
+							let ast: ESTree.Program | undefined;
+							return {
+								sourcePath: restored.sourcePath,
+								parsed: {
+									type: restored.type,
+									strict: restored.strict,
+									get ast() {
+										return (ast ??= parseWithGoal(
+											baseParseSource(filePath, source, goal, restored.sourcePath),
+											goal,
+											true,
+										).ast);
+									},
+								},
+								dependencies: restored.dependencies.map((dependency) => ({
+									...dependency,
+								})),
+							};
+						})()
+					: recordObservations(memoKey !== undefined, () => {
+							const sourcePath = catalogSources.get(filePath)?.sourcePath;
+							let parseSource = baseParseSource(filePath, source, goal, sourcePath);
+							if (filePath === entry && options.entryPrelude !== undefined) {
+								const specifier = JSON.stringify(options.entryPrelude.specifier);
+								parseSource =
+									goal === "cjs"
+										? `require(${specifier});\n${parseSource}`
+										: `import ${specifier};\n${parseSource}`;
 							}
 							parseSource =
-								goal === "cjs"
-									? `module.exports = JSON.parse(${JSON.stringify(source)});`
-									: `export default JSON.parse(${JSON.stringify(source)});`;
-						}
-						if (TS_EXTENSIONS.has(path.extname(sourcePath ?? filePath))) {
-							if (!options.stripTypes) {
-								throw new Error(
-									`TypeScript module '${filePath}' requires BuildModuleGraphOptions.stripTypes`,
-								);
-							}
-							parseSource = options.stripTypes(parseSource, sourcePath ?? filePath);
-						}
-						if (filePath === entry && options.entryPrelude !== undefined) {
-							const specifier = JSON.stringify(options.entryPrelude.specifier);
-							parseSource =
-								goal === "cjs"
-									? `require(${specifier});\n${parseSource}`
-									: `import ${specifier};\n${parseSource}`;
-						}
-						parseSource = options.transformSource?.(parseSource, filePath) ?? parseSource;
-						const strict = filePath === entry ? (options.entryStrict ?? true) : true;
-						const parse = () => {
-							try {
-								const parsed = parseWithGoal(parseSource, goal, strict);
-								return { parsed, dependencies: extractDependencies(parsed.ast, goal) };
-							} catch (error) {
-								if (error instanceof SyntaxError) {
-									throw new SyntaxDiagnostic(
-										filePath === entry ? "parse" : "resolution",
-										error.message,
-										{ cause: error },
-									);
+								options.transformSource?.(parseSource, filePath) ?? parseSource;
+							const strict = filePath === entry ? (options.entryStrict ?? true) : true;
+							const parse = () => {
+								try {
+									const parsed = parseWithGoal(parseSource, goal, strict);
+									return { parsed, dependencies: extractDependencies(parsed.ast, goal) };
+								} catch (error) {
+									if (error instanceof SyntaxError) {
+										throw new SyntaxDiagnostic(
+											filePath === entry ? "parse" : "resolution",
+											error.message,
+											{ cause: error },
+										);
+									}
+									throw error;
 								}
-								throw error;
-							}
-						};
-						const parsedModule =
-							options.parseCache?.parse(filePath, parseSource, goal, parse, strict) ??
-							parse();
-						const parsed = parsedModule.parsed;
+							};
+							const parsedModule =
+								options.parseCache?.parse(filePath, parseSource, goal, parse, strict) ??
+								parse();
+							const parsed = parsedModule.parsed;
 
-						const dependencies = parsedModule.dependencies.map(
-							(dependency): ModuleDependency => {
-								if (dependency.specifier === null) {
-									// A computed import/require cannot be resolved while building the
-									// graph. Preserve the edge for later lowering/runtime handling.
-									return { ...dependency, resolvedPath: null };
-								}
-								const aliasedSpecifier =
-									options.buildConfig?.modules.aliases[dependency.specifier] ??
-									dependency.specifier;
-								const platform = lookupPlatformModule(aliasedSpecifier);
-								if (
-									(platform as { internal?: boolean } | undefined)?.internal === true &&
-									lookupPlatformModule(filePath)?.kind !== "source" &&
-									!catalogFiles.owned.has(filePath)
-								) {
-									throw new SyntaxDiagnostic(
-										"resolution",
-										`Internal module '${dependency.specifier}' is reserved for platform sources`,
-									);
-								}
-								// A toolchain module an earlier image owns keeps its specifier identity.
-								if (options.externalModules?.has(aliasedSpecifier)) {
-									resolvedThroughExternal = true;
-									return { ...dependency, resolvedPath: aliasedSpecifier };
-								}
-								const toolchainModule = virtualModule(aliasedSpecifier);
-								if (toolchainModule !== undefined) {
-									const entryPreludeRequire =
-										dependency.kind === "require" &&
-										dependency.specifier === options.entryPrelude?.specifier;
+							const dependencies = parsedModule.dependencies.map(
+								(dependency): ModuleDependency => {
+									if (dependency.specifier === null) {
+										// A computed import/require cannot be resolved while building the
+										// graph. Preserve the edge for later lowering/runtime handling.
+										return { ...dependency, resolvedPath: null };
+									}
+									const aliasedSpecifier =
+										options.buildConfig?.modules.aliases[dependency.specifier] ??
+										dependency.specifier;
+									const platform = lookupPlatformModule(aliasedSpecifier);
 									if (
-										(dependency.kind === "dynamic" &&
-											!(
-												toolchainModule.platform &&
-												lookupPlatformModule(aliasedSpecifier)?.kind === "source"
-											)) ||
-										(dependency.kind === "require" && !entryPreludeRequire)
+										(platform as { internal?: boolean } | undefined)?.internal === true &&
+										lookupPlatformModule(filePath)?.kind !== "source" &&
+										!catalogFiles.owned.has(filePath)
 									) {
 										throw new SyntaxDiagnostic(
 											"resolution",
-											`Toolchain module '${dependency.specifier}' supports static ESM imports only`,
+											`Internal module '${dependency.specifier}' is reserved for platform sources`,
 										);
 									}
-									return { ...dependency, resolvedPath: aliasedSpecifier };
-								}
-								const canonicalHostId = canonicalNodeHostModuleId(aliasedSpecifier);
-								const canonicalBuiltinId = canonicalNodeBuiltinId(aliasedSpecifier);
-								const resolved = resolveSpecifier(
-									canonicalHostId ?? canonicalBuiltinId ?? aliasedSpecifier,
-									sourcePath ?? filePath,
-									{
-										...ctx,
-										conditions: exportConditions(
-											ctx.nodeEnabled,
-											dependency.kind === "require" ? "require" : "import",
-										),
-									},
-								);
-								if ("host" in resolved) {
-									// A supported `node:*` built-in: identity is its canonical specifier.
-									return { ...dependency, resolvedPath: resolved.host.id };
-								}
-								if ("error" in resolved) {
-									// A `node:*` error (surface disabled / unknown built-in) is `hard`: it
-									// rejects even a literal dynamic import rather than silently deferring,
-									// so an unsupported host import fails loudly at build time. A plain
-									// dynamic resolution failure (missing file) still defers to the graph.
-									if (dependency.kind === "dynamic" && !resolved.hard) {
-										return { ...dependency, resolvedPath: null };
+									// A toolchain module an earlier image owns keeps its specifier identity.
+									if (options.externalModules?.has(aliasedSpecifier)) {
+										resolvedThroughExternal = true;
+										return { ...dependency, resolvedPath: aliasedSpecifier };
 									}
-									if (
-										dependency.kind === "require" &&
-										dependency.catchableMissing &&
-										!resolved.hard
-									) {
-										return { ...dependency, resolvedPath: null };
+									const toolchainModule = virtualModule(aliasedSpecifier);
+									if (toolchainModule !== undefined) {
+										const entryPreludeRequire =
+											dependency.kind === "require" &&
+											dependency.specifier === options.entryPrelude?.specifier;
+										if (
+											(dependency.kind === "dynamic" &&
+												!(
+													toolchainModule.platform &&
+													lookupPlatformModule(aliasedSpecifier)?.kind === "source"
+												)) ||
+											(dependency.kind === "require" && !entryPreludeRequire)
+										) {
+											throw new SyntaxDiagnostic(
+												"resolution",
+												`Toolchain module '${dependency.specifier}' supports static ESM imports only`,
+											);
+										}
+										return { ...dependency, resolvedPath: aliasedSpecifier };
 									}
-									// A static import that cannot resolve fails the graph — the
-									// resolution-phase SyntaxError of 16.2.1.6.1.
-									throw new SyntaxDiagnostic(
-										"resolution",
-										`Cannot resolve '${dependency.specifier}' from ${filePath}: ${resolved.error}`,
+									const canonicalHostId = canonicalNodeHostModuleId(aliasedSpecifier);
+									const canonicalBuiltinId = canonicalNodeBuiltinId(aliasedSpecifier);
+									const resolved = resolveSpecifier(
+										canonicalHostId ?? canonicalBuiltinId ?? aliasedSpecifier,
+										sourcePath ?? filePath,
+										{
+											...ctx,
+											conditions: exportConditions(
+												ctx.nodeEnabled,
+												dependency.kind === "require" ? "require" : "import",
+											),
+										},
 									);
-								}
+									if ("host" in resolved) {
+										// A supported `node:*` built-in: identity is its canonical specifier.
+										return { ...dependency, resolvedPath: resolved.host.id };
+									}
+									if ("error" in resolved) {
+										// A `node:*` error (surface disabled / unknown built-in) is `hard`: it
+										// rejects even a literal dynamic import rather than silently deferring,
+										// so an unsupported host import fails loudly at build time. A plain
+										// dynamic resolution failure (missing file) still defers to the graph.
+										if (dependency.kind === "dynamic" && !resolved.hard) {
+											return { ...dependency, resolvedPath: null };
+										}
+										if (
+											dependency.kind === "require" &&
+											dependency.catchableMissing &&
+											!resolved.hard
+										) {
+											return { ...dependency, resolvedPath: null };
+										}
+										// A static import that cannot resolve fails the graph — the
+										// resolution-phase SyntaxError of 16.2.1.6.1.
+										throw new SyntaxDiagnostic(
+											"resolution",
+											`Cannot resolve '${dependency.specifier}' from ${filePath}: ${resolved.error}`,
+										);
+									}
 
-								const catalogSource = catalogFiles.sources.get(resolved.path);
-								if (catalogSource !== undefined) virtualModule(catalogSource);
-								return { ...dependency, resolvedPath: catalogSource ?? resolved.path };
-							},
-						);
-						return { sourcePath, parsed, dependencies };
-					});
+									const catalogSource = catalogFiles.sources.get(resolved.path);
+									if (catalogSource !== undefined) virtualModule(catalogSource);
+									return { ...dependency, resolvedPath: catalogSource ?? resolved.path };
+								},
+							);
+							return { sourcePath, parsed, dependencies };
+						});
 		} catch (error) {
 			// A module the entry reaches only through `import()` fails when that import
 			// runs; the check after loading fails the build for one it imports statically.
@@ -750,14 +835,29 @@ export function buildModuleGraph(
 			!resolvedThroughExternal &&
 			(sourceOverride !== undefined || sourceIdentity !== "-")
 		) {
+			const observations = restored?.observations ?? lastObservations;
 			options.parseCache!.memoizeLoad(memoKey, {
 				source,
-				sourceIdentity: sourceOverride === undefined ? sourceIdentity : undefined,
+				sourceIdentity,
 				sourcePath,
 				parsed,
 				dependencies: dependencies.map((dependency) => ({ ...dependency })),
-				observations: lastObservations,
+				observations,
 			});
+			if (
+				restored === undefined &&
+				sourceOverride === undefined &&
+				sourceDigest !== undefined
+			) {
+				options.parseCache!.persistLoad(memoKey, {
+					sourceDigest,
+					...(sourcePath === undefined ? {} : { sourcePath }),
+					type: parsed.type,
+					strict: parsed.strict,
+					dependencies: dependencies.map((dependency) => ({ ...dependency })),
+					observations: observations.map(([key, value]) => [key, value]),
+				});
+			}
 		}
 
 		// Record before recursing so a cyclic back-import finds this module and

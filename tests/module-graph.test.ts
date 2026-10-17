@@ -241,6 +241,38 @@ test("re-resolves a retained module's package import after the package exports c
 	}
 });
 
+test("restores persisted module loads in a new process until their inputs change", () => {
+	const directory = "persisted-loads";
+	const entry = path.join(root, directory, "entry.mjs");
+	const middle = path.join(root, directory, "middle.mjs");
+	write(`${directory}/entry.mjs`, `import "./middle.mjs";\n`);
+	write(`${directory}/middle.mjs`, `import "./target";\nexport const middle = 1;\n`);
+	write(`${directory}/target/index.mjs`, `export {};\n`);
+	let persisted = { parses: {}, loads: {} };
+	/** A walk by a fresh process that starts from what earlier walks persisted. */
+	const walk = () => {
+		const parseCache = new ModuleParseCache();
+		parseCache.usePersisted(persisted.parses, persisted.loads);
+		const graph = buildModuleGraph(entry, { parseCache });
+		persisted = parseCache.takePersistedChanges() ?? persisted;
+		return { graph, parses: parseCache.statistics() };
+	};
+
+	expect(walk().parses).toEqual({ hits: 0, misses: 3 });
+	const restored = walk();
+	expect(restored.parses).toEqual({ hits: 3, misses: 0 });
+	expect(restored.graph.modules.get(middle)!.parsed.ast.body).toHaveLength(2);
+
+	write(`${directory}/target.mjs`, `export {};\n`);
+	expect(walk().graph.modules.get(middle)!.dependencies[0]!.resolvedPath).toBe(
+		path.join(root, directory, "target.mjs"),
+	);
+	write(`${directory}/middle.mjs`, `export const middle = 2;\n`);
+	const edited = walk().graph;
+	expect(edited.modules.get(middle)!.dependencies).toEqual([]);
+	expect(edited.modules.has(path.join(root, directory, "target.mjs"))).toBe(false);
+});
+
 test("re-analyses a retained module after its source changes", () => {
 	const directory = "retained-source";
 	const entry = path.join(root, directory, "entry.mjs");
