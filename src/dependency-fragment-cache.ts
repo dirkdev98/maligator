@@ -13,6 +13,7 @@ import type { CompilerProgramFacts } from "./compiler/shared/compiler-facts.ts";
 import { frontendDigest } from "./frontend-cache.ts";
 import { FrontendCompilationSession } from "./frontend-cache.ts";
 import {
+	compiledByWorker,
 	compileLinkedImage,
 	findLinkedImage,
 	linkedImageEnvironment,
@@ -56,6 +57,8 @@ export interface CompileDependencyFragmentsOptions {
 	phases: DependencyFragmentPhases;
 	onCompilePhase?: (phase: CompileCorePhase, durationMs: number) => void;
 	worker?: DependencyFragmentWorker;
+	/** Hidden CLI tasks for other missing images, run beside the islands' workers. */
+	parallelTasks?: ReadonlyArray<ReadonlyArray<string>>;
 }
 
 interface DependencyFragmentRequest {
@@ -185,6 +188,7 @@ function compileWithWorkers(
 	root: string,
 	requests: Array<DependencyFragmentRequest>,
 	worker: DependencyFragmentWorker,
+	tasks: ReadonlyArray<ReadonlyArray<string>>,
 ): number {
 	const startedAt = Date.now();
 	const commands = requests.map((request) => {
@@ -199,6 +203,8 @@ function compileWithWorkers(
 			args: [...worker.args, "--maligator-internal-dependency-fragment", file],
 		};
 	});
+	for (const task of tasks)
+		commands.push({ tool: worker.tool, args: [...worker.args, ...task] });
 	runIndependentCommands(commands, {
 		cwd: process.cwd(),
 		env: process.env,
@@ -259,7 +265,9 @@ export function compileDependencyFragments(
 		({ targets, graph }) =>
 			findLinkedImage(environment, ISLAND_KIND, graph, new Set(targets)) === undefined,
 	);
-	if (options.worker !== undefined && missing.length > 1) {
+	const tasks = options.parallelTasks ?? [];
+	const worker = missing.length + tasks.length > 1 ? options.worker : undefined;
+	if (worker !== undefined) {
 		options.phases.workerMs += compileWithWorkers(
 			environment.root,
 			missing.map(({ targets }) => ({
@@ -272,12 +280,11 @@ export function compileDependencyFragments(
 					? {}
 					: { cacheDirectory: options.cacheDirectory }),
 			})),
-			options.worker,
+			worker,
+			tasks,
 		);
 	}
-	const compiledByWorkers = new Set(
-		options.worker !== undefined && missing.length > 1 ? missing : [],
-	);
+	const compiledByWorkers = new Set(worker === undefined ? [] : missing);
 	return islands.map((island) => {
 		const artifact = compileLinkedImage(
 			environment,
@@ -285,21 +292,9 @@ export function compileDependencyFragments(
 			island.graph,
 			new Set(island.targets),
 		);
-		return {
-			get wire() {
-				return artifact.wire;
-			},
-			get programImage() {
-				return artifact.programImage;
-			},
-			runtimeArtifact: artifact.runtimeArtifact,
-			compilerArtifact: artifact.compilerArtifact,
-			diagnostics: artifact.diagnostics,
-			interfaces: artifact.interfaces,
-			// The workers' compilations are this build's misses even though the
-			// coordinator reads them back from the cache.
-			cache: compiledByWorkers.has(island) ? "miss" : artifact.cache,
-			targets: island.targets,
-		};
+		return Object.assign(
+			compiledByWorkers.has(island) ? compiledByWorker(artifact) : artifact,
+			{ targets: island.targets },
+		);
 	});
 }

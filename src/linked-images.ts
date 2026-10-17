@@ -133,6 +133,23 @@ export function linkedImageEnvironment(
 	};
 }
 
+/** The artifact as a miss: a worker compiled it for this command, so a reread is no hit. */
+export function compiledByWorker(artifact: LinkedImageArtifact): LinkedImageArtifact {
+	return {
+		get wire() {
+			return artifact.wire;
+		},
+		get programImage() {
+			return artifact.programImage;
+		},
+		runtimeArtifact: artifact.runtimeArtifact,
+		compilerArtifact: artifact.compilerArtifact,
+		diagnostics: artifact.diagnostics,
+		interfaces: artifact.interfaces,
+		cache: "miss",
+	};
+}
+
 /** Whether compiling the graph bakes in the execution snapshot (`maligator:process`). */
 export function graphReadsExecution(graph: ModuleGraph): boolean {
 	for (const record of graph.modules.values()) {

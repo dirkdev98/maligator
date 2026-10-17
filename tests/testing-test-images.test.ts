@@ -390,3 +390,37 @@ test("reads its filter", () => expect([answer, execution.command]).toEqual([42, 
 		expect(filtered.artifactHits).toBe(filtered.wires.length - 1);
 	});
 });
+
+test("compiles a cold test runtime beside a cold dependency island", () => {
+	const root = temporaryDirectory();
+	const packageDirectory = path.join(root, "node_modules/example-package");
+	const entry = path.join(root, "package.test.mts");
+	write(path.join(root, "package.json"), `{"type":"module"}\n`);
+	write(
+		path.join(packageDirectory, "package.json"),
+		`{"type":"module","exports":"./index.mjs"}\n`,
+	);
+	write(path.join(packageDirectory, "index.mjs"), `export const answer = 42;\n`);
+	write(
+		entry,
+		`import { test } from "maligator:test";\nimport { answer } from "example-package";\ntest("answer", () => answer);\n`,
+	);
+
+	const compiled = compileLinkedTestImage({
+		files: [entry],
+		config: resolveBuildConfig({}),
+		stripTypes: stripCompactTypes,
+		stripperIdentity: "parallel-runtime-stripper",
+		testModuleSource,
+		cacheDirectory: path.join(root, "cache"),
+		dependencyWorker: { tool: process.execPath, args: [path.resolve("src/index.ts")] },
+	});
+	expect(compiled.wires.map((wire) => wire.kind)).toEqual([
+		"runtime",
+		"dependency",
+		"entry",
+		"runner",
+	]);
+	expect(compiled.phases.workerMs).toBeGreaterThan(0);
+	expect(compiled.artifactMisses).toBe(4);
+}, 60_000);

@@ -110,6 +110,7 @@ import {
 } from "./testing/command.ts";
 import type { TestCommandSummary } from "./testing/command.ts";
 import type { TestRunResult } from "./testing/protocol.ts";
+import { compileTestRuntimeRequest } from "./testing/test-images.ts";
 import { watchTestCommand } from "./testing/watch.ts";
 import {
 	formatToolchainReport,
@@ -2160,6 +2161,13 @@ export async function runCli(
 				throw new Error("dependency fragment worker requires one request path");
 			}
 			compileDependencyFragmentRequest(args[1]!, context.stripTypes);
+			return;
+		}
+		if (args[0] === "--maligator-internal-test-runtime-image") {
+			if (args.length !== 2) {
+				throw new Error("test runtime worker requires one request path");
+			}
+			compileTestRuntimeRequest(args[1]!, context.stripTypes);
 			return;
 		}
 		const command = parseCliArgs(args);

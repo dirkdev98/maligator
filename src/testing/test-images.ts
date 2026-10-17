@@ -23,8 +23,10 @@ import {
 import type { FrontendArtifactIdentity } from "../frontend-cache.ts";
 import {
 	assertStaticImageBoundary,
+	compiledByWorker,
 	compileLinkedImage,
 	externalModulesOf,
+	findLinkedImage,
 	graphReadsExecution,
 	linkedImageEnvironment,
 	moduleImageComponents,
@@ -219,11 +221,113 @@ function importsOf(specifiers: ReadonlyArray<string>): string {
 }
 
 /** Toolchain modules every test program evaluates before its dependencies. */
-function runtimeImports(options: CompileTestImageOptions): Array<string> {
+function runtimeImports(options: Pick<CompileTestImageOptions, "config">): Array<string> {
 	return [
 		...(options.config.surface.node ? [NODE_GLOBALS_MODULE_ID] : []),
 		TEST_BOOTSTRAP_MODULE_ID,
 	];
+}
+
+/** The image every test program evaluates first: Node globals and the test runtime. */
+function testRuntimeGraph(
+	options: Pick<
+		CompileTestImageOptions,
+		| "config"
+		| "execution"
+		| "stripTypes"
+		| "platformSourceRoot"
+		| "testModuleSource"
+		| "nodeGlobalsSource"
+	>,
+	session: TestCompilationSession,
+): ModuleGraph {
+	return buildModuleGraph(
+		path.resolve(options.platformSourceRoot ?? ".", ".maligator-test-runtime.mts"),
+		{
+			stripTypes: options.stripTypes,
+			buildConfig: options.config,
+			platformSourceRoot: options.platformSourceRoot,
+			execution: options.execution,
+			parseCache: session.moduleParses,
+			entryGoal: "module",
+			entrySource: importsOf(runtimeImports(options)),
+			virtualModules: testVirtualModules(options),
+		},
+	);
+}
+
+interface TestRuntimeRequest {
+	schema: 1;
+	config: CompileTestImageOptions["config"];
+	execution?: CompileTestImageOptions["execution"];
+	stripperIdentity: string;
+	cacheDirectory?: string;
+	platformSourceRoot?: string;
+	testModuleSource: string;
+	nodeGlobalsSource?: string;
+}
+
+function testRuntimeTask(root: string, options: CompileTestImageOptions): Array<string> {
+	const request: TestRuntimeRequest = {
+		schema: 1,
+		config: options.config,
+		...(options.execution === undefined ? {} : { execution: options.execution }),
+		stripperIdentity: options.stripperIdentity,
+		...(options.cacheDirectory === undefined
+			? {}
+			: { cacheDirectory: options.cacheDirectory }),
+		...(options.platformSourceRoot === undefined
+			? {}
+			: { platformSourceRoot: options.platformSourceRoot }),
+		testModuleSource: options.testModuleSource,
+		...(options.nodeGlobalsSource === undefined
+			? {}
+			: { nodeGlobalsSource: options.nodeGlobalsSource }),
+	};
+	const file = path.join(root, "requests", `${digest(JSON.stringify(request))}.json`);
+	writeFileAtomically(file, `${JSON.stringify(request)}\n`);
+	return ["--maligator-internal-test-runtime-image", file];
+}
+
+/** Internal worker entry that compiles a cold test runtime image into the shared cache. */
+export function compileTestRuntimeRequest(
+	file: string,
+	stripTypes: CompileTestImageOptions["stripTypes"],
+): void {
+	const request = JSON.parse(readFileSync(path.resolve(file), "utf-8")) as
+		| TestRuntimeRequest
+		| undefined;
+	if (request?.schema !== 1 || typeof request.testModuleSource !== "string") {
+		throw new Error("invalid test runtime worker request");
+	}
+	const options = { ...request, stripTypes };
+	const session = new TestCompilationSession();
+	session.useCacheDirectory(request.cacheDirectory);
+	compileImage(
+		testImageEnvironment(options, emptyPhases()),
+		"runtime",
+		testRuntimeGraph(options, session),
+		"all",
+	);
+	session.flush();
+}
+
+function testImageEnvironment(
+	options: Pick<
+		CompileTestImageOptions,
+		"config" | "stripperIdentity" | "cacheDirectory"
+	>,
+	phases: TestFrontendPhases,
+): LinkedImageEnvironment {
+	return linkedImageEnvironment({
+		producer: "test-fragment",
+		family: TEST_IMAGE_FAMILY,
+		config: options.config,
+		facts: compilerProgramFactsFromConfig(options.config),
+		stripperIdentity: options.stripperIdentity,
+		cacheDirectory: options.cacheDirectory,
+		phases,
+	});
 }
 
 /** Every module of the test program, from which the images are planned. */
@@ -291,16 +395,8 @@ export function compileLinkedTestImage(
 	const session = options.session ?? new TestCompilationSession();
 	session.useCacheDirectory(options.cacheDirectory);
 	const phases = emptyPhases();
-	const facts = compilerProgramFactsFromConfig(options.config);
-	const environment = linkedImageEnvironment({
-		producer: "test-fragment",
-		family: TEST_IMAGE_FAMILY,
-		config: options.config,
-		facts,
-		stripperIdentity: options.stripperIdentity,
-		cacheDirectory: options.cacheDirectory,
-		phases,
-	});
+	const environment = testImageEnvironment(options, phases);
+	const facts = environment.facts;
 	const identity = digest(
 		JSON.stringify({ environment: environment.identity, runner: options.runner ?? null }),
 	);
@@ -338,18 +434,15 @@ export function compileLinkedTestImage(
 	assertDependenciesPrecedeImporters(planning);
 
 	const runtimeStartedAt = Date.now();
-	const runtimeGraph = buildModuleGraph(
-		path.resolve(options.platformSourceRoot ?? ".", ".maligator-test-runtime.mts"),
-		{
-			...graphOptions(options, session),
-			entryGoal: "module",
-			entrySource: importsOf(runtimeImports(options)),
-			virtualModules: testVirtualModules(options),
-		},
-	);
+	const runtimeGraph = testRuntimeGraph(options, session);
 	phases.graphMs += Date.now() - runtimeStartedAt;
-	const runtime = compileImage(environment, "runtime", runtimeGraph, "all");
 	const runtimeOwned = new Set(runtimeGraph.modules.keys());
+	// A cold runtime image compiles in a worker beside the dependency islands.
+	const runtimeTask =
+		options.dependencyWorker === undefined ||
+		findLinkedImage(environment, "runtime", runtimeGraph, "all") !== undefined
+			? []
+			: [testRuntimeTask(environment.root, options)];
 
 	const dependencies = compileDependencyFragments({
 		graph: planning,
@@ -363,7 +456,10 @@ export function compileLinkedTestImage(
 		session,
 		phases,
 		worker: options.dependencyWorker,
+		parallelTasks: runtimeTask,
 	});
+	const runtimeImage = compileImage(environment, "runtime", runtimeGraph, "all");
+	const runtime = runtimeTask.length > 0 ? compiledByWorker(runtimeImage) : runtimeImage;
 
 	const selected = new Set(entries);
 	const applicationModules = new Set(
