@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
@@ -21,13 +21,22 @@ function stopTestProcesses(child: ChildProcess, signal: NodeJS.Signals): void {
 	}
 }
 
+// Locally, scratch lives in the repository's .cache, where anything a crash leaves behind
+// is easy to find and prune; CI runners are discarded after each job.
+function testTemporaryRoot(): string {
+	if (process.env.CI === "true") return os.tmpdir();
+	const root = path.resolve(import.meta.dirname, "..", ".cache", "test-tmp");
+	mkdirSync(root, { recursive: true });
+	return root;
+}
+
 /** Owns test scratch until the child exits; retained artifacts are always explicit. */
 export async function runTestProcess(
 	executable: string,
 	args: ReadonlyArray<string>,
 	options: { environment: NodeJS.ProcessEnv; keepArtifacts?: boolean },
 ): Promise<number> {
-	const temporary = mkdtempSync(path.join(os.tmpdir(), "maligator-tests-"));
+	const temporary = mkdtempSync(path.join(testTemporaryRoot(), "maligator-tests-"));
 	let child: ChildProcess | undefined;
 	let interrupted: NodeJS.Signals | undefined;
 	let forceStop: NodeJS.Timeout | undefined;
