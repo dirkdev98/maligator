@@ -3,6 +3,7 @@ import type { ChildProcess } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { maligatorCacheBaseDirectory } from "../src/cache-root.ts";
 
 function stopTestProcesses(child: ChildProcess, signal: NodeJS.Signals): void {
 	if (child.pid === undefined) return;
@@ -21,11 +22,12 @@ function stopTestProcesses(child: ChildProcess, signal: NodeJS.Signals): void {
 	}
 }
 
-// Locally, scratch lives in the repository's .cache, where anything a crash leaves behind
-// is easy to find and prune; CI runners are discarded after each job.
+// Locally, anything a crash leaves behind collects in one prunable directory; CI runners
+// are discarded after each job. Fixtures must not live inside a project, where module
+// resolution would find that project's package.json and node_modules.
 function testTemporaryRoot(): string {
 	if (process.env.CI === "true") return os.tmpdir();
-	const root = path.resolve(import.meta.dirname, "..", ".cache", "test-tmp");
+	const root = path.join(maligatorCacheBaseDirectory(), "test-tmp");
 	mkdirSync(root, { recursive: true });
 	return root;
 }

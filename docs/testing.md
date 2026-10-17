@@ -608,8 +608,10 @@ experiment journals, or historical timing snapshots.
 
 The repository's Vitest and sanitizer wrappers own one temporary directory per
 invocation and remove it on success, failure, or handled interruption. Locally it lives
-under `.cache/test-tmp/`, so a crashed run leaves nothing outside the repository; on CI
-it uses the runner's temporary directory. Use `--keep-artifacts` to retain generated
+under `test-tmp/` in the Maligator cache base directory, beside the layout generations
+`cache clear --all` removes, so a crashed run leaves its scratch in one known place; on
+CI it uses the runner's temporary directory. Fixtures stay outside every project so
+module resolution cannot reach the repository's `package.json` or `node_modules`. Use `--keep-artifacts` to retain generated
 sources and binaries for diagnosis; the runner prints the path.
 Reports and the shared build cache remain outside that disposable directory.
 
