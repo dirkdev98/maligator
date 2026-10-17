@@ -1552,8 +1552,11 @@ MalValue mal_vm_op_with_get(MalVm *vm, MalEnv *env, i32 name_string_index) {
             }
             MalValue object = e->slots[0];
             if (mal_vm_with_has_binding(vm, object, key)) {
-                MalValue value;
-                if (!mal_vm_get_property(vm, object, key, &value)) {
+                // GetBindingValue probes HasProperty again; a binding that has
+                // vanished since reads as undefined in sloppy code.
+                MalValue value = mal_value_new_undefined();
+                if (mal_vm_has_property(vm, object, key) &&
+                    !mal_vm_get_property(vm, object, key, &value)) {
                     value = mal_value_new_undefined();
                 }
                 return value;
