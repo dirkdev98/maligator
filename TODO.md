@@ -728,11 +728,6 @@ contracts or investigates costs still visible after the string follow-ups.
       false. Factory functions are unaffected because each call owns its slots.
       Give such evaluations their own class scope, as per-iteration bindings do.
 
-- [ ] Apply computed object-literal accessor names at runtime. For
-      `const k = Symbol("field"); const o = { get [k]() {} };`, the getter's
-      name is currently empty instead of `get [field]`. Reuse the evaluated
-      property key and preserve the getter/setter prefix without repeating coercion.
-
 - [ ] Fix remaining RegExp @@replace protocol and coercion cases. Prefer shared
       replacement semantics over case-specific branches.
 
@@ -772,6 +767,25 @@ contracts or investigates costs still visible after the string follow-ups.
 - [ ] Preserve iterator [[Done]] semantics in positional destructuring. Keep abrupt
       completion and iterator closing correct around exhausted iterators.
 
+- [ ] Look up the super constructor when `super()` runs. GetSuperConstructor reads
+      the active function's current prototype, so `Object.setPrototypeOf(C, other)`
+      changes what `super()` constructs; the lowering uses the class heritage
+      captured at definition. Keep a guarded fast path for the unchanged parent.
+
+- [ ] Yield the inner result object unchanged from a sync `yield*`. The spec hands
+      `innerResult` to GeneratorYield without reading `value`; the `yield`
+      instruction always builds a new result, so a `return()` result with
+      `done: false` has its `value` getter called.
+
+- [ ] Parse CreateDynamicFunction parameters and body separately. `new Function("/*", "*/){")`
+      compiles because the joined source is valid; the spec parses each part on
+      its own. Check that the function's parameter list and body close at the
+      delimiters the runtime inserts.
+
+- [ ] Probe HasProperty again when a `with`-provided callee is read. The call path
+      resolves the base and then loads the function with a plain Get, skipping
+      GetBindingValue's second HasProperty that a Proxy with-object observes.
+
 ## Engine capabilities
 
 - [ ] Replace the fixed 128-bit BigInt representation with arbitrary-precision digits.
@@ -782,13 +796,14 @@ contracts or investigates costs still visible after the string follow-ups.
       options, NumberFormat, DateTimeFormat, and interval collapsing. Keep data
       availability distinct from algorithmic correctness.
 
-- [ ] Implement `Temporal.PlainDateTime.prototype.with` through the existing Rust
-      partial-date-time API. Preserve observable field access and conversion order,
-      calendar fields, overflow behavior, and rejection of Temporal objects.
+- [ ] Add the Intl.Locale info methods: getCalendars, getCollations, getHourCycles,
+      getNumberingSystems, getTimeZones and getWeekInfo. They need CLDR region
+      preferences with the rg, region, sd, likely-subtags priority; ICU4X's
+      calendar resolution skips likely subtags, and week data lives in the
+      DateTimeFormat service while Intl.Locale is in the always-on floor.
 
-- [ ] Complete Duration `relativeTo` conversion for strings and property bags in
-      `compare`, `round`, and `total`. Preserve option access order and Rust handle
-      lifetimes for plain and zoned reference dates.
+- [ ] Reject RegExp.prototype.compile on a RegExp from another realm. The legacy
+      features check needs the object's realm, which RegExp objects do not record.
 
 - [ ] Generate a ranked failure-cluster report from scripts/test262.json. Use it rather
       than mutable hand-maintained counts to select correctness work.
