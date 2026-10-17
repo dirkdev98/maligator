@@ -2,6 +2,12 @@
 
 #include <string.h>
 
+// The ARMv8 SHA-256 instructions run about ten times the portable loop's throughput.
+// They are used only where the target ISA guarantees them, as on every Apple arm64 core.
+#if defined(__aarch64__) && defined(__ARM_FEATURE_SHA2)
+#include <arm_neon.h>
+#define MAL_SHA256_ARMV8 1
+#endif
 
 static const u32 MAL_SHA256_K[64] = {
     0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
@@ -29,7 +35,8 @@ void mal_sha256_init(MalSha256 *ctx) {
     ctx->block_len = 0;
 }
 
-static void mal_sha256_compress(MalSha256 *ctx, const u8 *p) {
+#ifndef MAL_SHA256_ARMV8
+static void mal_sha256_compress_portable(u32 state[8], const u8 *p) {
     u32 w[64];
     for (int i = 0; i < 16; i++) {
         w[i] = ((u32) p[i * 4] << 24) | ((u32) p[i * 4 + 1] << 16) | ((u32) p[i * 4 + 2] << 8)
@@ -40,8 +47,8 @@ static void mal_sha256_compress(MalSha256 *ctx, const u8 *p) {
         u32 s1 = MAL_ROTR(w[i - 2], 17) ^ MAL_ROTR(w[i - 2], 19) ^ (w[i - 2] >> 10);
         w[i] = w[i - 16] + s0 + w[i - 7] + s1;
     }
-    u32 a = ctx->state[0], b = ctx->state[1], c = ctx->state[2], d = ctx->state[3];
-    u32 e = ctx->state[4], f = ctx->state[5], g = ctx->state[6], h = ctx->state[7];
+    u32 a = state[0], b = state[1], c = state[2], d = state[3];
+    u32 e = state[4], f = state[5], g = state[6], h = state[7];
     for (int i = 0; i < 64; i++) {
         u32 s1 = MAL_ROTR(e, 6) ^ MAL_ROTR(e, 11) ^ MAL_ROTR(e, 25);
         u32 ch = (e & f) ^ (~e & g);
@@ -58,25 +65,78 @@ static void mal_sha256_compress(MalSha256 *ctx, const u8 *p) {
         b = a;
         a = t1 + t2;
     }
-    ctx->state[0] += a;
-    ctx->state[1] += b;
-    ctx->state[2] += c;
-    ctx->state[3] += d;
-    ctx->state[4] += e;
-    ctx->state[5] += f;
-    ctx->state[6] += g;
-    ctx->state[7] += h;
+    state[0] += a;
+    state[1] += b;
+    state[2] += c;
+    state[3] += d;
+    state[4] += e;
+    state[5] += f;
+    state[6] += g;
+    state[7] += h;
+}
+#endif
+
+#ifdef MAL_SHA256_ARMV8
+static void mal_sha256_compress_armv8(u32 state[8], const u8 *data, usize blocks) {
+    uint32x4_t abcd = vld1q_u32(&state[0]);
+    uint32x4_t efgh = vld1q_u32(&state[4]);
+    for (; blocks > 0; blocks--, data += 64) {
+        const uint32x4_t abcd_start = abcd;
+        const uint32x4_t efgh_start = efgh;
+        // message[i % 4] holds schedule words 4i..4i+3 when round group i runs.
+        uint32x4_t message[4];
+        for (int i = 0; i < 4; i++) {
+            message[i] = vreinterpretq_u32_u8(vrev32q_u8(vld1q_u8(data + i * 16)));
+        }
+        for (int group = 0; group < 16; group++) {
+            const uint32x4_t words =
+                vaddq_u32(message[group % 4], vld1q_u32(&MAL_SHA256_K[group * 4]));
+            if (group < 12) {
+                message[group % 4] = vsha256su1q_u32(
+                    vsha256su0q_u32(message[group % 4], message[(group + 1) % 4]),
+                    message[(group + 2) % 4], message[(group + 3) % 4]);
+            }
+            const uint32x4_t abcd_before = abcd;
+            abcd = vsha256hq_u32(abcd, efgh, words);
+            efgh = vsha256h2q_u32(efgh, abcd_before, words);
+        }
+        abcd = vaddq_u32(abcd, abcd_start);
+        efgh = vaddq_u32(efgh, efgh_start);
+    }
+    vst1q_u32(&state[0], abcd);
+    vst1q_u32(&state[4], efgh);
+}
+#endif
+
+static void mal_sha256_blocks(u32 state[8], const u8 *data, usize blocks) {
+#ifdef MAL_SHA256_ARMV8
+    mal_sha256_compress_armv8(state, data, blocks);
+#else
+    for (usize i = 0; i < blocks; i++) mal_sha256_compress_portable(state, data + i * 64);
+#endif
 }
 
 void mal_sha256_update(MalSha256 *ctx, const u8 *data, usize len) {
-    for (usize i = 0; i < len; i++) {
-        ctx->block[ctx->block_len++] = data[i];
-        if (ctx->block_len == 64) {
-            mal_sha256_compress(ctx, ctx->block);
-            ctx->bit_len += 512;
-            ctx->block_len = 0;
-        }
+    if (ctx->block_len > 0) {
+        usize take = 64 - ctx->block_len < len ? 64 - ctx->block_len : len;
+        memcpy(ctx->block + ctx->block_len, data, take);
+        ctx->block_len += take;
+        data += take;
+        len -= take;
+        if (ctx->block_len < 64) return;
+        mal_sha256_blocks(ctx->state, ctx->block, 1);
+        ctx->bit_len += 512;
+        ctx->block_len = 0;
     }
+    usize blocks = len / 64;
+    if (blocks > 0) {
+        mal_sha256_blocks(ctx->state, data, blocks);
+        ctx->bit_len += (u64) blocks * 512;
+        data += blocks * 64;
+        len -= blocks * 64;
+    }
+    memcpy(ctx->block, data, len);
+    ctx->block_len = len;
 }
 
 void mal_sha256_final(MalSha256 *ctx, u8 out[32]) {
@@ -89,7 +149,7 @@ void mal_sha256_final(MalSha256 *ctx, u8 out[32]) {
         while (i < 64) {
             ctx->block[i++] = 0;
         }
-        mal_sha256_compress(ctx, ctx->block);
+        mal_sha256_blocks(ctx->state, ctx->block, 1);
         i = 0;
     }
     while (i < 56) {
@@ -98,7 +158,7 @@ void mal_sha256_final(MalSha256 *ctx, u8 out[32]) {
     for (int k = 0; k < 8; k++) {
         ctx->block[63 - k] = (u8) (ctx->bit_len >> (k * 8));  // big-endian 64-bit length
     }
-    mal_sha256_compress(ctx, ctx->block);
+    mal_sha256_blocks(ctx->state, ctx->block, 1);
     for (int j = 0; j < 8; j++) {
         out[j * 4] = (u8) (ctx->state[j] >> 24);
         out[j * 4 + 1] = (u8) (ctx->state[j] >> 16);
