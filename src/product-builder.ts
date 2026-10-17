@@ -4,7 +4,7 @@ import { includeConfiguredAssets } from "./assets.ts";
 import { createBuildArtifact } from "./build-artifact.ts";
 import { buildDerivationFromConfig, resolveBuildConfig } from "./build-config.ts";
 import type { ResolvedBuildConfig } from "./build-config.ts";
-import { selectNativeBuildPlan } from "./build-flags.ts";
+import { normalizeNativeFeatures, selectNativeBuildPlan } from "./build-flags.ts";
 import { maligatorCacheDirectory } from "./cache-root.ts";
 import { compilerProducerDigestsForRoot } from "./compiler-cache-identity.ts";
 import { stripCompactTypes } from "./compiler/frontend/compact-type-strip.ts";
@@ -18,6 +18,8 @@ import { emitWorkerRegistryTranslationUnit } from "./compiler/target/emit-worker
 import { buildDevelopmentRunner, buildLocalBinary } from "./local-build.ts";
 import { resolveNativeBuildContext } from "./native-build-context.ts";
 import { nativeSourcePath } from "./native-source-path.ts";
+import { prepareProfile } from "./profile-artifact.ts";
+import type { PreparedProfile } from "./profile-artifact.ts";
 import { requireToolchain } from "./toolchain.ts";
 import { MALIGATOR_VERSION } from "./version.ts";
 
@@ -98,6 +100,11 @@ export interface BuildProductCliOptions {
 	target?: string;
 	production?: boolean;
 	artifactDirectory?: string;
+	/**
+	 * Instrument the CLI itself, and prepare `<binary>.profile.json` for captures of
+	 * its runs. Sampling records stacks; compiler mode records exact site counters.
+	 */
+	profile?: PreparedProfile["mode"];
 	onProgress?: (message: string) => void;
 }
 
@@ -171,14 +178,28 @@ export function buildProductCli(options: BuildProductCliOptions): string {
 		throw new Error("Product compilerWire asset must contain exactly one file");
 	}
 	compilerWire.files[0]!.embeddedSymbol = "mal_compiler_wire_data";
-	const cSource = emitProductCliTranslationUnits(
+	const { units: cSource, definition } = emitProductCliTranslationUnits(
 		repositoryRoot,
 		config,
 		assets,
+		options.profile !== undefined,
 		progress,
 	);
 	progress("product CLI translation units ready");
-	const derivation = buildDerivationFromConfig(config);
+	const baseDerivation = buildDerivationFromConfig(config);
+	const derivation =
+		options.profile === undefined
+			? baseDerivation
+			: {
+					features: normalizeNativeFeatures({
+						...baseDerivation.features,
+						profileEnabled: true,
+					}),
+					cacheSuffix:
+						baseDerivation.cacheSuffix === ""
+							? "profile"
+							: `${baseDerivation.cacheSuffix}-profile`,
+				};
 	const context = resolveNativeBuildContext({
 		toolchain,
 		plan,
@@ -211,6 +232,8 @@ export function buildProductCli(options: BuildProductCliOptions): string {
 			production,
 		});
 	}
+	if (options.profile !== undefined)
+		prepareProfile(binaryPath, definition, options.profile);
 	progress(`product CLI ready: ${binaryPath}`);
 	return binaryPath;
 }
@@ -219,8 +242,12 @@ function emitProductCliTranslationUnits(
 	repositoryRoot: string,
 	config: ResolvedBuildConfig,
 	assets: ReturnType<typeof includeConfiguredAssets>,
+	profile: boolean,
 	progress: (message: string) => void,
-): ReturnType<typeof emitProgramTranslationUnits> {
+): {
+	units: ReturnType<typeof emitProgramTranslationUnits>;
+	definition: ReturnType<typeof compileSemanticProgramToProgramImage>;
+} {
 	progress("analyzing and compiling the product CLI");
 	const semanticProgram = loadEntrypointAndRunSemanticAnalysis(
 		path.join(repositoryRoot, "src/product-cli-entry.mts"),
@@ -228,6 +255,7 @@ function emitProductCliTranslationUnits(
 	);
 	const definition = compileSemanticProgramToProgramImage(semanticProgram, {
 		facts: compilerProgramFactsFromConfig(config),
+		profile,
 		runPhase: (phase, run) => {
 			progress(`product CLI ${phase}`);
 			const result = run();
@@ -237,18 +265,21 @@ function emitProductCliTranslationUnits(
 	});
 	progress("emitting the product CLI translation units");
 	const graph = semanticProgram.graph;
-	return [
-		...emitProgramTranslationUnits(definition, {
-			sourcePath: nativeSourcePath,
-			compiled: true,
-			assets,
-			maligatorSurface: config.surface.maligator,
-		}),
-		emitWorkerRegistryTranslationUnit(
-			workerRootEntries(graph ?? {}).map((entry) => ({
-				entry,
-				imageSymbol: "mal_runtime_image",
-			})),
-		),
-	];
+	return {
+		units: [
+			...emitProgramTranslationUnits(definition, {
+				sourcePath: nativeSourcePath,
+				compiled: true,
+				assets,
+				maligatorSurface: config.surface.maligator,
+			}),
+			emitWorkerRegistryTranslationUnit(
+				workerRootEntries(graph ?? {}).map((entry) => ({
+					entry,
+					imageSymbol: "mal_runtime_image",
+				})),
+			),
+		],
+		definition,
+	};
 }
