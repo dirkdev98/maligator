@@ -96,11 +96,9 @@ describe("node:child_process detached spawn and unref", () => {
 			files: number;
 		};
 		const volume = statfsSync(outDir);
-		expect(reported).toMatchObject({
-			bsize: volume.bsize,
-			blocks: volume.blocks,
-			files: volume.files,
-		});
+		// APFS derives its inode total from free space, so only the geometry is stable.
+		expect(reported).toMatchObject({ bsize: volume.bsize, blocks: volume.blocks });
+		expect(reported.files).toBeGreaterThan(0);
 		expect(reported.pid).toBeGreaterThan(0);
 		const deadline = Date.now() + 10_000;
 		while (!existsSync(marker) && Date.now() < deadline) await sleep(100);
