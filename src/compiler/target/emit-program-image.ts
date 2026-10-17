@@ -783,6 +783,8 @@ function emitNativeFunctions(
 	availability: NativeCompilationAvailability;
 } {
 	const headerCodeUnits = NATIVE_C_HEADER_LINES.join("\n").length + 1;
+	const importedGlobals =
+		options.relocation === undefined ? undefined : nativeImportedGlobals(image.runtime);
 	const fits = (source: string): boolean =>
 		options.maxCodeUnits === undefined ||
 		source.length + headerCodeUnits <= options.maxCodeUnits;
@@ -894,6 +896,7 @@ function emitNativeFunctions(
 						symbolStem: options.symbolStems[functionIndex]!,
 						relocation: options.relocation,
 						symbolStems: options.symbolStems,
+						importedGlobals,
 					},
 			strictCompiledTargets,
 			image.runtime.stringConstants,
@@ -1952,6 +1955,14 @@ export type NativeOverlayTarget =
 
 const EVAL_COMPILER_OVERLAY: NativeOverlayTarget = { kind: "eval-compiler" };
 
+/** Imported global slots in the order their overlay's attach resolves them. */
+function nativeImportedGlobals(runtime: RuntimeImage): ReadonlyMap<number, number> {
+	const imports = (runtime.moduleLinks?.imports ?? []).filter(
+		(link) => link.kind !== "cjs",
+	);
+	return new Map(imports.map((link, ordinal) => [link.slot, ordinal]));
+}
+
 export function emitRelocatableNativeOverlayTranslationUnits(
 	image: ProgramImage,
 	wireDigest: string,
@@ -2007,6 +2018,9 @@ export function emitRelocatableNativeOverlayTranslationUnits(
 	const installed = compiled.map((fn) =>
 		fn === null || fn.source.length === 0 ? undefined : fn.symbol,
 	);
+	const importCount = nativeImportedGlobals(image.runtime).size;
+	if (importCount > 0 && target.kind !== "fragment")
+		throw new Error("only a program fragment's overlay can import globals");
 	const declarations = installed.flatMap((symbol) =>
 		symbol === undefined ? [] : [`MAL_DECLARE_COMPILED(${symbol});`],
 	);
@@ -2024,6 +2038,9 @@ export function emitRelocatableNativeOverlayTranslationUnits(
 			? [
 					`MalNativeProgramRelocation ${relocationCell};`,
 					`static bool ${relocationCell}_attached;`,
+					...(importCount === 0
+						? []
+						: [`static i32 ${relocationCell}_global_imports[${importCount}];`]),
 					"",
 				]
 			: []),
@@ -2035,6 +2052,12 @@ export function emitRelocatableNativeOverlayTranslationUnits(
 			? [
 					`    .relocation = &${relocationCell},`,
 					`    .relocation_attached = &${relocationCell}_attached,`,
+					...(importCount === 0
+						? []
+						: [
+								`    .global_imports = ${relocationCell}_global_imports,`,
+								`    .global_import_count = ${importCount},`,
+							]),
 				]
 			: []),
 		"};",

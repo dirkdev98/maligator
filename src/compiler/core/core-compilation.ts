@@ -1,4 +1,5 @@
 import type { PlatformData } from "../../platform/catalog.ts";
+import type { ExternalModuleInterface } from "../frontend/module-graph.ts";
 import type { SemanticProgram } from "../frontend/semantic-analysis.ts";
 import type { SourceCallSite } from "../frontend/source-function-origins.ts";
 import type { CompilerProgramFacts } from "../shared/compiler-facts.ts";
@@ -22,6 +23,33 @@ export interface CoreHostInstallCandidate {
 		readonly slot: number;
 		readonly constant?: PlatformData;
 	}>;
+}
+
+/**
+ * A module binding, namespace cache slot, or CommonJS module that one image of a
+ * relocatable program shares with another. Module paths are the identity the
+ * loader matches imports against exports by.
+ */
+export interface CoreModuleLink {
+	readonly kind: "binding" | "namespace" | "cjs";
+	readonly module: string;
+	/** The export name of a binding link; empty for namespace and CommonJS links. */
+	readonly name: string;
+	/** A global slot, or the CommonJS module id of a `cjs` link. */
+	readonly slot: number;
+}
+
+export interface CoreModuleLinks {
+	/** Slots the loader aliases to an earlier image's exports; never written here. */
+	readonly imports: ReadonlyArray<CoreModuleLink>;
+	/** Slots later images read and alias; their stores are externally observable. */
+	readonly exports: ReadonlyArray<CoreModuleLink>;
+	/** What later images compile against for each module this image publishes. */
+	readonly interfaces: ReadonlyArray<CoreModuleInterface>;
+}
+
+export interface CoreModuleInterface extends ExternalModuleInterface {
+	readonly module: string;
 }
 
 /**
@@ -60,6 +88,8 @@ export interface CoreProgramData {
 	/** Captured cells that a function can only read after their initialization. */
 	readonly initializedCapturedReads?: ReadonlyArray<CoreInitializedCapturedRead>;
 	readonly retainedHostInstallers: ReadonlyArray<string>;
+	/** Present only for an image of a relocatable program. */
+	readonly moduleLinks?: CoreModuleLinks;
 }
 
 /** Analysis and diagnostics that accompany, but are not part of, canonical SSA. */

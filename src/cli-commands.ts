@@ -22,7 +22,6 @@ import {
 	selectNativeBuildPlan,
 } from "./build-flags.ts";
 import type { NativeBuildPlan } from "./build-flags.ts";
-import { validateBuildFragmentRequest } from "./build-fragment-cache.ts";
 import {
 	compileBuildFrontend,
 	compileBuildFrontendAsync,
@@ -2161,13 +2160,6 @@ export async function runCli(
 				throw new Error("dependency fragment worker requires one request path");
 			}
 			compileDependencyFragmentRequest(args[1]!, context.stripTypes);
-			return;
-		}
-		if (args[0] === "--maligator-internal-linkage-validation") {
-			if (args.length !== 2) {
-				throw new Error("linkage validation worker requires one request path");
-			}
-			validateBuildFragmentRequest(args[1]!, context.stripTypes);
 			return;
 		}
 		const command = parseCliArgs(args);

@@ -1412,6 +1412,35 @@ function verifyCompilationContext(
 			}
 		}
 	}
+	const links = context.data.moduleLinks;
+	if (links !== undefined) {
+		// Other images write imported slots and read exported ones.
+		if (context.facts.closure.sourceClosure.kind === "known") {
+			fail("an image linked to other images cannot be a closed program");
+		}
+		const ownCommonJsModules = context.data.cjsModuleFunctionIndices.length;
+		for (const [direction, entries] of [
+			["import", links.imports],
+			["export", links.exports],
+		] as const) {
+			for (const link of entries) {
+				const valid =
+					link.kind === "cjs"
+						? Number.isSafeInteger(link.slot) &&
+							(direction === "export"
+								? link.slot >= 0 && link.slot < ownCommonJsModules
+								: link.slot >= ownCommonJsModules)
+						: Number.isSafeInteger(link.slot) &&
+							link.slot >= 0 &&
+							link.slot < program.globalCount;
+				if (!valid) {
+					fail(
+						`module ${direction} ${link.kind} ${link.module}:${link.name} has invalid slot ${link.slot}`,
+					);
+				}
+			}
+		}
+	}
 }
 
 export function verifyCoreFunction(

@@ -51,7 +51,9 @@ function lowerOptimizedCoreToProgramImage(
 				options.coreOptimizationBenchmarkAblation?.family === "guarded-direct-call",
 		}),
 	);
-	return runPhase("execution to image", () =>
+	const image = runPhase("execution to image", () =>
 		lowerExecutionToProgramImage(lowered, native, options.profile === true),
 	);
+	const interfaces = optimized.context.data.moduleLinks?.interfaces;
+	return interfaces === undefined ? image : { ...image, moduleInterfaces: interfaces };
 }

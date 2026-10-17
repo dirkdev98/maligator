@@ -304,6 +304,23 @@ export interface RuntimeImage {
 		installer: string;
 		exports: Array<{ name: string; slot: number; constant?: PlatformData }>;
 	}>;
+	/**
+	 * Present on an image of a relocatable program. The loader aliases each import
+	 * to the slot (or CommonJS module) an earlier image published under the same
+	 * module path, kind, and name, then publishes this image's exports.
+	 */
+	moduleLinks?: {
+		imports: Array<RuntimeModuleLink>;
+		exports: Array<RuntimeModuleLink>;
+	};
+}
+
+export interface RuntimeModuleLink {
+	kind: "binding" | "namespace" | "cjs";
+	module: string;
+	name: string;
+	/** A global slot, or a CommonJS module id. */
+	slot: number;
 }
 
 /** Exact builtin calls whose dynamic property/callback seam was erased in Core. */
@@ -3304,6 +3321,14 @@ export function lowerVerifiedTargetsToRuntimePlans(
 		hostInstalls: buildHostInstalls(context, functions),
 		files,
 		sourcePositions,
+		...(context.data.moduleLinks === undefined
+			? {}
+			: {
+					moduleLinks: {
+						imports: context.data.moduleLinks.imports.map((link) => ({ ...link })),
+						exports: context.data.moduleLinks.exports.map((link) => ({ ...link })),
+					},
+				}),
 	};
 	const compacted = compactRuntimeImageConstants(runtime);
 	// No function escapes before relocation, compaction and validation finish.
@@ -3339,7 +3364,12 @@ function buildHostInstalls(
 	context: CoreCompilationContext,
 	functions: Array<BytecodeFunction>,
 ): RuntimeImage["hostInstalls"] {
-	const readGlobalSlots = new Set<number>();
+	// Later images read published slots, so a re-exported host export stays installed.
+	const readGlobalSlots = new Set<number>(
+		(context.data.moduleLinks?.exports ?? []).flatMap((link) =>
+			link.kind === "binding" ? [link.slot] : [],
+		),
+	);
 	for (const fn of functions) {
 		for (const instruction of fn.instructions) {
 			if (instruction.opcode === "LOAD_GLOBAL") {

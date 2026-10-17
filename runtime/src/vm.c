@@ -23,6 +23,7 @@
 #include "heap_string.h"
 #include "intrinsics.h"
 #include "microtask.h"
+#include "module_links.h"
 #include "object_ops.h"
 #include "promise_object.h"
 #include "perf_stats.h"
@@ -553,6 +554,7 @@ static void mal_vm_init_engine_state(MalVm *vm) {
     vm->small_uint_string_cache_scan_limit = 0;
     vm->small_bigint_cache = nullptr;
     vm->array_join_frames = nullptr;
+    mal_module_link_registry_init(&vm->module_links);
     vm->semantic_epochs = (MalSemanticEpochs) {
         .activity = 1,
         .array_elements = 1,
@@ -574,6 +576,11 @@ static void mal_vm_adopt_program_image(MalVm *vm, const MalRuntimeImage *program
     // in place (static, or the loader arena). Counts of 0 use a capacity of 1 so
     // a later splice always has a real array to grow.
     vm->live_runtime_image = *program;
+    // Links describe one image; the merged program spliced from them has none.
+    vm->live_runtime_image.module_import_count = 0;
+    vm->live_runtime_image.module_imports = nullptr;
+    vm->live_runtime_image.module_export_count = 0;
+    vm->live_runtime_image.module_exports = nullptr;
     for (i32 i = 0; i < program->function_count; i++) {
         g_loaded_instruction_count += (u64) program->functions[i].instruction_count;
         g_loaded_instruction_data_count +=
@@ -845,6 +852,7 @@ static void mal_vm_init_language_state(MalVm *vm, const MalRuntimeImage *program
             vm->cjs_registry[i] = (MalCjsModuleSlot) {
                 .module_object = mal_value_new_undefined(),
                 .loaded = false,
+                .alias = -1,
             };
         }
     } else {
@@ -864,6 +872,8 @@ void mal_vm_init(MalVm *vm, const MalRuntimeImage *program) {
 	mal_vm_adopt_program_image(vm, program);
 	mal_vm_init_execution_state(vm, program);
 	mal_vm_init_language_state(vm, program);
+	// The first image of a relocatable program links nothing in; it only publishes.
+	mal_vm_publish_module_exports(vm, program, nullptr, 0);
 }
 
 MalValue mal_vm_cjs_require(MalVm *vm, i32 id) {
@@ -876,6 +886,7 @@ MalValue mal_vm_cjs_require(MalVm *vm, i32 id) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "invalid CommonJS module id");
         return mal_value_new_undefined();
     }
+    if (vm->cjs_registry[id].alias >= 0) id = vm->cjs_registry[id].alias;
 
     MalCjsModuleSlot *slot = &vm->cjs_registry[id];
     MalKey exports_key = mal_intrinsic_string_key(vm, (const byte *) "exports");
@@ -1062,6 +1073,7 @@ void mal_vm_free(MalVm *vm) {
 #endif
     free(vm->cjs_registry);
     free(vm->function_cjs_module_bases);
+    mal_module_link_registry_free(&vm->module_links);
 
     // The VM-owned constant/template tables (the instruction/code-unit data their
     // rows point at is owned elsewhere — static, or the caller's loaded runtime image).
@@ -1165,7 +1177,7 @@ static i32 mal_vm_rebase_value_operand(i32 operand, i32 string_base) {
 }
 
 static void mal_vm_rebase_instruction(
-    MalInstruction *in, i32 *instruction_data, i32 fn_base, i32 global_base,
+    MalInstruction *in, i32 *instruction_data, i32 fn_base, const i32 *global_remap,
     i32 string_base, i32 bigint_base, i32 template_base
 ) {
     switch (in->opcode) {
@@ -1207,13 +1219,13 @@ static void mal_vm_rebase_instruction(
             }
             break;
         case MAL_OP_LOAD_GLOBAL_INDEX:
-            in->as.load_global_index.index += global_base;
+            in->as.load_global_index.index = global_remap[in->as.load_global_index.index];
             break;
         case MAL_OP_LOAD_GLOBAL:
-            in->as.load_global.index += global_base;
+            in->as.load_global.index = global_remap[in->as.load_global.index];
             break;
         case MAL_OP_STORE_GLOBAL:
-            in->as.store_global.index += global_base;
+            in->as.store_global.index = global_remap[in->as.store_global.index];
             break;
         case MAL_OP_CREATE_STRING:
             in->as.create_string.string_index += string_base;
@@ -1269,7 +1281,8 @@ static void mal_vm_rebase_instruction(
         case MAL_OP_INSTANTIATE_LITERAL_TEMPLATE:
             in->as.instantiate_literal_template.template_offset += template_base;
             if (in->as.instantiate_literal_template.cache_slot >= 0)
-                in->as.instantiate_literal_template.cache_slot += global_base;
+                in->as.instantiate_literal_template.cache_slot =
+                    global_remap[in->as.instantiate_literal_template.cache_slot];
             break;
         case MAL_OP_QUERY_STATIC_DATA:
             instruction_data[in->as.query_static_data.data_offset] += template_base;
@@ -1285,7 +1298,7 @@ static void mal_vm_rebase_instruction(
             break;
         case MAL_OP_DECLARE_GLOBAL_LEXICAL:
             in->as.declare_global_lexical.name_string_index += string_base;
-            in->as.declare_global_lexical.index += global_base;
+            in->as.declare_global_lexical.index = global_remap[in->as.declare_global_lexical.index];
             break;
         case MAL_OP_GLOBAL_BINDING_QUERY:
             in->as.global_binding_query.name_string_index += string_base;
@@ -1319,7 +1332,7 @@ static void mal_vm_rebase_instruction(
             break;
         }
         case MAL_OP_CREATE_TEMPLATE_OBJECT: {
-            in->as.create_template_object.cache_slot += global_base;
+            in->as.create_template_object.cache_slot = global_remap[in->as.create_template_object.cache_slot];
             i32 *data = instruction_data + in->as.create_template_object.data_offset;
             i32 count = data[0];
             i32 *cooked = &data[1];
@@ -1333,14 +1346,16 @@ static void mal_vm_rebase_instruction(
             break;
         }
         case MAL_OP_CREATE_MODULE_NAMESPACE: {
-            if (in->as.create_module_namespace.cache_slot >= 0) in->as.create_module_namespace.cache_slot += global_base;
+            if (in->as.create_module_namespace.cache_slot >= 0)
+                in->as.create_module_namespace.cache_slot =
+                    global_remap[in->as.create_module_namespace.cache_slot];
             i32 *data = instruction_data + in->as.create_module_namespace.data_offset;
             i32 count = data[0];
             i32 *names = &data[1];
             i32 *slots = &data[1 + count];
             for (i32 i = 0; i < count; i++) {
                 names[i] += string_base;
-                slots[i] += global_base;
+                slots[i] = global_remap[slots[i]];
             }
             break;
         }
@@ -1424,6 +1439,13 @@ static bool mal_vm_rebase_literal_templates(
     return true;
 }
 
+/** Grow geometrically so splicing many images stays linear in their total size. */
+static i32 mal_vm_grown_capacity(i32 capacity, i32 needed) {
+    i64 grown = (i64) capacity * 2;
+    if (grown < needed) grown = needed;
+    return grown > INT32_MAX ? needed : (i32) grown;
+}
+
 i32 mal_vm_splice_runtime_image(MalVm *vm, const MalRuntimeImage *loaded) {
     MalRuntimeImage *live = &vm->live_runtime_image;
     i32 fn_base = live->function_count;
@@ -1446,6 +1468,23 @@ i32 mal_vm_splice_runtime_image(MalVm *vm, const MalRuntimeImage *loaded) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
                            "eval: too many string/BigInt constants");
         return -1;
+    }
+    i32 linked_namespace_slots = 0;
+    if (!mal_vm_resolve_module_imports(vm, loaded, global_base, &linked_namespace_slots)) {
+        return -1;
+    }
+    // Each image-local global slot's absolute slot: imports alias earlier images'.
+    i32 *global_remap = malloc(sizeof(i32) * (usize) (loaded->global_count > 0 ? loaded->global_count : 1));
+    if (global_remap == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return -1;
+    }
+    for (i32 i = 0; i < loaded->global_count; i++) global_remap[i] = global_base + i;
+    i32 cjs_import_count = 0;
+    for (i32 i = 0; i < loaded->module_import_count; i++) {
+        const MalModuleLink *link = &loaded->module_imports[i];
+        if (link->kind == MAL_MODULE_LINK_CJS) cjs_import_count++;
+        else global_remap[link->slot] = link->target;
     }
 
     // String constants: append the loaded cells (immortal, code units in the
@@ -1471,9 +1510,10 @@ i32 mal_vm_splice_runtime_image(MalVm *vm, const MalRuntimeImage *loaded) {
     // copy so spliced instructions can use one merged program table.
     i32 new_template_count = template_base + loaded->literal_template_data_count;
     if (new_template_count > vm->literal_template_capacity) {
-        vm->literal_template_capacity = new_template_count;
+        vm->literal_template_capacity = mal_vm_grown_capacity(vm->literal_template_capacity, new_template_count);
         live->literal_template_data = realloc(
-            (u32 *) live->literal_template_data, sizeof(u32) * (usize) new_template_count);
+            (u32 *) live->literal_template_data,
+            sizeof(u32) * (usize) vm->literal_template_capacity);
     }
     u32 *templates = (u32 *) live->literal_template_data;
     if (loaded->literal_template_data_count > 0) {
@@ -1484,19 +1524,21 @@ i32 mal_vm_splice_runtime_image(MalVm *vm, const MalRuntimeImage *loaded) {
                 string_base, bigint_base)) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
                                "eval: invalid literal template");
+            free(global_remap);
             return -1;
         }
     }
     live->literal_template_data_count = new_template_count;
 
-    // Globals: grow and undefined-initialize the same absolute range in every realm.
-    i32 new_globals = global_base + loaded->global_count;
+    // Globals: grow and undefined-initialize the same absolute range in every realm,
+    // including the namespace slots first created by this image's imports.
+    i32 new_globals = global_base + loaded->global_count + linked_namespace_slots;
 #if MAL_REALMS
     if (new_globals > vm->global_capacity) {
+        vm->global_capacity = mal_vm_grown_capacity(vm->global_capacity, new_globals);
         for (MalRealm *realm = vm->realms; realm != nullptr; realm = realm->next) {
-            realm->globals = realloc(realm->globals, sizeof(MalValue) * (usize) new_globals);
+            realm->globals = realloc(realm->globals, sizeof(MalValue) * (usize) vm->global_capacity);
         }
-        vm->global_capacity = new_globals;
     }
     for (MalRealm *realm = vm->realms; realm != nullptr; realm = realm->next) {
         for (i32 i = global_base; i < new_globals; i++) {
@@ -1506,8 +1548,8 @@ i32 mal_vm_splice_runtime_image(MalVm *vm, const MalRuntimeImage *loaded) {
     vm->globals = vm->current_realm->globals;
 #else
     if (new_globals > vm->global_capacity) {
-        vm->global_capacity = new_globals;
-        vm->globals = realloc(vm->globals, sizeof(MalValue) * (usize) new_globals);
+        vm->global_capacity = mal_vm_grown_capacity(vm->global_capacity, new_globals);
+        vm->globals = realloc(vm->globals, sizeof(MalValue) * (usize) vm->global_capacity);
     }
     for (i32 i = global_base; i < new_globals; i++) {
         vm->globals[i] = mal_value_new_undefined();
@@ -1521,7 +1563,7 @@ i32 mal_vm_splice_runtime_image(MalVm *vm, const MalRuntimeImage *loaded) {
         MalHostInstall *install = (MalHostInstall *) &loaded->host_installs[i];
         MalHostInstallSlot *slots = (MalHostInstallSlot *) install->slots;
         for (i32 slot = 0; slot < install->slot_count; slot++) {
-            slots[slot].slot += global_base;
+            slots[slot].slot = global_remap[slots[slot].slot];
         }
     }
 
@@ -1531,15 +1573,15 @@ i32 mal_vm_splice_runtime_image(MalVm *vm, const MalRuntimeImage *loaded) {
     i32 new_file_count = file_base + loaded->file_count;
     if (new_file_count > vm->file_capacity) {
         i32 old_capacity = vm->file_capacity;
-        vm->file_capacity = new_file_count;
+        vm->file_capacity = mal_vm_grown_capacity(vm->file_capacity, new_file_count);
         live->files = realloc(
-            (char **) live->files, sizeof(char *) * (usize) new_file_count);
+            (char **) live->files, sizeof(char *) * (usize) vm->file_capacity);
         vm->file_string_atoms = realloc(
             vm->file_string_atoms,
-            sizeof(MalString *) * (usize) new_file_count);
+            sizeof(MalString *) * (usize) vm->file_capacity);
         memset(
             vm->file_string_atoms + old_capacity, 0,
-            sizeof(MalString *) * (usize) (new_file_count - old_capacity));
+            sizeof(MalString *) * (usize) (vm->file_capacity - old_capacity));
     }
     const char **files = (const char **) live->files;
     for (i32 i = 0; i < loaded->file_count; i++) {
@@ -1550,10 +1592,11 @@ i32 mal_vm_splice_runtime_image(MalVm *vm, const MalRuntimeImage *loaded) {
     i32 new_source_position_count =
         source_position_base + loaded->source_position_count;
     if (new_source_position_count > vm->source_position_capacity) {
-        vm->source_position_capacity = new_source_position_count;
+        vm->source_position_capacity =
+            mal_vm_grown_capacity(vm->source_position_capacity, new_source_position_count);
         live->source_positions = realloc(
             (MalSourcePos *) live->source_positions,
-            sizeof(MalSourcePos) * (usize) new_source_position_count);
+            sizeof(MalSourcePos) * (usize) vm->source_position_capacity);
     }
     MalSourcePos *source_positions = (MalSourcePos *) live->source_positions;
     for (i32 i = 0; i < loaded->source_position_count; i++) {
@@ -1571,10 +1614,11 @@ i32 mal_vm_splice_runtime_image(MalVm *vm, const MalRuntimeImage *loaded) {
     // Functions: append rebased copies. Instruction/handler/position runs remain
     // owned by the loaded arena and are safely mutated once during this splice.
     i32 new_functions = fn_base + loaded->function_count;
+    i32 previous_function_capacity = vm->function_capacity;
     if (new_functions > vm->function_capacity) {
-        vm->function_capacity = new_functions;
-        live->functions =
-            realloc((MalFunction *) live->functions, sizeof(MalFunction) * (usize) new_functions);
+        vm->function_capacity = mal_vm_grown_capacity(vm->function_capacity, new_functions);
+        live->functions = realloc(
+            (MalFunction *) live->functions, sizeof(MalFunction) * (usize) vm->function_capacity);
     }
     MalFunction *functions = (MalFunction *) live->functions;
     for (i32 f = 0; f < loaded->function_count; f++) {
@@ -1595,7 +1639,7 @@ i32 mal_vm_splice_runtime_image(MalVm *vm, const MalRuntimeImage *loaded) {
         for (i32 k = 0; k < fn.instruction_count; k++) {
             mal_vm_rebase_instruction(
                 (MalInstruction *) &fn.instructions[k], (i32 *) fn.instruction_data,
-                fn_base, global_base, string_base, bigint_base, template_base);
+                fn_base, global_remap, string_base, bigint_base, template_base);
         }
         functions[fn_base + f] = fn;
     }
@@ -1604,13 +1648,14 @@ i32 mal_vm_splice_runtime_image(MalVm *vm, const MalRuntimeImage *loaded) {
     // CommonJS module ids are program-local numeric values. Append the
     // module-to-function rows here; the caller function's segment base is
     // applied by mal_vm_cjs_require so no instruction data needs rewriting.
-    i32 new_cjs_module_count =
-        cjs_module_base + loaded->cjs_module_count;
+    // Imported modules follow the image's own and alias the owning image's entry.
+    i32 own_cjs_module_count = cjs_module_base + loaded->cjs_module_count;
+    i32 new_cjs_module_count = own_cjs_module_count + cjs_import_count;
     if (new_cjs_module_count > vm->cjs_module_capacity) {
-        vm->cjs_module_capacity = new_cjs_module_count;
+        vm->cjs_module_capacity = mal_vm_grown_capacity(vm->cjs_module_capacity, new_cjs_module_count);
         live->cjs_module_function_indices = realloc(
             (i32 *) live->cjs_module_function_indices,
-            sizeof(i32) * (usize) new_cjs_module_count);
+            sizeof(i32) * (usize) vm->cjs_module_capacity);
     }
     i32 *cjs_module_function_indices =
         (i32 *) live->cjs_module_function_indices;
@@ -1621,13 +1666,20 @@ i32 mal_vm_splice_runtime_image(MalVm *vm, const MalRuntimeImage *loaded) {
     if (new_cjs_module_count > cjs_module_base) {
         vm->cjs_registry = realloc(
             vm->cjs_registry,
-            sizeof(MalCjsModuleSlot) * (usize) new_cjs_module_count);
+            sizeof(MalCjsModuleSlot) * (usize) vm->cjs_module_capacity);
         for (i32 i = cjs_module_base; i < new_cjs_module_count; i++) {
             vm->cjs_registry[i] = (MalCjsModuleSlot) {
                 .module_object = mal_value_new_undefined(),
                 .loaded = false,
+                .alias = -1,
             };
         }
+    }
+    for (i32 i = 0; i < loaded->module_import_count; i++) {
+        const MalModuleLink *link = &loaded->module_imports[i];
+        if (link->kind != MAL_MODULE_LINK_CJS) continue;
+        cjs_module_function_indices[cjs_module_base + link->slot] = -1;
+        vm->cjs_registry[cjs_module_base + link->slot].alias = link->target;
     }
     live->cjs_module_count = new_cjs_module_count;
 
@@ -1649,12 +1701,15 @@ i32 mal_vm_splice_runtime_image(MalVm *vm, const MalRuntimeImage *loaded) {
     }
 
     // Per-function caches grow with the function table.
-    vm->property_cache =
-        realloc(vm->property_cache, sizeof(MalPropertyCachePool) * (usize) new_functions);
-    vm->literal_shape_cache = realloc(
-        vm->literal_shape_cache, sizeof(MalShape **) * (usize) new_functions);
-    vm->function_cjs_module_bases = realloc(
-        vm->function_cjs_module_bases, sizeof(i32) * (usize) new_functions);
+    if (vm->function_capacity != previous_function_capacity) {
+        usize capacity = (usize) vm->function_capacity;
+        vm->property_cache =
+            realloc(vm->property_cache, sizeof(MalPropertyCachePool) * capacity);
+        vm->literal_shape_cache =
+            realloc(vm->literal_shape_cache, sizeof(MalShape **) * capacity);
+        vm->function_cjs_module_bases =
+            realloc(vm->function_cjs_module_bases, sizeof(i32) * capacity);
+    }
     for (i32 i = fn_base; i < new_functions; i++) {
         vm->property_cache[i] = (MalPropertyCachePool){0};
         vm->literal_shape_cache[i] = nullptr;
@@ -1665,7 +1720,9 @@ i32 mal_vm_splice_runtime_image(MalVm *vm, const MalRuntimeImage *loaded) {
     // origins. Their strings and function rows are now fully rebased and live.
     mal_vm_materialize_precompiled_literal_shapes(vm, loaded, fn_base, string_base);
 
-    return fn_base;
+    bool published = mal_vm_publish_module_exports(vm, loaded, global_remap, cjs_module_base);
+    free(global_remap);
+    return published ? fn_base : -1;
 }
 
 void mal_vm_retain_loaded_runtime_image(MalVm *vm, MalLoadedRuntimeImage *loaded) {
@@ -3481,7 +3538,7 @@ static void mal_vm_print_thrown(MalVm *vm, MalValue value, const byte *prefix) {
     fprintf(stderr, "\n");
 }
 
-static void mal_vm_report_uncaught(MalVm *vm) {
+void mal_vm_report_uncaught(MalVm *vm) {
     mal_vm_print_thrown(vm, vm->completion.value, "Uncaught ");
 }
 

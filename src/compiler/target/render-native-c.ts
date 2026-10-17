@@ -613,7 +613,9 @@ type NativeRelocationBase =
 	| "global_base"
 	| "string_base"
 	| "bigint_base"
-	| "literal_template_base";
+	| "literal_template_base"
+	// The link slot holds an import's ordinal; the first attach resolves its slot.
+	| "global_imports";
 
 /** One overlay-local index that a relocatable body adds to its runtime relocation base. */
 export interface NativeLinkSlot {
@@ -634,6 +636,8 @@ export interface NativeRelocatableEmission {
 	readonly relocation?: string;
 	/** Every overlay function's stem, which names direct call and entry targets. */
 	readonly symbolStems?: ReadonlyArray<string>;
+	/** Ordinal of each global slot the image imports from an earlier image. */
+	readonly importedGlobals?: ReadonlyMap<number, number>;
 }
 
 interface NativeRelocationExpressions {
@@ -656,6 +660,7 @@ function nativeRelocationExpressions(
 	linkSymbol: string | undefined,
 	symbolStems?: ReadonlyArray<string>,
 	relative = false,
+	importedGlobals?: ReadonlyMap<number, number>,
 ): NativeRelocationExpressions {
 	const link: Array<NativeLinkSlot> = [];
 	const slots = new Map<string, number>();
@@ -666,6 +671,10 @@ function nativeRelocationExpressions(
 		if (slot === undefined) {
 			slot = link.push({ base, index }) - 1;
 			slots.set(key, slot);
+		}
+		if (base === "global_imports") {
+			if (!relative) throw new Error("imported globals require a relocated overlay");
+			return `(__mal_relocation->global_imports[${linkSymbol}[${slot}]])`;
 		}
 		return relative
 			? `(__mal_relocation->${base} + ${linkSymbol}[${slot}])`
@@ -685,7 +694,12 @@ function nativeRelocationExpressions(
 		functionIndex: (index) => indexed("function_base", index),
 		ownerFunctionIndex: (index) =>
 			index < 0 ? String(index) : indexed("function_base", index),
-		globalIndex: (index) => indexed("global_base", index),
+		globalIndex: (index) => {
+			const ordinal = importedGlobals?.get(index);
+			return ordinal === undefined
+				? indexed("global_base", index)
+				: indexed("global_imports", ordinal);
+		},
 		stringIndex: (index) => indexed("string_base", index),
 		bigintIndex: (index) => indexed("bigint_base", index),
 		templateOffset: (index) => indexed("literal_template_base", index),
@@ -1642,6 +1656,7 @@ function emitCompiledVariant(
 		relocatable === false ? undefined : `${symbol}_link`,
 		relocatable === false ? undefined : relocatable.symbolStems,
 		relocatable !== false && relocatable.relocation !== undefined,
+		relocatable === false ? undefined : relocatable.importedGlobals,
 	);
 
 	const valueRegs = [...storage.rootRegisters];
@@ -2969,6 +2984,7 @@ function emitResumableFunction(
 		relocatable === false ? undefined : `${symbol}_link`,
 		relocatable === false ? undefined : relocatable.symbolStems,
 		relocatable !== false && relocatable.relocation !== undefined,
+		relocatable === false ? undefined : relocatable.importedGlobals,
 	);
 	const isAsyncGenerator = fn.isAsync && fn.isGenerator;
 

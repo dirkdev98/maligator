@@ -11,19 +11,19 @@ export function runSemanticAnalysisForGraph(graph: ModuleGraph): SemanticProgram
 		graph,
 	};
 
-	// Host virtual modules (node:* built-ins) carry no user source — the linker
-	// binds their exports later — so they are skipped here rather than analyzed.
+	// Host built-ins and modules owned by earlier images carry no user source — the
+	// linker binds their exports from an interface — so they are not analyzed.
 	const analyzed = new Set<string>();
 	for (const modulePath of graph.evaluationOrder) {
 		const record = graph.modules.get(modulePath)!;
-		if (record.host) {
+		if (record.host || record.external) {
 			continue;
 		}
 		program.files.push(analyzeModuleRecord(record));
 		analyzed.add(modulePath);
 	}
 	for (const [modulePath, record] of graph.modules) {
-		if (record.host || analyzed.has(modulePath)) {
+		if (record.host || record.external || analyzed.has(modulePath)) {
 			continue;
 		}
 		program.files.push(analyzeModuleRecord(record));

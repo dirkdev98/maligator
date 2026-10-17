@@ -9,7 +9,7 @@ import { compileBuildFrontend } from "../../src/build-frontend-cache.ts";
 import { stripCompactTypes } from "../../src/compiler/frontend/compact-type-strip.ts";
 import { buildDevelopmentRunner } from "../../src/local-build.ts";
 import { resolveNativeBuildContext } from "../../src/native-build-context.ts";
-import { compileRelocatableTestImage } from "../../src/testing/fragment-cache.ts";
+import { compileLinkedTestImage } from "../../src/testing/test-images.ts";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const root = mkdtempSync(path.join(os.tmpdir(), "mal-test-runner-regression-"));
@@ -36,7 +36,7 @@ function compileSupportWire(file: string): Array<Uint8Array> {
 }
 
 function prepareTestFile(testFile: string): Array<string> {
-	const testImage = compileRelocatableTestImage({
+	const testImage = compileLinkedTestImage({
 		files: [testFile],
 		config,
 		stripTypes: stripCompactTypes,
@@ -111,6 +111,37 @@ afterAll(() => {
 });
 
 describe("maligator:test runner startup regressions", () => {
+	it("observes an application module's reassigned exports through test imports", () => {
+		const directory = path.join(root, "live-bindings");
+		write(path.join(directory, "package.json"), `{"type":"module"}\n`);
+		write(
+			path.join(directory, "counter.ts"),
+			`export let count = 0;
+export function increment(): void {
+	count++;
+}
+`,
+		);
+		write(path.join(directory, "barrel.ts"), `export * from "./counter.ts";\n`);
+		const testFile = path.join(directory, "counter.test.ts");
+		write(
+			testFile,
+			`import { expect, test } from "maligator:test";
+import { count, increment } from "./counter.ts";
+import * as counter from "./barrel.ts";
+test("sees the live count", () => {
+	increment();
+	expect(count).toBe(1);
+	expect(counter.count).toBe(1);
+});
+`,
+		);
+		const wirePaths = prepareTestFile(testFile);
+		const result = runTestFile(testFile, wirePaths, false);
+		expect(result.status, result.stderr || result.stdout).toBe(0);
+		expect(result.stdout).toContain("RUNNER_RESULT 1/0");
+	});
+
 	for (const [issue, relativeFixture] of [
 		[31, "tests/fixtures/maligator-test-runner/minimal.test.ts"],
 		[38, "tests/fixtures/maligator-test-runner/esm/runner-repro.test.ts"],

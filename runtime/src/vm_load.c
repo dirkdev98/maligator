@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 75u
+#define WIRE_VERSION 76u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 typedef enum WireOp {
@@ -2172,6 +2172,90 @@ static bool mal_loaded_strings_equal(const MalString *left, const MalString *rig
     return true;
 }
 
+/**
+ * Links name this image's own globals and CommonJS modules. Each import claims one
+ * slot the splice aliases, and CommonJS imports number the ids that follow the
+ * image's own modules, where the splice appends their registry entries.
+ */
+static bool mal_loaded_module_links_valid(const MalRuntimeImage *def) {
+    i32 cjs_imports = 0;
+    for (i32 index = 0; index < def->module_import_count; index++) {
+        if (def->module_imports[index].kind == MAL_MODULE_LINK_CJS) cjs_imports++;
+    }
+    bool *claimed = calloc((usize) def->global_count + (usize) cjs_imports + 1, sizeof(bool));
+    if (claimed == nullptr) return false;
+    bool valid = true;
+    for (i32 index = 0; valid && index < def->module_import_count; index++) {
+        const MalModuleLink *link = &def->module_imports[index];
+        i32 claim;
+        if (link->kind == MAL_MODULE_LINK_CJS) {
+            i32 ordinal = link->slot - def->cjs_module_count;
+            valid = ordinal >= 0 && ordinal < cjs_imports;
+            claim = def->global_count + ordinal;
+        } else {
+            valid = link->kind >= MAL_MODULE_LINK_BINDING &&
+                link->kind <= MAL_MODULE_LINK_NAMESPACE && link->slot >= 0 &&
+                link->slot < def->global_count;
+            claim = link->slot;
+        }
+        if (valid) {
+            valid = !claimed[claim];
+            claimed[claim] = true;
+        }
+    }
+    for (i32 index = 0; valid && index < def->module_export_count; index++) {
+        const MalModuleLink *link = &def->module_exports[index];
+        valid = link->kind == MAL_MODULE_LINK_CJS
+            ? link->slot >= 0 && link->slot < def->cjs_module_count
+            : link->kind >= MAL_MODULE_LINK_BINDING && link->kind <= MAL_MODULE_LINK_NAMESPACE &&
+                link->slot >= 0 && link->slot < def->global_count;
+    }
+    free(claimed);
+    return valid;
+}
+
+/** A splice remaps every global slot an instruction names, so each must exist. */
+static bool mal_loaded_global_operands_valid(
+    const MalFunction *owner, const MalInstruction *instruction, i32 global_count
+) {
+    i32 slot;
+    switch (instruction->opcode) {
+        case MAL_OP_LOAD_GLOBAL_INDEX:
+            slot = instruction->as.load_global_index.index;
+            break;
+        case MAL_OP_LOAD_GLOBAL:
+            slot = instruction->as.load_global.index;
+            break;
+        case MAL_OP_STORE_GLOBAL:
+            slot = instruction->as.store_global.index;
+            break;
+        case MAL_OP_DECLARE_GLOBAL_LEXICAL:
+            slot = instruction->as.declare_global_lexical.index;
+            break;
+        case MAL_OP_INSTANTIATE_LITERAL_TEMPLATE:
+            slot = instruction->as.instantiate_literal_template.cache_slot;
+            if (slot == -1) return true;
+            break;
+        case MAL_OP_CREATE_TEMPLATE_OBJECT:
+            slot = instruction->as.create_template_object.cache_slot;
+            break;
+        case MAL_OP_CREATE_MODULE_NAMESPACE: {
+            slot = instruction->as.create_module_namespace.cache_slot;
+            if (slot < -1 || slot >= global_count) return false;
+            const i32 *data =
+                &owner->instruction_data[instruction->as.create_module_namespace.data_offset];
+            for (i32 index = 0; index < data[0]; index++) {
+                i32 export_slot = data[1 + data[0] + index];
+                if (export_slot < 0 || export_slot >= global_count) return false;
+            }
+            return true;
+        }
+        default:
+            return true;
+    }
+    return slot >= 0 && slot < global_count;
+}
+
 static bool mal_loaded_value_operand_valid(
     const MalFunction *owner, u32 string_count, i32 operand
 ) {
@@ -2760,6 +2844,9 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
                     }
                 }
             }
+            if (!mal_loaded_global_operands_valid(fn, instruction, def->global_count)) {
+                r.ok = false;
+            }
             if ((instruction->opcode == MAL_OP_LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT ||
                  instruction->opcode == MAL_OP_STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT) &&
                 !mal_loaded_known_own_slot_valid(
@@ -2861,6 +2948,36 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
                 slots[slot].data = data;
             }
         }
+    }
+
+    for (i32 table = 0; r.ok && table < 2; table++) {
+        // Kind, two length prefixes and the slot are the smallest entry.
+        u32 link_count = rd_count(&r, 13);
+        MalModuleLink *links = arena_array(
+            L, &r, link_count, sizeof(MalModuleLink), alignof(MalModuleLink));
+        for (u32 index = 0; r.ok && index < link_count; index++) {
+            links[index].kind = rd_u8(&r);
+            const char **texts[] = {&links[index].module, &links[index].name};
+            for (usize text = 0; r.ok && text < countof(texts); text++) {
+                u32 length = rd_count(&r, 1);
+                char *bytes = arena(L, &r, (usize) length + 1, alignof(char));
+                for (u32 byte = 0; r.ok && byte < length; byte++) bytes[byte] = (char) rd_u8(&r);
+                *texts[text] = bytes;
+            }
+            links[index].slot = rd_i32(&r);
+            links[index].target = -1;
+        }
+        if (table == 0) {
+            def->module_import_count = (i32) link_count;
+            def->module_imports = links;
+        } else {
+            def->module_export_count = (i32) link_count;
+            def->module_exports = links;
+        }
+    }
+    if (r.ok && !mal_loaded_module_links_valid(def)) {
+        err = "invalid module link";
+        goto fail;
     }
 
     if (!r.ok || r.pos != r.len) {

@@ -868,6 +868,11 @@ typedef struct MalNativeProgramRelocation {
     i32 string_base;
     i32 bigint_base;
     i32 literal_template_base;
+    /**
+     * Absolute slots of the image's imported globals, in import-table order; their
+     * aliases are not contiguous, so they cannot be expressed as a base.
+     */
+    const i32 *global_imports;
 } MalNativeProgramRelocation;
 
 enum {
@@ -1049,6 +1054,40 @@ typedef struct MalHostInstall {
     i32 slot_count;
 } MalHostInstall;
 
+/** Wire tags of RuntimeModuleLink kinds in src/compiler/target/runtime-image.ts. */
+typedef enum MalModuleLinkKind {
+    MAL_MODULE_LINK_BINDING = 0,
+    MAL_MODULE_LINK_NAMESPACE = 1,
+    MAL_MODULE_LINK_CJS = 2,
+} MalModuleLinkKind;
+
+/**
+ * A module binding, namespace cache slot, or CommonJS module one image of a
+ * relocatable program shares with another, identified by module path, kind and
+ * export name. An import's slot is never written by its own image: the splice
+ * aliases it to the slot an earlier image published, so the binding stays live.
+ */
+typedef struct MalModuleLink {
+    const char *module;
+    const char *name;
+    i32 kind;
+    /** Image-local global slot, or CommonJS module id for MAL_MODULE_LINK_CJS. */
+    i32 slot;
+    /** Absolute slot or module id an import resolved to; written by the splice. */
+    i32 target;
+} MalModuleLink;
+
+/** Exports published by the images spliced into one VM, keyed by link identity. */
+typedef struct MalModuleLinkRegistry {
+    const MalModuleLink **entries;
+    i32 *targets;
+    i32 count;
+    i32 capacity;
+    /** Open-addressed indices into entries, -1 when empty; a power of two in size. */
+    i32 *table;
+    i32 table_size;
+} MalModuleLinkRegistry;
+
 /** One immutable regular file in a configured executable asset. */
 typedef struct MalAssetFile {
     const char *path;
@@ -1154,6 +1193,16 @@ typedef struct MalRuntimeImage {
      */
     i32 host_install_count;
     const MalHostInstall *host_installs;
+
+    /**
+     * Links of an image of a relocatable program (see MalModuleLink). CommonJS
+     * import ids follow the image's own modules: cjs_module_count..+N. Zero/null
+     * for a whole program.
+     */
+    i32 module_import_count;
+    MalModuleLink *module_imports;
+    i32 module_export_count;
+    const MalModuleLink *module_exports;
 } MalRuntimeImage;
 
 /**
@@ -1166,6 +1215,8 @@ typedef struct MalRuntimeImage {
 typedef struct MalCjsModuleSlot {
     MalValue module_object;
     bool loaded;
+    /** Absolute id of the earlier image's module this entry imports, else -1. */
+    i32 alias;
 } MalCjsModuleSlot;
 
 // Shared atomic binding slots, grouped by activation or per-iteration identity.
@@ -1882,6 +1933,9 @@ typedef struct MalVm {
      */
     MalCjsModuleSlot *cjs_registry;
 
+    /** Module exports of every image of a relocatable program spliced so far. */
+    MalModuleLinkRegistry module_links;
+
     /**
      * Fibers (see docs/decisions/03-wave-0-host-architecture.md). This MalVm is the *isolate*: it owns the
      * heap + globals, and one or more fibers execute on it (one at a time on this
@@ -2400,6 +2454,9 @@ void mal_vm_note_unhandled_rejection(MalVm *vm, MalValue promise);
 
 /** Report (to stderr) any still-unhandled rejected promises, then clear the list. */
 void mal_vm_report_unhandled_rejections(MalVm *vm);
+
+/** Print the pending throw completion to stderr the way an uncaught throw is. */
+void mal_vm_report_uncaught(MalVm *vm);
 
 MalCallable *mal_vm_create_callable(MalVm *vm, i32 function_index);
 

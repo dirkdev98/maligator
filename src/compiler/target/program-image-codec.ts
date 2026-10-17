@@ -28,6 +28,7 @@ import type {
 	BytecodeFunction,
 	BytecodeInstruction,
 	RuntimeImage,
+	RuntimeModuleLink,
 } from "./runtime-image.ts";
 
 /**
@@ -39,7 +40,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Runtime wires are hard cut-overs: stale cached buffers must rebuild.
-export const WIRE_VERSION = 75;
+export const WIRE_VERSION = 76;
 
 /** Canonical wire tags generated into the C runtime from the same registry. */
 export const WIRE_OPCODES = BYTECODE_OPERATIONS;
@@ -624,7 +625,23 @@ export function writeRuntimeImage(
 			for (const byte of constant) w.u8(byte);
 		}
 	}
+
+	for (const links of [def.moduleLinks?.imports ?? [], def.moduleLinks?.exports ?? []]) {
+		w.u32(links.length);
+		for (const link of links) {
+			w.u8(MODULE_LINK_KINDS.indexOf(link.kind));
+			for (const text of [link.module, link.name]) {
+				const bytes = utf8Encode(text);
+				w.u32(bytes.length);
+				for (const byte of bytes) w.u8(byte);
+			}
+			w.i32(link.slot);
+		}
+	}
 }
+
+/** Wire tags of RuntimeModuleLink kinds; runtime/src/vm.h mirrors their order. */
+const MODULE_LINK_KINDS = ["binding", "namespace", "cjs"] as const;
 
 export function writeRuntimeFunction(
 	w: Writer,
@@ -1490,6 +1507,23 @@ export function readRuntimeImage(
 		hostInstalls.push({ installer: utf8Decode(installerBytes), exports: hostExports });
 	}
 
+	const [moduleImports, moduleExports] = [0, 1].map(() => {
+		const links: Array<RuntimeModuleLink> = [];
+		const count = r.count(13);
+		for (let index = 0; index < count; index++) {
+			const kind = MODULE_LINK_KINDS[r.u8()];
+			if (kind === undefined) throw new Error("invalid module link kind");
+			const [module, name] = [0, 1].map(() => {
+				const length = r.count(1);
+				const bytes = new Array<number>(length);
+				for (let byte = 0; byte < length; byte++) bytes[byte] = r.u8();
+				return utf8Decode(bytes);
+			}) as [string, string];
+			links.push({ kind, module, name, slot: r.i32() });
+		}
+		return links;
+	}) as [Array<RuntimeModuleLink>, Array<RuntimeModuleLink>];
+
 	const runtimeImage: RuntimeImage = {
 		entrypointPath,
 		functionCount,
@@ -1503,6 +1537,9 @@ export function readRuntimeImage(
 		files,
 		sourcePositions,
 		cjsModuleFunctionIndices,
+		...(moduleImports.length === 0 && moduleExports.length === 0
+			? {}
+			: { moduleLinks: { imports: moduleImports, exports: moduleExports } }),
 	};
 	validateRuntimeImageMetadata(runtimeImage);
 	return { reader: r, runtime: runtimeImage };

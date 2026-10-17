@@ -699,6 +699,21 @@ contracts or investigates costs still visible after the string follow-ups.
 - [ ] Add $262.agent and multi-agent Atomics behavior. Define worker lifetime, shared
       memory, synchronization, cleanup, and harness failure reporting first.
 
+- [ ] Let `require` and `import()` cross linked-image boundaries. A build still
+      compiles one whole program for them, and `maligator test` one application image.
+      The loader already aliases CommonJS registry entries and namespace slots;
+      `import()` additionally needs the earlier image's module evaluation state.
+
+- [ ] Give `run`, `dev` and development builds one linked image per application
+      module, as `maligator test` does. Measure native development builds first: every
+      image adds an overlay table and link units.
+
+- [ ] Keep unchanged modules out of the graph walk of one-shot `test` and `run`
+      commands. Each command reparses every reachable module, `node_modules` included,
+      to find its cached images; that is about 70 ms of a 200 ms test edit in
+      `scripts/dx-performance.ts`. Persist dependency extraction by source digest and
+      parse a module only when its image misses.
+
 ## Active correctness clusters
 
 - [ ] Restore the interpreted `await using` Test262 results. Against the

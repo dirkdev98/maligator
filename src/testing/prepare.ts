@@ -9,14 +9,12 @@ import type { CommandContext } from "../cli-commands.ts";
 import { cacheDevelopmentAssets } from "../development-assets.ts";
 import { cacheFrontendWire, frontendDigest } from "../frontend-cache.ts";
 import type { FrontendDependencyIdentity } from "../frontend-cache.ts";
+import { UnsupportedLinkedImagesError } from "../linked-images.ts";
 import type { Execution } from "../platform/execution.ts";
 import { cacheDevelopmentWorkerManifest } from "../worker-image-cache.ts";
 import { compileTestImage, TestCompilationSession } from "./cache.ts";
 import type { TestFrontendPhases } from "./cache.ts";
-import {
-	compileRelocatableTestImage,
-	UnsupportedRelocatableTestImageError,
-} from "./fragment-cache.ts";
+import { compileLinkedTestImage } from "./test-images.ts";
 
 export interface TestCompilationInput {
 	files: Array<string>;
@@ -87,9 +85,9 @@ function prepareTestApplicationImage(
 	const compile = () => {
 		if (request.wholeImage) return compileTestImage(options);
 		try {
-			return compileRelocatableTestImage(options);
+			return compileLinkedTestImage(options);
 		} catch (error) {
-			if (!(error instanceof UnsupportedRelocatableTestImageError)) throw error;
+			if (!(error instanceof UnsupportedLinkedImagesError)) throw error;
 			context.checkpoint?.();
 			return compileTestImage(options);
 		}

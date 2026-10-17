@@ -87,6 +87,7 @@ tests/native/literal-materialization.test.ts
 tests/native/static-array-copies.test.ts
 tests/native/symbol-registry-reuse.test.ts
 tests/native/node-buffer.test.ts
+tests/native/module-links.test.ts
 tests/native/node-http-limits.test.ts
 tests/native/node-http-request.test.ts
 tests/native/node-string-decoder.test.ts

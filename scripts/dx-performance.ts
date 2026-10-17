@@ -175,14 +175,58 @@ async function developmentSamples(
 	return result!;
 }
 
+const SUITE_FILES = 20;
+const LIBRARY_MODULES = 30;
+
+/** A chain of application modules, so each test reaches a different slice of it. */
+function libraryModule(index: number, revision: number): string {
+	const previous =
+		index === 0 ? "" : `import { value${index - 1} } from "./module-${index - 1}.mts";\n`;
+	const base = index === 0 ? "1" : `value${index - 1}() + 1`;
+	return `${previous}export function value${index}(): number {
+	return ${base};
+}
+export const label${index} = "module ${index} revision ${revision}";
+`;
+}
+
+function suiteTest(index: number, revision: number, namespaced = false): string {
+	const module = (index * 7) % LIBRARY_MODULES;
+	return `import { describe, expect, test } from "maligator:test";
+import { literal, object, parse } from "valibot";
+${namespaced ? 'import * as path from "node:path";\n' : ""}import { label${module}, value${module} } from "../lib/module-${module}.mts";
+
+describe("unit ${index}", () => {
+	test("reads the library", () => {
+		expect(value${module}()).toBe(${module + 1});
+		expect(label${module}).toContain("module ${module}");
+	});
+	test("parses with a dependency", () => {
+		expect(parse(object({ status: literal("ok") }), { status: "ok" })).toEqual({ status: "ok" });
+	});${
+		namespaced
+			? `
+	test("uses a namespace import", () => {
+		expect(path.basename("/a/b.txt")).toBe("b.txt");
+	});`
+			: ""
+	}
+});
+// revision ${revision}
+`;
+}
+
 function report(sample: Sample): void {
 	const detailPrefixes = [
 		"Frontend cache:",
 		"Frontend phases:",
 		"Development fragments:",
 		"Compiler phase ·",
+		"Timing:",
+		"Artifacts:",
+		"Frontend:",
 	];
-	const details = sample.stderr
+	const details = `${sample.stdout}\n${sample.stderr}`
 		.split("\n")
 		.map((line) => line.trim())
 		.filter((line) => detailPrefixes.some((prefix) => line.startsWith(prefix)))
@@ -254,6 +298,15 @@ test("representative graph", () => {
 });\n`,
 	);
 
+	for (let index = 0; index < LIBRARY_MODULES; index++) {
+		write(`lib/module-${index}.mts`, libraryModule(index, 0));
+	}
+	for (let index = 0; index < SUITE_FILES; index++) {
+		const name = `unit-${String(index).padStart(2, "0")}.test.mts`;
+		write(`suite/${name}`, suiteTest(index, 0));
+		write(`namespaced/${name}`, suiteTest(index, 0, index === 3));
+	}
+
 	persist();
 	if (selectedLane === undefined || selectedLane === "run") {
 		invoke("run cold", [
@@ -268,6 +321,25 @@ test("representative graph", () => {
 	if (selectedLane === undefined || selectedLane === "test") {
 		invoke("test cold", ["test", "app.test.mts", "--config", "maligator.build.mts"]);
 		invoke("test hot", ["test", "app.test.mts", "--config", "maligator.build.mts"]);
+		const suite = ["test", "suite", "--config", "maligator.build.mts"];
+		invoke("suite cold", suite);
+		invoke("suite hot", suite);
+		write("suite/unit-07.test.mts", suiteTest(7, 1));
+		invoke("suite test edit", suite);
+		write("lib/module-29.mts", libraryModule(29, 1));
+		invoke("suite library edit", suite);
+		write("suite/unit-07.test.mts", suiteTest(7, 2));
+		invoke("suite single file after edit", [
+			"test",
+			"suite/unit-07.test.mts",
+			"--config",
+			"maligator.build.mts",
+		]);
+		invoke("suite after single file", suite);
+		const namespaced = ["test", "namespaced", "--config", "maligator.build.mts"];
+		invoke("namespace suite cold", namespaced);
+		write("namespaced/unit-03.test.mts", suiteTest(3, 1, true));
+		invoke("namespace suite test edit", namespaced);
 	}
 	if (selectedLane === undefined || selectedLane === "dev") {
 		for (const sample of await developmentSamples("dev cold served revision", false)) {

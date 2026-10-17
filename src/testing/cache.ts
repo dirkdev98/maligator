@@ -48,8 +48,9 @@ import type { WorkerImageArtifact } from "../worker-image-cache.ts";
 
 const TEST_CACHE_SCHEMA = 3;
 const TEST_CACHE_DIRECTORY = path.join(maligatorCacheDirectory(), "test");
-const TEST_MODULE_ID = "maligator:test";
-const TEST_BOOTSTRAP_MODULE_ID = "maligator-internal:test-bootstrap";
+export const TEST_MODULE_ID = "maligator:test";
+export const TEST_BOOTSTRAP_MODULE_ID = "maligator-internal:test-bootstrap";
+export const NODE_GLOBALS_MODULE_ID = "maligator-internal:node-globals";
 const TEST_IMAGE_TRANSFORM = 1;
 
 export type DependencyIdentity = FrontendDependencyIdentity;
@@ -126,7 +127,7 @@ function cacheRoot(override: string | undefined): string {
 	return path.resolve(override ?? TEST_CACHE_DIRECTORY);
 }
 
-function resolvedEntries(files: Array<string>): Array<string> {
+export function resolvedEntries(files: Array<string>): Array<string> {
 	return [...new Set(files.map((file) => path.resolve(file)))].sort((left, right) =>
 		left < right ? -1 : left > right ? 1 : 0,
 	);
@@ -170,7 +171,7 @@ function readManifest(filePath: string): TestCacheManifest | undefined {
 	}
 }
 
-function dependenciesUnchanged(
+export function dependenciesUnchanged(
 	dependencies: Array<DependencyIdentity>,
 	session: FrontendCompilationSession,
 ): boolean {
@@ -222,7 +223,7 @@ function syntheticEntry(
 	runner?: TestImageRunner,
 ): string {
 	const imports = entries.map((file) => `import ${JSON.stringify(file)};`).join("\n");
-	return `${node ? 'import "maligator-internal:node-globals";\n' : ""}import ${JSON.stringify(TEST_BOOTSTRAP_MODULE_ID)};
+	return `${node ? `import ${JSON.stringify(NODE_GLOBALS_MODULE_ID)};\n` : ""}import ${JSON.stringify(TEST_BOOTSTRAP_MODULE_ID)};
 import { __run } from ${JSON.stringify(TEST_MODULE_ID)};
 ${imports}
 ${testRunnerSource("__run", entries, runner)}
@@ -244,10 +245,37 @@ console.log(${JSON.stringify(runner.resultPrefix)} + JSON.stringify(__result));\
 	return `globalThis.__maligatorTestResult = await ${callee}(globalThis.__maligatorTestOptions);\n`;
 }
 
-function wrapTestEntry(source: string, file: string): string {
+export function wrapTestEntry(source: string, file: string): string {
 	return `globalThis.__maligatorTestBeginFile(${JSON.stringify(
 		file,
 	)});${source}\nglobalThis.__maligatorTestEndFile();`;
+}
+
+/** The toolchain modules a test program evaluates before its test files. */
+export function testVirtualModules(
+	options: Pick<CompileTestOptions, "config" | "testModuleSource" | "nodeGlobalsSource">,
+): NonNullable<BuildModuleGraphOptions["virtualModules"]> {
+	return new Map([
+		[
+			TEST_MODULE_ID,
+			{ source: options.testModuleSource, goal: "module", platform: true },
+		],
+		[
+			TEST_BOOTSTRAP_MODULE_ID,
+			{
+				source: `import { __initializeRunner } from ${JSON.stringify(TEST_MODULE_ID)}; __initializeRunner();`,
+				goal: "module",
+			},
+		],
+		...(options.config.surface.node
+			? [
+					[
+						NODE_GLOBALS_MODULE_ID,
+						{ source: options.nodeGlobalsSource ?? "", goal: "module" },
+					] as const,
+				]
+			: []),
+	]);
 }
 
 function buildTestGraph(
@@ -266,27 +294,7 @@ function buildTestGraph(
 		execution: options.execution,
 		parseCache: session.moduleParses,
 		platformSourceRoot: options.platformSourceRoot,
-		virtualModules: new Map([
-			[
-				TEST_MODULE_ID,
-				{ source: options.testModuleSource, goal: "module", platform: true },
-			],
-			[
-				TEST_BOOTSTRAP_MODULE_ID,
-				{
-					source: `import { __initializeRunner } from "maligator:test"; __initializeRunner();`,
-					goal: "module",
-				},
-			],
-			...(options.config.surface.node
-				? [
-						[
-							"maligator-internal:node-globals",
-							{ source: options.nodeGlobalsSource ?? "", goal: "module" },
-						] as const,
-					]
-				: []),
-		]),
+		virtualModules: testVirtualModules(options),
 		transformSource(source, filePath) {
 			return entrySet.has(filePath) ? wrapTestEntry(source, filePath) : source;
 		},

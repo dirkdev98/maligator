@@ -44,6 +44,7 @@ export interface CompileCoreOptions {
 		evalCompletion?: boolean;
 		evalDirect?: boolean;
 		directEvalContext?: DirectEvalContext;
+		moduleExports?: "all" | ReadonlySet<string>;
 	};
 	afterCoreOptimization?: (
 		program: SealedCoreProgram,

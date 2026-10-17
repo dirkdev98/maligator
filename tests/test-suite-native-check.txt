@@ -57,6 +57,7 @@ tests/native/postgres-load.test.ts
 tests/native/runtime-mechanics.test.ts
 tests/native/platform-execution.test.ts
 tests/native/test-runner-regressions.test.ts
+tests/native/module-links.test.ts
 tests/native/template-literal-coercion.test.ts
 tests/native/wire-loader.test.ts
 

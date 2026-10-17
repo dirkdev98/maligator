@@ -30,6 +30,8 @@ writeFileSync(
 		"export class Counter { #count = 0; increment() { return ++this.#count; } }",
 		"export async function later(value) { await null; return value * 2; }",
 		"export function* pairs(limit) { for (let i = 0; i < limit; i++) yield [i, i * i]; }",
+		"export let calls = 0;",
+		"export function track() { calls++; }",
 	].join("\n"),
 );
 writeFileSync(
@@ -41,11 +43,13 @@ function writeApplication(extra: string): void {
 	writeFileSync(
 		path.join(project, "main.mjs"),
 		[
-			'import { Counter, later, pairs, sum } from "tiny-dep";',
+			'import { Counter, calls, later, pairs, sum, track } from "tiny-dep";',
+			'import * as dependency from "tiny-dep";',
 			"const counter = new Counter();",
 			"counter.increment();",
 			"const squares = [...pairs(4)].map(([, square]) => square);",
-			"console.log(sum(squares), counter.increment(), await later(21));",
+			"track();",
+			"console.log(sum(squares), counter.increment(), await later(21), calls, dependency.calls);",
 			extra,
 		].join("\n"),
 	);
@@ -91,14 +95,14 @@ describe("development builds from relocatable fragments", () => {
 	it("runs the application with each image's native overlay", () => {
 		writeApplication("");
 		build();
-		expect(runBinary()).toBe("14 2 42\n");
+		expect(runBinary()).toBe("14 2 42 1 1\n");
 	});
 
 	it("recompiles only the edited application's image after a function is added", () => {
 		writeApplication("const extra = (value) => value * 4;\nconsole.log(extra(5));");
 		const output = build();
 		const compiled = compiledUnits(output);
-		expect(runBinary()).toBe("14 2 42\n20\n");
+		expect(runBinary()).toBe("14 2 42 1 1\n20\n");
 
 		expect(output).toMatch(/Development fragments: [1-9]\d* reused, 1 compiled/);
 

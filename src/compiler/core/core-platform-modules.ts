@@ -110,6 +110,9 @@ export function pruneUnusedPlatformModuleInitializers(
 		const owner = slotOwners.get(slot);
 		if (owner !== undefined) demandInitializer(owner);
 	};
+	for (const link of compilation.context.data.moduleLinks?.exports ?? []) {
+		if (link.kind !== "cjs") demand(link.slot);
+	}
 	while (pending.length > 0) {
 		const id = pending.pop()!;
 		if (visited.has(id) || !program.hasFunction(id)) continue;

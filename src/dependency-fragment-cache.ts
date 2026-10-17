@@ -2,62 +2,27 @@ import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import { writeFileAtomically } from "./atomic-file.ts";
 import type { ResolvedBuildConfig } from "./build-config.ts";
-import { assertEvalPolicy, assertRegexpPolicy } from "./build-config.ts";
-import { maligatorCacheDirectory } from "./cache-root.ts";
-import {
-	compilerConfigurationIdentity,
-	compilerProducerIdentity,
-} from "./compiler-cache-identity.ts";
-import { runSemanticAnalysisForGraph } from "./compiler/frontend/analyze-module-graph.ts";
 import type {
 	BuildModuleGraphOptions,
 	ModuleGraph,
 } from "./compiler/frontend/module-graph.ts";
 import { buildModuleGraph } from "./compiler/frontend/module-graph.ts";
-import { collectPrimordialMutationDiagnostics } from "./compiler/frontend/primordial-diagnostics.ts";
-import {
-	collectDisallowedEvalUsage,
-	collectDisallowedRegexpUsage,
-} from "./compiler/frontend/semantic-analysis.ts";
-import { compileSemanticProgramToProgramImage } from "./compiler/pipeline/compile-core.ts";
 import type { CompileCorePhase } from "./compiler/pipeline/compile-core.ts";
-import type { CompilerDiagnostic } from "./compiler/shared/compiler-diagnostics.ts";
 import { compilerProgramFactsFromConfig } from "./compiler/shared/compiler-facts.ts";
 import type { CompilerProgramFacts } from "./compiler/shared/compiler-facts.ts";
-import {
-	COMPILER_ARTIFACT_VERSION,
-	serializeCompilerArtifact,
-} from "./compiler/target/compiler-artifact-codec.ts";
-import {
-	serializeRuntimeImage,
-	WIRE_VERSION,
-} from "./compiler/target/program-image-codec.ts";
-import {
-	cacheFrontendCompilerArtifact,
-	cacheFrontendWire,
-	frontendArtifactCacheRoot,
-	frontendArtifactIdentity,
-	frontendArtifactUnchanged,
-	frontendCompilerArtifactIdentity,
-	frontendCompilerArtifactUnchanged,
-	frontendDigest,
-} from "./frontend-cache.ts";
-import type { FrontendArtifactIdentity } from "./frontend-cache.ts";
+import { frontendDigest } from "./frontend-cache.ts";
 import { FrontendCompilationSession } from "./frontend-cache.ts";
+import {
+	compileLinkedImage,
+	findLinkedImage,
+	linkedImageEnvironment,
+} from "./linked-images.ts";
+import type { LinkedImageArtifact, LinkedImageEnvironment } from "./linked-images.ts";
 import { nativeBuildJobs, runIndependentCommands } from "./native-command.ts";
-import { executionIdentity } from "./platform/execution.ts";
 import type { Execution } from "./platform/execution.ts";
 
-const DEPENDENCY_FRAGMENT_SCHEMA = 2;
-const CACHE_DIRECTORY = path.join(maligatorCacheDirectory(), "dependency-fragments");
-
-/** Stable runtime registry populated before application and test fragments execute. */
-export const DEVELOPMENT_LINKED_MODULES_GLOBAL = "__maligatorDevelopmentLinkedModules";
-
-export interface DependencyFragmentTarget {
-	target: string;
-	commonjs: boolean;
-}
+const DEPENDENCY_FRAGMENT_FAMILY = "dependency-fragments";
+const ISLAND_KIND = "dependency-island";
 
 export interface DependencyFragmentPhases {
 	graphMs: number;
@@ -72,19 +37,15 @@ export interface DependencyFragmentWorker {
 	args: Array<string>;
 }
 
-export interface DependencyFragmentArtifact extends FrontendArtifactIdentity {
-	key: string;
-	targets: Array<string>;
-	wire: Uint8Array;
-	/** The island's native plans, which development fragment builds emit from. */
-	compilerArtifact: FrontendArtifactIdentity;
-	diagnostics: Array<CompilerDiagnostic>;
-	cache: "hit" | "miss";
+export interface DependencyFragmentArtifact extends LinkedImageArtifact {
+	/** The dependency modules the island's image publishes. */
+	readonly targets: ReadonlyArray<string>;
 }
 
 export interface CompileDependencyFragmentsOptions {
 	graph: ModuleGraph;
-	targets: Array<DependencyFragmentTarget>;
+	/** Dependency modules imported from outside `node_modules`. */
+	targets: ReadonlyArray<string>;
 	config: ResolvedBuildConfig;
 	execution?: Execution;
 	facts: CompilerProgramFacts;
@@ -95,45 +56,44 @@ export interface CompileDependencyFragmentsOptions {
 	phases: DependencyFragmentPhases;
 	onCompilePhase?: (phase: CompileCorePhase, durationMs: number) => void;
 	worker?: DependencyFragmentWorker;
-	/** Additional hidden CLI tasks that can overlap independent island misses. */
-	parallelWorkerTasks?: Array<Array<string>>;
 }
 
 interface DependencyFragmentRequest {
-	schema: 1;
-	targets: Array<DependencyFragmentTarget>;
+	schema: 2;
+	targets: Array<string>;
 	config: ResolvedBuildConfig;
 	execution?: Execution;
 	stripperIdentity: string;
 	cacheDirectory?: string;
 }
 
-function cacheRoot(override: string | undefined): string {
-	return override === undefined
-		? path.resolve(CACHE_DIRECTORY)
-		: path.resolve(override, "dependency-fragments");
-}
-
 export function isExternalModule(file: string): boolean {
 	return file.split(path.sep).includes("node_modules");
 }
 
-function environmentIdentity(options: CompileDependencyFragmentsOptions): string {
-	return frontendDigest(
-		JSON.stringify({
-			schema: DEPENDENCY_FRAGMENT_SCHEMA,
-			producer: compilerProducerIdentity(
-				"dependency-fragment",
-				DEPENDENCY_FRAGMENT_SCHEMA,
-			),
-			wireVersion: WIRE_VERSION,
-			compilerArtifactVersion: COMPILER_ARTIFACT_VERSION,
-			stripper: options.stripperIdentity,
-			optimization: "development",
-			configuration: compilerConfigurationIdentity(options.config),
-			execution: executionIdentity(options.execution),
-		}),
-	);
+function islandEnvironment(
+	options: Pick<
+		CompileDependencyFragmentsOptions,
+		| "config"
+		| "execution"
+		| "facts"
+		| "stripperIdentity"
+		| "cacheDirectory"
+		| "phases"
+		| "onCompilePhase"
+	>,
+): LinkedImageEnvironment {
+	return linkedImageEnvironment({
+		producer: "dependency-fragment",
+		family: DEPENDENCY_FRAGMENT_FAMILY,
+		config: options.config,
+		execution: options.execution,
+		facts: options.facts,
+		stripperIdentity: options.stripperIdentity,
+		cacheDirectory: options.cacheDirectory,
+		phases: options.phases,
+		onCompilePhase: options.onCompilePhase,
+	});
 }
 
 function reachableExternalModules(graph: ModuleGraph, target: string): Set<string> {
@@ -155,7 +115,7 @@ function reachableExternalModules(graph: ModuleGraph, target: string): Set<strin
 }
 
 interface DependencyIsland {
-	targets: Array<DependencyFragmentTarget>;
+	targets: Array<string>;
 	modules: Set<string>;
 }
 
@@ -171,13 +131,11 @@ function intersects(left: Set<string>, right: Set<string>): boolean {
  */
 function dependencyIslands(
 	graph: ModuleGraph,
-	targets: Array<DependencyFragmentTarget>,
+	targets: ReadonlyArray<string>,
 ): Array<DependencyIsland> {
 	const islands: Array<DependencyIsland> = [];
-	for (const target of [...targets].sort((left, right) =>
-		left.target < right.target ? -1 : left.target > right.target ? 1 : 0,
-	)) {
-		const modules = reachableExternalModules(graph, target.target);
+	for (const target of [...targets].sort()) {
+		const modules = reachableExternalModules(graph, target);
 		const overlapping = islands.filter((island) => intersects(island.modules, modules));
 		if (overlapping.length === 0) {
 			islands.push({ targets: [target], modules });
@@ -192,51 +150,32 @@ function dependencyIslands(
 			islands.splice(islands.indexOf(other), 1);
 		}
 	}
+	for (const island of islands) island.targets.sort();
 	return islands.sort((left, right) =>
-		left.targets[0]!.target < right.targets[0]!.target
+		left.targets[0]! < right.targets[0]!
 			? -1
-			: left.targets[0]!.target > right.targets[0]!.target
+			: left.targets[0]! > right.targets[0]!
 				? 1
 				: 0,
 	);
 }
 
+/** An island image evaluates its roots and publishes them to the images after it. */
 function islandGraph(
-	targetsInput: Array<DependencyFragmentTarget>,
+	targets: ReadonlyArray<string>,
 	options: Pick<
 		CompileDependencyFragmentsOptions,
 		"config" | "execution" | "stripTypes" | "session"
 	>,
 ): ModuleGraph {
-	const targets = [...targetsInput].sort((left, right) =>
-		left.target < right.target ? -1 : left.target > right.target ? 1 : 0,
-	);
-	const imports = targets
-		.map((target, index) =>
-			target.commonjs
-				? `import __maligatorModule${index} from ${JSON.stringify(target.target)};`
-				: `import * as __maligatorModule${index} from ${JSON.stringify(target.target)};`,
-		)
-		.join("\n");
-	const publications = targets
-		.map(
-			(target, index) =>
-				`__maligatorModules[${JSON.stringify(target.target)}] = __maligatorModule${index};`,
-		)
-		.join("\n");
-	const source = `${imports}
-const __maligatorModules = globalThis[${JSON.stringify(DEVELOPMENT_LINKED_MODULES_GLOBAL)}] || Object.create(null);
-${publications}
-globalThis[${JSON.stringify(DEVELOPMENT_LINKED_MODULES_GLOBAL)}] = __maligatorModules;
-`;
-	const targetKey = frontendDigest(JSON.stringify(targets.map(({ target }) => target)));
+	const targetKey = frontendDigest(JSON.stringify(targets));
 	const entry = path.join(
-		path.dirname(targets[0]!.target),
+		path.dirname(targets[0]!),
 		`.maligator-dependency-island-${targetKey.slice(0, 24)}.mts`,
 	);
 	return buildModuleGraph(entry, {
 		entryGoal: "module",
-		entrySource: source,
+		entrySource: targets.map((target) => `import ${JSON.stringify(target)};\n`).join(""),
 		stripTypes: options.stripTypes,
 		buildConfig: options.config,
 		execution: options.execution,
@@ -244,165 +183,24 @@ globalThis[${JSON.stringify(DEVELOPMENT_LINKED_MODULES_GLOBAL)}] = __maligatorMo
 	});
 }
 
-function graphKey(identity: string, targets: Array<string>, graph: ModuleGraph): string {
-	return frontendDigest(
-		JSON.stringify({
-			identity,
-			targets,
-			entry: graph.entry,
-			evaluationOrder: graph.evaluationOrder,
-			modules: [...graph.modules.values()]
-				.map((record) => ({
-					path: record.path,
-					goal: record.goal,
-					source: frontendDigest(record.source),
-					host: record.host?.id,
-					virtual: record.virtual === true,
-				}))
-				.sort((left, right) =>
-					left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
-				),
-		}),
-	);
-}
-
-function loadIsland(
-	root: string,
-	artifactRoot: string,
-	identity: string,
-	targets: Array<string>,
-	graph: ModuleGraph,
-): DependencyFragmentArtifact | undefined {
-	const key = graphKey(identity, targets, graph);
-	const mappingPath = path.join(root, "artifacts", `${key}.json`);
-	try {
-		const reference = JSON.parse(readFileSync(mappingPath, "utf-8")) as {
-			schema?: number;
-			artifact?: FrontendArtifactIdentity;
-			compilerArtifact?: FrontendArtifactIdentity;
-			diagnostics?: Array<CompilerDiagnostic>;
-		};
-		if (
-			reference.schema !== 3 ||
-			reference.artifact === undefined ||
-			reference.compilerArtifact === undefined ||
-			!Array.isArray(reference.diagnostics) ||
-			!frontendArtifactUnchanged(reference.artifact, artifactRoot) ||
-			!frontendCompilerArtifactUnchanged(reference.compilerArtifact, artifactRoot)
-		) {
-			throw new Error("invalid dependency artifact reference");
-		}
-		let wire: Uint8Array | undefined;
-		return {
-			key,
-			targets,
-			...reference.artifact,
-			compilerArtifact: reference.compilerArtifact,
-			diagnostics: reference.diagnostics,
-			get wire() {
-				if (wire !== undefined) return wire;
-				wire = new Uint8Array(readFileSync(reference.artifact!.path));
-				if (frontendDigest(wire) !== reference.artifact!.digest) {
-					throw new Error("corrupt dependency fragment artifact");
-				}
-				return wire;
-			},
-			cache: "hit",
-		};
-	} catch {
-		return undefined;
-	}
-}
-
-function compileIsland(
-	root: string,
-	artifactRoot: string,
-	identity: string,
-	targets: Array<string>,
-	graph: ModuleGraph,
-	options: CompileDependencyFragmentsOptions,
-): DependencyFragmentArtifact {
-	const cached = loadIsland(root, artifactRoot, identity, targets, graph);
-	if (cached !== undefined) return cached;
-	const key = graphKey(identity, targets, graph);
-	const mappingPath = path.join(root, "artifacts", `${key}.json`);
-	const semanticStartedAt = Date.now();
-	const semantic = runSemanticAnalysisForGraph(graph);
-	assertEvalPolicy(options.config, collectDisallowedEvalUsage(semantic));
-	assertRegexpPolicy(options.config, collectDisallowedRegexpUsage(semantic));
-	const diagnostics =
-		options.facts.world.primordialPolicy === "locked"
-			? collectPrimordialMutationDiagnostics(semantic, options.facts.world, {
-					nodeEnabled: options.config.surface.node,
-				})
-			: [];
-	options.phases.semanticMs += Date.now() - semanticStartedAt;
-	const definition = compileSemanticProgramToProgramImage(semantic, {
-		facts: options.facts,
-		optimization: "development",
-		runPhase(phase, run) {
-			const startedAt = Date.now();
-			try {
-				return run();
-			} finally {
-				const durationMs = Date.now() - startedAt;
-				options.phases.compileMs += durationMs;
-				options.onCompilePhase?.(phase, durationMs);
-			}
-		},
-	});
-	const serializeStartedAt = Date.now();
-	const wire = serializeRuntimeImage(definition.runtime);
-	const compilerWire = serializeCompilerArtifact(definition);
-	options.phases.serializeMs += Date.now() - serializeStartedAt;
-	const wireDigest = frontendDigest(wire);
-	cacheFrontendWire(wire, artifactRoot);
-	cacheFrontendCompilerArtifact(compilerWire, artifactRoot);
-	const artifact = frontendArtifactIdentity(wireDigest, artifactRoot);
-	const compilerArtifact = frontendCompilerArtifactIdentity(
-		frontendDigest(compilerWire),
-		artifactRoot,
-	);
-	if (artifact === undefined || compilerArtifact === undefined) {
-		throw new Error(`dependency artifact is missing after publication: ${wireDigest}`);
-	}
-	writeFileAtomically(
-		mappingPath,
-		`${JSON.stringify({ schema: 3, artifact, compilerArtifact, diagnostics })}\n`,
-	);
-	return {
-		key,
-		targets,
-		...artifact,
-		compilerArtifact,
-		wire,
-		diagnostics,
-		cache: "miss",
-	};
-}
-
-function requestPath(root: string, request: DependencyFragmentRequest): string {
-	return path.join(root, "requests", `${frontendDigest(JSON.stringify(request))}.json`);
-}
-
 function compileWithWorkers(
 	root: string,
 	requests: Array<DependencyFragmentRequest>,
 	worker: DependencyFragmentWorker,
-	additionalTasks: Array<Array<string>>,
 ): number {
 	const startedAt = Date.now();
 	const commands = requests.map((request) => {
-		const file = requestPath(root, request);
+		const file = path.join(
+			root,
+			"requests",
+			`${frontendDigest(JSON.stringify(request))}.json`,
+		);
 		writeFileAtomically(file, `${JSON.stringify(request)}\n`);
 		return {
 			tool: worker.tool,
 			args: [...worker.args, "--maligator-internal-dependency-fragment", file],
 		};
 	});
-	for (const task of additionalTasks) {
-		commands.push({ tool: worker.tool, args: [...worker.args, ...task] });
-	}
 	runIndependentCommands(commands, {
 		cwd: process.cwd(),
 		env: process.env,
@@ -421,47 +219,29 @@ export function compileDependencyFragmentRequest(
 		| DependencyFragmentRequest
 		| undefined;
 	if (
-		request?.schema !== 1 ||
+		request?.schema !== 2 ||
 		!Array.isArray(request.targets) ||
 		request.targets.length === 0
 	) {
 		throw new Error("invalid dependency fragment worker request");
 	}
-	const phases: DependencyFragmentPhases = {
-		graphMs: 0,
-		semanticMs: 0,
-		compileMs: 0,
-		serializeMs: 0,
-		workerMs: 0,
-	};
 	const session = new FrontendCompilationSession();
 	session.useCacheDirectory(request.cacheDirectory);
+	const environment = islandEnvironment({
+		config: request.config,
+		execution: request.execution,
+		facts: compilerProgramFactsFromConfig(request.config),
+		stripperIdentity: request.stripperIdentity,
+		cacheDirectory: request.cacheDirectory,
+		phases: { graphMs: 0, semanticMs: 0, compileMs: 0, serializeMs: 0, workerMs: 0 },
+	});
 	const graph = islandGraph(request.targets, {
 		config: request.config,
 		execution: request.execution,
 		stripTypes,
 		session,
 	});
-	const options: CompileDependencyFragmentsOptions = {
-		graph,
-		targets: request.targets,
-		config: request.config,
-		execution: request.execution,
-		facts: compilerProgramFactsFromConfig(request.config),
-		stripTypes,
-		stripperIdentity: request.stripperIdentity,
-		cacheDirectory: request.cacheDirectory,
-		session,
-		phases,
-	};
-	compileIsland(
-		cacheRoot(request.cacheDirectory),
-		frontendArtifactCacheRoot(request.cacheDirectory),
-		environmentIdentity(options),
-		request.targets.map(({ target }) => target).sort(),
-		graph,
-		options,
-	);
+	compileLinkedImage(environment, ISLAND_KIND, graph, new Set(request.targets));
 	session.flush();
 }
 
@@ -469,48 +249,60 @@ export function compileDependencyFragmentRequest(
 export function compileDependencyFragments(
 	options: CompileDependencyFragmentsOptions,
 ): Array<DependencyFragmentArtifact> {
-	const identity = environmentIdentity(options);
-	const root = cacheRoot(options.cacheDirectory);
-	const artifactRoot = frontendArtifactCacheRoot(options.cacheDirectory);
+	const environment = islandEnvironment(options);
 	const graphStartedAt = Date.now();
-	const graphs = dependencyIslands(options.graph, options.targets).map((island) => ({
-		plans: island.targets,
-		targets: island.targets.map(({ target }) => target).sort(),
-		graph: islandGraph(island.targets, options),
-	}));
-	options.phases.graphMs += Date.now() - graphStartedAt;
-	const missing = graphs.filter(
-		({ targets, graph }) =>
-			loadIsland(root, artifactRoot, identity, targets, graph) === undefined,
+	const islands = dependencyIslands(options.graph, options.targets).map(
+		({ targets }) => ({
+			targets,
+			graph: islandGraph(targets, options),
+		}),
 	);
-	const workerCompiledKeys = new Set<string>();
-	if (
-		options.worker !== undefined &&
-		(missing.length > 1 || (options.parallelWorkerTasks?.length ?? 0) > 0)
-	) {
-		const requests = missing.map(({ plans }): DependencyFragmentRequest => ({
-			schema: 1,
-			targets: plans,
-			config: options.config,
-			execution: options.execution,
-			stripperIdentity: options.stripperIdentity,
-			...(options.cacheDirectory === undefined
-				? {}
-				: { cacheDirectory: options.cacheDirectory }),
-		}));
+	options.phases.graphMs += Date.now() - graphStartedAt;
+	const missing = islands.filter(
+		({ targets, graph }) =>
+			findLinkedImage(environment, ISLAND_KIND, graph, new Set(targets)) === undefined,
+	);
+	if (options.worker !== undefined && missing.length > 1) {
 		options.phases.workerMs += compileWithWorkers(
-			root,
-			requests,
+			environment.root,
+			missing.map(({ targets }) => ({
+				schema: 2,
+				targets,
+				config: options.config,
+				execution: options.execution,
+				stripperIdentity: options.stripperIdentity,
+				...(options.cacheDirectory === undefined
+					? {}
+					: { cacheDirectory: options.cacheDirectory }),
+			})),
 			options.worker,
-			options.parallelWorkerTasks ?? [],
 		);
-		for (const { targets, graph } of missing) {
-			workerCompiledKeys.add(graphKey(identity, targets, graph));
-		}
 	}
-	return graphs.map(({ targets, graph }) => {
-		const artifact = compileIsland(root, artifactRoot, identity, targets, graph, options);
-		if (workerCompiledKeys.has(artifact.key)) artifact.cache = "miss";
-		return artifact;
+	const compiledByWorkers = new Set(
+		options.worker !== undefined && missing.length > 1 ? missing : [],
+	);
+	return islands.map((island) => {
+		const artifact = compileLinkedImage(
+			environment,
+			ISLAND_KIND,
+			island.graph,
+			new Set(island.targets),
+		);
+		return {
+			get wire() {
+				return artifact.wire;
+			},
+			get programImage() {
+				return artifact.programImage;
+			},
+			runtimeArtifact: artifact.runtimeArtifact,
+			compilerArtifact: artifact.compilerArtifact,
+			diagnostics: artifact.diagnostics,
+			interfaces: artifact.interfaces,
+			// The workers' compilations are this build's misses even though the
+			// coordinator reads them back from the cache.
+			cache: compiledByWorkers.has(island) ? "miss" : artifact.cache,
+			targets: island.targets,
+		};
 	});
 }

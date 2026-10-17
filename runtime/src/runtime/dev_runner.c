@@ -4,6 +4,7 @@
 #include "development_assets.h"
 #include "vm.h"
 #include "perf_stats.h"
+#include "promise_object.h"
 #include "vm_load.h"
 
 #include <stdio.h>
@@ -49,6 +50,12 @@ static u8 *read_file(const char *path, usize *length_out) {
     return buffer;
 }
 
+static bool image_entry_settled(MalVm *vm, void *data) {
+    (void) data;
+    return !mal_value_is_promise_object(vm->entry_async_promise) ||
+        mal_value_to_promise_object(vm->entry_async_promise)->state != MAL_PROMISE_PENDING;
+}
+
 static MalLoadedRuntimeImage *load_runtime_image(const MalDevelopmentImage *image) {
     const char *error = "ok";
     MalLoadedRuntimeImage *loaded = mal_runtime_image_load_with_host_resolver(
@@ -65,7 +72,7 @@ static bool attach_overlay(
     const MalRuntimeImage *program,
     const MalNativeProgramRelocation *relocation) {
     if (image->overlay == nullptr) return true;
-    if (mal_native_overlay_attach_fragment(vm, image->overlay, program->function_count, relocation)) {
+    if (mal_native_overlay_attach_fragment(vm, image->overlay, program, relocation)) {
         return true;
     }
     fprintf(stderr, "native code does not match development image %s\n", image->label);
@@ -134,6 +141,11 @@ int mal_dev_run_images(
         return 2;
     }
     MalRuntimeImage root_program = *mal_loaded_runtime_image_get(loaded);
+    if (root_program.module_import_count > 0) {
+        fprintf(stderr, "development image %s imports from no earlier image\n", images[0].label);
+        mal_loaded_runtime_image_free(loaded);
+        return 2;
+    }
     if (assets != nullptr) {
         root_program.assets = assets;
         root_program.asset_count = asset_count;
@@ -196,6 +208,7 @@ int mal_dev_run_images(
             entry = mal_vm_splice_runtime_image(&vm, program);
             if (entry < 0) {
                 mal_loaded_runtime_image_free(fragment);
+                mal_vm_report_uncaught(&vm);
                 break;
             }
             mal_vm_retain_loaded_runtime_image(&vm, fragment);
@@ -210,6 +223,13 @@ int mal_dev_run_images(
         callables[index] = mal_vm_create_callable(&vm, entry);
         mal_vm_run(&vm, callables[index]);
         if (vm.completion.kind == MAL_COMPLETION_THROW) break;
+        if (index + 1 < wire_count) {
+            // Later images may import what this one's top-level await initializes,
+            // so they evaluate once it settles, in the application host's order.
+            mal_host_run_event_loop_until(&vm, image_entry_settled, nullptr);
+            if (!mal_vm_check_entry_evaluation(&vm)) break;
+            vm.entry_async_promise = mal_value_new_undefined();
+        }
     }
     mal_host_run_event_loop(&vm);
     int code = mal_host_finish_process(&vm, vm.completion.kind == MAL_COMPLETION_THROW ? 1 : 0);

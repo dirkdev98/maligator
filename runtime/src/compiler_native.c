@@ -5,14 +5,39 @@
 bool mal_native_overlay_attach_fragment(
     MalVm *vm,
     const MalNativeOverlay *overlay,
-    i32 function_count,
+    const MalRuntimeImage *program,
     const MalNativeProgramRelocation *relocation
 ) {
+    i32 function_count = program->function_count;
     if (overlay->function_count != function_count || overlay->relocation == nullptr) return false;
+    i32 import_count = 0;
+    for (i32 index = 0; index < program->module_import_count; index++) {
+        if (program->module_imports[index].kind != MAL_MODULE_LINK_CJS) import_count++;
+    }
+    if (import_count != overlay->global_import_count) return false;
+    const MalNativeProgramRelocation *attached = overlay->relocation;
     if (*overlay->relocation_attached) {
-        if (memcmp(overlay->relocation, relocation, sizeof *relocation) != 0) return false;
-    } else {
+        if (attached->function_base != relocation->function_base ||
+            attached->global_base != relocation->global_base ||
+            attached->string_base != relocation->string_base ||
+            attached->bigint_base != relocation->bigint_base ||
+            attached->literal_template_base != relocation->literal_template_base) {
+            return false;
+        }
+    }
+    for (i32 index = 0, ordinal = 0; index < program->module_import_count; index++) {
+        const MalModuleLink *link = &program->module_imports[index];
+        if (link->kind == MAL_MODULE_LINK_CJS) continue;
+        if (*overlay->relocation_attached) {
+            if (overlay->global_imports[ordinal] != link->target) return false;
+        } else {
+            overlay->global_imports[ordinal] = link->target;
+        }
+        ordinal++;
+    }
+    if (!*overlay->relocation_attached) {
         *overlay->relocation = *relocation;
+        overlay->relocation->global_imports = overlay->global_imports;
         *overlay->relocation_attached = true;
     }
     MalFunction *functions = (MalFunction *) vm->runtime_image->functions;

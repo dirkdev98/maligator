@@ -29,7 +29,7 @@ const PRODUCER_ROOTS: Record<CompilerProducerStage, Array<string>> = {
 	"build-fragment": ["build-fragment-cache.ts"],
 	"dependency-fragment": ["dependency-fragment-cache.ts"],
 	"test-frontend": ["testing/cache.ts"],
-	"test-fragment": ["testing/fragment-cache.ts"],
+	"test-fragment": ["testing/test-images.ts"],
 };
 
 let installedProducerDigests: Record<CompilerProducerStage, string> | undefined;

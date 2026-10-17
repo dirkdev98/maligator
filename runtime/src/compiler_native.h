@@ -13,6 +13,9 @@ typedef struct MalNativeOverlay {
      */
     MalNativeProgramRelocation *relocation;
     bool *relocation_attached;
+    /** Process-wide storage for the relocation's resolved imported global slots. */
+    i32 *global_imports;
+    i32 global_import_count;
 } MalNativeOverlay;
 
 /** Attach a matching optional native overlay to the newly spliced compiler image. */
@@ -24,13 +27,13 @@ bool mal_compiler_native_attach(
 );
 
 /**
- * Install a program fragment's overlay on the image just loaded or spliced at
- * `relocation`. Fails when the overlay belongs to another image or another attach
- * placed the fragment at different bases.
+ * Install a program fragment's overlay on `program`, the image just loaded or
+ * spliced at `relocation` with its imports resolved. Fails when the overlay belongs
+ * to another image or another attach placed or linked the fragment differently.
  */
 bool mal_native_overlay_attach_fragment(
     MalVm *vm,
     const MalNativeOverlay *overlay,
-    i32 function_count,
+    const MalRuntimeImage *program,
     const MalNativeProgramRelocation *relocation
 );

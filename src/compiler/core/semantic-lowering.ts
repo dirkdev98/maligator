@@ -69,6 +69,9 @@ import type {
 	CoreInitializedCapturedRead,
 	ConstructedCoreCompilation,
 	CoreHostInstallCandidate,
+	CoreModuleInterface,
+	CoreModuleLink,
+	CoreModuleLinks,
 } from "./core-compilation.ts";
 import { CoreEditor } from "./core-editor.ts";
 import { formatCoreProgram } from "./core-format.ts";
@@ -299,6 +302,10 @@ interface CoreFrontendContext {
 
 	/** Free global `Buffer`, installed by the same installer as `node:buffer`. */
 	hostBuffer: { installer: string; retained: boolean } | null;
+
+	/** Modules whose bindings this image publishes to later images of its program. */
+	moduleExports?: "all" | ReadonlySet<string>;
+	commonJsExportNames: (modulePath: string) => ReadonlyArray<string>;
 }
 
 type BindingLocation =
@@ -797,9 +804,13 @@ export function constructSemanticProgramCore(
 		directEvalContext?: DirectEvalContext;
 		facts?: CompilerProgramFacts;
 		intrinsicGlobalReads?: boolean;
+		moduleExports?: "all" | ReadonlySet<string>;
 	} = {},
 ): ConstructedCoreCompilation {
 	const program: CoreFrontendContext = {
+		...(options.moduleExports === undefined
+			? {}
+			: { moduleExports: options.moduleExports }),
 		semantic,
 		core: new CoreProgram(coreOpcodeRegistry),
 		facts: options.facts ?? conservativeCompilerProgramFacts(),
@@ -874,6 +885,7 @@ export function constructSemanticProgramCore(
 		hostModules: [],
 		hostProcess: null,
 		hostBuffer: null,
+		commonJsExportNames: () => [],
 	};
 
 	// Cross-module linking: aliases imported names to their exporter bindings (a
@@ -898,6 +910,7 @@ export function constructSemanticProgramCore(
 	// Host-module bindings resolve to slots as reachable code compiles. Process
 	// instead records reachable compilation without allocating a private slot.
 	program.hostModules = linkage.hostModules;
+	program.commonJsExportNames = linkage.commonJsExportNames;
 	program.hostProcess = linkage.hostProcess
 		? { installer: linkage.hostProcess.installer, retained: false }
 		: null;
@@ -950,6 +963,8 @@ export function constructSemanticProgramCore(
 }
 
 function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompilation {
+	// Exports first: publishing a re-exported import or host export allocates its slot.
+	const moduleLinks = coreModuleLinks(program);
 	const hostInstallCandidates = coreHostInstallCandidates(program);
 	CoreEditor.configureProgram(program.core, {
 		stringConstants: program.stringConstants,
@@ -1010,6 +1025,7 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 					.filter(
 						(installer, index, installers) => installers.indexOf(installer) === index,
 					),
+				...(moduleLinks === undefined ? {} : { moduleLinks }),
 			}),
 		},
 	};
@@ -1439,6 +1455,101 @@ function coreSingleAssignmentCellCandidates(program: CoreFrontendContext): {
 		singleAssignmentGlobalSlots: [...globals].sort((left, right) => left - right),
 		singleAssignmentCapturedSlots: [...captured.values()].sort(
 			(left, right) => left.owner - right.owner || left.index - right.index,
+		),
+	};
+}
+
+function moduleBindingSlot(program: CoreFrontendContext, binding: Binding): number {
+	const location = program.bindingToStorage.get(binding);
+	if (location?.type === "global") return location.index;
+	if (location !== undefined || binding.scopedTo !== "global")
+		throw new Error(`module binding '${binding.name}' has no global slot to publish`);
+	// An export no code of this image reads or writes still needs a slot to alias.
+	const index = program.nextGlobalIndex++;
+	program.bindingToStorage.set(binding, { type: "global", index });
+	return index;
+}
+
+function compareModuleLinks(left: CoreModuleLink, right: CoreModuleLink): number {
+	return (
+		(left.module < right.module ? -1 : left.module > right.module ? 1 : 0) ||
+		(left.kind < right.kind ? -1 : left.kind > right.kind ? 1 : 0) ||
+		(left.name < right.name ? -1 : left.name > right.name ? 1 : 0)
+	);
+}
+
+function coreModuleLinks(program: CoreFrontendContext): CoreModuleLinks | undefined {
+	const graph = program.semantic.graph;
+	if (graph === undefined) return undefined;
+	const exported = program.moduleExports;
+	const exportedFiles =
+		exported === undefined
+			? []
+			: program.semantic.files.filter(
+					(file) => exported === "all" || exported.has(file.path),
+				);
+	const exports: Array<CoreModuleLink> = [];
+	const interfaces: Array<CoreModuleInterface> = [];
+	for (const file of exportedFiles) {
+		if (file.commonjs) {
+			const id = program.cjsModuleId.get(file.path);
+			if (id === undefined) continue;
+			exports.push({ kind: "cjs", module: file.path, name: "", slot: id });
+			interfaces.push({
+				module: file.path,
+				goal: "cjs",
+				exports: program.commonJsExportNames(file.path),
+			});
+			continue;
+		}
+		if (file.type !== "module") continue;
+		const namespace = program.moduleNamespaces.get(file.path) ?? [];
+		interfaces.push({
+			module: file.path,
+			goal: "module",
+			exports: namespace.map(({ name }) => name),
+		});
+		for (const { name, exporter } of namespace) {
+			exports.push({
+				kind: "binding",
+				module: file.path,
+				name,
+				slot: moduleBindingSlot(program, exporter),
+			});
+		}
+		const namespaceSlot = program.moduleNamespaceSlot.get(file.path);
+		if (namespaceSlot !== undefined)
+			exports.push({
+				kind: "namespace",
+				module: file.path,
+				name: "",
+				slot: namespaceSlot,
+			});
+	}
+	const imports: Array<CoreModuleLink> = [];
+	for (const [binding, location] of program.bindingToStorage) {
+		if (binding.external === undefined || location.type !== "global") continue;
+		imports.push({
+			kind: "binding",
+			module: binding.external.module,
+			name: binding.external.name,
+			slot: location.index,
+		});
+	}
+	for (const [modulePath, slot] of program.moduleNamespaceSlot) {
+		if (graph.modules.get(modulePath)?.external !== undefined)
+			imports.push({ kind: "namespace", module: modulePath, name: "", slot });
+	}
+	for (const [modulePath, id] of program.cjsModuleId) {
+		if (graph.modules.get(modulePath)?.external !== undefined)
+			imports.push({ kind: "cjs", module: modulePath, name: "", slot: id });
+	}
+	if (imports.length === 0 && exports.length === 0) return undefined;
+	return {
+		imports: imports.sort(compareModuleLinks),
+		exports: exports.sort(compareModuleLinks),
+		interfaces: interfaces.sort((left, right) =>
+			left.module < right.module ? -1 : left.module > right.module ? 1 : 0,
 		),
 	};
 }
@@ -2335,6 +2446,16 @@ function assignCjsModuleIds(program: CoreFrontendContext) {
 		if (file.commonjs && !program.cjsModuleId.has(file.path)) {
 			program.cjsModuleId.set(file.path, program.cjsModuleId.size);
 		}
+	}
+	// Ids past this image's own modules name CommonJS modules of earlier images; the
+	// loader aliases their registry entries to the owning image's.
+	for (const [modulePath, record] of program.semantic.graph?.modules ?? []) {
+		if (
+			record.external !== undefined &&
+			record.goal === "cjs" &&
+			!program.cjsModuleId.has(modulePath)
+		)
+			program.cjsModuleId.set(modulePath, program.cjsModuleId.size);
 	}
 }
 

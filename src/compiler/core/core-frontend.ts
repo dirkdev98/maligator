@@ -13,6 +13,8 @@ export interface CoreFrontendOptions {
 	readonly facts?: CompilerProgramFacts;
 	/** Engine implementation code reads intrinsic globals without freezing their properties. */
 	readonly intrinsicGlobalReads?: boolean;
+	/** Modules whose bindings a relocatable image publishes to later images. */
+	readonly moduleExports?: "all" | ReadonlySet<string>;
 	readonly runPhase?: <T>(phase: "construct core ir", run: () => T) => T;
 }
 
@@ -31,6 +33,7 @@ export function lowerSemanticProgramToCore(
 			directEvalContext: options.directEvalContext,
 			facts: options.facts,
 			intrinsicGlobalReads: options.intrinsicGlobalReads,
+			moduleExports: options.moduleExports,
 		}),
 	);
 }

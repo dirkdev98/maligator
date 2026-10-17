@@ -1,3 +1,4 @@
+import type { CoreModuleInterface } from "../core/core-compilation.ts";
 import type {
 	CoreBuiltinIdentityDecision,
 	CoreCollectionBuiltinOperation,
@@ -795,6 +796,8 @@ export function vmCallProvesBuiltin(
 export interface ProgramImage {
 	readonly runtime: RuntimeImage;
 	readonly native: NativePlan;
+	/** What later images of a relocatable program compile against; never serialized. */
+	readonly moduleInterfaces?: ReadonlyArray<CoreModuleInterface>;
 	readonly diagnostics: {
 		sourceCallSites?: ReadonlyArray<SourceCallSite>;
 		profileFunctions?: ReadonlyArray<SourceFunctionOrigin | undefined>;

@@ -12,7 +12,7 @@ Create these files in a project with `maligator.build.ts`:
 maligator test sum.test.ts
 ```
 
-The runner reports both tests as passed. It discovers `*.test.{js,mjs,ts,mts}` and `*.spec.{js,mjs,ts,mts}` when given directories or no explicit files. Successful results are never cached: every selected test executes on each run.
+The runner reports both tests as passed. It discovers `*.test.{js,mjs,ts,mts}` and `*.spec.{js,mjs,ts,mts}` when given directories or no explicit files. Successful results are never cached: every selected test executes on each run. Compiled code is cached instead: an edit recompiles the edited test file, or the application modules the tests import, and leaves dependencies and the other test files alone.
 
 ## Filter and repeat tests
 

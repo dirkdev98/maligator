@@ -2,7 +2,6 @@ import {
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
-	readdirSync,
 	statSync,
 	utimesSync,
 	writeFileSync,
@@ -668,7 +667,7 @@ describe("normal build frontend cache", () => {
 		expect(changedAlpha.wires![2]).toEqual(combined.wires![2]);
 	}, 30_000);
 
-	it("retains dependency linkage validation across local exported-value edits", () => {
+	it("recompiles the application only when a dependency's exported names change", () => {
 		const root = temporaryDirectory();
 		const cacheDirectory = path.join(root, "cache");
 		const entrypoint = path.join(root, "entry.mjs");
@@ -698,27 +697,30 @@ describe("normal build frontend cache", () => {
 			optimization: "development" as const,
 			relocatable: true,
 		};
+		const rebuild = (file: string, source: string) => {
+			write(file, source);
+			session.invalidate(file);
+			return compileBuildFrontend(options).fragmentArtifacts;
+		};
 
 		expect(compileBuildFrontend(options).fragmentArtifacts).toEqual({
 			hits: 0,
 			misses: 2,
 		});
-		expect(readdirSync(path.join(cacheDirectory, "linkages"))).toHaveLength(1);
-		write(local, `export const revision = 1;\n`);
-		session.invalidate(local);
-		expect(compileBuildFrontend(options).fragmentArtifacts).toEqual({
+		expect(rebuild(local, `export const revision = 1;\n`)).toEqual({
 			hits: 1,
 			misses: 1,
 		});
-		expect(readdirSync(path.join(cacheDirectory, "linkages"))).toHaveLength(1);
-
-		write(dependency, `export const answer = 43;\n`);
-		session.invalidate(dependency);
-		compileBuildFrontend(options);
-		expect(readdirSync(path.join(cacheDirectory, "linkages"))).toHaveLength(2);
+		expect(rebuild(dependency, `export const answer = 43;\n`)).toEqual({
+			hits: 1,
+			misses: 1,
+		});
+		expect(
+			rebuild(dependency, `export const answer = 43;\nexport const added = true;\n`),
+		).toEqual({ hits: 0, misses: 2 });
 	});
 
-	it("falls back to a whole image for namespace imports across the boundary", () => {
+	it("links namespace imports across the dependency boundary", () => {
 		const root = temporaryDirectory();
 		const cacheDirectory = path.join(root, "cache");
 		const entrypoint = path.join(root, "entry.mjs");
@@ -745,11 +747,11 @@ describe("normal build frontend cache", () => {
 			relocatable: true,
 		});
 
-		expect(compiled.wires).toBeUndefined();
-		expect(compiled.fragmentFallback).toContain("namespace import");
+		expect(compiled.fragmentFallback).toBeUndefined();
+		expect(compiled.wires).toHaveLength(2);
 	});
 
-	it("falls back when a dependency export has a live mutable binding", () => {
+	it("links a dependency export that a dependency function reassigns", () => {
 		const root = temporaryDirectory();
 		const cacheDirectory = path.join(root, "cache");
 		const entrypoint = path.join(root, "entry.mjs");
@@ -783,8 +785,8 @@ describe("normal build frontend cache", () => {
 			},
 		});
 
-		expect(compiled.wires).toBeUndefined();
-		expect(compiled.fragmentFallback).toContain("live export 'answer'");
+		expect(compiled.fragmentFallback).toBeUndefined();
+		expect(compiled.wires).toHaveLength(2);
 	}, 30_000);
 
 	it("does not reuse policy-unchecked portable output for a checked native build", () => {

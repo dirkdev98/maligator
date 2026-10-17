@@ -92,6 +92,22 @@ export interface ModuleRecord {
 	/** In-memory source supplied by the embedding toolchain (for example maligator:test). */
 	virtual?: true;
 	platform?: PlatformModule;
+	/**
+	 * Owned and already evaluated by an earlier image of a relocatable program. The
+	 * record has no source; its interface lets the linker bind imports that the
+	 * loader resolves against that image's published exports.
+	 */
+	external?: ExternalModuleInterface;
+}
+
+/** The linkable surface an earlier image publishes for one of its modules. */
+export interface ExternalModuleInterface {
+	goal: "module" | "cjs";
+	/**
+	 * ESM: every resolvable export name, `export *` included. CommonJS: the
+	 * statically detected `module.exports` names.
+	 */
+	exports: ReadonlyArray<string>;
 }
 
 export interface ModuleGraph {
@@ -256,6 +272,13 @@ export interface BuildModuleGraphOptions {
 
 	/** In-process parse reuse for retained compiler/test sessions. */
 	parseCache?: ModuleParseCache;
+
+	/**
+	 * Modules owned by earlier images, keyed by graph identity. The walk stops at
+	 * them: their records carry only an interface, and the compiled image imports
+	 * their bindings through the loader instead of compiling them again.
+	 */
+	externalModules?: ReadonlyMap<string, ExternalModuleInterface>;
 }
 
 /**
@@ -432,6 +455,10 @@ export function buildModuleGraph(
 					`Internal module '${dependency.specifier}' is reserved for platform sources`,
 				);
 			}
+			// A toolchain module an earlier image owns keeps its specifier identity.
+			if (options.externalModules?.has(aliasedSpecifier)) {
+				return { ...dependency, resolvedPath: aliasedSpecifier };
+			}
 			const toolchainModule = virtualModule(aliasedSpecifier);
 			if (toolchainModule !== undefined) {
 				const entryPreludeRequire =
@@ -520,6 +547,11 @@ export function buildModuleGraph(
 		for (const dependency of dependencies) {
 			const resolvedPath = dependency.resolvedPath;
 			if (!resolvedPath || modules.has(resolvedPath)) {
+				continue;
+			}
+			const external = options.externalModules?.get(resolvedPath);
+			if (external !== undefined) {
+				modules.set(resolvedPath, externalModuleRecord(resolvedPath, external));
 				continue;
 			}
 			// A `node:*` host built-in resolves to a virtual record from the catalog —
@@ -811,6 +843,20 @@ type ResolveResult =
 	// `hard` marks a `node:*` error that must reject even a literal dynamic import
 	// (not defer): the surface is off, or the built-in is unknown.
 	| { error: string; hard?: boolean };
+
+function externalModuleRecord(
+	modulePath: string,
+	external: ExternalModuleInterface,
+): ModuleRecord {
+	return {
+		path: modulePath,
+		goal: external.goal,
+		source: "",
+		parsed: parseModule(""),
+		dependencies: [],
+		external,
+	};
+}
 
 /**
  * A minimal virtual record for a supported `node:*` host built-in. It carries no

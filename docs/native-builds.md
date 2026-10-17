@@ -63,7 +63,15 @@ normal iteration and useful native crash diagnostics.
 A development build links the same ordered images `run` loads instead of one whole
 program. Each image gets a relocatable native overlay that depends only on that
 image, and the binary splices the embedded images at startup, so an application edit
-recompiles only the application's objects. Code does not optimize across images,
+recompiles only the application's objects.
+
+Images link the way modules do. An image publishes the bindings of the modules later
+images import, and the loader aliases each import to that slot while it splices
+(`runtime/src/module_links.c`). So an import stays a live binding and a namespace object
+is shared between images. An image evaluates only after the images before it have
+settled, top-level await included. A dependency edit that keeps its exported names leaves
+the application image cached. Note that `require` and `import()` across an image boundary
+still compile one whole program. Code does not optimize across images,
 which costs a few percent of throughput against a whole-program development
 binary. Configured assets are embedded in a translation unit of their own, so an asset
 edit and an application edit never recompile each other's objects. A build with

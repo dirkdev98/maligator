@@ -135,6 +135,13 @@ export interface Binding {
 	 * uninitialized (TDZ) slot.
 	 */
 	imported?: true;
+
+	/**
+	 * A binding owned by a module of an earlier image. Its global slot is an
+	 * import the loader aliases to that image's published slot, so the value is
+	 * live and written only by the owning image.
+	 */
+	external?: { module: string; name: string };
 }
 
 interface SemanticAnalysisCandidates {

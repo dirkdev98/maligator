@@ -5,6 +5,7 @@ import type { CommandContext } from "../cli-commands.ts";
 import type { TestCommand } from "../cli.ts";
 import { CommandProgress } from "../command-progress.ts";
 import { frontendDependencyUnchanged } from "../frontend-cache.ts";
+import { UnsupportedLinkedImagesError } from "../linked-images.ts";
 import { hostExecutionTarget, resolveExecution } from "../platform/execution.ts";
 import {
 	compileIsolatedTestImage,
@@ -14,17 +15,14 @@ import {
 import type { CompiledTestImage, TestFrontendPhases } from "./cache.ts";
 import { discoverTestFiles } from "./discovery.ts";
 import { executeTestApplication } from "./execute.ts";
-import {
-	compileRelocatableTestImage,
-	UnsupportedRelocatableTestImageError,
-} from "./fragment-cache.ts";
-import type { CompiledRelocatableTestImage } from "./fragment-cache.ts";
 import { prepareTestApplication } from "./prepare.ts";
 import type { PreparedTestApplication, TestCompilationInput } from "./prepare.ts";
 import type { TestEvent, TestFailure, TestRunResult } from "./protocol.ts";
 import { scheduleTestJobs } from "./scheduler.ts";
 import { TestApplicationSession, TestSourceChangedError } from "./session.ts";
 import type { TestGenerationControls } from "./session.ts";
+import { compileLinkedTestImage } from "./test-images.ts";
+import type { CompiledLinkedTestImage } from "./test-images.ts";
 
 export interface TestCommandSummary {
 	exitCode: number;
@@ -242,14 +240,14 @@ export function prepareIsolatedTestCommand(
 		session: new TestCompilationSession(),
 		dependencyWorker: context.dependencyWorker,
 	};
-	let compiled: CompiledTestImage | CompiledRelocatableTestImage;
+	let compiled: CompiledTestImage | CompiledLinkedTestImage;
 	try {
-		compiled = compileRelocatableTestImage({
+		compiled = compileLinkedTestImage({
 			...options,
 			runner: { kind: "process", runOptions, resultPrefix: ISOLATED_TEST_RESULT_PREFIX },
 		});
 	} catch (error) {
-		if (!(error instanceof UnsupportedRelocatableTestImageError)) throw error;
+		if (!(error instanceof UnsupportedLinkedImagesError)) throw error;
 		compiled = compileIsolatedTestImage(options, runOptions, ISOLATED_TEST_RESULT_PREFIX);
 	}
 	return {

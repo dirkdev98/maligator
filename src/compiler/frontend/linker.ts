@@ -100,6 +100,9 @@ export interface ModuleLinkage {
 
 	/** The free global `Buffer`, backed by the `node:buffer` module installer. */
 	hostBuffer?: { installer: string };
+
+	/** Statically detected `module.exports` names of a CommonJS module, sorted. */
+	commonJsExportNames: (modulePath: string) => ReadonlyArray<string>;
 }
 
 type ExportEntry =
@@ -126,6 +129,7 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 		moduleNamespaces: new Map(),
 		cjsImports: new Map(),
 		hostModules: [],
+		commonJsExportNames: () => [],
 	};
 
 	const graph = program.graph;
@@ -213,6 +217,16 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 	const exportInfoCache = new Map<string, CjsExportInfo>();
 	const cjsExportInfo = (cjsPath: string): CjsExportInfo => {
 		let info = exportInfoCache.get(cjsPath);
+		const external = graph.modules.get(cjsPath)?.external;
+		if (!info && external !== undefined) {
+			info = {
+				names: new Set(external.exports),
+				complete: false,
+				reassignsModuleExports: false,
+				reexports: new Set<string>(),
+			};
+			exportInfoCache.set(cjsPath, info);
+		}
 		if (!info) {
 			const ast = fileByPath.get(cjsPath)?.ast;
 			info = ast
@@ -241,6 +255,9 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 		}
 		return info;
 	};
+
+	linkage.commonJsExportNames = (modulePath) =>
+		[...cjsExportInfo(modulePath).names].sort();
 
 	// import binding -> where it imports from. Lets resolveExport follow a
 	// re-exported import (`import {x} from "a"; export {x};`).
@@ -329,6 +346,28 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 			installer: spec.installer,
 			exports: exportBindings,
 		});
+	}
+
+	// Modules of earlier images export synthetic bindings importers alias like any
+	// exporter. Their slots stay unwritten here: the loader aliases each to the slot
+	// the owning image publishes, which keeps the binding live.
+	for (const [modulePath, record] of graph.modules) {
+		if (record.external === undefined || record.goal === "cjs") continue;
+		const moduleExports: ModuleExports = { named: new Map(), stars: [] };
+		for (const name of record.external.exports) {
+			moduleExports.named.set(name, {
+				kind: "local",
+				binding: {
+					kind: "let",
+					name: `*external:${modulePath}:${name}*`,
+					usageNodes: [],
+					scopedTo: "global",
+					imported: true,
+					external: { module: modulePath, name },
+				},
+			});
+		}
+		exportsByModule.set(modulePath, moduleExports);
 	}
 
 	// --- Phase A: scan exports + imports of every module ---

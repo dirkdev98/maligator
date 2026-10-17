@@ -11,10 +11,7 @@ import {
 import * as path from "node:path";
 import type { ResolvedBuildConfig } from "./build-config.ts";
 import { assertEvalPolicy, assertRegexpPolicy } from "./build-config.ts";
-import {
-	compileBuildFragments,
-	UnsupportedBuildFragmentsError,
-} from "./build-fragment-cache.ts";
+import { compileBuildFragments } from "./build-fragment-cache.ts";
 import { maligatorCacheDirectory } from "./cache-root.ts";
 import {
 	compilerConfigurationIdentity,
@@ -88,6 +85,7 @@ import {
 	frontendWirePath,
 } from "./frontend-cache.ts";
 import type { FrontendDependencyIdentity } from "./frontend-cache.ts";
+import { UnsupportedLinkedImagesError } from "./linked-images.ts";
 import { executionIdentity } from "./platform/execution.ts";
 import type { Execution } from "./platform/execution.ts";
 import {
@@ -841,7 +839,6 @@ function prepareBuildFrontend(
 					config: options.config,
 					execution: options.execution,
 					facts,
-					semantic: sharedSemantic,
 					stripTypes: options.stripTypes,
 					stripperIdentity: options.stripperIdentity,
 					cacheDirectory: options.cacheDirectory,
@@ -895,7 +892,7 @@ function prepareBuildFrontend(
 					misses: fragments.artifactMisses,
 				};
 			} catch (error) {
-				if (!(error instanceof UnsupportedBuildFragmentsError)) throw error;
+				if (!(error instanceof UnsupportedLinkedImagesError)) throw error;
 				fragmentFallback = error.message;
 				prepareMain();
 				programImage = compileProgramImage(
