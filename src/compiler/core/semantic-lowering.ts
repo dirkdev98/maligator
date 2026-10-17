@@ -9879,6 +9879,7 @@ function compileExpression(
 				cursor,
 				expression.source,
 				expression.options,
+				(expression as { phase?: string | null }).phase,
 			);
 		}
 		case "NewExpression": {
@@ -13125,21 +13126,27 @@ function compileImportExpression(
 	cursor: CoreFrontendCursor,
 	source: ESTree.Expression,
 	options?: ESTree.Expression | null,
+	phase?: string | null,
 ): number {
 	const targetPath = dynamicImportTargetPath(program, fn, source);
 	const specifier = compileExpression(program, fn, cursor, source);
 	const optionsRegister = options
 		? compileExpression(program, fn, cursor, options)
 		: compileUndefined(fn, cursor);
+	if (phase === "source") {
+		// Every module this program can load is a source text module, so after the
+		// specifier and options are checked the import rejects as GetModuleSource does.
+		return emitDynamicImportCall(program, fn, cursor, specifier, optionsRegister, {
+			failure: new SyntaxDiagnostic(
+				"resolution",
+				"Source text modules have no module source for a source-phase import",
+			),
+		});
+	}
 	if (targetPath) {
-		return emitDynamicImportCall(
-			program,
-			fn,
-			cursor,
-			specifier,
-			optionsRegister,
-			targetPath,
-		);
+		return emitDynamicImportCall(program, fn, cursor, specifier, optionsRegister, {
+			path: targetPath,
+		});
 	}
 	if (source.type === "Literal") {
 		return emitDynamicImportCall(program, fn, cursor, specifier, optionsRegister);
@@ -13151,7 +13158,7 @@ function compileImportExpression(
 		cursor,
 		specifier,
 		optionsRegister,
-		undefined,
+		{},
 		dynamicImportCandidates(program, fn),
 	);
 }
@@ -13281,18 +13288,22 @@ function emitDynamicImportCall(
 	cursor: CoreFrontendCursor,
 	specifier: number,
 	options: number,
-	targetPath?: string,
+	target: { path?: string; failure?: SyntaxDiagnostic } = {},
 	candidates: ReadonlyArray<DynamicImportCandidate> = [],
 ): number {
-	const emitTarget = (path: string | undefined): Array<number> => {
-		const failure = path === undefined ? undefined : program.failedModules.get(path);
+	const emitTarget = (
+		path: string | undefined,
+		rejection?: SyntaxDiagnostic,
+	): Array<number> => {
+		const failure =
+			rejection ?? (path === undefined ? undefined : program.failedModules.get(path));
 		const targetFile =
 			path && failure === undefined
 				? program.semantic.files.find((file) => file.path === path)
 				: undefined;
 		const targetInitIndex =
 			failure !== undefined
-				? compileFailedModuleInitializer(program, fn.semanticFile, path!, failure)
+				? compileFailedModuleInitializer(program, fn.semanticFile, path ?? "", failure)
 				: targetFile?.commonjs
 					? compileCjsDynamicInitializer(program, targetFile)
 					: targetFile
@@ -13327,7 +13338,10 @@ function emitDynamicImportCall(
 			namespace = namespaceExports
 				? emitNamespaceObjectRegister(program, fn, cursor.block, namespaceExports, path)
 				: compileUndefined(fn, cursor);
-		const statusSlot = path ? getDynamicModuleStatusSlot(program, path) : -1;
+		// A rejection without a module still needs module state: without a status cell
+		// the runtime resolves with the namespace instead of running the initializer.
+		const stateKey = path || (rejection === undefined ? undefined : "\0source-phase");
+		const statusSlot = stateKey ? getDynamicModuleStatusSlot(program, stateKey) : -1;
 		return [
 			initFn,
 			namespace,
@@ -13335,9 +13349,9 @@ function emitDynamicImportCall(
 				? compileNumberLiteral(fn, cursor, -1)
 				: compileGlobalIndex(fn, cursor, statusSlot),
 			...[
-				path ? getModuleEvaluationErrorSlot(program, path) : -1,
-				path ? getModuleEvaluationRecordSlot(program, path) : -1,
-				path ? getModuleEvaluationContextSlot(program) : -1,
+				stateKey ? getModuleEvaluationErrorSlot(program, stateKey) : -1,
+				stateKey ? getModuleEvaluationRecordSlot(program, stateKey) : -1,
+				stateKey ? getModuleEvaluationContextSlot(program) : -1,
 			].map((slot) =>
 				slot < 0
 					? compileNumberLiteral(fn, cursor, -1)
@@ -13353,7 +13367,7 @@ function emitDynamicImportCall(
 		intrinsic: "__dynamicImport",
 	});
 	const thisRegister = compileUndefined(fn, cursor);
-	const targetArguments = emitTarget(targetPath);
+	const targetArguments = emitTarget(target.path, target.failure);
 	const candidateArguments = candidates.flatMap((candidate) => [
 		compileStaticString(program, fn, cursor, candidate.specifier),
 		...emitTarget(candidate.targetPath),

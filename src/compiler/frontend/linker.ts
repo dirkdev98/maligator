@@ -400,6 +400,18 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 			switch (statement.type) {
 				case "ImportDeclaration": {
 					const module = resolveDependency(file, literalValue(statement.source), true);
+					if (statement.phase === "source") {
+						// Only a host module (such as WebAssembly) has a module source;
+						// GetModuleSource of a source text module throws a SyntaxError.
+						fail(
+							file.path,
+							new SyntaxDiagnostic(
+								"resolution",
+								`Linker: ${module} is a source text module, which has no module source (source-phase import in ${file.path})`,
+							),
+						);
+						continue;
+					}
 					const moduleIsCommonJs = goalOf(module) === "cjs";
 					for (const specifier of statement.specifiers) {
 						const binding = file.nodeToBinding.get(specifier.local);

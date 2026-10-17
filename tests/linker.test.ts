@@ -414,3 +414,24 @@ test("fails the build for a load or link error behind a static import", () => {
 		linkModules(loadEntrypointAndRunSemanticAnalysis(path.join(unlinkable, "main.mjs"))),
 	).toThrow("does not export 'x'");
 });
+
+test("rejects a source-phase import of a source text module", () => {
+	const dynamic = tree({
+		"main.mjs": `import("./indirect.mjs");\n`,
+		"indirect.mjs": `import source s from "./plain.mjs";\nexport { s };\n`,
+		"plain.mjs": `export const v = 1;\n`,
+	});
+	const direct = tree({
+		"main.mjs": `import source s from "./plain.mjs";\nglobalThis.sink = s;\n`,
+		"plain.mjs": `export const v = 1;\n`,
+	});
+
+	const linkage = linkModules(
+		loadEntrypointAndRunSemanticAnalysis(path.join(dynamic, "main.mjs")),
+	);
+
+	expect([...linkage.failedModules.keys()]).toEqual([path.join(dynamic, "indirect.mjs")]);
+	expect(() =>
+		linkModules(loadEntrypointAndRunSemanticAnalysis(path.join(direct, "main.mjs"))),
+	).toThrow("has no module source");
+});
