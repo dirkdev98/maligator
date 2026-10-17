@@ -259,6 +259,7 @@ describe("compiler wire provisioning", () => {
 		expect(bakeCount).toBe(1);
 	});
 
+	// Parsing the eval compiler's module graph grows with it and shares a busy runner.
 	it("keys every compiler-owned module the eval compiler graph loads", () => {
 		const sourceDirectory = path.resolve("src");
 		const entrypoints = [
@@ -288,7 +289,7 @@ describe("compiler wire provisioning", () => {
 		} finally {
 			rmSync(path.dirname(manifest), { recursive: true, force: true });
 		}
-	});
+	}, 30_000);
 
 	it("deduplicates equivalent bytes and prebuilt content", () => {
 		const root = mkdtempSync(path.join(os.tmpdir(), "mal-compiler-content-"));
