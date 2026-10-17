@@ -7822,6 +7822,13 @@ function compileForInOfBindingAndBody(
 		if (declaration) {
 			compilePatternTarget(program, fn, bindCursor, declaration.id, boundValue);
 		}
+	} else if ((left as ESTree.Node).type === "CallExpression") {
+		compileCallAssignmentTarget(
+			program,
+			fn,
+			bindCursor,
+			left as unknown as ESTree.CallExpression,
+		);
 	} else {
 		compilePatternTarget(program, fn, bindCursor, left, boundValue, true);
 	}
@@ -10399,12 +10406,41 @@ function compileFunctionExpression(
 	return destination;
 }
 
+/**
+ * Annex B's runtime error for a call used as an assignment target, which only
+ * sloppy code can parse: the call runs, then a ReferenceError is thrown before
+ * anything else is evaluated.
+ */
+function compileCallAssignmentTarget(
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
+	call: ESTree.CallExpression,
+): number {
+	compileExpression(program, fn, cursor, call);
+	return emitThrowError(
+		program,
+		fn,
+		cursor,
+		"ReferenceError",
+		"Invalid assignment target",
+	);
+}
+
 function compileAssignment(
 	program: CoreFrontendContext,
 	fn: CoreFrontendFunction,
 	cursor: CoreFrontendCursor,
 	assignmentExpression: ESTree.AssignmentExpression,
 ): number {
+	if ((assignmentExpression.left as ESTree.Node).type === "CallExpression") {
+		return compileCallAssignmentTarget(
+			program,
+			fn,
+			cursor,
+			assignmentExpression.left as unknown as ESTree.CallExpression,
+		);
+	}
 	if (
 		assignmentExpression.operator === "||=" ||
 		assignmentExpression.operator === "&&=" ||
@@ -11435,6 +11471,9 @@ function compileUpdateExpression(
 	// `oldValue` is the ToNumeric result, so postfix returns the coerced value.
 	const step = expression.operator === "++" ? "increment" : "decrement";
 
+	if (expression.argument.type === "CallExpression") {
+		return compileCallAssignmentTarget(program, fn, cursor, expression.argument);
+	}
 	if (expression.argument.type === "Identifier") {
 		const binding = fn.semanticFile.nodeToBinding.get(expression.argument);
 		if (!binding) {
