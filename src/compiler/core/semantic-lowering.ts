@@ -8272,7 +8272,8 @@ function compileContinueStatement(
 			? fn.loops?.findLast((c) => c.kind === "loop")
 			: fn.loops?.findLast((c) => c.kind === "loop" && c.labels?.has(label));
 	if (!target) {
-		return;
+		// meriyah misses a label on a non-iteration statement around the loop.
+		throw new SyntaxDiagnostic("parse", `Undefined continue target '${label ?? ""}'`);
 	}
 
 	emitContinue(program, fn, block, label);
