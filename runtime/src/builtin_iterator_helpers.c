@@ -1445,17 +1445,10 @@ static MalValue mal_iterator_constructor(MalVm *vm, MalValue this_value, const M
 }
 
 /** Whether value's [[Prototype]] chain includes %IteratorPrototype% (≈ instanceof %Iterator%). */
+// OrdinaryHasInstance(%Iterator%, value): a proxy observes the prototype walk,
+// and a throwing getPrototypeOf trap leaves its completion on the vm.
 static bool mal_ih_is_iterator_instance(MalVm *vm, MalValue value) {
-    if (!mal_value_is_object(value)) {
-        return false;
-    }
-    MalObject *target = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ITERATOR_PROTOTYPE]);
-    for (MalObject *proto = mal_object_prototype(mal_value_to_object(value)); proto != nullptr; proto = mal_object_prototype(proto)) {
-        if (proto == target) {
-            return true;
-        }
-    }
-    return false;
+    return mal_vm_ordinary_has_instance(vm, vm->intrinsics[MAL_INTRINSIC_ITERATOR_CONSTRUCTOR], value);
 }
 
 static bool mal_ih_is_default_builtin_iterator(MalVm *vm, MalValue value) {
@@ -1543,7 +1536,11 @@ static MalValue mal_iterator_from(MalVm *vm, MalValue this_value, const MalValue
     }
 
     // Already an Iterator instance (has the helpers): hand it back as-is.
-    if (mal_ih_is_iterator_instance(vm, record.iterator)) {
+    bool instance = mal_ih_is_iterator_instance(vm, record.iterator);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return mal_value_new_undefined();
+    }
+    if (instance) {
         return record.iterator;
     }
     // Otherwise wrap so the result has %IteratorPrototype% in its chain.
