@@ -2,6 +2,7 @@ import type { MessagePort, TaskContext } from "maligator:workers";
 import type { BuildCommandResult, CompilerInstallation } from "./cli-commands.ts";
 import type { BuildCommand, DevCommand, RunCommand } from "./cli.ts";
 import type { CompilerProducerStage } from "./compiler-cache-identity.ts";
+import type { DependencyFragmentWorker } from "./dependency-fragment-cache.ts";
 import type { PreparedTestApplication, TestCompilationInput } from "./testing/prepare.ts";
 
 export interface CompilationPhase {
@@ -30,6 +31,8 @@ export interface CompilerRequestContext {
 	producerDigests: Record<CompilerProducerStage, string>;
 	invalidatedPaths: Array<string>;
 	invalidateAll: boolean;
+	/** Command that compiles independent dependency islands in parallel processes. */
+	dependencyWorker?: DependencyFragmentWorker;
 	cancellation?: SharedArrayBuffer;
 	progress?: MessagePort<CompilationPhase>;
 }

@@ -55,11 +55,12 @@ const installation = productCompilerInstallation(
 );
 
 setCacheMaintenanceCommand([process.argv[0]!]);
+const dependencyWorker = { tool: process.argv[0]!, args: [] };
 
 await runCli(process.argv.slice(2), {
 	stripTypes: stripCompactTypes,
 	installation,
-	compiler: createNativeCompilerService(installation, producerDigests),
+	compiler: createNativeCompilerService(installation, producerDigests, dependencyWorker),
 	rootCompiler: { start: startNativeRootCompilation, validateInputs: validateRootInputs },
 	availableCompileConcurrency: Math.min(
 		workerBudget(process.env.MALIGATOR_WORKERS),
@@ -92,5 +93,5 @@ await runCli(process.argv.slice(2), {
 		},
 		close() {},
 	},
-	dependencyWorker: { tool: process.argv[0]!, args: [] },
+	dependencyWorker,
 });

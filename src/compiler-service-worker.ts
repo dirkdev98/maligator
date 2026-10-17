@@ -50,6 +50,9 @@ function compilationContext(
 	else for (const file of request.invalidatedPaths) session.invalidate(file);
 	return {
 		...retained.context,
+		...(request.dependencyWorker === undefined
+			? {}
+			: { dependencyWorker: request.dependencyWorker }),
 		checkpoint,
 		onCompilationPhase:
 			context.report ??

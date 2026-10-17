@@ -5,6 +5,7 @@ import type {
 	CompilationRequest,
 	CompilerService,
 } from "./compiler-service.ts";
+import type { DependencyFragmentWorker } from "./dependency-fragment-cache.ts";
 
 export interface NodeCompilationJob {
 	id: number;
@@ -33,6 +34,7 @@ interface PendingCompilation {
 
 export function createNodeCompilerService(
 	installation: CompilerInstallation,
+	dependencyWorker?: DependencyFragmentWorker,
 ): CompilerService {
 	let worker: Worker | undefined;
 	let active: PendingCompilation | undefined;
@@ -131,6 +133,7 @@ export function createNodeCompilerService(
 						request: {
 							command,
 							installation,
+							dependencyWorker,
 							compact: options.compact ?? false,
 							invalidatedPaths: options.invalidatedPaths ?? [],
 							invalidateAll: options.invalidateAll ?? false,

@@ -9,13 +9,14 @@ import { startNodeRootCompilation, validateRootInputs } from "./node-root-compil
 import { workerBudget } from "./worker-budget.ts";
 
 const installation = developmentCompilerInstallation(import.meta.dirname);
+const dependencyWorker = { tool: process.execPath, args: [import.meta.filename] };
 
 await runCli(process.argv.slice(2), {
 	stripTypes: stripCompactTypes,
 	installation,
 	...(process.argv[2] === "build"
 		? {
-				compiler: createNodeCompilerService(installation),
+				compiler: createNodeCompilerService(installation, dependencyWorker),
 				rootCompiler: {
 					start: startNodeRootCompilation,
 					validateInputs: validateRootInputs,
@@ -25,5 +26,5 @@ await runCli(process.argv.slice(2), {
 		: {}),
 	developmentProcesses: nodeDevelopmentProcessHost,
 	developmentWatcher: nodeDevelopmentWatchHost,
-	dependencyWorker: { tool: process.execPath, args: [import.meta.filename] },
+	dependencyWorker,
 });

@@ -10,6 +10,7 @@ import type { CompilerInstallation } from "./cli-commands.ts";
 import type { CompilerProducerStage } from "./compiler-cache-identity.ts";
 import type { prepare, prepareTests } from "./compiler-service-worker.ts";
 import type { CompilationPhase, CompilerService } from "./compiler-service.ts";
+import type { DependencyFragmentWorker } from "./dependency-fragment-cache.ts";
 
 type CompilerWorker = { prepare: typeof prepare; prepareTests: typeof prepareTests };
 
@@ -69,6 +70,7 @@ function observePhases(onPhase: ((phase: CompilationPhase) => void) | undefined)
 export function createNativeCompilerService(
 	installation: CompilerInstallation,
 	producerDigests: Record<CompilerProducerStage, string>,
+	dependencyWorker?: DependencyFragmentWorker,
 ): CompilerService {
 	let pool: WorkerPool<CompilerWorker> | undefined;
 	const parallelism = capabilities().parallelism;
@@ -107,6 +109,7 @@ export function createNativeCompilerService(
 							command,
 							installation,
 							producerDigests,
+							dependencyWorker,
 							compact: options.compact ?? false,
 							invalidatedPaths: options.invalidatedPaths ?? [],
 							invalidateAll: options.invalidateAll ?? false,
@@ -145,6 +148,7 @@ export function createNativeCompilerService(
 							input,
 							installation,
 							producerDigests,
+							dependencyWorker,
 							invalidatedPaths: options.invalidatedPaths ?? [],
 							invalidateAll: options.invalidateAll ?? false,
 							cancellation: cancellation.buffer,
