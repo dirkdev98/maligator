@@ -58,9 +58,10 @@ rooting, and resource-safety defects can interrupt that order.
       fragment's compiler artifact, and a runner that splices them at startup. On an
       Express and Valibot app (216 dependencies) a rebuild after an edit drops from
       4.4 s to 0.7 s and adding a function no longer recompiles dependency objects.
-      `bench/javascript.mjs` runs within 3% of the whole-program development binary
-      (2.42 s against 2.35 s); what is left is cross-fragment calls through the
-      boxed boundary and link-table loads. Programs with assets fall back to the
+      `bench/javascript.mjs`, a single fragment, runs 2.6% slower than the
+      whole-program development binary (median of 8 interleaved pairs, 2.26 s against
+      2.20 s, equal checksums), so link-table loads alone cost that much; programs with
+      dependencies add cross-fragment calls through the boxed boundary. Programs with assets fall back to the
       whole-program build, and worker roots link their whole-program images behind
       the compiled registry. Before switching the default: compare the JavaScript
       benchmark family and the HTTP benchmarks in both modes. Production builds stay
@@ -499,13 +500,16 @@ iterator cursor is not, by itself, permission to delete its language object.
       Whole-program emission names bodies `mal_compiled_<index>` and writes function,
       string and global indices as literals, so adding one function to the compiler
       shifts most of them: the Wasm engine build recompiles 110 of its 118 generated
-      units, and the self-hosted CLI and Explorer builds pay the same on CI for every
-      compiler commit. Relocatable overlays already avoid this with stem names and
+      units, and the Explorer build pays the same on CI for every compiler commit. The
+      self-hosted CLI is the whole compiler program, so its Extended CI check spends
+      about 7.5 minutes rebuilding and linking it after almost any change under `src`. Relocatable overlays already avoid this with stem names and
       link tables (one added compiler function now recompiles 11 of 370 overlay units).
       Stem names cost nothing at run time; the index literals are the hard part,
       because a link-table load in production code blocks constant folding of
-      identity guards. Measure that cost, or find an emission that keeps literals
-      in the unit that owns them, before choosing.
+      identity guards. In development builds the loads cost 2.6% on
+      `bench/javascript.mjs` (see the fragment item); measure production builds, or
+      find an emission that keeps literals in the unit that owns them, before
+      choosing.
 
 ## Compiler measurement and diagnostics
 
