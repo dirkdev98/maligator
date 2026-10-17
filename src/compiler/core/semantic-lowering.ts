@@ -12151,6 +12151,13 @@ function compileObjectExpression(
 				homeObjectBinding,
 				accessorNameHint,
 			);
+			if (name === undefined) {
+				cursor.block.emitter.emit({
+					type: "setFunctionName",
+					registers: [accessor, key],
+					namePrefix: property.kind,
+				});
+			}
 			cursor.block.emitter.emit({
 				type: "defineAccessor",
 				registers: [object, key, accessor],
