@@ -27,6 +27,31 @@ function write(file: string, source: string): void {
 	writeFileSync(file, source);
 }
 
+/** A project whose entry imports the CommonJS package `located`; returns the entry. */
+function interpretedPackageProject(directory: string, packageSource: string): string {
+	const packageDirectory = path.join(directory, "node_modules/located");
+	mkdirSync(packageDirectory, { recursive: true });
+	write(path.join(directory, "package.json"), `{"type":"module"}\n`);
+	write(path.join(packageDirectory, "package.json"), `{"main":"./index.js"}\n`);
+	write(path.join(packageDirectory, "index.js"), packageSource);
+	const entrypoint = path.join(directory, "entry.mjs");
+	write(entrypoint, `import located from "located";\nconsole.log(located);\n`);
+	return entrypoint;
+}
+
+function compileInterpretedProject(entrypoint: string, cacheDirectory: string) {
+	return compileBuildFrontend({
+		entrypoint,
+		config: resolveBuildConfig({}),
+		stripTypes: stripCompactTypes,
+		stripperIdentity: "build-fragment-location-test",
+		cacheDirectory,
+		optimization: "development",
+		relocatable: true,
+		interpreted: true,
+	});
+}
+
 function compile(
 	entrypoint: string,
 	cacheDirectory: string,
@@ -780,7 +805,7 @@ describe("normal build frontend cache", () => {
 		const compilerArtifacts = path.join(cacheDirectory, "frontend/compiler-artifacts");
 
 		const interpreted = compileBuildFrontend({ ...options, interpreted: true });
-		expect(interpreted.fragmentArtifacts).toEqual({ hits: 0, misses: 2 });
+		expect(interpreted.fragmentArtifacts).toEqual({ hits: 0, misses: 3 });
 		expect(existsSync(compilerArtifacts)).toBe(false);
 		expect(compileBuildFrontend({ ...options, interpreted: true }).cache).toBe("hit");
 
@@ -788,6 +813,63 @@ describe("normal build frontend cache", () => {
 		expect(native.fragmentArtifacts).toEqual({ hits: 0, misses: 2 });
 		expect(native.fragmentCompilerArtifacts).toHaveLength(2);
 		expect(native.programImage.native.functions.length).toBeGreaterThan(0);
+	});
+
+	it("reuses an interpreted dependency image at another project location", () => {
+		const root = temporaryDirectory();
+		const cacheDirectory = path.join(root, "cache");
+		const first = interpretedPackageProject(
+			path.join(root, "first"),
+			`module.exports = { dirname: __dirname };\n`,
+		);
+		const second = interpretedPackageProject(
+			path.join(root, "second-location"),
+			`module.exports = { dirname: __dirname };\n`,
+		);
+
+		const compiledFirst = compileInterpretedProject(first, cacheDirectory);
+		const compiledSecond = compileInterpretedProject(second, cacheDirectory);
+
+		expect(compiledFirst.fragmentArtifacts).toEqual({ hits: 0, misses: 3 });
+		expect(compiledSecond.fragmentArtifacts).toEqual({ hits: 1, misses: 2 });
+		const [packageRoot, island] = compiledSecond.wires!.map(deserializeRuntimeImage);
+		const secondModules = path.join(path.dirname(second), "node_modules");
+		expect(packageRoot!.moduleLinks!.exports.map((link) => link.module)).toEqual([
+			path.join(secondModules, ".maligator-package-root.mjs"),
+			path.join(secondModules, ".maligator-package-root.mjs"),
+		]);
+		for (const link of [
+			...island!.moduleLinks!.imports,
+			...island!.moduleLinks!.exports,
+		]) {
+			expect(link.module.startsWith(`${secondModules}${path.sep}`)).toBe(true);
+		}
+	});
+
+	it("keeps a dependency image that names its own location to that location", () => {
+		const root = temporaryDirectory();
+		const cacheDirectory = path.join(root, "cache");
+		const locatedSource = (project: string) =>
+			`module.exports = ${JSON.stringify(path.join(project, "node_modules"))};\n`;
+		const first = interpretedPackageProject(
+			path.join(root, "first"),
+			locatedSource(path.join(root, "first")),
+		);
+		const second = interpretedPackageProject(
+			path.join(root, "second"),
+			locatedSource(path.join(root, "first")),
+		);
+
+		compileInterpretedProject(first, cacheDirectory);
+		expect(compileInterpretedProject(second, cacheDirectory).fragmentArtifacts).toEqual({
+			hits: 0,
+			misses: 3,
+		});
+		write(first, `import located from "located";\nconsole.log(located, 1);\n`);
+		expect(compileInterpretedProject(first, cacheDirectory).fragmentArtifacts).toEqual({
+			hits: 2,
+			misses: 1,
+		});
 	});
 
 	it("links a dependency export that a dependency function reassigns", () => {

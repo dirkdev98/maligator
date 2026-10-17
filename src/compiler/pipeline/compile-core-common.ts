@@ -18,6 +18,7 @@ import type { DirectEvalContext } from "../frontend/direct-eval-context.ts";
 import type { SemanticProgram } from "../frontend/semantic-analysis.ts";
 import { conservativeCompilerProgramFacts } from "../shared/compiler-facts.ts";
 import type { CompilerProgramFacts } from "../shared/compiler-facts.ts";
+import type { PackageRootLowering } from "../shared/module-path-values.ts";
 
 export type CompileCorePhase =
 	| "construct core ir"
@@ -45,6 +46,7 @@ export interface CompileCoreOptions {
 		evalDirect?: boolean;
 		directEvalContext?: DirectEvalContext;
 		moduleExports?: "all" | ReadonlySet<string>;
+		packageRoot?: PackageRootLowering;
 	};
 	afterCoreOptimization?: (
 		program: SealedCoreProgram,

@@ -60,6 +60,13 @@ import type {
 	CompilerIntrinsic,
 } from "../shared/compiler-instruction.ts";
 import {
+	isWithinDirectory,
+	moduleDirname,
+	moduleFileUrl,
+	moduleFileUrlSuffix,
+} from "../shared/module-path-values.ts";
+import type { PackageRootLowering } from "../shared/module-path-values.ts";
+import {
 	NATIVE_STRING_SWITCH_CASE_LIMIT,
 	NATIVE_STRING_SWITCH_CODE_UNIT_LIMIT,
 } from "../shared/native-string-switch.ts";
@@ -308,6 +315,11 @@ interface CoreFrontendContext {
 
 	/** Modules whose bindings this image publishes to later images of its program. */
 	moduleExports?: "all" | ReadonlySet<string>;
+	packageRoot?: {
+		readonly lowering: PackageRootLowering;
+		/** The imported root bindings this image reads, by form. */
+		readonly slots: Map<"path" | "url", number>;
+	};
 	commonJsExportNames: (modulePath: string) => ReadonlyArray<string>;
 }
 
@@ -808,12 +820,16 @@ export function constructSemanticProgramCore(
 		facts?: CompilerProgramFacts;
 		intrinsicGlobalReads?: boolean;
 		moduleExports?: "all" | ReadonlySet<string>;
+		packageRoot?: PackageRootLowering;
 	} = {},
 ): ConstructedCoreCompilation {
 	const program: CoreFrontendContext = {
 		...(options.moduleExports === undefined
 			? {}
 			: { moduleExports: options.moduleExports }),
+		...(options.packageRoot === undefined
+			? {}
+			: { packageRoot: { lowering: options.packageRoot, slots: new Map() } }),
 		semantic,
 		core: new CoreProgram(coreOpcodeRegistry),
 		facts: options.facts ?? conservativeCompilerProgramFacts(),
@@ -1549,6 +1565,11 @@ function coreModuleLinks(program: CoreFrontendContext): CoreModuleLinks | undefi
 	for (const [modulePath, id] of program.cjsModuleId) {
 		if (graph.modules.get(modulePath)?.external !== undefined)
 			imports.push({ kind: "cjs", module: modulePath, name: "", slot: id });
+	}
+	if (program.packageRoot !== undefined) {
+		const { lowering, slots } = program.packageRoot;
+		for (const [name, slot] of slots)
+			imports.push({ kind: "binding", module: lowering.module, name, slot });
 	}
 	if (imports.length === 0 && exports.length === 0) return undefined;
 	return {
@@ -2765,13 +2786,19 @@ function compileCjsModuleWrapper(
 	}
 	for (const [name, value] of [
 		["__filename", file.path],
-		["__dirname", commonJsDirname(file.path)],
+		["__dirname", moduleDirname(file.path)],
 	] as const) {
 		const binding = programScope?.bindings.find(
 			(candidate) => candidate.name === name && !candidate.undeclared,
 		);
 		if (binding) {
-			const register = compileStaticString(program, fn, { block: paramsBlock }, value);
+			const register = compileModulePath(
+				program,
+				fn,
+				{ block: paramsBlock },
+				value,
+				"path",
+			);
 			storeRegisterAtLocation(
 				paramsBlock,
 				getOrCreateBindingLocation(program, fn, binding),
@@ -2791,19 +2818,54 @@ function compileCjsModuleWrapper(
 	return fn.functionIndex;
 }
 
-/** dirname for the absolute loader path without adding a compiler host dependency. */
-function commonJsDirname(filePath: string): string {
-	const separator = Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\"));
-	if (separator < 0) {
-		return ".";
+/**
+ * A module path as a program value, preceded by `prefix`. Under a package root the
+ * root's location is a runtime value, so the image embeds only the path below it.
+ */
+function compileModulePath(
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
+	filePath: string,
+	form: "path" | "url",
+	prefix = "",
+): number {
+	const root = program.packageRoot;
+	if (root === undefined || !isWithinDirectory(filePath, root.lowering.directory)) {
+		return compileStaticString(
+			program,
+			fn,
+			cursor,
+			prefix + (form === "url" ? moduleFileUrl(filePath) : filePath),
+		);
 	}
-	if (separator === 0) {
-		return filePath[0]!;
+	let slot = root.slots.get(form);
+	if (slot === undefined) {
+		slot = program.nextGlobalIndex++;
+		root.slots.set(form, slot);
 	}
-	if (separator === 2 && filePath[1] === ":") {
-		return filePath.slice(0, 3);
-	}
-	return filePath.slice(0, separator);
+	const location = nextCoreVariable(fn);
+	cursor.block.emitter.emit({ type: "loadGlobal", registers: [location], index: slot });
+	const locationText = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
+		type: "unary",
+		registers: [locationText, location],
+		operator: "tostring",
+	});
+	const suffix = filePath.slice(root.lowering.directory.length);
+	const tail = form === "url" ? moduleFileUrlSuffix(suffix) : suffix;
+	const parts = [
+		...(prefix.length > 0 ? [compileStaticString(program, fn, cursor, prefix)] : []),
+		locationText,
+		...(tail.length > 0 ? [compileStaticString(program, fn, cursor, tail)] : []),
+	];
+	if (parts.length === 1) return locationText;
+	const result = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
+		type: "concatStrings",
+		registers: [result, parts[0]!, parts[1]!, ...parts.slice(2)],
+	});
+	return result;
 }
 
 /** Emit a call to the CJS `require` intrinsic with a numeric module id. */
@@ -2900,11 +2962,13 @@ function emitMissingCjsModuleThrow(
 		registers: [constructor],
 		intrinsic: "Error",
 	});
-	const message = compileStaticString(
+	const message = compileModulePath(
 		program,
 		fn,
 		cursor,
-		`Cannot find module '${specifier}'\nRequire stack:\n- ${requesterPath}`,
+		requesterPath,
+		"path",
+		`Cannot find module '${specifier}'\nRequire stack:\n- `,
 	);
 	const error = nextCoreVariable(fn);
 	cursor.block.emitter.emit({
@@ -3165,15 +3229,6 @@ function importMetaSlot(program: CoreFrontendContext, file: SemanticFile): numbe
 	return slot;
 }
 
-function importMetaUrl(filePath: string): string {
-	const normalized = filePath.replaceAll("\\", "/");
-	const encoded = normalized
-		.split("/")
-		.map((segment) => encodeURIComponent(segment))
-		.join("/");
-	return `file://${encoded.startsWith("/") ? "" : "/"}${encoded}`;
-}
-
 function emitImportMetaInit(
 	program: CoreFrontendContext,
 	fn: CoreFrontendFunction,
@@ -3185,27 +3240,24 @@ function emitImportMetaInit(
 	const cursor = { block };
 	const object = nextCoreVariable(fn);
 	block.emitter.emit({ type: "createObject", registers: [object] });
-	for (const [name, value] of [
-		[
-			"url",
-			importMetaUrl(
-				program.semantic.graph?.modules.get(file.path)?.sourcePath ?? file.path,
-			),
-		],
-	] as const) {
-		emitStoreProperty(
+	emitStoreProperty(
+		program,
+		fn,
+		cursor,
+		object,
+		"url",
+		compileModulePath(
 			program,
 			fn,
 			cursor,
-			object,
-			name,
-			compileStaticString(program, fn, cursor, value),
-		);
-	}
+			program.semantic.graph?.modules.get(file.path)?.sourcePath ?? file.path,
+			"url",
+		),
+	);
 	if (program.semantic.graph?.nodeEnabled) {
 		for (const [name, value] of [
 			["filename", file.path],
-			["dirname", commonJsDirname(file.path)],
+			["dirname", moduleDirname(file.path)],
 		] as const) {
 			emitStoreProperty(
 				program,
@@ -3213,7 +3265,7 @@ function emitImportMetaInit(
 				cursor,
 				object,
 				name,
-				compileStaticString(program, fn, cursor, value),
+				compileModulePath(program, fn, cursor, value, "path"),
 			);
 		}
 		const main = nextCoreVariable(fn);
@@ -13165,6 +13217,8 @@ function compileImportExpression(
 
 interface DynamicImportCandidate {
 	specifier: string;
+	/** How `specifier` names the target: as written, or as its path or URL. */
+	form: "source" | "path" | "url";
 	targetPath: string;
 }
 
@@ -13177,8 +13231,11 @@ function dynamicImportCandidates(
 	const candidates = new Map<string, DynamicImportCandidate>();
 	for (const targetPath of program.semantic.graph?.dynamicImportCandidates ?? []) {
 		if (!files.has(targetPath) && !program.failedModules.has(targetPath)) continue;
-		for (const specifier of [targetPath, importMetaUrl(targetPath)]) {
-			candidates.set(`${specifier}\0${targetPath}`, { specifier, targetPath });
+		for (const [specifier, form] of [
+			[targetPath, "path"],
+			[moduleFileUrl(targetPath), "url"],
+		] as const) {
+			candidates.set(`${specifier}\0${targetPath}`, { specifier, form, targetPath });
 		}
 	}
 	for (const dependency of record?.dependencies ?? []) {
@@ -13190,10 +13247,14 @@ function dynamicImportCandidates(
 		) {
 			continue;
 		}
-		for (const candidateSpecifier of [dependency.specifier, dependency.resolvedPath]) {
+		for (const [candidateSpecifier, form] of [
+			[dependency.specifier, "source"],
+			[dependency.resolvedPath, "path"],
+		] as const) {
 			if (candidateSpecifier === null) continue;
 			const candidate = {
 				specifier: candidateSpecifier,
+				form,
 				targetPath: dependency.resolvedPath,
 			};
 			candidates.set(`${candidateSpecifier}\0${dependency.resolvedPath}`, candidate);
@@ -13369,7 +13430,9 @@ function emitDynamicImportCall(
 	const thisRegister = compileUndefined(fn, cursor);
 	const targetArguments = emitTarget(target.path, target.failure);
 	const candidateArguments = candidates.flatMap((candidate) => [
-		compileStaticString(program, fn, cursor, candidate.specifier),
+		candidate.form === "source"
+			? compileStaticString(program, fn, cursor, candidate.specifier)
+			: compileModulePath(program, fn, cursor, candidate.targetPath, candidate.form),
 		...emitTarget(candidate.targetPath),
 	]);
 	const destination = nextCoreVariable(fn);

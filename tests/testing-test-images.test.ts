@@ -137,10 +137,11 @@ describe("linked test images", () => {
 		expect(compiled.wires.map((wire) => wire.kind)).toEqual([
 			"runtime",
 			"dependency",
+			"dependency",
 			"entry",
 			"runner",
 		]);
-		expect(compiled.artifactMisses).toBe(4);
+		expect(compiled.artifactMisses).toBe(5);
 		expect(lowering).toHaveBeenCalled();
 		for (const [, options] of lowering.mock.calls) {
 			expect(options).toMatchObject({ reuseRegisters: false });
@@ -177,7 +178,7 @@ describe("linked test images", () => {
 			relocatable: true,
 			interpreted: true,
 		});
-		expect(build.fragmentArtifacts).toEqual({ hits: 0, misses: 2 });
+		expect(build.fragmentArtifacts).toEqual({ hits: 0, misses: 3 });
 
 		const compiledTest = compileLinkedTestImage({
 			files: [testEntry],
@@ -190,11 +191,14 @@ describe("linked test images", () => {
 		expect(compiledTest.wires.map((wire) => wire.kind)).toEqual([
 			"runtime",
 			"dependency",
+			"dependency",
 			"entry",
 			"runner",
 		]);
-		expect(compiledTest.wires[1]!.path).toBe(build.runtimeArtifacts[0]!.path);
-		expect(compiledTest.artifactHits).toBe(1);
+		expect(compiledTest.wires.slice(1, 3).map((wire) => wire.path)).toEqual(
+			build.runtimeArtifacts.slice(0, 2).map((artifact) => artifact.path),
+		);
+		expect(compiledTest.artifactHits).toBe(2);
 		expect(compiledTest.artifactMisses).toBe(3);
 	});
 
@@ -422,9 +426,10 @@ test("compiles a cold test runtime beside a cold dependency island", () => {
 	expect(compiled.wires.map((wire) => wire.kind)).toEqual([
 		"runtime",
 		"dependency",
+		"dependency",
 		"entry",
 		"runner",
 	]);
 	expect(compiled.phases.workerMs).toBeGreaterThan(0);
-	expect(compiled.artifactMisses).toBe(4);
+	expect(compiled.artifactMisses).toBe(5);
 }, 60_000);

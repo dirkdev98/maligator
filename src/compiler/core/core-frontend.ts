@@ -2,6 +2,7 @@ import type { DirectEvalContext } from "../frontend/direct-eval-context.ts";
 import type { SemanticProgram } from "../frontend/semantic-analysis.ts";
 import type { SourceFunctionOriginOptions } from "../frontend/source-function-origins.ts";
 import type { CompilerProgramFacts } from "../shared/compiler-facts.ts";
+import type { PackageRootLowering } from "../shared/module-path-values.ts";
 import type { ConstructedCoreCompilation } from "./core-compilation.ts";
 import { constructSemanticProgramCore } from "./semantic-lowering.ts";
 
@@ -15,6 +16,7 @@ export interface CoreFrontendOptions {
 	readonly intrinsicGlobalReads?: boolean;
 	/** Modules whose bindings a relocatable image publishes to later images. */
 	readonly moduleExports?: "all" | ReadonlySet<string>;
+	readonly packageRoot?: PackageRootLowering;
 	readonly runPhase?: <T>(phase: "construct core ir", run: () => T) => T;
 }
 
@@ -34,6 +36,7 @@ export function lowerSemanticProgramToCore(
 			facts: options.facts,
 			intrinsicGlobalReads: options.intrinsicGlobalReads,
 			moduleExports: options.moduleExports,
+			packageRoot: options.packageRoot,
 		}),
 	);
 }

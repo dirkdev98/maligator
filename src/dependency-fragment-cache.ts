@@ -17,6 +17,8 @@ import {
 	compileLinkedImage,
 	findLinkedImage,
 	linkedImageEnvironment,
+	packageRootModule,
+	packageRootSource,
 } from "./linked-images.ts";
 import type {
 	LinkedImageArtifact,
@@ -28,6 +30,7 @@ import type { Execution } from "./platform/execution.ts";
 
 const DEPENDENCY_FRAGMENT_FAMILY = "dependency-fragments";
 const ISLAND_KIND = "dependency-island";
+const PACKAGE_ROOT_KIND = "package-root";
 
 export interface DependencyFragmentPhases {
 	graphMs: number;
@@ -43,7 +46,7 @@ export interface DependencyFragmentWorker {
 }
 
 export interface DependencyFragmentArtifact extends LinkedImageArtifact {
-	/** The dependency modules the island's image publishes. */
+	/** The dependency modules the island's image publishes; none for a package root. */
 	readonly targets: ReadonlyArray<string>;
 }
 
@@ -169,7 +172,11 @@ function dependencyIslands(
 	);
 }
 
-/** An island image evaluates its roots and publishes them to the images after it. */
+/**
+ * An island image evaluates its roots and publishes them to the images after it.
+ * Its entry names the roots relative to itself, so the same packages at another
+ * location produce the same entry.
+ */
 function islandGraph(
 	targets: ReadonlyArray<string>,
 	options: Pick<
@@ -177,14 +184,60 @@ function islandGraph(
 		"config" | "execution" | "stripTypes" | "session"
 	>,
 ): ModuleGraph {
-	const targetKey = frontendDigest(JSON.stringify(targets));
+	const directory = path.dirname(targets[0]!);
+	const specifiers = targets.map((target) => {
+		const relative = path.relative(directory, target).split(path.sep).join("/");
+		return relative.startsWith("../") ? relative : `./${relative}`;
+	});
 	const entry = path.join(
-		path.dirname(targets[0]!),
-		`.maligator-dependency-island-${targetKey.slice(0, 24)}.mts`,
+		directory,
+		`.maligator-dependency-island-${frontendDigest(JSON.stringify(specifiers)).slice(0, 24)}.mts`,
 	);
 	return buildModuleGraph(entry, {
 		entryGoal: "module",
-		entrySource: targets.map((target) => `import ${JSON.stringify(target)};\n`).join(""),
+		entrySource: specifiers
+			.map((specifier) => `import ${JSON.stringify(specifier)};\n`)
+			.join(""),
+		stripTypes: options.stripTypes,
+		buildConfig: options.config,
+		execution: options.execution,
+		parseCache: options.session.moduleParses,
+	});
+}
+
+/**
+ * The `node_modules` directory holding every module of an interpreted island. The
+ * island then compiles against that root, so the same packages installed at another
+ * location reuse its image.
+ */
+function islandPackageRoot(
+	target: LinkedImageTarget,
+	graph: ModuleGraph,
+): string | undefined {
+	if (target !== "runtime") return undefined;
+	let root: string | undefined;
+	for (const record of graph.modules.values()) {
+		if (record.host !== undefined) continue;
+		const segments = record.path.split(path.sep);
+		const index = segments.indexOf("node_modules");
+		if (index < 0) return undefined;
+		const directory = segments.slice(0, index + 1).join(path.sep);
+		if (root !== undefined && root !== directory) return undefined;
+		root = directory;
+	}
+	return root;
+}
+
+function packageRootGraph(
+	directory: string,
+	options: Pick<
+		CompileDependencyFragmentsOptions,
+		"config" | "execution" | "stripTypes" | "session"
+	>,
+): ModuleGraph {
+	return buildModuleGraph(packageRootModule(directory), {
+		entryGoal: "module",
+		entrySource: packageRootSource(directory),
 		stripTypes: options.stripTypes,
 		buildConfig: options.config,
 		execution: options.execution,
@@ -253,7 +306,13 @@ export function compileDependencyFragmentRequest(
 		stripTypes,
 		session,
 	});
-	compileLinkedImage(environment, ISLAND_KIND, graph, new Set(request.targets));
+	compileLinkedImage(
+		environment,
+		ISLAND_KIND,
+		graph,
+		new Set(request.targets),
+		islandPackageRoot(request.target, graph),
+	);
 	session.flush();
 }
 
@@ -263,16 +322,15 @@ export function compileDependencyFragments(
 ): Array<DependencyFragmentArtifact> {
 	const environment = islandEnvironment(options);
 	const graphStartedAt = Date.now();
-	const islands = dependencyIslands(options.graph, options.targets).map(
-		({ targets }) => ({
-			targets,
-			graph: islandGraph(targets, options),
-		}),
-	);
+	const islands = dependencyIslands(options.graph, options.targets).map(({ targets }) => {
+		const graph = islandGraph(targets, options);
+		return { targets, graph, packageRoot: islandPackageRoot(options.target, graph) };
+	});
 	options.phases.graphMs += Date.now() - graphStartedAt;
 	const missing = islands.filter(
-		({ targets, graph }) =>
-			findLinkedImage(environment, ISLAND_KIND, graph, new Set(targets)) === undefined,
+		({ targets, graph, packageRoot }) =>
+			findLinkedImage(environment, ISLAND_KIND, graph, new Set(targets), packageRoot) ===
+			undefined,
 	);
 	const tasks = options.parallelTasks ?? [];
 	const worker = missing.length + tasks.length > 1 ? options.worker : undefined;
@@ -295,16 +353,31 @@ export function compileDependencyFragments(
 		);
 	}
 	const compiledByWorkers = new Set(worker === undefined ? [] : missing);
-	return islands.map((island) => {
-		const artifact = compileLinkedImage(
-			environment,
-			ISLAND_KIND,
-			island.graph,
-			new Set(island.targets),
-		);
-		return Object.assign(
-			compiledByWorkers.has(island) ? compiledByWorker(artifact) : artifact,
-			{ targets: island.targets },
-		);
-	});
+	const packageRoots = [
+		...new Set(islands.flatMap(({ packageRoot }) => packageRoot ?? [])),
+	].sort();
+	return [
+		...packageRoots.map((directory) => {
+			const graphStartedAt = Date.now();
+			const graph = packageRootGraph(directory, options);
+			options.phases.graphMs += Date.now() - graphStartedAt;
+			return Object.assign(
+				compileLinkedImage(environment, PACKAGE_ROOT_KIND, graph, "all"),
+				{ targets: [] },
+			);
+		}),
+		...islands.map((island) => {
+			const artifact = compileLinkedImage(
+				environment,
+				ISLAND_KIND,
+				island.graph,
+				new Set(island.targets),
+				island.packageRoot,
+			);
+			return Object.assign(
+				compiledByWorkers.has(island) ? compiledByWorker(artifact) : artifact,
+				{ targets: island.targets },
+			);
+		}),
+	];
 }
