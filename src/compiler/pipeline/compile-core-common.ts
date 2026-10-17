@@ -44,6 +44,7 @@ export interface CompileCoreOptions {
 		intrinsicGlobalReads?: boolean;
 		evalCompletion?: boolean;
 		evalDirect?: boolean;
+		evalScript?: boolean;
 		directEvalContext?: DirectEvalContext;
 		moduleExports?: "all" | ReadonlySet<string>;
 		packageRoot?: PackageRootLowering;

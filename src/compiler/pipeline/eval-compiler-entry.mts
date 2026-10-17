@@ -27,6 +27,7 @@ declare const globalThis: {
 		inParamExpr?: boolean,
 		inFieldInitializer?: boolean,
 		directEvalContext?: string,
+		script?: boolean,
 	) => Uint8Array;
 };
 declare const SyntaxError: new (message?: string) => Error;
@@ -38,6 +39,7 @@ interface EvalCompilerCacheEntry {
 	inParamExpr: boolean | undefined;
 	inFieldInitializer: boolean | undefined;
 	directEvalContext: string | undefined;
+	script: boolean | undefined;
 	buffer: Uint8Array;
 	retainedBytes: number;
 	semanticallyEmpty: boolean;
@@ -55,6 +57,7 @@ function cachedCompilation(
 	inParamExpr: boolean | undefined,
 	inFieldInitializer: boolean | undefined,
 	directEvalContext: string | undefined,
+	script: boolean | undefined,
 	semanticallyEmpty: boolean,
 ): Uint8Array | undefined {
 	for (let index = 0; index < cache.length; index++) {
@@ -66,7 +69,8 @@ function cachedCompilation(
 			entry.callerStrict !== callerStrict ||
 			entry.inParamExpr !== inParamExpr ||
 			entry.inFieldInitializer !== inFieldInitializer ||
-			entry.directEvalContext !== directEvalContext
+			entry.directEvalContext !== directEvalContext ||
+			entry.script !== script
 		) {
 			continue;
 		}
@@ -84,6 +88,7 @@ function retainCompilation(
 	inParamExpr: boolean | undefined,
 	inFieldInitializer: boolean | undefined,
 	directEvalContext: string | undefined,
+	script: boolean | undefined,
 	buffer: Uint8Array,
 	semanticallyEmpty: boolean,
 ) {
@@ -109,6 +114,7 @@ function retainCompilation(
 		inParamExpr,
 		inFieldInitializer,
 		directEvalContext,
+		script,
 		buffer,
 		retainedBytes,
 		semanticallyEmpty,
@@ -125,6 +131,7 @@ globalThis.__compile = function __compile(
 	inParamExpr?: boolean,
 	inFieldInitializer?: boolean,
 	directEvalContext?: string,
+	script?: boolean,
 ): Uint8Array {
 	try {
 		// Wire images are immutable compiler output; execution still creates fresh
@@ -136,6 +143,7 @@ globalThis.__compile = function __compile(
 			inParamExpr,
 			inFieldInitializer,
 			directEvalContext,
+			script,
 			false,
 		);
 		if (cached !== undefined) return cached;
@@ -154,6 +162,8 @@ globalThis.__compile = function __compile(
 			inParamExpr,
 			inFieldInitializer,
 			directEvalContext,
+			// script: the source is a Script ($262.evalScript, vm.runInThisContext).
+			evalScript: script,
 		};
 		const prepared = prepareSourceForCompilation(source, options);
 		if (prepared.semanticallyEmpty) {
@@ -164,6 +174,7 @@ globalThis.__compile = function __compile(
 				inParamExpr,
 				inFieldInitializer,
 				directEvalContext,
+				script,
 				true,
 			);
 			if (empty !== undefined) return empty;
@@ -176,6 +187,7 @@ globalThis.__compile = function __compile(
 			inParamExpr,
 			inFieldInitializer,
 			directEvalContext,
+			script,
 			buffer,
 			prepared.semanticallyEmpty,
 		);

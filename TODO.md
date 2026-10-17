@@ -759,10 +759,11 @@ contracts or investigates costs still visible after the string follow-ups.
       after calling user code.
 
 - [ ] Complete script-global environment-record behavior across separately evaluated
-      scripts. `$262.evalScript` still uses indirect eval, so persistent lexical
-      declarations, declaration conflicts, and global-property attributes diverge
-      from Script evaluation. Keep eval-created declarations distinct from script
-      declarations, including deletability and restricted-global checks.
+      scripts. `$262.evalScript` now compiles a Script, but the runtime keeps no
+      [[VarNames]]: a `let` over a var that an earlier eval created is refused, and
+      a `var` over an existing configurable global property tries to redefine it.
+      Keep eval-created declarations distinct from script declarations, including
+      deletability and restricted-global checks.
 
 - [ ] Preserve iterator [[Done]] semantics in positional destructuring. Keep abrupt
       completion and iterator closing correct around exhausted iterators.
@@ -781,6 +782,13 @@ contracts or investigates costs still visible after the string follow-ups.
       compiles because the joined source is valid; the spec parses each part on
       its own. Check that the function's parameter list and body close at the
       delimiters the runtime inserts.
+
+- [ ] Give sloppy functions own `caller` and `arguments` properties. V8,
+      SpiderMonkey and JSC define them as non-writable data properties holding
+      null, so reading `f.caller` from sloppy code does not reach the
+      %ThrowTypeError% accessors on %Function.prototype%; 16 legacy
+      `Function/15.3.5.4_2-*gs` tests rely on that. Keep own-key order, descriptors
+      and deletion consistent with the synthetic `prototype` property.
 
 - [ ] Probe HasProperty again when a `with`-provided callee is read. The call path
       resolves the base and then loads the function with a plain Get, skipping

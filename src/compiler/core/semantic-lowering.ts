@@ -118,6 +118,13 @@ interface CoreFrontendContext {
 	evalCompletion: boolean;
 
 	/**
+	 * The eval'd source runs as a Script ($262.evalScript, vm.runInThisContext):
+	 * its global declarations are non-configurable and its lexical declarations
+	 * go through GlobalDeclarationInstantiation's checks.
+	 */
+	evalScript: boolean;
+
+	/**
 	 * Direct-eval mode: compiling source for a *direct* eval, where free
 	 * (undeclared) identifiers may resolve against the caller's scope. Encoded
 	 * caller bindings use the `with`-dynamic path (withGet/withSet) before falling
@@ -816,6 +823,7 @@ export function constructSemanticProgramCore(
 		sourceOrigins?: SourceFunctionOriginOptions;
 		evalCompletion?: boolean;
 		evalDirect?: boolean;
+		evalScript?: boolean;
 		directEvalContext?: DirectEvalContext;
 		facts?: CompilerProgramFacts;
 		intrinsicGlobalReads?: boolean;
@@ -836,6 +844,7 @@ export function constructSemanticProgramCore(
 		intrinsicGlobalReads: options.intrinsicGlobalReads ?? false,
 		evalCompletion: options.evalCompletion ?? false,
 		evalDirect: options.evalDirect ?? false,
+		evalScript: options.evalScript ?? false,
 		directEvalContext: options.directEvalContext ?? {
 			allowSuperProperty: false,
 			allowSuperCall: false,
@@ -3042,7 +3051,7 @@ function emitVarDeclarationInits(
 		block.emitter.emit({
 			type: "initGlobalVars",
 			nameStringIndices: pendingGlobalNames,
-			declarationConfigurable: program.evalCompletion,
+			declarationConfigurable: program.evalCompletion && !program.evalScript,
 		});
 		pendingGlobalNames = [];
 	};
@@ -3135,7 +3144,7 @@ function emitGlobalDeclarationChecks(
 			registers: [check],
 			nameStringIndex: location.nameStringIndex,
 			declaration: true,
-			declarationConfigurable: program.evalCompletion,
+			declarationConfigurable: program.evalCompletion && !program.evalScript,
 		});
 	}
 
@@ -3163,7 +3172,7 @@ function emitGlobalDeclarationChecks(
 			registers: [check],
 			nameStringIndex: location.nameStringIndex,
 			declaration: true,
-			declarationConfigurable: program.evalCompletion,
+			declarationConfigurable: program.evalCompletion && !program.evalScript,
 		});
 	}
 }
@@ -6482,7 +6491,7 @@ function compileStatementsToBlock(
 
 		if (
 			fn.semanticFile.type === "script" &&
-			!program.evalCompletion &&
+			(!program.evalCompletion || program.evalScript) &&
 			declarationScopes.includes(fn.semanticFile.scopes[0]!)
 		) {
 			const lexicalBindings = fn.semanticFile.scopes[0]!.bindings.filter(
@@ -7130,7 +7139,7 @@ function compileFunctionDeclaration(
 			registers: [destination],
 			nameStringIndex: location.nameStringIndex,
 			declaration: true,
-			declarationConfigurable: program.evalCompletion,
+			declarationConfigurable: program.evalCompletion && !program.evalScript,
 		});
 	} else {
 		storeRegisterAtLocation(block, location, destination);

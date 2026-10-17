@@ -10,6 +10,8 @@ export interface CoreFrontendOptions {
 	readonly sourceOrigins?: SourceFunctionOriginOptions;
 	readonly evalCompletion?: boolean;
 	readonly evalDirect?: boolean;
+	/** The eval'd source is a Script (GlobalDeclarationInstantiation), not eval code. */
+	readonly evalScript?: boolean;
 	readonly directEvalContext?: DirectEvalContext;
 	readonly facts?: CompilerProgramFacts;
 	/** Engine implementation code reads intrinsic globals without freezing their properties. */
@@ -32,6 +34,7 @@ export function lowerSemanticProgramToCore(
 			sourceOrigins: options.sourceOrigins,
 			evalCompletion: options.evalCompletion,
 			evalDirect: options.evalDirect,
+			evalScript: options.evalScript,
 			directEvalContext: options.directEvalContext,
 			facts: options.facts,
 			intrinsicGlobalReads: options.intrinsicGlobalReads,

@@ -122,6 +122,8 @@ export interface CompileSourceOptions {
 	inFieldInitializer?: boolean;
 	/** Encoded inherited method/private syntax and identity shape for direct eval. */
 	directEvalContext?: string;
+	/** Evaluate as a Script: non-configurable declarations and global lexical checks. */
+	evalScript?: boolean;
 }
 
 // Keep larger sources fully optimized so compile-latency savings cannot create unbounded
@@ -205,6 +207,7 @@ export function compilePreparedSourceToBuffer(
 		semanticLowering: {
 			evalCompletion: options.completionValue,
 			evalDirect: options.direct,
+			evalScript: options.evalScript,
 			directEvalContext: prepared.directEvalContext,
 		},
 	});

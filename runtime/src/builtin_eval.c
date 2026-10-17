@@ -163,15 +163,16 @@ done:
 // failure.
 static i32 compile_source(MalVm *vm, MalValue source, bool direct, bool caller_strict,
                           bool in_param_expr, bool in_field_initializer,
-                          MalValue direct_eval_context, bool *splice_failed) {
-    MalValue roots[7] = {source, mal_value_new_boolean(direct),
+                          MalValue direct_eval_context, bool script, bool *splice_failed) {
+    MalValue roots[8] = {source, mal_value_new_boolean(direct),
                           mal_value_new_boolean(caller_strict),
                           mal_value_new_boolean(in_param_expr),
                           mal_value_new_boolean(in_field_initializer),
                           direct_eval_context,
+                          mal_value_new_boolean(script),
                           mal_value_new_undefined()};
     MalRootSpan root_span;
-    mal_gc_root(&root_span, roots, 7);
+    mal_gc_root(&root_span, roots, 8);
     i32 entry = -1;
     if (splice_failed != nullptr) {
         *splice_failed = false;
@@ -188,27 +189,27 @@ static i32 compile_source(MalVm *vm, MalValue source, bool direct, bool caller_s
         goto done;
     }
     MalCompletion compiled =
-        mal_vm_call_value(vm, vm->compiler_fn, mal_value_new_undefined(), roots, 6);
+        mal_vm_call_value(vm, vm->compiler_fn, mal_value_new_undefined(), roots, 7);
     if (previous_stress_interval != 0) {
         mal_gc_swap_stress_interval(previous_stress_interval);
     }
-    roots[6] = compiled.value;
+    roots[7] = compiled.value;
     if (compiled.kind == MAL_COMPLETION_THROW) {
         vm->completion = compiled;
         goto done;
     }
-    if (!mal_value_is_typed_array_object(roots[6])) {
+    if (!mal_value_is_typed_array_object(roots[7])) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_EVAL_ERROR_PROTOTYPE,
                             "eval: compiler did not return a byte buffer");
         goto done;
     }
-    MalTypedArrayObject *buffer = mal_value_to_typed_array_object(roots[6]);
+    MalTypedArrayObject *buffer = mal_value_to_typed_array_object(roots[7]);
     if (buffer->runtime_image_entry >= 0) {
         entry = buffer->runtime_image_entry;
         goto done;
     }
     MalBufferSourceSpan span;
-    if (mal_buffer_source_span(roots[6], &span) != MAL_BUFFER_SOURCE_SPAN_OK) {
+    if (mal_buffer_source_span(roots[7], &span) != MAL_BUFFER_SOURCE_SPAN_OK) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_EVAL_ERROR_PROTOTYPE,
                             "eval: compiler returned a detached byte buffer");
         goto done;
@@ -278,7 +279,7 @@ done:
     return result;
 }
 
-MalValue mal_vm_eval_source(MalVm *vm, MalValue source) {
+static MalValue eval_source(MalVm *vm, MalValue source, bool script) {
     MalValue roots[1] = {source};
     MalRootSpan root_span;
     mal_gc_root(&root_span, roots, 1);
@@ -290,7 +291,7 @@ MalValue mal_vm_eval_source(MalVm *vm, MalValue source) {
     // Indirect eval: always sloppy (no containing strict context), never a
     // parameter-expression or field-initializer context.
     i32 entry = compile_source(
-        vm, roots[0], false, false, false, false, mal_value_new_undefined(), nullptr);
+        vm, roots[0], false, false, false, false, mal_value_new_undefined(), script, nullptr);
     if (entry < 0) {
         goto done;
     }
@@ -299,6 +300,10 @@ MalValue mal_vm_eval_source(MalVm *vm, MalValue source) {
 done:
     mal_gc_unroot(&root_span);
     return result;
+}
+
+MalValue mal_vm_eval_source(MalVm *vm, MalValue source) {
+    return eval_source(vm, source, false);
 }
 
 #if MAL_REALMS
@@ -310,7 +315,7 @@ MalCompletion mal_realm_eval_script(MalVm *vm, MalRealm *realm, MalValue source)
 
     MalRealm *caller_realm = vm->current_realm;
     mal_vm_realm_switch_to(vm, realm);
-    MalValue value = mal_vm_eval_source(vm, source);
+    MalValue value = eval_source(vm, source, true);
     MalCompletion completion = vm->completion.kind == MAL_COMPLETION_THROW
         ? vm->completion
         : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
@@ -344,7 +349,7 @@ MalCompletion mal_shadow_realm_eval_script(MalVm *vm, MalRealm *caller_realm,
 
     bool splice_failed;
     i32 entry = compile_source(
-        vm, source, false, false, false, false, mal_value_new_undefined(), &splice_failed);
+        vm, source, false, false, false, false, mal_value_new_undefined(), false, &splice_failed);
     if (entry < 0) {
         if (splice_failed) {
             *failure_out = MAL_SHADOW_REALM_EVAL_FAILURE_SANITIZE;
@@ -399,7 +404,7 @@ MalValue mal_vm_eval_direct(MalVm *vm, MalValue source, MalValue scope_object, b
     }
 
     i32 entry = compile_source(vm, roots[0], true, caller_strict, in_param_expr,
-                               in_field_initializer, roots[4], nullptr);
+                               in_field_initializer, roots[4], false, nullptr);
     if (entry < 0) {
         goto done;
     }
@@ -512,7 +517,7 @@ MalValue mal_vm_construct_function(MalVm *vm, const MalValue *args, i32 arg_coun
 
     bool splice_failed;
     i32 entry = compile_source(
-        vm, roots[2], false, false, false, false, mal_value_new_undefined(), &splice_failed);
+        vm, roots[2], false, false, false, false, mal_value_new_undefined(), false, &splice_failed);
     if (entry < 0) {
         if (splice_failed) {
             goto done;
