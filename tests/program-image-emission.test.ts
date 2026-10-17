@@ -1264,6 +1264,41 @@ describe("emit-program-image instruction packing", () => {
 		expect(stable.length).toBeGreaterThan((names.length * 3) / 4);
 	});
 
+	it("emits the same code units for a program compiled from another directory", () => {
+		const firstNameIndex = definition.runtime.stringConstants.length;
+		const names = Array.from({ length: 48 }, (_, index) => `moved_${String(index)}`);
+		const functions = names.map((_name, index) => ({
+			...fn,
+			fileIndex: index % 2,
+			nameStringIndex: firstNameIndex + index,
+			instructions: [...fn.instructions],
+		}));
+		const at = (root: string): ProgramImage => ({
+			...definition,
+			runtime: {
+				...definition.runtime,
+				files: [`${root}/main.mjs`, `${root}/lib/helpers.mjs`],
+				functionCount: functions.length,
+				functions,
+				stringConstants: [
+					...definition.runtime.stringConstants,
+					...names.map((name) => [...name].map((character) => character.charCodeAt(0))),
+				],
+			},
+			native: createConservativeNativePlan(functions),
+		});
+		const policy = { targetCodeUnits: 16_000, hardMaximumCodeUnits: 200_000 };
+		const codeUnits = (image: ProgramImage) =>
+			emitProgramTranslationUnits(image, {}, policy)
+				.filter((unit) => unit.kind === "code")
+				.map((unit) => [unit.id, unit.source]);
+
+		const first = codeUnits(at("/tmp/run-a1b2"));
+
+		expect(first.length).toBeGreaterThan(1);
+		expect(codeUnits(at("/home/ci/work/fixtures/run-c3d4"))).toEqual(first);
+	});
+
 	it("keeps repeated data partition identities within filesystem limits", () => {
 		const units = emitProgramTranslationUnits(
 			{

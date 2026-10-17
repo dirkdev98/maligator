@@ -756,6 +756,7 @@ function prepareBuildFrontend(
 	phases.graphMs = Date.now() - graphStartedAt;
 	const ownerPackageAbsences = captureRootPackageAbsences(builtGraph);
 	const workerRoots = {
+		entry: builtGraph.entry,
 		workerEntries: builtGraph.workerEntries,
 		dynamicImportCandidates: builtGraph.dynamicImportCandidates,
 	};

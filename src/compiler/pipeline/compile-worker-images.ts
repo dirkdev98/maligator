@@ -1,4 +1,5 @@
 import { hash } from "node:crypto";
+import * as path from "node:path";
 import type { ModuleGraph } from "../frontend/module-graph.ts";
 import type { WorkerEntryDeclaration } from "../frontend/worker-entries.ts";
 import { serializeRuntimeImage } from "../target/program-image-codec.ts";
@@ -34,8 +35,20 @@ export function workerRootEntries(
 	return [...entries.values()];
 }
 
+/**
+ * Names a worker's symbols and translation units after its path from the program entry,
+ * so the same program compiled from another directory reuses its generated objects.
+ */
+export function workerImageId(
+	entry: WorkerEntryDeclaration,
+	graph: Pick<ModuleGraph, "entry">,
+): string {
+	const relative = path.relative(path.dirname(graph.entry), entry.path);
+	return hash("sha256", relative.split(path.sep).join("/"), "hex").slice(0, 20);
+}
+
 export function compileWorkerImages(
-	graph: Pick<ModuleGraph, "workerEntries" | "dynamicImportCandidates">,
+	graph: Pick<ModuleGraph, "entry" | "workerEntries" | "dynamicImportCandidates">,
 	options: CompileEntrypointOptions = {},
 ): Array<CompiledWorkerImage> {
 	const candidates = graph.dynamicImportCandidates ?? [];
@@ -50,7 +63,7 @@ export function compileWorkerImages(
 			dynamicImportCandidates: candidates,
 		});
 		workers.push({
-			id: hash("sha256", entry.href, "hex").slice(0, 20),
+			id: workerImageId(entry, graph),
 			entry,
 			image,
 			wire: serializeRuntimeImage(image.runtime),

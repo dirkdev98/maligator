@@ -3,6 +3,7 @@ import type { FrontendDependencyIdentity } from "../frontend-cache.ts";
 import { stripCompactTypes } from "./frontend/compact-type-strip.ts";
 import type { ModuleGraph } from "./frontend/module-graph.ts";
 import type { CompileEntrypointOptions } from "./pipeline/compile-program-common.ts";
+import { workerImageId } from "./pipeline/compile-worker-images.ts";
 import type { CompiledWorkerImage } from "./pipeline/compile-worker-images.ts";
 import {
 	captureRootPackageAbsences,
@@ -183,7 +184,7 @@ export function startRootCompilation(
 			diagnostics.push(...record.diagnostics);
 			const entry = entries[record.index]!;
 			return {
-				id: hash("sha256", entry.href, "hex").slice(0, 20),
+				id: workerImageId(entry, graph),
 				entry,
 				image: deserializeCompilerArtifact(record.compilerArtifact),
 				wire: record.wire,

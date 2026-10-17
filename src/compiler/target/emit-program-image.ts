@@ -1448,6 +1448,8 @@ function generatedHeaderFiles(lines: ReadonlyArray<string>): Array<string> {
 
 const MAX_STABLE_PARTITION_HASH_BITS = 64;
 
+const ABSOLUTE_PATH = /^(?:\/|[A-Za-z]:[\\/])/;
+
 /**
  * Functions from absolute source paths outside `node_modules`. Internal modules and
  * packages change only with the toolchain or a dependency update.
@@ -1455,7 +1457,7 @@ const MAX_STABLE_PARTITION_HASH_BITS = 64;
 function applicationFunctions(image: ProgramImage): Array<boolean> {
 	return image.runtime.functions.map((fn) => {
 		const file = image.runtime.files[fn.fileIndex] ?? "";
-		return /^(?:\/|[A-Za-z]:[\\/])/.test(file) && !/[\\/]node_modules[\\/]/.test(file);
+		return ABSOLUTE_PATH.test(file) && !/[\\/]node_modules[\\/]/.test(file);
 	});
 }
 
@@ -1506,12 +1508,32 @@ function compiledFunctionDeclarations(
 	];
 }
 
+/**
+ * Source paths relative to the deepest directory holding every absolute one, so a
+ * program compiled from another location (a temporary fixture, another checkout, a
+ * dependency island under a different project) keeps its partition keys.
+ */
+function partitionFileNames(files: ReadonlyArray<string>): Array<string> {
+	const directories = files
+		.filter((file) => ABSOLUTE_PATH.test(file))
+		.map((file) => file.split(/[\\/]/).slice(0, -1));
+	if (directories.length === 0) return [...files];
+	let depth = directories[0]!.length;
+	for (const directory of directories)
+		for (let index = 0; index < depth; index++)
+			if (directory[index] !== directories[0]![index]) depth = index;
+	return files.map((file) =>
+		ABSOLUTE_PATH.test(file) ? file.split(/[\\/]/).slice(depth).join("/") : file,
+	);
+}
+
 function compiledFunctionPartitionKeys(image: ProgramImage): Array<string> {
 	const occurrences = new Map<string, number>();
+	const files = partitionFileNames(image.runtime.files);
 	return image.runtime.functions.map((fn) => {
 		const name = image.runtime.stringConstants[fn.nameStringIndex] ?? [];
 		const base = JSON.stringify({
-			file: image.runtime.files[fn.fileIndex] ?? "<unknown>",
+			file: files[fn.fileIndex] ?? "<unknown>",
 			name,
 			async: fn.isAsync,
 			generator: fn.isGenerator,

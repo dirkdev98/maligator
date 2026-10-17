@@ -28,6 +28,7 @@ import {
 import type { RootCompilationResult } from "../src/compiler/root-compilation.ts";
 import { serializeCompilerArtifact } from "../src/compiler/target/compiler-artifact-codec.ts";
 import { emitProgramTranslationUnits } from "../src/compiler/target/emit-program-image.ts";
+import { emitWorkerImageTranslationUnits } from "../src/compiler/target/emit-worker-images.ts";
 
 const directories: Array<string> = [];
 afterEach(() => {
@@ -131,6 +132,19 @@ test("serial and async shared flow retain complete compiler/runtime/C outputs an
 			c: emitProgramTranslationUnits(worker.image),
 		})),
 	);
+});
+
+test("workers compiled from another directory emit the same code units", () => {
+	const codeUnits = (options: CompileBuildFrontendOptions) =>
+		emitWorkerImageTranslationUnits(
+			compileBuildFrontend({ ...options, forceCompile: true }).workerImages,
+		)
+			.filter((unit) => unit.kind === "code")
+			.map((unit) => ({ id: unit.id, source: unit.source }));
+
+	const first = codeUnits(fixture());
+	assert.ok(first.length > 0);
+	assert.deepEqual(codeUnits(fixture()), first);
 });
 
 test("cache hits and graphs without roots admit no transport jobs", async () => {
