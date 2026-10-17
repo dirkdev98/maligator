@@ -72,8 +72,13 @@ tests, and benchmarks; never kill another task or introduce a global performance
 
 ## Verification
 
-Use bounded, one-shot commands while developing. `npm test` and `npm run test:unit`
-run once by default; pass `-- --watch` only when requested.
+Keep local verification light; CI runs the heavy checks. While developing, run the
+affected unit files and the native or sanitizer fixture that observes the change,
+then type-check and lint once after cohesive work. Do not run the whole unit suite,
+the canonical gate, full native or sanitizer sweeps, captures, or long benchmarks
+locally for extra confidence; push, or ask to, and let CI run them. Use bounded,
+one-shot commands: `npm test` and `npm run test:unit` run once by default, so pass
+`-- --watch` only when requested.
 
 | Purpose                                    | Command                                 |
 | ------------------------------------------ | --------------------------------------- |
@@ -84,48 +89,57 @@ run once by default; pass `-- --watch` only when requested.
 | Native memory/UB checks                    | `npm run test:sanitize -- <file>`       |
 | Type checking                              | `npm run type-check`                    |
 | Lint and formatting without source edits   | `npm run lint:ci`                       |
-| Canonical acceptance gate                  | `npm run test:check`                    |
 
-During edits, run affected unit files and the native or sanitizer fixture that
-observes the change. Batch type-check and lint after cohesive work; do not repeat
-the whole unit suite or canonical gate after every small edit or checkpoint.
 Documentation-only changes need formatting, links, and command checks; website
 changes also need relevant generation, routes, and behavior. Do not rebuild the
 runtime for prose edits.
 
-CI owns broad acceptance at an authorized branch or PR checkpoint. Continue
-independent work while checks run; acceptance remains pending until required
-coverage succeeds. Push authority is separate. Without CI or push authority, run
-relevant local lanes once after the batch; use the entire gate for cross-cutting
-changes or unresolved coverage. Repeat only after relevant changes or failures.
-Check is a curated gate, not every native fixture or the full standards corpus.
-Use `test:help`, tier `--list`/`--plan=json`, and the manifests for exact coverage;
-[CI coverage](docs/testing.md#github-actions) includes the weekly native remainder.
+CI owns acceptance. Every pull request and push runs the canonical check gate; every
+push to `main` also runs the native remainder, Extended CI (self-hosted checks, Wasm,
+slow unit tests, the primordial inventory) and, once CI passes, the full Test262
+corpus. Continue independent work while checks run. Acceptance stays pending until
+the required coverage succeeds, and a red run gets fixed before more work lands on
+top of it. Without push authority, report what ran locally and what remains for CI
+instead of substituting a local gate. Check is a curated gate, not every native
+fixture or the full standards corpus; use `test:help`, tier `--list`/`--plan=json`,
+the manifests and [CI coverage](docs/testing.md#github-actions) for exact coverage.
+
+Captures and audits run on CI too. After changing a native installer, dispatch the
+Native primordial audit workflow for both targets when authorized to, then import
+its captures; see the
+[inventory workflow](docs/decisions/static-value-foundations.md#native-inventory-and-coverage).
 
 Follow [test placement](docs/testing.md#test-placement) when adding tests. Ask if the
 acceptance boundary could reasonably belong in multiple lanes. Slow unit/subprocess
 tests belong in `tests/test-suite-unit-full-only.txt`. For Core changes, use the
 [focused optimizer workflow](docs/testing.md#focused-optimizer-verification).
-Reproduce Test262 cases through its runner so harness includes and variants are honored.
 
 ## Standards and baselines
 
-Full Test262, `test:full`, and `test:full:report` require explicit authorization;
-filtered tests and small manifests remain normal development tools. Keep self-hosted
-checks early in the full gate. Use explicit `--backend` and `--mode` flags: canonical
-runners remove ambient runtime overrides such as `MAL_INTERP`.
+The full Test262 corpus runs only on CI: the Test262 workflow runs it after CI
+passes on every push to `main`. Do not run it locally (unfiltered `npm run test262`,
+`test262:report`, `test:full`, or `test:full:report`); filtered runs and the
+regression manifests remain normal development tools. Reproduce Test262 cases
+through its runner so harness includes and variants are honored. Use explicit
+`--backend` and `--mode` flags: canonical runners remove ambient runtime overrides
+such as `MAL_INTERP`. Keep self-hosted checks early in the full gate.
 
 Test262 checks the resolved HEAD baseline without rewriting it; inspect completeness
-and exact `PASSED -> FAILED` transitions, not just totals.
-Replacing `scripts/test262.json` requires an authorized
-`npm run test262:update-baseline`; updating `bench/baseline.json` requires an authorized
-benchmark `--update`. Neither baseline update is implied by running a check.
+and exact `PASSED -> FAILED` transitions, not just totals. The workflow maintains the
+`Automated Test262 regressions` issue and commits improvement-only refreshes of
+`scripts/test262.json`, so never replace that baseline by hand. An intentional
+replacement, such as advancing the pinned corpus, imports a complete CI report with
+an authorized `npm run test262:update-baseline -- --from-report`. Updating
+`bench/baseline.json` requires an authorized benchmark `--update` through the
+benchmark baseline workflow. Neither baseline update is implied by running a check.
 
 ## Performance and evidence
 
 Use matched workloads, output parity, source/toolchain identity, and repeated
-interleaved pairs for performance conclusions. Inspect `--plan=json` before costly
-work; a single pair or zero exit code does not establish acceptance. Use the
+interleaved pairs for performance conclusions. Keep local measurements to the
+comparison a decision needs; complete benchmark families and baseline refreshes run
+in their CI workflows. Inspect `--plan=json` before costly work; a single pair or zero
+exit code does not establish acceptance. Use the
 [benchmark reference](docs/benchmarking.md) for commands, budgets, and resume rules.
 
 Report what was exercised, failed, and left unverified. Retain the evidence needed
@@ -155,10 +169,10 @@ environment; changed source or incomplete coverage cannot establish acceptance.
 
 Audit ownership and activity before deleting artifacts. Remove only explicitly
 identified inactive scratch or superseded generated data; preserve source, baselines,
-useful failure evidence, and unrelated drafts. Use `cache prune --dry-run` before
-supported cache pruning and respect live leases. It manages the user cache, not
-repository reports; see [cache ownership](docs/testing.md#cache-ownership). Never
-reuse an old deletion list.
+useful failure evidence, and unrelated drafts. The user cache trims itself in the
+background; prune it by hand only when asked, previewing with `cache prune --dry-run`
+first. Pruning manages the user cache, not repository reports; see
+[cache ownership](docs/testing.md#cache-ownership). Never reuse an old deletion list.
 
 Delegate only when requested. Use the requested available external harness, give each
 assignment a complete scope and a 30-minute wall-clock limit, and capture its output.

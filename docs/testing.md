@@ -31,8 +31,8 @@ feature-complete crate and belongs to the full tier. `npm run test262:prepare` i
 the only Test262 command that clones, fetches, or checks out the pinned full
 corpus. All execution commands consume that shared snapshot read-only and name
 this preparation command when it is absent. A modified snapshot must be restored
-before it can be used. Running the full Test262 corpus
-requires explicit approval; targeted filters and manifests do not.
+before it can be used. The full Test262 corpus runs on CI after every push to `main`;
+run targeted filters and manifests locally.
 
 The native harness shares persistent frontend, generated-object, runtime, and
 linked-binary caches. `buildBackendPairFromOneProgramImage` goes further: one
@@ -122,11 +122,10 @@ exercise backend parity and GC stress themselves. Add a focused
 `rest-forwarding` and `stack-object` currently belong to the full-tier native
 complement; a successful `test:check` alone does not exercise them. Use
 `npm run test:check -- --plan=json` or a tier's `--list` to inspect actual selection.
-After cohesive work, batch type-check and lint. Use CI's complete check result for
-the tested checkpoint when pushing is authorized. Otherwise run the relevant local
-lanes once, and the whole `test:check` gate when the change is cross-cutting or coverage
-remains uncertain. Focused full-tier fixtures still run when relevant; a check pass
-does not replace them.
+After cohesive work, batch type-check and lint, then rely on CI's complete check result
+for the pushed checkpoint instead of running the gate locally. Without push authority,
+report which focused lanes ran and what remains for CI. Focused full-tier fixtures
+still run when relevant; a check pass does not replace them.
 
 For a compiler representation failure, use the product CLI with `MAL_DEBUG=true`
 and a self-contained fixture. A raw Test262 file may require harness includes;
@@ -272,7 +271,9 @@ its own workflow after CI; these jobs do not update either baseline.
 The manual **Native primordial audit** workflow captures every descriptor inventory
 mode for one selected native target, using four shards. It retains raw records,
 normalized graphs and source metadata for fourteen days. These are inputs for a
-reviewed target audit, not a passing verification gate. See the
+reviewed target audit, not a passing verification gate. It only runs from `main`, so a
+change to installer sources lands first and its imported audit follows; the inventory
+tests in Extended CI fail in between. See the
 [inventory workflow](decisions/static-value-foundations.md#native-inventory-and-coverage)
 for import and matrix verification.
 
@@ -399,8 +400,9 @@ The suite and standards runners accept two policies:
 - `complete` traverses the selected corpus, writes complete reports, and returns
   nonzero after reporting failures.
 
-Use completion commands when coverage numbers matter. Full Test262 and full-gate
-execution require explicit authorization:
+Use completion commands when coverage numbers matter. They run complete selections
+and belong on CI, where the Test262 workflow runs the authoritative corpus after every
+push to `main`; run them locally only when explicitly asked:
 
 ```sh
 npm run test262:report
@@ -452,15 +454,13 @@ baseline content digest. `--baseline <file>` explicitly selects a frozen compari
 file for reproductions. Single-variant checks return nonzero on regressions under
 both `bail` and `complete`; intentional variant skips are not regressions.
 
-`npm run test262:update-baseline` explicitly replaces `scripts/test262.json`. It
-requires a full canonical compiled/normal run with complete policy; partial,
-single-variant, custom-baseline, and instrumented updates are rejected before work.
-All three full-corpus commands are expensive; ask before running them, `test:full`,
-or `test:full:report`. Filtered diagnostic selections remain focused commands.
-
-For an authorized baseline refresh measured on another host, first verify the
-queue's captured source and retain its combined, strict, and sloppy reports. Apply
-the combined report locally with:
+The Test262 workflow commits improvement-only baseline refreshes itself.
+`npm run test262:update-baseline` explicitly replaces `scripts/test262.json` for an
+intentional change. It requires a full canonical compiled/normal run with complete
+policy; partial, single-variant, custom-baseline, and instrumented updates are rejected
+before work. Take that run from CI instead of running the corpus locally: download the
+workflow's combined report (the `test262-report-<run>` artifact), confirm the run's
+tested revision, and apply the report with:
 
 ```bash
 npm run test262:update-baseline -- --from-report .cache/results/report-compiled-normal-combined.json
@@ -468,9 +468,9 @@ npm run test262:update-baseline -- --from-report .cache/results/report-compiled-
 
 This prepares the pinned corpus index without compiling or executing tests. Import
 requires complete compiled/normal results for every pinned test, a matching HEAD
-baseline digest, consistent totals and skip reasons, and no regressions. Source
-identity must be verified from the queue receipt; the combined report does not
-record the compiler revision.
+baseline digest, consistent totals and skip reasons, and no regressions. The combined
+report does not record the compiler revision, so take the source identity from the
+run that produced it.
 
 ### Test262 verdicts and counts
 
@@ -567,8 +567,8 @@ build configuration; tests declare or drive their relevant dimensions.
 - Test262 checkout and cache revisions must match `TEST262_METADATA.revision`.
   Run `npm run test262:prepare` to populate the shared pinned corpus and input index;
   never vendor upstream Test262 files. To advance the corpus, update that revision
-  deliberately, run the approved baseline-update command, and commit the resulting
-  `scripts/test262.json` change.
+  deliberately, import a complete CI report for it with the approved baseline-update
+  command, and commit the resulting `scripts/test262.json` change.
 - WPT smoke/check manifests are disjoint curated subsets; the full tier reruns
   compiled/normal across the complete curated set and GC stress on the smoke
   cross-section.
