@@ -110,6 +110,15 @@ typedef struct MalHeap {
     /** Canonical metadata keys reused by every native function allocation. */
     MalString *native_function_length_key;
     MalString *native_function_name_key;
+    /**
+     * The shape after adding `length` (and `name`) to a fresh function, per
+     * script/native keys and naming. Every function repeats the same transitions,
+     * whose lookup on the crowded root shape dominated closure creation.
+     */
+    struct {
+        const MalShape *base;
+        MalShape *shape;
+    } function_metadata_shapes[4];
     /** Process-unique heap lifetime identity. Static native call caches use this
      * with epoch so exact object identities never cross VM lifetimes. */
     u64 identity;

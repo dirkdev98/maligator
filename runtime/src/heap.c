@@ -577,6 +577,7 @@ void mal_heap_init(MalHeap *heap, usize capacity) {
     mal_shape_heap_init(heap);
     heap->native_function_length_key = nullptr;
     heap->native_function_name_key = nullptr;
+    memset(heap->function_metadata_shapes, 0, sizeof(heap->function_metadata_shapes));
     do {
         heap->identity = atomic_fetch_add(&g_next_heap_identity, 1);
     } while (heap->identity == 0);
