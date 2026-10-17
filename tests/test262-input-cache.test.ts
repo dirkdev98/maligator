@@ -306,9 +306,12 @@ console.log(JSON.stringify({ path: corpus.path, cache: index.cache, count: index
 		const corpus = test262PrepareCheckout(options);
 		const lease = createCacheLease("test262", options.cacheDirectory);
 		try {
-			expect(() =>
-				pruneMaligatorCache({ cacheRoot: options.cacheDirectory, maxBytes: 0 }),
-			).toThrow("command is active");
+			pruneMaligatorCache({
+				cacheRoot: options.cacheDirectory,
+				maxBytes: 0,
+				minAgeMs: 0,
+			});
+			expect(test262Checkout(options).files).toEqual(corpus.files);
 		} finally {
 			lease.release();
 		}
