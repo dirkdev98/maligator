@@ -233,10 +233,7 @@ delete globalThis.uninstalledFunctionGlobal;
 const blockedDeclaration = caught(() =>
 	(0, eval)("function uninstalledFunctionGlobal(){} function blockedFunctionGlobal(){}"),
 );
-ok(
-	"invalid global function declaration throws",
-	blockedDeclaration instanceof TypeError,
-);
+ok("invalid global function declaration throws", blockedDeclaration instanceof TypeError);
 ok(
 	"global function checks precede installation",
 	!("uninstalledFunctionGlobal" in globalThis),
