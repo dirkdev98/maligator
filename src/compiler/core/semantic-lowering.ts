@@ -14270,6 +14270,7 @@ function compileWithDynamicCallee(
 		{ type: "loadProperty", registers: [callee, base, key] },
 		{ type: "move", registers: [thisRegister, base] },
 	);
+	clearDirectEvalScopeThis(program, fn, cursor, base, thisRegister);
 	const foundJoin: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
 		blocks: [-1],
@@ -14295,6 +14296,70 @@ function compileWithDynamicCallee(
 	missJoin.blocks[0] = joinIdx;
 	cursor.block = fn.blocks[joinIdx]!;
 	return { callee, thisRegister };
+}
+
+/**
+ * The injected direct-eval scope objects stand in for declarative environments,
+ * whose WithBaseObject is undefined, so a call through them gets no `this`.
+ */
+function clearDirectEvalScopeThis(
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
+	base: number,
+	thisRegister: number,
+): void {
+	const scopeBindings = [
+		program.directEvalScopeObjectBinding,
+		program.directEvalPersistentScopeBinding,
+	].filter((binding) => binding !== undefined);
+	if (scopeBindings.length === 0) return;
+
+	const clearJumps: Array<Extract<CompilerInstruction, { type: "jumpIf" }>> = [];
+	for (const binding of scopeBindings) {
+		const scope = loadCapturedBinding(program, fn, cursor, binding);
+		const matches = nextCoreVariable(fn);
+		const clearJump: Extract<CompilerInstruction, { type: "jumpIf" }> = {
+			type: "jumpIf",
+			registers: [matches],
+			blocks: [-1],
+		};
+		const nextJump: Extract<CompilerInstruction, { type: "jump" }> = {
+			type: "jump",
+			blocks: [-1],
+		};
+		cursor.block.emitter.emit(
+			{ type: "binary", registers: [matches, base, scope], operator: "===" },
+			clearJump,
+			nextJump,
+		);
+		clearJumps.push(clearJump);
+		nextJump.blocks[0] = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+		cursor.block = fn.blocks[nextJump.blocks[0]]!;
+	}
+	const keepJump: Extract<CompilerInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	cursor.block.emitter.emit(keepJump);
+
+	const clearIndex = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+	cursor.block = fn.blocks[clearIndex]!;
+	const undefinedThis = compileUndefined(fn, cursor);
+	const clearJoin: Extract<CompilerInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	cursor.block.emitter.emit(
+		{ type: "move", registers: [thisRegister, undefinedThis] },
+		clearJoin,
+	);
+
+	const joinIndex = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+	for (const clearJump of clearJumps) clearJump.blocks[0] = clearIndex;
+	keepJump.blocks[0] = joinIndex;
+	clearJoin.blocks[0] = joinIndex;
+	cursor.block = fn.blocks[joinIndex]!;
 }
 
 function compileWithDynamicTypeof(

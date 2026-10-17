@@ -827,6 +827,11 @@ contracts or investigates costs still visible after the string follow-ups.
 - [ ] Complete direct-eval arguments and parameter-environment behavior. Preserve
       mapped parameters, parameter expressions, shadowing, and strict-mode differences.
 
+- [ ] Resolve the caller's `with` objects in direct eval code. Inside
+      `with (o) { eval("m()") }` the eval code throws a ReferenceError for `m`: the
+      marshaled caller scope carries the caller's bindings but not its with-object
+      environments, so neither reads nor WithBaseObject calls reach `o`.
+
 - [ ] Complete eval-created and nested new.target behavior. Keep direct eval connected
       to the correct active function or constructor without exposing it indirectly.
 
