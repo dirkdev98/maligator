@@ -235,7 +235,7 @@ const blockedDeclaration = caught(() =>
 );
 ok(
 	"invalid global function declaration throws",
-	blockedDeclaration instanceof SyntaxError,
+	blockedDeclaration instanceof TypeError,
 );
 ok(
 	"global function checks precede installation",
@@ -247,13 +247,13 @@ const blockedAfterVar = caught(() =>
 );
 ok(
 	"invalid function prevents earlier var creation",
-	blockedAfterVar instanceof SyntaxError,
+	blockedAfterVar instanceof TypeError,
 );
 ok("failed declaration does not leak var", !("leakedVarGlobal" in globalThis));
 const mixedBlocked = caught(() =>
 	(0, eval)("var blockedFunctionGlobal; function blockedFunctionGlobal(){}"),
 );
-ok("same-name var does not suppress function check", mixedBlocked instanceof SyntaxError);
+ok("same-name var does not suppress function check", mixedBlocked instanceof TypeError);
 
 Object.defineProperty(globalThis, "cacheMutationGlobal", {
 	value: 11,
