@@ -679,14 +679,7 @@ MalValue mal_builtin_object_parsed_descriptor_object(
     MalObject *object = mal_value_to_object(roots[0]);
     MalPropertyFlags flags =
         MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE;
-    if (parsed->has_enumerable) {
-        mal_intrinsic_define_data(vm, object, "enumerable",
-            mal_value_new_boolean(parsed->desc.flags & MAL_PROPERTY_ENUMERABLE), flags);
-    }
-    if (parsed->has_configurable) {
-        mal_intrinsic_define_data(vm, object, "configurable",
-            mal_value_new_boolean(parsed->desc.flags & MAL_PROPERTY_CONFIGURABLE), flags);
-    }
+    // FromPropertyDescriptor's field order is observable through the keys.
     if (parsed->has_value) {
         mal_intrinsic_define_data(vm, object, "value", roots[1], flags);
     }
@@ -699,6 +692,14 @@ MalValue mal_builtin_object_parsed_descriptor_object(
     }
     if (parsed->has_set) {
         mal_intrinsic_define_data(vm, object, "set", roots[3], flags);
+    }
+    if (parsed->has_enumerable) {
+        mal_intrinsic_define_data(vm, object, "enumerable",
+            mal_value_new_boolean(parsed->desc.flags & MAL_PROPERTY_ENUMERABLE), flags);
+    }
+    if (parsed->has_configurable) {
+        mal_intrinsic_define_data(vm, object, "configurable",
+            mal_value_new_boolean(parsed->desc.flags & MAL_PROPERTY_CONFIGURABLE), flags);
     }
     MalValue result = roots[0];
     mal_gc_unroot(&roots_span);
