@@ -51,6 +51,8 @@ int32_t mal_i18n_local_tz_name(uint8_t *buf, int32_t cap);
  * Each writes UTF-8 into `out` (<= out_cap bytes) and returns the full length,
  * or -1 if the tag is structurally invalid. */
 int32_t mal_i18n_canonicalize_locale(const uint8_t *tag, size_t tag_len, uint8_t *out, int32_t out_cap);
+/** Script direction of a locale: 1 right to left, 0 left to right, -1 invalid tag. */
+int32_t mal_i18n_locale_direction(const uint8_t *tag, size_t tag_len);
 int32_t mal_i18n_locale_maximize(const uint8_t *tag, size_t tag_len, uint8_t *out, int32_t out_cap);
 int32_t mal_i18n_locale_minimize(const uint8_t *tag, size_t tag_len, uint8_t *out, int32_t out_cap);
 int32_t mal_i18n_locale_field(const uint8_t *tag, size_t tag_len, int32_t field, uint8_t *out, int32_t out_cap);
@@ -66,6 +68,8 @@ int32_t mal_i18n_locale_field(const uint8_t *tag, size_t tag_len, int32_t field,
 #define MAL_LOCALE_FIELD_CASE_FIRST 7
 #define MAL_LOCALE_FIELD_NUMERIC 8
 #define MAL_LOCALE_FIELD_NUMBERING_SYSTEM 9
+#define MAL_LOCALE_FIELD_VARIANTS 10
+#define MAL_LOCALE_FIELD_FIRST_DAY_OF_WEEK 11
 
 /* ---- Intl.Collator ----
  * collator_new returns an opaque, leaked handle (or NULL on failure).

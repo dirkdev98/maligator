@@ -95,6 +95,19 @@ pub unsafe extern "C" fn mal_i18n_canonicalize_locale(tag_ptr: *const u8, tag_le
     }
 }
 
+/// The script direction for Intl.Locale.prototype.getTextInfo: 1 for right to
+/// left, 0 for left to right, or -1 for a structurally invalid tag.
+#[no_mangle]
+pub unsafe extern "C" fn mal_i18n_locale_direction(tag_ptr: *const u8, tag_len: usize) -> i32 {
+    let Some(locale) = parse_locale(tag_ptr, tag_len) else {
+        return -1;
+    };
+    match icu_locale::LocaleDirectionality::new_extended().get(&locale.id) {
+        Some(icu_locale::Direction::RightToLeft) => 1,
+        _ => 0,
+    }
+}
+
 /// Add likely subtags (Intl.Locale.prototype.maximize) and write the result.
 #[no_mangle]
 pub unsafe extern "C" fn mal_i18n_locale_maximize(tag_ptr: *const u8, tag_len: usize, out: *mut u8, out_cap: i32) -> i32 {
@@ -121,13 +134,15 @@ pub const MAL_LOCALE_FIELD_LANGUAGE: i32 = 1;
 pub const MAL_LOCALE_FIELD_SCRIPT: i32 = 2;
 pub const MAL_LOCALE_FIELD_REGION: i32 = 3;
 // Unicode extension keyword values (calendar/collation/hourCycle/caseFirst/
-// numeric/numberingSystem).
+// numeric/numberingSystem, and firstDayOfWeek below the variants subtags).
 pub const MAL_LOCALE_FIELD_CALENDAR: i32 = 4;
 pub const MAL_LOCALE_FIELD_COLLATION: i32 = 5;
 pub const MAL_LOCALE_FIELD_HOUR_CYCLE: i32 = 6;
 pub const MAL_LOCALE_FIELD_CASE_FIRST: i32 = 7;
 pub const MAL_LOCALE_FIELD_NUMERIC: i32 = 8;
 pub const MAL_LOCALE_FIELD_NUMBERING_SYSTEM: i32 = 9;
+pub const MAL_LOCALE_FIELD_VARIANTS: i32 = 10;
+pub const MAL_LOCALE_FIELD_FIRST_DAY_OF_WEEK: i32 = 11;
 
 /// Extract a subtag or Unicode-extension keyword (the Intl.Locale getters).
 /// Writes the value (UTF-8, empty when absent) into `out`; returns -1 for an
@@ -155,6 +170,8 @@ pub unsafe extern "C" fn mal_i18n_locale_field(tag_ptr: *const u8, tag_len: usiz
             None => String::new(),
         },
         MAL_LOCALE_FIELD_NUMBERING_SYSTEM => keyword(key!("nu")),
+        MAL_LOCALE_FIELD_VARIANTS => locale.id.variants.to_string(),
+        MAL_LOCALE_FIELD_FIRST_DAY_OF_WEEK => keyword(key!("fw")),
         _ => return -1,
     };
     unsafe { write_utf8(&value, out, out_cap) }

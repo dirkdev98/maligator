@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #include "ascii.h"
 #include "array_object.h"
@@ -317,7 +318,8 @@ static MalArrayObject *intl_canonicalize_locale_list(MalVm *vm, MalValue locales
         intl_array_push(vm, mal_value_to_array_object(roots[1]), 0, roots[2]);
         goto done;
     }
-    if (!mal_value_is_object(roots[0])) goto done;
+    // ToObject: a primitive list reads its length and elements through its wrapper.
+    if (!mal_value_is_object(roots[0])) roots[0] = mal_builtin_object_box_primitive(vm, roots[0]);
     MalValue length_value;
     if (!mal_vm_get_property(vm, roots[0], mal_intrinsic_string_key(vm, "length"), &length_value)) goto failed;
     f64 length_number;
@@ -455,19 +457,124 @@ static MalValue intl_supported_values_of(MalVm *vm, MalValue this_value, const M
 // Intl.Locale
 // ---------------------------------------------------------------------------
 
-// The Unicode-extension keyword options, in (option name, bcp47 key, is-boolean) form.
+static bool intl_option_string(MalVm *vm, MalValue options, const char *name, MalString **out, bool *present);
+static bool intl_option_bool(MalVm *vm, MalValue options, const char *name, bool *out, bool *present);
+static void intl_resolved_set(MalVm *vm, MalObject *object, const char *name, MalValue value);
+
+static bool intl_ascii_alpha(byte c) { return (c | 0x20) >= 'a' && (c | 0x20) <= 'z'; }
+static bool intl_ascii_digit(byte c) { return c >= '0' && c <= '9'; }
+static bool intl_ascii_alnum(byte c) { return intl_ascii_alpha(c) || intl_ascii_digit(c); }
+
+/** A string option as ASCII; false (no throw) for a unit no locale subtag can hold. */
+static bool intl_option_ascii(MalString *value, char *out, usize cap, usize *len) {
+    usize n = mal_string_length(value);
+    if (n >= cap) return false;
+    for (usize i = 0; i < n; i++) {
+        c16 unit = mal_string_code_unit_at(value, i);
+        if (unit == 0 || unit > 0x7F) return false;
+        out[i] = (char) unit;
+    }
+    out[n] = '\0';
+    *len = n;
+    return true;
+}
+
+static bool intl_all(const char *s, usize from, usize to, bool (*pred)(byte)) {
+    for (usize i = from; i < to; i++) {
+        if (!pred((byte) s[i])) return false;
+    }
+    return true;
+}
+
+// unicode_language_subtag, unicode_script_subtag and unicode_region_subtag.
+static bool intl_language_subtag(const char *s, usize n) {
+    return ((n >= 2 && n <= 3) || (n >= 5 && n <= 8)) && intl_all(s, 0, n, intl_ascii_alpha);
+}
+static bool intl_script_subtag(const char *s, usize n) {
+    return n == 4 && intl_all(s, 0, n, intl_ascii_alpha);
+}
+static bool intl_region_subtag(const char *s, usize n) {
+    return (n == 2 && intl_all(s, 0, n, intl_ascii_alpha)) || (n == 3 && intl_all(s, 0, n, intl_ascii_digit));
+}
+
+/** unicode_variant_subtag (- unicode_variant_subtag)*, without duplicates. */
+static bool intl_variants_subtags(const char *s, usize n) {
+    usize start = 0;
+    while (start <= n) {
+        usize end = start;
+        while (end < n && s[end] != '-') end++;
+        usize len = end - start;
+        bool ok = ((len >= 5 && len <= 8) && intl_all(s, start, end, intl_ascii_alnum)) ||
+            (len == 4 && intl_ascii_digit((byte) s[start]) && intl_all(s, start + 1, end, intl_ascii_alnum));
+        if (!ok) return false;
+        for (usize prev = 0; prev < start;) {
+            usize prev_end = prev;
+            while (s[prev_end] != '-') prev_end++;
+            if (prev_end - prev == len && strncasecmp(s + prev, s + start, len) == 0) return false;
+            prev = prev_end + 1;
+        }
+        start = end + 1;
+    }
+    return true;
+}
+
+/** The `type` nonterminal: alphanum{3,8} (- alphanum{3,8})*. */
+static bool intl_type_subtags(const char *s, usize n) {
+    usize start = 0;
+    while (start <= n) {
+        usize end = start;
+        while (end < n && s[end] != '-') end++;
+        usize len = end - start;
+        if (len < 3 || len > 8 || !intl_all(s, start, end, intl_ascii_alnum)) return false;
+        start = end + 1;
+    }
+    return true;
+}
+
+/** Reads a string option for the Locale constructor; `*present` is false when undefined. */
+static bool intl_locale_option(MalVm *vm, MalValue options, const char *name, char *out, usize cap, usize *len, bool *present, bool *ascii) {
+    MalString *value;
+    if (!intl_option_string(vm, options, name, &value, present)) return false;
+    *ascii = !*present || intl_option_ascii(value, out, cap, len);
+    return true;
+}
+
+static MalValue intl_locale_range_error(MalVm *vm) {
+    mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Incorrect locale information provided");
+    return mal_value_new_undefined();
+}
+
+// The Unicode-extension keyword options in the order the constructor reads them.
+typedef enum { LOCALE_TYPE, LOCALE_FIRST_DAY, LOCALE_HOUR_CYCLE, LOCALE_CASE_FIRST, LOCALE_BOOLEAN } IntlLocaleOptionKind;
 static const struct {
     const char *option;
     const char *key;
-    bool is_bool;
+    IntlLocaleOptionKind kind;
 } LOCALE_KEYWORDS[] = {
-    {"calendar", "ca", false},
-    {"collation", "co", false},
-    {"hourCycle", "hc", false},
-    {"caseFirst", "kf", false},
-    {"numeric", "kn", true},
-    {"numberingSystem", "nu", false},
+    {"calendar", "ca", LOCALE_TYPE},
+    {"collation", "co", LOCALE_TYPE},
+    {"firstDayOfWeek", "fw", LOCALE_FIRST_DAY},
+    {"hourCycle", "hc", LOCALE_HOUR_CYCLE},
+    {"caseFirst", "kf", LOCALE_CASE_FIRST},
+    {"numeric", "kn", LOCALE_BOOLEAN},
+    {"numberingSystem", "nu", LOCALE_TYPE},
 };
+
+static bool intl_one_of(const char *value, const char *const *values) {
+    for (; *values != nullptr; values++) {
+        if (strcmp(value, *values) == 0) return true;
+    }
+    return false;
+}
+
+/** Append `text` (of `n` bytes) to the tag buffer; false when it would not fit. */
+static bool intl_tag_append(char *buf, usize cap, usize *len, const char *text, usize n) {
+    if (*len + n >= cap) return false;
+    memcpy(buf + *len, text, n);
+    *len += n;
+    buf[*len] = '\0';
+    return true;
+}
 
 static MalValue intl_locale_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
@@ -482,79 +589,207 @@ static MalValue intl_locale_constructor(MalVm *vm, MalValue this_value, const Ma
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "locale tag must be a String or Object");
         return mal_value_new_undefined();
     }
-
     MalString *base_tag;
     if (mal_value_is_intl_object(tag_arg) && mal_value_to_intl_object(tag_arg)->kind == MAL_INTL_LOCALE) {
         base_tag = mal_value_to_string(mal_value_to_intl_object(tag_arg)->data);
     } else if (!mal_vm_to_string(vm, tag_arg, &base_tag)) {
         return mal_value_new_undefined();
     }
-
-    // Build a BCP-47 tag with any -u- keyword options, then canonicalize (which
-    // validates structure and normalizes ordering/case). Structural overrides
-    // Language/script/region options remain unsupported.
-    byte buf[400];
-    usize len;
-    if (!intl_tag_utf8(base_tag, buf, sizeof(buf), &len)) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Incorrect locale information provided");
+    MalValue options = arg_count >= 2 ? args[1] : mal_value_new_undefined();
+    if (mal_value_is_null(options)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Intl.Locale options must be an object");
         return mal_value_new_undefined();
     }
+    MalValue roots[] = {mal_value_from_string(base_tag), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalValue result = mal_value_new_undefined();
 
-    MalValue options = arg_count >= 2 ? args[1] : mal_value_new_undefined();
-    if (mal_value_is_object(options)) {
-        bool wrote_ext = false;
-        for (usize k = 0; k < countof(LOCALE_KEYWORDS); k++) {
-            MalValue value;
-            if (!mal_vm_get_property(vm, options, mal_intrinsic_string_key(vm, LOCALE_KEYWORDS[k].option), &value)) {
-                return mal_value_new_undefined();
+    // The tag is canonicalized before the options apply, then once more after.
+    bool invalid;
+    MalString *canonical = intl_call_locale_fn(vm, mal_i18n_canonicalize_locale, base_tag, &invalid);
+    if (invalid) {
+        intl_locale_range_error(vm);
+        goto done;
+    }
+    roots[1] = mal_value_from_string(canonical);
+
+    // UpdateLanguageId.
+    char parts[4][96];
+    usize part_len[4];
+    static const i32 part_fields[4] = {
+        MAL_LOCALE_FIELD_LANGUAGE, MAL_LOCALE_FIELD_SCRIPT, MAL_LOCALE_FIELD_REGION, MAL_LOCALE_FIELD_VARIANTS,
+    };
+    static const char *const part_options[4] = {"language", "script", "region", "variants"};
+    static bool (*const part_valid[4])(const char *, usize) = {
+        intl_language_subtag, intl_script_subtag, intl_region_subtag, intl_variants_subtags,
+    };
+    for (usize i = 0; i < 4; i++) {
+        bool present;
+        bool ascii;
+        if (!intl_locale_option(vm, options, part_options[i], parts[i], sizeof(parts[i]), &part_len[i], &present, &ascii)) {
+            goto done;
+        }
+        if (present) {
+            if (!ascii || !part_valid[i](parts[i], part_len[i])) {
+                intl_locale_range_error(vm);
+                goto done;
             }
-            if (mal_value_is_undefined(value)) {
-                continue;
-            }
-            char value_buf[64];
-            if (LOCALE_KEYWORDS[k].is_bool) {
-                snprintf(value_buf, sizeof(value_buf), "%s", mal_value_is_truthy(value) ? "true" : "false");
-            } else {
-                MalString *value_string;
-                if (!mal_vm_to_string(vm, value, &value_string)) {
-                    return mal_value_new_undefined();
-                }
-                usize vn = mal_string_length(value_string);
-                const c16 *vu = mal_string_code_units(value_string);
-                if (vn >= sizeof(value_buf)) {
-                    vn = sizeof(value_buf) - 1;
-                }
-                for (usize i = 0; i < vn; i++) {
-                    value_buf[i] = (char) (vu[i] <= 0x7F ? (byte) vu[i] : '?');
-                }
-                value_buf[vn] = '\0';
-            }
-            int written = snprintf(
-                (char *) buf + len, sizeof(buf) - len, "%s-%s-%s",
-                wrote_ext ? "" : "-u", LOCALE_KEYWORDS[k].key, value_buf
-            );
-            if (written > 0) {
-                len += (usize) written;
-            }
-            wrote_ext = true;
+            continue;
+        }
+        MalString *field = intl_locale_field_string(vm, canonical, part_fields[i]);
+        if (!intl_option_ascii(field, parts[i], sizeof(parts[i]), &part_len[i])) {
+            intl_locale_range_error(vm);
+            goto done;
+        }
+    }
+    char tag[400];
+    usize tag_len = 0;
+    tag[0] = '\0';
+    for (usize i = 0; i < 4; i++) {
+        if (part_len[i] == 0) continue;
+        if ((tag_len > 0 && !intl_tag_append(tag, sizeof(tag), &tag_len, "-", 1)) ||
+            !intl_tag_append(tag, sizeof(tag), &tag_len, parts[i], part_len[i])) {
+            intl_locale_range_error(vm);
+            goto done;
         }
     }
 
-    // Canonicalize the assembled tag.
-    bool invalid;
-    MalString *assembled = mal_string_new_ascii(&vm->heap, buf, len);
-    MalString *canonical = intl_call_locale_fn(vm, mal_i18n_canonicalize_locale, assembled, &invalid);
-    if (invalid) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Incorrect locale information provided");
-        return mal_value_new_undefined();
+    // The extensions follow the base name in the canonical tag.
+    char canonical_ascii[400];
+    usize canonical_len;
+    MalString *base_name = intl_locale_field_string(vm, canonical, MAL_LOCALE_FIELD_BASE_NAME);
+    if (!intl_option_ascii(canonical, canonical_ascii, sizeof(canonical_ascii), &canonical_len)) {
+        intl_locale_range_error(vm);
+        goto done;
+    }
+    const char *extensions = canonical_ascii + mal_string_length(base_name);
+
+    // MakeLocaleRecord: each keyword option replaces or adds its -u- keyword.
+    char values[countof(LOCALE_KEYWORDS)][96];
+    bool set[countof(LOCALE_KEYWORDS)] = {false};
+    for (usize k = 0; k < countof(LOCALE_KEYWORDS); k++) {
+        usize len = 0;
+        if (LOCALE_KEYWORDS[k].kind == LOCALE_BOOLEAN) {
+            bool value;
+            bool present;
+            if (!intl_option_bool(vm, options, LOCALE_KEYWORDS[k].option, &value, &present)) goto done;
+            if (present) {
+                snprintf(values[k], sizeof(values[k]), "%s", value ? "true" : "false");
+                set[k] = true;
+            }
+            continue;
+        }
+        bool present;
+        bool ascii;
+        if (!intl_locale_option(vm, options, LOCALE_KEYWORDS[k].option, values[k], sizeof(values[k]), &len, &present, &ascii)) {
+            goto done;
+        }
+        if (!present) continue;
+        static const char *const hour_cycles[] = {"h11", "h12", "h23", "h24", nullptr};
+        static const char *const case_firsts[] = {"upper", "lower", "false", nullptr};
+        static const char *const weekdays[] = {"sun", "mon", "tue", "wed", "thu", "fri", "sat", "sun"};
+        bool valid = ascii;
+        switch (LOCALE_KEYWORDS[k].kind) {
+            case LOCALE_HOUR_CYCLE: valid = valid && intl_one_of(values[k], hour_cycles); break;
+            case LOCALE_CASE_FIRST: valid = valid && intl_one_of(values[k], case_firsts); break;
+            case LOCALE_FIRST_DAY:
+                // WeekdayToString maps "0" through "7" to weekday names.
+                if (valid && len == 1 && values[k][0] >= '0' && values[k][0] <= '7') {
+                    snprintf(values[k], sizeof(values[k]), "%s", weekdays[values[k][0] - '0']);
+                    len = 3;
+                }
+                valid = valid && intl_type_subtags(values[k], len);
+                break;
+            default: valid = valid && intl_type_subtags(values[k], len); break;
+        }
+        if (!valid) {
+            intl_locale_range_error(vm);
+            goto done;
+        }
+        for (usize i = 0; i < len; i++) values[k][i] = (char) ((byte) values[k][i] | (intl_ascii_alpha((byte) values[k][i]) ? 0x20 : 0));
+        set[k] = true;
     }
 
-    MalObject *prototype = intl_resolve_prototype(vm, new_target, MAL_INTRINSIC_INTL_LOCALE_PROTOTYPE);
-    if (prototype == nullptr) {
-        return mal_value_new_undefined();
+    // Copy the extensions, rewriting the -u- extension (inserted before -x-).
+    const char *u_start = nullptr;
+    const char *u_end = nullptr;
+    const char *x_start = nullptr;
+    for (const char *p = extensions; *p != '\0';) {
+        const char *token = p + 1;
+        const char *token_end = token;
+        while (*token_end != '\0' && *token_end != '-') token_end++;
+        if (token_end - token == 1) {
+            if (u_start != nullptr && u_end == nullptr) u_end = p;
+            if (*token == 'x') {
+                x_start = p;
+                break;
+            }
+            if (*token == 'u') u_start = p;
+        }
+        p = token_end;
     }
-    MalIntlObject *locale = mal_intl_object_new(&vm->heap, prototype, MAL_INTL_LOCALE, nullptr, mal_value_from_string(canonical));
-    return mal_value_from_intl_object(locale);
+    if (u_start != nullptr && u_end == nullptr) u_end = x_start != nullptr ? x_start : extensions + strlen(extensions);
+    const char *insert_at = u_start != nullptr ? u_start : (x_start != nullptr ? x_start : extensions + strlen(extensions));
+    if (!intl_tag_append(tag, sizeof(tag), &tag_len, extensions, (usize) (insert_at - extensions))) {
+        intl_locale_range_error(vm);
+        goto done;
+    }
+    bool any_keyword = false;
+    for (usize k = 0; k < countof(LOCALE_KEYWORDS); k++) any_keyword |= set[k];
+    if (u_start != nullptr || any_keyword) {
+        bool ok = intl_tag_append(tag, sizeof(tag), &tag_len, "-u", 2);
+        if (u_start != nullptr) {
+            // Keep attributes and the keywords the options leave alone.
+            const char *p = u_start + 2;
+            bool skipping = false;
+            while (ok && p < u_end) {
+                const char *token = p + 1;
+                const char *token_end = token;
+                while (token_end < u_end && *token_end != '-') token_end++;
+                if (token_end - token == 2) {
+                    skipping = false;
+                    for (usize k = 0; k < countof(LOCALE_KEYWORDS); k++) {
+                        if (set[k] && strncmp(token, LOCALE_KEYWORDS[k].key, 2) == 0) skipping = true;
+                    }
+                }
+                if (!skipping) ok = intl_tag_append(tag, sizeof(tag), &tag_len, p, (usize) (token_end - p));
+                p = token_end;
+            }
+        }
+        for (usize k = 0; ok && k < countof(LOCALE_KEYWORDS); k++) {
+            if (!set[k]) continue;
+            ok = intl_tag_append(tag, sizeof(tag), &tag_len, "-", 1) &&
+                intl_tag_append(tag, sizeof(tag), &tag_len, LOCALE_KEYWORDS[k].key, 2) &&
+                intl_tag_append(tag, sizeof(tag), &tag_len, "-", 1) &&
+                intl_tag_append(tag, sizeof(tag), &tag_len, values[k], strlen(values[k]));
+        }
+        if (!ok) {
+            intl_locale_range_error(vm);
+            goto done;
+        }
+    }
+    const char *rest = u_end != nullptr ? u_end : insert_at;
+    if (!intl_tag_append(tag, sizeof(tag), &tag_len, rest, strlen(rest))) {
+        intl_locale_range_error(vm);
+        goto done;
+    }
+
+    MalString *assembled = mal_string_new_ascii(&vm->heap, (const byte *) tag, tag_len);
+    roots[1] = mal_value_from_string(assembled);
+    MalString *final_tag = intl_call_locale_fn(vm, mal_i18n_canonicalize_locale, assembled, &invalid);
+    if (invalid) {
+        intl_locale_range_error(vm);
+        goto done;
+    }
+    roots[1] = mal_value_from_string(final_tag);
+    MalObject *prototype = intl_resolve_prototype(vm, new_target, MAL_INTRINSIC_INTL_LOCALE_PROTOTYPE);
+    if (prototype == nullptr) goto done;
+    result = mal_value_from_intl_object(
+        mal_intl_object_new(&vm->heap, prototype, MAL_INTL_LOCALE, nullptr, mal_value_from_string(final_tag)));
+done:
+    mal_gc_unroot(&root);
+    return result;
 }
 
 static MalValue intl_locale_field_getter(MalVm *vm, MalValue this_value, i32 field, bool as_bool, bool undef_if_empty) {
@@ -586,12 +821,14 @@ LOCALE_GETTER(intl_locale_get_base_name, MAL_LOCALE_FIELD_BASE_NAME, false, fals
 LOCALE_GETTER(intl_locale_get_language, MAL_LOCALE_FIELD_LANGUAGE, false, false)
 LOCALE_GETTER(intl_locale_get_script, MAL_LOCALE_FIELD_SCRIPT, false, true)
 LOCALE_GETTER(intl_locale_get_region, MAL_LOCALE_FIELD_REGION, false, true)
+LOCALE_GETTER(intl_locale_get_variants, MAL_LOCALE_FIELD_VARIANTS, false, true)
 LOCALE_GETTER(intl_locale_get_calendar, MAL_LOCALE_FIELD_CALENDAR, false, true)
 LOCALE_GETTER(intl_locale_get_collation, MAL_LOCALE_FIELD_COLLATION, false, true)
 LOCALE_GETTER(intl_locale_get_hour_cycle, MAL_LOCALE_FIELD_HOUR_CYCLE, false, true)
 LOCALE_GETTER(intl_locale_get_case_first, MAL_LOCALE_FIELD_CASE_FIRST, false, true)
 LOCALE_GETTER(intl_locale_get_numeric, MAL_LOCALE_FIELD_NUMERIC, true, false)
 LOCALE_GETTER(intl_locale_get_numbering_system, MAL_LOCALE_FIELD_NUMBERING_SYSTEM, false, true)
+LOCALE_GETTER(intl_locale_get_first_day_of_week, MAL_LOCALE_FIELD_FIRST_DAY_OF_WEEK, false, true)
 
 static MalValue intl_locale_to_string(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue cl) {
     (void) args;
@@ -637,6 +874,28 @@ static MalValue intl_locale_minimize(MalVm *vm, MalValue this_value, const MalVa
     return intl_locale_transform(vm, this_value, mal_i18n_locale_minimize);
 }
 
+static MalValue intl_locale_get_text_info(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue nt, MalValue cl) {
+    (void) args;
+    (void) arg_count;
+    (void) nt;
+    (void) cl;
+    MalIntlObject *locale;
+    if (!intl_this(vm, this_value, MAL_INTL_LOCALE, &locale, "Intl.Locale.prototype.getTextInfo called on incompatible receiver")) {
+        return mal_value_new_undefined();
+    }
+    byte tag[320];
+    usize tag_len;
+    i32 direction = intl_tag_utf8(mal_value_to_string(locale->data), tag, sizeof(tag), &tag_len)
+        ? mal_i18n_locale_direction((const uint8_t *) tag, tag_len) : -1;
+    MalObject *info = mal_intrinsic_new_object(vm);
+    MalValue rooted = mal_value_from_object(info);
+    MalRootSpan root;
+    mal_gc_root(&root, &rooted, 1);
+    intl_resolved_set(vm, info, "direction", mal_value_from_string(mal_intrinsic_ascii(vm, direction == 1 ? "rtl" : "ltr")));
+    mal_gc_unroot(&root);
+    return rooted;
+}
+
 static void intl_install_locale(MalVm *vm, MalObject *intl_object) {
     MalObject *function_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
     MalObject *prototype = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]));
@@ -655,17 +914,20 @@ static void intl_install_locale(MalVm *vm, MalObject *intl_object) {
     mal_intrinsic_define_method_n(vm, prototype, "toString", 0, intl_locale_to_string);
     mal_intrinsic_define_method_n(vm, prototype, "maximize", 0, intl_locale_maximize);
     mal_intrinsic_define_method_n(vm, prototype, "minimize", 0, intl_locale_minimize);
+    mal_intrinsic_define_method_n(vm, prototype, "getTextInfo", 0, intl_locale_get_text_info);
 
     intl_define_getter(vm, prototype, "baseName", intl_locale_get_base_name);
     intl_define_getter(vm, prototype, "language", intl_locale_get_language);
     intl_define_getter(vm, prototype, "script", intl_locale_get_script);
     intl_define_getter(vm, prototype, "region", intl_locale_get_region);
+    intl_define_getter(vm, prototype, "variants", intl_locale_get_variants);
     intl_define_getter(vm, prototype, "calendar", intl_locale_get_calendar);
     intl_define_getter(vm, prototype, "collation", intl_locale_get_collation);
     intl_define_getter(vm, prototype, "hourCycle", intl_locale_get_hour_cycle);
     intl_define_getter(vm, prototype, "caseFirst", intl_locale_get_case_first);
     intl_define_getter(vm, prototype, "numeric", intl_locale_get_numeric);
     intl_define_getter(vm, prototype, "numberingSystem", intl_locale_get_numbering_system);
+    intl_define_getter(vm, prototype, "firstDayOfWeek", intl_locale_get_first_day_of_week);
 
     mal_intrinsic_define_data(vm, intl_object, "Locale", vm->intrinsics[MAL_INTRINSIC_INTL_LOCALE_CONSTRUCTOR], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
 }
