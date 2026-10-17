@@ -281,7 +281,7 @@
 	},
 	{
 		"file": "generated/known_native_builtin_temporal_c.inc",
-		"sha256": "adc23a703914e512a23a992335f88735c64acc19e6f281d36f98ee242938b7ec"
+		"sha256": "b7503764b20599f428b1ea714706b2653b21bb8f7cb096a360dcb544c7240995"
 	},
 	{
 		"file": "generated/known_native_builtin_typed_array_c.inc",
@@ -297,7 +297,7 @@
 	},
 	{
 		"file": "generated/known_native_entries.inc",
-		"sha256": "0b77010afc08feed5818d225ff9328b62b0d275ef144ff8d8a66acd0fb6be12a"
+		"sha256": "7f234995413174a5709586496efd8846459681fa17c2d4b16ed7c1b833d4e7e0"
 	},
 	{
 		"file": "generated/known_native_intrinsics_c.inc",
@@ -305,7 +305,7 @@
 	},
 	{
 		"file": "generated/known_primordials.inc",
-		"sha256": "55aa199d394a008dd10b6aefad100a263e9c1c63d2b97371b351b8391dcbe1c9"
+		"sha256": "15fba9c2263562b0ad56ae9f9e2a4528fd8d4b85f7c8c0979b1e4087d1f49e6a"
 	},
 	{
 		"file": "generated/node_builtin_installers.inc",

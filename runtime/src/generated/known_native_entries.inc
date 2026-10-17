@@ -706,6 +706,7 @@ MalValue mal_known_native_plain_date_time_to_zoned_date_time(MalVm *vm, MalValue
 MalValue mal_known_native_plain_date_time_until(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
 MalValue mal_known_native_plain_date_time_value_of(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
 MalValue mal_known_native_plain_date_time_week_of_year(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
+MalValue mal_known_native_plain_date_time_with(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
 MalValue mal_known_native_plain_date_time_with_calendar(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
 MalValue mal_known_native_plain_date_time_with_plain_time(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);
 MalValue mal_known_native_plain_date_time_year(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee);

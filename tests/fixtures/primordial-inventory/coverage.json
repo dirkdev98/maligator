@@ -71277,6 +71277,19 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"Temporal.PlainDateTime.prototype\",\"with\"]",
+			"owner": "Temporal.PlainDateTime.prototype",
+			"ownerPaths": [
+				"MAL_INTRINSIC_TEMPORAL_PLAIN_DATE_TIME_PROTOTYPE",
+				"Temporal.PlainDateTime.prototype"
+			],
+			"key": "with",
+			"kind": "data",
+			"operations": ["Temporal.PlainDateTime.prototype.with"],
+			"task": "L-16",
+			"decisions": []
+		},
+		{
 			"id": "[\"Temporal.PlainDateTime.prototype\",\"withCalendar\"]",
 			"owner": "Temporal.PlainDateTime.prototype",
 			"ownerPaths": [
@@ -71969,6 +71982,26 @@
 			"id": "[\"Temporal.PlainDateTime.prototype.weekOfYear<get>\",\"name\"]",
 			"owner": "Temporal.PlainDateTime.prototype.weekOfYear<get>",
 			"ownerPaths": ["Temporal.PlainDateTime.prototype.weekOfYear<get>"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"Temporal.PlainDateTime.prototype.with\",\"length\"]",
+			"owner": "Temporal.PlainDateTime.prototype.with",
+			"ownerPaths": ["Temporal.PlainDateTime.prototype.with"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"Temporal.PlainDateTime.prototype.with\",\"name\"]",
+			"owner": "Temporal.PlainDateTime.prototype.with",
+			"ownerPaths": ["Temporal.PlainDateTime.prototype.with"],
 			"key": "name",
 			"kind": "data",
 			"operations": [],
@@ -198556,6 +198589,26 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"Temporal.PlainDateTime.prototype.with\",\"<call>\"]",
+			"owner": "Temporal.PlainDateTime.prototype.with",
+			"ownerPaths": ["Temporal.PlainDateTime.prototype.with"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["Temporal.PlainDateTime.prototype.with"],
+			"task": "L-16",
+			"decisions": []
+		},
+		{
+			"id": "[\"Temporal.PlainDateTime.prototype.with\",\"<construct>\"]",
+			"owner": "Temporal.PlainDateTime.prototype.with",
+			"ownerPaths": ["Temporal.PlainDateTime.prototype.with"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["Temporal.PlainDateTime.prototype.with"],
+			"task": "L-16",
+			"decisions": []
+		},
+		{
 			"id": "[\"Temporal.PlainDateTime.prototype.withCalendar\",\"<call>\"]",
 			"owner": "Temporal.PlainDateTime.prototype.withCalendar",
 			"ownerPaths": ["Temporal.PlainDateTime.prototype.withCalendar"],
@@ -225711,6 +225764,10 @@
 			"identities": ["Temporal.PlainDateTime.prototype.weekOfYear<get>"]
 		},
 		{
+			"id": "Temporal.PlainDateTime.prototype.with",
+			"identities": ["Temporal.PlainDateTime.prototype.with"]
+		},
+		{
 			"id": "Temporal.PlainDateTime.prototype.withCalendar",
 			"identities": ["Temporal.PlainDateTime.prototype.withCalendar"]
 		},
@@ -233651,8 +233708,8 @@
 			"owner": "Temporal.PlainDateTime.prototype",
 			"key": "with",
 			"task": "L-16",
-			"exposures": [],
-			"state": "not-installed-in-full-inventory"
+			"exposures": ["[\"Temporal.PlainDateTime.prototype\",\"with\"]"],
+			"state": "reconciled"
 		},
 		{
 			"owner": "Temporal.PlainDateTime.prototype",

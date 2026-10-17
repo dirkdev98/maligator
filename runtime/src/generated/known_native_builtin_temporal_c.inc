@@ -1043,6 +1043,15 @@ MalValue mal_known_native_plain_date_time_week_of_year(MalVm *vm, MalValue recei
     return mal_value_new_undefined();
 #endif
 }
+MalValue mal_known_native_plain_date_time_with(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee) {
+#if (MAL_TEMPORAL)
+    return plain_date_time_with(vm, receiver, args, count, target, callee);
+#else
+    (void) receiver; (void) args; (void) count; (void) target; (void) callee;
+    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Known native operation is unavailable");
+    return mal_value_new_undefined();
+#endif
+}
 MalValue mal_known_native_plain_date_time_with_calendar(MalVm *vm, MalValue receiver, const MalValue *args, i32 count, MalValue target, MalValue callee) {
 #if (MAL_TEMPORAL)
     return plain_date_time_with_calendar(vm, receiver, args, count, target, callee);
