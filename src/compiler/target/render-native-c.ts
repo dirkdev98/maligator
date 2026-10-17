@@ -33,6 +33,7 @@ import {
 	nativeStringSwitchHash,
 } from "../shared/native-string-switch.ts";
 import { staticDataQueryTag } from "../shared/static-data-query.ts";
+import { bytecodeLoopInstructions } from "./bytecode-loops.ts";
 import {
 	emitBinaryOperator,
 	emitIntrinsic,
@@ -1218,6 +1219,7 @@ function emitNumberRecordRegion(
 	plan: NativeNumberRecordRegionPlan,
 	reps: ReadonlyArray<VmRegisterRepresentation>,
 	propertyCache: string,
+	shapeSnapshots: Set<number> | undefined,
 ): ReadonlyArray<string> {
 	const members = new Set(plan.claimedIps);
 	const order = numberRecordOrder(fn, plan.id, plan.exitIp, (ip) => members.has(ip));
@@ -1246,10 +1248,16 @@ function emitNumberRecordRegion(
 	const guards = [
 		`mal_vm_number_record_begin(r${plan.object}, ${stored.length > 0}, &${id})`,
 	];
-	for (const [index, { icIndex }] of plan.fields.entries())
+	for (const [index, { icIndex }] of plan.fields.entries()) {
+		shapeSnapshots?.add(icIndex);
+		const snapshot =
+			shapeSnapshots === undefined
+				? "&(MalShapeSnapshot) {0}"
+				: `&${shapeSnapshotName(icIndex)}`;
 		guards.push(
-			`mal_vm_number_record_field(&${id}, &${propertyCache}[${icIndex}], &${id}_f${index}, &${id}_v${index})`,
+			`mal_vm_number_record_field(&${id}, &${propertyCache}[${icIndex}], ${snapshot}, &${id}_f${index}, &${id}_v${index})`,
 		);
+	}
 	const initial = new Map<number, string>();
 	for (const register of plan.inputs) {
 		const representation = reps[register];
@@ -3698,6 +3706,10 @@ const NATIVE_BODY_REFERENCES: Readonly<Record<NativeBodyResource, string>> = {
 	throwExit: "__throw_exit",
 };
 
+function shapeSnapshotName(icIndex: number): string {
+	return `__shape_snapshot_${icIndex}`;
+}
+
 function nativeBodyReference(
 	resources: Set<NativeBodyResource>,
 	resource: NativeBodyResource,
@@ -4553,6 +4565,9 @@ function emitBody(
 	const emittedInstructions = new Set<number>();
 	const directEntryCalls = new Map<number, Set<number>>();
 	const stringLeafCaches = new Set<number>();
+	// Record-region field rows whose last shape lives in a frame local; only loops reuse one.
+	const shapeSnapshots = new Set<number>();
+	const loopInstructions = bytecodeLoopInstructions(fn);
 	const invocationPreamble: Array<string> = [];
 	for (const action of nativeStringCharCodeAtChainActionByIp.values()) {
 		if (action.role !== "call") continue;
@@ -5050,6 +5065,7 @@ function emitBody(
 				numberRecord,
 				reps,
 				nativeBodyReference(resources, "propertyCache"),
+				loopInstructions[ip] === 1 ? shapeSnapshots : undefined,
 			))
 				lines.push(`    ${line}`);
 		const safepointKind = gcSafepointKinds.get(ip);
@@ -5547,9 +5563,14 @@ function emitBody(
 		}
 	}
 
-	const leafCacheDeclarations = [...stringLeafCaches].map(
-		(ip) => `MalStringLeafReadCache __string_leaf_cache_${ip} = {0};`,
-	);
+	const leafCacheDeclarations = [
+		...[...stringLeafCaches].map(
+			(ip) => `MalStringLeafReadCache __string_leaf_cache_${ip} = {0};`,
+		),
+		...[...shapeSnapshots].map(
+			(icIndex) => `MalShapeSnapshot ${shapeSnapshotName(icIndex)} = {0};`,
+		),
+	];
 	if (coro === null) lines.unshift(...leafCacheDeclarations);
 	else invocationPreamble.push(...leafCacheDeclarations);
 	const declarationCount = coro === null ? leafCacheDeclarations.length : 0;

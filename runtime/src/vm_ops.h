@@ -954,6 +954,18 @@ typedef struct MalInlineCache {
 
 static_assert(sizeof(MalInlineCache) == (sizeof(void *) == 8 ? 72 : 56), "MalInlineCache must retain its pointer-width-specific layout");
 
+/**
+ * A number-record field's last proven shape row, held in a native frame local
+ * across loop iterations. Shapes live as long as the heap, so the row stays sound
+ * after its cache row changes, and C compilers keep it in registers across the
+ * field stores that force cache-row reloads. A null shape never matches.
+ */
+typedef struct MalShapeSnapshot {
+    const struct MalShape *shape;
+    u16 field;
+    u8 slot;
+} MalShapeSnapshot;
+
 static inline u8 mal_ic_poly_slot(const MalInlineCache *ic, u8 index) {
     return ic->poly_data[index];
 }
@@ -2244,31 +2256,41 @@ static inline __attribute__((always_inline)) bool mal_vm_number_record_begin(
  * shape, and a store row also proves it writable. Admits only a Number value.
  */
 static inline __attribute__((always_inline)) bool mal_vm_number_record_field(
-    const MalNumberRecord *record, const MalInlineCache *ic, MalNumberRecordField *field, f64 *value
+    const MalNumberRecord *record, const MalInlineCache *ic, MalShapeSnapshot *snapshot,
+    MalNumberRecordField *field, f64 *value
 ) {
     MAL_PERF_COUNT(number_record_field_checks);
-    if (ic->mode != MAL_IC_MODE_SHAPE || ic->slot == MAL_IC_VALUE_SLOT || ic->shape == nullptr) {
-        return false;
-    }
     u16 token;
-    u8 slot = ic->slot;
+    u8 slot;
     bool polymorphic = false;
-    if (__builtin_expect(ic->shape == record->shape, 1)) {
-        token = ic->field;
-    } else if (mal_shape_same_logical(ic->shape, record->shape)) {
-        token = record->shape->props[ic->slot].field;
+    if (snapshot->shape != nullptr && snapshot->shape == record->shape) {
+        MAL_PERF_COUNT(ic_snapshot_hits);
+        token = snapshot->field;
+        slot = snapshot->slot;
     } else {
-        bool found = false;
-        for (u8 index = 0; index < ic->poly_count; index++) {
-            if (mal_shape_same_logical(record->shape, ic->poly_shape[index])) {
-                slot = mal_ic_poly_slot(ic, index);
-                found = true;
-                break;
-            }
+        if (ic->mode != MAL_IC_MODE_SHAPE || ic->slot == MAL_IC_VALUE_SLOT || ic->shape == nullptr) {
+            return false;
         }
-        if (!found) return false;
-        token = record->shape->props[slot].field;
-        polymorphic = true;
+        slot = ic->slot;
+        if (__builtin_expect(ic->shape == record->shape, 1)) {
+            token = ic->field;
+        } else if (mal_shape_same_logical(ic->shape, record->shape)) {
+            token = record->shape->props[ic->slot].field;
+        } else {
+            bool found = false;
+            for (u8 index = 0; index < ic->poly_count; index++) {
+                if (mal_shape_same_logical(record->shape, ic->poly_shape[index])) {
+                    slot = mal_ic_poly_slot(ic, index);
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) return false;
+            token = record->shape->props[slot].field;
+            polymorphic = true;
+        }
+        // Every row above proves the field for the record's own physical layout.
+        *snapshot = (MalShapeSnapshot) {.shape = record->shape, .field = token, .slot = slot};
     }
     switch (mal_shape_field_representation(token)) {
         case MAL_FIELD_I32:
@@ -2309,6 +2331,13 @@ static inline __attribute__((always_inline)) bool mal_vm_number_record_try_store
             memcpy(address, &integer, sizeof(integer));
             return true;
         }
+    }
+    // Admission read a Number from this field, so neither the overwritten nor the
+    // stored value is a reference: SATB and card barriers have nothing to record.
+    if (representation == MAL_FIELD_TAGGED) {
+        MalValue boxed = mal_ops_number_value(value);
+        memcpy(address, &boxed, sizeof(boxed));
+        return true;
     }
     return false;
 }

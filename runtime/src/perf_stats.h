@@ -591,6 +591,8 @@ typedef struct MalPerfStats {
     u64 probe_read_named_missing;
 
     u64 ic_load_mono_hits;
+    // Number-record field rows answered by a frame-local shape snapshot.
+    u64 ic_snapshot_hits;
     u64 ic_load_own_table_hits;
     u64 ic_load_own_table_fills;
     u64 ic_load_inherited_hits;

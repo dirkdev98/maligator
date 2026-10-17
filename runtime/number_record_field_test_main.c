@@ -4,6 +4,7 @@
 #include <string.h>
 
 #define CHECK(condition) do { if (!(condition)) { fprintf(stderr, "record field contract failed at line %d\n", __LINE__); return 1; } } while (0)
+#define FRESH (&(MalShapeSnapshot) {0})
 
 int main(void) {
     MalShapeProp primary_props[1] = {{.slot = 0, .field = mal_shape_field(MAL_FIELD_F64, 0)}};
@@ -54,7 +55,7 @@ int main(void) {
     mal_ic_set_poly_slot(&cache, 0, 2);
     MalNumberRecordField field;
     f64 value;
-    CHECK(mal_vm_number_record_field(&record, &cache, &field, &value));
+    CHECK(mal_vm_number_record_field(&record, &cache, FRESH, &field, &value));
     CHECK(field.slot == 2 && value == 33.5);
     CHECK(mal_vm_number_record_try_store(&record, field, 44.5));
     CHECK(values[0] == 11.0 && values[1] == 22.0 && values[2] == 44.5);
@@ -64,7 +65,7 @@ int main(void) {
     memcpy(storage + 4, &initial, sizeof(initial));
     record.shape = &compact;
     record.fields = storage;
-    CHECK(mal_vm_number_record_field(&record, &cache, &field, &value));
+    CHECK(mal_vm_number_record_field(&record, &cache, FRESH, &field, &value));
     CHECK(field.slot == 2 && value == 37.0);
     CHECK(!mal_vm_number_record_try_store(&record, field, 0.5));
     memcpy(&stored, storage + 4, sizeof(stored));
@@ -73,13 +74,43 @@ int main(void) {
     memcpy(&stored, storage + 4, sizeof(stored));
     CHECK(stored == 41);
     cache.poly_count = 0;
-    CHECK(!mal_vm_number_record_field(&record, &cache, &field, &value));
+    CHECK(!mal_vm_number_record_field(&record, &cache, FRESH, &field, &value));
     cache.poly_count = 1;
     cache.mode = MAL_IC_MODE_TRANSITION;
-    CHECK(!mal_vm_number_record_field(&record, &cache, &field, &value));
+    CHECK(!mal_vm_number_record_field(&record, &cache, FRESH, &field, &value));
     cache.mode = MAL_IC_MODE_SHAPE;
     cache.slot = MAL_IC_VALUE_SLOT;
-    CHECK(!mal_vm_number_record_field(&record, &cache, &field, &value));
+    CHECK(!mal_vm_number_record_field(&record, &cache, FRESH, &field, &value));
+
+    // A snapshot keeps answering for its own layout after the cache row moves on.
+    cache = (MalInlineCache) {.mode = MAL_IC_MODE_SHAPE, .shape = &compact, .slot = 2,
+                              .field = compact_props[2].field};
+    MalShapeSnapshot snapshot = {0};
+    CHECK(mal_vm_number_record_field(&record, &cache, &snapshot, &field, &value));
+    CHECK(snapshot.shape == &compact && snapshot.slot == 2 && snapshot.field == compact_props[2].field);
+    cache.mode = MAL_IC_MODE_TRANSITION;
+    CHECK(mal_vm_number_record_field(&record, &cache, &snapshot, &field, &value));
+    CHECK(field.slot == 2 && value == 41.0);
+    record.shape = &alternate;
+    record.fields = values;
+    CHECK(!mal_vm_number_record_field(&record, &cache, &snapshot, &field, &value));
+
+    // Admission read a Number, so a Number replaces it in a tagged field without barriers.
+    MalShapeProp tagged_props[1] = {{.slot = 0, .field = mal_shape_field(MAL_FIELD_TAGGED, 0)}};
+    MalShape tagged = {.inline_count = 1, .props = tagged_props};
+    MalValue tagged_fields[1] = {mal_ops_number_value(2.5)};
+    record.shape = &tagged;
+    record.fields = tagged_fields;
+    cache = (MalInlineCache) {.mode = MAL_IC_MODE_SHAPE, .shape = &tagged, .slot = 0,
+                              .field = tagged_props[0].field};
+    CHECK(mal_vm_number_record_field(&record, &cache, FRESH, &field, &value));
+    CHECK(value == 2.5);
+    CHECK(mal_vm_number_record_try_store(&record, field, -0.0));
+    CHECK(tagged_fields[0] == mal_ops_number_value(-0.0));
+    CHECK(mal_vm_number_record_try_store(&record, field, 7.0));
+    CHECK(tagged_fields[0] == mal_ops_number_value(7.0));
+    tagged_fields[0] = MAL_VALUE_UNDEFINED;
+    CHECK(!mal_vm_number_record_field(&record, &cache, FRESH, &field, &value));
     puts("number-record-field PASS");
     return 0;
 }
