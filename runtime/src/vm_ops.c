@@ -7793,26 +7793,12 @@ void mal_op_prepared_string_compare(MalCallable *callable, const MalInstruction 
         (u8) (plan & 63));
 }
 
-// ClassDefinitionEvaluation heritage check: the superclass must be null, or a
-// constructor whose `prototype` is an object or null. Sets vm->completion on a
-// violation (`extends 42`, `extends Math.abs`, `extends a-function-without-a
-// -valid-prototype`). The null literal is handled at compile time and never
-// reaches here; a runtime null value is accepted (protoParent is null).
+// ClassDefinitionEvaluation heritage check: the superclass must be null or a
+// constructor. The compiler reads and validates its `prototype` itself, once,
+// as the spec's single Get requires. Sets vm->completion on a violation.
 void mal_vm_op_check_super_class(MalVm *vm, MalValue parent) {
-    if (mal_value_is_null(parent)) {
-        return;
-    }
-    if (!mal_vm_is_constructor(vm, parent)) {
+    if (!mal_value_is_null(parent) && !mal_vm_is_constructor(vm, parent)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Class extends value is not a constructor or null");
-        return;
-    }
-    MalValue proto;
-    if (!mal_vm_get_property(vm, parent, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_PROTOTYPE), &proto)) {
-        return; // a `prototype` getter threw; propagate its completion
-    }
-    if (!mal_value_is_object(proto) && !mal_value_is_null(proto)) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            "Class extends value does not have valid prototype property");
     }
 }
 

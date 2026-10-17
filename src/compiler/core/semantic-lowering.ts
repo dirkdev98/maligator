@@ -4333,13 +4333,64 @@ function compileClass(
 				{ type: "loadProperty", registers: [parentPrototype, parent, prototypeKey] },
 				{ type: "move", registers: [constructorParent, parent] },
 			);
+			// The superclass prototype must be an object or null; typeof null is "object".
+			const prototypeType = nextCoreVariable(fn);
+			const isObject = nextCoreVariable(fn);
+			const isFunction = nextCoreVariable(fn);
+			valueBlock.emitter.emit(
+				{
+					type: "unary",
+					registers: [prototypeType, parentPrototype],
+					operator: "typeof",
+				},
+				{
+					type: "binary",
+					registers: [
+						isObject,
+						prototypeType,
+						compileStaticString(program, fn, { block: valueBlock }, "object"),
+					],
+					operator: "===",
+				},
+				{
+					type: "binary",
+					registers: [
+						isFunction,
+						prototypeType,
+						compileStaticString(program, fn, { block: valueBlock }, "function"),
+					],
+					operator: "===",
+				},
+			);
+			const invalidBlock: CoreFrontendBlock = { emitter: unboundCoreEmitter };
+			const objectOk: Extract<CompilerInstruction, { type: "jumpIf" }> = {
+				type: "jumpIf",
+				registers: [isObject],
+				blocks: [-1],
+			};
+			const functionOk: Extract<CompilerInstruction, { type: "jumpIf" }> = {
+				type: "jumpIf",
+				registers: [isFunction],
+				blocks: [-1],
+			};
+			valueBlock.emitter.emit(objectOk, functionOk, {
+				type: "jump",
+				blocks: [fn.blocks.push(invalidBlock) - 1],
+			});
+			emitThrowTypeError(
+				program,
+				fn,
+				{ block: invalidBlock },
+				"Class extends value does not have valid prototype property",
+			);
 			const nullBlock: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 			nullJump.blocks[0] = fn.blocks.push(nullBlock) - 1;
 			nullBlock.emitter.emit({ type: "createNull", registers: [parentPrototype] });
 			loadFunctionPrototype(nullBlock, constructorParent);
 			const join: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 			const joinIdx = fn.blocks.push(join) - 1;
-			valueBlock.emitter.emit({ type: "jump", blocks: [joinIdx] });
+			objectOk.blocks[0] = joinIdx;
+			functionOk.blocks[0] = joinIdx;
 			nullBlock.emitter.emit({ type: "jump", blocks: [joinIdx] });
 			cursor.block = join;
 		}
