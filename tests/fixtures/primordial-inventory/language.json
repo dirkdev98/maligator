@@ -12771,6 +12771,7 @@
 		["mal_host_install_node_fs:rmdirSync", ["runtime", "primitive"]],
 		["mal_host_install_node_fs:stat", ["runtime", "primitive"]],
 		["mal_host_install_node_fs:statSync", ["runtime", "primitive"]],
+		["mal_host_install_node_fs:statfsSync", ["runtime", "primitive"]],
 		["mal_host_install_node_fs:symlink", ["runtime", "primitive"]],
 		["mal_host_install_node_fs:symlinkSync", ["runtime", "primitive"]],
 		["mal_host_install_node_fs:unlink", ["runtime", "primitive"]],
