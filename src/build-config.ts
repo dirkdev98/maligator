@@ -278,6 +278,80 @@ function configStatementRange(
 	};
 }
 
+/**
+ * The value of a configuration expression built only from literals, or undefined
+ * when evaluating it could run code or depend on bindings.
+ */
+function configData(node: ESTree.Node): { value: unknown } | undefined {
+	switch (node.type) {
+		case "Literal":
+			return node.value === null ||
+				typeof node.value === "string" ||
+				typeof node.value === "number" ||
+				typeof node.value === "boolean"
+				? { value: node.value }
+				: undefined;
+		case "TemplateLiteral":
+			return node.expressions.length === 0 && node.quasis[0]?.value.cooked !== undefined
+				? { value: node.quasis[0].value.cooked }
+				: undefined;
+		case "UnaryExpression":
+			return node.operator === "-" &&
+				node.argument.type === "Literal" &&
+				typeof node.argument.value === "number"
+				? { value: -node.argument.value }
+				: undefined;
+		case "ArrayExpression": {
+			const value: Array<unknown> = [];
+			for (const element of node.elements) {
+				const item = element === null ? undefined : configData(element);
+				if (item === undefined) return undefined;
+				value.push(item.value);
+			}
+			return { value };
+		}
+		case "ObjectExpression": {
+			const value: Record<string, unknown> = {};
+			for (const property of node.properties) {
+				if (
+					property.type !== "Property" ||
+					property.kind !== "init" ||
+					property.computed ||
+					property.method ||
+					property.shorthand
+				)
+					return undefined;
+				const key =
+					property.key.type === "Identifier"
+						? property.key.name
+						: property.key.type === "Literal" &&
+							  (typeof property.key.value === "string" ||
+									typeof property.key.value === "number")
+							? String(property.key.value)
+							: undefined;
+				// `__proto__: value` sets the prototype rather than defining a property.
+				if (key === undefined || key === "__proto__") return undefined;
+				const item = configData(property.value);
+				if (item === undefined) return undefined;
+				value[key] = item.value;
+			}
+			return { value };
+		}
+		case "CallExpression": {
+			// meriyah types CallExpression.callee as `any`.
+			const callee = node.callee as ESTree.Node;
+			return callee.type === "Identifier" &&
+				callee.name === "defineBuild" &&
+				node.arguments.length === 1 &&
+				node.arguments[0]!.type !== "SpreadElement"
+				? configData(node.arguments[0]!)
+				: undefined;
+		}
+		default:
+			return undefined;
+	}
+}
+
 function evaluateBuildConfig(
 	source: string,
 	configPath: string,
@@ -353,6 +427,16 @@ function evaluateBuildConfig(
 
 	if (defaultExport === undefined) {
 		throw new BuildConfigError("maligator.build.ts: missing default export");
+	}
+	// Starting the CLI's eval compiler dominates a command whose config is plain data.
+	if (
+		ast.body.every(
+			(statement) =>
+				statement.type === "ImportDeclaration" || statement === defaultExport,
+		)
+	) {
+		const data = configData(defaultExport.declaration);
+		if (data !== undefined) return data.value;
 	}
 
 	let $cfg: unknown;
