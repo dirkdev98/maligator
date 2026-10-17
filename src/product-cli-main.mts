@@ -92,10 +92,12 @@ await runCli(process.argv.slice(2), {
 		},
 		async wait(opaqueHandle, timeoutMs) {
 			const handle = opaqueHandle as ProductDevelopmentWatcher;
+			// Referenced until close: a process-backed application holds nothing else in
+			// this event loop, so an unreferenced pending wait would let the loop drain.
 			handle.waits ??= createPool(developmentWatchEntry, {
 				size: 1,
 				name: "development-watch",
-			}).unref();
+			});
 			await handle.waits.run("waitForChange", [handle.directories, timeoutMs]);
 		},
 		close(opaqueHandle) {
