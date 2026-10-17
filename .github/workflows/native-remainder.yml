@@ -19,6 +19,10 @@ jobs:
     name: ${{ startsWith(matrix.os, 'macos') && 'macOS ARM' || 'Linux' }} remaining ${{ matrix.lane }} ${{ matrix.shard }}/${{ matrix.shards }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 180
+    permissions:
+      contents: read
+      # The cache-line save step deletes the snapshot it superseded.
+      actions: write
     env:
       # Hosted Linux runners have four CPUs; macOS ARM runners have three.
       REMAINDER_WORKERS: ${{ startsWith(matrix.os, 'macos') && '3' || '4' }}

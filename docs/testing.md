@@ -301,7 +301,10 @@ variants that job built. Import verifies every blob and ThinLTO entry, and `main
 saves the recently read set when it changed, within 4 GiB; a full snapshot keeps the
 bakes and then what the job itself read first, then ThinLTO entries, then older
 entries, each in the order Rust, overlay, runtime, fixture objects. Snapshots compress
-about sixfold, so the newest one of every line fits the repository's 10 GB allowance. A restored action that no longer matches is
+about sixfold, so the newest one of every line fits the repository's 10 GB allowance.
+After saving, a job deletes the snapshot it restored: GitHub evicts the least recently
+used entries, and that superseded snapshot counts as just used, so keeping it would
+evict the newest snapshot of a line that runs less often. A restored action that no longer matches is
 simply never read; the weekly native-remainder run stays cold so cache identity
 defects still surface. Native linked binaries, frontend artifacts, Zig outputs, and
 the managed cache are not stored: a test binary is tens of megabytes, and a developer

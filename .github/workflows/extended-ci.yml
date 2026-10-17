@@ -20,6 +20,10 @@ jobs:
     name: ${{ matrix.check }}
     runs-on: ubuntu-26.04
     timeout-minutes: 120
+    permissions:
+      contents: read
+      # The cache-line save step deletes the snapshot it superseded.
+      actions: write
     strategy:
       fail-fast: false
       matrix:
@@ -69,6 +73,10 @@ jobs:
     name: Compiler, Rust and GC standards checks
     runs-on: ubuntu-26.04
     timeout-minutes: 90
+    permissions:
+      contents: read
+      # The cache-line save step deletes the snapshot it superseded.
+      actions: write
     steps:
       - name: Check out the tested revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -145,6 +153,10 @@ jobs:
     name: Slow unit integration (${{ matrix.part }})
     runs-on: ubuntu-26.04
     timeout-minutes: 120
+    permissions:
+      contents: read
+      # The cache-line save step deletes the snapshot it superseded.
+      actions: write
     strategy:
       fail-fast: false
       matrix:
@@ -197,6 +209,10 @@ jobs:
     name: Wasm parity
     runs-on: ubuntu-26.04
     timeout-minutes: 90
+    permissions:
+      contents: read
+      # The cache-line save step deletes the snapshot it superseded.
+      actions: write
     steps:
       - name: Check out the tested revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -238,6 +254,10 @@ jobs:
     name: Compiled WPT
     runs-on: ubuntu-26.04
     timeout-minutes: 120
+    permissions:
+      contents: read
+      # The cache-line save step deletes the snapshot it superseded.
+      actions: write
     steps:
       - name: Check out the tested revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

@@ -88,6 +88,7 @@ runs:
         echo "MALIGATOR_NATIVE_CACHE_PREFIX=$prefix" >> "$GITHUB_ENV"
 
     - name: Restore the native library cache
+      id: restore-native-cache
       if: inputs.native-cache != ''
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
@@ -98,7 +99,11 @@ runs:
     - name: Import the native library cache
       if: inputs.native-cache != ''
       shell: bash
-      run: node scripts/ci-native-cache.ts import "$RUNNER_TEMP/maligator-native-cache"
+      env:
+        RESTORED_KEY: ${{ steps.restore-native-cache.outputs.cache-matched-key }}
+      run: |
+        node scripts/ci-native-cache.ts import "$RUNNER_TEMP/maligator-native-cache"
+        echo "MALIGATOR_NATIVE_CACHE_RESTORED_KEY=$RESTORED_KEY" >> "$GITHUB_ENV"
 
     - name: Prepare the pinned Test262 corpus
       if: inputs.cache-test262 == 'true'

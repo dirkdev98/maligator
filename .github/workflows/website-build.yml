@@ -67,6 +67,10 @@ jobs:
     if: needs.changes.outputs.changed == 'true'
     runs-on: ubuntu-26.04
     timeout-minutes: 90
+    permissions:
+      contents: read
+      # The cache-line save step deletes the snapshot it superseded.
+      actions: write
     steps:
       - name: Check out the selected revision and chart history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
