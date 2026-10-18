@@ -58,6 +58,8 @@ struct MalShape {
     MalShapeProp *props;
     MalShapeTransitionIndex *transition_index;
     MalShapeTransition *transitions;
+    /** Immutable for-in keys of a plain object that owns all of its enumerable keys here. */
+    struct MalArrayObject *for_in_keys;
 };
 
 static inline bool mal_shape_can_add_property(const MalShape *shape) {

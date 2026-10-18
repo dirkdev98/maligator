@@ -7238,6 +7238,7 @@ static MalValue mal_for_in_collect_keys(MalVm *vm, MalValue source, const MalSha
 MalValue mal_for_in_keys(MalVm *vm, MalValue source) {
     const MalShape *snapshot = nullptr;
     MalValue keys = mal_for_in_collect_keys(vm, source, &snapshot);
+    mal_value_to_object(keys)->for_in_keys = true;
     // Every key array records an entry, which also retires a stale one at its address.
     MalForInSnapshot *entry = mal_for_in_snapshot_entry(vm, keys);
     entry->keys = mal_value_to_heap(keys);
@@ -7258,7 +7259,13 @@ static MalValue mal_for_in_collect_keys(MalVm *vm, MalValue source, const MalSha
         mal_object_overflow(mal_value_to_object(source)) == nullptr &&
         mal_for_in_own_keys_suffice(&vm->heap, mal_value_to_object(source))) {
         MAL_PERF_COUNT(for_in_own_key_snapshots);
-        const MalShape *shape = mal_value_to_object(source)->shape;
+        MalShape *shape = mal_value_to_object(source)->shape;
+        *snapshot = shape;
+        // Key arrays never reach JavaScript, so one immutable array serves every loop.
+        if (shape->for_in_keys != nullptr) {
+            MAL_PERF_COUNT(for_in_shape_key_reuses);
+            return mal_value_from_array_object(shape->for_in_keys);
+        }
         MalValue keys[MAL_SHAPE_MAX_INLINE_SLOTS];
         u32 count = 0;
         for (u32 i = 0; i < shape->inline_count; i++) {
@@ -7267,10 +7274,11 @@ static MalValue mal_for_in_collect_keys(MalVm *vm, MalValue source, const MalSha
                 keys[count++] = prop->key;
             }
         }
-        *snapshot = shape;
-        return mal_value_from_array_object(mal_array_object_new_from_values(
+        MalArrayObject *array = mal_array_object_new_from_values(
             &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]),
-            keys, count));
+            keys, count);
+        if (shape != mal_shape_dictionary_empty()) shape->for_in_keys = array;
+        return mal_value_from_array_object(array);
     }
     MalArrayObject *result = mal_intrinsic_new_array(vm, 0);
     u32 count = 0;

@@ -2010,6 +2010,8 @@ typedef struct MalVm {
      * collected array cannot match a later key array at the same address.
      */
     MalForInSnapshot for_in_snapshots[4];
+    /** %ArrayIteratorPrototype%.next's behaviour for for-in key Arrays, unreachable from JavaScript. */
+    MalValue for_in_iterator_next;
 } MalVm;
 
 /** Every engine heap is the unique inline heap of one MalVm. */

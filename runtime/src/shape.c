@@ -461,6 +461,9 @@ MalShape *mal_shape_set_integrity(MalShape *shape, bool clear_writable) {
 }
 
 static void mal_shape_visit_child_keys(MalShape *shape, void (*visit)(MalValue)) {
+    if (shape->for_in_keys != nullptr) {
+        visit(mal_value_from_heap((MalHeapHeader *) shape->for_in_keys));
+    }
     for (MalShapeTransition *transition = shape->transitions;
          transition != nullptr; transition = transition->next) {
         if (transition->kind == MAL_SHAPE_TRANSITION_ADD) {

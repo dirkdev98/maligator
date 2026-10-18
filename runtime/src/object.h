@@ -74,6 +74,8 @@ typedef struct MalObject {
     bool primordial_locking : 1;
     /** A non-null overflow table contains private names only. */
     bool overflow_private_only : 1;
+    /** A for-in key Array, which JavaScript never sees, so iterating it observes no protocol. */
+    bool for_in_keys : 1;
     u8 storage_kind : 2;
     /** Property count for packed fields; tagged entry capacity otherwise. */
     u8 slot_capacity;

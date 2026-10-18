@@ -535,16 +535,16 @@ bool mal_vm_array_values_deferred_begin(
     MalVm *vm, MalValue source, MalArrayValuesDeferredCursor *cursor
 ) {
     cursor->active = false;
-    // The protector covers Array.prototype @@iterator and ArrayIterator next/return.
-    if (!mal_primitive_method_protector || !mal_value_is_array_object(source)) {
-        return false;
-    }
+    if (!mal_value_is_array_object(source)) return false;
     MalObject *object = mal_value_to_object(source);
-    if (mal_object_prototype(object) !=
-            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]) ||
-        ((object->shape->inline_count != 0 || mal_object_overflow(object) != nullptr) &&
-         mal_object_get_own(
-             object, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_ITERATOR)).present)) {
+    // The protector covers Array.prototype @@iterator and ArrayIterator next/return.
+    if (!object->for_in_keys &&
+        (!mal_primitive_method_protector ||
+         mal_object_prototype(object) !=
+             mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]) ||
+         ((object->shape->inline_count != 0 || mal_object_overflow(object) != nullptr) &&
+          mal_object_get_own(
+              object, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_ITERATOR)).present))) {
         return false;
     }
     cursor->index = 0;
@@ -571,7 +571,7 @@ bool mal_vm_array_values_deferred_close(
     const MalArrayValuesDeferredCursor *cursor,
     bool normal
 ) {
-    if (mal_primitive_method_protector) return true;
+    if (mal_primitive_method_protector || mal_value_to_object(array)->for_in_keys) return true;
     MAL_PERF_COUNT(iterator_deferred_array_materializations);
     MalValue roots[1] = {mal_vm_new_builtin_iterator(vm, MAL_ITERATOR_ARRAY_VALUES, array)};
     MalRootSpan roots_span;
@@ -825,7 +825,30 @@ static bool mal_vm_watched_inherited_get(
     return true;
 }
 
+// EnumerateObjectProperties iterates internally: no @@iterator, next or return lookup.
+static bool mal_vm_get_for_in_iterator(MalVm *vm, MalValue keys, MalIteratorRecord *record_out) {
+    MalValue roots[2] = {keys, mal_value_new_undefined()};
+    MalRootSpan roots_span;
+    mal_gc_root(&roots_span, roots, 2);
+    if (mal_value_is_undefined(vm->for_in_iterator_next)) {
+        vm->for_in_iterator_next = mal_value_from_native_function_object(
+            mal_native_function_object_new(
+                &vm->heap,
+                mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+                mal_intrinsic_ascii(vm, "next"), mal_builtin_array_iterator_next));
+    }
+    roots[1] = mal_value_from_iterator_object(
+        mal_iterator_object_new(&vm->heap, nullptr, MAL_ITERATOR_ARRAY_VALUES, roots[0]));
+    record_out->iterator = roots[1];
+    record_out->next_method = vm->for_in_iterator_next;
+    mal_gc_unroot(&roots_span);
+    return true;
+}
+
 bool mal_vm_get_iterator(MalVm *vm, MalValue value, MalIteratorRecord *record_out) {
+    if (mal_value_is_array_object(value) && mal_value_to_object(value)->for_in_keys) {
+        return mal_vm_get_for_in_iterator(vm, value, record_out);
+    }
     MalValue method;
     MalKey key = mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_ITERATOR);
     if (!mal_vm_watched_inherited_get(vm, value, key, &method) &&

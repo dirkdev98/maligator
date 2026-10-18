@@ -555,6 +555,7 @@ static void mal_vm_init_engine_state(MalVm *vm) {
     vm->small_bigint_cache = nullptr;
     vm->array_join_frames = nullptr;
     memset(vm->for_in_snapshots, 0, sizeof(vm->for_in_snapshots));
+    vm->for_in_iterator_next = mal_value_new_undefined();
     vm->key_atom_cache.string = nullptr;
     mal_module_link_registry_init(&vm->module_links);
     vm->semantic_epochs = (MalSemanticEpochs) {
