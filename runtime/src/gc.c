@@ -1285,19 +1285,10 @@ static void mal_gc_trace_object_common(MalObject *object) {
     for (u32 i = 0; i < shape->inline_count; ++i) {
         mal_gc_mark_value(shape->props[i].key);
     }
-    const void *fields = mal_object_fields(object);
+    const MalValue *fields = mal_object_fields(object);
     if (fields != nullptr) {
-        u64 heap_fields = shape->heap_fields;
-        while (heap_fields != 0) {
-            u32 ordinal = (u32) __builtin_ctzll(heap_fields);
-            heap_fields &= heap_fields - 1;
-            mal_gc_shade(mal_shape_field_load_heap(fields, shape->props[ordinal].field));
-        }
-        u64 tagged_fields = shape->tagged_fields;
-        while (tagged_fields != 0) {
-            u32 ordinal = (u32) __builtin_ctzll(tagged_fields);
-            tagged_fields &= tagged_fields - 1;
-            mal_gc_mark_value(mal_shape_field_load(fields, shape->props[ordinal].field));
+        for (u32 i = 0; i < shape->inline_count; ++i) {
+            mal_gc_mark_value(fields[i]);
         }
     }
     mal_gc_trace_table(mal_object_overflow(object));
@@ -2286,8 +2277,7 @@ static bool mal_gc_snapshot_edge_count(MalHeapHeader *cell, usize *count) {
         object->shape->inline_count > MAL_GC_SNAPSHOT_INLINE_LIMIT ||
         (object->shape->inline_count > 0 && mal_object_fields(object) == nullptr)) return false;
     usize edges = (mal_object_prototype(object) != nullptr ? 1 : 0)
-        + object->shape->inline_count
-        + (usize) __builtin_popcountll(object->shape->heap_fields | object->shape->tagged_fields);
+        + 2 * (usize) object->shape->inline_count;
     if (cell->type == MAL_HEAP_ARRAY_OBJECT) {
         MalArrayObject *array = (MalArrayObject *) cell;
         if (array->dense_count > MAL_GC_SNAPSHOT_DENSE_LIMIT ||
@@ -2312,20 +2302,9 @@ static void mal_gc_snapshot_edges(MalGcState *g, MalHeapHeader *cell, usize inde
     for (u32 i = 0; i < shape->inline_count; ++i) {
         mal_gc_snapshot_append_heap_edge(g, shape->props[i].key);
     }
-    const void *fields = mal_object_fields(object);
-    u64 heap_fields = shape->heap_fields;
-    while (heap_fields != 0) {
-        u32 ordinal = (u32) __builtin_ctzll(heap_fields);
-        heap_fields &= heap_fields - 1;
-        mal_gc_snapshot_append_heap_edge(g, mal_value_from_heap(
-            mal_shape_field_load_heap(fields, shape->props[ordinal].field)));
-    }
-    u64 tagged_fields = shape->tagged_fields;
-    while (tagged_fields != 0) {
-        u32 ordinal = (u32) __builtin_ctzll(tagged_fields);
-        tagged_fields &= tagged_fields - 1;
-        mal_gc_snapshot_append_heap_edge(g, mal_shape_field_load(
-            fields, shape->props[ordinal].field));
+    const MalValue *fields = mal_object_fields(object);
+    for (u32 i = 0; i < shape->inline_count; ++i) {
+        mal_gc_snapshot_append_heap_edge(g, fields[i]);
     }
     if (cell->type == MAL_HEAP_ARRAY_OBJECT) {
         MalArrayObject *array = (MalArrayObject *) cell;
@@ -2998,8 +2977,7 @@ static u64 mal_gc_remembered_table_slots(const MalTable *table) {
 
 static u64 mal_gc_remembered_object_slots(const MalObject *object) {
     u64 slots = mal_object_fields(object) == nullptr ? 0
-        : object->shape->inline_count
-            + (u64) __builtin_popcountll(object->shape->heap_fields | object->shape->tagged_fields);
+        : 2 * (u64) object->shape->inline_count;
     return slots + mal_gc_remembered_table_slots(mal_object_overflow(object));
 }
 

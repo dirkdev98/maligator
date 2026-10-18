@@ -126,12 +126,7 @@ static inline void *mal_object_fields_nonempty(const MalObject *object) {
 
 static inline MalValue mal_object_field_load(const MalObject *object, u32 ordinal) {
     assert(ordinal < object->shape->inline_count);
-    return mal_shape_field_load(
-        mal_object_fields_nonempty(object), object->shape->props[ordinal].field);
-}
-
-static inline MalValue mal_object_field_load_token(const MalObject *object, u16 field) {
-    return mal_shape_field_load(mal_object_fields_nonempty(object), field);
+    return ((const MalValue *) mal_object_fields_nonempty(object))[ordinal];
 }
 
 static inline MalTable *mal_object_overflow(const MalObject *object) {
@@ -157,46 +152,18 @@ static_assert((sizeof(MalObject) + sizeof(void *)) % alignof(MalValue) == 0,
 void mal_object_set_prototype_pointer(MalObject *object, MalObject *prototype);
 void mal_object_set_fields_pointer(MalObject *object, void *fields);
 void mal_object_set_overflow_pointer(MalObject *object, MalTable *overflow);
-void mal_object_generalize_fields(MalObject *object);
-void mal_object_widen_field(MalObject *object, u32 ordinal, MalValue value);
-static inline void mal_object_field_store_token(
-    MalObject *object, u32 ordinal, u16 field, MalValue value
-) {
+static inline void mal_object_field_store(MalObject *object, u32 ordinal, MalValue value) {
     assert(ordinal < object->shape->inline_count);
-    if (mal_shape_field_representation(field) == MAL_FIELD_I32 &&
-        mal_value_is_int32(value)) {
-        i32 integer = mal_value_to_i32(value);
-        memcpy((byte *) mal_object_fields_nonempty(object) + mal_shape_field_offset(field),
-               &integer, sizeof(integer));
+    MalValue *field = (MalValue *) mal_object_fields_nonempty(object) + ordinal;
+    if (!mal_gc_marking_active && !mal_value_is_heap(value)) {
+        *field = value;
         return;
     }
-    if (mal_shape_field_representation(field) == MAL_FIELD_F64) {
-        f64 number;
-        if (mal_ops_try_number_as_f64(value, &number)) {
-            memcpy((byte *) mal_object_fields_nonempty(object) + mal_shape_field_offset(field),
-                   &number, sizeof(number));
-            return;
-        }
-    }
-    if (mal_shape_field_representation(field) == MAL_FIELD_TAGGED &&
-        !mal_gc_marking_active && !mal_value_is_heap(value)) {
-        memcpy((byte *) mal_object_fields_nonempty(object) + mal_shape_field_offset(field),
-               &value, sizeof(value));
-        return;
-    }
-    if (mal_gc_marking_active) {
-        mal_gc_satb_record(mal_object_field_load_token(object, field));
-    }
-    if (!mal_shape_field_try_store(mal_object_fields_nonempty(object), field, value)) {
-        mal_object_widen_field(object, ordinal, value);
-    }
+    if (mal_gc_marking_active) mal_gc_satb_record(*field);
+    *field = value;
     mal_gc_card(&object->header, value);
 }
 
-static inline void mal_object_field_store(MalObject *object, u32 ordinal, MalValue value) {
-    mal_object_field_store_token(
-        object, ordinal, object->shape->props[ordinal].field, value);
-}
 void mal_object_field_initialize(
     MalObject *object, const MalShape *shape, u32 ordinal, MalValue value);
 
@@ -268,9 +235,6 @@ MalObject *mal_object_new_reserved(MalHeap *heap, MalObject *prototype, u8 capac
 /** Allocate an ordinary object and its known inline slots in one managed cell. */
 MalObject *mal_object_new_shaped(MalHeap *heap, MalObject *prototype, MalShape *shape,
                                  const MalValue *values, u32 count);
-/** Use when every field is known to use the canonical tagged layout. */
-MalObject *mal_object_new_shaped_tagged(MalHeap *heap, MalObject *prototype,
-                                        MalShape *shape, const MalValue *values, u32 count);
 MalObject *mal_object_try_new_shaped(MalHeap *heap, MalObject *prototype, MalShape *shape,
                                      const MalValue *values, u32 count);
 

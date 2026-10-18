@@ -309,9 +309,8 @@ static u32 mal_object_inline_slot_capacity(MalObject *object) {
         return 0;
     }
     if (object->inline_payload_eights == 0) {
-        if (object->header.storage != MAL_HEAP_STORAGE_DYNAMIC ||
-            mal_shape_is_compact(object->shape)) return 0;
-        // Before tagged inline growth, slot capacity still describes the original allocation.
+        if (object->header.storage != MAL_HEAP_STORAGE_DYNAMIC) return 0;
+        // Before inline growth, slot capacity still describes the original allocation.
         usize allocation_size = sizeof(MalObject) + sizeof(void *)
             + sizeof(MalValue) * object->slot_capacity;
         object->inline_payload_eights = mal_object_inline_payload_eights(allocation_size);
@@ -320,130 +319,11 @@ static u32 mal_object_inline_slot_capacity(MalObject *object) {
         ? object->inline_payload_eights : MAL_SHAPE_MAX_INLINE_SLOTS;
 }
 
-static void mal_object_generalize_fields_capacity(MalObject *object, u32 capacity) {
-    MalShape *shape = object->shape;
-    u32 count = shape->inline_count;
-    assert(mal_shape_is_compact(shape) && count <= capacity);
-    void *fields = mal_object_fields(object);
-    bool inline_fields = capacity <= mal_object_inline_slot_capacity(object);
-    MalValue stack_values[MAL_SHAPE_MAX_INLINE_SLOTS];
-    MalValue *values = inline_fields ? stack_values : malloc(sizeof(MalValue) * capacity);
-    if (values == nullptr) abort();
-    for (u32 i = 0; i < count; i++) {
-        values[i] = mal_shape_field_load(fields, shape->props[i].field);
-    }
-    if (inline_fields) {
-        memcpy(fields, values, sizeof(MalValue) * count);
-    } else {
-        if (object->slots_owned) free(fields);
-        else if (object->header.storage == MAL_HEAP_STORAGE_DYNAMIC) {
-            g_slot_grow_migrations++;
-        }
-        mal_object_set_fields_pointer(object, values);
-        object->slots_owned = true;
-    }
-    object->slot_capacity = (u8) capacity;
-    object->shape = mal_shape_logical(shape);
-}
-
-void mal_object_generalize_fields(MalObject *object) {
-    if (!mal_shape_is_compact(object->shape)) return;
-    mal_object_generalize_fields_capacity(object, object->shape->inline_count);
-}
-
-void mal_object_widen_field(MalObject *object, u32 ordinal, MalValue value) {
-    MalShape *shape = object->shape;
-    assert(mal_shape_is_compact(shape) && ordinal < shape->inline_count);
-    MalShape *widened = mal_shape_widen_field(shape, ordinal, value);
-    u32 count = shape->inline_count;
-    void *fields = mal_object_fields_nonempty(object);
-    // Widening never shrinks a field, so equal payload sizes preserve every offset.
-    if (shape->payload_bytes == widened->payload_bytes) {
-        for (u32 word = 0; word < 2; word++) {
-            u64 next = mal_shape_is_compact(widened) ? widened->representations[word] : 0;
-            u64 changed = shape->representations[word] ^ next;
-            changed = (changed | (changed >> 1)) & UINT64_C(0x5555555555555555);
-            while (changed != 0) {
-                u32 slot = word * 32 + (u32) __builtin_ctzll(changed) / 2;
-                changed &= changed - 1;
-                if (slot == ordinal) continue;
-                MalValue unchanged = mal_shape_field_load(fields, shape->props[slot].field);
-                bool stored = mal_shape_field_try_store(fields, widened->props[slot].field, unchanged);
-                assert(stored);
-            }
-        }
-        bool stored = mal_shape_field_try_store(fields, widened->props[ordinal].field, value);
-        assert(stored);
-        object->shape = widened;
-        return;
-    }
-    MalValue values[MAL_SHAPE_MAX_INLINE_SLOTS];
-    for (u32 i = 0; i < count; i++) {
-        values[i] = mal_shape_field_load(fields, shape->props[i].field);
-    }
-    values[ordinal] = value;
-    bool inline_fields = !object->slots_owned
-        && fields == (u8 *) (object + 1) + sizeof(void *)
-        && widened->payload_bytes
-            <= (usize) object->inline_payload_eights * sizeof(MalValue);
-    void *target = inline_fields ? fields : malloc(widened->payload_bytes);
-    if (target == nullptr) abort();
-    for (u32 i = 0; i < count; i++) {
-        bool stored = mal_shape_field_try_store(target, widened->props[i].field, values[i]);
-        assert(stored);
-    }
-    if (!inline_fields) {
-        if (object->slots_owned) free(fields);
-        mal_object_set_fields_pointer(object, target);
-        object->slots_owned = true;
-    }
-    object->shape = widened;
-}
-
-static void mal_object_initialize_admitted_fields(
-    MalObject *object, const MalShape *shape, const MalValue *values, u32 count
-) {
-    // The selected physical shape already proved these exact values fit every field.
-    byte *fields = mal_object_fields_nonempty(object);
-    if (!mal_shape_is_compact(shape)) {
-        memcpy(fields, values, sizeof(MalValue) * count);
-        return;
-    }
-    for (u32 i = 0; i < count; i++) {
-        u16 field = shape->props[i].field;
-        byte *address = fields + mal_shape_field_offset(field);
-        MalValue value = values[i];
-        switch (mal_shape_field_representation(field)) {
-            case MAL_FIELD_TAGGED:
-                memcpy(address, &value, sizeof(value));
-                break;
-            case MAL_FIELD_I32: {
-                i32 integer = mal_value_is_int32(value)
-                    ? mal_value_to_i32(value) : (i32) mal_ops_number_as_f64(value);
-                memcpy(address, &integer, sizeof(integer));
-                break;
-            }
-            case MAL_FIELD_F64: {
-                f64 number = mal_ops_number_as_f64(value);
-                memcpy(address, &number, sizeof(number));
-                break;
-            }
-            case MAL_FIELD_HEAP: {
-                MalHeapHeader *pointer = mal_value_to_heap(value);
-                memcpy(address, &pointer, sizeof(pointer));
-                break;
-            }
-        }
-    }
-}
-
 void mal_object_field_initialize(
     MalObject *object, const MalShape *shape, u32 ordinal, MalValue value
 ) {
     assert(ordinal < shape->inline_count);
-    bool stored = mal_shape_field_try_store(
-        mal_object_fields(object), shape->props[ordinal].field, value);
-    assert(stored);
+    ((MalValue *) mal_object_fields(object))[ordinal] = value;
     mal_gc_card(&object->header, value);
 }
 
@@ -477,7 +357,7 @@ void mal_object_init_embedded_stack(
 ) {
     mal_object_init(heap, &wrapper->object, MAL_HEAP_OBJECT, prototype);
     wrapper->object.header.storage = MAL_HEAP_STORAGE_IMMORTAL;
-    wrapper->object.shape = mal_shape_logical(shape);
+    wrapper->object.shape = shape;
     wrapper->storage.fields = slots;
     wrapper->object.slot_capacity = (u8) shape->inline_count;
 }
@@ -508,12 +388,10 @@ MalObject *mal_object_new_reserved(MalHeap *heap, MalObject *prototype, u8 capac
     return object;
 }
 
-MalObject *mal_object_new_shaped_tagged(
-    MalHeap *heap, MalObject *prototype, MalShape *shape,
-    const MalValue *values, u32 count
-) {
+MalObject *mal_object_new_shaped(MalHeap *heap, MalObject *prototype, MalShape *shape,
+                                 const MalValue *values, u32 count) {
     assert(count >= 1 && count <= MAL_SHAPE_MAX_INLINE_SLOTS);
-    assert(shape == mal_shape_logical(shape) && shape->inline_count == count);
+    assert(shape->inline_count == count);
     MalObject *object = mal_heap_alloc(
         heap, sizeof(MalObject) + sizeof(void *) + sizeof(MalValue) * count,
         MAL_HEAP_OBJECT);
@@ -524,40 +402,19 @@ MalObject *mal_object_new_shaped_tagged(
     return object;
 }
 
-MalObject *mal_object_new_shaped(MalHeap *heap, MalObject *prototype, MalShape *shape,
-                                 const MalValue *values, u32 count) {
-    assert(count >= 1 && count <= MAL_SHAPE_MAX_INLINE_SLOTS);
-    assert(shape->inline_count == count);
-    shape = mal_shape_compact_from_values(shape, values, count);
-    if (!mal_shape_is_compact(shape)) {
-        return mal_object_new_shaped_tagged(heap, prototype, shape, values, count);
-    }
-    usize allocation_size = sizeof(MalObject) + sizeof(void *) + shape->payload_bytes;
-    MalObject *object =
-        mal_heap_alloc(heap, allocation_size, MAL_HEAP_OBJECT);
-    mal_object_init_payload(heap, object, prototype, MAL_OBJECT_COMPACT, shape);
-    object->slot_capacity = (u8) count;
-    object->inline_payload_eights = mal_object_inline_payload_eights(allocation_size);
-    mal_object_initialize_admitted_fields(object, shape, values, count);
-    g_slot_coallocations++;
-    return object;
-}
-
 MalObject *mal_object_try_new_shaped(
     MalHeap *heap, MalObject *prototype, MalShape *shape,
     const MalValue *values, u32 count
 ) {
     assert(count >= 1 && count <= MAL_SHAPE_MAX_INLINE_SLOTS);
     assert(shape->inline_count == count);
-    shape = mal_shape_compact_from_values(shape, values, count);
-    usize allocation_size = sizeof(MalObject) + sizeof(void *) + shape->payload_bytes;
     MalObject *object = mal_heap_try_alloc(
-        heap, allocation_size, MAL_HEAP_OBJECT);
+        heap, sizeof(MalObject) + sizeof(void *) + sizeof(MalValue) * count,
+        MAL_HEAP_OBJECT);
     if (object == nullptr) return nullptr;
     mal_object_init_payload(heap, object, prototype, MAL_OBJECT_COMPACT, shape);
     object->slot_capacity = (u8) count;
-    object->inline_payload_eights = mal_object_inline_payload_eights(allocation_size);
-    mal_object_initialize_admitted_fields(object, shape, values, count);
+    memcpy(mal_object_fields_nonempty(object), values, sizeof(MalValue) * count);
     g_slot_coallocations++;
     return object;
 }
@@ -569,7 +426,6 @@ void mal_object_set_shaped_values(
     assert(mal_object_fields(object) == nullptr);
     assert(mal_object_overflow(object) == nullptr);
     assert(shape->inline_count == count);
-    shape = mal_shape_logical(shape);
     if (mal_object_note_prototype_mutation(object)) {
         MAL_PERF_COUNT(prototype_epoch_shaped_invalidations);
     }
@@ -588,12 +444,10 @@ void mal_object_set_shaped_values(
 
 void mal_object_grow_slots(MalObject *object, u32 old_count, u32 new_count) {
     assert(new_count <= MAL_SHAPE_MAX_INLINE_SLOTS);
-    bool compact = mal_shape_is_compact(object->shape);
-    if (!compact && new_count <= object->slot_capacity) return;
+    if (new_count <= object->slot_capacity) return;
     u32 inline_capacity = mal_object_inline_slot_capacity(object);
     if (new_count <= inline_capacity) {
-        if (compact) mal_object_generalize_fields_capacity(object, inline_capacity);
-        else object->slot_capacity = (u8) inline_capacity;
+        object->slot_capacity = (u8) inline_capacity;
         return;
     }
     u32 capacity = object->slot_capacity < 4 ? 4 : object->slot_capacity;
@@ -601,10 +455,6 @@ void mal_object_grow_slots(MalObject *object, u32 old_count, u32 new_count) {
         capacity = capacity < MAL_SHAPE_MAX_INLINE_SLOTS / 2
             ? capacity * 2
             : MAL_SHAPE_MAX_INLINE_SLOTS;
-    }
-    if (compact) {
-        mal_object_generalize_fields_capacity(object, capacity);
-        return;
     }
     // Spare slots stay invisible until callers initialize them and publish the shape.
     if (object->slots_owned) {

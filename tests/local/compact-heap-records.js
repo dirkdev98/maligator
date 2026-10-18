@@ -51,7 +51,7 @@ gc();
 
 const selected = retained[7];
 const alias = selected;
-check("materialized mixed physical fields", inspect(selected) === 63);
+check("materialized record stays in its cell", inspect(selected) === 3);
 for (let index = 0; index < 64; index++) {
 	check(
 		"cross-function cached reads",
@@ -59,7 +59,7 @@ for (let index = 0; index < 64; index++) {
 	);
 }
 reflectRecord(selected, "id,weight,link,note");
-check("reflection preserves compact storage", inspect(selected) === 63);
+check("reflection preserves compact storage", inspect(selected) === 3);
 
 updateRecord(selected, 5);
 gc();
@@ -67,7 +67,7 @@ check(
 	"raw and tagged young references survive",
 	selected.link.value === 36 && selected.note.retained === 22,
 );
-check("typed updates stay compact", inspect(selected) === 63);
+check("updates stay in the cell", inspect(selected) === 3);
 check("updated cross-function read", readTotal(selected) === 55.75);
 
 widenRecord(selected);
@@ -76,7 +76,7 @@ check(
 	"same identity after generalization",
 	selected === alias && retained[7] === alias && identities.get(alias) === 7,
 );
-check("widened record stays inline with tagged fields", (inspect(selected) & 35) === 35);
+check("generalized record stays inline", (inspect(selected) & 3) === 3);
 check("cached load observes new representation", readId(selected).marker === "wide");
 for (let index = 0; index < 32; index++) {
 	check(
@@ -149,7 +149,7 @@ check(
 );
 
 const added = retained[8];
-check("fresh addition starts compact", inspect(added) === 63);
+check("fresh addition starts compact", inspect(added) === 3);
 added.extra = { live: 81 };
 gc();
 check(
@@ -158,7 +158,7 @@ check(
 );
 
 const deleted = retained[9];
-check("fresh deletion starts compact", inspect(deleted) === 63);
+check("fresh deletion starts compact", inspect(deleted) === 3);
 delete deleted.weight;
 check(
 	"direct compact deletion",
@@ -191,13 +191,13 @@ updateRecord(sealed, 1);
 gc();
 check(
 	"sealed layout retains packed fields",
-	inspect(sealed) === 63 && Object.isSealed(sealed) && sealed.note.retained === 23,
+	inspect(sealed) === 3 && Object.isSealed(sealed) && sealed.note.retained === 23,
 );
 const frozen = retained[13];
 Object.freeze(frozen);
 check(
 	"frozen layout retains packed fields",
-	inspect(frozen) === 63 && Object.isFrozen(frozen),
+	inspect(frozen) === 3 && Object.isFrozen(frozen),
 );
 check(
 	"frozen representation-changing write rejected",
@@ -222,7 +222,7 @@ for (const value of [-0, NaN, Infinity, -Infinity, 1, 1.25]) {
 	gc();
 	check(
 		"F64 Number round trip",
-		Object.is(numeric.weight, value) && inspect(numeric) === 63,
+		Object.is(numeric.weight, value) && inspect(numeric) === 3,
 	);
 }
 numeric.link = "heap class";

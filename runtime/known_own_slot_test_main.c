@@ -6,13 +6,12 @@
 
 extern const MalRuntimeImage mal_runtime_image;
 
-// Execution may add a compact layout of a preseeded shape and promote whichever row
-// hit last, so a preseeded row survives as any position holding its logical shape.
+// Execution promotes whichever row hit last, so a preseeded row survives at any position.
 static bool retains_row(const MalInlineCache *ic, const MalShape *shape, u8 slot) {
     if (ic->mode != MAL_IC_MODE_SHAPE) return false;
-    if (mal_shape_same_logical(ic->shape, shape) && ic->slot == slot) return true;
+    if (ic->shape == shape && ic->slot == slot) return true;
     for (u8 i = 0; i < ic->poly_count; i++) {
-        if (mal_shape_same_logical(ic->poly_shape[i], shape) && mal_ic_poly_slot(ic, i) == slot) {
+        if (ic->poly_shape[i] == shape && mal_ic_poly_slot(ic, i) == slot) {
             return true;
         }
     }

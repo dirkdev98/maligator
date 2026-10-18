@@ -661,7 +661,6 @@ typedef struct MalPerfStats {
     u64 number_record_attempts;
     u64 number_record_admissions;
     u64 number_record_field_checks;
-    u64 number_record_slow_stores;
     u64 number_record_poly_fields;
     u64 number_record_external_admissions;
 

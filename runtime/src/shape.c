@@ -13,7 +13,6 @@ static_assert(MAL_SHAPE_FIND_CALLER_COUNT == MAL_PERF_SHAPE_CALLER_COUNT, "shape
 #define MAL_SHAPE_FIND_CACHE_SET_COUNT 512
 #define MAL_SHAPE_FIND_CACHE_WAYS 2
 #define MAL_SHAPE_FIND_CACHE_THRESHOLD 4
-#define MAL_SHAPE_COMPACT_VARIANT_LIMIT 8
 
 typedef struct MalShapeFindCacheSet {
     const MalShape *shape[MAL_SHAPE_FIND_CACHE_WAYS];
@@ -225,224 +224,6 @@ static void mal_shape_init_empty(MalShape *shape) {
     };
 }
 
-static u64 mal_shape_all_fields(u32 count) {
-    return count == 64 ? UINT64_MAX : (UINT64_C(1) << count) - 1;
-}
-
-static MalFieldRepresentation mal_shape_value_representation(MalValue value) {
-    if (mal_value_is_int32(value)) return MAL_FIELD_I32;
-    if (mal_ops_is_number(value)) {
-        i32 integer;
-        return mal_shape_value_as_i32(value, &integer) ? MAL_FIELD_I32 : MAL_FIELD_F64;
-    }
-    if ((value & MAL_VALUE_CLASS_MASK) == MAL_VALUE_OBJECT) return MAL_FIELD_HEAP;
-    return MAL_FIELD_TAGGED;
-}
-
-static bool mal_shape_values_fit_variant(
-    const MalShape *variant, const MalValue *values, u32 count
-) {
-    for (u32 slot = 0; slot < count; slot++) {
-        MalValue value = values[slot];
-        switch (mal_shape_field_representation(variant->props[slot].field)) {
-            case MAL_FIELD_I32: {
-                i32 integer;
-                if (!mal_shape_value_as_i32(value, &integer)) return false;
-                break;
-            }
-            case MAL_FIELD_F64:
-                if (!mal_ops_is_number(value)) return false;
-                break;
-            case MAL_FIELD_HEAP:
-                if ((value & MAL_VALUE_CLASS_MASK) != MAL_VALUE_OBJECT) return false;
-                break;
-            case MAL_FIELD_TAGGED:
-                break;
-        }
-    }
-    return true;
-}
-
-static MalFieldRepresentation mal_shape_representation_at(
-    const u64 representations[2], u32 slot
-) {
-    return (MalFieldRepresentation)
-        ((representations[slot / 32] >> ((slot % 32) * 2)) & 3u);
-}
-
-/** Join 32 independent two-bit representation lanes without decoding each field. */
-static u64 mal_shape_join_representation_word(u64 left, u64 right) {
-    static_assert(MAL_FIELD_TAGGED == 0 && MAL_FIELD_I32 == 1 &&
-                  MAL_FIELD_F64 == 2 && MAL_FIELD_HEAP == 3,
-                  "packed joins require the two-bit representation encoding");
-    u64 different = left ^ right;
-    different = (different | (different >> 1)) & UINT64_C(0x5555555555555555);
-    u64 equal = ~(different | (different << 1));
-    // Numeric lanes (01 and 10) have differing low/high bits. A numeric mismatch
-    // joins to F64 (10); every other mismatch joins to tagged (00).
-    u64 numbers = (left ^ (left >> 1)) & (right ^ (right >> 1)) & different;
-    return (left & equal) | (numbers << 1);
-}
-
-static void mal_shape_join_preferred(
-    MalShape *logical, u64 representations[2]
-) {
-    const MalShape *preferred = logical->compact_next;
-    if (preferred == nullptr ||
-        (representations[0] == preferred->representations[0] &&
-         representations[1] == preferred->representations[1])) {
-        return;
-    }
-    for (u32 word = 0; word < 2; word++) {
-        representations[word] = mal_shape_join_representation_word(
-            representations[word], preferred->representations[word]);
-    }
-}
-
-static void mal_shape_compact_promote(MalShape *logical, MalShape *variant) {
-    if (logical->compact_next == variant) return;
-    for (MalShape *cursor = logical->compact_next;
-         cursor != nullptr; cursor = cursor->compact_next) {
-        if (cursor->compact_next != variant) continue;
-        cursor->compact_next = variant->compact_next;
-        variant->compact_next = logical->compact_next;
-        logical->compact_next = variant;
-        return;
-    }
-    abort();
-}
-
-static MalShape *mal_shape_compact_find(
-    MalShape *logical, const u64 representations[2], u32 *variant_count
-) {
-    *variant_count = 0;
-    for (MalShape *variant = logical->compact_next;
-         variant != nullptr; variant = variant->compact_next) {
-        (*variant_count)++;
-        if (variant->representations[0] == representations[0] &&
-            variant->representations[1] == representations[1]) {
-            return variant;
-        }
-    }
-    return nullptr;
-}
-
-static MalShape *mal_shape_compact_new(
-    MalShape *logical, const u64 representations[2], bool prefer
-) {
-    MalShape *compact = malloc(sizeof(*compact));
-    if (compact == nullptr) abort();
-    *compact = (MalShape) {
-        .header = {.type = MAL_HEAP_SHAPE, .storage = MAL_HEAP_STORAGE_DYNAMIC},
-        .inline_count = logical->inline_count,
-        .representations = {representations[0], representations[1]},
-        .logical = logical,
-        .compact_next = prefer ? logical->compact_next : nullptr,
-    };
-    if (logical->inline_count != 0) {
-        compact->props = malloc(sizeof(*compact->props) * logical->inline_count);
-        if (compact->props == nullptr) abort();
-        memcpy(compact->props, logical->props,
-               sizeof(*compact->props) * logical->inline_count);
-    }
-
-    u16 offset = 0;
-    // Packing wider fields first removes alignment holes without changing property order.
-    for (usize width = sizeof(MalValue); width >= sizeof(i32); width /= 2) {
-        for (u32 slot = 0; slot < compact->inline_count; slot++) {
-            MalFieldRepresentation representation =
-                mal_shape_representation_at(representations, slot);
-            if (mal_shape_field_size(representation) != width) continue;
-            compact->props[slot].field = mal_shape_field(representation, offset);
-            offset += (u16) width;
-            if (representation == MAL_FIELD_HEAP) {
-                compact->heap_fields |= UINT64_C(1) << slot;
-            } else if (representation == MAL_FIELD_TAGGED) {
-                compact->tagged_fields |= UINT64_C(1) << slot;
-            }
-        }
-    }
-    compact->payload_bytes = offset;
-    if (prefer || logical->compact_next == nullptr) {
-        logical->compact_next = compact;
-    } else {
-        MalShape *tail = logical->compact_next;
-        while (tail->compact_next != nullptr) tail = tail->compact_next;
-        tail->compact_next = compact;
-    }
-    return compact;
-}
-
-MalShape *mal_shape_compact_from_values(MalShape *shape, const MalValue *values, u32 count) {
-    if (shape == nullptr || count != shape->inline_count ||
-        count > MAL_SHAPE_MAX_INLINE_SLOTS || (count != 0 && values == nullptr)) {
-        abort();
-    }
-    MalShape *logical = mal_shape_logical(shape);
-    MalShape *preferred = logical->compact_next;
-    if (preferred != nullptr && mal_shape_values_fit_variant(preferred, values, count)) {
-        return preferred;
-    }
-    // Packing either remaining field cannot shrink a two-field cell with one tagged value.
-    if (count == 2 &&
-        (mal_shape_value_representation(values[1]) == MAL_FIELD_TAGGED ||
-         mal_shape_value_representation(values[0]) == MAL_FIELD_TAGGED)) {
-        return logical;
-    }
-    u64 representations[2] = {0, 0};
-    for (u32 slot = 0; slot < count; slot++) {
-        representations[slot / 32] |=
-            (u64) mal_shape_value_representation(values[slot]) << ((slot % 32) * 2);
-    }
-    if (representations[0] == 0 && representations[1] == 0) return logical;
-    mal_shape_join_preferred(logical, representations);
-    if (representations[0] == 0 && representations[1] == 0) return logical;
-    if (mal_shape_is_compact(shape) &&
-        shape->representations[0] == representations[0] &&
-        shape->representations[1] == representations[1]) {
-        mal_shape_compact_promote(logical, shape);
-        return shape;
-    }
-    u32 variant_count;
-    MalShape *compact = mal_shape_compact_find(logical, representations, &variant_count);
-    if (compact != nullptr) {
-        mal_shape_compact_promote(logical, compact);
-        return compact;
-    }
-    if (variant_count >= MAL_SHAPE_COMPACT_VARIANT_LIMIT) return logical;
-    return mal_shape_compact_new(logical, representations, true);
-}
-
-MalShape *mal_shape_widen_field(MalShape *shape, u32 ordinal, MalValue value) {
-    if (!mal_shape_is_compact(shape) || ordinal >= shape->inline_count) abort();
-    MalFieldRepresentation old =
-        mal_shape_field_representation(shape->props[ordinal].field);
-    MalFieldRepresentation next = old == MAL_FIELD_I32 && mal_ops_is_number(value)
-        ? MAL_FIELD_F64 : MAL_FIELD_TAGGED;
-    u64 representations[2] = {shape->representations[0], shape->representations[1]};
-    u32 index = ordinal / 32;
-    u32 shift = (ordinal % 32) * 2;
-    representations[index] = (representations[index] & ~(UINT64_C(3) << shift))
-        | ((u64) next << shift);
-    MalShape *logical = shape->logical;
-    if (shape->inline_count == 2 &&
-        (mal_shape_representation_at(representations, 0) == MAL_FIELD_TAGGED ||
-         mal_shape_representation_at(representations, 1) == MAL_FIELD_TAGGED)) {
-        return logical;
-    }
-    if (representations[0] == 0 && representations[1] == 0) return logical;
-    mal_shape_join_preferred(logical, representations);
-    if (representations[0] == 0 && representations[1] == 0) return logical;
-    u32 variant_count;
-    MalShape *variant = mal_shape_compact_find(logical, representations, &variant_count);
-    if (variant != nullptr) {
-        mal_shape_compact_promote(logical, variant);
-        return variant;
-    }
-    if (variant_count >= MAL_SHAPE_COMPACT_VARIANT_LIMIT) return logical;
-    return mal_shape_compact_new(logical, representations, true);
-}
-
 void mal_shape_heap_init(MalHeap *heap) {
     heap->shape_root = malloc(sizeof(MalShape));
     mal_shape_init_empty(heap->shape_root);
@@ -450,14 +231,6 @@ void mal_shape_heap_init(MalHeap *heap) {
 }
 
 static void mal_shape_free_children(MalShape *shape) {
-    MalShape *compact = shape->compact_next;
-    while (compact != nullptr) {
-        MalShape *next = compact->compact_next;
-        free(compact->props);
-        free(compact);
-        compact = next;
-    }
-    shape->compact_next = nullptr;
     MalShapeTransition *transition = shape->transitions;
     while (transition != nullptr) {
         MalShapeTransition *next = transition->next;
@@ -490,7 +263,6 @@ bool mal_shape_attrs_are_default(u8 attrs) {
 }
 
 i32 mal_shape_find_wide(const MalShape *shape, MalKey key, MalShapeFindCaller caller) {
-    if (shape->logical != nullptr) shape = shape->logical;
     // Empty and single-property shapes are handled by the header fast path.
     if (shape->inline_count <= 1) abort();
     u64 hash = 0;
@@ -561,7 +333,6 @@ MalShape *mal_shape_from_string_keys(MalHeap *heap, struct MalString **keys, u32
 }
 
 MalShape *mal_shape_add_property(MalShape *shape, MalKey key, u8 attrs) {
-    shape = mal_shape_logical(shape);
     if (shape->inline_count >= MAL_SHAPE_MAX_INLINE_SLOTS) abort();
     u64 comparisons = 0;
     MalShapeTransition *match = nullptr;
@@ -617,8 +388,6 @@ MalShape *mal_shape_add_property(MalShape *shape, MalKey key, u8 attrs) {
     *child = (MalShape) {
         .header = {.type = MAL_HEAP_SHAPE, .storage = MAL_HEAP_STORAGE_DYNAMIC},
         .inline_count = shape->inline_count + 1,
-        .payload_bytes = (shape->inline_count + 1) * sizeof(MalValue),
-        .tagged_fields = mal_shape_all_fields(shape->inline_count + 1),
     };
     child->props = malloc(sizeof(MalShapeProp) * child->inline_count);
     if (shape->inline_count > 0) {
@@ -628,8 +397,6 @@ MalShape *mal_shape_add_property(MalShape *shape, MalKey key, u8 attrs) {
         .key = key.value,
         .attrs = attrs,
         .slot = shape->inline_count,
-        .field = mal_shape_field(MAL_FIELD_TAGGED,
-                                 (u16) (shape->inline_count * sizeof(MalValue))),
     };
 
     MalShapeTransition *transition = malloc(sizeof(MalShapeTransition));
@@ -650,16 +417,6 @@ MalShape *mal_shape_add_property(MalShape *shape, MalKey key, u8 attrs) {
 }
 
 MalShape *mal_shape_set_integrity(MalShape *shape, bool clear_writable) {
-    if (mal_shape_is_compact(shape)) {
-        MalShape *logical = mal_shape_set_integrity(shape->logical, clear_writable);
-        if (logical == shape->logical) return shape;
-        u32 variant_count;
-        MalShape *compact =
-            mal_shape_compact_find(logical, shape->representations, &variant_count);
-        // Integrity changes keep offsets unchanged, including after variant admission closes.
-        return compact != nullptr ? compact
-            : mal_shape_compact_new(logical, shape->representations, false);
-    }
     u8 clear = (u8) MAL_PROPERTY_CONFIGURABLE;
     if (clear_writable) clear |= (u8) MAL_PROPERTY_WRITABLE;
 
@@ -684,8 +441,6 @@ MalShape *mal_shape_set_integrity(MalShape *shape, bool clear_writable) {
     *child = (MalShape) {
         .header = {.type = MAL_HEAP_SHAPE, .storage = MAL_HEAP_STORAGE_DYNAMIC},
         .inline_count = shape->inline_count,
-        .payload_bytes = shape->payload_bytes,
-        .tagged_fields = shape->tagged_fields,
     };
     child->props = malloc(sizeof(MalShapeProp) * child->inline_count);
     memcpy(

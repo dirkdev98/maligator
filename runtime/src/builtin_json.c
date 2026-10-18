@@ -645,7 +645,7 @@ static MalJsonResult mal_json_serialize_object(MalJsonState *state, MalJsonBuild
                 !mal_object_has_public_overflow(object);
             MalJsonResult result = mal_json_serialize_member(
                 state, builder, key, key_string, value, direct,
-                direct ? mal_object_field_load_token(object, shape_snapshot->props[i].field)
+                direct ? mal_object_field_load(object, shape_snapshot->props[i].slot)
                     : mal_value_new_undefined(), depth + 1, any);
             if (result == MAL_JSON_THROW) {
                 ok = false;
@@ -918,7 +918,7 @@ typedef struct MalJsonEscapedKey {
 } MalJsonEscapedKey;
 
 typedef struct MalJsonKeyPlan {
-    u16 field;
+    u32 slot;
     MalString *key;
     usize offset;
     usize length;
@@ -1071,7 +1071,7 @@ static bool mal_json_plain_shape(
         if (mal_value_is_string(prop->key) &&
             (prop->attrs & MAL_PROPERTY_ENUMERABLE) != 0) {
             plan->keys[plan->count++] = (MalJsonKeyPlan) {
-                .field = prop->field, .key = mal_value_to_string(prop->key),
+                .slot = prop->slot, .key = mal_value_to_string(prop->key),
             };
         }
     }
@@ -1455,12 +1455,11 @@ static bool mal_json_try_serialize_plain(
                     if (!mal_value_is_string(prop->key) ||
                         (prop->attrs & MAL_PROPERTY_ENUMERABLE) == 0) continue;
                     uncached_key = (MalJsonKeyPlan) {
-                        .field = prop->field, .key = mal_value_to_string(prop->key),
+                        .slot = prop->slot, .key = mal_value_to_string(prop->key),
                     };
                     key = &uncached_key;
                 }
-                value = mal_object_field_load_token(
-                    mal_value_to_object(frame->value), key->field);
+                value = mal_object_field_load(mal_value_to_object(frame->value), key->slot);
                 if (!mal_value_is_object(value) && mal_json_value_is_omitted(value)) continue;
             }
             // An observable toJSON may omit this member. Prove its absence

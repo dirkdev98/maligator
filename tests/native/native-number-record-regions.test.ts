@@ -36,7 +36,7 @@ describe("native number record regions", () => {
 	it.each(kernels)("admits %s through one receiver guard", (name) => {
 		const source = emittedKernels.get(name)!;
 		expect(source.match(/mal_vm_number_record_begin\(/g)).toHaveLength(1);
-		expect(source).toContain("mal_vm_number_record_store_slow(");
+		expect(source).toContain("mal_vm_number_record_store(");
 	});
 
 	it("matches array-slot reference arithmetic and every declined receiver", () => {

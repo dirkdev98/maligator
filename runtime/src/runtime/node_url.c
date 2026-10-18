@@ -78,7 +78,7 @@ static MalValue url_new_instance(MalVm *vm, MalValue prototype) {
     MalShape *shape = url_instance_shape(vm);
     MalValue values[countof(url_field_names)];
     for (usize i = 0; i < countof(values); i++) values[i] = mal_value_new_null();
-    MalValue object = mal_value_from_object(mal_object_new_shaped_tagged(
+    MalValue object = mal_value_from_object(mal_object_new_shaped(
         &vm->heap, mal_value_to_object(parent), shape, values, countof(values)));
     mal_gc_unroot(&root);
     return object;

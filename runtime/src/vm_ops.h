@@ -903,8 +903,8 @@ typedef struct MalInlineCache {
     // dependency-registered inherited rows:
     //  - primitive-method: `mode == MAL_IC_MODE_PRIMITIVE_VALUE` — `value` is
     //    `key` on that primitive kind's (unmodified) prototype chain.
-    //  - watched-intrinsic own property: `prim_kind` 0 and `slot == MAL_IC_VALUE_SLOT`
-    //    — `value` is `key`'s own value on a watched intrinsic (String, Math, …),
+    //  - watched-intrinsic own property: `mode == MAL_IC_MODE_WATCHED_VALUE` —
+    //    `value` is `key`'s own value on a watched intrinsic (String, Math, …),
     //    which lives in the overflow table (no shape slot).
     // Both value modes are valid only while `mal_primitive_method_protector`
     // holds. Under MAL_REALMS a primitive-method entry is additionally tagged
@@ -916,7 +916,7 @@ typedef struct MalInlineCache {
         // MAL_IC_MODE_INHERITED_TABLE: generation of the holder's entry handle.
         u64 table_handle_epoch;
     };
-    // For a value-slot entry (`slot == MAL_IC_VALUE_SLOT`), the exact watched
+    // For a watched-value entry, the exact watched
     // object the value belongs to. Shape is NOT a unique discriminator — the
     // typed-array constructors (and other same-layout intrinsics) share one
     // shape yet hold different overflow-table values (e.g. BYTES_PER_ELEMENT), so
@@ -961,7 +961,6 @@ typedef struct MalInlineCache {
     u8 mode;
     u8 receiver_type;
     bool megamorphic;
-    u16 field;
 } MalInlineCache;
 
 static_assert(sizeof(MalInlineCache) == (sizeof(void *) == 8 ? 72 : 56), "MalInlineCache must retain its pointer-width-specific layout");
@@ -974,7 +973,6 @@ static_assert(sizeof(MalInlineCache) == (sizeof(void *) == 8 ? 72 : 56), "MalInl
  */
 typedef struct MalShapeSnapshot {
     const struct MalShape *shape;
-    u16 field;
     u8 slot;
 } MalShapeSnapshot;
 
@@ -992,7 +990,6 @@ static inline void mal_ic_promote_poly_slot(MalInlineCache *ic, u8 index) {
     u8 slot = ic->slot;
     ic->shape = ic->poly_shape[index];
     ic->slot = mal_ic_poly_slot(ic, index);
-    ic->field = ic->shape->props[ic->slot].field;
     ic->poly_shape[index] = shape;
     mal_ic_set_poly_slot(ic, index, slot);
 }
@@ -1035,6 +1032,9 @@ static inline void mal_ic_set_recorded_prototype_epoch(MalInlineCache *ic, u64 e
 #define MAL_IC_MODE_INHERITED_GETTER 13u
 // `value` is the setter of such an accessor; a store site calls it on a hit.
 #define MAL_IC_MODE_INHERITED_SETTER 14u
+// `value` is `key`'s own value on the exact watched intrinsic `obj`, valid while the
+// primitive-method protector holds; shape-mode rows therefore always name a real slot.
+#define MAL_IC_MODE_WATCHED_VALUE 15u
 
 #define MAL_IC_MISSING_SHAPE_CHAIN 0u
 #define MAL_IC_MISSING_EXACT_CHAIN 1u
@@ -1093,7 +1093,6 @@ typedef struct MalPropertyStubEntry {
     MalValue key;
     u32 slot;
     u8 attrs;
-    u16 field;
 } MalPropertyStubEntry;
 
 static_assert(sizeof(MalPropertyStubEntry) == 24,
@@ -1249,7 +1248,7 @@ static inline i32 mal_vm_select_shape_case(
         }
         MalShape **row = vm->literal_shape_cache[function_index];
         MalShape *shape = row == nullptr ? nullptr : row[shape_cache_index];
-        if (shape != nullptr && mal_shape_logical(object->shape) == shape) {
+        if (shape != nullptr && object->shape == shape) {
             MAL_PERF_COUNT(shape_case_hits);
             return index;
         }
@@ -1318,7 +1317,6 @@ static inline void mal_vm_seed_known_own_slot_ic(
             ic->shape = shape;
             ic->key = key;
             ic->slot = (u8) slot;
-            ic->field = shape->props[slot].field;
             ic->prim_kind = 0;
             ic->poly_count = 0;
             ic->mode = MAL_IC_MODE_SHAPE;
@@ -1360,9 +1358,8 @@ static inline __attribute__((always_inline)) bool mal_vm_try_load_known_own_slot
 ) {
     MAL_PERF_COUNT(known_own_slot_load_probes);
     MalObject *object = mal_vm_as_object(receiver);
-    if (object != nullptr && ic->mode == MAL_IC_MODE_SHAPE &&
-        object->shape == ic->shape && ic->slot != MAL_IC_VALUE_SLOT) {
-        *out = mal_object_field_load_token(object, ic->field);
+    if (object != nullptr && ic->mode == MAL_IC_MODE_SHAPE && object->shape == ic->shape) {
+        *out = mal_object_field_load(object, ic->slot);
         mal_perf_ic_load_mono_hit();
         MAL_PERF_COUNT(known_own_slot_load_hits);
         return true;
@@ -1379,10 +1376,9 @@ bool mal_vm_own_table_try_load(
 static inline bool mal_vm_object_try_load_monomorphic(
     const MalObject *object, MalValue key, const MalInlineCache *ic, MalValue *out
 ) {
-    if (ic->mode == MAL_IC_MODE_SHAPE && object->shape == ic->shape && key == ic->key &&
-        ic->slot != MAL_IC_VALUE_SLOT) {
+    if (ic->mode == MAL_IC_MODE_SHAPE && object->shape == ic->shape && key == ic->key) {
         mal_perf_ic_load_mono_hit();
-        *out = mal_object_field_load_token(object, ic->field);
+        *out = mal_object_field_load(object, ic->slot);
         return true;
     }
     return false;
@@ -1395,15 +1391,13 @@ static inline bool mal_vm_object_try_load_monomorphic(
 static inline MalValue mal_vm_object_poly_load(
     const MalObject *object, const MalInlineCache *ic, u8 index
 ) {
-    return mal_object_field_load_token(
-        object, object->shape->props[mal_ic_poly_slot(ic, index)].field);
+    return mal_object_field_load(object, mal_ic_poly_slot(ic, index));
 }
 
 static inline __attribute__((always_inline)) bool mal_vm_object_try_load_polymorphic(
     const MalObject *object, MalValue key, MalInlineCache *ic, MalValue *out
 ) {
-    if (ic->mode == MAL_IC_MODE_SHAPE && ic->poly_count > 0 && key == ic->key &&
-        ic->slot != MAL_IC_VALUE_SLOT) {
+    if (ic->mode == MAL_IC_MODE_SHAPE && ic->poly_count > 0 && key == ic->key) {
         for (u8 i = 0; i < ic->poly_count; i++) {
             if (object->shape == ic->poly_shape[i]) {
                 MAL_PERF_COUNT(ic_load_poly_hits);
@@ -1655,8 +1649,8 @@ bool mal_vm_inherited_stub_try_load_static(
 /** Guarded own-value hit for watched built-ins whose properties live in overflow tables. */
 static inline bool mal_vm_watched_try_load(const MalVm *vm, MalValue receiver, MalValue key,
                                            const MalInlineCache *ic, MalValue *out) {
-    if (!mal_vm_primitive_methods_intact(vm) || ic->mode != MAL_IC_MODE_SHAPE ||
-        ic->slot != MAL_IC_VALUE_SLOT || ic->prim_kind != 0 || key != ic->key ||
+    if (!mal_vm_primitive_methods_intact(vm) || ic->mode != MAL_IC_MODE_WATCHED_VALUE ||
+        ic->prim_kind != 0 || key != ic->key ||
         !mal_value_is_object(receiver) || mal_value_to_object(receiver) != ic->obj) {
         return false;
     }
@@ -1802,7 +1796,7 @@ mal_vm_property_try_load_static_remaining(
 static inline __attribute__((always_inline)) bool mal_vm_watched_own_value_try_load_static(
     const MalVm *vm, MalValue receiver, const MalInlineCache *ic, MalValue *out
 ) {
-    if (ic->mode != MAL_IC_MODE_SHAPE || ic->slot != MAL_IC_VALUE_SLOT || ic->prim_kind != 0 ||
+    if (ic->mode != MAL_IC_MODE_WATCHED_VALUE || ic->prim_kind != 0 ||
         !mal_value_is_object(receiver) ||
         (const MalObject *) mal_value_to_heap(receiver) != ic->obj ||
         !mal_vm_primitive_methods_intact(vm)) {
@@ -1820,10 +1814,9 @@ static inline __attribute__((always_inline)) bool mal_vm_property_try_load_stati
     // Every static load site expands this probe; also inlining the polymorphic,
     // watched, and string-length rows made each site about 2.5 times larger.
     const MalObject *object = mal_vm_as_object(receiver);
-    if (object != nullptr && ic->mode == MAL_IC_MODE_SHAPE && ic->slot != MAL_IC_VALUE_SLOT &&
-        object->shape == ic->shape) {
+    if (object != nullptr && ic->mode == MAL_IC_MODE_SHAPE && object->shape == ic->shape) {
         mal_perf_ic_load_mono_hit();
-        *out = mal_object_field_load_token(object, ic->field);
+        *out = mal_object_field_load(object, ic->slot);
         return true;
     }
     // Prototype methods (`array.pop`, class methods) would otherwise pay the out-of-line probe.
@@ -1922,12 +1915,10 @@ static inline __attribute__((always_inline)) bool mal_vm_property_read_region_tr
     if (region->shape == ic->shape) {
         // Keep own-slot hits on the mode-dispatch fallthrough.
         if (__builtin_expect(ic->mode == MAL_IC_MODE_SHAPE, 1)) {
-            if (ic->slot != MAL_IC_VALUE_SLOT) {
-                *out = mal_shape_field_load(region->fields, ic->field);
-                MAL_PERF_COUNT(property_read_region_hits);
-                mal_perf_ic_load_mono_hit();
-                return true;
-            }
+            *out = ((const MalValue *) region->fields)[ic->slot];
+            MAL_PERF_COUNT(property_read_region_hits);
+            mal_perf_ic_load_mono_hit();
+            return true;
         } else if (ic->mode == MAL_IC_MODE_INHERITED_VALUE && ic->poly_count > 0 &&
             ic->receiver_type == MAL_HEAP_OBJECT && region->object->header.type == MAL_HEAP_OBJECT &&
             !mal_object_has_public_overflow(region->object) &&
@@ -1938,11 +1929,10 @@ static inline __attribute__((always_inline)) bool mal_vm_property_read_region_tr
             return true;
         }
     }
-    if (ic->mode == MAL_IC_MODE_SHAPE && ic->slot != MAL_IC_VALUE_SLOT) {
+    if (ic->mode == MAL_IC_MODE_SHAPE) {
         for (u8 index = 0; index < ic->poly_count; index++) {
             if (region->shape == ic->poly_shape[index]) {
-                u16 field = region->shape->props[mal_ic_poly_slot(ic, index)].field;
-                *out = mal_shape_field_load(region->fields, field);
+                *out = ((const MalValue *) region->fields)[mal_ic_poly_slot(ic, index)];
                 MAL_PERF_COUNT(property_read_region_hits);
                 MAL_PERF_COUNT(property_read_region_poly_hits);
                 MAL_PERF_COUNT(ic_load_poly_hits);
@@ -1967,16 +1957,14 @@ static inline __attribute__((always_inline)) bool mal_vm_property_try_load_stati
     if (object == nullptr ||
         first->mode != MAL_IC_MODE_SHAPE ||
         second->mode != MAL_IC_MODE_SHAPE ||
-        first->slot == MAL_IC_VALUE_SLOT ||
-        second->slot == MAL_IC_VALUE_SLOT ||
         object->shape != first->shape ||
         first->shape != second->shape) {
         return false;
     }
     const void *fields = mal_object_fields_nonempty(object);
     if (fields == nullptr) return false;
-    *first_out = mal_shape_field_load(fields, first->field);
-    *second_out = mal_shape_field_load(fields, second->field);
+    *first_out = ((const MalValue *) fields)[first->slot];
+    *second_out = ((const MalValue *) fields)[second->slot];
     mal_perf_ic_load_mono_hit();
     mal_perf_ic_load_mono_hit();
     return true;
@@ -1994,8 +1982,6 @@ static inline __attribute__((always_inline)) bool mal_vm_property_try_load_stati
     if (object == nullptr ||
         first->mode != MAL_IC_MODE_SHAPE ||
         second->mode != MAL_IC_MODE_SHAPE ||
-        first->slot == MAL_IC_VALUE_SLOT ||
-        second->slot == MAL_IC_VALUE_SLOT ||
         object->shape != first->shape ||
         first->shape != second->shape) {
         return false;
@@ -2004,26 +1990,8 @@ static inline __attribute__((always_inline)) bool mal_vm_property_try_load_stati
     if (fields == nullptr) return false;
     f64 first_value;
     f64 second_value;
-    MalFieldRepresentation first_rep = mal_shape_field_representation(first->field);
-    MalFieldRepresentation second_rep = mal_shape_field_representation(second->field);
-    if (__builtin_expect(first_rep >= MAL_FIELD_I32 && first_rep <= MAL_FIELD_F64 &&
-                         second_rep >= MAL_FIELD_I32 && second_rep <= MAL_FIELD_F64, 1)) {
-        if (first_rep == MAL_FIELD_I32) {
-            first_value = mal_shape_field_load_i32(fields, first->field);
-        } else {
-            memcpy(&first_value, (const u8 *) fields + mal_shape_field_offset(first->field),
-                   sizeof(first_value));
-        }
-        if (second_rep == MAL_FIELD_I32) {
-            second_value = mal_shape_field_load_i32(fields, second->field);
-        } else {
-            memcpy(&second_value, (const u8 *) fields + mal_shape_field_offset(second->field),
-                   sizeof(second_value));
-        }
-    } else {
-        if (!mal_shape_field_try_load_number(fields, first->field, &first_value)) return false;
-        if (!mal_shape_field_try_load_number(fields, second->field, &second_value)) return false;
-    }
+    if (!mal_ops_try_number_as_f64(((const MalValue *) fields)[first->slot], &first_value)) return false;
+    if (!mal_ops_try_number_as_f64(((const MalValue *) fields)[second->slot], &second_value)) return false;
     *first_out = first_value;
     *second_out = second_value;
     mal_perf_ic_load_mono_hit();
@@ -2045,9 +2013,6 @@ static inline __attribute__((always_inline)) bool mal_vm_property_try_load_stati
         first->mode != MAL_IC_MODE_SHAPE ||
         second->mode != MAL_IC_MODE_SHAPE ||
         third->mode != MAL_IC_MODE_SHAPE ||
-        first->slot == MAL_IC_VALUE_SLOT ||
-        second->slot == MAL_IC_VALUE_SLOT ||
-        third->slot == MAL_IC_VALUE_SLOT ||
         object->shape != first->shape ||
         first->shape != second->shape ||
         first->shape != third->shape) {
@@ -2058,17 +2023,9 @@ static inline __attribute__((always_inline)) bool mal_vm_property_try_load_stati
     f64 first_value;
     f64 second_value;
     f64 third_value;
-    if (mal_shape_field_representation(first->field) == MAL_FIELD_I32 &&
-        mal_shape_field_representation(second->field) == MAL_FIELD_I32 &&
-        mal_shape_field_representation(third->field) == MAL_FIELD_I32) {
-        first_value = mal_shape_field_load_i32(fields, first->field);
-        second_value = mal_shape_field_load_i32(fields, second->field);
-        third_value = mal_shape_field_load_i32(fields, third->field);
-    } else {
-        if (!mal_shape_field_try_load_number(fields, first->field, &first_value)) return false;
-        if (!mal_shape_field_try_load_number(fields, second->field, &second_value)) return false;
-        if (!mal_shape_field_try_load_number(fields, third->field, &third_value)) return false;
-    }
+    if (!mal_ops_try_number_as_f64(((const MalValue *) fields)[first->slot], &first_value)) return false;
+    if (!mal_ops_try_number_as_f64(((const MalValue *) fields)[second->slot], &second_value)) return false;
+    if (!mal_ops_try_number_as_f64(((const MalValue *) fields)[third->slot], &third_value)) return false;
     *first_out = first_value;
     *second_out = second_value;
     *third_out = third_value;
@@ -2095,10 +2052,6 @@ static inline __attribute__((always_inline)) bool mal_vm_property_try_load_stati
         second->mode != MAL_IC_MODE_SHAPE ||
         third->mode != MAL_IC_MODE_SHAPE ||
         fourth->mode != MAL_IC_MODE_SHAPE ||
-        first->slot == MAL_IC_VALUE_SLOT ||
-        second->slot == MAL_IC_VALUE_SLOT ||
-        third->slot == MAL_IC_VALUE_SLOT ||
-        fourth->slot == MAL_IC_VALUE_SLOT ||
         object->shape != first->shape ||
         first->shape != second->shape ||
         first->shape != third->shape ||
@@ -2111,20 +2064,10 @@ static inline __attribute__((always_inline)) bool mal_vm_property_try_load_stati
     f64 second_value;
     f64 third_value;
     f64 fourth_value;
-    if (mal_shape_field_representation(first->field) == MAL_FIELD_I32 &&
-        mal_shape_field_representation(second->field) == MAL_FIELD_I32 &&
-        mal_shape_field_representation(third->field) == MAL_FIELD_I32 &&
-        mal_shape_field_representation(fourth->field) == MAL_FIELD_I32) {
-        first_value = mal_shape_field_load_i32(fields, first->field);
-        second_value = mal_shape_field_load_i32(fields, second->field);
-        third_value = mal_shape_field_load_i32(fields, third->field);
-        fourth_value = mal_shape_field_load_i32(fields, fourth->field);
-    } else {
-        if (!mal_shape_field_try_load_number(fields, first->field, &first_value)) return false;
-        if (!mal_shape_field_try_load_number(fields, second->field, &second_value)) return false;
-        if (!mal_shape_field_try_load_number(fields, third->field, &third_value)) return false;
-        if (!mal_shape_field_try_load_number(fields, fourth->field, &fourth_value)) return false;
-    }
+    if (!mal_ops_try_number_as_f64(((const MalValue *) fields)[first->slot], &first_value)) return false;
+    if (!mal_ops_try_number_as_f64(((const MalValue *) fields)[second->slot], &second_value)) return false;
+    if (!mal_ops_try_number_as_f64(((const MalValue *) fields)[third->slot], &third_value)) return false;
+    if (!mal_ops_try_number_as_f64(((const MalValue *) fields)[fourth->slot], &fourth_value)) return false;
     *first_out = first_value;
     *second_out = second_value;
     *third_out = third_value;
@@ -2137,8 +2080,7 @@ static inline __attribute__((always_inline)) bool mal_vm_property_try_load_stati
 }
 
 typedef struct MalNativeNumericFieldUpdate {
-    void *fields;
-    u16 field;
+    MalValue *field;
 } MalNativeNumericFieldUpdate;
 
 static inline bool mal_vm_property_numeric_update_begin_same(
@@ -2149,23 +2091,13 @@ static inline bool mal_vm_property_numeric_update_begin_same(
     if (object == nullptr || object->storage_kind != MAL_OBJECT_COMPACT ||
         object->is_prototype || object->watched_method_proto ||
         object->primordial_locked || store->mode != MAL_IC_MODE_SHAPE ||
-        store->slot == MAL_IC_VALUE_SLOT || store->shape != object->shape) {
+        store->shape != object->shape) {
         return false;
     }
-    MalFieldRepresentation representation = mal_shape_field_representation(store->field);
-    if (representation != MAL_FIELD_I32 && representation != MAL_FIELD_F64 &&
-        representation != MAL_FIELD_TAGGED) return false;
     void *fields = mal_object_fields_nonempty(object);
-    if (representation == MAL_FIELD_I32) {
-        *old_value = (f64) mal_shape_field_load_i32(fields, store->field);
-    } else if (representation == MAL_FIELD_F64) {
-        memcpy(old_value, (u8 *) fields + mal_shape_field_offset(store->field), sizeof(*old_value));
-    } else if (!mal_shape_field_try_load_number(fields, store->field, old_value)) {
-        return false;
-    }
+    if (!mal_ops_try_number_as_f64(((const MalValue *) fields)[store->slot], old_value)) return false;
     *update = (MalNativeNumericFieldUpdate) {
-        .fields = fields,
-        .field = store->field,
+        .field = (MalValue *) fields + store->slot,
     };
     return true;
 }
@@ -2180,25 +2112,13 @@ static inline bool mal_vm_property_numeric_update_begin(
         object->is_prototype || object->watched_method_proto ||
         object->primordial_locked ||
         load->mode != MAL_IC_MODE_SHAPE || store->mode != MAL_IC_MODE_SHAPE ||
-        load->slot == MAL_IC_VALUE_SLOT || store->slot == MAL_IC_VALUE_SLOT ||
         load->shape != object->shape || store->shape != object->shape) {
         return false;
     }
-    MalFieldRepresentation source = mal_shape_field_representation(load->field);
-    MalFieldRepresentation target = mal_shape_field_representation(store->field);
-    if ((source != MAL_FIELD_I32 && source != MAL_FIELD_F64) ||
-        (target != MAL_FIELD_I32 && target != MAL_FIELD_F64)) {
-        return false;
-    }
     void *fields = mal_object_fields_nonempty(object);
-    if (source == MAL_FIELD_I32) {
-        *old_value = (f64) mal_shape_field_load_i32(fields, load->field);
-    } else {
-        memcpy(old_value, (u8 *) fields + mal_shape_field_offset(load->field), sizeof(*old_value));
-    }
+    if (!mal_ops_try_number_as_f64(((const MalValue *) fields)[load->slot], old_value)) return false;
     *update = (MalNativeNumericFieldUpdate) {
-        .fields = fields,
-        .field = store->field,
+        .field = (MalValue *) fields + store->slot,
     };
     return true;
 }
@@ -2206,21 +2126,9 @@ static inline bool mal_vm_property_numeric_update_begin(
 static inline bool mal_vm_property_numeric_update_commit(
     const MalNativeNumericFieldUpdate *update, f64 number, MalValue *out
 ) {
-    byte *address = (byte *) update->fields + mal_shape_field_offset(update->field);
-    if (mal_shape_field_representation(update->field) == MAL_FIELD_I32) {
-        if (!(number >= INT32_MIN && number <= INT32_MAX)) return false;
-        i32 integer = (i32) number;
-        if ((f64) integer != number || (integer == 0 && signbit(number))) return false;
-        memcpy(address, &integer, sizeof(integer));
-        if (out != nullptr) *out = mal_value_from_i32(integer);
-    } else if (mal_shape_field_representation(update->field) == MAL_FIELD_F64) {
-        memcpy(address, &number, sizeof(number));
-        if (out != nullptr) *out = mal_ops_number_value(number);
-    } else {
-        MalValue result = mal_ops_number_value(number);
-        memcpy(address, &result, sizeof(result));
-        if (out != nullptr) *out = result;
-    }
+    MalValue result = mal_ops_number_value(number);
+    *update->field = result;
+    if (out != nullptr) *out = result;
     mal_perf_ic_load_mono_hit();
     mal_perf_ic_store_mono_hit();
     return true;
@@ -2238,8 +2146,6 @@ typedef struct MalNumberRecord {
 } MalNumberRecord;
 
 typedef struct MalNumberRecordField {
-    u16 token;
-    // Widening preserves this ordinal; the primary cache row may describe another layout.
     u8 slot;
 } MalNumberRecordField;
 
@@ -2265,59 +2171,38 @@ static inline __attribute__((always_inline)) bool mal_vm_number_record_begin(
     return true;
 }
 
-/**
- * A shape-mode row proves an own data field for every layout of its logical
- * shape, and a store row also proves it writable. Admits only a Number value.
- */
+/** A shape-mode row proves an own data field, and a store row also proves it writable. Admits only a Number value. */
 static inline __attribute__((always_inline)) bool mal_vm_number_record_field(
     const MalNumberRecord *record, const MalInlineCache *ic, MalShapeSnapshot *snapshot,
     MalNumberRecordField *field, f64 *value
 ) {
     MAL_PERF_COUNT(number_record_field_checks);
-    u16 token;
     u8 slot;
     bool polymorphic = false;
     if (snapshot->shape != nullptr && snapshot->shape == record->shape) {
         MAL_PERF_COUNT(ic_snapshot_hits);
-        token = snapshot->field;
         slot = snapshot->slot;
     } else {
-        if (ic->mode != MAL_IC_MODE_SHAPE || ic->slot == MAL_IC_VALUE_SLOT || ic->shape == nullptr) {
+        if (ic->mode != MAL_IC_MODE_SHAPE || ic->shape == nullptr) {
             return false;
         }
         slot = ic->slot;
-        if (__builtin_expect(ic->shape == record->shape, 1)) {
-            token = ic->field;
-        } else if (mal_shape_same_logical(ic->shape, record->shape)) {
-            token = record->shape->props[ic->slot].field;
-        } else {
+        if (__builtin_expect(ic->shape != record->shape, 0)) {
             bool found = false;
             for (u8 index = 0; index < ic->poly_count; index++) {
-                if (mal_shape_same_logical(record->shape, ic->poly_shape[index])) {
+                if (record->shape == ic->poly_shape[index]) {
                     slot = mal_ic_poly_slot(ic, index);
                     found = true;
                     break;
                 }
             }
             if (!found) return false;
-            token = record->shape->props[slot].field;
             polymorphic = true;
         }
-        // Every row above proves the field for the record's own physical layout.
-        *snapshot = (MalShapeSnapshot) {.shape = record->shape, .field = token, .slot = slot};
+        *snapshot = (MalShapeSnapshot) {.shape = record->shape, .slot = slot};
     }
-    switch (mal_shape_field_representation(token)) {
-        case MAL_FIELD_I32:
-            *value = (f64) mal_shape_field_load_i32(record->fields, token);
-            break;
-        case MAL_FIELD_F64:
-            memcpy(value, (const u8 *) record->fields + mal_shape_field_offset(token),
-                   sizeof(*value));
-            break;
-        default:
-            if (!mal_shape_field_try_load_number(record->fields, token, value)) return false;
-    }
-    *field = (MalNumberRecordField) {.token = token, .slot = slot};
+    if (!mal_ops_try_number_as_f64(((const MalValue *) record->fields)[slot], value)) return false;
+    *field = (MalNumberRecordField) {.slot = slot};
     if (polymorphic) MAL_PERF_COUNT(number_record_poly_fields);
     return true;
 }
@@ -2329,40 +2214,13 @@ static inline void mal_vm_number_record_admitted(const MalNumberRecord *record) 
     }
 }
 
-/** Writes only a value the admitted layout holds unchanged; false leaves the field untouched. */
-static inline __attribute__((always_inline)) bool mal_vm_number_record_try_store(
+static inline __attribute__((always_inline)) void mal_vm_number_record_store(
     const MalNumberRecord *record, MalNumberRecordField field, f64 value
 ) {
-    u8 *address = (u8 *) record->fields + mal_shape_field_offset(field.token);
-    MalFieldRepresentation representation = mal_shape_field_representation(field.token);
-    if (__builtin_expect(representation == MAL_FIELD_F64, 1)) {
-        memcpy(address, &value, sizeof(value));
-        return true;
-    }
-    if (representation == MAL_FIELD_I32 && value >= INT32_MIN && value <= INT32_MAX) {
-        i32 integer = (i32) value;
-        if ((f64) integer == value && !(integer == 0 && signbit(value))) {
-            memcpy(address, &integer, sizeof(integer));
-            return true;
-        }
-    }
     // Admission read a Number from this field, so neither the overwritten nor the
     // stored value is a reference: SATB and card barriers have nothing to record.
-    if (representation == MAL_FIELD_TAGGED) {
-        MalValue boxed = mal_ops_number_value(value);
-        memcpy(address, &boxed, sizeof(boxed));
-        return true;
-    }
-    return false;
+    ((MalValue *) record->fields)[field.slot] = mal_ops_number_value(value);
 }
-
-/**
- * Stores through the current layout, widening as needed. Callers repeat every
- * stored field after any failed try-store because widening can move fields.
- */
-__attribute__((noinline)) void mal_vm_number_record_store_slow(
-    MalObject *object, u8 slot, f64 value
-);
 
 /**
  * Monomorphic shape-slot overwrite or proven fresh-property shape transition.
@@ -2372,29 +2230,15 @@ __attribute__((noinline)) void mal_vm_number_record_store_slow(
  */
 static inline bool mal_vm_object_try_store(MalObject *object, MalValue key, MalValue value,
                                            MalInlineCache *ic) {
-    if (ic->mode == MAL_IC_MODE_SHAPE && object->shape == ic->shape && key == ic->key &&
-        ic->slot != MAL_IC_VALUE_SLOT) {
+    if (ic->mode == MAL_IC_MODE_SHAPE && object->shape == ic->shape && key == ic->key) {
         mal_perf_ic_store_mono_hit();
         if (mal_object_note_prototype_mutation(object)) {
             MAL_PERF_COUNT(prototype_epoch_define_invalidations);
         }
-        mal_object_field_store_token(object, ic->slot, ic->field, value);
+        mal_object_field_store(object, ic->slot, value);
         return true;
     }
-    if (ic->mode == MAL_IC_MODE_SHAPE && ic->shape != nullptr &&
-        ic->slot != MAL_IC_VALUE_SLOT && key == ic->key &&
-        mal_shape_same_logical(object->shape, ic->shape)) {
-        MAL_PERF_COUNT(ic_store_poly_hits);
-        ic->shape = object->shape;
-        ic->field = object->shape->props[ic->slot].field;
-        if (mal_object_note_prototype_mutation(object)) {
-            MAL_PERF_COUNT(prototype_epoch_define_invalidations);
-        }
-        mal_object_field_store_token(object, ic->slot, ic->field, value);
-        return true;
-    }
-    if (ic->mode == MAL_IC_MODE_SHAPE && ic->poly_count > 0 && key == ic->key &&
-        ic->slot != MAL_IC_VALUE_SLOT) {
+    if (ic->mode == MAL_IC_MODE_SHAPE && ic->poly_count > 0 && key == ic->key) {
         for (u8 i = 0; i < ic->poly_count; i++) {
             if (object->shape == ic->poly_shape[i]) {
                 MAL_PERF_COUNT(ic_store_poly_hits);
@@ -2483,9 +2327,7 @@ static inline bool mal_vm_constructor_try_begin_initialization(
             shape = site->poly_shape[0];
             continue;
         }
-        if (site->mode != MAL_IC_MODE_SHAPE ||
-            site->shape != shape ||
-            site->slot == MAL_IC_VALUE_SLOT) {
+        if (site->mode != MAL_IC_MODE_SHAPE || site->shape != shape) {
             return false;
         }
     }
@@ -2529,7 +2371,7 @@ static inline bool mal_vm_try_store_known_own_slots(
             i32 slot = candidates[index * 3 + 2];
             MalShape **row = vm->literal_shape_cache[shape_function_index];
             MalShape *expected = row == nullptr ? nullptr : row[shape_cache_index];
-            if (expected == nullptr || mal_shape_logical(object->shape) != expected) continue;
+            if (expected == nullptr || object->shape != expected) continue;
             mal_vm_object_slot_store(object, (u32) slot, value);
             mal_vm_record_own_slot(ic, object->shape, expected->props[slot].key, (u32) slot);
             MAL_PERF_COUNT(known_own_slot_store_hits);

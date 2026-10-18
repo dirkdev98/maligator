@@ -9,70 +9,48 @@ can no longer live in the cell. The prototype remains per object because
 `Object.setPrototypeOf` can change it without changing property order or moving
 the object.
 
-## Logical and physical layouts
+## Field layout
 
-The canonical shape owns property names, insertion order, attributes, and
-structural transitions. Physical variants share that logical identity and give
-each ordinal a field token containing an offset and one representation:
+Every shaped property occupies one tagged `MalValue` field, and its slot is its
+property ordinal. NaN boxing already stores doubles unboxed and int32 values
+inline, so field reads never decode a representation and a shape guard licenses
+one load at `fields[slot]`.
 
-| Representation | Payload        | Read as JavaScript value                         |
-| -------------- | -------------- | ------------------------------------------------ |
-| `I32`          | Four bytes     | Number with the same integer value               |
-| `F64`          | Eight bytes    | Number, retaining negative zero and NaN behavior |
-| `HEAP`         | Native pointer | Tagged heap value                                |
-| `TAGGED`       | `MalValue`     | Unchanged value                                  |
+An earlier layout packed int32, double and raw-pointer fields into physical
+variants of each shape. However, every cache hit then decoded a four-way field
+token, the decode was too large to inline at most sites, and a representation
+change repacked the payload and swapped the object's shape. Uniform slots made the
+native self-compile about 1.6% faster. A drawback is that int32-heavy records
+grow four bytes per field.
 
-Eight-byte fields precede four-byte fields in the payload. Property enumeration
-uses logical ordinals, never physical order. The descriptor also carries masks
-for raw heap pointers and tagged fields; tracing reads each according to that
-map. A canonical shape stores all fields as tagged values. Physical variants
-are bounded to eight per logical shape, and the preferred layout joins observed
-representations so recurring constructor values converge instead of creating
-unbounded variants. A two-field record with a tagged field uses the canonical
-layout when packing cannot shrink its allocation class.
+Representation knowledge belongs in facts about a shape's fields rather than in
+their storage, so a new fact never needs a new physical layout or a migration.
 
 ## Identity-preserving changes
 
-A write that fits its field changes only the payload. A representation mismatch
-selects a widened physical variant, stages the old JavaScript values, repacks
-the payload, and publishes the new shape last. It reuses spare capacity in the
-original size class when possible; otherwise it externalizes field storage.
-Adding a property, changing attributes, defining an accessor, or deleting a
-property returns to canonical tagged storage before the existing shape or
+A write changes only the payload. Adding a property, changing attributes,
+defining an accessor, or deleting a property uses the existing shape or
 dictionary operation. Those changes may allocate a sidecar or field buffer but
-never replace the identity cell. Prototype changes update its prototype word
-or sidecar and invalidate dependent caches.
+never replace the identity cell. Prototype changes update its prototype word or
+sidecar and invalidate dependent caches.
 
-The allocator's charged size, rather than the requested payload size, determines
-whether in-place repacking fits. Raw pointers in compact fields receive the same
-card, SATB, and mark treatment as tagged references. Stack materialization
-copies the original cell-capacity bound so later widening cannot overrun it.
-Tagged ordinary objects derive that bound from their original slot capacity on
-first growth, avoiding allocator-size queries for objects that never grow.
-Embedded objects and separately owned fields cannot infer an inline bound.
-When adding a property requires canonical storage, existing typed fields decode
-directly into the final geometrically sized buffer, avoiding an exact-size
-allocation followed by growth.
-If the tagged prefix and new properties fit the original cell, conversion stages
-the overlapping fields before copying them back. Spare capacity remains invisible
-to reflection and tracing until each new field is initialized and its shape is
-published.
+Tagged ordinary objects derive their inline bound from their original slot
+capacity on first growth, avoiding allocator-size queries for objects that never
+grow. Embedded objects and separately owned fields cannot infer an inline bound.
+Spare capacity remains invisible to reflection and tracing until each new field
+is initialized and its shape is published.
 
 ## Compiled access
 
-Inline caches retain both logical property position and the physical field
-token. A shape guard licenses direct typed reads and writes; the generic path
-uses the same token and reboxes values for reflection. Shape changes invalidate
-the old guard. Store caches can promote another physical variant of the same
-logical shape using that variant's field token; an attribute change has a
-different logical shape and misses the guard. A numeric read region can carry
-its result through pure arithmetic and commit through a guarded field store
-without boxing. It runs the original operations when admission or
-representation checks fail. This includes retained records whose identity
-crosses functions and survives reflection and generalization.
+Inline caches retain the shape and slot. A numeric read region can carry its
+result through pure arithmetic and commit through a guarded field store without
+boxing in between. It runs the original operations when admission or a Number
+check fails. This includes retained records whose identity crosses functions and
+survives reflection.
 
-The companion native fixture exercises typed fields, GC tracing, descriptor
-reflection, mutation, accessors, deletion, prototype changes, integrity levels,
-and identity after externalization in compiled and interpreted execution. The
-`materialized-record-graph` benchmark retains an object graph across function
-calls and traversals, so its records cannot be removed by scalar replacement.
+The companion native fixture exercises number round trips, GC tracing,
+descriptor reflection, mutation, accessors, deletion, prototype changes,
+integrity levels, and identity after externalization in compiled and interpreted
+execution. The `materialized-record-graph` benchmark retains an object graph
+across function calls and traversals, so its records cannot be removed by scalar
+replacement.

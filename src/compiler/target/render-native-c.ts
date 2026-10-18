@@ -1389,14 +1389,9 @@ function emitNumberRecordRegion(
 		}
 		lines.push("    }");
 	}
-	if (stored.length > 0)
+	for (const index of stored)
 		lines.push(
-			`    if (__builtin_expect(!(${stored.map((index) => `mal_vm_number_record_try_store(&${id}, ${id}_f${index}, ${id}_v${index})`).join(" & ")}), 0)) {`,
-			...stored.map(
-				(index) =>
-					`      mal_vm_number_record_store_slow(${id}.object, ${id}_f${index}.slot, ${id}_v${index});`,
-			),
-			"    }",
+			`    mal_vm_number_record_store(&${id}, ${id}_f${index}, ${id}_v${index});`,
 		);
 	for (const register of plan.outputs) {
 		const value = local(register);
@@ -7550,7 +7545,7 @@ function emitInstruction(
 					...shape,
 					`MalInlineCache *${icName} = &${nativeBodyReference(resources, "propertyCache")}[${stackObjectSite.inheritedIcIndex}];`,
 					`MalObject *${prototypeName} = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);`,
-					`${fastName} = ${icName}->mode == MAL_IC_MODE_INHERITED_VALUE && ${icName}->shape != nullptr && (${icName}->shape == __oshape_${ip} || ${icName}->shape->logical == __oshape_${ip}) && ((${icName}->poly_count > 0 && ${icName}->proto_object[0] == ${prototypeName}) || (${icName}->poly_count == 0 && ${inheritedStackObjectProtectorGuard(stackObjectSite)} && ${icName}->receiver_type == MAL_HEAP_OBJECT && ${icName}->obj == ${prototypeName}));`,
+					`${fastName} = ${icName}->mode == MAL_IC_MODE_INHERITED_VALUE && ${icName}->shape != nullptr && ${icName}->shape == __oshape_${ip} && ((${icName}->poly_count > 0 && ${icName}->proto_object[0] == ${prototypeName}) || (${icName}->poly_count == 0 && ${inheritedStackObjectProtectorGuard(stackObjectSite)} && ${icName}->receiver_type == MAL_HEAP_OBJECT && ${icName}->obj == ${prototypeName}));`,
 					`if (${fastName}) {`,
 					`  ${inheritedValue} = ${icName}->value;`,
 					`  mal_perf_stack_object_init();`,

@@ -74,7 +74,7 @@ int main(void) {
     }
 
     MalShapeProp props[4] = {0};
-    MalShape shape = {.inline_count = 4, .props = props, .tagged_fields = 15}, other = {0};
+    MalShape shape = {.inline_count = 4, .props = props}, other = {0};
     MalValue values[4];
     f64 expected[4];
     MalEmbeddedObject object = {
@@ -88,10 +88,8 @@ int main(void) {
     MalInlineCache ic[4] = {0};
     for (int i = 0; i < 4; i++) {
         props[i].slot = i;
-        props[i].field = mal_shape_field(MAL_FIELD_TAGGED, (u16) (i * sizeof(MalValue)));
         ic[i].shape = &shape;
         ic[i].slot = i;
-        ic[i].field = props[i].field;
         ic[i].mode = MAL_IC_MODE_SHAPE;
     }
     const MalHeapType receiver_types[] = {
@@ -120,10 +118,9 @@ int main(void) {
                 for (int i = 0; i < 4; i++) values[i] = MAL_VALUE_INT32 | (i + 1);
                 ic[changed].mode = MAL_IC_MODE_INHERITED_VALUE;
                 CHECK(check_projection(count, receiver, ic, expected, false));
-                ic[changed].mode = MAL_IC_MODE_SHAPE;
-                ic[changed].slot = MAL_IC_VALUE_SLOT;
+                ic[changed].mode = MAL_IC_MODE_WATCHED_VALUE;
                 CHECK(check_projection(count, receiver, ic, expected, false));
-                ic[changed].slot = changed;
+                ic[changed].mode = MAL_IC_MODE_SHAPE;
                 ic[changed].shape = &other;
                 CHECK(check_projection(count, receiver, ic, expected, false));
                 ic[changed].shape = &shape;

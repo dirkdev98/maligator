@@ -611,8 +611,7 @@ bool mal_object_append_plan_init(
 ) {
     if (plan == nullptr) return false;
     *plan = (MalShapeAppendPlan) {0};
-    if (source == nullptr || final == nullptr || count == 0 ||
-        mal_shape_is_compact(final)) {
+    if (source == nullptr || final == nullptr || count == 0) {
         return false;
     }
     // A non-null source also records that a caller attempted initialization.

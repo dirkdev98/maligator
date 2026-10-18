@@ -34,7 +34,7 @@ MalValue mal_vm_create_iter_result(MalVm *vm, MalValue value, bool done) {
     MalObject *prototype =
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
     // Allocation cannot collect before the local value pair is copied into the cell.
-    return mal_value_from_object(mal_object_new_shaped_tagged(
+    return mal_value_from_object(mal_object_new_shaped(
         &vm->heap, prototype, vm->iterator_result_shape, values, 2));
 }
 

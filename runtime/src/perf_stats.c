@@ -1599,11 +1599,10 @@ static void mal_perf_stats_print(void) {
     fprintf(
         stderr,
         "[perf-number-record] attempts=%llu admissions=%llu field_checks=%llu "
-        "slow_stores=%llu poly_fields=%llu external=%llu\n",
+        "poly_fields=%llu external=%llu\n",
         (unsigned long long) mal_perf_stats.number_record_attempts,
         (unsigned long long) mal_perf_stats.number_record_admissions,
         (unsigned long long) mal_perf_stats.number_record_field_checks,
-        (unsigned long long) mal_perf_stats.number_record_slow_stores,
         (unsigned long long) mal_perf_stats.number_record_poly_fields,
         (unsigned long long) mal_perf_stats.number_record_external_admissions
     );

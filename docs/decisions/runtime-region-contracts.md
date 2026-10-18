@@ -138,18 +138,15 @@ stricter receiver guard and writable cache rows. Larger plans keep bounded prefi
 and may cover complete numeric fusions; no fusion temporary crosses their boundary.
 Small linear read-only arithmetic stays with the existing pair/triple/quad projections.
 Read-only admission supports compact, embedded and external own-slot storage.
-Alternate cache layouts carry both the current physical token and its logical slot;
-slow writeback must use that admitted slot after widening, not the primary cache's
-slot for another layout. Any widening replays all final stored fields because a
-physical transition may have moved fields already written. Ordinary writable
-records retain admission after growth into external storage; embedded objects
-remain excluded from writeback.
+Alternate cache rows carry their own slot; writeback uses the slot admitted for
+the record's shape, not the primary row's slot for another shape. Ordinary
+writable records retain admission after growth into external storage; embedded
+objects remain excluded from writeback.
 
 Property-read regions can retain a receiver through must-alias register moves
 and effect-free forward branches. Every incoming edge preserves that identity.
 Own-slot admission also covers callable objects and alternate shape-cache rows;
-each cached field token is interpreted against the retained logical shape and
-field storage. Inherited constant rows retain their ordinary-object receiver guard.
+each cached slot is read from the retained shape's field storage. Inherited constant rows retain their ordinary-object receiver guard.
 An unmaterialized scalar-backed stack object may have a shape without a field
 buffer; it cannot enter a borrowed-field region.
 Named own slots of Arrays, TypedArrays, Maps, Sets, Dates, RegExps, Promises,

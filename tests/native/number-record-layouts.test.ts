@@ -15,9 +15,9 @@ import {
 const fixture = "tests/local/number-record-layouts.js";
 const outDir = mkdtempSync(join(tmpdir(), "mal-number-layouts-"));
 afterAll(() => rmSync(outDir, { recursive: true, force: true }));
-describe("numeric record storage across alternate logical and physical layouts", () => {
+describe("numeric record storage across alternate shapes", () => {
 	it.each(["mutable", "locked"] as const)(
-		"preserves slot identity through alternate layouts, widening and fallback with %s primordials",
+		"preserves slot identity through alternate shapes, generalization and fallback with %s primordials",
 		(primordials) => {
 			const pair = buildBackendPairFromOneProgramImage({
 				fixture,
@@ -66,20 +66,19 @@ describe("numeric record storage across alternate logical and physical layouts",
 					expect(result.stdout, context).toBe(expected);
 					if (backend === "compiled" && mode !== "fallback") {
 						const stats = result.stderr.match(
-							/\[perf-number-record\] attempts=\d+ admissions=(\d+) field_checks=\d+ slow_stores=(\d+) poly_fields=(\d+) external=(\d+)/,
+							/\[perf-number-record\] attempts=\d+ admissions=(\d+) field_checks=\d+ poly_fields=(\d+) external=(\d+)/,
 						);
 						expect(stats, context).not.toBeNull();
 						expect(Number(stats![1]), context).toBeGreaterThan(0);
-						expect(Number(stats![3]), context).toBeGreaterThan(0);
-						if (mode === "update") expect(Number(stats![2]), context).toBeGreaterThan(0);
-						if (mode === "grown") expect(Number(stats![4]), context).toBeGreaterThan(0);
+						expect(Number(stats![2]), context).toBeGreaterThan(0);
+						if (mode === "grown") expect(Number(stats![3]), context).toBeGreaterThan(0);
 					}
 				}
 			}
 		},
 		600000,
 	);
-	it("retains alternate logical slots across compact field representations", () => {
+	it("reads number record fields through polymorphic rows and shape snapshots", () => {
 		const result = buildNativeBinaryResult({
 			fixture,
 			name: "number-record-field-contract",
