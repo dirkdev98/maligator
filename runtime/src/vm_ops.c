@@ -7171,13 +7171,12 @@ static MalValue mal_vm_for_in_key_string(MalVm *vm, MalKey key) {
     return key.value;
 }
 
-// Build the for-in enumeration key array for `source` (EnumerateObjectProperties):
-// the enumerable string keys reachable on the prototype chain, each visited once
-// with nearer keys shadowing farther ones. Returns the result array. On a
-// proxy-trap exception vm->completion is set to THROW and the partially-built
-// array is returned; callers must check the completion before using the result.
+// Element writes to a prototype array go through define_own, which bumps the
+// chain epoch like any other prototype mutation.
 static bool mal_for_in_prototype_is_silent(MalHeap *heap, MalObject *prototype) {
-    if (prototype->header.type != MAL_HEAP_OBJECT) return false;
+    if (prototype->header.type != MAL_HEAP_OBJECT && prototype->header.type != MAL_HEAP_ARRAY_OBJECT) {
+        return false;
+    }
     u64 chain_epoch = mal_prototype_chain_epoch;
     for (usize i = 0; i < countof(heap->for_in_silent_prototypes); i++) {
         if (heap->for_in_silent_prototypes[i].object == prototype && chain_epoch != 0 &&
@@ -7216,6 +7215,11 @@ static bool mal_for_in_own_keys_suffice(MalHeap *heap, MalObject *object) {
     return true;
 }
 
+// Build the for-in enumeration key array for `source` (EnumerateObjectProperties):
+// the enumerable string keys reachable on the prototype chain, each visited once
+// with nearer keys shadowing farther ones. Returns the result array. On a
+// proxy-trap exception vm->completion is set to THROW and the partially-built
+// array is returned; callers must check the completion before using the result.
 MalValue mal_for_in_keys(MalVm *vm, MalValue source) {
     // Shaped storage holds string and symbol keys only, in insertion order, so a
     // plain object without overflow has its whole for-in result in its shape.

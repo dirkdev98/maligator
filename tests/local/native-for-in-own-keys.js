@@ -47,12 +47,21 @@ Object.setPrototypeOf(parent, { shadowed: 2, visible: 3 });
 expectKeys(child, "own,visible", "a non-enumerable key shadows further up the chain");
 
 const accessorParent = {};
-Object.defineProperty(accessorParent, "computed", { get: () => 1, enumerable: true });
+Object.defineProperty(accessorParent, "computed", {
+	get: () => 1,
+	enumerable: true,
+});
 expectKeys(Object.create(accessorParent), "computed", "an enumerable prototype accessor");
 
 const list = [10, 20, 30];
 list.extra = true;
 expectKeys(list, "0,1,2,extra", "array indices then named keys");
+for (let round = 0; round < 3; round++)
+	expectKeys([1, , 3], "0,2", "a warm silent array prototype");
+Array.prototype[1] = "inherited";
+expectKeys([1, , 3], "0,2,1", "an element added to Array.prototype fills the hole");
+delete Array.prototype[1];
+expectKeys([1, , 3], "0,2", "the deleted prototype element disappears");
 
 let total = 0;
 const counted = { alpha: 1, beta: 2, gamma: 3 };
