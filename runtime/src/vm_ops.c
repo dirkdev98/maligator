@@ -6764,6 +6764,26 @@ void mal_vm_op_store_property_ic(
             vm, object_value, key_value, nullptr, value, strict, ic);
         return;
     }
+    // A computed key that varies never settles in the site's row, which the complete
+    // path still fills for an empty or same-key site. Stub rows are keyed by atom
+    // identity and record only shaped data slots, so a hit with default attributes
+    // overwrites a plain writable property; objects whose stores carry invalidation
+    // or locking duties keep the complete path.
+    MalObject *receiver = (MalObject *) mal_value_to_heap(object_value);
+    if (vm->property_stub != nullptr &&
+        (ic->megamorphic || (ic->shape != nullptr && key_value != ic->key)) &&
+        !receiver->is_prototype &&
+        !receiver->watched_method_proto && !receiver->primordial_locked &&
+        object_value != vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS]) {
+        const MalPropertyStubEntry *stub =
+            &vm->property_stub[mal_stub_hash(receiver->shape, key_value)];
+        if (stub->shape == receiver->shape && stub->key == key_value &&
+            mal_shape_attrs_are_default(stub->attrs)) {
+            MAL_PERF_COUNT(ic_store_mega_hits);
+            mal_object_field_store_token(receiver, stub->slot, stub->field, value);
+            return;
+        }
+    }
     MalKey key;
     if (!mal_vm_string_to_property_key(vm, key_value, &key)) return;
     if (key.kind != MAL_KEY_STRING) {
