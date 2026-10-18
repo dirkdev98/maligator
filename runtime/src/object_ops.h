@@ -115,19 +115,6 @@ bool mal_object_set(MalObject *object, MalKey key, MalValue value);
 void mal_object_array_deoptimize(struct MalArrayObject *array);
 
 /**
- * Array fast-elements protector (see object_ops.c). True while a default-prototype
- * array's inherited chain has no integer-index property, so a fresh-index store
- * cannot hit an inherited setter and may skip the prototype-chain resolve.
- */
-extern MAL_ISOLATE_LOCAL bool mal_array_elements_protector;
-
-/**
- * Holds while no watched built-in prototype/lookup object has been mutated; gates
- * primitive, intrinsic-own, and inherited-method value caches.
- */
-extern MAL_ISOLATE_LOCAL bool mal_primitive_method_protector;
-
-/**
  * Permanently clear one legacy protector and advance the current VM's matching
  * semantic-family epoch. These remain cold mutation-path calls; generated proof
  * regions snapshot the epochs, while existing runtime fast paths keep reading the
@@ -136,9 +123,3 @@ extern MAL_ISOLATE_LOCAL bool mal_primitive_method_protector;
 void mal_invalidate_array_elements_protector(void);
 void mal_invalidate_primitive_method_protector(void);
 
-/**
- * The %Array.prototype% object (set at intrinsics init). Cached as a bare pointer so
- * the inline array index store fast path can confirm an array is on the default
- * prototype without a vm handle.
- */
-extern MAL_ISOLATE_LOCAL MalObject *mal_array_prototype_object;

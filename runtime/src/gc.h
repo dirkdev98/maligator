@@ -1,6 +1,7 @@
 #pragma once
 
 #include "./defaults.h"
+#include "isolate.h"
 #include "value.h"
 
 #if !defined(__wasi__)
@@ -32,16 +33,6 @@ usize mal_gc_worker_limit(MalVm *vm);
 /* The flags, root chains, and hooks below belong to the isolate pinned to the current
  * mutator thread. Collector helpers never read or write their own copies. */
 
-/* Set during an incremental major mark cycle (init-mark → remark). */
-extern MAL_ISOLATE_LOCAL bool mal_gc_marking_active;
-
-/* The mutator's safepoint request. Helpers and process signal handlers set the owning
- * mutator's flag through mal_gc_request_safepoint, never through their own copy. */
-#if defined(__wasi__)
-extern bool mal_gc_poll;
-#else
-extern MAL_ISOLATE_LOCAL _Atomic bool mal_gc_poll;
-#endif
 
 /* Poll sites only choose whether to enter mal_gc_safepoint, whose exchange acquires the
  * request; a sequentially consistent read would order every loop backedge and call return. */
@@ -62,15 +53,6 @@ MalGcPollTarget *mal_gc_current_poll_target(void);
 void mal_gc_set_mutator_busy(MalVm *vm, bool busy);
 void mal_gc_set_mutator_waker(MalVm *vm, void (*wake)(void *), void *data);
 
-/* Sticky cooperative termination of the owning isolate (worker terminate/process.exit).
- * Never cleared while the isolate runs. A safepoint re-arms mal_gc_poll while it is set,
- * so every later poll observes it; loop/call poll sites then raise an uncatchable throw
- * through mal_gc_poll_termination. */
-#if defined(__wasi__)
-extern bool mal_gc_termination;
-#else
-extern MAL_ISOLATE_LOCAL _Atomic bool mal_gc_termination;
-#endif
 typedef struct MalGcTerminationTarget MalGcTerminationTarget;
 MalGcTerminationTarget *mal_gc_current_termination_target(void);
 /* Thread-safe: set the sticky flag, then request a safepoint on the same isolate. */
@@ -302,7 +284,6 @@ typedef struct MalRootSpan {
     i32 count;
 } MalRootSpan;
 
-extern MAL_ISOLATE_LOCAL MalRootSpan *mal_root_span_head;
 
 static inline void mal_gc_root(MalRootSpan *span, MalValue *slots, i32 count) {
     span->slots = slots;

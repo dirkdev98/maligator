@@ -10,24 +10,6 @@
 #include "value_ops.h"
 #include "vm.h"
 
-/**
- * Array fast-elements protector. True while neither %Array.prototype% nor
- * %Object.prototype% has an integer-index own property and neither has been
- * reparented — i.e. an array whose [[Prototype]] is the default %Array.prototype%
- * has a fully index-clean prototype chain, so a fresh-index store cannot be
- * intercepted by an inherited indexed setter and can skip the prototype-chain
- * resolve. Invalidated permanently (conservative) the first time that stops holding.
- * Read on the array index [[Set]] hot path (mal_vm_set_property).
- */
-MAL_ISOLATE_LOCAL bool mal_array_elements_protector = true;
-
-/**
- * Holds while no watched built-in prototype/lookup object has been mutated. Property
- * inline caches retain resolved data values only while this is true; any
- * define/set/delete/reparent clears it (see `watched_method_proto`).
- */
-MAL_ISOLATE_LOCAL bool mal_primitive_method_protector = true;
-
 /** Zero is the permanently exhausted state, matching the prototype-chain epoch. */
 static void mal_semantic_epoch_bump(u64 *epoch) {
     if (*epoch == 0) return;
@@ -55,8 +37,6 @@ static inline void mal_gc_card_desc(MalHeapHeader *owner, const MalPropertyDesc 
     mal_gc_card(owner, desc->getter);
     mal_gc_card(owner, desc->setter);
 }
-
-MAL_ISOLATE_LOCAL MalObject *mal_array_prototype_object = nullptr;
 
 static bool mal_object_desc_is_accessor(MalPropertyDesc desc) {
     return (desc.flags & MAL_PROPERTY_ACCESSOR) != 0;

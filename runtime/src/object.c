@@ -40,8 +40,6 @@ static _Thread_local usize g_prototype_dependency_active = 0;
 
 void mal_vm_property_cache_invalidate(void *cache);
 
-MAL_ISOLATE_LOCAL u64 mal_prototype_chain_epoch = 1;
-
 static usize mal_prototype_dependency_hash(const void *pointer) {
     u64 hash = (u64) (uptr) pointer;
     hash ^= hash >> 30;

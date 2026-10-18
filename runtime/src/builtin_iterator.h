@@ -13,7 +13,6 @@ typedef struct MalArrayObject MalArrayObject;
  * a captured next against it to confirm the array-iterator protocol is unpatched
  * before advancing a dense array directly.
  */
-extern MAL_ISOLATE_LOCAL MalNativeFunctionCallback mal_array_iterator_next_callback;
 
 /**
  * Spec IteratorRecord: the iterator object together with its cached next

@@ -68,24 +68,20 @@
 #include "temporal_rs/ZonedDateTime.h"
 #endif
 
-MAL_ISOLATE_LOCAL bool mal_gc_marking_active = false;
+MAL_ISOLATE_LOCAL MalIsolateLocals mal_isolate = {
+    .prototype_chain_epoch = 1,
+    .array_elements_protector = true,
+    .primitive_method_protector = true,
+};
 
-#if defined(__wasi__)
-bool mal_gc_poll = false;
-#else
+#if !defined(__wasi__)
 static_assert(ATOMIC_BOOL_LOCK_FREE == 2, "GC poll must be signal-safe and lock-free");
-MAL_ISOLATE_LOCAL _Atomic bool mal_gc_poll = false;
 #endif
 
 MalGcPollTarget *mal_gc_current_poll_target(void) {
     return (MalGcPollTarget *) &mal_gc_poll;
 }
 
-#if defined(__wasi__)
-bool mal_gc_termination = false;
-#else
-MAL_ISOLATE_LOCAL _Atomic bool mal_gc_termination = false;
-#endif
 
 MalGcTerminationTarget *mal_gc_current_termination_target(void) {
     return (MalGcTerminationTarget *) &mal_gc_termination;
@@ -119,7 +115,6 @@ void mal_gc_request_safepoint(MalGcPollTarget *target) {
 #endif
 }
 
-MAL_ISOLATE_LOCAL MalRootSpan *mal_root_span_head = nullptr;
 
 /* Preemption hook (docs/decisions/03-wave-0-host-architecture.md). Null in a plain
  * run; the scheduler installs one so a safepoint can yield the running fiber when its reduction

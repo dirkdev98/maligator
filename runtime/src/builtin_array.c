@@ -28,8 +28,6 @@
 #include "vm.h"
 #include "vm_ops.h"
 
-MAL_ISOLATE_LOCAL MalNativeFunctionCallback mal_array_values_callback = nullptr;
-
 static bool mal_array_default_species(MalVm *vm, MalValue recv);
 
 typedef struct MalArrayJoinFrame {
