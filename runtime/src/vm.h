@@ -2012,6 +2012,15 @@ typedef struct MalVm {
     MalForInSnapshot for_in_snapshots[4];
     /** %ArrayIteratorPrototype%.next's behaviour for for-in key Arrays, unreachable from JavaScript. */
     MalValue for_in_iterator_next;
+    /**
+     * Shapes reached by installing a run of private elements, keyed by the source
+     * shape and first name. Shapes are immortal and their transitions immutable, so
+     * an entry whose tail names match stays exact.
+     */
+    struct {
+        const struct MalShape *source;
+        struct MalShape *final;
+    } private_append_cache[32];
 } MalVm;
 
 /** Every engine heap is the unique inline heap of one MalVm. */

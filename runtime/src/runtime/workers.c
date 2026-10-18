@@ -1087,8 +1087,8 @@ static bool hooks_reject(void *data, MalVm *vm, MalValue object) {
     (void) vm;
     if (iso == nullptr || mal_value_is_undefined(iso->uncloneable) || !mal_value_is_object(object)) return false;
     MalValue mark;
-    return mal_table_get_private_value(
-        mal_object_overflow(mal_value_to_object(object)), mal_value_to_symbol(iso->uncloneable), &mark);
+    return mal_object_get_private(
+        mal_value_to_object(object), mal_value_to_symbol(iso->uncloneable), &mark);
 }
 
 void mal_workers_mark_uncloneable(MalVm *vm, MalValue object) {

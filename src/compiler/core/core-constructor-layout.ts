@@ -24,10 +24,18 @@ function rootDefinition(
 export function coreConstructorSlotReserve(fn: CoreFunctionStore): number {
 	if (!fn.metadata.isClassConstructor || fn.metadata.isDerivedConstructor) return 0;
 	const keys = new Set<number>();
+	// Private elements share the instance's shape slots; each install names a distinct element.
+	let privateElements = 0;
 	for (const instruction of fn.instructionIds()) {
 		if (fn.instructionKind(instruction) !== "operation") continue;
 		const opcode = fn.instructionOpcodeName(instruction);
-		if (opcode !== "storePropertyStatic" && opcode !== "defineProperty") continue;
+		if (
+			opcode !== "storePropertyStatic" &&
+			opcode !== "defineProperty" &&
+			opcode !== "definePrivate" &&
+			opcode !== "initPrivateFields"
+		)
+			continue;
 		const operandStart = fn.kernel.instructionOperandStart(instruction);
 		const receiver = fn.kernel.operandAt(operandStart);
 		const receiverDefinition = rootDefinition(fn, receiver);
@@ -36,6 +44,14 @@ export function coreConstructorSlotReserve(fn: CoreFunctionStore): number {
 			fn.instructionOpcodeName(receiverDefinition) !== "loadThis"
 		)
 			continue;
+		if (opcode === "definePrivate") {
+			privateElements++;
+			continue;
+		}
+		if (opcode === "initPrivateFields") {
+			privateElements += fn.kernel.instructionOperandCount(instruction) - 1;
+			continue;
+		}
 		if (opcode === "storePropertyStatic") {
 			const stringIndex = fn.instructionAttributes(instruction).stringIndex;
 			if (typeof stringIndex === "number") keys.add(stringIndex);
@@ -51,5 +67,5 @@ export function coreConstructorSlotReserve(fn: CoreFunctionStore): number {
 		const stringIndex = fn.instructionAttributes(definition).stringIndex;
 		if (typeof stringIndex === "number") keys.add(stringIndex);
 	}
-	return Math.min(keys.size, MAX_CONSTRUCTOR_SLOT_RESERVE);
+	return Math.min(keys.size + privateElements, MAX_CONSTRUCTOR_SLOT_RESERVE);
 }

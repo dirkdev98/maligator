@@ -10,6 +10,7 @@
 #include "function_object.h"
 #include "gc.h"
 #include "heap_string.h"
+#include "heap_symbol.h"
 #include "number_text.h"
 #include "object_ops.h"
 #include "perf_stats.h"
@@ -570,7 +571,10 @@ static MalJsonResult mal_json_serialize_object(MalJsonState *state, MalJsonBuild
             !mal_object_has_public_overflow(object) && object->shape != nullptr) {
             shape_snapshot = object->shape;
             for (u32 i = 0; i < shape_snapshot->inline_count; i++) {
-                if (!mal_value_is_string(shape_snapshot->props[i].key)) {
+                // Shaped private elements are never enumerable, so the snapshot skips them.
+                MalValue key = shape_snapshot->props[i].key;
+                if (!mal_value_is_string(key) &&
+                    !(mal_value_is_symbol(key) && mal_symbol_is_private(mal_value_to_symbol(key)))) {
                     shape_snapshot = nullptr;
                     break;
                 }

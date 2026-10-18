@@ -94,6 +94,7 @@ tests/native/node-http-request.test.ts
 tests/native/node-string-decoder.test.ts
 tests/native/numeric-abstract-ops.test.ts
 tests/native/private-batch.test.ts
+tests/native/private-shape-slots.test.ts
 tests/native/string-limit-p0.test.ts
 tests/native/test-runner-regressions.test.ts
 tests/native/text-decoder-streaming.test.ts

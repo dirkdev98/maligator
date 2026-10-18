@@ -141,9 +141,47 @@ static MalTable *mal_object_ensure_overflow(MalObject *object) {
     return mal_object_overflow(object);
 }
 
+/** Shaped objects keep private elements in their shape; dictionaries keep them in the table. */
+static bool mal_object_shapes_private(const MalObject *object) {
+    return !mal_object_has_public_overflow(object) &&
+        object->shape != mal_shape_dictionary_empty();
+}
+
+MalValue *mal_object_private_value_slot(MalObject *object, MalSymbol *symbol) {
+    MalValue key = mal_value_from_symbol(symbol);
+    i32 index = mal_shape_find(
+        object->shape, (MalKey) {.kind = MAL_KEY_SYMBOL, .value = key}, MAL_SHAPE_FIND_GET_OWN);
+    if (index >= 0) {
+        symbol->private_entry_hint = (u32) index + 1;
+        return &((MalValue *) mal_object_fields_nonempty(object))[index];
+    }
+    return mal_table_private_value_slot(mal_object_overflow(object), symbol);
+}
+
+bool mal_object_get_private(MalObject *object, MalSymbol *symbol, MalValue *value) {
+    const MalValue *slot = mal_object_private_value_slot(object, symbol);
+    if (slot == nullptr) return false;
+    *value = *slot;
+    return true;
+}
+
 bool mal_object_add_private(MalObject *object, MalKey key, MalValue value) {
     assert(key.kind == MAL_KEY_SYMBOL &&
            mal_symbol_is_private(mal_value_to_symbol(key.value)));
+    if (mal_shape_find(object->shape, key, MAL_SHAPE_FIND_DEFINE_OWN) >= 0) return false;
+    // PrivateFieldAdd ignores [[Extensible]], so frozen receivers still gain slots.
+    if (mal_object_shapes_private(object) && mal_shape_can_add_property(object->shape) &&
+        (mal_object_overflow(object) == nullptr ||
+         !mal_table_lookup(mal_object_overflow(object), key).present)) {
+        MalShape *child = mal_shape_add_property(object->shape, key, (u8) MAL_PROPERTY_WRITABLE);
+        u32 count = child->inline_count;
+        mal_object_grow_slots(object, object->shape->inline_count, count);
+        mal_object_field_initialize(object, child, count - 1, value);
+        object->shape = child;
+        mal_value_to_symbol(key.value)->private_entry_hint = count;
+        mal_gc_card(&object->header, key.value);
+        return true;
+    }
     bool private_only = !mal_object_has_public_overflow(object);
     MalTable *table = mal_object_ensure_overflow(object);
     MalPropertyDesc desc = mal_object_data_desc(value, MAL_PROPERTY_WRITABLE);
@@ -156,6 +194,12 @@ bool mal_object_add_private(MalObject *object, MalKey key, MalValue value) {
 }
 
 bool mal_object_reserve_private(MalObject *object, usize additional) {
+    if (mal_object_shapes_private(object)) {
+        usize count = object->shape->inline_count + additional;
+        if (count > MAL_SHAPE_MAX_INLINE_SLOTS) count = MAL_SHAPE_MAX_INLINE_SLOTS;
+        mal_object_grow_slots(object, object->shape->inline_count, (u32) count);
+        return true;
+    }
     bool private_only = !mal_object_has_public_overflow(object);
     MalTable *table = mal_object_ensure_overflow(object);
     object->overflow_private_only = private_only;
@@ -406,8 +450,10 @@ MalPropertyLookup mal_object_get_own(const MalObject *object, MalKey key) {
         }
         // Table-mode array (deopted or lazy-empty): fall through to the table lookup.
     }
-    // Shaped string property: synthesize a data descriptor from the inline slot.
-    if (key.kind == MAL_KEY_STRING) {
+    bool private_key = key.kind == MAL_KEY_SYMBOL &&
+        mal_symbol_is_private(mal_value_to_symbol(key.value));
+    // Shaped string property or private element: synthesize a data descriptor from the inline slot.
+    if (key.kind == MAL_KEY_STRING || private_key) {
         i32 idx = mal_shape_find(object->shape, key, MAL_SHAPE_FIND_GET_OWN);
         if (idx >= 0) {
             const MalShapeProp *prop = &object->shape->props[idx];
@@ -419,8 +465,6 @@ MalPropertyLookup mal_object_get_own(const MalObject *object, MalKey key) {
         }
     }
     // Index/symbol keys and dictionary-mode objects live in the overflow table.
-    bool private_key = key.kind == MAL_KEY_SYMBOL &&
-        mal_symbol_is_private(mal_value_to_symbol(key.value));
     if (mal_object_overflow(object) != nullptr &&
         (!object->overflow_private_only || private_key)) {
         return mal_property_lookup(mal_object_overflow(object), key);
@@ -475,6 +519,29 @@ MalDefineOwnStatus mal_object_define_own(MalObject *object, MalKey key, const Ma
 
     if (key.kind == MAL_KEY_SYMBOL &&
         mal_symbol_is_private(mal_value_to_symbol(key.value))) {
+        i32 index = mal_shape_find(object->shape, key, MAL_SHAPE_FIND_DEFINE_OWN);
+        bool shaped_data = !mal_object_desc_is_accessor(*desc);
+        if (index >= 0) {
+            const MalShapeProp *prop = &object->shape->props[index];
+            if (shaped_data && desc->flags == (MalPropertyFlags) prop->attrs) {
+                MalPropertyDesc current =
+                    mal_object_data_desc(mal_object_field_load(object, prop->slot), prop->attrs);
+                if (!mal_object_define_is_compatible(current, *desc)) {
+                    return MAL_DEFINE_OWN_REJECTED;
+                }
+                mal_object_field_store(object, prop->slot, desc->value);
+                return MAL_DEFINE_OWN_APPLIED;
+            }
+            // Attribute transitions keep the dictionary's descriptor machinery.
+            mal_object_dictionarize(object);
+        } else if (shaped_data && desc->flags == MAL_PROPERTY_WRITABLE &&
+                   mal_object_shapes_private(object) &&
+                   mal_shape_can_add_property(object->shape) &&
+                   (mal_object_overflow(object) == nullptr ||
+                    !mal_table_lookup(mal_object_overflow(object), key).present)) {
+            return mal_object_add_private(object, key, desc->value)
+                ? MAL_DEFINE_OWN_APPLIED : MAL_DEFINE_OWN_REJECTED;
+        }
         bool private_only = !mal_object_has_public_overflow(object);
         MalTable *table = mal_object_ensure_overflow(object);
         MalPropertyEnsure ensured = mal_property_ensure(table, key, desc);

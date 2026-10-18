@@ -26,6 +26,22 @@ grow four bytes per field.
 Representation knowledge belongs in facts about a shape's fields rather than in
 their storage, so a new fact never needs a new physical layout or a migration.
 
+## Private elements
+
+A shaped object keeps private fields and brand markers in its shape, keyed by
+their private name with writable-only attributes. Public symbols still move the
+object to dictionary mode, so a symbol key in a shape is always private:
+reflection, copying, and serialization skip non-string shape keys, and
+integrity levels leave them unchanged. Dictionary mode moves private elements
+into the table with the same descriptor. Keeping them in a private-only table
+cost every instance a storage sidecar and a table, which made constructing a
+class with three private fields 3.6 times slower than with public ones.
+
+A private name's hint is its last slot plus one. A read validates the hint
+against the receiver's own shape, so subclasses that add fields after the base
+class's private fields share one hint. A run of private fields installs through a
+cached source-to-final shape pair.
+
 ## Identity-preserving changes
 
 A write changes only the payload. Adding a property, changing attributes,

@@ -482,8 +482,10 @@ iterator cursor is not, by itself, permission to delete its language object.
       `mal_vm_call_value` and each accessor's own entry and exit. A property load
       whose receiver class and prototype accessor are known could become a guarded
       direct call that the existing inliner expands, with the original load as the
-      fallback. Private names could also carry a last-shape and slot hint in a
-      larger cell, so shaped private fields need no per-site cache.
+      fallback. Private elements now live in shape slots behind a name-level slot
+      hint (constructing a three-private-field class went from 269 to 108 ms per 3M
+      against 75 for public fields); a per-site shape row would make the private
+      probe a single compare.
 
 - [ ] Widen numeric loop regions beyond plain Array element and record sums.
       Index and for-of loops over Arrays now keep their sums in f64 locals,
@@ -814,7 +816,9 @@ contracts or investigates costs still visible after the string follow-ups.
       names in that activation's captured slots, so every evaluation overwrites
       the same slots: after `for (...) list.push(class { #x; static has(o) { return #x in o; } })`,
       `list[1].has(new list[0]())` is true in both backends where Node returns
-      false. Factory functions are unaffected because each call owns its slots.
+      false. The class's home-object and heritage slots are shared the same way:
+      `super.m()` in the first iteration's subclass calls the last iteration's
+      base. Factory functions are unaffected because each call owns its slots.
       Give such evaluations their own class scope, as per-iteration bindings do.
 
 - [ ] Fix remaining RegExp @@replace protocol and coercion cases. Prefer shared

@@ -77,7 +77,7 @@
 	},
 	{
 		"file": "builtin_json.c",
-		"sha256": "84b63cdb502b53885f082f634234b875f397f4a4f72ee5a32ab40bd821bac756"
+		"sha256": "9603f349ff7faa837ffa81dd4e58d14259c75a8da981aecfe4f89bba7349ec91"
 	},
 	{
 		"file": "builtin_map.c",
@@ -329,11 +329,11 @@
 	},
 	{
 		"file": "object_ops.c",
-		"sha256": "41a1ba3afda19655b8f2846ba97cf2c1865f159ac5f9f7b63f8ca0b312168fe7"
+		"sha256": "e41c1987f8ef3c1ad75ae9ca3b2374be67e4d67f7d3091b712706c5409695509"
 	},
 	{
 		"file": "object_ops.h",
-		"sha256": "cfe3eee625a6687d983948c262bdfb59f119a1c9d0a9a937ebc0aaeca81cc76d"
+		"sha256": "1327cb79235055f070c6a1260ad5f3960755fadff00f3ed4350377661a844a94"
 	},
 	{
 		"file": "primordials.c",
@@ -705,7 +705,7 @@
 	},
 	{
 		"file": "runtime/workers.c",
-		"sha256": "c356bc1455d6b999ccb4f6384fdb688a00bc6648c6df012cc564611cf89362af"
+		"sha256": "ad88183f04181342f40005d2c579f74bf016f0ff8dcba84d08fb5b5ef3613713"
 	},
 	{
 		"file": "runtime/workers.h",
@@ -721,18 +721,18 @@
 	},
 	{
 		"file": "vm.c",
-		"sha256": "c146e616e762a93712cc679ffc600bd2959b8913fdc3259118d679c14340d3b2"
+		"sha256": "6f1679675283a799f6850c1084713f1e886f74ef06ff9cced72852e59c31b9a4"
 	},
 	{
 		"file": "vm.h",
-		"sha256": "ed5f873abb7323fdeed2c2cd12631ba3d5206cb7b6e6531c5cba2227ee965dab"
+		"sha256": "925f9d0b730c6cf9c8bf40380f6fb519c89d728605eda31365f0dd4f9b9665d4"
 	},
 	{
 		"file": "vm_ops.c",
-		"sha256": "d046b621b0a91aec14b49b238946e34c9be40e99e868a5756896c739701df939"
+		"sha256": "eb780eaecf15abd39203ee21bae2ffb6128ec8adb3364568feccb600260b5401"
 	},
 	{
 		"file": "vm_ops.h",
-		"sha256": "6d410d05418cf6d9b4d48eb53caa86d9ce3fbd8ca5aa9451c3c341bde14e0a10"
+		"sha256": "b677db51641f1fcd84c576d5a34070137cfcec36e229c4eda614889c0afa93f7"
 	}
 ]

@@ -35,13 +35,15 @@ static bool mal_property_iter_has_overflow(const MalPropertyIter *iter) {
 }
 
 /**
- * Emit the next shaped property (all of which are string keys), advancing
- * `shape_index`. Respects the enumerable filter. Returns false when exhausted.
+ * Emit the next shaped string property, advancing `shape_index`; shaped private
+ * elements are not properties. Respects the enumerable filter. Returns false when
+ * exhausted.
  */
 static bool mal_property_iter_next_shape(MalPropertyIter *iter, MalKey *key_out, MalPropertyDesc *desc_out) {
     const MalShape *shape = iter->object->shape;
     while (iter->shape_index < shape->inline_count) {
         const MalShapeProp *prop = &shape->props[iter->shape_index++];
+        if (!mal_value_is_string(prop->key)) continue;
         MalPropertyDesc desc = mal_property_desc_from_shape(iter->object, prop);
 
         if (!mal_property_iter_desc_matches(iter, desc)) {

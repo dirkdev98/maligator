@@ -3465,25 +3465,48 @@ void mal_vm_op_init_private_fields(
 /** PrivateGet; an unbranded receiver throws (sets vm->completion). */
 MalValue mal_vm_op_load_private(MalVm *vm, MalValue object_value, MalValue key_value);
 
+/**
+ * The shape slot of private element `key` behind its name's 1-based hint, or -1.
+ * Shape slots equal property indices, and the hint is validated against the
+ * receiver's own shape, so one hint serves every class sharing the field's index.
+ */
+static inline i32 mal_vm_private_hint_slot(const MalObject *object, MalValue key) {
+    u32 index = mal_value_to_symbol(key)->private_entry_hint - 1;
+    const MalShape *shape = object->shape;
+    return index < shape->inline_count && shape->props[index].key == key ? (i32) index : -1;
+}
+
 /** Noncollecting hinted PrivateGet; a miss leaves the full lookup and its throw to the op. */
 static inline bool mal_vm_private_try_load(
     MalValue object_value, MalValue key_value, MalValue *out
 ) {
     MAL_PERF_COUNT(private_load_attempts);
     if (!mal_value_is_object(object_value)) return false;
-    const MalTable *table = mal_object_overflow(mal_value_to_object(object_value));
+    const MalObject *object = mal_value_to_object(object_value);
+    i32 slot = mal_vm_private_hint_slot(object, key_value);
+    if (slot >= 0) {
+        MAL_PERF_COUNT(private_load_hint_hits);
+        *out = mal_object_field_load(object, (u32) slot);
+        return true;
+    }
+    const MalTable *table = mal_object_overflow(object);
     bool hit = table != nullptr && mal_table_private_hint_read(
         table, key_value, mal_value_to_symbol(key_value)->private_entry_hint, out);
     if (hit) MAL_PERF_COUNT(private_load_hint_hits);
     return hit;
 }
 
-/** PrivateSet of an installed private data element through its name's entry hint. */
+/** PrivateSet of an installed private data element through its name's hint. */
 static inline bool mal_vm_private_try_store(
     MalValue object_value, MalValue key_value, MalValue value
 ) {
     if (!mal_value_is_object(object_value)) return false;
     MalObject *object = mal_value_to_object(object_value);
+    i32 slot = mal_vm_private_hint_slot(object, key_value);
+    if (slot >= 0) {
+        mal_object_field_store(object, (u32) slot, value);
+        return true;
+    }
     MalTable *table = mal_object_overflow(object);
     MalValue *field = table == nullptr ? nullptr : mal_table_private_hint_slot(
         table, key_value, mal_value_to_symbol(key_value)->private_entry_hint);
@@ -3527,8 +3550,8 @@ static inline __attribute__((always_inline)) bool mal_vm_probe_private_read(
         return true;
     }
     MAL_PERF_COUNT(probe_read_private_searches);
-    bool found = mal_table_get_private_value(
-        mal_object_overflow(mal_value_to_object(receiver)), mal_value_to_symbol(key), out);
+    bool found = mal_object_get_private(
+        mal_value_to_object(receiver), mal_value_to_symbol(key), out);
     if (found) MAL_PERF_COUNT(probe_read_hits[0]);
     return found;
 }

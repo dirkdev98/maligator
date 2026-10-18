@@ -8737,23 +8737,67 @@ void mal_op_create_private_names(MalCallable *callable, const MalInstruction *in
 // Shared by the interpreter op and the native backend: AddPrivateName — install a
 // private field/method/brand on a freshly built instance or class object. A second
 // install of the same name on one object throws; sets vm->completion.
+static void mal_vm_throw_private_reinstall(MalVm *vm) {
+    // AddPrivateName rejects installing the same private element twice on
+    // one object (re-entrant construction of the same this).
+    mal_vm_throw_error(
+        vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+        "Cannot initialize the same private member twice on an object"
+    );
+}
+
+/**
+ * Install `count` private elements; null `values` installs undefined. Returns
+ * false after throwing on a reinstalled name.
+ */
+static bool mal_vm_append_private_elements(
+    MalVm *vm, MalObject *object, u32 count, const MalValue *keys, const MalValue *values
+) {
+    MalShape *source = object->shape;
+    u32 base = source->inline_count;
+    // A private-only table could already hold one of the names, so only table-free objects qualify.
+    bool shaped = mal_object_overflow(object) == nullptr &&
+        source != mal_shape_dictionary_empty() && base + count <= MAL_SHAPE_MAX_INLINE_SLOTS;
+    usize row = (((uptr) source >> 4) ^ ((uptr) keys[0] >> 4)) % countof(vm->private_append_cache);
+    if (shaped && vm->private_append_cache[row].source == source) {
+        MalShape *final = vm->private_append_cache[row].final;
+        bool exact = final->inline_count == base + count;
+        for (u32 i = 0; exact && i < count; i++) exact = final->props[base + i].key == keys[i];
+        // A cached tail can be reached only through duplicate-checked additions from `source`.
+        if (exact) {
+            mal_object_grow_slots(object, base, base + count);
+            MalValue *fields = mal_object_fields_nonempty(object);
+            for (u32 i = 0; i < count; i++) {
+                MalValue value = values == nullptr ? MAL_VALUE_UNDEFINED : values[i];
+                fields[base + i] = value;
+                mal_gc_card(&object->header, value);
+                mal_value_to_symbol(keys[i])->private_entry_hint = base + i + 1;
+            }
+            object->shape = final;
+            return true;
+        }
+    }
+    for (u32 i = 0; i < count; i++) {
+        MalKey key = {.kind = MAL_KEY_SYMBOL, .value = keys[i]};
+        if (!mal_object_add_private(
+                object, key, values == nullptr ? MAL_VALUE_UNDEFINED : values[i])) {
+            mal_vm_throw_private_reinstall(vm);
+            return false;
+        }
+    }
+    if (shaped && object->shape->inline_count == base + count) {
+        vm->private_append_cache[row].source = source;
+        vm->private_append_cache[row].final = object->shape;
+    }
+    return true;
+}
+
 void mal_vm_op_define_private(MalVm *vm, MalValue object_value, MalValue key_value, MalValue value) {
     // The receiver is always a freshly built instance or the class object.
     if (!mal_value_is_object(object_value)) {
         return;
     }
-
-    MalObject *object = mal_value_to_object(object_value);
-    MalKey key = {.kind = MAL_KEY_SYMBOL, .value = key_value};
-
-    if (!mal_object_add_private(object, key, value)) {
-        // AddPrivateName rejects installing the same private element twice on
-        // one object (re-entrant construction of the same this).
-        mal_vm_throw_error(
-            vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            "Cannot initialize the same private member twice on an object"
-        );
-    }
+    mal_vm_append_private_elements(vm, mal_value_to_object(object_value), 1, &key_value, &value);
 }
 
 void mal_op_define_private(MalCallable *callable, const MalInstruction *instruction) {
@@ -8768,10 +8812,8 @@ void mal_op_define_private(MalCallable *callable, const MalInstruction *instruct
 void mal_vm_op_init_private_fields(
     MalVm *vm, MalValue object_value, i32 count, const MalValue *keys
 ) {
-    for (i32 i = 0; i < count; i++) {
-        mal_vm_op_define_private(vm, object_value, keys[i], mal_value_new_undefined());
-        if (vm->completion.kind == MAL_COMPLETION_THROW) return;
-    }
+    if (count <= 0 || !mal_value_is_object(object_value)) return;
+    mal_vm_append_private_elements(vm, mal_value_to_object(object_value), (u32) count, keys, nullptr);
 }
 
 void mal_op_init_private_fields(MalCallable *callable, const MalInstruction *instruction) {
@@ -8795,8 +8837,8 @@ MalValue mal_vm_op_load_private(MalVm *vm, MalValue object_value, MalValue key_v
     }
 
     MalValue value;
-    if (!mal_table_get_private_value(
-            mal_object_overflow(mal_value_to_object(object_value)), mal_value_to_symbol(key_value), &value)) {
+    if (!mal_object_get_private(
+            mal_value_to_object(object_value), mal_value_to_symbol(key_value), &value)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, mal_private_absent_message);
         return mal_value_new_undefined();
     }
@@ -8824,8 +8866,7 @@ void mal_vm_op_store_private(MalVm *vm, MalValue object_value, MalValue key_valu
     }
 
     MalObject *object = mal_value_to_object(object_value);
-    MalValue *field = mal_table_private_value_slot(
-        mal_object_overflow(object), mal_value_to_symbol(key_value));
+    MalValue *field = mal_object_private_value_slot(object, mal_value_to_symbol(key_value));
     if (field != nullptr) {
         mal_gc_write_barrier(*field);
         *field = value;

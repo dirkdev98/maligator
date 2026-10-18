@@ -420,9 +420,10 @@ MalShape *mal_shape_set_integrity(MalShape *shape, bool clear_writable) {
     u8 clear = (u8) MAL_PROPERTY_CONFIGURABLE;
     if (clear_writable) clear |= (u8) MAL_PROPERTY_WRITABLE;
 
+    // Private elements are not properties; integrity levels never reach them.
     bool changed = false;
     for (u32 i = 0; i < shape->inline_count; i++) {
-        if ((shape->props[i].attrs & clear) != 0) {
+        if (mal_value_is_string(shape->props[i].key) && (shape->props[i].attrs & clear) != 0) {
             changed = true;
             break;
         }
@@ -447,7 +448,7 @@ MalShape *mal_shape_set_integrity(MalShape *shape, bool clear_writable) {
         child->props, shape->props,
         sizeof(MalShapeProp) * child->inline_count);
     for (u32 i = 0; i < child->inline_count; i++) {
-        child->props[i].attrs &= (u8) ~clear;
+        if (mal_value_is_string(child->props[i].key)) child->props[i].attrs &= (u8) ~clear;
     }
 
     MalShapeTransition *transition = malloc(sizeof(MalShapeTransition));
