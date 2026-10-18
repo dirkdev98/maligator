@@ -56,6 +56,35 @@ static inline MalTextBufferStatus mal_text_buffer_push(MalTextBuffer *buffer, c1
     return mal_text_buffer_push_slow(buffer, code_unit);
 }
 
+/**
+ * Copy `size` non-overlapping bytes. JSON keys and short strings are a few bytes
+ * long, where a libc call costs more than the copy; two overlapping fixed-size
+ * moves cover every size up to 16 without touching bytes outside either range.
+ */
+static inline void mal_text_buffer_copy_bytes(void *destination, const void *source, usize size) {
+    u8 *to = destination;
+    const u8 *from = source;
+    if (size > 16) {
+        memcpy(to, from, size);
+    } else if (size >= 8) {
+        u64 head, tail;
+        memcpy(&head, from, 8);
+        memcpy(&tail, from + size - 8, 8);
+        memcpy(to, &head, 8);
+        memcpy(to + size - 8, &tail, 8);
+    } else if (size >= 4) {
+        u32 head, tail;
+        memcpy(&head, from, 4);
+        memcpy(&tail, from + size - 4, 4);
+        memcpy(to, &head, 4);
+        memcpy(to + size - 4, &tail, 4);
+    } else if (size != 0) {
+        to[0] = from[0];
+        to[size / 2] = from[size / 2];
+        to[size - 1] = from[size - 1];
+    }
+}
+
 MalTextBufferStatus mal_text_buffer_append_units_slow(
     MalTextBuffer *buffer, const c16 *code_units, usize length);
 
@@ -64,9 +93,8 @@ static inline MalTextBufferStatus mal_text_buffer_append_units(
     MalTextBuffer *buffer, const c16 *code_units, usize length
 ) {
     if (buffer->utf16 && mal_text_buffer_fits(buffer, length)) {
-        if (length != 0) {
-            memcpy((c16 *) buffer->data + buffer->length, code_units, sizeof(c16) * length);
-        }
+        mal_text_buffer_copy_bytes(
+            (c16 *) buffer->data + buffer->length, code_units, sizeof(c16) * length);
         buffer->length += length;
         return MAL_TEXT_BUFFER_OK;
     }
@@ -80,7 +108,7 @@ static inline MalTextBufferStatus mal_text_buffer_append_latin1(
     MalTextBuffer *buffer, const u8 *code_units, usize length
 ) {
     if (!buffer->utf16 && mal_text_buffer_fits(buffer, length)) {
-        if (length != 0) memcpy((u8 *) buffer->data + buffer->length, code_units, length);
+        mal_text_buffer_copy_bytes((u8 *) buffer->data + buffer->length, code_units, length);
         buffer->length += length;
         return MAL_TEXT_BUFFER_OK;
     }
