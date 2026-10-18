@@ -3187,6 +3187,14 @@ export function selectNativeFastPaths(
 			// A loop region keeps a number-record region's code as its per-iteration fallback.
 			for (const claimedIp of plan.claimedIps) blocked.add(claimedIp);
 		}
+		// Paired Array loops compare elements of any type, so numeric regions leave them alone.
+		for (const plan of lowerPairedArrayLoops(
+			fn,
+			indexedLoops,
+			jumpTargets,
+			(ip) => unavailable(ip) || native.instructions[ip] !== undefined,
+		))
+			for (const ip of plan.claimedIps) numericLoopBlocked.add(ip);
 		for (const header of [...body.jumpTargets].sort((a, b) => a - b)) {
 			if (numericLoopBlocked.has(header)) continue;
 			const plan = lowerNumericLoopRegion(
