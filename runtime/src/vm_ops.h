@@ -1970,6 +1970,22 @@ static inline __attribute__((always_inline)) bool mal_vm_property_try_load_stati
     return true;
 }
 
+/** Integer records are the common case, so all-int32 fields decode behind one branch. */
+static inline __attribute__((always_inline)) bool mal_vm_try_load_number_fields(
+    const MalValue *values, u32 count, f64 *out
+) {
+    bool integers = true;
+    for (u32 i = 0; i < count; i++) integers &= mal_value_is_int32(values[i]);
+    if (__builtin_expect(integers, 1)) {
+        for (u32 i = 0; i < count; i++) out[i] = (f64) mal_value_to_i32(values[i]);
+        return true;
+    }
+    for (u32 i = 0; i < count; i++) {
+        if (!mal_ops_try_number_as_f64(values[i], &out[i])) return false;
+    }
+    return true;
+}
+
 /** Share one monomorphic shape guard and keep numeric slot values unboxed. */
 static inline __attribute__((always_inline)) bool mal_vm_property_try_load_static_number_pair(
     MalValue receiver,
@@ -1988,12 +2004,14 @@ static inline __attribute__((always_inline)) bool mal_vm_property_try_load_stati
     }
     const void *fields = mal_object_fields_nonempty(object);
     if (fields == nullptr) return false;
-    f64 first_value;
-    f64 second_value;
-    if (!mal_ops_try_number_as_f64(((const MalValue *) fields)[first->slot], &first_value)) return false;
-    if (!mal_ops_try_number_as_f64(((const MalValue *) fields)[second->slot], &second_value)) return false;
-    *first_out = first_value;
-    *second_out = second_value;
+    const MalValue *slots = fields;
+    f64 values[2];
+    if (!mal_vm_try_load_number_fields(
+            (MalValue[]) {slots[first->slot], slots[second->slot]}, 2, values)) {
+        return false;
+    }
+    *first_out = values[0];
+    *second_out = values[1];
     mal_perf_ic_load_mono_hit();
     mal_perf_ic_load_mono_hit();
     return true;
@@ -2020,15 +2038,15 @@ static inline __attribute__((always_inline)) bool mal_vm_property_try_load_stati
     }
     const void *fields = mal_object_fields_nonempty(object);
     if (fields == nullptr) return false;
-    f64 first_value;
-    f64 second_value;
-    f64 third_value;
-    if (!mal_ops_try_number_as_f64(((const MalValue *) fields)[first->slot], &first_value)) return false;
-    if (!mal_ops_try_number_as_f64(((const MalValue *) fields)[second->slot], &second_value)) return false;
-    if (!mal_ops_try_number_as_f64(((const MalValue *) fields)[third->slot], &third_value)) return false;
-    *first_out = first_value;
-    *second_out = second_value;
-    *third_out = third_value;
+    const MalValue *slots = fields;
+    f64 values[3];
+    if (!mal_vm_try_load_number_fields(
+            (MalValue[]) {slots[first->slot], slots[second->slot], slots[third->slot]}, 3, values)) {
+        return false;
+    }
+    *first_out = values[0];
+    *second_out = values[1];
+    *third_out = values[2];
     mal_perf_ic_load_mono_hit();
     mal_perf_ic_load_mono_hit();
     mal_perf_ic_load_mono_hit();
@@ -2060,18 +2078,18 @@ static inline __attribute__((always_inline)) bool mal_vm_property_try_load_stati
     }
     const void *fields = mal_object_fields_nonempty(object);
     if (fields == nullptr) return false;
-    f64 first_value;
-    f64 second_value;
-    f64 third_value;
-    f64 fourth_value;
-    if (!mal_ops_try_number_as_f64(((const MalValue *) fields)[first->slot], &first_value)) return false;
-    if (!mal_ops_try_number_as_f64(((const MalValue *) fields)[second->slot], &second_value)) return false;
-    if (!mal_ops_try_number_as_f64(((const MalValue *) fields)[third->slot], &third_value)) return false;
-    if (!mal_ops_try_number_as_f64(((const MalValue *) fields)[fourth->slot], &fourth_value)) return false;
-    *first_out = first_value;
-    *second_out = second_value;
-    *third_out = third_value;
-    *fourth_out = fourth_value;
+    const MalValue *slots = fields;
+    f64 values[4];
+    if (!mal_vm_try_load_number_fields(
+            (MalValue[]) {slots[first->slot], slots[second->slot], slots[third->slot],
+                          slots[fourth->slot]},
+            4, values)) {
+        return false;
+    }
+    *first_out = values[0];
+    *second_out = values[1];
+    *third_out = values[2];
+    *fourth_out = values[3];
     mal_perf_ic_load_mono_hit();
     mal_perf_ic_load_mono_hit();
     mal_perf_ic_load_mono_hit();
