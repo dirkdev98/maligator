@@ -6284,14 +6284,23 @@ static MalValue mal_vm_op_load_property_ic_keyed(
         }
         // Megamorphic: consult the shared stub cache before a shape search (serves
         // the interpreter and any compiled access whose inline stub probe was cold).
-        if (ic->megamorphic) {
+        // A computed-key site restarts its row on every new key and never becomes
+        // megamorphic, so a key other than the row's probes the stub as well.
+        if (ic->megamorphic || key_value != ic->key) {
             const MalPropertyStubEntry *e =
                 &mal_vm_property_stub_cache(vm)[
                     mal_stub_hash(object->shape, key_value)];
             if (e->shape == object->shape && e->key == key_value) {
                 MAL_PERF_COUNT(ic_load_mega_hits);
-                if (mal_ic_key_is_stable_string(key_value)) {
+                // A computed-key site adopts a key on its second consecutive stub hit, so
+                // a site cycling between keys keeps its row while a new phase still
+                // moves the row. A real-slot shape row leaves `value` free to remember
+                // the candidate; stable keys make the identity comparison ABA-safe.
+                if (mal_ic_key_is_stable_string(key_value) &&
+                    (ic->megamorphic || ic->value == key_value)) {
                     mal_vm_record_own_slot(ic, object->shape, key_value, e->slot);
+                } else if (ic->mode == MAL_IC_MODE_SHAPE && ic->slot != MAL_IC_VALUE_SLOT) {
+                    ic->value = key_value;
                 }
                 return mal_object_field_load_token(object, e->field);
             }
