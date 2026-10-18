@@ -280,11 +280,23 @@ static bool mal_vm_string_to_property_key_impl(
     }
 
     MalString *string = mal_value_to_string(value);
-    MalString *atom = mal_vm_string_constant_atom(vm, string);
-    if (atom == nullptr) {
-        atom = atomize
-            ? mal_property_atomize_string(vm, string)
-            : mal_property_query_string(vm, string);
+    // `counts[word] = (counts[word] ?? 0) + 1` converts one fresh string twice. An
+    // address names the same immutable string until a sweep can reuse it.
+    MalString *atom;
+    if (vm->key_atom_cache.string == string && vm->key_atom_cache.heap_epoch == vm->heap.epoch) {
+        atom = vm->key_atom_cache.atom;
+    } else {
+        atom = mal_vm_string_constant_atom(vm, string);
+        if (atom == nullptr) {
+            atom = atomize
+                ? mal_property_atomize_string(vm, string)
+                : mal_property_query_string(vm, string);
+        }
+        if (atom != string && atom->property_atom) {
+            vm->key_atom_cache.string = string;
+            vm->key_atom_cache.atom = atom;
+            vm->key_atom_cache.heap_epoch = vm->heap.epoch;
+        }
     }
     *key_out = (MalKey) {
         .kind = MAL_KEY_STRING,

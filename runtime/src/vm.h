@@ -1998,6 +1998,12 @@ typedef struct MalVm {
 
     /** Tail-only semantic versions: do not perturb established hot VM offsets. */
     MalSemanticEpochs semantic_epochs;
+    /** The last non-atom string converted to a property key and its atom. */
+    struct {
+        const struct MalString *string;
+        struct MalString *atom;
+        u32 heap_epoch;
+    } key_atom_cache;
     /**
      * For-in key arrays built from one plain object's own shape, by array address.
      * Every key array overwrites its slot when created, so a stale entry for a
