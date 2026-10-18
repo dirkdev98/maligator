@@ -1587,17 +1587,7 @@ static MalStringRopeEquality mal_string_rope_equals_segment(
     }
 }
 
-bool mal_string_equals(const MalString *left, const MalString *right) {
-    MAL_PERF_COUNT(string_equals_calls);
-    if (left == right) {
-        MAL_PERF_COUNT(string_pointer_hits);
-        return true;
-    }
-
-    if (left->length != right->length) {
-        MAL_PERF_COUNT(string_length_misses);
-        return false;
-    }
+bool mal_string_equals_same_length(const MalString *left, const MalString *right) {
     // Computing a missing hash adds an unnecessary full pass before comparison.
     if (left->hash_valid && right->hash_valid && left->hash != right->hash) {
         MAL_PERF_COUNT(string_hash_misses);

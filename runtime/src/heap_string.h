@@ -299,10 +299,23 @@ static inline MalStringStorage mal_string_storage(const MalString *string) {
     return string->storage;
 }
 
+bool mal_string_equals_same_length(const MalString *left, const MalString *right);
+
 /**
  * Compare two strings by UTF-16 code units.
  */
-bool mal_string_equals(const MalString *left, const MalString *right);
+static inline bool mal_string_equals(const MalString *left, const MalString *right) {
+    MAL_PERF_COUNT(string_equals_calls);
+    if (left == right) {
+        MAL_PERF_COUNT(string_pointer_hits);
+        return true;
+    }
+    if (left->length != right->length) {
+        MAL_PERF_COUNT(string_length_misses);
+        return false;
+    }
+    return mal_string_equals_same_length(left, right);
+}
 
 /**
  * Lexicographically compare two strings by UTF-16 code units.
