@@ -260,12 +260,14 @@ The independent target boundary and current storage contract are recorded in
 - [ ] Reach the remaining hot isolate state without Darwin TLV calls. On macOS
       every `_Thread_local` read is a call to `_tlv_get_addr`, which took 4% of
       native self-compile samples before allocation moved its black-allocation
-      flag and mark color into `MalHeap` (a 1% self-compile win). Barriers
-      (`mal_gc_marking_active`), inherited loads (`mal_prototype_chain_epoch`),
-      root spans (`mal_root_span_head`) and safepoint polls still read
-      thread-locals. Workers keep several isolates per process, so this state
-      cannot become process-global; it belongs in `MalHeap`/`MalVm` where callers
-      hold one.
+      flag and mark color into `MalHeap` (a 1% self-compile win) and IC probes
+      read the primitive-method protector through the VM (0.4%). Inherited loads
+      (`mal_prototype_chain_epoch`), array element helpers (the elements
+      protector and `mal_array_prototype_object`), root spans and safepoint polls
+      still read thread-locals. Gating barriers on a process-wide count of
+      marking isolates before `mal_gc_marking_active` measured neutral (+0.04%,
+      6 pairs). Workers keep several isolates per process, so this state cannot
+      become process-global; it belongs in `MalHeap`/`MalVm` where callers hold one.
 - [ ] Measure sequentially consistent environment slots on Linux x64. `MalEnv`
       slots are `_Atomic`, so every captured store compiles to `XCHG` on x86-64.
       Major-mark workers trace slots while the mutator runs, so stores must stay
