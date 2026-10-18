@@ -454,6 +454,16 @@ iterator cursor is not, by itself, permission to delete its language object.
       Checking HasProperty per step is the spec's shape; a receiver whose shape is
       unchanged since the snapshot can skip that check.
 
+- [ ] Keep `JSON.stringify` plain-path plans across calls. Serializing the same
+      small record 300k times takes 125 ms against Node's 24: every call allocates
+      its shape, prototype and key tables, rebuilds the escaped-key plan for the
+      record's shape and frees it all again. Caching the prototype `toJSON` proof
+      across calls changed nothing, so the plan and table setup is the cost.
+- [ ] Store private fields in shaped slots. A getter/setter pair over `#celsius`
+      still upserts and looks up the field in the object's overflow table on every
+      access, after inherited setters gained a cache row; the remaining accessor
+      loop takes 275 ms against Node's 4 for 5M iterations.
+
 - [ ] Keep loop-carried Number accumulators unboxed across field reads. A loop
       such as `sx += p.x; sy += p.y` over records takes about 8 ns per element
       against Node's 1.4: each iteration publishes the boxed sums as roots, probes
