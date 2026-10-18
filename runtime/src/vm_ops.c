@@ -2564,8 +2564,9 @@ mal_vm_property_try_load_static_remaining(
         vm->property_stub != nullptr && mal_value_is_string(ic->key)) {
         // Stub rows speak the VM atom; a site still holding its baked constant maps to it.
         MalValue key = ic->key;
-        if (mal_value_to_string(key)->header.storage == MAL_HEAP_STORAGE_IMMORTAL) {
-            MalString *atom = mal_vm_string_constant_atom(vm, mal_value_to_string(key));
+        const MalString *name = mal_value_to_string(key);
+        if (!name->property_atom && name->header.storage == MAL_HEAP_STORAGE_IMMORTAL) {
+            MalString *atom = mal_vm_string_constant_atom(vm, name);
             if (atom != nullptr) key = mal_value_from_string(atom);
         }
         const MalPropertyStubEntry *entry =
