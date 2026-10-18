@@ -497,4 +497,36 @@ check(
 	"direct root serialization preserves the empty toJSON key",
 );
 
+const repeated = { id: 1, label: "x" };
+let warm = true;
+for (let round = 0; round < 3; round++)
+	warm &&= JSON.stringify(repeated) === '{"id":1,"label":"x"}';
+check(warm, "a repeated record serializes the same way every call");
+Object.prototype.toJSON = function () {
+	return "inherited";
+};
+check(
+	JSON.stringify(repeated) === '"inherited"',
+	"a toJSON added to Object.prototype is seen",
+);
+delete Object.prototype.toJSON;
+check(JSON.stringify(repeated) === '{"id":1,"label":"x"}', "and its removal is seen too");
+const reparented = { id: 2 };
+JSON.stringify(reparented);
+Object.setPrototypeOf(reparented, {
+	toJSON() {
+		return "reparented";
+	},
+});
+check(JSON.stringify(reparented) === '"reparented"', "a new prototype's toJSON is seen");
+const sameShape = { id: 3, label: "y" };
+sameShape.toJSON = () => "own";
+check(JSON.stringify(sameShape) === '"own"', "an own toJSON on a grown shape is seen");
+const sized = [];
+for (let i = 0; i < 200; i++) sized.push({ index: i, text: "abcdefghij" });
+check(
+	JSON.parse(JSON.stringify(sized)).length === 200,
+	"a large array outgrows its size hint",
+);
+
 console.log(failed ? "json-stringify-scratch FAIL" : "json-stringify-scratch PASS");

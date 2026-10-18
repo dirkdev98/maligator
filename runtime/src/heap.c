@@ -580,6 +580,9 @@ void mal_heap_init(MalHeap *heap, usize capacity) {
     memset(heap->function_metadata_shapes, 0, sizeof(heap->function_metadata_shapes));
     memset(heap->for_in_silent_prototypes, 0, sizeof(heap->for_in_silent_prototypes));
     memset(heap->fixed_constructor_prototypes, 0, sizeof(heap->fixed_constructor_prototypes));
+    memset(heap->json_plain_shapes, 0, sizeof(heap->json_plain_shapes));
+    memset(heap->json_plain_prototypes, 0, sizeof(heap->json_plain_prototypes));
+    heap->json_plain_prototype_next = 0;
     heap->fixed_constructor_next = 0;
     heap->for_in_silent_next = 0;
     do {

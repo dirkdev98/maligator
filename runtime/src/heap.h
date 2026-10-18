@@ -144,6 +144,15 @@ typedef struct MalHeap {
         u32 heap_epoch;
     } fixed_constructor_prototypes[4];
     u8 fixed_constructor_next;
+    /** Shapes with no accessor and no own `toJSON`; shapes are immortal and immutable. */
+    const MalShape *json_plain_shapes[8];
+    /** Prototypes whose chain has no `toJSON`, valid like for_in_silent_prototypes. */
+    struct {
+        const void *object;
+        u64 chain_epoch;
+        u32 heap_epoch;
+    } json_plain_prototypes[4];
+    u8 json_plain_prototype_next;
     /** Process-unique heap lifetime identity. Static native call caches use this
      * with epoch so exact object identities never cross VM lifetimes. */
     u64 identity;

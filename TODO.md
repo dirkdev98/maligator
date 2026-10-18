@@ -466,11 +466,12 @@ iterator cursor is not, by itself, permission to delete its language object.
       has no per-loop state to hold that shape; a dedicated for-in step op with its
       own cursor would also drop the generic array-iterator step.
 
-- [ ] Keep `JSON.stringify` plain-path plans across calls. Serializing the same
-      small record 300k times takes 105 ms against Node's 24. Each call still
-      rebuilds and frees the escaped-key plan for the record's shape, and caching
-      the prototype `toJSON` proof across calls changed nothing. Plans depend only
-      on the immortal shape, so a bounded per-VM cache could keep them.
+- [ ] Close the rest of the `JSON.stringify` small-record gap. 1.2M calls on a
+      five-field record take 79 ms against Node's 24 now that the output buffer is
+      sized from the root and shape and prototype proofs persist across calls. A
+      record seen once per call never builds an escaped-key plan; its keys and
+      short strings go through `memmove` calls (5% of samples) and numbers through
+      `mal_text_buffer_append_number` (6%).
 - [ ] Store private fields in shaped slots. Reads and writes now reach a private
       field through the symbol's entry hint in the object's overflow table, but a
       getter/setter pair over `#celsius` still takes 227 ms against Node's 4 for 5M
