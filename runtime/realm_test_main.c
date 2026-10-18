@@ -408,7 +408,8 @@ int main(void) {
             &vm, &call_cache, call_cache_closures[0], mal_value_new_undefined(), nullptr, 0);
         call_cache_two = mal_vm_call_cached(
             &vm, &call_cache, call_cache_closures[1], mal_value_new_undefined(), nullptr, 0);
-        vm.native_call_depth = MAL_NATIVE_CALL_DEPTH_LIMIT;
+        uptr stack_limit = vm.stack_limit;
+        vm.stack_limit = (uptr) -1;
         MalCompletion call_cache_overflow = mal_vm_call_cached(
             &vm, &call_cache, call_cache_closures[1], mal_value_new_undefined(), nullptr, 0);
         call_cache_overflow_realm =
@@ -417,7 +418,7 @@ int main(void) {
             mal_object_get_prototype(mal_value_to_object(call_cache_overflow.value)) ==
                 mal_value_to_object(realm_two->intrinsics[MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE]) &&
             realm_is_current(&vm, realm_one);
-        vm.native_call_depth = 0;
+        vm.stack_limit = stack_limit;
         vm.completion = (MalCompletion) {
             .kind = MAL_COMPLETION_NORMAL,
             .value = mal_value_new_undefined(),

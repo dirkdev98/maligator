@@ -31,7 +31,7 @@ function mixedLeafUnits(image: ProgramImage) {
 		const text = units.map((unit) => unit.source).join("\n");
 		if (
 			/mal_function_\d+_instructions\b/.test(text) &&
-			text.includes("mal_vm_enter_leaf_checked")
+			text.includes("mal_vm_leaf_stack_available")
 		)
 			return units;
 	}
@@ -39,7 +39,7 @@ function mixedLeafUnits(image: ProgramImage) {
 }
 
 describe("checked numeric leaf activation", () => {
-	it("selects checked leaf calls, balances trace rows, and rejects depth and current-stack limits inside large caller frames", () => {
+	it("enters leaves without trace rows and rejects the current-stack limit inside large caller frames", () => {
 		const outDir = mkdtempSync(join(tmpdir(), "mal-checked-leaf-"));
 		for (const profileEnabled of [false, true]) {
 			const built = buildNativeBinaryResult({
@@ -53,7 +53,7 @@ describe("checked numeric leaf activation", () => {
 				compiled: true,
 				debugInfo: false,
 			});
-			expect(source).toContain("mal_vm_enter_leaf_checked");
+			expect(source).toContain("mal_vm_leaf_stack_available");
 			expect(runToStdout(built.binaryPath, { env: STRESS_ENV })).toBe(
 				"checked-leaf-fixture PASS\nchecked-leaf-entry PASS\n",
 			);

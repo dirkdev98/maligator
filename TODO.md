@@ -634,30 +634,24 @@ contracts or investigates costs still visible after the string follow-ups.
 
 ## Focused performance work
 
-- [ ] Close the closed-compiled JavaScript benchmark's per-call gap. In its
-      pricing loop the three-class `quote` call costs 54 ms against Node's 6 (13 ms
-      of it polymorphism), the `arguments` function 24 ms against 4 and the
-      one-line closure 26 ms against 8, about 7 ns per call. Frame work is not the
-      main cost: dropping native debug frames saved about 5 ms of 97 and dropping
-      root-frame links about 3 ms. `mal_vm_enter_compiled` and the inherited,
-      array-length and array-index probes stay out of line in the large caller;
-      forcing them inline cut the loop by 12% but grew the benchmark binary 1.6%.
-      Moving the entry checks into each compiled function's prologue would inline
-      them once per function instead of once per call site. Inlining the three
-      `quote` bodies instead of dispatching to their field entries doubled the
-      three-class loop (106 against 51 ms), so field entries stay preferred.
-      A leaf entry keeps its native stack check even when its caller's frame is
-      verified: `checked-leaf-entry` enters a leaf from a caller frame large
-      enough to exhaust the remaining margin.
+- [ ] Close the closed-compiled JavaScript benchmark's per-call gap. Compiled
+      entries now push their own frame row and the cached dispatch tail-calls an
+      ordinary compiled callee, yet an unknown-target call still costs 6.4 ns
+      against Node's 4.3 (a four-closure loop, 191 ms against 129) and a five-class
+      method loop 345 ms against 232. The generic entry still unpacks an argument
+      array, publishes a root frame and returns through a completion check. Inlining
+      the three `quote` bodies instead of dispatching to their field entries doubled
+      the three-class loop (106 against 51 ms), so field entries stay preferred, and
+      raising the cross-call inlining budget fourfold made the self-compile 14%
+      slower while Node's run of the same source stayed level.
 - [ ] Keep three receivers of a polymorphic method site in its own cache. The
       objects phase's `rules[i % 3].quote(order)` hits the site's one inherited row
-      for one class in three; the others take the out-of-line probe and the shared
-      stub, about 31% of that loop's samples (40 ms alone against Node's 14 ms).
-      The 72-byte cache row has no room for three shape, prototype and value
-      triples, so extra rows need storage registered for prototype invalidation
-      like the stub's. A two-extra-row experiment preserved the primary probe and
-      binary-size budget, but matched whole-workload compiled results were
-      inconclusive. An isolated three-class loop improved 7% while its monomorphic
+      for one class in three; the others probe both banks of the shared stub
+      inline at sites whose callee feeds several guarded targets, which still hashes
+      shape, prototype and key on every call. The 72-byte cache row has no room for
+      three shape, prototype and value triples, so extra rows need storage
+      registered for prototype invalidation like the stub's. A two-extra-row
+      experiment improved an isolated three-class loop 7% while its monomorphic
       control regressed 1.3%; resolve that trade-off before shipping site storage.
 - [ ] Forward `fn.apply(this, arguments)` without materializing `arguments`.
       Express's router (`restore`) and type-is build a dictionary arguments object

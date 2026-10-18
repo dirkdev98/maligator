@@ -565,6 +565,11 @@ interface NativeCallCoverage {
 export const COMPILED_FUNCTION_DECLARATION =
 	"(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, void *entry_state)";
 
+// An entry pushes its own frame, so call sites carry no bookkeeping; every return pops it.
+const COMPILED_ENTRY_SCOPE = [
+	"    MalVm *const __entered __attribute__((cleanup(mal_vm_leave_compiled_scope))) = vm;",
+];
+
 /** `name` is the function's index, or its stem in a relocatable overlay. */
 export function nativeCallbackSymbol(
 	name: number | string,
@@ -2215,6 +2220,10 @@ function emitCompiledVariant(
 			`    const MalNativeProgramRelocation *__mal_relocation = ${relocatable.relocation};`,
 		);
 	if (directEntry === undefined) lines.push(`    (void) entry_state;`);
+	lines.push(
+		`    if (!mal_vm_enter_compiled(vm, ${relocation.functionIndex(index)})) return ${directEntry === undefined ? "MAL_VALUE_UNDEFINED" : zeroOf(directEntry.resultRepresentation)};`,
+		...COMPILED_ENTRY_SCOPE,
+	);
 	if (directEntry !== undefined && body.resources.has("newTarget")) {
 		lines.push(`    const MalValue new_target = MAL_VALUE_UNDEFINED;`);
 	}
@@ -2864,7 +2873,7 @@ function renderCompiledFunction(
 				: undefined;
 		const source = `static __attribute__((aligned(64))) f64 ${symbol}(${parameters.join(", ") || "void"}) {\n#pragma STDC FP_CONTRACT OFF\n${worker.join("\n")}\n}\n${emitted.source.replace(
 			"#pragma STDC FP_CONTRACT OFF\n",
-			`#pragma STDC FP_CONTRACT OFF\n    if (mal_vm_leaf_unobserved(vm)) return ${symbol}(${args.join(", ")});\n`,
+			`#pragma STDC FP_CONTRACT OFF\n    if (mal_vm_leaf_unobserved(vm) && mal_vm_leaf_stack_available(vm)) return ${symbol}(${args.join(", ")});\n`,
 		)}${sortSymbol === undefined ? "" : `\n${numericSortKernelDeclaration(sortSymbol)} {\n    mal_numeric_leaf_merge_sort(values, scratch, keys, count, ${symbol});\n}\n`}`;
 		return [
 			{
@@ -3200,6 +3209,14 @@ function emitResumableFunction(
 	lines.push(...rootMaskStatements.declarations);
 	lines.push(`    (void) this_value;`);
 	lines.push(`    (void) new_target;`);
+	// A refused resume settles the coroutine as the throwing body would.
+	lines.push(
+		`    if (!mal_vm_enter_compiled(vm, ${self})) {`,
+		`        if (entry_state != nullptr) mal_vm_op_coroutine_throw_compiled(vm, (MalGeneratorObject *) entry_state, ((MalGeneratorObject *) entry_state)->frame.registers);`,
+		`        return MAL_VALUE_UNDEFINED;`,
+		`    }`,
+		...COMPILED_ENTRY_SCOPE,
+	);
 	if (body.resources.has("propertyCache") || body.resources.has("literalShapes")) {
 		const cacheMisses = [
 			body.resources.has("propertyCache")
@@ -11437,13 +11454,8 @@ function emitInstruction(
 							"  MalRealm *__entry_realm = vm->current_realm;",
 							`  mal_vm_realm_switch_to(vm, mal_vm_callee_realm(vm, ${guardedCallee}));`,
 							"#endif",
-							`  if (!${entry.leaf ? "mal_vm_enter_leaf_checked" : "mal_vm_enter_compiled"}(vm, ${relocation.functionIndex(target)})) {`,
-							...restoreRealm,
-							`    ${onThrow()}`,
-							"  }",
 							"  MAL_PERF_COUNT(direct_entry_hits);",
 							`  ${cTypeOf(transport.resultRepresentation)} ${value} = mal_direct_${relocation.stem(target)}_${entry.id}${suffix}(vm, ${receiver}${parameters.length === 0 ? "" : `, ${parameters.join(", ")}`}, mal_value_to_function_object(${guardedCallee})->creation_env, ${guardedCallee});`,
-							`  ${entry.leaf ? "mal_vm_leave_leaf_checked" : "mal_vm_leave_compiled"}(vm);`,
 							...restoreRealm,
 							`  ${throwCheck()}`,
 							`  r${instruction.dst} = ${convert(transport.result, value)};`,
@@ -11510,10 +11522,8 @@ function emitInstruction(
 					return [
 						`MalValue ${directCallee} = ${boxedOperand(instruction.callee)};`,
 						`MAL_PERF_COUNT(direct_entry_hits);`,
-						`if (!${directEntry.leaf ? "mal_vm_enter_leaf_checked" : "mal_vm_enter_compiled"}(vm, ${relocation.functionIndex(target)})) ${onThrow()}`,
 						...functionDeclaration,
 						`${cTypeOf(directEntry.resultRepresentation)} ${directValue} = mal_direct_${relocation.stem(target)}_${directEntry.id}${suffix}(vm, ${thisArgument}${parameters.length === 0 ? "" : `, ${parameters.join(", ")}`}, mal_value_to_function_object(${directCallee})->creation_env, ${directCallee});`,
-						`${directEntry.leaf ? "mal_vm_leave_leaf_checked" : "mal_vm_leave_compiled"}(vm);`,
 						`if (MAL_THREW()) ${onThrow()}`,
 						`r${instruction.dst} = ${directResult};`,
 						poll(),
@@ -11525,10 +11535,8 @@ function emitInstruction(
 					const directValue = `__direct_value_${ip}`;
 					return [
 						`MalValue ${directCallee} = ${boxedOperand(instruction.callee)};`,
-						`if (!mal_vm_enter_compiled(vm, ${relocation.functionIndex(target)})) ${onThrow()}`,
 						...functionDeclaration,
 						`MalValue ${directValue} = mal_compiled_${relocation.stem(target)}${suffix}(vm, ${thisArgument}, ${argsExpr}, ${args.length}, MAL_VALUE_UNDEFINED, mal_value_to_function_object(${directCallee})->creation_env, ${directCallee}, nullptr);`,
-						`mal_vm_leave_compiled(vm);`,
 						`if (MAL_THREW()) ${onThrow()}`,
 						`r${instruction.dst} = ${callResult(directValue)};`,
 						poll(),

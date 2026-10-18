@@ -2754,12 +2754,8 @@ static void mal_vm_call_dispatch(MalVm *vm, MalValue callee, MalValue this_value
                 // Native-backend function: invoke directly, no bytecode frame.
                 // The C stack, not the value stack, bounds this recursion.
                 i32 caller_frame_index = vm->frame_count - 1;
-                MalValue result = mal_value_new_undefined();
-                if (mal_vm_enter_compiled(vm, function_index)) {
-                    MalValue this_value = mal_vm_callee_this(vm, function, resolution.this_value);
-                    result = function->compiled(vm, this_value, &vm->value_stack[base], resolution.arg_count, mal_value_new_undefined(), env, resolution.callee, nullptr);
-                    mal_vm_leave_compiled(vm);
-                }
+                MalValue this_value = mal_vm_callee_this(vm, function, resolution.this_value);
+                MalValue result = function->compiled(vm, this_value, &vm->value_stack[base], resolution.arg_count, mal_value_new_undefined(), env, resolution.callee, nullptr);
                 vm->frames[caller_frame_index].registers[dst] = result;
                 vm->value_stack_size = base;
 #if MAL_REALMS
@@ -2895,18 +2891,14 @@ static void mal_vm_construct_dispatch(MalVm *vm, MalValue callee, i32 base, i32 
             // bails reaches mal_vm_interpret_function, which re-runs as a construct
             // because new_target is an object.
             i32 caller_frame_index = vm->frame_count - 1;
-            MalValue result = mal_value_new_undefined();
-            if (mal_vm_enter_compiled(vm, callee_index)) {
-                // The instance exists only as this_value until the body stores it,
-                // so root it (plus new.target/args) for the call: a collection
-                // inside the constructor would otherwise sweep it.
-                MalCalleeRoots ncr;
-                mal_gc_callee_roots_begin(&ncr, this_value, resolution.callee,
-                                          resolution.callee, &vm->value_stack[base], resolution.arg_count);
-                result = function->compiled(vm, this_value, &vm->value_stack[base], resolution.arg_count, resolution.callee, env, resolution.callee, nullptr);
-                mal_gc_callee_roots_end(&ncr);
-                mal_vm_leave_compiled(vm);
-            }
+            // The instance exists only as this_value until the body stores it,
+            // so root it (plus new.target/args) for the call: a collection
+            // inside the constructor would otherwise sweep it.
+            MalCalleeRoots ncr;
+            mal_gc_callee_roots_begin(&ncr, this_value, resolution.callee,
+                                      resolution.callee, &vm->value_stack[base], resolution.arg_count);
+            MalValue result = function->compiled(vm, this_value, &vm->value_stack[base], resolution.arg_count, resolution.callee, env, resolution.callee, nullptr);
+            mal_gc_callee_roots_end(&ncr);
 #if MAL_REALMS
             mal_vm_realm_switch_to(vm, saved_realm);
 #endif

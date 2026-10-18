@@ -11,12 +11,8 @@ static i32 spin_function_index = -1;
 static bool saw_spin_poll;
 
 static void terminate_at_spin_poll(MalVm *vm) {
-    // SpinCaller has one nested compiled call; stripped images retain depth, not frame rows.
-    bool spinning = vm->native_call_depth >= 2;
-    if (vm->runtime_image->file_count > 0) {
-        spinning = vm->native_frame_count > 0 &&
-            vm->native_frames[vm->native_frame_count - 1].function_index == spin_function_index;
-    }
+    bool spinning = vm->native_frame_count > 0 &&
+        vm->native_frames[vm->native_frame_count - 1].function_index == spin_function_index;
     if (spinning) {
         saw_spin_poll = true;
         mal_gc_preempt_hook = nullptr;
@@ -49,7 +45,7 @@ int main(void) {
     mal_gc_request_safepoint(mal_gc_current_poll_target());
     MalCompletion completion = mal_vm_call_value(
         &vm, callback, MAL_VALUE_UNDEFINED, nullptr, 0);
-    if (!saw_spin_poll || completion.kind != MAL_COMPLETION_THROW || vm.native_call_depth != 0 || vm.native_frame_count != 0)
+    if (!saw_spin_poll || completion.kind != MAL_COMPLETION_THROW || vm.native_frame_count != 0)
         return 4;
     mal_gc_unroot(&root);
     mal_vm_free_callable(entry);

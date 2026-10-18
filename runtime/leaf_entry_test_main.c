@@ -4,16 +4,16 @@
 
 extern const MalRuntimeImage mal_runtime_image;
 
-__attribute__((noinline)) static bool rejects_large_caller_frame(MalVm *vm, bool leaf) {
+__attribute__((noinline)) static bool rejects_large_caller_frame(MalVm *vm) {
     volatile byte locals[32 * 1024];
     for (usize i = 0; i < sizeof(locals); i++) locals[i] = (byte) i;
     uptr saved_limit = vm->stack_limit;
     vm->stack_limit = (uptr) &locals[sizeof(locals) / 2];
-    i32 depth = vm->native_call_depth;
     i32 rows = vm->native_frame_count;
-    bool entered = leaf ? mal_vm_enter_leaf_checked(vm, 0) : mal_vm_enter_compiled(vm, 0);
-    bool rejected = !entered && vm->completion.kind == MAL_COMPLETION_THROW &&
-        vm->native_call_depth == depth && vm->native_frame_count == rows;
+    bool leaf = mal_vm_leaf_stack_available(vm);
+    bool entered = mal_vm_enter_compiled(vm, 0);
+    bool rejected = !leaf && !entered && vm->completion.kind == MAL_COMPLETION_THROW &&
+        vm->native_frame_count == rows;
     vm->stack_limit = saved_limit;
     vm->completion = (MalCompletion) { .kind = MAL_COMPLETION_NORMAL, .value = MAL_VALUE_UNDEFINED };
     return rejected && locals[0] == 0;
@@ -30,27 +30,15 @@ int main(void) {
         vm.live_runtime_image.file_count = observed;
         i32 rows = vm.native_frame_count;
         if (!mal_vm_enter_compiled(&vm, 0)) return 2;
-        i32 parent_rows = vm.native_frame_count;
-        i32 depth = vm.native_call_depth;
-        if (!mal_vm_enter_leaf_checked(&vm, 0)) return 3;
-        if (vm.native_call_depth != depth + 1 ||
-            vm.native_frame_count != parent_rows + (mal_vm_leaf_unobserved(&vm) ? 0 : observed)) return 4;
-        mal_vm_leave_leaf_checked(&vm);
-        if (vm.native_call_depth != depth || vm.native_frame_count != parent_rows) return 5;
+        if (vm.native_frame_count != rows + 1) return 3;
+        if (!mal_vm_leaf_stack_available(&vm)) return 4;
         mal_vm_leave_compiled(&vm);
-        if (vm.native_frame_count != rows) return 6;
-        vm.native_call_depth = MAL_NATIVE_CALL_DEPTH_LIMIT;
-        if (mal_vm_enter_leaf_checked(&vm, 0) || vm.completion.kind != MAL_COMPLETION_THROW ||
-            vm.native_call_depth != MAL_NATIVE_CALL_DEPTH_LIMIT) return 7;
-        vm.completion = (MalCompletion) { .kind = MAL_COMPLETION_NORMAL, .value = MAL_VALUE_UNDEFINED };
-        vm.native_call_depth = 0;
+        if (vm.native_frame_count != rows) return 5;
         uptr limit = vm.stack_limit;
         vm.stack_limit = (uptr) -1;
-        if (mal_vm_enter_leaf_checked(&vm, 0) || vm.completion.kind != MAL_COMPLETION_THROW ||
-            vm.native_call_depth != 0) return 8;
+        if (mal_vm_leaf_stack_available(&vm)) return 6;
         vm.stack_limit = limit;
-        vm.completion = (MalCompletion) { .kind = MAL_COMPLETION_NORMAL, .value = MAL_VALUE_UNDEFINED };
-        if (!rejects_large_caller_frame(&vm, false) || !rejects_large_caller_frame(&vm, true)) return 9;
+        if (!rejects_large_caller_frame(&vm)) return 7;
     }
     vm.live_runtime_image.file_count = image.file_count;
     mal_gc_collect(&vm);

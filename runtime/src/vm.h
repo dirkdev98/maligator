@@ -1341,8 +1341,9 @@ static inline MalEnv *mal_vm_capture_owner_at(MalEnv *env, i32 owner_function_in
 /**
  * A native-backend (compiled) call frame, tracked only for stack traces. The
  * interpreter's frames live in MalVm.frames; compiled functions run on the C
- * stack and are not there, so each compiled invocation records a lightweight
- * frame here (pushed in mal_vm_enter_compiled, popped in mal_vm_leave_compiled).
+ * stack and are not there, so each compiled entry records a lightweight frame
+ * here for itself (mal_vm_enter_compiled in its prologue, mal_vm_leave_compiled on
+ * every return), and callers never enter on a callee's behalf.
  * The compiled function writes its current entry in the function's position table
  * into `position_entry` as it runs (statement-granular), so generated code never
  * names an image-wide position id. `hidden` is set when the function bailed to the
@@ -1875,15 +1876,6 @@ typedef struct MalVm {
     i32 frame_count;
     i32 frame_capacity;
 
-    /**
-     * Nesting depth of native-backend (MalFunction.compiled) invocations.
-     * Interpreted recursion is bounded by the value stack, but a compiled
-     * function calling another runs on the real C stack with no such window, so
-     * deep compiled recursion (e.g. non-tail-recursive functions) is bounded
-     * here instead — exceeding MAL_NATIVE_CALL_DEPTH_LIMIT throws a RangeError
-     * rather than overflowing the C stack.
-     */
-    i32 native_call_depth;
     // Saturation makes every prepared-prefix comparison miss instead of wrapping.
     u64 service_epoch;
 
@@ -1914,8 +1906,10 @@ typedef struct MalVm {
 
     /**
      * Native (compiled-backend) call frames, for stack traces — see
-     * MalNativeFrame. Pushed/popped around every compiled invocation. A growable
-     * array; capacity persists across the VM lifetime.
+     * MalNativeFrame. Each compiled entry pushes its own row, so the row count is
+     * also the compiled nesting depth: interpreted recursion is bounded by the
+     * value stack, compiled recursion by MAL_NATIVE_CALL_DEPTH_LIMIT rows. A
+     * growable array; capacity persists across the VM lifetime.
      */
     MalNativeFrame *native_frames;
     i32 native_frame_count;
@@ -2163,7 +2157,8 @@ static inline void mal_gc_callee_roots_end(MalCalleeRoots *roots) {
 #define MAL_NATIVE_CALL_DEPTH_LIMIT 6000
 
 void mal_vm_throw_stack_overflow(MalVm *vm);
-void mal_vm_grow_native_frames(MalVm *vm);
+/** Grow the frame rows or report the overflow; true when the entry proceeds. */
+bool mal_vm_enter_compiled_slow(MalVm *vm, i32 function_index);
 
 #if UINTPTR_MAX != UINT64_MAX || (!defined(__aarch64__) && !defined(__x86_64__))
 uptr mal_vm_native_stack_address(void);
@@ -2180,24 +2175,11 @@ static inline uptr mal_vm_native_stack_address(void) {
 }
 #endif
 
-static inline bool mal_vm_enter_depth_checked(MalVm *vm) {
-    const uptr stack_limit = vm->stack_limit;
-    if ((stack_limit != 0 && mal_vm_native_stack_address() < stack_limit) ||
-        vm->native_call_depth >= MAL_NATIVE_CALL_DEPTH_LIMIT) {
-        mal_vm_throw_stack_overflow(vm);
-        return false;
-    }
-    vm->native_call_depth++;
-    return true;
-}
-
-/**
- * mal_vm_enter_compiled when it needs neither to report an overflow nor to grow
- * the frame stack; false leaves the VM untouched for the complete entry.
- */
-static inline void mal_vm_push_native_frame(MalVm *vm, i32 function_index) {
+/** The row count is the call depth: capacity never exceeds MAL_NATIVE_CALL_DEPTH_LIMIT,
+ * so one comparison sends both growth and the depth limit to the slow path. */
+static inline void mal_vm_push_native_frame(MalVm *vm, i32 count, i32 function_index) {
     MAL_PERF_COUNT(compiled_debug_frame_entries);
-    vm->native_frames[vm->native_frame_count++] = (MalNativeFrame) {
+    vm->native_frames[count] = (MalNativeFrame) {
         .function_index = function_index,
         .position_entry = -1,
 #if MAL_PROFILE
@@ -2206,31 +2188,18 @@ static inline void mal_vm_push_native_frame(MalVm *vm, i32 function_index) {
         .enter_seq = vm->frame_seq++,
         .hidden = false,
     };
-}
-
-static inline bool mal_vm_try_enter_compiled_fast(MalVm *vm, i32 function_index) {
-    const uptr stack_limit = vm->stack_limit;
-    bool frames = vm->runtime_image->file_count != 0;
-    if ((stack_limit != 0 && mal_vm_native_stack_address() < stack_limit) ||
-        vm->native_call_depth >= MAL_NATIVE_CALL_DEPTH_LIMIT ||
-        (frames && vm->native_frame_count == vm->native_frame_capacity)) {
-        return false;
-    }
-    MAL_PERF_COUNT(compiled_enter_calls);
-    vm->native_call_depth++;
-    if (frames) mal_vm_push_native_frame(vm, function_index);
-    return true;
+    vm->native_frame_count = count + 1;
 }
 
 // A successful entry requires a matching leave; rejection records a RangeError.
 static inline bool mal_vm_enter_compiled(MalVm *vm, i32 function_index) {
     MAL_PERF_COUNT(compiled_enter_calls);
-    if (!mal_vm_enter_depth_checked(vm)) return false;
-    if (vm->runtime_image->file_count == 0) return true;
-    if (vm->native_frame_count == vm->native_frame_capacity) {
-        mal_vm_grow_native_frames(vm);
-    }
-    mal_vm_push_native_frame(vm, function_index);
+    i32 count = vm->native_frame_count;
+    // A zero limit admits every address.
+    if (__builtin_expect(mal_vm_native_stack_address() < vm->stack_limit ||
+                             count >= vm->native_frame_capacity, 0))
+        return mal_vm_enter_compiled_slow(vm, function_index);
+    mal_vm_push_native_frame(vm, count, function_index);
     return true;
 }
 
@@ -2245,26 +2214,22 @@ static inline i32 mal_vm_native_frame_pos_id(const MalVm *vm, const MalNativeFra
 }
 
 static inline void mal_vm_leave_compiled(MalVm *vm) {
-    vm->native_call_depth--;
-    if (vm->native_frame_count > 0) vm->native_frame_count--;
+    vm->native_frame_count--;
+}
+/** Compiled entries enter themselves; this cleanup pops that frame on every return. */
+static inline void mal_vm_leave_compiled_scope(MalVm *const *vm) {
+    mal_vm_leave_compiled(*vm);
 }
 // A numeric leaf cannot throw, call or poll, so only the sampling profiler sees its frame.
 static inline bool mal_vm_leaf_unobserved(const MalVm *vm) {
     (void) vm;
     return !MAL_PROFILE;
 }
-static inline bool mal_vm_enter_leaf_checked(MalVm *vm, i32 function_index) {
-    if (!mal_vm_leaf_unobserved(vm)) return mal_vm_enter_compiled(vm, function_index);
-    MAL_PERF_COUNT(compiled_enter_calls);
-    return mal_vm_enter_depth_checked(vm);
-}
-
-static inline void mal_vm_leave_leaf_checked(MalVm *vm) {
-    if (!mal_vm_leaf_unobserved(vm)) {
-        mal_vm_leave_compiled(vm);
-        return;
-    }
-    vm->native_call_depth--;
+/** A leaf needs no depth or frame row, but its caller's frame may have used the margin;
+ * below the limit it takes its full entry, which reports the overflow. */
+static inline bool mal_vm_leaf_stack_available(const MalVm *vm) {
+    const uptr stack_limit = vm->stack_limit;
+    return stack_limit == 0 || mal_vm_native_stack_address() >= stack_limit;
 }
 
 /**
@@ -2592,7 +2557,9 @@ typedef struct MalCallCache {
     u64 heap_identity;
 } MalCallCache;
 
-MalCompletion mal_vm_call_cached(
+/** Cached [[Call]] whose completion is left in vm->completion; an ordinary compiled
+ * callee is entered as a tail call, since it owns its activation. */
+MalValue mal_vm_call_cached_value(
     MalVm *vm,
     MalCallCache *cc,
     MalValue callee,
@@ -2600,6 +2567,20 @@ MalCompletion mal_vm_call_cached(
     const MalValue *args,
     i32 arg_count
 );
+
+static inline MalCompletion mal_vm_call_cached(
+    MalVm *vm,
+    MalCallCache *cc,
+    MalValue callee,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count
+) {
+    MalValue value = mal_vm_call_cached_value(vm, cc, callee, this_value, args, arg_count);
+    return vm->completion.kind == MAL_COMPLETION_THROW
+        ? vm->completion
+        : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
+}
 
 /**
  * Invoke a compiler-proven native builtin target without repeating callable,
@@ -2765,25 +2746,18 @@ mal_vm_call_exact_script_compiled_callback(
     mal_vm_realm_switch_to(vm, mal_vm_callee_realm(vm, exact->callee));
 #endif
 
-    MalCompletion completion;
-    bool entered = mal_vm_enter_compiled(vm, exact->function_index);
-    if (!entered) {
-        completion = vm->completion;
-    } else {
-        MalValue value = exact->compiled_callback(
-            vm,
-            mal_vm_callee_this(vm, &vm->runtime_image->functions[exact->function_index], this_value),
-            args,
-            arg_count,
-            MAL_VALUE_UNDEFINED,
-            exact->env,
-            exact->callee,
-            nullptr);
-        mal_vm_leave_compiled(vm);
-        completion = vm->completion.kind == MAL_COMPLETION_THROW
-            ? vm->completion
-            : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
-    }
+    MalValue value = exact->compiled_callback(
+        vm,
+        mal_vm_callee_this(vm, &vm->runtime_image->functions[exact->function_index], this_value),
+        args,
+        arg_count,
+        MAL_VALUE_UNDEFINED,
+        exact->env,
+        exact->callee,
+        nullptr);
+    MalCompletion completion = vm->completion.kind == MAL_COMPLETION_THROW
+        ? vm->completion
+        : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
 
 #if MAL_REALMS
     mal_vm_realm_switch_to(vm, saved_realm);
@@ -2822,13 +2796,10 @@ static inline __attribute__((always_inline)) bool mal_vm_call_numeric_reduce_cal
     MalRealm *saved_realm = vm->current_realm;
     mal_vm_realm_switch_to(vm, mal_vm_callee_realm(vm, exact->callee));
 #endif
-    if (mal_vm_enter_compiled(vm, exact->function_index)) {
-        MAL_PERF_COUNT(array_iteration_numeric_reduce_calls);
-        *result = exact->numeric_reduce_callback(
-            vm, mal_vm_callee_this(vm, &vm->runtime_image->functions[exact->function_index], MAL_VALUE_UNDEFINED),
-            accumulator, value, index, receiver, exact->env, exact->callee);
-        mal_vm_leave_compiled(vm);
-    }
+    MAL_PERF_COUNT(array_iteration_numeric_reduce_calls);
+    *result = exact->numeric_reduce_callback(
+        vm, mal_vm_callee_this(vm, &vm->runtime_image->functions[exact->function_index], MAL_VALUE_UNDEFINED),
+        accumulator, value, index, receiver, exact->env, exact->callee);
 #if MAL_REALMS
     mal_vm_realm_switch_to(vm, saved_realm);
 #endif

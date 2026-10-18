@@ -3993,20 +3993,15 @@ static inline MalNumericSortComparison mal_vm_try_numeric_sort_comparison(
     MalRealm *saved_realm = vm->current_realm;
     mal_vm_realm_switch_to(vm, mal_vm_callee_realm(vm, compare));
 #endif
-    bool entered = mal_vm_enter_compiled(vm, exact->function_index);
-    f64 result = 0;
-    if (entered) {
-        MAL_PERF_COUNT(direct_entry_hits);
-        MAL_PERF_COUNT(numeric_sort_callback_calls);
-        result = exact->numeric_sort_comparator(vm,
-            mal_vm_callee_this(vm, &vm->runtime_image->functions[exact->function_index], MAL_VALUE_UNDEFINED),
-            mal_ops_number_as_f64(left), mal_ops_number_as_f64(right), exact->env, compare);
-        mal_vm_leave_compiled(vm);
-    }
+    MAL_PERF_COUNT(direct_entry_hits);
+    MAL_PERF_COUNT(numeric_sort_callback_calls);
+    f64 result = exact->numeric_sort_comparator(vm,
+        mal_vm_callee_this(vm, &vm->runtime_image->functions[exact->function_index], MAL_VALUE_UNDEFINED),
+        mal_ops_number_as_f64(left), mal_ops_number_as_f64(right), exact->env, compare);
 #if MAL_REALMS
     mal_vm_realm_switch_to(vm, saved_realm);
 #endif
-    if (!entered || vm->completion.kind == MAL_COMPLETION_THROW) return MAL_NUMERIC_SORT_THROW;
+    if (vm->completion.kind == MAL_COMPLETION_THROW) return MAL_NUMERIC_SORT_THROW;
     *out = isnan(result) ? 0 : result;
     return MAL_NUMERIC_SORT_COMPLETE;
 }

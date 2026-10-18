@@ -722,7 +722,6 @@ static void mal_vm_init_execution_state(MalVm *vm, const MalRuntimeImage *progra
     vm->value_stack_capacity = MAL_VALUE_STACK_CAPACITY;
     vm->value_stack = malloc(sizeof(MalValue) * (usize) vm->value_stack_capacity);
     vm->value_stack_size = 0;
-    vm->native_call_depth = 0;
     vm->service_epoch = 0;
     vm->proxy_dispatch_depth = 0;
     vm->stack_limit = mal_vm_compute_stack_limit();
@@ -925,13 +924,10 @@ MalValue mal_vm_cjs_require(MalVm *vm, i32 id) {
     i32 function_index = vm->runtime_image->cjs_module_function_indices[id];
     const MalFunction *function = &vm->runtime_image->functions[function_index];
     if (function->compiled != nullptr) {
-        if (mal_vm_enter_compiled(vm, function_index)) {
-            function->compiled(
-                vm, exports_value, args, 5, mal_value_new_undefined(), nullptr,
-                mal_value_new_undefined(), nullptr
-            );
-            mal_vm_leave_compiled(vm);
-        }
+        function->compiled(
+            vm, exports_value, args, 5, mal_value_new_undefined(), nullptr,
+            mal_value_new_undefined(), nullptr
+        );
     } else {
         mal_vm_interpret_function(
             vm, function_index, mal_value_new_undefined(), exports_value, args, 5,
@@ -3627,14 +3623,11 @@ void mal_vm_run(MalVm *vm, MalCallable *callable) {
         MalValue entry_this = mal_vm_callee_this(vm, entry, mal_value_new_undefined());
         vm->completion =
             (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
-        if (!mal_vm_enter_compiled(vm, entry_index)) {
-            script_completion = vm->completion;
-        } else {
+        {
             MalValue value = entry->compiled(
                 vm, entry_this, nullptr, 0, mal_value_new_undefined(), nullptr,
                 mal_value_new_undefined(), nullptr
             );
-            mal_vm_leave_compiled(vm);
             // Runtime eval can splice functions into the live program and move
             // its function table. The index is stable; a pointer cached across the
             // compiled call is not.
@@ -3725,14 +3718,8 @@ void mal_vm_resume_generator(MalVm *vm, MalGeneratorObject *generator, MalValue 
 #endif
 
     if (function->compiled != nullptr) {
-        // Compiled resume destinations name snapshot mailboxes, independently of native locals.
-        if (!mal_vm_enter_compiled(vm, generator->frame.function_index)) {
-            mal_vm_op_coroutine_throw_compiled(vm, generator, generator->frame.registers);
-#if MAL_REALMS
-            mal_vm_realm_switch_to(vm, saved_realm);
-#endif
-            return;
-        }
+        // A refused entry throws into the coroutine from the compiled prologue, since
+        // resume destinations name snapshot mailboxes independently of native locals.
         generator->frame.function = function;
         if (generator->resume_value_register >= 0) {
             generator->frame.registers[generator->resume_value_register] = sent_value;
@@ -3746,7 +3733,6 @@ void mal_vm_resume_generator(MalVm *vm, MalGeneratorObject *generator, MalValue 
         // args/new_target params are unused on resume (the prologue is skipped).
         function->compiled(vm, generator->frame.this_value, nullptr, 0,
             mal_value_new_undefined(), generator->frame.env, generator->frame.callee, generator);
-        mal_vm_leave_compiled(vm);
         if (vm->completion.kind == MAL_COMPLETION_THROW) {
             generator->state = MAL_GENERATOR_COMPLETED;
         }
@@ -3818,9 +3804,23 @@ __attribute__((cold, noinline)) void mal_vm_throw_stack_overflow(MalVm *vm) {
     mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Maximum call stack size exceeded");
 }
 
-__attribute__((cold, noinline)) void mal_vm_grow_native_frames(MalVm *vm) {
-    vm->native_frame_capacity = vm->native_frame_capacity == 0 ? 16 : vm->native_frame_capacity * 2;
-    vm->native_frames = realloc(vm->native_frames, sizeof(MalNativeFrame) * (usize) vm->native_frame_capacity);
+__attribute__((cold, noinline)) bool mal_vm_enter_compiled_slow(MalVm *vm, i32 function_index) {
+    i32 count = vm->native_frame_count;
+    if (mal_vm_native_stack_address() < vm->stack_limit || count >= MAL_NATIVE_CALL_DEPTH_LIMIT) {
+        mal_vm_throw_stack_overflow(vm);
+        return false;
+    }
+    i32 capacity = vm->native_frame_capacity == 0 ? 16 : vm->native_frame_capacity * 2;
+    if (capacity > MAL_NATIVE_CALL_DEPTH_LIMIT) capacity = MAL_NATIVE_CALL_DEPTH_LIMIT;
+    MalNativeFrame *frames = realloc(vm->native_frames, sizeof(MalNativeFrame) * (usize) capacity);
+    if (frames == nullptr) {
+        mal_vm_throw_stack_overflow(vm);
+        return false;
+    }
+    vm->native_frames = frames;
+    vm->native_frame_capacity = capacity;
+    mal_vm_push_native_frame(vm, count, function_index);
+    return true;
 }
 
 /**
@@ -4333,19 +4333,18 @@ MalCompletion mal_vm_call_value(
         if (function_index >= 0 && function_index < vm->runtime_image->function_count) {
             const MalFunction *function = &vm->runtime_image->functions[function_index];
             if (function->compiled != nullptr && !function->is_class_constructor &&
-                (function->strict || mal_value_is_object(this_value)) &&
+                (function->strict || mal_value_is_object(this_value))
 #if MAL_REALMS
-                (function_object->realm == nullptr ||
-                 function_object->realm == vm->current_realm) &&
+                && (function_object->realm == nullptr ||
+                    function_object->realm == vm->current_realm)
 #endif
-                mal_vm_try_enter_compiled_fast(vm, function_index)) {
+            ) {
 #if MAL_REALMS
                 MalRealm *saved_realm = vm->current_realm;
 #endif
                 MalValue value = function->compiled(
                     vm, this_value, args, arg_count, mal_value_new_undefined(),
                     function_object->creation_env, callee, nullptr);
-                mal_vm_leave_compiled(vm);
 #if MAL_REALMS
                 mal_vm_realm_switch_to(vm, saved_realm);
 #endif
@@ -4415,16 +4414,11 @@ MalCompletion mal_vm_call_value(
         } else if (function->compiled != nullptr) {
             // Native-backend function: invoke directly (no stack marshaling). The
             // C stack, not the value stack, bounds this recursion.
-            if (!mal_vm_enter_compiled(vm, function_index)) {
-                completion = vm->completion;
-            } else {
-                MalValue this_value = mal_vm_callee_this(vm, function, resolution.this_value);
-                MalValue value = function->compiled(vm, this_value, resolution.args, resolution.arg_count, mal_value_new_undefined(), env, resolution.callee, nullptr);
-                mal_vm_leave_compiled(vm);
-                completion = vm->completion.kind == MAL_COMPLETION_THROW
-                    ? vm->completion
-                    : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
-            }
+            MalValue this_value = mal_vm_callee_this(vm, function, resolution.this_value);
+            MalValue value = function->compiled(vm, this_value, resolution.args, resolution.arg_count, mal_value_new_undefined(), env, resolution.callee, nullptr);
+            completion = vm->completion.kind == MAL_COMPLETION_THROW
+                ? vm->completion
+                : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
         } else {
             // Interpreted function: marshal args, push a bytecode frame, run.
             mal_vm_interpret_function(
@@ -4539,7 +4533,37 @@ __attribute__((noinline)) static MalCompletion mal_vm_call_cached_fallback(
     return completion;
 }
 
-MalCompletion mal_vm_call_cached(
+__attribute__((noinline)) static MalValue mal_vm_call_cached_value_fallback(
+    MalVm *vm,
+    MalCallCache *cc,
+    MalValue callee,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count
+) {
+    MalCompletion completion =
+        mal_vm_call_cached_fallback(vm, cc, callee, this_value, args, arg_count);
+    if (completion.kind != MAL_COMPLETION_THROW) return completion.value;
+    vm->completion = completion;
+    return MAL_VALUE_UNDEFINED;
+}
+
+/** A sloppy callee's primitive or nullish receiver needs OrdinaryCallBindThis first. */
+__attribute__((noinline)) static MalValue mal_vm_call_compiled_bound_this(
+    MalVm *vm,
+    const MalFunction *function,
+    MalValue callee,
+    MalValue this_value,
+    const MalValue *args,
+    i32 arg_count
+) {
+    return function->compiled(
+        vm, mal_vm_callee_this(vm, function, this_value), args, arg_count,
+        mal_value_new_undefined(), mal_value_to_function_object(callee)->creation_env, callee,
+        nullptr);
+}
+
+MalValue mal_vm_call_cached_value(
     MalVm *vm,
     MalCallCache *cc,
     MalValue callee,
@@ -4548,60 +4572,48 @@ MalCompletion mal_vm_call_cached(
     i32 arg_count
 ) {
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
-        return vm->completion;
+        return MAL_VALUE_UNDEFINED;
     }
     MAL_PERF_COUNT(call_cache_probes);
 
-    MalFunctionObject *function_object = nullptr;
-    const MalFunction *function = nullptr;
-    i32 function_index = -1;
-
     if (mal_value_is_function_object(callee)) {
-        function_object = mal_value_to_function_object(callee);
-        function_index = mal_function_object_function_index(function_object);
+        MalFunctionObject *function_object = mal_value_to_function_object(callee);
+        i32 function_index = mal_function_object_function_index(function_object);
         if (function_index >= 0 && function_index < vm->runtime_image->function_count) {
-            const MalFunction *candidate = &vm->runtime_image->functions[function_index];
-            if (candidate->compiled != nullptr && !candidate->is_class_constructor) {
-                function = candidate;
+            const MalFunction *function = &vm->runtime_image->functions[function_index];
+            if (function->compiled != nullptr && !function->is_class_constructor) {
                 MAL_PERF_COUNT(call_cache_compiled_dispatches);
-                goto call_compiled;
+#if MAL_REALMS || (MAL_PROFILE && MAL_PERF_STATS)
+#if MAL_PROFILE && MAL_PERF_STATS
+                i32 saved_profile_site = vm->profile_current_site_id;
+#endif
+#if MAL_REALMS
+                MalRealm *saved_realm = vm->current_realm;
+                mal_vm_realm_switch_to(vm, mal_vm_callee_realm(vm, callee));
+#endif
+                MalValue value = function->compiled(
+                    vm, mal_vm_callee_this(vm, function, this_value), args, arg_count,
+                    mal_value_new_undefined(), function_object->creation_env, callee, nullptr);
+#if MAL_REALMS
+                mal_vm_realm_switch_to(vm, saved_realm);
+#endif
+#if MAL_PROFILE && MAL_PERF_STATS
+                vm->profile_current_site_id = saved_profile_site;
+#endif
+                return value;
+#else
+                // Both paths are tail calls, so the dispatch keeps no frame of its own.
+                if (!function->strict && !mal_value_is_object(this_value))
+                    return mal_vm_call_compiled_bound_this(
+                        vm, function, callee, this_value, args, arg_count);
+                return function->compiled(
+                    vm, this_value, args, arg_count, mal_value_new_undefined(),
+                    function_object->creation_env, callee, nullptr);
+#endif
             }
         }
     }
-    return mal_vm_call_cached_fallback(vm, cc, callee, this_value, args, arg_count);
-
-call_compiled:
-#if MAL_PROFILE && MAL_PERF_STATS
-    i32 saved_profile_site = vm->profile_current_site_id;
-#endif
-#if MAL_REALMS
-    MalRealm *saved_realm = vm->current_realm;
-    mal_vm_realm_switch_to(vm, mal_vm_callee_realm(vm, callee));
-#endif
-    if (!mal_vm_enter_compiled(vm, function_index)) {
-#if MAL_REALMS
-        mal_vm_realm_switch_to(vm, saved_realm);
-#endif
-#if MAL_PROFILE && MAL_PERF_STATS
-        vm->profile_current_site_id = saved_profile_site;
-#endif
-        return vm->completion;
-    }
-    MalValue tv = mal_vm_callee_this(vm, function, this_value);
-    MalValue value = function->compiled(
-        vm, tv, args, arg_count, mal_value_new_undefined(), function_object->creation_env,
-        callee, nullptr
-    );
-    mal_vm_leave_compiled(vm);
-#if MAL_REALMS
-    mal_vm_realm_switch_to(vm, saved_realm);
-#endif
-#if MAL_PROFILE && MAL_PERF_STATS
-    vm->profile_current_site_id = saved_profile_site;
-#endif
-    return vm->completion.kind == MAL_COMPLETION_THROW
-        ? vm->completion
-        : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
+    return mal_vm_call_cached_value_fallback(vm, cc, callee, this_value, args, arg_count);
 }
 
 bool mal_vm_prepare_builtin_callback(MalVm *vm, MalValue callback, MalExactScriptCall *exact) {
@@ -4658,18 +4670,13 @@ MalCompletion mal_vm_call_exact_script(
     if (!mal_vm_require_ordinary_call_target(vm, function)) {
         completion = vm->completion;
     } else if (function->compiled != nullptr) {
-        if (!mal_vm_enter_compiled(vm, function_index)) {
-            completion = vm->completion;
-        } else {
-            MalValue callee_this = mal_vm_callee_this(vm, function, this_value);
-            MalValue value = function->compiled(
-                vm, callee_this, args, arg_count, mal_value_new_undefined(),
-                env, callee, nullptr);
-            mal_vm_leave_compiled(vm);
-            completion = vm->completion.kind == MAL_COMPLETION_THROW
-                ? vm->completion
-                : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
-        }
+        MalValue callee_this = mal_vm_callee_this(vm, function, this_value);
+        MalValue value = function->compiled(
+            vm, callee_this, args, arg_count, mal_value_new_undefined(),
+            env, callee, nullptr);
+        completion = vm->completion.kind == MAL_COMPLETION_THROW
+            ? vm->completion
+            : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
     } else {
         mal_vm_interpret_function(
             vm, function_index, callee, this_value, args, arg_count,
@@ -4846,16 +4853,13 @@ MalCompletion mal_vm_construct_direct(
     MalEnv *env = function_object->creation_env;
     MalCompletion completion;
     if (function->compiled != nullptr) {
-        if (!mal_vm_enter_compiled(vm, function_index)) {
-            completion = vm->completion;
-        } else {
+        {
             MalCalleeRoots ncr;
             mal_gc_callee_roots_begin(
                 &ncr, this_value, callee, callee, args, arg_count);
             MalValue value = function->compiled(
                 vm, this_value, args, arg_count, callee, env, callee, nullptr);
             mal_gc_callee_roots_end(&ncr);
-            mal_vm_leave_compiled(vm);
             // Direct eval may splice a program and reallocate the function table
             // while the compiled constructor runs. The stable index survives; the
             // pre-call pointer does not.
@@ -5080,9 +5084,7 @@ static MalCompletion mal_vm_construct_with_native_target(MalVm *vm, MalValue cal
             if (function->compiled != nullptr) {
                 // Native-backend constructor: the compiled body returns enough raw
                 // state for the post-body derived-result checks below.
-                if (!mal_vm_enter_compiled(vm, function_index)) {
-                    completion = vm->completion;
-                } else {
+                {
                     // The instance exists only as this_value until the body stores
                     // it, so root it (plus new.target/args) for the call: a
                     // collection inside the constructor would otherwise sweep it.
@@ -5092,7 +5094,6 @@ static MalCompletion mal_vm_construct_with_native_target(MalVm *vm, MalValue cal
                                               resolution.arg_count);
                     MalValue value = function->compiled(vm, this_value, resolution.args, resolution.arg_count, effective_new_target, env, resolution.callee, nullptr);
                     mal_gc_callee_roots_end(&ncr);
-                    mal_vm_leave_compiled(vm);
                     // Direct eval may splice a program and reallocate the function table
                     // while the compiled constructor runs. The stable index survives; the
                     // pre-call pointer does not.

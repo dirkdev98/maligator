@@ -171,7 +171,6 @@ MalFiber *mal_fiber_create(
     f->exec.native_frames = nullptr;
     f->exec.native_frame_count = 0;
     f->exec.native_frame_capacity = 0;
-    f->exec.native_call_depth = 0;
     f->exec.proxy_dispatch_depth = 0;
     f->exec.exact_script_call = nullptr;
     f->exec.stack_limit = (uptr) base + page + MAL_FIBER_STACK_MARGIN;
@@ -252,7 +251,6 @@ void mal_fiber_save_exec(MalFiber *f, MalVm *vm) {
     f->exec.native_frames = vm->native_frames;
     f->exec.native_frame_count = vm->native_frame_count;
     f->exec.native_frame_capacity = vm->native_frame_capacity;
-    f->exec.native_call_depth = vm->native_call_depth;
     f->exec.proxy_dispatch_depth = vm->proxy_dispatch_depth;
     f->exec.exact_script_call = vm->exact_script_call;
     f->exec.stack_limit = vm->stack_limit;
@@ -279,7 +277,6 @@ void mal_fiber_load_exec(MalFiber *f, MalVm *vm) {
     vm->native_frames = f->exec.native_frames;
     vm->native_frame_count = f->exec.native_frame_count;
     vm->native_frame_capacity = f->exec.native_frame_capacity;
-    vm->native_call_depth = f->exec.native_call_depth;
     vm->proxy_dispatch_depth = f->exec.proxy_dispatch_depth;
     vm->exact_script_call = f->exec.exact_script_call;
     vm->stack_limit = f->exec.stack_limit;
