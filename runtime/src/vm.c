@@ -4320,6 +4320,39 @@ MalCompletion mal_vm_call_value(
         return vm->completion;
     }
 
+#if !(MAL_PROFILE && MAL_PERF_STATS)
+    // Accessors and builtin callbacks mostly call plain compiled functions, which
+    // need no bound resolution, realm switch, receiver boxing or frame growth.
+    if (mal_value_is_function_object(callee)) {
+        MalFunctionObject *function_object = mal_value_to_function_object(callee);
+        i32 function_index = mal_function_object_function_index(function_object);
+        if (function_index >= 0 && function_index < vm->runtime_image->function_count) {
+            const MalFunction *function = &vm->runtime_image->functions[function_index];
+            if (function->compiled != nullptr && !function->is_class_constructor &&
+                (function->strict || mal_value_is_object(this_value)) &&
+#if MAL_REALMS
+                (function_object->realm == nullptr ||
+                 function_object->realm == vm->current_realm) &&
+#endif
+                mal_vm_try_enter_compiled_fast(vm, function_index)) {
+#if MAL_REALMS
+                MalRealm *saved_realm = vm->current_realm;
+#endif
+                MalValue value = function->compiled(
+                    vm, this_value, args, arg_count, mal_value_new_undefined(),
+                    function_object->creation_env, callee, nullptr);
+                mal_vm_leave_compiled(vm);
+#if MAL_REALMS
+                mal_vm_realm_switch_to(vm, saved_realm);
+#endif
+                return vm->completion.kind == MAL_COMPLETION_THROW
+                    ? vm->completion
+                    : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
+            }
+        }
+    }
+#endif
+
     // A callable proxy routes [[Call]] through its apply trap.
     if (mal_value_is_proxy_object(callee)) {
         MalCompletion proxy_completion =

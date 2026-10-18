@@ -2155,6 +2155,34 @@ static inline bool mal_vm_enter_depth_checked(MalVm *vm) {
     return true;
 }
 
+/**
+ * mal_vm_enter_compiled when it needs neither to report an overflow nor to grow
+ * the frame stack; false leaves the VM untouched for the complete entry.
+ */
+static inline bool mal_vm_try_enter_compiled_fast(MalVm *vm, i32 function_index) {
+    const uptr stack_limit = vm->stack_limit;
+    bool frames = vm->runtime_image->file_count != 0;
+    if ((stack_limit != 0 && mal_vm_native_stack_address() < stack_limit) ||
+        vm->native_call_depth >= MAL_NATIVE_CALL_DEPTH_LIMIT ||
+        (frames && vm->native_frame_count == vm->native_frame_capacity)) {
+        return false;
+    }
+    MAL_PERF_COUNT(compiled_enter_calls);
+    vm->native_call_depth++;
+    if (!frames) return true;
+    MAL_PERF_COUNT(compiled_debug_frame_entries);
+    vm->native_frames[vm->native_frame_count++] = (MalNativeFrame) {
+        .function_index = function_index,
+        .position_entry = -1,
+#if MAL_PROFILE
+        .site_id = -1,
+#endif
+        .enter_seq = vm->frame_seq++,
+        .hidden = false,
+    };
+    return true;
+}
+
 // A successful entry requires a matching leave; rejection records a RangeError.
 static inline bool mal_vm_enter_compiled(MalVm *vm, i32 function_index) {
     MAL_PERF_COUNT(compiled_enter_calls);
