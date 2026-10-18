@@ -4987,6 +4987,7 @@ function emitBody(
 		tdzInactiveRootMask: undefined,
 		knownOwnSlotLoadInactiveRootMask: undefined,
 		staticPropertyLoadInactiveRootMask: undefined,
+		privateLoadInactiveRootMask: undefined,
 		indexedPropertyInactiveRootMask: undefined,
 		staticPropertyWriteInactiveRootMask: undefined,
 		charCodeAtCallRootPublication: undefined,
@@ -5043,6 +5044,7 @@ function emitBody(
 		propertyReadRegionAction: undefined,
 		constructorInitializationAction: undefined,
 		privateFieldReserveCount: undefined,
+		slowPathFramePosition: undefined,
 		polymorphicMethodLoad: false,
 		stringConstantRegisters,
 		relocation,
@@ -5272,6 +5274,8 @@ function emitBody(
 			!constructorInitializationActionByIp.has(ip);
 		const deferredOperatorRoots =
 			deferrableRoots && fn.instructions[ip]!.opcode === "BINARY";
+		const deferredPrivateLoadRoots =
+			deferrableRoots && fn.instructions[ip]!.opcode === "LOAD_PRIVATE";
 		// Only selected private values need the operator's mask on its fallback edge.
 		const eagerOperatorRootPublication =
 			deferredOperatorRoots && (rootPublication?.slots.size ?? 0) === 0;
@@ -5317,6 +5321,7 @@ function emitBody(
 		const publishesIncomingRoots =
 			safepointKind !== "loop-backedge" &&
 			!deferredPropertyRoots &&
+			!deferredPrivateLoadRoots &&
 			!deferredIndexedPropertyRoots &&
 			!deferredStaticPropertyWriteRoots &&
 			!deferredOperatorRoots &&
@@ -5417,6 +5422,12 @@ function emitBody(
 			inactiveRootMask !== lastPublishedInactiveRootMask
 				? inactiveRootMask
 				: undefined;
+		const privateLoadInactiveRootMask =
+			safepointKind === "operation" &&
+			fn.instructions[ip]!.opcode === "LOAD_PRIVATE" &&
+			inactiveRootMask !== lastPublishedInactiveRootMask
+				? inactiveRootMask
+				: undefined;
 		if (
 			inactiveRootMask !== undefined &&
 			loopBackedgeInactiveRootMask === undefined &&
@@ -5425,6 +5436,7 @@ function emitBody(
 			tdzInactiveRootMask === undefined &&
 			knownOwnSlotLoadInactiveRootMask === undefined &&
 			staticPropertyLoadInactiveRootMask === undefined &&
+			privateLoadInactiveRootMask === undefined &&
 			indexedPropertyInactiveRootMask === undefined &&
 			staticPropertyWriteInactiveRootMask === undefined &&
 			iteratorStepInactiveRootMask === undefined &&
@@ -5443,6 +5455,7 @@ function emitBody(
 			tdzInactiveRootMask === undefined &&
 			knownOwnSlotLoadInactiveRootMask === undefined &&
 			staticPropertyLoadInactiveRootMask === undefined &&
+			privateLoadInactiveRootMask === undefined &&
 			indexedPropertyInactiveRootMask === undefined &&
 			staticPropertyWriteInactiveRootMask === undefined &&
 			iteratorStepInactiveRootMask === undefined &&
@@ -5462,6 +5475,7 @@ function emitBody(
 		instructionContext.loopPoll = safepointKind === "loop-backedge";
 		instructionContext.incomingRootPublication =
 			deferredPropertyRoots ||
+			deferredPrivateLoadRoots ||
 			deferredIndexedPropertyRoots ||
 			deferredStaticPropertyWriteRoots ||
 			deferredOperatorRoots ||
@@ -5492,6 +5506,7 @@ function emitBody(
 			knownOwnSlotLoadInactiveRootMask;
 		instructionContext.staticPropertyLoadInactiveRootMask =
 			staticPropertyLoadInactiveRootMask;
+		instructionContext.privateLoadInactiveRootMask = privateLoadInactiveRootMask;
 		instructionContext.indexedPropertyInactiveRootMask = indexedPropertyInactiveRootMask;
 		instructionContext.staticPropertyWriteInactiveRootMask =
 			staticPropertyWriteInactiveRootMask;
@@ -5593,6 +5608,19 @@ function emitBody(
 			);
 		}
 		instructionContext.scalarInputValues = scalarInputValues;
+		const framePosition =
+			debug !== false && nativeInstructionMayCaptureStack(instruction, reps)
+				? (fn.positions[ip] ?? -1)
+				: -1;
+		const framePositionStore =
+			debug !== false && framePosition !== -1 && framePosition !== lastPublishedPos
+				? `MAL_FRAME_POS(__frame_row, ${nativePositionEntry(debug, functionIndex, framePosition)});`
+				: undefined;
+		const slowPathFramePosition =
+			framePositionStore === undefined
+				? undefined
+				: { store: framePositionStore, consumed: false };
+		instructionContext.slowPathFramePosition = slowPathFramePosition;
 		const emitted = elidedTdzIps.has(ip)
 			? []
 			: emitInstruction(
@@ -5625,6 +5653,7 @@ function emitBody(
 			tdzInactiveRootMask !== undefined ||
 			knownOwnSlotLoadInactiveRootMask !== undefined ||
 			staticPropertyLoadInactiveRootMask !== undefined ||
+			privateLoadInactiveRootMask !== undefined ||
 			indexedPropertyInactiveRootMask !== undefined ||
 			staticPropertyWriteInactiveRootMask !== undefined ||
 			iteratorStepInactiveRootMask !== undefined ||
@@ -5633,13 +5662,13 @@ function emitBody(
 			// Conditional paths can preserve the old mask or publish the instruction's mask.
 			lastPublishedInactiveRootMask = undefined;
 		}
-		if (debug !== false && nativeInstructionMayCaptureStack(fn.instructions[ip]!, reps)) {
-			const pos = fn.positions[ip] ?? -1;
-			if (pos !== -1 && pos !== lastPublishedPos) {
-				lines.push(
-					`    MAL_FRAME_POS(__frame_row, ${nativePositionEntry(debug, functionIndex, pos)});`,
-				);
-				lastPublishedPos = pos;
+		if (slowPathFramePosition !== undefined) {
+			if (slowPathFramePosition.consumed) {
+				// Only the slow path published it, so the frame may still hold an older position.
+				lastPublishedPos = -1;
+			} else {
+				lines.push(`    ${slowPathFramePosition.store}`);
+				lastPublishedPos = framePosition;
 			}
 		}
 		const profileSiteId = fn.profileSiteIds?.[ip] ?? -1;
@@ -5951,6 +5980,11 @@ interface NativeFieldCall {
 	}>;
 }
 
+interface NativeSlowPathFramePosition {
+	readonly store: string;
+	consumed: boolean;
+}
+
 interface NativeInstructionContext {
 	readonly scalarInputValues?: ReadonlyMap<number, string>;
 	readonly inactiveRootMaskStatements?: ReadonlyMap<NativeInactiveRootMask, string>;
@@ -5977,6 +6011,7 @@ interface NativeInstructionContext {
 	readonly tdzInactiveRootMask?: NativeInactiveRootMask;
 	readonly knownOwnSlotLoadInactiveRootMask?: NativeInactiveRootMask;
 	readonly staticPropertyLoadInactiveRootMask?: NativeInactiveRootMask;
+	readonly privateLoadInactiveRootMask?: NativeInactiveRootMask;
 	readonly indexedPropertyInactiveRootMask?: NativeInactiveRootMask;
 	readonly staticPropertyWriteInactiveRootMask?: NativeInactiveRootMask;
 	readonly charCodeAtCallRootPublication?: boolean;
@@ -6045,6 +6080,12 @@ interface NativeInstructionContext {
 	readonly propertyReadRegionAction?: NativePropertyReadRegionAction;
 	readonly constructorInitializationAction?: NativeConstructorInitializationAction;
 	readonly privateFieldReserveCount?: number;
+	/**
+	 * The instruction's pending frame-position store. An emitter whose fast path cannot
+	 * throw may move it into its slow path by marking it consumed; otherwise it
+	 * precedes the instruction.
+	 */
+	readonly slowPathFramePosition?: NativeSlowPathFramePosition;
 	readonly relocation: NativeRelocationExpressions;
 	readonly stringConstants: ReadonlyArray<ReadonlyArray<number>>;
 	readonly staticDefineStringIndexByIp: ReadonlyMap<number, number>;
@@ -6285,6 +6326,7 @@ function emitInstruction(
 		tdzInactiveRootMask: context.tdzInactiveRootMask,
 		knownOwnSlotLoadInactiveRootMask: context.knownOwnSlotLoadInactiveRootMask,
 		staticPropertyLoadInactiveRootMask: context.staticPropertyLoadInactiveRootMask,
+		privateLoadInactiveRootMask: context.privateLoadInactiveRootMask,
 		indexedPropertyInactiveRootMask: context.indexedPropertyInactiveRootMask,
 		staticPropertyWriteInactiveRootMask: context.staticPropertyWriteInactiveRootMask,
 		charCodeAtCallRootPublication: context.charCodeAtCallRootPublication,
@@ -6398,6 +6440,12 @@ function emitInstruction(
 	};
 	const callValue = (dst: number, value: string): string =>
 		convertedValue("boxed", reps[dst]!, value);
+	const slowPathFramePosition = (): Array<string> => {
+		const position = context.slowPathFramePosition;
+		if (position === undefined) return [];
+		position.consumed = true;
+		return [`  ${position.store}`];
+	};
 	const boxedLoad = (dst: number, expression: string): Array<string> => {
 		if (reps[dst] === "boxed" || reps[dst] === "string")
 			return [`r${dst} = ${expression};`, throwCheck()];
@@ -8360,7 +8408,7 @@ function emitInstruction(
 			// the try_* helper inlines.
 			const receiverName = `__property_receiver_${ip}`;
 			if (instruction.opcode === "LOAD_PROPERTY") {
-				const ordinary = (): Array<string> =>
+				const ordinary = (position: ReadonlyArray<string> = []): Array<string> =>
 					isNumericRep(reps[instruction.key]!)
 						? [
 								`MalArrayObject *${receiverName} = mal_vm_as_array(${boxed(instruction.object)});`,
@@ -8368,6 +8416,7 @@ function emitInstruction(
 								`if (${receiverName} && mal_vm_array_try_get_index(${receiverName}, ${num(instruction.key)}, &__v_${ip})) {`,
 								`  r${instruction.dst} = ${callValue(instruction.dst, `__v_${ip}`)};`,
 								`} else {`,
+								...position,
 								...(context.incomingRootPublication ?? []).map((line) => `  ${line}`),
 								...(context.indexedPropertyInactiveRootMask === undefined
 									? []
@@ -8385,6 +8434,7 @@ function emitInstruction(
 								`if (${receiverName} && mal_ops_is_number(${boxed(instruction.key)}) && mal_vm_array_try_get_index(${receiverName}, mal_ops_number_as_f64(${boxed(instruction.key)}), &__v_${ip})) {`,
 								`  r${instruction.dst} = ${callValue(instruction.dst, `__v_${ip}`)};`,
 								`} else {`,
+								...position,
 								`  r${instruction.dst} = mal_vm_indexed_fast_load(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}]);`,
 								`  ${throwCheck()}`,
 								`}`,
@@ -8486,7 +8536,9 @@ function emitInstruction(
 						];
 					}
 				}
-				return ordinary();
+				return reps[instruction.dst] === "boxed"
+					? ordinary(slowPathFramePosition())
+					: ordinary();
 			}
 			const probeHelper = isLengthPropertyName(
 				context.stringConstants[instruction.stringIndex],
@@ -8497,11 +8549,12 @@ function emitInstruction(
 					: "mal_vm_property_try_load_static";
 			const probe = (): string =>
 				`${context.watchedMathCallee === true ? `mal_vm_watched_own_value_try_load_static(vm, ${boxed(instruction.object)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}], &__v_${ip}) || ` : ""}${probeHelper}(vm, ${boxed(instruction.object)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}], &__v_${ip})`;
-			const ordinary = (): Array<string> => [
+			const ordinary = (position: ReadonlyArray<string> = []): Array<string> => [
 				`MalValue __v_${ip};`,
 				`if (${probe()}) {`,
 				`  r${instruction.dst} = ${callValue(instruction.dst, `__v_${ip}`)};`,
 				`} else {`,
+				...position,
 				...(context.incomingRootPublication ?? []).map((line) => `  ${line}`),
 				...(context.staticPropertyLoadInactiveRootMask === undefined
 					? []
@@ -8613,7 +8666,9 @@ function emitInstruction(
 					`}`,
 				];
 			}
-			return ordinary();
+			return reps[instruction.dst] === "boxed"
+				? ordinary(slowPathFramePosition())
+				: ordinary();
 		}
 		case "STORE_PROPERTY":
 		case "STORE_PROPERTY_STATIC": {
@@ -12176,6 +12231,13 @@ function emitInstruction(
 				`if (mal_vm_private_try_load(${boxed(instruction.object)}, ${boxed(instruction.key)}, &${loaded})) {`,
 				`  r${instruction.dst} = ${loaded};`,
 				`} else {`,
+				...slowPathFramePosition(),
+				...(context.incomingRootPublication ?? []).map((line) => `  ${line}`),
+				...(context.privateLoadInactiveRootMask === undefined
+					? []
+					: [
+							`  ${cInactiveRootMaskPublication(context.privateLoadInactiveRootMask, context.inactiveRootMaskStatements)};`,
+						]),
 				`  r${instruction.dst} = mal_vm_op_load_private(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)});`,
 				`  ${throwCheck()}`,
 				`}`,
