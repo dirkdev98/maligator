@@ -565,6 +565,9 @@ interface NativeCallCoverage {
 export const COMPILED_FUNCTION_DECLARATION =
 	"(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, void *entry_state)";
 
+// Generated frames index their arrays only by constants, so the per-call canary is waste.
+const NATIVE_ENTRY_ATTRIBUTES = "__attribute__((no_stack_protector)) ";
+
 // An entry pushes its own frame, so call sites carry no bookkeeping; every return pops it.
 const COMPILED_ENTRY_SCOPE = [
 	"    MalVm *const __entered __attribute__((cleanup(mal_vm_leave_compiled_scope))) = vm;",
@@ -2209,8 +2212,8 @@ function emitCompiledVariant(
 	// Keep native entries on 64-byte boundaries as neighboring generated code changes.
 	const signature =
 		directEntry === undefined
-			? `${linkage === "static" ? "static " : ""}__attribute__((aligned(64))) MalValue ${symbol}(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, void *entry_state) {`
-			: `${linkage === "static" ? "static " : ""}__attribute__((aligned(64))) ${cTypeOf(directEntry.resultRepresentation)} ${symbol}(MalVm *vm, MalValue this_value${directParameters!.length === 0 ? "" : `, ${directParameters!.join(", ")}`}, MalEnv *env, MalValue callee) {`;
+			? `${linkage === "static" ? "static " : ""}${NATIVE_ENTRY_ATTRIBUTES}__attribute__((aligned(64))) MalValue ${symbol}(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, void *entry_state) {`
+			: `${linkage === "static" ? "static " : ""}${NATIVE_ENTRY_ATTRIBUTES}__attribute__((aligned(64))) ${cTypeOf(directEntry.resultRepresentation)} ${symbol}(MalVm *vm, MalValue this_value${directParameters!.length === 0 ? "" : `, ${directParameters!.join(", ")}`}, MalEnv *env, MalValue callee) {`;
 	lines.push(`    (void) this_value;`);
 	if (directEntry === undefined) lines.push(`    (void) new_target;`);
 	lines.push(`    (void) env;`);
@@ -3199,7 +3202,7 @@ function emitResumableFunction(
 	const lines: Array<string> = [];
 
 	lines.push(
-		`${linkage === "static" ? "static " : ""}__attribute__((aligned(64))) MalValue ${symbol}(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, void *entry_state) {`,
+		`${linkage === "static" ? "static " : ""}${NATIVE_ENTRY_ATTRIBUTES}__attribute__((aligned(64))) MalValue ${symbol}(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, void *entry_state) {`,
 	);
 	lines.push("#pragma STDC FP_CONTRACT OFF");
 	if (relocatable !== false && relocatable.relocation !== undefined)

@@ -825,7 +825,7 @@ describe("emit-program-image instruction packing", () => {
 		const definitions = (source: string) =>
 			[
 				...source.matchAll(
-					/^(?:__attribute__\S* )?MalValue (mal_compiled_\d+_0)\(.*\{$/gm,
+					/^(?:__attribute__\S* )*MalValue (mal_compiled_\d+_0)\(.*\{$/gm,
 				),
 			].map((match) => match[1]!);
 		const prefixSymbols = definitions(first.shared);
