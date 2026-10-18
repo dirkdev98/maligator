@@ -6806,6 +6806,14 @@ void mal_vm_op_store_property_ic(
         if (stub->shape == receiver->shape && stub->key == key_value &&
             mal_shape_attrs_are_default(stub->attrs)) {
             MAL_PERF_COUNT(ic_store_mega_hits);
+            // Adopt a key on its second consecutive stub hit, as computed-key loads do,
+            // so a site whose key changes once per phase serves it inline again.
+            if (mal_ic_key_is_stable_string(key_value) &&
+                (ic->megamorphic || ic->value == key_value)) {
+                mal_vm_record_own_slot(ic, receiver->shape, key_value, stub->slot);
+            } else if (ic->mode == MAL_IC_MODE_SHAPE && ic->slot != MAL_IC_VALUE_SLOT) {
+                ic->value = key_value;
+            }
             mal_object_field_store_token(receiver, stub->slot, stub->field, value);
             return;
         }
