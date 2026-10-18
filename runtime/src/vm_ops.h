@@ -1806,13 +1806,21 @@ static inline __attribute__((always_inline)) bool mal_vm_watched_own_value_try_l
 static inline __attribute__((always_inline)) bool mal_vm_property_try_load_static(
     MalVm *vm, MalValue receiver, MalInlineCache *ic, MalValue *out
 ) {
-    // Every static load site expands this probe; also inlining the polymorphic,
+    // Every static load site expands this probe; also inlining the remaining polymorphic,
     // watched, and string-length rows made each site about 2.5 times larger.
     const MalObject *object = mal_vm_as_object(receiver);
-    if (object != nullptr && ic->mode == MAL_IC_MODE_SHAPE && object->shape == ic->shape) {
-        mal_perf_ic_load_mono_hit();
-        *out = mal_object_field_load(object, ic->slot);
-        return true;
+    if (object != nullptr && ic->mode == MAL_IC_MODE_SHAPE) {
+        if (object->shape == ic->shape) {
+            mal_perf_ic_load_mono_hit();
+            *out = mal_object_field_load(object, ic->slot);
+            return true;
+        }
+        // Tagged unions alternate between two shapes.
+        if (ic->poly_count > 0 && object->shape == ic->poly_shape[0]) {
+            MAL_PERF_COUNT(ic_load_poly_hits);
+            *out = mal_object_field_load(object, mal_ic_poly_slot(ic, 0));
+            return true;
+        }
     }
     // Prototype methods (`array.pop`, class methods) would otherwise pay the out-of-line probe.
     if (ic->mode == MAL_IC_MODE_INHERITED_VALUE &&
