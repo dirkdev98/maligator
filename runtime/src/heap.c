@@ -479,17 +479,11 @@ static void *mal_gc_alloc_large(MalHeap *heap, usize size, u8 kind) {
     return (u8 *) rec + offset;
 }
 
-static void *mal_gc_alloc(MalHeap *heap, usize size, u8 kind) {
-    if (size == 0) {
-        size = 1;
-    }
-    if (size > MAL_GC_LARGE_THRESHOLD) {
-        return mal_gc_alloc_large(heap, size, kind);
-    }
-
-    usize slot = (size + MAL_GC_CELL_ALIGN - 1) / MAL_GC_CELL_ALIGN;
-    u16 size_class = g_size_to_class[slot];
-
+/* A reclaimed cell or the current block's next bump, or nullptr when the class needs a
+ * fresh block. */
+static inline __attribute__((always_inline)) void *mal_gc_alloc_in_class(
+    MalHeap *heap, u16 size_class, u8 kind
+) {
     // Reuse a cell reclaimed by the sweep (CELL) or freed by an owner finalizer
     // (RAW) before bumping. CELL cells thread the free link past their header
     // (mal_gc_free_next_offset); RAW cells have no header, so the link sits at
@@ -520,16 +514,10 @@ static void *mal_gc_alloc(MalHeap *heap, usize size, u8 kind) {
         return cell;
     }
 
-    MalGcBlock **current = (kind == MAL_GC_BLOCK_CELL)
-        ? &heap->cell_blocks[size_class]
-        : &heap->raw_blocks[size_class];
-
-    MalGcBlock *block = *current;
-    if (block == nullptr || block->bump + block->cell_size > block->limit) {
-        block = mal_gc_new_block(heap, size_class, kind);
-        if (block == nullptr) return nullptr;
-        *current = block;
-    }
+    MalGcBlock *block = (kind == MAL_GC_BLOCK_CELL)
+        ? heap->cell_blocks[size_class]
+        : heap->raw_blocks[size_class];
+    if (block == nullptr || block->bump + block->cell_size > block->limit) return nullptr;
 
     void *cell = block->bump;
     block->bump += block->cell_size;
@@ -544,6 +532,40 @@ static void *mal_gc_alloc(MalHeap *heap, usize size, u8 kind) {
     mal_gc_count_black(heap, block, kind, block->cell_size);
     mal_heap_maybe_trigger_gc(heap);
     return cell;
+}
+
+static inline u16 mal_gc_size_class(usize size) {
+    return g_size_to_class[(size + MAL_GC_CELL_ALIGN - 1) / MAL_GC_CELL_ALIGN];
+}
+
+static __attribute__((noinline)) void *mal_gc_alloc_slow(MalHeap *heap, usize size, u8 kind) {
+    if (size == 0) {
+        size = 1;
+    }
+    if (size > MAL_GC_LARGE_THRESHOLD) {
+        return mal_gc_alloc_large(heap, size, kind);
+    }
+    u16 size_class = mal_gc_size_class(size);
+    void *cell = mal_gc_alloc_in_class(heap, size_class, kind);
+    if (cell != nullptr) return cell;
+    MalGcBlock *block = mal_gc_new_block(heap, size_class, kind);
+    if (block == nullptr) return nullptr;
+    if (kind == MAL_GC_BLOCK_CELL) heap->cell_blocks[size_class] = block;
+    else heap->raw_blocks[size_class] = block;
+    return mal_gc_alloc_in_class(heap, size_class, kind);
+}
+
+/* Reclaimed cells and the current block's bump serve nearly every allocation without a
+ * call, so an inlined hit saves no registers; block refills and large objects go out of
+ * line. */
+static inline __attribute__((always_inline)) void *mal_gc_alloc(
+    MalHeap *heap, usize size, u8 kind
+) {
+    if (size - 1 < MAL_GC_LARGE_THRESHOLD) {
+        void *cell = mal_gc_alloc_in_class(heap, mal_gc_size_class(size), kind);
+        if (cell != nullptr) return cell;
+    }
+    return mal_gc_alloc_slow(heap, size, kind);
 }
 
 void mal_heap_init(MalHeap *heap, usize capacity) {
