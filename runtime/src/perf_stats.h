@@ -248,6 +248,8 @@ typedef struct MalPerfStats {
     u64 object_keys_snapshot_materializations;
     // for-in sources whose prototype chain enumerates nothing.
     u64 for_in_own_key_snapshots;
+    // Constructions that reused a constructor's immutable `prototype`.
+    u64 fixed_constructor_prototype_hits;
     u64 object_values_snapshot_admissions;
     u64 object_values_snapshot_observed;
     u64 object_entries_snapshot_observed;

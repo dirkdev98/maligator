@@ -1885,10 +1885,34 @@ bool mal_vm_get_prototype_from_constructor(
     MalIntrinsic intrinsic_default_proto,
     MalObject **prototype_out
 ) {
+    MalHeap *heap = &vm->heap;
+    bool function = mal_value_is_function_object(constructor);
+    if (function) {
+        const void *identity = mal_value_to_heap(constructor);
+        for (usize i = 0; i < countof(heap->fixed_constructor_prototypes); i++) {
+            if (heap->fixed_constructor_prototypes[i].constructor == identity &&
+                heap->fixed_constructor_prototypes[i].heap_epoch == heap->epoch) {
+                MAL_PERF_COUNT(fixed_constructor_prototype_hits);
+                *prototype_out = heap->fixed_constructor_prototypes[i].prototype;
+                return true;
+            }
+        }
+    }
+    MalKey key = mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_PROTOTYPE);
     MalValue prototype;
-    if (!mal_vm_get_property(
-            vm, constructor, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_PROTOTYPE), &prototype)) {
+    if (!mal_vm_get_property(vm, constructor, key, &prototype)) {
         return false;
+    }
+    if (function && mal_value_is_object(prototype)) {
+        MalPropertyLookup own = mal_object_get_own(mal_value_to_object(constructor), key);
+        if (own.present && own.desc.value == prototype &&
+            !(own.desc.flags & (MAL_PROPERTY_ACCESSOR | MAL_PROPERTY_WRITABLE |
+                                MAL_PROPERTY_CONFIGURABLE))) {
+            usize slot = heap->fixed_constructor_next++ % countof(heap->fixed_constructor_prototypes);
+            heap->fixed_constructor_prototypes[slot].constructor = mal_value_to_heap(constructor);
+            heap->fixed_constructor_prototypes[slot].prototype = mal_value_to_object(prototype);
+            heap->fixed_constructor_prototypes[slot].heap_epoch = heap->epoch;
+        }
     }
     if (mal_value_is_object(prototype)) {
         *prototype_out = mal_value_to_object(prototype);

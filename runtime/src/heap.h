@@ -130,6 +130,16 @@ typedef struct MalHeap {
         u32 heap_epoch;
     } for_in_silent_prototypes[4];
     u8 for_in_silent_next;
+    /**
+     * Constructors whose `prototype` is a non-writable, non-configurable data property,
+     * which can never change. Entries hold until a sweep could reuse the address.
+     */
+    struct {
+        const void *constructor;
+        void *prototype;
+        u32 heap_epoch;
+    } fixed_constructor_prototypes[4];
+    u8 fixed_constructor_next;
     /** Process-unique heap lifetime identity. Static native call caches use this
      * with epoch so exact object identities never cross VM lifetimes. */
     u64 identity;
