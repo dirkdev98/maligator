@@ -250,13 +250,15 @@ The independent target boundary and current storage contract are recorded in
       so a dead, half-initialized cell found on the stack would be traced through
       freed edges unless allocation clears payloads and tracers accept null shapes.
 
-- [ ] Shrink the largest inline expansions in generated code. In one 800 KB
-      translation unit of the self-compiler, the inline static load probe is 16%
-      of the text (909 sites at about 140 bytes, most of it the four-way field
-      representation decode), `mal_ops_number_as_f64` is 6.5%, and throw checks,
-      `MAL_FRAME_POS`, root masks and safepoint polls are about 5% each.
+- [ ] Shrink the largest inline expansions in generated code. Uniform tagged
+      field slots and the one-compare Number decode cut the self-compiler's text
+      from 55.0 to 49.9 MB; the inline static load probe is now about 19
+      instructions, spent on the value class, heap type, cache mode, shape and
+      storage-kind checks. Throw checks, `MAL_FRAME_POS`, root masks and
+      safepoint polls were about 5% each of one 800 KB translation unit.
       `MAL_FRAME_POS` reloads `vm->native_frames` and its count at all 5,030 of
-      its sites, because a nested call can reallocate the frame array.
+      its sites, because a nested call can reallocate the frame array. A shape
+      root per exotic object kind would let the shape compare imply the heap type.
 - [ ] Reach the remaining hot isolate state without Darwin TLV calls only where a
       profile shows it. On macOS every `_Thread_local` read is a call to
       `_tlv_get_addr`, which took 4% of native self-compile samples before
@@ -461,14 +463,17 @@ iterator cursor is not, by itself, permission to delete its language object.
       inside such a region needs a consumer outside the compiler first.
 
 - [ ] Step for-in keys without allocating and iterating a key array. A for-in
-      over a five-field record takes about 10.7 ns per key, against well under one
-      in Node, which reuses a per-shape key cache. Each loop allocates a fresh key
-      array and walks it through the generic array-iterator step; the presence
-      check already reduces to one shape compare through the per-VM snapshot of
-      the array's source shape.
+      over a five-field record takes 10.5 ns per key (15.1 when reading values),
+      against Node's 1.5 (2.3), which reuses a per-shape key cache. Each loop
+      allocates a fresh key array and iterates it with `getIterator`, which looks
+      up `@@iterator` and `next` observably: with mutable primordials a patched
+      `Array.prototype[Symbol.iterator]` would run during for-in. Recognizing the
+      internal key array in `mal_vm_get_iterator` and stepping it through the
+      intrinsic array iterator would fix that and allow an immutable per-shape key
+      array; the presence check already reduces to one shape compare.
 
 - [ ] Close the rest of the `JSON.stringify` small-record gap. 300k calls on a
-      five-field record take 79 ms against Node's 24 now that the output buffer is
+      five-field record take 63 ms against Node's 23 now that the output buffer is
       sized from the root and shape and prototype proofs persist across calls. A
       record seen once per call never builds an escaped-key plan; its keys and
       short strings go through `memmove` calls (5% of samples) and numbers through
@@ -476,17 +481,39 @@ iterator cursor is not, by itself, permission to delete its language object.
 - [ ] Store private fields in shaped slots. Reads and writes now reach a private
       field through the symbol's entry hint in the object's overflow table, and
       accessor calls enter compiled getters and setters directly, but a getter/setter
-      pair over `#celsius` still takes 207 ms against Node's 5 for 5M iterations.
+      pair over `#celsius` still takes 157 ms against Node's 2 for 5M iterations.
+      Most of that is the accessor calls: the same pair over a public field takes
+      168 ms, while a private field read and written inside a method takes 30 ms
+      (Node 3). Each store or load of `t.celsius` misses the inline probe for its
+      inherited setter or getter row and calls through the out-of-line cache.
+      Private names created once per class evaluation could carry a last-shape and
+      slot hint in a larger cell, so shaped private fields need no per-site cache.
 
-- [ ] Keep loop-carried Number accumulators unboxed across field reads. A loop
-      such as `sx += p.x; sy += p.y` over records takes about 8 ns per element
-      against Node's 1.4: each iteration publishes the boxed sums as roots, probes
-      both fields through the cache and adds through the boxed path. Number-record
-      regions need four field accesses and cover a single iteration, so they cannot
-      carry the sums; a loop-level region with a boxed fallback exit could.
+- [ ] Keep loop-carried Number accumulators unboxed across field reads. Numeric
+      loop regions now run dense Array element sums in f64 locals
+      (`dense-array-traversal` 1337 to 235 ms), but a loop such as
+      `sx += p.x; sy += p.y` over records still takes 5.6 ns per element against
+      Node's 1.0: each iteration publishes the boxed sums as roots, probes both
+      fields through the cache and adds through the boxed path. The region needs an
+      object-valued element read and shape-guarded field reads whose miss restarts
+      the iteration. Bounds such as `values.length - 1` are not admitted either.
       Frame-local shape snapshots for plain static loads and stores in loops made
       such a loop about 8% faster but the self-compiler's parser slice 1.7 to 2.6%
       slower, so they serve number-record regions only.
+- [ ] Track field representation facts on shapes. Every field is now one tagged
+      slot, so int32, Number, object, constant or a known field shape would be a
+      monotone fact on a shape's property that widens in place, not a physical
+      layout with repacking. A region could then guard its receivers' shape once
+      and skip per-field tag checks, and chained loads could skip the inner shape
+      compare. Widening must reach the transition subtree and integrity variants,
+      and trusting code needs either one fact epoch or per-field dependencies;
+      try both. Measure against the loop regions first: so far the large costs are
+      boxing on loop-carried chains and call dispatch, which facts alone do not remove.
+- [ ] Recover the small losses of the value-encoding change. Against 843c1983,
+      typed-array-operations went from 296 to 311 ms and value-kinds from 230 to
+      234 ms, with unchanged kernel C; the one-compare decode becomes a select
+      unless clang expects doubles, and forcing branches with an empty asm blocked
+      box/unbox folding (16% slower typed-array loops).
 
 ## P2: composable temporary values
 
