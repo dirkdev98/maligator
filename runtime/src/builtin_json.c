@@ -173,73 +173,90 @@ static usize mal_json_utf16_safe_run(const c16 *units, usize length) {
     return position;
 }
 
+// A high surrogate ending one leaf pairs with a low surrogate starting the next.
+static bool mal_json_builder_push_quoted_segment(
+    MalJsonBuilder *builder, const MalStringSegment *segment, c16 *pending_high
+) {
+    if (segment->latin1) MAL_PERF_ADD(json_quote_latin1_code_units, segment->length);
+    else MAL_PERF_ADD(json_quote_utf16_code_units, segment->length);
+    usize position = 0;
+    if (*pending_high != 0) {
+        c16 first = mal_string_segment_code_unit_at(segment, 0);
+        bool ok;
+        if (first >= 0xdc00 && first <= 0xdfff) {
+            c16 pair[2] = {*pending_high, first};
+            ok = mal_json_builder_push_units(builder, pair, 2);
+            position++;
+        } else {
+            ok = mal_json_builder_push_unicode_escape(builder, *pending_high);
+        }
+        *pending_high = 0;
+        if (!ok) return false;
+    }
+    while (position < segment->length) {
+        usize run = position;
+        if (segment->latin1) {
+            position += mal_json_latin1_safe_run(
+                segment->latin1_units + position, segment->length - position);
+        } else {
+            position += mal_json_utf16_safe_run(
+                segment->utf16_units + position, segment->length - position);
+        }
+        if (position > run && !mal_json_builder_push_segment(
+                builder, segment, run, position - run)) {
+            return false;
+        }
+        if (position == segment->length) break;
+        c16 unit = mal_string_segment_code_unit_at(segment, position++);
+        bool ok;
+        switch (unit) {
+            case '"': ok = mal_json_builder_push_ascii(builder, "\\\""); break;
+            case '\\': ok = mal_json_builder_push_ascii(builder, "\\\\"); break;
+            case '\b': ok = mal_json_builder_push_ascii(builder, "\\b"); break;
+            case '\f': ok = mal_json_builder_push_ascii(builder, "\\f"); break;
+            case '\n': ok = mal_json_builder_push_ascii(builder, "\\n"); break;
+            case '\r': ok = mal_json_builder_push_ascii(builder, "\\r"); break;
+            case '\t': ok = mal_json_builder_push_ascii(builder, "\\t"); break;
+            default:
+                if (unit >= 0xd800 && unit <= 0xdbff) {
+                    if (position == segment->length) {
+                        *pending_high = unit;
+                        ok = true;
+                        break;
+                    }
+                    c16 next = mal_string_segment_code_unit_at(segment, position);
+                    if (next >= 0xdc00 && next <= 0xdfff) {
+                        c16 pair[2] = {unit, next};
+                        ok = mal_json_builder_push_units(builder, pair, 2);
+                        position++;
+                        break;
+                    }
+                }
+                ok = mal_json_builder_push_unicode_escape(builder, unit);
+                break;
+        }
+        if (!ok) return false;
+    }
+    return true;
+}
+
 static bool mal_json_builder_push_quoted(MalJsonBuilder *builder, const MalString *string) {
     if (!mal_json_builder_push(builder, '"')) return false;
-    MalStringIterator iterator;
-    MalStringSegment segment;
-    mal_string_iterator_init(&iterator, string, 0, mal_string_length(string));
     c16 pending_high = 0;
     bool ok = true;
-    while (ok && mal_string_iterator_next(&iterator, &segment)) {
-        if (segment.latin1) MAL_PERF_ADD(json_quote_latin1_code_units, segment.length);
-        else MAL_PERF_ADD(json_quote_utf16_code_units, segment.length);
-        usize position = 0;
-        if (pending_high != 0) {
-            c16 first = mal_string_segment_code_unit_at(&segment, 0);
-            if (first >= 0xdc00 && first <= 0xdfff) {
-                c16 pair[2] = {pending_high, first};
-                ok = mal_json_builder_push_units(builder, pair, 2);
-                position++;
-            } else {
-                ok = mal_json_builder_push_unicode_escape(builder, pending_high);
-            }
-            pending_high = 0;
+    // Most values are one leaf and short enough that iterator setup would dominate.
+    MalStringSegment whole;
+    if (mal_string_try_get_segment(string, 0, mal_string_length(string), &whole)) {
+        ok = mal_json_builder_push_quoted_segment(builder, &whole, &pending_high);
+    } else {
+        MalStringIterator iterator;
+        MalStringSegment segment;
+        mal_string_iterator_init(&iterator, string, 0, mal_string_length(string));
+        while (ok && mal_string_iterator_next(&iterator, &segment)) {
+            ok = mal_json_builder_push_quoted_segment(builder, &segment, &pending_high);
         }
-        while (ok && position < segment.length) {
-            usize run = position;
-            if (segment.latin1) {
-                position += mal_json_latin1_safe_run(
-                    segment.latin1_units + position, segment.length - position);
-            } else {
-                position += mal_json_utf16_safe_run(
-                    segment.utf16_units + position, segment.length - position);
-            }
-            if (position > run && !mal_json_builder_push_segment(
-                    builder, &segment, run, position - run)) {
-                ok = false;
-                break;
-            }
-            if (position == segment.length) break;
-            c16 unit = mal_string_segment_code_unit_at(&segment, position++);
-            switch (unit) {
-                case '"': ok = mal_json_builder_push_ascii(builder, "\\\""); break;
-                case '\\': ok = mal_json_builder_push_ascii(builder, "\\\\"); break;
-                case '\b': ok = mal_json_builder_push_ascii(builder, "\\b"); break;
-                case '\f': ok = mal_json_builder_push_ascii(builder, "\\f"); break;
-                case '\n': ok = mal_json_builder_push_ascii(builder, "\\n"); break;
-                case '\r': ok = mal_json_builder_push_ascii(builder, "\\r"); break;
-                case '\t': ok = mal_json_builder_push_ascii(builder, "\\t"); break;
-                default:
-                    if (unit >= 0xd800 && unit <= 0xdbff) {
-                        if (position == segment.length) {
-                            // The matching low surrogate may be in the next leaf.
-                            pending_high = unit;
-                            break;
-                        }
-                        c16 next = mal_string_segment_code_unit_at(&segment, position);
-                        if (next >= 0xdc00 && next <= 0xdfff) {
-                            c16 pair[2] = {unit, next};
-                            ok = mal_json_builder_push_units(builder, pair, 2);
-                            position++;
-                            break;
-                        }
-                    }
-                    ok = mal_json_builder_push_unicode_escape(builder, unit);
-                    break;
-            }
-        }
+        mal_string_iterator_dispose(&iterator);
     }
-    mal_string_iterator_dispose(&iterator);
     if (ok && pending_high != 0) {
         ok = mal_json_builder_push_unicode_escape(builder, pending_high);
     }
@@ -251,12 +268,27 @@ typedef struct MalJsonPointerEntry {
     void *value;
 } MalJsonPointerEntry;
 
+#define MAL_JSON_POINTER_INLINE_CAPACITY 16
+
+// Most serializations touch a few shapes, prototypes and nesting levels, so the
+// first table lives in the map itself; move a map with mal_json_pointer_move.
 typedef struct MalJsonPointerMap {
     MalJsonPointerEntry *entries;
     usize capacity;
     usize count;
     usize used;
+    MalJsonPointerEntry inline_entries[MAL_JSON_POINTER_INLINE_CAPACITY];
 } MalJsonPointerMap;
+
+static void mal_json_pointer_dispose(MalJsonPointerMap *map) {
+    if (map->entries != map->inline_entries) free(map->entries);
+}
+
+static void mal_json_pointer_move(MalJsonPointerMap *to, MalJsonPointerMap *from) {
+    *to = *from;
+    if (from->entries == from->inline_entries) to->entries = to->inline_entries;
+    *from = (MalJsonPointerMap) {0};
+}
 
 static usize mal_json_pointer_hash(const void *pointer) {
     u64 bits = (u64) (uintptr_t) pointer;
@@ -288,8 +320,14 @@ static void mal_json_pointer_insert(
             capacity *= 2;
         }
         if (capacity > SIZE_MAX / sizeof(MalJsonPointerEntry)) abort();
-        MalJsonPointerEntry *entries = calloc(capacity, sizeof(*entries));
-        if (entries == nullptr) abort();
+        MalJsonPointerEntry *entries;
+        if (map->capacity == 0 && capacity == MAL_JSON_POINTER_INLINE_CAPACITY) {
+            entries = map->inline_entries;
+            memset(entries, 0, sizeof(map->inline_entries));
+        } else {
+            entries = calloc(capacity, sizeof(*entries));
+            if (entries == nullptr) abort();
+        }
         for (usize i = 0; i < map->capacity; i++) {
             MalJsonPointerEntry entry = map->entries[i];
             if (entry.key == nullptr) continue;
@@ -297,7 +335,7 @@ static void mal_json_pointer_insert(
             while (entries[slot].key != nullptr) slot = (slot + 1) & (capacity - 1);
             entries[slot] = entry;
         }
-        free(map->entries);
+        mal_json_pointer_dispose(map);
         map->entries = entries;
         map->capacity = capacity;
         map->used = map->count;
@@ -1200,12 +1238,12 @@ static void mal_json_plain_dispose(MalJsonPlainState *state) {
     MAL_PERF_ADD(json_escaped_key_capacity_bytes,
         state->shared_escaped_keys.capacity * (state->shared_escaped_keys.utf16 ? 2 : 1));
     mal_text_buffer_dispose(&state->shared_escaped_keys);
-    free(state->keys.entries);
+    mal_json_pointer_dispose(&state->keys);
     MAL_PERF_ADD(json_plan_table_bytes,
         (state->shapes.capacity + state->prototypes.capacity + state->keys.capacity) * sizeof(MalJsonPointerEntry));
-    free(state->shapes.entries);
-    free(state->prototypes.entries);
-    free(state->active.entries);
+    mal_json_pointer_dispose(&state->shapes);
+    mal_json_pointer_dispose(&state->prototypes);
+    mal_json_pointer_dispose(&state->active);
     free(state->frames);
 }
 
@@ -1242,8 +1280,7 @@ static MalJsonResult mal_json_resume_generic(
             }
         }
     }
-    generic->active = plain->active;
-    plain->active = (MalJsonPointerMap) {0};
+    mal_json_pointer_move(&generic->active, &plain->active);
     MalJsonResult result = MAL_JSON_THROW;
     while (plain->count != 0) {
         MalJsonFrame *frame = &plain->frames[plain->count - 1];
@@ -1515,7 +1552,7 @@ static MalValue mal_builtin_json_stringify(MalVm *vm, MalValue this_value, const
 
     if (nominated) vm->exact_script_call = runtime_callback.previous;
     mal_rooted_value_list_dispose(&state.property_list);
-    free(state.active.entries);
+    mal_json_pointer_dispose(&state.active);
 
     if (result != MAL_JSON_WROTE) {
         mal_text_buffer_dispose(&builder.buffer);
