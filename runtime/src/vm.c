@@ -556,9 +556,9 @@ static void mal_vm_init_engine_state(MalVm *vm) {
     vm->array_join_frames = nullptr;
     mal_module_link_registry_init(&vm->module_links);
     vm->semantic_epochs = (MalSemanticEpochs) {
-        .activity = 1,
-        .array_elements = 1,
-        .watched_methods = 1,
+        .activity = MAL_SEMANTIC_EPOCH_INITIAL,
+        .array_elements = MAL_SEMANTIC_EPOCH_INITIAL,
+        .watched_methods = MAL_SEMANTIC_EPOCH_INITIAL,
     };
 	mal_gc_init(vm);
 }

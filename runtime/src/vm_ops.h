@@ -67,20 +67,32 @@ typedef enum MalSemanticDependencyMask {
     MAL_SEMANTIC_DEPENDENCY_ARRAY_ELEMENTS = 1 << 2,
 } MalSemanticDependencyMask;
 
+/**
+ * `mal_primitive_method_protector` as seen by this VM. Each invalidation also bumps
+ * the VM's watched-methods epoch, so the epoch keeps its initial value exactly
+ * while the protector holds, and a caller holding the VM skips a thread-local
+ * read (a `_tlv_get_addr` call on Darwin).
+ */
+static inline bool mal_vm_primitive_methods_intact(const MalVm *vm) {
+    return vm->semantic_epochs.watched_methods == MAL_SEMANTIC_EPOCH_INITIAL;
+}
+
+/** `mal_array_elements_protector` as seen by this VM; see mal_vm_primitive_methods_intact. */
+static inline bool mal_vm_array_elements_intact(const MalVm *vm) {
+    return vm->semantic_epochs.array_elements == MAL_SEMANTIC_EPOCH_INITIAL;
+}
+
 static inline bool mal_vm_semantic_dependencies_hold(
     const MalVm *vm, u8 dependencies
 ) {
     const u8 watched =
         MAL_SEMANTIC_DEPENDENCY_PRIMITIVE_METHODS |
         MAL_SEMANTIC_DEPENDENCY_WATCHED_METHODS;
-    if ((dependencies & watched) != 0 &&
-        (!mal_primitive_method_protector ||
-         vm->semantic_epochs.watched_methods == 0)) {
+    if ((dependencies & watched) != 0 && !mal_vm_primitive_methods_intact(vm)) {
         return false;
     }
     if ((dependencies & MAL_SEMANTIC_DEPENDENCY_ARRAY_ELEMENTS) != 0 &&
-        (!mal_array_elements_protector ||
-         vm->semantic_epochs.array_elements == 0)) {
+        !mal_vm_array_elements_intact(vm)) {
         return false;
     }
     return true;
@@ -109,7 +121,7 @@ static inline bool mal_vm_try_capture_collection_method(
     MalValue receiver,
     MalValue *method_out
 ) {
-    if (!mal_primitive_method_protector) return false;
+    if (!mal_vm_primitive_methods_intact(vm)) return false;
 
     MalObject *collection;
     MalIntrinsic prototype_intrinsic;
@@ -1502,8 +1514,8 @@ static inline bool mal_vm_local_watched_primitive_value_try_load_static(
 }
 
 /** An INHERITED_VALUE row's hit: a prototype data value proven by shape and chain identity. */
-static inline bool mal_vm_inherited_value_try_load(MalValue receiver, const MalInlineCache *ic,
-                                                   MalValue *out) {
+static inline bool mal_vm_inherited_value_try_load(const MalVm *vm, MalValue receiver,
+                                                   const MalInlineCache *ic, MalValue *out) {
     if (ic->poly_count > 0) {
         u8 receiver_type = ic->receiver_type == MAL_IC_RECEIVER_DICTIONARY
             ? MAL_HEAP_OBJECT : ic->receiver_type;
@@ -1524,7 +1536,7 @@ static inline bool mal_vm_inherited_value_try_load(MalValue receiver, const MalI
         mal_perf_ic_load_inherited_hit();
         return true;
     }
-    if (!mal_primitive_method_protector || !mal_value_is_object(receiver)) {
+    if (!mal_vm_primitive_methods_intact(vm) || !mal_value_is_object(receiver)) {
         return false;
     }
     const MalObject *object = (const MalObject *) mal_value_to_heap(receiver);
@@ -1537,14 +1549,14 @@ static inline bool mal_vm_inherited_value_try_load(MalValue receiver, const MalI
     return true;
 }
 
-static inline bool mal_vm_inherited_try_load(MalValue receiver, MalValue key,
+static inline bool mal_vm_inherited_try_load(const MalVm *vm, MalValue receiver, MalValue key,
                                               const MalInlineCache *ic, MalValue *out) {
     if (key != ic->key) {
         return false;
     }
 
     if (ic->mode == MAL_IC_MODE_INHERITED_VALUE) {
-        return mal_vm_inherited_value_try_load(receiver, ic, out);
+        return mal_vm_inherited_value_try_load(vm, receiver, ic, out);
     }
 
     if (ic->mode == MAL_IC_MODE_MISSING) {
@@ -1629,9 +1641,9 @@ static inline bool mal_vm_inherited_try_load(MalValue receiver, MalValue key,
     return true;
 }
 
-static inline bool mal_vm_inherited_try_load_static(MalValue receiver,
+static inline bool mal_vm_inherited_try_load_static(const MalVm *vm, MalValue receiver,
                                                      const MalInlineCache *ic, MalValue *out) {
-    return mal_vm_inherited_try_load(receiver, ic->key, ic, out);
+    return mal_vm_inherited_try_load(vm, receiver, ic->key, ic, out);
 }
 
 /** Probe the VM-wide inherited/negative handler cache after local site misses. */
@@ -1641,9 +1653,9 @@ bool mal_vm_inherited_stub_try_load_static(
 );
 
 /** Guarded own-value hit for watched built-ins whose properties live in overflow tables. */
-static inline bool mal_vm_watched_try_load(MalValue receiver, MalValue key,
+static inline bool mal_vm_watched_try_load(const MalVm *vm, MalValue receiver, MalValue key,
                                            const MalInlineCache *ic, MalValue *out) {
-    if (!mal_primitive_method_protector || ic->mode != MAL_IC_MODE_SHAPE ||
+    if (!mal_vm_primitive_methods_intact(vm) || ic->mode != MAL_IC_MODE_SHAPE ||
         ic->slot != MAL_IC_VALUE_SLOT || ic->prim_kind != 0 || key != ic->key ||
         !mal_value_is_object(receiver) || mal_value_to_object(receiver) != ic->obj) {
         return false;
@@ -1653,9 +1665,9 @@ static inline bool mal_vm_watched_try_load(MalValue receiver, MalValue key,
     return true;
 }
 
-static inline bool mal_vm_watched_try_load_static(MalValue receiver,
+static inline bool mal_vm_watched_try_load_static(const MalVm *vm, MalValue receiver,
                                                    const MalInlineCache *ic, MalValue *out) {
-    return mal_vm_watched_try_load(receiver, ic->key, ic, out);
+    return mal_vm_watched_try_load(vm, receiver, ic->key, ic, out);
 }
 
 static inline bool mal_vm_try_typed_array_length(
@@ -1669,7 +1681,7 @@ static inline bool mal_vm_try_typed_array_length(
  * empty own-property layout cannot shadow the accessor.
  */
 static inline bool mal_vm_admit_collection_size(MalVm *vm, MalValue receiver, usize *size) {
-    if (!mal_primitive_method_protector) return false;
+    if (!mal_vm_primitive_methods_intact(vm)) return false;
     const MalObject *collection;
     MalIntrinsic prototype;
     if (mal_value_is_map_object(receiver)) {
@@ -1702,7 +1714,7 @@ static inline bool mal_vm_special_try_load(MalVm *vm, MalValue receiver, MalValu
         return false;
     }
     if (ic->mode == MAL_IC_MODE_PRIMITIVE_VALUE) {
-        if (!mal_primitive_method_protector ||
+        if (!mal_vm_primitive_methods_intact(vm) ||
             mal_vm_primitive_method_kind(receiver) != ic->prim_kind
 #if MAL_REALMS
             || ic->realm != vm->current_realm
@@ -1762,11 +1774,11 @@ static inline bool mal_vm_property_try_load(MalVm *vm, MalValue receiver, MalVal
         ic->mode == MAL_IC_MODE_INHERITED_SLOT ||
         ic->mode == MAL_IC_MODE_INHERITED_TABLE ||
         ic->mode == MAL_IC_MODE_MISSING) {
-        return mal_vm_inherited_try_load(receiver, key, ic, out);
+        return mal_vm_inherited_try_load(vm, receiver, key, ic, out);
     }
     MalObject *object = mal_vm_as_object(receiver);
     return (object != nullptr && mal_vm_object_try_load(object, key, ic, out)) ||
-        mal_vm_watched_try_load(receiver, key, ic, out) ||
+        mal_vm_watched_try_load(vm, receiver, key, ic, out) ||
         mal_vm_special_try_load(vm, receiver, key, ic, out);
 }
 
@@ -1788,12 +1800,12 @@ mal_vm_property_try_load_static_remaining(
  * guarded Math call's callee such as `Math.round`.
  */
 static inline __attribute__((always_inline)) bool mal_vm_watched_own_value_try_load_static(
-    MalValue receiver, const MalInlineCache *ic, MalValue *out
+    const MalVm *vm, MalValue receiver, const MalInlineCache *ic, MalValue *out
 ) {
     if (ic->mode != MAL_IC_MODE_SHAPE || ic->slot != MAL_IC_VALUE_SLOT || ic->prim_kind != 0 ||
         !mal_value_is_object(receiver) ||
         (const MalObject *) mal_value_to_heap(receiver) != ic->obj ||
-        !mal_primitive_method_protector) {
+        !mal_vm_primitive_methods_intact(vm)) {
         return false;
     }
     MAL_PERF_COUNT(ic_load_watched_hits);
@@ -1816,7 +1828,7 @@ static inline __attribute__((always_inline)) bool mal_vm_property_try_load_stati
     }
     // Prototype methods (`array.pop`, class methods) would otherwise pay the out-of-line probe.
     if (ic->mode == MAL_IC_MODE_INHERITED_VALUE &&
-        mal_vm_inherited_value_try_load(receiver, ic, out)) {
+        mal_vm_inherited_value_try_load(vm, receiver, ic, out)) {
         return true;
     }
     MalStaticPropertyProbeResult result =
@@ -1847,7 +1859,7 @@ static inline bool mal_vm_property_try_load_length_static(
         *out = mal_value_from_i32((i32) mal_value_to_string(receiver)->length);
         return true;
     }
-    if (ic->mode == MAL_IC_MODE_TYPED_ARRAY_LENGTH && mal_primitive_method_protector &&
+    if (ic->mode == MAL_IC_MODE_TYPED_ARRAY_LENGTH && mal_vm_primitive_methods_intact(vm) &&
         mal_value_is_typed_array_object(receiver)) {
         const MalTypedArrayObject *array = mal_value_to_typed_array_object(receiver);
         const MalObject *prototype = mal_object_prototype(&array->object);

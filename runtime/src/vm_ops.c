@@ -2439,9 +2439,9 @@ bool mal_vm_inherited_stub_try_load_static(
     const MalInlineCache *stub =
         &vm->inherited_property_stub[mal_inherited_stub_hash(
             object->shape, mal_object_prototype(object), site->key)];
-    return mal_vm_inherited_try_load(receiver, site->key, stub, out) ||
+    return mal_vm_inherited_try_load(vm, receiver, site->key, stub, out) ||
         mal_vm_inherited_try_load(
-            receiver, site->key, stub + MAL_INHERITED_STUB_CACHE_SET_COUNT, out);
+            vm, receiver, site->key, stub + MAL_INHERITED_STUB_CACHE_SET_COUNT, out);
 }
 
 __attribute__((noinline)) void mal_vm_number_record_store_slow(
@@ -2552,7 +2552,7 @@ mal_vm_property_try_load_static_remaining(
         ic->mode == MAL_IC_MODE_INHERITED_SLOT ||
         ic->mode == MAL_IC_MODE_INHERITED_TABLE ||
         ic->mode == MAL_IC_MODE_MISSING) {
-        hit = mal_vm_inherited_try_load_static(receiver, ic, &value) ||
+        hit = mal_vm_inherited_try_load_static(vm, receiver, ic, &value) ||
             mal_vm_inherited_stub_try_load_static(vm, receiver, object, ic, &value);
     } else {
         const MalObject *own = object != nullptr ? object : mal_vm_as_own_slot_object(receiver);
@@ -2564,7 +2564,7 @@ mal_vm_property_try_load_static_remaining(
         }
         hit = (own != nullptr && ic->mode == MAL_IC_MODE_OWN_TABLE &&
                mal_vm_own_table_try_load(own, ic->key, ic, &value)) ||
-            mal_vm_watched_try_load_static(receiver, ic, &value) ||
+            mal_vm_watched_try_load_static(vm, receiver, ic, &value) ||
             mal_vm_special_try_load_static(vm, receiver, ic, &value) ||
             mal_vm_inherited_stub_try_load_static(vm, receiver, object, ic, &value);
     }
@@ -6196,7 +6196,7 @@ static MalValue mal_vm_op_load_property_ic_keyed(
     }
     MalValue inherited_value;
     if (!static_probe_missed &&
-        mal_vm_inherited_try_load(object_value, key_value, ic, &inherited_value)) {
+        mal_vm_inherited_try_load(vm, object_value, key_value, ic, &inherited_value)) {
         return inherited_value;
     }
     bool inherited_stub_already_probed =
@@ -6212,9 +6212,9 @@ static MalValue mal_vm_op_load_property_ic_keyed(
             &vm->inherited_property_stub[mal_inherited_stub_hash(
                 object->shape, mal_object_prototype(object), key_value)];
         if (mal_vm_inherited_try_load(
-                object_value, key_value, stub, &inherited_value) ||
+                vm, object_value, key_value, stub, &inherited_value) ||
             mal_vm_inherited_try_load(
-                object_value, key_value, stub + MAL_INHERITED_STUB_CACHE_SET_COUNT,
+                vm, object_value, key_value, stub + MAL_INHERITED_STUB_CACHE_SET_COUNT,
                 &inherited_value)) {
             // An empty site would otherwise reach this shared row through the slow path forever.
             if (ic->mode == MAL_IC_MODE_SHAPE && ic->shape == nullptr) {

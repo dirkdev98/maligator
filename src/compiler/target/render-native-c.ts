@@ -8348,7 +8348,7 @@ function emitInstruction(
 				? "mal_vm_property_try_load_length_static"
 				: "mal_vm_property_try_load_static";
 			const probe = (): string =>
-				`${context.watchedMathCallee === true ? `mal_vm_watched_own_value_try_load_static(${boxed(instruction.object)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}], &__v_${ip}) || ` : ""}${probeHelper}(vm, ${boxed(instruction.object)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}], &__v_${ip})`;
+				`${context.watchedMathCallee === true ? `mal_vm_watched_own_value_try_load_static(vm, ${boxed(instruction.object)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}], &__v_${ip}) || ` : ""}${probeHelper}(vm, ${boxed(instruction.object)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}], &__v_${ip})`;
 			const ordinary = (): Array<string> => [
 				`MalValue __v_${ip};`,
 				`if (${probe()}) {`,

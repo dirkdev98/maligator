@@ -1497,6 +1497,9 @@ typedef struct MalWatchedLookupEntry {
     MalValue value;
 } MalWatchedLookupEntry;
 
+/** Every semantic epoch starts here; zero is the exhausted state. */
+#define MAL_SEMANTIC_EPOCH_INITIAL UINT64_C(1)
+
 typedef struct MalSemanticEpochs {
     /** Advanced by every semantic-family invalidation; future re-entry dirty test. */
     u64 activity;
