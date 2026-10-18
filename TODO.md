@@ -467,16 +467,16 @@ iterator cursor is not, by itself, permission to delete its language object.
       check already reduces to one shape compare through the per-VM snapshot of
       the array's source shape.
 
-- [ ] Close the rest of the `JSON.stringify` small-record gap. 1.2M calls on a
+- [ ] Close the rest of the `JSON.stringify` small-record gap. 300k calls on a
       five-field record take 79 ms against Node's 24 now that the output buffer is
       sized from the root and shape and prototype proofs persist across calls. A
       record seen once per call never builds an escaped-key plan; its keys and
       short strings go through `memmove` calls (5% of samples) and numbers through
       `mal_text_buffer_append_number` (6%).
 - [ ] Store private fields in shaped slots. Reads and writes now reach a private
-      field through the symbol's entry hint in the object's overflow table, but a
-      getter/setter pair over `#celsius` still takes 227 ms against Node's 4 for 5M
-      iterations, mostly in the two generic accessor calls per iteration.
+      field through the symbol's entry hint in the object's overflow table, and
+      accessor calls enter compiled getters and setters directly, but a getter/setter
+      pair over `#celsius` still takes 207 ms against Node's 5 for 5M iterations.
 
 - [ ] Keep loop-carried Number accumulators unboxed across field reads. A loop
       such as `sx += p.x; sy += p.y` over records takes about 8 ns per element
