@@ -241,6 +241,11 @@ static bool mal_gc_index_chunk(MalHeap *heap, MalGcChunk *chunk) {
             return false;
         }
         heap->chunk_index = grown;
+        uptr *bases = realloc(heap->chunk_bases, next_capacity * sizeof(uptr));
+        if (bases == nullptr) {
+            return false;
+        }
+        heap->chunk_bases = bases;
         heap->chunk_capacity = next_capacity;
     }
 
@@ -249,7 +254,7 @@ static bool mal_gc_index_chunk(MalHeap *heap, MalGcChunk *chunk) {
     usize high = heap->chunk_count;
     while (low < high) {
         usize middle = low + (high - low) / 2;
-        if ((uptr) heap->chunk_index[middle]->base < base) {
+        if (heap->chunk_bases[middle] < base) {
             low = middle + 1;
         } else {
             high = middle;
@@ -257,7 +262,10 @@ static bool mal_gc_index_chunk(MalHeap *heap, MalGcChunk *chunk) {
     }
     memmove(&heap->chunk_index[low + 1], &heap->chunk_index[low],
         (heap->chunk_count - low) * sizeof(MalGcChunk *));
+    memmove(&heap->chunk_bases[low + 1], &heap->chunk_bases[low],
+        (heap->chunk_count - low) * sizeof(uptr));
     heap->chunk_index[low] = chunk;
+    heap->chunk_bases[low] = base;
     heap->chunk_count++;
     return true;
 }
@@ -574,6 +582,7 @@ void mal_heap_init(MalHeap *heap, usize capacity) {
     heap->chunks = nullptr;
     heap->raw_lookup_chunk = nullptr;
     heap->chunk_index = nullptr;
+    heap->chunk_bases = nullptr;
     heap->chunk_count = 0;
     heap->chunk_capacity = 0;
     heap->large = nullptr;
@@ -644,6 +653,7 @@ void mal_heap_free(MalHeap *heap) {
         chunk = next;
     }
     free(heap->chunk_index);
+    free(heap->chunk_bases);
     MalGcLarge *large = heap->large;
     while (large != nullptr) {
         MalGcLarge *next = large->next;
@@ -661,6 +671,7 @@ void mal_heap_free(MalHeap *heap) {
     heap->chunks = nullptr;
     heap->raw_lookup_chunk = nullptr;
     heap->chunk_index = nullptr;
+    heap->chunk_bases = nullptr;
     heap->chunk_count = 0;
     heap->chunk_capacity = 0;
     heap->large = nullptr;
@@ -950,18 +961,15 @@ static bool mal_gc_ptr_in_chunks(MalHeap *heap, const void *ptr) {
     usize high = heap->chunk_count;
     while (low < high) {
         usize middle = low + (high - low) / 2;
-        if ((uptr) heap->chunk_index[middle]->base <= address) {
+        if (heap->chunk_bases[middle] <= address) {
             low = middle + 1;
         } else {
             high = middle;
         }
     }
-    if (low > 0) {
-        MalGcChunk *chunk = heap->chunk_index[low - 1];
-        if (mal_gc_ptr_in_chunk(chunk, ptr)) {
-            heap->raw_lookup_chunk = chunk;
-            return true;
-        }
+    if (low > 0 && address - heap->chunk_bases[low - 1] < MAL_GC_CHUNK_SIZE) {
+        heap->raw_lookup_chunk = heap->chunk_index[low - 1];
+        return true;
     }
     return false;
 }

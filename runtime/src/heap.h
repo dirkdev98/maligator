@@ -65,8 +65,9 @@ typedef struct MalHeap {
     MalGcChunk *raw_lookup_chunk;
     /** Chunks sorted by base address. Explicit RAW frees use this for an O(log n)
      * ownership fallback when the locality cache misses, instead of walking the
-     * allocation-order list. */
+     * allocation-order list; the search reads the parallel dense base array. */
     MalGcChunk **chunk_index;
+    uptr *chunk_bases;
     usize chunk_count;
     usize chunk_capacity;
     /** Managed large cells; RAW large buffers have separate owner lifetime. */
