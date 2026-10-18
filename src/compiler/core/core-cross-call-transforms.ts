@@ -592,8 +592,8 @@ function inlineTarget(
 			returns.push(fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator)));
 		// The cloned throw inherits the call site's handler, as the call's exception would.
 		else if (kind === "throw") linear = false;
-		else if (kind === "jump" || kind === "branch") {
-			if (kind === "branch") linear = false;
+		else if (kind === "jump" || kind === "branch" || kind === "switch") {
+			if (kind !== "jump") linear = false;
 			const start = fn.kernel.terminatorEdgeStart(terminator);
 			for (let index = 0; index < fn.kernel.terminatorEdgeCount(terminator); index++) {
 				const edge = start + index;
@@ -2586,6 +2586,16 @@ function applyGuardedInline(
 					condition: values.get(terminator.condition)!,
 					consequent: edge(terminator.consequent),
 					alternate: edge(terminator.alternate),
+				});
+			else if (terminator.kind === "switch")
+				editor.setTerminator(destination, {
+					kind: "switch",
+					discriminant: values.get(terminator.discriminant)!,
+					cases: terminator.cases.map((entry) => ({
+						value: entry.value,
+						edge: edge(entry.edge),
+					})),
+					default: edge(terminator.default),
 				});
 			else if (terminator.kind === "throw")
 				editor.setTerminator(destination, {
