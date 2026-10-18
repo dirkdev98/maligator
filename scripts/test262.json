@@ -1,14 +1,14 @@
 {
   "sha": "3655e7464de3d52643ecddd4b5f9f4f3e7f62398",
   "summary": {
-    "FAILED": 927,
-    "PASSED": 52651
+    "FAILED": 922,
+    "PASSED": 52656
   },
   "skips": {},
   "code": {
     "compiledFiles": 94218,
     "functionCount": 2985900,
-    "instructionCount": 109763856
+    "instructionCount": 109799379
   },
   "results": {
     "test/annexB/built-ins/Array/from/iterator-method-emulates-undefined.js": "FAILED",
@@ -13069,7 +13069,7 @@
     "test/staging/sm/Array/redefine-length-frozen-dictionarymode-array.js": "PASSED",
     "test/staging/sm/Array/regress-386030.js": "PASSED",
     "test/staging/sm/Array/regress-619970.js": "PASSED",
-    "test/staging/sm/Array/shift_for_in.js": "FAILED",
+    "test/staging/sm/Array/shift_for_in.js": "PASSED",
     "test/staging/sm/Array/sort-non-function.js": "PASSED",
     "test/staging/sm/Array/sort_proxy.js": "PASSED",
     "test/staging/sm/Array/splice-species-changes-length.js": "PASSED",
@@ -25631,7 +25631,7 @@
     "test/language/statements/for-in/S12.6.4_A14_T2.js": "PASSED",
     "test/language/statements/for-in/S12.6.4_A3.js": "PASSED",
     "test/language/statements/for-in/S12.6.4_A5.js": "PASSED",
-    "test/language/statements/for-in/S12.6.4_A7_T2.js": "FAILED",
+    "test/language/statements/for-in/S12.6.4_A7_T2.js": "PASSED",
     "test/language/statements/for-in/cptn-decl-zero-itr.js": "PASSED",
     "test/language/statements/for-in/cptn-expr-zero-itr.js": "PASSED",
     "test/language/statements/for-in/decl-const.js": "PASSED",
@@ -26448,7 +26448,7 @@
     "test/staging/explicit-resource-management/disposable-stack-re-entry.js": "PASSED",
     "test/staging/explicit-resource-management/using-with-null-or-undefined.js": "PASSED",
     "test/staging/set-is-subset-table-transition.js": "PASSED",
-    "test/staging/sm/Array/array-length-set-during-for-in.js": "FAILED",
+    "test/staging/sm/Array/array-length-set-during-for-in.js": "PASSED",
     "test/staging/sm/Array/change-array-by-copy-errors-from-correct-realm.js": "PASSED",
     "test/staging/sm/Array/fill.js": "PASSED",
     "test/staging/sm/Array/for_of_4.js": "PASSED",
@@ -26467,7 +26467,7 @@
     "test/staging/sm/Array/sort-01.js": "PASSED",
     "test/staging/sm/Array/sort-typedarray-with-own-length.js": "PASSED",
     "test/staging/sm/Array/sort_small.js": "PASSED",
-    "test/staging/sm/Array/splice-suppresses-unvisited-indexes.js": "FAILED",
+    "test/staging/sm/Array/splice-suppresses-unvisited-indexes.js": "PASSED",
     "test/staging/sm/Array/toLocaleString.js": "PASSED",
     "test/staging/sm/Array/unscopables.js": "PASSED",
     "test/staging/sm/Array/with-dense.js": "PASSED",
@@ -53258,7 +53258,7 @@
     "test/staging/sm/Array/splice-return-array-elements-defined-not-set.js": "PASSED",
     "test/staging/sm/Array/toLocaleString-01.js": "PASSED",
     "test/staging/sm/Array/toSpliced.js": "PASSED",
-    "test/staging/sm/Array/unshift-with-enumeration.js": "FAILED",
+    "test/staging/sm/Array/unshift-with-enumeration.js": "PASSED",
     "test/staging/sm/ArrayBuffer/CloneArrayBuffer.js": "PASSED",
     "test/staging/sm/ArrayBuffer/slice-species.js": "PASSED",
     "test/staging/sm/AsyncGenerators/for-await-of-error.js": "PASSED",
