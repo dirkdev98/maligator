@@ -99,6 +99,8 @@ MalTableLookup mal_table_lookup(const MalTable *table, MalKey key);
 
 // Private fields and compiler-managed brand markers always carry inline data values.
 bool mal_table_get_private_value(const MalTable *table, MalSymbol *symbol, MalValue *value);
+/** The value cell of an installed private data element, refreshing the symbol's hint; null otherwise. */
+MalValue *mal_table_private_value_slot(MalTable *table, MalSymbol *symbol);
 
 /**
  * Insert a new entry for key, or return the existing live entry if present.

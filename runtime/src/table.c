@@ -378,6 +378,20 @@ bool mal_table_get_private_value(const MalTable *table, MalSymbol *symbol, MalVa
     return true;
 }
 
+MalValue *mal_table_private_value_slot(MalTable *table, MalSymbol *symbol) {
+    if (table == nullptr) return nullptr;
+    MalValue key = mal_value_from_symbol(symbol);
+    MalTableEntry *entry = (MalTableEntry *) mal_table_handle_row(table, (const void *) (uptr) symbol->private_entry_hint);
+    if (entry == nullptr ||
+        (entry->key & MAL_TABLE_IDENTITY_MASK) != (MAL_TABLE_SYMBOL | (key & MAKS_PTR))) {
+        MalTableLookup lookup = mal_table_lookup(table, (MalKey) {.kind = MAL_KEY_SYMBOL, .value = key});
+        if (!lookup.present) return nullptr;
+        symbol->private_entry_hint = (u32) (uptr) lookup.entry;
+        entry = &table->entries[mal_table_handle_index(lookup.entry)];
+    }
+    return (entry->key & MAL_TABLE_OWNS_DATA) != 0 ? nullptr : &entry->payload.value;
+}
+
 MalTableLookup mal_table_lookup(const MalTable *table, MalKey key) {
     u64 encoded = mal_table_encode_key(key);
     MalPerfTableStats *stats = mal_perf_stats_enabled ? &mal_perf_stats.table : nullptr;

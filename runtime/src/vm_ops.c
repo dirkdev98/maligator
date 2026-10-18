@@ -8717,6 +8717,14 @@ void mal_vm_op_store_private(MalVm *vm, MalValue object_value, MalValue key_valu
     }
 
     MalObject *object = mal_value_to_object(object_value);
+    MalValue *field = mal_table_private_value_slot(
+        mal_object_overflow(object), mal_value_to_symbol(key_value));
+    if (field != nullptr) {
+        mal_gc_write_barrier(*field);
+        *field = value;
+        mal_gc_card(&object->header, value);
+        return;
+    }
     MalKey key = {.kind = MAL_KEY_SYMBOL, .value = key_value};
     MalPropertyLookup lookup = mal_object_get_own(object, key);
     if (!lookup.present) {

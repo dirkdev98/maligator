@@ -459,10 +459,10 @@ iterator cursor is not, by itself, permission to delete its language object.
       rebuilds and frees the escaped-key plan for the record's shape, and caching
       the prototype `toJSON` proof across calls changed nothing. Plans depend only
       on the immortal shape, so a bounded per-VM cache could keep them.
-- [ ] Store private fields in shaped slots. A getter/setter pair over `#celsius`
-      still upserts and looks up the field in the object's overflow table on every
-      access, after inherited setters gained a cache row; the remaining accessor
-      loop takes 275 ms against Node's 4 for 5M iterations.
+- [ ] Store private fields in shaped slots. Reads and writes now reach a private
+      field through the symbol's entry hint in the object's overflow table, but a
+      getter/setter pair over `#celsius` still takes 227 ms against Node's 4 for 5M
+      iterations, mostly in the two generic accessor calls per iteration.
 
 - [ ] Keep loop-carried Number accumulators unboxed across field reads. A loop
       such as `sx += p.x; sy += p.y` over records takes about 8 ns per element
