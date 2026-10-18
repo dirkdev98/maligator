@@ -460,12 +460,12 @@ iterator cursor is not, by itself, permission to delete its language object.
       steps, 4 keyed loads, 1 static load), so typed-array or property access
       inside such a region needs a consumer outside the compiler first.
 
-- [ ] Make the per-key for-in presence check one compare. `forInHas` rescans the
-      receiver's shape for every key, about 2 ns per key on a five-key object (for-in
-      summing `key.length` went from 9.4 to 11.4 ns per key). A receiver whose shape
-      is unchanged since `forInKeys` still has every collected key, but the bytecode
-      has no per-loop state to hold that shape; a dedicated for-in step op with its
-      own cursor would also drop the generic array-iterator step.
+- [ ] Step for-in keys without allocating and iterating a key array. A for-in
+      over a five-field record takes about 10.7 ns per key, against well under one
+      in Node, which reuses a per-shape key cache. Each loop allocates a fresh key
+      array and walks it through the generic array-iterator step; the presence
+      check already reduces to one shape compare through the per-VM snapshot of
+      the array's source shape.
 
 - [ ] Close the rest of the `JSON.stringify` small-record gap. 1.2M calls on a
       five-field record take 79 ms against Node's 24 now that the output buffer is

@@ -7255,12 +7255,25 @@ static bool mal_for_in_own_keys_suffice(MalHeap *heap, MalObject *object) {
     return true;
 }
 
+static MalValue mal_for_in_collect_keys(MalVm *vm, MalValue source, const MalShape **snapshot);
+
+MalValue mal_for_in_keys(MalVm *vm, MalValue source) {
+    const MalShape *snapshot = nullptr;
+    MalValue keys = mal_for_in_collect_keys(vm, source, &snapshot);
+    // Every key array records an entry, which also retires a stale one at its address.
+    MalForInSnapshot *entry = mal_for_in_snapshot_entry(vm, keys);
+    entry->keys = mal_value_to_heap(keys);
+    entry->shape = snapshot;
+    return keys;
+}
+
 // Build the for-in enumeration key array for `source` (EnumerateObjectProperties):
 // the enumerable string keys reachable on the prototype chain, each visited once
-// with nearer keys shadowing farther ones. Returns the result array. On a
-// proxy-trap exception vm->completion is set to THROW and the partially-built
-// array is returned; callers must check the completion before using the result.
-MalValue mal_for_in_keys(MalVm *vm, MalValue source) {
+// with nearer keys shadowing farther ones. Returns the result array, and through
+// `snapshot` the shape that alone supplied every key. On a proxy-trap exception
+// vm->completion is set to THROW and the partially-built array is returned;
+// callers must check the completion before using the result.
+static MalValue mal_for_in_collect_keys(MalVm *vm, MalValue source, const MalShape **snapshot) {
     // Shaped storage holds string and symbol keys only, in insertion order, so a
     // plain object without overflow has its whole for-in result in its shape.
     if (mal_value_is_heap_type(source, MAL_HEAP_OBJECT) &&
@@ -7276,6 +7289,7 @@ MalValue mal_for_in_keys(MalVm *vm, MalValue source) {
                 keys[count++] = prop->key;
             }
         }
+        *snapshot = shape;
         return mal_value_from_array_object(mal_array_object_new_from_values(
             &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]),
             keys, count));
@@ -7503,10 +7517,11 @@ bool mal_for_in_has_slow(MalVm *vm, MalValue source, MalValue key_value) {
 }
 
 void mal_op_for_in_has(MalCallable *callable, const MalInstruction *instruction) {
-    bool present = mal_for_in_has(
-        callable->vm,
-        callable->registers[instruction->as.for_in_has.object],
-        callable->registers[instruction->as.for_in_has.key]);
+    MalValue source = callable->registers[instruction->as.for_in_has.object];
+    bool present =
+        mal_for_in_snapshot_holds(
+            callable->vm, source, callable->registers[instruction->as.for_in_has.keys]) ||
+        mal_for_in_has(callable->vm, source, callable->registers[instruction->as.for_in_has.key]);
     if (callable->vm->completion.kind != MAL_COMPLETION_THROW) {
         callable->registers[instruction->as.for_in_has.dst] = mal_value_new_boolean(present);
     }

@@ -8741,7 +8741,7 @@ function emitInstruction(
 					: `mal_value_new_boolean(${present})`;
 			// A proxy on the prototype chain can trap HasProperty and throw.
 			return [
-				`if (mal_vm_shape_has_own_key(vm, ${operands})) {`,
+				`if (mal_for_in_snapshot_holds(vm, ${boxed(instruction.object)}, ${boxed(instruction.keys)}) || mal_vm_shape_has_own_key(vm, ${operands})) {`,
 				`  r${instruction.dst} = ${result("true")};`,
 				`} else {`,
 				...(context.incomingRootPublication ?? []).map((line) => `  ${line}`),

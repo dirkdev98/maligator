@@ -1169,6 +1169,7 @@ export type BytecodeInstruction =
 			dst: number;
 			object: number;
 			key: number;
+			keys: number;
 	  }
 	| {
 			opcode: "CALL_SPREAD";
@@ -4312,6 +4313,7 @@ function lowerInstructionToBytecodeInstruction(
 				dst: instruction.registers[0],
 				object: instruction.registers[1],
 				key: instruction.registers[2],
+				keys: instruction.registers[3],
 			};
 		case "callSpread":
 			return {

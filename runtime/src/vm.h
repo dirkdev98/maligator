@@ -494,9 +494,9 @@ typedef struct MalInstruction {
             i32 dst, source;
         } for_in_keys;
 
-        /** Whether for-in key `key` is still a property of `object`, as a boolean. */
+        /** Whether for-in key `key` from array `keys` is still a property of `object`. */
         struct {
-            i32 dst, object, key;
+            i32 dst, object, key, keys;
         } for_in_has;
 
         /**
@@ -1497,6 +1497,11 @@ typedef struct MalWatchedLookupEntry {
     MalValue value;
 } MalWatchedLookupEntry;
 
+typedef struct MalForInSnapshot {
+    const void *keys;
+    const struct MalShape *shape;
+} MalForInSnapshot;
+
 /** Every semantic epoch starts here; zero is the exhausted state. */
 #define MAL_SEMANTIC_EPOCH_INITIAL UINT64_C(1)
 
@@ -1993,6 +1998,12 @@ typedef struct MalVm {
 
     /** Tail-only semantic versions: do not perturb established hot VM offsets. */
     MalSemanticEpochs semantic_epochs;
+    /**
+     * For-in key arrays built from one plain object's own shape, by array address.
+     * Every key array overwrites its slot when created, so a stale entry for a
+     * collected array cannot match a later key array at the same address.
+     */
+    MalForInSnapshot for_in_snapshots[4];
 } MalVm;
 
 /** Every engine heap is the unique inline heap of one MalVm. */

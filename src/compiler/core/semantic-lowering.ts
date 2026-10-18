@@ -8009,7 +8009,7 @@ function compileForInOfLoop(
 		});
 		const present = nextCoreVariable(fn);
 		fn.blocks[filterIdx]!.emitter.emit(
-			{ type: "forInHas", registers: [present, forInSource, valueRegister] },
+			{ type: "forInHas", registers: [present, forInSource, valueRegister, iterable] },
 			{ type: "jumpIf", registers: [present], blocks: [bindIdx] },
 			{ type: "jump", blocks: [headerIdx] },
 		);

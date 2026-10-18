@@ -691,7 +691,7 @@ const INPUT_ARITIES = {
 	envCopy: [0, 0],
 	envPop: [0, 0],
 	envPush: [0, 0],
-	forInHas: [2, 2],
+	forInHas: [3, 3],
 	forInKeys: [1, 1],
 	generatorStart: [0, 0],
 	getAsyncIterator: [1, 1],

@@ -3807,6 +3807,19 @@ static inline bool mal_vm_shape_has_own_key(const MalVm *vm, MalValue object, Ma
     return entry->shape == shape && entry->key == key;
 }
 
+static inline MalForInSnapshot *mal_for_in_snapshot_entry(MalVm *vm, MalValue keys) {
+    return &vm->for_in_snapshots[((uptr) mal_value_to_heap(keys) >> 4) % countof(vm->for_in_snapshots)];
+}
+
+/** Whether `source` keeps the shape that every key of the for-in array `keys` came from. */
+static inline bool mal_for_in_snapshot_holds(const MalVm *vm, MalValue source, MalValue keys) {
+    const MalForInSnapshot *entry =
+        &vm->for_in_snapshots[((uptr) mal_value_to_heap(keys) >> 4) % countof(vm->for_in_snapshots)];
+    return entry->keys == mal_value_to_heap(keys) && entry->shape != nullptr &&
+        mal_value_is_heap_type(source, MAL_HEAP_OBJECT) &&
+        ((const MalObject *) mal_value_to_heap(source))->shape == entry->shape;
+}
+
 /**
  * Whether a collected for-in key is still a property of `source` when its turn
  * comes; a key deleted earlier in the enumeration is skipped. A trap on a proxy

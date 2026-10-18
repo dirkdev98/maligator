@@ -717,9 +717,10 @@ type CompilerOperation =
 	| {
 			type: "forInHas";
 
-			// [destination, source, key] — whether a collected for-in key is still
-			// a property of source, so keys deleted before their turn are skipped.
-			registers: [number, number, number];
+			// [destination, source, key, keys] — whether a key from the forInKeys
+			// array is still a property of source, so keys deleted before their turn
+			// are skipped.
+			registers: [number, number, number, number];
 	  }
 	| {
 			// Generator prologue: suspend the activation and return a generator

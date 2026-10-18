@@ -40,7 +40,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Runtime wires are hard cut-overs: stale cached buffers must rebuild.
-export const WIRE_VERSION = 77;
+export const WIRE_VERSION = 78;
 
 /** Canonical wire tags generated into the C runtime from the same registry. */
 export const WIRE_OPCODES = BYTECODE_OPERATIONS;
@@ -1064,12 +1064,17 @@ function writeInstructionOperands(w: Writer, i: BytecodeInstruction): void {
 			w.i32(i.src);
 			w.i32(i.index);
 			return;
+		case "FOR_IN_HAS":
+			w.i32(i.dst);
+			w.i32(i.object);
+			w.i32(i.key);
+			w.i32(i.keys);
+			return;
 		case "LOAD_PROPERTY":
 		case "DELETE_PROPERTY":
 		case "TO_PROPERTY_KEY":
 		case "LOAD_PRIVATE":
 		case "HAS_PRIVATE":
-		case "FOR_IN_HAS":
 			w.i32(i.dst);
 			w.i32(i.object);
 			w.i32(i.key);
@@ -2119,8 +2124,9 @@ function readInstructionOperands(r: Reader): BytecodeInstruction {
 			};
 		}
 		case "HAS_PRIVATE":
-		case "FOR_IN_HAS":
 			return { opcode, dst: r.i32(), object: r.i32(), key: r.i32() };
+		case "FOR_IN_HAS":
+			return { opcode, dst: r.i32(), object: r.i32(), key: r.i32(), keys: r.i32() };
 		case "STORE_PROPERTY":
 			return {
 				opcode,

@@ -2926,7 +2926,7 @@ function emitInstruction(instruction: BytecodeInstruction, dataOffset?: number) 
 		case "FOR_IN_KEYS":
 			return `{ .opcode = MAL_OP_FOR_IN_KEYS, .as.for_in_keys = { .dst = ${instruction.dst}, .source = ${instruction.source} } }`;
 		case "FOR_IN_HAS":
-			return `{ .opcode = MAL_OP_FOR_IN_HAS, .as.for_in_has = { .dst = ${instruction.dst}, .object = ${instruction.object}, .key = ${instruction.key} } }`;
+			return `{ .opcode = MAL_OP_FOR_IN_HAS, .as.for_in_has = { .dst = ${instruction.dst}, .object = ${instruction.object}, .key = ${instruction.key}, .keys = ${instruction.keys} } }`;
 		case "CALL_SPREAD":
 			return `{ .opcode = MAL_OP_CALL_SPREAD, .as.call_spread = { .dst = ${instruction.dst}, .callee = ${instruction.callee}, .this_value = ${instruction.thisValue}, .arguments_array = ${instruction.argumentsArray} } }`;
 		case "CALL_REST_ARGUMENTS":
