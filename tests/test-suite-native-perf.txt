@@ -1,6 +1,7 @@
 # Files using the default internal native feature profile with MAL_PERF_STATS=1.
 # Prepare this shared archive before timed hooks, alongside the ordinary archive.
 tests/native/arguments-static.test.ts
+tests/native/array-deque-direct.test.ts
 tests/native/array-push-direct.test.ts
 tests/native/array-values-deferred-iterator.test.ts
 tests/native/async-generator-direct-promise.test.ts
