@@ -198,12 +198,29 @@ describe("native number record regions", () => {
 		);
 	});
 
-	it("leaves a loop that revisits the record to the generic path", () => {
+	it("admits a loop body once per iteration without claiming the back edge", () => {
 		const image = compile(`
 			for (let i = 0; i < 4; i++) record.a = record.a + record.b;
 			return record.a;
 		`);
-		expect(regions(image)).toEqual([]);
+		const backEdges = image.native.functions[1]!.body.instructions.flatMap(
+			(instruction, ip) =>
+				(instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF") &&
+				instruction.targetIp <= ip
+					? [{ ip, target: instruction.targetIp }]
+					: [],
+		);
+		expect(backEdges.length).toBeGreaterThan(0);
+		const [plan] = regions(image);
+		expect(fieldNames(image, plan!)).toEqual(["a=", "b"]);
+		for (const { ip, target } of backEdges) {
+			expect(plan!.claimedIps).not.toContain(ip);
+			expect(plan!.claimedIps).not.toContain(target);
+		}
+	});
+
+	it("keeps two-field reads outside a loop on the projected path", () => {
+		expect(regions(compile("return record.a * 2 + record.b;"))).toEqual([]);
 	});
 
 	it("admits a numeric scale as a guarded input", () => {

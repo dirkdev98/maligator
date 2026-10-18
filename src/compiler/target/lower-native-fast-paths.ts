@@ -2,6 +2,7 @@ import {
 	COMPILER_VALUE_KIND_NUMBER,
 	compilerBuiltinInputKindsAreValid,
 } from "../shared/compiler-value-kinds.ts";
+import { bytecodeLoopInstructions } from "./bytecode-loops.ts";
 import { selectNativeStringTransform } from "./lower-native-string-transforms.ts";
 import type { NativeStringTransformPlan } from "./lower-native-string-transforms.ts";
 import { selectNativeArrayInitializations } from "./native-array-initialization.ts";
@@ -1236,6 +1237,7 @@ function registersLiveAt(
 function numberRecordFields(
 	fn: BytecodeFunction,
 	order: ReadonlyArray<number>,
+	inLoop: boolean,
 ): NativeNumberRecordRegionPlan["fields"] | undefined {
 	const fields = new Map<
 		number,
@@ -1262,7 +1264,8 @@ function numberRecordFields(
 				});
 		}
 	}
-	if (accesses < 4 || fields.size > NUMBER_RECORD_FIELD_LIMIT) return undefined;
+	if (accesses < (inLoop ? 2 : 4) || fields.size > NUMBER_RECORD_FIELD_LIMIT)
+		return undefined;
 	if (![...fields.values()].some((field) => field.stored)) {
 		const builtin = order.some(
 			(ip) => nativeNumericBuiltinInstruction(fn.instructions[ip]!) !== undefined,
@@ -1275,7 +1278,7 @@ function numberRecordFields(
 			);
 		});
 		// Existing pair/triple/quad projections already cover small linear read-only arithmetic.
-		if (!builtin && (accesses <= 4 || !arithmetic)) return undefined;
+		if (!builtin && ((!inLoop && accesses <= 4) || !arithmetic)) return undefined;
 	}
 	return Object.freeze([...fields.values()]);
 }
@@ -1346,6 +1349,7 @@ function lowerNumberRecordRegion(
 	representations: ReadonlyArray<VmRegisterRepresentation>,
 	body: NativeBodyFacts,
 	conflicts: (ip: number) => boolean,
+	inLoop: boolean,
 ): NativeNumberRecordRegionPlan | undefined {
 	const first = fn.instructions[startIp];
 	if (
@@ -1379,7 +1383,8 @@ function lowerNumberRecordRegion(
 	for (const exitIp of [...closure, ...exits]) {
 		if (exitIp === startIp || exitIp >= fn.instructions.length) continue;
 		const order = numberRecordOrder(fn, startIp, exitIp, (ip) => closure.has(ip));
-		const fields = order === undefined ? undefined : numberRecordFields(fn, order);
+		const fields =
+			order === undefined ? undefined : numberRecordFields(fn, order, inLoop);
 		if (order !== undefined && fields !== undefined)
 			candidates.push({ order, exitIp, fields });
 	}
@@ -2866,6 +2871,7 @@ export function selectNativeFastPaths(
 		!fn.isAsync &&
 		fn.profileSiteIds === undefined
 	) {
+		const loops = bytecodeLoopInstructions(fn);
 		for (const ip of body.staticPropertyLoadIps) {
 			if (unavailable(ip)) continue;
 			const plan = lowerNumberRecordRegion(
@@ -2884,6 +2890,7 @@ export function selectNativeFastPaths(
 							))
 					);
 				},
+				loops[ip] === 1,
 			);
 			if (plan === undefined) continue;
 			const members = new Set(plan.claimedIps);
