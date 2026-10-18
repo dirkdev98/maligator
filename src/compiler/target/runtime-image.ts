@@ -1165,6 +1165,12 @@ export type BytecodeInstruction =
 			source: number;
 	  }
 	| {
+			opcode: "FOR_IN_HAS";
+			dst: number;
+			object: number;
+			key: number;
+	  }
+	| {
 			opcode: "CALL_SPREAD";
 			dst: number;
 			callee: number;
@@ -4299,6 +4305,13 @@ function lowerInstructionToBytecodeInstruction(
 				opcode: "FOR_IN_KEYS",
 				dst: instruction.registers[0],
 				source: instruction.registers[1],
+			};
+		case "forInHas":
+			return {
+				opcode: "FOR_IN_HAS",
+				dst: instruction.registers[0],
+				object: instruction.registers[1],
+				key: instruction.registers[2],
 			};
 		case "callSpread":
 			return {

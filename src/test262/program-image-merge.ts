@@ -522,6 +522,7 @@ function cloneInstruction(
 		case "ITERATOR_STEP":
 		case "ITERATOR_CLOSE":
 		case "FOR_IN_KEYS":
+		case "FOR_IN_HAS":
 		case "MERGE_DATA_PROPERTIES":
 		case "DELETE_PROPERTY":
 		case "DEFINE_ACCESSOR":

@@ -3772,6 +3772,35 @@ void mal_op_for_in_keys(MalCallable *callable, const MalInstruction *instruction
 // compiled code. On a proxy-trap exception sets vm->completion (caller checks).
 MalValue mal_for_in_keys(MalVm *vm, MalValue source);
 
+void mal_op_for_in_has(MalCallable *callable, const MalInstruction *instruction);
+
+bool mal_for_in_has_slow(MalVm *vm, MalValue source, MalValue key);
+
+/** The noncollecting part of mal_for_in_has: a key still in a plain object's shape. */
+static inline bool mal_for_in_has_fast(const MalVm *vm, MalValue source, MalValue key) {
+    if (!mal_value_is_heap_type(source, MAL_HEAP_OBJECT)) return false;
+    const MalShape *shape = ((const MalObject *) mal_value_to_heap(source))->shape;
+    // Shape keys are atoms, as are the keys collected from them.
+    if (shape->inline_count <= 8) {
+        for (u32 i = 0; i < shape->inline_count; i++) {
+            if (shape->props[i].key == key) return true;
+        }
+        return false;
+    }
+    if (vm->property_stub == nullptr) return false;
+    const MalPropertyStubEntry *entry = &vm->property_stub[mal_stub_hash(shape, key)];
+    return entry->shape == shape && entry->key == key;
+}
+
+/**
+ * Whether a collected for-in key is still a property of `source` when its turn
+ * comes; a key deleted earlier in the enumeration is skipped. A trap on a proxy
+ * prototype can throw, which sets vm->completion (caller checks).
+ */
+static inline bool mal_for_in_has(MalVm *vm, MalValue source, MalValue key) {
+    return mal_for_in_has_fast(vm, source, key) || mal_for_in_has_slow(vm, source, key);
+}
+
 void mal_op_delete_property(MalCallable *callable, const MalInstruction *instruction);
 
 void mal_op_define_accessor(MalCallable *callable, const MalInstruction *instruction);

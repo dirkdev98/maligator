@@ -715,6 +715,13 @@ type CompilerOperation =
 			registers: [number, number];
 	  }
 	| {
+			type: "forInHas";
+
+			// [destination, source, key] — whether a collected for-in key is still
+			// a property of source, so keys deleted before their turn are skipped.
+			registers: [number, number, number];
+	  }
+	| {
 			// Generator prologue: suspend the activation and return a generator
 			// object to the caller. No operands; uses the frame's return target.
 			type: "generatorStart";

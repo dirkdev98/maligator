@@ -7802,8 +7802,9 @@ function compileForOfStatement(
 /**
  * for-in reuses the iterator-driven loop: a runtime op collects the source's
  * enumerable property keys into an array, which is then iterated like any other
- * iterable. for-in over null/undefined yields an empty key list (no iteration)
- * rather than throwing, which the key-collection op handles.
+ * iterable, skipping keys deleted before their turn. for-in over null/undefined
+ * yields an empty key list (no iteration) rather than throwing, which the
+ * key-collection op handles.
  */
 function compileForInStatement(
 	program: CoreFrontendContext,
@@ -7849,6 +7850,7 @@ function compileForInStatement(
 		statement.body,
 		perIter,
 		lexicalHead && perIter !== null,
+		source,
 	);
 }
 
@@ -7939,6 +7941,7 @@ function compileForInOfLoop(
 	body: ESTree.Statement,
 	perIter: { scopeId: number; slotCount: number } | null,
 	perIterEnvEntered: boolean,
+	forInSource?: number,
 ) {
 	const labels = takePendingLabels(fn);
 	const iteratorRegister = nextCoreVariable(fn);
@@ -7993,10 +7996,24 @@ function compileForInOfLoop(
 	// iterator and propagates. The step itself stays unprotected, as specced.
 	const bindBlock: CoreFrontendBlock = { emitter: unboundCoreEmitter };
 	const bindIdx = fn.blocks.push(bindBlock) - 1;
-	header.emitter.emit({
-		type: "jump",
-		blocks: [bindIdx],
-	});
+	if (forInSource === undefined) {
+		header.emitter.emit({
+			type: "jump",
+			blocks: [bindIdx],
+		});
+	} else {
+		const filterIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+		header.emitter.emit({
+			type: "jump",
+			blocks: [filterIdx],
+		});
+		const present = nextCoreVariable(fn);
+		fn.blocks[filterIdx]!.emitter.emit(
+			{ type: "forInHas", registers: [present, forInSource, valueRegister] },
+			{ type: "jumpIf", registers: [present], blocks: [bindIdx] },
+			{ type: "jump", blocks: [headerIdx] },
+		);
+	}
 
 	// A fresh per-iteration env; continue re-enters via the header, so this re-runs
 	// each iteration. The head pattern and body TDZ initialization overwrite copied

@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 76u
+#define WIRE_VERSION 77u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 typedef enum WireOp {
@@ -1185,6 +1185,12 @@ static void rd_instruction_operands(Rd *r, MalInstruction *o, I32Builder *side_d
             o->as.for_in_keys.dst = rd_i32(r);
             o->as.for_in_keys.source = rd_i32(r);
             return;
+        case WIRE_FOR_IN_HAS:
+            o->opcode = MAL_OP_FOR_IN_HAS;
+            o->as.for_in_has.dst = rd_i32(r);
+            o->as.for_in_has.object = rd_i32(r);
+            o->as.for_in_has.key = rd_i32(r);
+            return;
         case WIRE_CALL_SPREAD:
             o->opcode = MAL_OP_CALL_SPREAD;
             o->as.call_spread.dst = rd_i32(r);
@@ -1648,6 +1654,7 @@ static bool mal_loaded_instruction_writes_register(
         MAL_WRITES_DST(MAL_OP_LOAD_SUPER_PROPERTY, load_super_property);
         MAL_WRITES_DST(MAL_OP_LOAD_PROTOTYPE, load_prototype);
         MAL_WRITES_DST(MAL_OP_FOR_IN_KEYS, for_in_keys);
+        MAL_WRITES_DST(MAL_OP_FOR_IN_HAS, for_in_has);
         MAL_WRITES_DST(MAL_OP_CALL_SPREAD, call_spread);
         MAL_WRITES_DST(MAL_OP_CALL_SPREAD_ITERABLE, call_spread_iterable);
         MAL_WRITES_DST(MAL_OP_CALL_REST_ARGUMENTS, call_rest_arguments);

@@ -2891,6 +2891,9 @@ static void mal_vm_run_until_frame_count(
             case MAL_OP_FOR_IN_KEYS:
                 MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_for_in_keys(frame, instruction));
                 break;
+            case MAL_OP_FOR_IN_HAS:
+                MAL_VM_INTERPRETER_SYNCHRONIZED_HELPER(mal_op_for_in_has(frame, instruction));
+                break;
 
             case MAL_OP_GENERATOR_START: {
                 MAL_VM_INTERPRETER_SYNC();

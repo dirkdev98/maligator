@@ -448,11 +448,12 @@ iterator cursor is not, by itself, permission to delete its language object.
       steps, 4 keyed loads, 1 static load), so typed-array or property access
       inside such a region needs a consumer outside the compiler first.
 
-- [ ] Skip for-in keys deleted before they are visited. `mal_for_in_keys` snapshots
-      every key up front and the loop visits each one, so deleting a later key in
-      the body still visits it (Test262 `language/statements/for-in/S12.6.4_A7_T2.js`).
-      Checking HasProperty per step is the spec's shape; a receiver whose shape is
-      unchanged since the snapshot can skip that check.
+- [ ] Make the per-key for-in presence check one compare. `forInHas` rescans the
+      receiver's shape for every key, about 2 ns per key on a five-key object (for-in
+      summing `key.length` went from 9.4 to 11.4 ns per key). A receiver whose shape
+      is unchanged since `forInKeys` still has every collected key, but the bytecode
+      has no per-loop state to hold that shape; a dedicated for-in step op with its
+      own cursor would also drop the generic array-iterator step.
 
 - [ ] Keep `JSON.stringify` plain-path plans across calls. Serializing the same
       small record 300k times takes 105 ms against Node's 24. Each call still

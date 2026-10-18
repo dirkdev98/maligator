@@ -494,6 +494,11 @@ typedef struct MalInstruction {
             i32 dst, source;
         } for_in_keys;
 
+        /** Whether for-in key `key` is still a property of `object`, as a boolean. */
+        struct {
+            i32 dst, object, key;
+        } for_in_has;
+
         /**
          * yield <src>: suspend the generator frame, leaving src as the yielded
          * value. On resume, the sent value lands in value_dst and the resume

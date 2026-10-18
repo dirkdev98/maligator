@@ -75,6 +75,7 @@ export const CORE_OPCODES = [
 	"envCopy",
 	"envPop",
 	"envPush",
+	"forInHas",
 	"forInKeys",
 	"generatorStart",
 	"getAsyncIterator",
@@ -266,6 +267,7 @@ const CALLS_USER_CODE = new Set<CoreOpcode>([
 	"definePrivate",
 	"defineProperty",
 	"deleteProperty",
+	"forInHas",
 	"forInKeys",
 	// GetPrototypeFromConstructor reads the mutable callee.prototype property.
 	"generatorStart",
@@ -689,6 +691,7 @@ const INPUT_ARITIES = {
 	envCopy: [0, 0],
 	envPop: [0, 0],
 	envPush: [0, 0],
+	forInHas: [2, 2],
 	forInKeys: [1, 1],
 	generatorStart: [0, 0],
 	getAsyncIterator: [1, 1],

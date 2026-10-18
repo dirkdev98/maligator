@@ -5136,6 +5136,8 @@ function emitBody(
 			deferredOperatorRoots && (rootPublication?.slots.size ?? 0) === 0;
 		const deferredTdzRoots =
 			deferrableRoots && fn.instructions[ip]!.opcode === "THROW_IF_TDZ";
+		const deferredForInRoots =
+			deferrableRoots && fn.instructions[ip]!.opcode === "FOR_IN_HAS";
 		const iteratorCursorAction = nativeIteratorCursorActionByIp.get(ip);
 		const deferredIteratorRoots =
 			deferrableRoots &&
@@ -5178,6 +5180,7 @@ function emitBody(
 			!deferredStaticPropertyWriteRoots &&
 			!deferredOperatorRoots &&
 			!deferredTdzRoots &&
+			!deferredForInRoots &&
 			!deferredIteratorRoots &&
 			!deferredCharCodeAtRoots &&
 			(effects.collection || effects.reentry);
@@ -5322,6 +5325,7 @@ function emitBody(
 			deferredStaticPropertyWriteRoots ||
 			deferredOperatorRoots ||
 			deferredTdzRoots ||
+			deferredForInRoots ||
 			deferredIteratorRoots ||
 			deferredCharCodeAtRoots
 				? operatorInactiveRootMask === undefined
@@ -8729,6 +8733,23 @@ function emitInstruction(
 				`r${instruction.dst} = mal_for_in_keys(vm, ${boxed(instruction.source)});`,
 				throwCheck(),
 			];
+		case "FOR_IN_HAS": {
+			const operands = `${boxed(instruction.object)}, ${boxed(instruction.key)}`;
+			const result = (present: string): string =>
+				reps[instruction.dst] === "boolean"
+					? present
+					: `mal_value_new_boolean(${present})`;
+			// A proxy on the prototype chain can trap HasProperty and throw.
+			return [
+				`if (mal_for_in_has_fast(vm, ${operands})) {`,
+				`  r${instruction.dst} = ${result("true")};`,
+				`} else {`,
+				...(context.incomingRootPublication ?? []).map((line) => `  ${line}`),
+				`  r${instruction.dst} = ${result(`mal_for_in_has_slow(vm, ${operands})`)};`,
+				`  ${throwCheck()}`,
+				`}`,
+			];
+		}
 		case "LOAD_PRIMORDIAL":
 			return [
 				`r${instruction.dst} = mal_vm_load_primordial(vm, ${instruction.nodeIndex});`,

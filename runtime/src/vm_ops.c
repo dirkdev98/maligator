@@ -7458,6 +7458,40 @@ MalValue mal_for_in_keys(MalVm *vm, MalValue source) {
     return mal_value_from_array_object(result);
 }
 
+bool mal_for_in_has_slow(MalVm *vm, MalValue source, MalValue key_value) {
+    // A proxy answered its traps when the keys were collected.
+    if (mal_value_is_proxy_object(source)) return true;
+    MalKey key;
+    if (!mal_vm_to_property_query(vm, key_value, &key)) return false;
+    if (mal_value_is_heap_type(source, MAL_HEAP_ARRAY_OBJECT) && key.kind == MAL_KEY_INDEX) {
+        MalValue element;
+        if (mal_array_object_dense_get(
+                (const MalArrayObject *) mal_value_to_heap(source), mal_key_index_value(key),
+                &element)) {
+            return true;
+        }
+    }
+    if (mal_value_is_object(source)) return mal_vm_has_property(vm, source, key);
+    // A primitive's own keys are its immutable string indices; the rest are inherited.
+    if (mal_value_is_string(source) && key.kind == MAL_KEY_INDEX &&
+        mal_key_index_value(key) < mal_string_length(mal_value_to_string(source))) {
+        return true;
+    }
+    u8 prim_kind = mal_vm_primitive_method_kind(source);
+    return prim_kind != 0 &&
+        mal_vm_has_property(vm, vm->intrinsics[mal_vm_primitive_method_proto_slot(prim_kind)], key);
+}
+
+void mal_op_for_in_has(MalCallable *callable, const MalInstruction *instruction) {
+    bool present = mal_for_in_has(
+        callable->vm,
+        callable->registers[instruction->as.for_in_has.object],
+        callable->registers[instruction->as.for_in_has.key]);
+    if (callable->vm->completion.kind != MAL_COMPLETION_THROW) {
+        callable->registers[instruction->as.for_in_has.dst] = mal_value_new_boolean(present);
+    }
+}
+
 void mal_op_for_in_keys(MalCallable *callable, const MalInstruction *instruction) {
     callable->registers[instruction->as.for_in_keys.dst] =
         mal_for_in_keys(callable->vm, callable->registers[instruction->as.for_in_keys.source]);
