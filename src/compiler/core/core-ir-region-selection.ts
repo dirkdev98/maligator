@@ -1318,6 +1318,7 @@ function directEntryOpportunities(
 		);
 	};
 	const callsByTarget = new Map<CoreFunctionId, Array<CoreDirectEntryCallSite>>();
+	const singleTargetGuards = new Set<CoreDirectEntryCallSite>();
 	const methods = new Map<number, Array<CoreFunctionId>>();
 	for (const target of live) {
 		const fn = program.function(target);
@@ -1418,15 +1419,15 @@ function directEntryOpportunities(
 			for (const target of targets) {
 				if (!live.has(target)) continue;
 				const calls = callsByTarget.get(target) ?? [];
-				calls.push(
-					Object.freeze({
-						caller,
-						instruction: site.instruction,
-						...(speculative || site.open || targets.length > 1
-							? { guarded: true as const }
-							: {}),
-					}),
-				);
+				const call: CoreDirectEntryCallSite = Object.freeze({
+					caller,
+					instruction: site.instruction,
+					...(speculative || site.open || targets.length > 1
+						? { guarded: true as const }
+						: {}),
+				});
+				if (call.guarded === true && targets.length === 1) singleTargetGuards.add(call);
+				calls.push(call);
 				callsByTarget.set(target, calls);
 			}
 		}
@@ -1510,9 +1511,12 @@ function directEntryOpportunities(
 				let argumentRepresentations: ReadonlyArray<CorePlanRepresentation> | undefined;
 				let constantBooleans: CoreDirectEntryPlan["constantBooleans"];
 				let operatorInputs: CoreDirectEntryPlan["operatorInputs"];
+				// A single guarded target compares the callee's function index before entering;
+				// only field entries may share one site between several targets.
 				let selectedCalls = callSites.filter(
 					(call) =>
 						call.numericSortCallback !== undefined ||
+						singleTargetGuards.has(call) ||
 						summaries.targets.site(call.caller, call.instruction)?.targets.functions
 							.length === 1,
 				);
