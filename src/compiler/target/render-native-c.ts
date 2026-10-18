@@ -12099,8 +12099,10 @@ function emitInstruction(
 		case "STORE_PRIVATE":
 			// PrivateSet; the name must already be installed, else throws.
 			return [
-				`mal_vm_op_store_private(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)});`,
-				throwCheck(),
+				`if (!mal_vm_private_try_store(${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)})) {`,
+				`  mal_vm_op_store_private(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)});`,
+				`  ${throwCheck()}`,
+				`}`,
 			];
 		case "HAS_PRIVATE":
 			// Ergonomic brand check `#x in obj`; a non-object receiver throws.

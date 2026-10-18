@@ -3470,6 +3470,22 @@ static inline bool mal_vm_private_try_load(
     return hit;
 }
 
+/** PrivateSet of an installed private data element through its name's entry hint. */
+static inline bool mal_vm_private_try_store(
+    MalValue object_value, MalValue key_value, MalValue value
+) {
+    if (!mal_value_is_object(object_value)) return false;
+    MalObject *object = mal_value_to_object(object_value);
+    MalTable *table = mal_object_overflow(object);
+    MalValue *field = table == nullptr ? nullptr : mal_table_private_hint_slot(
+        table, key_value, mal_value_to_symbol(key_value)->private_entry_hint);
+    if (field == nullptr) return false;
+    mal_gc_write_barrier(*field);
+    *field = value;
+    mal_gc_card(&object->header, value);
+    return true;
+}
+
 static inline f64 mal_vm_read_service_epoch(MalVm *vm) {
     MAL_PERF_COUNT(accessor_prefix_admissions);
     return vm->service_epoch == 9007199254740991ULL ? NAN : (f64) vm->service_epoch;

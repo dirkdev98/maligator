@@ -2482,6 +2482,10 @@ mal_vm_property_try_load_static_remaining(
     MalVm *vm, MalValue receiver, const MalObject *object,
     MalInlineCache *ic
 ) {
+    // Getter rows run user code, which only the rooted miss path may do.
+    if (ic->mode == MAL_IC_MODE_INHERITED_GETTER) {
+        return (MalStaticPropertyProbeResult) { .hit = false };
+    }
     // A method site that alternates between classes misses its one row for every class
     // but one; the shared stub holds the others, so try it before the unrelated rows.
     if (object != nullptr && ic->mode == MAL_IC_MODE_INHERITED_VALUE && ic->poly_count > 0 &&
@@ -6154,6 +6158,18 @@ static inline bool mal_vm_load_stub_try(
     return true;
 }
 
+// An inherited accessor row's receiver guard: same shape and first prototype, no own overflow.
+static inline bool mal_vm_inherited_accessor_row_holds(
+    MalValue object_value, MalValue key_value, const MalInlineCache *ic
+) {
+    if (key_value != ic->key || !mal_value_is_heap_type(object_value, MAL_HEAP_OBJECT)) {
+        return false;
+    }
+    const MalObject *object = mal_value_to_object(object_value);
+    return object->shape == ic->shape && mal_object_prototype(object) == ic->proto_object[0] &&
+        !mal_object_has_public_overflow(object);
+}
+
 static MalValue mal_vm_op_load_property_ic_keyed(
     MalVm *vm, MalValue object_value, MalKey key, MalInlineCache *ic,
     bool static_probe_missed
@@ -6161,21 +6177,15 @@ static MalValue mal_vm_op_load_property_ic_keyed(
     MAL_PERF_COUNT(ic_load_fallbacks);
     MalValue key_value = key.value;
     // Getters run user code, so their rows hit only here, after the caller rooted its operands.
-    if (ic->mode == MAL_IC_MODE_INHERITED_GETTER && key_value == ic->key &&
-        mal_value_is_heap_type(object_value, MAL_HEAP_OBJECT)) {
-        const MalObject *object = mal_value_to_object(object_value);
-        if (object->shape == ic->shape &&
-            mal_object_prototype(object) == ic->proto_object[0] &&
-            !mal_object_has_public_overflow(object)) {
-            MAL_PERF_COUNT(ic_load_inherited_getter_hits);
-            MalCompletion completion =
-                mal_vm_call_value(vm, ic->value, object_value, nullptr, 0);
-            if (completion.kind != MAL_COMPLETION_NORMAL) {
-                vm->completion = completion;
-                return MAL_VALUE_UNDEFINED;
-            }
-            return completion.value;
+    if (ic->mode == MAL_IC_MODE_INHERITED_GETTER &&
+        mal_vm_inherited_accessor_row_holds(object_value, key_value, ic)) {
+        MAL_PERF_COUNT(ic_load_inherited_getter_hits);
+        MalCompletion completion = mal_vm_call_value(vm, ic->value, object_value, nullptr, 0);
+        if (completion.kind != MAL_COMPLETION_NORMAL) {
+            vm->completion = completion;
+            return MAL_VALUE_UNDEFINED;
         }
+        return completion.value;
     }
     MalValue special_value;
     if (!static_probe_missed &&
@@ -6553,17 +6563,27 @@ MalValue mal_vm_op_load_property_ic_static_miss(
             "Cannot read properties of null or undefined");
         return MAL_VALUE_UNDEFINED;
     }
-    // The VM atom is already this property's canonical query key; only an
-    // index-shaped name needs the INDEX kind.
     MalString *name = vm->string_constant_atoms[atom];
-    u32 index = 0;
-    MalKey key = mal_vm_string_to_array_index(name, &index)
-        ? mal_key_index(index)
-        : (MalKey) {.kind = MAL_KEY_STRING, .value = mal_value_from_string(name)};
     MalValue roots[] = {object_value};
     MalRootSpan span;
     mal_gc_root(&span, roots, countof(roots));
-    MalValue result = mal_vm_op_load_property_ic_keyed(vm, object_value, key, ic, true);
+    MalValue result;
+    // A getter row skips the index-name check: an index never shares a string row.
+    if (ic->mode == MAL_IC_MODE_INHERITED_GETTER &&
+        mal_vm_inherited_accessor_row_holds(object_value, mal_value_from_string(name), ic)) {
+        MAL_PERF_COUNT(ic_load_inherited_getter_hits);
+        MalCompletion completion = mal_vm_call_value(vm, ic->value, object_value, nullptr, 0);
+        if (completion.kind != MAL_COMPLETION_NORMAL) vm->completion = completion;
+        result = completion.kind == MAL_COMPLETION_NORMAL ? completion.value : MAL_VALUE_UNDEFINED;
+    } else {
+        // The VM atom is already this property's canonical query key; only an
+        // index-shaped name needs the INDEX kind.
+        u32 index = 0;
+        MalKey key = mal_vm_string_to_array_index(name, &index)
+            ? mal_key_index(index)
+            : (MalKey) {.kind = MAL_KEY_STRING, .value = mal_value_from_string(name)};
+        result = mal_vm_op_load_property_ic_keyed(vm, object_value, key, ic, true);
+    }
     mal_gc_unroot(&span);
     return result;
 }
@@ -6722,6 +6742,14 @@ static void mal_vm_op_store_object_property_ic(
 void mal_vm_op_store_property_ic(
     MalVm *vm, MalValue object_value, MalValue key_value, MalValue value, bool strict, MalInlineCache *ic
 ) {
+    // Setter rows hit before key conversion; the caller has rooted its operands.
+    if (ic->mode == MAL_IC_MODE_INHERITED_SETTER &&
+        mal_vm_inherited_accessor_row_holds(object_value, key_value, ic)) {
+        MAL_PERF_COUNT(ic_store_inherited_setter_hits);
+        MalCompletion completion = mal_vm_call_value(vm, ic->value, object_value, &value, 1);
+        if (completion.kind != MAL_COMPLETION_NORMAL) vm->completion = completion;
+        return;
+    }
     if (mal_vm_dictionary_try_overwrite(vm, object_value, key_value, value)) return;
     MAL_PERF_COUNT(ic_store_fallbacks);
     if (!mal_value_is_heap_type(object_value, MAL_HEAP_OBJECT)) {

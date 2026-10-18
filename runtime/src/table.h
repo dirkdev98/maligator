@@ -12,6 +12,7 @@ typedef struct MalSymbol MalSymbol;
 #define MAL_TABLE_STRING (UINT64_C(2) << MAL_TABLE_KIND_SHIFT)
 #define MAL_TABLE_SYMBOL (UINT64_C(3) << MAL_TABLE_KIND_SHIFT)
 #define MAL_TABLE_IDENTITY_MASK (UINT64_C(0x0000ffffffffffff) | MAL_TABLE_KIND_MASK)
+#define MAL_TABLE_OWNS_DATA (UINT64_C(1) << 57)
 
 typedef struct MalTableEntry {
     // Kind zero is dead; ownership survives deletion until the RAW sidecar is freed.
@@ -57,6 +58,17 @@ static inline bool mal_table_private_hint_read(
         return false;
     *value = entry->payload.value;
     return true;
+}
+
+/** The value cell of a private data element behind a symbol's entry hint, or null. */
+static inline MalValue *mal_table_private_hint_slot(MalTable *table, MalValue symbol, u32 hint) {
+    u32 index = hint - 1;
+    if (index >= table->entry_count) return nullptr;
+    MalTableEntry *entry = &table->entries[index];
+    if ((entry->key & (MAL_TABLE_IDENTITY_MASK | MAL_TABLE_OWNS_DATA)) !=
+        (MAL_TABLE_SYMBOL | (symbol & MAKS_PTR)))
+        return nullptr;
+    return &entry->payload.value;
 }
 
 typedef enum MalTableIterKind {
