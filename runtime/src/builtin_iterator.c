@@ -538,7 +538,7 @@ bool mal_vm_array_values_deferred_begin(
     MalObject *object = mal_value_to_object(source);
     // The protector covers Array.prototype @@iterator and ArrayIterator next/return.
     if (!object->for_in_keys &&
-        (!mal_primitive_method_protector ||
+        (!mal_vm_primitive_methods_intact(vm) ||
          mal_object_prototype(object) !=
              mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]) ||
          ((object->shape->inline_count != 0 || mal_object_overflow(object) != nullptr) &&
@@ -570,7 +570,7 @@ bool mal_vm_array_values_deferred_close(
     const MalArrayValuesDeferredCursor *cursor,
     bool normal
 ) {
-    if (mal_primitive_method_protector || mal_value_to_object(array)->for_in_keys) return true;
+    if (mal_vm_primitive_methods_intact(vm) || mal_value_to_object(array)->for_in_keys) return true;
     MAL_PERF_COUNT(iterator_deferred_array_materializations);
     MalValue roots[1] = {mal_vm_new_builtin_iterator(vm, MAL_ITERATOR_ARRAY_VALUES, array)};
     MalRootSpan roots_span;
@@ -778,7 +778,7 @@ static MalValue mal_builtin_iterator_prototype_dispose(
 static bool mal_vm_watched_inherited_get(
     MalVm *vm, MalValue receiver, MalKey key, MalValue *value_out
 ) {
-    if (!mal_primitive_method_protector) return false;
+    if (!mal_vm_primitive_methods_intact(vm)) return false;
     const MalObject *prototype;
     if (mal_value_is_string(receiver)) {
         // String exotic own keys are indices and "length".

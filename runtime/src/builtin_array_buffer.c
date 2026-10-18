@@ -103,7 +103,7 @@ static MalValue mal_builtin_array_buffer_construct(MalVm *vm, const MalValue *ar
     MalIntrinsic fallback = shared ? MAL_INTRINSIC_SHARED_ARRAY_BUFFER_PROTOTYPE : MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE;
     MalIntrinsic constructor = shared ? MAL_INTRINSIC_SHARED_ARRAY_BUFFER_CONSTRUCTOR : MAL_INTRINSIC_ARRAY_BUFFER_CONSTRUCTOR;
     MalObject *prototype = nullptr;
-    if (mal_primitive_method_protector &&
+    if (mal_vm_primitive_methods_intact(vm) &&
         mal_ops_same_value(new_target, vm->intrinsics[constructor])) {
         prototype = mal_value_to_object(vm->intrinsics[fallback]);
     } else if (!mal_vm_get_prototype_from_constructor(vm, new_target, fallback, &prototype)) {
@@ -228,7 +228,7 @@ static bool mal_array_buffer_clamp(MalVm *vm, MalValue value, u32 length, u32 fa
 static bool mal_array_buffer_default_species(
     MalVm *vm, MalValue object, MalIntrinsic default_ctor
 ) {
-    if (!mal_primitive_method_protector ||
+    if (!mal_vm_primitive_methods_intact(vm) ||
         !mal_value_is_array_buffer_object(object)) {
         return false;
     }

@@ -380,7 +380,7 @@ static bool mal_builtin_error_get_string(
 static bool mal_builtin_error_exact_string_parts(
     MalVm *vm, MalValue value, MalValue *name_out, MalValue *message_out
 ) {
-    if (!mal_primitive_method_protector || !mal_value_is_object(value)) {
+    if (!mal_vm_primitive_methods_intact(vm) || !mal_value_is_object(value)) {
         return false;
     }
     MalObject *error = mal_value_to_object(value);

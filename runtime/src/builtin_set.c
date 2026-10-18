@@ -424,7 +424,7 @@ static bool mal_builtin_set_get_set_record(MalVm *vm, MalValue obj, MalSetRecord
     }
 
     // The protector covers inherited size/has/keys only for an unmodified intrinsic instance.
-    if (mal_primitive_method_protector && mal_value_is_set_object(obj)) {
+    if (mal_vm_primitive_methods_intact(vm) && mal_value_is_set_object(obj)) {
         MalSetObject *candidate = mal_value_to_set_object(obj);
         MalObject *object = &candidate->object;
         if (mal_object_prototype(object) ==

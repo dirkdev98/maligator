@@ -4987,7 +4987,7 @@ function emitBody(
 		tdzInactiveRootMask: undefined,
 		knownOwnSlotLoadInactiveRootMask: undefined,
 		staticPropertyLoadInactiveRootMask: undefined,
-		privateLoadInactiveRootMask: undefined,
+		privateAccessInactiveRootMask: undefined,
 		indexedPropertyInactiveRootMask: undefined,
 		staticPropertyWriteInactiveRootMask: undefined,
 		charCodeAtCallRootPublication: undefined,
@@ -5274,8 +5274,10 @@ function emitBody(
 			!constructorInitializationActionByIp.has(ip);
 		const deferredOperatorRoots =
 			deferrableRoots && fn.instructions[ip]!.opcode === "BINARY";
-		const deferredPrivateLoadRoots =
-			deferrableRoots && fn.instructions[ip]!.opcode === "LOAD_PRIVATE";
+		const deferredPrivateAccessRoots =
+			deferrableRoots &&
+			(fn.instructions[ip]!.opcode === "LOAD_PRIVATE" ||
+				fn.instructions[ip]!.opcode === "STORE_PRIVATE");
 		// Only selected private values need the operator's mask on its fallback edge.
 		const eagerOperatorRootPublication =
 			deferredOperatorRoots && (rootPublication?.slots.size ?? 0) === 0;
@@ -5321,7 +5323,7 @@ function emitBody(
 		const publishesIncomingRoots =
 			safepointKind !== "loop-backedge" &&
 			!deferredPropertyRoots &&
-			!deferredPrivateLoadRoots &&
+			!deferredPrivateAccessRoots &&
 			!deferredIndexedPropertyRoots &&
 			!deferredStaticPropertyWriteRoots &&
 			!deferredOperatorRoots &&
@@ -5422,9 +5424,10 @@ function emitBody(
 			inactiveRootMask !== lastPublishedInactiveRootMask
 				? inactiveRootMask
 				: undefined;
-		const privateLoadInactiveRootMask =
+		const privateAccessInactiveRootMask =
 			safepointKind === "operation" &&
-			fn.instructions[ip]!.opcode === "LOAD_PRIVATE" &&
+			(fn.instructions[ip]!.opcode === "LOAD_PRIVATE" ||
+				fn.instructions[ip]!.opcode === "STORE_PRIVATE") &&
 			inactiveRootMask !== lastPublishedInactiveRootMask
 				? inactiveRootMask
 				: undefined;
@@ -5436,7 +5439,7 @@ function emitBody(
 			tdzInactiveRootMask === undefined &&
 			knownOwnSlotLoadInactiveRootMask === undefined &&
 			staticPropertyLoadInactiveRootMask === undefined &&
-			privateLoadInactiveRootMask === undefined &&
+			privateAccessInactiveRootMask === undefined &&
 			indexedPropertyInactiveRootMask === undefined &&
 			staticPropertyWriteInactiveRootMask === undefined &&
 			iteratorStepInactiveRootMask === undefined &&
@@ -5455,7 +5458,7 @@ function emitBody(
 			tdzInactiveRootMask === undefined &&
 			knownOwnSlotLoadInactiveRootMask === undefined &&
 			staticPropertyLoadInactiveRootMask === undefined &&
-			privateLoadInactiveRootMask === undefined &&
+			privateAccessInactiveRootMask === undefined &&
 			indexedPropertyInactiveRootMask === undefined &&
 			staticPropertyWriteInactiveRootMask === undefined &&
 			iteratorStepInactiveRootMask === undefined &&
@@ -5475,7 +5478,7 @@ function emitBody(
 		instructionContext.loopPoll = safepointKind === "loop-backedge";
 		instructionContext.incomingRootPublication =
 			deferredPropertyRoots ||
-			deferredPrivateLoadRoots ||
+			deferredPrivateAccessRoots ||
 			deferredIndexedPropertyRoots ||
 			deferredStaticPropertyWriteRoots ||
 			deferredOperatorRoots ||
@@ -5506,7 +5509,7 @@ function emitBody(
 			knownOwnSlotLoadInactiveRootMask;
 		instructionContext.staticPropertyLoadInactiveRootMask =
 			staticPropertyLoadInactiveRootMask;
-		instructionContext.privateLoadInactiveRootMask = privateLoadInactiveRootMask;
+		instructionContext.privateAccessInactiveRootMask = privateAccessInactiveRootMask;
 		instructionContext.indexedPropertyInactiveRootMask = indexedPropertyInactiveRootMask;
 		instructionContext.staticPropertyWriteInactiveRootMask =
 			staticPropertyWriteInactiveRootMask;
@@ -5653,7 +5656,7 @@ function emitBody(
 			tdzInactiveRootMask !== undefined ||
 			knownOwnSlotLoadInactiveRootMask !== undefined ||
 			staticPropertyLoadInactiveRootMask !== undefined ||
-			privateLoadInactiveRootMask !== undefined ||
+			privateAccessInactiveRootMask !== undefined ||
 			indexedPropertyInactiveRootMask !== undefined ||
 			staticPropertyWriteInactiveRootMask !== undefined ||
 			iteratorStepInactiveRootMask !== undefined ||
@@ -6011,7 +6014,7 @@ interface NativeInstructionContext {
 	readonly tdzInactiveRootMask?: NativeInactiveRootMask;
 	readonly knownOwnSlotLoadInactiveRootMask?: NativeInactiveRootMask;
 	readonly staticPropertyLoadInactiveRootMask?: NativeInactiveRootMask;
-	readonly privateLoadInactiveRootMask?: NativeInactiveRootMask;
+	readonly privateAccessInactiveRootMask?: NativeInactiveRootMask;
 	readonly indexedPropertyInactiveRootMask?: NativeInactiveRootMask;
 	readonly staticPropertyWriteInactiveRootMask?: NativeInactiveRootMask;
 	readonly charCodeAtCallRootPublication?: boolean;
@@ -6326,7 +6329,7 @@ function emitInstruction(
 		tdzInactiveRootMask: context.tdzInactiveRootMask,
 		knownOwnSlotLoadInactiveRootMask: context.knownOwnSlotLoadInactiveRootMask,
 		staticPropertyLoadInactiveRootMask: context.staticPropertyLoadInactiveRootMask,
-		privateLoadInactiveRootMask: context.privateLoadInactiveRootMask,
+		privateAccessInactiveRootMask: context.privateAccessInactiveRootMask,
 		indexedPropertyInactiveRootMask: context.indexedPropertyInactiveRootMask,
 		staticPropertyWriteInactiveRootMask: context.staticPropertyWriteInactiveRootMask,
 		charCodeAtCallRootPublication: context.charCodeAtCallRootPublication,
@@ -8733,11 +8736,12 @@ function emitInstruction(
 			// the general [[Set]] fallback keeps the throw check.
 			const receiverName = `__property_receiver_${ip}`;
 			if (instruction.opcode === "STORE_PROPERTY") {
-				const ordinary = (): Array<string> =>
+				const ordinary = (position: ReadonlyArray<string> = []): Array<string> =>
 					isNumericRep(reps[instruction.key]!)
 						? [
 								`MalArrayObject *${receiverName} = mal_vm_as_array(${boxed(instruction.object)});`,
 								`if (!(${receiverName} && mal_vm_array_try_store(${receiverName}, ${num(instruction.key)}, ${boxed(instruction.value)}))) {`,
+								...position,
 								...(context.incomingRootPublication ?? []).map((line) => `  ${line}`),
 								...(context.indexedPropertyInactiveRootMask === undefined
 									? []
@@ -8776,13 +8780,16 @@ function emitInstruction(
 						`}`,
 					];
 				}
-				return ordinary();
+				return isNumericRep(reps[instruction.key]!)
+					? ordinary(slowPathFramePosition())
+					: ordinary();
 			}
 			const probe = (): string =>
 				`${receiverName} && mal_vm_object_try_store_static(${receiverName}, ${boxed(instruction.value)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}])`;
 			return [
 				`MalObject *${receiverName} = mal_vm_as_object(${boxed(instruction.object)});`,
 				`if (!(${probe()})) {`,
+				...slowPathFramePosition(),
 				...(context.incomingRootPublication ?? []).map((line) => `  ${line}`),
 				...(context.staticPropertyWriteInactiveRootMask === undefined
 					? []
@@ -12233,10 +12240,10 @@ function emitInstruction(
 				`} else {`,
 				...slowPathFramePosition(),
 				...(context.incomingRootPublication ?? []).map((line) => `  ${line}`),
-				...(context.privateLoadInactiveRootMask === undefined
+				...(context.privateAccessInactiveRootMask === undefined
 					? []
 					: [
-							`  ${cInactiveRootMaskPublication(context.privateLoadInactiveRootMask, context.inactiveRootMaskStatements)};`,
+							`  ${cInactiveRootMaskPublication(context.privateAccessInactiveRootMask, context.inactiveRootMaskStatements)};`,
 						]),
 				`  r${instruction.dst} = mal_vm_op_load_private(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)});`,
 				`  ${throwCheck()}`,
@@ -12278,6 +12285,13 @@ function emitInstruction(
 			// PrivateSet; the name must already be installed, else throws.
 			return [
 				`if (!mal_vm_private_try_store(${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)})) {`,
+				...slowPathFramePosition(),
+				...(context.incomingRootPublication ?? []).map((line) => `  ${line}`),
+				...(context.privateAccessInactiveRootMask === undefined
+					? []
+					: [
+							`  ${cInactiveRootMaskPublication(context.privateAccessInactiveRootMask, context.inactiveRootMaskStatements)};`,
+						]),
 				`  mal_vm_op_store_private(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)});`,
 				`  ${throwCheck()}`,
 				`}`,

@@ -1451,7 +1451,7 @@ static bool mal_ih_is_iterator_instance(MalVm *vm, MalValue value) {
 }
 
 static bool mal_ih_is_default_builtin_iterator(MalVm *vm, MalValue value) {
-    if (!mal_primitive_method_protector ||
+    if (!mal_vm_primitive_methods_intact(vm) ||
         (!mal_value_is_iterator_object(value) &&
          !mal_value_is_iterator_helper_object(value))) {
         return false;
@@ -1490,7 +1490,7 @@ static MalValue mal_iterator_from(MalVm *vm, MalValue this_value, const MalValue
     // A primitive string has no own overrides. While the String and String
     // iterator prototypes remain watched, the observable lookup/call sequence
     // can only produce the standard String iterator.
-    if (mal_primitive_method_protector && mal_value_is_string(source)) {
+    if (mal_vm_primitive_methods_intact(vm) && mal_value_is_string(source)) {
         return mal_vm_new_builtin_iterator(
             vm, MAL_ITERATOR_STRING_VALUES, source);
     }

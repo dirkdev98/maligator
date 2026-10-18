@@ -295,7 +295,7 @@ static MalShape *regexp_instance_shape(MalVm *vm) {
 static bool regexp_canonical_instance(
     MalVm *vm, MalValue value, MalRegExpObject **out
 ) {
-    if (!mal_primitive_method_protector || !mal_value_is_regexp_object(value)) {
+    if (!mal_vm_primitive_methods_intact(vm) || !mal_value_is_regexp_object(value)) {
         return false;
     }
     MalRegExpObject *re = mal_value_to_regexp_object(value);

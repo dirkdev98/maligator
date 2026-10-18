@@ -31,7 +31,7 @@ static bool mal_ta_prototype_from_constructor(
         (MalIntrinsic) (MAL_INTRINSIC_TYPED_ARRAY_KIND_CONSTRUCTOR_BASE + kind);
     MalIntrinsic fallback =
         (MalIntrinsic) (MAL_INTRINSIC_TYPED_ARRAY_KIND_PROTOTYPE_BASE + kind);
-    if (mal_primitive_method_protector &&
+    if (mal_vm_primitive_methods_intact(vm) &&
         mal_ops_same_value(new_target, vm->intrinsics[constructor])) {
         *prototype = mal_value_to_object(vm->intrinsics[fallback]);
         return true;
@@ -42,7 +42,7 @@ static bool mal_ta_prototype_from_constructor(
 static bool mal_ta_default_species(
     MalVm *vm, MalTypedArrayObject *array
 ) {
-    if (!mal_primitive_method_protector ||
+    if (!mal_vm_primitive_methods_intact(vm) ||
         mal_object_prototype(&array->object) != mal_ta_kind_prototype(vm, array->kind)) {
         return false;
     }
@@ -2137,7 +2137,7 @@ static bool mal_ta_create_from_constructor(MalVm *vm, MalValue constructor, u32 
         return false;
     }
     if (vm->completion.kind == MAL_COMPLETION_NORMAL &&
-        mal_primitive_method_protector && length <= INT32_MAX &&
+        mal_vm_primitive_methods_intact(vm) && length <= INT32_MAX &&
         mal_value_is_native_function_object(constructor)) {
         for (i32 index = 0; index < MAL_TA_KIND_COUNT; index++) {
             if (constructor != vm->intrinsics[MAL_INTRINSIC_TYPED_ARRAY_KIND_CONSTRUCTOR_BASE + index]) {

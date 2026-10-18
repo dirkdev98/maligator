@@ -83,8 +83,7 @@ u64 mal_vm_stack_object_materialization_count(void) {
 bool mal_vm_try_fresh_dense_indexed_fill_reserve(
     MalVm *vm, MalValue array_value, u32 needed
 ) {
-    if (!mal_array_elements_protector || vm->semantic_epochs.array_elements == 0 ||
-        !mal_value_is_array_object(array_value)) {
+    if (!mal_vm_array_elements_intact(vm) || !mal_value_is_array_object(array_value)) {
         MAL_PERF_COUNT(array_indexed_fill_guard_fallbacks);
         return false;
     }
@@ -2547,7 +2546,7 @@ mal_vm_property_try_load_static_remaining(
     // Watched built-ins such as `Math.round` are the hottest rows the inline probe
     // leaves out; they hit by identity once the inline checks miss.
     if (object != nullptr && ic->mode == MAL_IC_MODE_WATCHED_VALUE &&
-        object == ic->obj && ic->prim_kind == 0 && mal_primitive_method_protector) {
+        object == ic->obj && ic->prim_kind == 0 && mal_vm_primitive_methods_intact(vm)) {
         MAL_PERF_COUNT(ic_load_watched_hits);
         return (MalStaticPropertyProbeResult) { .hit = true, .value = ic->value };
     }
@@ -4984,7 +4983,7 @@ bool mal_vm_set_property(MalVm *vm, MalValue target, MalKey key, MalValue value,
             // default %Array.prototype% and the fast-elements protector holds — and it
             // is extensible with a writable length (else the slow path must reject or
             // handle length specially). A too-sparse index (NEEDS_TABLE) falls through.
-            if (!array->dense_deopted && mal_array_elements_protector &&
+            if (!array->dense_deopted && mal_vm_array_elements_intact(vm) &&
                 array->object.extensible && array->length_writable &&
                 mal_object_prototype(&array->object) ==
                     mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE])) {
@@ -6140,7 +6139,7 @@ static void mal_ic_try_record_inherited(
         return;
     }
 
-    if (!mal_primitive_method_protector) {
+    if (!mal_vm_primitive_methods_intact(vm)) {
         MAL_PERF_COUNT(ic_inherited_reject_basic);
         return;
     }
@@ -6343,7 +6342,7 @@ static MalValue mal_vm_op_load_property_ic_keyed(
         // requires exact object identity. Otherwise re-resolve, which may refill.
         if (!ordinary_static_probe_missed &&
             ic->mode == MAL_IC_MODE_WATCHED_VALUE && object->shape == ic->shape &&
-            key_value == ic->key && mal_primitive_method_protector && object == ic->obj) {
+            key_value == ic->key && mal_vm_primitive_methods_intact(vm) && object == ic->obj) {
             MAL_PERF_COUNT(ic_load_watched_hits);
             return ic->value;
         }
@@ -6396,7 +6395,7 @@ static MalValue mal_vm_op_load_property_ic_keyed(
             // would re-hash every call. Cache the value while the protector holds; any
             // mutation of a watched intrinsic clears it. Accessors are excluded
             // (their getter must run per access).
-            if (object->watched_method_proto && mal_primitive_method_protector
+            if (object->watched_method_proto && mal_vm_primitive_methods_intact(vm)
                 && mal_ic_key_is_stable_string(key_value)) {
                 MalPropertyLookup own = mal_object_get_own(object, key);
                 if (own.present && !(own.desc.flags & MAL_PROPERTY_ACCESSOR)) {
@@ -6467,7 +6466,7 @@ static MalValue mal_vm_op_load_property_ic_keyed(
         // an immortal string key that is not a string-receiver exotic own (length /
         // canonical index, resolved on the value not the prototype) and not an
         // accessor (whose getter must run each time).
-        if (mal_primitive_method_protector
+        if (mal_vm_primitive_methods_intact(vm)
             && vm->completion.kind != MAL_COMPLETION_THROW
             && mal_ic_key_is_stable_string(key_value)) {
             MalKey key = {.kind = MAL_KEY_STRING, .value = key_value};
@@ -6500,7 +6499,7 @@ static MalValue mal_vm_op_load_property_ic_keyed(
     // straight through (one predictable flag load).
     if (mal_value_is_object(object_value)) {
         MalObject *object = mal_value_to_object(object_value);
-        if (object->watched_method_proto && mal_primitive_method_protector) {
+        if (object->watched_method_proto && mal_vm_primitive_methods_intact(vm)) {
             // Object identity — not just shape — because the typed-array
             // constructors share one shape yet differ in overflow values
             // (BYTES_PER_ELEMENT, name, …); shape+key alone would false-hit at a
@@ -7058,7 +7057,7 @@ static void mal_vm_op_store_property_keyed(
             // no inherited indexed setter can intercept (default %Array.prototype% +
             // the fast-elements protector) and the array is extensible with a writable
             // length. A too-sparse index (NEEDS_TABLE) falls through to the slow path.
-            if (!array->dense_deopted && mal_array_elements_protector &&
+            if (!array->dense_deopted && mal_vm_array_elements_intact(vm) &&
                 array->object.extensible && array->length_writable &&
                 mal_object_prototype(&array->object) ==
                     mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE])) {

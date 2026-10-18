@@ -52,7 +52,7 @@ static bool mal_builtin_array_numeric_key(MalVm *vm, f64 index, MalKey *key_out)
 static MalArrayObject *mal_builtin_array_clean_dense(
     MalVm *vm, MalValue value
 ) {
-    if (!mal_array_elements_protector ||
+    if (!mal_vm_array_elements_intact(vm) ||
         !mal_value_is_array_object(value)) {
         return nullptr;
     }
@@ -1361,7 +1361,7 @@ static MalValue mal_builtin_array_map(MalVm *vm, MalValue this_value, const MalV
     MalArrayObject *source_array = nullptr;
     MalArrayObject *result_array = nullptr;
     MalValue result = mal_value_new_undefined();
-    if (length <= (f64) UINT32_MAX && mal_array_elements_protector &&
+    if (length <= (f64) UINT32_MAX && mal_vm_array_elements_intact(vm) &&
         mal_value_is_array_object(this_value)) {
         source_array = mal_value_to_array_object(this_value);
         MalValue prototype = vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE];
@@ -1399,7 +1399,7 @@ static MalValue mal_builtin_array_map(MalVm *vm, MalValue this_value, const MalV
         for (u32 index = 0; index < (u32) length; index++) {
             MalValue element;
             if (dense_source &&
-                (!mal_array_elements_protector ||
+                (!mal_vm_array_elements_intact(vm) ||
                  !mal_array_object_is_dense(source_array) ||
                  mal_object_prototype(&source_array->object) != array_prototype)) {
                 dense_source = false;
@@ -2079,7 +2079,7 @@ MalValue mal_builtin_array_push_known(
     MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count
 ) {
     if (arg_count >= 0 && mal_value_is_array_object(this_value) &&
-        mal_array_elements_protector) {
+        mal_vm_array_elements_intact(vm)) {
         MalValue prototype_value = vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE];
         MalArrayObject *array = mal_value_to_array_object(this_value);
         if (mal_value_is_array_object(prototype_value) &&
@@ -2121,7 +2121,7 @@ bool mal_builtin_array_push_virtual_guard(MalVm *vm) {
         mal_native_function_object_callback(mal_value_to_native_function_object(callee)) !=
             mal_builtin_array_push ||
         !mal_value_is_array_object(prototype_value) ||
-        !mal_array_elements_protector) {
+        !mal_vm_array_elements_intact(vm)) {
         return false;
     }
 #if MAL_PRIMORDIALS_LOCKED
@@ -2129,7 +2129,7 @@ bool mal_builtin_array_push_virtual_guard(MalVm *vm) {
     return true;
 #else
     // Array.prototype is watched: any redefinition of its push clears the protector.
-    if (mal_primitive_method_protector) return true;
+    if (mal_vm_primitive_methods_intact(vm)) return true;
     MalPropertyLookup live = mal_object_get_own(
         mal_value_to_object(prototype_value), mal_intrinsic_string_key(vm, "push"));
     return live.present && !(live.desc.flags & MAL_PROPERTY_ACCESSOR) &&
@@ -2209,7 +2209,7 @@ bool mal_builtin_array_pair_destructure_try(
     MalValue *second_out, bool *second_done_out
 ) {
     // The protector covers Array.prototype @@iterator and ArrayIterator next/return.
-    if (!mal_primitive_method_protector || !mal_value_is_array_object(source)) {
+    if (!mal_vm_primitive_methods_intact(vm) || !mal_value_is_array_object(source)) {
         return false;
     }
     MalArrayObject *array = mal_value_to_array_object(source);
@@ -2616,7 +2616,7 @@ static MalValue mal_builtin_array_concat(MalVm *vm, MalValue this_value, const M
         if (mal_value_is_object(source)) {
             MalKey spreadable_key = mal_intrinsic_symbol_key(
                 vm, MAL_INTRINSIC_SYMBOL_IS_CONCAT_SPREADABLE);
-            bool default_array_spread = mal_primitive_method_protector &&
+            bool default_array_spread = mal_vm_primitive_methods_intact(vm) &&
                 mal_builtin_array_clean_dense(vm, source) != nullptr &&
                 !mal_object_get_own(
                     mal_value_to_object(source), spreadable_key).present;
@@ -4537,7 +4537,7 @@ static MalValue mal_builtin_array_to_string(MalVm *vm, MalValue this_value, cons
     if (!mal_builtin_array_to_object(vm, &this_value)) {
         return mal_value_new_undefined();
     }
-    if (mal_primitive_method_protector &&
+    if (mal_vm_primitive_methods_intact(vm) &&
         mal_array_method_is_default_builtin(
             vm, this_value, (const byte *) "join",
             mal_builtin_array_join)) {
@@ -5209,7 +5209,7 @@ static bool mal_array_default_species(MalVm *vm, MalValue recv) {
 bool mal_builtin_array_exact_map_guard(
     MalVm *vm, MalValue callee, MalValue receiver
 ) {
-    if (!mal_primitive_method_protector || !mal_array_elements_protector ||
+    if (!mal_vm_primitive_methods_intact(vm) || !mal_vm_array_elements_intact(vm) ||
         !mal_value_is_native_function_object(callee) ||
         mal_native_function_object_callback(
             mal_value_to_native_function_object(callee)) != mal_builtin_array_map ||
@@ -5226,7 +5226,7 @@ bool mal_builtin_array_exact_map_guard(
 }
 
 bool mal_builtin_array_default_map_guard(MalVm *vm, MalValue receiver) {
-    return mal_primitive_method_protector && mal_array_elements_protector &&
+    return mal_vm_primitive_methods_intact(vm) && mal_vm_array_elements_intact(vm) &&
         mal_array_method_is_default_builtin(
             vm, receiver, (const byte *) "map", mal_builtin_array_map) &&
         mal_array_default_species(vm, receiver);

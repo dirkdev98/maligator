@@ -289,7 +289,7 @@ static MalValue mal_builtin_data_view_constructor(MalVm *vm, MalValue this_value
     // detached state and the offset/length bounds against the post-access buffer
     // length before installing the view.
     MalObject *prototype = nullptr;
-    if (mal_primitive_method_protector &&
+    if (mal_vm_primitive_methods_intact(vm) &&
         mal_ops_same_value(new_target, vm->intrinsics[MAL_INTRINSIC_DATA_VIEW_CONSTRUCTOR])) {
         prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_DATA_VIEW_PROTOTYPE]);
     } else if (!mal_vm_get_prototype_from_constructor(

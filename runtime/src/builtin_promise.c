@@ -100,7 +100,7 @@ static bool mal_promise_is_canonical_intrinsic(
     MalValue value,
     MalValue captured_then
 ) {
-    if (!mal_primitive_method_protector || !mal_value_is_promise_object(value)) {
+    if (!mal_vm_primitive_methods_intact(vm) || !mal_value_is_promise_object(value)) {
         return false;
     }
 
