@@ -2195,7 +2195,9 @@ static void mal_gc_finalize_cell(MalHeapHeader *cell) {
     }
 
     MalObject *object = (MalObject *) cell;
-    mal_builtin_error_finalize_object(g_gc_vm, object);
+    // Most dead objects own nothing; testing the flags here keeps them off the isolate
+    // lookup and the calls below.
+    if (object->has_captured_stack) mal_builtin_error_finalize_object(g_gc_vm, object);
     // Exact inherited/missing IC entries retain untraced prototype/holder
     // identities. Invalidate them before a prototype cell can enter a free list
     // and have its address reused; ordinary collections with no dead prototypes
@@ -2209,7 +2211,9 @@ static void mal_gc_finalize_cell(MalHeapHeader *cell) {
         mal_table_free(mal_object_overflow(object));
         mal_object_set_overflow_pointer(object, nullptr);
     }
-    mal_object_release_slots(object);
+    if (object->slots_owned || object->storage_kind != MAL_OBJECT_COMPACT) {
+        mal_object_release_slots(object);
+    }
     if (object->storage_kind == MAL_OBJECT_EXTERNAL) {
         free(mal_object_storage(object));
     }
