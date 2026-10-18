@@ -901,10 +901,13 @@ function emitNumericLoopRegion(
 	const flow =
 		order === undefined
 			? undefined
-			: numberRecordDataflow(fn, order, -1, reps, plan.kind === "fixed-numeric");
+			: numberRecordDataflow(fn, order, -1, reps, plan.kind !== "integer");
 	if (order === undefined || flow === undefined)
 		throw new Error("Invalid native integer loop region");
-	const floating = plan.kind === "fixed-numeric";
+	const floating = plan.kind !== "integer";
+	// The deferred cursor's index is the iteration state a restart must rewind.
+	const cursor =
+		plan.kind === "array-iteration" ? `__iter_deferred_${plan.initializeIp}` : undefined;
 	const id = floating ? `__typed_loop_${plan.id}` : `__integer_loop_${plan.id}`;
 	const kindOf = (register: number) => {
 		const kind = flow.kinds.get(register);
@@ -946,7 +949,7 @@ function emitNumericLoopRegion(
 	}
 	const readOnly =
 		plan.kind === "fixed-numeric" && plan.views.every((view) => !view.writable);
-	const records = new Set(plan.kind === "fixed-numeric" ? (plan.records ?? []) : []);
+	const records = new Set(plan.kind !== "integer" ? (plan.records ?? []) : []);
 	// Length bounds and records exist only for Array views.
 	const arrayOnly =
 		plan.kind === "fixed-numeric" && (plan.boundObject !== undefined || records.size > 0);
@@ -1037,7 +1040,7 @@ function emitNumericLoopRegion(
 	const restart = `{ ${id}_exit = 0; break; }`;
 	const reach = (ip: number): string => {
 		if (ip === plan.id)
-			return `${plan.carried.map((register) => `${start(register)} = ${local(register)};`).join(" ")} if (mal_gc_poll) ${restart} continue;`;
+			return `${plan.carried.map((register) => `${start(register)} = ${local(register)};`).join(" ")}${cursor === undefined ? "" : ` ${id}_si = ${cursor}.index;`} if (mal_gc_poll) ${restart} continue;`;
 		const exit = exitIndex.get(ip);
 		if (exit !== undefined) return `{ ${id}_exit = ${exit}; break; }`;
 		return `${id}_b${ip} = true;`;
@@ -1068,6 +1071,13 @@ function emitNumericLoopRegion(
 				if (expression === null)
 					throw new Error("Invalid numeric loop builtin expression");
 				return `${local(op.dst)} = ${expression};`;
+			}
+			case "ITERATOR_STEP": {
+				if (cursor === undefined) throw new Error("Invalid numeric loop iterator step");
+				const element = records.has(op.valueDst)
+					? `if (__builtin_expect(!mal_value_is_heap_type(${id}_e, MAL_HEAP_OBJECT), 0)) ${restart} ${local(op.valueDst)} = ${id}_e;`
+					: `if (__builtin_expect(!mal_ops_is_number(${id}_e), 0)) ${restart} ${local(op.valueDst)} = mal_ops_number_as_f64(${id}_e);`;
+				return `if (${cursor}.done || ${cursor}.index >= ${id}_a.length) { ${cursor}.done = true; ${local(op.doneDst)} = true; } else { if (__builtin_expect(${cursor}.index >= ${id}_a.count, 0)) ${restart} MalValue ${id}_e = ${id}_a.elements[${cursor}.index]; ${element} ${cursor}.index++; ${local(op.doneDst)} = false; }`;
 			}
 			case "LOAD_PROPERTY_STATIC":
 			case "LOAD_PROPERTY_STATIC_ARRAY_LENGTH":
@@ -1181,6 +1191,7 @@ function emitNumericLoopRegion(
 				(register) =>
 					`    ${kindOf(register) === "boolean" ? "bool" : floating ? "f64" : "i64"} ${start(register)} = ${local(register)};`,
 			),
+			...(cursor === undefined ? [] : [`    u64 ${id}_si = ${cursor}.index;`]),
 			`    u8 ${id}_exit = 0;`,
 			"    for (;;) {",
 			...heads.slice(1).map((ip) => `      bool ${id}_b${ip} = false;`),
@@ -1208,6 +1219,7 @@ function emitNumericLoopRegion(
 		}
 		for (const register of plan.carried)
 			lines.push(`    ${materialize(register, start(register))}`);
+		if (cursor !== undefined) lines.push(`    ${cursor}.index = ${id}_si;`);
 		lines.push(`    goto L${plan.id};`);
 		return lines;
 	};
@@ -1239,6 +1251,20 @@ function emitNumericLoopRegion(
 		...loopBody("array"),
 	];
 	const lengthBound = arrayOnly;
+	if (plan.kind === "array-iteration")
+		return [
+			"{",
+			`  MalDenseNumberSpan ${id}_a = {0};`,
+			...[...flow.kinds].map(([register, kind]) =>
+				records.has(register)
+					? `  MalValue ${local(register)} = MAL_VALUE_UNDEFINED;`
+					: `  ${kind === "boolean" ? "bool" : "f64"} ${local(register)} = ${initial.get(register) ?? (kind === "boolean" ? "false" : "0")};`,
+			),
+			`  if (${[`${cursor}.active`, `mal_vm_dense_number_storage(r${plan.iterator}, &${id}_a)`, ...guards].join(" && ")}) {`,
+			...arrayBody(),
+			"  }",
+			"}",
+		];
 	return [
 		"{",
 		...(plan.kind === "fixed-numeric"
@@ -5106,7 +5132,12 @@ function emitBody(
 			continue;
 		}
 		const integerLoop = integerLoopRegionByEntry.get(ip);
-		if (integerLoop !== undefined)
+		// An iteration region steps the deferred cursor, so it needs that cursor.
+		if (
+			integerLoop !== undefined &&
+			(integerLoop.kind !== "array-iteration" ||
+				deferredIteratorCursors.has(integerLoop.initializeIp))
+		)
 			for (const line of emitNumericLoopRegion(
 				fn,
 				integerLoop,

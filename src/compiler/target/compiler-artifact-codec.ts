@@ -97,7 +97,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 246;
+export const COMPILER_ARTIFACT_VERSION = 247;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -868,7 +868,12 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 	}
 	w.u32(storage.numericLoopRegions.length);
 	for (const plan of storage.numericLoopRegions) {
-		w.u8(plan.kind === "integer" ? 0 : 1);
+		w.u8(plan.kind === "integer" ? 0 : plan.kind === "fixed-numeric" ? 1 : 2);
+		if (plan.kind === "array-iteration") {
+			w.i32(plan.initializeIp);
+			w.i32(plan.iterator);
+			w.i32Array([...(plan.records ?? [])]);
+		}
 		if (plan.kind === "fixed-numeric") {
 			w.i32(plan.index);
 			w.i32(plan.bound);
@@ -1374,35 +1379,47 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 	const numericLoopRegions: Array<NativeNumericLoopRegionPlan> = [];
 	for (let i = 0, count = r.count(29); i < count; i++) {
 		const kindTag = r.u8();
-		if (kindTag > 1) throw new RangeError("Invalid native numeric loop kind");
+		if (kindTag > 2) throw new RangeError("Invalid native numeric loop kind");
 		const storage =
 			kindTag === 0
 				? { kind: "integer" as const }
-				: (() => {
-						const index = r.i32(),
-							bound = r.i32(),
-							boundObject = r.i32(),
-							records = r.i32Array();
-						return {
-							kind: "fixed-numeric" as const,
-							index,
-							bound,
-							...(boundObject === -1 ? {} : { boundObject }),
-							...(records.length === 0 ? {} : { records }),
-							stride: r.i32(),
-							views: Array.from({ length: r.count(13) }, () => {
-								const object = r.i32(),
-									writable = r.u8();
-								if (writable > 1) throw new RangeError("Invalid numeric loop view");
-								return {
-									object,
-									writable: writable === 1,
-									minOffset: r.i32(),
-									maxOffset: r.i32(),
-								};
-							}),
-						};
-					})();
+				: kindTag === 2
+					? (() => {
+							const initializeIp = r.i32(),
+								iterator = r.i32(),
+								records = r.i32Array();
+							return {
+								kind: "array-iteration" as const,
+								initializeIp,
+								iterator,
+								...(records.length === 0 ? {} : { records }),
+							};
+						})()
+					: (() => {
+							const index = r.i32(),
+								bound = r.i32(),
+								boundObject = r.i32(),
+								records = r.i32Array();
+							return {
+								kind: "fixed-numeric" as const,
+								index,
+								bound,
+								...(boundObject === -1 ? {} : { boundObject }),
+								...(records.length === 0 ? {} : { records }),
+								stride: r.i32(),
+								views: Array.from({ length: r.count(13) }, () => {
+									const object = r.i32(),
+										writable = r.u8();
+									if (writable > 1) throw new RangeError("Invalid numeric loop view");
+									return {
+										object,
+										writable: writable === 1,
+										minOffset: r.i32(),
+										maxOffset: r.i32(),
+									};
+								}),
+							};
+						})();
 		const id = r.i32(),
 			entryIp = r.i32(),
 			inputs = r.i32Array(),

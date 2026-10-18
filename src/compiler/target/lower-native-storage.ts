@@ -1534,6 +1534,11 @@ export function validateNativeStorage(
 			const expected = selected[index]!;
 			return (
 				plan.kind === expected.kind &&
+				(plan.kind !== "array-iteration" ||
+					(expected.kind === "array-iteration" &&
+						plan.initializeIp === expected.initializeIp &&
+						plan.iterator === expected.iterator &&
+						(plan.records ?? []).join() === (expected.records ?? []).join())) &&
 				(plan.kind !== "fixed-numeric" ||
 					(expected.kind === "fixed-numeric" &&
 						plan.index === expected.index &&

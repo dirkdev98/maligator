@@ -26,6 +26,31 @@ function centroid(points) {
 	return `${sx},${sy}`;
 }
 
+function sumOf(values) {
+	let total = 0;
+	for (const value of values) total += value;
+	return total;
+}
+
+function centroidOf(points) {
+	let sx = 0;
+	let sy = 0;
+	for (const point of points) {
+		sx += point.x;
+		sy += point.y;
+	}
+	return `${sx},${sy}`;
+}
+
+function sumUntilNegative(values) {
+	let total = 0;
+	for (const value of values) {
+		if (value < 0) break;
+		total += value;
+	}
+	return total;
+}
+
 const lines = [];
 const show = (label, value) =>
 	lines.push(`${label} ${String(value)} ${Object.is(value, -0)}`);
@@ -93,9 +118,21 @@ try {
 } catch (error) {
 	lines.push(`null element ${error instanceof TypeError}`);
 }
+const iterated = Array.from({ length: 128 }, (_, index) => index * 0.5);
+lines.push(`for-of numbers ${sumOf(iterated)} ${sumOf(iterated)}`);
+lines.push(`for-of hole ${sumOf([1, , 3])}`);
+const iteratedTrailing = [1, 2];
+iteratedTrailing.length = 3;
+lines.push(`for-of trailing hole ${sumOf(iteratedTrailing)}`);
+lines.push(`for-of string ${sumOf([1, "b", 2])}`);
+lines.push(`for-of empty ${sumOf([])}`);
+lines.push(`for-of records ${centroidOf(records)}`);
+lines.push(`for-of mixed records ${centroidOf([{ x: 1, y: 2 }, { y: 3, x: 4 }, 5])}`);
+lines.push(`for-of break ${sumUntilNegative([1, 2, 3, -1, 100])}`);
 if (process.env.DENSE_ARRAY_PROTOTYPE_HOLE === "1") {
 	Array.prototype[1] = 100;
 	show("prototype hole", sumReloaded([1, , 3]));
+	show("for-of prototype hole", sumOf([1, , 3]));
 	delete Array.prototype[1];
 }
 console.log(lines.join("\n"));

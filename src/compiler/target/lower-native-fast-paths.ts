@@ -187,6 +187,13 @@ export type NativeNumericLoopRegionPlan = NativeNumericLoopRegionBase &
 	(
 		| { readonly kind: "integer" }
 		| {
+				/** A for-of over an Array whose deferred cursor the header steps. */
+				readonly kind: "array-iteration";
+				readonly initializeIp: number;
+				readonly iterator: number;
+				readonly records?: ReadonlyArray<number>;
+		  }
+		| {
 				readonly kind: "fixed-numeric";
 				readonly index: number;
 				readonly bound: number;
@@ -1151,6 +1158,12 @@ export function numberRecordDataflow(
 			case "LOAD_PROPERTY_STATIC_ARRAY_LENGTH":
 				admitted = indexed && write(instruction.dst, "number");
 				break;
+			case "ITERATOR_STEP":
+				admitted =
+					indexed &&
+					write(instruction.valueDst, "number") &&
+					write(instruction.doneDst, "boolean");
+				break;
 			case "LOAD_PROPERTY_STATIC":
 			case "CREATE_NUMBER":
 			case "CREATE_F64":
@@ -1750,16 +1763,15 @@ export function nativeNumericBuiltinInstruction(instruction: BytecodeInstruction
 function numericLoopRecords(
 	fn: BytecodeFunction,
 	shape: NativeNumericLoopShape,
-	memory: ReadonlyArray<{ readonly ip: number; readonly op: BytecodeInstruction }>,
+	elements: ReadonlyArray<number>,
 ): Set<number> | undefined {
 	const writers = new Map<number, number>();
 	for (const ip of shape.order)
 		for (const register of vmInstructionWriteRegisters(fn.instructions[ip]!))
 			writers.set(register, (writers.get(register) ?? 0) + 1);
 	const candidates = new Set<number>();
-	for (const { op } of memory)
-		if (op.opcode === "LOAD_PROPERTY" && writers.get(op.dst) === 1)
-			candidates.add(op.dst);
+	for (const register of elements)
+		if (writers.get(register) === 1) candidates.add(register);
 	for (let changed = true; changed;) {
 		changed = false;
 		for (const ip of shape.order) {
@@ -1920,7 +1932,11 @@ function fixedNumericLoopStorage(
 	}
 	if (lengthLoad !== undefined && !views.has(lengthLoad.object))
 		views.set(lengthLoad.object, { writable: false, minOffset: 0, maxOffset: 0 });
-	const records = numericLoopRecords(fn, shape, memory);
+	const records = numericLoopRecords(
+		fn,
+		shape,
+		memory.flatMap(({ op }) => (op.opcode === "LOAD_PROPERTY" ? [op.dst] : [])),
+	);
 	if (records === undefined) return undefined;
 	// Only read-only Array views admit a length bound or records, so stores keep their kinds.
 	if (
@@ -1959,6 +1975,104 @@ function fixedNumericLoopStorage(
 	};
 }
 
+function lowerArrayIterationRegion(
+	fn: BytecodeFunction,
+	header: number,
+	representations: ReadonlyArray<VmRegisterRepresentation>,
+	body: NativeBodyFacts,
+	conflicts: (ip: number) => boolean,
+	cursor: { readonly initializeIp: number; readonly iterator: number },
+): NativeNumericLoopRegionPlan | undefined {
+	const step = fn.instructions[header]!;
+	if (step.opcode !== "ITERATOR_STEP" || conflicts(header)) return undefined;
+	const shape = numericLoopShape(fn, body, header);
+	if (shape === undefined || conflicts(shape.entryIp) || shape.order.some(conflicts))
+		return undefined;
+	const branch = fn.instructions[header + 1];
+	if (
+		branch?.opcode !== "JUMP_IF" ||
+		branch.cond !== step.doneDst ||
+		shape.members.has(branch.targetIp) ||
+		!shape.members.has(header + 2)
+	)
+		return undefined;
+	if (
+		shape.order.some((ip) =>
+			vmInstructionWriteRegisters(fn.instructions[ip]!).some(
+				(register) => register === step.iterator || register === step.next,
+			),
+		)
+	)
+		return undefined;
+	const records = numericLoopRecords(fn, shape, [step.valueDst]);
+	if (records === undefined) return undefined;
+	for (const ip of shape.order) {
+		if (ip === header) continue;
+		const op = fn.instructions[ip]!;
+		if (op.opcode === "LOAD_PROPERTY_STATIC" && records.has(op.object)) continue;
+		if (
+			(op.opcode !== "CREATE_NUMBER" &&
+				op.opcode !== "CREATE_F64" &&
+				!integerLoopInstruction(op) &&
+				nativeNumericBuiltinInstruction(op) === undefined) ||
+			vmInstructionReadRegisters(op).some(
+				(register) => register === step.iterator || register === step.next,
+			)
+		)
+			return undefined;
+	}
+	const flow = numberRecordDataflow(fn, shape.order, -1, representations, true);
+	if (flow === undefined) return undefined;
+	const inputs = new Set(flow.inputs);
+	const targets = new Set<number>();
+	for (const ip of shape.order)
+		for (const successor of numberRecordSuccessors(fn.instructions[ip]!, ip))
+			if (!shape.members.has(successor)) targets.add(successor);
+	const exits: Array<NativeNumericLoopRegionPlan["exits"][number]> = [];
+	for (const targetIp of [...targets].sort((a, b) => a - b)) {
+		if (targetIp >= fn.instructions.length) return undefined;
+		const outputs = registersLiveAt(fn, body, targetIp, flow.written);
+		const assigned = flow.assigned.get(targetIp) ?? new Set<number>();
+		for (const register of outputs) {
+			// The step leaves its value undefined once done, which a Number local cannot hold.
+			if (register === step.valueDst || records.has(register)) return undefined;
+			const representation = representations[register];
+			const kind = flow.kinds.get(register);
+			if (
+				kind === "number"
+					? representation !== "number" &&
+						representation !== "int32" &&
+						representation !== "boxed"
+					: representation !== "boolean" && representation !== "boxed"
+			)
+				return undefined;
+			if (!assigned.has(register)) {
+				if (numberRecordInputKind(representation) !== kind) return undefined;
+				inputs.add(register);
+			}
+		}
+		exits.push(Object.freeze({ targetIp, outputs: Object.freeze(outputs) }));
+	}
+	if ([...inputs].some((register) => records.has(register))) return undefined;
+	const claimedIps = [...shape.members, shape.entryIp].sort((a, b) => a - b);
+	return Object.freeze({
+		kind: "array-iteration" as const,
+		initializeIp: cursor.initializeIp,
+		iterator: cursor.iterator,
+		...(records.size === 0 ? {} : { records: [...records].sort((a, b) => a - b) }),
+		id: header,
+		entryIp: shape.entryIp,
+		inputs: Object.freeze([...inputs].sort((a, b) => a - b)),
+		carried: Object.freeze(
+			[...inputs].filter((register) => flow.written.has(register)).sort((a, b) => a - b),
+		),
+		exits: Object.freeze(exits),
+		claimedIps: Object.freeze(claimedIps),
+		borrowedRegisters: borrowedRegisters(fn, claimedIps, body),
+		fallback: "original-instructions",
+	});
+}
+
 function lowerNumericLoopRegion(
 	fn: BytecodeFunction,
 	header: number,
@@ -1966,8 +2080,19 @@ function lowerNumericLoopRegion(
 	body: NativeBodyFacts,
 	conflicts: (ip: number) => boolean,
 	lengthLoads: ReadonlySet<number>,
+	cursorSteps: ReadonlyMap<number, { initializeIp: number; iterator: number }>,
 ): NativeNumericLoopRegionPlan | undefined {
 	const first = fn.instructions[header];
+	const cursor = first?.opcode === "ITERATOR_STEP" ? cursorSteps.get(header) : undefined;
+	if (cursor !== undefined)
+		return lowerArrayIterationRegion(
+			fn,
+			header,
+			representations,
+			body,
+			conflicts,
+			cursor,
+		);
 	// Fixed-storage headers are comparisons or a view's length load.
 	if (
 		first === undefined ||
@@ -2898,8 +3023,9 @@ export function selectNativeFastPaths(
 	const mapEntryBlocked = new Set(blocked);
 	const snapshotOverlayIps = new Set<number>();
 	const snapshotBlocked = new Set(blocked);
-	// Numeric loop regions keep an indexed-length loop's code as their fallback.
+	// Numeric loop regions keep indexed-length loop and Array cursor code as their fallback.
 	const numericLoopBlocked = new Set(blocked);
+	const cursorSteps = new Map<number, { initializeIp: number; iterator: number }>();
 	// An Array view's length is an own data property, so any `.length` load can bound its loop.
 	const lengthLoads = new Set<number>();
 	for (const [ip, op] of fn.instructions.entries()) {
@@ -2921,10 +3047,24 @@ export function selectNativeFastPaths(
 			blocked.add(action.ip);
 			for (const ip of region.claimedIps) blocked.add(ip);
 		}
-		if (region.kind !== "numeric-fusion" && region.kind !== "indexed-length-loop") {
+		if (
+			region.kind !== "numeric-fusion" &&
+			region.kind !== "indexed-length-loop" &&
+			region.kind !== "array-values-iterator-cursor" &&
+			region.kind !== "iterator-result-virtualization"
+		) {
 			numericLoopBlocked.add(action.ip);
 			for (const ip of region.claimedIps) numericLoopBlocked.add(ip);
 		}
+		if (
+			region.kind === "array-values-iterator-cursor" &&
+			region.stateSynchronization === "materialize-before-observation"
+		)
+			for (const stepIp of region.stepIps)
+				cursorSteps.set(stepIp, {
+					initializeIp: region.initializeIp,
+					iterator: region.iterator,
+				});
 		switch (region.kind) {
 			case "numeric-fusion": {
 				const pair = region.pairs[action.primaryIndex!]!;
@@ -3070,6 +3210,7 @@ export function selectNativeFastPaths(
 					);
 				},
 				lengthLoads,
+				cursorSteps,
 			);
 			if (plan === undefined) continue;
 			const members = new Set(plan.claimedIps);
@@ -3079,7 +3220,7 @@ export function selectNativeFastPaths(
 					const fusion = fusions.get(ip);
 					return (
 						fusion !== undefined &&
-						(plan.kind !== "fixed-numeric" ||
+						(plan.kind === "integer" ||
 							!members.has(fusion.id) ||
 							!members.has(fusion.finishIp))
 					);
