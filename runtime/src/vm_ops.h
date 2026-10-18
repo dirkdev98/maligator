@@ -1098,30 +1098,19 @@ static_assert(sizeof(MalPropertyStubEntry) == 24,
 
 /** Direct-mapped index for (shape, key) in the stub cache. */
 static inline u32 mal_stub_hash(const struct MalShape *shape, MalValue key) {
-    // Heap size classes make nearby shapes share many low address bits. Avalanche
-    // the full pointer/key mix before masking so those layouts do not collapse
-    // onto one direct-mapped row.
-    u64 h = ((u64) (uptr) shape >> 4) ^ ((u64) key * UINT64_C(0x9e3779b97f4a7c15));
-    h ^= h >> 30;
-    h *= UINT64_C(0xbf58476d1ce4e5b9);
-    h ^= h >> 27;
-    h *= UINT64_C(0x94d049bb133111eb);
-    h ^= h >> 31;
-    return (u32) h & (MAL_STUB_CACHE_SIZE - 1u);
+    // Heap size classes make nearby shapes share many low address bits, so the row comes
+    // from the product's high bits, which every input bit reaches, with one multiply.
+    u64 h = ((u64) (uptr) shape + ((u64) key << 1)) * UINT64_C(0x9e3779b97f4a7c15);
+    return (u32) (h >> (64 - MAL_STUB_CACHE_BITS));
 }
 
 /** Set index for an exact inherited receiver family. */
 static inline u32 mal_inherited_stub_hash(
     const struct MalShape *shape, const struct MalObject *prototype, MalValue key
 ) {
-    u64 h = ((u64) (uptr) shape >> 4) ^ ((u64) (uptr) prototype >> 3) ^
-        ((u64) key * UINT64_C(0x9e3779b97f4a7c15));
-    h ^= h >> 30;
-    h *= UINT64_C(0xbf58476d1ce4e5b9);
-    h ^= h >> 27;
-    h *= UINT64_C(0x94d049bb133111eb);
-    h ^= h >> 31;
-    return (u32) h & (MAL_INHERITED_STUB_CACHE_SET_COUNT - 1u);
+    u64 h = ((u64) (uptr) shape + ((u64) (uptr) prototype << 1) + ((u64) key << 2)) *
+        UINT64_C(0x9e3779b97f4a7c15);
+    return (u32) (h >> (64 - MAL_INHERITED_STUB_CACHE_BITS));
 }
 
 /**
