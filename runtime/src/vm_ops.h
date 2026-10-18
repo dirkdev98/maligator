@@ -1899,6 +1899,12 @@ static inline __attribute__((always_inline)) bool mal_vm_property_try_load_lengt
         mal_perf_ic_load_array_length_hit();
         return true;
     }
+    // String length is a non-writable own property no prototype can shadow.
+    if (ic->mode == MAL_IC_MODE_STRING_LENGTH && mal_value_is_string(receiver)) {
+        mal_perf_ic_load_string_length_hit();
+        *out = mal_value_from_i32((i32) mal_value_to_string(receiver)->length);
+        return true;
+    }
     return mal_vm_property_try_load_length_static_remaining(vm, receiver, ic, out);
 }
 

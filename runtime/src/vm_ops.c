@@ -2489,12 +2489,6 @@ bool mal_vm_array_try_get_absent_index(const MalArrayObject *arr, MalValue *out)
 bool mal_vm_property_try_load_length_static_remaining(
     MalVm *vm, MalValue receiver, MalInlineCache *ic, MalValue *out
 ) {
-    // String length is a non-writable own property no prototype can shadow.
-    if (ic->mode == MAL_IC_MODE_STRING_LENGTH && mal_value_is_string(receiver)) {
-        mal_perf_ic_load_string_length_hit();
-        *out = mal_value_from_i32((i32) mal_value_to_string(receiver)->length);
-        return true;
-    }
     if (ic->mode == MAL_IC_MODE_TYPED_ARRAY_LENGTH && mal_vm_primitive_methods_intact(vm) &&
         mal_value_is_typed_array_object(receiver)) {
         const MalTypedArrayObject *array = mal_value_to_typed_array_object(receiver);
