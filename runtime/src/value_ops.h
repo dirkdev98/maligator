@@ -125,7 +125,7 @@ static inline bool mal_ops_is_number(MalValue value) {
 }
 
 static inline f64 mal_ops_number_as_f64(MalValue value) {
-    return value < MAL_VALUE_TAG_BASE
+    return __builtin_expect(value < MAL_VALUE_TAG_BASE, 1)
         ? mal_value_to_f64(value) : (f64) (i32) (u32) (value & MASK_INT32);
 }
 

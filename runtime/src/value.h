@@ -132,7 +132,7 @@ static inline bool mal_value_is_nan(MalValue value) {
 
 /** Reinterpret f64 as MalValue + convert any NaN to our only NaN. */
 static inline MalValue mal_value_from_f64_convert_nan(f64 value) {
-    return value != value ? MAL_VALUE_NAN : mal_value_from_f64(value);
+    return __builtin_expect(value != value, 0) ? MAL_VALUE_NAN : mal_value_from_f64(value);
 }
 
 /** Create a new null value. */
