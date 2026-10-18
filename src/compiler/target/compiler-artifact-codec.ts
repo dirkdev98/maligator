@@ -97,7 +97,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 244;
+export const COMPILER_ARTIFACT_VERSION = 245;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -872,6 +872,7 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 		if (plan.kind === "fixed-numeric") {
 			w.i32(plan.index);
 			w.i32(plan.bound);
+			w.i32(plan.boundObject ?? -1);
 			w.i32(plan.stride);
 			w.u32(plan.views.length);
 			for (const view of plan.views) {
@@ -1376,23 +1377,29 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 		const storage =
 			kindTag === 0
 				? { kind: "integer" as const }
-				: {
-						kind: "fixed-numeric" as const,
-						index: r.i32(),
-						bound: r.i32(),
-						stride: r.i32(),
-						views: Array.from({ length: r.count(13) }, () => {
-							const object = r.i32(),
-								writable = r.u8();
-							if (writable > 1) throw new RangeError("Invalid numeric loop view");
-							return {
-								object,
-								writable: writable === 1,
-								minOffset: r.i32(),
-								maxOffset: r.i32(),
-							};
-						}),
-					};
+				: (() => {
+						const index = r.i32(),
+							bound = r.i32(),
+							boundObject = r.i32();
+						return {
+							kind: "fixed-numeric" as const,
+							index,
+							bound,
+							...(boundObject === -1 ? {} : { boundObject }),
+							stride: r.i32(),
+							views: Array.from({ length: r.count(13) }, () => {
+								const object = r.i32(),
+									writable = r.u8();
+								if (writable > 1) throw new RangeError("Invalid numeric loop view");
+								return {
+									object,
+									writable: writable === 1,
+									minOffset: r.i32(),
+									maxOffset: r.i32(),
+								};
+							}),
+						};
+					})();
 		const id = r.i32(),
 			entryIp = r.i32(),
 			inputs = r.i32Array(),

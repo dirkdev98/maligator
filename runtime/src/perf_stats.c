@@ -1033,6 +1033,8 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.fixed_typed_array_region_views[3],
         (unsigned long long) mal_perf_stats.fixed_typed_array_region_views[4],
         (unsigned long long) mal_perf_stats.fixed_typed_array_affine_regions);
+    fprintf(stderr, "[perf-dense-array-region-stats] admissions=%llu\n",
+        (unsigned long long) mal_perf_stats.dense_array_number_region_admissions);
     fprintf(stderr, "[perf-typed-array-stride-stats] admissions=%llu\n",
         (unsigned long long) mal_perf_stats.fixed_typed_array_stride_regions);
     fprintf(

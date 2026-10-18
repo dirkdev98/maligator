@@ -2442,6 +2442,29 @@ static inline bool mal_vm_fixed_numeric_storage(
     return true;
 }
 
+/**
+ * A dense Array's elements below `count`, borrowed until a poll like typed-array
+ * bytes. A hole or non-Number element is not an own Number, so its read declines.
+ */
+typedef struct MalDenseNumberSpan {
+    const MalValue *elements;
+    u32 length;
+    u32 count;
+} MalDenseNumberSpan;
+
+static inline bool mal_vm_dense_number_storage(MalValue receiver, MalDenseNumberSpan *span) {
+    if (!mal_value_is_heap_type(receiver, MAL_HEAP_ARRAY_OBJECT)) return false;
+    const MalArrayObject *array = (const MalArrayObject *) mal_value_to_heap(receiver);
+    if (array->dense_deopted) return false;
+    *span = (MalDenseNumberSpan) {
+        .elements = array->elements,
+        .length = array->length,
+        .count = array->elements == nullptr ? 0
+            : array->dense_count < array->length ? array->dense_count : array->length,
+    };
+    return true;
+}
+
 static inline f64 mal_vm_fixed_numeric_load(const MalTypedArraySpan *span, u32 index) {
     const byte *at = span->data + (usize) index * span->element_size;
     if (span->kind == MAL_TA_FLOAT64)

@@ -913,6 +913,8 @@ function emitNumericLoopRegion(
 	const local = (register: number) => `${id}_r${register}`;
 	const start = (register: number) => `${id}_s${register}`;
 	const guards: Array<string> = [];
+	const typedViewGuards: Array<string> = [];
+	const arrayViewGuards: Array<string> = [];
 	const rangePrelude: Array<string> = [];
 	const initial = new Map<number, string>();
 	for (const register of plan.inputs) {
@@ -941,13 +943,27 @@ function emitNumericLoopRegion(
 			);
 		else guards.push(`mal_safe_integer_admit(${value}, &${local(register)})`);
 	}
+	const readOnly =
+		plan.kind === "fixed-numeric" && plan.views.every((view) => !view.writable);
 	if (plan.kind === "fixed-numeric") {
-		const comparison = fn.instructions[plan.id]!;
+		const comparison =
+			fn.instructions[plan.id + (plan.boundObject === undefined ? 0 : 1)]!;
 		if (comparison.opcode !== "BINARY") throw new Error("Invalid typed loop comparison");
 		const ascending = plan.stride > 0;
 		const inclusive = comparison.operator === "<=" || comparison.operator === ">=";
 		const index = local(plan.index),
 			bound = local(plan.bound);
+		// Views are admitted before the range so a length bound can read the admitted length.
+		rangePrelude.push(
+			// A TypedArray's length is an inherited getter that a length bound would bypass.
+			`  bool ${id}_typed = ${plan.boundObject !== undefined ? "false" : plan.views.map((view) => `mal_vm_fixed_numeric_storage(r${view.object}, 0, ${view.writable}, &${id}_v${view.object})`).join(" && ")};`,
+			`  bool ${id}_array = ${readOnly ? `!${id}_typed && ${plan.views.map((view) => `mal_vm_dense_number_storage(r${view.object}, &${id}_a${view.object})`).join(" && ")}` : "false"};`,
+		);
+		if (plan.boundObject !== undefined)
+			rangePrelude.push(
+				`  ${bound} = ${id}_array ? (f64) ${id}_a${plan.boundObject}.length : 0.0;`,
+			);
+		guards.unshift(`(${id}_typed || ${id}_array)`);
 		guards.push(
 			`${index} >= 0.0`,
 			`${index} <= UINT32_MAX`,
@@ -975,10 +991,11 @@ function emitNumericLoopRegion(
 			const high = `(${ascending ? last : index} + ${cF64Literal(view.maxOffset + 1)})`;
 			if (view.minOffset !== 0) guards.push(`${low} >= 0.0`);
 			guards.push(`${high} <= UINT32_MAX`);
-			guards.push(
-				`mal_vm_fixed_numeric_storage(r${view.object}, (u32) ${high}, ${view.writable}, &${id}_v${view.object})`,
-			);
+			typedViewGuards.push(`(u32) ${high} <= ${id}_v${view.object}.length`);
+			arrayViewGuards.push(`(u32) ${high} <= ${id}_a${view.object}.count`);
 		}
+		typedViewGuards.unshift(`${id}_typed`);
+		arrayViewGuards.unshift(`${id}_array`);
 	}
 	const materialize = (register: number, value: string) => {
 		const representation = reps[register];
@@ -1029,7 +1046,7 @@ function emitNumericLoopRegion(
 	const int32 = (register: number) => `mal_safe_integer_to_i32(${local(register)})`;
 	const checked = (call: string, dst: number) =>
 		`if (__builtin_expect(!${call.replace("%DST%", `&${local(dst)}`)}, 0)) ${restart}`;
-	const statement = (ip: number, fixedF64: boolean): string => {
+	const statement = (ip: number, mode: "f64" | "typed" | "array"): string => {
 		const op = fn.instructions[ip]!;
 		switch (op.opcode) {
 			case "CALL_KNOWN":
@@ -1047,12 +1064,20 @@ function emitNumericLoopRegion(
 					throw new Error("Invalid numeric loop builtin expression");
 				return `${local(op.dst)} = ${expression};`;
 			}
+			case "LOAD_PROPERTY_STATIC":
+			case "LOAD_PROPERTY_STATIC_ARRAY_LENGTH":
+				if (plan.kind !== "fixed-numeric" || op.object !== plan.boundObject)
+					throw new Error("Invalid numeric loop length load");
+				return `${local(op.dst)} = (f64) ${id}_${mode === "array" ? "a" : "v"}${op.object}.length;`;
 			case "LOAD_PROPERTY":
-				return fixedF64
+				if (mode === "array")
+					return `{ MalValue ${id}_e = ${id}_a${op.object}.elements[(u32) ${local(op.key)}]; if (__builtin_expect(!mal_ops_is_number(${id}_e), 0)) ${restart} ${local(op.dst)} = mal_ops_number_as_f64(${id}_e); }`;
+				return mode === "f64"
 					? `${local(op.dst)} = mal_scalar_f64_from_bits(mal_scalar_load_native_u64(${id}_v${op.object}.data + (usize)(u32) ${local(op.key)} * 8));`
 					: `${local(op.dst)} = mal_vm_fixed_numeric_load(&${id}_v${op.object}, (u32) ${local(op.key)});`;
 			case "STORE_PROPERTY":
-				return fixedF64
+				if (mode === "array") throw new Error("Invalid dense Array loop store");
+				return mode === "f64"
 					? `mal_scalar_store_native_u64(${id}_v${op.object}.data + (usize)(u32) ${local(op.key)} * 8, mal_scalar_f64_to_bits(${local(op.value)}));`
 					: `mal_vm_fixed_numeric_store(&${id}_v${op.object}, (u32) ${local(op.key)}, ${local(op.value)});`;
 			case "CREATE_NUMBER":
@@ -1140,7 +1165,7 @@ function emitNumericLoopRegion(
 				throw new Error(`Invalid native integer loop instruction ${op.opcode}`);
 		}
 	};
-	const loopBody = (fixedF64: boolean): ReadonlyArray<string> => {
+	const loopBody = (mode: "f64" | "typed" | "array"): ReadonlyArray<string> => {
 		const lines = [
 			...plan.carried.map(
 				(register) =>
@@ -1154,7 +1179,7 @@ function emitNumericLoopRegion(
 			lines.push(head === plan.id ? "      {" : `      if (${id}_b${head}) {`);
 			let ip = head;
 			for (;;) {
-				lines.push(`        ${statement(ip, fixedF64)}`);
+				lines.push(`        ${statement(ip, mode)}`);
 				if (isBranch(ip)) break;
 				if (!members.has(ip + 1) || headSet.has(ip + 1)) {
 					lines.push(`        ${reach(ip + 1)}`);
@@ -1176,18 +1201,8 @@ function emitNumericLoopRegion(
 		lines.push(`    goto L${plan.id};`);
 		return lines;
 	};
-	return [
-		"{",
-		...(plan.kind === "fixed-numeric"
-			? plan.views.map((view) => `  MalTypedArraySpan ${id}_v${view.object} = {0};`)
-			: []),
-		...[...flow.kinds].map(
-			([register, kind]) =>
-				`  ${kind === "boolean" ? "bool" : floating ? "f64" : "i64"} ${local(register)} = ${initial.get(register) ?? (kind === "boolean" ? "false" : "0")};`,
-		),
-		...rangePrelude,
-		`  if (${guards.length === 0 ? "true" : guards.join(" && ")}) {`,
-		...(plan.kind === "fixed-numeric"
+	const typedBodies =
+		plan.kind === "fixed-numeric"
 			? [
 					"    MAL_PERF_COUNT(fixed_typed_array_region_admissions);",
 					...(plan.stride > 1
@@ -1203,12 +1218,42 @@ function emitNumericLoopRegion(
 					// One bounded specialization keeps kind dispatch out of the established Float64 loop.
 					`    if (${plan.views.map((view) => `${id}_v${view.object}.kind == MAL_TA_FLOAT64`).join(" && ")}) {`,
 					"      MAL_PERF_COUNT(fixed_typed_array_region_f64_admissions);",
-					...loopBody(true).map((line) => `  ${line}`),
+					...loopBody("f64").map((line) => `  ${line}`),
 					"    } else {",
-					...loopBody(false).map((line) => `  ${line}`),
+					...loopBody("typed").map((line) => `  ${line}`),
 					"    }",
 				]
-			: loopBody(false)),
+			: loopBody("typed");
+	const arrayBody = (): ReadonlyArray<string> => [
+		"    MAL_PERF_COUNT(dense_array_number_region_admissions);",
+		...loopBody("array"),
+	];
+	const lengthBound = plan.kind === "fixed-numeric" && plan.boundObject !== undefined;
+	return [
+		"{",
+		...(plan.kind === "fixed-numeric"
+			? plan.views.flatMap((view) => [
+					...(lengthBound ? [] : [`  MalTypedArraySpan ${id}_v${view.object} = {0};`]),
+					...(readOnly ? [`  MalDenseNumberSpan ${id}_a${view.object} = {0};`] : []),
+				])
+			: []),
+		...[...flow.kinds].map(
+			([register, kind]) =>
+				`  ${kind === "boolean" ? "bool" : floating ? "f64" : "i64"} ${local(register)} = ${initial.get(register) ?? (kind === "boolean" ? "false" : "0")};`,
+		),
+		...rangePrelude,
+		...(lengthBound
+			? [`  if (${[...guards, ...arrayViewGuards].join(" && ")}) {`, ...arrayBody()]
+			: [
+					`  if (${[...guards, ...typedViewGuards].join(" && ") || "true"}) {`,
+					...typedBodies,
+					...(readOnly
+						? [
+								`  } else if (${[...guards, ...arrayViewGuards].join(" && ")}) {`,
+								...arrayBody(),
+							]
+						: []),
+				]),
 		"  }",
 		"}",
 	];

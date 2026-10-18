@@ -190,6 +190,8 @@ export type NativeNumericLoopRegionPlan = NativeNumericLoopRegionBase &
 				readonly kind: "fixed-numeric";
 				readonly index: number;
 				readonly bound: number;
+				/** The view whose length the header loads into `bound` on every iteration. */
+				readonly boundObject?: number;
 				readonly stride: number;
 				readonly views: ReadonlyArray<{
 					readonly object: number;
@@ -1144,6 +1146,9 @@ export function numberRecordDataflow(
 				admitted =
 					indexed && read(instruction.key, "number") && read(instruction.value, "number");
 				break;
+			case "LOAD_PROPERTY_STATIC_ARRAY_LENGTH":
+				admitted = indexed && write(instruction.dst, "number");
+				break;
 			case "LOAD_PROPERTY_STATIC":
 			case "CREATE_NUMBER":
 			case "CREATE_F64":
@@ -1740,10 +1745,11 @@ function fixedNumericLoopStorage(
 	fn: BytecodeFunction,
 	shape: NativeNumericLoopShape,
 	body: NativeBodyFacts,
+	lengthLoads: ReadonlySet<number>,
 ):
 	| Pick<
 			Extract<NativeNumericLoopRegionPlan, { kind: "fixed-numeric" }>,
-			"index" | "bound" | "stride" | "views"
+			"index" | "bound" | "boundObject" | "stride" | "views"
 	  >
 	| undefined {
 	const memory = shape.order.flatMap((ip) => {
@@ -1754,27 +1760,38 @@ function fixedNumericLoopStorage(
 	});
 	if (memory.length === 0 || memory.length > FIXED_NUMERIC_LOOP_ACCESS_LIMIT)
 		return undefined;
-	const comparison = fn.instructions[shape.order[0]!]!;
+	// An indexed-length header reloads a view's length, which no region instruction can change.
+	const header = fn.instructions[shape.order[0]!]!;
+	const lengthLoad =
+		lengthLoads.has(shape.order[0]!) &&
+		(header.opcode === "LOAD_PROPERTY_STATIC" ||
+			header.opcode === "LOAD_PROPERTY_STATIC_ARRAY_LENGTH")
+			? { ip: shape.order[0]!, object: header.object, dst: header.dst }
+			: undefined;
+	const comparisonIp = shape.order[0]! + (lengthLoad === undefined ? 0 : 1);
+	const comparison = fn.instructions[comparisonIp]!;
 	if (
 		comparison.opcode !== "BINARY" ||
-		!["<", "<=", ">", ">="].includes(comparison.operator)
+		!["<", "<=", ">", ">="].includes(comparison.operator) ||
+		(lengthLoad !== undefined && shape.order[1] !== comparisonIp)
 	)
 		return undefined;
-	const leftWritten = shape.order.some((ip) =>
-		body.writes[ip]!.includes(comparison.left),
-	);
-	const rightWritten = shape.order.some((ip) =>
-		body.writes[ip]!.includes(comparison.right),
-	);
+	const writtenInLoop = (register: number) =>
+		shape.order.some(
+			(ip) => ip !== lengthLoad?.ip && body.writes[ip]!.includes(register),
+		);
+	const leftWritten = writtenInLoop(comparison.left);
+	const rightWritten = writtenInLoop(comparison.right);
 	if (leftWritten === rightWritten) return undefined;
 	const index = leftWritten ? comparison.left : comparison.right;
 	const bound = leftWritten ? comparison.right : comparison.left;
-	const branch = fn.instructions[shape.order[0]! + 1];
+	if (lengthLoad !== undefined && bound !== lengthLoad.dst) return undefined;
+	const branch = fn.instructions[comparisonIp + 1];
 	if (
 		branch?.opcode !== "JUMP_IF" ||
 		branch.cond !== comparison.dst ||
 		!shape.members.has(branch.targetIp) ||
-		shape.members.has(shape.order[0]! + 2)
+		shape.members.has(comparisonIp + 2)
 	)
 		return undefined;
 	const { offsets, increments } = numericLoopIndexFacts(fn, body, shape, index);
@@ -1836,8 +1853,14 @@ function fixedNumericLoopStorage(
 			maxOffset: Math.max(previous?.maxOffset ?? offset, offset),
 		});
 	}
+	if (lengthLoad !== undefined && !views.has(lengthLoad.object))
+		views.set(lengthLoad.object, { writable: false, minOffset: 0, maxOffset: 0 });
+	// Only read-only Array views admit a length bound, so stores keep a hoisted bound.
+	if (lengthLoad !== undefined && [...views.values()].some((view) => view.writable))
+		return undefined;
 	if (views.size > 8 || views.has(index) || views.has(bound)) return undefined;
 	for (const ip of shape.order) {
+		if (ip === lengthLoad?.ip) continue;
 		const op = fn.instructions[ip]!;
 		if (
 			vmInstructionWriteRegisters(op).some(
@@ -1858,6 +1881,7 @@ function fixedNumericLoopStorage(
 	return {
 		index,
 		bound,
+		...(lengthLoad === undefined ? {} : { boundObject: lengthLoad.object }),
 		stride,
 		views: [...views].map(([object, window]) => ({ object, ...window })),
 	};
@@ -1869,15 +1893,21 @@ function lowerNumericLoopRegion(
 	representations: ReadonlyArray<VmRegisterRepresentation>,
 	body: NativeBodyFacts,
 	conflicts: (ip: number) => boolean,
+	lengthLoads: ReadonlySet<number>,
 ): NativeNumericLoopRegionPlan | undefined {
 	const first = fn.instructions[header];
-	// Fixed-storage headers are comparisons; both loop contracts require an integer-loop header.
-	if (first === undefined || !integerLoopInstruction(first) || conflicts(header))
+	// Fixed-storage headers are comparisons or a view's length load.
+	if (
+		first === undefined ||
+		(!integerLoopInstruction(first) && !lengthLoads.has(header)) ||
+		conflicts(header)
+	)
 		return undefined;
 	const shape = numericLoopShape(fn, body, header);
 	if (shape === undefined || conflicts(shape.entryIp) || shape.order.some(conflicts))
 		return undefined;
-	const storage = fixedNumericLoopStorage(fn, shape, body);
+	const storage = fixedNumericLoopStorage(fn, shape, body, lengthLoads);
+	if (storage === undefined && !integerLoopInstruction(first)) return undefined;
 	if (
 		(storage === undefined &&
 			shape.order.some((ip) => !integerLoopInstruction(fn.instructions[ip]!))) ||
@@ -2789,6 +2819,9 @@ export function selectNativeFastPaths(
 	const mapEntryBlocked = new Set(blocked);
 	const snapshotOverlayIps = new Set<number>();
 	const snapshotBlocked = new Set(blocked);
+	// Numeric loop regions keep an indexed-length loop's code as their fallback.
+	const numericLoopBlocked = new Set(blocked);
+	const indexedLengthLoads = new Set<number>();
 	const indexedLoops: Array<NativeIndexedLoopElement> = [];
 	for (const action of native.regionActions) {
 		const region = native.specializations[action.regionIndex]!;
@@ -2799,6 +2832,10 @@ export function selectNativeFastPaths(
 		if (region.kind !== "numeric-fusion") {
 			blocked.add(action.ip);
 			for (const ip of region.claimedIps) blocked.add(ip);
+		}
+		if (region.kind !== "numeric-fusion" && region.kind !== "indexed-length-loop") {
+			numericLoopBlocked.add(action.ip);
+			for (const ip of region.claimedIps) numericLoopBlocked.add(ip);
 		}
 		switch (region.kind) {
 			case "numeric-fusion": {
@@ -2820,6 +2857,7 @@ export function selectNativeFastPaths(
 			case "indexed-length-loop": {
 				snapshotOverlayIps.add(action.ip);
 				blocked.add(action.ip);
+				if (action.role === "load") indexedLengthLoads.add(action.ip);
 				const site = region.sites[action.primaryIndex!]!;
 				const element =
 					action.role === "element" ? site.elements[action.secondaryIndex!] : undefined;
@@ -2840,27 +2878,30 @@ export function selectNativeFastPaths(
 			}
 		}
 	}
+	const claim = (ip: number) => {
+		blocked.add(ip);
+		numericLoopBlocked.add(ip);
+	};
 	const spanContinuations = selectNativeSpanContinuations(
 		native,
 		body,
 		stringConstants,
 		(ip) => unavailable(ip) || fusions.has(ip),
 	);
-	for (const plan of spanContinuations) for (const ip of plan.claimedIps) blocked.add(ip);
+	for (const plan of spanContinuations) for (const ip of plan.claimedIps) claim(ip);
 	const mapEntries = selectNativeMapEntries(
 		native,
 		body,
 		(ip) => mapEntryBlocked.has(ip) || pollingEdges.has(ip),
 	);
-	for (const plan of mapEntries) for (const ip of plan.claimedIps) blocked.add(ip);
+	for (const plan of mapEntries) for (const ip of plan.claimedIps) claim(ip);
 	const arrayInitializations = selectNativeArrayInitializations(
 		native,
 		body,
 		stringConstants,
 		unavailable,
 	);
-	for (const plan of arrayInitializations)
-		for (const ip of plan.claimedIps) blocked.add(ip);
+	for (const plan of arrayInitializations) for (const ip of plan.claimedIps) claim(ip);
 	const numberRecordRegions: Array<NativeNumberRecordRegionPlan> = [];
 	const numericLoopRegions: Array<NativeNumericLoopRegionPlan> = [];
 	const objectEnumerationSnapshots = selectNativeObjectEnumerationSnapshots(
@@ -2873,7 +2914,7 @@ export function selectNativeFastPaths(
 			pollingEdges.has(ip),
 	);
 	for (const plan of objectEnumerationSnapshots)
-		for (const ip of plan.claimedIps) blocked.add(ip);
+		for (const ip of plan.claimedIps) claim(ip);
 	// Profiled sites observe each original instruction.
 	if (
 		native.mode === "direct" &&
@@ -2916,10 +2957,10 @@ export function selectNativeFastPaths(
 			)
 				continue;
 			numberRecordRegions.push(plan);
-			for (const claimedIp of plan.claimedIps) blocked.add(claimedIp);
+			for (const claimedIp of plan.claimedIps) claim(claimedIp);
 		}
 		for (const header of [...body.jumpTargets].sort((a, b) => a - b)) {
-			if (blocked.has(header)) continue;
+			if (numericLoopBlocked.has(header)) continue;
 			const plan = lowerNumericLoopRegion(
 				fn,
 				header,
@@ -2929,7 +2970,7 @@ export function selectNativeFastPaths(
 				(candidate) => {
 					const kind = native.instructions[candidate]?.kind;
 					return (
-						blocked.has(candidate) ||
+						numericLoopBlocked.has(candidate) ||
 						// Operand kind proofs refine the double lowering; the region replaces it.
 						(kind !== undefined &&
 							kind !== "exact-operator-input-kinds" &&
@@ -2940,6 +2981,7 @@ export function selectNativeFastPaths(
 							))
 					);
 				},
+				indexedLengthLoads,
 			);
 			if (plan === undefined) continue;
 			const members = new Set(plan.claimedIps);
@@ -2957,7 +2999,7 @@ export function selectNativeFastPaths(
 			)
 				continue;
 			numericLoopRegions.push(plan);
-			for (const claimedIp of plan.claimedIps) blocked.add(claimedIp);
+			for (const claimedIp of plan.claimedIps) claim(claimedIp);
 		}
 	}
 	const selected = lowerNativeFastPaths(
