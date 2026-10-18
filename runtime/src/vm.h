@@ -1554,6 +1554,39 @@ typedef struct MalShapeCopyCacheEntry {
 } MalShapeCopyCacheEntry;
 
 typedef struct MalVm {
+    // Generated code reaches these on every call and throw check; leading the struct
+    // keeps each access within a load's immediate offset.
+    MalCompletion completion;
+    /**
+     * Lowest safe C-stack address (the real stack bottom plus a safety margin), or 0
+     * when the platform stack bounds could not be queried. A compiled-function entry
+     * whose frame is below this throws a RangeError before the C stack is actually
+     * exhausted — robust to per-frame size, unlike the fixed depth counter alone
+     * (which stays as a backstop). The stack grows down, so "below" means a smaller
+     * address.
+     */
+    uptr stack_limit;
+
+    /**
+     * Native (compiled-backend) call frames, for stack traces — see
+     * MalNativeFrame. Each compiled entry pushes its own row, so the row count is
+     * also the compiled nesting depth: interpreted recursion is bounded by the
+     * value stack, compiled recursion by MAL_NATIVE_CALL_DEPTH_LIMIT rows. A
+     * growable array; capacity persists across the VM lifetime.
+     */
+    MalNativeFrame *native_frames;
+    i32 native_frame_count;
+    i32 native_frame_capacity;
+    /** Innermost compiled-function root frame; a field, not a thread-local, so
+     * generated prologues and epilogues need no thread-local lookup. */
+    struct MalRootFrame *root_frame_head;
+    /**
+     * Monotonic frame-entry counter. Each interpreted frame (push / generator
+     * resume) and native frame records the value at entry, giving a total order
+     * a stack-trace capture uses to interleave the two frame stacks.
+     */
+    u64 frame_seq;
+
 #if !MAL_REALMS
     MalValue known_primordial_values[MAL_KNOWN_PRIMORDIAL_COUNT];
 #endif
@@ -1717,7 +1750,6 @@ typedef struct MalVm {
     MalValue *globals;
     MalValue intrinsics[MAL_INTRINSIC_COUNT];
 #endif
-    MalCompletion completion;
     MalLiteralCacheEntry literal_cache_entries[MAL_LITERAL_CACHE_CAPACITY];
     u32 literal_cache_count;
     u32 literal_cache_cursor;
@@ -1883,16 +1915,6 @@ typedef struct MalVm {
     i32 proxy_dispatch_depth;
 
     /**
-     * Lowest safe C-stack address (the real stack bottom plus a safety margin), or 0
-     * when the platform stack bounds could not be queried. A compiled-function entry
-     * whose frame is below this throws a RangeError before the C stack is actually
-     * exhausted — robust to per-frame size, unlike the fixed depth counter alone
-     * (which stays as a backstop). The stack grows down, so "below" means a smaller
-     * address.
-     */
-    uptr stack_limit;
-
-    /**
      * Count of active *un-rooted* native builtin invocations on the C stack. A
      * builtin holds MalValue scratch in C locals the root scan cannot enumerate, so
      * the collector must not run while any are active — the safepoint poll is gated
@@ -1904,30 +1926,10 @@ typedef struct MalVm {
      */
     i32 gc_native_frames;
 
-    /**
-     * Native (compiled-backend) call frames, for stack traces — see
-     * MalNativeFrame. Each compiled entry pushes its own row, so the row count is
-     * also the compiled nesting depth: interpreted recursion is bounded by the
-     * value stack, compiled recursion by MAL_NATIVE_CALL_DEPTH_LIMIT rows. A
-     * growable array; capacity persists across the VM lifetime.
-     */
-    MalNativeFrame *native_frames;
-    i32 native_frame_count;
-    i32 native_frame_capacity;
-    /** Innermost compiled-function root frame; a field, not a thread-local, so
-     * generated prologues and epilogues need no thread-local lookup. */
-    struct MalRootFrame *root_frame_head;
 #if MAL_PROFILE
     /** Last source site published by either backend; profile attribution is O(1). */
     i32 profile_current_site_id;
 #endif
-
-    /**
-     * Monotonic frame-entry counter. Each interpreted frame (push / generator
-     * resume) and native frame records the value at entry, giving a total order
-     * a stack-trace capture uses to interleave the two frame stacks.
-     */
-    u64 frame_seq;
 
     /**
      * Captured stack traces, indexed by recyclable id. The private property on
