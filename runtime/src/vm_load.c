@@ -1093,7 +1093,7 @@ static void rd_instruction_operands(Rd *r, MalInstruction *o, I32Builder *side_d
             i32 key = rd_i32(r);
             u8 kind = rd_u8(r);
             i32 string_index = rd_i32(r);
-            if (kind > 2 || !i32_builder_reserve(side_data, r, 4)) { r->ok = false; return; }
+            if (kind > 4 || !i32_builder_reserve(side_data, r, 4)) { r->ok = false; return; }
             o->as.probe_read.data_offset = (i32) side_data->count;
             side_data->data[side_data->count++] = key;
             side_data->data[side_data->count++] = kind;
@@ -1502,7 +1502,7 @@ static i32 *rd_property_cache_index(Rd *r, MalInstruction *instruction, I32Build
                 r->ok = false;
                 return nullptr;
             }
-            return side_data->data[offset + 1] == 1
+            return mal_vm_probe_read_kind_named((u8) side_data->data[offset + 1])
                 ? &side_data->data[offset + 3] : nullptr;
         }
         case MAL_OP_LOAD_PROPERTY:
@@ -2756,7 +2756,7 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
                     if (registers[index] < 0 || registers[index] >= fn->register_count) r.ok = false;
                 }
                 i32 string_index = data[2];
-                if (data[1] == 1 ?
+                if (mal_vm_probe_read_kind_named((u8) data[1]) ?
                     string_index < 0 || string_index >= (i32) string_count :
                     string_index != -1) r.ok = false;
             } else if (instruction->opcode == MAL_OP_BUILTIN_ERROR) {

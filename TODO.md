@@ -474,18 +474,18 @@ iterator cursor is not, by itself, permission to delete its language object.
       record seen once per call never builds an escaped-key plan; its keys and
       short strings go through `memmove` calls (5% of samples) and numbers through
       `mal_text_buffer_append_number` (6%).
-- [ ] Inline known getters and setters. A getter/setter pair over `#celsius`
-      takes 112 ms against Node's 2 for 5M iterations, and the same pair over a
-      public field 142 ms; a private field read and written inside a method takes
-      29 ms (Node 3). The rooted miss paths now test accessor rows first and
-      private stores use the name's entry hint, so what remains is the call through
-      `mal_vm_call_value` and each accessor's own entry and exit. A property load
-      whose receiver class and prototype accessor are known could become a guarded
-      direct call that the existing inliner expands, with the original load as the
-      fallback. Private elements now live in shape slots behind a name-level slot
-      hint (constructing a three-private-field class went from 269 to 108 ms per 3M
-      against 75 for public fields); a per-site shape row would make the private
-      probe a single compare.
+- [ ] Narrow the remaining class accessor gap. Loop sites now probe for a
+      uniquely named class getter or setter and inline it behind a function-index
+      guard: the `#celsius` getter/setter pair takes 33 ms for 5M iterations
+      (was 112, Node 2). Each iteration still pays two accessor probes, two guards
+      and the private hint check that V8 hoists out of the loop. Exposure runs
+      before inlining, so an accessor read inside a helper called from a loop
+      stays a call, and names that some literal or store also uses as data, such
+      as `metadata` on the compiler's function store, are never exposed. Private
+      elements live in shape slots behind a name-level slot hint (a
+      three-private-field class constructs in 108 instead of 269 ms per 3M, public
+      fields 75); a per-site shape row would make the private probe a single
+      compare.
 
 - [ ] Widen numeric loop regions beyond plain Array element and record sums.
       Index and for-of loops over Arrays now keep their sums in f64 locals,

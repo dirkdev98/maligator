@@ -7,6 +7,7 @@ import type {
 	SealedCoreProgram,
 } from "../core/core-ir.ts";
 import type { CompilerInstruction } from "../shared/compiler-instruction.ts";
+import { probeReadKindIsNamed } from "../shared/compiler-instruction.ts";
 import type { CompilerOperatorInputKindMasks } from "../shared/compiler-value-kinds.ts";
 
 export function targetInstructionUsesPropertyCache(
@@ -16,7 +17,7 @@ export function targetInstructionUsesPropertyCache(
 		instruction.type === "loadProperty" ||
 		instruction.type === "loadPropertyStatic" ||
 		instruction.type === "loadPropertyStaticShapeCase" ||
-		(instruction.type === "probeRead" && instruction.readKind === "named") ||
+		(instruction.type === "probeRead" && probeReadKindIsNamed(instruction.readKind)) ||
 		instruction.type === "storeProperty" ||
 		instruction.type === "storePropertyStatic" ||
 		instruction.type === "guardBaseConstructorLayout"

@@ -25,6 +25,31 @@ export type CompilerNumericTypedArrayKind =
 
 export type CompilerExactCollectionBrand = "Map" | "Set";
 
+/**
+ * Non-observable read probes, in wire order. Named, getter, and setter probes name
+ * a static property and own a property cache row; getter and setter probes answer
+ * the accessor a static load or store would call, without calling it.
+ */
+export const PROBE_READ_KINDS = [
+	"private",
+	"named",
+	"indexed",
+	"getter",
+	"setter",
+] as const;
+export type ProbeReadKind = (typeof PROBE_READ_KINDS)[number];
+export type NamedProbeReadKind = "named" | "getter" | "setter";
+
+export function probeReadKindIsNamed(kind: ProbeReadKind): kind is NamedProbeReadKind {
+	return kind === "named" || kind === "getter" || kind === "setter";
+}
+
+export function probeReadIsNamed<T extends { readonly readKind: ProbeReadKind }>(
+	probe: T,
+): probe is Extract<T, { readonly readKind: NamedProbeReadKind }> {
+	return probeReadKindIsNamed(probe.readKind);
+}
+
 export type CompilerImmediateValue =
 	| { kind: "undefined" }
 	| { kind: "null" }
@@ -897,7 +922,7 @@ type CompilerOperation =
 			/** A miss is non-observable and must enter the original JavaScript continuation. */
 			type: "probeRead";
 			registers: [number, number, number, number];
-			readKind: "private" | "named" | "indexed";
+			readKind: ProbeReadKind;
 			stringIndex?: number;
 	  }
 	| {

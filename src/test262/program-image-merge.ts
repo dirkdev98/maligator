@@ -1,3 +1,4 @@
+import { probeReadIsNamed } from "../compiler/shared/compiler-instruction.ts";
 import type { NativeStoragePlan } from "../compiler/target/lower-native-storage.ts";
 import type {
 	ProgramImage,
@@ -309,7 +310,7 @@ function cloneInstruction(
 		case "GUARD_SERVICE_EPOCH":
 			return instruction;
 		case "PROBE_READ":
-			return instruction.readKind === "named"
+			return probeReadIsNamed(instruction)
 				? { ...instruction, stringIndex: instruction.stringIndex + base.string }
 				: instruction;
 		case "GUARD_BASE_CONSTRUCTOR_LAYOUT":

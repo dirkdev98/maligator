@@ -7,6 +7,7 @@
 # workloads when the owning test already forces collection at the vulnerable edge.
 
 # Allocator, GC roots, suspended work, and re-entrant lifetime.
+tests/native/accessor-calls.test.ts
 tests/native/allocation-failure.test.ts
 tests/native/array-destructuring-close.test.ts
 tests/native/array-spread-iterable.test.ts

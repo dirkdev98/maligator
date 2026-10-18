@@ -341,7 +341,7 @@ console.log(count);`),
 						.reduce((total, site) => total + events.bySite[site.id]!.executions, 0);
 				for (const name of accessors)
 					expect(executions(name), `${mode}: ${name}`).toBe(0);
-				const probes = { private: 0, named: 0, indexed: 0 };
+				const probes = { private: 0, named: 0, indexed: 0, getter: 0, setter: 0 };
 				for (const [functionIndex, fn] of built.programImage.native.functions.entries()) {
 					if (names[functionIndex] !== "materializeInstructionOperands") continue;
 					for (const [index, instruction] of fn.body.instructions.entries()) {

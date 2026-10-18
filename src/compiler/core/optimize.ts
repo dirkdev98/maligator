@@ -1,3 +1,4 @@
+import { exposeCoreAccessorCalls } from "./core-accessor-calls.ts";
 import { CoreAnalysisManager } from "./core-analysis-manager.ts";
 import { pruneCoreCaptureLiveness } from "./core-capture-liveness.ts";
 import type { ConstructedCoreCompilation, CoreCompilation } from "./core-compilation.ts";
@@ -293,6 +294,8 @@ export function optimizeCore(
 	] as const) {
 		reportBuilder.recordPhase(phase, functionPhaseTimes.get(phase) ?? 0);
 	}
+	if (ablatedFamily !== "class-read-accessors" && ablatedFamily !== "inlining-cross-call")
+		exposeCoreAccessorCalls(compilation);
 	reportBuilder.recordCheckpoint("before-memory-and-provenance", compilation.program);
 	const analyses = new CoreAnalysisManager(
 		compilation.program,

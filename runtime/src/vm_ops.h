@@ -1035,6 +1035,9 @@ static inline void mal_ic_set_recorded_prototype_epoch(MalInlineCache *ic, u64 e
 // `value` is `key`'s own value on the exact watched intrinsic `obj`, valid while the
 // primitive-method protector holds; shape-mode rows therefore always name a real slot.
 #define MAL_IC_MODE_WATCHED_VALUE 15u
+// An accessor probe's site resolved to something other than its accessor, so the probe
+// leaves every access to the site's own load or store.
+#define MAL_IC_MODE_ACCESSOR_DECLINED 16u
 
 #define MAL_IC_MISSING_SHAPE_CHAIN 0u
 #define MAL_IC_MISSING_EXACT_CHAIN 1u
@@ -3602,6 +3605,38 @@ static inline __attribute__((always_inline)) bool mal_vm_probe_named_read(
     return found;
 }
 
+/** Whether an ordinary receiver still resolves `key` to the row's inherited accessor. */
+static inline bool mal_vm_inherited_accessor_row_holds(
+    MalValue object_value, MalValue key_value, const MalInlineCache *ic
+) {
+    if (key_value != ic->key || !mal_value_is_heap_type(object_value, MAL_HEAP_OBJECT)) {
+        return false;
+    }
+    const MalObject *object = mal_value_to_object(object_value);
+    return object->shape == ic->shape && mal_object_prototype(object) == ic->proto_object[0] &&
+        !mal_object_has_public_overflow(object);
+}
+
+bool mal_vm_probe_accessor_read_miss(
+    MalVm *vm, MalValue receiver, i32 string_index, MalInlineCache *ic, bool setter,
+    MalValue *out
+);
+
+/** The getter or setter a static load or store of the name would call, without calling it. */
+static inline __attribute__((always_inline)) bool mal_vm_probe_accessor_read(
+    MalVm *vm, MalValue receiver, i32 string_index, MalInlineCache *ic, bool setter,
+    MalValue *out
+) {
+    *out = MAL_VALUE_UNDEFINED;
+    if (ic->mode == (setter ? MAL_IC_MODE_INHERITED_SETTER : MAL_IC_MODE_INHERITED_GETTER) &&
+        mal_vm_inherited_accessor_row_holds(receiver, ic->key, ic)) {
+        *out = ic->value;
+        return true;
+    }
+    return ic->mode != MAL_IC_MODE_ACCESSOR_DECLINED &&
+        mal_vm_probe_accessor_read_miss(vm, receiver, string_index, ic, setter, out);
+}
+
 static inline bool mal_vm_probe_read(
     MalVm *vm, MalValue receiver, MalValue key, u8 kind, i32 string_index,
     MalInlineCache *ic, MalValue *out
@@ -3610,6 +3645,8 @@ static inline bool mal_vm_probe_read(
         case 0: return mal_vm_probe_private_read(receiver, key, out);
         case 1: return mal_vm_probe_named_read(vm, receiver, string_index, ic, out);
         case 2: return mal_vm_probe_indexed_read(receiver, key, out);
+        case 3: return mal_vm_probe_accessor_read(vm, receiver, string_index, ic, false, out);
+        case 4: return mal_vm_probe_accessor_read(vm, receiver, string_index, ic, true, out);
         default:
             *out = MAL_VALUE_UNDEFINED;
             return false;

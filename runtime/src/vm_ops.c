@@ -6158,16 +6158,40 @@ static inline bool mal_vm_load_stub_try(
     return true;
 }
 
-// An inherited accessor row's receiver guard: same shape and first prototype, no own overflow.
-static inline bool mal_vm_inherited_accessor_row_holds(
-    MalValue object_value, MalValue key_value, const MalInlineCache *ic
+// Receivers alternating between classes would otherwise re-register the row on every miss.
+#define MAL_ACCESSOR_PROBE_REFILL_LIMIT 4
+
+bool mal_vm_probe_accessor_read_miss(
+    MalVm *vm, MalValue receiver, i32 string_index, MalInlineCache *ic, bool setter,
+    MalValue *out
 ) {
-    if (key_value != ic->key || !mal_value_is_heap_type(object_value, MAL_HEAP_OBJECT)) {
+    u8 mode = setter ? MAL_IC_MODE_INHERITED_SETTER : MAL_IC_MODE_INHERITED_GETTER;
+    // prim_kind is unused by accessor rows; a probe's row counts its refills there.
+    u8 refills = ic->mode == mode ? (u8) (ic->prim_kind + 1) : 0;
+    MalValue key_value = mal_value_from_string(vm->string_constant_atoms[string_index]);
+    MalKey key = mal_key_from_value(key_value);
+    bool recorded = false;
+    // Exotic and primitive receivers decline too: the site's own access serves them.
+    if (refills <= MAL_ACCESSOR_PROBE_REFILL_LIMIT &&
+        mal_value_is_heap_type(receiver, MAL_HEAP_OBJECT)) {
+        MalObject *object = mal_value_to_object(receiver);
+        if (setter) {
+            recorded = mal_ic_try_record_inherited_setter(object, key, key_value, ic);
+        } else {
+            MalPropertyResolution resolution = mal_object_resolve_property(object, key);
+            recorded = resolution.found && !resolution.own &&
+                (resolution.desc.flags & MAL_PROPERTY_ACCESSOR) &&
+                mal_ic_try_record_inherited_getter(receiver, key_value, resolution, ic);
+        }
+    }
+    if (!recorded) {
+        mal_perf_ic_note_replacement(ic, MAL_IC_MODE_ACCESSOR_DECLINED);
+        ic->mode = MAL_IC_MODE_ACCESSOR_DECLINED;
         return false;
     }
-    const MalObject *object = mal_value_to_object(object_value);
-    return object->shape == ic->shape && mal_object_prototype(object) == ic->proto_object[0] &&
-        !mal_object_has_public_overflow(object);
+    ic->prim_kind = refills;
+    *out = ic->value;
+    return true;
 }
 
 static MalValue mal_vm_op_load_property_ic_keyed(

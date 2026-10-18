@@ -776,6 +776,14 @@ typedef struct MalInstruction {
 _Static_assert(sizeof(MalInstruction) == 20, "MalInstruction must remain densely packed");
 
 /**
+ * Probe kinds are private, named, indexed, getter and setter. Named, getter and
+ * setter probes carry a string constant and a property cache row in their side data.
+ */
+static inline bool mal_vm_probe_read_kind_named(u8 kind) {
+    return kind == 1 || kind == 3 || kind == 4;
+}
+
+/**
  * Statically known protected instruction range. While the instruction pointer
  * is inside [start_ip, end_ip), a throw unwinds to handler_ip.
  */

@@ -12135,7 +12135,9 @@ function emitInstruction(
 			const probe =
 				instruction.readKind === "named"
 					? `mal_vm_probe_named_read(vm, ${boxed(instruction.object)}, ${relocation.stringIndex(instruction.stringIndex)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}], &${loaded})`
-					: `mal_vm_probe_${instruction.readKind}_read(${boxed(instruction.object)}, ${boxed(instruction.key)}, &${loaded})`;
+					: instruction.readKind === "getter" || instruction.readKind === "setter"
+						? `mal_vm_probe_accessor_read(vm, ${boxed(instruction.object)}, ${relocation.stringIndex(instruction.stringIndex)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}], ${instruction.readKind === "setter"}, &${loaded})`
+						: `mal_vm_probe_${instruction.readKind}_read(${boxed(instruction.object)}, ${boxed(instruction.key)}, &${loaded})`;
 			return [
 				`MalValue ${loaded};`,
 				`bool ${success} = ${probe};`,

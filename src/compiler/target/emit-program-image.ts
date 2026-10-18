@@ -1,4 +1,5 @@
 import type { IncludedAsset } from "../../assets.ts";
+import { PROBE_READ_KINDS, probeReadIsNamed } from "../shared/compiler-instruction.ts";
 import { knownOperationFlags } from "../shared/known-operations.ts";
 import { knownOperationIndex } from "../shared/known-operations.ts";
 import { staticDataQueryTag } from "../shared/static-data-query.ts";
@@ -460,9 +461,9 @@ function instructionData(fn: RuntimeImage["functions"][number]): {
 				offsets[index] = data.length;
 				data.push(
 					instruction.key,
-					["private", "named", "indexed"].indexOf(instruction.readKind),
+					PROBE_READ_KINDS.indexOf(instruction.readKind),
 					instruction.stringIndex ?? -1,
-					instruction.readKind === "named" ? instruction.icIndex : -1,
+					probeReadIsNamed(instruction) ? instruction.icIndex : -1,
 				);
 				break;
 			case "CREATE_OBJECT_SHAPED":

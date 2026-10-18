@@ -68,8 +68,28 @@ actual kernel operand and result materialization loops; native fixtures cover
 mutation, retirement, method replacement, getters, private failures, defaults,
 backend parity, and collection stress.
 
-The benchmark-only `class-read-accessors` ablation disables caller expansion while
-retaining summaries and ordinary inline selection. It applies when building the
+## Class getters and setters
+
+A static load or store inside a loop whose name only one class defines as a
+prototype accessor first probes for that accessor. Names that any object literal,
+definition, constant-key store, or setter-less static store also gives an ordinary
+property are excluded, as are accessors too large for a read summary or a single
+store. A hit calls the accessor with the receiver, exactly the call [[Get]] or
+[[Set]] would make, and records the accessor as the call's hinted target, so call
+specialization guards and expands it like a method. A miss runs the original access.
+
+Getter and setter probes are `PROBE_READ` kinds with their own property cache rows.
+A row holds the inherited accessor's chain registration, so a hit needs only the
+receiver's shape and first prototype. A receiver that resolves elsewhere, or a
+row refilled four times by alternating classes, declines the row permanently and
+leaves the site to its original access. Outside loops, and for names receivers
+also hold as data, the probe code cost more than it saved: exposing 1,722 sites
+in the self-compile made it 3.9% slower. Restricted to loops and uniquely
+accessor names it is neutral there, while a getter and setter pair over a private
+field runs 3.4 times faster.
+
+The benchmark-only `class-read-accessors` ablation disables caller expansion and
+accessor exposure while retaining summaries and ordinary inline selection. It applies when building the
 measured binary, independently of the compilation settings that binary later
 uses. Counter instrumentation reports bounded region visits, plan reuse, offers,
 and applications; runtime diagnostics distinguish probe hits from hint/cache

@@ -1273,7 +1273,7 @@ static void mal_vm_rebase_instruction(
         }
         case MAL_OP_PROBE_READ: {
             i32 *data = instruction_data + in->as.probe_read.data_offset;
-            if (data[1] == 1) data[2] += string_base;
+            if (mal_vm_probe_read_kind_named((u8) data[1])) data[2] += string_base;
             break;
         }
         case MAL_OP_STORE_PROPERTY_STATIC:
@@ -3101,7 +3101,7 @@ static void mal_vm_run_until_frame_count(
                 bool success = mal_vm_probe_read(vm,
                     registers[instruction->as.probe_read.object],
                     registers[data[0]], (u8) data[1], data[2],
-                    data[1] == 1 ? mal_vm_property_ic_at(frame, data[3]) : nullptr,
+                    mal_vm_probe_read_kind_named((u8) data[1]) ? mal_vm_property_ic_at(frame, data[3]) : nullptr,
                     &value);
                 registers[instruction->as.probe_read.dst] = value;
                 registers[instruction->as.probe_read.success] = success ? MAL_VALUE_TRUE : MAL_VALUE_FALSE;

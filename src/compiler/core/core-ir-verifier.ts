@@ -1,7 +1,12 @@
 import { verifyBuiltinWorldAssumptions } from "../shared/builtin-assumptions.ts";
 import { exactBuiltinCallDescriptor } from "../shared/builtin-registry.ts";
 import type { WorldFacts } from "../shared/compiler-facts.ts";
-import { MAX_STRING_CODE_UNITS } from "../shared/compiler-instruction.ts";
+import {
+	MAX_STRING_CODE_UNITS,
+	PROBE_READ_KINDS,
+	probeReadKindIsNamed,
+} from "../shared/compiler-instruction.ts";
+import type { ProbeReadKind } from "../shared/compiler-instruction.ts";
 import { effectSummaryCovers } from "../shared/effect-summary.ts";
 import { isKnownBuiltinError } from "../shared/known-builtin-errors.ts";
 import { knownArgumentModes } from "../shared/known-operations.ts";
@@ -409,14 +414,23 @@ function verifyInstructionRows(
 			)
 				fail("Invalid primitive String length hint");
 			if (descriptor.opcode === "probeRead") {
+				const readKind = attributes.readKind as ProbeReadKind;
+				const accessor = readKind === "getter" || readKind === "setter";
 				if (
-					!["private", "named", "indexed"].includes(attributes.readKind as string) ||
-					(attributes.readKind === "named"
+					!PROBE_READ_KINDS.includes(readKind) ||
+					(probeReadKindIsNamed(readKind)
 						? typeof attributes.stringIndex !== "number" ||
 							!Number.isSafeInteger(attributes.stringIndex) ||
 							attributes.stringIndex < 0 ||
 							attributes.stringIndex >= program.stringConstants.length
-						: attributes.stringIndex !== undefined)
+						: attributes.stringIndex !== undefined) ||
+					// An accessor probe may name the function its hint expects.
+					(attributes.functionIndex !== undefined &&
+						(!accessor ||
+							typeof attributes.functionIndex !== "number" ||
+							!Number.isSafeInteger(attributes.functionIndex) ||
+							attributes.functionIndex < 0 ||
+							attributes.functionIndex >= program.functionCapacity))
 				)
 					fail("Invalid non-observable data-read probe");
 			} else if (descriptor.opcode === "stringConcatLength") {

@@ -3,6 +3,8 @@ import {
 	MAX_PRECISE_NUMBER_SUM_INPUTS,
 	MAX_STRING_CODE_UNITS,
 	MAX_STRING_CONCAT_INPUTS,
+	PROBE_READ_KINDS,
+	probeReadKindIsNamed,
 } from "../shared/compiler-instruction.ts";
 import {
 	knownBuiltinErrorNames,
@@ -1091,7 +1093,7 @@ function writeInstructionOperands(w: Writer, i: BytecodeInstruction): void {
 			w.i32(i.success);
 			w.i32(i.object);
 			w.i32(i.key);
-			w.u8(["private", "named", "indexed"].indexOf(i.readKind));
+			w.u8(PROBE_READ_KINDS.indexOf(i.readKind));
 			w.i32(i.stringIndex ?? -1);
 			return;
 		case "LOAD_PROPERTY_STATIC":
@@ -2109,10 +2111,10 @@ function readInstructionOperands(r: Reader): BytecodeInstruction {
 				success = r.i32(),
 				object = r.i32(),
 				key = r.i32();
-			const readKind = (["private", "named", "indexed"] as const)[r.u8()];
+			const readKind = PROBE_READ_KINDS[r.u8()];
 			if (readKind === undefined) throw new RangeError("Invalid data-read probe kind");
 			const stringIndex = r.i32();
-			if (readKind !== "named" && stringIndex !== -1)
+			if (!probeReadKindIsNamed(readKind) && stringIndex !== -1)
 				throw new RangeError("Invalid data-read probe string index");
 			return {
 				opcode,
@@ -2120,7 +2122,9 @@ function readInstructionOperands(r: Reader): BytecodeInstruction {
 				success,
 				object,
 				key,
-				...(readKind === "named" ? { readKind, stringIndex, icIndex: -1 } : { readKind }),
+				...(probeReadKindIsNamed(readKind)
+					? { readKind, stringIndex, icIndex: -1 }
+					: { readKind }),
 			};
 		}
 		case "HAS_PRIVATE":

@@ -7,10 +7,14 @@ import {
 	MAX_PRECISE_NUMBER_SUM_INPUTS,
 	MAX_STRING_CODE_UNITS,
 	MAX_STRING_CONCAT_INPUTS,
+	PROBE_READ_KINDS,
+	probeReadIsNamed,
+	probeReadKindIsNamed,
 } from "../shared/compiler-instruction.ts";
 import type {
 	CompilerImmediateValue,
 	CompilerInstruction,
+	NamedProbeReadKind,
 } from "../shared/compiler-instruction.ts";
 import type { KnownBuiltinError } from "../shared/known-builtin-errors.ts";
 import type { KnownArgumentMode } from "../shared/known-operations.ts";
@@ -1296,7 +1300,7 @@ export type BytecodeInstruction =
 			object: number;
 			key: number;
 	  } & (
-			| { readKind: "named"; stringIndex: number; icIndex: number }
+			| { readKind: NamedProbeReadKind; stringIndex: number; icIndex: number }
 			| { readKind: "private" | "indexed"; stringIndex?: undefined }
 	  ))
 	| {
@@ -2130,7 +2134,7 @@ export function validateRuntimeImageMetadata(definition: RuntimeImage): void {
 			}
 			if (instruction.opcode === "PROBE_READ") {
 				if (
-					!["private", "named", "indexed"].includes(instruction.readKind) ||
+					!PROBE_READ_KINDS.includes(instruction.readKind) ||
 					[
 						instruction.dst,
 						instruction.success,
@@ -2140,7 +2144,7 @@ export function validateRuntimeImageMetadata(definition: RuntimeImage): void {
 						(register) =>
 							!isNonnegativeSafeInteger(register) || register >= fn.registerCount,
 					) ||
-					(instruction.readKind === "named"
+					(probeReadKindIsNamed(instruction.readKind)
 						? !isNonnegativeSafeInteger(instruction.stringIndex) ||
 							instruction.stringIndex >= definition.stringConstants.length
 						: instruction.stringIndex !== undefined)
@@ -3558,7 +3562,7 @@ function lowerExecutionFunctionToBytecode(
 			}
 			switch (vmInstruction.opcode) {
 				case "PROBE_READ":
-					if (vmInstruction.readKind === "named")
+					if (probeReadIsNamed(vmInstruction))
 						vmInstruction.icIndex = propertyIcIndexByInstruction.get(instruction)!;
 					break;
 				case "LOAD_PROPERTY":
@@ -4454,8 +4458,12 @@ function lowerInstructionToBytecodeInstruction(
 				success: instruction.registers[1],
 				object: instruction.registers[2],
 				key: instruction.registers[3],
-				...(instruction.readKind === "named"
-					? { readKind: "named", stringIndex: instruction.stringIndex!, icIndex: -1 }
+				...(probeReadKindIsNamed(instruction.readKind)
+					? {
+							readKind: instruction.readKind,
+							stringIndex: instruction.stringIndex!,
+							icIndex: -1,
+						}
 					: { readKind: instruction.readKind, stringIndex: undefined }),
 			};
 		case "storePrivate":
