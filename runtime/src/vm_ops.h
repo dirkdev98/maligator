@@ -3776,11 +3776,14 @@ void mal_op_for_in_has(MalCallable *callable, const MalInstruction *instruction)
 
 bool mal_for_in_has_slow(MalVm *vm, MalValue source, MalValue key);
 
-/** The noncollecting part of mal_for_in_has: a key still in a plain object's shape. */
-static inline bool mal_for_in_has_fast(const MalVm *vm, MalValue source, MalValue key) {
-    if (!mal_value_is_heap_type(source, MAL_HEAP_OBJECT)) return false;
-    const MalShape *shape = ((const MalObject *) mal_value_to_heap(source))->shape;
-    // Shape keys are atoms, as are the keys collected from them.
+/**
+ * Whether `key` names an own property in a plain object's shape. Shape keys are
+ * atoms, so a key that is not one answers false without a lookup; false is not a
+ * miss, since overflow tables and the prototype chain are not consulted.
+ */
+static inline bool mal_vm_shape_has_own_key(const MalVm *vm, MalValue object, MalValue key) {
+    if (!mal_value_is_heap_type(object, MAL_HEAP_OBJECT)) return false;
+    const MalShape *shape = ((const MalObject *) mal_value_to_heap(object))->shape;
     if (shape->inline_count <= 8) {
         for (u32 i = 0; i < shape->inline_count; i++) {
             if (shape->props[i].key == key) return true;
@@ -3798,7 +3801,7 @@ static inline bool mal_for_in_has_fast(const MalVm *vm, MalValue source, MalValu
  * prototype can throw, which sets vm->completion (caller checks).
  */
 static inline bool mal_for_in_has(MalVm *vm, MalValue source, MalValue key) {
-    return mal_for_in_has_fast(vm, source, key) || mal_for_in_has_slow(vm, source, key);
+    return mal_vm_shape_has_own_key(vm, source, key) || mal_for_in_has_slow(vm, source, key);
 }
 
 void mal_op_delete_property(MalCallable *callable, const MalInstruction *instruction);

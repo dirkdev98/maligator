@@ -8741,7 +8741,7 @@ function emitInstruction(
 					: `mal_value_new_boolean(${present})`;
 			// A proxy on the prototype chain can trap HasProperty and throw.
 			return [
-				`if (mal_for_in_has_fast(vm, ${operands})) {`,
+				`if (mal_vm_shape_has_own_key(vm, ${operands})) {`,
 				`  r${instruction.dst} = ${result("true")};`,
 				`} else {`,
 				...(context.incomingRootPublication ?? []).map((line) => `  ${line}`),
@@ -8973,8 +8973,9 @@ function emitInstruction(
 			if (operator === "in") {
 				const membership = `__array_has_${ip}`;
 				const fastMembership = `mal_vm_array_try_has(mal_vm_as_array(${boxed(right)}), ${leftIsNum ? num(left) : `mal_ops_number_as_f64(${boxed(left)})`})`;
+				const ownKey = `mal_vm_shape_has_own_key(vm, ${boxed(right)}, ${boxed(left)}) ? 1 : -1`;
 				return [
-					`i32 ${membership} = ${leftIsNum ? fastMembership : `mal_ops_is_number(${boxed(left)}) ? ${fastMembership} : -1`};`,
+					`i32 ${membership} = ${leftIsNum ? fastMembership : `mal_ops_is_number(${boxed(left)}) ? ${fastMembership} : ${ownKey}`};`,
 					`if (${membership} >= 0) {`,
 					dstIsBool
 						? `  r${dst} = ${membership} != 0;`
