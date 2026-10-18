@@ -4925,6 +4925,14 @@ function emitBody(
 			? literalSwitches?.map((site) => [site.instructionIp, site])
 			: [],
 	);
+	// A rematerialized string constant reads as that constant everywhere, so a strict
+	// comparison against it can reject other lengths inline.
+	const stringConstantRegisters = new Map<number, number>();
+	for (const ip of [...expressionIps, ...rematerializedConstantIps]) {
+		const instruction = fn.instructions[ip]!;
+		if (instruction.opcode === "CREATE_STRING")
+			stringConstantRegisters.set(instruction.dst, instruction.stringIndex);
+	}
 	// Finite dispatch compares one loaded callee against each candidate class's method,
 	// through separate guards or a call plan's guarded targets.
 	const polymorphicMethodLoads = new Set<number>();
@@ -5030,6 +5038,7 @@ function emitBody(
 		constructorInitializationAction: undefined,
 		privateFieldReserveCount: undefined,
 		polymorphicMethodLoad: false,
+		stringConstantRegisters,
 		relocation,
 	};
 	for (const plan of fastPathPlans.mapEntries)
@@ -5993,6 +6002,8 @@ interface NativeInstructionContext {
 	readonly watchedMathCallee?: boolean;
 	/** The loaded value is a callee guarded against several function identities. */
 	readonly polymorphicMethodLoad?: boolean;
+	/** Registers that read as one string constant, by string index. */
+	readonly stringConstantRegisters?: ReadonlyMap<number, number>;
 	readonly numberPredicate?: NativeNumberPredicatePlan;
 	readonly stringTransform?: NativeStringTransformPlan;
 	readonly arrayInitialization?: {
@@ -9445,7 +9456,22 @@ function emitInstruction(
 					: `mal_ops_is_number(${boxed(left)}) && mal_ops_is_number(${boxed(right)})`;
 			if (compare !== undefined) {
 				if (bothBoxed && (operator === "===" || operator === "!==")) {
-					const equal = `mal_ops_strict_equal_boxed(${boxed(left)}, ${boxed(right)})`;
+					const constantRegister = [right, left].find(
+						(register) =>
+							context.stringConstantRegisters?.has(register) === true &&
+							context.stringConstants[context.stringConstantRegisters.get(register)!] !==
+								undefined,
+					);
+					const constantLength =
+						constantRegister === undefined
+							? undefined
+							: context.stringConstants[
+									context.stringConstantRegisters!.get(constantRegister)!
+								]!.length;
+					const equal =
+						constantRegister === undefined
+							? `mal_ops_strict_equal_boxed(${boxed(left)}, ${boxed(right)})`
+							: `mal_ops_strict_equal_string_constant(${boxed(constantRegister === right ? left : right)}, ${boxed(constantRegister)}, ${constantLength})`;
 					return [storeBoolean(dst, operator === "!==" ? `!${equal}` : equal)];
 				}
 				const completionCheck = binaryOpCanThrow(operator) ? throwCheck() : undefined;

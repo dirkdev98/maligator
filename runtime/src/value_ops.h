@@ -295,6 +295,22 @@ static inline bool mal_ops_strict_equal_boxed(MalValue left, MalValue right) {
     return mal_ops_strict_equal_distinct(left, right);
 }
 
+/** `value === constant` against a string constant of `length` units, which only a string
+ * of that length can equal; most misses then answer without a call. */
+static inline __attribute__((always_inline)) bool mal_ops_strict_equal_string_constant(
+    MalValue value, MalValue constant, u32 length
+) {
+    if (value == constant) return true;
+    if (!mal_value_is_string(value)) return false;
+    const MalString *string = mal_value_to_string(value);
+    MAL_PERF_COUNT(string_equals_calls);
+    if (string->length != length) {
+        MAL_PERF_COUNT(string_length_misses);
+        return false;
+    }
+    return mal_string_equals_same_length(string, mal_value_to_string(constant));
+}
+
 /** Returns false without allocating when string concatenation exceeds the engine limit. */
 bool mal_ops_add_checked(MalHeap *heap, MalValue left, MalValue right, MalValue *out);
 
