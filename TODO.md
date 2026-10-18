@@ -462,15 +462,11 @@ iterator cursor is not, by itself, permission to delete its language object.
       steps, 4 keyed loads, 1 static load), so typed-array or property access
       inside such a region needs a consumer outside the compiler first.
 
-- [ ] Step for-in keys without allocating and iterating a key array. A for-in
-      over a five-field record takes 10.5 ns per key (15.1 when reading values),
-      against Node's 1.5 (2.3), which reuses a per-shape key cache. Each loop
-      allocates a fresh key array and iterates it with `getIterator`, which looks
-      up `@@iterator` and `next` observably: with mutable primordials a patched
-      `Array.prototype[Symbol.iterator]` would run during for-in. Recognizing the
-      internal key array in `mal_vm_get_iterator` and stepping it through the
-      intrinsic array iterator would fix that and allow an immutable per-shape key
-      array; the presence check already reduces to one shape compare.
+- [ ] Close the for-in per-call gap. With shared per-shape key arrays and
+      internal iteration, a for-in over a five-field record takes 6.0 ns per key
+      (10.5 when reading values) against Node's 1.5 (2.3). The remaining cost is
+      per loop: the out-of-line `mal_for_in_keys` call with its prototype-chain
+      check and snapshot entry, and the function call of each small kernel.
 
 - [ ] Close the rest of the `JSON.stringify` small-record gap. 300k calls on a
       five-field record take 63 ms against Node's 23 now that the output buffer is
@@ -478,25 +474,24 @@ iterator cursor is not, by itself, permission to delete its language object.
       record seen once per call never builds an escaped-key plan; its keys and
       short strings go through `memmove` calls (5% of samples) and numbers through
       `mal_text_buffer_append_number` (6%).
-- [ ] Store private fields in shaped slots. Reads and writes now reach a private
-      field through the symbol's entry hint in the object's overflow table, and
-      accessor calls enter compiled getters and setters directly, but a getter/setter
-      pair over `#celsius` still takes 157 ms against Node's 2 for 5M iterations.
-      Most of that is the accessor calls: the same pair over a public field takes
-      168 ms, while a private field read and written inside a method takes 30 ms
-      (Node 3). Each store or load of `t.celsius` misses the inline probe for its
-      inherited setter or getter row and calls through the out-of-line cache.
-      Private names created once per class evaluation could carry a last-shape and
-      slot hint in a larger cell, so shaped private fields need no per-site cache.
+- [ ] Inline known getters and setters. A getter/setter pair over `#celsius`
+      takes 112 ms against Node's 2 for 5M iterations, and the same pair over a
+      public field 142 ms; a private field read and written inside a method takes
+      29 ms (Node 3). The rooted miss paths now test accessor rows first and
+      private stores use the name's entry hint, so what remains is the call through
+      `mal_vm_call_value` and each accessor's own entry and exit. A property load
+      whose receiver class and prototype accessor are known could become a guarded
+      direct call that the existing inliner expands, with the original load as the
+      fallback. Private names could also carry a last-shape and slot hint in a
+      larger cell, so shaped private fields need no per-site cache.
 
-- [ ] Keep loop-carried Number accumulators unboxed across field reads. Numeric
-      loop regions now run dense Array element sums in f64 locals
-      (`dense-array-traversal` 1337 to 235 ms), but a loop such as
-      `sx += p.x; sy += p.y` over records still takes 5.6 ns per element against
-      Node's 1.0: each iteration publishes the boxed sums as roots, probes both
-      fields through the cache and adds through the boxed path. The region needs an
-      object-valued element read and shape-guarded field reads whose miss restarts
-      the iteration. Bounds such as `values.length - 1` are not admitted either.
+- [ ] Widen numeric loop regions beyond plain Array element and record sums.
+      Index and for-of loops over Arrays now keep their sums in f64 locals,
+      including fields of record elements (`sx += p.x` 5.7 to 1.7 ns per element,
+      Node 1.0; `record-array-traversal` 532 to 250 ms, Node 109). Bounds such as
+      `values.length - 1`, field reads through polymorphic rows, nested records,
+      stores to records and calls in the body still decline, and a guard failure
+      finishes the whole loop in the original code.
       Frame-local shape snapshots for plain static loads and stores in loops made
       such a loop about 8% faster but the self-compiler's parser slice 1.7 to 2.6%
       slower, so they serve number-record regions only.
