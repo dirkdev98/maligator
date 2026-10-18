@@ -3804,23 +3804,24 @@ __attribute__((cold, noinline)) void mal_vm_throw_stack_overflow(MalVm *vm) {
     mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Maximum call stack size exceeded");
 }
 
-__attribute__((cold, noinline)) bool mal_vm_enter_compiled_slow(MalVm *vm, i32 function_index) {
+__attribute__((cold, noinline)) MalNativeFrame *mal_vm_enter_compiled_slow(
+    MalVm *vm, i32 function_index
+) {
     i32 count = vm->native_frame_count;
     if (mal_vm_native_stack_address() < vm->stack_limit || count >= MAL_NATIVE_CALL_DEPTH_LIMIT) {
         mal_vm_throw_stack_overflow(vm);
-        return false;
+        return nullptr;
     }
-    i32 capacity = vm->native_frame_capacity == 0 ? 16 : vm->native_frame_capacity * 2;
-    if (capacity > MAL_NATIVE_CALL_DEPTH_LIMIT) capacity = MAL_NATIVE_CALL_DEPTH_LIMIT;
-    MalNativeFrame *frames = realloc(vm->native_frames, sizeof(MalNativeFrame) * (usize) capacity);
-    if (frames == nullptr) {
-        mal_vm_throw_stack_overflow(vm);
-        return false;
+    if (vm->native_frames == nullptr) {
+        // Untouched rows stay uncommitted; full capacity keeps every live row in place.
+        vm->native_frames = calloc(MAL_NATIVE_CALL_DEPTH_LIMIT, sizeof(MalNativeFrame));
+        if (vm->native_frames == nullptr) {
+            mal_vm_throw_stack_overflow(vm);
+            return nullptr;
+        }
+        vm->native_frame_capacity = MAL_NATIVE_CALL_DEPTH_LIMIT;
     }
-    vm->native_frames = frames;
-    vm->native_frame_capacity = capacity;
-    mal_vm_push_native_frame(vm, count, function_index);
-    return true;
+    return mal_vm_push_native_frame(vm, count, function_index);
 }
 
 /**

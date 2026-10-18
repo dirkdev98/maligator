@@ -1571,8 +1571,9 @@ typedef struct MalVm {
      * Native (compiled-backend) call frames, for stack traces — see
      * MalNativeFrame. Each compiled entry pushes its own row, so the row count is
      * also the compiled nesting depth: interpreted recursion is bounded by the
-     * value stack, compiled recursion by MAL_NATIVE_CALL_DEPTH_LIMIT rows. A
-     * growable array; capacity persists across the VM lifetime.
+     * value stack, compiled recursion by MAL_NATIVE_CALL_DEPTH_LIMIT rows. The
+     * array is allocated once at that capacity and never moves, so a running entry
+     * keeps a pointer to its own row.
      */
     MalNativeFrame *native_frames;
     i32 native_frame_count;
@@ -2159,8 +2160,8 @@ static inline void mal_gc_callee_roots_end(MalCalleeRoots *roots) {
 #define MAL_NATIVE_CALL_DEPTH_LIMIT 6000
 
 void mal_vm_throw_stack_overflow(MalVm *vm);
-/** Grow the frame rows or report the overflow; true when the entry proceeds. */
-bool mal_vm_enter_compiled_slow(MalVm *vm, i32 function_index);
+/** Allocate the frame rows or report the overflow; the entry's row when it proceeds. */
+MalNativeFrame *mal_vm_enter_compiled_slow(MalVm *vm, i32 function_index);
 
 #if UINTPTR_MAX != UINT64_MAX || (!defined(__aarch64__) && !defined(__x86_64__))
 uptr mal_vm_native_stack_address(void);
@@ -2177,11 +2178,15 @@ static inline uptr mal_vm_native_stack_address(void) {
 }
 #endif
 
-/** The row count is the call depth: capacity never exceeds MAL_NATIVE_CALL_DEPTH_LIMIT,
- * so one comparison sends both growth and the depth limit to the slow path. */
-static inline void mal_vm_push_native_frame(MalVm *vm, i32 count, i32 function_index) {
+/** The row count is the call depth. Rows are allocated once at MAL_NATIVE_CALL_DEPTH_LIMIT,
+ * so one comparison sends both allocation and the depth limit to the slow path, and an
+ * entry's row never moves while it runs. */
+static inline MalNativeFrame *mal_vm_push_native_frame(
+    MalVm *vm, i32 count, i32 function_index
+) {
     MAL_PERF_COUNT(compiled_debug_frame_entries);
-    vm->native_frames[count] = (MalNativeFrame) {
+    MalNativeFrame *row = &vm->native_frames[count];
+    *row = (MalNativeFrame) {
         .function_index = function_index,
         .position_entry = -1,
 #if MAL_PROFILE
@@ -2191,18 +2196,23 @@ static inline void mal_vm_push_native_frame(MalVm *vm, i32 count, i32 function_i
         .hidden = false,
     };
     vm->native_frame_count = count + 1;
+    return row;
 }
 
-// A successful entry requires a matching leave; rejection records a RangeError.
-static inline bool mal_vm_enter_compiled(MalVm *vm, i32 function_index) {
+/** The entry's own frame row, which publishes its source position, or nullptr after
+ * recording a RangeError. A successful entry requires a matching leave. */
+static inline MalNativeFrame *mal_vm_enter_compiled_row(MalVm *vm, i32 function_index) {
     MAL_PERF_COUNT(compiled_enter_calls);
     i32 count = vm->native_frame_count;
     // A zero limit admits every address.
     if (__builtin_expect(mal_vm_native_stack_address() < vm->stack_limit ||
                              count >= vm->native_frame_capacity, 0))
         return mal_vm_enter_compiled_slow(vm, function_index);
-    mal_vm_push_native_frame(vm, count, function_index);
-    return true;
+    return mal_vm_push_native_frame(vm, count, function_index);
+}
+
+static inline bool mal_vm_enter_compiled(MalVm *vm, i32 function_index) {
+    return mal_vm_enter_compiled_row(vm, function_index) != nullptr;
 }
 
 /** Source position id of entry `entry` in a function's position table, or -1 outside it. */

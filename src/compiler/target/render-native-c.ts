@@ -571,6 +571,7 @@ const NATIVE_ENTRY_ATTRIBUTES = "__attribute__((no_stack_protector)) ";
 // An entry pushes its own frame, so call sites carry no bookkeeping; every return pops it.
 const COMPILED_ENTRY_SCOPE = [
 	"    MalVm *const __entered __attribute__((cleanup(mal_vm_leave_compiled_scope))) = vm;",
+	"    (void) __frame_row;",
 ];
 
 /** `name` is the function's index, or its stem in a relocatable overlay. */
@@ -2224,7 +2225,8 @@ function emitCompiledVariant(
 		);
 	if (directEntry === undefined) lines.push(`    (void) entry_state;`);
 	lines.push(
-		`    if (!mal_vm_enter_compiled(vm, ${relocation.functionIndex(index)})) return ${directEntry === undefined ? "MAL_VALUE_UNDEFINED" : zeroOf(directEntry.resultRepresentation)};`,
+		`    MalNativeFrame *__frame_row = mal_vm_enter_compiled_row(vm, ${relocation.functionIndex(index)});`,
+		`    if (__frame_row == nullptr) return ${directEntry === undefined ? "MAL_VALUE_UNDEFINED" : zeroOf(directEntry.resultRepresentation)};`,
 		...COMPILED_ENTRY_SCOPE,
 	);
 	if (directEntry !== undefined && body.resources.has("newTarget")) {
@@ -3214,7 +3216,8 @@ function emitResumableFunction(
 	lines.push(`    (void) new_target;`);
 	// A refused resume settles the coroutine as the throwing body would.
 	lines.push(
-		`    if (!mal_vm_enter_compiled(vm, ${self})) {`,
+		`    MalNativeFrame *__frame_row = mal_vm_enter_compiled_row(vm, ${self});`,
+		`    if (__frame_row == nullptr) {`,
 		`        if (entry_state != nullptr) mal_vm_op_coroutine_throw_compiled(vm, (MalGeneratorObject *) entry_state, ((MalGeneratorObject *) entry_state)->frame.registers);`,
 		`        return MAL_VALUE_UNDEFINED;`,
 		`    }`,
@@ -5634,7 +5637,7 @@ function emitBody(
 			const pos = fn.positions[ip] ?? -1;
 			if (pos !== -1 && pos !== lastPublishedPos) {
 				lines.push(
-					`    MAL_FRAME_POS(${nativePositionEntry(debug, functionIndex, pos)});`,
+					`    MAL_FRAME_POS(__frame_row, ${nativePositionEntry(debug, functionIndex, pos)});`,
 				);
 				lastPublishedPos = pos;
 			}

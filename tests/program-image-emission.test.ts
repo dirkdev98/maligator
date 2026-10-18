@@ -1660,9 +1660,9 @@ describe("emit-program-image instruction packing", () => {
 			)!,
 		);
 		expect(callee).toContain(
-			"mal_vm_enter_compiled(vm, (__mal_relocation->function_base + 1))",
+			"mal_vm_enter_compiled_row(vm, (__mal_relocation->function_base + 1))",
 		);
-		expect(callee).not.toMatch(/mal_vm_enter_compiled\(vm, \d/);
+		expect(callee).not.toMatch(/mal_vm_enter_compiled_row\(vm, \d/);
 	});
 
 	it("rejects an invalid translation-unit budget", () => {
