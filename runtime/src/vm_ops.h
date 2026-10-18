@@ -1021,6 +1021,8 @@ static inline void mal_ic_set_recorded_prototype_epoch(MalInlineCache *ic, u64 e
 #define MAL_IC_MODE_COLLECTION_SIZE 12u
 // `value` is the getter of an accessor on an ordinary prototype chain, called on a hit.
 #define MAL_IC_MODE_INHERITED_GETTER 13u
+// `value` is the setter of such an accessor; a store site calls it on a hit.
+#define MAL_IC_MODE_INHERITED_SETTER 14u
 
 #define MAL_IC_MISSING_SHAPE_CHAIN 0u
 #define MAL_IC_MISSING_EXACT_CHAIN 1u

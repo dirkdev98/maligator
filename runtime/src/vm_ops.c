@@ -5536,6 +5536,7 @@ static bool mal_ic_record_local_prototype_chain(
          ic->mode == MAL_IC_MODE_INHERITED_SLOT ||
          ic->mode == MAL_IC_MODE_INHERITED_TABLE ||
          ic->mode == MAL_IC_MODE_INHERITED_GETTER ||
+         ic->mode == MAL_IC_MODE_INHERITED_SETTER ||
          ic->mode == MAL_IC_MODE_TYPED_ARRAY_LENGTH) &&
         ic->poly_count > 0 &&
         ic->proto_object[0] == mal_object_prototype(receiver) &&
@@ -5979,6 +5980,54 @@ static bool mal_ic_try_record_inherited_getter(
     ic->mode = MAL_IC_MODE_INHERITED_GETTER;
     ic->receiver_type = MAL_HEAP_OBJECT;
     MAL_PERF_COUNT(ic_inherited_getter_fills);
+    return true;
+}
+
+/**
+ * Record an ordinary-chain accessor's setter for a store site. As for getters, the
+ * chain registration clears the row when anything between receiver and holder
+ * changes, and the receiver's shape proves it still has no own property to write.
+ */
+static bool mal_ic_try_record_inherited_setter(
+    MalObject *object, MalKey key, MalValue key_value, MalInlineCache *ic
+) {
+    if (object->header.type != MAL_HEAP_OBJECT || mal_object_has_public_overflow(object)) {
+        return false;
+    }
+    MalPropertyResolution resolution = mal_object_resolve_property(object, key);
+    if (!resolution.found || resolution.own || !(resolution.desc.flags & MAL_PROPERTY_ACCESSOR) ||
+        !mal_value_is_callable(resolution.desc.setter) || resolution.holder == nullptr ||
+        resolution.holder->header.type != MAL_HEAP_OBJECT) {
+        return false;
+    }
+    bool found_holder = false;
+    for (MalObject *cursor = mal_object_prototype(object); cursor != nullptr;
+         cursor = mal_object_prototype(cursor)) {
+        if (cursor->header.type != MAL_HEAP_OBJECT) return false;
+        if (cursor == resolution.holder) {
+            found_holder = true;
+            break;
+        }
+    }
+    if (!found_holder) return false;
+    MalPropertyLookup own = mal_object_get_own(resolution.holder, key);
+    if (!own.present || !(own.desc.flags & MAL_PROPERTY_ACCESSOR) ||
+        own.desc.setter != resolution.desc.setter) {
+        return false;
+    }
+    if (!mal_ic_record_local_prototype_chain(object, resolution.holder, ic, false)) {
+        return false;
+    }
+    mal_perf_ic_note_replacement(ic, MAL_IC_MODE_INHERITED_SETTER);
+    ic->shape = object->shape;
+    ic->key = key_value;
+    ic->value = resolution.desc.setter;
+    ic->slot = MAL_IC_VALUE_SLOT;
+    ic->prim_kind = 0;
+    ic->megamorphic = false;
+    ic->mode = MAL_IC_MODE_INHERITED_SETTER;
+    ic->receiver_type = MAL_HEAP_OBJECT;
+    MAL_PERF_COUNT(ic_inherited_setter_fills);
     return true;
 }
 
@@ -6542,6 +6591,14 @@ static void mal_vm_op_store_object_property_ic(
     MalValue value, bool strict, MalInlineCache *ic
 ) {
     MalObject *object = (MalObject *) mal_value_to_heap(object_value);
+    if (ic->mode == MAL_IC_MODE_INHERITED_SETTER && key_value == ic->key &&
+        object->shape == ic->shape && mal_object_prototype(object) == ic->proto_object[0] &&
+        !mal_object_has_public_overflow(object)) {
+        MAL_PERF_COUNT(ic_store_inherited_setter_hits);
+        MalCompletion completion = mal_vm_call_value(vm, ic->value, object_value, &value, 1);
+        if (completion.kind != MAL_COMPLETION_NORMAL) vm->completion = completion;
+        return;
+    }
     if (ic->mode == MAL_IC_MODE_SHAPE && object->shape == ic->shape &&
         key_value == ic->key && ic->slot != MAL_IC_VALUE_SLOT) {
         MAL_PERF_COUNT(ic_store_slow_mono_hits);
@@ -6652,6 +6709,9 @@ static void mal_vm_op_store_object_property_ic(
             }
             return;
         }
+    }
+    if (key.kind == MAL_KEY_STRING && mal_ic_key_is_stable_string(key_value)) {
+        (void) mal_ic_try_record_inherited_setter(object, key, key_value, ic);
     }
     // Prototype setter / overflow / index / symbol key: store with the
     // converted key (no re-conversion).
