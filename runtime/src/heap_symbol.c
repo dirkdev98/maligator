@@ -1,16 +1,11 @@
 #include "heap_symbol.h"
 
-void mal_symbol_init(MalSymbol *symbol, MalString *description) {
-    mal_heap_header_init(&symbol->header, MAL_HEAP_SYMBOL);
+MalSymbol *mal_symbol_new(MalHeap *heap, MalString *description) {
+    MalSymbol *symbol = mal_heap_alloc(heap, sizeof(MalSymbol), MAL_HEAP_SYMBOL);
     symbol->description = description;
     symbol->registered = false;
     symbol->is_private = false;
     symbol->private_entry_hint = 0;
-}
-
-MalSymbol *mal_symbol_new(MalHeap *heap, MalString *description) {
-    MalSymbol *symbol = mal_heap_alloc(heap, sizeof(MalSymbol), MAL_HEAP_SYMBOL);
-    mal_symbol_init(symbol, description);
 
     return symbol;
 }

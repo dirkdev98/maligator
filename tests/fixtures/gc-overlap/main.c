@@ -107,11 +107,11 @@ int main(void) {
     pthread_mutex_unlock(&gate_mutex);
 
     time_t deadline = time(nullptr) + 30;
-    while (mal_gc_black_alloc && time(nullptr) < deadline) {
+    while (vm.heap.black_alloc && time(nullptr) < deadline) {
         mal_gc_safepoint(&vm);
         sched_yield();
     }
-    if (mal_gc_black_alloc || old_finalized != 0) return 2;
+    if (vm.heap.black_alloc || old_finalized != 0) return 2;
     mal_gc_collect(&vm);
     if (old_finalized != 1 || target_env->slots[0] != mal_value_from_object(replacement)) return 3;
 
@@ -141,7 +141,7 @@ int main(void) {
     mal_vm_free(&vm);
     mal_gc_test_trace_env_hook = nullptr;
     mal_gc_test_before_worker_join_hook = nullptr;
-    if (!teardown_release_called || mal_gc_marking_active || mal_gc_black_alloc || mal_gc_poll) return 9;
+    if (!teardown_release_called || mal_gc_marking_active || vm.heap.black_alloc || mal_gc_poll) return 9;
     MalVm next_vm;
     mal_vm_init(&next_vm, &mal_runtime_image);
     mal_gc_collect(&next_vm);

@@ -5,11 +5,6 @@
 #include "heap_string.h"
 #include "vm.h"
 
-void mal_bigint_init(MalBigInt *bigint, i128 value) {
-    mal_heap_header_init(&bigint->header, MAL_HEAP_BIGINT);
-    bigint->value = value;
-}
-
 MalBigInt *mal_bigint_new(MalHeap *heap, i128 value) {
     MalVm *owner = nullptr;
     usize cache_index = 0;
@@ -30,7 +25,7 @@ MalBigInt *mal_bigint_new(MalHeap *heap, i128 value) {
     }
 
     MalBigInt *bigint = mal_heap_alloc(heap, sizeof(MalBigInt), MAL_HEAP_BIGINT);
-    mal_bigint_init(bigint, value);
+    bigint->value = value;
 
     if (owner != nullptr) {
         owner->small_bigint_cache[cache_index] = bigint;

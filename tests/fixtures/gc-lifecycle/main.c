@@ -30,7 +30,7 @@ int main(void) {
             if (mal_gc_marking_active || !vm.heap.sweeping) return 4;
         }
         mal_vm_free(&vm);
-        if (mal_gc_marking_active || mal_gc_black_alloc || mal_gc_poll) return 3;
+        if (mal_gc_marking_active || vm.heap.black_alloc || mal_gc_poll) return 3;
     }
     puts("gc-lifecycle PASS");
     return 0;

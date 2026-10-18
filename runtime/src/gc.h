@@ -30,10 +30,6 @@ usize mal_gc_worker_limit(MalVm *vm);
 
 /* Set during an incremental major mark cycle (init-mark → remark). */
 extern MAL_ISOLATE_LOCAL bool mal_gc_marking_active;
-/* Fresh cells remain live while an incremental sweep is in flight. */
-extern MAL_ISOLATE_LOCAL bool mal_gc_black_alloc;
-/* Bytes promoted immediately by allocation during this isolate's major cycles. */
-extern MAL_ISOLATE_LOCAL usize mal_gc_black_alloc_bytes;
 
 /* The mutator's safepoint request. Helpers and process signal handlers set the owning
  * mutator's flag through mal_gc_request_safepoint, never through their own copy. */

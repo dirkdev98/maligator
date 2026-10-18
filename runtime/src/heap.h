@@ -105,6 +105,10 @@ typedef struct MalHeap {
     u64 minor_blocks_inspected;
     /** Flipped at each major start; matching cells survived the current major. */
     u8 mark_color;
+    /** Fresh cells remain live while an incremental sweep is in flight. */
+    bool black_alloc;
+    /** Bytes promoted immediately by allocation during this heap's major cycles. */
+    usize black_alloc_bytes;
     /** Heap-lifetime root of this isolate's hidden-class transition tree. */
     MalShape *shape_root;
     /** Canonical metadata keys reused by every native function allocation. */
@@ -517,7 +521,10 @@ void mal_heap_array_buffer_release(MalHeap *heap, usize bytes);
 /**
  * Initialize a heap header in place.
  */
-void mal_heap_header_init(MalHeapHeader *header, MalHeapType type);
+void mal_heap_header_init(const MalHeap *heap, MalHeapHeader *header, MalHeapType type);
+
+/** Initialize the header of a cell that no collector manages, such as a stack probe. */
+void mal_heap_header_init_detached(MalHeapHeader *header, MalHeapType type);
 
 /**
  * Read the type tag from a heap allocation header.

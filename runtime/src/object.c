@@ -467,7 +467,7 @@ static void mal_object_init_payload(
 }
 
 void mal_object_init(MalHeap *heap, MalObject *object, MalHeapType type, MalObject *prototype) {
-    mal_heap_header_init(&object->header, type);
+    mal_heap_header_init(heap, &object->header, type);
     mal_object_init_payload(heap, object, prototype, MAL_OBJECT_EMBEDDED, nullptr);
 }
 

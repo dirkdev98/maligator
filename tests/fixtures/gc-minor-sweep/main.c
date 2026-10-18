@@ -264,7 +264,7 @@ static bool incremental_major_keeps_allocations_after_a_block_was_swept(MalHeap 
     mark_live(first);
     mark_live(second);
     mal_heap_sweep_begin(heap);
-    mal_gc_black_alloc = true;
+    heap->black_alloc = true;
     CHECK(!mal_heap_sweep_step(heap, finalize_cell, 1));
     TestCell *after_visit = new_cell(heap, 512);
     TestCell *after_visit_bump = new_cell(heap, 512);
@@ -280,7 +280,7 @@ static bool incremental_major_keeps_allocations_after_a_block_was_swept(MalHeap 
     }
     CHECK(heap->chunk_count >= 2);
     CHECK(mal_heap_sweep_step(heap, finalize_cell, (usize) -1));
-    mal_gc_black_alloc = false;
+    heap->black_alloc = false;
 
     usize live_bytes = 3 * mal_heap_allocation_charge(512) + 2 * mal_heap_allocation_charge(1024)
         + countof(new_chunk_cells) * mal_heap_allocation_charge(8192);
@@ -304,12 +304,12 @@ static bool incremental_major_accounts_a_new_block_in_a_completed_chunk(MalHeap 
     mark_live(old);
     mark_live(large);
     mal_heap_sweep_begin(heap);
-    mal_gc_black_alloc = true;
+    heap->black_alloc = true;
     CHECK(!mal_heap_sweep_step(heap, finalize_cell, 1));
     TestCell *newborn = new_cell(heap, 1024);
     CHECK(heap->chunk_count == 1);
     CHECK(mal_heap_sweep_step(heap, finalize_cell, (usize) -1));
-    mal_gc_black_alloc = false;
+    heap->black_alloc = false;
     usize live_bytes = mal_heap_allocation_charge(512) + mal_heap_allocation_charge(1024) + 10000;
     CHECK(heap->live_bytes == live_bytes);
     mal_heap_sweep_minor(heap, finalize_cell);
@@ -332,7 +332,7 @@ static bool incremental_major_accounts_recycled_raw_blocks(MalHeap *heap) {
     mark_live(old_behind);
     mark_live(old_ahead);
     mal_heap_sweep_begin(heap);
-    mal_gc_black_alloc = true;
+    heap->black_alloc = true;
     CHECK(!mal_heap_sweep_step(heap, finalize_cell, 1));
     for (usize i = 0; i < 15; i++) gc_free_raw(heap, raw_behind[i]);
     CHECK(mal_heap_usage(heap).recycled_block_bytes == 32768);
@@ -343,7 +343,7 @@ static bool incremental_major_accounts_recycled_raw_blocks(MalHeap *heap) {
     TestCell *reused_ahead = new_cell(heap, 7168);
     CHECK((void *) reused_ahead == raw_ahead[0]);
     CHECK(mal_heap_sweep_step(heap, finalize_cell, (usize) -1));
-    mal_gc_black_alloc = false;
+    heap->black_alloc = false;
     usize live_bytes = mal_heap_allocation_charge(512) + mal_heap_allocation_charge(1024)
         + mal_heap_allocation_charge(3072) + mal_heap_allocation_charge(7168);
     CHECK(heap->live_bytes == live_bytes);
@@ -515,13 +515,13 @@ static bool incremental_major_resets_sweep_epochs_on_wrap(MalHeap *heap) {
     mark_live(second);
     mal_heap_sweep_begin(heap);
     CHECK(heap->sweep_epoch == 1);
-    mal_gc_black_alloc = true;
+    heap->black_alloc = true;
     CHECK(!mal_heap_sweep_step(heap, finalize_cell, 1));
     TestCell *newborn = new_cell(heap, 512);
     TestCell *before_cursor = new_cell(heap, 1024);
     TestCell *fresh_block = new_cell(heap, 2048);
     CHECK(mal_heap_sweep_step(heap, finalize_cell, (usize) -1));
-    mal_gc_black_alloc = false;
+    heap->black_alloc = false;
     usize live_bytes = 2 * mal_heap_allocation_charge(512) + 2 * mal_heap_allocation_charge(1024)
         + mal_heap_allocation_charge(2048);
     CHECK(heap->live_bytes == live_bytes);
@@ -599,12 +599,12 @@ static bool incremental_major_accounts_new_large_cells(MalHeap *heap) {
     mal_heap_begin_major(heap);
     mark_live(old);
     mal_heap_sweep_begin(heap);
-    mal_gc_black_alloc = true;
+    heap->black_alloc = true;
     CHECK(!mal_heap_sweep_step(heap, finalize_cell, 1));
     TestCell *newborn = new_cell(heap, cell_size);
     CHECK(mal_heap_mark_is_current(newborn->header.mark, heap->mark_color));
     CHECK(mal_heap_sweep_step(heap, finalize_cell, (usize) -1));
-    mal_gc_black_alloc = false;
+    heap->black_alloc = false;
     CHECK(heap->live_bytes == 2 * cell_size && g_finalized[2] == 1);
     mal_heap_sweep_minor(heap, finalize_cell);
     CHECK(heap->live_bytes == 2 * cell_size && live_cell(old, 1) && live_cell(newborn, 3));
@@ -650,7 +650,6 @@ static bool run_check(bool (*check)(MalHeap *)) {
     memset(g_finalized, 0, sizeof(g_finalized));
     g_invalid_finalizer = false;
     bool ok = check(&heap);
-    mal_gc_black_alloc = false;
     mal_heap_free(&heap);
     return ok && !g_invalid_finalizer;
 }

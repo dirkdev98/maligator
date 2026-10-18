@@ -257,15 +257,15 @@ The independent target boundary and current storage contract are recorded in
       `MAL_FRAME_POS`, root masks and safepoint polls are about 5% each.
       `MAL_FRAME_POS` reloads `vm->native_frames` and its count at all 5,030 of
       its sites, because a nested call can reallocate the frame array.
-- [ ] Reach hot isolate state without Darwin TLV calls. On macOS every
-      `_Thread_local` read is a call to `_tlv_get_addr`, which alone takes 4% of
-      native self-compile samples (6% of a for-in value loop). Callers are spread
-      over allocation (`mal_gc_black_alloc` per cell), header initialization,
-      barriers (`mal_gc_marking_active`), inherited loads
-      (`mal_prototype_chain_epoch`), root spans and safepoint polls. Workers keep
-      several isolates per process, so the state cannot become process-global;
-      moving the hot flags into `MalHeap`/`MalVm`, which those paths already hold,
-      would turn each read into one load.
+- [ ] Reach the remaining hot isolate state without Darwin TLV calls. On macOS
+      every `_Thread_local` read is a call to `_tlv_get_addr`, which took 4% of
+      native self-compile samples before allocation moved its black-allocation
+      flag and mark color into `MalHeap` (a 1% self-compile win). Barriers
+      (`mal_gc_marking_active`), inherited loads (`mal_prototype_chain_epoch`),
+      root spans (`mal_root_span_head`) and safepoint polls still read
+      thread-locals. Workers keep several isolates per process, so this state
+      cannot become process-global; it belongs in `MalHeap`/`MalVm` where callers
+      hold one.
 - [ ] Measure sequentially consistent environment slots on Linux x64. `MalEnv`
       slots are `_Atomic`, so every captured store compiles to `XCHG` on x86-64.
       Major-mark workers trace slots while the mutator runs, so stores must stay

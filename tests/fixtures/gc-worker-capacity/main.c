@@ -113,11 +113,11 @@ static int check_capacity(usize capacity, usize failure_index, bool start_parked
     mal_gc_safepoint(&vm);
     if (!mal_gc_marking_active) return 2;
     time_t deadline = time(nullptr) + 30;
-    while (mal_gc_black_alloc && time(nullptr) < deadline) {
+    while (vm.heap.black_alloc && time(nullptr) < deadline) {
         mal_gc_safepoint(&vm);
         sched_yield();
     }
-    if (mal_gc_black_alloc) return 3;
+    if (vm.heap.black_alloc) return 3;
     if (mal_gc_worker_limit(&vm) != effective_capacity ||
         worker_start_attempts != expected_attempts) return 4;
     if (effective_capacity > 0 &&

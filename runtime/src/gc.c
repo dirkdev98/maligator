@@ -69,11 +69,6 @@
 #endif
 
 MAL_ISOLATE_LOCAL bool mal_gc_marking_active = false;
-/* New cells take the active color and OLD bit through mark and sweep, so a
- * post-snapshot allocation cannot be reclaimed by the in-flight major. */
-MAL_ISOLATE_LOCAL bool mal_gc_black_alloc = false;
-/* Bytes promoted by allocation during this isolate's majors. */
-MAL_ISOLATE_LOCAL usize mal_gc_black_alloc_bytes = 0;
 
 #if defined(__wasi__)
 bool mal_gc_poll = false;
@@ -398,6 +393,7 @@ struct MalGcState {
     usize peak_live_bytes;
     usize allocated_bytes;
     MalHeapUsage heap_usage_before_teardown;
+    usize black_alloc_bytes_before_teardown;
     u64 compiled_root_slots_scanned;
     u64 compiled_root_slots_skipped;
     u64 cycles; // incremental major cycles started
@@ -699,7 +695,8 @@ static void mal_gc_print_stats_now(void) {
             "worker_merge_ms=%.3f worker_wait_ms=%.3f "
             "remark_wait_ms=%.3f remark_join_ms=%.3f",
             (unsigned long long) g->cycles, (unsigned long long) g->sync_backstop,
-            (unsigned long long) mal_gc_black_alloc_bytes,
+            (unsigned long long) (live_heap
+                ? g_gc_vm->heap.black_alloc_bytes : g->black_alloc_bytes_before_teardown),
             (unsigned long long) g->promoted_bytes,
             (unsigned long long) g->promotion_debt,
             (unsigned long long) g->last_major_live_bytes,
@@ -948,7 +945,7 @@ void mal_gc_init(MalVm *vm) {
     g_gc = g;
     g_gc_vm = vm;
     mal_gc_marking_active = false;
-    mal_gc_black_alloc = false;
+    vm->heap.black_alloc = false;
     mal_gc_poll = false;
     mal_perf_stats_init();
     g->major_every = 8;
@@ -1012,14 +1009,17 @@ void mal_gc_begin_teardown(MalVm *vm) {
 #endif
     mal_gc_process_unregister(g->process);
     g->process = nullptr;
-    if (g->stats_enabled) g->heap_usage_before_teardown = mal_heap_usage(&vm->heap);
+    if (g->stats_enabled) {
+        g->heap_usage_before_teardown = mal_heap_usage(&vm->heap);
+        g->black_alloc_bytes_before_teardown = vm->heap.black_alloc_bytes;
+    }
     // Teardown invalidates published roots, so abandon any unfinished snapshot.
     g->phase = MAL_GC_PHASE_IDLE;
     g->stress_interval = 0;
     g->grey_count = 0;
     g->satb_count = 0;
     mal_gc_marking_active = false;
-    mal_gc_black_alloc = false;
+    vm->heap.black_alloc = false;
     mal_gc_poll = false;
     vm->heap.next_gc_at = (usize) -1;
 }
@@ -3202,7 +3202,7 @@ static void mal_gc_cycle_begin(MalVm *vm) {
     // this instant is either marked now (root-reachable) or preserved by the
     // barrier / black allocation for the rest of the cycle.
     mal_gc_marking_active = true;
-    mal_gc_black_alloc = true;
+    vm->heap.black_alloc = true;
     mal_gc_scan_roots(vm);
 
     g_gc->phase = MAL_GC_PHASE_MARK;
@@ -3267,7 +3267,7 @@ static void mal_gc_cycle_remark(MalVm *vm) {
  * the synchronous-finish path (which sweeps everything remaining first). */
 static void mal_gc_cycle_finish_sweep(MalVm *vm) {
     mal_gc_clear_remembered();
-    mal_gc_black_alloc = false;
+    vm->heap.black_alloc = false;
     g_gc->phase = MAL_GC_PHASE_IDLE;
     g_gc->major_collection = false;
     g_gc->last_major_live_bytes = vm->heap.live_bytes;
@@ -3615,7 +3615,7 @@ void mal_gc_state_free(MalVm *vm) {
         g_gc = nullptr;
         g_gc_vm = nullptr;
         mal_gc_marking_active = false;
-        mal_gc_black_alloc = false;
+        vm->heap.black_alloc = false;
         mal_gc_poll = false;
     }
 }

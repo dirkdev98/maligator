@@ -90,12 +90,12 @@ static int exercise(void) {
     first->header.mark = heap.mark_color | MAL_MARK_OLD;
     reused->header.mark = heap.mark_color | MAL_MARK_OLD;
     mal_heap_sweep_begin(&heap);
-    mal_gc_black_alloc = true;
+    heap.black_alloc = true;
     TestCell *black = mal_heap_alloc(&heap, sizeof(TestCell), MAL_HEAP_BIGINT);
     CHECK(mal_heap_mark_is_current(black->header.mark, heap.mark_color));
     CHECK(matches_walk(&heap));
     while (!mal_heap_sweep_step(&heap, finalize_cell, 1)) CHECK(matches_walk(&heap));
-    mal_gc_black_alloc = false;
+    heap.black_alloc = false;
     CHECK(matches_walk(&heap));
 
     MalArrayBufferObject *buffer = mal_array_buffer_object_new(

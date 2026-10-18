@@ -92,11 +92,11 @@ int main(void) {
     pthread_mutex_unlock(&gate_mutex);
 
     deadline = time(nullptr) + 30;
-    while (mal_gc_black_alloc && time(nullptr) < deadline) {
+    while (vm.heap.black_alloc && time(nullptr) < deadline) {
         mal_gc_safepoint(&vm);
         sched_yield();
     }
-    if (mal_gc_black_alloc) return 5;
+    if (vm.heap.black_alloc) return 5;
     for (usize i = 0; i < countof(targets); ++i) {
         if (finalized[i] != 0) return 6;
     }

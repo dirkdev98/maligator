@@ -72,10 +72,10 @@ static inline void mal_string_copy_inline_latin1(u8 *destination, const u8 *sour
     }
 }
 
+// The header belongs to the allocator, which already set its type and initial mark.
 static void mal_string_init_flat(
     MalString *string, MalStringStorage storage, bool latin1, usize length
 ) {
-    mal_heap_header_init(&string->header, MAL_HEAP_STRING);
     string->storage = storage;
     string->hash_valid = false;
     string->array_index_impossible = false;
@@ -298,13 +298,19 @@ void mal_string_init_copy(MalHeap *heap, MalString *string, const c16 *code_unit
     }
 }
 
-void mal_string_init_external(MalString *string, const c16 *code_units, usize length) {
+static void mal_string_init_external_units(MalString *string, const c16 *code_units, usize length) {
     mal_string_require_valid_length(length);
     mal_string_init_flat(string, MAL_STRING_STORAGE_EXTERNAL, false, length);
     string->code_units = code_units;
 }
 
+void mal_string_init_external(MalString *string, const c16 *code_units, usize length) {
+    mal_heap_header_init_detached(&string->header, MAL_HEAP_STRING);
+    mal_string_init_external_units(string, code_units, length);
+}
+
 void mal_string_init_external_latin1(MalString *string, const u8 *units, usize length) {
+    mal_heap_header_init_detached(&string->header, MAL_HEAP_STRING);
     mal_string_require_valid_length(length);
     mal_string_init_flat(string, MAL_STRING_STORAGE_EXTERNAL, true, length);
     string->latin1_units = units;
@@ -337,7 +343,7 @@ MalString *mal_string_new_external(MalHeap *heap, const c16 *code_units, usize l
     MAL_PERF_COUNT(string_external_allocations);
     MAL_PERF_ADD(string_external_code_units, length);
     MalString *string = mal_heap_alloc(heap, sizeof(MalString), MAL_HEAP_STRING);
-    mal_string_init_external(string, code_units, length);
+    mal_string_init_external_units(string, code_units, length);
 
     return string;
 }
@@ -534,7 +540,6 @@ void mal_string_iterator_dispose(MalStringIterator *iterator) {
 
 MalStringCursor *mal_string_cursor_new(MalHeap *heap, const MalString *string) {
     MalStringCursor *cursor = mal_heap_alloc(heap, sizeof(*cursor), MAL_HEAP_STRING_CURSOR);
-    mal_heap_header_init(&cursor->header, MAL_HEAP_STRING_CURSOR);
     cursor->iterator = mal_heap_alloc_raw_profiled(heap, sizeof(*cursor->iterator),
         MAL_PROFILE_ALLOCATION_FAMILY_ITERATOR);
     mal_string_iterator_init(cursor->iterator, string, 0, string->length);

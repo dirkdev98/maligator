@@ -30,11 +30,6 @@ typedef struct MalSymbol {
 static_assert(sizeof(MalSymbol) <= 16, "MalSymbol outgrew its 16-byte size class");
 
 /**
- * Initialize a symbol allocation in caller-provided storage.
- */
-void mal_symbol_init(MalSymbol *symbol, MalString *description);
-
-/**
  * Allocate and initialize a new symbol.
  */
 MalSymbol *mal_symbol_new(MalHeap *heap, MalString *description);

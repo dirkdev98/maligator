@@ -18,11 +18,6 @@ typedef struct MalBigInt {
 } MalBigInt;
 
 /**
- * Initialize a BigInt allocation in caller-provided storage.
- */
-void mal_bigint_init(MalBigInt *bigint, i128 value);
-
-/**
  * Allocate and initialize a new BigInt.
  */
 MalBigInt *mal_bigint_new(MalHeap *heap, i128 value);

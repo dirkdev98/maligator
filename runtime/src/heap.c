@@ -17,7 +17,6 @@
 
 static _Atomic(u64) g_next_heap_identity = 1;
 /* Each pinned mutator binds header initialization to its own heap's major color. */
-static MAL_ISOLATE_LOCAL u8 g_allocation_mark_color;
 
 static inline u8 mal_heap_sweep_mark_load(const MalHeapHeader *header) {
 #if defined(__wasi__)
@@ -357,7 +356,7 @@ static MalGcBlock *mal_gc_new_block(MalHeap *heap, u16 size_class, u8 kind) {
 }
 
 static inline void mal_gc_track_young_block(MalHeap *heap, MalGcBlock *block, void *cell) {
-    if (mal_gc_black_alloc) return;
+    if (heap->black_alloc) return;
     usize slot = ((uptr) cell & (MAL_GC_BLOCK_SIZE - 1)) / MAL_GC_CELL_ALIGN;
     block->young_cells[slot / 64] |= UINT64_C(1) << (slot % 64);
     if (!block->on_young) {
@@ -432,8 +431,8 @@ static bool mal_gc_sweep_large(MalHeap *heap, MalGcLarge *rec, MalHeapFinalizeFn
 
 /* A black cell behind the sweep cursor needs immediate survivor accounting. */
 static inline void mal_gc_count_black(MalHeap *heap, MalGcBlock *block, u8 kind, usize size) {
-    if (kind == MAL_GC_BLOCK_CELL && mal_gc_black_alloc) {
-        mal_gc_black_alloc_bytes += size;
+    if (kind == MAL_GC_BLOCK_CELL && heap->black_alloc) {
+        heap->black_alloc_bytes += size;
         if (block != nullptr && heap->sweeping && block->sweep_epoch == heap->sweep_epoch) {
             heap->sweep_live_bytes += size;
             block->live++;
@@ -559,7 +558,8 @@ void mal_heap_init(MalHeap *heap, usize capacity) {
     heap->raw_large = nullptr;
     heap->young_large = nullptr;
     heap->mark_color = 0;
-    g_allocation_mark_color = 0;
+    heap->black_alloc = false;
+    heap->black_alloc_bytes = 0;
     memset(heap->cell_blocks, 0, sizeof(heap->cell_blocks));
     memset(heap->raw_blocks, 0, sizeof(heap->raw_blocks));
     memset(heap->cell_free, 0, sizeof(heap->cell_free));
@@ -733,11 +733,11 @@ void mal_heap_array_buffer_release(MalHeap *heap, usize bytes) {
     heap->current_usage.array_buffer_bytes -= bytes;
 }
 
-void mal_heap_header_init(MalHeapHeader *header, MalHeapType type) {
+void mal_heap_header_init(const MalHeap *heap, MalHeapHeader *header, MalHeapType type) {
     header->type = type;
     header->storage = MAL_HEAP_STORAGE_DYNAMIC;
     // New cells stay live when allocated during an in-flight incremental sweep.
-    u8 initial_mark = g_allocation_mark_color | (mal_gc_black_alloc ? MAL_MARK_OLD : 0);
+    u8 initial_mark = heap->mark_color | (heap->black_alloc ? MAL_MARK_OLD : 0);
 #if defined(__wasi__)
     header->mark = initial_mark;
 #else
@@ -747,9 +747,19 @@ void mal_heap_header_init(MalHeapHeader *header, MalHeapType type) {
     header->dirty = 0; // not on the remembered set
 }
 
+void mal_heap_header_init_detached(MalHeapHeader *header, MalHeapType type) {
+    header->type = type;
+    header->storage = MAL_HEAP_STORAGE_DYNAMIC;
+#if defined(__wasi__)
+    header->mark = 0;
+#else
+    atomic_store_explicit(&header->mark, 0, memory_order_relaxed);
+#endif
+    header->dirty = 0;
+}
+
 void mal_heap_begin_major(MalHeap *heap) {
     heap->mark_color ^= MAL_MARK_COLOR;
-    g_allocation_mark_color = heap->mark_color;
 }
 
 MalHeapType mal_heap_header_type(const MalHeapHeader *header) {
@@ -839,7 +849,7 @@ static inline void mal_heap_profile_allocation(
 void *mal_heap_alloc(MalHeap *heap, usize alloc_size, MalHeapType type) {
     void *ptr = mal_gc_alloc(heap, alloc_size, MAL_GC_BLOCK_CELL);
     if (ptr == nullptr) abort();
-	mal_heap_header_init(ptr, type);
+	mal_heap_header_init(heap, ptr, type);
 	mal_heap_profile_allocation(
         heap, alloc_size, mal_heap_allocation_charge(alloc_size),
         MAL_PROFILE_ALLOCATION_MANAGED_CELL, mal_profile_family_for_heap_type(type),
@@ -853,7 +863,7 @@ void *mal_heap_try_alloc(MalHeap *heap, usize alloc_size, MalHeapType type) {
         return nullptr;
     }
     void *ptr = mal_gc_alloc(heap, alloc_size, MAL_GC_BLOCK_CELL);
-	if (ptr != nullptr) mal_heap_header_init(ptr, type);
+	if (ptr != nullptr) mal_heap_header_init(heap, ptr, type);
 	if (ptr != nullptr) {
         mal_heap_profile_allocation(
             heap, alloc_size, mal_heap_allocation_charge(alloc_size),

@@ -74,7 +74,8 @@ void mal_string_tiny_cache_promote(MalHeap *heap, MalString *atom);
 void mal_string_init_copy(MalHeap *heap, MalString *string, const c16 *code_units, usize length);
 
 /**
- * Initialize a string that borrows externally managed UTF-16 storage.
+ * Initialize a string outside the managed heap, such as a lookup probe, that
+ * borrows externally managed UTF-16 storage.
  */
 void mal_string_init_external(MalString *string, const c16 *code_units, usize length);
 void mal_string_init_external_latin1(MalString *string, const u8 *units, usize length);

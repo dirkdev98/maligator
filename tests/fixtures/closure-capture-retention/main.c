@@ -609,7 +609,7 @@ static int check_value_construction_during_marking(const MalRuntimeImage *image)
     mal_gc_write_barrier_env(source_frame.env);
     source_frame.env = nullptr;
     vm.root_frame_head = source_frame.prev;
-    if (!mal_gc_finish_pending_cycle(&vm) || mal_gc_black_alloc ||
+    if (!mal_gc_finish_pending_cycle(&vm) || vm.heap.black_alloc ||
             finalized[0] != 0 || finalized[1] != 0 ||
             !mal_heap_mark_is_old(tracked[0]->mark)) return 81;
     if (mal_value_to_heap(mal_vm_load_captured_value_at(values, 1, 1, 0)) != tracked[0]) return 82;
@@ -620,7 +620,7 @@ static int check_value_construction_during_marking(const MalRuntimeImage *image)
     vm.heap.next_gc_at = 1;
     mal_gc_poll = true;
     mal_gc_safepoint(&vm);
-    if (mal_gc_black_alloc || vm.heap.mark_color != major_color || finalized[2] != 1 ||
+    if (vm.heap.black_alloc || vm.heap.mark_color != major_color || finalized[2] != 1 ||
             finalized[0] != 0 || finalized[1] != 0) return 83;
     if (mal_value_to_heap(mal_vm_load_captured_value_at(values, 1, 1, 0)) != tracked[0]) return 84;
 
