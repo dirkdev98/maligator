@@ -6709,9 +6709,10 @@ static void mal_vm_op_store_object_property_ic(
             }
             return;
         }
-    }
-    if (key.kind == MAL_KEY_STRING && mal_ic_key_is_stable_string(key_value)) {
-        (void) mal_ic_try_record_inherited_setter(object, key, key_value, ic);
+        // Only a key absent from the receiver's shape can reach an inherited setter.
+        if (idx < 0 && mal_ic_key_is_stable_string(key_value)) {
+            (void) mal_ic_try_record_inherited_setter(object, key, key_value, ic);
+        }
     }
     // Prototype setter / overflow / index / symbol key: store with the
     // converted key (no re-conversion).

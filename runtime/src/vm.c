@@ -1900,19 +1900,22 @@ bool mal_vm_get_prototype_from_constructor(
     }
     MalKey key = mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_PROTOTYPE);
     MalValue prototype;
-    if (!mal_vm_get_property(vm, constructor, key, &prototype)) {
-        return false;
-    }
-    if (function && mal_value_is_object(prototype)) {
-        MalPropertyLookup own = mal_object_get_own(mal_value_to_object(constructor), key);
-        if (own.present && own.desc.value == prototype &&
-            !(own.desc.flags & (MAL_PROPERTY_ACCESSOR | MAL_PROPERTY_WRITABLE |
-                                MAL_PROPERTY_CONFIGURABLE))) {
+    // An own data property is what [[Get]] returns; a script function creates its
+    // `prototype` lazily, so only an absent one needs the generic path.
+    MalPropertyLookup own = function
+        ? mal_object_get_own(mal_value_to_object(constructor), key)
+        : (MalPropertyLookup) {0};
+    if (own.present && !(own.desc.flags & MAL_PROPERTY_ACCESSOR)) {
+        prototype = own.desc.value;
+        if (mal_value_is_object(prototype) &&
+            !(own.desc.flags & (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE))) {
             usize slot = heap->fixed_constructor_next++ % countof(heap->fixed_constructor_prototypes);
             heap->fixed_constructor_prototypes[slot].constructor = mal_value_to_heap(constructor);
             heap->fixed_constructor_prototypes[slot].prototype = mal_value_to_object(prototype);
             heap->fixed_constructor_prototypes[slot].heap_epoch = heap->epoch;
         }
+    } else if (!mal_vm_get_property(vm, constructor, key, &prototype)) {
+        return false;
     }
     if (mal_value_is_object(prototype)) {
         *prototype_out = mal_value_to_object(prototype);
