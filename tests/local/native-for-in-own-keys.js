@@ -58,8 +58,18 @@ list.extra = true;
 expectKeys(list, "0,1,2,extra", "array indices then named keys");
 for (let round = 0; round < 3; round++)
 	expectKeys([1, , 3], "0,2", "a warm silent array prototype");
+const holey = [1, , 3];
+holey["01"] = "named";
+function readByStrings(array) {
+	return ["0", "1", "2", "01", "3"].map((key) => String(array[key])).join(",");
+}
+for (let round = 0; round < 3; round++)
+	if (readByStrings(holey) !== "1,undefined,3,named,undefined")
+		throw new Error(`index strings read ${readByStrings(holey)}`);
 Array.prototype[1] = "inherited";
 expectKeys([1, , 3], "0,2,1", "an element added to Array.prototype fills the hole");
+if (readByStrings(holey) !== "1,inherited,3,named,undefined")
+	throw new Error(`an index string reaches the prototype: ${readByStrings(holey)}`);
 delete Array.prototype[1];
 expectKeys([1, , 3], "0,2", "the deleted prototype element disappears");
 

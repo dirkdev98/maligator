@@ -203,28 +203,22 @@ static bool mal_vm_string_to_array_index(MalString *string, u32 *index_out) {
         return false;
     }
 
-    MalStringIterator iterator;
     MalStringSegment segment;
-    mal_string_iterator_init(&iterator, string, 0, length);
-    u64 value = 0;
-    usize offset = 0;
-    bool valid = true;
-    while (valid && mal_string_iterator_next(&iterator, &segment)) {
-        for (usize i = 0; i < segment.length; i++, offset++) {
-            c16 unit = mal_string_segment_code_unit_at(&segment, i);
-            if (unit < '0' || unit > '9' || (offset == 0 && length > 1 && unit == '0')) {
-                valid = false;
-                break;
-            }
-            value = value * 10 + (u64) (unit - '0');
-            if (value >= UINT32_MAX) {
-                valid = false;
-                break;
-            }
-        }
+    c16 units[10];
+    if (!mal_string_try_get_segment(string, 0, length, &segment)) {
+        mal_string_copy_range_to(string, 0, length, units);
+        segment = (MalStringSegment) {.latin1 = false, .length = length, .utf16_units = units};
     }
-    mal_string_iterator_dispose(&iterator);
-    if (!valid) {
+    u64 value = 0;
+    for (usize i = 0; i < length; i++) {
+        c16 unit = mal_string_segment_code_unit_at(&segment, i);
+        if (unit < '0' || unit > '9' || (i == 0 && length > 1 && unit == '0')) {
+            string->array_index_impossible = true;
+            return false;
+        }
+        value = value * 10 + (u64) (unit - '0');
+    }
+    if (value >= UINT32_MAX) {
         string->array_index_impossible = true;
         return false;
     }
@@ -6148,6 +6142,30 @@ static void mal_ic_try_record_inherited(
     MAL_PERF_COUNT(ic_inherited_fills);
 }
 
+// A computed-key site restarts its row on every new key and never becomes
+// megamorphic, so a key other than the row's probes the stub as well.
+static inline bool mal_vm_load_stub_try(
+    MalVm *vm, const MalObject *object, MalValue key_value, MalInlineCache *ic, MalValue *out
+) {
+    if (!ic->megamorphic && key_value == ic->key) return false;
+    const MalPropertyStubEntry *e =
+        &mal_vm_property_stub_cache(vm)[mal_stub_hash(object->shape, key_value)];
+    if (e->shape != object->shape || e->key != key_value) return false;
+    MAL_PERF_COUNT(ic_load_mega_hits);
+    // A computed-key site adopts a key on its second consecutive stub hit, so
+    // a site cycling between keys keeps its row while a new phase still
+    // moves the row. A real-slot shape row leaves `value` free to remember
+    // the candidate; stable keys make the identity comparison ABA-safe.
+    if (mal_ic_key_is_stable_string(key_value) &&
+        (ic->megamorphic || ic->value == key_value)) {
+        mal_vm_record_own_slot(ic, object->shape, key_value, e->slot);
+    } else if (ic->mode == MAL_IC_MODE_SHAPE && ic->slot != MAL_IC_VALUE_SLOT) {
+        ic->value = key_value;
+    }
+    *out = mal_object_field_load_token(object, e->field);
+    return true;
+}
+
 static MalValue mal_vm_op_load_property_ic_keyed(
     MalVm *vm, MalValue object_value, MalKey key, MalInlineCache *ic,
     bool static_probe_missed
@@ -6284,28 +6302,11 @@ static MalValue mal_vm_op_load_property_ic_keyed(
         }
         // Megamorphic: consult the shared stub cache before a shape search (serves
         // the interpreter and any compiled access whose inline stub probe was cold).
-        // A computed-key site restarts its row on every new key and never becomes
-        // megamorphic, so a key other than the row's probes the stub as well.
-        if (ic->megamorphic || key_value != ic->key) {
-            const MalPropertyStubEntry *e =
-                &mal_vm_property_stub_cache(vm)[
-                    mal_stub_hash(object->shape, key_value)];
-            if (e->shape == object->shape && e->key == key_value) {
-                MAL_PERF_COUNT(ic_load_mega_hits);
-                // A computed-key site adopts a key on its second consecutive stub hit, so
-                // a site cycling between keys keeps its row while a new phase still
-                // moves the row. A real-slot shape row leaves `value` free to remember
-                // the candidate; stable keys make the identity comparison ABA-safe.
-                if (mal_ic_key_is_stable_string(key_value) &&
-                    (ic->megamorphic || ic->value == key_value)) {
-                    mal_vm_record_own_slot(ic, object->shape, key_value, e->slot);
-                } else if (ic->mode == MAL_IC_MODE_SHAPE && ic->slot != MAL_IC_VALUE_SLOT) {
-                    ic->value = key_value;
-                }
-                return mal_object_field_load_token(object, e->field);
-            }
-            MAL_PERF_COUNT(ic_load_mega_misses);
+        MalValue stub_value;
+        if (mal_vm_load_stub_try(vm, object, key_value, ic, &stub_value)) {
+            return stub_value;
         }
+        if (ic->megamorphic || key_value != ic->key) MAL_PERF_COUNT(ic_load_mega_misses);
         if (key.kind == MAL_KEY_STRING) {
             i32 idx = mal_shape_find(object->shape, key, MAL_SHAPE_FIND_LOAD_IC);
             if (idx >= 0) {
@@ -6526,6 +6527,25 @@ static MalTable *mal_vm_dictionary_receiver_table(MalValue object_value, MalValu
 MalValue mal_vm_op_load_property_ic(
     MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic
 ) {
+    // Index strings such as for-in keys over an array name the same elements as numbers.
+    u32 index;
+    MalValue element;
+    if (mal_value_is_string(key_value) &&
+        mal_value_is_heap_type(object_value, MAL_HEAP_ARRAY_OBJECT) &&
+        mal_vm_string_to_array_index(mal_value_to_string(key_value), &index) &&
+        mal_vm_array_try_get_proven_index(
+            (const MalArrayObject *) mal_value_to_heap(object_value), index, &element)) {
+        MAL_PERF_COUNT(ic_load_index_string_hits);
+        return element;
+    }
+    // Stub rows are keyed by atom identity, so any other string merely misses and a
+    // hit needs neither key conversion nor rooting.
+    MalObject *slot_object = mal_value_is_string(key_value) && vm->property_stub != nullptr
+        ? mal_vm_as_own_slot_object(object_value) : nullptr;
+    MalValue stub_value;
+    if (slot_object != nullptr && mal_vm_load_stub_try(vm, slot_object, key_value, ic, &stub_value)) {
+        return stub_value;
+    }
     // A cacheable key at a cold or same-key site fills and keeps the entry-hinted
     // own-table row; keys the site cannot cache, or one varying past its row, probe directly.
     bool cacheable = mal_ic_key_is_stable_string(key_value) &&
