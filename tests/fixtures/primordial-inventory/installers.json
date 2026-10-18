@@ -729,7 +729,7 @@
 	},
 	{
 		"file": "vm_ops.c",
-		"sha256": "7749f696000c678f58bfe646a55a784c4bcab1ce156fccf20474ff46e85d9e67"
+		"sha256": "a16d6a2a6c3a6abe443a81067951bd3b799ebd0c4dd6af1e5e29372b95abfc63"
 	},
 	{
 		"file": "vm_ops.h",

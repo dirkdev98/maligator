@@ -2452,9 +2452,23 @@ __attribute__((noinline)) void mal_vm_number_record_store_slow(
     mal_object_field_store(object, slot, mal_ops_number_value(value));
 }
 
+static bool mal_ic_key_is_stable_string(MalValue key);
+static inline bool mal_vm_load_stub_try(
+    MalVm *vm, const MalObject *object, MalValue key_value, MalInlineCache *ic, MalValue *out);
+
 MalValue mal_vm_indexed_load_keyed(
     MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic
 ) {
+    // Keys cycling through one record miss the site's row on most reads; answer them
+    // from the shared stub, which holds only stable names, before the complete load.
+    // The stub probe declines at once when the row holds this key.
+    MalValue value;
+    if (vm->property_stub != nullptr && mal_value_is_heap_type(object_value, MAL_HEAP_OBJECT) &&
+        mal_ic_key_is_stable_string(key_value) &&
+        mal_vm_load_stub_try(
+            vm, (const MalObject *) mal_value_to_heap(object_value), key_value, ic, &value)) {
+        return value;
+    }
     return mal_vm_indexed_fast_load_full(vm, object_value, key_value, ic);
 }
 
