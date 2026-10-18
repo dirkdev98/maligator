@@ -1,14 +1,14 @@
 {
   "sha": "3655e7464de3d52643ecddd4b5f9f4f3e7f62398",
   "summary": {
-    "FAILED": 922,
-    "PASSED": 52656
+    "FAILED": 921,
+    "PASSED": 52657
   },
   "skips": {},
   "code": {
     "compiledFiles": 94218,
     "functionCount": 2985900,
-    "instructionCount": 109799379
+    "instructionCount": 109799421
   },
   "results": {
     "test/annexB/built-ins/Array/from/iterator-method-emulates-undefined.js": "FAILED",
@@ -53536,7 +53536,7 @@
     "test/staging/sm/object/getPrototypeOf-array.js": "PASSED",
     "test/staging/sm/object/isExtensible.js": "PASSED",
     "test/staging/sm/object/keys.js": "PASSED",
-    "test/staging/sm/object/object-toString-01.js": "FAILED",
+    "test/staging/sm/object/object-toString-01.js": "PASSED",
     "test/staging/sm/object/property-descriptor-order.js": "PASSED",
     "test/staging/sm/object/regress-459405.js": "PASSED",
     "test/staging/sm/object/setPrototypeOf-same-value.js": "PASSED",
