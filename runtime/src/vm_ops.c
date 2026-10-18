@@ -6236,7 +6236,7 @@ static MalValue mal_vm_op_load_property_ic_keyed(
         }
         return mal_ops_number_value((f64) ((const MalArrayObject *) mal_value_to_heap(object_value))->length);
     }
-    if (mal_value_is_string(key_value) &&
+    if (mal_value_is_typed_array_object(object_value) && mal_value_is_string(key_value) &&
         mal_array_key_is_length((MalKey) {.kind = MAL_KEY_STRING, .value = key_value})) {
         MalTypedArrayObject *array;
         u32 length;
