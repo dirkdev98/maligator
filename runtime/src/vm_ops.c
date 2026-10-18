@@ -1191,7 +1191,7 @@ MalValue mal_vm_query_static_data(MalVm *vm, i32 template_offset, i32 query_kind
             // Primitive comparisons are effect-free; retaining the last match avoids a reverse offset table.
             if (query_kind != 3) break;
         }
-        if (((index + 1) & 1023u) == 0 && mal_gc_poll) {
+        if (((index + 1) & 1023u) == 0 && mal_gc_poll_requested()) {
             mal_gc_safepoint(vm);
             cursor.data = vm->runtime_image->literal_template_data;
             cursor.count = (u32) vm->runtime_image->literal_template_data_count;
@@ -1344,7 +1344,7 @@ MalValue mal_vm_instantiate_literal_template(MalVm *vm, i32 template_offset, i32
             active_root.count = (i32) depth;
         }
 
-        if ((++built & 1023u) == 0 && mal_gc_poll) {
+        if ((++built & 1023u) == 0 && mal_gc_poll_requested()) {
             mal_gc_safepoint(vm);
             if (vm->completion.kind == MAL_COMPLETION_THROW) {
                 ok = false;

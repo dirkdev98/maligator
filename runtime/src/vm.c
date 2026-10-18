@@ -2312,7 +2312,7 @@ static void mal_vm_prepare_interpreter_safepoint(MalVmFrame *frame, i32 instruct
         MAL_PERF_COUNT(interpreter_state_syncs); \
         MAL_PERF_COUNT(interpreter_boundary_dispatches); \
         call; \
-        if (mal_vm_interpreter_activation_is_current(vm, activation) && mal_gc_poll) { \
+        if (mal_vm_interpreter_activation_is_current(vm, activation) && mal_gc_poll_requested()) { \
             mal_gc_safepoint(vm); \
         } \
         if (mal_vm_interpreter_activation_is_current(vm, activation)) { \
@@ -3259,7 +3259,7 @@ static void mal_vm_run_until_frame_count(
                 if (guarded_tag > MAL_MATH_UNARY_ROUND &&
                     mal_op_call_guarded_builtin(frame, instruction)) {
                     MAL_VM_INTERPRETER_DIRECT_LEAF();
-                    if (!mal_gc_poll) continue;
+                    if (!mal_gc_poll_requested()) continue;
                     MalVmInterpreterActivation activation =
                         mal_vm_interpreter_activation(vm, frame);
                     mal_vm_prepare_interpreter_safepoint_except(
@@ -3304,7 +3304,7 @@ static void mal_vm_run_until_frame_count(
                 bool backedge = instruction->as.jump.target_ip < instruction_pointer;
                 instruction_pointer = instruction->as.jump.target_ip;
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
-                if (backedge && mal_gc_poll) {
+                if (backedge && mal_gc_poll_requested()) {
                     MAL_VM_INTERPRETER_SYNC_AT(safepoint_ip);
                     mal_gc_safepoint(vm);
                     frame = &vm->frames[vm->frame_count - 1];
@@ -3328,7 +3328,7 @@ static void mal_vm_run_until_frame_count(
                     instruction_pointer = instruction->as.jump_if.target_ip;
                 }
                 MAL_VM_INTERPRETER_DIRECT_LEAF();
-                if (backedge && mal_gc_poll) {
+                if (backedge && mal_gc_poll_requested()) {
                     MAL_VM_INTERPRETER_SYNC_AT(safepoint_ip);
                     mal_gc_safepoint(vm);
                     frame = &vm->frames[vm->frame_count - 1];
@@ -3424,7 +3424,7 @@ static void mal_vm_run_until_frame_count(
                         vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = return_value};
                     }
                 }
-                if (vm->completion.kind == MAL_COMPLETION_NORMAL && mal_gc_poll) {
+                if (vm->completion.kind == MAL_COMPLETION_NORMAL && mal_gc_poll_requested()) {
                     mal_gc_safepoint(vm);
                 }
                 break;

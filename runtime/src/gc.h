@@ -3,6 +3,10 @@
 #include "./defaults.h"
 #include "value.h"
 
+#if !defined(__wasi__)
+#include <stdatomic.h>
+#endif
+
 typedef struct MalVm MalVm;
 struct MalEnv;
 
@@ -38,6 +42,16 @@ extern bool mal_gc_poll;
 #else
 extern MAL_ISOLATE_LOCAL _Atomic bool mal_gc_poll;
 #endif
+
+/* Poll sites only choose whether to enter mal_gc_safepoint, whose exchange acquires the
+ * request; a sequentially consistent read would order every loop backedge and call return. */
+static inline __attribute__((always_inline)) bool mal_gc_poll_requested(void) {
+#if defined(__wasi__)
+    return mal_gc_poll;
+#else
+    return atomic_load_explicit(&mal_gc_poll, memory_order_relaxed);
+#endif
+}
 
 typedef struct MalGcPollTarget MalGcPollTarget;
 /* Async-signal-safe and thread-safe: request a safepoint on the isolate owning `target`. */

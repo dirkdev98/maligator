@@ -1040,7 +1040,7 @@ function emitNumericLoopRegion(
 	const restart = `{ ${id}_exit = 0; break; }`;
 	const reach = (ip: number): string => {
 		if (ip === plan.id)
-			return `${plan.carried.map((register) => `${start(register)} = ${local(register)};`).join(" ")}${cursor === undefined ? "" : ` ${id}_si = ${cursor}.index;`} if (mal_gc_poll) ${restart} continue;`;
+			return `${plan.carried.map((register) => `${start(register)} = ${local(register)};`).join(" ")}${cursor === undefined ? "" : ` ${id}_si = ${cursor}.index;`} if (mal_gc_poll_requested()) ${restart} continue;`;
 		const exit = exitIndex.get(ip);
 		if (exit !== undefined) return `{ ${id}_exit = ${exit}; break; }`;
 		return `${id}_b${ip} = true;`;
@@ -5083,7 +5083,7 @@ function emitBody(
 					handler !== undefined
 						? `goto L${handler};`
 						: `goto ${nativeBodyReference(resources, "throwExit")};`;
-				return `if (mal_gc_poll) { ${cPrivateRootPublication(
+				return `if (mal_gc_poll_requested()) { ${cPrivateRootPublication(
 					rootPublication,
 					branchIp,
 					"outgoing",
@@ -6595,18 +6595,18 @@ function emitInstruction(
 	const poll = (): string =>
 		(pollText ??=
 			(context.outgoingRootPublication?.length ?? 0) > 0
-				? `if (mal_gc_poll) { ${context.outgoingRootPublication!.join(" ")} ${context.loopBackedgeInactiveRootMask === undefined ? "" : `${cInactiveRootMaskPublication(context.loopBackedgeInactiveRootMask, context.inactiveRootMaskStatements)}; `}${safepoint()} }`
+				? `if (mal_gc_poll_requested()) { ${context.outgoingRootPublication!.join(" ")} ${context.loopBackedgeInactiveRootMask === undefined ? "" : `${cInactiveRootMaskPublication(context.loopBackedgeInactiveRootMask, context.inactiveRootMaskStatements)}; `}${safepoint()} }`
 				: context.loopBackedgeInactiveRootMask === undefined
 					? context.gcSafepoint
-						? `if (mal_gc_poll) { ${safepoint()} }`
+						? `if (mal_gc_poll_requested()) { ${safepoint()} }`
 						: ""
-					: `if (mal_gc_poll) { ${cInactiveRootMaskPublication(context.loopBackedgeInactiveRootMask, context.inactiveRootMaskStatements)}; ${safepoint()} }`);
+					: `if (mal_gc_poll_requested()) { ${cInactiveRootMaskPublication(context.loopBackedgeInactiveRootMask, context.inactiveRootMaskStatements)}; ${safepoint()} }`);
 	let mathPollText: string | undefined;
 	const mathPoll = (): string =>
 		(mathPollText ??=
 			context.mathCallInactiveRootMask === undefined
 				? poll()
-				: `if (mal_gc_poll) { ${(context.outgoingRootPublication ?? []).map((line) => `${line} `).join("")}${cInactiveRootMaskPublication(context.mathCallInactiveRootMask, context.inactiveRootMaskStatements)}; ${safepoint()} }`);
+				: `if (mal_gc_poll_requested()) { ${(context.outgoingRootPublication ?? []).map((line) => `${line} `).join("")}${cInactiveRootMaskPublication(context.mathCallInactiveRootMask, context.inactiveRootMaskStatements)}; ${safepoint()} }`);
 	let mathFallbackText: ReadonlyArray<string> | undefined;
 	const mathFallbackRootPublication = (): ReadonlyArray<string> =>
 		(mathFallbackText ??=
@@ -11307,7 +11307,7 @@ function emitInstruction(
 					const charPoll =
 						mask === undefined
 							? poll()
-							: `if (mal_gc_poll) { ${(context.outgoingRootPublication ?? []).join(" ")} ${cInactiveRootMaskPublication(mask, context.inactiveRootMaskStatements)}; ${safepoint()} }`;
+							: `if (mal_gc_poll_requested()) { ${(context.outgoingRootPublication ?? []).join(" ")} ${cInactiveRootMaskPublication(mask, context.inactiveRootMaskStatements)}; ${safepoint()} }`;
 					return [
 						`MalValue __char_value_${ip};`,
 						`if (mal_builtin_string_char_code_at_try(vm, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length}, &__string_leaf_cache_${ip}, &__char_value_${ip})) {`,
