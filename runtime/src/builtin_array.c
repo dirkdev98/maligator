@@ -563,9 +563,6 @@ static bool mal_builtin_array_int32_search_matches(
     if (mal_value_is_int32(element)) {
         return false;
     }
-    if (element == MAL_VALUE_NEGATIVE_ZERO) {
-        return search_number == 0.0;
-    }
     return mal_value_is_f64(element) && mal_value_to_f64(element) == search_number;
 }
 
@@ -581,7 +578,8 @@ static bool mal_builtin_array_numeric_search_words(
         number = (f64) integer;
     } else if (mal_value_is_f64(search)) {
         number = mal_value_to_f64(search);
-        if (number == 0.0) return false;
+        // Zero has two encodings, and NaN never strictly equals its own bits.
+        if (number == 0.0 || isnan(number)) return false;
     } else {
         return false;
     }

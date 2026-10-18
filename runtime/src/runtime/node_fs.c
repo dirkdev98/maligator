@@ -242,7 +242,8 @@ static u32 node_fs_this_type(MalVm *vm, MalValue self) {
         return (u32) mal_value_to_i32(v);
     }
     if (mal_value_is_f64(v)) {
-        return (u32) mal_value_to_f64(v);
+        f64 number = mal_value_to_f64(v);
+        if (number >= 0 && number <= UINT32_MAX) return (u32) number;
     }
     return MAL_POSIX_FT_OTHER;
 }
@@ -1129,7 +1130,7 @@ static bool node_fs_mode(MalVm *vm, MalValue value, u32 *mode) {
             if (digit < '0' || digit > '7') goto invalid_type;
             number = number * 8 + digit - '0';
         }
-    } else if (mal_value_is_int32(value) || mal_value_is_f64_or_nan(value)) {
+    } else if (mal_value_is_int32(value) || mal_value_is_f64(value)) {
         number = mal_ops_number_as_f64(value);
     } else {
 invalid_type:
@@ -1581,7 +1582,7 @@ static bool node_fs_time_value(MalVm *vm, MalValue value, i64 *seconds, i64 *nan
         milliseconds = mal_value_to_date_object(value)->date_value;
     } else {
         f64 seconds_value;
-        if (!mal_value_is_string(value) && !mal_value_is_int32(value) && !mal_value_is_f64_or_nan(value)) {
+        if (!mal_value_is_string(value) && !mal_value_is_int32(value) && !mal_value_is_f64(value)) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "utimes time must be a finite number, string, or Date");
             return false;
         }
@@ -1940,7 +1941,7 @@ static bool node_fs_rm_options(MalVm *vm, MalValue options, NodeFsRmOptions *out
             if (i == 0) out->recursive = mal_value_is_truthy(option);
             else out->force = mal_value_is_truthy(option);
         } else {
-            if (!(mal_value_is_int32(option) || mal_value_is_f64_or_nan(option))) {
+            if (!(mal_value_is_int32(option) || mal_value_is_f64(option))) {
                 mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "rm retry options must be numbers");
                 return false;
             }

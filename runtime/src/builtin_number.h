@@ -21,21 +21,16 @@ f64 mal_builtin_parse_float_string(MalValue source);
 void mal_builtin_number_install(MalVm *vm);
 
 static inline bool mal_builtin_number_value_is_nan(MalValue value) {
-    return mal_value_is_nan(value) || (mal_value_is_f64(value) && isnan(mal_value_to_f64(value)));
+    return mal_value_is_nan(value);
 }
 
 static inline bool mal_builtin_number_value_is_finite(MalValue value) {
-    if (mal_value_is_int32(value) || value == MAL_VALUE_NEGATIVE_ZERO) {
-        return true;
-    }
-
+    if (mal_value_is_int32(value)) return true;
     return mal_value_is_f64(value) && isfinite(mal_value_to_f64(value));
 }
 
 static inline bool mal_builtin_number_value_is_integer(MalValue value) {
-    if (mal_value_is_int32(value) || value == MAL_VALUE_NEGATIVE_ZERO) {
-        return true;
-    }
+    if (mal_value_is_int32(value)) return true;
 
     if (!mal_value_is_f64(value)) {
         return false;

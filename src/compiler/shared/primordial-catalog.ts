@@ -26,20 +26,17 @@ export function primordialConstantDescription(
 			),
 		};
 	if (value[0] === "bigint") return { kind: "bigint", decimal: value[1] };
+	// Captured MalValue bits: doubles are raw, boxed classes start at 0xfff8.
 	const high = parseInt(value[1].slice(0, 8), 16),
 		low = parseInt(value[1].slice(8), 16);
-	if (high === 0x7ff90000) return staticNumberDescription(low | 0);
-	if (high === 0x7ff80000) {
+	if (high === 0xfff80000) return staticNumberDescription(low | 0);
+	if (high === 0xfff90000) {
 		if (low === 2) return { kind: "null" };
 		if (low === 3) return { kind: "undefined" };
 		if (low === 4 || low === 5) return { kind: "boolean", value: low === 4 };
-		if (low === 1 || low === 6 || low === 7 || low === 8)
-			return staticNumberDescription(
-				low === 1 ? NaN : low === 6 ? -0 : low === 7 ? Infinity : -Infinity,
-			);
 		return undefined;
 	}
-	if ((high & 0x7ff80000) === 0x7ff80000) return undefined;
+	if (high >= 0xfff80000) return undefined;
 	return { kind: "number", high, low };
 }
 

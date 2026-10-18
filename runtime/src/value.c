@@ -226,13 +226,8 @@ MalValue mal_value_from_primitive_wrapper(MalPrimitiveWrapperObject *wrapper) {
     return mal_value_from_heap((MalHeapHeader *) wrapper);
 }
 
-/** A JS Number in any of its NaN-boxing encodings. */
 static bool mal_value_is_number_value(MalValue value) {
-    return mal_value_is_int32(value) ||
-        mal_value_is_f64_or_nan(value) ||
-        value == MAL_VALUE_NEGATIVE_ZERO ||
-        value == MAL_VALUE_POSITIVE_INFINITY ||
-        value == MAL_VALUE_NEGATIVE_INFINITY;
+    return mal_value_is_int32(value) || mal_value_is_f64(value);
 }
 
 bool mal_value_this_string_value(MalValue value, MalValue *out) {
@@ -315,17 +310,6 @@ bool mal_value_is_truthy_primitive(MalValue value) {
 
     if (mal_value_is_bigint(value)) {
         return mal_bigint_value(mal_value_to_bigint(value)) != 0;
-    }
-
-    // ±Infinity and -0 also have static encodings, whose all-ones exponent bits
-    // make mal_value_is_f64 reject them. Kept behind the common cases, but ahead
-    // of the fallthrough that would otherwise report the falsy -0 as truthy.
-    if (value == MAL_VALUE_NEGATIVE_ZERO) {
-        return false;
-    }
-
-    if (value == MAL_VALUE_POSITIVE_INFINITY || value == MAL_VALUE_NEGATIVE_INFINITY) {
-        return true;
     }
 
     // Any object is truthy.

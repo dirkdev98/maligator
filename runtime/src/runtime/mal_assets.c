@@ -311,7 +311,7 @@ static bool mal_dev_pid(MalVm *vm, MalValue value, pid_t *pid) {
         return false;
     }
     f64 number = mal_value_to_f64(value);
-    if (number <= 0 || number > (f64) INT32_MAX || number != (f64) (pid_t) number) {
+    if (!(number > 0 && number <= (f64) INT32_MAX) || number != (f64) (pid_t) number) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
             "invalid development process handle");
         return false;

@@ -4345,12 +4345,7 @@ MalValue mal_vm_function_prototype(MalVm *vm, MalValue function_value) {
 }
 
 static bool mal_vm_value_is_number(MalValue value) {
-    // ±Infinity and -0 are canonicalised to dedicated static tags (value.h), so
-    // they are NOT is_f64 — enumerate them explicitly or a property access on
-    // Infinity (e.g. `Infinity.toString()`) fails to route to %Number.prototype%.
-    return mal_value_is_int32(value) || mal_value_is_f64_or_nan(value)
-        || value == MAL_VALUE_NEGATIVE_ZERO || value == MAL_VALUE_POSITIVE_INFINITY
-        || value == MAL_VALUE_NEGATIVE_INFINITY;
+    return mal_ops_is_number(value);
 }
 
 /**

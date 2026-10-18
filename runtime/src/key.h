@@ -54,11 +54,6 @@ static inline MalKeyKind mal_key_kind_of(MalValue value) {
 static inline MalValue mal_collection_canonical_value(MalValue value) {
     if (mal_value_is_int32(value)) return mal_value_from_f64((f64) mal_value_to_i32(value));
     if (value == MAL_VALUE_NEGATIVE_ZERO) return mal_value_from_f64(0.0);
-    if (mal_value_is_f64(value)) {
-        f64 number = mal_value_to_f64(value);
-        if (number == 0.0) return mal_value_from_f64(0.0);
-        if (isnan(number)) return MAL_VALUE_NAN;
-    }
     return value;
 }
 
@@ -73,9 +68,7 @@ static inline MalKey mal_collection_key_from_value(MalValue value) {
     if (mal_value_is_string(value)) kind = MAL_KEY_STRING;
     else if (mal_value_is_symbol(value)) kind = MAL_KEY_SYMBOL;
     else if (mal_value_is_object(value)) kind = MAL_KEY_OBJECT;
-    else if (mal_value_is_f64(value) || mal_value_is_bigint(value) ||
-            value == MAL_VALUE_NAN || value == MAL_VALUE_POSITIVE_INFINITY ||
-            value == MAL_VALUE_NEGATIVE_INFINITY) kind = MAL_KEY_NUMBER;
+    else if (mal_value_is_f64(value) || mal_value_is_bigint(value)) kind = MAL_KEY_NUMBER;
     return (MalKey) {.kind = kind, .value = value};
 }
 

@@ -35,8 +35,6 @@ static MalSetKeyDomain mal_set_key_domain(MalValue key) {
         return number >= INT32_MIN && number <= INT32_MAX && (f64) (i32) number == number
             ? MAL_SET_KEYS_INT32 : MAL_SET_KEYS_NUMBER;
     }
-    if (key == MAL_VALUE_NAN || key == MAL_VALUE_POSITIVE_INFINITY ||
-        key == MAL_VALUE_NEGATIVE_INFINITY) return MAL_SET_KEYS_NUMBER;
     if (mal_value_is_string(key)) return MAL_SET_KEYS_STRING;
     if (mal_value_is_object(key) || mal_value_is_symbol(key)) return MAL_SET_KEYS_IDENTITY;
     return MAL_SET_KEYS_GENERIC;

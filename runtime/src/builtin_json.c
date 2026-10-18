@@ -406,11 +406,8 @@ typedef enum MalJsonResult {
     MAL_JSON_THROW,
 } MalJsonResult;
 
-// Every JS Number value: tagged int32/f64 plus the static ±0, NaN, ±Infinity.
 static bool mal_json_is_number(MalValue value) {
-    return mal_value_is_int32(value) || mal_value_is_f64(value) ||
-        value == MAL_VALUE_NEGATIVE_ZERO || mal_value_is_nan(value) ||
-        value == MAL_VALUE_POSITIVE_INFINITY || value == MAL_VALUE_NEGATIVE_INFINITY;
+    return mal_ops_is_number(value);
 }
 
 static MalJsonResult mal_json_serialize_property(MalJsonState *state, MalJsonBuilder *builder, MalKey get_key, MalValue key_string, MalValue holder, usize depth);
@@ -1555,7 +1552,7 @@ static MalValue mal_builtin_json_stringify(MalVm *vm, MalValue this_value, const
             space = mal_value_from_string(string_value);
         }
     }
-    if (mal_value_is_int32(space) || mal_value_is_f64(space) || space == MAL_VALUE_NEGATIVE_ZERO || mal_value_is_nan(space)) {
+    if (mal_ops_is_number(space)) {
         f64 number = mal_ops_to_number(space);
         i32 count = isnan(number) ? 0 : (i32) fmin(10.0, fmax(0.0, trunc(number)));
         for (i32 i = 0; i < count; i++) {

@@ -115,58 +115,25 @@ static inline f64 mal_number_exponentiate(f64 base, f64 exponent) {
 }
 
 /**
- * Whether the value is a JS Number (any of: int32, f64, NaN, -0, ±Infinity),
- * and the f64 recovery of a value already known to be one (precondition:
- * mal_ops_is_number). Both are written directly over the NaN-boxing layout
- * (see value.h) and kept `static inline` so the native-C backend's speculative
- * numeric guard lowers to a few bit tests in the hot loop instead of two
- * cross-TU calls. mal_ops_number_as_f64 matches mal_ops_to_number on Numbers.
+ * Whether the value is a JS Number, and the f64 recovery of a value already known
+ * to be one (precondition: mal_ops_is_number). Every double is stored as its own
+ * bits and int32 is the lowest boxed class, so both are a single compare.
+ * mal_ops_number_as_f64 matches mal_ops_to_number on Numbers.
  */
 static inline bool mal_ops_is_number(MalValue value) {
-    return ((value & MASK_EXPONENT_BITS) != MASK_EXPONENT_BITS) || // genuine f64 (incl ±0.0)
-        ((value & MAL_VALUE_CLASS_MASK) == MAL_VALUE_INT32) ||          // tagged int32
-        value == MAL_VALUE_NAN ||
-        value == MAL_VALUE_NEGATIVE_ZERO ||
-        value == MAL_VALUE_POSITIVE_INFINITY ||
-        value == MAL_VALUE_NEGATIVE_INFINITY;
+    return value < MAL_VALUE_STATIC;
 }
 
 static inline f64 mal_ops_number_as_f64(MalValue value) {
-    if ((value & MASK_EXPONENT_BITS) != MASK_EXPONENT_BITS) {
-        return *(f64 *) &value; // genuine double, incl ±0.0
-    }
-    if ((value & MAL_VALUE_CLASS_MASK) == MAL_VALUE_INT32) {
-        return (f64) (i32) (u32) (value & MASK_INT32); // tagged int32
-    }
-    if (value == MAL_VALUE_POSITIVE_INFINITY) {
-        return INFINITY;
-    }
-    if (value == MAL_VALUE_NEGATIVE_INFINITY) {
-        return -INFINITY;
-    }
-    if (value == MAL_VALUE_NEGATIVE_ZERO) {
-        return -0.0;
-    }
-    return NAN; // MAL_VALUE_NAN
+    return value < MAL_VALUE_TAG_BASE
+        ? mal_value_to_f64(value) : (f64) (i32) (u32) (value & MASK_INT32);
 }
 
 /** Classify and decode one Number without retaining its boxed form across a guard join. */
 static inline __attribute__((always_inline)) bool mal_ops_try_number_as_f64(MalValue value, f64 *out) {
-    if ((value & MAL_VALUE_CLASS_MASK) == MAL_VALUE_INT32) {
-        *out = (f64) (i32) (u32) (value & MASK_INT32);
-        return true;
-    }
-    if ((value & MASK_EXPONENT_BITS) != MASK_EXPONENT_BITS) {
-        memcpy(out, &value, sizeof(value));
-        return true;
-    }
-    switch (value) {
-        case MAL_VALUE_NAN: *out = NAN; return true;
-        case MAL_VALUE_NEGATIVE_ZERO: *out = -0.0; return true;
-        case MAL_VALUE_POSITIVE_INFINITY: *out = INFINITY; return true;
-        case MAL_VALUE_NEGATIVE_INFINITY: *out = -INFINITY; return true;
-        default: return false;
-    }
+    if (value >= MAL_VALUE_STATIC) return false;
+    *out = mal_ops_number_as_f64(value);
+    return true;
 }
 
 /** Reinterpret a uint32 result as the corresponding signed two's-complement value. */

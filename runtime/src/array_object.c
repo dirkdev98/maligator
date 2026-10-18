@@ -19,10 +19,7 @@
 #if MAL_PERF_STATS
 static usize mal_array_object_perf_value_kind(MalValue value) {
     if (mal_value_is_int32(value)) return 0;
-    if (mal_value_is_f64_or_nan(value) || value == MAL_VALUE_NEGATIVE_ZERO ||
-        value == MAL_VALUE_POSITIVE_INFINITY || value == MAL_VALUE_NEGATIVE_INFINITY) {
-        return 1;
-    }
+    if (mal_value_is_f64(value)) return 1;
     return 2;
 }
 
@@ -761,7 +758,7 @@ static bool mal_array_object_store_tail(MalArrayObject *array, MalKey key, MalVa
         f64 number = mal_value_is_int32(value)
             ? (f64) mal_value_to_i32(value)
             : (mal_value_is_f64(value) ? mal_value_to_f64(value) : -1.0);
-        if (number >= 0 && (f64) (u32) number == number) {
+        if (number >= 0 && number <= UINT32_MAX && (f64) (u32) number == number) {
             u32 new_length = (u32) number;
             // This is the array [[Set]] path (arrays don't override [[Set]], so a
             // write delegates here). OrdinarySetWithOwnDescriptor rejects any write

@@ -2093,7 +2093,7 @@ MalValue mal_builtin_object_prototype_to_string(MalVm *vm, MalValue this_value, 
         tag = "[object String]";
     } else if (mal_value_is_boolean(this_value)) {
         tag = "[object Boolean]";
-    } else if (mal_value_is_int32(this_value) || mal_value_is_f64_or_nan(this_value)) {
+    } else if (mal_value_is_int32(this_value) || mal_value_is_f64(this_value)) {
         tag = "[object Number]";
     }
 
@@ -2394,7 +2394,7 @@ static MalObject *mal_builtin_object_receiver_holder(MalVm *vm, MalValue this_va
     if (mal_value_is_boolean(this_value)) {
         return mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_BOOLEAN_PROTOTYPE]);
     }
-    if (mal_value_is_int32(this_value) || mal_value_is_f64_or_nan(this_value)) {
+    if (mal_value_is_int32(this_value) || mal_value_is_f64(this_value)) {
         return mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_NUMBER_PROTOTYPE]);
     }
     if (mal_value_is_symbol(this_value)) {

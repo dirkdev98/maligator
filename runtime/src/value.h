@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string.h>
+
 #include "./defaults.h"
 #include "heap.h"
 
@@ -39,44 +41,42 @@ typedef struct MalEventTargetObject MalEventTargetObject;
 typedef struct MalReadableStreamObject MalReadableStreamObject;
 
 /**
- * NaN-Boxed MalValue representation.
+ * NaN-boxed MalValue representation.
  *
- * A f64 is a 1 sign bit, 11 exponent bits and 52 mantissa bits.
- * NaN values are represented by 0b01111111111100000...00. The first mantissa
- * bit is used for signaling that an exception should be thrown, so it should always be 0.
+ * Every double, including the infinities and -0, is stored as its own bits.
+ * Boxed kinds live in the negative quiet-NaN range at and above
+ * MAL_VALUE_TAG_BASE: the top 16 bits select the class and the low 48 bits carry
+ * the payload. So that range never holds a double, every NaN is boxed as the
+ * one canonical MAL_VALUE_NAN.
  *
- * Pointers are at most 48-bits. So we have 11 NaN bits, 48 pointer bits (or other values) + the first mantissa bit reserved.
- * Which leaves the sign bit and the 2nd, 3rd and 4th mantissa bits to encode data.
- *
- * Those 3 mantissa bits (50..48) are a class selector distinguishing the boxed
- * kinds — static, int32, and the six heap classes (string/symbol/bigint/object/
- * array/callable); see the MAL_VALUE_* tags below. The static class (selector
- * 000) discriminates its members (null/undefined/true/false/±0/±Inf/empty/hole)
- * in the low payload bits. The sign bit is currently free for future use.
+ * The classes are ordered so that each predicate is one compare: int32 sits
+ * lowest, so a Number is any value below the static class, and the heap classes
+ * follow with the object family (object, array, callable) at the top, so `is_heap`
+ * and `is_object` are unsigned range compares that never dereference the pointer.
+ * A value's class is fixed at allocation and never changes.
  */
 typedef u64 MalValue;
 
-// Various masking constants.
 #define MASK_SIGN_BIT 0x8000000000000000
-#define MASK_EXPONENT_BITS 0x7FF0000000000000
-#define MASK_QUIET_NAN 0x0008000000000000
 #define MASK_INT32 0x00000000FFFFFFFF
 #define MASK_UINT32_SIGN 0x0000000080000000
 #define MAKS_PTR 0x0000FFFFFFFFFFFF
 
-// Inline static values. We have lots of bits here to play with, so if it makes sense to add more things, we should do that.
-// i.e things like -0, +0 etc could be a good usecase.
-#define MAL_VALUE_STATIC (MASK_QUIET_NAN | MASK_EXPONENT_BITS)
-#define MAL_VALUE_NAN (MAL_VALUE_STATIC | 0x01)
+#define MAL_VALUE_TAG_BASE 0xFFF8000000000000
+#define MAL_VALUE_INT32 0xFFF8000000000000
+#define MAL_VALUE_STATIC 0xFFF9000000000000
+#define MAL_VALUE_STRING 0xFFFA000000000000
+#define MAL_VALUE_SYMBOL 0xFFFB000000000000
+#define MAL_VALUE_BIGINT 0xFFFC000000000000
+#define MAL_VALUE_OBJECT 0xFFFD000000000000
+#define MAL_VALUE_ARRAY 0xFFFE000000000000
+#define MAL_VALUE_CALLABLE 0xFFFF000000000000
+#define MAL_VALUE_CLASS_MASK 0xFFFF000000000000
+
 #define MAL_VALUE_NULL (MAL_VALUE_STATIC | 0x02)
 #define MAL_VALUE_UNDEFINED (MAL_VALUE_STATIC | 0x03)
 #define MAL_VALUE_TRUE (MAL_VALUE_STATIC | 0x04)
 #define MAL_VALUE_FALSE (MAL_VALUE_STATIC | 0x05)
-#define MAL_VALUE_NEGATIVE_ZERO (MAL_VALUE_STATIC | 0x06)
-// Raw f64 infinities collide with the tag space check (exponent all ones), so
-// they get static encodings like NaN does.
-#define MAL_VALUE_POSITIVE_INFINITY (MAL_VALUE_STATIC | 0x07)
-#define MAL_VALUE_NEGATIVE_INFINITY (MAL_VALUE_STATIC | 0x08)
 // The "empty"/uninitialized sentinel: a let/const/class binding in its temporal
 // dead zone. Never a real JS value; reading one throws ReferenceError.
 #define MAL_VALUE_EMPTY (MAL_VALUE_STATIC | 0x09)
@@ -86,29 +86,10 @@ typedef u64 MalValue;
 // A static (non-pointer) value, so GC tracing skips it.
 #define MAL_VALUE_ARRAY_HOLE (MAL_VALUE_STATIC | 0x0A)
 
-
-// Boxed (non-double) values carry a 3-bit class selector in mantissa bits 50..48
-// (bit 51 is the reserved quiet-NaN bit; bits 62..52 are the all-ones exponent;
-// the sign bit 63 stays free). Static sub-values (null/undefined/bool/±0/±Inf/
-// empty/hole) keep selector 000 and discriminate in the low bits.
-//
-// The classes are ORDERED so that masking off sign + payload yields a monotonic
-// value: the two non-pointer classes (static, int32) sit lowest, then the heap
-// classes, with the object family (object, array, callable) at the top. So
-// `is_heap` and `is_object` are single unsigned range compares and every other
-// type predicate an exact compare — none dereferences the pointer. The 48-bit
-// payload lives below the selector (MAKS_PTR), so mal_value_to_heap masks it off
-// unchanged. A value's class is fixed at allocation and never changes.
-#define MAL_VALUE_INT32 (MAL_VALUE_STATIC | 0x0001000000000000)    // tag 001
-#define MAL_VALUE_STRING (MAL_VALUE_STATIC | 0x0002000000000000)   // tag 010
-#define MAL_VALUE_SYMBOL (MAL_VALUE_STATIC | 0x0003000000000000)   // tag 011
-#define MAL_VALUE_BIGINT (MAL_VALUE_STATIC | 0x0004000000000000)   // tag 100
-#define MAL_VALUE_OBJECT (MAL_VALUE_STATIC | 0x0005000000000000)   // tag 101
-#define MAL_VALUE_ARRAY (MAL_VALUE_STATIC | 0x0006000000000000)    // tag 110
-#define MAL_VALUE_CALLABLE (MAL_VALUE_STATIC | 0x0007000000000000) // tag 111
-// Sign-excluded class field (exponent + quiet bit + 3-bit selector). Masking a
-// value with this and comparing against the constants above classifies it.
-#define MAL_VALUE_CLASS_MASK 0x7FFF000000000000
+#define MAL_VALUE_NAN 0x7FF8000000000000
+#define MAL_VALUE_NEGATIVE_ZERO 0x8000000000000000
+#define MAL_VALUE_POSITIVE_INFINITY 0x7FF0000000000000
+#define MAL_VALUE_NEGATIVE_INFINITY 0xFFF0000000000000
 
 
 /**
@@ -120,19 +101,23 @@ typedef u64 MalValue;
  * use them. Definitions are ordered so each callee precedes its callers.
  */
 
-/** Reinterpret f64 as MalValue. */
+/** Reinterpret f64 as MalValue; a NaN must already be MAL_VALUE_NAN. */
 static inline MalValue mal_value_from_f64(f64 value) {
-    return *(MalValue *) &value;
+    MalValue bits;
+    memcpy(&bits, &value, sizeof(bits));
+    return bits;
 }
 
 /** Reinterpret a MalValue as a f64. */
 static inline f64 mal_value_to_f64(MalValue value) {
-    return *(f64 *) &value;
+    f64 number;
+    memcpy(&number, &value, sizeof(number));
+    return number;
 }
 
-/** Returns true if the value is a f64. */
+/** Returns true if the value is a double, which includes NaN, the infinities and -0. */
 static inline bool mal_value_is_f64(MalValue value) {
-    return (value & MASK_EXPONENT_BITS) != MASK_EXPONENT_BITS;
+    return value < MAL_VALUE_TAG_BASE;
 }
 
 /** Create a new NaN value. */
@@ -145,24 +130,9 @@ static inline bool mal_value_is_nan(MalValue value) {
     return value == MAL_VALUE_NAN;
 }
 
-/** Returns true if the value is a f64 or NaN. */
-static inline bool mal_value_is_f64_or_nan(MalValue value) {
-    return mal_value_is_nan(value) || mal_value_is_f64(value);
-}
-
 /** Reinterpret f64 as MalValue + convert any NaN to our only NaN. */
 static inline MalValue mal_value_from_f64_convert_nan(f64 value) {
-    MalValue mal_value = mal_value_from_f64(value);
-    if ((mal_value & MASK_EXPONENT_BITS) == MASK_EXPONENT_BITS) {
-        if (value > 0) {
-            return MAL_VALUE_POSITIVE_INFINITY;
-        }
-        if (value < 0) {
-            return MAL_VALUE_NEGATIVE_INFINITY;
-        }
-        return MAL_VALUE_NAN;
-    }
-    return mal_value;
+    return value != value ? MAL_VALUE_NAN : mal_value_from_f64(value);
 }
 
 /** Create a new null value. */
@@ -287,7 +257,7 @@ static inline MalValue mal_value_from_heap(MalHeapHeader *heap) {
 
 /** Check if the value is heap-backed (string/symbol/bigint or any object). */
 static inline bool mal_value_is_heap(MalValue value) {
-    return (value & MAL_VALUE_CLASS_MASK) >= MAL_VALUE_STRING;
+    return value >= MAL_VALUE_STRING;
 }
 
 /** Unbox a heap allocation. */
@@ -332,7 +302,7 @@ static inline bool mal_value_is_bigint(MalValue value) {
  * the OBJECT threshold.
  */
 static inline bool mal_value_is_object(MalValue value) {
-    return (value & MAL_VALUE_CLASS_MASK) >= MAL_VALUE_OBJECT;
+    return value >= MAL_VALUE_OBJECT;
 }
 
 /** Check if the value is a script function object. */

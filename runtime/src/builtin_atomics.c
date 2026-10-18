@@ -639,7 +639,7 @@ static MalValue mal_atomics_pause(MalVm *vm, MalValue this_value, const MalValue
     (void) new_target;
     (void) callee;
     if (arg_count >= 1 && !mal_value_is_undefined(args[0])) {
-        bool is_number = mal_value_is_int32(args[0]) || mal_value_is_f64_or_nan(args[0]);
+        bool is_number = mal_value_is_int32(args[0]) || mal_value_is_f64(args[0]);
         f64 n = is_number ? mal_ops_to_number(args[0]) : 0;
         if (!is_number || !isfinite(n) || trunc(n) != n) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,

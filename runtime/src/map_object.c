@@ -50,8 +50,6 @@ static MalMapKeyDomain mal_map_key_domain(MalValue key) {
         return number >= INT32_MIN && number <= INT32_MAX && (f64) (i32) number == number
             ? MAL_MAP_KEYS_INT32 : MAL_MAP_KEYS_NUMBER;
     }
-    if (key == MAL_VALUE_NAN || key == MAL_VALUE_POSITIVE_INFINITY ||
-        key == MAL_VALUE_NEGATIVE_INFINITY) return MAL_MAP_KEYS_NUMBER;
     if (mal_value_is_string(key)) return MAL_MAP_KEYS_STRING;
     if (mal_value_is_object(key) || mal_value_is_symbol(key)) return MAL_MAP_KEYS_IDENTITY;
     return MAL_MAP_KEYS_GENERIC;
@@ -198,8 +196,7 @@ static inline bool mal_map_query_in_domain(
             return (f64) *int_key == number;
         }
         case MAL_MAP_KEYS_NUMBER:
-            return mal_value_is_f64(key) || key == MAL_VALUE_NAN ||
-                key == MAL_VALUE_POSITIVE_INFINITY || key == MAL_VALUE_NEGATIVE_INFINITY;
+            return mal_value_is_f64(key);
         case MAL_MAP_KEYS_STRING:
             return mal_value_is_string(key);
         case MAL_MAP_KEYS_IDENTITY:

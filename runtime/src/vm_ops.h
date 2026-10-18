@@ -1051,12 +1051,7 @@ enum {
 
 static inline u8 mal_vm_primitive_method_kind(MalValue value) {
     if (mal_value_is_string(value)) return MAL_PRIM_KIND_STRING;
-    // +/-Infinity and -0 have dedicated static tags rather than the f64 tag.
-    if (mal_value_is_int32(value) || mal_value_is_f64_or_nan(value) ||
-        value == MAL_VALUE_NEGATIVE_ZERO || value == MAL_VALUE_POSITIVE_INFINITY ||
-        value == MAL_VALUE_NEGATIVE_INFINITY) {
-        return MAL_PRIM_KIND_NUMBER;
-    }
+    if (mal_ops_is_number(value)) return MAL_PRIM_KIND_NUMBER;
     if (mal_value_is_boolean(value)) return MAL_PRIM_KIND_BOOLEAN;
     if (mal_value_is_symbol(value)) return MAL_PRIM_KIND_SYMBOL;
     if (mal_value_is_bigint(value)) return MAL_PRIM_KIND_BIGINT;

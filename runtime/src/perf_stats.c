@@ -332,8 +332,7 @@ static void mal_perf_collection_snapshot_live(void) {
 
 u8 mal_perf_collection_key_bit(u64 value) {
     usize kind = mal_value_is_int32(value) ? 0 :
-        (mal_value_is_f64_or_nan(value) || value == MAL_VALUE_NEGATIVE_ZERO ||
-            value == MAL_VALUE_POSITIVE_INFINITY || value == MAL_VALUE_NEGATIVE_INFINITY) ? 1 :
+        mal_value_is_f64(value) ? 1 :
         mal_value_is_string(value) ? 2 :
         mal_value_is_symbol(value) ? 3 :
         mal_value_is_object(value) ? 4 :
@@ -354,9 +353,7 @@ void mal_perf_collection_key_value(const void *collection, u64 value) {
 
 void mal_perf_array_element_write(const void *array, u64 value) {
     if (!mal_perf_stats_enabled) return;
-    usize kind = mal_value_is_int32(value) ? 0 :
-        (mal_value_is_f64_or_nan(value) || value == MAL_VALUE_NEGATIVE_ZERO ||
-            value == MAL_VALUE_POSITIVE_INFINITY || value == MAL_VALUE_NEGATIVE_INFINITY) ? 1 : 2;
+    usize kind = mal_value_is_int32(value) ? 0 : mal_value_is_f64(value) ? 1 : 2;
     mal_perf_stats.array_element_writes[kind]++;
     MalPerfCollectionRecord *record = mal_perf_collection_record(array, false);
     if (record == nullptr) return;
