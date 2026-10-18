@@ -2159,6 +2159,19 @@ static inline bool mal_vm_enter_depth_checked(MalVm *vm) {
  * mal_vm_enter_compiled when it needs neither to report an overflow nor to grow
  * the frame stack; false leaves the VM untouched for the complete entry.
  */
+static inline void mal_vm_push_native_frame(MalVm *vm, i32 function_index) {
+    MAL_PERF_COUNT(compiled_debug_frame_entries);
+    vm->native_frames[vm->native_frame_count++] = (MalNativeFrame) {
+        .function_index = function_index,
+        .position_entry = -1,
+#if MAL_PROFILE
+        .site_id = -1,
+#endif
+        .enter_seq = vm->frame_seq++,
+        .hidden = false,
+    };
+}
+
 static inline bool mal_vm_try_enter_compiled_fast(MalVm *vm, i32 function_index) {
     const uptr stack_limit = vm->stack_limit;
     bool frames = vm->runtime_image->file_count != 0;
@@ -2169,17 +2182,7 @@ static inline bool mal_vm_try_enter_compiled_fast(MalVm *vm, i32 function_index)
     }
     MAL_PERF_COUNT(compiled_enter_calls);
     vm->native_call_depth++;
-    if (!frames) return true;
-    MAL_PERF_COUNT(compiled_debug_frame_entries);
-    vm->native_frames[vm->native_frame_count++] = (MalNativeFrame) {
-        .function_index = function_index,
-        .position_entry = -1,
-#if MAL_PROFILE
-        .site_id = -1,
-#endif
-        .enter_seq = vm->frame_seq++,
-        .hidden = false,
-    };
+    if (frames) mal_vm_push_native_frame(vm, function_index);
     return true;
 }
 
@@ -2188,20 +2191,10 @@ static inline bool mal_vm_enter_compiled(MalVm *vm, i32 function_index) {
     MAL_PERF_COUNT(compiled_enter_calls);
     if (!mal_vm_enter_depth_checked(vm)) return false;
     if (vm->runtime_image->file_count == 0) return true;
-
-    MAL_PERF_COUNT(compiled_debug_frame_entries);
     if (vm->native_frame_count == vm->native_frame_capacity) {
         mal_vm_grow_native_frames(vm);
     }
-    vm->native_frames[vm->native_frame_count++] = (MalNativeFrame) {
-        .function_index = function_index,
-        .position_entry = -1,
-#if MAL_PROFILE
-        .site_id = -1,
-#endif
-        .enter_seq = vm->frame_seq++,
-        .hidden = false,
-    };
+    mal_vm_push_native_frame(vm, function_index);
     return true;
 }
 
