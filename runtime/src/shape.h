@@ -60,6 +60,8 @@ struct MalShape {
     MalShapeTransition *transitions;
     /** Immutable for-in keys of a plain object that owns all of its enumerable keys here. */
     struct MalArrayObject *for_in_keys;
+    /** The empty shape this one's transition tree grows from; null for the dictionary sentinel. */
+    MalShape *tree_root;
 };
 
 static inline bool mal_shape_can_add_property(const MalShape *shape) {
@@ -135,6 +137,9 @@ static inline i32 mal_shape_find(
  * return the same child. The new property occupies slot `shape->inline_count`.
  */
 MalShape *mal_shape_add_property(MalShape *shape, MalKey key, u8 attrs);
+
+/** The interned child for adding `key` with `attrs`, or null before its first addition. */
+MalShape *mal_shape_find_add_transition(MalShape *shape, MalKey key, u8 attrs);
 
 /**
  * Return the interned sealed/frozen variant of `shape`. Property order, keys,

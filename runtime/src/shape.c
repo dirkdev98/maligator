@@ -227,6 +227,7 @@ static void mal_shape_init_empty(MalShape *shape) {
 void mal_shape_heap_init(MalHeap *heap) {
     heap->shape_root = malloc(sizeof(MalShape));
     mal_shape_init_empty(heap->shape_root);
+    heap->shape_root->tree_root = heap->shape_root;
     memset(mal_shape_find_cache, 0, sizeof(mal_shape_find_cache));
 }
 
@@ -332,6 +333,26 @@ MalShape *mal_shape_from_string_keys(MalHeap *heap, struct MalString **keys, u32
     return shape;
 }
 
+MalShape *mal_shape_find_add_transition(MalShape *shape, MalKey key, u8 attrs) {
+    if (shape->transition_index != nullptr) {
+        u64 hash;
+        if (mal_shape_transition_hash(key, attrs, &hash)) {
+            MalShapeTransition *match =
+                mal_shape_transition_index_find(shape->transition_index, key, attrs, hash);
+            if (match != nullptr) return match->child;
+            if (shape->transition_index->complete) return nullptr;
+        }
+    }
+    for (MalShapeTransition *transition = shape->transitions;
+         transition != nullptr; transition = transition->next) {
+        if (transition->kind == MAL_SHAPE_TRANSITION_ADD && transition->attrs == attrs &&
+            mal_key_value_equals(transition->key, key.value)) {
+            return transition->child;
+        }
+    }
+    return nullptr;
+}
+
 MalShape *mal_shape_add_property(MalShape *shape, MalKey key, u8 attrs) {
     if (shape->inline_count >= MAL_SHAPE_MAX_INLINE_SLOTS) abort();
     u64 comparisons = 0;
@@ -388,6 +409,7 @@ MalShape *mal_shape_add_property(MalShape *shape, MalKey key, u8 attrs) {
     *child = (MalShape) {
         .header = {.type = MAL_HEAP_SHAPE, .storage = MAL_HEAP_STORAGE_DYNAMIC},
         .inline_count = shape->inline_count + 1,
+        .tree_root = shape->tree_root,
     };
     child->props = malloc(sizeof(MalShapeProp) * child->inline_count);
     if (shape->inline_count > 0) {
@@ -442,6 +464,7 @@ MalShape *mal_shape_set_integrity(MalShape *shape, bool clear_writable) {
     *child = (MalShape) {
         .header = {.type = MAL_HEAP_SHAPE, .storage = MAL_HEAP_STORAGE_DYNAMIC},
         .inline_count = shape->inline_count,
+        .tree_root = shape->tree_root,
     };
     child->props = malloc(sizeof(MalShapeProp) * child->inline_count);
     memcpy(

@@ -21,8 +21,14 @@ typedef struct MalSymbol {
      */
     u32 is_private : 1;
 
-    // A truncated 1-based entry index, validated against each receiver's live key.
-    u32 private_entry_hint : 30;
+    /**
+     * Set once a full shape evicted this private name: its class outgrows shape
+     * slots, so later instances install it straight into their private table.
+     */
+    u32 private_table_resident : 1;
+
+    // A truncated 1-based shape slot or table entry index, validated against each receiver.
+    u32 private_entry_hint : 29;
 
     MalString *description;
 } MalSymbol;

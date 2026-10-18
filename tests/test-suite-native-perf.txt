@@ -18,6 +18,7 @@ tests/native/interpreter-property-ic.test.ts
 tests/native/interpreter-strict-equality.test.ts
 tests/native/known-own-slot-load.test.ts
 tests/native/map-get-set-cache.test.ts
+tests/native/native-shape-snapshots.test.ts
 tests/native/object-rest-shaped.test.ts
 tests/native/object-slot-coallocation.test.ts
 tests/native/own-table-property-cache.test.ts

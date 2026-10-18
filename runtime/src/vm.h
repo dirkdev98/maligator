@@ -2020,7 +2020,7 @@ typedef struct MalVm {
     struct {
         const struct MalShape *source;
         struct MalShape *final;
-    } private_append_cache[32];
+    } private_append_cache[128];
 } MalVm;
 
 /** Every engine heap is the unique inline heap of one MalVm. */

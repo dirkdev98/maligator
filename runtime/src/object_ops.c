@@ -168,12 +168,21 @@ bool mal_object_get_private(MalObject *object, MalSymbol *symbol, MalValue *valu
 bool mal_object_add_private(MalObject *object, MalKey key, MalValue value) {
     assert(key.kind == MAL_KEY_SYMBOL &&
            mal_symbol_is_private(mal_value_to_symbol(key.value)));
-    if (mal_shape_find(object->shape, key, MAL_SHAPE_FIND_DEFINE_OWN) >= 0) return false;
+    // Only this function adds private names to shapes, after proving them absent, so
+    // an existing transition proves the name is not already in the source shape.
+    MalShape *child =
+        mal_shape_find_add_transition(object->shape, key, (u8) MAL_PROPERTY_WRITABLE);
+    if (child == nullptr && mal_shape_find(object->shape, key, MAL_SHAPE_FIND_DEFINE_OWN) >= 0) {
+        return false;
+    }
     // PrivateFieldAdd ignores [[Extensible]], so frozen receivers still gain slots.
-    if (mal_object_shapes_private(object) && mal_shape_can_add_property(object->shape) &&
+    if (!mal_value_to_symbol(key.value)->private_table_resident &&
+        mal_object_shapes_private(object) && mal_shape_can_add_property(object->shape) &&
         (mal_object_overflow(object) == nullptr ||
          !mal_table_lookup(mal_object_overflow(object), key).present)) {
-        MalShape *child = mal_shape_add_property(object->shape, key, (u8) MAL_PROPERTY_WRITABLE);
+        if (child == nullptr) {
+            child = mal_shape_add_property(object->shape, key, (u8) MAL_PROPERTY_WRITABLE);
+        }
         u32 count = child->inline_count;
         mal_object_grow_slots(object, object->shape->inline_count, count);
         mal_object_field_initialize(object, child, count - 1, value);
@@ -233,6 +242,50 @@ static void mal_object_dictionarize(MalObject *object) {
     // coallocated storage remains part of the managed object cell.
     mal_object_record_slot_dictionary_migration(object);
     mal_object_release_slots(object);
+}
+
+/**
+ * Move a full shape's private elements into a private-only table and rebuild the
+ * shape from its public properties, so a class with many private fields keeps its
+ * public ones shaped. Returns false when the shape holds no private element.
+ */
+static bool mal_object_evict_shaped_private(MalObject *object) {
+    const MalShape *shape = object->shape;
+    u32 count = shape->inline_count;
+    bool shaped_private = false;
+    for (u32 i = 0; i < count && !shaped_private; i++) {
+        shaped_private = !mal_value_is_string(shape->props[i].key);
+    }
+    if (!shaped_private || shape->tree_root == nullptr) return false;
+    if (mal_object_note_prototype_mutation(object)) {
+        MAL_PERF_COUNT(prototype_epoch_define_invalidations);
+    }
+    MalTable *table = mal_object_ensure_overflow(object);
+    MalShape *public_shape = shape->tree_root;
+    MalValue values[MAL_SHAPE_MAX_INLINE_SLOTS];
+    u32 kept = 0;
+    for (u32 i = 0; i < count; i++) {
+        const MalShapeProp *prop = &shape->props[i];
+        MalValue value = mal_object_field_load(object, i);
+        if (mal_value_is_string(prop->key)) {
+            public_shape = mal_shape_add_property(
+                public_shape, mal_key_from_value(prop->key), prop->attrs);
+            values[kept++] = value;
+            continue;
+        }
+        MalPropertyDesc desc = mal_object_data_desc(value, (MalPropertyFlags) prop->attrs);
+        mal_property_ensure(table, mal_key_from_value(prop->key), &desc);
+        mal_gc_card_desc(&object->header, &desc);
+        mal_gc_card(&object->header, prop->key);
+        mal_value_to_symbol(prop->key)->private_table_resident = true;
+    }
+    // Every old slot is overwritten or dropped, so shade each for the snapshot barrier.
+    MalValue *fields = mal_object_fields_nonempty(object);
+    for (u32 i = 0; i < count; i++) mal_gc_write_barrier(fields[i]);
+    for (u32 i = 0; i < kept; i++) fields[i] = values[i];
+    object->shape = public_shape;
+    object->overflow_private_only = true;
+    return true;
 }
 
 MalTable *mal_object_properties(MalObject *object) {
@@ -617,8 +670,9 @@ MalDefineOwnStatus mal_object_define_own(MalObject *object, MalKey key, const Ma
             // An attribute transition needs the dictionary's full descriptor
             // compatibility machinery.
         } else if (mal_object_desc_is_default_data(desc) &&
-            !mal_object_has_public_overflow(object)
-            && mal_shape_can_add_property(object->shape)) {
+            !mal_object_has_public_overflow(object) &&
+            (mal_shape_can_add_property(object->shape) ||
+             (object->extensible && mal_object_evict_shaped_private(object)))) {
             if (!object->extensible) {
                 return MAL_DEFINE_OWN_REJECTED;
             }

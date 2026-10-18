@@ -5,6 +5,7 @@ MalSymbol *mal_symbol_new(MalHeap *heap, MalString *description) {
     symbol->description = description;
     symbol->registered = false;
     symbol->is_private = false;
+    symbol->private_table_resident = false;
     symbol->private_entry_hint = 0;
 
     return symbol;

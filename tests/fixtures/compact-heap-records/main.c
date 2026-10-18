@@ -173,6 +173,7 @@ static MalValue record_layout(
     i32 flags = object->header.storage == MAL_HEAP_STORAGE_DYNAMIC ? 1 : 0;
     if (object->storage_kind == MAL_OBJECT_COMPACT) flags |= 2;
     if (object->storage_kind == MAL_OBJECT_EXTERNAL) flags |= 64;
+    if (object->shape == mal_shape_dictionary_empty()) flags |= 128;
     return mal_value_from_i32(flags);
 }
 

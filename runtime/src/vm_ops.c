@@ -8762,7 +8762,10 @@ static bool mal_vm_append_private_elements(
     if (shaped && vm->private_append_cache[row].source == source) {
         MalShape *final = vm->private_append_cache[row].final;
         bool exact = final->inline_count == base + count;
-        for (u32 i = 0; exact && i < count; i++) exact = final->props[base + i].key == keys[i];
+        for (u32 i = 0; exact && i < count; i++) {
+            exact = final->props[base + i].key == keys[i] &&
+                !mal_value_to_symbol(keys[i])->private_table_resident;
+        }
         // A cached tail can be reached only through duplicate-checked additions from `source`.
         if (exact) {
             mal_object_grow_slots(object, base, base + count);

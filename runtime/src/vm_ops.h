@@ -3471,7 +3471,9 @@ MalValue mal_vm_op_load_private(MalVm *vm, MalValue object_value, MalValue key_v
  * receiver's own shape, so one hint serves every class sharing the field's index.
  */
 static inline i32 mal_vm_private_hint_slot(const MalObject *object, MalValue key) {
-    u32 index = mal_value_to_symbol(key)->private_entry_hint - 1;
+    const MalSymbol *symbol = mal_value_to_symbol(key);
+    if (symbol->private_table_resident) return -1;
+    u32 index = symbol->private_entry_hint - 1;
     const MalShape *shape = object->shape;
     return index < shape->inline_count && shape->props[index].key == key ? (i32) index : -1;
 }

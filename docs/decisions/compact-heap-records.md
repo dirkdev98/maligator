@@ -42,6 +42,14 @@ against the receiver's own shape, so subclasses that add fields after the base
 class's private fields share one hint. A run of private fields installs through a
 cached source-to-final shape pair.
 
+A public property that finds the shape full of private elements moves them into
+the private-only table and rebuilds the shape from the public properties instead
+of turning the object into a dictionary. The compiler's own function store has 90
+private fields; dictionary mode made every public field load an own-table lookup
+and the self-compile 11% slower. Evicted names are marked table-resident, so later
+instances of the class install them straight into the table and private reads skip
+the shape check.
+
 ## Identity-preserving changes
 
 A write changes only the payload. Adding a property, changing attributes,
