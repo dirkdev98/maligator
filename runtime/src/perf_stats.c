@@ -920,6 +920,8 @@ static void mal_perf_stats_print(void) {
     fprintf(stderr, "[perf-object-keys-snapshot-stats] admissions=%llu materializations=%llu\n",
         (unsigned long long) mal_perf_stats.object_keys_snapshot_admissions,
         (unsigned long long) mal_perf_stats.object_keys_snapshot_materializations);
+    fprintf(stderr, "[perf-for-in-stats] own_key_snapshots=%llu\n",
+        (unsigned long long) mal_perf_stats.for_in_own_key_snapshots);
     fprintf(stderr, "[perf-object-values-snapshot-stats] admissions=%llu materializations=%llu\n",
         (unsigned long long) mal_perf_stats.object_values_snapshot_admissions,
         (unsigned long long) mal_perf_stats.object_values_snapshot_materializations);

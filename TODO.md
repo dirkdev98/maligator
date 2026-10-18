@@ -448,6 +448,12 @@ iterator cursor is not, by itself, permission to delete its language object.
       steps, 4 keyed loads, 1 static load), so typed-array or property access
       inside such a region needs a consumer outside the compiler first.
 
+- [ ] Skip for-in keys deleted before they are visited. `mal_for_in_keys` snapshots
+      every key up front and the loop visits each one, so deleting a later key in
+      the body still visits it (Test262 `language/statements/for-in/S12.6.4_A7_T2.js`).
+      Checking HasProperty per step is the spec's shape; a receiver whose shape is
+      unchanged since the snapshot can skip that check.
+
 - [ ] Keep loop-carried Number accumulators unboxed across field reads. A loop
       such as `sx += p.x; sy += p.y` over records takes about 8 ns per element
       against Node's 1.4: each iteration publishes the boxed sums as roots, probes

@@ -119,6 +119,17 @@ typedef struct MalHeap {
         const MalShape *base;
         MalShape *shape;
     } function_metadata_shapes[4];
+    /**
+     * Prototypes recently found to have no enumerable string key. A verdict holds
+     * while the prototype-chain epoch (bumped by every structural prototype change)
+     * and this heap's sweep epoch (an address is reused only across a sweep) match.
+     */
+    struct {
+        const void *object;
+        u64 chain_epoch;
+        u32 heap_epoch;
+    } for_in_silent_prototypes[4];
+    u8 for_in_silent_next;
     /** Process-unique heap lifetime identity. Static native call caches use this
      * with epoch so exact object identities never cross VM lifetimes. */
     u64 identity;

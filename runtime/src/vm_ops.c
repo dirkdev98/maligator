@@ -7106,6 +7106,46 @@ static MalValue mal_vm_for_in_key_string(MalVm *vm, MalKey key) {
 // with nearer keys shadowing farther ones. Returns the result array. On a
 // proxy-trap exception vm->completion is set to THROW and the partially-built
 // array is returned; callers must check the completion before using the result.
+static bool mal_for_in_prototype_is_silent(MalHeap *heap, MalObject *prototype) {
+    if (prototype->header.type != MAL_HEAP_OBJECT) return false;
+    u64 chain_epoch = mal_prototype_chain_epoch;
+    for (usize i = 0; i < countof(heap->for_in_silent_prototypes); i++) {
+        if (heap->for_in_silent_prototypes[i].object == prototype && chain_epoch != 0 &&
+            heap->for_in_silent_prototypes[i].chain_epoch == chain_epoch &&
+            heap->for_in_silent_prototypes[i].heap_epoch == heap->epoch) {
+            return true;
+        }
+    }
+    MalPropertyIter iter;
+    mal_property_iter_init(&iter, prototype, MAL_PROPERTY_ITER_OWN_PROPERTY_ORDER);
+    MalKey key;
+    MalPropertyDesc desc;
+    while (mal_property_iter_next(&iter, &key, &desc)) {
+        if (key.kind != MAL_KEY_SYMBOL && (desc.flags & MAL_PROPERTY_ENUMERABLE)) return false;
+    }
+    usize slot = heap->for_in_silent_next++ % countof(heap->for_in_silent_prototypes);
+    heap->for_in_silent_prototypes[slot].object = prototype;
+    heap->for_in_silent_prototypes[slot].chain_epoch = chain_epoch;
+    heap->for_in_silent_prototypes[slot].heap_epoch = heap->epoch;
+    return true;
+}
+
+/**
+ * Whether EnumerateObjectProperties reduces to the receiver's own enumerable string
+ * keys: no prototype has an enumerable string key, so none can be shadowed or
+ * contributed from further up the chain.
+ */
+static bool mal_for_in_own_keys_suffice(MalHeap *heap, MalObject *object) {
+    if (object->header.type != MAL_HEAP_OBJECT && object->header.type != MAL_HEAP_ARRAY_OBJECT) {
+        return false;
+    }
+    for (MalObject *proto = mal_object_get_prototype(object); proto != nullptr;
+         proto = mal_object_get_prototype(proto)) {
+        if (!mal_for_in_prototype_is_silent(heap, proto)) return false;
+    }
+    return true;
+}
+
 MalValue mal_for_in_keys(MalVm *vm, MalValue source) {
     MalArrayObject *result = mal_intrinsic_new_array(vm, 0);
     u32 count = 0;
@@ -7149,6 +7189,20 @@ MalValue mal_for_in_keys(MalVm *vm, MalValue source) {
 
     // Numbers, booleans, and symbols have no enumerable own properties.
     if (!mal_value_is_object(source)) {
+        return mal_value_from_array_object(result);
+    }
+
+    if (mal_for_in_own_keys_suffice(&vm->heap, mal_value_to_object(source))) {
+        MAL_PERF_COUNT(for_in_own_key_snapshots);
+        MalPropertyIter iter;
+        mal_property_iter_init(&iter, mal_value_to_object(source), MAL_PROPERTY_ITER_OWN_PROPERTY_ORDER);
+        MalKey key;
+        MalPropertyDesc desc;
+        while (mal_property_iter_next(&iter, &key, &desc)) {
+            if (key.kind == MAL_KEY_SYMBOL || !(desc.flags & MAL_PROPERTY_ENUMERABLE)) continue;
+            mal_array_object_store(result, mal_key_index(count), mal_vm_for_in_key_string(vm, key));
+            count++;
+        }
         return mal_value_from_array_object(result);
     }
 
