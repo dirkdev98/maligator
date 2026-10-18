@@ -119,15 +119,27 @@ static inline void *mal_object_fields(const MalObject *object) {
     return mal_object_storage_const(object)->fields;
 }
 
-static inline void *mal_object_fields_nonempty(const MalObject *object) {
+// Very large generated functions otherwise call these instead of inlining them.
+static inline __attribute__((always_inline)) void *mal_object_fields_nonempty(
+    const MalObject *object
+) {
     if (__builtin_expect(object->storage_kind == MAL_OBJECT_COMPACT, 1)) {
         return (u8 *) (object + 1) + sizeof(void *);
     }
     return mal_object_storage_const(object)->fields;
 }
 
-static inline MalValue mal_object_field_load(const MalObject *object, u32 ordinal) {
-    assert(ordinal < object->shape->inline_count);
+// Every cache hit inlines this guard; a trap keeps it one instruction past the compare.
+static inline __attribute__((always_inline)) void mal_object_field_check(
+    const MalObject *object, u32 ordinal
+) {
+    if (__builtin_expect(ordinal >= object->shape->inline_count, 0)) __builtin_trap();
+}
+
+static inline __attribute__((always_inline)) MalValue mal_object_field_load(
+    const MalObject *object, u32 ordinal
+) {
+    mal_object_field_check(object, ordinal);
     return ((const MalValue *) mal_object_fields_nonempty(object))[ordinal];
 }
 
@@ -155,7 +167,7 @@ void mal_object_set_prototype_pointer(MalObject *object, MalObject *prototype);
 void mal_object_set_fields_pointer(MalObject *object, void *fields);
 void mal_object_set_overflow_pointer(MalObject *object, MalTable *overflow);
 static inline void mal_object_field_store(MalObject *object, u32 ordinal, MalValue value) {
-    assert(ordinal < object->shape->inline_count);
+    mal_object_field_check(object, ordinal);
     MalValue *field = (MalValue *) mal_object_fields_nonempty(object) + ordinal;
     if (!mal_gc_marking_active && !mal_value_is_heap(value)) {
         *field = value;
