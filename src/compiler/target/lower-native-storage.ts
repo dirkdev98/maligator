@@ -1539,6 +1539,7 @@ export function validateNativeStorage(
 						plan.index === expected.index &&
 						plan.bound === expected.bound &&
 						plan.boundObject === expected.boundObject &&
+						(plan.records ?? []).join() === (expected.records ?? []).join() &&
 						plan.stride === expected.stride &&
 						plan.views.length === expected.views.length &&
 						plan.views.every(

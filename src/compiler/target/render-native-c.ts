@@ -894,6 +894,7 @@ function emitNumericLoopRegion(
 	fn: BytecodeFunction,
 	plan: NativeNumericLoopRegionPlan,
 	reps: ReadonlyArray<VmRegisterRepresentation>,
+	propertyCache: string,
 ): ReadonlyArray<string> {
 	const members = new Set(plan.claimedIps.filter((ip) => ip !== plan.entryIp));
 	const order = numericLoopOrder(fn, plan.id, members);
@@ -945,6 +946,10 @@ function emitNumericLoopRegion(
 	}
 	const readOnly =
 		plan.kind === "fixed-numeric" && plan.views.every((view) => !view.writable);
+	const records = new Set(plan.kind === "fixed-numeric" ? (plan.records ?? []) : []);
+	// Length bounds and records exist only for Array views.
+	const arrayOnly =
+		plan.kind === "fixed-numeric" && (plan.boundObject !== undefined || records.size > 0);
 	if (plan.kind === "fixed-numeric") {
 		const comparison =
 			fn.instructions[plan.id + (plan.boundObject === undefined ? 0 : 1)]!;
@@ -956,7 +961,7 @@ function emitNumericLoopRegion(
 		// Views are admitted before the range so a length bound can read the admitted length.
 		rangePrelude.push(
 			// A TypedArray's length is an inherited getter that a length bound would bypass.
-			`  bool ${id}_typed = ${plan.boundObject !== undefined ? "false" : plan.views.map((view) => `mal_vm_fixed_numeric_storage(r${view.object}, 0, ${view.writable}, &${id}_v${view.object})`).join(" && ")};`,
+			`  bool ${id}_typed = ${arrayOnly ? "false" : plan.views.map((view) => `mal_vm_fixed_numeric_storage(r${view.object}, 0, ${view.writable}, &${id}_v${view.object})`).join(" && ")};`,
 			`  bool ${id}_array = ${readOnly ? `!${id}_typed && ${plan.views.map((view) => `mal_vm_dense_number_storage(r${view.object}, &${id}_a${view.object})`).join(" && ")}` : "false"};`,
 		);
 		if (plan.boundObject !== undefined)
@@ -1066,10 +1071,15 @@ function emitNumericLoopRegion(
 			}
 			case "LOAD_PROPERTY_STATIC":
 			case "LOAD_PROPERTY_STATIC_ARRAY_LENGTH":
+				if (op.opcode === "LOAD_PROPERTY_STATIC" && records.has(op.object))
+					// The site's own-slot row proves the field; any other row ends the iteration.
+					return `{ const MalObject *${id}_o = (const MalObject *) mal_value_to_heap(${local(op.object)}); const MalInlineCache *${id}_c = &${propertyCache}[${op.icIndex}]; if (__builtin_expect(${id}_c->mode != MAL_IC_MODE_SHAPE || ${id}_o->shape != ${id}_c->shape, 0)) ${restart} MalValue ${id}_f = ((const MalValue *) mal_object_fields_nonempty(${id}_o))[${id}_c->slot]; if (__builtin_expect(!mal_ops_is_number(${id}_f), 0)) ${restart} ${local(op.dst)} = mal_ops_number_as_f64(${id}_f); }`;
 				if (plan.kind !== "fixed-numeric" || op.object !== plan.boundObject)
 					throw new Error("Invalid numeric loop length load");
 				return `${local(op.dst)} = (f64) ${id}_${mode === "array" ? "a" : "v"}${op.object}.length;`;
 			case "LOAD_PROPERTY":
+				if (mode === "array" && records.has(op.dst))
+					return `{ MalValue ${id}_e = ${id}_a${op.object}.elements[(u32) ${local(op.key)}]; if (__builtin_expect(!mal_value_is_heap_type(${id}_e, MAL_HEAP_OBJECT), 0)) ${restart} ${local(op.dst)} = ${id}_e; }`;
 				if (mode === "array")
 					return `{ MalValue ${id}_e = ${id}_a${op.object}.elements[(u32) ${local(op.key)}]; if (__builtin_expect(!mal_ops_is_number(${id}_e), 0)) ${restart} ${local(op.dst)} = mal_ops_number_as_f64(${id}_e); }`;
 				return mode === "f64"
@@ -1228,7 +1238,7 @@ function emitNumericLoopRegion(
 		"    MAL_PERF_COUNT(dense_array_number_region_admissions);",
 		...loopBody("array"),
 	];
-	const lengthBound = plan.kind === "fixed-numeric" && plan.boundObject !== undefined;
+	const lengthBound = arrayOnly;
 	return [
 		"{",
 		...(plan.kind === "fixed-numeric"
@@ -1237,9 +1247,10 @@ function emitNumericLoopRegion(
 					...(readOnly ? [`  MalDenseNumberSpan ${id}_a${view.object} = {0};`] : []),
 				])
 			: []),
-		...[...flow.kinds].map(
-			([register, kind]) =>
-				`  ${kind === "boolean" ? "bool" : floating ? "f64" : "i64"} ${local(register)} = ${initial.get(register) ?? (kind === "boolean" ? "false" : "0")};`,
+		...[...flow.kinds].map(([register, kind]) =>
+			records.has(register)
+				? `  MalValue ${local(register)} = MAL_VALUE_UNDEFINED;`
+				: `  ${kind === "boolean" ? "bool" : floating ? "f64" : "i64"} ${local(register)} = ${initial.get(register) ?? (kind === "boolean" ? "false" : "0")};`,
 		),
 		...rangePrelude,
 		...(lengthBound
@@ -5096,7 +5107,12 @@ function emitBody(
 		}
 		const integerLoop = integerLoopRegionByEntry.get(ip);
 		if (integerLoop !== undefined)
-			for (const line of emitNumericLoopRegion(fn, integerLoop, reps))
+			for (const line of emitNumericLoopRegion(
+				fn,
+				integerLoop,
+				reps,
+				nativeBodyReference(resources, "propertyCache"),
+			))
 				lines.push(`    ${line}`);
 		const numberRecord = numberRecordRegionById.get(ip);
 		if (numberRecord !== undefined)

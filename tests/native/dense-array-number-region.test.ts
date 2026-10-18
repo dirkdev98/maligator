@@ -52,6 +52,11 @@ describe("dense Array number loop regions", () => {
 			expect(
 				regionPlans(pair, "sumHoisted").some((plan) => plan.kind === "fixed-numeric"),
 			).toBe(true);
+			expect(
+				regionPlans(pair, "centroid").some(
+					(plan) => plan.kind === "fixed-numeric" && (plan.records?.length ?? 0) > 0,
+				),
+			).toBe(true);
 			const env = {
 				MAL_HOST_GC: "1",
 				DENSE_ARRAY_PROTOTYPE_HOLE: primordials === "mutable" ? "1" : "0",
