@@ -1346,10 +1346,10 @@ static inline MalEnv *mal_vm_capture_owner_at(MalEnv *env, i32 owner_function_in
  * every return), and callers never enter on a callee's behalf.
  * The compiled function writes its current entry in the function's position table
  * into `position_entry` as it runs (statement-granular), so generated code never
- * names an image-wide position id. `hidden` is set when the function bailed to the
- * interpreter — its interpreted frame then represents it, so a capture skips the
- * duplicate. A capture orders this stack against the interpreted frames by
- * `enter_seq`.
+ * names an image-wide position id. A function that bailed to the interpreter hides
+ * its row (mal_native_frame_hidden): its interpreted frame then represents it, so a
+ * capture skips the duplicate. A capture orders this stack against the interpreted
+ * frames by their `native_depth`.
  */
 typedef struct MalNativeFrame {
     i32 function_index;
@@ -1357,9 +1357,11 @@ typedef struct MalNativeFrame {
 #if MAL_PROFILE
     i32 site_id;
 #endif
-    u64 enter_seq;
-    bool hidden;
 } MalNativeFrame;
+
+static inline bool mal_native_frame_hidden(const MalNativeFrame *frame) {
+    return frame->function_index < 0;
+}
 
 /** One captured frame: the function and its source position (pos_id, -1 = none). */
 typedef struct MalStackFrameRecord {
@@ -1581,11 +1583,7 @@ typedef struct MalVm {
     /** Innermost compiled-function root frame; a field, not a thread-local, so
      * generated prologues and epilogues need no thread-local lookup. */
     struct MalRootFrame *root_frame_head;
-    /**
-     * Monotonic frame-entry counter. Each interpreted frame (push / generator
-     * resume) and native frame records the value at entry, giving a total order
-     * a stack-trace capture uses to interleave the two frame stacks.
-     */
+    /** Interpreted-frame entry counter; see MalVmFrame.enter_seq. */
     u64 frame_seq;
 
 #if !MAL_REALMS
@@ -2158,6 +2156,7 @@ static inline void mal_gc_callee_roots_end(MalCalleeRoots *roots) {
  * count against it.
  */
 #define MAL_NATIVE_CALL_DEPTH_LIMIT 6000
+static_assert(MAL_NATIVE_CALL_DEPTH_LIMIT <= UINT16_MAX, "MalVmFrame.native_depth is 16 bits");
 
 void mal_vm_throw_stack_overflow(MalVm *vm);
 /** Allocate the frame rows or report the overflow; the entry's row when it proceeds. */
@@ -2192,8 +2191,6 @@ static inline MalNativeFrame *mal_vm_push_native_frame(
 #if MAL_PROFILE
         .site_id = -1,
 #endif
-        .enter_seq = vm->frame_seq++,
-        .hidden = false,
     };
     vm->native_frame_count = count + 1;
     return row;
@@ -2332,8 +2329,7 @@ typedef struct MalVmFrame {
 
     /**
      * Monotonic sequence number assigned when this frame was pushed (or a
-     * generator/async frame resumed). Stack-trace capture merges interpreted
-     * frames with native compiled frames by this order. See mal_vm_capture_stack.
+     * generator/async frame resumed); it identifies one activation of a reused slot.
      */
     u64 enter_seq;
 
@@ -2379,6 +2375,12 @@ typedef struct MalVmFrame {
      * Construct frames replace non-object return values with this_value.
      */
     bool is_construct;
+    /**
+     * Native rows live when this frame was pushed or resumed. Both frame stacks are
+     * LIFO, so native row n is older than this frame exactly when n < native_depth;
+     * stack-trace capture merges the stacks by it. See mal_vm_capture_stack.
+     */
+    u16 native_depth;
 } MalVmFrame;
 
 static_assert(sizeof(MalVmFrame) <= (MAL_REALMS ? 144 : 136),

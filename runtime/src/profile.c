@@ -217,7 +217,7 @@ typedef struct MalProfileStackCopy {
 static MalProfileStackCopy mal_profile_copy_stack(MalProfileState *state, MalVm *vm) {
     u32 visible_native = 0;
     for (i32 index = 0; index < vm->native_frame_count; index++) {
-        if (!vm->native_frames[index].hidden) visible_native++;
+        if (!mal_native_frame_hidden(&vm->native_frames[index])) visible_native++;
     }
     u32 total = (u32) vm->frame_count + visible_native;
     u32 target = total > MAL_PROFILE_MAX_STACK ? MAL_PROFILE_MAX_STACK : total;
@@ -242,11 +242,11 @@ static MalProfileStackCopy mal_profile_copy_stack(MalProfileState *state, MalVm 
     i32 native = 0;
     while ((interpreted < vm->frame_count || native < vm->native_frame_count) &&
            state->frame_count - start < target) {
-        while (native < vm->native_frame_count && vm->native_frames[native].hidden) native++;
+        while (native < vm->native_frame_count &&
+               mal_native_frame_hidden(&vm->native_frames[native])) native++;
         bool take_interpreted = interpreted < vm->frame_count;
         if (take_interpreted && native < vm->native_frame_count) {
-            take_interpreted = vm->frames[interpreted].enter_seq <=
-                               vm->native_frames[native].enter_seq;
+            take_interpreted = native >= vm->frames[interpreted].native_depth;
         }
         i32 function_index;
         i32 position_id;

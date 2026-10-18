@@ -721,11 +721,11 @@
 	},
 	{
 		"file": "vm.c",
-		"sha256": "b7be683a780be8ba8c8fd133ae28e7f95aaf63dc97e49a1d00649dce1adb950a"
+		"sha256": "ba48a71810eadbf4829b3a1180318eb94fbe9b853097b40a50c43f26e1ad4bbb"
 	},
 	{
 		"file": "vm.h",
-		"sha256": "7958eb8622978b6aa07778595a7be8393fbf04140c7819b8bdf2630b87727bb0"
+		"sha256": "cd5e0cf87e9316b051b2b001d265277210e42db08685e834c4eaa3a41f5798e6"
 	},
 	{
 		"file": "vm_ops.c",

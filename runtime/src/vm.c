@@ -2109,6 +2109,7 @@ bool mal_vm_push_function_frame(
     frame->return_register = return_register;
     frame->caller_frame_index = caller_frame_index;
     frame->enter_seq = vm->frame_seq++;
+    frame->native_depth = (u16) vm->native_frame_count;
 #if MAL_REALMS
     // Default stamp: the realm current at push time. Call/construct seams that cross
     // into a callee's realm switch to it BEFORE pushing (so this captures the callee
@@ -3761,6 +3762,7 @@ void mal_vm_resume_generator(MalVm *vm, MalGeneratorObject *generator, MalValue 
     // A resumption is a fresh entry on the logical call stack, so it sorts above
     // whatever drove the resume (a microtask, .next() caller) in a capture.
     frame->enter_seq = vm->frame_seq++;
+    frame->native_depth = (u16) vm->native_frame_count;
 
     // Deliver the sent value and resume mode to the suspended yield expression,
     // which the compiler-emitted dispatch following the yield consults. (A
@@ -3831,7 +3833,7 @@ __attribute__((cold, noinline)) MalNativeFrame *mal_vm_enter_compiled_slow(
  */
 void mal_vm_compiled_bailed(MalVm *vm) {
     if (vm->native_frame_count > 0) {
-        vm->native_frames[vm->native_frame_count - 1].hidden = true;
+        vm->native_frames[vm->native_frame_count - 1].function_index = -1;
     }
 }
 
@@ -3870,9 +3872,9 @@ static MalStackTrace *mal_vm_stack_trace_new(MalVm *vm, usize frame_capacity) {
 }
 
 MalStackTrace *mal_vm_capture_stack(MalVm *vm) {
-    // Each live-frame array is already ordered by enter_seq. Merge them from
-    // their newest ends, skipping bailed native duplicates, directly into one
-    // coallocated trace instead of allocating sequence scratch and sorting it.
+    // Both live-frame arrays are already ordered. Merge them from their newest
+    // ends, skipping bailed native duplicates, directly into one coallocated trace
+    // instead of allocating sequence scratch and sorting it.
     usize frame_capacity;
     if (!mal_checked_size_add(
             (usize) vm->frame_count,
@@ -3890,11 +3892,10 @@ MalStackTrace *mal_vm_capture_stack(MalVm *vm) {
     i32 interpreted = vm->frame_count - 1;
     i32 native = vm->native_frame_count - 1;
     while (interpreted >= 0 || native >= 0) {
-        while (native >= 0 && vm->native_frames[native].hidden) native--;
+        while (native >= 0 && mal_native_frame_hidden(&vm->native_frames[native])) native--;
         bool take_interpreted = interpreted >= 0;
         if (take_interpreted && native >= 0) {
-            take_interpreted = vm->frames[interpreted].enter_seq >=
-                               vm->native_frames[native].enter_seq;
+            take_interpreted = native < vm->frames[interpreted].native_depth;
         }
         if (take_interpreted) {
             MalVmFrame *frame = &vm->frames[interpreted--];
