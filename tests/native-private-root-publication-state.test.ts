@@ -397,7 +397,9 @@ describe("private-root publication state at collecting edges", () => {
 		expect(before).toContain(`${slot} = MAL_VALUE_UNDEFINED;`);
 		const result = afterCallResult(source, 1);
 		const poll = source.indexOf("mal_gc_safepoint(vm)", result);
-		expect(source.slice(result, poll)).toContain(`if (mal_gc_poll_requested()) { ${publication}`);
+		expect(source.slice(result, poll)).toContain(
+			`if (mal_gc_poll_requested()) { ${publication}`,
+		);
 		expect(hasIncomingCopy(beforeCall(source, 2, poll), publication)).toBe(true);
 		expect(source).not.toContain(`#define r${retained} (${slot})`);
 		expect(source).not.toContain(`__private_r${retained} = ${slot};`);
