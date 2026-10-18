@@ -1774,6 +1774,33 @@ static inline bool mal_vm_property_try_load(MalVm *vm, MalValue receiver, MalVal
         mal_vm_special_try_load(vm, receiver, key, ic, out);
 }
 
+static inline bool mal_vm_inherited_stub_value_row_holds(
+    const MalInlineCache *row, const MalObject *object, const MalObject *prototype, MalValue key
+) {
+    return row->key == key && row->mode == MAL_IC_MODE_INHERITED_VALUE && row->poly_count > 0 &&
+        row->receiver_type == MAL_HEAP_OBJECT && object->shape == row->shape &&
+        prototype == row->proto_object[0];
+}
+
+/** An ordinary receiver's dependency-registered inherited value in either stub bank. */
+static inline __attribute__((always_inline)) bool mal_vm_inherited_stub_value_try_load(
+    const MalVm *vm, const MalObject *object, MalValue key, MalValue *out
+) {
+    if ((u8) object->header.type != MAL_HEAP_OBJECT || mal_object_has_public_overflow(object)) {
+        return false;
+    }
+    const MalObject *prototype = mal_object_prototype(object);
+    const MalInlineCache *row = &vm->inherited_property_stub[
+        mal_inherited_stub_hash(object->shape, prototype, key)];
+    if (!mal_vm_inherited_stub_value_row_holds(row, object, prototype, key)) {
+        row += MAL_INHERITED_STUB_CACHE_SET_COUNT;
+        if (!mal_vm_inherited_stub_value_row_holds(row, object, prototype, key)) return false;
+    }
+    mal_perf_ic_load_inherited_hit();
+    *out = row->value;
+    return true;
+}
+
 /** Return status and value without exposing the caller's result temporary. */
 typedef struct MalStaticPropertyProbeResult {
     bool hit;
@@ -1838,11 +1865,31 @@ static inline __attribute__((always_inline)) bool mal_vm_property_try_load_stati
 }
 
 /**
- * Static `.length` loads. Arrays, and typed arrays whose prototype is the kind
- * prototype or this site's registered intermediate prototype, answer inline when
- * the view has no own named properties.
+ * The static probe for a method whose call dispatches over several classes: each
+ * class's row lives in the shared stub, so both banks are probed inline before
+ * the out-of-line remainder. Ordinary sites leave the stub out of line, since
+ * every static load inlining it made the self-compile binary 11% larger.
  */
-static inline bool mal_vm_property_try_load_length_static(
+static inline __attribute__((always_inline)) bool mal_vm_property_try_load_static_polymorphic(
+    MalVm *vm, MalValue receiver, MalInlineCache *ic, MalValue *out
+) {
+    const MalObject *object = mal_vm_as_object(receiver);
+    if (object != nullptr && ic->mode == MAL_IC_MODE_INHERITED_VALUE && ic->poly_count > 0 &&
+        vm->inherited_property_stub != nullptr &&
+        mal_vm_inherited_stub_value_try_load(vm, object, ic->key, out)) {
+        return true;
+    }
+    return mal_vm_property_try_load_static(vm, receiver, ic, out);
+}
+
+/** Typed arrays whose prototype is the kind prototype or this site's registered
+ * intermediate prototype answer when the view has no own named properties. */
+__attribute__((noinline)) bool mal_vm_property_try_load_length_static_remaining(
+    MalVm *vm, MalValue receiver, MalInlineCache *ic, MalValue *out);
+
+/** Static `.length` loads; only the Array row expands at each site. */
+
+static inline __attribute__((always_inline)) bool mal_vm_property_try_load_length_static(
     MalVm *vm, MalValue receiver, MalInlineCache *ic, MalValue *out
 ) {
     if (ic->mode == MAL_IC_MODE_ARRAY_LENGTH &&
@@ -1852,32 +1899,7 @@ static inline bool mal_vm_property_try_load_length_static(
         mal_perf_ic_load_array_length_hit();
         return true;
     }
-    // String length is a non-writable own property no prototype can shadow.
-    if (ic->mode == MAL_IC_MODE_STRING_LENGTH && mal_value_is_string(receiver)) {
-        mal_perf_ic_load_string_length_hit();
-        *out = mal_value_from_i32((i32) mal_value_to_string(receiver)->length);
-        return true;
-    }
-    if (ic->mode == MAL_IC_MODE_TYPED_ARRAY_LENGTH && mal_vm_primitive_methods_intact(vm) &&
-        mal_value_is_typed_array_object(receiver)) {
-        const MalTypedArrayObject *array = mal_value_to_typed_array_object(receiver);
-        const MalObject *prototype = mal_object_prototype(&array->object);
-        const MalArrayBufferObject *buffer = array->buffer;
-        if (prototype != nullptr &&
-            (prototype == ic->proto_object[0] ||
-             prototype == mal_value_to_object(
-                 vm->intrinsics[MAL_INTRINSIC_TYPED_ARRAY_KIND_PROTOTYPE_BASE + array->kind])) &&
-            array->object.shape->inline_count == 0 &&
-            !mal_object_has_public_overflow(&array->object) &&
-            // A fixed view over a fixed buffer keeps its validated extent until detached.
-            !array->length_tracking && buffer != nullptr && !buffer->detached &&
-            !buffer->resizable && !buffer->shared) {
-            *out = mal_value_from_u32(array->length);
-            mal_perf_ic_load_typed_array_length_hit();
-            return true;
-        }
-    }
-    return mal_vm_property_try_load_static(vm, receiver, ic, out);
+    return mal_vm_property_try_load_length_static_remaining(vm, receiver, ic, out);
 }
 
 /** Captured storage is usable only before the region's first generic continuation. */
@@ -2821,23 +2843,21 @@ static inline MalArrayObject *mal_vm_as_array(MalValue v) {
                                                             : nullptr;
 }
 
+/** An absent dense element reads as undefined while the indexed-prototype protector holds. */
+__attribute__((noinline)) bool mal_vm_array_try_get_absent_index(
+    const MalArrayObject *arr, MalValue *out);
+
 /** `index` must be an ECMAScript Array index, which excludes UINT32_MAX. */
-static inline bool mal_vm_array_try_get_proven_index(
+static inline __attribute__((always_inline)) bool mal_vm_array_try_get_proven_index(
     const MalArrayObject *arr, u32 index, MalValue *out
 ) {
-    if (mal_array_object_dense_get(arr, index, out)) {
+    if (__builtin_expect(mal_array_object_dense_get(arr, index, out), 1)) {
         return true;
     }
-    if (!arr->dense_deopted && mal_array_elements_protector &&
-        mal_array_prototype_object != nullptr &&
-        mal_object_prototype(&arr->object) == mal_array_prototype_object) {
-        *out = mal_value_new_undefined();
-        return true;
-    }
-    return false;
+    return mal_vm_array_try_get_absent_index(arr, out);
 }
 
-static inline bool mal_vm_array_try_get_index(
+static inline __attribute__((always_inline)) bool mal_vm_array_try_get_index(
     const MalArrayObject *arr, f64 index, MalValue *out
 ) {
     if (!(index >= 0 && index < (f64) UINT32_MAX)) {

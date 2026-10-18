@@ -2476,6 +2476,47 @@ MalValue mal_vm_indexed_load_keyed(
     return mal_vm_indexed_fast_load_full(vm, object_value, key_value, ic);
 }
 
+bool mal_vm_array_try_get_absent_index(const MalArrayObject *arr, MalValue *out) {
+    if (!arr->dense_deopted && mal_array_elements_protector &&
+        mal_array_prototype_object != nullptr &&
+        mal_object_prototype(&arr->object) == mal_array_prototype_object) {
+        *out = mal_value_new_undefined();
+        return true;
+    }
+    return false;
+}
+
+bool mal_vm_property_try_load_length_static_remaining(
+    MalVm *vm, MalValue receiver, MalInlineCache *ic, MalValue *out
+) {
+    // String length is a non-writable own property no prototype can shadow.
+    if (ic->mode == MAL_IC_MODE_STRING_LENGTH && mal_value_is_string(receiver)) {
+        mal_perf_ic_load_string_length_hit();
+        *out = mal_value_from_i32((i32) mal_value_to_string(receiver)->length);
+        return true;
+    }
+    if (ic->mode == MAL_IC_MODE_TYPED_ARRAY_LENGTH && mal_vm_primitive_methods_intact(vm) &&
+        mal_value_is_typed_array_object(receiver)) {
+        const MalTypedArrayObject *array = mal_value_to_typed_array_object(receiver);
+        const MalObject *prototype = mal_object_prototype(&array->object);
+        const MalArrayBufferObject *buffer = array->buffer;
+        if (prototype != nullptr &&
+            (prototype == ic->proto_object[0] ||
+             prototype == mal_value_to_object(
+                 vm->intrinsics[MAL_INTRINSIC_TYPED_ARRAY_KIND_PROTOTYPE_BASE + array->kind])) &&
+            array->object.shape->inline_count == 0 &&
+            !mal_object_has_public_overflow(&array->object) &&
+            // A fixed view over a fixed buffer keeps its validated extent until detached.
+            !array->length_tracking && buffer != nullptr && !buffer->detached &&
+            !buffer->resizable && !buffer->shared) {
+            *out = mal_value_from_u32(array->length);
+            mal_perf_ic_load_typed_array_length_hit();
+            return true;
+        }
+    }
+    return mal_vm_property_try_load_static(vm, receiver, ic, out);
+}
+
 // Keep all non-monomorphic static cache hits noncollecting: callers may hold private roots.
 __attribute__((noinline)) MalStaticPropertyProbeResult
 mal_vm_property_try_load_static_remaining(

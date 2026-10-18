@@ -4908,6 +4908,27 @@ function emitBody(
 			? literalSwitches?.map((site) => [site.instructionIp, site])
 			: [],
 	);
+	// Finite dispatch compares one loaded callee against each candidate class's method,
+	// through separate guards or a call plan's guarded targets.
+	const polymorphicMethodLoads = new Set<number>();
+	for (const [ip, instruction] of fn.instructions.entries()) {
+		if (instruction.opcode !== "LOAD_PROPERTY_STATIC") continue;
+		let guards = 0;
+		for (let next = ip + 1; next < Math.min(fn.instructions.length, ip + 24); next++) {
+			const candidate = fn.instructions[next]!;
+			if (
+				candidate.opcode === "GUARD_FUNCTION_INDEX" &&
+				candidate.callee === instruction.dst
+			)
+				guards++;
+			if (candidate.opcode === "CALL" && candidate.callee === instruction.dst) {
+				const plan = nativeInstructions[next];
+				guards += plan?.kind === "call" ? (plan.guardedFunctionIndices?.length ?? 0) : 0;
+			}
+			if (vmInstructionWriteRegisters(candidate).includes(instruction.dst)) break;
+		}
+		if (guards >= 2) polymorphicMethodLoads.add(ip);
+	}
 	// Instruction emission consumes the context synchronously; fallbacks copy it.
 	const instructionContext: {
 		-readonly [Key in keyof NativeInstructionContext]: NativeInstructionContext[Key];
@@ -4991,6 +5012,7 @@ function emitBody(
 		propertyReadRegionAction: undefined,
 		constructorInitializationAction: undefined,
 		privateFieldReserveCount: undefined,
+		polymorphicMethodLoad: false,
 		relocation,
 	};
 	for (const plan of fastPathPlans.mapEntries)
@@ -5508,6 +5530,7 @@ function emitBody(
 			constructorInitializationActionByIp.get(ip);
 		instructionContext.privateFieldReserveCount =
 			privateFieldReserve?.id === ip ? privateFieldReserve.count : undefined;
+		instructionContext.polymorphicMethodLoad = polymorphicMethodLoads.has(ip);
 		const scalarInputDeclarations: Array<string> = [];
 		let scalarInputValues: Map<number, string> | undefined;
 		const instruction = fn.instructions[ip]!;
@@ -5951,6 +5974,8 @@ interface NativeInstructionContext {
 	readonly mathCall: NativeMathCallPlan | undefined;
 	/** The load reads a callee that a guarded Math call checks, so its row is a watched intrinsic. */
 	readonly watchedMathCallee?: boolean;
+	/** The loaded value is a callee guarded against several function identities. */
+	readonly polymorphicMethodLoad?: boolean;
 	readonly numberPredicate?: NativeNumberPredicatePlan;
 	readonly stringTransform?: NativeStringTransformPlan;
 	readonly arrayInitialization?: {
@@ -8433,7 +8458,9 @@ function emitInstruction(
 				context.stringConstants[instruction.stringIndex],
 			)
 				? "mal_vm_property_try_load_length_static"
-				: "mal_vm_property_try_load_static";
+				: context.polymorphicMethodLoad === true
+					? "mal_vm_property_try_load_static_polymorphic"
+					: "mal_vm_property_try_load_static";
 			const probe = (): string =>
 				`${context.watchedMathCallee === true ? `mal_vm_watched_own_value_try_load_static(vm, ${boxed(instruction.object)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}], &__v_${ip}) || ` : ""}${probeHelper}(vm, ${boxed(instruction.object)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}], &__v_${ip})`;
 			const ordinary = (): Array<string> => [
