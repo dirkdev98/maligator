@@ -507,10 +507,10 @@ i32 mal_gc_swap_stress_interval(i32 interval) {
 // Keep queue growth out of the mark probe's register-save prologue.
 __attribute__((noinline))
 #endif
-static void mal_gc_grey_push(MalHeapHeader *cell) {
+static void mal_gc_grey_push_in(MalGcThreadContext *ctx, MalHeapHeader *cell) {
 #if !defined(__wasi__)
-    if (g_trace_worker != nullptr) {
-        MalGcWorker *worker = g_trace_worker;
+    if (ctx->trace_worker != nullptr) {
+        MalGcWorker *worker = ctx->trace_worker;
         if (worker->discovered_count == worker->discovered_capacity) {
             usize capacity = worker->discovered_capacity == 0
                 ? 256 : worker->discovered_capacity * 2;
@@ -524,12 +524,12 @@ static void mal_gc_grey_push(MalHeapHeader *cell) {
         return;
     }
 #endif
-    if (g_gc->grey_count == g_gc->grey_capacity) {
-        g_gc->grey_capacity = g_gc->grey_capacity == 0 ? 4096 : g_gc->grey_capacity * 2;
-        g_gc->grey = realloc(g_gc->grey, g_gc->grey_capacity * sizeof(MalHeapHeader *));
-        if (g_gc->grey == nullptr) abort();
+    if (ctx->gc->grey_count == ctx->gc->grey_capacity) {
+        ctx->gc->grey_capacity = ctx->gc->grey_capacity == 0 ? 4096 : ctx->gc->grey_capacity * 2;
+        ctx->gc->grey = realloc(ctx->gc->grey, ctx->gc->grey_capacity * sizeof(MalHeapHeader *));
+        if (ctx->gc->grey == nullptr) abort();
     }
-    g_gc->grey[g_gc->grey_count++] = cell;
+    ctx->gc->grey[ctx->gc->grey_count++] = cell;
 }
 
 static void mal_gc_register_weak_map(MalWeakMapObject *map) {
@@ -1042,15 +1042,15 @@ void mal_gc_set_mutator_waker(MalVm *vm, void (*wake)(void *), void *data) {
 /** Shade a cell grey: a managed, non-immortal cell reached for the first time.
  * In verify mode it instead asserts the cell is already marked — a reachable but
  * unmarked cell means a trace edge was missed. */
-static void mal_gc_shade(MalHeapHeader *cell) {
+static void mal_gc_shade_in(MalGcThreadContext *ctx, MalHeapHeader *cell) {
     if (cell == nullptr || cell->storage == MAL_HEAP_STORAGE_IMMORTAL) {
         return;
     }
-    if (g_gc_verifying) {
+    if (ctx->verifying) {
         if (cell->mark & MAL_MARK_FREE) {
             fprintf(stderr, "[gc verify] live cell (source type=%d) points to a freed "
                 "cell type=%d: a root or trace edge was missed, the target was swept "
-                "while still reachable\n", g_gc_verify_source, cell->type);
+                "while still reachable\n", ctx->verify_source, cell->type);
             abort();
         }
         return;
@@ -1061,9 +1061,9 @@ static void mal_gc_shade(MalHeapHeader *cell) {
         fprintf(stderr, "[gc] attempted to shade a reclaimed cell\n");
         abort();
     }
-    if (g_gc->major_collection) {
-        if (mal_heap_mark_is_current(mark, g_gc_vm->heap.mark_color)) return;
-        cell->mark = (mark & ~MAL_MARK_COLOR) | g_gc_vm->heap.mark_color;
+    if (ctx->gc->major_collection) {
+        if (mal_heap_mark_is_current(mark, ctx->vm->heap.mark_color)) return;
+        cell->mark = (mark & ~MAL_MARK_COLOR) | ctx->vm->heap.mark_color;
     } else {
         if (mal_heap_mark_is_old(mark)) return;
         cell->mark = mark | MAL_MARK_OLD;
@@ -1076,9 +1076,9 @@ static void mal_gc_shade(MalHeapHeader *cell) {
             abort();
         }
         u8 desired;
-        if (g_gc->major_collection) {
-            if (mal_heap_mark_is_current(expected, g_gc_vm->heap.mark_color)) return;
-            desired = (expected & ~MAL_MARK_COLOR) | g_gc_vm->heap.mark_color;
+        if (ctx->gc->major_collection) {
+            if (mal_heap_mark_is_current(expected, ctx->vm->heap.mark_color)) return;
+            desired = (expected & ~MAL_MARK_COLOR) | ctx->vm->heap.mark_color;
         } else {
             if (mal_heap_mark_is_old(expected)) return;
             // Minors park the mutator and never dispatch workers, so no other
@@ -1091,13 +1091,17 @@ static void mal_gc_shade(MalHeapHeader *cell) {
                 memory_order_relaxed, memory_order_relaxed)) break;
     }
 #endif
-    mal_gc_grey_push(cell);
+    mal_gc_grey_push_in(ctx, cell);
+}
+
+static void mal_gc_mark_value_in(MalGcThreadContext *ctx, MalValue value) {
+    if (mal_value_is_heap(value)) {
+        mal_gc_shade_in(ctx, mal_value_to_heap(value));
+    }
 }
 
 void mal_gc_mark_value(MalValue value) {
-    if (mal_value_is_heap(value)) {
-        mal_gc_shade(mal_value_to_heap(value));
-    }
+    mal_gc_mark_value_in(&g_gc_thread, value);
 }
 
 /** Whether a value is live for weak-reference purposes: a non-heap or immortal
@@ -1114,28 +1118,36 @@ static bool mal_gc_is_marked(MalValue value) {
         : mal_heap_mark_is_old(mark);
 }
 
-void mal_gc_mark_values(const MalValue *values, i32 count) {
+static void mal_gc_mark_values_in(MalGcThreadContext *ctx, const MalValue *values, i32 count) {
     if (values == nullptr) {
         return;
     }
     for (i32 i = 0; i < count; ++i) {
-        mal_gc_mark_value(values[i]);
+        mal_gc_mark_value_in(ctx, values[i]);
     }
 }
 
-static void mal_gc_mark_object(MalObject *object) {
+void mal_gc_mark_values(const MalValue *values, i32 count) {
+    mal_gc_mark_values_in(&g_gc_thread, values, count);
+}
+
+static void mal_gc_mark_object_in(MalGcThreadContext *ctx, MalObject *object) {
     if (object != nullptr) {
-        mal_gc_shade(&object->header);
+        mal_gc_shade_in(ctx, &object->header);
+    }
+}
+
+static void mal_gc_mark_string_in(MalGcThreadContext *ctx, MalString *string) {
+    if (string != nullptr) {
+        mal_gc_shade_in(ctx, &string->header);
     }
 }
 
 static void mal_gc_mark_string(MalString *string) {
-    if (string != nullptr) {
-        mal_gc_shade(&string->header);
-    }
+    mal_gc_mark_string_in(&g_gc_thread, string);
 }
 
-static void mal_gc_trace_table(MalTable *table) {
+static void mal_gc_trace_table_in(MalGcThreadContext *ctx, MalTable *table) {
     if (table == nullptr) {
         return;
     }
@@ -1144,42 +1156,46 @@ static void mal_gc_trace_table(MalTable *table) {
     MalKey key;
     void *entry;
     while (mal_table_iter_next(&iter, &key, &entry)) {
-        mal_gc_mark_value(key.value);
+        mal_gc_mark_value_in(ctx, key.value);
         MalPropertyDesc desc = mal_property_entry_desc(table, entry);
-        mal_gc_mark_value(desc.value);
-        mal_gc_mark_value(desc.getter);
-        mal_gc_mark_value(desc.setter);
+        mal_gc_mark_value_in(ctx, desc.value);
+        mal_gc_mark_value_in(ctx, desc.getter);
+        mal_gc_mark_value_in(ctx, desc.setter);
     }
 }
 
-static void mal_gc_trace_map(MalMapStorage *storage) {
+static void mal_gc_trace_map_in(MalGcThreadContext *ctx, MalMapStorage *storage) {
     MalMapKeyDomain domain = mal_map_storage_key_domain(storage);
     bool trace_keys = domain != MAL_MAP_KEYS_INT32 && domain != MAL_MAP_KEYS_NUMBER;
     MalMapIter iter;
     mal_map_iter_init(&iter, storage);
     MalValue key, value;
     while (mal_map_iter_next(&iter, &key, &value)) {
-        if (trace_keys) mal_gc_mark_value(key);
-        mal_gc_mark_value(value);
+        if (trace_keys) mal_gc_mark_value_in(ctx, key);
+        mal_gc_mark_value_in(ctx, value);
     }
 }
 
 // Active frames and exact complete-chain closures own their lexical links.
 // Tagged/display captures own selected lexical state only; the owners' parent
 // pointers may be stale after the frame exits and must not be followed.
-static void mal_gc_trace_env(MalEnv *env) {
+static void mal_gc_trace_env_in(MalGcThreadContext *ctx, MalEnv *env) {
     for (; env != nullptr; env = env->parent) {
         if (mal_env_is_single_owner(env)) {
-            mal_gc_shade(&mal_env_untag_single_owner(env)->header);
+            mal_gc_shade_in(ctx, &mal_env_untag_single_owner(env)->header);
             return;
         }
         if (mal_env_is_capture_display(env)) {
-            mal_gc_shade((MalHeapHeader *) env->parent);
+            mal_gc_shade_in(ctx, (MalHeapHeader *) env->parent);
             return;
         }
-        mal_gc_shade(&env->header);
+        mal_gc_shade_in(ctx, &env->header);
         if (!env->compact_parent) return;
     }
+}
+
+static void mal_gc_trace_env(MalEnv *env) {
+    mal_gc_trace_env_in(&g_gc_thread, env);
 }
 
 void mal_gc_satb_record_env(MalEnv *env) {
@@ -1243,14 +1259,18 @@ static void mal_gc_visit_frame_registers(
 }
 
 /** Trace an interpreter / generator activation frame. */
-static void mal_gc_trace_frame(MalVmFrame *frame) {
+static void mal_gc_trace_frame_in(MalGcThreadContext *ctx, MalVmFrame *frame) {
     mal_gc_visit_frame_registers(frame, mal_gc_mark_value);
-    mal_gc_mark_values(frame->arguments, frame->argument_count);
-    mal_gc_mark_value(frame->this_value);
-    mal_gc_mark_value(frame->arguments_object);
-    mal_gc_mark_value(frame->callee);
-    mal_gc_mark_value(frame->new_target);
-    mal_gc_trace_env(frame->env);
+    mal_gc_mark_values_in(ctx, frame->arguments, frame->argument_count);
+    mal_gc_mark_value_in(ctx, frame->this_value);
+    mal_gc_mark_value_in(ctx, frame->arguments_object);
+    mal_gc_mark_value_in(ctx, frame->callee);
+    mal_gc_mark_value_in(ctx, frame->new_target);
+    mal_gc_trace_env_in(ctx, frame->env);
+}
+
+static void mal_gc_trace_frame(MalVmFrame *frame) {
+    mal_gc_trace_frame_in(&g_gc_thread, frame);
 }
 
 /* SATB teardown/resume shade: see gc.h. Mirrors mal_gc_trace_frame but records
@@ -1274,40 +1294,40 @@ void mal_gc_satb_shade_frame(MalVmFrame *frame) {
 /** Common edges of every MalObject-based cell: prototype, inline slots, overflow.
  * The shape tree is malloc-owned, but its property atoms are heap strings, so
  * they are marked here through both owning objects and the heap root scan. */
-static void mal_gc_trace_object_common(MalObject *object) {
-    mal_gc_mark_object(mal_object_prototype(object));
+static void mal_gc_trace_object_common_in(MalGcThreadContext *ctx, MalObject *object) {
+    mal_gc_mark_object_in(ctx, mal_object_prototype(object));
     const MalShape *shape = object->shape;
     for (u32 i = 0; i < shape->inline_count; ++i) {
-        mal_gc_mark_value(shape->props[i].key);
+        mal_gc_mark_value_in(ctx, shape->props[i].key);
     }
     const MalValue *fields = mal_object_fields(object);
     if (fields != nullptr) {
         for (u32 i = 0; i < shape->inline_count; ++i) {
-            mal_gc_mark_value(fields[i]);
+            mal_gc_mark_value_in(ctx, fields[i]);
         }
     }
-    mal_gc_trace_table(mal_object_overflow(object));
+    mal_gc_trace_table_in(ctx, mal_object_overflow(object));
 }
 
 /** Trace a cell's outgoing edges after its mark claim. */
-static void mal_gc_trace_cell(MalHeapHeader *cell) {
+static void mal_gc_trace_cell_in(MalGcThreadContext *ctx, MalHeapHeader *cell) {
     switch (cell->type) {
         case MAL_HEAP_STRING: {
             MalString *string = (MalString *) cell;
             if (string->storage == MAL_STRING_STORAGE_DEPENDENT) {
-                mal_gc_mark_string(string->parent);
+                mal_gc_mark_string_in(ctx, string->parent);
             } else if (string->storage == MAL_STRING_STORAGE_CONS) {
-                mal_gc_mark_string(string->left);
-                mal_gc_mark_string(string->right);
+                mal_gc_mark_string_in(ctx, string->left);
+                mal_gc_mark_string_in(ctx, string->right);
             }
             return;
         }
         case MAL_HEAP_STRING_CURSOR: {
             MalStringIterator *iterator = ((MalStringCursor *) cell)->iterator;
             if (iterator != nullptr) {
-                mal_gc_mark_string((MalString *) iterator->current.string);
+                mal_gc_mark_string_in(ctx, (MalString *) iterator->current.string);
                 for (usize i = 0; i < iterator->count; i++) {
-                    mal_gc_mark_string((MalString *) iterator->stack[i].string);
+                    mal_gc_mark_string_in(ctx, (MalString *) iterator->stack[i].string);
                 }
             }
             return;
@@ -1315,7 +1335,7 @@ static void mal_gc_trace_cell(MalHeapHeader *cell) {
         case MAL_HEAP_BIGINT:
             return; // leaves (code_units / digits are non-pointer payload)
         case MAL_HEAP_SYMBOL:
-            mal_gc_mark_string(((MalSymbol *) cell)->description);
+            mal_gc_mark_string_in(ctx, ((MalSymbol *) cell)->description);
             return;
         case MAL_HEAP_ENV: {
             // Not a MalObject: trace the parent env and this env's captured slots
@@ -1323,48 +1343,48 @@ static void mal_gc_trace_cell(MalHeapHeader *cell) {
             // too).
             MalEnv *env = (MalEnv *) cell;
 #if !defined(__wasi__)
-            if (g_trace_worker != nullptr && !g_trace_worker->owner_inline &&
-                g_gc->worker_batch_concurrent && mal_gc_test_trace_env_hook != nullptr) {
+            if (ctx->trace_worker != nullptr && !ctx->trace_worker->owner_inline &&
+                ctx->gc->worker_batch_concurrent && mal_gc_test_trace_env_hook != nullptr) {
                 mal_gc_test_trace_env_hook(env);
             }
 #endif
-            if (!env->compact_parent) mal_gc_trace_env(env->parent);
+            if (!env->compact_parent) mal_gc_trace_env_in(ctx, env->parent);
             for (i32 i = 0; i < env->slot_count; ++i) {
-                mal_gc_mark_value(env->slots[i]);
+                mal_gc_mark_value_in(ctx, env->slots[i]);
             }
             return;
         }
         case MAL_HEAP_ASYNC_CONTEXT: {
             MalAsyncContext *context = (MalAsyncContext *) cell;
             if (context->parent != nullptr) {
-                mal_gc_shade(&context->parent->header);
+                mal_gc_shade_in(ctx, &context->parent->header);
             }
             if (context->storage != nullptr) {
-                mal_gc_shade(&context->storage->header);
+                mal_gc_shade_in(ctx, &context->storage->header);
             }
-            mal_gc_mark_value(context->store);
+            mal_gc_mark_value_in(ctx, context->store);
             return;
         }
         case MAL_HEAP_ASYNC_LOCAL_STORAGE_STATE: {
             MalAsyncLocalStorageState *state =
                 (MalAsyncLocalStorageState *) cell;
-            mal_gc_mark_value(state->default_value);
-            mal_gc_mark_value(state->name);
+            mal_gc_mark_value_in(ctx, state->default_value);
+            mal_gc_mark_value_in(ctx, state->name);
             return;
         }
         case MAL_HEAP_ASYNC_RESOURCE_STATE: {
             MalAsyncResourceState *state = (MalAsyncResourceState *) cell;
             if (state->context != nullptr) {
-                mal_gc_shade(&state->context->header);
+                mal_gc_shade_in(ctx, &state->context->header);
             }
             return;
         }
         case MAL_HEAP_ASYNC_RUN_SCOPE_STATE: {
             MalAsyncRunScopeState *state = (MalAsyncRunScopeState *) cell;
             if (state->storage != nullptr) {
-                mal_gc_shade(&state->storage->header);
+                mal_gc_shade_in(ctx, &state->storage->header);
             }
-            mal_gc_mark_value(state->previous_store);
+            mal_gc_mark_value_in(ctx, state->previous_store);
             return;
         }
         default:
@@ -1372,7 +1392,7 @@ static void mal_gc_trace_cell(MalHeapHeader *cell) {
     }
 
     MalObject *object = (MalObject *) cell;
-    mal_gc_trace_object_common(object);
+    mal_gc_trace_object_common_in(ctx, object);
 
     // Host/runtime-registered per-type tracers (e.g. the fetch Headers name/value
     // list) — marks edges the engine has no type knowledge of.
@@ -1385,7 +1405,7 @@ static void mal_gc_trace_cell(MalHeapHeader *cell) {
             // Mapped arguments own parameter slots, not their expired activation's links.
             if (env != nullptr) {
                 if (mal_env_is_single_owner(env)) env = mal_env_untag_single_owner(env);
-                mal_gc_shade(mal_env_is_capture_display(env)
+                mal_gc_shade_in(ctx, mal_env_is_capture_display(env)
                     ? (MalHeapHeader *) env->parent : &env->header);
             }
             break;
@@ -1396,30 +1416,30 @@ static void mal_gc_trace_cell(MalHeapHeader *cell) {
             MalArrayObject *array = (MalArrayObject *) cell;
             if (array->elements != nullptr) {
 #if !defined(__wasi__)
-                bool measure = g_trace_worker == nullptr;
+                bool measure = ctx->trace_worker == nullptr;
 #else
                 bool measure = true;
 #endif
-                measure = measure && g_gc->stats_enabled && g_gc->in_mark_step &&
-                    !g_gc_verifying;
+                measure = measure && ctx->gc->stats_enabled && ctx->gc->in_mark_step &&
+                    !ctx->verifying;
                 u32 slots = array->dense_count;
-                bool minor_trace = !g_gc->major_collection && !g_gc_verifying;
+                bool minor_trace = !ctx->gc->major_collection && !ctx->verifying;
                 u32 scan_start = minor_trace && array->minor_scan_start <= slots
                     ? array->minor_scan_start : 0;
                 u64 start_ns = measure ? mal_monotonic_now_ns() : 0;
-                mal_gc_mark_values(array->elements + scan_start, (i32) (slots - scan_start));
+                mal_gc_mark_values_in(ctx, array->elements + scan_start, (i32) (slots - scan_start));
                 if (minor_trace) {
                     array->minor_scan_start = slots <= MAL_ARRAY_MINOR_SCAN_MAX ? slots : 0;
                 }
                 if (measure) {
                     u64 elapsed = mal_monotonic_now_ns() - start_ns;
-                    g_gc->major_array_trace_slots += slots;
-                    g_gc->major_array_trace_ns += elapsed;
-                    if (elapsed > g_gc->max_major_array_trace_ns) {
-                        g_gc->max_major_array_trace_ns = elapsed;
+                    ctx->gc->major_array_trace_slots += slots;
+                    ctx->gc->major_array_trace_ns += elapsed;
+                    if (elapsed > ctx->gc->max_major_array_trace_ns) {
+                        ctx->gc->max_major_array_trace_ns = elapsed;
                     }
-                    if (slots > g_gc->max_major_array_trace_slots)
-                        g_gc->max_major_array_trace_slots = slots;
+                    if (slots > ctx->gc->max_major_array_trace_slots)
+                        ctx->gc->max_major_array_trace_slots = slots;
                 }
             }
             break;
@@ -1430,46 +1450,46 @@ static void mal_gc_trace_cell(MalHeapHeader *cell) {
                     mal_env_is_capture_display(env)) {
                 // Fallback closures can borrow a display coallocated in another function.
                 MalHeapHeader *owner = (MalHeapHeader *) env->parent;
-                if (owner != cell) mal_gc_shade(owner);
+                if (owner != cell) mal_gc_shade_in(ctx, owner);
                 if (env->function_index == MAL_ENV_CAPTURE_VALUES) {
                     for (i32 i = 0; i < env->slot_count; i++)
-                        mal_gc_mark_value(env->slots[i + 1]);
+                        mal_gc_mark_value_in(ctx, env->slots[i + 1]);
                 } else {
                     MalEnv **scopes = mal_env_capture_scopes(env);
                     for (i32 i = 0; i < env->slot_count; i++)
-                        mal_gc_shade(&scopes[i]->header);
+                        mal_gc_shade_in(ctx, &scopes[i]->header);
                 }
             } else {
-                mal_gc_trace_env(env);
+                mal_gc_trace_env_in(ctx, env);
             }
             break;
         }
         case MAL_HEAP_NATIVE_FUNCTION_OBJECT: {
             MalNativeFunctionObject *fn = (MalNativeFunctionObject *) cell;
-            mal_gc_mark_string(fn->name);
-            mal_gc_mark_values(fn->slots, fn->slot_count);
+            mal_gc_mark_string_in(ctx, fn->name);
+            mal_gc_mark_values_in(ctx, fn->slots, fn->slot_count);
             break;
         }
         case MAL_HEAP_BOUND_FUNCTION_OBJECT: {
             MalBoundFunctionObject *bound = (MalBoundFunctionObject *) cell;
-            mal_gc_mark_value(bound->target);
-            mal_gc_mark_value(bound->bound_this);
-            mal_gc_mark_values(bound->bound_args, bound->bound_count);
+            mal_gc_mark_value_in(ctx, bound->target);
+            mal_gc_mark_value_in(ctx, bound->bound_this);
+            mal_gc_mark_values_in(ctx, bound->bound_args, bound->bound_count);
             break;
         }
         case MAL_HEAP_PRIMITIVE_WRAPPER_OBJECT:
-            mal_gc_mark_value(((MalPrimitiveWrapperObject *) cell)->primitive_data);
+            mal_gc_mark_value_in(ctx, ((MalPrimitiveWrapperObject *) cell)->primitive_data);
             break;
         case MAL_HEAP_ITERATOR_OBJECT: {
             MalIteratorObject *iterator = (MalIteratorObject *) cell;
-            mal_gc_mark_value(iterator->target);
+            mal_gc_mark_value_in(ctx, iterator->target);
             if (iterator->kind == MAL_ITERATOR_STRING_VALUES && iterator->string_cursor != nullptr) {
-                mal_gc_mark_value(mal_value_from_heap(&iterator->string_cursor->header));
+                mal_gc_mark_value_in(ctx, mal_value_from_heap(&iterator->string_cursor->header));
             }
             break;
         }
         case MAL_HEAP_MAP_OBJECT:
-            mal_gc_trace_map(((MalMapObject *) cell)->entries);
+            mal_gc_trace_map_in(ctx, ((MalMapObject *) cell)->entries);
             break;
         case MAL_HEAP_SET_OBJECT: {
             MalSetObject *set = (MalSetObject *) cell;
@@ -1477,112 +1497,112 @@ static void mal_gc_trace_cell(MalHeapHeader *cell) {
                 MalSetIter iter;
                 mal_set_iter_init(&iter, set->entries);
                 MalValue key;
-                while (mal_set_iter_next(&iter, &key)) mal_gc_mark_value(key);
+                while (mal_set_iter_next(&iter, &key)) mal_gc_mark_value_in(ctx, key);
             }
             break;
         }
         case MAL_HEAP_WEAK_MAP_OBJECT: {
             MalWeakMapObject *map = (MalWeakMapObject *) cell;
-            if (!g_gc_verifying) {
+            if (!ctx->verifying) {
                 mal_gc_register_weak_map(map);
             } else {
                 MalWeakMapIter iter;
                 mal_weak_map_iter_init(&iter, map->entries);
                 MalValue key, value;
                 while (mal_weak_map_iter_next(&iter, &key, &value)) {
-                    mal_gc_mark_value(key);
-                    mal_gc_mark_value(value);
+                    mal_gc_mark_value_in(ctx, key);
+                    mal_gc_mark_value_in(ctx, value);
                 }
             }
             break;
         }
         case MAL_HEAP_WEAK_SET_OBJECT: {
             MalWeakSetObject *set = (MalWeakSetObject *) cell;
-            if (!g_gc_verifying) {
+            if (!ctx->verifying) {
                 mal_gc_register_weak_set(set);
             } else {
                 MalWeakSetIter iter;
                 mal_weak_set_iter_init(&iter, set->entries);
                 MalValue key;
-                while (mal_weak_set_iter_next(&iter, &key)) mal_gc_mark_value(key);
+                while (mal_weak_set_iter_next(&iter, &key)) mal_gc_mark_value_in(ctx, key);
             }
             break;
         }
         case MAL_HEAP_TYPED_ARRAY_OBJECT:
-            mal_gc_mark_object((MalObject *) ((MalTypedArrayObject *) cell)->buffer);
+            mal_gc_mark_object_in(ctx, (MalObject *) ((MalTypedArrayObject *) cell)->buffer);
             break;
         case MAL_HEAP_DATA_VIEW_OBJECT:
-            mal_gc_mark_object((MalObject *) mal_data_view_object_buffer((MalDataViewObject *) cell));
+            mal_gc_mark_object_in(ctx, (MalObject *) mal_data_view_object_buffer((MalDataViewObject *) cell));
             break;
         case MAL_HEAP_PROXY_OBJECT: {
             MalProxyObject *proxy = (MalProxyObject *) cell;
-            mal_gc_mark_value(proxy->target);
-            mal_gc_mark_value(proxy->handler);
+            mal_gc_mark_value_in(ctx, proxy->target);
+            mal_gc_mark_value_in(ctx, proxy->handler);
             break;
         }
         case MAL_HEAP_INTL_OBJECT: {
             MalIntlObject *intl = (MalIntlObject *) cell;
-            mal_gc_mark_value(intl->data);
-            mal_gc_mark_value(intl->bound);
+            mal_gc_mark_value_in(ctx, intl->data);
+            mal_gc_mark_value_in(ctx, intl->bound);
             break;
         }
         case MAL_HEAP_REGEXP_OBJECT: {
             MalRegExpObject *re = (MalRegExpObject *) cell;
-            mal_gc_mark_string(re->source);
-            mal_gc_mark_string(re->flags);
+            mal_gc_mark_string_in(ctx, re->source);
+            mal_gc_mark_string_in(ctx, re->flags);
             break;
         }
         case MAL_HEAP_REGEXP_STRING_ITERATOR_OBJECT: {
             MalRegExpStringIteratorObject *it = (MalRegExpStringIteratorObject *) cell;
-            mal_gc_mark_value(it->regexp);
-            mal_gc_mark_string(it->string);
+            mal_gc_mark_value_in(ctx, it->regexp);
+            mal_gc_mark_string_in(ctx, it->string);
             break;
         }
         case MAL_HEAP_ITERATOR_HELPER_OBJECT: {
             MalIteratorHelperObject *ih = (MalIteratorHelperObject *) cell;
-            mal_gc_mark_value(ih->iterator);
-            mal_gc_mark_value(ih->next_method);
-            mal_gc_mark_value(ih->callback);
-            mal_gc_mark_value(ih->inner_iterator);
-            mal_gc_mark_value(ih->inner_next);
-            mal_gc_mark_value(ih->sources);
-            mal_gc_mark_value(ih->source_methods);
-            mal_gc_mark_value(ih->zip_padding);
-            mal_gc_mark_value(ih->zip_keys);
+            mal_gc_mark_value_in(ctx, ih->iterator);
+            mal_gc_mark_value_in(ctx, ih->next_method);
+            mal_gc_mark_value_in(ctx, ih->callback);
+            mal_gc_mark_value_in(ctx, ih->inner_iterator);
+            mal_gc_mark_value_in(ctx, ih->inner_next);
+            mal_gc_mark_value_in(ctx, ih->sources);
+            mal_gc_mark_value_in(ctx, ih->source_methods);
+            mal_gc_mark_value_in(ctx, ih->zip_padding);
+            mal_gc_mark_value_in(ctx, ih->zip_keys);
             break;
         }
         case MAL_HEAP_WEAK_REF_OBJECT:
             // The target is a weak edge: register for the weak pass, do not follow
             // it. In verify mode the pass has run (target is undefined or a
             // survivor), so trace it as an ordinary dangling check.
-            if (g_gc_verifying) {
-                mal_gc_mark_value(((MalWeakRefObject *) cell)->target);
+            if (ctx->verifying) {
+                mal_gc_mark_value_in(ctx, ((MalWeakRefObject *) cell)->target);
             } else {
                 mal_gc_register_weak_ref((MalWeakRefObject *) cell);
             }
             break;
         case MAL_HEAP_FINALIZATION_REGISTRY_OBJECT: {
             MalFinalizationRegistryObject *reg = (MalFinalizationRegistryObject *) cell;
-            mal_gc_mark_value(reg->cleanup_callback); // strong
+            mal_gc_mark_value_in(ctx, reg->cleanup_callback); // strong
             for (MalFinRegCell *fc = reg->cells; fc != nullptr; fc = fc->next) {
-                mal_gc_mark_value(fc->held_value); // strong; passed to the callback
-                if (g_gc_verifying) {
+                mal_gc_mark_value_in(ctx, fc->held_value); // strong; passed to the callback
+                if (ctx->verifying) {
                     // Survivors after the pass: targets/tokens must be live too.
-                    mal_gc_mark_value(fc->target);
-                    mal_gc_mark_value(fc->unregister_token);
+                    mal_gc_mark_value_in(ctx, fc->target);
+                    mal_gc_mark_value_in(ctx, fc->unregister_token);
                 }
             }
             // target / unregister_token are weak edges, handled by the weak pass.
-            if (!g_gc_verifying) {
+            if (!ctx->verifying) {
                 mal_gc_register_fin_reg(reg);
             }
             break;
         }
         case MAL_HEAP_MODULE_NAMESPACE_OBJECT: {
             MalModuleNamespaceObject *ns = (MalModuleNamespaceObject *) cell;
-            mal_gc_mark_value(ns->init_fn);
+            mal_gc_mark_value_in(ctx, ns->init_fn);
             for (i32 i = 0; i < ns->export_count; ++i) {
-                mal_gc_mark_string(ns->exports[i].name);
+                mal_gc_mark_string_in(ctx, ns->exports[i].name);
             }
             break;
         }
@@ -1605,43 +1625,43 @@ static void mal_gc_trace_cell(MalHeapHeader *cell) {
                 // no-op trace.
                 if (gen->frame.function != nullptr) {
                     gen->frame.function =
-                        &g_gc_vm->live_runtime_image.functions[gen->frame.function_index];
+                        &ctx->vm->live_runtime_image.functions[gen->frame.function_index];
                 }
-                mal_gc_trace_frame(&gen->frame);
+                mal_gc_trace_frame_in(ctx, &gen->frame);
             }
-            mal_gc_mark_value(gen->yielded_value);
+            mal_gc_mark_value_in(ctx, gen->yielded_value);
             if (gen->async_data != nullptr) {
-                mal_gc_mark_value(gen->async_data->promise);
+                mal_gc_mark_value_in(ctx, gen->async_data->promise);
                 if (gen->async_data->awaited_by != nullptr) {
-                    mal_gc_shade(&gen->async_data->awaited_by->object.header);
+                    mal_gc_shade_in(ctx, &gen->async_data->awaited_by->object.header);
                 }
                 // Pending async-generator requests (malloc'd nodes, traced via
                 // the owner) remain reachable through the coallocated tail.
                 for (MalAsyncGeneratorRequest *req = gen->async_data->queue_head;
                      req != nullptr; req = req->next) {
-                    mal_gc_mark_value(req->promise);
-                    mal_gc_mark_value(req->promise_constructor);
-                    mal_gc_mark_value(req->value);
+                    mal_gc_mark_value_in(ctx, req->promise);
+                    mal_gc_mark_value_in(ctx, req->promise_constructor);
+                    mal_gc_mark_value_in(ctx, req->value);
                 }
             }
             break;
         }
         case MAL_HEAP_PROMISE_OBJECT: {
             MalPromiseObject *promise = (MalPromiseObject *) cell;
-            mal_gc_mark_value(promise->result);
+            mal_gc_mark_value_in(ctx, promise->result);
             for (MalPromiseReaction *r = promise->reactions_head; r != nullptr; r = r->next) {
-                mal_gc_mark_value(r->cap_resolve);
-                mal_gc_mark_value(r->cap_reject);
-                mal_gc_mark_value(r->on_fulfilled);
-                mal_gc_mark_value(r->on_rejected);
+                mal_gc_mark_value_in(ctx, r->cap_resolve);
+                mal_gc_mark_value_in(ctx, r->cap_reject);
+                mal_gc_mark_value_in(ctx, r->on_fulfilled);
+                mal_gc_mark_value_in(ctx, r->on_rejected);
 #if MAL_NODE
                 if (r->async_context != nullptr) {
-                    mal_gc_shade(&r->async_context->header);
+                    mal_gc_shade_in(ctx, &r->async_context->header);
                 }
 #endif
             }
             if (promise->async_owner != nullptr) {
-                mal_gc_shade(&promise->async_owner->object.header);
+                mal_gc_shade_in(ctx, &promise->async_owner->object.header);
             }
             break;
         }
@@ -1651,13 +1671,17 @@ static void mal_gc_trace_cell(MalHeapHeader *cell) {
     }
 }
 
+static void mal_gc_trace_cell(MalHeapHeader *cell) {
+    mal_gc_trace_cell_in(&g_gc_thread, cell);
+}
+
 // --- Roots -----------------------------------------------------------------
 
 /** Trace a microtask job's live MalValue fields (queued or currently running). */
 static void mal_gc_mark_job(MalJob *job) {
 #if MAL_NODE
     if (job->async_context != nullptr) {
-        mal_gc_shade(&job->async_context->header);
+        mal_gc_shade_in(&g_gc_thread, &job->async_context->header);
     }
 #endif
     if (job->kind == MAL_JOB_PROMISE_REACTION ||
@@ -1845,7 +1869,7 @@ static void mal_gc_scan_roots(MalVm *vm) {
             f->exec.root_span_head);
 #if MAL_NODE
         if (f->exec.async_context != nullptr) {
-            mal_gc_shade(&f->exec.async_context->header);
+            mal_gc_shade_in(&g_gc_thread, &f->exec.async_context->header);
         }
 #endif
     }
@@ -1859,7 +1883,7 @@ static void mal_gc_scan_roots(MalVm *vm) {
     }
 #if MAL_NODE
     if (vm->async_context != nullptr) {
-        mal_gc_shade(&vm->async_context->header);
+        mal_gc_shade_in(&g_gc_thread, &vm->async_context->header);
     }
 #endif
 #if MAL_REALMS
@@ -2597,13 +2621,14 @@ static bool mal_gc_workers_trace_batch(MalGcState *g, usize count, bool drain) {
 #define MAL_GC_PARALLEL_BATCH_MIN 64
 
 static void mal_gc_trace_parked_batch(usize count, bool drain) {
+    MalGcThreadContext *ctx = &g_gc_thread;
     usize safe_count = 0;
     for (usize i = 0; i < count; ++i) {
         MalHeapHeader *cell = g_gc->batch[i];
         if (mal_gc_worker_can_trace(cell)) {
             g_gc->batch[safe_count++] = cell;
         } else {
-            mal_gc_trace_cell(cell);
+            mal_gc_trace_cell_in(ctx, cell);
         }
     }
 #if !defined(__wasi__)
@@ -2612,7 +2637,7 @@ static void mal_gc_trace_parked_batch(usize count, bool drain) {
         if (mal_gc_workers_trace_batch(g_gc, safe_count, drain)) return;
     }
 #endif
-    for (usize i = 0; i < safe_count; ++i) mal_gc_trace_cell(g_gc->batch[i]);
+    for (usize i = 0; i < safe_count; ++i) mal_gc_trace_cell_in(ctx, g_gc->batch[i]);
 }
 
 #if !defined(__wasi__)
@@ -3051,8 +3076,9 @@ static void mal_gc_collect_sync(MalVm *vm, bool major) {
         // collections it reaches, so a dirtied old WeakMap's dead young keys are
         // still cleaned this cycle.
         if (!g_gc->stats_enabled) {
+            MalGcThreadContext *ctx = &g_gc_thread;
             for (usize i = 0; i < g_gc->remembered_count; ++i) {
-                mal_gc_trace_cell(g_gc->remembered[i]);
+                mal_gc_trace_cell_in(ctx, g_gc->remembered[i]);
             }
         } else {
             for (usize i = 0; i < g_gc->remembered_count; ++i) {
