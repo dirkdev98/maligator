@@ -1953,16 +1953,26 @@ function lowerConstructorInitialization(
 	jumpTargets: ReadonlySet<number>,
 	conflicts: (ip: number) => boolean,
 ): NativeConstructorInitializationPlan | undefined {
-	if (!fn.isClassConstructor || fn.isDerivedConstructor) return undefined;
+	if (fn.isDerivedConstructor) return undefined;
+	// A base constructor initializes `this`; elsewhere an inlined construction
+	// initializes the fresh receiver it creates. One plan admits a single receiver.
+	const ownReceiver = fn.isClassConstructor;
+	let createdReceiver = false;
 	const thisAliases = new Set<number>();
 	const stores: Array<{ ip: number; instruction: StaticPropertyStore }> = [];
 	const pureIps = new Set<number>();
 	let thisEscaped = false;
 	for (let ip = 0; ip < fn.instructions.length; ip++) {
 		const instruction = fn.instructions[ip]!;
-		if (instruction.opcode === "LOAD_THIS") {
+		if (ownReceiver && instruction.opcode === "LOAD_THIS") {
 			thisAliases.add(instruction.dst);
 			pureIps.add(ip);
+			continue;
+		}
+		if (!ownReceiver && instruction.opcode === "CREATE_BASE_CONSTRUCT_RECEIVER") {
+			if (createdReceiver) break;
+			createdReceiver = true;
+			thisAliases.add(instruction.dst);
 			continue;
 		}
 		if (instruction.opcode === "MOVE") {

@@ -93,4 +93,37 @@ for (let round = 0; round < 5; round++) {
 }
 expectValue(created, 500, "every construction ran");
 
+class Cell {
+	constructor(value) {
+		this.value = value;
+		this.next = null;
+	}
+	link(value) {
+		const cell = new Cell(value);
+		cell.next = this;
+		return cell;
+	}
+}
+let head = new Cell(0);
+for (let i = 1; i <= 100; i++) head = head.link(i);
+expectValue(
+	head.value + head.next.value,
+	199,
+	"inlined constructions initialize their fields",
+);
+let intercepted = 0;
+Object.defineProperty(Cell.prototype, "next", {
+	set() {
+		intercepted++;
+	},
+	configurable: true,
+});
+const linked = head.link(101);
+expectValue(intercepted, 2, "an inherited setter sees both stores once batching stops");
+expectValue(
+	Object.hasOwn(linked, "next"),
+	false,
+	"the setter, not a field, received next",
+);
+
 console.log("native-constructor-prototypes PASS");
