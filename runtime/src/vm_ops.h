@@ -3561,13 +3561,45 @@ static inline __attribute__((always_inline)) bool mal_vm_probe_private_read(
     return found;
 }
 
+/**
+ * An in-bounds element of an unshared numeric TypedArray. Integer-indexed [[Get]]
+ * never consults the prototype chain, and numeric elements box without allocating.
+ */
+static inline bool mal_vm_probe_typed_array_element(
+    const MalTypedArrayObject *array, u32 index, MalValue *out
+) {
+    const MalArrayBufferObject *buffer = array->buffer;
+    MalTypedArrayKind kind = array->kind;
+    if (kind > MAL_TA_FLOAT64 || buffer == nullptr || buffer->detached ||
+        buffer->shared_memory != nullptr) {
+        return false;
+    }
+    u32 element_size = kind <= MAL_TA_UINT8_CLAMPED ? 1 : kind <= MAL_TA_UINT16 ? 2
+        : kind <= MAL_TA_FLOAT32 ? 4 : 8;
+    u32 length;
+    if (array->length_tracking) {
+        if (array->byte_offset > buffer->byte_length) return false;
+        length = (buffer->byte_length - array->byte_offset) / element_size;
+    } else {
+        if ((u64) array->byte_offset + (u64) array->length * element_size > buffer->byte_length) {
+            return false;
+        }
+        length = array->length;
+    }
+    if (index >= length) return false;
+    *out = mal_vm_numeric_typed_array_load_at(
+        buffer->data + array->byte_offset + (usize) index * element_size, kind);
+    return true;
+}
+
 static inline __attribute__((always_inline)) bool mal_vm_probe_indexed_read(
     MalValue receiver, MalValue key, MalValue *out
 ) {
     *out = MAL_VALUE_UNDEFINED;
     MAL_PERF_COUNT(probe_read_attempts[2]);
     f64 number;
-    if (!mal_value_is_heap_type(receiver, MAL_HEAP_ARRAY_OBJECT) ||
+    bool array = mal_value_is_heap_type(receiver, MAL_HEAP_ARRAY_OBJECT);
+    if ((!array && !mal_value_is_typed_array_object(receiver)) ||
         !mal_ops_try_number_as_f64(key, &number) ||
         !(number >= 0 && number < UINT32_MAX)) {
         MAL_PERF_COUNT(probe_read_unsupported[2]);
@@ -3578,8 +3610,9 @@ static inline __attribute__((always_inline)) bool mal_vm_probe_indexed_read(
         MAL_PERF_COUNT(probe_read_unsupported[2]);
         return false;
     }
-    bool found = mal_array_object_dense_get(
-        (const MalArrayObject *) mal_value_to_heap(receiver), index, out);
+    bool found = array
+        ? mal_array_object_dense_get((const MalArrayObject *) mal_value_to_heap(receiver), index, out)
+        : mal_vm_probe_typed_array_element(mal_value_to_typed_array_object(receiver), index, out);
     if (found) MAL_PERF_COUNT(probe_read_hits[2]);
     return found;
 }

@@ -211,4 +211,40 @@ try {
 	terminalThrew = error.message === "terminal key";
 }
 check(terminalThrew, "terminal key exception reaches caller");
+
+// Typed columns answer in-bounds reads without a prototype lookup; every other
+// element read, including a detached or shrunk buffer, takes the original read.
+const typedStarts = new Int32Array([5, 9, -3]);
+const typedKernel = new Kernel({
+	starts: typedStarts,
+	counts: new Uint8Array([1, 2]),
+	operands: new Float64Array([0.5, 1.5, 2.5]),
+});
+let typedTotal = 0;
+for (let round = 0; round < 50; round++) {
+	for (let index = 0; index < 3; index++) {
+		typedTotal +=
+			typedKernel.start(index) + typedKernel.count(index) + typedKernel.operand(index);
+	}
+}
+check(
+	typedTotal === 50 * (5 + 9 - 3 + 1 + 2 + 0 + 0.5 + 1.5 + 2.5),
+	"typed column reads",
+);
+check(
+	typedKernel.start(3) === 0 && typedKernel.start(1.5) === 0,
+	"typed out-of-range reads",
+);
+const resizable = new ArrayBuffer(8, { maxByteLength: 16 });
+const tracking = new Int32Array(resizable);
+tracking[1] = 21;
+typedKernel.replace({ starts: tracking });
+check(typedKernel.start(1) === 21, "length-tracking column");
+resizable.resize(4);
+check(typedKernel.start(1) === 0, "shrunk column");
+const detached = new Int32Array([31]);
+typedKernel.replace({ starts: detached });
+check(typedKernel.start(0) === 31, "column before detach");
+detached.buffer.transfer();
+check(typedKernel.start(0) === 0, "detached column");
 console.log("read-accessor-regions PASS");
