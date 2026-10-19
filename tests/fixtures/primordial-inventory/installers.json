@@ -465,7 +465,7 @@
 	},
 	{
 		"file": "runtime/node_events.c",
-		"sha256": "3086ca6c9797fa06e828c9b5ed567521f2fef94919532b028be28779ce3513d1"
+		"sha256": "25b6d888bf7e33e7c0016f90c2546e26075f834d758ae3f4c9cf2f5ea49bbe23"
 	},
 	{
 		"file": "runtime/node_events.h",
@@ -473,7 +473,7 @@
 	},
 	{
 		"file": "runtime/node_fs.c",
-		"sha256": "e7b696164ffaaadbc7105a056852a2058713332f444acc01bfa6eb624029e6fd"
+		"sha256": "8717801c77090e1cff41a65126fb16f5030b453b98bf35a5d79a3cf52240a1bb"
 	},
 	{
 		"file": "runtime/node_fs.h",

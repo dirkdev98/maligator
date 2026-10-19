@@ -2,12 +2,14 @@ import events, {
 	EventEmitter,
 	addAbortListener,
 	captureRejectionSymbol,
+	defaultMaxListeners,
 	getEventListeners,
 	getMaxListeners,
 	on,
 	setMaxListeners,
 } from "node:events";
 import * as fs from "node:fs";
+import { mkdtempDisposable } from "node:fs/promises";
 import { maxHeaderSize, setMaxIdleHTTPParsers } from "node:http";
 // Node 26 APIs that popular packages probe or call directly.
 import * as os from "node:os";
@@ -245,4 +247,28 @@ for (const target of [path.join(envDirectory, "missing.env"), 1]) {
 	}
 }
 fs.rmSync(envDirectory, { recursive: true });
+show("defaultMaxListeners", [defaultMaxListeners, events.defaultMaxListeners]);
+{
+	using temporary = fs.mkdtempDisposableSync(path.join(os.tmpdir(), "node-disposable-"));
+	show("mkdtempDisposableSync", [
+		fs.existsSync(temporary.path),
+		temporary.remove.name,
+		typeof temporary[Symbol.dispose],
+		Object.getPrototypeOf(temporary) === Object.prototype,
+	]);
+	var disposedPath = temporary.path;
+}
+show("disposed", [fs.existsSync(disposedPath)]);
+{
+	await using temporary = await mkdtempDisposable(
+		path.join(os.tmpdir(), "node-disposable-"),
+	);
+	fs.writeFileSync(path.join(temporary.path, "file"), "x");
+	show("mkdtempDisposable", [
+		Object.getPrototypeOf(temporary),
+		typeof temporary[Symbol.asyncDispose],
+	]);
+	var asyncDisposedPath = temporary.path;
+}
+show("async disposed", [fs.existsSync(asyncDisposedPath)]);
 console.log(lines.join("\n"));

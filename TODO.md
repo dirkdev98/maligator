@@ -1128,9 +1128,10 @@ remains a Maligator extension and does not count as global fetch conformance.
       Exercise active-child cleanup in embedded VM teardown on a Linux host.
 
 - [ ] Fill the remaining Node 26 module gaps: fs.watch/watchFile/unwatchFile,
-      fs.openAsBlob and mkdtempDisposableSync, readdir's `encoding: "buffer"`;
-      https and http2 servers over net.Server, its Unix-path listen, allowHalfOpen
-      and named-host lookup, dgram, and the WebSocket client global; crypto
+      fs.openAsBlob, readdir's `encoding: "buffer"`; https and http2 servers over
+      net.Server, its Unix-path listen, allowHalfOpen and named-host lookup; dgram
+      hostname lookup, source-specific membership and collection of sockets that
+      are never closed; the WebSocket client global; crypto
       asymmetric KeyObjects, sign/verify, key generation, X509Certificate,
       DiffieHellman/ECDH and Cipheriv as Transform streams; dns record types beyond
       A/AAAA (needs res_query and libresolv in the link); zlib zstd and the zip

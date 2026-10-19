@@ -170,6 +170,7 @@ const FS: HostModuleSpec = {
 		"mkdir",
 		"mkdirSync",
 		"mkdtemp",
+		"mkdtempDisposableSync",
 		"mkdtempSync",
 		"open",
 		"openSync",
@@ -234,6 +235,7 @@ const FS_PROMISES: HostModuleSpec = {
 		"lutimes",
 		"mkdir",
 		"mkdtemp",
+		"mkdtempDisposable",
 		"open",
 		"opendir",
 		"readFile",
@@ -617,6 +619,7 @@ const EVENTS: HostModuleSpec = {
 		"addAbortListener",
 		"captureRejectionSymbol",
 		"captureRejections",
+		"defaultMaxListeners",
 		"errorMonitor",
 		"getEventListeners",
 		"getMaxListeners",
@@ -1125,7 +1128,6 @@ const READLINE_PROMISES: HostModuleSpec = {
 	installer: hostInstallerSymbol("node:readline/promises"),
 };
 
-const NET: HostModuleSpec = {
 const DGRAM: HostModuleSpec = {
 	id: "node:dgram",
 	named: ["Socket", "createSocket"],
@@ -1133,6 +1135,7 @@ const DGRAM: HostModuleSpec = {
 	installer: hostInstallerSymbol("node:dgram"),
 };
 
+const NET: HostModuleSpec = {
 	id: "node:net",
 	named: [
 		"Server",
@@ -1288,8 +1291,8 @@ export const HOST_MODULES: ReadonlyMap<string, HostModuleSpec> = new Map(
 		QUERYSTRING,
 		READLINE,
 		READLINE_PROMISES,
-		NET,
 		DGRAM,
+		NET,
 		OS,
 		STRING_DECODER,
 		ZLIB,

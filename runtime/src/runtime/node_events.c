@@ -1514,11 +1514,23 @@ failure:
     return mal_value_new_undefined();
 }
 
+// Publication skips accessors; Node's ESM export is a snapshot of the current default.
+static void ee_publish_default_max_listeners(MalVm *vm, const MalHostInstallSlot *slots, i32 count) {
+    for (i32 i = 0; i < count; i++) {
+        if (strcmp(slots[i].name, "defaultMaxListeners") == 0) {
+            vm->globals[slots[i].slot] = mal_value_from_f64(ee_default_max_listeners);
+        }
+    }
+}
+
 void mal_host_install_node_events(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
     const MalHostLaunchContext *launch) {
     (void) launch;
-    if (mal_node_module_install_cached(vm, "node:events", slots, count)) return;
+    if (mal_node_module_install_cached(vm, "node:events", slots, count)) {
+        ee_publish_default_max_listeners(vm, slots, count);
+        return;
+    }
     static const MalNodeEventsMethod methods[] = {
         {"emit", 1, ee_emit},
         {"eventNames", 0, ee_event_names},
@@ -1652,6 +1664,7 @@ void mal_host_install_node_events(
         MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
 
     mal_node_module_publish(vm, "node:events", slots, count, roots[1]);
+    ee_publish_default_max_listeners(vm, slots, count);
     mal_gc_unroot(&root);
 }
 

@@ -4579,6 +4579,99 @@ static MalValue node_fs_cp_promise(
     return promise;
 }
 
+// Slots: [absolute path, async]. Removal ignores a directory that is already gone.
+static MalValue node_fs_mkdtemp_remove(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) args; (void) argc; (void) nt;
+    MalNativeFunctionObject *function = mal_value_to_native_function_object(callee);
+    bool async = mal_value_is_truthy(mal_native_function_object_get_slot(function, 1));
+    char *path = node_fs_path_cstr(vm, mal_native_function_object_get_slot(function, 0));
+    int err = path == nullptr ? 0 : mal_posix_fs_rm(path, true, true);
+    if (err != 0) node_fs_throw_errno(vm, err, "rm", path);
+    free(path);
+    if (!async) return mal_value_new_undefined();
+    MalValue promise = mal_value_from_promise_object(mal_promise_object_new(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_PROMISE_PROTOTYPE])));
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        MalValue error = vm->completion.value;
+        node_fs_clear_completion(vm);
+        mal_promise_reject(vm, mal_value_to_promise_object(promise), error);
+    } else {
+        mal_promise_fulfill(vm, mal_value_to_promise_object(promise), mal_value_new_undefined());
+    }
+    return promise;
+}
+
+// Node 24's disposable temporary directory: { path, remove, [Symbol.dispose] } with the
+// path resolved up front so a later chdir cannot redirect removal.
+static MalValue node_fs_mkdtemp_disposable(MalVm *vm, const MalValue *args, i32 argc, bool async) {
+    MalValue roots[] = {node_fs_mkdtemp_sync(vm, mal_value_new_undefined(), args, argc,
+        mal_value_new_undefined(), mal_value_new_undefined()), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined()};
+    if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    char *created = node_fs_path_cstr(vm, roots[0]);
+    char *full = created == nullptr ? nullptr : node_fs_cp_resolve(".", created);
+    free(created);
+    MalValue result = mal_value_new_undefined();
+    if (full == nullptr) {
+        if (vm->completion.kind != MAL_COMPLETION_THROW) mal_vm_throw_allocation_error(vm);
+        goto done;
+    }
+    roots[1] = node_fs_string_from_cstr(vm, full);
+    free(full);
+    roots[2] = mal_value_from_object(async ? mal_object_new(&vm->heap, nullptr) : mal_intrinsic_new_object(vm));
+    MalObject *object = mal_value_to_object(roots[2]);
+    mal_intrinsic_define_data(vm, object, "path", roots[0], NODE_FS_VISIBLE);
+    MalObject *prototype = mal_value_to_object(vm->intrinsics[async
+        ? MAL_INTRINSIC_ASYNC_FUNCTION_PROTOTYPE : MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
+    MalValue slots[] = {roots[1], mal_value_new_boolean(async)};
+    roots[3] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(
+        &vm->heap, prototype, mal_intrinsic_ascii(vm, "remove"), 0, node_fs_mkdtemp_remove,
+        slots, countof(slots)));
+    if (async) mal_native_function_object_set_async(mal_value_to_native_function_object(roots[3]));
+    mal_intrinsic_define_data(vm, object, "remove", roots[3], NODE_FS_VISIBLE);
+    roots[3] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(
+        &vm->heap, prototype,
+        mal_intrinsic_ascii(vm, async ? "[Symbol.asyncDispose]" : "[Symbol.dispose]"), 0,
+        node_fs_mkdtemp_remove, slots, countof(slots)));
+    if (async) mal_native_function_object_set_async(mal_value_to_native_function_object(roots[3]));
+    MalPropertyDesc descriptor = mal_intrinsic_data_desc(roots[3], NODE_FS_VISIBLE);
+    mal_object_define_own(object, mal_intrinsic_symbol_key(vm,
+        async ? MAL_INTRINSIC_SYMBOL_ASYNC_DISPOSE : MAL_INTRINSIC_SYMBOL_DISPOSE), &descriptor);
+    result = roots[2];
+done:
+    mal_gc_unroot(&root);
+    return result;
+}
+
+static MalValue node_fs_mkdtemp_disposable_sync(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) nt; (void) callee;
+    return node_fs_mkdtemp_disposable(vm, args, argc, false);
+}
+
+static MalValue node_fs_mkdtemp_disposable_promise(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) nt; (void) callee;
+    MalValue roots[] = {mal_value_from_promise_object(mal_promise_object_new(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_PROMISE_PROTOTYPE]))), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    roots[1] = node_fs_mkdtemp_disposable(vm, args, argc, true);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        roots[1] = vm->completion.value;
+        node_fs_clear_completion(vm);
+        mal_promise_reject(vm, mal_value_to_promise_object(roots[0]), roots[1]);
+    } else {
+        mal_promise_fulfill(vm, mal_value_to_promise_object(roots[0]), roots[1]);
+    }
+    MalValue promise = roots[0];
+    mal_gc_unroot(&root);
+    return promise;
+}
+
 static MalValue node_fs_mkdtemp_promise(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
     MalValue new_target, MalValue callee
@@ -6893,6 +6986,9 @@ static MalValue node_fs_export(
         return node_fs_regular_function(vm,
             node_fs_make_fn(vm, fn_proto, "mkdtemp", 3, node_fs_mkdtemp_callback));
     }
+    if (strcmp(name, "mkdtempDisposableSync") == 0) {
+        return node_fs_make_fn(vm, fn_proto, "mkdtempDisposableSync", 2, node_fs_mkdtemp_disposable_sync);
+    }
     if (strcmp(name, "rmSync") == 0) {
         return node_fs_make_fn(vm, fn_proto, "rmSync", 1, node_fs_rm_sync);
     }
@@ -7039,7 +7135,7 @@ void mal_host_install_node_fs(
         "fchownSync", "fdatasync", "fdatasyncSync", "fstat", "fstatSync", "fsync", "fsyncSync",
         "ftruncate", "ftruncateSync", "futimes", "futimesSync", "glob", "globSync", "lchown", "lchownSync", "link",
         "linkSync", "lstat", "lstatSync", "lutimes", "lutimesSync", "mkdir", "mkdirSync",
-        "mkdtemp", "mkdtempSync", "open", "openSync", "read", "readFile", "readFileSync",
+        "mkdtemp", "mkdtempDisposableSync", "mkdtempSync", "open", "openSync", "read", "readFile", "readFileSync",
         "readlink", "readlinkSync", "readSync", "readdir", "readdirSync", "realpath",
         "realpathSync", "rename", "renameSync", "rm", "rmSync", "rmdir", "rmdirSync", "statSync",
         "stat", "statfsSync", "symlink", "symlinkSync", "truncate", "truncateSync", "unlink",
@@ -7304,6 +7400,12 @@ void mal_host_install_node_fs_promises(
         "mkdtemp", 2, node_fs_mkdtemp_promise);
     mal_native_function_object_set_async(mal_value_to_native_function_object(roots[1]));
     mal_intrinsic_define_data(vm, mal_value_to_object(roots[2]), "mkdtemp", roots[1], NODE_FS_VISIBLE);
+    roots[1] = node_fs_make_fn(vm,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ASYNC_FUNCTION_PROTOTYPE]),
+        "mkdtempDisposable", 2, node_fs_mkdtemp_disposable_promise);
+    mal_native_function_object_set_async(mal_value_to_native_function_object(roots[1]));
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[2]), "mkdtempDisposable", roots[1],
+        NODE_FS_VISIBLE);
 
     if (!mal_vm_get_property(vm, roots[0], mal_intrinsic_string_key(vm, "constants"), &roots[1])) {
         mal_gc_unroot(&root);
