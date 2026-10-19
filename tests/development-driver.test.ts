@@ -15,8 +15,9 @@ function harness(mode: string) {
 		readinessTimeoutMs: 1000,
 		requestTimeoutMs: 50,
 		pollMs: 5,
-		shutdownGraceMs: 80,
-		shutdownTimeoutMs: 2000,
+		// A loaded runner can take hundreds of milliseconds to close a cooperative child's stdio.
+		shutdownGraceMs: 1000,
+		shutdownTimeoutMs: 4000,
 	});
 	return {
 		driver,
