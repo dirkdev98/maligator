@@ -625,7 +625,7 @@
 	},
 	{
 		"file": "runtime/node_tls.c",
-		"sha256": "26a41f6220046d4b1042ea94367398955d55167e86d895f10072501070adc59a"
+		"sha256": "d1490e7117821cb98bfe6f185eb7b50385d2bfb4d4970a10534adf52250e6d82"
 	},
 	{
 		"file": "runtime/node_tls.h",

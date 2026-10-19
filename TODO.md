@@ -1121,9 +1121,25 @@ remains a Maligator extension and does not count as global fetch conformance.
       remove intermediate conversions. The recurrence edge still boxes its value;
       specializing it must preserve zero-trip behavior and coercion effects.
 
-- [ ] Extend asynchronous child-process stdio to pipes and implement exec/execFile;
-      inherited and ignored stdio cover UPM commands. Exercise active-child cleanup
-      in embedded VM teardown and Linux memory/libc reporting on a Linux host.
+- [ ] Detect child exits from SIGCHLD or a kqueue process source instead of the
+      5 ms waitpid poll, emit 'data' on exec/execFile child streams (output goes
+      straight to the callback buffer today), and implement fork with an IPC channel.
+      Exercise active-child cleanup in embedded VM teardown on a Linux host.
+
+- [ ] Fill the remaining Node 26 module gaps: fs.watch/watchFile/unwatchFile,
+      fs.cp/cpSync, fs.glob/globSync, fs.openAsBlob and mkdtempDisposableSync;
+      net.Server-backed https and http2 servers, dgram, and the WebSocket client
+      global; crypto asymmetric KeyObjects, sign/verify, key generation,
+      X509Certificate, DiffieHellman/ECDH and Cipheriv as Transform streams;
+      dns record types beyond A/AAAA (needs res_query and libresolv in the link);
+      zlib zstd and the zip archive APIs; util MIMEType/MIMEParams; tls
+      rootCertificates, checkServerIdentity and createServer; worker_threads
+      environment data, BroadcastChannel and locks; and vm beyond runInNewContext.
+
+- [ ] Make async_hooks observe more than AsyncResource: timers, I/O and promises
+      do not emit hook events, and executionAsyncId() inside their callbacks stays
+      at the enclosing resource. perf_hooks reports no GC, http or dns entries and
+      no loop idle time, since the reactor does not expose its wait time.
 
 - [ ] Preserve partially consumed ciphertext in direct node:tls socket reads;
       the Rust TLS input ABI can accept less than one socket-read buffer. Exercise

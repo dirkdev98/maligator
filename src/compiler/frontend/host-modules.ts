@@ -588,7 +588,18 @@ const PERF_HOOKS: HostModuleSpec = {
 
 const TLS: HostModuleSpec = {
 	id: "node:tls",
-	named: ["connect"],
+	named: [
+		"CLIENT_RENEG_LIMIT",
+		"CLIENT_RENEG_WINDOW",
+		"DEFAULT_CIPHERS",
+		"DEFAULT_ECDH_CURVE",
+		"DEFAULT_MAX_VERSION",
+		"DEFAULT_MIN_VERSION",
+		"checkServerIdentity",
+		"connect",
+		"getCACertificates",
+		"getCiphers",
+	],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:tls"),
 };
