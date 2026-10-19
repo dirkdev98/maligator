@@ -1217,17 +1217,15 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
 
 - [ ] zlib zstd and the zip archive APIs.
 
-- [ ] WebSocket: resolve host names (only numeric hosts and localhost connect),
-      test wss end to end, offer permessage-deflate, fire ErrorEvent instead of a
-      plain Event, put MessageEvent/CloseEvent fields on prototype getters, time out
-      a close handshake the server never finishes, and bound send backpressure and
-      message size.
+- [ ] WebSocket: try further resolved addresses after a refused connect (Happy
+      Eyeballs like Node's autoSelectFamily), offer permessage-deflate, and bound send
+      backpressure and message size. Web events: base Event fields as prototype
+      getters like Node, and MessageEvent.prototype.initMessageEvent.
 
 - [ ] worker_threads: `locks` / `navigator.locks` (LockManager request/query,
       exclusive and shared modes, ifAvailable, steal, signal), shared across threads
-      through a process-wide table with per-isolate grant mailboxes. Dispatch port
-      and BroadcastChannel messages as instances of the MessageEvent class the
-      WebSocket client defines. `markAsUntransferable` should also make an ArrayBuffer's
+      through a process-wide table with per-isolate grant mailboxes.
+      `markAsUntransferable` should also make an ArrayBuffer's
       `transfer()`/`transferToFixedLength()` throw "ArrayBuffer is not detachable
       and could not be cloned.", as V8's detach key does. BroadcastChannel scans one
       process-wide list; index it by name if processes use many channels.

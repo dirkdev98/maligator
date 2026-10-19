@@ -13,6 +13,9 @@
 #include "ascii.h"
 #include "async_context.h"
 #include "base64.h"
+#include "dns.h"
+#include <arpa/inet.h>
+#include <netinet/in.h>
 #include "builtin_data_view.h"
 #include "entropy.h"
 #include "function_object.h"
@@ -21,6 +24,7 @@
 #include "heap_symbol.h"
 #include "host.h"
 #include "intrinsics.h"
+#include "node_module.h"
 #include "object.h"
 #include "object_ops.h"
 #include "tcp.h"
@@ -38,6 +42,9 @@ typedef struct MalWebSocket {
     MalAsyncContext *async_context;
     MalHostHandle operation;
     bool secure;
+    /* The handle is a DNS lookup until the connect starts. */
+    bool resolving;
+    u16 port;
     char *server_name;
     char *request;
     usize request_length;
@@ -63,6 +70,7 @@ static MAL_ISOLATE_LOCAL MalWebSocket *ws_list;
 static MAL_ISOLATE_LOCAL MalValue ws_slots_symbol;
 static MAL_ISOLATE_LOCAL MalValue ws_message_event_prototype;
 static MAL_ISOLATE_LOCAL MalValue ws_close_event_prototype;
+static MAL_ISOLATE_LOCAL MalValue ws_error_event_prototype;
 static MAL_ISOLATE_LOCAL bool ws_roots_installed;
 
 static void ws_scan_roots(MalVm *vm, void *data) {
@@ -70,6 +78,7 @@ static void ws_scan_roots(MalVm *vm, void *data) {
     mal_gc_mark_value(ws_slots_symbol);
     mal_gc_mark_value(ws_message_event_prototype);
     mal_gc_mark_value(ws_close_event_prototype);
+    mal_gc_mark_value(ws_error_event_prototype);
     for (MalWebSocket *ws = ws_list; ws != nullptr; ws = ws->next) {
         if (ws->vm != vm) continue;
         mal_gc_mark_value(ws->receiver);
@@ -150,9 +159,17 @@ static MalValue ws_ascii(MalVm *vm, const char *text) {
     return mal_value_from_string(mal_string_from_utf8(&vm->heap, (const byte *) text, strlen(text)));
 }
 
+/* Event fields live in a hidden record that the prototype getters read, as Node's private fields do. */
 static void ws_define(MalVm *vm, MalValue object, const char *name, MalValue value) {
-    mal_intrinsic_define_data(vm, mal_value_to_object(object), (const byte *) name, value,
-        MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
+    MalValue roots[] = {object, value, ws_slots(object)};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    if (!mal_value_is_object(roots[2])) {
+        roots[2] = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
+        mal_object_set(mal_value_to_object(roots[0]), (MalKey) {.kind = MAL_KEY_SYMBOL, .value = ws_slots_symbol}, roots[2]);
+    }
+    mal_object_set(mal_value_to_object(roots[2]), mal_intrinsic_string_key(vm, (const byte *) name), roots[1]);
+    mal_gc_unroot(&root);
 }
 
 static MalValue ws_event(MalVm *vm, const char *type, MalValue prototype) {
@@ -253,7 +270,20 @@ static void ws_finish(MalVm *vm, MalWebSocket *ws) {
     ws_set_slot(vm, roots[0], "readyState", mal_value_from_i32(WS_CLOSED));
     MalAsyncContextScope scope;
     mal_async_context_scope_enter(vm, &scope, context);
-    if (failed) ws_dispatch(vm, roots[0], ws_event(vm, "error", mal_value_new_undefined()));
+    if (failed) {
+        // undici reports a failed connection as an ErrorEvent carrying an empty TypeError.
+        roots[1] = ws_event(vm, "error", ws_error_event_prototype);
+        if (mal_value_is_object(roots[1])) {
+            MalValue empty = ws_ascii(vm, "");
+            MalCompletion error = mal_vm_construct_value(vm, vm->intrinsics[MAL_INTRINSIC_TYPE_ERROR_CONSTRUCTOR], &empty, 1);
+            ws_define(vm, roots[1], "message", ws_ascii(vm, ""));
+            ws_define(vm, roots[1], "filename", ws_ascii(vm, ""));
+            ws_define(vm, roots[1], "lineno", mal_value_from_i32(0));
+            ws_define(vm, roots[1], "colno", mal_value_from_i32(0));
+            ws_define(vm, roots[1], "error", error.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : error.value);
+            ws_dispatch(vm, roots[0], roots[1]);
+        }
+    }
     roots[1] = ws_event(vm, "close", ws_close_event_prototype);
     if (mal_value_is_object(roots[1])) {
         ws_define(vm, roots[1], "wasClean", mal_value_new_boolean(clean));
@@ -270,7 +300,9 @@ static void ws_fail(MalVm *vm, MalWebSocket *ws, u16 code) {
     if (code != 0 && ws->handshake_done) ws_send_close(ws, code, nullptr, 0);
     ws->failed = true;
     ws_set_slot(vm, ws->receiver, "readyState", mal_value_from_i32(WS_CLOSING));
-    if (ws->operation != 0) (void) mal_tcp_cancel(mal_host(vm), ws->operation);
+    if (ws->operation != 0) {
+        (void) (ws->resolving ? mal_dns_cancel(mal_host(vm), ws->operation) : mal_tcp_cancel(mal_host(vm), ws->operation));
+    }
 }
 
 static MalValue ws_header_value(const char *head, const char *name, char *out, usize capacity) {
@@ -516,7 +548,36 @@ static bool mal_web_websocket_drain(MalVm *vm) {
     void *data = mal_host_task_take_data(&host->tasks, &task);
     MalAsyncContextScope scope;
     mal_async_context_scope_enter(vm, &scope, ws->async_context);
-    if (task.kind == MAL_HOST_TASK_PROGRESS) {
+    if (ws->resolving && task.kind == MAL_HOST_TASK_TERMINAL) {
+        // Like Node's autoSelectFamily fallback order, an IPv4 answer is tried before IPv6.
+        MalDnsResult *result = data;
+        struct sockaddr_storage address;
+        socklen_t length = 0;
+        for (int pass = 0; pass < 2 && length == 0 && result != nullptr; pass++) {
+            for (usize i = 0; i < mal_dns_result_address_count(result); i++) {
+                socklen_t candidate_length = 0;
+                const struct sockaddr *candidate = mal_dns_result_address(result, i, &candidate_length);
+                if (candidate == nullptr || candidate_length > sizeof address) continue;
+                if (pass == 0 && candidate->sa_family != AF_INET) continue;
+                memcpy(&address, candidate, candidate_length);
+                length = candidate_length;
+                break;
+            }
+        }
+        if (result != nullptr) mal_dns_result_release(result);
+        ws->resolving = false;
+        ws->operation = 0;
+        if (length > 0) {
+            if (address.ss_family == AF_INET) ((struct sockaddr_in *) &address)->sin_port = htons(ws->port);
+            else ((struct sockaddr_in6 *) &address)->sin6_port = htons(ws->port);
+        }
+        if (length == 0 || task.result != MAL_HOST_TERMINAL_OK
+            || !mal_tcp_connect_address_start(host, (struct sockaddr *) &address, length, &ws->operation)) {
+            ws->operation = 0;
+            ws->failed = true;
+            ws_finish(vm, ws);
+        }
+    } else if (task.kind == MAL_HOST_TASK_PROGRESS) {
         MalTcpProgress *progress = data;
         if (progress->kind == MAL_TCP_CONNECTED) {
             (void) mal_tcp_read_resume(host, ws->operation);
@@ -698,6 +759,12 @@ static MalValue mal_web_websocket_constructor(
     ws_set_slot(vm, roots[3], "protocol", ws_ascii(vm, ""));
     ws_set_slot(vm, roots[3], "extensions", ws_ascii(vm, ""));
     ws_set_slot(vm, roots[3], "binaryType", ws_ascii(vm, "blob"));
+    {
+        MalValue origin = mal_value_new_undefined();
+        if (mal_vm_get_property(vm, roots[2], mal_intrinsic_string_key(vm, (const byte *) "origin"), &origin)) {
+            ws_set_slot(vm, roots[3], "origin", origin);
+        }
+    }
     MalWebSocket *ws = calloc(1, sizeof(*ws));
     if (ws == nullptr) { mal_vm_throw_allocation_error(vm); goto done; }
     ws->vm = vm;
@@ -709,13 +776,15 @@ static MalValue mal_web_websocket_constructor(
     const char *host = hostname == nullptr ? "" : hostname;
     usize host_length = strlen(host);
     // URL hostnames keep IPv6 brackets; the socket wants the bare address.
-    char numeric[64];
+    char numeric[256];
     if (host_length >= 2 && host[0] == '[' && host_length - 2 < sizeof numeric) {
         memcpy(numeric, host + 1, host_length - 2);
         numeric[host_length - 2] = '\0';
     } else {
-        snprintf(numeric, sizeof numeric, "%s", strcmp(host, "localhost") == 0 ? "127.0.0.1" : host);
+        snprintf(numeric, sizeof numeric, "%s", host);
     }
+    struct in6_addr parsed_address;
+    bool literal = inet_pton(AF_INET, numeric, &parsed_address) == 1 || inet_pton(AF_INET6, numeric, &parsed_address) == 1;
     ws->server_name = strdup(host);
     byte nonce[16];
     char key[25];
@@ -744,7 +813,13 @@ static MalValue mal_web_websocket_constructor(
     ws->next = ws_list;
     ws_list = ws;
     u16 port_number = default_port ? (secure ? 443 : 80) : (u16) strtoul(port, nullptr, 10);
-    if (ws->request == nullptr || !mal_tcp_connect_start(mal_host(vm), numeric, port_number, &ws->operation)) {
+    ws->port = port_number;
+    ws->resolving = !literal;
+    bool started = ws->request != nullptr
+        && (literal ? mal_tcp_connect_start(mal_host(vm), numeric, port_number, &ws->operation)
+                    : mal_dns_start(mal_host(vm), numeric, nullptr, &ws->operation) == MAL_DNS_START_OK);
+    if (!started) {
+        ws->resolving = false;
         // Node reports even an immediate failure asynchronously, so it goes through the task queue.
         ws->failed = true;
         MalHostTasks *tasks = &mal_host(vm)->tasks;
@@ -930,7 +1005,45 @@ static MalValue mal_web_websocket_close(
     return mal_value_new_undefined();
 }
 
-/* MessageEvent/CloseEvent: Events whose init fields become own properties. */
+typedef struct WsEventField {
+    const char *name;
+    i32 default_kind; /* 0 null, 1 "", 2 0, 3 false, 4 [], 5 undefined */
+} WsEventField;
+
+static const WsEventField WS_MESSAGE_FIELDS[] = {
+    {"data", 0}, {"origin", 1}, {"lastEventId", 1}, {"source", 0}, {"ports", 4},
+};
+static const WsEventField WS_CLOSE_FIELDS[] = {{"wasClean", 3}, {"code", 2}, {"reason", 1}};
+static const WsEventField WS_ERROR_FIELDS[] = {
+    {"message", 1}, {"filename", 1}, {"lineno", 2}, {"colno", 2}, {"error", 5},
+};
+
+static const WsEventField *ws_event_fields(MalValue kind, usize *count) {
+    MalString *name = mal_value_is_string(kind) ? mal_value_to_string(kind) : nullptr;
+    if (name != nullptr && mal_string_equals_ascii(name, "close")) {
+        *count = countof(WS_CLOSE_FIELDS);
+        return WS_CLOSE_FIELDS;
+    }
+    if (name != nullptr && mal_string_equals_ascii(name, "error")) {
+        *count = countof(WS_ERROR_FIELDS);
+        return WS_ERROR_FIELDS;
+    }
+    *count = countof(WS_MESSAGE_FIELDS);
+    return WS_MESSAGE_FIELDS;
+}
+
+static MalValue ws_field_default(MalVm *vm, i32 kind) {
+    switch (kind) {
+    case 0: return mal_value_new_null();
+    case 1: return ws_ascii(vm, "");
+    case 2: return mal_value_from_i32(0);
+    case 3: return mal_value_new_boolean(false);
+    case 4: return mal_value_from_array_object(mal_intrinsic_new_array(vm, 0));
+    default: return mal_value_new_undefined();
+    }
+}
+
+/* MessageEvent, CloseEvent and ErrorEvent: Events whose init dictionary fills the getter fields. */
 static MalValue mal_web_websocket_event_constructor(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
     (void) receiver;
@@ -942,47 +1055,147 @@ static MalValue mal_web_websocket_event_constructor(
     MalCompletion made = mal_vm_construct_value_with_target(
         vm, vm->intrinsics[MAL_INTRINSIC_EVENT_CONSTRUCTOR], args, argc > 2 ? 2 : argc, new_target);
     if (made.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
-    MalValue roots[] = {made.value, argc > 1 ? args[1] : mal_value_new_undefined(), mal_value_new_undefined()};
+    MalValue roots[] = {made.value, argc > 1 ? args[1] : mal_value_new_undefined(), mal_value_new_undefined(), kind};
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
-    bool close = mal_value_is_string(kind) && mal_string_equals_ascii(mal_value_to_string(kind), "close");
-    static const char *const message_fields[] = {"data", "origin", "lastEventId", "source", "ports"};
-    static const char *const close_fields[] = {"wasClean", "code", "reason"};
-    const char *const *fields = close ? close_fields : message_fields;
-    usize count = close ? countof(close_fields) : countof(message_fields);
+    usize count;
+    const WsEventField *fields = ws_event_fields(roots[3], &count);
     for (usize i = 0; i < count; i++) {
         roots[2] = mal_value_new_undefined();
-        if (mal_value_is_object(roots[1])) {
-            (void) mal_vm_get_property(vm, roots[1], mal_intrinsic_string_key(vm, (const byte *) fields[i]), &roots[2]);
+        if (mal_value_is_object(roots[1])
+            && !mal_vm_get_property(vm, roots[1], mal_intrinsic_string_key(vm, (const byte *) fields[i].name), &roots[2])) {
+            mal_gc_unroot(&root);
+            return mal_value_new_undefined();
         }
         if (mal_value_is_undefined(roots[2])) {
-            roots[2] = close ? (i == 0 ? mal_value_new_boolean(false) : i == 1 ? mal_value_from_i32(0) : ws_ascii(vm, ""))
-                : i == 0 ? mal_value_new_null() : i < 3 ? ws_ascii(vm, "") : i == 3 ? mal_value_new_null()
-                : mal_value_from_array_object(mal_intrinsic_new_array(vm, 0));
-        } else if (close && i == 0) {
+            roots[2] = ws_field_default(vm, fields[i].default_kind);
+        } else if (fields[i].default_kind == 3) {
             roots[2] = mal_value_new_boolean(mal_value_is_truthy(roots[2]));
+        } else if (fields[i].default_kind == 1 && !mal_value_is_string(roots[2])) {
+            MalString *text = mal_ops_to_string(&vm->heap, roots[2]);
+            if (text == nullptr || vm->completion.kind == MAL_COMPLETION_THROW) { mal_gc_unroot(&root); return mal_value_new_undefined(); }
+            roots[2] = mal_value_from_string(text);
+        } else if (fields[i].default_kind == 2 && !mal_ops_is_number(roots[2])) {
+            roots[2] = mal_value_from_f64(mal_ops_to_number(roots[2]));
         }
-        ws_define(vm, roots[0], fields[i], roots[2]);
+        ws_define(vm, roots[0], fields[i].name, roots[2]);
     }
     mal_gc_unroot(&root);
     return roots[0];
 }
 
-static MalValue ws_event_class(MalVm *vm, const char *name, const char *kind) {
+static MalValue mal_web_websocket_event_field(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) args, (void) argc, (void) new_target;
+    MalValue name = mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 0);
+    MalValue fields = ws_slots(receiver);
+    if (!mal_value_is_object(fields)) {
+        mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Illegal invocation", "ERR_INVALID_THIS");
+        return mal_value_new_undefined();
+    }
+    MalPropertyLookup lookup = mal_object_get_own(mal_value_to_object(fields), mal_key_from_value(name));
+    return lookup.present ? lookup.desc.value : mal_value_new_undefined();
+}
+
+static MalValue ws_event_class(MalVm *vm, const char *name, const char *kind, i32 length) {
     MalValue roots[] = {mal_value_from_object(mal_object_new(&vm->heap,
-        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_EVENT_PROTOTYPE]))), ws_ascii(vm, kind), mal_value_new_undefined()};
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_EVENT_PROTOTYPE]))), ws_ascii(vm, kind), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined()};
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
     MalNativeFunctionObject *constructor = mal_native_function_object_new_with_slots_arity(&vm->heap,
-        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_EVENT_CONSTRUCTOR]), mal_intrinsic_ascii(vm, (const byte *) name), 1,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_EVENT_CONSTRUCTOR]), mal_intrinsic_ascii(vm, (const byte *) name), length,
         mal_web_websocket_event_constructor, &roots[1], 1);
     mal_native_function_object_set_constructor(constructor);
     roots[2] = mal_value_from_native_function_object(constructor);
     mal_intrinsic_define_data(vm, (MalObject *) constructor, (const byte *) "prototype", roots[0], MAL_PROPERTY_NONE);
     mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]), (const byte *) "constructor", roots[2],
         MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    usize count;
+    const WsEventField *fields = ws_event_fields(roots[1], &count);
+    for (usize i = 0; i < count; i++) {
+        char getter_name[48];
+        snprintf(getter_name, sizeof getter_name, "get %s", fields[i].name);
+        roots[3] = ws_ascii(vm, fields[i].name);
+        roots[4] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(&vm->heap,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+            mal_intrinsic_ascii(vm, (const byte *) getter_name), 0, mal_web_websocket_event_field, &roots[3], 1));
+        MalPropertyDesc desc = mal_intrinsic_accessor_desc(roots[4], mal_value_new_undefined(),
+            MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
+        mal_object_define_own(mal_value_to_object(roots[0]), mal_key_from_value(roots[3]), &desc);
+    }
     mal_gc_unroot(&root);
     return roots[2];
+}
+
+static MalValue ws_get_constructor(MalVm *vm, MalValue prototype) {
+    if (!mal_value_is_object(prototype)) return mal_value_new_undefined();
+    MalPropertyLookup lookup = mal_object_get_own(mal_value_to_object(prototype),
+        mal_intrinsic_string_key(vm, (const byte *) "constructor"));
+    return lookup.present ? lookup.desc.value : mal_value_new_undefined();
+}
+
+static void ws_install_roots(void) {
+    if (!ws_roots_installed) {
+        ws_slots_symbol = mal_value_new_undefined();
+        ws_message_event_prototype = mal_value_new_undefined();
+        ws_close_event_prototype = mal_value_new_undefined();
+        ws_error_event_prototype = mal_value_new_undefined();
+        mal_gc_register_root_source(ws_scan_roots, nullptr);
+        mal_host_register_macrotask_drain(mal_web_websocket_drain, false);
+        ws_roots_installed = true;
+    }
+}
+
+/* MessageEvent, CloseEvent and ErrorEvent, created once and shared by WebSocket and MessagePort. */
+static bool ws_event_classes(MalVm *vm) {
+    if (!mal_value_is_object(vm->intrinsics[MAL_INTRINSIC_EVENT_CONSTRUCTOR])
+        || !mal_value_is_object(vm->intrinsics[MAL_INTRINSIC_EVENT_PROTOTYPE])) {
+        return false;
+    }
+    ws_install_roots();
+    if (!mal_value_is_symbol(ws_slots_symbol)) ws_slots_symbol = mal_value_from_symbol(mal_symbol_new_private(&vm->heap));
+    if (mal_value_is_object(ws_message_event_prototype)) return true;
+    MalValue roots[] = {mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    roots[0] = ws_event_class(vm, "MessageEvent", "message", 1);
+    roots[1] = ws_event_class(vm, "CloseEvent", "close", 1);
+    roots[2] = ws_event_class(vm, "ErrorEvent", "error", 2);
+    ws_message_event_prototype = mal_vm_function_prototype(vm, roots[0]);
+    ws_close_event_prototype = mal_vm_function_prototype(vm, roots[1]);
+    ws_error_event_prototype = mal_vm_function_prototype(vm, roots[2]);
+    MalValue global = vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS];
+    static const char *const names[] = {"MessageEvent", "CloseEvent", "ErrorEvent"};
+    for (usize i = 0; i < countof(names); i++) {
+        if (mal_value_is_object(global)) {
+            mal_intrinsic_define_data(vm, mal_value_to_object(global), (const byte *) names[i], roots[i],
+                MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+        }
+    }
+    mal_gc_unroot(&root);
+    return true;
+}
+
+MalValue mal_web_message_event_new(
+    MalVm *vm, const char *type, MalValue data, MalValue ports, MalValue source) {
+    MalValue roots[] = {data, ports, source, mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    if (!ws_event_classes(vm)) {
+        mal_gc_unroot(&root);
+        return mal_value_new_undefined();
+    }
+    roots[3] = ws_event(vm, type, ws_message_event_prototype);
+    if (mal_value_is_object(roots[3])) {
+        ws_define(vm, roots[3], "data", roots[0]);
+        ws_define(vm, roots[3], "origin", ws_ascii(vm, ""));
+        ws_define(vm, roots[3], "lastEventId", ws_ascii(vm, ""));
+        ws_define(vm, roots[3], "source", roots[2]);
+        ws_define(vm, roots[3], "ports", roots[1]);
+    }
+    mal_gc_unroot(&root);
+    return roots[3];
 }
 
 void mal_web_websocket_install(MalVm *vm, MalObject *module) {
@@ -995,15 +1208,7 @@ void mal_web_websocket_install(MalVm *vm, MalObject *module) {
     for (usize i = 0; i < countof(required); i++) {
         if (!mal_value_is_object(vm->intrinsics[required[i]])) return;
     }
-    if (!ws_roots_installed) {
-        ws_slots_symbol = mal_value_new_undefined();
-        ws_message_event_prototype = mal_value_new_undefined();
-        ws_close_event_prototype = mal_value_new_undefined();
-        mal_gc_register_root_source(ws_scan_roots, nullptr);
-        mal_host_register_macrotask_drain(mal_web_websocket_drain, false);
-        ws_roots_installed = true;
-    }
-    if (!mal_value_is_symbol(ws_slots_symbol)) ws_slots_symbol = mal_value_from_symbol(mal_symbol_new_private(&vm->heap));
+    if (!ws_event_classes(vm)) return;
     MalValue roots[] = {mal_value_from_object(mal_object_new(&vm->heap,
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_EVENT_TARGET_PROTOTYPE]))), mal_value_new_undefined(),
         mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined()};
@@ -1063,16 +1268,16 @@ void mal_web_websocket_install(MalVm *vm, MalObject *module) {
             MAL_PROPERTY_ENUMERABLE);
         mal_intrinsic_define_data(vm, prototype, (const byte *) states[i], mal_value_from_i32((i32) i), MAL_PROPERTY_ENUMERABLE);
     }
-    roots[2] = ws_event_class(vm, "MessageEvent", "message");
-    ws_message_event_prototype = mal_vm_function_prototype(vm, roots[2]);
-    roots[3] = ws_event_class(vm, "CloseEvent", "close");
-    ws_close_event_prototype = mal_vm_function_prototype(vm, roots[3]);
+    roots[2] = ws_get_constructor(vm, ws_message_event_prototype);
+    roots[3] = ws_get_constructor(vm, ws_close_event_prototype);
+    roots[4] = ws_get_constructor(vm, ws_error_event_prototype);
     MalPropertyFlags visible = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE;
     MalValue global = vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS];
-    static const char *const names[] = {"WebSocket", "MessageEvent", "CloseEvent"};
-    MalValue values[] = {roots[1], roots[2], roots[3]};
+    static const char *const names[] = {"WebSocket", "MessageEvent", "CloseEvent", "ErrorEvent"};
+    MalValue values[] = {roots[1], roots[2], roots[3], roots[4]};
     for (usize i = 0; i < countof(names); i++) {
-        mal_intrinsic_define_data(vm, module, (const byte *) names[i], values[i], visible);
+        // Node 26's node:http exports all but ErrorEvent, which is only a global.
+        if (i < 3) mal_intrinsic_define_data(vm, module, (const byte *) names[i], values[i], visible);
         if (mal_value_is_object(global)) {
             mal_intrinsic_define_data(vm, mal_value_to_object(global), (const byte *) names[i], values[i],
                 MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);

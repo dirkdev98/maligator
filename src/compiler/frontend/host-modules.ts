@@ -93,11 +93,12 @@ export const WORKER_THREADS_INSTALLER_SYMBOL = hostInstallerSymbol("node:worker_
 /** The node:http installer, which also defines Node's WebSocket globals. */
 export const HTTP_INSTALLER_SYMBOL = hostInstallerSymbol("node:http");
 
-/** Free WebSocket globals that node:http defines, as Node 26 exposes both. */
+/** Free WebSocket globals that node:http defines; Node 26 exports all but ErrorEvent from it too. */
 export const WEBSOCKET_GLOBALS: ReadonlyArray<string> = [
 	"WebSocket",
 	"MessageEvent",
 	"CloseEvent",
+	"ErrorEvent",
 ];
 
 /** Free messaging globals that node:worker_threads defines. */

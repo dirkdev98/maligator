@@ -22,6 +22,7 @@
 #include "worker_manifest.h"
 #if MAL_NODE
 #include "node_module.h"
+#include "web_websocket.h"
 #endif
 #include "gc.h"
 #include "gc_process.h"
@@ -1464,6 +1465,25 @@ static MalValue message_event_new(MalVm *vm, const char *type, MalValue data, Ma
     MalValue roots[] = {data, target, mal_value_new_undefined(), ports};
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
+#if MAL_NODE
+    // Node delivers port messages as MessageEvent instances whose fields are prototype getters.
+    if (strcmp(type, "close") != 0) {
+        if (!mal_value_is_object(roots[3])) {
+            roots[3] = mal_value_from_array_object(mal_array_object_new_from_values(
+                &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]), &roots[3], 0));
+        }
+        mal_object_set_integrity_level(mal_value_to_object(roots[3]), true);
+        roots[2] = mal_web_message_event_new(vm, type, roots[0], roots[3], mal_value_new_null());
+        if (mal_value_is_object(roots[2])) {
+            MalObject *event = mal_value_to_object(roots[2]);
+            mal_intrinsic_define_data(vm, event, (const byte *) "target", roots[1], MAL_PROPERTY_ENUMERABLE);
+            mal_intrinsic_define_data(vm, event, (const byte *) "currentTarget", roots[1], MAL_PROPERTY_ENUMERABLE);
+            MalValue made = roots[2];
+            mal_gc_unroot(&root);
+            return made;
+        }
+    }
+#endif
     roots[2] = mal_event_new(vm, type, true);
     MalObject *event = mal_value_to_object(roots[2]);
     mal_intrinsic_define_data(vm, event, (const byte *) "type", str_value(vm, type), MAL_PROPERTY_ENUMERABLE);
