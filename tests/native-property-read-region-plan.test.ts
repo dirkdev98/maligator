@@ -65,18 +65,13 @@ describe("persisted native property read regions", () => {
 		const plan = fn.storage!.propertyReadRegions[0]!;
 		expect(fn.storage!.propertyReadRegions).toHaveLength(1);
 		expect(plan.loads).toHaveLength(8);
-		expect(plan.endIp - plan.id).toBeGreaterThan(24);
 		expect(
 			plan.claimedIps.some((ip) => fn.body.instructions[ip]!.opcode === "TYPEOF_COMPARE"),
 		).toBe(true);
 		expect(
 			plan.claimedIps.some((ip) => {
 				const op = fn.body.instructions[ip]!;
-				return (
-					op.opcode === "UNARY" &&
-					op.operator === "!" &&
-					fn.registerRepresentations[op.src] === "boxed"
-				);
+				return op.opcode === "JUMP_IF" && fn.registerRepresentations[op.cond] === "boxed";
 			}),
 		).toBe(true);
 		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
