@@ -1128,7 +1128,7 @@ remains a Maligator extension and does not count as global fetch conformance.
       Exercise active-child cleanup in embedded VM teardown on a Linux host.
 
 - [ ] Fill the remaining Node 26 module gaps: fs.watch/watchFile/unwatchFile,
-      fs.cp/cpSync, fs.glob/globSync, fs.openAsBlob and mkdtempDisposableSync;
+      fs.openAsBlob and mkdtempDisposableSync, readdir's `encoding: "buffer"`;
       https and http2 servers over net.Server, its Unix-path listen, allowHalfOpen
       and named-host lookup, dgram, and the WebSocket client global; crypto
       asymmetric KeyObjects, sign/verify, key generation, X509Certificate,

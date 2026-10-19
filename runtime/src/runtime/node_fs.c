@@ -5,9 +5,11 @@
 #include <errno.h>
 #include <limits.h>
 #include <math.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "ascii.h"
 #include "async_context.h"
@@ -1608,6 +1610,8 @@ static MalValue node_fs_utimes_sync(
 
 static MalValue node_fs_directory_entries(
     MalVm *vm, char *path, bool with_types, MalObject *dirent_proto, const char *syscall);
+static MalValue node_fs_directory_entries_recursive(
+    MalVm *vm, char *path, bool with_types, MalObject *dirent_proto);
 
 static MalValue node_fs_readdir_sync(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
@@ -1618,17 +1622,112 @@ static MalValue node_fs_readdir_sync(
         return mal_value_new_undefined();
     }
     bool with_types = false;
+    bool recursive = false;
     if (argc >= 2 && mal_value_is_object(args[1])) {
         MalValue wft;
+        MalValue recursive_option;
         if (!mal_vm_get_property(
-                vm, args[1], mal_intrinsic_string_key(vm, (const byte *) "withFileTypes"), &wft)) {
+                vm, args[1], mal_intrinsic_string_key(vm, (const byte *) "withFileTypes"), &wft)
+            || !mal_vm_get_property(vm, args[1], mal_intrinsic_string_key(vm, "recursive"),
+                &recursive_option)) {
             free(path);
             return mal_value_new_undefined();
         }
         with_types = mal_value_is_truthy(wft);
+        recursive = mal_value_is_truthy(recursive_option);
+    }
+    if (recursive) {
+        return node_fs_directory_entries_recursive(vm, path, with_types, node_fs_slot_proto(vm, callee));
     }
     return node_fs_directory_entries(vm, path, with_types, node_fs_slot_proto(vm, callee),
         "scandir");
+}
+
+static char *node_fs_cp_join(const char *left, const char *right);
+static void node_fs_array_push(MalValue array, MalValue value);
+
+/* Node's readdirSyncRecursive: breadth-first, names relative to `path` (owned), descending
+ * through symlinked directories too. */
+static MalValue node_fs_directory_entries_recursive(
+    MalVm *vm, char *path, bool with_types, MalObject *dirent_proto) {
+    usize capacity = 16;
+    char **queue = malloc(capacity * sizeof(char *));
+    usize queued = 0;
+    MalValue roots[] = {mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    bool ok = queue != nullptr && (queue[queued++] = strdup("")) != nullptr;
+    if (ok) roots[0] = mal_value_from_array_object(mal_intrinsic_new_array(vm, 0));
+    else mal_vm_throw_allocation_error(vm);
+    for (usize head = 0; ok && head < queued; head++) {
+        char *relative = queue[head];
+        char *directory = relative[0] == '\0' ? strdup(path) : node_fs_cp_join(path, relative);
+        MalPosixDirent *entries = nullptr;
+        usize count = 0;
+        int err = directory == nullptr ? ENOMEM : mal_posix_fs_readdir(directory, &entries, &count);
+        if (err != 0) {
+            if (err == ENOMEM) mal_vm_throw_allocation_error(vm);
+            else node_fs_throw_errno(vm, err, "scandir", directory);
+            free(directory);
+            ok = false;
+            break;
+        }
+        if (with_types) roots[1] = node_fs_string_from_cstr(vm, directory);
+        for (usize i = 0; ok && i < count; i++) {
+            const char *name = entries[i].name;
+            char *child = relative[0] == '\0' ? strdup(name) : node_fs_cp_join(relative, name);
+            if (child == nullptr) {
+                mal_vm_throw_allocation_error(vm);
+                ok = false;
+                break;
+            }
+            bool is_directory = entries[i].type == MAL_POSIX_FT_DIR;
+            if (with_types) {
+                MalObject *dirent = mal_object_new(&vm->heap, dirent_proto);
+                roots[2] = mal_value_from_object(dirent);
+                roots[3] = node_fs_string_from_cstr(vm, name);
+                mal_intrinsic_define_data(vm, dirent, (const byte *) "name", roots[3], NODE_FS_VISIBLE);
+                mal_intrinsic_define_data(vm, dirent, (const byte *) "parentPath", roots[1], NODE_FS_VISIBLE);
+                mal_intrinsic_define_data(vm, dirent, (const byte *) NODE_FS_TYPE_KEY,
+                    mal_value_from_i32((i32) entries[i].type), MAL_PROPERTY_NONE);
+            } else {
+                roots[2] = node_fs_string_from_cstr(vm, child);
+            }
+            if (entries[i].type == MAL_POSIX_FT_SYMLINK || entries[i].type == MAL_POSIX_FT_OTHER) {
+                char *target = node_fs_cp_join(directory, name);
+                MalPosixStat st;
+                is_directory = target != nullptr && mal_posix_fs_stat(target, &st) == 0
+                    && st.type == MAL_POSIX_FT_DIR;
+                free(target);
+            }
+            node_fs_array_push(roots[0], roots[2]);
+            if (is_directory && queued == capacity) {
+                char **grown = realloc(queue, capacity * 2 * sizeof(char *));
+                if (grown != nullptr) {
+                    queue = grown;
+                    capacity *= 2;
+                }
+            }
+            if (!is_directory) {
+                free(child);
+            } else if (queued < capacity) {
+                queue[queued++] = child;
+            } else {
+                free(child);
+                mal_vm_throw_allocation_error(vm);
+                ok = false;
+            }
+        }
+        mal_posix_fs_free_dirents(entries, count);
+        free(directory);
+    }
+    for (usize i = 0; i < queued; i++) free(queue[i]);
+    free(queue);
+    free(path);
+    MalValue result = ok ? roots[0] : mal_value_new_undefined();
+    mal_gc_unroot(&root);
+    return result;
 }
 
 /* List `path` (owned) as names or Dirents; failures throw with `syscall`. */
@@ -2035,7 +2134,8 @@ static bool node_fs_glob_follows_symlink(MalVm *vm, MalValue patterns, MalValue 
     return false;
 }
 
-static MalValue node_fs_glob_step(MalVm *vm, MalValue state) {
+// The next match, or undefined once the walk is done or has thrown.
+static MalValue node_fs_glob_advance(MalVm *vm, MalValue state) {
     MalValue roots[6] = {state, mal_value_new_undefined(), mal_value_new_undefined(),
         mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined()};
     MalRootSpan root;
@@ -2176,16 +2276,24 @@ static MalValue node_fs_glob_step(MalVm *vm, MalValue state) {
         mal_gc_unroot(&root);
         return mal_value_new_undefined();
     }
-    done = mal_value_is_undefined(value);
-    roots[5] = mal_value_from_object(mal_intrinsic_new_object(vm));
-    mal_intrinsic_define_data(vm, mal_value_to_object(roots[5]), (const byte *) "value", value, NODE_FS_VISIBLE);
-    mal_intrinsic_define_data(vm, mal_value_to_object(roots[5]), (const byte *) "done",
-        mal_value_new_boolean(done), NODE_FS_VISIBLE);
-    if (done) {
+    if (mal_value_is_undefined(value)) {
         mal_array_object_store(mal_value_to_array_object(state), mal_key_index(NODE_FS_GLOB_DONE), mal_value_new_boolean(true));
         mal_array_object_store(mal_value_to_array_object(state), mal_key_index(NODE_FS_GLOB_SEEN), mal_value_new_undefined());
     }
-    MalValue result = roots[5];
+    mal_gc_unroot(&root);
+    return value;
+}
+
+static MalValue node_fs_glob_step(MalVm *vm, MalValue state) {
+    MalValue roots[] = {state, node_fs_glob_advance(vm, state), mal_value_new_undefined()};
+    if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    roots[2] = mal_value_from_object(mal_intrinsic_new_object(vm));
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[2]), (const byte *) "value", roots[1], NODE_FS_VISIBLE);
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[2]), (const byte *) "done",
+        mal_value_new_boolean(mal_value_is_undefined(roots[1])), NODE_FS_VISIBLE);
+    MalValue result = roots[2];
     mal_gc_unroot(&root);
     return result;
 }
@@ -2226,7 +2334,7 @@ static MalValue node_fs_glob_iterator(MalVm *vm, MalValue self, const MalValue *
     return self;
 }
 
-static bool node_fs_glob_patterns(MalVm *vm, MalValue input, MalValue *output) {
+static bool node_fs_glob_patterns(MalVm *vm, MalValue input, MalValue *output, const char *name) {
     if (mal_value_is_string(input)) {
         *output = mal_value_from_array_object(mal_intrinsic_new_array(vm, 1));
         mal_array_object_store(mal_value_to_array_object(*output), mal_key_index(0), input);
@@ -2238,32 +2346,36 @@ static bool node_fs_glob_patterns(MalVm *vm, MalValue input, MalValue *output) {
         for (u32 i = 0; i < length; i++) {
             MalValue pattern;
             if (!mal_vm_get_property(vm, input, mal_key_index(i), &pattern)) return false;
-            if (!mal_value_is_string(pattern)) break;
+            if (!mal_value_is_string(pattern)) {
+                char element[64];
+                snprintf(element, sizeof element, "%s[%u]", name, i);
+                mal_node_throw_invalid_arg_type(vm, element, "of type string", pattern);
+                return false;
+            }
             node_fs_array_push(*output, pattern);
         }
-        if (mal_array_object_length(mal_value_to_array_object(*output)) == length) return true;
+        return true;
     }
-    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Glob patterns must be strings");
+    mal_node_throw_invalid_arg_type(vm, name, "of type string", input);
     return false;
 }
 
-static MalValue node_fs_glob(MalVm *vm, MalValue self, const MalValue *args,
-    i32 argc, MalValue nt, MalValue callee) {
-    (void) self; (void) nt;
+// Validates the patterns and options and returns the walk state, or undefined after a throw.
+static MalValue node_fs_glob_state(MalVm *vm, const MalValue *args, i32 argc, MalValue dirent_proto) {
     MalValue roots[7];
     for (usize i = 0; i < countof(roots); i++) roots[i] = mal_value_new_undefined();
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
     roots[0] = mal_value_from_array_object(mal_intrinsic_new_array(vm, NODE_FS_GLOB_STATE_COUNT));
     roots[1] = argc > 0 ? args[0] : mal_value_new_undefined();
-    if (!node_fs_glob_patterns(vm, roots[1], &roots[2])) goto failed;
+    if (!node_fs_glob_patterns(vm, roots[1], &roots[2], "patterns")) goto failed;
     mal_array_object_store(mal_value_to_array_object(roots[0]), mal_key_index(NODE_FS_GLOB_PATTERNS), roots[2]);
     roots[3] = node_fs_string_from_cstr(vm, ".");
     roots[4] = mal_value_new_undefined();
     roots[5] = mal_value_new_boolean(false);
     if (argc > 1 && !mal_value_is_undefined(args[1])) {
         if (!mal_value_is_object(args[1])) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Glob options must be an object");
+            mal_node_throw_invalid_arg_type(vm, "options", "of type object", args[1]);
             goto failed;
         }
         if (!mal_vm_get_property(vm, args[1], mal_intrinsic_string_key(vm, "cwd"), &roots[6])) goto failed;
@@ -2277,11 +2389,11 @@ static MalValue node_fs_glob(MalVm *vm, MalValue self, const MalValue *args,
             || !mal_vm_get_property(vm, args[1], mal_intrinsic_string_key(vm, "withFileTypes"), &roots[5])) goto failed;
         if (!mal_value_is_undefined(roots[4]) && !mal_value_is_callable(roots[4])) {
             if (!mal_value_is_array_object(roots[4])) {
-                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Glob exclude must be a function or string array");
+                mal_node_throw_invalid_arg_type(vm, "options.exclude", "of type function or string[]", roots[4]);
                 goto failed;
             }
             roots[6] = roots[4];
-            if (!node_fs_glob_patterns(vm, roots[6], &roots[4])) goto failed;
+            if (!node_fs_glob_patterns(vm, roots[6], &roots[4], "options.exclude")) goto failed;
         }
     }
     roots[3] = mal_node_path_resolve_path(vm, roots[3]);
@@ -2314,8 +2426,24 @@ static MalValue node_fs_glob(MalVm *vm, MalValue self, const MalValue *args,
     }
     roots[3] = mal_value_from_object(mal_intrinsic_new_object(vm));
     mal_array_object_store(mal_value_to_array_object(roots[0]), mal_key_index(NODE_FS_GLOB_SEEN), roots[3]);
-    MalValue dirent_proto = mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 0);
     mal_array_object_store(mal_value_to_array_object(roots[0]), mal_key_index(NODE_FS_GLOB_DIRENT_PROTO), dirent_proto);
+    MalValue state = roots[0];
+    mal_gc_unroot(&root);
+    return state;
+failed:
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+static MalValue node_fs_glob(MalVm *vm, MalValue self, const MalValue *args,
+    i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) nt;
+    MalValue roots[3] = {node_fs_glob_state(vm, args, argc,
+        mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 0)),
+        mal_value_new_undefined(), mal_value_new_undefined()};
+    if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
     roots[1] = mal_value_from_object(mal_object_new(&vm->heap,
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ASYNC_ITERATOR_PROTOTYPE])));
     MalObject *fn_proto = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
@@ -2329,9 +2457,547 @@ static MalValue node_fs_glob(MalVm *vm, MalValue self, const MalValue *args,
     MalValue result = roots[1];
     mal_gc_unroot(&root);
     return result;
-failed:
+}
+
+// The remaining matches as an array, or undefined after a throw.
+static MalValue node_fs_glob_collect(MalVm *vm, MalValue state) {
+    MalValue roots[] = {state, mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    roots[1] = mal_value_from_array_object(mal_intrinsic_new_array(vm, 0));
+    for (;;) {
+        roots[2] = node_fs_glob_advance(vm, roots[0]);
+        if (mal_value_is_undefined(roots[2])) break;
+        node_fs_array_push(roots[1], roots[2]);
+    }
+    MalValue result = vm->completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : roots[1];
     mal_gc_unroot(&root);
-    return mal_value_new_undefined();
+    return result;
+}
+
+static MalValue node_fs_glob_sync(MalVm *vm, MalValue self, const MalValue *args,
+    i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) nt;
+    MalValue state = node_fs_glob_state(vm, args, argc,
+        mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 0));
+    if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
+    return node_fs_glob_collect(vm, state);
+}
+
+// fs.cp walks an explicit work stack so the asynchronous form can suspend on a filter promise.
+typedef enum NodeFsCpPhase {
+    NODE_FS_CP_CHECK,
+    NODE_FS_CP_DIR_FINISH,
+} NodeFsCpPhase;
+
+typedef struct NodeFsCpItem {
+    char *src;
+    char *dest;
+    u32 mode;
+    u8 phase;
+    bool top;
+    bool set_mode;
+} NodeFsCpItem;
+
+typedef enum NodeFsCpStatus {
+    NODE_FS_CP_DONE,
+    NODE_FS_CP_FAILED,
+    NODE_FS_CP_FILTER,
+} NodeFsCpStatus;
+
+typedef struct NodeFsCp {
+    NodeFsCpItem *items;
+    usize count;
+    usize capacity;
+    u32 mode;
+    bool dereference;
+    bool error_on_exist;
+    bool force;
+    bool preserve_timestamps;
+    bool recursive;
+    bool verbatim_symlinks;
+    // cpSync keeps Node's native path checks and their plain coded errors.
+    bool sync;
+    bool filter;
+    bool filter_answered;
+    bool filter_result;
+    int error;
+    const char *syscall;
+    // A coded failure when set; otherwise `error` is a plain errno failure.
+    const char *code;
+    // The SystemError prefix, or nullptr for a plain Error carrying only `code`.
+    const char *prefix;
+    const char *info_code;
+    char *message;
+    char *path;
+    char *dest;
+} NodeFsCp;
+
+static void node_fs_cp_free(NodeFsCp *cp) {
+    if (cp == nullptr) return;
+    for (usize i = 0; i < cp->count; i++) {
+        free(cp->items[i].src);
+        free(cp->items[i].dest);
+    }
+    free(cp->items);
+    free(cp->message);
+    free(cp->path);
+    free(cp->dest);
+    free(cp);
+}
+
+static NodeFsCpStatus node_fs_cp_errno(
+    NodeFsCp *cp, int err, const char *syscall, const char *path, const char *dest) {
+    cp->error = err;
+    cp->syscall = syscall;
+    cp->path = path == nullptr ? nullptr : strdup(path);
+    cp->dest = dest == nullptr ? nullptr : strdup(dest);
+    return NODE_FS_CP_FAILED;
+}
+
+static NodeFsCpStatus node_fs_cp_fail(NodeFsCp *cp, const char *code, const char *prefix,
+    const char *info_code, int err, const char *path, const char *format, ...) {
+    va_list args;
+    va_start(args, format);
+    int length = vsnprintf(nullptr, 0, format, args);
+    va_end(args);
+    cp->message = length < 0 ? nullptr : malloc((usize) length + 1);
+    if (cp->message != nullptr) {
+        va_start(args, format);
+        vsnprintf(cp->message, (usize) length + 1, format, args);
+        va_end(args);
+    }
+    cp->code = code;
+    cp->prefix = prefix;
+    cp->info_code = info_code;
+    cp->error = err;
+    cp->syscall = "cp";
+    cp->path = path == nullptr ? nullptr : strdup(path);
+    return NODE_FS_CP_FAILED;
+}
+
+static bool node_fs_cp_push(NodeFsCp *cp, char *src, char *dest, NodeFsCpPhase phase,
+    bool top, u32 mode, bool set_mode) {
+    if (src != nullptr && dest != nullptr && cp->count == cp->capacity) {
+        usize capacity = cp->capacity == 0 ? 16 : cp->capacity * 2;
+        NodeFsCpItem *items = realloc(cp->items, capacity * sizeof(NodeFsCpItem));
+        if (items != nullptr) {
+            cp->items = items;
+            cp->capacity = capacity;
+        }
+    }
+    if (src == nullptr || dest == nullptr || cp->count == cp->capacity) {
+        free(src);
+        free(dest);
+        return false;
+    }
+    cp->items[cp->count++] = (NodeFsCpItem) {
+        .src = src, .dest = dest, .mode = mode, .phase = (u8) phase, .top = top, .set_mode = set_mode};
+    return true;
+}
+
+// path.posix.normalize; `keep_trailing` preserves a trailing separator as normalize does
+// and resolve does not.
+static char *node_fs_cp_normalize(const char *path, bool keep_trailing) {
+    usize length = strlen(path);
+    char *out = malloc(length + 2);
+    if (out == nullptr) return nullptr;
+    bool absolute = length > 0 && path[0] == '/';
+    usize used = 0;
+    usize segments = 0;
+    for (usize i = 0; i < length;) {
+        while (i < length && path[i] == '/') i++;
+        usize start = i;
+        while (i < length && path[i] != '/') i++;
+        usize size = i - start;
+        if (size == 0 || (size == 1 && path[start] == '.')) continue;
+        if (size == 2 && path[start] == '.' && path[start + 1] == '.') {
+            usize last = used;
+            while (last > 0 && out[last - 1] != '/') last--;
+            bool parent = used - last == 2 && out[last] == '.' && out[last + 1] == '.';
+            if (segments > 0 && !parent) {
+                used = last > 0 ? last - 1 : 0;
+                segments--;
+                continue;
+            }
+            if (absolute) continue;
+        }
+        if (used > 0) out[used++] = '/';
+        memcpy(out + used, path + start, size);
+        used += size;
+        if (!(size == 2 && path[start] == '.' && path[start + 1] == '.')) segments++;
+    }
+    if (absolute) {
+        memmove(out + 1, out, used);
+        out[0] = '/';
+        used++;
+    } else if (used == 0) {
+        out[used++] = '.';
+    }
+    if (keep_trailing && length > 0 && path[length - 1] == '/' && out[used - 1] != '/') out[used++] = '/';
+    out[used] = '\0';
+    return out;
+}
+
+static char *node_fs_cp_join(const char *left, const char *right) {
+    usize capacity = strlen(left) + strlen(right) + 2;
+    char *joined = malloc(capacity);
+    if (joined == nullptr) return nullptr;
+    snprintf(joined, capacity, "%s/%s", left, right);
+    char *normalized = node_fs_cp_normalize(joined, true);
+    free(joined);
+    return normalized;
+}
+
+// path.posix.dirname
+static char *node_fs_cp_dirname(const char *path) {
+    usize length = strlen(path);
+    if (length == 0) return strdup(".");
+    usize end = length;
+    while (end > 1 && path[end - 1] == '/') end--;
+    while (end > 0 && path[end - 1] != '/') end--;
+    if (end == 0) return strdup(".");
+    while (end > 1 && path[end - 1] == '/') end--;
+    return strndup(path, end);
+}
+
+// path.posix.resolve(base, path) against the current directory.
+static char *node_fs_cp_resolve(const char *base, const char *path) {
+    if (path[0] == '/') return node_fs_cp_normalize(path, false);
+    char cwd[PATH_MAX];
+    if (base[0] != '/' && getcwd(cwd, sizeof cwd) == nullptr) cwd[0] = '\0';
+    usize capacity = strlen(cwd) + strlen(base) + strlen(path) + 3;
+    char *joined = malloc(capacity);
+    if (joined == nullptr) return nullptr;
+    if (base[0] == '/') snprintf(joined, capacity, "%s/%s", base, path);
+    else snprintf(joined, capacity, "%s/%s/%s", cwd, base, path);
+    char *resolved = node_fs_cp_normalize(joined, false);
+    free(joined);
+    return resolved;
+}
+
+// Node's isSrcSubdir: every resolved segment of src prefixes dest's.
+static bool node_fs_cp_is_subdir(const char *src, const char *dest) {
+    char *a = node_fs_cp_resolve(".", src);
+    char *b = node_fs_cp_resolve(".", dest);
+    bool result = false;
+    if (a != nullptr && b != nullptr) {
+        usize length = strlen(a);
+        result = strcmp(a, "/") == 0
+            || (strncmp(a, b, length) == 0 && (b[length] == '/' || b[length] == '\0'));
+    }
+    free(a);
+    free(b);
+    return result;
+}
+
+static bool node_fs_cp_identical(const MalPosixStat *src, const MalPosixStat *dest) {
+    return dest->ino != 0 && dest->dev != 0 && dest->ino == src->ino && dest->dev == src->dev;
+}
+
+static int node_fs_cp_stat(const NodeFsCp *cp, const char *path, MalPosixStat *out) {
+    return cp->dereference ? mal_posix_fs_stat(path, out) : mal_posix_fs_lstat(path, out);
+}
+
+static NodeFsCpStatus node_fs_cp_set_times(NodeFsCp *cp, const char *src, const char *dest) {
+    MalPosixStat st;
+    int err = mal_posix_fs_stat(src, &st);
+    if (err != 0) return node_fs_cp_errno(cp, err, "stat", src, nullptr);
+    // Node copies the millisecond Date values, not the native nanosecond timestamps.
+    f64 atime = floor(st.atime_ms / 1000.0);
+    f64 mtime = floor(st.mtime_ms / 1000.0);
+    err = mal_posix_fs_utimes(dest, (i64) atime, (i64) llround((st.atime_ms - atime * 1000.0) * 1e6),
+        (i64) mtime, (i64) llround((st.mtime_ms - mtime * 1000.0) * 1e6));
+    if (err != 0) return node_fs_cp_errno(cp, err, "utime", dest, nullptr);
+    return NODE_FS_CP_DONE;
+}
+
+static NodeFsCpStatus node_fs_cp_copy_file(NodeFsCp *cp, const char *src, const char *dest, u32 mode) {
+    int err = mal_posix_fs_copy_file_mode(src, dest, cp->mode);
+    if (err != 0) return node_fs_cp_errno(cp, err, "copyfile", src, dest);
+    if (cp->preserve_timestamps) {
+        if ((mode & 0200) == 0 && (err = mal_posix_fs_chmod(dest, (mode | 0200) & 07777)) != 0) {
+            return node_fs_cp_errno(cp, err, "chmod", dest, nullptr);
+        }
+        if (node_fs_cp_set_times(cp, src, dest) != NODE_FS_CP_DONE) return NODE_FS_CP_FAILED;
+    }
+    err = mal_posix_fs_chmod(dest, mode & 07777);
+    return err == 0 ? NODE_FS_CP_DONE : node_fs_cp_errno(cp, err, "chmod", dest, nullptr);
+}
+
+static NodeFsCpStatus node_fs_cp_exists_error(NodeFsCp *cp, const char *dest) {
+    return node_fs_cp_fail(cp, "ERR_FS_CP_EEXIST", "Target already exists", "EEXIST", EEXIST, dest,
+        "%s already exists", dest);
+}
+
+static NodeFsCpStatus node_fs_cp_dir(NodeFsCp *cp, const char *src, const char *dest,
+    const MalPosixStat *src_stat, bool dest_exists) {
+    if (!dest_exists) {
+        int err = mal_posix_fs_mkdir_mode(dest, false, 0777, nullptr);
+        if (err != 0) return node_fs_cp_errno(cp, err, "mkdir", dest, nullptr);
+        if (!node_fs_cp_push(cp, strdup(src), strdup(dest), NODE_FS_CP_DIR_FINISH, false,
+                src_stat->mode, true)) return node_fs_cp_errno(cp, ENOMEM, "cp", src, nullptr);
+    } else {
+        if (cp->error_on_exist && !cp->force) return node_fs_cp_exists_error(cp, dest);
+        if (cp->preserve_timestamps && !node_fs_cp_push(cp, strdup(src), strdup(dest),
+                NODE_FS_CP_DIR_FINISH, false, 0, false)) return node_fs_cp_errno(cp, ENOMEM, "cp", src, nullptr);
+    }
+    MalPosixDirent *entries;
+    usize count;
+    int err = mal_posix_fs_readdir(src, &entries, &count);
+    if (err != 0) return node_fs_cp_errno(cp, err, "opendir", src, nullptr);
+    bool ok = true;
+    for (usize i = count; ok && i > 0; i--) {
+        ok = node_fs_cp_push(cp, node_fs_cp_join(src, entries[i - 1].name),
+            node_fs_cp_join(dest, entries[i - 1].name), NODE_FS_CP_CHECK, false, 0, false);
+    }
+    mal_posix_fs_free_dirents(entries, count);
+    return ok ? NODE_FS_CP_DONE : node_fs_cp_errno(cp, ENOMEM, "cp", src, nullptr);
+}
+
+static NodeFsCpStatus node_fs_cp_link(NodeFsCp *cp, const char *src, const char *dest, bool dest_exists) {
+    byte *bytes;
+    usize length;
+    int err = mal_posix_fs_readlink(src, &bytes, &length);
+    if (err != 0) return node_fs_cp_errno(cp, err, "readlink", src, nullptr);
+    char *target = strndup((const char *) bytes, length);
+    free(bytes);
+    char *resolved_dest = nullptr;
+    NodeFsCpStatus status = NODE_FS_CP_DONE;
+    if (target == nullptr) return node_fs_cp_errno(cp, ENOMEM, "readlink", src, nullptr);
+    if (!cp->verbatim_symlinks && target[0] != '/') {
+        char *parent = node_fs_cp_dirname(src);
+        char *absolute = parent == nullptr ? nullptr : node_fs_cp_resolve(parent, target);
+        free(parent);
+        free(target);
+        target = absolute;
+        if (target == nullptr) return node_fs_cp_errno(cp, ENOMEM, "readlink", src, nullptr);
+    }
+    if (dest_exists) {
+        err = mal_posix_fs_readlink(dest, &bytes, &length);
+        if (err != 0 && err != EINVAL) {
+            status = node_fs_cp_errno(cp, err, "readlink", dest, nullptr);
+            goto done;
+        }
+    }
+    if (dest_exists && err == 0) {
+        resolved_dest = strndup((const char *) bytes, length);
+        free(bytes);
+        if (resolved_dest != nullptr && resolved_dest[0] != '/') {
+            char *parent = node_fs_cp_dirname(dest);
+            char *absolute = parent == nullptr ? nullptr : node_fs_cp_resolve(parent, resolved_dest);
+            free(parent);
+            free(resolved_dest);
+            resolved_dest = absolute;
+        }
+        if (resolved_dest == nullptr) {
+            status = node_fs_cp_errno(cp, ENOMEM, "readlink", dest, nullptr);
+            goto done;
+        }
+        MalPosixStat st;
+        bool src_is_dir = mal_posix_fs_stat(src, &st) == 0 && st.type == MAL_POSIX_FT_DIR;
+        if (src_is_dir && node_fs_cp_is_subdir(target, resolved_dest)) {
+            status = node_fs_cp_fail(cp, "ERR_FS_CP_EINVAL", "Invalid src or dest", "EINVAL", EINVAL,
+                dest, "cannot copy %s to a subdirectory of self %s", target, resolved_dest);
+            goto done;
+        }
+        bool overwrites_dir = src_is_dir;
+        if (cp->sync) {
+            err = mal_posix_fs_stat(dest, &st);
+            if (err != 0) {
+                status = node_fs_cp_errno(cp, err, "stat", dest, nullptr);
+                goto done;
+            }
+            overwrites_dir = st.type == MAL_POSIX_FT_DIR;
+        }
+        if (overwrites_dir && node_fs_cp_is_subdir(resolved_dest, target)) {
+            status = node_fs_cp_fail(cp, "ERR_FS_CP_SYMLINK_TO_SUBDIRECTORY",
+                "Cannot overwrite symlink in subdirectory of self", "EINVAL", EINVAL, dest,
+                "cannot overwrite %s with %s", resolved_dest, target);
+            goto done;
+        }
+        err = mal_posix_fs_unlink(dest);
+        if (err != 0) {
+            status = node_fs_cp_errno(cp, err, "unlink", dest, nullptr);
+            goto done;
+        }
+    }
+    err = mal_posix_fs_symlink(target, dest);
+    if (err != 0) status = node_fs_cp_errno(cp, err, "symlink", target, dest);
+done:
+    free(target);
+    free(resolved_dest);
+    return status;
+}
+
+// cpSyncCheckPaths: Node's native checks report plain coded Errors, and a source directory
+// is printed with a trailing separator.
+static NodeFsCpStatus node_fs_cp_check_sync(NodeFsCp *cp, const char *src, const char *dest,
+    const MalPosixStat *src_stat, const MalPosixStat *dest_stat, bool dest_exists) {
+    bool src_dir = src_stat->type == MAL_POSIX_FT_DIR;
+    if (dest_exists) {
+        bool dest_dir = dest_stat->type == MAL_POSIX_FT_DIR;
+        if (node_fs_cp_identical(src_stat, dest_stat)) {
+            return node_fs_cp_fail(cp, "ERR_FS_CP_EINVAL", nullptr, nullptr, EINVAL, nullptr,
+                "src and dest cannot be the same %s", dest);
+        }
+        if (src_dir && !dest_dir) {
+            return node_fs_cp_fail(cp, "ERR_FS_CP_DIR_TO_NON_DIR", nullptr, nullptr, EISDIR, nullptr,
+                "Cannot overwrite non-directory %s with directory %s", dest, src);
+        }
+        if (!src_dir && dest_dir) {
+            return node_fs_cp_fail(cp, "ERR_FS_CP_NON_DIR_TO_DIR", nullptr, nullptr, ENOTDIR, nullptr,
+                "Cannot overwrite directory %s with non-directory %s", dest, src);
+        }
+    }
+    if (!src_dir) return NODE_FS_CP_DONE;
+    usize length = strlen(src);
+    bool slash = length > 0 && src[length - 1] == '/';
+    const char *separator = slash ? "" : "/";
+    if (strncmp(dest, src, length) == 0 && (slash || dest[length] == '/')) {
+        return node_fs_cp_fail(cp, "ERR_FS_CP_EINVAL", nullptr, nullptr, EINVAL, nullptr,
+            "Cannot copy %s%s to a subdirectory of self %s", src, separator, dest);
+    }
+    if (!cp->recursive) {
+        return node_fs_cp_fail(cp, "ERR_FS_EISDIR", nullptr, nullptr, EISDIR, nullptr,
+            "Recursive option not enabled, cannot copy a directory: %s%s", src, separator);
+    }
+    return NODE_FS_CP_DONE;
+}
+
+// checkPaths and, for the top-level call, checkParentPaths of Node's promise-based cp.
+static NodeFsCpStatus node_fs_cp_check(NodeFsCp *cp, const char *src, const char *dest,
+    const MalPosixStat *src_stat, const MalPosixStat *dest_stat, bool dest_exists, bool top) {
+    bool src_dir = src_stat->type == MAL_POSIX_FT_DIR;
+    if (dest_exists) {
+        bool dest_dir = dest_stat->type == MAL_POSIX_FT_DIR;
+        if (node_fs_cp_identical(src_stat, dest_stat)) {
+            return node_fs_cp_fail(cp, "ERR_FS_CP_EINVAL", "Invalid src or dest", "EINVAL", EINVAL,
+                dest, "src and dest cannot be the same");
+        }
+        if (src_dir && !dest_dir) {
+            return node_fs_cp_fail(cp, "ERR_FS_CP_DIR_TO_NON_DIR",
+                "Cannot overwrite non-directory with directory", "EISDIR", EISDIR, dest,
+                "cannot overwrite non-directory %s with directory %s", dest, src);
+        }
+        if (!src_dir && dest_dir) {
+            return node_fs_cp_fail(cp, "ERR_FS_CP_NON_DIR_TO_DIR",
+                "Cannot overwrite directory with non-directory", "ENOTDIR", ENOTDIR, dest,
+                "cannot overwrite directory %s with non-directory %s", dest, src);
+        }
+    }
+    if (src_dir && node_fs_cp_is_subdir(src, dest)) {
+        return node_fs_cp_fail(cp, "ERR_FS_CP_EINVAL", "Invalid src or dest", "EINVAL", EINVAL, dest,
+            "cannot copy %s to a subdirectory of self %s", src, dest);
+    }
+    if (!top) return NODE_FS_CP_DONE;
+    char *src_dir_name = node_fs_cp_dirname(src);
+    char *src_parent = src_dir_name == nullptr ? nullptr : node_fs_cp_resolve(".", src_dir_name);
+    free(src_dir_name);
+    char *current = strdup(dest);
+    NodeFsCpStatus status = NODE_FS_CP_DONE;
+    while (src_parent != nullptr && current != nullptr) {
+        char *dir_name = node_fs_cp_dirname(current);
+        char *parent = dir_name == nullptr ? nullptr : node_fs_cp_resolve(".", dir_name);
+        free(dir_name);
+        if (parent == nullptr || strcmp(parent, src_parent) == 0 || strcmp(parent, "/") == 0) {
+            free(parent);
+            break;
+        }
+        MalPosixStat st;
+        int err = mal_posix_fs_stat(parent, &st);
+        if (err == 0 && node_fs_cp_identical(src_stat, &st)) {
+            status = node_fs_cp_fail(cp, "ERR_FS_CP_EINVAL", "Invalid src or dest", "EINVAL", EINVAL,
+                current, "cannot copy %s to a subdirectory of self %s", src, current);
+        } else if (err != 0 && err != ENOENT) {
+            status = node_fs_cp_errno(cp, err, "stat", parent, nullptr);
+        }
+        free(current);
+        current = parent;
+        if (err != 0 || status != NODE_FS_CP_DONE) break;
+    }
+    free(src_parent);
+    free(current);
+    return status;
+}
+
+static NodeFsCpStatus node_fs_cp_entry(NodeFsCp *cp, const char *src, const char *dest, bool top) {
+    const char *stat_syscall = cp->dereference ? "stat" : "lstat";
+    MalPosixStat src_stat;
+    MalPosixStat dest_stat;
+    int err = node_fs_cp_stat(cp, src, &src_stat);
+    if (err != 0) return node_fs_cp_errno(cp, err, stat_syscall, src, nullptr);
+    err = node_fs_cp_stat(cp, dest, &dest_stat);
+    if (err != 0 && err != ENOENT) return node_fs_cp_errno(cp, err, stat_syscall, dest, nullptr);
+    bool dest_exists = err == 0;
+    NodeFsCpStatus status = NODE_FS_CP_DONE;
+    if (cp->sync && top) status = node_fs_cp_check_sync(cp, src, dest, &src_stat, &dest_stat, dest_exists);
+    else if (!cp->sync) status = node_fs_cp_check(cp, src, dest, &src_stat, &dest_stat, dest_exists, top);
+    if (status != NODE_FS_CP_DONE) return status;
+    if (top) {
+        char *parent = node_fs_cp_dirname(dest);
+        if (parent == nullptr) return node_fs_cp_errno(cp, ENOMEM, "mkdir", dest, nullptr);
+        MalPosixStat st;
+        err = mal_posix_fs_stat(parent, &st);
+        if (err == ENOENT) err = mal_posix_fs_mkdir_mode(parent, true, 0777, nullptr);
+        if (err != 0) status = node_fs_cp_errno(cp, err, "mkdir", parent, nullptr);
+        free(parent);
+        if (status != NODE_FS_CP_DONE) return status;
+    }
+    switch (src_stat.type) {
+        case MAL_POSIX_FT_DIR:
+            if (!cp->recursive) {
+                return node_fs_cp_fail(cp, "ERR_FS_EISDIR", "Path is a directory", "EISDIR", EISDIR,
+                    src, "%s is a directory (not copied)", src);
+            }
+            return node_fs_cp_dir(cp, src, dest, &src_stat, dest_exists);
+        case MAL_POSIX_FT_FILE:
+        case MAL_POSIX_FT_BLOCK:
+        case MAL_POSIX_FT_CHARACTER:
+            if (!dest_exists) return node_fs_cp_copy_file(cp, src, dest, src_stat.mode);
+            if (cp->force) {
+                err = mal_posix_fs_unlink(dest);
+                if (err != 0) return node_fs_cp_errno(cp, err, "unlink", dest, nullptr);
+                return node_fs_cp_copy_file(cp, src, dest, src_stat.mode);
+            }
+            return cp->error_on_exist ? node_fs_cp_exists_error(cp, dest) : NODE_FS_CP_DONE;
+        case MAL_POSIX_FT_SYMLINK:
+            return node_fs_cp_link(cp, src, dest, dest_exists);
+        case MAL_POSIX_FT_SOCKET:
+            return node_fs_cp_fail(cp, "ERR_FS_CP_SOCKET", "Cannot copy a socket file", "EINVAL",
+                EINVAL, dest, "cannot copy a socket file: %s", dest);
+        case MAL_POSIX_FT_FIFO:
+            return node_fs_cp_fail(cp, "ERR_FS_CP_FIFO_PIPE", "Cannot copy a FIFO pipe", "EINVAL",
+                EINVAL, dest, "cannot copy a FIFO pipe: %s", dest);
+        default:
+            return node_fs_cp_fail(cp, "ERR_FS_CP_UNKNOWN", "Cannot copy an unknown file type",
+                "EINVAL", EINVAL, dest, "cannot copy an unknown file type: %s", dest);
+    }
+}
+
+// Runs until done or failed, or until the next item needs the filter's answer.
+static NodeFsCpStatus node_fs_cp_run(NodeFsCp *cp) {
+    while (cp->count > 0) {
+        NodeFsCpItem item = cp->items[cp->count - 1];
+        bool check = item.phase == NODE_FS_CP_CHECK;
+        if (check && cp->filter && !cp->filter_answered) return NODE_FS_CP_FILTER;
+        cp->count--;
+        NodeFsCpStatus status = NODE_FS_CP_DONE;
+        if (!check) {
+            if (cp->preserve_timestamps) status = node_fs_cp_set_times(cp, item.src, item.dest);
+            int err = status == NODE_FS_CP_DONE && item.set_mode
+                ? mal_posix_fs_chmod(item.dest, item.mode & 07777) : 0;
+            if (err != 0) status = node_fs_cp_errno(cp, err, "chmod", item.dest, nullptr);
+        } else {
+            bool copy = !cp->filter || cp->filter_result;
+            cp->filter_answered = false;
+            if (copy) status = node_fs_cp_entry(cp, item.src, item.dest, item.top);
+        }
+        free(item.src);
+        free(item.dest);
+        if (status != NODE_FS_CP_DONE) return status;
+    }
+    return NODE_FS_CP_DONE;
 }
 
 /* ---------------------------------------------------------------------------
@@ -2690,6 +3356,7 @@ typedef enum NodeFsJobKind {
     NODE_FS_JOB_READV,
     NODE_FS_JOB_WRITEV,
     NODE_FS_JOB_STATFS,
+    NODE_FS_JOB_CP,
 } NodeFsJobKind;
 
 typedef struct NodeFsJob {
@@ -2721,6 +3388,7 @@ typedef struct NodeFsJob {
     bool buffer_result;
     int error;
     const char *syscall;
+    NodeFsCp *cp;
 } NodeFsJob;
 
 typedef struct NodeFsPending {
@@ -2743,6 +3411,7 @@ static MAL_ISOLATE_LOCAL NodeFsPending *node_fs_pending;
 static MAL_ISOLATE_LOCAL bool node_fs_async_installed;
 
 static void node_fs_job_clear(NodeFsJob *job) {
+    node_fs_cp_free(job->cp);
     free(job->path);
     free(job->destination);
     free(job->created);
@@ -2788,6 +3457,7 @@ static const char *node_fs_job_syscall(NodeFsJobKind kind) {
         case NODE_FS_JOB_READV: return "read";
         case NODE_FS_JOB_WRITEV: return "write";
         case NODE_FS_JOB_STATFS: return "statfs";
+        case NODE_FS_JOB_CP: return "cp";
     }
     return "unknown";
 }
@@ -2845,6 +3515,10 @@ static void node_fs_job_run(void *data) {
         case NODE_FS_JOB_MKDIR:
             job->error = mal_posix_fs_mkdir_mode(job->path, job->recursive, job->mode,
                 job->recursive ? &job->created : nullptr);
+            return;
+        case NODE_FS_JOB_CP:
+            job->error = node_fs_cp_run(job->cp) == NODE_FS_CP_DONE ? 0
+                : job->cp->error != 0 ? job->cp->error : EIO;
             return;
         case NODE_FS_JOB_COPY_FILE:
             job->error = mal_posix_fs_copy_file_mode(job->path, job->destination, job->mode);
@@ -2977,8 +3651,11 @@ static void node_fs_job_run(void *data) {
     }
 }
 
+static void node_fs_cp_scan_drivers(MalVm *vm);
+
 static void node_fs_async_scan_roots(MalVm *vm, void *data) {
     (void) data;
+    node_fs_cp_scan_drivers(vm);
     for (NodeFsPending *state = node_fs_pending;
         state != nullptr; state = state->next) {
         if (state->vm != vm) continue;
@@ -2989,7 +3666,10 @@ static void node_fs_async_scan_roots(MalVm *vm, void *data) {
     }
 }
 
+static void node_fs_cp_free_drivers(MalVm *vm);
+
 static void node_fs_async_free(MalVm *vm) {
+    node_fs_cp_free_drivers(vm);
     NodeFsPending **link = &node_fs_pending;
     while (*link != nullptr) {
         NodeFsPending *state = *link;
@@ -3002,7 +3682,13 @@ static void node_fs_async_free(MalVm *vm) {
     }
 }
 
+static void node_fs_cp_throw(MalVm *vm, const NodeFsCp *cp);
+
 static void node_fs_job_throw(MalVm *vm, NodeFsJob *job) {
+    if (job->kind == NODE_FS_JOB_CP) {
+        node_fs_cp_throw(vm, job->cp);
+        return;
+    }
     if (job->kind == NODE_FS_JOB_RM && job->error == EISDIR) {
         const char *prefix = "Path is a directory: rm returned EISDIR (is a directory) ";
         usize length = strlen(prefix) + strlen(job->path) + 1;
@@ -3089,6 +3775,10 @@ static i32 node_fs_job_results(
             return 2;
         case NODE_FS_JOB_STATFS:
             out[0] = node_fs_make_statfs(vm, &job->statfs);
+            return 1;
+        case NODE_FS_JOB_CP:
+            // Node callbackifies cp, so a successful callback receives (null, undefined).
+            out[0] = mal_value_new_undefined();
             return 1;
         default:
             return 0;
@@ -3430,6 +4120,463 @@ static MalValue node_fs_mkdtemp_callback(
  failed:
     mal_gc_unroot(&root);
     return mal_value_new_undefined();
+}
+
+static bool node_fs_cp_options(MalVm *vm, MalValue options, NodeFsCp *cp, MalValue *filter) {
+    cp->force = true;
+    *filter = mal_value_new_undefined();
+    if (mal_value_is_undefined(options)) return true;
+    if (!mal_value_is_object(options) || mal_value_is_array_object(options) || mal_value_is_callable(options)) {
+        mal_node_throw_invalid_arg_type(vm, "options", "of type object", options);
+        return false;
+    }
+    static const char *const names[] = {"options.dereference", "options.errorOnExist", "options.force",
+        "options.preserveTimestamps", "options.recursive", "options.verbatimSymlinks"};
+    bool *flags[] = {&cp->dereference, &cp->error_on_exist, &cp->force, &cp->preserve_timestamps,
+        &cp->recursive, &cp->verbatim_symlinks};
+    for (usize i = 0; i < countof(names); i++) {
+        MalValue value;
+        if (!mal_vm_get_property(vm, options, mal_intrinsic_string_key(vm, names[i] + 8), &value)) return false;
+        if (mal_value_is_undefined(value)) continue;
+        if (!mal_value_is_boolean(value)) {
+            mal_node_throw_invalid_arg_type(vm, names[i], "of type boolean", value);
+            return false;
+        }
+        *flags[i] = mal_value_is_truthy(value);
+    }
+    MalValue mode;
+    if (!mal_vm_get_property(vm, options, mal_intrinsic_string_key(vm, "mode"), &mode)) return false;
+    if (!mal_value_is_undefined(mode)) {
+        f64 number;
+        if (!mal_node_validate_integer(vm, mode, "mode", 0, 7, &number)) return false;
+        cp->mode = (u32) number;
+    }
+    if (cp->dereference && cp->verbatim_symlinks) {
+        mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Option \"dereference\" cannot be used in combination with option \"verbatimSymlinks\"",
+            "ERR_INCOMPATIBLE_OPTION_PAIR");
+        return false;
+    }
+    if (!mal_vm_get_property(vm, options, mal_intrinsic_string_key(vm, "filter"), filter)) return false;
+    if (!mal_value_is_undefined(*filter) && !mal_value_is_callable(*filter)) {
+        mal_node_throw_invalid_arg_type(vm, "options.filter", "of type function", *filter);
+        return false;
+    }
+    return true;
+}
+
+static char *node_fs_cp_path(MalVm *vm, MalValue value, const char *name) {
+    char *path;
+    NodeFsPathResult result = node_fs_path_bytes(vm, value, false, &path);
+    if (result == NODE_FS_PATH_OK) return path;
+    if (vm->completion.kind == MAL_COMPLETION_THROW) return nullptr;
+    if (result == NODE_FS_PATH_INVALID_TYPE) {
+        mal_node_throw_invalid_arg_type(vm, name, "of type string or an instance of Buffer or URL", value);
+    } else if (result == NODE_FS_PATH_EMBEDDED_NUL) {
+        char message[128];
+        snprintf(message, sizeof message,
+            "The argument '%s' must be a string, Uint8Array, or URL without null bytes", name);
+        mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, message, "ERR_INVALID_ARG_VALUE");
+    } else {
+        mal_vm_throw_allocation_error(vm);
+    }
+    return nullptr;
+}
+
+// Validates like Node: options first, then src and dest.
+static NodeFsCp *node_fs_cp_new(MalVm *vm, MalValue src, MalValue dest, MalValue options,
+    bool sync, MalValue *filter) {
+    NodeFsCp *cp = calloc(1, sizeof(*cp));
+    if (cp == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return nullptr;
+    }
+    cp->sync = sync;
+    char *src_path = nullptr;
+    char *dest_path = nullptr;
+    if (!node_fs_cp_options(vm, options, cp, filter)
+        || (src_path = node_fs_cp_path(vm, src, "src")) == nullptr
+        || (dest_path = node_fs_cp_path(vm, dest, "dest")) == nullptr) {
+        free(src_path);
+        node_fs_cp_free(cp);
+        return nullptr;
+    }
+    cp->filter = mal_value_is_callable(*filter);
+    if (!node_fs_cp_push(cp, src_path, dest_path, NODE_FS_CP_CHECK, true, 0, false)) {
+        node_fs_cp_free(cp);
+        mal_vm_throw_allocation_error(vm);
+        return nullptr;
+    }
+    return cp;
+}
+
+static void node_fs_cp_throw(MalVm *vm, const NodeFsCp *cp) {
+    if (cp->code == nullptr) {
+        node_fs_throw_errno_with_dest(vm, cp->error, cp->syscall, cp->path, cp->dest);
+        return;
+    }
+    const char *message = cp->message == nullptr ? "" : cp->message;
+    if (cp->prefix == nullptr) {
+        mal_node_throw_code(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, message, cp->code);
+        return;
+    }
+    const char *path = cp->path == nullptr ? "" : cp->path;
+    usize length = strlen(cp->prefix) + strlen(cp->info_code) + strlen(message) + strlen(path) + 32;
+    char *full = malloc(length);
+    if (full == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return;
+    }
+    snprintf(full, length, "%s: cp returned %s (%s) %s", cp->prefix, cp->info_code, message, path);
+    mal_node_throw_code(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, full, cp->code);
+    free(full);
+    MalValue roots[] = {vm->completion.value, mal_value_from_object(mal_intrinsic_new_object(vm))};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalObject *error = mal_value_to_object(roots[0]);
+    MalObject *info = mal_value_to_object(roots[1]);
+    node_fs_define_str(vm, info, "message", message);
+    node_fs_define_str(vm, info, "path", path);
+    node_fs_define_str(vm, info, "syscall", "cp");
+    mal_intrinsic_define_data(vm, info, "errno", mal_value_from_i32(cp->error), NODE_FS_VISIBLE);
+    node_fs_define_str(vm, info, "code", cp->info_code);
+    mal_intrinsic_define_data(vm, error, "info", roots[1], NODE_FS_VISIBLE);
+    mal_intrinsic_define_data(vm, error, "errno", mal_value_from_i32(cp->error), NODE_FS_VISIBLE);
+    node_fs_define_str(vm, error, "syscall", "cp");
+    node_fs_define_str(vm, error, "path", path);
+    roots[1] = mal_value_from_string(mal_intrinsic_ascii(vm, "SystemError"));
+    mal_intrinsic_define_data(vm, error, "name", roots[1], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_THROW, .value = roots[0]};
+    mal_gc_unroot(&root);
+}
+
+// Calls the filter for the pending top item; false leaves its throw in the completion.
+static bool node_fs_cp_call_filter(MalVm *vm, const NodeFsCp *cp, MalValue filter, MalValue *out) {
+    const NodeFsCpItem *item = &cp->items[cp->count - 1];
+    MalValue args[] = {mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, args, countof(args));
+    args[0] = node_fs_string_from_cstr(vm, item->src);
+    args[1] = node_fs_string_from_cstr(vm, item->dest);
+    MalCompletion completion = mal_vm_call_value(vm, filter, mal_value_new_undefined(), args, 2);
+    mal_gc_unroot(&root);
+    if (completion.kind == MAL_COMPLETION_THROW) return false;
+    *out = completion.value;
+    return true;
+}
+
+static MalValue node_fs_cp_sync(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) nt; (void) callee;
+    MalValue filter = mal_value_new_undefined();
+    MalRootSpan root;
+    mal_gc_root(&root, &filter, 1);
+    NodeFsCp *cp = node_fs_cp_new(vm, argc > 0 ? args[0] : mal_value_new_undefined(),
+        argc > 1 ? args[1] : mal_value_new_undefined(), argc > 2 ? args[2] : mal_value_new_undefined(),
+        true, &filter);
+    while (cp != nullptr) {
+        NodeFsCpStatus status = node_fs_cp_run(cp);
+        if (status == NODE_FS_CP_FAILED) node_fs_cp_throw(vm, cp);
+        if (status != NODE_FS_CP_FILTER) break;
+        MalValue result;
+        if (!node_fs_cp_call_filter(vm, cp, filter, &result)) break;
+        if (mal_value_is_promise_object(result)) {
+            mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                "Expected boolean to be returned from the \"filter\" function but got an instance of Promise.",
+                "ERR_INVALID_RETURN_VALUE");
+            break;
+        }
+        cp->filter_result = mal_value_is_truthy(result);
+        cp->filter_answered = true;
+    }
+    node_fs_cp_free(cp);
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+// Slots: [callback, mode]; mode 0 passes the argument alone, 1 passes (null, argument).
+static MalValue node_fs_deferred_callback(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) nt;
+    MalNativeFunctionObject *function = mal_value_to_native_function_object(callee);
+    MalValue callback = mal_native_function_object_get_slot(function, 0);
+    bool with_null = mal_value_to_i32(mal_native_function_object_get_slot(function, 1)) == 1;
+    MalValue argument = argc > 0 ? args[0] : mal_value_new_undefined();
+    MalValue call_args[] = {with_null ? mal_value_new_null() : argument, argument};
+    MalCompletion completion = mal_vm_call_value(vm, callback, mal_value_new_undefined(), call_args,
+        with_null ? 2 : 1);
+    return completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : completion.value;
+}
+
+// Calls `callback` from a microtask; a throw rejects an unobserved promise, as Node's
+// `.then(callback, callback)` does.
+static void node_fs_defer_callback(MalVm *vm, MalValue callback, bool with_null, MalValue argument) {
+    MalValue roots[] = {callback, argument, mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalValue slots[] = {callback, mal_value_from_i32(with_null ? 1 : 0)};
+    roots[2] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+        mal_intrinsic_ascii(vm, "callback"), node_fs_deferred_callback, slots, countof(slots)));
+    mal_promise_new_direct_capability(vm, &roots[3], &roots[4], &roots[5]);
+    mal_vm_enqueue_reaction_job(vm, roots[2], false, roots[4], roots[5], roots[1]);
+    mal_gc_unroot(&root);
+}
+
+typedef struct NodeFsCpDriver {
+    struct NodeFsCpDriver *next;
+    MalVm *vm;
+    NodeFsCp *cp;
+    MalValue filter;
+    MalValue completion;
+    bool callback;
+    u32 id;
+    // Identifies the pending filter result, so a thenable settling twice answers once.
+    u32 step;
+} NodeFsCpDriver;
+
+// Filtered asynchronous copies run on the mutator between filter results.
+static MAL_ISOLATE_LOCAL NodeFsCpDriver *node_fs_cp_drivers;
+static MAL_ISOLATE_LOCAL u32 node_fs_cp_next_id;
+
+static void node_fs_cp_scan_drivers(MalVm *vm) {
+    for (NodeFsCpDriver *driver = node_fs_cp_drivers; driver != nullptr; driver = driver->next) {
+        if (driver->vm != vm) continue;
+        mal_gc_mark_value(driver->filter);
+        mal_gc_mark_value(driver->completion);
+    }
+}
+
+static void node_fs_cp_free_drivers(MalVm *vm) {
+    NodeFsCpDriver **link = &node_fs_cp_drivers;
+    while (*link != nullptr) {
+        NodeFsCpDriver *driver = *link;
+        if (driver->vm != vm) {
+            link = &driver->next;
+            continue;
+        }
+        *link = driver->next;
+        node_fs_cp_free(driver->cp);
+        free(driver);
+    }
+}
+
+static void node_fs_cp_finish(MalVm *vm, NodeFsCpDriver *driver, MalValue error, bool failed) {
+    NodeFsCpDriver **link = &node_fs_cp_drivers;
+    while (*link != nullptr && *link != driver) link = &(*link)->next;
+    if (*link == driver) *link = driver->next;
+    MalValue roots[] = {driver->completion, error};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    bool callback = driver->callback;
+    node_fs_cp_free(driver->cp);
+    free(driver);
+    if (callback) {
+        node_fs_defer_callback(vm, roots[0], !failed, failed ? roots[1] : mal_value_new_undefined());
+    } else if (failed) {
+        mal_promise_reject(vm, mal_value_to_promise_object(roots[0]), roots[1]);
+    } else {
+        mal_promise_fulfill(vm, mal_value_to_promise_object(roots[0]), mal_value_new_undefined());
+    }
+    mal_gc_unroot(&root);
+}
+
+static void node_fs_cp_fail_driver(MalVm *vm, NodeFsCpDriver *driver) {
+    MalValue error = vm->completion.value;
+    node_fs_clear_completion(vm);
+    node_fs_cp_finish(vm, driver, error, true);
+}
+
+static MalValue node_fs_cp_filter_settled(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee);
+
+static void node_fs_cp_drive(MalVm *vm, NodeFsCpDriver *driver) {
+    for (;;) {
+        NodeFsCpStatus status = node_fs_cp_run(driver->cp);
+        if (status == NODE_FS_CP_DONE) {
+            node_fs_cp_finish(vm, driver, mal_value_new_undefined(), false);
+            return;
+        }
+        if (status == NODE_FS_CP_FAILED) {
+            node_fs_cp_throw(vm, driver->cp);
+            node_fs_cp_fail_driver(vm, driver);
+            return;
+        }
+        MalValue roots[] = {mal_value_new_undefined(), mal_value_new_undefined(),
+            mal_value_new_undefined(), mal_value_new_undefined()};
+        MalRootSpan root;
+        mal_gc_root(&root, roots, countof(roots));
+        if (!node_fs_cp_call_filter(vm, driver->cp, driver->filter, &roots[0])) {
+            mal_gc_unroot(&root);
+            node_fs_cp_fail_driver(vm, driver);
+            return;
+        }
+        bool thenable = mal_value_is_promise_object(roots[0]);
+        if (!thenable && mal_value_is_object(roots[0])) {
+            if (!mal_vm_get_property(vm, roots[0], mal_intrinsic_string_key(vm, "then"), &roots[1])) {
+                mal_gc_unroot(&root);
+                node_fs_cp_fail_driver(vm, driver);
+                return;
+            }
+            thenable = mal_value_is_callable(roots[1]);
+        }
+        if (!thenable) {
+            mal_gc_unroot(&root);
+            driver->cp->filter_result = mal_value_is_truthy(roots[0]);
+            driver->cp->filter_answered = true;
+            continue;
+        }
+        MalObject *fn_proto = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
+        driver->step++;
+        for (i32 rejected = 0; rejected < 2; rejected++) {
+            MalValue slots[] = {mal_value_from_f64((f64) driver->id), mal_value_new_boolean(rejected == 1),
+                mal_value_from_f64((f64) driver->step)};
+            roots[2 + rejected] = mal_value_from_native_function_object(
+                mal_native_function_object_new_with_slots_arity(&vm->heap, fn_proto,
+                    mal_intrinsic_ascii(vm, ""), 1, node_fs_cp_filter_settled, slots, countof(slots)));
+        }
+        if (mal_value_is_promise_object(roots[0])) {
+            mal_promise_perform_then(vm, roots[0], roots[2], roots[3],
+                mal_value_new_undefined(), mal_value_new_undefined());
+        } else {
+            MalCompletion completion = mal_vm_call_value(vm, roots[1], roots[0], roots + 2, 2);
+            if (completion.kind == MAL_COMPLETION_THROW) {
+                mal_gc_unroot(&root);
+                node_fs_cp_fail_driver(vm, driver);
+                return;
+            }
+        }
+        mal_gc_unroot(&root);
+        return;
+    }
+}
+
+static MalValue node_fs_cp_filter_settled(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) nt;
+    MalNativeFunctionObject *function = mal_value_to_native_function_object(callee);
+    u32 id = (u32) mal_ops_number_as_f64(mal_native_function_object_get_slot(function, 0));
+    bool rejected = mal_value_is_truthy(mal_native_function_object_get_slot(function, 1));
+    u32 step = (u32) mal_ops_number_as_f64(mal_native_function_object_get_slot(function, 2));
+    NodeFsCpDriver *driver = node_fs_cp_drivers;
+    while (driver != nullptr && (driver->vm != vm || driver->id != id)) driver = driver->next;
+    if (driver == nullptr || driver->step != step) return mal_value_new_undefined();
+    driver->step++;
+    MalValue value = argc > 0 ? args[0] : mal_value_new_undefined();
+    if (rejected) {
+        node_fs_cp_finish(vm, driver, value, true);
+    } else {
+        driver->cp->filter_result = mal_value_is_truthy(value);
+        driver->cp->filter_answered = true;
+        node_fs_cp_drive(vm, driver);
+    }
+    return mal_value_new_undefined();
+}
+
+static bool node_fs_cp_start(MalVm *vm, const MalValue *args, i32 argc, MalValue options,
+    MalValue completion, bool callback) {
+    MalValue filter = mal_value_new_undefined();
+    MalRootSpan root;
+    mal_gc_root(&root, &filter, 1);
+    NodeFsCp *cp = node_fs_cp_new(vm, argc > 0 ? args[0] : mal_value_new_undefined(),
+        argc > 1 ? args[1] : mal_value_new_undefined(), options, false, &filter);
+    bool started = cp != nullptr;
+    if (started && cp->filter) {
+        NodeFsCpDriver *driver = calloc(1, sizeof(*driver));
+        if (driver == nullptr) {
+            node_fs_cp_free(cp);
+            mal_vm_throw_allocation_error(vm);
+            started = false;
+        } else {
+            *driver = (NodeFsCpDriver) {.next = node_fs_cp_drivers, .vm = vm, .cp = cp, .filter = filter,
+                .completion = completion, .callback = callback, .id = ++node_fs_cp_next_id};
+            node_fs_cp_drivers = driver;
+            node_fs_cp_drive(vm, driver);
+        }
+    } else if (started) {
+        // Without a filter the whole copy runs on the blocking-work pool, like Node's CpDirJob.
+        NodeFsJob *job = calloc(1, sizeof(*job));
+        if (job == nullptr) {
+            node_fs_cp_free(cp);
+            mal_vm_throw_allocation_error(vm);
+            started = false;
+        } else {
+            job->kind = NODE_FS_JOB_CP;
+            job->cp = cp;
+            job->path = strdup(cp->items[0].src);
+            MalBlockingWorkReservation reservation = {0};
+            started = node_fs_start_job(vm, job, &reservation, completion, callback,
+                mal_value_new_undefined(), mal_value_new_undefined());
+        }
+    }
+    mal_gc_unroot(&root);
+    return started;
+}
+
+static MalValue node_fs_cp_callback(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) nt; (void) callee;
+    MalValue options = argc > 2 ? args[2] : mal_value_new_undefined();
+    MalValue callback = argc > 3 ? args[3] : mal_value_new_undefined();
+    if (mal_value_is_callable(options)) {
+        callback = options;
+        options = mal_value_new_undefined();
+    }
+    if (!mal_value_is_callable(callback)) {
+        mal_node_throw_invalid_arg_type(vm, "cb", "of type function", callback);
+        return mal_value_new_undefined();
+    }
+    (void) node_fs_cp_start(vm, args, argc, options, callback, true);
+    return mal_value_new_undefined();
+}
+
+static MalValue node_fs_glob_callback(MalVm *vm, MalValue self, const MalValue *args,
+    i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) nt;
+    MalValue roots[] = {argc > 0 ? args[0] : mal_value_new_undefined(),
+        argc > 1 ? args[1] : mal_value_new_undefined(), argc > 2 ? args[2] : mal_value_new_undefined(),
+        mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    if (mal_value_is_callable(roots[1])) {
+        roots[2] = roots[1];
+        roots[1] = mal_value_new_undefined();
+    }
+    if (!mal_value_is_callable(roots[2])) {
+        mal_node_throw_invalid_arg_type(vm, "cb", "of type function", roots[2]);
+        goto done;
+    }
+    // Pattern and option errors throw synchronously, as Node's Glob constructor does.
+    roots[3] = node_fs_glob_state(vm, roots, 2,
+        mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 0));
+    if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
+    roots[3] = node_fs_glob_collect(vm, roots[3]);
+    bool failed = vm->completion.kind == MAL_COMPLETION_THROW;
+    if (failed) {
+        roots[3] = vm->completion.value;
+        node_fs_clear_completion(vm);
+    }
+    node_fs_defer_callback(vm, roots[2], !failed, roots[3]);
+done:
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+static MalValue node_fs_cp_promise(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) nt; (void) callee;
+    MalValue promise = mal_value_from_promise_object(mal_promise_object_new(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_PROMISE_PROTOTYPE])));
+    MalRootSpan root;
+    mal_gc_root(&root, &promise, 1);
+    if (!node_fs_cp_start(vm, args, argc, argc > 2 ? args[2] : mal_value_new_undefined(), promise, false)) {
+        MalValue error = vm->completion.value;
+        node_fs_clear_completion(vm);
+        mal_promise_reject(vm, mal_value_to_promise_object(promise), error);
+    }
+    mal_gc_unroot(&root);
+    return promise;
 }
 
 static MalValue node_fs_mkdtemp_promise(
@@ -5727,6 +6874,14 @@ static MalValue node_fs_export(
     if (strcmp(name, "copyFileSync") == 0) {
         return node_fs_make_fn(vm, fn_proto, "copyFileSync", 2, node_fs_copy_file_sync);
     }
+    if (strcmp(name, "cp") == 0) return node_fs_make_fn(vm, fn_proto, "cp", 4, node_fs_cp_callback);
+    if (strcmp(name, "cpSync") == 0) return node_fs_make_fn(vm, fn_proto, "cpSync", 3, node_fs_cp_sync);
+    if (strcmp(name, "glob") == 0) {
+        return node_fs_make_fn_slot(vm, fn_proto, "glob", 3, node_fs_glob_callback, protos[1]);
+    }
+    if (strcmp(name, "globSync") == 0) {
+        return node_fs_make_fn_slot(vm, fn_proto, "globSync", 2, node_fs_glob_sync, protos[1]);
+    }
     if (strcmp(name, "renameSync") == 0) {
         return node_fs_make_fn(vm, fn_proto, "renameSync", 2, node_fs_rename_sync);
     }
@@ -5879,10 +7034,10 @@ void mal_host_install_node_fs(
         "Dir", "Dirent", "ReadStream", "WriteStream", "createWriteStream", "opendir",
         "opendirSync", "readv", "readvSync", "statfs", "writev", "writevSync",
         "Stats", "access", "accessSync", "appendFile", "appendFileSync", "chmod", "chmodSync",
-        "chown", "chownSync", "close", "closeSync", "copyFile", "copyFileSync",
+        "chown", "chownSync", "close", "closeSync", "copyFile", "copyFileSync", "cp", "cpSync",
         "createReadStream", "exists", "existsSync", "fchmod", "fchmodSync", "fchown",
         "fchownSync", "fdatasync", "fdatasyncSync", "fstat", "fstatSync", "fsync", "fsyncSync",
-        "ftruncate", "ftruncateSync", "futimes", "futimesSync", "lchown", "lchownSync", "link",
+        "ftruncate", "ftruncateSync", "futimes", "futimesSync", "glob", "globSync", "lchown", "lchownSync", "link",
         "linkSync", "lstat", "lstatSync", "lutimes", "lutimesSync", "mkdir", "mkdirSync",
         "mkdtemp", "mkdtempSync", "open", "openSync", "read", "readFile", "readFileSync",
         "readlink", "readlinkSync", "readSync", "readdir", "readdirSync", "realpath",
@@ -6088,6 +7243,10 @@ void mal_host_install_node_fs_promises(
 
     roots[1] = node_fs_make_fn(vm, fn_proto, "rm", 1, node_fs_rm_promise);
     mal_intrinsic_define_data(vm, mal_value_to_object(roots[2]), "rm", roots[1], NODE_FS_VISIBLE);
+    roots[1] = node_fs_make_fn(vm, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ASYNC_FUNCTION_PROTOTYPE]),
+        "cp", 3, node_fs_cp_promise);
+    mal_native_function_object_set_async(mal_value_to_native_function_object(roots[1]));
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[2]), "cp", roots[1], NODE_FS_VISIBLE);
     if (!mal_vm_get_property(vm, roots[0], mal_intrinsic_string_key(vm, "readdirSync"), &roots[1])) {
         mal_gc_unroot(&root);
         return;
