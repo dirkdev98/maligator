@@ -314,6 +314,8 @@ static inline bool mal_string_equals(const MalString *left, const MalString *rig
         MAL_PERF_COUNT(string_length_misses);
         return false;
     }
+    // Interning keeps one atom per content, so two different atoms differ.
+    if (left->property_atom && right->property_atom) return false;
     return mal_string_equals_same_length(left, right);
 }
 

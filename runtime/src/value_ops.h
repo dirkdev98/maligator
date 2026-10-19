@@ -308,7 +308,10 @@ static inline __attribute__((always_inline)) bool mal_ops_strict_equal_string_co
         MAL_PERF_COUNT(string_length_misses);
         return false;
     }
-    return mal_string_equals_same_length(string, mal_value_to_string(constant));
+    const MalString *constant_string = mal_value_to_string(constant);
+    // Interning keeps one atom per content, so two different atoms differ.
+    if (string->property_atom && constant_string->property_atom) return false;
+    return mal_string_equals_same_length(string, constant_string);
 }
 
 /** Returns false without allocating when string concatenation exceeds the engine limit. */
