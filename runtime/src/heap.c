@@ -499,7 +499,10 @@ static inline __attribute__((always_inline)) void *mal_gc_alloc_in_class(
     // uncollected run is still pure bump allocation.
     if (kind == MAL_GC_BLOCK_CELL && heap->cell_free[size_class] != nullptr) {
         void *cell = heap->cell_free[size_class];
-        heap->cell_free[size_class] = *(void **) ((u8 *) cell + mal_gc_free_next_offset());
+        void *next = *(void **) ((u8 *) cell + mal_gc_free_next_offset());
+        heap->cell_free[size_class] = next;
+        // Reclaimed cells are scattered; the next pop's link read would otherwise miss.
+        __builtin_prefetch(next, 1, 3);
         MalGcBlock *block = (MalGcBlock *) ((uptr) cell & ~(uptr) (MAL_GC_BLOCK_SIZE - 1));
         mal_gc_track_young_block(heap, block, cell);
         heap->bytes_allocated += g_class_cell_size[size_class];
