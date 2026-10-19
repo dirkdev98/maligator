@@ -209,7 +209,7 @@ int mal_posix_fs_sleep_milliseconds(i64 milliseconds);
 /* The additional synchronous operations used by native compiler caches. String
  * results are malloc-owned and must be freed by the caller. */
 int mal_posix_fs_copy_file(const char *source, const char *destination);
-/* copyFile with Node's COPYFILE_EXCL (1) refusing an existing destination. */
+/* copyFile with Node's COPYFILE_EXCL (1), FICLONE (2) and FICLONE_FORCE (4) bits. */
 int mal_posix_fs_copy_file_mode(const char *source, const char *destination, u32 mode);
 int mal_posix_fs_realpath(const char *path, char **out_path);
 // Returns the owned attempted path on syscall failure too; allocation failure leaves it null.

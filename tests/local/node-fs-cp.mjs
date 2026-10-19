@@ -92,6 +92,17 @@ fs.cpSync(at("src", "a.txt"), at("ts.txt"), { preserveTimestamps: true });
 console.log("timestamps", fs.statSync(at("ts.txt")).mtimeMs);
 fs.cpSync(at("src", "a.txt"), at("nested", "dir", "a.txt"));
 console.log("parents", fs.existsSync(at("nested", "dir", "a.txt")));
+fs.writeFileSync(at("self.txt"), "self");
+fs.copyFileSync(at("self.txt"), at("self.txt"));
+console.log("self copy", fs.readFileSync(at("self.txt"), "utf8"));
+fs.writeFileSync(at("existing.txt"), "previous contents");
+fs.chmodSync(at("existing.txt"), 0o600);
+fs.copyFileSync(at("src", "a.txt"), at("existing.txt"));
+console.log(
+	"existing copy",
+	fs.readFileSync(at("existing.txt"), "utf8"),
+	(fs.statSync(at("existing.txt")).mode & 0o777).toString(8),
+);
 fs.cpSync(new URL(`file://${at("src", "a.txt")}`), at("url.txt"));
 console.log("url", fs.readFileSync(at("url.txt"), "utf8"));
 

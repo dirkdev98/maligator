@@ -21,9 +21,14 @@
 #include <sys/uio.h>
 #include <unistd.h>
 #if defined(__APPLE__)
+#include <copyfile.h>
 #include <sys/mount.h>
 #else
+#include <sys/ioctl.h>
 #include <sys/vfs.h>
+#if defined(__linux__)
+#include <linux/fs.h>
+#endif
 #endif
 
 static u32 mal_posix_ft_from_mode(mode_t m) {
@@ -771,56 +776,103 @@ int mal_posix_fs_copy_file(const char *source, const char *destination) {
     return mal_posix_fs_copy_file_mode(source, destination, 0);
 }
 
-int mal_posix_fs_copy_file_mode(const char *source, const char *destination, u32 mode) {
-    int source_fd = open(source, O_RDONLY);
-    if (source_fd < 0) {
-        return errno;
+// Kernel-side copies first; the read/write loop covers filesystems that refuse them.
+static int posix_fs_copy_data(int source_fd, int destination_fd, off_t size) {
+#if defined(__APPLE__)
+    if (fcopyfile(source_fd, destination_fd, nullptr, COPYFILE_DATA) == 0) return 0;
+    if (errno != ENOTSUP && errno != EINVAL) return errno;
+    if (lseek(source_fd, 0, SEEK_SET) < 0 || lseek(destination_fd, 0, SEEK_SET) < 0
+        || ftruncate(destination_fd, 0) != 0) return errno;
+#elif defined(__linux__) && defined(__GLIBC__)
+    off_t copied = 0;
+    while (copied < size) {
+        ssize_t count = copy_file_range(source_fd, nullptr, destination_fd, nullptr,
+            (usize) (size - copied), 0);
+        if (count > 0) {
+            copied += count;
+            continue;
+        }
+        if (count == 0) return 0;
+        if (errno == EINTR) continue;
+        if (copied > 0 || (errno != EXDEV && errno != EINVAL && errno != ENOSYS
+                && errno != EOPNOTSUPP && errno != EPERM)) return errno;
+        break;
     }
-    struct stat st;
-    if (fstat(source_fd, &st) != 0) {
-        int err = errno;
-        close(source_fd);
-        return err;
-    }
-    int destination_fd = open(destination,
-        O_WRONLY | O_CREAT | ((mode & 1) != 0 ? O_EXCL : O_TRUNC), st.st_mode & 0777);
-    if (destination_fd < 0) {
-        int err = errno;
-        close(source_fd);
-        return err;
-    }
-    byte buffer[16384];
+    if (copied >= size) return 0;
+#else
+    (void) size;
+#endif
+    usize capacity = 128 * 1024;
+    byte *buffer = malloc(capacity);
+    if (buffer == nullptr) return ENOMEM;
     int result = 0;
     for (;;) {
-        ssize_t read_count = read(source_fd, buffer, sizeof buffer);
-        if (read_count < 0) {
-            if (errno == EINTR) {
-                continue;
-            }
-            result = errno;
+        ssize_t read_count = read(source_fd, buffer, capacity);
+        if (read_count < 0 && errno == EINTR) continue;
+        if (read_count <= 0) {
+            if (read_count < 0) result = errno;
             break;
         }
-        if (read_count == 0) {
-            break;
-        }
-        ssize_t offset = 0;
-        while (offset < read_count) {
+        for (ssize_t offset = 0; offset < read_count;) {
             ssize_t written = write(destination_fd, buffer + offset, (usize) (read_count - offset));
-            if (written < 0 && errno == EINTR) {
-                continue;
-            }
+            if (written < 0 && errno == EINTR) continue;
             if (written <= 0) {
                 result = written < 0 ? errno : EIO;
                 break;
             }
             offset += written;
         }
-        if (result != 0) {
-            break;
+        if (result != 0) break;
+    }
+    free(buffer);
+    return result;
+}
+
+// libuv's uv_fs_copyfile: the destination takes the source mode, a copy onto the
+// same file is a no-op, and a failed copy removes the destination.
+int mal_posix_fs_copy_file_mode(const char *source, const char *destination, u32 mode) {
+    enum { COPY_EXCL = 1, COPY_FICLONE = 2, COPY_FICLONE_FORCE = 4 };
+    int source_fd = open(source, O_RDONLY | O_CLOEXEC);
+    if (source_fd < 0) return errno;
+    struct stat source_stat;
+    if (fstat(source_fd, &source_stat) != 0) {
+        int err = errno;
+        close(source_fd);
+        return err;
+    }
+    int destination_fd = open(destination,
+        O_WRONLY | O_CREAT | O_CLOEXEC | ((mode & COPY_EXCL) != 0 ? O_EXCL : 0), source_stat.st_mode & 07777);
+    if (destination_fd < 0) {
+        int err = errno;
+        close(source_fd);
+        return err;
+    }
+    int result = 0;
+    bool same_file = false;
+    if ((mode & COPY_EXCL) == 0) {
+        struct stat destination_stat;
+        if (fstat(destination_fd, &destination_stat) != 0) {
+            result = errno;
+        } else if (destination_stat.st_dev == source_stat.st_dev && destination_stat.st_ino == source_stat.st_ino) {
+            same_file = true;
+        } else if (ftruncate(destination_fd, 0) != 0 && (errno != EACCES || destination_stat.st_size > 0)) {
+            result = errno;
         }
     }
-    if (close(source_fd) != 0 && result == 0) result = errno;
+    if (result == 0 && !same_file && fchmod(destination_fd, source_stat.st_mode & 07777) != 0) result = errno;
+    bool cloned = false;
+    if (result == 0 && !same_file && (mode & (COPY_FICLONE | COPY_FICLONE_FORCE)) != 0) {
+#if defined(FICLONE)
+        cloned = ioctl(destination_fd, FICLONE, source_fd) == 0;
+        if (!cloned && (mode & COPY_FICLONE_FORCE) != 0) result = errno;
+#else
+        if ((mode & COPY_FICLONE_FORCE) != 0) result = ENOSYS;
+#endif
+    }
+    if (result == 0 && !same_file && !cloned) result = posix_fs_copy_data(source_fd, destination_fd, source_stat.st_size);
     if (close(destination_fd) != 0 && result == 0) result = errno;
+    close(source_fd);
+    if (result != 0 && !same_file) (void) unlink(destination);
     return result;
 }
 
