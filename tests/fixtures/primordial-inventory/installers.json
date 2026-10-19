@@ -433,7 +433,7 @@
 	},
 	{
 		"file": "runtime/node_diagnostics_channel.c",
-		"sha256": "a28a61abfa7b8522c02fb642f05c0650200ccef94956a70a098f0dbab4359105"
+		"sha256": "07a922d01f3dfcfa28904fd03528778b5aadc4f2c72d8a302f9e22261c300bb2"
 	},
 	{
 		"file": "runtime/node_diagnostics_channel.h",

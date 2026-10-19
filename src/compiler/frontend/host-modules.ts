@@ -255,7 +255,7 @@ const VM: HostModuleSpec = {
 
 const DIAGNOSTICS_CHANNEL: HostModuleSpec = {
 	id: "node:diagnostics_channel",
-	named: ["channel", "hasSubscribers", "subscribe", "tracingChannel", "unsubscribe"],
+	named: ["Channel", "channel", "hasSubscribers", "subscribe", "tracingChannel", "unsubscribe"],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:diagnostics_channel"),
 };
