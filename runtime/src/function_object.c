@@ -156,11 +156,31 @@ MalFunctionObject *mal_function_object_new(
     MalFunctionObject *function = mal_heap_alloc(
         heap, sizeof(MalFunctionObject) + 2 * sizeof(MalValue) + capture_bytes,
         MAL_HEAP_FUNCTION_OBJECT);
-    mal_function_init_state(heap, function, prototype, function_index);
-    mal_function_init_metadata(
-        heap, &function->object, length_key, mal_value_from_i32(length), name_key, name,
-        (MalValue *) (function + 1));
-
+    // Closures are created per call, so the fresh cell is initialized in place rather
+    // than through the generic object and shaped-value constructors.
+    bool named = name != nullptr;
+    MalValue *fields = (MalValue *) (function + 1);
+    MalHeapHeader header = function->object.header;
+    function->object = (MalObject) {
+        .header = header,
+        .extensible = true,
+        .storage_kind = MAL_OBJECT_EMBEDDED,
+        .slot_capacity = named ? 2 : 1,
+        .shape = mal_function_metadata_shape(
+            heap, mal_shape_root(heap), length_key, name_key, named),
+    };
+    function->object_storage = (MalObjectStorage) {.prototype = prototype, .fields = fields};
+    mal_object_mark_as_prototype(prototype);
+    function->function_index = function_index;
+    function->creation_env = nullptr;
+#if MAL_REALMS
+    function->realm = heap->current_realm;
+#endif
+    fields[0] = mal_value_from_i32(length);
+    if (named) {
+        fields[1] = mal_value_from_string(name);
+        mal_gc_card(&function->object.header, fields[1]);
+    }
     return function;
 }
 
