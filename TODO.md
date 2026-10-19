@@ -1173,9 +1173,16 @@ remains a Maligator extension and does not count as global fetch conformance.
       ECDH/X25519, deriveKey/deriveBits, wrapKey, jwk export of secret keys, and
       Crypto/SubtleCrypto methods on their prototypes rather than the instances.
 
-- [ ] tls and https: `authorizationError` and `rejectUnauthorized: false` (accept an
-      unverified client certificate with `authorized=false` and report OpenSSL verify
-      codes on both sides; keep the verifier on the session and re-verify on demand).
+- [ ] tls and https: `authorizationError` on TLS sockets (map the deferred client
+      verifier's `CertificateError` to OpenSSL verify codes such as
+      UNABLE_TO_VERIFY_LEAF_SIGNATURE) and the client-side verdict under
+      `rejectUnauthorized: false`. `new tls.TLSSocket(socket, options)` wrapping with a
+      deferred start, and `setDefaultCACertificates`. rootCertificates comes from the
+      system store rather than Node's NSS list, and no certificate compression is
+      offered. Plain 'connection' listeners on a tls.Server see a TLSSocket where Node
+      passes the raw socket. http: move the shared header and body methods onto
+      OutgoingMessage.prototype so overriding them there reaches ServerResponse and
+      ClientRequest.
       The client verifies the server certificate during the handshake, while Node
       verifies afterwards, so a server sees an unknown_ca alert instead of
       'secureConnection'. getPeerCertificate(true) issuer chains, repeated name
@@ -1216,7 +1223,11 @@ remains a Maligator extension and does not count as global fetch conformance.
       deletions do not reach the script), plus collection of realms whose sandboxes
       are gone.
 
-- [ ] stream.compose, buffer.transcode, util.debounce and util.throttle.
+- [ ] node:url: `url.format` should `querystring.stringify` an object `query` when
+      `search` is absent, and format WHATWG URL objects with its options argument.
+      util.isPartialDeepStrictEqual, stream.compose, and `_extend` on a primitive
+      target throwing V8's exact message. Once `URL.createObjectURL` exists,
+      buffer.resolveObjectURL must look up registered `blob:nodedata:` ids.
 
 - [ ] Make async_hooks observe more than AsyncResource: timers, I/O and promises
       do not emit hook events, and executionAsyncId() inside their callbacks stays

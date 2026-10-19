@@ -19,6 +19,7 @@ and error codes closely:
 | `runtime/src/runtime/node_dns.c`                 | lib/dns.js                                                                |
 | `runtime/src/runtime/node_dotenv.c`              | src/node_dotenv.cc                                                        |
 | `runtime/src/runtime/node_fs.c`                  | lib/internal/fs/cp/cp.js, lib/internal/fs/cp/cp-sync.js, src/node_file.cc |
+| `runtime/src/runtime/node_http.c`                | lib/_http_outgoing.js                                                     |
 | `runtime/src/runtime/node_inspect.c`             | lib/internal/util/inspect.js                                              |
 | `runtime/src/runtime/node_dgram.c`               | lib/dgram.js                                                              |
 | `runtime/src/runtime/node_net.c`                 | lib/net.js, lib/_tls_wrap.js                                              |

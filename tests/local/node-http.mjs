@@ -18,6 +18,17 @@ const expectedStatuses =
 	"100:Continue|101:Switching Protocols|102:Processing|103:Early Hints|200:OK|201:Created|202:Accepted|203:Non-Authoritative Information|204:No Content|205:Reset Content|206:Partial Content|207:Multi-Status|208:Already Reported|226:IM Used|300:Multiple Choices|301:Moved Permanently|302:Found|303:See Other|304:Not Modified|305:Use Proxy|307:Temporary Redirect|308:Permanent Redirect|400:Bad Request|401:Unauthorized|402:Payment Required|403:Forbidden|404:Not Found|405:Method Not Allowed|406:Not Acceptable|407:Proxy Authentication Required|408:Request Timeout|409:Conflict|410:Gone|411:Length Required|412:Precondition Failed|413:Payload Too Large|414:URI Too Long|415:Unsupported Media Type|416:Range Not Satisfiable|417:Expectation Failed|418:I'm a Teapot|421:Misdirected Request|422:Unprocessable Entity|423:Locked|424:Failed Dependency|425:Too Early|426:Upgrade Required|428:Precondition Required|429:Too Many Requests|431:Request Header Fields Too Large|451:Unavailable For Legal Reasons|500:Internal Server Error|501:Not Implemented|502:Bad Gateway|503:Service Unavailable|504:Gateway Timeout|505:HTTP Version Not Supported|506:Variant Also Negotiates|507:Insufficient Storage|508:Loop Detected|509:Bandwidth Limit Exceeded|510:Not Extended|511:Network Authentication Required";
 const incoming = new IncomingMessage();
 const response = new ServerResponse();
+http.OutgoingMessage.prototype.malOutgoingProbe = function () {
+	return this === response;
+};
+const outgoingPatchSeen = response.malOutgoingProbe() === true;
+delete http.OutgoingMessage.prototype.malOutgoingProbe;
+let invalidHttpValidation = false;
+try {
+	http.isValidHeaderValue("x", { httpValidation: "nope" });
+} catch (error) {
+	invalidHttpValidation = error.code === "ERR_INVALID_ARG_VALUE";
+}
 const responseReceiver = {};
 const calledResponse = ServerResponse.call(responseReceiver);
 class DerivedResponse extends ServerResponse {}
@@ -73,7 +84,8 @@ const checks = [
 	validateHeaderValue("x-valid", ["one", 2, null]) === undefined,
 	validateHeaderName.length === 1 && validateHeaderValue.length === 2,
 	Object.getPrototypeOf(IncomingMessage.prototype) === Readable.prototype,
-	Object.getPrototypeOf(ServerResponse.prototype) === Stream.prototype,
+	Object.getPrototypeOf(Object.getPrototypeOf(ServerResponse.prototype)) ===
+		Stream.prototype,
 	incoming instanceof IncomingMessage,
 	incoming instanceof Readable,
 	response instanceof ServerResponse,
@@ -104,6 +116,27 @@ const checks = [
 	invalidOptions,
 	invalidHeaderName,
 	invalidHeaderValue,
+	response instanceof http.OutgoingMessage,
+	Object.getPrototypeOf(ServerResponse.prototype) === http.OutgoingMessage.prototype,
+	Object.getPrototypeOf(http.ClientRequest.prototype) === http.OutgoingMessage.prototype,
+	Object.getPrototypeOf(http.OutgoingMessage.prototype) === Stream.prototype,
+	new http.OutgoingMessage() instanceof Stream,
+	outgoingPatchSeen,
+	http.isValidHeaderName("Content-Type") && http.isValidHeaderName("~!#$%&*+.^_`|"),
+	!http.isValidHeaderName("bad name") &&
+		!http.isValidHeaderName("") &&
+		!http.isValidHeaderName(5),
+	http.isValidHeaderValue("ok\tvalue \u00ff") &&
+		http.isValidHeaderValue(5) &&
+		http.isValidHeaderValue(null),
+	!http.isValidHeaderValue("bad\nline") &&
+		!http.isValidHeaderValue("\u007f") &&
+		!http.isValidHeaderValue(undefined),
+	http.isValidHeaderValue("\u007f\u0001", { httpValidation: "relaxed" }),
+	!http.isValidHeaderValue("a\u0100", { httpValidation: "relaxed" }),
+	invalidHttpValidation,
 ];
 
+const failedChecks = checks.flatMap((passed, index) => (passed ? [] : [index]));
+if (failedChecks.length > 0) console.log("FAIL: checks " + failedChecks.join(","));
 console.log("RESULT " + checks.filter(Boolean).length + "/" + checks.length);

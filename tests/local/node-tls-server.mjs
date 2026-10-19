@@ -152,6 +152,38 @@ async function echo(label, serverOptions, clientOptions) {
 	console.log(label, "client", JSON.stringify(clientEvents));
 }
 
+{
+	const server = tls.createServer({ cert: CERT, key: KEY });
+	const accepted = new Promise((resolve) => server.on("secureConnection", resolve));
+	await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+	const client = await connectClient(server.address().port, { ca: CA });
+	const socket = await accepted;
+	console.log(
+		"TLSSocket",
+		client instanceof tls.TLSSocket,
+		socket instanceof tls.TLSSocket,
+		socket instanceof net.Socket,
+		Object.getPrototypeOf(tls.TLSSocket) === net.Socket,
+		Object.getPrototypeOf(tls.TLSSocket.prototype) === net.Socket.prototype,
+		server.listenerCount("connection"),
+	);
+	client.destroy();
+	socket.destroy();
+	server.close();
+	const roots = tls.rootCertificates;
+	console.log(
+		"rootCertificates",
+		Array.isArray(roots),
+		Object.isFrozen(roots),
+		roots === tls.rootCertificates,
+		roots.length > 0 &&
+			roots.every((pem) =>
+				/^-----BEGIN CERTIFICATE-----\n[^]*\n-----END CERTIFICATE-----$/.test(pem),
+			),
+		Array.isArray(tls.getCertificateCompressionAlgorithms()),
+	);
+}
+
 await echo("plain", { cert: CERT, key: KEY }, { ca: CA });
 await echo(
 	"alpn",
@@ -182,16 +214,17 @@ function describePeer(certificate) {
 	});
 }
 
-for (const [label, clientOptions] of [
-	["peer certificate", { ca: CA, cert: CLIENT_CERT, key: CLIENT_KEY }],
-	["no peer certificate", { ca: CA }],
+for (const [label, serverCa, clientOptions] of [
+	["peer certificate", CLIENT_CA, { ca: CA, cert: CLIENT_CERT, key: CLIENT_KEY }],
+	["no peer certificate", CLIENT_CA, { ca: CA }],
+	["untrusted peer certificate", CA, { ca: CA, cert: CLIENT_CERT, key: CLIENT_KEY }],
 ]) {
 	let serverSees;
 	let clientSees;
 	const server = tls.createServer(
-		{ cert: CERT, key: KEY, ca: CLIENT_CA, requestCert: true, rejectUnauthorized: false },
+		{ cert: CERT, key: KEY, ca: serverCa, requestCert: true, rejectUnauthorized: false },
 		(socket) => {
-			serverSees = describePeer(socket.getPeerCertificate());
+			serverSees = `authorized=${socket.authorized} ${describePeer(socket.getPeerCertificate())}`;
 			socket.end();
 		},
 	);

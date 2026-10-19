@@ -3,6 +3,7 @@
 
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+use rustls::server::danger::{ClientCertVerified, ClientCertVerifier};
 use rustls::server::{Accepted, Acceptor, ResolvesServerCert, WebPkiClientVerifier};
 use rustls::sign::CertifiedKey;
 use rustls::{
@@ -81,6 +82,8 @@ pub struct MalTlsClient {
     connection: Connection,
     /// OpenSSL's reason text for the failure that ended the session, when one corresponds.
     failure: Option<&'static str>,
+    /// Judges a client certificate the handshake admitted without verifying it.
+    client_verifier: Option<Arc<dyn ClientCertVerifier>>,
     seen_ciphertext: bool,
     peer_closed: bool,
     config_id: u64,
@@ -327,14 +330,19 @@ pub unsafe extern "C" fn mal_tls_client_create(
     let Ok(connection) = ClientConnection::new(config, server_name) else {
         return MAL_TLS_STATUS_ERROR;
     };
-    unsafe { *out_handle = new_session(Connection::Client(connection), config_id) };
+    unsafe { *out_handle = new_session(Connection::Client(connection), config_id, None) };
     MAL_TLS_STATUS_OK
 }
 
-fn new_session(connection: Connection, config_id: u64) -> *mut MalTlsClient {
+fn new_session(
+    connection: Connection,
+    config_id: u64,
+    client_verifier: Option<Arc<dyn ClientCertVerifier>>,
+) -> *mut MalTlsClient {
     Box::into_raw(Box::new(MalTlsClient {
         connection,
         failure: None,
+        client_verifier,
         seen_ciphertext: false,
         peer_closed: false,
         config_id,
@@ -346,6 +354,53 @@ fn new_session(connection: Connection, config_id: u64) -> *mut MalTlsClient {
 
 pub struct MalTlsServerConfig {
     config: Arc<ServerConfig>,
+    client_verifier: Option<Arc<dyn ClientCertVerifier>>,
+}
+
+/// Node's `rejectUnauthorized: false` with `requestCert`: any client certificate completes the
+/// handshake, and `authorized` asks the wrapped verifier afterwards.
+#[derive(Debug)]
+struct DeferredClientVerifier(Arc<dyn ClientCertVerifier>);
+
+impl ClientCertVerifier for DeferredClientVerifier {
+    fn client_auth_mandatory(&self) -> bool {
+        false
+    }
+
+    fn root_hint_subjects(&self) -> &[rustls::DistinguishedName] {
+        self.0.root_hint_subjects()
+    }
+
+    fn verify_client_cert(
+        &self,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _now: UnixTime,
+    ) -> Result<ClientCertVerified, rustls::Error> {
+        Ok(ClientCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        self.0.verify_tls12_signature(message, cert, dss)
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        self.0.verify_tls13_signature(message, cert, dss)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.0.supported_verify_schemes()
+    }
 }
 
 #[derive(Debug)]
@@ -365,8 +420,9 @@ fn server_config(
     alpn_wire: &[u8],
     request_cert: bool,
     reject_unauthorized: bool,
-) -> Result<ServerConfig, i32> {
+) -> Result<(ServerConfig, Option<Arc<dyn ClientCertVerifier>>), i32> {
     let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let mut deferred = None;
     let builder = ServerConfig::builder_with_provider(provider.clone())
         .with_safe_default_protocol_versions()
         .map_err(|_| MAL_TLS_STATUS_ERROR)?;
@@ -376,13 +432,15 @@ fn server_config(
             let certificate = certificate.map_err(|_| MAL_TLS_STATUS_BAD_CA)?;
             roots.add(certificate).map_err(|_| MAL_TLS_STATUS_BAD_CA)?;
         }
-        let verifier = WebPkiClientVerifier::builder_with_provider(Arc::new(roots), provider);
-        let verifier = if reject_unauthorized {
-            verifier
+        let verifier = WebPkiClientVerifier::builder_with_provider(Arc::new(roots), provider)
+            .build()
+            .map_err(|_| MAL_TLS_STATUS_BAD_CA)?;
+        if reject_unauthorized {
+            builder.with_client_cert_verifier(verifier)
         } else {
-            verifier.allow_unauthenticated()
-        };
-        builder.with_client_cert_verifier(verifier.build().map_err(|_| MAL_TLS_STATUS_BAD_CA)?)
+            deferred = Some(verifier.clone());
+            builder.with_client_cert_verifier(Arc::new(DeferredClientVerifier(verifier)))
+        }
     } else {
         builder.with_no_client_auth()
     };
@@ -419,7 +477,7 @@ fn server_config(
         config.alpn_protocols.push(rest[..length].to_vec());
         wire = &rest[length..];
     }
-    Ok(config)
+    Ok((config, deferred))
 }
 
 #[no_mangle]
@@ -460,10 +518,11 @@ pub unsafe extern "C" fn mal_tls_server_config_create(
         request_cert != 0,
         reject_unauthorized != 0,
     ) {
-        Ok(config) => {
+        Ok((config, client_verifier)) => {
             unsafe {
                 *out_config = Box::into_raw(Box::new(MalTlsServerConfig {
                     config: Arc::new(config),
+                    client_verifier,
                 }))
             };
             MAL_TLS_STATUS_OK
@@ -497,10 +556,11 @@ pub unsafe extern "C" fn mal_tls_server_create(
         return MAL_TLS_STATUS_INVALID_ARGUMENT;
     }
     unsafe { *out_handle = core::ptr::null_mut() };
-    let Ok(connection) = ServerConnection::new(unsafe { &*config }.config.clone()) else {
+    let config = unsafe { &*config };
+    let Ok(connection) = ServerConnection::new(config.config.clone()) else {
         return MAL_TLS_STATUS_ERROR;
     };
-    unsafe { *out_handle = new_session(Connection::Server(connection), 0) };
+    unsafe { *out_handle = new_session(Connection::Server(connection), 0, config.client_verifier.clone()) };
     MAL_TLS_STATUS_OK
 }
 
@@ -604,7 +664,10 @@ pub unsafe extern "C" fn mal_tls_acceptor_accept(
     };
     match accepted.into_connection(config.config.clone()) {
         Ok(connection) => {
-            unsafe { *out_handle = new_session(Connection::Server(connection), 0) };
+            unsafe {
+                *out_handle =
+                    new_session(Connection::Server(connection), 0, config.client_verifier.clone())
+            };
             MAL_TLS_STATUS_OK
         }
         Err(_) => MAL_TLS_STATUS_ERROR,
@@ -673,7 +736,17 @@ pub unsafe extern "C" fn mal_tls_session_info(
             None => return -1,
         },
         MAL_TLS_INFO_PEER_CERTIFIED => match connection.peer_certificates() {
-            Some(certificates) if !certificates.is_empty() => b"1",
+            Some(certificates) if !certificates.is_empty() => {
+                if let Some(verifier) = &unsafe { &*handle }.client_verifier {
+                    if verifier
+                        .verify_client_cert(&certificates[0], &certificates[1..], UnixTime::now())
+                        .is_err()
+                    {
+                        return -1;
+                    }
+                }
+                b"1"
+            }
             _ => return -1,
         },
         _ => return -1,

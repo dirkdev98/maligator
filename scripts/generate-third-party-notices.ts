@@ -36,6 +36,7 @@ const NODE_DERIVED: Array<Derivation> = [
 		file: "runtime/src/runtime/node_fs.c",
 		upstream: "lib/internal/fs/cp/cp.js, lib/internal/fs/cp/cp-sync.js, src/node_file.cc",
 	},
+	{ file: "runtime/src/runtime/node_http.c", upstream: "lib/_http_outgoing.js" },
 	{
 		file: "runtime/src/runtime/node_inspect.c",
 		upstream: "lib/internal/util/inspect.js",

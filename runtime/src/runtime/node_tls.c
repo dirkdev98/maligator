@@ -269,6 +269,10 @@ static MalValue node_tls_connect(
         mal_gc_unroot(&root);
         return mal_value_new_undefined();
     }
+    MalValue socket_prototype = mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 0);
+    if (mal_value_is_object(socket_prototype)) {
+        mal_object_set_prototype(mal_value_to_object(roots[1]), mal_value_to_object(socket_prototype));
+    }
     if (argc > 1 && mal_value_is_callable(args[1])) {
         roots[6] = mal_value_from_string(
             mal_intrinsic_ascii(vm, (const byte *) "secureConnect"));
@@ -869,7 +873,9 @@ static MalValue node_tls_server_constructor(
     MalObject *prototype = mal_value_is_object(roots[0]) ? mal_value_to_object(roots[0])
         : mal_value_to_object(mal_node_net_server_prototype());
     roots[0] = mal_value_from_object(mal_object_new(&vm->heap, prototype));
-    if (!mal_node_net_server_init(vm, roots[0], roots[1], mal_value_new_undefined())
+    // Node's tlsConnectionListener: every accepted socket is a TLSSocket before it is secure.
+    MalValue connection_listener = mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 0);
+    if (!mal_node_net_server_init(vm, roots[0], roots[1], connection_listener)
         || !mal_node_tls_server_setup(vm, roots[0], roots[1])) {
         goto done;
     }
@@ -896,7 +902,8 @@ static MalValue node_tls_create_server(
 
 static MalValue node_tls_class(
     MalVm *vm, MalObject *module, const char *name, MalNativeFunctionCallback callback,
-    MalValue parent, const char *factory_name, MalNativeFunctionCallback factory) {
+    MalValue parent, const char *factory_name, MalNativeFunctionCallback factory,
+    const MalValue *slots, u32 slot_count) {
     MalValue parent_prototype = mal_value_new_undefined();
     MalValue parent_constructor = mal_value_new_undefined();
     if (mal_value_is_object(parent)) {
@@ -910,9 +917,9 @@ static MalValue node_tls_class(
     };
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
-    MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(&vm->heap,
+    MalNativeFunctionObject *constructor = mal_native_function_object_new_with_slots_arity(&vm->heap,
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-        mal_intrinsic_ascii(vm, (const byte *) name), 1, callback);
+        mal_intrinsic_ascii(vm, (const byte *) name), 1, callback, slots, slot_count);
     mal_native_function_object_set_constructor(constructor);
     roots[2] = mal_value_from_native_function_object(constructor);
     if (mal_value_is_object(roots[1])) mal_object_set_prototype((MalObject *) constructor, mal_value_to_object(roots[1]));
@@ -920,19 +927,48 @@ static MalValue node_tls_class(
     mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]), (const byte *) "constructor", roots[2],
         MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
     mal_intrinsic_define_data(vm, module, (const byte *) name, roots[2], TLS_VISIBLE);
-    roots[3] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(
-        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-        mal_intrinsic_ascii(vm, (const byte *) factory_name), 2, factory, &roots[2], 1));
-    mal_intrinsic_define_data(vm, module, (const byte *) factory_name, roots[3], TLS_VISIBLE);
+    if (factory != nullptr) {
+        roots[3] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(
+            &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+            mal_intrinsic_ascii(vm, (const byte *) factory_name), 2, factory, &roots[2], 1));
+        mal_intrinsic_define_data(vm, module, (const byte *) factory_name, roots[3], TLS_VISIBLE);
+    }
     MalValue result = roots[2];
     mal_gc_unroot(&root);
     return result;
 }
 
-static void node_tls_install_server(MalVm *vm, MalObject *module, const MalHostLaunchContext *launch) {
+static MalValue node_tls_connection_listener(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) vm, (void) receiver, (void) new_target;
+    MalValue prototype = mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 0);
+    if (argc > 0 && mal_value_is_object(args[0]) && mal_value_is_object(prototype)) {
+        mal_object_set_prototype(mal_value_to_object(args[0]), mal_value_to_object(prototype));
+    }
+    return mal_value_new_undefined();
+}
+
+static MalValue node_tls_socket_constructor(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver, (void) args, (void) argc, (void) new_target, (void) callee;
+    // Node's constructor only wraps; the handshake waits for internals this adapter lacks.
+    mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+        "new tls.TLSSocket() is not supported; use tls.connect({ socket })");
+    return mal_value_new_undefined();
+}
+
+static void node_tls_install_server(
+    MalVm *vm, MalObject *module, const MalHostLaunchContext *launch, MalValue socket_prototype) {
     mal_host_install_node_net(vm, nullptr, 0, launch);
+    MalValue listener = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+        mal_intrinsic_ascii(vm, (const byte *) "tlsConnectionListener"), 1, node_tls_connection_listener,
+        &socket_prototype, 1));
+    MalRootSpan root;
+    mal_gc_root(&root, &listener, 1);
     MalValue server = node_tls_class(vm, module, "Server", node_tls_server_constructor,
-        mal_node_net_server_prototype(), "createServer", node_tls_create_server);
+        mal_node_net_server_prototype(), "createServer", node_tls_create_server, &listener, 1);
+    mal_gc_unroot(&root);
     if (mal_value_is_object(server)) {
         MalValue prototype = mal_vm_function_prototype(vm, server);
         if (mal_value_is_object(prototype)) {
@@ -943,10 +979,19 @@ static void node_tls_install_server(MalVm *vm, MalObject *module, const MalHostL
         }
     }
     (void) node_tls_class(vm, module, "SecureContext", node_tls_secure_context_constructor,
-        mal_value_new_undefined(), "createSecureContext", node_tls_create_secure_context);
+        mal_value_new_undefined(), "createSecureContext", node_tls_create_secure_context, nullptr, 0);
+}
+
+// Rustls here is built without certificate compression, so no algorithm is negotiable.
+static MalValue node_tls_get_certificate_compression_algorithms(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver, (void) args, (void) argc, (void) new_target, (void) callee;
+    return mal_value_from_array_object(mal_intrinsic_new_array(vm, 0));
 }
 
 static void node_tls_install_extras(MalVm *vm, MalObject *module) {
+    mal_intrinsic_define_method_n(vm, module, (const byte *) "getCertificateCompressionAlgorithms", 0,
+        node_tls_get_certificate_compression_algorithms);
     mal_intrinsic_define_method_n(vm, module, (const byte *) "getCiphers", 0, node_tls_get_ciphers);
     mal_intrinsic_define_method_n(vm, module, (const byte *) "getCACertificates", 1, node_tls_get_ca_certificates);
     mal_intrinsic_define_method_n(vm, module, (const byte *) "checkServerIdentity", 2, node_tls_check_server_identity);
@@ -980,28 +1025,51 @@ static void node_tls_install_extras(MalVm *vm, MalObject *module) {
     mal_gc_unroot(&root);
 }
 
+// Named bindings are snapshots, so the lazy rootCertificates getter runs only when imported.
+static void node_tls_publish_lazy(MalVm *vm, const MalHostInstallSlot *slots, i32 count, MalValue module) {
+    for (i32 i = 0; i < count; i++) {
+        if (strcmp(slots[i].name, "rootCertificates") != 0) continue;
+        MalValue value = mal_value_new_undefined();
+        if (mal_vm_get_property(vm, module, mal_intrinsic_string_key(vm, (const byte *) "rootCertificates"), &value)) {
+            vm->globals[slots[i].slot] = value;
+        }
+    }
+}
+
 void mal_host_install_node_tls(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
     const MalHostLaunchContext *launch) {
-    if (mal_node_module_install_cached(vm, "node:tls", slots, count)) return;
+    if (mal_node_module_install_cached(vm, "node:tls", slots, count)) {
+        node_tls_publish_lazy(vm, slots, count, mal_node_module_get_cached(vm, "node:tls"));
+        return;
+    }
     MalValue cached = vm->intrinsics[MAL_INTRINSIC_NODE_TLS_MODULE];
     if (!mal_value_is_undefined(cached)) {
         mal_node_module_publish(vm, "node:tls", slots, count, cached);
+        node_tls_publish_lazy(vm, slots, count, cached);
         return;
     }
-    MalValue module = mal_value_from_object(mal_intrinsic_new_object(vm));
+    mal_host_install_node_net(vm, nullptr, 0, launch);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) return;
+    MalValue roots[] = {mal_value_from_object(mal_intrinsic_new_object(vm)), mal_value_new_undefined(),
+        mal_value_new_undefined()};
     MalRootSpan root;
-    mal_gc_root(&root, &module, 1);
-    MalValue connect = mal_intrinsic_define_method_n(
-        vm, mal_value_to_object(module), (const byte *) "connect", 1,
-        node_tls_connect);
+    mal_gc_root(&root, roots, countof(roots));
+    MalValue module = roots[0];
+    roots[1] = node_tls_class(vm, mal_value_to_object(module), "TLSSocket", node_tls_socket_constructor,
+        vm->intrinsics[MAL_INTRINSIC_NODE_NET_SOCKET_PROTOTYPE], nullptr, nullptr, nullptr, 0);
+    roots[1] = mal_vm_function_prototype(vm, roots[1]);
+    roots[2] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+        mal_intrinsic_ascii(vm, (const byte *) "connect"), 1, node_tls_connect, &roots[1], 1));
     mal_intrinsic_define_data(
-        vm, mal_value_to_object(module), (const byte *) "connect", connect,
+        vm, mal_value_to_object(module), (const byte *) "connect", roots[2],
         TLS_VISIBLE);
     node_tls_install_extras(vm, mal_value_to_object(module));
-    node_tls_install_server(vm, mal_value_to_object(module), launch);
+    node_tls_install_server(vm, mal_value_to_object(module), launch, roots[1]);
     vm->intrinsics[MAL_INTRINSIC_NODE_TLS_MODULE] = module;
     mal_node_module_publish(vm, "node:tls", slots, count, module);
+    node_tls_publish_lazy(vm, slots, count, module);
     mal_gc_unroot(&root);
 }
 

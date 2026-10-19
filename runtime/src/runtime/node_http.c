@@ -1,3 +1,4 @@
+// Portions derived from Node.js lib/_http_outgoing.js (MIT); see THIRD_PARTY_NOTICES.md.
 #include "node_http.h"
 #include "node_https.h"
 
@@ -329,6 +330,9 @@ typedef struct MalNodeHttpClientState {
 
 // Value-holding lists belong to, and are traced on, their isolate's mutator.
 static MAL_ISOLATE_LOCAL MalNodeHttpServerState *http_servers;
+/* OutgoingMessage.prototype as installed; a patch changes its shape and disables the fast path. */
+static MAL_ISOLATE_LOCAL MalShape *http_outgoing_prototype_shape;
+static MAL_ISOLATE_LOCAL usize http_outgoing_prototype_properties;
 static MAL_ISOLATE_LOCAL MalNodeHttpSocketState *http_sockets;
 static MAL_ISOLATE_LOCAL MalNodeHttpRequestState *http_requests;
 static MAL_ISOLATE_LOCAL MalNodeHttpRequestState *http_requests_tail;
@@ -1307,7 +1311,11 @@ static bool http_can_construct_canonical(
         return false;
     }
     if (!readable) {
-        return mal_object_get_prototype(prototype) == stream;
+        MalObject *outgoing = mal_object_get_prototype(prototype);
+        return outgoing != nullptr
+            && http_prototype_shape_matches(mal_value_from_object(outgoing),
+                http_outgoing_prototype_shape, http_outgoing_prototype_properties)
+            && mal_object_get_prototype(outgoing) == stream;
     }
     if (!http_prototype_shape_matches(
             readable_prototype, vm->node_http_readable_prototype_shape,
@@ -1580,6 +1588,111 @@ static MalValue http_validate_header_name(
         return mal_value_new_undefined();
     }
     return mal_value_new_undefined();
+}
+
+// lib/_http_common.js checkIsHttpToken.
+static MalValue http_is_valid_header_name(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) vm, (void) receiver, (void) new_target, (void) callee;
+    if (argc < 1 || !mal_value_is_string(args[0])) return mal_value_new_boolean(false);
+    MalString *string = mal_value_to_string(args[0]);
+    usize length = mal_string_length(string);
+    const c16 *units = mal_string_code_units(string);
+    if (length == 0) return mal_value_new_boolean(false);
+    for (usize i = 0; i < length; i++) {
+        c16 unit = units[i];
+        bool valid = (unit >= 'a' && unit <= 'z') || (unit >= 'A' && unit <= 'Z')
+            || (unit >= '0' && unit <= '9') || (unit < 0x80 && strchr("!#$%&'*+-.^_`|~", (int) unit) != nullptr && unit != 0);
+        if (!valid) return mal_value_new_boolean(false);
+    }
+    return mal_value_new_boolean(true);
+}
+
+// lib/_http_outgoing.js isValidHeaderValue: strict admits HTAB, 0x20-0x7e and 0x80-0xff;
+// relaxed rejects only NUL, CR, LF and code units above 0xff.
+static MalValue http_is_valid_header_value(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver, (void) new_target, (void) callee;
+    MalValue value = argc > 0 ? args[0] : mal_value_new_undefined();
+    bool lenient = false;
+    if (argc > 1 && !mal_value_is_undefined(args[1])) {
+        MalValue options = args[1];
+        if (!mal_value_is_object(options) || mal_value_is_callable(options) || mal_value_is_array_object(options)) {
+            char received[320];
+            mal_node_describe_received(vm, options, received, sizeof received);
+            char message[400];
+            snprintf(message, sizeof message, "The \"options\" argument must be of type object. %s", received);
+            mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, message, "ERR_INVALID_ARG_TYPE");
+            return mal_value_new_undefined();
+        }
+        MalValue validation = mal_value_new_undefined();
+        MalRootSpan root;
+        mal_gc_root(&root, &validation, 1);
+        bool ok = mal_vm_get_property(vm, options, mal_intrinsic_string_key(vm, (const byte *) "httpValidation"), &validation);
+        if (ok && mal_value_is_string(validation) && mal_string_equals_ascii(mal_value_to_string(validation), "relaxed")) {
+            lenient = true;
+        } else if (ok && !mal_value_is_undefined(validation)
+            && !(mal_value_is_string(validation) && mal_string_equals_ascii(mal_value_to_string(validation), "strict"))) {
+            char shown[256] = "";
+            if (mal_value_is_string(validation)) {
+                usize length = 0;
+                byte *text = mal_string_to_utf8(mal_value_to_string(validation), &length);
+                snprintf(shown, sizeof shown, "'%.*s'", text == nullptr ? 0 : (int) length, text == nullptr ? "" : (const char *) text);
+                free(text);
+            } else {
+                mal_node_describe_received(vm, validation, shown, sizeof shown);
+            }
+            char message[400];
+            snprintf(message, sizeof message,
+                "The property 'options.httpValidation' must be one of: 'strict', 'relaxed'. Received %s",
+                strncmp(shown, "Received ", 9) == 0 ? shown + 9 : shown);
+            mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, message, "ERR_INVALID_ARG_VALUE");
+            ok = false;
+        }
+        mal_gc_unroot(&root);
+        if (!ok) return mal_value_new_undefined();
+    }
+    if (mal_value_is_undefined(value) || mal_value_is_symbol(value)) return mal_value_new_boolean(false);
+    MalString *string = mal_value_is_string(value) ? mal_value_to_string(value) : mal_ops_to_string(&vm->heap, value);
+    if (string == nullptr || vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
+    usize length = mal_string_length(string);
+    const c16 *units = mal_string_code_units(string);
+    for (usize i = 0; i < length; i++) {
+        c16 unit = units[i];
+        bool valid = lenient ? unit != 0 && unit != '\r' && unit != '\n' && unit <= 0xff
+            : unit == '\t' || (unit >= 0x20 && unit <= 0x7e) || (unit >= 0x80 && unit <= 0xff);
+        if (!valid) return mal_value_new_boolean(false);
+    }
+    return mal_value_new_boolean(true);
+}
+
+// Node's OutgoingMessage, which also accepts the `OutgoingMessage.call(this)` subclass idiom.
+static MalValue http_outgoing_message_constructor(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) args, (void) argc;
+    MalValue roots[] = {receiver};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    if (!mal_value_is_undefined(new_target) || !mal_value_is_object(roots[0])) {
+        MalValue prototype = mal_vm_function_prototype(vm, mal_value_is_undefined(new_target) ? callee : new_target);
+        roots[0] = mal_value_from_object(mal_object_new(&vm->heap, mal_value_is_object(prototype)
+            ? mal_value_to_object(prototype)
+            : mal_value_to_object(mal_vm_function_prototype(vm, callee))));
+    }
+    MalCompletion initialized = mal_vm_call_value(
+        vm, vm->intrinsics[MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR], roots[0], nullptr, 0);
+    if (initialized.kind != MAL_COMPLETION_THROW) {
+        http_define_own(vm, roots[0], "writable", mal_value_new_boolean(true));
+        http_define_own(vm, roots[0], "destroyed", mal_value_new_boolean(false));
+        http_define_own(vm, roots[0], "finished", mal_value_new_boolean(false));
+    }
+    MalValue result = mal_value_is_undefined(new_target) && mal_value_is_object(receiver)
+        ? mal_value_new_undefined() : roots[0];
+    mal_gc_unroot(&root);
+    return vm->completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : result;
 }
 
 static MalValue http_validate_header_value(
@@ -5359,9 +5472,18 @@ void mal_host_install_node_http(
     roots[1] = mal_value_from_object(mal_object_new(
         &vm->heap, mal_value_to_object(
             vm->intrinsics[MAL_INTRINSIC_NODE_READABLE_PROTOTYPE])));
-    roots[2] = mal_value_from_object(mal_object_new(
+    // [7] holds OutgoingMessage.prototype until createServer claims the slot.
+    roots[7] = mal_value_from_object(mal_object_new(
         &vm->heap, mal_value_to_object(
             vm->intrinsics[MAL_INTRINSIC_NODE_STREAM_PROTOTYPE])));
+    roots[2] = mal_value_from_object(mal_object_new(&vm->heap, mal_value_to_object(roots[7])));
+    roots[9] = http_constructor(vm, "OutgoingMessage", 1, http_outgoing_message_constructor, roots[7]);
+    mal_object_set_prototype(mal_value_to_object(roots[9]), mal_value_to_object(
+        vm->intrinsics[MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR]));
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]), (const byte *) "OutgoingMessage", roots[9],
+        HTTP_VISIBLE);
+    http_outgoing_prototype_shape = mal_value_to_object(roots[7])->shape;
+    http_outgoing_prototype_properties = http_object_property_count(mal_value_to_object(roots[7]));
     mal_intrinsic_define_method_n(
         vm, mal_value_to_object(roots[1]), (const byte *) "_read", 1,
         http_incoming_read);
@@ -5430,8 +5552,7 @@ void mal_host_install_node_http(
                               (const byte *) "createServer", roots[7], HTTP_VISIBLE);
     roots[8] = http_methods(vm);
     roots[9] = mal_value_from_object(mal_object_new(
-        &vm->heap, mal_value_to_object(
-            vm->intrinsics[MAL_INTRINSIC_NODE_STREAM_PROTOTYPE])));
+        &vm->heap, mal_object_get_prototype(mal_value_to_object(roots[2]))));
     mal_intrinsic_define_method_n(
         vm, mal_value_to_object(roots[9]), (const byte *) "write", 3,
         http_client_write);
@@ -5486,6 +5607,10 @@ void mal_host_install_node_http(
     mal_intrinsic_define_data(
         vm, mal_value_to_object(roots[0]), (const byte *) "validateHeaderValue",
         roots[15], HTTP_VISIBLE);
+    mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[0]), (const byte *) "isValidHeaderName", 1,
+        http_is_valid_header_name);
+    mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[0]), (const byte *) "isValidHeaderValue", 2,
+        http_is_valid_header_value);
     roots[16] = mal_value_from_object(mal_intrinsic_new_object(vm));
     mal_intrinsic_define_method_n(
         vm, mal_value_to_object(roots[16]), (const byte *) "destroy", 0,
