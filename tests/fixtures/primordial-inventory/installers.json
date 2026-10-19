@@ -53,7 +53,7 @@
 	},
 	{
 		"file": "builtin_eval.c",
-		"sha256": "61a75e74724821468d715805928d5e394b028de837325736f41ff89480acd5a3"
+		"sha256": "3f4085c56744fe3358d8053c3d80ff601d38baf603abfa82c9ba924449aaa8e9"
 	},
 	{
 		"file": "builtin_finalization_registry.c",
@@ -681,7 +681,7 @@
 	},
 	{
 		"file": "runtime/node_vm.c",
-		"sha256": "3b322c406fa3168ae7771671817f6e481e1c45a42c7ab212df7315b1eaaae7b4"
+		"sha256": "b856c563815d68c88fd8c2c7c0c17434c10af7e3ed5c6aa5ec003c0ed107324d"
 	},
 	{
 		"file": "runtime/node_vm.h",

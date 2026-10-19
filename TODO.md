@@ -1137,7 +1137,11 @@ remains a Maligator extension and does not count as global fetch conformance.
       Cipheriv as Transform streams; dns record types beyond A/AAAA (needs res_query
       and libresolv in the link); zlib zstd and the zip archive APIs; tls
       createServer; worker_threads environment data, markAsUntransferable,
-      BroadcastChannel and locks; and vm beyond runInNewContext.
+      BroadcastChannel and locks; vm's SourceTextModule, SyntheticModule,
+      measureMemory and DONT_CONTEXTIFY, and a live contextified global (contexts copy
+      the sandbox's own enumerable properties in and changed globals back, so its
+      prototype chain, getters and deletions do not reach the script), plus collection
+      of realms whose sandboxes are gone.
 
 - [ ] Make async_hooks observe more than AsyncResource: timers, I/O and promises
       do not emit hook events, and executionAsyncId() inside their callbacks stays

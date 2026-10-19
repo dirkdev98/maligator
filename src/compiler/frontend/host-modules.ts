@@ -281,7 +281,17 @@ const V8: HostModuleSpec = {
 
 const VM: HostModuleSpec = {
 	id: "node:vm",
-	named: ["runInNewContext"],
+	named: [
+		"Script",
+		"compileFunction",
+		"constants",
+		"createContext",
+		"createScript",
+		"isContext",
+		"runInContext",
+		"runInNewContext",
+		"runInThisContext",
+	],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:vm"),
 };

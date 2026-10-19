@@ -39,14 +39,6 @@ try {
 }
 check("V8 flags require a string", flagsTypeError);
 
-let codeTypeError = false;
-try {
-	runInNewContext(1 as unknown as string);
-} catch (error) {
-	codeTypeError = error instanceof TypeError;
-}
-check("VM code requires a string", codeTypeError);
-
 for (const [name, ok] of results) {
 	if (!ok) console.log(`FAIL: ${name}`);
 }

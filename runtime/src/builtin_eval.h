@@ -20,6 +20,16 @@ void mal_intrinsics_init_eval(MalVm *vm, MalObject *global_this);
  */
 MalValue mal_vm_eval_source(MalVm *vm, MalValue source);
 
+/**
+ * Compile `source` as a classic script in global scope without running it, and
+ * return its spliced entry, or -1 with a pending throw. The entry may be run any
+ * number of times, in any realm, with mal_vm_run_script_entry.
+ */
+i32 mal_vm_compile_script(MalVm *vm, MalValue source);
+
+/** Run a mal_vm_compile_script entry in the current realm and return its completion value. */
+MalValue mal_vm_run_script_entry(MalVm *vm, i32 entry);
+
 #if MAL_REALMS
 typedef enum {
     MAL_SHADOW_REALM_EVAL_FAILURE_NONE,

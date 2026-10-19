@@ -306,6 +306,15 @@ MalValue mal_vm_eval_source(MalVm *vm, MalValue source) {
     return eval_source(vm, source, false);
 }
 
+i32 mal_vm_compile_script(MalVm *vm, MalValue source) {
+    return compile_source(
+        vm, source, false, false, false, false, mal_value_new_undefined(), true, nullptr);
+}
+
+MalValue mal_vm_run_script_entry(MalVm *vm, i32 entry) {
+    return run_compiled_source(vm, entry, mal_value_new_undefined());
+}
+
 #if MAL_REALMS
 MalCompletion mal_realm_eval_script(MalVm *vm, MalRealm *realm, MalValue source) {
     // Embedding calls have no native-frame contribution to lift. The $262 native
