@@ -1720,6 +1720,7 @@ static u64 endpoint_post(MalVm *vm, PortRecord *from, MalValue value, MalValue t
             mal_serialized_value_release(snapshot);
         } else {
             message->value = snapshot;
+            message->shared = nullptr;
             message->bytes = bytes;
             message->ticket = atomic_fetch_add_explicit(&g_next_ticket, 1, memory_order_relaxed);
             message->sender = sender;
