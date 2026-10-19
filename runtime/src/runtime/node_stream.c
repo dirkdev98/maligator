@@ -1,4 +1,4 @@
-// Portions derived from Node.js lib/internal/streams/compose.js, lib/internal/streams/duplex.js, lib/internal/streams/readable.js, lib/internal/streams/writable.js (MIT); see THIRD_PARTY_NOTICES.md.
+// Portions derived from Node.js lib/internal/streams/compose.js, lib/internal/streams/duplex.js, lib/internal/streams/duplexify.js, lib/internal/streams/from.js, lib/internal/streams/pipeline.js, lib/internal/streams/readable.js, lib/internal/streams/writable.js (MIT); see THIRD_PARTY_NOTICES.md.
 #include "node_stream.h"
 
 #if MAL_NODE
@@ -1966,6 +1966,9 @@ static MalValue stream_buffer_call(MalVm *vm, MalValue target, const char *name,
 
 /* fromList: n bytes (or characters with a decoder), or one object in objectMode. */
 static MalValue stream_from_list(MalVm *vm, MalValue receiver, i32 n) {
+    if (stream_state_i32(vm, receiver, "length", 0) == 0 || stream_queue_count(vm, receiver) == 0) {
+        return mal_value_new_null();
+    }
     if (stream_state_truthy(vm, receiver, "objectMode")) return stream_queue_shift(vm, receiver);
     bool strings = mal_value_is_object(stream_own(vm, stream_own(vm, receiver, "_readableState"), "decoder"));
     MalValue roots[] = {receiver, stream_new_array(vm), mal_value_new_undefined(), mal_value_new_undefined()};
@@ -2724,6 +2727,7 @@ static MalValue stream_slot_function(MalVm *vm, const char *name, i32 length, Ma
     const MalValue *slots, i32 count);
 static bool stream_is_node_stream(MalVm *vm, MalValue value);
 static bool stream_has_state(MalVm *vm, MalValue value, const char *name);
+static MalValue df_duplexify(MalVm *vm, MalValue body, const char *name);
 static MalValue stream_finished(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
     MalValue new_target, MalValue callee);
@@ -3101,9 +3105,8 @@ static MalValue pl_pipeline(MalVm *vm, MalValue stages, MalValue callback, bool 
             } else if (pl_is_iterable(vm, roots[4], 0) || stream_has_state(vm, roots[4], "_readableState")) {
                 roots[7] = roots[4];
             } else {
-                mal_node_throw_code(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, "The Duplex.from() method is not implemented",
-                    "ERR_METHOD_NOT_IMPLEMENTED");
-                break;
+                roots[7] = df_duplexify(vm, roots[4], "body");
+                if (vm->completion.kind == MAL_COMPLETION_THROW) break;
             }
         } else if (mal_value_is_callable(roots[4])) {
             MalValue call_args[] = {roots[7], pl_signal_options(vm, roots[3])};
@@ -3176,9 +3179,9 @@ static MalValue pl_pipeline(MalVm *vm, MalValue stages, MalValue callback, bool 
             }
             roots[7] = roots[4];
         } else {
-            mal_node_throw_code(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, "The Duplex.from() method is not implemented",
-                "ERR_METHOD_NOT_IMPLEMENTED");
-            break;
+            // pipelineImpl's last branch: ret = Duplex.from(stream), without connecting it.
+            roots[7] = df_duplexify(vm, roots[4], "body");
+            if (vm->completion.kind == MAL_COMPLETION_THROW) break;
         }
     }
     if (vm->completion.kind != MAL_COMPLETION_THROW) result = roots[7];
@@ -4625,36 +4628,45 @@ static MalValue stream_compose(MalVm *vm, MalValue self, const MalValue *args, i
             "ERR_MISSING_ARGS");
         return mal_value_new_undefined();
     }
-    bool needs_from = argc == 1 || mal_value_is_callable(args[0]) || mal_value_is_callable(args[argc - 1]);
-    if (argc == 1 && stream_is_readable(vm, args[0]) && stream_is_writable(vm, args[0])) return args[0];
-    if (needs_from) {
-        // TODO: Duplex.from (duplexify) for functions, iterables and single non-duplex stages.
-        mal_node_throw_code(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, "The Duplex.from() method is not implemented",
-            "ERR_METHOD_NOT_IMPLEMENTED");
-        return mal_value_new_undefined();
-    }
-    for (i32 n = 0; n < argc; n++) {
-        if (!stream_is_node_stream(vm, args[n])) continue;
-        if (n < argc - 1 && !stream_predicate_true(vm, args[n], STREAM_IS_READABLE)) {
-            stream_compose_invalid(vm, n, args[n], "must be readable");
-            return mal_value_new_undefined();
-        }
-        if (n > 0 && !stream_predicate_true(vm, args[n], STREAM_IS_WRITABLE)) {
-            stream_compose_invalid(vm, n, args[n], "must be writable");
-            return mal_value_new_undefined();
-        }
-        if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
-    }
+    if (argc == 1) return df_duplexify(vm, args[0], "body");
+    MalValue stages = mal_value_from_array_object(mal_array_object_new_from_values(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]), args, (u32) argc));
     MalValue roots[] = {mal_value_from_object(mal_intrinsic_new_object(vm)), mal_value_new_undefined(),
-        mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined()};
+        mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(),
+        stages};
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
     MalValue result = mal_value_new_undefined();
-    MalValue head = args[0];
+    MalArrayObject *stage_array = mal_value_to_array_object(roots[6]);
+    if (mal_value_is_callable(args[0])) {
+        roots[1] = df_duplexify(vm, args[0], "body");
+        if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
+        mal_array_object_store(stage_array, mal_key_index(0), roots[1]);
+    }
+    if (mal_value_is_callable(args[argc - 1])) {
+        roots[1] = df_duplexify(vm, args[argc - 1], "body");
+        if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
+        mal_array_object_store(stage_array, mal_key_index((u32) argc - 1), roots[1]);
+    }
+    for (i32 n = 0; n < argc; n++) {
+        MalValue stage = stream_array_at(stage_array, (u32) n);
+        if (!stream_is_node_stream(vm, stage)) continue;
+        if (n < argc - 1 && !stream_predicate_true(vm, stage, STREAM_IS_READABLE)) {
+            stream_compose_invalid(vm, n, args[n], "must be readable");
+            goto done;
+        }
+        if (n > 0 && !stream_predicate_true(vm, stage, STREAM_IS_WRITABLE)) {
+            stream_compose_invalid(vm, n, args[n], "must be writable");
+            goto done;
+        }
+        if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
+    }
+    MalValue head = stream_array_at(stage_array, 0);
     stream_set(vm, roots[0], "head", head);
     stream_set(vm, roots[0], "onclose", mal_value_new_undefined());
     roots[1] = stream_slot_function(vm, "onfinished", 1, stream_compose_onfinished, &roots[0], 1);
-    MalValue tail = stream_pipeline_common(vm, args, argc, roots[1]);
+    MalValue tail = pl_needs_general(vm, roots[6]) ? pl_pipeline(vm, roots[6], roots[1], true, mal_value_new_undefined())
+        : stream_pipeline_common(vm, &roots[6], 1, roots[1]);
     if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
     roots[2] = tail;
     stream_set(vm, roots[0], "tail", tail);
@@ -4703,6 +4715,640 @@ static MalValue stream_compose(MalVm *vm, MalValue self, const MalValue *args, i
 done:
     mal_gc_unroot(&root);
     return vm->completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : result;
+}
+
+/* Duplex.from, translated from Node 26 lib/internal/streams/duplexify.js (duplexify,
+ * fromAsyncGen, _duplexify) and the Duplex form of lib/internal/streams/from.js. */
+static MalValue df_duplexify(MalVm *vm, MalValue body, const char *name);
+
+static bool df_is_readable(MalVm *vm, MalValue value) {
+    return stream_is_node_stream(vm, value) && stream_has_state(vm, value, "_readableState");
+}
+
+static bool df_is_writable(MalVm *vm, MalValue value) {
+    return stream_is_node_stream(vm, value) && stream_has_state(vm, value, "_writableState");
+}
+
+static bool df_has_prototype(MalVm *vm, MalValue value, MalIntrinsic slot) {
+    return stream_prototype_chain_has(value, vm->intrinsics[slot]);
+}
+
+static MalValue df_construct(MalVm *vm, MalValue options) {
+    MalCompletion constructed = mal_vm_construct_value(vm, vm->intrinsics[MAL_INTRINSIC_NODE_DUPLEX_CONSTRUCTOR], &options, 1);
+    return constructed.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : constructed.value;
+}
+
+/* from(Duplex, iterable, opts): objectMode, highWaterMark 1, reading from the iterator. */
+static MalValue df_from_iterable(MalVm *vm, MalValue iterable, MalValue extra) {
+    MalValue roots[] = {iterable, extra, mal_value_new_undefined(), mal_value_from_object(mal_intrinsic_new_object(vm)),
+        mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalValue result = mal_value_new_undefined();
+    bool async = pl_is_iterable(vm, roots[0], 1);
+    mal_vm_get_property(vm, roots[0], mal_intrinsic_symbol_key(vm,
+        async ? MAL_INTRINSIC_SYMBOL_ASYNC_ITERATOR : MAL_INTRINSIC_SYMBOL_ITERATOR), &roots[2]);
+    MalCompletion iterator = mal_vm_call_value(vm, roots[2], roots[0], nullptr, 0);
+    if (iterator.kind == MAL_COMPLETION_THROW) goto done;
+    roots[2] = iterator.value;
+    stream_set(vm, roots[3], "objectMode", mal_value_new_boolean(true));
+    stream_set(vm, roots[3], "highWaterMark", mal_value_from_i32(1));
+    if (mal_value_is_object(roots[1])) {
+        static const char *const names[] = {"writable", "write", "final"};
+        for (usize i = 0; i < countof(names); i++) {
+            MalValue option = stream_option(vm, roots[1], names[i]);
+            if (!mal_value_is_undefined(option)) stream_set(vm, roots[3], names[i], option);
+        }
+    }
+    stream_set(vm, roots[3], "read", stream_function(vm, "fromRead", 1, stream_from_read));
+    // from.js replaces any destroy option with its iterator-closing _destroy.
+    stream_set(vm, roots[3], "destroy", stream_function(vm, "fromDestroy", 2, stream_from_destroy));
+    roots[4] = df_construct(vm, roots[3]);
+    if (mal_value_is_object(roots[4])) {
+        stream_set(vm, roots[4], "_malSourceIterator", roots[2]);
+        result = roots[4];
+    }
+done:
+    mal_gc_unroot(&root);
+    return vm->completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : result;
+}
+
+/* fromAsyncGen's source generator: slot 0 is the shared state object. `pending` is the
+ * promise write()/final() settle with {chunk, done, cb}; it is replaced after each chunk. */
+static MalValue df_new_pending(MalVm *vm, MalValue state) {
+    MalValue promise = mal_value_from_promise_object(mal_promise_object_new(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_PROMISE_PROTOTYPE])));
+    stream_set(vm, state, "pending", promise);
+    stream_set(vm, state, "hasResolve", mal_value_new_boolean(true));
+    return promise;
+}
+
+static void df_settle_pending(MalVm *vm, MalValue state, MalValue message) {
+    MalValue roots[] = {state, message};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    stream_set(vm, roots[0], "hasResolve", mal_value_new_boolean(false));
+    MalValue pending = stream_own(vm, roots[0], "pending");
+    if (mal_value_is_promise_object(pending)) mal_promise_fulfill(vm, mal_value_to_promise_object(pending), roots[1]);
+    mal_gc_unroot(&root);
+}
+
+static MalValue df_message(MalVm *vm, MalValue chunk, bool done, MalValue cb) {
+    MalValue roots[] = {chunk, cb, mal_value_from_object(mal_object_new(&vm->heap, nullptr))};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    stream_set(vm, roots[2], "chunk", roots[0]);
+    stream_set(vm, roots[2], "done", mal_value_new_boolean(done));
+    stream_set(vm, roots[2], "cb", roots[1]);
+    mal_gc_unroot(&root);
+    return roots[2];
+}
+
+static MalValue df_iter_result(MalVm *vm, MalValue value, bool done) {
+    MalValue roots[] = {value, mal_value_from_object(mal_intrinsic_new_object(vm))};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    stream_set(vm, roots[1], "value", roots[0]);
+    stream_set(vm, roots[1], "done", mal_value_new_boolean(done));
+    mal_gc_unroot(&root);
+    return roots[1];
+}
+
+/* Slots: state, the next() result promise. Runs when `pending` settles. */
+static MalValue df_source_received(MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) nt;
+    MalValue roots[] = {pl_slot(callee, 0), pl_slot(callee, 1), argc > 0 ? args[0] : mal_value_new_undefined(),
+        mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalPromiseObject *result = mal_value_to_promise_object(roots[1]);
+    roots[3] = stream_own(vm, roots[2], "cb");
+    if (mal_value_is_callable(roots[3])) pl_next_tick_finish(vm, roots[3], mal_value_new_undefined());
+    if (stream_truthy_own(vm, roots[2], "done")) {
+        stream_set(vm, roots[0], "finished", mal_value_new_boolean(true));
+        mal_promise_fulfill(vm, result, df_iter_result(vm, mal_value_new_undefined(), true));
+    } else {
+        MalValue signal = stream_own(vm, roots[0], "signal");
+        if (mal_value_is_object(signal) && mal_abort_signal_is_aborted(signal)) {
+            stream_set(vm, roots[0], "finished", mal_value_new_boolean(true));
+            mal_promise_reject(vm, result, mal_node_abort_error(vm, mal_abort_signal_reason(signal)));
+        } else {
+            df_new_pending(vm, roots[0]);
+            mal_promise_fulfill(vm, result, df_iter_result(vm, stream_own(vm, roots[2], "chunk"), false));
+        }
+    }
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+static MalValue df_source_next(MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) args; (void) argc; (void) nt;
+    MalValue roots[] = {pl_slot(callee, 0), mal_value_from_promise_object(mal_promise_object_new(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_PROMISE_PROTOTYPE]))), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalValue pending = stream_own(vm, roots[0], "pending");
+    if (stream_truthy_own(vm, roots[0], "finished") || !mal_value_is_promise_object(pending)) {
+        mal_promise_fulfill(vm, mal_value_to_promise_object(roots[1]), df_iter_result(vm, mal_value_new_undefined(), true));
+    } else {
+        // write()/final() keep settling this promise until a received chunk replaces it.
+        MalValue slots[] = {roots[0], roots[1]};
+        roots[2] = stream_slot_function(vm, "", 1, df_source_received, slots, 2);
+        MalValue then_args[] = {roots[2], mal_value_new_undefined()};
+        stream_call_method(vm, pending, "then", then_args, 2);
+        stream_clear_completion(vm);
+    }
+    mal_gc_unroot(&root);
+    return roots[1];
+}
+
+static MalValue df_source_return(MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) nt;
+    MalValue state = pl_slot(callee, 0);
+    stream_set(vm, state, "finished", mal_value_new_boolean(true));
+    MalValue roots[] = {mal_value_from_promise_object(mal_promise_object_new(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_PROMISE_PROTOTYPE])))};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    mal_promise_fulfill(vm, mal_value_to_promise_object(roots[0]),
+        df_iter_result(vm, argc > 0 ? args[0] : mal_value_new_undefined(), true));
+    mal_gc_unroot(&root);
+    return roots[0];
+}
+
+static MalValue df_source_iterator(MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) vm; (void) args; (void) argc; (void) nt; (void) callee;
+    return self;
+}
+
+static MalValue df_gen_write(MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) nt;
+    MalValue state = pl_slot(callee, 0);
+    MalValue message = df_message(vm, argc > 0 ? args[0] : mal_value_new_undefined(), false,
+        argc > 2 ? args[2] : mal_value_new_undefined());
+    df_settle_pending(vm, state, message);
+    return mal_value_new_undefined();
+}
+
+static MalValue df_gen_final(MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) nt;
+    MalValue state = pl_slot(callee, 0);
+    df_settle_pending(vm, state, df_message(vm, mal_value_new_undefined(), true, argc > 0 ? args[0] : mal_value_new_undefined()));
+    return mal_value_new_undefined();
+}
+
+static MalValue df_noop(MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) vm; (void) self; (void) args; (void) argc; (void) nt; (void) callee;
+    return mal_value_new_undefined();
+}
+
+static MalValue df_gen_destroy(MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) nt;
+    MalValue roots[] = {pl_slot(callee, 0), argc > 0 ? args[0] : mal_value_new_undefined(),
+        argc > 1 ? args[1] : mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalValue controller = stream_own(vm, roots[0], "controller");
+    stream_call_method(vm, controller, "abort", &roots[1], 1);
+    stream_clear_completion(vm);
+    if (stream_truthy_own(vm, roots[0], "hasResolve")) {
+        df_settle_pending(vm, roots[0], df_message(vm, mal_value_new_undefined(), true,
+            stream_function(vm, "cb", 0, df_noop)));
+    }
+    mal_vm_call_value(vm, roots[2], mal_value_new_undefined(), &roots[1], 1);
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+/* Then-handlers for an async function body; slot 0 is the hook state. */
+static MalValue df_body_fulfilled(MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) nt;
+    MalValue state = pl_slot(callee, 0);
+    MalValue value = argc > 0 ? args[0] : mal_value_new_undefined();
+    if (!mal_value_is_nil(value)) {
+        pl_throw_return_value(vm, "nully", "body", value);
+        return mal_value_new_undefined();
+    }
+    if (!stream_truthy_own(vm, state, "finalized")) {
+        MalValue d = stream_own(vm, state, "d");
+        if (mal_value_is_object(d) && !stream_truthy_own(vm, d, "destroyed")) stream_call_method(vm, d, "destroy", nullptr, 0);
+    }
+    return mal_value_new_undefined();
+}
+
+static MalValue df_body_rejected(MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) nt;
+    MalValue state = pl_slot(callee, 0);
+    MalValue error = argc > 0 ? args[0] : mal_value_new_undefined();
+    MalValue d = stream_own(vm, state, "d");
+    if (mal_value_is_object(d) && !stream_truthy_own(vm, d, "destroyed")) stream_call_method(vm, d, "destroy", &error, 1);
+    stream_clear_completion(vm);
+    return mal_value_new_undefined();
+}
+
+/* final(cb) of an async-function sink: end the source, then report the body's outcome. */
+static MalValue df_final_settled(MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) nt;
+    bool rejected = mal_value_is_truthy(pl_slot(callee, 2));
+    pl_next_tick_finish(vm, pl_slot(callee, 1), rejected && argc > 0 ? args[0] : mal_value_new_null());
+    return mal_value_new_undefined();
+}
+
+static MalValue df_final_after_source(MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) args; (void) argc; (void) nt;
+    MalValue state = pl_slot(callee, 0);
+    MalValue roots[] = {state, pl_slot(callee, 1), mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalValue ok_slots[] = {roots[0], roots[1], mal_value_new_boolean(false)};
+    roots[2] = stream_slot_function(vm, "", 1, df_final_settled, ok_slots, 3);
+    MalValue fail_slots[] = {roots[0], roots[1], mal_value_new_boolean(true)};
+    roots[3] = stream_slot_function(vm, "", 1, df_final_settled, fail_slots, 3);
+    MalValue then_args[] = {roots[2], roots[3]};
+    stream_call_method(vm, stream_own(vm, roots[0], "bodyPromise"), "then", then_args, 2);
+    stream_clear_completion(vm);
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+static MalValue df_sink_final(MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) nt;
+    MalValue roots[] = {pl_slot(callee, 0), argc > 0 ? args[0] : mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    stream_set(vm, roots[0], "finalized", mal_value_new_boolean(true));
+    MalValue slots[] = {roots[0], roots[1]};
+    roots[2] = stream_slot_function(vm, "", 0, df_final_after_source, slots, 2);
+    df_settle_pending(vm, roots[0], df_message(vm, mal_value_new_undefined(), true, roots[2]));
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+static MalValue df_from_function(MalVm *vm, MalValue body, const char *name) {
+    MalValue roots[] = {body, mal_value_from_object(mal_intrinsic_new_object(vm)), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalValue result = mal_value_new_undefined();
+    MalCompletion controller = mal_vm_construct_value(vm, vm->intrinsics[MAL_INTRINSIC_ABORT_CONTROLLER_CONSTRUCTOR], nullptr, 0);
+    if (controller.kind == MAL_COMPLETION_THROW) goto done;
+    stream_set(vm, roots[1], "controller", controller.value);
+    stream_get(vm, controller.value, "signal", &roots[2]);
+    stream_set(vm, roots[1], "signal", roots[2]);
+    df_new_pending(vm, roots[1]);
+    roots[3] = mal_value_from_object(mal_intrinsic_new_object(vm));
+    roots[4] = stream_slot_function(vm, "next", 0, df_source_next, &roots[1], 1);
+    stream_set(vm, roots[3], "next", roots[4]);
+    roots[4] = stream_slot_function(vm, "return", 1, df_source_return, &roots[1], 1);
+    stream_set(vm, roots[3], "return", roots[4]);
+    roots[4] = stream_slot_function(vm, "[Symbol.asyncIterator]", 0, df_source_iterator, &roots[1], 1);
+    MalPropertyDesc iterator_desc = mal_intrinsic_data_desc(roots[4], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    mal_object_define_own(mal_value_to_object(roots[3]), mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_ASYNC_ITERATOR),
+        &iterator_desc);
+    MalValue call_args[] = {roots[3], pl_signal_options(vm, roots[2])};
+    roots[4] = call_args[1];
+    MalCompletion called = mal_vm_call_value(vm, roots[0], mal_value_new_undefined(), call_args, 2);
+    if (called.kind == MAL_COMPLETION_THROW) goto done;
+    roots[5] = called.value;
+    if (df_is_readable(vm, roots[5]) && df_is_writable(vm, roots[5])) {
+        result = roots[5];
+        goto done;
+    }
+    roots[6] = mal_value_from_object(mal_intrinsic_new_object(vm));
+    stream_set(vm, roots[6], "write", stream_slot_function(vm, "write", 3, df_gen_write, &roots[1], 1));
+    if (pl_is_iterable(vm, roots[5], 0)) {
+        stream_set(vm, roots[6], "final", stream_slot_function(vm, "final", 1, df_gen_final, &roots[1], 1));
+        result = df_from_iterable(vm, roots[5], roots[6]);
+        goto done;
+    }
+    MalValue then = mal_value_new_undefined();
+    if (mal_value_is_object(roots[5])) stream_get(vm, roots[5], "then", &then);
+    if (mal_value_is_callable(then)) {
+        MalValue handlers[] = {stream_slot_function(vm, "", 1, df_body_fulfilled, &roots[1], 1), mal_value_new_undefined()};
+        MalRootSpan handler_root;
+        mal_gc_root(&handler_root, handlers, countof(handlers));
+        handlers[1] = stream_slot_function(vm, "", 1, df_body_rejected, &roots[1], 1);
+        MalCompletion chained = mal_vm_call_value(vm, then, roots[5], handlers, 2);
+        mal_gc_unroot(&handler_root);
+        if (chained.kind == MAL_COMPLETION_THROW) goto done;
+        stream_set(vm, roots[1], "bodyPromise", chained.value);
+        stream_set(vm, roots[6], "objectMode", mal_value_new_boolean(true));
+        stream_set(vm, roots[6], "readable", mal_value_new_boolean(false));
+        stream_set(vm, roots[6], "final", stream_slot_function(vm, "final", 1, df_sink_final, &roots[1], 1));
+        stream_set(vm, roots[6], "destroy", stream_slot_function(vm, "destroy", 2, df_gen_destroy, &roots[1], 1));
+        roots[5] = df_construct(vm, roots[6]);
+        if (!mal_value_is_object(roots[5])) goto done;
+        stream_set(vm, roots[1], "d", roots[5]);
+        result = roots[5];
+        goto done;
+    }
+    pl_throw_return_value(vm, "Iterable, AsyncIterable or AsyncFunction", name, roots[5]);
+done:
+    mal_gc_unroot(&root);
+    return vm->completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : result;
+}
+
+/* _duplexify({ readable, writable }): hooks close over a state object (slot 0) holding
+ * d, r, w and the ondrain/onfinish/onreadable/onclose continuations. */
+static MalValue df_take(MalVm *vm, MalValue state, const char *name) {
+    MalValue value = stream_own(vm, state, name);
+    stream_set(vm, state, name, mal_value_new_null());
+    return value;
+}
+
+static void df_destroyer(MalVm *vm, MalValue stream, MalValue error) {
+    if (!mal_value_is_object(stream) || stream_truthy_own(vm, stream, "destroyed")) return;
+    MalValue roots[] = {stream, error};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    stream_call_method(vm, roots[0], "destroy", &roots[1], mal_value_is_undefined(roots[1]) ? 0 : 1);
+    stream_clear_completion(vm);
+    mal_gc_unroot(&root);
+}
+
+static void df_onfinished(MalVm *vm, MalValue state, MalValue error) {
+    MalValue roots[] = {state, error, df_take(vm, state, "onclose")};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    if (mal_value_is_callable(roots[2])) {
+        mal_vm_call_value(vm, roots[2], mal_value_new_undefined(), &roots[1], 1);
+    } else if (mal_value_is_truthy(roots[1])) {
+        df_destroyer(vm, stream_own(vm, roots[0], "d"), roots[1]);
+    }
+    mal_gc_unroot(&root);
+}
+
+/* Slot 1 is true for the writable side's eos. */
+static MalValue df_side_done(MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) nt;
+    MalValue roots[] = {pl_slot(callee, 0), argc > 0 ? args[0] : mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    bool writable_side = mal_value_is_truthy(pl_slot(callee, 1));
+    if (mal_value_is_truthy(roots[1])) df_destroyer(vm, stream_own(vm, roots[0], writable_side ? "r" : "w"), roots[1]);
+    df_onfinished(vm, roots[0], roots[1]);
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+static MalValue df_pair_write(MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) nt;
+    MalValue roots[] = {pl_slot(callee, 0), argc > 0 ? args[0] : mal_value_new_undefined(),
+        argc > 1 ? args[1] : mal_value_new_undefined(), argc > 2 ? args[2] : mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalCompletion written = stream_call_method(vm, stream_own(vm, roots[0], "w"), "write", roots + 1, 2);
+    if (written.kind != MAL_COMPLETION_THROW) {
+        if (mal_value_is_truthy(written.value)) mal_vm_call_value(vm, roots[3], mal_value_new_undefined(), nullptr, 0);
+        else stream_set(vm, roots[0], "ondrain", roots[3]);
+    }
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+static MalValue df_pair_final(MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) nt;
+    MalValue roots[] = {pl_slot(callee, 0), argc > 0 ? args[0] : mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    stream_call_method(vm, stream_own(vm, roots[0], "w"), "end", nullptr, 0);
+    stream_set(vm, roots[0], "onfinish", roots[1]);
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+/* Slot 1 names the continuation: 0 ondrain, 1 onfinish, 2 onreadable. */
+static MalValue df_pair_continue(MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) args; (void) argc; (void) nt;
+    static const char *const fields[] = {"ondrain", "onfinish", "onreadable"};
+    const char *field = fields[mal_value_to_i32(pl_slot(callee, 1))];
+    MalValue state = pl_slot(callee, 0);
+    if (mal_value_is_callable(stream_own(vm, state, field))) {
+        MalValue callback = df_take(vm, state, field);
+        MalRootSpan root;
+        mal_gc_root(&root, &callback, 1);
+        MalValue d = stream_own(vm, state, "d");
+        mal_vm_call_value(vm, callback, d, nullptr, 0);
+        mal_gc_unroot(&root);
+    }
+    return mal_value_new_undefined();
+}
+
+static MalValue df_pair_read(MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) args; (void) argc; (void) nt;
+    MalValue roots[] = {pl_slot(callee, 0), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalValue r = stream_own(vm, roots[0], "r");
+    MalValue d = stream_own(vm, roots[0], "d");
+    for (;;) {
+        MalCompletion read = stream_call_method(vm, r, "read", nullptr, 0);
+        if (read.kind == MAL_COMPLETION_THROW) break;
+        roots[1] = read.value;
+        if (mal_value_is_null(roots[1])) {
+            stream_set(vm, roots[0], "onreadable", callee);
+            break;
+        }
+        MalCompletion pushed = stream_call_method(vm, d, "push", &roots[1], 1);
+        if (pushed.kind == MAL_COMPLETION_THROW || !mal_value_is_truthy(pushed.value)) break;
+    }
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+static MalValue df_pair_end(MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) args; (void) argc; (void) nt;
+    MalValue end = mal_value_new_null();
+    stream_call_method(vm, stream_own(vm, pl_slot(callee, 0), "d"), "push", &end, 1);
+    return mal_value_new_undefined();
+}
+
+static MalValue df_pair_destroy(MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) nt;
+    MalValue roots[] = {pl_slot(callee, 0), argc > 0 ? args[0] : mal_value_new_undefined(),
+        argc > 1 ? args[1] : mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    bool closed = mal_value_is_null(stream_own(vm, roots[0], "onclose"));
+    if (!mal_value_is_truthy(roots[1]) && !closed) roots[1] = mal_node_abort_error(vm, mal_value_new_undefined());
+    stream_set(vm, roots[0], "onreadable", mal_value_new_null());
+    stream_set(vm, roots[0], "ondrain", mal_value_new_null());
+    stream_set(vm, roots[0], "onfinish", mal_value_new_null());
+    if (closed) {
+        mal_vm_call_value(vm, roots[2], mal_value_new_undefined(), &roots[1], 1);
+    } else {
+        stream_set(vm, roots[0], "onclose", roots[2]);
+        df_destroyer(vm, stream_own(vm, roots[0], "w"), roots[1]);
+        df_destroyer(vm, stream_own(vm, roots[0], "r"), roots[1]);
+    }
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+static MalValue df_pair(MalVm *vm, MalValue r, MalValue w) {
+    MalValue roots[] = {mal_value_from_object(mal_intrinsic_new_object(vm)), r, w,
+        mal_value_from_object(mal_intrinsic_new_object(vm)), mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalValue result = mal_value_new_undefined();
+    bool readable = df_is_readable(vm, roots[1]) && stream_predicate_true(vm, roots[1], STREAM_IS_READABLE);
+    bool writable = df_is_writable(vm, roots[2]) && stream_predicate_true(vm, roots[2], STREAM_IS_WRITABLE);
+    stream_set(vm, roots[0], "r", roots[1]);
+    stream_set(vm, roots[0], "w", roots[2]);
+    stream_set(vm, roots[0], "onclose", mal_value_new_undefined());
+    MalValue mode = mal_value_new_undefined();
+    if (mal_value_is_object(roots[1])) stream_probe(vm, roots[1], "readableObjectMode", &mode);
+    stream_set(vm, roots[3], "readableObjectMode", mal_value_new_boolean(mal_value_is_truthy(mode)));
+    mode = mal_value_new_undefined();
+    if (mal_value_is_object(roots[2])) stream_probe(vm, roots[2], "writableObjectMode", &mode);
+    stream_set(vm, roots[3], "writableObjectMode", mal_value_new_boolean(mal_value_is_truthy(mode)));
+    stream_set(vm, roots[3], "readable", mal_value_new_boolean(readable));
+    stream_set(vm, roots[3], "writable", mal_value_new_boolean(writable));
+    roots[4] = df_construct(vm, roots[3]);
+    if (!mal_value_is_object(roots[4])) goto done;
+    stream_set(vm, roots[0], "d", roots[4]);
+    if (writable) {
+        MalValue slots[] = {roots[0], mal_value_new_boolean(true)};
+        roots[5] = stream_slot_function(vm, "", 1, df_side_done, slots, 2);
+        MalValue eos_args[] = {roots[2], roots[5]};
+        stream_finished(vm, mal_value_new_undefined(), eos_args, 2, mal_value_new_undefined(), mal_value_new_undefined());
+        stream_set(vm, roots[4], "_write", stream_slot_function(vm, "_write", 3, df_pair_write, &roots[0], 1));
+        stream_set(vm, roots[4], "_final", stream_slot_function(vm, "_final", 1, df_pair_final, &roots[0], 1));
+        MalValue drain_slots[] = {roots[0], mal_value_from_i32(0)};
+        roots[5] = stream_slot_function(vm, "", 0, df_pair_continue, drain_slots, 2);
+        stream_compose_listen(vm, roots[2], "drain", roots[5]);
+        MalValue finish_slots[] = {roots[0], mal_value_from_i32(1)};
+        roots[5] = stream_slot_function(vm, "", 0, df_pair_continue, finish_slots, 2);
+        stream_compose_listen(vm, roots[2], "finish", roots[5]);
+    }
+    if (readable) {
+        MalValue slots[] = {roots[0], mal_value_new_boolean(false)};
+        roots[5] = stream_slot_function(vm, "", 1, df_side_done, slots, 2);
+        MalValue eos_args[] = {roots[1], roots[5]};
+        stream_finished(vm, mal_value_new_undefined(), eos_args, 2, mal_value_new_undefined(), mal_value_new_undefined());
+        MalValue readable_slots[] = {roots[0], mal_value_from_i32(2)};
+        roots[5] = stream_slot_function(vm, "", 0, df_pair_continue, readable_slots, 2);
+        stream_compose_listen(vm, roots[1], "readable", roots[5]);
+        roots[5] = stream_slot_function(vm, "", 0, df_pair_end, &roots[0], 1);
+        stream_compose_listen(vm, roots[1], "end", roots[5]);
+        stream_set(vm, roots[4], "_read", stream_slot_function(vm, "_read", 0, df_pair_read, &roots[0], 1));
+    }
+    stream_set(vm, roots[4], "_destroy", stream_slot_function(vm, "_destroy", 2, df_pair_destroy, &roots[0], 1));
+    result = roots[4];
+done:
+    mal_gc_unroot(&root);
+    return vm->completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : result;
+}
+
+static MalValue df_promise_fulfilled(MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) nt;
+    MalValue roots[] = {pl_slot(callee, 0), argc > 0 ? args[0] : mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    if (!mal_value_is_nil(roots[1])) stream_call_method(vm, roots[0], "push", &roots[1], 1);
+    MalValue end = mal_value_new_null();
+    stream_call_method(vm, roots[0], "push", &end, 1);
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+static MalValue df_promise_rejected(MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) nt;
+    df_destroyer(vm, pl_slot(callee, 0), argc > 0 ? args[0] : mal_value_new_undefined());
+    return mal_value_new_undefined();
+}
+
+static MalValue df_from_promise(MalVm *vm, MalValue body, MalValue then) {
+    MalValue roots[] = {body, then, mal_value_from_object(mal_intrinsic_new_object(vm)), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    stream_set(vm, roots[2], "objectMode", mal_value_new_boolean(true));
+    stream_set(vm, roots[2], "writable", mal_value_new_boolean(false));
+    stream_set(vm, roots[2], "read", stream_function(vm, "read", 0, df_noop));
+    roots[3] = df_construct(vm, roots[2]);
+    if (mal_value_is_object(roots[3])) {
+        roots[4] = stream_slot_function(vm, "", 1, df_promise_fulfilled, &roots[3], 1);
+        roots[5] = stream_slot_function(vm, "", 1, df_promise_rejected, &roots[3], 1);
+        MalValue handlers[] = {roots[4], roots[5]};
+        mal_vm_call_value(vm, roots[1], roots[0], handlers, 2);
+    }
+    mal_gc_unroot(&root);
+    return vm->completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : roots[3];
+}
+
+static MalValue df_from_web(MalVm *vm, MalNativeFunctionCallback converter, MalValue body) {
+    return converter(vm, mal_value_new_undefined(), &body, 1, mal_value_new_undefined(), mal_value_new_undefined());
+}
+
+static bool df_is_web_writable(MalVm *vm, MalValue value) {
+    return df_has_prototype(vm, value, MAL_INTRINSIC_WRITABLE_STREAM_PROTOTYPE);
+}
+
+static MalValue df_duplexify(MalVm *vm, MalValue body, const char *name) {
+    MalValue roots[] = {body, mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalValue result = mal_value_new_undefined();
+    bool readable = df_is_readable(vm, roots[0]);
+    bool writable = df_is_writable(vm, roots[0]);
+    if (readable && writable) {
+        result = roots[0];
+    } else if (readable) {
+        result = df_pair(vm, roots[0], mal_value_new_undefined());
+    } else if (writable) {
+        result = df_pair(vm, mal_value_new_undefined(), roots[0]);
+    } else if (stream_is_node_stream(vm, roots[0])) {
+        result = df_pair(vm, mal_value_new_undefined(), mal_value_new_undefined());
+    } else if (mal_value_is_readable_stream_object(roots[0])) {
+        roots[1] = df_from_web(vm, stream_readable_from_web, roots[0]);
+        if (vm->completion.kind != MAL_COMPLETION_THROW) result = df_pair(vm, roots[1], mal_value_new_undefined());
+    } else if (df_is_web_writable(vm, roots[0])) {
+        roots[1] = df_from_web(vm, stream_writable_from_web, roots[0]);
+        if (vm->completion.kind != MAL_COMPLETION_THROW) result = df_pair(vm, mal_value_new_undefined(), roots[1]);
+    } else if (mal_value_is_callable(roots[0])) {
+        result = df_from_function(vm, roots[0], name);
+    } else if (df_has_prototype(vm, roots[0], MAL_INTRINSIC_BLOB_PROTOTYPE)) {
+        MalCompletion buffer = stream_call_method(vm, roots[0], "arrayBuffer", nullptr, 0);
+        if (buffer.kind != MAL_COMPLETION_THROW) result = df_duplexify(vm, buffer.value, name);
+    } else if (pl_is_iterable(vm, roots[0], 0)) {
+        roots[1] = mal_value_from_object(mal_intrinsic_new_object(vm));
+        stream_set(vm, roots[1], "writable", mal_value_new_boolean(false));
+        result = df_from_iterable(vm, roots[0], roots[1]);
+    } else {
+        if (mal_value_is_object(roots[0])) {
+            stream_get(vm, roots[0], "readable", &roots[1]);
+            stream_get(vm, roots[0], "writable", &roots[2]);
+        }
+        if (mal_value_is_readable_stream_object(roots[1]) && df_is_web_writable(vm, roots[2])) {
+            result = df_from_web(vm, stream_duplex_from_web, roots[0]);
+        } else if ((mal_value_is_object(roots[1]) && !mal_value_is_callable(roots[1]))
+            || (mal_value_is_object(roots[2]) && !mal_value_is_callable(roots[2]))) {
+            if (mal_value_is_truthy(roots[1]) && !df_is_readable(vm, roots[1])) roots[1] = df_duplexify(vm, roots[1], name);
+            if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
+            if (mal_value_is_truthy(roots[2]) && !df_is_writable(vm, roots[2])) roots[2] = df_duplexify(vm, roots[2], name);
+            if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
+            result = df_pair(vm, mal_value_is_truthy(roots[1]) ? roots[1] : mal_value_new_undefined(),
+                mal_value_is_truthy(roots[2]) ? roots[2] : mal_value_new_undefined());
+        } else {
+            if (mal_value_is_object(roots[0])) stream_get(vm, roots[0], "then", &roots[3]);
+            if (mal_value_is_callable(roots[3])) {
+                result = df_from_promise(vm, roots[0], roots[3]);
+            } else {
+                mal_node_throw_invalid_arg_type(vm, name,
+                    "of type function or an instance of Blob, ReadableStream, WritableStream, Stream, Iterable, "
+                    "AsyncIterable, or Promise or { readable, writable } pair", roots[0]);
+            }
+        }
+    }
+done:
+    mal_gc_unroot(&root);
+    return vm->completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : result;
+}
+
+static MalValue stream_duplex_from(MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) nt; (void) callee;
+    return df_duplexify(vm, argc > 0 ? args[0] : mal_value_new_undefined(), "body");
 }
 
 static const MalIntrinsic stream_constructor_slots[] = {
@@ -4873,6 +5519,9 @@ void mal_host_install_node_stream(
     }
     roots[12] = stream_function(vm, "from", 2, stream_from);
     mal_intrinsic_define_data(vm, mal_value_to_object(roots[8]), "from", roots[12], STREAM_METHOD);
+    // Node assigns an anonymous function: Duplex.from.name is "".
+    roots[12] = stream_function(vm, "", 1, stream_duplex_from);
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[10]), "from", roots[12], STREAM_METHOD);
     roots[12] = stream_function(vm, "toWeb", 1, stream_readable_to_web);
     mal_intrinsic_define_data(vm, mal_value_to_object(roots[8]), "toWeb", roots[12], STREAM_METHOD);
     roots[12] = stream_function(vm, "fromWeb", 2, stream_readable_from_web);

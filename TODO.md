@@ -1251,11 +1251,8 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
       Middle generator stages in pipeline receive the previous Readable itself, where
       Node wraps it with fromReadable, and pipeline takes no web streams yet.
 
-- [ ] node:stream: `Duplex.from` (lib/internal/streams/duplexify.js: async generator
-      functions, async functions, iterables, promises, web streams,
-      `{ readable, writable }` pairs, Blob), then route compose's function and
-      iterable stages and pipeline's other non-stream stages through it, removing both
-      ERR_METHOD_NOT_IMPLEMENTED branches.
+- [ ] node:stream: `Readable.wrap` for old-style streams, which `Duplex.from` would
+      use for `{ readable, writable }` pairs whose readable lacks read().
 
 - [ ] node:url: `url.format` should `querystring.stringify` an object `query` when
       `search` is absent, and format WHATWG URL objects with its options argument.
