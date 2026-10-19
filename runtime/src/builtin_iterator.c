@@ -994,6 +994,57 @@ bool mal_vm_iterator_drain_set_values_to_fresh_dense_array(
     return true;
 }
 
+/**
+ * A Set value, Map key or value, or dense Array element step that allocates nothing
+ * and is not the last; false leaves every other step to the protocol cursor, which
+ * rereads the same position.
+ */
+static bool mal_vm_iterator_try_step_in_place(
+    MalIteratorObject *iterator, MalValue *value_out
+) {
+    if (iterator->done) return false;
+    switch (iterator->kind) {
+        case MAL_ITERATOR_SET_VALUES: {
+            MalSetObject *set = mal_value_to_set_object(iterator->target);
+            MalSetIter iter;
+            mal_set_iter_init(&iter, set->entries);
+            iter.index = (usize) iterator->index;
+            if (!mal_set_iter_next(&iter, value_out)) return false;
+            iterator->index = (u64) iter.index;
+            mal_perf_collection_iteration_step(set);
+            return true;
+        }
+        case MAL_ITERATOR_MAP_KEYS:
+        case MAL_ITERATOR_MAP_VALUES: {
+            MalMapObject *map = mal_value_to_map_object(iterator->target);
+            MalMapIter iter;
+            mal_map_iter_init(&iter, map->entries);
+            iter.index = (usize) iterator->index;
+            MalValue key;
+            MalValue mapped;
+            if (!mal_map_iter_next(&iter, &key, &mapped)) return false;
+            iterator->index = (u64) iter.index;
+            mal_perf_collection_iteration_step(map);
+            *value_out = iterator->kind == MAL_ITERATOR_MAP_KEYS ? key : mapped;
+            return true;
+        }
+        case MAL_ITERATOR_ARRAY_VALUES: {
+            if (!mal_value_is_array_object(iterator->target)) return false;
+            MalArrayObject *array = mal_value_to_array_object(iterator->target);
+            u64 index = iterator->index;
+            if (index >= array->length ||
+                !mal_array_object_dense_get(array, (u32) index, value_out)) {
+                return false;
+            }
+            iterator->index++;
+            mal_perf_collection_iteration_step(array);
+            return true;
+        }
+        default:
+            return false;
+    }
+}
+
 bool mal_vm_iterator_step(MalVm *vm, const MalIteratorRecord *record, MalValue *value_out, bool *done_out) {
     *value_out = mal_value_new_undefined();
     *done_out = false;
@@ -1004,6 +1055,7 @@ bool mal_vm_iterator_step(MalVm *vm, const MalIteratorRecord *record, MalValue *
         MalNativeFunctionCallback next_callback =
             mal_native_function_object_callback(mal_value_to_native_function_object(record->next_method));
         if (next_callback == mal_builtin_iterator_expected_next(iterator->kind)) {
+            if (mal_vm_iterator_try_step_in_place(iterator, value_out)) return true;
             return mal_vm_iterator_step_protocol_cursor(
                 vm, iterator, record, value_out, done_out);
         }
