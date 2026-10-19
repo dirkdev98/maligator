@@ -361,7 +361,7 @@ fn parse_der(der: &[u8], key_type: u32, private: bool) -> Result<Material, i32> 
 
 const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-fn base64_decode(text: &[u8]) -> Option<Vec<u8>> {
+pub(crate) fn base64_decode(text: &[u8]) -> Option<Vec<u8>> {
     let mut out = Vec::with_capacity(text.len() * 3 / 4);
     let mut acc = 0u32;
     let mut bits = 0;
@@ -393,7 +393,7 @@ fn base64_decode(text: &[u8]) -> Option<Vec<u8>> {
     Some(out)
 }
 
-fn base64_encode_lines(data: &[u8]) -> Vec<u8> {
+pub(crate) fn base64_encode_lines(data: &[u8]) -> Vec<u8> {
     let mut encoded = Vec::with_capacity(data.len() * 4 / 3 + 4);
     for chunk in data.chunks(3) {
         let b = [

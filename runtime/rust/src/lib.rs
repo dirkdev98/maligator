@@ -39,6 +39,10 @@ pub mod zlib;
 
 #[cfg(feature = "node-tls")]
 pub mod tls;
+#[cfg(any(feature = "node-tls", feature = "node-crypto"))]
+pub mod x509;
+#[cfg(feature = "node-crypto")]
+pub mod crypto_x509;
 
 // Argon2 derivation primitives for node:crypto. Pure computation over borrowed
 // byte slices: no retained pointers, no shared state, no message strings across

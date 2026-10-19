@@ -1168,10 +1168,17 @@ remains a Maligator extension and does not count as global fetch conformance.
 
 - [ ] crypto: RSA key generation (ring has none), encrypted PEM, RSA-PSS salt
       lengths other than the digest length, ECDSA signing with a hash other than the
-      curve's own, publicEncrypt, X509Certificate, DiffieHellman/ECDH and Cipheriv
-      as Transform streams. The rest of WebCrypto: RSA generateKey, RSA-OAEP,
-      ECDH/X25519, deriveKey/deriveBits, wrapKey, jwk export of secret keys, and
+      curve's own, publicEncrypt, DiffieHellman and Cipheriv as Transform streams.
+      The rest of WebCrypto: RSA generateKey, RSA-OAEP, ECDH/X25519,
+      deriveKey/deriveBits, wrapKey, jwk export of secret keys, and
       Crypto/SubtleCrypto methods on their prototypes rather than the instances.
+
+- [ ] crypto: createECDH/ECDH needs elliptic-curve arithmetic that ring does not
+      expose (private-key import and export, reusable computeSecret), so it waits on a
+      crate decision. X509Certificate: OpenSSL-exact checkIssued (key identifiers and
+      keyUsage), checkHost options, RSA-PSS verify, toLegacyObject's public-key
+      fields, issuerCertificate, and the DEP0179/DEP0181 warnings of the Hash and Hmac
+      constructors.
 
 - [ ] tls and https: `authorizationError` on TLS sockets (map the deferred client
       verifier's `CertificateError` to OpenSSL verify codes such as

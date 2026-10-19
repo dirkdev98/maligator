@@ -3,7 +3,7 @@
 //
 // Every check here is a refusal. The property under test is that an option this
 // connector does not implement is an error rather than a silent omission: a
-// caller that passes a client certificate, pins a minimum version, or asks for a
+// caller that passes a PFX bundle, pins a minimum version, or asks for a
 // protocol over ALPN must not get a connection that quietly did none of those.
 import { connect } from "node:tls";
 
@@ -23,7 +23,13 @@ function refusal(options) {
 
 // A credential, a trust decision, and a negotiation constraint: none are wired
 // through, so all three have to be refused.
-for (const option of ["cert", "key", "minVersion", "checkServerIdentity", "ciphers"]) {
+for (const option of [
+	"pfx",
+	"passphrase",
+	"minVersion",
+	"checkServerIdentity",
+	"ciphers",
+]) {
 	const message = refusal({ [option]: "x" });
 	check(`${option} is refused`, message !== null && message.includes(option));
 }

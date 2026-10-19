@@ -513,3 +513,222 @@ console.log(
 	"web ed25519 raw",
 	Buffer.from(await subtle.exportKey("raw", edPublicRaw)).toString("base64url"),
 );
+
+// tests/fixtures/tls: a localhost CA, the server certificate it issued, its key, and an EC client certificate.
+const X509_CA = `-----BEGIN CERTIFICATE-----
+MIIDHzCCAgegAwIBAgIULVaV44pPF1s2X4nIQVnkQ4gncQwwDQYJKoZIhvcNAQEL
+BQAwFDESMBAGA1UEAwwJbG9jYWxob3N0MB4XDTI2MDcyNzIwMTQwNVoXDTM2MDcy
+NDIwMTQwNVowFDESMBAGA1UEAwwJbG9jYWxob3N0MIIBIjANBgkqhkiG9w0BAQEF
+AAOCAQ8AMIIBCgKCAQEAugrG62LEZPIE0jvdNCQ1ewHN//t5XP1N8Nf9Bgepdbme
+KUi/GbyQsMFYWaPPjLB4iEYPYFfBJ+HL4F3bYB37623e7027OYapo5hMiGwGHBGY
++HeFWaii1dMQWZ4FG+UZ0BXik+xR/InI/4vVCsU3c203WIGS89TrQ//6cnOmAsVZ
+NXMBBIEA4sQybe7Np9BF6cnBirSqVySZm2sQv9X5l46lmGP3fgN9qdkj8hHmFms4
+7NroYeuMonSkVbYKBiSCLNX6eU/P28mnWrX0tA+CNVnl6+mEAjlRJWye3dHlaPZa
+hix9ygVOI39yHP/JvsCbT+Lf/QFHq/w2uhrb1By/EQIDAQABo2kwZzAdBgNVHQ4E
+FgQUTmWkC3KciaaTX/Ixp1nQ1h71T1MwHwYDVR0jBBgwFoAUTmWkC3KciaaTX/Ix
+p1nQ1h71T1MwDwYDVR0TAQH/BAUwAwEB/zAUBgNVHREEDTALgglsb2NhbGhvc3Qw
+DQYJKoZIhvcNAQELBQADggEBAJvXM3BD+2roJIkg92dS3OzvtH1Y66ELLOsILjiT
+Ezbx5bV5nc1yjybIhLU3eMuyarvXN/iwwKXbx6I4YrrIr7W35ZqlKWCiFJS4nivz
+8M3t/RFX47gg6iclZs1DuvueWvwdrNU03UHxZ+gQYY6E86eTgpAXYSgJS2nGZqA2
+QYSmRKz42+wFRwP1BftXt09ir5FmYbf4txAZDk7gj3XeiYk3g4+gNDHlCnYOMU6X
+rpnz81gR4MniuDNqNTI+o6G0E7pPoCrMg9gxvztk62aecuNiM+sAh1FZeOgWcSuQ
+pDa8gW5gZetuCUL0n2D7cqbUBMXAQhhzrXMTAHHTXawHiNs=
+-----END CERTIFICATE-----
+`;
+const X509_SERVER = `-----BEGIN CERTIFICATE-----
+MIIDPTCCAiWgAwIBAgIUAKMihiwk4GFZURFNOuv3qe1ercswDQYJKoZIhvcNAQEL
+BQAwFDESMBAGA1UEAwwJbG9jYWxob3N0MB4XDTI2MDcyNzIwMjExNloXDTM2MDcy
+NDIwMjExNlowFDESMBAGA1UEAwwJbG9jYWxob3N0MIIBIjANBgkqhkiG9w0BAQEF
+AAOCAQ8AMIIBCgKCAQEA0C5Nflog96InamL2eDzDqN7nwP+t/RXYmYaHMyteqfQ9
+3XQthDJV83CVyOeKKZVdk33Xvz6iAJemAFX1A5O+tUqVSwHnzm485Vl9ft+7zjaf
+mZW+Lzl/jELfyzRfgt1BfoRn4cXHW15OWmIxBHYdPp4F22dXYNTeJAkpJrqbA4Xh
+3MnLP9VjNKrR2EQoO8lfzRrfAM1edJvA/JJ3K/Fz6GE75MqU/ledAZse6loMuD+F
+B3kETySVFbwweEa3zkDnCaSI26YLDP155Dhnrz0E0O0RFmq5nhAZqrINa319eyp/
+h4MrMpxgk/4OtK2oF4SvbjhUNhSlqZPd/QCDI2O0XQIDAQABo4GGMIGDMBQGA1Ud
+EQQNMAuCCWxvY2FsaG9zdDAJBgNVHRMEAjAAMAsGA1UdDwQEAwIFoDATBgNVHSUE
+DDAKBggrBgEFBQcDATAdBgNVHQ4EFgQU2k6PyDIyt5yUfedSSssAZ3eJb9owHwYD
+VR0jBBgwFoAUTmWkC3KciaaTX/Ixp1nQ1h71T1MwDQYJKoZIhvcNAQELBQADggEB
+ALPzLUWd9J7f86BOo3GI1j+E38rKZ+YDPLFjs7TdHwCfc12yLHfnybvr+0N8WLpI
+qodjDGwti/qkDe5ury8dfzrrDK+gtjWyY3e4rLTnARbrHgVvNsU7W8l9Z/Ym6RxJ
+tvV4iYTf+s5JxFG5SjDi9AemnB+v9FPlTJtOla2PY3jdSShEZ16h3FfvVffzFnuh
+EJ5JoUudcwMdL7Q5zJs9a4uSegyNDbC3EoyvJtu8Fiho5F1YuPg5kcDbsHFqP7vR
+pCkYDc5++7/RNlsknlCo5aTDChq8Wg/WsM//3lVsIsDd4nvQsKEzR+j0Hk1Z4062
+hcwKmXmF37fwjB2/JO/0WU8=
+-----END CERTIFICATE-----
+`;
+const X509_SERVER_KEY = `-----BEGIN PRIVATE KEY-----
+MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDQLk1+WiD3oidq
+YvZ4PMOo3ufA/639FdiZhoczK16p9D3ddC2EMlXzcJXI54oplV2Tfde/PqIAl6YA
+VfUDk761SpVLAefObjzlWX1+37vONp+Zlb4vOX+MQt/LNF+C3UF+hGfhxcdbXk5a
+YjEEdh0+ngXbZ1dg1N4kCSkmupsDheHcycs/1WM0qtHYRCg7yV/NGt8AzV50m8D8
+kncr8XPoYTvkypT+V50Bmx7qWgy4P4UHeQRPJJUVvDB4RrfOQOcJpIjbpgsM/Xnk
+OGevPQTQ7REWarmeEBmqsg1rfX17Kn+HgysynGCT/g60ragXhK9uOFQ2FKWpk939
+AIMjY7RdAgMBAAECggEALu2FG/qqrE/CBVYWG7AM5hQLV4L7QE4Mo70C3JrF7ddI
+G9PMz9w96lDCfwWMrEeGjtEjEXIHuEz3B2PZBauoJXtQ0JX3IF5SvVuRMciy7+75
+xrgN5VzXfvFzO74MWrZQBXpI5Yi9IgBN9stkI86RVJRwGw9+T65kfeiPvXJ6r431
+qI0P3J7XGorDP3xaSpQG98C6pFA6/rxHbQGdAfsQhpfyYCIAs3kWmeutiluc8jCi
+1m5FFhBnnTeOeOo0kf6knxMhv+67q6X6usl/fkGo9lZaDdLvq1scwx/3cENMsYZg
+oGnnQ9De9CSx/PFjkRNwASJLp9cURAKbMlYyN2rH0QKBgQD/hOIvaV/PAJWJvcoT
+tU2gAnL8f1+kA80Lmldt4acTjxhXcJHSs7H63D0iVnvrbw9s39EJxOql8xDKRy7z
+GX1YRBJl6bNfljNi16LxPAt3Guj1f9gk9soJ3jlXjvJNfwhb9sZLQoBghev7hXhD
+ebl6GKUeVmYMAGIQy5huPsADbQKBgQDQkpw594TPrEf0RIF1Ff5VH/K7tdznQePK
+UyHjTMajx8SlL5J59l1AHimJtKEN65TiwovQpqDI+KuwxBajUJIKBsUL9AgwrOz9
+8sgrh5UV2Vf5z8h+lJI7YEa+ArkikSHazl7u5/MXYiRjljh9h/1vFt3B6aIc9m9K
++mPbWfrusQKBgQCj5WODz85ho9lHWdJlo9SfvxJsfXMmbD24pI5R7/zQIegWJiGT
+CiouY9hezyR7VmiJiGK4JnPwcCGj7dbincX1uOwoLKgetuRNEU31+HLOOheVaSSG
+STo87CrRy+IF7Wa6Pmbg3U4lG6HLWshSV6Ct/WLkO70HE7PTXBRxGpTlXQKBgGqI
+F+e7t0hjlLT9MKpfO3K7SL373AL6sqCq6YoxstwAsz40GDrXTTXssga2DfUQORHB
+kKxYD5PW/8rfvThZdN5OKuM6F9zU1o+3K+qf69QnGTptmNiehjpxqHBw76LqQkKC
+Whbovk9ZP4DmP6BOj3HoWggrjzP/40SGs+5b/UFhAoGBAJXCBc5UmpvVUJPT/m63
+ktYxaqcxn0QiVpnsM/Zug7Gc0PHU4EalsrOEfjXf4b4aHPbXLIvS3/9F2+ej5wwy
+jHkmY8jH2C/sOc+wbUincCUcOfHQDn6Dr8iKenKiSSEBLtfcrBdLDvpcz0KbwRTk
+Z29mJJ2qyw8fQwtM1g8cNba/
+-----END PRIVATE KEY-----
+`;
+const X509_CLIENT = `-----BEGIN CERTIFICATE-----
+MIIBczCCARigAwIBAgIULLg5xQM7FRSQvUdDFaoCsHVxShAwCgYIKoZIzj0EAwIw
+IzEhMB8GA1UEAwwYTWFsaWdhdG9yIFRlc3QgQ2xpZW50IENBMB4XDTI2MTAxOTIx
+MzIzOFoXDTM2MTAxNjIxMzIzOFowGzEZMBcGA1UEAwwQbWFsaWdhdG9yLWNsaWVu
+dDBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABNBSLNLfAcPTBP0CCXkYA5Cr0lwx
+DLm3O95uOfYnVuulZdYAArfDPXiYgO+r4gMLDOua8YNoQn2WzkHNZI95H9SjMjAw
+MAkGA1UdEwQCMAAwDgYDVR0PAQH/BAQDAgeAMBMGA1UdJQQMMAoGCCsGAQUFBwMC
+MAoGCCqGSM49BAMCA0kAMEYCIQDNVaWwfVumDCMyDd1alM6D6tMkAozVhKcVlf8k
+C7I5eAIhAPuiJTnxR2UUpfIx1H4dkUysB1Yyk6lCwnMwAFcnMEJY
+-----END CERTIFICATE-----
+`;
+
+const x509Server = new crypto.X509Certificate(X509_SERVER);
+const x509Ca = new crypto.X509Certificate(Buffer.from(X509_CA));
+const x509Client = new crypto.X509Certificate(
+	new crypto.X509Certificate(X509_CLIENT).raw,
+);
+for (const [label, certificate] of [
+	["server", x509Server],
+	["ca", x509Ca],
+	["client", x509Client],
+]) {
+	console.log(
+		"x509",
+		label,
+		JSON.stringify({
+			subject: certificate.subject,
+			issuer: certificate.issuer,
+			subjectAltName: certificate.subjectAltName,
+			infoAccess: certificate.infoAccess,
+			validFrom: certificate.validFrom,
+			validTo: certificate.validTo,
+			validFromDate: certificate.validFromDate.toISOString(),
+			validToDate: certificate.validToDate.toISOString(),
+			serialNumber: certificate.serialNumber,
+			fingerprint: certificate.fingerprint,
+			fingerprint256: certificate.fingerprint256,
+			fingerprint512: certificate.fingerprint512,
+			ca: certificate.ca,
+			keyUsage: certificate.keyUsage,
+			signatureAlgorithm: certificate.signatureAlgorithm,
+			signatureAlgorithmOid: certificate.signatureAlgorithmOid,
+			raw: certificate.raw.length,
+			publicKey: [certificate.publicKey.type, certificate.publicKey.asymmetricKeyType],
+		}),
+	);
+}
+console.log(
+	"x509 pem",
+	x509Server.toString() === X509_SERVER,
+	x509Server.toJSON() === X509_SERVER,
+	x509Server.raw === x509Server.raw,
+);
+console.log(
+	"x509 checks",
+	x509Server.checkHost("localhost"),
+	x509Server.checkHost("LOCALHOST"),
+	x509Server.checkHost("example.com"),
+	x509Server.checkEmail("a@example.com"),
+	x509Server.checkIP("127.0.0.1"),
+	x509Server.checkIssued(x509Ca),
+	x509Ca.checkIssued(x509Server),
+	x509Server.verify(x509Ca.publicKey),
+	x509Server.verify(x509Server.publicKey),
+	x509Client.verify(x509Ca.publicKey),
+	x509Server.checkPrivateKey(crypto.createPrivateKey(X509_SERVER_KEY)),
+);
+const legacy = x509Server.toLegacyObject();
+console.log(
+	"x509 legacy",
+	JSON.stringify(legacy.subject),
+	JSON.stringify(legacy.issuer),
+	legacy.subjectaltname,
+	legacy.ca,
+	legacy.valid_from,
+	legacy.fingerprint256 === x509Server.fingerprint256,
+	JSON.stringify(legacy.ext_key_usage),
+	legacy.serialNumber,
+	legacy.raw.length,
+);
+for (const input of ["not a certificate", 5, new ArrayBuffer(4)]) {
+	try {
+		new crypto.X509Certificate(input);
+		console.log("x509 accepted", typeof input);
+	} catch (error) {
+		console.log("x509 rejected", error.code);
+	}
+}
+
+for (const [type, options] of [
+	["hmac", { length: 8 }],
+	["hmac", { length: 9 }],
+	["hmac", { length: 512 }],
+	["aes", { length: 128 }],
+	["aes", { length: 256 }],
+	["hmac", { length: 7 }],
+	["hmac", { length: 8.5 }],
+	["hmac", { length: 2 ** 31 }],
+	["hmac", {}],
+	["aes", { length: 100 }],
+	["aes", { length: "128" }],
+	["xyz", { length: 128 }],
+	[5, { length: 128 }],
+	["hmac", null],
+]) {
+	try {
+		const key = crypto.generateKeySync(type, options);
+		console.log(
+			"generateKeySync",
+			type,
+			key.type,
+			key.symmetricKeySize,
+			key instanceof crypto.KeyObject,
+		);
+	} catch (error) {
+		console.log("generateKeySync", String(type), error.code, error.message);
+	}
+}
+const generatedSecret = await new Promise((resolve, reject) =>
+	crypto.generateKey("aes", { length: 192 }, (error, key) =>
+		error ? reject(error) : resolve(key),
+	),
+);
+console.log(
+	"generateKey",
+	generatedSecret.type,
+	generatedSecret.symmetricKeySize,
+	generatedSecret.export().length,
+);
+try {
+	crypto.generateKey("aes", { length: 192 });
+} catch (error) {
+	console.log("generateKey callback", error.code);
+}
+console.log(
+	"digest classes",
+	typeof crypto.Hash,
+	typeof crypto.Hmac,
+	crypto.Hash.length,
+	crypto.Hmac.length,
+	crypto.createHash("sha256") instanceof crypto.Hash,
+	crypto.createHmac("sha256", "k") instanceof crypto.Hmac,
+	crypto.createHmac("sha256", "k") instanceof crypto.Hash,
+	crypto.createHash("sha256").constructor === crypto.Hash,
+	new crypto.Hash("sha1").update("x").digest("hex"),
+	crypto.Hmac("sha256", "k").update("x").digest("hex"),
+);
