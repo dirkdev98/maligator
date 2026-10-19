@@ -1425,7 +1425,8 @@ static inline bool mal_vm_object_try_load_static(const MalObject *object,
     return mal_vm_object_try_load(object, ic->key, ic, out);
 }
 
-static inline bool mal_vm_local_inherited_value_try_load_static(
+// Every inherited-method hit outside the inline probe runs this check.
+static inline __attribute__((always_inline)) bool mal_vm_local_inherited_value_try_load_static(
     const MalObject *object, const MalInlineCache *ic, MalValue *out
 ) {
     if (object == nullptr || ic->mode != MAL_IC_MODE_INHERITED_VALUE ||
@@ -1501,14 +1502,15 @@ static inline bool mal_vm_local_watched_primitive_value_try_load_static(
 static inline bool mal_vm_inherited_value_try_load(const MalVm *vm, MalValue receiver,
                                                    const MalInlineCache *ic, MalValue *out) {
     if (ic->poly_count > 0) {
-        u8 receiver_type = ic->receiver_type == MAL_IC_RECEIVER_DICTIONARY
-            ? MAL_HEAP_OBJECT : ic->receiver_type;
-        if (!mal_value_is_heap_type(receiver, receiver_type)) {
+        bool dictionary_receiver =
+            ic->receiver_type == MAL_IC_RECEIVER_DICTIONARY;
+        // A dictionary row names its receiver, whose identity implies its type.
+        if (dictionary_receiver
+                ? !mal_value_is_object(receiver)
+                : !mal_value_is_heap_type(receiver, ic->receiver_type)) {
             return false;
         }
         const MalObject *object = (const MalObject *) mal_value_to_heap(receiver);
-        bool dictionary_receiver =
-            ic->receiver_type == MAL_IC_RECEIVER_DICTIONARY;
         if (object->shape != ic->shape ||
             mal_object_prototype(object) != ic->proto_object[0] ||
             (dictionary_receiver

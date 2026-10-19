@@ -5755,27 +5755,36 @@ static bool mal_ic_can_apply_transition_store(const MalObject *object, MalKey ke
 	return mal_prototype_chain_allows_transition_store(mal_object_prototype(object), key);
 }
 
+/**
+ * Whether `object` resolves `key` only through its shape and table. Functions
+ * materialize their default `prototype` lazily, so only that key escapes both.
+ */
+static bool mal_ic_chain_object_admits(const MalObject *object, MalKey key) {
+    return object->header.type == MAL_HEAP_OBJECT ||
+        (mal_tag_for_heap_type(object->header.type) == MAL_VALUE_CALLABLE &&
+         !mal_vm_key_is_prototype(key));
+}
+
 static bool mal_ic_try_record_inherited_slot(
     MalValue receiver, MalValue key_value, MalPropertyResolution resolution,
     MalInlineCache *ic, bool count_fill
 ) {
     MalHeapType receiver_type = mal_value_heap_type(receiver);
-    if ((receiver_type != MAL_HEAP_OBJECT &&
-         receiver_type != MAL_HEAP_GENERATOR_OBJECT) ||
+    MalObject *object = mal_value_to_object(receiver);
+    MalKey key = mal_key_from_value(key_value);
+    if ((receiver_type != MAL_HEAP_GENERATOR_OBJECT && !mal_ic_chain_object_admits(object, key)) ||
         (resolution.desc.flags & MAL_PROPERTY_ACCESSOR)) {
         return false;
     }
 
-    MalObject *object = mal_value_to_object(receiver);
     bool dictionary_receiver = mal_object_has_public_overflow(object);
     if ((dictionary_receiver &&
-         (receiver_type != MAL_HEAP_OBJECT || object->shape->inline_count != 0)) ||
+         (receiver_type == MAL_HEAP_GENERATOR_OBJECT || object->shape->inline_count != 0)) ||
         resolution.holder == nullptr ||
-        resolution.holder->header.type != MAL_HEAP_OBJECT) {
+        !mal_ic_chain_object_admits(resolution.holder, key)) {
         return false;
     }
 
-    MalKey key = mal_key_from_value(key_value);
     if (dictionary_receiver && mal_object_get_own(object, key).present) {
         return false;
     }
@@ -5785,7 +5794,7 @@ static bool mal_ic_try_record_inherited_slot(
     // time, so a later structural mutation invalidates the shared epoch.
     bool found_holder = false;
     for (MalObject *cursor = mal_object_prototype(object); cursor != nullptr; cursor = mal_object_prototype(cursor)) {
-        if (cursor->header.type != MAL_HEAP_OBJECT) {
+        if (!mal_ic_chain_object_admits(cursor, key)) {
             return false;
         }
         if (cursor == resolution.holder) {
@@ -6138,7 +6147,8 @@ static void mal_ic_try_record_inherited(
 
     if (mal_ic_try_record_inherited_slot(
             receiver, key_value, resolution, ic, true)) {
-        if (!fill_shared) return;
+        // Shared rows are probed for ordinary receivers only.
+        if (!fill_shared || object->header.type != MAL_HEAP_OBJECT) return;
         MalInlineCache *stub = mal_vm_inherited_stub_for_fill(vm, object, key_value, ic);
         if (stub != nullptr && stub != ic) {
             (void) mal_ic_try_record_inherited_slot(
@@ -6242,11 +6252,15 @@ bool mal_vm_probe_accessor_read_miss(
     return true;
 }
 
+static inline bool mal_ic_is_getter_row(const MalInlineCache *ic) {
+    return ic->mode == MAL_IC_MODE_INHERITED_GETTER || ic->mode == MAL_IC_MODE_OWN_GETTER;
+}
+
 /**
  * Call the getter of a getter row that still holds for the receiver. Getters run user
  * code, so these rows hit only on slow paths, after the caller rooted its operands.
  */
-static bool mal_vm_getter_row_try_load(
+static __attribute__((noinline)) bool mal_vm_getter_row_try_load(
     MalVm *vm, MalValue object_value, MalValue key_value, const MalInlineCache *ic,
     MalValue *out
 ) {
@@ -6283,7 +6297,8 @@ static MalValue mal_vm_op_load_property_ic_keyed(
     MAL_PERF_COUNT(ic_load_fallbacks);
     MalValue key_value = key.value;
     MalValue getter_value;
-    if (mal_vm_getter_row_try_load(vm, object_value, key_value, ic, &getter_value)) {
+    if (mal_ic_is_getter_row(ic) &&
+        mal_vm_getter_row_try_load(vm, object_value, key_value, ic, &getter_value)) {
         return getter_value;
     }
     MalValue special_value;
@@ -6670,7 +6685,8 @@ MalValue mal_vm_op_load_property_ic_static_miss(
     mal_gc_root(&span, roots, countof(roots));
     MalValue result;
     // A getter row skips the index-name check: an index never shares a string row.
-    if (!mal_vm_getter_row_try_load(vm, object_value, mal_value_from_string(name), ic, &result)) {
+    if (!mal_ic_is_getter_row(ic) ||
+        !mal_vm_getter_row_try_load(vm, object_value, mal_value_from_string(name), ic, &result)) {
         // The VM atom is already this property's canonical query key; only an
         // index-shaped name needs the INDEX kind.
         u32 index = 0;
