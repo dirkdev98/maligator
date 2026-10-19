@@ -601,7 +601,7 @@
 	},
 	{
 		"file": "runtime/node_stream.c",
-		"sha256": "49cced54be739b23c7d97fcd0ff465567050b8cbc028d7f1833c86e98b3a310c"
+		"sha256": "303de3bd3255142db6772ce15fbee9e11a46b89259e527f301ac588cf3365ab7"
 	},
 	{
 		"file": "runtime/node_stream.h",
@@ -689,7 +689,7 @@
 	},
 	{
 		"file": "runtime/personality.c",
-		"sha256": "cf659b9c07e8f2f30a5b8bd33056e2da0720381f425f71e489c54697630913a3"
+		"sha256": "3d8cfbcbbd130e739cc3034d10e5440d85b3cb870de219e75967f0a7eae299de"
 	},
 	{
 		"file": "runtime/test262_agent.c",
@@ -717,7 +717,11 @@
 	},
 	{
 		"file": "runtime/web_readable_stream.c",
-		"sha256": "bcc08478f62ba51fdb2b48a41257c392c50190510f2440f1532d6cb83c4dae94"
+		"sha256": "788212aa0d3783e04e83c88a1956f579abe1526d3bf13bc814fb7d1f2a8c4c9c"
+	},
+	{
+		"file": "runtime/web_transform_stream.c",
+		"sha256": "d8fe67f744e484a819b840f911cfea451d45a492228d703a7cdf10c2079de98d"
 	},
 	{
 		"file": "runtime/web_url.c",
@@ -725,7 +729,7 @@
 	},
 	{
 		"file": "runtime/web_writable_stream.c",
-		"sha256": "a9abb6bb75572b7f3d645780e5002c3fde755cc055fbfdc367512c85ef84126c"
+		"sha256": "a600b5b6e4c9683ba43b6e3c524ec2e8e7289dfc0151278fe39efffc19e30211"
 	},
 	{
 		"file": "runtime/workers.c",

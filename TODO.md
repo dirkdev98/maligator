@@ -1048,9 +1048,9 @@ remains a Maligator extension and does not count as global fetch conformance.
       microtask failures, and exactly-once uncaught reporting. Choose the ECMA-429
       server-global mechanism explicitly.
 
-- [ ] Complete residual byte-stream BYOB, descriptor, error, cancellation, and
-      TransformStream semantics. Keep active Streams WPT slices green under normal and
-      GC-stress execution.
+- [ ] Complete residual byte-stream BYOB, descriptor, error, and cancellation
+      semantics, and curate the streams/transform-streams WPT. Keep active Streams WPT
+      slices green under normal and GC-stress execution.
 
 - [ ] Bridge host llhttp headers and bodies to Web Streams without exposing parser
       buffers or socket ownership. Backpressure, EOF, abort, failure, and teardown each
@@ -1072,11 +1072,12 @@ remains a Maligator extension and does not count as global fetch conformance.
 - [ ] Complete URL and URLSearchParams Web IDL behavior and broader WPT, then implement
       URLPattern. Connect object URLs after Blob lifetime and revocation are defined.
 
-- [ ] Add remaining TextDecoder labels and Web IDL details, then implement encoding
-      streams over TransformStream. Use versioned encoding data and incremental state.
+- [ ] Add remaining TextDecoder labels and Web IDL details, and curate the
+      encoding/streams WPT. Use versioned encoding data and incremental state.
 
-- [ ] Add compression streams over a DCE-friendly backend. Cover format selection,
-      chunking, flushing, errors, cancellation, and native-state cleanup.
+- [ ] Offer CompressionStream and DecompressionStream without the Node surface: the
+      zlib codec links only with the node-zlib feature. Curate the compression WPT and
+      match Node's messages for corrupt input.
 
 ## W3: fetch and crypto
 
@@ -1128,12 +1129,12 @@ remains a Maligator extension and does not count as global fetch conformance.
 
 - [ ] Fill the remaining Node 26 module gaps: fs.watch/watchFile/unwatchFile,
       fs.cp/cpSync, fs.glob/globSync, fs.openAsBlob and mkdtempDisposableSync;
-      net.Server-backed https and http2 servers, dgram, and the WebSocket client
-      global; crypto asymmetric KeyObjects, sign/verify, key generation,
-      X509Certificate, DiffieHellman/ECDH and Cipheriv as Transform streams;
-      dns record types beyond A/AAAA (needs res_query and libresolv in the link);
-      zlib zstd and the zip archive APIs; util MIMEType/MIMEParams; tls
-      rootCertificates, checkServerIdentity and createServer; worker_threads
+      https and http2 servers over net.Server, its Unix-path listen, allowHalfOpen
+      and named-host lookup, dgram, and the WebSocket client global; crypto
+      asymmetric KeyObjects, sign/verify, key generation, X509Certificate,
+      DiffieHellman/ECDH and Cipheriv as Transform streams; dns record types beyond
+      A/AAAA (needs res_query and libresolv in the link); zlib zstd and the zip
+      archive APIs; util MIMEType/MIMEParams; tls createServer; worker_threads
       environment data, BroadcastChannel and locks; and vm beyond runInNewContext.
 
 - [ ] Make async_hooks observe more than AsyncResource: timers, I/O and promises

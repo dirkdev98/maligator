@@ -4736,6 +4736,31 @@ static void rs_trace(MalHeapHeader *cell) {
             mal_gc_mark_value(object->as.writer.closed_promise);
             mal_gc_mark_value(object->as.writer.ready_promise);
             break;
+        case MAL_TRANSFORM_STREAM:
+            mal_gc_mark_value(object->as.transform.readable);
+            mal_gc_mark_value(object->as.transform.writable);
+            mal_gc_mark_value(object->as.transform.controller);
+            mal_gc_mark_value(object->as.transform.readable_controller);
+            mal_gc_mark_value(object->as.transform.writable_controller);
+            mal_gc_mark_value(object->as.transform.backpressure_promise);
+            mal_gc_mark_value(object->as.transform.start_promise);
+            break;
+        case MAL_TRANSFORM_STREAM_DEFAULT_CONTROLLER:
+            mal_gc_mark_value(object->as.transform_controller.stream);
+            mal_gc_mark_value(object->as.transform_controller.transformer);
+            mal_gc_mark_value(object->as.transform_controller.transform_method);
+            mal_gc_mark_value(object->as.transform_controller.flush_method);
+            mal_gc_mark_value(object->as.transform_controller.cancel_method);
+            mal_gc_mark_value(object->as.transform_controller.finish_promise);
+            mal_gc_mark_value(object->as.transform_controller.helper);
+            break;
+        case MAL_TEXT_ENCODER_STREAM:
+        case MAL_TEXT_DECODER_STREAM:
+        case MAL_COMPRESSION_STREAM:
+        case MAL_DECOMPRESSION_STREAM:
+            mal_gc_mark_value(object->as.transform_wrapper.transform);
+            mal_gc_mark_value(object->as.transform_wrapper.helper);
+            break;
     }
 }
 
@@ -4756,6 +4781,11 @@ static void rs_finalize(MalHeapHeader *cell) {
         }
         object->as.reader.requests_head = nullptr;
         object->as.reader.requests_tail = nullptr;
+    } else if (object->kind == MAL_TRANSFORM_STREAM_DEFAULT_CONTROLLER) {
+        if (object->as.transform_controller.codec_free != nullptr && object->as.transform_controller.codec != nullptr) {
+            object->as.transform_controller.codec_free(object->as.transform_controller.codec);
+        }
+        object->as.transform_controller.codec = nullptr;
     } else if (object->kind == MAL_WRITABLE_STREAM_DEFAULT_CONTROLLER) {
         MalWritableStreamWriteRequest *request =
             object->as.writable_controller.queue_head;

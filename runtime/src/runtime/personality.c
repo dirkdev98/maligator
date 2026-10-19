@@ -9,6 +9,7 @@
 #include "web_globals.h"
 #include "web_host_timer.h"
 #include "web_readable_stream_object.h"
+#include "web_transform_stream.h"
 #include "web_url_object.h"
 
 void mal_runtime_events_ensure(MalVm *vm) {
@@ -73,6 +74,7 @@ void mal_runtime_personality_install(MalVm *vm, bool web_platform, bool node) {
     if (web_platform || node) {
         mal_readable_stream_install(vm, global_this);
         mal_writable_stream_install(vm, global_this);
+        mal_transform_stream_install(vm, global_this);
     }
 #endif
 }

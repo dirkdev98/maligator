@@ -17,6 +17,7 @@
 #include "node_events.h"
 #include "node_module.h"
 #include "node_string_decoder.h"
+#include "web_readable_stream_object.h"
 #include "object.h"
 #include "object_ops.h"
 #include "promise_object.h"
@@ -3066,6 +3067,462 @@ static MalValue stream_duplex_pair(MalVm *vm, MalValue self, const MalValue *arg
     return result;
 }
 
+static MalValue stream_slot_function(MalVm *vm, const char *name, i32 length, MalNativeFunctionCallback callback,
+    const MalValue *slots, i32 count) {
+    return mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+        mal_intrinsic_ascii(vm, (const byte *) name), length, callback, slots, count));
+}
+
+static MalValue stream_slot(MalValue callee, i32 index) {
+    return mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), index);
+}
+
+// Readable.toWeb listeners and source hooks; slot 0 is the Node readable.
+static MalValue stream_to_web_data(MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self; (void) nt;
+    MalValue roots[3] = {stream_slot(callee, 0), argc > 0 ? args[0] : mal_value_new_undefined(),
+        MAL_VALUE_UNDEFINED};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, 3);
+    roots[2] = stream_own(vm, roots[0], "_malWebController");
+    MalValue state = stream_own(vm, roots[0], "_readableState");
+    if (mal_value_is_typed_array_object(roots[1]) && !stream_truthy_own(vm, state, "objectMode")) {
+        MalTypedArrayObject *source = mal_value_to_typed_array_object(roots[1]);
+        u32 length = mal_typed_array_object_byte_length(source);
+        MalValue length_value = mal_value_from_i32((i32) length);
+        MalCompletion copy = mal_vm_construct_value(vm, vm->intrinsics[MAL_INTRINSIC_TYPED_ARRAY_UINT8_CONSTRUCTOR],
+            &length_value, 1);
+        if (copy.kind == MAL_COMPLETION_THROW) goto done;
+        MalTypedArrayObject *target = mal_value_to_typed_array_object(copy.value);
+        memcpy(target->buffer->data + target->byte_offset, source->buffer->data + source->byte_offset, length);
+        roots[1] = copy.value;
+    }
+    stream_call_method(vm, roots[2], "enqueue", &roots[1], 1);
+    MalValue desired;
+    if (vm->completion.kind != MAL_COMPLETION_THROW && stream_get(vm, roots[2], "desiredSize", &desired)
+        && mal_ops_is_number(desired) && mal_ops_number_as_f64(desired) <= 0) {
+        stream_call_method(vm, roots[0], "pause", nullptr, 0);
+    }
+done:
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+static MalValue stream_to_web_end(MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self; (void) nt;
+    MalValue roots[2] = {stream_own(vm, stream_slot(callee, 0), "_malWebController"),
+        argc > 0 ? args[0] : mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, 2);
+    bool error = mal_value_to_i32(stream_slot(callee, 1)) == 1;
+    if (error) stream_call_method(vm, roots[0], "error", &roots[1], 1);
+    else stream_call_method(vm, roots[0], "close", nullptr, 0);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) vm->completion = (MalCompletion) {MAL_COMPLETION_NORMAL, MAL_VALUE_UNDEFINED};
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+static MalValue stream_to_web_start(MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self; (void) nt;
+    stream_set(vm, stream_slot(callee, 0), "_malWebController", argc > 0 ? args[0] : mal_value_new_undefined());
+    return mal_value_new_undefined();
+}
+
+static MalValue stream_to_web_pull(MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self; (void) args; (void) argc; (void) nt;
+    stream_call_method(vm, stream_slot(callee, 0), "resume", nullptr, 0);
+    return mal_value_new_undefined();
+}
+
+static MalValue stream_to_web_cancel(MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self; (void) nt;
+    MalValue reason = argc > 0 ? args[0] : mal_value_new_undefined();
+    stream_call_method(vm, stream_slot(callee, 0), "destroy", &reason, 1);
+    return mal_value_new_undefined();
+}
+
+static MalValue stream_readable_to_web(MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self; (void) nt; (void) callee;
+    MalValue roots[5] = {argc > 0 ? args[0] : mal_value_new_undefined(), MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED,
+        MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, 5);
+    MalValue result = mal_value_new_undefined();
+    MalValue state = stream_own(vm, roots[0], "_readableState");
+    if (!mal_value_is_object(state)) {
+        mal_node_throw_invalid_arg_type(vm, "streamReadable", "an instance of Readable", roots[0]);
+        goto done;
+    }
+    bool object_mode = stream_truthy_own(vm, state, "objectMode");
+    MalValue hwm = stream_own(vm, state, "highWaterMark");
+    roots[1] = mal_value_from_object(mal_intrinsic_new_object(vm));
+    static const struct { const char *name; i32 length; MalNativeFunctionCallback callback; } hooks[] = {
+        {"start", 1, stream_to_web_start}, {"pull", 1, stream_to_web_pull}, {"cancel", 1, stream_to_web_cancel},
+    };
+    for (usize i = 0; i < countof(hooks); i++) {
+        roots[2] = stream_slot_function(vm, hooks[i].name, hooks[i].length, hooks[i].callback, &roots[0], 1);
+        stream_set(vm, roots[1], hooks[i].name, roots[2]);
+    }
+    roots[3] = mal_value_from_object(mal_intrinsic_new_object(vm));
+    stream_set(vm, roots[3], "highWaterMark", mal_ops_is_number(hwm) ? hwm : mal_value_from_i32(object_mode ? 16 : 65536));
+    if (!object_mode) {
+        MalValue strategy_args = roots[3];
+        MalCompletion strategy = mal_vm_construct_value(vm,
+            vm->intrinsics[MAL_INTRINSIC_BYTE_LENGTH_QUEUING_STRATEGY_CONSTRUCTOR], &strategy_args, 1);
+        if (strategy.kind == MAL_COMPLETION_THROW) goto done;
+        roots[3] = strategy.value;
+    }
+    MalValue construct_args[2] = {roots[1], roots[3]};
+    MalCompletion readable = mal_vm_construct_value(vm, vm->intrinsics[MAL_INTRINSIC_READABLE_STREAM_CONSTRUCTOR],
+        construct_args, 2);
+    if (readable.kind == MAL_COMPLETION_THROW) goto done;
+    roots[4] = readable.value;
+    static const char *const events[] = {"data", "end", "error"};
+    for (i32 i = 0; i < 3 && vm->completion.kind != MAL_COMPLETION_THROW; i++) {
+        MalValue slots[2] = {roots[0], mal_value_from_i32(i == 2 ? 1 : 0)};
+        roots[2] = i == 0 ? stream_slot_function(vm, "onData", 1, stream_to_web_data, slots, 1)
+            : stream_slot_function(vm, "onFinished", 1, stream_to_web_end, slots, 2);
+        MalValue listen[2] = {mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) events[i])), roots[2]};
+        stream_call_method(vm, roots[0], "on", listen, 2);
+    }
+    if (vm->completion.kind != MAL_COMPLETION_THROW) result = roots[4];
+done:
+    mal_gc_unroot(&root);
+    return result;
+}
+
+// Readable.fromWeb read hook and reader reactions; slot 0 is the Node readable, slot 1 the web reader.
+static MalValue stream_from_web_settled(MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self; (void) nt;
+    MalValue roots[3] = {stream_slot(callee, 0), argc > 0 ? args[0] : mal_value_new_undefined(), MAL_VALUE_UNDEFINED};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, 3);
+    if (mal_value_to_i32(stream_slot(callee, 1)) == 1) {
+        stream_call_method(vm, roots[0], "destroy", &roots[1], 1);
+    } else {
+        MalValue done = mal_value_new_undefined();
+        stream_get(vm, roots[1], "done", &done);
+        if (mal_value_is_truthy(done)) {
+            roots[2] = mal_value_new_null();
+        } else {
+            stream_get(vm, roots[1], "value", &roots[2]);
+        }
+        stream_call_method(vm, roots[0], "push", &roots[2], 1);
+    }
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+static MalValue stream_from_web_read(MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self; (void) args; (void) argc; (void) nt;
+    MalValue roots[4] = {stream_own(vm, stream_slot(callee, 0), "_malWebReadable"), stream_slot(callee, 0),
+        MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, 4);
+    MalCompletion read = stream_call_method(vm, roots[1], "read", nullptr, 0);
+    if (read.kind != MAL_COMPLETION_THROW) {
+        roots[2] = read.value;
+        MalValue handlers[2];
+        MalValue fulfilled_slots[2] = {roots[0], mal_value_from_i32(0)};
+        MalValue rejected_slots[2] = {roots[0], mal_value_from_i32(1)};
+        handlers[0] = stream_slot_function(vm, "", 1, stream_from_web_settled, fulfilled_slots, 2);
+        roots[3] = handlers[0];
+        handlers[1] = stream_slot_function(vm, "", 1, stream_from_web_settled, rejected_slots, 2);
+        MalRootSpan handler_root;
+        mal_gc_root(&handler_root, handlers, 2);
+        stream_call_method(vm, roots[2], "then", handlers, 2);
+        mal_gc_unroot(&handler_root);
+    }
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+static MalValue stream_readable_from_web(MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self; (void) nt; (void) callee;
+    MalValue roots[5] = {argc > 0 ? args[0] : mal_value_new_undefined(), argc > 1 ? args[1] : mal_value_new_undefined(),
+        MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, 5);
+    MalValue result = mal_value_new_undefined();
+    if (!mal_value_is_readable_stream_object(roots[0])) {
+        mal_node_throw_invalid_arg_type(vm, "readableStream", "an instance of ReadableStream", roots[0]);
+        goto done;
+    }
+    MalCompletion reader = stream_call_method(vm, roots[0], "getReader", nullptr, 0);
+    if (reader.kind == MAL_COMPLETION_THROW) goto done;
+    roots[2] = reader.value;
+    roots[3] = mal_value_from_object(mal_intrinsic_new_object(vm));
+    static const char *const names[] = {"highWaterMark", "encoding", "objectMode", "signal"};
+    for (usize i = 0; i < countof(names); i++) {
+        MalValue option = stream_option(vm, roots[1], names[i]);
+        if (!mal_value_is_undefined(option)) stream_set(vm, roots[3], names[i], option);
+    }
+    roots[4] = stream_slot_function(vm, "read", 0, stream_from_web_read, &roots[2], 1);
+    stream_set(vm, roots[3], "read", roots[4]);
+    MalCompletion readable = mal_vm_construct_value(vm, vm->intrinsics[MAL_INTRINSIC_NODE_READABLE_CONSTRUCTOR],
+        &roots[3], 1);
+    if (readable.kind == MAL_COMPLETION_THROW) goto done;
+    stream_set(vm, roots[2], "_malWebReadable", readable.value);
+    result = readable.value;
+done:
+    mal_gc_unroot(&root);
+    return result;
+}
+
+static MalValue stream_new_promise(MalVm *vm) {
+    return mal_value_from_object((MalObject *) mal_promise_object_new(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_PROMISE_PROTOTYPE])));
+}
+
+// Settles slot 0's promise: slot 1 is 0 to fulfill, 1 to reject with the first argument.
+static MalValue stream_settle_slot(MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self; (void) nt;
+    MalPromiseObject *promise = mal_value_to_promise_object(stream_slot(callee, 0));
+    if (promise->state != MAL_PROMISE_PENDING) return mal_value_new_undefined();
+    if (mal_value_to_i32(stream_slot(callee, 1)) == 1) {
+        mal_promise_reject(vm, promise, argc > 0 ? args[0] : mal_value_new_undefined());
+    } else {
+        mal_promise_fulfill(vm, promise, mal_value_new_undefined());
+    }
+    return mal_value_new_undefined();
+}
+
+static void stream_once_settle(MalVm *vm, MalValue emitter, const char *event, MalValue promise, bool reject) {
+    MalValue slots[2] = {promise, mal_value_from_i32(reject ? 1 : 0)};
+    MalValue listen[2] = {mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) event)), MAL_VALUE_UNDEFINED};
+    MalRootSpan root;
+    mal_gc_root(&root, listen, 2);
+    listen[1] = stream_slot_function(vm, "", 1, stream_settle_slot, slots, 2);
+    stream_call_method(vm, emitter, "once", listen, 2);
+    mal_gc_unroot(&root);
+}
+
+static MalValue stream_writable_web_write(MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self; (void) nt;
+    MalValue roots[3] = {stream_slot(callee, 0), argc > 0 ? args[0] : mal_value_new_undefined(), MAL_VALUE_UNDEFINED};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, 3);
+    MalValue result = mal_value_new_undefined();
+    MalCompletion written = stream_call_method(vm, roots[0], "write", &roots[1], 1);
+    if (written.kind != MAL_COMPLETION_THROW && mal_value_is_boolean(written.value)
+        && !mal_value_to_boolean(written.value)) {
+        roots[2] = stream_new_promise(vm);
+        stream_once_settle(vm, roots[0], "drain", roots[2], false);
+        stream_once_settle(vm, roots[0], "error", roots[2], true);
+        result = roots[2];
+    }
+    mal_gc_unroot(&root);
+    return result;
+}
+
+static MalValue stream_writable_web_close(MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self; (void) args; (void) argc; (void) nt;
+    MalValue roots[2] = {stream_slot(callee, 0), stream_new_promise(vm)};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, 2);
+    stream_once_settle(vm, roots[0], "finish", roots[1], false);
+    stream_once_settle(vm, roots[0], "error", roots[1], true);
+    stream_call_method(vm, roots[0], "end", nullptr, 0);
+    MalValue result = vm->completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : roots[1];
+    mal_gc_unroot(&root);
+    return result;
+}
+
+static MalValue stream_writable_web_abort(MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self; (void) nt;
+    MalValue reason = argc > 0 ? args[0] : mal_value_new_undefined();
+    stream_call_method(vm, stream_slot(callee, 0), "destroy", &reason, 1);
+    return mal_value_new_undefined();
+}
+
+static MalValue stream_writable_to_web(MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self; (void) nt; (void) callee;
+    MalValue roots[4] = {argc > 0 ? args[0] : mal_value_new_undefined(), MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED,
+        MAL_VALUE_UNDEFINED};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, 4);
+    MalValue result = mal_value_new_undefined();
+    if (!mal_value_is_object(stream_own(vm, roots[0], "_writableState"))) {
+        mal_node_throw_invalid_arg_type(vm, "streamWritable", "an instance of Writable", roots[0]);
+        goto done;
+    }
+    roots[1] = mal_value_from_object(mal_intrinsic_new_object(vm));
+    static const struct { const char *name; i32 length; MalNativeFunctionCallback callback; } hooks[] = {
+        {"write", 1, stream_writable_web_write}, {"close", 0, stream_writable_web_close},
+        {"abort", 1, stream_writable_web_abort},
+    };
+    for (usize i = 0; i < countof(hooks); i++) {
+        roots[2] = stream_slot_function(vm, hooks[i].name, hooks[i].length, hooks[i].callback, &roots[0], 1);
+        stream_set(vm, roots[1], hooks[i].name, roots[2]);
+    }
+    MalCompletion writable = mal_vm_construct_value(vm, vm->intrinsics[MAL_INTRINSIC_WRITABLE_STREAM_CONSTRUCTOR],
+        &roots[1], 1);
+    if (writable.kind != MAL_COMPLETION_THROW) result = writable.value;
+done:
+    mal_gc_unroot(&root);
+    return result;
+}
+
+// Writable.fromWeb hooks; slot 0 is the web writer. The Node callback settles after the web write.
+static MalValue stream_callback_settled(MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self; (void) nt;
+    MalValue callback = stream_slot(callee, 0);
+    MalValue error = mal_value_to_i32(stream_slot(callee, 1)) == 1 && argc > 0 ? args[0] : mal_value_new_null();
+    if (mal_value_is_callable(callback)) mal_vm_call_value(vm, callback, mal_value_new_undefined(), &error, 1);
+    return mal_value_new_undefined();
+}
+
+static void stream_then_callback(MalVm *vm, MalValue promise, MalValue callback) {
+    MalValue roots[3] = {promise, MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, 3);
+    MalValue fulfilled[2] = {callback, mal_value_from_i32(0)};
+    MalValue rejected[2] = {callback, mal_value_from_i32(1)};
+    roots[1] = stream_slot_function(vm, "", 1, stream_callback_settled, fulfilled, 2);
+    roots[2] = stream_slot_function(vm, "", 1, stream_callback_settled, rejected, 2);
+    stream_call_method(vm, roots[0], "then", roots + 1, 2);
+    mal_gc_unroot(&root);
+}
+
+static MalValue stream_web_writer_write(MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self; (void) nt;
+    MalValue roots[3] = {stream_slot(callee, 0), argc > 0 ? args[0] : mal_value_new_undefined(),
+        argc > 2 ? args[2] : mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, 3);
+    MalCompletion written = stream_call_method(vm, roots[0], "write", &roots[1], 1);
+    if (written.kind != MAL_COMPLETION_THROW) stream_then_callback(vm, written.value, roots[2]);
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+static MalValue stream_web_writer_final(MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self; (void) nt;
+    MalValue roots[2] = {stream_slot(callee, 0), argc > 0 ? args[0] : mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, 2);
+    MalCompletion closed = stream_call_method(vm, roots[0], "close", nullptr, 0);
+    if (closed.kind != MAL_COMPLETION_THROW) stream_then_callback(vm, closed.value, roots[1]);
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+static MalValue stream_writable_from_web(MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self; (void) nt; (void) callee;
+    MalValue roots[4] = {argc > 0 ? args[0] : mal_value_new_undefined(), argc > 1 ? args[1] : mal_value_new_undefined(),
+        MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, 4);
+    MalValue result = mal_value_new_undefined();
+    if (!mal_writable_stream_is_stream(roots[0])) {
+        mal_node_throw_invalid_arg_type(vm, "writableStream", "an instance of WritableStream", roots[0]);
+        goto done;
+    }
+    MalCompletion writer = stream_call_method(vm, roots[0], "getWriter", nullptr, 0);
+    if (writer.kind == MAL_COMPLETION_THROW) goto done;
+    roots[2] = writer.value;
+    roots[3] = mal_value_from_object(mal_intrinsic_new_object(vm));
+    static const char *const names[] = {"highWaterMark", "decodeStrings", "objectMode", "signal"};
+    for (usize i = 0; i < countof(names); i++) {
+        MalValue option = stream_option(vm, roots[1], names[i]);
+        if (!mal_value_is_undefined(option)) stream_set(vm, roots[3], names[i], option);
+    }
+    MalValue hook = stream_slot_function(vm, "write", 3, stream_web_writer_write, &roots[2], 1);
+    stream_set(vm, roots[3], "write", hook);
+    hook = stream_slot_function(vm, "final", 1, stream_web_writer_final, &roots[2], 1);
+    stream_set(vm, roots[3], "final", hook);
+    MalCompletion writable = mal_vm_construct_value(vm, vm->intrinsics[MAL_INTRINSIC_NODE_WRITABLE_CONSTRUCTOR],
+        &roots[3], 1);
+    if (writable.kind != MAL_COMPLETION_THROW) result = writable.value;
+done:
+    mal_gc_unroot(&root);
+    return result;
+}
+
+static MalValue stream_duplex_to_web(MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    MalValue roots[3] = {argc > 0 ? args[0] : mal_value_new_undefined(), MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, 3);
+    MalValue result = mal_value_new_undefined();
+    roots[1] = stream_readable_to_web(vm, self, roots, 1, nt, callee);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
+    roots[2] = stream_writable_to_web(vm, self, roots, 1, nt, callee);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
+    MalObject *pair = mal_intrinsic_new_object(vm);
+    result = mal_value_from_object(pair);
+    mal_intrinsic_define_data(vm, pair, (const byte *) "writable", roots[2], STREAM_VISIBLE);
+    mal_intrinsic_define_data(vm, pair, (const byte *) "readable", roots[1], STREAM_VISIBLE);
+done:
+    mal_gc_unroot(&root);
+    return result;
+}
+
+static MalValue stream_duplex_from_web(MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue nt, MalValue callee) {
+    (void) self; (void) nt; (void) callee;
+    MalValue roots[6] = {argc > 0 ? args[0] : mal_value_new_undefined(), argc > 1 ? args[1] : mal_value_new_undefined(),
+        MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalValue result = mal_value_new_undefined();
+    MalValue readable = stream_option(vm, roots[0], "readable");
+    roots[4] = readable;
+    MalValue writable = stream_option(vm, roots[0], "writable");
+    roots[5] = writable;
+    if (!mal_value_is_readable_stream_object(roots[4]) || !mal_writable_stream_is_stream(roots[5])) {
+        mal_node_throw_invalid_arg_type(vm, "pair", "an object with readable and writable web streams", roots[0]);
+        goto done;
+    }
+    MalCompletion reader = stream_call_method(vm, roots[4], "getReader", nullptr, 0);
+    if (reader.kind == MAL_COMPLETION_THROW) goto done;
+    roots[2] = reader.value;
+    MalCompletion writer = stream_call_method(vm, roots[5], "getWriter", nullptr, 0);
+    if (writer.kind == MAL_COMPLETION_THROW) goto done;
+    roots[3] = writer.value;
+    MalValue options = mal_value_from_object(mal_intrinsic_new_object(vm));
+    roots[4] = options;
+    static const char *const names[] = {"allowHalfOpen", "decodeStrings", "encoding", "highWaterMark",
+        "objectMode", "signal"};
+    for (usize i = 0; i < countof(names); i++) {
+        MalValue option = stream_option(vm, roots[1], names[i]);
+        if (!mal_value_is_undefined(option)) stream_set(vm, roots[4], names[i], option);
+    }
+    MalValue hook = stream_slot_function(vm, "read", 0, stream_from_web_read, &roots[2], 1);
+    stream_set(vm, roots[4], "read", hook);
+    hook = stream_slot_function(vm, "write", 3, stream_web_writer_write, &roots[3], 1);
+    stream_set(vm, roots[4], "write", hook);
+    hook = stream_slot_function(vm, "final", 1, stream_web_writer_final, &roots[3], 1);
+    stream_set(vm, roots[4], "final", hook);
+    MalCompletion duplex = mal_vm_construct_value(vm, vm->intrinsics[MAL_INTRINSIC_NODE_DUPLEX_CONSTRUCTOR],
+        &roots[4], 1);
+    if (duplex.kind == MAL_COMPLETION_THROW) goto done;
+    stream_set(vm, roots[2], "_malWebReadable", duplex.value);
+    result = duplex.value;
+done:
+    mal_gc_unroot(&root);
+    return result;
+}
+
 static const MalIntrinsic stream_constructor_slots[] = {
     MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR,
     MAL_INTRINSIC_NODE_READABLE_CONSTRUCTOR,
@@ -3223,6 +3680,18 @@ void mal_host_install_node_stream(
     }
     roots[12] = stream_function(vm, "from", 2, stream_from);
     mal_intrinsic_define_data(vm, mal_value_to_object(roots[8]), "from", roots[12], STREAM_METHOD);
+    roots[12] = stream_function(vm, "toWeb", 1, stream_readable_to_web);
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[8]), "toWeb", roots[12], STREAM_METHOD);
+    roots[12] = stream_function(vm, "fromWeb", 2, stream_readable_from_web);
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[8]), "fromWeb", roots[12], STREAM_METHOD);
+    roots[12] = stream_function(vm, "toWeb", 1, stream_writable_to_web);
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[9]), "toWeb", roots[12], STREAM_METHOD);
+    roots[12] = stream_function(vm, "fromWeb", 2, stream_writable_from_web);
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[9]), "fromWeb", roots[12], STREAM_METHOD);
+    roots[12] = stream_function(vm, "toWeb", 1, stream_duplex_to_web);
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[10]), "toWeb", roots[12], STREAM_METHOD);
+    roots[12] = stream_function(vm, "fromWeb", 2, stream_duplex_from_web);
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[10]), "fromWeb", roots[12], STREAM_METHOD);
     roots[12] = stream_function(vm, "[Symbol.asyncIterator]", 0, stream_async_iterator);
     MalPropertyDesc async_iterator = mal_intrinsic_data_desc(roots[12], STREAM_METHOD);
     mal_object_define_own(mal_value_to_object(roots[3]), mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_ASYNC_ITERATOR), &async_iterator);

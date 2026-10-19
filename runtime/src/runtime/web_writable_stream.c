@@ -183,10 +183,13 @@ static void ws_error_stream(
     if (writer != nullptr) {
         MalPromiseObject *ready =
             mal_value_to_promise_object(writer->as.writer.ready_promise);
+        // EnsureReadyPromiseRejected and RejectCloseAndClosedPromiseIfNeeded mark the writer's promises handled.
         if (ready->state == MAL_PROMISE_PENDING) {
+            ready->is_handled = true;
             mal_promise_reject(vm, ready, roots[1]);
         } else {
             MalValue replacement = ws_rejected_promise(vm, roots[1]);
+            mal_value_to_promise_object(replacement)->is_handled = true;
             mal_gc_write_barrier(writer->as.writer.ready_promise);
             writer->as.writer.ready_promise = replacement;
             mal_gc_card(&writer->object.header, replacement);
@@ -216,7 +219,10 @@ static void ws_error_stream(
     if (writer != nullptr) {
         MalPromiseObject *closed =
             mal_value_to_promise_object(writer->as.writer.closed_promise);
-        if (closed->state == MAL_PROMISE_PENDING) mal_promise_reject(vm, closed, roots[1]);
+        if (closed->state == MAL_PROMISE_PENDING) {
+            closed->is_handled = true;
+            mal_promise_reject(vm, closed, roots[1]);
+        }
     }
     mal_gc_unroot(&span);
 }
@@ -285,11 +291,21 @@ static MalValue ws_operation_rejected(MalVm *vm, MalValue self,
     }
     MalReadableStreamObject *controller =
         mal_value_to_readable_stream_object(controller_value);
+    bool was_writing = controller->as.writable_controller.writing;
     controller->as.writable_controller.writing = false;
     MalValue reason = argc >= 1 ? args[0] : mal_value_new_undefined();
-    ws_error_stream(vm,
-        mal_value_to_readable_stream_object(controller->as.writable_controller.stream),
-        reason);
+    MalReadableStreamObject *stream =
+        mal_value_to_readable_stream_object(controller->as.writable_controller.stream);
+    // An earlier controller.error() kept the in-flight request queued; FinishInFlightWriteWithError rejects it now.
+    MalWritableStreamWriteRequest *request = controller->as.writable_controller.queue_head;
+    if (was_writing && request != nullptr
+        && stream->as.writable_stream.state != MAL_READABLE_STREAM_READABLE) {
+        controller->as.writable_controller.queue_head = request->next;
+        if (request->next == nullptr) controller->as.writable_controller.queue_tail = nullptr;
+        mal_promise_reject(vm, mal_value_to_promise_object(request->promise), reason);
+        ws_free_request(request);
+    }
+    ws_error_stream(vm, stream, reason);
     return mal_value_new_undefined();
 }
 

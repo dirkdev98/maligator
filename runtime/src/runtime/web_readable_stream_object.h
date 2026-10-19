@@ -17,6 +17,12 @@ typedef enum MalReadableStreamKind : u8 {
     MAL_WRITABLE_STREAM,
     MAL_WRITABLE_STREAM_DEFAULT_CONTROLLER,
     MAL_WRITABLE_STREAM_DEFAULT_WRITER,
+    MAL_TRANSFORM_STREAM,
+    MAL_TRANSFORM_STREAM_DEFAULT_CONTROLLER,
+    MAL_TEXT_ENCODER_STREAM,
+    MAL_TEXT_DECODER_STREAM,
+    MAL_COMPRESSION_STREAM,
+    MAL_DECOMPRESSION_STREAM,
 } MalReadableStreamKind;
 
 typedef enum MalReadableStreamState : u8 {
@@ -128,6 +134,36 @@ typedef struct MalReadableStreamObject {
             MalValue closed_promise;
             MalValue ready_promise;
         } writer;
+        struct {
+            MalValue readable;
+            MalValue writable;
+            MalValue controller;
+            MalValue readable_controller;
+            MalValue writable_controller;
+            MalValue backpressure_promise;
+            MalValue start_promise;
+            bool backpressure;
+        } transform;
+        struct {
+            MalValue stream;
+            MalValue transformer;
+            MalValue transform_method;
+            MalValue flush_method;
+            MalValue cancel_method;
+            MalValue finish_promise;
+            /** TextEncoder or TextDecoder backing a text stream's transform. */
+            MalValue helper;
+            /** Native codec state (a MalZlibStream) released by codec_free when finalized. */
+            void *codec;
+            void (*codec_free)(void *codec);
+            u32 pending_surrogate;
+            u8 algorithm;
+            bool cleared;
+        } transform_controller;
+        struct {
+            MalValue transform;
+            MalValue helper;
+        } transform_wrapper;
     } as;
 } MalReadableStreamObject;
 
