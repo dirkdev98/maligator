@@ -7458,7 +7458,7 @@ function compileWhileStatement(
 	(fn.loops ??= []).push(loop);
 
 	const headerCursor: CoreFrontendCursor = { block: fn.blocks[headerIdx]! };
-	const condition = compileExpression(program, fn, headerCursor, statement.test);
+	const branch = compileBranch(program, fn, headerCursor, statement.test);
 
 	const bodyIdx = compileStatementsToBlock(
 		program,
@@ -7479,17 +7479,7 @@ function compileWhileStatement(
 			{ type: "jump", blocks: [bodyIdx] },
 		);
 	}
-	headerCursor.block.emitter.emit({
-		type: "jumpIf",
-		registers: [condition],
-		blocks: [iterationEntryIdx],
-	});
-	const exitJump: Extract<CompilerInstruction, { type: "jump" }> = {
-		type: "jump",
-		// Patched below, once the exit block exists.
-		blocks: [-1],
-	};
-	headerCursor.block.emitter.emit(exitJump);
+	patchBranchJumps(branch.whenTrue, iterationEntryIdx);
 
 	// Back edge from the body tail to the condition.
 	bodyLastBlock.emitter.emit({
@@ -7501,7 +7491,7 @@ function compileWhileStatement(
 	if (perIter) {
 		fn.blocks[exitIdx]!.emitter.emit({ type: "envPop" });
 	}
-	exitJump.blocks[0] = exitIdx;
+	patchBranchJumps(branch.whenFalse, exitIdx);
 	for (const jump of loop.breakJumps) {
 		jump.blocks[0] = exitIdx;
 	}
@@ -7571,23 +7561,14 @@ function compileDoWhileStatement(
 	});
 
 	const conditionCursor: CoreFrontendCursor = { block: fn.blocks[conditionIdx]! };
-	const condition = compileExpression(program, fn, conditionCursor, statement.test);
-	conditionCursor.block.emitter.emit({
-		type: "jumpIf",
-		registers: [condition],
-		blocks: [iterationEntryIdx],
-	});
-	const exitJump: Extract<CompilerInstruction, { type: "jump" }> = {
-		type: "jump",
-		blocks: [-1],
-	};
-	conditionCursor.block.emitter.emit(exitJump);
+	const branch = compileBranch(program, fn, conditionCursor, statement.test);
+	patchBranchJumps(branch.whenTrue, iterationEntryIdx);
 
 	const exitIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 	if (perIter) {
 		fn.blocks[exitIdx]!.emitter.emit({ type: "envPop" });
 	}
-	exitJump.blocks[0] = exitIdx;
+	patchBranchJumps(branch.whenFalse, exitIdx);
 	for (const jump of loop.breakJumps) {
 		jump.blocks[0] = exitIdx;
 	}
@@ -7727,29 +7708,21 @@ function compileForStatementBody(
 	(fn.loops ??= []).push(loop);
 
 	const headerCursor: CoreFrontendCursor = { block: fn.blocks[headerIdx]! };
-	let condition: number;
+	let branch: BranchJumps;
 	if (statement.test) {
-		condition = compileExpression(program, fn, headerCursor, statement.test);
+		branch = compileBranch(program, fn, headerCursor, statement.test);
 	} else {
-		condition = nextCoreVariable(fn);
+		const condition = nextCoreVariable(fn);
 		headerCursor.block.emitter.emit({
 			type: "createBoolean",
 			registers: [condition],
 			value: true,
 		});
+		branch = emitBranch(fn, headerCursor, condition);
 	}
 
 	const bodyIdx = compileStatementsToBlock(program, fn, [statement.body]);
-	headerCursor.block.emitter.emit({
-		type: "jumpIf",
-		registers: [condition],
-		blocks: [bodyIdx],
-	});
-	const exitJump: Extract<CompilerInstruction, { type: "jump" }> = {
-		type: "jump",
-		blocks: [-1],
-	};
-	headerCursor.block.emitter.emit(exitJump);
+	patchBranchJumps(branch.whenTrue, bodyIdx);
 
 	// The update block is the continue target and closes the back edge.
 	const bodyLastBlock = fn.blocks.at(-1)!;
@@ -7784,7 +7757,7 @@ function compileForStatementBody(
 	if (perIter) {
 		fn.blocks[exitIdx]!.emitter.emit({ type: "envPop" });
 	}
-	exitJump.blocks[0] = exitIdx;
+	patchBranchJumps(branch.whenFalse, exitIdx);
 	for (const jump of loop.breakJumps) {
 		jump.blocks[0] = exitIdx;
 	}
@@ -8795,33 +8768,82 @@ function compileIfStatement(
 	statement: ESTree.IfStatement,
 ) {
 	const cursor: CoreFrontendCursor = { block };
-	const condition = compileExpression(program, fn, cursor, statement.test);
+	// The test cannot complete a statement, so resetting first matches UpdateEmpty.
 	resetEvalCompletion(fn, cursor.block);
-	const consequentBlock = compileStatementsToBlock(
-		program,
-		fn,
-		normalizeStatementOrBlock(statement.consequent),
+	const branch = compileBranch(program, fn, cursor, statement.test);
+	patchBranchJumps(
+		branch.whenTrue,
+		compileStatementsToBlock(
+			program,
+			fn,
+			normalizeStatementOrBlock(statement.consequent),
+		),
 	);
-	cursor.block.emitter.emit({
-		type: "jumpIf",
-		registers: [condition],
-		blocks: [consequentBlock],
-	});
 
 	// We always create an alternate block so we have something to resume.
 	const alternate = statement.alternate ?? {
 		type: "BlockStatement",
 		body: [],
 	};
-	const alternateBlock = compileStatementsToBlock(
-		program,
-		fn,
-		normalizeStatementOrBlock(alternate),
+	patchBranchJumps(
+		branch.whenFalse,
+		compileStatementsToBlock(program, fn, normalizeStatementOrBlock(alternate)),
 	);
-	cursor.block.emitter.emit({
+}
+
+interface BranchJumps {
+	whenTrue: Array<{ blocks: Array<number> }>;
+	whenFalse: Array<{ blocks: Array<number> }>;
+}
+
+/**
+ * Compile a test that only decides control flow. Each operand of `&&`, `||` and
+ * `!` branches on its own value, so no join materializes (and boxes) a value that
+ * the test would only convert with ToBoolean. The jumps target -1 until patched.
+ */
+function compileBranch(
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
+	test: ESTree.Expression,
+): BranchJumps {
+	if (test.type === "LogicalExpression" && test.operator !== "??") {
+		const left = compileBranch(program, fn, cursor, test.left);
+		const rightIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+		patchBranchJumps(test.operator === "&&" ? left.whenTrue : left.whenFalse, rightIdx);
+		cursor.block = fn.blocks[rightIdx]!;
+		const right = compileBranch(program, fn, cursor, test.right);
+		return test.operator === "&&"
+			? { whenTrue: right.whenTrue, whenFalse: [...left.whenFalse, ...right.whenFalse] }
+			: { whenTrue: [...left.whenTrue, ...right.whenTrue], whenFalse: right.whenFalse };
+	}
+	if (test.type === "UnaryExpression" && test.operator === "!") {
+		const operand = compileBranch(program, fn, cursor, test.argument);
+		return { whenTrue: operand.whenFalse, whenFalse: operand.whenTrue };
+	}
+	return emitBranch(fn, cursor, compileExpression(program, fn, cursor, test));
+}
+
+function emitBranch(
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
+	condition: number,
+): BranchJumps {
+	const whenTrue: Extract<CompilerInstruction, { type: "jumpIf" }> = {
+		type: "jumpIf",
+		registers: [condition],
+		blocks: [-1],
+	};
+	const whenFalse: Extract<CompilerInstruction, { type: "jump" }> = {
 		type: "jump",
-		blocks: [alternateBlock],
-	});
+		blocks: [-1],
+	};
+	cursor.block.emitter.emit(whenTrue, whenFalse);
+	return { whenTrue: [whenTrue], whenFalse: [whenFalse] };
+}
+
+function patchBranchJumps(jumps: BranchJumps["whenTrue"], block: number): void {
+	for (const jump of jumps) jump.blocks[0] = block;
 }
 
 /**
@@ -11170,18 +11192,7 @@ function compileConditionalExpression(
 	expression: ESTree.ConditionalExpression,
 ): number {
 	const result = nextCoreVariable(fn);
-	const condition = compileExpression(program, fn, cursor, expression.test);
-
-	const consequentJump: Extract<CompilerInstruction, { type: "jumpIf" }> = {
-		type: "jumpIf",
-		registers: [condition],
-		blocks: [-1],
-	};
-	const alternateJump: Extract<CompilerInstruction, { type: "jump" }> = {
-		type: "jump",
-		blocks: [-1],
-	};
-	cursor.block.emitter.emit(consequentJump, alternateJump);
+	const branch = compileBranch(program, fn, cursor, expression.test);
 
 	const consequentIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
 	cursor.block = fn.blocks[consequentIdx]!;
@@ -11210,8 +11221,8 @@ function compileConditionalExpression(
 	cursor.block.emitter.emit(alternateJoinJump);
 
 	const joinIdx = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
-	consequentJump.blocks[0] = consequentIdx;
-	alternateJump.blocks[0] = alternateIdx;
+	patchBranchJumps(branch.whenTrue, consequentIdx);
+	patchBranchJumps(branch.whenFalse, alternateIdx);
 	consequentJoinJump.blocks[0] = joinIdx;
 	alternateJoinJump.blocks[0] = joinIdx;
 	cursor.block = fn.blocks[joinIdx]!;
