@@ -1,14 +1,14 @@
 {
   "sha": "3655e7464de3d52643ecddd4b5f9f4f3e7f62398",
   "summary": {
-    "FAILED": 921,
-    "PASSED": 52657
+    "FAILED": 914,
+    "PASSED": 52664
   },
   "skips": {},
   "code": {
     "compiledFiles": 94218,
     "functionCount": 2985900,
-    "instructionCount": 109799421
+    "instructionCount": 109804800
   },
   "results": {
     "test/annexB/built-ins/Array/from/iterator-method-emulates-undefined.js": "FAILED",
@@ -4141,7 +4141,7 @@
     "test/built-ins/String/prototype/matchAll/regexp-get-matchAll-throws.js": "PASSED",
     "test/built-ins/String/prototype/matchAll/regexp-matchAll-invocation.js": "PASSED",
     "test/built-ins/String/prototype/matchAll/regexp-prototype-get-matchAll-throws.js": "PASSED",
-    "test/built-ins/String/prototype/matchAll/regexp-prototype-matchAll-v-u-flag.js": "FAILED",
+    "test/built-ins/String/prototype/matchAll/regexp-prototype-matchAll-v-u-flag.js": "PASSED",
     "test/built-ins/String/prototype/normalize/length.js": "PASSED",
     "test/built-ins/String/prototype/normalize/return-abrupt-from-form-as-symbol.js": "PASSED",
     "test/built-ins/String/prototype/normalize/return-normalized-string-from-coerced-form.js": "PASSED",
@@ -4168,7 +4168,7 @@
     "test/built-ins/String/prototype/replace/S15.5.4.11_A7.js": "PASSED",
     "test/built-ins/String/prototype/replace/cstm-replace-on-bigint-primitive.js": "PASSED",
     "test/built-ins/String/prototype/replace/length.js": "PASSED",
-    "test/built-ins/String/prototype/replace/regexp-prototype-replace-v-u-flag.js": "FAILED",
+    "test/built-ins/String/prototype/replace/regexp-prototype-replace-v-u-flag.js": "PASSED",
     "test/built-ins/String/prototype/replace/tostring-this-throws-symbol.js": "PASSED",
     "test/built-ins/String/prototype/replaceAll/cstm-replaceall-on-number-primitive.js": "PASSED",
     "test/built-ins/String/prototype/replaceAll/getSubstitution-0x0024-0x0027.js": "PASSED",
@@ -4191,7 +4191,7 @@
     "test/built-ins/String/prototype/search/cstm-search-get-err.js": "PASSED",
     "test/built-ins/String/prototype/search/cstm-search-on-boolean-primitive.js": "PASSED",
     "test/built-ins/String/prototype/search/invoke-builtin-search.js": "PASSED",
-    "test/built-ins/String/prototype/search/regexp-prototype-search-v-u-flag.js": "FAILED",
+    "test/built-ins/String/prototype/search/regexp-prototype-search-v-u-flag.js": "PASSED",
     "test/built-ins/String/prototype/slice/S15.5.4.13_A1_T1.js": "PASSED",
     "test/built-ins/String/prototype/slice/S15.5.4.13_A1_T13.js": "PASSED",
     "test/built-ins/String/prototype/slice/S15.5.4.13_A1_T4.js": "PASSED",
@@ -17166,7 +17166,7 @@
     "test/built-ins/RegExp/prototype/exec/S15.10.6.2_A5_T3.js": "PASSED",
     "test/built-ins/RegExp/prototype/exec/S15.10.6.2_A9.js": "PASSED",
     "test/built-ins/RegExp/prototype/exec/failure-lastindex-access.js": "PASSED",
-    "test/built-ins/RegExp/prototype/exec/regexp-builtin-exec-v-u-flag.js": "FAILED",
+    "test/built-ins/RegExp/prototype/exec/regexp-builtin-exec-v-u-flag.js": "PASSED",
     "test/built-ins/RegExp/prototype/exec/u-lastindex-adv.js": "PASSED",
     "test/built-ins/RegExp/prototype/exec/y-fail-return.js": "PASSED",
     "test/built-ins/RegExp/prototype/flags/coercion-global.js": "PASSED",
@@ -30924,7 +30924,7 @@
     "test/built-ins/String/prototype/match/cstm-matcher-invocation.js": "PASSED",
     "test/built-ins/String/prototype/match/cstm-matcher-on-number-primitive.js": "PASSED",
     "test/built-ins/String/prototype/match/invoke-builtin-match.js": "PASSED",
-    "test/built-ins/String/prototype/match/regexp-prototype-match-v-u-flag.js": "FAILED",
+    "test/built-ins/String/prototype/match/regexp-prototype-match-v-u-flag.js": "PASSED",
     "test/built-ins/String/prototype/matchAll/cstm-matchall-on-bigint-primitive.js": "PASSED",
     "test/built-ins/String/prototype/matchAll/flags-nonglobal-throws.js": "PASSED",
     "test/built-ins/String/prototype/matchAll/not-a-constructor.js": "PASSED",
@@ -39996,7 +39996,7 @@
     "test/staging/sm/RegExp/test-emptyMatch.js": "PASSED",
     "test/staging/sm/RegExp/unicode-braced.js": "FAILED",
     "test/staging/sm/RegExp/unicode-class-ignoreCase.js": "PASSED",
-    "test/staging/sm/RegExp/unicode-class-raw.js": "FAILED",
+    "test/staging/sm/RegExp/unicode-class-raw.js": "PASSED",
     "test/staging/sm/RegExp/unicode-ignoreCase-escape.js": "FAILED",
     "test/staging/sm/RegExp/unicode-lead-trail.js": "FAILED",
     "test/staging/sm/Set/is-disjoint-from.js": "PASSED",
@@ -44374,7 +44374,7 @@
     "test/built-ins/String/prototype/search/S15.5.4.12_A9.js": "PASSED",
     "test/built-ins/String/prototype/search/cstm-search-on-bigint-primitive.js": "PASSED",
     "test/built-ins/String/prototype/search/invoke-builtin-search-searcher-undef.js": "PASSED",
-    "test/built-ins/String/prototype/search/regexp-prototype-search-v-flag.js": "FAILED",
+    "test/built-ins/String/prototype/search/regexp-prototype-search-v-flag.js": "PASSED",
     "test/built-ins/String/prototype/slice/S15.5.4.13_A11.js": "PASSED",
     "test/built-ins/String/prototype/slice/S15.5.4.13_A1_T12.js": "PASSED",
     "test/built-ins/String/prototype/slice/S15.5.4.13_A1_T2.js": "PASSED",
