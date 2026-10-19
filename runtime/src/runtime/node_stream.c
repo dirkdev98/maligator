@@ -1469,6 +1469,10 @@ static void stream_emit_finish(MalVm *vm, MalValue receiver) {
     if (vm->completion.kind != MAL_COMPLETION_THROW) {
         stream_emit(vm, receiver, "finish", nullptr, 0);
     }
+    if (vm->completion.kind != MAL_COMPLETION_THROW
+        && stream_truthy_own(vm, receiver, "_malAutoDestroyAfterFinish")) {
+        stream_destroy(vm, receiver, nullptr, 0, mal_value_new_undefined(), mal_value_new_undefined());
+    }
 }
 
 static void stream_schedule_finish(MalVm *vm, MalValue receiver) {

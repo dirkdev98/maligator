@@ -18,6 +18,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/uio.h>
 #include <unistd.h>
 #if defined(__APPLE__)
 #include <sys/mount.h>
@@ -420,6 +421,65 @@ int mal_posix_fs_read_fd(
         return errno;
     }
     *read_count = (usize) count;
+    return 0;
+}
+
+static usize posix_fs_iovecs(
+    const MalPosixIoVec *vectors, usize count, usize skip, struct iovec *out, usize capacity) {
+    usize used = 0;
+    for (usize i = 0; i < count && used < capacity; i++) {
+        if (skip >= vectors[i].length) {
+            skip -= vectors[i].length;
+            continue;
+        }
+        out[used].iov_base = vectors[i].data + skip;
+        out[used].iov_len = vectors[i].length - skip;
+        skip = 0;
+        used++;
+    }
+    return used;
+}
+
+enum { POSIX_FS_IOV_BATCH = 64 };
+
+int mal_posix_fs_readv_fd(int fd, const MalPosixIoVec *vectors, usize count,
+    bool has_position, i64 position, usize *read_count) {
+    struct iovec iov[POSIX_FS_IOV_BATCH];
+    usize used = posix_fs_iovecs(vectors, count, 0, iov, POSIX_FS_IOV_BATCH);
+    *read_count = 0;
+    if (used == 0) return 0;
+    ssize_t result;
+    do {
+        result = has_position ? preadv(fd, iov, (int) used, (off_t) position)
+            : readv(fd, iov, (int) used);
+    } while (result < 0 && errno == EINTR);
+    if (result < 0) return errno;
+    *read_count = (usize) result;
+    return 0;
+}
+
+int mal_posix_fs_writev_fd(int fd, const MalPosixIoVec *vectors, usize count,
+    bool has_position, i64 position, usize *written) {
+    struct iovec iov[POSIX_FS_IOV_BATCH];
+    usize off = 0;
+    for (;;) {
+        usize used = posix_fs_iovecs(vectors, count, off, iov, POSIX_FS_IOV_BATCH);
+        if (used == 0) break;
+        ssize_t result = has_position
+            ? pwritev(fd, iov, (int) used, (off_t) (position + (i64) off))
+            : writev(fd, iov, (int) used);
+        if (result < 0) {
+            if (errno == EINTR) continue;
+            *written = off;
+            return errno;
+        }
+        if (result == 0) {
+            *written = off;
+            return EIO;
+        }
+        off += (usize) result;
+    }
+    *written = off;
     return 0;
 }
 

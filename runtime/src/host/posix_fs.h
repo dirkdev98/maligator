@@ -138,6 +138,18 @@ int mal_posix_fs_write_at_fd(
 int mal_posix_fs_read_fd(
     int fd, byte *data, usize len, bool has_position, i64 position, usize *read);
 
+typedef struct MalPosixIoVec {
+    byte *data;
+    usize length;
+} MalPosixIoVec;
+
+/* Scatter one read(2) across `vectors` (positioned with preadv(2) when requested). */
+int mal_posix_fs_readv_fd(int fd, const MalPosixIoVec *vectors, usize count,
+    bool has_position, i64 position, usize *read);
+/* Gather-write every vector, retrying short writes. Returns 0 or an errno. */
+int mal_posix_fs_writev_fd(int fd, const MalPosixIoVec *vectors, usize count,
+    bool has_position, i64 position, usize *written);
+
 /* Close an open descriptor. Returns 0 or an errno. */
 int mal_posix_fs_close_fd(int fd);
 
