@@ -12,6 +12,13 @@ import { inputFactsFixture } from "./helpers/native-input-facts.ts";
 // Only the function's metadata is reused; building the whole fixture costs ~90 ms.
 let baseFunction: BytecodeFunction | undefined;
 
+// An entry closure needs the owned environment at once, so it is allocated eagerly.
+const createsClosure: BytecodeInstruction = {
+	opcode: "CREATE_FUNCTION",
+	dst: 1,
+	functionIndex: 0,
+};
+
 function emitInputContract(
 	instructions: Array<BytecodeInstruction>,
 	representations: Array<VmRegisterRepresentation>,
@@ -60,12 +67,15 @@ function emitInputContract(
 describe("local native input admission", () => {
 	it("uses owned capture slots only while the activation environment is stable", () => {
 		const instructions: Array<BytecodeInstruction> = [
+			createsClosure,
 			{ opcode: "CREATE_NUMBER", dst: 0, value: 7 },
 			{ opcode: "STORE_CAPTURED", src: 0, ownerFunctionIndex: 0, index: 0 },
 			{ opcode: "LOAD_CAPTURED", dst: 0, ownerFunctionIndex: 0, index: 0 },
 			{ opcode: "RETURN", value: 0 },
 		];
-		const owned = emitInputContract(instructions, ["boxed"], { capturedCount: 1 });
+		const owned = emitInputContract(instructions, ["boxed", "boxed"], {
+			capturedCount: 1,
+		});
 		expect(owned).not.toContain("mal_vm_load_captured(");
 		expect(owned).not.toContain("mal_vm_store_captured(");
 		expect(owned).toMatch(
@@ -78,9 +88,13 @@ describe("local native input admission", () => {
 			{ opcode: "WITH_ENTER", object: 0 },
 			{ opcode: "WITH_EXIT" },
 		] satisfies Array<BytecodeInstruction>) {
-			const fallback = emitInputContract([rebinding, ...instructions], ["boxed"], {
-				capturedCount: 1,
-			});
+			const fallback = emitInputContract(
+				[rebinding, ...instructions],
+				["boxed", "boxed"],
+				{
+					capturedCount: 1,
+				},
+			);
 			expect(fallback, rebinding.opcode).toContain("mal_vm_load_captured(");
 			expect(fallback, rebinding.opcode).toContain("mal_vm_store_captured(");
 		}
@@ -100,11 +114,12 @@ describe("local native input admission", () => {
 		];
 		for (const { create, representation } of stores) {
 			const instructions: Array<BytecodeInstruction> = [
+				createsClosure,
 				create,
 				{ opcode: "STORE_CAPTURED", src: 0, ownerFunctionIndex: 0, index: 0 },
 				{ opcode: "RETURN", value: 0 },
 			];
-			const owned = emitInputContract(instructions, [representation], {
+			const owned = emitInputContract(instructions, [representation, "boxed"], {
 				capturedCount: 1,
 			});
 			expect(owned).toContain("mal_gc_write_barrier(env->slots[0]);");
@@ -112,18 +127,19 @@ describe("local native input admission", () => {
 			expect(owned).not.toContain("mal_gc_card(&env->header,");
 			const rebound = emitInputContract(
 				[{ opcode: "ENV_PUSH", scopeId: -2, slotCount: 1 }, ...instructions],
-				[representation],
+				[representation, "boxed"],
 				{ capturedCount: 1 },
 			);
 			expect(rebound).toContain("mal_vm_store_captured(");
 		}
 		const pointer = emitInputContract(
 			[
+				createsClosure,
 				{ opcode: "CREATE_STRING", dst: 0, stringIndex: 0 },
 				{ opcode: "STORE_CAPTURED", src: 0, ownerFunctionIndex: 0, index: 0 },
 				{ opcode: "RETURN", value: 0 },
 			],
-			["string"],
+			["string", "boxed"],
 			{ capturedCount: 1 },
 		);
 		expect(pointer).toContain("mal_gc_card(&env->header,");
