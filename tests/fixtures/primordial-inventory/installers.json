@@ -29,7 +29,11 @@
 	},
 	{
 		"file": "builtin_console.c",
-		"sha256": "5f742a7f77885064268a228bf492dc89ef25e9177084aab1d3c99fdfbcc59bbc"
+		"sha256": "638d0f40f655ad00ec83ce923867b2f617a8adcb1bd43457a29c4262283cfcd6"
+	},
+	{
+		"file": "builtin_console.h",
+		"sha256": "61fce80581a85b16d2468dbbd2a335354183e1e7fd98c104f71786a341aa231b"
 	},
 	{
 		"file": "builtin_data_view.c",
@@ -697,7 +701,7 @@
 	},
 	{
 		"file": "runtime/personality.c",
-		"sha256": "3d8cfbcbbd130e739cc3034d10e5440d85b3cb870de219e75967f0a7eae299de"
+		"sha256": "2b39e2fec14e7282e6e8827401172be8e7d378340f354d16bf899e7ecb39209c"
 	},
 	{
 		"file": "runtime/test262_agent.c",
@@ -757,11 +761,11 @@
 	},
 	{
 		"file": "vm.c",
-		"sha256": "35fcf352a904b90a2afda38049aa43ab080687b9416a87b30617a1b7bf105b9e"
+		"sha256": "5a38fc2596fe172e4cb20ca2dc3a646b67cbe092c80cd13643f552423af688ce"
 	},
 	{
 		"file": "vm.h",
-		"sha256": "a7d496e631d314726d9806ee371036edb38723eb82781980481a4119737710c4"
+		"sha256": "a08340c977829e4304d784b4d2964d4c6e449ed2bc72189e4c2803b02c88278b"
 	},
 	{
 		"file": "vm_ops.c",

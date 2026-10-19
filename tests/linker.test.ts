@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { afterEach, expect, test } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
+import { HOST_MODULES } from "../src/compiler/frontend/host-modules.ts";
 import { linkModules } from "../src/compiler/frontend/linker.ts";
 import type {
 	Binding,
@@ -302,24 +303,10 @@ test("resolves a namespace import of a host built-in to its (sorted) exports", (
 	});
 	const linkage = linkModules(program);
 	const nsImports = linkage.namespaceImports.get(path.join(root, "main.mjs"));
-	expect(nsImports?.[0]?.exports.map((e) => e.name)).toEqual([
-		"basename",
-		"default",
-		"delimiter",
-		"dirname",
-		"extname",
-		"format",
-		"isAbsolute",
-		"join",
-		"matchesGlob",
-		"normalize",
-		"parse",
-		"posix",
-		"relative",
-		"resolve",
-		"sep",
-		"toNamespacedPath",
-	]);
+	const spec = HOST_MODULES.get("node:path");
+	expect(nsImports?.[0]?.exports.map((e) => e.name)).toEqual(
+		[...(spec?.named ?? []), "default"].sort(),
+	);
 });
 
 test("detects a free global `process` without rebinding its references", () => {

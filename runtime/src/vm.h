@@ -1993,6 +1993,8 @@ typedef struct MalVm {
     void *host;
     bool host_web_platform;
     bool host_node;
+    /* Node's console formatting, registered by the runtime personality (see builtin_console.h). */
+    const struct MalConsoleNodeHooks *console_node_hooks;
 
     // Application fragments share prepared exports for the lifetime of this isolate.
     MalPreparedValue *prepared_values;

@@ -24,7 +24,6 @@
 #if MAL_NODE
 #include "function_object.h"
 #include "runtime/node_inspect.h"
-#include "runtime/node_module.h"
 #endif
 
 #define CONSOLE_VISIBLE (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE)
@@ -125,7 +124,7 @@ static bool console_instance_stream(MalVm *vm, FILE *stream, MalValue *out) {
 
 #if MAL_NODE
 static bool console_node(const MalVm *vm) {
-    return vm->host_node;
+    return vm->host_node && vm->console_node_hooks != nullptr;
 }
 
 // Node's console colors only a TTY whose color depth exceeds two colors.
@@ -159,7 +158,7 @@ static bool console_format(MalVm *vm, FILE *stream, MalTextBuffer *out, const Ma
         if (mal_value_is_object(console_receiver)) {
             (void) console_state_value(vm, mal_value_to_object(console_receiver), "inspectOptions", &options);
         }
-        return mal_node_util_format_into(vm, out, options, console_colors(vm, stream), args, argc);
+        return vm->console_node_hooks->format_into(vm, out, options, console_colors(vm, stream), args, argc);
     }
 #endif
     (void) stream;
@@ -360,7 +359,7 @@ CONSOLE_METHOD(console_dir) {
             .colors = console_colors(vm, stdout),
             .dir = true,
         };
-        if (!mal_node_util_inspect_into(vm, &line, value, &options)) {
+        if (!vm->console_node_hooks->inspect_into(vm, &line, value, &options)) {
             mal_text_buffer_dispose(&line);
             return mal_value_new_undefined();
         }
@@ -608,7 +607,7 @@ static MalKey console_key(MalValue name) {
 static bool console_cell(MalVm *vm, MalValue value, MalValue *out) {
     MalTextBuffer text = {0};
     MalNodeInspectOptions options = {.options = mal_value_new_undefined(), .table_cell = true};
-    if (!mal_node_util_inspect_into(vm, &text, value, &options)) {
+    if (!vm->console_node_hooks->inspect_into(vm, &text, value, &options)) {
         mal_text_buffer_dispose(&text);
         return false;
     }
@@ -871,7 +870,12 @@ static bool console_writable(MalVm *vm, MalValue stream, const char *name) {
     if (mal_value_is_callable(write)) return true;
     char message[64];
     snprintf(message, sizeof message, "Console expects a writable stream instance for %s", name);
-    mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, message, "ERR_CONSOLE_WRITABLE_STREAM");
+    if (vm->console_node_hooks == nullptr) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, (const byte *) message);
+    } else {
+        vm->console_node_hooks->throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, message,
+            "ERR_CONSOLE_WRITABLE_STREAM");
+    }
     return false;
 }
 
