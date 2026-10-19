@@ -309,7 +309,7 @@
 	},
 	{
 		"file": "generated/known_primordials.inc",
-		"sha256": "c0237a11ea1b5549c359e77ea72845e740d6c806be1696042acc7a0ea3c0f25b"
+		"sha256": "4ea78a7f2043551a12de7a9f006b15406f09e9329cd1d41f070732aea74fcc20"
 	},
 	{
 		"file": "generated/node_builtin_installers.inc",
