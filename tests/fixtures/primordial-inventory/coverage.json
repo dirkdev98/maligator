@@ -15497,6 +15497,20 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\\\"node:https\\\"].Server.prototype\",\"setSecureContext\"]",
+			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server.prototype",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server.prototype"
+			],
+			"key": "setSecureContext",
+			"kind": "data",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server.prototype.setSecureContext"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\\\"node:https\\\"].Server.prototype\",\"constructor\"]",
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server.prototype",
 			"ownerPaths": [
@@ -15525,6 +15539,30 @@
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server.prototype.listen",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server.prototype.listen"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\\\"node:https\\\"].Server.prototype.setSecureContext\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server.prototype.setSecureContext",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server.prototype.setSecureContext"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\\\"node:https\\\"].Server.prototype.setSecureContext\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server.prototype.setSecureContext",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server.prototype.setSecureContext"
 			],
 			"key": "name",
 			"kind": "data",
@@ -50090,6 +50128,28 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype\",\"setSecureContext\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype"],
+			"key": "setSecureContext",
+			"kind": "data",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server.prototype.setSecureContext"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype\",\"addContext\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype"],
+			"key": "addContext",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.addContext"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]]\",\"listen\"]",
 			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]]",
 			"ownerPaths": [
@@ -50408,6 +50468,46 @@
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]][%Symbol.asyncDispose%]"
 			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.addContext\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.addContext",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.addContext"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.addContext\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.addContext",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.addContext"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.setSecureContext\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.setSecureContext",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.setSecureContext"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.setSecureContext\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.setSecureContext",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.setSecureContext"],
 			"key": "name",
 			"kind": "data",
 			"operations": [],
@@ -52084,7 +52184,7 @@
 			],
 			"key": "MessageChannel",
 			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessageChannel"],
+			"operations": ["globalThis.MessageChannel"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -52099,7 +52199,7 @@
 			],
 			"key": "MessagePort",
 			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort"],
+			"operations": ["%mal_host_install_maligator_internal_workers:MessagePort%"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -52254,807 +52354,80 @@
 			"decisions": []
 		},
 		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessageChannel\",\"length\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessageChannel",
+			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%\",\"BroadcastChannel\"]",
+			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%",
 			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessageChannel",
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessageChannel.prototype.constructor",
-				"mal_host_install_node_worker_threads:MessageChannel"
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:worker_threads\"]",
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%",
+				"MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE",
+				"mal_host_install_node_worker_threads:default"
 			],
-			"key": "length",
+			"key": "BroadcastChannel",
 			"kind": "data",
-			"operations": [],
-			"task": "H-10",
+			"operations": ["globalThis.BroadcastChannel"],
+			"task": "N-06",
 			"decisions": []
 		},
 		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessageChannel\",\"name\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessageChannel",
+			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%\",\"markAsUntransferable\"]",
+			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%",
 			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessageChannel",
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessageChannel.prototype.constructor",
-				"mal_host_install_node_worker_threads:MessageChannel"
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:worker_threads\"]",
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%",
+				"MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE",
+				"mal_host_install_node_worker_threads:default"
 			],
-			"key": "name",
+			"key": "markAsUntransferable",
 			"kind": "data",
-			"operations": [],
-			"task": "H-10",
+			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.markAsUntransferable"],
+			"task": "N-06",
 			"decisions": []
 		},
 		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessageChannel\",\"prototype\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessageChannel",
+			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%\",\"isMarkedAsUntransferable\"]",
+			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%",
 			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessageChannel",
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessageChannel.prototype.constructor",
-				"mal_host_install_node_worker_threads:MessageChannel"
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:worker_threads\"]",
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%",
+				"MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE",
+				"mal_host_install_node_worker_threads:default"
 			],
-			"key": "prototype",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessageChannel.prototype\",\"constructor\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessageChannel.prototype",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessageChannel.prototype"
-			],
-			"key": "constructor",
-			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessageChannel"],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort\",\"length\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort",
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.constructor",
-				"mal_host_install_node_worker_threads:MessagePort"
-			],
-			"key": "length",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort\",\"name\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort",
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.constructor",
-				"mal_host_install_node_worker_threads:MessagePort"
-			],
-			"key": "name",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort\",\"prototype\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort",
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.constructor",
-				"mal_host_install_node_worker_threads:MessagePort"
-			],
-			"key": "prototype",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype\",\"postMessage\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype"],
-			"key": "postMessage",
+			"key": "isMarkedAsUntransferable",
 			"kind": "data",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.postMessage"
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.isMarkedAsUntransferable"
 			],
 			"task": "N-06",
 			"decisions": []
 		},
 		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype\",\"start\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype"],
-			"key": "start",
-			"kind": "data",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.start"
+			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%\",\"setEnvironmentData\"]",
+			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:worker_threads\"]",
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%",
+				"MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE",
+				"mal_host_install_node_worker_threads:default"
 			],
+			"key": "setEnvironmentData",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.setEnvironmentData"],
 			"task": "N-06",
 			"decisions": []
 		},
 		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype\",\"close\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype"],
-			"key": "close",
-			"kind": "data",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.close"
+			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%\",\"getEnvironmentData\"]",
+			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:worker_threads\"]",
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%",
+				"MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE",
+				"mal_host_install_node_worker_threads:default"
 			],
+			"key": "getEnvironmentData",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.getEnvironmentData"],
 			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype\",\"ref\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype"],
-			"key": "ref",
-			"kind": "data",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.ref"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype\",\"unref\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype"],
-			"key": "unref",
-			"kind": "data",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.unref"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype\",\"hasRef\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype"],
-			"key": "hasRef",
-			"kind": "data",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.hasRef"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype\",\"on\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype"],
-			"key": "on",
-			"kind": "data",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.addListener"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype\",\"addListener\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype"],
-			"key": "addListener",
-			"kind": "data",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.addListener"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype\",\"once\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype"],
-			"key": "once",
-			"kind": "data",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.once"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype\",\"prependListener\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype"],
-			"key": "prependListener",
-			"kind": "data",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.prependListener"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype\",\"prependOnceListener\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype"],
-			"key": "prependOnceListener",
-			"kind": "data",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.prependOnceListener"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype\",\"off\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype"],
-			"key": "off",
-			"kind": "data",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.off"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype\",\"removeListener\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype"],
-			"key": "removeListener",
-			"kind": "data",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.off"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype\",\"removeAllListeners\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype"],
-			"key": "removeAllListeners",
-			"kind": "data",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.removeAllListeners"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype\",\"emit\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype"],
-			"key": "emit",
-			"kind": "data",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.emit"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype\",\"listenerCount\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype"],
-			"key": "listenerCount",
-			"kind": "data",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.listenerCount"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype\",\"onmessage\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype"],
-			"key": "onmessage",
-			"kind": "accessor",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessage<get>",
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessage<set>"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype\",\"onmessageerror\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype"],
-			"key": "onmessageerror",
-			"kind": "accessor",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessageerror<get>",
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessageerror<set>"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype\",\"constructor\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype"],
-			"key": "constructor",
-			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort"],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.addListener\",\"length\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.addListener",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.addListener"
-			],
-			"key": "length",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.addListener\",\"name\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.addListener",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.addListener"
-			],
-			"key": "name",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.close\",\"length\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.close",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.close"
-			],
-			"key": "length",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.close\",\"name\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.close",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.close"
-			],
-			"key": "name",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.emit\",\"length\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.emit",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.emit"
-			],
-			"key": "length",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.emit\",\"name\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.emit",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.emit"
-			],
-			"key": "name",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.hasRef\",\"length\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.hasRef",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.hasRef"
-			],
-			"key": "length",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.hasRef\",\"name\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.hasRef",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.hasRef"
-			],
-			"key": "name",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.listenerCount\",\"length\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.listenerCount",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.listenerCount"
-			],
-			"key": "length",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.listenerCount\",\"name\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.listenerCount",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.listenerCount"
-			],
-			"key": "name",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.off\",\"length\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.off",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.off"
-			],
-			"key": "length",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.off\",\"name\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.off",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.off"
-			],
-			"key": "name",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.on\",\"length\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.on",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.on"
-			],
-			"key": "length",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.on\",\"name\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.on",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.on"
-			],
-			"key": "name",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.once\",\"length\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.once",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.once"
-			],
-			"key": "length",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.once\",\"name\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.once",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.once"
-			],
-			"key": "name",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessage<get>\",\"length\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessage<get>",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessage<get>"
-			],
-			"key": "length",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessage<get>\",\"name\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessage<get>",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessage<get>"
-			],
-			"key": "name",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessage<set>\",\"length\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessage<set>",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessage<set>"
-			],
-			"key": "length",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessage<set>\",\"name\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessage<set>",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessage<set>"
-			],
-			"key": "name",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessageerror<get>\",\"length\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessageerror<get>",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessageerror<get>"
-			],
-			"key": "length",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessageerror<get>\",\"name\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessageerror<get>",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessageerror<get>"
-			],
-			"key": "name",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessageerror<set>\",\"length\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessageerror<set>",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessageerror<set>"
-			],
-			"key": "length",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessageerror<set>\",\"name\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessageerror<set>",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessageerror<set>"
-			],
-			"key": "name",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.postMessage\",\"length\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.postMessage",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.postMessage"
-			],
-			"key": "length",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.postMessage\",\"name\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.postMessage",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.postMessage"
-			],
-			"key": "name",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.prependListener\",\"length\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.prependListener",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.prependListener"
-			],
-			"key": "length",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.prependListener\",\"name\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.prependListener",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.prependListener"
-			],
-			"key": "name",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.prependOnceListener\",\"length\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.prependOnceListener",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.prependOnceListener"
-			],
-			"key": "length",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.prependOnceListener\",\"name\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.prependOnceListener",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.prependOnceListener"
-			],
-			"key": "name",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.ref\",\"length\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.ref",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.ref"
-			],
-			"key": "length",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.ref\",\"name\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.ref",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.ref"
-			],
-			"key": "name",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.removeAllListeners\",\"length\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.removeAllListeners",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.removeAllListeners"
-			],
-			"key": "length",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.removeAllListeners\",\"name\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.removeAllListeners",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.removeAllListeners"
-			],
-			"key": "name",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.removeListener\",\"length\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.removeListener",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.removeListener"
-			],
-			"key": "length",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.removeListener\",\"name\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.removeListener",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.removeListener"
-			],
-			"key": "name",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.start\",\"length\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.start",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.start"
-			],
-			"key": "length",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.start\",\"name\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.start",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.start"
-			],
-			"key": "name",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.unref\",\"length\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.unref",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.unref"
-			],
-			"key": "length",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.unref\",\"name\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.unref",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.unref"
-			],
-			"key": "name",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
 			"decisions": []
 		},
 		{
@@ -53162,7 +52535,7 @@
 			"key": "on",
 			"kind": "data",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.addListener"
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.addListener"
 			],
 			"task": "N-06",
 			"decisions": []
@@ -53174,7 +52547,7 @@
 			"key": "addListener",
 			"kind": "data",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.addListener"
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.addListener"
 			],
 			"task": "N-06",
 			"decisions": []
@@ -53185,9 +52558,7 @@
 			"ownerPaths": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype"],
 			"key": "once",
 			"kind": "data",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.once"
-			],
+			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.once"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -53198,7 +52569,7 @@
 			"key": "prependListener",
 			"kind": "data",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.prependListener"
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.prependListener"
 			],
 			"task": "N-06",
 			"decisions": []
@@ -53210,7 +52581,7 @@
 			"key": "prependOnceListener",
 			"kind": "data",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.prependOnceListener"
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.prependOnceListener"
 			],
 			"task": "N-06",
 			"decisions": []
@@ -53221,9 +52592,7 @@
 			"ownerPaths": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype"],
 			"key": "off",
 			"kind": "data",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.off"
-			],
+			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.off"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -53233,9 +52602,7 @@
 			"ownerPaths": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype"],
 			"key": "removeListener",
 			"kind": "data",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.off"
-			],
+			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.off"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -53246,7 +52613,7 @@
 			"key": "removeAllListeners",
 			"kind": "data",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.removeAllListeners"
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.removeAllListeners"
 			],
 			"task": "N-06",
 			"decisions": []
@@ -53257,9 +52624,7 @@
 			"ownerPaths": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype"],
 			"key": "emit",
 			"kind": "data",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.emit"
-			],
+			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.emit"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -53270,7 +52635,7 @@
 			"key": "listenerCount",
 			"kind": "data",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.listenerCount"
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.listenerCount"
 			],
 			"task": "N-06",
 			"decisions": []
@@ -53622,6 +52987,58 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.getEnvironmentData\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.getEnvironmentData",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.getEnvironmentData",
+				"mal_host_install_node_worker_threads:getEnvironmentData"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.getEnvironmentData\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.getEnvironmentData",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.getEnvironmentData",
+				"mal_host_install_node_worker_threads:getEnvironmentData"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.isMarkedAsUntransferable\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.isMarkedAsUntransferable",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.isMarkedAsUntransferable",
+				"mal_host_install_node_worker_threads:isMarkedAsUntransferable"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.isMarkedAsUntransferable\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.isMarkedAsUntransferable",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.isMarkedAsUntransferable",
+				"mal_host_install_node_worker_threads:isMarkedAsUntransferable"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.markAsUncloneable\",\"length\"]",
 			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.markAsUncloneable",
 			"ownerPaths": [
@@ -53640,6 +53057,32 @@
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.markAsUncloneable",
 				"mal_host_install_node_worker_threads:markAsUncloneable"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.markAsUntransferable\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.markAsUntransferable",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.markAsUntransferable",
+				"mal_host_install_node_worker_threads:markAsUntransferable"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.markAsUntransferable\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.markAsUntransferable",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.markAsUntransferable",
+				"mal_host_install_node_worker_threads:markAsUntransferable"
 			],
 			"key": "name",
 			"kind": "data",
@@ -53668,6 +53111,32 @@
 				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.receiveMessageOnPort",
 				"mal_host_install_maligator_internal_workers:receiveMessageOnPort",
 				"mal_host_install_node_worker_threads:receiveMessageOnPort"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.setEnvironmentData\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.setEnvironmentData",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.setEnvironmentData",
+				"mal_host_install_node_worker_threads:setEnvironmentData"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.setEnvironmentData\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.setEnvironmentData",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.setEnvironmentData",
+				"mal_host_install_node_worker_threads:setEnvironmentData"
 			],
 			"key": "name",
 			"kind": "data",
@@ -58679,7 +58148,7 @@
 			"key": "postMessage",
 			"kind": "data",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.postMessage"
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.postMessage"
 			],
 			"task": "N-05",
 			"decisions": []
@@ -58707,7 +58176,7 @@
 			"key": "start",
 			"kind": "data",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.start"
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.start"
 			],
 			"task": "N-05",
 			"decisions": []
@@ -58721,7 +58190,7 @@
 			"key": "close",
 			"kind": "data",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.close"
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.close"
 			],
 			"task": "N-05",
 			"decisions": []
@@ -58735,7 +58204,7 @@
 			"key": "ref",
 			"kind": "data",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.ref"
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.ref"
 			],
 			"task": "N-05",
 			"decisions": []
@@ -58749,7 +58218,7 @@
 			"key": "unref",
 			"kind": "data",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.unref"
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.unref"
 			],
 			"task": "N-05",
 			"decisions": []
@@ -58763,7 +58232,7 @@
 			"key": "hasRef",
 			"kind": "data",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.hasRef"
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.hasRef"
 			],
 			"task": "N-05",
 			"decisions": []
@@ -58777,7 +58246,7 @@
 			"key": "on",
 			"kind": "data",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.addListener"
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.addListener"
 			],
 			"task": "N-05",
 			"decisions": []
@@ -58791,7 +58260,7 @@
 			"key": "addListener",
 			"kind": "data",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.addListener"
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.addListener"
 			],
 			"task": "N-05",
 			"decisions": []
@@ -58804,9 +58273,7 @@
 			],
 			"key": "once",
 			"kind": "data",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.once"
-			],
+			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.once"],
 			"task": "N-05",
 			"decisions": []
 		},
@@ -58819,7 +58286,7 @@
 			"key": "prependListener",
 			"kind": "data",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.prependListener"
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.prependListener"
 			],
 			"task": "N-05",
 			"decisions": []
@@ -58833,7 +58300,7 @@
 			"key": "prependOnceListener",
 			"kind": "data",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.prependOnceListener"
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.prependOnceListener"
 			],
 			"task": "N-05",
 			"decisions": []
@@ -58846,9 +58313,7 @@
 			],
 			"key": "off",
 			"kind": "data",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.off"
-			],
+			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.off"],
 			"task": "N-05",
 			"decisions": []
 		},
@@ -58860,9 +58325,7 @@
 			],
 			"key": "removeListener",
 			"kind": "data",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.off"
-			],
+			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.off"],
 			"task": "N-05",
 			"decisions": []
 		},
@@ -58875,7 +58338,7 @@
 			"key": "removeAllListeners",
 			"kind": "data",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.removeAllListeners"
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.removeAllListeners"
 			],
 			"task": "N-05",
 			"decisions": []
@@ -58888,9 +58351,7 @@
 			],
 			"key": "emit",
 			"kind": "data",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.emit"
-			],
+			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.emit"],
 			"task": "N-05",
 			"decisions": []
 		},
@@ -58903,7 +58364,7 @@
 			"key": "listenerCount",
 			"kind": "data",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.listenerCount"
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.listenerCount"
 			],
 			"task": "N-05",
 			"decisions": []
@@ -58917,8 +58378,8 @@
 			"key": "onmessage",
 			"kind": "accessor",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessage<get>",
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessage<set>"
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.onmessage<get>",
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.onmessage<set>"
 			],
 			"task": "N-05",
 			"decisions": []
@@ -58932,8 +58393,8 @@
 			"key": "onmessageerror",
 			"kind": "accessor",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessageerror<get>",
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessageerror<set>"
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.onmessageerror<get>",
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.onmessageerror<set>"
 			],
 			"task": "N-05",
 			"decisions": []
@@ -58946,7 +58407,7 @@
 			],
 			"key": "constructor",
 			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort"],
+			"operations": ["%mal_host_install_maligator_internal_workers:MessagePort%"],
 			"task": "H-10",
 			"decisions": []
 		},
@@ -114221,6 +113682,51 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"globalThis\",\"BroadcastChannel\"]",
+			"owner": "globalThis",
+			"ownerPaths": [
+				"MAL_INTRINSIC_GLOBAL_THIS",
+				"globalThis",
+				"globalThis.global",
+				"globalThis.globalThis"
+			],
+			"key": "BroadcastChannel",
+			"kind": "data",
+			"operations": ["globalThis.BroadcastChannel"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis\",\"MessageChannel\"]",
+			"owner": "globalThis",
+			"ownerPaths": [
+				"MAL_INTRINSIC_GLOBAL_THIS",
+				"globalThis",
+				"globalThis.global",
+				"globalThis.globalThis"
+			],
+			"key": "MessageChannel",
+			"kind": "data",
+			"operations": ["globalThis.MessageChannel"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis\",\"MessagePort\"]",
+			"owner": "globalThis",
+			"ownerPaths": [
+				"MAL_INTRINSIC_GLOBAL_THIS",
+				"globalThis",
+				"globalThis.global",
+				"globalThis.globalThis"
+			],
+			"key": "MessagePort",
+			"kind": "data",
+			"operations": ["%mal_host_install_maligator_internal_workers:MessagePort%"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
 			"id": "[\"globalThis\",\"SubtleCrypto\"]",
 			"owner": "globalThis",
 			"ownerPaths": [
@@ -115106,6 +114612,317 @@
 			"id": "[\"globalThis.Blob.prototype.type<get>\",\"name\"]",
 			"owner": "globalThis.Blob.prototype.type<get>",
 			"ownerPaths": ["globalThis.Blob.prototype.type<get>"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.BroadcastChannel\",\"length\"]",
+			"owner": "globalThis.BroadcastChannel",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.BroadcastChannel",
+				"globalThis.BroadcastChannel",
+				"globalThis.BroadcastChannel.prototype.constructor",
+				"mal_host_install_node_worker_threads:BroadcastChannel"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.BroadcastChannel\",\"name\"]",
+			"owner": "globalThis.BroadcastChannel",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.BroadcastChannel",
+				"globalThis.BroadcastChannel",
+				"globalThis.BroadcastChannel.prototype.constructor",
+				"mal_host_install_node_worker_threads:BroadcastChannel"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.BroadcastChannel\",\"prototype\"]",
+			"owner": "globalThis.BroadcastChannel",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.BroadcastChannel",
+				"globalThis.BroadcastChannel",
+				"globalThis.BroadcastChannel.prototype.constructor",
+				"mal_host_install_node_worker_threads:BroadcastChannel"
+			],
+			"key": "prototype",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.BroadcastChannel.prototype\",\"name\"]",
+			"owner": "globalThis.BroadcastChannel.prototype",
+			"ownerPaths": ["globalThis.BroadcastChannel.prototype"],
+			"key": "name",
+			"kind": "accessor",
+			"operations": ["globalThis.BroadcastChannel.prototype.name<get>"],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.BroadcastChannel.prototype\",\"close\"]",
+			"owner": "globalThis.BroadcastChannel.prototype",
+			"ownerPaths": ["globalThis.BroadcastChannel.prototype"],
+			"key": "close",
+			"kind": "data",
+			"operations": ["globalThis.BroadcastChannel.prototype.close"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.BroadcastChannel.prototype\",\"postMessage\"]",
+			"owner": "globalThis.BroadcastChannel.prototype",
+			"ownerPaths": ["globalThis.BroadcastChannel.prototype"],
+			"key": "postMessage",
+			"kind": "data",
+			"operations": ["globalThis.BroadcastChannel.prototype.postMessage"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.BroadcastChannel.prototype\",\"ref\"]",
+			"owner": "globalThis.BroadcastChannel.prototype",
+			"ownerPaths": ["globalThis.BroadcastChannel.prototype"],
+			"key": "ref",
+			"kind": "data",
+			"operations": ["globalThis.BroadcastChannel.prototype.ref"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.BroadcastChannel.prototype\",\"unref\"]",
+			"owner": "globalThis.BroadcastChannel.prototype",
+			"ownerPaths": ["globalThis.BroadcastChannel.prototype"],
+			"key": "unref",
+			"kind": "data",
+			"operations": ["globalThis.BroadcastChannel.prototype.unref"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.BroadcastChannel.prototype\",\"onmessage\"]",
+			"owner": "globalThis.BroadcastChannel.prototype",
+			"ownerPaths": ["globalThis.BroadcastChannel.prototype"],
+			"key": "onmessage",
+			"kind": "accessor",
+			"operations": [
+				"globalThis.BroadcastChannel.prototype.onmessage<get>",
+				"globalThis.BroadcastChannel.prototype.onmessage<set>"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.BroadcastChannel.prototype\",\"onmessageerror\"]",
+			"owner": "globalThis.BroadcastChannel.prototype",
+			"ownerPaths": ["globalThis.BroadcastChannel.prototype"],
+			"key": "onmessageerror",
+			"kind": "accessor",
+			"operations": [
+				"globalThis.BroadcastChannel.prototype.onmessageerror<get>",
+				"globalThis.BroadcastChannel.prototype.onmessageerror<set>"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.BroadcastChannel.prototype\",\"constructor\"]",
+			"owner": "globalThis.BroadcastChannel.prototype",
+			"ownerPaths": ["globalThis.BroadcastChannel.prototype"],
+			"key": "constructor",
+			"kind": "data",
+			"operations": ["globalThis.BroadcastChannel"],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.BroadcastChannel.prototype.close\",\"length\"]",
+			"owner": "globalThis.BroadcastChannel.prototype.close",
+			"ownerPaths": ["globalThis.BroadcastChannel.prototype.close"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.BroadcastChannel.prototype.close\",\"name\"]",
+			"owner": "globalThis.BroadcastChannel.prototype.close",
+			"ownerPaths": ["globalThis.BroadcastChannel.prototype.close"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.BroadcastChannel.prototype.name<get>\",\"length\"]",
+			"owner": "globalThis.BroadcastChannel.prototype.name<get>",
+			"ownerPaths": ["globalThis.BroadcastChannel.prototype.name<get>"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.BroadcastChannel.prototype.name<get>\",\"name\"]",
+			"owner": "globalThis.BroadcastChannel.prototype.name<get>",
+			"ownerPaths": ["globalThis.BroadcastChannel.prototype.name<get>"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.BroadcastChannel.prototype.onmessage<get>\",\"length\"]",
+			"owner": "globalThis.BroadcastChannel.prototype.onmessage<get>",
+			"ownerPaths": ["globalThis.BroadcastChannel.prototype.onmessage<get>"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.BroadcastChannel.prototype.onmessage<get>\",\"name\"]",
+			"owner": "globalThis.BroadcastChannel.prototype.onmessage<get>",
+			"ownerPaths": ["globalThis.BroadcastChannel.prototype.onmessage<get>"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.BroadcastChannel.prototype.onmessage<set>\",\"length\"]",
+			"owner": "globalThis.BroadcastChannel.prototype.onmessage<set>",
+			"ownerPaths": ["globalThis.BroadcastChannel.prototype.onmessage<set>"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.BroadcastChannel.prototype.onmessage<set>\",\"name\"]",
+			"owner": "globalThis.BroadcastChannel.prototype.onmessage<set>",
+			"ownerPaths": ["globalThis.BroadcastChannel.prototype.onmessage<set>"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.BroadcastChannel.prototype.onmessageerror<get>\",\"length\"]",
+			"owner": "globalThis.BroadcastChannel.prototype.onmessageerror<get>",
+			"ownerPaths": ["globalThis.BroadcastChannel.prototype.onmessageerror<get>"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.BroadcastChannel.prototype.onmessageerror<get>\",\"name\"]",
+			"owner": "globalThis.BroadcastChannel.prototype.onmessageerror<get>",
+			"ownerPaths": ["globalThis.BroadcastChannel.prototype.onmessageerror<get>"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.BroadcastChannel.prototype.onmessageerror<set>\",\"length\"]",
+			"owner": "globalThis.BroadcastChannel.prototype.onmessageerror<set>",
+			"ownerPaths": ["globalThis.BroadcastChannel.prototype.onmessageerror<set>"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.BroadcastChannel.prototype.onmessageerror<set>\",\"name\"]",
+			"owner": "globalThis.BroadcastChannel.prototype.onmessageerror<set>",
+			"ownerPaths": ["globalThis.BroadcastChannel.prototype.onmessageerror<set>"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.BroadcastChannel.prototype.postMessage\",\"length\"]",
+			"owner": "globalThis.BroadcastChannel.prototype.postMessage",
+			"ownerPaths": ["globalThis.BroadcastChannel.prototype.postMessage"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.BroadcastChannel.prototype.postMessage\",\"name\"]",
+			"owner": "globalThis.BroadcastChannel.prototype.postMessage",
+			"ownerPaths": ["globalThis.BroadcastChannel.prototype.postMessage"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.BroadcastChannel.prototype.ref\",\"length\"]",
+			"owner": "globalThis.BroadcastChannel.prototype.ref",
+			"ownerPaths": ["globalThis.BroadcastChannel.prototype.ref"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.BroadcastChannel.prototype.ref\",\"name\"]",
+			"owner": "globalThis.BroadcastChannel.prototype.ref",
+			"ownerPaths": ["globalThis.BroadcastChannel.prototype.ref"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.BroadcastChannel.prototype.unref\",\"length\"]",
+			"owner": "globalThis.BroadcastChannel.prototype.unref",
+			"ownerPaths": ["globalThis.BroadcastChannel.prototype.unref"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.BroadcastChannel.prototype.unref\",\"name\"]",
+			"owner": "globalThis.BroadcastChannel.prototype.unref",
+			"ownerPaths": ["globalThis.BroadcastChannel.prototype.unref"],
 			"key": "name",
 			"kind": "data",
 			"operations": [],
@@ -121413,6 +121230,726 @@
 			"id": "[\"globalThis.Mal.serve\",\"name\"]",
 			"owner": "globalThis.Mal.serve",
 			"ownerPaths": ["globalThis.Mal.serve"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessageChannel\",\"length\"]",
+			"owner": "globalThis.MessageChannel",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessageChannel",
+				"globalThis.MessageChannel",
+				"globalThis.MessageChannel.prototype.constructor",
+				"mal_host_install_node_worker_threads:MessageChannel"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessageChannel\",\"name\"]",
+			"owner": "globalThis.MessageChannel",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessageChannel",
+				"globalThis.MessageChannel",
+				"globalThis.MessageChannel.prototype.constructor",
+				"mal_host_install_node_worker_threads:MessageChannel"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessageChannel\",\"prototype\"]",
+			"owner": "globalThis.MessageChannel",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessageChannel",
+				"globalThis.MessageChannel",
+				"globalThis.MessageChannel.prototype.constructor",
+				"mal_host_install_node_worker_threads:MessageChannel"
+			],
+			"key": "prototype",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessageChannel.prototype\",\"constructor\"]",
+			"owner": "globalThis.MessageChannel.prototype",
+			"ownerPaths": ["globalThis.MessageChannel.prototype"],
+			"key": "constructor",
+			"kind": "data",
+			"operations": ["globalThis.MessageChannel"],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort\",\"length\"]",
+			"owner": "globalThis.MessagePort",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort",
+				"globalThis.MessagePort",
+				"globalThis.MessagePort.prototype.constructor",
+				"mal_host_install_node_worker_threads:MessagePort"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort\",\"name\"]",
+			"owner": "globalThis.MessagePort",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort",
+				"globalThis.MessagePort",
+				"globalThis.MessagePort.prototype.constructor",
+				"mal_host_install_node_worker_threads:MessagePort"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort\",\"prototype\"]",
+			"owner": "globalThis.MessagePort",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort",
+				"globalThis.MessagePort",
+				"globalThis.MessagePort.prototype.constructor",
+				"mal_host_install_node_worker_threads:MessagePort"
+			],
+			"key": "prototype",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype\",\"postMessage\"]",
+			"owner": "globalThis.MessagePort.prototype",
+			"ownerPaths": ["globalThis.MessagePort.prototype"],
+			"key": "postMessage",
+			"kind": "data",
+			"operations": [
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.postMessage"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype\",\"start\"]",
+			"owner": "globalThis.MessagePort.prototype",
+			"ownerPaths": ["globalThis.MessagePort.prototype"],
+			"key": "start",
+			"kind": "data",
+			"operations": [
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.start"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype\",\"close\"]",
+			"owner": "globalThis.MessagePort.prototype",
+			"ownerPaths": ["globalThis.MessagePort.prototype"],
+			"key": "close",
+			"kind": "data",
+			"operations": [
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.close"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype\",\"ref\"]",
+			"owner": "globalThis.MessagePort.prototype",
+			"ownerPaths": ["globalThis.MessagePort.prototype"],
+			"key": "ref",
+			"kind": "data",
+			"operations": [
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.ref"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype\",\"unref\"]",
+			"owner": "globalThis.MessagePort.prototype",
+			"ownerPaths": ["globalThis.MessagePort.prototype"],
+			"key": "unref",
+			"kind": "data",
+			"operations": [
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.unref"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype\",\"hasRef\"]",
+			"owner": "globalThis.MessagePort.prototype",
+			"ownerPaths": ["globalThis.MessagePort.prototype"],
+			"key": "hasRef",
+			"kind": "data",
+			"operations": [
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.hasRef"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype\",\"on\"]",
+			"owner": "globalThis.MessagePort.prototype",
+			"ownerPaths": ["globalThis.MessagePort.prototype"],
+			"key": "on",
+			"kind": "data",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.addListener"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype\",\"addListener\"]",
+			"owner": "globalThis.MessagePort.prototype",
+			"ownerPaths": ["globalThis.MessagePort.prototype"],
+			"key": "addListener",
+			"kind": "data",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.addListener"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype\",\"once\"]",
+			"owner": "globalThis.MessagePort.prototype",
+			"ownerPaths": ["globalThis.MessagePort.prototype"],
+			"key": "once",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.once"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype\",\"prependListener\"]",
+			"owner": "globalThis.MessagePort.prototype",
+			"ownerPaths": ["globalThis.MessagePort.prototype"],
+			"key": "prependListener",
+			"kind": "data",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.prependListener"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype\",\"prependOnceListener\"]",
+			"owner": "globalThis.MessagePort.prototype",
+			"ownerPaths": ["globalThis.MessagePort.prototype"],
+			"key": "prependOnceListener",
+			"kind": "data",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.prependOnceListener"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype\",\"off\"]",
+			"owner": "globalThis.MessagePort.prototype",
+			"ownerPaths": ["globalThis.MessagePort.prototype"],
+			"key": "off",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.off"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype\",\"removeListener\"]",
+			"owner": "globalThis.MessagePort.prototype",
+			"ownerPaths": ["globalThis.MessagePort.prototype"],
+			"key": "removeListener",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.off"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype\",\"removeAllListeners\"]",
+			"owner": "globalThis.MessagePort.prototype",
+			"ownerPaths": ["globalThis.MessagePort.prototype"],
+			"key": "removeAllListeners",
+			"kind": "data",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.removeAllListeners"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype\",\"emit\"]",
+			"owner": "globalThis.MessagePort.prototype",
+			"ownerPaths": ["globalThis.MessagePort.prototype"],
+			"key": "emit",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.emit"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype\",\"listenerCount\"]",
+			"owner": "globalThis.MessagePort.prototype",
+			"ownerPaths": ["globalThis.MessagePort.prototype"],
+			"key": "listenerCount",
+			"kind": "data",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.listenerCount"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype\",\"onmessage\"]",
+			"owner": "globalThis.MessagePort.prototype",
+			"ownerPaths": ["globalThis.MessagePort.prototype"],
+			"key": "onmessage",
+			"kind": "accessor",
+			"operations": [
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.onmessage<get>",
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.onmessage<set>"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype\",\"onmessageerror\"]",
+			"owner": "globalThis.MessagePort.prototype",
+			"ownerPaths": ["globalThis.MessagePort.prototype"],
+			"key": "onmessageerror",
+			"kind": "accessor",
+			"operations": [
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.onmessageerror<get>",
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.onmessageerror<set>"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype\",\"constructor\"]",
+			"owner": "globalThis.MessagePort.prototype",
+			"ownerPaths": ["globalThis.MessagePort.prototype"],
+			"key": "constructor",
+			"kind": "data",
+			"operations": ["%mal_host_install_maligator_internal_workers:MessagePort%"],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.addListener\",\"length\"]",
+			"owner": "globalThis.MessagePort.prototype.addListener",
+			"ownerPaths": ["globalThis.MessagePort.prototype.addListener"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.addListener\",\"name\"]",
+			"owner": "globalThis.MessagePort.prototype.addListener",
+			"ownerPaths": ["globalThis.MessagePort.prototype.addListener"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.close\",\"length\"]",
+			"owner": "globalThis.MessagePort.prototype.close",
+			"ownerPaths": ["globalThis.MessagePort.prototype.close"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.close\",\"name\"]",
+			"owner": "globalThis.MessagePort.prototype.close",
+			"ownerPaths": ["globalThis.MessagePort.prototype.close"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.emit\",\"length\"]",
+			"owner": "globalThis.MessagePort.prototype.emit",
+			"ownerPaths": ["globalThis.MessagePort.prototype.emit"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.emit\",\"name\"]",
+			"owner": "globalThis.MessagePort.prototype.emit",
+			"ownerPaths": ["globalThis.MessagePort.prototype.emit"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.hasRef\",\"length\"]",
+			"owner": "globalThis.MessagePort.prototype.hasRef",
+			"ownerPaths": ["globalThis.MessagePort.prototype.hasRef"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.hasRef\",\"name\"]",
+			"owner": "globalThis.MessagePort.prototype.hasRef",
+			"ownerPaths": ["globalThis.MessagePort.prototype.hasRef"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.listenerCount\",\"length\"]",
+			"owner": "globalThis.MessagePort.prototype.listenerCount",
+			"ownerPaths": ["globalThis.MessagePort.prototype.listenerCount"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.listenerCount\",\"name\"]",
+			"owner": "globalThis.MessagePort.prototype.listenerCount",
+			"ownerPaths": ["globalThis.MessagePort.prototype.listenerCount"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.off\",\"length\"]",
+			"owner": "globalThis.MessagePort.prototype.off",
+			"ownerPaths": ["globalThis.MessagePort.prototype.off"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.off\",\"name\"]",
+			"owner": "globalThis.MessagePort.prototype.off",
+			"ownerPaths": ["globalThis.MessagePort.prototype.off"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.on\",\"length\"]",
+			"owner": "globalThis.MessagePort.prototype.on",
+			"ownerPaths": ["globalThis.MessagePort.prototype.on"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.on\",\"name\"]",
+			"owner": "globalThis.MessagePort.prototype.on",
+			"ownerPaths": ["globalThis.MessagePort.prototype.on"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.once\",\"length\"]",
+			"owner": "globalThis.MessagePort.prototype.once",
+			"ownerPaths": ["globalThis.MessagePort.prototype.once"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.once\",\"name\"]",
+			"owner": "globalThis.MessagePort.prototype.once",
+			"ownerPaths": ["globalThis.MessagePort.prototype.once"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.onmessage<get>\",\"length\"]",
+			"owner": "globalThis.MessagePort.prototype.onmessage<get>",
+			"ownerPaths": ["globalThis.MessagePort.prototype.onmessage<get>"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.onmessage<get>\",\"name\"]",
+			"owner": "globalThis.MessagePort.prototype.onmessage<get>",
+			"ownerPaths": ["globalThis.MessagePort.prototype.onmessage<get>"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.onmessage<set>\",\"length\"]",
+			"owner": "globalThis.MessagePort.prototype.onmessage<set>",
+			"ownerPaths": ["globalThis.MessagePort.prototype.onmessage<set>"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.onmessage<set>\",\"name\"]",
+			"owner": "globalThis.MessagePort.prototype.onmessage<set>",
+			"ownerPaths": ["globalThis.MessagePort.prototype.onmessage<set>"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.onmessageerror<get>\",\"length\"]",
+			"owner": "globalThis.MessagePort.prototype.onmessageerror<get>",
+			"ownerPaths": ["globalThis.MessagePort.prototype.onmessageerror<get>"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.onmessageerror<get>\",\"name\"]",
+			"owner": "globalThis.MessagePort.prototype.onmessageerror<get>",
+			"ownerPaths": ["globalThis.MessagePort.prototype.onmessageerror<get>"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.onmessageerror<set>\",\"length\"]",
+			"owner": "globalThis.MessagePort.prototype.onmessageerror<set>",
+			"ownerPaths": ["globalThis.MessagePort.prototype.onmessageerror<set>"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.onmessageerror<set>\",\"name\"]",
+			"owner": "globalThis.MessagePort.prototype.onmessageerror<set>",
+			"ownerPaths": ["globalThis.MessagePort.prototype.onmessageerror<set>"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.postMessage\",\"length\"]",
+			"owner": "globalThis.MessagePort.prototype.postMessage",
+			"ownerPaths": ["globalThis.MessagePort.prototype.postMessage"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.postMessage\",\"name\"]",
+			"owner": "globalThis.MessagePort.prototype.postMessage",
+			"ownerPaths": ["globalThis.MessagePort.prototype.postMessage"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.prependListener\",\"length\"]",
+			"owner": "globalThis.MessagePort.prototype.prependListener",
+			"ownerPaths": ["globalThis.MessagePort.prototype.prependListener"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.prependListener\",\"name\"]",
+			"owner": "globalThis.MessagePort.prototype.prependListener",
+			"ownerPaths": ["globalThis.MessagePort.prototype.prependListener"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.prependOnceListener\",\"length\"]",
+			"owner": "globalThis.MessagePort.prototype.prependOnceListener",
+			"ownerPaths": ["globalThis.MessagePort.prototype.prependOnceListener"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.prependOnceListener\",\"name\"]",
+			"owner": "globalThis.MessagePort.prototype.prependOnceListener",
+			"ownerPaths": ["globalThis.MessagePort.prototype.prependOnceListener"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.ref\",\"length\"]",
+			"owner": "globalThis.MessagePort.prototype.ref",
+			"ownerPaths": ["globalThis.MessagePort.prototype.ref"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.ref\",\"name\"]",
+			"owner": "globalThis.MessagePort.prototype.ref",
+			"ownerPaths": ["globalThis.MessagePort.prototype.ref"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.removeAllListeners\",\"length\"]",
+			"owner": "globalThis.MessagePort.prototype.removeAllListeners",
+			"ownerPaths": ["globalThis.MessagePort.prototype.removeAllListeners"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.removeAllListeners\",\"name\"]",
+			"owner": "globalThis.MessagePort.prototype.removeAllListeners",
+			"ownerPaths": ["globalThis.MessagePort.prototype.removeAllListeners"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.removeListener\",\"length\"]",
+			"owner": "globalThis.MessagePort.prototype.removeListener",
+			"ownerPaths": ["globalThis.MessagePort.prototype.removeListener"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.removeListener\",\"name\"]",
+			"owner": "globalThis.MessagePort.prototype.removeListener",
+			"ownerPaths": ["globalThis.MessagePort.prototype.removeListener"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.start\",\"length\"]",
+			"owner": "globalThis.MessagePort.prototype.start",
+			"ownerPaths": ["globalThis.MessagePort.prototype.start"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.start\",\"name\"]",
+			"owner": "globalThis.MessagePort.prototype.start",
+			"ownerPaths": ["globalThis.MessagePort.prototype.start"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.unref\",\"length\"]",
+			"owner": "globalThis.MessagePort.prototype.unref",
+			"ownerPaths": ["globalThis.MessagePort.prototype.unref"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.unref\",\"name\"]",
+			"owner": "globalThis.MessagePort.prototype.unref",
+			"ownerPaths": ["globalThis.MessagePort.prototype.unref"],
 			"key": "name",
 			"kind": "data",
 			"operations": [],
@@ -141928,6 +142465,34 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\\\"node:https\\\"].Server.prototype.setSecureContext\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server.prototype.setSecureContext",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server.prototype.setSecureContext"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server.prototype.setSecureContext"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\\\"node:https\\\"].Server.prototype.setSecureContext\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server.prototype.setSecureContext",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server.prototype.setSecureContext"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server.prototype.setSecureContext"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\\\"node:https\\\"].createServer\",\"<call>\"]",
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].createServer",
 			"ownerPaths": [
@@ -157122,6 +157687,50 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.addContext\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.addContext",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.addContext"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.addContext"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.addContext\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.addContext",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.addContext"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.addContext"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.setSecureContext\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.setSecureContext",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.setSecureContext"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server.prototype.setSecureContext"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.setSecureContext\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.setSecureContext",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.setSecureContext"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server.prototype.setSecureContext"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.checkServerIdentity\",\"<call>\"]",
 			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.checkServerIdentity",
 			"ownerPaths": [
@@ -158142,622 +158751,6 @@
 			"decisions": []
 		},
 		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessageChannel\",\"<call>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessageChannel",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessageChannel",
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessageChannel.prototype.constructor",
-				"mal_host_install_node_worker_threads:MessageChannel"
-			],
-			"key": "<call>",
-			"kind": "call",
-			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessageChannel"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessageChannel\",\"<construct>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessageChannel",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessageChannel",
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessageChannel.prototype.constructor",
-				"mal_host_install_node_worker_threads:MessageChannel"
-			],
-			"key": "<construct>",
-			"kind": "construct",
-			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessageChannel"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort\",\"<call>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort",
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.constructor",
-				"mal_host_install_node_worker_threads:MessagePort"
-			],
-			"key": "<call>",
-			"kind": "call",
-			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort\",\"<construct>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort",
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.constructor",
-				"mal_host_install_node_worker_threads:MessagePort"
-			],
-			"key": "<construct>",
-			"kind": "construct",
-			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.addListener\",\"<call>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.addListener",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.addListener"
-			],
-			"key": "<call>",
-			"kind": "call",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.addListener"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.addListener\",\"<construct>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.addListener",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.addListener"
-			],
-			"key": "<construct>",
-			"kind": "construct",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.addListener"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.close\",\"<call>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.close",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.close"
-			],
-			"key": "<call>",
-			"kind": "call",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.close"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.close\",\"<construct>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.close",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.close"
-			],
-			"key": "<construct>",
-			"kind": "construct",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.close"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.emit\",\"<call>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.emit",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.emit"
-			],
-			"key": "<call>",
-			"kind": "call",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.emit"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.emit\",\"<construct>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.emit",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.emit"
-			],
-			"key": "<construct>",
-			"kind": "construct",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.emit"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.hasRef\",\"<call>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.hasRef",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.hasRef"
-			],
-			"key": "<call>",
-			"kind": "call",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.hasRef"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.hasRef\",\"<construct>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.hasRef",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.hasRef"
-			],
-			"key": "<construct>",
-			"kind": "construct",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.hasRef"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.listenerCount\",\"<call>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.listenerCount",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.listenerCount"
-			],
-			"key": "<call>",
-			"kind": "call",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.listenerCount"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.listenerCount\",\"<construct>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.listenerCount",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.listenerCount"
-			],
-			"key": "<construct>",
-			"kind": "construct",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.listenerCount"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.off\",\"<call>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.off",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.off"
-			],
-			"key": "<call>",
-			"kind": "call",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.off"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.off\",\"<construct>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.off",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.off"
-			],
-			"key": "<construct>",
-			"kind": "construct",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.off"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.on\",\"<call>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.on",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.on"
-			],
-			"key": "<call>",
-			"kind": "call",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.addListener"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.on\",\"<construct>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.on",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.on"
-			],
-			"key": "<construct>",
-			"kind": "construct",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.addListener"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.once\",\"<call>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.once",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.once"
-			],
-			"key": "<call>",
-			"kind": "call",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.once"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.once\",\"<construct>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.once",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.once"
-			],
-			"key": "<construct>",
-			"kind": "construct",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.once"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessage<get>\",\"<call>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessage<get>",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessage<get>"
-			],
-			"key": "<call>",
-			"kind": "call",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessage<get>"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessage<get>\",\"<construct>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessage<get>",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessage<get>"
-			],
-			"key": "<construct>",
-			"kind": "construct",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessage<get>"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessage<set>\",\"<call>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessage<set>",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessage<set>"
-			],
-			"key": "<call>",
-			"kind": "call",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessage<set>"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessage<set>\",\"<construct>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessage<set>",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessage<set>"
-			],
-			"key": "<construct>",
-			"kind": "construct",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessage<set>"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessageerror<get>\",\"<call>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessageerror<get>",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessageerror<get>"
-			],
-			"key": "<call>",
-			"kind": "call",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessageerror<get>"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessageerror<get>\",\"<construct>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessageerror<get>",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessageerror<get>"
-			],
-			"key": "<construct>",
-			"kind": "construct",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessageerror<get>"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessageerror<set>\",\"<call>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessageerror<set>",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessageerror<set>"
-			],
-			"key": "<call>",
-			"kind": "call",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessageerror<set>"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessageerror<set>\",\"<construct>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessageerror<set>",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessageerror<set>"
-			],
-			"key": "<construct>",
-			"kind": "construct",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessageerror<set>"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.postMessage\",\"<call>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.postMessage",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.postMessage"
-			],
-			"key": "<call>",
-			"kind": "call",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.postMessage"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.postMessage\",\"<construct>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.postMessage",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.postMessage"
-			],
-			"key": "<construct>",
-			"kind": "construct",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.postMessage"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.prependListener\",\"<call>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.prependListener",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.prependListener"
-			],
-			"key": "<call>",
-			"kind": "call",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.prependListener"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.prependListener\",\"<construct>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.prependListener",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.prependListener"
-			],
-			"key": "<construct>",
-			"kind": "construct",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.prependListener"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.prependOnceListener\",\"<call>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.prependOnceListener",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.prependOnceListener"
-			],
-			"key": "<call>",
-			"kind": "call",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.prependOnceListener"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.prependOnceListener\",\"<construct>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.prependOnceListener",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.prependOnceListener"
-			],
-			"key": "<construct>",
-			"kind": "construct",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.prependOnceListener"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.ref\",\"<call>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.ref",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.ref"
-			],
-			"key": "<call>",
-			"kind": "call",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.ref"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.ref\",\"<construct>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.ref",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.ref"
-			],
-			"key": "<construct>",
-			"kind": "construct",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.ref"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.removeAllListeners\",\"<call>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.removeAllListeners",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.removeAllListeners"
-			],
-			"key": "<call>",
-			"kind": "call",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.removeAllListeners"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.removeAllListeners\",\"<construct>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.removeAllListeners",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.removeAllListeners"
-			],
-			"key": "<construct>",
-			"kind": "construct",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.removeAllListeners"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.removeListener\",\"<call>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.removeListener",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.removeListener"
-			],
-			"key": "<call>",
-			"kind": "call",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.off"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.removeListener\",\"<construct>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.removeListener",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.removeListener"
-			],
-			"key": "<construct>",
-			"kind": "construct",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.off"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.start\",\"<call>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.start",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.start"
-			],
-			"key": "<call>",
-			"kind": "call",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.start"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.start\",\"<construct>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.start",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.start"
-			],
-			"key": "<construct>",
-			"kind": "construct",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.start"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.unref\",\"<call>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.unref",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.unref"
-			],
-			"key": "<call>",
-			"kind": "call",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.unref"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.unref\",\"<construct>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.unref",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.unref"
-			],
-			"key": "<construct>",
-			"kind": "construct",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.unref"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
 			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker\",\"<call>\"]",
 			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker",
 			"ownerPaths": [
@@ -158794,7 +158787,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.addListener"
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.addListener"
 			],
 			"task": "N-06",
 			"decisions": []
@@ -158808,7 +158801,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.addListener"
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.addListener"
 			],
 			"task": "N-06",
 			"decisions": []
@@ -158819,9 +158812,7 @@
 			"ownerPaths": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.emit"],
 			"key": "<call>",
 			"kind": "call",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.emit"
-			],
+			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.emit"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -158831,9 +158822,7 @@
 			"ownerPaths": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.emit"],
 			"key": "<construct>",
 			"kind": "construct",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.emit"
-			],
+			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.emit"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -158874,7 +158863,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.listenerCount"
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.listenerCount"
 			],
 			"task": "N-06",
 			"decisions": []
@@ -158888,7 +158877,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.listenerCount"
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.listenerCount"
 			],
 			"task": "N-06",
 			"decisions": []
@@ -158899,9 +158888,7 @@
 			"ownerPaths": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.off"],
 			"key": "<call>",
 			"kind": "call",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.off"
-			],
+			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.off"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -158911,9 +158898,7 @@
 			"ownerPaths": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.off"],
 			"key": "<construct>",
 			"kind": "construct",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.off"
-			],
+			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.off"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -158924,7 +158909,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.addListener"
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.addListener"
 			],
 			"task": "N-06",
 			"decisions": []
@@ -158936,7 +158921,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.addListener"
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.addListener"
 			],
 			"task": "N-06",
 			"decisions": []
@@ -158947,9 +158932,7 @@
 			"ownerPaths": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.once"],
 			"key": "<call>",
 			"kind": "call",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.once"
-			],
+			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.once"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -158959,9 +158942,7 @@
 			"ownerPaths": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.once"],
 			"key": "<construct>",
 			"kind": "construct",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.once"
-			],
+			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.once"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -159002,7 +158983,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.prependListener"
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.prependListener"
 			],
 			"task": "N-06",
 			"decisions": []
@@ -159016,7 +158997,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.prependListener"
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.prependListener"
 			],
 			"task": "N-06",
 			"decisions": []
@@ -159030,7 +159011,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.prependOnceListener"
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.prependOnceListener"
 			],
 			"task": "N-06",
 			"decisions": []
@@ -159044,7 +159025,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.prependOnceListener"
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.prependOnceListener"
 			],
 			"task": "N-06",
 			"decisions": []
@@ -159078,7 +159059,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.removeAllListeners"
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.removeAllListeners"
 			],
 			"task": "N-06",
 			"decisions": []
@@ -159092,7 +159073,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.removeAllListeners"
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.removeAllListeners"
 			],
 			"task": "N-06",
 			"decisions": []
@@ -159105,9 +159086,7 @@
 			],
 			"key": "<call>",
 			"kind": "call",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.off"
-			],
+			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.off"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -159119,9 +159098,7 @@
 			],
 			"key": "<construct>",
 			"kind": "construct",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.off"
-			],
+			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.off"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -159174,6 +159151,62 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.getEnvironmentData\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.getEnvironmentData",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.getEnvironmentData",
+				"mal_host_install_node_worker_threads:getEnvironmentData"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.getEnvironmentData"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.getEnvironmentData\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.getEnvironmentData",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.getEnvironmentData",
+				"mal_host_install_node_worker_threads:getEnvironmentData"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.getEnvironmentData"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.isMarkedAsUntransferable\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.isMarkedAsUntransferable",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.isMarkedAsUntransferable",
+				"mal_host_install_node_worker_threads:isMarkedAsUntransferable"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.isMarkedAsUntransferable"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.isMarkedAsUntransferable\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.isMarkedAsUntransferable",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.isMarkedAsUntransferable",
+				"mal_host_install_node_worker_threads:isMarkedAsUntransferable"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.isMarkedAsUntransferable"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.markAsUncloneable\",\"<call>\"]",
 			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.markAsUncloneable",
 			"ownerPaths": [
@@ -159196,6 +159229,32 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.markAsUncloneable"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.markAsUntransferable\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.markAsUntransferable",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.markAsUntransferable",
+				"mal_host_install_node_worker_threads:markAsUntransferable"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.markAsUntransferable"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.markAsUntransferable\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.markAsUntransferable",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.markAsUntransferable",
+				"mal_host_install_node_worker_threads:markAsUntransferable"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.markAsUntransferable"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -159224,6 +159283,32 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.receiveMessageOnPort"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.setEnvironmentData\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.setEnvironmentData",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.setEnvironmentData",
+				"mal_host_install_node_worker_threads:setEnvironmentData"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.setEnvironmentData"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.setEnvironmentData\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.setEnvironmentData",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.setEnvironmentData",
+				"mal_host_install_node_worker_threads:setEnvironmentData"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.setEnvironmentData"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -160463,7 +160548,7 @@
 			],
 			"key": "<call>",
 			"kind": "call",
-			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort"],
+			"operations": ["%mal_host_install_maligator_internal_workers:MessagePort%"],
 			"task": "N-05",
 			"decisions": []
 		},
@@ -160477,7 +160562,7 @@
 			],
 			"key": "<construct>",
 			"kind": "construct",
-			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort"],
+			"operations": ["%mal_host_install_maligator_internal_workers:MessagePort%"],
 			"task": "N-05",
 			"decisions": []
 		},
@@ -160518,7 +160603,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.addListener"
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.addListener"
 			],
 			"task": "N-05",
 			"decisions": []
@@ -160532,7 +160617,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.addListener"
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.addListener"
 			],
 			"task": "N-05",
 			"decisions": []
@@ -160546,7 +160631,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.close"
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.close"
 			],
 			"task": "N-05",
 			"decisions": []
@@ -160560,7 +160645,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.close"
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.close"
 			],
 			"task": "N-05",
 			"decisions": []
@@ -160573,9 +160658,7 @@
 			],
 			"key": "<call>",
 			"kind": "call",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.emit"
-			],
+			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.emit"],
 			"task": "N-05",
 			"decisions": []
 		},
@@ -160587,9 +160670,7 @@
 			],
 			"key": "<construct>",
 			"kind": "construct",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.emit"
-			],
+			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.emit"],
 			"task": "N-05",
 			"decisions": []
 		},
@@ -160602,7 +160683,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.hasRef"
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.hasRef"
 			],
 			"task": "N-05",
 			"decisions": []
@@ -160616,7 +160697,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.hasRef"
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.hasRef"
 			],
 			"task": "N-05",
 			"decisions": []
@@ -160630,7 +160711,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.listenerCount"
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.listenerCount"
 			],
 			"task": "N-05",
 			"decisions": []
@@ -160644,7 +160725,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.listenerCount"
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.listenerCount"
 			],
 			"task": "N-05",
 			"decisions": []
@@ -160657,9 +160738,7 @@
 			],
 			"key": "<call>",
 			"kind": "call",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.off"
-			],
+			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.off"],
 			"task": "N-05",
 			"decisions": []
 		},
@@ -160671,9 +160750,7 @@
 			],
 			"key": "<construct>",
 			"kind": "construct",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.off"
-			],
+			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.off"],
 			"task": "N-05",
 			"decisions": []
 		},
@@ -160686,7 +160763,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.addListener"
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.addListener"
 			],
 			"task": "N-05",
 			"decisions": []
@@ -160700,7 +160777,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.addListener"
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.addListener"
 			],
 			"task": "N-05",
 			"decisions": []
@@ -160713,9 +160790,7 @@
 			],
 			"key": "<call>",
 			"kind": "call",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.once"
-			],
+			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.once"],
 			"task": "N-05",
 			"decisions": []
 		},
@@ -160727,9 +160802,7 @@
 			],
 			"key": "<construct>",
 			"kind": "construct",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.once"
-			],
+			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.once"],
 			"task": "N-05",
 			"decisions": []
 		},
@@ -160742,7 +160815,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessage<get>"
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.onmessage<get>"
 			],
 			"task": "N-05",
 			"decisions": []
@@ -160756,7 +160829,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessage<get>"
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.onmessage<get>"
 			],
 			"task": "N-05",
 			"decisions": []
@@ -160770,7 +160843,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessage<set>"
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.onmessage<set>"
 			],
 			"task": "N-05",
 			"decisions": []
@@ -160784,7 +160857,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessage<set>"
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.onmessage<set>"
 			],
 			"task": "N-05",
 			"decisions": []
@@ -160798,7 +160871,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessageerror<get>"
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.onmessageerror<get>"
 			],
 			"task": "N-05",
 			"decisions": []
@@ -160812,7 +160885,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessageerror<get>"
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.onmessageerror<get>"
 			],
 			"task": "N-05",
 			"decisions": []
@@ -160826,7 +160899,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessageerror<set>"
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.onmessageerror<set>"
 			],
 			"task": "N-05",
 			"decisions": []
@@ -160840,7 +160913,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessageerror<set>"
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.onmessageerror<set>"
 			],
 			"task": "N-05",
 			"decisions": []
@@ -160854,7 +160927,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.postMessage"
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.postMessage"
 			],
 			"task": "N-05",
 			"decisions": []
@@ -160868,7 +160941,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.postMessage"
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.postMessage"
 			],
 			"task": "N-05",
 			"decisions": []
@@ -160882,7 +160955,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.prependListener"
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.prependListener"
 			],
 			"task": "N-05",
 			"decisions": []
@@ -160896,7 +160969,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.prependListener"
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.prependListener"
 			],
 			"task": "N-05",
 			"decisions": []
@@ -160910,7 +160983,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.prependOnceListener"
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.prependOnceListener"
 			],
 			"task": "N-05",
 			"decisions": []
@@ -160924,7 +160997,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.prependOnceListener"
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.prependOnceListener"
 			],
 			"task": "N-05",
 			"decisions": []
@@ -160938,7 +161011,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.ref"
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.ref"
 			],
 			"task": "N-05",
 			"decisions": []
@@ -160952,7 +161025,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.ref"
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.ref"
 			],
 			"task": "N-05",
 			"decisions": []
@@ -160966,7 +161039,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.removeAllListeners"
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.removeAllListeners"
 			],
 			"task": "N-05",
 			"decisions": []
@@ -160980,7 +161053,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.removeAllListeners"
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.removeAllListeners"
 			],
 			"task": "N-05",
 			"decisions": []
@@ -160993,9 +161066,7 @@
 			],
 			"key": "<call>",
 			"kind": "call",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.off"
-			],
+			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.off"],
 			"task": "N-05",
 			"decisions": []
 		},
@@ -161007,9 +161078,7 @@
 			],
 			"key": "<construct>",
 			"kind": "construct",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.off"
-			],
+			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.off"],
 			"task": "N-05",
 			"decisions": []
 		},
@@ -161022,7 +161091,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.start"
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.start"
 			],
 			"task": "N-05",
 			"decisions": []
@@ -161036,7 +161105,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.start"
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.start"
 			],
 			"task": "N-05",
 			"decisions": []
@@ -161050,7 +161119,7 @@
 			"key": "<call>",
 			"kind": "call",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.unref"
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.unref"
 			],
 			"task": "N-05",
 			"decisions": []
@@ -161064,7 +161133,7 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.unref"
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.unref"
 			],
 			"task": "N-05",
 			"decisions": []
@@ -260558,6 +260627,216 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"globalThis.BroadcastChannel\",\"<call>\"]",
+			"owner": "globalThis.BroadcastChannel",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.BroadcastChannel",
+				"globalThis.BroadcastChannel",
+				"globalThis.BroadcastChannel.prototype.constructor",
+				"mal_host_install_node_worker_threads:BroadcastChannel"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.BroadcastChannel"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.BroadcastChannel\",\"<construct>\"]",
+			"owner": "globalThis.BroadcastChannel",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.BroadcastChannel",
+				"globalThis.BroadcastChannel",
+				"globalThis.BroadcastChannel.prototype.constructor",
+				"mal_host_install_node_worker_threads:BroadcastChannel"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.BroadcastChannel"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.BroadcastChannel.prototype.close\",\"<call>\"]",
+			"owner": "globalThis.BroadcastChannel.prototype.close",
+			"ownerPaths": ["globalThis.BroadcastChannel.prototype.close"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.BroadcastChannel.prototype.close"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.BroadcastChannel.prototype.close\",\"<construct>\"]",
+			"owner": "globalThis.BroadcastChannel.prototype.close",
+			"ownerPaths": ["globalThis.BroadcastChannel.prototype.close"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.BroadcastChannel.prototype.close"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.BroadcastChannel.prototype.name<get>\",\"<call>\"]",
+			"owner": "globalThis.BroadcastChannel.prototype.name<get>",
+			"ownerPaths": ["globalThis.BroadcastChannel.prototype.name<get>"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.BroadcastChannel.prototype.name<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.BroadcastChannel.prototype.name<get>\",\"<construct>\"]",
+			"owner": "globalThis.BroadcastChannel.prototype.name<get>",
+			"ownerPaths": ["globalThis.BroadcastChannel.prototype.name<get>"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.BroadcastChannel.prototype.name<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.BroadcastChannel.prototype.onmessage<get>\",\"<call>\"]",
+			"owner": "globalThis.BroadcastChannel.prototype.onmessage<get>",
+			"ownerPaths": ["globalThis.BroadcastChannel.prototype.onmessage<get>"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.BroadcastChannel.prototype.onmessage<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.BroadcastChannel.prototype.onmessage<get>\",\"<construct>\"]",
+			"owner": "globalThis.BroadcastChannel.prototype.onmessage<get>",
+			"ownerPaths": ["globalThis.BroadcastChannel.prototype.onmessage<get>"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.BroadcastChannel.prototype.onmessage<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.BroadcastChannel.prototype.onmessage<set>\",\"<call>\"]",
+			"owner": "globalThis.BroadcastChannel.prototype.onmessage<set>",
+			"ownerPaths": ["globalThis.BroadcastChannel.prototype.onmessage<set>"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.BroadcastChannel.prototype.onmessage<set>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.BroadcastChannel.prototype.onmessage<set>\",\"<construct>\"]",
+			"owner": "globalThis.BroadcastChannel.prototype.onmessage<set>",
+			"ownerPaths": ["globalThis.BroadcastChannel.prototype.onmessage<set>"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.BroadcastChannel.prototype.onmessage<set>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.BroadcastChannel.prototype.onmessageerror<get>\",\"<call>\"]",
+			"owner": "globalThis.BroadcastChannel.prototype.onmessageerror<get>",
+			"ownerPaths": ["globalThis.BroadcastChannel.prototype.onmessageerror<get>"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.BroadcastChannel.prototype.onmessageerror<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.BroadcastChannel.prototype.onmessageerror<get>\",\"<construct>\"]",
+			"owner": "globalThis.BroadcastChannel.prototype.onmessageerror<get>",
+			"ownerPaths": ["globalThis.BroadcastChannel.prototype.onmessageerror<get>"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.BroadcastChannel.prototype.onmessageerror<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.BroadcastChannel.prototype.onmessageerror<set>\",\"<call>\"]",
+			"owner": "globalThis.BroadcastChannel.prototype.onmessageerror<set>",
+			"ownerPaths": ["globalThis.BroadcastChannel.prototype.onmessageerror<set>"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.BroadcastChannel.prototype.onmessageerror<set>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.BroadcastChannel.prototype.onmessageerror<set>\",\"<construct>\"]",
+			"owner": "globalThis.BroadcastChannel.prototype.onmessageerror<set>",
+			"ownerPaths": ["globalThis.BroadcastChannel.prototype.onmessageerror<set>"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.BroadcastChannel.prototype.onmessageerror<set>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.BroadcastChannel.prototype.postMessage\",\"<call>\"]",
+			"owner": "globalThis.BroadcastChannel.prototype.postMessage",
+			"ownerPaths": ["globalThis.BroadcastChannel.prototype.postMessage"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.BroadcastChannel.prototype.postMessage"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.BroadcastChannel.prototype.postMessage\",\"<construct>\"]",
+			"owner": "globalThis.BroadcastChannel.prototype.postMessage",
+			"ownerPaths": ["globalThis.BroadcastChannel.prototype.postMessage"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.BroadcastChannel.prototype.postMessage"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.BroadcastChannel.prototype.ref\",\"<call>\"]",
+			"owner": "globalThis.BroadcastChannel.prototype.ref",
+			"ownerPaths": ["globalThis.BroadcastChannel.prototype.ref"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.BroadcastChannel.prototype.ref"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.BroadcastChannel.prototype.ref\",\"<construct>\"]",
+			"owner": "globalThis.BroadcastChannel.prototype.ref",
+			"ownerPaths": ["globalThis.BroadcastChannel.prototype.ref"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.BroadcastChannel.prototype.ref"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.BroadcastChannel.prototype.unref\",\"<call>\"]",
+			"owner": "globalThis.BroadcastChannel.prototype.unref",
+			"ownerPaths": ["globalThis.BroadcastChannel.prototype.unref"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.BroadcastChannel.prototype.unref"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.BroadcastChannel.prototype.unref\",\"<construct>\"]",
+			"owner": "globalThis.BroadcastChannel.prototype.unref",
+			"ownerPaths": ["globalThis.BroadcastChannel.prototype.unref"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.BroadcastChannel.prototype.unref"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
 			"id": "[\"globalThis.Buffer\",\"<call>\"]",
 			"owner": "globalThis.Buffer",
 			"ownerPaths": [
@@ -263658,6 +263937,530 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.Mal.serve"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessageChannel\",\"<call>\"]",
+			"owner": "globalThis.MessageChannel",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessageChannel",
+				"globalThis.MessageChannel",
+				"globalThis.MessageChannel.prototype.constructor",
+				"mal_host_install_node_worker_threads:MessageChannel"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.MessageChannel"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessageChannel\",\"<construct>\"]",
+			"owner": "globalThis.MessageChannel",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessageChannel",
+				"globalThis.MessageChannel",
+				"globalThis.MessageChannel.prototype.constructor",
+				"mal_host_install_node_worker_threads:MessageChannel"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.MessageChannel"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort\",\"<call>\"]",
+			"owner": "globalThis.MessagePort",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort",
+				"globalThis.MessagePort",
+				"globalThis.MessagePort.prototype.constructor",
+				"mal_host_install_node_worker_threads:MessagePort"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%mal_host_install_maligator_internal_workers:MessagePort%"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort\",\"<construct>\"]",
+			"owner": "globalThis.MessagePort",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort",
+				"globalThis.MessagePort",
+				"globalThis.MessagePort.prototype.constructor",
+				"mal_host_install_node_worker_threads:MessagePort"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%mal_host_install_maligator_internal_workers:MessagePort%"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.addListener\",\"<call>\"]",
+			"owner": "globalThis.MessagePort.prototype.addListener",
+			"ownerPaths": ["globalThis.MessagePort.prototype.addListener"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.addListener"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.addListener\",\"<construct>\"]",
+			"owner": "globalThis.MessagePort.prototype.addListener",
+			"ownerPaths": ["globalThis.MessagePort.prototype.addListener"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.addListener"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.close\",\"<call>\"]",
+			"owner": "globalThis.MessagePort.prototype.close",
+			"ownerPaths": ["globalThis.MessagePort.prototype.close"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": [
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.close"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.close\",\"<construct>\"]",
+			"owner": "globalThis.MessagePort.prototype.close",
+			"ownerPaths": ["globalThis.MessagePort.prototype.close"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": [
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.close"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.emit\",\"<call>\"]",
+			"owner": "globalThis.MessagePort.prototype.emit",
+			"ownerPaths": ["globalThis.MessagePort.prototype.emit"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.emit"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.emit\",\"<construct>\"]",
+			"owner": "globalThis.MessagePort.prototype.emit",
+			"ownerPaths": ["globalThis.MessagePort.prototype.emit"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.emit"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.hasRef\",\"<call>\"]",
+			"owner": "globalThis.MessagePort.prototype.hasRef",
+			"ownerPaths": ["globalThis.MessagePort.prototype.hasRef"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": [
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.hasRef"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.hasRef\",\"<construct>\"]",
+			"owner": "globalThis.MessagePort.prototype.hasRef",
+			"ownerPaths": ["globalThis.MessagePort.prototype.hasRef"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": [
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.hasRef"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.listenerCount\",\"<call>\"]",
+			"owner": "globalThis.MessagePort.prototype.listenerCount",
+			"ownerPaths": ["globalThis.MessagePort.prototype.listenerCount"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.listenerCount"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.listenerCount\",\"<construct>\"]",
+			"owner": "globalThis.MessagePort.prototype.listenerCount",
+			"ownerPaths": ["globalThis.MessagePort.prototype.listenerCount"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.listenerCount"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.off\",\"<call>\"]",
+			"owner": "globalThis.MessagePort.prototype.off",
+			"ownerPaths": ["globalThis.MessagePort.prototype.off"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.off"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.off\",\"<construct>\"]",
+			"owner": "globalThis.MessagePort.prototype.off",
+			"ownerPaths": ["globalThis.MessagePort.prototype.off"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.off"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.on\",\"<call>\"]",
+			"owner": "globalThis.MessagePort.prototype.on",
+			"ownerPaths": ["globalThis.MessagePort.prototype.on"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.addListener"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.on\",\"<construct>\"]",
+			"owner": "globalThis.MessagePort.prototype.on",
+			"ownerPaths": ["globalThis.MessagePort.prototype.on"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.addListener"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.once\",\"<call>\"]",
+			"owner": "globalThis.MessagePort.prototype.once",
+			"ownerPaths": ["globalThis.MessagePort.prototype.once"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.once"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.once\",\"<construct>\"]",
+			"owner": "globalThis.MessagePort.prototype.once",
+			"ownerPaths": ["globalThis.MessagePort.prototype.once"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.once"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.onmessage<get>\",\"<call>\"]",
+			"owner": "globalThis.MessagePort.prototype.onmessage<get>",
+			"ownerPaths": ["globalThis.MessagePort.prototype.onmessage<get>"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": [
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.onmessage<get>"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.onmessage<get>\",\"<construct>\"]",
+			"owner": "globalThis.MessagePort.prototype.onmessage<get>",
+			"ownerPaths": ["globalThis.MessagePort.prototype.onmessage<get>"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": [
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.onmessage<get>"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.onmessage<set>\",\"<call>\"]",
+			"owner": "globalThis.MessagePort.prototype.onmessage<set>",
+			"ownerPaths": ["globalThis.MessagePort.prototype.onmessage<set>"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": [
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.onmessage<set>"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.onmessage<set>\",\"<construct>\"]",
+			"owner": "globalThis.MessagePort.prototype.onmessage<set>",
+			"ownerPaths": ["globalThis.MessagePort.prototype.onmessage<set>"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": [
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.onmessage<set>"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.onmessageerror<get>\",\"<call>\"]",
+			"owner": "globalThis.MessagePort.prototype.onmessageerror<get>",
+			"ownerPaths": ["globalThis.MessagePort.prototype.onmessageerror<get>"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": [
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.onmessageerror<get>"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.onmessageerror<get>\",\"<construct>\"]",
+			"owner": "globalThis.MessagePort.prototype.onmessageerror<get>",
+			"ownerPaths": ["globalThis.MessagePort.prototype.onmessageerror<get>"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": [
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.onmessageerror<get>"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.onmessageerror<set>\",\"<call>\"]",
+			"owner": "globalThis.MessagePort.prototype.onmessageerror<set>",
+			"ownerPaths": ["globalThis.MessagePort.prototype.onmessageerror<set>"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": [
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.onmessageerror<set>"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.onmessageerror<set>\",\"<construct>\"]",
+			"owner": "globalThis.MessagePort.prototype.onmessageerror<set>",
+			"ownerPaths": ["globalThis.MessagePort.prototype.onmessageerror<set>"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": [
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.onmessageerror<set>"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.postMessage\",\"<call>\"]",
+			"owner": "globalThis.MessagePort.prototype.postMessage",
+			"ownerPaths": ["globalThis.MessagePort.prototype.postMessage"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": [
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.postMessage"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.postMessage\",\"<construct>\"]",
+			"owner": "globalThis.MessagePort.prototype.postMessage",
+			"ownerPaths": ["globalThis.MessagePort.prototype.postMessage"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": [
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.postMessage"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.prependListener\",\"<call>\"]",
+			"owner": "globalThis.MessagePort.prototype.prependListener",
+			"ownerPaths": ["globalThis.MessagePort.prototype.prependListener"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.prependListener"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.prependListener\",\"<construct>\"]",
+			"owner": "globalThis.MessagePort.prototype.prependListener",
+			"ownerPaths": ["globalThis.MessagePort.prototype.prependListener"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.prependListener"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.prependOnceListener\",\"<call>\"]",
+			"owner": "globalThis.MessagePort.prototype.prependOnceListener",
+			"ownerPaths": ["globalThis.MessagePort.prototype.prependOnceListener"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.prependOnceListener"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.prependOnceListener\",\"<construct>\"]",
+			"owner": "globalThis.MessagePort.prototype.prependOnceListener",
+			"ownerPaths": ["globalThis.MessagePort.prototype.prependOnceListener"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.prependOnceListener"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.ref\",\"<call>\"]",
+			"owner": "globalThis.MessagePort.prototype.ref",
+			"ownerPaths": ["globalThis.MessagePort.prototype.ref"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": [
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.ref"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.ref\",\"<construct>\"]",
+			"owner": "globalThis.MessagePort.prototype.ref",
+			"ownerPaths": ["globalThis.MessagePort.prototype.ref"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": [
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.ref"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.removeAllListeners\",\"<call>\"]",
+			"owner": "globalThis.MessagePort.prototype.removeAllListeners",
+			"ownerPaths": ["globalThis.MessagePort.prototype.removeAllListeners"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.removeAllListeners"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.removeAllListeners\",\"<construct>\"]",
+			"owner": "globalThis.MessagePort.prototype.removeAllListeners",
+			"ownerPaths": ["globalThis.MessagePort.prototype.removeAllListeners"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.removeAllListeners"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.removeListener\",\"<call>\"]",
+			"owner": "globalThis.MessagePort.prototype.removeListener",
+			"ownerPaths": ["globalThis.MessagePort.prototype.removeListener"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.off"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.removeListener\",\"<construct>\"]",
+			"owner": "globalThis.MessagePort.prototype.removeListener",
+			"ownerPaths": ["globalThis.MessagePort.prototype.removeListener"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.off"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.start\",\"<call>\"]",
+			"owner": "globalThis.MessagePort.prototype.start",
+			"ownerPaths": ["globalThis.MessagePort.prototype.start"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": [
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.start"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.start\",\"<construct>\"]",
+			"owner": "globalThis.MessagePort.prototype.start",
+			"ownerPaths": ["globalThis.MessagePort.prototype.start"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": [
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.start"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.unref\",\"<call>\"]",
+			"owner": "globalThis.MessagePort.prototype.unref",
+			"ownerPaths": ["globalThis.MessagePort.prototype.unref"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": [
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.unref"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessagePort.prototype.unref\",\"<construct>\"]",
+			"owner": "globalThis.MessagePort.prototype.unref",
+			"ownerPaths": ["globalThis.MessagePort.prototype.unref"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": [
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.unref"
+			],
 			"task": "C-01",
 			"decisions": []
 		},
@@ -278410,7 +279213,7 @@
 			"ownerPaths": ["[[roots]]"],
 			"key": "mal_host_install_maligator_internal_workers:MessagePort",
 			"kind": "binding",
-			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort"],
+			"operations": ["%mal_host_install_maligator_internal_workers:MessagePort%"],
 			"task": "N-05",
 			"decisions": []
 		},
@@ -287065,12 +287868,22 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_worker_threads:BroadcastChannel\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_worker_threads:BroadcastChannel",
+			"kind": "binding",
+			"operations": ["globalThis.BroadcastChannel"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"[[roots]]\",\"mal_host_install_node_worker_threads:MessageChannel\"]",
 			"owner": "[[roots]]",
 			"ownerPaths": ["[[roots]]"],
 			"key": "mal_host_install_node_worker_threads:MessageChannel",
 			"kind": "binding",
-			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessageChannel"],
+			"operations": ["globalThis.MessageChannel"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -287080,7 +287893,7 @@
 			"ownerPaths": ["[[roots]]"],
 			"key": "mal_host_install_node_worker_threads:MessagePort",
 			"kind": "binding",
-			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort"],
+			"operations": ["%mal_host_install_maligator_internal_workers:MessagePort%"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -287115,6 +287928,16 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_worker_threads:getEnvironmentData\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_worker_threads:getEnvironmentData",
+			"kind": "binding",
+			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.getEnvironmentData"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"[[roots]]\",\"mal_host_install_node_worker_threads:isInternalThread\"]",
 			"owner": "[[roots]]",
 			"ownerPaths": ["[[roots]]"],
@@ -287135,12 +287958,34 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_worker_threads:isMarkedAsUntransferable\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_worker_threads:isMarkedAsUntransferable",
+			"kind": "binding",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.isMarkedAsUntransferable"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"[[roots]]\",\"mal_host_install_node_worker_threads:markAsUncloneable\"]",
 			"owner": "[[roots]]",
 			"ownerPaths": ["[[roots]]"],
 			"key": "mal_host_install_node_worker_threads:markAsUncloneable",
 			"kind": "binding",
 			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.markAsUncloneable"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_worker_threads:markAsUntransferable\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_worker_threads:markAsUntransferable",
+			"kind": "binding",
+			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.markAsUntransferable"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -287171,6 +288016,16 @@
 			"key": "mal_host_install_node_worker_threads:resourceLimits",
 			"kind": "binding",
 			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_worker_threads:setEnvironmentData\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_worker_threads:setEnvironmentData",
+			"kind": "binding",
+			"operations": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.setEnvironmentData"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -289199,6 +290054,13 @@
 			"id": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server.prototype.listen",
 			"identities": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server.prototype.listen"
+			]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server.prototype.setSecureContext",
+			"identities": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server.prototype.setSecureContext",
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.setSecureContext"
 			]
 		},
 		{
@@ -291508,6 +292370,10 @@
 			]
 		},
 		{
+			"id": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.addContext",
+			"identities": ["%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.addContext"]
+		},
+		{
 			"id": "%MAL_INTRINSIC_NODE_TLS_MODULE%.checkServerIdentity",
 			"identities": ["%MAL_INTRINSIC_NODE_TLS_MODULE%.checkServerIdentity"]
 		},
@@ -291663,159 +292529,27 @@
 			"identities": ["%MAL_INTRINSIC_NODE_VM_MODULE%.runInThisContext"]
 		},
 		{
-			"id": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessageChannel",
-			"identities": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessageChannel"]
+			"id": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker",
+			"identities": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker"]
 		},
 		{
-			"id": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort",
+			"id": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.addListener",
 			"identities": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort",
-				"%mal_host_install_maligator_internal_workers:MessagePort%"
-			]
-		},
-		{
-			"id": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.addListener",
-			"identities": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.addListener",
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.on",
 				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.addListener",
 				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.on",
 				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.addListener",
-				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.on"
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.on",
+				"globalThis.MessagePort.prototype.addListener",
+				"globalThis.MessagePort.prototype.on"
 			]
 		},
 		{
-			"id": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.close",
+			"id": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.emit",
 			"identities": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.close",
-				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.close"
-			]
-		},
-		{
-			"id": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.emit",
-			"identities": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.emit",
 				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.emit",
-				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.emit"
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.emit",
+				"globalThis.MessagePort.prototype.emit"
 			]
-		},
-		{
-			"id": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.hasRef",
-			"identities": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.hasRef",
-				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.hasRef"
-			]
-		},
-		{
-			"id": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.listenerCount",
-			"identities": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.listenerCount",
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.listenerCount",
-				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.listenerCount"
-			]
-		},
-		{
-			"id": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.off",
-			"identities": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.off",
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.removeListener",
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.off",
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.removeListener",
-				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.off",
-				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.removeListener"
-			]
-		},
-		{
-			"id": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.once",
-			"identities": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.once",
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.once",
-				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.once"
-			]
-		},
-		{
-			"id": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessage<get>",
-			"identities": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessage<get>",
-				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.onmessage<get>"
-			]
-		},
-		{
-			"id": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessage<set>",
-			"identities": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessage<set>",
-				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.onmessage<set>"
-			]
-		},
-		{
-			"id": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessageerror<get>",
-			"identities": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessageerror<get>",
-				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.onmessageerror<get>"
-			]
-		},
-		{
-			"id": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessageerror<set>",
-			"identities": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.onmessageerror<set>",
-				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.onmessageerror<set>"
-			]
-		},
-		{
-			"id": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.postMessage",
-			"identities": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.postMessage",
-				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.postMessage"
-			]
-		},
-		{
-			"id": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.prependListener",
-			"identities": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.prependListener",
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.prependListener",
-				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.prependListener"
-			]
-		},
-		{
-			"id": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.prependOnceListener",
-			"identities": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.prependOnceListener",
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.prependOnceListener",
-				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.prependOnceListener"
-			]
-		},
-		{
-			"id": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.ref",
-			"identities": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.ref",
-				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.ref"
-			]
-		},
-		{
-			"id": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.removeAllListeners",
-			"identities": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.removeAllListeners",
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.removeAllListeners",
-				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.removeAllListeners"
-			]
-		},
-		{
-			"id": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.start",
-			"identities": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.start",
-				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.start"
-			]
-		},
-		{
-			"id": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.unref",
-			"identities": [
-				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.MessagePort.prototype.unref",
-				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.unref"
-			]
-		},
-		{
-			"id": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker",
-			"identities": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker"]
 		},
 		{
 			"id": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.hasRef",
@@ -291825,9 +292559,52 @@
 			]
 		},
 		{
+			"id": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.listenerCount",
+			"identities": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.listenerCount",
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.listenerCount",
+				"globalThis.MessagePort.prototype.listenerCount"
+			]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.off",
+			"identities": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.off",
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.removeListener",
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.off",
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.removeListener",
+				"globalThis.MessagePort.prototype.off",
+				"globalThis.MessagePort.prototype.removeListener"
+			]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.once",
+			"identities": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.once",
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.once",
+				"globalThis.MessagePort.prototype.once"
+			]
+		},
+		{
 			"id": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.postMessage",
 			"identities": [
 				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.postMessage"
+			]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.prependListener",
+			"identities": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.prependListener",
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.prependListener",
+				"globalThis.MessagePort.prototype.prependListener"
+			]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.prependOnceListener",
+			"identities": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.prependOnceListener",
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.prependOnceListener",
+				"globalThis.MessagePort.prototype.prependOnceListener"
 			]
 		},
 		{
@@ -291835,6 +292612,14 @@
 			"identities": [
 				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.ref",
 				"%mal_host_install_maligator_internal_workers:Worker%.prototype.ref"
+			]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.removeAllListeners",
+			"identities": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.Worker.prototype.removeAllListeners",
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.removeAllListeners",
+				"globalThis.MessagePort.prototype.removeAllListeners"
 			]
 		},
 		{
@@ -291852,12 +292637,30 @@
 			]
 		},
 		{
+			"id": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.getEnvironmentData",
+			"identities": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.getEnvironmentData"]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.isMarkedAsUntransferable",
+			"identities": [
+				"%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.isMarkedAsUntransferable"
+			]
+		},
+		{
 			"id": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.markAsUncloneable",
 			"identities": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.markAsUncloneable"]
 		},
 		{
+			"id": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.markAsUntransferable",
+			"identities": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.markAsUntransferable"]
+		},
+		{
 			"id": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.receiveMessageOnPort",
 			"identities": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.receiveMessageOnPort"]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.setEnvironmentData",
+			"identities": ["%MAL_INTRINSIC_NODE_WORKER_THREADS_MODULE%.setEnvironmentData"]
 		},
 		{
 			"id": "%MAL_INTRINSIC_NODE_ZLIB_MODULE%.BrotliCompress",
@@ -291963,9 +292766,86 @@
 			"identities": ["%mal_host_install_maligator_internal_workers:MessageChannel%"]
 		},
 		{
+			"id": "%mal_host_install_maligator_internal_workers:MessagePort%",
+			"identities": [
+				"%mal_host_install_maligator_internal_workers:MessagePort%",
+				"globalThis.MessagePort"
+			]
+		},
+		{
 			"id": "%mal_host_install_maligator_internal_workers:MessagePort%.prototype._discard",
 			"identities": [
 				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype._discard"
+			]
+		},
+		{
+			"id": "%mal_host_install_maligator_internal_workers:MessagePort%.prototype.close",
+			"identities": [
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.close",
+				"globalThis.MessagePort.prototype.close"
+			]
+		},
+		{
+			"id": "%mal_host_install_maligator_internal_workers:MessagePort%.prototype.hasRef",
+			"identities": [
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.hasRef",
+				"globalThis.MessagePort.prototype.hasRef"
+			]
+		},
+		{
+			"id": "%mal_host_install_maligator_internal_workers:MessagePort%.prototype.onmessage<get>",
+			"identities": [
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.onmessage<get>",
+				"globalThis.MessagePort.prototype.onmessage<get>"
+			]
+		},
+		{
+			"id": "%mal_host_install_maligator_internal_workers:MessagePort%.prototype.onmessage<set>",
+			"identities": [
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.onmessage<set>",
+				"globalThis.MessagePort.prototype.onmessage<set>"
+			]
+		},
+		{
+			"id": "%mal_host_install_maligator_internal_workers:MessagePort%.prototype.onmessageerror<get>",
+			"identities": [
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.onmessageerror<get>",
+				"globalThis.MessagePort.prototype.onmessageerror<get>"
+			]
+		},
+		{
+			"id": "%mal_host_install_maligator_internal_workers:MessagePort%.prototype.onmessageerror<set>",
+			"identities": [
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.onmessageerror<set>",
+				"globalThis.MessagePort.prototype.onmessageerror<set>"
+			]
+		},
+		{
+			"id": "%mal_host_install_maligator_internal_workers:MessagePort%.prototype.postMessage",
+			"identities": [
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.postMessage",
+				"globalThis.MessagePort.prototype.postMessage"
+			]
+		},
+		{
+			"id": "%mal_host_install_maligator_internal_workers:MessagePort%.prototype.ref",
+			"identities": [
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.ref",
+				"globalThis.MessagePort.prototype.ref"
+			]
+		},
+		{
+			"id": "%mal_host_install_maligator_internal_workers:MessagePort%.prototype.start",
+			"identities": [
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.start",
+				"globalThis.MessagePort.prototype.start"
+			]
+		},
+		{
+			"id": "%mal_host_install_maligator_internal_workers:MessagePort%.prototype.unref",
+			"identities": [
+				"%mal_host_install_maligator_internal_workers:MessagePort%.prototype.unref",
+				"globalThis.MessagePort.prototype.unref"
 			]
 		},
 		{
@@ -294231,6 +295111,46 @@
 			"id": "globalThis.Blob.prototype.type<get>",
 			"identities": ["globalThis.Blob.prototype.type<get>"]
 		},
+		{
+			"id": "globalThis.BroadcastChannel",
+			"identities": ["globalThis.BroadcastChannel"]
+		},
+		{
+			"id": "globalThis.BroadcastChannel.prototype.close",
+			"identities": ["globalThis.BroadcastChannel.prototype.close"]
+		},
+		{
+			"id": "globalThis.BroadcastChannel.prototype.name<get>",
+			"identities": ["globalThis.BroadcastChannel.prototype.name<get>"]
+		},
+		{
+			"id": "globalThis.BroadcastChannel.prototype.onmessage<get>",
+			"identities": ["globalThis.BroadcastChannel.prototype.onmessage<get>"]
+		},
+		{
+			"id": "globalThis.BroadcastChannel.prototype.onmessage<set>",
+			"identities": ["globalThis.BroadcastChannel.prototype.onmessage<set>"]
+		},
+		{
+			"id": "globalThis.BroadcastChannel.prototype.onmessageerror<get>",
+			"identities": ["globalThis.BroadcastChannel.prototype.onmessageerror<get>"]
+		},
+		{
+			"id": "globalThis.BroadcastChannel.prototype.onmessageerror<set>",
+			"identities": ["globalThis.BroadcastChannel.prototype.onmessageerror<set>"]
+		},
+		{
+			"id": "globalThis.BroadcastChannel.prototype.postMessage",
+			"identities": ["globalThis.BroadcastChannel.prototype.postMessage"]
+		},
+		{
+			"id": "globalThis.BroadcastChannel.prototype.ref",
+			"identities": ["globalThis.BroadcastChannel.prototype.ref"]
+		},
+		{
+			"id": "globalThis.BroadcastChannel.prototype.unref",
+			"identities": ["globalThis.BroadcastChannel.prototype.unref"]
+		},
 		{ "id": "globalThis.Buffer", "identities": ["globalThis.Buffer"] },
 		{ "id": "globalThis.Buffer.alloc", "identities": ["globalThis.Buffer.alloc"] },
 		{
@@ -294593,6 +295513,7 @@
 			"identities": ["globalThis.Headers.prototype.values"]
 		},
 		{ "id": "globalThis.Mal.serve", "identities": ["globalThis.Mal.serve"] },
+		{ "id": "globalThis.MessageChannel", "identities": ["globalThis.MessageChannel"] },
 		{
 			"id": "globalThis.Performance",
 			"identities": [

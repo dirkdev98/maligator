@@ -13786,20 +13786,31 @@
 		["mal_host_install_node_vm:runInContext", ["runtime", "primitive"]],
 		["mal_host_install_node_vm:runInNewContext", ["runtime", "primitive"]],
 		["mal_host_install_node_vm:runInThisContext", ["runtime", "primitive"]],
+		["mal_host_install_node_worker_threads:BroadcastChannel", ["runtime", "primitive"]],
 		["mal_host_install_node_worker_threads:MessageChannel", ["runtime", "primitive"]],
 		["mal_host_install_node_worker_threads:MessagePort", ["runtime", "primitive"]],
 		["mal_host_install_node_worker_threads:SHARE_ENV", ["runtime", "primitive"]],
 		["mal_host_install_node_worker_threads:Worker", ["runtime", "primitive"]],
 		["mal_host_install_node_worker_threads:default", ["runtime", "primitive"]],
+		["mal_host_install_node_worker_threads:getEnvironmentData", ["runtime", "primitive"]],
 		["mal_host_install_node_worker_threads:isInternalThread", ["runtime", "primitive"]],
 		["mal_host_install_node_worker_threads:isMainThread", ["runtime", "primitive"]],
+		[
+			"mal_host_install_node_worker_threads:isMarkedAsUntransferable",
+			["runtime", "primitive"]
+		],
 		["mal_host_install_node_worker_threads:markAsUncloneable", ["runtime", "primitive"]],
+		[
+			"mal_host_install_node_worker_threads:markAsUntransferable",
+			["runtime", "primitive"]
+		],
 		["mal_host_install_node_worker_threads:parentPort", ["runtime", "primitive"]],
 		[
 			"mal_host_install_node_worker_threads:receiveMessageOnPort",
 			["runtime", "primitive"]
 		],
 		["mal_host_install_node_worker_threads:resourceLimits", ["runtime", "primitive"]],
+		["mal_host_install_node_worker_threads:setEnvironmentData", ["runtime", "primitive"]],
 		["mal_host_install_node_worker_threads:threadId", ["runtime", "primitive"]],
 		["mal_host_install_node_worker_threads:threadName", ["runtime", "primitive"]],
 		["mal_host_install_node_worker_threads:workerData", ["runtime", "primitive"]],
