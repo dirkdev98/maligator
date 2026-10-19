@@ -160,6 +160,8 @@ The independent target boundary and current storage contract are recorded in
       allocates 71 GB, and minor collections spend 6 s sweeping 616 million young
       cells, almost all dead; skipping the finalizer's out-of-line calls for plain
       objects saved 1.5% of that, so touching each dead cell is the cost.
+      Prefetching young cells four ahead made the parser workload's minor sweeps
+      7% slower, and batching their byte accounting per block changed nothing.
 - [ ] Stop fingerprinting every bytecode function with `JSON.stringify` to trust its
       safepoint root maps (452 ms of a 40 s Node frontend). Only functions that keep
       bytecode consume the trust. Profile builds also replace `profileSiteIds` in
@@ -643,7 +645,12 @@ contracts or investigates costs still visible after the string follow-ups.
       the three `quote` bodies instead of dispatching to their field entries doubled
       the three-class loop (106 against 51 ms), so field entries stay preferred, and
       raising the cross-call inlining budget fourfold made the self-compile 14%
-      slower while Node's run of the same source stayed level.
+      slower while Node's run of the same source stayed level. Rows are not the
+      cost: an unsafe build that pushed no frame rows ran the self-compile only
+      0.3% faster. Dispatching through a dense per-VM entry table instead of the
+      callee's metadata row gained 0.8%, while per-site private-load cache rows
+      cost 1% (their lines displace the shared hint path's), and guarded direct
+      calls at hinted method sites outside loops cost 0.65% with Node level.
 - [ ] Keep three receivers of a polymorphic method site in its own cache. The
       objects phase's `rules[i % 3].quote(order)` hits the site's one inherited row
       for one class in three; the others probe both banks of the shared stub
