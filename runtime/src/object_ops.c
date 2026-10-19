@@ -842,11 +842,109 @@ bool mal_object_delete_own(MalObject *object, MalKey key) {
     return true;
 }
 
+/**
+ * How mal_object_set last wrote `key` on objects of `shape`: into an own writable
+ * slot, or by adding a default data property, which stays valid while the
+ * prototype chain epoch holds. Runtime code builds and updates its objects with
+ * mal_object_set, which otherwise resolves the key through the prototype chain and
+ * then searches the shape again.
+ */
+typedef struct MalObjectSetSite {
+    const MalShape *shape;
+    MalValue key;
+    const MalObject *prototype;
+    u64 epoch;
+    /** The shape after an addition; null for an own-slot write. */
+    MalShape *child;
+    u32 slot;
+} MalObjectSetSite;
+
+#define MAL_OBJECT_SET_SITES 512
+
+static MAL_ISOLATE_LOCAL MalObjectSetSite g_object_set_sites[MAL_OBJECT_SET_SITES];
+
+static MalObjectSetSite *mal_object_set_site(const MalShape *shape, MalValue key) {
+    uptr hash = ((uptr) shape >> 4) ^ ((uptr) key >> 3) * 0x9e3779b1u;
+    return &g_object_set_sites[(hash ^ hash >> 9) % MAL_OBJECT_SET_SITES];
+}
+
+// Prototype mutations bump the epoch, and so does freeing a prototype before its
+// address can return; the receiver's own keys are exactly its shape's.
+static bool mal_object_set_is_cacheable(const MalObject *object, MalKey key) {
+    return key.kind == MAL_KEY_STRING && object->header.type == MAL_HEAP_OBJECT &&
+        !object->is_prototype && !object->watched_method_proto && object->extensible &&
+        !mal_object_has_public_overflow(object) && mal_prototype_chain_epoch != 0;
+}
+
+static bool mal_object_try_cached_set(MalObject *object, MalKey key, MalValue value) {
+    const MalObjectSetSite *site = mal_object_set_site(object->shape, key.value);
+    if (site->shape != object->shape || site->key != key.value) {
+        MAL_PERF_COUNT(object_set_cache_misses);
+        return false;
+    }
+    if (site->child == nullptr) {
+        MAL_PERF_COUNT(object_set_cache_hits);
+        mal_object_field_store(object, site->slot, value);
+        return true;
+    }
+    if (site->prototype != mal_object_prototype(object) ||
+        site->epoch != mal_prototype_chain_epoch) {
+        MAL_PERF_COUNT(object_set_cache_misses);
+        return false;
+    }
+    MAL_PERF_COUNT(object_set_cache_hits);
+    MalShape *child = site->child;
+    u32 count = child->inline_count;
+    mal_object_grow_slots(object, object->shape->inline_count, count);
+    mal_object_field_initialize(object, child, count - 1, value);
+    object->shape = child;
+    mal_gc_card(&object->header, value);
+    mal_gc_card(&object->header, key.value);
+    return true;
+}
+
+static void mal_object_record_add(
+    const MalObject *object, const MalShape *shape, MalKey key
+) {
+    const MalShape *child = object->shape;
+    if (child->inline_count != shape->inline_count + 1 ||
+        child->props[child->inline_count - 1].key != key.value ||
+        child->props[child->inline_count - 1].attrs != (u8) MAL_DEFAULT_DATA_FLAGS) {
+        return;
+    }
+    for (const MalObject *cursor = mal_object_prototype(object); cursor != nullptr;
+         cursor = mal_object_prototype(cursor)) {
+        if (cursor->header.type != MAL_HEAP_OBJECT &&
+            mal_tag_for_heap_type(cursor->header.type) != MAL_VALUE_CALLABLE) {
+            return;
+        }
+    }
+    MAL_PERF_COUNT(object_set_cache_fills);
+    *mal_object_set_site(shape, key.value) = (MalObjectSetSite) {
+        .shape = shape,
+        .key = key.value,
+        .prototype = mal_object_prototype(object),
+        .epoch = mal_prototype_chain_epoch,
+        .child = (MalShape *) child,
+    };
+}
+
+static void mal_object_set_new_own(MalObject *object, MalKey key, MalValue value) {
+    bool cacheable = mal_object_set_is_cacheable(object, key);
+    const MalShape *shape = object->shape;
+    MalPropertyDesc desc = mal_object_data_desc(value, MAL_DEFAULT_DATA_FLAGS);
+    mal_object_define_own(object, key, &desc);
+    if (cacheable) mal_object_record_add(object, shape, key);
+}
+
 bool mal_object_set(MalObject *object, MalKey key, MalValue value) {
     // Reassigning/adding a property on a watched primitive prototype (e.g.
     // `String.prototype.charCodeAt = fn`) invalidates the primitive-method cache.
     if (object->watched_method_proto) {
         mal_invalidate_primitive_method_protector();
+    }
+    if (mal_object_set_is_cacheable(object, key) && mal_object_try_cached_set(object, key, value)) {
+        return true;
     }
     void *resolved_entry;
     MalPropertyResolution resolution =
@@ -857,8 +955,7 @@ bool mal_object_set(MalObject *object, MalKey key, MalValue value) {
             return false;
         }
 
-        MalPropertyDesc desc = mal_object_data_desc(value, MAL_DEFAULT_DATA_FLAGS);
-        mal_object_define_own(object, key, &desc);
+        mal_object_set_new_own(object, key, value);
         return true;
     }
 
@@ -875,8 +972,7 @@ bool mal_object_set(MalObject *object, MalKey key, MalValue value) {
             return false;
         }
 
-        MalPropertyDesc desc = mal_object_data_desc(value, MAL_DEFAULT_DATA_FLAGS);
-        mal_object_define_own(object, key, &desc);
+        mal_object_set_new_own(object, key, value);
         return true;
     }
 
@@ -886,6 +982,14 @@ bool mal_object_set(MalObject *object, MalKey key, MalValue value) {
         if (idx >= 0) {
             u32 slot = object->shape->props[idx].slot;
             mal_object_field_store(object, slot, value);
+            if (mal_object_set_is_cacheable(object, key)) {
+                MAL_PERF_COUNT(object_set_cache_fills);
+                *mal_object_set_site(object->shape, key.value) = (MalObjectSetSite) {
+                    .shape = object->shape,
+                    .key = key.value,
+                    .slot = slot,
+                };
+            }
             return true;
         }
     }
