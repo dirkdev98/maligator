@@ -5,12 +5,19 @@
 
 #include <arpa/inet.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <netdb.h>
+#include <netinet/in.h>
+#include <poll.h>
+#include <sys/time.h>
+#include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/random.h>
 #include <sys/socket.h>
 
+#include "array_buffer_object.h"
 #include "array_object.h"
 #include "ascii.h"
 #include "async_context.h"
@@ -46,6 +53,8 @@ typedef enum NodeDnsKind {
     NODE_DNS_LOOKUP_SERVICE,
     NODE_DNS_REVERSE,
     NODE_DNS_RESOLVE,
+    // A DNS query for one record type other than A/AAAA, sent with res_nsend.
+    NODE_DNS_QUERY,
 } NodeDnsKind;
 
 typedef struct NodeDnsAddress {
@@ -66,6 +75,15 @@ typedef struct NodeDnsJob {
     usize address_count;
     char name[NI_MAXHOST];
     char service[NI_MAXSERV];
+    int rrtype;
+    // Servers from setServers or /etc/resolv.conf, tried in order.
+    struct sockaddr_storage servers[DNS_MAX_SERVERS];
+    socklen_t server_lengths[DNS_MAX_SERVERS];
+    usize server_count;
+    u8 *answer;
+    int answer_length;
+    // c-ares style code for a query that produced no usable response.
+    const char *query_error;
 } NodeDnsJob;
 
 typedef struct NodeDnsPending {
@@ -91,6 +109,7 @@ static MAL_ISOLATE_LOCAL NodeDnsPending *dns_pending;
 static MAL_ISOLATE_LOCAL bool dns_installed;
 static MAL_ISOLATE_LOCAL NodeDnsOrder dns_default_order = NODE_DNS_ORDER_VERBATIM;
 static MAL_ISOLATE_LOCAL char *dns_servers[DNS_MAX_SERVERS];
+static MAL_ISOLATE_LOCAL int dns_server_ports[DNS_MAX_SERVERS];
 static MAL_ISOLATE_LOCAL usize dns_server_count;
 static MAL_ISOLATE_LOCAL bool dns_servers_loaded;
 
@@ -166,19 +185,24 @@ static void dns_error_code(int status, int system_errno, const char **code, int 
     }
 }
 
-/* lib/internal/errors.js DNSException: "<syscall> <code> <hostname>". */
+/* lib/internal/errors.js DNSException: "<syscall> <code>[ <hostname>]", then own errno
+ * (undefined for c-ares codes), code, syscall and a non-empty hostname, in that order. */
 static MalValue dns_exception(MalVm *vm, const char *syscall, const char *code, int errno_value,
     const char *hostname) {
+    if (hostname != nullptr && hostname[0] == '\0') hostname = nullptr;
     char message[512];
     if (hostname != nullptr) snprintf(message, sizeof message, "%s %s %s", syscall, code, hostname);
     else snprintf(message, sizeof message, "%s %s", syscall, code);
-    mal_node_throw_code(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, message, code);
-    MalValue error = vm->completion.value;
-    vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+    MalValue error = dns_string(vm, message);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
     MalRootSpan root;
     mal_gc_root(&root, &error, 1);
+    mal_vm_throw_error_value(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, error);
+    error = vm->completion.value;
+    vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
     if (mal_value_is_object(error)) {
-        if (errno_value != 0) dns_set(vm, error, "errno", mal_value_from_i32(errno_value));
+        dns_set(vm, error, "errno", errno_value != 0 ? mal_value_from_i32(errno_value) : mal_value_new_undefined());
+        dns_set(vm, error, "code", dns_string(vm, code));
         dns_set(vm, error, "syscall", dns_string(vm, syscall));
         if (hostname != nullptr) dns_set(vm, error, "hostname", dns_string(vm, hostname));
     }
@@ -191,6 +215,7 @@ static void dns_job_free(void *data) {
     if (job == nullptr) return;
     free(job->host);
     free(job->addresses);
+    free(job->answer);
     free(job);
 }
 
@@ -260,9 +285,182 @@ static void dns_job_getnameinfo(NodeDnsJob *job) {
     job->system_errno = errno;
 }
 
+static void dns_load_servers(void);
+
+#define DNS_ANSWER_CAPACITY 65536
+#define DNS_QUERY_CAPACITY 512
+// c-ares defaults that Node keeps: a 2 s attempt timeout and 4 tries per server.
+#define DNS_ATTEMPT_TIMEOUT_MS 2000
+#define DNS_TRIES 4
+
+/* ares_query's message: one question with RD set, no EDNS. Names use presentation
+ * form, so "\." and "\DDD" escapes become label bytes. Returns 0 for EBADNAME. */
+static int dns_build_query(const char *name, int type, u16 id, u8 *out) {
+    u8 header[] = {(u8) (id >> 8), (u8) id, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0};
+    memcpy(out, header, sizeof header);
+    usize used = sizeof header;
+    usize label_start = used++;
+    out[label_start] = 0;
+    for (const char *c = name; *c != '\0'; c++) {
+        u8 value = (u8) *c;
+        if (value == '.') {
+            if (out[label_start] == 0) {
+                if (c[1] != '\0' || c != name) return 0;
+                break;
+            }
+            if (c[1] == '\0') break;
+            label_start = used++;
+            out[label_start] = 0;
+            continue;
+        }
+        if (value == '\\' && c[1] != '\0') {
+            if (c[1] >= '0' && c[1] <= '9' && c[2] >= '0' && c[2] <= '9' && c[3] >= '0' && c[3] <= '9') {
+                int code = (c[1] - '0') * 100 + (c[2] - '0') * 10 + (c[3] - '0');
+                if (code > 255) return 0;
+                value = (u8) code;
+                c += 3;
+            } else {
+                value = (u8) *++c;
+            }
+        }
+        if (out[label_start] == 63 || used + 6 > DNS_QUERY_CAPACITY || used - sizeof header >= 254) return 0;
+        out[used++] = value;
+        out[label_start]++;
+    }
+    if (out[label_start] != 0) out[used++] = 0;
+    out[used++] = (u8) (type >> 8);
+    out[used++] = (u8) type;
+    out[used++] = 0;
+    out[used++] = 1;
+    return (int) used;
+}
+
+static int dns_socket(int family, int type) {
+    int fd = socket(family, type, 0);
+    if (fd >= 0) fcntl(fd, F_SETFD, FD_CLOEXEC);
+    return fd;
+}
+
+/* One UDP attempt: the reply with our id, 0 on timeout, -1 with errno on failure. */
+static int dns_exchange_udp(const struct sockaddr *server, socklen_t length, const u8 *query, int query_length,
+    u8 *answer) {
+    int fd = dns_socket(server->sa_family, SOCK_DGRAM);
+    if (fd < 0) return -1;
+    if (connect(fd, server, length) != 0 || send(fd, query, (usize) query_length, 0) != query_length) {
+        int saved = errno;
+        close(fd);
+        errno = saved;
+        return -1;
+    }
+    int result = 0;
+    for (;;) {
+        struct pollfd poller = {.fd = fd, .events = POLLIN};
+        int ready = poll(&poller, 1, DNS_ATTEMPT_TIMEOUT_MS);
+        if (ready < 0 && errno == EINTR) continue;
+        if (ready <= 0) break;
+        ssize_t received = recv(fd, answer, DNS_ANSWER_CAPACITY, 0);
+        if (received < 0) {
+            if (errno == EINTR) continue;
+            result = -1;
+            break;
+        }
+        // Connected UDP only accepts the server's datagrams; a stale id is skipped.
+        if (received >= 12 && answer[0] == query[0] && answer[1] == query[1]) {
+            result = (int) received;
+            break;
+        }
+    }
+    int saved = errno;
+    close(fd);
+    errno = saved;
+    return result;
+}
+
+static bool dns_io_all(int fd, u8 *data, usize length, bool writing) {
+    while (length > 0) {
+        ssize_t done = writing ? send(fd, data, length, 0) : recv(fd, data, length, 0);
+        if (done < 0 && errno == EINTR) continue;
+        if (done <= 0) return false;
+        data += done;
+        length -= (usize) done;
+    }
+    return true;
+}
+
+/* A truncated UDP reply is repeated over TCP, as c-ares does. */
+static int dns_exchange_tcp(const struct sockaddr *server, socklen_t length, const u8 *query, int query_length,
+    u8 *answer) {
+    int fd = dns_socket(server->sa_family, SOCK_STREAM);
+    if (fd < 0) return -1;
+    struct timeval timeout = {.tv_sec = DNS_ATTEMPT_TIMEOUT_MS / 1000, .tv_usec = 0};
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof timeout);
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof timeout);
+    u8 prefix[2] = {(u8) (query_length >> 8), (u8) query_length};
+    int result = -1;
+    if (connect(fd, server, length) == 0 && dns_io_all(fd, prefix, 2, true)
+        && dns_io_all(fd, (u8 *) query, (usize) query_length, true) && dns_io_all(fd, prefix, 2, false)) {
+        usize size = (usize) (prefix[0] << 8 | prefix[1]);
+        if (size >= 12 && dns_io_all(fd, answer, size, false)) result = (int) size;
+    }
+    int saved = errno;
+    close(fd);
+    errno = saved;
+    return result;
+}
+
+/* ares_query semantics: no search list; SERVFAIL, NOTIMP and REFUSED move on to the
+ * next server and are reported when no server does better. */
+static void dns_job_query(NodeDnsJob *job) {
+    u8 query[DNS_QUERY_CAPACITY];
+    u16 id = 0;
+    if (getentropy(&id, sizeof id) != 0) id = (u16) ((uintptr_t) job >> 4);
+    int query_length = dns_build_query(job->host, job->rrtype, id, query);
+    if (query_length == 0) {
+        job->query_error = "EBADNAME";
+        return;
+    }
+    job->answer = malloc(DNS_ANSWER_CAPACITY);
+    if (job->answer == nullptr) {
+        job->query_error = "ENOMEM";
+        return;
+    }
+    if (job->server_count == 0) {
+        struct sockaddr_in *loopback = (struct sockaddr_in *) &job->servers[0];
+        loopback->sin_family = AF_INET;
+        loopback->sin_port = htons(53);
+        loopback->sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        job->server_lengths[0] = sizeof *loopback;
+        job->server_count = 1;
+    }
+    bool refused = false, failed_rcode = false;
+    for (int attempt = 0; attempt < DNS_TRIES; attempt++) {
+        bool timed_out = false;
+        for (usize i = 0; i < job->server_count; i++) {
+            const struct sockaddr *server = (const struct sockaddr *) &job->servers[i];
+            errno = 0;
+            int length = dns_exchange_udp(server, job->server_lengths[i], query, query_length, job->answer);
+            if (length > 0 && (job->answer[2] & 0x02) != 0) {
+                length = dns_exchange_tcp(server, job->server_lengths[i], query, query_length, job->answer);
+            }
+            if (length == 0) timed_out = true;
+            if (length < 0) refused = refused || errno == ECONNREFUSED;
+            if (length <= 0) continue;
+            int rcode = job->answer[3] & 0x0F;
+            job->answer_length = length;
+            if (rcode != 2 && rcode != 4 && rcode != 5) return;
+            failed_rcode = true;
+        }
+        if (failed_rcode || !timed_out) break;
+    }
+    if (failed_rcode) return;
+    job->answer_length = 0;
+    job->query_error = refused ? "ECONNREFUSED" : "ETIMEOUT";
+}
+
 static void dns_job_run(void *data) {
     NodeDnsJob *job = data;
     if (job->kind == NODE_DNS_LOOKUP || job->kind == NODE_DNS_RESOLVE) dns_job_getaddrinfo(job);
+    else if (job->kind == NODE_DNS_QUERY) dns_job_query(job);
     else dns_job_getnameinfo(job);
 }
 
@@ -342,6 +540,278 @@ static i32 dns_success_values(MalVm *vm, NodeDnsPending *state, NodeDnsJob *job,
     return 1;
 }
 
+enum {
+    DNS_T_NS = 2, DNS_T_CNAME = 5, DNS_T_SOA = 6, DNS_T_PTR = 12, DNS_T_MX = 15, DNS_T_TXT = 16,
+    DNS_T_SRV = 33, DNS_T_NAPTR = 35, DNS_T_TLSA = 52, DNS_T_CAA = 257,
+};
+#define DNS_NAME_CAPACITY 1280
+
+static int dns_query_type(MalString *rrtype) {
+    static const struct {
+        const char *name;
+        int type;
+    } types[] = {
+        {"CAA", DNS_T_CAA}, {"CNAME", DNS_T_CNAME}, {"MX", DNS_T_MX}, {"NAPTR", DNS_T_NAPTR},
+        {"NS", DNS_T_NS}, {"PTR", DNS_T_PTR}, {"SOA", DNS_T_SOA}, {"SRV", DNS_T_SRV},
+        {"TLSA", DNS_T_TLSA}, {"TXT", DNS_T_TXT},
+    };
+    for (usize i = 0; i < countof(types); i++) {
+        if (mal_string_equals_ascii(rrtype, types[i].name)) return types[i].type;
+    }
+    return 0;
+}
+
+static u16 dns_u16(const u8 *data) {
+    return (u16) ((data[0] << 8) | data[1]);
+}
+
+static u32 dns_u32(const u8 *data) {
+    return ((u32) data[0] << 24) | ((u32) data[1] << 16) | ((u32) data[2] << 8) | data[3];
+}
+
+/* Expands a possibly compressed name at *offset into presentation form, escaping like
+ * c-ares ('.' and '\\' with a backslash, other unprintable bytes as \DDD). */
+static bool dns_read_name(const u8 *message, usize length, usize *offset, char *out) {
+    usize position = *offset;
+    usize used = 0;
+    bool jumped = false;
+    for (u32 hops = 0;; hops++) {
+        if (position >= length || hops > 128) return false;
+        u8 label = message[position];
+        if ((label & 0xC0) == 0xC0) {
+            if (position + 1 >= length) return false;
+            if (!jumped) *offset = position + 2;
+            jumped = true;
+            position = (usize) ((label & 0x3F) << 8) | message[position + 1];
+            continue;
+        }
+        if ((label & 0xC0) != 0) return false;
+        position++;
+        if (label == 0) break;
+        if (position + label > length) return false;
+        if (used > 0) out[used++] = '.';
+        for (u32 i = 0; i < label; i++) {
+            u8 c = message[position + i];
+            if (used + 5 >= DNS_NAME_CAPACITY) return false;
+            if (c == '.' || c == '\\') {
+                out[used++] = '\\';
+                out[used++] = (char) c;
+            } else if (c < 0x21 || c > 0x7e) {
+                used += (usize) snprintf(out + used, 5, "\\%03u", c);
+            } else {
+                out[used++] = (char) c;
+            }
+        }
+        position += label;
+    }
+    if (!jumped) *offset = position;
+    out[used] = '\0';
+    return true;
+}
+
+static MalValue dns_latin1(MalVm *vm, const u8 *bytes, usize length) {
+    MalString *string = mal_string_new_latin1_copy(&vm->heap, bytes, length);
+    if (string == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
+    return mal_value_from_string(string);
+}
+
+static MalValue dns_number(u32 value) {
+    return value <= INT32_MAX ? mal_value_from_i32((i32) value) : mal_value_from_f64((f64) value);
+}
+
+/* One <character-string>: a length byte and that many bytes. */
+static bool dns_character_string(const u8 *rdata, usize rdlength, usize *offset, const u8 **text,
+    usize *text_length) {
+    if (*offset >= rdlength || *offset + 1 + rdata[*offset] > rdlength) return false;
+    *text_length = rdata[*offset];
+    *text = rdata + *offset + 1;
+    *offset += 1 + *text_length;
+    return true;
+}
+
+/* Builds one Node result value for an answer record (cares_wrap.cc result shapes). */
+static bool dns_record_value(MalVm *vm, const u8 *message, usize length, usize rdata_offset,
+    u16 rdlength, int type, MalValue *out) {
+    const u8 *rdata = message + rdata_offset;
+    char name[DNS_NAME_CAPACITY];
+    usize offset = rdata_offset;
+    switch (type) {
+    case DNS_T_CNAME:
+    case DNS_T_NS:
+    case DNS_T_PTR:
+        if (!dns_read_name(message, length, &offset, name)) return false;
+        *out = dns_string(vm, name);
+        return true;
+    case DNS_T_MX:
+        if (rdlength < 3) return false;
+        offset += 2;
+        if (!dns_read_name(message, length, &offset, name)) return false;
+        *out = mal_value_from_object(mal_intrinsic_new_object(vm));
+        dns_set(vm, *out, "exchange", dns_string(vm, name));
+        dns_set(vm, *out, "priority", mal_value_from_i32(dns_u16(rdata)));
+        dns_set(vm, *out, "type", dns_string(vm, "MX"));
+        return true;
+    case DNS_T_SRV:
+        if (rdlength < 7) return false;
+        offset += 6;
+        if (!dns_read_name(message, length, &offset, name)) return false;
+        *out = mal_value_from_object(mal_intrinsic_new_object(vm));
+        dns_set(vm, *out, "name", dns_string(vm, name));
+        dns_set(vm, *out, "port", mal_value_from_i32(dns_u16(rdata + 4)));
+        dns_set(vm, *out, "priority", mal_value_from_i32(dns_u16(rdata)));
+        dns_set(vm, *out, "weight", mal_value_from_i32(dns_u16(rdata + 2)));
+        dns_set(vm, *out, "type", dns_string(vm, "SRV"));
+        return true;
+    case DNS_T_TXT: {
+        *out = mal_value_from_array_object(mal_intrinsic_new_dense_array(vm, 0));
+        usize position = 0;
+        u32 index = 0;
+        while (position < rdlength) {
+            const u8 *text;
+            usize text_length;
+            if (!dns_character_string(rdata, rdlength, &position, &text, &text_length)) return false;
+            MalValue chunk = dns_latin1(vm, text, text_length);
+            mal_array_object_store(mal_value_to_array_object(*out), mal_key_index(index++), chunk);
+        }
+        return true;
+    }
+    case DNS_T_SOA: {
+        char hostmaster[DNS_NAME_CAPACITY];
+        if (!dns_read_name(message, length, &offset, name)
+            || !dns_read_name(message, length, &offset, hostmaster)
+            || offset + 20 > rdata_offset + rdlength) {
+            return false;
+        }
+        const u8 *numbers = message + offset;
+        *out = mal_value_from_object(mal_intrinsic_new_object(vm));
+        dns_set(vm, *out, "nsname", dns_string(vm, name));
+        dns_set(vm, *out, "hostmaster", dns_string(vm, hostmaster));
+        dns_set(vm, *out, "serial", dns_number(dns_u32(numbers)));
+        dns_set(vm, *out, "refresh", dns_number(dns_u32(numbers + 4)));
+        dns_set(vm, *out, "retry", dns_number(dns_u32(numbers + 8)));
+        dns_set(vm, *out, "expire", dns_number(dns_u32(numbers + 12)));
+        dns_set(vm, *out, "minttl", dns_number(dns_u32(numbers + 16)));
+        dns_set(vm, *out, "type", mal_value_new_undefined());
+        return true;
+    }
+    case DNS_T_NAPTR: {
+        if (rdlength < 4) return false;
+        usize position = 4;
+        const u8 *texts[3];
+        usize lengths[3];
+        for (int i = 0; i < 3; i++) {
+            if (!dns_character_string(rdata, rdlength, &position, &texts[i], &lengths[i])) return false;
+        }
+        offset = rdata_offset + position;
+        if (!dns_read_name(message, length, &offset, name)) return false;
+        *out = mal_value_from_object(mal_intrinsic_new_object(vm));
+        static const char *const keys[] = {"flags", "service", "regexp"};
+        for (int i = 0; i < 3; i++) dns_set(vm, *out, keys[i], dns_latin1(vm, texts[i], lengths[i]));
+        dns_set(vm, *out, "replacement", dns_string(vm, name));
+        dns_set(vm, *out, "order", mal_value_from_i32(dns_u16(rdata)));
+        dns_set(vm, *out, "preference", mal_value_from_i32(dns_u16(rdata + 2)));
+        dns_set(vm, *out, "type", mal_value_new_undefined());
+        return true;
+    }
+    case DNS_T_CAA: {
+        if (rdlength < 2 || 2u + rdata[1] > rdlength || rdata[1] == 0) return false;
+        char tag[256];
+        memcpy(tag, rdata + 2, rdata[1]);
+        tag[rdata[1]] = '\0';
+        *out = mal_value_from_object(mal_intrinsic_new_object(vm));
+        dns_set(vm, *out, "critical", mal_value_from_i32(rdata[0]));
+        dns_set(vm, *out, "type", dns_string(vm, "CAA"));
+        usize value_offset = 2u + rdata[1];
+        dns_set(vm, *out, tag, dns_latin1(vm, rdata + value_offset, rdlength - value_offset));
+        return true;
+    }
+    case DNS_T_TLSA: {
+        if (rdlength < 3) return false;
+        *out = mal_value_from_object(mal_intrinsic_new_object(vm));
+        dns_set(vm, *out, "certUsage", mal_value_from_i32(rdata[0]));
+        dns_set(vm, *out, "selector", mal_value_from_i32(rdata[1]));
+        dns_set(vm, *out, "match", mal_value_from_i32(rdata[2]));
+        MalArrayBufferObject *data = mal_array_buffer_object_new(&vm->heap,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]),
+            (u32) (rdlength - 3), (u32) (rdlength - 3), false, false);
+        if (data == nullptr) {
+            mal_vm_throw_allocation_error(vm);
+            return true;
+        }
+        if (rdlength > 3) memcpy(data->data, rdata + 3, rdlength - 3);
+        dns_set(vm, *out, "data", mal_value_from_object(&data->object));
+        return true;
+    }
+    default:
+        return false;
+    }
+}
+
+/* Parses a query response into the callback value, or names its c-ares error code. */
+static i32 dns_query_values(MalVm *vm, NodeDnsJob *job, MalValue *out, const char **code) {
+    const u8 *message = job->answer;
+    usize length = (usize) job->answer_length;
+    *code = "EBADRESP";
+    if (length < 12) return 0;
+    switch (message[3] & 0x0F) {
+    case 0: break;
+    case 1: *code = "EFORMERR"; return 0;
+    case 2: *code = "ESERVFAIL"; return 0;
+    case 3: *code = "ENOTFOUND"; return 0;
+    case 4: *code = "ENOTIMP"; return 0;
+    case 5: *code = "EREFUSED"; return 0;
+    default: return 0;
+    }
+    u16 questions = dns_u16(message + 4);
+    u16 answers = dns_u16(message + 6);
+    usize offset = 12;
+    char name[DNS_NAME_CAPACITY];
+    for (u16 i = 0; i < questions; i++) {
+        if (!dns_read_name(message, length, &offset, name) || offset + 4 > length) return 0;
+        offset += 4;
+    }
+    MalValue roots[] = {mal_value_from_array_object(mal_intrinsic_new_dense_array(vm, 0)),
+        mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    u32 found = 0;
+    bool ok = true;
+    for (u16 i = 0; i < answers && ok; i++) {
+        if (!dns_read_name(message, length, &offset, name) || offset + 10 > length) {
+            ok = false;
+            break;
+        }
+        int type = dns_u16(message + offset);
+        int klass = dns_u16(message + offset + 2);
+        u16 rdlength = dns_u16(message + offset + 8);
+        offset += 10;
+        if (offset + rdlength > length) {
+            ok = false;
+            break;
+        }
+        if (type == job->rrtype && klass == 1) {
+            ok = dns_record_value(vm, message, length, offset, rdlength, type, &roots[1]);
+            if (ok && vm->completion.kind != MAL_COMPLETION_THROW) {
+                mal_array_object_store(mal_value_to_array_object(roots[0]), mal_key_index(found++), roots[1]);
+            }
+        }
+        offset += rdlength;
+    }
+    i32 count = 0;
+    if (ok && found == 0) {
+        *code = "ENODATA";
+    } else if (ok) {
+        *code = nullptr;
+        out[0] = job->rrtype == DNS_T_SOA ? roots[1] : roots[0];
+        count = 1;
+    }
+    mal_gc_unroot(&root);
+    return count;
+}
+
 static void dns_settle(MalVm *vm, MalValue callback, MalValue promise, MalValue error,
     const MalValue *values, i32 count, bool lookup_object) {
     if (mal_value_is_promise_object(promise)) {
@@ -392,7 +862,14 @@ static bool dns_drain(MalVm *vm) {
     mal_async_context_scope_enter(vm, &scope, state->async_context);
     NodeDnsJob *job = mal_blocking_work_result_data(task.data);
     i32 count = 0;
-    if (task.result == MAL_HOST_TERMINAL_CANCELLED || job == nullptr || job->status != 0) {
+    if (state->kind == NODE_DNS_QUERY && task.result != MAL_HOST_TERMINAL_CANCELLED && job != nullptr) {
+        const char *code = job->query_error;
+        if (code == nullptr) count = dns_query_values(vm, job, roots + 3, &code);
+        if (code != nullptr && vm->completion.kind != MAL_COMPLETION_THROW) {
+            count = 0;
+            roots[2] = dns_exception(vm, state->syscall, code, 0, state->host);
+        }
+    } else if (task.result == MAL_HOST_TERMINAL_CANCELLED || job == nullptr || job->status != 0) {
         const char *code;
         int errno_value;
         dns_error_code(job == nullptr ? EAI_FAIL : job->status,
@@ -801,6 +1278,7 @@ static MalValue dns_resolve_typed(MalVm *vm, MalValue callee, const MalValue *ar
         return mal_value_new_undefined();
     }
     int family = mal_string_equals_ascii(rrtype, "A") ? 4 : mal_string_equals_ascii(rrtype, "AAAA") ? 6 : 0;
+    int query_type = family == 0 ? dns_query_type(rrtype) : 0;
     char *host = dns_c_string(vm, hostname);
     if (host == nullptr) return mal_value_new_undefined();
     char syscall[32];
@@ -823,12 +1301,12 @@ static MalValue dns_resolve_typed(MalVm *vm, MalValue callee, const MalValue *ar
         mal_vm_throw_allocation_error(vm);
         return mal_value_new_undefined();
     }
-    state->kind = NODE_DNS_RESOLVE;
+    state->kind = query_type != 0 ? NODE_DNS_QUERY : NODE_DNS_RESOLVE;
     state->family = family;
     state->ttl = ttl;
     state->callback = promise ? mal_value_new_undefined() : callback;
-    if (family == 0) {
-        // Only A and AAAA records are answered, through the system resolver.
+    if (family == 0 && query_type == 0) {
+        // ANY is not queried: most servers refuse it (RFC 8482).
         MalValue roots[] = {callback, mal_value_new_undefined(), mal_value_new_undefined()};
         MalRootSpan root;
         mal_gc_root(&root, roots, countof(roots));
@@ -863,9 +1341,28 @@ static MalValue dns_resolve_typed(MalVm *vm, MalValue callee, const MalValue *ar
         mal_vm_throw_allocation_error(vm);
         return mal_value_new_undefined();
     }
-    job->kind = NODE_DNS_RESOLVE;
+    job->kind = state->kind;
     job->host = host;
     job->family = family;
+    job->rrtype = query_type;
+    dns_load_servers();
+    for (usize i = 0; i < dns_server_count; i++) {
+        struct sockaddr_storage *storage = &job->servers[job->server_count];
+        if (dns_ip_family(dns_servers[i]) == 6) {
+            struct sockaddr_in6 *server = (struct sockaddr_in6 *) storage;
+            server->sin6_family = AF_INET6;
+            server->sin6_port = htons((u16) dns_server_ports[i]);
+            inet_pton(AF_INET6, dns_servers[i], &server->sin6_addr);
+            job->server_lengths[job->server_count] = sizeof *server;
+        } else {
+            struct sockaddr_in *server = (struct sockaddr_in *) storage;
+            server->sin_family = AF_INET;
+            server->sin_port = htons((u16) dns_server_ports[i]);
+            inet_pton(AF_INET, dns_servers[i], &server->sin_addr);
+            job->server_lengths[job->server_count] = sizeof *server;
+        }
+        job->server_count++;
+    }
     MalValue started = dns_start(vm, job, state, promise);
     if (promise || vm->completion.kind == MAL_COMPLETION_THROW) return started;
     return mal_value_new_undefined();
@@ -878,16 +1375,27 @@ static MalValue dns_resolve_fixed(
     return dns_resolve_typed(vm, callee, args, argc, mal_value_to_string(type));
 }
 
+/* lib/dns.js and lib/internal/dns/promises.js resolve(): the callback form takes a
+ * function in place of rrtype, the promise form defaults an undefined rrtype to 'A'. */
 static MalValue dns_resolve(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
     (void) receiver, (void) new_target;
-    MalValue type = argc > 1 && mal_value_is_string(args[1]) ? args[1]
-        : mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "A"));
-    MalValue rooted[] = {type};
+    bool promise = mal_value_is_truthy(
+        mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 1));
+    MalValue rrtype = argc > 1 ? args[1] : mal_value_new_undefined();
+    MalValue callback = argc > 2 ? args[2] : mal_value_new_undefined();
+    if (!mal_value_is_string(rrtype)) {
+        if ((promise && mal_value_is_undefined(rrtype)) || (!promise && mal_value_is_callable(rrtype))) {
+            callback = rrtype;
+            rrtype = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "A"));
+        } else {
+            mal_node_throw_invalid_arg_type(vm, "rrtype", "of type string", rrtype);
+            return mal_value_new_undefined();
+        }
+    }
+    MalValue rooted[] = {rrtype, callback};
     MalRootSpan root;
-    mal_gc_root(&root, rooted, 1);
-    MalValue shifted[3] = {argc > 0 ? args[0] : mal_value_new_undefined(),
-        argc > 2 ? args[2] : argc > 1 && !mal_value_is_string(args[1]) ? args[1] : mal_value_new_undefined()};
+    mal_gc_root(&root, rooted, countof(rooted));
     static const char *const known[] = {"A", "AAAA", "ANY", "CAA", "CNAME", "MX", "NAPTR", "NS",
         "PTR", "SOA", "SRV", "TLSA", "TXT"};
     bool valid = false;
@@ -902,7 +1410,8 @@ static MalValue dns_resolve(
         snprintf(message, sizeof message, "The argument 'rrtype' is invalid. Received %s", received);
         mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, message, "ERR_INVALID_ARG_VALUE");
     } else {
-        result = dns_resolve_typed(vm, callee, shifted, argc > 1 ? argc - 1 : argc, mal_value_to_string(rooted[0]));
+        MalValue shifted[] = {argc > 0 ? args[0] : mal_value_new_undefined(), rooted[1]};
+        result = dns_resolve_typed(vm, callee, shifted, promise ? 1 : 2, mal_value_to_string(rooted[0]));
     }
     mal_gc_unroot(&root);
     return result;
@@ -915,9 +1424,10 @@ static void dns_load_servers(void) {
     if (file == nullptr) return;
     char line[512];
     while (fgets(line, sizeof line, file) != nullptr && dns_server_count < DNS_MAX_SERVERS) {
-        char address[INET6_ADDRSTRLEN + 16];
+        char address[64];
         if (sscanf(line, " nameserver %63s", address) == 1 && dns_ip_family(address) != 0) {
             dns_servers[dns_server_count] = strdup(address);
+            dns_server_ports[dns_server_count] = 53;
             if (dns_servers[dns_server_count] != nullptr) dns_server_count++;
         }
     }
@@ -933,7 +1443,11 @@ static MalValue dns_get_servers(
     MalRootSpan root;
     mal_gc_root(&root, &result, 1);
     for (usize i = 0; i < dns_server_count; i++) {
-        mal_array_object_store(list, mal_key_index((u32) i), dns_string(vm, dns_servers[i]));
+        char text[INET6_ADDRSTRLEN + 16];
+        bool v6 = dns_ip_family(dns_servers[i]) == 6;
+        if (dns_server_ports[i] == 53) snprintf(text, sizeof text, "%s", dns_servers[i]);
+        else snprintf(text, sizeof text, v6 ? "[%s]:%d" : "%s:%d", dns_servers[i], dns_server_ports[i]);
+        mal_array_object_store(list, mal_key_index((u32) i), dns_string(vm, text));
     }
     mal_gc_unroot(&root);
     return result;
@@ -949,6 +1463,7 @@ static MalValue dns_set_servers(
     }
     u32 length = mal_array_object_length(mal_value_to_array_object(list));
     char *parsed[DNS_MAX_SERVERS] = {0};
+    int ports[DNS_MAX_SERVERS] = {0};
     usize count = 0;
     for (u32 i = 0; i < length; i++) {
         MalValue item;
@@ -961,14 +1476,20 @@ static MalValue dns_set_servers(
         }
         char *text = dns_c_string(vm, item);
         if (text == nullptr) goto failed;
-        // A bracketed "[v6]:port" or "v4:port" keeps only the address, as c-ares stores it.
+        // "[v6]:port" and "v4:port" carry a port; a bare address uses 53.
         char *address = text;
+        int port = 53;
         if (address[0] == '[') {
             address++;
             char *end = strchr(address, ']');
-            if (end != nullptr) *end = '\0';
+            if (end != nullptr) {
+                *end = '\0';
+                if (end[1] == ':') port = atoi(end + 2);
+            }
         } else if (strchr(address, ':') == strrchr(address, ':') && strchr(address, ':') != nullptr) {
-            *strchr(address, ':') = '\0';
+            char *colon = strchr(address, ':');
+            *colon = '\0';
+            port = atoi(colon + 1);
         }
         if (dns_ip_family(address) == 0) {
             char message[320];
@@ -977,12 +1498,18 @@ static MalValue dns_set_servers(
             mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, message, "ERR_INVALID_IP_ADDRESS");
             goto failed;
         }
-        if (count < DNS_MAX_SERVERS) parsed[count++] = strdup(address);
+        if (count < DNS_MAX_SERVERS) {
+            ports[count] = port;
+            parsed[count++] = strdup(address);
+        }
         free(text);
     }
     dns_load_servers();
     for (usize i = 0; i < dns_server_count; i++) free(dns_servers[i]);
-    for (usize i = 0; i < count; i++) dns_servers[i] = parsed[i];
+    for (usize i = 0; i < count; i++) {
+        dns_servers[i] = parsed[i];
+        dns_server_ports[i] = ports[i];
+    }
     dns_server_count = count;
     return mal_value_new_undefined();
 failed:
