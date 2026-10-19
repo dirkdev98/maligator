@@ -732,3 +732,74 @@ console.log(
 	new crypto.Hash("sha1").update("x").digest("hex"),
 	crypto.Hmac("sha256", "k").update("x").digest("hex"),
 );
+
+{
+	const { Readable, Writable, Transform } = await import("node:stream");
+	const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
+	const hash = crypto.createHash("sha256");
+	const events = [];
+	// TODO: add "prefinish" and "close" once node:stream Transforms emit them.
+	for (const name of ["data", "end", "finish"]) {
+		hash.on(name, (chunk) =>
+			events.push(chunk ? `${name}:${chunk.toString("hex").slice(0, 8)}` : name),
+		);
+	}
+	hash.write("ab");
+	hash.end("c");
+	await settle();
+	console.log("hash stream events", events.join(" "));
+
+	const encoded = crypto.createHash("sha256");
+	encoded.setEncoding("hex");
+	const piped = [];
+	Readable.from(["a", "b", "c"])
+		.pipe(encoded)
+		.on("data", (chunk) => piped.push(chunk));
+	await settle();
+	console.log("hash pipe", piped.join(""));
+
+	const finalized = crypto.createHash("sha256");
+	finalized.digest();
+	const order = [];
+	finalized.on("error", (error) => order.push(`error ${error.code} ${error.message}`));
+	finalized.write("x", (error) => order.push(`callback ${error && error.code}`));
+	await settle();
+	console.log("hash write after digest", order.join(" | "));
+
+	const hmac = crypto.createHmac("sha256", "k");
+	const hmacChunks = [];
+	hmac.on("data", (chunk) => hmacChunks.push(chunk));
+	hmac.end("abc");
+	await settle();
+	console.log("hmac stream data", Buffer.concat(hmacChunks).toString("hex").slice(0, 16));
+
+	const key = Buffer.alloc(16, 1);
+	const iv = Buffer.alloc(16, 2);
+	const plain = [];
+	await new Promise((resolve) =>
+		Readable.from([Buffer.from("hello "), Buffer.from("world")])
+			.pipe(crypto.createCipheriv("aes-128-cbc", key, iv))
+			.pipe(crypto.createDecipheriv("aes-128-cbc", key, iv))
+			.on("data", (chunk) => plain.push(chunk))
+			.on("end", resolve),
+	);
+	console.log("cipher pipe roundtrip", Buffer.concat(plain).toString());
+	const broken = crypto.createDecipheriv("aes-128-cbc", key, iv);
+	const brokenError = new Promise((resolve) =>
+		broken.on("error", (error) => resolve(error instanceof Error)),
+	);
+	broken.end(Buffer.alloc(16));
+	console.log("decipher stream error", await brokenError);
+
+	const fresh = crypto.createHash("sha256");
+	console.log(
+		"lazy transform",
+		Object.keys(fresh).includes("_readableState"),
+		fresh instanceof Transform,
+		crypto.createHmac("sha256", "k") instanceof Transform,
+		crypto.createCipheriv("aes-128-cbc", key, iv) instanceof Transform,
+		crypto.createDecipheriv("aes-128-cbc", key, iv) instanceof Transform,
+		crypto.createSign("sha256") instanceof Writable,
+		fresh.update("abc").digest("hex").slice(0, 16),
+	);
+}

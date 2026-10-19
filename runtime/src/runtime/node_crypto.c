@@ -1,3 +1,4 @@
+// Portions derived from Node.js lib/internal/crypto/hash.js, lib/internal/crypto/cipher.js, lib/internal/crypto/keygen.js, lib/internal/streams/lazy_transform.js (MIT); see THIRD_PARTY_NOTICES.md.
 #include "node_crypto.h"
 
 #include <limits.h>
@@ -6511,6 +6512,197 @@ static MalValue crypto_digest_class(
     return value;
 }
 
+/*
+ * lib/internal/streams/lazy_transform.js: Hash, Hmac, Cipheriv and Decipheriv are Transforms
+ * whose stream state appears on first stream use, so update()/digest() never pay for it. The
+ * native stream methods read their state as own properties, so the stream entry points on these
+ * prototypes create it before delegating to Transform.prototype.
+ */
+static const char *const CRYPTO_LAZY_STREAM_METHODS[] = {
+    "write", "end", "pipe", "unpipe", "on", "addListener", "once", "prependListener",
+    "prependOnceListener", "removeListener", "off", "removeAllListeners", "setEncoding", "read",
+    "resume", "pause", "isPaused", "unshift", "cork", "uncork", "destroy", "setDefaultEncoding", "push",
+};
+
+static bool crypto_lazy_stream_init(MalVm *vm, MalValue receiver) {
+    if (!mal_value_is_object(receiver)) return true;
+    MalObject *object = mal_value_to_object(receiver);
+    if (mal_object_get_own(object, mal_intrinsic_string_key(vm, (const byte *) "_readableState")).present) return true;
+    MalPropertyLookup options = mal_object_get_own(object, mal_intrinsic_string_key(vm, (const byte *) "_options"));
+    MalValue roots[] = {receiver, options.present ? options.desc.value : mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalCompletion initialized = mal_vm_call_value(
+        vm, vm->intrinsics[MAL_INTRINSIC_NODE_TRANSFORM_CONSTRUCTOR], roots[0], &roots[1], 1);
+    bool ok = initialized.kind != MAL_COMPLETION_THROW;
+    if (ok) {
+        // Strings reach update() with their encoding instead of being decoded to Buffers first.
+        MalPropertyLookup state = mal_object_get_own(object, mal_intrinsic_string_key(vm, (const byte *) "_writableState"));
+        if (state.present && mal_value_is_object(state.desc.value)) {
+            mal_object_set(mal_value_to_object(state.desc.value),
+                mal_intrinsic_string_key(vm, (const byte *) "decodeStrings"), mal_value_new_boolean(false));
+        }
+    }
+    mal_gc_unroot(&root);
+    return ok;
+}
+
+static MalValue mal_node_crypto_lazy_stream_method(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) new_target;
+    MalValue name = mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 0);
+    MalValue roots[] = {receiver, name, mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalValue result = mal_value_new_undefined();
+    if (crypto_lazy_stream_init(vm, roots[0])
+        && mal_vm_get_property(vm, vm->intrinsics[MAL_INTRINSIC_NODE_TRANSFORM_PROTOTYPE], mal_key_from_value(roots[1]),
+            &roots[2])) {
+        MalCompletion called = mal_vm_call_value(vm, roots[2], roots[0], args, argc);
+        if (called.kind != MAL_COMPLETION_THROW) result = called.value;
+    }
+    mal_gc_unroot(&root);
+    return result;
+}
+
+static void crypto_lazy_call_back(MalVm *vm, MalValue callback, MalValue error) {
+    if (!mal_value_is_callable(callback)) return;
+    (void) mal_vm_call_value(vm, callback, mal_value_new_undefined(), &error, mal_value_is_undefined(error) ? 0 : 1);
+}
+
+static MalValue crypto_lazy_take_error(MalVm *vm) {
+    MalValue error = vm->completion.value;
+    vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+    return error;
+}
+
+static bool crypto_lazy_push(MalVm *vm, MalValue receiver, MalValue chunk) {
+    MalValue push = mal_value_new_undefined();
+    MalValue roots[] = {receiver, chunk, push};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    bool ok = mal_vm_get_property(vm, roots[0], mal_intrinsic_string_key(vm, (const byte *) "push"), &roots[2])
+        && mal_vm_call_value(vm, roots[2], roots[0], &roots[1], 1).kind != MAL_COMPLETION_THROW;
+    mal_gc_unroot(&root);
+    return ok;
+}
+
+/* Hash and Hmac: slot 0 is update, slot 1 digest, as installed (not as later patched). */
+static MalValue mal_node_crypto_digest_transform(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) new_target;
+    MalNativeFunctionObject *self = mal_value_to_native_function_object(callee);
+    MalValue roots[] = {receiver, argc > 2 ? args[2] : mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalValue update_args[] = {argc > 0 ? args[0] : mal_value_new_undefined(), argc > 1 ? args[1] : mal_value_new_undefined()};
+    MalCompletion updated = mal_vm_call_value(vm, mal_native_function_object_get_slot(self, 0), roots[0], update_args, 2);
+    if (updated.kind == MAL_COMPLETION_THROW) {
+        (void) crypto_lazy_take_error(vm);
+        mal_node_throw_code(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, "Hash update failed", "ERR_CRYPTO_HASH_UPDATE_FAILED");
+        roots[2] = crypto_lazy_take_error(vm);
+    }
+    crypto_lazy_call_back(vm, roots[1], roots[2]);
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+static MalValue mal_node_crypto_digest_flush(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) new_target;
+    MalNativeFunctionObject *self = mal_value_to_native_function_object(callee);
+    MalValue roots[] = {receiver, argc > 0 ? args[0] : mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalCompletion digested = mal_vm_call_value(vm, mal_native_function_object_get_slot(self, 1), roots[0], nullptr, 0);
+    if (digested.kind == MAL_COMPLETION_THROW) {
+        roots[2] = crypto_lazy_take_error(vm);
+    } else if (!crypto_lazy_push(vm, roots[0], digested.value)) {
+        roots[2] = crypto_lazy_take_error(vm);
+    }
+    crypto_lazy_call_back(vm, roots[1], roots[2]);
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+/* Cipheriv and Decipheriv: slot 0 is update, slot 1 final. */
+static MalValue mal_node_crypto_cipher_transform(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) new_target;
+    MalNativeFunctionObject *self = mal_value_to_native_function_object(callee);
+    MalValue roots[] = {receiver, argc > 2 ? args[2] : mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalValue update_args[] = {argc > 0 ? args[0] : mal_value_new_undefined(), argc > 1 ? args[1] : mal_value_new_undefined()};
+    MalCompletion updated = mal_vm_call_value(vm, mal_native_function_object_get_slot(self, 0), roots[0], update_args, 2);
+    if (updated.kind == MAL_COMPLETION_THROW || !crypto_lazy_push(vm, roots[0], updated.value)) {
+        roots[2] = crypto_lazy_take_error(vm);
+    }
+    crypto_lazy_call_back(vm, roots[1], roots[2]);
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+static MalValue mal_node_crypto_cipher_flush(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) new_target;
+    MalNativeFunctionObject *self = mal_value_to_native_function_object(callee);
+    MalValue roots[] = {receiver, argc > 0 ? args[0] : mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalCompletion finished = mal_vm_call_value(vm, mal_native_function_object_get_slot(self, 1), roots[0], nullptr, 0);
+    if (finished.kind == MAL_COMPLETION_THROW || !crypto_lazy_push(vm, roots[0], finished.value)) {
+        roots[2] = crypto_lazy_take_error(vm);
+    }
+    crypto_lazy_call_back(vm, roots[1], roots[2]);
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+static void crypto_lazy_transform_prototype(
+    MalVm *vm, MalValue prototype, const char *update_name, const char *finish_name,
+    MalNativeFunctionCallback transform, MalNativeFunctionCallback flush) {
+    if (!mal_value_is_object(prototype)) return;
+    MalObject *object = mal_value_to_object(prototype);
+    MalValue roots[] = {prototype, mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    mal_object_set_prototype(object, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_NODE_TRANSFORM_PROTOTYPE]));
+    MalPropertyFlags hidden = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE;
+    for (usize i = 0; i < countof(CRYPTO_LAZY_STREAM_METHODS); i++) {
+        roots[1] = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) CRYPTO_LAZY_STREAM_METHODS[i]));
+        roots[2] = mal_value_new_undefined();
+        (void) mal_vm_get_property(vm, vm->intrinsics[MAL_INTRINSIC_NODE_TRANSFORM_PROTOTYPE],
+            mal_key_from_value(roots[1]), &roots[2]);
+        i32 length = 0;
+        MalValue length_value = mal_value_new_undefined();
+        if (mal_value_is_callable(roots[2])
+            && mal_vm_get_property(vm, roots[2], mal_intrinsic_string_key(vm, (const byte *) "length"), &length_value)
+            && mal_ops_is_number(length_value)) {
+            length = (i32) mal_ops_number_as_f64(length_value);
+        }
+        roots[3] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(
+            &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+            mal_intrinsic_ascii(vm, (const byte *) CRYPTO_LAZY_STREAM_METHODS[i]), length,
+            mal_node_crypto_lazy_stream_method, &roots[1], 1));
+        mal_intrinsic_define_data(vm, object, (const byte *) CRYPTO_LAZY_STREAM_METHODS[i], roots[3], hidden);
+    }
+    MalValue methods[2];
+    MalPropertyLookup update = mal_object_get_own(object, mal_intrinsic_string_key(vm, (const byte *) update_name));
+    MalPropertyLookup finish = mal_object_get_own(object, mal_intrinsic_string_key(vm, (const byte *) finish_name));
+    methods[0] = update.present ? update.desc.value : mal_value_new_undefined();
+    methods[1] = finish.present ? finish.desc.value : mal_value_new_undefined();
+    roots[1] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+        mal_intrinsic_ascii(vm, (const byte *) "_transform"), 3, transform, methods, 2));
+    mal_intrinsic_define_data(vm, object, (const byte *) "_transform", roots[1], hidden);
+    roots[1] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+        mal_intrinsic_ascii(vm, (const byte *) "_flush"), 1, flush, methods, 2));
+    mal_intrinsic_define_data(vm, object, (const byte *) "_flush", roots[1], hidden);
+    mal_gc_unroot(&root);
+}
+
 /* The flat exports (everything that needs no private-symbol slot). Lengths match
  * Node's, which the fixture pins. */
 static const CryptoExport CRYPTO_EXPORTS[] = {
@@ -6628,6 +6820,14 @@ void mal_host_install_node_crypto(
     crypto_install_webcrypto(vm, module);
     crypto_install_web_globals(vm, module);
     crypto_install_ciphers(vm, module);
+    crypto_lazy_transform_prototype(vm, roots[1], "update", "digest",
+        mal_node_crypto_digest_transform, mal_node_crypto_digest_flush);
+    crypto_lazy_transform_prototype(vm, roots[7], "update", "digest",
+        mal_node_crypto_digest_transform, mal_node_crypto_digest_flush);
+    crypto_lazy_transform_prototype(vm, crypto_cipheriv_prototype, "update", "final",
+        mal_node_crypto_cipher_transform, mal_node_crypto_cipher_flush);
+    crypto_lazy_transform_prototype(vm, crypto_decipheriv_prototype, "update", "final",
+        mal_node_crypto_cipher_transform, mal_node_crypto_cipher_flush);
     roots[2] = crypto_constants_object(vm);
     mal_intrinsic_define_data(vm, module, (const byte *) "constants", roots[2], method_flags);
 

@@ -1173,6 +1173,12 @@ remains a Maligator extension and does not count as global fetch conformance.
       deriveKey/deriveBits, wrapKey, jwk export of secret keys, and
       Crypto/SubtleCrypto methods on their prototypes rather than the instances.
 
+- [ ] crypto: createHash, createHmac and createCipheriv drop their options instead of
+      keeping them as `_options` for lazy stream initialization, so stream options
+      such as `highWaterMark` do not apply; after a stream flushes a hash, update and
+      digest report ERR_CRYPTO_HASH_FINALIZED where Node reports
+      ERR_CRYPTO_HASH_UPDATE_FAILED and digest still answers.
+
 - [ ] crypto: createECDH/ECDH needs elliptic-curve arithmetic that ring does not
       expose (private-key import and export, reusable computeSecret), so it waits on a
       crate decision. X509Certificate: OpenSSL-exact checkIssued (key identifiers and

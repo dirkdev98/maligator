@@ -23,6 +23,11 @@ const NODE_DERIVED: Array<Derivation> = [
 		upstream: "lib/buffer.js, src/node_buffer.cc",
 	},
 	{
+		file: "runtime/src/runtime/node_crypto.c",
+		upstream:
+			"lib/internal/crypto/hash.js, lib/internal/crypto/cipher.js, lib/internal/crypto/keygen.js, lib/internal/streams/lazy_transform.js",
+	},
+	{
 		file: "runtime/src/runtime/node_deep_equal.c",
 		upstream: "lib/internal/util/comparisons.js",
 	},
