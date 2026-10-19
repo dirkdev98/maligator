@@ -90,6 +90,16 @@ export const PERFORMANCE_GLOBALS: ReadonlyArray<string> = [
 /** The node:worker_threads installer, which also defines the messaging globals. */
 export const WORKER_THREADS_INSTALLER_SYMBOL = hostInstallerSymbol("node:worker_threads");
 
+/** The node:http installer, which also defines Node's WebSocket globals. */
+export const HTTP_INSTALLER_SYMBOL = hostInstallerSymbol("node:http");
+
+/** Free WebSocket globals that node:http defines, as Node 26 exposes both. */
+export const WEBSOCKET_GLOBALS: ReadonlyArray<string> = [
+	"WebSocket",
+	"MessageEvent",
+	"CloseEvent",
+];
+
 /** Free messaging globals that node:worker_threads defines. */
 export const WORKER_GLOBALS: ReadonlyArray<string> = [
 	"BroadcastChannel",
@@ -118,6 +128,7 @@ export const HOST_GLOBAL_INSTALLERS: ReadonlyArray<{
 		globals: WORKER_GLOBALS,
 		computedMember: false,
 	},
+	{ installer: HTTP_INSTALLER_SYMBOL, globals: WEBSOCKET_GLOBALS, computedMember: false },
 ];
 
 // path is the one module with a planned default export (`import path from
@@ -1099,7 +1110,9 @@ const HTTP: HostModuleSpec = {
 	id: "node:http",
 	named: [
 		"Agent",
+		"CloseEvent",
 		"METHODS",
+		"MessageEvent",
 		"STATUS_CODES",
 		"IncomingMessage",
 		"OutgoingMessage",
@@ -1116,6 +1129,7 @@ const HTTP: HostModuleSpec = {
 		"setMaxIdleHTTPParsers",
 		"validateHeaderName",
 		"validateHeaderValue",
+		"WebSocket",
 	],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:http"),

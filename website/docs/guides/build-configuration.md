@@ -51,7 +51,9 @@ Callback and promise forms of filesystem `access`, `unlink`, and `rename` run th
 
 `node:net` servers accept connections through the host reactor and hand them out as ordinary `net.Socket` instances, over TCP or Unix domain socket paths. `node:dgram` sends datagrams straight from the caller's buffers. Both resolve host names through `dns.lookup`, and client sockets accept a custom `lookup` function and emit `'lookup'` events. `node:dns` answers `lookup` through the system resolver and sends SRV, TXT, MX, CNAME, NS, PTR, NAPTR, SOA, CAA and TLSA queries itself, to the servers from `setServers()` or `/etc/resolv.conf`.
 
-`node:worker_threads` provides `BroadcastChannel` across the main thread and workers, `setEnvironmentData`/`getEnvironmentData`, and `markAsUntransferable`. `BroadcastChannel`, `MessageChannel` and `MessagePort` are also globals. `locks` and the `MessageEvent` global are not available yet.
+The global `WebSocket` client, with `MessageEvent` and `CloseEvent`, speaks RFC 6455 over the host connections; it connects to numeric hosts and `localhost` for now, without compression.
+
+`node:worker_threads` provides `BroadcastChannel` across the main thread and workers, `setEnvironmentData`/`getEnvironmentData`, and `markAsUntransferable`. `BroadcastChannel`, `MessageChannel` and `MessagePort` are also globals. `locks` is not available yet, and port messages arrive as plain events rather than `MessageEvent` instances.
 
 `node:vm` runs scripts in the current context with the global semantics of indirect eval, and a `Script` parses once. A context from `createContext` is a separate realm: the sandbox's own enumerable properties are copied in before a run, and globals the script created or changed are copied back afterwards. Note that the sandbox's prototype chain, getters and deletions do not reach the script.
 

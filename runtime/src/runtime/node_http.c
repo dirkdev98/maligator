@@ -36,6 +36,7 @@
 #include "typed_array_object.h"
 #include "value_ops.h"
 #include "web_headers_object.h"
+#include "web_websocket.h"
 #include "vm_ops.h"
 
 #define HTTP_VISIBLE \
@@ -5767,6 +5768,7 @@ void mal_host_install_node_http(
 
     mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[0]), (const byte *) "setMaxIdleHTTPParsers", 1,
         http_set_max_idle_parsers);
+    mal_web_websocket_install(vm, mal_value_to_object(roots[0]));
     // Node's default --max-http-header-size.
     mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]), (const byte *) "maxHeaderSize",
         mal_value_from_i32(16384), HTTP_VISIBLE);
