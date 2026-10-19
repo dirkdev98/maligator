@@ -8,6 +8,7 @@
     "console",
     "constants",
     "crypto",
+    "dgram",
     "diagnostics_channel",
     "dns",
     "dns/promises",

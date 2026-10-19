@@ -1290,10 +1290,10 @@ test("parse caches distinguish transformed source from the on-disk module", () =
 });
 
 test("rejects an unknown node:* built-in clearly even when surface.node is on", () => {
-	write("node-unknown.mjs", `import "node:dgram";\n`);
+	write("node-unknown.mjs", `import "node:repl";\n`);
 	expect(() =>
 		buildModuleGraph(path.join(root, "node-unknown.mjs"), { buildConfig: nodeOn }),
-	).toThrow(/unknown node built-in module 'node:dgram'/);
+	).toThrow(/unknown node built-in module 'node:repl'/);
 });
 
 test("canonicalizes a bare ESM path specifier to the host built-in", () => {
@@ -1447,10 +1447,10 @@ test("a literal dynamic import of a supported node:* resolves to its host module
 });
 
 test("a literal dynamic import of an unknown node:* is rejected, not deferred", () => {
-	write("dyn-unknown.mjs", `import("node:dgram");\n`);
+	write("dyn-unknown.mjs", `import("node:repl");\n`);
 	expect(() =>
 		buildModuleGraph(path.join(root, "dyn-unknown.mjs"), { buildConfig: nodeOn }),
-	).toThrow(/unknown node built-in module 'node:dgram'/);
+	).toThrow(/unknown node built-in module 'node:repl'/);
 });
 
 test("a literal dynamic import of node:* is rejected when surface.node is off", () => {

@@ -309,11 +309,11 @@
 	},
 	{
 		"file": "generated/node_builtin_installers.inc",
-		"sha256": "96b663e4b47390d46f172c78ad11f065c33bb3aba40c19aa29d00639f57ddb62"
+		"sha256": "145c4a7666af65015665e68b90e19348ae11658fdba2e5ad218f985a7b8eb7ef"
 	},
 	{
 		"file": "generated/node_builtin_modules.inc",
-		"sha256": "1994f8f7ab4cf17d0ffc0ddc4e64f2726797967977ba88e58668fdc9f0d1c28a"
+		"sha256": "8f6ba8267ce497418e7d3c9bf2785d480a526aab464f808ba6d55f3c55ec773d"
 	},
 	{
 		"file": "generated/primordial_registry.inc",
@@ -349,7 +349,7 @@
 	},
 	{
 		"file": "runtime/host_registry.c",
-		"sha256": "c7bb758c5a06823c6a16626c31e03acb906230b8e7e80a4816acfdbcb1ca3c83"
+		"sha256": "2257a9a02d2f21df0265066e050ca66a1ea0f6ca95e50200eb2b056ec8d7f738"
 	},
 	{
 		"file": "runtime/mal_application.c",
@@ -430,6 +430,14 @@
 	{
 		"file": "runtime/node_crypto.h",
 		"sha256": "f1bc07f044495306085e071069fe5a6dac8db47cced55489cdeac2e7a9ad8727"
+	},
+	{
+		"file": "runtime/node_dgram.c",
+		"sha256": "9cfcc6a2b135d6dda2b2a39273435e42176b906765a9e3028edac6a6d07bda41"
+	},
+	{
+		"file": "runtime/node_dgram.h",
+		"sha256": "6ef238833ff8ea3b0f5372bae5142aa48b27b6915b587626be7745cb886e664e"
 	},
 	{
 		"file": "runtime/node_diagnostics_channel.c",

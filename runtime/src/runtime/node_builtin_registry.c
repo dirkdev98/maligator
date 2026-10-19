@@ -14,6 +14,7 @@
 #include "node_legacy.h"
 #include "node_http.h"
 #include "node_module_api.h"
+#include "node_dgram.h"
 #include "node_net.h"
 #include "node_os.h"
 #include "node_path.h"

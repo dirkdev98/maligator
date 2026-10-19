@@ -1126,6 +1126,13 @@ const READLINE_PROMISES: HostModuleSpec = {
 };
 
 const NET: HostModuleSpec = {
+const DGRAM: HostModuleSpec = {
+	id: "node:dgram",
+	named: ["Socket", "createSocket"],
+	hasDefault: true,
+	installer: hostInstallerSymbol("node:dgram"),
+};
+
 	id: "node:net",
 	named: [
 		"Server",
@@ -1282,6 +1289,7 @@ export const HOST_MODULES: ReadonlyMap<string, HostModuleSpec> = new Map(
 		READLINE,
 		READLINE_PROMISES,
 		NET,
+		DGRAM,
 		OS,
 		STRING_DECODER,
 		ZLIB,

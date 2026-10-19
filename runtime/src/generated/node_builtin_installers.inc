@@ -44,6 +44,7 @@
         {"node:querystring", mal_host_install_node_querystring, true},
         {"node:readline", mal_host_install_node_readline, true},
         {"node:readline/promises", mal_host_install_node_readline_promises, true},
+        {"node:dgram", mal_host_install_node_dgram, true},
         {"node:net", mal_host_install_node_net, true},
         {"node:os", mal_host_install_node_os, true},
         {"node:string_decoder", mal_host_install_node_string_decoder, true},
