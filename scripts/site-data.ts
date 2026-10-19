@@ -467,7 +467,6 @@ function escapeHtml(value: string): string {
 
 const SHAPE_ONLY_NODE_MODULES = new Set([
 	"node:cluster",
-	"node:dns",
 	"node:domain",
 	"node:http2",
 	"node:https",

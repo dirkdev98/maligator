@@ -1,6 +1,8 @@
-import {
+import events, {
 	EventEmitter,
 	addAbortListener,
+	captureRejectionSymbol,
+	getEventListeners,
 	getMaxListeners,
 	on,
 	setMaxListeners,
@@ -9,6 +11,7 @@ import * as fs from "node:fs";
 // Node 26 APIs that popular packages probe or call directly.
 import * as os from "node:os";
 import * as path from "node:path";
+import { cpuUsage, uptime, version } from "node:process";
 
 const lines = [];
 const show = (label, value) => lines.push(`${label} ${JSON.stringify(value)}`);
@@ -104,6 +107,73 @@ try {
 		received.push(value);
 } catch (error) {
 	show("on abort", [error.name, error.code]);
+}
+
+show("process named", [version === process.version, typeof cpuUsage, typeof uptime]);
+show("uptime", [typeof process.uptime(), process.uptime() >= 0]);
+const usage = process.cpuUsage();
+show("cpuUsage", [Object.keys(usage), process.cpuUsage(usage).user >= 0]);
+show("threadCpuUsage", Object.keys(process.threadCpuUsage()));
+show("resourceUsage", Object.keys(process.resourceUsage()));
+show("memory", [typeof process.availableMemory(), process.constrainedMemory() >= 0]);
+show("legacy", [
+	process.debugPort,
+	process.domain,
+	Array.isArray(process.moduleLoadList),
+	process.allowedNodeEnvironmentFlags instanceof Set,
+	typeof process.config.variables,
+]);
+show("sourceMaps", process.sourceMapsEnabled);
+process.setSourceMapsEnabled(true);
+show("sourceMaps set", process.sourceMapsEnabled);
+process.setSourceMapsEnabled(false);
+const refs = [];
+process.ref({ ref: () => refs.push("ref") });
+process.unref({
+	[Symbol.for("nodejs.unref")]: () => refs.push("symbol"),
+	unref: () => refs.push("plain"),
+});
+show("ref", refs);
+try {
+	process.setuid({});
+} catch (error) {
+	show("setuid type", [error.code, error.message]);
+}
+try {
+	process.chdir(5);
+} catch (error) {
+	show("chdir message", error.message);
+}
+show("capture", process.hasUncaughtExceptionCaptureCallback());
+
+const listened = new EventEmitter();
+const listener = () => {};
+listened.on("x", listener);
+const target = new EventTarget();
+target.addEventListener("y", listener);
+show("getEventListeners", [
+	getEventListeners(listened, "x").length,
+	getEventListeners(target, "y")[0] === listener,
+	getEventListeners(target, "z").length,
+]);
+show("events statics", [
+	captureRejectionSymbol === Symbol.for("nodejs.rejection"),
+	events.captureRejections,
+	events.usingDomains,
+	typeof events.init,
+]);
+function Legacy() {
+	EventEmitter.init.call(this);
+}
+Object.setPrototypeOf(Legacy.prototype, EventEmitter.prototype);
+const legacy = new Legacy();
+legacy.on("ping", () => refs.push("pinged"));
+legacy.emit("ping");
+show("init", refs.at(-1));
+try {
+	getEventListeners({}, "x");
+} catch (error) {
+	show("getEventListeners type", [error.code, error.message]);
 }
 
 console.log(lines.join("\n"));

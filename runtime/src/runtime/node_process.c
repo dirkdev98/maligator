@@ -11,6 +11,9 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include <grp.h>
+#include <pwd.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/ioctl.h>
 #include <sys/utsname.h>
@@ -28,6 +31,7 @@
 #include "heap_string.h"
 #include "heap_bigint.h"
 #include "host.h"
+#include "intern_store.h"
 #include "intrinsics.h"
 #include "microtask.h"
 #include "node_events.h"
@@ -37,6 +41,7 @@
 #include "object.h"
 #include "object_ops.h"
 #include "posix_signal.h"
+#include "property_iter.h"
 #include "property_store.h"
 #include "table.h"
 #include "utf8.h"
@@ -60,6 +65,9 @@ static char **mal_process_environ(void) {
     return environ;
 }
 #endif
+
+#define MAL_PROCESS_VISIBLE \
+    (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE)
 
 // Fallback for stripped definitions whose source entry is not retained.
 static const char mal_process_script_placeholder[] = "<compiled>";
@@ -190,8 +198,8 @@ static MalValue mal_process_chdir(
     (void) nt;
     (void) callee;
     if (argc < 1 || !mal_value_is_string(args[0])) {
-        mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            "The \"directory\" argument must be of type string", "ERR_INVALID_ARG_TYPE");
+        mal_node_throw_invalid_arg_type(
+            vm, "directory", "of type string", argc > 0 ? args[0] : mal_value_new_undefined());
         return mal_value_new_undefined();
     }
     usize length;
@@ -966,6 +974,578 @@ static MalValue mal_process_build_stdio(MalVm *vm, int fd) {
     return stream_value;
 }
 
+static u64 mal_process_start_ns;
+
+__attribute__((constructor)) static void mal_process_record_start(void) {
+    mal_process_start_ns = mal_process_monotonic_ns();
+}
+
+static MalValue mal_process_uptime(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) vm, (void) self, (void) args, (void) argc, (void) nt, (void) callee;
+    return mal_value_from_f64((f64) (mal_process_monotonic_ns() - mal_process_start_ns) / 1e9);
+}
+
+static f64 mal_process_timeval_us(struct timeval value) {
+    return (f64) value.tv_sec * 1e6 + (f64) value.tv_usec;
+}
+
+static MalValue mal_process_cpu_result(
+    MalVm *vm, MalValue previous, f64 user, f64 system) {
+    if (!mal_value_is_undefined(previous) && !mal_value_is_null(previous)) {
+        static const char *const fields[] = {"user", "system"};
+        f64 *totals[] = {&user, &system};
+        for (usize i = 0; i < countof(fields); i++) {
+            MalValue field;
+            if (!mal_vm_get_property(vm, previous,
+                    mal_intrinsic_string_key(vm, (const byte *) fields[i]), &field)) {
+                return mal_value_new_undefined();
+            }
+            char name[32];
+            snprintf(name, sizeof name, "prevValue.%s", fields[i]);
+            if (!mal_node_validate_number(vm, field, name)) return mal_value_new_undefined();
+            f64 number = mal_ops_number_as_f64(field);
+            if (number < 0 || !isfinite(number)) {
+                mal_node_throw_out_of_range(vm, name, ">= 0 && <= 9007199254740991", field);
+                return mal_value_new_undefined();
+            }
+            *totals[i] -= number;
+        }
+    }
+    MalValue result = mal_value_from_object(mal_intrinsic_new_object(vm));
+    MalRootSpan root;
+    mal_gc_root(&root, &result, 1);
+    mal_intrinsic_define_data(vm, mal_value_to_object(result), (const byte *) "user",
+        mal_value_from_f64(user), MAL_PROCESS_VISIBLE);
+    mal_intrinsic_define_data(vm, mal_value_to_object(result), (const byte *) "system",
+        mal_value_from_f64(system), MAL_PROCESS_VISIBLE);
+    mal_gc_unroot(&root);
+    return result;
+}
+
+static MalValue mal_process_cpu_usage(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self, (void) nt, (void) callee;
+    struct rusage usage;
+    getrusage(RUSAGE_SELF, &usage);
+    return mal_process_cpu_result(vm, argc > 0 ? args[0] : mal_value_new_undefined(),
+        mal_process_timeval_us(usage.ru_utime), mal_process_timeval_us(usage.ru_stime));
+}
+
+static MalValue mal_process_thread_cpu_usage(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self, (void) nt, (void) callee;
+    f64 user = 0, system = 0;
+#if defined(__APPLE__)
+    thread_basic_info_data_t info;
+    mach_msg_type_number_t count = THREAD_BASIC_INFO_COUNT;
+    mach_port_t thread = mach_thread_self();
+    if (thread_info(thread, THREAD_BASIC_INFO, (thread_info_t) &info, &count) == KERN_SUCCESS) {
+        user = (f64) info.user_time.seconds * 1e6 + (f64) info.user_time.microseconds;
+        system = (f64) info.system_time.seconds * 1e6 + (f64) info.system_time.microseconds;
+    }
+    mach_port_deallocate(mach_task_self(), thread);
+#elif defined(RUSAGE_THREAD)
+    struct rusage usage;
+    getrusage(RUSAGE_THREAD, &usage);
+    user = mal_process_timeval_us(usage.ru_utime);
+    system = mal_process_timeval_us(usage.ru_stime);
+#endif
+    return mal_process_cpu_result(vm, argc > 0 ? args[0] : mal_value_new_undefined(), user, system);
+}
+
+static MalValue mal_process_resource_usage(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self, (void) args, (void) argc, (void) nt, (void) callee;
+    struct rusage usage;
+    getrusage(RUSAGE_SELF, &usage);
+#if defined(__APPLE__)
+    f64 max_rss = (f64) usage.ru_maxrss / 1024;
+#else
+    f64 max_rss = (f64) usage.ru_maxrss;
+#endif
+    const struct {
+        const char *name;
+        f64 value;
+    } fields[] = {
+        {"userCPUTime", mal_process_timeval_us(usage.ru_utime)},
+        {"systemCPUTime", mal_process_timeval_us(usage.ru_stime)},
+        {"maxRSS", max_rss},
+        {"sharedMemorySize", (f64) usage.ru_ixrss},
+        {"unsharedDataSize", (f64) usage.ru_idrss},
+        {"unsharedStackSize", (f64) usage.ru_isrss},
+        {"minorPageFault", (f64) usage.ru_minflt},
+        {"majorPageFault", (f64) usage.ru_majflt},
+        {"swappedOut", (f64) usage.ru_nswap},
+        {"fsRead", (f64) usage.ru_inblock},
+        {"fsWrite", (f64) usage.ru_oublock},
+        {"ipcSent", (f64) usage.ru_msgsnd},
+        {"ipcReceived", (f64) usage.ru_msgrcv},
+        {"signalsCount", (f64) usage.ru_nsignals},
+        {"voluntaryContextSwitches", (f64) usage.ru_nvcsw},
+        {"involuntaryContextSwitches", (f64) usage.ru_nivcsw},
+    };
+    MalValue result = mal_value_from_object(mal_intrinsic_new_object(vm));
+    MalRootSpan root;
+    mal_gc_root(&root, &result, 1);
+    for (usize i = 0; i < countof(fields); i++) {
+        mal_intrinsic_define_data(vm, mal_value_to_object(result), (const byte *) fields[i].name,
+            mal_value_from_f64(fields[i].value), MAL_PROCESS_VISIBLE);
+    }
+    mal_gc_unroot(&root);
+    return result;
+}
+
+static MalValue mal_process_available_memory(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) vm, (void) self, (void) args, (void) argc, (void) nt, (void) callee;
+    f64 available = 0;
+#if defined(__APPLE__)
+    vm_statistics64_data_t stats;
+    mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
+    if (host_statistics64(mach_host_self(), HOST_VM_INFO64, (host_info64_t) &stats, &count)
+        == KERN_SUCCESS) {
+        available = (f64) stats.free_count * (f64) sysconf(_SC_PAGESIZE);
+    }
+#else
+    long pages = sysconf(_SC_AVPHYS_PAGES);
+    if (pages > 0) available = (f64) pages * (f64) sysconf(_SC_PAGESIZE);
+#endif
+    return mal_value_from_f64(available);
+}
+
+/* No cgroup or rlimit constraint is detected, which Node reports as 0. */
+static MalValue mal_process_constrained_memory(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) vm, (void) self, (void) args, (void) argc, (void) nt, (void) callee;
+    return mal_value_from_i32(0);
+}
+
+static MalValue mal_process_abort(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) vm, (void) self, (void) args, (void) argc, (void) nt, (void) callee;
+    fflush(stdout);
+    fflush(stderr);
+    abort();
+}
+
+static MalValue mal_process_really_exit(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self, (void) nt, (void) callee;
+    f64 code = 0;
+    if (argc > 0 && !mal_value_is_undefined(args[0])
+        && !mal_process_exit_code_number(vm, args[0], &code)) {
+        return mal_value_new_undefined();
+    }
+    fflush(stdout);
+    fflush(stderr);
+    if (mal_workers_exit_current(vm, mal_process_status(code))) return mal_value_new_undefined();
+    _exit(mal_process_status(code));
+}
+
+static MalValue mal_process_unsupported(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self, (void) args, (void) argc, (void) nt;
+    MalString *name = mal_vm_callable_name(vm, callee);
+    usize length = 0;
+    byte *utf8 = name == nullptr ? nullptr : mal_string_to_utf8(name, &length);
+    char message[160];
+    snprintf(message, sizeof message, "process.%.*s is not supported by this runtime",
+        (int) length, utf8 == nullptr ? "" : (const char *) utf8);
+    free(utf8);
+    mal_node_throw_code(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, message, "ERR_METHOD_NOT_IMPLEMENTED");
+    return mal_value_new_undefined();
+}
+
+#define MAL_PROCESS_CAPTURE_KEY "_malUncaughtCapture"
+
+static MalValue mal_process_capture_callback(MalVm *vm) {
+    MalValue process = mal_process_object(vm);
+    if (!mal_value_is_object(process)) return mal_value_new_undefined();
+    MalPropertyLookup found = mal_object_get_own(mal_value_to_object(process),
+        mal_intrinsic_string_key(vm, (const byte *) MAL_PROCESS_CAPTURE_KEY));
+    return found.present ? found.desc.value : mal_value_new_undefined();
+}
+
+static MalValue mal_process_set_capture_callback(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self, (void) nt, (void) callee;
+    MalValue callback = argc > 0 ? args[0] : mal_value_new_undefined();
+    if (!mal_value_is_null(callback) && !mal_value_is_callable(callback)) {
+        mal_node_throw_invalid_arg_type(vm, "fn", "of type function or null", callback);
+        return mal_value_new_undefined();
+    }
+    if (!mal_value_is_null(callback) && mal_value_is_callable(mal_process_capture_callback(vm))) {
+        mal_node_throw_code(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+            "`process.setupUncaughtExceptionCapture()` was called while a capture callback "
+            "was already active", "ERR_UNCAUGHT_EXCEPTION_CAPTURE_ALREADY_SET");
+        return mal_value_new_undefined();
+    }
+    MalValue process = mal_process_object(vm);
+    if (mal_value_is_object(process)) {
+        mal_intrinsic_define_data(vm, mal_value_to_object(process),
+            (const byte *) MAL_PROCESS_CAPTURE_KEY, callback,
+            MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    }
+    return mal_value_new_undefined();
+}
+
+static MalValue mal_process_has_capture_callback(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self, (void) args, (void) argc, (void) nt, (void) callee;
+    return mal_value_new_boolean(mal_value_is_callable(mal_process_capture_callback(vm)));
+}
+
+static void mal_process_emit_values(MalVm *vm, const char *event, const MalValue *values, i32 count) {
+    MalValue roots[5] = {mal_process_object(vm)};
+    for (i32 i = 0; i < count && i < 3; i++) roots[2 + i] = values[i];
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    roots[1] = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) event));
+    MalValue emit;
+    if (mal_vm_get_property(vm, roots[0], mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_EMIT), &emit)
+        && mal_value_is_callable(emit)) {
+        mal_vm_call_value(vm, emit, roots[0], roots + 1, 1 + count);
+    }
+    mal_gc_unroot(&root);
+}
+
+/* lib/internal/process/execution.js: an unhandled rejection reaches 'unhandledRejection'
+ * listeners first; otherwise it and every uncaught throw go to the capture callback or
+ * 'uncaughtException', after 'uncaughtExceptionMonitor' has seen it. */
+static bool mal_process_handle_uncaught(
+    MalVm *vm, MalValue error, bool from_rejection, MalValue promise) {
+    MalValue process = mal_process_object(vm);
+    if (!mal_value_is_object(process)) return false;
+    MalValue roots[] = {error, promise, mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    bool handled = false;
+    if (from_rejection && mal_node_events_listener_count(vm, process, "unhandledRejection") > 0) {
+        mal_process_emit_values(vm, "unhandledRejection", roots, 2);
+        handled = vm->completion.kind != MAL_COMPLETION_THROW;
+        goto done;
+    }
+    roots[2] = mal_value_from_string(mal_intrinsic_ascii(
+        vm, (const byte *) (from_rejection ? "unhandledRejection" : "uncaughtException")));
+    MalValue origin_args[] = {roots[0], roots[2]};
+    if (mal_node_events_listener_count(vm, process, "uncaughtExceptionMonitor") > 0) {
+        mal_process_emit_values(vm, "uncaughtExceptionMonitor", origin_args, 2);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
+    }
+    MalValue capture = mal_process_capture_callback(vm);
+    if (mal_value_is_callable(capture)) {
+        mal_vm_call_value(vm, capture, mal_value_new_undefined(), roots, 1);
+        handled = vm->completion.kind != MAL_COMPLETION_THROW;
+    } else if (mal_node_events_listener_count(vm, process, "uncaughtException") > 0) {
+        mal_process_emit_values(vm, "uncaughtException", origin_args, 2);
+        handled = vm->completion.kind != MAL_COMPLETION_THROW;
+    }
+done:
+    mal_gc_unroot(&root);
+    return handled;
+}
+
+static MalValue mal_process_source_maps_enabled(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) vm, (void) self, (void) args, (void) argc, (void) nt;
+    return mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 0);
+}
+
+static MalValue mal_process_set_source_maps_enabled(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self, (void) nt, (void) callee;
+    MalValue value = argc > 0 ? args[0] : mal_value_new_undefined();
+    if (!mal_value_is_boolean(value)) {
+        mal_node_throw_invalid_arg_type(vm, "enabled", "of type boolean", value);
+        return mal_value_new_undefined();
+    }
+    MalValue process = mal_process_object(vm);
+    MalPropertyLookup getter = mal_value_is_object(process)
+        ? mal_object_get_own(mal_value_to_object(process),
+            mal_intrinsic_string_key(vm, (const byte *) "sourceMapsEnabled"))
+        : (MalPropertyLookup) {0};
+    if (getter.present && (getter.desc.flags & MAL_PROPERTY_ACCESSOR) != 0
+        && mal_value_is_native_function_object(getter.desc.getter)) {
+        mal_native_function_object_set_slot(
+            mal_value_to_native_function_object(getter.desc.getter), 0, value);
+    }
+    return mal_value_new_undefined();
+}
+
+/* process.ref/unref(maybeRefable): Node prefers the nodejs.ref/unref symbol hook. */
+static MalValue mal_process_ref_impl(MalVm *vm, MalValue target, bool referenced) {
+    if (!mal_value_is_object(target)) return mal_value_new_undefined();
+    MalValue roots[] = {target, mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalString *symbol_name = mal_intrinsic_ascii(
+        vm, (const byte *) (referenced ? "nodejs.ref" : "nodejs.unref"));
+    MalSymbol *symbol = mal_symbol_registry_find(&vm->symbol_registry, symbol_name);
+    bool called = false;
+    if (symbol != nullptr && mal_vm_get_property(vm, roots[0],
+            mal_key_from_value(mal_value_from_symbol(symbol)), &roots[1])
+        && mal_value_is_callable(roots[1])) {
+        mal_vm_call_value(vm, roots[1], roots[0], nullptr, 0);
+        called = true;
+    }
+    if (!called && vm->completion.kind != MAL_COMPLETION_THROW
+        && mal_vm_get_property(vm, roots[0],
+            mal_intrinsic_string_key(vm, (const byte *) (referenced ? "ref" : "unref")), &roots[1])
+        && mal_value_is_callable(roots[1])) {
+        mal_vm_call_value(vm, roots[1], roots[0], nullptr, 0);
+    }
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+static MalValue mal_process_ref(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self, (void) nt, (void) callee;
+    return mal_process_ref_impl(vm, argc > 0 ? args[0] : mal_value_new_undefined(), true);
+}
+
+static MalValue mal_process_unref(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self, (void) nt, (void) callee;
+    return mal_process_ref_impl(vm, argc > 0 ? args[0] : mal_value_new_undefined(), false);
+}
+
+typedef enum MalProcessIdentity {
+    MAL_PROCESS_SETUID,
+    MAL_PROCESS_SETEUID,
+    MAL_PROCESS_SETGID,
+    MAL_PROCESS_SETEGID,
+} MalProcessIdentity;
+
+/* A numeric id, or a user or group name resolved through the passwd/group databases. */
+static bool mal_process_identity_id(MalVm *vm, MalValue value, bool group, const char *name, u32 *out) {
+    if (mal_ops_is_number(value)) {
+        f64 number;
+        if (!mal_node_validate_integer(vm, value, name, 0, 4294967295.0, &number)) return false;
+        *out = (u32) number;
+        return true;
+    }
+    if (!mal_value_is_string(value)) {
+        mal_node_throw_invalid_arg_type(vm, name, "one of type number or string", value);
+        return false;
+    }
+    usize length = 0;
+    byte *utf8 = mal_string_to_utf8(mal_value_to_string(value), &length);
+    char *text = utf8 == nullptr ? nullptr : realloc(utf8, length + 1);
+    if (text == nullptr) {
+        free(utf8);
+        mal_vm_throw_allocation_error(vm);
+        return false;
+    }
+    text[length] = '\0';
+    bool found = false;
+    if (group) {
+        struct group *entry = getgrnam(text);
+        if (entry != nullptr) {
+            *out = (u32) entry->gr_gid;
+            found = true;
+        }
+    } else {
+        struct passwd *entry = getpwnam(text);
+        if (entry != nullptr) {
+            *out = (u32) entry->pw_uid;
+            found = true;
+        }
+    }
+    if (!found) {
+        char message[320];
+        snprintf(message, sizeof message, "%s identifier does not exist: %s",
+            group ? "Group" : "User", text);
+        mal_node_throw_code(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, message, "ERR_UNKNOWN_CREDENTIAL");
+    }
+    free(text);
+    return found;
+}
+
+static MalValue mal_process_set_identity(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self, (void) nt;
+    MalProcessIdentity kind = (MalProcessIdentity) mal_value_to_i32(
+        mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 0));
+    static const char *const names[] = {"id", "id", "id", "id"};
+    static const char *const syscalls[] = {"setuid", "seteuid", "setgid", "setegid"};
+    bool group = kind == MAL_PROCESS_SETGID || kind == MAL_PROCESS_SETEGID;
+    u32 id;
+    if (!mal_process_identity_id(vm, argc > 0 ? args[0] : mal_value_new_undefined(), group,
+            names[kind], &id)) {
+        return mal_value_new_undefined();
+    }
+    int status = kind == MAL_PROCESS_SETUID ? setuid((uid_t) id)
+        : kind == MAL_PROCESS_SETEUID ? seteuid((uid_t) id)
+        : kind == MAL_PROCESS_SETGID ? setgid((gid_t) id)
+        : setegid((gid_t) id);
+    if (status != 0) mal_node_throw_errno(vm, errno, syscalls[kind], nullptr, nullptr);
+    return mal_value_new_undefined();
+}
+
+static MalValue mal_process_setgroups(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self, (void) nt, (void) callee;
+    MalValue list = argc > 0 ? args[0] : mal_value_new_undefined();
+    if (!mal_value_is_array_object(list)) {
+        mal_node_throw_invalid_arg_type(vm, "groups", "an instance of Array", list);
+        return mal_value_new_undefined();
+    }
+    u32 count = mal_array_object_length(mal_value_to_array_object(list));
+    gid_t *groups = malloc(sizeof(gid_t) * (count == 0 ? 1 : count));
+    if (groups == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
+    for (u32 i = 0; i < count; i++) {
+        MalValue item;
+        char name[32];
+        snprintf(name, sizeof name, "groups[%u]", i);
+        u32 id;
+        if (!mal_vm_get_property(vm, list, mal_key_index(i), &item)
+            || !mal_process_identity_id(vm, item, true, name, &id)) {
+            free(groups);
+            return mal_value_new_undefined();
+        }
+        groups[i] = (gid_t) id;
+    }
+    if (setgroups((int) count, groups) != 0) mal_node_throw_errno(vm, errno, "setgroups", nullptr, nullptr);
+    free(groups);
+    return mal_value_new_undefined();
+}
+
+static MalValue mal_process_initgroups(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self, (void) nt, (void) callee;
+    MalValue user = argc > 0 ? args[0] : mal_value_new_undefined();
+    u32 uid, gid;
+    if (!mal_process_identity_id(vm, user, false, "user", &uid)
+        || !mal_process_identity_id(vm, argc > 1 ? args[1] : mal_value_new_undefined(), true,
+            "extraGroup", &gid)) {
+        return mal_value_new_undefined();
+    }
+    struct passwd *entry = getpwuid((uid_t) uid);
+    if (entry == nullptr) {
+        mal_node_throw_code(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, "User identifier does not exist",
+            "ERR_UNKNOWN_CREDENTIAL");
+        return mal_value_new_undefined();
+    }
+    if (initgroups(entry->pw_name, (int) gid) != 0) {
+        mal_node_throw_errno(vm, errno, "initgroups", nullptr, nullptr);
+    }
+    return mal_value_new_undefined();
+}
+
+static char *mal_process_c_string(MalVm *vm, MalValue value) {
+    MalString *string;
+    if (!mal_vm_to_string(vm, value, &string)) return nullptr;
+    usize length = 0;
+    byte *utf8 = mal_string_to_utf8(string, &length);
+    char *text = utf8 == nullptr ? nullptr : realloc(utf8, length + 1);
+    if (text == nullptr) {
+        free(utf8);
+        mal_vm_throw_allocation_error(vm);
+        return nullptr;
+    }
+    text[length] = '\0';
+    return text;
+}
+
+static void mal_process_free_strings(char **strings) {
+    if (strings == nullptr) return;
+    for (char **cursor = strings; *cursor != nullptr; cursor++) free(*cursor);
+    free(strings);
+}
+
+/* process.execve(file[, args[, env]]) replaces the process image; it only returns by throwing. */
+static MalValue mal_process_execve(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self, (void) nt, (void) callee;
+    MalValue file = argc > 0 ? args[0] : mal_value_new_undefined();
+    MalValue list = argc > 1 ? args[1] : mal_value_new_undefined();
+    MalValue env = argc > 2 ? args[2] : mal_value_new_undefined();
+    if (!mal_value_is_string(file)) {
+        mal_node_throw_invalid_arg_type(vm, "execPath", "of type string", file);
+        return mal_value_new_undefined();
+    }
+    if (!mal_value_is_undefined(list) && !mal_value_is_array_object(list)) {
+        mal_node_throw_invalid_arg_type(vm, "args", "an instance of Array", list);
+        return mal_value_new_undefined();
+    }
+    if (!mal_value_is_undefined(env) && !mal_value_is_object(env)) {
+        mal_node_throw_invalid_arg_type(vm, "env", "of type object", env);
+        return mal_value_new_undefined();
+    }
+    char *path = mal_process_c_string(vm, file);
+    if (path == nullptr) return mal_value_new_undefined();
+    u32 count = mal_value_is_undefined(list) ? 0 : mal_array_object_length(mal_value_to_array_object(list));
+    char **argv = calloc((usize) count + 2, sizeof(char *));
+    char **envp = nullptr;
+    if (argv == nullptr) goto allocation_failed;
+    if (count == 0) {
+        argv[0] = strdup(path);
+        if (argv[0] == nullptr) goto allocation_failed;
+    }
+    for (u32 i = 0; i < count; i++) {
+        MalValue item;
+        if (!mal_vm_get_property(vm, list, mal_key_index(i), &item)) goto failed;
+        argv[i] = mal_process_c_string(vm, item);
+        if (argv[i] == nullptr) goto failed;
+    }
+    if (mal_value_is_object(env)) {
+        MalPropertyIter iter;
+        mal_property_iter_init(&iter, mal_value_to_object(env), MAL_PROPERTY_ITER_ENUMERABLE_OWN_PROPERTY_ORDER);
+        usize capacity = 16, used = 0;
+        envp = calloc(capacity + 1, sizeof(char *));
+        if (envp == nullptr) goto allocation_failed;
+        MalKey key;
+        MalPropertyDesc desc;
+        while (mal_property_iter_next(&iter, &key, &desc)) {
+            if (key.kind == MAL_KEY_SYMBOL || (desc.flags & MAL_PROPERTY_ACCESSOR) != 0) continue;
+            char *name = mal_process_c_string(vm, key.value);
+            char *text = name == nullptr ? nullptr : mal_process_c_string(vm, desc.value);
+            if (text == nullptr) {
+                free(name);
+                goto failed;
+            }
+            if (used == capacity) {
+                char **grown = realloc(envp, sizeof(char *) * (capacity * 2 + 1));
+                if (grown == nullptr) {
+                    free(name);
+                    free(text);
+                    goto allocation_failed;
+                }
+                envp = grown;
+                capacity *= 2;
+            }
+            usize length = strlen(name) + strlen(text) + 2;
+            envp[used] = malloc(length);
+            if (envp[used] == nullptr) {
+                free(name);
+                free(text);
+                goto allocation_failed;
+            }
+            snprintf(envp[used], length, "%s=%s", name, text);
+            envp[++used] = nullptr;
+            free(name);
+            free(text);
+        }
+    }
+    fflush(stdout);
+    fflush(stderr);
+    execve(path, argv, envp != nullptr ? envp : mal_process_environ());
+    mal_node_throw_errno(vm, errno, "execve", path, nullptr);
+    goto failed;
+allocation_failed:
+    mal_vm_throw_allocation_error(vm);
+failed:
+    free(path);
+    mal_process_free_strings(argv);
+    mal_process_free_strings(envp);
+    return mal_value_new_undefined();
+}
+
 void mal_host_install_process(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch) {
     if (mal_node_module_install_cached(vm, "node:process", slots, count)) return;
@@ -999,6 +1579,7 @@ void mal_host_install_process(
         mal_host_register_macrotask_drain(mal_process_drain_signals, true);
         mal_host_register_idle_notify(mal_process_emit_before_exit);
         mal_host_register_exit_notify(mal_process_finish);
+        mal_vm_set_uncaught_handler(mal_process_handle_uncaught);
         mal_process_hooks_registered = true;
     }
 
@@ -1131,6 +1712,93 @@ void mal_host_install_process(
     mal_intrinsic_define_method_n(vm, process, (const byte *) "exit", 1, mal_process_exit);
     mal_intrinsic_define_method_n(vm, process, (const byte *) "kill", 2, mal_process_kill);
     mal_intrinsic_define_method_n(vm, process, (const byte *) "umask", 1, mal_process_umask);
+    static const struct {
+        const char *name;
+        i32 length;
+        MalNativeFunctionCallback callback;
+    } methods[] = {
+        {"uptime", 0, mal_process_uptime},
+        {"cpuUsage", 1, mal_process_cpu_usage},
+        {"threadCpuUsage", 1, mal_process_thread_cpu_usage},
+        {"resourceUsage", 0, mal_process_resource_usage},
+        {"availableMemory", 0, mal_process_available_memory},
+        {"constrainedMemory", 0, mal_process_constrained_memory},
+        {"abort", 0, mal_process_abort},
+        {"reallyExit", 1, mal_process_really_exit},
+        {"setUncaughtExceptionCaptureCallback", 1, mal_process_set_capture_callback},
+        {"hasUncaughtExceptionCaptureCallback", 0, mal_process_has_capture_callback},
+        {"setSourceMapsEnabled", 1, mal_process_set_source_maps_enabled},
+        {"ref", 1, mal_process_ref},
+        {"unref", 1, mal_process_unref},
+        {"setgroups", 1, mal_process_setgroups},
+        {"initgroups", 2, mal_process_initgroups},
+        {"execve", 3, mal_process_execve},
+        {"binding", 1, mal_process_unsupported},
+        {"dlopen", 2, mal_process_unsupported},
+    };
+    for (usize i = 0; i < countof(methods); i++) {
+        mal_intrinsic_define_method_n(vm, process, (const byte *) methods[i].name,
+            methods[i].length, methods[i].callback);
+    }
+    static const char *const identity_setters[] = {"setuid", "seteuid", "setgid", "setegid"};
+    for (usize i = 0; i < countof(identity_setters); i++) {
+        MalValue kind = mal_value_from_i32((i32) i);
+        MalValue setter = mal_value_from_native_function_object(
+            mal_native_function_object_new_with_slots_arity(&vm->heap,
+                mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+                mal_intrinsic_ascii(vm, (const byte *) identity_setters[i]), 1,
+                mal_process_set_identity, &kind, 1));
+        MalRootSpan setter_root;
+        mal_gc_root(&setter_root, &setter, 1);
+        mal_intrinsic_define_data(vm, process, (const byte *) identity_setters[i], setter, data_flags);
+        mal_gc_unroot(&setter_root);
+    }
+    {
+        MalValue disabled = mal_value_new_boolean(false);
+        MalValue getter = mal_value_from_native_function_object(
+            mal_native_function_object_new_with_slots_arity(&vm->heap,
+                mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+                mal_intrinsic_ascii(vm, (const byte *) "get sourceMapsEnabled"), 0,
+                mal_process_source_maps_enabled, &disabled, 1));
+        MalRootSpan getter_root;
+        mal_gc_root(&getter_root, &getter, 1);
+        MalPropertyDesc descriptor = mal_intrinsic_accessor_desc(
+            getter, mal_value_new_undefined(), MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
+        mal_object_define_own(process, mal_intrinsic_string_key(vm, (const byte *) "sourceMapsEnabled"),
+            &descriptor);
+        mal_gc_unroot(&getter_root);
+    }
+    mal_intrinsic_define_data(vm, process, (const byte *) "debugPort", mal_value_from_i32(9229),
+        data_flags);
+    mal_intrinsic_define_data(vm, process, (const byte *) "domain", mal_value_new_null(), data_flags);
+    {
+        MalValue legacy[] = {
+            mal_value_from_array_object(mal_intrinsic_new_dense_array(vm, 0)),
+            mal_value_from_object(mal_intrinsic_new_object(vm)),
+            mal_value_from_object(mal_intrinsic_new_object(vm)),
+            mal_value_from_object(mal_intrinsic_new_object(vm)),
+            mal_value_new_undefined(),
+        };
+        MalRootSpan legacy_root;
+        mal_gc_root(&legacy_root, legacy, countof(legacy));
+        mal_intrinsic_define_data(vm, process, (const byte *) "moduleLoadList", legacy[0], data_flags);
+        mal_intrinsic_define_data(vm, mal_value_to_object(legacy[1]), (const byte *) "target_defaults",
+            legacy[2], data_flags);
+        mal_intrinsic_define_data(vm, mal_value_to_object(legacy[1]), (const byte *) "variables",
+            legacy[3], data_flags);
+        mal_intrinsic_define_data(vm, process, (const byte *) "config", legacy[1], data_flags);
+        MalCompletion flags = mal_vm_construct_value(
+            vm, vm->intrinsics[MAL_INTRINSIC_SET_CONSTRUCTOR], nullptr, 0);
+        if (flags.kind == MAL_COMPLETION_NORMAL) {
+            legacy[4] = flags.value;
+            mal_intrinsic_define_data(vm, process, (const byte *) "allowedNodeEnvironmentFlags",
+                legacy[4], data_flags);
+        } else {
+            vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL,
+                .value = mal_value_new_undefined()};
+        }
+        mal_gc_unroot(&legacy_root);
+    }
     mal_intrinsic_define_method_n(vm, process, (const byte *) "getBuiltinModule", 1,
         mal_process_get_builtin_module);
     MalValue memory = mal_intrinsic_define_method_n(vm, process, (const byte *) "memoryUsage", 0,

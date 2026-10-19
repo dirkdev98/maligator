@@ -15,6 +15,8 @@
 #include "gc.h"
 #include "heap_symbol.h"
 #include "heap_string.h"
+#include "heap_symbol.h"
+#include "intern_store.h"
 #include "intrinsics.h"
 #include "microtask.h"
 #include "object.h"
@@ -25,6 +27,7 @@
 #include "value.h"
 #include "value_ops.h"
 #include "vm_ops.h"
+#include "web_events_object.h"
 
 #define EE_WEC (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE)
 
@@ -1072,6 +1075,56 @@ static MalValue ee_static_get_max_listeners(
     return result;
 }
 
+static MalValue ee_static_get_event_listeners(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target,
+    MalValue callee) {
+    (void) receiver, (void) new_target, (void) callee;
+    MalValue target = argc > 0 ? args[0] : mal_value_new_undefined();
+    MalValue name = argc > 1 ? args[1] : mal_value_new_undefined();
+    if (mal_value_is_event_target_object(target)) {
+        MalEventTargetObject *events = mal_value_to_event_target_object(target);
+        MalArrayObject *result = mal_intrinsic_new_dense_array(vm, 0);
+        MalValue roots[] = {target, name, mal_value_from_array_object(result)};
+        MalRootSpan root;
+        mal_gc_root(&root, roots, countof(roots));
+        u32 length = 0;
+        for (i32 i = 0; i < events->count; i++) {
+            MalEventListener *listener = &events->listeners[i];
+            if (listener->removed || !mal_value_is_string(roots[1])
+                || !mal_string_equals(listener->type, mal_value_to_string(roots[1]))) {
+                continue;
+            }
+            mal_array_object_store(result, mal_key_index(length++), listener->callback);
+        }
+        mal_gc_unroot(&root);
+        return roots[2];
+    }
+    MalValue result = mal_value_new_undefined();
+    if (mal_value_is_object(target)) {
+        MalValue method;
+        if (!mal_vm_get_property(vm, target, ee_name_key(vm, "listeners"), &method)) {
+            return mal_value_new_undefined();
+        }
+        if (mal_value_is_callable(method)) {
+            ee_call_method(vm, target, "listeners", &name, 1, &result);
+            return result;
+        }
+    }
+    mal_node_throw_invalid_arg_type(vm, "emitter", "an instance of EventEmitter or EventTarget", target);
+    return mal_value_new_undefined();
+}
+
+/* EventEmitter.init(opts) is the constructor body, reused by pre-class subclasses. */
+static MalValue ee_static_init(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target,
+    MalValue callee) {
+    (void) new_target, (void) callee;
+    MalCompletion completion = mal_vm_call_value(
+        vm, vm->intrinsics[MAL_INTRINSIC_NODE_EVENT_EMITTER_CONSTRUCTOR], receiver, args, argc);
+    if (completion.kind == MAL_COMPLETION_THROW) vm->completion = completion;
+    return mal_value_new_undefined();
+}
+
 static MalValue ee_abort_listener_dispose(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target,
     MalValue callee) {
@@ -1289,24 +1342,6 @@ static MalValue ee_on_error_listener(
     return mal_value_new_undefined();
 }
 
-static MalValue ee_abort_error(MalVm *vm, MalValue reason) {
-    mal_node_throw_code(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, "The operation was aborted", "ABORT_ERR");
-    MalValue error = vm->completion.value;
-    vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
-    MalValue roots[] = {error, reason};
-    MalRootSpan root;
-    mal_gc_root(&root, roots, countof(roots));
-    if (mal_value_is_object(roots[0])) {
-        mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]), (const byte *) "name",
-            mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "AbortError")),
-            MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
-        mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]), (const byte *) "cause",
-            roots[1], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
-    }
-    mal_gc_unroot(&root);
-    return roots[0];
-}
-
 static MalValue ee_on_abort_listener(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target,
     MalValue callee) {
@@ -1315,7 +1350,7 @@ static MalValue ee_on_abort_listener(
     MalValue reason = mal_value_new_undefined();
     mal_vm_get_property(vm, mal_native_function_object_get_slot(hub, EE_ON_SIGNAL),
         ee_name_key(vm, "reason"), &reason);
-    ee_on_fail(vm, hub, ee_abort_error(vm, reason));
+    ee_on_fail(vm, hub, mal_node_abort_error(vm, reason));
     return mal_value_new_undefined();
 }
 
@@ -1414,7 +1449,7 @@ static MalValue ee_static_on(
             if (!mal_vm_get_property(vm, hub_slots[EE_ON_SIGNAL], ee_name_key(vm, "reason"), &roots[1]))
                 goto failure;
             vm->completion = (MalCompletion) {
-                .kind = MAL_COMPLETION_THROW, .value = ee_abort_error(vm, roots[1])};
+                .kind = MAL_COMPLETION_THROW, .value = mal_node_abort_error(vm, roots[1])};
             goto failure;
         }
     }
@@ -1590,12 +1625,26 @@ void mal_host_install_node_events(
         {"setMaxListeners", 0, ee_static_set_max_listeners},
         {"getMaxListeners", 1, ee_static_get_max_listeners},
         {"addAbortListener", 2, ee_add_abort_listener},
+        {"getEventListeners", 2, ee_static_get_event_listeners},
+        {"init", 1, ee_static_init},
     };
     for (usize i = 0; i < countof(statics); i++) {
         roots[8] = ee_new_function(vm, statics[i].name, statics[i].length, statics[i].callback);
         mal_intrinsic_define_data(vm, (MalObject *) constructor, (const byte *) statics[i].name,
             roots[8], EE_WEC);
     }
+    MalString *rejection_name = mal_intrinsic_ascii(vm, (const byte *) "nodejs.rejection");
+    MalSymbol *rejection = mal_symbol_registry_find(&vm->symbol_registry, rejection_name);
+    if (rejection == nullptr) {
+        rejection = mal_symbol_registry_insert(
+            &vm->symbol_registry, mal_symbol_new(&vm->heap, rejection_name));
+    }
+    mal_intrinsic_define_data(vm, (MalObject *) constructor, (const byte *) "captureRejectionSymbol",
+        mal_value_from_symbol(rejection), EE_WEC);
+    mal_intrinsic_define_data(vm, (MalObject *) constructor, (const byte *) "captureRejections",
+        mal_value_new_boolean(false), EE_WEC);
+    mal_intrinsic_define_data(vm, (MalObject *) constructor, (const byte *) "usingDomains",
+        mal_value_new_boolean(false), EE_WEC);
     mal_intrinsic_define_accessor_n(vm, (MalObject *) constructor,
         ee_name_key(vm, "defaultMaxListeners"),
         (const byte *) "get", 0, ee_get_default_max_listeners,

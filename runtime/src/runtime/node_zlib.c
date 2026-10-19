@@ -1271,9 +1271,14 @@ void mal_host_install_node_zlib(
         snprintf(index, sizeof index, "%d", codes[i].value);
         mal_intrinsic_define_data(vm, mal_value_to_object(roots[CONSTANTS]), (const byte *) codes[i].name,
             mal_value_from_i32(codes[i].value), MAL_PROPERTY_ENUMERABLE);
-        mal_intrinsic_define_data(vm, mal_value_to_object(roots[CONSTANTS]), (const byte *) index,
+        // Non-negative codes are array-index keys, which string-keyed defines would not produce.
+        MalPropertyDesc name = mal_intrinsic_data_desc(
             mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) codes[i].name)),
             MAL_PROPERTY_ENUMERABLE);
+        mal_object_define_own(mal_value_to_object(roots[CONSTANTS]),
+            codes[i].value >= 0 ? mal_key_index((u32) codes[i].value)
+                : mal_intrinsic_string_key(vm, (const byte *) index),
+            &name);
     }
     mal_intrinsic_define_data(vm, mal_value_to_object(roots[MODULE]), (const byte *) "codes",
         roots[CONSTANTS], ZLIB_VISIBLE);

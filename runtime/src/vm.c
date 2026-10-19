@@ -3597,8 +3597,37 @@ static void mal_vm_print_thrown(MalVm *vm, MalValue value, const byte *prefix) {
     fprintf(stderr, "\n");
 }
 
-void mal_vm_report_uncaught(MalVm *vm) {
+static MalVmUncaughtHandler mal_vm_uncaught_handler;
+
+void mal_vm_set_uncaught_handler(MalVmUncaughtHandler handler) {
+    mal_vm_uncaught_handler = handler;
+}
+
+/* Hands `error` to the handler with no throw pending; false leaves `error` (or the
+ * handler's own throw) pending. */
+static bool mal_vm_offer_uncaught(MalVm *vm, MalValue error, bool from_rejection, MalValue promise) {
+    if (mal_vm_uncaught_handler == nullptr || vm->errors_forwarded) {
+        vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_THROW, .value = error};
+        return false;
+    }
+    MalValue roots[] = {error, promise};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+    bool handled = mal_vm_uncaught_handler(vm, roots[0], from_rejection, roots[1]);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) handled = false;
+    else if (!handled) vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_THROW, .value = roots[0]};
+    mal_gc_unroot(&root);
+    return handled;
+}
+
+bool mal_vm_report_uncaught(MalVm *vm) {
+    if (mal_vm_offer_uncaught(vm, vm->completion.value, false, mal_value_new_undefined())) {
+        return true;
+    }
     mal_vm_print_thrown(vm, vm->completion.value, "Uncaught ");
+    vm->uncaught_reported = true;
+    return false;
 }
 
 void mal_vm_note_unhandled_rejection(MalVm *vm, MalValue promise) {
@@ -3628,7 +3657,16 @@ void mal_vm_report_unhandled_rejections(MalVm *vm) {
                     .kind = MAL_COMPLETION_THROW, .value = promise->result};
                 break;
             }
-            mal_vm_print_thrown(vm, promise->result, "Uncaught (in promise) ");
+            if (mal_vm_uncaught_handler == nullptr && !vm->host_node) {
+                mal_vm_print_thrown(vm, promise->result, "Uncaught (in promise) ");
+                continue;
+            }
+            // Node's default --unhandled-rejections=throw: an unconsumed rejection is fatal.
+            promise->is_handled = true;
+            if (mal_vm_offer_uncaught(vm, promise->result, true, promise_value)) continue;
+            mal_vm_print_thrown(vm, vm->completion.value, "Uncaught (in promise) ");
+            vm->uncaught_reported = true;
+            break;
         }
     }
     vm->unhandled_count = 0;

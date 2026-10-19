@@ -302,6 +302,12 @@ static bool mal_host_has_referenced_work(MalVm *vm) {
         || atomic_load_explicit(&host->reactor.wake_pending, memory_order_acquire);
 }
 
+/* A macrotask's throw goes to the uncaught handler once; true when the loop may continue. */
+static bool mal_host_recover_uncaught(MalVm *vm) {
+    if (vm->uncaught_reported || vm->errors_forwarded) return false;
+    return mal_vm_report_uncaught(vm);
+}
+
 void mal_host_run_event_loop_until(MalVm *vm, bool (*stop)(MalVm *, void *), void *data) {
     mal_gc_set_mutator_busy(vm, true);
     // Tracks whether the loop did anything since the last idle notification, so a
@@ -314,13 +320,13 @@ void mal_host_run_event_loop_until(MalVm *vm, bool (*stop)(MalVm *, void *), voi
     MalHost *host = mal_host(vm);
     for (;;) {
         // A prior macrotask's uncaught throw must survive the next microtask checkpoint.
-        if (vm->completion.kind == MAL_COMPLETION_THROW) break;
+        if (vm->completion.kind == MAL_COMPLETION_THROW && !mal_host_recover_uncaught(vm)) break;
         if (mal_gc_terminating()) break;
         if (mal_host_termination_check != nullptr && mal_host_termination_check(vm)) break;
         mal_vm_drain_microtasks(vm);
         if (stop != nullptr && stop(vm, data)) break;
         if (!mal_vm_check_entry_evaluation(vm)) break;
-        if (vm->completion.kind == MAL_COMPLETION_THROW) break;
+        if (vm->completion.kind == MAL_COMPLETION_THROW && !mal_host_recover_uncaught(vm)) break;
         if (mal_host_termination_check != nullptr && mal_host_termination_check(vm)) break;
         if (mal_host_run_priority_macrotask(vm)) {
             progressed = true;

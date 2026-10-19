@@ -266,13 +266,35 @@ void mal_node_throw_out_of_range(MalVm *vm, const char *name, const char *range,
     mal_node_throw_code(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, message, "ERR_OUT_OF_RANGE");
 }
 
-MalValue mal_node_inspect_custom_symbol(MalVm *vm) {
-    MalString *key = mal_intrinsic_ascii(vm, (const byte *) "nodejs.util.inspect.custom");
-    MalSymbol *symbol = mal_symbol_registry_find(&vm->symbol_registry, key);
+MalValue mal_node_registered_symbol(MalVm *vm, const char *key) {
+    MalString *description = mal_intrinsic_ascii(vm, (const byte *) key);
+    MalSymbol *symbol = mal_symbol_registry_find(&vm->symbol_registry, description);
     if (symbol == nullptr) {
-        symbol = mal_symbol_registry_insert(&vm->symbol_registry, mal_symbol_new(&vm->heap, key));
+        symbol = mal_symbol_registry_insert(
+            &vm->symbol_registry, mal_symbol_new(&vm->heap, description));
     }
     return mal_value_from_symbol(symbol);
+}
+
+MalValue mal_node_inspect_custom_symbol(MalVm *vm) {
+    return mal_node_registered_symbol(vm, "nodejs.util.inspect.custom");
+}
+
+MalValue mal_node_abort_error(MalVm *vm, MalValue cause) {
+    mal_node_throw_code(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, "The operation was aborted", "ABORT_ERR");
+    MalValue roots[] = {vm->completion.value, cause};
+    vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    if (mal_value_is_object(roots[0])) {
+        mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]), (const byte *) "name",
+            mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "AbortError")),
+            MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+        mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]), (const byte *) "cause",
+            roots[1], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    }
+    mal_gc_unroot(&root);
+    return roots[0];
 }
 
 bool mal_node_validate_number(MalVm *vm, MalValue value, const char *name) {

@@ -27,8 +27,14 @@ void mal_node_throw_invalid_arg_type(
 /** ERR_OUT_OF_RANGE; `range` is the phrase after "It must be", such as ">= 0 and <= 3". */
 void mal_node_throw_out_of_range(MalVm *vm, const char *name, const char *range, MalValue actual);
 
+/** Symbol.for(key), registering it on first use. */
+MalValue mal_node_registered_symbol(MalVm *vm, const char *key);
+
 /** Symbol.for("nodejs.util.inspect.custom"), the key of custom util.inspect hooks. */
 MalValue mal_node_inspect_custom_symbol(MalVm *vm);
+
+/** Node's AbortError ("The operation was aborted", code ABORT_ERR) with `cause`, returned unthrown. */
+MalValue mal_node_abort_error(MalVm *vm, MalValue cause);
 
 /** Node's validateNumber: a number primitive, without coercion. */
 bool mal_node_validate_number(MalVm *vm, MalValue value, const char *name);

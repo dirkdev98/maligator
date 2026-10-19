@@ -1868,6 +1868,8 @@ typedef struct MalVm {
     MalValue entry_async_promise;
     // Workers fail on uncaught asynchronous errors and forward the reason to their parent.
     bool errors_forwarded;
+    // The pending throw was already printed as uncaught, so the event loop only stops.
+    bool uncaught_reported;
 
     MalSymbolRegistry symbol_registry;
     // Shapes and caches borrow these canonical pointers for the VM lifetime.
@@ -2525,8 +2527,21 @@ void mal_vm_note_unhandled_rejection(MalVm *vm, MalValue promise);
 /** Report (to stderr) any still-unhandled rejected promises, then clear the list. */
 void mal_vm_report_unhandled_rejections(MalVm *vm);
 
-/** Print the pending throw completion to stderr the way an uncaught throw is. */
-void mal_vm_report_uncaught(MalVm *vm);
+/**
+ * A host's process-level handler for an uncaught throw (from_rejection false) or an
+ * unhandled rejection of `promise`. It returns true when it consumed the error and
+ * execution continues; it may leave a new throw pending instead.
+ */
+typedef bool (*MalVmUncaughtHandler)(MalVm *vm, MalValue error, bool from_rejection, MalValue promise);
+
+void mal_vm_set_uncaught_handler(MalVmUncaughtHandler handler);
+
+/**
+ * Offer the pending throw completion to the uncaught handler; when it is not consumed,
+ * print it to stderr the way an uncaught throw is and keep it pending. Returns true when
+ * the handler consumed it and the completion is normal again.
+ */
+bool mal_vm_report_uncaught(MalVm *vm);
 
 MalCallable *mal_vm_create_callable(MalVm *vm, i32 function_index);
 
