@@ -1243,12 +1243,14 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
 - [ ] node:stream: `removeListener('readable')` does not re-evaluate
       readableListening (Node's updateReadableListening), and 'close' after destroy is
       emitted synchronously from the destroy callback rather than on the next tick.
-      `pipeline` and `stream/promises.pipeline` with async generator function stages
-      and async iterable sources.
+      Middle generator stages in pipeline receive the previous Readable itself, where
+      Node wraps it with fromReadable, and pipeline takes no web streams yet.
 
-- [ ] node:stream: `Duplex.from` (async generator functions, async functions,
-      iterables, promises, web streams, `{ readable, writable }` pairs), then function
-      and iterable stages in `compose`; and `pipeline` with web streams.
+- [ ] node:stream: `Duplex.from` (lib/internal/streams/duplexify.js: async generator
+      functions, async functions, iterables, promises, web streams,
+      `{ readable, writable }` pairs, Blob), then route compose's function and
+      iterable stages and pipeline's other non-stream stages through it, removing both
+      ERR_METHOD_NOT_IMPLEMENTED branches.
 
 - [ ] node:url: `url.format` should `querystring.stringify` an object `query` when
       `search` is absent, and format WHATWG URL objects with its options argument.
