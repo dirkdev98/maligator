@@ -5688,19 +5688,6 @@
 			"decisions": []
 		},
 		{
-			"id": "[\"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\\\"node:async_hooks\\\"].asyncWrapProviders\",\"JSUDPWRAP\"]",
-			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:async_hooks\"].asyncWrapProviders",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:async_hooks\"].asyncWrapProviders",
-				"mal_host_install_node_async_hooks:asyncWrapProviders"
-			],
-			"key": "JSUDPWRAP",
-			"kind": "data",
-			"operations": [],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
 			"id": "[\"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\\\"node:async_hooks\\\"].asyncWrapProviders\",\"MESSAGEPORT\"]",
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:async_hooks\"].asyncWrapProviders",
 			"ownerPaths": [
