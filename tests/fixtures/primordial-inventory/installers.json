@@ -329,7 +329,7 @@
 	},
 	{
 		"file": "intrinsics.h",
-		"sha256": "6c2a35647c46553dd6f03b29b204266a231cec8a493416bea9da6b0c939b4c6c"
+		"sha256": "2d13fce1affa6ddc41aa8c4a0543a4ddebae49e9f706a2adf3aff30b2f8b50ec"
 	},
 	{
 		"file": "object_ops.c",
@@ -437,7 +437,7 @@
 	},
 	{
 		"file": "runtime/node_dgram.c",
-		"sha256": "9cfcc6a2b135d6dda2b2a39273435e42176b906765a9e3028edac6a6d07bda41"
+		"sha256": "aae3a4809d7a3da84f81211630789e7be94aa2c78ba35b2ee7deef3ef15a78f0"
 	},
 	{
 		"file": "runtime/node_dgram.h",
@@ -453,11 +453,11 @@
 	},
 	{
 		"file": "runtime/node_dns.c",
-		"sha256": "d9df48471a740d5ed17e0a80dca7f12e156a864506bbb2a2fc313afeb01b9eda"
+		"sha256": "a6cdd6f3bc25d0163c99f70c3df084f914c540dd68b8dbdfc21ab5d63e0994ee"
 	},
 	{
 		"file": "runtime/node_dns.h",
-		"sha256": "87f4d980a992f075480570ef294988c8261bc6918e303982de9c2479dc52655b"
+		"sha256": "a2f452a33e0ce05a3b5f92b7c6d8faf9ea0b7e69ddbe8f8e53b9e2c97e6425c3"
 	},
 	{
 		"file": "runtime/node_domain.c",
@@ -477,7 +477,7 @@
 	},
 	{
 		"file": "runtime/node_fs.c",
-		"sha256": "4b69c402bcac43f872c5356d917a8154e3672013a5144d2e04ab17306fee316f"
+		"sha256": "723047f2c6106f2f55f148441c1e48802409deeb97a771af68a4afd6e298837f"
 	},
 	{
 		"file": "runtime/node_fs.h",
@@ -541,7 +541,7 @@
 	},
 	{
 		"file": "runtime/node_module_api.c",
-		"sha256": "cf3631743b7973b12cd01291ee812c2bd7598a51703b2a4a84aa055d4a2fe006"
+		"sha256": "4200940b9ce608089dac4b24eb19eb3eeb4557af1b7a2c0c5462bec2d0c8632e"
 	},
 	{
 		"file": "runtime/node_module_api.h",
@@ -549,7 +549,7 @@
 	},
 	{
 		"file": "runtime/node_net.c",
-		"sha256": "21fcab213846a03c3c9823468fbce1b30271494dd103127239d4a7f8b5e210d6"
+		"sha256": "ba0b4de70faa4c60abb35df2d4f561b85a26748dc1e7c57d75c47b1ccfff40bc"
 	},
 	{
 		"file": "runtime/node_net.h",
