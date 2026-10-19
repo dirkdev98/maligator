@@ -146,6 +146,18 @@ int mal_posix_fs_sync_fd(int fd);
 int mal_posix_fs_datasync_fd(int fd);
 int mal_posix_fs_truncate_fd(int fd, i64 length);
 
+/* Descriptor and no-follow metadata updates. A uid or gid of UINT32_MAX keeps the
+ * current owner, matching chown(2)'s (uid_t) -1. */
+int mal_posix_fs_fchmod(int fd, u32 mode);
+int mal_posix_fs_chown(const char *path, u32 uid, u32 gid, bool follow);
+int mal_posix_fs_fchown(int fd, u32 uid, u32 gid);
+int mal_posix_fs_futimes(int fd,
+    i64 atime_seconds, i64 atime_nanoseconds,
+    i64 mtime_seconds, i64 mtime_nanoseconds);
+int mal_posix_fs_lutimes(const char *path,
+    i64 atime_seconds, i64 atime_nanoseconds,
+    i64 mtime_seconds, i64 mtime_nanoseconds);
+
 /* stat(2) `path` into `*out` (follows symlinks). Returns 0 or an errno. */
 int mal_posix_fs_stat(const char *path, MalPosixStat *out);
 
@@ -176,12 +188,17 @@ void mal_posix_fs_free_dirents(MalPosixDirent *entries, usize count);
  * missing parent and treat an already-existing directory as success (mkdir -p /
  * fs.mkdirSync({recursive:true})). Returns 0 or an errno. */
 int mal_posix_fs_mkdir(const char *path, bool recursive);
+/* mkdir with an explicit mode. A recursive call that creates anything stores the
+ * malloc-owned first created prefix in `*out_first_created` when it is non-null. */
+int mal_posix_fs_mkdir_mode(const char *path, bool recursive, u32 mode, char **out_first_created);
 int mal_posix_fs_rmdir(const char *path);
 int mal_posix_fs_sleep_milliseconds(i64 milliseconds);
 
 /* The additional synchronous operations used by native compiler caches. String
  * results are malloc-owned and must be freed by the caller. */
 int mal_posix_fs_copy_file(const char *source, const char *destination);
+/* copyFile with Node's COPYFILE_EXCL (1) refusing an existing destination. */
+int mal_posix_fs_copy_file_mode(const char *source, const char *destination, u32 mode);
 int mal_posix_fs_realpath(const char *path, char **out_path);
 // Returns the owned attempted path on syscall failure too; allocation failure leaves it null.
 int mal_posix_fs_mkdtemp(const char *prefix, char **out_path);

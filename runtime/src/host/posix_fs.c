@@ -449,6 +449,40 @@ int mal_posix_fs_datasync_fd(int fd) {
 #endif
 }
 
+int mal_posix_fs_fchmod(int fd, u32 mode) {
+    return fchmod(fd, (mode_t) mode) == 0 ? 0 : errno;
+}
+
+int mal_posix_fs_chown(const char *path, u32 uid, u32 gid, bool follow) {
+    int result = follow ? chown(path, (uid_t) uid, (gid_t) gid)
+        : lchown(path, (uid_t) uid, (gid_t) gid);
+    return result == 0 ? 0 : errno;
+}
+
+int mal_posix_fs_fchown(int fd, u32 uid, u32 gid) {
+    return fchown(fd, (uid_t) uid, (gid_t) gid) == 0 ? 0 : errno;
+}
+
+int mal_posix_fs_futimes(int fd,
+    i64 atime_seconds, i64 atime_nanoseconds,
+    i64 mtime_seconds, i64 mtime_nanoseconds) {
+    struct timespec times[2] = {
+        { .tv_sec = (time_t) atime_seconds, .tv_nsec = (long) atime_nanoseconds },
+        { .tv_sec = (time_t) mtime_seconds, .tv_nsec = (long) mtime_nanoseconds },
+    };
+    return futimens(fd, times) == 0 ? 0 : errno;
+}
+
+int mal_posix_fs_lutimes(const char *path,
+    i64 atime_seconds, i64 atime_nanoseconds,
+    i64 mtime_seconds, i64 mtime_nanoseconds) {
+    struct timespec times[2] = {
+        { .tv_sec = (time_t) atime_seconds, .tv_nsec = (long) atime_nanoseconds },
+        { .tv_sec = (time_t) mtime_seconds, .tv_nsec = (long) mtime_nanoseconds },
+    };
+    return utimensat(AT_FDCWD, path, times, AT_SYMLINK_NOFOLLOW) == 0 ? 0 : errno;
+}
+
 int mal_posix_fs_truncate_fd(int fd, i64 length) {
     int result;
     do {
@@ -614,8 +648,12 @@ int mal_posix_fs_sleep_milliseconds(i64 milliseconds) {
 }
 
 int mal_posix_fs_mkdir(const char *path, bool recursive) {
+    return mal_posix_fs_mkdir_mode(path, recursive, 0777, nullptr);
+}
+
+int mal_posix_fs_mkdir_mode(const char *path, bool recursive, u32 mode, char **out_first_created) {
     if (!recursive) {
-        if (mkdir(path, 0777) != 0) {
+        if (mkdir(path, (mode_t) mode) != 0) {
             return errno;
         }
         return 0;
@@ -636,11 +674,12 @@ int mal_posix_fs_mkdir(const char *path, bool recursive) {
     // Create each prefix in turn. EEXIST is success only when that prefix really
     // is a directory; accepting a regular file would incorrectly make the final
     // component of mkdirSync(file, { recursive: true }) succeed.
+    char *first_created = nullptr;
     for (usize i = 1; i <= len; i++) {
         if (buf[i] == '/' || buf[i] == '\0') {
             char saved = buf[i];
             buf[i] = '\0';
-            if (mkdir(buf, 0777) != 0) {
+            if (mkdir(buf, (mode_t) mode) != 0) {
                 int err = errno;
                 struct stat st;
                 if (err == EEXIST && stat(buf, &st) != 0) {
@@ -649,17 +688,30 @@ int mal_posix_fs_mkdir(const char *path, bool recursive) {
                     buf[i] = saved;
                     continue;
                 }
+                free(first_created);
                 free(buf);
                 return err;
+            }
+            if (first_created == nullptr && out_first_created != nullptr) {
+                first_created = strdup(buf);
+                if (first_created == nullptr) {
+                    free(buf);
+                    return ENOMEM;
+                }
             }
             buf[i] = saved;
         }
     }
     free(buf);
+    if (out_first_created != nullptr) *out_first_created = first_created;
     return 0;
 }
 
 int mal_posix_fs_copy_file(const char *source, const char *destination) {
+    return mal_posix_fs_copy_file_mode(source, destination, 0);
+}
+
+int mal_posix_fs_copy_file_mode(const char *source, const char *destination, u32 mode) {
     int source_fd = open(source, O_RDONLY);
     if (source_fd < 0) {
         return errno;
@@ -670,7 +722,8 @@ int mal_posix_fs_copy_file(const char *source, const char *destination) {
         close(source_fd);
         return err;
     }
-    int destination_fd = open(destination, O_WRONLY | O_CREAT | O_TRUNC, st.st_mode & 0777);
+    int destination_fd = open(destination,
+        O_WRONLY | O_CREAT | ((mode & 1) != 0 ? O_EXCL : O_TRUNC), st.st_mode & 0777);
     if (destination_fd < 0) {
         int err = errno;
         close(source_fd);
