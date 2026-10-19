@@ -304,10 +304,6 @@ MalString *mal_native_function_object_name(const MalNativeFunctionObject *functi
     return function->name;
 }
 
-MalNativeFunctionCallback mal_native_function_object_callback(const MalNativeFunctionObject *function) {
-    return function->callback;
-}
-
 bool mal_native_function_object_is_constructor(const MalNativeFunctionObject *function) {
     return function->is_constructor;
 }

@@ -222,10 +222,11 @@ MalNativeFunctionObject *mal_native_function_object_new_with_slots_arity_keys(
  */
 MalString *mal_native_function_object_name(const MalNativeFunctionObject *function);
 
-/**
- * Return the callback carried by a native function object.
- */
-MalNativeFunctionCallback mal_native_function_object_callback(const MalNativeFunctionObject *function);
+static inline MalNativeFunctionCallback mal_native_function_object_callback(
+    const MalNativeFunctionObject *function
+) {
+    return function->callback;
+}
 
 /**
  * Whether the native function implements [[Construct]].
