@@ -105,6 +105,25 @@ static MalValue mal_builtin_set_construct(
         mal_vm_callee_realm(vm, roots[1]) == vm->current_realm;
 #endif
     bool direct_adder = direct_set_adder || direct_weak_adder;
+    MalArrayValuesDeferredCursor array_cursor;
+    // The builtin adder runs no code, so nothing can observe the ArrayIterator this skips.
+    if (direct_set_adder && mal_vm_array_values_deferred_begin(vm, args[0], &array_cursor)) {
+        record.iterator = args[0];
+        (void) mal_set_object_reserve(
+            set, mal_array_object_length(mal_value_to_array_object(record.iterator)));
+        while (true) {
+            bool done;
+            if (!mal_vm_array_values_deferred_step(
+                    vm, record.iterator, &array_cursor, &roots[2], &done)) {
+                goto done;
+            }
+            if (done) {
+                ret = roots[0];
+                goto done;
+            }
+            mal_set_object_add(set, roots[2]);
+        }
+    }
     if (!mal_vm_get_iterator(vm, args[0], &record)) {
         goto done;
     }
