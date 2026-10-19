@@ -10,10 +10,19 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <dirent.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#if defined(__APPLE__)
+#include <sys/event.h>
+#elif defined(__linux__)
+#include <sys/inotify.h>
+#endif
 
 #include "ascii.h"
 #include "async_context.h"
 #include "array_object.h"
+#include "builtin_iterator.h"
 #include "builtin_data_view.h"
 #include "builtin_date.h"
 #include "builtin_promise.h"
@@ -35,6 +44,7 @@
 #include "object_ops.h"
 #include "posix_fs.h" // host layer: the POSIX syscalls + errno results
 #include "property_store.h"
+#include "reactor.h"
 #include "promise_object.h"
 #include "table.h"
 #include "utf8.h"
@@ -6755,6 +6765,935 @@ static const struct {
     {"lchownSync", 3, NODE_FS_JOB_LCHOWN, true},
 };
 
+#define NODE_FS_WATCH_EVENTS 32
+// kqueue needs an open descriptor per watched entry, so large directories only report renames.
+#define NODE_FS_WATCH_CHILD_LIMIT 256
+
+typedef struct NodeFsWatchEvent {
+    MalValue result;
+    struct NodeFsWatchEvent *next;
+} NodeFsWatchEvent;
+
+typedef struct NodeFsWatcher {
+    MalVm *vm;
+    MalHost *host;
+    MalValue receiver;
+    MalAsyncContext *async_context;
+#if MAL_REALMS
+    MalRealm *realm;
+#endif
+    MalHostHandle operation;
+    MalOp read_op;
+    int fd;
+    int target_fd;
+    char *path;
+    char *basename;
+    char **entries;
+    int *entry_fds;
+    usize entry_count;
+    bool directory;
+    bool buffer_names;
+    bool closed;
+    bool unreferenced;
+    bool iterator;
+    MalValue pending;
+    NodeFsWatchEvent *queue_head;
+    NodeFsWatchEvent *queue_tail;
+    MalValue abort_reason;
+    bool aborted;
+    struct NodeFsWatcher *next;
+} NodeFsWatcher;
+
+typedef struct NodeFsStatWatcher {
+    MalVm *vm;
+    MalValue receiver;
+    MalValue stats_proto;
+    char *path;
+    MalPosixStat previous;
+    i64 timer;
+    bool initially_missing;
+    struct NodeFsStatWatcher *next;
+} NodeFsStatWatcher;
+
+// Watchers and their drain registration belong to this mutator's isolate; installed on first use.
+static MAL_ISOLATE_LOCAL NodeFsWatcher *node_fs_watchers;
+static MAL_ISOLATE_LOCAL NodeFsStatWatcher *node_fs_stat_watchers;
+static MAL_ISOLATE_LOCAL MalValue node_fs_watcher_proto;
+static MAL_ISOLATE_LOCAL MalValue node_fs_stat_watcher_proto;
+static MAL_ISOLATE_LOCAL bool node_fs_watch_installed;
+
+static MalValue node_fs_watch_ascii(MalVm *vm, const char *text) {
+    return mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) text));
+}
+
+static void node_fs_watch_call(MalVm *vm, MalValue receiver, const char *name, MalValue *args, i32 argc) {
+    MalValue roots[] = {receiver, mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, 2);
+    if (mal_vm_get_property(vm, roots[0], mal_intrinsic_string_key(vm, (const byte *) name), &roots[1])) {
+        mal_vm_call_value(vm, roots[1], roots[0], args, argc);
+    }
+    mal_gc_unroot(&root);
+}
+
+static void node_fs_watch_listen(MalVm *vm, MalValue receiver, const char *event, MalValue callback) {
+    if (!mal_value_is_callable(callback)) return;
+    MalValue args[] = {node_fs_watch_ascii(vm, event), callback};
+    MalRootSpan root;
+    mal_gc_root(&root, args, 2);
+    node_fs_watch_call(vm, receiver, "on", args, 2);
+    mal_gc_unroot(&root);
+}
+
+static void node_fs_watch_scan_roots(MalVm *vm, void *data) {
+    (void) data;
+    if (mal_value_is_object(node_fs_watcher_proto)) mal_gc_mark_value(node_fs_watcher_proto);
+    if (mal_value_is_object(node_fs_stat_watcher_proto)) mal_gc_mark_value(node_fs_stat_watcher_proto);
+    for (NodeFsWatcher *state = node_fs_watchers; state != nullptr; state = state->next) {
+        if (state->vm != vm) continue;
+        mal_gc_mark_value(state->receiver);
+        mal_gc_mark_value(state->pending);
+        mal_gc_mark_value(state->abort_reason);
+        mal_gc_mark_value(mal_async_internal_value((MalHeapHeader *) state->async_context));
+        for (NodeFsWatchEvent *event = state->queue_head; event != nullptr; event = event->next) {
+            mal_gc_mark_value(event->result);
+        }
+    }
+    for (NodeFsStatWatcher *state = node_fs_stat_watchers; state != nullptr; state = state->next) {
+        if (state->vm != vm) continue;
+        mal_gc_mark_value(state->receiver);
+        mal_gc_mark_value(state->stats_proto);
+    }
+}
+
+static NodeFsWatcher *node_fs_watcher_find(MalValue receiver) {
+    for (NodeFsWatcher *state = node_fs_watchers; state != nullptr; state = state->next) {
+        if (state->receiver == receiver) return state;
+    }
+    return nullptr;
+}
+
+static void node_fs_watcher_free(NodeFsWatcher *state) {
+    NodeFsWatcher **link = &node_fs_watchers;
+    while (*link != nullptr && *link != state) link = &(*link)->next;
+    if (*link == state) *link = state->next;
+    for (usize i = 0; i < state->entry_count; i++) {
+        if (state->entry_fds != nullptr && state->entry_fds[i] >= 0) close(state->entry_fds[i]);
+        free(state->entries[i]);
+    }
+    free(state->entries);
+    free(state->entry_fds);
+    while (state->queue_head != nullptr) {
+        NodeFsWatchEvent *event = state->queue_head;
+        state->queue_head = event->next;
+        free(event);
+    }
+    free(state->path);
+    free(state);
+}
+
+#if defined(__APPLE__)
+static int node_fs_watch_compare(const void *left, const void *right) {
+    return strcmp(*(char *const *) left, *(char *const *) right);
+}
+
+static bool node_fs_watch_list(const char *path, char ***out, usize *count) {
+    DIR *dir = opendir(path);
+    *out = nullptr;
+    *count = 0;
+    if (dir == nullptr) return false;
+    usize capacity = 0;
+    for (struct dirent *entry = readdir(dir); entry != nullptr; entry = readdir(dir)) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
+        if (*count == capacity) {
+            capacity = capacity == 0 ? 16 : capacity * 2;
+            char **grown = realloc(*out, capacity * sizeof(char *));
+            if (grown == nullptr) break;
+            *out = grown;
+        }
+        char *name = strdup(entry->d_name);
+        if (name == nullptr) break;
+        (*out)[(*count)++] = name;
+    }
+    closedir(dir);
+    if (*count > 1) qsort(*out, *count, sizeof(char *), node_fs_watch_compare);
+    return true;
+}
+#endif
+
+static void node_fs_watch_ready(void *data) {
+    NodeFsWatcher *state = data;
+    if (state->unreferenced) state->host->reactor.unreferenced_ops--;
+    (void) mal_host_operation_progress(&state->host->tasks, state->operation, nullptr, nullptr);
+}
+
+static bool node_fs_watch_arm(NodeFsWatcher *state) {
+    state->read_op = (MalOp) {.fd = state->fd, .interest = MAL_IO_READ,
+        .waker = {.fn = node_fs_watch_ready, .data = state}};
+    if (!mal_reactor_add_op(&state->host->reactor, &state->read_op)) return false;
+    if (state->unreferenced) state->host->reactor.unreferenced_ops++;
+    return true;
+}
+
+static void node_fs_watch_disarm(NodeFsWatcher *state) {
+    if (state->read_op.active && state->unreferenced) state->host->reactor.unreferenced_ops--;
+    (void) mal_reactor_cancel_op(&state->host->reactor, &state->read_op);
+}
+
+static void node_fs_watch_emit(MalVm *vm, NodeFsWatcher *state, const char *type, const char *name) {
+    MalValue values[] = {node_fs_watch_ascii(vm, "change"), node_fs_watch_ascii(vm, type),
+        mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, values, countof(values));
+    if (state->buffer_names) {
+        usize length = strlen(name);
+        byte *bytes = malloc(length == 0 ? 1 : length);
+        if (bytes != nullptr) memcpy(bytes, name, length);
+        values[2] = bytes == nullptr ? mal_value_new_null() : mal_node_buffer_from_owned_bytes(vm, bytes, length);
+    } else {
+        values[2] = node_fs_string_from_cstr(vm, name);
+    }
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        mal_gc_unroot(&root);
+        return;
+    }
+    if (!state->iterator) {
+        node_fs_watch_call(vm, state->receiver, "emit", values, 3);
+    } else {
+        MalObject *event = mal_intrinsic_new_object(vm);
+        values[3] = mal_value_from_object(event);
+        mal_intrinsic_define_data(vm, event, (const byte *) "eventType", values[1], NODE_FS_VISIBLE);
+        mal_intrinsic_define_data(vm, event, (const byte *) "filename", values[2], NODE_FS_VISIBLE);
+        values[3] = mal_vm_create_iter_result(vm, values[3], false);
+        if (mal_value_is_object(state->pending)) {
+            MalPromiseObject *promise = mal_value_to_promise_object(state->pending);
+            state->pending = mal_value_new_undefined();
+            mal_promise_fulfill(vm, promise, values[3]);
+        } else {
+            NodeFsWatchEvent *queued = calloc(1, sizeof(NodeFsWatchEvent));
+            if (queued != nullptr) {
+                queued->result = values[3];
+                if (state->queue_tail != nullptr) state->queue_tail->next = queued;
+                else state->queue_head = queued;
+                state->queue_tail = queued;
+            }
+        }
+    }
+    mal_gc_unroot(&root);
+}
+
+#if defined(__APPLE__)
+static int node_fs_watch_child(NodeFsWatcher *state, const char *name, usize watched) {
+    if (watched >= NODE_FS_WATCH_CHILD_LIMIT) return -1;
+    int fd = openat(state->target_fd, name, O_EVTONLY | O_CLOEXEC | O_NOFOLLOW);
+    if (fd < 0) return -1;
+    struct stat st;
+    struct kevent change;
+    EV_SET(&change, fd, EVFILT_VNODE, EV_ADD | EV_CLEAR, NOTE_WRITE | NOTE_EXTEND | NOTE_ATTRIB, 0,
+        (void *) (uintptr_t) (fd + 1));
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || kevent(state->fd, &change, 1, nullptr, 0, nullptr) < 0) {
+        close(fd);
+        return -1;
+    }
+    return fd;
+}
+
+static void node_fs_watch_rescan(MalVm *vm, NodeFsWatcher *state, bool announce) {
+    char **entries;
+    usize count;
+    (void) node_fs_watch_list(state->path, &entries, &count);
+    int *fds = count == 0 ? nullptr : malloc(count * sizeof(int));
+    if (count > 0 && fds == nullptr) {
+        for (usize i = 0; i < count; i++) free(entries[i]);
+        free(entries);
+        return;
+    }
+    usize left = 0, right = 0, watched = 0;
+    while (left < state->entry_count || right < count) {
+        int order = left == state->entry_count ? 1 : right == count ? -1
+            : strcmp(state->entries[left], entries[right]);
+        if (order == 0) {
+            fds[right] = state->entry_fds[left];
+            if (fds[right] >= 0) watched++;
+            left++;
+            right++;
+            continue;
+        }
+        bool active = announce && !state->closed && vm->completion.kind != MAL_COMPLETION_THROW;
+        if (order < 0) {
+            if (state->entry_fds[left] >= 0) close(state->entry_fds[left]);
+            if (active) node_fs_watch_emit(vm, state, "rename", state->entries[left]);
+            left++;
+        } else {
+            fds[right] = node_fs_watch_child(state, entries[right], watched);
+            if (fds[right] >= 0) watched++;
+            if (active) node_fs_watch_emit(vm, state, "rename", entries[right]);
+            right++;
+        }
+    }
+    for (usize i = 0; i < state->entry_count; i++) free(state->entries[i]);
+    free(state->entries);
+    free(state->entry_fds);
+    state->entries = entries;
+    state->entry_fds = fds;
+    state->entry_count = count;
+}
+
+static const char *node_fs_watch_child_name(const NodeFsWatcher *state, int fd) {
+    for (usize i = 0; i < state->entry_count; i++) {
+        if (state->entry_fds[i] == fd) return state->entries[i];
+    }
+    return nullptr;
+}
+#endif
+
+static void node_fs_watch_receive(MalVm *vm, NodeFsWatcher *state) {
+#if defined(__APPLE__)
+    struct kevent events[NODE_FS_WATCH_EVENTS];
+    struct timespec zero = {0};
+    int ready = kevent(state->fd, nullptr, 0, events, NODE_FS_WATCH_EVENTS, &zero);
+    for (int i = 0; i < ready && !state->closed && vm->completion.kind != MAL_COMPLETION_THROW; i++) {
+        u32 flags = events[i].fflags;
+        if (events[i].udata != nullptr) {
+            const char *name = node_fs_watch_child_name(state, (int) ((uintptr_t) events[i].udata - 1));
+            if (name != nullptr) node_fs_watch_emit(vm, state, "change", name);
+            continue;
+        }
+        if (state->directory && (flags & NOTE_WRITE) != 0) node_fs_watch_rescan(vm, state, true);
+        if ((flags & (NOTE_DELETE | NOTE_RENAME | NOTE_REVOKE)) != 0) {
+            node_fs_watch_emit(vm, state, "rename", state->basename);
+        } else if (!state->directory && (flags & (NOTE_WRITE | NOTE_EXTEND | NOTE_ATTRIB)) != 0) {
+            node_fs_watch_emit(vm, state, "change", state->basename);
+        }
+    }
+#elif defined(__linux__)
+    _Alignas(struct inotify_event) char buffer[4096];
+    ssize_t length = read(state->fd, buffer, sizeof(buffer));
+    for (ssize_t offset = 0; offset < length && !state->closed && vm->completion.kind != MAL_COMPLETION_THROW;) {
+        const struct inotify_event *event = (const struct inotify_event *) (buffer + offset);
+        offset += (ssize_t) (sizeof(struct inotify_event) + event->len);
+        const char *name = event->len > 0 ? event->name : state->basename;
+        if ((event->mask & (IN_CREATE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO | IN_DELETE_SELF
+                | IN_MOVE_SELF)) != 0) {
+            node_fs_watch_emit(vm, state, "rename", name);
+        } else if ((event->mask & (IN_MODIFY | IN_ATTRIB)) != 0) {
+            node_fs_watch_emit(vm, state, "change", name);
+        }
+    }
+#endif
+    if (!state->closed) (void) node_fs_watch_arm(state);
+}
+
+static bool node_fs_watch_drain(MalVm *vm) {
+    MalHost *host = mal_host(vm);
+    if (host == nullptr || mal_host_tasks_pending(&host->tasks) == 0) return false;
+    MalHostTask peek;
+    if (!mal_host_peek_task(&host->tasks, &peek)) return false;
+    NodeFsWatcher *state = node_fs_watchers;
+    while (state != nullptr && (state->vm != vm || state->operation != peek.operation)) state = state->next;
+    if (state == nullptr) return false;
+    MalHostTask task;
+    if (!mal_host_next_task(&host->tasks, &task)) return false;
+    (void) mal_host_task_take_data(&host->tasks, &task);
+    if (task.kind == MAL_HOST_TASK_TERMINAL) {
+        // An iterator outlives its handle until next() has consumed the buffered events or the abort.
+        if (!state->iterator || (state->queue_head == nullptr && !state->aborted)) node_fs_watcher_free(state);
+        else state->operation = 0;
+    } else if (!state->closed) {
+#if MAL_REALMS
+        MalRealm *saved_realm = vm->current_realm;
+        mal_realm_switch(vm, state->realm);
+#endif
+        MalAsyncContextScope scope;
+        mal_async_context_scope_enter(vm, &scope, state->async_context);
+        node_fs_watch_receive(vm, state);
+        mal_async_context_scope_exit(vm, &scope);
+#if MAL_REALMS
+        mal_realm_switch(vm, saved_realm);
+#endif
+    }
+    mal_host_task_release(&host->tasks, &task);
+    return true;
+}
+
+static int node_fs_watch_open(NodeFsWatcher *state) {
+    MalPosixStat st;
+    int error = mal_posix_fs_stat(state->path, &st);
+    if (error != 0) return error;
+    state->directory = (st.mode & S_IFMT) == S_IFDIR;
+#if defined(__APPLE__)
+    state->target_fd = open(state->path, O_EVTONLY | O_CLOEXEC);
+    if (state->target_fd < 0) return errno;
+    state->fd = kqueue();
+    if (state->fd < 0) return errno;
+    (void) fcntl(state->fd, F_SETFD, FD_CLOEXEC);
+    struct kevent change;
+    EV_SET(&change, state->target_fd, EVFILT_VNODE, EV_ADD | EV_CLEAR,
+        NOTE_WRITE | NOTE_EXTEND | NOTE_ATTRIB | NOTE_DELETE | NOTE_RENAME | NOTE_REVOKE, 0, nullptr);
+    if (kevent(state->fd, &change, 1, nullptr, 0, nullptr) < 0) return errno;
+    if (state->directory) node_fs_watch_rescan(nullptr, state, false);
+#elif defined(__linux__)
+    state->fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+    if (state->fd < 0) return errno;
+    if (inotify_add_watch(state->fd, state->path, IN_ATTRIB | IN_CREATE | IN_MODIFY | IN_DELETE | IN_DELETE_SELF
+            | IN_MOVE_SELF | IN_MOVED_FROM | IN_MOVED_TO) < 0) {
+        return errno;
+    }
+#else
+    return ENOSYS;
+#endif
+    return 0;
+}
+
+static void node_fs_watch_close_handle(NodeFsWatcher *state) {
+    state->closed = true;
+    if (state->operation != 0) {
+        node_fs_watch_disarm(state);
+        mal_host_operation_unbind(&state->host->tasks, state->operation, state);
+        (void) mal_host_operation_complete(&state->host->tasks, state->operation, MAL_HOST_TERMINAL_OK,
+            nullptr, nullptr);
+    }
+    if (state->fd >= 0) close(state->fd);
+    if (state->target_fd >= 0) close(state->target_fd);
+    state->fd = -1;
+    state->target_fd = -1;
+}
+
+static MalValue node_fs_watch_tick(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver; (void) args; (void) argc; (void) new_target;
+    MalValue emit_args[] = {node_fs_watch_ascii(vm, "close")};
+    node_fs_watch_call(vm, mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 0),
+        "emit", emit_args, 1);
+    return mal_value_new_undefined();
+}
+
+static MalValue node_fs_watcher_close(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) args; (void) argc; (void) new_target; (void) callee;
+    NodeFsWatcher *state = node_fs_watcher_find(receiver);
+    if (state == nullptr || state->closed) return mal_value_new_undefined();
+    node_fs_watch_close_handle(state);
+    MalRootSpan root;
+    mal_gc_root(&root, &receiver, 1);
+    MalValue task = mal_value_from_native_function_object(mal_native_function_object_new_with_slots(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+        mal_intrinsic_ascii(vm, (const byte *) "emitCloseNT"), node_fs_watch_tick, &receiver, 1));
+    mal_vm_enqueue_reaction_job(vm, task, false, mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined());
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+static MalValue node_fs_watcher_set_ref(MalValue receiver, bool referenced) {
+    NodeFsWatcher *state = node_fs_watcher_find(receiver);
+    if (state == nullptr || state->closed || state->unreferenced == !referenced) return receiver;
+    if (state->read_op.active) state->host->reactor.unreferenced_ops += referenced ? -1 : 1;
+    state->unreferenced = !referenced;
+    return receiver;
+}
+
+static MalValue node_fs_watcher_ref(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) vm; (void) args; (void) argc; (void) new_target; (void) callee;
+    return node_fs_watcher_set_ref(receiver, true);
+}
+
+static MalValue node_fs_watcher_unref(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) vm; (void) args; (void) argc; (void) new_target; (void) callee;
+    return node_fs_watcher_set_ref(receiver, false);
+}
+
+static MalValue node_fs_watch_new_emitter(MalVm *vm, MalValue *proto_slot, const char *const *methods,
+    const MalNativeFunctionCallback *callbacks, usize method_count) {
+    if (!mal_value_is_object(*proto_slot)) {
+        *proto_slot = mal_value_from_object(mal_object_new(&vm->heap,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_NODE_EVENT_EMITTER_PROTOTYPE])));
+        for (usize i = 0; i < method_count; i++) {
+            mal_intrinsic_define_method_n(vm, mal_value_to_object(*proto_slot), (const byte *) methods[i],
+                0, callbacks[i]);
+        }
+    }
+    MalValue object = mal_value_from_object(mal_object_new(&vm->heap, mal_value_to_object(*proto_slot)));
+    MalRootSpan root;
+    mal_gc_root(&root, &object, 1);
+    mal_vm_call_value(vm, vm->intrinsics[MAL_INTRINSIC_NODE_EVENT_EMITTER_CONSTRUCTOR], object, nullptr, 0);
+    mal_gc_unroot(&root);
+    return object;
+}
+
+static bool node_fs_watch_install(MalVm *vm) {
+    if (!mal_value_is_object(vm->intrinsics[MAL_INTRINSIC_NODE_EVENT_EMITTER_PROTOTYPE])) {
+        node_fs_throw_code(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, (const byte *) "node:events is unavailable",
+            (const byte *) "ERR_INTERNAL_ASSERTION");
+        return false;
+    }
+    if (!node_fs_watch_installed) {
+        mal_gc_register_root_source(node_fs_watch_scan_roots, nullptr);
+        mal_host_register_macrotask_drain(node_fs_watch_drain, false);
+        node_fs_watch_installed = true;
+    }
+    return true;
+}
+
+static bool node_fs_watch_options(MalVm *vm, MalValue options, bool *persistent, bool *buffer_names,
+    MalValue *signal) {
+    *persistent = true;
+    *buffer_names = false;
+    *signal = mal_value_new_undefined();
+    MalValue encoding = mal_value_new_undefined();
+    if (mal_value_is_string(options)) {
+        encoding = options;
+    } else if (mal_value_is_object(options)) {
+        MalValue value;
+        if (!mal_vm_get_property(vm, options, mal_intrinsic_string_key(vm, (const byte *) "persistent"), &value)) {
+            return false;
+        }
+        if (!mal_value_is_undefined(value)) *persistent = mal_value_is_truthy(value);
+        if (!mal_vm_get_property(vm, options, mal_intrinsic_string_key(vm, (const byte *) "encoding"), &encoding)
+            || !mal_vm_get_property(vm, options, mal_intrinsic_string_key(vm, (const byte *) "signal"), signal)) {
+            return false;
+        }
+        if (!mal_value_is_undefined(*signal) && !mal_value_is_object(*signal)) {
+            mal_node_throw_invalid_arg_type(vm, "options.signal", "an instance of AbortSignal", *signal);
+            return false;
+        }
+    } else if (!mal_value_is_undefined(options) && !mal_value_is_null(options)) {
+        mal_node_throw_invalid_arg_type(vm, "options", "of type string or an instance of Object", options);
+        return false;
+    }
+    *buffer_names = mal_value_is_string(encoding)
+        && mal_string_equals_ascii(mal_value_to_string(encoding), "buffer");
+    return true;
+}
+
+static void node_fs_watch_listen_abort(MalVm *vm, MalValue signal, MalValue handler) {
+    MalValue values[] = {signal, handler, mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, values, countof(values));
+    if (mal_vm_get_property(vm, values[0], mal_intrinsic_string_key(vm, (const byte *) "aborted"), &values[2])
+        && mal_value_is_truthy(values[2])) {
+        mal_vm_call_value(vm, values[1], mal_value_new_undefined(), nullptr, 0);
+    } else if (vm->completion.kind != MAL_COMPLETION_THROW) {
+        values[3] = mal_value_from_object(mal_intrinsic_new_object(vm));
+        mal_intrinsic_define_data(vm, mal_value_to_object(values[3]), (const byte *) "once",
+            mal_value_new_boolean(true), NODE_FS_VISIBLE);
+        MalValue args[] = {node_fs_watch_ascii(vm, "abort"), values[1], values[3]};
+        MalRootSpan args_root;
+        mal_gc_root(&args_root, args, 3);
+        node_fs_watch_call(vm, values[0], "addEventListener", args, 3);
+        mal_gc_unroot(&args_root);
+    }
+    mal_gc_unroot(&root);
+}
+
+/* Opens the kernel watch; on failure throws Node's `watch` error and returns nullptr. */
+static NodeFsWatcher *node_fs_watch_start(MalVm *vm, MalValue filename, MalValue receiver, bool persistent,
+    bool buffer_names) {
+    char *path = node_fs_path_cstr(vm, filename);
+    if (path == nullptr) return nullptr;
+    NodeFsWatcher *state = calloc(1, sizeof(NodeFsWatcher));
+    if (state == nullptr) {
+        free(path);
+        mal_vm_throw_allocation_error(vm);
+        return nullptr;
+    }
+    state->fd = -1;
+    state->target_fd = -1;
+    state->path = path;
+    const char *slash = strrchr(path, '/');
+    state->basename = slash != nullptr && slash[1] != '\0' ? (char *) slash + 1 : path;
+    state->buffer_names = buffer_names;
+    state->unreferenced = !persistent;
+    state->pending = mal_value_new_undefined();
+    state->abort_reason = mal_value_new_undefined();
+    int error = node_fs_watch_open(state);
+    MalHost *host = mal_host(vm);
+    state->host = host;
+    if (error == 0 && (host == nullptr || !mal_host_operation_start(&host->tasks, &state->operation))) error = ENOMEM;
+    if (error == 0 && (!mal_host_operation_bind(&host->tasks, state->operation, state) || !node_fs_watch_arm(state)
+            || !mal_host_operation_activate(&host->tasks, state->operation))) {
+        node_fs_watch_disarm(state);
+        mal_host_operation_unbind(&host->tasks, state->operation, state);
+        (void) mal_host_operation_abort_start(&host->tasks, state->operation);
+        state->operation = 0;
+        error = ENOMEM;
+    }
+    if (error != 0) {
+        node_fs_throw_errno(vm, error, "watch", path);
+        state->operation = 0;
+        node_fs_watch_close_handle(state);
+        node_fs_watcher_free(state);
+        return nullptr;
+    }
+    state->vm = vm;
+    state->receiver = receiver;
+    state->async_context = mal_async_context_capture(vm);
+#if MAL_REALMS
+    state->realm = vm->current_realm;
+#endif
+    state->next = node_fs_watchers;
+    node_fs_watchers = state;
+    return state;
+}
+
+static MalValue node_fs_watch_aborted(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver; (void) args; (void) argc; (void) new_target;
+    MalValue watcher = mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 0);
+    return node_fs_watcher_close(vm, watcher, nullptr, 0, mal_value_new_undefined(), mal_value_new_undefined());
+}
+
+static MalValue node_fs_watch(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver; (void) new_target; (void) callee;
+    MalValue undefined = mal_value_new_undefined();
+    MalValue roots[] = {argc > 0 ? args[0] : undefined, argc > 1 ? args[1] : undefined,
+        argc > 2 ? args[2] : undefined, undefined, undefined};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalValue result = undefined;
+    if (mal_value_is_callable(roots[1])) {
+        roots[2] = roots[1];
+        roots[1] = undefined;
+    }
+    bool persistent, buffer_names;
+    if (!node_fs_watch_install(vm) || !node_fs_watch_options(vm, roots[1], &persistent, &buffer_names, &roots[4])) {
+        goto done;
+    }
+    static const char *const methods[] = {"close", "ref", "unref"};
+    static const MalNativeFunctionCallback callbacks[] = {
+        node_fs_watcher_close, node_fs_watcher_ref, node_fs_watcher_unref};
+    roots[3] = node_fs_watch_new_emitter(vm, &node_fs_watcher_proto, methods, callbacks, countof(methods));
+    if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
+    if (node_fs_watch_start(vm, roots[0], roots[3], persistent, buffer_names) == nullptr) goto done;
+    node_fs_watch_listen(vm, roots[3], "change", roots[2]);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
+    if (mal_value_is_object(roots[4])) {
+        roots[1] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots(&vm->heap,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+            mal_intrinsic_ascii(vm, (const byte *) "onAborted"), node_fs_watch_aborted, &roots[3], 1));
+        node_fs_watch_listen_abort(vm, roots[4], roots[1]);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
+    }
+    result = roots[3];
+done:
+    mal_gc_unroot(&root);
+    return result;
+}
+
+static NodeFsWatcher *node_fs_watch_iterator_state(MalValue callee) {
+    MalValue iterator = mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 0);
+    return node_fs_watcher_find(iterator);
+}
+
+static MalValue node_fs_watch_iterator_next(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver; (void) args; (void) argc; (void) new_target; (void) callee;
+    NodeFsWatcher *state = node_fs_watcher_find(receiver);
+    MalValue values[] = {mal_value_from_promise_object(mal_promise_object_new(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_PROMISE_PROTOTYPE]))), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, values, countof(values));
+    MalValue promise = values[0];
+    MalPromiseObject *object = mal_value_to_promise_object(promise);
+    if (state != nullptr && state->aborted) {
+        values[1] = state->abort_reason;
+        if (state->operation == 0) node_fs_watcher_free(state);
+        else state->aborted = false;
+        mal_promise_reject(vm, object, mal_node_abort_error(vm, values[1]));
+    } else if (state != nullptr && state->queue_head != nullptr) {
+        NodeFsWatchEvent *event = state->queue_head;
+        state->queue_head = event->next;
+        if (state->queue_head == nullptr) state->queue_tail = nullptr;
+        values[1] = event->result;
+        MalValue value = values[1];
+        free(event);
+        if (state->queue_head == nullptr && state->closed && state->operation == 0 && !state->aborted) {
+            node_fs_watcher_free(state);
+        }
+        mal_promise_fulfill(vm, object, value);
+    } else if (state == nullptr || state->closed) {
+        mal_promise_fulfill(vm, object, mal_vm_create_iter_result(vm, mal_value_new_undefined(), true));
+    } else {
+        state->pending = promise;
+    }
+    mal_gc_unroot(&root);
+    return promise;
+}
+
+static void node_fs_watch_iterator_finish(MalVm *vm, NodeFsWatcher *state, bool aborted, MalValue reason) {
+    if (state->closed) return;
+    node_fs_watch_close_handle(state);
+    while (state->queue_head != nullptr) {
+        NodeFsWatchEvent *event = state->queue_head;
+        state->queue_head = event->next;
+        free(event);
+    }
+    state->queue_tail = nullptr;
+    if (mal_value_is_object(state->pending)) {
+        MalPromiseObject *promise = mal_value_to_promise_object(state->pending);
+        state->pending = mal_value_new_undefined();
+        if (aborted) mal_promise_reject(vm, promise, mal_node_abort_error(vm, reason));
+        else mal_promise_fulfill(vm, promise, mal_vm_create_iter_result(vm, mal_value_new_undefined(), true));
+    } else if (aborted) {
+        state->aborted = true;
+        state->abort_reason = reason;
+    }
+}
+
+static MalValue node_fs_watch_iterator_return(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) args; (void) argc; (void) new_target; (void) callee;
+    NodeFsWatcher *state = node_fs_watcher_find(receiver);
+    if (state != nullptr) node_fs_watch_iterator_finish(vm, state, false, mal_value_new_undefined());
+    MalValue promise = mal_value_from_promise_object(mal_promise_object_new(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_PROMISE_PROTOTYPE])));
+    MalRootSpan root;
+    mal_gc_root(&root, &promise, 1);
+    mal_promise_fulfill(vm, mal_value_to_promise_object(promise),
+        mal_vm_create_iter_result(vm, mal_value_new_undefined(), true));
+    mal_gc_unroot(&root);
+    return promise;
+}
+
+static MalValue node_fs_watch_iterator_self(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) vm; (void) args; (void) argc; (void) new_target; (void) callee;
+    return receiver;
+}
+
+static MalValue node_fs_watch_iterator_aborted(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver; (void) args; (void) argc; (void) new_target;
+    NodeFsWatcher *state = node_fs_watch_iterator_state(callee);
+    MalValue signal = mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 1);
+    MalValue reason = mal_value_new_undefined();
+    MalRootSpan root;
+    mal_gc_root(&root, &reason, 1);
+    (void) mal_vm_get_property(vm, signal, mal_intrinsic_string_key(vm, (const byte *) "reason"), &reason);
+    if (state != nullptr) node_fs_watch_iterator_finish(vm, state, true, reason);
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+static MalValue node_fs_watch_promise(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver; (void) new_target; (void) callee;
+    MalValue undefined = mal_value_new_undefined();
+    MalValue roots[] = {argc > 0 ? args[0] : undefined, argc > 1 ? args[1] : undefined, undefined, undefined};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalValue result = undefined;
+    bool persistent, buffer_names;
+    if (!node_fs_watch_install(vm) || !node_fs_watch_options(vm, roots[1], &persistent, &buffer_names, &roots[3])) {
+        goto done;
+    }
+    roots[2] = mal_value_from_object(mal_object_new(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ASYNC_ITERATOR_PROTOTYPE])));
+    mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[2]), (const byte *) "next", 0,
+        node_fs_watch_iterator_next);
+    mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[2]), (const byte *) "return", 0,
+        node_fs_watch_iterator_return);
+    MalValue self = mal_value_from_native_function_object(mal_native_function_object_new_arity(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+        mal_intrinsic_ascii(vm, (const byte *) "[Symbol.asyncIterator]"), 0, node_fs_watch_iterator_self));
+    MalPropertyDesc descriptor = {.value = self, .flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE};
+    mal_object_define_own(mal_value_to_object(roots[2]),
+        mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_ASYNC_ITERATOR), &descriptor);
+    NodeFsWatcher *state = node_fs_watch_start(vm, roots[0], roots[2], persistent, buffer_names);
+    if (state == nullptr) goto done;
+    state->iterator = true;
+    if (mal_value_is_object(roots[3])) {
+        MalValue slots[] = {roots[2], roots[3]};
+        roots[1] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots(&vm->heap,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+            mal_intrinsic_ascii(vm, (const byte *) "onAborted"), node_fs_watch_iterator_aborted, slots, 2));
+        node_fs_watch_listen_abort(vm, roots[3], roots[1]);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
+    }
+    result = roots[2];
+done:
+    mal_gc_unroot(&root);
+    return result;
+}
+
+static NodeFsStatWatcher *node_fs_stat_watcher_find_path(MalVm *vm, const char *path) {
+    for (NodeFsStatWatcher *state = node_fs_stat_watchers; state != nullptr; state = state->next) {
+        if (state->vm == vm && strcmp(state->path, path) == 0) return state;
+    }
+    return nullptr;
+}
+
+static void node_fs_stat_watcher_stop(NodeFsStatWatcher *state) {
+    NodeFsStatWatcher **link = &node_fs_stat_watchers;
+    while (*link != nullptr && *link != state) link = &(*link)->next;
+    if (*link == state) *link = state->next;
+    mal_host_clear_timeout(state->vm, state->timer);
+    free(state->path);
+    free(state);
+}
+
+static bool node_fs_stat_same(const MalPosixStat *left, const MalPosixStat *right) {
+    return left->mtime_ms == right->mtime_ms && left->ctime_ms == right->ctime_ms && left->size == right->size
+        && left->ino == right->ino && left->dev == right->dev && left->mode == right->mode
+        && left->nlink == right->nlink && left->uid == right->uid && left->gid == right->gid;
+}
+
+static MalValue node_fs_stat_watcher_poll(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver; (void) args; (void) argc; (void) new_target;
+    MalValue watcher = mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 0);
+    NodeFsStatWatcher *state = node_fs_stat_watchers;
+    while (state != nullptr && state->receiver != watcher) state = state->next;
+    if (state == nullptr) return mal_value_new_undefined();
+    MalPosixStat current = {0};
+    if (mal_posix_fs_stat(state->path, &current) != 0) current = (MalPosixStat) {0};
+    // Node reports a path missing at start once, with both Stats zeroed.
+    bool report_missing = state->initially_missing && node_fs_stat_same(&current, &state->previous);
+    state->initially_missing = false;
+    if (!report_missing && node_fs_stat_same(&current, &state->previous)) return mal_value_new_undefined();
+    MalPosixStat previous = state->previous;
+    state->previous = current;
+    MalValue values[] = {node_fs_watch_ascii(vm, "change"), watcher, mal_value_new_undefined(),
+        mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, values, countof(values));
+    MalObject *proto = mal_value_to_object(state->stats_proto);
+    values[2] = node_fs_make_stats(vm, proto, &current);
+    values[3] = node_fs_make_stats(vm, proto, &previous);
+    MalValue emit_args[] = {values[0], values[2], values[3]};
+    node_fs_watch_call(vm, values[1], "emit", emit_args, 3);
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+static MalValue node_fs_stat_watcher_set_ref(MalVm *vm, MalValue receiver, bool referenced) {
+    for (NodeFsStatWatcher *state = node_fs_stat_watchers; state != nullptr; state = state->next) {
+        if (state->receiver == receiver) mal_host_timer_set_referenced(vm, state->timer, referenced);
+    }
+    return receiver;
+}
+
+static MalValue node_fs_stat_watcher_ref(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) args; (void) argc; (void) new_target; (void) callee;
+    return node_fs_stat_watcher_set_ref(vm, receiver, true);
+}
+
+static MalValue node_fs_stat_watcher_unref(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) args; (void) argc; (void) new_target; (void) callee;
+    return node_fs_stat_watcher_set_ref(vm, receiver, false);
+}
+
+static MalValue node_fs_watch_file(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver; (void) new_target;
+    MalValue undefined = mal_value_new_undefined();
+    MalValue roots[] = {argc > 0 ? args[0] : undefined, argc > 1 ? args[1] : undefined,
+        argc > 2 ? args[2] : undefined, undefined, undefined};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalValue result = undefined;
+    char *path = nullptr;
+    if (mal_value_is_callable(roots[1])) {
+        roots[2] = roots[1];
+        roots[1] = undefined;
+    }
+    path = node_fs_path_cstr(vm, roots[0]);
+    if (path == nullptr || !node_fs_watch_install(vm)) goto done;
+    bool persistent = true;
+    f64 interval = 5007;
+    if (mal_value_is_object(roots[1])) {
+        MalValue value;
+        if (!mal_vm_get_property(vm, roots[1], mal_intrinsic_string_key(vm, (const byte *) "persistent"), &value)) {
+            goto done;
+        }
+        if (!mal_value_is_undefined(value)) persistent = mal_value_is_truthy(value);
+        if (!mal_vm_get_property(vm, roots[1], mal_intrinsic_string_key(vm, (const byte *) "interval"), &value)) {
+            goto done;
+        }
+        if (mal_ops_is_number(value)) interval = mal_ops_to_number(value);
+    }
+    if (!mal_value_is_callable(roots[2])) {
+        mal_node_throw_invalid_arg_type(vm, "listener", "of type function", roots[2]);
+        goto done;
+    }
+    NodeFsStatWatcher *state = node_fs_stat_watcher_find_path(vm, path);
+    if (state == nullptr) {
+        static const char *const methods[] = {"ref", "unref"};
+        static const MalNativeFunctionCallback callbacks[] = {node_fs_stat_watcher_ref, node_fs_stat_watcher_unref};
+        roots[3] = node_fs_watch_new_emitter(vm, &node_fs_stat_watcher_proto, methods, callbacks, countof(methods));
+        if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
+        state = calloc(1, sizeof(NodeFsStatWatcher));
+        if (state == nullptr) {
+            mal_vm_throw_allocation_error(vm);
+            goto done;
+        }
+        state->vm = vm;
+        state->receiver = roots[3];
+        state->stats_proto = mal_value_from_object(node_fs_slot_proto(vm, callee));
+        state->path = path;
+        path = nullptr;
+        if (mal_posix_fs_stat(state->path, &state->previous) != 0) {
+            state->previous = (MalPosixStat) {0};
+            state->initially_missing = true;
+        }
+        state->next = node_fs_stat_watchers;
+        node_fs_stat_watchers = state;
+        roots[4] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots(&vm->heap,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+            mal_intrinsic_ascii(vm, (const byte *) "onchange"), node_fs_stat_watcher_poll, &roots[3], 1));
+        state->timer = mal_host_set_interval(vm, roots[4], interval < 1 ? 1 : (i64) interval, nullptr, 0);
+        if (!persistent) mal_host_timer_set_referenced(vm, state->timer, false);
+    }
+    roots[3] = state->receiver;
+    node_fs_watch_listen(vm, roots[3], "change", roots[2]);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
+    result = roots[3];
+done:
+    free(path);
+    mal_gc_unroot(&root);
+    return result;
+}
+
+static MalValue node_fs_unwatch_file(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver; (void) new_target; (void) callee;
+    MalValue undefined = mal_value_new_undefined();
+    MalValue roots[] = {argc > 0 ? args[0] : undefined, argc > 1 ? args[1] : undefined, undefined, undefined};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    char *path = node_fs_path_cstr(vm, roots[0]);
+    NodeFsStatWatcher *state = path == nullptr ? nullptr : node_fs_stat_watcher_find_path(vm, path);
+    free(path);
+    if (state != nullptr) {
+        roots[2] = state->receiver;
+        MalValue name = node_fs_watch_ascii(vm, "change");
+        MalValue call_args[] = {name, roots[1]};
+        MalRootSpan args_root;
+        mal_gc_root(&args_root, call_args, 2);
+        if (mal_value_is_callable(roots[1])) node_fs_watch_call(vm, roots[2], "removeListener", call_args, 2);
+        else node_fs_watch_call(vm, roots[2], "removeAllListeners", call_args, 1);
+        MalValue count = undefined;
+        if (vm->completion.kind != MAL_COMPLETION_THROW
+            && mal_vm_get_property(vm, roots[2], mal_intrinsic_string_key(vm, (const byte *) "listenerCount"),
+                &roots[3])) {
+            MalCompletion counted = mal_vm_call_value(vm, roots[3], roots[2], call_args, 1);
+            if (counted.kind == MAL_COMPLETION_NORMAL) count = counted.value;
+        }
+        mal_gc_unroot(&args_root);
+        if (vm->completion.kind != MAL_COMPLETION_THROW && (!mal_ops_is_number(count)
+                || mal_ops_to_number(count) == 0)) {
+            node_fs_stat_watcher_stop(state);
+        }
+    }
+    mal_gc_unroot(&root);
+    return undefined;
+}
+
 static MalValue node_fs_export_realpath(
     MalVm *vm, MalObject *fn_proto, const char *name, bool sync) {
     MalNativeFunctionCallback callback = sync ? node_fs_job_sync : node_fs_job_callback;
@@ -6792,6 +7731,9 @@ static MalValue node_fs_export(
     if (strcmp(name, "realpath") == 0 || strcmp(name, "realpathSync") == 0) {
         return node_fs_export_realpath(vm, fn_proto, name, strcmp(name, "realpathSync") == 0);
     }
+    if (strcmp(name, "watch") == 0) return node_fs_make_fn(vm, fn_proto, name, 3, node_fs_watch);
+    if (strcmp(name, "watchFile") == 0) return node_fs_make_fn_slot(vm, fn_proto, name, 3, node_fs_watch_file, protos[0]);
+    if (strcmp(name, "unwatchFile") == 0) return node_fs_make_fn(vm, fn_proto, name, 2, node_fs_unwatch_file);
     if (strcmp(name, "writeFile") == 0 || strcmp(name, "appendFile") == 0) {
         bool append = strcmp(name, "appendFile") == 0;
         return node_fs_make_job_fn(vm, fn_proto, name, 4, node_fs_write_file_callback,
@@ -7139,7 +8081,8 @@ void mal_host_install_node_fs(
         "readlink", "readlinkSync", "readSync", "readdir", "readdirSync", "realpath",
         "realpathSync", "rename", "renameSync", "rm", "rmSync", "rmdir", "rmdirSync", "statSync",
         "stat", "statfsSync", "symlink", "symlinkSync", "truncate", "truncateSync", "unlink",
-        "unlinkSync", "utimes", "utimesSync", "write", "writeFile", "writeFileSync", "writeSync",
+        "unlinkSync", "unwatchFile", "utimes", "utimesSync", "watch", "watchFile", "write", "writeFile",
+        "writeFileSync", "writeSync",
     };
     MalValue module = mal_value_from_object(mal_intrinsic_new_object(vm));
     MalRootSpan module_root;
@@ -7406,6 +8349,9 @@ void mal_host_install_node_fs_promises(
     mal_native_function_object_set_async(mal_value_to_native_function_object(roots[1]));
     mal_intrinsic_define_data(vm, mal_value_to_object(roots[2]), "mkdtempDisposable", roots[1],
         NODE_FS_VISIBLE);
+    roots[1] = node_fs_make_fn(vm,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]), "watch", 2, node_fs_watch_promise);
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[2]), "watch", roots[1], NODE_FS_VISIBLE);
 
     if (!mal_vm_get_property(vm, roots[0], mal_intrinsic_string_key(vm, "constants"), &roots[1])) {
         mal_gc_unroot(&root);

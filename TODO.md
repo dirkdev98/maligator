@@ -1127,16 +1127,17 @@ remains a Maligator extension and does not count as global fetch conformance.
       straight to the callback buffer today), and implement fork with an IPC channel.
       Exercise active-child cleanup in embedded VM teardown on a Linux host.
 
-- [ ] Fill the remaining Node 26 module gaps: fs.watch/watchFile/unwatchFile,
-      fs.openAsBlob, readdir's `encoding: "buffer"`; https and http2 servers over
-      net.Server, its Unix-path listen, allowHalfOpen and named-host lookup; dgram
-      hostname lookup, source-specific membership and collection of sockets that
-      are never closed; the WebSocket client global; crypto
-      asymmetric KeyObjects, sign/verify, key generation, X509Certificate,
-      DiffieHellman/ECDH and Cipheriv as Transform streams; dns record types beyond
-      A/AAAA (needs res_query and libresolv in the link); zlib zstd and the zip
-      archive APIs; tls createServer; worker_threads environment data,
-      markAsUntransferable, BroadcastChannel and locks; and vm beyond runInNewContext.
+- [ ] Fill the remaining Node 26 module gaps: recursive fs.watch, watching more than
+      256 directory entries on macOS (kqueue holds one fd per entry) and the watcher
+      'error' event, fs.openAsBlob, readdir's `encoding: "buffer"`; https and http2
+      servers over net.Server, its Unix-path listen, allowHalfOpen and named-host
+      lookup; dgram hostname lookup, source-specific membership and collection of
+      sockets that are never closed; the WebSocket client global; crypto asymmetric
+      KeyObjects, sign/verify, key generation, X509Certificate, DiffieHellman/ECDH and
+      Cipheriv as Transform streams; dns record types beyond A/AAAA (needs res_query
+      and libresolv in the link); zlib zstd and the zip archive APIs; tls
+      createServer; worker_threads environment data, markAsUntransferable,
+      BroadcastChannel and locks; and vm beyond runInNewContext.
 
 - [ ] Make async_hooks observe more than AsyncResource: timers, I/O and promises
       do not emit hook events, and executionAsyncId() inside their callbacks stays
