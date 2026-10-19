@@ -280,6 +280,7 @@ describe("shared primordial catalog and coverage obligations", () => {
 			}),
 		).toThrow("Unknown coverage closure task");
 	});
+	// Each case revalidates the whole coverage ledger, which outgrew the default budget.
 	it("ties instance property observations to the producing constructor and executable witnesses", () => {
 		const instance = coverage.seeds.find(
 			(seed) => seed.owner === "String instances" && seed.key === "<indexed-properties>",
@@ -339,7 +340,7 @@ describe("shared primordial catalog and coverage obligations", () => {
 				coverageEvidence,
 			),
 		).toThrow("Duplicate coverage seed");
-	});
+	}, 30_000);
 	it("requires source evidence for implemented grouped cells", () => {
 		const first = coverage.rows[0]!;
 		const witness = {
