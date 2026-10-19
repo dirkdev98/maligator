@@ -445,7 +445,7 @@ void mal_op_call_known(MalCallable *callable, const MalInstruction *instruction)
 
 void mal_op_call_spread(MalCallable *callable, const MalInstruction *instruction);
 void mal_op_call_rest_arguments(MalCallable *callable, const MalInstruction *instruction);
-MalCompletion mal_vm_op_call_rest_arguments(MalVm *vm, MalValue callee, MalValue this_value, MalValue receiver, const MalValue *args, i32 arg_count, i32 start, bool apply, MalValue *state, const MalValue *prefix, i32 prefix_count);
+MalCompletion mal_vm_op_call_rest_arguments(MalVm *vm, MalValue callee, MalValue this_value, MalValue receiver, const MalValue *args, i32 arg_count, i32 start, i32 flags, MalValue *state, const MalValue *prefix, i32 prefix_count);
 
 void mal_op_call_spread_iterable(
     MalCallable *callable, const MalInstruction *instruction);

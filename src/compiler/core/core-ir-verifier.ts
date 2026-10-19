@@ -1224,12 +1224,13 @@ function verifyFunction(
 			fn.metadata.mappedArguments
 		)
 			fail("Invalid rest forwarding state");
-		const { startIndex, apply } = fn.instructionAttributes(instruction);
+		const { startIndex, apply, argumentsObject } = fn.instructionAttributes(instruction);
 		if (
 			typeof startIndex !== "number" ||
 			!Number.isSafeInteger(startIndex) ||
 			startIndex < 0 ||
 			typeof apply !== "boolean" ||
+			(argumentsObject !== undefined && (argumentsObject !== true || startIndex !== 0)) ||
 			(apply && fn.kernel.instructionOperandCount(instruction) !== 4)
 		)
 			fail("Invalid rest forwarding arguments");

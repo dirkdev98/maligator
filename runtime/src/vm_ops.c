@@ -3585,10 +3585,19 @@ static bool mal_vm_rest_arguments_can_forward(
     return mal_value_is_callable(this_value);
 }
 
+static MalValue mal_vm_rest_forward_state(
+    MalVm *vm, const MalValue *args, i32 arg_count, i32 start, i32 flags) {
+    return (flags & MAL_REST_FORWARD_ARGUMENTS_OBJECT) != 0
+        ? mal_create_arguments_object(
+            vm, args, arg_count, mal_value_new_undefined(), nullptr, false, 0, nullptr)
+        : mal_create_rest_arguments(vm, args, arg_count, start);
+}
+
 MalCompletion mal_vm_op_call_rest_arguments(
     MalVm *vm, MalValue callee, MalValue this_value, MalValue receiver,
-    const MalValue *args, i32 arg_count, i32 start, bool apply,
+    const MalValue *args, i32 arg_count, i32 start, i32 flags,
     MalValue *state, const MalValue *prefix, i32 prefix_count) {
+    bool apply = (flags & MAL_REST_FORWARD_APPLY) != 0;
     i32 count = arg_count > start ? arg_count - start : 0;
     i32 base = vm->value_stack_size;
     if (mal_value_is_undefined(*state)
@@ -3617,7 +3626,7 @@ MalCompletion mal_vm_op_call_rest_arguments(
     mal_gc_root(&prefix_root, (MalValue *) prefix, prefix_count);
     // Once observable, the same Array remains authoritative even if the guard recovers.
     if (mal_value_is_undefined(*state))
-        *state = mal_create_rest_arguments(vm, args, arg_count, start);
+        *state = mal_vm_rest_forward_state(vm, args, arg_count, start, flags);
     MalCompletion completion;
     if (apply) {
         MalValue call_args[2] = {receiver, *state};
@@ -3638,7 +3647,8 @@ void mal_op_call_rest_arguments(MalCallable *callable, const MalInstruction *ins
     const i32 *data = mal_op_instruction_data(callable, instruction->as.call_rest_arguments.data_offset);
     MalValue receiver = callable->registers[data[0]];
     i32 start = data[1];
-    bool apply = data[2] != 0;
+    i32 flags = data[2];
+    bool apply = (flags & MAL_REST_FORWARD_APPLY) != 0;
     MalValue *state = &callable->registers[data[3]];
     i32 prefix_count = data[4];
     i32 count = callable->argument_count > start ? callable->argument_count - start : 0;
@@ -3662,7 +3672,8 @@ void mal_op_call_rest_arguments(MalCallable *callable, const MalInstruction *ins
         }
     } else {
         if (mal_value_is_undefined(*state))
-            *state = mal_create_rest_arguments(vm, callable->arguments, callable->argument_count, start);
+            *state = mal_vm_rest_forward_state(
+                vm, callable->arguments, callable->argument_count, start, flags);
         if (apply) {
             if (vm->value_stack_capacity - base < 2) {
                 mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Maximum call stack size exceeded");

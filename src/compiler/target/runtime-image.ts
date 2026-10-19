@@ -574,6 +574,14 @@ export function withClosureCaptureValues(
 
 /** -1 never retains; INT32_MAX always retains nonempty input; otherwise the
  * largest static index whose absence requires the supplied argument slice. */
+/** CALL_REST_ARGUMENTS's MAL_REST_FORWARD_* flags. */
+export function restForwardFlags(instruction: {
+	readonly apply: boolean;
+	readonly argumentsObject: boolean;
+}): number {
+	return (instruction.apply ? 1 : 0) | (instruction.argumentsObject ? 2 : 0);
+}
+
 export function computeArgumentRetentionLimit(
 	fn: Pick<BytecodeFunction, "argumentSnapshotCount" | "instructions">,
 ): number {
@@ -1190,6 +1198,7 @@ export type BytecodeInstruction =
 			receiver: number;
 			startIndex: number;
 			apply: boolean;
+			argumentsObject: boolean;
 			state: number;
 			prefixArguments: Array<number>;
 	  }
@@ -4336,6 +4345,7 @@ function lowerInstructionToBytecodeInstruction(
 				receiver: instruction.registers[3],
 				startIndex: instruction.startIndex,
 				apply: instruction.apply,
+				argumentsObject: instruction.argumentsObject === true,
 				state: instruction.registers[4],
 				prefixArguments: instruction.registers.slice(5),
 			};

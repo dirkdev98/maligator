@@ -1206,10 +1206,14 @@ static void rd_instruction_operands(Rd *r, MalInstruction *o, I32Builder *side_d
             o->as.call_rest_arguments.this_value = rd_i32(r);
             i32 receiver = rd_i32(r);
             i32 start = rd_i32(r);
-            bool apply = rd_u8(r) != 0;
+            i32 flags = rd_u8(r);
+            bool apply = (flags & MAL_REST_FORWARD_APPLY) != 0;
+            bool arguments_object = (flags & MAL_REST_FORWARD_ARGUMENTS_OBJECT) != 0;
             i32 state = rd_i32(r);
             u32 prefix_count = rd_count(r, 1);
             if (!r->ok || start < 0 || state < 0 || (apply && prefix_count != 0) ||
+                (flags & ~(MAL_REST_FORWARD_APPLY | MAL_REST_FORWARD_ARGUMENTS_OBJECT)) != 0 ||
+                (arguments_object && start != 0) ||
                 !i32_builder_reserve(side_data, r, 5 + (usize) prefix_count)) {
                 r->ok = false;
                 return;
@@ -1217,7 +1221,7 @@ static void rd_instruction_operands(Rd *r, MalInstruction *o, I32Builder *side_d
             o->as.call_rest_arguments.data_offset = (i32) side_data->count;
             side_data->data[side_data->count++] = receiver;
             side_data->data[side_data->count++] = start;
-            side_data->data[side_data->count++] = apply;
+            side_data->data[side_data->count++] = flags;
             side_data->data[side_data->count++] = state;
             side_data->data[side_data->count++] = prefix_count;
             for (i32 i = 0; i < prefix_count; i++)
@@ -2695,8 +2699,12 @@ MalLoadedRuntimeImage *mal_runtime_image_load_with_host_resolver(
                 i32 registers[] = { instruction->as.call_rest_arguments.dst,
                     instruction->as.call_rest_arguments.callee,
                     instruction->as.call_rest_arguments.this_value, data[0], data[3] };
+                i32 flags = data[2];
                 if (prefix_count < 0 || prefix_count > fn->instruction_data_count - offset - 5 ||
-                    data[1] < 0 || (data[2] != 0 && data[2] != 1) || (data[2] && prefix_count != 0)) {
+                    data[1] < 0 ||
+                    (flags & ~(MAL_REST_FORWARD_APPLY | MAL_REST_FORWARD_ARGUMENTS_OBJECT)) != 0 ||
+                    ((flags & MAL_REST_FORWARD_APPLY) != 0 && prefix_count != 0) ||
+                    ((flags & MAL_REST_FORWARD_ARGUMENTS_OBJECT) != 0 && data[1] != 0)) {
                     r.ok = false; continue;
                 }
                 for (usize index = 0; index < countof(registers); index++)

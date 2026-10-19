@@ -791,6 +791,8 @@ type CompilerOperation =
 			registers: [number, number, number, number, number, ...Array<number>];
 			startIndex: number;
 			apply: boolean;
+			/** Forwards an unmapped `arguments`, which the fallback materializes as such. */
+			argumentsObject?: boolean;
 	  }
 	| {
 			type: "callSpreadIterable";

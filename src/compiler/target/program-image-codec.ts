@@ -18,6 +18,7 @@ import { BYTECODE_OPERATIONS } from "./bytecode-operation-spec.ts";
 import {
 	buildArgumentSnapshotPlan,
 	compressPositions,
+	restForwardFlags,
 	validateRuntimeImageMetadata,
 	validateVmPropertyCacheLayout,
 	vmInstructionUsesPropertyCache,
@@ -1204,7 +1205,7 @@ function writeInstructionOperands(w: Writer, i: BytecodeInstruction): void {
 			w.i32(i.thisValue);
 			w.i32(i.receiver);
 			w.i32(i.startIndex);
-			w.u8(i.apply ? 1 : 0);
+			w.u8(restForwardFlags(i));
 			w.i32(i.state);
 			w.i32Array(i.prefixArguments);
 			return;
@@ -2192,18 +2193,28 @@ function readInstructionOperands(r: Reader): BytecodeInstruction {
 				thisValue: r.i32(),
 				argumentsArray: r.i32(),
 			};
-		case "CALL_REST_ARGUMENTS":
+		case "CALL_REST_ARGUMENTS": {
+			const dst = r.i32();
+			const callee = r.i32();
+			const thisValue = r.i32();
+			const receiver = r.i32();
+			const startIndex = r.i32();
+			const flags = r.u8();
+			if ((flags & ~3) !== 0)
+				throw new RangeError("program-image-codec: invalid rest forwarding flags");
 			return {
 				opcode,
-				dst: r.i32(),
-				callee: r.i32(),
-				thisValue: r.i32(),
-				receiver: r.i32(),
-				startIndex: r.i32(),
-				apply: r.u8() !== 0,
+				dst,
+				callee,
+				thisValue,
+				receiver,
+				startIndex,
+				apply: (flags & 1) !== 0,
+				argumentsObject: (flags & 2) !== 0,
 				state: r.i32(),
 				prefixArguments: r.i32Array(),
 			};
+		}
 		case "CALL_SPREAD_ITERABLE":
 			return {
 				opcode,

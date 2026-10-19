@@ -2555,7 +2555,7 @@ const canonicalizeBlockParameters: CoreFunctionPass = {
 const forwardRestArguments: CoreFunctionPass = {
 	name: "forward-rest-arguments",
 	stage: "canonicalize",
-	requiredFunctionOpcodesAny: ["createRestArguments"],
+	requiredFunctionOpcodesAny: ["createRestArguments", "createArgumentsObject"],
 	requiredAnalyses: [CORE_CONTROL_FLOW_BUNDLE_ANALYSIS],
 	wakesOn: ["body", "cfg"],
 	changes: LOCAL_CHANGES,
@@ -2571,13 +2571,22 @@ const forwardRestArguments: CoreFunctionPass = {
 			fn.metadata.mappedArguments
 		)
 			return undefined;
+		// An unmapped arguments object forwards like a rest array from index 0. With a
+		// second producer the object's identity could be observed across both.
+		let argumentsObjects = 0;
+		for (const instruction of fn.instructionIds())
+			if (
+				fn.instructionKind(instruction) === "operation" &&
+				fn.instructionOpcodeName(instruction) === "createArgumentsObject"
+			)
+				argumentsObjects++;
 		let editor: CoreEditor | undefined;
 		for (const producer of fn.instructionIds()) {
-			if (
-				fn.instructionKind(producer) !== "operation" ||
-				fn.instructionOpcodeName(producer) !== "createRestArguments"
-			)
-				continue;
+			if (fn.instructionKind(producer) !== "operation") continue;
+			const producerOpcode = fn.instructionOpcodeName(producer);
+			const argumentsObject =
+				producerOpcode === "createArgumentsObject" && argumentsObjects === 1;
+			if (producerOpcode !== "createRestArguments" && !argumentsObject) continue;
 			const rest = instructionResult(fn, producer, 0)!;
 			if (fn.kernel.valueHandlerUseCount(rest) !== 0) continue;
 			const consumers: Array<{
@@ -2627,7 +2636,9 @@ const forwardRestArguments: CoreFunctionPass = {
 				consumers.push({ instruction: consumer, inputs, apply });
 			}
 			if (!valid || consumers.length === 0) continue;
-			const startIndex = fn.instructionAttributes(producer).startIndex;
+			const startIndex = argumentsObject
+				? 0
+				: fn.instructionAttributes(producer).startIndex;
 			if (typeof startIndex !== "number") continue;
 			const control = context.analysis(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS).exceptional();
 			if (
@@ -2652,7 +2663,9 @@ const forwardRestArguments: CoreFunctionPass = {
 						? [...inputs.slice(0, 3), rest]
 						: [inputs[0]!, inputs[1]!, inputs[1]!, rest, ...inputs.slice(3)],
 					{
-						attributes: { startIndex, apply },
+						attributes: argumentsObject
+							? { startIndex, apply, argumentsObject }
+							: { startIndex, apply },
 						sourcePosition: fn.instructionSourcePosition(consumer),
 					},
 				);

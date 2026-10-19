@@ -22,6 +22,7 @@ import {
 	compressPositions,
 	computeArgumentRetentionLimit,
 	positionTableEntries,
+	restForwardFlags,
 	validateRuntimeImageMetadata,
 	vmGuardedCallSideTag,
 	vmSafepointRootMapsAreTrusted,
@@ -416,7 +417,7 @@ function instructionData(fn: RuntimeImage["functions"][number]): {
 				data.push(
 					instruction.receiver,
 					instruction.startIndex,
-					instruction.apply ? 1 : 0,
+					restForwardFlags(instruction),
 					instruction.state,
 					instruction.prefixArguments.length,
 					...instruction.prefixArguments,

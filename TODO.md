@@ -721,13 +721,6 @@ contracts or investigates costs still visible after the string follow-ups.
       registered for prototype invalidation like the stub's. A two-extra-row
       experiment improved an isolated three-class loop 7% while its monomorphic
       control regressed 1.3%; resolve that trade-off before shipping site storage.
-- [ ] Forward `fn.apply(this, arguments)` without materializing `arguments`.
-      Element reads such as copy loops now read the incoming values, but
-      forwarding still builds a dictionary arguments object per call: once's
-      wrapper, router's `restore` closure and Express's `req.accepts` do it on
-      every request. Rest parameters already forward through
-      `callRestArguments`; arguments objects need a fallback that builds an
-      arguments object rather than an Array when `apply` is not the builtin.
 - [ ] Keep Node stream state in native fields. The C stream runtime reads and
       writes its state as own properties named by C strings, about 177 interned
       names per Express JSON request, and its helpers take 7% of that route's

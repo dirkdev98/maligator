@@ -130,6 +130,7 @@ import type {
 import {
 	computeArgumentRetentionLimit,
 	decodeVmValueOperand,
+	restForwardFlags,
 	vmExceptionHandlerTargets as exceptionHandlerTargets,
 	vmInstructionUsesRegister,
 	vmInstructionWriteRegisters,
@@ -12396,7 +12397,7 @@ function emitInstruction(
 					: [
 							`MalValue ${prefixName}[${prefix.length}] = { ${prefix.map(boxed).join(", ")} };`,
 						]),
-				`MalCompletion ${tmp} = mal_vm_op_call_rest_arguments(vm, ${boxed(instruction.callee)}, ${boxed(instruction.thisValue)}, ${boxed(instruction.receiver)}, args, arg_count, ${instruction.startIndex}, ${instruction.apply}, &r${instruction.state}, ${prefixName}, ${prefix.length});`,
+				`MalCompletion ${tmp} = mal_vm_op_call_rest_arguments(vm, ${boxed(instruction.callee)}, ${boxed(instruction.thisValue)}, ${boxed(instruction.receiver)}, args, arg_count, ${instruction.startIndex}, ${restForwardFlags(instruction)}, &r${instruction.state}, ${prefixName}, ${prefix.length});`,
 				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 				`r${instruction.dst} = ${tmp}.value;`,
 				poll(),
