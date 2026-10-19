@@ -19,7 +19,7 @@ const createsClosure: BytecodeInstruction = {
 function emit(
 	instructions: Array<BytecodeInstruction>,
 	options: Partial<BytecodeFunction> = {},
-	relocatable = false,
+	relocatable: boolean | "linked" = false,
 ) {
 	const fn: BytecodeFunction = {
 		nameStringIndex: -1,
@@ -71,10 +71,14 @@ function emit(
 		new Set(),
 		[],
 		new Map(),
-		relocatable ? TEST_RELOCATION : false,
+		relocatable === "linked"
+			? { symbolStem: "linked" }
+			: relocatable
+				? TEST_RELOCATION
+				: false,
 	);
 	expect(emitted).not.toBeNull();
-	return relocatable
+	return relocatable === true
 		? {
 				...emitted!,
 				source: resolveNativeLinks(emitted!),
@@ -268,7 +272,7 @@ describe("native lexical owner lookup contract", () => {
 		},
 	);
 
-	it("retains the resolver for certified wire overlays and unbounded layouts", () => {
+	it("retains the resolver for wire overlays and unbounded layouts but not linked images", () => {
 		const instructions: Array<BytecodeInstruction> = [
 			{ opcode: "LOAD_CAPTURED", dst: 0, ownerFunctionIndex: 2, index: 0 },
 			{ opcode: "RETURN", value: 0 },
@@ -278,6 +282,9 @@ describe("native lexical owner lookup contract", () => {
 			"mal_vm_capture_owner_at(env, (__mal_relocation->function_base + 2), 0)",
 		);
 		expect(overlay.source).not.toContain("mal_env_untag_single_owner(");
+		const linked = emit(instructions, { closureCaptureOwners: [2] }, "linked");
+		expect(linked.source).toContain("= mal_env_untag_single_owner(env);");
+		expect(linked.source).not.toContain("mal_vm_capture_owner");
 		const large = emit(instructions, {
 			closureCaptureOwners: Array.from({ length: 17 }, (_, index) => index + 1),
 		});

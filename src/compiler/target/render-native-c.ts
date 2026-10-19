@@ -393,7 +393,7 @@ function initializeFixedCaptureOwners(
 	const layout = captures.layout;
 	// Native constructors encode these layouts as one tagged owner, a display,
 	// or an exact complete chain. Wire overlays and resumed scopes can differ.
-	if (captures.initialization === "complete-layout" && !relocation.enabled) {
+	if (captures.initialization === "complete-layout" && !relocation.relative) {
 		if (layout.length === 1)
 			return [
 				`${binding}${captureOwnerName(relocation, owners[0]!)} = mal_env_untag_single_owner(${incoming});`,
@@ -685,6 +685,8 @@ export interface NativeRelocatableEmission {
 
 interface NativeRelocationExpressions {
 	readonly enabled: boolean;
+	/** Offsets every index by its overlay's base, so foreign images can share scope chains. */
+	readonly relative: boolean;
 	/** Symbol-name component of a function: its stem in an overlay, else its index. */
 	stem(index: number): string;
 	/** Slots in first-use order, referenced as `<link symbol>[slot]`. */
@@ -726,6 +728,7 @@ function nativeRelocationExpressions(
 	const enabled = linkSymbol !== undefined;
 	return {
 		enabled,
+		relative: enabled && relative,
 		stem: (index) => {
 			if (symbolStems === undefined) return String(index);
 			const stem = symbolStems[index];
