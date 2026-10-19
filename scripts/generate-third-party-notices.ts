@@ -56,7 +56,7 @@ const NODE_DERIVED: Array<Derivation> = [
 	{
 		file: "runtime/src/runtime/node_stream.c",
 		upstream:
-			"lib/internal/streams/compose.js, lib/internal/streams/duplex.js, lib/internal/streams/duplexify.js, lib/internal/streams/from.js, lib/internal/streams/pipeline.js, lib/internal/streams/readable.js, lib/internal/streams/writable.js",
+			"lib/internal/streams/compose.js, lib/internal/streams/duplex.js, lib/internal/streams/duplexify.js, lib/internal/streams/from.js, lib/internal/streams/pipeline.js, lib/internal/streams/readable.js, lib/internal/streams/utils.js, lib/internal/streams/writable.js",
 	},
 	{ file: "runtime/src/runtime/node_tls.c", upstream: "lib/tls.js, lib/_tls_wrap.js" },
 	{ file: "runtime/src/runtime/node_util.c", upstream: "lib/util.js" },

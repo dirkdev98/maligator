@@ -1151,8 +1151,8 @@ remains a Maligator extension and does not count as global fetch conformance.
 - [ ] fs: watching more than 256 entries per watcher on macOS (kqueue holds one fd
       per watched file and subdirectory; FSEvents would lift it), Linux
       recursive-watch symlink entries (Node reports their events and link-target
-      changes as 'rename'), the watcher 'error' event, fs.openAsBlob and readdir's
-      `encoding: "buffer"`.
+      changes as 'rename'), the watcher 'error' event, fs.openAsBlob, readdir's
+      `encoding: "buffer"` and lchmod on macOS.
 
 - [ ] net and dgram: http2 servers and allowHalfOpen. Client sockets try resolved
       addresses one after another instead of Node's happy-eyeballs attempts (no
@@ -1247,10 +1247,11 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
       readableListening (Node's updateReadableListening), and 'close' after destroy is
       emitted synchronously from the destroy callback rather than on the next tick.
       Middle generator stages in pipeline receive the previous Readable itself, where
-      Node wraps it with fromReadable, and pipeline takes no web streams yet.
+      Node wraps it with fromReadable.
 
-- [ ] node:stream: `Readable.wrap` for old-style streams, which `Duplex.from` would
-      use for `{ readable, writable }` pairs whose readable lacks read().
+- [ ] node:stream: a pipeline stage that pumps into a web TransformStream rejects with
+      "Value is not a function" (Readable → TransformStream → Writable), although the
+      TransformStream's writer and async iteration work on their own.
 
 - [ ] node:url: `url.format` should `querystring.stringify` an object `query` when
       `search` is absent, and format WHATWG URL objects with its options argument.

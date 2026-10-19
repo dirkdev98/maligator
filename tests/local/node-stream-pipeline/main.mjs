@@ -104,3 +104,41 @@ console.log("aborted", JSON.stringify(await aborted));
 const unended = new PassThrough({ objectMode: true });
 await pipelinePromise(["keep"], unended, { end: false });
 console.log("end false", unended.writableEnded, String(unended.read()));
+
+const webOut = [];
+await pipelinePromise(
+	new ReadableStream({
+		start(controller) {
+			controller.enqueue("w1");
+			controller.enqueue("w2");
+			controller.close();
+		},
+	}),
+	new WritableStream({
+		write(chunk) {
+			webOut.push(chunk);
+		},
+	}),
+);
+console.log("web stages", webOut.join(","));
+const nodeToWeb = [];
+await pipelinePromise(
+	Readable.from(["n1", "n2"]),
+	new WritableStream({
+		write(chunk) {
+			nodeToWeb.push(String(chunk));
+		},
+	}),
+);
+console.log("node to web", nodeToWeb.join(","));
+const webToNode = [];
+await pipelinePromise(
+	new ReadableStream({
+		start(controller) {
+			controller.enqueue("x1");
+			controller.close();
+		},
+	}),
+	collector(webToNode),
+);
+console.log("web to node", webToNode.join(","));

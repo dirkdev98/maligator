@@ -143,3 +143,31 @@ await new Promise((resolve) =>
 		},
 	),
 );
+
+const { EventEmitter } = await import("node:events");
+const old = new EventEmitter();
+old.pause = () => {};
+old.resume = () => {};
+old.pipe = () => {};
+old.custom = function () {
+	return this === old;
+};
+const wrapped = new Readable({ objectMode: true }).wrap(old);
+console.log(
+	typeof wrapped.custom,
+	wrapped.custom(),
+	Readable.wrap.length,
+	Readable.prototype.wrap.length,
+);
+const wrappedOut = collect(wrapped);
+old.emit("data", "o1");
+old.emit("data", "o2");
+old.emit("end");
+console.log("wrap", await wrappedOut);
+const legacy = new EventEmitter();
+legacy.pipe = () => {};
+const legacyPair = Duplex.from({ readable: legacy });
+const legacyOut = collect(legacyPair);
+legacy.emit("data", "q1");
+legacy.emit("end");
+console.log("pair old-style", await legacyOut, legacyPair.readableObjectMode);
