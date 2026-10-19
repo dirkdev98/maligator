@@ -143,7 +143,7 @@ if (
 ) {
 	throw new Error("broken string case conversion");
 }
-const regexpProbe = /(?:stats)/;
+const regexpProbe = /\bstats/;
 if (!regexpProbe.test(consProbe) || !regexpProbe.test(consProbe)) {
 	throw new Error("broken regexp ASCII execution cache");
 }
