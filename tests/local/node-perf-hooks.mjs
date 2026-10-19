@@ -200,7 +200,12 @@ console.log(
 	histogram.stddev,
 	histogram.count,
 );
-report("histogram record", () => histogram.record(0));
+report("histogram record", () => histogram.record(2));
+try {
+	histogram.record(-1);
+} catch (error) {
+	console.log("histogram record negative", error.name, error.code);
+}
 histogram.reset();
 console.log(
 	"histogram reset",

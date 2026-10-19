@@ -1029,17 +1029,14 @@ static MalValue perf_illegal_constructor(MalVm *vm, MalValue receiver, const Mal
 static MalValue perf_histogram_record(MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
     (void) receiver; (void) nt;
     MalValue value = argc > 0 ? args[0] : mal_value_new_undefined();
-    f64 number = mal_ops_is_number(value) ? mal_ops_number_as_f64(value) : NAN;
-    if (!(number >= 1 && number <= 9007199254740991.0) || trunc(number) != number) {
-        if (!mal_ops_is_number(value)) {
-            perf_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                "The \"val\" argument must be of type number or bigint", "ERR_INVALID_ARG_TYPE");
-        } else {
-            char message[160];
-            snprintf(message, sizeof(message),
-                "The value of \"val\" is out of range. It must be >= 1 && <= 9007199254740991. Received %.17g", number);
-            perf_throw_code(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, message, "ERR_OUT_OF_RANGE");
-        }
+    f64 number;
+    if (!mal_ops_is_number(value)) {
+        perf_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "The \"val\" argument must be of type number or bigint", "ERR_INVALID_ARG_TYPE");
+        return mal_value_new_undefined();
+    }
+    // Node 26.12 validates with a minimum of 0 rather than 1.
+    if (!mal_node_validate_integer(vm, value, "val", 0, 9007199254740991.0, &number)) {
         return mal_value_new_undefined();
     }
     MalNodeDelayHistogram *state = node_delay_state(callee);

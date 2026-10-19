@@ -397,7 +397,7 @@
 	},
 	{
 		"file": "runtime/node_buffer.c",
-		"sha256": "0a3df76316bbbe34b9f8c30fe3daa3db6a5270b9fab7b1cb2126c22f2b459880"
+		"sha256": "015e74d713c9401760c1257fcfbb1db5f19499fb8631e8f1519705f404ebe625"
 	},
 	{
 		"file": "runtime/node_buffer.h",
@@ -573,7 +573,7 @@
 	},
 	{
 		"file": "runtime/node_perf_hooks.c",
-		"sha256": "78c63fb8d843ebf0fdaf99c37aa48b75593ede7f61d9c90f9b99f05a9cdf6d45"
+		"sha256": "da1184df25095d0e41800054cf02ea3278bb531b913b36455988210d06b1c410"
 	},
 	{
 		"file": "runtime/node_perf_hooks.h",
@@ -765,7 +765,7 @@
 	},
 	{
 		"file": "vm.c",
-		"sha256": "5a38fc2596fe172e4cb20ca2dc3a646b67cbe092c80cd13643f552423af688ce"
+		"sha256": "1906a21fc59f9f4616d0ec15385d9e8003a9b27dd7bb6090cc160f9b93f1b381"
 	},
 	{
 		"file": "vm.h",

@@ -126,7 +126,7 @@ show("includes", () => [
 const wide = Buffer.from("abcabcab", "ucs2");
 show("ucs2 search", () => [
 	wide.indexOf("b", "ucs2"),
-	wide.indexOf("b", 3, "ucs2"),
+	wide.indexOf("b", 4, "ucs2"),
 	wide.lastIndexOf("b", undefined, "ucs2"),
 	wide.lastIndexOf("ca", 9, "ucs2"),
 ]);

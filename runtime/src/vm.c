@@ -815,6 +815,7 @@ static void mal_vm_init_execution_state(MalVm *vm, const MalRuntimeImage *progra
     vm->unhandled_capacity = 0;
 	vm->entry_async_promise = mal_value_new_undefined();
     vm->errors_forwarded = false;
+    vm->uncaught_reported = false;
 }
 
 /** Phase 4: create language heap roots, intrinsics, module state, and the main fiber. */

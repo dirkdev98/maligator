@@ -2153,6 +2153,8 @@ static bool mal_buffer_index_of_impl(
         *result = start;
         return true;
     }
+    // Node 26.12 starts a forward UTF-16 string search at the next code unit, not the previous.
+    if (unit == 2 && forward && mal_value_is_string(needle) && (start & 1) != 0) start++;
     *result = -1;
     if (length == 0 || start < 0 || (forward && (i64) needle_length + start > length)
         || needle_length > length || (unit == 2 && (length < 2 || needle_length < 2))) {
