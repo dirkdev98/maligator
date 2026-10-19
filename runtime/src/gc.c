@@ -1972,7 +1972,7 @@ static void mal_gc_scan_roots(MalVm *vm) {
 
 // --- Finalization ----------------------------------------------------------
 
-static void mal_gc_finalize_cell(MalHeapHeader *cell) {
+static __attribute__((noinline)) void mal_gc_finalize_cell_owned(MalHeapHeader *cell) {
     switch (cell->type) {
         case MAL_HEAP_STRING: {
             MalString *string = (MalString *) cell;
@@ -2256,6 +2256,40 @@ static void mal_gc_finalize_cell(MalHeapHeader *cell) {
     if (object->storage_kind == MAL_OBJECT_EXTERNAL) {
         free(mal_object_storage(object));
     }
+}
+
+static inline bool mal_gc_object_owns_nothing(const MalObject *object) {
+    return mal_gc_type_hook_load(g_type_finalizers[object->header.type]) == nullptr &&
+        !object->has_captured_stack && !object->is_prototype && !object->slots_owned &&
+        object->storage_kind != MAL_OBJECT_EXTERNAL && mal_object_overflow(object) == nullptr;
+}
+
+/* Most dead cells own nothing outside their own allocation; settling that before the
+ * full finalizer keeps them off its frame. */
+static void mal_gc_finalize_cell(MalHeapHeader *cell) {
+    switch (cell->type) {
+        case MAL_HEAP_SYMBOL:
+        case MAL_HEAP_BIGINT:
+        case MAL_HEAP_ENV:
+            return;
+        case MAL_HEAP_OBJECT:
+        case MAL_HEAP_FUNCTION_OBJECT:
+            if (mal_gc_object_owns_nothing((const MalObject *) cell)) return;
+            break;
+#if !MAL_PERF_STATS
+        case MAL_HEAP_ARRAY_OBJECT: {
+            const MalArrayObject *array = (const MalArrayObject *) cell;
+            if ((array->elements == nullptr || mal_array_object_elements_inline(array)) &&
+                mal_gc_object_owns_nothing(&array->object)) {
+                return;
+            }
+            break;
+        }
+#endif
+        default:
+            break;
+    }
+    mal_gc_finalize_cell_owned(cell);
 }
 
 // --- Mark / weak / verify --------------------------------------------------
