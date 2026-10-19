@@ -665,8 +665,12 @@ contracts or investigates costs still visible after the string follow-ups.
       `emitBody` get no deferred iterator cursors or entry pairs: its 54 for-of
       loops allocate an ArrayIterator each, and `entries()` loops a pair per step.
       Raising the program budget fourfold made the self-compile 3.1% slower,
-      because the compiler then emits more C for its own input. Admit
-      the allocation-free plans by benefit rather than by a larger budget.
+      because the compiler then emits more C for its own input. Within the
+      functions it reaches, four expansive plans per function decline about 3,300
+      more; raising that limit to 16 made the self-compile 1.04% slower (optimize
+      +18 ms and emit +20 ms for `parser.ts`) with no measurable gain in the
+      compiler's own run. Admission needs a runtime benefit signal, such as loop
+      nesting or a profile, rather than a larger budget or limit.
 - [ ] Stop allocating closures that are only called. render-native-c's
       `emitInstruction` creates about 40 closures on entry to every call and uses
       a few per case. Only the 20 of its 225 creation sites that capture lifting
@@ -692,6 +696,21 @@ contracts or investigates costs still visible after the string follow-ups.
       first; letting inlines of 32 or fewer units bypass that budget grew the
       compiler's own output for `parser.ts` by 49% and made the self-compile 44%
       slower, so the remedy is cheaper calls or a hotness signal, not more inlining.
+- [ ] Check class-instance method rows inline at static load sites. Method loads
+      on class instances hit an inherited-value row that the inline probe reaches
+      only through an out-of-line helper; together with the polymorphic remainder
+      that is about 8% of the self-compile's samples. Inlining the row check at
+      every site made the self-compile 1.4% faster (8 pairs, sd 0.21) but grew the
+      compiler's text from 56.1 to 65.1 MB; one shared out-of-line copy gained
+      nothing, so the gain is the avoided call. A smaller inline check (dropping the
+      public-overflow test that a matching non-dictionary shape already implies, and
+      one compare for mode, receiver type and row count) needs measuring, and its C
+      compile time with it.
+- [ ] Read isolate state without a call on macOS. Every `_Thread_local` access is
+      a `_tlv_get_addr` call there, about 2% of the Express in-process samples
+      (field stores test the marking flag, `mal_object_set` its site table, the
+      prototype epoch). Linux reads them from the thread pointer. Passing the
+      isolate through the VM, or caching its address per call, would remove most.
 - [ ] Keep three receivers of a polymorphic method site in its own cache. The
       objects phase's `rules[i % 3].quote(order)` hits the site's one inherited row
       for one class in three; the others probe both banks of the shared stub
@@ -787,12 +806,13 @@ contracts or investigates costs still visible after the string follow-ups.
       backtracking executor for every exec, and each RegExp literal evaluation
       allocates a compiled-pattern handle freed at finalization; together with
       result arrays they dominate `primordial-string-regexp-projections`. In the
-      Express in-process route RegExp execution takes about 11% of the samples:
-      backtracking is under a third of that and malloc/free about as much, from
-      each match's capture vector and from widening Latin-1 subjects for patterns
-      with non-ASCII classes such as content-type's parameter pattern. An
-      anchored literal route such as `^(?:\/json)(?:\/$)?$` costs about 120 ns per
-      exec on an 8-character path.
+      Express in-process route RegExp execution took about 11% of the samples:
+      backtracking under a third of that and malloc/free about as much, from each
+      match's capture vector and from widening Latin-1 subjects for patterns with
+      non-ASCII classes. The allocation-free plan now runs linear patterns such as
+      routes and media types, 37% of the route's executions; the rest need
+      alternation and quantified groups, for example content-type's parameter
+      pattern with its quoted-string alternative.
 
 - [ ] Investigate full-output checksum traversal and construction/replacement in
       the complete mixed-text pipeline. Use `scripts/profile-text-pipeline.ts`
