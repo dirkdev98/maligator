@@ -683,8 +683,10 @@ contracts or investigates costs still visible after the string follow-ups.
 - [ ] Publish compiled root frames only on paths that can reach a safepoint.
       Small accessors such as the Core store's `instructionKind` and `checkedId`
       link a root frame and clear their GC slots on entry although only their
-      throw paths collect; those accessors take about 7% of the self-compile's
-      samples.
+      throw paths collect. In the full self-compile's optimize phase those
+      accessors take about 14% of the samples, and loading and dispatching the
+      method calls to them another 8%; calling them directly on a known
+      `CoreFunctionStore` receiver would remove most of both.
 - [ ] Keep three receivers of a polymorphic method site in its own cache. The
       objects phase's `rules[i % 3].quote(order)` hits the site's one inherited row
       for one class in three; the others probe both banks of the shared stub
