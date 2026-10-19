@@ -56,21 +56,144 @@ const LATIN1_WIDE_RETAINED_UNITS: usize = 64 * 1024;
 const FAST_CAPTURE_CAPACITY: usize = 31;
 const FAST_CAPTURE_SLOTS: usize = (FAST_CAPTURE_CAPACITY + 1) * 2;
 
+/// A set of UTF-16 code units: a bitmap below 256 and sorted disjoint ranges above.
+#[derive(Debug, Clone)]
+struct FastClass {
+    low: [u64; 4],
+    high: Box<[(u16, u16)]>,
+}
+
+impl FastClass {
+    fn empty() -> Self {
+        Self {
+            low: [0; 4],
+            high: Box::new([]),
+        }
+    }
+
+    fn from_ranges(mut ranges: Vec<(u16, u16)>, negate: bool) -> Self {
+        ranges.sort_unstable();
+        let mut merged: Vec<(u16, u16)> = Vec::with_capacity(ranges.len());
+        for (first, last) in ranges {
+            match merged.last_mut() {
+                Some(previous) if u32::from(first) <= u32::from(previous.1) + 1 => {
+                    previous.1 = previous.1.max(last);
+                }
+                _ => merged.push((first, last)),
+            }
+        }
+        if negate {
+            let mut complement = Vec::with_capacity(merged.len() + 1);
+            let mut next = 0u32;
+            for (first, last) in merged {
+                if u32::from(first) > next {
+                    complement.push((next as u16, first - 1));
+                }
+                next = u32::from(last) + 1;
+            }
+            if next <= 0xffff {
+                complement.push((next as u16, 0xffff));
+            }
+            merged = complement;
+        }
+        let mut low = [0u64; 4];
+        let mut high = Vec::new();
+        for (first, last) in merged {
+            for unit in first..=last.min(255) {
+                low[usize::from(unit >> 6)] |= 1 << (unit & 63);
+            }
+            if last >= 256 {
+                high.push((first.max(256), last));
+            }
+        }
+        Self {
+            low,
+            high: high.into(),
+        }
+    }
+
+    fn unit(unit: u16) -> Self {
+        Self::from_ranges(vec![(unit, unit)], false)
+    }
+
+    #[inline]
+    fn contains(&self, unit: u16) -> bool {
+        if unit < 256 {
+            return self.low[usize::from(unit >> 6)] >> (unit & 63) & 1 != 0;
+        }
+        self.high
+            .binary_search_by(|(first, last)| {
+                if *last < unit {
+                    core::cmp::Ordering::Less
+                } else if *first > unit {
+                    core::cmp::Ordering::Greater
+                } else {
+                    core::cmp::Ordering::Equal
+                }
+            })
+            .is_ok()
+    }
+
+    fn intersects(&self, other: &Self) -> bool {
+        if self.low.iter().zip(&other.low).any(|(a, b)| a & b != 0) {
+            return true;
+        }
+        let (mut left, mut right) = (0, 0);
+        while left < self.high.len() && right < other.high.len() {
+            let (a, b) = (self.high[left], other.high[right]);
+            if a.1 < b.0 {
+                left += 1;
+            } else if b.1 < a.0 {
+                right += 1;
+            } else {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn union(&self, other: &Self) -> Self {
+        let mut low = self.low;
+        for (word, other_word) in low.iter_mut().zip(&other.low) {
+            *word |= other_word;
+        }
+        let mut high = self.high.to_vec();
+        high.extend_from_slice(&other.high);
+        let merged = Self::from_ranges(high, false);
+        Self {
+            low,
+            high: merged.high,
+        }
+    }
+}
+
+/// One element of an allocation-free plan. Every quantifier is greedy and never
+/// backtracks; `compile_fast_pattern` admits only plans where that is exact.
 #[derive(Debug)]
-enum FastToken {
+enum FastNode {
     Literal(Box<[u16]>),
-    ClassPlus {
-        first: u16,
-        last: u16,
-        capture: Option<usize>,
+    Repeat {
+        class: FastClass,
+        min: u32,
+        max: u32,
     },
+    Group {
+        body: Box<[FastNode]>,
+        capture: Option<usize>,
+        /// Capture indices inside the group, cleared when an optional group is skipped.
+        inner: core::ops::Range<usize>,
+        optional: bool,
+    },
+    End,
 }
 
 #[derive(Debug)]
 struct FastPattern {
     anchored_start: bool,
-    tokens: Box<[FastToken]>,
+    nodes: Box<[FastNode]>,
     capture_count: usize,
+    /// Units a match can begin with, when every match consumes one.
+    first: Option<FastClass>,
 }
 
 struct FastMatch {
@@ -168,74 +291,103 @@ impl FastPattern {
             .all(|(expected, unit)| unit.code_unit() == *expected)
     }
 
-    fn token_starts_at<U: SubjectUnit>(token: &FastToken, subject: &[U], position: usize) -> bool {
-        match token {
-            FastToken::Literal(literal) => subject
-                .get(position)
-                .is_some_and(|unit| unit.code_unit() == literal[0]),
-            FastToken::ClassPlus { first, last, .. } => subject
-                .get(position)
-                .is_some_and(|unit| (*first..=*last).contains(&unit.code_unit())),
-        }
-    }
-
-    fn next_candidate<U: SubjectUnit>(&self, subject: &[U], from: usize) -> Option<usize> {
-        let first_token = self.tokens.first()?;
-        if let FastToken::Literal(literal) = first_token {
-            return U::find_unit(subject, from, literal[0]);
-        }
-        (from..subject.len())
-            .find(|position| Self::token_starts_at(first_token, subject, *position))
-    }
-
-    fn match_at<U: SubjectUnit>(&self, subject: &[U], start: usize) -> Option<FastMatch> {
-        let mut position = start;
-        let mut captures = [None; FAST_CAPTURE_CAPACITY];
-        for token in self.tokens.iter() {
-            match token {
-                FastToken::Literal(literal) => {
+    fn match_nodes<U: SubjectUnit>(
+        nodes: &[FastNode],
+        subject: &[U],
+        mut position: usize,
+        captures: &mut [Option<(usize, usize)>; FAST_CAPTURE_CAPACITY],
+    ) -> Option<usize> {
+        for node in nodes {
+            match node {
+                FastNode::Literal(literal) => {
                     if !Self::literal_matches_at(literal, subject, position) {
                         return None;
                     }
                     position += literal.len();
                 }
-                FastToken::ClassPlus {
-                    first,
-                    last,
-                    capture,
-                } => {
-                    let capture_start = position;
-                    while subject
-                        .get(position)
-                        .is_some_and(|unit| (*first..=*last).contains(&unit.code_unit()))
-                    {
-                        position += 1;
+                FastNode::Repeat { class, min, max } => {
+                    let limit = subject.len().min(position.saturating_add(*max as usize));
+                    let mut end = position;
+                    while end < limit && class.contains(subject[end].code_unit()) {
+                        end += 1;
                     }
-                    if position == capture_start {
+                    if end - position < *min as usize {
                         return None;
                     }
-                    if let Some(index) = capture {
-                        captures[*index] = Some((capture_start, position));
+                    position = end;
+                }
+                FastNode::Group {
+                    body,
+                    capture,
+                    inner,
+                    optional,
+                } => match Self::match_nodes(body, subject, position, captures) {
+                    Some(end) => {
+                        if let Some(index) = capture {
+                            captures[*index] = Some((position, end));
+                        }
+                        position = end;
+                    }
+                    None if *optional => {
+                        for index in inner.clone() {
+                            captures[index] = None;
+                        }
+                    }
+                    None => return None,
+                },
+                FastNode::End => {
+                    if position != subject.len() {
+                        return None;
                     }
                 }
             }
         }
-        Some(FastMatch {
-            start,
-            end: position,
-            captures,
-        })
+        Some(position)
+    }
+
+    fn match_at<U: SubjectUnit>(
+        &self,
+        subject: &[U],
+        start: usize,
+        captures: &mut [Option<(usize, usize)>; FAST_CAPTURE_CAPACITY],
+    ) -> Option<FastMatch> {
+        match Self::match_nodes(&self.nodes, subject, start, captures) {
+            Some(end) => Some(FastMatch {
+                start,
+                end,
+                captures: *captures,
+            }),
+            None => {
+                captures[..self.capture_count].fill(None);
+                None
+            }
+        }
     }
 
     fn find<U: SubjectUnit>(&self, subject: &[U], start: usize) -> Option<FastMatch> {
+        let mut captures = [None; FAST_CAPTURE_CAPACITY];
         if self.anchored_start {
-            return (start == 0).then(|| self.match_at(subject, 0)).flatten();
+            return (start == 0)
+                .then(|| self.match_at(subject, 0, &mut captures))
+                .flatten();
         }
-
+        let leading_unit = match self.nodes.first() {
+            Some(FastNode::Literal(literal)) => Some(literal[0]),
+            _ => None,
+        };
         let mut candidate = start;
-        while candidate < subject.len() {
-            candidate = self.next_candidate(subject, candidate)?;
-            if let Some(found) = self.match_at(subject, candidate) {
+        while candidate <= subject.len() {
+            if let Some(unit) = leading_unit {
+                candidate = U::find_unit(subject, candidate, unit)?;
+            } else if let Some(first) = &self.first {
+                while candidate < subject.len() && !first.contains(subject[candidate].code_unit()) {
+                    candidate += 1;
+                }
+                if candidate == subject.len() {
+                    return None;
+                }
+            }
+            if let Some(found) = self.match_at(subject, candidate, &mut captures) {
                 return Some(found);
             }
             candidate += 1;
@@ -244,118 +396,401 @@ impl FastPattern {
     }
 }
 
-fn is_regexp_meta(unit: u16) -> bool {
-    matches!(
-        unit,
-        0x2e | 0x5e
-            | 0x24
-            | 0x2a
-            | 0x2b
-            | 0x3f
-            | 0x7b
-            | 0x7d
-            | 0x5b
-            | 0x5d
-            | 0x28
-            | 0x29
-            | 0x7c
-            | 0x5c
-    )
+/// How a sequence's first-unit set ends: at a node that always consumes, at a `$`
+/// after which nothing can consume, or by matching empty.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FastFirstEnd {
+    Consumes,
+    Blocked,
+    Nullable,
+}
+
+fn fast_first(nodes: &[FastNode]) -> (FastClass, FastFirstEnd) {
+    let mut first = FastClass::empty();
+    for node in nodes {
+        let (node_first, end) = match node {
+            FastNode::Literal(literal) => (FastClass::unit(literal[0]), FastFirstEnd::Consumes),
+            FastNode::Repeat { class, min, .. } => (
+                class.clone(),
+                if *min > 0 {
+                    FastFirstEnd::Consumes
+                } else {
+                    FastFirstEnd::Nullable
+                },
+            ),
+            FastNode::Group { body, optional, .. } => {
+                let (body_first, end) = fast_first(body);
+                (
+                    body_first,
+                    if *optional {
+                        FastFirstEnd::Nullable
+                    } else {
+                        end
+                    },
+                )
+            }
+            FastNode::End => (FastClass::empty(), FastFirstEnd::Blocked),
+        };
+        first = first.union(&node_first);
+        if end != FastFirstEnd::Nullable {
+            return (first, end);
+        }
+    }
+    (first, FastFirstEnd::Nullable)
+}
+
+/// The units that can be consumed first after `nodes`, given those after the enclosing sequence.
+fn fast_follow(nodes: &[FastNode], outer: &FastClass) -> FastClass {
+    match fast_first(nodes) {
+        (first, FastFirstEnd::Nullable) => first.union(outer),
+        (first, _) => first,
+    }
+}
+
+/// Greedy matching equals ECMAScript backtracking when no quantified class shares a unit
+/// with what can follow it: a backtracking engine would only retry shorter runs, and the
+/// continuation can neither consume a unit of the run nor end the match inside it. An
+/// optional group needs the same disjointness and must always consume, so skipping it
+/// cannot succeed where taking it failed.
+fn fast_nodes_are_greedy_safe(nodes: &[FastNode], outer: &FastClass) -> bool {
+    for (index, node) in nodes.iter().enumerate() {
+        let follow = fast_follow(&nodes[index + 1..], outer);
+        match node {
+            FastNode::Repeat { class, min, max } if min != max && class.intersects(&follow) => {
+                return false;
+            }
+            FastNode::Group { body, optional, .. } => {
+                if *optional {
+                    let (first, end) = fast_first(body);
+                    if end != FastFirstEnd::Consumes || first.intersects(&follow) {
+                        return false;
+                    }
+                }
+                if !fast_nodes_are_greedy_safe(body, &follow) {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+    }
+    true
+}
+
+const FAST_REPEAT_LIMIT: u32 = 0xffff;
+
+/// Recursive-descent reader for the allocation-free subset: literals, escapes, classes,
+/// greedy quantifiers, plain and optional groups, a leading `^` and `$`. Anything with
+/// Annex B or alternation semantics declines the plan.
+struct FastParser<'a> {
+    units: &'a [u16],
+    position: usize,
+    capture_count: usize,
+}
+
+enum FastAtom {
+    Unit(u16),
+    Class(FastClass),
+    Group(FastNode),
+    End,
+}
+
+fn fast_shorthand_ranges(unit: u16) -> Option<(Vec<(u16, u16)>, bool)> {
+    let digits = vec![(0x30, 0x39)];
+    let word = vec![(0x30, 0x39), (0x41, 0x5a), (0x5f, 0x5f), (0x61, 0x7a)];
+    let space = vec![
+        (0x09, 0x0d),
+        (0x20, 0x20),
+        (0xa0, 0xa0),
+        (0x1680, 0x1680),
+        (0x2000, 0x200a),
+        (0x2028, 0x2029),
+        (0x202f, 0x202f),
+        (0x205f, 0x205f),
+        (0x3000, 0x3000),
+        (0xfeff, 0xfeff),
+    ];
+    match unit {
+        0x64 => Some((digits, false)), // d
+        0x44 => Some((digits, true)),  // D
+        0x77 => Some((word, false)),   // w
+        0x57 => Some((word, true)),    // W
+        0x73 => Some((space, false)),  // s
+        0x53 => Some((space, true)),   // S
+        _ => None,
+    }
+}
+
+impl FastParser<'_> {
+    fn peek(&self) -> Option<u16> {
+        self.units.get(self.position).copied()
+    }
+
+    fn hex(&mut self, digits: usize) -> Option<u16> {
+        let mut value = 0u32;
+        for _ in 0..digits {
+            let digit = char::from_u32(u32::from(self.peek()?))?.to_digit(16)?;
+            value = value * 16 + digit;
+            self.position += 1;
+        }
+        Some(value as u16)
+    }
+
+    /// A single-unit escape after the backslash, shared by atoms and class members.
+    fn escaped_unit(&mut self, unit: u16) -> Option<u16> {
+        match unit {
+            0x74 => Some(0x09), // t
+            0x6e => Some(0x0a), // n
+            0x76 => Some(0x0b), // v
+            0x66 => Some(0x0c), // f
+            0x72 => Some(0x0d), // r
+            0x30 if !self
+                .peek()
+                .is_some_and(|next| (0x30..=0x39).contains(&next)) =>
+            {
+                Some(0)
+            }
+            0x78 => self.hex(2),
+            0x75 => self.hex(4),
+            _ if unit < 0x80 && b"^$\\.*+?()[]{}|/-".contains(&(unit as u8)) => Some(unit),
+            _ => None,
+        }
+    }
+
+    fn class(&mut self) -> Option<FastClass> {
+        let negate = self.peek() == Some(u16::from(b'^'));
+        if negate {
+            self.position += 1;
+        }
+        let mut ranges = Vec::new();
+        let mut members = 0;
+        loop {
+            let unit = self.peek()?;
+            self.position += 1;
+            if unit == u16::from(b']') {
+                break;
+            }
+            members += 1;
+            let first = if unit == u16::from(b'\\') {
+                let escaped = self.peek()?;
+                self.position += 1;
+                if let Some((shorthand, false)) = fast_shorthand_ranges(escaped) {
+                    ranges.extend(shorthand);
+                    continue;
+                }
+                self.escaped_unit(escaped)?
+            } else {
+                unit
+            };
+            let is_range = self.peek() == Some(u16::from(b'-'))
+                && self.units.get(self.position + 1) != Some(&u16::from(b']'))
+                && self.position + 1 < self.units.len();
+            if !is_range {
+                ranges.push((first, first));
+                continue;
+            }
+            self.position += 1;
+            let unit = self.peek()?;
+            self.position += 1;
+            let last = if unit == u16::from(b'\\') {
+                let escaped = self.peek()?;
+                self.position += 1;
+                if fast_shorthand_ranges(escaped).is_some() {
+                    return None;
+                }
+                self.escaped_unit(escaped)?
+            } else {
+                unit
+            };
+            if first > last {
+                return None;
+            }
+            ranges.push((first, last));
+        }
+        (members > 0).then(|| FastClass::from_ranges(ranges, negate))
+    }
+
+    fn quantifier(&mut self) -> Option<Option<(u32, u32)>> {
+        let bounds = match self.peek() {
+            Some(0x2a) => (0, u32::MAX), // *
+            Some(0x2b) => (1, u32::MAX), // +
+            Some(0x3f) => (0, 1),        // ?
+            Some(0x7b) => {
+                // {
+                self.position += 1;
+                let min = self.number()?;
+                let max = if self.peek() == Some(u16::from(b',')) {
+                    self.position += 1;
+                    if self.peek() == Some(u16::from(b'}')) {
+                        u32::MAX
+                    } else {
+                        self.number()?
+                    }
+                } else {
+                    min
+                };
+                if self.peek() != Some(u16::from(b'}')) || min > max {
+                    return None;
+                }
+                (min, max)
+            }
+            _ => return Some(None),
+        };
+        self.position += 1;
+        if self.peek() == Some(u16::from(b'?')) {
+            return None;
+        }
+        Some(Some(bounds))
+    }
+
+    fn number(&mut self) -> Option<u32> {
+        let start = self.position;
+        let mut value = 0u32;
+        while let Some(digit @ 0x30..=0x39) = self.peek() {
+            value = value * 10 + u32::from(digit - 0x30);
+            if value > FAST_REPEAT_LIMIT {
+                return None;
+            }
+            self.position += 1;
+        }
+        (self.position > start).then_some(value)
+    }
+
+    fn atom(&mut self, unit: u16) -> Option<FastAtom> {
+        Some(match unit {
+            0x24 => FastAtom::End, // $
+            0x2e => FastAtom::Class(FastClass::from_ranges(
+                vec![(0x0a, 0x0a), (0x0d, 0x0d), (0x2028, 0x2029)],
+                true,
+            )),
+            0x5b => FastAtom::Class(self.class()?), // [
+            0x5c => {
+                let escaped = self.peek()?;
+                self.position += 1;
+                match fast_shorthand_ranges(escaped) {
+                    Some((ranges, negate)) => {
+                        FastAtom::Class(FastClass::from_ranges(ranges, negate))
+                    }
+                    None => FastAtom::Unit(self.escaped_unit(escaped)?),
+                }
+            }
+            0x28 => {
+                // (
+                // Named groups report their names from the engine's match, which this
+                // plan never builds.
+                let capture = if self.peek() == Some(u16::from(b'?')) {
+                    if self.units.get(self.position + 1) != Some(&u16::from(b':')) {
+                        return None;
+                    }
+                    self.position += 2;
+                    None
+                } else {
+                    Some(self.next_capture()?)
+                };
+                let inner_start = self.capture_count;
+                let body = self.sequence()?;
+                if self.peek() != Some(u16::from(b')')) {
+                    return None;
+                }
+                self.position += 1;
+                FastAtom::Group(FastNode::Group {
+                    body: body.into(),
+                    capture,
+                    inner: capture.unwrap_or(inner_start)..self.capture_count,
+                    optional: false,
+                })
+            }
+            0x5e | 0x2a | 0x2b | 0x3f | 0x7b | 0x7d | 0x5d | 0x7c | 0x29 => return None,
+            _ => FastAtom::Unit(unit),
+        })
+    }
+
+    fn next_capture(&mut self) -> Option<usize> {
+        (self.capture_count < FAST_CAPTURE_CAPACITY).then(|| {
+            self.capture_count += 1;
+            self.capture_count - 1
+        })
+    }
+
+    fn sequence(&mut self) -> Option<Vec<FastNode>> {
+        let mut nodes: Vec<FastNode> = Vec::new();
+        let mut literal: Vec<u16> = Vec::new();
+        while let Some(unit) = self.peek() {
+            if unit == u16::from(b')') {
+                break;
+            }
+            self.position += 1;
+            let atom = self.atom(unit)?;
+            let quantifier = self.quantifier()?;
+            let node = match (atom, quantifier) {
+                (FastAtom::Unit(unit), None) => {
+                    literal.push(unit);
+                    continue;
+                }
+                (FastAtom::Unit(unit), Some((min, max))) => FastNode::Repeat {
+                    class: FastClass::unit(unit),
+                    min,
+                    max,
+                },
+                (FastAtom::Class(class), bounds) => {
+                    let (min, max) = bounds.unwrap_or((1, 1));
+                    FastNode::Repeat { class, min, max }
+                }
+                (FastAtom::Group(group), None) => group,
+                (
+                    FastAtom::Group(FastNode::Group {
+                        body,
+                        capture,
+                        inner,
+                        ..
+                    }),
+                    Some((0, 1)),
+                ) => FastNode::Group {
+                    body,
+                    capture,
+                    inner,
+                    optional: true,
+                },
+                (FastAtom::End, None) => FastNode::End,
+                _ => return None,
+            };
+            if !literal.is_empty() {
+                nodes.push(FastNode::Literal(core::mem::take(&mut literal).into()));
+            }
+            nodes.push(node);
+        }
+        if !literal.is_empty() {
+            nodes.push(FastNode::Literal(literal.into()));
+        }
+        Some(nodes)
+    }
 }
 
 fn compile_fast_pattern(units: &[u16], flags: u32) -> Option<FastPattern> {
-    if units.is_empty() || flags & COMPILE_FLAGS != 0 || units.iter().any(|unit| *unit > 0x7f) {
+    if units.is_empty() || flags & COMPILE_FLAGS != 0 {
         return None;
     }
-
-    let mut position = 0;
-    let anchored_start = units.first() == Some(&(b'^' as u16));
-    if anchored_start {
-        position += 1;
-    }
-    let mut tokens = Vec::new();
-    let mut literal = Vec::new();
-    let mut capture_count = 0;
-
-    while position < units.len() {
-        let capture = units[position] == b'(' as u16;
-        let class_start = position + usize::from(capture);
-        if class_start < units.len() && units[class_start] == b'[' as u16 {
-            let class_length = if capture { 8 } else { 6 };
-            if position + class_length > units.len()
-                || units[class_start + 2] != b'-' as u16
-                || units[class_start + 4] != b']' as u16
-                || units[class_start + 5] != b'+' as u16
-                || (capture && units[class_start + 6] != b')' as u16)
-            {
-                return None;
-            }
-            let first = units[class_start + 1];
-            let last = units[class_start + 3];
-            // Keep the structural recognizer deliberately narrow: punctuation
-            // can introduce negation, escapes, or other class grammar that is
-            // not equivalent to a raw inclusive code-unit range.
-            if first > last
-                || !(first as u8).is_ascii_alphanumeric()
-                || !(last as u8).is_ascii_alphanumeric()
-            {
-                return None;
-            }
-            if !literal.is_empty() {
-                tokens.push(FastToken::Literal(core::mem::take(&mut literal).into()));
-            }
-            let capture_index = if capture {
-                if capture_count == FAST_CAPTURE_CAPACITY {
-                    return None;
-                }
-                let index = capture_count;
-                capture_count += 1;
-                Some(index)
-            } else {
-                None
-            };
-            tokens.push(FastToken::ClassPlus {
-                first,
-                last,
-                capture: capture_index,
-            });
-            position += class_length;
-            continue;
-        }
-
-        if is_regexp_meta(units[position]) {
-            return None;
-        }
-        literal.push(units[position]);
-        position += 1;
-    }
-
-    if !literal.is_empty() {
-        tokens.push(FastToken::Literal(literal.into()));
-    }
-    if position != units.len() || tokens.is_empty() {
+    let anchored_start = units[0] == u16::from(b'^');
+    let mut parser = FastParser {
+        units,
+        position: usize::from(anchored_start),
+        capture_count: 0,
+    };
+    let nodes = parser.sequence()?;
+    if parser.position != units.len()
+        || nodes.is_empty()
+        || !fast_nodes_are_greedy_safe(&nodes, &FastClass::empty())
+    {
         return None;
     }
-
-    // The fast executor consumes a class greedily without backtracking. Retain
-    // only plans where the following literal begins outside that class, making
-    // the greedy result equivalent to the general engine.
-    for pair in tokens.windows(2) {
-        let FastToken::ClassPlus { first, last, .. } = &pair[0] else {
-            continue;
-        };
-        let FastToken::Literal(literal) = &pair[1] else {
-            return None;
-        };
-        if (*first..=*last).contains(&literal[0]) {
-            return None;
-        }
-    }
-
+    let first = match fast_first(&nodes) {
+        (first, FastFirstEnd::Consumes) => Some(first),
+        _ => None,
+    };
     Some(FastPattern {
         anchored_start,
-        tokens: tokens.into(),
-        capture_count,
+        nodes: nodes.into(),
+        capture_count: parser.capture_count,
+        first,
     })
 }
 
@@ -1239,7 +1674,7 @@ mod tests {
     #[test]
     fn shared_regex_handles_retain_independent_captures() {
         clear_cache();
-        let pattern = utf16("(a)(b)?");
+        let pattern = utf16("(a)(b)?|^$");
         let first = unsafe { handle(&pattern, 0) };
         let second = unsafe { handle(&pattern, 0) };
         let first_subject = utf16("ab");
@@ -1306,7 +1741,7 @@ mod tests {
     #[test]
     fn repeated_immutable_subjects_use_ascii_after_one_utf16_probe() {
         clear_cache();
-        let pattern = utf16("value=([0-9]{1,})");
+        let pattern = utf16("value=([0-9]{1,})|^$");
         let subject = utf16("prefix value=42 suffix");
         let compiled = unsafe { handle(&pattern, 0) };
         let mut caps = [-1; 4];
@@ -1389,11 +1824,139 @@ mod tests {
         assert!(compile_fast_pattern(&utf16("value=([0-9]+)"), 0).is_some());
         assert!(compile_fast_pattern(&utf16("payload=[a-z]+"), 0).is_some());
         assert!(compile_fast_pattern(&utf16("value="), 0).is_some());
+        assert!(compile_fast_pattern(&utf16("value$"), 0).is_some());
+        assert!(compile_fast_pattern(&utf16(r"^(?:\/users\/([^\/]+))(?:\/$)?$"), 0).is_some());
         assert!(compile_fast_pattern(&utf16("[a-z]+a"), 0).is_none());
-        assert!(compile_fast_pattern(&utf16("[^-z]+"), 0).is_none());
-        assert!(compile_fast_pattern(&utf16("value$"), 0).is_none());
+        assert!(compile_fast_pattern(&utf16("[a-z]+[a-c]"), 0).is_none());
+        assert!(compile_fast_pattern(&utf16("[a-c]+d?b"), 0).is_none());
+        assert!(compile_fast_pattern(&utf16("(?:ab)?a"), 0).is_none());
+        assert!(compile_fast_pattern(&utf16("(a*)?"), 0).is_none());
+        assert!(compile_fast_pattern(&utf16("a+?"), 0).is_none());
+        assert!(compile_fast_pattern(&utf16("a|b"), 0).is_none());
+        assert!(compile_fast_pattern(&utf16(r"\bword"), 0).is_none());
+        assert!(compile_fast_pattern(&utf16("x{2,1}"), 0).is_none());
+        assert!(compile_fast_pattern(&utf16("a{"), 0).is_none());
+        assert!(compile_fast_pattern(&utf16("(?<name>a)"), 0).is_none());
         assert!(compile_fast_pattern(&utf16("value=([0-9]+)"), FLAG_IGNORE_CASE).is_none());
-        assert!(compile_fast_pattern(&utf16("(?:value)"), 0).is_none());
+    }
+
+    fn fast_match_ranges(
+        found: Option<FastMatch>,
+        groups: usize,
+    ) -> Option<Vec<Option<(usize, usize)>>> {
+        found.map(|found| {
+            let mut ranges = vec![Some((found.start, found.end))];
+            ranges.extend((0..groups).map(|index| found.captures[index]));
+            ranges
+        })
+    }
+
+    #[test]
+    fn fast_plans_agree_with_the_backtracking_engine() {
+        let cases = [
+            (r#"^(?:\/users\/([^\/]+))(?:\/$)?$"#, "/users/a b/"),
+            (r#"^(?:\/middleware)(?:\/$)?$"#, "/middleware/"),
+            (
+                r#"^ *([A-Za-z0-9][A-Za-z0-9!#$&^_-]{0,126})\/([A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}) *$"#,
+                " application/json ",
+            ),
+            (
+                r#"^[!#$%&'*+.^_`|~0-9A-Za-z-]+\/[!#$%&'*+.^_`|~0-9A-Za-z-]+$"#,
+                "text/plain",
+            ),
+            (r#"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$"#, "token"),
+            (r#"\+"#, "a+b"),
+            (r#"%5B"#, "x%5By"),
+            (r#"^[\x20\x09\x0a\x0d]*([^\x20\x09\x0a\x0d])"#, " \tvalue"),
+            (r#"^[\u0020-\u003A\u003D-\u007E]*$"#, "abc=;"),
+            (r#"^text\/"#, "text/html"),
+            (r#"a{2,3}b"#, "aaab"),
+            (r#"(?:ab)?c$"#, "abc"),
+            (r#"x(\d+)(?:\.(\d+))?y"#, "x12.5y"),
+            (r#"(\w+)=([^;]*);?"#, "k=v;"),
+            (r#"\s*,\s*"#, "a , b"),
+            (r#"\u00e9+"#, "\u{e9}\u{e9}"),
+            (r#".+"#, "abc"),
+            (r#"a.c"#, "abc"),
+            (r#"(a)(b)?"#, "ab"),
+            (r#"[^a]+a"#, "bba"),
+            (r#"^$"#, ""),
+            (r#"x*"#, "xx"),
+            (r#"([a-z]+)-(\d{2})"#, "ab-12"),
+            (r#"(?:-(\S+))?$"#, "-foo"),
+            (r#"\W\D"#, "!a"),
+            (r#"(?:(a)b)?c"#, "abc"),
+            (r#"x(?:(a)b)?"#, "xab"),
+        ];
+        let extras = [
+            'a', 'b', 'c', 'x', 'y', 'Z', '0', '9', ' ', '/', ';', '=', ',', '-', '.', '\t',
+            '\u{e9}', '\u{ff}', '\u{100}', '\u{2028}', '\u{3000}',
+        ];
+        let mut state = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        for (pattern, seed) in cases {
+            let units = utf16(pattern);
+            let fast = compile_fast_pattern(&units, 0)
+                .unwrap_or_else(|| panic!("{pattern} has no fast plan"));
+            let regex =
+                Regex::from_unicode(utf16_to_codepoints(&units).into_iter(), Flags::default())
+                    .unwrap_or_else(|error| panic!("{pattern}: {error:?}"));
+            let mut alphabet: Vec<u16> =
+                units.iter().copied().filter(|unit| *unit < 0x80).collect();
+            alphabet.extend(extras.iter().map(|unit| *unit as u16));
+            for round in 0..1200 {
+                let mut subject: Vec<u16> = if round % 2 == 0 {
+                    utf16(seed)
+                } else {
+                    Vec::new()
+                };
+                let edits = if round % 2 == 0 {
+                    next() % 4
+                } else {
+                    next() % 11
+                };
+                for _ in 0..edits {
+                    let unit = alphabet[(next() % alphabet.len() as u64) as usize];
+                    let position = (next() % (subject.len() as u64 + 1)) as usize;
+                    match next() % 3 {
+                        0 if position < subject.len() => subject[position] = unit,
+                        1 if position < subject.len() => {
+                            subject.remove(position);
+                        }
+                        _ => subject.insert(position, unit),
+                    }
+                }
+                for start in 0..=subject.len() {
+                    let expected =
+                        regex.find_from_ucs2(&subject, start).next().map(|found| {
+                            let mut ranges = vec![Some((found.range.start, found.range.end))];
+                            ranges.extend(found.captures.iter().map(|capture| {
+                                capture.as_ref().map(|range| (range.start, range.end))
+                            }));
+                            ranges
+                        });
+                    let groups = fast.capture_count;
+                    assert_eq!(
+                        fast_match_ranges(fast.find(&subject[..], start), groups),
+                        expected,
+                        "{pattern} on {subject:?} from {start}"
+                    );
+                    if subject.iter().all(|unit| *unit <= 0xff) {
+                        let bytes: Vec<u8> = subject.iter().map(|unit| *unit as u8).collect();
+                        assert_eq!(
+                            fast_match_ranges(fast.find(&bytes[..], start), groups),
+                            expected,
+                            "{pattern} on Latin-1 {subject:?} from {start}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]
@@ -1413,7 +1976,7 @@ mod tests {
     #[test]
     fn repeated_non_ascii_subjects_remain_on_utf16_without_rescanning() {
         clear_cache();
-        let pattern = utf16(".");
+        let pattern = utf16(".|^$");
         let subject = utf16("é");
         let compiled = unsafe { handle(&pattern, 0) };
         let mut caps = [-1; 2];
@@ -1475,7 +2038,7 @@ mod tests {
     #[test]
     fn ascii_latin1_subjects_borrow_their_bytes_for_the_ascii_engine() {
         clear_cache();
-        let pattern = utf16("value=([0-9]{1,})");
+        let pattern = utf16("value=([0-9]{1,})|^$");
         let compiled = unsafe { handle(&pattern, 0) };
         let mut caps = [-1; 4];
         let mut flags = 0;
@@ -1505,7 +2068,7 @@ mod tests {
     #[test]
     fn non_ascii_latin1_subjects_match_through_one_cached_widening() {
         clear_cache();
-        let pattern = utf16("caf(.)=([0-9]{1,})");
+        let pattern = utf16("caf(.)=([0-9]{1,})|^$");
         let compiled = unsafe { handle(&pattern, 0) };
         let subject = b"menu caf\xe9=42";
         let mut caps = [-1; 6];
@@ -1579,9 +2142,9 @@ mod tests {
     #[test]
     fn subject_cache_entries_do_not_answer_for_another_encoding() {
         clear_cache();
-        let pattern = utf16("b+");
+        let pattern = utf16("b+|^$");
         let compiled = unsafe { handle(&pattern, 0) };
-        // `b+` is not a fast plan, so both entries go through the subject cache.
+        // Alternation is not a fast plan, so both entries go through the subject cache.
         assert!(unsafe { &*(compiled as *const CompiledPattern) }
             .fast
             .is_none());
