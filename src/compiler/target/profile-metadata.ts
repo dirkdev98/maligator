@@ -132,8 +132,12 @@ function stableHash(value: string, seed: number): string {
 	return hash.toString(16).padStart(8, "0");
 }
 
+function digest(value: string): string {
+	return `${stableHash(value, 0x811c9dc5)}${stableHash(value, 0x9e3779b9)}`;
+}
+
 function logicalId(value: string): string {
-	return `site-v1-${stableHash(value, 0x811c9dc5)}${stableHash(value, 0x9e3779b9)}`;
+	return `site-v2-${digest(value)}`;
 }
 
 const PROFILE_ALLOCATION_OPCODES = new Set<BytecodeInstruction["opcode"]>([
@@ -516,15 +520,43 @@ export function buildProfileMetadata(
 	};
 	const relativeFile = (file: string): string =>
 		root !== "" && file.startsWith(`${root}/`) ? file.slice(root.length + 1) : file;
+	const functionNames = new Map<number, string>();
 	const functionName = (functionIndex: number): string => {
+		let name = functionNames.get(functionIndex);
+		if (name !== undefined) return name;
 		const candidate = runtime.functions[functionIndex];
 		const units =
 			candidate === undefined
 				? undefined
 				: runtime.stringConstants[candidate.nameStringIndex];
-		return units === undefined
-			? "<anonymous>"
-			: String.fromCodePoint(...units) || "<anonymous>";
+		name =
+			units === undefined
+				? "<anonymous>"
+				: String.fromCodePoint(...units) || "<anonymous>";
+		functionNames.set(functionIndex, name);
+		return name;
+	};
+	// A bundle can hold megabytes on a few lines, so each file is split once and each
+	// line contributes the digest of its whitespace-normalized text, not the text.
+	const anchorLines = new Map<
+		string,
+		{ lines: Array<string>; digests: Map<number, string> }
+	>();
+	const anchorDigest = (file: string, line: number): string => {
+		let entry = anchorLines.get(file);
+		if (entry === undefined) {
+			entry = {
+				lines: (fileByPath.get(file)?.contents ?? "").split("\n"),
+				digests: new Map(),
+			};
+			anchorLines.set(file, entry);
+		}
+		let lineDigest = entry.digests.get(line);
+		if (lineDigest === undefined) {
+			lineDigest = digest((entry.lines[line - 1] ?? "").trim().replaceAll(/\s+/g, " "));
+			entry.digests.set(line, lineDigest);
+		}
+		return lineDigest;
 	};
 	const functionFile = (functionIndex: number): string => {
 		const candidate = runtime.functions[functionIndex];
@@ -548,10 +580,7 @@ export function buildProfileMetadata(
 				const operation = profileOperationForInstruction(instruction);
 				const leafFunctionIndex = position.inlinedFunctionIndex ?? functionIndex;
 				const leafFile = functionFile(leafFunctionIndex);
-				const leafSource = fileByPath.get(leafFile)?.contents ?? "";
-				const anchor = (leafSource.split("\n")[position.line - 1] ?? "")
-					.trim()
-					.replaceAll(/\s+/g, " ");
+				const anchor = anchorDigest(leafFile, position.line);
 				const occurrenceKey = `${positionId}:${operation}`;
 				const occurrence = occurrenceByOrigin.get(occurrenceKey) ?? 0;
 				occurrenceByOrigin.set(occurrenceKey, occurrence + 1);
@@ -572,10 +601,7 @@ export function buildProfileMetadata(
 					.map((entry) => {
 						const chainPosition = runtime.sourcePositions[entry.positionId]!;
 						const chainFile = functionFile(entry.functionIndex);
-						const chainSource = fileByPath.get(chainFile)?.contents ?? "";
-						const chainAnchor = (chainSource.split("\n")[chainPosition.line - 1] ?? "")
-							.trim()
-							.replaceAll(/\s+/g, " ");
+						const chainAnchor = anchorDigest(chainFile, chainPosition.line);
 						return `${relativeFile(chainFile)}:${functionName(entry.functionIndex)}:${chainAnchor}:${chainPosition.column}`;
 					})
 					.join("<-");
