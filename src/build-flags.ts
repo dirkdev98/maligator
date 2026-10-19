@@ -365,6 +365,14 @@ export function optFlags(
 	return plan?.lto === true ? ["-O2", "-g0", ...plan.ltoFlags] : ["-O2", "-g0"];
 }
 
+/**
+ * Handwritten runtime objects compile once per toolchain and flag set and are reused
+ * by every program, so they take -O3 where generated units keep -O2 for build time.
+ */
+export function runtimeOptimizationFlags(env: NodeJS.ProcessEnv = process.env): Array<string> {
+	return sanitizerMode(env) === "none" ? ["-O3"] : [];
+}
+
 /** Shared compiler flags; callers append the normalized feature defines. */
 export function ccExtraFlags(
 	plan?: NativeBuildPlan,

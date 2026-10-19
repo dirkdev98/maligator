@@ -19,7 +19,7 @@ import {
 	readArtifactAction,
 	withArtifactActionLock,
 } from "./artifact-store.ts";
-import { ccExtraFlags, sanitizerMode } from "./build-flags.ts";
+import { ccExtraFlags, runtimeOptimizationFlags, sanitizerMode } from "./build-flags.ts";
 import {
 	compileArgumentsEmitDebugInfo,
 	expandedGeneratedUnitDigest,
@@ -286,6 +286,7 @@ function runtimeLayout(context: NativeBuildContext): RuntimeLayout {
 		compileArguments: [
 			"-std=c2x",
 			...identityFlags,
+			...runtimeOptimizationFlags(context.environment),
 			...includeArguments.map((argument) =>
 				normalizeRuntimeBuildArgument(context.runtimeDirectory, argument),
 			),
@@ -389,7 +390,7 @@ function objectActionKey(
 	return artifactActionKey(RUNTIME_OBJECT_PRODUCER, {
 		source: source.logicalPath,
 		preprocessedDigest,
-		arguments: runtimeObjectCodegenArguments(context, layout),
+		arguments: runtimeObjectCodegenArguments(context, layout, source),
 		environment: context.environmentFingerprint,
 		toolchain: context.toolchain.fingerprint,
 		target: context.toolchain.target,
@@ -416,13 +417,24 @@ function sourceIncludeArguments(
 	);
 }
 
+function runtimeSourceCompileFlags(
+	context: NativeBuildContext,
+	layout: RuntimeLayout,
+	source: RuntimeSource,
+): Array<string> {
+	return source.objectStage === "compiler-overlay-object"
+		? layout.flags
+		: [...layout.flags, ...runtimeOptimizationFlags(context.environment)];
+}
+
 function runtimeObjectCodegenArguments(
 	context: NativeBuildContext,
 	layout: RuntimeLayout,
+	source: RuntimeSource,
 ): Array<string> {
 	return [
 		"-std=c2x",
-		...layout.flags
+		...runtimeSourceCompileFlags(context, layout, source)
 			// Feature and GC macros, the compiler-wire include, and header search paths
 			// have already been projected into the preprocessed source digest. Keep
 			// every code-generation-affecting flag so optimization, sanitizer, LTO,
@@ -533,7 +545,7 @@ function ensureRuntimeObjects(
 				tool: context.toolchain.tools.cc.path,
 				args: toolArguments(context.toolchain.tools.cc, [
 					"-std=c2x",
-					...layout.flags,
+					...runtimeSourceCompileFlags(context, layout, source),
 					...sourceIncludeArguments(layout, source),
 					"-c",
 					source.path,
