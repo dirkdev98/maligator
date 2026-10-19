@@ -43,6 +43,38 @@ test("mixed parameter arguments reads materialize only on an observing body path
 	).toBe(false);
 });
 
+test("body count reads beside a cold observing use materialize only on that path", () => {
+	const program = lowerSemanticProgramToCore(
+		analyzeSourceAndRunSemanticAnalysis(
+			`function setting(name) {
+				"use strict";
+				if (arguments.length === 1) return name;
+				return Array.prototype.slice.call(arguments, 1);
+			}
+			setting("etag");`,
+			"arguments-lazy-body.js",
+		),
+	).program;
+	const fn = functionNamed(program, "setting");
+	const blocks = coreBlocks(fn);
+	const entry = blocks.find(({ id }) => id === fn.entry)!;
+	expect(entry.terminator.kind).toBe("jump");
+	const prologue = blocks.find(
+		({ id }) => entry.terminator.kind === "jump" && id === entry.terminator.edge.block,
+	)!;
+	const materializationBlocks = blocks.filter(({ instructions }) =>
+		instructions.some(({ opcode }) => opcode === "createArgumentsObject"),
+	);
+
+	expect(materializationBlocks).toHaveLength(1);
+	expect(materializationBlocks[0]!.id).not.toBe(prologue.id);
+	expect(
+		blocks
+			.flatMap(({ instructions }) => instructions)
+			.some(({ opcode }) => opcode === "loadArgumentCount"),
+	).toBe(true);
+});
+
 test("direct eval and arrow capture retain eager arguments materialization", () => {
 	const program = lowerSemanticProgramToCore(
 		analyzeSourceAndRunSemanticAnalysis(

@@ -5151,6 +5151,8 @@ function compileFunctionParams(
 		}
 	}
 	if (argumentsBinding && lazilyMaterializesArguments) {
+		if (needsStaticFallback)
+			fn.staticArgumentsFallbackRegister = compileUndefined(fn, cursor);
 		const empty = nextCoreVariable(fn);
 		block.emitter.emit({ type: "createEmpty", registers: [empty] });
 		fn.argumentsObjectRegister = empty;
@@ -12445,11 +12447,121 @@ function compileStaticArgumentsMember(
 
 	const mappedBinding = fn.staticMappedArgumentBindings?.get(usage);
 	const snapshot = fn.staticArgumentsRegisters?.get(usage);
-	if (access.kind === "length") return snapshot;
 	const fallbackRegister = fn.staticArgumentsFallbackRegister;
-	if (fallbackRegister === undefined || (!mappedBinding && snapshot === undefined)) {
+	if (
+		access.kind === "length"
+			? snapshot === undefined
+			: fallbackRegister === undefined || (!mappedBinding && snapshot === undefined)
+	) {
 		return undefined;
 	}
+	if (!fn.semanticFile.guardedArgumentsAccesses.has(usage)) {
+		return compileDirectArgumentsRead(
+			program,
+			fn,
+			cursor,
+			access,
+			mappedBinding,
+			snapshot,
+		);
+	}
+	return compileGuardedArgumentsRead(
+		program,
+		fn,
+		cursor,
+		usage,
+		access,
+		mappedBinding,
+		snapshot,
+	);
+}
+
+/** Read the frame while the lazy binding is EMPTY, else the materialized object. */
+function compileGuardedArgumentsRead(
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
+	usage: ESTree.Node,
+	access: StaticArgumentsAccess,
+	mappedBinding: Binding | undefined,
+	snapshot: number | undefined,
+): number {
+	const binding = fn.semanticFile.nodeToBinding.get(usage)!;
+	const current = loadRegisterFromLocation(
+		fn,
+		cursor.block,
+		getOrCreateBindingLocation(program, fn, binding),
+	);
+	const missing = nextCoreVariable(fn);
+	cursor.block.emitter.emit({ type: "isEmpty", registers: [missing, current] });
+	const directJump: Extract<CompilerInstruction, { type: "jumpIf" }> = {
+		type: "jumpIf",
+		registers: [missing],
+		blocks: [-1],
+	};
+	const objectJump: Extract<CompilerInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	cursor.block.emitter.emit(directJump, objectJump);
+	const result = nextCoreVariable(fn);
+
+	directJump.blocks[0] = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+	cursor.block = fn.blocks[directJump.blocks[0]]!;
+	const direct = compileDirectArgumentsRead(
+		program,
+		fn,
+		cursor,
+		access,
+		mappedBinding,
+		snapshot,
+	);
+	const directDone: Extract<CompilerInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	cursor.block.emitter.emit({ type: "move", registers: [result, direct] }, directDone);
+
+	objectJump.blocks[0] = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+	cursor.block = fn.blocks[objectJump.blocks[0]]!;
+	let key: number;
+	if (access.kind === "length") {
+		key = compileStaticString(program, fn, cursor, "length");
+	} else {
+		key = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
+			type: "createNumber",
+			registers: [key],
+			value: access.index,
+		});
+	}
+	const objectDone: Extract<CompilerInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	cursor.block.emitter.emit(
+		{ type: "loadProperty", registers: [result, current, key] },
+		objectDone,
+	);
+
+	const joinIndex = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+	directDone.blocks[0] = joinIndex;
+	objectDone.blocks[0] = joinIndex;
+	cursor.block = fn.blocks[joinIndex]!;
+	return result;
+}
+
+function compileDirectArgumentsRead(
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
+	access: StaticArgumentsAccess,
+	mappedBinding: Binding | undefined,
+	snapshot: number | undefined,
+): number {
+	// The caller proved the snapshot or mapped binding and the fallback exist.
+	if (access.kind === "length") return snapshot!;
+	const fallbackRegister = fn.staticArgumentsFallbackRegister!;
 	const direct = mappedBinding
 		? loadRegisterFromLocation(
 				fn,

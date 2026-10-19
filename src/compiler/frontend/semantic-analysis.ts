@@ -51,17 +51,23 @@ export interface SemanticFile {
 	/**
 	 * Implicit `arguments` identifier reads proven to be direct frame accesses.
 	 * IR may read the frame count/value without constructing the arguments object.
-	 * A wholly static binding records every access; a mixed binding records only
-	 * accesses that run in the parameter environment before any body use can
-	 * observe the object.
+	 * A wholly static binding records every access; a lazy binding records its
+	 * direct reads, guarding body reads with `guardedArgumentsAccesses`.
 	 */
 	staticArgumentsAccesses: Map<ESTree.Node, StaticArgumentsAccess>;
 
 	/**
-	 * Mixed implicit `arguments` bindings whose parameter-environment reads are
-	 * static and whose remaining uses are local to the owning function body. IR
-	 * initializes these bindings to EMPTY and materializes the object at the first
-	 * body read, so paths that never observe `arguments` allocate nothing.
+	 * Body reads of a lazy binding in `staticArgumentsAccesses`. They read the frame
+	 * only while the binding is still EMPTY: once a body use has materialized the
+	 * object, callees may have changed its length or elements.
+	 */
+	guardedArgumentsAccesses: Set<ESTree.Node>;
+
+	/**
+	 * Mixed implicit `arguments` bindings whose uses are all local to the owning
+	 * function and include a direct read. IR initializes these bindings to EMPTY and
+	 * materializes the object at the first other body use, so paths that only read
+	 * the count or constant indices allocate nothing.
 	 */
 	lazyArgumentsBindings: Set<Binding>;
 
@@ -263,6 +269,7 @@ export function analyzeSourceAndRunSemanticAnalysis(
 		nodeToBinding: new Map(),
 		withDynamicNodes: new Set(),
 		staticArgumentsAccesses: new Map(),
+		guardedArgumentsAccesses: new Set(),
 		lazyArgumentsBindings: new Set(),
 		hasDirectEval: new Set(),
 		directEvalVariableEnvironments: new Set(),
@@ -667,12 +674,12 @@ function canLazilyMaterializeArgumentsUse(
 
 /**
  * Classify direct `arguments.length` and canonical constant-index reads. A
- * binding whose every use is direct remains fully static. For a mixed binding,
- * direct `arguments.length` reads in its parameter environment may stay static
- * when every other parameter use is also such a read and every remaining use is
- * local to the owning function body. The latter restriction lets lowering lazily
- * materialize the one observable arguments object without making an arrow,
- * `with`, or direct eval create the wrong activation's object.
+ * binding whose every use is direct remains fully static. A mixed binding is lazy
+ * when every parameter use is a direct `arguments.length` read, every body use is
+ * local to the owning function body, and some use is a direct read. The locality
+ * restriction lets lowering lazily materialize the one observable arguments
+ * object without making an arrow, `with`, or direct eval create the wrong
+ * activation's object.
  */
 function classifyStaticArgumentsUsage(file: SemanticFile): void {
 	const parents = new Map<ESTree.Node, ESTree.Node>();
@@ -726,7 +733,6 @@ function classifyStaticArgumentsUsage(file: SemanticFile): void {
 			usageIsInFunctionParameters(usage, owner, parents),
 		);
 		if (
-			parameterUsages.length === 0 ||
 			!parameterUsages.every((usage) => {
 				const access = byNode.get(usage);
 				return access?.kind === "length" && isDirectArgumentsRead(access.member, parents);
@@ -743,9 +749,12 @@ function classifyStaticArgumentsUsage(file: SemanticFile): void {
 		) {
 			continue;
 		}
-		for (const usage of parameterUsages) {
+		const guardedReads = bodyUsages.filter(isStaticRead);
+		if (parameterUsages.length === 0 && guardedReads.length === 0) continue;
+		for (const usage of [...parameterUsages, ...guardedReads]) {
 			file.staticArgumentsAccesses.set(usage, byNode.get(usage)!);
 		}
+		for (const usage of guardedReads) file.guardedArgumentsAccesses.add(usage);
 		file.lazyArgumentsBindings.add(binding);
 	}
 }

@@ -701,19 +701,22 @@ contracts or investigates costs still visible after the string follow-ups.
       registered for prototype invalidation like the stub's. A two-extra-row
       experiment improved an isolated three-class loop 7% while its monomorphic
       control regressed 1.3%; resolve that trade-off before shipping site storage.
-- [ ] Forward `fn.apply(this, arguments)` without materializing `arguments`.
-      Express's router (`restore`) and type-is build a dictionary arguments object
-      per call, about 3% of the Express JSON route's samples. Rest parameters
-      already forward through `callRestArguments`; arguments objects also need
-      mapped-parameter aliasing ruled out, and a fallback that builds an arguments
-      object rather than an Array when `apply` is not the builtin.
+- [ ] Read `arguments[i]` and forward `fn.apply(this, arguments)` without
+      materializing `arguments`. Body `arguments.length` and constant-index reads
+      no longer allocate, but copy loops such as `args[i] = arguments[i]` (raw-body,
+      ee-first, wrappy, Express's request) and router's `restore` still build a
+      dictionary arguments object per call and read it through the keyed slow
+      path, about seven reads per Express request. A dynamic-index read needs a
+      frame read for in-range integer keys with the object as fallback. Rest
+      parameters already forward through `callRestArguments`; arguments objects
+      also need mapped-parameter aliasing ruled out, and a fallback that builds an
+      arguments object rather than an Array when `apply` is not the builtin.
 - [ ] Keep Node stream state in native fields. The C stream runtime reads and
       writes its state as own properties named by C strings, about 177 interned
       names per Express JSON request, and its helpers take 7% of that route's
       samples. Interning by address made each name cheap; the property traffic
-      remains. The route's other cache misses are mostly debug's `enabled` getter,
-      ten per request; calling it straight from the function's own table changed
-      nothing measurable.
+      remains. Finding those names through the shared shape stub instead of a
+      shape search changed nothing measurable.
 - [ ] Bound the call targets of methods stored on module-scope objects. In a
       script, `holder.run(value)` with `holder.run` assigned two functions
       dispatches to both through a finite guarded set; as an ES module the same
@@ -783,7 +786,13 @@ contracts or investigates costs still visible after the string follow-ups.
 - [ ] Remove per-match allocations from RegExp execution. regress builds a fresh
       backtracking executor for every exec, and each RegExp literal evaluation
       allocates a compiled-pattern handle freed at finalization; together with
-      result arrays they dominate `primordial-string-regexp-projections`.
+      result arrays they dominate `primordial-string-regexp-projections`. In the
+      Express in-process route RegExp execution takes about 11% of the samples:
+      backtracking is under a third of that and malloc/free about as much, from
+      each match's capture vector and from widening Latin-1 subjects for patterns
+      with non-ASCII classes such as content-type's parameter pattern. An
+      anchored literal route such as `^(?:\/json)(?:\/$)?$` costs about 120 ns per
+      exec on an 8-character path.
 
 - [ ] Investigate full-output checksum traversal and construction/replacement in
       the complete mixed-text pipeline. Use `scripts/profile-text-pipeline.ts`
