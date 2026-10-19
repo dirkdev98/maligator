@@ -174,8 +174,8 @@ export interface CompilerInstallation {
 	platformSourceRoot?: string;
 	/** Absolute runtime source tree owned by this compiler installation. */
 	runtimeDirectory: string;
-	/** License notice copied into deployable artifacts. */
-	licensePath?: string;
+	/** Maligator's license and third-party notices, copied into deployable artifacts. */
+	licensePaths?: Array<string>;
 	/** Source implementation supplied for the virtual maligator:test module. */
 	testModulePath: string;
 	/** Node-compatible globals installed before applications and interpreted tests. */
@@ -211,7 +211,10 @@ export function developmentCompilerInstallation(
 	return {
 		platformSourceRoot: sourceDirectory,
 		runtimeDirectory: path.resolve(sourceDirectory, "../runtime"),
-		licensePath: path.resolve(sourceDirectory, "../LICENSE"),
+		licensePaths: [
+			path.resolve(sourceDirectory, "../LICENSE"),
+			path.resolve(sourceDirectory, "../THIRD_PARTY_NOTICES.md"),
+		],
 		testModulePath: path.join(sourceDirectory, "testing/runtime.mjs"),
 		nodeGlobalsPath: path.join(sourceDirectory, "node-globals.mjs"),
 		frontendIdentity: TYPE_STRIPPER_IDENTITY,
@@ -227,7 +230,7 @@ export function productCompilerInstallation(
 	runtimeDirectory: string,
 	compilerWirePath: string,
 	testModulePath: string,
-	licensePath?: string,
+	licensePaths?: Array<string>,
 	developmentRunnerPath?: string,
 	nodeGlobalsPath?: string,
 	mutableDevelopmentRunnerPath?: string,
@@ -238,7 +241,9 @@ export function productCompilerInstallation(
 		...(platformSourceRoot === undefined
 			? {}
 			: { platformSourceRoot: path.resolve(platformSourceRoot) }),
-		...(licensePath === undefined ? {} : { licensePath: path.resolve(licensePath) }),
+		...(licensePaths === undefined
+			? {}
+			: { licensePaths: licensePaths.map((file) => path.resolve(file)) }),
 		testModulePath: path.resolve(testModulePath),
 		nodeGlobalsPath: path.resolve(
 			nodeGlobalsPath ?? path.join(path.dirname(testModulePath), "node-globals.mjs"),
@@ -1147,7 +1152,7 @@ function prepareCommandState(
 						binaryPath,
 						directory: artifactDirectory,
 						executableName: name,
-						licensePath: context.installation.licensePath,
+						licensePaths: context.installation.licensePaths,
 						version: MALIGATOR_VERSION,
 						target: nativeContext.toolchain.rustTarget,
 						production: true,

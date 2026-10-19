@@ -26,6 +26,12 @@ preparation, and push that exact commit to `main` before dispatching the workflo
 
 ## Prepare the packages
 
+Every package, release archive and `--artifact` output carries `LICENSE` and
+`THIRD_PARTY_NOTICES.md`, and the embedded runtime sources include the vendored
+license files. Run `npm run generate:third-party-notices` after changing
+`runtime/rust/Cargo.lock`, vendored code, or a runtime file ported from Node.js or
+libuv, and commit the result before cutting a release.
+
 The `Prepare release packages` GitHub Actions workflow is the preferred packaging
 path. Dispatch it on the exact release commit. It cross-builds all four targets on
 macOS ARM, executes the native binary and installed npm launcher on every supported

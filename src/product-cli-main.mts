@@ -55,7 +55,7 @@ const installation = productCompilerInstallation(
 	assets.materialize("runtime"),
 	assets.materialize("compilerWire"),
 	assets.materialize("testRuntime"),
-	assets.materialize("license"),
+	[assets.materialize("license"), assets.materialize("thirdPartyNotices")],
 	process.argv[0],
 	assets.materialize("nodeGlobals"),
 	mutableDevelopmentRunner,

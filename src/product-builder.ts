@@ -36,7 +36,11 @@ export const PRODUCT_RUNTIME_ASSET_INCLUDE = [
 	"rust/include/**",
 	"vendor/llhttp/include/**",
 	"vendor/llhttp/src/**",
+	"vendor/llhttp/LICENSE-MIT",
+	"vendor/libuv/LICENSE",
+	"vendor/node/LICENSE",
 	"vendor/sqlite/**",
+	"vendor/unicode/LICENSE.txt",
 ];
 
 function productRuntimeConfig(primordials: "locked" | "mutable") {
@@ -83,6 +87,10 @@ export function productCliConfig(
 				include: ["workers/**"],
 			},
 			license: { type: "file", path: path.resolve(repositoryRoot, "LICENSE") },
+			thirdPartyNotices: {
+				type: "file",
+				path: path.resolve(repositoryRoot, "THIRD_PARTY_NOTICES.md"),
+			},
 			runtime: {
 				type: "directory",
 				path: path.resolve(repositoryRoot, "runtime"),
@@ -226,7 +234,10 @@ export function buildProductCli(options: BuildProductCliOptions): string {
 			binaryPath,
 			directory: options.artifactDirectory,
 			executableName,
-			licensePath: path.join(repositoryRoot, "LICENSE"),
+			licensePaths: [
+				path.join(repositoryRoot, "LICENSE"),
+				path.join(repositoryRoot, "THIRD_PARTY_NOTICES.md"),
+			],
 			version: MALIGATOR_VERSION,
 			target: toolchain.rustTarget,
 			production,

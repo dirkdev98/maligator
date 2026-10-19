@@ -13,7 +13,8 @@ export interface BuildArtifactOptions {
 	binaryPath: string;
 	directory: string;
 	executableName?: string;
-	licensePath?: string;
+	/** License and notice files, copied into the artifact root under their own names. */
+	licensePaths?: Array<string>;
 	version: string;
 	target: string;
 	production: boolean;
@@ -73,12 +74,16 @@ export function createBuildArtifact(options: BuildArtifactOptions): BuildArtifac
 		production: options.production,
 		files: [{ path: relativeBinaryPath, sha256: digest, bytes: bytes.length }],
 	};
-	if (options.licensePath !== undefined) {
-		const licensePath = path.join(directory, "LICENSE");
-		copyFileSync(options.licensePath, licensePath);
+	for (const source of options.licensePaths ?? []) {
+		const name = path.basename(source);
+		if (manifest.files.some((file) => file.path === name)) {
+			throw new Error(`artifact license file name must be unique: ${name}`);
+		}
+		const licensePath = path.join(directory, name);
+		copyFileSync(source, licensePath);
 		const license = readFileSync(licensePath);
 		manifest.files.push({
-			path: "LICENSE",
+			path: name,
 			sha256: hash("sha256", license, "hex"),
 			bytes: license.length,
 		});

@@ -1127,6 +1127,16 @@ remains a Maligator extension and does not count as global fetch conformance.
       straight to the callback buffer today), and implement fork with an IPC channel.
       Exercise active-child cleanup in embedded VM teardown on a Linux host.
 
+- [ ] With the next runtime installer change, give every file listed in
+      THIRD_PARTY_NOTICES.md a one-line header naming its upstream source, e.g.
+      `// Derived from Node.js lib/internal/mime.js (MIT); see THIRD_PARTY_NOTICES.md.`
+      A header alone changes installer fingerprints and needs a primordial audit, so
+      it rides along with that change. Keep new ports listed in the generator.
+
+- [ ] Fail CI when THIRD_PARTY_NOTICES.md is stale against Cargo.lock, the vendored
+      sources and the derived-file list, and find license texts for alloc-stdlib and
+      blake2b_simd, which publish none and are listed by SPDX expression only.
+
 - [ ] Fill the remaining Node 26 module gaps: recursive fs.watch, watching more than
       256 directory entries on macOS (kqueue holds one fd per entry) and the watcher
       'error' event, fs.openAsBlob, readdir's `encoding: "buffer"`; https and http2

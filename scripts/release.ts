@@ -224,6 +224,7 @@ const launcherPackageFiles = [
 	...PLATFORM_MODULES.map((module) => module.declarationFile).sort(),
 	"README.md",
 	"LICENSE",
+	"THIRD_PARTY_NOTICES.md",
 ];
 
 export function createLauncherPackageJson(
@@ -249,6 +250,15 @@ export function createLauncherPackageJson(
 	};
 }
 
+// The binary embeds the runtime, so every package carries the third-party notices too.
+const LICENSE_FILES = ["LICENSE", "THIRD_PARTY_NOTICES.md"];
+
+function copyLicenses(directory: string): void {
+	for (const file of LICENSE_FILES) {
+		copyFileSync(path.join(repositoryRoot, file), path.join(directory, file));
+	}
+}
+
 function stagePlatformPackage(
 	target: (typeof targets)[number],
 	version: string,
@@ -259,12 +269,12 @@ function stagePlatformPackage(
 	mkdirSync(path.dirname(binaryPath), { recursive: true });
 	copyFileSync(path.join(artifactDirectory, "bin/maligator"), binaryPath);
 	chmodSync(binaryPath, 0o755);
-	copyFileSync(path.join(repositoryRoot, "LICENSE"), path.join(directory, "LICENSE"));
+	copyLicenses(directory);
 	writeJson(path.join(directory, "package.json"), {
 		...commonPackageFields(target.packageName, version),
 		os: [target.platform],
 		cpu: [target.arch],
-		files: ["bin/maligator", "LICENSE"],
+		files: ["bin/maligator", ...LICENSE_FILES],
 		bin: { maligator: "bin/maligator" },
 	});
 	return directory;
@@ -296,7 +306,7 @@ function stageLauncherPackage(version: string, selected: typeof targets): string
 			path.join(directory, module.declarationFile),
 		);
 	}
-	copyFileSync(path.join(repositoryRoot, "LICENSE"), path.join(directory, "LICENSE"));
+	copyLicenses(directory);
 	writeJson(
 		path.join(directory, "package.json"),
 		createLauncherPackageJson(
@@ -637,7 +647,7 @@ function packRelease(args: Array<string>): void {
 		if (!existsSync(directory)) {
 			throw new Error("build the complete target matrix before packing");
 		}
-		const packed = packDirectory(directory, packs, ["LICENSE", "bin/maligator"]);
+		const packed = packDirectory(directory, packs, [...LICENSE_FILES, "bin/maligator"]);
 		platformTarballs.set(target.rust, packed);
 		packedPackages.push({
 			name: target.packageName,

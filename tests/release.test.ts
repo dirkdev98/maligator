@@ -32,10 +32,12 @@ describe("build artifacts", () => {
 		const root = temporaryDirectory();
 		const source = path.join(root, "source");
 		const license = path.join(root, "LICENSE");
+		const notices = path.join(root, "THIRD_PARTY_NOTICES.md");
 		const directory = path.join(root, "artifact");
 		const profile = path.join(root, "profile.json");
 		writeFileSync(source, "native-binary");
 		writeFileSync(license, "MIT");
+		writeFileSync(notices, "notices");
 		writeFileSync(profile, '{"schema":1}\n');
 		chmodSync(source, 0o755);
 
@@ -43,7 +45,7 @@ describe("build artifacts", () => {
 			binaryPath: source,
 			directory,
 			executableName: "maligator",
-			licensePath: license,
+			licensePaths: [license, notices],
 			version: MALIGATOR_VERSION,
 			target: "aarch64-apple-darwin",
 			production: true,
@@ -69,6 +71,11 @@ describe("build artifacts", () => {
 					bytes: 3,
 				},
 				{
+					path: "THIRD_PARTY_NOTICES.md",
+					sha256: "7367ab9a454559025d4d8ee2241d74682674f0e62c344695d23cfb2f080dd0a9",
+					bytes: 7,
+				},
+				{
 					path: "profile.json",
 					sha256: "6b823fa123b900a4139de2101277275af8329f3a3d34c00ef3bf4fc6bf60287e",
 					bytes: 13,
@@ -76,13 +83,17 @@ describe("build artifacts", () => {
 			],
 		});
 		expect(readFileSync(path.join(directory, "LICENSE"), "utf-8")).toBe("MIT");
+		expect(readFileSync(path.join(directory, "THIRD_PARTY_NOTICES.md"), "utf-8")).toBe(
+			"notices",
+		);
 		expect(readFileSync(path.join(directory, "profile.json"), "utf-8")).toBe(
 			'{"schema":1}\n',
 		);
 		expect(readFileSync(result.checksumsPath, "utf-8")).toBe(
 			`${result.manifest.files[0]!.sha256}  bin/maligator\n` +
 				`${result.manifest.files[1]!.sha256}  LICENSE\n` +
-				`${result.manifest.files[2]!.sha256}  profile.json\n`,
+				`${result.manifest.files[2]!.sha256}  THIRD_PARTY_NOTICES.md\n` +
+				`${result.manifest.files[3]!.sha256}  profile.json\n`,
 		);
 		expect(() =>
 			createBuildArtifact({
@@ -357,6 +368,7 @@ describe("npm launcher", () => {
 			"workers-host-api.d.ts",
 			"README.md",
 			"LICENSE",
+			"THIRD_PARTY_NOTICES.md",
 		]);
 		expect(manifest.optionalDependencies).toEqual({
 			"@maligator/cli-darwin-arm64": "0.1.0-alpha.2",

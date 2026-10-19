@@ -293,7 +293,10 @@ describe("command shell", () => {
 		const installation = developmentCompilerInstallation(path.join(repoRoot, "src"));
 		expect(installation).toEqual({
 			runtimeDirectory: path.join(repoRoot, "runtime"),
-			licensePath: path.join(repoRoot, "LICENSE"),
+			licensePaths: [
+				path.join(repoRoot, "LICENSE"),
+				path.join(repoRoot, "THIRD_PARTY_NOTICES.md"),
+			],
 			testModulePath: path.join(repoRoot, "src/testing/runtime.mjs"),
 			nodeGlobalsPath: path.join(repoRoot, "src/node-globals.mjs"),
 			platformSourceRoot: path.join(repoRoot, "src"),
@@ -378,6 +381,15 @@ describe("command shell", () => {
 		expect(PRODUCT_RUNTIME_ASSET_INCLUDE).toContain("vendor/llhttp/include/**");
 		expect(PRODUCT_RUNTIME_ASSET_INCLUDE).toContain("vendor/llhttp/src/**");
 		expect(PRODUCT_RUNTIME_ASSET_INCLUDE).toContain("vendor/sqlite/**");
+		for (const notice of [
+			"vendor/llhttp/LICENSE-MIT",
+			"vendor/libuv/LICENSE",
+			"vendor/node/LICENSE",
+			"vendor/unicode/LICENSE.txt",
+		]) {
+			expect(PRODUCT_RUNTIME_ASSET_INCLUDE).toContain(notice);
+			expect(existsSync(path.join(repoRoot, "runtime", notice))).toBe(true);
+		}
 		const productConfig = productCliConfig(
 			repoRoot,
 			path.join(repoRoot, "compiler.malw"),
@@ -394,6 +406,10 @@ describe("command shell", () => {
 		expect(productConfig.assets.license).toEqual({
 			type: "file",
 			path: path.join(repoRoot, "LICENSE"),
+		});
+		expect(productConfig.assets.thirdPartyNotices).toEqual({
+			type: "file",
+			path: path.join(repoRoot, "THIRD_PARTY_NOTICES.md"),
 		});
 		expect(productConfig.assets.testRuntime).toEqual({
 			type: "file",
