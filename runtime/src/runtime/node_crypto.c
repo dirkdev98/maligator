@@ -439,6 +439,15 @@ static void crypto_scrub_free(byte *bytes, usize length) {
     free(bytes);
 }
 
+// SIMD cipher backends (AVX2 on x86_64) need more than malloc's 16-byte alignment, and the
+// Rust side refuses misaligned state storage.
+static byte *crypto_cipher_storage(usize size) {
+    usize rounded = (size + 63) & ~(usize) 63;
+    byte *storage = aligned_alloc(64, rounded);
+    if (storage != nullptr) memset(storage, 0, rounded);
+    return storage;
+}
+
 /* True when `str` is exactly the ASCII literal `ascii` of length `n`. Used for the
  * algorithm and output-encoding checks — both must match one fixed lowercase word,
  * so a code-unit-wise compare (no allocation, no ToLower) is enough. */
@@ -3464,7 +3473,7 @@ static MalValue crypto_web_aes_gcm(MalVm *vm, const MalValue *args, i32 argc, bo
     usize key_length = stored->byte_length - 1;
     u32 kind = key_length == 16 ? 7 : key_length == 24 ? 8 : 9;
     usize body = encrypt ? data.length : data.length - tag_length;
-    storage = calloc(1, storage_size);
+    storage = crypto_cipher_storage(storage_size);
     out = malloc(body + 32);
     if (storage == nullptr || out == nullptr) {
         mal_vm_throw_allocation_error(vm);
@@ -3907,7 +3916,7 @@ static MalValue crypto_cipher_create(MalVm *vm, const MalValue *args, i32 argc, 
         return undefined;
     }
     usize storage_size = CRYPTO_CIPHER_HEADER_BYTES + mal_cipher_state_size();
-    byte *storage = calloc(1, storage_size);
+    byte *storage = crypto_cipher_storage(storage_size);
     if (storage == nullptr) {
         crypto_scrub_free(owned_key, key.length);
         crypto_scrub_free(owned_iv, iv.length);

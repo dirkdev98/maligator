@@ -16,8 +16,9 @@ show("top level", [
 ]);
 show("providers", [
 	Object.isFrozen(asyncWrapProviders),
-	asyncWrapProviders.ZLIB,
-	Object.keys(asyncWrapProviders).length,
+	asyncWrapProviders.ZLIB === Object.keys(asyncWrapProviders).indexOf("ZLIB"),
+	asyncWrapProviders.NONE,
+	"TCPWRAP" in asyncWrapProviders,
 ]);
 try {
 	createHook({ init: 1 });

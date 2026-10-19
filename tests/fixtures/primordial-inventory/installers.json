@@ -389,7 +389,7 @@
 	},
 	{
 		"file": "runtime/node_async_hooks.c",
-		"sha256": "519294201a018433ac8606c0375236a8d4d4da213c741eebf5a2c00bb91cbb4f"
+		"sha256": "6c9add96864fa2b383705ada3070301f4a9c992b52ec61c0723cf3e84f228397"
 	},
 	{
 		"file": "runtime/node_async_hooks.h",
@@ -429,7 +429,7 @@
 	},
 	{
 		"file": "runtime/node_crypto.c",
-		"sha256": "9083c62eaac596ada1abe808b4f35380f451c2a3804449e0dd6fd6b031f34436"
+		"sha256": "e949b79e1764573a948b34a95ca2ccf6bb82303963b62bd42e92098d058a492d"
 	},
 	{
 		"file": "runtime/node_crypto.h",
