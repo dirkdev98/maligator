@@ -30,11 +30,16 @@ pub const MAL_TLS_INFO_CIPHER: i32 = 2;
 pub const MAL_TLS_INFO_SERVER_NAME: i32 = 3;
 pub const MAL_TLS_INFO_PEER_CERTIFIED: i32 = 4;
 pub const MAL_TLS_INFO_FAILURE: i32 = 5;
+pub const MAL_TLS_INFO_AUTHORIZATION_ERROR: i32 = 6;
 
+/// `rejectUnauthorized: false`: the handshake still proves possession of the certificate's key,
+/// while `authorized`/`authorizationError` ask the wrapped verifier afterwards, as Node does.
 #[derive(Debug)]
-struct NoCertificateVerification;
+struct DeferredServerVerifier {
+    algorithms: rustls::crypto::WebPkiSupportedAlgorithms,
+}
 
-impl ServerCertVerifier for NoCertificateVerification {
+impl ServerCertVerifier for DeferredServerVerifier {
     fn verify_server_cert(
         &self,
         _end_entity: &CertificateDer<'_>,
@@ -48,34 +53,53 @@ impl ServerCertVerifier for NoCertificateVerification {
 
     fn verify_tls12_signature(
         &self,
-        _message: &[u8],
-        _certificate: &CertificateDer<'_>,
-        _signature: &DigitallySignedStruct,
+        message: &[u8],
+        certificate: &CertificateDer<'_>,
+        signature: &DigitallySignedStruct,
     ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        Ok(HandshakeSignatureValid::assertion())
+        rustls::crypto::verify_tls12_signature(message, certificate, signature, &self.algorithms)
     }
 
     fn verify_tls13_signature(
         &self,
-        _message: &[u8],
-        _certificate: &CertificateDer<'_>,
-        _signature: &DigitallySignedStruct,
+        message: &[u8],
+        certificate: &CertificateDer<'_>,
+        signature: &DigitallySignedStruct,
     ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        Ok(HandshakeSignatureValid::assertion())
+        rustls::crypto::verify_tls13_signature(message, certificate, signature, &self.algorithms)
     }
 
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        vec![
-            SignatureScheme::ECDSA_NISTP256_SHA256,
-            SignatureScheme::ECDSA_NISTP384_SHA384,
-            SignatureScheme::ED25519,
-            SignatureScheme::RSA_PSS_SHA256,
-            SignatureScheme::RSA_PSS_SHA384,
-            SignatureScheme::RSA_PSS_SHA512,
-            SignatureScheme::RSA_PKCS1_SHA256,
-            SignatureScheme::RSA_PKCS1_SHA384,
-            SignatureScheme::RSA_PKCS1_SHA512,
-        ]
+        self.algorithms.supported_schemes()
+    }
+}
+
+type ServerVerdict = (Option<Arc<rustls::client::WebPkiServerVerifier>>, ServerName<'static>);
+
+fn self_signed(certificate: &[u8]) -> bool {
+    crate::x509::self_issued(certificate)
+}
+
+// OpenSSL's X509_verify_cert_error_string codes, which Node reports as authorizationError.
+fn verify_code(error: &rustls::Error, chain: &[CertificateDer<'_>]) -> &'static str {
+    use rustls::CertificateError as E;
+    let rustls::Error::InvalidCertificate(error) = error else {
+        return "UNABLE_TO_VERIFY_LEAF_SIGNATURE";
+    };
+    match error {
+        E::UnknownIssuer => match chain {
+            [leaf] if self_signed(leaf) => "DEPTH_ZERO_SELF_SIGNED_CERT",
+            [_] => "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+            [.., root] if self_signed(root) => "SELF_SIGNED_CERT_IN_CHAIN",
+            _ => "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
+        },
+        E::Expired | E::ExpiredContext { .. } => "CERT_HAS_EXPIRED",
+        E::NotValidYet | E::NotValidYetContext { .. } => "CERT_NOT_YET_VALID",
+        E::NotValidForName | E::NotValidForNameContext { .. } => "ERR_TLS_CERT_ALTNAME_INVALID",
+        E::BadSignature => "CERT_SIGNATURE_FAILURE",
+        E::Revoked => "CERT_REVOKED",
+        E::InvalidPurpose | E::InvalidPurposeContext { .. } => "INVALID_PURPOSE",
+        _ => "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
     }
 }
 
@@ -85,6 +109,8 @@ pub struct MalTlsClient {
     failure: Option<&'static str>,
     /// Judges a client certificate the handshake admitted without verifying it.
     client_verifier: Option<Arc<dyn ClientCertVerifier>>,
+    /// Judges a server certificate under `rejectUnauthorized: false`.
+    server_verdict: Option<ServerVerdict>,
     seen_ciphertext: bool,
     peer_closed: bool,
     config_id: u64,
@@ -94,6 +120,32 @@ pub struct MalTlsClient {
 }
 
 impl MalTlsClient {
+    /// The OpenSSL verify code for an admitted but unverified peer, or None once it verifies.
+    fn authorization_error(&self) -> Option<&'static str> {
+        let chain = self.connection.peer_certificates().unwrap_or(&[]);
+        if let Some(verifier) = &self.client_verifier {
+            // Node reports a requested but absent client certificate this way.
+            let Some((leaf, intermediates)) = chain.split_first() else {
+                return Some("UNABLE_TO_GET_ISSUER_CERT");
+            };
+            return verifier
+                .verify_client_cert(leaf, intermediates, UnixTime::now())
+                .err()
+                .map(|error| verify_code(&error, chain));
+        }
+        if let Some((verifier, name)) = &self.server_verdict {
+            let (leaf, intermediates) = chain.split_first()?;
+            let Some(verifier) = verifier else {
+                return Some(verify_code(&rustls::Error::InvalidCertificate(rustls::CertificateError::UnknownIssuer), chain));
+            };
+            return verifier
+                .verify_server_cert(leaf, intermediates, name, &[], UnixTime::now())
+                .err()
+                .map(|error| verify_code(&error, chain));
+        }
+        None
+    }
+
     fn consumed_ciphertext(&mut self, mut bytes: &[u8]) {
         // Rustls may retain a partial record after consuming every byte in the C staging buffer.
         while !bytes.is_empty() {
@@ -122,14 +174,26 @@ struct CachedConfig {
     alpn: Vec<u8>,
     cert_pem: Vec<u8>,
     key_pem: Vec<u8>,
-    config: Arc<ClientConfig>,
-    id: u64,
+    insecure: bool,
+    policy: ClientPolicy,
 }
 
 impl CachedConfig {
-    fn matches(&self, ca_pem: &[u8], alpn: &[u8], cert_pem: &[u8], key_pem: &[u8]) -> bool {
-        self.ca_pem == ca_pem && self.alpn == alpn && self.cert_pem == cert_pem && self.key_pem == key_pem
+    fn matches(&self, ca_pem: &[u8], alpn: &[u8], cert_pem: &[u8], key_pem: &[u8], insecure: bool) -> bool {
+        self.insecure == insecure
+            && self.ca_pem == ca_pem
+            && self.alpn == alpn
+            && self.cert_pem == cert_pem
+            && self.key_pem == key_pem
     }
+}
+
+#[derive(Clone)]
+struct ClientPolicy {
+    config: Arc<ClientConfig>,
+    /// Zero for `rejectUnauthorized: false`, whose connections are never pooled.
+    id: u64,
+    deferred: Option<Option<Arc<rustls::client::WebPkiServerVerifier>>>,
 }
 
 type ClientIdentity = (Vec<CertificateDer<'static>>, rustls::pki_types::PrivateKeyDer<'static>);
@@ -161,70 +225,73 @@ fn client_config(
     cert_pem: &[u8],
     key_pem: &[u8],
     insecure: bool,
-) -> Result<(Arc<ClientConfig>, u64), i32> {
+) -> Result<ClientPolicy, i32> {
     let cache = CONFIGS.get_or_init(|| Mutex::new(VecDeque::new()));
-    if !insecure {
+    {
         let entries = cache.lock().map_err(|_| MAL_TLS_STATUS_ERROR)?;
         if let Some(entry) = entries
             .iter()
-            .find(|entry| entry.matches(ca_pem, alpn, cert_pem, key_pem))
+            .find(|entry| entry.matches(ca_pem, alpn, cert_pem, key_pem, insecure))
         {
-            return Ok((entry.config.clone(), entry.id));
+            return Ok(entry.policy.clone());
         }
     }
     let identity = client_identity(cert_pem, key_pem)?;
     let provider = Arc::new(rustls::crypto::ring::default_provider());
-    let builder = ClientConfig::builder_with_provider(provider)
+    let mut roots = RootCertStore::empty();
+    let mut added = 0;
+    for certificate in rustls_pemfile::certs(&mut Cursor::new(ca_pem)) {
+        let certificate = certificate.map_err(|_| MAL_TLS_STATUS_INVALID_ARGUMENT)?;
+        if roots.add(certificate).is_ok() {
+            added += 1;
+        }
+    }
+    if added == 0 && !insecure {
+        return Err(MAL_TLS_STATUS_INVALID_ARGUMENT);
+    }
+    let builder = ClientConfig::builder_with_provider(provider.clone())
         .with_safe_default_protocol_versions()
         .map_err(|_| MAL_TLS_STATUS_ERROR)?;
-    let mut config = if insecure {
-        let builder = builder
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(NoCertificateVerification));
-        match identity {
-            Some((chain, key)) => builder
-                .with_client_auth_cert(chain, key)
-                .map_err(|_| MAL_TLS_STATUS_KEY_MISMATCH)?,
-            None => builder.with_no_client_auth(),
-        }
+    let (builder, deferred) = if insecure {
+        let verifier = (added > 0)
+            .then(|| {
+                rustls::client::WebPkiServerVerifier::builder_with_provider(Arc::new(roots), provider.clone())
+                    .build()
+                    .ok()
+            })
+            .flatten();
+        let deferred = Arc::new(DeferredServerVerifier {
+            algorithms: provider.signature_verification_algorithms,
+        });
+        (builder.dangerous().with_custom_certificate_verifier(deferred), Some(verifier))
     } else {
-        let mut roots = RootCertStore::empty();
-        let mut added = 0;
-        for certificate in rustls_pemfile::certs(&mut Cursor::new(ca_pem)) {
-            let certificate = certificate.map_err(|_| MAL_TLS_STATUS_INVALID_ARGUMENT)?;
-            if roots.add(certificate).is_ok() {
-                added += 1;
-            }
-        }
-        if added == 0 {
-            return Err(MAL_TLS_STATUS_INVALID_ARGUMENT);
-        }
-        let builder = builder.with_root_certificates(roots);
-        match identity {
-            Some((chain, key)) => builder
-                .with_client_auth_cert(chain, key)
-                .map_err(|_| MAL_TLS_STATUS_KEY_MISMATCH)?,
-            None => builder.with_no_client_auth(),
-        }
+        (builder.with_root_certificates(roots), None)
+    };
+    let mut config = match identity {
+        Some((chain, key)) => builder
+            .with_client_auth_cert(chain, key)
+            .map_err(|_| MAL_TLS_STATUS_KEY_MISMATCH)?,
+        None => builder.with_no_client_auth(),
     };
     if !alpn.is_empty() {
         config.alpn_protocols.push(alpn.to_vec());
     }
-    let config = Arc::new(config);
-    if insecure {
-        return Ok((config, 0));
-    }
-    let id = NEXT_CONFIG_ID
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
-        .map_err(|_| MAL_TLS_STATUS_ERROR)?;
+    let id = if insecure {
+        0
+    } else {
+        NEXT_CONFIG_ID
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+            .map_err(|_| MAL_TLS_STATUS_ERROR)?
+    };
+    let policy = ClientPolicy { config: Arc::new(config), id, deferred };
     // Exact trust bytes prevent a changed CA file from borrowing an older connection policy.
     if ca_pem.len() <= 1024 * 1024 && alpn.len() <= 255 && cert_pem.len() + key_pem.len() <= 64 * 1024 {
         let mut entries = cache.lock().map_err(|_| MAL_TLS_STATUS_ERROR)?;
         if let Some(entry) = entries
             .iter()
-            .find(|entry| entry.matches(ca_pem, alpn, cert_pem, key_pem))
+            .find(|entry| entry.matches(ca_pem, alpn, cert_pem, key_pem, insecure))
         {
-            return Ok((entry.config.clone(), entry.id));
+            return Ok(entry.policy.clone());
         }
         if entries.len() == 4 {
             entries.pop_front();
@@ -234,11 +301,11 @@ fn client_config(
             alpn: alpn.to_vec(),
             cert_pem: cert_pem.to_vec(),
             key_pem: key_pem.to_vec(),
-            config: config.clone(),
-            id,
+            insecure,
+            policy: policy.clone(),
         });
     }
-    Ok((config, id))
+    Ok(policy)
 }
 
 struct BoundedWriter<'a> {
@@ -324,14 +391,18 @@ pub unsafe extern "C" fn mal_tls_client_create(
     else {
         return MAL_TLS_STATUS_INVALID_ARGUMENT;
     };
-    let (config, config_id) = match client_config(ca_pem, alpn, cert_pem, key_pem, insecure != 0) {
-        Ok(config) => config,
+    let policy = match client_config(ca_pem, alpn, cert_pem, key_pem, insecure != 0) {
+        Ok(policy) => policy,
         Err(status) => return status,
     };
-    let Ok(connection) = ClientConnection::new(config, server_name) else {
+    let Ok(connection) = ClientConnection::new(policy.config, server_name.clone()) else {
         return MAL_TLS_STATUS_ERROR;
     };
-    unsafe { *out_handle = new_session(Connection::Client(connection), config_id, None) };
+    let session = new_session(Connection::Client(connection), policy.id, None);
+    unsafe {
+        (*session).server_verdict = policy.deferred.map(|verifier| (verifier, server_name));
+        *out_handle = session;
+    }
     MAL_TLS_STATUS_OK
 }
 
@@ -344,6 +415,7 @@ fn new_session(
         connection,
         failure: None,
         client_verifier,
+        server_verdict: None,
         seen_ciphertext: false,
         peer_closed: false,
         config_id,
@@ -736,19 +808,13 @@ pub unsafe extern "C" fn mal_tls_session_info(
             Some(reason) => reason.as_bytes(),
             None => return -1,
         },
-        MAL_TLS_INFO_PEER_CERTIFIED => match connection.peer_certificates() {
-            Some(certificates) if !certificates.is_empty() => {
-                if let Some(verifier) = &unsafe { &*handle }.client_verifier {
-                    if verifier
-                        .verify_client_cert(&certificates[0], &certificates[1..], UnixTime::now())
-                        .is_err()
-                    {
-                        return -1;
-                    }
-                }
-                b"1"
-            }
+        MAL_TLS_INFO_PEER_CERTIFIED => match unsafe { &*handle }.authorization_error() {
+            None if connection.peer_certificates().is_some_and(|chain| !chain.is_empty()) => b"1",
             _ => return -1,
+        },
+        MAL_TLS_INFO_AUTHORIZATION_ERROR => match unsafe { &*handle }.authorization_error() {
+            Some(code) => code.as_bytes(),
+            None => return -1,
         },
         _ => return -1,
     };

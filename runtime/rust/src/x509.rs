@@ -344,3 +344,32 @@ pub(crate) fn signature_algorithm_name(oid: &[u8]) -> Option<&'static str> {
         _ => return None,
     })
 }
+
+/// OpenSSL's self-signed test without the signature check: the issuer is the subject, and the
+/// authority key identifier, when both identifiers are present, names the certificate's own key.
+pub(crate) fn self_issued(certificate: &[u8]) -> bool {
+    let Some(parsed) = parse(certificate) else {
+        return false;
+    };
+    if parsed.issuer_tlv != parsed.subject_tlv {
+        return false;
+    }
+    let mut subject_key = None;
+    let mut authority_key = None;
+    for (oid, value) in &parsed.extensions {
+        match *oid {
+            [0x55, 0x1d, 0x0e] => subject_key = der(value).map(|(_, id, _)| id),
+            [0x55, 0x1d, 0x23] => {
+                authority_key = der(value)
+                    .and_then(|(_, fields, _)| der(fields))
+                    .filter(|(tag, _, _)| *tag == 0x80)
+                    .map(|(_, id, _)| id)
+            }
+            _ => {}
+        }
+    }
+    match (authority_key, subject_key) {
+        (Some(authority), Some(subject)) => authority == subject,
+        _ => true,
+    }
+}

@@ -19,6 +19,7 @@
 #include "mal_tls.h"
 #include "node_module.h"
 #include "node_net.h"
+#include "node_http.h"
 #include "object.h"
 #include "object_ops.h"
 #include "posix_fs.h"
@@ -756,7 +757,7 @@ static bool node_tls_server_alpn(MalVm *vm, MalValue value, MalValue *out) {
 }
 
 // Node's Server.prototype.addContext; the pattern stays a string that net_sni_matches reads.
-static MalValue node_tls_server_add_context(
+MalValue mal_node_tls_server_add_context(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
     (void) new_target, (void) callee;
     MalValue roots[] = {receiver, argc > 0 ? args[0] : mal_value_new_undefined(),
@@ -786,7 +787,9 @@ static MalValue node_tls_server_add_context(
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]), pair, 2));
     MalValue push;
     if (!node_tls_get(vm, roots[3], "push", &push)) goto done;
-    (void) mal_vm_call_value(vm, push, roots[3], &roots[4], 1);
+    if (mal_vm_call_value(vm, push, roots[3], &roots[4], 1).kind != MAL_COMPLETION_THROW) {
+        mal_node_http_server_enable_sni(roots[0]);
+    }
 done:
     mal_gc_unroot(&root);
     return mal_value_new_undefined();
@@ -975,7 +978,7 @@ static void node_tls_install_server(
             mal_intrinsic_define_method_n(vm, mal_value_to_object(prototype), (const byte *) "setSecureContext", 1,
                 mal_node_tls_server_set_secure_context);
             mal_intrinsic_define_method_n(vm, mal_value_to_object(prototype), (const byte *) "addContext", 2,
-                node_tls_server_add_context);
+                mal_node_tls_server_add_context);
         }
     }
     (void) node_tls_class(vm, module, "SecureContext", node_tls_secure_context_constructor,

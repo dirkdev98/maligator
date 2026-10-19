@@ -74,6 +74,16 @@ bool mal_http_server_set_tls(
     MalHttpServer *server, MalTlsServerConfig *config,
     MalHttpServerTlsCallback callback, void *data);
 bool mal_http_conn_is_tls(const MalHttpConn *conn);
+/* A ClientHello awaits mal_http_conn_tls_select; `name` is null without SNI. Runs on the
+ * reactor path and must not call into JavaScript. */
+typedef void (*MalHttpServerTlsHelloCallback)(void *data, MalHttpConn *conn, const byte *name, usize length);
+/* Later accepts read the ClientHello first and report it; null restores direct sessions. */
+void mal_http_server_set_tls_hello(MalHttpServer *server, MalHttpServerTlsHelloCallback callback);
+/* Continues a reported ClientHello under `config`, or the server's own config when null.
+ * False means the connection is closing. */
+bool mal_http_conn_tls_select(MalHttpConn *conn, const MalTlsServerConfig *config);
+/* The caller reported this handshake's failure, so closing reports no hang-up. */
+void mal_http_conn_tls_mark_reported(MalHttpConn *conn);
 /* Copies OpenSSL's reason text for the TLS failure ending `conn` (NUL-terminated, empty when
  * the cause has no counterpart); valid inside the TLS callback. */
 void mal_http_conn_tls_failure(const MalHttpConn *conn, char *out, usize capacity);

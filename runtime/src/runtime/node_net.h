@@ -16,6 +16,11 @@ bool mal_node_net_start_tls(
 /* Rebuilds a listening TLS server's config from its `_sharedCreds`; a server not yet listening
  * reads them at listen. */
 bool mal_node_net_server_refresh_tls(MalVm *vm, MalValue server);
+typedef struct MalTlsServerConfig MalTlsServerConfig;
+/* The most recently added `server._contexts` entry matching `name`, else undefined. */
+MalValue mal_node_net_sni_match(MalVm *vm, MalValue server, const byte *name, usize length);
+/* A new config from a SecureContext's credentials and `server`'s ALPN and client-cert policy. */
+MalTlsServerConfig *mal_node_net_context_config(MalVm *vm, MalValue server, MalValue context);
 /* EventEmitter and net.Server option setup for an instance of a net.Server subclass. */
 bool mal_node_net_server_init(MalVm *vm, MalValue server, MalValue options, MalValue listener);
 /* Undefined until node:net is installed. */

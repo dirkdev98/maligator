@@ -19,3 +19,5 @@ typedef struct MalTlsServerConfig MalTlsServerConfig;
 bool mal_node_http_server_set_tls(MalValue server, MalTlsServerConfig *config);
 /* False when `server` has no running TLS listener; the caller keeps `config` then. */
 bool mal_node_http_server_replace_tls(MalValue server, MalTlsServerConfig *config);
+/* Routes later handshakes of a listening https.Server through SNICallback/addContext. */
+void mal_node_http_server_enable_sni(MalValue server);

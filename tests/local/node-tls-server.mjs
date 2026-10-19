@@ -106,6 +106,26 @@ tzvebjn2J1brpWXWAAK3wz14mIDvq+IDCwzrmvGDaEJ9ls5BzWSPeR/U
 -----END PRIVATE KEY-----
 `;
 
+// tests/fixtures/tls/self-signed-*.pem: a self-signed localhost certificate and its key.
+const SELF_SIGNED_CERT = `-----BEGIN CERTIFICATE-----
+MIIBhDCCASqgAwIBAgIUeVQgAJ0bzz1ip7maR02X0THez4cwCgYIKoZIzj0EAwIw
+FDESMBAGA1UEAwwJbG9jYWxob3N0MB4XDTI2MTAxOTIyNTU0MloXDTM2MTAxNjIy
+NTU0MlowFDESMBAGA1UEAwwJbG9jYWxob3N0MFkwEwYHKoZIzj0CAQYIKoZIzj0D
+AQcDQgAEsf3edBgpTJgeOZ1Z+UdO6CXXyBjtovDtU1IA1uhWYzws76T/z02c0Txi
+B156PcvIonTJMBUVcpO+n6FzK6W6IqNaMFgwHQYDVR0OBBYEFLLdaXYQ1TALqXio
+5dviIF5aCiFEMBQGA1UdEQQNMAuCCWxvY2FsaG9zdDAMBgNVHRMBAf8EAjAAMBMG
+A1UdJQQMMAoGCCsGAQUFBwMBMAoGCCqGSM49BAMCA0gAMEUCIAKGc9W/0OC3ajJY
+fV4QT8ejO/0sdElRY4lqudsfxr9uAiEA5ijwyAPGzomCDYrBioFRzpAqVEdlYHE4
+SAvzHaCxU6c=
+-----END CERTIFICATE-----
+`;
+const SELF_SIGNED_KEY = `-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgKRJ3U/8nqymWuSlu
+hJBdutA3varC6N5Wc/LF4vnpuBmhRANCAASx/d50GClMmB45nVn5R07oJdfIGO2i
+8O1TUgDW6FZjPCzvpP/PTZzRPGIHXno9y8iidMkwFRVyk76foXMrpboi
+-----END PRIVATE KEY-----
+`;
+
 function connectClient(port, options) {
 	return new Promise((resolve) => {
 		const raw = net.connect(port, "127.0.0.1", () => {
@@ -238,6 +258,52 @@ for (const [label, serverCa, clientOptions] of [
 	await new Promise((resolve) => client.on("close", resolve));
 	console.log(label, "server sees", serverSees);
 	console.log(label, "client sees", clientSees);
+	server.close();
+}
+
+for (const [label, serverOptions, clientOptions] of [
+	["verdict untrusted server", {}, { rejectUnauthorized: false }],
+	[
+		"verdict self-signed server",
+		{ cert: SELF_SIGNED_CERT, key: SELF_SIGNED_KEY },
+		{ rejectUnauthorized: false },
+	],
+	[
+		"verdict wrong name",
+		{},
+		{ rejectUnauthorized: false, ca: CA, servername: "example.com" },
+	],
+	["verdict trusted", {}, { rejectUnauthorized: false, ca: CA }],
+	[
+		"verdict missing client cert",
+		{ requestCert: true, rejectUnauthorized: false, ca: CLIENT_CA },
+		{ ca: CA },
+	],
+	[
+		"verdict untrusted client cert",
+		{ requestCert: true, rejectUnauthorized: false, ca: CA },
+		{ ca: CA, cert: CLIENT_CERT, key: CLIENT_KEY },
+	],
+]) {
+	let serverVerdict;
+	let clientVerdict;
+	const server = tls.createServer(
+		{ cert: CERT, key: KEY, ...serverOptions },
+		(socket) => {
+			serverVerdict = `${socket.authorized} ${socket.authorizationError}`;
+			socket.end();
+		},
+	);
+	await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+	const client = await connectClient(server.address().port, clientOptions);
+	client.on(
+		"secureConnect",
+		() => (clientVerdict = `${client.authorized} ${client.authorizationError}`),
+	);
+	client.on("error", (error) => (clientVerdict = `error ${error.code}`));
+	client.resume();
+	await new Promise((resolve) => client.on("close", resolve));
+	console.log(label, "server", serverVerdict, "client", clientVerdict);
 	server.close();
 }
 
@@ -460,4 +526,48 @@ await clientErrorCode(
 	});
 	console.log("https client cert", body);
 	server.close();
+}
+
+async function httpsSni(label, server) {
+	await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+	const body = await new Promise((resolve, reject) => {
+		const request = https.get(
+			{ hostname: "localhost", port: server.address().port, ca: CA, agent: false },
+			(response) => {
+				const chunks = [];
+				response.on("data", (chunk) => chunks.push(chunk));
+				response.on("end", () => resolve(Buffer.concat(chunks).toString()));
+			},
+		);
+		request.on("error", reject);
+	});
+	console.log(label, body);
+	server.close();
+}
+
+{
+	const server = https.createServer({}, (request, response) =>
+		response.end("https addContext"),
+	);
+	server.addContext("*.example", { cert: SELF_SIGNED_CERT, key: SELF_SIGNED_KEY });
+	server.addContext("LOCALHOST", { cert: CERT, key: KEY });
+	await httpsSni("https sni", server);
+}
+
+{
+	const names = [];
+	const server = https.createServer(
+		{
+			SNICallback(servername, callback) {
+				names.push(servername);
+				setTimeout(
+					() => callback(null, tls.createSecureContext({ cert: CERT, key: KEY })),
+					1,
+				);
+			},
+		},
+		(request, response) => response.end("https SNICallback"),
+	);
+	await httpsSni("https sni", server);
+	console.log("https SNICallback names", JSON.stringify(names));
 }

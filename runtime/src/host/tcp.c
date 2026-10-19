@@ -618,7 +618,8 @@ int mal_tcp_tls_create_client(
 #if MAL_NODE
     static const MalTlsClientIdentity anonymous = {0};
     if (identity == nullptr) identity = &anonymous;
-    if (insecure || ca_pem != nullptr) {
+    // Insecure clients still load the default roots: authorizationError reports their verdict.
+    if (ca_pem != nullptr) {
         return mal_tls_client_create((const uint8_t *)server_name, server_name_length,
             (const uint8_t *)ca_pem, ca_pem_length, (const uint8_t *)alpn, alpn_length,
             identity->cert_pem, identity->cert_pem_length,
@@ -658,7 +659,7 @@ int mal_tcp_tls_create_client(
     int status = mal_tls_client_create((const uint8_t *)server_name, server_name_length,
         (const uint8_t *)roots, roots_length, (const uint8_t *)alpn, alpn_length,
         identity->cert_pem, identity->cert_pem_length,
-        identity->key_pem, identity->key_pem_length, 0, out);
+        identity->key_pem, identity->key_pem_length, insecure ? 1 : 0, out);
     free(roots);
     return status;
 #else

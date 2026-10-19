@@ -13,6 +13,7 @@
 #include "gc.h"
 #include "intrinsics.h"
 #include "mal_tls.h"
+#include "array_object.h"
 #include "node_net.h"
 #include "node_tls.h"
 #include "object.h"
@@ -110,6 +111,16 @@ static MalValue node_https_server_listen(
         mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, "https.Server: failed to start TLS");
         goto done;
     }
+    {
+        MalValue callback = mal_value_new_undefined(), contexts = mal_value_new_undefined();
+        if (mal_vm_get_property(vm, roots[0], mal_intrinsic_string_key(vm, (const byte *) "_malSNICallback"), &callback)
+            && mal_vm_get_property(vm, roots[0], mal_intrinsic_string_key(vm, (const byte *) "_contexts"), &contexts)
+            && (mal_value_is_callable(callback)
+                || (mal_value_is_array_object(contexts)
+                    && mal_array_object_length(mal_value_to_array_object(contexts)) > 0))) {
+            mal_node_http_server_enable_sni(roots[0]);
+        }
+    }
     result = roots[1];
 done:
     mal_gc_unroot(&root);
@@ -159,6 +170,8 @@ static void node_https_install_server(MalVm *vm, MalObject *module) {
         node_https_server_listen);
     mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[0]), (const byte *) "setSecureContext", 1,
         mal_node_tls_server_set_secure_context);
+    mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[0]), (const byte *) "addContext", 2,
+        mal_node_tls_server_add_context);
     MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(&vm->heap,
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
         mal_intrinsic_ascii(vm, (const byte *) "Server"), 2, node_https_server_constructor);

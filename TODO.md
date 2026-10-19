@@ -1186,25 +1186,22 @@ remains a Maligator extension and does not count as global fetch conformance.
       fields, issuerCertificate, and the DEP0179/DEP0181 warnings of the Hash and Hmac
       constructors.
 
-- [ ] tls and https: `authorizationError` on TLS sockets (map the deferred client
-      verifier's `CertificateError` to OpenSSL verify codes such as
-      UNABLE_TO_VERIFY_LEAF_SIGNATURE) and the client-side verdict under
-      `rejectUnauthorized: false`. `new tls.TLSSocket(socket, options)` wrapping with a
-      deferred start, and `setDefaultCACertificates`. rootCertificates comes from the
-      system store rather than Node's NSS list, and no certificate compression is
-      offered. Plain 'connection' listeners on a tls.Server see a TLSSocket where Node
-      passes the raw socket. http: move the shared header and body methods onto
+- [ ] tls and https: https.Server should cache SNI-selected configs (tls.Server keeps
+      four) and give request sockets `authorized`, `authorizationError` and
+      getPeerCertificate. Cache the deferred verification verdict on the session, and
+      accept tls.connect's `checkServerIdentity` option. `new tls.TLSSocket(socket,
+    options)` wrapping with a deferred start, and `setDefaultCACertificates`.
+      rootCertificates comes from the system store rather than Node's NSS list, and
+      no certificate compression is offered. Plain 'connection' listeners on a
+      tls.Server see a TLSSocket where Node passes the raw socket.
+      getPeerCertificate(true) issuer chains, repeated name attributes as arrays,
+      public-key fields, `ext_key_usage`, `infoAccess` and IPv6 subjectaltname
+      entries. https agents with TLS options, Buffer `cert`/`key` and
+      `pfx`/`passphrase` for https requests, Node's `ERR_OSSL_*` codes for malformed
+      credentials, and 'connection' on https.Server with TLSSocket-like sockets for
+      its 'tlsClientError'. http: move the shared header and body methods onto
       OutgoingMessage.prototype so overriding them there reaches ServerResponse and
       ClientRequest.
-      The client verifies the server certificate during the handshake, while Node
-      verifies afterwards, so a server sees an unknown_ca alert instead of
-      'secureConnection'. getPeerCertificate(true) issuer chains, repeated name
-      attributes as arrays, public-key fields, `ext_key_usage`, `infoAccess` and IPv6
-      subjectaltname entries. SNICallback/addContext on https.Server (the native HTTP
-      server needs the ClientHello acceptor path). https agents with TLS options,
-      Buffer `cert`/`key` and `pfx`/`passphrase` for https requests, Node's
-      `ERR_OSSL_*` codes for malformed credentials, and 'connection' on https.Server
-      with TLSSocket-like sockets for its 'tlsClientError'.
 
 - [ ] modules: createRequire with a computed specifier, or a base other than
       `import.meta.url`, resolves only what the module graph bundled from literal

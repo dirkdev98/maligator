@@ -1294,9 +1294,11 @@ static void net_tls_describe(MalVm *vm, MalNodeNetSocketState *state) {
         value = net_tls_info_value(vm, state, MAL_TLS_INFO_SERVER_NAME);
         net_set(vm, state->receiver, "servername",
             mal_value_is_undefined(value) ? mal_value_new_boolean(false) : value);
-        value = net_tls_info_value(vm, state, MAL_TLS_INFO_PEER_CERTIFIED);
-        net_set(vm, state->receiver, "authorized", mal_value_new_boolean(!mal_value_is_undefined(value)));
     }
+    value = net_tls_info_value(vm, state, MAL_TLS_INFO_PEER_CERTIFIED);
+    net_set(vm, state->receiver, "authorized", mal_value_new_boolean(!mal_value_is_undefined(value)));
+    value = net_tls_info_value(vm, state, MAL_TLS_INFO_AUTHORIZATION_ERROR);
+    net_set(vm, state->receiver, "authorizationError", mal_value_is_undefined(value) ? mal_value_new_null() : value);
     mal_intrinsic_define_method_n(vm, mal_value_to_object(state->receiver),
         (const byte *) "getProtocol", 0, net_tls_get_protocol);
     mal_intrinsic_define_method_n(vm, mal_value_to_object(state->receiver),
@@ -1386,6 +1388,34 @@ static MalValue net_sni_callback(
     return mal_value_new_undefined();
 }
 
+MalValue mal_node_net_sni_match(MalVm *vm, MalValue server, const byte *name, usize length) {
+    MalValue contexts_value;
+    if (!net_get(vm, server, "_contexts", &contexts_value) || !mal_value_is_array_object(contexts_value)) {
+        return mal_value_new_undefined();
+    }
+    MalArrayObject *contexts = mal_value_to_array_object(contexts_value);
+    for (u32 i = mal_array_object_length(contexts); i-- > 0;) {
+        MalValue entry;
+        if (!mal_array_object_dense_get(contexts, i, &entry) || !mal_value_is_array_object(entry)) continue;
+        MalValue pattern, context;
+        if (!mal_array_object_dense_get(mal_value_to_array_object(entry), 0, &pattern)
+            || !mal_array_object_dense_get(mal_value_to_array_object(entry), 1, &context)
+            || !mal_value_is_string(pattern)) {
+            continue;
+        }
+        MalString *text = mal_value_to_string(pattern);
+        if (net_sni_matches(mal_string_code_units(text), mal_string_length(text), name, length)) return context;
+    }
+    return mal_value_new_undefined();
+}
+
+MalTlsServerConfig *mal_node_net_context_config(MalVm *vm, MalValue server, MalValue context) {
+    MalTlsServerConfig *config = nullptr;
+    bool without_cert = false;
+    if (!net_tls_config_from(vm, server, context, &config, &without_cert)) return nullptr;
+    return config;
+}
+
 static void net_sni_hello(MalVm *vm, MalNodeNetSocketState *state, MalTcpProgress *progress) {
     state->sni_pending = true;
     if (progress->bytes == nullptr) {
@@ -1408,27 +1438,8 @@ static void net_sni_hello(MalVm *vm, MalNodeNetSocketState *state, MalTcpProgres
         (void) called;
         goto done;
     }
-    if (!net_get(vm, state->server, "_contexts", &roots[0])) goto done;
-    roots[2] = mal_value_new_undefined();
-    if (mal_value_is_array_object(roots[0])) {
-        MalArrayObject *contexts = mal_value_to_array_object(roots[0]);
-        for (u32 i = mal_array_object_length(contexts); i-- > 0;) {
-            MalValue entry;
-            if (!mal_array_object_dense_get(contexts, i, &entry) || !mal_value_is_array_object(entry)) continue;
-            MalValue pattern, context;
-            if (!mal_array_object_dense_get(mal_value_to_array_object(entry), 0, &pattern)
-                || !mal_array_object_dense_get(mal_value_to_array_object(entry), 1, &context)
-                || !mal_value_is_string(pattern)) {
-                continue;
-            }
-            MalString *text = mal_value_to_string(pattern);
-            if (net_sni_matches(mal_string_code_units(text), mal_string_length(text),
-                    progress->bytes, progress->length)) {
-                roots[2] = context;
-                break;
-            }
-        }
-    }
+    roots[2] = mal_node_net_sni_match(vm, state->server, progress->bytes, progress->length);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
     net_sni_select(vm, state, roots[2]);
 done:
     mal_gc_unroot(&root);

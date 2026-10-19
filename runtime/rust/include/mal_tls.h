@@ -24,6 +24,8 @@ extern "C" {
 #define MAL_TLS_INFO_PEER_CERTIFIED 4
 /* OpenSSL's reason text for the failure that ended the session, when one corresponds. */
 #define MAL_TLS_INFO_FAILURE 5
+/* The OpenSSL verify code for a peer admitted unverified (rejectUnauthorized: false). */
+#define MAL_TLS_INFO_AUTHORIZATION_ERROR 6
 
 typedef struct MalTlsClient MalTlsClient;
 typedef struct MalTlsServerConfig MalTlsServerConfig;

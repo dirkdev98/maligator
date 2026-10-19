@@ -22,6 +22,8 @@
 #include "http_client.h"
 #include "intrinsics.h"
 #include "node_module.h"
+#include "node_net.h"
+#include "mal_tls.h"
 #include "node_stream.h"
 #include "node_buffer.h"
 #include "net.h"
@@ -136,6 +138,9 @@ typedef struct MalNodeHttpServerState {
     struct MalNodeHttpSocketState *secure_tail;
     struct MalNodeHttpTlsError *tls_errors;
     struct MalNodeHttpTlsError *tls_errors_tail;
+    /* ClientHellos awaiting SNICallback or addContext selection, in arrival order. */
+    struct MalNodeHttpSocketState *hello_head;
+    struct MalNodeHttpSocketState *hello_tail;
     struct MalNodeHttpServerState *next;
 } MalNodeHttpServerState;
 
@@ -152,6 +157,12 @@ typedef struct MalNodeHttpSocketState {
     MalHttpConn *conn;
     MalNodeHttpServerState *secure_server;
     struct MalNodeHttpSocketState *secure_next;
+    MalNodeHttpServerState *hello_server;
+    struct MalNodeHttpSocketState *hello_next;
+    /* The ClientHello's server name (owned), or null without SNI. */
+    char *hello_name;
+    usize hello_name_length;
+    bool hello_pending;
     struct MalNodeHttpSocketState *previous;
     struct MalNodeHttpSocketState *next;
 } MalNodeHttpSocketState;
@@ -1002,9 +1013,29 @@ static void http_socket_unqueue_secure(MalNodeHttpSocketState *state) {
     state->secure_next = nullptr;
 }
 
+static void http_socket_unqueue_hello(MalNodeHttpSocketState *state) {
+    MalNodeHttpServerState *server = state->hello_server;
+    if (server != nullptr) {
+        MalNodeHttpSocketState *previous = nullptr;
+        for (MalNodeHttpSocketState *at = server->hello_head; at != nullptr; at = at->hello_next) {
+            if (at == state) {
+                if (previous == nullptr) server->hello_head = at->hello_next;
+                else previous->hello_next = at->hello_next;
+                if (server->hello_tail == at) server->hello_tail = previous;
+                break;
+            }
+            previous = at;
+        }
+    }
+    state->hello_server = nullptr;
+    state->hello_next = nullptr;
+}
+
 static void http_socket_release(void *data) {
     MalNodeHttpSocketState *state = data;
     http_socket_unqueue_secure(state);
+    http_socket_unqueue_hello(state);
+    free(state->hello_name);
     if (state->previous == nullptr) http_sockets = state->next;
     else state->previous->next = state->next;
     if (state->next != nullptr) state->next->previous = state->previous;
@@ -4555,6 +4586,24 @@ static bool http_ipv4_host(MalValue value, char out[16]) {
     return true;
 }
 
+/* The connection's socket state, attached now so a close before dispatch unqueues it. */
+static MalNodeHttpSocketState *http_socket_state_for(MalNodeHttpServerState *server, MalHttpConn *conn) {
+    MalNodeHttpSocketState *state = mal_http_conn_context(conn);
+    if (state != nullptr) return state;
+    state = malloc(sizeof(*state));
+    if (state == nullptr) return nullptr;
+    *state = (MalNodeHttpSocketState) {
+        .vm = server->vm, .receiver = mal_value_new_undefined(), .conn = conn, .next = http_sockets,
+    };
+    if (!mal_http_conn_attach_context(conn, state, http_socket_release)) {
+        free(state);
+        return nullptr;
+    }
+    if (http_sockets != nullptr) http_sockets->previous = state;
+    http_sockets = state;
+    return state;
+}
+
 static void http_server_tls_event(void *data, MalHttpConn *conn, int error) {
     MalNodeHttpServerState *server = data;
     if (error != 0) {
@@ -4567,22 +4616,117 @@ static void http_server_tls_event(void *data, MalHttpConn *conn, int error) {
         server->tls_errors_tail = entry;
         return;
     }
-    if (mal_http_conn_context(conn) != nullptr) return;
-    MalNodeHttpSocketState *state = malloc(sizeof(*state));
-    if (state == nullptr) return;
-    *state = (MalNodeHttpSocketState) {
-        .vm = server->vm, .receiver = mal_value_new_undefined(), .conn = conn,
-        .secure_server = server, .next = http_sockets,
-    };
-    if (!mal_http_conn_attach_context(conn, state, http_socket_release)) {
-        free(state);
-        return;
-    }
-    if (http_sockets != nullptr) http_sockets->previous = state;
-    http_sockets = state;
+    MalNodeHttpSocketState *state = http_socket_state_for(server, conn);
+    if (state == nullptr || state->secure_server != nullptr) return;
+    state->secure_server = server;
     if (server->secure_tail == nullptr) server->secure_head = state;
     else server->secure_tail->secure_next = state;
     server->secure_tail = state;
+}
+
+static void http_server_tls_hello(void *data, MalHttpConn *conn, const byte *name, usize length) {
+    MalNodeHttpServerState *server = data;
+    MalNodeHttpSocketState *state = http_socket_state_for(server, conn);
+    if (state == nullptr || state->hello_server != nullptr) {
+        (void) mal_http_conn_tls_select(conn, nullptr);
+        return;
+    }
+    if (name != nullptr) {
+        state->hello_name = malloc(length + 1);
+        if (state->hello_name == nullptr) {
+            (void) mal_http_conn_tls_select(conn, nullptr);
+            return;
+        }
+        memcpy(state->hello_name, name, length);
+        state->hello_name_length = length;
+    }
+    state->hello_pending = true;
+    state->hello_server = server;
+    if (server->hello_tail == nullptr) server->hello_head = state;
+    else server->hello_tail->hello_next = state;
+    server->hello_tail = state;
+}
+
+void mal_node_http_server_enable_sni(MalValue server) {
+    MalNodeHttpServerState *state = http_server_state(server);
+    if (state != nullptr && state->native != nullptr) mal_http_server_set_tls_hello(state->native, http_server_tls_hello);
+}
+
+static MalNodeHttpSocketState *http_socket_for_receiver(MalValue receiver) {
+    for (MalNodeHttpSocketState *state = http_sockets; state != nullptr; state = state->next) {
+        if (state->receiver == receiver) return state;
+    }
+    return nullptr;
+}
+
+/* Node's loadSNI callback: an error ends the handshake, a context replaces the default. */
+static MalValue http_sni_callback(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver, (void) new_target;
+    MalValue socket = mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 0);
+    MalValue server_value = mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 1);
+    MalNodeHttpSocketState *state = http_socket_for_receiver(socket);
+    if (state == nullptr || state->conn == nullptr || !state->hello_pending) return mal_value_new_undefined();
+    state->hello_pending = false;
+    MalValue roots[] = {socket, server_value, argc > 0 ? args[0] : mal_value_new_undefined(),
+        argc > 1 ? args[1] : mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    if (mal_value_is_truthy(roots[2])) {
+        MalValue emitted[] = {
+            mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "tlsClientError")), roots[2], roots[0]};
+        // The error is reported here, so the close that follows must not report a hang-up too.
+        mal_http_conn_tls_mark_reported(state->conn);
+        (void) http_call_method(vm, roots[1], "emit", emitted, 3);
+        mal_http_conn_abort(state->conn);
+    } else {
+        MalTlsServerConfig *config = mal_value_is_object(roots[3])
+            ? mal_node_net_context_config(vm, roots[1], roots[3]) : nullptr;
+        if (vm->completion.kind != MAL_COMPLETION_THROW) {
+            (void) mal_http_conn_tls_select(state->conn, config);
+        }
+        mal_tls_server_config_free(&config);
+    }
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+static bool http_server_drain_hello(MalVm *vm, MalNodeHttpServerState *server) {
+    MalNodeHttpSocketState *state = server->hello_head;
+    if (state == nullptr) return false;
+    http_socket_unqueue_hello(state);
+    MalValue roots[] = {server->receiver, mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalAsyncContextScope scope;
+    mal_async_context_scope_enter(vm, &scope, server->async_context);
+    MalHttpConn *conn = state->conn;
+    if (state->hello_name == nullptr
+        || !mal_vm_get_property(vm, roots[0], mal_intrinsic_string_key(vm, (const byte *) "_malSNICallback"), &roots[1])) {
+        state->hello_pending = false;
+        (void) mal_http_conn_tls_select(conn, nullptr);
+    } else if (mal_value_is_callable(roots[1])) {
+        roots[2] = http_server_socket_facade(vm, conn);
+        roots[3] = mal_value_from_string(mal_string_from_utf8(&vm->heap, (const byte *) state->hello_name,
+            state->hello_name_length));
+        MalValue slots[] = {roots[2], roots[0]};
+        roots[4] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(
+            &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+            mal_intrinsic_ascii(vm, (const byte *) ""), 2, http_sni_callback, slots, 2));
+        MalValue call_args[] = {roots[3], roots[4]};
+        (void) mal_vm_call_value(vm, roots[1], roots[0], call_args, 2);
+    } else {
+        state->hello_pending = false;
+        roots[2] = mal_node_net_sni_match(vm, roots[0], (const byte *) state->hello_name, state->hello_name_length);
+        MalTlsServerConfig *config = mal_value_is_object(roots[2])
+            ? mal_node_net_context_config(vm, roots[0], roots[2]) : nullptr;
+        if (vm->completion.kind != MAL_COMPLETION_THROW) (void) mal_http_conn_tls_select(conn, config);
+        mal_tls_server_config_free(&config);
+    }
+    mal_async_context_scope_exit(vm, &scope);
+    mal_gc_unroot(&root);
+    return true;
 }
 
 static void http_server_free_tls_errors(MalNodeHttpServerState *server) {
@@ -4617,6 +4761,7 @@ static MalValue http_tls_client_error(MalVm *vm, int error, const char *failure)
 
 /* Node's https.Server is a tls.Server, so its handshake outcomes reach JavaScript first. */
 static bool http_server_drain_tls(MalVm *vm, MalNodeHttpServerState *state) {
+    if (http_server_drain_hello(vm, state)) return true;
     if (state->secure_head == nullptr && state->tls_errors == nullptr) return false;
     MalValue roots[] = {
         mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(),
