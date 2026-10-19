@@ -1131,14 +1131,23 @@ remains a Maligator extension and does not count as global fetch conformance.
       sources and the derived-file list, and find license texts for alloc-stdlib and
       blake2b_simd, which publish none and are listed by SPDX expression only.
 
-- [ ] fs: recursive fs.watch, watching more than 256 directory entries on macOS
-      (kqueue holds one fd per entry), the watcher 'error' event, fs.openAsBlob,
-      readdir's `encoding: "buffer"`, and copyFileSync's mode argument (it calls the
-      mode-less copy).
+- [ ] fs: watching more than 256 entries per watcher on macOS (kqueue holds one fd
+      per watched file and subdirectory; FSEvents would lift it), Linux
+      recursive-watch symlink entries (Node reports their events and link-target
+      changes as 'rename'), the watcher 'error' event, fs.openAsBlob and readdir's
+      `encoding: "buffer"`.
 
-- [ ] net and dgram: http2 servers, net.Server's Unix-path listen, allowHalfOpen and
-      named-host lookup; dgram hostname lookup, source-specific membership and
-      collection of sockets that are never closed.
+- [ ] net and dgram: http2 servers and allowHalfOpen. Client sockets try resolved
+      addresses one after another instead of Node's happy-eyeballs attempts (no
+      250 ms attempt timer, no `connectionAttempt*` events, no family interleaving),
+      and `autoSelectFamily: false` is not read. net and dgram call the internal
+      lookup, so a patched `dns.lookup` is not seen; dgram ignores
+      `createSocket({ lookup })`. TCP connect errors lack Node's
+      `connect ECONNREFUSED host:port` message and `address`/`port`/`errno`/`syscall`
+      fields. A second `listen()` during a pending named-host lookup does not throw
+      ERR_SERVER_ALREADY_LISTEN, and an over-long Unix socket path throws a generic
+      Error. Also dgram source-specific membership and collection of sockets that
+      are never closed.
 
 - [ ] crypto: RSA key generation (ring has none), encrypted PEM, RSA-PSS salt
       lengths other than the digest length, ECDSA signing with a hash other than the
@@ -1152,9 +1161,11 @@ remains a Maligator extension and does not count as global fetch conformance.
       options, rustls error detail in tlsClientError codes, and
       'secureConnection'/'tlsClientError' on https.Server.
 
-- [ ] modules: import.meta.resolve; createRequire with a computed specifier, or a
-      base other than `import.meta.url`, resolves only what the module graph bundled
-      from literal specifiers.
+- [ ] modules: createRequire with a computed specifier, or a base other than
+      `import.meta.url`, resolves only what the module graph bundled from literal
+      specifiers. import.meta.resolve does not resolve `#` package imports, does not
+      realpath symlinked files, and resolves a computed bare specifier only when the
+      module imports it or resolves it literally.
 
 - [ ] dns record types beyond A/AAAA (needs res_query and libresolv in the link);
       zlib zstd and the zip archive APIs; the WebSocket client global.

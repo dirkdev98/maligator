@@ -1,3 +1,4 @@
+// Portions derived from Node.js lib/dgram.js (MIT); see THIRD_PARTY_NOTICES.md.
 #include "node_dgram.h"
 
 #if MAL_NODE
@@ -22,6 +23,7 @@
 #include "intrinsics.h"
 #include "net.h"
 #include "node_buffer.h"
+#include "node_dns.h"
 #include "node_events.h"
 #include "node_module.h"
 #include "microtask.h"
@@ -70,6 +72,8 @@ typedef struct MalDgramSocket {
     bool reuse_port;
     bool ipv6_only;
     bool bound;
+    /* A named bind address is resolving; sends wait for 'listening' as in lib/dgram.js enqueue. */
+    bool binding;
     bool connected;
     bool closed;
     bool unreferenced;
@@ -425,7 +429,99 @@ static bool dgram_ascii_string(MalVm *vm, MalValue value, char *out, usize capac
     return true;
 }
 
-/* Node resolves the address through dns.lookup; numeric literals and localhost cover the loopback cases. */
+/* A non-empty name other than localhost that is not an IP literal resolves through dns.lookup. */
+static bool dgram_needs_lookup(MalValue value) {
+    if (!mal_value_is_string(value)) return false;
+    MalString *string = mal_value_to_string(value);
+    usize length = mal_string_length(string);
+    if (length == 0 || mal_string_equals_ascii(string, "localhost")) return false;
+    if (length > MAL_NET_ADDRESS_MAX) return true;
+    char text[MAL_NET_ADDRESS_MAX + 1];
+    const c16 *units = mal_string_code_units(string);
+    for (usize i = 0; i < length; i++) {
+        if (units[i] > 0x7f) return true;
+        text[i] = (char) units[i];
+    }
+    text[length] = '\0';
+    struct sockaddr_storage address;
+    socklen_t address_length;
+    return !mal_net_parse_ip(text, 0, &address, &address_length);
+}
+
+static MalValue dgram_send(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee);
+static bool dgram_bind_to(MalVm *vm, MalDgramSocket *state, MalValue address_value, u16 port);
+
+typedef enum DgramRetryKind {
+    DGRAM_RETRY_BIND = 0,
+    DGRAM_RETRY_SEND_LOOKUP = 1,
+    DGRAM_RETRY_SEND_LISTENING = 2,
+} DgramRetryKind;
+
+#define DGRAM_RETRY_ARGS 6
+
+/* Slots: [socket, kind, port or callback, argc, address index, send arguments...]. */
+static MalValue dgram_retry_task(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver; (void) new_target;
+    MalNativeFunctionObject *self = mal_value_to_native_function_object(callee);
+    MalValue undefined = mal_value_new_undefined();
+    MalValue roots[3 + DGRAM_RETRY_ARGS] = {mal_native_function_object_get_slot(self, 0),
+        argc > 0 ? args[0] : undefined, argc > 1 ? args[1] : undefined};
+    for (i32 i = 0; i < DGRAM_RETRY_ARGS; i++) roots[3 + i] = mal_native_function_object_get_slot(self, 5 + i);
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    DgramRetryKind kind = (DgramRetryKind) mal_ops_number_as_f64(mal_native_function_object_get_slot(self, 1));
+    MalValue extra = mal_native_function_object_get_slot(self, 2);
+    MalDgramSocket *state = dgram_find(roots[0]);
+    if (state == nullptr || state->closed) goto done;
+    if (kind == DGRAM_RETRY_BIND) {
+        state->binding = false;
+        state->bound = false;
+        if (!mal_value_is_nil(roots[1])) dgram_emit_later(vm, roots[0], "error", roots[1]);
+        else (void) dgram_bind_to(vm, state, roots[2], (u16) mal_ops_number_as_f64(extra));
+        goto done;
+    }
+    if (kind == DGRAM_RETRY_SEND_LOOKUP && !mal_value_is_nil(roots[1])) {
+        // lib/dgram.js doSend: a lookup error goes to the callback, else to 'error'.
+        if (mal_value_is_callable(extra)) dgram_next_tick(vm, roots[0], extra, roots[1], undefined);
+        else dgram_emit_later(vm, roots[0], "error", roots[1]);
+        goto done;
+    }
+    i32 count = (i32) mal_ops_number_as_f64(mal_native_function_object_get_slot(self, 3));
+    i32 address_index = (i32) mal_ops_number_as_f64(mal_native_function_object_get_slot(self, 4));
+    if (kind == DGRAM_RETRY_SEND_LOOKUP && address_index >= 0) roots[3 + address_index] = roots[2];
+    dgram_send(vm, roots[0], roots + 3, count, undefined, undefined);
+done:
+    mal_gc_unroot(&root);
+    return undefined;
+}
+
+static MalValue dgram_retry_function(MalVm *vm, MalValue socket, DgramRetryKind kind, MalValue extra,
+    const MalValue *args, i32 argc, i32 address_index) {
+    MalValue slots[5 + DGRAM_RETRY_ARGS] = {socket, mal_value_from_i32(kind), extra,
+        mal_value_from_i32(argc < DGRAM_RETRY_ARGS ? argc : DGRAM_RETRY_ARGS), mal_value_from_i32(address_index)};
+    for (i32 i = 0; i < DGRAM_RETRY_ARGS; i++) slots[5 + i] = i < argc ? args[i] : mal_value_new_undefined();
+    MalRootSpan root;
+    mal_gc_root(&root, slots, countof(slots));
+    MalValue function = mal_value_from_native_function_object(mal_native_function_object_new_with_slots(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+        mal_intrinsic_ascii(vm, (const byte *) "dgramRetry"), dgram_retry_task, slots, countof(slots)));
+    mal_gc_unroot(&root);
+    return function;
+}
+
+/* lib/dgram.js lookup4/lookup6: `lookup(address, family, callback)` through dns.lookup. */
+static bool dgram_lookup(MalVm *vm, MalDgramSocket *state, MalValue address, MalValue callback) {
+    MalValue lookup_args[] = {address, mal_value_from_i32(state->family == AF_INET6 ? 6 : 4), callback};
+    MalRootSpan root;
+    mal_gc_root(&root, lookup_args, countof(lookup_args));
+    mal_node_dns_lookup(vm, lookup_args, 3);
+    mal_gc_unroot(&root);
+    return vm->completion.kind != MAL_COMPLETION_THROW;
+}
+
+/* Node resolves the address through dns.lookup; numeric literals and localhost skip the resolver. */
 static bool dgram_resolve(MalVm *vm, MalDgramSocket *state, MalValue value, bool wildcard, u16 port,
     char *text, struct sockaddr_storage *address, socklen_t *length) {
     if (mal_value_is_nil(value) || (mal_value_is_string(value) && mal_string_length(mal_value_to_string(value)) == 0)) {
@@ -516,6 +612,17 @@ static bool dgram_start(MalVm *vm, MalDgramSocket *state) {
 
 /* Binds synchronously; 'listening' or the bind error is emitted on the next tick as after Node's lookup. */
 static bool dgram_bind_to(MalVm *vm, MalDgramSocket *state, MalValue address_value, u16 port) {
+    if (dgram_needs_lookup(address_value)) {
+        state->bound = true;
+        state->binding = true;
+        MalValue roots[] = {address_value, dgram_retry_function(vm, state->receiver, DGRAM_RETRY_BIND,
+            mal_value_from_i32(port), nullptr, 0, -1)};
+        MalRootSpan root;
+        mal_gc_root(&root, roots, countof(roots));
+        bool ok = dgram_lookup(vm, state, roots[0], roots[1]);
+        mal_gc_unroot(&root);
+        return ok;
+    }
     char text[MAL_NET_ADDRESS_MAX];
     struct sockaddr_storage address;
     socklen_t length;
@@ -751,6 +858,22 @@ static MalValue dgram_send(
     socklen_t target_length = 0;
     if (!state->connected) {
         if (!dgram_port(vm, port, false, &port_number)) goto done;
+        if (state->binding) {
+            MalValue once_args[] = {dgram_ascii(vm, "listening"), undefined};
+            MalRootSpan once_root;
+            mal_gc_root(&once_root, once_args, countof(once_args));
+            once_args[1] = dgram_retry_function(vm, receiver, DGRAM_RETRY_SEND_LISTENING, undefined, args, argc, -1);
+            dgram_call_method(vm, receiver, "once", once_args, 2);
+            mal_gc_unroot(&once_root);
+            goto done;
+        }
+        if (dgram_needs_lookup(roots[2])) {
+            if (!dgram_ensure_bound(vm, state) || vm->completion.kind == MAL_COMPLETION_THROW) goto done;
+            MalValue retry = dgram_retry_function(vm, receiver, DGRAM_RETRY_SEND_LOOKUP, roots[1], args, argc,
+                sliced ? 4 : 2);
+            (void) dgram_lookup(vm, state, roots[2], retry);
+            goto done;
+        }
         if (!dgram_resolve(vm, state, roots[2], false, port_number, text, &target, &target_length)) goto done;
     }
     if (!dgram_ensure_bound(vm, state) || vm->completion.kind == MAL_COMPLETION_THROW) goto done;

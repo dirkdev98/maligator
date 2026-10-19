@@ -93,14 +93,15 @@ int mal_net_listen(const char *host, u16 port, int backlog) {
 
 int mal_net_listen_address(
     const struct sockaddr *address, socklen_t length, int backlog, bool ipv6_only) {
-    if (address == nullptr || (address->sa_family != AF_INET && address->sa_family != AF_INET6)) {
+    if (address == nullptr || (address->sa_family != AF_INET && address->sa_family != AF_INET6
+                                && address->sa_family != AF_UNIX)) {
         errno = EINVAL;
         return -1;
     }
     int fd = socket(address->sa_family, SOCK_STREAM, 0);
     if (fd < 0) return -1;
     int one = 1;
-    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    if (address->sa_family != AF_UNIX) setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
     if (address->sa_family == AF_INET6) {
         int only = ipv6_only ? 1 : 0;
         setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &only, sizeof(only));
@@ -159,8 +160,8 @@ int mal_net_connect(const char *host, u16 port) {
 }
 
 int mal_net_connect_address(const struct sockaddr *address, socklen_t length) {
-    if (address == nullptr ||
-        (address->sa_family != AF_INET && address->sa_family != AF_INET6)) {
+    if (address == nullptr || (address->sa_family != AF_INET && address->sa_family != AF_INET6
+                                && address->sa_family != AF_UNIX)) {
         errno = EINVAL;
         return -1;
     }
@@ -178,11 +179,15 @@ int mal_net_connect_address(const struct sockaddr *address, socklen_t length) {
     int one = 1;
     setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
 #endif
-    int no_delay = 1;
-    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &no_delay, sizeof(no_delay));
+    if (address->sa_family != AF_UNIX) {
+        int no_delay = 1;
+        setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &no_delay, sizeof(no_delay));
+    }
     int r = connect(fd, address, length);
     if (r < 0 && errno != EINPROGRESS) {
+        int error = errno;
         close(fd);
+        errno = error;
         return -1;
     }
     return fd;

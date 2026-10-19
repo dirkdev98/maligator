@@ -47,9 +47,9 @@ Callback and promise forms of filesystem `access`, `unlink`, and `rename` run th
 
 `mkdtemp` supports callback and promise forms, while `mkdtempSync` performs the same operation synchronously. All three honor encoding options, including Buffer paths, and preserve Node's option-getter order. Callback `fsync` and `fdatasync` run on the host worker pool; `fsyncSync` and `fdatasyncSync` flush directly. These APIs retain Node's descriptor validation, callback signatures, and construction behavior.
 
-`fs.cp`, `cpSync` and `node:fs/promises.cp` follow Node 26's copy algorithm, including `filter`, `force`, `errorOnExist`, `dereference`, `verbatimSymlinks`, `preserveTimestamps` and its error codes. Without a filter the whole copy runs on the host worker pool. `fs.glob`, `globSync` and `readdir` with `recursive` walk in Node's order. `fs.watch` uses kqueue on macOS and inotify on Linux; `recursive` is accepted, but only the top level is watched for now. `watchFile` polls `stat` on a timer.
+`fs.cp`, `cpSync` and `node:fs/promises.cp` follow Node 26's copy algorithm, including `filter`, `force`, `errorOnExist`, `dereference`, `verbatimSymlinks`, `preserveTimestamps` and its error codes. Without a filter the whole copy runs on the host worker pool. `fs.glob`, `globSync` and `readdir` with `recursive` walk in Node's order. `fs.watch` uses kqueue on macOS and inotify on Linux. `recursive: true` watches the whole tree and reports names relative to the watched directory, such as `sub/file.txt`; on macOS one kqueue descriptor per watched file and subdirectory caps a watcher at 256 entries. `copyFile`, `copyFileSync` and `fs.promises.copyFile` honor `COPYFILE_EXCL`, `COPYFILE_FICLONE` and `COPYFILE_FICLONE_FORCE` like libuv; as in Node, `COPYFILE_FICLONE_FORCE` fails with `ENOSYS` on macOS. `watchFile` polls `stat` on a timer.
 
-`node:net` servers accept connections through the host reactor and hand them out as ordinary `net.Socket` instances. `node:dgram` sends datagrams straight from the caller's buffers. Both resolve only numeric addresses and `localhost`, and a server cannot listen on a Unix socket path yet.
+`node:net` servers accept connections through the host reactor and hand them out as ordinary `net.Socket` instances, over TCP or Unix domain socket paths. `node:dgram` sends datagrams straight from the caller's buffers. Both resolve host names through `dns.lookup`, and client sockets accept a custom `lookup` function and emit `'lookup'` events.
 
 `node:vm` runs scripts in the current context with the global semantics of indirect eval, and a `Script` parses once. A context from `createContext` is a separate realm: the sandbox's own enumerable properties are copied in before a run, and globals the script created or changed are copied back afterwards. Note that the sandbox's prototype chain, getters and deletions do not reach the script.
 
@@ -57,7 +57,7 @@ Callback and promise forms of filesystem `access`, `unlink`, and `rename` run th
 
 `tls.createServer` and `https.createServer` terminate TLS with rustls on the sockets `node:net` and `node:http` already use, including ALPN. `SNICallback`, `setSecureContext` and client certificates are not supported yet.
 
-`createRequire(import.meta.url)` resolves at build time like CommonJS `require`: modules required with a literal specifier are bundled. A require with a computed specifier finds only modules that are bundled that way.
+`createRequire(import.meta.url)` resolves at build time like CommonJS `require`: modules required with a literal specifier are bundled. A require with a computed specifier finds only modules that are bundled that way. `import.meta.resolve` answers a literal specifier from the build's resolution, packages included, and resolves a computed path or URL against the module's URL when it runs.
 
 `TransformStream`, `TextEncoderStream` and `TextDecoderStream` are available with either the web platform or the Node surface. `CompressionStream` and `DecompressionStream` need the Node surface, since the zlib codec ships with it. `util.MIMEType` and `MIMEParams` port Node's parser, including its quoting rules and error messages.
 

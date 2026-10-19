@@ -183,6 +183,22 @@ sink.close();
 
 await new Promise((resolve) => server.close(resolve));
 
+// "127.1" is not an IP literal for net.isIP, so it resolves through dns.lookup without the network.
+await new Promise((resolve) => {
+	const named = createSocket("udp4");
+	named.on("message", (message, remote) => {
+		console.log("named message", String(message), remote.address);
+		named.close(resolve);
+	});
+	named.bind(0, "127.1", () => {
+		console.log("named bound", named.address().address);
+		named.send("named-ping", named.address().port, "127.1", (error, bytes) =>
+			console.log("named sent", error, bytes),
+		);
+	});
+	named.send("queued", 9, "127.0.0.1", (error) => console.log("queued sent", error));
+});
+
 const controller = new AbortController();
 const aborted = createSocket({ type: "udp4", signal: controller.signal });
 aborted.bind(0, "127.0.0.1");

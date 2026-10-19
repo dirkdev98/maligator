@@ -444,11 +444,17 @@ bool mal_tcp_connect_address_start(
     connection->host = host;
     connection->operation = *operation;
     connection->fd = mal_net_connect_address(address, length);
-    if (connection->fd < 0) goto fail_connection;
+    int connect_error = connection->fd < 0 ? errno : 0;
     connection->connecting = true;
     if (!mal_host_operation_bind(
             &host->tasks, *operation, connection)) {
         goto fail_connection;
+    }
+    if (connect_error != 0) {
+        // A refused Unix path or unreachable route fails inside connect(); report it like a late failure.
+        if (!mal_host_operation_activate(&host->tasks, *operation)) goto fail_connection;
+        tcp_complete(connection, MAL_HOST_TERMINAL_ERROR, connect_error);
+        return true;
     }
     if (!tcp_arm_write(connection)
         || !mal_host_operation_activate(&host->tasks, *operation)) {

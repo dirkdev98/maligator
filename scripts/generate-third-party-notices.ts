@@ -34,12 +34,14 @@ const NODE_DERIVED: Array<Derivation> = [
 	{ file: "runtime/src/runtime/node_dotenv.c", upstream: "src/node_dotenv.cc" },
 	{
 		file: "runtime/src/runtime/node_fs.c",
-		upstream: "lib/internal/fs/cp/cp.js, lib/internal/fs/cp/cp-sync.js",
+		upstream: "lib/internal/fs/cp/cp.js, lib/internal/fs/cp/cp-sync.js, src/node_file.cc",
 	},
 	{
 		file: "runtime/src/runtime/node_inspect.c",
 		upstream: "lib/internal/util/inspect.js",
 	},
+	{ file: "runtime/src/runtime/node_dgram.c", upstream: "lib/dgram.js" },
+	{ file: "runtime/src/runtime/node_net.c", upstream: "lib/net.js" },
 	{ file: "runtime/src/runtime/node_path.c", upstream: "lib/path.js" },
 	{ file: "runtime/src/runtime/node_tls.c", upstream: "lib/tls.js" },
 	{ file: "runtime/src/runtime/node_util_mime.c", upstream: "lib/internal/mime.js" },

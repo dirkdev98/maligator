@@ -1,3 +1,4 @@
+import dns from "node:dns";
 import net, { Server, createServer } from "node:net";
 
 // Server and client events come from separate sockets, so each side keeps its own order.
@@ -113,6 +114,63 @@ const disposable = createServer();
 await new Promise((resolve) => disposable.listen(0, "127.0.0.1", resolve));
 await disposable[Symbol.asyncDispose]();
 console.log("disposed", disposable.listening);
+
+await new Promise((resolve) => {
+	const lookupLog = [];
+	const named = createServer((socket) => socket.end("named"));
+	// "127.1" is not an IP literal for net.isIP, so it resolves through dns.lookup without the network.
+	named.listen(0, "127.1", () => {
+		const namedPort = named.address().port;
+		console.log("named listen", named.address().address, named.listening);
+		const client = net.connect({
+			port: namedPort,
+			host: "service.test",
+			lookup(host, options, callback) {
+				lookupLog.push(
+					`lookup ${host} ${options.family} ${options.hints === dns.ADDRCONFIG} ${options.all}`,
+				);
+				setImmediate(() => callback(null, [{ address: "127.0.0.1", family: 4 }]));
+			},
+		});
+		client.on("lookup", (error, address, family, host) =>
+			lookupLog.push(`lookup event ${error} ${address} ${family} ${host}`),
+		);
+		client.on("connect", () => lookupLog.push(`connect ${client.remoteAddress}`));
+		client.on("data", (chunk) => lookupLog.push(`data ${chunk}`));
+		client.on("close", () => {
+			const failing = net.connect({
+				port: namedPort,
+				host: "missing.test",
+				lookup(host, options, callback) {
+					const error = new Error(`getaddrinfo ENOTFOUND ${host}`);
+					error.code = "ENOTFOUND";
+					setImmediate(() => callback(error));
+				},
+			});
+			failing.on("lookup", (error, address, family, host) =>
+				lookupLog.push(`failed lookup ${error.code} ${address} ${family} ${host}`),
+			);
+			failing.on("error", (error) =>
+				lookupLog.push(`error ${error.code} ${error.message}`),
+			);
+			failing.on("close", (hadError) => {
+				lookupLog.push(`failed close ${hadError}`);
+				const resolved = net.connect(namedPort, "127.1");
+				resolved.on("lookup", (error, address, family, host) =>
+					lookupLog.push(`dns lookup ${error} ${address} ${family} ${host}`),
+				);
+				resolved.on("connect", () =>
+					lookupLog.push(`dns connect ${resolved.remoteAddress}`),
+				);
+				resolved.resume();
+				resolved.on("close", () => {
+					console.log(lookupLog.join("\n"));
+					named.close(resolve);
+				});
+			});
+		});
+	});
+});
 
 try {
 	createServer().listen(70000);

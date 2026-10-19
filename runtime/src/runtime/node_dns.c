@@ -683,6 +683,10 @@ static MalValue dns_lookup(
     return dns_lookup_impl(vm, args, argc, false);
 }
 
+MalValue mal_node_dns_lookup(MalVm *vm, const MalValue *args, i32 argc) {
+    return dns_lookup_impl(vm, args, argc, false);
+}
+
 static MalValue dns_promises_lookup(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
     (void) receiver, (void) new_target, (void) callee;
