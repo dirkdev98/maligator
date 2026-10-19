@@ -53,6 +53,12 @@ Callback and promise forms of filesystem `access`, `unlink`, and `rename` run th
 
 `node:vm` runs scripts in the current context with the global semantics of indirect eval, and a `Script` parses once. A context from `createContext` is a separate realm: the sandbox's own enumerable properties are copied in before a run, and globals the script created or changed are copied back afterwards. Note that the sandbox's prototype chain, getters and deletions do not reach the script.
 
+`node:crypto` imports, exports and generates asymmetric keys as `KeyObject`s, and signs and verifies with RSA (PKCS#1 v1.5 and PSS), ECDSA on P-256 and P-384, and Ed25519. `crypto.subtle` handles the same keys. RSA key generation and encrypted PEM keys are not supported yet.
+
+`tls.createServer` and `https.createServer` terminate TLS with rustls on the sockets `node:net` and `node:http` already use, including ALPN. `SNICallback`, `setSecureContext` and client certificates are not supported yet.
+
+`createRequire(import.meta.url)` resolves at build time like CommonJS `require`: modules required with a literal specifier are bundled. A require with a computed specifier finds only modules that are bundled that way.
+
 `TransformStream`, `TextEncoderStream` and `TextDecoderStream` are available with either the web platform or the Node surface. `CompressionStream` and `DecompressionStream` need the Node surface, since the zlib codec ships with it. `util.MIMEType` and `MIMEParams` port Node's parser, including its quoting rules and error messages.
 
 ## Replace a module specifier
