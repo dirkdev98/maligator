@@ -545,6 +545,32 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_CREATE_IMPORT_META_RESOLVE%\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_CREATE_IMPORT_META_RESOLVE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_CREATE_IMPORT_META_RESOLVE%",
+				"MAL_INTRINSIC_CREATE_IMPORT_META_RESOLVE"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_CREATE_IMPORT_META_RESOLVE%\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_CREATE_IMPORT_META_RESOLVE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_CREATE_IMPORT_META_RESOLVE%",
+				"MAL_INTRINSIC_CREATE_IMPORT_META_RESOLVE"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_DIRECT_EVAL%\",\"length\"]",
 			"owner": "%MAL_INTRINSIC_DIRECT_EVAL%",
 			"ownerPaths": ["%MAL_INTRINSIC_DIRECT_EVAL%", "MAL_INTRINSIC_DIRECT_EVAL"],
@@ -31311,7 +31337,7 @@
 			],
 			"key": "copyFileSync",
 			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.copyFileSync"],
+			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.chownSync"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -34783,6 +34809,7 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.copyFileSync",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.copyFileSync",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.copyFileSync.prototype.constructor",
 				"mal_host_install_node_fs:copyFileSync"
 			],
 			"key": "length",
@@ -34796,11 +34823,36 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.copyFileSync",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.copyFileSync",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.copyFileSync.prototype.constructor",
 				"mal_host_install_node_fs:copyFileSync"
 			],
 			"key": "name",
 			"kind": "data",
 			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.copyFileSync\",\"prototype\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.copyFileSync",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.copyFileSync",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.copyFileSync.prototype.constructor",
+				"mal_host_install_node_fs:copyFileSync"
+			],
+			"key": "prototype",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_MODULE%.copyFileSync.prototype\",\"constructor\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.copyFileSync.prototype",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_FS_MODULE%.copyFileSync.prototype"],
+			"key": "constructor",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.chownSync"],
 			"task": "H-10",
 			"decisions": []
 		},
@@ -37992,22 +38044,6 @@
 			"decisions": []
 		},
 		{
-			"id": "[\"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%\",\"copyFile\"]",
-			"owner": "%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:fs/promises\"]",
-				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%",
-				"MAL_INTRINSIC_NODE_FS_PROMISES_MODULE",
-				"mal_host_install_node_fs:promises",
-				"mal_host_install_node_fs_promises:default"
-			],
-			"key": "copyFile",
-			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.appendFile"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
 			"id": "[\"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%\",\"link\"]",
 			"owner": "%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%",
 			"ownerPaths": [
@@ -38338,6 +38374,22 @@
 				"mal_host_install_node_fs_promises:default"
 			],
 			"key": "chown",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.chown"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%\",\"copyFile\"]",
+			"owner": "%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:fs/promises\"]",
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%",
+				"MAL_INTRINSIC_NODE_FS_PROMISES_MODULE",
+				"mal_host_install_node_fs:promises",
+				"mal_host_install_node_fs_promises:default"
+			],
+			"key": "copyFile",
 			"kind": "data",
 			"operations": ["%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.chown"],
 			"task": "N-06",
@@ -135686,6 +135738,32 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_CREATE_IMPORT_META_RESOLVE%\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_CREATE_IMPORT_META_RESOLVE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_CREATE_IMPORT_META_RESOLVE%",
+				"MAL_INTRINSIC_CREATE_IMPORT_META_RESOLVE"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_CREATE_IMPORT_META_RESOLVE%"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_CREATE_IMPORT_META_RESOLVE%\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_CREATE_IMPORT_META_RESOLVE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_CREATE_IMPORT_META_RESOLVE%",
+				"MAL_INTRINSIC_CREATE_IMPORT_META_RESOLVE"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_CREATE_IMPORT_META_RESOLVE%"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_DIRECT_EVAL%\",\"<call>\"]",
 			"owner": "%MAL_INTRINSIC_DIRECT_EVAL%",
 			"ownerPaths": ["%MAL_INTRINSIC_DIRECT_EVAL%", "MAL_INTRINSIC_DIRECT_EVAL"],
@@ -149856,11 +149934,12 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.copyFileSync",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.copyFileSync",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.copyFileSync.prototype.constructor",
 				"mal_host_install_node_fs:copyFileSync"
 			],
 			"key": "<call>",
 			"kind": "call",
-			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.copyFileSync"],
+			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.chownSync"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -149869,11 +149948,12 @@
 			"owner": "%MAL_INTRINSIC_NODE_FS_MODULE%.copyFileSync",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.copyFileSync",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.copyFileSync.prototype.constructor",
 				"mal_host_install_node_fs:copyFileSync"
 			],
 			"key": "<construct>",
 			"kind": "construct",
-			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.copyFileSync"],
+			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.chownSync"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -152160,7 +152240,7 @@
 			],
 			"key": "<call>",
 			"kind": "call",
-			"operations": ["%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.appendFile"],
+			"operations": ["%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.chown"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -152173,7 +152253,7 @@
 			],
 			"key": "<construct>",
 			"kind": "construct",
-			"operations": ["%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.appendFile"],
+			"operations": ["%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.chown"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -275555,6 +275635,16 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"[[roots]]\",\"MAL_INTRINSIC_CREATE_IMPORT_META_RESOLVE\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "MAL_INTRINSIC_CREATE_IMPORT_META_RESOLVE",
+			"kind": "binding",
+			"operations": ["%MAL_INTRINSIC_CREATE_IMPORT_META_RESOLVE%"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"[[roots]]\",\"MAL_INTRINSIC_CUSTOM_EVENT_CONSTRUCTOR\"]",
 			"owner": "[[roots]]",
 			"ownerPaths": ["[[roots]]"],
@@ -281528,7 +281618,7 @@
 			"ownerPaths": ["[[roots]]"],
 			"key": "mal_host_install_node_fs:copyFileSync",
 			"kind": "binding",
-			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.copyFileSync"],
+			"operations": ["%MAL_INTRINSIC_NODE_FS_MODULE%.chownSync"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -282388,7 +282478,7 @@
 			"ownerPaths": ["[[roots]]"],
 			"key": "mal_host_install_node_fs_promises:copyFile",
 			"kind": "binding",
-			"operations": ["%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.appendFile"],
+			"operations": ["%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.chown"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -288353,6 +288443,10 @@
 			"identities": ["%MAL_INTRINSIC_COUNT_QUEUING_STRATEGY_SIZE%"]
 		},
 		{
+			"id": "%MAL_INTRINSIC_CREATE_IMPORT_META_RESOLVE%",
+			"identities": ["%MAL_INTRINSIC_CREATE_IMPORT_META_RESOLVE%"]
+		},
+		{
 			"id": "%MAL_INTRINSIC_DIRECT_EVAL%",
 			"identities": ["%MAL_INTRINSIC_DIRECT_EVAL%"]
 		},
@@ -290465,6 +290559,7 @@
 			"id": "%MAL_INTRINSIC_NODE_FS_MODULE%.chownSync",
 			"identities": [
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.chownSync",
+				"%MAL_INTRINSIC_NODE_FS_MODULE%.copyFileSync",
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.fchmodSync",
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.fchownSync",
 				"%MAL_INTRINSIC_NODE_FS_MODULE%.futimesSync",
@@ -290478,10 +290573,6 @@
 		{
 			"id": "%MAL_INTRINSIC_NODE_FS_MODULE%.closeSync",
 			"identities": ["%MAL_INTRINSIC_NODE_FS_MODULE%.closeSync"]
-		},
-		{
-			"id": "%MAL_INTRINSIC_NODE_FS_MODULE%.copyFileSync",
-			"identities": ["%MAL_INTRINSIC_NODE_FS_MODULE%.copyFileSync"]
 		},
 		{
 			"id": "%MAL_INTRINSIC_NODE_FS_MODULE%.cp",
@@ -290672,7 +290763,6 @@
 			"identities": [
 				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.appendFile",
 				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.chmod",
-				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.copyFile",
 				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.link",
 				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.lstat",
 				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.mkdir",
@@ -290692,6 +290782,7 @@
 			"id": "%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.chown",
 			"identities": [
 				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.chown",
+				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.copyFile",
 				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.lchown",
 				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.lutimes",
 				"%MAL_INTRINSIC_NODE_FS_PROMISES_MODULE%.statfs",
