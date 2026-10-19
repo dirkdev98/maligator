@@ -469,7 +469,7 @@ static void mal_perf_stats_print(void) {
         "split_planned_matches=%llu split_plan_overflows=%llu "
         "char_code_at_direct_hits=%llu char_code_at_direct_fallbacks=%llu "
         "case_calls=%llu case_input_code_units=%llu case_reuses=%llu "
-        "case_changed_allocations=%llu case_changed_code_units=%llu\n",
+        "case_changed_allocations=%llu case_changed_code_units=%llu case_atom_hits=%llu\n",
         (unsigned long long) mal_perf_stats.key_equals_calls,
         (unsigned long long) mal_perf_stats.key_pointer_hits,
         (unsigned long long) mal_perf_stats.key_string_fallbacks,
@@ -512,7 +512,8 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.string_case_input_code_units,
         (unsigned long long) mal_perf_stats.string_case_reuses,
         (unsigned long long) mal_perf_stats.string_case_changed_allocations,
-        (unsigned long long) mal_perf_stats.string_case_changed_code_units
+        (unsigned long long) mal_perf_stats.string_case_changed_code_units,
+        (unsigned long long) mal_perf_stats.string_case_atom_hits
     );
     fprintf(stderr,
         "[perf-json-stats] shape_plans=%llu shape_plan_bytes=%llu shape_plan_hits=%llu "

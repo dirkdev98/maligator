@@ -1895,6 +1895,12 @@ typedef struct MalVm {
      * from character extraction, iteration, RegExp, and string-spread paths.
      */
     MalString *code_unit_strings[256];
+    /** Root-locale case conversions of atoms, as atoms; see mal_builtin_string_case_known. */
+    struct {
+        MalString *input;
+        MalString *result;
+        bool upper;
+    } string_case_cache[128];
 
     /**
      * Contiguous register/argument storage for non-suspendable frames. Each such

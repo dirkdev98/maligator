@@ -2797,7 +2797,25 @@ static MalValue mal_builtin_string_case_range(MalVm *vm, MalString *string, usiz
 }
 
 MalValue mal_builtin_string_case_known(MalVm *vm, MalString *string, bool upper, MalUnicodeLocale locale) {
-    return mal_builtin_string_case_range(vm, string, 0, mal_string_length(string), upper, locale);
+    if (!string->property_atom || locale != MAL_UNICODE_LOCALE_ROOT) {
+        return mal_builtin_string_case_range(vm, string, 0, mal_string_length(string), upper, locale);
+    }
+    // Programs convert the same header and property names again and again. Atoms live as
+    // long as the VM, so one atom's conversion can be remembered as another without tracing.
+    typeof(vm->string_case_cache[0]) *entry = &vm->string_case_cache[
+        (((uptr) string >> 4) ^ (uptr) upper) % countof(vm->string_case_cache)];
+    if (entry->input == string && entry->upper == upper) {
+        MAL_PERF_COUNT(string_case_atom_hits);
+        return mal_value_from_string(entry->result);
+    }
+    MalValue converted =
+        mal_builtin_string_case_range(vm, string, 0, mal_string_length(string), upper, locale);
+    if (!mal_value_is_string(converted)) return converted;
+    MalString *atom = mal_property_atomize_string(vm, mal_value_to_string(converted));
+    entry->input = string;
+    entry->result = atom;
+    entry->upper = upper;
+    return mal_value_from_string(atom);
 }
 
 static MalValue mal_builtin_string_locale_case_range(
