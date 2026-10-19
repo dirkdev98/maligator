@@ -2,6 +2,7 @@
 
 #include "./defaults.h"
 #include "host_task.h"
+#include "net.h"
 
 #include <sys/socket.h>
 
@@ -13,6 +14,8 @@ typedef enum MalTcpProgressKind {
     MAL_TCP_SECURE_CONNECTED,
     MAL_TCP_DATA,
     MAL_TCP_WRITE_COMPLETE,
+    /* A listener accepted a connection, now live on `accepted` with reads paused. */
+    MAL_TCP_ACCEPTED,
 } MalTcpProgressKind;
 
 typedef struct MalTcpProgress {
@@ -20,6 +23,7 @@ typedef struct MalTcpProgress {
     byte *bytes;
     usize length;
     u64 write_token;
+    MalHostHandle accepted;
 } MalTcpProgress;
 
 typedef struct MalTcpTerminal {
@@ -50,6 +54,19 @@ bool mal_tcp_start_tls(
     const byte *ca_pem, usize ca_pem_length,
     const byte *alpn, usize alpn_length, bool insecure);
 bool mal_tcp_cancel(MalHost *host, MalHostHandle operation);
+
+/* Listening sockets: 0 or the bind/listen errno. Accepts arrive as MAL_TCP_ACCEPTED
+ * progress on `operation`; close completes it with an OK terminal. */
+int mal_tcp_listen_start(
+    MalHost *host, const struct sockaddr *address, socklen_t length, int backlog, bool ipv6_only,
+    MalHostHandle *operation);
+bool mal_tcp_listen_endpoint(MalHost *host, MalHostHandle operation, MalNetEndpoint *out);
+bool mal_tcp_listen_pause(MalHost *host, MalHostHandle operation, bool paused);
+/* An unreferenced listener accepts connections but does not keep the event loop alive. */
+bool mal_tcp_listen_set_referenced(MalHost *host, MalHostHandle operation, bool referenced);
+bool mal_tcp_listen_close(MalHost *host, MalHostHandle operation);
+bool mal_tcp_connection_endpoints(
+    MalHost *host, MalHostHandle operation, MalNetEndpoint *local, MalNetEndpoint *remote);
 void mal_tcp_shutdown(MalHost *host);
 
 /* An explicit CA replaces defaults; otherwise use host roots plus NODE_EXTRA_CA_CERTS. */

@@ -621,6 +621,183 @@ bool mal_tcp_start_tls(
 #endif
 }
 
+typedef struct MalTcpListener {
+    MalHost *host;
+    MalHostHandle operation;
+    int fd;
+    MalOp accept_op;
+    bool unreferenced;
+    struct MalTcpListener *next;
+} MalTcpListener;
+
+// Listeners belong to the reactor thread of the isolate that opened them.
+static MAL_ISOLATE_LOCAL MalTcpListener *tcp_listeners;
+
+static bool tcp_listener_disarm(MalTcpListener *listener) {
+    MalReactor *reactor = &listener->host->reactor;
+    if (listener->accept_op.active && listener->unreferenced) reactor->unreferenced_ops--;
+    return mal_reactor_cancel_op(reactor, &listener->accept_op);
+}
+
+static void tcp_listener_destroy(MalTcpListener *listener) {
+    MalTcpListener **link = &tcp_listeners;
+    while (*link != nullptr && *link != listener) link = &(*link)->next;
+    if (*link == listener) *link = listener->next;
+    (void) tcp_listener_disarm(listener);
+    mal_host_operation_unbind(&listener->host->tasks, listener->operation, listener);
+    mal_net_close(listener->fd);
+    free(listener);
+}
+
+static MalTcpListener *tcp_listener_find(MalHost *host, MalHostHandle operation) {
+    for (MalTcpListener *listener = tcp_listeners; listener != nullptr; listener = listener->next) {
+        if (listener->host == host && listener->operation == operation) return listener;
+    }
+    return nullptr;
+}
+
+static bool tcp_listener_arm(MalTcpListener *listener);
+
+static bool tcp_adopt(MalTcpListener *listener, int fd) {
+    MalHost *host = listener->host;
+    MalTcpConnection *connection = calloc(1, sizeof(MalTcpConnection));
+    MalTcpProgress *progress = calloc(1, sizeof(MalTcpProgress));
+    MalHostHandle operation = 0;
+    if (connection == nullptr || progress == nullptr || !mal_host_operation_start(&host->tasks, &operation)) {
+        free(connection);
+        free(progress);
+        mal_net_close(fd);
+        return false;
+    }
+    connection->host = host;
+    connection->operation = operation;
+    connection->fd = fd;
+    // Paused until adopted, so no data task can precede the adopter's socket state.
+    connection->read_paused = true;
+    if (!mal_host_operation_bind(&host->tasks, operation, connection)
+        || !mal_host_operation_activate(&host->tasks, operation)) {
+        free(progress);
+        tcp_destroy(connection);
+        (void) mal_host_operation_abort_start(&host->tasks, operation);
+        return false;
+    }
+    connection->next = host->tcp_connections;
+    host->tcp_connections = connection;
+    progress->kind = MAL_TCP_ACCEPTED;
+    progress->accepted = operation;
+    if (!mal_host_operation_progress(&host->tasks, listener->operation, progress, mal_tcp_progress_free)) {
+        mal_tcp_progress_free(progress);
+        (void) mal_tcp_cancel(host, operation);
+        return false;
+    }
+    return true;
+}
+
+static void tcp_accept_ready(void *data) {
+    MalTcpListener *listener = data;
+    if (listener->unreferenced) listener->host->reactor.unreferenced_ops--;
+    for (usize turn = 0; turn < 64; turn++) {
+        int fd = mal_net_accept_connection(listener->fd);
+        if (fd >= 0) {
+            (void) tcp_adopt(listener, fd);
+            continue;
+        }
+        if (errno == EAGAIN || errno == EWOULDBLOCK || errno == ECONNABORTED || errno == EMFILE
+            || errno == ENFILE) {
+            break;
+        }
+        MalTcpTerminal *terminal = malloc(sizeof(MalTcpTerminal));
+        if (terminal != nullptr) terminal->error = errno;
+        if (!mal_host_operation_complete(&listener->host->tasks, listener->operation,
+                MAL_HOST_TERMINAL_ERROR, terminal, mal_tcp_terminal_free)) {
+            free(terminal);
+        }
+        tcp_listener_destroy(listener);
+        return;
+    }
+    (void) tcp_listener_arm(listener);
+}
+
+static bool tcp_listener_arm(MalTcpListener *listener) {
+    listener->accept_op = (MalOp) {
+        .fd = listener->fd,
+        .interest = MAL_IO_READ,
+        .waker = {.fn = tcp_accept_ready, .data = listener},
+    };
+    if (!mal_reactor_add_op(&listener->host->reactor, &listener->accept_op)) return false;
+    if (listener->unreferenced) listener->host->reactor.unreferenced_ops++;
+    return true;
+}
+
+int mal_tcp_listen_start(
+    MalHost *host, const struct sockaddr *address, socklen_t length, int backlog, bool ipv6_only,
+    MalHostHandle *operation) {
+    if (host == nullptr || address == nullptr || operation == nullptr) return EINVAL;
+    int fd = mal_net_listen_address(address, length, backlog, ipv6_only);
+    if (fd < 0) return errno != 0 ? errno : EIO;
+    MalTcpListener *listener = calloc(1, sizeof(MalTcpListener));
+    if (listener == nullptr || !mal_host_operation_start(&host->tasks, operation)) {
+        free(listener);
+        mal_net_close(fd);
+        return ENOMEM;
+    }
+    listener->host = host;
+    listener->operation = *operation;
+    listener->fd = fd;
+    if (!mal_host_operation_bind(&host->tasks, *operation, listener) || !tcp_listener_arm(listener)
+        || !mal_host_operation_activate(&host->tasks, *operation)) {
+        (void) mal_reactor_cancel_op(&host->reactor, &listener->accept_op);
+        mal_host_operation_unbind(&host->tasks, *operation, listener);
+        (void) mal_host_operation_abort_start(&host->tasks, *operation);
+        mal_net_close(fd);
+        free(listener);
+        return EIO;
+    }
+    listener->next = tcp_listeners;
+    tcp_listeners = listener;
+    return 0;
+}
+
+bool mal_tcp_listen_endpoint(MalHost *host, MalHostHandle operation, MalNetEndpoint *out) {
+    MalTcpListener *listener = tcp_listener_find(host, operation);
+    return listener != nullptr && mal_net_local_endpoint(listener->fd, out);
+}
+
+bool mal_tcp_connection_endpoints(
+    MalHost *host, MalHostHandle operation, MalNetEndpoint *local, MalNetEndpoint *remote) {
+    MalTcpConnection *connection = host == nullptr ? nullptr : tcp_find(host, operation);
+    return connection != nullptr && mal_net_local_endpoint(connection->fd, local)
+        && mal_net_remote_endpoint(connection->fd, remote);
+}
+
+bool mal_tcp_listen_pause(MalHost *host, MalHostHandle operation, bool paused) {
+    MalTcpListener *listener = tcp_listener_find(host, operation);
+    if (listener == nullptr) return false;
+    if (paused) return tcp_listener_disarm(listener);
+    return listener->accept_op.active || tcp_listener_arm(listener);
+}
+
+bool mal_tcp_listen_set_referenced(MalHost *host, MalHostHandle operation, bool referenced) {
+    MalTcpListener *listener = tcp_listener_find(host, operation);
+    if (listener == nullptr) return false;
+    if (listener->unreferenced != referenced) return true;
+    if (listener->accept_op.active) host->reactor.unreferenced_ops += referenced ? -1 : 1;
+    listener->unreferenced = !referenced;
+    return true;
+}
+
+bool mal_tcp_listen_close(MalHost *host, MalHostHandle operation) {
+    MalTcpListener *listener = tcp_listener_find(host, operation);
+    if (listener == nullptr) return false;
+    MalTcpTerminal *terminal = calloc(1, sizeof(MalTcpTerminal));
+    if (!mal_host_operation_complete(&host->tasks, operation, MAL_HOST_TERMINAL_OK, terminal,
+            mal_tcp_terminal_free)) {
+        free(terminal);
+    }
+    tcp_listener_destroy(listener);
+    return true;
+}
+
 bool mal_tcp_cancel(MalHost *host, MalHostHandle operation) {
     if (host == nullptr) return false;
     MalTcpConnection *connection = tcp_find(host, operation);
@@ -634,6 +811,12 @@ bool mal_tcp_cancel(MalHost *host, MalHostHandle operation) {
 
 void mal_tcp_shutdown(MalHost *host) {
     if (host == nullptr) return;
+    for (MalTcpListener *listener = tcp_listeners, *next; listener != nullptr; listener = next) {
+        next = listener->next;
+        if (listener->host != host) continue;
+        (void) mal_host_operation_cancel(&host->tasks, listener->operation);
+        tcp_listener_destroy(listener);
+    }
     while (host->tcp_connections != nullptr) {
         MalTcpConnection *connection = host->tcp_connections;
         (void) mal_host_operation_cancel(&host->tasks, connection->operation);

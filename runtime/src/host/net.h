@@ -42,6 +42,13 @@ int mal_net_listen(const char *host, u16 port, int backlog);
  */
 int mal_net_accept(int listen_fd);
 
+/* A nonblocking, close-on-exec listening socket for any IP family; -1 with errno on failure. */
+int mal_net_listen_address(
+    const struct sockaddr *address, socklen_t length, int backlog, bool ipv6_only);
+
+/* Accepts one nonblocking connection without the HTTP server's TCP_NODELAY default. */
+int mal_net_accept_connection(int listen_fd);
+
 /*
  * Create a non-blocking IPv4/IPv6 socket and begin connecting to host:port. Returns the
  * fd immediately; the connection may still be in progress (wait for the fd to

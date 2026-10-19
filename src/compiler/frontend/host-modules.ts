@@ -1122,7 +1122,16 @@ const READLINE_PROMISES: HostModuleSpec = {
 
 const NET: HostModuleSpec = {
 	id: "node:net",
-	named: ["Socket", "connect", "createConnection", "isIP", "isIPv4", "isIPv6"],
+	named: [
+		"Server",
+		"Socket",
+		"connect",
+		"createConnection",
+		"createServer",
+		"isIP",
+		"isIPv4",
+		"isIPv6",
+	],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:net"),
 };

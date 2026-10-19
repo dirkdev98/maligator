@@ -80,6 +80,8 @@ struct MalReactor {
 
     /* Count of registered fd ops (so the scheduler knows when work remains). */
     i32 pending_ops;
+    /* Registered ops their owners marked as not keeping the event loop alive. */
+    i32 unreferenced_ops;
 
     /* Ops queued to run before the next backend wait. */
     MalOp *ready_ops;

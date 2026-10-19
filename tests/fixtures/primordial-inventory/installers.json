@@ -537,7 +537,7 @@
 	},
 	{
 		"file": "runtime/node_net.c",
-		"sha256": "bfafa643718b1ed935010dca031ac4700db343a3a15a69f0af709bb2b2e65844"
+		"sha256": "3eaf444281ab269dd4178482e87ff87eb8cabfe2b5a317c7c4ab2fa95125c1f5"
 	},
 	{
 		"file": "runtime/node_net.h",
@@ -713,7 +713,7 @@
 	},
 	{
 		"file": "runtime/web_host_timer.c",
-		"sha256": "f82ab4b0e141fc7e6bfc8e03b6c5ae4b0bf1757466864f4ae63ec3935d470fad"
+		"sha256": "d44dcf7d6dd8f3f7d1dd381ab7c76485540e46f3c79f83b5d5110c1824760992"
 	},
 	{
 		"file": "runtime/web_readable_stream.c",

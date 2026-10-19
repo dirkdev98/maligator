@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "ascii.h"
 #include "async_context.h"
 #include "function_object.h"
 #include "dns.h"
@@ -20,7 +21,9 @@
 #include "node_buffer.h"
 #include "node_module.h"
 #include "node_stream.h"
+#include "microtask.h"
 #include "object.h"
+#include "promise_object.h"
 #include "object_ops.h"
 #include "property_store.h"
 #include "tcp.h"
@@ -57,6 +60,8 @@ typedef struct MalNodeNetSocketState {
 #endif
     MalHostHandle operation;
     MalValue destroy_error;
+    /* The accepting net.Server for server-side sockets, else undefined. */
+    MalValue server;
     MalNodeNetWrite *write_head;
     MalNodeNetWrite *write_tail;
     struct sockaddr_storage *addresses;
@@ -435,6 +440,7 @@ static MalValue net_socket_connect(
     state->receiver = receiver;
     state->async_context = mal_async_context_capture(vm);
     state->destroy_error = mal_value_new_undefined();
+    state->server = mal_value_new_undefined();
     state->next_write_token = 1;
 #if MAL_REALMS
     state->realm = vm->current_realm;
@@ -719,12 +725,16 @@ static MalValue net_create_connection(
         ? mal_value_new_undefined() : result;
 }
 
+static void net_scan_servers(MalVm *vm);
+
 static void net_scan_roots(MalVm *vm, void *data) {
     (void) data;
+    net_scan_servers(vm);
     for (MalNodeNetSocketState *state = net_sockets; state != nullptr; state = state->next) {
         if (state->vm != vm) continue;
         mal_gc_mark_value(state->receiver);
         mal_gc_mark_value(state->destroy_error);
+        mal_gc_mark_value(state->server);
         mal_gc_mark_value(
             mal_async_internal_value((MalHeapHeader *) state->async_context));
         mal_gc_mark_value(
@@ -908,6 +918,650 @@ static bool net_store_dns_addresses(
     return true;
 }
 
+typedef struct MalNodeNetServerState {
+    MalVm *vm;
+    MalValue receiver;
+    MalAsyncContext *async_context;
+#if MAL_REALMS
+    MalRealm *realm;
+#endif
+    MalHostHandle operation;
+    u32 connections;
+    bool listening;
+    bool handle_open;
+    struct MalNodeNetServerState *next;
+} MalNodeNetServerState;
+
+static MAL_ISOLATE_LOCAL MalNodeNetServerState *net_servers;
+
+/* Accepted connections refused before adoption still post a cancellation terminal;
+ * the head-only drain must consume it or it would block every later net task. */
+typedef struct MalNodeNetDropped {
+    MalVm *vm;
+    MalHostHandle operation;
+    struct MalNodeNetDropped *next;
+} MalNodeNetDropped;
+
+static MAL_ISOLATE_LOCAL MalNodeNetDropped *net_dropped;
+
+static void net_drop_connection(MalVm *vm, MalHostHandle operation) {
+    MalNodeNetDropped *dropped = calloc(1, sizeof(MalNodeNetDropped));
+    if (dropped != nullptr) {
+        dropped->vm = vm;
+        dropped->operation = operation;
+        dropped->next = net_dropped;
+        net_dropped = dropped;
+    }
+    (void) mal_tcp_cancel(mal_host(vm), operation);
+}
+
+static bool net_drain_dropped(MalVm *vm, MalHost *host, const MalHostTask *peek) {
+    MalNodeNetDropped **link = &net_dropped;
+    while (*link != nullptr && ((*link)->vm != vm || (*link)->operation != peek->operation)) link = &(*link)->next;
+    if (*link == nullptr) return false;
+    MalHostTask task;
+    if (!mal_host_next_task(&host->tasks, &task)) return false;
+    void *data = mal_host_task_take_data(&host->tasks, &task);
+    if (task.kind == MAL_HOST_TASK_TERMINAL) {
+        mal_tcp_terminal_free(data);
+        MalNodeNetDropped *dropped = *link;
+        *link = dropped->next;
+        free(dropped);
+    } else {
+        mal_tcp_progress_free(data);
+    }
+    mal_host_task_release(&host->tasks, &task);
+    return true;
+}
+
+static MAL_ISOLATE_LOCAL MalValue net_server_prototype;
+
+static void net_scan_servers(MalVm *vm) {
+    if (mal_value_is_object(net_server_prototype)) mal_gc_mark_value(net_server_prototype);
+    for (MalNodeNetServerState *state = net_servers; state != nullptr; state = state->next) {
+        if (state->vm != vm) continue;
+        mal_gc_mark_value(state->receiver);
+        mal_gc_mark_value(mal_async_internal_value((MalHeapHeader *) state->async_context));
+    }
+}
+
+static MalNodeNetServerState *net_server_state(MalValue receiver) {
+    if (!mal_value_is_object(receiver)) return nullptr;
+    for (MalNodeNetServerState *state = net_servers; state != nullptr; state = state->next) {
+        if (state->receiver == receiver) return state;
+    }
+    return nullptr;
+}
+
+static MalValue net_coded_error(MalVm *vm, MalIntrinsic prototype, const char *message, const char *code) {
+    mal_node_throw_code(vm, prototype, message, code);
+    MalValue error = vm->completion.value;
+    vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+    return error;
+}
+
+/* Node's process.nextTick ordering is approximated by a reaction job. */
+static void net_next_tick(MalVm *vm, MalValue receiver, MalNativeFunctionCallback callback, MalValue *slots, i32 count) {
+    MalValue values[3] = {receiver, count > 0 ? slots[0] : mal_value_new_undefined(),
+        count > 1 ? slots[1] : mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, values, 3);
+    MalValue task = mal_value_from_native_function_object(mal_native_function_object_new_with_slots(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+        mal_intrinsic_ascii(vm, (const byte *) "serverTick"), callback, values, 3));
+    mal_vm_enqueue_reaction_job(vm, task, false, mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined());
+    mal_gc_unroot(&root);
+}
+
+/* Slots: [server, event, argument]. */
+static MalValue net_server_emit_task(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver; (void) args; (void) argc; (void) new_target;
+    MalNativeFunctionObject *function = mal_value_to_native_function_object(callee);
+    MalValue server = mal_native_function_object_get_slot(function, 0);
+    MalValue event = mal_native_function_object_get_slot(function, 1);
+    MalValue argument = mal_native_function_object_get_slot(function, 2);
+    if (mal_value_is_string(event) && mal_string_equals_ascii(mal_value_to_string(event), "listening")) {
+        MalNodeNetServerState *state = net_server_state(server);
+        if (state != nullptr && state->handle_open) state->listening = true;
+    }
+    MalValue emit_args[] = {event, argument};
+    net_call_method(vm, server, "emit", emit_args, mal_value_is_undefined(argument) ? 1 : 2);
+    return mal_value_new_undefined();
+}
+
+static void net_server_emit_later(MalVm *vm, MalValue server, const char *event, MalValue argument) {
+    MalValue slots[] = {mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) event)), argument};
+    MalRootSpan root;
+    mal_gc_root(&root, slots, 2);
+    net_next_tick(vm, server, net_server_emit_task, slots, 2);
+    mal_gc_unroot(&root);
+}
+
+static void net_server_unlink(MalNodeNetServerState *state) {
+    MalNodeNetServerState **link = &net_servers;
+    while (*link != nullptr && *link != state) link = &(*link)->next;
+    if (*link == state) *link = state->next;
+}
+
+/* Node's _emitCloseIfDrained: 'close' once the handle is gone and no socket remains. */
+static void net_server_maybe_close(MalVm *vm, MalNodeNetServerState *state) {
+    if (state->handle_open || state->connections > 0) return;
+    MalValue server = state->receiver;
+    MalRootSpan root;
+    mal_gc_root(&root, &server, 1);
+    net_server_unlink(state);
+    free(state);
+    net_server_emit_later(vm, server, "close", mal_value_new_undefined());
+    mal_gc_unroot(&root);
+}
+
+static void net_socket_server_release(MalVm *vm, MalNodeNetSocketState *socket) {
+    if (!mal_value_is_object(socket->server)) return;
+    MalNodeNetServerState *server = net_server_state(socket->server);
+    socket->server = mal_value_new_undefined();
+    if (server == nullptr || server->connections == 0) return;
+    server->connections--;
+    net_set(vm, server->receiver, "_connections", mal_value_from_i32((i32) server->connections));
+    net_server_maybe_close(vm, server);
+}
+
+static MalValue net_endpoint_family(MalVm *vm, const MalNetEndpoint *endpoint) {
+    return mal_value_from_string(mal_intrinsic_ascii(vm,
+        (const byte *) (endpoint->family == MAL_NET_ADDRESS_IPV6 ? "IPv6" : "IPv4")));
+}
+
+static void net_server_accept(MalVm *vm, MalNodeNetServerState *server, MalHostHandle accepted) {
+    MalValue roots[] = {server->receiver, mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalValue max_connections;
+    if (net_get(vm, roots[0], "maxConnections", &max_connections) && mal_ops_is_number(max_connections)
+        && (f64) server->connections >= mal_ops_number_as_f64(max_connections)) {
+        // Node closes the surplus connection and reports both endpoints through 'drop'.
+        MalNetEndpoint local, remote;
+        bool known = mal_tcp_connection_endpoints(mal_host(vm), accepted, &local, &remote);
+        net_drop_connection(vm, accepted);
+        roots[1] = mal_value_from_object(mal_intrinsic_new_object(vm));
+        if (known) {
+            const MalNetEndpoint *sides[] = {&local, &remote};
+            static const char *const names[][3] = {
+                {"localAddress", "localPort", "localFamily"}, {"remoteAddress", "remotePort", "remoteFamily"}};
+            for (usize i = 0; i < 2; i++) {
+                roots[2] = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) sides[i]->address));
+                mal_intrinsic_define_data(vm, mal_value_to_object(roots[1]), (const byte *) names[i][0], roots[2], NET_VISIBLE);
+                mal_intrinsic_define_data(vm, mal_value_to_object(roots[1]), (const byte *) names[i][1],
+                    mal_value_from_i32(sides[i]->port), NET_VISIBLE);
+                roots[2] = net_endpoint_family(vm, sides[i]);
+                mal_intrinsic_define_data(vm, mal_value_to_object(roots[1]), (const byte *) names[i][2], roots[2], NET_VISIBLE);
+            }
+        }
+        net_emit(vm, roots[0], "drop", &roots[1], 1);
+        mal_gc_unroot(&root);
+        return;
+    }
+    MalNodeNetSocketState *state = calloc(1, sizeof(MalNodeNetSocketState));
+    if (state == nullptr) {
+        net_drop_connection(vm, accepted);
+        mal_gc_unroot(&root);
+        return;
+    }
+    MalCompletion constructed = mal_vm_construct_value(vm, vm->intrinsics[MAL_INTRINSIC_NODE_NET_SOCKET_CONSTRUCTOR],
+        nullptr, 0);
+    if (constructed.kind == MAL_COMPLETION_THROW) {
+        free(state);
+        net_drop_connection(vm, accepted);
+        mal_gc_unroot(&root);
+        return;
+    }
+    roots[1] = constructed.value;
+    state->vm = vm;
+    state->receiver = roots[1];
+    state->async_context = mal_async_context_capture(vm);
+    state->destroy_error = mal_value_new_undefined();
+    state->server = roots[0];
+    state->next_write_token = 1;
+    state->operation = accepted;
+    state->connected = true;
+#if MAL_REALMS
+    state->realm = vm->current_realm;
+#endif
+    state->next = net_sockets;
+    net_sockets = state;
+    server->connections++;
+    net_set(vm, roots[0], "_connections", mal_value_from_i32((i32) server->connections));
+    net_set(vm, roots[1], "connecting", mal_value_new_boolean(false));
+    net_set(vm, roots[1], "pending", mal_value_new_boolean(false));
+    net_set(vm, roots[1], "destroyed", mal_value_new_boolean(false));
+    net_set(vm, roots[1], "readyState", mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "open")));
+    net_set(vm, roots[1], "server", roots[0]);
+    MalNetEndpoint local, remote;
+    if (mal_tcp_connection_endpoints(mal_host(vm), accepted, &local, &remote)) {
+        roots[2] = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) remote.address));
+        net_set(vm, roots[1], "remoteAddress", roots[2]);
+        net_set(vm, roots[1], "remotePort", mal_value_from_i32(remote.port));
+        roots[2] = net_endpoint_family(vm, &remote);
+        net_set(vm, roots[1], "remoteFamily", roots[2]);
+        roots[2] = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) local.address));
+        net_set(vm, roots[1], "localAddress", roots[2]);
+        net_set(vm, roots[1], "localPort", mal_value_from_i32(local.port));
+        roots[2] = net_endpoint_family(vm, &local);
+        net_set(vm, roots[1], "localFamily", roots[2]);
+    }
+    MalValue pause_on_connect;
+    bool paused = net_get(vm, roots[0], "pauseOnConnect", &pause_on_connect) && mal_value_is_truthy(pause_on_connect);
+    if (paused) {
+        state->read_paused = true;
+        net_call_readable_method(vm, roots[1], "pause");
+    } else {
+        (void) mal_tcp_read_resume(mal_host(vm), accepted);
+    }
+    if (vm->completion.kind != MAL_COMPLETION_THROW) net_emit(vm, roots[0], "connection", &roots[1], 1);
+    mal_gc_unroot(&root);
+}
+
+static void net_server_dispatch(MalVm *vm, MalNodeNetServerState *state, MalHostTask *task, void *data) {
+    MalAsyncContextScope scope;
+    mal_async_context_scope_enter(vm, &scope, state->async_context);
+    if (task->kind == MAL_HOST_TASK_PROGRESS) {
+        MalTcpProgress *progress = data;
+        if (progress != nullptr && progress->kind == MAL_TCP_ACCEPTED) net_server_accept(vm, state, progress->accepted);
+        mal_tcp_progress_free(progress);
+    } else {
+        MalTcpTerminal *terminal = data;
+        state->handle_open = false;
+        state->listening = false;
+        if (task->result == MAL_HOST_TERMINAL_ERROR) {
+            MalValue error = net_error(vm, terminal == nullptr ? EIO : terminal->error);
+            MalRootSpan root;
+            mal_gc_root(&root, &error, 1);
+            net_emit(vm, state->receiver, "error", &error, 1);
+            mal_gc_unroot(&root);
+        }
+        mal_tcp_terminal_free(terminal);
+        if (vm->completion.kind != MAL_COMPLETION_THROW) net_server_maybe_close(vm, state);
+    }
+    mal_async_context_scope_exit(vm, &scope);
+}
+
+static bool net_server_drain(MalVm *vm, MalHost *host, const MalHostTask *peek) {
+    MalNodeNetServerState *state = net_servers;
+    while (state != nullptr && (state->vm != vm || state->operation != peek->operation)) state = state->next;
+    if (state == nullptr) return net_drain_dropped(vm, host, peek);
+    MalHostTask task;
+    if (!mal_host_next_task(&host->tasks, &task)) return false;
+    void *data = mal_host_task_take_data(&host->tasks, &task);
+#if MAL_REALMS
+    MalRealm *saved_realm = vm->current_realm;
+    mal_realm_switch(vm, state->realm);
+#endif
+    net_server_dispatch(vm, state, &task, data);
+#if MAL_REALMS
+    mal_realm_switch(vm, saved_realm);
+#endif
+    mal_host_task_release(&host->tasks, &task);
+    return true;
+}
+
+static const char *net_listen_description(int error) {
+    switch (error) {
+        case EADDRINUSE: return "address already in use";
+        case EACCES: return "permission denied";
+        case EADDRNOTAVAIL: return "address not available";
+        default: return "listen failed";
+    }
+}
+
+static const char *net_listen_code(int error) {
+    switch (error) {
+        case EADDRINUSE: return "EADDRINUSE";
+        case EACCES: return "EACCES";
+        case EADDRNOTAVAIL: return "EADDRNOTAVAIL";
+        case EINVAL: return "EINVAL";
+        default: return "EIO";
+    }
+}
+
+static MalValue net_listen_error(MalVm *vm, int error, const char *host, u16 port) {
+    char message[256];
+    const char *code = net_listen_code(error);
+    snprintf(message, sizeof(message), "listen %s: %s %s:%u", code, net_listen_description(error), host,
+        (unsigned) port);
+    MalValue roots[] = {net_coded_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, message, code), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    net_set(vm, roots[0], "errno", mal_value_from_i32(-error));
+    roots[1] = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "listen"));
+    net_set(vm, roots[0], "syscall", roots[1]);
+    roots[1] = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) host));
+    net_set(vm, roots[0], "address", roots[1]);
+    net_set(vm, roots[0], "port", mal_value_from_i32(port));
+    mal_gc_unroot(&root);
+    return roots[0];
+}
+
+static bool net_listen_port(MalVm *vm, MalValue value, u16 *port) {
+    if (mal_value_is_nil(value)) {
+        *port = 0;
+        return true;
+    }
+    f64 number = NAN;
+    if (mal_ops_is_number(value)) {
+        number = mal_ops_number_as_f64(value);
+    } else if (mal_value_is_string(value) && mal_string_length(mal_value_to_string(value)) > 0) {
+        if (!mal_vm_to_number(vm, value, &number)) return false;
+    }
+    if (!(number >= 0 && number < 65536) || floor(number) != number) {
+        char received[96];
+        if (mal_ops_is_number(value)) snprintf(received, sizeof(received), "type number (%.17g)", number);
+        else snprintf(received, sizeof(received), "type %s", mal_value_is_string(value) ? "string" : "object");
+        char message[160];
+        snprintf(message, sizeof(message), "options.port should be >= 0 and < 65536. Received %s.", received);
+        mal_node_throw_code(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, message, "ERR_SOCKET_BAD_PORT");
+        return false;
+    }
+    *port = (u16) number;
+    return true;
+}
+
+static MalValue net_server_listen(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) new_target; (void) callee;
+    MalValue undefined = mal_value_new_undefined();
+    MalValue roots[] = {receiver, undefined, undefined, undefined, undefined};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalValue result = undefined;
+    char *host = nullptr;
+    if (net_server_state(receiver) != nullptr) {
+        mal_node_throw_code(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+            "Listen method has been called more than once without closing.", "ERR_SERVER_ALREADY_LISTEN");
+        goto done;
+    }
+    i32 count = argc;
+    if (count > 0 && mal_value_is_callable(args[count - 1])) {
+        roots[1] = args[count - 1];
+        count--;
+    }
+    MalValue port_value = undefined, host_value = undefined, backlog_value = undefined;
+    bool ipv6_only = false;
+    if (count > 0 && mal_value_is_object(args[0])) {
+        roots[2] = args[0];
+        if (!net_get(vm, roots[2], "port", &roots[3]) || !net_get(vm, roots[2], "host", &roots[4])
+            || !net_get(vm, roots[2], "backlog", &backlog_value)) goto done;
+        MalValue only;
+        if (!net_get(vm, roots[2], "ipv6Only", &only)) goto done;
+        ipv6_only = mal_value_is_truthy(only);
+        port_value = roots[3];
+        host_value = roots[4];
+    } else {
+        port_value = count > 0 ? args[0] : undefined;
+        if (count > 1 && mal_ops_is_number(args[1])) {
+            backlog_value = args[1];
+        } else {
+            host_value = count > 1 ? args[1] : undefined;
+            backlog_value = count > 2 ? args[2] : undefined;
+        }
+        roots[3] = port_value;
+        roots[4] = host_value;
+    }
+    u16 port;
+    if (!net_listen_port(vm, port_value, &port)) goto done;
+    bool default_host = mal_value_is_nil(host_value);
+    if (default_host) {
+        host = strdup("::");
+    } else if (!net_ascii_string(vm, host_value, &host)) {
+        goto done;
+    }
+    if (host == nullptr) { mal_vm_throw_allocation_error(vm); goto done; }
+    if (strcmp(host, "localhost") == 0) {
+        free(host);
+        host = strdup("127.0.0.1");
+        if (host == nullptr) { mal_vm_throw_allocation_error(vm); goto done; }
+    }
+    int backlog = mal_ops_is_number(backlog_value) ? (int) mal_ops_number_as_f64(backlog_value) : 511;
+    struct sockaddr_storage address;
+    socklen_t length;
+    if (!mal_net_parse_ip(host, port, &address, &length)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, "Server host must be a numeric IP address or localhost");
+        goto done;
+    }
+    if (!mal_value_is_undefined(roots[1])) {
+        MalValue once_args[] = {mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "listening")), roots[1]};
+        net_call_method(vm, receiver, "once", once_args, 2);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
+    }
+    MalHostHandle operation = 0;
+    int error = mal_tcp_listen_start(mal_host(vm), (const struct sockaddr *) &address, length, backlog,
+        ipv6_only, &operation);
+    if (error == EAFNOSUPPORT && default_host) {
+        // No IPv6 on this host: Node falls back to the IPv4 wildcard.
+        (void) mal_net_parse_ip("0.0.0.0", port, &address, &length);
+        error = mal_tcp_listen_start(mal_host(vm), (const struct sockaddr *) &address, length, backlog, false,
+            &operation);
+    }
+    if (error != 0) {
+        roots[2] = net_listen_error(vm, error, host, port);
+        net_server_emit_later(vm, receiver, "error", roots[2]);
+        result = receiver;
+        goto done;
+    }
+    MalNodeNetServerState *state = calloc(1, sizeof(MalNodeNetServerState));
+    if (state == nullptr) {
+        (void) mal_tcp_listen_close(mal_host(vm), operation);
+        mal_vm_throw_allocation_error(vm);
+        goto done;
+    }
+    state->vm = vm;
+    state->receiver = receiver;
+    state->async_context = mal_async_context_capture(vm);
+#if MAL_REALMS
+    state->realm = vm->current_realm;
+#endif
+    state->operation = operation;
+    // A named host goes through Node's async lookup, so `listening` turns true with the event.
+    state->listening = default_host;
+    state->handle_open = true;
+    state->next = net_servers;
+    net_servers = state;
+    MalValue unref;
+    if (net_get(vm, receiver, "_unref", &unref) && mal_value_is_truthy(unref)) {
+        (void) mal_tcp_listen_set_referenced(mal_host(vm), operation, false);
+    }
+    net_server_emit_later(vm, receiver, "listening", undefined);
+    result = receiver;
+done:
+    free(host);
+    mal_gc_unroot(&root);
+    return result;
+}
+
+static MalValue net_server_address(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) args; (void) argc; (void) new_target; (void) callee;
+    MalNodeNetServerState *state = net_server_state(receiver);
+    MalNetEndpoint endpoint;
+    if (state == nullptr || !state->handle_open || !mal_tcp_listen_endpoint(mal_host(vm), state->operation, &endpoint)) {
+        return mal_value_new_null();
+    }
+    MalValue roots[] = {mal_value_from_object(mal_intrinsic_new_object(vm)), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    roots[1] = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) endpoint.address));
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]), (const byte *) "address", roots[1], NET_VISIBLE);
+    roots[1] = net_endpoint_family(vm, &endpoint);
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]), (const byte *) "family", roots[1], NET_VISIBLE);
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]), (const byte *) "port",
+        mal_value_from_i32(endpoint.port), NET_VISIBLE);
+    mal_gc_unroot(&root);
+    return roots[0];
+}
+
+/* Slots: [server, callback]; reports ERR_SERVER_NOT_RUNNING through close(cb). */
+static MalValue net_server_not_running_task(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver; (void) args; (void) argc; (void) new_target;
+    MalValue callback = mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 1);
+    MalValue error = net_coded_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, "Server is not running.",
+        "ERR_SERVER_NOT_RUNNING");
+    MalRootSpan root;
+    mal_gc_root(&root, &error, 1);
+    if (mal_value_is_callable(callback)) mal_vm_call_value(vm, callback, mal_value_new_undefined(), &error, 1);
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+static MalValue net_server_close(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) new_target; (void) callee;
+    MalValue callback = argc > 0 && mal_value_is_callable(args[0]) ? args[0] : mal_value_new_undefined();
+    MalNodeNetServerState *state = net_server_state(receiver);
+    if (state == nullptr || !state->handle_open) {
+        if (!mal_value_is_undefined(callback)) net_next_tick(vm, receiver, net_server_not_running_task, &callback, 1);
+        if (state == nullptr) net_server_emit_later(vm, receiver, "close", mal_value_new_undefined());
+        return receiver;
+    }
+    if (!mal_value_is_undefined(callback)) {
+        MalValue once_args[] = {mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "close")), callback};
+        net_call_method(vm, receiver, "once", once_args, 2);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
+    }
+    state->listening = false;
+    state->handle_open = false;
+    (void) mal_tcp_listen_close(mal_host(vm), state->operation);
+    return receiver;
+}
+
+/* Slots: [server, callback]. */
+static MalValue net_server_connections_task(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver; (void) args; (void) argc; (void) new_target;
+    MalNativeFunctionObject *function = mal_value_to_native_function_object(callee);
+    MalNodeNetServerState *state = net_server_state(mal_native_function_object_get_slot(function, 0));
+    MalValue callback = mal_native_function_object_get_slot(function, 1);
+    MalValue call_args[] = {mal_value_new_null(), mal_value_from_i32(state == nullptr ? 0 : (i32) state->connections)};
+    if (mal_value_is_callable(callback)) mal_vm_call_value(vm, callback, mal_value_new_undefined(), call_args, 2);
+    return mal_value_new_undefined();
+}
+
+static MalValue net_server_get_connections(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) new_target; (void) callee;
+    MalValue callback = argc > 0 ? args[0] : mal_value_new_undefined();
+    if (mal_value_is_callable(callback)) net_next_tick(vm, receiver, net_server_connections_task, &callback, 1);
+    return receiver;
+}
+
+static MalValue net_server_set_ref(MalVm *vm, MalValue receiver, bool referenced) {
+    net_set(vm, receiver, "_unref", mal_value_new_boolean(!referenced));
+    MalNodeNetServerState *state = net_server_state(receiver);
+    if (state != nullptr && state->handle_open) {
+        (void) mal_tcp_listen_set_referenced(mal_host(vm), state->operation, referenced);
+    }
+    return receiver;
+}
+
+static MalValue net_server_ref(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) args; (void) argc; (void) new_target; (void) callee;
+    return net_server_set_ref(vm, receiver, true);
+}
+
+static MalValue net_server_unref(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) args; (void) argc; (void) new_target; (void) callee;
+    return net_server_set_ref(vm, receiver, false);
+}
+
+static MalValue net_server_listening_getter(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) vm; (void) args; (void) argc; (void) new_target; (void) callee;
+    MalNodeNetServerState *state = net_server_state(receiver);
+    return mal_value_new_boolean(state != nullptr && state->listening);
+}
+
+/* Slots: [promise]. */
+static MalValue net_server_dispose_settle(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver; (void) new_target;
+    MalPromiseObject *promise = mal_value_to_promise_object(
+        mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 0));
+    if (argc > 0 && !mal_value_is_nil(args[0])) mal_promise_reject(vm, promise, args[0]);
+    else mal_promise_fulfill(vm, promise, mal_value_new_undefined());
+    return mal_value_new_undefined();
+}
+
+static MalValue net_server_async_dispose(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) args; (void) argc; (void) new_target; (void) callee;
+    MalValue roots[] = {mal_value_from_promise_object(mal_promise_object_new(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_PROMISE_PROTOTYPE]))), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalNodeNetServerState *state = net_server_state(receiver);
+    if (state == nullptr || !state->handle_open) {
+        mal_promise_fulfill(vm, mal_value_to_promise_object(roots[0]), mal_value_new_undefined());
+    } else {
+        roots[1] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots(&vm->heap,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+            mal_intrinsic_ascii(vm, (const byte *) "disposeClosed"), net_server_dispose_settle, roots, 1));
+        net_server_close(vm, receiver, &roots[1], 1, mal_value_new_undefined(), mal_value_new_undefined());
+    }
+    mal_gc_unroot(&root);
+    return roots[0];
+}
+
+static bool net_server_init(MalVm *vm, MalValue server, MalValue options, MalValue listener) {
+    MalValue roots[] = {server, options, listener};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    mal_vm_call_value(vm, vm->intrinsics[MAL_INTRINSIC_NODE_EVENT_EMITTER_CONSTRUCTOR], roots[0], nullptr, 0);
+    bool ok = vm->completion.kind != MAL_COMPLETION_THROW;
+    static const char *const flags[] = {"allowHalfOpen", "pauseOnConnect", "noDelay", "keepAlive"};
+    for (usize i = 0; ok && i < countof(flags); i++) {
+        MalValue value = mal_value_new_boolean(false);
+        if (mal_value_is_object(roots[1])) ok = net_get(vm, roots[1], flags[i], &value);
+        if (ok) net_set(vm, roots[0], flags[i], mal_value_new_boolean(mal_value_is_truthy(value)));
+    }
+    if (ok) net_set(vm, roots[0], "_connections", mal_value_from_i32(0));
+    if (ok) net_set(vm, roots[0], "_unref", mal_value_new_boolean(false));
+    if (ok && mal_value_is_callable(roots[2])) {
+        MalValue on_args[] = {mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "connection")), roots[2]};
+        net_call_method(vm, roots[0], "on", on_args, 2);
+        ok = vm->completion.kind != MAL_COMPLETION_THROW;
+    }
+    mal_gc_unroot(&root);
+    return ok;
+}
+
+static MalValue net_server_new(MalVm *vm, MalObject *prototype, const MalValue *args, i32 argc) {
+    MalValue options = argc > 0 && !mal_value_is_callable(args[0]) ? args[0] : mal_value_new_undefined();
+    MalValue listener = argc > 0 && mal_value_is_callable(args[0]) ? args[0]
+        : argc > 1 && mal_value_is_callable(args[1]) ? args[1] : mal_value_new_undefined();
+    MalValue instance = mal_value_from_object(mal_object_new(&vm->heap, prototype));
+    MalRootSpan root;
+    mal_gc_root(&root, &instance, 1);
+    bool ok = net_server_init(vm, instance, options, listener);
+    mal_gc_unroot(&root);
+    return ok ? instance : mal_value_new_undefined();
+}
+
+static MalValue net_server_constructor(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver;
+    MalValue target = mal_value_is_undefined(new_target) ? callee : new_target;
+    MalValue prototype_value = mal_vm_function_prototype(vm, target);
+    return net_server_new(vm, mal_value_is_object(prototype_value) ? mal_value_to_object(prototype_value)
+        : mal_value_to_object(net_server_prototype), args, argc);
+}
+
+static MalValue net_create_server(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver; (void) new_target; (void) callee;
+    return net_server_new(vm, mal_value_to_object(net_server_prototype), args, argc);
+}
+
 bool mal_node_net_drain(MalVm *vm) {
     MalHost *host = mal_host(vm);
     if (host == nullptr || mal_host_tasks_pending(&host->tasks) == 0) return false;
@@ -918,7 +1572,7 @@ bool mal_node_net_drain(MalVm *vm) {
            && (state->vm != vm || state->operation != peek.operation)) {
         state = state->next;
     }
-    if (state == nullptr) return false;
+    if (state == nullptr) return net_server_drain(vm, host, &peek);
     MalHostTask task;
     if (!mal_host_next_task(&host->tasks, &task)) return false;
     void *data = mal_host_task_take_data(&host->tasks, &task);
@@ -989,7 +1643,12 @@ bool mal_node_net_drain(MalVm *vm) {
     } else {
         MalNodeNetSocketState **link = net_state_link(state);
         if (*link == state) *link = state->next;
+        MalValue server = state->server;
+        MalRootSpan server_root;
+        mal_gc_root(&server_root, &server, 1);
         net_dispatch_terminal(vm, state, &task, data);
+        net_socket_server_release(vm, state);
+        mal_gc_unroot(&server_root);
         net_state_free(state);
     }
 #if MAL_REALMS
@@ -1058,6 +1717,46 @@ void mal_host_install_node_net(
     roots[2] = net_constructor(vm, "Socket", net_socket_constructor, roots[1]);
     mal_object_set_prototype(mal_value_to_object(roots[2]), mal_value_to_object(
         vm->intrinsics[MAL_INTRINSIC_NODE_DUPLEX_CONSTRUCTOR]));
+    roots[3] = mal_value_from_object(mal_object_new(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_NODE_EVENT_EMITTER_PROTOTYPE])));
+    net_server_prototype = roots[3];
+    {
+        MalObject *prototype = mal_value_to_object(roots[3]);
+        mal_intrinsic_define_method_n(vm, prototype, (const byte *) "listen", 0, net_server_listen);
+        mal_intrinsic_define_method_n(vm, prototype, (const byte *) "address", 0, net_server_address);
+        mal_intrinsic_define_method_n(vm, prototype, (const byte *) "getConnections", 1, net_server_get_connections);
+        mal_intrinsic_define_method_n(vm, prototype, (const byte *) "close", 1, net_server_close);
+        mal_intrinsic_define_method_n(vm, prototype, (const byte *) "ref", 0, net_server_ref);
+        mal_intrinsic_define_method_n(vm, prototype, (const byte *) "unref", 0, net_server_unref);
+        mal_intrinsic_define_accessor_n(vm, prototype, mal_intrinsic_string_key(vm, (const byte *) "listening"),
+            (const byte *) "get listening", 0, net_server_listening_getter, nullptr, 0, nullptr,
+            MAL_PROPERTY_CONFIGURABLE);
+        MalValue dispose_key = vm->intrinsics[MAL_INTRINSIC_SYMBOL_ASYNC_DISPOSE];
+        if (mal_value_is_symbol(dispose_key)) {
+            MalValue dispose = mal_value_from_native_function_object(mal_native_function_object_new_arity(&vm->heap,
+                mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+                mal_intrinsic_ascii(vm, (const byte *) "[Symbol.asyncDispose]"), 0, net_server_async_dispose));
+            MalRootSpan dispose_root;
+            mal_gc_root(&dispose_root, &dispose, 1);
+            MalPropertyDesc descriptor = {.value = dispose, .flags = NET_METHOD};
+            mal_object_define_own(prototype, mal_key_from_value(dispose_key), &descriptor);
+            mal_gc_unroot(&dispose_root);
+        }
+        MalValue constructor = net_constructor(vm, "Server", net_server_constructor, roots[3]);
+        MalRootSpan constructor_root;
+        mal_gc_root(&constructor_root, &constructor, 1);
+        mal_object_set_prototype(mal_value_to_object(constructor), mal_value_to_object(
+            vm->intrinsics[MAL_INTRINSIC_NODE_EVENT_EMITTER_CONSTRUCTOR]));
+        mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]), (const byte *) "Server", constructor, NET_VISIBLE);
+        MalValue create = mal_value_from_native_function_object(mal_native_function_object_new_arity(&vm->heap,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+            mal_intrinsic_ascii(vm, (const byte *) "createServer"), 2, net_create_server));
+        MalRootSpan create_root;
+        mal_gc_root(&create_root, &create, 1);
+        mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]), (const byte *) "createServer", create, NET_VISIBLE);
+        mal_gc_unroot(&create_root);
+        mal_gc_unroot(&constructor_root);
+    }
     roots[3] = net_ip_function(vm, "isIP", net_is_ip);
     roots[6] = net_ip_function(vm, "isIPv4", net_is_ipv4);
     roots[7] = net_ip_function(vm, "isIPv6", net_is_ipv6);

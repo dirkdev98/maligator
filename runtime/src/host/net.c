@@ -91,6 +91,47 @@ int mal_net_listen(const char *host, u16 port, int backlog) {
     return fd;
 }
 
+int mal_net_listen_address(
+    const struct sockaddr *address, socklen_t length, int backlog, bool ipv6_only) {
+    if (address == nullptr || (address->sa_family != AF_INET && address->sa_family != AF_INET6)) {
+        errno = EINVAL;
+        return -1;
+    }
+    int fd = socket(address->sa_family, SOCK_STREAM, 0);
+    if (fd < 0) return -1;
+    int one = 1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    if (address->sa_family == AF_INET6) {
+        int only = ipv6_only ? 1 : 0;
+        setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &only, sizeof(only));
+    }
+    if (mal_net_prepare_fd(fd) < 0 || bind(fd, address, length) < 0
+        || listen(fd, backlog > 0 ? backlog : 511) < 0) {
+        int error = errno;
+        close(fd);
+        errno = error;
+        return -1;
+    }
+    return fd;
+}
+
+int mal_net_accept_connection(int listen_fd) {
+    int client;
+    do { client = accept(listen_fd, nullptr, nullptr); } while (client < 0 && errno == EINTR);
+    if (client < 0) return -1;
+    if (mal_net_prepare_fd(client) < 0) {
+        int error = errno;
+        close(client);
+        errno = error;
+        return -1;
+    }
+#if defined(SO_NOSIGPIPE)
+    int one = 1;
+    setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
+#endif
+    return client;
+}
+
 int mal_net_accept(int listen_fd) {
     int client = accept(listen_fd, nullptr, nullptr);
     if (client < 0) {

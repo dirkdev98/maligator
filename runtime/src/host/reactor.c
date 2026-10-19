@@ -545,6 +545,7 @@ void mal_reactor_init(MalReactor *r) {
     r->timer_cap = 0;
     r->next_timer_sequence = 0;
     r->pending_ops = 0;
+    r->unreferenced_ops = 0;
     r->ready_ops = nullptr;
     r->ready_ops_tail = nullptr;
     r->ready_op_count = 0;
@@ -613,6 +614,7 @@ void mal_reactor_free(MalReactor *r) {
     r->fd_pages = nullptr;
     r->fd_page_count = 0;
     r->pending_ops = 0;
+    r->unreferenced_ops = 0;
     atomic_store_explicit(&r->wake_pending, false, memory_order_relaxed);
     atomic_store_explicit(&r->retained_work, 0, memory_order_relaxed);
     r->wake_waker = (MalWaker) {0};

@@ -297,7 +297,8 @@ static bool mal_host_has_referenced_work(MalVm *vm) {
         if (timer->referenced) return true;
         if (timer->timer.heap_index >= 0) unreferenced++;
     }
-    return host->reactor.timer_count > unreferenced || host->reactor.pending_ops > 0
+    return host->reactor.timer_count > unreferenced
+        || host->reactor.pending_ops > host->reactor.unreferenced_ops
         || atomic_load_explicit(&host->reactor.retained_work, memory_order_acquire) > 0
         || atomic_load_explicit(&host->reactor.wake_pending, memory_order_acquire);
 }
