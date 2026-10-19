@@ -7,6 +7,7 @@
 #include "heap_symbol.h"
 #include "intern_store.h"
 #include "intrinsics.h"
+#include "map_object.h"
 #include "node_module.h"
 #include "object.h"
 #include "object_ops.h"
@@ -22,6 +23,58 @@ static MalValue node_worker_threads_mark_uncloneable(
     (void) callee;
     if (argc > 0) mal_workers_mark_uncloneable(vm, args[0]);
     return mal_value_new_undefined();
+}
+
+static MalValue node_worker_threads_mark_untransferable(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver;
+    (void) new_target;
+    (void) callee;
+    if (argc > 0) mal_workers_mark_untransferable(vm, args[0]);
+    return mal_value_new_undefined();
+}
+
+static MalValue node_worker_threads_is_marked_untransferable(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver;
+    (void) new_target;
+    (void) callee;
+    return mal_value_new_boolean(argc > 0 && mal_workers_is_marked_untransferable(vm, args[0]));
+}
+
+static MalValue node_worker_threads_set_environment_data(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver;
+    (void) new_target;
+    (void) callee;
+    MalValue key = argc > 0 ? args[0] : mal_value_new_undefined();
+    MalValue value = argc > 1 ? args[1] : mal_value_new_undefined();
+    MalValue map = mal_workers_environment_data(vm);
+    if (!mal_value_is_map_object(map)) return mal_value_new_undefined();
+    if (mal_value_is_undefined(value)) mal_map_object_delete(mal_value_to_map_object(map), key);
+    else mal_map_object_set(mal_value_to_map_object(map), key, value);
+    return mal_value_new_undefined();
+}
+
+static MalValue node_worker_threads_get_environment_data(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver;
+    (void) new_target;
+    (void) callee;
+    MalValue map = mal_workers_environment_data(vm);
+    if (!mal_value_is_map_object(map)) return mal_value_new_undefined();
+    return mal_map_object_get(mal_value_to_map_object(map), argc > 0 ? args[0] : mal_value_new_undefined());
+}
+
+static MalValue node_worker_threads_function(MalVm *vm, const char *name, i32 length,
+    MalNativeFunctionCallback callback) {
+    return mal_value_from_native_function_object(mal_native_function_object_new_arity(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+        mal_intrinsic_ascii(vm, (const byte *) name), length, callback));
 }
 
 // Node publishes SHARE_ENV as this registered symbol, so it is identical across isolates
@@ -52,6 +105,10 @@ void mal_host_install_node_worker_threads(
             mal_value_new_undefined(),
             mal_value_new_undefined(),
             mal_value_new_undefined(),
+            mal_value_new_undefined(),
+            mal_value_new_undefined(),
+            mal_value_new_undefined(),
+            mal_value_new_undefined(),
         };
         MalRootSpan root;
         mal_gc_root(&root, roots, countof(roots));
@@ -66,12 +123,21 @@ void mal_host_install_node_worker_threads(
                 &vm->heap, function_prototype,
                 mal_intrinsic_ascii(vm, (const byte *) "markAsUncloneable"), 1,
                 node_worker_threads_mark_uncloneable));
+        roots[4] = node_worker_threads_function(vm, "markAsUntransferable", 1,
+            node_worker_threads_mark_untransferable);
+        roots[5] = node_worker_threads_function(vm, "isMarkedAsUntransferable", 1,
+            node_worker_threads_is_marked_untransferable);
+        roots[6] = node_worker_threads_function(vm, "setEnvironmentData", 2,
+            node_worker_threads_set_environment_data);
+        roots[7] = node_worker_threads_function(vm, "getEnvironmentData", 1,
+            node_worker_threads_get_environment_data);
         bool main_thread = !mal_workers_is_worker() || mal_workers_is_application();
         roots[1] = mal_value_from_object(mal_intrinsic_new_object(vm));
         const char *names[] = {
             "Worker", "MessageChannel", "MessagePort", "parentPort", "workerData",
             "threadId", "receiveMessageOnPort", "markAsUncloneable", "isMainThread",
-            "SHARE_ENV", "isInternalThread", "threadName", "resourceLimits",
+            "SHARE_ENV", "isInternalThread", "threadName", "resourceLimits", "BroadcastChannel",
+            "markAsUntransferable", "isMarkedAsUntransferable", "setEnvironmentData", "getEnvironmentData",
         };
         MalValue values[] = {
             mal_workers_node_worker_constructor(vm),
@@ -87,12 +153,31 @@ void mal_host_install_node_worker_threads(
             mal_value_new_boolean(false),
             mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "")),
             roots[1],
+            mal_workers_node_broadcast_channel_constructor(vm),
+            roots[4],
+            roots[5],
+            roots[6],
+            roots[7],
         };
         for (usize i = 0; i < countof(names); i++) {
             mal_intrinsic_define_data(vm, mal_value_to_object(module),
                 (const byte *) names[i], values[i],
                 MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE |
                     MAL_PROPERTY_CONFIGURABLE);
+        }
+        // Node 26 bootstraps these as globals that are the module's own constructors.
+        MalValue global = vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS];
+        if (mal_value_is_object(global)) {
+            const char *globals[] = {"BroadcastChannel", "MessageChannel", "MessagePort"};
+            MalValue constructors[] = {
+                mal_workers_node_broadcast_channel_constructor(vm),
+                mal_workers_node_message_channel_constructor(vm),
+                mal_workers_node_message_port_constructor(vm),
+            };
+            for (usize i = 0; i < countof(globals); i++) {
+                mal_intrinsic_define_data(vm, mal_value_to_object(global), (const byte *) globals[i],
+                    constructors[i], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+            }
         }
         mal_gc_unroot(&root);
     }

@@ -5,10 +5,7 @@ import type { CjsExportInfo } from "./cjs-exports.ts";
 import { traverseEstree } from "./estree-traversal.ts";
 import {
 	BUFFER_INSTALLER_SYMBOL,
-	PERFORMANCE_GLOBALS,
-	PERFORMANCE_INSTALLER_SYMBOL,
-	CRYPTO_GLOBALS,
-	CRYPTO_INSTALLER_SYMBOL,
+	HOST_GLOBAL_INSTALLERS,
 	PROCESS_INSTALLER_SYMBOL,
 } from "./host-modules.ts";
 import { staticModuleClosure } from "./module-closure.ts";
@@ -109,11 +106,11 @@ export interface ModuleLinkage {
 	/** The free global `Buffer`, backed by the `node:buffer` module installer. */
 	hostBuffer?: { installer: string };
 
-	/** Free `performance` or Performance* globals, which `node:perf_hooks` completes. */
-	hostPerformance?: { installer: string };
-
-	/** Free `crypto` or WebCrypto interface globals, which `node:crypto` replaces. */
-	hostCrypto?: { installer: string };
+	/**
+	 * Installers of {@link HOST_GLOBAL_INSTALLERS} whose globals the program names,
+	 * for example `performance`, `crypto` or `BroadcastChannel`.
+	 */
+	hostGlobalInstallers: Array<string>;
 
 	/** Statically detected `module.exports` names of a CommonJS module, sorted. */
 	commonJsExportNames: (modulePath: string) => ReadonlyArray<string>;
@@ -150,6 +147,7 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 		moduleNamespaces: new Map(),
 		cjsImports: new Map(),
 		hostModules: [],
+		hostGlobalInstallers: [],
 		commonJsExportNames: () => [],
 		failedModules: new Map(),
 	};
@@ -832,11 +830,10 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 		if (freeGlobalUsed("Buffer") || members.has("Buffer")) {
 			linkage.hostBuffer = { installer: BUFFER_INSTALLER_SYMBOL };
 		}
-		if (PERFORMANCE_GLOBALS.some((name) => freeGlobalUsed(name) || members.has(name))) {
-			linkage.hostPerformance = { installer: PERFORMANCE_INSTALLER_SYMBOL };
-		}
-		if (CRYPTO_GLOBALS.some((name) => freeGlobalUsed(name) || members.has(name))) {
-			linkage.hostCrypto = { installer: CRYPTO_INSTALLER_SYMBOL };
+		for (const host of HOST_GLOBAL_INSTALLERS) {
+			if (host.globals.some((name) => freeGlobalUsed(name) || members.has(name))) {
+				linkage.hostGlobalInstallers.push(host.installer);
+			}
 		}
 	}
 

@@ -96,10 +96,20 @@ bool mal_workers_adopt_transferred(MalVm *vm, MalSerializedValue *snapshot);
  * DataCloneError in this isolate. Primitives are ignored. */
 void mal_workers_mark_uncloneable(MalVm *vm, MalValue object);
 
+/* Node markAsUntransferable: a marked object (objects only) in a later transfer list
+ * fails with DataCloneError in this isolate; it stays cloneable. */
+void mal_workers_mark_untransferable(MalVm *vm, MalValue object);
+bool mal_workers_is_marked_untransferable(MalVm *vm, MalValue object);
+
+/* Node environmentData Map of the calling isolate, created on first use. A Node
+ * worker starts with a clone of its parent's map taken at construction. */
+MalValue mal_workers_environment_data(MalVm *vm);
+
 /* Node-flavoured surface shared with node:worker_threads. */
 MalValue mal_workers_node_worker_constructor(MalVm *vm);
 MalValue mal_workers_node_message_channel_constructor(MalVm *vm);
 MalValue mal_workers_node_message_port_constructor(MalVm *vm);
+MalValue mal_workers_node_broadcast_channel_constructor(MalVm *vm);
 MalValue mal_workers_receive_message_function(MalVm *vm);
 MalValue mal_workers_parent_port(MalVm *vm);
 MalValue mal_workers_worker_data(MalVm *vm);

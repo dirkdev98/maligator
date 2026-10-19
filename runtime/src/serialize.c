@@ -577,6 +577,10 @@ static bool enc_validate_transfers(SerEncoder *enc, MalValue list_value) {
         if (transfer_index_of(enc, item) >= 0) {
             return enc_fail(enc, "duplicate transferable");
         }
+        if (enc->hooks != nullptr && enc->hooks->untransferable != nullptr &&
+            enc->hooks->untransferable(enc->hooks->data, enc->vm, item)) {
+            return enc_fail(enc, "Cannot transfer object of unsupported type.");
+        }
         mal_rooted_value_list_append(&enc->transfers, item);
         snap->transfer_resources[i] = UINT32_MAX;
         if (mal_value_is_array_buffer_object(item)) {

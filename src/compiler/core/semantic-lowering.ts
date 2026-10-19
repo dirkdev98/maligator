@@ -30,11 +30,7 @@ import {
 	ESTREE_STOP,
 	traverseEstree,
 } from "../frontend/estree-traversal.ts";
-import {
-	CRYPTO_GLOBALS,
-	PERFORMANCE_GLOBALS,
-	hostInstallerSymbol,
-} from "../frontend/host-modules.ts";
+import { HOST_GLOBAL_INSTALLERS, hostInstallerSymbol } from "../frontend/host-modules.ts";
 import { isImportMeta, isImportMetaResolveCall } from "../frontend/import-meta.ts";
 import { linkModules } from "../frontend/linker.ts";
 import { planModuleEvaluation } from "../frontend/module-evaluation-plan.ts";
@@ -330,11 +326,8 @@ interface CoreFrontendContext {
 	/** Free global `Buffer`, installed by the same installer as `node:buffer`. */
 	hostBuffer: { installer: string; retained: boolean } | null;
 
-	/** Free `performance` and Performance* globals, completed by `node:perf_hooks`. */
-	hostPerformance: { installer: string; retained: boolean } | null;
-
-	/** Free `crypto` and WebCrypto interface globals, replaced by `node:crypto`. */
-	hostCrypto: { installer: string; retained: boolean } | null;
+	/** Linked HOST_GLOBAL_INSTALLERS rows; a reachable read of one of their globals retains them. */
+	hostGlobals: Array<(typeof HOST_GLOBAL_INSTALLERS)[number] & { retained: boolean }>;
 
 	/** Set when a module's import.meta needs node:module's run-time resolve. */
 	importMetaResolveInstaller: string | null;
@@ -939,8 +932,7 @@ export function constructSemanticProgramCore(
 		hostModules: [],
 		hostProcess: null,
 		hostBuffer: null,
-		hostPerformance: null,
-		hostCrypto: null,
+		hostGlobals: [],
 		importMetaResolveInstaller: null,
 		commonJsExportNames: () => [],
 	};
@@ -975,12 +967,9 @@ export function constructSemanticProgramCore(
 	program.hostBuffer = linkage.hostBuffer
 		? { installer: linkage.hostBuffer.installer, retained: false }
 		: null;
-	program.hostPerformance = linkage.hostPerformance
-		? { installer: linkage.hostPerformance.installer, retained: false }
-		: null;
-	program.hostCrypto = linkage.hostCrypto
-		? { installer: linkage.hostCrypto.installer, retained: false }
-		: null;
+	program.hostGlobals = HOST_GLOBAL_INSTALLERS.filter((host) =>
+		linkage.hostGlobalInstallers.includes(host.installer),
+	).map((host) => ({ ...host, retained: false }));
 
 	const initFile = program.semantic.files.find(
 		(it) => it.path === program.semantic.entrypointPath,
@@ -1087,8 +1076,7 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 				retainedHostInstallers: [
 					program.hostProcess,
 					program.hostBuffer,
-					program.hostPerformance,
-					program.hostCrypto,
+					...program.hostGlobals,
 				]
 					.flatMap((host) => (host?.retained === true ? [host.installer] : []))
 					.concat(program.importMetaResolveInstaller ?? [])
@@ -15240,11 +15228,10 @@ function retainHostMember(
 		program.hostProcess.retained = true;
 	if (program.hostBuffer && (key === undefined || key === "Buffer"))
 		program.hostBuffer.retained = true;
-	if (program.hostPerformance && (key === undefined || PERFORMANCE_GLOBALS.includes(key)))
-		program.hostPerformance.retained = true;
-	// A computed globalThis read does not pull node:crypto in; only a named crypto global does.
-	if (program.hostCrypto && key !== undefined && CRYPTO_GLOBALS.includes(key))
-		program.hostCrypto.retained = true;
+	for (const host of program.hostGlobals) {
+		if (key === undefined ? host.computedMember : host.globals.includes(key))
+			host.retained = true;
+	}
 }
 
 /** Mark a reachable free Node global and keep it on globalThis storage. */
@@ -15261,19 +15248,12 @@ function retainHostGlobal(program: CoreFrontendContext, binding: Binding): boole
 		program.hostBuffer.retained = true;
 		return true;
 	}
-	if (
-		program.hostPerformance &&
-		binding.undeclared &&
-		PERFORMANCE_GLOBALS.includes(binding.name)
-	) {
-		program.hostPerformance.retained = true;
-		return true;
-	}
-	if (program.hostCrypto && binding.undeclared && CRYPTO_GLOBALS.includes(binding.name)) {
-		program.hostCrypto.retained = true;
-		return true;
-	}
-	return false;
+	const host = binding.undeclared
+		? program.hostGlobals.find((candidate) => candidate.globals.includes(binding.name))
+		: undefined;
+	if (host === undefined) return false;
+	host.retained = true;
+	return true;
 }
 
 function globalPropertyLocation(

@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "array_object.h"
+#include "map_object.h"
 #include "ascii.h"
 #include "builtin_atomics.h"
 #include "builtin_promise.h"
@@ -19,6 +20,9 @@
 #include "hex.h"
 #include "sha256.h"
 #include "worker_manifest.h"
+#if MAL_NODE
+#include "node_module.h"
+#endif
 #include "gc.h"
 #include "gc_process.h"
 #include "host.h"
@@ -61,9 +65,17 @@ typedef enum PostingPolicy { POST_TRANSACTIONAL, POST_NODE } PostingPolicy;
 typedef struct Owner Owner;
 typedef struct Channel Channel;
 
+// One BroadcastChannel post fanned out to several receivers; each decodes a copy.
+typedef struct SharedPayload {
+    _Atomic(u32) refcount;
+    MalSerializedValue *value;
+} SharedPayload;
+
 typedef struct Message {
     struct Message *next;
+    // Borrowed from `shared` when set; otherwise owned and consumed by the receiver.
     MalSerializedValue *value;
+    SharedPayload *shared;
     u64 bytes;
     // Process-unique; only `sender` may discard the message while it is queued.
     u64 ticket;
@@ -179,9 +191,16 @@ static void process_release_bytes(u64 bytes) {
 }
 
 // Every Message is admitted, so freeing it returns its process slot and bytes once.
+static void shared_payload_release(SharedPayload *payload) {
+    if (atomic_fetch_sub_explicit(&payload->refcount, 1, memory_order_acq_rel) != 1) return;
+    mal_serialized_value_release(payload->value);
+    free(payload);
+}
+
 static void message_free(Message *message) {
     u64 bytes = message->bytes;
-    mal_serialized_value_release(message->value);
+    if (message->shared != nullptr) shared_payload_release(message->shared);
+    else mal_serialized_value_release(message->value);
     free(message);
     process_release_bytes(bytes);
     process_release_message();
@@ -615,6 +634,8 @@ struct WorkerThread {
     Endpoint *child_endpoint;
     MalSerializedValue *data;
     u64 data_bytes;
+    // `data` is [workerData, environmentData] for a Node worker with inherited environment data.
+    bool data_has_environment;
     MalSharedWaitInterrupt *interrupt;
     pthread_t thread;
     pthread_mutex_t mutex;
@@ -726,6 +747,8 @@ typedef struct PortRecord {
     MalValue onmessageerror;
     // Node Worker whose emitter receives this port's events (internal port).
     MalValue forward;
+    // BroadcastChannel name; undefined for MessagePorts.
+    MalValue name;
     Endpoint *endpoint; // null once closed or transferred away
     PostingPolicy posting_policy;
     Listeners listeners;
@@ -736,9 +759,19 @@ typedef struct PortRecord {
     bool referenced;
     bool holds_work;
     bool closed_emitted;
+    // A BroadcastChannel receiver: never transferable and never dispatches 'close'.
+    bool broadcast;
 } PortRecord;
 
-typedef struct WorkerRecord {
+typedef struct WorkerRecord WorkerRecord;
+
+// Worker EventEmitter state, owned by the wrapper so listeners outlive the join (Node).
+typedef struct WorkerEmitter {
+    Listeners listeners;
+    WorkerRecord *record; // null once joined or torn down
+} WorkerEmitter;
+
+struct WorkerRecord {
     struct WorkerRecord *next;
     MalValue wrapper;
     MalValue port;
@@ -748,14 +781,14 @@ typedef struct WorkerRecord {
     bool application_ready_settled;
     MalValue terminations;
     WorkerThread *thread;
-    Listeners listeners;
+    WorkerEmitter *emitter;
     bool node;
     bool referenced;
     bool holds_work;
     bool joined;
     bool online;
     bool ready_settled;
-} WorkerRecord;
+};
 
 typedef struct UrlRecord {
     struct UrlRecord *next;
@@ -786,6 +819,8 @@ typedef struct Isolate {
     MalValue channel_constructor;
     MalValue node_port_constructor;
     MalValue node_channel_constructor;
+    MalValue broadcast_prototype;
+    MalValue broadcast_constructor;
     MalValue worker_constructor;
     MalValue node_worker_constructor;
     MalValue receive_function;
@@ -793,8 +828,11 @@ typedef struct Isolate {
     MalValue create_url_function;
     MalValue parent_port;
     MalValue worker_data;
-    // Private mark set by Node markAsUncloneable; created on first use.
+    // Private marks set by Node markAsUncloneable / markAsUntransferable; created on first use.
     MalValue uncloneable;
+    MalValue untransferable;
+    // Node setEnvironmentData Map; undefined until first use or inherited from the parent.
+    MalValue environment_data;
     bool worker_data_ready;
     // Set on a worker isolate.
     WorkerThread *self;
@@ -832,8 +870,9 @@ static void workers_scan_roots(MalVm *vm, void *data) {
         iso->port_prototype, iso->node_port_prototype, iso->worker_prototype, iso->node_worker_prototype,
         iso->port_constructor, iso->channel_constructor, iso->worker_constructor,
         iso->node_port_constructor, iso->node_channel_constructor,
-        iso->node_worker_constructor, iso->receive_function, iso->capabilities_function,
+        iso->broadcast_prototype, iso->broadcast_constructor, iso->node_worker_constructor, iso->receive_function, iso->capabilities_function,
         iso->create_url_function, iso->parent_port, iso->worker_data, iso->uncloneable,
+        iso->untransferable, iso->environment_data,
     };
     for (usize i = 0; i < countof(fixed); i++) mal_gc_mark_value(fixed[i]);
     for (PortRecord *port = iso->ports; port != nullptr; port = port->next) {
@@ -846,7 +885,6 @@ static void workers_scan_roots(MalVm *vm, void *data) {
         mal_gc_mark_value(worker->closed);
         mal_gc_mark_value(worker->application_ready);
         mal_gc_mark_value(worker->terminations);
-        listeners_mark(&worker->listeners);
     }
     for (UrlRecord *url = iso->urls; url != nullptr; url = url->next) {
         mal_gc_mark_value(url->weak_descriptor);
@@ -897,10 +935,12 @@ static void port_trace(void *native) {
     mal_gc_mark_value(port->onmessage);
     mal_gc_mark_value(port->onmessageerror);
     mal_gc_mark_value(port->forward);
+    mal_gc_mark_value(port->name);
     listeners_mark(&port->listeners);
 }
 
 static void port_record_release(PortRecord *port);
+static void broadcast_leave(Channel *channel);
 
 // Owner sweep or teardown, never JS. An unreachable port is unpinned, so it holds no
 // loop work; dropping it closes the channel and the peer observes 'close'.
@@ -910,6 +950,7 @@ static void port_finalize(void *native) {
     if (port->endpoint != nullptr) {
         Endpoint *endpoint = port->endpoint;
         port->endpoint = nullptr;
+        if (port->broadcast) broadcast_leave(endpoint->channel);
         endpoint_bind(endpoint, nullptr);
         channel_close(endpoint->channel);
         channel_release(endpoint->channel);
@@ -928,10 +969,20 @@ static void port_finalize(void *native) {
 
 static const MalEventTargetNativeOps g_port_ops = {.trace = port_trace, .finalize = port_finalize};
 
-static PortRecord *port_record(MalValue value) {
+static PortRecord *receiver_record(MalValue value) {
     if (!mal_value_is_heap_type(value, MAL_HEAP_EVENT_TARGET_OBJECT)) return nullptr;
     MalEventTargetObject *object = (MalEventTargetObject *) mal_value_to_object(value);
     return object->native_ops == &g_port_ops ? object->native : nullptr;
+}
+
+static PortRecord *port_record(MalValue value) {
+    PortRecord *port = receiver_record(value);
+    return port != nullptr && !port->broadcast ? port : nullptr;
+}
+
+static PortRecord *broadcast_record(MalValue value) {
+    PortRecord *port = receiver_record(value);
+    return port != nullptr && port->broadcast ? port : nullptr;
 }
 
 // Detach a record from its live wrapper at isolate teardown; the wrapper stays an
@@ -951,12 +1002,35 @@ static void port_edge_store(PortRecord *port, MalValue *slot, MalValue value) {
     if (mal_value_is_object(port->wrapper)) mal_gc_card(&mal_value_to_object(port->wrapper)->header, value);
 }
 
+static void worker_emitter_trace(void *native) {
+    WorkerEmitter *emitter = native;
+    listeners_mark(&emitter->listeners);
+}
+
+static void worker_emitter_finalize(void *native) {
+    WorkerEmitter *emitter = native;
+    free(emitter->listeners.items);
+    free(emitter);
+}
+
+static const MalEventTargetNativeOps g_worker_ops = {
+    .trace = worker_emitter_trace, .finalize = worker_emitter_finalize};
+
+static WorkerEmitter *worker_emitter(MalValue value) {
+    if (!mal_value_is_heap_type(value, MAL_HEAP_EVENT_TARGET_OBJECT)) return nullptr;
+    MalEventTargetObject *object = (MalEventTargetObject *) mal_value_to_object(value);
+    return object->native_ops == &g_worker_ops ? object->native : nullptr;
+}
+
 static WorkerRecord *worker_record(MalValue value) {
-    if (g_isolate == nullptr || !mal_value_is_object(value)) return nullptr;
-    for (WorkerRecord *worker = g_isolate->workers; worker != nullptr; worker = worker->next) {
-        if (worker->wrapper == value) return worker;
-    }
-    return nullptr;
+    WorkerEmitter *emitter = worker_emitter(value);
+    return emitter != nullptr ? emitter->record : nullptr;
+}
+
+// The wrapper keeps the emitter; only the live-worker state goes.
+static void worker_record_free(WorkerRecord *worker) {
+    if (worker->emitter != nullptr) worker->emitter->record = nullptr;
+    free(worker);
 }
 
 static UrlRecord *url_record(MalValue value) {
@@ -1101,6 +1175,29 @@ void mal_workers_mark_uncloneable(MalVm *vm, MalValue object) {
     mal_object_add_private(mal_value_to_object(object), key, mal_value_new_boolean(true));
 }
 
+static bool hooks_untransferable(void *data, MalVm *vm, MalValue object) {
+    (void) data;
+    (void) vm;
+    Isolate *iso = g_isolate;
+    if (iso == nullptr || mal_value_is_undefined(iso->untransferable) || !mal_value_is_object(object)) return false;
+    MalValue mark;
+    return mal_object_get_private(mal_value_to_object(object), mal_value_to_symbol(iso->untransferable), &mark);
+}
+
+void mal_workers_mark_untransferable(MalVm *vm, MalValue object) {
+    Isolate *iso = g_isolate;
+    if (iso == nullptr || !mal_value_is_object(object) || hooks_untransferable(nullptr, vm, object)) return;
+    if (mal_value_is_undefined(iso->untransferable)) {
+        iso->untransferable = mal_value_from_symbol(mal_symbol_new_private(&vm->heap));
+    }
+    MalKey key = {.kind = MAL_KEY_SYMBOL, .value = iso->untransferable};
+    mal_object_add_private(mal_value_to_object(object), key, mal_value_new_boolean(true));
+}
+
+bool mal_workers_is_marked_untransferable(MalVm *vm, MalValue object) {
+    return hooks_untransferable(nullptr, vm, object);
+}
+
 bool mal_workers_prepare_commit(MalVm *vm, MalSerializedValue *snapshot, const char **error) {
     return mal_serialized_value_validate(vm, snapshot, error);
 }
@@ -1181,6 +1278,7 @@ static const MalSerializeHooks g_hooks = {
     .release = hooks_release,
     .validate = hooks_validate,
     .reject = hooks_reject,
+    .untransferable = hooks_untransferable,
 };
 
 const MalSerializeHooks *mal_workers_get_serialize_hooks(MalVm *vm) {
@@ -1427,14 +1525,14 @@ static bool port_dispatch(MalVm *vm, PortRecord *port, const char *name, MalValu
     if (!mal_value_is_undefined(roots[2])) {
         WorkerRecord *worker = worker_record(roots[2]);
         if (worker != nullptr && !is_close) {
-            ok = listeners_emit(vm, &worker->listeners, roots[2], name, &roots[1], 1);
+            ok = listeners_emit(vm, &worker->emitter->listeners, roots[2], name, &roots[1], 1);
         }
         mal_gc_unroot(&root);
         return ok;
     }
     ok = listeners_emit(vm, &port->listeners, roots[0], name, &roots[1], is_close ? 0 : 1);
     if (ok) {
-        PortRecord *live = port_record(roots[0]);
+        PortRecord *live = receiver_record(roots[0]);
         MalValue handler = live == nullptr ? mal_value_new_undefined()
             : strcmp(name, "message") == 0 ? live->onmessage
             : strcmp(name, "messageerror") == 0 ? live->onmessageerror
@@ -1443,7 +1541,7 @@ static bool port_dispatch(MalVm *vm, PortRecord *port, const char *name, MalValu
             roots[3] = message_event_new(vm, name, roots[1], roots[0], roots[4]);
             ok = event_target_emit(vm, roots[0], name, roots[3]);
             // EventTarget listeners may replace the handler before its turn.
-            live = port_record(roots[0]);
+            live = receiver_record(roots[0]);
             handler = live == nullptr ? mal_value_new_undefined()
                 : strcmp(name, "message") == 0 ? live->onmessage
                 : strcmp(name, "messageerror") == 0 ? live->onmessageerror
@@ -1489,6 +1587,7 @@ static MalValue port_wrapper_new(MalVm *vm, Endpoint *endpoint) {
     port->onmessage = mal_value_new_null();
     port->onmessageerror = mal_value_new_null();
     port->forward = mal_value_new_undefined();
+    port->name = mal_value_new_undefined();
     port->endpoint = endpoint;
     // The wrapper retains its policy after close or transfer removes the endpoint.
     port->posting_policy = endpoint->posting_policy;
@@ -1730,10 +1829,10 @@ static Listeners *emitter_listeners(MalVm *vm, MalValue receiver, bool *is_port)
         *is_port = true;
         return &port->listeners;
     }
-    WorkerRecord *worker = worker_record(receiver);
-    if (worker != nullptr) {
+    WorkerEmitter *emitter = worker_emitter(receiver);
+    if (emitter != nullptr) {
         *is_port = false;
-        return &worker->listeners;
+        return &emitter->listeners;
     }
     throw_type(vm, "receiver is not a MessagePort or Worker");
     return nullptr;
@@ -1960,6 +2059,335 @@ static MalValue receive_message_on_port(MalVm *vm, MalValue receiver, const MalV
     mal_gc_unroot(&root);
     return result;
 }
+
+#if MAL_NODE
+
+// Process-wide BroadcastChannel membership in creation order. Each member keeps the
+// receive side (side[0]) of its own channel; the registry owns the side[1] handle.
+// Lock order: registry, then channel, then owner.
+typedef struct BroadcastMember {
+    struct BroadcastMember *next;
+    Channel *channel;
+    usize name_length;
+    char name[];
+} BroadcastMember;
+
+static pthread_mutex_t g_broadcast_mutex = PTHREAD_MUTEX_INITIALIZER;
+static BroadcastMember *g_broadcast_head;
+static BroadcastMember *g_broadcast_tail;
+
+static bool broadcast_join(Channel *channel, const byte *name, usize name_length) {
+    BroadcastMember *member = malloc(sizeof(BroadcastMember) + name_length + 1);
+    if (member == nullptr) return false;
+    member->next = nullptr;
+    member->channel = channel;
+    member->name_length = name_length;
+    memcpy(member->name, name, name_length);
+    member->name[name_length] = '\0';
+    pthread_mutex_lock(&g_broadcast_mutex);
+    if (g_broadcast_tail != nullptr) g_broadcast_tail->next = member;
+    else g_broadcast_head = member;
+    g_broadcast_tail = member;
+    pthread_mutex_unlock(&g_broadcast_mutex);
+    return true;
+}
+
+static void broadcast_leave(Channel *channel) {
+    BroadcastMember *found = nullptr;
+    pthread_mutex_lock(&g_broadcast_mutex);
+    BroadcastMember *previous = nullptr;
+    for (BroadcastMember *member = g_broadcast_head; member != nullptr; previous = member, member = member->next) {
+        if (member->channel != channel) continue;
+        if (previous != nullptr) previous->next = member->next;
+        else g_broadcast_head = member->next;
+        if (g_broadcast_tail == member) g_broadcast_tail = previous;
+        found = member;
+        break;
+    }
+    pthread_mutex_unlock(&g_broadcast_mutex);
+    if (found == nullptr) return;
+    channel_release(found->channel);
+    free(found);
+}
+
+static PortRecord *this_broadcast(MalVm *vm, MalValue receiver) {
+    PortRecord *port = broadcast_record(receiver);
+    if (port == nullptr) {
+        mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Value of \"this\" must be of type BroadcastChannel", "ERR_INVALID_THIS");
+    }
+    return port;
+}
+
+static bool broadcast_open(const PortRecord *port) {
+    return port->endpoint != nullptr && !port->closing;
+}
+
+static MalValue broadcast_construct(MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver; (void) callee;
+    if (argc == 0) {
+        mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "The \"name\" argument must be specified", "ERR_MISSING_ARGS");
+        return mal_value_new_undefined();
+    }
+    MalValue roots[] = {new_target, mal_value_new_undefined(), g_isolate->broadcast_prototype, mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalValue result = mal_value_new_undefined();
+    MalString *name = nullptr;
+    if (!mal_vm_to_string(vm, args[0], &name)) goto done;
+    roots[1] = mal_value_from_string(name);
+    if (mal_value_is_object(roots[0]) && roots[0] != g_isolate->broadcast_constructor) {
+        if (!get_named(vm, roots[0], "prototype", &roots[3])) goto done;
+        if (mal_value_is_object(roots[3])) roots[2] = roots[3];
+    }
+    usize length = 0;
+    byte *bytes = mal_string_to_utf8(name, &length);
+    Channel *channel = bytes == nullptr ? nullptr
+        : channel_new(WORKERS_DEFAULT_MAX_MESSAGES, WORKERS_DEFAULT_MAX_BYTES,
+            WORKERS_DEFAULT_MAX_MESSAGE_BYTES, POST_NODE);
+    if (channel == nullptr || !broadcast_join(channel, bytes, length)) {
+        free(bytes);
+        if (channel != nullptr) {
+            channel_release(channel);
+            channel_release(channel);
+        }
+        mal_vm_throw_allocation_error(vm);
+        goto done;
+    }
+    free(bytes);
+    roots[3] = port_wrapper_new(vm, &channel->side[0]);
+    if (thrown(vm)) {
+        broadcast_leave(channel);
+        channel_release(channel);
+        goto done;
+    }
+    mal_object_set_prototype_pointer(mal_value_to_object(roots[3]), mal_value_to_object(roots[2]));
+    PortRecord *port = receiver_record(roots[3]);
+    port->broadcast = true;
+    port_edge_store(port, &port->name, roots[1]);
+    // Node starts and refs the handle at construction by listening for 'message'.
+    port_start(vm, port);
+    result = roots[3];
+done:
+    mal_gc_unroot(&root);
+    return result;
+}
+
+static MalValue broadcast_name_get(MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) args; (void) argc; (void) new_target; (void) callee;
+    PortRecord *port = this_broadcast(vm, receiver);
+    return port == nullptr ? mal_value_new_undefined() : port->name;
+}
+
+static MalValue broadcast_close(MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) args; (void) argc; (void) new_target; (void) callee;
+    PortRecord *port = this_broadcast(vm, receiver);
+    if (port == nullptr || !broadcast_open(port)) return mal_value_new_undefined();
+    broadcast_leave(port->endpoint->channel);
+    port_close_record(vm, port);
+    return mal_value_new_undefined();
+}
+
+static void broadcast_deliver(Channel *channel, SharedPayload *payload, u64 bytes, AdmitResult *failure) {
+    Endpoint *receiver = &channel->side[0];
+    AdmitResult admit = endpoint_reserve(receiver);
+    if (admit == ADMIT_OK) admit = endpoint_admit_bytes(receiver, bytes);
+    Message *message = admit == ADMIT_OK ? calloc(1, sizeof(Message)) : nullptr;
+    if (message == nullptr) {
+        if (admit == ADMIT_OK) {
+            endpoint_cancel_admitted(receiver, bytes);
+            admit = ADMIT_PROCESS_FULL;
+        }
+        // A member that closed meanwhile simply misses the message.
+        if (admit != ADMIT_CLOSED && *failure == ADMIT_OK) *failure = admit;
+        return;
+    }
+    atomic_fetch_add_explicit(&payload->refcount, 1, memory_order_relaxed);
+    message->value = payload->value;
+    message->shared = payload;
+    message->bytes = bytes;
+    message->ticket = atomic_fetch_add_explicit(&g_next_ticket, 1, memory_order_relaxed);
+    message->sender = nullptr;
+    endpoint_publish(receiver, message);
+}
+
+static MalValue broadcast_post_message(MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) new_target; (void) callee;
+    PortRecord *port = this_broadcast(vm, receiver);
+    if (port == nullptr) return mal_value_new_undefined();
+    if (argc == 0) {
+        mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "The \"message\" argument must be specified", "ERR_MISSING_ARGS");
+        return mal_value_new_undefined();
+    }
+    if (!broadcast_open(port)) {
+        mal_dom_exception_throw(vm, (const byte *) "BroadcastChannel is closed.", (const byte *) "InvalidStateError");
+        return mal_value_new_undefined();
+    }
+    MalSerializeLimits limits = {.max_bytes = WORKERS_DEFAULT_MAX_MESSAGE_BYTES, .max_objects = 0};
+    const char *error = nullptr;
+    MalSerializedValue *snapshot = mal_serialize(vm, args[0], mal_value_new_undefined(), &limits, &g_hooks, &error);
+    if (snapshot == nullptr) {
+        if (!thrown(vm)) throw_clone_error(vm, error, "could not clone message");
+        return mal_value_new_undefined();
+    }
+    if (!mal_serialize_commit(vm, snapshot)) {
+        error = nullptr;
+        mal_serialized_value_validate(vm, snapshot, &error);
+        mal_serialized_value_release(snapshot);
+        throw_clone_error(vm, error, "could not clone message");
+        return mal_value_new_undefined();
+    }
+    SharedPayload *payload = malloc(sizeof(SharedPayload));
+    if (payload == nullptr) {
+        mal_serialized_value_release(snapshot);
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
+    atomic_init(&payload->refcount, 1);
+    payload->value = snapshot;
+    u64 bytes = mal_serialized_value_size(snapshot);
+    // A getter may have closed this channel; the post still reaches the others.
+    Channel *self = port->endpoint != nullptr ? port->endpoint->channel : nullptr;
+    PortRecord *sender = receiver_record(receiver);
+    usize name_length = 0;
+    byte *name = mal_string_to_utf8(mal_value_to_string(sender->name), &name_length);
+    Channel **targets = nullptr;
+    usize count = 0;
+    if (name != nullptr) {
+        pthread_mutex_lock(&g_broadcast_mutex);
+        usize cap = 0;
+        for (BroadcastMember *member = g_broadcast_head; member != nullptr; member = member->next) {
+            if (member->channel == self || member->name_length != name_length ||
+                memcmp(member->name, name, name_length) != 0) continue;
+            if (count == cap) {
+                cap = cap == 0 ? 4 : cap * 2;
+                Channel **grown = realloc(targets, cap * sizeof(Channel *));
+                if (grown == nullptr) break;
+                targets = grown;
+            }
+            channel_retain(member->channel);
+            targets[count++] = member->channel;
+        }
+        pthread_mutex_unlock(&g_broadcast_mutex);
+    }
+    free(name);
+    AdmitResult failure = ADMIT_OK;
+    for (usize i = 0; i < count; i++) {
+        broadcast_deliver(targets[i], payload, bytes, &failure);
+        channel_release(targets[i]);
+    }
+    free(targets);
+    shared_payload_release(payload);
+    if (failure != ADMIT_OK) throw_admission_error(vm, failure);
+    return mal_value_new_undefined();
+}
+
+static MalValue broadcast_set_referenced(MalVm *vm, MalValue receiver, bool referenced) {
+    PortRecord *port = this_broadcast(vm, receiver);
+    if (port == nullptr) return mal_value_new_undefined();
+    if (broadcast_open(port)) {
+        port->referenced = referenced;
+        port_update_work(vm, port);
+    }
+    return receiver;
+}
+
+static MalValue broadcast_ref(MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) args; (void) argc; (void) new_target; (void) callee;
+    return broadcast_set_referenced(vm, receiver, true);
+}
+
+static MalValue broadcast_unref(MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) args; (void) argc; (void) new_target; (void) callee;
+    return broadcast_set_referenced(vm, receiver, false);
+}
+
+static MalValue broadcast_handler_get(MalVm *vm, MalValue receiver, bool error) {
+    PortRecord *port = this_broadcast(vm, receiver);
+    if (port == nullptr) return mal_value_new_undefined();
+    return error ? port->onmessageerror : port->onmessage;
+}
+
+static MalValue broadcast_handler_set(MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, bool error) {
+    PortRecord *port = this_broadcast(vm, receiver);
+    if (port == nullptr) return mal_value_new_undefined();
+    MalValue value = argc > 0 && mal_value_is_callable(args[0]) ? args[0] : mal_value_new_null();
+    port_edge_store(port, error ? &port->onmessageerror : &port->onmessage, value);
+    return mal_value_new_undefined();
+}
+
+static MalValue broadcast_onmessage_get(MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) args; (void) argc; (void) new_target; (void) callee;
+    return broadcast_handler_get(vm, receiver, false);
+}
+
+static MalValue broadcast_onmessageerror_get(MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) args; (void) argc; (void) new_target; (void) callee;
+    return broadcast_handler_get(vm, receiver, true);
+}
+
+static MalValue broadcast_onmessage_set(MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) new_target; (void) callee;
+    return broadcast_handler_set(vm, receiver, args, argc, false);
+}
+
+static MalValue broadcast_onmessageerror_set(MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) new_target; (void) callee;
+    return broadcast_handler_set(vm, receiver, args, argc, true);
+}
+
+static MalValue define_constructor(MalVm *vm, const char *name, i32 arity, MalNativeFunctionCallback callback,
+    MalValue prototype);
+static void define_method(MalVm *vm, MalObject *object, const char *name, i32 arity,
+    MalNativeFunctionCallback callback);
+static MalValue prototype_new(MalVm *vm);
+
+static void broadcast_install(MalVm *vm) {
+    Isolate *iso = g_isolate;
+    iso->broadcast_prototype = prototype_new(vm);
+    MalObject *prototype = mal_value_to_object(iso->broadcast_prototype);
+    MalPropertyFlags enumerable = MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE;
+    mal_intrinsic_define_accessor_n(vm, prototype, name_key(vm, "name"),
+        (const byte *) "get name", 0, broadcast_name_get, nullptr, 0, nullptr, enumerable);
+    MalObject *function_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
+    MalValue close = mal_value_from_native_function_object(mal_native_function_object_new_arity(
+        &vm->heap, function_prototype, mal_intrinsic_ascii(vm, (const byte *) "close"), 0, broadcast_close));
+    mal_intrinsic_define_data(vm, prototype, (const byte *) "close", close, MAL_PROPERTY_WRITABLE | enumerable);
+    MalValue post = mal_value_from_native_function_object(mal_native_function_object_new_arity(
+        &vm->heap, function_prototype, mal_intrinsic_ascii(vm, (const byte *) "postMessage"), 1,
+        broadcast_post_message));
+    mal_intrinsic_define_data(vm, prototype, (const byte *) "postMessage", post, MAL_PROPERTY_WRITABLE | enumerable);
+    define_method(vm, prototype, "ref", 0, broadcast_ref);
+    define_method(vm, prototype, "unref", 0, broadcast_unref);
+    mal_intrinsic_define_accessor_n(vm, prototype, name_key(vm, "onmessage"),
+        (const byte *) "get onmessage", 0, broadcast_onmessage_get,
+        (const byte *) "set onmessage", 1, broadcast_onmessage_set, enumerable);
+    mal_intrinsic_define_accessor_n(vm, prototype, name_key(vm, "onmessageerror"),
+        (const byte *) "get onmessageerror", 0, broadcast_onmessageerror_get,
+        (const byte *) "set onmessageerror", 1, broadcast_onmessageerror_set, enumerable);
+    iso->broadcast_constructor = define_constructor(vm, "BroadcastChannel", 1, broadcast_construct,
+        iso->broadcast_prototype);
+}
+
+#else
+
+static void broadcast_leave(Channel *channel) {
+    (void) channel;
+}
+
+#endif /* MAL_NODE */
 
 static MAL_ISOLATE_LOCAL WorkerThread *g_self_thread;
 static MAL_ISOLATE_LOCAL bool g_exit_requested;
@@ -2361,9 +2789,9 @@ static bool worker_finish(MalVm *vm, WorkerRecord *worker) {
     bool ok = true;
     if (worker->node) {
         if (thread->reason == REASON_ERROR) {
-            ok = listeners_emit(vm, &worker->listeners, roots[0], "error", &roots[1], 1);
+            ok = listeners_emit(vm, &worker->emitter->listeners, roots[0], "error", &roots[1], 1);
         }
-        if (ok) ok = listeners_emit(vm, &worker->listeners, roots[0], "exit", &roots[2], 1);
+        if (ok) ok = listeners_emit(vm, &worker->emitter->listeners, roots[0], "exit", &roots[2], 1);
     } else {
         if (thread->reason == REASON_ERROR) {
             MalValue event = error_event_new(vm, roots[1], roots[0]);
@@ -2382,9 +2810,8 @@ static bool worker_finish(MalVm *vm, WorkerRecord *worker) {
         }
     }
     worker_unlink(g_isolate, worker);
-    free(worker->listeners.items);
     worker_thread_release(thread);
-    free(worker);
+    worker_record_free(worker);
     mal_gc_unroot(&root);
     return ok;
 }
@@ -2436,7 +2863,7 @@ static bool workers_drain(MalVm *vm) {
         bool ok = true;
         if (worker != nullptr && online && !worker->online) {
             worker->online = true;
-            if (worker->node) ok = listeners_emit(vm, &worker->listeners, worker->wrapper, "online", nullptr, 0);
+            if (worker->node) ok = listeners_emit(vm, &worker->emitter->listeners, worker->wrapper, "online", nullptr, 0);
         }
         if (worker != nullptr && ready && !worker->ready_settled) {
             worker->ready_settled = true;
@@ -2485,11 +2912,19 @@ static bool workers_drain(MalVm *vm) {
     }
     bool closing = message == nullptr && endpoint->close_pending && !port->closed_emitted;
     pthread_mutex_unlock(&channel->mutex);
+    // A closed BroadcastChannel has already dropped its listeners (Node io.js close()).
+    if (message != nullptr && port->broadcast && port->closing) {
+        message_free(message);
+        channel_release(channel);
+        return true;
+    }
     if (message != nullptr) {
         MalValue values[] = {mal_value_new_undefined(), mal_value_new_undefined()};
         MalRootSpan root;
         mal_gc_root(&root, values, countof(values));
-        bool decoded = mal_deserialize_take(vm, message->value, &g_hooks, &values[0]);
+        bool decoded = message->shared != nullptr
+            ? mal_deserialize(vm, message->value, &g_hooks, &values[0])
+            : mal_deserialize_take(vm, message->value, &g_hooks, &values[0]);
         if (decoded) {
             values[1] = transferred_ports(vm, message->value);
             decoded = !thrown(vm);
@@ -2518,7 +2953,9 @@ static bool workers_drain(MalVm *vm) {
         // The record stays linked and branded like a transferred-away port, so later
         // close/ref/start/listener calls are no-ops rather than brand failures;
         // port_finalize frees it with the wrapper.
-        port_dispatch(vm, port, "close", mal_value_new_undefined(), mal_value_new_undefined());
+        if (!port->broadcast) {
+            port_dispatch(vm, port, "close", mal_value_new_undefined(), mal_value_new_undefined());
+        }
         mal_gc_unroot(&root);
         channel_release(channel); // the wrapper's endpoint handle
     }
@@ -2977,7 +3414,18 @@ static MalValue worker_construct_entry(MalVm *vm, const MalValue *args, i32 argc
     }
     MalSerializeLimits limits = {.max_bytes = max_message, .max_objects = 0};
     const char *error = nullptr;
-    MalSerializedValue *snapshot = mal_serialize(vm, data, transfer, &limits, &g_hooks, &error);
+    // Node clones workerData and environmentData in one startup message, in that order.
+    bool with_environment = node && mal_value_is_map_object(iso->environment_data) &&
+        mal_map_object_size(mal_value_to_map_object(iso->environment_data)) > 0;
+    MalValue payload[] = {data, iso->environment_data, data};
+    MalRootSpan payload_root;
+    mal_gc_root(&payload_root, payload, countof(payload));
+    if (with_environment) {
+        payload[2] = mal_value_from_array_object(mal_array_object_new_from_values(
+            &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]), payload, 2));
+    }
+    MalSerializedValue *snapshot = mal_serialize(vm, payload[2], transfer, &limits, &g_hooks, &error);
+    mal_gc_unroot(&payload_root);
     if (snapshot == nullptr) {
         process_release_message();
         atomic_fetch_sub_explicit(&g_live_workers, 1, memory_order_acq_rel);
@@ -2999,6 +3447,11 @@ static MalValue worker_construct_entry(MalVm *vm, const MalValue *args, i32 argc
         node ? POST_NODE : POST_TRANSACTIONAL) : nullptr;
     MalSharedWaitInterrupt *interrupt = channel != nullptr ? mal_shared_wait_interrupt_new() : nullptr;
     WorkerRecord *worker = interrupt != nullptr ? calloc(1, sizeof(WorkerRecord)) : nullptr;
+    WorkerEmitter *emitter = worker != nullptr ? calloc(1, sizeof(WorkerEmitter)) : nullptr;
+    if (emitter == nullptr) {
+        free(worker);
+        worker = nullptr;
+    }
     if (worker == nullptr) {
         atomic_fetch_sub_explicit(&g_live_workers, 1, memory_order_acq_rel);
         if (interrupt != nullptr) mal_shared_wait_interrupt_free(interrupt);
@@ -3026,6 +3479,7 @@ static MalValue worker_construct_entry(MalVm *vm, const MalValue *args, i32 argc
     thread->child_endpoint = &channel->side[1];
     thread->data = snapshot;
     thread->data_bytes = data_bytes;
+    thread->data_has_environment = with_environment;
     thread->interrupt = interrupt;
     thread->parent = iso->owner;
     owner_retain(iso->owner);
@@ -3037,7 +3491,12 @@ static MalValue worker_construct_entry(MalVm *vm, const MalValue *args, i32 argc
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
     MalValue proto = node ? iso->node_worker_prototype : iso->worker_prototype;
-    roots[0] = mal_value_from_object(&mal_event_target_object_new(&vm->heap, mal_value_to_object(proto))->object);
+    MalEventTargetObject *wrapper = mal_event_target_object_new(&vm->heap, mal_value_to_object(proto));
+    wrapper->native = emitter;
+    wrapper->native_ops = &g_worker_ops;
+    emitter->record = worker;
+    worker->emitter = emitter;
+    roots[0] = mal_value_from_object(&wrapper->object);
     roots[1] = port_wrapper_new(vm, &channel->side[0]);
     roots[2] = promise_new(vm);
     roots[3] = promise_new(vm);
@@ -3089,8 +3548,7 @@ static MalValue worker_construct_entry(MalVm *vm, const MalValue *args, i32 argc
         atomic_fetch_sub_explicit(&g_live_workers, 1, memory_order_acq_rel);
         worker_thread_release(thread);
         worker_thread_release(thread);
-        free(worker->listeners.items);
-        free(worker);
+        worker_record_free(worker);
         mal_gc_unroot(&root);
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "could not start worker thread");
         return mal_value_new_undefined();
@@ -3113,8 +3571,7 @@ static MalValue worker_construct_entry(MalVm *vm, const MalValue *args, i32 argc
         port_close_record(vm, port);
         atomic_fetch_sub_explicit(&g_live_workers, 1, memory_order_acq_rel);
         worker_thread_release(thread);
-        free(worker->listeners.items);
-        free(worker);
+        worker_record_free(worker);
         error = nullptr;
         mal_serialized_value_validate(vm, snapshot, &error);
         mal_serialized_value_release(snapshot);
@@ -3350,12 +3807,13 @@ bool mal_workers_install(MalVm *vm) {
     MalValue undefined = mal_value_new_undefined();
     iso->port_prototype = iso->worker_prototype = iso->node_worker_prototype = undefined;
     iso->node_port_prototype = iso->node_port_constructor = iso->node_channel_constructor = undefined;
+    iso->broadcast_prototype = iso->broadcast_constructor = undefined;
     iso->port_constructor = iso->channel_constructor = iso->worker_constructor = undefined;
     iso->node_worker_constructor = iso->receive_function = iso->capabilities_function = undefined;
     iso->create_url_function = undefined;
     iso->parent_port = mal_value_new_null();
     iso->worker_data = undefined;
-    iso->uncloneable = undefined;
+    iso->uncloneable = iso->untransferable = iso->environment_data = undefined;
     iso->self = g_self_thread;
     g_isolate = iso;
     mal_gc_register_root_source(workers_scan_roots, nullptr);
@@ -3392,6 +3850,9 @@ bool mal_workers_install(MalVm *vm) {
     mal_intrinsic_define_method_n(vm, node_proto, (const byte *) "hasRef", 0, worker_has_ref);
     define_emitter_methods(vm, node_proto);
     iso->node_worker_constructor = define_constructor(vm, "Worker", 1, worker_construct_node, iso->node_worker_prototype);
+#if MAL_NODE
+    broadcast_install(vm);
+#endif
 
     iso->receive_function = mal_value_from_native_function_object(mal_native_function_object_new_arity(
         &vm->heap, function_prototype, mal_intrinsic_ascii(vm, (const byte *) "receiveMessageOnPort"), 1,
@@ -3439,10 +3900,30 @@ MalValue mal_workers_worker_data(MalVm *vm) {
     mal_gc_root(&root, &value, 1);
     if (!mal_deserialize_take(vm, iso->self->data, &g_hooks, &value)) value = mal_value_new_undefined();
     else mal_workers_adopt_transferred(vm, iso->self->data);
+    if (iso->self->data_has_environment && mal_value_is_array_object(value)) {
+        MalValue environment = mal_value_new_undefined();
+        if (mal_vm_get_property(vm, value, mal_key_index(1), &environment) &&
+            mal_value_is_map_object(environment)) {
+            iso->environment_data = environment;
+        }
+        if (!mal_vm_get_property(vm, value, mal_key_index(0), &value)) value = mal_value_new_undefined();
+    }
     worker_data_release(iso->self);
     iso->worker_data = value;
     mal_gc_unroot(&root);
     return value;
+}
+
+MalValue mal_workers_environment_data(MalVm *vm) {
+    if (!mal_workers_install(vm)) return mal_value_new_undefined();
+    // An inherited copy arrives with workerData, so decode that first.
+    if (!mal_workers_is_application()) mal_workers_worker_data(vm);
+    Isolate *iso = g_isolate;
+    if (!mal_value_is_map_object(iso->environment_data)) {
+        iso->environment_data = mal_value_from_map_object(mal_map_object_new(
+            &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_MAP_PROTOTYPE])));
+    }
+    return iso->environment_data;
 }
 
 MalValue mal_workers_parent_port(MalVm *vm) {
@@ -3465,6 +3946,11 @@ MalValue mal_workers_node_message_port_constructor(MalVm *vm) {
     return g_isolate != nullptr ? g_isolate->node_port_constructor : mal_value_new_undefined();
 }
 
+MalValue mal_workers_node_broadcast_channel_constructor(MalVm *vm) {
+    (void) vm;
+    return g_isolate != nullptr ? g_isolate->broadcast_constructor : mal_value_new_undefined();
+}
+
 MalValue mal_workers_receive_message_function(MalVm *vm) {
     (void) vm;
     return g_isolate != nullptr ? g_isolate->receive_function : mal_value_new_undefined();
@@ -3485,8 +3971,7 @@ void mal_workers_shutdown(MalVm *vm) {
         atomic_fetch_sub_explicit(&g_live_workers, 1, memory_order_acq_rel);
         if (worker->holds_work) mal_reactor_release_work(isolate_reactor(vm));
         worker_thread_release(worker->thread);
-        free(worker->listeners.items);
-        free(worker);
+        worker_record_free(worker);
     }
     Owner *owner = iso->owner;
     pthread_mutex_lock(&owner->mutex);
@@ -3512,6 +3997,7 @@ void mal_workers_shutdown(MalVm *vm) {
         iso->ports = port->next;
         if (port->endpoint != nullptr) {
             Channel *channel = port->endpoint->channel;
+            if (port->broadcast) broadcast_leave(channel);
             channel_close(channel);
             endpoint_bind(port->endpoint, nullptr);
             channel_release(channel);

@@ -87,6 +87,39 @@ export const PERFORMANCE_GLOBALS: ReadonlyArray<string> = [
 	"PerformanceResourceTiming",
 ];
 
+/** The node:worker_threads installer, which also defines the messaging globals. */
+export const WORKER_THREADS_INSTALLER_SYMBOL = hostInstallerSymbol("node:worker_threads");
+
+/** Free messaging globals that node:worker_threads defines. */
+export const WORKER_GLOBALS: ReadonlyArray<string> = [
+	"BroadcastChannel",
+	"MessageChannel",
+	"MessagePort",
+];
+
+/**
+ * Module installers that also define free Node globals, retained at startup when a
+ * program names one of them. `computedMember` means a computed `globalThis[key]`
+ * read retains the installer once it is linked.
+ */
+export const HOST_GLOBAL_INSTALLERS: ReadonlyArray<{
+	readonly installer: string;
+	readonly globals: ReadonlyArray<string>;
+	readonly computedMember: boolean;
+}> = [
+	{
+		installer: PERFORMANCE_INSTALLER_SYMBOL,
+		globals: PERFORMANCE_GLOBALS,
+		computedMember: true,
+	},
+	{ installer: CRYPTO_INSTALLER_SYMBOL, globals: CRYPTO_GLOBALS, computedMember: false },
+	{
+		installer: WORKER_THREADS_INSTALLER_SYMBOL,
+		globals: WORKER_GLOBALS,
+		computedMember: false,
+	},
+];
+
 // path is the one module with a planned default export (`import path from
 // "node:path"`) alongside its named functions — `relative` included.
 const PATH: HostModuleSpec = {
@@ -443,16 +476,21 @@ const DNS_PROMISES: HostModuleSpec = {
 const WORKER_THREADS: HostModuleSpec = {
 	id: "node:worker_threads",
 	named: [
+		"BroadcastChannel",
 		"MessageChannel",
 		"MessagePort",
 		"SHARE_ENV",
 		"Worker",
+		"getEnvironmentData",
 		"isInternalThread",
 		"isMainThread",
+		"isMarkedAsUntransferable",
 		"markAsUncloneable",
+		"markAsUntransferable",
 		"parentPort",
 		"receiveMessageOnPort",
 		"resourceLimits",
+		"setEnvironmentData",
 		"threadId",
 		"threadName",
 		"workerData",

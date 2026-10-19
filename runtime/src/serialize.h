@@ -53,7 +53,9 @@ typedef struct MalSerializeLimits {
  * transferred or otherwise became untransferable after encode. Optional
  * `reject` runs once for every object before the core encodes it (ordinary
  * objects included) and for every listed transferable; true fails the clone
- * with DataCloneError (Node markAsUncloneable). It must not run JS.
+ * with DataCloneError (Node markAsUncloneable). It must not run JS. Optional
+ * `untransferable` runs for every transfer list item before any getter; true fails
+ * with DataCloneError while the object stays cloneable (Node markAsUntransferable).
  */
 typedef struct MalSerializeHostDescriptor {
     u32 kind;
@@ -68,6 +70,7 @@ typedef struct MalSerializeHooks {
     void (*release)(MalSerializeHostDescriptor *descriptor);
     bool (*validate)(void *data, MalVm *vm, const MalSerializeHostDescriptor *descriptor);
     bool (*reject)(void *data, MalVm *vm, MalValue object);
+    bool (*untransferable)(void *data, MalVm *vm, MalValue object);
 } MalSerializeHooks;
 
 /*
