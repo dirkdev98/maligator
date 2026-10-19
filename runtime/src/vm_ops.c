@@ -8493,6 +8493,33 @@ static bool mal_vm_try_merge_shaped_data_properties(
 // Shared by the interpreter op and the native backend: object spread
 // (`{...source}`) — copy source's own enumerable properties onto target with
 // CreateDataProperty semantics. A throwing getter sets vm->completion.
+/**
+ * CopyDataProperties from an ordinary object whose public properties are all
+ * string-keyed data properties in its shape. Shape order is then the
+ * [[OwnPropertyKeys]] order, and neither the reads nor the target's defines can
+ * run code, so no key snapshot is needed.
+ */
+static bool mal_vm_try_merge_plain_data_properties(MalObject *target, MalValue source) {
+    if (!mal_value_is_heap_type(source, MAL_HEAP_OBJECT)) return false;
+    const MalObject *source_object = mal_value_to_object(source);
+    if (mal_object_has_public_overflow(source_object)) return false;
+    const MalShape *shape = source_object->shape;
+    for (u32 i = 0; i < shape->inline_count; i++) {
+        const MalShapeProp *prop = &shape->props[i];
+        if (mal_value_is_symbol(prop->key) && mal_value_to_symbol(prop->key)->is_private) continue;
+        if (!mal_value_is_string(prop->key) || (prop->attrs & MAL_PROPERTY_ACCESSOR)) return false;
+    }
+    for (u32 i = 0; i < shape->inline_count; i++) {
+        const MalShapeProp *prop = &shape->props[i];
+        if (!mal_value_is_string(prop->key) || !(prop->attrs & MAL_PROPERTY_ENUMERABLE)) continue;
+        MalPropertyDesc data = mal_intrinsic_data_desc(
+            mal_object_field_load(source_object, prop->slot),
+            MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
+        mal_object_define_own(target, (MalKey) {.kind = MAL_KEY_STRING, .value = prop->key}, &data);
+    }
+    return true;
+}
+
 void mal_vm_op_merge_data_properties(MalVm *vm, MalValue target_value, MalValue source) {
     // Spreading null/undefined contributes nothing.
     if (mal_value_is_nil(source)) {
@@ -8525,7 +8552,8 @@ void mal_vm_op_merge_data_properties(MalVm *vm, MalValue target_value, MalValue 
         return;
     }
 
-    if (mal_vm_try_merge_shaped_data_properties(vm, target_value, source)) {
+    if (mal_vm_try_merge_shaped_data_properties(vm, target_value, source) ||
+        mal_vm_try_merge_plain_data_properties(target, source)) {
         return;
     }
     MAL_PERF_COUNT(merge_data_fallbacks);
