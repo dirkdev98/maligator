@@ -108,6 +108,16 @@ bool mal_object_delete_own(MalObject *object, MalKey key);
 bool mal_object_set(MalObject *object, MalKey key, MalValue value);
 
 /**
+ * Repeat an addition of `key` that mal_object_set or a JavaScript store already made
+ * on this shape, proven while the prototype chain epoch holds. The caller rules out
+ * locked primordials and the global object.
+ */
+bool mal_object_add_cached(MalObject *object, MalKey key, MalValue value);
+
+/** Remember that adding `key` to objects of `shape` produced `object`'s current shape. */
+void mal_object_note_added_property(const MalObject *object, const MalShape *shape, MalKey key);
+
+/**
  * Deoptimize a dense array to legacy table storage (no-op if already table-mode or
  * not dense). Used by operations that need per-element attributes the dense vector
  * cannot represent (e.g. Object.freeze/seal demoting elements to real table entries).

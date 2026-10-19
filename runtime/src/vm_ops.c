@@ -6808,6 +6808,14 @@ static void mal_vm_op_store_object_property_ic(
         return;
     }
     if (key.kind == MAL_KEY_STRING) {
+        // A site whose row serves another key or shape repeats a known addition from
+        // the isolate's table instead of re-proving the chain and replacing its row.
+        // Overwrites keep the path below, which grows the row's alternate shapes.
+        if (ic->shape != nullptr && !object->primordial_locked &&
+            object_value != vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS] &&
+            mal_object_add_cached(object, key, value)) {
+            return;
+        }
         i32 idx = mal_shape_find(object->shape, key, MAL_SHAPE_FIND_STORE_IC);
         // Cache only a default (writable, enumerable, configurable) data slot;
         // a store to such a property cannot run a setter or change the shape.
@@ -6856,6 +6864,10 @@ static void mal_vm_op_store_object_property_ic(
             object->shape = child;
             mal_gc_card(&object->header, value);
             mal_gc_card(&object->header, key.value);
+            // Only sites already serving another key or shape read the table.
+            if (ic->shape != nullptr && !object->primordial_locked) {
+                mal_object_note_added_property(object, source, key);
+            }
             if (mal_ic_record_transition(
                     object, source, key_value, child, ic)) {
                 MAL_PERF_COUNT(ic_store_transition_fills);

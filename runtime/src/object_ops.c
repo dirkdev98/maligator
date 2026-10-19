@@ -876,17 +876,9 @@ static bool mal_object_set_is_cacheable(const MalObject *object, MalKey key) {
         !mal_object_has_public_overflow(object) && mal_prototype_chain_epoch != 0;
 }
 
-static bool mal_object_try_cached_set(MalObject *object, MalKey key, MalValue value) {
-    const MalObjectSetSite *site = mal_object_set_site(object->shape, key.value);
-    if (site->shape != object->shape || site->key != key.value) {
-        MAL_PERF_COUNT(object_set_cache_misses);
-        return false;
-    }
-    if (site->child == nullptr) {
-        MAL_PERF_COUNT(object_set_cache_hits);
-        mal_object_field_store(object, site->slot, value);
-        return true;
-    }
+static bool mal_object_try_cached_add(
+    MalObject *object, const MalObjectSetSite *site, MalKey key, MalValue value
+) {
     if (site->prototype != mal_object_prototype(object) ||
         site->epoch != mal_prototype_chain_epoch) {
         MAL_PERF_COUNT(object_set_cache_misses);
@@ -900,6 +892,18 @@ static bool mal_object_try_cached_set(MalObject *object, MalKey key, MalValue va
     object->shape = child;
     mal_gc_card(&object->header, value);
     mal_gc_card(&object->header, key.value);
+    return true;
+}
+
+static bool mal_object_try_cached_set(MalObject *object, MalKey key, MalValue value) {
+    const MalObjectSetSite *site = mal_object_set_site(object->shape, key.value);
+    if (site->shape != object->shape || site->key != key.value) {
+        MAL_PERF_COUNT(object_set_cache_misses);
+        return false;
+    }
+    if (site->child != nullptr) return mal_object_try_cached_add(object, site, key, value);
+    MAL_PERF_COUNT(object_set_cache_hits);
+    mal_object_field_store(object, site->slot, value);
     return true;
 }
 
@@ -927,6 +931,17 @@ static void mal_object_record_add(
         .epoch = mal_prototype_chain_epoch,
         .child = (MalShape *) child,
     };
+}
+
+bool mal_object_add_cached(MalObject *object, MalKey key, MalValue value) {
+    if (!mal_object_set_is_cacheable(object, key)) return false;
+    const MalObjectSetSite *site = mal_object_set_site(object->shape, key.value);
+    return site->shape == object->shape && site->key == key.value && site->child != nullptr &&
+        mal_object_try_cached_add(object, site, key, value);
+}
+
+void mal_object_note_added_property(const MalObject *object, const MalShape *shape, MalKey key) {
+    if (mal_object_set_is_cacheable(object, key)) mal_object_record_add(object, shape, key);
 }
 
 static void mal_object_set_new_own(MalObject *object, MalKey key, MalValue value) {
