@@ -126,6 +126,45 @@ await call(
 	fs.constants.COPYFILE_EXCL,
 );
 
+const copied = at("modes.txt");
+for (const mode of [0.5, -0.5, NaN, Infinity, -1, 8, 2 ** 32, "1", null]) {
+	try {
+		fs.copyFileSync(file, copied, mode);
+		console.log("copyFileSync mode", String(mode), "copied");
+	} catch (error) {
+		console.log("copyFileSync mode", String(mode), error.name, error.code, error.message);
+	}
+}
+for (const name of ["COPYFILE_EXCL", "COPYFILE_FICLONE", "COPYFILE_FICLONE_FORCE"]) {
+	try {
+		fs.copyFileSync(file, copied, fs.constants[name]);
+		console.log("copyFileSync", name, fs.readFileSync(copied, "utf8"));
+	} catch (error) {
+		console.log(
+			"copyFileSync",
+			name,
+			"throws",
+			describe(error),
+			"dest kept",
+			fs.existsSync(copied),
+		);
+	}
+}
+await fs.promises.copyFile(file, copied);
+for (const mode of [fs.constants.COPYFILE_EXCL, 9, "x"]) {
+	await fs.promises.copyFile(file, copied, mode).then(
+		() => console.log("promises copyFile", String(mode), "copied"),
+		(error) =>
+			console.log(
+				"promises copyFile",
+				String(mode),
+				"rejects",
+				error.code,
+				describe(error),
+			),
+	);
+}
+
 await call("chmod", fs.chmod, file, 0o600);
 await call("chmod string", fs.chmod, at("copy.txt"), "644");
 console.log(
@@ -218,6 +257,7 @@ console.log(
 		"writeFile",
 		"appendFile",
 		"copyFile",
+		"copyFileSync",
 		"rm",
 		"rmdir",
 		"chmod",
@@ -244,6 +284,7 @@ console.log(
 		.map((name) => `${name}=${fs[name].length}`)
 		.join(" "),
 );
+console.log("promises copyFile length", fs.promises.copyFile.length);
 console.log("realpath.native", fs.realpath.native.length, fs.realpathSync.native.length);
 
 fs.rmSync(root, { recursive: true, force: true });

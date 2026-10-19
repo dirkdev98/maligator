@@ -47,6 +47,33 @@ async function watchDirectory() {
 	console.log("dir", await closed);
 }
 
+async function watchTree() {
+	const dir = path.join(root, "tree");
+	fs.mkdirSync(path.join(dir, "sub"), { recursive: true });
+	const watcher = fs.watch(dir, { recursive: true });
+	let created = 0;
+	const [type, name] = await untilEvent(
+		watcher,
+		(eventType, filename) =>
+			eventType === "rename" && filename === path.join("sub", "created.txt"),
+		() => fs.writeFileSync(path.join(dir, "sub", "created.txt"), `v${created++}`),
+	);
+	console.log("tree event", type, name);
+	const later = path.join(dir, "sub", "later");
+	let nested = 0;
+	const [nestedType, nestedName] = await untilEvent(
+		watcher,
+		(eventType, filename) =>
+			eventType === "rename" && filename === path.join("sub", "later", "deep.txt"),
+		() => {
+			fs.mkdirSync(later, { recursive: true });
+			fs.writeFileSync(path.join(later, "deep.txt"), `v${nested++}`);
+		},
+	);
+	console.log("tree event", nestedType, nestedName);
+	watcher.close();
+}
+
 async function watchFile() {
 	const file = path.join(root, "single.txt");
 	fs.writeFileSync(file, "start");
@@ -142,6 +169,7 @@ async function promisesWatch() {
 }
 
 await watchDirectory();
+await watchTree();
 await watchFile();
 await watchErrors();
 await statPolling();

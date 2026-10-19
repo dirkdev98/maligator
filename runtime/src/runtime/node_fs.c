@@ -1,4 +1,4 @@
-// Portions derived from Node.js lib/internal/fs/cp/cp.js, lib/internal/fs/cp/cp-sync.js (MIT); see THIRD_PARTY_NOTICES.md.
+// Portions derived from Node.js lib/internal/fs/cp/cp.js, lib/internal/fs/cp/cp-sync.js, src/node_file.cc (MIT); see THIRD_PARTY_NOTICES.md.
 #include "node_fs.h"
 
 #if MAL_NODE
@@ -1790,23 +1790,30 @@ static MalValue node_fs_directory_entries(
     return array;
 }
 
-static MalValue node_fs_copy_file_sync(
-    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
-    (void) self;
-    (void) nt;
-    (void) callee;
-    char *source = node_fs_path_cstr(vm, argc >= 1 ? args[0] : mal_value_new_undefined());
-    if (source == nullptr) return mal_value_new_undefined();
-    char *destination = node_fs_path_cstr(vm, argc >= 2 ? args[1] : mal_value_new_undefined());
-    if (destination == nullptr) {
-        free(source);
-        return mal_value_new_undefined();
+/* Node's C++ GetValidFileMode for UV_FS_COPYFILE: null/undefined is 0, fractions
+ * truncate (V8's Int32 cast), and non-finite values fail before the range check. */
+static bool node_fs_copy_mode(MalVm *vm, MalValue value, u32 *out) {
+    *out = 0;
+    if (mal_value_is_undefined(value) || mal_value_is_null(value)) return true;
+    if (!mal_ops_is_number(value)) {
+        node_fs_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "mode must be int32 or null/undefined", "ERR_INVALID_ARG_TYPE");
+        return false;
     }
-    int err = mal_posix_fs_copy_file(source, destination);
-    if (err != 0) node_fs_throw_errno(vm, err, "copyfile", source);
-    free(destination);
-    free(source);
-    return mal_value_new_undefined();
+    f64 mode = mal_ops_number_as_f64(value);
+    if (!isfinite(mode)) {
+        node_fs_throw_code(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "mode is out of range",
+            "ERR_OUT_OF_RANGE");
+        return false;
+    }
+    mode = trunc(mode);
+    if (mode < 0 || mode > 7) {
+        node_fs_throw_code(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            "mode is out of range: >= 0 && <= 7", "ERR_OUT_OF_RANGE");
+        return false;
+    }
+    *out = (u32) mode;
+    return true;
 }
 
 static MalValue node_fs_realpath_sync(
@@ -5006,22 +5013,7 @@ static bool node_fs_job_arguments(
             if (!node_fs_job_path(vm, job, a[0])) return false;
             job->destination = node_fs_path_cstr(vm, a[1]);
             if (job->destination == nullptr) return false;
-            job->mode = 0;
-            if (omitted || mal_value_is_undefined(a[2])) return true;
-            if (!mal_ops_is_number(a[2])) {
-                node_fs_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                    "The \"mode\" argument must be of type number", "ERR_INVALID_ARG_TYPE");
-                return false;
-            }
-            f64 mode = mal_ops_number_as_f64(a[2]);
-            if (trunc(mode) != mode || mode < 0 || mode > 7) {
-                node_fs_throw_code(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
-                    "The value of \"mode\" is out of range. It must be an integer >= 0 && <= 7",
-                    "ERR_OUT_OF_RANGE");
-                return false;
-            }
-            job->mode = (u32) mode;
-            return true;
+            return node_fs_copy_mode(vm, omitted ? mal_value_new_undefined() : a[2], &job->mode);
         }
         case NODE_FS_JOB_RM: {
             *callback = optional ? a[1] : a[2];
@@ -6740,6 +6732,7 @@ static const struct {
     {"fstat", 1, NODE_FS_JOB_FSTAT, false},
     {"mkdir", 3, NODE_FS_JOB_MKDIR, false},
     {"copyFile", 4, NODE_FS_JOB_COPY_FILE, false},
+    {"copyFileSync", 3, NODE_FS_JOB_COPY_FILE, true},
     {"rm", 3, NODE_FS_JOB_RM, false},
     {"rmdir", 3, NODE_FS_JOB_RMDIR, false},
     {"chmod", 3, NODE_FS_JOB_CHMOD, false},
@@ -6767,8 +6760,23 @@ static const struct {
 };
 
 #define NODE_FS_WATCH_EVENTS 32
-// kqueue needs an open descriptor per watched entry, so large directories only report renames.
+// kqueue needs an open descriptor per watched entry, so large trees only report renames.
 #define NODE_FS_WATCH_CHILD_LIMIT 256
+#if defined(__linux__)
+#define NODE_FS_WATCH_TREE_MASK (IN_ATTRIB | IN_CREATE | IN_MODIFY | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO)
+#endif
+
+/* One watched directory; `relative` is root-relative ("" for the root). `fd` is the
+ * kqueue O_EVTONLY descriptor on macOS and the inotify watch descriptor on Linux. */
+typedef struct NodeFsWatchDir {
+    char *relative;
+    int fd;
+#if defined(__APPLE__)
+    char **entries;
+    int *entry_fds;
+    usize entry_count;
+#endif
+} NodeFsWatchDir;
 
 typedef struct NodeFsWatchEvent {
     MalValue result;
@@ -6789,10 +6797,15 @@ typedef struct NodeFsWatcher {
     int target_fd;
     char *path;
     char *basename;
-    char **entries;
-    int *entry_fds;
-    usize entry_count;
+    // The root directory first; Linux keeps the rest sorted by watch descriptor.
+    NodeFsWatchDir **dirs;
+    usize dir_count;
+    usize dir_capacity;
+    usize watched;
+    char *name;
+    usize name_capacity;
     bool directory;
+    bool recursive;
     bool buffer_names;
     bool closed;
     bool unreferenced;
@@ -6874,16 +6887,94 @@ static NodeFsWatcher *node_fs_watcher_find(MalValue receiver) {
     return nullptr;
 }
 
+static void node_fs_watch_dir_free(NodeFsWatchDir *dir) {
+#if defined(__APPLE__)
+    for (usize i = 0; i < dir->entry_count; i++) {
+        if (dir->entry_fds != nullptr && dir->entry_fds[i] >= 0) close(dir->entry_fds[i]);
+        free(dir->entries[i]);
+    }
+    free(dir->entries);
+    free(dir->entry_fds);
+    // The root's descriptor is target_fd, closed with the handle.
+    if (dir->relative[0] != '\0' && dir->fd >= 0) close(dir->fd);
+#endif
+    free(dir->relative);
+    free(dir);
+}
+
+/* `dir/name` in the watcher's reusable buffer, or `name` itself at the root. */
+static const char *node_fs_watch_join(NodeFsWatcher *state, const char *dir, const char *name) {
+    if (dir[0] == '\0') return name;
+    usize dir_length = strlen(dir);
+    usize name_length = strlen(name);
+    usize needed = dir_length + name_length + 2;
+    if (needed > state->name_capacity) {
+        char *grown = realloc(state->name, needed);
+        if (grown == nullptr) return nullptr;
+        state->name = grown;
+        state->name_capacity = needed;
+    }
+    memcpy(state->name, dir, dir_length);
+    state->name[dir_length] = '/';
+    memcpy(state->name + dir_length + 1, name, name_length + 1);
+    return state->name;
+}
+
+static NodeFsWatchDir *node_fs_watch_add_dir(NodeFsWatcher *state, const char *relative, int fd) {
+    if (state->dir_count == state->dir_capacity) {
+        usize capacity = state->dir_capacity == 0 ? 4 : state->dir_capacity * 2;
+        NodeFsWatchDir **grown = realloc(state->dirs, capacity * sizeof(NodeFsWatchDir *));
+        if (grown == nullptr) return nullptr;
+        state->dirs = grown;
+        state->dir_capacity = capacity;
+    }
+    NodeFsWatchDir *dir = calloc(1, sizeof(NodeFsWatchDir));
+    if (dir == nullptr || (dir->relative = strdup(relative)) == nullptr) {
+        free(dir);
+        return nullptr;
+    }
+    dir->fd = fd;
+    usize index = state->dir_count;
+#if defined(__linux__)
+    while (index > 1 && state->dirs[index - 1]->fd > fd) index--;
+    memmove(state->dirs + index + 1, state->dirs + index, (state->dir_count - index) * sizeof(NodeFsWatchDir *));
+#endif
+    state->dirs[index] = dir;
+    state->dir_count++;
+    return dir;
+}
+
+/* Drops the watched directory at `relative` and every directory below it. */
+static void node_fs_watch_forget(NodeFsWatcher *state, const char *relative) {
+    usize length = strlen(relative);
+    usize kept = 0;
+    for (usize i = 0; i < state->dir_count; i++) {
+        NodeFsWatchDir *dir = state->dirs[i];
+        if (strncmp(dir->relative, relative, length) != 0
+            || (dir->relative[length] != '\0' && dir->relative[length] != '/')) {
+            state->dirs[kept++] = dir;
+            continue;
+        }
+#if defined(__APPLE__)
+        state->watched--;
+        for (usize entry = 0; entry < dir->entry_count; entry++) {
+            if (dir->entry_fds[entry] >= 0) state->watched--;
+        }
+#elif defined(__linux__)
+        (void) inotify_rm_watch(state->fd, dir->fd);
+#endif
+        node_fs_watch_dir_free(dir);
+    }
+    state->dir_count = kept;
+}
+
 static void node_fs_watcher_free(NodeFsWatcher *state) {
     NodeFsWatcher **link = &node_fs_watchers;
     while (*link != nullptr && *link != state) link = &(*link)->next;
     if (*link == state) *link = state->next;
-    for (usize i = 0; i < state->entry_count; i++) {
-        if (state->entry_fds != nullptr && state->entry_fds[i] >= 0) close(state->entry_fds[i]);
-        free(state->entries[i]);
-    }
-    free(state->entries);
-    free(state->entry_fds);
+    for (usize i = 0; i < state->dir_count; i++) node_fs_watch_dir_free(state->dirs[i]);
+    free(state->dirs);
+    free(state->name);
     while (state->queue_head != nullptr) {
         NodeFsWatchEvent *event = state->queue_head;
         state->queue_head = event->next;
@@ -6983,68 +7074,196 @@ static void node_fs_watch_emit(MalVm *vm, NodeFsWatcher *state, const char *type
     mal_gc_unroot(&root);
 }
 
+/* malloc-owned absolute path of a watched directory. */
+static char *node_fs_watch_absolute(const NodeFsWatcher *state, const char *relative) {
+    if (relative[0] == '\0') return strdup(state->path);
+    usize length = strlen(state->path) + strlen(relative) + 2;
+    char *absolute = malloc(length);
+    if (absolute != nullptr) snprintf(absolute, length, "%s/%s", state->path, relative);
+    return absolute;
+}
+
 #if defined(__APPLE__)
-static int node_fs_watch_child(NodeFsWatcher *state, const char *name, usize watched) {
-    if (watched >= NODE_FS_WATCH_CHILD_LIMIT) return -1;
-    int fd = openat(state->target_fd, name, O_EVTONLY | O_CLOEXEC | O_NOFOLLOW);
+static void node_fs_watch_rescan(MalVm *vm, NodeFsWatcher *state, NodeFsWatchDir *dir, bool announce);
+
+/* Regular files get their own descriptor; a recursive watch turns subdirectories into
+ * watched directories that own theirs, so their entry keeps -1. */
+static int node_fs_watch_child(MalVm *vm, NodeFsWatcher *state, NodeFsWatchDir *dir, const char *name,
+    bool announce) {
+    if (state->closed || state->watched >= NODE_FS_WATCH_CHILD_LIMIT) return -1;
+    int fd = openat(dir->fd, name, O_EVTONLY | O_CLOEXEC | O_NOFOLLOW);
     if (fd < 0) return -1;
     struct stat st;
-    struct kevent change;
-    EV_SET(&change, fd, EVFILT_VNODE, EV_ADD | EV_CLEAR, NOTE_WRITE | NOTE_EXTEND | NOTE_ATTRIB, 0,
-        (void *) (uintptr_t) (fd + 1));
-    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode) || kevent(state->fd, &change, 1, nullptr, 0, nullptr) < 0) {
+    bool directory = false;
+    if (fstat(fd, &st) != 0 || !(S_ISREG(st.st_mode) || (directory = state->recursive && S_ISDIR(st.st_mode)))) {
         close(fd);
         return -1;
     }
-    return fd;
+    struct kevent change;
+    EV_SET(&change, fd, EVFILT_VNODE, EV_ADD | EV_CLEAR,
+        directory ? NOTE_WRITE : NOTE_WRITE | NOTE_EXTEND | NOTE_ATTRIB, 0, (void *) (uintptr_t) (fd + 1));
+    if (kevent(state->fd, &change, 1, nullptr, 0, nullptr) < 0) {
+        close(fd);
+        return -1;
+    }
+    state->watched++;
+    if (!directory) return fd;
+    const char *relative = node_fs_watch_join(state, dir->relative, name);
+    NodeFsWatchDir *child = relative == nullptr ? nullptr : node_fs_watch_add_dir(state, relative, fd);
+    if (child == nullptr) {
+        close(fd);
+        state->watched--;
+        return -1;
+    }
+    node_fs_watch_rescan(vm, state, child, announce);
+    return -1;
 }
 
-static void node_fs_watch_rescan(MalVm *vm, NodeFsWatcher *state, bool announce) {
+static void node_fs_watch_rescan(MalVm *vm, NodeFsWatcher *state, NodeFsWatchDir *dir, bool announce) {
+    char *absolute = node_fs_watch_absolute(state, dir->relative);
+    if (absolute == nullptr) return;
     char **entries;
     usize count;
-    (void) node_fs_watch_list(state->path, &entries, &count);
+    (void) node_fs_watch_list(absolute, &entries, &count);
+    free(absolute);
     int *fds = count == 0 ? nullptr : malloc(count * sizeof(int));
     if (count > 0 && fds == nullptr) {
         for (usize i = 0; i < count; i++) free(entries[i]);
         free(entries);
         return;
     }
-    usize left = 0, right = 0, watched = 0;
-    while (left < state->entry_count || right < count) {
-        int order = left == state->entry_count ? 1 : right == count ? -1
-            : strcmp(state->entries[left], entries[right]);
+    usize left = 0, right = 0;
+    while (left < dir->entry_count || right < count) {
+        int order = left == dir->entry_count ? 1 : right == count ? -1
+            : strcmp(dir->entries[left], entries[right]);
         if (order == 0) {
-            fds[right] = state->entry_fds[left];
-            if (fds[right] >= 0) watched++;
-            left++;
-            right++;
+            fds[right++] = dir->entry_fds[left++];
             continue;
         }
         bool active = announce && !state->closed && vm->completion.kind != MAL_COMPLETION_THROW;
         if (order < 0) {
-            if (state->entry_fds[left] >= 0) close(state->entry_fds[left]);
-            if (active) node_fs_watch_emit(vm, state, "rename", state->entries[left]);
+            int fd = dir->entry_fds[left];
+            if (fd >= 0) {
+                close(fd);
+                state->watched--;
+            }
+            const char *name = node_fs_watch_join(state, dir->relative, dir->entries[left]);
+            if (name != nullptr && state->recursive && fd < 0) node_fs_watch_forget(state, name);
+            if (name != nullptr && active) node_fs_watch_emit(vm, state, "rename", name);
             left++;
         } else {
-            fds[right] = node_fs_watch_child(state, entries[right], watched);
-            if (fds[right] >= 0) watched++;
-            if (active) node_fs_watch_emit(vm, state, "rename", entries[right]);
+            const char *name = node_fs_watch_join(state, dir->relative, entries[right]);
+            if (name != nullptr && active) node_fs_watch_emit(vm, state, "rename", name);
+            fds[right] = node_fs_watch_child(vm, state, dir, entries[right], announce);
             right++;
         }
     }
-    for (usize i = 0; i < state->entry_count; i++) free(state->entries[i]);
-    free(state->entries);
-    free(state->entry_fds);
-    state->entries = entries;
-    state->entry_fds = fds;
-    state->entry_count = count;
+    for (usize i = 0; i < dir->entry_count; i++) free(dir->entries[i]);
+    free(dir->entries);
+    free(dir->entry_fds);
+    dir->entries = entries;
+    dir->entry_fds = fds;
+    dir->entry_count = count;
 }
 
-static const char *node_fs_watch_child_name(const NodeFsWatcher *state, int fd) {
-    for (usize i = 0; i < state->entry_count; i++) {
-        if (state->entry_fds[i] == fd) return state->entries[i];
+static void node_fs_watch_child_event(MalVm *vm, NodeFsWatcher *state, int fd) {
+    for (usize i = 0; i < state->dir_count; i++) {
+        NodeFsWatchDir *dir = state->dirs[i];
+        if (dir->fd == fd && dir->relative[0] != '\0') {
+            node_fs_watch_rescan(vm, state, dir, true);
+            return;
+        }
+        for (usize entry = 0; entry < dir->entry_count; entry++) {
+            if (dir->entry_fds[entry] != fd) continue;
+            const char *name = node_fs_watch_join(state, dir->relative, dir->entries[entry]);
+            if (name != nullptr) node_fs_watch_emit(vm, state, "change", name);
+            return;
+        }
+    }
+}
+#elif defined(__linux__)
+static NodeFsWatchDir *node_fs_watch_find(const NodeFsWatcher *state, int wd, usize *index) {
+    usize low = 0, high = state->dir_count;
+    while (low < high) {
+        usize middle = low + (high - low) / 2;
+        int fd = state->dirs[middle]->fd;
+        if (fd == wd) {
+            *index = middle;
+            return state->dirs[middle];
+        }
+        if (fd < wd) low = middle + 1;
+        else high = middle;
     }
     return nullptr;
+}
+
+static bool node_fs_watch_subdir(NodeFsWatcher *state, const char *relative) {
+    char *absolute = node_fs_watch_absolute(state, relative);
+    if (absolute == nullptr) return false;
+    // IN_ONLYDIR also rejects the DT_UNKNOWN entries that turn out not to be directories.
+    int wd = inotify_add_watch(state->fd, absolute, NODE_FS_WATCH_TREE_MASK | IN_ONLYDIR | IN_DONT_FOLLOW);
+    free(absolute);
+    if (wd < 0) return false;
+    // A descriptor that is already watched means a bind-mount loop; stop descending.
+    usize index;
+    if (node_fs_watch_find(state, wd, &index) != nullptr) return false;
+    return node_fs_watch_add_dir(state, relative, wd) != nullptr;
+}
+
+/* Watches every directory below the watched `relative`; like Node's recursive watcher
+ * for a directory that appears, `announce` reports each entry found as a 'rename'. */
+static void node_fs_watch_tree(MalVm *vm, NodeFsWatcher *state, const char *relative, bool announce) {
+    char *absolute = node_fs_watch_absolute(state, relative);
+    DIR *directory = absolute == nullptr ? nullptr : opendir(absolute);
+    free(absolute);
+    if (directory == nullptr) return;
+    for (struct dirent *entry = readdir(directory); entry != nullptr && !state->closed; entry = readdir(directory)) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
+        const char *name = node_fs_watch_join(state, relative, entry->d_name);
+        if (name == nullptr) continue;
+        if (announce && vm->completion.kind != MAL_COMPLETION_THROW) node_fs_watch_emit(vm, state, "rename", name);
+        if (entry->d_type != DT_DIR && entry->d_type != DT_UNKNOWN) continue;
+        char *child = strdup(name);
+        if (child != nullptr && node_fs_watch_subdir(state, child)) node_fs_watch_tree(vm, state, child, announce);
+        free(child);
+    }
+    closedir(directory);
+}
+
+/* Mirrors Node 26's JavaScript recursive watcher: entries that appear or vanish are
+ * 'rename', changed files are 'change', and changed directories report nothing. */
+static void node_fs_watch_tree_event(MalVm *vm, NodeFsWatcher *state, const struct inotify_event *event) {
+    usize index;
+    NodeFsWatchDir *dir = node_fs_watch_find(state, event->wd, &index);
+    if (dir == nullptr) return;
+    bool root = dir->relative[0] == '\0';
+    if ((event->mask & IN_IGNORED) != 0) {
+        if (root) return;
+        memmove(state->dirs + index, state->dirs + index + 1, (state->dir_count - index - 1) * sizeof(NodeFsWatchDir *));
+        state->dir_count--;
+        node_fs_watch_dir_free(dir);
+        return;
+    }
+    if (event->len == 0) {
+        // Node names the vanished root by its path relative to itself.
+        if (root && (event->mask & (IN_DELETE_SELF | IN_MOVE_SELF)) != 0) node_fs_watch_emit(vm, state, "rename", "");
+        return;
+    }
+    const char *name = node_fs_watch_join(state, dir->relative, event->name);
+    if (name == nullptr) return;
+    bool renamed = (event->mask & (IN_CREATE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO)) != 0;
+    bool directory = (event->mask & IN_ISDIR) != 0;
+    if (directory && !renamed) return;
+    node_fs_watch_emit(vm, state, renamed ? "rename" : "change", name);
+    if (!directory || state->closed) return;
+    char *relative = strdup(name);
+    if (relative == nullptr) return;
+    if ((event->mask & (IN_DELETE | IN_MOVED_FROM)) != 0) {
+        node_fs_watch_forget(state, relative);
+    } else if (node_fs_watch_subdir(state, relative)) {
+        node_fs_watch_tree(vm, state, relative, vm->completion.kind != MAL_COMPLETION_THROW);
+    }
+    free(relative);
 }
 #endif
 
@@ -7056,11 +7275,10 @@ static void node_fs_watch_receive(MalVm *vm, NodeFsWatcher *state) {
     for (int i = 0; i < ready && !state->closed && vm->completion.kind != MAL_COMPLETION_THROW; i++) {
         u32 flags = events[i].fflags;
         if (events[i].udata != nullptr) {
-            const char *name = node_fs_watch_child_name(state, (int) ((uintptr_t) events[i].udata - 1));
-            if (name != nullptr) node_fs_watch_emit(vm, state, "change", name);
+            node_fs_watch_child_event(vm, state, (int) ((uintptr_t) events[i].udata - 1));
             continue;
         }
-        if (state->directory && (flags & NOTE_WRITE) != 0) node_fs_watch_rescan(vm, state, true);
+        if (state->directory && (flags & NOTE_WRITE) != 0) node_fs_watch_rescan(vm, state, state->dirs[0], true);
         if ((flags & (NOTE_DELETE | NOTE_RENAME | NOTE_REVOKE)) != 0) {
             node_fs_watch_emit(vm, state, "rename", state->basename);
         } else if (!state->directory && (flags & (NOTE_WRITE | NOTE_EXTEND | NOTE_ATTRIB)) != 0) {
@@ -7073,6 +7291,10 @@ static void node_fs_watch_receive(MalVm *vm, NodeFsWatcher *state) {
     for (ssize_t offset = 0; offset < length && !state->closed && vm->completion.kind != MAL_COMPLETION_THROW;) {
         const struct inotify_event *event = (const struct inotify_event *) (buffer + offset);
         offset += (ssize_t) (sizeof(struct inotify_event) + event->len);
+        if (state->recursive) {
+            node_fs_watch_tree_event(vm, state, event);
+            continue;
+        }
         const char *name = event->len > 0 ? event->name : state->basename;
         if ((event->mask & (IN_CREATE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO | IN_DELETE_SELF
                 | IN_MOVE_SELF)) != 0) {
@@ -7122,6 +7344,7 @@ static int node_fs_watch_open(NodeFsWatcher *state) {
     int error = mal_posix_fs_stat(state->path, &st);
     if (error != 0) return error;
     state->directory = (st.mode & S_IFMT) == S_IFDIR;
+    state->recursive = state->recursive && state->directory;
 #if defined(__APPLE__)
     state->target_fd = open(state->path, O_EVTONLY | O_CLOEXEC);
     if (state->target_fd < 0) return errno;
@@ -7132,13 +7355,19 @@ static int node_fs_watch_open(NodeFsWatcher *state) {
     EV_SET(&change, state->target_fd, EVFILT_VNODE, EV_ADD | EV_CLEAR,
         NOTE_WRITE | NOTE_EXTEND | NOTE_ATTRIB | NOTE_DELETE | NOTE_RENAME | NOTE_REVOKE, 0, nullptr);
     if (kevent(state->fd, &change, 1, nullptr, 0, nullptr) < 0) return errno;
-    if (state->directory) node_fs_watch_rescan(nullptr, state, false);
+    if (state->directory) {
+        NodeFsWatchDir *root = node_fs_watch_add_dir(state, "", state->target_fd);
+        if (root == nullptr) return ENOMEM;
+        node_fs_watch_rescan(nullptr, state, root, false);
+    }
 #elif defined(__linux__)
     state->fd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
     if (state->fd < 0) return errno;
-    if (inotify_add_watch(state->fd, state->path, IN_ATTRIB | IN_CREATE | IN_MODIFY | IN_DELETE | IN_DELETE_SELF
-            | IN_MOVE_SELF | IN_MOVED_FROM | IN_MOVED_TO) < 0) {
-        return errno;
+    int wd = inotify_add_watch(state->fd, state->path, NODE_FS_WATCH_TREE_MASK | IN_DELETE_SELF | IN_MOVE_SELF);
+    if (wd < 0) return errno;
+    if (state->recursive) {
+        if (node_fs_watch_add_dir(state, "", wd) == nullptr) return ENOMEM;
+        node_fs_watch_tree(nullptr, state, "", false);
     }
 #else
     return ENOSYS;
@@ -7238,9 +7467,10 @@ static bool node_fs_watch_install(MalVm *vm) {
     return true;
 }
 
-static bool node_fs_watch_options(MalVm *vm, MalValue options, bool *persistent, bool *buffer_names,
-    MalValue *signal) {
+static bool node_fs_watch_options(MalVm *vm, MalValue options, bool *persistent, bool *recursive,
+    bool *buffer_names, MalValue *signal) {
     *persistent = true;
+    *recursive = false;
     *buffer_names = false;
     *signal = mal_value_new_undefined();
     MalValue encoding = mal_value_new_undefined();
@@ -7252,6 +7482,10 @@ static bool node_fs_watch_options(MalVm *vm, MalValue options, bool *persistent,
             return false;
         }
         if (!mal_value_is_undefined(value)) *persistent = mal_value_is_truthy(value);
+        if (!mal_vm_get_property(vm, options, mal_intrinsic_string_key(vm, (const byte *) "recursive"), &value)) {
+            return false;
+        }
+        *recursive = mal_value_is_truthy(value);
         if (!mal_vm_get_property(vm, options, mal_intrinsic_string_key(vm, (const byte *) "encoding"), &encoding)
             || !mal_vm_get_property(vm, options, mal_intrinsic_string_key(vm, (const byte *) "signal"), signal)) {
             return false;
@@ -7291,7 +7525,7 @@ static void node_fs_watch_listen_abort(MalVm *vm, MalValue signal, MalValue hand
 
 /* Opens the kernel watch; on failure throws Node's `watch` error and returns nullptr. */
 static NodeFsWatcher *node_fs_watch_start(MalVm *vm, MalValue filename, MalValue receiver, bool persistent,
-    bool buffer_names) {
+    bool recursive, bool buffer_names) {
     char *path = node_fs_path_cstr(vm, filename);
     if (path == nullptr) return nullptr;
     NodeFsWatcher *state = calloc(1, sizeof(NodeFsWatcher));
@@ -7305,6 +7539,11 @@ static NodeFsWatcher *node_fs_watch_start(MalVm *vm, MalValue filename, MalValue
     state->path = path;
     const char *slash = strrchr(path, '/');
     state->basename = slash != nullptr && slash[1] != '\0' ? (char *) slash + 1 : path;
+    state->recursive = recursive;
+#if defined(__linux__)
+    // Node 26 watches recursively on Linux in JavaScript, which reports string names whatever the encoding.
+    if (recursive) buffer_names = false;
+#endif
     state->buffer_names = buffer_names;
     state->unreferenced = !persistent;
     state->pending = mal_value_new_undefined();
@@ -7359,8 +7598,9 @@ static MalValue node_fs_watch(
         roots[2] = roots[1];
         roots[1] = undefined;
     }
-    bool persistent, buffer_names;
-    if (!node_fs_watch_install(vm) || !node_fs_watch_options(vm, roots[1], &persistent, &buffer_names, &roots[4])) {
+    bool persistent, recursive, buffer_names;
+    if (!node_fs_watch_install(vm)
+        || !node_fs_watch_options(vm, roots[1], &persistent, &recursive, &buffer_names, &roots[4])) {
         goto done;
     }
     static const char *const methods[] = {"close", "ref", "unref"};
@@ -7368,7 +7608,7 @@ static MalValue node_fs_watch(
         node_fs_watcher_close, node_fs_watcher_ref, node_fs_watcher_unref};
     roots[3] = node_fs_watch_new_emitter(vm, &node_fs_watcher_proto, methods, callbacks, countof(methods));
     if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
-    if (node_fs_watch_start(vm, roots[0], roots[3], persistent, buffer_names) == nullptr) goto done;
+    if (node_fs_watch_start(vm, roots[0], roots[3], persistent, recursive, buffer_names) == nullptr) goto done;
     node_fs_watch_listen(vm, roots[3], "change", roots[2]);
     if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
     if (mal_value_is_object(roots[4])) {
@@ -7487,8 +7727,9 @@ static MalValue node_fs_watch_promise(
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
     MalValue result = undefined;
-    bool persistent, buffer_names;
-    if (!node_fs_watch_install(vm) || !node_fs_watch_options(vm, roots[1], &persistent, &buffer_names, &roots[3])) {
+    bool persistent, recursive, buffer_names;
+    if (!node_fs_watch_install(vm)
+        || !node_fs_watch_options(vm, roots[1], &persistent, &recursive, &buffer_names, &roots[3])) {
         goto done;
     }
     roots[2] = mal_value_from_object(mal_object_new(&vm->heap,
@@ -7503,7 +7744,7 @@ static MalValue node_fs_watch_promise(
     MalPropertyDesc descriptor = {.value = self, .flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE};
     mal_object_define_own(mal_value_to_object(roots[2]),
         mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_ASYNC_ITERATOR), &descriptor);
-    NodeFsWatcher *state = node_fs_watch_start(vm, roots[0], roots[2], persistent, buffer_names);
+    NodeFsWatcher *state = node_fs_watch_start(vm, roots[0], roots[2], persistent, recursive, buffer_names);
     if (state == nullptr) goto done;
     state->iterator = true;
     if (mal_value_is_object(roots[3])) {
@@ -7907,9 +8148,6 @@ static MalValue node_fs_export(
         mal_gc_unroot(&root);
         return result;
     }
-    if (strcmp(name, "copyFileSync") == 0) {
-        return node_fs_make_fn(vm, fn_proto, "copyFileSync", 2, node_fs_copy_file_sync);
-    }
     if (strcmp(name, "cp") == 0) return node_fs_make_fn(vm, fn_proto, "cp", 4, node_fs_cp_callback);
     if (strcmp(name, "cpSync") == 0) return node_fs_make_fn(vm, fn_proto, "cpSync", 3, node_fs_cp_sync);
     if (strcmp(name, "glob") == 0) {
@@ -8227,7 +8465,6 @@ void mal_host_install_node_fs_promises(
     } operations[] = {
         {"appendFile", "appendFileSync", 2},
         {"chmod", "chmodSync", 2},
-        {"copyFile", "copyFileSync", 2},
         {"link", "linkSync", 2},
         {"lstat", "lstatSync", 1},
         {"mkdir", "mkdirSync", 1},
@@ -8322,6 +8559,7 @@ void mal_host_install_node_fs_promises(
         NodeFsJobKind kind;
     } jobs[] = {
         {"chown", 3, NODE_FS_JOB_CHOWN},
+        {"copyFile", 3, NODE_FS_JOB_COPY_FILE},
         {"lchown", 3, NODE_FS_JOB_LCHOWN},
         {"lutimes", 3, NODE_FS_JOB_LUTIMES},
         {"statfs", 1, NODE_FS_JOB_STATFS},
