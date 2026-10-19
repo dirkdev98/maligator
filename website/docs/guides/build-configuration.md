@@ -47,6 +47,14 @@ Callback and promise forms of filesystem `access`, `unlink`, and `rename` run th
 
 `mkdtemp` supports callback and promise forms, while `mkdtempSync` performs the same operation synchronously. All three honor encoding options, including Buffer paths, and preserve Node's option-getter order. Callback `fsync` and `fdatasync` run on the host worker pool; `fsyncSync` and `fdatasyncSync` flush directly. These APIs retain Node's descriptor validation, callback signatures, and construction behavior.
 
+`fs.cp`, `cpSync` and `node:fs/promises.cp` follow Node 26's copy algorithm, including `filter`, `force`, `errorOnExist`, `dereference`, `verbatimSymlinks`, `preserveTimestamps` and its error codes. Without a filter the whole copy runs on the host worker pool. `fs.glob`, `globSync` and `readdir` with `recursive` walk in Node's order. `fs.watch` uses kqueue on macOS and inotify on Linux; `recursive` is accepted, but only the top level is watched for now. `watchFile` polls `stat` on a timer.
+
+`node:net` servers accept connections through the host reactor and hand them out as ordinary `net.Socket` instances. `node:dgram` sends datagrams straight from the caller's buffers. Both resolve only numeric addresses and `localhost`, and a server cannot listen on a Unix socket path yet.
+
+`node:vm` runs scripts in the current context with the global semantics of indirect eval, and a `Script` parses once. A context from `createContext` is a separate realm: the sandbox's own enumerable properties are copied in before a run, and globals the script created or changed are copied back afterwards. Note that the sandbox's prototype chain, getters and deletions do not reach the script.
+
+`TransformStream`, `TextEncoderStream` and `TextDecoderStream` are available with either the web platform or the Node surface. `CompressionStream` and `DecompressionStream` need the Node surface, since the zlib codec ships with it. `util.MIMEType` and `MIMEParams` port Node's parser, including its quoting rules and error messages.
+
 ## Replace a module specifier
 
 ```typescript maligator.build.ts
