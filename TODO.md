@@ -155,13 +155,21 @@ The independent target boundary and current storage contract are recorded in
       runs about 9% slower on the JavaScript benchmark because its polymorphic hits
       take the out-of-line probe. Reading the GC poll flag through a VM pointer
       cost the same phase another 20%, so that change was reverted: the pointer
-      load stays in the loop where the thread-local address was hoisted.
+      load stays in the loop where the thread-local address was hoisted. Testing
+      the alternate shapes in a frameless leaf ahead of the full out-of-line probe
+      made the self-compile 0.8% slower.
 - [ ] Cut the cost of minor sweeps in large programs. The native self-compile
       allocates 71 GB, and minor collections spend 6 s sweeping 616 million young
       cells, almost all dead; skipping the finalizer's out-of-line calls for plain
       objects saved 1.5% of that, so touching each dead cell is the cost.
       Prefetching young cells four ahead made the parser workload's minor sweeps
       7% slower, and batching their byte accounting per block changed nothing.
+      A census of the parser workload's 21.8 million dead young cells counted
+      6.4 million arrays, 4.0 million closure environments, 3.5 million closures,
+      3.1 million plain objects and 2.6 million iterator objects. Small arrays now
+      keep their elements in their own cell, and Set construction, Set spreads and
+      object spreads no longer allocate iterators or key arrays; fewer dead cells,
+      from escape analysis or allocation-free iteration, are the remaining lever.
 - [ ] Stop fingerprinting every bytecode function with `JSON.stringify` to trust its
       safepoint root maps (452 ms of a 40 s Node frontend). Only functions that keep
       bytecode consume the trust. Profile builds also replace `profileSiteIds` in
@@ -651,6 +659,26 @@ contracts or investigates costs still visible after the string follow-ups.
       callee's metadata row gained 0.8%, while per-site private-load cache rows
       cost 1% (their lines displace the shared hint path's), and guarded direct
       calls at hinted method sites outside loops cost 0.65% with Node level.
+- [ ] Give large functions allocation-free iteration. Region selection spends the
+      program generated-code budget after about 1,700 of 28,700 discovery
+      opportunities in the self-compile, so functions such as render-native-c's
+      `emitBody` get no deferred iterator cursors or entry pairs: its 54 for-of
+      loops allocate an ArrayIterator each, and `entries()` loops a pair per step.
+      Raising the program budget fourfold made the self-compile 3.1% slower,
+      because the compiler then emits more C for its own input. Admit
+      the allocation-free plans by benefit rather than by a larger budget.
+- [ ] Stop allocating closures that are only called. render-native-c's
+      `emitInstruction` creates about 40 closures on entry to every call and uses
+      a few per case. Only the 20 of its 225 creation sites that capture lifting
+      rewrites are reduced to direct calls, and even those still allocate the
+      closure object the call passes as its callee. Sinking creation into the
+      cases that use it, or passing no object when the target never reads its
+      callee, would remove most of these allocations.
+- [ ] Publish compiled root frames only on paths that can reach a safepoint.
+      Small accessors such as the Core store's `instructionKind` and `checkedId`
+      link a root frame and clear their GC slots on entry although only their
+      throw paths collect; those accessors take about 7% of the self-compile's
+      samples.
 - [ ] Keep three receivers of a polymorphic method site in its own cache. The
       objects phase's `rules[i % 3].quote(order)` hits the site's one inherited row
       for one class in three; the others probe both banks of the shared stub
