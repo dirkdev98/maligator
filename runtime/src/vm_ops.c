@@ -2517,7 +2517,7 @@ mal_vm_property_try_load_static_remaining(
     MalInlineCache *ic
 ) {
     // Getter rows run user code, which only the rooted miss path may do.
-    if (ic->mode == MAL_IC_MODE_INHERITED_GETTER) {
+    if (ic->mode == MAL_IC_MODE_INHERITED_GETTER || ic->mode == MAL_IC_MODE_OWN_GETTER) {
         return (MalStaticPropertyProbeResult) { .hit = false };
     }
     // A method site that alternates between classes misses its one row for every class
@@ -5394,15 +5394,23 @@ bool mal_vm_own_table_try_load(
     return true;
 }
 
-static void mal_ic_record_own_table(MalInlineCache *ic, MalValue key, void *entry) {
-    mal_perf_ic_note_replacement(ic, MAL_IC_MODE_OWN_TABLE);
+static void mal_ic_record_own_entry(MalInlineCache *ic, u8 mode, MalValue key, void *entry) {
+    mal_perf_ic_note_replacement(ic, mode);
     mal_ic_detach_prototype_cache(ic);
     *ic = (MalInlineCache) {
         .key = key,
         .entry = entry,
-        .mode = MAL_IC_MODE_OWN_TABLE,
+        .mode = mode,
     };
-    MAL_PERF_COUNT(ic_load_own_table_fills);
+    if (mode == MAL_IC_MODE_OWN_GETTER) {
+        MAL_PERF_COUNT(ic_own_getter_fills);
+    } else {
+        MAL_PERF_COUNT(ic_load_own_table_fills);
+    }
+}
+
+static u8 mal_ic_own_entry_mode(MalPropertyFlags flags) {
+    return (flags & MAL_PROPERTY_ACCESSOR) ? MAL_IC_MODE_OWN_GETTER : MAL_IC_MODE_OWN_TABLE;
 }
 
 static void mal_ic_record_special(
@@ -5875,7 +5883,7 @@ bool mal_vm_probe_named_read_miss(
                     ic, true);
             } else if (own.entry != nullptr) {
                 if (object->shape->inline_count == 0)
-                    mal_ic_record_own_table(ic, key_value, own.entry);
+                    mal_ic_record_own_entry(ic, MAL_IC_MODE_OWN_TABLE, key_value, own.entry);
             } else {
                 i32 index = mal_shape_find(object->shape, key, MAL_SHAPE_FIND_LOAD_IC);
                 if (index >= 0)
@@ -6234,22 +6242,49 @@ bool mal_vm_probe_accessor_read_miss(
     return true;
 }
 
+/**
+ * Call the getter of a getter row that still holds for the receiver. Getters run user
+ * code, so these rows hit only on slow paths, after the caller rooted its operands.
+ */
+static bool mal_vm_getter_row_try_load(
+    MalVm *vm, MalValue object_value, MalValue key_value, const MalInlineCache *ic,
+    MalValue *out
+) {
+    MalValue getter;
+    if (ic->mode == MAL_IC_MODE_INHERITED_GETTER &&
+        mal_vm_inherited_accessor_row_holds(object_value, key_value, ic)) {
+        MAL_PERF_COUNT(ic_load_inherited_getter_hits);
+        getter = ic->value;
+    } else {
+        // Own table keys never repeat a shaped key only while the shape is empty.
+        const MalObject *object = ic->mode == MAL_IC_MODE_OWN_GETTER && key_value == ic->key
+            ? mal_vm_as_own_slot_object(object_value) : nullptr;
+        if (object == nullptr || object->shape->inline_count != 0 ||
+            mal_object_overflow(object) == nullptr ||
+            !mal_property_read_getter_hint(mal_object_overflow(object), ic->entry, key_value, &getter)) {
+            return false;
+        }
+        MAL_PERF_COUNT(ic_load_own_getter_hits);
+        if (!mal_value_is_callable(getter)) {
+            *out = MAL_VALUE_UNDEFINED;
+            return true;
+        }
+    }
+    MalCompletion completion = mal_vm_call_value(vm, getter, object_value, nullptr, 0);
+    if (completion.kind != MAL_COMPLETION_NORMAL) vm->completion = completion;
+    *out = completion.kind == MAL_COMPLETION_NORMAL ? completion.value : MAL_VALUE_UNDEFINED;
+    return true;
+}
+
 static MalValue mal_vm_op_load_property_ic_keyed(
     MalVm *vm, MalValue object_value, MalKey key, MalInlineCache *ic,
     bool static_probe_missed
 ) {
     MAL_PERF_COUNT(ic_load_fallbacks);
     MalValue key_value = key.value;
-    // Getters run user code, so their rows hit only here, after the caller rooted its operands.
-    if (ic->mode == MAL_IC_MODE_INHERITED_GETTER &&
-        mal_vm_inherited_accessor_row_holds(object_value, key_value, ic)) {
-        MAL_PERF_COUNT(ic_load_inherited_getter_hits);
-        MalCompletion completion = mal_vm_call_value(vm, ic->value, object_value, nullptr, 0);
-        if (completion.kind != MAL_COMPLETION_NORMAL) {
-            vm->completion = completion;
-            return MAL_VALUE_UNDEFINED;
-        }
-        return completion.value;
+    MalValue getter_value;
+    if (mal_vm_getter_row_try_load(vm, object_value, key_value, ic, &getter_value)) {
+        return getter_value;
     }
     MalValue special_value;
     if (!static_probe_missed &&
@@ -6411,12 +6446,11 @@ static MalValue mal_vm_op_load_property_ic_keyed(
             MalValue result = mal_value_new_undefined();
             MalPropertyLookup own = mal_property_lookup(mal_object_overflow(object), key);
             if (own.present) {
-                if (!(own.desc.flags & MAL_PROPERTY_ACCESSOR)) {
-                    if (mal_ic_key_is_stable_string(key_value)) {
-                        mal_ic_record_own_table(ic, key_value, own.entry);
-                    }
-                    return own.desc.value;
+                if (mal_ic_key_is_stable_string(key_value)) {
+                    mal_ic_record_own_entry(
+                        ic, mal_ic_own_entry_mode(own.desc.flags), key_value, own.entry);
                 }
+                if (!(own.desc.flags & MAL_PROPERTY_ACCESSOR)) return own.desc.value;
                 mal_vm_desc_read(vm, own.desc, object_value, &result);
             } else if (mal_object_prototype(object) != nullptr) {
                 mal_vm_get_property_with_receiver(
@@ -6433,9 +6467,12 @@ static MalValue mal_vm_op_load_property_ic_keyed(
             mal_object_overflow(object) != nullptr && key.kind == MAL_KEY_STRING &&
             mal_ic_key_is_stable_string(key_value)) {
             MalPropertyLookup own = mal_property_lookup(mal_object_overflow(object), key);
-            if (own.present && !(own.desc.flags & MAL_PROPERTY_ACCESSOR)) {
-                mal_ic_record_own_table(ic, key_value, own.entry);
-                return own.desc.value;
+            if (own.present) {
+                mal_ic_record_own_entry(
+                    ic, mal_ic_own_entry_mode(own.desc.flags), key_value, own.entry);
+                MalValue result = MAL_VALUE_UNDEFINED;
+                (void) mal_vm_desc_read(vm, own.desc, object_value, &result);
+                return result;
             }
         }
         MAL_PERF_COUNT(ic_load_plain_generic);
@@ -6633,13 +6670,7 @@ MalValue mal_vm_op_load_property_ic_static_miss(
     mal_gc_root(&span, roots, countof(roots));
     MalValue result;
     // A getter row skips the index-name check: an index never shares a string row.
-    if (ic->mode == MAL_IC_MODE_INHERITED_GETTER &&
-        mal_vm_inherited_accessor_row_holds(object_value, mal_value_from_string(name), ic)) {
-        MAL_PERF_COUNT(ic_load_inherited_getter_hits);
-        MalCompletion completion = mal_vm_call_value(vm, ic->value, object_value, nullptr, 0);
-        if (completion.kind != MAL_COMPLETION_NORMAL) vm->completion = completion;
-        result = completion.kind == MAL_COMPLETION_NORMAL ? completion.value : MAL_VALUE_UNDEFINED;
-    } else {
+    if (!mal_vm_getter_row_try_load(vm, object_value, mal_value_from_string(name), ic, &result)) {
         // The VM atom is already this property's canonical query key; only an
         // index-shaped name needs the INDEX kind.
         u32 index = 0;

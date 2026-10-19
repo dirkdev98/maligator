@@ -1521,6 +1521,7 @@ static void mal_perf_stats_print(void) {
         "inherited_reject_key=%llu inherited_reject_receiver=%llu "
         "inherited_reject_resolution=%llu inherited_reject_chain=%llu "
         "inherited_getter_fills=%llu load_inherited_getter_hits=%llu "
+        "own_getter_fills=%llu load_own_getter_hits=%llu "
         "prototype_epoch_invalidations=%llu prototype_epoch_define=%llu "
         "prototype_epoch_dictionary=%llu prototype_epoch_append=%llu "
         "prototype_epoch_delete=%llu prototype_epoch_reparent=%llu "
@@ -1569,6 +1570,8 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.ic_inherited_reject_chain,
         (unsigned long long) mal_perf_stats.ic_inherited_getter_fills,
         (unsigned long long) mal_perf_stats.ic_load_inherited_getter_hits,
+        (unsigned long long) mal_perf_stats.ic_own_getter_fills,
+        (unsigned long long) mal_perf_stats.ic_load_own_getter_hits,
         (unsigned long long) mal_perf_stats.prototype_epoch_invalidations,
         (unsigned long long) mal_perf_stats.prototype_epoch_define_invalidations,
         (unsigned long long) mal_perf_stats.prototype_epoch_dictionary_invalidations,

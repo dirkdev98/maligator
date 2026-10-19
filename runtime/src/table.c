@@ -741,22 +741,38 @@ bool mal_table_entry_matches(
         mal_table_key_equals(candidate, encoded, true);
 }
 
+static const MalTableEntry *mal_table_hinted_row(
+    const MalTable *table, const void *entry, MalValue key
+) {
+    if (entry == nullptr) return nullptr;
+    u32 index = mal_table_handle_index(entry);
+    if (index >= table->entry_count) return nullptr;
+    const MalTableEntry *candidate = &table->entries[index];
+    if (!mal_table_row_live(candidate) ||
+        (candidate->key & MAL_TABLE_IDENTITY_MASK) != mal_table_encode_key(mal_key_from_value(key))) {
+        return nullptr;
+    }
+    return candidate;
+}
+
 bool mal_table_read_entry_hint(
     const MalTable *table, const void *entry, MalValue key,
     MalValue *value, u8 *property_flags
 ) {
-    if (entry == nullptr) return false;
-    u32 index = mal_table_handle_index(entry);
-    if (index >= table->entry_count) return false;
-    const MalTableEntry *candidate = &table->entries[index];
-    if (!mal_table_row_live(candidate) ||
-        (candidate->key & MAL_TABLE_IDENTITY_MASK) != mal_table_encode_key(mal_key_from_value(key)) ||
-        mal_table_row_owned(candidate)) {
-        return false;
-    }
-    *value = candidate->payload.value;
-    *property_flags = (u8) ((candidate->key & MAL_TABLE_FLAGS_MASK) >> MAL_TABLE_FLAGS_SHIFT);
+    const MalTableEntry *row = mal_table_hinted_row(table, entry, key);
+    if (row == nullptr || mal_table_row_owned(row)) return false;
+    *value = row->payload.value;
+    *property_flags = (u8) ((row->key & MAL_TABLE_FLAGS_MASK) >> MAL_TABLE_FLAGS_SHIFT);
     return true;
+}
+
+void *mal_table_read_owned_entry_hint(
+    const MalTable *table, const void *entry, MalValue key, u8 *property_flags
+) {
+    const MalTableEntry *row = mal_table_hinted_row(table, entry, key);
+    if (row == nullptr || !mal_table_row_owned(row)) return nullptr;
+    *property_flags = (u8) ((row->key & MAL_TABLE_FLAGS_MASK) >> MAL_TABLE_FLAGS_SHIFT);
+    return row->payload.data;
 }
 
 void mal_table_iter_init(MalTableIter *iter, MalTable *table, MalTableIterKind kind) {

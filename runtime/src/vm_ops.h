@@ -1038,6 +1038,9 @@ static inline void mal_ic_set_recorded_prototype_epoch(MalInlineCache *ic, u64 e
 // An accessor probe's site resolved to something other than its accessor, so the probe
 // leaves every access to the site's own load or store.
 #define MAL_IC_MODE_ACCESSOR_DECLINED 16u
+// `entry` hints `key`'s own accessor in a dictionary receiver's table. Same-layout
+// receivers own different getter closures, so a hit reads the getter from the receiver.
+#define MAL_IC_MODE_OWN_GETTER 17u
 
 #define MAL_IC_MISSING_SHAPE_CHAIN 0u
 #define MAL_IC_MISSING_EXACT_CHAIN 1u
@@ -3681,7 +3684,8 @@ static inline __attribute__((always_inline)) bool mal_vm_probe_accessor_read(
         *out = ic->value;
         return true;
     }
-    return ic->mode != MAL_IC_MODE_ACCESSOR_DECLINED &&
+    // The site's own load fills own getter rows; re-resolving them here would only decline.
+    return ic->mode != MAL_IC_MODE_ACCESSOR_DECLINED && ic->mode != MAL_IC_MODE_OWN_GETTER &&
         mal_vm_probe_accessor_read_miss(vm, receiver, string_index, ic, setter, out);
 }
 

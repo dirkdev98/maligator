@@ -160,3 +160,14 @@ MalKey mal_property_entry_key(const MalTable *table, void *entry) {
 MalPropertyDesc mal_property_entry_desc(const MalTable *table, void *entry) {
     return mal_property_entry_read(table, entry);
 }
+
+bool mal_property_read_getter_hint(
+    const MalTable *table, const void *entry, MalValue key, MalValue *getter
+) {
+    u8 flags;
+    const MalPropertyAccessors *accessors =
+        mal_table_read_owned_entry_hint(table, entry, key, &flags);
+    if (accessors == nullptr || !(flags & MAL_PROPERTY_ACCESSOR)) return false;
+    *getter = accessors->getter;
+    return true;
+}

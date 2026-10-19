@@ -102,3 +102,7 @@ MalKey mal_property_entry_key(const MalTable *table, void *entry);
  * Read the descriptor payload for a previously resolved entry handle.
  */
 MalPropertyDesc mal_property_entry_desc(const MalTable *table, void *entry);
+
+// Read the getter of `key`'s accessor through a possibly stale entry handle.
+bool mal_property_read_getter_hint(
+    const MalTable *table, const void *entry, MalValue key, MalValue *getter);

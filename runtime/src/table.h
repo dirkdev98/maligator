@@ -200,6 +200,11 @@ bool mal_table_read_entry_hint(
     MalValue *value, u8 *property_flags
 );
 
+// The owned-data counterpart of mal_table_read_entry_hint; nullptr on any mismatch.
+void *mal_table_read_owned_entry_hint(
+    const MalTable *table, const void *entry, MalValue key, u8 *property_flags
+);
+
 /**
  * Initialize a live storage-order iterator.
  */
