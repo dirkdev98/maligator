@@ -575,11 +575,21 @@ static int mal_proc_write_from(
     }
 }
 
-/* Run the parent I/O loop until the child's pipes are drained. `launch_errno`
- * receives the child-reported launch failure (0 when the child exec'd cleanly). */
+static i64 mal_proc_now_ms(void) {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (i64) now.tv_sec * 1000 + now.tv_nsec / 1000000;
+}
+
+/* Run the parent I/O loop until the child's pipes are drained, or until it is
+ * killed for exceeding `timeout_ms` or `max_buffer`. `launch_errno` receives the
+ * child-reported launch failure (0 when the child exec'd cleanly). */
 static void mal_proc_pump(
-    const MalProcRequest *req, int in_fd, int out_fd, int err_fd, int errpipe, MalProcResult *out, int *launch_errno
+    const MalProcRequest *req, pid_t pid, int in_fd, int out_fd, int err_fd, int errpipe, MalProcResult *out,
+    int *launch_errno
 ) {
+    i64 deadline = req->timeout_ms > 0 ? mal_proc_now_ms() + req->timeout_ms : 0;
+    int kill_signal = req->kill_signal != 0 ? req->kill_signal : SIGTERM;
     if (in_fd >= 0 && (req->input == NULL || req->input_len == 0)) {
         close(in_fd); /* nothing to send: hand the child immediate EOF on stdin */
         in_fd = -1;
@@ -604,7 +614,10 @@ static void mal_proc_pump(
     byte errbuf[sizeof(int)];
     usize errbuf_len = 0;
 
-    while (in_fd >= 0 || out_fd >= 0 || err_fd >= 0 || errpipe >= 0) {
+    // A killed child's pipes are abandoned rather than drained, as libuv does:
+    // grandchildren may hold them open indefinitely.
+    bool killed = false;
+    while (!killed && (in_fd >= 0 || out_fd >= 0 || err_fd >= 0 || errpipe >= 0)) {
         struct pollfd pfds[4];
         int which[4];
         nfds_t n = 0;
@@ -629,12 +642,23 @@ static void mal_proc_pump(
             n++;
         }
 
-        int r = poll(pfds, n, -1);
+        int wait_ms = -1;
+        if (deadline != 0) {
+            i64 remaining = deadline - mal_proc_now_ms();
+            wait_ms = remaining <= 0 ? 0 : remaining > INT_MAX ? INT_MAX : (int) remaining;
+        }
+        int r = poll(pfds, n, wait_ms);
         if (r < 0) {
             if (errno == EINTR) {
                 continue;
             }
             out->io_errno = errno;
+            break;
+        }
+        if (r == 0 && deadline != 0 && mal_proc_now_ms() >= deadline) {
+            (void) kill(pid, kill_signal);
+            out->timed_out = true;
+            killed = true;
             break;
         }
 
@@ -685,6 +709,11 @@ static void mal_proc_pump(
                     break;
                 default:
                     break;
+            }
+            if (req->max_buffer != 0 && !killed && out->stdout_len + out->stderr_len > req->max_buffer) {
+                (void) kill(pid, kill_signal);
+                out->buffer_exceeded = true;
+                killed = true;
             }
         }
     }
@@ -776,8 +805,9 @@ int mal_proc_run(const MalProcRequest *req, MalProcResult *out) {
         err_pipe[1] = -1;
     }
 
+    out->pid = (int) pid;
     int launch_errno = 0;
-    mal_proc_pump(req, in_pipe[1], out_pipe[0], err_pipe[0], errp[0], out, &launch_errno);
+    mal_proc_pump(req, pid, in_pipe[1], out_pipe[0], err_pipe[0], errp[0], out, &launch_errno);
     /* Every fd handed to the pump is closed there once drained. */
     in_pipe[1] = out_pipe[0] = err_pipe[0] = errp[0] = -1;
 

@@ -46,6 +46,9 @@ typedef struct MalProcRequest {
     const byte *input;   /* bytes fed to stdin when stdin_mode is PIPE (may be NULL) */
     usize input_len;
     bool detached;       /* lead a new session, so the child outlives the parent's terminal */
+    i64 timeout_ms;      /* mal_proc_run kills the child after this long; <= 0 waits forever */
+    int kill_signal;     /* signal for timeout and max_buffer kills; 0 selects SIGTERM */
+    usize max_buffer;    /* mal_proc_run kills once stdout+stderr exceed this; 0 is unlimited */
 } MalProcRequest;
 
 /* How the child terminated plus any captured output. */
@@ -64,6 +67,10 @@ typedef struct MalProcResult {
     usize stderr_len;
 
     int io_errno; /* errno of a parent-side I/O / wait failure (0 when none) */
+
+    int pid;              /* the launched child's PID (0 before fork) */
+    bool timed_out;       /* killed because `timeout_ms` elapsed */
+    bool buffer_exceeded; /* killed because captured output exceeded `max_buffer` */
 } MalProcResult;
 
 /*

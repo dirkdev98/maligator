@@ -401,7 +401,7 @@
 	},
 	{
 		"file": "runtime/node_child_process.c",
-		"sha256": "89ea2c36544231daba4ba3c8ace3c01905cc061af0e7bbe9cda97e7f7dd62ff0"
+		"sha256": "e81142c6629f5ccf99a605495aa7376bf5ec3727bbd7a040c370531568a1ab60"
 	},
 	{
 		"file": "runtime/node_child_process.h",

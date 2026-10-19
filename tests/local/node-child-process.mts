@@ -143,7 +143,7 @@ const dual = errorFrom(() =>
 				`for(let i=0;i<${chunkCount};i++)fs.writeSync(2,b);` +
 				`for(let i=0;i<${chunkCount};i++)fs.writeSync(1,b);process.exit(9)`,
 		],
-		encoding,
+		{ ...encoding, stdio: "pipe", maxBuffer: Infinity },
 	),
 );
 check(

@@ -282,8 +282,8 @@ const MODULE: HostModuleSpec = {
 
 const CHILD_PROCESS: HostModuleSpec = {
 	id: "node:child_process",
-	named: ["exec", "execFile", "execFileSync", "fork", "spawn"],
-	hasDefault: false,
+	named: ["exec", "execFile", "execFileSync", "execSync", "fork", "spawn", "spawnSync"],
+	hasDefault: true,
 	installer: hostInstallerSymbol("node:child_process"),
 };
 
