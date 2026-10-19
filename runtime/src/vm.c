@@ -667,6 +667,8 @@ static void mal_vm_adopt_program_image(MalVm *vm, const MalRuntimeImage *program
     vm->live_runtime_image.source_positions = source_positions;
 	vm->function_cjs_module_bases =
 		calloc((usize) vm->function_capacity, sizeof(i32));
+    vm->call_entries = calloc((usize) vm->function_capacity, sizeof(uptr));
+    for (i32 i = 0; i < function_count; i++) mal_vm_refresh_call_entry(vm, i);
 }
 
 /** Phase 3: allocate execution stacks, caches, queues, and host-neutral state. */
@@ -1073,6 +1075,7 @@ void mal_vm_free(MalVm *vm) {
 #endif
     free(vm->cjs_registry);
     free(vm->function_cjs_module_bases);
+    free(vm->call_entries);
     mal_module_link_registry_free(&vm->module_links);
 
     // The VM-owned constant/template tables (the instruction/code-unit data their
@@ -1709,11 +1712,13 @@ i32 mal_vm_splice_runtime_image(MalVm *vm, const MalRuntimeImage *loaded) {
             realloc(vm->literal_shape_cache, sizeof(MalShape **) * capacity);
         vm->function_cjs_module_bases =
             realloc(vm->function_cjs_module_bases, sizeof(i32) * capacity);
+        vm->call_entries = realloc(vm->call_entries, sizeof(uptr) * capacity);
     }
     for (i32 i = fn_base; i < new_functions; i++) {
         vm->property_cache[i] = (MalPropertyCachePool){0};
         vm->literal_shape_cache[i] = nullptr;
         vm->function_cjs_module_bases[i] = cjs_module_base;
+        vm->call_entries[i] = 0;
     }
 
     // Spliced functions may execute guarded loads before their own literal
@@ -4565,6 +4570,14 @@ __attribute__((noinline)) static MalValue mal_vm_call_compiled_bound_this(
         nullptr);
 }
 
+void mal_vm_refresh_call_entry(MalVm *vm, i32 function_index) {
+    const MalFunction *function = &vm->runtime_image->functions[function_index];
+    MalCompiledFunction compiled = function->compiled;
+    // Compiled entries are 64-byte aligned, leaving bit 0 free for the mode.
+    vm->call_entries[function_index] = compiled == nullptr || function->is_class_constructor
+        ? 0 : (uptr) compiled | (function->strict ? 0 : 1);
+}
+
 MalValue mal_vm_call_cached_value(
     MalVm *vm,
     MalCallCache *cc,
@@ -4581,11 +4594,11 @@ MalValue mal_vm_call_cached_value(
     if (mal_value_is_function_object(callee)) {
         MalFunctionObject *function_object = mal_value_to_function_object(callee);
         i32 function_index = mal_function_object_function_index(function_object);
+#if MAL_REALMS || (MAL_PROFILE && MAL_PERF_STATS)
         if (function_index >= 0 && function_index < vm->runtime_image->function_count) {
             const MalFunction *function = &vm->runtime_image->functions[function_index];
             if (function->compiled != nullptr && !function->is_class_constructor) {
                 MAL_PERF_COUNT(call_cache_compiled_dispatches);
-#if MAL_REALMS || (MAL_PROFILE && MAL_PERF_STATS)
 #if MAL_PROFILE && MAL_PERF_STATS
                 i32 saved_profile_site = vm->profile_current_site_id;
 #endif
@@ -4603,17 +4616,23 @@ MalValue mal_vm_call_cached_value(
                 vm->profile_current_site_id = saved_profile_site;
 #endif
                 return value;
-#else
-                // Both paths are tail calls, so the dispatch keeps no frame of its own.
-                if (!function->strict && !mal_value_is_object(this_value))
-                    return mal_vm_call_compiled_bound_this(
-                        vm, function, callee, this_value, args, arg_count);
-                return function->compiled(
-                    vm, this_value, args, arg_count, mal_value_new_undefined(),
-                    function_object->creation_env, callee, nullptr);
-#endif
             }
         }
+#else
+        uptr entry = (u32) function_index < (u32) vm->runtime_image->function_count
+            ? vm->call_entries[function_index] : 0;
+        if (entry != 0) {
+            MAL_PERF_COUNT(call_cache_compiled_dispatches);
+            // Both paths are tail calls, so the dispatch keeps no frame of its own.
+            if ((entry & 1) != 0 && !mal_value_is_object(this_value))
+                return mal_vm_call_compiled_bound_this(
+                    vm, &vm->runtime_image->functions[function_index], callee, this_value,
+                    args, arg_count);
+            return ((MalCompiledFunction) (entry & ~(uptr) 1))(
+                vm, this_value, args, arg_count, mal_value_new_undefined(),
+                function_object->creation_env, callee, nullptr);
+        }
+#endif
     }
     return mal_vm_call_cached_value_fallback(vm, cc, callee, this_value, args, arg_count);
 }

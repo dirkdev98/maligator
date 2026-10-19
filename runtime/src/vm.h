@@ -1607,6 +1607,13 @@ typedef struct MalVm {
      * `vm->runtime_image->...` access paths. The *_capacity fields size that growth.
      */
     MalRuntimeImage live_runtime_image;
+    /**
+     * Per function: the compiled entry an ordinary call enters, with bit 0 set for a
+     * sloppy-mode callee, or 0 when calls take the general path. Generic dispatch reads
+     * this dense word instead of the function's metadata row; see
+     * mal_vm_refresh_call_entry.
+     */
+    uptr *call_entries;
     i32 function_capacity;
     i32 string_capacity;
     i32 bigint_capacity;
@@ -2573,6 +2580,9 @@ typedef struct MalCallCache {
 
 /** Cached [[Call]] whose completion is left in vm->completion; an ordinary compiled
  * callee is entered as a tail call, since it owns its activation. */
+/** Recompute a function's call_entries word after its compiled entry changes. */
+void mal_vm_refresh_call_entry(MalVm *vm, i32 function_index);
+
 MalValue mal_vm_call_cached_value(
     MalVm *vm,
     MalCallCache *cc,

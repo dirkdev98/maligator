@@ -44,6 +44,7 @@ bool mal_native_overlay_attach_fragment(
     for (i32 index = 0; index < function_count; index++) {
         if (overlay->entries[index] == nullptr) continue;
         functions[relocation->function_base + index].compiled = overlay->entries[index];
+        mal_vm_refresh_call_entry(vm, relocation->function_base + index);
     }
     return true;
 }
@@ -75,6 +76,7 @@ bool mal_compiler_native_attach(
         if (overlay->entries[index] == nullptr) continue;
         MalFunction *function = &functions[function_base + index];
         function->compiled = overlay->entries[index];
+        mal_vm_refresh_call_entry(vm, function_base + index);
     }
     return true;
 }
