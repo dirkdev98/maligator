@@ -154,4 +154,23 @@ describe("node:buffer text validation", () => {
 			rmSync(directory, { recursive: true, force: true });
 		}
 	});
+	it("matches Node's numeric accessors, search, fill and encoding methods", () => {
+		const directory = mkdtempSync(path.join(os.tmpdir(), "mal-buffer-api-"));
+		const fixture = "tests/local/node-buffer-api.mjs";
+		const expected = execFileSync(process.execPath, [fixture], { encoding: "utf8" });
+		try {
+			const pair = buildBackendPairFromOneProgramImage({
+				fixture,
+				name: "node-buffer-api",
+				nodeEnabled: true,
+				mainFile: HOST_MAIN,
+				outDir: directory,
+			});
+			for (const binary of [pair.compiled, pair.interpreted]) {
+				expect(runToStdout(binary)).toBe(expected);
+			}
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
 });

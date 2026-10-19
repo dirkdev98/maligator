@@ -1075,6 +1075,11 @@ void mal_text_encoding_globals_install(MalVm *vm, MalObject *global_this) {
         MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
 }
 
+void mal_base64_globals_install(MalVm *vm, MalObject *global_this) {
+    mal_intrinsic_define_method_n(vm, global_this, (const byte *) "btoa", 1, mal_web_btoa);
+    mal_intrinsic_define_method_n(vm, global_this, (const byte *) "atob", 1, mal_web_atob);
+}
+
 void mal_navigator_global_install(MalVm *vm, MalObject *global_this) {
     long processors = sysconf(_SC_NPROCESSORS_ONLN);
     MalValue value = mal_value_from_object(mal_intrinsic_new_object(vm));
@@ -1096,9 +1101,7 @@ void mal_web_globals_install(MalVm *vm, MalObject *global_this) {
     mal_text_encoding_globals_install(vm, global_this);
     mal_navigator_global_install(vm, global_this);
 
-    // btoa / atob.
-    mal_intrinsic_define_method_n(vm, global_this, (const byte *) "btoa", 1, mal_web_btoa);
-    mal_intrinsic_define_method_n(vm, global_this, (const byte *) "atob", 1, mal_web_atob);
+    mal_base64_globals_install(vm, global_this);
 
     // queueMicrotask.
     mal_intrinsic_define_method_n(vm, global_this, (const byte *) "queueMicrotask", 1,

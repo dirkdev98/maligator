@@ -393,7 +393,7 @@
 	},
 	{
 		"file": "runtime/node_buffer.c",
-		"sha256": "29d634979b56f1cd905b47070ae3a0c0c2573de0e9fbab9f51bceda5fa5e611d"
+		"sha256": "a016f84f4f4d7d60a44492f00b9728d56aa291d0593e5b912d1c101a1301572b"
 	},
 	{
 		"file": "runtime/node_buffer.h",
@@ -501,11 +501,11 @@
 	},
 	{
 		"file": "runtime/node_module.c",
-		"sha256": "4f5244f1fc7fce5b8fe4584f9f2b195d6f5e66b700de5c2569067f8e3e8d052d"
+		"sha256": "4ab9d34ff1174a309cb8c7209df82ce36e75053740bc352d8f55c56e4e04d9e4"
 	},
 	{
 		"file": "runtime/node_module.h",
-		"sha256": "92a82bf4f98265ada766f1bd7d4536ec717c77043859800b39d422230e51fd10"
+		"sha256": "fe84c55a797880666448611564e726fc8face6db2b5daa0023269a409e761dbf"
 	},
 	{
 		"file": "runtime/node_module_api.c",
@@ -669,7 +669,7 @@
 	},
 	{
 		"file": "runtime/personality.c",
-		"sha256": "d21b9d4bde18644f98e7ac29ed981af50248f37e41d8b19e9ac257deb42a42d9"
+		"sha256": "cf659b9c07e8f2f30a5b8bd33056e2da0720381f425f71e489c54697630913a3"
 	},
 	{
 		"file": "runtime/test262_agent.c",
@@ -685,7 +685,7 @@
 	},
 	{
 		"file": "runtime/web_globals.c",
-		"sha256": "7b3e041bf8207de9addbe744e69ae46b256d2dc86db19364dd3b43063f556407"
+		"sha256": "d9d5029486d1bb4614d2ae2110a1b976a29af5d1667bc500241b44dd1595a9fa"
 	},
 	{
 		"file": "runtime/web_headers.c",

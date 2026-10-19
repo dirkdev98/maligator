@@ -305,8 +305,8 @@ throws("invalid ArrayBuffer range rejects", RangeError, () => Buffer.from(backin
 throws("compare rejects non-byte views", TypeError, () =>
 	Buffer.compare(basic, new Uint16Array(1)),
 );
-throws("prototype receiver is branded", TypeError, () =>
-	Buffer.prototype.toString.call(new Uint8Array(1)),
+throws("prototype methods reject non-view receivers", TypeError, () =>
+	Buffer.prototype.toString.call({}),
 );
 throws("compare rejects negative ranges", RangeError, () =>
 	Buffer.from("a").compare(Buffer.from("a"), -1),

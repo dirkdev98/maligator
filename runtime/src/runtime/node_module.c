@@ -2,10 +2,14 @@
 
 #if MAL_NODE
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "heap_bigint.h"
+#include "heap_symbol.h"
+#include "intern_store.h"
 #include "intrinsics.h"
 #include "object.h"
 #include "object_ops.h"
@@ -13,6 +17,8 @@
 #include "heap_string.h"
 #include "posix_fs.h"
 #include "utf8.h"
+#include "value_ops.h"
+#include "vm_ops.h"
 
 MalValue mal_node_module_get_cached(MalVm *vm, const char *id) {
     MalValue registry = vm->intrinsics[MAL_INTRINSIC_NODE_BUILTIN_MODULES];
@@ -72,7 +78,16 @@ bool mal_node_module_install_cached(
 }
 
 void mal_node_throw_code(MalVm *vm, MalIntrinsic prototype, const char *message, const char *code) {
-    mal_vm_throw_error(vm, prototype, (const byte *) message);
+    MalString *text = mal_string_from_utf8(&vm->heap, (const byte *) message, strlen(message));
+    if (text == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return;
+    }
+    MalValue text_value = mal_value_from_string(text);
+    MalRootSpan text_root;
+    mal_gc_root(&text_root, &text_value, 1);
+    mal_vm_throw_error_value(vm, prototype, text_value);
+    mal_gc_unroot(&text_root);
     MalValue roots[] = {
         vm->completion.value, mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) code)),
     };
@@ -83,6 +98,205 @@ void mal_node_throw_code(MalVm *vm, MalIntrinsic prototype, const char *message,
             roots[1], MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
     }
     mal_gc_unroot(&root);
+}
+
+static void mal_node_copy_utf8(const MalString *string, char *out, usize capacity) {
+    usize length = 0;
+    byte *utf8 = mal_string_to_utf8((MalString *) string, &length);
+    if (utf8 == nullptr) {
+        out[0] = '\0';
+        return;
+    }
+    if (length >= capacity) {
+        length = capacity - 1;
+        while (length > 0 && ((u8) utf8[length] & 0xc0) == 0x80) length--;
+    }
+    memcpy(out, utf8, length);
+    out[length] = '\0';
+    free(utf8);
+}
+
+/* util.inspect of a number: String(n), except that -0 keeps its sign. */
+static void mal_node_number_text(MalVm *vm, f64 number, char *out, usize capacity) {
+    if (number == 0 && signbit(number)) {
+        snprintf(out, capacity, "-0");
+        return;
+    }
+    mal_node_copy_utf8(mal_ops_to_string(&vm->heap, mal_value_from_f64(number)), out, capacity);
+}
+
+/* lib/internal/errors.js addNumericalSeparator, applied to the String() form. */
+static void mal_node_numerical_separator(const char *text, char *out, usize capacity) {
+    usize length = strlen(text);
+    usize start = text[0] == '-' ? 1 : 0;
+    usize head = length;
+    while (head >= start + 4) head -= 3;
+    usize written = 0;
+    for (usize i = 0; i < length && written + 2 < capacity; i++) {
+        if (i >= head && (i - head) % 3 == 0) out[written++] = '_';
+        out[written++] = text[i];
+    }
+    out[written] = '\0';
+}
+
+static void mal_node_quote_string(MalVm *vm, MalString *string, bool truncate, char *out, usize capacity) {
+    usize length = mal_string_length(string);
+    bool truncated = truncate && length > 28;
+    MalString *shown = truncated ? mal_string_new_slice(&vm->heap, string, 0, 25) : string;
+    char text[256];
+    mal_node_copy_utf8(shown, text, sizeof text);
+    const char *suffix = truncated ? "..." : "";
+    if (strchr(text, '\'') == nullptr) {
+        snprintf(out, capacity, "'%s%s'", text, suffix);
+        return;
+    }
+    char escaped[512];
+    usize written = 0;
+    for (const char *c = text; *c != '\0' && written + 3 < sizeof escaped; c++) {
+        if (*c == '"' || *c == '\\') escaped[written++] = '\\';
+        escaped[written++] = *c;
+    }
+    escaped[written] = '\0';
+    snprintf(out, capacity, "\"%s%s\"", escaped, suffix);
+}
+
+static bool mal_node_get_ascii(MalVm *vm, MalValue object, const char *name, MalValue *out) {
+    if (mal_vm_get_property(vm, object, mal_intrinsic_string_key(vm, (const byte *) name), out)) {
+        return true;
+    }
+    vm->completion.kind = MAL_COMPLETION_NORMAL;
+    vm->completion.value = mal_value_new_undefined();
+    return false;
+}
+
+void mal_node_describe_received(MalVm *vm, MalValue value, char *out, usize capacity) {
+    char text[256];
+    if (mal_value_is_null(value)) {
+        snprintf(out, capacity, "null");
+    } else if (mal_value_is_undefined(value)) {
+        snprintf(out, capacity, "undefined");
+    } else if (mal_value_is_bigint(value)) {
+        mal_node_copy_utf8(mal_ops_to_string(&vm->heap, value), text, sizeof text);
+        snprintf(out, capacity, "type bigint (%sn)", text);
+    } else if (mal_ops_is_number(value)) {
+        mal_node_number_text(vm, mal_ops_number_as_f64(value), text, sizeof text);
+        snprintf(out, capacity, "type number (%s)", text);
+    } else if (mal_value_is_boolean(value)) {
+        snprintf(out, capacity, "type boolean (%s)", mal_value_is_truthy(value) ? "true" : "false");
+    } else if (mal_value_is_symbol(value)) {
+        MalString *description = mal_symbol_description(mal_value_to_symbol(value));
+        if (description == nullptr) text[0] = '\0';
+        else mal_node_copy_utf8(description, text, sizeof text);
+        snprintf(out, capacity, "type symbol (Symbol(%s))", text);
+    } else if (mal_value_is_string(value)) {
+        char quoted[300];
+        mal_node_quote_string(vm, mal_value_to_string(value), true, quoted, sizeof quoted);
+        snprintf(out, capacity, "type string (%s)", quoted);
+    } else if (mal_value_is_callable(value)) {
+        MalValue name = mal_value_new_undefined();
+        text[0] = '\0';
+        if (mal_node_get_ascii(vm, value, "name", &name) && mal_value_is_string(name)) {
+            mal_node_copy_utf8(mal_value_to_string(name), text, sizeof text);
+        }
+        snprintf(out, capacity, "function %s", text);
+    } else {
+        MalValue constructor = mal_value_new_undefined();
+        MalValue name = mal_value_new_undefined();
+        if (mal_node_get_ascii(vm, value, "constructor", &constructor)
+            && mal_value_is_truthy(constructor) && mal_value_is_object(constructor)
+            && mal_node_get_ascii(vm, constructor, "name", &name)) {
+            MalString *string = mal_value_is_string(name) ? mal_value_to_string(name)
+                : mal_ops_to_string(&vm->heap, name);
+            mal_node_copy_utf8(string, text, sizeof text);
+            snprintf(out, capacity, "an instance of %s", text);
+        } else {
+            snprintf(out, capacity, "[Object: null prototype] {}");
+        }
+    }
+}
+
+static void mal_node_describe_range_received(MalVm *vm, MalValue value, char *out, usize capacity) {
+    char text[256];
+    if (mal_ops_is_number(value)) {
+        f64 number = mal_ops_number_as_f64(value);
+        mal_node_number_text(vm, number, text, sizeof text);
+        if (isfinite(number) && trunc(number) == number && fabs(number) > 4294967296.0) {
+            mal_node_numerical_separator(text, out, capacity);
+        } else {
+            snprintf(out, capacity, "%s", text);
+        }
+    } else if (mal_value_is_bigint(value)) {
+        mal_node_copy_utf8(mal_ops_to_string(&vm->heap, value), text, sizeof text);
+        i128 number = mal_bigint_value(mal_value_to_bigint(value));
+        char grouped[300];
+        if (number > ((i128) 1 << 32) || number < -((i128) 1 << 32)) {
+            mal_node_numerical_separator(text, grouped, sizeof grouped);
+        } else {
+            snprintf(grouped, sizeof grouped, "%s", text);
+        }
+        snprintf(out, capacity, "%sn", grouped);
+    } else if (mal_value_is_string(value)) {
+        mal_node_quote_string(vm, mal_value_to_string(value), false, out, capacity);
+    } else {
+        mal_node_describe_received(vm, value, out, capacity);
+    }
+}
+
+void mal_node_throw_invalid_arg_type(
+    MalVm *vm, const char *name, const char *expected, MalValue actual) {
+    char received[320];
+    mal_node_describe_received(vm, actual, received, sizeof received);
+    char message[640];
+    usize name_length = strlen(name);
+    if (name_length >= 9 && strcmp(name + name_length - 9, " argument") == 0) {
+        snprintf(message, sizeof message, "The %s must be %s. Received %s", name, expected, received);
+    } else {
+        snprintf(message, sizeof message, "The \"%s\" %s must be %s. Received %s", name,
+            strchr(name, '.') != nullptr ? "property" : "argument", expected, received);
+    }
+    mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, message, "ERR_INVALID_ARG_TYPE");
+}
+
+void mal_node_throw_out_of_range(MalVm *vm, const char *name, const char *range, MalValue actual) {
+    char received[320];
+    mal_node_describe_range_received(vm, actual, received, sizeof received);
+    char message[640];
+    snprintf(message, sizeof message,
+        "The value of \"%s\" is out of range. It must be %s. Received %s", name, range, received);
+    mal_node_throw_code(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, message, "ERR_OUT_OF_RANGE");
+}
+
+MalValue mal_node_inspect_custom_symbol(MalVm *vm) {
+    MalString *key = mal_intrinsic_ascii(vm, (const byte *) "nodejs.util.inspect.custom");
+    MalSymbol *symbol = mal_symbol_registry_find(&vm->symbol_registry, key);
+    if (symbol == nullptr) {
+        symbol = mal_symbol_registry_insert(&vm->symbol_registry, mal_symbol_new(&vm->heap, key));
+    }
+    return mal_value_from_symbol(symbol);
+}
+
+bool mal_node_validate_number(MalVm *vm, MalValue value, const char *name) {
+    if (mal_ops_is_number(value)) return true;
+    mal_node_throw_invalid_arg_type(vm, name, "of type number", value);
+    return false;
+}
+
+bool mal_node_validate_integer(
+    MalVm *vm, MalValue value, const char *name, f64 min, f64 max, f64 *out) {
+    if (!mal_node_validate_number(vm, value, name)) return false;
+    f64 number = mal_ops_number_as_f64(value);
+    if (!isfinite(number) || trunc(number) != number) {
+        mal_node_throw_out_of_range(vm, name, "an integer", value);
+        return false;
+    }
+    if (number < min || number > max) {
+        char range[96];
+        snprintf(range, sizeof range, ">= %.17g && <= %.17g", min, max);
+        mal_node_throw_out_of_range(vm, name, range, value);
+        return false;
+    }
+    *out = number;
+    return true;
 }
 
 static void mal_node_define_utf8(MalVm *vm, MalObject *object, const char *name, const char *text) {
