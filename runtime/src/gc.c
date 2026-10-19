@@ -1042,10 +1042,9 @@ void mal_gc_set_mutator_waker(MalVm *vm, void (*wake)(void *), void *data) {
 /** Shade a cell grey: a managed, non-immortal cell reached for the first time.
  * In verify mode it instead asserts the cell is already marked — a reachable but
  * unmarked cell means a trace edge was missed. */
-static void mal_gc_shade_in(MalGcThreadContext *ctx, MalHeapHeader *cell) {
-    if (cell == nullptr || cell->storage == MAL_HEAP_STORAGE_IMMORTAL) {
-        return;
-    }
+static __attribute__((noinline)) void mal_gc_shade_slow(
+    MalGcThreadContext *ctx, MalHeapHeader *cell
+) {
     if (ctx->verifying) {
         if (cell->mark & MAL_MARK_FREE) {
             fprintf(stderr, "[gc verify] live cell (source type=%d) points to a freed "
@@ -1092,6 +1091,28 @@ static void mal_gc_shade_in(MalGcThreadContext *ctx, MalHeapHeader *cell) {
     }
 #endif
     mal_gc_grey_push_in(ctx, cell);
+}
+
+/* Most traced edges reach cells this collection already marked; they return without
+ * a call. A freed cell never looks marked, so the slow path still reports it. */
+static inline __attribute__((always_inline)) void mal_gc_shade_in(
+    MalGcThreadContext *ctx, MalHeapHeader *cell
+) {
+    if (cell == nullptr || cell->storage == MAL_HEAP_STORAGE_IMMORTAL) {
+        return;
+    }
+    if (!ctx->verifying) {
+#if defined(__wasi__)
+        u8 mark = cell->mark;
+#else
+        u8 mark = atomic_load_explicit(&cell->mark, memory_order_relaxed);
+#endif
+        bool marked = ctx->gc->major_collection
+            ? mal_heap_mark_is_current(mark, ctx->vm->heap.mark_color)
+            : mal_heap_mark_is_old(mark);
+        if (marked) return;
+    }
+    mal_gc_shade_slow(ctx, cell);
 }
 
 static void mal_gc_mark_value_in(MalGcThreadContext *ctx, MalValue value) {
