@@ -1,4 +1,4 @@
-// Portions derived from Node.js lib/internal/streams/compose.js, lib/internal/streams/duplex.js (MIT); see THIRD_PARTY_NOTICES.md.
+// Portions derived from Node.js lib/internal/streams/compose.js, lib/internal/streams/duplex.js, lib/internal/streams/readable.js, lib/internal/streams/writable.js (MIT); see THIRD_PARTY_NOTICES.md.
 #include "node_stream.h"
 
 #if MAL_NODE
@@ -19,6 +19,7 @@
 #include "node_events.h"
 #include "node_module.h"
 #include "node_string_decoder.h"
+#include "utf8.h"
 #include "web_readable_stream_object.h"
 #include "object.h"
 #include "object_ops.h"
@@ -270,7 +271,6 @@ static void stream_init_writable(MalVm *vm, MalValue receiver, MalValue options,
     stream_set(vm, roots[0], "writable", mal_value_new_boolean(true));
     stream_set(vm, roots[0], "writableEnded", mal_value_new_boolean(false));
     stream_set(vm, roots[0], "writableFinished", mal_value_new_boolean(false));
-    stream_set(vm, roots[0], "writableObjectMode", mal_value_new_boolean(object_mode));
     mal_gc_unroot(&root);
 }
 
@@ -294,6 +294,11 @@ static void stream_init_kind(
     stream_init_events(vm, receiver);
     stream_set(vm, receiver, "destroyed", mal_value_new_boolean(false));
     stream_set(vm, receiver, "_malStreamKind", mal_value_from_i32(kind));
+    // Node's autoDestroy defaults to true; only the opt-out is recorded.
+    MalValue auto_destroy = mal_value_is_object(options) ? stream_option(vm, options, "autoDestroy") : mal_value_new_undefined();
+    if (mal_value_is_boolean(auto_destroy) && !mal_value_to_boolean(auto_destroy)) {
+        stream_set(vm, receiver, "_malNoAutoDestroy", mal_value_new_boolean(true));
+    }
     if (kind == STREAM_READABLE || kind == STREAM_DUPLEX || kind == STREAM_TRANSFORM) {
         stream_init_readable(vm, receiver, options, kind != STREAM_READABLE);
     }
@@ -434,6 +439,10 @@ static void stream_iterator_drain(MalVm *vm, MalValue receiver);
 static bool stream_iterator_demand(MalVm *vm, MalValue receiver);
 static i32 stream_readable_bytes(MalVm *vm, MalValue receiver, MalValue chunk);
 static void stream_schedule_pull(MalVm *vm, MalValue receiver);
+static i32 stream_i32_own(MalVm *vm, MalValue receiver, const char *name, i32 fallback);
+static void stream_emit_readable(MalVm *vm, MalValue receiver);
+static void stream_emit_readable_now(MalVm *vm, MalValue receiver);
+static void stream_maybe_read_more(MalVm *vm, MalValue receiver);
 static void stream_finish_if_ready(MalVm *vm, MalValue receiver);
 static void stream_process_writes(MalVm *vm, MalValue receiver);
 static MalValue stream_run_task(
@@ -445,6 +454,9 @@ enum {
     STREAM_TASK_FINISH,
     STREAM_TASK_END_READABLE,
     STREAM_TASK_PULL,
+    STREAM_TASK_EMIT_READABLE,
+    STREAM_TASK_READ_MORE,
+    STREAM_TASK_READ_ZERO,
 };
 
 static void stream_enqueue_task(
@@ -501,7 +513,14 @@ static void stream_resume_core(MalVm *vm, MalValue receiver) {
         return;
     }
     bool was_paused = stream_truthy_own(vm, receiver, "_malPaused");
+    MalValue readable_state = stream_own(vm, receiver, "_readableState");
     stream_set(vm, receiver, "_malPaused", mal_value_new_boolean(false));
+    // resume(): state.flowing = !state.readableListening.
+    if (stream_truthy_own(vm, readable_state, "readableListening")) {
+        if (was_paused) stream_emit(vm, receiver, "resume", nullptr, 0);
+        return;
+    }
+    stream_set(vm, readable_state, "flowingFalse", mal_value_new_boolean(false));
     stream_set(vm, receiver, "_malFlowing", mal_value_new_boolean(true));
     if (was_paused) {
         stream_emit(vm, receiver, "resume", nullptr, 0);
@@ -772,6 +791,8 @@ static void stream_push_chunk(MalVm *vm, MalValue receiver, MalValue state, MalV
         i32 added = stream_readable_bytes(vm, receiver, chunk);
         stream_set(vm, state, "length", mal_value_from_i32(added > INT32_MAX - length ? INT32_MAX : length + added));
         mal_gc_unroot(&root);
+        if (stream_truthy_own(vm, state, "needReadable")) stream_emit_readable(vm, receiver);
+        stream_maybe_read_more(vm, receiver);
         stream_iterator_drain(vm, receiver);
     }
 }
@@ -811,9 +832,19 @@ static MalValue stream_push(
         }
     }
     if (mal_value_is_null(chunk)) {
+        bool was_ended = stream_truthy_own(vm, state, "ended");
         stream_set(vm, state, "ended", mal_value_new_boolean(true));
         if (stream_truthy_own(vm, receiver, "_malFlowing")) {
             stream_readable_drain(vm, receiver);
+        } else if (!was_ended && stream_truthy_own(vm, state, "readableListening")) {
+            // onEofChunk: inside a synchronous _read the 'readable' event waits a tick.
+            if (stream_truthy_own(vm, state, "sync")) {
+                stream_emit_readable(vm, receiver);
+            } else {
+                stream_set(vm, state, "needReadable", mal_value_new_boolean(false));
+                stream_set(vm, state, "emittedReadable", mal_value_new_boolean(true));
+                stream_emit_readable_now(vm, receiver);
+            }
         }
         stream_iterator_drain(vm, receiver);
         return mal_value_new_boolean(false);
@@ -842,6 +873,7 @@ static MalValue stream_pause(
     }
     stream_set(vm, receiver, "_malPaused", mal_value_new_boolean(true));
     stream_set(vm, receiver, "_malFlowing", mal_value_new_boolean(false));
+    stream_set(vm, stream_own(vm, receiver, "_readableState"), "flowingFalse", mal_value_new_boolean(true));
     stream_emit(vm, receiver, "pause", nullptr, 0);
     return receiver;
 }
@@ -948,8 +980,25 @@ static MalValue stream_on(
         && mal_value_is_string(args[0])) {
         MalString *event = mal_value_to_string(args[0]);
         MalString *data = mal_intrinsic_ascii(vm, (const byte *) "data");
+        MalString *readable = mal_intrinsic_ascii(vm, (const byte *) "readable");
+        MalValue state = stream_own(vm, receiver, "_readableState");
         if (mal_string_equals(event, data) && stream_is_readable(vm, receiver)) {
-            stream_resume_core(vm, receiver);
+            // Node resumes on 'data' unless flowing was set false by pause() or a 'readable' listener.
+            if (!stream_truthy_own(vm, state, "flowingFalse")) stream_resume_core(vm, receiver);
+        } else if (mal_string_equals(event, readable) && stream_is_readable(vm, receiver)
+            && !stream_truthy_own(vm, state, "endEmitted") && !stream_truthy_own(vm, state, "readableListening")) {
+            stream_set(vm, state, "readableListening", mal_value_new_boolean(true));
+            stream_set(vm, state, "needReadable", mal_value_new_boolean(true));
+            stream_set(vm, state, "flowingFalse", mal_value_new_boolean(true));
+            stream_set(vm, receiver, "_malFlowing", mal_value_new_boolean(false));
+            stream_set(vm, state, "emittedReadable", mal_value_new_boolean(false));
+            if (stream_i32_own(vm, state, "length", 0) > 0) {
+                stream_emit_readable(vm, receiver);
+            } else if (!stream_truthy_own(vm, receiver, "_malReading")) {
+                // nReadingNextTick: one read(0) on the next tick.
+                stream_enqueue_task(vm, STREAM_TASK_READ_ZERO, receiver, mal_value_new_undefined(),
+                    mal_value_new_undefined(), mal_value_new_undefined(), 0, 0);
+            }
         }
     }
     return added.value;
@@ -1596,6 +1645,22 @@ static MalValue stream_write(
     return mal_value_new_boolean(below);
 }
 
+/* finish()/endReadableNT autoDestroy: the other side must be done or absent. An explicit
+ * _malAutoDestroyAfterEnd/_malAutoDestroyAfterFinish flag (fs, child_process) wins. */
+static bool stream_auto_destroy_after(MalVm *vm, MalValue receiver, bool after_finish) {
+    MalValue explicit_flag = stream_own(vm, receiver, after_finish ? "_malAutoDestroyAfterFinish" : "_malAutoDestroyAfterEnd");
+    if (mal_value_is_boolean(explicit_flag)) return mal_value_to_boolean(explicit_flag);
+    if (stream_truthy_own(vm, receiver, "_malNoAutoDestroy")) return false;
+    if (after_finish) {
+        MalValue state = stream_own(vm, receiver, "_readableState");
+        return !mal_value_is_object(state) || stream_truthy_own(vm, state, "endEmitted")
+            || !stream_truthy_own(vm, receiver, "readable");
+    }
+    MalValue state = stream_own(vm, receiver, "_writableState");
+    return !mal_value_is_object(state) || stream_truthy_own(vm, state, "finished")
+        || !stream_truthy_own(vm, receiver, "writable");
+}
+
 static void stream_emit_finish(MalVm *vm, MalValue receiver) {
     if (stream_truthy_own(vm, receiver, "writableFinished")) {
         return;
@@ -1609,8 +1674,8 @@ static void stream_emit_finish(MalVm *vm, MalValue receiver) {
     if (vm->completion.kind != MAL_COMPLETION_THROW) {
         stream_emit(vm, receiver, "finish", nullptr, 0);
     }
-    if (vm->completion.kind != MAL_COMPLETION_THROW
-        && stream_truthy_own(vm, receiver, "_malAutoDestroyAfterFinish")) {
+    if (vm->completion.kind != MAL_COMPLETION_THROW && !stream_truthy_own(vm, receiver, "destroyed")
+        && stream_auto_destroy_after(vm, receiver, true)) {
         stream_destroy(vm, receiver, nullptr, 0, mal_value_new_undefined(), mal_value_new_undefined());
     }
 }
@@ -1712,6 +1777,12 @@ static void stream_finish_if_ready(MalVm *vm, MalValue receiver) {
         }
         mal_gc_unroot(&root);
     }
+    // prefinish(): once _final (or a Transform's flush) has completed, before 'finish'.
+    if (!stream_truthy_own(vm, receiver, "_malPrefinished")) {
+        stream_set(vm, receiver, "_malPrefinished", mal_value_new_boolean(true));
+        stream_emit(vm, receiver, "prefinish", nullptr, 0);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) return;
+    }
     stream_schedule_finish(vm, receiver);
 }
 
@@ -1768,6 +1839,286 @@ static MalValue stream_end(
     return receiver;
 }
 
+/* Readable.prototype.read and the 'readable' event, translated from Node 26
+ * lib/internal/streams/readable.js (read, howMuchToRead, fromList, emitReadable,
+ * maybeReadMore) over this file's queue (_malReadableQueue from _malReadableIndex). */
+static u32 stream_queue_start(MalVm *vm, MalValue receiver) {
+    i32 index = stream_i32_own(vm, receiver, "_malReadableIndex", 0);
+    return index > 0 ? (u32) index : 0;
+}
+
+static u32 stream_queue_count(MalVm *vm, MalValue receiver) {
+    MalValue queue = stream_own(vm, receiver, "_malReadableQueue");
+    if (!mal_value_is_array_object(queue)) return 0;
+    u32 length = mal_array_object_length(mal_value_to_array_object(queue));
+    u32 start = stream_queue_start(vm, receiver);
+    return length > start ? length - start : 0;
+}
+
+static MalValue stream_queue_shift(MalVm *vm, MalValue receiver) {
+    MalValue queue = stream_own(vm, receiver, "_malReadableQueue");
+    if (!mal_value_is_array_object(queue)) return mal_value_new_undefined();
+    MalArrayObject *array = mal_value_to_array_object(queue);
+    u32 start = stream_queue_start(vm, receiver);
+    if (start >= mal_array_object_length(array)) return mal_value_new_undefined();
+    MalValue chunk = stream_array_at(array, start);
+    MalRootSpan root;
+    mal_gc_root(&root, &chunk, 1);
+    mal_array_object_store(array, mal_key_index(start), mal_value_new_undefined());
+    if (start + 1 >= mal_array_object_length(array)) {
+        stream_set(vm, receiver, "_malReadableQueue", stream_new_array(vm));
+        stream_set(vm, receiver, "_malReadableIndex", mal_value_from_i32(0));
+    } else {
+        stream_set(vm, receiver, "_malReadableIndex", mal_value_from_i32((i32) start + 1));
+    }
+    mal_gc_unroot(&root);
+    return chunk;
+}
+
+static void stream_queue_unshift(MalVm *vm, MalValue receiver, MalValue chunk) {
+    MalValue roots[] = {chunk, stream_own(vm, receiver, "_malReadableQueue")};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    u32 start = stream_queue_start(vm, receiver);
+    if (start > 0) {
+        mal_array_object_store(mal_value_to_array_object(roots[1]), mal_key_index(start - 1), roots[0]);
+        stream_set(vm, receiver, "_malReadableIndex", mal_value_from_i32((i32) start - 1));
+    } else {
+        MalValue fresh = stream_new_array(vm);
+        MalRootSpan fresh_root;
+        mal_gc_root(&fresh_root, &fresh, 1);
+        mal_array_object_store(mal_value_to_array_object(fresh), mal_key_index(0), roots[0]);
+        u32 length = mal_value_is_array_object(roots[1]) ? mal_array_object_length(mal_value_to_array_object(roots[1])) : 0;
+        for (u32 i = 0; i < length; i++) {
+            mal_array_object_store(mal_value_to_array_object(fresh), mal_key_index(i + 1),
+                stream_array_at(mal_value_to_array_object(roots[1]), i));
+        }
+        stream_set(vm, receiver, "_malReadableQueue", fresh);
+        mal_gc_unroot(&fresh_root);
+    }
+    mal_gc_unroot(&root);
+}
+
+static i32 stream_state_i32(MalVm *vm, MalValue receiver, const char *name, i32 fallback) {
+    return stream_i32_own(vm, stream_own(vm, receiver, "_readableState"), name, fallback);
+}
+
+static void stream_state_flag(MalVm *vm, MalValue receiver, const char *name, bool value) {
+    stream_set(vm, stream_own(vm, receiver, "_readableState"), name, mal_value_new_boolean(value));
+}
+
+static bool stream_state_truthy(MalVm *vm, MalValue receiver, const char *name) {
+    return stream_truthy_own(vm, stream_own(vm, receiver, "_readableState"), name);
+}
+
+static void stream_emit_readable(MalVm *vm, MalValue receiver) {
+    stream_state_flag(vm, receiver, "needReadable", false);
+    if (stream_state_truthy(vm, receiver, "emittedReadable")) return;
+    stream_state_flag(vm, receiver, "emittedReadable", true);
+    stream_enqueue_task(vm, STREAM_TASK_EMIT_READABLE, receiver, mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(), 0, 0);
+}
+
+static void stream_emit_readable_now(MalVm *vm, MalValue receiver) {
+    i32 length = stream_state_i32(vm, receiver, "length", 0);
+    bool ended = stream_state_truthy(vm, receiver, "ended");
+    if (!stream_truthy_own(vm, receiver, "destroyed") && !mal_value_is_object(stream_own(vm, receiver, "_malStreamError"))
+        && (length > 0 || ended)) {
+        stream_emit(vm, receiver, "readable", nullptr, 0);
+        stream_state_flag(vm, receiver, "emittedReadable", false);
+    }
+    bool flowing = stream_truthy_own(vm, receiver, "_malFlowing");
+    stream_state_flag(vm, receiver, "needReadable", !flowing && !stream_state_truthy(vm, receiver, "ended")
+        && stream_state_i32(vm, receiver, "length", 0) <= stream_state_i32(vm, receiver, "highWaterMark", 16384));
+}
+
+static void stream_maybe_read_more(MalVm *vm, MalValue receiver) {
+    if (!stream_state_truthy(vm, receiver, "readableListening") || stream_state_truthy(vm, receiver, "readingMore")) return;
+    stream_state_flag(vm, receiver, "readingMore", true);
+    stream_enqueue_task(vm, STREAM_TASK_READ_MORE, receiver, mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(), 0, 0);
+}
+
+static i32 stream_how_much_to_read(MalVm *vm, MalValue receiver, f64 n) {
+    i32 length = stream_state_i32(vm, receiver, "length", 0);
+    bool ended = stream_state_truthy(vm, receiver, "ended");
+    if (n <= 0 || (length == 0 && ended)) return 0;
+    if (stream_state_truthy(vm, receiver, "objectMode")) return 1;
+    if (isnan(n)) {
+        bool decoder = mal_value_is_object(stream_own(vm, stream_own(vm, receiver, "_readableState"), "decoder"));
+        if ((!decoder || stream_truthy_own(vm, receiver, "_malFlowing")) && length > 0) {
+            MalValue queue = stream_own(vm, receiver, "_malReadableQueue");
+            MalValue first = stream_array_at(mal_value_to_array_object(queue), stream_queue_start(vm, receiver));
+            return stream_readable_bytes(vm, receiver, first);
+        }
+        return length;
+    }
+    if (n <= length) return (i32) n;
+    return ended ? length : 0;
+}
+
+static MalValue stream_buffer_call(MalVm *vm, MalValue target, const char *name, const MalValue *args, i32 argc) {
+    MalCompletion completion = stream_call_method(vm, target, name, args, argc);
+    return completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : completion.value;
+}
+
+/* fromList: n bytes (or characters with a decoder), or one object in objectMode. */
+static MalValue stream_from_list(MalVm *vm, MalValue receiver, i32 n) {
+    if (stream_state_truthy(vm, receiver, "objectMode")) return stream_queue_shift(vm, receiver);
+    bool strings = mal_value_is_object(stream_own(vm, stream_own(vm, receiver, "_readableState"), "decoder"));
+    MalValue roots[] = {receiver, stream_new_array(vm), mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    i32 remaining = n;
+    u32 parts = 0;
+    while (remaining > 0 && stream_queue_count(vm, roots[0]) > 0) {
+        roots[2] = stream_queue_shift(vm, roots[0]);
+        i32 size = stream_readable_bytes(vm, roots[0], roots[2]);
+        if (size > remaining) {
+            MalValue split[] = {mal_value_from_i32(0), mal_value_from_i32(remaining)};
+            if (mal_value_is_string(roots[2])) {
+                MalString *text = mal_value_to_string(roots[2]);
+                roots[3] = mal_value_from_string(mal_string_new_slice(&vm->heap, text, (usize) remaining,
+                    mal_string_length(text) - (usize) remaining));
+                stream_queue_unshift(vm, roots[0], roots[3]);
+                roots[2] = mal_value_from_string(mal_string_new_slice(&vm->heap, mal_value_to_string(roots[2]), 0,
+                    (usize) remaining));
+            } else {
+                roots[3] = stream_buffer_call(vm, roots[2], "slice", &split[1], 1);
+                stream_queue_unshift(vm, roots[0], roots[3]);
+                roots[2] = stream_buffer_call(vm, roots[2], "slice", split, 2);
+            }
+            size = remaining;
+        }
+        mal_array_object_store(mal_value_to_array_object(roots[1]), mal_key_index(parts++), roots[2]);
+        remaining -= size;
+        if (vm->completion.kind == MAL_COMPLETION_THROW) break;
+    }
+    MalValue result = mal_value_new_null();
+    if (parts == 1) {
+        result = stream_array_at(mal_value_to_array_object(roots[1]), 0);
+    } else if (parts > 1 && strings) {
+        MalTextBuffer text = {0};
+        for (u32 i = 0; i < parts; i++) {
+            MalValue part = stream_array_at(mal_value_to_array_object(roots[1]), i);
+            if (mal_value_is_string(part)) mal_text_buffer_append_string(&text, mal_value_to_string(part));
+        }
+        result = mal_value_from_string(mal_text_buffer_finish(&vm->heap, &text));
+    } else if (parts > 1) {
+        MalValue args[] = {roots[1], mal_value_from_i32(n - remaining)};
+        result = stream_buffer_call(vm, vm->intrinsics[MAL_INTRINSIC_NODE_BUFFER_CONSTRUCTOR], "concat", args, 2);
+    }
+    mal_gc_unroot(&root);
+    return result;
+}
+
+static MalValue stream_read_core(MalVm *vm, MalValue receiver, MalValue n_value) {
+    MalValue roots[] = {receiver, stream_own(vm, receiver, "_readableState"), mal_value_new_undefined(),
+        mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalValue result = mal_value_new_null();
+    f64 n = NAN;
+    if (!mal_value_is_undefined(n_value)) {
+        if (mal_ops_is_number(n_value) && mal_ops_number_as_f64(n_value) == trunc(mal_ops_number_as_f64(n_value))) {
+            n = mal_ops_number_as_f64(n_value);
+        } else {
+            // Number.parseInt(n, 10)
+            MalString *text;
+            if (!mal_vm_to_string(vm, n_value, &text)) goto done;
+            usize length = 0;
+            byte *utf8 = mal_string_to_utf8(text, &length);
+            char *end = nullptr;
+            n = utf8 == nullptr ? NAN : strtod(utf8, &end);
+            if (utf8 != nullptr && (end == utf8 || !isfinite(n))) n = NAN;
+            else if (!isnan(n)) n = trunc(n);
+            free(utf8);
+        }
+    }
+    f64 n_orig = n;
+    i32 hwm = stream_i32_own(vm, roots[1], "highWaterMark", 16384);
+    if (n > hwm) {
+        if (n > 0x40000000) {
+            char message[160];
+            snprintf(message, sizeof message,
+                "The value of \"size\" is out of range. It must be <= 1GiB. Received %.0f", n);
+            mal_node_throw_code(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, message, "ERR_OUT_OF_RANGE");
+            goto done;
+        }
+        u32 grown = (u32) n - 1;
+        grown |= grown >> 1; grown |= grown >> 2; grown |= grown >> 4; grown |= grown >> 8; grown |= grown >> 16;
+        hwm = (i32) (grown + 1);
+        stream_set(vm, roots[1], "highWaterMark", mal_value_from_i32(hwm));
+    }
+    if (n != 0) stream_set(vm, roots[1], "emittedReadable", mal_value_new_boolean(false));
+    i32 length = stream_i32_own(vm, roots[1], "length", 0);
+    bool ended = stream_truthy_own(vm, roots[1], "ended");
+    if (n == 0 && stream_truthy_own(vm, roots[1], "needReadable")
+        && ((hwm != 0 ? length >= hwm : length > 0) || ended)) {
+        if (length == 0 && ended) stream_schedule_readable_end(vm, roots[0]);
+        else stream_emit_readable(vm, roots[0]);
+        goto done;
+    }
+    i32 amount = stream_how_much_to_read(vm, roots[0], n);
+    if (amount == 0 && ended) {
+        if (length == 0) stream_schedule_readable_end(vm, roots[0]);
+        goto done;
+    }
+    bool do_read = stream_truthy_own(vm, roots[1], "needReadable");
+    if (length == 0 || length - amount < hwm) do_read = true;
+    if (ended || stream_truthy_own(vm, roots[0], "_malReading") || stream_truthy_own(vm, roots[0], "destroyed")
+        || mal_value_is_object(stream_own(vm, roots[0], "_malStreamError"))) {
+        do_read = false;
+    } else if (do_read && stream_get(vm, roots[0], "_read", &roots[2]) && mal_value_is_callable(roots[2])) {
+        stream_set(vm, roots[0], "_malReading", mal_value_new_boolean(true));
+        stream_set(vm, roots[1], "reading", mal_value_new_boolean(true));
+        stream_set(vm, roots[1], "sync", mal_value_new_boolean(true));
+        if (length == 0) stream_set(vm, roots[1], "needReadable", mal_value_new_boolean(true));
+        MalValue size = mal_value_from_i32(hwm);
+        mal_vm_call_value(vm, roots[2], roots[0], &size, 1);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            roots[3] = vm->completion.value;
+            stream_clear_completion(vm);
+            stream_destroy(vm, roots[0], &roots[3], 1, mal_value_new_undefined(), mal_value_new_undefined());
+        }
+        stream_set(vm, roots[1], "sync", mal_value_new_boolean(false));
+        if (!stream_truthy_own(vm, roots[0], "_malReading")) amount = stream_how_much_to_read(vm, roots[0], n_orig);
+    }
+    if (amount > 0) result = stream_from_list(vm, roots[0], amount);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
+    length = stream_i32_own(vm, roots[1], "length", 0);
+    hwm = stream_i32_own(vm, roots[1], "highWaterMark", 16384);
+    if (mal_value_is_null(result)) {
+        stream_set(vm, roots[1], "needReadable", mal_value_new_boolean(length <= hwm));
+        amount = 0;
+    } else {
+        length -= amount;
+        stream_set(vm, roots[1], "length", mal_value_from_i32(length < 0 ? 0 : length));
+    }
+    if (length <= 0) {
+        if (!stream_truthy_own(vm, roots[1], "ended")) stream_set(vm, roots[1], "needReadable", mal_value_new_boolean(true));
+        if (n_orig != amount && stream_truthy_own(vm, roots[1], "ended")) stream_schedule_readable_end(vm, roots[0]);
+    }
+    if (!mal_value_is_null(result)) {
+        roots[3] = result;
+        stream_pipe_chunk(vm, roots[0], roots[3]);
+        if (vm->completion.kind != MAL_COMPLETION_THROW) stream_emit(vm, roots[0], "data", &roots[3], 1);
+    }
+done:
+    mal_gc_unroot(&root);
+    return vm->completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : result;
+}
+
+static MalValue stream_read_method(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) new_target;
+    (void) callee;
+    stream_require_readable(vm, receiver);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
+    return stream_read_core(vm, receiver, argc > 0 ? args[0] : mal_value_new_undefined());
+}
+
 static MalValue stream_run_task(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
     MalValue new_target, MalValue callee) {
@@ -1795,12 +2146,26 @@ static MalValue stream_run_task(
         stream_set(vm, stream, "_malEndScheduled", mal_value_new_boolean(false));
         if (!stream_truthy_own(vm, stream, "destroyed")) {
             stream_end_readable(vm, stream);
-            if (vm->completion.kind != MAL_COMPLETION_THROW && stream_truthy_own(vm, stream, "_malAutoDestroyAfterEnd"))
+            if (vm->completion.kind != MAL_COMPLETION_THROW && !stream_truthy_own(vm, stream, "destroyed")
+                && stream_auto_destroy_after(vm, stream, false))
                 stream_destroy(vm, stream, nullptr, 0, mal_value_new_undefined(), mal_value_new_undefined());
         }
     } else if (action == STREAM_TASK_PULL) {
         stream_set(vm, stream, "_malReadScheduled", mal_value_new_boolean(false));
         stream_start_pull(vm, stream);
+    } else if (action == STREAM_TASK_EMIT_READABLE) {
+        stream_emit_readable_now(vm, stream);
+    } else if (action == STREAM_TASK_READ_ZERO) {
+        stream_read_core(vm, stream, mal_value_from_i32(0));
+    } else if (action == STREAM_TASK_READ_MORE) {
+        while (vm->completion.kind != MAL_COMPLETION_THROW && !stream_truthy_own(vm, stream, "_malReading")
+            && !stream_state_truthy(vm, stream, "ended")
+            && stream_state_i32(vm, stream, "length", 0) < stream_state_i32(vm, stream, "highWaterMark", 16384)) {
+            i32 before = stream_state_i32(vm, stream, "length", 0);
+            stream_read_core(vm, stream, mal_value_from_i32(0));
+            if (before == stream_state_i32(vm, stream, "length", 0)) break;
+        }
+        stream_state_flag(vm, stream, "readingMore", false);
     }
     return mal_value_new_undefined();
 }
@@ -2222,6 +2587,28 @@ static MalValue stream_lifecycle_listener(
     return mal_value_new_undefined();
 }
 
+static bool stream_prototype_chain_has(MalValue value, MalValue prototype) {
+    if (!mal_value_is_object(value) || !mal_value_is_object(prototype)) return false;
+    for (MalObject *cursor = mal_object_get_prototype(mal_value_to_object(value)); cursor != nullptr;
+         cursor = mal_object_get_prototype(cursor)) {
+        if (cursor == mal_value_to_object(prototype)) return true;
+    }
+    return false;
+}
+
+/* A stage qualifies by its state ([[Get]], as Node checks) or, for lazily initialized
+ * streams such as crypto Hash whose state appears on first stream method call, by
+ * inheriting the Readable/Writable prototypes. */
+static bool stream_has_state(MalVm *vm, MalValue value, const char *name) {
+    MalValue state = mal_value_new_undefined();
+    if (mal_value_is_object(value) && stream_get(vm, value, name, &state) && mal_value_is_object(state)) return true;
+    if (strcmp(name, "_readableState") == 0) {
+        return stream_prototype_chain_has(value, vm->intrinsics[MAL_INTRINSIC_NODE_READABLE_PROTOTYPE]);
+    }
+    return stream_prototype_chain_has(value, vm->intrinsics[MAL_INTRINSIC_NODE_WRITABLE_PROTOTYPE])
+        || stream_prototype_chain_has(value, vm->intrinsics[MAL_INTRINSIC_NODE_DUPLEX_PROTOTYPE]);
+}
+
 static bool stream_collect_pipeline_streams(
     MalVm *vm, const MalValue *args, i32 argc, MalValue *out) {
     MalValue roots[] = {mal_value_new_undefined(), mal_value_new_undefined()};
@@ -2247,12 +2634,16 @@ static bool stream_collect_pipeline_streams(
         roots[1] = input != nullptr
             ? stream_array_at(input, (u32) i)
             : args[i];
+        // Node checks through [[Get]], so a lazily initialized stream initializes here.
+        bool readable_stage = stream_has_state(vm, roots[1], "_readableState");
+        bool writable_stage = stream_has_state(vm, roots[1], "_writableState");
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            mal_gc_unroot(&root);
+            return false;
+        }
         bool valid = i == 0
-            ? stream_is_readable(vm, roots[1])
-            : (i == count - 1
-                ? stream_is_writable(vm, roots[1])
-                : stream_is_readable(vm, roots[1])
-                    && stream_is_writable(vm, roots[1]));
+            ? readable_stage
+            : (i == count - 1 ? writable_stage : readable_stage && writable_stage);
         if (!valid) {
             mal_vm_throw_error(
                 vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
@@ -3010,11 +3401,13 @@ static MalValue stream_add_abort_signal(MalVm *vm, MalValue self, const MalValue
 }
 
 // Readable state getters; slot 0 names the _readableState field.
+/* Slot 0 names the state field; slot 1 is true for _writableState getters. */
 static MalValue stream_state_getter(MalVm *vm, MalValue self, const MalValue *args,
     i32 argc, MalValue nt, MalValue callee) {
     (void) args; (void) argc; (void) nt;
     MalValue field = mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 0);
-    MalValue state = stream_own(vm, self, "_readableState");
+    bool writable = mal_value_is_truthy(mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 1));
+    MalValue state = stream_own(vm, self, writable ? "_writableState" : "_readableState");
     if (!mal_value_is_object(state) || !mal_value_is_string(field)) return mal_value_new_undefined();
     MalPropertyLookup found = mal_object_get_own(mal_value_to_object(state), mal_key_from_value(field));
     return found.present ? found.desc.value : mal_value_new_undefined();
@@ -3880,6 +4273,7 @@ void mal_host_install_node_stream(
         {"pause", 0, stream_pause},
         {"pipe", 1, stream_pipe},
         {"push", 1, stream_push},
+        {"read", 1, stream_read_method},
         {"resume", 0, stream_resume},
         {"setEncoding", 1, stream_set_encoding},
         {"unpipe", 1, stream_unpipe},
@@ -3939,19 +4333,29 @@ void mal_host_install_node_stream(
     static const char *const state_getters[][2] = {
         {"readableHighWaterMark", "highWaterMark"}, {"readableEncoding", "encoding"},
         {"readableObjectMode", "objectMode"}, {"readableLength", "length"},
+        {"writableHighWaterMark", "highWaterMark"}, {"writableObjectMode", "objectMode"},
+        {"writableLength", "length"},
     };
     for (usize i = 0; i < countof(state_getters); i++) {
-        MalValue field = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) state_getters[i][1]));
+        bool writable = state_getters[i][0][0] == 'w';
+        MalValue slots[] = {mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) state_getters[i][1])),
+            mal_value_new_boolean(writable)};
         roots[12] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(
             &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-            mal_intrinsic_ascii(vm, (const byte *) state_getters[i][0]), 0, stream_state_getter, &field, 1));
+            mal_intrinsic_ascii(vm, (const byte *) state_getters[i][0]), 0, stream_state_getter, slots, 2));
         MalPropertyDesc accessor = {
             .flags = MAL_PROPERTY_ACCESSOR | MAL_PROPERTY_CONFIGURABLE,
             .value = mal_value_new_undefined(),
             .getter = roots[12],
             .setter = mal_value_new_undefined(),
         };
-        mal_object_define_own(mal_value_to_object(roots[3]), stream_static_key(vm, state_getters[i][0]), &accessor);
+        // Writable getters live on Writable.prototype and Duplex.prototype (Node copies them).
+        if (writable) {
+            mal_object_define_own(mal_value_to_object(roots[4]), stream_static_key(vm, state_getters[i][0]), &accessor);
+            mal_object_define_own(mal_value_to_object(roots[5]), stream_static_key(vm, state_getters[i][0]), &accessor);
+        } else {
+            mal_object_define_own(mal_value_to_object(roots[3]), stream_static_key(vm, state_getters[i][0]), &accessor);
+        }
     }
     roots[12] = stream_function(vm, "from", 2, stream_from);
     mal_intrinsic_define_data(vm, mal_value_to_object(roots[8]), "from", roots[12], STREAM_METHOD);

@@ -1190,7 +1190,7 @@ remains a Maligator extension and does not count as global fetch conformance.
       four) and give request sockets `authorized`, `authorizationError` and
       getPeerCertificate. Cache the deferred verification verdict on the session, and
       accept tls.connect's `checkServerIdentity` option. `new tls.TLSSocket(socket,
-    options)` wrapping with a deferred start, and `setDefaultCACertificates`.
+options)` wrapping with a deferred start, and `setDefaultCACertificates`.
       rootCertificates comes from the system store rather than Node's NSS list, and
       no certificate compression is offered. Plain 'connection' listeners on a
       tls.Server see a TLSSocket where Node passes the raw socket.
@@ -1240,11 +1240,15 @@ remains a Maligator extension and does not count as global fetch conformance.
       are module state only today. util.throttle as Node 26 defines it. url.parse
       emits no DEP0169 warning, and ASCII hostnames skip Node's toASCII validation.
 
+- [ ] node:stream: `removeListener('readable')` does not re-evaluate
+      readableListening (Node's updateReadableListening), and 'close' after destroy is
+      emitted synchronously from the destroy callback rather than on the next tick.
+      `pipeline` and `stream/promises.pipeline` with async generator function stages
+      and async iterable sources.
+
 - [ ] node:stream: `Duplex.from` (async generator functions, async functions,
       iterables, promises, web streams, `{ readable, writable }` pairs), then function
-      and iterable stages in `compose`; `pipeline` with async generator stages and web
-      streams; `Readable.prototype.read`; `writableObjectMode`, `writableLength` and
-      `writableHighWaterMark` as prototype getters rather than own properties.
+      and iterable stages in `compose`; and `pipeline` with web streams.
 
 - [ ] node:url: `url.format` should `querystring.stringify` an object `query` when
       `search` is absent, and format WHATWG URL objects with its options argument.

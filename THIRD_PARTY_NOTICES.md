@@ -10,26 +10,26 @@ notices travel with Maligator's own [LICENSE](LICENSE). This file is generated b
 These files translate parts of Node.js to C, following the upstream algorithms, messages
 and error codes closely:
 
-| Maligator file                                   | Upstream source                                                                                                                   |
-| ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
-| `runtime/src/runtime/node_assert_strict.c`       | lib/internal/assert/assertion_error.js, lib/internal/assert/myers_diff.js                                                         |
-| `runtime/src/runtime/node_buffer.c`              | lib/buffer.js, src/node_buffer.cc                                                                                                 |
-| `runtime/src/runtime/node_crypto.c`              | lib/internal/crypto/hash.js, lib/internal/crypto/cipher.js, lib/internal/crypto/keygen.js, lib/internal/streams/lazy_transform.js |
-| `runtime/src/runtime/node_deep_equal.c`          | lib/internal/util/comparisons.js                                                                                                  |
-| `runtime/src/runtime/node_diagnostics_channel.c` | lib/diagnostics_channel.js                                                                                                        |
-| `runtime/src/runtime/node_dns.c`                 | lib/dns.js                                                                                                                        |
-| `runtime/src/runtime/node_dotenv.c`              | src/node_dotenv.cc                                                                                                                |
-| `runtime/src/runtime/node_fs.c`                  | lib/internal/fs/cp/cp.js, lib/internal/fs/cp/cp-sync.js, src/node_file.cc                                                         |
-| `runtime/src/runtime/node_http.c`                | lib/_http_outgoing.js                                                                                                             |
-| `runtime/src/runtime/node_inspect.c`             | lib/internal/util/inspect.js                                                                                                      |
-| `runtime/src/runtime/node_dgram.c`               | lib/dgram.js                                                                                                                      |
-| `runtime/src/runtime/node_net.c`                 | lib/net.js, lib/_tls_wrap.js                                                                                                      |
-| `runtime/src/runtime/node_path.c`                | lib/path.js                                                                                                                       |
-| `runtime/src/runtime/node_url.c`                 | lib/url.js, lib/internal/querystring.js                                                                                           |
-| `runtime/src/runtime/node_stream.c`              | lib/internal/streams/compose.js, lib/internal/streams/duplex.js                                                                   |
-| `runtime/src/runtime/node_tls.c`                 | lib/tls.js, lib/_tls_wrap.js                                                                                                      |
-| `runtime/src/runtime/node_util.c`                | lib/util.js                                                                                                                       |
-| `runtime/src/runtime/node_util_mime.c`           | lib/internal/mime.js                                                                                                              |
+| Maligator file                                   | Upstream source                                                                                                                     |
+| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `runtime/src/runtime/node_assert_strict.c`       | lib/internal/assert/assertion_error.js, lib/internal/assert/myers_diff.js                                                           |
+| `runtime/src/runtime/node_buffer.c`              | lib/buffer.js, src/node_buffer.cc                                                                                                   |
+| `runtime/src/runtime/node_crypto.c`              | lib/internal/crypto/hash.js, lib/internal/crypto/cipher.js, lib/internal/crypto/keygen.js, lib/internal/streams/lazy_transform.js   |
+| `runtime/src/runtime/node_deep_equal.c`          | lib/internal/util/comparisons.js                                                                                                    |
+| `runtime/src/runtime/node_diagnostics_channel.c` | lib/diagnostics_channel.js                                                                                                          |
+| `runtime/src/runtime/node_dns.c`                 | lib/dns.js                                                                                                                          |
+| `runtime/src/runtime/node_dotenv.c`              | src/node_dotenv.cc                                                                                                                  |
+| `runtime/src/runtime/node_fs.c`                  | lib/internal/fs/cp/cp.js, lib/internal/fs/cp/cp-sync.js, src/node_file.cc                                                           |
+| `runtime/src/runtime/node_http.c`                | lib/_http_outgoing.js                                                                                                               |
+| `runtime/src/runtime/node_inspect.c`             | lib/internal/util/inspect.js                                                                                                        |
+| `runtime/src/runtime/node_dgram.c`               | lib/dgram.js                                                                                                                        |
+| `runtime/src/runtime/node_net.c`                 | lib/net.js, lib/_tls_wrap.js                                                                                                        |
+| `runtime/src/runtime/node_path.c`                | lib/path.js                                                                                                                         |
+| `runtime/src/runtime/node_url.c`                 | lib/url.js, lib/internal/querystring.js                                                                                             |
+| `runtime/src/runtime/node_stream.c`              | lib/internal/streams/compose.js, lib/internal/streams/duplex.js, lib/internal/streams/readable.js, lib/internal/streams/writable.js |
+| `runtime/src/runtime/node_tls.c`                 | lib/tls.js, lib/_tls_wrap.js                                                                                                        |
+| `runtime/src/runtime/node_util.c`                | lib/util.js                                                                                                                         |
+| `runtime/src/runtime/node_util_mime.c`           | lib/internal/mime.js                                                                                                                |
 
 ```text
 Node.js is licensed for use as follows:
