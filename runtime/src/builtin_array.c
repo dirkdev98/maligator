@@ -881,6 +881,32 @@ static bool mal_builtin_array_from_set_length(MalVm *vm, MalValue a, u32 length)
     return true;
 }
 
+/**
+ * Fill a fresh Array from `source` when `method` is the current realm's
+ * Set.prototype.values over a Set and its iterator's next is still the builtin:
+ * that iterator visits the live members in insertion order, and appending them
+ * runs no code that could observe the skipped iterator.
+ */
+static bool mal_builtin_array_copy_set_members(
+    MalVm *vm, MalValue method, MalValue source, MalArrayObject *fresh
+) {
+    if (method != vm->intrinsics[MAL_INTRINSIC_SET_PROTOTYPE_VALUES] ||
+        !mal_value_is_set_object(source) || !mal_vm_primitive_methods_intact(vm)) {
+        return false;
+    }
+    MalSetObject *set = mal_value_to_set_object(source);
+    if (!mal_array_object_fresh_dense_reserve_exact(fresh, (u32) mal_set_object_size(set))) {
+        return false;
+    }
+    MalSetIter members;
+    mal_set_iter_init(&members, set->entries);
+    MalValue member;
+    while (mal_set_iter_next(&members, &member)) {
+        if (!mal_array_object_fresh_dense_append(fresh, member)) abort();
+    }
+    return true;
+}
+
 static MalValue mal_builtin_array_from(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
     (void) callee;
@@ -955,6 +981,12 @@ static MalValue mal_builtin_array_from(MalVm *vm, MalValue this_value, const Mal
             a = c.value;
         }
 
+        if (plain_mode && mal_value_is_undefined(map_fn) &&
+            mal_builtin_array_copy_set_members(
+                vm, method, source, mal_value_to_array_object(a))) {
+            mal_gc_unroot(&method_span);
+            return a;
+        }
         MalIteratorRecord record;
         bool got_iterator = mal_vm_get_iterator_from_method(
             vm, source, method, &record);
@@ -1222,6 +1254,13 @@ MalValue mal_builtin_array_from_iterable(MalVm *vm, MalValue source) {
         MalValue result = roots[1];
         mal_gc_unroot(&roots_span);
         return result;
+    }
+
+    if (mal_builtin_array_copy_set_members(
+            vm, roots[2], roots[0], mal_value_to_array_object(roots[1]))) {
+        MalValue copied = roots[1];
+        mal_gc_unroot(&roots_span);
+        return copied;
     }
 
     MalIteratorRecord record;
