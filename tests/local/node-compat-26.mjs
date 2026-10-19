@@ -8,6 +8,7 @@ import events, {
 	setMaxListeners,
 } from "node:events";
 import * as fs from "node:fs";
+import { maxHeaderSize, setMaxIdleHTTPParsers } from "node:http";
 // Node 26 APIs that popular packages probe or call directly.
 import * as os from "node:os";
 import * as path from "node:path";
@@ -216,5 +217,11 @@ try {
 	domainToASCII();
 } catch (error) {
 	show("domainToASCII missing", [error.code, error.message]);
+}
+show("http", [maxHeaderSize, setMaxIdleHTTPParsers(4)]);
+try {
+	setMaxIdleHTTPParsers(0);
+} catch (error) {
+	show("http parsers", [error.code, error.message]);
 }
 console.log(lines.join("\n"));

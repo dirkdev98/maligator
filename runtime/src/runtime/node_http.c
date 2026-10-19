@@ -5133,6 +5133,16 @@ static void http_install_exports(
     mal_node_module_publish(vm, "node:http", slots, count, module);
 }
 
+/* The parser pool is per connection here, so only Node's validation is observable. */
+static MalValue http_set_max_idle_parsers(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver, (void) new_target, (void) callee;
+    f64 max;
+    mal_node_validate_integer(vm, argc > 0 ? args[0] : mal_value_new_undefined(), "max", 1,
+        9007199254740991.0, &max);
+    return mal_value_new_undefined();
+}
+
 void mal_host_install_node_http(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
     const MalHostLaunchContext *launch) {
@@ -5303,6 +5313,11 @@ void mal_host_install_node_http(
     roots[18] = mal_value_from_object(mal_object_new(
         &vm->heap, mal_value_to_object(roots[16])));
 
+    mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[0]), (const byte *) "setMaxIdleHTTPParsers", 1,
+        http_set_max_idle_parsers);
+    // Node's default --max-http-header-size.
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]), (const byte *) "maxHeaderSize",
+        mal_value_from_i32(16384), HTTP_VISIBLE);
     static const char *names[] = {
         "METHODS", "STATUS_CODES", "IncomingMessage", "ServerResponse", "Server",
         "ClientRequest", "Agent", "globalAgent",

@@ -821,7 +821,15 @@ const ASSERT: HostModuleSpec = {
 
 const ASYNC_HOOKS: HostModuleSpec = {
 	id: "node:async_hooks",
-	named: ["AsyncLocalStorage", "AsyncResource"],
+	named: [
+		"AsyncLocalStorage",
+		"AsyncResource",
+		"asyncWrapProviders",
+		"createHook",
+		"executionAsyncId",
+		"executionAsyncResource",
+		"triggerAsyncId",
+	],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:async_hooks"),
 };
@@ -905,7 +913,9 @@ const HTTP: HostModuleSpec = {
 		"createServer",
 		"get",
 		"globalAgent",
+		"maxHeaderSize",
 		"request",
+		"setMaxIdleHTTPParsers",
 		"validateHeaderName",
 		"validateHeaderValue",
 	],

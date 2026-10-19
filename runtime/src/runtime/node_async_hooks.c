@@ -5,14 +5,18 @@
 
 #include <limits.h>
 #include <math.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "async_context.h"
+#include "builtin_object.h"
 #include "function_object.h"
 #include "gc.h"
 #include "heap_string.h"
 #include "heap_symbol.h"
+#include "array_object.h"
 #include "intrinsics.h"
+#include "microtask.h"
 #include "object.h"
 #include "object_ops.h"
 #include "value.h"
@@ -139,6 +143,180 @@ static MalAsyncResourceState *async_resource_require_receiver(
     return nullptr;
 }
 
+/* ------------------------------------------------------------------------- */
+/* createHook                                                                */
+/* ------------------------------------------------------------------------- */
+
+/* Hooks observe the AsyncResource lifecycle; the runtime's own timers, I/O and
+ * promises are not async_wrap resources, so they emit no hook events. */
+enum {
+    HOOK_INIT,
+    HOOK_BEFORE,
+    HOOK_AFTER,
+    HOOK_DESTROY,
+    HOOK_PROMISE_RESOLVE,
+    HOOK_COUNT,
+};
+
+static const char *const async_hook_names[HOOK_COUNT] = {
+    "init", "before", "after", "destroy", "promiseResolve"};
+
+static MAL_ISOLATE_LOCAL u64 async_current_trigger_id;
+
+static MalArrayObject *async_enabled_hooks(MalVm *vm, bool create) {
+    MalValue module = mal_node_module_get_cached(vm, "node:async_hooks");
+    if (!mal_value_is_object(module)) return nullptr;
+    MalKey key = mal_key_from_value(mal_node_registered_symbol(vm, "maligator.async_hooks.enabled"));
+    MalPropertyLookup found = mal_object_get_own(mal_value_to_object(module), key);
+    if (found.present && mal_value_is_array_object(found.desc.value)) {
+        return mal_value_to_array_object(found.desc.value);
+    }
+    if (!create) return nullptr;
+    MalValue roots[] = {module, mal_value_from_array_object(mal_intrinsic_new_dense_array(vm, 0))};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalPropertyDesc desc = mal_intrinsic_data_desc(roots[1], MAL_PROPERTY_WRITABLE);
+    mal_object_define_own(mal_value_to_object(roots[0]), key, &desc);
+    mal_gc_unroot(&root);
+    return mal_value_to_array_object(roots[1]);
+}
+
+static MalNativeFunctionObject *async_hook_state(MalVm *vm, MalValue hook) {
+    if (!mal_value_is_object(hook)) return nullptr;
+    MalPropertyLookup found = mal_object_get_own(mal_value_to_object(hook),
+        mal_key_from_value(mal_node_registered_symbol(vm, "maligator.async_hooks.callbacks")));
+    return found.present && mal_value_is_native_function_object(found.desc.value)
+        ? mal_value_to_native_function_object(found.desc.value) : nullptr;
+}
+
+/* Calls `kind` on every enabled hook, in enable order, with the hook as `this`. */
+static void async_hooks_emit(MalVm *vm, i32 kind, MalValue *args, i32 argc) {
+    MalArrayObject *enabled = async_enabled_hooks(vm, false);
+    if (enabled == nullptr || mal_array_object_length(enabled) == 0) return;
+    MalValue roots[] = {mal_value_from_array_object(enabled), mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalRootSpan args_root;
+    mal_gc_root(&args_root, args, argc);
+    u32 length = mal_array_object_length(enabled);
+    for (u32 i = 0; i < length && vm->completion.kind != MAL_COMPLETION_THROW; i++) {
+        if (!mal_array_object_dense_get(mal_value_to_array_object(roots[0]), i, &roots[1])) continue;
+        MalNativeFunctionObject *state = async_hook_state(vm, roots[1]);
+        if (state == nullptr) continue;
+        roots[2] = mal_native_function_object_get_slot(state, kind);
+        if (!mal_value_is_callable(roots[2])) continue;
+        MalCompletion completion = mal_vm_call_value(vm, roots[2], roots[1], args, argc);
+        if (completion.kind == MAL_COMPLETION_THROW) vm->completion = completion;
+    }
+    mal_gc_unroot(&args_root);
+    mal_gc_unroot(&root);
+}
+
+static MalValue async_hook_toggle(MalVm *vm, MalValue receiver, bool enable) {
+    if (async_hook_state(vm, receiver) == nullptr) {
+        mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Value of \"this\" must be of type AsyncHook", "ERR_INVALID_THIS");
+        return mal_value_new_undefined();
+    }
+    MalArrayObject *enabled = async_enabled_hooks(vm, true);
+    if (enabled == nullptr) return receiver;
+    u32 length = mal_array_object_length(enabled);
+    u32 found = length;
+    for (u32 i = 0; i < length; i++) {
+        MalValue item;
+        if (mal_array_object_dense_get(enabled, i, &item) && item == receiver) found = i;
+    }
+    if (enable && found == length) {
+        mal_array_object_store(enabled, mal_key_index(length), receiver);
+    } else if (!enable && found < length) {
+        for (u32 i = found + 1; i < length; i++) {
+            MalValue item;
+            mal_array_object_dense_get(enabled, i, &item);
+            mal_array_object_store(enabled, mal_key_index(i - 1), item);
+        }
+        mal_array_object_set_length(enabled, length - 1);
+    }
+    return receiver;
+}
+
+static MalValue async_hook_enable(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) args, (void) argc, (void) new_target, (void) callee;
+    return async_hook_toggle(vm, receiver, true);
+}
+
+static MalValue async_hook_disable(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) args, (void) argc, (void) new_target, (void) callee;
+    return async_hook_toggle(vm, receiver, false);
+}
+
+static MalValue async_create_hook(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver, (void) new_target;
+    MalValue callbacks = argc > 0 ? args[0] : mal_value_new_undefined();
+    MalValue slots[HOOK_COUNT];
+    for (i32 i = 0; i < HOOK_COUNT; i++) slots[i] = mal_value_new_undefined();
+    MalRootSpan slots_root;
+    mal_gc_root(&slots_root, slots, HOOK_COUNT);
+    for (i32 i = 0; i < HOOK_COUNT && mal_value_is_object(callbacks); i++) {
+        if (!mal_vm_get_property(vm, callbacks, mal_intrinsic_string_key(vm, (const byte *) async_hook_names[i]),
+                &slots[i])) {
+            mal_gc_unroot(&slots_root);
+            return mal_value_new_undefined();
+        }
+        if (!mal_value_is_undefined(slots[i]) && !mal_value_is_callable(slots[i])) {
+            char message[64];
+            snprintf(message, sizeof message, "hook.%s must be a function", async_hook_names[i]);
+            mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, message, "ERR_ASYNC_CALLBACK");
+            mal_gc_unroot(&slots_root);
+            return mal_value_new_undefined();
+        }
+    }
+    MalValue roots[] = {
+        mal_value_from_object(mal_object_new(&vm->heap, mal_value_to_object(
+            mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 0)))),
+        mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    roots[1] = mal_value_from_native_function_object(async_function_with_slots(
+        vm, "", 0, async_hook_enable, slots, HOOK_COUNT));
+    MalPropertyDesc desc = mal_intrinsic_data_desc(roots[1], MAL_PROPERTY_NONE);
+    mal_object_define_own(mal_value_to_object(roots[0]),
+        mal_key_from_value(mal_node_registered_symbol(vm, "maligator.async_hooks.callbacks")), &desc);
+    mal_gc_unroot(&root);
+    mal_gc_unroot(&slots_root);
+    return roots[0];
+}
+
+static MalValue async_execution_async_id(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) vm, (void) receiver, (void) args, (void) argc, (void) new_target, (void) callee;
+    // An ES module's top level runs as a job, where Node reports 0.
+    return mal_value_from_f64((f64) mal_async_resource_current_id());
+}
+
+static MalValue async_trigger_async_id(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) vm, (void) receiver, (void) args, (void) argc, (void) new_target, (void) callee;
+    return mal_value_from_f64(mal_async_resource_current_id() != 0 ? (f64) async_current_trigger_id : 0);
+}
+
+/* The bootstrap resource object that executionAsyncResource() reports outside any scope. */
+static MalValue async_execution_async_resource(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) vm, (void) receiver, (void) args, (void) argc, (void) new_target;
+    return mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 0);
+}
+
+static MalValue async_destroy_job(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver, (void) args, (void) argc, (void) new_target;
+    MalValue id = mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 0);
+    async_hooks_emit(vm, HOOK_DESTROY, &id, 1);
+    return mal_value_new_undefined();
+}
+
 static MalValue async_resource_constructor(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
     MalValue new_target, MalValue callee) {
@@ -193,7 +371,12 @@ static MalValue async_resource_constructor(
         mal_object_new(&vm->heap, mal_value_to_object(roots[0])));
     async_define_private_state(
         mal_value_to_object(roots[3]), roots[1], roots[2]);
-    MalValue instance = roots[3];
+    MalAsyncResourceState *created = (MalAsyncResourceState *) mal_value_to_heap(roots[2]);
+    MalValue init_args[] = {mal_value_from_f64((f64) created->async_id),
+        argc > 0 ? args[0] : mal_value_new_undefined(),
+        mal_value_from_f64((f64) created->trigger_async_id), roots[3]};
+    async_hooks_emit(vm, HOOK_INIT, init_args, countof(init_args));
+    MalValue instance = vm->completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : roots[3];
     mal_gc_unroot(&root);
     return instance;
 }
@@ -217,9 +400,18 @@ static MalValue async_resource_run_in_async_scope(
     MalAsyncContextScope scope;
     mal_async_context_scope_enter(vm, &scope, state->context);
     u64 previous_id = mal_async_resource_set_current_id(state->async_id);
-    MalCompletion completion = mal_vm_call_value(
-        vm, callback, this_arg, argc > 2 ? args + 2 : nullptr,
-        argc > 2 ? argc - 2 : 0);
+    u64 previous_trigger = async_current_trigger_id;
+    async_current_trigger_id = state->trigger_async_id;
+    MalValue id = mal_value_from_f64((f64) state->async_id);
+    async_hooks_emit(vm, HOOK_BEFORE, &id, 1);
+    MalCompletion completion = vm->completion.kind == MAL_COMPLETION_THROW
+        ? vm->completion
+        : mal_vm_call_value(vm, callback, this_arg, argc > 2 ? args + 2 : nullptr, argc > 2 ? argc - 2 : 0);
+    if (completion.kind != MAL_COMPLETION_THROW) {
+        async_hooks_emit(vm, HOOK_AFTER, &id, 1);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) completion = vm->completion;
+    }
+    async_current_trigger_id = previous_trigger;
     mal_async_resource_set_current_id(previous_id);
     mal_async_context_scope_exit(vm, &scope);
     return completion.value;
@@ -245,7 +437,15 @@ static MalValue async_resource_emit_destroy(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
     MalValue new_target, MalValue callee) {
     (void) args; (void) argc; (void) new_target;
-    return async_resource_require_receiver(vm, receiver, callee) == nullptr ? mal_value_new_undefined() : receiver;
+    MalAsyncResourceState *state = async_resource_require_receiver(vm, receiver, callee);
+    if (state == nullptr) return mal_value_new_undefined();
+    // Node queues destroy hooks and runs those enabled when the queue drains.
+    MalValue id = mal_value_from_f64((f64) state->async_id);
+    MalValue job = mal_value_from_native_function_object(async_function_with_slots(
+        vm, "destroy", 0, async_destroy_job, &id, 1));
+    mal_vm_enqueue_reaction_job(vm, job, false, mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined());
+    return receiver;
 }
 
 static MalValue async_resource_bind(
@@ -922,6 +1122,47 @@ void mal_host_install_node_async_hooks(
         MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE |
             MAL_PROPERTY_CONFIGURABLE);
 
+    MalObject *module = mal_value_to_object(roots[MODULE]);
+    const MalPropertyFlags exported = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE;
+    roots[TEMP] = mal_value_from_object(mal_object_new(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE])));
+    mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[TEMP]), (const byte *) "enable", 0, async_hook_enable);
+    mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[TEMP]), (const byte *) "disable", 0, async_hook_disable);
+    roots[SCOPE_BRAND] = mal_value_from_native_function_object(
+        async_function_with_slots(vm, "createHook", 1, async_create_hook, &roots[TEMP], 1));
+    mal_intrinsic_define_data(vm, module, (const byte *) "createHook", roots[SCOPE_BRAND], exported);
+    roots[TEMP] = mal_value_from_native_function_object(
+        async_function_with_slots(vm, "executionAsyncId", 0, async_execution_async_id, nullptr, 0));
+    mal_intrinsic_define_data(vm, module, (const byte *) "executionAsyncId", roots[TEMP], exported);
+    roots[TEMP] = mal_value_from_native_function_object(
+        async_function_with_slots(vm, "triggerAsyncId", 0, async_trigger_async_id, nullptr, 0));
+    mal_intrinsic_define_data(vm, module, (const byte *) "triggerAsyncId", roots[TEMP], exported);
+    roots[SCOPE_BRAND] = mal_value_from_object(mal_intrinsic_new_object(vm));
+    roots[TEMP] = mal_value_from_native_function_object(async_function_with_slots(
+        vm, "executionAsyncResource", 0, async_execution_async_resource, &roots[SCOPE_BRAND], 1));
+    mal_intrinsic_define_data(vm, module, (const byte *) "executionAsyncResource", roots[TEMP], exported);
+    static const char *const providers[] = {
+        "NONE", "DIRHANDLE", "DNSCHANNEL", "ELDHISTOGRAM", "FILEHANDLE", "FILEHANDLECLOSEREQ",
+        "BLOBREADER", "FSEVENTWRAP", "FSREQCALLBACK", "FSREQPROMISE", "GETADDRINFOREQWRAP",
+        "GETNAMEINFOREQWRAP", "HEAPSNAPSHOT", "HTTP2SESSION", "HTTP2STREAM", "HTTP2PING",
+        "HTTP2SETTINGS", "HTTPINCOMINGMESSAGE", "HTTPCLIENTREQUEST", "LOCKS", "DTLS_ENDPOINT",
+        "DTLS_SESSION", "JSSTREAM", "JSUDPWRAP", "MESSAGEPORT", "PIPECONNECTWRAP", "PIPESERVERWRAP",
+        "PIPEWRAP", "PROCESSWRAP", "PROMISE", "QUERYWRAP", "QUIC_ENDPOINT", "QUIC_LOGSTREAM",
+        "QUIC_SESSION", "QUIC_STREAM", "QUIC_UDP", "SHUTDOWNWRAP", "SIGNALWRAP", "STATWATCHER",
+        "STREAMPIPE", "TCPCONNECTWRAP", "TCPSERVERWRAP", "TCPWRAP", "TTYWRAP", "UDPSENDWRAP",
+        "UDPWRAP", "SIGINTWATCHDOG", "WORKER", "WORKERCPUPROFILE", "WORKERCPUUSAGE",
+        "WORKERHEAPPROFILE", "WORKERHEAPSNAPSHOT", "WORKERHEAPSTATISTICS", "WRITEWRAP", "ZLIB",
+        "CHECKPRIMEREQUEST", "PBKDF2REQUEST", "KEYPAIRGENREQUEST", "KEYGENREQUEST",
+        "KEYEXPORTREQUEST", "ARGON2REQUEST", "CIPHERREQUEST", "DERIVEBITSREQUEST", "HASHREQUEST",
+        "RANDOMBYTESREQUEST", "RANDOMPRIMEREQUEST", "SCRYPTREQUEST", "SIGNREQUEST", "TLSWRAP",
+        "VERIFYREQUEST"};
+    roots[TEMP] = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
+    for (usize i = 0; i < countof(providers); i++) {
+        mal_intrinsic_define_data(vm, mal_value_to_object(roots[TEMP]), (const byte *) providers[i],
+            mal_value_from_i32((i32) i), MAL_PROPERTY_ENUMERABLE);
+    }
+    mal_builtin_object_set_integrity(vm, roots[TEMP], true);
+    mal_intrinsic_define_data(vm, module, (const byte *) "asyncWrapProviders", roots[TEMP], exported);
     mal_node_module_publish(vm, "node:async_hooks", slots, count, roots[MODULE]);
     mal_gc_unroot(&root);
 }
