@@ -1943,6 +1943,14 @@ bool mal_node_util_inspect_into(
     if (options->dir) ctx.custom_inspect = false;
     if (options->colors) ctx.colors = true;
     util_ctx_apply(&ctx, options->options);
+    if (options->assert_value) {
+        ctx.compact = 0;
+        ctx.custom_inspect = false;
+        ctx.depth = 1000;
+        ctx.max_array_length = INFINITY;
+        ctx.sorted = true;
+        ctx.getters = 1;
+    }
     if (options->table_cell) {
         ctx.depth = 0;
         if (mal_value_is_object(value) && !mal_value_is_array_object(value)) {

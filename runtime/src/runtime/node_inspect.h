@@ -14,6 +14,8 @@ typedef struct MalNodeInspectOptions {
     bool dir;
     /** console.table cell: depth 0 (-1 for objects with more than two keys), maxArrayLength 3, unbounded breakLength. */
     bool table_cell;
+    /** assert's inspectValue: compact false, no custom inspect, depth 1000, sorted keys, getters. */
+    bool assert_value;
 } MalNodeInspectOptions;
 
 /** Append util.inspect(value, options); false leaves the thrown completion on the VM. */

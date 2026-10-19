@@ -34,6 +34,7 @@
 #include "intern_store.h"
 #include "intrinsics.h"
 #include "microtask.h"
+#include "node_dotenv.h"
 #include "node_events.h"
 #include "node_buffer.h"
 #include "node_module.h"
@@ -1546,6 +1547,92 @@ failed:
     return mal_value_new_undefined();
 }
 
+/* process.loadEnvFile(path = '.env'): existing environment variables win over the file. */
+static MalValue mal_process_load_env_file(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self, (void) nt, (void) callee;
+    MalValue path_value = argc > 0 && !mal_value_is_undefined(args[0]) ? args[0]
+        : mal_process_utf8_string(vm, ".env");
+    MalRootSpan path_root;
+    mal_gc_root(&path_root, &path_value, 1);
+    if (mal_value_is_object(path_value) && !mal_value_is_typed_array_object(path_value)) {
+        MalValue pathname;
+        if (!mal_vm_get_property(vm, path_value, mal_intrinsic_string_key(vm, (const byte *) "pathname"), &pathname)) {
+            mal_gc_unroot(&path_root);
+            return mal_value_new_undefined();
+        }
+        if (mal_value_is_string(pathname)) path_value = pathname;
+    }
+    char *path = nullptr;
+    if (mal_value_is_string(path_value)) {
+        usize length = 0;
+        byte *utf8 = mal_string_to_utf8(mal_value_to_string(path_value), &length);
+        path = utf8 == nullptr ? nullptr : realloc(utf8, length + 1);
+        if (path != nullptr) path[length] = '\0';
+        else free(utf8);
+    } else if (mal_value_is_typed_array_object(path_value)) {
+        MalBufferSourceSpan span;
+        if (mal_buffer_source_span(path_value, &span) == MAL_BUFFER_SOURCE_SPAN_OK) {
+            path = malloc(span.length + 1);
+            if (path != nullptr) {
+                mal_buffer_source_span_read(&span, 0, (byte *) path, span.length);
+                path[span.length] = '\0';
+            }
+        }
+    } else {
+        mal_node_throw_invalid_arg_type(vm, "path",
+            "of type string or an instance of Buffer or URL", path_value);
+        mal_gc_unroot(&path_root);
+        return mal_value_new_undefined();
+    }
+    mal_gc_unroot(&path_root);
+    if (path == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
+    FILE *file = fopen(path, "rb");
+    if (file == nullptr) {
+        mal_node_throw_errno(vm, errno, "open", path, nullptr);
+        free(path);
+        return mal_value_new_undefined();
+    }
+    free(path);
+    byte *content = nullptr;
+    usize length = 0, capacity = 0;
+    for (;;) {
+        if (length == capacity) {
+            capacity = capacity == 0 ? 4096 : capacity * 2;
+            byte *grown = realloc(content, capacity);
+            if (grown == nullptr) {
+                free(content);
+                fclose(file);
+                mal_vm_throw_allocation_error(vm);
+                return mal_value_new_undefined();
+            }
+            content = grown;
+        }
+        usize read = fread(content + length, 1, capacity - length, file);
+        length += read;
+        if (read == 0) break;
+    }
+    fclose(file);
+    MalString *text = mal_string_from_utf8(&vm->heap, content, length);
+    free(content);
+    if (text == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
+    MalValue roots[] = {mal_value_from_string(text), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    if (mal_vm_get_property(vm, mal_process_object(vm), mal_intrinsic_string_key(vm, (const byte *) "env"), &roots[1])
+        && mal_value_is_object(roots[1])) {
+        mal_node_dotenv_parse(vm, mal_value_to_string(roots[0]), roots[1], true);
+    }
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
 void mal_host_install_process(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch) {
     if (mal_node_module_install_cached(vm, "node:process", slots, count)) return;
@@ -1733,6 +1820,7 @@ void mal_host_install_process(
         {"setgroups", 1, mal_process_setgroups},
         {"initgroups", 2, mal_process_initgroups},
         {"execve", 3, mal_process_execve},
+        {"loadEnvFile", 1, mal_process_load_env_file},
         {"binding", 1, mal_process_unsupported},
         {"dlopen", 2, mal_process_unsupported},
     };

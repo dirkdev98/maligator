@@ -1,10 +1,14 @@
 #include <math.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "node_util.h"
 #include "node_inspect.h"
+#include "node_deep_equal.h"
+#include "node_dotenv.h"
+#include "posix_fs.h"
 
 #if MAL_NODE
 
@@ -454,6 +458,7 @@ UTIL_TYPED_ARRAY_PREDICATE(is_float32_array, MAL_TA_FLOAT32)
 UTIL_TYPED_ARRAY_PREDICATE(is_float64_array, MAL_TA_FLOAT64)
 UTIL_TYPED_ARRAY_PREDICATE(is_big_int64_array, MAL_TA_BIGINT64)
 UTIL_TYPED_ARRAY_PREDICATE(is_big_uint64_array, MAL_TA_BIGUINT64)
+UTIL_TYPE_PREDICATE(is_float16_array, false)
 
 typedef struct MalNodeUtilTypeExport {
     const char *name;
@@ -540,6 +545,7 @@ static const MalNodeUtilTypeExport util_type_exports[] = {
     {"isFloat64Array", util_types_is_float64_array, true},
     {"isBigInt64Array", util_types_is_big_int64_array, true},
     {"isBigUint64Array", util_types_is_big_uint64_array, true},
+    {"isFloat16Array", util_types_is_float16_array, true},
 };
 
 static MalValue util_to_usv_string(
@@ -590,10 +596,6 @@ static MalValue util_debuglog(
     return logger;
 }
 
-static bool util_env_space(c16 unit) {
-    return unit == ' ' || unit == '\t';
-}
-
 static MalValue util_parse_env(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
     MalValue new_target, MalValue callee) {
@@ -605,76 +607,11 @@ static MalValue util_parse_env(
             "The content argument must be a string");
         return mal_value_new_undefined();
     }
-    MalValue roots[] = {
-        args[0],
-        mal_value_from_object(mal_intrinsic_new_object(vm)),
-        mal_value_new_undefined(),
-        mal_value_new_undefined(),
-    };
+    MalValue roots[] = {args[0], mal_value_from_object(mal_intrinsic_new_object(vm))};
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
-    MalString *source = mal_value_to_string(roots[0]);
-    const c16 *units = mal_string_code_units(source);
-    usize length = mal_string_length(source);
-    usize cursor = 0;
-    while (cursor < length) {
-        usize line_end = cursor;
-        while (line_end < length && units[line_end] != '\n'
-               && units[line_end] != '\r') {
-            line_end++;
-        }
-        usize start = cursor;
-        while (start < line_end && util_env_space(units[start])) start++;
-        if (start < line_end && units[start] != '#') {
-            if (line_end - start >= 7
-                && units[start] == 'e' && units[start + 1] == 'x'
-                && units[start + 2] == 'p' && units[start + 3] == 'o'
-                && units[start + 4] == 'r' && units[start + 5] == 't'
-                && util_env_space(units[start + 6])) {
-                start += 7;
-                while (start < line_end && util_env_space(units[start])) start++;
-            }
-            usize equals = start;
-            while (equals < line_end && units[equals] != '=') equals++;
-            usize key_end = equals;
-            while (key_end > start && util_env_space(units[key_end - 1])) key_end--;
-            if (equals < line_end && key_end > start) {
-                usize value_start = equals + 1;
-                while (value_start < line_end && util_env_space(units[value_start])) {
-                    value_start++;
-                }
-                usize value_end = line_end;
-                if (value_start < value_end
-                    && (units[value_start] == '\'' || units[value_start] == '"')) {
-                    c16 quote = units[value_start++];
-                    if (value_end > value_start && units[value_end - 1] == quote) {
-                        value_end--;
-                    }
-                } else {
-                    for (usize i = value_start; i < value_end; i++) {
-                        if (units[i] == '#') {
-                            value_end = i;
-                            break;
-                        }
-                    }
-                    while (value_end > value_start
-                           && util_env_space(units[value_end - 1])) {
-                        value_end--;
-                    }
-                }
-                roots[2] = mal_value_from_string(mal_string_new_slice(
-                    &vm->heap, source, start, key_end - start));
-                roots[3] = mal_value_from_string(mal_string_new_slice(
-                    &vm->heap, source, value_start, value_end - value_start));
-                mal_object_set(mal_value_to_object(roots[1]),
-                    mal_key_from_value(roots[2]), roots[3]);
-            }
-        }
-        cursor = line_end;
-        if (cursor < length && units[cursor] == '\r') cursor++;
-        if (cursor < length && units[cursor] == '\n') cursor++;
-    }
-    MalValue result = roots[1];
+    bool ok = mal_node_dotenv_parse(vm, mal_value_to_string(roots[0]), roots[1], false);
+    MalValue result = ok ? roots[1] : mal_value_new_undefined();
     mal_gc_unroot(&root);
     return result;
 }
@@ -1769,6 +1706,484 @@ static MalValue util_style_text(MalVm *vm, MalValue self, const MalValue *args, 
     return result;
 }
 
+static MalValue util_string_value(MalVm *vm, const char *text) {
+    return mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) text));
+}
+
+static MalValue util_is_deep_strict_equal(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver; (void) new_target; (void) callee;
+    bool equal = false;
+    if (!mal_node_deep_equal(vm, argc > 0 ? args[0] : mal_value_new_undefined(),
+            argc > 1 ? args[1] : mal_value_new_undefined(), MAL_NODE_DEEP_EQUAL_STRICT, &equal)) {
+        return mal_value_new_undefined();
+    }
+    return mal_value_new_boolean(equal);
+}
+
+static bool util_errno_argument(MalVm *vm, const MalValue *args, i32 argc, int *err) {
+    MalValue value = argc > 0 ? args[0] : mal_value_new_undefined();
+    if (!mal_node_validate_number(vm, value, "err")) return false;
+    f64 number = mal_ops_number_as_f64(value);
+    if (!(number < 0) || trunc(number) != number) {
+        mal_node_throw_out_of_range(vm, "err", "a negative integer", value);
+        return false;
+    }
+    *err = (int) -number;
+    return true;
+}
+
+static MalValue util_get_system_error_name(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver; (void) new_target; (void) callee;
+    int err;
+    if (!util_errno_argument(vm, args, argc, &err)) return mal_value_new_undefined();
+    const char *name = mal_posix_fs_errno_name(err);
+    if (strcmp(name, "UNKNOWN") != 0) return util_string_value(vm, name);
+    char text[64];
+    snprintf(text, sizeof text, "Unknown system error -%d", err);
+    return util_string_value(vm, text);
+}
+
+static MalValue util_get_system_error_message(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver; (void) new_target; (void) callee;
+    int err;
+    if (!util_errno_argument(vm, args, argc, &err)) return mal_value_new_undefined();
+    if (strcmp(mal_posix_fs_errno_name(err), "UNKNOWN") != 0) {
+        return util_string_value(vm, mal_posix_errno_description(err));
+    }
+    char text[64];
+    snprintf(text, sizeof text, "Unknown system error -%d", err);
+    return util_string_value(vm, text);
+}
+
+static MalValue util_get_system_error_map(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver; (void) args; (void) argc; (void) new_target; (void) callee;
+    MalValue roots[3] = {MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, 3);
+    roots[0] = mal_value_from_object((MalObject *) mal_map_object_new(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_MAP_PROTOTYPE])));
+    for (int err = 1; err < 512; err++) {
+        const char *name = mal_posix_fs_errno_name(err);
+        if (strcmp(name, "UNKNOWN") == 0) continue;
+        roots[1] = mal_value_from_array_object(mal_intrinsic_new_dense_array(vm, 0));
+        MalArrayObject *pair = mal_value_to_array_object(roots[1]);
+        roots[2] = util_string_value(vm, name);
+        mal_array_object_store(pair, mal_key_index(0), roots[2]);
+        roots[2] = util_string_value(vm, mal_posix_errno_description(err));
+        mal_array_object_store(pair, mal_key_index(1), roots[2]);
+        mal_map_object_set(mal_value_to_map_object(roots[0]), mal_value_from_i32(-err), roots[1]);
+    }
+    MalValue result = roots[0];
+    mal_gc_unroot(&root);
+    return result;
+}
+
+static const char util_ansi_pattern[] =
+    "[\\u001B\\u009B][[\\]()#;?]*(?:(?:(?:(?:;[-a-zA-Z\\d\\/\\#&.:=?%@~_]+)*"
+    "|[a-zA-Z\\d]+(?:;[-a-zA-Z\\d\\/\\#&.:=?%@~_]*)*)?(?:\\u0007|\\u001B\\u005C|\\u009C))"
+    "|(?:(?:\\d{1,4}(?:;\\d{0,4})*)?[\\dA-PR-TZcf-ntqry=><~]))";
+
+static MalValue util_strip_vt_control_characters(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver; (void) new_target; (void) callee;
+    MalValue input = argc > 0 ? args[0] : mal_value_new_undefined();
+    if (!mal_value_is_string(input)) {
+        mal_node_throw_invalid_arg_type(vm, "str", "of type string", input);
+        return mal_value_new_undefined();
+    }
+    MalString *string = mal_value_to_string(input);
+    const c16 *units = mal_string_code_units(string);
+    usize length = mal_string_length(string);
+    bool control = false;
+    for (usize i = 0; i < length && !control; i++) control = units[i] == 0x1b || units[i] == 0x9b;
+    if (!control) return input;
+    MalValue roots[4] = {input, util_string_value(vm, util_ansi_pattern), util_string_value(vm, "g"),
+        MAL_VALUE_UNDEFINED};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, 4);
+    MalValue result = mal_value_new_undefined();
+    MalCompletion regexp = mal_vm_construct_value(vm, vm->intrinsics[MAL_INTRINSIC_REGEXP_CONSTRUCTOR], roots + 1, 2);
+    if (regexp.kind != MAL_COMPLETION_THROW) {
+        roots[1] = regexp.value;
+        roots[2] = util_string_value(vm, "");
+        MalValue replace;
+        if (mal_vm_get_property(vm, roots[0], mal_intrinsic_string_key(vm, (const byte *) "replace"), &replace)) {
+            MalCompletion replaced = mal_vm_call_value(vm, replace, roots[0], roots + 1, 2);
+            if (replaced.kind != MAL_COMPLETION_THROW) result = replaced.value;
+        }
+    }
+    mal_gc_unroot(&root);
+    return result;
+}
+
+static const struct {
+    const char *name;
+    int number;
+} util_signals[] = {
+    {"SIGHUP", SIGHUP}, {"SIGINT", SIGINT}, {"SIGQUIT", SIGQUIT}, {"SIGILL", SIGILL},
+    {"SIGTRAP", SIGTRAP}, {"SIGABRT", SIGABRT}, {"SIGIOT", SIGIOT}, {"SIGBUS", SIGBUS},
+    {"SIGFPE", SIGFPE}, {"SIGKILL", SIGKILL}, {"SIGUSR1", SIGUSR1}, {"SIGSEGV", SIGSEGV},
+    {"SIGUSR2", SIGUSR2}, {"SIGPIPE", SIGPIPE}, {"SIGALRM", SIGALRM}, {"SIGTERM", SIGTERM},
+    {"SIGCHLD", SIGCHLD}, {"SIGCONT", SIGCONT}, {"SIGSTOP", SIGSTOP}, {"SIGTSTP", SIGTSTP},
+    {"SIGTTIN", SIGTTIN}, {"SIGTTOU", SIGTTOU}, {"SIGURG", SIGURG}, {"SIGXCPU", SIGXCPU},
+    {"SIGXFSZ", SIGXFSZ}, {"SIGVTALRM", SIGVTALRM}, {"SIGPROF", SIGPROF}, {"SIGWINCH", SIGWINCH},
+    {"SIGIO", SIGIO},
+#ifdef SIGINFO
+    {"SIGINFO", SIGINFO},
+#endif
+    {"SIGSYS", SIGSYS},
+};
+
+static MalValue util_convert_signal_to_exit_code(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver; (void) new_target; (void) callee;
+    MalValue signal = argc > 0 ? args[0] : mal_value_new_undefined();
+    if (mal_value_is_string(signal)) {
+        for (usize i = 0; i < countof(util_signals); i++) {
+            if (mal_string_equals_ascii(mal_value_to_string(signal), (const byte *) util_signals[i].name)) {
+                return mal_value_from_i32(128 + util_signals[i].number);
+            }
+        }
+    }
+    MalTextBuffer text = {0};
+    mal_text_buffer_append_ascii(&text, (const byte *) "The argument 'signalCode' must be one of: ");
+    for (usize i = 0; i < countof(util_signals); i++) {
+        if (i > 0) mal_text_buffer_append_ascii(&text, (const byte *) ", ");
+        mal_text_buffer_push(&text, '\'');
+        mal_text_buffer_append_ascii(&text, (const byte *) util_signals[i].name);
+        mal_text_buffer_push(&text, '\'');
+    }
+    mal_text_buffer_append_ascii(&text, (const byte *) ". Received ");
+    MalNodeInspectOptions options = {.options = mal_value_new_undefined()};
+    if (!mal_node_util_inspect_into(vm, &text, signal, &options)) {
+        mal_text_buffer_dispose(&text);
+        return mal_value_new_undefined();
+    }
+    MalString *message = mal_text_buffer_finish(&vm->heap, &text);
+    usize byte_length;
+    byte *bytes = mal_string_to_utf8(message, &byte_length);
+    if (bytes != nullptr) {
+        mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, (const char *) bytes, "ERR_INVALID_ARG_VALUE");
+        free(bytes);
+    }
+    return mal_value_new_undefined();
+}
+
+static MalValue util_get_call_sites(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver; (void) args; (void) argc; (void) new_target; (void) callee;
+    return mal_value_from_array_object(mal_intrinsic_new_dense_array(vm, 0));
+}
+
+static bool util_is_abort_signal(MalVm *vm, MalValue value) {
+    MalValue aborted;
+    return mal_value_is_object(value)
+        && mal_vm_get_property(vm, value, mal_intrinsic_string_key(vm, (const byte *) "aborted"), &aborted)
+        && mal_value_is_boolean(aborted);
+}
+
+static MalValue util_transferable_abort_signal(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver; (void) new_target; (void) callee;
+    MalValue signal = argc > 0 ? args[0] : mal_value_new_undefined();
+    if (!util_is_abort_signal(vm, signal)) {
+        if (vm->completion.kind != MAL_COMPLETION_THROW) {
+            mal_node_throw_invalid_arg_type(vm, "signal", "an instance of AbortSignal", signal);
+        }
+        return mal_value_new_undefined();
+    }
+    return signal;
+}
+
+static MalValue util_transferable_abort_controller(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver; (void) args; (void) argc; (void) new_target; (void) callee;
+    MalCompletion controller = mal_vm_construct_value(
+        vm, vm->intrinsics[MAL_INTRINSIC_ABORT_CONTROLLER_CONSTRUCTOR], nullptr, 0);
+    return controller.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : controller.value;
+}
+
+static MalValue util_aborted_listener(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver; (void) args; (void) argc; (void) new_target;
+    MalValue promise = mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 0);
+    MalPromiseObject *object = mal_value_to_promise_object(promise);
+    if (object->state == MAL_PROMISE_PENDING) mal_promise_fulfill(vm, object, mal_value_new_undefined());
+    return mal_value_new_undefined();
+}
+
+static MalValue util_aborted(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver; (void) new_target; (void) callee;
+    MalValue roots[4] = {argc > 0 ? args[0] : mal_value_new_undefined(),
+        argc > 1 ? args[1] : mal_value_new_undefined(), MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, 4);
+    MalValue result = mal_value_new_undefined();
+    if (!util_is_abort_signal(vm, roots[0])) {
+        if (vm->completion.kind != MAL_COMPLETION_THROW) {
+            mal_node_throw_invalid_arg_type(vm, "signal", "an instance of AbortSignal", roots[0]);
+        }
+        goto done;
+    }
+    if (!mal_value_is_object(roots[1])) {
+        mal_node_throw_invalid_arg_type(vm, "resource", "of type object", roots[1]);
+        goto done;
+    }
+    roots[2] = mal_value_from_object((MalObject *) mal_promise_object_new(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_PROMISE_PROTOTYPE])));
+    MalValue aborted;
+    mal_vm_get_property(vm, roots[0], mal_intrinsic_string_key(vm, (const byte *) "aborted"), &aborted);
+    if (mal_value_is_truthy(aborted)) {
+        mal_promise_fulfill(vm, mal_value_to_promise_object(roots[2]), mal_value_new_undefined());
+    } else {
+        roots[3] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(
+            &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+            mal_intrinsic_ascii(vm, (const byte *) ""), 0, util_aborted_listener, &roots[2], 1));
+        MalValue listen[2] = {util_string_value(vm, "abort"), roots[3]};
+        MalRootSpan listen_root;
+        mal_gc_root(&listen_root, listen, 2);
+        MalValue add;
+        if (mal_vm_get_property(vm, roots[0], mal_intrinsic_string_key(vm, (const byte *) "addEventListener"), &add)
+            && vm->completion.kind != MAL_COMPLETION_THROW) {
+            mal_vm_call_value(vm, add, roots[0], listen, 2);
+        }
+        mal_gc_unroot(&listen_root);
+    }
+    if (vm->completion.kind != MAL_COMPLETION_THROW) result = roots[2];
+done:
+    mal_gc_unroot(&root);
+    return result;
+}
+
+// callbackify reactions; slots: callback, settled kind (0 fulfilled, 1 rejected).
+static MalValue util_callbackify_settled(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver; (void) new_target;
+    MalNativeFunctionObject *function = mal_value_to_native_function_object(callee);
+    MalValue roots[3] = {mal_native_function_object_get_slot(function, 0),
+        argc > 0 ? args[0] : mal_value_new_undefined(), MAL_VALUE_UNDEFINED};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, 3);
+    bool rejected = mal_value_to_i32(mal_native_function_object_get_slot(function, 1)) == 1;
+    if (rejected) {
+        if (!mal_value_is_truthy(roots[1])) {
+            MalObject *error = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ERROR_PROTOTYPE]));
+            roots[2] = mal_value_from_object(error);
+            mal_intrinsic_define_data(vm, error, (const byte *) "message",
+                util_string_value(vm, "Promise was rejected with falsy value"), MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+            mal_intrinsic_define_data(vm, error, (const byte *) "code",
+                util_string_value(vm, "ERR_FALSY_VALUE_REJECTION"), UTIL_VISIBLE);
+            mal_intrinsic_define_data(vm, error, (const byte *) "reason", roots[1], UTIL_VISIBLE);
+            roots[1] = roots[2];
+        }
+        mal_vm_call_value(vm, roots[0], mal_value_new_undefined(), &roots[1], 1);
+    } else {
+        MalValue call_args[2] = {mal_value_new_null(), roots[1]};
+        mal_vm_call_value(vm, roots[0], mal_value_new_undefined(), call_args, 2);
+    }
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+static MalValue util_callbackified(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) new_target;
+    MalValue original = mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 0);
+    MalValue callback = argc > 0 ? args[argc - 1] : mal_value_new_undefined();
+    if (!mal_value_is_callable(callback)) {
+        mal_node_throw_invalid_arg_type(vm, "last argument", "of type function", callback);
+        return mal_value_new_undefined();
+    }
+    MalValue roots[5] = {original, callback, receiver, MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, 5);
+    MalCompletion result = mal_vm_call_value(vm, roots[0], roots[2], args, argc - 1);
+    if (result.kind != MAL_COMPLETION_THROW) {
+        roots[3] = result.value;
+        MalValue handlers[2];
+        for (i32 i = 0; i < 2; i++) {
+            MalValue slots[2] = {roots[1], mal_value_from_i32(i)};
+            handlers[i] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(
+                &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+                mal_intrinsic_ascii(vm, (const byte *) ""), 1, util_callbackify_settled, slots, 2));
+            if (i == 0) roots[4] = handlers[0];
+        }
+        handlers[0] = roots[4];
+        MalRootSpan handler_root;
+        mal_gc_root(&handler_root, handlers, 2);
+        MalValue then;
+        if (mal_value_is_promise_object(roots[3])
+            && mal_vm_get_property(vm, roots[3], mal_intrinsic_string_key(vm, (const byte *) "then"), &then)
+            && vm->completion.kind != MAL_COMPLETION_THROW) {
+            mal_vm_call_value(vm, then, roots[3], handlers, 2);
+        } else if (vm->completion.kind != MAL_COMPLETION_THROW) {
+            MalPromiseObject *resolved = mal_promise_object_new(
+                &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_PROMISE_PROTOTYPE]));
+            MalValue resolved_value = mal_value_from_object((MalObject *) resolved);
+            MalRootSpan resolved_root;
+            mal_gc_root(&resolved_root, &resolved_value, 1);
+            mal_promise_fulfill(vm, resolved, roots[3]);
+            if (mal_vm_get_property(vm, resolved_value, mal_intrinsic_string_key(vm, (const byte *) "then"), &then)) {
+                mal_vm_call_value(vm, then, resolved_value, handlers, 2);
+            }
+            mal_gc_unroot(&resolved_root);
+        }
+        mal_gc_unroot(&handler_root);
+    }
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+static MalValue util_callbackify(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver; (void) new_target; (void) callee;
+    MalValue original = argc > 0 ? args[0] : mal_value_new_undefined();
+    if (!mal_value_is_callable(original)) {
+        mal_node_throw_invalid_arg_type(vm, "original", "of type function", original);
+        return mal_value_new_undefined();
+    }
+    MalString *name = mal_vm_callable_name(vm, original);
+    MalTextBuffer text = {0};
+    if (name != nullptr) mal_text_buffer_append_string(&text, name);
+    mal_text_buffer_append_ascii(&text, (const byte *) "Callbackified");
+    MalValue roots[2] = {original, mal_value_from_string(mal_text_buffer_finish(&vm->heap, &text))};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, 2);
+    MalValue length;
+    i32 arity = 1;
+    if (mal_vm_get_property(vm, original, mal_intrinsic_string_key(vm, (const byte *) "length"), &length)
+        && mal_ops_is_number(length)) {
+        arity = (i32) mal_ops_number_as_f64(length) + 1;
+    }
+    MalValue result = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+        mal_value_to_string(roots[1]), arity, util_callbackified, &roots[0], 1));
+    mal_gc_unroot(&root);
+    return result;
+}
+
+static bool util_diff_strings(MalVm *vm, MalValue value, const char *name, MalValue *items, bool *is_string) {
+    *is_string = mal_value_is_string(value);
+    if (*is_string) {
+        *items = value;
+        return true;
+    }
+    if (!mal_value_is_array_object(value)) {
+        mal_node_throw_invalid_arg_type(vm, name, "of type string or an instance of Array", value);
+        return false;
+    }
+    MalArrayObject *array = mal_value_to_array_object(value);
+    for (u32 i = 0; i < mal_array_object_length(array); i++) {
+        MalValue item = mal_value_new_undefined();
+        mal_array_object_dense_get(array, i, &item);
+        if (!mal_value_is_string(item)) {
+            char label[48];
+            snprintf(label, sizeof label, "%s[%u]", name, i);
+            mal_node_throw_invalid_arg_type(vm, label, "of type string", item);
+            return false;
+        }
+    }
+    *items = value;
+    return true;
+}
+
+typedef struct UtilDiffData {
+    MalValue actual;
+    MalValue expected;
+    bool strings;
+} UtilDiffData;
+
+static MalValue util_diff_item(MalValue source, bool strings, usize index, MalVm *vm) {
+    if (strings) {
+        MalTextBuffer text = {0};
+        mal_text_buffer_push(&text, mal_string_code_units(mal_value_to_string(source))[index]);
+        return mal_value_from_string(mal_text_buffer_finish(&vm->heap, &text));
+    }
+    MalValue item = mal_value_new_undefined();
+    mal_array_object_dense_get(mal_value_to_array_object(source), (u32) index, &item);
+    return item;
+}
+
+static bool util_diff_equal(void *opaque, usize i, usize j) {
+    const UtilDiffData *data = opaque;
+    if (data->strings) {
+        return mal_string_code_units(mal_value_to_string(data->actual))[i]
+            == mal_string_code_units(mal_value_to_string(data->expected))[j];
+    }
+    MalValue a = mal_value_new_undefined(), b = mal_value_new_undefined();
+    mal_array_object_dense_get(mal_value_to_array_object(data->actual), (u32) i, &a);
+    mal_array_object_dense_get(mal_value_to_array_object(data->expected), (u32) j, &b);
+    return mal_string_equals(mal_value_to_string(a), mal_value_to_string(b));
+}
+
+static MalValue util_diff(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver; (void) new_target; (void) callee;
+    MalValue roots[4] = {MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED, MAL_VALUE_UNDEFINED};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, 4);
+    MalValue result = mal_value_new_undefined();
+    bool actual_string, expected_string;
+    if (!util_diff_strings(vm, argc > 0 ? args[0] : mal_value_new_undefined(), "actual", &roots[0], &actual_string)
+        || !util_diff_strings(vm, argc > 1 ? args[1] : mal_value_new_undefined(), "expected", &roots[1], &expected_string)) {
+        goto done;
+    }
+    bool strings = actual_string && expected_string;
+    if (actual_string != expected_string) {
+        mal_node_throw_invalid_arg_type(vm, "expected", actual_string ? "of type string" : "an instance of Array", roots[1]);
+        goto done;
+    }
+    usize count_a = strings ? mal_string_length(mal_value_to_string(roots[0]))
+        : mal_array_object_length(mal_value_to_array_object(roots[0]));
+    usize count_e = strings ? mal_string_length(mal_value_to_string(roots[1]))
+        : mal_array_object_length(mal_value_to_array_object(roots[1]));
+    UtilDiffData data = {roots[0], roots[1], strings};
+    MalNodeDiffOp *ops = nullptr;
+    usize count = 0;
+    if (!mal_node_myers_diff(count_a, count_e, util_diff_equal, &data, &ops, &count)) {
+        mal_vm_throw_allocation_error(vm);
+        goto done;
+    }
+    roots[2] = mal_value_from_array_object(mal_intrinsic_new_dense_array(vm, 0));
+    MalArrayObject *list = mal_value_to_array_object(roots[2]);
+    for (usize step = count; step > 0; step--) {
+        const MalNodeDiffOp *op = &ops[step - 1];
+        roots[3] = mal_value_from_array_object(mal_intrinsic_new_dense_array(vm, 0));
+        MalArrayObject *pair = mal_value_to_array_object(roots[3]);
+        mal_array_object_store(pair, mal_key_index(0), mal_value_from_i32(op->op));
+        MalValue item = op->op == -1 ? util_diff_item(roots[1], strings, op->expected, vm)
+            : util_diff_item(roots[0], strings, op->actual, vm);
+        mal_array_object_store(pair, mal_key_index(1), item);
+        mal_array_object_store(list, mal_key_index(mal_array_object_length(list)), roots[3]);
+    }
+    free(ops);
+    result = roots[2];
+done:
+    mal_gc_unroot(&root);
+    return result;
+}
+
+
 typedef struct MalNodeUtilExport {
     const char *name;
     i32 length;
@@ -1776,7 +2191,19 @@ typedef struct MalNodeUtilExport {
 } MalNodeUtilExport;
 
 static const MalNodeUtilExport util_exports[] = {
+    {"aborted", 2, util_aborted},
+    {"callbackify", 1, util_callbackify},
+    {"convertProcessSignalToExitCode", 1, util_convert_signal_to_exit_code},
     {"deprecate", 3, util_deprecate},
+    {"diff", 2, util_diff},
+    {"getCallSites", 0, util_get_call_sites},
+    {"getSystemErrorMap", 0, util_get_system_error_map},
+    {"getSystemErrorMessage", 1, util_get_system_error_message},
+    {"getSystemErrorName", 1, util_get_system_error_name},
+    {"isDeepStrictEqual", 2, util_is_deep_strict_equal},
+    {"stripVTControlCharacters", 1, util_strip_vt_control_characters},
+    {"transferableAbortController", 0, util_transferable_abort_controller},
+    {"transferableAbortSignal", 1, util_transferable_abort_signal},
     {"debuglog", 2, util_debuglog},
     {"format", 1, mal_node_util_format},
     {"formatWithOptions", 2, mal_node_util_format_with_options},
@@ -1870,6 +2297,20 @@ void mal_host_install_node_util(
     }
 	mal_intrinsic_define_data(vm, namespace,
 		(const byte *) "types", values[types_index], UTIL_VISIBLE);
+    for (usize i = 0; i < countof(util_exports); i++) {
+        if (strcmp(util_exports[i].name, "debuglog") == 0) {
+            mal_intrinsic_define_data(vm, namespace, (const byte *) "debug", values[i], UTIL_VISIBLE);
+        }
+    }
+    static const char *const util_globals[] = {"TextDecoder", "TextEncoder"};
+    for (usize i = 0; i < countof(util_globals); i++) {
+        MalPropertyLookup global = mal_object_get_own(
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS]),
+            mal_intrinsic_string_key(vm, (const byte *) util_globals[i]));
+        if (global.present && (global.desc.flags & MAL_PROPERTY_ACCESSOR) == 0) {
+            mal_intrinsic_define_data(vm, namespace, (const byte *) util_globals[i], global.desc.value, UTIL_VISIBLE);
+        }
+    }
 
     mal_node_module_publish(vm, "node:util/types", nullptr, 0, values[types_index]);
     mal_node_module_publish(vm, "node:util", slots, count, values[namespace_index]);

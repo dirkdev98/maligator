@@ -377,7 +377,7 @@
 	},
 	{
 		"file": "runtime/node_assert_strict.c",
-		"sha256": "40b7d2983c0df6fbfe3c3a79e002cb47c89d5d3a844c63d1806aa76d4654bd86"
+		"sha256": "0f15a4b47790253b090ac888cbd7904b90fa89587132129d63092cd84cff771e"
 	},
 	{
 		"file": "runtime/node_assert_strict.h",
@@ -501,7 +501,7 @@
 	},
 	{
 		"file": "runtime/node_inspect.c",
-		"sha256": "9dc35872f57eb70b3ed62e55b9c5b457d818359f9e587c84f74f8e31468c6598"
+		"sha256": "e6e2239b6e049a18924be5e97ab1aa896c241521b54ab16931f2bf57d3c0b38c"
 	},
 	{
 		"file": "runtime/node_inspector.c",
@@ -569,7 +569,7 @@
 	},
 	{
 		"file": "runtime/node_process.c",
-		"sha256": "4cca2dbbf46c5d7a629575d06d4f69479ff0520cec67b5359e154d2f2fd66368"
+		"sha256": "446260deac12706405e8b1f8113d127c007b01b14c2b5d3a62d08cd922a5ca82"
 	},
 	{
 		"file": "runtime/node_process.h",
@@ -649,7 +649,7 @@
 	},
 	{
 		"file": "runtime/node_util.c",
-		"sha256": "ed534b2f328dcb7e18be91cd08166b155e9f31795e0229c0e50790189551b2e2"
+		"sha256": "bec0f1c04169b0beb8d25c7bb49a6f832946bf0c6624ba53a4958a9151e21cad"
 	},
 	{
 		"file": "runtime/node_util.h",

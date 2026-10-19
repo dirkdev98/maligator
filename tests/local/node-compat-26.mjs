@@ -224,4 +224,25 @@ try {
 } catch (error) {
 	show("http parsers", [error.code, error.message]);
 }
+const envDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "node-env-"));
+const envFile = path.join(envDirectory, ".env");
+fs.writeFileSync(
+	envFile,
+	"MAL_ENV_A=from file\nMAL_ENV_B='two' # comment\nMAL_ENV_KEEP=file\n",
+);
+process.env.MAL_ENV_KEEP = "process";
+process.loadEnvFile(envFile);
+show("loadEnvFile", [
+	process.env.MAL_ENV_A,
+	process.env.MAL_ENV_B,
+	process.env.MAL_ENV_KEEP,
+]);
+for (const target of [path.join(envDirectory, "missing.env"), 1]) {
+	try {
+		process.loadEnvFile(target);
+	} catch (error) {
+		show("loadEnvFile error", [error.code, error.syscall ?? null]);
+	}
+}
+fs.rmSync(envDirectory, { recursive: true });
 console.log(lines.join("\n"));
