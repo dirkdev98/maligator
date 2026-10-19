@@ -2521,6 +2521,15 @@ mal_vm_property_try_load_static_remaining(
     if (ic->mode == MAL_IC_MODE_INHERITED_GETTER || ic->mode == MAL_IC_MODE_OWN_GETTER) {
         return (MalStaticPropertyProbeResult) { .hit = false };
     }
+    // Dictionary-mode receivers, such as an enum object with hundreds of members, only
+    // ever hit this row; reaching it after every shape-mode row cost more than the read.
+    if (ic->mode == MAL_IC_MODE_OWN_TABLE) {
+        const MalObject *own = object != nullptr ? object : mal_vm_as_own_slot_object(receiver);
+        MalValue value;
+        if (own != nullptr && mal_vm_own_table_try_load(own, ic->key, ic, &value)) {
+            return (MalStaticPropertyProbeResult) {.hit = true, .value = value};
+        }
+    }
     // A method site that alternates between classes misses its one row for every class
     // but one; the shared stub holds the others, so try it before the unrelated rows.
     if (object != nullptr && ic->mode == MAL_IC_MODE_INHERITED_VALUE && ic->poly_count > 0 &&
