@@ -421,6 +421,32 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_ATTACH_REQUIRE_TABLE%\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_ATTACH_REQUIRE_TABLE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_ATTACH_REQUIRE_TABLE%",
+				"MAL_INTRINSIC_ATTACH_REQUIRE_TABLE"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_ATTACH_REQUIRE_TABLE%\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_ATTACH_REQUIRE_TABLE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_ATTACH_REQUIRE_TABLE%",
+				"MAL_INTRINSIC_ATTACH_REQUIRE_TABLE"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_BYTE_LENGTH_QUEUING_STRATEGY_SIZE%\",\"length\"]",
 			"owner": "%MAL_INTRINSIC_BYTE_LENGTH_QUEUING_STRATEGY_SIZE%",
 			"ownerPaths": [
@@ -4208,6 +4234,19 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%\",\"node:net\"]",
+			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%",
+				"MAL_INTRINSIC_NODE_BUILTIN_MODULES"
+			],
+			"key": "node:net",
+			"kind": "data",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%\",\"node:tls\"]",
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%",
 			"ownerPaths": [
@@ -4540,19 +4579,6 @@
 				"MAL_INTRINSIC_NODE_BUILTIN_MODULES"
 			],
 			"key": "node:dgram",
-			"kind": "data",
-			"operations": [],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%\",\"node:net\"]",
-			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%",
-				"MAL_INTRINSIC_NODE_BUILTIN_MODULES"
-			],
-			"key": "node:net",
 			"kind": "data",
 			"operations": [],
 			"task": "N-06",
@@ -15271,6 +15297,32 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\\\"node:https\\\"]\",\"Server\"]",
+			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"]",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"]",
+				"mal_host_install_node_https:default"
+			],
+			"key": "Server",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\\\"node:https\\\"]\",\"createServer\"]",
+			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"]",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"]",
+				"mal_host_install_node_https:default"
+			],
+			"key": "createServer",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].createServer"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\\\"node:https\\\"].Agent\",\"length\"]",
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Agent",
 			"ownerPaths": [
@@ -15355,6 +15407,124 @@
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Agent.prototype.destroy",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Agent.prototype.destroy"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\\\"node:https\\\"].Server\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server",
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server.prototype.constructor",
+				"mal_host_install_node_https:Server"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\\\"node:https\\\"].Server\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server",
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server.prototype.constructor",
+				"mal_host_install_node_https:Server"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\\\"node:https\\\"].Server\",\"prototype\"]",
+			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server",
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server.prototype.constructor",
+				"mal_host_install_node_https:Server"
+			],
+			"key": "prototype",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\\\"node:https\\\"].Server.prototype\",\"listen\"]",
+			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server.prototype",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server.prototype"
+			],
+			"key": "listen",
+			"kind": "data",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server.prototype.listen"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\\\"node:https\\\"].Server.prototype\",\"constructor\"]",
+			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server.prototype",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server.prototype"
+			],
+			"key": "constructor",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server"],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\\\"node:https\\\"].Server.prototype.listen\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server.prototype.listen",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server.prototype.listen"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\\\"node:https\\\"].Server.prototype.listen\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server.prototype.listen",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server.prototype.listen"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\\\"node:https\\\"].createServer\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].createServer",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].createServer",
+				"mal_host_install_node_https:createServer"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\\\"node:https\\\"].createServer\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].createServer",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].createServer",
+				"mal_host_install_node_https:createServer"
 			],
 			"key": "name",
 			"kind": "data",
@@ -27305,7 +27475,7 @@
 			],
 			"key": "getRandomValues",
 			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.getRandomValues"],
+			"operations": ["globalThis.crypto.getRandomValues"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -27470,7 +27640,7 @@
 			],
 			"key": "randomUUID",
 			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.randomUUID"],
+			"operations": ["globalThis.crypto.randomUUID"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -27490,6 +27660,36 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%\",\"createPrivateKey\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:crypto\"]",
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%",
+				"MAL_INTRINSIC_NODE_CRYPTO_MODULE",
+				"mal_host_install_node_crypto:default"
+			],
+			"key": "createPrivateKey",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createPrivateKey"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%\",\"createPublicKey\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:crypto\"]",
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%",
+				"MAL_INTRINSIC_NODE_CRYPTO_MODULE",
+				"mal_host_install_node_crypto:default"
+			],
+			"key": "createPublicKey",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createPublicKey"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%\",\"createSign\"]",
 			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%",
 			"ownerPaths": [
@@ -27500,7 +27700,7 @@
 			],
 			"key": "createSign",
 			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.X509Certificate"],
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createSign"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -27515,7 +27715,52 @@
 			],
 			"key": "createVerify",
 			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.X509Certificate"],
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createVerify"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%\",\"sign\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:crypto\"]",
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%",
+				"MAL_INTRINSIC_NODE_CRYPTO_MODULE",
+				"mal_host_install_node_crypto:default"
+			],
+			"key": "sign",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.sign"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%\",\"verify\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:crypto\"]",
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%",
+				"MAL_INTRINSIC_NODE_CRYPTO_MODULE",
+				"mal_host_install_node_crypto:default"
+			],
+			"key": "verify",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.verify"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%\",\"generateKeyPair\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:crypto\"]",
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%",
+				"MAL_INTRINSIC_NODE_CRYPTO_MODULE",
+				"mal_host_install_node_crypto:default"
+			],
+			"key": "generateKeyPair",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.generateKeyPair"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -27530,7 +27775,7 @@
 			],
 			"key": "generateKeyPairSync",
 			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.X509Certificate"],
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.generateKeyPairSync"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -27576,6 +27821,36 @@
 			"key": "KeyObject",
 			"kind": "data",
 			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.KeyObject"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%\",\"Sign\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:crypto\"]",
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%",
+				"MAL_INTRINSIC_NODE_CRYPTO_MODULE",
+				"mal_host_install_node_crypto:default"
+			],
+			"key": "Sign",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%\",\"Verify\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:crypto\"]",
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%",
+				"MAL_INTRINSIC_NODE_CRYPTO_MODULE",
+				"mal_host_install_node_crypto:default"
+			],
+			"key": "Verify",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -28119,6 +28394,40 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.KeyObject\",\"from\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.KeyObject",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.KeyObject",
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.KeyObject.prototype.constructor",
+				"mal_host_install_node_crypto:KeyObject"
+			],
+			"key": "from",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.KeyObject.from"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.KeyObject.from\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.KeyObject.from",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.KeyObject.from"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.KeyObject.from\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.KeyObject.from",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.KeyObject.from"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.KeyObject.prototype\",\"constructor\"]",
 			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.KeyObject.prototype",
 			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.KeyObject.prototype"],
@@ -28192,6 +28501,290 @@
 			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.KeyObject.prototype.type<get>\",\"name\"]",
 			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.KeyObject.prototype.type<get>",
 			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.KeyObject.prototype.type<get>"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign",
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype.constructor",
+				"mal_host_install_node_crypto:Sign"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign",
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype.constructor",
+				"mal_host_install_node_crypto:Sign"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign\",\"prototype\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign",
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype.constructor",
+				"mal_host_install_node_crypto:Sign"
+			],
+			"key": "prototype",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype\",\"constructor\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype"],
+			"key": "constructor",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign"],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype\",\"_write\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype"],
+			"key": "_write",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype._write"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype\",\"update\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype"],
+			"key": "update",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype.update"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype\",\"sign\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype"],
+			"key": "sign",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype.sign"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype._write\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype._write",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype._write"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype._write\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype._write",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype._write"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype.sign\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype.sign",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype.sign"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype.sign\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype.sign",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype.sign"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype.update\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype.update",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype.update"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype.update\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype.update",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype.update"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify",
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype.constructor",
+				"mal_host_install_node_crypto:Verify"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify",
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype.constructor",
+				"mal_host_install_node_crypto:Verify"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify\",\"prototype\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify",
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype.constructor",
+				"mal_host_install_node_crypto:Verify"
+			],
+			"key": "prototype",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype\",\"constructor\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype"],
+			"key": "constructor",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify"],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype\",\"_write\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype"],
+			"key": "_write",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype._write"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype\",\"update\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype"],
+			"key": "update",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype.update"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype\",\"verify\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype"],
+			"key": "verify",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype.verify"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype._write\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype._write",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype._write"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype._write\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype._write",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype._write"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype.update\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype.update",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype.update"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype.update\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype.update",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype.update"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype.verify\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype.verify",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype.verify"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype.verify\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype.verify",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype.verify"],
 			"key": "name",
 			"kind": "data",
 			"operations": [],
@@ -29122,6 +29715,58 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createPrivateKey\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createPrivateKey",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createPrivateKey",
+				"mal_host_install_node_crypto:createPrivateKey"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createPrivateKey\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createPrivateKey",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createPrivateKey",
+				"mal_host_install_node_crypto:createPrivateKey"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createPublicKey\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createPublicKey",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createPublicKey",
+				"mal_host_install_node_crypto:createPublicKey"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createPublicKey\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createPublicKey",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createPublicKey",
+				"mal_host_install_node_crypto:createPublicKey"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createSecretKey\",\"length\"]",
 			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createSecretKey",
 			"ownerPaths": [
@@ -29192,6 +29837,32 @@
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createVerify",
 				"mal_host_install_node_crypto:createVerify"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.generateKeyPair\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.generateKeyPair",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.generateKeyPair",
+				"mal_host_install_node_crypto:generateKeyPair"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.generateKeyPair\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.generateKeyPair",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.generateKeyPair",
+				"mal_host_install_node_crypto:generateKeyPair"
 			],
 			"key": "name",
 			"kind": "data",
@@ -29322,34 +29993,6 @@
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.getHashes",
 				"mal_host_install_node_crypto:getHashes"
-			],
-			"key": "name",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.getRandomValues\",\"length\"]",
-			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.getRandomValues",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.getRandomValues",
-				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.webcrypto.getRandomValues",
-				"mal_host_install_node_crypto:getRandomValues"
-			],
-			"key": "length",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.getRandomValues\",\"name\"]",
-			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.getRandomValues",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.getRandomValues",
-				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.webcrypto.getRandomValues",
-				"mal_host_install_node_crypto:getRandomValues"
 			],
 			"key": "name",
 			"kind": "data",
@@ -29618,34 +30261,6 @@
 			"decisions": []
 		},
 		{
-			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.randomUUID\",\"length\"]",
-			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.randomUUID",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.randomUUID",
-				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.webcrypto.randomUUID",
-				"mal_host_install_node_crypto:randomUUID"
-			],
-			"key": "length",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.randomUUID\",\"name\"]",
-			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.randomUUID",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.randomUUID",
-				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.webcrypto.randomUUID",
-				"mal_host_install_node_crypto:randomUUID"
-			],
-			"key": "name",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
 			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.randomUUIDv7\",\"length\"]",
 			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.randomUUIDv7",
 			"ownerPaths": [
@@ -29724,93 +30339,12 @@
 			"decisions": []
 		},
 		{
-			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle\",\"digest\"]",
-			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle",
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.sign\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.sign",
 			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle",
-				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.webcrypto.subtle",
-				"mal_host_install_node_crypto:subtle"
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.sign",
+				"mal_host_install_node_crypto:sign"
 			],
-			"key": "digest",
-			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.digest"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle\",\"importKey\"]",
-			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle",
-				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.webcrypto.subtle",
-				"mal_host_install_node_crypto:subtle"
-			],
-			"key": "importKey",
-			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.importKey"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle\",\"sign\"]",
-			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle",
-				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.webcrypto.subtle",
-				"mal_host_install_node_crypto:subtle"
-			],
-			"key": "sign",
-			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.sign"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle\",\"verify\"]",
-			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle",
-				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.webcrypto.subtle",
-				"mal_host_install_node_crypto:subtle"
-			],
-			"key": "verify",
-			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.verify"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle\",\"encrypt\"]",
-			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle",
-				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.webcrypto.subtle",
-				"mal_host_install_node_crypto:subtle"
-			],
-			"key": "encrypt",
-			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.encrypt"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle\",\"decrypt\"]",
-			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle",
-				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.webcrypto.subtle",
-				"mal_host_install_node_crypto:subtle"
-			],
-			"key": "decrypt",
-			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.decrypt"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.decrypt\",\"length\"]",
-			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.decrypt",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.decrypt"],
 			"key": "length",
 			"kind": "data",
 			"operations": [],
@@ -29818,109 +30352,12 @@
 			"decisions": []
 		},
 		{
-			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.decrypt\",\"name\"]",
-			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.decrypt",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.decrypt"],
-			"key": "name",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.digest\",\"length\"]",
-			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.digest",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.digest"],
-			"key": "length",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.digest\",\"name\"]",
-			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.digest",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.digest"],
-			"key": "name",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.encrypt\",\"length\"]",
-			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.encrypt",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.encrypt"],
-			"key": "length",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.encrypt\",\"name\"]",
-			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.encrypt",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.encrypt"],
-			"key": "name",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.importKey\",\"length\"]",
-			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.importKey",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.importKey"],
-			"key": "length",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.importKey\",\"name\"]",
-			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.importKey",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.importKey"],
-			"key": "name",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.sign\",\"length\"]",
-			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.sign",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.sign"],
-			"key": "length",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.sign\",\"name\"]",
-			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.sign",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.sign"],
-			"key": "name",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.verify\",\"length\"]",
-			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.verify",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.verify"],
-			"key": "length",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.verify\",\"name\"]",
-			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.verify",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.verify"],
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.sign\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.sign",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.sign",
+				"mal_host_install_node_crypto:sign"
+			],
 			"key": "name",
 			"kind": "data",
 			"operations": [],
@@ -29954,42 +30391,29 @@
 			"decisions": []
 		},
 		{
-			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.webcrypto\",\"subtle\"]",
-			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.webcrypto",
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.verify\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.verify",
 			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.webcrypto",
-				"mal_host_install_node_crypto:webcrypto"
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.verify",
+				"mal_host_install_node_crypto:verify"
 			],
-			"key": "subtle",
+			"key": "length",
 			"kind": "data",
 			"operations": [],
-			"task": "N-06",
+			"task": "H-10",
 			"decisions": []
 		},
 		{
-			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.webcrypto\",\"getRandomValues\"]",
-			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.webcrypto",
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.verify\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.verify",
 			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.webcrypto",
-				"mal_host_install_node_crypto:webcrypto"
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.verify",
+				"mal_host_install_node_crypto:verify"
 			],
-			"key": "getRandomValues",
+			"key": "name",
 			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.getRandomValues"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.webcrypto\",\"randomUUID\"]",
-			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.webcrypto",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.webcrypto",
-				"mal_host_install_node_crypto:webcrypto"
-			],
-			"key": "randomUUID",
-			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.randomUUID"],
-			"task": "N-06",
+			"operations": [],
+			"task": "H-10",
 			"decisions": []
 		},
 		{
@@ -43105,7 +43529,7 @@
 			],
 			"key": "Server",
 			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server"],
+			"operations": ["%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.[[Prototype]]"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -43212,304 +43636,6 @@
 			"kind": "data",
 			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.isIPv6"],
 			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.Server\",\"length\"]",
-			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_NET_MODULE%.Server",
-				"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.constructor",
-				"mal_host_install_node_net:Server"
-			],
-			"key": "length",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.Server\",\"name\"]",
-			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_NET_MODULE%.Server",
-				"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.constructor",
-				"mal_host_install_node_net:Server"
-			],
-			"key": "name",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.Server\",\"prototype\"]",
-			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_NET_MODULE%.Server",
-				"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.constructor",
-				"mal_host_install_node_net:Server"
-			],
-			"key": "prototype",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype\",\"listen\"]",
-			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype"],
-			"key": "listen",
-			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.listen"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype\",\"address\"]",
-			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype"],
-			"key": "address",
-			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.address"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype\",\"getConnections\"]",
-			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype"],
-			"key": "getConnections",
-			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.getConnections"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype\",\"close\"]",
-			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype"],
-			"key": "close",
-			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.close"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype\",\"ref\"]",
-			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype"],
-			"key": "ref",
-			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.ref"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype\",\"unref\"]",
-			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype"],
-			"key": "unref",
-			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.unref"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype\",\"listening\"]",
-			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype"],
-			"key": "listening",
-			"kind": "accessor",
-			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.listening<get>"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype\",\"constructor\"]",
-			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype"],
-			"key": "constructor",
-			"kind": "data",
-			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server"],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype\",\"symbol:%Symbol.asyncDispose%\"]",
-			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype"],
-			"key": "symbol:%Symbol.asyncDispose%",
-			"kind": "data",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype[%Symbol.asyncDispose%]"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.address\",\"length\"]",
-			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.address",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.address"],
-			"key": "length",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.address\",\"name\"]",
-			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.address",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.address"],
-			"key": "name",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.close\",\"length\"]",
-			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.close",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.close"],
-			"key": "length",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.close\",\"name\"]",
-			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.close",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.close"],
-			"key": "name",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.getConnections\",\"length\"]",
-			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.getConnections",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.getConnections"],
-			"key": "length",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.getConnections\",\"name\"]",
-			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.getConnections",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.getConnections"],
-			"key": "name",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.listen\",\"length\"]",
-			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.listen",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.listen"],
-			"key": "length",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.listen\",\"name\"]",
-			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.listen",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.listen"],
-			"key": "name",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.listening<get>\",\"length\"]",
-			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.listening<get>",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.listening<get>"],
-			"key": "length",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.listening<get>\",\"name\"]",
-			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.listening<get>",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.listening<get>"],
-			"key": "name",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.ref\",\"length\"]",
-			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.ref",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.ref"],
-			"key": "length",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.ref\",\"name\"]",
-			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.ref",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.ref"],
-			"key": "name",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.unref\",\"length\"]",
-			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.unref",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.unref"],
-			"key": "length",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.unref\",\"name\"]",
-			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.unref",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.unref"],
-			"key": "name",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype[%Symbol.asyncDispose%]\",\"length\"]",
-			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype[%Symbol.asyncDispose%]",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype[%Symbol.asyncDispose%]"
-			],
-			"key": "length",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype[%Symbol.asyncDispose%]\",\"name\"]",
-			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype[%Symbol.asyncDispose%]",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype[%Symbol.asyncDispose%]"
-			],
-			"key": "name",
-			"kind": "data",
-			"operations": [],
-			"task": "H-10",
 			"decisions": []
 		},
 		{
@@ -49703,6 +49829,540 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%\",\"Server\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:tls\"]",
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%",
+				"MAL_INTRINSIC_NODE_TLS_MODULE",
+				"mal_host_install_node_tls:default"
+			],
+			"key": "Server",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_TLS_MODULE%.Server"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%\",\"createServer\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:tls\"]",
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%",
+				"MAL_INTRINSIC_NODE_TLS_MODULE",
+				"mal_host_install_node_tls:default"
+			],
+			"key": "createServer",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_TLS_MODULE%.createServer"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%\",\"SecureContext\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:tls\"]",
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%",
+				"MAL_INTRINSIC_NODE_TLS_MODULE",
+				"mal_host_install_node_tls:default"
+			],
+			"key": "SecureContext",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_TLS_MODULE%.SecureContext"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%\",\"createSecureContext\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:tls\"]",
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%",
+				"MAL_INTRINSIC_NODE_TLS_MODULE",
+				"mal_host_install_node_tls:default"
+			],
+			"key": "createSecureContext",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_TLS_MODULE%.createSecureContext"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.SecureContext\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.SecureContext",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.SecureContext",
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.SecureContext.prototype.constructor",
+				"mal_host_install_node_tls:SecureContext"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.SecureContext\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.SecureContext",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.SecureContext",
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.SecureContext.prototype.constructor",
+				"mal_host_install_node_tls:SecureContext"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.SecureContext\",\"prototype\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.SecureContext",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.SecureContext",
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.SecureContext.prototype.constructor",
+				"mal_host_install_node_tls:SecureContext"
+			],
+			"key": "prototype",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.SecureContext.prototype\",\"constructor\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.SecureContext.prototype",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_TLS_MODULE%.SecureContext.prototype"],
+			"key": "constructor",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_TLS_MODULE%.SecureContext"],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server",
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.constructor",
+				"mal_host_install_node_tls:Server"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server",
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.constructor",
+				"mal_host_install_node_tls:Server"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server\",\"prototype\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server",
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.constructor",
+				"mal_host_install_node_tls:Server"
+			],
+			"key": "prototype",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.[[Prototype]]\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.[[Prototype]]",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_NET_MODULE%.Server",
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.[[Prototype]]",
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].constructor",
+				"mal_host_install_node_net:Server"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.[[Prototype]]\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.[[Prototype]]",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_NET_MODULE%.Server",
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.[[Prototype]]",
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].constructor",
+				"mal_host_install_node_net:Server"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.[[Prototype]]\",\"prototype\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.[[Prototype]]",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_NET_MODULE%.Server",
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.[[Prototype]]",
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].constructor",
+				"mal_host_install_node_net:Server"
+			],
+			"key": "prototype",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype\",\"constructor\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype"],
+			"key": "constructor",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_TLS_MODULE%.Server"],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]]\",\"listen\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]]",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.[[Prototype]].prototype",
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]]"
+			],
+			"key": "listen",
+			"kind": "data",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].listen"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]]\",\"address\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]]",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.[[Prototype]].prototype",
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]]"
+			],
+			"key": "address",
+			"kind": "data",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].address"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]]\",\"getConnections\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]]",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.[[Prototype]].prototype",
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]]"
+			],
+			"key": "getConnections",
+			"kind": "data",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].getConnections"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]]\",\"close\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]]",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.[[Prototype]].prototype",
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]]"
+			],
+			"key": "close",
+			"kind": "data",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].close"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]]\",\"ref\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]]",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.[[Prototype]].prototype",
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]]"
+			],
+			"key": "ref",
+			"kind": "data",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].ref"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]]\",\"unref\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]]",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.[[Prototype]].prototype",
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]]"
+			],
+			"key": "unref",
+			"kind": "data",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].unref"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]]\",\"listening\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]]",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.[[Prototype]].prototype",
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]]"
+			],
+			"key": "listening",
+			"kind": "accessor",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].listening<get>"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]]\",\"constructor\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]]",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.[[Prototype]].prototype",
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]]"
+			],
+			"key": "constructor",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.[[Prototype]]"],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]]\",\"symbol:%Symbol.asyncDispose%\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]]",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.[[Prototype]].prototype",
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]]"
+			],
+			"key": "symbol:%Symbol.asyncDispose%",
+			"kind": "data",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]][%Symbol.asyncDispose%]"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].address\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].address",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].address"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].address\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].address",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].address"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].close\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].close",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].close"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].close\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].close",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].close"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].getConnections\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].getConnections",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].getConnections"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].getConnections\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].getConnections",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].getConnections"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].listen\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].listen",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].listen"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].listen\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].listen",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].listen"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].listening<get>\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].listening<get>",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].listening<get>"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].listening<get>\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].listening<get>",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].listening<get>"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].ref\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].ref",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].ref"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].ref\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].ref",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].ref"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].unref\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].unref",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].unref"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].unref\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].unref",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].unref"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]][%Symbol.asyncDispose%]\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]][%Symbol.asyncDispose%]",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]][%Symbol.asyncDispose%]"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]][%Symbol.asyncDispose%]\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]][%Symbol.asyncDispose%]",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]][%Symbol.asyncDispose%]"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.checkServerIdentity\",\"length\"]",
 			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.checkServerIdentity",
 			"ownerPaths": [
@@ -49747,6 +50407,58 @@
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_TLS_MODULE%.connect",
 				"mal_host_install_node_tls:connect"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.createSecureContext\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.createSecureContext",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.createSecureContext",
+				"mal_host_install_node_tls:createSecureContext"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.createSecureContext\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.createSecureContext",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.createSecureContext",
+				"mal_host_install_node_tls:createSecureContext"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.createServer\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.createServer",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.createServer",
+				"mal_host_install_node_tls:createServer"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.createServer\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.createServer",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.createServer",
+				"mal_host_install_node_tls:createServer"
 			],
 			"key": "name",
 			"kind": "data",
@@ -113457,6 +114169,51 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"globalThis\",\"SubtleCrypto\"]",
+			"owner": "globalThis",
+			"ownerPaths": [
+				"MAL_INTRINSIC_GLOBAL_THIS",
+				"globalThis",
+				"globalThis.global",
+				"globalThis.globalThis"
+			],
+			"key": "SubtleCrypto",
+			"kind": "data",
+			"operations": ["globalThis.Crypto"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis\",\"Crypto\"]",
+			"owner": "globalThis",
+			"ownerPaths": [
+				"MAL_INTRINSIC_GLOBAL_THIS",
+				"globalThis",
+				"globalThis.global",
+				"globalThis.globalThis"
+			],
+			"key": "Crypto",
+			"kind": "data",
+			"operations": ["globalThis.Crypto"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis\",\"CryptoKey\"]",
+			"owner": "globalThis",
+			"ownerPaths": [
+				"MAL_INTRINSIC_GLOBAL_THIS",
+				"globalThis",
+				"globalThis.global",
+				"globalThis.globalThis"
+			],
+			"key": "CryptoKey",
+			"kind": "data",
+			"operations": ["globalThis.Crypto"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
 			"id": "[\"globalThis\",\"Performance\"]",
 			"owner": "globalThis",
 			"ownerPaths": [
@@ -118122,6 +118879,105 @@
 			"owner": "globalThis.CountQueuingStrategy.prototype.size<get>",
 			"ownerPaths": ["globalThis.CountQueuingStrategy.prototype.size<get>"],
 			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.Crypto\",\"length\"]",
+			"owner": "globalThis.Crypto",
+			"ownerPaths": ["globalThis.Crypto", "globalThis.Crypto.prototype.constructor"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.Crypto\",\"name\"]",
+			"owner": "globalThis.Crypto",
+			"ownerPaths": ["globalThis.Crypto", "globalThis.Crypto.prototype.constructor"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.Crypto\",\"prototype\"]",
+			"owner": "globalThis.Crypto",
+			"ownerPaths": ["globalThis.Crypto", "globalThis.Crypto.prototype.constructor"],
+			"key": "prototype",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.Crypto.prototype\",\"constructor\"]",
+			"owner": "globalThis.Crypto.prototype",
+			"ownerPaths": ["globalThis.Crypto.prototype"],
+			"key": "constructor",
+			"kind": "data",
+			"operations": ["globalThis.Crypto"],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.CryptoKey\",\"length\"]",
+			"owner": "globalThis.CryptoKey",
+			"ownerPaths": [
+				"globalThis.CryptoKey",
+				"globalThis.CryptoKey.prototype.constructor"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.CryptoKey\",\"name\"]",
+			"owner": "globalThis.CryptoKey",
+			"ownerPaths": [
+				"globalThis.CryptoKey",
+				"globalThis.CryptoKey.prototype.constructor"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.CryptoKey\",\"prototype\"]",
+			"owner": "globalThis.CryptoKey",
+			"ownerPaths": [
+				"globalThis.CryptoKey",
+				"globalThis.CryptoKey.prototype.constructor"
+			],
+			"key": "prototype",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.CryptoKey.prototype\",\"constructor\"]",
+			"owner": "globalThis.CryptoKey.prototype",
+			"ownerPaths": ["globalThis.CryptoKey.prototype"],
+			"key": "constructor",
+			"kind": "data",
+			"operations": ["globalThis.Crypto"],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.CryptoKey.prototype\",\"symbol:%Symbol.toStringTag%\"]",
+			"owner": "globalThis.CryptoKey.prototype",
+			"ownerPaths": ["globalThis.CryptoKey.prototype"],
+			"key": "symbol:%Symbol.toStringTag%",
 			"kind": "data",
 			"operations": [],
 			"task": "H-10",
@@ -125010,6 +125866,55 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"globalThis.SubtleCrypto\",\"length\"]",
+			"owner": "globalThis.SubtleCrypto",
+			"ownerPaths": [
+				"globalThis.SubtleCrypto",
+				"globalThis.SubtleCrypto.prototype.constructor"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.SubtleCrypto\",\"name\"]",
+			"owner": "globalThis.SubtleCrypto",
+			"ownerPaths": [
+				"globalThis.SubtleCrypto",
+				"globalThis.SubtleCrypto.prototype.constructor"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.SubtleCrypto\",\"prototype\"]",
+			"owner": "globalThis.SubtleCrypto",
+			"ownerPaths": [
+				"globalThis.SubtleCrypto",
+				"globalThis.SubtleCrypto.prototype.constructor"
+			],
+			"key": "prototype",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.SubtleCrypto.prototype\",\"constructor\"]",
+			"owner": "globalThis.SubtleCrypto.prototype",
+			"ownerPaths": ["globalThis.SubtleCrypto.prototype"],
+			"key": "constructor",
+			"kind": "data",
+			"operations": ["globalThis.Crypto"],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
 			"id": "[\"globalThis.TextDecoder\",\"length\"]",
 			"owner": "globalThis.TextDecoder",
 			"ownerPaths": [
@@ -129760,19 +130665,27 @@
 			"decisions": []
 		},
 		{
-			"id": "[\"globalThis.crypto\",\"randomUUID\"]",
+			"id": "[\"globalThis.crypto\",\"subtle\"]",
 			"owner": "globalThis.crypto",
-			"ownerPaths": ["globalThis.crypto"],
-			"key": "randomUUID",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.webcrypto",
+				"globalThis.crypto",
+				"mal_host_install_node_crypto:webcrypto"
+			],
+			"key": "subtle",
 			"kind": "data",
-			"operations": ["globalThis.crypto.randomUUID"],
+			"operations": [],
 			"task": "C-01",
 			"decisions": []
 		},
 		{
 			"id": "[\"globalThis.crypto\",\"getRandomValues\"]",
 			"owner": "globalThis.crypto",
-			"ownerPaths": ["globalThis.crypto"],
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.webcrypto",
+				"globalThis.crypto",
+				"mal_host_install_node_crypto:webcrypto"
+			],
 			"key": "getRandomValues",
 			"kind": "data",
 			"operations": ["globalThis.crypto.getRandomValues"],
@@ -129780,9 +130693,27 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"globalThis.crypto\",\"randomUUID\"]",
+			"owner": "globalThis.crypto",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.webcrypto",
+				"globalThis.crypto",
+				"mal_host_install_node_crypto:webcrypto"
+			],
+			"key": "randomUUID",
+			"kind": "data",
+			"operations": ["globalThis.crypto.randomUUID"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
 			"id": "[\"globalThis.crypto.getRandomValues\",\"length\"]",
 			"owner": "globalThis.crypto.getRandomValues",
-			"ownerPaths": ["globalThis.crypto.getRandomValues"],
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.getRandomValues",
+				"globalThis.crypto.getRandomValues",
+				"mal_host_install_node_crypto:getRandomValues"
+			],
 			"key": "length",
 			"kind": "data",
 			"operations": [],
@@ -129792,7 +130723,11 @@
 		{
 			"id": "[\"globalThis.crypto.getRandomValues\",\"name\"]",
 			"owner": "globalThis.crypto.getRandomValues",
-			"ownerPaths": ["globalThis.crypto.getRandomValues"],
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.getRandomValues",
+				"globalThis.crypto.getRandomValues",
+				"mal_host_install_node_crypto:getRandomValues"
+			],
 			"key": "name",
 			"kind": "data",
 			"operations": [],
@@ -129802,7 +130737,11 @@
 		{
 			"id": "[\"globalThis.crypto.randomUUID\",\"length\"]",
 			"owner": "globalThis.crypto.randomUUID",
-			"ownerPaths": ["globalThis.crypto.randomUUID"],
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.randomUUID",
+				"globalThis.crypto.randomUUID",
+				"mal_host_install_node_crypto:randomUUID"
+			],
 			"key": "length",
 			"kind": "data",
 			"operations": [],
@@ -129812,7 +130751,283 @@
 		{
 			"id": "[\"globalThis.crypto.randomUUID\",\"name\"]",
 			"owner": "globalThis.crypto.randomUUID",
-			"ownerPaths": ["globalThis.crypto.randomUUID"],
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.randomUUID",
+				"globalThis.crypto.randomUUID",
+				"mal_host_install_node_crypto:randomUUID"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.crypto.subtle\",\"digest\"]",
+			"owner": "globalThis.crypto.subtle",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle",
+				"globalThis.crypto.subtle",
+				"mal_host_install_node_crypto:subtle"
+			],
+			"key": "digest",
+			"kind": "data",
+			"operations": ["globalThis.crypto.subtle.digest"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.crypto.subtle\",\"importKey\"]",
+			"owner": "globalThis.crypto.subtle",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle",
+				"globalThis.crypto.subtle",
+				"mal_host_install_node_crypto:subtle"
+			],
+			"key": "importKey",
+			"kind": "data",
+			"operations": ["globalThis.crypto.subtle.importKey"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.crypto.subtle\",\"sign\"]",
+			"owner": "globalThis.crypto.subtle",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle",
+				"globalThis.crypto.subtle",
+				"mal_host_install_node_crypto:subtle"
+			],
+			"key": "sign",
+			"kind": "data",
+			"operations": ["globalThis.crypto.subtle.sign"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.crypto.subtle\",\"verify\"]",
+			"owner": "globalThis.crypto.subtle",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle",
+				"globalThis.crypto.subtle",
+				"mal_host_install_node_crypto:subtle"
+			],
+			"key": "verify",
+			"kind": "data",
+			"operations": ["globalThis.crypto.subtle.verify"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.crypto.subtle\",\"encrypt\"]",
+			"owner": "globalThis.crypto.subtle",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle",
+				"globalThis.crypto.subtle",
+				"mal_host_install_node_crypto:subtle"
+			],
+			"key": "encrypt",
+			"kind": "data",
+			"operations": ["globalThis.crypto.subtle.encrypt"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.crypto.subtle\",\"decrypt\"]",
+			"owner": "globalThis.crypto.subtle",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle",
+				"globalThis.crypto.subtle",
+				"mal_host_install_node_crypto:subtle"
+			],
+			"key": "decrypt",
+			"kind": "data",
+			"operations": ["globalThis.crypto.subtle.decrypt"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.crypto.subtle\",\"exportKey\"]",
+			"owner": "globalThis.crypto.subtle",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle",
+				"globalThis.crypto.subtle",
+				"mal_host_install_node_crypto:subtle"
+			],
+			"key": "exportKey",
+			"kind": "data",
+			"operations": ["globalThis.crypto.subtle.exportKey"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.crypto.subtle\",\"generateKey\"]",
+			"owner": "globalThis.crypto.subtle",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle",
+				"globalThis.crypto.subtle",
+				"mal_host_install_node_crypto:subtle"
+			],
+			"key": "generateKey",
+			"kind": "data",
+			"operations": ["globalThis.crypto.subtle.generateKey"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.crypto.subtle.decrypt\",\"length\"]",
+			"owner": "globalThis.crypto.subtle.decrypt",
+			"ownerPaths": ["globalThis.crypto.subtle.decrypt"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.crypto.subtle.decrypt\",\"name\"]",
+			"owner": "globalThis.crypto.subtle.decrypt",
+			"ownerPaths": ["globalThis.crypto.subtle.decrypt"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.crypto.subtle.digest\",\"length\"]",
+			"owner": "globalThis.crypto.subtle.digest",
+			"ownerPaths": ["globalThis.crypto.subtle.digest"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.crypto.subtle.digest\",\"name\"]",
+			"owner": "globalThis.crypto.subtle.digest",
+			"ownerPaths": ["globalThis.crypto.subtle.digest"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.crypto.subtle.encrypt\",\"length\"]",
+			"owner": "globalThis.crypto.subtle.encrypt",
+			"ownerPaths": ["globalThis.crypto.subtle.encrypt"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.crypto.subtle.encrypt\",\"name\"]",
+			"owner": "globalThis.crypto.subtle.encrypt",
+			"ownerPaths": ["globalThis.crypto.subtle.encrypt"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.crypto.subtle.exportKey\",\"length\"]",
+			"owner": "globalThis.crypto.subtle.exportKey",
+			"ownerPaths": ["globalThis.crypto.subtle.exportKey"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.crypto.subtle.exportKey\",\"name\"]",
+			"owner": "globalThis.crypto.subtle.exportKey",
+			"ownerPaths": ["globalThis.crypto.subtle.exportKey"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.crypto.subtle.generateKey\",\"length\"]",
+			"owner": "globalThis.crypto.subtle.generateKey",
+			"ownerPaths": ["globalThis.crypto.subtle.generateKey"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.crypto.subtle.generateKey\",\"name\"]",
+			"owner": "globalThis.crypto.subtle.generateKey",
+			"ownerPaths": ["globalThis.crypto.subtle.generateKey"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.crypto.subtle.importKey\",\"length\"]",
+			"owner": "globalThis.crypto.subtle.importKey",
+			"ownerPaths": ["globalThis.crypto.subtle.importKey"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.crypto.subtle.importKey\",\"name\"]",
+			"owner": "globalThis.crypto.subtle.importKey",
+			"ownerPaths": ["globalThis.crypto.subtle.importKey"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.crypto.subtle.sign\",\"length\"]",
+			"owner": "globalThis.crypto.subtle.sign",
+			"ownerPaths": ["globalThis.crypto.subtle.sign"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.crypto.subtle.sign\",\"name\"]",
+			"owner": "globalThis.crypto.subtle.sign",
+			"ownerPaths": ["globalThis.crypto.subtle.sign"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.crypto.subtle.verify\",\"length\"]",
+			"owner": "globalThis.crypto.subtle.verify",
+			"ownerPaths": ["globalThis.crypto.subtle.verify"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.crypto.subtle.verify\",\"name\"]",
+			"owner": "globalThis.crypto.subtle.verify",
+			"ownerPaths": ["globalThis.crypto.subtle.verify"],
 			"key": "name",
 			"kind": "data",
 			"operations": [],
@@ -134344,6 +135559,32 @@
 			"kind": "construct",
 			"operations": ["%MAL_INTRINSIC_ASYNC_GENERATOR_PROTOTYPE%.throw"],
 			"task": "M-02",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_ATTACH_REQUIRE_TABLE%\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_ATTACH_REQUIRE_TABLE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_ATTACH_REQUIRE_TABLE%",
+				"MAL_INTRINSIC_ATTACH_REQUIRE_TABLE"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_ATTACH_REQUIRE_TABLE%"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_ATTACH_REQUIRE_TABLE%\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_ATTACH_REQUIRE_TABLE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_ATTACH_REQUIRE_TABLE%",
+				"MAL_INTRINSIC_ATTACH_REQUIRE_TABLE"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_ATTACH_REQUIRE_TABLE%"],
+			"task": "N-06",
 			"decisions": []
 		},
 		{
@@ -140553,6 +141794,88 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\\\"node:https\\\"].Server\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server",
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server.prototype.constructor",
+				"mal_host_install_node_https:Server"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\\\"node:https\\\"].Server\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server",
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server.prototype.constructor",
+				"mal_host_install_node_https:Server"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\\\"node:https\\\"].Server.prototype.listen\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server.prototype.listen",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server.prototype.listen"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server.prototype.listen"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\\\"node:https\\\"].Server.prototype.listen\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server.prototype.listen",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server.prototype.listen"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server.prototype.listen"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\\\"node:https\\\"].createServer\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].createServer",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].createServer",
+				"mal_host_install_node_https:createServer"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].createServer"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\\\"node:https\\\"].createServer\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].createServer",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].createServer",
+				"mal_host_install_node_https:createServer"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].createServer"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\\\"node:https\\\"].get\",\"<call>\"]",
 			"owner": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].get",
 			"ownerPaths": [
@@ -146059,6 +147382,26 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.KeyObject.from\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.KeyObject.from",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.KeyObject.from"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.KeyObject.from"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.KeyObject.from\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.KeyObject.from",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.KeyObject.from"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.KeyObject.from"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.KeyObject.prototype.equals\",\"<call>\"]",
 			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.KeyObject.prototype.equals",
 			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.KeyObject.prototype.equals"],
@@ -146095,6 +147438,182 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.KeyObject.prototype.type<get>"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign",
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype.constructor",
+				"mal_host_install_node_crypto:Sign"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign",
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype.constructor",
+				"mal_host_install_node_crypto:Sign"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype._write\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype._write",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype._write"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype._write"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype._write\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype._write",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype._write"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype._write"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype.sign\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype.sign",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype.sign"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype.sign"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype.sign\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype.sign",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype.sign"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype.sign"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype.update\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype.update",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype.update"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype.update"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype.update\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype.update",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype.update"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype.update"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify",
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype.constructor",
+				"mal_host_install_node_crypto:Verify"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify",
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype.constructor",
+				"mal_host_install_node_crypto:Verify"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype._write\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype._write",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype._write"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype._write"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype._write\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype._write",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype._write"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype._write"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype.update\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype.update",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype.update"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype.update"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype.update\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype.update",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype.update"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype.update"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype.verify\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype.verify",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype.verify"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype.verify"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype.verify\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype.verify",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype.verify"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype.verify"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -146281,6 +147800,58 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createPrivateKey\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createPrivateKey",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createPrivateKey",
+				"mal_host_install_node_crypto:createPrivateKey"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createPrivateKey"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createPrivateKey\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createPrivateKey",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createPrivateKey",
+				"mal_host_install_node_crypto:createPrivateKey"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createPrivateKey"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createPublicKey\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createPublicKey",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createPublicKey",
+				"mal_host_install_node_crypto:createPublicKey"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createPublicKey"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createPublicKey\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createPublicKey",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createPublicKey",
+				"mal_host_install_node_crypto:createPublicKey"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createPublicKey"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createSecretKey\",\"<call>\"]",
 			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createSecretKey",
 			"ownerPaths": [
@@ -146315,7 +147886,7 @@
 			],
 			"key": "<call>",
 			"kind": "call",
-			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.X509Certificate"],
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createSign"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -146328,7 +147899,7 @@
 			],
 			"key": "<construct>",
 			"kind": "construct",
-			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.X509Certificate"],
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createSign"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -146341,7 +147912,7 @@
 			],
 			"key": "<call>",
 			"kind": "call",
-			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.X509Certificate"],
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createVerify"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -146354,7 +147925,33 @@
 			],
 			"key": "<construct>",
 			"kind": "construct",
-			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.X509Certificate"],
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createVerify"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.generateKeyPair\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.generateKeyPair",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.generateKeyPair",
+				"mal_host_install_node_crypto:generateKeyPair"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.generateKeyPair"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.generateKeyPair\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.generateKeyPair",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.generateKeyPair",
+				"mal_host_install_node_crypto:generateKeyPair"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.generateKeyPair"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -146367,7 +147964,7 @@
 			],
 			"key": "<call>",
 			"kind": "call",
-			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.X509Certificate"],
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.generateKeyPairSync"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -146380,7 +147977,7 @@
 			],
 			"key": "<construct>",
 			"kind": "construct",
-			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.X509Certificate"],
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.generateKeyPairSync"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -146485,34 +148082,6 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.getHashes"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.getRandomValues\",\"<call>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.getRandomValues",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.getRandomValues",
-				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.webcrypto.getRandomValues",
-				"mal_host_install_node_crypto:getRandomValues"
-			],
-			"key": "<call>",
-			"kind": "call",
-			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.getRandomValues"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.getRandomValues\",\"<construct>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.getRandomValues",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.getRandomValues",
-				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.webcrypto.getRandomValues",
-				"mal_host_install_node_crypto:getRandomValues"
-			],
-			"key": "<construct>",
-			"kind": "construct",
-			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.getRandomValues"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -146777,34 +148346,6 @@
 			"decisions": []
 		},
 		{
-			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.randomUUID\",\"<call>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.randomUUID",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.randomUUID",
-				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.webcrypto.randomUUID",
-				"mal_host_install_node_crypto:randomUUID"
-			],
-			"key": "<call>",
-			"kind": "call",
-			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.randomUUID"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.randomUUID\",\"<construct>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.randomUUID",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.randomUUID",
-				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.webcrypto.randomUUID",
-				"mal_host_install_node_crypto:randomUUID"
-			],
-			"key": "<construct>",
-			"kind": "construct",
-			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.randomUUID"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
 			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.randomUUIDv7\",\"<call>\"]",
 			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.randomUUIDv7",
 			"ownerPaths": [
@@ -146883,122 +148424,28 @@
 			"decisions": []
 		},
 		{
-			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.decrypt\",\"<call>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.decrypt",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.decrypt"],
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.sign\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.sign",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.sign",
+				"mal_host_install_node_crypto:sign"
+			],
 			"key": "<call>",
 			"kind": "call",
-			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.decrypt"],
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.sign"],
 			"task": "N-06",
 			"decisions": []
 		},
 		{
-			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.decrypt\",\"<construct>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.decrypt",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.decrypt"],
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.sign\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.sign",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.sign",
+				"mal_host_install_node_crypto:sign"
+			],
 			"key": "<construct>",
 			"kind": "construct",
-			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.decrypt"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.digest\",\"<call>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.digest",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.digest"],
-			"key": "<call>",
-			"kind": "call",
-			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.digest"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.digest\",\"<construct>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.digest",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.digest"],
-			"key": "<construct>",
-			"kind": "construct",
-			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.digest"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.encrypt\",\"<call>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.encrypt",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.encrypt"],
-			"key": "<call>",
-			"kind": "call",
-			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.encrypt"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.encrypt\",\"<construct>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.encrypt",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.encrypt"],
-			"key": "<construct>",
-			"kind": "construct",
-			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.encrypt"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.importKey\",\"<call>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.importKey",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.importKey"],
-			"key": "<call>",
-			"kind": "call",
-			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.importKey"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.importKey\",\"<construct>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.importKey",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.importKey"],
-			"key": "<construct>",
-			"kind": "construct",
-			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.importKey"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.sign\",\"<call>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.sign",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.sign"],
-			"key": "<call>",
-			"kind": "call",
-			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.sign"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.sign\",\"<construct>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.sign",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.sign"],
-			"key": "<construct>",
-			"kind": "construct",
-			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.sign"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.verify\",\"<call>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.verify",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.verify"],
-			"key": "<call>",
-			"kind": "call",
-			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.verify"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.verify\",\"<construct>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.verify",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.verify"],
-			"key": "<construct>",
-			"kind": "construct",
-			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.verify"],
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.sign"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -147025,6 +148472,32 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.timingSafeEqual"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.verify\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.verify",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.verify",
+				"mal_host_install_node_crypto:verify"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.verify"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.verify\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.verify",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.verify",
+				"mal_host_install_node_crypto:verify"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.verify"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -152621,202 +154094,6 @@
 			"decisions": []
 		},
 		{
-			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.Server\",\"<call>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_NET_MODULE%.Server",
-				"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.constructor",
-				"mal_host_install_node_net:Server"
-			],
-			"key": "<call>",
-			"kind": "call",
-			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.Server\",\"<construct>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_NET_MODULE%.Server",
-				"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.constructor",
-				"mal_host_install_node_net:Server"
-			],
-			"key": "<construct>",
-			"kind": "construct",
-			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.address\",\"<call>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.address",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.address"],
-			"key": "<call>",
-			"kind": "call",
-			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.address"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.address\",\"<construct>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.address",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.address"],
-			"key": "<construct>",
-			"kind": "construct",
-			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.address"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.close\",\"<call>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.close",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.close"],
-			"key": "<call>",
-			"kind": "call",
-			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.close"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.close\",\"<construct>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.close",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.close"],
-			"key": "<construct>",
-			"kind": "construct",
-			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.close"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.getConnections\",\"<call>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.getConnections",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.getConnections"],
-			"key": "<call>",
-			"kind": "call",
-			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.getConnections"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.getConnections\",\"<construct>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.getConnections",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.getConnections"],
-			"key": "<construct>",
-			"kind": "construct",
-			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.getConnections"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.listen\",\"<call>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.listen",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.listen"],
-			"key": "<call>",
-			"kind": "call",
-			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.listen"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.listen\",\"<construct>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.listen",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.listen"],
-			"key": "<construct>",
-			"kind": "construct",
-			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.listen"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.listening<get>\",\"<call>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.listening<get>",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.listening<get>"],
-			"key": "<call>",
-			"kind": "call",
-			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.listening<get>"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.listening<get>\",\"<construct>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.listening<get>",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.listening<get>"],
-			"key": "<construct>",
-			"kind": "construct",
-			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.listening<get>"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.ref\",\"<call>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.ref",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.ref"],
-			"key": "<call>",
-			"kind": "call",
-			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.ref"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.ref\",\"<construct>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.ref",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.ref"],
-			"key": "<construct>",
-			"kind": "construct",
-			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.ref"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.unref\",\"<call>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.unref",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.unref"],
-			"key": "<call>",
-			"kind": "call",
-			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.unref"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.unref\",\"<construct>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.unref",
-			"ownerPaths": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.unref"],
-			"key": "<construct>",
-			"kind": "construct",
-			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.unref"],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype[%Symbol.asyncDispose%]\",\"<call>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype[%Symbol.asyncDispose%]",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype[%Symbol.asyncDispose%]"
-			],
-			"key": "<call>",
-			"kind": "call",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype[%Symbol.asyncDispose%]"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
-			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype[%Symbol.asyncDispose%]\",\"<construct>\"]",
-			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype[%Symbol.asyncDispose%]",
-			"ownerPaths": [
-				"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype[%Symbol.asyncDispose%]"
-			],
-			"key": "<construct>",
-			"kind": "construct",
-			"operations": [
-				"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype[%Symbol.asyncDispose%]"
-			],
-			"task": "N-06",
-			"decisions": []
-		},
-		{
 			"id": "[\"%MAL_INTRINSIC_NODE_NET_MODULE%.connect\",\"<call>\"]",
 			"owner": "%MAL_INTRINSIC_NODE_NET_MODULE%.connect",
 			"ownerPaths": [
@@ -155455,6 +156732,316 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.SecureContext\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.SecureContext",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.SecureContext",
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.SecureContext.prototype.constructor",
+				"mal_host_install_node_tls:SecureContext"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_NODE_TLS_MODULE%.SecureContext"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.SecureContext\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.SecureContext",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.SecureContext",
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.SecureContext.prototype.constructor",
+				"mal_host_install_node_tls:SecureContext"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_NODE_TLS_MODULE%.SecureContext"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server",
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.constructor",
+				"mal_host_install_node_tls:Server"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_NODE_TLS_MODULE%.Server"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server",
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.constructor",
+				"mal_host_install_node_tls:Server"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_NODE_TLS_MODULE%.Server"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.[[Prototype]]\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.[[Prototype]]",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_NET_MODULE%.Server",
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.[[Prototype]]",
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].constructor",
+				"mal_host_install_node_net:Server"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.[[Prototype]]"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.[[Prototype]]\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.[[Prototype]]",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_NET_MODULE%.Server",
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.[[Prototype]]",
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].constructor",
+				"mal_host_install_node_net:Server"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.[[Prototype]]"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].address\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].address",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].address"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].address"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].address\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].address",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].address"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].address"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].close\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].close",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].close"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].close"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].close\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].close",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].close"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].close"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].getConnections\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].getConnections",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].getConnections"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].getConnections"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].getConnections\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].getConnections",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].getConnections"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].getConnections"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].listen\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].listen",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].listen"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].listen"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].listen\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].listen",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].listen"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].listen"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].listening<get>\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].listening<get>",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].listening<get>"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].listening<get>"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].listening<get>\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].listening<get>",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].listening<get>"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].listening<get>"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].ref\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].ref",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].ref"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].ref"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].ref\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].ref",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].ref"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].ref"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].unref\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].unref",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].unref"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].unref"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].unref\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].unref",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].unref"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].unref"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]][%Symbol.asyncDispose%]\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]][%Symbol.asyncDispose%]",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]][%Symbol.asyncDispose%]"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]][%Symbol.asyncDispose%]"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]][%Symbol.asyncDispose%]\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]][%Symbol.asyncDispose%]",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]][%Symbol.asyncDispose%]"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]][%Symbol.asyncDispose%]"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.checkServerIdentity\",\"<call>\"]",
 			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.checkServerIdentity",
 			"ownerPaths": [
@@ -155503,6 +157090,58 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["%MAL_INTRINSIC_NODE_TLS_MODULE%.connect"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.createSecureContext\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.createSecureContext",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.createSecureContext",
+				"mal_host_install_node_tls:createSecureContext"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_NODE_TLS_MODULE%.createSecureContext"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.createSecureContext\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.createSecureContext",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.createSecureContext",
+				"mal_host_install_node_tls:createSecureContext"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_NODE_TLS_MODULE%.createSecureContext"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.createServer\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.createServer",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.createServer",
+				"mal_host_install_node_tls:createServer"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_NODE_TLS_MODULE%.createServer"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.createServer\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.createServer",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.createServer",
+				"mal_host_install_node_tls:createServer"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_NODE_TLS_MODULE%.createServer"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -260957,6 +262596,52 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"globalThis.Crypto\",\"<call>\"]",
+			"owner": "globalThis.Crypto",
+			"ownerPaths": ["globalThis.Crypto", "globalThis.Crypto.prototype.constructor"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.Crypto"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.Crypto\",\"<construct>\"]",
+			"owner": "globalThis.Crypto",
+			"ownerPaths": ["globalThis.Crypto", "globalThis.Crypto.prototype.constructor"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.Crypto"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.CryptoKey\",\"<call>\"]",
+			"owner": "globalThis.CryptoKey",
+			"ownerPaths": [
+				"globalThis.CryptoKey",
+				"globalThis.CryptoKey.prototype.constructor"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.Crypto"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.CryptoKey\",\"<construct>\"]",
+			"owner": "globalThis.CryptoKey",
+			"ownerPaths": [
+				"globalThis.CryptoKey",
+				"globalThis.CryptoKey.prototype.constructor"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.Crypto"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
 			"id": "[\"globalThis.CustomEvent\",\"<call>\"]",
 			"owner": "globalThis.CustomEvent",
 			"ownerPaths": [
@@ -264565,6 +266250,32 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"globalThis.SubtleCrypto\",\"<call>\"]",
+			"owner": "globalThis.SubtleCrypto",
+			"ownerPaths": [
+				"globalThis.SubtleCrypto",
+				"globalThis.SubtleCrypto.prototype.constructor"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.Crypto"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.SubtleCrypto\",\"<construct>\"]",
+			"owner": "globalThis.SubtleCrypto",
+			"ownerPaths": [
+				"globalThis.SubtleCrypto",
+				"globalThis.SubtleCrypto.prototype.constructor"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.Crypto"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
 			"id": "[\"globalThis.TextDecoder\",\"<call>\"]",
 			"owner": "globalThis.TextDecoder",
 			"ownerPaths": [
@@ -267581,7 +269292,11 @@
 		{
 			"id": "[\"globalThis.crypto.getRandomValues\",\"<call>\"]",
 			"owner": "globalThis.crypto.getRandomValues",
-			"ownerPaths": ["globalThis.crypto.getRandomValues"],
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.getRandomValues",
+				"globalThis.crypto.getRandomValues",
+				"mal_host_install_node_crypto:getRandomValues"
+			],
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.crypto.getRandomValues"],
@@ -267591,7 +269306,11 @@
 		{
 			"id": "[\"globalThis.crypto.getRandomValues\",\"<construct>\"]",
 			"owner": "globalThis.crypto.getRandomValues",
-			"ownerPaths": ["globalThis.crypto.getRandomValues"],
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.getRandomValues",
+				"globalThis.crypto.getRandomValues",
+				"mal_host_install_node_crypto:getRandomValues"
+			],
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.crypto.getRandomValues"],
@@ -267601,7 +269320,11 @@
 		{
 			"id": "[\"globalThis.crypto.randomUUID\",\"<call>\"]",
 			"owner": "globalThis.crypto.randomUUID",
-			"ownerPaths": ["globalThis.crypto.randomUUID"],
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.randomUUID",
+				"globalThis.crypto.randomUUID",
+				"mal_host_install_node_crypto:randomUUID"
+			],
 			"key": "<call>",
 			"kind": "call",
 			"operations": ["globalThis.crypto.randomUUID"],
@@ -267611,10 +269334,174 @@
 		{
 			"id": "[\"globalThis.crypto.randomUUID\",\"<construct>\"]",
 			"owner": "globalThis.crypto.randomUUID",
-			"ownerPaths": ["globalThis.crypto.randomUUID"],
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.randomUUID",
+				"globalThis.crypto.randomUUID",
+				"mal_host_install_node_crypto:randomUUID"
+			],
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.crypto.randomUUID"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.crypto.subtle.decrypt\",\"<call>\"]",
+			"owner": "globalThis.crypto.subtle.decrypt",
+			"ownerPaths": ["globalThis.crypto.subtle.decrypt"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.crypto.subtle.decrypt"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.crypto.subtle.decrypt\",\"<construct>\"]",
+			"owner": "globalThis.crypto.subtle.decrypt",
+			"ownerPaths": ["globalThis.crypto.subtle.decrypt"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.crypto.subtle.decrypt"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.crypto.subtle.digest\",\"<call>\"]",
+			"owner": "globalThis.crypto.subtle.digest",
+			"ownerPaths": ["globalThis.crypto.subtle.digest"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.crypto.subtle.digest"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.crypto.subtle.digest\",\"<construct>\"]",
+			"owner": "globalThis.crypto.subtle.digest",
+			"ownerPaths": ["globalThis.crypto.subtle.digest"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.crypto.subtle.digest"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.crypto.subtle.encrypt\",\"<call>\"]",
+			"owner": "globalThis.crypto.subtle.encrypt",
+			"ownerPaths": ["globalThis.crypto.subtle.encrypt"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.crypto.subtle.encrypt"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.crypto.subtle.encrypt\",\"<construct>\"]",
+			"owner": "globalThis.crypto.subtle.encrypt",
+			"ownerPaths": ["globalThis.crypto.subtle.encrypt"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.crypto.subtle.encrypt"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.crypto.subtle.exportKey\",\"<call>\"]",
+			"owner": "globalThis.crypto.subtle.exportKey",
+			"ownerPaths": ["globalThis.crypto.subtle.exportKey"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.crypto.subtle.exportKey"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.crypto.subtle.exportKey\",\"<construct>\"]",
+			"owner": "globalThis.crypto.subtle.exportKey",
+			"ownerPaths": ["globalThis.crypto.subtle.exportKey"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.crypto.subtle.exportKey"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.crypto.subtle.generateKey\",\"<call>\"]",
+			"owner": "globalThis.crypto.subtle.generateKey",
+			"ownerPaths": ["globalThis.crypto.subtle.generateKey"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.crypto.subtle.generateKey"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.crypto.subtle.generateKey\",\"<construct>\"]",
+			"owner": "globalThis.crypto.subtle.generateKey",
+			"ownerPaths": ["globalThis.crypto.subtle.generateKey"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.crypto.subtle.generateKey"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.crypto.subtle.importKey\",\"<call>\"]",
+			"owner": "globalThis.crypto.subtle.importKey",
+			"ownerPaths": ["globalThis.crypto.subtle.importKey"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.crypto.subtle.importKey"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.crypto.subtle.importKey\",\"<construct>\"]",
+			"owner": "globalThis.crypto.subtle.importKey",
+			"ownerPaths": ["globalThis.crypto.subtle.importKey"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.crypto.subtle.importKey"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.crypto.subtle.sign\",\"<call>\"]",
+			"owner": "globalThis.crypto.subtle.sign",
+			"ownerPaths": ["globalThis.crypto.subtle.sign"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.crypto.subtle.sign"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.crypto.subtle.sign\",\"<construct>\"]",
+			"owner": "globalThis.crypto.subtle.sign",
+			"ownerPaths": ["globalThis.crypto.subtle.sign"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.crypto.subtle.sign"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.crypto.subtle.verify\",\"<call>\"]",
+			"owner": "globalThis.crypto.subtle.verify",
+			"ownerPaths": ["globalThis.crypto.subtle.verify"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.crypto.subtle.verify"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.crypto.subtle.verify\",\"<construct>\"]",
+			"owner": "globalThis.crypto.subtle.verify",
+			"ownerPaths": ["globalThis.crypto.subtle.verify"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.crypto.subtle.verify"],
 			"task": "C-01",
 			"decisions": []
 		},
@@ -273508,6 +275395,16 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"[[roots]]\",\"MAL_INTRINSIC_ATTACH_REQUIRE_TABLE\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "MAL_INTRINSIC_ATTACH_REQUIRE_TABLE",
+			"kind": "binding",
+			"operations": ["%MAL_INTRINSIC_ATTACH_REQUIRE_TABLE%"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"[[roots]]\",\"MAL_INTRINSIC_BIGINT_CONSTRUCTOR\"]",
 			"owner": "[[roots]]",
 			"ownerPaths": ["[[roots]]"],
@@ -277664,6 +279561,26 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_crypto:Sign\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_crypto:Sign",
+			"kind": "binding",
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_crypto:Verify\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_crypto:Verify",
+			"kind": "binding",
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"[[roots]]\",\"mal_host_install_node_crypto:X509Certificate\"]",
 			"owner": "[[roots]]",
 			"ownerPaths": ["[[roots]]"],
@@ -277744,6 +279661,26 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_crypto:createPrivateKey\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_crypto:createPrivateKey",
+			"kind": "binding",
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createPrivateKey"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_crypto:createPublicKey\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_crypto:createPublicKey",
+			"kind": "binding",
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createPublicKey"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"[[roots]]\",\"mal_host_install_node_crypto:createSecretKey\"]",
 			"owner": "[[roots]]",
 			"ownerPaths": ["[[roots]]"],
@@ -277759,7 +279696,7 @@
 			"ownerPaths": ["[[roots]]"],
 			"key": "mal_host_install_node_crypto:createSign",
 			"kind": "binding",
-			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.X509Certificate"],
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createSign"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -277769,7 +279706,7 @@
 			"ownerPaths": ["[[roots]]"],
 			"key": "mal_host_install_node_crypto:createVerify",
 			"kind": "binding",
-			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.X509Certificate"],
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createVerify"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -277784,12 +279721,22 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_crypto:generateKeyPair\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_crypto:generateKeyPair",
+			"kind": "binding",
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.generateKeyPair"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"[[roots]]\",\"mal_host_install_node_crypto:generateKeyPairSync\"]",
 			"owner": "[[roots]]",
 			"ownerPaths": ["[[roots]]"],
 			"key": "mal_host_install_node_crypto:generateKeyPairSync",
 			"kind": "binding",
-			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.X509Certificate"],
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.generateKeyPairSync"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -277839,7 +279786,7 @@
 			"ownerPaths": ["[[roots]]"],
 			"key": "mal_host_install_node_crypto:getRandomValues",
 			"kind": "binding",
-			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.getRandomValues"],
+			"operations": ["globalThis.crypto.getRandomValues"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -277949,7 +279896,7 @@
 			"ownerPaths": ["[[roots]]"],
 			"key": "mal_host_install_node_crypto:randomUUID",
 			"kind": "binding",
-			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.randomUUID"],
+			"operations": ["globalThis.crypto.randomUUID"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -277984,6 +279931,16 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_crypto:sign\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_crypto:sign",
+			"kind": "binding",
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.sign"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"[[roots]]\",\"mal_host_install_node_crypto:subtle\"]",
 			"owner": "[[roots]]",
 			"ownerPaths": ["[[roots]]"],
@@ -278000,6 +279957,16 @@
 			"key": "mal_host_install_node_crypto:timingSafeEqual",
 			"kind": "binding",
 			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.timingSafeEqual"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_crypto:verify\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_crypto:verify",
+			"kind": "binding",
+			"operations": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.verify"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -280886,6 +282853,26 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_https:Server\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_https:Server",
+			"kind": "binding",
+			"operations": ["%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_https:createServer\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_https:createServer",
+			"kind": "binding",
+			"operations": ["%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].createServer"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"[[roots]]\",\"mal_host_install_node_https:default\"]",
 			"owner": "[[roots]]",
 			"ownerPaths": ["[[roots]]"],
@@ -281151,7 +283138,7 @@
 			"ownerPaths": ["[[roots]]"],
 			"key": "mal_host_install_node_net:Server",
 			"kind": "binding",
-			"operations": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server"],
+			"operations": ["%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.[[Prototype]]"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -283592,6 +285579,26 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_tls:SecureContext\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_tls:SecureContext",
+			"kind": "binding",
+			"operations": ["%MAL_INTRINSIC_NODE_TLS_MODULE%.SecureContext"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_tls:Server\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_tls:Server",
+			"kind": "binding",
+			"operations": ["%MAL_INTRINSIC_NODE_TLS_MODULE%.Server"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"[[roots]]\",\"mal_host_install_node_tls:checkServerIdentity\"]",
 			"owner": "[[roots]]",
 			"ownerPaths": ["[[roots]]"],
@@ -283608,6 +285615,26 @@
 			"key": "mal_host_install_node_tls:connect",
 			"kind": "binding",
 			"operations": ["%MAL_INTRINSIC_NODE_TLS_MODULE%.connect"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_tls:createSecureContext\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_tls:createSecureContext",
+			"kind": "binding",
+			"operations": ["%MAL_INTRINSIC_NODE_TLS_MODULE%.createSecureContext"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_tls:createServer\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_tls:createServer",
+			"kind": "binding",
+			"operations": ["%MAL_INTRINSIC_NODE_TLS_MODULE%.createServer"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -286306,6 +288333,10 @@
 			"identities": ["%MAL_INTRINSIC_ASYNC_GENERATOR_PROTOTYPE%.throw"]
 		},
 		{
+			"id": "%MAL_INTRINSIC_ATTACH_REQUIRE_TABLE%",
+			"identities": ["%MAL_INTRINSIC_ATTACH_REQUIRE_TABLE%"]
+		},
+		{
 			"id": "%MAL_INTRINSIC_BYTE_LENGTH_QUEUING_STRATEGY_SIZE%",
 			"identities": ["%MAL_INTRINSIC_BYTE_LENGTH_QUEUING_STRATEGY_SIZE%"]
 		},
@@ -287065,6 +289096,20 @@
 			"identities": [
 				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Agent.prototype.destroy"
 			]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server",
+			"identities": ["%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server"]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server.prototype.listen",
+			"identities": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].Server.prototype.listen"
+			]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].createServer",
+			"identities": ["%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].createServer"]
 		},
 		{
 			"id": "%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:https\"].get",
@@ -287996,6 +290041,10 @@
 			"identities": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.KeyObject"]
 		},
 		{
+			"id": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.KeyObject.from",
+			"identities": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.KeyObject.from"]
+		},
+		{
 			"id": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.KeyObject.prototype.equals",
 			"identities": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.KeyObject.prototype.equals"]
 		},
@@ -288004,12 +290053,39 @@
 			"identities": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.KeyObject.prototype.type<get>"]
 		},
 		{
+			"id": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign",
+			"identities": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign"]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype._write",
+			"identities": [
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype._write",
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype._write"
+			]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype.sign",
+			"identities": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype.sign"]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype.update",
+			"identities": [
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Sign.prototype.update",
+				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype.update"
+			]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify",
+			"identities": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify"]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype.verify",
+			"identities": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.Verify.prototype.verify"]
+		},
+		{
 			"id": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.X509Certificate",
 			"identities": [
 				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.X509Certificate",
-				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createSign",
-				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createVerify",
-				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.generateKeyPairSync",
 				"%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.publicEncrypt"
 			]
 		},
@@ -288030,8 +290106,32 @@
 			"identities": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createHmac"]
 		},
 		{
+			"id": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createPrivateKey",
+			"identities": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createPrivateKey"]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createPublicKey",
+			"identities": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createPublicKey"]
+		},
+		{
 			"id": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createSecretKey",
 			"identities": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createSecretKey"]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createSign",
+			"identities": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createSign"]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createVerify",
+			"identities": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.createVerify"]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.generateKeyPair",
+			"identities": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.generateKeyPair"]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.generateKeyPairSync",
+			"identities": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.generateKeyPairSync"]
 		},
 		{
 			"id": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.getCipherInfo",
@@ -288048,10 +290148,6 @@
 		{
 			"id": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.getHashes",
 			"identities": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.getHashes"]
-		},
-		{
-			"id": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.getRandomValues",
-			"identities": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.getRandomValues"]
 		},
 		{
 			"id": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.hash",
@@ -288090,10 +290186,6 @@
 			"identities": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.randomInt"]
 		},
 		{
-			"id": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.randomUUID",
-			"identities": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.randomUUID"]
-		},
-		{
 			"id": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.randomUUIDv7",
 			"identities": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.randomUUIDv7"]
 		},
@@ -288106,32 +290198,16 @@
 			"identities": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.scryptSync"]
 		},
 		{
-			"id": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.decrypt",
-			"identities": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.decrypt"]
-		},
-		{
-			"id": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.digest",
-			"identities": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.digest"]
-		},
-		{
-			"id": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.encrypt",
-			"identities": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.encrypt"]
-		},
-		{
-			"id": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.importKey",
-			"identities": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.importKey"]
-		},
-		{
-			"id": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.sign",
-			"identities": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.sign"]
-		},
-		{
-			"id": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.verify",
-			"identities": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.subtle.verify"]
+			"id": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.sign",
+			"identities": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.sign"]
 		},
 		{
 			"id": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.timingSafeEqual",
 			"identities": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.timingSafeEqual"]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.verify",
+			"identities": ["%MAL_INTRINSIC_NODE_CRYPTO_MODULE%.verify"]
 		},
 		{
 			"id": "%MAL_INTRINSIC_NODE_DIAGNOSTICS_CHANNEL_MODULE%.Channel",
@@ -288858,44 +290934,6 @@
 			"identities": ["%MAL_INTRINSIC_NODE_MODULE_API_MODULE%.setSourceMapsSupport"]
 		},
 		{
-			"id": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server",
-			"identities": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server"]
-		},
-		{
-			"id": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.address",
-			"identities": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.address"]
-		},
-		{
-			"id": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.close",
-			"identities": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.close"]
-		},
-		{
-			"id": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.getConnections",
-			"identities": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.getConnections"]
-		},
-		{
-			"id": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.listen",
-			"identities": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.listen"]
-		},
-		{
-			"id": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.listening<get>",
-			"identities": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.listening<get>"]
-		},
-		{
-			"id": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.ref",
-			"identities": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.ref"]
-		},
-		{
-			"id": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.unref",
-			"identities": ["%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype.unref"]
-		},
-		{
-			"id": "%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype[%Symbol.asyncDispose%]",
-			"identities": [
-				"%MAL_INTRINSIC_NODE_NET_MODULE%.Server.prototype[%Symbol.asyncDispose%]"
-			]
-		},
-		{
 			"id": "%MAL_INTRINSIC_NODE_NET_MODULE%.connect",
 			"identities": [
 				"%MAL_INTRINSIC_NODE_NET_MODULE%.connect",
@@ -289321,12 +291359,78 @@
 			"identities": ["%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.setDefaultHighWaterMark"]
 		},
 		{
+			"id": "%MAL_INTRINSIC_NODE_TLS_MODULE%.SecureContext",
+			"identities": ["%MAL_INTRINSIC_NODE_TLS_MODULE%.SecureContext"]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server",
+			"identities": ["%MAL_INTRINSIC_NODE_TLS_MODULE%.Server"]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.[[Prototype]]",
+			"identities": ["%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.[[Prototype]]"]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].address",
+			"identities": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].address"
+			]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].close",
+			"identities": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].close"
+			]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].getConnections",
+			"identities": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].getConnections"
+			]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].listen",
+			"identities": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].listen"
+			]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].listening<get>",
+			"identities": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].listening<get>"
+			]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].ref",
+			"identities": ["%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].ref"]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].unref",
+			"identities": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]].unref"
+			]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]][%Symbol.asyncDispose%]",
+			"identities": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.Server.prototype.[[Prototype]][%Symbol.asyncDispose%]"
+			]
+		},
+		{
 			"id": "%MAL_INTRINSIC_NODE_TLS_MODULE%.checkServerIdentity",
 			"identities": ["%MAL_INTRINSIC_NODE_TLS_MODULE%.checkServerIdentity"]
 		},
 		{
 			"id": "%MAL_INTRINSIC_NODE_TLS_MODULE%.connect",
 			"identities": ["%MAL_INTRINSIC_NODE_TLS_MODULE%.connect"]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_TLS_MODULE%.createSecureContext",
+			"identities": ["%MAL_INTRINSIC_NODE_TLS_MODULE%.createSecureContext"]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_TLS_MODULE%.createServer",
+			"identities": ["%MAL_INTRINSIC_NODE_TLS_MODULE%.createServer"]
 		},
 		{
 			"id": "%MAL_INTRINSIC_NODE_TLS_MODULE%.getCACertificates",
@@ -292251,6 +294355,14 @@
 			"id": "globalThis.CountQueuingStrategy.prototype.size<get>",
 			"identities": ["globalThis.CountQueuingStrategy.prototype.size<get>"]
 		},
+		{
+			"id": "globalThis.Crypto",
+			"identities": [
+				"globalThis.Crypto",
+				"globalThis.CryptoKey",
+				"globalThis.SubtleCrypto"
+			]
+		},
 		{ "id": "globalThis.CustomEvent", "identities": ["globalThis.CustomEvent"] },
 		{ "id": "globalThis.DOMException", "identities": ["globalThis.DOMException"] },
 		{
@@ -293237,6 +295349,38 @@
 		{
 			"id": "globalThis.crypto.randomUUID",
 			"identities": ["globalThis.crypto.randomUUID"]
+		},
+		{
+			"id": "globalThis.crypto.subtle.decrypt",
+			"identities": ["globalThis.crypto.subtle.decrypt"]
+		},
+		{
+			"id": "globalThis.crypto.subtle.digest",
+			"identities": ["globalThis.crypto.subtle.digest"]
+		},
+		{
+			"id": "globalThis.crypto.subtle.encrypt",
+			"identities": ["globalThis.crypto.subtle.encrypt"]
+		},
+		{
+			"id": "globalThis.crypto.subtle.exportKey",
+			"identities": ["globalThis.crypto.subtle.exportKey"]
+		},
+		{
+			"id": "globalThis.crypto.subtle.generateKey",
+			"identities": ["globalThis.crypto.subtle.generateKey"]
+		},
+		{
+			"id": "globalThis.crypto.subtle.importKey",
+			"identities": ["globalThis.crypto.subtle.importKey"]
+		},
+		{
+			"id": "globalThis.crypto.subtle.sign",
+			"identities": ["globalThis.crypto.subtle.sign"]
+		},
+		{
+			"id": "globalThis.crypto.subtle.verify",
+			"identities": ["globalThis.crypto.subtle.verify"]
 		},
 		{ "id": "globalThis.escape", "identities": ["globalThis.escape"] },
 		{
