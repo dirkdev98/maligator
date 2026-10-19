@@ -106,12 +106,14 @@ async function statPolling() {
 
 	const missing = path.join(root, "appears.txt");
 	await new Promise((resolve) => {
+		// A first report can arrive before the file appears; the write must not outlive the fixture.
+		const appear = setTimeout(() => fs.writeFileSync(missing, "xyz"), 60);
 		fs.watchFile(missing, { interval: 20 }, (curr, prev) => {
 			console.log("appeared", curr.size, prev.size, prev.mtimeMs, prev.ino);
 			fs.unwatchFile(missing);
+			clearTimeout(appear);
 			resolve();
 		});
-		setTimeout(() => fs.writeFileSync(missing, "xyz"), 60);
 	});
 }
 
