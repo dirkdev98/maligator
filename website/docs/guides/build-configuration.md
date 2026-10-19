@@ -55,7 +55,7 @@ Callback and promise forms of filesystem `access`, `unlink`, and `rename` run th
 
 `node:vm` runs scripts in the current context with the global semantics of indirect eval, and a `Script` parses once. A context from `createContext` is a separate realm: the sandbox's own enumerable properties are copied in before a run, and globals the script created or changed are copied back afterwards. Note that the sandbox's prototype chain, getters and deletions do not reach the script.
 
-`node:crypto` imports, exports and generates asymmetric keys as `KeyObject`s, and signs and verifies with RSA (PKCS#1 v1.5 and PSS), ECDSA on P-256 and P-384, and Ed25519. `crypto.subtle` handles the same keys. RSA key generation and encrypted PEM keys are not supported yet.
+`node:crypto` imports, exports and generates asymmetric keys as `KeyObject`s, and signs and verifies with RSA (PKCS#1 v1.5 and PSS), ECDSA on P-256 and P-384, and Ed25519. `crypto.subtle` handles the same keys, and `X509Certificate` reads PEM and DER certificates. RSA key generation, encrypted PEM keys and `createECDH` are not supported yet.
 
 `tls.createServer` and `https.createServer` terminate TLS with rustls on the sockets `node:net` and `node:http` already use, including ALPN, client certificates, `setSecureContext` and Node's `ERR_SSL_*` codes for failed handshakes. `tls.Server` also takes `SNICallback` and `addContext`, and TLS sockets answer `getPeerCertificate()`. Unverified client certificates are rejected even with `rejectUnauthorized: false`, so `authorizationError` is not available yet.
 
