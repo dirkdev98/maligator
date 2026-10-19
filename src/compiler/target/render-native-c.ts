@@ -45,7 +45,15 @@ import type {
 	NativeCallTargetTransport,
 	NativeCallTransportPlan,
 } from "./lower-native-calls.ts";
-import type { NativeCaptureAccessPlan } from "./lower-native-captures.ts";
+import {
+	ENVIRONMENT_ABSENT,
+	ENVIRONMENT_PRESENT,
+	planLazyCaptureEnvironment,
+} from "./lower-native-captures.ts";
+import type {
+	NativeCaptureAccessPlan,
+	NativeLazyCaptureEnvironment,
+} from "./lower-native-captures.ts";
 import {
 	numericLoopOrder,
 	nativeNumericBuiltinInstruction,
@@ -226,6 +234,14 @@ interface NativeRegionTopology {
 	>;
 }
 
+/** Frame slots standing in for this activation's capture environment until it exists. */
+interface NativeCaptureShadow {
+	readonly plan: NativeLazyCaptureEnvironment;
+	readonly base: number;
+	/** Creates the environment from the shadow slots and assigns `env`. */
+	readonly create: string;
+}
+
 interface NativeBodyAnalysis {
 	readonly captures: NativeCaptureAccessPlan;
 	readonly regionTopology: (
@@ -239,6 +255,7 @@ interface NativeBodyAnalysis {
 	readonly jumpTargets: ReadonlySet<number>;
 	readonly handlerTargets: ReadonlyArray<number | undefined>;
 	readonly ownsCaptureEnvironment: boolean;
+	readonly lazyCaptureEnvironment: NativeLazyCaptureEnvironment | undefined;
 	readonly iterationEligibilityRegisters: ReadonlySet<number>;
 	readonly writeRegistersAt: (instructionIp: number) => ReadonlyArray<number>;
 }
@@ -351,6 +368,7 @@ function analyzeNativeBody(
 				? []
 				: exceptionHandlerTargets(fn.instructions.length, fn.handlers),
 		ownsCaptureEnvironment: captures.ownsEnvironment,
+		lazyCaptureEnvironment: planLazyCaptureEnvironment(fn, captures),
 		iterationEligibilityRegisters,
 	};
 }
@@ -364,10 +382,10 @@ function captureOwnerName(
 }
 
 function initializeFixedCaptureOwners(
-	fn: BytecodeFunction,
 	captures: NativeCaptureAccessPlan,
 	relocation: NativeRelocationExpressions,
 	declare: boolean,
+	incoming: "env" | "env->parent",
 ): Array<string> {
 	const binding = declare ? "MalEnv *const " : "";
 	const owners = captures.owners.map((owner) => owner.ownerFunctionIndex);
@@ -375,7 +393,6 @@ function initializeFixedCaptureOwners(
 	// Native constructors encode these layouts as one tagged owner, a display,
 	// or an exact complete chain. Wire overlays and resumed scopes can differ.
 	if (captures.initialization === "complete-layout" && !relocation.enabled) {
-		const incoming = fn.capturedCount > 0 ? "env->parent" : "env";
 		if (layout.length === 1)
 			return [
 				`${binding}${captureOwnerName(relocation, owners[0]!)} = mal_env_untag_single_owner(${incoming});`,
@@ -428,6 +445,21 @@ function initializeFixedCaptureOwners(
 			return `${binding}${captureOwnerName(relocation, owner)} = ${lookup};`;
 		},
 	);
+}
+
+function ensureCaptureEnvironment(
+	shadow: NativeCaptureShadow | undefined,
+	ip: number,
+): Array<string> {
+	const state = shadow?.plan.states[ip] ?? ENVIRONMENT_PRESENT;
+	if (shadow === undefined || (state & ENVIRONMENT_ABSENT) === 0) return [];
+	const create = [
+		shadow.create,
+		"__gc_frame.env = env;",
+		...(shadow.plan.guarded ? ["__capture_env_ready = true;"] : []),
+	];
+	if (state === ENVIRONMENT_ABSENT) return create;
+	return ["if (!__capture_env_ready) {", ...create.map((line) => `  ${line}`), "}"];
 }
 
 function initializeCopiedCaptureValues(
@@ -1723,6 +1755,7 @@ function emitCompiledVariant(
 	// node at entry (below) and reassigns `env` to it, so the body's captured
 	// access and CREATE_FUNCTION see this activation's slots.
 	const capturesEnv = fn.capturedCount > 0;
+	const lazyCaptures = analysis.lazyCaptureEnvironment;
 
 	if (
 		nativeContract.registerRepresentations.length !== fn.registerCount ||
@@ -2077,6 +2110,15 @@ function emitCompiledVariant(
 		});
 	}
 	const fieldCalls = renderFieldCallSlots(fn, nativeContract, () => nextStackSlot++);
+	const captureShadow: NativeCaptureShadow | undefined =
+		lazyCaptures === undefined
+			? undefined
+			: {
+					plan: lazyCaptures,
+					create: `env = mal_env_new_from_frame(vm, env, ${relocation.functionIndex(index)}, ${fn.capturedCount}, ${fn.closureCaptureOwners !== undefined}, &__gc_slots[${nextStackSlot}]);`,
+					base: nextStackSlot,
+				};
+	if (lazyCaptures !== undefined) nextStackSlot += fn.capturedCount;
 	const totalSlots = nextStackSlot;
 
 	// `with` pushes an object environment record onto the `env` chain (WITH_ENTER),
@@ -2183,6 +2225,7 @@ function emitCompiledVariant(
 		new Set(storage.rootPublicationContinuations),
 		maxCodeUnits,
 		restArgumentRootReleaseIp,
+		captureShadow,
 	);
 	if (body === null) {
 		return null;
@@ -2388,18 +2431,20 @@ function emitCompiledVariant(
 	// Allocate this activation's captured-slot env (mirroring the interpreter) and
 	// reassign `env` so the body's LOAD/STORE_CAPTURED(self) and CREATE_FUNCTION use
 	// it, then root it in the published frame. capturesEnv implies needsRootFrame.
-	if (capturesEnv) {
+	// A lazy activation keeps its captured slots in the frame until it needs the env.
+	if (capturesEnv && lazyCaptures === undefined) {
 		lines.push(
 			`    env = ${fn.closureCaptureOwners === undefined ? "mal_env_new" : "mal_env_new_compact"}(vm, env, ${relocation.functionIndex(index)}, ${fn.capturedCount});`,
 			`    __gc_frame.env = env;`,
 		);
 	}
+	if (lazyCaptures?.guarded === true) lines.push("    bool __capture_env_ready = false;");
 
 	for (const line of initializeFixedCaptureOwners(
-		fn,
 		analysis.captures,
 		relocation,
 		true,
+		capturesEnv && lazyCaptures === undefined ? "env->parent" : "env",
 	)) {
 		lines.push(`    ${line}`);
 	}
@@ -3303,10 +3348,10 @@ function emitResumableFunction(
 	);
 	lines.push(`        vm->root_frame_head = &__gc_frame;`);
 	for (const line of initializeFixedCaptureOwners(
-		fn,
 		analysis.captures,
 		relocation,
 		false,
+		fn.capturedCount > 0 ? "env->parent" : "env",
 	)) {
 		lines.push(`        ${line}`);
 	}
@@ -3359,10 +3404,10 @@ function emitResumableFunction(
 		);
 	}
 	for (const line of initializeFixedCaptureOwners(
-		fn,
 		analysis.captures,
 		relocation,
 		false,
+		fn.capturedCount > 0 ? "env->parent" : "env",
 	)) {
 		lines.push(`        ${line}`);
 	}
@@ -4352,6 +4397,7 @@ function emitBody(
 	rootPublicationContinuations: ReadonlySet<number> = new Set(),
 	maxCodeUnits = Infinity,
 	restArgumentRootReleaseIp?: number,
+	captureShadow?: NativeCaptureShadow,
 ): EmittedBody | null {
 	const callTransportByIp = new Map(
 		callTransports.map((plan) => [plan.instructionIp, plan]),
@@ -5001,6 +5047,7 @@ function emitBody(
 		directCompiledTargets,
 		directCompiledEntries,
 		ownedCaptureFunctionIndex: ownsCaptureEnvironment ? functionIndex : undefined,
+		captureShadow,
 		fixedCaptureOwners: stableCaptureOwners,
 		requiredCaptureOwners,
 		copiedCaptures,
@@ -5992,6 +6039,7 @@ interface NativeInstructionContext {
 	readonly scalarInputValues?: ReadonlyMap<number, string>;
 	readonly inactiveRootMaskStatements?: ReadonlyMap<NativeInactiveRootMask, string>;
 	readonly ownedCaptureFunctionIndex?: number;
+	readonly captureShadow?: NativeCaptureShadow;
 	readonly fixedCaptureOwners?: ReadonlySet<number>;
 	readonly requiredCaptureOwners?: ReadonlySet<number>;
 	readonly copiedCaptures?: ReadonlyMap<string, number>;
@@ -6338,6 +6386,7 @@ function emitInstruction(
 		stringSplitTrimLengthSite: context.stringSplitTrimLengthSite,
 		iteratorStepInactiveRootMask: context.iteratorStepInactiveRootMask,
 		ownedCaptureFunctionIndex: context.ownedCaptureFunctionIndex,
+		captureShadow: context.captureShadow,
 		fixedCaptureOwners: context.fixedCaptureOwners,
 		requiredCaptureOwners: context.requiredCaptureOwners,
 		copiedCaptures: context.copiedCaptures,
@@ -7815,6 +7864,7 @@ function emitInstruction(
 		}
 		case "CREATE_FUNCTION":
 			return [
+				...ensureCaptureEnvironment(context.captureShadow, ip),
 				`r${instruction.dst} = mal_vm_op_create_function(vm, ${relocation.functionIndex(instruction.functionIndex)}, env);`,
 			];
 		case "DEFINE_PROPERTY": {
@@ -7916,8 +7966,17 @@ function emitInstruction(
 					`r${instruction.dst} = ${owner} != nullptr ? ${owner}->slots[${instruction.index}] : MAL_VALUE_UNDEFINED;`,
 				];
 			}
-			if (instruction.ownerFunctionIndex === context.ownedCaptureFunctionIndex)
-				return [`r${instruction.dst} = env->slots[${instruction.index}];`];
+			if (instruction.ownerFunctionIndex === context.ownedCaptureFunctionIndex) {
+				const shadow = context.captureShadow;
+				const state = shadow?.plan.states[ip] ?? ENVIRONMENT_PRESENT;
+				const environment = `env->slots[${instruction.index}]`;
+				if (shadow === undefined || (state & ENVIRONMENT_ABSENT) === 0)
+					return [`r${instruction.dst} = ${environment};`];
+				const frame = `__gc_slots[${shadow.base + instruction.index}]`;
+				return [
+					`r${instruction.dst} = ${state === ENVIRONMENT_ABSENT ? frame : `__capture_env_ready ? ${environment} : ${frame}`};`,
+				];
+			}
 			return [
 				`r${instruction.dst} = mal_vm_load_captured(env, ${relocation.ownerFunctionIndex(instruction.ownerFunctionIndex)}, ${instruction.index});`,
 			];
@@ -7945,12 +8004,24 @@ function emitInstruction(
 					reps[instruction.src] === "number" ||
 					reps[instruction.src] === "int32" ||
 					reps[instruction.src] === "boolean";
-				return [
+				const store = [
 					`mal_gc_write_barrier(env->slots[${instruction.index}]);`,
 					`env->slots[${instruction.index}] = ${boxed(instruction.src)};`,
 					...(!primitive
 						? [`mal_gc_card(&env->header, ${boxed(instruction.src)});`]
 						: []),
+				];
+				const shadow = context.captureShadow;
+				const state = shadow?.plan.states[ip] ?? ENVIRONMENT_PRESENT;
+				if (shadow === undefined || (state & ENVIRONMENT_ABSENT) === 0) return store;
+				const frame = `__gc_slots[${shadow.base + instruction.index}] = ${boxed(instruction.src)};`;
+				if (state === ENVIRONMENT_ABSENT) return [frame];
+				return [
+					"if (__capture_env_ready) {",
+					...store.map((line) => `  ${line}`),
+					"} else {",
+					`  ${frame}`,
+					"}",
 				];
 			}
 			return [
@@ -12208,6 +12279,7 @@ function emitInstruction(
 			return [`r${instruction.dst} = mal_vm_op_create_private_name(vm);`];
 		case "CREATE_PRIVATE_NAMES":
 			return [
+				...ensureCaptureEnvironment(context.captureShadow, ip),
 				`mal_vm_op_create_private_names(vm, env, ${relocation.ownerFunctionIndex(instruction.ownerFunctionIndex)}, ${instruction.capturedIndices.length}, (const i32[]){ ${instruction.capturedIndices.join(", ")} });`,
 			];
 		case "DEFINE_PRIVATE":

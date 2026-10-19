@@ -9,6 +9,13 @@ import type {
 import { resolveNativeLinks, TEST_RELOCATION } from "./helpers/native-relocation.ts";
 import { testPropertyCacheCount } from "./helpers/program-image.ts";
 
+// An entry closure needs the owned environment at once, so it is allocated eagerly.
+const createsClosure: BytecodeInstruction = {
+	opcode: "CREATE_FUNCTION",
+	dst: 2,
+	functionIndex: 0,
+};
+
 function emit(
 	instructions: Array<BytecodeInstruction>,
 	options: Partial<BytecodeFunction> = {},
@@ -201,6 +208,7 @@ describe("native lexical owner lookup contract", () => {
 		(capturedCount) => {
 			const emitted = emit(
 				[
+					createsClosure,
 					{ opcode: "LOAD_CAPTURED", dst: 0, ownerFunctionIndex: 2, index: 0 },
 					{ opcode: "RETURN", value: 0 },
 				],
@@ -221,6 +229,7 @@ describe("native lexical owner lookup contract", () => {
 	it("decodes a bounded capture display or complete chain once per entry", () => {
 		const emitted = emit(
 			[
+				createsClosure,
 				{ opcode: "LOAD_CAPTURED", dst: 0, ownerFunctionIndex: 2, index: 0 },
 				{ opcode: "LOAD_CAPTURED", dst: 1, ownerFunctionIndex: 5, index: 0 },
 				{ opcode: "RETURN", value: 0 },
@@ -343,6 +352,7 @@ describe("native lexical owner lookup contract", () => {
 	it("keeps owned storage direct and resolves external storage after allocation", () => {
 		const { source } = emit(
 			[
+				createsClosure,
 				{ opcode: "LOAD_CAPTURED", dst: 0, ownerFunctionIndex: 2, index: 0 },
 				{ opcode: "STORE_CAPTURED", src: 0, ownerFunctionIndex: 0, index: 0 },
 				{ opcode: "LOAD_CAPTURED", dst: 1, ownerFunctionIndex: 0, index: 0 },
@@ -381,6 +391,7 @@ describe("native lexical owner lookup contract", () => {
 			const emitted = emit(
 				[
 					...(isGenerator ? [{ opcode: "GENERATOR_START" as const }] : []),
+					createsClosure,
 					{ opcode: "STORE_CAPTURED", src: 0, ownerFunctionIndex: 0, index: 0 },
 					{ opcode: "RETURN", value: 0 },
 				],
@@ -396,6 +407,32 @@ describe("native lexical owner lookup contract", () => {
 			}
 		},
 	);
+
+	it("creates an owned environment from frame slots only on paths that create a closure", () => {
+		const emitted = emit(
+			[
+				{ opcode: "STORE_CAPTURED", src: 0, ownerFunctionIndex: 0, index: 0 },
+				{ opcode: "LOAD_CAPTURED", dst: 1, ownerFunctionIndex: 2, index: 0 },
+				{ opcode: "JUMP_IF", cond: 1, targetIp: 4 },
+				{ opcode: "RETURN", value: 0 },
+				createsClosure,
+				{ opcode: "LOAD_CAPTURED", dst: 0, ownerFunctionIndex: 0, index: 0 },
+				{ opcode: "RETURN", value: 0 },
+			],
+			{ capturedCount: 1, closureCaptureOwners: [2] },
+		);
+		for (const { source } of [emitted, ...emitted.directEntries]) {
+			expect(source).not.toMatch(/env = mal_env_new(_compact)?\(/);
+			expect(source).toContain("__capture_owner_2 = mal_env_untag_single_owner(env);");
+			const creation = source.indexOf(
+				"env = mal_env_new_from_frame(vm, env, 0, 1, true, ",
+			);
+			expect(creation).toBeGreaterThan(-1);
+			expect(source.indexOf("mal_vm_op_create_function(")).toBeGreaterThan(creation);
+			expect(source.indexOf("env->slots[0]")).toBeGreaterThan(creation);
+			expect(source).not.toContain("__capture_env_ready");
+		}
+	});
 
 	it("omits incoming environment roots only for a certified empty layout", () => {
 		const instructions: Array<BytecodeInstruction> = [

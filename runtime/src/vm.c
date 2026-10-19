@@ -450,7 +450,9 @@ void mal_vm_free_coroutine_buffer_pool(MalVm *vm) {
 #define MAL_MAX_STRING_CONSTANTS (128 * 1024)
 #define MAL_MAX_BIGINT_CONSTANTS (16 * 1024)
 
-static MalEnv *mal_env_new_storage(MalVm *vm, MalEnv *parent, i32 function_index, i32 count, bool compact_parent) {
+static MalEnv *mal_env_new_storage(
+    MalVm *vm, MalEnv *parent, i32 function_index, i32 count, bool compact_parent, const MalValue *values
+) {
     MalEnv *env = mal_heap_alloc(
         &vm->heap, sizeof(MalEnv) + sizeof(MalValue) * (usize) count, MAL_HEAP_ENV
     );
@@ -473,26 +475,46 @@ static MalEnv *mal_env_new_storage(MalVm *vm, MalEnv *parent, i32 function_index
         }
     }
     for (i32 i = 0; i < count; i++) {
+        MalValue value = values == nullptr ? mal_value_new_undefined() : values[i];
 #if defined(__wasi__)
-        env->slots[i] = mal_value_new_undefined();
+        env->slots[i] = value;
 #else
-        atomic_init(&env->slots[i], mal_value_new_undefined());
+        atomic_init(&env->slots[i], value);
 #endif
+    }
+    if (function_index >= 0) MAL_PERF_COUNT(capture_environments);
+    if (values != nullptr) {
+        MAL_PERF_COUNT(deferred_capture_environments);
+        // A cell allocated black during marking is old and may now hold young values.
+        mal_gc_remember_if_old(&env->header);
     }
     return env;
 }
 
-MalEnv *mal_env_new(MalVm *vm, MalEnv *parent, i32 function_index, i32 count) {
-    bool compact_parent = function_index >= 0
+static bool mal_env_inherits_compact_parent(MalVm *vm, MalEnv *parent, i32 function_index) {
+    return function_index >= 0
         ? function_index < vm->runtime_image->function_count &&
             vm->runtime_image->functions[function_index].closure_captures != nullptr
         : parent != nullptr && (mal_env_is_single_owner(parent) || parent->compact_parent ||
             mal_env_is_capture_display(parent));
-    return mal_env_new_storage(vm, parent, function_index, count, compact_parent);
+}
+
+MalEnv *mal_env_new(MalVm *vm, MalEnv *parent, i32 function_index, i32 count) {
+    return mal_env_new_storage(
+        vm, parent, function_index, count,
+        mal_env_inherits_compact_parent(vm, parent, function_index), nullptr);
 }
 
 MalEnv *mal_env_new_compact(MalVm *vm, MalEnv *parent, i32 function_index, i32 count) {
-    return mal_env_new_storage(vm, parent, function_index, count, true);
+    return mal_env_new_storage(vm, parent, function_index, count, true, nullptr);
+}
+
+MalEnv *mal_env_new_from_frame(
+    MalVm *vm, MalEnv *parent, i32 function_index, i32 count, bool compact, const MalValue *values
+) {
+    return mal_env_new_storage(
+        vm, parent, function_index, count,
+        compact || mal_env_inherits_compact_parent(vm, parent, function_index), values);
 }
 
 MalEnv *mal_env_new_with_object(MalVm *vm, MalEnv *parent, MalValue object) {

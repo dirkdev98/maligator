@@ -2493,6 +2493,14 @@ void mal_vm_retain_loaded_runtime_image(MalVm *vm, MalLoadedRuntimeImage *loaded
 MalEnv *mal_env_new(MalVm *vm, MalEnv *parent, i32 function_index, i32 count);
 // Native entries with a certified closure layout already know the parent policy.
 MalEnv *mal_env_new_compact(MalVm *vm, MalEnv *parent, i32 function_index, i32 count);
+/**
+ * A native activation's environment created after its body already ran, with slots
+ * copied from `values`. They must stay rooted: the allocation may collect.
+ * `compact` selects mal_env_new_compact's parent policy, otherwise mal_env_new's.
+ */
+MalEnv *mal_env_new_from_frame(
+    MalVm *vm, MalEnv *parent, i32 function_index, i32 count, bool compact, const MalValue *values
+);
 
 // Allocate a `with` object environment record (function_index MAL_ENV_WITH_OBJECT,
 // slots[0] = object) and link it onto `parent`. Pushed onto the env chain by

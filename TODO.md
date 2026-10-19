@@ -678,23 +678,6 @@ contracts or investigates costs still visible after the string follow-ups.
       closure object the call passes as its callee. Sinking creation into the
       cases that use it, or passing no object when the target never reads its
       callee, would remove most of these allocations.
-- [ ] Create a function's capture environment where its first closure is created.
-      Functions that capture parameters only in some branches allocate the
-      environment on every entry: `remapRuntimeConstantReferences` and
-      `coreAttributeValuesEqual` each allocate about 250,000 in the self-compile,
-      although most of their calls return from a primitive check before any
-      closure exists. Counting environments against closures per function in the
-      parser workload puts the avoidable environments near 860,000 (also
-      `remapRuntimeInstructionConstants`, `lowerInstructionToBytecodeInstruction`,
-      `effectDomainsForMask`, `relocateFunctionReferences`, `foldControl` and
-      `eliminateLocalDuplicates`), roughly 0.5 to 1% of the run. The native
-      renderer could create the environment at the first access to it instead of
-      in the prologue, folding the entry stores that only mark bindings
-      uninitialized into that creation, while the interpreter stays eager; reads of
-      captured parameters that are never reassigned must come from their registers,
-      or the first parameter check would still create it. A ten-line equality
-      function shaped like `coreAttributeValuesEqual` runs 11.7 times slower than
-      in Node on primitive inputs.
 - [ ] Publish compiled root frames only on paths that can reach a safepoint.
       Small accessors such as the Core store's `instructionKind` and `checkedId`
       link a root frame and clear their GC slots on entry although only their
