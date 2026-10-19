@@ -1,11 +1,14 @@
 #pragma once
 
+#include <stdatomic.h>
+
 #include "./defaults.h"
 #include "value.h"
 
 struct MalVm;
 struct MalObject;
 struct MalRootSpan;
+struct MalObjectSetSite;
 
 /**
  * Isolate-local state that generated code and hot runtime paths read on nearly every
@@ -48,17 +51,37 @@ typedef struct MalIsolateLocals {
     /* Holds while no watched built-in prototype/lookup object has been mutated; gates
      * primitive, intrinsic-own, and inherited-method value caches. */
     bool primitive_method_protector;
+    /* This thread's mal_object_set site table, bound on first use. */
+    struct MalObjectSetSite *object_set_sites;
 } MalIsolateLocals;
 
 extern MAL_ISOLATE_LOCAL MalIsolateLocals mal_isolate;
 
-#define mal_root_span_head (mal_isolate.root_span_head)
-#define mal_prototype_chain_epoch (mal_isolate.prototype_chain_epoch)
-#define mal_array_prototype_object (mal_isolate.array_prototype_object)
-#define mal_array_values_callback (mal_isolate.array_values_callback)
-#define mal_array_iterator_next_callback (mal_isolate.array_iterator_next_callback)
-#define mal_gc_poll (mal_isolate.gc_poll)
-#define mal_gc_termination (mal_isolate.gc_termination)
-#define mal_gc_marking_active (mal_isolate.gc_marking_active)
-#define mal_array_elements_protector (mal_isolate.array_elements_protector)
-#define mal_primitive_method_protector (mal_isolate.primitive_method_protector)
+#if defined(__APPLE__) && !defined(__wasi__)
+/* Even one record costs a lookup call per function on macOS. Until a second isolate
+ * thread starts, the only isolate's record is also published here. */
+extern _Atomic(MalIsolateLocals *) mal_sole_isolate;
+
+static inline __attribute__((always_inline)) MalIsolateLocals *mal_isolate_locals(void) {
+    MalIsolateLocals *sole = atomic_load_explicit(&mal_sole_isolate, memory_order_relaxed);
+    return __builtin_expect(sole != nullptr, 1) ? sole : &mal_isolate;
+}
+#else
+#define mal_isolate_locals() (&mal_isolate)
+#endif
+
+/** Publish the calling thread's record unless another isolate thread was ever started. */
+void mal_isolate_claim_sole(void);
+/** Call before starting another isolate thread; afterwards each isolate reads its own record. */
+void mal_isolate_release_sole(void);
+
+#define mal_root_span_head (mal_isolate_locals()->root_span_head)
+#define mal_prototype_chain_epoch (mal_isolate_locals()->prototype_chain_epoch)
+#define mal_array_prototype_object (mal_isolate_locals()->array_prototype_object)
+#define mal_array_values_callback (mal_isolate_locals()->array_values_callback)
+#define mal_array_iterator_next_callback (mal_isolate_locals()->array_iterator_next_callback)
+#define mal_gc_poll (mal_isolate_locals()->gc_poll)
+#define mal_gc_termination (mal_isolate_locals()->gc_termination)
+#define mal_gc_marking_active (mal_isolate_locals()->gc_marking_active)
+#define mal_array_elements_protector (mal_isolate_locals()->array_elements_protector)
+#define mal_primitive_method_protector (mal_isolate_locals()->primitive_method_protector)

@@ -895,6 +895,7 @@ static void mal_vm_init_language_state(MalVm *vm, const MalRuntimeImage *program
 }
 
 void mal_vm_init(MalVm *vm, const MalRuntimeImage *program) {
+	mal_isolate_claim_sole();
 	mal_vm_init_engine_state(vm);
 	mal_vm_adopt_program_image(vm, program);
 	mal_vm_init_execution_state(vm, program);

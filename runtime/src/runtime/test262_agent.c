@@ -342,6 +342,7 @@ static MalValue mal_test262_agent_start(
     pthread_mutex_lock(&g_test262.lock);
     agent->received = g_test262.generation;
     pthread_t thread;
+    mal_isolate_release_sole();
     if (pthread_create(&thread, &attributes, test262_agent_main, agent) != 0) {
         pthread_mutex_unlock(&g_test262.lock);
         pthread_attr_destroy(&attributes);

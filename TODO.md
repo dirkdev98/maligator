@@ -700,11 +700,19 @@ contracts or investigates costs still visible after the string follow-ups.
       public-overflow test that a matching non-dictionary shape already implies, and
       one compare for mode, receiver type and row count) needs measuring, and its C
       compile time with it.
-- [ ] Read isolate state without a call on macOS. Every `_Thread_local` access is
-      a `_tlv_get_addr` call there, about 2% of the Express in-process samples
-      (field stores test the marking flag, `mal_object_set` its site table, the
-      prototype epoch). Linux reads them from the thread pointer. Passing the
-      isolate through the VM, or caching its address per call, would remove most.
+- [ ] Reach the remaining thread-locals without a call on macOS. Isolate state
+      and the `mal_object_set` site table go through a plain pointer while one
+      isolate runs, but generated code still keeps a thread-local
+      `MalDefinePropertyCache` per static define site (510 in the compiler), and
+      the fiber, profile and perf-stats state stay thread-local. Each access is a
+      `_tlv_get_addr` call there; Linux reads them from the thread pointer.
+- [ ] Allocate objects with the slot capacity their allocation site reaches.
+      Objects that outgrow their inline slots move them to `malloc` storage,
+      grow it by `realloc` and free it from a minor-sweep finalizer: growth and
+      those finalizers take about 2.7% of the Express in-process samples
+      (request and response objects, RegExp results, runtime-built stream
+      state). V8-style slack tracking per allocation site, rather than per root
+      shape, would size the cell once.
 - [ ] Dispatch the objects phase's pricing rules without loading the method. Its
       `rules[i % 3].quote(order)` loop runs 2.9 times slower than Node while the
       particle loop is 1.37 times: the order allocation is already elided and the

@@ -74,6 +74,28 @@ MAL_ISOLATE_LOCAL MalIsolateLocals mal_isolate = {
     .primitive_method_protector = true,
 };
 
+#if defined(__APPLE__) && !defined(__wasi__)
+_Atomic(MalIsolateLocals *) mal_sole_isolate = nullptr;
+static _Atomic bool g_isolate_threads_started = false;
+
+void mal_isolate_claim_sole(void) {
+    if (atomic_load_explicit(&g_isolate_threads_started, memory_order_acquire)) return;
+    MalIsolateLocals *expected = nullptr;
+    if (!atomic_compare_exchange_strong(&mal_sole_isolate, &expected, &mal_isolate) &&
+            expected != &mal_isolate) {
+        mal_isolate_release_sole();
+    }
+}
+
+void mal_isolate_release_sole(void) {
+    atomic_store_explicit(&g_isolate_threads_started, true, memory_order_release);
+    atomic_store_explicit(&mal_sole_isolate, nullptr, memory_order_release);
+}
+#else
+void mal_isolate_claim_sole(void) {}
+void mal_isolate_release_sole(void) {}
+#endif
+
 #if !defined(__wasi__)
 static_assert(ATOMIC_BOOL_LOCK_FREE == 2, "GC poll must be signal-safe and lock-free");
 #endif

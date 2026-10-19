@@ -864,8 +864,11 @@ typedef struct MalObjectSetSite {
 static MAL_ISOLATE_LOCAL MalObjectSetSite g_object_set_sites[MAL_OBJECT_SET_SITES];
 
 static MalObjectSetSite *mal_object_set_site(const MalShape *shape, MalValue key) {
+    MalIsolateLocals *isolate = mal_isolate_locals();
+    MalObjectSetSite *sites = isolate->object_set_sites;
+    if (__builtin_expect(sites == nullptr, 0)) sites = isolate->object_set_sites = g_object_set_sites;
     uptr hash = ((uptr) shape >> 4) ^ ((uptr) key >> 3) * 0x9e3779b1u;
-    return &g_object_set_sites[(hash ^ hash >> 9) % MAL_OBJECT_SET_SITES];
+    return &sites[(hash ^ hash >> 9) % MAL_OBJECT_SET_SITES];
 }
 
 // Prototype mutations bump the epoch, and so does freeing a prototype before its

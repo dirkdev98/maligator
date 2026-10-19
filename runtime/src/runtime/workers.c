@@ -3076,6 +3076,7 @@ static MalValue worker_construct_entry(MalVm *vm, const MalValue *args, i32 argc
     pthread_attr_t attributes;
     pthread_attr_init(&attributes);
     pthread_attr_setstacksize(&attributes, WORKERS_STACK_BYTES);
+    mal_isolate_release_sole();
     int spawn = pthread_create(&thread->thread, &attributes, worker_thread_main, thread);
     pthread_attr_destroy(&attributes);
     if (spawn != 0) {

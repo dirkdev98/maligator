@@ -329,7 +329,7 @@
 	},
 	{
 		"file": "object_ops.c",
-		"sha256": "81cdab0069604b215ff87a033d54f09706238a738265c97b89116098ed0e688d"
+		"sha256": "539351bcca3e839a89858c89cb128297361f6c70db636c16c5ad85ab896f2641"
 	},
 	{
 		"file": "object_ops.h",
@@ -669,7 +669,7 @@
 	},
 	{
 		"file": "runtime/test262_agent.c",
-		"sha256": "8a94b5662d0616f015e282c9bf475bf16b66ad1b3dfe18397a816dceba672ffe"
+		"sha256": "df3a15c2f0b2a1745d66a80f810211ab054cd122b6b486d3301b044eef80aef0"
 	},
 	{
 		"file": "runtime/web_events.c",
@@ -705,7 +705,7 @@
 	},
 	{
 		"file": "runtime/workers.c",
-		"sha256": "ad88183f04181342f40005d2c579f74bf016f0ff8dcba84d08fb5b5ef3613713"
+		"sha256": "6243a5b4364568d0af06ae29ffbbdc6a2c2f3836c82da466e4f0316b0e135f2d"
 	},
 	{
 		"file": "runtime/workers.h",
@@ -721,7 +721,7 @@
 	},
 	{
 		"file": "vm.c",
-		"sha256": "2db0408f54dc16d1e732ba677d80c89520feed3f27a00614062b31370555b483"
+		"sha256": "e530e81d89db8039c585583173e23e5c918914c6720e29d1d9b02c1af0bbb6c9"
 	},
 	{
 		"file": "vm.h",
