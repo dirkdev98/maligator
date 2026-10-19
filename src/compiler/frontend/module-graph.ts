@@ -1,7 +1,7 @@
 import { hash } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import type { ESTree } from "meriyah";
 import type { ResolvedBuildConfig } from "../../build-config.ts";
 import type { PlatformModule } from "../../platform/catalog.ts";
@@ -18,6 +18,7 @@ import {
 	lookupHostModule,
 	supportedHostModuleIds,
 } from "./host-modules.ts";
+import { isImportMetaResolveCall } from "./import-meta.ts";
 import { staticModuleClosure } from "./module-closure.ts";
 import { parseModule, parseScript } from "./parser.ts";
 import type { SemanticFile } from "./semantic-analysis.ts";
@@ -74,6 +75,11 @@ export interface ModuleDependency {
 	catchableMissing?: true;
 }
 
+/** What a literal `import.meta.resolve(specifier)` answers: a file, or any other URL. */
+export type ImportMetaResolution =
+	| { specifier: string; path: string }
+	| { specifier: string; url: string };
+
 export interface ModuleRecord {
 	sourcePath?: string;
 	/**
@@ -85,6 +91,8 @@ export interface ModuleRecord {
 	source: string;
 	parsed: Pick<SemanticFile, "type" | "strict" | "ast">;
 	dependencies: Array<ModuleDependency>;
+	/** Literal `import.meta.resolve` specifiers that resolve; the rest throw at run time. */
+	importMetaResolutions?: ReadonlyArray<ImportMetaResolution>;
 	/**
 	 * Set for a `node:*` host built-in resolved from the static catalog
 	 * (host-modules.ts) rather than read from disk. Carries the planned export
@@ -171,6 +179,7 @@ export interface PersistedModuleLoad {
 	type: ModuleRecord["parsed"]["type"];
 	strict: boolean;
 	dependencies: Array<ModuleDependency>;
+	importMetaResolutions?: Array<ImportMetaResolution>;
 	observations: Array<[string, string]>;
 }
 
@@ -182,6 +191,7 @@ interface MemoizedModuleLoad {
 	sourcePath: string | undefined;
 	parsed: ModuleRecord["parsed"];
 	dependencies: ReadonlyArray<ModuleDependency>;
+	importMetaResolutions: ReadonlyArray<ImportMetaResolution>;
 	observations: ReadonlyArray<readonly [string, string]>;
 }
 
@@ -671,6 +681,7 @@ export function buildModuleGraph(
 			sourcePath: string | undefined;
 			parsed: ModuleRecord["parsed"];
 			dependencies: Array<ModuleDependency>;
+			importMetaResolutions: ReadonlyArray<ImportMetaResolution>;
 		};
 		let resolvedThroughExternal = false;
 		if (reusable || restored !== undefined) options.parseCache!.countReusedLoad();
@@ -680,6 +691,7 @@ export function buildModuleGraph(
 						sourcePath: memo.sourcePath,
 						parsed: memo.parsed,
 						dependencies: memo.dependencies.map((dependency) => ({ ...dependency })),
+						importMetaResolutions: memo.importMetaResolutions,
 					}
 				: restored !== undefined
 					? (() => {
@@ -700,6 +712,7 @@ export function buildModuleGraph(
 								dependencies: restored.dependencies.map((dependency) => ({
 									...dependency,
 								})),
+								importMetaResolutions: restored.importMetaResolutions ?? [],
 							};
 						})()
 					: recordObservations(memoKey !== undefined, () => {
@@ -737,12 +750,19 @@ export function buildModuleGraph(
 								parse();
 							const parsed = parsedModule.parsed;
 
-							const dependencies = parsedModule.dependencies.map(
-								(dependency): ModuleDependency => {
+							const importMetaResolutions = parsedModule.dependencies.flatMap(
+								(dependency) =>
+									dependency.kind === "import-meta-resolve"
+										? resolveImportMeta(dependency.specifier, sourcePath ?? filePath, ctx)
+										: [],
+							);
+							const dependencies = parsedModule.dependencies.flatMap(
+								(dependency): Array<ModuleDependency> => {
+									if (dependency.kind === "import-meta-resolve") return [];
 									if (dependency.specifier === null) {
 										// A computed import/require cannot be resolved while building the
 										// graph. Preserve the edge for later lowering/runtime handling.
-										return { ...dependency, resolvedPath: null };
+										return [{ ...dependency, resolvedPath: null }];
 									}
 									const aliasedSpecifier =
 										options.buildConfig?.modules.aliases[dependency.specifier] ??
@@ -761,7 +781,7 @@ export function buildModuleGraph(
 									// A toolchain module an earlier image owns keeps its specifier identity.
 									if (options.externalModules?.has(aliasedSpecifier)) {
 										resolvedThroughExternal = true;
-										return { ...dependency, resolvedPath: aliasedSpecifier };
+										return [{ ...dependency, resolvedPath: aliasedSpecifier }];
 									}
 									const toolchainModule = virtualModule(aliasedSpecifier);
 									if (toolchainModule !== undefined) {
@@ -781,7 +801,7 @@ export function buildModuleGraph(
 												`Toolchain module '${dependency.specifier}' supports static ESM imports only`,
 											);
 										}
-										return { ...dependency, resolvedPath: aliasedSpecifier };
+										return [{ ...dependency, resolvedPath: aliasedSpecifier }];
 									}
 									const canonicalHostId = canonicalNodeHostModuleId(aliasedSpecifier);
 									const canonicalBuiltinId = canonicalNodeBuiltinId(aliasedSpecifier);
@@ -798,7 +818,7 @@ export function buildModuleGraph(
 									);
 									if ("host" in resolved) {
 										// A supported `node:*` built-in: identity is its canonical specifier.
-										return { ...dependency, resolvedPath: resolved.host.id };
+										return [{ ...dependency, resolvedPath: resolved.host.id }];
 									}
 									if ("error" in resolved) {
 										// A `node:*` error (surface disabled / unknown built-in) is `hard`: it
@@ -806,14 +826,14 @@ export function buildModuleGraph(
 										// so an unsupported host import fails loudly at build time. A plain
 										// dynamic resolution failure (missing file) still defers to the graph.
 										if (dependency.kind === "dynamic" && !resolved.hard) {
-											return { ...dependency, resolvedPath: null };
+											return [{ ...dependency, resolvedPath: null }];
 										}
 										if (
 											dependency.kind === "require" &&
 											dependency.catchableMissing &&
 											!resolved.hard
 										) {
-											return { ...dependency, resolvedPath: null };
+											return [{ ...dependency, resolvedPath: null }];
 										}
 										// A static import that cannot resolve fails the graph — the
 										// resolution-phase SyntaxError of 16.2.1.6.1.
@@ -825,10 +845,12 @@ export function buildModuleGraph(
 
 									const catalogSource = catalogFiles.sources.get(resolved.path);
 									if (catalogSource !== undefined) virtualModule(catalogSource);
-									return { ...dependency, resolvedPath: catalogSource ?? resolved.path };
+									return [
+										{ ...dependency, resolvedPath: catalogSource ?? resolved.path },
+									];
 								},
 							);
-							return { sourcePath, parsed, dependencies };
+							return { sourcePath, parsed, dependencies, importMetaResolutions };
 						});
 		} catch (error) {
 			// A module the entry reaches only through `import()` fails when that import
@@ -844,7 +866,7 @@ export function buildModuleGraph(
 			});
 			return;
 		}
-		const { sourcePath, parsed, dependencies } = analyzed;
+		const { sourcePath, parsed, dependencies, importMetaResolutions } = analyzed;
 		if (
 			memoKey !== undefined &&
 			!reusable &&
@@ -858,6 +880,7 @@ export function buildModuleGraph(
 				sourcePath,
 				parsed,
 				dependencies: dependencies.map((dependency) => ({ ...dependency })),
+				importMetaResolutions,
 				observations,
 			});
 			if (
@@ -871,6 +894,9 @@ export function buildModuleGraph(
 					type: parsed.type,
 					strict: parsed.strict,
 					dependencies: dependencies.map((dependency) => ({ ...dependency })),
+					...(importMetaResolutions.length === 0
+						? {}
+						: { importMetaResolutions: [...importMetaResolutions] }),
 					observations: observations.map(([key, value]) => [key, value]),
 				});
 			}
@@ -885,6 +911,7 @@ export function buildModuleGraph(
 			source,
 			parsed,
 			dependencies,
+			...(importMetaResolutions.length === 0 ? {} : { importMetaResolutions }),
 			...(virtual ? { virtual: true as const } : {}),
 			...(virtual && virtualModule(filePath)?.platform
 				? { platform: lookupPlatformModule(filePath) }
@@ -1095,11 +1122,10 @@ function findNearestPackageType(
 	return goal;
 }
 
-interface ExtractedDependency {
-	specifier: string | null;
-	kind: ModuleDependencyKind;
-	catchableMissing?: true;
-}
+type ExtractedDependency =
+	| { specifier: string | null; kind: ModuleDependencyKind; catchableMissing?: true }
+	// Asks for a resolution only; nothing is loaded for it.
+	| { specifier: string; kind: "import-meta-resolve" };
 
 function requireErrorIsCatchable(
 	call: ESTree.CallExpression,
@@ -1167,6 +1193,13 @@ function extractDependencies(
 				dependencies.push({ specifier: literalString(node.source), kind: "dynamic" });
 				break;
 			case "CallExpression": {
+				if (goal === "module" && isImportMetaResolveCall(node)) {
+					const specifier = literalString(node.arguments[0]);
+					if (specifier !== null && node.arguments.length === 1) {
+						dependencies.push({ specifier, kind: "import-meta-resolve" });
+					}
+					break;
+				}
 				// `require("x")` in a CommonJS module. A naive callee-name match: a
 				// shadowed/reassigned `require` is a rare edge case refined later.
 				// meriyah types CallExpression.callee as `any`, so narrow explicitly.
@@ -1275,6 +1308,42 @@ function forwardsCallee(root: ESTree.Node, names: ReadonlyMap<string, unknown>):
 		if (found) return true;
 	}
 	return false;
+}
+
+// Node's relative specifiers: "." and "..", or a "./", "../" or "/" prefix.
+function isRelativeSpecifier(specifier: string): boolean {
+	return (
+		specifier === "." ||
+		specifier === ".." ||
+		specifier.startsWith("./") ||
+		specifier.startsWith("../") ||
+		specifier.startsWith("/")
+	);
+}
+
+// What Node's import.meta.resolve answers. Paths and URLs resolve without touching
+// the disk (a missing file still yields its URL), built-ins name their `node:` URL,
+// and packages resolve with the import conditions. A package that does not resolve
+// is left to the run-time ERR_MODULE_NOT_FOUND.
+function resolveImportMeta(
+	specifier: string,
+	importerPath: string,
+	ctx: ResolveContext,
+): Array<ImportMetaResolution> {
+	if (isRelativeSpecifier(specifier) || URL.canParse(specifier)) {
+		const url = new URL(specifier, pathToFileURL(importerPath));
+		if (url.protocol === "file:" && url.search === "" && url.hash === "") {
+			return [{ specifier, path: fileURLToPath(url) }];
+		}
+		return [{ specifier, url: url.href }];
+	}
+	const builtin = canonicalNodeBuiltinId(specifier);
+	if (builtin !== undefined) return [{ specifier, url: builtin }];
+	const resolved = resolveSpecifier(specifier, importerPath, {
+		...ctx,
+		conditions: exportConditions(ctx.nodeEnabled, "import"),
+	});
+	return "path" in resolved ? [{ specifier, path: resolved.path }] : [];
 }
 
 /**

@@ -30,10 +30,16 @@ import {
 	ESTREE_STOP,
 	traverseEstree,
 } from "../frontend/estree-traversal.ts";
-import { CRYPTO_GLOBALS, PERFORMANCE_GLOBALS } from "../frontend/host-modules.ts";
+import {
+	CRYPTO_GLOBALS,
+	PERFORMANCE_GLOBALS,
+	hostInstallerSymbol,
+} from "../frontend/host-modules.ts";
+import { isImportMeta, isImportMetaResolveCall } from "../frontend/import-meta.ts";
 import { linkModules } from "../frontend/linker.ts";
 import { planModuleEvaluation } from "../frontend/module-evaluation-plan.ts";
 import type { ModuleEvaluationPlan } from "../frontend/module-evaluation-plan.ts";
+import type { ImportMetaResolution } from "../frontend/module-graph.ts";
 import { COMMONJS_BINDINGS } from "../frontend/semantic-analysis.ts";
 import { FUNCTION_UNIT_NODE_TYPES } from "../frontend/semantic-analysis.ts";
 import type {
@@ -329,6 +335,9 @@ interface CoreFrontendContext {
 
 	/** Free `crypto` and WebCrypto interface globals, replaced by `node:crypto`. */
 	hostCrypto: { installer: string; retained: boolean } | null;
+
+	/** Set when a module's import.meta needs node:module's run-time resolve. */
+	importMetaResolveInstaller: string | null;
 
 	/** Modules whose bindings this image publishes to later images of its program. */
 	moduleExports?: "all" | ReadonlySet<string>;
@@ -699,6 +708,7 @@ const unboundCoreEmitter: CoreInstructionEmitter = {
 const compilerPrivateIntrinsics = new Set<string>([
 	"__cjs_require",
 	"__attachRequireTable",
+	"__createImportMetaResolve",
 	"__directEval",
 	"__dynamicImport",
 	"__configureDeferredNamespace",
@@ -931,6 +941,7 @@ export function constructSemanticProgramCore(
 		hostBuffer: null,
 		hostPerformance: null,
 		hostCrypto: null,
+		importMetaResolveInstaller: null,
 		commonJsExportNames: () => [],
 	};
 
@@ -1080,6 +1091,7 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 					program.hostCrypto,
 				]
 					.flatMap((host) => (host?.retained === true ? [host.installer] : []))
+					.concat(program.importMetaResolveInstaller ?? [])
 					.filter(
 						(installer, index, installers) => installers.indexOf(installer) === index,
 					),
@@ -3242,14 +3254,6 @@ function moduleNeedsPrologue(program: CoreFrontendContext, file: SemanticFile): 
 	);
 }
 
-function isImportMeta(node: ESTree.Node): node is ESTree.MetaProperty {
-	return (
-		node.type === "MetaProperty" &&
-		node.meta.name === "import" &&
-		node.property.name === "meta"
-	);
-}
-
 function fileUsesImportMeta(file: SemanticFile): boolean {
 	// Semantic analysis indexes every AST node before this lowering begins.
 	for (const node of file.nodeToScope.keys()) if (isImportMeta(node)) return true;
@@ -3277,34 +3281,24 @@ function emitImportMetaInit(
 	const cursor = { block };
 	const object = nextCoreVariable(fn);
 	block.emitter.emit({ type: "createObject", registers: [object] });
-	emitStoreProperty(
+	const url = compileModulePath(
 		program,
 		fn,
 		cursor,
-		object,
+		program.semantic.graph?.modules.get(file.path)?.sourcePath ?? file.path,
 		"url",
-		compileModulePath(
+	);
+	if (program.semantic.graph?.nodeEnabled) {
+		const filename = compileModulePath(program, fn, cursor, file.path, "path");
+		emitStoreProperty(
 			program,
 			fn,
 			cursor,
-			program.semantic.graph?.modules.get(file.path)?.sourcePath ?? file.path,
-			"url",
-		),
-	);
-	if (program.semantic.graph?.nodeEnabled) {
-		for (const [name, value] of [
-			["filename", file.path],
-			["dirname", moduleDirname(file.path)],
-		] as const) {
-			emitStoreProperty(
-				program,
-				fn,
-				cursor,
-				object,
-				name,
-				compileModulePath(program, fn, cursor, value, "path"),
-			);
-		}
+			object,
+			"dirname",
+			compileModulePath(program, fn, cursor, moduleDirname(file.path), "path"),
+		);
+		emitStoreProperty(program, fn, cursor, object, "filename", filename);
 		const main = nextCoreVariable(fn);
 		block.emitter.emit({
 			type: "createBoolean",
@@ -3312,12 +3306,185 @@ function emitImportMetaInit(
 			value: file.path === program.semantic.entrypointPath,
 		});
 		emitStoreProperty(program, fn, cursor, object, "main", main);
+		if (importMetaResolveUse(program, file).observable) {
+			emitStoreProperty(
+				program,
+				fn,
+				cursor,
+				object,
+				"resolve",
+				emitImportMetaResolveFunction(program, fn, cursor, file, url, filename),
+			);
+		}
 	}
+	emitStoreProperty(program, fn, cursor, object, "url", url);
 	block.emitter.emit({
 		type: "storeGlobal",
 		registers: [object],
 		index: importMetaSlot(program, file),
 	});
+}
+
+interface ImportMetaResolveUse {
+	/** Literal calls that answer from the build-time resolution. */
+	folded: Set<ESTree.Node>;
+	/** Whether code can reach import.meta.resolve as a value, so it must exist. */
+	observable: boolean;
+}
+
+const importMetaResolveUses = new WeakMap<SemanticFile, ImportMetaResolveUse>();
+
+// import.meta is an ordinary extensible object, so a literal call folds only while
+// nothing can replace its resolve: every import.meta is a static member read, and
+// none of them writes resolve.
+function importMetaResolveUse(
+	program: CoreFrontendContext,
+	file: SemanticFile,
+): ImportMetaResolveUse {
+	let use = importMetaResolveUses.get(file);
+	if (use !== undefined) return use;
+	const resolutions = new Map(
+		(program.semantic.graph?.modules.get(file.path)?.importMetaResolutions ?? []).map(
+			(resolution) => [resolution.specifier, resolution],
+		),
+	);
+	const literalCalls: Array<ESTree.CallExpression> = [];
+	let closed = true;
+	let observable = false;
+	const parents = new Map<ESTree.Node, ESTree.Node>();
+	traverseEstree(file.ast.body, (node, { parent, key }) => {
+		if (parent) parents.set(node, parent);
+		if (!isImportMeta(node)) return;
+		if (parent?.type !== "MemberExpression" || key !== "object") {
+			closed = false;
+			return;
+		}
+		const property = parent.computed
+			? parent.property.type === "Literal" && typeof parent.property.value === "string"
+				? parent.property.value
+				: undefined
+			: parent.property.type === "Identifier"
+				? parent.property.name
+				: undefined;
+		if (property !== undefined && property !== "resolve") {
+			return;
+		}
+		const call = parents.get(parent);
+		if (
+			property === "resolve" &&
+			call?.type === "CallExpression" &&
+			call.callee === parent &&
+			isImportMetaResolveCall(call)
+		) {
+			const argument = call.arguments[0] as ESTree.Node | undefined;
+			if (
+				call.arguments.length === 1 &&
+				!call.optional &&
+				argument?.type === "Literal" &&
+				typeof argument.value === "string" &&
+				resolutions.has(argument.value)
+			) {
+				literalCalls.push(call);
+			} else {
+				observable = true;
+			}
+			return;
+		}
+		closed = false;
+	});
+	use = {
+		folded: closed ? new Set(literalCalls) : new Set(),
+		observable: observable || !closed,
+	};
+	importMetaResolveUses.set(file, use);
+	return use;
+}
+
+function emitImportMetaResolveFunction(
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
+	file: SemanticFile,
+	url: number,
+	filename: number,
+): number {
+	program.importMetaResolveInstaller = hostInstallerSymbol("node:module");
+	const graph = program.semantic.graph;
+	const record = graph?.modules.get(file.path);
+	const table = nextCoreVariable(fn);
+	cursor.block.emitter.emit({ type: "createObject", registers: [table] });
+	const seen = new Set<string>();
+	const store = (specifier: string, value: () => number) => {
+		if (seen.has(specifier)) return;
+		seen.add(specifier);
+		emitStoreProperty(program, fn, cursor, table, specifier, value());
+	};
+	for (const resolution of record?.importMetaResolutions ?? []) {
+		store(resolution.specifier, () =>
+			importMetaResolution(program, fn, cursor, resolution),
+		);
+	}
+	// A computed specifier still finds what this module's own imports resolved to.
+	for (const dependency of record?.dependencies ?? []) {
+		if (
+			dependency.specifier === null ||
+			dependency.resolvedPath === null ||
+			(dependency.kind !== "import" &&
+				dependency.kind !== "export" &&
+				dependency.kind !== "dynamic")
+		) {
+			continue;
+		}
+		const target = graph?.modules.get(dependency.resolvedPath);
+		if (target === undefined || target.external !== undefined || target.virtual) continue;
+		const resolvedPath = dependency.resolvedPath;
+		store(dependency.specifier, () =>
+			target.host === undefined
+				? compileModulePath(program, fn, cursor, target.sourcePath ?? resolvedPath, "url")
+				: compileStaticString(program, fn, cursor, target.path),
+		);
+	}
+	const create = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
+		type: "loadIntrinsic",
+		registers: [create],
+		intrinsic: "__createImportMetaResolve",
+	});
+	const thisRegister = compileUndefined(fn, cursor);
+	const resolve = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
+		type: "call",
+		registers: [resolve, create, thisRegister, url, filename, table],
+	});
+	return resolve;
+}
+
+function importMetaResolution(
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
+	resolution: ImportMetaResolution,
+): number {
+	return "path" in resolution
+		? compileModulePath(program, fn, cursor, resolution.path, "url")
+		: compileStaticString(program, fn, cursor, resolution.url);
+}
+
+function tryCompileImportMetaResolveCall(
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
+	callExpression: ESTree.CallExpression,
+): number | undefined {
+	const file = fn.semanticFile;
+	if (!importMetaResolveUse(program, file).folded.has(callExpression)) return undefined;
+	const specifier = (callExpression.arguments[0] as ESTree.Literal).value;
+	const resolution = program.semantic.graph?.modules
+		.get(file.path)
+		?.importMetaResolutions?.find((candidate) => candidate.specifier === specifier);
+	return resolution === undefined
+		? undefined
+		: importMetaResolution(program, fn, cursor, resolution);
 }
 
 /**
@@ -14116,6 +14283,15 @@ function compileCall(
 	if (!fn.semanticFile.commonjs) {
 		const required = tryCompileCreateRequireCall(program, fn, cursor, callExpression);
 		if (required !== undefined) return required;
+		if (program.semantic.graph?.nodeEnabled && isImportMetaResolveCall(callExpression)) {
+			const resolved = tryCompileImportMetaResolveCall(
+				program,
+				fn,
+				cursor,
+				callExpression,
+			);
+			if (resolved !== undefined) return resolved;
+		}
 	}
 	const result = compileCallValue(program, fn, cursor, callExpression);
 	if (

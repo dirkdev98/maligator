@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 79u
+#define WIRE_VERSION 80u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 typedef enum WireOp {
@@ -211,6 +211,7 @@ static const i32 wire_intrinsics[] = {
     MAL_INTRINSIC_CONFIGURE_DEFERRED_NAMESPACE,
     MAL_INTRINSIC_EVALUATE_MODULE_SYNC,
     MAL_INTRINSIC_ATTACH_REQUIRE_TABLE,
+    MAL_INTRINSIC_CREATE_IMPORT_META_RESOLVE,
 };
 
 // ---- owned arena (chained calloc'd blocks; pointers stay stable, one free) ----

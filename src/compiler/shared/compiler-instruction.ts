@@ -1308,4 +1308,6 @@ export type CompilerIntrinsic =
 	| "__disposeResources"
 	// Attaches a module's resolved require edges to its createRequire(import.meta.url)
 	// result. Not a user-visible global.
-	| "__attachRequireTable";
+	| "__attachRequireTable"
+	// Builds a module's import.meta.resolve from its URL, filename and resolutions.
+	| "__createImportMetaResolve";

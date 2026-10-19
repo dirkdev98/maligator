@@ -367,6 +367,11 @@ typedef enum MalIntrinsic {
      */
     MAL_INTRINSIC_ATTACH_REQUIRE_TABLE,
     /*
+     * node:module's factory for a module's import.meta.resolve, given its URL,
+     * filename and build-time resolutions. Undefined until node:module installs.
+     */
+    MAL_INTRINSIC_CREATE_IMPORT_META_RESOLVE,
+    /*
      * WinterTC fetch server slots (runtime/web_fetch.c). Installed only by the host
      * entry (mal_fetch_install), so they stay undefined — and harmless — in the bare
      * test262 VM. Stored here so the collector roots them (scan_roots marks every

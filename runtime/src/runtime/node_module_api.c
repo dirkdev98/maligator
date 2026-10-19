@@ -14,6 +14,7 @@
 #include "gc.h"
 #include "heap_string.h"
 #include "intrinsics.h"
+#include "mal_url.h"
 #include "node_module.h"
 #include "object.h"
 #include "object_ops.h"
@@ -179,6 +180,141 @@ static MalValue node_module_require_resolve(
     node_module_throw_not_found(vm, mal_value_to_string(id),
         ": only built-in modules can be resolved dynamically from an ahead-of-time image");
     return mal_value_new_undefined();
+}
+
+// Slots of a module's import.meta.resolve: its URL and filename, and the specifiers the
+// build resolved for it, keyed as written.
+enum { META_RESOLVE_URL, META_RESOLVE_FILENAME, META_RESOLVE_TABLE, META_RESOLVE_SLOT_COUNT };
+
+static bool node_module_has_prefix(MalString *string, const char *prefix) {
+    const c16 *units = mal_string_code_units(string);
+    usize length = strlen(prefix);
+    if (mal_string_length(string) < length) return false;
+    for (usize i = 0; i < length; i++) {
+        if (units[i] != (byte) prefix[i]) return false;
+    }
+    return true;
+}
+
+static MalValue node_module_url_href(MalVm *vm, void *url) {
+    i32 length = mal_url_href(url, nullptr, 0);
+    u8 *bytes = malloc(length > 0 ? (usize) length : 1);
+    if (bytes == nullptr) {
+        mal_url_free(url);
+        mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "out of memory");
+        return mal_value_new_undefined();
+    }
+    mal_url_href(url, bytes, length);
+    mal_url_free(url);
+    MalValue href = mal_value_from_string(mal_string_from_utf8(&vm->heap, (const byte *) bytes, (usize) length));
+    free(bytes);
+    return href;
+}
+
+static void node_module_throw_unresolved(MalVm *vm, MalString *specifier, MalValue filename) {
+    char *text = nullptr;
+    char *from = nullptr;
+    usize length = 0;
+    if (mal_string_to_utf8_c_string(specifier, &text, &length) != MAL_UTF8_C_STRING_OK) text = nullptr;
+    if (!mal_value_is_string(filename)
+        || mal_string_to_utf8_c_string(mal_value_to_string(filename), &from, &length) != MAL_UTF8_C_STRING_OK) {
+        from = nullptr;
+    }
+    const char *name = text == nullptr ? "" : text;
+    char message[1024];
+    if (name[0] == '#') {
+        snprintf(message, sizeof message, "Package import specifier \"%s\" is not defined imported from %s", name,
+            from == nullptr ? "" : from);
+        free(text);
+        free(from);
+        mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, message, "ERR_PACKAGE_IMPORT_NOT_DEFINED");
+        return;
+    }
+    // Node names the package, not the subpath: `@scope/name` or the first segment.
+    const char *slash = strchr(name, '/');
+    if (name[0] == '@' && slash != nullptr) slash = strchr(slash + 1, '/');
+    i32 package_length = slash == nullptr ? (i32) strlen(name) : (i32) (slash - name);
+    snprintf(message, sizeof message, "Cannot find package '%.*s' imported from %s", package_length, name,
+        from == nullptr ? "" : from);
+    free(text);
+    free(from);
+    mal_node_throw_code(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, message, "ERR_MODULE_NOT_FOUND");
+}
+
+// A computed specifier answers like Node's import.meta.resolve where that needs no
+// package lookup: what the build resolved, built-ins, then paths and URLs against
+// the module URL. A missing file still yields its URL, as in Node.
+static MalValue node_module_import_meta_resolve(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver;
+    (void) new_target;
+    MalString *specifier = nullptr;
+    if (!mal_vm_to_string(vm, argc > 0 ? args[0] : mal_value_new_undefined(), &specifier)) {
+        return mal_value_new_undefined();
+    }
+    MalNativeFunctionObject *resolve = mal_value_to_native_function_object(callee);
+    MalValue table = mal_native_function_object_get_slot(resolve, META_RESOLVE_TABLE);
+    if (mal_value_is_object(table)) {
+        MalPropertyLookup found =
+            mal_object_get_own(mal_value_to_object(table), mal_key_from_value(mal_value_from_string(specifier)));
+        if (found.present) return found.desc.value;
+    }
+    if (node_module_has_prefix(specifier, "node:")) return mal_value_from_string(specifier);
+    for (usize i = 0; i < countof(node_module_builtin_names); i++) {
+        if (!node_module_matches_builtin(specifier, node_module_builtin_names[i])) continue;
+        usize length = mal_string_length(specifier);
+        c16 *units = malloc((length + 5) * sizeof(c16));
+        if (units == nullptr) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "out of memory");
+            return mal_value_new_undefined();
+        }
+        for (usize j = 0; j < 5; j++) units[j] = (c16) "node:"[j];
+        memcpy(units + 5, mal_string_code_units(specifier), length * sizeof(c16));
+        MalString *id = mal_string_new_copy(&vm->heap, units, length + 5);
+        free(units);
+        return mal_value_from_string(id);
+    }
+    const c16 *units = mal_string_code_units(specifier);
+    usize length = mal_string_length(specifier);
+    bool relative = node_module_has_prefix(specifier, "/") || node_module_has_prefix(specifier, "./")
+        || node_module_has_prefix(specifier, "../") || (length == 1 && units[0] == '.')
+        || (length == 2 && units[0] == '.' && units[1] == '.');
+    void *url = nullptr;
+    if (relative) {
+        MalValue base = mal_native_function_object_get_slot(resolve, META_RESOLVE_URL);
+        if (mal_value_is_string(base)) {
+            MalString *base_string = mal_value_to_string(base);
+            url = mal_url_parse(units, length, mal_string_code_units(base_string), mal_string_length(base_string),
+                true);
+        }
+    } else {
+        url = mal_url_parse(units, length, nullptr, 0, false);
+    }
+    if (url != nullptr) return node_module_url_href(vm, url);
+    node_module_throw_unresolved(
+        vm, specifier, mal_native_function_object_get_slot(resolve, META_RESOLVE_FILENAME));
+    return mal_value_new_undefined();
+}
+
+static MalValue node_module_create_import_meta_resolve(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver;
+    (void) new_target;
+    (void) callee;
+    MalValue slots[META_RESOLVE_SLOT_COUNT] = {
+        argc > 0 ? args[0] : mal_value_new_undefined(),
+        argc > 1 ? args[1] : mal_value_new_undefined(),
+        argc > 2 ? args[2] : mal_value_new_undefined(),
+    };
+    MalRootSpan root;
+    mal_gc_root(&root, slots, countof(slots));
+    MalValue resolve = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+        mal_intrinsic_ascii(vm, "resolve"), 2, node_module_import_meta_resolve, slots, countof(slots)));
+    mal_gc_unroot(&root);
+    return resolve;
 }
 
 static MalValue node_module_constructor(
@@ -617,6 +753,10 @@ void mal_host_install_node_module(
             mal_native_function_object_new_arity(&vm->heap,
                 mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
                 mal_intrinsic_ascii(vm, ""), 3, node_module_attach_require_table));
+        vm->intrinsics[MAL_INTRINSIC_CREATE_IMPORT_META_RESOLVE] = mal_value_from_native_function_object(
+            mal_native_function_object_new_arity(&vm->heap,
+                mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+                mal_intrinsic_ascii(vm, ""), 3, node_module_create_import_meta_resolve));
         mal_gc_unroot(&root);
     }
     mal_node_module_publish(vm, "node:module", slots, count, module);
