@@ -43,3 +43,6 @@ tests/native/json-late-fallback.test.ts
 tests/native/string-search-followups.test.ts
 
 tests/native/map-string-representative.test.ts
+tests/native/lazy-capture-environment.test.ts
+tests/native/own-getter-cache.test.ts
+tests/native/function-inherited-cache.test.ts
