@@ -49,7 +49,7 @@ async function main() {
 	);
 	check(
 		Object.keys(zlib).sort().join(",") ===
-			"constants,createBrotliDecompress,createGunzip,createGzip,createInflate,deflate,gunzipSync",
+			"BrotliCompress,BrotliDecompress,Deflate,DeflateRaw,Gunzip,Gzip,Inflate,InflateRaw,Unzip,brotliCompress,brotliCompressSync,brotliDecompress,brotliDecompressSync,codes,constants,crc32,createBrotliCompress,createBrotliDecompress,createDeflate,createDeflateRaw,createGunzip,createGzip,createInflate,createInflateRaw,createUnzip,deflate,deflateRaw,deflateRawSync,deflateSync,gunzip,gunzipSync,gzip,gzipSync,inflate,inflateRaw,inflateRawSync,inflateSync,unzip,unzipSync",
 		"declared compatibility exports",
 	);
 	check(
@@ -58,18 +58,6 @@ async function main() {
 			constants.ZSTD_e_flush === 1,
 		"portable flush constants",
 	);
-	let compressionFailures = 0;
-	for (const operation of [createGzip, deflate]) {
-		try {
-			operation();
-		} catch (error) {
-			if (error instanceof Error && error.message.includes("not supported")) {
-				compressionFailures++;
-			}
-		}
-	}
-	check(compressionFailures === 2, "unsupported compression fails explicitly");
-
 	const text = "bounded streaming output; split input; portable codecs";
 	const deflateBytes = [
 		120, 156, 75, 202, 47, 205, 75, 73, 77, 81, 40, 46, 41, 74, 77, 204, 205, 204, 75, 87,

@@ -1,5 +1,5 @@
 /*
- * mal_zlib.h - flat streaming decompression ABI for the Rust codec backend.
+ * mal_zlib.h - flat streaming codec ABI (deflate, gzip, Brotli) for the Rust backend.
  * The caller owns all input/output storage; the opaque stream retains no buffer
  * pointers across calls. Available only when Cargo feature `node-zlib` is linked.
  */
@@ -12,13 +12,16 @@
 extern "C" {
 #endif
 
-#define MAL_ZLIB_ABI_VERSION 1u
+#define MAL_ZLIB_ABI_VERSION 2u
 
 typedef struct MalZlibStream MalZlibStream;
 
 #define MAL_ZLIB_FORMAT_ZLIB   1u
 #define MAL_ZLIB_FORMAT_GZIP   2u
 #define MAL_ZLIB_FORMAT_BROTLI 3u
+#define MAL_ZLIB_FORMAT_RAW    4u
+/* Decode only: gzip when the first byte is 0x1f, zlib otherwise. */
+#define MAL_ZLIB_FORMAT_UNZIP  5u
 
 #define MAL_ZLIB_STATUS_NEED_INPUT        1
 #define MAL_ZLIB_STATUS_NEED_OUTPUT       2
@@ -33,15 +36,23 @@ uint32_t mal_zlib_abi_version(void);
  * NULL and returns INVALID_ARGUMENT. */
 int32_t mal_zlib_create(uint32_t format, MalZlibStream **out_handle);
 
+/* Like mal_zlib_create, choosing an encoder when `encode` is non-zero. Level -1
+ * selects the default; window bits are clamped to 9..15. */
+int32_t mal_zlib_create_codec(uint32_t format, uint32_t encode, int32_t level,
+                              int32_t window_bits, MalZlibStream **out_handle);
+
 /* Borrows the two bounded buffers for this call only. Always initializes
  * consumed/produced when those pointers are valid. Unconsumed input remains the
  * caller's responsibility and must be resubmitted. All non-null pointers must be
  * valid for their stated access; handle, input, output, consumed, and produced
  * must not overlap, and one handle must not be pumped concurrently. Buffer lengths
- * above PTRDIFF_MAX are rejected with INVALID_ARGUMENT before buffer access. */
+ * above PTRDIFF_MAX are rejected with INVALID_ARGUMENT before buffer access.
+ * `flush` is a Node Z_* flush value for deflate encoders and a BROTLI_OPERATION_*
+ * value for Brotli encoders; decoders ignore it. An encoder reports NEED_INPUT
+ * once all input is consumed and the requested flush is complete. */
 int32_t mal_zlib_pump(MalZlibStream *handle,
                       const uint8_t *input, size_t input_len,
-                      uint8_t *output, size_t output_len,
+                      uint8_t *output, size_t output_len, int32_t flush,
                       size_t *consumed, size_t *produced);
 
 /* Declare that no more input will arrive. STREAM_END confirms a complete zlib
@@ -49,6 +60,17 @@ int32_t mal_zlib_pump(MalZlibStream *handle,
  * TRUNCATED (or the stream's sticky DATA_ERROR). Drain NEED_OUTPUT first. After a
  * successful finish, later pump calls return STREAM_END without consuming input. */
 int32_t mal_zlib_finish(MalZlibStream *handle);
+
+/* Restart with the creation parameters; NEED_INPUT on success. */
+int32_t mal_zlib_reset(MalZlibStream *handle);
+
+/* Deflate encoders only; NEED_OUTPUT means pending output must be flushed first. */
+int32_t mal_zlib_set_level(MalZlibStream *handle, int32_t level);
+
+/* Node BROTLI_PARAM_* id; INVALID_ARGUMENT for an unknown id or value. */
+int32_t mal_zlib_set_brotli_param(MalZlibStream *handle, uint32_t param, uint32_t value);
+
+uint32_t mal_zlib_crc32(uint32_t value, const uint8_t *bytes, size_t length);
 
 /* Takes ownership through the slot, sets *handle to NULL, then releases it.
  * Calling repeatedly with the same slot, a null slot, or a slot holding NULL is safe. */

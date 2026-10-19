@@ -120,6 +120,7 @@ tests/native/node-sqlite.test.ts
 tests/native/node-stream.test.ts
 tests/native/node-tls.test.ts
 tests/native/node-zlib.test.ts
+tests/native/node-zlib-compress.test.ts
 tests/native/postgres-auth.test.ts
 tests/native/postgres-load.test.ts
 tests/native/postgres-types-large-live.test.ts

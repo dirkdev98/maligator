@@ -661,11 +661,11 @@
 	},
 	{
 		"file": "runtime/node_zlib.c",
-		"sha256": "2c82b3baa402e08d0313f05fb447c66698528a14c4a6cf3d3cf4ee6359539d7d"
+		"sha256": "46fd328ac1880a4aaefa583ac6ec738f1e593743ba8ecf6601264b1e1a5d8746"
 	},
 	{
 		"file": "runtime/node_zlib.h",
-		"sha256": "cc00293f9dba780c03ffd998eebece6beed82c2de3aafc4e256bcbdd7329daed"
+		"sha256": "54a8b07393a2855e06c6254cb929ba64cbac5f0bbf6e3fff22ec8e235c9759e0"
 	},
 	{
 		"file": "runtime/personality.c",

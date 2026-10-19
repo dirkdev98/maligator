@@ -63,6 +63,8 @@ flate2 = { version = "1", default-features = false, features = [
 	"zlib-rs",
 ], optional = true }
 brotli-decompressor = { version = "5", optional = true }
+# Pure-Rust Brotli encoder (no C library); it shares brotli-decompressor above.
+brotli = { version = "8", default-features = false, features = ["std"], optional = true }
 rustls = { version = "0.23", default-features = false, features = [
 	"ring",
 	"std",
@@ -97,9 +99,9 @@ regexp = ["dep:regress"]
 # build config selects engine.temporal.
 temporal = ["dep:temporal_capi", "temporal_capi/compiled_data"]
 
-# node:zlib phase 1: decompression-only flat primitives. The C/JS adapters remain
+# node:zlib flat codec primitives (deflate, gzip and Brotli, both directions). The C/JS adapters remain
 # outside this feature; Node builds select it through normalizeNativeFeatures.
-node-zlib = ["dep:flate2", "dep:brotli-decompressor"]
+node-zlib = ["dep:flate2", "dep:brotli-decompressor", "dep:brotli"]
 node-tls = ["dep:rustls", "dep:rustls-pemfile"]
 node-argon2 = ["dep:rust-argon2"]
 

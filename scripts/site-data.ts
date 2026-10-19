@@ -487,8 +487,6 @@ const SHAPE_ONLY_NODE_APIS = new Set([
 	"node:perf_hooks#monitorEventLoopDelay",
 	"node:stream#pipeline",
 	"node:url#urlToHttpOptions",
-	"node:zlib#createGzip",
-	"node:zlib#deflate",
 ]);
 
 function nodeCompatibilityHtml(): string {
