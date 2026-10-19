@@ -1,3 +1,4 @@
+// Portions derived from Node.js lib/url.js, lib/internal/querystring.js (MIT); see THIRD_PARTY_NOTICES.md.
 #include "node_url.h"
 
 #if MAL_NODE
@@ -235,54 +236,207 @@ static void url_append_property(
     url_buffer_append(buffer, mal_string_code_units(string), mal_string_length(string));
 }
 
+static MalValue url_parse(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee);
+
+static void url_buffer_ascii(UrlBuffer *buffer, const char *ascii);
+
+/* lib/url.js noEscapeAuth: alphanumerics and ! - . _ ~ ' ( ) * : stay literal. */
+static bool url_auth_literal(c16 unit) {
+    return (unit >= 'a' && unit <= 'z') || (unit >= 'A' && unit <= 'Z') || (unit >= '0' && unit <= '9')
+        || unit == '!' || unit == '-' || unit == '.' || unit == '_' || unit == '~' || unit == '\''
+        || unit == '(' || unit == ')' || unit == '*' || unit == ':';
+}
+
+static void url_percent_byte(UrlBuffer *buffer, u32 value) {
+    static const char hex[] = "0123456789ABCDEF";
+    url_buffer_char(buffer, '%');
+    url_buffer_char(buffer, (c16) hex[(value >> 4) & 0xF]);
+    url_buffer_char(buffer, (c16) hex[value & 0xF]);
+}
+
+/* lib/internal/querystring.js encodeStr with noEscapeAuth; false on a lone surrogate. */
+static bool url_append_auth(UrlBuffer *buffer, MalString *auth) {
+    const c16 *units = mal_string_code_units(auth);
+    usize length = mal_string_length(auth);
+    for (usize i = 0; i < length; i++) {
+        u32 c = units[i];
+        if (c < 0x80) {
+            if (url_auth_literal((c16) c)) url_buffer_char(buffer, (c16) c);
+            else url_percent_byte(buffer, c);
+            continue;
+        }
+        if (c >= 0xD800 && c <= 0xDFFF) {
+            if (c >= 0xDC00 || i + 1 >= length || units[i + 1] < 0xDC00 || units[i + 1] > 0xDFFF) return false;
+            c = 0x10000 + ((c - 0xD800) << 10) + (units[++i] - 0xDC00);
+        }
+        if (c < 0x800) {
+            url_percent_byte(buffer, 0xC0 | (c >> 6));
+        } else if (c < 0x10000) {
+            url_percent_byte(buffer, 0xE0 | (c >> 12));
+            url_percent_byte(buffer, 0x80 | ((c >> 6) & 0x3F));
+        } else {
+            url_percent_byte(buffer, 0xF0 | (c >> 18));
+            url_percent_byte(buffer, 0x80 | ((c >> 12) & 0x3F));
+            url_percent_byte(buffer, 0x80 | ((c >> 6) & 0x3F));
+        }
+        url_percent_byte(buffer, 0x80 | (c & 0x3F));
+    }
+    return true;
+}
+
+static bool url_property_truthy(MalVm *vm, MalValue object, const char *name, MalValue *out) {
+    *out = mal_value_new_undefined();
+    if (!mal_vm_get_property(vm, object, mal_intrinsic_string_key(vm, (const byte *) name), out)) return false;
+    return mal_value_is_truthy(*out);
+}
+
+static void url_append_value(UrlBuffer *buffer, MalString *string) {
+    if (string != nullptr) url_buffer_append(buffer, mal_string_code_units(string), mal_string_length(string));
+}
+
+static bool url_units_have(MalString *string, c16 unit) {
+    if (string == nullptr) return false;
+    const c16 *units = mal_string_code_units(string);
+    for (usize i = 0; i < mal_string_length(string); i++) {
+        if (units[i] == unit) return true;
+    }
+    return false;
+}
+
+/* Url.prototype.format, translated from Node 26 lib/url.js. An object `query` is not
+ * stringified here (querystring.stringify); `search` carries the query instead. */
 static MalValue url_format(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
     MalValue new_target, MalValue callee) {
     (void) receiver;
     (void) new_target;
     (void) callee;
+    if (argc >= 1 && mal_value_is_string(args[0])) {
+        MalValue parsed = url_parse(vm, mal_value_new_undefined(), args, 1, mal_value_new_undefined(),
+            mal_value_new_undefined());
+        if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
+        return url_format(vm, mal_value_new_undefined(), &parsed, 1, mal_value_new_undefined(),
+            mal_value_new_undefined());
+    }
     if (argc < 1 || !mal_value_is_object(args[0])) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
                            "The \"urlObject\" argument must be of type object.");
         return mal_value_new_undefined();
     }
     MalValue object = args[0];
-    UrlBuffer buffer = {0};
-    url_append_property(vm, object, "protocol", &buffer);
-    MalValue slashes;
-    bool has_slashes = mal_vm_get_property(vm, object,
-        mal_intrinsic_string_key(vm, (const byte *) "slashes"), &slashes) &&
-        mal_value_is_truthy(slashes);
-    MalString *host = nullptr;
-    url_get_string(vm, object, "host", &host);
-    if (has_slashes || host != nullptr) {
-        url_buffer_char(&buffer, '/');
-        url_buffer_char(&buffer, '/');
+    MalValue values[8];
+    for (usize i = 0; i < countof(values); i++) values[i] = mal_value_new_undefined();
+    MalRootSpan root;
+    mal_gc_root(&root, values, countof(values));
+    MalString *auth = nullptr, *protocol = nullptr, *pathname = nullptr, *hash = nullptr;
+    MalString *host = nullptr, *hostname = nullptr, *port = nullptr, *search = nullptr;
+    const char *names[] = {"auth", "protocol", "pathname", "hash", "host", "hostname", "port", "search"};
+    MalString **strings[] = {&auth, &protocol, &pathname, &hash, &host, &hostname, &port, &search};
+    bool slashes_value = false;
+    for (usize i = 0; i < countof(names); i++) {
+        if (url_property_truthy(vm, object, names[i], &values[i])) {
+            if (!mal_vm_to_string(vm, values[i], strings[i])) break;
+            values[i] = mal_value_from_string(*strings[i]);
+        }
+        if (vm->completion.kind == MAL_COMPLETION_THROW) break;
     }
-    if (host != nullptr) {
-        url_buffer_append(&buffer, mal_string_code_units(host), mal_string_length(host));
-    } else {
-        url_append_property(vm, object, "hostname", &buffer);
-        MalString *port = nullptr;
-        url_get_string(vm, object, "port", &port);
-        if (port != nullptr && mal_string_length(port) != 0) {
-            url_buffer_char(&buffer, ':');
-            url_buffer_append(&buffer, mal_string_code_units(port), mal_string_length(port));
+    MalValue slashes = mal_value_new_undefined();
+    if (vm->completion.kind != MAL_COMPLETION_THROW) slashes_value = url_property_truthy(vm, object, "slashes", &slashes);
+    UrlBuffer buffer = {0};
+    UrlBuffer host_buffer = {0};
+    UrlBuffer path_buffer = {0};
+    if (vm->completion.kind != MAL_COMPLETION_THROW) {
+        if (protocol != nullptr) {
+            url_append_value(&buffer, protocol);
+            if (mal_string_code_units(protocol)[mal_string_length(protocol) - 1] != ':') url_buffer_char(&buffer, ':');
+        }
+        bool has_host = host != nullptr || hostname != nullptr;
+        if (has_host && auth != nullptr) {
+            if (!url_append_auth(&host_buffer, auth)) {
+                mal_vm_throw_error(vm, MAL_INTRINSIC_URI_ERROR_PROTOTYPE, "URI malformed");
+            } else {
+                url_buffer_char(&host_buffer, '@');
+            }
+        }
+        if (host != nullptr) {
+            url_append_value(&host_buffer, host);
+        } else if (hostname != nullptr) {
+            usize length = mal_string_length(hostname);
+            const c16 *units = mal_string_code_units(hostname);
+            bool bracket = url_units_have(hostname, ':') && !(units[0] == '[' && units[length - 1] == ']');
+            if (bracket) url_buffer_char(&host_buffer, '[');
+            url_append_value(&host_buffer, hostname);
+            if (bracket) url_buffer_char(&host_buffer, ']');
+            if (port != nullptr) {
+                url_buffer_char(&host_buffer, ':');
+                url_append_value(&host_buffer, port);
+            }
+        }
+        if (pathname != nullptr) {
+            const c16 *units = mal_string_code_units(pathname);
+            for (usize i = 0; i < mal_string_length(pathname); i++) {
+                if (units[i] == '#') url_buffer_ascii(&path_buffer, "%23");
+                else if (units[i] == '?') url_buffer_ascii(&path_buffer, "%3F");
+                else url_buffer_char(&path_buffer, units[i]);
+            }
+        }
+        // Only the slashed protocols get "//", unless the URL had them to begin with.
+        bool slashed = false;
+        if (protocol != nullptr) {
+            static const char *const known[] = {"http:", "https:", "ftp:", "gopher:", "file:", "ws:", "wss:"};
+            UrlBuffer copy = {0};
+            url_append_value(&copy, protocol);
+            if (mal_string_code_units(protocol)[mal_string_length(protocol) - 1] != ':') url_buffer_char(&copy, ':');
+            for (usize i = 0; i < countof(known) && copy.status == MAL_TEXT_BUFFER_OK; i++) {
+                usize known_length = strlen(known[i]);
+                if (copy.length != known_length) continue;
+                bool equal = true;
+                for (usize j = 0; j < known_length && equal; j++) {
+                    equal = mal_text_buffer_code_unit_at(&copy, j) == (c16) known[i][j];
+                }
+                slashed = slashed || equal;
+            }
+            mal_text_buffer_dispose(&copy);
+        }
+        bool has_host_text = host_buffer.length > 0;
+        if (slashes_value || slashed) {
+            if (slashes_value || has_host_text) {
+                url_buffer_char(&buffer, '/');
+                url_buffer_char(&buffer, '/');
+                if (path_buffer.length > 0 && mal_text_buffer_code_unit_at(&path_buffer, 0) != '/') {
+                    mal_text_buffer_append_buffer(&buffer, &host_buffer);
+                    url_buffer_char(&buffer, '/');
+                    mal_text_buffer_append_buffer(&buffer, &path_buffer);
+                    goto appended;
+                }
+            } else if (protocol != nullptr && mal_string_length(protocol) >= 4
+                && mal_string_code_units(protocol)[0] == 'f' && mal_string_code_units(protocol)[1] == 'i'
+                && mal_string_code_units(protocol)[2] == 'l' && mal_string_code_units(protocol)[3] == 'e') {
+                url_buffer_char(&buffer, '/');
+                url_buffer_char(&buffer, '/');
+            }
+        }
+        mal_text_buffer_append_buffer(&buffer, &host_buffer);
+        mal_text_buffer_append_buffer(&buffer, &path_buffer);
+    appended:
+        if (search != nullptr) {
+            if (mal_string_code_units(search)[0] != '?') url_buffer_char(&buffer, '?');
+            const c16 *units = mal_string_code_units(search);
+            for (usize i = 0; i < mal_string_length(search); i++) {
+                if (units[i] == '#') url_buffer_ascii(&buffer, "%23");
+                else url_buffer_char(&buffer, units[i]);
+            }
+        }
+        if (hash != nullptr) {
+            if (mal_string_code_units(hash)[0] != '#') url_buffer_char(&buffer, '#');
+            url_append_value(&buffer, hash);
         }
     }
-    url_append_property(vm, object, "pathname", &buffer);
-    MalString *search = nullptr;
-    url_get_string(vm, object, "search", &search);
-    if (search != nullptr && mal_string_length(search) != 0) {
-        if (mal_string_code_units(search)[0] != '?') url_buffer_char(&buffer, '?');
-        url_buffer_append(&buffer, mal_string_code_units(search), mal_string_length(search));
-    }
-    MalString *hash = nullptr;
-    url_get_string(vm, object, "hash", &hash);
-    if (hash != nullptr && mal_string_length(hash) != 0) {
-        if (mal_string_code_units(hash)[0] != '#') url_buffer_char(&buffer, '#');
-        url_buffer_append(&buffer, mal_string_code_units(hash), mal_string_length(hash));
-    }
+    mal_text_buffer_dispose(&host_buffer);
+    mal_text_buffer_dispose(&path_buffer);
+    mal_gc_unroot(&root);
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         mal_text_buffer_dispose(&buffer);
         return mal_value_new_undefined();
@@ -697,6 +851,518 @@ static MalValue url_domain_to_unicode(
     return url_domain_convert(vm, args, argc, true);
 }
 
+/* Url.prototype.resolveObject, translated from Node 26 lib/url.js. Path lists are
+ * rooted string arrays with a fixed capacity, so their root span never moves. */
+typedef struct UrlPath {
+    MalValue *items;
+    i32 count;
+} UrlPath;
+
+static MalValue url_get(MalVm *vm, MalValue object, const char *name) {
+    MalValue value = mal_value_new_undefined();
+    if (mal_value_is_object(object)) {
+        mal_vm_get_property(vm, object, mal_intrinsic_string_key(vm, (const byte *) name), &value);
+    }
+    return value;
+}
+
+static void url_put(MalVm *vm, MalValue object, const char *name, MalValue value) {
+    MalRootSpan root;
+    mal_gc_root(&root, &value, 1);
+    mal_vm_set_property(vm, object, mal_intrinsic_string_key(vm, (const byte *) name), value, object);
+    mal_gc_unroot(&root);
+}
+
+static bool url_truthy(MalValue value) {
+    return mal_value_is_truthy(value);
+}
+
+static bool url_is(MalValue value, const char *ascii) {
+    return mal_value_is_string(value) && mal_string_equals_ascii(mal_value_to_string(value), ascii);
+}
+
+static bool url_slashed_protocol(MalValue protocol) {
+    static const char *const names[] = {"http", "http:", "https", "https:", "ftp", "ftp:", "gopher",
+        "gopher:", "file", "file:", "ws", "ws:", "wss", "wss:"};
+    for (usize i = 0; i < countof(names); i++) {
+        if (url_is(protocol, names[i])) return true;
+    }
+    return false;
+}
+
+static bool url_hostless_protocol(MalValue protocol) {
+    return url_is(protocol, "javascript") || url_is(protocol, "javascript:");
+}
+
+static bool url_starts_with_slash(MalValue value) {
+    return mal_value_is_string(value) && mal_string_length(mal_value_to_string(value)) > 0
+        && mal_string_code_units(mal_value_to_string(value))[0] == '/';
+}
+
+static void url_path_split(MalVm *vm, UrlPath *path, MalValue value) {
+    path->count = 0;
+    if (!url_truthy(value) || !mal_value_is_string(value)) return;
+    MalString *string = mal_value_to_string(value);
+    const c16 *units = mal_string_code_units(string);
+    usize length = mal_string_length(string);
+    usize start = 0;
+    for (usize i = 0; i <= length; i++) {
+        if (i == length || units[i] == '/') {
+            path->items[path->count++] = url_slice(vm, mal_value_to_string(value), start, i);
+            string = mal_value_to_string(value);
+            units = mal_string_code_units(string);
+            start = i + 1;
+        }
+    }
+}
+
+static usize url_segments(MalValue value) {
+    if (!mal_value_is_string(value)) return 0;
+    MalString *string = mal_value_to_string(value);
+    const c16 *units = mal_string_code_units(string);
+    usize count = 1;
+    for (usize i = 0; i < mal_string_length(string); i++) count += units[i] == '/';
+    return count;
+}
+
+static void url_path_unshift(UrlPath *path, MalValue value) {
+    memmove(path->items + 1, path->items, (usize) path->count * sizeof(MalValue));
+    path->items[0] = value;
+    path->count++;
+}
+
+static MalValue url_path_shift(UrlPath *path) {
+    if (path->count == 0) return mal_value_new_undefined();
+    MalValue first = path->items[0];
+    memmove(path->items, path->items + 1, (usize) (path->count - 1) * sizeof(MalValue));
+    path->items[--path->count] = mal_value_new_undefined();
+    return first;
+}
+
+static void url_path_remove(UrlPath *path, i32 index) {
+    memmove(path->items + index, path->items + index + 1, (usize) (path->count - index - 1) * sizeof(MalValue));
+    path->items[--path->count] = mal_value_new_undefined();
+}
+
+static MalValue url_path_join(MalVm *vm, const UrlPath *path) {
+    UrlBuffer buffer = {0};
+    for (i32 i = 0; i < path->count; i++) {
+        if (i > 0) url_buffer_char(&buffer, '/');
+        MalValue item = path->items[i];
+        if (mal_value_is_string(item)) {
+            url_buffer_append(&buffer, mal_string_code_units(mal_value_to_string(item)),
+                mal_string_length(mal_value_to_string(item)));
+        }
+    }
+    if (buffer.status != MAL_TEXT_BUFFER_OK) {
+        mal_text_buffer_dispose(&buffer);
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
+    return mal_value_from_string(mal_text_buffer_finish(&vm->heap, &buffer));
+}
+
+static MalValue url_concat(MalVm *vm, MalValue left, MalValue right) {
+    UrlBuffer buffer = {0};
+    MalValue parts[] = {left, right};
+    for (usize i = 0; i < countof(parts); i++) {
+        if (mal_value_is_string(parts[i])) {
+            url_buffer_append(&buffer, mal_string_code_units(mal_value_to_string(parts[i])),
+                mal_string_length(mal_value_to_string(parts[i])));
+        }
+    }
+    if (buffer.status != MAL_TEXT_BUFFER_OK) {
+        mal_text_buffer_dispose(&buffer);
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
+    return mal_value_from_string(mal_text_buffer_finish(&vm->heap, &buffer));
+}
+
+static bool url_assign(MalVm *vm, MalValue target, MalValue source) {
+    MalValue assign = url_get(vm, vm->intrinsics[MAL_INTRINSIC_OBJECT_CONSTRUCTOR], "assign");
+    if (vm->completion.kind == MAL_COMPLETION_THROW) return false;
+    MalValue args[] = {target, source};
+    mal_vm_call_value(vm, assign, vm->intrinsics[MAL_INTRINSIC_OBJECT_CONSTRUCTOR], args, 2);
+    return vm->completion.kind != MAL_COMPLETION_THROW;
+}
+
+static MalValue url_finish(MalVm *vm, MalValue result) {
+    MalValue argument = result;
+    MalValue href = url_format(vm, mal_value_new_undefined(), &argument, 1, mal_value_new_undefined(),
+        mal_value_new_undefined());
+    if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
+    url_put(vm, result, "href", href);
+    return result;
+}
+
+/* "a@b" in a hostless host moves the user part into auth (lib/url.js authInHost). */
+static void url_auth_in_host(MalVm *vm, MalValue result) {
+    MalValue host = url_get(vm, result, "host");
+    if (!url_truthy(host) || !mal_value_is_string(host)) return;
+    MalString *string = mal_value_to_string(host);
+    const c16 *units = mal_string_code_units(string);
+    usize length = mal_string_length(string);
+    usize at = 0;
+    while (at < length && units[at] != '@') at++;
+    if (at == 0 || at == length) return;
+    usize next = at + 1;
+    while (next < length && units[next] != '@') next++;
+    MalValue parts[] = {url_slice(vm, string, 0, at), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, parts, countof(parts));
+    parts[1] = url_slice(vm, mal_value_to_string(host), at + 1, next);
+    url_put(vm, result, "auth", parts[0]);
+    url_put(vm, result, "hostname", parts[1]);
+    url_put(vm, result, "host", parts[1]);
+    mal_gc_unroot(&root);
+}
+
+static MalValue url_resolve_object_impl(MalVm *vm, MalValue self, MalValue relative_value) {
+    MalValue roots[] = {self, relative_value, mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalValue result_value = mal_value_new_undefined();
+    if (mal_value_is_string(roots[1])) {
+        MalValue parse_args[] = {roots[1], mal_value_new_boolean(false), mal_value_new_boolean(true)};
+        roots[1] = url_parse(vm, mal_value_new_undefined(), parse_args, 3, mal_value_new_undefined(),
+            mal_value_new_undefined());
+        if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
+    }
+#define SELF roots[0]
+#define REL roots[1]
+#define RESULT roots[2]
+    RESULT = url_new_instance(vm, vm->intrinsics[MAL_INTRINSIC_NODE_URL_PROTOTYPE]);
+    if (!url_assign(vm, RESULT, SELF)) goto done;
+    url_put(vm, RESULT, "hash", url_get(vm, REL, "hash"));
+    if (url_is(url_get(vm, REL, "href"), "")) {
+        result_value = url_finish(vm, RESULT);
+        goto done;
+    }
+    if (url_truthy(url_get(vm, REL, "slashes")) && !url_truthy(url_get(vm, REL, "protocol"))) {
+        roots[3] = url_get(vm, RESULT, "protocol");
+        if (!url_assign(vm, RESULT, REL)) goto done;
+        url_put(vm, RESULT, "protocol", roots[3]);
+        if (url_slashed_protocol(url_get(vm, RESULT, "protocol")) && url_truthy(url_get(vm, RESULT, "hostname"))
+            && !url_truthy(url_get(vm, RESULT, "pathname"))) {
+            roots[3] = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "/"));
+            url_put(vm, RESULT, "pathname", roots[3]);
+            url_put(vm, RESULT, "path", roots[3]);
+        }
+        result_value = url_finish(vm, RESULT);
+        goto done;
+    }
+    roots[3] = url_get(vm, REL, "protocol");
+    if (url_truthy(roots[3]) && !mal_ops_strict_equal_bool(roots[3], url_get(vm, RESULT, "protocol"))) {
+        if (!url_slashed_protocol(roots[3])) {
+            if (!url_assign(vm, RESULT, REL)) goto done;
+            result_value = url_finish(vm, RESULT);
+            goto done;
+        }
+        url_put(vm, RESULT, "protocol", roots[3]);
+        if (!url_truthy(url_get(vm, REL, "host")) && !url_is(roots[3], "file") && !url_is(roots[3], "file:")
+            && !url_hostless_protocol(roots[3])) {
+            MalValue pathname = url_get(vm, REL, "pathname");
+            usize capacity = url_segments(pathname) + 4;
+            MalValue *items = calloc(capacity, sizeof(MalValue));
+            if (items == nullptr) {
+                mal_vm_throw_allocation_error(vm);
+                goto done;
+            }
+            for (usize i = 0; i < capacity; i++) items[i] = mal_value_new_undefined();
+            MalRootSpan path_root;
+            mal_gc_root(&path_root, items, (i32) capacity);
+            UrlPath rel_path = {.items = items};
+            if (url_truthy(pathname)) url_path_split(vm, &rel_path, pathname);
+            else {
+                rel_path.items[0] = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) ""));
+                rel_path.count = 1;
+            }
+            MalValue host = mal_value_new_undefined();
+            while (rel_path.count > 0) {
+                host = url_path_shift(&rel_path);
+                url_put(vm, REL, "host", host);
+                if (url_truthy(host)) break;
+            }
+            MalValue empty = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) ""));
+            if (!url_truthy(url_get(vm, REL, "host"))) url_put(vm, REL, "host", empty);
+            if (!url_truthy(url_get(vm, REL, "hostname"))) url_put(vm, REL, "hostname", empty);
+            if (rel_path.count == 0 || !url_is(rel_path.items[0], "")) url_path_unshift(&rel_path, empty);
+            if (rel_path.count < 2) url_path_unshift(&rel_path, empty);
+            url_put(vm, RESULT, "pathname", url_path_join(vm, &rel_path));
+            mal_gc_unroot(&path_root);
+            free(items);
+        } else {
+            url_put(vm, RESULT, "pathname", url_get(vm, REL, "pathname"));
+        }
+        url_put(vm, RESULT, "search", url_get(vm, REL, "search"));
+        url_put(vm, RESULT, "query", url_get(vm, REL, "query"));
+        roots[4] = url_get(vm, REL, "host");
+        url_put(vm, RESULT, "host", url_truthy(roots[4]) ? roots[4]
+            : mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "")));
+        url_put(vm, RESULT, "auth", url_get(vm, REL, "auth"));
+        MalValue hostname = url_get(vm, REL, "hostname");
+        url_put(vm, RESULT, "hostname", url_truthy(hostname) ? hostname : url_get(vm, REL, "host"));
+        url_put(vm, RESULT, "port", url_get(vm, REL, "port"));
+        roots[3] = url_get(vm, RESULT, "pathname");
+        roots[4] = url_get(vm, RESULT, "search");
+        if (url_truthy(roots[3]) || url_truthy(roots[4])) {
+            url_put(vm, RESULT, "path", url_concat(vm, url_truthy(roots[3]) ? roots[3] : mal_value_new_undefined(),
+                url_truthy(roots[4]) ? roots[4] : mal_value_new_undefined()));
+        }
+        if (!url_truthy(url_get(vm, RESULT, "slashes"))) url_put(vm, RESULT, "slashes", url_get(vm, REL, "slashes"));
+        result_value = url_finish(vm, RESULT);
+        goto done;
+    }
+
+    MalValue result_pathname = url_get(vm, RESULT, "pathname");
+    MalValue rel_pathname = url_get(vm, REL, "pathname");
+    bool is_source_abs = url_truthy(result_pathname) && url_starts_with_slash(result_pathname);
+    bool is_rel_abs = url_truthy(url_get(vm, REL, "host"))
+        || (url_truthy(rel_pathname) && url_starts_with_slash(rel_pathname));
+    bool must_end_abs = is_rel_abs || is_source_abs
+        || (url_truthy(url_get(vm, RESULT, "host")) && url_truthy(rel_pathname));
+    bool remove_all_dots = must_end_abs;
+    usize capacity = 2 * (url_segments(result_pathname) + url_segments(rel_pathname)) + 8;
+    MalValue *items = calloc(capacity * 2, sizeof(MalValue));
+    if (items == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        goto done;
+    }
+    for (usize i = 0; i < capacity * 2; i++) items[i] = mal_value_new_undefined();
+    MalRootSpan path_root;
+    mal_gc_root(&path_root, items, (i32) (capacity * 2));
+    UrlPath src_path = {.items = items};
+    UrlPath rel_path = {.items = items + capacity};
+    url_path_split(vm, &src_path, url_get(vm, RESULT, "pathname"));
+    url_path_split(vm, &rel_path, url_get(vm, REL, "pathname"));
+    MalValue empty = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) ""));
+    roots[3] = url_get(vm, RESULT, "protocol");
+    bool no_leading_slashes = url_truthy(roots[3]) && !url_slashed_protocol(roots[3]);
+    if (no_leading_slashes) {
+        url_put(vm, RESULT, "hostname", empty);
+        url_put(vm, RESULT, "port", mal_value_new_null());
+        roots[4] = url_get(vm, RESULT, "host");
+        if (url_truthy(roots[4])) {
+            if (src_path.count > 0 && url_is(src_path.items[0], "")) src_path.items[0] = roots[4];
+            else url_path_unshift(&src_path, roots[4]);
+        }
+        url_put(vm, RESULT, "host", empty);
+        if (url_truthy(url_get(vm, REL, "protocol"))) {
+            url_put(vm, REL, "hostname", mal_value_new_null());
+            url_put(vm, REL, "port", mal_value_new_null());
+            url_put(vm, RESULT, "auth", mal_value_new_null());
+            roots[4] = url_get(vm, REL, "host");
+            if (url_truthy(roots[4])) {
+                if (rel_path.count > 0 && url_is(rel_path.items[0], "")) rel_path.items[0] = roots[4];
+                else url_path_unshift(&rel_path, roots[4]);
+            }
+            url_put(vm, REL, "host", mal_value_new_null());
+        }
+        must_end_abs = must_end_abs && ((rel_path.count > 0 && url_is(rel_path.items[0], ""))
+            || (src_path.count > 0 && url_is(src_path.items[0], "")));
+    }
+    if (is_rel_abs) {
+        roots[4] = url_get(vm, REL, "host");
+        if (url_truthy(roots[4]) || url_is(roots[4], "")) {
+            if (!mal_ops_strict_equal_bool(url_get(vm, RESULT, "host"), roots[4])) {
+                url_put(vm, RESULT, "auth", mal_value_new_null());
+            }
+            url_put(vm, RESULT, "host", roots[4]);
+            url_put(vm, RESULT, "port", url_get(vm, REL, "port"));
+        }
+        roots[4] = url_get(vm, REL, "hostname");
+        if (url_truthy(roots[4]) || url_is(roots[4], "")) {
+            if (!mal_ops_strict_equal_bool(url_get(vm, RESULT, "hostname"), roots[4])) {
+                url_put(vm, RESULT, "auth", mal_value_new_null());
+            }
+            url_put(vm, RESULT, "hostname", roots[4]);
+        }
+        url_put(vm, RESULT, "search", url_get(vm, REL, "search"));
+        url_put(vm, RESULT, "query", url_get(vm, REL, "query"));
+        memcpy(src_path.items, rel_path.items, (usize) rel_path.count * sizeof(MalValue));
+        src_path.count = rel_path.count;
+    } else if (rel_path.count > 0) {
+        if (src_path.count > 0) src_path.items[--src_path.count] = mal_value_new_undefined();
+        memcpy(src_path.items + src_path.count, rel_path.items, (usize) rel_path.count * sizeof(MalValue));
+        src_path.count += rel_path.count;
+        url_put(vm, RESULT, "search", url_get(vm, REL, "search"));
+        url_put(vm, RESULT, "query", url_get(vm, REL, "query"));
+    } else if (!mal_value_is_nil(url_get(vm, REL, "search"))) {
+        if (no_leading_slashes) {
+            roots[4] = url_path_shift(&src_path);
+            url_put(vm, RESULT, "host", roots[4]);
+            url_put(vm, RESULT, "hostname", roots[4]);
+            url_auth_in_host(vm, RESULT);
+        }
+        url_put(vm, RESULT, "search", url_get(vm, REL, "search"));
+        url_put(vm, RESULT, "query", url_get(vm, REL, "query"));
+        roots[3] = url_get(vm, RESULT, "pathname");
+        roots[4] = url_get(vm, RESULT, "search");
+        if (!mal_value_is_null(roots[3]) || !mal_value_is_null(roots[4])) {
+            url_put(vm, RESULT, "path", url_concat(vm, url_truthy(roots[3]) ? roots[3] : empty,
+                url_truthy(roots[4]) ? roots[4] : empty));
+        }
+        result_value = url_finish(vm, RESULT);
+        goto paths_done;
+    }
+    if (src_path.count == 0) {
+        url_put(vm, RESULT, "pathname", mal_value_new_null());
+        roots[4] = url_get(vm, RESULT, "search");
+        url_put(vm, RESULT, "path", url_truthy(roots[4])
+            ? url_concat(vm, mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "/")), roots[4])
+            : mal_value_new_null());
+        result_value = url_finish(vm, RESULT);
+        goto paths_done;
+    }
+    {
+        MalValue last = src_path.items[src_path.count - 1];
+        bool has_trailing_slash = ((url_truthy(url_get(vm, RESULT, "host")) || url_truthy(url_get(vm, REL, "host"))
+            || src_path.count > 1) && (url_is(last, ".") || url_is(last, ".."))) || url_is(last, "");
+        i32 up = 0;
+        for (i32 i = src_path.count - 1; i >= 0; i--) {
+            last = src_path.items[i];
+            if (url_is(last, ".")) {
+                url_path_remove(&src_path, i);
+            } else if (url_is(last, "..")) {
+                url_path_remove(&src_path, i);
+                up++;
+            } else if (up > 0) {
+                url_path_remove(&src_path, i);
+                up--;
+            }
+        }
+        if (!must_end_abs && !remove_all_dots) {
+            MalValue dots = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) ".."));
+            while (up-- > 0) url_path_unshift(&src_path, dots);
+        }
+        if (must_end_abs && !(src_path.count > 0 && url_is(src_path.items[0], ""))
+            && !(src_path.count > 0 && url_truthy(src_path.items[0]) && url_starts_with_slash(src_path.items[0]))) {
+            url_path_unshift(&src_path, empty);
+        }
+        if (has_trailing_slash) {
+            roots[4] = url_path_join(vm, &src_path);
+            MalString *joined = mal_value_to_string(roots[4]);
+            usize length = mal_string_length(joined);
+            if (length == 0 || mal_string_code_units(joined)[length - 1] != '/') src_path.items[src_path.count++] = empty;
+        }
+        bool is_absolute = src_path.count > 0 && (url_is(src_path.items[0], "")
+            || (url_truthy(src_path.items[0]) && url_starts_with_slash(src_path.items[0])));
+        if (no_leading_slashes) {
+            roots[4] = is_absolute ? empty : src_path.count > 0 ? url_path_shift(&src_path) : empty;
+            url_put(vm, RESULT, "host", roots[4]);
+            url_put(vm, RESULT, "hostname", roots[4]);
+            url_auth_in_host(vm, RESULT);
+        }
+        must_end_abs = must_end_abs || (url_truthy(url_get(vm, RESULT, "host")) && src_path.count > 0);
+        if (must_end_abs && !is_absolute) url_path_unshift(&src_path, empty);
+        if (src_path.count == 0) {
+            url_put(vm, RESULT, "pathname", mal_value_new_null());
+            url_put(vm, RESULT, "path", mal_value_new_null());
+        } else {
+            url_put(vm, RESULT, "pathname", url_path_join(vm, &src_path));
+        }
+        roots[3] = url_get(vm, RESULT, "pathname");
+        roots[4] = url_get(vm, RESULT, "search");
+        if (!mal_value_is_null(roots[3]) || !mal_value_is_null(roots[4])) {
+            url_put(vm, RESULT, "path", url_concat(vm, url_truthy(roots[3]) ? roots[3] : empty,
+                url_truthy(roots[4]) ? roots[4] : empty));
+        }
+        roots[4] = url_get(vm, REL, "auth");
+        url_put(vm, RESULT, "auth", url_truthy(roots[4]) ? roots[4] : url_get(vm, RESULT, "auth"));
+        if (!url_truthy(url_get(vm, RESULT, "slashes"))) url_put(vm, RESULT, "slashes", url_get(vm, REL, "slashes"));
+        result_value = url_finish(vm, RESULT);
+    }
+paths_done:
+    mal_gc_unroot(&path_root);
+    free(items);
+#undef SELF
+#undef REL
+#undef RESULT
+done:
+    mal_gc_unroot(&root);
+    return vm->completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : result_value;
+}
+
+static MalValue url_parse_source(MalVm *vm, MalValue source) {
+    MalValue prototype = vm->intrinsics[MAL_INTRINSIC_NODE_URL_PROTOTYPE];
+    if (mal_value_is_object(source) && mal_value_is_object(prototype)) {
+        for (MalObject *cursor = mal_object_get_prototype(mal_value_to_object(source)); cursor != nullptr;
+             cursor = mal_object_get_prototype(cursor)) {
+            if (cursor == mal_value_to_object(prototype)) return source;
+        }
+    }
+    MalValue parse_args[] = {source, mal_value_new_boolean(false), mal_value_new_boolean(true)};
+    return url_parse(vm, mal_value_new_undefined(), parse_args, 3, mal_value_new_undefined(),
+        mal_value_new_undefined());
+}
+
+static MalValue url_module_resolve_object(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver, (void) new_target, (void) callee;
+    MalValue source = argc > 0 ? args[0] : mal_value_new_undefined();
+    MalValue relative = argc > 1 ? args[1] : mal_value_new_undefined();
+    if (!url_truthy(source)) return relative;
+    MalValue roots[] = {relative, mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    roots[1] = url_parse_source(vm, source);
+    MalValue result = vm->completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined()
+        : url_resolve_object_impl(vm, roots[1], roots[0]);
+    mal_gc_unroot(&root);
+    return result;
+}
+
+static MalValue url_resolve_with(MalVm *vm, MalValue self, MalValue relative) {
+    MalValue roots[] = {self, url_parse_source(vm, relative)};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalValue result = mal_value_new_undefined();
+    if (vm->completion.kind != MAL_COMPLETION_THROW) {
+        roots[1] = url_resolve_object_impl(vm, roots[0], roots[1]);
+        if (vm->completion.kind != MAL_COMPLETION_THROW) {
+            result = url_format(vm, mal_value_new_undefined(), &roots[1], 1, mal_value_new_undefined(),
+                mal_value_new_undefined());
+        }
+    }
+    mal_gc_unroot(&root);
+    return result;
+}
+
+static MalValue url_module_resolve(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver, (void) new_target, (void) callee;
+    MalValue relative = argc > 1 ? args[1] : mal_value_new_undefined();
+    MalValue roots[] = {relative, url_parse_source(vm, argc > 0 ? args[0] : mal_value_new_undefined())};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalValue result = vm->completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined()
+        : url_resolve_with(vm, roots[1], roots[0]);
+    mal_gc_unroot(&root);
+    return result;
+}
+
+static MalValue url_proto_resolve(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) new_target, (void) callee;
+    return url_resolve_with(vm, receiver, argc > 0 ? args[0] : mal_value_new_undefined());
+}
+
+static MalValue url_proto_resolve_object(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) new_target, (void) callee;
+    return url_resolve_object_impl(vm, receiver, argc > 0 ? args[0] : mal_value_new_undefined());
+}
+
+static MalValue url_proto_format(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) args, (void) argc, (void) new_target, (void) callee;
+    MalValue argument = receiver;
+    return url_format(vm, mal_value_new_undefined(), &argument, 1, mal_value_new_undefined(),
+        mal_value_new_undefined());
+}
+
 void mal_host_install_node_url(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
     const MalHostLaunchContext *launch) {
@@ -762,6 +1428,16 @@ void mal_host_install_node_url(
         }
         mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[0]), (const byte *) "domainToASCII", 1,
             url_domain_to_ascii);
+        mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[0]), (const byte *) "resolve", 2,
+            url_module_resolve);
+        mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[0]), (const byte *) "resolveObject", 2,
+            url_module_resolve_object);
+        mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[1]), (const byte *) "resolve", 1,
+            url_proto_resolve);
+        mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[1]), (const byte *) "resolveObject", 1,
+            url_proto_resolve_object);
+        mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[1]), (const byte *) "format", 0,
+            url_proto_format);
         mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[0]), (const byte *) "domainToUnicode", 1,
             url_domain_to_unicode);
         vm->intrinsics[MAL_INTRINSIC_NODE_URL_CONSTRUCTOR] = roots[2];

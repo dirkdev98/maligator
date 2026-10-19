@@ -894,6 +894,224 @@ static MalValue mal_buffer_validate_text_call(
     return vm->completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : instance;
 }
 
+typedef enum MalTranscodeEncoding {
+    MAL_TRANSCODE_UNSUPPORTED, MAL_TRANSCODE_ASCII, MAL_TRANSCODE_LATIN1, MAL_TRANSCODE_UCS2,
+    MAL_TRANSCODE_UTF8,
+} MalTranscodeEncoding;
+
+// ICU UErrorCode values that Node reports as errno.
+#define MAL_U_ILLEGAL_ARGUMENT_ERROR 1
+#define MAL_U_INVALID_CHAR_FOUND 10
+
+/* lib/buffer.js normalizeEncoding, limited to the encodings node_i18n.cc transcodes. */
+static MalTranscodeEncoding mal_transcode_encoding(MalValue value) {
+    if (mal_value_is_nil(value)) return MAL_TRANSCODE_UTF8;
+    if (!mal_value_is_string(value)) return MAL_TRANSCODE_UNSUPPORTED;
+    MalString *string = mal_value_to_string(value);
+    usize length = mal_string_length(string);
+    const c16 *units = mal_string_code_units(string);
+    char lower[16];
+    if (length >= sizeof lower) return MAL_TRANSCODE_UNSUPPORTED;
+    for (usize i = 0; i < length; i++) {
+        c16 unit = units[i];
+        if (unit >= 0x80) return MAL_TRANSCODE_UNSUPPORTED;
+        lower[i] = (char) (unit >= 'A' && unit <= 'Z' ? unit + 32 : unit);
+    }
+    lower[length] = '\0';
+    if (strcmp(lower, "utf8") == 0 || strcmp(lower, "utf-8") == 0) return MAL_TRANSCODE_UTF8;
+    if (strcmp(lower, "ucs2") == 0 || strcmp(lower, "ucs-2") == 0 || strcmp(lower, "utf16le") == 0
+        || strcmp(lower, "utf-16le") == 0) {
+        return MAL_TRANSCODE_UCS2;
+    }
+    if (strcmp(lower, "latin1") == 0 || strcmp(lower, "binary") == 0) return MAL_TRANSCODE_LATIN1;
+    if (strcmp(lower, "ascii") == 0) return MAL_TRANSCODE_ASCII;
+    return MAL_TRANSCODE_UNSUPPORTED;
+}
+
+/* Next code point of `bytes`; invalid input yields U+FFFD per maximal subpart, or -1 when strict. */
+static i32 mal_transcode_utf8_next(const u8 *bytes, usize length, usize *offset, bool strict) {
+    u8 lead = bytes[*offset];
+    if (lead < 0x80) {
+        (*offset)++;
+        return lead;
+    }
+    u32 need = lead >= 0xC2 && lead <= 0xDF ? 1 : lead >= 0xE0 && lead <= 0xEF ? 2
+        : lead >= 0xF0 && lead <= 0xF4 ? 3 : 0;
+    u32 code = need == 1 ? lead & 0x1F : need == 2 ? lead & 0x0F : lead & 0x07;
+    usize position = *offset + 1;
+    for (u32 i = 0; i < need; i++, position++) {
+        u8 lower = 0x80, upper = 0xBF;
+        if (i == 0 && lead == 0xE0) lower = 0xA0;
+        if (i == 0 && lead == 0xED) upper = 0x9F;
+        if (i == 0 && lead == 0xF0) lower = 0x90;
+        if (i == 0 && lead == 0xF4) upper = 0x8F;
+        if (position >= length || bytes[position] < lower || bytes[position] > upper) {
+            *offset = position;
+            return strict ? -1 : 0xFFFD;
+        }
+        code = (code << 6) | (bytes[position] & 0x3F);
+    }
+    *offset = need == 0 ? *offset + 1 : position;
+    if (need == 0) return strict ? -1 : 0xFFFD;
+    return (i32) code;
+}
+
+static void mal_transcode_put(u8 *out, usize *used, MalTranscodeEncoding to, u32 code) {
+    switch (to) {
+    case MAL_TRANSCODE_ASCII:
+        out[(*used)++] = code < 0x80 ? (u8) code : '?';
+        return;
+    case MAL_TRANSCODE_LATIN1:
+        out[(*used)++] = code < 0x100 ? (u8) code : '?';
+        return;
+    case MAL_TRANSCODE_UCS2:
+        if (code >= 0x10000) {
+            u32 high = 0xD800 + ((code - 0x10000) >> 10), low = 0xDC00 + ((code - 0x10000) & 0x3FF);
+            out[(*used)++] = (u8) high;
+            out[(*used)++] = (u8) (high >> 8);
+            out[(*used)++] = (u8) low;
+            out[(*used)++] = (u8) (low >> 8);
+        } else {
+            out[(*used)++] = (u8) code;
+            out[(*used)++] = (u8) (code >> 8);
+        }
+        return;
+    case MAL_TRANSCODE_UTF8:
+        if (code < 0x80) {
+            out[(*used)++] = (u8) code;
+        } else if (code < 0x800) {
+            out[(*used)++] = (u8) (0xC0 | (code >> 6));
+            out[(*used)++] = (u8) (0x80 | (code & 0x3F));
+        } else if (code < 0x10000) {
+            out[(*used)++] = (u8) (0xE0 | (code >> 12));
+            out[(*used)++] = (u8) (0x80 | ((code >> 6) & 0x3F));
+            out[(*used)++] = (u8) (0x80 | (code & 0x3F));
+        } else {
+            out[(*used)++] = (u8) (0xF0 | (code >> 18));
+            out[(*used)++] = (u8) (0x80 | ((code >> 12) & 0x3F));
+            out[(*used)++] = (u8) (0x80 | ((code >> 6) & 0x3F));
+            out[(*used)++] = (u8) (0x80 | (code & 0x3F));
+        }
+        return;
+    case MAL_TRANSCODE_UNSUPPORTED:
+        return;
+    }
+}
+
+/* node_i18n.cc Transcode: ASCII/Latin-1 to UCS-2 widen bytes, UTF-8 to UCS-2 and UCS-2 to
+ * UTF-8 are strict, and every other pair converts with ICU substitution ('?' for unmappable
+ * output, U+FFFD for invalid input). Returns the ICU error code, or 0. */
+static int mal_transcode(const u8 *bytes, usize length, MalTranscodeEncoding from, MalTranscodeEncoding to,
+    u8 **out, usize *out_length) {
+    if (from == MAL_TRANSCODE_UNSUPPORTED || to == MAL_TRANSCODE_UNSUPPORTED) return MAL_U_ILLEGAL_ARGUMENT_ERROR;
+    if (from == MAL_TRANSCODE_UCS2 && to == MAL_TRANSCODE_UTF8 && length % 2 != 0) return MAL_U_INVALID_CHAR_FOUND;
+    *out = malloc(length * 4 + 4);
+    if (*out == nullptr) return -1;
+    usize used = 0;
+    usize offset = 0;
+    while (offset < length) {
+        i32 code;
+        if (from == MAL_TRANSCODE_LATIN1 || (from == MAL_TRANSCODE_ASCII && to == MAL_TRANSCODE_UCS2)) {
+            code = bytes[offset++];
+        } else if (from == MAL_TRANSCODE_ASCII) {
+            code = bytes[offset] < 0x80 ? bytes[offset] : 0xFFFD;
+            offset++;
+        } else if (from == MAL_TRANSCODE_UTF8) {
+            code = mal_transcode_utf8_next(bytes, length, &offset, to == MAL_TRANSCODE_UCS2);
+        } else {
+            if (offset + 1 >= length) break;
+            u32 unit = (u32) bytes[offset] | ((u32) bytes[offset + 1] << 8);
+            offset += 2;
+            code = (i32) unit;
+            if (unit >= 0xD800 && unit <= 0xDBFF && offset + 1 < length) {
+                u32 next = (u32) bytes[offset] | ((u32) bytes[offset + 1] << 8);
+                if (next >= 0xDC00 && next <= 0xDFFF) {
+                    code = (i32) (0x10000 + ((unit - 0xD800) << 10) + (next - 0xDC00));
+                    offset += 2;
+                }
+            }
+            if (code >= 0xD800 && code <= 0xDFFF) {
+                if (to == MAL_TRANSCODE_UTF8) code = -1;
+                else if (to != MAL_TRANSCODE_UCS2) code = '?';
+            }
+        }
+        if (code < 0) {
+            free(*out);
+            *out = nullptr;
+            return MAL_U_INVALID_CHAR_FOUND;
+        }
+        if (to == MAL_TRANSCODE_UCS2 && code >= 0xD800 && code <= 0xDFFF) {
+            (*out)[used++] = (u8) code;
+            (*out)[used++] = (u8) (code >> 8);
+        } else {
+            mal_transcode_put(*out, &used, to, (u32) code);
+        }
+    }
+    *out_length = used;
+    return 0;
+}
+
+/* lib/internal/blob.js resolveObjectURL. The runtime has no URL.createObjectURL, so no
+ * "blob:nodedata:" id is ever registered and every URL resolves to undefined. */
+static MalValue mal_buffer_resolve_object_url(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee
+) {
+    (void) self; (void) new_target; (void) callee;
+    MalString *url;
+    (void) mal_vm_to_string(vm, argc > 0 ? args[0] : mal_value_new_undefined(), &url);
+    return mal_value_new_undefined();
+}
+
+/* lib/buffer.js transcode over node_i18n.cc. */
+static MalValue mal_buffer_transcode(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee
+) {
+    (void) self; (void) new_target; (void) callee;
+    MalValue source = argc > 0 ? args[0] : mal_value_new_undefined();
+    if (!mal_value_is_typed_array_object(source) || mal_value_to_typed_array_object(source)->kind != MAL_TA_UINT8) {
+        mal_node_throw_invalid_arg_type(vm, "source", "an instance of Buffer or Uint8Array", source);
+        return mal_value_new_undefined();
+    }
+    MalTypedArrayObject *array = mal_value_to_typed_array_object(source);
+    usize length = mal_typed_array_object_is_out_of_bounds(array) ? 0 : mal_typed_array_object_length(array);
+    if (length == 0) return mal_node_buffer_from_owned_bytes(vm, nullptr, 0);
+    MalTranscodeEncoding from = mal_transcode_encoding(argc > 1 ? args[1] : mal_value_new_undefined());
+    MalTranscodeEncoding to = mal_transcode_encoding(argc > 2 ? args[2] : mal_value_new_undefined());
+    u8 *input = malloc(length);
+    if (input == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
+    mal_buffer_view_read(array, 0, (byte *) input, length);
+    u8 *output = nullptr;
+    usize output_length = 0;
+    int status = mal_transcode(input, length, from, to, &output, &output_length);
+    free(input);
+    if (status < 0) {
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
+    if (status > 0) {
+        const char *code = status == MAL_U_ILLEGAL_ARGUMENT_ERROR ? "U_ILLEGAL_ARGUMENT_ERROR" : "U_INVALID_CHAR_FOUND";
+        char message[96];
+        snprintf(message, sizeof message, "Unable to transcode Buffer [%s]", code);
+        mal_node_throw_code(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, message, code);
+        MalValue error = vm->completion.value;
+        if (mal_value_is_object(error)) {
+            MalRootSpan root;
+            mal_gc_root(&root, &error, 1);
+            mal_intrinsic_define_data(vm, mal_value_to_object(error), (const byte *) "errno",
+                mal_value_from_i32(status), MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
+            vm->completion.value = error;
+            mal_gc_unroot(&root);
+        }
+        return mal_value_new_undefined();
+    }
+    return mal_node_buffer_from_owned_bytes(vm, (byte *) output, output_length);
+}
+
 static MalValue mal_buffer_is_ascii(
     MalVm *vm, MalValue self, const MalValue *args, i32 argc,
     MalValue new_target, MalValue callee
@@ -2702,6 +2920,16 @@ void mal_host_install_node_buffer(
     mal_intrinsic_define_data(vm, module_default, "isAscii", roots[4],
         MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
     mal_intrinsic_define_data(vm, module_default, "isUtf8", roots[5],
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
+    roots[6] = mal_value_from_native_function_object(mal_native_function_object_new_arity(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+        mal_intrinsic_ascii(vm, "transcode"), 3, mal_buffer_transcode));
+    mal_intrinsic_define_data(vm, module_default, "transcode", roots[6],
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
+    roots[6] = mal_value_from_native_function_object(mal_native_function_object_new_arity(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+        mal_intrinsic_ascii(vm, "resolveObjectURL"), 1, mal_buffer_resolve_object_url));
+    mal_intrinsic_define_data(vm, module_default, "resolveObjectURL", roots[6],
         MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
 
     vm->intrinsics[MAL_INTRINSIC_NODE_BUFFER_CONSTRUCTOR] = roots[1];

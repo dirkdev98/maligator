@@ -2185,6 +2185,75 @@ done:
 }
 
 
+/* lib/util.js _extend: own enumerable keys copied last-to-first, with strict-mode sets. */
+static MalValue util_extend(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver, (void) new_target, (void) callee;
+    MalValue roots[] = {argc > 0 ? args[0] : mal_value_new_undefined(),
+        argc > 1 ? args[1] : mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined()};
+    if (!mal_value_is_object(roots[1]) || mal_value_is_callable(roots[1])) return roots[0];
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalValue object_constructor = vm->intrinsics[MAL_INTRINSIC_OBJECT_CONSTRUCTOR];
+    if (mal_vm_get_property(vm, object_constructor, mal_intrinsic_string_key(vm, (const byte *) "keys"), &roots[2])) {
+        MalCompletion keys = mal_vm_call_value(vm, roots[2], object_constructor, &roots[1], 1);
+        roots[2] = keys.value;
+    }
+    MalValue length_value;
+    if (vm->completion.kind != MAL_COMPLETION_THROW && mal_vm_get_property(vm, roots[2],
+            mal_intrinsic_string_key(vm, (const byte *) "length"), &length_value)
+        && mal_value_is_int32(length_value)) {
+        for (i32 i = mal_value_to_i32(length_value) - 1; i >= 0; i--) {
+            if (!mal_vm_get_property(vm, roots[2], mal_key_index((u32) i), &roots[3])) break;
+            MalKey key;
+            if (!mal_vm_to_property_key(vm, roots[3], &key)) break;
+            if (!mal_vm_get_property(vm, roots[1], key, &roots[4])) break;
+            if (!mal_value_is_object(roots[0])) {
+                char message[256];
+                MalString *name = mal_value_to_string(roots[3]);
+                usize name_length = 0;
+                byte *name_utf8 = mal_string_to_utf8(name, &name_length);
+                if (mal_value_is_nil(roots[0])) {
+                    snprintf(message, sizeof message, "Cannot set properties of %s (setting '%.*s')",
+                        mal_value_is_null(roots[0]) ? "null" : "undefined", (int) name_length,
+                        name_utf8 != nullptr ? name_utf8 : "");
+                } else {
+                    snprintf(message, sizeof message, "Cannot create property '%.*s' on a primitive value",
+                        (int) name_length, name_utf8 != nullptr ? name_utf8 : "");
+                }
+                free(name_utf8);
+                mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, message);
+                break;
+            }
+            if (!mal_vm_set_property(vm, roots[0], key, roots[4], roots[0])) {
+                if (vm->completion.kind != MAL_COMPLETION_THROW) {
+                    mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                        "Cannot assign to read only property of object");
+                }
+                break;
+            }
+        }
+    }
+    MalValue result = vm->completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : roots[0];
+    mal_gc_unroot(&root);
+    return result;
+}
+
+static MalValue util_mark_promise_as_handled(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver, (void) new_target, (void) callee;
+    MalValue promise = argc > 0 ? args[0] : mal_value_new_undefined();
+    if (!mal_value_is_promise_object(promise)) {
+        mal_node_throw_invalid_arg_type(vm, "promise", "an instance of Promise", promise);
+        return mal_value_new_undefined();
+    }
+    mal_value_to_promise_object(promise)->is_handled = true;
+    return mal_value_new_undefined();
+}
+
 typedef struct MalNodeUtilExport {
     const char *name;
     i32 length;
@@ -2192,6 +2261,7 @@ typedef struct MalNodeUtilExport {
 } MalNodeUtilExport;
 
 static const MalNodeUtilExport util_exports[] = {
+    {"_extend", 2, util_extend},
     {"aborted", 2, util_aborted},
     {"callbackify", 1, util_callbackify},
     {"convertProcessSignalToExitCode", 1, util_convert_signal_to_exit_code},
@@ -2202,6 +2272,7 @@ static const MalNodeUtilExport util_exports[] = {
     {"getSystemErrorMessage", 1, util_get_system_error_message},
     {"getSystemErrorName", 1, util_get_system_error_name},
     {"isDeepStrictEqual", 2, util_is_deep_strict_equal},
+    {"markPromiseAsHandled", 1, util_mark_promise_as_handled},
     {"stripVTControlCharacters", 1, util_strip_vt_control_characters},
     {"transferableAbortController", 0, util_transferable_abort_controller},
     {"transferableAbortSignal", 1, util_transferable_abort_signal},
@@ -2253,6 +2324,19 @@ void mal_host_install_node_util(
     for (usize i = 0; i < countof(util_exports); i++) {
         if (strcmp(util_exports[i].name, "inspect") == 0) {
             mal_node_inspect_install_tables(vm, mal_value_to_object(values[i]));
+        } else if (strcmp(util_exports[i].name, "_extend") == 0) {
+            // Node wraps _extend in deprecate(..., 'DEP0060'): named "deprecated", length 2.
+            MalValue slots[] = {values[i],
+                mal_value_from_string(mal_intrinsic_ascii(vm,
+                    (const byte *) "The `util._extend` API is deprecated. Please use Object.assign() instead.")),
+                mal_value_new_boolean(false)};
+            MalRootSpan slot_root;
+            mal_gc_root(&slot_root, slots, countof(slots));
+            values[i] = mal_value_from_native_function_object(
+                mal_native_function_object_new_with_slots_arity(&vm->heap, function_prototype,
+                    mal_intrinsic_ascii(vm, (const byte *) "deprecated"), 2, util_deprecated_call,
+                    slots, countof(slots)));
+            mal_gc_unroot(&slot_root);
         } else if (strcmp(util_exports[i].name, "promisify") == 0) {
             mal_intrinsic_define_data(vm, mal_value_to_object(values[i]), (const byte *) "custom",
                 mal_node_registered_symbol(vm, "nodejs.util.promisify.custom"), UTIL_VISIBLE);
