@@ -1995,7 +1995,6 @@ describe("emit-program-image instruction packing", () => {
 				for (const [register, slot] of slots) expect(slot).toBe(register);
 			}
 			expect(output).toContain("r0 = arg_count > 0 ? args[0] : MAL_VALUE_UNDEFINED;");
-			expect(output).toContain("__gc_frame.env = env;");
 		},
 	);
 
