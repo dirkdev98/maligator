@@ -690,16 +690,6 @@ contracts or investigates costs still visible after the string follow-ups.
       first; letting inlines of 32 or fewer units bypass that budget grew the
       compiler's own output for `parser.ts` by 49% and made the self-compile 44%
       slower, so the remedy is cheaper calls or a hotness signal, not more inlining.
-- [ ] Check class-instance method rows inline at static load sites. Method loads
-      on class instances hit an inherited-value row that the inline probe reaches
-      only through an out-of-line helper; together with the polymorphic remainder
-      that is about 8% of the self-compile's samples. Inlining the row check at
-      every site made the self-compile 1.4% faster (8 pairs, sd 0.21) but grew the
-      compiler's text from 56.1 to 65.1 MB; one shared out-of-line copy gained
-      nothing, so the gain is the avoided call. A smaller inline check (dropping the
-      public-overflow test that a matching non-dictionary shape already implies, and
-      one compare for mode, receiver type and row count) needs measuring, and its C
-      compile time with it.
 - [ ] Reach the remaining thread-locals without a call on macOS. Isolate state
       and the `mal_object_set` site table go through a plain pointer while one
       isolate runs, but generated code still keeps a thread-local
