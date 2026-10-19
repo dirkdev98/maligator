@@ -1135,8 +1135,8 @@ remains a Maligator extension and does not count as global fetch conformance.
       asymmetric KeyObjects, sign/verify, key generation, X509Certificate,
       DiffieHellman/ECDH and Cipheriv as Transform streams; dns record types beyond
       A/AAAA (needs res_query and libresolv in the link); zlib zstd and the zip
-      archive APIs; util MIMEType/MIMEParams; tls createServer; worker_threads
-      environment data, BroadcastChannel and locks; and vm beyond runInNewContext.
+      archive APIs; tls createServer; worker_threads environment data,
+      markAsUntransferable, BroadcastChannel and locks; and vm beyond runInNewContext.
 
 - [ ] Make async_hooks observe more than AsyncResource: timers, I/O and promises
       do not emit hook events, and executionAsyncId() inside their callbacks stays

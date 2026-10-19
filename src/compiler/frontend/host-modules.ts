@@ -658,6 +658,8 @@ const UTIL: HostModuleSpec = {
 		"getCallSites",
 		"getSystemErrorMap",
 		"getSystemErrorMessage",
+		"MIMEParams",
+		"MIMEType",
 		"getSystemErrorName",
 		"inherits",
 		"inspect",

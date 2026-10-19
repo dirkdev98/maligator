@@ -661,11 +661,15 @@
 	},
 	{
 		"file": "runtime/node_util.c",
-		"sha256": "bec0f1c04169b0beb8d25c7bb49a6f832946bf0c6624ba53a4958a9151e21cad"
+		"sha256": "73848485df59dc5eef6a00096da8fb733ef6372aa9081b71c26b0f73f26d7a78"
 	},
 	{
 		"file": "runtime/node_util.h",
 		"sha256": "329620df24b20a75997314b04cb4e3f28ad24101839b011d0b5f3bdb88236b94"
+	},
+	{
+		"file": "runtime/node_util_mime.c",
+		"sha256": "b020d5154c259562828651723b56986147a5abbe0f860c82ebedcb709caefdaa"
 	},
 	{
 		"file": "runtime/node_v8.c",

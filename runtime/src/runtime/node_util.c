@@ -25,6 +25,7 @@
 #include "heap_string.h"
 #include "intrinsics.h"
 #include "node_module.h"
+#include "node_util_mime.h"
 #include "iterator_object.h"
 #include "map_object.h"
 #include "set_object.h"
@@ -2297,6 +2298,7 @@ void mal_host_install_node_util(
     }
 	mal_intrinsic_define_data(vm, namespace,
 		(const byte *) "types", values[types_index], UTIL_VISIBLE);
+    mal_node_util_mime_install(vm, namespace);
     for (usize i = 0; i < countof(util_exports); i++) {
         if (strcmp(util_exports[i].name, "debuglog") == 0) {
             mal_intrinsic_define_data(vm, namespace, (const byte *) "debug", values[i], UTIL_VISIBLE);
