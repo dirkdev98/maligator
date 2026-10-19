@@ -673,7 +673,7 @@ contracts or investigates costs still visible after the string follow-ups.
       nesting or a profile, rather than a larger budget or limit.
 - [ ] Stop allocating closures that are only called. render-native-c's
       `emitInstruction` creates about 40 closures on entry to every call and uses
-      a few per case. Only the 20 of its 225 creation sites that capture lifting
+      a few per case: 1.64 million closures from 46,000 calls in the parser workload. Only the 20 of its 225 creation sites that capture lifting
       rewrites are reduced to direct calls, and even those still allocate the
       closure object the call passes as its callee. Sinking creation into the
       cases that use it, or passing no object when the target never reads its
@@ -683,7 +683,18 @@ contracts or investigates costs still visible after the string follow-ups.
       environment on every entry: `remapRuntimeConstantReferences` and
       `coreAttributeValuesEqual` each allocate about 250,000 in the self-compile,
       although most of their calls return from a primitive check before any
-      closure exists.
+      closure exists. Counting environments against closures per function in the
+      parser workload puts the avoidable environments near 860,000 (also
+      `remapRuntimeInstructionConstants`, `lowerInstructionToBytecodeInstruction`,
+      `effectDomainsForMask`, `relocateFunctionReferences`, `foldControl` and
+      `eliminateLocalDuplicates`), roughly 0.5 to 1% of the run. The native
+      renderer could create the environment at the first access to it instead of
+      in the prologue, folding the entry stores that only mark bindings
+      uninitialized into that creation, while the interpreter stays eager; reads of
+      captured parameters that are never reassigned must come from their registers,
+      or the first parameter check would still create it. A ten-line equality
+      function shaped like `coreAttributeValuesEqual` runs 11.7 times slower than
+      in Node on primitive inputs.
 - [ ] Publish compiled root frames only on paths that can reach a safepoint.
       Small accessors such as the Core store's `instructionKind` and `checkedId`
       link a root frame and clear their GC slots on entry although only their
@@ -711,6 +722,13 @@ contracts or investigates costs still visible after the string follow-ups.
       (field stores test the marking flag, `mal_object_set` its site table, the
       prototype epoch). Linux reads them from the thread pointer. Passing the
       isolate through the VM, or caching its address per call, would remove most.
+- [ ] Dispatch the objects phase's pricing rules without loading the method. Its
+      `rules[i % 3].quote(order)` loop runs 2.9 times slower than Node while the
+      particle loop is 1.37 times: the order allocation is already elided and the
+      call is a three-way switch over direct entries, but two calls in three load
+      `quote` through the shared inherited stub first (about 5 ns each). With the
+      three classes known, a guard on the receiver's prototype could select the
+      direct entry without the load.
 - [ ] Keep three receivers of a polymorphic method site in its own cache. The
       objects phase's `rules[i % 3].quote(order)` hits the site's one inherited row
       for one class in three; the others probe both banks of the shared stub
