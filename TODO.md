@@ -696,15 +696,6 @@ contracts or investigates costs still visible after the string follow-ups.
       `MalDefinePropertyCache` per static define site (510 in the compiler), and
       the fiber, profile and perf-stats state stay thread-local. Each access is a
       `_tlv_get_addr` call there; Linux reads them from the thread pointer.
-- [ ] Allocate objects with the slot capacity their allocation site reaches.
-      Objects that outgrow their inline slots move them to `malloc` storage,
-      grow it by `realloc` and free it from a minor-sweep finalizer: growth and
-      those finalizers take about 2.7% of the Express in-process samples, where
-      8.6 objects per request migrate (the harness's script-built request and
-      response objects, RegExp results, runtime-built stream state). V8-style
-      slack tracking per allocation site, rather than per root shape, would size
-      the cell once. Node HTTP's canonical request and response objects could
-      also reserve their slots, but the in-process harness never builds them.
 - [ ] Dispatch the objects phase's pricing rules without loading the method. Its
       `rules[i % 3].quote(order)` loop runs 2.9 times slower than Node while the
       particle loop is 1.37 times: the order allocation is already elided and the
