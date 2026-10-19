@@ -2251,9 +2251,8 @@ static void mal_gc_finalize_cell(MalHeapHeader *cell) {
         mal_table_free(mal_object_overflow(object));
         mal_object_set_overflow_pointer(object, nullptr);
     }
-    if (object->slots_owned || object->storage_kind != MAL_OBJECT_COMPACT) {
-        mal_object_release_slots(object);
-    }
+    // Clearing a dead cell's borrowed field pointer would only dirty its line.
+    if (object->slots_owned) mal_object_release_slots(object);
     if (object->storage_kind == MAL_OBJECT_EXTERNAL) {
         free(mal_object_storage(object));
     }
