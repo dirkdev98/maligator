@@ -265,3 +265,84 @@ console.log(
 	net.setDefaultAutoSelectFamily.length,
 	net.getDefaultAutoSelectFamilyAttemptTimeout.length,
 );
+
+const { debounce } = util;
+const debounceCalls = [];
+const debounced = debounce(function (value) {
+	debounceCalls.push([this === debounced, value]);
+	return value * 2;
+}, 20);
+console.log(
+	debounced.name,
+	debounced.length,
+	typeof debounced.cancel,
+	debounced.pendingCount,
+	debounced.pending,
+);
+console.log(JSON.stringify(Object.keys(debounced)));
+const firstCall = debounced(1);
+const secondCall = debounced(2);
+console.log(debounced.pendingCount, debounced.pending === secondCall);
+console.log(
+	await firstCall,
+	await secondCall,
+	JSON.stringify(debounceCalls),
+	debounced.pendingCount,
+);
+const leadingCall = debounce((value) => value, 10, { leading: true });
+console.log(await leadingCall("now"));
+const superseded = debounce((value) => value, 10, { rejectOnCancel: true });
+const supersededFirst = superseded(1);
+const supersededSecond = superseded(2);
+console.log(
+	JSON.stringify(
+		await supersededFirst.catch((error) => [error.name, error.code, error.message]),
+	),
+	await supersededSecond,
+);
+const cancelled = debounce(() => 1, 10);
+const cancelledCall = cancelled();
+cancelled.cancel("why");
+console.log(
+	JSON.stringify(
+		await cancelledCall.catch((error) => [
+			error.name,
+			error.code,
+			error.message,
+			error.cause,
+		]),
+	),
+);
+const flushed = debounce((value) => value + 1, 1000);
+const flushedCall = flushed(1);
+flushed.flush();
+console.log(await flushedCall, flushed.pendingCount);
+const controller = new AbortController();
+const signalled = debounce(() => 1, 10, { signal: controller.signal });
+const signalledCall = signalled();
+controller.abort("stop");
+console.log(
+	JSON.stringify(await signalledCall.catch((error) => [error.name, error.cause])),
+	await signalled().catch((error) => error.name),
+);
+const throwing = debounce(() => {
+	throw new Error("boom");
+}, 5);
+console.log(await throwing().catch((error) => error.message));
+console.log(debounced.ref() === debounced, debounced.unref() === debounced);
+for (const args of [
+	[1, 1],
+	[() => {}, -1],
+	[() => {}, 1.5],
+	[() => {}, 1, null],
+	[() => {}, 1, { leading: 1 }],
+	[() => {}, 1, { signal: {} }],
+	[() => {}, 1, { signal: AbortSignal.abort("early") }],
+]) {
+	try {
+		debounce(...args);
+		console.log("created");
+	} catch (error) {
+		console.log(error.name, error.code, error.message.split(". Received")[0]);
+	}
+}

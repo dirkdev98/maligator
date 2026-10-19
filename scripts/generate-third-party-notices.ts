@@ -48,7 +48,12 @@ const NODE_DERIVED: Array<Derivation> = [
 		file: "runtime/src/runtime/node_url.c",
 		upstream: "lib/url.js, lib/internal/querystring.js",
 	},
+	{
+		file: "runtime/src/runtime/node_stream.c",
+		upstream: "lib/internal/streams/compose.js, lib/internal/streams/duplex.js",
+	},
 	{ file: "runtime/src/runtime/node_tls.c", upstream: "lib/tls.js, lib/_tls_wrap.js" },
+	{ file: "runtime/src/runtime/node_util.c", upstream: "lib/util.js" },
 	{ file: "runtime/src/runtime/node_util_mime.c", upstream: "lib/internal/mime.js" },
 ];
 

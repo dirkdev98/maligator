@@ -1,3 +1,4 @@
+// Portions derived from Node.js lib/util.js (MIT); see THIRD_PARTY_NOTICES.md.
 #include <math.h>
 #include <signal.h>
 #include <stdio.h>
@@ -34,6 +35,8 @@
 #include "property_iter.h"
 #include "property_store.h"
 #include "promise_object.h"
+#include "builtin_promise.h"
+#include "web_events_object.h"
 #include "primitive_wrapper_object.h"
 #include "proxy_object.h"
 #include "typed_array_object.h"
@@ -2254,6 +2257,415 @@ static MalValue util_mark_promise_as_handled(
     return mal_value_new_undefined();
 }
 
+/* util.debounce, translated from Node 26 lib/util.js. The closure variables live on one
+ * state object in slot 0 of every helper; the timer is a Node Timeout object. */
+static MalValue util_st(MalVm *vm, MalValue state, const char *name) {
+    MalValue value = mal_value_new_undefined();
+    mal_vm_get_property(vm, state, mal_intrinsic_string_key(vm, (const byte *) name), &value);
+    return value;
+}
+
+static void util_st_set(MalVm *vm, MalValue state, const char *name, MalValue value) {
+    MalRootSpan root;
+    mal_gc_root(&root, &value, 1);
+    mal_intrinsic_define_data(vm, mal_value_to_object(state), (const byte *) name, value,
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
+    mal_gc_unroot(&root);
+}
+
+static MalValue util_slot_state(MalValue callee) {
+    return mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 0);
+}
+
+static MalValue util_abort_error_for(MalVm *vm, MalValue reason, const char *message) {
+    MalValue error = mal_node_abort_error(vm, reason);
+    if (message != nullptr && mal_value_is_object(error)) {
+        MalRootSpan root;
+        mal_gc_root(&root, &error, 1);
+        mal_intrinsic_define_data(vm, mal_value_to_object(error), (const byte *) "message",
+            mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) message)),
+            MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+        mal_gc_unroot(&root);
+    }
+    if (mal_value_is_undefined(reason) && mal_value_is_object(error)) {
+        mal_object_delete_own(mal_value_to_object(error), mal_intrinsic_string_key(vm, (const byte *) "cause"));
+    }
+    return error;
+}
+
+static i32 util_array_length(MalValue array) {
+    return mal_value_is_array_object(array) ? (i32) mal_array_object_length(mal_value_to_array_object(array)) : 0;
+}
+
+static MalValue util_array_get(MalVm *vm, MalValue array, i32 index) {
+    MalValue value = mal_value_new_undefined();
+    mal_vm_get_property(vm, array, mal_key_index((u32) index), &value);
+    return value;
+}
+
+/* Each pending call is a Promise settled directly, like PromiseWithResolvers' resolve/reject. */
+static void util_settle_calls(MalVm *vm, MalValue calls, const char *which, MalValue value) {
+    MalValue roots[] = {calls, value, mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    bool rejected = strcmp(which, "reject") == 0;
+    for (i32 i = 0; i < util_array_length(roots[0]); i++) {
+        roots[2] = util_array_get(vm, roots[0], i);
+        mal_promise_settle_direct(vm, roots[2], vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR], rejected, roots[1]);
+        util_clear_completion(vm);
+    }
+    mal_gc_unroot(&root);
+}
+
+static void util_debounce_reject_pending(MalVm *vm, MalValue state, MalValue error) {
+    MalValue roots[] = {state, error, util_st(vm, state, "pending")};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    util_st_set(vm, roots[0], "pending", mal_value_from_array_object(mal_intrinsic_new_dense_array(vm, 0)));
+    util_settle_calls(vm, roots[2], "reject", roots[1]);
+    mal_gc_unroot(&root);
+}
+
+static MalValue util_timer_call(MalVm *vm, MalValue target, const char *name, const MalValue *args, i32 argc) {
+    MalValue function = mal_value_new_undefined();
+    mal_vm_get_property(vm, target, mal_intrinsic_string_key(vm, (const byte *) name), &function);
+    if (!mal_value_is_callable(function)) return mal_value_new_undefined();
+    return mal_vm_call_value(vm, function, target, args, argc).value;
+}
+
+static void util_debounce_clear_timer(MalVm *vm, MalValue state) {
+    MalValue timeout = util_st(vm, state, "timeout");
+    if (!mal_value_is_undefined(timeout)) {
+        MalRootSpan root;
+        mal_gc_root(&root, &timeout, 1);
+        util_timer_call(vm, vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS], "clearTimeout", &timeout, 1);
+        mal_gc_unroot(&root);
+    }
+    util_st_set(vm, state, "timeout", mal_value_new_undefined());
+}
+
+static void util_debounce_cancel_with_error(MalVm *vm, MalValue state, MalValue error) {
+    if (mal_value_is_undefined(util_st(vm, state, "timeout"))) return;
+    MalValue roots[] = {state, error};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    util_debounce_clear_timer(vm, roots[0]);
+    util_st_set(vm, roots[0], "args", mal_value_new_undefined());
+    util_debounce_reject_pending(vm, roots[0], roots[1]);
+    mal_gc_unroot(&root);
+}
+
+static void util_debounce_abort(MalVm *vm, MalValue state) {
+    MalValue roots[] = {state, util_st(vm, state, "abortError")};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    if (mal_value_is_undefined(roots[1])) {
+        roots[1] = util_abort_error_for(vm, mal_abort_signal_reason(util_st(vm, roots[0], "signal")), nullptr);
+        util_st_set(vm, roots[0], "abortError", roots[1]);
+    }
+    util_debounce_cancel_with_error(vm, roots[0], roots[1]);
+    mal_gc_unroot(&root);
+}
+
+static bool util_debounce_signal_aborted(MalVm *vm, MalValue state) {
+    MalValue signal = util_st(vm, state, "signal");
+    return !mal_value_is_undefined(signal) && mal_abort_signal_is_aborted(signal);
+}
+
+static void util_debounce_invoke(MalVm *vm, MalValue state, MalValue call_args, MalValue calls) {
+    MalValue roots[] = {state, call_args, calls, mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    if (util_debounce_signal_aborted(vm, roots[0])) {
+        util_debounce_abort(vm, roots[0]);
+        util_settle_calls(vm, roots[2], "reject", util_st(vm, roots[0], "abortError"));
+        mal_gc_unroot(&root);
+        return;
+    }
+    i32 count = util_array_length(roots[1]);
+    MalValue *values = calloc(count == 0 ? 1 : (usize) count, sizeof(MalValue));
+    if (values == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        mal_gc_unroot(&root);
+        return;
+    }
+    MalRootSpan values_root;
+    mal_gc_root(&values_root, values, count);
+    for (i32 i = 0; i < count; i++) values[i] = util_array_get(vm, roots[1], i);
+    MalCompletion completion = mal_vm_call_value(vm, util_st(vm, roots[0], "fn"), util_st(vm, roots[0], "debounced"),
+        values, count);
+    mal_gc_unroot(&values_root);
+    free(values);
+    roots[3] = completion.value;
+    bool threw = completion.kind == MAL_COMPLETION_THROW;
+    util_clear_completion(vm);
+    util_settle_calls(vm, roots[2], threw ? "reject" : "resolve", roots[3]);
+    mal_gc_unroot(&root);
+}
+
+static void util_debounce_invoke_pending(MalVm *vm, MalValue state) {
+    MalValue roots[] = {state, util_st(vm, state, "args"), util_st(vm, state, "pending")};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    util_st_set(vm, roots[0], "args", mal_value_new_undefined());
+    util_st_set(vm, roots[0], "pending", mal_value_from_array_object(mal_intrinsic_new_dense_array(vm, 0)));
+    if (util_array_length(roots[2]) != 0) util_debounce_invoke(vm, roots[0], roots[1], roots[2]);
+    mal_gc_unroot(&root);
+}
+
+static MalValue util_debounce_on_timeout(MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver, (void) args, (void) argc, (void) new_target;
+    MalValue state = util_slot_state(callee);
+    util_st_set(vm, state, "timeout", mal_value_new_undefined());
+    util_debounce_invoke_pending(vm, state);
+    return mal_value_new_undefined();
+}
+
+static void util_debounce_start_timer(MalVm *vm, MalValue state) {
+    MalValue roots[] = {state, util_st(vm, state, "onTimeout"), util_st(vm, state, "wait"), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    roots[3] = util_timer_call(vm, vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS], "setTimeout", roots + 1, 2);
+    if (!mal_value_is_truthy(util_st(vm, roots[0], "refed"))) util_timer_call(vm, roots[3], "unref", nullptr, 0);
+    util_st_set(vm, roots[0], "timeout", roots[3]);
+    mal_gc_unroot(&root);
+}
+
+static MalValue util_new_promise(MalVm *vm) {
+    MalValue promise, resolve, reject;
+    mal_promise_new_direct_capability(vm, &promise, &resolve, &reject);
+    return promise;
+}
+
+static MalValue util_debounce_reject(MalVm *vm, MalValue error) {
+    MalValue roots[] = {error, util_new_promise(vm)};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    mal_promise_settle_direct(vm, roots[1], vm->intrinsics[MAL_INTRINSIC_PROMISE_CONSTRUCTOR], true, roots[0]);
+    mal_gc_unroot(&root);
+    return roots[1];
+}
+
+static MalValue util_debounced_call(MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver, (void) new_target;
+    MalValue roots[] = {util_slot_state(callee), mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalValue result = mal_value_new_undefined();
+    if (util_debounce_signal_aborted(vm, roots[0])) util_debounce_abort(vm, roots[0]);
+    roots[1] = util_st(vm, roots[0], "abortError");
+    if (!mal_value_is_undefined(roots[1])) {
+        result = util_debounce_reject(vm, roots[1]);
+        goto done;
+    }
+    bool invoke_now = mal_value_is_truthy(util_st(vm, roots[0], "leading"))
+        && mal_value_is_undefined(util_st(vm, roots[0], "timeout"));
+    if (!mal_value_is_undefined(util_st(vm, roots[0], "timeout"))) {
+        roots[2] = util_st(vm, roots[0], "pending");
+        i32 pending = util_array_length(roots[2]);
+        if (pending != 0) {
+            MalValue last = util_array_get(vm, roots[2], pending - 1);
+            if (mal_value_is_promise_object(last)) mal_value_to_promise_object(last)->is_handled = true;
+            if (mal_value_is_truthy(util_st(vm, roots[0], "rejectOnCancel"))) {
+                roots[3] = util_abort_error_for(vm, mal_value_new_undefined(), "The debounced call was superseded");
+                util_debounce_reject_pending(vm, roots[0], roots[3]);
+            }
+        }
+        util_timer_call(vm, util_st(vm, roots[0], "timeout"), "refresh", nullptr, 0);
+    } else {
+        util_debounce_start_timer(vm, roots[0]);
+    }
+    if (util_debounce_signal_aborted(vm, roots[0])) {
+        util_debounce_abort(vm, roots[0]);
+        result = util_debounce_reject(vm, util_st(vm, roots[0], "abortError"));
+        goto done;
+    }
+    roots[3] = util_new_promise(vm);
+    roots[4] = mal_value_from_array_object(mal_array_object_new_from_values(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]), args, (u32) argc));
+    if (invoke_now) {
+        roots[2] = mal_value_from_array_object(mal_array_object_new_from_values(&vm->heap,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]), &roots[3], 1));
+        util_debounce_invoke(vm, roots[0], roots[4], roots[2]);
+    } else {
+        roots[2] = util_st(vm, roots[0], "pending");
+        mal_vm_set_property(vm, roots[2], mal_key_index((u32) util_array_length(roots[2])), roots[3], roots[2]);
+        util_st_set(vm, roots[0], "args", roots[4]);
+    }
+    result = roots[3];
+done:
+    mal_gc_unroot(&root);
+    return result;
+}
+
+static MalValue util_debounce_cancel(MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver, (void) new_target;
+    MalValue state = util_slot_state(callee);
+    if (mal_value_is_undefined(util_st(vm, state, "timeout"))) return mal_value_new_undefined();
+    MalValue error = util_abort_error_for(vm, argc > 0 ? args[0] : mal_value_new_undefined(), nullptr);
+    util_debounce_cancel_with_error(vm, state, error);
+    return mal_value_new_undefined();
+}
+
+static MalValue util_debounce_flush(MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver, (void) args, (void) argc, (void) new_target;
+    MalValue state = util_slot_state(callee);
+    if (util_array_length(util_st(vm, state, "pending")) == 0) return mal_value_new_undefined();
+    util_debounce_clear_timer(vm, state);
+    util_debounce_invoke_pending(vm, state);
+    return mal_value_new_undefined();
+}
+
+static MalValue util_debounce_set_ref(MalVm *vm, MalValue callee, bool referenced) {
+    MalValue state = util_slot_state(callee);
+    util_st_set(vm, state, "refed", mal_value_new_boolean(referenced));
+    MalValue timeout = util_st(vm, state, "timeout");
+    if (!mal_value_is_undefined(timeout)) util_timer_call(vm, timeout, referenced ? "ref" : "unref", nullptr, 0);
+    return util_st(vm, state, "debounced");
+}
+
+static MalValue util_debounce_ref(MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver, (void) args, (void) argc, (void) new_target;
+    return util_debounce_set_ref(vm, callee, true);
+}
+
+static MalValue util_debounce_unref(MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver, (void) args, (void) argc, (void) new_target;
+    return util_debounce_set_ref(vm, callee, false);
+}
+
+static MalValue util_debounce_on_abort(MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver, (void) args, (void) argc, (void) new_target;
+    util_debounce_abort(vm, util_slot_state(callee));
+    return mal_value_new_undefined();
+}
+
+static MalValue util_debounce_pending_get(MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver, (void) args, (void) argc, (void) new_target;
+    MalValue pending = util_st(vm, util_slot_state(callee), "pending");
+    i32 count = util_array_length(pending);
+    return count == 0 ? mal_value_new_null() : util_array_get(vm, pending, count - 1);
+}
+
+static MalValue util_debounce_pending_count_get(MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver, (void) args, (void) argc, (void) new_target;
+    return mal_value_from_i32(util_array_length(util_st(vm, util_slot_state(callee), "pending")));
+}
+
+static bool util_validate_boolean_option(MalVm *vm, MalValue value, const char *name) {
+    if (mal_value_is_boolean(value)) return true;
+    mal_node_throw_invalid_arg_type(vm, name, "of type boolean", value);
+    return false;
+}
+
+static MalValue util_debounce(MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver, (void) new_target, (void) callee;
+    MalValue fn = argc > 0 ? args[0] : mal_value_new_undefined();
+    MalValue options = argc > 2 ? args[2] : mal_value_new_undefined();
+    if (!mal_value_is_callable(fn)) {
+        mal_node_throw_invalid_arg_type(vm, "fn", "of type function", fn);
+        return mal_value_new_undefined();
+    }
+    f64 wait;
+    if (!mal_node_validate_integer(vm, argc > 1 ? args[1] : mal_value_new_undefined(), "wait", 0, 2147483647.0, &wait)) {
+        return mal_value_new_undefined();
+    }
+    bool has_options = !mal_value_is_undefined(options);
+    if (has_options && (!mal_value_is_object(options) || mal_value_is_array_object(options) || mal_value_is_callable(options))) {
+        mal_node_throw_invalid_arg_type(vm, "options", "of type object", options);
+        return mal_value_new_undefined();
+    }
+    MalValue roots[] = {fn, options, mal_value_from_object(mal_intrinsic_new_object(vm)), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalValue result = mal_value_new_undefined();
+    roots[3] = has_options ? util_st(vm, roots[1], "leading") : mal_value_new_undefined();
+    roots[4] = has_options ? util_st(vm, roots[1], "rejectOnCancel") : mal_value_new_undefined();
+    roots[5] = has_options ? util_st(vm, roots[1], "signal") : mal_value_new_undefined();
+    if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
+    if (mal_value_is_undefined(roots[3])) roots[3] = mal_value_new_boolean(false);
+    if (mal_value_is_undefined(roots[4])) roots[4] = mal_value_new_boolean(false);
+    if (!util_validate_boolean_option(vm, roots[3], "options.leading")
+        || !util_validate_boolean_option(vm, roots[4], "options.rejectOnCancel")) {
+        goto done;
+    }
+    if (!mal_value_is_undefined(roots[5]) && !(mal_value_is_event_target_object(roots[5])
+        && mal_value_to_event_target_object(roots[5])->is_abort_signal)) {
+        mal_node_throw_invalid_arg_type(vm, "options.signal", "an instance of AbortSignal", roots[5]);
+        goto done;
+    }
+    if (!mal_value_is_undefined(roots[5]) && mal_abort_signal_is_aborted(roots[5])) {
+        MalValue error = util_abort_error_for(vm, mal_abort_signal_reason(roots[5]), nullptr);
+        vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_THROW, .value = error};
+        goto done;
+    }
+    util_st_set(vm, roots[2], "fn", roots[0]);
+    util_st_set(vm, roots[2], "wait", mal_value_from_f64(wait));
+    util_st_set(vm, roots[2], "leading", roots[3]);
+    util_st_set(vm, roots[2], "rejectOnCancel", roots[4]);
+    util_st_set(vm, roots[2], "signal", roots[5]);
+    util_st_set(vm, roots[2], "pending", mal_value_from_array_object(mal_intrinsic_new_dense_array(vm, 0)));
+    util_st_set(vm, roots[2], "refed", mal_value_new_boolean(true));
+    MalObject *function_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
+    roots[6] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(&vm->heap,
+        function_prototype, mal_intrinsic_ascii(vm, (const byte *) ""), 0, util_debounce_on_timeout, &roots[2], 1));
+    util_st_set(vm, roots[2], "onTimeout", roots[6]);
+    roots[6] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(&vm->heap,
+        function_prototype, mal_intrinsic_ascii(vm, (const byte *) "debounced"), 0, util_debounced_call, &roots[2], 1));
+    util_st_set(vm, roots[2], "debounced", roots[6]);
+    MalObject *debounced = mal_value_to_object(roots[6]);
+    static const struct {
+        const char *name;
+        i32 length;
+        MalNativeFunctionCallback callback;
+    } methods[] = {
+        {"cancel", 1, util_debounce_cancel}, {"flush", 0, util_debounce_flush},
+        {"ref", 0, util_debounce_ref}, {"unref", 0, util_debounce_unref},
+    };
+    for (usize i = 0; i < countof(methods); i++) {
+        roots[3] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(&vm->heap,
+            function_prototype, mal_intrinsic_ascii(vm, (const byte *) methods[i].name), methods[i].length,
+            methods[i].callback, &roots[2], 1));
+        mal_intrinsic_define_data(vm, debounced, (const byte *) methods[i].name, roots[3],
+            MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
+    }
+    roots[3] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(&vm->heap,
+        function_prototype, mal_intrinsic_ascii(vm, (const byte *) "get"), 0, util_debounce_pending_get, &roots[2], 1));
+    MalPropertyDesc pending = {.flags = MAL_PROPERTY_ACCESSOR, .getter = roots[3], .setter = mal_value_new_undefined()};
+    mal_object_define_own(debounced, mal_intrinsic_string_key(vm, (const byte *) "pending"), &pending);
+    roots[3] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(&vm->heap,
+        function_prototype, mal_intrinsic_ascii(vm, (const byte *) "get"), 0, util_debounce_pending_count_get,
+        &roots[2], 1));
+    MalPropertyDesc pending_count = {.flags = MAL_PROPERTY_ACCESSOR, .getter = roots[3], .setter = mal_value_new_undefined()};
+    mal_object_define_own(debounced, mal_intrinsic_string_key(vm, (const byte *) "pendingCount"), &pending_count);
+    roots[3] = util_st(vm, roots[0], "length");
+    roots[4] = util_st(vm, roots[0], "name");
+    if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
+    mal_intrinsic_define_data(vm, debounced, (const byte *) "length", roots[3], MAL_PROPERTY_CONFIGURABLE);
+    mal_intrinsic_define_data(vm, debounced, (const byte *) "name", roots[4], MAL_PROPERTY_CONFIGURABLE);
+    if (!mal_value_is_undefined(roots[5])) {
+        roots[3] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(&vm->heap,
+            function_prototype, mal_intrinsic_ascii(vm, (const byte *) "abort"), 0, util_debounce_on_abort, &roots[2], 1));
+        mal_abort_signal_add_algorithm(roots[5], roots[3]);
+    }
+    result = roots[6];
+done:
+    mal_gc_unroot(&root);
+    return vm->completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : result;
+}
+
 typedef struct MalNodeUtilExport {
     const char *name;
     i32 length;
@@ -2276,6 +2688,7 @@ static const MalNodeUtilExport util_exports[] = {
     {"stripVTControlCharacters", 1, util_strip_vt_control_characters},
     {"transferableAbortController", 0, util_transferable_abort_controller},
     {"transferableAbortSignal", 1, util_transferable_abort_signal},
+    {"debounce", 2, util_debounce},
     {"debuglog", 2, util_debuglog},
     {"format", 1, mal_node_util_format},
     {"formatWithOptions", 2, mal_node_util_format_with_options},

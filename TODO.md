@@ -1234,14 +1234,20 @@ remains a Maligator extension and does not count as global fetch conformance.
       matching, IPv4-mapped IPv6 included) and `SocketAddress`
       (lib/internal/socketaddress.js, `parse` through WHATWG URL parsing); make
       connect() honour getDefaultAutoSelectFamily() and its attempt timeout, which
-      are module state only today. util.debounce and util.throttle as Node 26 defines
-      them. url.parse emits no DEP0169 warning, and ASCII hostnames skip Node's
-      toASCII validation.
+      are module state only today. util.throttle as Node 26 defines it. url.parse
+      emits no DEP0169 warning, and ASCII hostnames skip Node's toASCII validation.
+
+- [ ] node:stream: `Duplex.from` (async generator functions, async functions,
+      iterables, promises, web streams, `{ readable, writable }` pairs), then function
+      and iterable stages in `compose`; `pipeline` with async generator stages and web
+      streams; `Readable.prototype.read`; `writableObjectMode`, `writableLength` and
+      `writableHighWaterMark` as prototype getters rather than own properties.
+
 - [ ] node:url: `url.format` should `querystring.stringify` an object `query` when
       `search` is absent, and format WHATWG URL objects with its options argument.
-      util.isPartialDeepStrictEqual, stream.compose, and `_extend` on a primitive
-      target throwing V8's exact message. Once `URL.createObjectURL` exists,
-      buffer.resolveObjectURL must look up registered `blob:nodedata:` ids.
+      util.isPartialDeepStrictEqual, and `_extend` on a primitive target throwing V8's
+      exact message. Once `URL.createObjectURL` exists, buffer.resolveObjectURL must
+      look up registered `blob:nodedata:` ids.
 
 - [ ] Make async_hooks observe more than AsyncResource: timers, I/O and promises
       do not emit hook events, and executionAsyncId() inside their callbacks stays
