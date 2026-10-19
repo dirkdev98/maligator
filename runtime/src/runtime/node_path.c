@@ -1,3 +1,4 @@
+// Portions derived from Node.js lib/path.js (MIT); see THIRD_PARTY_NOTICES.md.
 #include "node_path.h"
 
 #if MAL_NODE

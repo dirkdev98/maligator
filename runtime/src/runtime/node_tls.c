@@ -1,3 +1,4 @@
+// Portions derived from Node.js lib/tls.js (MIT); see THIRD_PARTY_NOTICES.md.
 #include "node_tls.h"
 
 #if MAL_NODE

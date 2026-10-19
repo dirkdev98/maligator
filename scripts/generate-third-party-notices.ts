@@ -46,7 +46,7 @@ const NODE_DERIVED: Array<Derivation> = [
 ];
 
 const LIBUV_DERIVED: Array<Derivation> = [
-	{ file: "runtime/src/host/posix_fs.c", upstream: "src/unix/fs.c (uv_fs_copyfile)" },
+	{ file: "runtime/src/host/posix_fs.c", upstream: "src/unix/fs.c uv_fs_copyfile" },
 ];
 
 function read(relative: string): string {
@@ -57,7 +57,13 @@ function fence(text: string): string {
 	return ["```text", text, "```"].join("\n");
 }
 
-function derivationTable(entries: Array<Derivation>): string {
+function derivationTable(project: string, entries: Array<Derivation>): string {
+	for (const entry of entries) {
+		const header = `// Portions derived from ${project} ${entry.upstream} (MIT); see THIRD_PARTY_NOTICES.md.`;
+		if (read(entry.file).split("\n", 1)[0] !== header) {
+			throw new Error(`${entry.file} must start with the line: ${header}`);
+		}
+	}
 	return [
 		"| Maligator file | Upstream source |",
 		"| --- | --- |",
@@ -219,13 +225,13 @@ const document = [
 	"These files translate parts of Node.js to C, following the upstream algorithms, messages",
 	"and error codes closely:",
 	"",
-	derivationTable(NODE_DERIVED),
+	derivationTable("Node.js", NODE_DERIVED),
 	"",
 	fence(read("runtime/vendor/node/LICENSE")),
 	"",
 	"## libuv",
 	"",
-	derivationTable(LIBUV_DERIVED),
+	derivationTable("libuv", LIBUV_DERIVED),
 	"",
 	fence(read("runtime/vendor/libuv/LICENSE")),
 	"",

@@ -1,3 +1,4 @@
+// Portions derived from libuv src/unix/fs.c uv_fs_copyfile (MIT); see THIRD_PARTY_NOTICES.md.
 #ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200809L
 #endif

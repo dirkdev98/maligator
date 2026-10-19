@@ -1,3 +1,4 @@
+// Portions derived from Node.js lib/diagnostics_channel.js (MIT); see THIRD_PARTY_NOTICES.md.
 #include "node_diagnostics_channel.h"
 
 #if MAL_NODE

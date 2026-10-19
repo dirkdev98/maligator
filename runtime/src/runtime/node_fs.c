@@ -1,3 +1,4 @@
+// Portions derived from Node.js lib/internal/fs/cp/cp.js, lib/internal/fs/cp/cp-sync.js (MIT); see THIRD_PARTY_NOTICES.md.
 #include "node_fs.h"
 
 #if MAL_NODE

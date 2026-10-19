@@ -1,3 +1,4 @@
+// Portions derived from Node.js lib/internal/util/comparisons.js (MIT); see THIRD_PARTY_NOTICES.md.
 #include "node_deep_equal.h"
 
 #if MAL_NODE

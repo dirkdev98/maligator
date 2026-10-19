@@ -79,9 +79,9 @@ maintained libraries.
 
 ## libuv
 
-| Maligator file                | Upstream source                |
-| ----------------------------- | ------------------------------ |
-| `runtime/src/host/posix_fs.c` | src/unix/fs.c (uv_fs_copyfile) |
+| Maligator file                | Upstream source              |
+| ----------------------------- | ---------------------------- |
+| `runtime/src/host/posix_fs.c` | src/unix/fs.c uv_fs_copyfile |
 
 ```text
 Copyright (c) 2015-present libuv project contributors.

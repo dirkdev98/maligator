@@ -1,3 +1,4 @@
+// Portions derived from Node.js lib/internal/util/inspect.js (MIT); see THIRD_PARTY_NOTICES.md.
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>

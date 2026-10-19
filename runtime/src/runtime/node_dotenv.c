@@ -1,3 +1,4 @@
+// Portions derived from Node.js src/node_dotenv.cc (MIT); see THIRD_PARTY_NOTICES.md.
 #include "node_dotenv.h"
 
 #if MAL_NODE

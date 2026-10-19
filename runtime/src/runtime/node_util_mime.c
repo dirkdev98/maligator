@@ -1,3 +1,4 @@
+// Portions derived from Node.js lib/internal/mime.js (MIT); see THIRD_PARTY_NOTICES.md.
 #include "node_util_mime.h"
 
 #if MAL_NODE

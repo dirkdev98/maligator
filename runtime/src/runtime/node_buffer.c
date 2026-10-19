@@ -1,3 +1,4 @@
+// Portions derived from Node.js lib/buffer.js, src/node_buffer.cc (MIT); see THIRD_PARTY_NOTICES.md.
 #include "node_buffer.h"
 
 #if MAL_NODE

@@ -1,3 +1,4 @@
+// Portions derived from Node.js lib/internal/assert/assertion_error.js, lib/internal/assert/myers_diff.js (MIT); see THIRD_PARTY_NOTICES.md.
 #include "node_assert_strict.h"
 
 #if MAL_NODE

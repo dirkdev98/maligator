@@ -1127,33 +1127,48 @@ remains a Maligator extension and does not count as global fetch conformance.
       straight to the callback buffer today), and implement fork with an IPC channel.
       Exercise active-child cleanup in embedded VM teardown on a Linux host.
 
-- [ ] With the next runtime installer change, give every file listed in
-      THIRD_PARTY_NOTICES.md a one-line header naming its upstream source, e.g.
-      `// Derived from Node.js lib/internal/mime.js (MIT); see THIRD_PARTY_NOTICES.md.`
-      A header alone changes installer fingerprints and needs a primordial audit, so
-      it rides along with that change. Keep new ports listed in the generator.
-
 - [ ] Fail CI when THIRD_PARTY_NOTICES.md is stale against Cargo.lock, the vendored
       sources and the derived-file list, and find license texts for alloc-stdlib and
       blake2b_simd, which publish none and are listed by SPDX expression only.
 
-- [ ] Fill the remaining Node 26 module gaps: recursive fs.watch, watching more than
-      256 directory entries on macOS (kqueue holds one fd per entry) and the watcher
-      'error' event, fs.openAsBlob, readdir's `encoding: "buffer"`; https and http2
-      servers over net.Server, its Unix-path listen, allowHalfOpen and named-host
-      lookup; dgram hostname lookup, source-specific membership and collection of
-      sockets that are never closed; the WebSocket client global; crypto asymmetric
-      KeyObjects, sign/verify, key generation, X509Certificate, DiffieHellman/ECDH and
-      Cipheriv as Transform streams; dns record types beyond A/AAAA (needs res_query
-      and libresolv in the link); zlib zstd and the zip archive APIs; tls
-      createServer; worker_threads environment data, markAsUntransferable,
-      BroadcastChannel and locks; vm's SourceTextModule, SyntheticModule,
-      measureMemory and DONT_CONTEXTIFY, and a live contextified global (contexts copy
-      the sandbox's own enumerable properties in and changed globals back, so its
-      prototype chain, getters and deletions do not reach the script), plus collection
-      of realms whose sandboxes are gone; import.meta.resolve; copyFileSync's mode
-      argument (it calls the mode-less copy); stream.compose, buffer.transcode,
-      util.debounce and util.throttle.
+- [ ] fs: recursive fs.watch, watching more than 256 directory entries on macOS
+      (kqueue holds one fd per entry), the watcher 'error' event, fs.openAsBlob,
+      readdir's `encoding: "buffer"`, and copyFileSync's mode argument (it calls the
+      mode-less copy).
+
+- [ ] net and dgram: http2 servers, net.Server's Unix-path listen, allowHalfOpen and
+      named-host lookup; dgram hostname lookup, source-specific membership and
+      collection of sockets that are never closed.
+
+- [ ] crypto: RSA key generation (ring has none), encrypted PEM, RSA-PSS salt
+      lengths other than the digest length, ECDSA signing with a hash other than the
+      curve's own, publicEncrypt, X509Certificate, DiffieHellman/ECDH and Cipheriv
+      as Transform streams. The rest of WebCrypto: RSA generateKey, RSA-OAEP,
+      ECDH/X25519, deriveKey/deriveBits, wrapKey, jwk export of secret keys, and
+      Crypto/SubtleCrypto methods on their prototypes rather than the instances.
+
+- [ ] tls and https: SNICallback, setSecureContext, client certificates
+      (`cert`/`key`) for tls.connect and the https client, https agents with TLS
+      options, rustls error detail in tlsClientError codes, and
+      'secureConnection'/'tlsClientError' on https.Server.
+
+- [ ] modules: import.meta.resolve; createRequire with a computed specifier, or a
+      base other than `import.meta.url`, resolves only what the module graph bundled
+      from literal specifiers.
+
+- [ ] dns record types beyond A/AAAA (needs res_query and libresolv in the link);
+      zlib zstd and the zip archive APIs; the WebSocket client global.
+
+- [ ] worker_threads environment data, markAsUntransferable, BroadcastChannel and
+      locks.
+
+- [ ] vm's SourceTextModule, SyntheticModule, measureMemory and DONT_CONTEXTIFY, and
+      a live contextified global (contexts copy the sandbox's own enumerable
+      properties in and changed globals back, so its prototype chain, getters and
+      deletions do not reach the script), plus collection of realms whose sandboxes
+      are gone.
+
+- [ ] stream.compose, buffer.transcode, util.debounce and util.throttle.
 
 - [ ] Make async_hooks observe more than AsyncResource: timers, I/O and promises
       do not emit hook events, and executionAsyncId() inside their callbacks stays

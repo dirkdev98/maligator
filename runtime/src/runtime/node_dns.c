@@ -1,3 +1,4 @@
+// Portions derived from Node.js lib/dns.js (MIT); see THIRD_PARTY_NOTICES.md.
 #include "node_dns.h"
 
 #if MAL_NODE
