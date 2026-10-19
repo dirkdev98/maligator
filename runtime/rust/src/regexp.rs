@@ -196,12 +196,6 @@ struct FastPattern {
     first: Option<FastClass>,
 }
 
-struct FastMatch {
-    start: usize,
-    end: usize,
-    captures: [Option<(usize, usize)>; FAST_CAPTURE_CAPACITY],
-}
-
 /// Subject storage the allocation-free plans can scan directly. Plans contain
 /// only ASCII units, so compact Latin-1 bytes compare exactly like their UTF-16
 /// widening and never need a converted copy.
@@ -291,11 +285,12 @@ impl FastPattern {
             .all(|(expected, unit)| unit.code_unit() == *expected)
     }
 
+    /// `captures` holds a start and end per group, -1 when the group did not participate.
     fn match_nodes<U: SubjectUnit>(
         nodes: &[FastNode],
         subject: &[U],
         mut position: usize,
-        captures: &mut [Option<(usize, usize)>; FAST_CAPTURE_CAPACITY],
+        captures: &mut [i32],
     ) -> Option<usize> {
         for node in nodes {
             match node {
@@ -324,14 +319,13 @@ impl FastPattern {
                 } => match Self::match_nodes(body, subject, position, captures) {
                     Some(end) => {
                         if let Some(index) = capture {
-                            captures[*index] = Some((position, end));
+                            captures[index * 2] = position as i32;
+                            captures[index * 2 + 1] = end as i32;
                         }
                         position = end;
                     }
                     None if *optional => {
-                        for index in inner.clone() {
-                            captures[index] = None;
-                        }
+                        captures[inner.start * 2..inner.end * 2].fill(-1);
                     }
                     None => return None,
                 },
@@ -349,27 +343,34 @@ impl FastPattern {
         &self,
         subject: &[U],
         start: usize,
-        captures: &mut [Option<(usize, usize)>; FAST_CAPTURE_CAPACITY],
-    ) -> Option<FastMatch> {
+        slots: &mut [i32; FAST_CAPTURE_SLOTS],
+    ) -> bool {
+        let (range, captures) = slots.split_at_mut(2);
+        let captures = &mut captures[..self.capture_count * 2];
         match Self::match_nodes(&self.nodes, subject, start, captures) {
-            Some(end) => Some(FastMatch {
-                start,
-                end,
-                captures: *captures,
-            }),
+            Some(end) => {
+                range[0] = start as i32;
+                range[1] = end as i32;
+                true
+            }
             None => {
-                captures[..self.capture_count].fill(None);
-                None
+                captures.fill(-1);
+                false
             }
         }
     }
 
-    fn find<U: SubjectUnit>(&self, subject: &[U], start: usize) -> Option<FastMatch> {
-        let mut captures = [None; FAST_CAPTURE_CAPACITY];
+    /// Writes the match range and its groups' ranges into `slots`, the layout the
+    /// engine's caller copies out.
+    fn find<U: SubjectUnit>(
+        &self,
+        subject: &[U],
+        start: usize,
+        slots: &mut [i32; FAST_CAPTURE_SLOTS],
+    ) -> bool {
+        slots[2..2 + self.capture_count * 2].fill(-1);
         if self.anchored_start {
-            return (start == 0)
-                .then(|| self.match_at(subject, 0, &mut captures))
-                .flatten();
+            return start == 0 && self.match_at(subject, 0, slots);
         }
         let leading_unit = match self.nodes.first() {
             Some(FastNode::Literal(literal)) => Some(literal[0]),
@@ -378,21 +379,24 @@ impl FastPattern {
         let mut candidate = start;
         while candidate <= subject.len() {
             if let Some(unit) = leading_unit {
-                candidate = U::find_unit(subject, candidate, unit)?;
+                match U::find_unit(subject, candidate, unit) {
+                    Some(found) => candidate = found,
+                    None => return false,
+                }
             } else if let Some(first) = &self.first {
                 while candidate < subject.len() && !first.contains(subject[candidate].code_unit()) {
                     candidate += 1;
                 }
                 if candidate == subject.len() {
-                    return None;
+                    return false;
                 }
             }
-            if let Some(found) = self.match_at(subject, candidate, &mut captures) {
-                return Some(found);
+            if self.match_at(subject, candidate, slots) {
+                return true;
             }
             candidate += 1;
         }
-        None
+        false
     }
 }
 
@@ -1147,23 +1151,6 @@ fn write_captures(m: &Match, out: *mut i32, cap: i32) -> i32 {
     ngroups as i32
 }
 
-fn cache_fast_captures(
-    pattern: &FastPattern,
-    found: &FastMatch,
-    cached: &mut [i32; FAST_CAPTURE_SLOTS],
-) -> i32 {
-    cached.fill(-1);
-    cached[0] = found.start as i32;
-    cached[1] = found.end as i32;
-    for index in 0..pattern.capture_count {
-        if let Some((start, end)) = found.captures[index] {
-            cached[(index + 1) * 2] = start as i32;
-            cached[(index + 1) * 2 + 1] = end as i32;
-        }
-    }
-    (pattern.capture_count + 1) as i32
-}
-
 unsafe fn copy_cached_captures(
     cached: &[i32; FAST_CAPTURE_SLOTS],
     groups: i32,
@@ -1177,28 +1164,23 @@ unsafe fn copy_cached_captures(
     groups
 }
 
-fn finish_fast_exec(
+/// Runs the allocation-free plan, which writes its captures straight into the retained slots.
+fn fast_exec<U: SubjectUnit>(
     cp: &mut CompiledPattern,
-    found: Option<FastMatch>,
+    subject: &[U],
+    start: usize,
     caps_out: *mut i32,
     caps_cap: i32,
 ) -> i32 {
     cp.last = None;
-    match found {
-        Some(found) => {
-            let groups = cache_fast_captures(
-                cp.fast.as_ref().expect("fast plan exists"),
-                &found,
-                &mut cp.fast_last_captures,
-            );
-            cp.fast_last_groups = groups;
-            unsafe { copy_cached_captures(&cp.fast_last_captures, groups, caps_out, caps_cap) }
-        }
-        None => {
-            cp.fast_last_groups = 0;
-            0
-        }
+    let fast = cp.fast.as_ref().expect("fast plan exists");
+    if !fast.find(subject, start, &mut cp.fast_last_captures) {
+        cp.fast_last_groups = 0;
+        return 0;
     }
+    let groups = (fast.capture_count + 1) as i32;
+    cp.fast_last_groups = groups;
+    unsafe { copy_cached_captures(&cp.fast_last_captures, groups, caps_out, caps_cap) }
 }
 
 /// The next match at or after `start`, resuming the cached iterator when the
@@ -1302,12 +1284,11 @@ pub unsafe extern "C" fn mal_regexp_exec(
     // lone surrogates and Unicode mode can apply its own pair handling.
     let subj = unsafe { nullable_u16_slice(subject, subject_len) };
 
-    if let Some(fast) = cp.fast.as_ref() {
-        let found = fast.find(subj, start);
+    if cp.fast.is_some() {
         if !execution_flags_out.is_null() {
             unsafe { *execution_flags_out = EXEC_FAST };
         }
-        return finish_fast_exec(cp, found, caps_out, caps_cap);
+        return fast_exec(cp, subj, start, caps_out, caps_cap);
     }
 
     let mut execution_flags = 0;
@@ -1402,12 +1383,11 @@ pub unsafe extern "C" fn mal_regexp_exec_latin1(
     }
     let subj = unsafe { nullable_slice(subject, subject_len) };
 
-    if let Some(fast) = cp.fast.as_ref() {
-        let found = fast.find(subj, start);
+    if cp.fast.is_some() {
         if !execution_flags_out.is_null() {
             unsafe { *execution_flags_out = EXEC_FAST | EXEC_LATIN1 };
         }
-        return finish_fast_exec(cp, found, caps_out, caps_cap);
+        return fast_exec(cp, subj, start, caps_out, caps_cap);
     }
 
     let string_identity = subject_identity as usize;
@@ -1884,14 +1864,19 @@ mod tests {
         assert!(compile_fast_pattern(&utf16("value"), FLAG_MULTILINE).is_none());
     }
 
-    fn fast_match_ranges(
-        found: Option<FastMatch>,
-        groups: usize,
+    fn fast_match_ranges<U: SubjectUnit>(
+        fast: &FastPattern,
+        subject: &[U],
+        start: usize,
     ) -> Option<Vec<Option<(usize, usize)>>> {
-        found.map(|found| {
-            let mut ranges = vec![Some((found.start, found.end))];
-            ranges.extend((0..groups).map(|index| found.captures[index]));
-            ranges
+        let mut slots = [0; FAST_CAPTURE_SLOTS];
+        fast.find(subject, start, &mut slots).then(|| {
+            (0..=fast.capture_count)
+                .map(|index| {
+                    (slots[index * 2] >= 0)
+                        .then(|| (slots[index * 2] as usize, slots[index * 2 + 1] as usize))
+                })
+                .collect()
         })
     }
 
@@ -1904,10 +1889,13 @@ mod tests {
             ("[a-z]", "\u{17f}"),
         ] {
             let fast = compile_fast_pattern(&utf16(pattern), FLAG_IGNORE_CASE).unwrap();
-            assert!(fast.find(&utf16(subject)[..], 0).is_none(), "{pattern}");
+            assert!(
+                fast_match_ranges(&fast, &utf16(subject)[..], 0).is_none(),
+                "{pattern}"
+            );
         }
         let fast = compile_fast_pattern(&utf16("k"), FLAG_IGNORE_CASE).unwrap();
-        assert!(fast.find(&utf16("K")[..], 0).is_some());
+        assert!(fast_match_ranges(&fast, &utf16("K")[..], 0).is_some());
     }
 
     #[test]
@@ -2028,16 +2016,15 @@ mod tests {
                             }));
                             ranges
                         });
-                    let groups = fast.capture_count;
                     assert_eq!(
-                        fast_match_ranges(fast.find(&subject[..], start), groups),
+                        fast_match_ranges(&fast, &subject[..], start),
                         expected,
                         "{pattern} on {subject:?} from {start}"
                     );
                     if subject.iter().all(|unit| *unit <= 0xff) {
                         let bytes: Vec<u8> = subject.iter().map(|unit| *unit as u8).collect();
                         assert_eq!(
-                            fast_match_ranges(fast.find(&bytes[..], start), groups),
+                            fast_match_ranges(&fast, &bytes[..], start),
                             expected,
                             "{pattern} on Latin-1 {subject:?} from {start}"
                         );
