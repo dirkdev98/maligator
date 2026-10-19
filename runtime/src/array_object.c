@@ -53,6 +53,7 @@ void mal_array_object_init(MalHeap *heap, MalArrayObject *array, MalObject *prot
     array->capacity = 0;
     array->dense_count = 0;
     array->minor_scan_start = 0;
+    array->inline_capacity = 0;
     array->dense_deopted = false;
     array->dense_maybe_holey = false;
     array->dense_elements_writable = true;
@@ -71,6 +72,11 @@ bool mal_array_object_dense_reserve_exact(MalArrayObject *array, u32 needed) {
     if (needed <= array->capacity) {
         return true;
     }
+    if (array->elements == nullptr && needed <= array->inline_capacity) {
+        array->elements = mal_array_object_inline_elements(array);
+        array->capacity = array->inline_capacity;
+        return true;
+    }
     if ((usize) needed > SIZE_MAX / sizeof(MalValue)) {
         return false;
     }
@@ -79,12 +85,14 @@ bool mal_array_object_dense_reserve_exact(MalArrayObject *array, u32 needed) {
     // RAW block returns to the OS. Growth may move the buffer; no safepoint runs
     // inside the allocator, so the detached old buffer is never observed by the
     // collector.
+    bool was_inline = mal_array_object_elements_inline(array);
     MalValue *grown = gc_realloc_raw_profiled(
-        mal_gc_current_heap(), array->elements, sizeof(MalValue) * (usize) needed,
-        MAL_PROFILE_ALLOCATION_FAMILY_ARRAY);
+        mal_gc_current_heap(), was_inline ? nullptr : array->elements,
+        sizeof(MalValue) * (usize) needed, MAL_PROFILE_ALLOCATION_FAMILY_ARRAY);
     if (grown == nullptr) {
         return false;
     }
+    if (was_inline) memcpy(grown, array->elements, sizeof(MalValue) * array->capacity);
     array->elements = grown;
     array->capacity = needed;
     return true;
@@ -145,14 +153,19 @@ bool mal_array_object_try_fresh_dense_reserve_exact(
     if ((usize) needed > SIZE_MAX / sizeof(MalValue)) {
         return false;
     }
-    MalValue *elements = mal_heap_try_alloc_raw_profiled(
-        mal_gc_current_heap(), sizeof(MalValue) * (usize) needed,
-        MAL_PROFILE_ALLOCATION_FAMILY_ARRAY);
-    if (elements == nullptr) {
-        return false;
+    if (needed <= array->inline_capacity) {
+        array->elements = mal_array_object_inline_elements(array);
+        array->capacity = array->inline_capacity;
+    } else {
+        MalValue *elements = mal_heap_try_alloc_raw_profiled(
+            mal_gc_current_heap(), sizeof(MalValue) * (usize) needed,
+            MAL_PROFILE_ALLOCATION_FAMILY_ARRAY);
+        if (elements == nullptr) {
+            return false;
+        }
+        array->elements = elements;
+        array->capacity = needed;
     }
-    array->elements = elements;
-    array->capacity = needed;
 
     MAL_PERF_COUNT(array_fresh_dense_exact_reserves);
     MAL_PERF_ADD(array_fresh_dense_reserved_slots, needed);
@@ -583,11 +596,25 @@ void mal_array_object_dense_delete(MalArrayObject *array, u32 index) {
     mal_perf_collection_mutation(array, array->length);
 }
 
-MalArrayObject *mal_array_object_new(MalHeap *heap, MalObject *prototype) {
-    MalArrayObject *array = mal_heap_alloc(heap, sizeof(MalArrayObject), MAL_HEAP_ARRAY_OBJECT);
-    mal_array_object_init(heap, array, prototype);
+// An empty array's first push reserves four slots, so its cell carries them.
+static u32 mal_array_object_inline_capacity_for(u32 reserved) {
+    if (reserved <= 4) return 4;
+    return reserved <= MAL_ARRAY_INLINE_CAPACITY_MAX ? (reserved + 1) & ~1u : 0;
+}
 
+static MalArrayObject *mal_array_object_new_inline(
+    MalHeap *heap, MalObject *prototype, u32 inline_capacity
+) {
+    MalArrayObject *array = mal_heap_alloc(
+        heap, sizeof(MalArrayObject) + sizeof(MalValue) * inline_capacity,
+        MAL_HEAP_ARRAY_OBJECT);
+    mal_array_object_init(heap, array, prototype);
+    array->inline_capacity = inline_capacity;
     return array;
+}
+
+MalArrayObject *mal_array_object_new(MalHeap *heap, MalObject *prototype) {
+    return mal_array_object_new_inline(heap, prototype, mal_array_object_inline_capacity_for(0));
 }
 
 MalArrayObject *mal_array_object_new_from_values(
@@ -603,16 +630,20 @@ MalArrayObject *mal_array_object_new_from_values(
 MalArrayObject *mal_array_object_new_reserved(
     MalHeap *heap, MalObject *prototype, u32 capacity
 ) {
-    MalArrayObject *array = mal_array_object_new(heap, prototype);
+    MalArrayObject *array = mal_array_object_new_inline(
+        heap, prototype, mal_array_object_inline_capacity_for(capacity));
     if (capacity > 0 && !mal_array_object_fresh_dense_reserve_exact(array, capacity)) abort();
     return array;
 }
 
 MalArrayObject *mal_array_object_try_new(MalHeap *heap, MalObject *prototype) {
+    u32 inline_capacity = mal_array_object_inline_capacity_for(0);
     MalArrayObject *array = mal_heap_try_alloc(
-        heap, sizeof(MalArrayObject), MAL_HEAP_ARRAY_OBJECT);
+        heap, sizeof(MalArrayObject) + sizeof(MalValue) * inline_capacity,
+        MAL_HEAP_ARRAY_OBJECT);
     if (array == nullptr) return nullptr;
     mal_array_object_init(heap, array, prototype);
+    array->inline_capacity = inline_capacity;
     return array;
 }
 

@@ -425,6 +425,7 @@ void mal_object_array_deoptimize(MalArrayObject *array) {
         return;
     }
     MalValue *buffer = array->elements;
+    bool inline_buffer = mal_array_object_elements_inline(array);
     u32 count = array->dense_count;
     // Switch to table mode FIRST so the mal_object_define_own calls below take the
     // ordinary table path instead of recursing into the dense path.
@@ -459,7 +460,7 @@ void mal_object_array_deoptimize(MalArrayObject *array) {
     }
     array->object.extensible = extensible;
     mal_gc_unroot(&span);
-    gc_free_raw(mal_gc_current_heap(), buffer); // dense vector lives in the RAW space
+    if (!inline_buffer) gc_free_raw(mal_gc_current_heap(), buffer); // dense vector lives in the RAW space
 }
 
 MalPropertyLookup mal_object_get_own(const MalObject *object, MalKey key) {

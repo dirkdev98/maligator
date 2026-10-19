@@ -2022,7 +2022,7 @@ static void mal_gc_finalize_cell(MalHeapHeader *cell) {
                 0,
                 array->dense_deopted);
 #endif
-            if (array->elements != nullptr) {
+            if (array->elements != nullptr && !mal_array_object_elements_inline(array)) {
                 gc_free_raw(&g_gc_vm->heap, array->elements); // RAW-space dense vector
                 array->elements = nullptr;
                 array->capacity = 0;

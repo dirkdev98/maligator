@@ -50,13 +50,29 @@ typedef struct MalArrayObject {
     /** Uniform attributes synthesized for every present dense element. */
     u32 dense_elements_writable : 1;
     u32 dense_elements_configurable : 1;
+    /**
+     * Element slots allocated in the array's own cell after the struct. The first
+     * dense reserve that fits uses them, so small arrays own no separate vector.
+     */
+    u32 inline_capacity : 4;
     // Earlier elements contain no young edges; unindexed cards clear this frontier.
-    u32 minor_scan_start : 27;
+    u32 minor_scan_start : 23;
 } MalArrayObject;
 
-#define MAL_ARRAY_MINOR_SCAN_MAX ((u32) ((1u << 27) - 1))
+#define MAL_ARRAY_MINOR_SCAN_MAX ((u32) ((1u << 23) - 1))
+#define MAL_ARRAY_INLINE_CAPACITY_MAX 8u
 
 static_assert(sizeof(MalArrayObject) <= 64, "MalArrayObject outgrew its 64-byte size class");
+
+static inline MalValue *mal_array_object_inline_elements(const MalArrayObject *array) {
+    return (MalValue *) (array + 1);
+}
+
+/** Whether the dense vector is the array cell's own inline slots, which are never freed. */
+static inline bool mal_array_object_elements_inline(const MalArrayObject *array) {
+    return array->inline_capacity != 0 &&
+        array->elements == mal_array_object_inline_elements(array);
+}
 
 /** Whether the array uses the dense element fast path (vs. legacy table storage). */
 static inline bool mal_array_object_is_dense(const MalArrayObject *array) {
