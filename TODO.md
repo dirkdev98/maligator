@@ -686,7 +686,12 @@ contracts or investigates costs still visible after the string follow-ups.
       throw paths collect. In the full self-compile's optimize phase those
       accessors take about 14% of the samples, and loading and dispatching the
       method calls to them another 8%; calling them directly on a known
-      `CoreFunctionStore` receiver would remove most of both.
+      `CoreFunctionStore` receiver would remove most of both. Their call sites in
+      loops are already offered as guarded inlines (218 for `instructionKind`,
+      286 for `instructionOpcodeName`) but the cross-call program budget runs out
+      first; letting inlines of 32 or fewer units bypass that budget grew the
+      compiler's own output for `parser.ts` by 49% and made the self-compile 44%
+      slower, so the remedy is cheaper calls or a hotness signal, not more inlining.
 - [ ] Keep three receivers of a polymorphic method site in its own cache. The
       objects phase's `rules[i % 3].quote(order)` hits the site's one inherited row
       for one class in three; the others probe both banks of the shared stub
