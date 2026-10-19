@@ -3156,6 +3156,8 @@ export function emitIntrinsic(
 			return "MAL_INTRINSIC_CONFIGURE_DEFERRED_NAMESPACE";
 		case "__evaluateModuleSync":
 			return "MAL_INTRINSIC_EVALUATE_MODULE_SYNC";
+		case "__attachRequireTable":
+			return "MAL_INTRINSIC_ATTACH_REQUIRE_TABLE";
 		case "__newDisposeCapability":
 			return "MAL_INTRINSIC_NEW_DISPOSE_CAPABILITY";
 		case "__addDisposableResource":

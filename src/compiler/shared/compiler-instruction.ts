@@ -1305,4 +1305,7 @@ export type CompilerIntrinsic =
 	| "__evaluateModuleSync"
 	| "__newDisposeCapability"
 	| "__addDisposableResource"
-	| "__disposeResources";
+	| "__disposeResources"
+	// Attaches a module's resolved require edges to its createRequire(import.meta.url)
+	// result. Not a user-visible global.
+	| "__attachRequireTable";

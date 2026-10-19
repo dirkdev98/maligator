@@ -8,6 +8,7 @@ import type { PlatformModule } from "../../platform/catalog.ts";
 import { PLATFORM_MODULES, lookupPlatformModule } from "../../platform/catalog.ts";
 import type { Execution } from "../../platform/execution.ts";
 import { executionData } from "../../platform/execution.ts";
+import { moduleCreateRequireDeclarators } from "./create-require.ts";
 import { traverseEstree } from "./estree-traversal.ts";
 import type { HostModuleSpec } from "./host-modules.ts";
 import {
@@ -1142,6 +1143,7 @@ function extractDependencies(
 ): Array<ExtractedDependency> {
 	const dependencies: Array<ExtractedDependency> = [];
 	const parents = new Map<ESTree.Node, ESTree.Node>();
+	const requireCallees = goal === "cjs" ? undefined : createRequireCallees(ast);
 
 	traverseEstree(ast.body, (node, { parent }) => {
 		if (parent) parents.set(node, parent);
@@ -1182,6 +1184,21 @@ function extractDependencies(
 							? { catchableMissing: true as const }
 							: {}),
 					});
+				} else if (
+					callee.type === "Identifier" &&
+					requireCallees?.has(callee.name) === true &&
+					node.arguments.length > 0
+				) {
+					const direct = requireCallees.get(callee.name) === "direct";
+					dependencies.push({
+						specifier: literalString(node.arguments[0]),
+						kind: "require",
+						// A forwarder may pass along values that are not specifiers at all, so
+						// a missing target there throws at runtime, as Node's lookup would.
+						...(!direct || requireErrorIsCatchable(node, parents)
+							? { catchableMissing: true as const }
+							: {}),
+					});
 				}
 				break;
 			}
@@ -1190,6 +1207,74 @@ function extractDependencies(
 		}
 	});
 	return dependencies;
+}
+
+/**
+ * Names that call a module-relative `require`: the createRequire bindings plus
+ * forwarders whose initializer or body reads one as a value, such as esbuild's
+ * `__require` wrapper. Like the CommonJS match this is name-based; shadowing is
+ * not modeled.
+ */
+function createRequireCallees(ast: ESTree.Program): Map<string, "direct" | "forwarder"> {
+	const callees = new Map<string, "direct" | "forwarder">();
+	for (const declarator of moduleCreateRequireDeclarators(ast)) {
+		callees.set(declarator.id.name, "direct");
+	}
+	if (callees.size === 0) return callees;
+	const declarations: Array<{ name: string; value: ESTree.Node }> = [];
+	traverseEstree(ast.body, (node) => {
+		if (
+			node.type === "VariableDeclarator" &&
+			node.id.type === "Identifier" &&
+			node.init
+		) {
+			declarations.push({ name: node.id.name, value: node.init });
+		} else if (node.type === "FunctionDeclaration" && node.id && node.body) {
+			declarations.push({ name: node.id.name, value: node.body });
+		}
+	});
+	for (let grew = true; grew;) {
+		grew = false;
+		for (const declaration of declarations) {
+			if (callees.has(declaration.name) || !forwardsCallee(declaration.value, callees))
+				continue;
+			callees.set(declaration.name, "forwarder");
+			grew = true;
+		}
+	}
+	return callees;
+}
+
+// A function forwards `require` when it reads the value (`require.apply`, `typeof
+// require`) or calls it with a computed specifier; a literal call merely requires.
+function forwardsCallee(root: ESTree.Node, names: ReadonlyMap<string, unknown>): boolean {
+	const functions: Array<ESTree.Node> = [];
+	traverseEstree([root], (node) => {
+		if (
+			node.type === "FunctionExpression" ||
+			node.type === "ArrowFunctionExpression" ||
+			node.type === "FunctionDeclaration" ||
+			node.type === "BlockStatement"
+		) {
+			functions.push(node);
+		}
+	});
+	let found = false;
+	for (const fn of functions) {
+		if (fn.type === "BlockStatement" && fn !== root) continue;
+		traverseEstree([fn], (node, { parent, key }) => {
+			if (found || node.type !== "Identifier" || !names.has(node.name)) return;
+			if (parent?.type === "MemberExpression" && key === "property" && !parent.computed)
+				return;
+			if (parent?.type === "CallExpression" && key === "callee") {
+				const argument = parent.arguments[0] as ESTree.Node | undefined;
+				if (argument?.type === "Literal" && typeof argument.value === "string") return;
+			}
+			found = true;
+		});
+		if (found) return true;
+	}
+	return false;
 }
 
 /**

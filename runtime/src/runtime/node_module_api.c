@@ -19,6 +19,7 @@
 #include "object_ops.h"
 #include "value.h"
 #include "utf8.h"
+#include "value_ops.h"
 #include "vm_ops.h"
 
 static const char *node_module_builtin_names[] = {
@@ -93,6 +94,93 @@ static MalValue node_module_dynamic_unavailable(
     return mal_value_new_undefined();
 }
 
+static void node_module_throw_not_found(MalVm *vm, MalString *id, const char *detail) {
+    char *text = nullptr;
+    usize length = 0;
+    if (mal_string_to_utf8_c_string(id, &text, &length) != MAL_UTF8_C_STRING_OK) text = nullptr;
+    char message[512];
+    snprintf(message, sizeof message, "Cannot find module '%s'%s", text == nullptr ? "" : text, detail);
+    free(text);
+    mal_node_throw_code(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, message, "MODULE_NOT_FOUND");
+}
+
+// A created require's slots: the compiler-attached [table, filenames] of its module.
+enum { REQUIRE_TABLE, REQUIRE_FILENAMES, REQUIRE_SLOT_COUNT };
+
+static bool node_module_table_lookup(MalValue require, i32 slot, MalValue id, MalValue *out) {
+    MalValue table = mal_native_function_object_get_slot(mal_value_to_native_function_object(require), slot);
+    if (!mal_value_is_object(table)) return false;
+    MalPropertyLookup found = mal_object_get_own(mal_value_to_object(table), mal_key_from_value(id));
+    if (!found.present) return false;
+    *out = found.desc.value;
+    return true;
+}
+
+// Static edges arrive through the compiler-attached table: CommonJS modules by registry
+// id, ES modules as a one-element array holding their evaluation thunk, built-ins as
+// their exports. The image holds no loader for anything outside the graph.
+static MalValue node_module_require(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver;
+    (void) new_target;
+    MalValue id = argc > 0 ? args[0] : mal_value_new_undefined();
+    if (!mal_value_is_string(id)) {
+        mal_node_throw_invalid_arg_type(vm, "id", "of type string", id);
+        return mal_value_new_undefined();
+    }
+    MalString *string = mal_value_to_string(id);
+    if (mal_string_length(string) == 0) {
+        mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "The argument 'id' must be a non-empty string. Received ''", "ERR_INVALID_ARG_VALUE");
+        return mal_value_new_undefined();
+    }
+    MalValue target;
+    if (node_module_table_lookup(callee, REQUIRE_TABLE, id, &target)) {
+        if (mal_ops_is_number(target)) return mal_vm_cjs_require(vm, (i32) mal_ops_number_as_f64(target));
+        if (!mal_value_is_array_object(target)) return target;
+        MalValue evaluate = mal_value_new_undefined();
+        mal_array_object_dense_get(mal_value_to_array_object(target), 0, &evaluate);
+        MalCompletion completion = mal_vm_call_value(vm, evaluate, mal_value_new_undefined(), nullptr, 0);
+        return completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : completion.value;
+    }
+    for (usize i = 0; i < countof(node_module_builtin_names); i++) {
+        const char *name = node_module_builtin_names[i];
+        if (!node_module_matches_builtin(string, name)) continue;
+        char canonical[64];
+        snprintf(canonical, sizeof canonical, "%s%s", strncmp(name, "node:", 5) == 0 ? "" : "node:", name);
+        MalValue module = mal_node_module_get_cached(vm, canonical);
+        if (!mal_value_is_undefined(module)) return module;
+        node_module_throw_not_found(vm, string, ": the built-in is not linked into this ahead-of-time image");
+        return mal_value_new_undefined();
+    }
+    node_module_throw_not_found(vm, string,
+        ": only built-in modules can be required dynamically from an ahead-of-time image");
+    return mal_value_new_undefined();
+}
+
+// Slots: [require].
+static MalValue node_module_require_resolve(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver;
+    (void) new_target;
+    MalValue id = argc > 0 ? args[0] : mal_value_new_undefined();
+    if (!mal_value_is_string(id)) {
+        mal_node_throw_invalid_arg_type(vm, "request", "of type string", id);
+        return mal_value_new_undefined();
+    }
+    MalValue require = mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 0);
+    MalValue filename;
+    if (node_module_table_lookup(require, REQUIRE_FILENAMES, id, &filename)) return filename;
+    for (usize i = 0; i < countof(node_module_builtin_names); i++) {
+        if (node_module_matches_builtin(mal_value_to_string(id), node_module_builtin_names[i])) return id;
+    }
+    node_module_throw_not_found(vm, mal_value_to_string(id),
+        ": only built-in modules can be resolved dynamically from an ahead-of-time image");
+    return mal_value_new_undefined();
+}
+
 static MalValue node_module_constructor(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
     MalValue new_target, MalValue callee) {
@@ -119,19 +207,40 @@ static MalValue node_module_create_require(
         return mal_value_new_undefined();
     }
 
-    MalValue require = mal_value_from_native_function_object(
-        mal_native_function_object_new_arity(
-            &vm->heap,
-            mal_value_to_object(
-                vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-            mal_intrinsic_ascii(vm, "require"), 1,
-            node_module_dynamic_unavailable));
+    MalValue slots[REQUIRE_SLOT_COUNT] = {mal_value_new_undefined(), mal_value_new_undefined()};
+    MalObject *function_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
+    MalValue roots[] = {
+        mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(
+            &vm->heap, function_prototype, mal_intrinsic_ascii(vm, "require"), 1,
+            node_module_require, slots, countof(slots))),
+        mal_value_new_undefined(),
+    };
     MalRootSpan root;
-    mal_gc_root(&root, &require, 1);
-    mal_intrinsic_define_method_n(vm, mal_value_to_object(require),
-        "resolve", 1, node_module_dynamic_unavailable);
+    mal_gc_root(&root, roots, countof(roots));
+    roots[1] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(
+        &vm->heap, function_prototype, mal_intrinsic_ascii(vm, "resolve"), 1,
+        node_module_require_resolve, &roots[0], 1));
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]), "resolve", roots[1],
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
+    MalValue require = roots[0];
     mal_gc_unroot(&root);
     return require;
+}
+
+// (require, table, filenames): emitted after `createRequire(import.meta.url)`.
+static MalValue node_module_attach_require_table(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) vm;
+    (void) receiver;
+    (void) new_target;
+    (void) callee;
+    if (argc < 3 || !mal_value_is_native_function_object(args[0])) return mal_value_new_undefined();
+    MalNativeFunctionObject *require = mal_value_to_native_function_object(args[0]);
+    if (require->callback != node_module_require) return mal_value_new_undefined();
+    mal_native_function_object_set_slot(require, REQUIRE_TABLE, args[1]);
+    mal_native_function_object_set_slot(require, REQUIRE_FILENAMES, args[2]);
+    return mal_value_new_undefined();
 }
 
 #define MODULE_VISIBLE \
@@ -504,6 +613,10 @@ void mal_host_install_node_module(
         mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]), (const byte *) "Module", roots[0],
             MODULE_VISIBLE);
         vm->intrinsics[MAL_INTRINSIC_NODE_MODULE_API_MODULE] = roots[0];
+        vm->intrinsics[MAL_INTRINSIC_ATTACH_REQUIRE_TABLE] = mal_value_from_native_function_object(
+            mal_native_function_object_new_arity(&vm->heap,
+                mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+                mal_intrinsic_ascii(vm, ""), 3, node_module_attach_require_table));
         mal_gc_unroot(&root);
     }
     mal_node_module_publish(vm, "node:module", slots, count, module);

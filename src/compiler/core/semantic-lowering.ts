@@ -2,6 +2,7 @@ import type { ESTree } from "meriyah";
 import type { PlatformData } from "../../platform/catalog.ts";
 import { debugEnabled, log } from "../../utils.ts";
 import { detectCjsExports, isPureDataCjsModule } from "../frontend/cjs-exports.ts";
+import { moduleCreateRequireDeclarators } from "../frontend/create-require.ts";
 import {
 	DIRECT_EVAL_PRIVATE_FIELD,
 	DIRECT_EVAL_PRIVATE_GETTER,
@@ -244,6 +245,8 @@ interface CoreFrontendContext {
 	moduleEvaluationContextSlot?: number;
 	moduleEvaluationPlan: ModuleEvaluationPlan;
 	deferredModuleNamespaceSlot: Map<string, number>;
+	/** Functions evaluating an ES module for createRequire's `require(esm)`, by module path. */
+	requiredEsmThunk: Map<string, number>;
 	moduleNamespaceSlot: Map<string, number>;
 	cjsDynamicNamespaces: Map<
 		string,
@@ -692,6 +695,7 @@ const unboundCoreEmitter: CoreInstructionEmitter = {
 
 const compilerPrivateIntrinsics = new Set<string>([
 	"__cjs_require",
+	"__attachRequireTable",
 	"__directEval",
 	"__dynamicImport",
 	"__configureDeferredNamespace",
@@ -908,6 +912,7 @@ export function constructSemanticProgramCore(
 				})),
 		),
 		deferredModuleNamespaceSlot: new Map(),
+		requiredEsmThunk: new Map(),
 		moduleNamespaceSlot: new Map(),
 		cjsDynamicNamespaces: new Map(),
 
@@ -2423,6 +2428,7 @@ function classifyCommonJsEsmModules(program: CoreFrontendContext) {
 		return;
 	}
 	for (const record of graph.modules.values()) {
+		// An ES module's createRequire edges evaluate their ESM targets lazily instead.
 		if (record.goal !== "cjs") {
 			continue;
 		}
@@ -14083,6 +14089,238 @@ function emitSourceCall(
 }
 
 function compileCall(
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
+	callExpression: ESTree.CallExpression,
+): number {
+	if (!fn.semanticFile.commonjs) {
+		const required = tryCompileCreateRequireCall(program, fn, cursor, callExpression);
+		if (required !== undefined) return required;
+	}
+	const result = compileCallValue(program, fn, cursor, callExpression);
+	if (
+		!fn.semanticFile.commonjs &&
+		createRequireInfo(fn.semanticFile).initializers.has(callExpression)
+	) {
+		emitAttachRequireTable(program, fn, cursor, result);
+	}
+	return result;
+}
+
+interface CreateRequireInfo {
+	/** `const` bindings holding this module's `createRequire(import.meta.url)` result. */
+	bindings: Set<Binding>;
+	initializers: Set<ESTree.Node>;
+}
+
+const createRequireInfos = new WeakMap<SemanticFile, CreateRequireInfo>();
+
+function createRequireInfo(file: SemanticFile): CreateRequireInfo {
+	let info = createRequireInfos.get(file);
+	if (info !== undefined) return info;
+	info = { bindings: new Set(), initializers: new Set() };
+	for (const declarator of moduleCreateRequireDeclarators(file.ast)) {
+		const factory = declarator.init.callee as ESTree.Node;
+		const factoryBinding = file.nodeToBinding.get(
+			factory.type === "MemberExpression" ? factory.object : factory,
+		);
+		// A local function that happens to be called createRequire is not node:module's.
+		if (factoryBinding?.imported !== true) continue;
+		info.initializers.add(declarator.init);
+		const binding = file.nodeToBinding.get(declarator.id);
+		if (binding?.kind === "const") info.bindings.add(binding);
+	}
+	createRequireInfos.set(file, info);
+	return info;
+}
+
+/**
+ * A literal call through a `const require = createRequire(import.meta.url)` binding
+ * resolves through the graph like a CommonJS `require("…")`; anything else stays a
+ * runtime call answered by the module's require table.
+ */
+function tryCompileCreateRequireCall(
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
+	callExpression: ESTree.CallExpression,
+): number | undefined {
+	const callee = callExpression.callee as unknown as ESTree.Node;
+	if (callee.type !== "Identifier") return undefined;
+	const binding = fn.semanticFile.nodeToBinding.get(callee);
+	if (
+		binding === undefined ||
+		!createRequireInfo(fn.semanticFile).bindings.has(binding)
+	) {
+		return undefined;
+	}
+	const specifier = callExpression.arguments[0];
+	if (
+		callExpression.arguments.length !== 1 ||
+		specifier?.type !== "Literal" ||
+		typeof specifier.value !== "string"
+	) {
+		return undefined;
+	}
+	const cjsPath = resolveCjsModulePath(program, fn.semanticFile, specifier.value);
+	if (cjsPath === null) {
+		return emitMissingCjsModuleThrow(
+			program,
+			fn,
+			cursor,
+			specifier.value,
+			fn.semanticFile.path,
+		);
+	}
+	if (cjsPath === undefined) return undefined;
+	if (program.cjsModuleId.has(cjsPath) || program.cjsHostSlot.has(cjsPath)) {
+		return emitCjsModuleExports(program, fn, cursor, cjsPath);
+	}
+	const thunk = requiredEsmThunk(program, cjsPath);
+	if (thunk === undefined) return undefined;
+	const evaluate = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
+		type: "createFunction",
+		registers: [evaluate],
+		functionIndex: thunk,
+	});
+	const destination = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
+		type: "call",
+		registers: [destination, evaluate, compileUndefined(fn, cursor)],
+	});
+	return destination;
+}
+
+/**
+ * require(esm) from an ES module: evaluate the target synchronously if it has not run
+ * yet, as Node's require does, and answer its cached namespace. Asynchronous graphs
+ * cannot be required synchronously, so they get no thunk.
+ */
+function requiredEsmThunk(
+	program: CoreFrontendContext,
+	modulePath: string,
+): number | undefined {
+	const cached = program.requiredEsmThunk.get(modulePath);
+	if (cached !== undefined) return cached;
+	const record = program.semantic.graph?.modules.get(modulePath);
+	const file = program.semantic.files.find((candidate) => candidate.path === modulePath);
+	if (
+		record?.goal !== "module" ||
+		record.host ||
+		file === undefined ||
+		file.commonjs ||
+		program.moduleEvaluationPlan.asynchronous.has(modulePath)
+	) {
+		return undefined;
+	}
+	const fn: CoreFrontendFunction = {
+		semanticFile: file,
+		functionIndex: program.nextFunctionIndex,
+		nameStringIndex: getOrCreateStringConstant(program, ""),
+		blocks: [],
+		isAsync: false,
+		parameterCount: 0,
+		length: 0,
+		nextCoreVariable: 0,
+		nextLocalIndex: 0,
+		nextCapturedIndex: 0,
+	};
+	registerCoreFunction(program, fn);
+	program.requiredEsmThunk.set(modulePath, fn.functionIndex);
+	const block: CoreFrontendBlock = { emitter: unboundCoreEmitter };
+	fn.blocks.push(block);
+	const cursor = { block };
+	emitModuleEvaluationCall(program, fn, cursor, file, -2);
+	const namespace = emitNamespaceObjectRegister(
+		program,
+		fn,
+		cursor.block,
+		program.moduleNamespaces.get(modulePath) ?? [],
+		modulePath,
+	);
+	cursor.block.emitter.emit({ type: "return", registers: [namespace] });
+	endFunction(program, fn);
+	return fn.functionIndex;
+}
+
+/**
+ * Hand the created `require` this module's resolved require edges, so calls the
+ * compiler cannot lower (forwarders such as esbuild's `__require`) still find their
+ * module. CommonJS targets stay lazy as registry ids and ES module targets as their
+ * evaluation thunk, wrapped in a one-element array because a built-in's exports
+ * (node:events, for one) can themselves be functions.
+ */
+function emitAttachRequireTable(
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
+	requireRegister: number,
+): void {
+	const record = program.semantic.graph?.modules.get(fn.semanticFile.path);
+	const seen = new Set<string>();
+	const entries: Array<{ specifier: string; path: string }> = [];
+	for (const dependency of record?.dependencies ?? []) {
+		if (
+			dependency.kind !== "require" ||
+			dependency.specifier === null ||
+			dependency.resolvedPath === null ||
+			seen.has(dependency.specifier)
+		) {
+			continue;
+		}
+		seen.add(dependency.specifier);
+		entries.push({ specifier: dependency.specifier, path: dependency.resolvedPath });
+	}
+	if (entries.length === 0) return;
+	const table = nextCoreVariable(fn);
+	cursor.block.emitter.emit({ type: "createObject", registers: [table] });
+	const filenames = nextCoreVariable(fn);
+	cursor.block.emitter.emit({ type: "createObject", registers: [filenames] });
+	for (const entry of entries) {
+		let value: number;
+		const id = program.cjsModuleId.get(entry.path);
+		const thunk = id === undefined ? requiredEsmThunk(program, entry.path) : undefined;
+		if (program.cjsEagerSlot.has(entry.path) || program.cjsHostSlot.has(entry.path)) {
+			value = emitCjsModuleExports(program, fn, cursor, entry.path);
+		} else if (id !== undefined) {
+			value = nextCoreVariable(fn);
+			cursor.block.emitter.emit({ type: "createNumber", registers: [value], value: id });
+		} else if (thunk !== undefined) {
+			const evaluate = nextCoreVariable(fn);
+			cursor.block.emitter.emit({
+				type: "createFunction",
+				registers: [evaluate],
+				functionIndex: thunk,
+			});
+			value = nextCoreVariable(fn);
+			cursor.block.emitter.emit({ type: "createArray", registers: [value], length: 0 });
+			emitStoreProperty(program, fn, cursor, value, "0", evaluate);
+		} else {
+			continue;
+		}
+		emitStoreProperty(program, fn, cursor, table, entry.specifier, value);
+		if (!program.cjsHostSlot.has(entry.path)) {
+			const filename = compileModulePath(program, fn, cursor, entry.path, "path");
+			emitStoreProperty(program, fn, cursor, filenames, entry.specifier, filename);
+		}
+	}
+	const attach = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
+		type: "loadIntrinsic",
+		registers: [attach],
+		intrinsic: "__attachRequireTable",
+	});
+	const thisRegister = compileUndefined(fn, cursor);
+	const destination = nextCoreVariable(fn);
+	cursor.block.emitter.emit({
+		type: "call",
+		registers: [destination, attach, thisRegister, requireRegister, table, filenames],
+	});
+}
+
+function compileCallValue(
 	program: CoreFrontendContext,
 	fn: CoreFrontendFunction,
 	cursor: CoreFrontendCursor,

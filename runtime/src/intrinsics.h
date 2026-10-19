@@ -362,6 +362,11 @@ typedef enum MalIntrinsic {
     MAL_INTRINSIC_CONFIGURE_DEFERRED_NAMESPACE,
     MAL_INTRINSIC_EVALUATE_MODULE_SYNC,
     /*
+     * node:module's helper attaching a module's resolved require edges to its
+     * createRequire(import.meta.url) result. Undefined until node:module installs.
+     */
+    MAL_INTRINSIC_ATTACH_REQUIRE_TABLE,
+    /*
      * WinterTC fetch server slots (runtime/web_fetch.c). Installed only by the host
      * entry (mal_fetch_install), so they stay undefined — and harmless — in the bare
      * test262 VM. Stored here so the collector roots them (scan_roots marks every
