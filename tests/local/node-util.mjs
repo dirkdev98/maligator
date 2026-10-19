@@ -137,7 +137,7 @@ check(!types.isKeyObject({}), "types.isKeyObject rejects ordinary objects");
 check(!types.isCryptoKey({}), "types.isCryptoKey rejects ordinary objects");
 const circular = {};
 circular.self = circular;
-check(inspect(circular) === "{ self: [Circular] }", "cycle inspection");
+check(inspect(circular) === "<ref *1> { self: [Circular *1] }", "cycle inspection");
 
 const parsed = parseArgs({
 	args: ["--verbose", "--name=maligator", "input", "--", "--literal"],

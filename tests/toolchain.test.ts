@@ -1531,6 +1531,7 @@ printf '!<arch>\\n' > "$2"
 		]);
 		expect(context.features.cargoFeatures).toEqual([
 			"node-argon2",
+			"node-crypto",
 			"node-tls",
 			"node-zlib",
 			"url",

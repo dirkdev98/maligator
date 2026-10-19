@@ -16,10 +16,13 @@
 #include "node_buffer.h"
 #include "node_events.h"
 #include "node_module.h"
+#include "node_string_decoder.h"
 #include "object.h"
 #include "object_ops.h"
 #include "promise_object.h"
+#include "property_iter.h"
 #include "property_store.h"
+#include "text_buffer.h"
 #include "typed_array_object.h"
 #include "value.h"
 #include "vm_ops.h"
@@ -62,6 +65,38 @@ static MalValue stream_new_array(MalVm *vm) {
 
 static bool stream_get(MalVm *vm, MalValue object, const char *name, MalValue *out) {
     return mal_vm_get_property(vm, object, stream_static_key(vm, name), out);
+}
+
+// Readable decoding goes through a real node:string_decoder StringDecoder, as in Node.
+static MalValue stream_new_decoder(MalVm *vm, MalValue encoding) {
+    MalValue roots[2] = {encoding, mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, 2);
+    MalValue result = mal_value_new_undefined();
+    mal_host_install_node_string_decoder(vm, nullptr, 0, nullptr);
+    if (vm->completion.kind != MAL_COMPLETION_THROW
+        && stream_get(vm, mal_node_module_get_cached(vm, "node:string_decoder"), "StringDecoder", &roots[1])
+        && vm->completion.kind != MAL_COMPLETION_THROW) {
+        MalCompletion decoder = mal_vm_construct_value(vm, roots[1], roots, 1);
+        if (decoder.kind != MAL_COMPLETION_THROW) result = decoder.value;
+    }
+    mal_gc_unroot(&root);
+    return result;
+}
+
+static MalValue stream_decoder_call(MalVm *vm, MalValue decoder, const char *method, MalValue chunk) {
+    MalValue roots[2] = {decoder, chunk};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, 2);
+    MalValue function = mal_value_new_undefined();
+    MalValue result = mal_value_new_undefined();
+    if (stream_get(vm, roots[0], method, &function) && vm->completion.kind != MAL_COMPLETION_THROW) {
+        MalCompletion completion = mal_vm_call_value(
+            vm, function, roots[0], roots + 1, mal_value_is_undefined(chunk) ? 0 : 1);
+        if (completion.kind != MAL_COMPLETION_THROW) result = completion.value;
+    }
+    mal_gc_unroot(&root);
+    return result;
 }
 
 static MalCompletion stream_call_method(
@@ -124,34 +159,41 @@ static MalValue stream_option(MalVm *vm, MalValue options, const char *name) {
     return value;
 }
 
+static f64 stream_default_high_water_mark(MalVm *vm, bool object_mode);
+
 static void stream_init_readable(MalVm *vm, MalValue receiver, MalValue options) {
     MalValue roots[] = {
         receiver, options, mal_value_new_undefined(), mal_value_new_undefined(),
-        mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(),
     };
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
     roots[2] = mal_value_from_object(mal_intrinsic_new_object(vm));
     roots[3] = stream_new_array(vm);
     roots[5] = stream_new_array(vm);
-    MalValue encoding = stream_option(vm, roots[1], "encoding");
+    roots[6] = stream_option(vm, roots[1], "encoding");
     bool object_mode = mal_value_is_truthy(stream_option(vm, roots[1], "objectMode"));
-    f64 high_water_mark = object_mode ? 16 : 16384;
+    f64 high_water_mark = stream_default_high_water_mark(vm, object_mode);
     MalValue option_hwm = stream_option(vm, roots[1], "highWaterMark");
     if (mal_ops_is_number(option_hwm)) {
         f64 number = mal_ops_number_as_f64(option_hwm);
         if (isfinite(number) && number >= 0) high_water_mark = floor(number);
     }
     if (high_water_mark > INT32_MAX) high_water_mark = INT32_MAX;
-    roots[4] = encoding;
-    if (mal_value_is_string(encoding)) {
-        roots[4] = mal_value_from_object(mal_intrinsic_new_object(vm));
-        stream_set(vm, roots[4], "encoding", encoding);
+    roots[4] = mal_value_new_null();
+    roots[7] = mal_value_new_null();
+    if (mal_value_is_string(roots[6])) {
+        roots[4] = stream_new_decoder(vm, roots[6]);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            mal_gc_unroot(&root);
+            return;
+        }
+        roots[7] = stream_own(vm, roots[4], "encoding");
+        if (!mal_value_is_string(roots[7])) roots[7] = roots[6];
     }
-    stream_set(vm, roots[2], "encoding",
-               mal_value_is_string(encoding) ? encoding : mal_value_new_null());
-    stream_set(vm, roots[2], "decoder",
-               mal_value_is_string(encoding) ? roots[4] : mal_value_new_null());
+    stream_set(vm, roots[2], "encoding", roots[7]);
+    stream_set(vm, roots[2], "decoder", roots[4]);
     stream_set(vm, roots[2], "ended", mal_value_new_boolean(false));
     stream_set(vm, roots[2], "endEmitted", mal_value_new_boolean(false));
     stream_set(vm, roots[2], "destroyed", mal_value_new_boolean(false));
@@ -187,7 +229,7 @@ static void stream_init_writable(MalVm *vm, MalValue receiver, MalValue options)
     MalValue decode_strings = stream_option(vm, roots[1], "decodeStrings");
     bool should_decode_strings = !mal_value_is_boolean(decode_strings)
         || mal_value_to_boolean(decode_strings);
-    f64 high_water_mark = object_mode ? 16 : 16384;
+    f64 high_water_mark = stream_default_high_water_mark(vm, object_mode);
     MalValue option_hwm = stream_option(vm, roots[1], "highWaterMark");
     if (mal_ops_is_number(option_hwm)) {
         f64 number = mal_ops_number_as_f64(option_hwm);
@@ -678,31 +720,7 @@ static void stream_readable_drain(MalVm *vm, MalValue receiver) {
     mal_gc_unroot(&root);
 }
 
-static MalValue stream_push(
-    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
-    MalValue new_target, MalValue callee) {
-    (void) new_target;
-    (void) callee;
-    stream_require_readable(vm, receiver);
-    if (vm->completion.kind == MAL_COMPLETION_THROW) {
-        return mal_value_new_undefined();
-    }
-    MalValue chunk = argc > 0 ? args[0] : mal_value_new_undefined();
-    MalValue state = stream_own(vm, receiver, "_readableState");
-    stream_set(vm, receiver, "_malReading", mal_value_new_boolean(false));
-    stream_set(vm, state, "reading", mal_value_new_boolean(false));
-    if (mal_value_is_null(chunk)) {
-        stream_set(vm, state, "ended", mal_value_new_boolean(true));
-        if (stream_truthy_own(vm, receiver, "_malFlowing")) {
-            stream_readable_drain(vm, receiver);
-        }
-        stream_iterator_drain(vm, receiver);
-        return mal_value_new_boolean(false);
-    }
-    if (stream_truthy_own(vm, state, "ended")
-        || stream_truthy_own(vm, receiver, "destroyed")) {
-        return mal_value_new_boolean(false);
-    }
+static void stream_push_chunk(MalVm *vm, MalValue receiver, MalValue state, MalValue chunk) {
     if (stream_truthy_own(vm, receiver, "_malFlowing")) {
         stream_deliver_chunk(vm, receiver, chunk);
         if (vm->completion.kind != MAL_COMPLETION_THROW) {
@@ -721,6 +739,58 @@ static MalValue stream_push(
         mal_gc_unroot(&root);
         stream_iterator_drain(vm, receiver);
     }
+}
+
+static MalValue stream_push(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) new_target;
+    (void) callee;
+    stream_require_readable(vm, receiver);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        return mal_value_new_undefined();
+    }
+    MalValue chunk = argc > 0 ? args[0] : mal_value_new_undefined();
+    MalValue state = stream_own(vm, receiver, "_readableState");
+    stream_set(vm, receiver, "_malReading", mal_value_new_boolean(false));
+    stream_set(vm, state, "reading", mal_value_new_boolean(false));
+    MalValue decoder = stream_own(vm, state, "decoder");
+    if (mal_value_is_object(decoder) && !stream_truthy_own(vm, state, "objectMode")
+        && !stream_truthy_own(vm, state, "ended") && !stream_truthy_own(vm, receiver, "destroyed")) {
+        if (mal_value_is_null(chunk)) {
+            MalValue tail = stream_decoder_call(vm, decoder, "end", mal_value_new_undefined());
+            if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
+            if (mal_value_is_string(tail) && mal_string_length(mal_value_to_string(tail)) > 0) {
+                MalRootSpan tail_root;
+                mal_gc_root(&tail_root, &tail, 1);
+                stream_push_chunk(vm, receiver, state, tail);
+                mal_gc_unroot(&tail_root);
+                if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
+            }
+        } else if (mal_value_is_typed_array_object(chunk)) {
+            chunk = stream_decoder_call(vm, decoder, "write", chunk);
+            if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
+            if (!mal_value_is_string(chunk) || mal_string_length(mal_value_to_string(chunk)) == 0) {
+                return mal_value_new_boolean(mal_node_stream_readable_capacity(vm, receiver) > 0);
+            }
+        }
+    }
+    if (mal_value_is_null(chunk)) {
+        stream_set(vm, state, "ended", mal_value_new_boolean(true));
+        if (stream_truthy_own(vm, receiver, "_malFlowing")) {
+            stream_readable_drain(vm, receiver);
+        }
+        stream_iterator_drain(vm, receiver);
+        return mal_value_new_boolean(false);
+    }
+    if (stream_truthy_own(vm, state, "ended")
+        || stream_truthy_own(vm, receiver, "destroyed")) {
+        return mal_value_new_boolean(false);
+    }
+    MalRootSpan chunk_root;
+    mal_gc_root(&chunk_root, &chunk, 1);
+    stream_push_chunk(vm, receiver, state, chunk);
+    mal_gc_unroot(&chunk_root);
     return mal_value_new_boolean(mal_node_stream_readable_capacity(vm, receiver) > 0);
 }
 
@@ -784,15 +854,50 @@ static MalValue stream_set_encoding(
         return mal_value_new_undefined();
     }
     MalValue roots[] = {
-        receiver, mal_value_from_string(string),
-        mal_value_from_object(mal_intrinsic_new_object(vm)),
+        receiver, mal_value_from_string(string), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(),
     };
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
-    stream_set(vm, roots[2], "encoding", roots[1]);
-    MalValue state = stream_own(vm, roots[0], "_readableState");
-    stream_set(vm, state, "encoding", roots[1]);
-    stream_set(vm, state, "decoder", roots[2]);
+    roots[2] = stream_new_decoder(vm, roots[1]);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        mal_gc_unroot(&root);
+        return mal_value_new_undefined();
+    }
+    roots[3] = stream_own(vm, roots[0], "_readableState");
+    MalValue normalized = stream_own(vm, roots[2], "encoding");
+    stream_set(vm, roots[3], "encoding", mal_value_is_string(normalized) ? normalized : roots[1]);
+    stream_set(vm, roots[3], "decoder", roots[2]);
+    // Node re-decodes buffered Buffers into one string chunk.
+    roots[4] = stream_own(vm, roots[0], "_malReadableQueue");
+    if (mal_value_is_array_object(roots[4])) {
+        MalArrayObject *queue = mal_value_to_array_object(roots[4]);
+        MalValue index_value = stream_own(vm, roots[0], "_malReadableIndex");
+        u32 index = mal_value_is_int32(index_value) && mal_value_to_i32(index_value) > 0
+            ? (u32) mal_value_to_i32(index_value) : 0;
+        MalTextBuffer text = {0};
+        bool any = false;
+        for (u32 i = index; i < mal_array_object_length(queue); i++) {
+            MalValue chunk = stream_array_at(queue, i);
+            MalValue decoded = mal_value_is_typed_array_object(chunk)
+                ? stream_decoder_call(vm, roots[2], "write", chunk) : chunk;
+            if (vm->completion.kind == MAL_COMPLETION_THROW) break;
+            if (mal_value_is_string(decoded)) mal_text_buffer_append_string(&text, mal_value_to_string(decoded));
+            any = true;
+        }
+        if (any && vm->completion.kind != MAL_COMPLETION_THROW) {
+            MalValue joined = mal_value_from_string(mal_text_buffer_finish(&vm->heap, &text));
+            MalRootSpan joined_root;
+            mal_gc_root(&joined_root, &joined, 1);
+            roots[4] = stream_new_array(vm);
+            mal_array_object_store(mal_value_to_array_object(roots[4]), mal_key_index(0), joined);
+            stream_set(vm, roots[0], "_malReadableQueue", roots[4]);
+            stream_set(vm, roots[0], "_malReadableIndex", mal_value_from_i32(0));
+            mal_gc_unroot(&joined_root);
+        } else {
+            mal_text_buffer_dispose(&text);
+        }
+    }
     mal_gc_unroot(&root);
     return receiver;
 }
@@ -2660,6 +2765,307 @@ finished:
     return result;
 }
 
+static f64 stream_default_high_water_mark(MalVm *vm, bool object_mode) {
+    MalValue value = stream_own(vm, vm->intrinsics[MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR],
+        object_mode ? "_malDefaultObjectHighWaterMark" : "_malDefaultHighWaterMark");
+    return mal_ops_is_number(value) ? mal_ops_number_as_f64(value) : object_mode ? 16 : 65536;
+}
+
+static MalValue stream_get_default_hwm(MalVm *vm, MalValue self, const MalValue *args,
+    i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) nt; (void) callee;
+    return mal_value_from_f64(stream_default_high_water_mark(vm, argc > 0 && mal_value_is_truthy(args[0])));
+}
+
+static MalValue stream_set_default_hwm(MalVm *vm, MalValue self, const MalValue *args,
+    i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) nt; (void) callee;
+    f64 value;
+    if (!mal_node_validate_integer(vm, argc > 1 ? args[1] : mal_value_new_undefined(), "value", 0,
+            9007199254740991.0, &value)) {
+        return mal_value_new_undefined();
+    }
+    mal_intrinsic_define_data(vm, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR]),
+        (const byte *) (argc > 0 && mal_value_is_truthy(args[0])
+            ? "_malDefaultObjectHighWaterMark" : "_malDefaultHighWaterMark"),
+        mal_value_from_f64(value), MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    return mal_value_new_undefined();
+}
+
+static bool stream_probe(MalVm *vm, MalValue object, const char *name, MalValue *out) {
+    *out = mal_value_new_undefined();
+    if (!mal_value_is_object(object)) return true;
+    return stream_get(vm, object, name, out) && vm->completion.kind != MAL_COMPLETION_THROW;
+}
+
+static bool stream_is_node_stream(MalVm *vm, MalValue value) {
+    if (!mal_value_is_object(value)) return false;
+    MalValue state;
+    if (stream_probe(vm, value, "_readableState", &state) && mal_value_is_object(state)) return true;
+    if (stream_probe(vm, value, "_writableState", &state) && mal_value_is_object(state)) return true;
+    MalValue on, method;
+    return stream_probe(vm, value, "on", &on) && mal_value_is_callable(on)
+        && ((stream_probe(vm, value, "write", &method) && mal_value_is_callable(method))
+            || (stream_probe(vm, value, "pipe", &method) && mal_value_is_callable(method)));
+}
+
+static bool stream_flag(MalVm *vm, MalValue object, const char *name) {
+    MalValue value;
+    return stream_probe(vm, object, name, &value) && mal_value_is_truthy(value);
+}
+
+static i32 stream_destroyed_state(MalVm *vm, MalValue stream) {
+    if (!stream_is_node_stream(vm, stream)) return -1;
+    MalValue state;
+    stream_probe(vm, stream, "_writableState", &state);
+    if (!mal_value_is_object(state)) stream_probe(vm, stream, "_readableState", &state);
+    return stream_flag(vm, stream, "destroyed") || stream_flag(vm, state, "destroyed");
+}
+
+typedef enum StreamPredicate {
+    STREAM_IS_READABLE,
+    STREAM_IS_WRITABLE,
+    STREAM_IS_ERRORED,
+    STREAM_IS_DESTROYED,
+    STREAM_IS_DISTURBED,
+} StreamPredicate;
+
+static MalValue stream_predicate(MalVm *vm, MalValue stream, StreamPredicate predicate) {
+    MalValue value, state;
+    switch (predicate) {
+        case STREAM_IS_READABLE:
+            if (!stream_probe(vm, stream, "readable", &value) || !mal_value_is_boolean(value)) return mal_value_new_null();
+            if (stream_destroyed_state(vm, stream) == 1) return mal_value_new_boolean(false);
+            stream_probe(vm, stream, "_readableState", &state);
+            return mal_value_new_boolean(mal_value_is_object(state) && mal_value_to_boolean(value)
+                && !stream_flag(vm, state, "endEmitted"));
+        case STREAM_IS_WRITABLE:
+            if (!stream_probe(vm, stream, "writable", &value) || !mal_value_is_boolean(value)) return mal_value_new_null();
+            if (stream_destroyed_state(vm, stream) == 1) return mal_value_new_boolean(false);
+            stream_probe(vm, stream, "_writableState", &state);
+            return mal_value_new_boolean(mal_value_is_object(state) && mal_value_to_boolean(value)
+                && !stream_flag(vm, stream, "writableEnded") && !stream_flag(vm, state, "ended"));
+        case STREAM_IS_ERRORED: {
+            MalValue readable_state, writable_state;
+            stream_probe(vm, stream, "_readableState", &readable_state);
+            stream_probe(vm, stream, "_writableState", &writable_state);
+            return mal_value_new_boolean(stream_flag(vm, stream, "readableErrored")
+                || stream_flag(vm, stream, "writableErrored")
+                || stream_flag(vm, readable_state, "errorEmitted") || stream_flag(vm, writable_state, "errorEmitted")
+                || stream_flag(vm, readable_state, "errored") || stream_flag(vm, writable_state, "errored"));
+        }
+        case STREAM_IS_DESTROYED: {
+            i32 destroyed = stream_destroyed_state(vm, stream);
+            return destroyed < 0 ? mal_value_new_null() : mal_value_new_boolean(destroyed == 1);
+        }
+        case STREAM_IS_DISTURBED:
+            return mal_value_new_boolean(stream_flag(vm, stream, "readableDidRead")
+                || stream_flag(vm, stream, "readableAborted"));
+    }
+    return mal_value_new_null();
+}
+
+#define STREAM_PREDICATE(name, predicate_kind) \
+    static MalValue name(MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) { \
+        (void) self; (void) nt; (void) callee; \
+        MalValue result = stream_predicate(vm, argc > 0 ? args[0] : mal_value_new_undefined(), predicate_kind); \
+        return vm->completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : result; \
+    }
+
+STREAM_PREDICATE(stream_is_readable_fn, STREAM_IS_READABLE)
+STREAM_PREDICATE(stream_is_writable_fn, STREAM_IS_WRITABLE)
+STREAM_PREDICATE(stream_is_errored_fn, STREAM_IS_ERRORED)
+STREAM_PREDICATE(stream_is_destroyed_fn, STREAM_IS_DESTROYED)
+STREAM_PREDICATE(stream_is_disturbed_fn, STREAM_IS_DISTURBED)
+
+static MalValue stream_abort_error(MalVm *vm, MalValue signal);
+
+static MalValue stream_destroy_fn(MalVm *vm, MalValue self, const MalValue *args,
+    i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) nt; (void) callee;
+    MalValue roots[2] = {argc > 0 ? args[0] : mal_value_new_undefined(),
+        argc > 1 ? args[1] : mal_value_new_undefined()};
+    if (!mal_value_is_object(roots[0]) || stream_destroyed_state(vm, roots[0]) == 1) return mal_value_new_undefined();
+    MalRootSpan root;
+    mal_gc_root(&root, roots, 2);
+    MalValue readable_state;
+    stream_probe(vm, roots[0], "_readableState", &readable_state);
+    // Node's destroyer aborts an unfinished stream when no error is given.
+    if (mal_value_is_undefined(roots[1]) && !stream_flag(vm, readable_state, "endEmitted")
+        && !stream_flag(vm, roots[0], "writableFinished")) {
+        roots[1] = stream_abort_error(vm, mal_value_new_undefined());
+    }
+    stream_call_method(vm, roots[0], "destroy", &roots[1], 1);
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+static MalValue stream_abort_error(MalVm *vm, MalValue signal) {
+    MalValue roots[2] = {signal, mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, 2);
+    MalObject *error = mal_object_new(&vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ERROR_PROTOTYPE]));
+    roots[1] = mal_value_from_object(error);
+    mal_intrinsic_define_data(vm, error, (const byte *) "message",
+        mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "The operation was aborted")),
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    mal_intrinsic_define_data(vm, error, (const byte *) "name",
+        mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "AbortError")),
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    mal_intrinsic_define_data(vm, error, (const byte *) "code",
+        mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "ABORT_ERR")), STREAM_VISIBLE);
+    MalValue reason;
+    if (stream_probe(vm, roots[0], "reason", &reason)) {
+        mal_intrinsic_define_data(vm, error, (const byte *) "cause", reason,
+            MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    }
+    mal_gc_unroot(&root);
+    return roots[1];
+}
+
+static MalValue stream_abort_listener(MalVm *vm, MalValue self, const MalValue *args,
+    i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) args; (void) argc; (void) nt;
+    MalNativeFunctionObject *function = mal_value_to_native_function_object(callee);
+    MalValue roots[2] = {mal_native_function_object_get_slot(function, 0),
+        mal_native_function_object_get_slot(function, 1)};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, 2);
+    MalValue error = stream_abort_error(vm, roots[1]);
+    stream_call_method(vm, roots[0], "destroy", &error, 1);
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+static MalValue stream_add_abort_signal(MalVm *vm, MalValue self, const MalValue *args,
+    i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) nt; (void) callee;
+    MalValue roots[3] = {argc > 0 ? args[0] : mal_value_new_undefined(),
+        argc > 1 ? args[1] : mal_value_new_undefined(), mal_value_new_undefined()};
+    MalValue aborted;
+    if (!mal_value_is_object(roots[0]) || !stream_probe(vm, roots[0], "aborted", &aborted)
+        || !mal_value_is_boolean(aborted)) {
+        if (vm->completion.kind != MAL_COMPLETION_THROW) {
+            mal_node_throw_invalid_arg_type(vm, "signal", "an instance of AbortSignal", roots[0]);
+        }
+        return mal_value_new_undefined();
+    }
+    if (!stream_is_node_stream(vm, roots[1])) {
+        if (vm->completion.kind != MAL_COMPLETION_THROW) {
+            mal_node_throw_invalid_arg_type(vm, "stream",
+                "an instance of ReadableStream, WritableStream, or Stream", roots[1]);
+        }
+        return mal_value_new_undefined();
+    }
+    MalRootSpan root;
+    mal_gc_root(&root, roots, 3);
+    if (mal_value_to_boolean(aborted)) {
+        MalValue error = stream_abort_error(vm, roots[0]);
+        stream_call_method(vm, roots[1], "destroy", &error, 1);
+    } else {
+        MalValue slots[2] = {roots[1], roots[0]};
+        roots[2] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(
+            &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+            mal_intrinsic_ascii(vm, (const byte *) "onAbort"), 0, stream_abort_listener, slots, 2));
+        MalValue listen[2] = {mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "abort")), roots[2]};
+        stream_call_method(vm, roots[0], "addEventListener", listen, 2);
+    }
+    mal_gc_unroot(&root);
+    return vm->completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : roots[1];
+}
+
+// Readable state getters; slot 0 names the _readableState field.
+static MalValue stream_state_getter(MalVm *vm, MalValue self, const MalValue *args,
+    i32 argc, MalValue nt, MalValue callee) {
+    (void) args; (void) argc; (void) nt;
+    MalValue field = mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 0);
+    MalValue state = stream_own(vm, self, "_readableState");
+    if (!mal_value_is_object(state) || !mal_value_is_string(field)) return mal_value_new_undefined();
+    MalPropertyLookup found = mal_object_get_own(mal_value_to_object(state), mal_key_from_value(field));
+    return found.present ? found.desc.value : mal_value_new_undefined();
+}
+
+// duplexPair side hooks; slot 0 is a two-element array holding both sides, slot 1 this side's index.
+static MalValue stream_pair_other(MalNativeFunctionObject *function) {
+    MalValue sides = mal_native_function_object_get_slot(function, 0);
+    i32 index = mal_value_to_i32(mal_native_function_object_get_slot(function, 1));
+    return stream_array_at(mal_value_to_array_object(sides), (u32) (1 - index));
+}
+
+static MalValue stream_pair_write(MalVm *vm, MalValue self, const MalValue *args,
+    i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) nt;
+    MalValue roots[3] = {stream_pair_other(mal_value_to_native_function_object(callee)),
+        argc > 0 ? args[0] : mal_value_new_undefined(), argc > 2 ? args[2] : mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, 3);
+    stream_call_method(vm, roots[0], "push", &roots[1], 1);
+    if (vm->completion.kind != MAL_COMPLETION_THROW && mal_value_is_callable(roots[2])) {
+        mal_vm_call_value(vm, roots[2], mal_value_new_undefined(), nullptr, 0);
+    }
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+static MalValue stream_pair_final(MalVm *vm, MalValue self, const MalValue *args,
+    i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) nt;
+    MalValue roots[3] = {stream_pair_other(mal_value_to_native_function_object(callee)),
+        mal_value_new_null(), argc > 0 ? args[0] : mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, 3);
+    stream_call_method(vm, roots[0], "push", &roots[1], 1);
+    if (vm->completion.kind != MAL_COMPLETION_THROW && mal_value_is_callable(roots[2])) {
+        mal_vm_call_value(vm, roots[2], mal_value_new_undefined(), nullptr, 0);
+    }
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+static MalValue stream_pair_read(MalVm *vm, MalValue self, const MalValue *args,
+    i32 argc, MalValue nt, MalValue callee) {
+    (void) vm; (void) self; (void) args; (void) argc; (void) nt; (void) callee;
+    return mal_value_new_undefined();
+}
+
+static MalValue stream_duplex_pair(MalVm *vm, MalValue self, const MalValue *args,
+    i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) nt; (void) callee;
+    MalValue roots[4] = {stream_new_array(vm), mal_value_new_undefined(), mal_value_new_undefined(),
+        argc > 0 ? args[0] : mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, 4);
+    static const struct { const char *name; i32 length; MalNativeFunctionCallback callback; } hooks[] = {
+        {"write", 3, stream_pair_write}, {"final", 1, stream_pair_final}, {"read", 1, stream_pair_read},
+    };
+    for (i32 side = 0; side < 2 && vm->completion.kind != MAL_COMPLETION_THROW; side++) {
+        roots[1] = mal_value_from_object(mal_intrinsic_new_object(vm));
+        if (mal_value_is_object(roots[3])) {
+            MalPropertyIter iter;
+            MalKey key;
+            MalPropertyDesc desc;
+            mal_property_iter_init(&iter, mal_value_to_object(roots[3]), MAL_PROPERTY_ITER_ENUMERABLE_OWN_PROPERTY_ORDER);
+            while (mal_property_iter_next(&iter, &key, &desc)) {
+                if ((desc.flags & MAL_PROPERTY_ACCESSOR) == 0) mal_object_set(mal_value_to_object(roots[1]), key, desc.value);
+            }
+        }
+        for (usize i = 0; i < countof(hooks); i++) {
+            MalValue slots[2] = {roots[0], mal_value_from_i32(side)};
+            roots[2] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(
+                &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+                mal_intrinsic_ascii(vm, (const byte *) hooks[i].name), hooks[i].length, hooks[i].callback, slots, 2));
+            stream_set(vm, roots[1], hooks[i].name, roots[2]);
+        }
+        MalCompletion duplex = mal_vm_construct_value(
+            vm, vm->intrinsics[MAL_INTRINSIC_NODE_DUPLEX_CONSTRUCTOR], &roots[1], 1);
+        if (duplex.kind == MAL_COMPLETION_THROW) break;
+        mal_array_object_store(mal_value_to_array_object(roots[0]), mal_key_index((u32) side), duplex.value);
+    }
+    MalValue result = vm->completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : roots[0];
+    mal_gc_unroot(&root);
+    return result;
+}
+
 static const MalIntrinsic stream_constructor_slots[] = {
     MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR,
     MAL_INTRINSIC_NODE_READABLE_CONSTRUCTOR,
@@ -2798,6 +3204,23 @@ void mal_host_install_node_stream(
                                   roots[12], STREAM_METHOD);
     }
 
+    static const char *const state_getters[][2] = {
+        {"readableHighWaterMark", "highWaterMark"}, {"readableEncoding", "encoding"},
+        {"readableObjectMode", "objectMode"}, {"readableLength", "length"},
+    };
+    for (usize i = 0; i < countof(state_getters); i++) {
+        MalValue field = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) state_getters[i][1]));
+        roots[12] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(
+            &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+            mal_intrinsic_ascii(vm, (const byte *) state_getters[i][0]), 0, stream_state_getter, &field, 1));
+        MalPropertyDesc accessor = {
+            .flags = MAL_PROPERTY_ACCESSOR | MAL_PROPERTY_CONFIGURABLE,
+            .value = mal_value_new_undefined(),
+            .getter = roots[12],
+            .setter = mal_value_new_undefined(),
+        };
+        mal_object_define_own(mal_value_to_object(roots[3]), stream_static_key(vm, state_getters[i][0]), &accessor);
+    }
     roots[12] = stream_function(vm, "from", 2, stream_from);
     mal_intrinsic_define_data(vm, mal_value_to_object(roots[8]), "from", roots[12], STREAM_METHOD);
     roots[12] = stream_function(vm, "[Symbol.asyncIterator]", 0, stream_async_iterator);
@@ -2840,6 +3263,19 @@ void mal_host_install_node_stream(
                               (const byte *) "promises", roots[18],
                               STREAM_VISIBLE);
     vm->intrinsics[MAL_INTRINSIC_NODE_STREAM_PROMISES_MODULE] = roots[18];
+    static const StreamMethod helpers[] = {
+        {"isReadable", 1, stream_is_readable_fn}, {"isWritable", 1, stream_is_writable_fn},
+        {"isErrored", 1, stream_is_errored_fn}, {"isDestroyed", 1, stream_is_destroyed_fn},
+        {"isDisturbed", 1, stream_is_disturbed_fn}, {"destroy", 2, stream_destroy_fn},
+        {"addAbortSignal", 2, stream_add_abort_signal}, {"duplexPair", 1, stream_duplex_pair},
+        {"getDefaultHighWaterMark", 1, stream_get_default_hwm},
+        {"setDefaultHighWaterMark", 2, stream_set_default_hwm},
+    };
+    for (usize i = 0; i < countof(helpers); i++) {
+        roots[12] = stream_function(vm, helpers[i].name, helpers[i].length, helpers[i].callback);
+        mal_intrinsic_define_data(vm, mal_value_to_object(roots[7]), (const byte *) helpers[i].name,
+                                  roots[12], STREAM_VISIBLE);
+    }
     stream_install_exports(vm, slots, count);
     mal_gc_unroot(&root);
 }
@@ -2854,6 +3290,215 @@ void mal_host_install_node_stream_promises(
     if (!mal_value_is_undefined(module)) {
         mal_node_module_publish(vm, "node:stream/promises", slots, count, module);
     }
+}
+
+enum {
+    CONSUME_TEXT,
+    CONSUME_JSON,
+    CONSUME_BUFFER,
+    CONSUME_BYTES,
+    CONSUME_ARRAY_BUFFER,
+    CONSUME_BLOB,
+};
+
+static MalValue consume_concat(MalVm *vm, MalValue chunks) {
+    MalValue roots[3] = {chunks, mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, 3);
+    MalValue result = mal_value_new_undefined();
+    if (mal_value_is_undefined(vm->intrinsics[MAL_INTRINSIC_NODE_BUFFER_CONSTRUCTOR])) {
+        mal_host_install_node_buffer(vm, nullptr, 0, nullptr);
+    }
+    roots[2] = vm->intrinsics[MAL_INTRINSIC_NODE_BUFFER_CONSTRUCTOR];
+    MalArrayObject *list = mal_value_to_array_object(roots[0]);
+    for (u32 i = 0; vm->completion.kind != MAL_COMPLETION_THROW && i < mal_array_object_length(list); i++) {
+        MalValue chunk = stream_array_at(list, i);
+        if (mal_value_is_typed_array_object(chunk)) continue;
+        MalCompletion converted = stream_call_method(vm, roots[2], "from", &chunk, 1);
+        if (converted.kind == MAL_COMPLETION_THROW) break;
+        mal_array_object_store(list, mal_key_index(i), converted.value);
+    }
+    if (vm->completion.kind != MAL_COMPLETION_THROW) {
+        MalCompletion joined = stream_call_method(vm, roots[2], "concat", roots, 1);
+        if (joined.kind != MAL_COMPLETION_THROW) result = joined.value;
+    }
+    mal_gc_unroot(&root);
+    return result;
+}
+
+static MalValue consume_finish(MalVm *vm, MalValue chunks, i32 kind) {
+    MalValue roots[3] = {chunks, mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, 3);
+    MalValue result = mal_value_new_undefined();
+    if (kind == CONSUME_BLOB) {
+        MalValue blob;
+        if (stream_get(vm, vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS], "Blob", &blob)
+            && vm->completion.kind != MAL_COMPLETION_THROW) {
+            MalCompletion made = mal_vm_construct_value(vm, blob, roots, 1);
+            if (made.kind != MAL_COMPLETION_THROW) result = made.value;
+        }
+        goto done;
+    }
+    roots[1] = consume_concat(vm, roots[0]);
+    if (vm->completion.kind == MAL_COMPLETION_THROW || !mal_value_is_typed_array_object(roots[1])) goto done;
+    MalTypedArrayObject *buffer = mal_value_to_typed_array_object(roots[1]);
+    if (kind == CONSUME_BUFFER) {
+        result = roots[1];
+    } else if (kind == CONSUME_BYTES || kind == CONSUME_ARRAY_BUFFER) {
+        MalValue args[3] = {mal_value_new_undefined(), mal_value_from_i32((i32) buffer->byte_offset),
+            mal_value_from_i32((i32) mal_typed_array_object_length(buffer))};
+        if (!stream_get(vm, roots[1], "buffer", &args[0])) goto done;
+        roots[2] = args[0];
+        if (kind == CONSUME_BYTES) {
+            MalCompletion bytes = mal_vm_construct_value(
+                vm, vm->intrinsics[MAL_INTRINSIC_TYPED_ARRAY_UINT8_CONSTRUCTOR], args, 3);
+            if (bytes.kind != MAL_COMPLETION_THROW) result = bytes.value;
+        } else {
+            MalValue range[2] = {args[1], mal_value_from_i32((i32) (buffer->byte_offset
+                + mal_typed_array_object_length(buffer)))};
+            MalCompletion slice = stream_call_method(vm, roots[2], "slice", range, 2);
+            if (slice.kind != MAL_COMPLETION_THROW) result = slice.value;
+        }
+    } else {
+        MalCompletion text = stream_call_method(vm, roots[1], "toString", nullptr, 0);
+        if (text.kind == MAL_COMPLETION_THROW) goto done;
+        result = text.value;
+        if (kind == CONSUME_JSON) {
+            roots[2] = text.value;
+            MalCompletion parsed = stream_call_method(vm, vm->intrinsics[MAL_INTRINSIC_JSON], "parse", &roots[2], 1);
+            result = parsed.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : parsed.value;
+        }
+    }
+done:
+    mal_gc_unroot(&root);
+    return result;
+}
+
+// Listener slots: 0 the chunk array, 1 the promise, 2 the consumer kind.
+static MalValue consume_listener(MalVm *vm, MalValue self, const MalValue *args,
+    i32 argc, MalValue nt, MalValue callee) {
+    (void) self; (void) nt;
+    MalNativeFunctionObject *function = mal_value_to_native_function_object(callee);
+    MalValue roots[4] = {mal_native_function_object_get_slot(function, 0),
+        mal_native_function_object_get_slot(function, 1), mal_native_function_object_get_slot(function, 3),
+        argc > 0 ? args[0] : mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, 4);
+    MalPromiseObject *promise = mal_value_to_promise_object(roots[1]);
+    i32 event = mal_value_to_i32(roots[2]);
+    if (promise->state != MAL_PROMISE_PENDING) {
+        mal_gc_unroot(&root);
+        return mal_value_new_undefined();
+    }
+    if (event == 0) {
+        MalArrayObject *chunks = mal_value_to_array_object(roots[0]);
+        mal_array_object_store(chunks, mal_key_index(mal_array_object_length(chunks)), roots[3]);
+    } else if (event == 1) {
+        MalValue result = consume_finish(vm, roots[0],
+            mal_value_to_i32(mal_native_function_object_get_slot(function, 2)));
+        if (vm->completion.kind == MAL_COMPLETION_THROW) {
+            MalValue error = vm->completion.value;
+            vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = MAL_VALUE_UNDEFINED};
+            mal_promise_reject(vm, promise, error);
+        } else {
+            mal_promise_fulfill(vm, promise, result);
+        }
+    } else {
+        mal_promise_reject(vm, promise, roots[3]);
+    }
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+static MalValue consume_stream(MalVm *vm, MalValue stream, i32 kind) {
+    MalValue roots[4] = {stream, mal_value_new_undefined(), stream_new_array(vm), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, 4);
+    roots[1] = mal_value_from_object((MalObject *) mal_promise_object_new(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_PROMISE_PROTOTYPE])));
+    MalValue on;
+    if (!mal_value_is_object(roots[0]) || !stream_get(vm, roots[0], "on", &on) || !mal_value_is_callable(on)) {
+        if (vm->completion.kind != MAL_COMPLETION_THROW) {
+            mal_node_throw_invalid_arg_type(vm, "stream", "an instance of Readable", roots[0]);
+        }
+        mal_gc_unroot(&root);
+        return mal_value_new_undefined();
+    }
+    static const char *const events[] = {"data", "end", "error"};
+    for (i32 i = 0; i < 3 && vm->completion.kind != MAL_COMPLETION_THROW; i++) {
+        MalValue slots[4] = {roots[2], roots[1], mal_value_from_i32(kind), mal_value_from_i32(i)};
+        roots[3] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(
+            &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+            mal_intrinsic_ascii(vm, (const byte *) events[i]), 1, consume_listener, slots, 4));
+        MalValue listen[2] = {mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) events[i])), roots[3]};
+        stream_call_method(vm, roots[0], "on", listen, 2);
+    }
+    MalValue result = vm->completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : roots[1];
+    mal_gc_unroot(&root);
+    return result;
+}
+
+#define STREAM_CONSUMER(name, consumer_kind) \
+    static MalValue name(MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) { \
+        (void) self; (void) nt; (void) callee; \
+        return consume_stream(vm, argc > 0 ? args[0] : mal_value_new_undefined(), consumer_kind); \
+    }
+
+STREAM_CONSUMER(stream_consume_text, CONSUME_TEXT)
+STREAM_CONSUMER(stream_consume_json, CONSUME_JSON)
+STREAM_CONSUMER(stream_consume_buffer, CONSUME_BUFFER)
+STREAM_CONSUMER(stream_consume_bytes, CONSUME_BYTES)
+STREAM_CONSUMER(stream_consume_array_buffer, CONSUME_ARRAY_BUFFER)
+STREAM_CONSUMER(stream_consume_blob, CONSUME_BLOB)
+
+void mal_host_install_node_stream_consumers(
+    MalVm *vm, const MalHostInstallSlot *slots, i32 count,
+    const MalHostLaunchContext *launch) {
+    (void) launch;
+    if (mal_node_module_install_cached(vm, "node:stream/consumers", slots, count)) return;
+    static const StreamMethod consumers[] = {
+        {"arrayBuffer", 1, stream_consume_array_buffer}, {"blob", 1, stream_consume_blob},
+        {"buffer", 1, stream_consume_buffer}, {"bytes", 1, stream_consume_bytes},
+        {"text", 1, stream_consume_text}, {"json", 1, stream_consume_json},
+    };
+    MalValue roots[2] = {mal_value_from_object(mal_intrinsic_new_object(vm)), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, 2);
+    for (usize i = 0; i < countof(consumers); i++) {
+        roots[1] = stream_function(vm, consumers[i].name, consumers[i].length, consumers[i].callback);
+        mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]), (const byte *) consumers[i].name,
+                                  roots[1], STREAM_VISIBLE);
+    }
+    mal_node_module_publish(vm, "node:stream/consumers", slots, count, roots[0]);
+    mal_gc_unroot(&root);
+}
+
+void mal_host_install_node_stream_web(
+    MalVm *vm, const MalHostInstallSlot *slots, i32 count,
+    const MalHostLaunchContext *launch) {
+    (void) launch;
+    if (mal_node_module_install_cached(vm, "node:stream/web", slots, count)) return;
+    static const char *const names[] = {
+        "ReadableStream", "ReadableStreamDefaultReader", "ReadableStreamBYOBReader",
+        "ReadableStreamBYOBRequest", "ReadableByteStreamController", "ReadableStreamDefaultController",
+        "TransformStream", "TransformStreamDefaultController", "WritableStream",
+        "WritableStreamDefaultWriter", "WritableStreamDefaultController", "ByteLengthQueuingStrategy",
+        "CountQueuingStrategy", "TextEncoderStream", "TextDecoderStream", "CompressionStream",
+        "DecompressionStream",
+    };
+    MalValue roots[1] = {mal_value_from_object(mal_intrinsic_new_object(vm))};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, 1);
+    MalObject *global = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS]);
+    for (usize i = 0; i < countof(names); i++) {
+        MalPropertyLookup found = mal_object_get_own(global, stream_static_key(vm, names[i]));
+        if (!found.present || (found.desc.flags & MAL_PROPERTY_ACCESSOR) != 0) continue;
+        mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]), (const byte *) names[i],
+                                  found.desc.value, STREAM_VISIBLE);
+    }
+    mal_node_module_publish(vm, "node:stream/web", slots, count, roots[0]);
+    mal_gc_unroot(&root);
 }
 
 #endif /* MAL_NODE */

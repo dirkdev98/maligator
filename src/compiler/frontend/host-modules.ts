@@ -230,7 +230,18 @@ const FS_PROMISES: HostModuleSpec = {
 
 const V8: HostModuleSpec = {
 	id: "node:v8",
-	named: ["setFlagsFromString"],
+	named: [
+		"cachedDataVersionTag",
+		"getHeapCodeStatistics",
+		"getHeapSpaceStatistics",
+		"getHeapStatistics",
+		"isStringOneByteRepresentation",
+		"setFlagsFromString",
+		"setHeapSnapshotNearHeapLimit",
+		"startupSnapshot",
+		"stopCoverage",
+		"takeCoverage",
+	],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:v8"),
 };
@@ -375,11 +386,14 @@ const WORKER_THREADS: HostModuleSpec = {
 		"MessagePort",
 		"SHARE_ENV",
 		"Worker",
+		"isInternalThread",
 		"isMainThread",
 		"markAsUncloneable",
 		"parentPort",
 		"receiveMessageOnPort",
+		"resourceLimits",
 		"threadId",
+		"threadName",
 		"workerData",
 	],
 	hasDefault: true,
@@ -388,16 +402,73 @@ const WORKER_THREADS: HostModuleSpec = {
 
 const MODULE: HostModuleSpec = {
 	id: "node:module",
-	named: ["builtinModules", "createRequire", "isBuiltin"],
+	named: [
+		"Module",
+		"builtinModules",
+		"constants",
+		"createRequire",
+		"enableCompileCache",
+		"findPackageJSON",
+		"findSourceMap",
+		"flushCompileCache",
+		"getCompileCacheDir",
+		"getSourceMapsSupport",
+		"globalPaths",
+		"isBuiltin",
+		"register",
+		"registerHooks",
+		"setSourceMapsSupport",
+		"syncBuiltinESMExports",
+	],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:module"),
 };
 
 const CHILD_PROCESS: HostModuleSpec = {
 	id: "node:child_process",
-	named: ["exec", "execFile", "execFileSync", "execSync", "fork", "spawn", "spawnSync"],
+	named: [
+		"ChildProcess",
+		"exec",
+		"execFile",
+		"execFileSync",
+		"execSync",
+		"fork",
+		"spawn",
+		"spawnSync",
+	],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:child_process"),
+};
+
+const CONSOLE: HostModuleSpec = {
+	id: "node:console",
+	named: [
+		"Console",
+		"assert",
+		"clear",
+		"count",
+		"countReset",
+		"debug",
+		"dir",
+		"dirxml",
+		"error",
+		"group",
+		"groupCollapsed",
+		"groupEnd",
+		"info",
+		"log",
+		"profile",
+		"profileEnd",
+		"table",
+		"time",
+		"timeEnd",
+		"timeLog",
+		"timeStamp",
+		"trace",
+		"warn",
+	],
+	hasDefault: true,
+	installer: hostInstallerSymbol("node:console"),
 };
 
 const CLUSTER: HostModuleSpec = {
@@ -423,21 +494,43 @@ const CLUSTER: HostModuleSpec = {
 const CRYPTO: HostModuleSpec = {
 	id: "node:crypto",
 	named: [
+		"Cipheriv",
+		"Decipheriv",
+		"KeyObject",
 		"X509Certificate",
 		"argon2",
 		"argon2Sync",
+		"constants",
+		"createCipheriv",
+		"createDecipheriv",
 		"createHash",
 		"createHmac",
+		"createSecretKey",
 		"createSign",
 		"createVerify",
 		"generateKeyPairSync",
+		"getCipherInfo",
+		"getCiphers",
+		"getCurves",
+		"getHashes",
+		"getRandomValues",
 		"hash",
+		"hkdf",
+		"hkdfSync",
+		"pbkdf2",
 		"pbkdf2Sync",
 		"publicEncrypt",
 		"randomBytes",
+		"randomFill",
+		"randomFillSync",
 		"randomInt",
 		"randomUUID",
+		"randomUUIDv7",
+		"scrypt",
+		"scryptSync",
+		"subtle",
 		"timingSafeEqual",
+		"webcrypto",
 	],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:crypto"),
@@ -515,6 +608,27 @@ const UTIL: HostModuleSpec = {
 	],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:util"),
+};
+
+const SYS: HostModuleSpec = {
+	id: "node:sys",
+	named: UTIL.named,
+	hasDefault: true,
+	installer: hostInstallerSymbol("node:sys"),
+};
+
+const CONSTANTS: HostModuleSpec = {
+	id: "node:constants",
+	named: [],
+	hasDefault: true,
+	installer: hostInstallerSymbol("node:constants"),
+};
+
+const PUNYCODE: HostModuleSpec = {
+	id: "node:punycode",
+	named: ["decode", "encode", "toASCII", "toUnicode", "ucs2", "version"],
+	hasDefault: true,
+	installer: hostInstallerSymbol("node:punycode"),
 };
 
 const UTIL_TYPES: HostModuleSpec = {
@@ -721,12 +835,54 @@ const STREAM: HostModuleSpec = {
 		"Duplex",
 		"Transform",
 		"PassThrough",
+		"addAbortSignal",
+		"destroy",
+		"duplexPair",
 		"finished",
+		"getDefaultHighWaterMark",
+		"isDestroyed",
+		"isDisturbed",
+		"isErrored",
+		"isReadable",
+		"isWritable",
 		"pipeline",
 		"promises",
+		"setDefaultHighWaterMark",
 	],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:stream"),
+};
+
+const STREAM_CONSUMERS: HostModuleSpec = {
+	id: "node:stream/consumers",
+	named: ["arrayBuffer", "blob", "buffer", "bytes", "json", "text"],
+	hasDefault: true,
+	installer: hostInstallerSymbol("node:stream/consumers"),
+};
+
+const STREAM_WEB: HostModuleSpec = {
+	id: "node:stream/web",
+	named: [
+		"ByteLengthQueuingStrategy",
+		"CompressionStream",
+		"CountQueuingStrategy",
+		"DecompressionStream",
+		"ReadableByteStreamController",
+		"ReadableStream",
+		"ReadableStreamBYOBReader",
+		"ReadableStreamBYOBRequest",
+		"ReadableStreamDefaultController",
+		"ReadableStreamDefaultReader",
+		"TextDecoderStream",
+		"TextEncoderStream",
+		"TransformStream",
+		"TransformStreamDefaultController",
+		"WritableStream",
+		"WritableStreamDefaultController",
+		"WritableStreamDefaultWriter",
+	],
+	hasDefault: true,
+	installer: hostInstallerSymbol("node:stream/web"),
 };
 
 const STREAM_PROMISES: HostModuleSpec = {
@@ -778,6 +934,21 @@ const INSPECTOR: HostModuleSpec = {
 	installer: hostInstallerSymbol("node:inspector"),
 };
 
+const TIMERS: HostModuleSpec = {
+	id: "node:timers",
+	named: [
+		"clearImmediate",
+		"clearInterval",
+		"clearTimeout",
+		"promises",
+		"setImmediate",
+		"setInterval",
+		"setTimeout",
+	],
+	hasDefault: true,
+	installer: hostInstallerSymbol("node:timers"),
+};
+
 const TIMERS_PROMISES: HostModuleSpec = {
 	id: "node:timers/promises",
 	named: ["scheduler", "setImmediate", "setInterval", "setTimeout"],
@@ -791,6 +962,8 @@ const URL: HostModuleSpec = {
 		"URL",
 		"URLSearchParams",
 		"Url",
+		"domainToASCII",
+		"domainToUnicode",
 		"fileURLToPath",
 		"format",
 		"parse",
@@ -818,9 +991,25 @@ const QUERYSTRING: HostModuleSpec = {
 
 const READLINE: HostModuleSpec = {
 	id: "node:readline",
-	named: ["createInterface"],
+	named: [
+		"Interface",
+		"clearLine",
+		"clearScreenDown",
+		"createInterface",
+		"cursorTo",
+		"emitKeypressEvents",
+		"moveCursor",
+		"promises",
+	],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:readline"),
+};
+
+const READLINE_PROMISES: HostModuleSpec = {
+	id: "node:readline/promises",
+	named: ["Interface", "createInterface"],
+	hasDefault: true,
+	installer: hostInstallerSymbol("node:readline/promises"),
 };
 
 const NET: HostModuleSpec = {
@@ -836,16 +1025,20 @@ const OS: HostModuleSpec = {
 		"EOL",
 		"arch",
 		"availableParallelism",
+		"constants",
 		"cpus",
 		"devNull",
 		"endianness",
 		"freemem",
+		"getPriority",
 		"homedir",
 		"hostname",
 		"loadavg",
 		"machine",
+		"networkInterfaces",
 		"platform",
 		"release",
+		"setPriority",
 		"tmpdir",
 		"totalmem",
 		"type",
@@ -862,21 +1055,6 @@ const STRING_DECODER: HostModuleSpec = {
 	named: ["StringDecoder"],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:string_decoder"),
-};
-
-const TIMERS: HostModuleSpec = {
-	id: "node:timers",
-	named: [
-		"clearImmediate",
-		"clearInterval",
-		"clearTimeout",
-		"promises",
-		"setImmediate",
-		"setInterval",
-		"setTimeout",
-	],
-	hasDefault: true,
-	installer: hostInstallerSymbol("node:timers"),
 };
 
 const ZLIB: HostModuleSpec = {
@@ -950,6 +1128,7 @@ export const HOST_MODULES: ReadonlyMap<string, HostModuleSpec> = new Map(
 		MODULE,
 		CHILD_PROCESS,
 		CLUSTER,
+		CONSOLE,
 		CRYPTO,
 		PERF_HOOKS,
 		TLS,
@@ -957,6 +1136,9 @@ export const HOST_MODULES: ReadonlyMap<string, HostModuleSpec> = new Map(
 		TTY,
 		UTIL,
 		UTIL_TYPES,
+		SYS,
+		CONSTANTS,
+		PUNYCODE,
 		BUFFER,
 		PROCESS,
 		ASSERT,
@@ -964,18 +1146,21 @@ export const HOST_MODULES: ReadonlyMap<string, HostModuleSpec> = new Map(
 		ASYNC_HOOKS,
 		STREAM,
 		STREAM_PROMISES,
+		STREAM_CONSUMERS,
+		STREAM_WEB,
 		HTTP,
 		HTTPS,
 		HTTP2,
 		INSPECTOR,
+		TIMERS,
 		TIMERS_PROMISES,
 		URL,
 		QUERYSTRING,
 		READLINE,
+		READLINE_PROMISES,
 		NET,
 		OS,
 		STRING_DECODER,
-		TIMERS,
 		ZLIB,
 		SQLITE,
 	].map((spec) => [spec.id, spec]),

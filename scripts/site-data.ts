@@ -471,13 +471,10 @@ const SHAPE_ONLY_NODE_MODULES = new Set([
 	"node:http2",
 	"node:https",
 	"node:inspector",
-	"node:readline",
 	"node:worker_threads",
 ]);
 
 const SHAPE_ONLY_NODE_APIS = new Set([
-	"node:child_process#exec",
-	"node:child_process#execFile",
 	"node:crypto#X509Certificate",
 	"node:crypto#createSign",
 	"node:crypto#createVerify",

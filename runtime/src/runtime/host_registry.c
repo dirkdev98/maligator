@@ -13,12 +13,14 @@
 #include "node_buffer.h"
 #include "node_child_process.h"
 #include "node_cluster.h"
+#include "node_console.h"
 #include "node_crypto.h"
 #include "node_diagnostics_channel.h"
 #include "node_dns.h"
 #include "node_domain.h"
 #include "node_events.h"
 #include "node_fs.h"
+#include "node_legacy.h"
 #include "node_http.h"
 #include "node_https.h"
 #include "node_http2.h"
@@ -61,6 +63,8 @@ MalHostInstaller mal_host_resolve_installer(const char *name, usize length) {
     MATCH_INSTALLER(mal_host_install_node_buffer);
     MATCH_INSTALLER(mal_host_install_node_child_process);
     MATCH_INSTALLER(mal_host_install_node_cluster);
+    MATCH_INSTALLER(mal_host_install_node_console);
+    MATCH_INSTALLER(mal_host_install_node_constants);
     MATCH_INSTALLER(mal_host_install_node_crypto);
     MATCH_INSTALLER(mal_host_install_node_diagnostics_channel);
     MATCH_INSTALLER(mal_host_install_node_dns);
@@ -80,11 +84,16 @@ MalHostInstaller mal_host_resolve_installer(const char *name, usize length) {
     MATCH_INSTALLER(mal_host_install_node_path_posix);
     MATCH_INSTALLER(mal_host_install_node_perf_hooks);
     MATCH_INSTALLER(mal_host_install_node_querystring);
+    MATCH_INSTALLER(mal_host_install_node_punycode);
     MATCH_INSTALLER(mal_host_install_node_readline);
+    MATCH_INSTALLER(mal_host_install_node_readline_promises);
     MATCH_INSTALLER(mal_host_install_node_sqlite);
     MATCH_INSTALLER(mal_host_install_node_stream);
     MATCH_INSTALLER(mal_host_install_node_stream_promises);
+    MATCH_INSTALLER(mal_host_install_node_stream_consumers);
+    MATCH_INSTALLER(mal_host_install_node_stream_web);
     MATCH_INSTALLER(mal_host_install_node_string_decoder);
+    MATCH_INSTALLER(mal_host_install_node_sys);
     MATCH_INSTALLER(mal_host_install_node_tls);
     MATCH_INSTALLER(mal_host_install_node_timers);
     MATCH_INSTALLER(mal_host_install_node_timers_promises);

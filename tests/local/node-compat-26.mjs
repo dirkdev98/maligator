@@ -12,6 +12,14 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { cpuUsage, uptime, version } from "node:process";
+import { domainToASCII, domainToUnicode } from "node:url";
+import {
+	getHeapSpaceStatistics,
+	getHeapStatistics,
+	isStringOneByteRepresentation,
+	startupSnapshot,
+} from "node:v8";
+import { isInternalThread, resourceLimits, threadName } from "node:worker_threads";
 
 const lines = [];
 const show = (label, value) => lines.push(`${label} ${JSON.stringify(value)}`);
@@ -176,4 +184,37 @@ try {
 	show("getEventListeners type", [error.code, error.message]);
 }
 
+show("worker_threads", [isInternalThread, threadName, resourceLimits]);
+const heap = getHeapStatistics();
+show("v8 heap", [
+	Object.keys(heap),
+	heap.used_heap_size > 0,
+	heap.heap_size_limit > heap.used_heap_size,
+]);
+show("v8 spaces", Object.keys(getHeapSpaceStatistics()[0]));
+show("v8 one byte", [
+	isStringOneByteRepresentation("abc"),
+	isStringOneByteRepresentation("\u20ac"),
+]);
+show("v8 snapshot", startupSnapshot.isBuildingSnapshot());
+try {
+	startupSnapshot.addSerializeCallback(() => {});
+} catch (error) {
+	show("v8 snapshot error", error.code);
+}
+show(
+	"domainToASCII",
+	["español.com", "xn--iñvalid.com", "EXAMPLE.org", "", "a..b", "1.2.3.4"].map(
+		domainToASCII,
+	),
+);
+show(
+	"domainToUnicode",
+	["xn--espaol-zwa.com", "xn--iñvalid.com", "example.org", 42].map(domainToUnicode),
+);
+try {
+	domainToASCII();
+} catch (error) {
+	show("domainToASCII missing", [error.code, error.message]);
+}
 console.log(lines.join("\n"));

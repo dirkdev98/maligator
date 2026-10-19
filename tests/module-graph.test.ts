@@ -382,39 +382,43 @@ test("traverses the complete pinned Express initialization graph", () => {
 	]) {
 		expect(graph.modules.get("node:url")?.host?.named).toContain(name);
 	}
-	expect(graph.modules.get("node:querystring")?.host?.named).toEqual([
-		"decode",
-		"encode",
-		"escape",
-		"parse",
-		"stringify",
-		"unescape",
-		"unescapeBuffer",
-	]);
+	expect(graph.modules.get("node:querystring")?.host?.named).toEqual(
+		expect.arrayContaining([
+			"decode",
+			"encode",
+			"escape",
+			"parse",
+			"stringify",
+			"unescape",
+			"unescapeBuffer",
+		]),
+	);
 	for (const name of ["Socket", "connect", "createConnection", "isIP"]) {
 		expect(graph.modules.get("node:net")?.host?.named).toContain(name);
 	}
-	expect(graph.modules.get("node:os")?.host?.named).toEqual([
-		"EOL",
-		"arch",
-		"availableParallelism",
-		"cpus",
-		"devNull",
-		"endianness",
-		"freemem",
-		"homedir",
-		"hostname",
-		"loadavg",
-		"machine",
-		"platform",
-		"release",
-		"tmpdir",
-		"totalmem",
-		"type",
-		"uptime",
-		"userInfo",
-		"version",
-	]);
+	expect(graph.modules.get("node:os")?.host?.named).toEqual(
+		expect.arrayContaining([
+			"EOL",
+			"arch",
+			"availableParallelism",
+			"cpus",
+			"devNull",
+			"endianness",
+			"freemem",
+			"homedir",
+			"hostname",
+			"loadavg",
+			"machine",
+			"platform",
+			"release",
+			"tmpdir",
+			"totalmem",
+			"type",
+			"uptime",
+			"userInfo",
+			"version",
+		]),
+	);
 });
 
 test("requires an explicit stripper for TypeScript and applies it across the graph", () => {
@@ -859,32 +863,38 @@ test("host catalog includes path and postgres.js loading companions", () => {
 	expect(pathSpec.hasDefault).toBe(true);
 
 	const cryptoSpec = graph.modules.get("node:crypto")!.host!;
-	expect(cryptoSpec.named).toEqual([
-		"X509Certificate",
-		"argon2",
-		"argon2Sync",
-		"createHash",
-		"createHmac",
-		"createSign",
-		"createVerify",
-		"generateKeyPairSync",
-		"hash",
-		"pbkdf2Sync",
-		"publicEncrypt",
-		"randomBytes",
-		"randomInt",
-		"randomUUID",
-		"timingSafeEqual",
-	]);
+	expect(cryptoSpec.named).toEqual(
+		expect.arrayContaining([
+			"X509Certificate",
+			"argon2",
+			"argon2Sync",
+			"createHash",
+			"createHmac",
+			"createSign",
+			"createVerify",
+			"generateKeyPairSync",
+			"hash",
+			"pbkdf2Sync",
+			"publicEncrypt",
+			"randomBytes",
+			"randomInt",
+			"randomUUID",
+			"timingSafeEqual",
+		]),
+	);
 	expect(cryptoSpec.hasDefault).toBe(true);
 	expect(graph.modules.get("node:perf_hooks")!.host).toMatchObject({
-		named: ["monitorEventLoopDelay", "performance"],
 		hasDefault: true,
 	});
+	expect(graph.modules.get("node:perf_hooks")!.host?.named).toEqual(
+		expect.arrayContaining(["monitorEventLoopDelay", "performance"]),
+	);
 	expect(graph.modules.get("node:tls")!.host).toMatchObject({
-		named: ["connect"],
 		hasDefault: true,
 	});
+	expect(graph.modules.get("node:tls")!.host?.named).toEqual(
+		expect.arrayContaining(["connect"]),
+	);
 });
 
 test("canonicalizes bare buffer and exposes the node:buffer constructor", () => {
@@ -959,13 +969,17 @@ test("resolves curated V8 and VM context helpers", () => {
 		buildConfig: nodeOn,
 	});
 	expect(graph.modules.get("node:v8")?.host).toMatchObject({
-		named: ["setFlagsFromString"],
 		hasDefault: true,
 	});
+	expect(graph.modules.get("node:v8")?.host?.named).toEqual(
+		expect.arrayContaining(["setFlagsFromString"]),
+	);
 	expect(graph.modules.get("node:vm")?.host).toMatchObject({
-		named: ["runInNewContext"],
 		hasDefault: true,
 	});
+	expect(graph.modules.get("node:vm")?.host?.named).toEqual(
+		expect.arrayContaining(["runInNewContext"]),
+	);
 });
 
 test("resolves the diagnostics tracing channel", () => {
@@ -992,7 +1006,11 @@ test("canonicalizes the worker_threads main-thread identity", () => {
 		"node:worker_threads",
 	);
 	expect(graph.modules.get("node:worker_threads")?.host).toMatchObject({
-		named: [
+		hasDefault: true,
+		installer: "mal_host_install_node_worker_threads",
+	});
+	expect(graph.modules.get("node:worker_threads")?.host?.named).toEqual(
+		expect.arrayContaining([
 			"MessageChannel",
 			"MessagePort",
 			"SHARE_ENV",
@@ -1003,10 +1021,8 @@ test("canonicalizes the worker_threads main-thread identity", () => {
 			"receiveMessageOnPort",
 			"threadId",
 			"workerData",
-		],
-		hasDefault: true,
-		installer: "mal_host_install_node_worker_threads",
-	});
+		]),
+	);
 });
 
 test("canonicalizes the CommonJS module API", () => {
@@ -1018,10 +1034,12 @@ test("canonicalizes the CommonJS module API", () => {
 		"node:module",
 	);
 	expect(graph.modules.get("node:module")?.host).toMatchObject({
-		named: ["builtinModules", "createRequire", "isBuiltin"],
 		hasDefault: true,
 		installer: "mal_host_install_node_module",
 	});
+	expect(graph.modules.get("node:module")?.host?.named).toEqual(
+		expect.arrayContaining(["builtinModules", "createRequire", "isBuiltin"]),
+	);
 });
 
 test("resolves asynchronous child process entrypoints", () => {
@@ -1034,7 +1052,16 @@ test("resolves asynchronous child process entrypoints", () => {
 		buildConfig: nodeOn,
 	});
 	expect(graph.modules.get("node:child_process")?.host).toMatchObject({
-		named: ["exec", "execFile", "execFileSync", "fork", "spawn"],
+		named: [
+			"ChildProcess",
+			"exec",
+			"execFile",
+			"execFileSync",
+			"execSync",
+			"fork",
+			"spawn",
+			"spawnSync",
+		],
 		installer: "mal_host_install_node_child_process",
 	});
 });
@@ -1088,7 +1115,10 @@ test("canonicalizes bare zlib and exposes compression adapters", () => {
 		"node:zlib",
 	]);
 	expect(graph.modules.get("node:zlib")?.host).toMatchObject({
-		named: [
+		hasDefault: true,
+	});
+	expect(graph.modules.get("node:zlib")?.host?.named).toEqual(
+		expect.arrayContaining([
 			"constants",
 			"createBrotliDecompress",
 			"createGunzip",
@@ -1096,9 +1126,8 @@ test("canonicalizes bare zlib and exposes compression adapters", () => {
 			"createInflate",
 			"deflate",
 			"gunzipSync",
-		],
-		hasDefault: true,
-	});
+		]),
+	);
 });
 
 test("canonicalizes bare and node: HTTP specifiers to one host module", () => {

@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "node_util.h"
+#include "node_inspect.h"
 
 #if MAL_NODE
 
@@ -12,6 +13,9 @@
 #include "array_buffer_object.h"
 #include "builtin_string.h"
 #include "builtin_error.h"
+#include "builtin_bigint.h"
+#include "date_object.h"
+#include "heap_symbol.h"
 #include "function_object.h"
 #include "gc.h"
 #include "heap_string.h"
@@ -36,25 +40,8 @@
 
 #define UTIL_VISIBLE \
     (MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE)
-#define UTIL_INSPECT_MAX_DEPTH 8
 
 typedef MalTextBuffer MalUtilBuilder;
-
-typedef struct MalUtilInspectState {
-    MalVm *vm;
-    MalUtilBuilder *builder;
-    MalObject *ancestors[UTIL_INSPECT_MAX_DEPTH + 1];
-    i32 max_depth;
-} MalUtilInspectState;
-
-static bool util_builder_units(
-    MalUtilBuilder *builder, const c16 *units, usize length) {
-    return mal_text_buffer_append_units(builder, units, length) == MAL_TEXT_BUFFER_OK;
-}
-
-static bool util_builder_string(MalUtilBuilder *builder, const MalString *string) {
-    return mal_text_buffer_append_string(builder, string) == MAL_TEXT_BUFFER_OK;
-}
 
 static bool util_builder_ascii(MalUtilBuilder *builder, const char *ascii) {
     return mal_text_buffer_append_ascii(
@@ -73,331 +60,6 @@ static MalValue util_builder_finish(MalVm *vm, MalUtilBuilder *builder) {
         return mal_value_new_undefined();
     }
     return mal_value_from_string(mal_text_buffer_finish(&vm->heap, builder));
-}
-
-static void util_inspect_value(
-    MalUtilInspectState *state, MalValue value, i32 depth, bool quote_string);
-
-static void util_inspect_quoted(
-    MalUtilBuilder *builder, const MalString *string) {
-    util_builder_code_unit(builder, '\'');
-    const c16 *units = mal_string_code_units(string);
-    usize length = mal_string_length(string);
-    for (usize i = 0; i < length; i++) {
-        c16 unit = units[i];
-        if (unit == '\'' || unit == '\\') {
-            util_builder_code_unit(builder, '\\');
-            util_builder_code_unit(builder, unit);
-        } else if (unit == '\n') {
-            util_builder_ascii(builder, "\\n");
-        } else if (unit == '\r') {
-            util_builder_ascii(builder, "\\r");
-        } else if (unit == '\t') {
-            util_builder_ascii(builder, "\\t");
-        } else {
-            util_builder_code_unit(builder, unit);
-        }
-    }
-    util_builder_code_unit(builder, '\'');
-}
-
-static bool util_inspect_is_cycle(
-    MalUtilInspectState *state, MalObject *object, i32 depth) {
-    for (i32 i = 0; i < depth; i++) {
-        if (state->ancestors[i] == object) {
-            return true;
-        }
-    }
-    return false;
-}
-
-static void util_inspect_array(
-    MalUtilInspectState *state, MalArrayObject *array, i32 depth) {
-    MalUtilBuilder *builder = state->builder;
-    u32 length = mal_array_object_length(array);
-    if (length == 0) {
-        util_builder_ascii(builder, "[]");
-        return;
-    }
-    util_builder_ascii(builder, "[ ");
-    for (u32 i = 0; i < length; i++) {
-        if (i > 0) {
-            util_builder_ascii(builder, ", ");
-        }
-        MalPropertyResolution resolution = mal_object_resolve_property(
-            (MalObject *) array,
-            mal_key_index(i));
-        if (resolution.found) {
-            util_inspect_value(state, resolution.desc.value, depth + 1, true);
-        } else {
-            util_builder_ascii(builder, "<1 empty item>");
-        }
-    }
-    util_builder_ascii(builder, " ]");
-}
-
-static void util_inspect_object(
-    MalUtilInspectState *state, MalObject *object, i32 depth) {
-    MalUtilBuilder *builder = state->builder;
-    if (util_inspect_is_cycle(state, object, depth)) {
-        util_builder_ascii(builder, "[Circular]");
-        return;
-    }
-    if (depth > state->max_depth) {
-        util_builder_ascii(builder, mal_value_is_array_object(
-            mal_value_from_object(object)) ? "[Array]" : "[Object]");
-        return;
-    }
-    state->ancestors[depth] = object;
-    MalValue object_value = mal_value_from_object(object);
-    if (mal_value_is_array_object(object_value)) {
-        util_inspect_array(state, mal_value_to_array_object(object_value), depth);
-        return;
-    }
-    if (mal_value_is_callable(object_value)) {
-        util_builder_ascii(builder, "[Function");
-        MalString *name = mal_vm_callable_name(state->vm, object_value);
-        if (name != nullptr && mal_string_length(name) > 0) {
-            util_builder_ascii(builder, ": ");
-            util_builder_string(builder, name);
-        }
-        util_builder_code_unit(builder, ']');
-        return;
-    }
-
-    MalPropertyIter iter;
-    mal_property_iter_init(
-        &iter, object, MAL_PROPERTY_ITER_ENUMERABLE_OWN_PROPERTY_ORDER);
-    MalKey key;
-    MalPropertyDesc desc;
-    bool first = true;
-    while (mal_property_iter_next(&iter, &key, &desc)) {
-        if (key.kind == MAL_KEY_SYMBOL) {
-            continue;
-        }
-        if (!first) {
-            util_builder_ascii(builder, ", ");
-        } else {
-            util_builder_ascii(builder, "{ ");
-        }
-        first = false;
-        util_builder_string(builder, mal_ops_to_string(&state->vm->heap, key.value));
-        util_builder_ascii(builder, ": ");
-        if ((desc.flags & MAL_PROPERTY_ACCESSOR) != 0) {
-            util_builder_ascii(builder, mal_value_is_callable(desc.getter)
-                ? "[Getter]" : "[Setter]");
-        } else {
-            util_inspect_value(state, desc.value, depth + 1, true);
-        }
-    }
-    util_builder_ascii(builder, first ? "{}" : " }");
-}
-
-static void util_inspect_value(
-    MalUtilInspectState *state, MalValue value, i32 depth, bool quote_string) {
-    if (mal_value_is_string(value)) {
-        if (quote_string) {
-            util_inspect_quoted(state->builder, mal_value_to_string(value));
-        } else {
-            util_builder_string(state->builder, mal_value_to_string(value));
-        }
-    } else if (mal_value_is_object(value)) {
-        util_inspect_object(state, mal_value_to_object(value), depth);
-    } else {
-        util_builder_string(
-            state->builder, mal_ops_to_string(&state->vm->heap, value));
-    }
-}
-
-static i32 util_inspect_depth(MalVm *vm, MalValue options) {
-    if (!mal_value_is_object(options)) {
-        return 2;
-    }
-    MalValue value;
-    if (!mal_vm_get_property(vm, options,
-            mal_intrinsic_string_key(vm, (const byte *) "depth"), &value)) {
-        return 2;
-    }
-    if (mal_value_is_null(value)) {
-        return UTIL_INSPECT_MAX_DEPTH;
-    }
-    if (!mal_ops_is_number(value)) {
-        return 2;
-    }
-    f64 number = mal_ops_number_as_f64(value);
-    if (!isfinite(number)) {
-        return number > 0 ? UTIL_INSPECT_MAX_DEPTH : 0;
-    }
-    if (number < 0) {
-        return 0;
-    }
-    return number > UTIL_INSPECT_MAX_DEPTH
-        ? UTIL_INSPECT_MAX_DEPTH
-        : (i32) trunc(number);
-}
-
-static MalValue util_inspect_result(
-    MalVm *vm, MalValue value, MalValue options) {
-    MalUtilBuilder builder = {0};
-    MalUtilInspectState state = {
-        .vm = vm,
-        .builder = &builder,
-        .max_depth = util_inspect_depth(vm, options),
-    };
-    if (vm->completion.kind == MAL_COMPLETION_THROW) {
-        return mal_value_new_undefined();
-    }
-    util_inspect_value(&state, value, 0, true);
-    return util_builder_finish(vm, &builder);
-}
-
-static MalValue util_inspect(
-    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
-    MalValue new_target, MalValue callee) {
-    (void) receiver;
-    (void) new_target;
-    (void) callee;
-    return util_inspect_result(vm,
-        argc > 0 ? args[0] : mal_value_new_undefined(),
-        argc > 1 ? args[1] : mal_value_new_undefined());
-}
-
-static bool util_format_number(
-    MalVm *vm, MalUtilBuilder *builder, MalValue value, char conversion) {
-    f64 number;
-    if (!mal_vm_to_number(vm, value, &number)) {
-        return false;
-    }
-    if (isnan(number)) {
-        return util_builder_ascii(builder, "NaN");
-    }
-    if (isinf(number)) {
-        return util_builder_ascii(builder, number < 0 ? "-Infinity" : "Infinity");
-    }
-    char text[64];
-    if (conversion == 'i') {
-        snprintf(text, sizeof(text), "%.0f", trunc(number));
-    } else {
-        snprintf(text, sizeof(text), "%.15g", number);
-    }
-    return util_builder_ascii(builder, text);
-}
-
-static bool util_format_argument(
-    MalVm *vm, MalUtilBuilder *builder, MalValue value, c16 conversion,
-    MalValue options) {
-    if (conversion == 's') {
-        MalString *string;
-        if (!mal_vm_to_string(vm, value, &string)) {
-            return false;
-        }
-        return util_builder_string(builder, string);
-    }
-    if (conversion == 'd' || conversion == 'f' || conversion == 'i') {
-        return util_format_number(vm, builder, value, (char) conversion);
-    }
-    if (conversion == 'o' || conversion == 'O' || conversion == 'j') {
-        MalValue inspected = util_inspect_result(vm, value, options);
-        if (vm->completion.kind == MAL_COMPLETION_THROW) {
-            return false;
-        }
-        return util_builder_string(builder, mal_value_to_string(inspected));
-    }
-    return false;
-}
-
-static MalValue util_format_values(
-    MalVm *vm, MalValue options, const MalValue *args, i32 argc) {
-    MalUtilBuilder builder = {0};
-    if (argc == 0) {
-        return util_builder_finish(vm, &builder);
-    }
-    if (!mal_value_is_string(args[0])) {
-        for (i32 i = 0; i < argc; i++) {
-            if (i > 0) {
-                util_builder_code_unit(&builder, ' ');
-            }
-            if (mal_value_is_string(args[i])) {
-                util_builder_string(&builder, mal_value_to_string(args[i]));
-                continue;
-            }
-            MalValue inspected = util_inspect_result(vm, args[i], options);
-            if (vm->completion.kind == MAL_COMPLETION_THROW) {
-                mal_text_buffer_dispose(&builder);
-                return mal_value_new_undefined();
-            }
-            util_builder_string(&builder, mal_value_to_string(inspected));
-        }
-        return util_builder_finish(vm, &builder);
-    }
-
-    MalString *format = mal_value_to_string(args[0]);
-    const c16 *units = mal_string_code_units(format);
-    usize length = mal_string_length(format);
-    i32 next = 1;
-    for (usize i = 0; i < length; i++) {
-        c16 unit = units[i];
-        if (unit != '%' || i + 1 >= length) {
-            util_builder_code_unit(&builder, unit);
-            continue;
-        }
-        c16 conversion = units[i + 1];
-        if (conversion == '%') {
-            util_builder_code_unit(&builder, '%');
-            i++;
-        } else if (next < argc
-            && (conversion == 's' || conversion == 'd' || conversion == 'f'
-                || conversion == 'i' || conversion == 'j' || conversion == 'o'
-                || conversion == 'O')) {
-            if (!util_format_argument(
-                    vm, &builder, args[next++], conversion, options)) {
-                mal_text_buffer_dispose(&builder);
-                return mal_value_new_undefined();
-            }
-            i++;
-        } else if (conversion == 'c') {
-            if (next < argc) {
-                next++;
-            }
-            i++;
-        } else {
-            util_builder_code_unit(&builder, unit);
-        }
-    }
-    for (; next < argc; next++) {
-        util_builder_code_unit(&builder, ' ');
-        if (mal_value_is_string(args[next])) {
-            util_builder_string(&builder, mal_value_to_string(args[next]));
-        } else {
-            MalValue inspected = util_inspect_result(vm, args[next], options);
-            if (vm->completion.kind == MAL_COMPLETION_THROW) {
-                mal_text_buffer_dispose(&builder);
-                return mal_value_new_undefined();
-            }
-            util_builder_string(&builder, mal_value_to_string(inspected));
-        }
-    }
-    return util_builder_finish(vm, &builder);
-}
-
-static MalValue util_format(
-    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
-    MalValue new_target, MalValue callee) {
-    (void) receiver;
-    (void) new_target;
-    (void) callee;
-    return util_format_values(vm, mal_value_new_undefined(), args, argc);
-}
-
-static MalValue util_format_with_options(
-    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
-    MalValue new_target, MalValue callee) {
-    (void) receiver;
-    (void) new_target;
-    (void) callee;
-    return util_format_values(vm,
-        argc > 0 ? args[0] : mal_value_new_undefined(),
-        argc > 1 ? args + 1 : nullptr, argc > 1 ? argc - 1 : 0);
 }
 
 static MalValue util_inherits(
@@ -597,23 +259,41 @@ static MalValue util_promisify(
     (void) receiver;
     (void) new_target;
     (void) callee;
-    if (argc < 1 || !mal_value_is_callable(args[0])) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            "The original argument must be a function");
+    MalValue original = argc > 0 ? args[0] : mal_value_new_undefined();
+    if (!mal_value_is_callable(original)) {
+        mal_node_throw_invalid_arg_type(vm, "original", "of type function", original);
         return mal_value_new_undefined();
     }
-    MalValue original = args[0];
+    MalValue roots[] = {original, mal_node_registered_symbol(vm, "nodejs.util.promisify.custom"),
+        mal_value_new_undefined()};
     MalRootSpan root;
-    mal_gc_root(&root, &original, 1);
-    MalValue wrapper = mal_value_from_native_function_object(
-        mal_native_function_object_new_with_slots(
-            &vm->heap,
-            mal_value_to_object(
-                vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
-            mal_intrinsic_ascii(vm, (const byte *) "promisified"),
-            util_promisified_call, &original, 1));
+    mal_gc_root(&root, roots, countof(roots));
+    MalKey custom_key = mal_key_from_value(roots[1]);
+    // An API such as child_process.exec names its own promise form under util.promisify.custom.
+    if (!mal_vm_get_property(vm, roots[0], custom_key, &roots[2])) {
+        mal_gc_unroot(&root);
+        return mal_value_new_undefined();
+    }
+    if (mal_value_is_truthy(roots[2])) {
+        if (!mal_value_is_callable(roots[2])) {
+            mal_node_throw_invalid_arg_type(vm, "util.promisify.custom", "of type function", roots[2]);
+            mal_gc_unroot(&root);
+            return mal_value_new_undefined();
+        }
+    } else {
+        roots[2] = mal_value_from_native_function_object(
+            mal_native_function_object_new_with_slots(
+                &vm->heap,
+                mal_value_to_object(
+                    vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+                mal_intrinsic_ascii(vm, (const byte *) "promisified"),
+                util_promisified_call, &roots[0], 1));
+    }
+    MalPropertyDesc self = mal_intrinsic_data_desc(roots[2], MAL_PROPERTY_CONFIGURABLE);
+    if (mal_value_is_object(roots[2])) mal_object_define_own(mal_value_to_object(roots[2]), custom_key, &self);
+    MalValue result = roots[2];
     mal_gc_unroot(&root);
-    return wrapper;
+    return result;
 }
 
 static MalValue util_types_is_promise(
@@ -2098,10 +1778,10 @@ typedef struct MalNodeUtilExport {
 static const MalNodeUtilExport util_exports[] = {
     {"deprecate", 3, util_deprecate},
     {"debuglog", 2, util_debuglog},
-    {"format", 1, util_format},
-    {"formatWithOptions", 2, util_format_with_options},
+    {"format", 1, mal_node_util_format},
+    {"formatWithOptions", 2, mal_node_util_format_with_options},
     {"inherits", 2, util_inherits},
-    {"inspect", 2, util_inspect},
+    {"inspect", 2, mal_node_util_inspect},
     {"isArray", 1, util_is_array},
     {"isBoolean", 1, util_is_boolean},
     {"isBuffer", 1, util_is_buffer},
@@ -2141,6 +1821,14 @@ void mal_host_install_node_util(
             mal_native_function_object_new_arity(&vm->heap, function_prototype,
                 mal_intrinsic_ascii(vm, (const byte *) export->name),
                 export->length, export->callback));
+    }
+    for (usize i = 0; i < countof(util_exports); i++) {
+        if (strcmp(util_exports[i].name, "inspect") == 0) {
+            mal_node_inspect_install_tables(vm, mal_value_to_object(values[i]));
+        } else if (strcmp(util_exports[i].name, "promisify") == 0) {
+            mal_intrinsic_define_data(vm, mal_value_to_object(values[i]), (const byte *) "custom",
+                mal_node_registered_symbol(vm, "nodejs.util.promisify.custom"), UTIL_VISIBLE);
+        }
     }
 	values[types_index] = mal_value_from_object(mal_intrinsic_new_object(vm));
 	values[namespace_index] = mal_value_from_native_function_object(

@@ -5,12 +5,15 @@
 /*
  * node:crypto host built-in (runtime layer, behind surface.node / MAL_NODE).
  *
- * Covers the authentication-grade surface: SHA-1/SHA-256/SHA-384/SHA-512/MD5 `createHash`,
- * SHA-256 `createHmac`, one-shot `hash`, `pbkdf2Sync`, `timingSafeEqual`,
- * `randomBytes`/`randomInt`/`randomUUID` (sync and callback where Node has
- * one), and Argon2d/i/id via `argon2Sync` and the off-event-loop `argon2`.
- * The digest cores are pure, self-contained C (FIPS 180-4) with no OpenSSL
- * dependency; Argon2 goes through the host worker pool onto a Rust primitive.
+ * Covers MD5/SHA-1/SHA-224/SHA-256/SHA-384/SHA-512 `createHash`, `createHmac`
+ * (string, buffer or secret KeyObject keys), one-shot `hash`, `pbkdf2`/`pbkdf2Sync`,
+ * `scrypt`/`scryptSync`, `hkdf`/`hkdfSync`, `timingSafeEqual`, the random APIs
+ * (`randomBytes`/`randomFill`/`randomInt`/`randomUUID`/`randomUUIDv7`/
+ * `getRandomValues`), `createSecretKey`, `createCipheriv`/`createDecipheriv` for
+ * AES-128/192/256-CBC/CTR/GCM and ChaCha20-Poly1305, a WebCrypto `subtle` with
+ * digest, raw HMAC sign/verify and AES-GCM encrypt/decrypt, and Argon2d/i/id via
+ * `argon2Sync` and the off-event-loop `argon2`. Digests are self-contained C
+ * (FIPS 180-4); ciphers and Argon2 are pure-Rust primitives behind flat ABIs.
  *
  * Deliberate divergences from Node 24.14.1, all pinned in
  * tests/local/node-crypto.mts:
@@ -20,18 +23,15 @@
  *     are then subject to a host resource policy (see MalArgon2Config). A
  *     request inside Node's range but past the ceilings is a fixed JavaScript
  *     Error; Node's answer to the same request is a SIGKILLed process.
- * Still narrower than Node: only SHA-1/SHA-2/MD5 digests, only sha256 HMAC and
- * pbkdf2, and `crypto.hash` accepts an ArrayBuffer input that Node rejects.
+ * Still narrower than Node: only the digests and ciphers above, Cipheriv is not a
+ * Transform stream (update/final only), and `crypto.hash` accepts an ArrayBuffer
+ * input that Node rejects.
  *
- * Asynchrony, stated plainly: only Argon2 leaves the event loop. `argon2` runs
- * on the host worker pool; `randomBytes(size, cb)` and `randomInt(..., cb)` draw
- * their entropy synchronously on the calling thread and then post the finished
- * value, so the callback lands as a macrotask with Node's ordering but the draw
- * itself is not off-loop. Node uses its threadpool for both. For the 16-32 byte
- * draws this surface targets the difference is unobservable; a multi-gigabyte
- * `randomBytes` would stall the loop here where Node's would not. Moving them
- * to a worker is a separate increment — it needs a second pool, and issue #16
- * only requires Argon2 off the loop.
+ * Asynchrony: Argon2, pbkdf2, scrypt and hkdf run on host worker pools.
+ * `randomBytes`, `randomFill` and `randomInt` draw entropy on the calling thread
+ * and post the finished value, so the callback lands as a macrotask with Node's
+ * ordering while the draw itself stays on the loop. `subtle` operations compute
+ * on the calling thread and settle their promise before returning.
  */
 
 typedef struct MalVm MalVm;
@@ -49,8 +49,8 @@ void mal_host_install_node_crypto(
 );
 
 /**
- * Macrotask source for the asynchronous crypto callbacks (`argon2`,
- * `randomBytes(cb)`, `randomInt(cb)`). Returns false when the head host task
+ * Macrotask source for the asynchronous crypto callbacks (`argon2`, the
+ * key derivations, `randomBytes(cb)`, `randomFill(cb)`, `randomInt(cb)`). Returns false when the head host task
  * belongs to another runtime module, so the cooperative drain protocol keeps
  * net/http from being starved.
  */

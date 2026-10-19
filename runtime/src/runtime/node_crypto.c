@@ -11,6 +11,11 @@
 #include "array_buffer_object.h"
 #include "async_context.h"
 #include "base64.h"
+#include "blocking_work.h"
+#include "promise_object.h"
+#include "array_object.h"
+#include "web_events_object.h"
+#include <time.h>
 #include "builtin_data_view.h"
 #include "builtin_math.h"
 #include "function_object.h"
@@ -38,6 +43,7 @@
 #if MAL_NODE
 
 #include "mal_argon2.h"
+#include "mal_crypto_cipher.h"
 
 #define MAL_ROTL(x, n) (((x) << (n)) | ((x) >> (32 - (n))))
 
@@ -399,7 +405,7 @@ static void crypto_throw_arg_type(
     char message[CRYPTO_MESSAGE_CAPACITY];
     snprintf(message, sizeof(message), "The \"%s\" argument must be %s. Received %s",
         name, expected, received);
-    crypto_throw(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, message);
+    mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, message, "ERR_INVALID_ARG_TYPE");
 }
 
 /* ERR_INVALID_ARG_TYPE for an option-bag property. */
@@ -410,7 +416,7 @@ static void crypto_throw_property_type(
     char message[CRYPTO_MESSAGE_CAPACITY];
     snprintf(message, sizeof(message), "The \"%s\" property must be %s. Received %s",
         name, expected, received);
-    crypto_throw(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, message);
+    mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, message, "ERR_INVALID_ARG_TYPE");
 }
 
 static void crypto_throw_out_of_range(
@@ -421,7 +427,7 @@ static void crypto_throw_out_of_range(
     snprintf(message, sizeof(message),
         "The value of \"%s\" is out of range. It must be %s. Received %s",
         name, range, received);
-    crypto_throw(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, message);
+    mal_node_throw_code(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, message, "ERR_OUT_OF_RANGE");
 }
 
 /* ---------------------------------------------------------------------------
@@ -633,23 +639,159 @@ typedef enum {
     MAL_NODE_CRYPTO_SHA384,
     MAL_NODE_CRYPTO_SHA512,
     MAL_NODE_CRYPTO_MD5,
-    MAL_NODE_CRYPTO_HMAC_SHA256,
+    MAL_NODE_CRYPTO_SHA224,
 } MalNodeCryptoStateKind;
+
+typedef union {
+    MalSha1 sha1;
+    MalSha256 sha256;
+    MalSha512 sha512;
+    MalMd5 md5;
+} MalNodeCryptoDigest;
 
 typedef struct {
     MalNodeCryptoStateKind kind;
     bool finalized;
-    union {
-        MalSha1 sha1;
-        MalSha256 sha256;
-        MalSha512 sha512;
-        MalMd5 md5;
-        struct {
-            MalSha256 inner;
-            u8 outer_pad[64];
-        } hmac;
-    } digest;
+    /* An HMAC keeps its opad-absorbed context in `outer`; a plain hash leaves it unused. */
+    bool hmac;
+    MalNodeCryptoDigest digest;
+    MalNodeCryptoDigest outer;
 } MalNodeCryptoState;
+
+static void crypto_digest_init(MalNodeCryptoStateKind kind, MalNodeCryptoDigest *digest) {
+    if (kind == MAL_NODE_CRYPTO_SHA1) {
+        mal_sha1_init(&digest->sha1);
+    } else if (kind == MAL_NODE_CRYPTO_SHA256 || kind == MAL_NODE_CRYPTO_SHA224) {
+        mal_sha256_init(&digest->sha256);
+        if (kind == MAL_NODE_CRYPTO_SHA224) {
+            static const u32 iv[8] = {0xc1059ed8, 0x367cd507, 0x3070dd17, 0xf70e5939,
+                0xffc00b31, 0x68581511, 0x64f98fa7, 0xbefa4fa4};
+            memcpy(digest->sha256.state, iv, sizeof(iv));
+        }
+    } else if (kind == MAL_NODE_CRYPTO_MD5) {
+        mal_md5_init(&digest->md5);
+    } else {
+        mal_sha512_init(&digest->sha512, kind == MAL_NODE_CRYPTO_SHA384);
+    }
+}
+
+static usize crypto_digest_size(MalNodeCryptoStateKind kind) {
+    switch (kind) {
+        case MAL_NODE_CRYPTO_SHA1: return 20;
+        case MAL_NODE_CRYPTO_MD5: return 16;
+        case MAL_NODE_CRYPTO_SHA224: return 28;
+        case MAL_NODE_CRYPTO_SHA384: return 48;
+        case MAL_NODE_CRYPTO_SHA512: return 64;
+        default: return 32;
+    }
+}
+
+static usize crypto_digest_block_size(MalNodeCryptoStateKind kind) {
+    return kind == MAL_NODE_CRYPTO_SHA384 || kind == MAL_NODE_CRYPTO_SHA512 ? 128 : 64;
+}
+
+static void crypto_digest_absorb(
+    MalNodeCryptoStateKind kind, MalNodeCryptoDigest *digest, const u8 *data, usize length) {
+    if (kind == MAL_NODE_CRYPTO_SHA1) mal_sha1_update(&digest->sha1, data, length);
+    else if (kind == MAL_NODE_CRYPTO_SHA256 || kind == MAL_NODE_CRYPTO_SHA224) {
+        mal_sha256_update(&digest->sha256, data, length);
+    } else if (kind == MAL_NODE_CRYPTO_MD5) mal_md5_update(&digest->md5, data, length);
+    else mal_sha512_update(&digest->sha512, data, length);
+}
+
+static void crypto_digest_emit(MalNodeCryptoStateKind kind, MalNodeCryptoDigest *digest, u8 *out) {
+    if (kind == MAL_NODE_CRYPTO_SHA1) {
+        mal_sha1_final(&digest->sha1, out);
+    } else if (kind == MAL_NODE_CRYPTO_SHA256) {
+        mal_sha256_final(&digest->sha256, out);
+    } else if (kind == MAL_NODE_CRYPTO_SHA224) {
+        u8 full[32];
+        mal_sha256_final(&digest->sha256, full);
+        memcpy(out, full, 28);
+        mal_secure_scrub((byte *) full, sizeof(full));
+    } else if (kind == MAL_NODE_CRYPTO_MD5) {
+        mal_md5_final(&digest->md5, out);
+    } else {
+        mal_sha512_final(&digest->sha512, out, crypto_digest_size(kind));
+    }
+}
+
+static void crypto_digest_start(MalNodeCryptoState *state, MalNodeCryptoStateKind kind) {
+    state->kind = kind;
+    state->finalized = false;
+    state->hmac = false;
+    crypto_digest_init(kind, &state->digest);
+}
+
+/* Writes crypto_digest_size(state->kind) bytes; an HMAC runs its outer pass here. */
+static void crypto_digest_finish(MalNodeCryptoState *state, u8 *out) {
+    if (!state->hmac) {
+        crypto_digest_emit(state->kind, &state->digest, out);
+        return;
+    }
+    u8 inner[64];
+    crypto_digest_emit(state->kind, &state->digest, inner);
+    crypto_digest_absorb(state->kind, &state->outer, inner, crypto_digest_size(state->kind));
+    crypto_digest_emit(state->kind, &state->outer, out);
+    mal_secure_scrub((byte *) inner, sizeof(inner));
+}
+
+static bool crypto_digest_kind(const MalString *name, MalNodeCryptoStateKind *kind) {
+    static const struct { const char *name; MalNodeCryptoStateKind kind; } digests[] = {
+        {"sha1", MAL_NODE_CRYPTO_SHA1}, {"sha224", MAL_NODE_CRYPTO_SHA224},
+        {"sha256", MAL_NODE_CRYPTO_SHA256}, {"sha384", MAL_NODE_CRYPTO_SHA384},
+        {"sha512", MAL_NODE_CRYPTO_SHA512}, {"md5", MAL_NODE_CRYPTO_MD5},
+        {"sha-1", MAL_NODE_CRYPTO_SHA1}, {"sha-224", MAL_NODE_CRYPTO_SHA224},
+        {"sha-256", MAL_NODE_CRYPTO_SHA256}, {"sha-384", MAL_NODE_CRYPTO_SHA384},
+        {"sha-512", MAL_NODE_CRYPTO_SHA512}, {"rsa-sha1", MAL_NODE_CRYPTO_SHA1},
+        {"rsa-sha256", MAL_NODE_CRYPTO_SHA256}, {"rsa-sha384", MAL_NODE_CRYPTO_SHA384},
+        {"rsa-sha512", MAL_NODE_CRYPTO_SHA512}, {"rsa-md5", MAL_NODE_CRYPTO_MD5},
+    };
+    for (usize i = 0; i < countof(digests); i++) {
+        if (mal_string_equals_ascii_ci(name, digests[i].name)) {
+            *kind = digests[i].kind;
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Absorbs both pads once, so each later MAC costs only the message and two finals. */
+static void crypto_hmac_init(MalNodeCryptoState *state, MalNodeCryptoStateKind kind, const u8 *key, usize length) {
+    usize block_size = crypto_digest_block_size(kind);
+    u8 block[128] = {0};
+    if (length > block_size) {
+        MalNodeCryptoDigest digest;
+        crypto_digest_init(kind, &digest);
+        crypto_digest_absorb(kind, &digest, key, length);
+        crypto_digest_emit(kind, &digest, block);
+        mal_secure_scrub((byte *) &digest, sizeof(digest));
+    } else if (length > 0) {
+        memcpy(block, key, length);
+    }
+    u8 pad[128];
+    crypto_digest_start(state, kind);
+    state->hmac = true;
+    crypto_digest_init(kind, &state->outer);
+    for (usize i = 0; i < block_size; i++) pad[i] = block[i] ^ 0x36;
+    crypto_digest_absorb(kind, &state->digest, pad, block_size);
+    for (usize i = 0; i < block_size; i++) pad[i] = block[i] ^ 0x5c;
+    crypto_digest_absorb(kind, &state->outer, pad, block_size);
+    mal_secure_scrub((byte *) block, sizeof(block));
+    mal_secure_scrub((byte *) pad, sizeof(pad));
+}
+
+typedef MalNodeCryptoState CryptoHmac;
+
+static void crypto_hmac(const CryptoHmac *hmac, const u8 *a, usize a_length, const u8 *b,
+    usize b_length, const u8 *c, usize c_length, u8 *out) {
+    MalNodeCryptoState context = *hmac;
+    if (a_length > 0) crypto_digest_absorb(context.kind, &context.digest, a, a_length);
+    if (b_length > 0) crypto_digest_absorb(context.kind, &context.digest, b, b_length);
+    if (c_length > 0) crypto_digest_absorb(context.kind, &context.digest, c, c_length);
+    crypto_digest_finish(&context, out);
+    mal_secure_scrub((byte *) &context, sizeof(context));
+}
 
 static MalKey mal_node_crypto_state_key(MalValue callee) {
     MalValue marker = mal_native_function_object_get_slot(
@@ -684,17 +826,7 @@ static bool mal_node_crypto_require_active(MalVm *vm, MalNodeCryptoState *state)
 static void mal_node_crypto_state_update(
     MalNodeCryptoState *state, const u8 *data, usize length
 ) {
-    if (state->kind == MAL_NODE_CRYPTO_SHA1) {
-        mal_sha1_update(&state->digest.sha1, data, length);
-    } else if (state->kind == MAL_NODE_CRYPTO_SHA256) {
-        mal_sha256_update(&state->digest.sha256, data, length);
-    } else if (state->kind == MAL_NODE_CRYPTO_SHA384 || state->kind == MAL_NODE_CRYPTO_SHA512) {
-        mal_sha512_update(&state->digest.sha512, data, length);
-    } else if (state->kind == MAL_NODE_CRYPTO_MD5) {
-        mal_md5_update(&state->digest.md5, data, length);
-    } else {
-        mal_sha256_update(&state->digest.hmac.inner, data, length);
-    }
+    crypto_digest_absorb(state->kind, &state->digest, data, length);
 }
 
 static MalValue mal_node_crypto_update(
@@ -746,37 +878,15 @@ static MalValue mal_node_crypto_digest(
     }
     state->finalized = true;
     u8 result[64];
-    usize length;
-    if (state->kind == MAL_NODE_CRYPTO_SHA1) {
-        mal_sha1_final(&state->digest.sha1, result);
-        length = 20;
-    } else if (state->kind == MAL_NODE_CRYPTO_SHA256) {
-        mal_sha256_final(&state->digest.sha256, result);
-        length = 32;
-    } else if (state->kind == MAL_NODE_CRYPTO_SHA384 || state->kind == MAL_NODE_CRYPTO_SHA512) {
-        length = state->kind == MAL_NODE_CRYPTO_SHA384 ? 48 : 64;
-        mal_sha512_final(&state->digest.sha512, result, length);
-    } else if (state->kind == MAL_NODE_CRYPTO_MD5) {
-        mal_md5_final(&state->digest.md5, result);
-        length = 16;
-    } else {
-        u8 inner[32];
-        mal_sha256_final(&state->digest.hmac.inner, inner);
-        MalSha256 outer;
-        mal_sha256_init(&outer);
-        mal_sha256_update(&outer, state->digest.hmac.outer_pad, 64);
-        mal_sha256_update(&outer, inner, sizeof(inner));
-        mal_sha256_final(&outer, result);
-        length = 32;
-        mal_secure_scrub((byte *) inner, sizeof(inner));
-        mal_secure_scrub((byte *) &outer, sizeof(outer));
-    }
+    usize length = crypto_digest_size(state->kind);
+    crypto_digest_finish(state, result);
     // `result` already holds the digest, so the absorbing state is spent. For
     // HMAC it is the outer pad — the key XOR 0x5c, and so the key — which
     // otherwise outlived the object in the freed backing store. Only the union
     // is cleared: `kind` and `finalized` must survive to keep refusing a second
     // digest() on this receiver.
     mal_secure_scrub((byte *) &state->digest, sizeof(state->digest));
+    mal_secure_scrub((byte *) &state->outer, sizeof(state->outer));
     MalValue encoding = argc > 0 ? args[0] : mal_value_new_undefined();
     // Node's ParseEncoding falls back to BUFFER here, so an unrecognized
     // encoding returns the raw digest instead of throwing. crypto.hash() below
@@ -848,60 +958,49 @@ static MalValue mal_node_crypto_create_hash(
             "crypto.createHash: algorithm must be a string");
         return mal_value_new_undefined();
     }
-    MalString *algorithm = mal_value_to_string(args[0]);
     MalNodeCryptoState state = {0};
-    if (mal_string_equals_ascii_ci(algorithm, "sha1")) {
-        state.kind = MAL_NODE_CRYPTO_SHA1;
-        mal_sha1_init(&state.digest.sha1);
-    } else if (mal_string_equals_ascii_ci(algorithm, "sha256")) {
-        state.kind = MAL_NODE_CRYPTO_SHA256;
-        mal_sha256_init(&state.digest.sha256);
-    } else if (mal_string_equals_ascii_ci(algorithm, "sha384") || mal_string_equals_ascii_ci(algorithm, "sha512")) {
-        bool sha384 = mal_string_equals_ascii_ci(algorithm, "sha384");
-        state.kind = sha384 ? MAL_NODE_CRYPTO_SHA384 : MAL_NODE_CRYPTO_SHA512;
-        mal_sha512_init(&state.digest.sha512, sha384);
-    } else if (mal_string_equals_ascii_ci(algorithm, "md5")) {
-        state.kind = MAL_NODE_CRYPTO_MD5;
-        mal_md5_init(&state.digest.md5);
-    } else {
+    MalNodeCryptoStateKind kind;
+    if (!crypto_digest_kind(mal_value_to_string(args[0]), &kind)) {
         crypto_throw(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
             "crypto.createHash: unsupported algorithm");
         return mal_value_new_undefined();
     }
+    crypto_digest_start(&state, kind);
     return mal_node_crypto_new_state(vm, callee, &state);
 }
 
-static void mal_node_crypto_hmac_init_bytes(
-    MalNodeCryptoState *state, const u8 *key, usize length) {
-    u8 key_block[64] = {0};
-    if (length > sizeof(key_block)) {
-        MalSha256 key_hash;
-        mal_sha256_init(&key_hash);
-        mal_sha256_update(&key_hash, key, length);
-        mal_sha256_final(&key_hash, key_block);
-        mal_secure_scrub((byte *) &key_hash, sizeof(key_hash));
-    } else if (length > 0) {
-        memcpy(key_block, key, length);
-    }
-    state->kind = MAL_NODE_CRYPTO_HMAC_SHA256;
-    state->finalized = false;
-    mal_sha256_init(&state->digest.hmac.inner);
-    u8 inner_pad[64];
-    for (usize i = 0; i < sizeof(key_block); i++) {
-        inner_pad[i] = key_block[i] ^ 0x36;
-        state->digest.hmac.outer_pad[i] = key_block[i] ^ 0x5c;
-    }
-    mal_sha256_update(&state->digest.hmac.inner, inner_pad, sizeof(inner_pad));
-    // The key block is the key (or its digest), and the inner pad is one XOR
-    // away from it. Both are absorbed by now; only the two pads inside `state`
-    // must survive, and those the caller scrubs when it finalizes.
-    mal_secure_scrub(key_block, sizeof(key_block));
-    mal_secure_scrub(inner_pad, sizeof(inner_pad));
+/* Secret KeyObjects keep their bytes in a sensitive ArrayBuffer behind a
+ * private symbol, so only this module can read them back. */
+static MAL_ISOLATE_LOCAL MalValue crypto_key_symbol;
+static MAL_ISOLATE_LOCAL MalValue crypto_key_object_constructor;
+static MAL_ISOLATE_LOCAL MalValue crypto_secret_key_prototype;
+static MAL_ISOLATE_LOCAL MalValue crypto_crypto_key_symbol;
+static MAL_ISOLATE_LOCAL MalValue crypto_crypto_key_prototype;
+static MAL_ISOLATE_LOCAL MalValue crypto_cipher_symbol;
+static MAL_ISOLATE_LOCAL MalValue crypto_cipheriv_prototype;
+static MAL_ISOLATE_LOCAL MalValue crypto_decipheriv_prototype;
+static MAL_ISOLATE_LOCAL bool crypto_keys_ready;
+
+static bool crypto_secret_key_bytes(MalValue value, const byte **data, usize *length) {
+    if (!crypto_keys_ready || !mal_value_is_object(value)) return false;
+    MalPropertyLookup lookup = mal_object_get_own(mal_value_to_object(value),
+        (MalKey) {.kind = MAL_KEY_SYMBOL, .value = crypto_key_symbol});
+    if (!lookup.present || !mal_value_is_array_buffer_object(lookup.desc.value)) return false;
+    MalArrayBufferObject *buffer = mal_value_to_array_buffer_object(lookup.desc.value);
+    *data = buffer->data;
+    *length = buffer->byte_length;
+    return true;
 }
 
 static bool mal_node_crypto_hmac_init(
-    MalVm *vm, MalNodeCryptoState *state, MalValue key
+    MalVm *vm, MalNodeCryptoState *state, MalNodeCryptoStateKind kind, MalValue key
 ) {
+    const byte *key_data;
+    usize key_length;
+    if (crypto_secret_key_bytes(key, &key_data, &key_length)) {
+        crypto_hmac_init(state, kind, (const u8 *) key_data, key_length);
+        return true;
+    }
     if (mal_value_is_string(key)) {
         MalString *string = mal_value_to_string(key);
         usize length;
@@ -910,7 +1009,7 @@ static bool mal_node_crypto_hmac_init(
             mal_vm_throw_allocation_error(vm);
             return false;
         }
-        mal_node_crypto_hmac_init_bytes(state, (const u8 *) bytes, length);
+        crypto_hmac_init(state, kind, (const u8 *) bytes, length);
         // This is the HMAC key, materialized by us from a JavaScript string.
         crypto_scrub_free(bytes, length);
         return true;
@@ -918,34 +1017,9 @@ static bool mal_node_crypto_hmac_init(
     MalBufferSourceSpan span;
     byte *owned;
     if (!crypto_byte_source_span(vm, key, "key", &span, &owned)) return false;
-    mal_node_crypto_hmac_init_bytes(state, (const u8 *) span.data, span.length);
+    crypto_hmac_init(state, kind, (const u8 *) span.data, span.length);
     crypto_scrub_free(owned, span.length);
     return true;
-}
-
-static void mal_node_crypto_hmac_final(MalNodeCryptoState *state, u8 result[32]) {
-    u8 inner[32];
-    mal_sha256_final(&state->digest.hmac.inner, inner);
-    MalSha256 outer;
-    mal_sha256_init(&outer);
-    mal_sha256_update(&outer, state->digest.hmac.outer_pad, 64);
-    mal_sha256_update(&outer, inner, sizeof(inner));
-    mal_sha256_final(&outer, result);
-    mal_secure_scrub((byte *) inner, sizeof(inner));
-    mal_secure_scrub((byte *) &outer, sizeof(outer));
-}
-
-/* One-shot HMAC over a caller-owned state. `result` is filled before the
- * keyed state is cleared, so the caller always gets its tag. */
-static void mal_node_crypto_hmac_bytes(
-    const u8 *key, usize key_length, const u8 *first, usize first_length,
-    const u8 *second, usize second_length, u8 result[32]) {
-    MalNodeCryptoState state;
-    mal_node_crypto_hmac_init_bytes(&state, key, key_length);
-    if (first_length > 0) mal_node_crypto_state_update(&state, first, first_length);
-    if (second_length > 0) mal_node_crypto_state_update(&state, second, second_length);
-    mal_node_crypto_hmac_final(&state, result);
-    mal_secure_scrub((byte *) &state, sizeof(state));
 }
 
 static MalValue mal_node_crypto_create_hmac(
@@ -959,9 +1033,13 @@ static MalValue mal_node_crypto_create_hmac(
             "crypto.createHmac: algorithm must be a string");
         return mal_value_new_undefined();
     }
-    if (!mal_node_crypto_str_is(mal_value_to_string(args[0]), "sha256", 6)) {
-        crypto_throw(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            "crypto.createHmac: only sha256 is supported");
+    MalNodeCryptoStateKind kind;
+    if (!crypto_digest_kind(mal_value_to_string(args[0]), &kind)) {
+        char name[64];
+        crypto_copy_string(mal_value_to_string(args[0]), name, sizeof(name));
+        char message[CRYPTO_MESSAGE_CAPACITY];
+        snprintf(message, sizeof(message), "Invalid digest: %s", name);
+        mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, message, "ERR_CRYPTO_INVALID_DIGEST");
         return mal_value_new_undefined();
     }
     if (argc < 2) {
@@ -970,7 +1048,7 @@ static MalValue mal_node_crypto_create_hmac(
         return mal_value_new_undefined();
     }
     MalNodeCryptoState state = {0};
-    if (!mal_node_crypto_hmac_init(vm, &state, args[1])) {
+    if (!mal_node_crypto_hmac_init(vm, &state, kind, args[1])) {
         return mal_value_new_undefined();
     }
     return mal_node_crypto_new_state(vm, callee, &state);
@@ -1104,6 +1182,184 @@ static bool crypto_random_int_bounds(
 }
 
 /* ---------------------------------------------------------------------------
+ * Key derivation (pbkdf2, scrypt, hkdf), randomFill, getRandomValues, UUIDv7.
+ * --------------------------------------------------------------------------- */
+
+static void crypto_pbkdf2(MalNodeCryptoStateKind kind, const u8 *password, usize password_length,
+    const u8 *salt, usize salt_length, u64 iterations, u8 *out, usize length) {
+    CryptoHmac hmac;
+    crypto_hmac_init(&hmac, kind, password, password_length);
+    usize digest_size = crypto_digest_size(kind);
+    for (usize block = 1, offset = 0; offset < length; block++, offset += digest_size) {
+        u8 index[4] = {(u8) (block >> 24), (u8) (block >> 16), (u8) (block >> 8), (u8) block};
+        u8 value[64];
+        u8 folded[64];
+        crypto_hmac(&hmac, salt, salt_length, index, sizeof(index), nullptr, 0, value);
+        memcpy(folded, value, digest_size);
+        for (u64 round = 1; round < iterations; round++) {
+            crypto_hmac(&hmac, value, digest_size, nullptr, 0, nullptr, 0, value);
+            for (usize i = 0; i < digest_size; i++) folded[i] ^= value[i];
+        }
+        memcpy(out + offset, folded, length - offset < digest_size ? length - offset : digest_size);
+        mal_secure_scrub((byte *) value, sizeof(value));
+        mal_secure_scrub((byte *) folded, sizeof(folded));
+    }
+    mal_secure_scrub((byte *) &hmac, sizeof(hmac));
+}
+
+static inline u32 crypto_load32_le(const u8 *p) {
+    return (u32) p[0] | ((u32) p[1] << 8) | ((u32) p[2] << 16) | ((u32) p[3] << 24);
+}
+
+static inline void crypto_store32_le(u8 *p, u32 v) {
+    p[0] = (u8) v; p[1] = (u8) (v >> 8); p[2] = (u8) (v >> 16); p[3] = (u8) (v >> 24);
+}
+
+static void crypto_salsa20_8(u32 b[16]) {
+    u32 x[16];
+    memcpy(x, b, sizeof(x));
+    for (int i = 0; i < 8; i += 2) {
+#define CRYPTO_R(a, n) (((a) << (n)) | ((a) >> (32 - (n))))
+        x[4] ^= CRYPTO_R(x[0] + x[12], 7);  x[8] ^= CRYPTO_R(x[4] + x[0], 9);
+        x[12] ^= CRYPTO_R(x[8] + x[4], 13); x[0] ^= CRYPTO_R(x[12] + x[8], 18);
+        x[9] ^= CRYPTO_R(x[5] + x[1], 7);   x[13] ^= CRYPTO_R(x[9] + x[5], 9);
+        x[1] ^= CRYPTO_R(x[13] + x[9], 13); x[5] ^= CRYPTO_R(x[1] + x[13], 18);
+        x[14] ^= CRYPTO_R(x[10] + x[6], 7); x[2] ^= CRYPTO_R(x[14] + x[10], 9);
+        x[6] ^= CRYPTO_R(x[2] + x[14], 13); x[10] ^= CRYPTO_R(x[6] + x[2], 18);
+        x[3] ^= CRYPTO_R(x[15] + x[11], 7); x[7] ^= CRYPTO_R(x[3] + x[15], 9);
+        x[11] ^= CRYPTO_R(x[7] + x[3], 13); x[15] ^= CRYPTO_R(x[11] + x[7], 18);
+        x[1] ^= CRYPTO_R(x[0] + x[3], 7);   x[2] ^= CRYPTO_R(x[1] + x[0], 9);
+        x[3] ^= CRYPTO_R(x[2] + x[1], 13);  x[0] ^= CRYPTO_R(x[3] + x[2], 18);
+        x[6] ^= CRYPTO_R(x[5] + x[4], 7);   x[7] ^= CRYPTO_R(x[6] + x[5], 9);
+        x[4] ^= CRYPTO_R(x[7] + x[6], 13);  x[5] ^= CRYPTO_R(x[4] + x[7], 18);
+        x[11] ^= CRYPTO_R(x[10] + x[9], 7); x[8] ^= CRYPTO_R(x[11] + x[10], 9);
+        x[9] ^= CRYPTO_R(x[8] + x[11], 13); x[10] ^= CRYPTO_R(x[9] + x[8], 18);
+        x[12] ^= CRYPTO_R(x[15] + x[14], 7); x[13] ^= CRYPTO_R(x[12] + x[15], 9);
+        x[14] ^= CRYPTO_R(x[13] + x[12], 13); x[15] ^= CRYPTO_R(x[14] + x[13], 18);
+#undef CRYPTO_R
+    }
+    for (int i = 0; i < 16; i++) b[i] += x[i];
+}
+
+/* scrypt BlockMix over 2r 64-byte words held as u32 little-endian lanes. */
+static void crypto_scrypt_block_mix(const u32 *in, u32 *out, u32 *x, u64 r) {
+    memcpy(x, &in[(2 * r - 1) * 16], 64);
+    for (u64 i = 0; i < 2 * r; i++) {
+        for (int j = 0; j < 16; j++) x[j] ^= in[i * 16 + (u64) j];
+        crypto_salsa20_8(x);
+        memcpy(&out[((i & 1) * r + i / 2) * 16], x, 64);
+    }
+}
+
+/* RFC 7914; `v` holds N blocks of 128r bytes and `xy` three more. */
+static void crypto_scrypt_ro_mix(u8 *block, u64 r, u64 n, u32 *v, u32 *xy) {
+    u64 words = 32 * r;
+    u32 *x = xy;
+    u32 *y = xy + words;
+    u32 *t = xy + 2 * words;
+    for (u64 k = 0; k < words; k++) x[k] = crypto_load32_le(block + 4 * k);
+    for (u64 i = 0; i < n; i++) {
+        memcpy(&v[i * words], x, words * 4);
+        crypto_scrypt_block_mix(x, y, t, r);
+        memcpy(x, y, words * 4);
+    }
+    for (u64 i = 0; i < n; i++) {
+        u64 j = x[(2 * r - 1) * 16] & (n - 1);
+        for (u64 k = 0; k < words; k++) x[k] ^= v[j * words + k];
+        crypto_scrypt_block_mix(x, y, t, r);
+        memcpy(x, y, words * 4);
+    }
+    for (u64 k = 0; k < words; k++) crypto_store32_le(block + 4 * k, x[k]);
+}
+
+static bool crypto_scrypt(const u8 *password, usize password_length, const u8 *salt,
+    usize salt_length, u64 n, u64 r, u64 p, u8 *out, usize length) {
+    usize block_bytes = (usize) (128 * r);
+    u8 *b = malloc(block_bytes * p);
+    u32 *v = malloc(block_bytes * n);
+    u32 *xy = malloc(block_bytes * 2 + 64);
+    bool ok = b != nullptr && v != nullptr && xy != nullptr;
+    if (ok) {
+        crypto_pbkdf2(MAL_NODE_CRYPTO_SHA256, password, password_length, salt, salt_length, 1, b, block_bytes * p);
+        for (u64 i = 0; i < p; i++) crypto_scrypt_ro_mix(b + i * block_bytes, r, n, v, xy);
+        crypto_pbkdf2(MAL_NODE_CRYPTO_SHA256, password, password_length, b, block_bytes * p, 1, out, length);
+    }
+    if (b != nullptr) crypto_scrub_free((byte *) b, block_bytes * p);
+    if (v != nullptr) crypto_scrub_free((byte *) v, block_bytes * n);
+    if (xy != nullptr) crypto_scrub_free((byte *) xy, block_bytes * 2 + 64);
+    return ok;
+}
+
+/* RFC 5869 extract-then-expand. */
+static void crypto_hkdf(MalNodeCryptoStateKind kind, const u8 *key, usize key_length,
+    const u8 *salt, usize salt_length, const u8 *info, usize info_length, u8 *out, usize length) {
+    CryptoHmac hmac;
+    u8 zero_salt[64] = {0};
+    usize digest_size = crypto_digest_size(kind);
+    crypto_hmac_init(&hmac, kind, salt_length > 0 ? salt : zero_salt, salt_length > 0 ? salt_length : digest_size);
+    u8 prk[64];
+    crypto_hmac(&hmac, key, key_length, nullptr, 0, nullptr, 0, prk);
+    crypto_hmac_init(&hmac, kind, prk, digest_size);
+    u8 t[64];
+    usize t_length = 0;
+    for (usize offset = 0, counter = 1; offset < length; counter++, offset += digest_size) {
+        u8 c = (u8) counter;
+        crypto_hmac(&hmac, t, t_length, info, info_length, &c, 1, t);
+        t_length = digest_size;
+        memcpy(out + offset, t, length - offset < digest_size ? length - offset : digest_size);
+    }
+    mal_secure_scrub(prk, sizeof(prk));
+    mal_secure_scrub(t, sizeof(t));
+    mal_secure_scrub((byte *) &hmac, sizeof(hmac));
+}
+
+typedef enum { CRYPTO_KDF_PBKDF2, CRYPTO_KDF_SCRYPT, CRYPTO_KDF_HKDF } CryptoKdfKind;
+
+typedef struct {
+    CryptoKdfKind kind;
+    MalNodeCryptoStateKind digest;
+    u8 *password;
+    usize password_length;
+    u8 *salt;
+    usize salt_length;
+    u8 *info;
+    usize info_length;
+    u64 iterations;
+    u64 n;
+    u64 r;
+    u64 p;
+    u8 *output;
+    usize length;
+    bool ok;
+} CryptoKdfJob;
+
+static void crypto_kdf_job_free(void *data) {
+    CryptoKdfJob *job = data;
+    if (job == nullptr) return;
+    crypto_scrub_free((byte *) job->password, job->password_length);
+    crypto_scrub_free((byte *) job->salt, job->salt_length);
+    crypto_scrub_free((byte *) job->info, job->info_length);
+    crypto_scrub_free((byte *) job->output, job->length);
+    free(job);
+}
+
+static void crypto_kdf_run(void *data) {
+    CryptoKdfJob *job = data;
+    if (job->kind == CRYPTO_KDF_PBKDF2) {
+        crypto_pbkdf2(job->digest, job->password, job->password_length, job->salt, job->salt_length,
+            job->iterations, job->output, job->length);
+        job->ok = true;
+    } else if (job->kind == CRYPTO_KDF_SCRYPT) {
+        job->ok = crypto_scrypt(job->password, job->password_length, job->salt, job->salt_length,
+            job->n, job->r, job->p, job->output, job->length);
+    } else {
+        crypto_hkdf(job->digest, job->password, job->password_length, job->salt, job->salt_length,
+            job->info, job->info_length, job->output, job->length);
+        job->ok = true;
+    }
+}
+
+/* ---------------------------------------------------------------------------
  * Asynchronous completion.
  *
  * One state list, one GC root source, and one macrotask drain serve all three
@@ -1116,6 +1372,9 @@ typedef enum {
     CRYPTO_ASYNC_ARGON2,
     CRYPTO_ASYNC_RANDOM_BYTES,
     CRYPTO_ASYNC_RANDOM_INT,
+    CRYPTO_ASYNC_RANDOM_FILL,
+    /* pbkdf2/scrypt/hkdf on the blocking-work pool; the payload stays host-owned. */
+    CRYPTO_ASYNC_KDF,
     /* An operation that failed before it could be handed to a worker, carrying
      * only the reason. Shares the immediate payload and drain path below. */
     CRYPTO_ASYNC_FAILURE,
@@ -1141,6 +1400,8 @@ typedef struct MalNodeCryptoAsync {
     CryptoAsyncKind kind;
     MalHostHandle operation;
     MalValue callback;
+    /* The randomFill target handed back to the callback. */
+    MalValue value;
     MalAsyncContext *async_context;
 #if MAL_REALMS
     MalRealm *realm;
@@ -1165,10 +1426,21 @@ static void crypto_immediate_destroy(void *data) {
 
 static void crypto_scan_roots(MalVm *vm, void *data) {
     (void) data;
+    if (crypto_keys_ready) {
+        mal_gc_mark_value(crypto_key_symbol);
+        mal_gc_mark_value(crypto_key_object_constructor);
+        mal_gc_mark_value(crypto_secret_key_prototype);
+        mal_gc_mark_value(crypto_crypto_key_symbol);
+        mal_gc_mark_value(crypto_crypto_key_prototype);
+        mal_gc_mark_value(crypto_cipher_symbol);
+        mal_gc_mark_value(crypto_cipheriv_prototype);
+        mal_gc_mark_value(crypto_decipheriv_prototype);
+    }
     for (MalNodeCryptoAsync *state = crypto_async_states; state != nullptr;
         state = state->next) {
         if (state->vm != vm) continue;
         mal_gc_mark_value(state->callback);
+        mal_gc_mark_value(state->value);
         mal_gc_mark_value(
             mal_async_internal_value((MalHeapHeader *) state->async_context));
     }
@@ -1180,6 +1452,7 @@ static MalNodeCryptoAsync *crypto_async_new(MalVm *vm, CryptoAsyncKind kind, Mal
     state->vm = vm;
     state->kind = kind;
     state->callback = callback;
+    state->value = mal_value_new_undefined();
     state->async_context = mal_async_context_capture(vm);
 #if MAL_REALMS
     state->realm = vm->current_realm;
@@ -1304,6 +1577,24 @@ static bool crypto_async_arguments(
         args[1] = mal_node_buffer_from_owned_secret_bytes(vm, owned, length);
         return vm->completion.kind != MAL_COMPLETION_THROW;
     }
+    if (state->kind == CRYPTO_ASYNC_KDF) {
+        CryptoKdfJob *job = mal_blocking_work_result_data(data);
+        if (task->result != MAL_HOST_TERMINAL_OK || job == nullptr || !job->ok) {
+            mal_node_throw_code(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, "Crypto operation failed",
+                "ERR_CRYPTO_OPERATION_FAILED");
+            return false;
+        }
+        byte *output = (byte *) job->output;
+        job->output = nullptr;
+        if (job->kind == CRYPTO_KDF_HKDF) {
+            args[1] = mal_value_from_array_buffer_object(mal_array_buffer_object_adopt(&vm->heap,
+                mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]),
+                output, (u32) job->length, true));
+        } else {
+            args[1] = mal_node_buffer_from_owned_secret_bytes(vm, output, job->length);
+        }
+        return vm->completion.kind != MAL_COMPLETION_THROW;
+    }
     CryptoImmediateResult *result = data;
     if (result == nullptr || result->failed) {
         const char *message = "Crypto operation failed";
@@ -1315,6 +1606,10 @@ static bool crypto_async_arguments(
     }
     if (state->kind == CRYPTO_ASYNC_RANDOM_INT) {
         args[1] = mal_ops_number_value(result->number);
+        return true;
+    }
+    if (state->kind == CRYPTO_ASYNC_RANDOM_FILL) {
+        args[1] = state->value;
         return true;
     }
     // from_owned_bytes consumes the allocation on both paths, so clear the
@@ -1343,7 +1638,8 @@ bool mal_node_crypto_drain(MalVm *vm) {
     if (state == nullptr) return false;
     MalHostTask task;
     if (!mal_host_next_task(&host->tasks, &task)) return false;
-    void *data = mal_host_task_take_data(&host->tasks, &task);
+    // A blocking-work wrapper is borrowed until release; taking it strands its reservation.
+    void *data = state->kind == CRYPTO_ASYNC_KDF ? task.data : mal_host_task_take_data(&host->tasks, &task);
 
 #if MAL_REALMS
     MalRealm *saved_realm = vm->current_realm;
@@ -1364,7 +1660,7 @@ bool mal_node_crypto_drain(MalVm *vm) {
     // take_data moved ownership out of the task, so the payload is released here.
     if (kind == CRYPTO_ASYNC_ARGON2) {
         mal_argon2_result_release(data);
-    } else {
+    } else if (kind != CRYPTO_ASYNC_KDF) {
         crypto_immediate_destroy(data);
     }
     MalValue callback = state->callback;
@@ -1607,16 +1903,16 @@ static bool mal_node_crypto_input_bytes(
     return mal_node_crypto_byte_span(vm, value, span, owned);
 }
 
+static bool crypto_digest_arg(MalVm *vm, MalValue value, MalNodeCryptoStateKind *kind);
+
 static MalValue mal_node_crypto_pbkdf2_sync(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target,
     MalValue callee) {
     (void) receiver;
     (void) new_target;
     (void) callee;
-    if (argc < 5 || !mal_value_is_string(args[4])
-        || !mal_node_crypto_str_is(mal_value_to_string(args[4]), "sha256", 6)) {
-        crypto_throw(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-            "crypto.pbkdf2Sync: only sha256 is supported");
+    MalNodeCryptoStateKind digest;
+    if (!crypto_digest_arg(vm, argc > 4 ? args[4] : mal_value_new_undefined(), &digest)) {
         return mal_value_new_undefined();
     }
     usize iterations;
@@ -1649,32 +1945,8 @@ static MalValue mal_node_crypto_pbkdf2_sync(
         mal_vm_throw_allocation_error(vm);
         return mal_value_new_undefined();
     }
-    usize blocks = (key_length + 31) / 32;
-    for (usize block = 1; block <= blocks; block++) {
-        u8 index[4] = {
-            (u8) (block >> 24), (u8) (block >> 16),
-            (u8) (block >> 8), (u8) block,
-        };
-        u8 value[32];
-        u8 accumulated[32];
-        mal_node_crypto_hmac_bytes((const u8 *) password.data, password.length,
-            (const u8 *) salt.data, salt.length, index, sizeof(index), value);
-        memcpy(accumulated, value, sizeof(accumulated));
-        for (usize round = 1; round < iterations; round++) {
-            mal_node_crypto_hmac_bytes((const u8 *) password.data, password.length,
-                value, sizeof(value), nullptr, 0, value);
-            for (usize i = 0; i < sizeof(accumulated); i++) accumulated[i] ^= value[i];
-        }
-        usize offset = (block - 1) * 32;
-        usize selected = key_length - offset;
-        if (selected > sizeof(accumulated)) selected = sizeof(accumulated);
-        // The derived block reaches `output` first; only then are the working
-        // registers cleared. `value` is U_c and `accumulated` the folded block,
-        // and both are key material for the block just written.
-        memcpy(output + offset, accumulated, selected);
-        mal_secure_scrub((byte *) value, sizeof(value));
-        mal_secure_scrub((byte *) accumulated, sizeof(accumulated));
-    }
+    crypto_pbkdf2(digest, (const u8 *) password.data, password.length, (const u8 *) salt.data,
+        salt.length, iterations, (u8 *) output, key_length);
     // The password is materialized by us when it arrives as a string; a borrowed
     // ArrayBufferView is the caller's and is left alone (`owned_*` is null).
     crypto_scrub_free(owned_password, password.length);
@@ -1737,25 +2009,13 @@ static MalValue mal_node_crypto_hash(
     }
     MalString *name = mal_value_to_string(algorithm);
     MalNodeCryptoState state = {0};
-    usize digest_length;
-    if (mal_string_equals_ascii_ci(name, "sha1")) {
-        state.kind = MAL_NODE_CRYPTO_SHA1; digest_length = 20;
-        mal_sha1_init(&state.digest.sha1);
-    } else if (mal_string_equals_ascii_ci(name, "sha256")) {
-        state.kind = MAL_NODE_CRYPTO_SHA256; digest_length = 32;
-        mal_sha256_init(&state.digest.sha256);
-    } else if (mal_string_equals_ascii_ci(name, "sha384") || mal_string_equals_ascii_ci(name, "sha512")) {
-        bool sha384 = mal_string_equals_ascii_ci(name, "sha384");
-        state.kind = sha384 ? MAL_NODE_CRYPTO_SHA384 : MAL_NODE_CRYPTO_SHA512;
-        digest_length = sha384 ? 48 : 64;
-        mal_sha512_init(&state.digest.sha512, sha384);
-    } else if (mal_string_equals_ascii_ci(name, "md5")) {
-        state.kind = MAL_NODE_CRYPTO_MD5; digest_length = 16;
-        mal_md5_init(&state.digest.md5);
-    } else {
+    MalNodeCryptoStateKind kind;
+    if (!crypto_digest_kind(name, &kind)) {
         crypto_throw(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "crypto.hash: unsupported algorithm");
         return mal_value_new_undefined();
     }
+    crypto_digest_start(&state, kind);
+    usize digest_length = crypto_digest_size(kind);
 
     // Validate the output encoding before extracting any raw byte pointer below.
     // A non-string, non-undefined third argument is Node's `options` slot.
@@ -1795,10 +2055,7 @@ static MalValue mal_node_crypto_hash(
     }
 
     u8 digest[64];
-    if (state.kind == MAL_NODE_CRYPTO_SHA1) mal_sha1_final(&state.digest.sha1, digest);
-    else if (state.kind == MAL_NODE_CRYPTO_SHA256) mal_sha256_final(&state.digest.sha256, digest);
-    else if (state.kind == MAL_NODE_CRYPTO_MD5) mal_md5_final(&state.digest.md5, digest);
-    else mal_sha512_final(&state.digest.sha512, digest, digest_length);
+    crypto_digest_finish(&state, digest);
     mal_secure_scrub((byte *) &state, sizeof(state));
 
     if (mal_value_is_undefined(encoding)) {
@@ -2181,6 +2438,1798 @@ static MalNativeFunctionObject *mal_node_crypto_function_with_slots(
         mal_intrinsic_ascii(vm, (const byte *) name), length, callback, slots, slot_count);
 }
 
+/* Copies one string or buffer-source input; the worker must not touch GC memory. */
+static bool crypto_kdf_copy(MalVm *vm, MalValue value, const char *name, u8 **result, usize *length) {
+    byte **out = (byte **) result;
+    MalBufferSourceSpan span;
+    byte *owned = nullptr;
+    const byte *key_data;
+    if (crypto_secret_key_bytes(value, &key_data, length)) {
+        *out = malloc(*length > 0 ? *length : 1);
+        if (*out == nullptr) { mal_vm_throw_allocation_error(vm); return false; }
+        if (*length > 0) memcpy(*out, key_data, *length);
+        return true;
+    }
+    if (mal_value_is_string(value)) {
+        *out = mal_string_to_utf8(mal_value_to_string(value), length);
+        if (*out == nullptr) { mal_vm_throw_allocation_error(vm); return false; }
+        return true;
+    }
+    if (!crypto_is_byte_source(value)) {
+        crypto_throw_arg_type(vm, name, "of type string or an instance of ArrayBuffer, Buffer, TypedArray, or DataView", value);
+        return false;
+    }
+    if (!crypto_byte_source_span(vm, value, name, &span, &owned)) return false;
+    if (owned != nullptr) {
+        *out = owned;
+    } else {
+        *out = malloc(span.length > 0 ? span.length : 1);
+        if (*out == nullptr) { mal_vm_throw_allocation_error(vm); return false; }
+        if (span.length > 0) memcpy(*out, span.data, span.length);
+    }
+    *length = span.length;
+    return true;
+}
+
+static bool crypto_int32_arg(MalVm *vm, MalValue value, const char *name, f64 minimum, u64 *out) {
+    if (!mal_ops_is_number(value)) {
+        crypto_throw_arg_type(vm, name, "of type number", value);
+        return false;
+    }
+    f64 number = mal_ops_number_as_f64(value);
+    if (trunc(number) != number) {
+        char message[CRYPTO_MESSAGE_CAPACITY];
+        char received[64];
+        crypto_number_text(vm, value, received, sizeof(received));
+        snprintf(message, sizeof(message),
+            "The value of \"%s\" is out of range. It must be an integer. Received %s", name, received);
+        mal_node_throw_code(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, message, "ERR_OUT_OF_RANGE");
+        return false;
+    }
+    if (number < minimum || number > 2147483647.0) {
+        char range[64];
+        snprintf(range, sizeof(range), ">= %.0f && <= 2147483647", minimum);
+        crypto_throw_out_of_range(vm, name, range, value);
+        return false;
+    }
+    *out = (u64) number;
+    return true;
+}
+
+/* Finishes a sync derivation or queues the job; the job is consumed either way. */
+static MalValue crypto_kdf_finish(MalVm *vm, CryptoKdfJob *job, MalValue callback) {
+    if (job->length > 0 && job->output == nullptr) {
+        job->output = malloc(job->length);
+        if (job->output == nullptr) {
+            crypto_kdf_job_free(job);
+            mal_vm_throw_allocation_error(vm);
+            return mal_value_new_undefined();
+        }
+    }
+    if (mal_value_is_undefined(callback)) {
+        crypto_kdf_run(job);
+        if (!job->ok) {
+            crypto_kdf_job_free(job);
+            mal_node_throw_code(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, "Crypto operation failed",
+                "ERR_CRYPTO_OPERATION_FAILED");
+            return mal_value_new_undefined();
+        }
+        byte *output = (byte *) job->output;
+        usize length = job->length;
+        bool array_buffer = job->kind == CRYPTO_KDF_HKDF;
+        job->output = nullptr;
+        crypto_kdf_job_free(job);
+        if (array_buffer) {
+            return mal_value_from_array_buffer_object(mal_array_buffer_object_adopt(&vm->heap,
+                mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]),
+                output, (u32) length, true));
+        }
+        return mal_node_buffer_from_owned_secret_bytes(vm, output, length);
+    }
+    if (!crypto_require_host(vm)) { crypto_kdf_job_free(job); return mal_value_new_undefined(); }
+    MalNodeCryptoAsync *state = crypto_async_new(vm, CRYPTO_ASYNC_KDF, callback);
+    MalBlockingWorkReservation reservation = {0};
+    MalHostHandle operation = 0;
+    if (state == nullptr
+        || !mal_blocking_work_reserve(mal_host(vm), sizeof(*job) + job->length, &reservation)
+        || !mal_blocking_work_start(mal_host(vm), crypto_kdf_run, job, crypto_kdf_job_free,
+            &reservation, &operation)) {
+        mal_blocking_work_reservation_release(&reservation);
+        crypto_kdf_job_free(job);
+        free(state);
+        mal_node_throw_code(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, "crypto work could not be scheduled", "EAGAIN");
+        return mal_value_new_undefined();
+    }
+    crypto_async_link(state, operation);
+    return mal_value_new_undefined();
+}
+
+static MalValue crypto_kdf_callback_arg(MalVm *vm, const MalValue *args, i32 argc, i32 index, bool *ok) {
+    MalValue callback = argc > index ? args[index] : mal_value_new_undefined();
+    *ok = mal_value_is_callable(callback);
+    if (!*ok) crypto_throw_arg_type(vm, "callback", "of type function", callback);
+    return callback;
+}
+
+static bool crypto_digest_arg(MalVm *vm, MalValue value, MalNodeCryptoStateKind *kind) {
+    if (!mal_value_is_string(value)) {
+        crypto_throw_arg_type(vm, "digest", "of type string", value);
+        return false;
+    }
+    if (crypto_digest_kind(mal_value_to_string(value), kind)) return true;
+    char name[64];
+    crypto_copy_string(mal_value_to_string(value), name, sizeof(name));
+    char message[CRYPTO_MESSAGE_CAPACITY];
+    snprintf(message, sizeof(message), "Invalid digest: %s", name);
+    mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, message, "ERR_CRYPTO_INVALID_DIGEST");
+    return false;
+}
+
+static MalValue mal_node_crypto_pbkdf2(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver; (void) new_target; (void) callee;
+    bool ok;
+    MalValue callback = crypto_kdf_callback_arg(vm, args, argc, 5, &ok);
+    if (!ok) return mal_value_new_undefined();
+    CryptoKdfJob *job = calloc(1, sizeof(*job));
+    if (job == nullptr) { mal_vm_throw_allocation_error(vm); return mal_value_new_undefined(); }
+    job->kind = CRYPTO_KDF_PBKDF2;
+    u64 length = 0;
+    MalValue undefined = mal_value_new_undefined();
+    if (!crypto_kdf_copy(vm, argc > 0 ? args[0] : undefined, "password", &job->password, &job->password_length)
+        || !crypto_kdf_copy(vm, argc > 1 ? args[1] : undefined, "salt", &job->salt, &job->salt_length)
+        || !crypto_int32_arg(vm, argc > 2 ? args[2] : undefined, "iterations", 1, &job->iterations)
+        || !crypto_int32_arg(vm, argc > 3 ? args[3] : undefined, "keylen", 0, &length)
+        || !crypto_digest_arg(vm, argc > 4 ? args[4] : undefined, &job->digest)) {
+        crypto_kdf_job_free(job);
+        return mal_value_new_undefined();
+    }
+    job->length = (usize) length;
+    return crypto_kdf_finish(vm, job, callback);
+}
+
+static MalValue crypto_scrypt_entry(MalVm *vm, const MalValue *args, i32 argc, bool async) {
+    MalValue undefined = mal_value_new_undefined();
+    MalValue callback = undefined;
+    MalValue options = argc > 3 ? args[3] : undefined;
+    if (async) {
+        i32 index = argc > 3 && mal_value_is_callable(args[3]) ? 3 : 4;
+        if (index == 3) options = undefined;
+        bool ok;
+        callback = crypto_kdf_callback_arg(vm, args, argc, index, &ok);
+        if (!ok) return undefined;
+    }
+    CryptoKdfJob *job = calloc(1, sizeof(*job));
+    if (job == nullptr) { mal_vm_throw_allocation_error(vm); return undefined; }
+    job->kind = CRYPTO_KDF_SCRYPT;
+    job->n = 16384;
+    job->r = 8;
+    job->p = 1;
+    u64 maxmem = 32ull << 20;
+    u64 length = 0;
+    if (!crypto_kdf_copy(vm, argc > 0 ? args[0] : undefined, "password", &job->password, &job->password_length)
+        || !crypto_kdf_copy(vm, argc > 1 ? args[1] : undefined, "salt", &job->salt, &job->salt_length)
+        || !crypto_int32_arg(vm, argc > 2 ? args[2] : undefined, "keylen", 0, &length)) {
+        crypto_kdf_job_free(job);
+        return undefined;
+    }
+    if (mal_value_is_object(options)) {
+        static const struct { const char *name; const char *alias; int slot; } names[] = {
+            {"N", "cost", 0}, {"r", "blockSize", 1}, {"p", "parallelization", 2}, {"maxmem", nullptr, 3}};
+        u64 *slots[] = {&job->n, &job->r, &job->p, &maxmem};
+        for (usize i = 0; i < countof(names); i++) {
+            for (int pass = 0; pass < 2; pass++) {
+                const char *name = pass == 0 ? names[i].name : names[i].alias;
+                if (name == nullptr) continue;
+                MalValue value;
+                if (!mal_vm_get_property(vm, options, mal_key_from_value(mal_value_from_string(
+                        mal_intrinsic_ascii(vm, (const byte *) name))), &value)) {
+                    crypto_kdf_job_free(job);
+                    return undefined;
+                }
+                if (mal_value_is_undefined(value)) continue;
+                if (!mal_ops_is_number(value) || mal_ops_number_as_f64(value) < 0
+                    || trunc(mal_ops_number_as_f64(value)) != mal_ops_number_as_f64(value)) {
+                    crypto_kdf_job_free(job);
+                    mal_node_throw_code(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+                        "Invalid scrypt params: invalid parameter", "ERR_CRYPTO_INVALID_SCRYPT_PARAMS");
+                    return undefined;
+                }
+                *slots[names[i].slot] = (u64) mal_ops_number_as_f64(value);
+            }
+        }
+    }
+    bool valid = job->n > 1 && (job->n & (job->n - 1)) == 0 && job->r > 0 && job->p > 0
+        && job->r * job->p < (1u << 30) && job->n < (1ull << 32) && job->r < (1u << 24);
+    if (!valid) {
+        crypto_kdf_job_free(job);
+        mal_node_throw_code(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            "Invalid scrypt params",
+            "ERR_CRYPTO_INVALID_SCRYPT_PARAMS");
+        return undefined;
+    }
+    if (128 * job->n * job->r + 128 * job->r * job->p > maxmem) {
+        crypto_kdf_job_free(job);
+        mal_node_throw_code(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
+            "Invalid scrypt params: error:030000AC:digital envelope routines::memory limit exceeded",
+            "ERR_CRYPTO_INVALID_SCRYPT_PARAMS");
+        return undefined;
+    }
+    job->length = (usize) length;
+    return crypto_kdf_finish(vm, job, callback);
+}
+
+static MalValue mal_node_crypto_scrypt_sync(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver; (void) new_target; (void) callee;
+    return crypto_scrypt_entry(vm, args, argc, false);
+}
+
+static MalValue mal_node_crypto_scrypt(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver; (void) new_target; (void) callee;
+    return crypto_scrypt_entry(vm, args, argc, true);
+}
+
+static MalValue crypto_hkdf_entry(MalVm *vm, const MalValue *args, i32 argc, bool async) {
+    MalValue undefined = mal_value_new_undefined();
+    MalValue callback = undefined;
+    if (async) {
+        bool ok;
+        callback = crypto_kdf_callback_arg(vm, args, argc, 5, &ok);
+        if (!ok) return undefined;
+    }
+    CryptoKdfJob *job = calloc(1, sizeof(*job));
+    if (job == nullptr) { mal_vm_throw_allocation_error(vm); return undefined; }
+    job->kind = CRYPTO_KDF_HKDF;
+    u64 length = 0;
+    if (!crypto_digest_arg(vm, argc > 0 ? args[0] : undefined, &job->digest)
+        || !crypto_kdf_copy(vm, argc > 1 ? args[1] : undefined, "ikm", &job->password, &job->password_length)
+        || !crypto_kdf_copy(vm, argc > 2 ? args[2] : undefined, "salt", &job->salt, &job->salt_length)
+        || !crypto_kdf_copy(vm, argc > 3 ? args[3] : undefined, "info", &job->info, &job->info_length)
+        || !crypto_int32_arg(vm, argc > 4 ? args[4] : undefined, "length", 0, &length)) {
+        crypto_kdf_job_free(job);
+        return undefined;
+    }
+    if (job->info_length > 1024) {
+        crypto_kdf_job_free(job);
+        char message[CRYPTO_MESSAGE_CAPACITY];
+        snprintf(message, sizeof(message),
+            "The value of \"info\" is out of range. It must be <= 1024. Received %zu", job->info_length);
+        mal_node_throw_code(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, message, "ERR_OUT_OF_RANGE");
+        return undefined;
+    }
+    if (length > 255 * crypto_digest_size(job->digest)) {
+        crypto_kdf_job_free(job);
+        mal_node_throw_code(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid key length",
+            "ERR_CRYPTO_INVALID_KEYLEN");
+        return undefined;
+    }
+    job->length = (usize) length;
+    return crypto_kdf_finish(vm, job, callback);
+}
+
+static MalValue mal_node_crypto_hkdf_sync(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver; (void) new_target; (void) callee;
+    return crypto_hkdf_entry(vm, args, argc, false);
+}
+
+static MalValue mal_node_crypto_hkdf(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver; (void) new_target; (void) callee;
+    return crypto_hkdf_entry(vm, args, argc, true);
+}
+
+/* The writable byte window of an ArrayBuffer or view, in elements of the view. */
+static bool crypto_fill_target(MalVm *vm, MalValue buffer, byte **data, usize *length, usize *element) {
+    *element = 1;
+    if (mal_value_is_array_buffer_object(buffer)) {
+        MalArrayBufferObject *array_buffer = mal_value_to_array_buffer_object(buffer);
+        *data = array_buffer->data;
+        *length = array_buffer->byte_length;
+        return true;
+    }
+    if (mal_value_is_typed_array_object(buffer) || mal_value_is_data_view_object(buffer)) {
+        MalBufferSourceSpan span;
+        if (mal_buffer_source_span(buffer, &span) != MAL_BUFFER_SOURCE_SPAN_OK) {
+            crypto_throw(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot fill a detached buffer");
+            return false;
+        }
+        *data = (byte *) span.data;
+        *length = span.length;
+        if (mal_value_is_typed_array_object(buffer)) {
+            *element = mal_typed_array_element_size(mal_value_to_typed_array_object(buffer)->kind);
+        }
+        return true;
+    }
+    crypto_throw_arg_type(vm, "buf", "an instance of ArrayBuffer or ArrayBufferView", buffer);
+    return false;
+}
+
+/* Node's randomFill offset/size checks, in elements of the target view. */
+static bool crypto_fill_window(MalVm *vm, MalValue offset_value, MalValue size_value, usize length,
+    usize element, usize *start, usize *count) {
+    usize elements = length / element;
+    f64 offset = 0;
+    if (!mal_value_is_undefined(offset_value)) {
+        if (!crypto_require_number(vm, offset_value, "offset", &offset)) return false;
+        if (!(offset >= 0 && offset <= (f64) elements) || trunc(offset) != offset) {
+            char range[64];
+            snprintf(range, sizeof(range), ">= 0 && <= %zu", elements);
+            crypto_throw_out_of_range(vm, "offset", range, offset_value);
+            return false;
+        }
+    }
+    f64 count_value = (f64) elements - offset;
+    if (!mal_value_is_undefined(size_value)) {
+        if (!crypto_require_number(vm, size_value, "size", &count_value)) return false;
+        if (!(count_value >= 0 && count_value <= 2147483647.0) || trunc(count_value) != count_value) {
+            crypto_throw_out_of_range(vm, "size", ">= 0 && <= 2147483647", size_value);
+            return false;
+        }
+        if (count_value + offset > (f64) elements) {
+            char range[64];
+            snprintf(range, sizeof(range), "<= %zu", elements);
+            crypto_throw_out_of_range(vm, "size + offset", range, mal_ops_number_value(count_value + offset));
+            return false;
+        }
+    }
+    *start = (usize) offset * element;
+    *count = (usize) count_value * element;
+    return true;
+}
+
+static MalValue mal_node_crypto_random_fill_sync(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver; (void) new_target; (void) callee;
+    MalValue undefined = mal_value_new_undefined();
+    MalValue buffer = argc > 0 ? args[0] : undefined;
+    byte *data;
+    usize length, element, start, count;
+    if (!crypto_fill_target(vm, buffer, &data, &length, &element)
+        || !crypto_fill_window(vm, argc > 1 ? args[1] : undefined, argc > 2 ? args[2] : undefined,
+            length, element, &start, &count)) {
+        return undefined;
+    }
+    if (count > 0 && mal_host_entropy(data + start, count) != 0) {
+        crypto_throw(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, CRYPTO_ENTROPY_UNAVAILABLE);
+        return undefined;
+    }
+    return buffer;
+}
+
+/* Fills in place at once and posts the callback, matching randomBytes' delivery. */
+static MalValue mal_node_crypto_random_fill(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver; (void) new_target; (void) callee;
+    MalValue undefined = mal_value_new_undefined();
+    MalValue buffer = argc > 0 ? args[0] : undefined;
+    MalValue callback = argc > 1 ? args[argc - 1] : undefined;
+    byte *data;
+    usize length, element, start, count;
+    if (!crypto_fill_target(vm, buffer, &data, &length, &element)) return undefined;
+    if (!mal_value_is_callable(callback)) {
+        crypto_throw_arg_type(vm, "callback", "of type function", callback);
+        return undefined;
+    }
+    MalValue offset = argc > 2 ? args[1] : undefined;
+    MalValue requested = argc > 3 ? args[2] : undefined;
+    if (!crypto_fill_window(vm, offset, requested, length, element, &start, &count)) return undefined;
+    if (!crypto_require_host(vm)) return undefined;
+    bool drawn = count == 0 || mal_host_entropy(data + start, count) == 0;
+    CryptoImmediateResult *result = calloc(1, sizeof(CryptoImmediateResult));
+    MalNodeCryptoAsync *state = crypto_async_new(vm, CRYPTO_ASYNC_RANDOM_FILL, callback);
+    if (result == nullptr || state == nullptr) {
+        free(result);
+        free(state);
+        mal_vm_throw_allocation_error(vm);
+        return undefined;
+    }
+    state->value = buffer;
+    result->failed = !drawn;
+    if (!crypto_complete_immediately(vm, state, result)) {
+        crypto_immediate_destroy(result);
+        free(state);
+        crypto_throw(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, "Crypto operation failed");
+    }
+    return undefined;
+}
+
+static MalValue mal_node_crypto_get_random_values(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver; (void) new_target; (void) callee;
+    MalValue array = argc > 0 ? args[0] : mal_value_new_undefined();
+    bool integer = false;
+    if (mal_value_is_typed_array_object(array)) {
+        MalTypedArrayKind kind = mal_value_to_typed_array_object(array)->kind;
+        integer = kind != MAL_TA_FLOAT32 && kind != MAL_TA_FLOAT64;
+    }
+    if (!integer) {
+        mal_dom_exception_throw(vm, (const byte *) "The data argument must be an integer-type TypedArray",
+            (const byte *) "TypeMismatchError");
+        return mal_value_new_undefined();
+    }
+    MalBufferSourceSpan span;
+    if (mal_buffer_source_span(array, &span) != MAL_BUFFER_SOURCE_SPAN_OK) {
+        crypto_throw(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Cannot fill a detached buffer");
+        return mal_value_new_undefined();
+    }
+    if (span.length > 65536) {
+        mal_dom_exception_throw(vm, (const byte *) "The requested length exceeds 65,536 bytes",
+            (const byte *) "QuotaExceededError");
+        return mal_value_new_undefined();
+    }
+    if (span.length > 0 && mal_host_entropy((byte *) span.data, span.length) != 0) {
+        crypto_throw(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, CRYPTO_ENTROPY_UNAVAILABLE);
+        return mal_value_new_undefined();
+    }
+    return array;
+}
+
+/* RFC 9562 version 7: 48-bit Unix milliseconds, then random bits. */
+static MalValue mal_node_crypto_random_uuid_v7(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver; (void) args; (void) argc; (void) new_target; (void) callee;
+    u8 bytes[16];
+    if (mal_host_entropy(bytes + 6, 10) != 0) {
+        crypto_throw(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, CRYPTO_ENTROPY_UNAVAILABLE);
+        return mal_value_new_undefined();
+    }
+    struct timespec now;
+    clock_gettime(CLOCK_REALTIME, &now);
+    u64 ms = (u64) now.tv_sec * 1000u + (u64) now.tv_nsec / 1000000u;
+    for (int i = 0; i < 6; i++) bytes[i] = (u8) (ms >> (40 - 8 * i));
+    bytes[6] = (u8) (0x70 | (bytes[6] & 0x0f));
+    bytes[8] = (u8) (0x80 | (bytes[8] & 0x3f));
+    char uuid[36];
+    usize out = 0;
+    for (usize i = 0; i < countof(bytes); i++) {
+        if (i == 4 || i == 6 || i == 8 || i == 10) uuid[out++] = '-';
+        mal_hex_encode_byte_lower((byte) bytes[i], uuid + out);
+        out += 2;
+    }
+    return mal_value_from_string(mal_string_new_ascii(&vm->heap, (const byte *) uuid, out));
+}
+
+static MalValue crypto_name_list(MalVm *vm, const char *const *names, usize count) {
+    MalValue *values = calloc(count > 0 ? count : 1, sizeof(MalValue));
+    if (values == nullptr) { mal_vm_throw_allocation_error(vm); return mal_value_new_undefined(); }
+    MalRootSpan root;
+    mal_gc_root(&root, values, (i32) count);
+    for (usize i = 0; i < count; i++) {
+        values[i] = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) names[i]));
+    }
+    MalValue array = mal_value_from_array_object(mal_array_object_new_from_values(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]), values, (u32) count));
+    mal_gc_unroot(&root);
+    free(values);
+    return array;
+}
+
+static MalValue mal_node_crypto_get_hashes(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver; (void) args; (void) argc; (void) new_target; (void) callee;
+    static const char *const names[] = {"md5", "sha1", "sha224", "sha256", "sha384", "sha512"};
+    return crypto_name_list(vm, names, countof(names));
+}
+
+
+static MalValue mal_node_crypto_get_curves(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver; (void) args; (void) argc; (void) new_target; (void) callee;
+    return crypto_name_list(vm, nullptr, 0);
+}
+
+/* OpenSSL-derived values Node 26 publishes; the TLS layer here is rustls, so they are informational. */
+static const struct { const char *name; f64 value; } CRYPTO_NUMERIC_CONSTANTS[] = {
+    {"OPENSSL_VERSION_NUMBER", 810549376},
+    {"SSL_OP_ALL", 2147485776},
+    {"SSL_OP_ALLOW_NO_DHE_KEX", 1024},
+    {"SSL_OP_ALLOW_UNSAFE_LEGACY_RENEGOTIATION", 262144},
+    {"SSL_OP_CIPHER_SERVER_PREFERENCE", 4194304},
+    {"SSL_OP_CISCO_ANYCONNECT", 32768},
+    {"SSL_OP_COOKIE_EXCHANGE", 8192},
+    {"SSL_OP_CRYPTOPRO_TLSEXT_BUG", 2147483648},
+    {"SSL_OP_DONT_INSERT_EMPTY_FRAGMENTS", 2048},
+    {"SSL_OP_LEGACY_SERVER_CONNECT", 4},
+    {"SSL_OP_NO_COMPRESSION", 131072},
+    {"SSL_OP_NO_ENCRYPT_THEN_MAC", 524288},
+    {"SSL_OP_NO_QUERY_MTU", 4096},
+    {"SSL_OP_NO_RENEGOTIATION", 1073741824},
+    {"SSL_OP_NO_SESSION_RESUMPTION_ON_RENEGOTIATION", 65536},
+    {"SSL_OP_NO_SSLv2", 0},
+    {"SSL_OP_NO_SSLv3", 33554432},
+    {"SSL_OP_NO_TICKET", 16384},
+    {"SSL_OP_NO_TLSv1", 67108864},
+    {"SSL_OP_NO_TLSv1_1", 268435456},
+    {"SSL_OP_NO_TLSv1_2", 134217728},
+    {"SSL_OP_NO_TLSv1_3", 536870912},
+    {"SSL_OP_PRIORITIZE_CHACHA", 2097152},
+    {"SSL_OP_TLS_ROLLBACK_BUG", 8388608},
+    {"ENGINE_METHOD_RSA", 1},
+    {"ENGINE_METHOD_DSA", 2},
+    {"ENGINE_METHOD_DH", 4},
+    {"ENGINE_METHOD_RAND", 8},
+    {"ENGINE_METHOD_EC", 2048},
+    {"ENGINE_METHOD_CIPHERS", 64},
+    {"ENGINE_METHOD_DIGESTS", 128},
+    {"ENGINE_METHOD_PKEY_METHS", 512},
+    {"ENGINE_METHOD_PKEY_ASN1_METHS", 1024},
+    {"ENGINE_METHOD_ALL", 65535},
+    {"ENGINE_METHOD_NONE", 0},
+    {"DH_CHECK_P_NOT_SAFE_PRIME", 2},
+    {"DH_CHECK_P_NOT_PRIME", 1},
+    {"DH_UNABLE_TO_CHECK_GENERATOR", 4},
+    {"DH_NOT_SUITABLE_GENERATOR", 8},
+    {"RSA_PKCS1_PADDING", 1},
+    {"RSA_SSLV23_PADDING", 2},
+    {"RSA_NO_PADDING", 3},
+    {"RSA_PKCS1_OAEP_PADDING", 4},
+    {"RSA_X931_PADDING", 5},
+    {"RSA_PKCS1_PSS_PADDING", 6},
+    {"RSA_PSS_SALTLEN_DIGEST", -1},
+    {"RSA_PSS_SALTLEN_MAX_SIGN", -2},
+    {"RSA_PSS_SALTLEN_AUTO", -2},
+    {"TLS1_VERSION", 769},
+    {"TLS1_1_VERSION", 770},
+    {"TLS1_2_VERSION", 771},
+    {"TLS1_3_VERSION", 772},
+    {"POINT_CONVERSION_COMPRESSED", 2},
+    {"POINT_CONVERSION_UNCOMPRESSED", 4},
+    {"POINT_CONVERSION_HYBRID", 6},
+};
+static const char CRYPTO_DEFAULT_CIPHER_LIST[] = "TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:TLS_AES_128_GCM_SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES256-GCM-SHA384:DHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-SHA256:DHE-RSA-AES128-SHA256:ECDHE-RSA-AES256-SHA384:DHE-RSA-AES256-SHA384:ECDHE-RSA-AES256-SHA256:DHE-RSA-AES256-SHA256:HIGH:!aNULL:!eNULL:!EXPORT:!DES:!RC4:!MD5:!PSK:!SRP:!CAMELLIA";
+/* Insertion order matches Node so Object.keys(constants) agrees. */
+static const char *const CRYPTO_CONSTANT_ORDER[] = {"OPENSSL_VERSION_NUMBER", "SSL_OP_ALL", "SSL_OP_ALLOW_NO_DHE_KEX", "SSL_OP_ALLOW_UNSAFE_LEGACY_RENEGOTIATION", "SSL_OP_CIPHER_SERVER_PREFERENCE", "SSL_OP_CISCO_ANYCONNECT", "SSL_OP_COOKIE_EXCHANGE", "SSL_OP_CRYPTOPRO_TLSEXT_BUG", "SSL_OP_DONT_INSERT_EMPTY_FRAGMENTS", "SSL_OP_LEGACY_SERVER_CONNECT", "SSL_OP_NO_COMPRESSION", "SSL_OP_NO_ENCRYPT_THEN_MAC", "SSL_OP_NO_QUERY_MTU", "SSL_OP_NO_RENEGOTIATION", "SSL_OP_NO_SESSION_RESUMPTION_ON_RENEGOTIATION", "SSL_OP_NO_SSLv2", "SSL_OP_NO_SSLv3", "SSL_OP_NO_TICKET", "SSL_OP_NO_TLSv1", "SSL_OP_NO_TLSv1_1", "SSL_OP_NO_TLSv1_2", "SSL_OP_NO_TLSv1_3", "SSL_OP_PRIORITIZE_CHACHA", "SSL_OP_TLS_ROLLBACK_BUG", "ENGINE_METHOD_RSA", "ENGINE_METHOD_DSA", "ENGINE_METHOD_DH", "ENGINE_METHOD_RAND", "ENGINE_METHOD_EC", "ENGINE_METHOD_CIPHERS", "ENGINE_METHOD_DIGESTS", "ENGINE_METHOD_PKEY_METHS", "ENGINE_METHOD_PKEY_ASN1_METHS", "ENGINE_METHOD_ALL", "ENGINE_METHOD_NONE", "DH_CHECK_P_NOT_SAFE_PRIME", "DH_CHECK_P_NOT_PRIME", "DH_UNABLE_TO_CHECK_GENERATOR", "DH_NOT_SUITABLE_GENERATOR", "RSA_PKCS1_PADDING", "RSA_SSLV23_PADDING", "RSA_NO_PADDING", "RSA_PKCS1_OAEP_PADDING", "RSA_X931_PADDING", "RSA_PKCS1_PSS_PADDING", "RSA_PSS_SALTLEN_DIGEST", "RSA_PSS_SALTLEN_MAX_SIGN", "RSA_PSS_SALTLEN_AUTO", "defaultCoreCipherList", "TLS1_VERSION", "TLS1_1_VERSION", "TLS1_2_VERSION", "TLS1_3_VERSION", "POINT_CONVERSION_COMPRESSED", "POINT_CONVERSION_UNCOMPRESSED", "POINT_CONVERSION_HYBRID", "defaultCipherList"};
+
+static MalValue crypto_constants_object(MalVm *vm) {
+    MalValue roots[] = {mal_value_from_object(mal_intrinsic_new_object(vm)), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalPropertyFlags flags = MAL_PROPERTY_ENUMERABLE;
+    for (usize i = 0; i < countof(CRYPTO_CONSTANT_ORDER); i++) {
+        const char *name = CRYPTO_CONSTANT_ORDER[i];
+        roots[1] = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) CRYPTO_DEFAULT_CIPHER_LIST));
+        for (usize j = 0; j < countof(CRYPTO_NUMERIC_CONSTANTS); j++) {
+            if (strcmp(CRYPTO_NUMERIC_CONSTANTS[j].name, name) == 0) {
+                roots[1] = mal_ops_number_value(CRYPTO_NUMERIC_CONSTANTS[j].value);
+                break;
+            }
+        }
+        mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]), (const byte *) name, roots[1], flags);
+    }
+    mal_gc_unroot(&root);
+    return roots[0];
+}
+
+
+static MalValue crypto_new_secret_key(MalVm *vm, byte *bytes, usize length) {
+    MalValue roots[] = {mal_value_from_object(mal_object_new(&vm->heap,
+        mal_value_to_object(crypto_secret_key_prototype))), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    roots[1] = mal_value_from_array_buffer_object(mal_array_buffer_object_adopt(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]), bytes, (u32) length, true));
+    mal_object_set(mal_value_to_object(roots[0]),
+        (MalKey) {.kind = MAL_KEY_SYMBOL, .value = crypto_key_symbol}, roots[1]);
+    mal_gc_unroot(&root);
+    return roots[0];
+}
+
+static MalValue mal_node_crypto_create_secret_key(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver; (void) new_target; (void) callee;
+    MalValue key = argc > 0 ? args[0] : mal_value_new_undefined();
+    byte *bytes = nullptr;
+    usize length = 0;
+    if (mal_value_is_string(key)) {
+        bytes = mal_node_buffer_decode_string(vm, key, argc > 1 ? args[1] : mal_value_new_undefined(), &length);
+        if (bytes == nullptr) { mal_vm_throw_allocation_error(vm); return mal_value_new_undefined(); }
+    } else if (crypto_is_byte_source(key)) {
+        MalBufferSourceSpan span;
+        byte *owned = nullptr;
+        if (!crypto_byte_source_span(vm, key, "key", &span, &owned)) return mal_value_new_undefined();
+        length = span.length;
+        bytes = owned;
+        if (bytes == nullptr) {
+            bytes = malloc(length > 0 ? length : 1);
+            if (bytes == nullptr) { mal_vm_throw_allocation_error(vm); return mal_value_new_undefined(); }
+            if (length > 0) memcpy(bytes, span.data, length);
+        }
+    } else {
+        crypto_throw_arg_type(vm, "key",
+            "of type string or an instance of ArrayBuffer, Buffer, TypedArray, or DataView", key);
+        return mal_value_new_undefined();
+    }
+    return crypto_new_secret_key(vm, bytes, length);
+}
+
+static bool crypto_receiver_key(MalVm *vm, MalValue receiver, const byte **data, usize *length) {
+    if (crypto_secret_key_bytes(receiver, data, length)) return true;
+    crypto_throw(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Illegal invocation");
+    return false;
+}
+
+static MalValue mal_node_crypto_key_type(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) args; (void) argc; (void) new_target; (void) callee;
+    const byte *data;
+    usize length;
+    if (!crypto_receiver_key(vm, receiver, &data, &length)) return mal_value_new_undefined();
+    return mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "secret"));
+}
+
+static MalValue mal_node_crypto_key_size(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) args; (void) argc; (void) new_target; (void) callee;
+    const byte *data;
+    usize length;
+    if (!crypto_receiver_key(vm, receiver, &data, &length)) return mal_value_new_undefined();
+    return mal_ops_number_value((f64) length);
+}
+
+static MalValue mal_node_crypto_key_export(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) new_target; (void) callee;
+    const byte *data;
+    usize length;
+    if (!crypto_receiver_key(vm, receiver, &data, &length)) return mal_value_new_undefined();
+    MalValue options = argc > 0 ? args[0] : mal_value_new_undefined();
+    MalValue format = mal_value_new_undefined();
+    if (mal_value_is_object(options) && !mal_vm_get_property(vm, options, mal_key_from_value(
+            mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "format"))), &format)) {
+        return mal_value_new_undefined();
+    }
+    if (mal_value_is_string(format) && mal_string_equals_ascii(mal_value_to_string(format), "jwk")) {
+        MalValue roots[] = {mal_value_from_object(mal_intrinsic_new_object(vm)), mal_value_new_undefined()};
+        MalRootSpan root;
+        mal_gc_root(&root, roots, countof(roots));
+        mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]), (const byte *) "kty",
+            mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "oct")),
+            MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
+        roots[1] = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "base64url"));
+        if (!crypto_secret_key_bytes(receiver, &data, &length)) { mal_gc_unroot(&root); return mal_value_new_undefined(); }
+        roots[1] = mal_node_buffer_encode_bytes(vm, data, length, roots[1], false);
+        if (vm->completion.kind != MAL_COMPLETION_THROW) {
+            mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]), (const byte *) "k", roots[1],
+                MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
+        }
+        mal_gc_unroot(&root);
+        return roots[0];
+    }
+    if (!mal_value_is_undefined(format) && !(mal_value_is_string(format)
+            && mal_string_equals_ascii(mal_value_to_string(format), "buffer"))) {
+        crypto_throw_property_type(vm, "options.format", "one of: 'buffer', 'jwk'", format);
+        return mal_value_new_undefined();
+    }
+    byte *copy = malloc(length > 0 ? length : 1);
+    if (copy == nullptr) { mal_vm_throw_allocation_error(vm); return mal_value_new_undefined(); }
+    if (length > 0) memcpy(copy, data, length);
+    return mal_node_buffer_from_owned_secret_bytes(vm, copy, length);
+}
+
+static MalValue mal_node_crypto_key_equals(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) new_target; (void) callee;
+    const byte *data;
+    usize length;
+    if (!crypto_receiver_key(vm, receiver, &data, &length)) return mal_value_new_undefined();
+    const byte *other;
+    usize other_length;
+    if (argc < 1 || !crypto_secret_key_bytes(args[0], &other, &other_length)) {
+        crypto_throw_arg_type(vm, "otherKeyObject", "an instance of KeyObject",
+            argc > 0 ? args[0] : mal_value_new_undefined());
+        return mal_value_new_undefined();
+    }
+    u8 difference = (u8) (length != other_length);
+    for (usize i = 0; i < length && i < other_length; i++) difference |= (u8) (data[i] ^ other[i]);
+    return mal_value_new_boolean(difference == 0);
+}
+
+static MalValue mal_node_crypto_key_object_constructor(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver; (void) new_target; (void) callee;
+    MalValue type = argc > 0 ? args[0] : mal_value_new_undefined();
+    char received[CRYPTO_MESSAGE_CAPACITY / 2];
+    crypto_received(vm, type, received, sizeof(received));
+    char message[CRYPTO_MESSAGE_CAPACITY];
+    snprintf(message, sizeof(message), "The argument 'type' is invalid. Received %s", received);
+    // Only createSecretKey mints keys: Node's constructor needs an internal handle.
+    mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, message, "ERR_INVALID_ARG_VALUE");
+    return mal_value_new_undefined();
+}
+
+static void crypto_define_getter(MalVm *vm, MalObject *object, const char *name, MalNativeFunctionCallback getter) {
+    char getter_name[64];
+    snprintf(getter_name, sizeof(getter_name), "get %s", name);
+    mal_intrinsic_define_accessor_n(vm, object, mal_intrinsic_string_key(vm, (const byte *) name),
+        (const byte *) getter_name, 0, getter, nullptr, 0, nullptr, MAL_PROPERTY_CONFIGURABLE);
+}
+
+/* KeyObject and its secret subclass; prototypes stay rooted through crypto_scan_roots. */
+static void crypto_install_key_objects(MalVm *vm, MalObject *module) {
+    MalValue roots[] = {mal_value_from_symbol(mal_symbol_new_private(&vm->heap)), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalPropertyFlags hidden = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE;
+    roots[1] = mal_value_from_object(mal_intrinsic_new_object(vm));
+    MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+        mal_intrinsic_ascii(vm, (const byte *) "KeyObject"), 2, mal_node_crypto_key_object_constructor);
+    mal_native_function_object_set_constructor(constructor);
+    roots[2] = mal_value_from_native_function_object(constructor);
+    mal_intrinsic_define_data(vm, (MalObject *) constructor, (const byte *) "prototype", roots[1], MAL_PROPERTY_NONE);
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[1]), (const byte *) "constructor", roots[2], hidden);
+    MalObject *key_prototype = mal_value_to_object(roots[1]);
+    crypto_define_getter(vm, key_prototype, "type", mal_node_crypto_key_type);
+    mal_intrinsic_define_method_n(vm, key_prototype, (const byte *) "equals", 1, mal_node_crypto_key_equals);
+    MalValue tag_key = vm->intrinsics[MAL_INTRINSIC_SYMBOL_TO_STRING_TAG];
+    if (mal_value_is_symbol(tag_key)) {
+        MalPropertyDesc tag = {
+            .value = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "KeyObject")),
+            .flags = MAL_PROPERTY_CONFIGURABLE};
+        mal_object_define_own(key_prototype, mal_key_from_value(tag_key), &tag);
+    }
+    roots[3] = mal_value_from_object(mal_object_new(&vm->heap, key_prototype));
+    MalNativeFunctionObject *secret = mal_native_function_object_new_arity(&vm->heap,
+        mal_value_to_object(roots[2]), mal_intrinsic_ascii(vm, (const byte *) "SecretKeyObject"), 1,
+        mal_node_crypto_key_object_constructor);
+    mal_native_function_object_set_constructor(secret);
+    roots[4] = mal_value_from_native_function_object(secret);
+    mal_intrinsic_define_data(vm, (MalObject *) secret, (const byte *) "prototype", roots[3], MAL_PROPERTY_NONE);
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[3]), (const byte *) "constructor", roots[4], hidden);
+    MalObject *secret_prototype = mal_value_to_object(roots[3]);
+    crypto_define_getter(vm, secret_prototype, "symmetricKeySize", mal_node_crypto_key_size);
+    mal_intrinsic_define_method_n(vm, secret_prototype, (const byte *) "export", 1, mal_node_crypto_key_export);
+    crypto_key_symbol = roots[0];
+    crypto_key_object_constructor = roots[2];
+    crypto_secret_key_prototype = roots[3];
+    crypto_crypto_key_symbol = mal_value_new_undefined();
+    crypto_crypto_key_prototype = mal_value_new_undefined();
+    crypto_cipher_symbol = mal_value_new_undefined();
+    crypto_cipheriv_prototype = mal_value_new_undefined();
+    crypto_decipheriv_prototype = mal_value_new_undefined();
+    crypto_keys_ready = true;
+    mal_intrinsic_define_data(vm, module, (const byte *) "KeyObject", roots[2],
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
+    mal_gc_unroot(&root);
+}
+
+
+static void crypto_settle_with_completion(MalVm *vm, MalValue promise) {
+    MalValue error = vm->completion.value;
+    vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, &error, 1);
+    mal_promise_reject(vm, mal_value_to_promise_object(promise), error);
+    mal_gc_unroot(&root);
+}
+
+/* WebCrypto digest: computed on the calling thread, delivered through a promise. */
+static MalValue mal_node_crypto_subtle_digest(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver; (void) new_target; (void) callee;
+    MalValue roots[] = {mal_value_from_promise_object(mal_promise_object_new(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_PROMISE_PROTOTYPE]))),
+        argc > 0 ? args[0] : mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    if (mal_value_is_object(roots[1]) && !mal_vm_get_property(vm, roots[1], mal_key_from_value(
+            mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "name"))), &roots[1])) {
+        crypto_settle_with_completion(vm, roots[0]);
+        goto done;
+    }
+    MalNodeCryptoStateKind kind = MAL_NODE_CRYPTO_MD5;
+    static const struct { const char *name; MalNodeCryptoStateKind kind; } names[] = {
+        {"SHA-1", MAL_NODE_CRYPTO_SHA1}, {"SHA-256", MAL_NODE_CRYPTO_SHA256},
+        {"SHA-384", MAL_NODE_CRYPTO_SHA384}, {"SHA-512", MAL_NODE_CRYPTO_SHA512}};
+    for (usize i = 0; mal_value_is_string(roots[1]) && i < countof(names); i++) {
+        if (mal_string_equals_ascii_ci(mal_value_to_string(roots[1]), names[i].name)) kind = names[i].kind;
+    }
+    if (kind == MAL_NODE_CRYPTO_MD5) {
+        mal_dom_exception_throw(vm, (const byte *) "Unrecognized algorithm name", (const byte *) "NotSupportedError");
+        crypto_settle_with_completion(vm, roots[0]);
+        goto done;
+    }
+    MalValue data = argc > 1 ? args[1] : mal_value_new_undefined();
+    MalBufferSourceSpan span;
+    if (!crypto_is_byte_source(data) || mal_buffer_source_span(data, &span) != MAL_BUFFER_SOURCE_SPAN_OK) {
+        mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Failed to execute 'digest' on 'SubtleCrypto': 2nd argument is not instance of ArrayBuffer, Buffer, TypedArray, or DataView.",
+            "ERR_INVALID_ARG_TYPE");
+        crypto_settle_with_completion(vm, roots[0]);
+        goto done;
+    }
+    MalNodeCryptoState state;
+    crypto_digest_start(&state, kind);
+    if (span.length > 0) mal_node_crypto_state_update(&state, (const u8 *) span.data, span.length);
+    usize length = crypto_digest_size(kind);
+    byte *out = malloc(length);
+    if (out == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        crypto_settle_with_completion(vm, roots[0]);
+        goto done;
+    }
+    crypto_digest_finish(&state, (u8 *) out);
+    roots[2] = mal_value_from_array_buffer_object(mal_array_buffer_object_adopt(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]), out, (u32) length, false));
+    mal_promise_fulfill(vm, mal_value_to_promise_object(roots[0]), roots[2]);
+done:
+    mal_gc_unroot(&root);
+    return roots[0];
+}
+
+
+
+static MalValue crypto_get(MalVm *vm, MalValue object, const char *name, bool *ok) {
+    MalValue value = mal_value_new_undefined();
+    *ok = !mal_value_is_object(object) || mal_vm_get_property(vm, object, mal_key_from_value(
+        mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) name))), &value);
+    return value;
+}
+
+static void crypto_set(MalVm *vm, MalValue object, const char *name, MalValue value) {
+    mal_intrinsic_define_data(vm, mal_value_to_object(object), (const byte *) name, value,
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
+}
+
+/* The WebCrypto hash names, matched case-insensitively. */
+static bool crypto_web_hash(MalValue name, MalNodeCryptoStateKind *kind) {
+    static const struct { const char *name; MalNodeCryptoStateKind kind; } names[] = {
+        {"SHA-1", MAL_NODE_CRYPTO_SHA1}, {"SHA-256", MAL_NODE_CRYPTO_SHA256},
+        {"SHA-384", MAL_NODE_CRYPTO_SHA384}, {"SHA-512", MAL_NODE_CRYPTO_SHA512}};
+    for (usize i = 0; mal_value_is_string(name) && i < countof(names); i++) {
+        if (mal_string_equals_ascii_ci(mal_value_to_string(name), names[i].name)) {
+            *kind = names[i].kind;
+            return true;
+        }
+    }
+    return false;
+}
+
+static const char *crypto_web_hash_name(MalNodeCryptoStateKind kind) {
+    switch (kind) {
+        case MAL_NODE_CRYPTO_SHA1: return "SHA-1";
+        case MAL_NODE_CRYPTO_SHA384: return "SHA-384";
+        case MAL_NODE_CRYPTO_SHA512: return "SHA-512";
+        default: return "SHA-256";
+    }
+}
+
+/* `algorithm` as a string or `{name}`; true when it names HMAC. */
+static bool crypto_web_is_hmac(MalVm *vm, MalValue algorithm, bool *ok) {
+    MalValue name = mal_value_is_object(algorithm) ? crypto_get(vm, algorithm, "name", ok) : algorithm;
+    if (!mal_value_is_object(algorithm)) *ok = true;
+    return *ok && mal_value_is_string(name) && mal_string_equals_ascii_ci(mal_value_to_string(name), "HMAC");
+}
+
+static MalValue crypto_web_reject_dom(MalVm *vm, MalValue promise, const char *message, const char *name) {
+    mal_dom_exception_throw(vm, (const byte *) message, (const byte *) name);
+    crypto_settle_with_completion(vm, promise);
+    return promise;
+}
+
+static MalValue crypto_new_promise(MalVm *vm) {
+    return mal_value_from_promise_object(mal_promise_object_new(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_PROMISE_PROTOTYPE])));
+}
+
+
+/* Byte 0 of a stored CryptoKey: an HMAC hash kind, or this marker for AES-GCM. */
+#define CRYPTO_WEB_AES_GCM 0x80
+
+static bool crypto_web_is_aes_gcm(MalVm *vm, MalValue algorithm, bool *ok) {
+    MalValue name = mal_value_is_object(algorithm) ? crypto_get(vm, algorithm, "name", ok) : algorithm;
+    if (!mal_value_is_object(algorithm)) *ok = true;
+    return *ok && mal_value_is_string(name) && mal_string_equals_ascii_ci(mal_value_to_string(name), "AES-GCM");
+}
+
+static MalValue crypto_web_new_key(MalVm *vm, byte *stored, usize stored_length, MalValue algorithm,
+    bool extractable, MalValue usages) {
+    MalValue roots[] = {mal_value_from_object(mal_object_new(&vm->heap, mal_value_to_object(crypto_crypto_key_prototype))),
+        algorithm, usages, mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    roots[3] = mal_value_from_array_buffer_object(mal_array_buffer_object_adopt(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]), stored, (u32) stored_length, true));
+    mal_object_set(mal_value_to_object(roots[0]), (MalKey) {.kind = MAL_KEY_SYMBOL, .value = crypto_crypto_key_symbol}, roots[3]);
+    crypto_set(vm, roots[0], "type", mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "secret")));
+    crypto_set(vm, roots[0], "extractable", mal_value_new_boolean(extractable));
+    crypto_set(vm, roots[0], "algorithm", roots[1]);
+    crypto_set(vm, roots[0], "usages", mal_value_is_array_object(roots[2]) ? roots[2]
+        : mal_value_from_array_object(mal_array_object_new_from_values(&vm->heap,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]), nullptr, 0)));
+    mal_gc_unroot(&root);
+    return roots[0];
+}
+
+static void crypto_web_import_aes(MalVm *vm, MalValue promise, const MalValue *args, i32 argc) {
+    MalValue format = argc > 0 ? args[0] : mal_value_new_undefined();
+    if (!mal_value_is_string(format) || !mal_string_equals_ascii(mal_value_to_string(format), "raw")) {
+        crypto_web_reject_dom(vm, promise, "Unable to import AES-GCM key with format", "NotSupportedError");
+        return;
+    }
+    MalValue data = argc > 1 ? args[1] : mal_value_new_undefined();
+    MalBufferSourceSpan span;
+    if (!crypto_is_byte_source(data) || mal_buffer_source_span(data, &span) != MAL_BUFFER_SOURCE_SPAN_OK) {
+        mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Failed to execute 'importKey' on 'SubtleCrypto': 2nd argument is not instance of ArrayBuffer, Buffer, TypedArray, or DataView.",
+            "ERR_INVALID_ARG_TYPE");
+        crypto_settle_with_completion(vm, promise);
+        return;
+    }
+    if (span.length != 16 && span.length != 24 && span.length != 32) {
+        crypto_web_reject_dom(vm, promise, "Invalid key length", "DataError");
+        return;
+    }
+    byte *stored = malloc(span.length + 1);
+    if (stored == nullptr) { mal_vm_throw_allocation_error(vm); crypto_settle_with_completion(vm, promise); return; }
+    stored[0] = (byte) CRYPTO_WEB_AES_GCM;
+    memcpy(stored + 1, span.data, span.length);
+    usize key_length = span.length;
+    MalValue algorithm = mal_value_from_object(mal_intrinsic_new_object(vm));
+    MalRootSpan root;
+    mal_gc_root(&root, &algorithm, 1);
+    crypto_set(vm, algorithm, "name", mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "AES-GCM")));
+    crypto_set(vm, algorithm, "length", mal_ops_number_value((f64) key_length * 8));
+    MalValue key = crypto_web_new_key(vm, stored, key_length + 1, algorithm, argc > 3 && mal_value_is_truthy(args[3]),
+        argc > 4 ? args[4] : mal_value_new_undefined());
+    mal_gc_unroot(&root);
+    mal_promise_fulfill(vm, mal_value_to_promise_object(promise), key);
+}
+
+/* An optional BufferSource dictionary member, resolved after every getter has run. */
+static bool crypto_web_bytes_member(MalVm *vm, MalValue value, const char *name, MalBufferSourceSpan *span,
+    bool *present) {
+    *present = false;
+    if (mal_value_is_undefined(value)) return true;
+    if (!crypto_is_byte_source(value) || mal_buffer_source_span(value, span) != MAL_BUFFER_SOURCE_SPAN_OK) {
+        char message[128];
+        snprintf(message, sizeof(message), "The \"algorithm.%s\" property must be an instance of ArrayBuffer, Buffer, TypedArray, or DataView.", name);
+        mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, message, "ERR_INVALID_ARG_TYPE");
+        return false;
+    }
+    *present = true;
+    return true;
+}
+
+static MalValue crypto_web_aes_gcm(MalVm *vm, const MalValue *args, i32 argc, bool encrypt) {
+    MalValue roots[] = {crypto_new_promise(vm), argc > 0 ? args[0] : mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    byte *storage = nullptr;
+    usize storage_size = mal_cipher_state_size();
+    u8 *out = nullptr;
+    bool ok = true;
+    if (!crypto_web_is_aes_gcm(vm, roots[1], &ok)) {
+        if (!ok) crypto_settle_with_completion(vm, roots[0]);
+        else crypto_web_reject_dom(vm, roots[0], "Unrecognized algorithm name", "NotSupportedError");
+        goto done;
+    }
+    MalValue key = argc > 1 ? args[1] : mal_value_new_undefined();
+    MalPropertyLookup lookup = {0};
+    if (mal_value_is_object(key)) {
+        lookup = mal_object_get_own(mal_value_to_object(key),
+            (MalKey) {.kind = MAL_KEY_SYMBOL, .value = crypto_crypto_key_symbol});
+    }
+    if (!lookup.present || !mal_value_is_array_buffer_object(lookup.desc.value)) {
+        mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "The \"key\" argument must be an instance of CryptoKey.", "ERR_INVALID_ARG_TYPE");
+        crypto_settle_with_completion(vm, roots[0]);
+        goto done;
+    }
+    MalArrayBufferObject *stored = mal_value_to_array_buffer_object(lookup.desc.value);
+    if ((u8) stored->data[0] != CRYPTO_WEB_AES_GCM) {
+        crypto_web_reject_dom(vm, roots[0], "Key algorithm mismatch", "InvalidAccessError");
+        goto done;
+    }
+    MalValue tag_value = crypto_get(vm, roots[1], "tagLength", &ok);
+    if (!ok) { crypto_settle_with_completion(vm, roots[0]); goto done; }
+    f64 tag_bits = mal_ops_is_number(tag_value) ? mal_ops_number_as_f64(tag_value) : 128;
+    if (!(tag_bits == 32 || tag_bits == 64 || tag_bits == 96 || tag_bits == 104 || tag_bits == 112
+            || tag_bits == 120 || tag_bits == 128)) {
+        char text[64];
+        crypto_number_text(vm, tag_value, text, sizeof(text));
+        char message[96];
+        snprintf(message, sizeof(message), "%s is not a valid AES-GCM tag length", text);
+        crypto_web_reject_dom(vm, roots[0], message, "OperationError");
+        goto done;
+    }
+    usize tag_length = (usize) tag_bits / 8;
+    MalBufferSourceSpan iv, aad, data;
+    bool has_iv, has_aad;
+    roots[3] = crypto_get(vm, roots[1], "iv", &ok);
+    if (ok) roots[4] = crypto_get(vm, roots[1], "additionalData", &ok);
+    if (!ok || !crypto_web_bytes_member(vm, roots[3], "iv", &iv, &has_iv)
+        || !crypto_web_bytes_member(vm, roots[4], "additionalData", &aad, &has_aad)) {
+        crypto_settle_with_completion(vm, roots[0]);
+        goto done;
+    }
+    roots[2] = argc > 2 ? args[2] : mal_value_new_undefined();
+    if (!crypto_is_byte_source(roots[2]) || mal_buffer_source_span(roots[2], &data) != MAL_BUFFER_SOURCE_SPAN_OK) {
+        mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "The \"data\" argument must be an instance of ArrayBuffer, Buffer, TypedArray, or DataView.",
+            "ERR_INVALID_ARG_TYPE");
+        crypto_settle_with_completion(vm, roots[0]);
+        goto done;
+    }
+    if (!has_iv || (!encrypt && data.length < tag_length)) {
+        crypto_web_reject_dom(vm, roots[0], "The operation failed for an operation-specific reason", "OperationError");
+        goto done;
+    }
+    // All member getters have run, so the borrowed spans stay valid through the cipher calls.
+    usize key_length = stored->byte_length - 1;
+    u32 kind = key_length == 16 ? 7 : key_length == 24 ? 8 : 9;
+    usize body = encrypt ? data.length : data.length - tag_length;
+    storage = calloc(1, storage_size);
+    out = malloc(body + 32);
+    if (storage == nullptr || out == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        crypto_settle_with_completion(vm, roots[0]);
+        goto done;
+    }
+    MalCipher *cipher = (MalCipher *) storage;
+    usize written = 0, tail = 0;
+    i32 status = mal_cipher_init((u8 *) storage, storage_size, kind, encrypt, (const u8 *) stored->data + 1,
+        key_length, (const u8 *) iv.data, iv.length);
+    if (status == MAL_CIPHER_OK && has_aad) status = mal_cipher_set_aad(cipher, (const u8 *) aad.data, aad.length);
+    if (status == MAL_CIPHER_OK && !encrypt) {
+        status = mal_cipher_set_tag(cipher, (const u8 *) data.data + body, tag_length);
+    }
+    if (status == MAL_CIPHER_OK) status = mal_cipher_update(cipher, (const u8 *) data.data, body, out, body + 32, &written);
+    if (status == MAL_CIPHER_OK) status = mal_cipher_final(cipher, out + written, 16, &tail);
+    if (status == MAL_CIPHER_OK && encrypt) {
+        status = mal_cipher_get_tag(cipher, out + written + tail, tag_length);
+        tail += tag_length;
+    }
+    if (status != MAL_CIPHER_OK) {
+        crypto_web_reject_dom(vm, roots[0], "The operation failed for an operation-specific reason", "OperationError");
+        goto done;
+    }
+    roots[2] = mal_value_from_array_buffer_object(mal_array_buffer_object_adopt(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]), (byte *) out, (u32) (written + tail),
+        false));
+    out = nullptr;
+    mal_promise_fulfill(vm, mal_value_to_promise_object(roots[0]), roots[2]);
+done:
+    if (storage != nullptr) crypto_scrub_free(storage, storage_size);
+    free(out);
+    mal_gc_unroot(&root);
+    return roots[0];
+}
+
+static MalValue mal_node_crypto_subtle_encrypt(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver; (void) new_target; (void) callee;
+    return crypto_web_aes_gcm(vm, args, argc, true);
+}
+
+static MalValue mal_node_crypto_subtle_decrypt(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver; (void) new_target; (void) callee;
+    return crypto_web_aes_gcm(vm, args, argc, false);
+}
+
+static MalValue mal_node_crypto_subtle_import_key(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver; (void) new_target; (void) callee;
+    MalValue undefined = mal_value_new_undefined();
+    MalValue roots[] = {crypto_new_promise(vm), argc > 2 ? args[2] : undefined, undefined, undefined, undefined};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    bool ok = true;
+    MalValue format = argc > 0 ? args[0] : undefined;
+    MalNodeCryptoStateKind hash = MAL_NODE_CRYPTO_SHA256;
+    if (crypto_web_is_aes_gcm(vm, roots[1], &ok)) {
+        crypto_web_import_aes(vm, roots[0], args, argc);
+        goto done;
+    }
+    if (!ok) { crypto_settle_with_completion(vm, roots[0]); goto done; }
+    if (!crypto_web_is_hmac(vm, roots[1], &ok)) {
+        if (!ok) crypto_settle_with_completion(vm, roots[0]);
+        else crypto_web_reject_dom(vm, roots[0], "Unrecognized algorithm name", "NotSupportedError");
+        goto done;
+    }
+    roots[2] = crypto_get(vm, roots[1], "hash", &ok);
+    if (ok && mal_value_is_object(roots[2])) roots[2] = crypto_get(vm, roots[2], "name", &ok);
+    if (!ok) { crypto_settle_with_completion(vm, roots[0]); goto done; }
+    if (!crypto_web_hash(roots[2], &hash)) {
+        crypto_web_reject_dom(vm, roots[0], "Unrecognized algorithm name", "NotSupportedError");
+        goto done;
+    }
+    if (!mal_value_is_string(format) || !mal_string_equals_ascii(mal_value_to_string(format), "raw")) {
+        crypto_web_reject_dom(vm, roots[0], "Unable to import HMAC key with format", "NotSupportedError");
+        goto done;
+    }
+    MalValue data = argc > 1 ? args[1] : undefined;
+    MalBufferSourceSpan span;
+    if (!crypto_is_byte_source(data) || mal_buffer_source_span(data, &span) != MAL_BUFFER_SOURCE_SPAN_OK) {
+        mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "Failed to execute 'importKey' on 'SubtleCrypto': 2nd argument is not instance of ArrayBuffer, Buffer, TypedArray, or DataView.",
+            "ERR_INVALID_ARG_TYPE");
+        crypto_settle_with_completion(vm, roots[0]);
+        goto done;
+    }
+    if (span.length == 0) {
+        crypto_web_reject_dom(vm, roots[0], "Zero-length key is not supported", "DataError");
+        goto done;
+    }
+    // Byte 0 records the hash so sign/verify need no second lookup.
+    byte *stored = malloc(span.length + 1);
+    if (stored == nullptr) { mal_vm_throw_allocation_error(vm); crypto_settle_with_completion(vm, roots[0]); goto done; }
+    stored[0] = (byte) hash;
+    memcpy(stored + 1, span.data, span.length);
+    usize key_length = span.length;
+    roots[3] = mal_value_from_object(mal_object_new(&vm->heap, mal_value_to_object(crypto_crypto_key_prototype)));
+    roots[4] = mal_value_from_array_buffer_object(mal_array_buffer_object_adopt(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]), stored, (u32) (key_length + 1), true));
+    mal_object_set(mal_value_to_object(roots[3]), (MalKey) {.kind = MAL_KEY_SYMBOL, .value = crypto_crypto_key_symbol}, roots[4]);
+    crypto_set(vm, roots[3], "type", mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "secret")));
+    crypto_set(vm, roots[3], "extractable", mal_value_new_boolean(argc > 3 && mal_value_is_truthy(args[3])));
+    roots[4] = mal_value_from_object(mal_intrinsic_new_object(vm));
+    crypto_set(vm, roots[4], "name", mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "HMAC")));
+    crypto_set(vm, roots[4], "length", mal_ops_number_value((f64) key_length * 8));
+    roots[2] = mal_value_from_object(mal_intrinsic_new_object(vm));
+    crypto_set(vm, roots[2], "name", mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) crypto_web_hash_name(hash))));
+    crypto_set(vm, roots[4], "hash", roots[2]);
+    crypto_set(vm, roots[3], "algorithm", roots[4]);
+    crypto_set(vm, roots[3], "usages", argc > 4 && mal_value_is_array_object(args[4]) ? args[4]
+        : mal_value_from_array_object(mal_array_object_new_from_values(&vm->heap,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]), nullptr, 0)));
+    mal_promise_fulfill(vm, mal_value_to_promise_object(roots[0]), roots[3]);
+done:
+    mal_gc_unroot(&root);
+    return roots[0];
+}
+
+/* HMAC tag for sign/verify, or false with the promise already rejected. */
+static bool crypto_web_hmac(MalVm *vm, MalValue promise, const MalValue *args, i32 argc, i32 data_index,
+    u8 tag[64], usize *tag_length) {
+    bool ok = true;
+    if (!crypto_web_is_hmac(vm, argc > 0 ? args[0] : mal_value_new_undefined(), &ok)) {
+        if (!ok) crypto_settle_with_completion(vm, promise);
+        else crypto_web_reject_dom(vm, promise, "Unrecognized algorithm name", "NotSupportedError");
+        return false;
+    }
+    MalValue key = argc > 1 ? args[1] : mal_value_new_undefined();
+    MalPropertyLookup lookup = {0};
+    if (mal_value_is_object(key)) {
+        lookup = mal_object_get_own(mal_value_to_object(key),
+            (MalKey) {.kind = MAL_KEY_SYMBOL, .value = crypto_crypto_key_symbol});
+    }
+    if (!lookup.present || !mal_value_is_array_buffer_object(lookup.desc.value)) {
+        mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "The \"key\" argument must be an instance of CryptoKey.", "ERR_INVALID_ARG_TYPE");
+        crypto_settle_with_completion(vm, promise);
+        return false;
+    }
+    MalValue data = argc > data_index ? args[data_index] : mal_value_new_undefined();
+    MalBufferSourceSpan span;
+    if (!crypto_is_byte_source(data) || mal_buffer_source_span(data, &span) != MAL_BUFFER_SOURCE_SPAN_OK) {
+        mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "The \"data\" argument must be an instance of ArrayBuffer, Buffer, TypedArray, or DataView.",
+            "ERR_INVALID_ARG_TYPE");
+        crypto_settle_with_completion(vm, promise);
+        return false;
+    }
+    MalArrayBufferObject *stored = mal_value_to_array_buffer_object(lookup.desc.value);
+    if ((u8) stored->data[0] == CRYPTO_WEB_AES_GCM) {
+        crypto_web_reject_dom(vm, promise, "Key algorithm mismatch", "InvalidAccessError");
+        return false;
+    }
+    MalNodeCryptoStateKind kind = (MalNodeCryptoStateKind) (u8) stored->data[0];
+    CryptoHmac hmac;
+    crypto_hmac_init(&hmac, kind, (const u8 *) stored->data + 1, stored->byte_length - 1);
+    crypto_hmac(&hmac, (const u8 *) span.data, span.length, nullptr, 0, nullptr, 0, tag);
+    *tag_length = crypto_digest_size(hmac.kind);
+    mal_secure_scrub((byte *) &hmac, sizeof(hmac));
+    return true;
+}
+
+static MalValue mal_node_crypto_subtle_sign(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver; (void) new_target; (void) callee;
+    MalValue roots[] = {crypto_new_promise(vm), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    u8 tag[64];
+    usize length = 0;
+    if (crypto_web_hmac(vm, roots[0], args, argc, 2, tag, &length)) {
+        byte *out = malloc(length);
+        if (out == nullptr) {
+            mal_vm_throw_allocation_error(vm);
+            crypto_settle_with_completion(vm, roots[0]);
+        } else {
+            memcpy(out, tag, length);
+            roots[1] = mal_value_from_array_buffer_object(mal_array_buffer_object_adopt(&vm->heap,
+                mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]), out, (u32) length, false));
+            mal_promise_fulfill(vm, mal_value_to_promise_object(roots[0]), roots[1]);
+        }
+    }
+    mal_secure_scrub((byte *) tag, sizeof(tag));
+    mal_gc_unroot(&root);
+    return roots[0];
+}
+
+static MalValue mal_node_crypto_subtle_verify(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver; (void) new_target; (void) callee;
+    MalValue roots[] = {crypto_new_promise(vm)};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    u8 tag[64];
+    usize length = 0;
+    MalValue signature = argc > 2 ? args[2] : mal_value_new_undefined();
+    MalBufferSourceSpan expected;
+    if (!crypto_is_byte_source(signature) || mal_buffer_source_span(signature, &expected) != MAL_BUFFER_SOURCE_SPAN_OK) {
+        mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "The \"signature\" argument must be an instance of ArrayBuffer, Buffer, TypedArray, or DataView.",
+            "ERR_INVALID_ARG_TYPE");
+        crypto_settle_with_completion(vm, roots[0]);
+    } else if (crypto_web_hmac(vm, roots[0], args, argc, 3, tag, &length)) {
+        u8 difference = (u8) (expected.length != length);
+        for (usize i = 0; i < length && i < expected.length; i++) {
+            difference |= (u8) (tag[i] ^ (u8) expected.data[i]);
+        }
+        mal_promise_fulfill(vm, mal_value_to_promise_object(roots[0]), mal_value_new_boolean(difference == 0));
+    }
+    mal_secure_scrub((byte *) tag, sizeof(tag));
+    mal_gc_unroot(&root);
+    return roots[0];
+}
+
+/* crypto.webcrypto and crypto.subtle: digest, raw HMAC sign/verify and AES-GCM encrypt/decrypt. */
+static void crypto_install_webcrypto(MalVm *vm, MalObject *module) {
+    MalPropertyFlags flags = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE;
+    MalValue roots[] = {mal_value_from_object(mal_intrinsic_new_object(vm)),
+        mal_value_from_object(mal_intrinsic_new_object(vm)), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[0]), (const byte *) "digest", 2,
+        mal_node_crypto_subtle_digest);
+    mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[0]), (const byte *) "importKey", 5,
+        mal_node_crypto_subtle_import_key);
+    mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[0]), (const byte *) "sign", 3,
+        mal_node_crypto_subtle_sign);
+    mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[0]), (const byte *) "verify", 4,
+        mal_node_crypto_subtle_verify);
+    mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[0]), (const byte *) "encrypt", 3,
+        mal_node_crypto_subtle_encrypt);
+    mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[0]), (const byte *) "decrypt", 3,
+        mal_node_crypto_subtle_decrypt);
+    crypto_crypto_key_symbol = mal_value_from_symbol(mal_symbol_new_private(&vm->heap));
+    crypto_crypto_key_prototype = mal_value_from_object(mal_intrinsic_new_object(vm));
+    MalValue tag_key = vm->intrinsics[MAL_INTRINSIC_SYMBOL_TO_STRING_TAG];
+    if (mal_value_is_symbol(tag_key)) {
+        MalPropertyDesc tag = {
+            .value = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "CryptoKey")),
+            .flags = MAL_PROPERTY_CONFIGURABLE};
+        mal_object_define_own(mal_value_to_object(crypto_crypto_key_prototype), mal_key_from_value(tag_key), &tag);
+    }
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[1]), (const byte *) "subtle", roots[0], flags);
+    static const char *const shared[] = {"getRandomValues", "randomUUID"};
+    for (usize i = 0; i < countof(shared); i++) {
+        if (mal_vm_get_property(vm, mal_value_from_object(module), mal_key_from_value(mal_value_from_string(
+                mal_intrinsic_ascii(vm, (const byte *) shared[i]))), &roots[2])) {
+            mal_intrinsic_define_data(vm, mal_value_to_object(roots[1]), (const byte *) shared[i], roots[2], flags);
+        }
+    }
+    mal_intrinsic_define_data(vm, module, (const byte *) "subtle", roots[0], flags);
+    mal_intrinsic_define_data(vm, module, (const byte *) "webcrypto", roots[1], flags);
+    mal_gc_unroot(&root);
+}
+
+
+/* ---------------------------------------------------------------------------
+ * Cipheriv / Decipheriv over the streaming Rust ciphers.
+ * --------------------------------------------------------------------------- */
+
+typedef struct {
+    const char *name;
+    const char *info_name;
+    const char *mode;
+    u32 kind;
+    u8 key_length;
+    u8 iv_length;
+    u8 block_size;
+    i32 nid;
+} CryptoCipherSpec;
+
+/* Sorted as Node's getCiphers() lists them. */
+static const CryptoCipherSpec CRYPTO_CIPHERS[] = {
+    {"aes-128-cbc", "aes-128-cbc", "cbc", 1, 16, 16, 16, 419},
+    {"aes-128-ctr", "aes-128-ctr", "ctr", 4, 16, 16, 1, 904},
+    {"aes-128-gcm", "id-aes128-gcm", "gcm", 7, 16, 12, 1, 895},
+    {"aes-192-cbc", "aes-192-cbc", "cbc", 2, 24, 16, 16, 423},
+    {"aes-192-ctr", "aes-192-ctr", "ctr", 5, 24, 16, 1, 905},
+    {"aes-192-gcm", "id-aes192-gcm", "gcm", 8, 24, 12, 1, 898},
+    {"aes-256-cbc", "aes-256-cbc", "cbc", 3, 32, 16, 16, 427},
+    {"aes-256-ctr", "aes-256-ctr", "ctr", 6, 32, 16, 1, 906},
+    {"aes-256-gcm", "id-aes256-gcm", "gcm", 9, 32, 12, 1, 901},
+    {"chacha20-poly1305", "chacha20-poly1305", "stream", 10, 32, 12, 0, 1018},
+};
+
+static const CryptoCipherSpec *crypto_cipher_spec(MalValue name) {
+    if (!mal_value_is_string(name)) return nullptr;
+    for (usize i = 0; i < countof(CRYPTO_CIPHERS); i++) {
+        if (mal_string_equals_ascii_ci(mal_value_to_string(name), CRYPTO_CIPHERS[i].name)
+            || mal_string_equals_ascii_ci(mal_value_to_string(name), CRYPTO_CIPHERS[i].info_name)) {
+            return &CRYPTO_CIPHERS[i];
+        }
+    }
+    return nullptr;
+}
+
+static bool crypto_cipher_is_aead(const CryptoCipherSpec *spec) {
+    return spec->kind >= 7;
+}
+
+/* Precedes the Rust state inside one sensitive ArrayBuffer; 64 keeps it aligned. */
+typedef struct {
+    const CryptoCipherSpec *spec;
+    bool encrypt;
+    bool finalized;
+    bool tag_ready;
+    bool tag_set;
+    u8 tag_length;
+    u8 tag[16];
+    /* Output bytes held back so string encodings concatenate like Node's StringDecoder. */
+    u8 carry[4];
+    u8 carry_length;
+} CryptoCipherHeader;
+
+#define CRYPTO_CIPHER_HEADER_BYTES 64
+static_assert(sizeof(CryptoCipherHeader) <= CRYPTO_CIPHER_HEADER_BYTES, "cipher header outgrew its slot");
+
+static CryptoCipherHeader *crypto_cipher_header(MalVm *vm, MalValue receiver) {
+    if (crypto_keys_ready && mal_value_is_object(receiver)) {
+        MalPropertyLookup lookup = mal_object_get_own(mal_value_to_object(receiver),
+            (MalKey) {.kind = MAL_KEY_SYMBOL, .value = crypto_cipher_symbol});
+        if (lookup.present && mal_value_is_array_buffer_object(lookup.desc.value)) {
+            return (CryptoCipherHeader *) mal_value_to_array_buffer_object(lookup.desc.value)->data;
+        }
+    }
+    crypto_throw(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Illegal invocation");
+    return nullptr;
+}
+
+static MalCipher *crypto_cipher_state(CryptoCipherHeader *header) {
+    return (MalCipher *) ((byte *) header + CRYPTO_CIPHER_HEADER_BYTES);
+}
+
+static void crypto_throw_coded(MalVm *vm, MalIntrinsic prototype, const char *message, const char *code) {
+    if (code == nullptr) crypto_throw(vm, prototype, message);
+    else mal_node_throw_code(vm, prototype, message, code);
+}
+
+static void crypto_cipher_throw_status(MalVm *vm, i32 status) {
+    switch (status) {
+        case MAL_CIPHER_INVALID_KEY:
+            crypto_throw_coded(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid key length", "ERR_CRYPTO_INVALID_KEYLEN");
+            break;
+        case MAL_CIPHER_INVALID_IV:
+            crypto_throw_coded(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Invalid initialization vector", "ERR_CRYPTO_INVALID_IV");
+            break;
+        case MAL_CIPHER_BAD_DECRYPT:
+            crypto_throw_coded(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, "error:1C800064:Provider routines::bad decrypt",
+                "ERR_OSSL_BAD_DECRYPT");
+            break;
+        case MAL_CIPHER_WRONG_FINAL_BLOCK_LENGTH:
+            crypto_throw_coded(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+                "error:1C80006B:Provider routines::wrong final block length", "ERR_OSSL_WRONG_FINAL_BLOCK_LENGTH");
+            break;
+        case MAL_CIPHER_AUTH_FAILED:
+            crypto_throw(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, "Unsupported state or unable to authenticate data");
+            break;
+        default:
+            crypto_throw_coded(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, "Invalid state", "ERR_CRYPTO_INVALID_STATE");
+            break;
+    }
+}
+
+/* Key, IV and data share Node's accepted shapes: strings, buffer sources, secret KeyObjects. */
+static bool crypto_cipher_bytes(MalVm *vm, MalValue value, MalValue encoding, const char *name,
+    MalBufferSourceSpan *span, byte **owned) {
+    *owned = nullptr;
+    const byte *key_data;
+    usize key_length;
+    if (crypto_secret_key_bytes(value, &key_data, &key_length)) {
+        *span = (MalBufferSourceSpan) {.data = (byte *) key_data, .length = key_length};
+        return true;
+    }
+    if (mal_value_is_string(value)) {
+        usize length;
+        *owned = mal_node_buffer_decode_string(vm, value, encoding, &length);
+        if (*owned == nullptr) { mal_vm_throw_allocation_error(vm); return false; }
+        *span = (MalBufferSourceSpan) {.data = *owned, .length = length};
+        return true;
+    }
+    if (!crypto_is_byte_source(value)) {
+        crypto_throw_arg_type(vm, name,
+            "of type string or an instance of ArrayBuffer, Buffer, TypedArray, or DataView", value);
+        return false;
+    }
+    return crypto_byte_source_span(vm, value, name, span, owned);
+}
+
+static bool crypto_gcm_tag_length_valid(u32 length) {
+    return length == 4 || length == 8 || (length >= 12 && length <= 16);
+}
+
+static MalValue crypto_cipher_create(MalVm *vm, const MalValue *args, i32 argc, bool encrypt) {
+    MalValue undefined = mal_value_new_undefined();
+    const CryptoCipherSpec *spec = crypto_cipher_spec(argc > 0 ? args[0] : undefined);
+    if (spec == nullptr) {
+        if (argc < 1 || !mal_value_is_string(args[0])) {
+            crypto_throw_arg_type(vm, "cipher", "of type string", argc > 0 ? args[0] : undefined);
+        } else {
+            crypto_throw_coded(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, "Unknown cipher", "ERR_CRYPTO_UNKNOWN_CIPHER");
+        }
+        return undefined;
+    }
+    u32 tag_length = 16;
+    MalValue options = argc > 3 ? args[3] : undefined;
+    if (mal_value_is_object(options)) {
+        bool ok;
+        MalValue requested = crypto_get(vm, options, "authTagLength", &ok);
+        if (!ok) return undefined;
+        if (!mal_value_is_undefined(requested) && crypto_cipher_is_aead(spec)) {
+            f64 number = mal_ops_is_number(requested) ? mal_ops_number_as_f64(requested) : -1;
+            bool valid = number >= 1 && number <= 16 && trunc(number) == number
+                && (spec->kind == 10 || crypto_gcm_tag_length_valid((u32) number));
+            if (!valid) {
+                char text[64];
+                crypto_number_text(vm, requested, text, sizeof(text));
+                char message[CRYPTO_MESSAGE_CAPACITY];
+                snprintf(message, sizeof(message), "Invalid authentication tag length: %s", text);
+                crypto_throw_coded(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, message, "ERR_CRYPTO_INVALID_AUTH_TAG");
+                return undefined;
+            }
+            tag_length = (u32) number;
+        }
+    }
+    MalBufferSourceSpan key;
+    MalBufferSourceSpan iv;
+    byte *owned_key = nullptr;
+    byte *owned_iv = nullptr;
+    if (!crypto_cipher_bytes(vm, argc > 1 ? args[1] : undefined, undefined, "key", &key, &owned_key)) return undefined;
+    MalValue iv_value = argc > 2 ? args[2] : undefined;
+    if (mal_value_is_nil(iv_value)) {
+        crypto_scrub_free(owned_key, key.length);
+        crypto_throw_coded(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Invalid initialization vector", "ERR_CRYPTO_INVALID_IV");
+        return undefined;
+    }
+    if (!crypto_cipher_bytes(vm, iv_value, undefined, "iv", &iv, &owned_iv)) {
+        crypto_scrub_free(owned_key, key.length);
+        return undefined;
+    }
+    usize storage_size = CRYPTO_CIPHER_HEADER_BYTES + mal_cipher_state_size();
+    byte *storage = calloc(1, storage_size);
+    if (storage == nullptr) {
+        crypto_scrub_free(owned_key, key.length);
+        crypto_scrub_free(owned_iv, iv.length);
+        mal_vm_throw_allocation_error(vm);
+        return undefined;
+    }
+    CryptoCipherHeader *header = (CryptoCipherHeader *) storage;
+    *header = (CryptoCipherHeader) {.spec = spec, .encrypt = encrypt, .tag_length = (u8) tag_length};
+    // Node checks the key before the IV; the Rust side reports whichever fails first the same way.
+    i32 status = key.length != spec->key_length ? MAL_CIPHER_INVALID_KEY
+        : mal_cipher_init((u8 *) storage + CRYPTO_CIPHER_HEADER_BYTES, mal_cipher_state_size(), spec->kind,
+            encrypt, (const u8 *) key.data, key.length, (const u8 *) iv.data, iv.length);
+    crypto_scrub_free(owned_key, key.length);
+    crypto_scrub_free(owned_iv, iv.length);
+    if (status != MAL_CIPHER_OK) {
+        crypto_scrub_free(storage, storage_size);
+        crypto_cipher_throw_status(vm, status);
+        return undefined;
+    }
+    MalValue roots[] = {mal_value_from_object(mal_object_new(&vm->heap, mal_value_to_object(
+        encrypt ? crypto_cipheriv_prototype : crypto_decipheriv_prototype))), undefined};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    roots[1] = mal_value_from_array_buffer_object(mal_array_buffer_object_adopt(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_BUFFER_PROTOTYPE]), storage, (u32) storage_size, true));
+    mal_object_set(mal_value_to_object(roots[0]), (MalKey) {.kind = MAL_KEY_SYMBOL, .value = crypto_cipher_symbol},
+        roots[1]);
+    mal_gc_unroot(&root);
+    return roots[0];
+}
+
+static MalValue mal_node_crypto_create_cipheriv(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver; (void) new_target; (void) callee;
+    return crypto_cipher_create(vm, args, argc, true);
+}
+
+static MalValue mal_node_crypto_create_decipheriv(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver; (void) new_target; (void) callee;
+    return crypto_cipher_create(vm, args, argc, false);
+}
+
+typedef enum { CRYPTO_CARRY_NONE, CRYPTO_CARRY_BASE64, CRYPTO_CARRY_UTF8 } CryptoCarryKind;
+
+static CryptoCarryKind crypto_carry_kind(MalValue encoding) {
+    if (!mal_value_is_string(encoding)) return CRYPTO_CARRY_NONE;
+    MalString *name = mal_value_to_string(encoding);
+    if (mal_string_equals_ascii_ci(name, "base64") || mal_string_equals_ascii_ci(name, "base64url")) {
+        return CRYPTO_CARRY_BASE64;
+    }
+    if (mal_string_equals_ascii_ci(name, "utf8") || mal_string_equals_ascii_ci(name, "utf-8")) {
+        return CRYPTO_CARRY_UTF8;
+    }
+    return CRYPTO_CARRY_NONE;
+}
+
+/* Bytes of an incomplete UTF-8 sequence at the end of `data`. */
+static usize crypto_utf8_tail(const u8 *data, usize length) {
+    for (usize back = 1; back <= 3 && back <= length; back++) {
+        u8 byte_value = data[length - back];
+        if ((byte_value & 0xc0) == 0x80) continue;
+        usize need = byte_value >= 0xf0 ? 4 : byte_value >= 0xe0 ? 3 : byte_value >= 0xc0 ? 2 : 1;
+        return need > back ? back : 0;
+    }
+    return 0;
+}
+
+/* Encodes `out` (which begins with any carried bytes) per Node's output encoding. */
+static MalValue crypto_cipher_output(MalVm *vm, CryptoCipherHeader *header, u8 *out, usize length,
+    MalValue encoding, bool last) {
+    if (!mal_value_is_string(encoding) || !mal_node_buffer_encoding_is_known(encoding)
+        || mal_string_equals_ascii_ci(mal_value_to_string(encoding), "buffer")) {
+        return mal_node_buffer_from_owned_bytes(vm, (byte *) out, length);
+    }
+    usize keep = 0;
+    CryptoCarryKind carry = crypto_carry_kind(encoding);
+    if (!last && carry == CRYPTO_CARRY_BASE64) keep = length % 3;
+    if (!last && carry == CRYPTO_CARRY_UTF8) keep = crypto_utf8_tail(out, length);
+    memcpy(header->carry, out + length - keep, keep);
+    header->carry_length = (u8) keep;
+    MalValue result = mal_node_buffer_encode_bytes(vm, (const byte *) out, length - keep, encoding, false);
+    free(out);
+    return result;
+}
+
+static MalValue mal_node_crypto_cipher_update(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) new_target; (void) callee;
+    CryptoCipherHeader *header = crypto_cipher_header(vm, receiver);
+    if (header == nullptr) return mal_value_new_undefined();
+    if (header->finalized) {
+        crypto_throw(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, "Trying to add data in unsupported state");
+        return mal_value_new_undefined();
+    }
+    MalValue data = argc > 0 ? args[0] : mal_value_new_undefined();
+    if (!mal_value_is_string(data) && !crypto_is_byte_source(data)) {
+        crypto_throw_arg_type(vm, "data",
+            "of type string or an instance of Buffer, TypedArray, or DataView", data);
+        return mal_value_new_undefined();
+    }
+    MalBufferSourceSpan span;
+    byte *owned = nullptr;
+    if (!crypto_cipher_bytes(vm, data, argc > 1 ? args[1] : mal_value_new_undefined(), "data", &span, &owned)) {
+        return mal_value_new_undefined();
+    }
+    usize carried = header->carry_length;
+    usize capacity = carried + span.length + 16;
+    u8 *out = malloc(capacity);
+    if (out == nullptr) {
+        free(owned);
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
+    memcpy(out, header->carry, carried);
+    usize written = 0;
+    i32 status = mal_cipher_update(crypto_cipher_state(header), (const u8 *) span.data, span.length,
+        out + carried, capacity - carried, &written);
+    free(owned);
+    if (status != MAL_CIPHER_OK) {
+        free(out);
+        crypto_cipher_throw_status(vm, status);
+        return mal_value_new_undefined();
+    }
+    return crypto_cipher_output(vm, header, out, carried + written, argc > 2 ? args[2] : mal_value_new_undefined(),
+        false);
+}
+
+static MalValue mal_node_crypto_cipher_final(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) new_target; (void) callee;
+    CryptoCipherHeader *header = crypto_cipher_header(vm, receiver);
+    if (header == nullptr) return mal_value_new_undefined();
+    if (header->finalized) {
+        crypto_throw_coded(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, "Unsupported state", "ERR_CRYPTO_INVALID_STATE");
+        return mal_value_new_undefined();
+    }
+    header->finalized = true;
+    usize carried = header->carry_length;
+    u8 *out = malloc(carried + 16);
+    if (out == nullptr) { mal_vm_throw_allocation_error(vm); return mal_value_new_undefined(); }
+    memcpy(out, header->carry, carried);
+    header->carry_length = 0;
+    usize written = 0;
+    MalCipher *state = crypto_cipher_state(header);
+    i32 status = crypto_cipher_is_aead(header->spec) && !header->encrypt && !header->tag_set
+        ? MAL_CIPHER_AUTH_FAILED : mal_cipher_final(state, out + carried, 16, &written);
+    if (status == MAL_CIPHER_OK && header->encrypt && crypto_cipher_is_aead(header->spec)) {
+        status = mal_cipher_get_tag(state, header->tag, header->tag_length);
+        header->tag_ready = status == MAL_CIPHER_OK;
+    }
+    if (status != MAL_CIPHER_OK) {
+        free(out);
+        crypto_cipher_throw_status(vm, status);
+        return mal_value_new_undefined();
+    }
+    return crypto_cipher_output(vm, header, out, carried + written, argc > 0 ? args[0] : mal_value_new_undefined(),
+        true);
+}
+
+static void crypto_cipher_invalid_state(MalVm *vm, const char *operation) {
+    char message[96];
+    snprintf(message, sizeof(message), "Invalid state for operation %s", operation);
+    crypto_throw_coded(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, message, "ERR_CRYPTO_INVALID_STATE");
+}
+
+static MalValue mal_node_crypto_cipher_set_auto_padding(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) new_target; (void) callee;
+    CryptoCipherHeader *header = crypto_cipher_header(vm, receiver);
+    if (header == nullptr) return mal_value_new_undefined();
+    bool padding = argc < 1 || mal_value_is_undefined(args[0]) || mal_value_is_truthy(args[0]);
+    if (header->finalized || mal_cipher_set_padding(crypto_cipher_state(header), padding) != MAL_CIPHER_OK) {
+        crypto_cipher_invalid_state(vm, "setAutoPadding");
+        return mal_value_new_undefined();
+    }
+    return receiver;
+}
+
+static MalValue mal_node_crypto_cipher_set_aad(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) new_target; (void) callee;
+    CryptoCipherHeader *header = crypto_cipher_header(vm, receiver);
+    if (header == nullptr) return mal_value_new_undefined();
+    MalValue data = argc > 0 ? args[0] : mal_value_new_undefined();
+    if (!crypto_is_byte_source(data)) {
+        crypto_throw_arg_type(vm, "buffer", "an instance of ArrayBuffer, Buffer, TypedArray, or DataView", data);
+        return mal_value_new_undefined();
+    }
+    MalBufferSourceSpan span;
+    byte *owned = nullptr;
+    if (!crypto_byte_source_span(vm, data, "buffer", &span, &owned)) return mal_value_new_undefined();
+    i32 status = header->finalized || !crypto_cipher_is_aead(header->spec) ? MAL_CIPHER_INVALID_STATE
+        : mal_cipher_set_aad(crypto_cipher_state(header), (const u8 *) span.data, span.length);
+    free(owned);
+    if (status != MAL_CIPHER_OK) {
+        crypto_cipher_invalid_state(vm, "setAAD");
+        return mal_value_new_undefined();
+    }
+    return receiver;
+}
+
+static MalValue mal_node_crypto_cipher_get_auth_tag(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) args; (void) argc; (void) new_target; (void) callee;
+    CryptoCipherHeader *header = crypto_cipher_header(vm, receiver);
+    if (header == nullptr) return mal_value_new_undefined();
+    if (!header->tag_ready) {
+        crypto_cipher_invalid_state(vm, "getAuthTag");
+        return mal_value_new_undefined();
+    }
+    byte *tag = malloc(header->tag_length);
+    if (tag == nullptr) { mal_vm_throw_allocation_error(vm); return mal_value_new_undefined(); }
+    memcpy(tag, header->tag, header->tag_length);
+    return mal_node_buffer_from_owned_bytes(vm, tag, header->tag_length);
+}
+
+static MalValue mal_node_crypto_cipher_set_auth_tag(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) new_target; (void) callee;
+    CryptoCipherHeader *header = crypto_cipher_header(vm, receiver);
+    if (header == nullptr) return mal_value_new_undefined();
+    MalValue data = argc > 0 ? args[0] : mal_value_new_undefined();
+    if (!crypto_is_byte_source(data)) {
+        crypto_throw_arg_type(vm, "buffer", "an instance of Buffer, TypedArray, or DataView", data);
+        return mal_value_new_undefined();
+    }
+    MalBufferSourceSpan span;
+    byte *owned = nullptr;
+    if (!crypto_byte_source_span(vm, data, "buffer", &span, &owned)) return mal_value_new_undefined();
+    bool valid_length = header->spec->kind == 10 ? span.length >= 1 && span.length <= 16
+        : crypto_gcm_tag_length_valid((u32) span.length);
+    if (crypto_cipher_is_aead(header->spec) && !header->finalized && !header->tag_set && !valid_length) {
+        free(owned);
+        char message[96];
+        snprintf(message, sizeof(message), "Invalid authentication tag length: %zu", span.length);
+        crypto_throw_coded(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, message, "ERR_CRYPTO_INVALID_AUTH_TAG");
+        return mal_value_new_undefined();
+    }
+    i32 status = header->finalized || header->tag_set || !crypto_cipher_is_aead(header->spec)
+        ? MAL_CIPHER_INVALID_STATE
+        : mal_cipher_set_tag(crypto_cipher_state(header), (const u8 *) span.data, span.length);
+    free(owned);
+    if (status != MAL_CIPHER_OK) {
+        crypto_cipher_invalid_state(vm, "setAuthTag");
+        return mal_value_new_undefined();
+    }
+    header->tag_set = true;
+    return receiver;
+}
+
+static MalValue mal_node_crypto_get_cipher_info(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver; (void) new_target; (void) callee;
+    MalValue query = argc > 0 ? args[0] : mal_value_new_undefined();
+    const CryptoCipherSpec *spec = crypto_cipher_spec(query);
+    for (usize i = 0; spec == nullptr && mal_ops_is_number(query) && i < countof(CRYPTO_CIPHERS); i++) {
+        if (mal_ops_number_as_f64(query) == (f64) CRYPTO_CIPHERS[i].nid) spec = &CRYPTO_CIPHERS[i];
+    }
+    if (spec == nullptr) return mal_value_new_undefined();
+    MalValue info = mal_value_from_object(mal_intrinsic_new_object(vm));
+    MalRootSpan root;
+    mal_gc_root(&root, &info, 1);
+    crypto_set(vm, info, "mode", mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) spec->mode)));
+    crypto_set(vm, info, "name", mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) spec->info_name)));
+    crypto_set(vm, info, "nid", mal_value_from_i32(spec->nid));
+    crypto_set(vm, info, "keyLength", mal_value_from_i32(spec->key_length));
+    if (spec->block_size > 0) crypto_set(vm, info, "blockSize", mal_value_from_i32(spec->block_size));
+    crypto_set(vm, info, "ivLength", mal_value_from_i32(spec->iv_length));
+    mal_gc_unroot(&root);
+    return info;
+}
+
+static MalValue crypto_cipher_class(MalVm *vm, MalObject *module, const char *name,
+    MalNativeFunctionCallback construct, bool encrypt) {
+    MalPropertyFlags hidden = MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE;
+    MalValue roots[] = {mal_value_from_object(mal_intrinsic_new_object(vm)), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+        mal_intrinsic_ascii(vm, (const byte *) name), 4, construct);
+    mal_native_function_object_set_constructor(constructor);
+    roots[1] = mal_value_from_native_function_object(constructor);
+    MalObject *prototype = mal_value_to_object(roots[0]);
+    mal_intrinsic_define_data(vm, (MalObject *) constructor, (const byte *) "prototype", roots[0], MAL_PROPERTY_NONE);
+    mal_intrinsic_define_data(vm, prototype, (const byte *) "constructor", roots[1], hidden);
+    mal_intrinsic_define_method_n(vm, prototype, (const byte *) "update", 3, mal_node_crypto_cipher_update);
+    mal_intrinsic_define_method_n(vm, prototype, (const byte *) "final", 1, mal_node_crypto_cipher_final);
+    mal_intrinsic_define_method_n(vm, prototype, (const byte *) "setAutoPadding", 1,
+        mal_node_crypto_cipher_set_auto_padding);
+    if (encrypt) {
+        mal_intrinsic_define_method_n(vm, prototype, (const byte *) "getAuthTag", 0,
+            mal_node_crypto_cipher_get_auth_tag);
+    } else {
+        mal_intrinsic_define_method_n(vm, prototype, (const byte *) "setAuthTag", 1,
+            mal_node_crypto_cipher_set_auth_tag);
+    }
+    mal_intrinsic_define_method_n(vm, prototype, (const byte *) "setAAD", 2, mal_node_crypto_cipher_set_aad);
+    mal_intrinsic_define_data(vm, module, (const byte *) name, roots[1],
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
+    mal_gc_unroot(&root);
+    return roots[0];
+}
+
+static void crypto_install_ciphers(MalVm *vm, MalObject *module) {
+    crypto_cipher_symbol = mal_value_from_symbol(mal_symbol_new_private(&vm->heap));
+    crypto_cipheriv_prototype = mal_value_new_undefined();
+    crypto_decipheriv_prototype = mal_value_new_undefined();
+    crypto_cipheriv_prototype = crypto_cipher_class(vm, module, "Cipheriv", mal_node_crypto_create_cipheriv, true);
+    crypto_decipheriv_prototype = crypto_cipher_class(vm, module, "Decipheriv", mal_node_crypto_create_decipheriv,
+        false);
+}
+
+static MalValue mal_node_crypto_get_ciphers(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver; (void) args; (void) argc; (void) new_target; (void) callee;
+    const char *names[countof(CRYPTO_CIPHERS)];
+    for (usize i = 0; i < countof(CRYPTO_CIPHERS); i++) names[i] = CRYPTO_CIPHERS[i].name;
+    return crypto_name_list(vm, names, countof(names));
+}
+
 typedef struct {
     const char *name;
     i32 length;
@@ -2206,7 +4255,23 @@ static const CryptoExport CRYPTO_EXPORTS[] = {
     {"argon2", 3, mal_node_crypto_argon2},
     {"argon2Sync", 2, mal_node_crypto_argon2_sync},
     {"hash", 3, mal_node_crypto_hash},
+    {"pbkdf2", 6, mal_node_crypto_pbkdf2},
     {"pbkdf2Sync", 5, mal_node_crypto_pbkdf2_sync},
+    {"scrypt", 5, mal_node_crypto_scrypt},
+    {"scryptSync", 4, mal_node_crypto_scrypt_sync},
+    {"hkdf", 6, mal_node_crypto_hkdf},
+    {"hkdfSync", 5, mal_node_crypto_hkdf_sync},
+    {"randomFill", 4, mal_node_crypto_random_fill},
+    {"randomFillSync", 3, mal_node_crypto_random_fill_sync},
+    {"getRandomValues", 1, mal_node_crypto_get_random_values},
+    {"randomUUIDv7", 0, mal_node_crypto_random_uuid_v7},
+    {"createSecretKey", 2, mal_node_crypto_create_secret_key},
+    {"createCipheriv", 4, mal_node_crypto_create_cipheriv},
+    {"createDecipheriv", 4, mal_node_crypto_create_decipheriv},
+    {"getCipherInfo", 2, mal_node_crypto_get_cipher_info},
+    {"getHashes", 0, mal_node_crypto_get_hashes},
+    {"getCiphers", 0, mal_node_crypto_get_ciphers},
+    {"getCurves", 0, mal_node_crypto_get_curves},
     {"randomBytes", 2, mal_node_crypto_random_bytes},
     {"randomInt", 3, mal_node_crypto_random_int},
     {"randomUUID", 1, mal_node_crypto_random_uuid},
@@ -2277,6 +4342,12 @@ void mal_host_install_node_crypto(
             vm, module, (const byte *) export_entry->name, function, method_flags);
         mal_gc_unroot(&function_root);
     }
+
+    crypto_install_key_objects(vm, module);
+    crypto_install_webcrypto(vm, module);
+    crypto_install_ciphers(vm, module);
+    roots[2] = crypto_constants_object(vm);
+    mal_intrinsic_define_data(vm, module, (const byte *) "constants", roots[2], method_flags);
 
     if (!crypto_roots_installed) {
         mal_gc_register_root_source(crypto_scan_roots, nullptr);

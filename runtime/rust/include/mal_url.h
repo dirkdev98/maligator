@@ -48,6 +48,10 @@ void mal_url_free(void *handle);
 /* Component getters: write the component (UTF-8) into `out` (<= out_cap bytes) and
  * return its full byte length (probe with out_cap 0, then fill). */
 int32_t mal_url_href(void *handle, uint8_t *out, int32_t out_cap);
+
+/* Node's domainToASCII (unicode false) / domainToUnicode result as UTF-8; "" when invalid. */
+int32_t mal_url_domain_convert(
+    const uint16_t *input, size_t input_len, bool unicode, uint8_t *out, int32_t out_cap);
 int32_t mal_url_protocol(void *handle, uint8_t *out, int32_t out_cap);
 int32_t mal_url_username(void *handle, uint8_t *out, int32_t out_cap);
 int32_t mal_url_password(void *handle, uint8_t *out, int32_t out_cap);

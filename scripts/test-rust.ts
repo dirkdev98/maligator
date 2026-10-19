@@ -35,7 +35,7 @@ export function runRustTests(args = process.argv.slice(2)): number {
 			path.join(rustDirectory, "Cargo.toml"),
 			"--locked",
 			"--features",
-			"node-argon2,node-zlib",
+			"node-argon2,node-crypto,node-zlib",
 			...args,
 		],
 		{

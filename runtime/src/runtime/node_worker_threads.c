@@ -67,10 +67,11 @@ void mal_host_install_node_worker_threads(
                 mal_intrinsic_ascii(vm, (const byte *) "markAsUncloneable"), 1,
                 node_worker_threads_mark_uncloneable));
         bool main_thread = !mal_workers_is_worker() || mal_workers_is_application();
+        roots[1] = mal_value_from_object(mal_intrinsic_new_object(vm));
         const char *names[] = {
             "Worker", "MessageChannel", "MessagePort", "parentPort", "workerData",
             "threadId", "receiveMessageOnPort", "markAsUncloneable", "isMainThread",
-            "SHARE_ENV",
+            "SHARE_ENV", "isInternalThread", "threadName", "resourceLimits",
         };
         MalValue values[] = {
             mal_workers_node_worker_constructor(vm),
@@ -83,6 +84,9 @@ void mal_host_install_node_worker_threads(
             roots[3],
             mal_value_new_boolean(main_thread),
             node_worker_threads_share_env(vm),
+            mal_value_new_boolean(false),
+            mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "")),
+            roots[1],
         };
         for (usize i = 0; i < countof(names); i++) {
             mal_intrinsic_define_data(vm, mal_value_to_object(module),

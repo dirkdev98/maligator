@@ -32,6 +32,7 @@ typedef enum MalProcStdio {
     MAL_PROC_STDIO_PIPE = 0, /* parent captures (out/err) or feeds (in) via a pipe */
     MAL_PROC_STDIO_INHERIT,  /* share the parent's own fd (0/1/2) */
     MAL_PROC_STDIO_IGNORE,   /* redirect to /dev/null */
+    MAL_PROC_STDIO_FD,       /* share the parent's `stdio_fd[i]` */
 } MalProcStdio;
 
 /* A fully-resolved spawn request. All strings are NUL-terminated C strings. */
@@ -49,6 +50,7 @@ typedef struct MalProcRequest {
     i64 timeout_ms;      /* mal_proc_run kills the child after this long; <= 0 waits forever */
     int kill_signal;     /* signal for timeout and max_buffer kills; 0 selects SIGTERM */
     usize max_buffer;    /* mal_proc_run kills once stdout+stderr exceed this; 0 is unlimited */
+    int stdio_fd[3];     /* parent descriptors for MAL_PROC_STDIO_FD streams */
 } MalProcRequest;
 
 /* How the child terminated plus any captured output. */
@@ -86,6 +88,9 @@ int mal_proc_run(const MalProcRequest *req, MalProcResult *out);
 
 typedef struct MalProcChild {
     int pid;
+    /* Parent ends of PIPE streams: nonblocking, close-on-exec stream sockets the
+     * caller owns once mal_proc_spawn returns 0; -1 for other modes. */
+    int stdio[3];
     int launch_fd;
     int launch_errno;
     usize launch_bytes;

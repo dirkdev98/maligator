@@ -78,6 +78,16 @@ rustls-pemfile = { version = "2", optional = true }
 # ThreadMode::Sequential — output is bit-identical to the parallel mode and the
 # derivation already runs on Maligator's own worker thread.
 rust-argon2 = { version = "3", default-features = false, optional = true }
+# Symmetric ciphers for node:crypto's Cipheriv/Decipheriv. The block, stream
+# and universal-hash crates are used directly rather than cbc / aes-gcm /
+# chacha20poly1305, whose typestate and one-shot AEAD APIs would force update()
+# to buffer whole messages; CBC, GCM and ChaCha20-Poly1305 are composed from them
+# in src/crypto_cipher.rs. All are pure Rust with runtime CPU feature detection.
+aes = { version = "0.8", optional = true }
+ctr = { version = "0.9", default-features = false, optional = true }
+ghash = { version = "0.5", default-features = false, optional = true }
+chacha20 = { version = "0.9", default-features = false, optional = true }
+poly1305 = { version = "0.8", default-features = false, optional = true }
 
 [features]
 # On by default so dev/test262 builds carry the full Intl + URL + RegExp surface.
@@ -104,6 +114,7 @@ temporal = ["dep:temporal_capi", "temporal_capi/compiled_data"]
 node-zlib = ["dep:flate2", "dep:brotli-decompressor", "dep:brotli"]
 node-tls = ["dep:rustls", "dep:rustls-pemfile"]
 node-argon2 = ["dep:rust-argon2"]
+node-crypto = ["dep:aes", "dep:ctr", "dep:ghash", "dep:chacha20", "dep:poly1305"]
 
 # The always-on Intl floor: locale parsing/negotiation (Intl.Locale,
 # getCanonicalLocales, maximize/minimize) + result stringification. Every service

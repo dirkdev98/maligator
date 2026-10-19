@@ -13,6 +13,7 @@
 
 #include <errno.h>
 #include <pthread.h>
+#include <sys/socket.h>
 #include <signal.h>
 #include <string.h>
 #include <unistd.h>
@@ -216,10 +217,11 @@ static bool mal_proc_child_devnull(int target, int oflag) {
     return ok;
 }
 
-/* Wire one standard stream. `pipe_fd` is the pipe end for PIPE mode (else -1). */
+/* Wire one standard stream. `pipe_fd` is the pipe or shared fd for PIPE and FD modes (else -1). */
 static bool mal_proc_child_stream(MalProcStdio mode, int target, int pipe_fd, int devnull_oflag) {
     switch (mode) {
         case MAL_PROC_STDIO_PIPE:
+        case MAL_PROC_STDIO_FD:
             return mal_proc_child_dup(pipe_fd, target);
         case MAL_PROC_STDIO_IGNORE:
             return mal_proc_child_devnull(target, devnull_oflag);
@@ -305,12 +307,53 @@ static void mal_proc_child(
     mal_proc_child_fail(errpipe);
 }
 
-int mal_proc_spawn(const MalProcRequest *req, MalProcChild *child) {
-    *child = (MalProcChild) {.launch_fd = -1};
-    if (req->stdin_mode == MAL_PROC_STDIO_PIPE || req->stdout_mode == MAL_PROC_STDIO_PIPE
-        || req->stderr_mode == MAL_PROC_STDIO_PIPE) {
-        child->launch_errno = ENOTSUP;
+/* libuv-style stdio channel: a stream socket pair, so writes can suppress SIGPIPE
+ * per call and the child sees a full-duplex descriptor as it does under Node. */
+static int mal_proc_make_channel(int fds[2]) {
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds) != 0) {
         return -1;
+    }
+    for (usize i = 0; i < 2; i++) {
+        int moved = mal_proc_move_above_stdio(fds[i]);
+        if (moved < 0 || mal_proc_set_cloexec(moved) != 0) {
+            int e = errno;
+            close(moved >= 0 ? moved : fds[i]);
+            if (i == 0) close(fds[1]); else close(fds[0]);
+            fds[0] = fds[1] = -1;
+            errno = e;
+            return -1;
+        }
+        fds[i] = moved;
+    }
+#if defined(SO_NOSIGPIPE)
+    int one = 1;
+    (void) setsockopt(fds[0], SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
+#endif
+    if (mal_proc_set_nonblock(fds[0]) != 0) {
+        int e = errno;
+        mal_proc_close_pipe(fds);
+        errno = e;
+        return -1;
+    }
+    return 0;
+}
+
+static int mal_proc_child_fd(const MalProcRequest *req, int index, MalProcStdio mode, const int channels[3][2]) {
+    if (mode == MAL_PROC_STDIO_PIPE) return channels[index][1];
+    if (mode == MAL_PROC_STDIO_FD) return req->stdio_fd[index];
+    return -1;
+}
+
+int mal_proc_spawn(const MalProcRequest *req, MalProcChild *child) {
+    *child = (MalProcChild) {.launch_fd = -1, .stdio = {-1, -1, -1}};
+    int channels[3][2] = {{-1, -1}, {-1, -1}, {-1, -1}};
+    const MalProcStdio modes[3] = {req->stdin_mode, req->stdout_mode, req->stderr_mode};
+    for (int i = 0; i < 3; i++) {
+        if (modes[i] == MAL_PROC_STDIO_PIPE && mal_proc_make_channel(channels[i]) != 0) {
+            child->launch_errno = errno;
+            for (int j = 0; j < i; j++) mal_proc_close_pipe(channels[j]);
+            return -1;
+        }
     }
 #if defined(__APPLE__)
     char *const *envp = req->envp != NULL ? req->envp : *_NSGetEnviron();
@@ -318,26 +361,34 @@ int mal_proc_spawn(const MalProcRequest *req, MalProcChild *child) {
     char *const *envp = req->envp != NULL ? req->envp : environ;
 #endif
     int pipe_fds[2];
-    if (mal_proc_make_pipe(pipe_fds) != 0) {
-        child->launch_errno = errno;
-        return -1;
-    }
-    if (mal_proc_set_nonblock(pipe_fds[0]) != 0) {
+    if (mal_proc_make_pipe(pipe_fds) != 0 || mal_proc_set_nonblock(pipe_fds[0]) != 0) {
         child->launch_errno = errno;
         mal_proc_close_pipe(pipe_fds);
+        for (int i = 0; i < 3; i++) mal_proc_close_pipe(channels[i]);
         return -1;
     }
     pid_t pid = mal_proc_fork();
     if (pid == 0) {
         close(pipe_fds[0]);
-        mal_proc_child(req, envp, -1, -1, -1, pipe_fds[1]);
+        for (int i = 0; i < 3; i++) if (channels[i][0] >= 0) close(channels[i][0]);
+        mal_proc_child(req, envp, mal_proc_child_fd(req, 0, modes[0], channels),
+            mal_proc_child_fd(req, 1, modes[1], channels), mal_proc_child_fd(req, 2, modes[2], channels),
+            pipe_fds[1]);
         _exit(127);
     }
     int fork_errno = errno;
     close(pipe_fds[1]);
+    for (int i = 0; i < 3; i++) {
+        if (channels[i][1] >= 0) close(channels[i][1]);
+        child->stdio[i] = channels[i][0];
+    }
     if (pid < 0) {
         child->launch_errno = fork_errno;
         close(pipe_fds[0]);
+        for (int i = 0; i < 3; i++) {
+            if (child->stdio[i] >= 0) close(child->stdio[i]);
+            child->stdio[i] = -1;
+        }
         return -1;
     }
     child->pid = (int) pid;

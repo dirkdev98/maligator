@@ -13,7 +13,7 @@
 //! probe-then-fill convention; the C side decodes to a MalString). URLSearchParams
 //! is implemented entirely C-side (form-urlencoded), so it needs nothing here.
 
-use ada_url::Url;
+use ada_url::{Idna, Url};
 
 use crate::ffi::{nullable_u16_slice, write_utf8};
 
@@ -204,4 +204,33 @@ pub unsafe extern "C" fn mal_url_set_hash(
         Some(unsafe { utf16_to_string(value, value_len) })
     };
     unsafe { url_mut(handle) }.set_hash(v.as_deref());
+}
+
+/// Node's url.domainToASCII / domainToUnicode: the hostname a special `ws://x` URL takes
+/// after `set_hostname(domain)`, or "" when that fails (src/node_url.cc). `unicode`
+/// then applies UTS #46 ToUnicode. Writes UTF-8 (probe with cap 0) and returns its length.
+#[no_mangle]
+pub unsafe extern "C" fn mal_url_domain_convert(
+    input: *const u16,
+    input_len: usize,
+    unicode: bool,
+    out: *mut u8,
+    out_cap: i32,
+) -> i32 {
+    let domain = unsafe { utf16_to_string(input, input_len) };
+    if domain.is_empty() {
+        return 0;
+    }
+    let Ok(mut url) = Url::parse("ws://x", None) else {
+        return 0;
+    };
+    if url.set_hostname(Some(&domain)).is_err() {
+        return 0;
+    }
+    let host = url.hostname();
+    if unicode {
+        unsafe { write_utf8(&Idna::unicode(host), out, out_cap) }
+    } else {
+        unsafe { write_utf8(host, out, out_cap) }
+    }
 }

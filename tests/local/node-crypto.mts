@@ -426,7 +426,7 @@ throwsTypeError("hash rejects an unknown output encoding", () =>
 );
 throwsError("createHash rejects an unknown algorithm", () => createHash("not-a-hash"));
 throwsTypeError("createHmac rejects unsupported algorithm", () =>
-	createHmac("sha1", "key"),
+	createHmac("not-a-hash", "key"),
 );
 throwsTypeError("createHmac requires a key", () =>
 	(createHmac as (...args: unknown[]) => unknown)("sha256"),
@@ -436,7 +436,7 @@ throwsRangeError("pbkdf2 rejects zero iterations", () =>
 	pbkdf2Sync("password", "salt", 0, 32, "sha256"),
 );
 throwsTypeError("pbkdf2 rejects unsupported digest", () =>
-	pbkdf2Sync("password", "salt", 1, 32, "sha1"),
+	pbkdf2Sync("password", "salt", 1, 32, "not-a-hash"),
 );
 const finalized = createHash("sha1");
 finalized.digest("base64");

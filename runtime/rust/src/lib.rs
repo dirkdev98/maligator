@@ -46,6 +46,11 @@ pub mod tls;
 #[cfg(feature = "node-argon2")]
 pub mod argon2;
 
+// Streaming AES-CBC/CTR/GCM and ChaCha20-Poly1305 for node:crypto's Cipheriv.
+// See src/crypto_cipher.rs + include/mal_crypto_cipher.h.
+#[cfg(feature = "node-crypto")]
+pub mod crypto_cipher;
+
 /// ABI version. Bump on any breaking change to the C header so the C side can
 /// assert the linked archive matches `mal_i18n.h`.
 /// v2: added `mal_i18n_collator_free` / `mal_i18n_plural_rules_free` (gc_todo.md D2).

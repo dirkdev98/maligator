@@ -29,7 +29,7 @@
 	},
 	{
 		"file": "builtin_console.c",
-		"sha256": "651cb452b02912f9dcd712c4a6dc9352fabce2d97d7ccef84626212e2bc36da6"
+		"sha256": "5f742a7f77885064268a228bf492dc89ef25e9177084aab1d3c99fdfbcc59bbc"
 	},
 	{
 		"file": "builtin_data_view.c",
@@ -309,11 +309,11 @@
 	},
 	{
 		"file": "generated/node_builtin_installers.inc",
-		"sha256": "59ddaafdcde45b479425d5bd71ed5b1bb6b3995a05157c1bb57a3f6594cc756d"
+		"sha256": "d98c8674d5575d07a2ff3f791f274d45cc6317be56606b7033b09eb3cc52f1f9"
 	},
 	{
 		"file": "generated/node_builtin_modules.inc",
-		"sha256": "5773097c5438f07cb47e857d3e4c4e60a4bf86d30e402008d3ffbdbf9dfbaa65"
+		"sha256": "9924851cee4f72a009865b602391821b126ac17c47676894ea6ee69587ef3f35"
 	},
 	{
 		"file": "generated/primordial_registry.inc",
@@ -349,7 +349,7 @@
 	},
 	{
 		"file": "runtime/host_registry.c",
-		"sha256": "b85dde8a32c4c02f481e7546f9f2305d8a0a875457e3dcb5d53223430121692a"
+		"sha256": "bfc492459c3e10fc4163004d72ae5ef0f566f372b84a914d60f1bf25f5d0d092"
 	},
 	{
 		"file": "runtime/mal_application.c",
@@ -401,11 +401,11 @@
 	},
 	{
 		"file": "runtime/node_child_process.c",
-		"sha256": "e81142c6629f5ccf99a605495aa7376bf5ec3727bbd7a040c370531568a1ab60"
+		"sha256": "c8bc1125337a15ebf4f6fb2d8e38c3aa3fdd3bf71e46f55630fa6a9188d45ef6"
 	},
 	{
 		"file": "runtime/node_child_process.h",
-		"sha256": "f7d2b3e5b69571ec51289cf5cdc6d42f1b8fce5108b0c8daa0cbb9a6bb9ae320"
+		"sha256": "70901d5017981d143812a77892edebdec774912b26e5a88212ba3d98c9604529"
 	},
 	{
 		"file": "runtime/node_cluster.c",
@@ -416,12 +416,20 @@
 		"sha256": "5e232ec78a3534e5cea50e202df3adcf9b90983915049cbd8cd9accad466dddc"
 	},
 	{
+		"file": "runtime/node_console.c",
+		"sha256": "8ff5f08cd2fe1420834d443d3da9d7a171c7395d9ace85f5727d8cf3dbda85fc"
+	},
+	{
+		"file": "runtime/node_console.h",
+		"sha256": "c3b00c0c1dd52769340b987c0de88d548473c2d2515315dbbabbfa8a071961dd"
+	},
+	{
 		"file": "runtime/node_crypto.c",
-		"sha256": "c38d9329533ae468b136a98abd5d37dffe1e62a9e56708117e3cb1dbdadc5528"
+		"sha256": "9083c62eaac596ada1abe808b4f35380f451c2a3804449e0dd6fd6b031f34436"
 	},
 	{
 		"file": "runtime/node_crypto.h",
-		"sha256": "03f48d1c952dc36211ddb6f5421609e4cb0f5fad3d59be662bbc8accd3fdf83f"
+		"sha256": "f1bc07f044495306085e071069fe5a6dac8db47cced55489cdeac2e7a9ad8727"
 	},
 	{
 		"file": "runtime/node_diagnostics_channel.c",
@@ -492,12 +500,24 @@
 		"sha256": "445b73f1b083ea2dd58f7b4e4c812fc9ef594f65a9308fb8696ad27d1d16ac67"
 	},
 	{
+		"file": "runtime/node_inspect.c",
+		"sha256": "9dc35872f57eb70b3ed62e55b9c5b457d818359f9e587c84f74f8e31468c6598"
+	},
+	{
 		"file": "runtime/node_inspector.c",
 		"sha256": "ce0b34764a1afd602223734c4fd4fb35496af012489ac06dce3de8fdfc236c9c"
 	},
 	{
 		"file": "runtime/node_inspector.h",
 		"sha256": "2ccef955b7da83bf4289a1f6ebdf625fb27a10f0756411f1ec854c494ad541ce"
+	},
+	{
+		"file": "runtime/node_legacy.c",
+		"sha256": "722fe516657a23d67a50b731961fde29ea3198652e19972871cb450f19216f94"
+	},
+	{
+		"file": "runtime/node_legacy.h",
+		"sha256": "60dfa737314fd05b64b241b377422b21b3025f1db9c6b8f72afac7fd66bdba2c"
 	},
 	{
 		"file": "runtime/node_module.c",
@@ -509,7 +529,7 @@
 	},
 	{
 		"file": "runtime/node_module_api.c",
-		"sha256": "85ec1d935de0e3896edfb3603f82ec3f1601aca7453679024b26a3a084b23150"
+		"sha256": "b2c867e424a0bdc4cfa504b62bac4b9866461dc7f0d37cf06b88c20ffd9be474"
 	},
 	{
 		"file": "runtime/node_module_api.h",
@@ -525,7 +545,7 @@
 	},
 	{
 		"file": "runtime/node_os.c",
-		"sha256": "b7ff3e8651d045239045e44cefb9350a50739f4371432e72ca3cf1ec36101836"
+		"sha256": "cefb06f18b2e763a5525aa11427c1e6cf323730c87050baa86926e7b6d934900"
 	},
 	{
 		"file": "runtime/node_os.h",
@@ -565,11 +585,11 @@
 	},
 	{
 		"file": "runtime/node_readline.c",
-		"sha256": "43a9092bc3bdb83eeb99b3271424e9520f9fffb050e6197b5f9b74409cf16206"
+		"sha256": "a50f4faf11d9d10ea37a192d084b3c2d7564fec348f6223b2fbe95afb60403a7"
 	},
 	{
 		"file": "runtime/node_readline.h",
-		"sha256": "f4ca16f1dd3b83df1b900bf67d70afc2053a1e05171c52fe9dd73ec6f41bbdd1"
+		"sha256": "984908f4386ddc1151c9d059f247591e58d16c8355ac078e204c44fd45ab423f"
 	},
 	{
 		"file": "runtime/node_sqlite.c",
@@ -581,11 +601,11 @@
 	},
 	{
 		"file": "runtime/node_stream.c",
-		"sha256": "8a2a0da1b4037c98ccc7c72ef7062d62bd5b4091dc83aa4a7f7e96b11f2a2357"
+		"sha256": "49cced54be739b23c7d97fcd0ff465567050b8cbc028d7f1833c86e98b3a310c"
 	},
 	{
 		"file": "runtime/node_stream.h",
-		"sha256": "4553c29f64b17fd2e5777cd17146b29dd56e06156b77f633f955f3190c0ed6a6"
+		"sha256": "4b1a26e5b7e57661c576d3adf3af303e12e705207b63963dc25a97f44b0a0870"
 	},
 	{
 		"file": "runtime/node_string_decoder.c",
@@ -621,7 +641,7 @@
 	},
 	{
 		"file": "runtime/node_url.c",
-		"sha256": "7c40f4b8631894f65c702137f9658a1446b13ed4c70121d6bf7369cddf8ff359"
+		"sha256": "bece8859892cba90697097d043e99ff06f7642cbb49ba04f29f43aa59081630f"
 	},
 	{
 		"file": "runtime/node_url.h",
@@ -629,7 +649,7 @@
 	},
 	{
 		"file": "runtime/node_util.c",
-		"sha256": "12f98927aeca8e9e1fca5e38f15ddb787ee7c35d4c21e7da3c60fbbd2ef1e46e"
+		"sha256": "ed534b2f328dcb7e18be91cd08166b155e9f31795e0229c0e50790189551b2e2"
 	},
 	{
 		"file": "runtime/node_util.h",
@@ -637,7 +657,7 @@
 	},
 	{
 		"file": "runtime/node_v8.c",
-		"sha256": "4962e1aff0f9a059a3f6c8541c0edbb5fd3233bd19049cfd04d2e280ddddf9ae"
+		"sha256": "2a7d2bd2f569ed2e2df708ca0d41c5559435df69cd58ada912f8827ecae0aded"
 	},
 	{
 		"file": "runtime/node_v8.h",
@@ -653,7 +673,7 @@
 	},
 	{
 		"file": "runtime/node_worker_threads.c",
-		"sha256": "3b34ec24ccaa4eb16d457d3f60d6ff0a3227296b2879bc44c050c94c75c04385"
+		"sha256": "9e30ec71840981ca3fa2355eb63b5678538573461b62e0b15ca2ce46b7c82749"
 	},
 	{
 		"file": "runtime/node_worker_threads.h",

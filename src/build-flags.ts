@@ -197,7 +197,7 @@ export function normalizeNativeFeatures(
 		...(webPlatformEnabled || nodeEnabled ? ["url"] : []),
 		...(regexpEnabled ? ["regexp"] : []),
 		...(temporalEnabled ? ["temporal"] : []),
-		...(nodeEnabled ? ["node-argon2", "node-tls", "node-zlib"] : []),
+		...(nodeEnabled ? ["node-argon2", "node-crypto", "node-tls", "node-zlib"] : []),
 	]);
 	return {
 		primordialsLocked,

@@ -12,6 +12,7 @@
 #include "gc.h"
 #include "heap_string.h"
 #include "intrinsics.h"
+#include "mal_url.h"
 #include "node_module.h"
 #include "object.h"
 #include "object_ops.h"
@@ -646,6 +647,56 @@ static MalValue url_to_http_options(
     return mal_value_new_undefined();
 }
 
+/* url.domainToASCII / domainToUnicode: `${domain}` through the URL host parser. */
+static MalValue url_domain_convert(MalVm *vm, const MalValue *args, i32 argc, bool unicode) {
+    if (argc < 1) {
+        mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "The \"domain\" argument must be specified", "ERR_MISSING_ARGS");
+        return mal_value_new_undefined();
+    }
+    MalString *domain;
+    if (!mal_vm_to_string(vm, args[0], &domain)) return mal_value_new_undefined();
+    usize length = mal_string_length(domain);
+    c16 *units = malloc(sizeof(c16) * (length == 0 ? 1 : length));
+    if (units == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
+    for (usize i = 0; i < length; i++) units[i] = mal_string_code_unit_at(domain, i);
+    u8 stack[256];
+    u8 *out = stack;
+    i32 written = mal_url_domain_convert(units, length, unicode, stack, (i32) sizeof stack);
+    if (written > (i32) sizeof stack) {
+        out = malloc((usize) written);
+        if (out == nullptr) {
+            free(units);
+            mal_vm_throw_allocation_error(vm);
+            return mal_value_new_undefined();
+        }
+        mal_url_domain_convert(units, length, unicode, out, written);
+    }
+    free(units);
+    MalString *result = mal_string_from_utf8(&vm->heap, out, written < 0 ? 0 : (usize) written);
+    if (out != stack) free(out);
+    if (result == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
+    return mal_value_from_string(result);
+}
+
+static MalValue url_domain_to_ascii(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver, (void) new_target, (void) callee;
+    return url_domain_convert(vm, args, argc, false);
+}
+
+static MalValue url_domain_to_unicode(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver, (void) new_target, (void) callee;
+    return url_domain_convert(vm, args, argc, true);
+}
+
 void mal_host_install_node_url(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
     const MalHostLaunchContext *launch) {
@@ -709,6 +760,10 @@ void mal_host_install_node_url(
             mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]),
                                       (const byte *) names[i], values[i], URL_VISIBLE);
         }
+        mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[0]), (const byte *) "domainToASCII", 1,
+            url_domain_to_ascii);
+        mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[0]), (const byte *) "domainToUnicode", 1,
+            url_domain_to_unicode);
         vm->intrinsics[MAL_INTRINSIC_NODE_URL_CONSTRUCTOR] = roots[2];
         vm->intrinsics[MAL_INTRINSIC_NODE_URL_PROTOTYPE] = roots[1];
         vm->intrinsics[MAL_INTRINSIC_NODE_URL_MODULE] = roots[0];
