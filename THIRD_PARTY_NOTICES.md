@@ -21,9 +21,9 @@ and error codes closely:
 | `runtime/src/runtime/node_fs.c`                  | lib/internal/fs/cp/cp.js, lib/internal/fs/cp/cp-sync.js, src/node_file.cc |
 | `runtime/src/runtime/node_inspect.c`             | lib/internal/util/inspect.js                                              |
 | `runtime/src/runtime/node_dgram.c`               | lib/dgram.js                                                              |
-| `runtime/src/runtime/node_net.c`                 | lib/net.js                                                                |
+| `runtime/src/runtime/node_net.c`                 | lib/net.js, lib/_tls_wrap.js                                              |
 | `runtime/src/runtime/node_path.c`                | lib/path.js                                                               |
-| `runtime/src/runtime/node_tls.c`                 | lib/tls.js                                                                |
+| `runtime/src/runtime/node_tls.c`                 | lib/tls.js, lib/_tls_wrap.js                                              |
 | `runtime/src/runtime/node_util_mime.c`           | lib/internal/mime.js                                                      |
 
 ```text

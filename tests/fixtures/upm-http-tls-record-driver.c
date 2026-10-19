@@ -13,7 +13,7 @@ static void check(int condition, const char *message) {
 int main(void) {
     MalTlsClient *client = NULL;
     check(mal_tls_client_create((const uint8_t *)"localhost", 9, NULL, 0,
-        NULL, 0, 1, &client) == MAL_TLS_STATUS_OK, "create record probe");
+        NULL, 0, NULL, 0, NULL, 0, 1, &client) == MAL_TLS_STATUS_OK, "create record probe");
     if (client == NULL) return 1;
     check(mal_tls_client_has_pending_input(client) == 0, "initial record boundary");
     const uint8_t header[] = {22, 3, 3, 0, 16};
@@ -35,20 +35,20 @@ int main(void) {
     MalTlsClient *first = NULL;
     MalTlsClient *second = NULL;
     check(mal_tls_client_create((const uint8_t *)"localhost", 9, pem, length,
-        (const uint8_t *)"http/1.1", 8, 0, &first) == MAL_TLS_STATUS_OK, "first verified config");
+        (const uint8_t *)"http/1.1", 8, NULL, 0, NULL, 0, 0, &first) == MAL_TLS_STATUS_OK, "first verified config");
     check(mal_tls_client_create((const uint8_t *)"other.example", 13, pem, length,
-        (const uint8_t *)"http/1.1", 8, 0, &second) == MAL_TLS_STATUS_OK, "same trust with separate hostname");
+        (const uint8_t *)"http/1.1", 8, NULL, 0, NULL, 0, 0, &second) == MAL_TLS_STATUS_OK, "same trust with separate hostname");
     check(mal_tls_client_config_id(first) != 0
         && mal_tls_client_config_id(first) == mal_tls_client_config_id(second), "verified policy cache reuses identity");
     mal_tls_client_free(&second);
     pem[length] = '\n';
     check(mal_tls_client_create((const uint8_t *)"localhost", 9, pem, length + 1,
-        (const uint8_t *)"http/1.1", 8, 0, &second) == MAL_TLS_STATUS_OK, "changed trust input remains valid");
+        (const uint8_t *)"http/1.1", 8, NULL, 0, NULL, 0, 0, &second) == MAL_TLS_STATUS_OK, "changed trust input remains valid");
     check(mal_tls_client_config_id(second) != mal_tls_client_config_id(first), "different trust bytes cannot alias policy identity");
     mal_tls_client_free(&first);
     mal_tls_client_free(&second);
     check(mal_tls_client_create((const uint8_t *)"localhost", 9, (const uint8_t *)"bad", 3,
-        NULL, 0, 0, &client) == MAL_TLS_STATUS_INVALID_ARGUMENT, "malformed CA never borrows cached config");
+        NULL, 0, NULL, 0, NULL, 0, 0, &client) == MAL_TLS_STATUS_INVALID_ARGUMENT, "malformed CA never borrows cached config");
     printf("RESULT %d/%d\n", passed, checks);
     return passed == checks ? 0 : 1;
 }

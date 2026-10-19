@@ -814,7 +814,8 @@ static void client_write_ready(void *data) {
 
 bool mal_http_client_start(
     MalHost *host, const char *host_name, u16 port, bool secure,
-    const byte *ca_pem, usize ca_pem_length, bool keep_alive, byte *request_head,
+    const byte *ca_pem, usize ca_pem_length, const MalTlsClientIdentity *identity,
+    bool keep_alive, byte *request_head,
     usize request_head_len, i64 content_length, bool head_request,
     u32 timeout_ms, MalHostHandle *operation) {
     if (host == nullptr || host_name == nullptr || request_head == nullptr
@@ -838,7 +839,7 @@ bool mal_http_client_start(
     client->head_request = head_request;
     if (secure) {
         if (mal_tcp_tls_create_client((const byte *)host_name, strlen(host_name),
-                ca_pem, ca_pem_length, (const byte *)"http/1.1", 8, false, &client->tls)
+                ca_pem, ca_pem_length, (const byte *)"http/1.1", 8, identity, false, &client->tls)
             != MAL_TLS_STATUS_OK) goto fail_client;
     }
     client->request_chunked = content_length < 0;

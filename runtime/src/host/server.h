@@ -65,8 +65,20 @@ bool mal_http_server_configure_limits(
 /* The bound port (host byte order). */
 typedef struct MalTlsClient MalTlsClient;
 typedef struct MalTlsServerConfig MalTlsServerConfig;
+/* `error` is 0 once a handshake completes, else the errno that ended the connection before it
+ * did (EPROTO for a TLS protocol failure). Runs on the reactor path and must not call into
+ * JavaScript; after a failure the connection closes as soon as the callback returns. */
+typedef void (*MalHttpServerTlsCallback)(void *data, MalHttpConn *conn, int error);
 /* Takes ownership; must precede the first accept, i.e. the listen call's first yield. */
-bool mal_http_server_set_tls(MalHttpServer *server, MalTlsServerConfig *config);
+bool mal_http_server_set_tls(
+    MalHttpServer *server, MalTlsServerConfig *config,
+    MalHttpServerTlsCallback callback, void *data);
+bool mal_http_conn_is_tls(const MalHttpConn *conn);
+/* Copies OpenSSL's reason text for the TLS failure ending `conn` (NUL-terminated, empty when
+ * the cause has no counterpart); valid inside the TLS callback. */
+void mal_http_conn_tls_failure(const MalHttpConn *conn, char *out, usize capacity);
+/* Takes ownership and frees the previous config; sessions already accepted keep theirs. */
+bool mal_http_server_replace_tls(MalHttpServer *server, MalTlsServerConfig *config);
 u16 mal_http_server_port(const MalHttpServer *server);
 
 /* Stop accepting and complete once all accepted connections have drained. Close

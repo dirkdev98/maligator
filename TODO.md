@@ -404,6 +404,14 @@ Shared lifetime and fallback rules are recorded in
       spends 1.0 s for 40 changed functions. Verification is another 5.5 s (13%),
       most of it independent re-derivation at trust boundaries.
 
+- [ ] redundant-tdz-check-folding treats a value it is still visiting as possibly
+      empty, so a loop value that reaches itself on one edge (a switch's implicit
+      default path, a `left`/`right` swap) keeps its TDZ check. Visiting
+      optimistically, as a greatest fixpoint that caches a true result only once no
+      unfinished ancestor supports it, removes those checks. tests/native-tdz-plan.test.ts
+      depends on its ROTATION fixture keeping one such check, so it needs a fixture
+      whose check Core cannot remove before the change lands.
+
 - [ ] Put aggregate work and memory budgets around analysis extensions, including
       rejected candidates and nested queries, not only admitted entries. Reuse
       versioned queries within their valid lifetime; bound contexts and recursive
@@ -484,6 +492,15 @@ iterator cursor is not, by itself, permission to delete its language object.
       record seen once per call never builds an escaped-key plan; its keys and
       short strings go through `memmove` calls (5% of samples) and numbers through
       `mal_text_buffer_append_number` (6%).
+- [ ] Create no function object for a nested function declaration whose binding is
+      only ever called directly (never read as a value, reassigned, or visible to
+      eval); its direct calls can take the declaring activation's environment
+      instead of the closure's. TypeScript's checkTypeRelatedTo instantiates about 40
+      nested declarations per call, and closure creation is 8% of a type-check.
+- [ ] Specialize higher-order helpers for constant function arguments. TypeScript's
+      binarySearchKey reaches getTypeId and compareValues through generic calls
+      (5% of a type-check in call dispatch), and a 64-element binarySearch loop runs
+      8x slower than under Node.
 - [ ] Narrow the remaining class accessor gap. Loop sites now probe for a
       uniquely named class getter or setter and inline it behind a function-index
       guard: the `#celsius` getter/setter pair takes 33 ms for 5M iterations
@@ -1156,10 +1173,18 @@ remains a Maligator extension and does not count as global fetch conformance.
       ECDH/X25519, deriveKey/deriveBits, wrapKey, jwk export of secret keys, and
       Crypto/SubtleCrypto methods on their prototypes rather than the instances.
 
-- [ ] tls and https: SNICallback, setSecureContext, client certificates
-      (`cert`/`key`) for tls.connect and the https client, https agents with TLS
-      options, rustls error detail in tlsClientError codes, and
-      'secureConnection'/'tlsClientError' on https.Server.
+- [ ] tls and https: `authorizationError` and `rejectUnauthorized: false` (accept an
+      unverified client certificate with `authorized=false` and report OpenSSL verify
+      codes on both sides; keep the verifier on the session and re-verify on demand).
+      The client verifies the server certificate during the handshake, while Node
+      verifies afterwards, so a server sees an unknown_ca alert instead of
+      'secureConnection'. getPeerCertificate(true) issuer chains, repeated name
+      attributes as arrays, public-key fields, `ext_key_usage`, `infoAccess` and IPv6
+      subjectaltname entries. SNICallback/addContext on https.Server (the native HTTP
+      server needs the ClientHello acceptor path). https agents with TLS options,
+      Buffer `cert`/`key` and `pfx`/`passphrase` for https requests, Node's
+      `ERR_OSSL_*` codes for malformed credentials, and 'connection' on https.Server
+      with TLSSocket-like sockets for its 'tlsClientError'.
 
 - [ ] modules: createRequire with a computed specifier, or a base other than
       `import.meta.url`, resolves only what the module graph bundled from literal
@@ -1167,11 +1192,23 @@ remains a Maligator extension and does not count as global fetch conformance.
       realpath symlinked files, and resolves a computed bare specifier only when the
       module imports it or resolves it literally.
 
-- [ ] dns record types beyond A/AAAA (needs res_query and libresolv in the link);
-      zlib zstd and the zip archive APIs; the WebSocket client global.
+- [ ] dns: resolveAny sends no query (ENOTIMP); decide whether to match Node 26's
+      irregular cares_wrap output. resolve4/resolve6 still use getaddrinfo, so
+      /etc/hosts applies and `ttl` is 0; route them through the record-query
+      transport. dns.Resolver instances share the module's servers and lack the
+      `timeout`/`tries` options and cancel(); queries send no EDNS0.
 
-- [ ] worker_threads environment data, markAsUntransferable, BroadcastChannel and
-      locks.
+- [ ] zlib zstd and the zip archive APIs; the WebSocket client global.
+
+- [ ] worker_threads: `locks` / `navigator.locks` (LockManager request/query,
+      exclusive and shared modes, ifAvailable, steal, signal), shared across threads
+      through a process-wide table with per-isolate grant mailboxes. A real
+      `MessageEvent` class (data, origin, lastEventId, source, ports and its init
+      dictionary) as a global, with port and BroadcastChannel messages dispatched as
+      instances of it. `markAsUntransferable` should also make an ArrayBuffer's
+      `transfer()`/`transferToFixedLength()` throw "ArrayBuffer is not detachable
+      and could not be cloned.", as V8's detach key does. BroadcastChannel scans one
+      process-wide list; index it by name if processes use many channels.
 
 - [ ] vm's SourceTextModule, SyntheticModule, measureMemory and DONT_CONTEXTIFY, and
       a live contextified global (contexts copy the sandbox's own enumerable

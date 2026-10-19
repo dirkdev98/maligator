@@ -17,6 +17,8 @@ typedef enum MalTcpProgressKind {
     MAL_TCP_WRITE_COMPLETE,
     /* A listener accepted a connection, now live on `accepted` with reads paused. */
     MAL_TCP_ACCEPTED,
+    /* A ClientHello awaits mal_tcp_tls_select; `bytes` holds its server name, null when absent. */
+    MAL_TCP_TLS_CLIENT_HELLO,
 } MalTcpProgressKind;
 
 typedef struct MalTcpProgress {
@@ -29,6 +31,8 @@ typedef struct MalTcpProgress {
 
 typedef struct MalTcpTerminal {
     int error;
+    /* OpenSSL's reason text for an EPROTO TLS failure with a known cause, else empty. */
+    char tls_failure[48];
 } MalTcpTerminal;
 
 void mal_tcp_progress_free(void *data);
@@ -49,11 +53,25 @@ bool mal_tcp_read_resume(MalHost *host, MalHostHandle operation);
 bool mal_tcp_set_keep_alive(
     MalHost *host, MalHostHandle operation, bool enabled, u32 initial_delay_ms);
 bool mal_tcp_set_no_delay(MalHost *host, MalHostHandle operation, bool enabled);
+/* A client certificate chain and its private key; empty halves present no certificate. */
+typedef struct MalTlsClientIdentity {
+    const byte *cert_pem;
+    usize cert_pem_length;
+    const byte *key_pem;
+    usize key_pem_length;
+} MalTlsClientIdentity;
+
+/* The leaf peer certificate's DER length (copying at most `capacity`), or -1 without one. */
+i64 mal_tcp_tls_peer_certificate(MalHost *host, MalHostHandle operation, byte *output, usize capacity);
+/* Reads the ClientHello first and reports it, so the caller picks the config by server name. */
+bool mal_tcp_start_tls_server_sni(MalHost *host, MalHostHandle operation);
+/* Continues a reported ClientHello under `config`; false ends the connection with EPROTO. */
+bool mal_tcp_tls_select(MalHost *host, MalHostHandle operation, const MalTlsServerConfig *config);
 bool mal_tcp_start_tls(
     MalHost *host, MalHostHandle operation,
     const byte *server_name, usize server_name_length,
     const byte *ca_pem, usize ca_pem_length,
-    const byte *alpn, usize alpn_length, bool insecure);
+    const byte *alpn, usize alpn_length, const MalTlsClientIdentity *identity, bool insecure);
 /* Starts the server role on an accepted connection; the session borrows `config`. */
 bool mal_tcp_start_tls_server(
     MalHost *host, MalHostHandle operation, const MalTlsServerConfig *config);
@@ -80,4 +98,5 @@ void mal_tcp_shutdown(MalHost *host);
 int mal_tcp_tls_create_client(
     const byte *server_name, usize server_name_length,
     const byte *ca_pem, usize ca_pem_length,
-    const byte *alpn, usize alpn_length, bool insecure, MalTlsClient **out);
+    const byte *alpn, usize alpn_length, const MalTlsClientIdentity *identity, bool insecure,
+    MalTlsClient **out);

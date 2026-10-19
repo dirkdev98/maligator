@@ -41,9 +41,9 @@ const NODE_DERIVED: Array<Derivation> = [
 		upstream: "lib/internal/util/inspect.js",
 	},
 	{ file: "runtime/src/runtime/node_dgram.c", upstream: "lib/dgram.js" },
-	{ file: "runtime/src/runtime/node_net.c", upstream: "lib/net.js" },
+	{ file: "runtime/src/runtime/node_net.c", upstream: "lib/net.js, lib/_tls_wrap.js" },
 	{ file: "runtime/src/runtime/node_path.c", upstream: "lib/path.js" },
-	{ file: "runtime/src/runtime/node_tls.c", upstream: "lib/tls.js" },
+	{ file: "runtime/src/runtime/node_tls.c", upstream: "lib/tls.js, lib/_tls_wrap.js" },
 	{ file: "runtime/src/runtime/node_util_mime.c", upstream: "lib/internal/mime.js" },
 ];
 

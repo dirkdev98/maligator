@@ -60,6 +60,8 @@ struct MalHttpServer {
     void *close_data;
     /* Owned; accepted connections then speak TLS in the server role. */
     MalTlsServerConfig *tls_config;
+    MalHttpServerTlsCallback tls_callback;
+    void *tls_data;
 };
 
 typedef struct MalHttpWireWrite {
@@ -142,6 +144,8 @@ typedef struct MalHttpConn {
     usize tls_out_offset;
     /* The last plaintext read filled its buffer, so the session may hold more. */
     bool tls_maybe_buffered;
+    bool tls_secure;
+    int tls_error;
 } MalHttpConn;
 
 void *mal_http_conn_context(const MalHttpConn *conn) {
@@ -245,6 +249,12 @@ static void conn_close(MalHttpConn *c) {
         return;
     }
     MalHttpServer *server = c->server;
+#if MAL_NODE
+    if (c->tls != nullptr && !c->tls_secure && server->tls_callback != nullptr) {
+        c->tls_secure = true;
+        server->tls_callback(server->tls_data, c, c->tls_error != 0 ? c->tls_error : ECONNRESET);
+    }
+#endif
     conn_cancel_timeout(c);
     (void) mal_reactor_cancel_op(conn_reactor(c), &c->read_op);
     (void) mal_reactor_cancel_op(conn_reactor(c), &c->write_op);
@@ -935,8 +945,15 @@ static ssize_t conn_tls_read(MalHttpConn *c, char *out, usize length) {
         // The handshake replies, or the alert explaining a failure, go out before reading on.
         bool flushed = conn_tls_flush(c);
         if (status != MAL_TLS_STATUS_OK || consumed != (usize) n) {
+            c->tls_error = EPROTO;
             errno = EPROTO;
             return -1;
+        }
+        if (!c->tls_secure && mal_tls_client_is_handshaking(c->tls) == 0) {
+            c->tls_secure = true;
+            if (c->server->tls_callback != nullptr) {
+                c->server->tls_callback(c->server->tls_data, c, 0);
+            }
         }
         if (!flushed) {
             if (errno != EAGAIN && errno != EWOULDBLOCK) return -1;
@@ -1307,15 +1324,47 @@ bool mal_http_server_configure_limits(
     return true;
 }
 
-bool mal_http_server_set_tls(MalHttpServer *server, MalTlsServerConfig *config) {
+bool mal_http_server_set_tls(
+    MalHttpServer *server, MalTlsServerConfig *config,
+    MalHttpServerTlsCallback callback, void *data) {
 #if MAL_NODE
     if (server == nullptr || server->tls_config != nullptr) return false;
+    server->tls_config = config;
+    server->tls_callback = callback;
+    server->tls_data = data;
+    return true;
+#else
+    (void) server; (void) config; (void) callback; (void) data;
+    return false;
+#endif
+}
+
+bool mal_http_server_replace_tls(MalHttpServer *server, MalTlsServerConfig *config) {
+#if MAL_NODE
+    if (server == nullptr || server->tls_config == nullptr || config == nullptr) return false;
+    mal_tls_server_config_free(&server->tls_config);
     server->tls_config = config;
     return true;
 #else
     (void) server; (void) config;
     return false;
 #endif
+}
+
+void mal_http_conn_tls_failure(const MalHttpConn *conn, char *out, usize capacity) {
+    if (capacity == 0) return;
+    out[0] = '\0';
+#if MAL_NODE
+    if (conn == nullptr || conn->tls == nullptr) return;
+    intptr_t length = mal_tls_session_info(conn->tls, MAL_TLS_INFO_FAILURE, (uint8_t *) out, capacity - 1);
+    out[length > 0 && (usize) length < capacity ? (usize) length : 0] = '\0';
+#else
+    (void) conn;
+#endif
+}
+
+bool mal_http_conn_is_tls(const MalHttpConn *conn) {
+    return conn != nullptr && conn->tls != nullptr;
 }
 
 u16 mal_http_server_port(const MalHttpServer *server) {

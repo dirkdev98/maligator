@@ -3,7 +3,7 @@
 
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
-use rustls::server::{ResolvesServerCert, WebPkiClientVerifier};
+use rustls::server::{Accepted, Acceptor, ResolvesServerCert, WebPkiClientVerifier};
 use rustls::sign::CertifiedKey;
 use rustls::{
     ClientConfig, ClientConnection, Connection, DigitallySignedStruct, ProtocolVersion,
@@ -27,6 +27,7 @@ pub const MAL_TLS_INFO_PROTOCOL: i32 = 1;
 pub const MAL_TLS_INFO_CIPHER: i32 = 2;
 pub const MAL_TLS_INFO_SERVER_NAME: i32 = 3;
 pub const MAL_TLS_INFO_PEER_CERTIFIED: i32 = 4;
+pub const MAL_TLS_INFO_FAILURE: i32 = 5;
 
 #[derive(Debug)]
 struct NoCertificateVerification;
@@ -78,6 +79,9 @@ impl ServerCertVerifier for NoCertificateVerification {
 
 pub struct MalTlsClient {
     connection: Connection,
+    /// OpenSSL's reason text for the failure that ended the session, when one corresponds.
+    failure: Option<&'static str>,
+    seen_ciphertext: bool,
     peer_closed: bool,
     config_id: u64,
     record_header: [u8; 5],
@@ -112,8 +116,36 @@ impl MalTlsClient {
 struct CachedConfig {
     ca_pem: Vec<u8>,
     alpn: Vec<u8>,
+    cert_pem: Vec<u8>,
+    key_pem: Vec<u8>,
     config: Arc<ClientConfig>,
     id: u64,
+}
+
+impl CachedConfig {
+    fn matches(&self, ca_pem: &[u8], alpn: &[u8], cert_pem: &[u8], key_pem: &[u8]) -> bool {
+        self.ca_pem == ca_pem && self.alpn == alpn && self.cert_pem == cert_pem && self.key_pem == key_pem
+    }
+}
+
+type ClientIdentity = (Vec<CertificateDer<'static>>, rustls::pki_types::PrivateKeyDer<'static>);
+
+// Node presents a client certificate only when both halves are configured.
+fn client_identity(cert_pem: &[u8], key_pem: &[u8]) -> Result<Option<ClientIdentity>, i32> {
+    if cert_pem.is_empty() || key_pem.is_empty() {
+        return Ok(None);
+    }
+    let mut chain = Vec::new();
+    for certificate in rustls_pemfile::certs(&mut Cursor::new(cert_pem)) {
+        chain.push(certificate.map_err(|_| MAL_TLS_STATUS_BAD_CERT)?);
+    }
+    if chain.is_empty() {
+        return Err(MAL_TLS_STATUS_BAD_CERT);
+    }
+    let key = rustls_pemfile::private_key(&mut Cursor::new(key_pem))
+        .map_err(|_| MAL_TLS_STATUS_BAD_KEY)?
+        .ok_or(MAL_TLS_STATUS_BAD_KEY)?;
+    Ok(Some((chain, key)))
 }
 
 static CONFIGS: OnceLock<Mutex<VecDeque<CachedConfig>>> = OnceLock::new();
@@ -122,6 +154,8 @@ static NEXT_CONFIG_ID: AtomicU64 = AtomicU64::new(1);
 fn client_config(
     ca_pem: &[u8],
     alpn: &[u8],
+    cert_pem: &[u8],
+    key_pem: &[u8],
     insecure: bool,
 ) -> Result<(Arc<ClientConfig>, u64), i32> {
     let cache = CONFIGS.get_or_init(|| Mutex::new(VecDeque::new()));
@@ -129,20 +163,26 @@ fn client_config(
         let entries = cache.lock().map_err(|_| MAL_TLS_STATUS_ERROR)?;
         if let Some(entry) = entries
             .iter()
-            .find(|entry| entry.ca_pem == ca_pem && entry.alpn == alpn)
+            .find(|entry| entry.matches(ca_pem, alpn, cert_pem, key_pem))
         {
             return Ok((entry.config.clone(), entry.id));
         }
     }
+    let identity = client_identity(cert_pem, key_pem)?;
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let builder = ClientConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()
         .map_err(|_| MAL_TLS_STATUS_ERROR)?;
     let mut config = if insecure {
-        builder
+        let builder = builder
             .dangerous()
-            .with_custom_certificate_verifier(Arc::new(NoCertificateVerification))
-            .with_no_client_auth()
+            .with_custom_certificate_verifier(Arc::new(NoCertificateVerification));
+        match identity {
+            Some((chain, key)) => builder
+                .with_client_auth_cert(chain, key)
+                .map_err(|_| MAL_TLS_STATUS_KEY_MISMATCH)?,
+            None => builder.with_no_client_auth(),
+        }
     } else {
         let mut roots = RootCertStore::empty();
         let mut added = 0;
@@ -155,7 +195,13 @@ fn client_config(
         if added == 0 {
             return Err(MAL_TLS_STATUS_INVALID_ARGUMENT);
         }
-        builder.with_root_certificates(roots).with_no_client_auth()
+        let builder = builder.with_root_certificates(roots);
+        match identity {
+            Some((chain, key)) => builder
+                .with_client_auth_cert(chain, key)
+                .map_err(|_| MAL_TLS_STATUS_KEY_MISMATCH)?,
+            None => builder.with_no_client_auth(),
+        }
     };
     if !alpn.is_empty() {
         config.alpn_protocols.push(alpn.to_vec());
@@ -168,11 +214,11 @@ fn client_config(
         .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
         .map_err(|_| MAL_TLS_STATUS_ERROR)?;
     // Exact trust bytes prevent a changed CA file from borrowing an older connection policy.
-    if ca_pem.len() <= 1024 * 1024 && alpn.len() <= 255 {
+    if ca_pem.len() <= 1024 * 1024 && alpn.len() <= 255 && cert_pem.len() + key_pem.len() <= 64 * 1024 {
         let mut entries = cache.lock().map_err(|_| MAL_TLS_STATUS_ERROR)?;
         if let Some(entry) = entries
             .iter()
-            .find(|entry| entry.ca_pem == ca_pem && entry.alpn == alpn)
+            .find(|entry| entry.matches(ca_pem, alpn, cert_pem, key_pem))
         {
             return Ok((entry.config.clone(), entry.id));
         }
@@ -182,6 +228,8 @@ fn client_config(
         entries.push_back(CachedConfig {
             ca_pem: ca_pem.to_vec(),
             alpn: alpn.to_vec(),
+            cert_pem: cert_pem.to_vec(),
+            key_pem: key_pem.to_vec(),
             config: config.clone(),
             id,
         });
@@ -241,6 +289,10 @@ pub unsafe extern "C" fn mal_tls_client_create(
     ca_pem_len: usize,
     alpn: *const u8,
     alpn_len: usize,
+    cert_pem: *const u8,
+    cert_pem_len: usize,
+    key_pem: *const u8,
+    key_pem_len: usize,
     insecure: i32,
     out_handle: *mut *mut MalTlsClient,
 ) -> i32 {
@@ -263,7 +315,12 @@ pub unsafe extern "C" fn mal_tls_client_create(
     let Some(alpn) = (unsafe { input(alpn, alpn_len) }) else {
         return MAL_TLS_STATUS_INVALID_ARGUMENT;
     };
-    let (config, config_id) = match client_config(ca_pem, alpn, insecure != 0) {
+    let (Some(cert_pem), Some(key_pem)) =
+        (unsafe { (input(cert_pem, cert_pem_len), input(key_pem, key_pem_len)) })
+    else {
+        return MAL_TLS_STATUS_INVALID_ARGUMENT;
+    };
+    let (config, config_id) = match client_config(ca_pem, alpn, cert_pem, key_pem, insecure != 0) {
         Ok(config) => config,
         Err(status) => return status,
     };
@@ -277,6 +334,8 @@ pub unsafe extern "C" fn mal_tls_client_create(
 fn new_session(connection: Connection, config_id: u64) -> *mut MalTlsClient {
     Box::into_raw(Box::new(MalTlsClient {
         connection,
+        failure: None,
+        seen_ciphertext: false,
         peer_closed: false,
         config_id,
         record_header: [0; 5],
@@ -445,6 +504,127 @@ pub unsafe extern "C" fn mal_tls_server_create(
     MAL_TLS_STATUS_OK
 }
 
+/// Reads a ClientHello before any configuration is chosen, so `SNICallback` can pick one.
+pub struct MalTlsAcceptor {
+    acceptor: Acceptor,
+    accepted: Option<Accepted>,
+}
+
+#[no_mangle]
+/// # Safety
+/// `out` must be a writable slot.
+pub unsafe extern "C" fn mal_tls_acceptor_create(out: *mut *mut MalTlsAcceptor) -> i32 {
+    if out.is_null() {
+        return MAL_TLS_STATUS_INVALID_ARGUMENT;
+    }
+    let acceptor = MalTlsAcceptor { acceptor: Acceptor::default(), accepted: None };
+    unsafe { *out = Box::into_raw(Box::new(acceptor)) };
+    MAL_TLS_STATUS_OK
+}
+
+#[no_mangle]
+/// # Safety
+/// `handle` must be live and `input` valid for `input_len` bytes.
+pub unsafe extern "C" fn mal_tls_acceptor_read(
+    handle: *mut MalTlsAcceptor,
+    input_pointer: *const u8,
+    input_len: usize,
+) -> i32 {
+    let (Some(handle), Some(mut bytes)) = (unsafe { handle.as_mut() }, unsafe { input(input_pointer, input_len) })
+    else {
+        return MAL_TLS_STATUS_INVALID_ARGUMENT;
+    };
+    if handle.accepted.is_some() {
+        return MAL_TLS_STATUS_ERROR;
+    }
+    while !bytes.is_empty() {
+        match handle.acceptor.read_tls(&mut bytes) {
+            Ok(0) | Err(_) => return MAL_TLS_STATUS_ERROR,
+            Ok(_) => {}
+        }
+        match handle.acceptor.accept() {
+            Ok(None) => {}
+            Ok(Some(accepted)) => {
+                // Bytes after the ClientHello belong to the session, which a ClientHello flight never has.
+                if !bytes.is_empty() {
+                    return MAL_TLS_STATUS_ERROR;
+                }
+                handle.accepted = Some(accepted);
+            }
+            Err(_) => return MAL_TLS_STATUS_ERROR,
+        }
+    }
+    MAL_TLS_STATUS_OK
+}
+
+#[no_mangle]
+/// # Safety
+/// `handle` must be live; `output` is valid for `output_len` bytes. Returns the server
+/// name's length, -1 when the ClientHello carried none, or -2 before it is complete.
+pub unsafe extern "C" fn mal_tls_acceptor_server_name(
+    handle: *const MalTlsAcceptor,
+    output_pointer: *mut u8,
+    output_len: usize,
+) -> isize {
+    let Some(handle) = (unsafe { handle.as_ref() }) else {
+        return -2;
+    };
+    let Some(accepted) = &handle.accepted else {
+        return -2;
+    };
+    let hello = accepted.client_hello();
+    let Some(name) = hello.server_name() else {
+        return -1;
+    };
+    let Some(output) = (unsafe { output(output_pointer, output_len) }) else {
+        return -2;
+    };
+    let length = name.len().min(output.len());
+    output[..length].copy_from_slice(&name.as_bytes()[..length]);
+    name.len() as isize
+}
+
+#[no_mangle]
+/// # Safety
+/// `handle` must be live, `config` a live configuration, and `out_handle` writable.
+pub unsafe extern "C" fn mal_tls_acceptor_accept(
+    handle: *mut MalTlsAcceptor,
+    config: *const MalTlsServerConfig,
+    out_handle: *mut *mut MalTlsClient,
+) -> i32 {
+    let (Some(handle), Some(config)) = (unsafe { handle.as_mut() }, unsafe { config.as_ref() }) else {
+        return MAL_TLS_STATUS_INVALID_ARGUMENT;
+    };
+    if out_handle.is_null() {
+        return MAL_TLS_STATUS_INVALID_ARGUMENT;
+    }
+    unsafe { *out_handle = core::ptr::null_mut() };
+    let Some(accepted) = handle.accepted.take() else {
+        return MAL_TLS_STATUS_ERROR;
+    };
+    match accepted.into_connection(config.config.clone()) {
+        Ok(connection) => {
+            unsafe { *out_handle = new_session(Connection::Server(connection), 0) };
+            MAL_TLS_STATUS_OK
+        }
+        Err(_) => MAL_TLS_STATUS_ERROR,
+    }
+}
+
+#[no_mangle]
+/// # Safety
+/// `handle` must be null or a valid slot holding a live or null acceptor.
+pub unsafe extern "C" fn mal_tls_acceptor_free(handle: *mut *mut MalTlsAcceptor) {
+    if handle.is_null() {
+        return;
+    }
+    let pointer = unsafe { *handle };
+    unsafe { *handle = core::ptr::null_mut() };
+    if !pointer.is_null() {
+        drop(unsafe { Box::from_raw(pointer) });
+    }
+}
+
 #[no_mangle]
 /// # Safety
 /// `handle` must be live; `output` is valid for `output_len` bytes. Returns the
@@ -487,6 +667,10 @@ pub unsafe extern "C" fn mal_tls_session_info(
                 None => return -1,
             },
             Connection::Client(_) => return -1,
+        },
+        MAL_TLS_INFO_FAILURE => match unsafe { &*handle }.failure {
+            Some(reason) => reason.as_bytes(),
+            None => return -1,
         },
         MAL_TLS_INFO_PEER_CERTIFIED => match connection.peer_certificates() {
             Some(certificates) if !certificates.is_empty() => b"1",
@@ -542,6 +726,8 @@ pub unsafe extern "C" fn mal_tls_client_read_ciphertext(
         return MAL_TLS_STATUS_INVALID_ARGUMENT;
     };
     let client = unsafe { &mut *handle };
+    let first = !client.seen_ciphertext && !input.is_empty();
+    client.seen_ciphertext |= !input.is_empty();
     let mut cursor = Cursor::new(input);
     if client.connection.read_tls(&mut cursor).is_err() {
         return MAL_TLS_STATUS_ERROR;
@@ -550,9 +736,31 @@ pub unsafe extern "C" fn mal_tls_client_read_ciphertext(
     unsafe { *consumed = cursor.position() as usize };
     match client.connection.process_new_packets() {
         Ok(state) => client.peer_closed = state.peer_has_closed(),
-        Err(_) => return MAL_TLS_STATUS_ERROR,
+        Err(error) => {
+            client.failure = failure_reason(&error, first.then_some(input));
+            return MAL_TLS_STATUS_ERROR;
+        }
     }
     MAL_TLS_STATUS_OK
+}
+
+// OpenSSL's reason strings, which Node turns into `ERR_SSL_*` codes, for the failures
+// whose cause rustls reports unambiguously.
+fn failure_reason(error: &rustls::Error, first_input: Option<&[u8]>) -> Option<&'static str> {
+    use rustls::{AlertDescription, Error, InvalidMessage};
+    match error {
+        // tls_validate_record_header recognizes exactly these four request prefixes.
+        Error::InvalidMessage(InvalidMessage::InvalidContentType) => first_input
+            .filter(|bytes| {
+                [b"GET ", b"POST", b"HEAD", b"PUT "]
+                    .iter()
+                    .any(|prefix| bytes.starts_with(*prefix))
+            })
+            .map(|_| "http request"),
+        Error::AlertReceived(AlertDescription::UnknownCA) => Some("tlsv1 alert unknown ca"),
+        Error::NoCertificatesPresented => Some("peer did not return a certificate"),
+        _ => None,
+    }
 }
 
 #[no_mangle]
@@ -687,4 +895,227 @@ pub unsafe extern "C" fn mal_tls_client_free(handle: *mut *mut MalTlsClient) {
     if !pointer.is_null() {
         drop(unsafe { Box::from_raw(pointer) });
     }
+}
+
+fn der(input: &[u8]) -> Option<(u8, &[u8], &[u8])> {
+    let (&tag, rest) = input.split_first()?;
+    let (&first, mut rest) = rest.split_first()?;
+    let length = if first < 0x80 {
+        first as usize
+    } else {
+        let count = (first & 0x7f) as usize;
+        if count == 0 || count > 4 || rest.len() < count {
+            return None;
+        }
+        let length = rest[..count].iter().fold(0usize, |length, &byte| length << 8 | byte as usize);
+        rest = &rest[count..];
+        length
+    };
+    (rest.len() >= length).then(|| (tag, &rest[..length], &rest[length..]))
+}
+
+fn attribute_name(oid: &[u8]) -> Option<&'static str> {
+    Some(match oid {
+        [0x55, 0x04, 0x03] => "CN",
+        [0x55, 0x04, 0x04] => "SN",
+        [0x55, 0x04, 0x05] => "serialNumber",
+        [0x55, 0x04, 0x06] => "C",
+        [0x55, 0x04, 0x07] => "L",
+        [0x55, 0x04, 0x08] => "ST",
+        [0x55, 0x04, 0x0a] => "O",
+        [0x55, 0x04, 0x0b] => "OU",
+        [0x55, 0x04, 0x2a] => "GN",
+        [0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09, 0x01] => "emailAddress",
+        _ => return None,
+    })
+}
+
+fn push_record(out: &mut Vec<u8>, kind: u8, key: &[u8], value: &[u8]) {
+    out.push(kind);
+    out.extend_from_slice(key);
+    out.push(0);
+    out.extend_from_slice(value);
+    out.push(0);
+}
+
+fn push_name(out: &mut Vec<u8>, kind: u8, mut name: &[u8]) -> Option<()> {
+    while !name.is_empty() {
+        let (_, mut set, rest) = der(name)?;
+        name = rest;
+        while !set.is_empty() {
+            let (_, attribute, rest) = der(set)?;
+            set = rest;
+            let (_, oid, value) = der(attribute)?;
+            let (_, value, _) = der(value)?;
+            if let Some(key) = attribute_name(oid) {
+                push_record(out, kind, key.as_bytes(), value);
+            }
+        }
+    }
+    Some(())
+}
+
+// OpenSSL's ASN1_TIME_print layout, which Node's valid_from/valid_to expose.
+fn push_time(out: &mut Vec<u8>, key: &[u8], tag: u8, time: &[u8]) -> Option<()> {
+    let digits = |range: core::ops::Range<usize>| -> Option<u32> {
+        core::str::from_utf8(time.get(range)?).ok()?.parse().ok()
+    };
+    let (year, rest) = match tag {
+        0x17 => {
+            let year = digits(0..2)?;
+            (if year < 50 { 2000 + year } else { 1900 + year }, 2)
+        }
+        0x18 => (digits(0..4)?, 4),
+        _ => return None,
+    };
+    const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    let month = MONTHS.get(digits(rest..rest + 2)?.checked_sub(1)? as usize)?;
+    let text = format!(
+        "{} {:>2} {:02}:{:02}:{:02} {} GMT",
+        month,
+        digits(rest + 2..rest + 4)?,
+        digits(rest + 4..rest + 6)?,
+        digits(rest + 6..rest + 8)?,
+        digits(rest + 8..rest + 10)?,
+        year
+    );
+    push_record(out, b'F', key, text.as_bytes());
+    Some(())
+}
+
+fn push_subject_alt_name(out: &mut Vec<u8>, mut names: &[u8]) -> Option<()> {
+    let mut text = String::new();
+    while !names.is_empty() {
+        let (tag, value, rest) = der(names)?;
+        names = rest;
+        let entry = match tag {
+            0x81 => format!("email:{}", String::from_utf8_lossy(value)),
+            0x82 => format!("DNS:{}", String::from_utf8_lossy(value)),
+            0x86 => format!("URI:{}", String::from_utf8_lossy(value)),
+            0x87 if value.len() == 4 => format!("IP Address:{}.{}.{}.{}", value[0], value[1], value[2], value[3]),
+            _ => continue,
+        };
+        if !text.is_empty() {
+            text.push_str(", ");
+        }
+        text.push_str(&entry);
+    }
+    push_record(out, b'F', b"subjectaltname", text.as_bytes());
+    Some(())
+}
+
+fn hex(bytes: &[u8], separator: bool) -> String {
+    let mut text = String::with_capacity(bytes.len() * 3);
+    for (index, byte) in bytes.iter().enumerate() {
+        if separator && index > 0 {
+            text.push(':');
+        }
+        text.push_str(&format!("{byte:02X}"));
+    }
+    text
+}
+
+/// Records of `kind key NUL value NUL`: `S`/`I` for subject/issuer attributes, `F` for fields,
+/// in the order Node's getPeerCertificate lists them.
+fn describe_certificate(certificate: &[u8]) -> Option<Vec<u8>> {
+    let (_, body, _) = der(certificate)?;
+    let (_, tbs, _) = der(body)?;
+    let (mut tag, mut field, mut rest) = der(tbs)?;
+    if tag == 0xa0 {
+        (tag, field, rest) = der(rest)?;
+    }
+    if tag != 0x02 {
+        return None;
+    }
+    let mut serial = field;
+    while serial.len() > 1 && serial[0] == 0 {
+        serial = &serial[1..];
+    }
+    let (_, _, rest) = der(rest)?;
+    let (_, issuer, rest) = der(rest)?;
+    let (_, validity, rest) = der(rest)?;
+    let (_, subject, mut rest) = der(rest)?;
+    let mut out = Vec::new();
+    push_name(&mut out, b'S', subject)?;
+    push_name(&mut out, b'I', issuer)?;
+    while !rest.is_empty() {
+        let (tag, value, next) = der(rest)?;
+        rest = next;
+        if tag != 0xa3 {
+            continue;
+        }
+        let (_, mut extensions, _) = der(value)?;
+        while !extensions.is_empty() {
+            let (_, extension, next) = der(extensions)?;
+            extensions = next;
+            let (_, oid, mut tail) = der(extension)?;
+            let (mut tag, mut value, next) = der(tail)?;
+            if tag == 0x01 {
+                tail = next;
+                (tag, value, _) = der(tail)?;
+            }
+            if oid == [0x55, 0x1d, 0x11] && tag == 0x04 {
+                let (_, names, _) = der(value)?;
+                push_subject_alt_name(&mut out, names)?;
+            }
+        }
+    }
+    let (from_tag, from, after) = der(validity)?;
+    let (to_tag, to, _) = der(after)?;
+    push_time(&mut out, b"valid_from", from_tag, from)?;
+    push_time(&mut out, b"valid_to", to_tag, to)?;
+    for (key, algorithm) in [
+        (&b"fingerprint"[..], &ring::digest::SHA1_FOR_LEGACY_USE_ONLY),
+        (&b"fingerprint256"[..], &ring::digest::SHA256),
+        (&b"fingerprint512"[..], &ring::digest::SHA512),
+    ] {
+        push_record(&mut out, b'F', key, hex(ring::digest::digest(algorithm, certificate).as_ref(), true).as_bytes());
+    }
+    push_record(&mut out, b'F', b"serialNumber", hex(serial, false).as_bytes());
+    Some(out)
+}
+
+#[no_mangle]
+/// # Safety
+/// `handle` must be live; `output` is valid for `output_len` bytes. Returns the
+/// leaf peer certificate's DER length, or -1 without one.
+pub unsafe extern "C" fn mal_tls_session_peer_certificate(
+    handle: *const MalTlsClient,
+    output_pointer: *mut u8,
+    output_len: usize,
+) -> isize {
+    let Some(handle) = (unsafe { handle.as_ref() }) else {
+        return -1;
+    };
+    let Some(certificate) = handle.connection.peer_certificates().and_then(|chain| chain.first()) else {
+        return -1;
+    };
+    if let Some(output) = unsafe { output(output_pointer, output_len) } {
+        let length = certificate.len().min(output.len());
+        output[..length].copy_from_slice(&certificate[..length]);
+    }
+    certificate.len() as isize
+}
+
+#[no_mangle]
+/// # Safety
+/// `der` is valid for `der_len` bytes and `output` for `output_len`. Returns the full
+/// record length (see `describe_certificate`), or -1 for malformed DER.
+pub unsafe extern "C" fn mal_tls_x509_describe(
+    der_pointer: *const u8,
+    der_len: usize,
+    output_pointer: *mut u8,
+    output_len: usize,
+) -> isize {
+    let Some(certificate) = (unsafe { input(der_pointer, der_len) }) else {
+        return -1;
+    };
+    let Some(records) = describe_certificate(certificate) else {
+        return -1;
+    };
+    if let Some(output) = unsafe { output(output_pointer, output_len) } {
+        let length = records.len().min(output.len());
+        output[..length].copy_from_slice(&records[..length]);
+    }
+    records.len() as isize
 }

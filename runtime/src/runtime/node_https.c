@@ -24,16 +24,16 @@
 
 bool mal_node_https_validate_options(MalVm *vm, MalValue options, bool agent, MalValue default_agent) {
     if (!mal_value_is_object(options)) return true;
-    // Requests honour `ca`; agents are refused outright, so theirs would be ignored.
+    // Requests honour `ca`, `cert` and `key`; agents are refused outright, so theirs would be ignored.
     static const char *unsupported[] = {
-        "ca", "servername", "rejectUnauthorized", "checkServerIdentity", "cert", "key",
+        "ca", "cert", "key", "servername", "rejectUnauthorized", "checkServerIdentity",
         "pfx", "passphrase", "secureContext", "secureProtocol", "secureOptions",
         "minVersion", "maxVersion", "ciphers", "sigalgs", "ecdhCurve", "dhparam",
         "ALPNProtocols", "session", "clientCertEngine", "privateKeyIdentifier",
         "privateKeyEngine", "honorCipherOrder", "crl", "requestOCSP", "createConnection",
         "psk", "pskCallback", "sessionIdContext", "lookup", "localAddress", "localPort", "family", "hints", "defaultPort",
     };
-    for (usize i = agent ? 0 : 1; i < countof(unsupported); i++) {
+    for (usize i = agent ? 0 : 3; i < countof(unsupported); i++) {
         MalValue value;
         if (!mal_vm_get_property(vm, options, mal_intrinsic_string_key(vm, unsupported[i]), &value)) return false;
         if (!mal_value_is_undefined(value)) {
@@ -157,6 +157,8 @@ static void node_https_install_server(MalVm *vm, MalObject *module) {
     mal_gc_root(&root, roots, countof(roots));
     mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[0]), (const byte *) "listen", 3,
         node_https_server_listen);
+    mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[0]), (const byte *) "setSecureContext", 1,
+        mal_node_tls_server_set_secure_context);
     MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(&vm->heap,
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
         mal_intrinsic_ascii(vm, (const byte *) "Server"), 2, node_https_server_constructor);

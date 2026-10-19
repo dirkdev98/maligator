@@ -4,6 +4,8 @@
 #include "host_task.h"
 #include "http_codec.h"
 
+typedef struct MalTlsClientIdentity MalTlsClientIdentity;
+
 typedef struct MalHost MalHost;
 
 typedef struct MalHttpClientResult {
@@ -49,6 +51,7 @@ bool mal_http_client_start(
     bool secure,
     const byte *ca_pem,
     usize ca_pem_length,
+    const MalTlsClientIdentity *identity,
     bool keep_alive,
     byte *request_head,
     usize request_head_len,

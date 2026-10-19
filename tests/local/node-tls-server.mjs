@@ -75,6 +75,37 @@ Z29mJJ2qyw8fQwtM1g8cNba/
 -----END PRIVATE KEY-----
 `;
 
+// tests/fixtures/tls/client-*.pem: a client CA and a clientAuth certificate it issued.
+const CLIENT_CA = `-----BEGIN CERTIFICATE-----
+MIIBiTCCATCgAwIBAgIUQLwqiBdHdiSby3Qyn390Z9IfYkAwCgYIKoZIzj0EAwIw
+IzEhMB8GA1UEAwwYTWFsaWdhdG9yIFRlc3QgQ2xpZW50IENBMB4XDTI2MTAxOTIx
+MzIzOFoXDTM2MTAxNjIxMzIzOFowIzEhMB8GA1UEAwwYTWFsaWdhdG9yIFRlc3Qg
+Q2xpZW50IENBMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAElNIKnQsLqX/iebzk
+1f/0KrZkKrKoXaxLu8c0RIH4wrvJkGqBZQ6yNb87KoMXolrK/UtO53yLxsTThyte
+5SvLcaNCMEAwHQYDVR0OBBYEFJ7eCy2LkQ2SbmIZth1pnd6TadRxMA8GA1UdEwEB
+/wQFMAMBAf8wDgYDVR0PAQH/BAQDAgEGMAoGCCqGSM49BAMCA0cAMEQCIGV+d8+C
+4K/ugzhkeRmNgXqtD015EkxETzorqqV3g42LAiAUNU0CEPUeBUPWDMBoNR9Bo30L
+/nWgYqmdoiIqFyaEqQ==
+-----END CERTIFICATE-----
+`;
+const CLIENT_CERT = `-----BEGIN CERTIFICATE-----
+MIIBczCCARigAwIBAgIULLg5xQM7FRSQvUdDFaoCsHVxShAwCgYIKoZIzj0EAwIw
+IzEhMB8GA1UEAwwYTWFsaWdhdG9yIFRlc3QgQ2xpZW50IENBMB4XDTI2MTAxOTIx
+MzIzOFoXDTM2MTAxNjIxMzIzOFowGzEZMBcGA1UEAwwQbWFsaWdhdG9yLWNsaWVu
+dDBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABNBSLNLfAcPTBP0CCXkYA5Cr0lwx
+DLm3O95uOfYnVuulZdYAArfDPXiYgO+r4gMLDOua8YNoQn2WzkHNZI95H9SjMjAw
+MAkGA1UdEwQCMAAwDgYDVR0PAQH/BAQDAgeAMBMGA1UdJQQMMAoGCCsGAQUFBwMC
+MAoGCCqGSM49BAMCA0kAMEYCIQDNVaWwfVumDCMyDd1alM6D6tMkAozVhKcVlf8k
+C7I5eAIhAPuiJTnxR2UUpfIx1H4dkUysB1Yyk6lCwnMwAFcnMEJY
+-----END CERTIFICATE-----
+`;
+const CLIENT_KEY = `-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgU3sYBCOMc+MLG1DY
+5o6BUYzyPSiDQAI+3LZmsKXtmH+hRANCAATQUizS3wHD0wT9Agl5GAOQq9JcMQy5
+tzvebjn2J1brpWXWAAK3wz14mIDvq+IDCwzrmvGDaEJ9ls5BzWSPeR/U
+-----END PRIVATE KEY-----
+`;
+
 function connectClient(port, options) {
 	return new Promise((resolve) => {
 		const raw = net.connect(port, "127.0.0.1", () => {
@@ -128,6 +159,55 @@ await echo(
 	{ ca: CA, ALPNProtocols: ["http/1.1"] },
 );
 
+await echo(
+	"client cert",
+	{ cert: CERT, key: KEY, ca: CLIENT_CA, requestCert: true, rejectUnauthorized: true },
+	{ ca: CA, cert: CLIENT_CERT, key: Buffer.from(CLIENT_KEY) },
+);
+
+function describePeer(certificate) {
+	const { subject, issuer, subjectaltname, valid_from, valid_to, serialNumber, raw } =
+		certificate;
+	return JSON.stringify({
+		subject,
+		issuer,
+		subjectaltname,
+		valid_from,
+		valid_to,
+		serialNumber,
+		fingerprint: certificate.fingerprint,
+		fingerprint256: certificate.fingerprint256,
+		fingerprint512: certificate.fingerprint512,
+		raw: raw && raw.length,
+	});
+}
+
+for (const [label, clientOptions] of [
+	["peer certificate", { ca: CA, cert: CLIENT_CERT, key: CLIENT_KEY }],
+	["no peer certificate", { ca: CA }],
+]) {
+	let serverSees;
+	let clientSees;
+	const server = tls.createServer(
+		{ cert: CERT, key: KEY, ca: CLIENT_CA, requestCert: true, rejectUnauthorized: false },
+		(socket) => {
+			serverSees = describePeer(socket.getPeerCertificate());
+			socket.end();
+		},
+	);
+	await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+	const client = await connectClient(server.address().port, clientOptions);
+	client.on(
+		"secureConnect",
+		() => (clientSees = describePeer(client.getPeerCertificate())),
+	);
+	client.resume();
+	await new Promise((resolve) => client.on("close", resolve));
+	console.log(label, "server sees", serverSees);
+	console.log(label, "client sees", clientSees);
+	server.close();
+}
+
 const context = tls.createSecureContext({ cert: Buffer.from(CERT), key: KEY, ca: CA });
 console.log("context", context instanceof tls.SecureContext, typeof context.context);
 await echo("context", { cert: CERT, key: KEY }, { secureContext: context });
@@ -163,12 +243,137 @@ for (const [name, options] of [
 }
 
 {
+	const server = tls.createServer({}, (socket) => socket.end("rotated"));
+	await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+	server.setSecureContext({ cert: CERT, key: KEY });
+	const client = await connectClient(server.address().port, { ca: CA });
+	const chunks = [];
+	client.on("data", (chunk) => chunks.push(chunk));
+	await new Promise((resolve) => client.on("close", resolve));
+	console.log("setSecureContext", Buffer.concat(chunks).toString());
+	server.close();
+}
+
+async function sniCase(label, server, servername) {
+	await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+	const client = await connectClient(server.address().port, { ca: CA, servername });
+	const events = [];
+	client.on("secureConnect", () => events.push("secureConnect"));
+	client.on("data", (chunk) => events.push(`data ${chunk}`));
+	client.on("error", () => events.push("error"));
+	await new Promise((resolve) => client.on("close", resolve));
+	console.log(label, JSON.stringify(events));
+	server.close();
+}
+
+{
+	const server = tls.createServer({}, (socket) => socket.end(`sni:${socket.servername}`));
+	server.addContext("*.example", context);
+	server.addContext("LOCAL*", { cert: CERT, key: KEY });
+	await sniCase("addContext", server, "localhost");
+}
+
+{
+	const names = [];
+	const server = tls.createServer(
+		{
+			SNICallback(servername, callback) {
+				names.push(servername);
+				setTimeout(
+					() => callback(null, tls.createSecureContext({ cert: CERT, key: KEY })),
+					1,
+				);
+			},
+		},
+		(socket) => socket.end("callback"),
+	);
+	await sniCase("SNICallback", server, "localhost");
+	console.log("SNICallback names", JSON.stringify(names));
+}
+
+{
+	const server = tls.createServer({
+		SNICallback(servername, callback) {
+			callback(new Error(`no context for ${servername}`));
+		},
+	});
+	server.on("tlsClientError", (error, socket) =>
+		console.log(
+			"SNICallback tlsClientError",
+			error.message,
+			socket instanceof net.Socket,
+		),
+	);
+	await sniCase("SNICallback error", server, "localhost");
+}
+
+async function clientErrorCode(label, serverOptions, connect) {
+	const server = tls.createServer(serverOptions);
+	const reported = new Promise((resolve) =>
+		server.on("tlsClientError", (error) => {
+			console.log(label, "tlsClientError", error.code);
+			resolve();
+		}),
+	);
+	await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+	const client = await connect(server.address().port);
+	client.on("error", () => {});
+	await Promise.all([reported, new Promise((resolve) => client.on("close", resolve))]);
+	server.close();
+}
+
+await clientErrorCode("plaintext", { cert: CERT, key: KEY }, (port) => {
+	const raw = net.connect(port, "127.0.0.1", () => raw.write("GET / HTTP/1.1\r\n\r\n"));
+	raw.resume();
+	return raw;
+});
+await clientErrorCode(
+	"missing client cert",
+	{ cert: CERT, key: KEY, ca: CLIENT_CA, requestCert: true, rejectUnauthorized: true },
+	(port) => connectClient(port, { ca: CA }),
+);
+
+{
+	const serverEvents = [];
+	let secureSocket;
 	const server = https.createServer({ cert: CERT, key: KEY }, (request, response) => {
+		serverEvents.push(
+			`request same=${request.socket === secureSocket} encrypted=${request.socket.encrypted}`,
+		);
 		response.setHeader("content-type", "text/plain");
 		response.end(`hello ${request.method} ${request.url}`);
 	});
+	server.on("secureConnection", (socket) => {
+		secureSocket = socket;
+		serverEvents.push(`secureConnection encrypted=${socket.encrypted}`);
+	});
+	const hangUp = new Promise((resolve) =>
+		server.once("tlsClientError", (error, socket) => {
+			serverEvents.push(`tlsClientError ${error.code} ${error.message} ${typeof socket}`);
+			resolve();
+		}),
+	);
 	console.log("https server", server instanceof https.Server);
 	await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+	await new Promise((resolve) => {
+		const raw = net.connect(server.address().port, "127.0.0.1", () => raw.end());
+		raw.on("close", resolve);
+	});
+	await hangUp;
+	const plaintext = new Promise((resolve) =>
+		server.once("tlsClientError", (error) => {
+			serverEvents.push(`tlsClientError ${error.code}`);
+			resolve();
+		}),
+	);
+	await new Promise((resolve) => {
+		const raw = net.connect(server.address().port, "127.0.0.1", () =>
+			raw.write("POST / HTTP/1.1\r\n\r\n"),
+		);
+		raw.resume();
+		raw.on("close", resolve);
+	});
+	await plaintext;
 	const { status, body } = await new Promise((resolve, reject) => {
 		const request = https.get(
 			{
@@ -192,5 +397,34 @@ for (const [name, options] of [
 		request.on("error", reject);
 	});
 	console.log("https", status, body);
+	console.log("https server events", JSON.stringify(serverEvents));
+	server.close();
+}
+
+{
+	const server = https.createServer(
+		{ cert: CERT, key: KEY, ca: CLIENT_CA, requestCert: true, rejectUnauthorized: true },
+		(request, response) => response.end("client certified"),
+	);
+	await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+	const body = await new Promise((resolve, reject) => {
+		const request = https.get(
+			{
+				hostname: "localhost",
+				port: server.address().port,
+				ca: CA,
+				cert: CLIENT_CERT,
+				key: CLIENT_KEY,
+				agent: false,
+			},
+			(response) => {
+				const chunks = [];
+				response.on("data", (chunk) => chunks.push(chunk));
+				response.on("end", () => resolve(Buffer.concat(chunks).toString()));
+			},
+		);
+		request.on("error", reject);
+	});
+	console.log("https client cert", body);
 	server.close();
 }

@@ -114,7 +114,7 @@ temporal = ["dep:temporal_capi", "temporal_capi/compiled_data"]
 # node:zlib flat codec primitives (deflate, gzip and Brotli, both directions). The C/JS adapters remain
 # outside this feature; Node builds select it through normalizeNativeFeatures.
 node-zlib = ["dep:flate2", "dep:brotli-decompressor", "dep:brotli"]
-node-tls = ["dep:rustls", "dep:rustls-pemfile"]
+node-tls = ["dep:rustls", "dep:rustls-pemfile", "dep:ring"]
 node-argon2 = ["dep:rust-argon2"]
 node-crypto = [
 	"dep:aes",
