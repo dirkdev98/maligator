@@ -369,7 +369,9 @@ export function optFlags(
  * Handwritten runtime objects compile once per toolchain and flag set and are reused
  * by every program, so they take -O3 where generated units keep -O2 for build time.
  */
-export function runtimeOptimizationFlags(env: NodeJS.ProcessEnv = process.env): Array<string> {
+export function runtimeOptimizationFlags(
+	env: NodeJS.ProcessEnv = process.env,
+): Array<string> {
 	return sanitizerMode(env) === "none" ? ["-O3"] : [];
 }
 
