@@ -485,6 +485,24 @@ struct FastParser<'a> {
     units: &'a [u16],
     position: usize,
     capture_count: usize,
+    /// Under `i` without `u`, Canonicalize never maps a non-ASCII unit to ASCII, so an
+    /// ASCII-only pattern matches as if its letters stood for both cases.
+    fold_ascii_case: bool,
+}
+
+fn fast_fold_ascii_ranges(ranges: &mut Vec<(u16, u16)>) {
+    let mut swapped = Vec::new();
+    for &(first, last) in ranges.iter() {
+        let (upper_first, upper_last) = (first.max(0x41), last.min(0x5a));
+        if upper_first <= upper_last {
+            swapped.push((upper_first + 0x20, upper_last + 0x20));
+        }
+        let (lower_first, lower_last) = (first.max(0x61), last.min(0x7a));
+        if lower_first <= lower_last {
+            swapped.push((lower_first - 0x20, lower_last - 0x20));
+        }
+    }
+    ranges.extend(swapped);
 }
 
 enum FastAtom {
@@ -585,6 +603,9 @@ impl FastParser<'_> {
                 && self.units.get(self.position + 1) != Some(&u16::from(b']'))
                 && self.position + 1 < self.units.len();
             if !is_range {
+                if self.fold_ascii_case && first >= 0x80 {
+                    return None;
+                }
                 ranges.push((first, first));
                 continue;
             }
@@ -601,10 +622,13 @@ impl FastParser<'_> {
             } else {
                 unit
             };
-            if first > last {
+            if first > last || (self.fold_ascii_case && last >= 0x80) {
                 return None;
             }
             ranges.push((first, last));
+        }
+        if self.fold_ascii_case {
+            fast_fold_ascii_ranges(&mut ranges);
         }
         (members > 0).then(|| FastClass::from_ranges(ranges, negate))
     }
@@ -721,16 +745,32 @@ impl FastParser<'_> {
             self.position += 1;
             let atom = self.atom(unit)?;
             let quantifier = self.quantifier()?;
+            let folds = match atom {
+                FastAtom::Unit(unit) if self.fold_ascii_case => {
+                    if unit >= 0x80 {
+                        return None;
+                    }
+                    (unit as u8).is_ascii_alphabetic()
+                }
+                _ => false,
+            };
             let node = match (atom, quantifier) {
-                (FastAtom::Unit(unit), None) => {
+                (FastAtom::Unit(unit), None) if !folds => {
                     literal.push(unit);
                     continue;
                 }
-                (FastAtom::Unit(unit), Some((min, max))) => FastNode::Repeat {
-                    class: FastClass::unit(unit),
-                    min,
-                    max,
-                },
+                (FastAtom::Unit(unit), bounds) => {
+                    let mut ranges = vec![(unit, unit)];
+                    if folds {
+                        fast_fold_ascii_ranges(&mut ranges);
+                    }
+                    let (min, max) = bounds.unwrap_or((1, 1));
+                    FastNode::Repeat {
+                        class: FastClass::from_ranges(ranges, false),
+                        min,
+                        max,
+                    }
+                }
                 (FastAtom::Class(class), bounds) => {
                     let (min, max) = bounds.unwrap_or((1, 1));
                     FastNode::Repeat { class, min, max }
@@ -766,7 +806,7 @@ impl FastParser<'_> {
 }
 
 fn compile_fast_pattern(units: &[u16], flags: u32) -> Option<FastPattern> {
-    if units.is_empty() || flags & COMPILE_FLAGS != 0 {
+    if units.is_empty() || flags & COMPILE_FLAGS & !FLAG_IGNORE_CASE != 0 {
         return None;
     }
     let anchored_start = units[0] == u16::from(b'^');
@@ -774,6 +814,7 @@ fn compile_fast_pattern(units: &[u16], flags: u32) -> Option<FastPattern> {
         units,
         position: usize::from(anchored_start),
         capture_count: 0,
+        fold_ascii_case: flags & FLAG_IGNORE_CASE != 0,
     };
     let nodes = parser.sequence()?;
     if parser.position != units.len()
@@ -1837,7 +1878,10 @@ mod tests {
         assert!(compile_fast_pattern(&utf16("x{2,1}"), 0).is_none());
         assert!(compile_fast_pattern(&utf16("a{"), 0).is_none());
         assert!(compile_fast_pattern(&utf16("(?<name>a)"), 0).is_none());
-        assert!(compile_fast_pattern(&utf16("value=([0-9]+)"), FLAG_IGNORE_CASE).is_none());
+        assert!(compile_fast_pattern(&utf16("value=([0-9]+)"), FLAG_IGNORE_CASE).is_some());
+        assert!(compile_fast_pattern(&utf16("caf\u{e9}"), FLAG_IGNORE_CASE).is_none());
+        assert!(compile_fast_pattern(&utf16(r"[\u00e0-\u00ff]"), FLAG_IGNORE_CASE).is_none());
+        assert!(compile_fast_pattern(&utf16("value"), FLAG_MULTILINE).is_none());
     }
 
     fn fast_match_ranges(
@@ -1852,45 +1896,80 @@ mod tests {
     }
 
     #[test]
+    fn ignore_case_plans_keep_non_ascii_units_off_ascii_letters() {
+        for (pattern, subject) in [
+            (r"\w", "\u{212a}"),
+            ("k", "\u{212a}"),
+            ("s", "\u{17f}"),
+            ("[a-z]", "\u{17f}"),
+        ] {
+            let fast = compile_fast_pattern(&utf16(pattern), FLAG_IGNORE_CASE).unwrap();
+            assert!(fast.find(&utf16(subject)[..], 0).is_none(), "{pattern}");
+        }
+        let fast = compile_fast_pattern(&utf16("k"), FLAG_IGNORE_CASE).unwrap();
+        assert!(fast.find(&utf16("K")[..], 0).is_some());
+    }
+
+    #[test]
     fn fast_plans_agree_with_the_backtracking_engine() {
         let cases = [
-            (r#"^(?:\/users\/([^\/]+))(?:\/$)?$"#, "/users/a b/"),
-            (r#"^(?:\/middleware)(?:\/$)?$"#, "/middleware/"),
+            (r#"^(?:\/users\/([^\/]+))(?:\/$)?$"#, "/users/a b/", 0),
+            (r#"^(?:\/middleware)(?:\/$)?$"#, "/middleware/", 0),
             (
                 r#"^ *([A-Za-z0-9][A-Za-z0-9!#$&^_-]{0,126})\/([A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}) *$"#,
                 " application/json ",
+                0,
             ),
             (
                 r#"^[!#$%&'*+.^_`|~0-9A-Za-z-]+\/[!#$%&'*+.^_`|~0-9A-Za-z-]+$"#,
                 "text/plain",
+                0,
             ),
-            (r#"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$"#, "token"),
-            (r#"\+"#, "a+b"),
-            (r#"%5B"#, "x%5By"),
-            (r#"^[\x20\x09\x0a\x0d]*([^\x20\x09\x0a\x0d])"#, " \tvalue"),
-            (r#"^[\u0020-\u003A\u003D-\u007E]*$"#, "abc=;"),
-            (r#"^text\/"#, "text/html"),
-            (r#"a{2,3}b"#, "aaab"),
-            (r#"(?:ab)?c$"#, "abc"),
-            (r#"x(\d+)(?:\.(\d+))?y"#, "x12.5y"),
-            (r#"(\w+)=([^;]*);?"#, "k=v;"),
-            (r#"\s*,\s*"#, "a , b"),
-            (r#"\u00e9+"#, "\u{e9}\u{e9}"),
-            (r#".+"#, "abc"),
-            (r#"a.c"#, "abc"),
-            (r#"(a)(b)?"#, "ab"),
-            (r#"[^a]+a"#, "bba"),
-            (r#"^$"#, ""),
-            (r#"x*"#, "xx"),
-            (r#"([a-z]+)-(\d{2})"#, "ab-12"),
-            (r#"(?:-(\S+))?$"#, "-foo"),
-            (r#"\W\D"#, "!a"),
-            (r#"(?:(a)b)?c"#, "abc"),
-            (r#"x(?:(a)b)?"#, "xab"),
+            (r#"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$"#, "token", 0),
+            (r#"\+"#, "a+b", 0),
+            (r#"%5B"#, "x%5By", 0),
+            (
+                r#"^[\x20\x09\x0a\x0d]*([^\x20\x09\x0a\x0d])"#,
+                " \tvalue",
+                0,
+            ),
+            (r#"^[\u0020-\u003A\u003D-\u007E]*$"#, "abc=;", 0),
+            (r#"^text\/"#, "text/html", 0),
+            (r#"a{2,3}b"#, "aaab", 0),
+            (r#"(?:ab)?c$"#, "abc", 0),
+            (r#"x(\d+)(?:\.(\d+))?y"#, "x12.5y", 0),
+            (r#"(\w+)=([^;]*);?"#, "k=v;", 0),
+            (r#"\s*,\s*"#, "a , b", 0),
+            (r#"\u00e9+"#, "\u{e9}\u{e9}", 0),
+            (r#".+"#, "abc", 0),
+            (r#"a.c"#, "abc", 0),
+            (r#"(a)(b)?"#, "ab", 0),
+            (r#"[^a]+a"#, "bba", 0),
+            (r#"^$"#, "", 0),
+            (r#"x*"#, "xx", 0),
+            (r#"([a-z]+)-(\d{2})"#, "ab-12", 0),
+            (r#"(?:-(\S+))?$"#, "-foo", 0),
+            (r#"\W\D"#, "!a", 0),
+            (r#"(?:(a)b)?c"#, "abc", 0),
+            (r#"x(?:(a)b)?"#, "xab", 0),
+            (
+                r#"^(?:\/users\/([^\/]+))(?:\/$)?$"#,
+                "/Users/AB/",
+                FLAG_IGNORE_CASE,
+            ),
+            (r#"^(?:\/json)(?:\/$)?$"#, "/JSON/", FLAG_IGNORE_CASE),
+            (r#"[a-c]+X"#, "abCx", FLAG_IGNORE_CASE),
+            (r#"(\w+)=([^;]*);?"#, "Key=Value;", FLAG_IGNORE_CASE),
+            (r#"^text\/"#, "TEXT/html", FLAG_IGNORE_CASE),
+            (r#"[^a-z]+"#, "1-A_", FLAG_IGNORE_CASE),
+            (r#"x(\d+)y"#, "X12Y", FLAG_IGNORE_CASE),
+            (r#"\W\Ds"#, "!aS", FLAG_IGNORE_CASE),
+            (r#"[A-z]+"#, "a^Z", FLAG_IGNORE_CASE),
         ];
         let extras = [
             'a', 'b', 'c', 'x', 'y', 'Z', '0', '9', ' ', '/', ';', '=', ',', '-', '.', '\t',
-            '\u{e9}', '\u{ff}', '\u{100}', '\u{2028}', '\u{3000}',
+            '\u{e9}', '\u{ff}', '\u{100}', '\u{2028}', '\u{3000}', 'A', 'S', 'X', '\u{c9}',
+            '\u{17f}', '\u{212a}', 'k', 's',
         ];
         let mut state = 0x9e37_79b9_7f4a_7c15u64;
         let mut next = move || {
@@ -1899,16 +1978,25 @@ mod tests {
             state ^= state << 17;
             state
         };
-        for (pattern, seed) in cases {
+        for (pattern, seed, flags) in cases {
             let units = utf16(pattern);
-            let fast = compile_fast_pattern(&units, 0)
+            let fast = compile_fast_pattern(&units, flags)
                 .unwrap_or_else(|| panic!("{pattern} has no fast plan"));
-            let regex =
-                Regex::from_unicode(utf16_to_codepoints(&units).into_iter(), Flags::default())
-                    .unwrap_or_else(|error| panic!("{pattern}: {error:?}"));
+            let regex = Regex::from_unicode(
+                utf16_to_codepoints(&units).into_iter(),
+                regress_flags(flags),
+            )
+            .unwrap_or_else(|error| panic!("{pattern}: {error:?}"));
             let mut alphabet: Vec<u16> =
                 units.iter().copied().filter(|unit| *unit < 0x80).collect();
-            alphabet.extend(extras.iter().map(|unit| *unit as u16));
+            // regress lets KELVIN SIGN and LONG S match ASCII letters and \w under `i`
+            // without `u`; ECMAScript's Canonicalize keeps them apart, as V8 does.
+            alphabet.extend(
+                extras
+                    .iter()
+                    .map(|unit| *unit as u16)
+                    .filter(|unit| flags == 0 || !matches!(unit, 0x17f | 0x212a)),
+            );
             for round in 0..1200 {
                 let mut subject: Vec<u16> = if round % 2 == 0 {
                     utf16(seed)
