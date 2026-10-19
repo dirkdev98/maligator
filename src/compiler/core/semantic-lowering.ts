@@ -29,6 +29,7 @@ import {
 	ESTREE_STOP,
 	traverseEstree,
 } from "../frontend/estree-traversal.ts";
+import { PERFORMANCE_GLOBALS } from "../frontend/host-modules.ts";
 import { linkModules } from "../frontend/linker.ts";
 import { planModuleEvaluation } from "../frontend/module-evaluation-plan.ts";
 import type { ModuleEvaluationPlan } from "../frontend/module-evaluation-plan.ts";
@@ -319,6 +320,9 @@ interface CoreFrontendContext {
 
 	/** Free global `Buffer`, installed by the same installer as `node:buffer`. */
 	hostBuffer: { installer: string; retained: boolean } | null;
+
+	/** Free `performance` and Performance* globals, completed by `node:perf_hooks`. */
+	hostPerformance: { installer: string; retained: boolean } | null;
 
 	/** Modules whose bindings this image publishes to later images of its program. */
 	moduleExports?: "all" | ReadonlySet<string>;
@@ -917,6 +921,7 @@ export function constructSemanticProgramCore(
 		hostModules: [],
 		hostProcess: null,
 		hostBuffer: null,
+		hostPerformance: null,
 		commonJsExportNames: () => [],
 	};
 
@@ -949,6 +954,9 @@ export function constructSemanticProgramCore(
 		: null;
 	program.hostBuffer = linkage.hostBuffer
 		? { installer: linkage.hostBuffer.installer, retained: false }
+		: null;
+	program.hostPerformance = linkage.hostPerformance
+		? { installer: linkage.hostPerformance.installer, retained: false }
 		: null;
 
 	const initFile = program.semantic.files.find(
@@ -1053,7 +1061,11 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 				singleAssignmentCapturedSlots: candidates.singleAssignmentCapturedSlots,
 				initializedModuleGlobalSlots: coreInitializedModuleGlobalSlots(program),
 				initializedCapturedReads: coreInitializedCapturedReads(program),
-				retainedHostInstallers: [program.hostProcess, program.hostBuffer]
+				retainedHostInstallers: [
+					program.hostProcess,
+					program.hostBuffer,
+					program.hostPerformance,
+				]
 					.flatMap((host) => (host?.retained === true ? [host.installer] : []))
 					.filter(
 						(installer, index, installers) => installers.indexOf(installer) === index,
@@ -14795,6 +14807,8 @@ function retainHostMember(
 		program.hostProcess.retained = true;
 	if (program.hostBuffer && (key === undefined || key === "Buffer"))
 		program.hostBuffer.retained = true;
+	if (program.hostPerformance && (key === undefined || PERFORMANCE_GLOBALS.includes(key)))
+		program.hostPerformance.retained = true;
 }
 
 /** Mark a reachable free Node global and keep it on globalThis storage. */
@@ -14809,6 +14823,14 @@ function retainHostGlobal(program: CoreFrontendContext, binding: Binding): boole
 	}
 	if (program.hostBuffer && binding.undeclared && binding.name === "Buffer") {
 		program.hostBuffer.retained = true;
+		return true;
+	}
+	if (
+		program.hostPerformance &&
+		binding.undeclared &&
+		PERFORMANCE_GLOBALS.includes(binding.name)
+	) {
+		program.hostPerformance.retained = true;
 		return true;
 	}
 	return false;

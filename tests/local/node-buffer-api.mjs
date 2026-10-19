@@ -218,3 +218,30 @@ show("module exports", () => [
 	buffer.btoa("hi"),
 	typeof buffer.Blob,
 ]);
+
+const {
+	File: BufferFile,
+	Blob: BufferBlob,
+	atob: bufferAtob,
+	INSPECT_MAX_BYTES,
+} = buffer;
+const file = new File(["ab", "c"], "x.txt", { type: "text/plain", lastModified: 5 });
+const fileText = await file.text();
+show("File", () => [
+	file.name,
+	file.size,
+	file.type,
+	file.lastModified,
+	file instanceof Blob,
+	String(file),
+	BufferFile === File,
+	BufferBlob === Blob,
+]);
+show("File text", () => [
+	fileText,
+	Object.getPrototypeOf(File) === Blob,
+	File.length,
+	new File([], 7).name,
+]);
+show("File missing args", () => new File(["a"]));
+show("named exports", () => [typeof bufferAtob, INSPECT_MAX_BYTES]);

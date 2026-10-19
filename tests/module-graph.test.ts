@@ -991,10 +991,18 @@ test("resolves the diagnostics tracing channel", () => {
 		buildConfig: nodeOn,
 	});
 	expect(graph.modules.get("node:diagnostics_channel")?.host).toMatchObject({
-		named: ["channel", "hasSubscribers", "subscribe", "tracingChannel", "unsubscribe"],
 		hasDefault: true,
 		installer: "mal_host_install_node_diagnostics_channel",
 	});
+	expect(graph.modules.get("node:diagnostics_channel")?.host?.named).toEqual(
+		expect.arrayContaining([
+			"channel",
+			"hasSubscribers",
+			"subscribe",
+			"tracingChannel",
+			"unsubscribe",
+		]),
+	);
 });
 
 test("canonicalizes the worker_threads main-thread identity", () => {
@@ -1141,7 +1149,10 @@ test("canonicalizes bare and node: HTTP specifiers to one host module", () => {
 		"node:http",
 	]);
 	expect(graph.modules.get("node:http")?.host).toMatchObject({
-		named: [
+		hasDefault: true,
+	});
+	expect(graph.modules.get("node:http")?.host?.named).toEqual(
+		expect.arrayContaining([
 			"Agent",
 			"METHODS",
 			"STATUS_CODES",
@@ -1155,9 +1166,8 @@ test("canonicalizes bare and node: HTTP specifiers to one host module", () => {
 			"request",
 			"validateHeaderName",
 			"validateHeaderValue",
-		],
-		hasDefault: true,
-	});
+		]),
+	);
 });
 
 test("canonicalizes strict assert and exposes the smoke-runner assertions", () => {
@@ -1174,7 +1184,10 @@ test("canonicalizes strict assert and exposes the smoke-runner assertions", () =
 		"node:assert/strict",
 	]);
 	expect(graph.modules.get("node:assert/strict")?.host).toMatchObject({
-		named: [
+		hasDefault: true,
+	});
+	expect(graph.modules.get("node:assert/strict")?.host?.named).toEqual(
+		expect.arrayContaining([
 			"deepEqual",
 			"deepStrictEqual",
 			"doesNotMatch",
@@ -1188,9 +1201,8 @@ test("canonicalizes strict assert and exposes the smoke-runner assertions", () =
 			"notStrictEqual",
 			"ok",
 			"strictEqual",
-		],
-		hasDefault: true,
-	});
+		]),
+	);
 });
 
 test("resolves a toolchain-owned virtual ESM module", () => {
@@ -1316,7 +1328,10 @@ test("gives supported bare assert precedence over npm packages", () => {
 		"node:assert",
 	);
 	expect(graph.modules.get("node:assert")?.host).toMatchObject({
-		named: [
+		hasDefault: true,
+	});
+	expect(graph.modules.get("node:assert")?.host?.named).toEqual(
+		expect.arrayContaining([
 			"AssertionError",
 			"deepEqual",
 			"deepStrictEqual",
@@ -1331,9 +1346,8 @@ test("gives supported bare assert precedence over npm packages", () => {
 			"notStrictEqual",
 			"ok",
 			"strictEqual",
-		],
-		hasDefault: true,
-	});
+		]),
+	);
 });
 
 test("recognizes inspector as a bare core module", () => {

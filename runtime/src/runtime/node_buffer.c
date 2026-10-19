@@ -2670,7 +2670,7 @@ void mal_host_install_node_buffer(
         mal_value_from_f64((f64) MAL_STRING_MAX_CODE_UNITS), MAL_BUFFER_VISIBLE);
     mal_intrinsic_define_data(vm, module_default, "INSPECT_MAX_BYTES",
         mal_value_from_i32((i32) MAL_BUFFER_INSPECT_MAX_BYTES), MAL_BUFFER_VISIBLE);
-    static const char *const globals[] = {"atob", "btoa", "Blob"};
+    static const char *const globals[] = {"atob", "btoa", "Blob", "File"};
     MalObject *global_object = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_GLOBAL_THIS]);
     for (usize i = 0; i < countof(globals); i++) {
         MalPropertyLookup found = mal_object_get_own(

@@ -8,6 +8,7 @@
 #include "ascii.h"
 #include "array_buffer_object.h"
 #include "builtin_data_view.h"
+#include "builtin_date.h"
 #include "builtin_iterator.h"
 #include "builtin_json.h"
 #include "builtin_promise.h"
@@ -18,6 +19,7 @@
 #include "web_form_data_object.h"
 #include "heap.h"
 #include "heap_string.h"
+#include "heap_symbol.h"
 #include "intrinsics.h"
 #include "mal_url.h"
 #include "object.h"
@@ -3777,6 +3779,125 @@ static MalValue mal_serve(
  * Installation (host entry only).
  * --------------------------------------------------------------------------- */
 
+/* File keeps its name and lastModified under private symbols held in its functions' slots. */
+static MalValue mal_file_private(MalValue self, MalValue symbol) {
+    if (!mal_value_is_object(self)) return mal_value_new_undefined();
+    MalPropertyLookup found = mal_object_get_own(mal_value_to_object(self), mal_key_from_value(symbol));
+    return found.present ? found.desc.value : mal_value_new_undefined();
+}
+
+static MalValue mal_file_constructor(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    MalNativeFunctionObject *function = mal_value_to_native_function_object(callee);
+    if (!mal_value_is_object(nt)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            (const byte *) "Class constructor File cannot be invoked without 'new'");
+        return mal_value_new_undefined();
+    }
+    if (argc < 2) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            (const byte *) "The \"fileBits\" and \"fileName\" arguments must be specified");
+        MalValue error = vm->completion.value;
+        MalRootSpan error_root;
+        mal_gc_root(&error_root, &error, 1);
+        if (mal_value_is_object(error)) {
+            mal_intrinsic_define_data(vm, mal_value_to_object(error), (const byte *) "code",
+                mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "ERR_MISSING_ARGS")),
+                MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
+        }
+        mal_gc_unroot(&error_root);
+        return mal_value_new_undefined();
+    }
+    MalValue roots[] = {args[1], argc > 2 ? args[2] : mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalString *name;
+    if (!mal_vm_to_string(vm, roots[0], &name)) {
+        mal_gc_unroot(&root);
+        return mal_value_new_undefined();
+    }
+    roots[0] = mal_value_from_string(name);
+    f64 modified = trunc(mal_date_now_ms());
+    if (mal_value_is_object(roots[1])) {
+        MalValue value;
+        if (!mal_vm_get_property(vm, roots[1], mal_intrinsic_string_key(vm, (const byte *) "lastModified"), &value)) {
+            mal_gc_unroot(&root);
+            return mal_value_new_undefined();
+        }
+        if (!mal_value_is_undefined(value)) {
+            if (!mal_vm_to_number(vm, value, &modified)) {
+                mal_gc_unroot(&root);
+                return mal_value_new_undefined();
+            }
+            modified = isnan(modified) ? 0 : trunc(modified);
+        }
+    }
+    MalValue blob_args[] = {args[0], roots[1]};
+    roots[2] = mal_blob_constructor(vm, self, blob_args, 2, nt, callee);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) {
+        mal_gc_unroot(&root);
+        return mal_value_new_undefined();
+    }
+    MalPropertyDesc name_desc = mal_intrinsic_data_desc(roots[0], MAL_PROPERTY_NONE);
+    mal_object_define_own(mal_value_to_object(roots[2]),
+        mal_key_from_value(mal_native_function_object_get_slot(function, 0)), &name_desc);
+    MalPropertyDesc modified_desc = mal_intrinsic_data_desc(mal_value_from_f64(modified), MAL_PROPERTY_NONE);
+    mal_object_define_own(mal_value_to_object(roots[2]),
+        mal_key_from_value(mal_native_function_object_get_slot(function, 1)), &modified_desc);
+    mal_gc_unroot(&root);
+    return roots[2];
+}
+
+static MalValue mal_file_getter(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) args; (void) argc; (void) nt;
+    MalValue value = mal_file_private(self, mal_native_function_object_get_slot(
+        mal_value_to_native_function_object(callee), 0));
+    if (mal_value_is_undefined(value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, (const byte *) "Invalid this");
+    }
+    return value;
+}
+
+static void mal_file_install(MalVm *vm, MalObject *global_this, MalObject *blob_proto) {
+    MalValue roots[] = {
+        mal_value_from_symbol(mal_symbol_new_private(&vm->heap)),
+        mal_value_from_symbol(mal_symbol_new_private(&vm->heap)),
+        mal_value_from_object(mal_object_new(&vm->heap, blob_proto)),
+        mal_value_new_undefined(),
+        mal_value_new_undefined(),
+    };
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalObject *function_prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
+    MalNativeFunctionObject *constructor = mal_native_function_object_new_with_slots_arity(&vm->heap,
+        function_prototype, mal_intrinsic_ascii(vm, (const byte *) "File"), 2, mal_file_constructor, roots, 2);
+    mal_native_function_object_set_constructor(constructor);
+    roots[3] = mal_value_from_native_function_object(constructor);
+    mal_object_set_prototype((MalObject *) constructor, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_BLOB_CONSTRUCTOR]));
+    MalObject *prototype = mal_value_to_object(roots[2]);
+    mal_intrinsic_define_data(vm, (MalObject *) constructor, (const byte *) "prototype", roots[2], MAL_PROPERTY_NONE);
+    mal_intrinsic_define_data(vm, prototype, (const byte *) "constructor", roots[3],
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    static const char *const names[] = {"name", "lastModified"};
+    for (usize i = 0; i < countof(names); i++) {
+        char getter_name[32];
+        snprintf(getter_name, sizeof getter_name, "get %s", names[i]);
+        roots[4] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(&vm->heap,
+            function_prototype, mal_intrinsic_ascii(vm, (const byte *) getter_name), 0, mal_file_getter, &roots[i], 1));
+        MalPropertyDesc desc = mal_intrinsic_accessor_desc(roots[4], mal_value_new_undefined(),
+            MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
+        mal_object_define_own(prototype, mal_intrinsic_string_key(vm, (const byte *) names[i]), &desc);
+    }
+    MalPropertyDesc tag = mal_intrinsic_data_desc(
+        mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "File")), MAL_PROPERTY_CONFIGURABLE);
+    mal_object_define_own(prototype, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_TO_STRING_TAG), &tag);
+    mal_intrinsic_define_data(vm, global_this, (const byte *) "File", roots[3],
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    mal_gc_unroot(&root);
+}
+
 void mal_fetch_install(MalVm *vm, MalObject *global_this) {
     MalObject *function_prototype =
         mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]);
@@ -3812,6 +3933,7 @@ void mal_fetch_install(MalVm *vm, MalObject *global_this) {
     mal_intrinsic_define_data(vm, global_this, (const byte *) "Blob",
         vm->intrinsics[MAL_INTRINSIC_BLOB_CONSTRUCTOR],
         MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    mal_file_install(vm, global_this, blob_proto);
 
     // FormData constructor, live iterators, and ordered entry operations.
     MalObject *form_data_iterator_proto = mal_object_new(&vm->heap,

@@ -309,11 +309,11 @@
 	},
 	{
 		"file": "generated/node_builtin_installers.inc",
-		"sha256": "d98c8674d5575d07a2ff3f791f274d45cc6317be56606b7033b09eb3cc52f1f9"
+		"sha256": "96b663e4b47390d46f172c78ad11f065c33bb3aba40c19aa29d00639f57ddb62"
 	},
 	{
 		"file": "generated/node_builtin_modules.inc",
-		"sha256": "9924851cee4f72a009865b602391821b126ac17c47676894ea6ee69587ef3f35"
+		"sha256": "1994f8f7ab4cf17d0ffc0ddc4e64f2726797967977ba88e58668fdc9f0d1c28a"
 	},
 	{
 		"file": "generated/primordial_registry.inc",
@@ -349,7 +349,7 @@
 	},
 	{
 		"file": "runtime/host_registry.c",
-		"sha256": "bfc492459c3e10fc4163004d72ae5ef0f566f372b84a914d60f1bf25f5d0d092"
+		"sha256": "c7bb758c5a06823c6a16626c31e03acb906230b8e7e80a4816acfdbcb1ca3c83"
 	},
 	{
 		"file": "runtime/mal_application.c",
@@ -393,7 +393,7 @@
 	},
 	{
 		"file": "runtime/node_buffer.c",
-		"sha256": "a016f84f4f4d7d60a44492f00b9728d56aa291d0593e5b912d1c101a1301572b"
+		"sha256": "0a3df76316bbbe34b9f8c30fe3daa3db6a5270b9fab7b1cb2126c22f2b459880"
 	},
 	{
 		"file": "runtime/node_buffer.h",
@@ -553,19 +553,19 @@
 	},
 	{
 		"file": "runtime/node_path.c",
-		"sha256": "3585090dbe86e7d2fc5637ab8a1c9df549551a1f5dc74a0f34e231689b96fe5f"
+		"sha256": "097633295ee78cbb7f2692bf4cef8dd0901c74f6b3774e6c6027381f9e65f7d4"
 	},
 	{
 		"file": "runtime/node_path.h",
-		"sha256": "a0f13d73f0c10cb3c3e6075a10083503c26d281c25e720d7c299c3cbd88d831a"
+		"sha256": "49c68efd7a437e79744d274aaee1b6318bd21ac12852492d413acf1c5eae4ca1"
 	},
 	{
 		"file": "runtime/node_perf_hooks.c",
-		"sha256": "7fb051184abf902858d98f663e171a0f6e512507b4ff7bf04d1533b123fb5a74"
+		"sha256": "78c63fb8d843ebf0fdaf99c37aa48b75593ede7f61d9c90f9b99f05a9cdf6d45"
 	},
 	{
 		"file": "runtime/node_perf_hooks.h",
-		"sha256": "e585ca353ac04ef55b6b1bb457f28867890713198ff4ce3b375db34d9fbb3717"
+		"sha256": "0f12ba71901a512c76a13afa1bdb2df94d7fa37aff096cd1001fc63161fd9f18"
 	},
 	{
 		"file": "runtime/node_process.c",
@@ -701,7 +701,7 @@
 	},
 	{
 		"file": "runtime/web_fetch.c",
-		"sha256": "f84d5710d13c82306ba31c5da00ef81c08132d27ded393bf09497db5c747b9a3"
+		"sha256": "cfef76637a40d477abbcf23bf5aced9c9bdaf12e9384dae0305e44e99e1dd7e5"
 	},
 	{
 		"file": "runtime/web_globals.c",

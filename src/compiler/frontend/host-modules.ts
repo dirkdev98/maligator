@@ -61,6 +61,21 @@ export const PROCESS_INSTALLER_SYMBOL = "mal_host_install_process";
 /** Installer shared by the free `Buffer` global and the `node:buffer` module. */
 export const BUFFER_INSTALLER_SYMBOL = hostInstallerSymbol("node:buffer");
 
+/** The node:perf_hooks installer, which gives Node's surface to the free `performance` global. */
+export const PERFORMANCE_INSTALLER_SYMBOL = hostInstallerSymbol("node:perf_hooks");
+
+/** Free globals that Node's perf_hooks defines or extends. */
+export const PERFORMANCE_GLOBALS: ReadonlyArray<string> = [
+	"performance",
+	"Performance",
+	"PerformanceEntry",
+	"PerformanceMark",
+	"PerformanceMeasure",
+	"PerformanceObserver",
+	"PerformanceObserverEntryList",
+	"PerformanceResourceTiming",
+];
+
 // path is the one module with a planned default export (`import path from
 // "node:path"`) alongside its named functions — `relative` included.
 const PATH: HostModuleSpec = {
@@ -81,6 +96,7 @@ const PATH: HostModuleSpec = {
 		"matchesGlob",
 		"sep",
 		"toNamespacedPath",
+		"win32",
 	],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:path"),
@@ -90,6 +106,12 @@ const PATH_POSIX: HostModuleSpec = {
 	...PATH,
 	id: "node:path/posix",
 	installer: hostInstallerSymbol("node:path/posix"),
+};
+
+const PATH_WIN32: HostModuleSpec = {
+	...PATH,
+	id: "node:path/win32",
+	installer: hostInstallerSymbol("node:path/win32"),
 };
 
 const FS: HostModuleSpec = {
@@ -545,7 +567,21 @@ const CRYPTO: HostModuleSpec = {
 
 const PERF_HOOKS: HostModuleSpec = {
 	id: "node:perf_hooks",
-	named: ["monitorEventLoopDelay", "performance"],
+	named: [
+		"Performance",
+		"PerformanceEntry",
+		"PerformanceMark",
+		"PerformanceMeasure",
+		"PerformanceObserver",
+		"PerformanceObserverEntryList",
+		"PerformanceResourceTiming",
+		"constants",
+		"createHistogram",
+		"eventLoopUtilization",
+		"monitorEventLoopDelay",
+		"performance",
+		"timerify",
+	],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:perf_hooks"),
 };
@@ -706,7 +742,19 @@ const UTIL_TYPES: HostModuleSpec = {
 
 const BUFFER: HostModuleSpec = {
 	id: "node:buffer",
-	named: ["Buffer", "constants", "isAscii", "isUtf8"],
+	named: [
+		"Blob",
+		"Buffer",
+		"File",
+		"INSPECT_MAX_BYTES",
+		"atob",
+		"btoa",
+		"constants",
+		"isAscii",
+		"isUtf8",
+		"kMaxLength",
+		"kStringMaxLength",
+	],
 	hasDefault: true,
 	installer: BUFFER_INSTALLER_SYMBOL,
 };
@@ -1165,6 +1213,7 @@ export const HOST_MODULES: ReadonlyMap<string, HostModuleSpec> = new Map(
 	[
 		PATH,
 		PATH_POSIX,
+		PATH_WIN32,
 		FS,
 		FS_PROMISES,
 		V8,

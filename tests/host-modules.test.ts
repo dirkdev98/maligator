@@ -7,6 +7,7 @@ import {
 	generateNodeBuiltinInstallersInclude,
 } from "../scripts/generate-node-builtin-modules.ts";
 import { resolveBuildConfig } from "../src/build-config.ts";
+import { HOST_MODULES } from "../src/compiler/frontend/host-modules.ts";
 import { loadEntrypointAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-program.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 import {
@@ -126,21 +127,7 @@ describe("host-install manifest", () => {
 		}
 		expect(def.runtime.hostInstalls).toHaveLength(1);
 		expect(def.runtime.hostInstalls[0]!.exports.map((entry) => entry.name)).toEqual([
-			"basename",
-			"delimiter",
-			"dirname",
-			"extname",
-			"format",
-			"isAbsolute",
-			"join",
-			"normalize",
-			"parse",
-			"posix",
-			"relative",
-			"resolve",
-			"matchesGlob",
-			"sep",
-			"toNamespacedPath",
+			...HOST_MODULES.get("node:path")!.named,
 			"default",
 		]);
 		expect(

@@ -68,8 +68,9 @@ describe("node host installer link retention", () => {
 		expect(pathInstallers).toEqual([
 			...HOST_MAIN_INSTALLERS,
 			"mal_host_install_node_path",
-			// Both path installers belong to the same runtime archive member.
+			// All path installers belong to the same runtime archive member.
 			"mal_host_install_node_path_posix",
+			"mal_host_install_node_path_win32",
 		]);
 	});
 

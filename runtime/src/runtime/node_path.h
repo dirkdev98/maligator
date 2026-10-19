@@ -30,3 +30,7 @@ void mal_host_install_node_path(
 void mal_host_install_node_path_posix(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch
 );
+
+void mal_host_install_node_path_win32(
+    MalVm *vm, const MalHostInstallSlot *slots, i32 count, const MalHostLaunchContext *launch
+);

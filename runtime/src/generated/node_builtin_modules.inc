@@ -24,6 +24,7 @@
     "os",
     "path",
     "path/posix",
+    "path/win32",
     "perf_hooks",
     "process",
     "punycode",

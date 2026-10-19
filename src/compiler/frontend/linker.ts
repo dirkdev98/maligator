@@ -3,7 +3,12 @@ import type { PlatformData } from "../../platform/catalog.ts";
 import { detectCjsExports } from "./cjs-exports.ts";
 import type { CjsExportInfo } from "./cjs-exports.ts";
 import { traverseEstree } from "./estree-traversal.ts";
-import { BUFFER_INSTALLER_SYMBOL, PROCESS_INSTALLER_SYMBOL } from "./host-modules.ts";
+import {
+	BUFFER_INSTALLER_SYMBOL,
+	PERFORMANCE_GLOBALS,
+	PERFORMANCE_INSTALLER_SYMBOL,
+	PROCESS_INSTALLER_SYMBOL,
+} from "./host-modules.ts";
 import { staticModuleClosure } from "./module-closure.ts";
 import type { Binding, SemanticFile, SemanticProgram } from "./semantic-analysis.ts";
 import { SyntaxDiagnostic } from "./syntax-diagnostic.ts";
@@ -101,6 +106,9 @@ export interface ModuleLinkage {
 
 	/** The free global `Buffer`, backed by the `node:buffer` module installer. */
 	hostBuffer?: { installer: string };
+
+	/** Free `performance` or Performance* globals, which `node:perf_hooks` completes. */
+	hostPerformance?: { installer: string };
 
 	/** Statically detected `module.exports` names of a CommonJS module, sorted. */
 	commonJsExportNames: (modulePath: string) => ReadonlyArray<string>;
@@ -818,6 +826,9 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 		}
 		if (freeGlobalUsed("Buffer") || members.has("Buffer")) {
 			linkage.hostBuffer = { installer: BUFFER_INSTALLER_SYMBOL };
+		}
+		if (PERFORMANCE_GLOBALS.some((name) => freeGlobalUsed(name) || members.has(name))) {
+			linkage.hostPerformance = { installer: PERFORMANCE_INSTALLER_SYMBOL };
 		}
 	}
 
