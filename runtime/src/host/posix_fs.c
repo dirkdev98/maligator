@@ -788,47 +788,83 @@ int mal_posix_fs_rm(const char *path, bool recursive, bool force) {
     return force && result == ENOENT ? 0 : result;
 }
 
+// libuv's names and messages, which Node reports instead of the C library's strerror text.
+static const struct {
+    int err;
+    const char *name;
+    const char *description;
+} mal_posix_errno_table[] = {
+    {E2BIG, "E2BIG", "argument list too long"},
+    {EACCES, "EACCES", "permission denied"},
+    {EADDRINUSE, "EADDRINUSE", "address already in use"},
+    {EADDRNOTAVAIL, "EADDRNOTAVAIL", "address not available"},
+    {EAFNOSUPPORT, "EAFNOSUPPORT", "address family not supported"},
+    {EAGAIN, "EAGAIN", "resource temporarily unavailable"},
+    {EALREADY, "EALREADY", "connection already in progress"},
+    {EBADF, "EBADF", "bad file descriptor"},
+    {EBUSY, "EBUSY", "resource busy or locked"},
+    {ECANCELED, "ECANCELED", "operation canceled"},
+    {ECONNABORTED, "ECONNABORTED", "software caused connection abort"},
+    {ECONNREFUSED, "ECONNREFUSED", "connection refused"},
+    {ECONNRESET, "ECONNRESET", "connection reset by peer"},
+    {EDESTADDRREQ, "EDESTADDRREQ", "destination address required"},
+    {EEXIST, "EEXIST", "file already exists"},
+    {EFAULT, "EFAULT", "bad address in system call argument"},
+    {EFBIG, "EFBIG", "file too large"},
+    {EHOSTUNREACH, "EHOSTUNREACH", "host is unreachable"},
+    {EILSEQ, "EILSEQ", "illegal byte sequence"},
+    {EINTR, "EINTR", "interrupted system call"},
+    {EINVAL, "EINVAL", "invalid argument"},
+    {EIO, "EIO", "i/o error"},
+    {EISCONN, "EISCONN", "socket is already connected"},
+    {EISDIR, "EISDIR", "illegal operation on a directory"},
+    {ELOOP, "ELOOP", "too many symbolic links encountered"},
+    {EMFILE, "EMFILE", "too many open files"},
+    {EMLINK, "EMLINK", "too many links"},
+    {EMSGSIZE, "EMSGSIZE", "message too long"},
+    {ENAMETOOLONG, "ENAMETOOLONG", "name too long"},
+    {ENETDOWN, "ENETDOWN", "network is down"},
+    {ENETUNREACH, "ENETUNREACH", "network is unreachable"},
+    {ENFILE, "ENFILE", "file table overflow"},
+    {ENOBUFS, "ENOBUFS", "no buffer space available"},
+    {ENODEV, "ENODEV", "no such device"},
+    {ENOENT, "ENOENT", "no such file or directory"},
+    {ENOMEM, "ENOMEM", "not enough memory"},
+    {ENOSPC, "ENOSPC", "no space left on device"},
+    {ENOSYS, "ENOSYS", "function not implemented"},
+    {ENOTCONN, "ENOTCONN", "socket is not connected"},
+    {ENOTDIR, "ENOTDIR", "not a directory"},
+    {ENOTEMPTY, "ENOTEMPTY", "directory not empty"},
+    {ENOTSOCK, "ENOTSOCK", "socket operation on non-socket"},
+    {ENOTSUP, "ENOTSUP", "operation not supported on socket"},
+    {ENOTTY, "ENOTTY", "inappropriate ioctl for device"},
+    {ENXIO, "ENXIO", "no such device or address"},
+    {EOVERFLOW, "EOVERFLOW", "value too large for defined data type"},
+    {EPERM, "EPERM", "operation not permitted"},
+    {EPIPE, "EPIPE", "broken pipe"},
+    {EPROTO, "EPROTO", "protocol error"},
+    {EPROTONOSUPPORT, "EPROTONOSUPPORT", "protocol not supported"},
+    {EPROTOTYPE, "EPROTOTYPE", "protocol wrong type for socket"},
+    {ERANGE, "ERANGE", "result too large"},
+    {EROFS, "EROFS", "read-only file system"},
+    {ESHUTDOWN, "ESHUTDOWN", "cannot send after transport endpoint shutdown"},
+    {ESPIPE, "ESPIPE", "invalid seek"},
+    {ESRCH, "ESRCH", "no such process"},
+    {ETIMEDOUT, "ETIMEDOUT", "connection timed out"},
+    {ETXTBSY, "ETXTBSY", "text file is busy"},
+    {EXDEV, "EXDEV", "cross-device link not permitted"},
+};
+
 const char *mal_posix_fs_errno_name(int err) {
-    switch (err) {
-        case EACCES:
-            return "EACCES";
-        case EEXIST:
-            return "EEXIST";
-        case EFBIG:
-            return "EFBIG";
-        case EBADF:
-            return "EBADF";
-        case EINVAL:
-            return "EINVAL";
-        case EISDIR:
-            return "EISDIR";
-        case EIO:
-            return "EIO";
-        case ELOOP:
-            return "ELOOP";
-        case EXDEV:
-            return "EXDEV";
-        case EMFILE:
-            return "EMFILE";
-        case ENAMETOOLONG:
-            return "ENAMETOOLONG";
-        case ENFILE:
-            return "ENFILE";
-        case ENOENT:
-            return "ENOENT";
-        case ENOMEM:
-            return "ENOMEM";
-        case ENOSPC:
-            return "ENOSPC";
-        case ENOTDIR:
-            return "ENOTDIR";
-        case ENOTEMPTY:
-            return "ENOTEMPTY";
-        case EPERM:
-            return "EPERM";
-        case EROFS:
-            return "EROFS";
-        default:
-            return "UNKNOWN";
+    for (usize i = 0; i < sizeof mal_posix_errno_table / sizeof mal_posix_errno_table[0]; i++) {
+        if (mal_posix_errno_table[i].err == err) return mal_posix_errno_table[i].name;
     }
+    return "UNKNOWN";
+}
+
+const char *mal_posix_errno_description(int err) {
+    for (usize i = 0; i < sizeof mal_posix_errno_table / sizeof mal_posix_errno_table[0]; i++) {
+        if (mal_posix_errno_table[i].err == err) return mal_posix_errno_table[i].description;
+    }
+    return "unknown error";
 }

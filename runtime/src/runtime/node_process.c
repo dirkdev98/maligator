@@ -184,6 +184,77 @@ static MalValue mal_process_cwd(
     return result;
 }
 
+static MalValue mal_process_chdir(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self;
+    (void) nt;
+    (void) callee;
+    if (argc < 1 || !mal_value_is_string(args[0])) {
+        mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+            "The \"directory\" argument must be of type string", "ERR_INVALID_ARG_TYPE");
+        return mal_value_new_undefined();
+    }
+    usize length;
+    byte *bytes = mal_string_to_utf8(mal_value_to_string(args[0]), &length);
+    char *directory = bytes == nullptr ? nullptr : realloc(bytes, length + 1);
+    if (directory == nullptr) {
+        free(bytes);
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
+    directory[length] = '\0';
+    if (chdir(directory) != 0) {
+        int err = errno;
+        char cwd[PATH_MAX];
+        mal_node_throw_errno(vm, err, "chdir",
+            getcwd(cwd, sizeof cwd) != nullptr ? cwd : "", directory);
+    }
+    free(directory);
+    return mal_value_new_undefined();
+}
+
+static MalValue mal_process_getuid(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) vm, (void) self, (void) args, (void) argc, (void) nt, (void) callee;
+    return mal_value_from_f64((f64) getuid());
+}
+
+static MalValue mal_process_geteuid(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) vm, (void) self, (void) args, (void) argc, (void) nt, (void) callee;
+    return mal_value_from_f64((f64) geteuid());
+}
+
+static MalValue mal_process_getgid(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) vm, (void) self, (void) args, (void) argc, (void) nt, (void) callee;
+    return mal_value_from_f64((f64) getgid());
+}
+
+static MalValue mal_process_getegid(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) vm, (void) self, (void) args, (void) argc, (void) nt, (void) callee;
+    return mal_value_from_f64((f64) getegid());
+}
+
+static MalValue mal_process_getgroups(
+    MalVm *vm, MalValue self, const MalValue *args, i32 argc, MalValue nt, MalValue callee) {
+    (void) self, (void) args, (void) argc, (void) nt, (void) callee;
+    int count = getgroups(0, nullptr);
+    gid_t *groups = count > 0 ? malloc(sizeof(gid_t) * (usize) count) : nullptr;
+    if (count > 0 && groups == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
+    if (count > 0) count = getgroups(count, groups);
+    MalArrayObject *array = mal_intrinsic_new_dense_array(vm, count > 0 ? (u32) count : 0);
+    for (int i = 0; i < count; i++) {
+        mal_array_object_store(array, mal_key_index((u32) i), mal_value_from_f64((f64) groups[i]));
+    }
+    free(groups);
+    return mal_value_from_array_object(array);
+}
+
 static u64 mal_process_monotonic_ns(void) {
     struct timespec now;
     if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return 0;
@@ -975,6 +1046,8 @@ void mal_host_install_process(
     mal_gc_root(&exec_path_root, &exec_path, 1);
     mal_intrinsic_define_data(
         vm, process, (const byte *) "execPath", exec_path, data_flags);
+    mal_intrinsic_define_data(
+        vm, process, (const byte *) "argv0", exec_path, data_flags);
     mal_gc_unroot(&exec_path_root);
 
     MalValue env = mal_process_build_env(vm);
@@ -1002,21 +1075,48 @@ void mal_host_install_process(
     mal_intrinsic_define_data(vm, process, (const byte *) "stdin", stdin_value, data_flags);
     mal_gc_unroot(&stdin_root);
 
-    MalValue versions = mal_value_from_object(mal_intrinsic_new_object(vm));
-    MalRootSpan versions_root;
-    mal_gc_root(&versions_root, &versions, 1);
-    mal_intrinsic_define_data(vm, process, (const byte *) "versions",
-        versions, data_flags);
-    mal_gc_unroot(&versions_root);
-    MalValue release = mal_value_from_object(mal_intrinsic_new_object(vm));
-    MalRootSpan release_root;
-    mal_gc_root(&release_root, &release, 1);
-    mal_intrinsic_define_data(vm, mal_value_to_object(release), (const byte *) "name",
-        mal_process_utf8_string(vm, "maligator"), data_flags);
-    mal_intrinsic_define_data(vm, process, (const byte *) "release", release, data_flags);
-    mal_gc_unroot(&release_root);
+    // Version guards and feature probes in packages select their Node 26 paths.
+    MalValue compat[] = {
+        mal_value_from_object(mal_intrinsic_new_object(vm)),
+        mal_value_from_object(mal_intrinsic_new_object(vm)),
+        mal_value_from_object(mal_intrinsic_new_object(vm)),
+        mal_value_from_array_object(mal_intrinsic_new_dense_array(vm, 0)),
+        mal_process_utf8_string(vm, "v" MAL_NODE_COMPAT_VERSION),
+        mal_process_utf8_string(vm, MAL_NODE_COMPAT_VERSION),
+        mal_process_utf8_string(vm, "node"),
+    };
+    MalRootSpan compat_root;
+    mal_gc_root(&compat_root, compat, countof(compat));
+    mal_intrinsic_define_data(vm, process, (const byte *) "version", compat[4], data_flags);
+    mal_intrinsic_define_data(vm, mal_value_to_object(compat[0]), (const byte *) "node",
+        compat[5], data_flags);
+    mal_intrinsic_define_data(vm, process, (const byte *) "versions", compat[0], data_flags);
+    mal_intrinsic_define_data(vm, mal_value_to_object(compat[1]), (const byte *) "name",
+        compat[6], data_flags);
+    mal_intrinsic_define_data(vm, process, (const byte *) "release", compat[1], data_flags);
+    static const struct { const char *name; bool value; } features[] = {
+        {"inspector", false}, {"debug", false}, {"uv", true}, {"ipv6", true},
+        {"tls_alpn", true}, {"tls_sni", true}, {"tls_ocsp", false}, {"tls", true},
+        {"openssl_is_boringssl", false}, {"cached_builtins", true},
+        {"require_module", true}, {"dtls", false}, {"quic", false}, {"typescript", false},
+    };
+    for (usize i = 0; i < countof(features); i++) {
+        mal_intrinsic_define_data(vm, mal_value_to_object(compat[2]),
+            (const byte *) features[i].name, mal_value_new_boolean(features[i].value), data_flags);
+    }
+    mal_intrinsic_define_data(vm, process, (const byte *) "features", compat[2], data_flags);
+    mal_intrinsic_define_data(vm, process, (const byte *) "execArgv", compat[3], data_flags);
+    mal_intrinsic_define_data(vm, process, (const byte *) "title", compat[6], data_flags);
+    mal_gc_unroot(&compat_root);
 
     mal_intrinsic_define_method_n(vm, process, (const byte *) "cwd", 0, mal_process_cwd);
+    mal_intrinsic_define_method_n(vm, process, (const byte *) "chdir", 1, mal_process_chdir);
+    mal_intrinsic_define_method_n(vm, process, (const byte *) "getuid", 0, mal_process_getuid);
+    mal_intrinsic_define_method_n(vm, process, (const byte *) "geteuid", 0, mal_process_geteuid);
+    mal_intrinsic_define_method_n(vm, process, (const byte *) "getgid", 0, mal_process_getgid);
+    mal_intrinsic_define_method_n(vm, process, (const byte *) "getegid", 0, mal_process_getegid);
+    mal_intrinsic_define_method_n(
+        vm, process, (const byte *) "getgroups", 0, mal_process_getgroups);
     mal_intrinsic_define_method_n(
         vm, process, (const byte *) "nextTick", 1, mal_process_next_tick);
     MalValue hrtime = mal_intrinsic_define_method_n(
@@ -1051,6 +1151,8 @@ void mal_host_install_process(
     mal_gc_unroot(&report_root);
     mal_intrinsic_define_data(
         vm, process, (const byte *) "pid", mal_value_from_f64((f64) getpid()), data_flags);
+    mal_intrinsic_define_data(
+        vm, process, (const byte *) "ppid", mal_value_from_f64((f64) getppid()), data_flags);
 #if defined(__APPLE__)
     MalValue platform = mal_process_utf8_string(vm, "darwin");
 #elif defined(__linux__)

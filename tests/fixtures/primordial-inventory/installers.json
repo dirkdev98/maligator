@@ -449,7 +449,7 @@
 	},
 	{
 		"file": "runtime/node_events.c",
-		"sha256": "95e050d5dbbc6b35aabdc7af3d583299e10cfb9262a9b9ce324618c33290eeb5"
+		"sha256": "97cd8e2fdf8f3437bed29fbb8ff867aee14b2acf5936dec77783df1022048653"
 	},
 	{
 		"file": "runtime/node_events.h",
@@ -501,7 +501,11 @@
 	},
 	{
 		"file": "runtime/node_module.c",
-		"sha256": "eb9c15b0fc818a8e7f7801156eacb32f68744adec3aa21aa53c2e1f933c05d6d"
+		"sha256": "4f5244f1fc7fce5b8fe4584f9f2b195d6f5e66b700de5c2569067f8e3e8d052d"
+	},
+	{
+		"file": "runtime/node_module.h",
+		"sha256": "92a82bf4f98265ada766f1bd7d4536ec717c77043859800b39d422230e51fd10"
 	},
 	{
 		"file": "runtime/node_module_api.c",
@@ -545,7 +549,7 @@
 	},
 	{
 		"file": "runtime/node_process.c",
-		"sha256": "005fc5018e1f1396c462f41f05f2e328f411503f20dddeb460a94dddfb496b5b"
+		"sha256": "4dda091cc73676a248f155d01385ece5b7aaee85dbe3833fd67f700d147783f2"
 	},
 	{
 		"file": "runtime/node_process.h",

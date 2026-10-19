@@ -194,3 +194,7 @@ int mal_posix_fs_rm(const char *path, bool recursive, bool force);
 /* The symbolic name of an errno ("ENOENT", ...) for Node-shaped error `.code`.
  * Returns "UNKNOWN" for codes outside the mapped set. */
 const char *mal_posix_fs_errno_name(int err);
+
+/* libuv's message for an errno ("no such file or directory", ...), which Node puts
+ * after the code in system error messages; "unknown error" outside the mapped set. */
+const char *mal_posix_errno_description(int err);

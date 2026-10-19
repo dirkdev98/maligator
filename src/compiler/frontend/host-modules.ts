@@ -316,7 +316,17 @@ const TLS: HostModuleSpec = {
 
 const EVENTS: HostModuleSpec = {
 	id: "node:events",
-	named: ["EventEmitter", "EventEmitterAsyncResource", "errorMonitor", "once"],
+	named: [
+		"EventEmitter",
+		"EventEmitterAsyncResource",
+		"addAbortListener",
+		"errorMonitor",
+		"getMaxListeners",
+		"listenerCount",
+		"on",
+		"once",
+		"setMaxListeners",
+	],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:events"),
 };

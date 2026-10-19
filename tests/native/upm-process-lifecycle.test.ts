@@ -39,7 +39,7 @@ describe("UPM process lifecycle", () => {
 			expect(lines).toContain("BUILTIN true");
 			expect(lines).toContain("UNKNOWN true");
 			expect(lines).toContain("IDENTITY true");
-			expect(lines).toContain("RUNTIME maligator undefined undefined");
+			expect(lines).toContain("RUNTIME node v26.12.0 26.12.0");
 			expect(lines).toContain("STDIO 0 function function undefined");
 			expect(lines).toContain("UMASK 63");
 			expect(lines).toContain("SIGNAL_VALIDATION true");

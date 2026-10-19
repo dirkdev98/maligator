@@ -117,8 +117,10 @@ check(
 );
 check("arch is supported", process.arch === "arm64" || process.arch === "x64");
 check(
-	"process identifies Maligator without advertising a Node version",
-	process.release.name === "maligator" && !Object.hasOwn(process.versions, "node"),
+	"process reports the Node 26 release it is compatible with",
+	process.release.name === "node" &&
+		process.version === `v${process.versions.node}` &&
+		process.version.startsWith("v26."),
 );
 check("stdout fd", process.stdout.fd === 1);
 check("stderr fd", process.stderr.fd === 2);
