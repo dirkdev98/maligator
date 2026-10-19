@@ -844,9 +844,76 @@ static bool mal_vm_get_for_in_iterator(MalVm *vm, MalValue keys, MalIteratorReco
     return true;
 }
 
+/**
+ * The builtin iterator kind `value[@@iterator]()` creates while the watched-method
+ * protector holds: an Array, Set, or Map on its own realm's intrinsic prototype
+ * without an own @@iterator still has the default method.
+ */
+static bool mal_vm_default_iterator_kind(
+    MalVm *vm, MalValue value, MalIteratorKind *kind_out
+) {
+    MalIntrinsic prototype_slot;
+    MalIteratorKind kind;
+    if (mal_value_is_array_object(value)) {
+        prototype_slot = MAL_INTRINSIC_ARRAY_PROTOTYPE;
+        kind = MAL_ITERATOR_ARRAY_VALUES;
+    } else if (mal_value_is_set_object(value)) {
+        prototype_slot = MAL_INTRINSIC_SET_PROTOTYPE;
+        kind = MAL_ITERATOR_SET_VALUES;
+    } else if (mal_value_is_map_object(value)) {
+        prototype_slot = MAL_INTRINSIC_MAP_PROTOTYPE;
+        kind = MAL_ITERATOR_MAP_ENTRIES;
+    } else {
+        return false;
+    }
+    if (!mal_vm_primitive_methods_intact(vm)) return false;
+    MalObject *object = mal_value_to_object(value);
+    const MalObject *prototype = mal_object_prototype(object);
+    if (prototype == nullptr || !prototype->watched_method_proto ||
+        prototype != mal_value_to_object(vm->intrinsics[prototype_slot])) {
+        return false;
+    }
+    if ((object->shape->inline_count != 0 || mal_object_overflow(object) != nullptr) &&
+        mal_object_get_own(
+            object, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_ITERATOR)).present) {
+        return false;
+    }
+    *kind_out = kind;
+    return true;
+}
+
+static bool mal_vm_iterator_record_from(
+    MalVm *vm, MalValue iterator, MalIteratorRecord *record_out
+) {
+    MalValue roots[2] = {iterator, mal_value_new_undefined()};
+    MalRootSpan roots_span;
+    mal_gc_root(&roots_span, roots, 2);
+    MalKey next_key = mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_NEXT);
+    if (!mal_vm_watched_inherited_get(vm, roots[0], next_key, &roots[1]) &&
+        !mal_vm_get_property(vm, roots[0], next_key, &roots[1])) {
+        mal_gc_unroot(&roots_span);
+        return false;
+    }
+
+    record_out->iterator = roots[0];
+    record_out->next_method = roots[1];
+    mal_gc_unroot(&roots_span);
+
+    return true;
+}
+
 bool mal_vm_get_iterator(MalVm *vm, MalValue value, MalIteratorRecord *record_out) {
     if (mal_value_is_array_object(value) && mal_value_to_object(value)->for_in_keys) {
         return mal_vm_get_for_in_iterator(vm, value, record_out);
+    }
+    // The default method only creates the builtin iterator, so skip its lookup and call.
+    MalIteratorKind kind;
+    if (mal_vm_default_iterator_kind(vm, value, &kind)) {
+        MalRootSpan value_span;
+        mal_gc_root(&value_span, &value, 1);
+        MalValue iterator = mal_vm_new_builtin_iterator(vm, kind, value);
+        mal_gc_unroot(&value_span);
+        return mal_vm_iterator_record_from(vm, iterator, record_out);
     }
     MalValue method;
     MalKey key = mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_ITERATOR);
@@ -875,21 +942,7 @@ bool mal_vm_get_iterator_from_method(
         return false;
     }
 
-    MalValue roots[2] = {completion.value, mal_value_new_undefined()};
-    MalRootSpan roots_span;
-    mal_gc_root(&roots_span, roots, 2);
-    MalKey next_key = mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_NEXT);
-    if (!mal_vm_watched_inherited_get(vm, roots[0], next_key, &roots[1]) &&
-        !mal_vm_get_property(vm, roots[0], next_key, &roots[1])) {
-        mal_gc_unroot(&roots_span);
-        return false;
-    }
-
-    record_out->iterator = roots[0];
-    record_out->next_method = roots[1];
-    mal_gc_unroot(&roots_span);
-
-    return true;
+    return mal_vm_iterator_record_from(vm, completion.value, record_out);
 }
 
 bool mal_vm_builtin_iterator_size_hint(
