@@ -184,6 +184,16 @@ enum FastNode {
         inner: core::ops::Range<usize>,
         optional: bool,
     },
+    /// Alternatives whose first units are disjoint, so at most one can start at a position.
+    Alternation {
+        alternatives: Box<[(Box<[FastNode]>, core::ops::Range<usize>)]>,
+    },
+    /// A quantified group without captures whose body always consumes.
+    Loop {
+        body: Box<[FastNode]>,
+        min: u32,
+        max: u32,
+    },
     End,
 }
 
@@ -329,6 +339,30 @@ impl FastPattern {
                     }
                     None => return None,
                 },
+                FastNode::Alternation { alternatives } => {
+                    let mut matched = None;
+                    for (body, inner) in alternatives.iter() {
+                        matched = Self::match_nodes(body, subject, position, captures);
+                        if matched.is_some() {
+                            break;
+                        }
+                        captures[inner.start * 2..inner.end * 2].fill(-1);
+                    }
+                    position = matched?;
+                }
+                FastNode::Loop { body, min, max } => {
+                    let mut count = 0;
+                    while count < *max {
+                        match Self::match_nodes(body, subject, position, captures) {
+                            Some(end) => position = end,
+                            None => break,
+                        }
+                        count += 1;
+                    }
+                    if count < *min {
+                        return None;
+                    }
+                }
                 FastNode::End => {
                     if position != subject.len() {
                         return None;
@@ -433,6 +467,32 @@ fn fast_first(nodes: &[FastNode]) -> (FastClass, FastFirstEnd) {
                     },
                 )
             }
+            FastNode::Alternation { alternatives } => {
+                let mut first = FastClass::empty();
+                let mut end = FastFirstEnd::Consumes;
+                for (body, _) in alternatives.iter() {
+                    let (body_first, body_end) = fast_first(body);
+                    first = first.union(&body_first);
+                    end = match (end, body_end) {
+                        (FastFirstEnd::Nullable, _) | (_, FastFirstEnd::Nullable) => {
+                            FastFirstEnd::Nullable
+                        }
+                        (FastFirstEnd::Blocked, _) | (_, FastFirstEnd::Blocked) => {
+                            FastFirstEnd::Blocked
+                        }
+                        _ => FastFirstEnd::Consumes,
+                    };
+                }
+                (first, end)
+            }
+            FastNode::Loop { body, min, .. } => (
+                fast_first(body).0,
+                if *min > 0 {
+                    FastFirstEnd::Consumes
+                } else {
+                    FastFirstEnd::Nullable
+                },
+            ),
             FastNode::End => (FastClass::empty(), FastFirstEnd::Blocked),
         };
         first = first.union(&node_first);
@@ -454,8 +514,10 @@ fn fast_follow(nodes: &[FastNode], outer: &FastClass) -> FastClass {
 /// Greedy matching equals ECMAScript backtracking when no quantified class shares a unit
 /// with what can follow it: a backtracking engine would only retry shorter runs, and the
 /// continuation can neither consume a unit of the run nor end the match inside it. An
-/// optional group needs the same disjointness and must always consume, so skipping it
-/// cannot succeed where taking it failed.
+/// optional group or a loop needs the same disjointness and a body that always consumes,
+/// so skipping it or stopping earlier cannot succeed where taking it failed. Alternatives
+/// need disjoint first units and must not match empty except at the end, so no other
+/// alternative could start where the taken one did.
 fn fast_nodes_are_greedy_safe(nodes: &[FastNode], outer: &FastClass) -> bool {
     for (index, node) in nodes.iter().enumerate() {
         let follow = fast_follow(&nodes[index + 1..], outer);
@@ -471,6 +533,28 @@ fn fast_nodes_are_greedy_safe(nodes: &[FastNode], outer: &FastClass) -> bool {
                     }
                 }
                 if !fast_nodes_are_greedy_safe(body, &follow) {
+                    return false;
+                }
+            }
+            FastNode::Alternation { alternatives } => {
+                let mut seen = FastClass::empty();
+                for (body, _) in alternatives.iter() {
+                    let (first, end) = fast_first(body);
+                    if end == FastFirstEnd::Nullable
+                        || first.intersects(&seen)
+                        || !fast_nodes_are_greedy_safe(body, &follow)
+                    {
+                        return false;
+                    }
+                    seen = seen.union(&first);
+                }
+            }
+            FastNode::Loop { body, min, max } => {
+                let (first, end) = fast_first(body);
+                if end != FastFirstEnd::Consumes
+                    || (min != max && first.intersects(&follow))
+                    || !fast_nodes_are_greedy_safe(body, &first.union(&follow))
+                {
                     return false;
                 }
             }
@@ -715,7 +799,7 @@ impl FastParser<'_> {
                     Some(self.next_capture()?)
                 };
                 let inner_start = self.capture_count;
-                let body = self.sequence()?;
+                let body = self.alternation()?;
                 if self.peek() != Some(u16::from(b')')) {
                     return None;
                 }
@@ -739,11 +823,30 @@ impl FastParser<'_> {
         })
     }
 
+    fn alternation(&mut self) -> Option<Vec<FastNode>> {
+        let mut alternatives = Vec::new();
+        loop {
+            let inner_start = self.capture_count;
+            let body = self.sequence()?;
+            alternatives.push((body.into_boxed_slice(), inner_start..self.capture_count));
+            if self.peek() != Some(u16::from(b'|')) {
+                break;
+            }
+            self.position += 1;
+        }
+        if alternatives.len() == 1 {
+            return alternatives.pop().map(|(body, _)| body.into_vec());
+        }
+        Some(vec![FastNode::Alternation {
+            alternatives: alternatives.into(),
+        }])
+    }
+
     fn sequence(&mut self) -> Option<Vec<FastNode>> {
         let mut nodes: Vec<FastNode> = Vec::new();
         let mut literal: Vec<u16> = Vec::new();
         while let Some(unit) = self.peek() {
-            if unit == u16::from(b')') {
+            if unit == u16::from(b')') || unit == u16::from(b'|') {
                 break;
             }
             self.position += 1;
@@ -794,6 +897,15 @@ impl FastParser<'_> {
                     inner,
                     optional: true,
                 },
+                (
+                    FastAtom::Group(FastNode::Group {
+                        body,
+                        capture: None,
+                        inner,
+                        ..
+                    }),
+                    Some((min, max)),
+                ) if inner.is_empty() => FastNode::Loop { body, min, max },
                 (FastAtom::End, None) => FastNode::End,
                 _ => return None,
             };
@@ -820,9 +932,12 @@ fn compile_fast_pattern(units: &[u16], flags: u32) -> Option<FastPattern> {
         capture_count: 0,
         fold_ascii_case: flags & FLAG_IGNORE_CASE != 0,
     };
-    let nodes = parser.sequence()?;
+    let nodes = parser.alternation()?;
+    // A leading `^` binds only to the first top-level alternative.
+    let top_level_alternation = matches!(nodes.as_slice(), [FastNode::Alternation { .. }]);
     if parser.position != units.len()
         || nodes.is_empty()
+        || (anchored_start && top_level_alternation)
         || !fast_nodes_are_greedy_safe(&nodes, &FastClass::empty())
     {
         return None;
@@ -1853,7 +1968,14 @@ mod tests {
         assert!(compile_fast_pattern(&utf16("(?:ab)?a"), 0).is_none());
         assert!(compile_fast_pattern(&utf16("(a*)?"), 0).is_none());
         assert!(compile_fast_pattern(&utf16("a+?"), 0).is_none());
-        assert!(compile_fast_pattern(&utf16("a|b"), 0).is_none());
+        assert!(compile_fast_pattern(&utf16("a|b"), 0).is_some());
+        assert!(compile_fast_pattern(&utf16("ab|ac"), 0).is_none());
+        assert!(compile_fast_pattern(&utf16("a|"), 0).is_none());
+        assert!(compile_fast_pattern(&utf16("^a|b"), 0).is_none());
+        assert!(compile_fast_pattern(&utf16("(a)*"), 0).is_none());
+        assert!(compile_fast_pattern(&utf16("(?:a*)*"), 0).is_none());
+        assert!(compile_fast_pattern(&utf16("(?:ab)*a"), 0).is_none());
+        assert!(compile_fast_pattern(&utf16(r":\d{4}$|[^0-9a-z]"), 0).is_none());
         assert!(compile_fast_pattern(&utf16(r"\bword"), 0).is_none());
         assert!(compile_fast_pattern(&utf16("x{2,1}"), 0).is_none());
         assert!(compile_fast_pattern(&utf16("a{"), 0).is_none());
@@ -1953,6 +2075,18 @@ mod tests {
             (r#"x(\d+)y"#, "X12Y", FLAG_IGNORE_CASE),
             (r#"\W\Ds"#, "!aS", FLAG_IGNORE_CASE),
             (r#"[A-z]+"#, "a^Z", FLAG_IGNORE_CASE),
+            (
+                r#"; *([!#$%&'*+.^_`|~0-9A-Za-z-]+) *= *("(?:[\u000b\u0020\u0021\u0023-\u005b\u005d-\u007e\u0080-\u00ff]|\\[\u000b\u0020-\u00ff])*"|[!#$%&'*+.^_`|~0-9A-Za-z-]+) *"#,
+                "; charset=\"u\\\"t\" ;q=0.5",
+                0,
+            ),
+            (r#"(?:;|,)\s*"#, "a; b", 0),
+            (r#"a(?:bc|d)*e"#, "abcdde", 0),
+            (r#"x(?:y|$)"#, "xy", 0),
+            (r#"(?:ab|cd)+"#, "abcdab", 0),
+            (r#"(foo|bar)baz"#, "barbaz", 0),
+            (r#"(?:(a)|b)c"#, "bc", 0),
+            (r#"(?:a|b)(c|d)?"#, "ad", FLAG_IGNORE_CASE),
         ];
         let extras = [
             'a', 'b', 'c', 'x', 'y', 'Z', '0', '9', ' ', '/', ';', '=', ',', '-', '.', '\t',
