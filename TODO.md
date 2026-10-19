@@ -1141,7 +1141,9 @@ remains a Maligator extension and does not count as global fetch conformance.
       measureMemory and DONT_CONTEXTIFY, and a live contextified global (contexts copy
       the sandbox's own enumerable properties in and changed globals back, so its
       prototype chain, getters and deletions do not reach the script), plus collection
-      of realms whose sandboxes are gone.
+      of realms whose sandboxes are gone; import.meta.resolve; copyFileSync's mode
+      argument (it calls the mode-less copy); stream.compose, buffer.transcode,
+      util.debounce and util.throttle.
 
 - [ ] Make async_hooks observe more than AsyncResource: timers, I/O and promises
       do not emit hook events, and executionAsyncId() inside their callbacks stays
