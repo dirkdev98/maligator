@@ -721,15 +721,12 @@ contracts or investigates costs still visible after the string follow-ups.
       registered for prototype invalidation like the stub's. A two-extra-row
       experiment improved an isolated three-class loop 7% while its monomorphic
       control regressed 1.3%; resolve that trade-off before shipping site storage.
-- [ ] Read `arguments[i]` and forward `fn.apply(this, arguments)` without
-      materializing `arguments`. Body `arguments.length` and constant-index reads
-      no longer allocate, but copy loops such as `args[i] = arguments[i]` (raw-body,
-      ee-first, wrappy, Express's request) and router's `restore` still build a
-      dictionary arguments object per call and read it through the keyed slow
-      path, about seven reads per Express request. A dynamic-index read needs a
-      frame read for in-range integer keys with the object as fallback. Rest
-      parameters already forward through `callRestArguments`; arguments objects
-      also need mapped-parameter aliasing ruled out, and a fallback that builds an
+- [ ] Forward `fn.apply(this, arguments)` without materializing `arguments`.
+      Element reads such as copy loops now read the incoming values, but
+      forwarding still builds a dictionary arguments object per call: once's
+      wrapper, router's `restore` closure and Express's `req.accepts` do it on
+      every request. Rest parameters already forward through
+      `callRestArguments`; arguments objects need a fallback that builds an
       arguments object rather than an Array when `apply` is not the builtin.
 - [ ] Keep Node stream state in native fields. The C stream runtime reads and
       writes its state as own properties named by C strings, about 177 interned

@@ -2097,6 +2097,7 @@ MalValue mal_create_arguments_object(
     MalVm *vm, const MalValue *args, i32 arg_count, MalValue callee, MalEnv *env,
     bool mapped, i32 mapped_argument_count, const i32 *mapped_argument_slots
 ) {
+    MAL_PERF_COUNT(arguments_objects);
     // Arguments length is an ordinary data property, independent of indexed writes.
     MalObject *prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
     MalObject *arguments = mapped

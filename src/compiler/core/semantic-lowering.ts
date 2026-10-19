@@ -494,6 +494,8 @@ interface CoreFrontendFunction {
 	staticMappedArgumentBindings?: Map<ESTree.Node, Binding>;
 	/** Register cache for the lazily created missing-index arguments object. */
 	staticArgumentsFallbackRegister?: number;
+	/** Incoming arguments as a packed rest view for in-range element reads. */
+	argumentsElementRegister?: number;
 	classContext?: SemanticClassContext;
 
 	/**
@@ -5103,14 +5105,17 @@ function compileFunctionParams(
 		argumentsBinding !== undefined &&
 		fn.semanticFile.lazyArgumentsBindings.has(argumentsBinding);
 	let hasStaticIndex = false;
+	let hasElement = false;
 	if (argumentsBinding && (!materializesArguments || lazilyMaterializesArguments)) {
 		for (const usage of argumentsBinding.usageNodes) {
 			const access = fn.semanticFile.staticArgumentsAccesses.get(usage);
 			if (access?.kind === "index") hasStaticIndex = true;
+			if (access?.kind === "element") hasElement = true;
 		}
 	}
 	const needsStaticFallback = hasStaticIndex;
-	if ((materializesArguments || needsStaticFallback) && canMapArguments) {
+	// Element reads materialize the binding for other keys, which must be the mapped object.
+	if ((materializesArguments || needsStaticFallback || hasElement) && canMapArguments) {
 		fn.mappedArguments = true;
 		fn.mappedArgumentSlots = new Array<number>(node.params.length).fill(-1);
 		for (const [i, binding] of mappedParameterBindings) {
@@ -5127,6 +5132,30 @@ function compileFunctionParams(
 		for (const usage of argumentsBinding.usageNodes) {
 			const access = fn.semanticFile.staticArgumentsAccesses.get(usage);
 			if (!access) continue;
+			if (access.kind === "element") {
+				if (argumentCountRegister === undefined) {
+					argumentCountRegister = nextCoreVariable(fn);
+					block.emitter.emit({
+						type: "loadArgumentCount",
+						registers: [argumentCountRegister],
+					});
+				}
+				(fn.staticArgumentsRegisters ??= new Map()).set(usage, argumentCountRegister);
+				// Without these facts the view could not stay virtual and would allocate per call.
+				if (
+					fn.argumentsElementRegister === undefined &&
+					program.facts.world.primordialPolicy === "locked" &&
+					compilerFactIsWorldInvariant(program.facts.protectors.get("array-elements"))
+				) {
+					fn.argumentsElementRegister = nextCoreVariable(fn);
+					block.emitter.emit({
+						type: "createRestArguments",
+						registers: [fn.argumentsElementRegister],
+						startIndex: 0,
+					});
+				}
+				continue;
+			}
 			const mappedBinding =
 				access.kind === "index" ? mappedParameterBindings.get(access.index) : undefined;
 			if (mappedBinding) {
@@ -12444,6 +12473,8 @@ function compileStaticArgumentsMember(
 	const access: StaticArgumentsAccess | undefined =
 		fn.semanticFile.staticArgumentsAccesses.get(usage);
 	if (access?.member !== memberExpression) return undefined;
+	if (access.kind === "element")
+		return compileArgumentsElementRead(program, fn, cursor, usage, memberExpression);
 
 	const mappedBinding = fn.staticMappedArgumentBindings?.get(usage);
 	const snapshot = fn.staticArgumentsRegisters?.get(usage);
@@ -12476,13 +12507,107 @@ function compileStaticArgumentsMember(
 	);
 }
 
+/**
+ * Read an in-range integer element from the incoming arguments while the lazy binding
+ * is EMPTY; other keys, and every key once materialized, read the object.
+ */
+function compileArgumentsElementRead(
+	program: CoreFrontendContext,
+	fn: CoreFrontendFunction,
+	cursor: CoreFrontendCursor,
+	usage: ESTree.Node,
+	memberExpression: ESTree.MemberExpression,
+): number {
+	const binding = fn.semanticFile.nodeToBinding.get(usage)!;
+	const key = compileExpression(program, fn, cursor, memberExpression.property);
+	const result = nextCoreVariable(fn);
+	const view = fn.argumentsElementRegister;
+	const count = fn.staticArgumentsRegisters?.get(usage);
+	const objectJumps: Array<Extract<CompilerInstruction, { type: "jump" }>> = [];
+	let viewDone: Extract<CompilerInstruction, { type: "jump" }> | undefined;
+	if (view !== undefined && count !== undefined) {
+		const current = loadRegisterFromLocation(
+			fn,
+			cursor.block,
+			getOrCreateBindingLocation(program, fn, binding),
+		);
+		const guard = (condition: number) => {
+			const pass: Extract<CompilerInstruction, { type: "jumpIf" }> = {
+				type: "jumpIf",
+				registers: [condition],
+				blocks: [-1],
+			};
+			const fail: Extract<CompilerInstruction, { type: "jump" }> = {
+				type: "jump",
+				blocks: [-1],
+			};
+			cursor.block.emitter.emit(pass, fail);
+			objectJumps.push(fail);
+			pass.blocks[0] = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+			cursor.block = fn.blocks[pass.blocks[0]]!;
+		};
+		const missing = nextCoreVariable(fn);
+		cursor.block.emitter.emit({ type: "isEmpty", registers: [missing, current] });
+		guard(missing);
+		const number = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
+			type: "typeofCompare",
+			registers: [number, key],
+			expected: "number",
+			negated: false,
+		});
+		guard(number);
+		const zero = nextCoreVariable(fn);
+		cursor.block.emitter.emit({ type: "createNumber", registers: [zero], value: 0 });
+		const index = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
+			type: "binary",
+			registers: [index, key, zero],
+			operator: ">>>",
+		});
+		const integral = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
+			type: "binary",
+			registers: [integral, index, key],
+			operator: "===",
+		});
+		guard(integral);
+		const inRange = nextCoreVariable(fn);
+		cursor.block.emitter.emit({
+			type: "binary",
+			registers: [inRange, index, count],
+			operator: "<",
+		});
+		guard(inRange);
+		cursor.block.emitter.emit({ type: "loadProperty", registers: [result, view, index] });
+		viewDone = { type: "jump", blocks: [-1] };
+		cursor.block.emitter.emit(viewDone);
+		const objectIndex = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+		for (const jump of objectJumps) jump.blocks[0] = objectIndex;
+		cursor.block = fn.blocks[objectIndex]!;
+	}
+	const object = loadLazyArgumentsObject(program, fn, cursor, binding);
+	cursor.block.emitter.emit({ type: "loadProperty", registers: [result, object, key] });
+	if (viewDone === undefined) return result;
+	const objectDone: Extract<CompilerInstruction, { type: "jump" }> = {
+		type: "jump",
+		blocks: [-1],
+	};
+	cursor.block.emitter.emit(objectDone);
+	const joinIndex = fn.blocks.push({ emitter: unboundCoreEmitter }) - 1;
+	viewDone.blocks[0] = joinIndex;
+	objectDone.blocks[0] = joinIndex;
+	cursor.block = fn.blocks[joinIndex]!;
+	return result;
+}
+
 /** Read the frame while the lazy binding is EMPTY, else the materialized object. */
 function compileGuardedArgumentsRead(
 	program: CoreFrontendContext,
 	fn: CoreFrontendFunction,
 	cursor: CoreFrontendCursor,
 	usage: ESTree.Node,
-	access: StaticArgumentsAccess,
+	access: Exclude<StaticArgumentsAccess, { kind: "element" }>,
 	mappedBinding: Binding | undefined,
 	snapshot: number | undefined,
 ): number {
@@ -12555,7 +12680,7 @@ function compileDirectArgumentsRead(
 	program: CoreFrontendContext,
 	fn: CoreFrontendFunction,
 	cursor: CoreFrontendCursor,
-	access: StaticArgumentsAccess,
+	access: Exclude<StaticArgumentsAccess, { kind: "element" }>,
 	mappedBinding: Binding | undefined,
 	snapshot: number | undefined,
 ): number {

@@ -94,7 +94,8 @@ export interface SemanticFile {
 
 export type StaticArgumentsAccess =
 	| { member: ESTree.MemberExpression; kind: "length" }
-	| { member: ESTree.MemberExpression; kind: "index"; index: number };
+	| { member: ESTree.MemberExpression; kind: "index"; index: number }
+	| { member: ESTree.MemberExpression; kind: "element" };
 
 export interface Scope {
 	parent: Scope | null;
@@ -634,6 +635,91 @@ function accessIsInOwningFunction(
 	return false;
 }
 
+function nodeIsWithin(
+	node: ESTree.Node,
+	ancestor: ESTree.Node,
+	parents: Map<ESTree.Node, ESTree.Node>,
+): boolean {
+	for (
+		let current: ESTree.Node | undefined = node;
+		current;
+		current = parents.get(current)
+	)
+		if (current === ancestor) return true;
+	return false;
+}
+
+/**
+ * Whether every unmaterialized `arguments[i]` equals incoming argument `i`. A sloppy
+ * function's object aliases its formals, so none may be written after entry.
+ */
+function argumentsMatchIncomingValues(
+	file: SemanticFile,
+	owner: Scope,
+	parents: Map<ESTree.Node, ESTree.Node>,
+): boolean {
+	if (
+		owner.node.type !== "FunctionDeclaration" &&
+		owner.node.type !== "FunctionExpression"
+	)
+		return false;
+	if (owner.strict) return true;
+	if (file.hasDirectEval.has(owner.node)) return false;
+	return owner.node.params.every((parameter) => {
+		if (parameter.type !== "Identifier") return true;
+		const binding = file.nodeToBinding.get(parameter);
+		return (
+			binding !== undefined &&
+			binding.usageNodes.every(
+				(usage) =>
+					usage === parameter ||
+					(usage.type === "Identifier" &&
+						!file.withDynamicNodes.has(usage) &&
+						identifierIsOnlyRead(usage, parents)),
+			)
+		);
+	});
+}
+
+function identifierIsOnlyRead(
+	identifier: ESTree.Identifier,
+	parents: Map<ESTree.Node, ESTree.Node>,
+): boolean {
+	const parent = parents.get(identifier);
+	if (
+		parent === undefined ||
+		((parent.type === "FunctionDeclaration" ||
+			parent.type === "FunctionExpression" ||
+			parent.type === "ClassDeclaration") &&
+			parent.id === identifier)
+	)
+		return false;
+	let current: ESTree.Node = identifier;
+	for (;;) {
+		const next = parents.get(current);
+		if (next === undefined) return true;
+		if (next.type === "AssignmentExpression") return next.left !== current;
+		if (next.type === "VariableDeclarator") return next.id !== current;
+		if (next.type === "UpdateExpression") return false;
+		if (
+			(next.type === "ForInStatement" || next.type === "ForOfStatement") &&
+			next.left === current
+		)
+			return false;
+		if (
+			next.type === "ArrayPattern" ||
+			next.type === "ObjectPattern" ||
+			next.type === "RestElement" ||
+			(next.type === "AssignmentPattern" && next.left === current) ||
+			(next.type === "Property" && next.value === current)
+		) {
+			current = next;
+			continue;
+		}
+		return true;
+	}
+}
+
 function argumentsBindingOwner(file: SemanticFile, binding: Binding): Scope | undefined {
 	return file.scopes.find((scope) => scope.bindings.includes(binding));
 }
@@ -702,9 +788,12 @@ function classifyStaticArgumentsUsage(file: SemanticFile): void {
 					node.property.name === "length"
 				) {
 					access = { member: node, kind: "length" };
-				} else {
+				} else if (node.computed) {
 					const index = staticArgumentsIndex(node);
-					if (index !== undefined) access = { member: node, kind: "index", index };
+					access =
+						index === undefined
+							? { member: node, kind: "element" }
+							: { member: node, kind: "index", index };
 				}
 				if (access) {
 					const byNode =
@@ -719,7 +808,22 @@ function classifyStaticArgumentsUsage(file: SemanticFile): void {
 	for (const [binding, byNode] of candidates) {
 		const isStaticRead = (usage: ESTree.Node): boolean => {
 			const access = byNode.get(usage);
-			return access !== undefined && isDirectArgumentsRead(access.member, parents);
+			return (
+				access !== undefined &&
+				access.kind !== "element" &&
+				isDirectArgumentsRead(access.member, parents)
+			);
+		};
+		// The key must not reach this binding, which could materialize or replace it first.
+		const isElementRead = (usage: ESTree.Node): boolean => {
+			const access = byNode.get(usage);
+			return (
+				access?.kind === "element" &&
+				isDirectArgumentsRead(access.member, parents) &&
+				!binding.usageNodes.some((other) =>
+					nodeIsWithin(other, access.member.property, parents),
+				)
+			);
 		};
 		if (binding.usageNodes.length > 0 && binding.usageNodes.every(isStaticRead)) {
 			for (const [usage, access] of byNode)
@@ -749,7 +853,10 @@ function classifyStaticArgumentsUsage(file: SemanticFile): void {
 		) {
 			continue;
 		}
-		const guardedReads = bodyUsages.filter(isStaticRead);
+		const elementReads = argumentsMatchIncomingValues(file, owner, parents)
+			? bodyUsages.filter(isElementRead)
+			: [];
+		const guardedReads = [...bodyUsages.filter(isStaticRead), ...elementReads];
 		if (parameterUsages.length === 0 && guardedReads.length === 0) continue;
 		for (const usage of [...parameterUsages, ...guardedReads]) {
 			file.staticArgumentsAccesses.set(usage, byNode.get(usage)!);

@@ -1154,10 +1154,11 @@ static void mal_perf_stats_print(void) {
     fprintf(
         stderr,
         "[perf-arguments-stats] logical_values=%llu destination_writes=%llu "
-        "temporary_copies=%llu\n",
+        "temporary_copies=%llu objects=%llu\n",
         (unsigned long long) mal_perf_stats.argument_snapshot_logical_values,
         (unsigned long long) mal_perf_stats.argument_snapshot_destination_writes,
-        (unsigned long long) mal_perf_stats.argument_snapshot_temporary_copies
+        (unsigned long long) mal_perf_stats.argument_snapshot_temporary_copies,
+        (unsigned long long) mal_perf_stats.arguments_objects
     );
 	fprintf(
         stderr,
