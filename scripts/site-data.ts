@@ -480,9 +480,6 @@ const SHAPE_ONLY_NODE_APIS = new Set([
 	"node:crypto#createVerify",
 	"node:crypto#generateKeyPairSync",
 	"node:crypto#publicEncrypt",
-	"node:perf_hooks#monitorEventLoopDelay",
-	"node:stream#pipeline",
-	"node:url#urlToHttpOptions",
 ]);
 
 function nodeCompatibilityHtml(): string {
