@@ -2247,29 +2247,41 @@ export function verifyCoreOptimizationPlan(
 		...specializations.map(({ cost }) => cost.compilerWork),
 		...plan.directEntries.map(({ cost }) => cost.compilerWork),
 	].reduce((sum, cost) => sum + cost, 0);
-	if (
-		plan.statistics.applied !== selected ||
-		total(plan.statistics.selectedByKind) !== selected ||
-		plan.statistics.considered !== plan.statistics.applied + plan.statistics.declined ||
-		total(plan.statistics.discoveredByKind) !== plan.statistics.considered ||
-		plan.statistics.generatedCodeConsumed !== generatedCode ||
-		plan.statistics.compilerWorkConsumed !==
-			compilerWork + plan.statistics.discovery.compilerWork ||
-		![
-			plan.statistics.discovery.opportunities,
-			plan.statistics.discovery.attempted,
-			plan.statistics.discovery.skipped,
-			plan.statistics.discovery.compilerWork,
-			...Object.values(plan.statistics.discovery.skippedByReason),
-		].every((value) => Number.isSafeInteger(value) && value >= 0) ||
-		plan.statistics.discovery.opportunities !==
-			plan.statistics.discovery.attempted + plan.statistics.discovery.skipped ||
-		total(plan.statistics.discovery.skippedByReason) !==
-			plan.statistics.discovery.skipped ||
-		!Number.isFinite(plan.statistics.verificationMs) ||
-		plan.statistics.verificationMs < 0
-	) {
-		fail("plan diagnostics do not describe the selected entries");
+	const statistics = plan.statistics;
+	const discovery = statistics.discovery;
+	const invariants: Array<[string, boolean]> = [
+		["applied", statistics.applied === selected],
+		["selectedByKind", total(statistics.selectedByKind) === selected],
+		["considered", statistics.considered === statistics.applied + statistics.declined],
+		["discoveredByKind", total(statistics.discoveredByKind) === statistics.considered],
+		["generatedCodeConsumed", statistics.generatedCodeConsumed === generatedCode],
+		[
+			"compilerWorkConsumed",
+			statistics.compilerWorkConsumed === compilerWork + discovery.compilerWork,
+		],
+		[
+			"discovery counts",
+			[
+				discovery.opportunities,
+				discovery.attempted,
+				discovery.skipped,
+				discovery.compilerWork,
+				...Object.values(discovery.skippedByReason),
+			].every((value) => Number.isSafeInteger(value) && value >= 0),
+		],
+		[
+			"opportunities",
+			discovery.opportunities === discovery.attempted + discovery.skipped,
+		],
+		["skippedByReason", total(discovery.skippedByReason) === discovery.skipped],
+		[
+			"verificationMs",
+			Number.isFinite(statistics.verificationMs) && statistics.verificationMs >= 0,
+		],
+	];
+	const broken = invariants.filter(([, holds]) => !holds).map(([name]) => name);
+	if (broken.length > 0) {
+		fail(`plan diagnostics do not describe the selected entries (${broken.join(", ")})`);
 	}
 	const verifiedPlan = immutablePlanCopy({
 		...plan,

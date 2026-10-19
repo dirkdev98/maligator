@@ -1961,9 +1961,11 @@ export function buildCoreOptimizationPlan(
 		discovery.attempted++;
 		discovery.compilerWork += cost.compilerWorkCost;
 		for (const candidate of opportunity.resolve()) {
-			increment(discoveredByKind, candidate.budget.kind);
 			const budget = candidate.budget;
-			if (service.offer(budget)) byBudget.set(budget, candidate);
+			// A repeated candidate identity is neither considered nor discovered twice.
+			if (!service.offer(budget)) continue;
+			increment(discoveredByKind, budget.kind);
+			byBudget.set(budget, candidate);
 		}
 
 		for (let budget = service.next(); budget !== undefined; budget = service.next()) {
@@ -2110,8 +2112,8 @@ export function buildCoreOptimizationPlan(
 							// local region sites use a different instruction ID space.
 							expansive: false,
 						};
-						increment(discoveredByKind, "direct-entry");
 						if (!service.offer(budget)) return false;
+						increment(discoveredByKind, "direct-entry");
 						service.next();
 						const reason = service.admit(budget);
 						if (reason !== undefined) {

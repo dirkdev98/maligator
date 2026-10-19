@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
+import { parseModule } from "../src/compiler/frontend/parser.ts";
 import { collectPrimordialMutationDiagnostics } from "../src/compiler/frontend/primordial-diagnostics.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { worldFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
@@ -55,6 +56,24 @@ const user = {};
 user.extra = 1;
 `);
 		expect(found).toEqual([]);
+	});
+
+	it("leaves module-scoped declarations that share a primordial's name alone", () => {
+		const source =
+			"var unescape = (text) => text;\nfunction escape() {}\nexport { escape, unescape };\n";
+		const semantic = analyzeSourceAndRunSemanticAnalysis(
+			source,
+			"diagnostic.mjs",
+			parseModule(source),
+		);
+		expect(
+			collectPrimordialMutationDiagnostics(
+				semantic,
+				worldFactsFromConfig(resolveBuildConfig({ engine: { primordials: "locked" } })),
+				{ nodeEnabled: false },
+			),
+		).toEqual([]);
+		expect(diagnostics("var unescape = (text) => text;\n")).toHaveLength(1);
 	});
 
 	it("is disabled completely in mutable builds", () => {

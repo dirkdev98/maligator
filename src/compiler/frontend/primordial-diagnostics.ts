@@ -46,9 +46,11 @@ function literalPropertyName(node: ESTree.Node): string | undefined {
 function globalIdentifier(file: SemanticFile, node: ESTree.Node): string | undefined {
 	if (node.type !== "Identifier" || !protectedBindings.has(node.name)) return undefined;
 	const binding = file.nodeToBinding.get(node);
+	// Module top-level bindings also use global storage, but only a classic script's
+	// var declarations become properties of the global object.
 	if (
 		binding?.undeclared === true ||
-		(binding?.scopedTo === "global" && binding.kind === "var")
+		(binding?.scopedTo === "global" && binding.kind === "var" && file.type === "script")
 	) {
 		return node.name;
 	}
