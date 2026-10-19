@@ -50,6 +50,8 @@ pub mod argon2;
 // See src/crypto_cipher.rs + include/mal_crypto_cipher.h.
 #[cfg(feature = "node-crypto")]
 pub mod crypto_cipher;
+#[cfg(feature = "node-crypto")]
+pub mod crypto_pkey;
 
 /// ABI version. Bump on any breaking change to the C header so the C side can
 /// assert the linked archive matches `mal_i18n.h`.

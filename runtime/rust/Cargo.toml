@@ -88,6 +88,8 @@ ctr = { version = "0.9", default-features = false, optional = true }
 ghash = { version = "0.5", default-features = false, optional = true }
 chacha20 = { version = "0.9", default-features = false, optional = true }
 poly1305 = { version = "0.8", default-features = false, optional = true }
+# Asymmetric signing for node:crypto; already in the tree through rustls.
+ring = { version = "0.17", optional = true }
 
 [features]
 # On by default so dev/test262 builds carry the full Intl + URL + RegExp surface.
@@ -114,7 +116,14 @@ temporal = ["dep:temporal_capi", "temporal_capi/compiled_data"]
 node-zlib = ["dep:flate2", "dep:brotli-decompressor", "dep:brotli"]
 node-tls = ["dep:rustls", "dep:rustls-pemfile"]
 node-argon2 = ["dep:rust-argon2"]
-node-crypto = ["dep:aes", "dep:ctr", "dep:ghash", "dep:chacha20", "dep:poly1305"]
+node-crypto = [
+	"dep:aes",
+	"dep:ctr",
+	"dep:ghash",
+	"dep:chacha20",
+	"dep:poly1305",
+	"dep:ring",
+]
 
 # The always-on Intl floor: locale parsing/negotiation (Intl.Locale,
 # getCanonicalLocales, maximize/minimize) + result stringification. Every service

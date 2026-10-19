@@ -7,6 +7,8 @@ import {
 	BUFFER_INSTALLER_SYMBOL,
 	PERFORMANCE_GLOBALS,
 	PERFORMANCE_INSTALLER_SYMBOL,
+	CRYPTO_GLOBALS,
+	CRYPTO_INSTALLER_SYMBOL,
 	PROCESS_INSTALLER_SYMBOL,
 } from "./host-modules.ts";
 import { staticModuleClosure } from "./module-closure.ts";
@@ -109,6 +111,9 @@ export interface ModuleLinkage {
 
 	/** Free `performance` or Performance* globals, which `node:perf_hooks` completes. */
 	hostPerformance?: { installer: string };
+
+	/** Free `crypto` or WebCrypto interface globals, which `node:crypto` replaces. */
+	hostCrypto?: { installer: string };
 
 	/** Statically detected `module.exports` names of a CommonJS module, sorted. */
 	commonJsExportNames: (modulePath: string) => ReadonlyArray<string>;
@@ -829,6 +834,9 @@ export function linkModules(program: SemanticProgram): ModuleLinkage {
 		}
 		if (PERFORMANCE_GLOBALS.some((name) => freeGlobalUsed(name) || members.has(name))) {
 			linkage.hostPerformance = { installer: PERFORMANCE_INSTALLER_SYMBOL };
+		}
+		if (CRYPTO_GLOBALS.some((name) => freeGlobalUsed(name) || members.has(name))) {
+			linkage.hostCrypto = { installer: CRYPTO_INSTALLER_SYMBOL };
 		}
 	}
 

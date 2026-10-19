@@ -434,8 +434,8 @@ UTIL_TYPE_PREDICATE(is_module_namespace_object,
     mal_value_is_module_namespace_object(value))
 UTIL_TYPE_PREDICATE(is_proxy, mal_value_is_proxy_object(value))
 UTIL_TYPE_PREDICATE(is_external, false)
-UTIL_TYPE_PREDICATE(is_key_object, false)
-UTIL_TYPE_PREDICATE(is_crypto_key, false)
+UTIL_TYPE_PREDICATE(is_key_object, mal_node_key_object_brand != nullptr && mal_node_key_object_brand(value))
+UTIL_TYPE_PREDICATE(is_crypto_key, mal_node_crypto_key_brand != nullptr && mal_node_crypto_key_brand(value))
 UTIL_TYPE_PREDICATE(is_map_iterator,
     mal_value_is_iterator_object(value)
         && mal_value_to_iterator_object(value)->kind <= MAL_ITERATOR_MAP_ENTRIES)

@@ -476,9 +476,6 @@ const SHAPE_ONLY_NODE_MODULES = new Set([
 
 const SHAPE_ONLY_NODE_APIS = new Set([
 	"node:crypto#X509Certificate",
-	"node:crypto#createSign",
-	"node:crypto#createVerify",
-	"node:crypto#generateKeyPairSync",
 	"node:crypto#publicEncrypt",
 ]);
 

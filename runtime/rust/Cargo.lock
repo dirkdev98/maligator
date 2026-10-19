@@ -863,6 +863,7 @@ dependencies = [
  "jiff",
  "poly1305",
  "regress",
+ "ring",
  "rust-argon2",
  "rustls",
  "rustls-pemfile",

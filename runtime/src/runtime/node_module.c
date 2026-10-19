@@ -77,6 +77,9 @@ bool mal_node_module_install_cached(
     return true;
 }
 
+MalNodeBrandCheck mal_node_key_object_brand;
+MalNodeBrandCheck mal_node_crypto_key_brand;
+
 void mal_node_throw_code(MalVm *vm, MalIntrinsic prototype, const char *message, const char *code) {
     MalString *text = mal_string_from_utf8(&vm->heap, (const byte *) message, strlen(message));
     if (text == nullptr) {

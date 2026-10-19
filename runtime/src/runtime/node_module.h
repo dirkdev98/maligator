@@ -14,6 +14,12 @@ bool mal_node_module_install_cached(
 
 MalValue mal_node_module_get_cached(MalVm *vm, const char *id);
 
+/* Brand checks node:crypto registers when installed, so util.types can recognize its
+ * objects without linking it; before that no KeyObject or CryptoKey can exist. */
+typedef bool (*MalNodeBrandCheck)(MalValue value);
+extern MalNodeBrandCheck mal_node_key_object_brand;
+extern MalNodeBrandCheck mal_node_crypto_key_brand;
+
 /** Throw `prototype` with `message` and a Node `code` property such as ERR_INVALID_ARG_TYPE. */
 void mal_node_throw_code(MalVm *vm, MalIntrinsic prototype, const char *message, const char *code);
 

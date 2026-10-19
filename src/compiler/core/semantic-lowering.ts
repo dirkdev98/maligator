@@ -30,7 +30,7 @@ import {
 	ESTREE_STOP,
 	traverseEstree,
 } from "../frontend/estree-traversal.ts";
-import { PERFORMANCE_GLOBALS } from "../frontend/host-modules.ts";
+import { CRYPTO_GLOBALS, PERFORMANCE_GLOBALS } from "../frontend/host-modules.ts";
 import { linkModules } from "../frontend/linker.ts";
 import { planModuleEvaluation } from "../frontend/module-evaluation-plan.ts";
 import type { ModuleEvaluationPlan } from "../frontend/module-evaluation-plan.ts";
@@ -326,6 +326,9 @@ interface CoreFrontendContext {
 
 	/** Free `performance` and Performance* globals, completed by `node:perf_hooks`. */
 	hostPerformance: { installer: string; retained: boolean } | null;
+
+	/** Free `crypto` and WebCrypto interface globals, replaced by `node:crypto`. */
+	hostCrypto: { installer: string; retained: boolean } | null;
 
 	/** Modules whose bindings this image publishes to later images of its program. */
 	moduleExports?: "all" | ReadonlySet<string>;
@@ -927,6 +930,7 @@ export function constructSemanticProgramCore(
 		hostProcess: null,
 		hostBuffer: null,
 		hostPerformance: null,
+		hostCrypto: null,
 		commonJsExportNames: () => [],
 	};
 
@@ -962,6 +966,9 @@ export function constructSemanticProgramCore(
 		: null;
 	program.hostPerformance = linkage.hostPerformance
 		? { installer: linkage.hostPerformance.installer, retained: false }
+		: null;
+	program.hostCrypto = linkage.hostCrypto
+		? { installer: linkage.hostCrypto.installer, retained: false }
 		: null;
 
 	const initFile = program.semantic.files.find(
@@ -1070,6 +1077,7 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 					program.hostProcess,
 					program.hostBuffer,
 					program.hostPerformance,
+					program.hostCrypto,
 				]
 					.flatMap((host) => (host?.retained === true ? [host.installer] : []))
 					.filter(
@@ -15047,6 +15055,9 @@ function retainHostMember(
 		program.hostBuffer.retained = true;
 	if (program.hostPerformance && (key === undefined || PERFORMANCE_GLOBALS.includes(key)))
 		program.hostPerformance.retained = true;
+	// A computed globalThis read does not pull node:crypto in; only a named crypto global does.
+	if (program.hostCrypto && key !== undefined && CRYPTO_GLOBALS.includes(key))
+		program.hostCrypto.retained = true;
 }
 
 /** Mark a reachable free Node global and keep it on globalThis storage. */
@@ -15069,6 +15080,10 @@ function retainHostGlobal(program: CoreFrontendContext, binding: Binding): boole
 		PERFORMANCE_GLOBALS.includes(binding.name)
 	) {
 		program.hostPerformance.retained = true;
+		return true;
+	}
+	if (program.hostCrypto && binding.undeclared && CRYPTO_GLOBALS.includes(binding.name)) {
+		program.hostCrypto.retained = true;
 		return true;
 	}
 	return false;

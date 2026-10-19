@@ -64,6 +64,17 @@ export const BUFFER_INSTALLER_SYMBOL = hostInstallerSymbol("node:buffer");
 /** The node:perf_hooks installer, which gives Node's surface to the free `performance` global. */
 export const PERFORMANCE_INSTALLER_SYMBOL = hostInstallerSymbol("node:perf_hooks");
 
+/** The node:crypto installer, which makes the free `crypto` global Node's webcrypto. */
+export const CRYPTO_INSTALLER_SYMBOL = hostInstallerSymbol("node:crypto");
+
+/** Free WebCrypto globals that node:crypto replaces or defines. */
+export const CRYPTO_GLOBALS: ReadonlyArray<string> = [
+	"crypto",
+	"Crypto",
+	"CryptoKey",
+	"SubtleCrypto",
+];
+
 /** Free globals that Node's perf_hooks defines or extends. */
 export const PERFORMANCE_GLOBALS: ReadonlyArray<string> = [
 	"performance",
@@ -539,14 +550,16 @@ const CLUSTER: HostModuleSpec = {
 };
 
 // The authentication-grade slice: hashing, HMAC, PBKDF2, Argon2 (sync and
-// off-event-loop), and the CSPRNG helpers, plus what pinned Express
-// dependencies reach for.
+// off-event-loop), the CSPRNG helpers, RSA/EC/Ed25519 signing, plus what pinned
+// Express dependencies reach for.
 const CRYPTO: HostModuleSpec = {
 	id: "node:crypto",
 	named: [
 		"Cipheriv",
 		"Decipheriv",
 		"KeyObject",
+		"Sign",
+		"Verify",
 		"X509Certificate",
 		"argon2",
 		"argon2Sync",
@@ -555,9 +568,12 @@ const CRYPTO: HostModuleSpec = {
 		"createDecipheriv",
 		"createHash",
 		"createHmac",
+		"createPrivateKey",
+		"createPublicKey",
 		"createSecretKey",
 		"createSign",
 		"createVerify",
+		"generateKeyPair",
 		"generateKeyPairSync",
 		"getCipherInfo",
 		"getCiphers",
@@ -578,8 +594,10 @@ const CRYPTO: HostModuleSpec = {
 		"randomUUIDv7",
 		"scrypt",
 		"scryptSync",
+		"sign",
 		"subtle",
 		"timingSafeEqual",
+		"verify",
 		"webcrypto",
 	],
 	hasDefault: true,
