@@ -1,7 +1,6 @@
 import url from "node:url";
 
-// Cases from Node's test-url-relative.js plus protocol, auth and host edge cases. Inputs that
-// need url.parse host normalization or auto-escaping are left out until url.parse matches Node.
+// Cases from Node's test-url-relative.js plus protocol, auth and host edge cases.
 const cases = [
 	["/foo/bar/baz", "quux"],
 	["/foo/bar/baz", "quux/asdf"],
@@ -63,7 +62,9 @@ const cases = [
 	["http://a/b/c/d;p?q", "http:g"],
 	["http://user:pw@a.com/x", "//b.com/y"],
 	["http://user:pw@a.com/x", "/y"],
+	["http://user:pw@a.com/x", "http://other.com"],
 	["mailto:local1@domain1", "local2@domain2"],
+	["mailto:local1@domain1", "?subject=hi"],
 	["mailto:a@b", "mailto:c@d"],
 	["javascript:void(0)", "x"],
 	["news:comp.lang", "other"],
@@ -73,10 +74,66 @@ const cases = [
 	["file:///a/b/c", "../d"],
 	["file:///a/b/c", "file:z"],
 	["", "relative"],
+	["http://example.com/dir/", "x y"],
 ];
 for (const [from, to] of cases) {
 	console.log(JSON.stringify([from, to, url.resolve(from, to)]));
 }
+for (const input of [
+	"http://a b/",
+	"HTTP://User:P%40ss@ExAmple.COM:8080/p?q#h",
+	"http://[::1]:3000/x",
+	"javascript:alert(1)",
+	"mailto:local1@domain1",
+	"//foo/bar",
+	"/simple/path?x=1",
+	"x y",
+	"http://a@b@c/",
+	"http://a@b?@c",
+	"http://xn--n3h.com/",
+	"  http://a.com/ ",
+	"http:\\\\a.com\\b?c\\d",
+	"http://a.com:/x",
+	"git+ssh://git@github.com:22/x.git",
+	"ws://h.com",
+	"file:///etc/passwd",
+	"HTTP://H.com",
+	"http://a.com/p\tq\nr",
+	"https://a.com/?q='<>`",
+	"http://a:b/",
+	"http://[::1%25]/",
+	"",
+	"?only=query",
+	"#only-hash",
+]) {
+	try {
+		console.log(JSON.stringify(input), JSON.stringify(url.parse(input)));
+	} catch (error) {
+		console.log(
+			JSON.stringify(input),
+			error.name,
+			error.code,
+			error.message,
+			error.input,
+		);
+	}
+}
+console.log(JSON.stringify(url.parse("http://a.com/?x=1&y=2", true).query));
+console.log(
+	Object.getPrototypeOf(url.parse("http://a.com/", true).query),
+	url.parse("http://a.com/", true).search,
+);
+console.log(
+	JSON.stringify(url.parse("//foo/bar", false, true)),
+	JSON.stringify(url.parse("/p?a=b", true).query),
+);
+try {
+	url.parse(1);
+} catch (error) {
+	console.log(error.code, error.message);
+}
+const target = new url.Url();
+console.log(target.parse("http://z.com/a") === target, target.href);
 const resolved = url.resolveObject("http://u@a.com/b/c?d#e", "../x?y");
 console.log(JSON.stringify(Object.entries(resolved)));
 console.log(
@@ -182,3 +239,29 @@ try {
 } catch (error) {
 	console.log(error.name);
 }
+
+const net = await import("node:net");
+console.log(
+	net.getDefaultAutoSelectFamily(),
+	net.getDefaultAutoSelectFamilyAttemptTimeout(),
+);
+for (const value of [undefined, 1, "x", false, true]) {
+	try {
+		net.setDefaultAutoSelectFamily(value);
+		console.log("set", value, net.getDefaultAutoSelectFamily());
+	} catch (error) {
+		console.log(error.code, error.message);
+	}
+}
+for (const value of [undefined, 5, 10, 750, 10.5, -1, "1", 2 ** 31, Number.NaN]) {
+	try {
+		net.setDefaultAutoSelectFamilyAttemptTimeout(value);
+		console.log("set", value, net.getDefaultAutoSelectFamilyAttemptTimeout());
+	} catch (error) {
+		console.log(error.code, error.message);
+	}
+}
+console.log(
+	net.setDefaultAutoSelectFamily.length,
+	net.getDefaultAutoSelectFamilyAttemptTimeout.length,
+);

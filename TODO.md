@@ -1223,6 +1223,13 @@ remains a Maligator extension and does not count as global fetch conformance.
       deletions do not reach the script), plus collection of realms whose sandboxes
       are gone.
 
+- [ ] node:net: `BlockList` (lib/internal/blocklist.js plus node_sockaddr.cc
+      matching, IPv4-mapped IPv6 included) and `SocketAddress`
+      (lib/internal/socketaddress.js, `parse` through WHATWG URL parsing); make
+      connect() honour getDefaultAutoSelectFamily() and its attempt timeout, which
+      are module state only today. util.debounce and util.throttle as Node 26 defines
+      them. url.parse emits no DEP0169 warning, and ASCII hostnames skip Node's
+      toASCII validation.
 - [ ] node:url: `url.format` should `querystring.stringify` an object `query` when
       `search` is absent, and format WHATWG URL objects with its options argument.
       util.isPartialDeepStrictEqual, stream.compose, and `_extend` on a primitive

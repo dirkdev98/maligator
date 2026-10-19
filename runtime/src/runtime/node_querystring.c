@@ -291,6 +291,10 @@ static bool qs_escape_allowed(u8 value) {
         || value == '(' || value == ')' || value == '*';
 }
 
+MalValue mal_node_querystring_parse(MalVm *vm, MalValue text) {
+    return qs_parse(vm, mal_value_new_undefined(), &text, 1, mal_value_new_undefined(), mal_value_new_undefined());
+}
+
 static MalValue qs_escape_string(MalVm *vm, MalString *string) {
     const c16 *units = mal_string_code_units(string);
     usize length = mal_string_length(string);

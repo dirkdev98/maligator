@@ -432,6 +432,47 @@ NET_IP_PREDICATE(net_is_ipv4, AF_INET)
 NET_IP_PREDICATE(net_is_ipv6, AF_INET6)
 #undef NET_IP_PREDICATE
 
+// lib/net.js module state behind get/setDefaultAutoSelectFamily(AttemptTimeout).
+static MAL_ISOLATE_LOCAL bool net_auto_select_family = true;
+static MAL_ISOLATE_LOCAL i32 net_auto_select_family_attempt_timeout = 500;
+
+static MalValue net_get_default_auto_select_family(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) vm, (void) receiver, (void) args, (void) argc, (void) new_target, (void) callee;
+    return mal_value_new_boolean(net_auto_select_family);
+}
+
+static MalValue net_set_default_auto_select_family(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver, (void) new_target, (void) callee;
+    MalValue value = argc > 0 ? args[0] : mal_value_new_undefined();
+    if (!mal_value_is_boolean(value)) {
+        mal_node_throw_invalid_arg_type(vm, "value", "of type boolean", value);
+        return mal_value_new_undefined();
+    }
+    net_auto_select_family = mal_value_to_boolean(value);
+    return mal_value_new_undefined();
+}
+
+static MalValue net_get_default_auto_select_family_attempt_timeout(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) vm, (void) receiver, (void) args, (void) argc, (void) new_target, (void) callee;
+    return mal_value_from_i32(net_auto_select_family_attempt_timeout);
+}
+
+/* validateInt32(value, 'value', 1), then values below 10 become 10. */
+static MalValue net_set_default_auto_select_family_attempt_timeout(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver, (void) new_target, (void) callee;
+    f64 value;
+    if (!mal_node_validate_integer(vm, argc > 0 ? args[0] : mal_value_new_undefined(), "value", 1,
+            2147483647.0, &value)) {
+        return mal_value_new_undefined();
+    }
+    net_auto_select_family_attempt_timeout = value < 10 ? 10 : (i32) value;
+    return mal_value_new_undefined();
+}
+
 static MalValue net_ip_function(
     MalVm *vm, const byte *name, MalNativeFunctionCallback callback
 ) {
@@ -2538,6 +2579,24 @@ void mal_host_install_node_net(
     for (usize i = 0; i < countof(names); i++) {
         mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]),
             (const byte *) names[i], values[i], NET_VISIBLE);
+    }
+    static const struct {
+        const char *name;
+        i32 length;
+        MalNativeFunctionCallback callback;
+    } state_functions[] = {
+        {"getDefaultAutoSelectFamily", 0, net_get_default_auto_select_family},
+        {"setDefaultAutoSelectFamily", 1, net_set_default_auto_select_family},
+        {"getDefaultAutoSelectFamilyAttemptTimeout", 0, net_get_default_auto_select_family_attempt_timeout},
+        {"setDefaultAutoSelectFamilyAttemptTimeout", 1, net_set_default_auto_select_family_attempt_timeout},
+    };
+    for (usize i = 0; i < countof(state_functions); i++) {
+        roots[3] = mal_value_from_native_function_object(mal_native_function_object_new_arity(&vm->heap,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+            mal_intrinsic_ascii(vm, (const byte *) state_functions[i].name), state_functions[i].length,
+            state_functions[i].callback));
+        mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]), (const byte *) state_functions[i].name,
+            roots[3], NET_VISIBLE);
     }
     vm->intrinsics[MAL_INTRINSIC_NODE_NET_SOCKET_CONSTRUCTOR] = roots[2];
     vm->intrinsics[MAL_INTRINSIC_NODE_NET_SOCKET_PROTOTYPE] = roots[1];

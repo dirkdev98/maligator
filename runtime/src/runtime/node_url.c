@@ -3,6 +3,7 @@
 
 #if MAL_NODE
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -15,6 +16,7 @@
 #include "intrinsics.h"
 #include "mal_url.h"
 #include "node_module.h"
+#include "node_querystring.h"
 #include "object.h"
 #include "object_ops.h"
 #include "text_buffer.h"
@@ -102,122 +104,6 @@ static MalValue url_constructor(
         return mal_value_new_undefined();
     }
     return url_new_instance(vm, mal_value_from_object(prototype));
-}
-
-static bool url_protocol_char(c16 unit, bool first) {
-    if ((unit >= 'a' && unit <= 'z') || (unit >= 'A' && unit <= 'Z')) return true;
-    return !first && ((unit >= '0' && unit <= '9') || unit == '+' || unit == '-' || unit == '.');
-}
-
-static MalValue url_parse(
-    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
-    MalValue new_target, MalValue callee) {
-    (void) receiver;
-    (void) new_target;
-    (void) callee;
-    if (argc < 1 || !mal_value_is_string(args[0])) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                           "The \"url\" argument must be of type string.");
-        return mal_value_new_undefined();
-    }
-    MalValue roots[] = {
-        args[0], url_new_instance(vm, vm->intrinsics[MAL_INTRINSIC_NODE_URL_PROTOTYPE]),
-        mal_value_new_undefined(), mal_value_new_undefined(),
-    };
-    MalRootSpan root;
-    mal_gc_root(&root, roots, countof(roots));
-    MalString *source = mal_value_to_string(roots[0]);
-    const c16 *units = mal_string_code_units(source);
-    usize length = mal_string_length(source);
-    usize start = 0;
-    while (start < length && (units[start] == ' ' || units[start] == '\t' ||
-                              units[start] == '\n' || units[start] == '\r')) start++;
-    while (length > start && (units[length - 1] == ' ' || units[length - 1] == '\t' ||
-                              units[length - 1] == '\n' || units[length - 1] == '\r')) length--;
-    usize cursor = start;
-    usize colon = cursor;
-    while (colon < length && units[colon] != ':' && url_protocol_char(units[colon], colon == cursor)) colon++;
-    bool protocol = colon < length && units[colon] == ':' && colon > cursor;
-    if (protocol) {
-        roots[2] = url_slice(vm, source, cursor, colon + 1);
-        url_set(vm, roots[1], "protocol", roots[2]);
-        cursor = colon + 1;
-    }
-    bool slashes = cursor + 1 < length && units[cursor] == '/' && units[cursor + 1] == '/'
-        && (protocol || (argc > 2 && mal_value_is_truthy(args[2])));
-    if (slashes) {
-        url_set(vm, roots[1], "slashes", mal_value_new_boolean(true));
-        cursor += 2;
-        usize authority_end = cursor;
-        while (authority_end < length && units[authority_end] != '/' &&
-               units[authority_end] != '?' && units[authority_end] != '#') authority_end++;
-        usize host_start = cursor;
-        for (usize i = cursor; i < authority_end; i++) {
-            if (units[i] == '@') {
-                roots[2] = url_slice(vm, source, cursor, i);
-                url_set(vm, roots[1], "auth", roots[2]);
-                host_start = i + 1;
-            }
-        }
-        roots[2] = url_slice(vm, source, host_start, authority_end);
-        url_set(vm, roots[1], "host", roots[2]);
-        usize hostname_end = authority_end;
-        usize port_start = authority_end;
-        if (host_start < authority_end && units[host_start] == '[') {
-            for (usize i = host_start + 1; i < authority_end; i++) {
-                if (units[i] == ']') {
-                    hostname_end = i + 1;
-                    if (i + 1 < authority_end && units[i + 1] == ':') port_start = i + 2;
-                    break;
-                }
-            }
-        } else {
-            for (usize i = authority_end; i > host_start; i--) {
-                if (units[i - 1] == ':') {
-                    hostname_end = i - 1;
-                    port_start = i;
-                    break;
-                }
-            }
-        }
-        roots[2] = url_slice(vm, source, host_start, hostname_end);
-        url_set(vm, roots[1], "hostname", roots[2]);
-        if (port_start < authority_end) {
-            roots[2] = url_slice(vm, source, port_start, authority_end);
-            url_set(vm, roots[1], "port", roots[2]);
-        }
-        cursor = authority_end;
-    }
-    usize hash = cursor;
-    while (hash < length && units[hash] != '#') hash++;
-    usize query = cursor;
-    while (query < hash && units[query] != '?') query++;
-    if (query > cursor) {
-        roots[2] = url_slice(vm, source, cursor, query);
-        url_set(vm, roots[1], "pathname", roots[2]);
-    } else if (slashes && cursor == length) {
-        roots[2] = url_slice(vm, source, cursor, cursor);
-        url_set(vm, roots[1], "pathname", roots[2]);
-    }
-    if (query < hash) {
-        roots[2] = url_slice(vm, source, query, hash);
-        url_set(vm, roots[1], "search", roots[2]);
-        roots[3] = url_slice(vm, source, query + 1, hash);
-        url_set(vm, roots[1], "query", roots[3]);
-    }
-    if (hash < length) {
-        roots[2] = url_slice(vm, source, hash, length);
-        url_set(vm, roots[1], "hash", roots[2]);
-    }
-    if (cursor < hash) {
-        roots[2] = url_slice(vm, source, cursor, hash);
-        url_set(vm, roots[1], "path", roots[2]);
-    }
-    roots[2] = url_slice(vm, source, start, length);
-    url_set(vm, roots[1], "href", roots[2]);
-    MalValue result = roots[1];
-    mal_gc_unroot(&root);
-    return result;
 }
 
 static bool url_get_string(MalVm *vm, MalValue object, const char *name, MalString **out) {
@@ -1363,6 +1249,482 @@ static MalValue url_proto_format(
         mal_value_new_undefined());
 }
 
+/* Url.prototype.parse, translated from Node 26 lib/url.js. `rest` is a growable UTF-16
+ * copy, so the in-place edits (tab removal, prefixing "/") mirror the JS string updates. */
+typedef struct UrlUnits {
+    c16 *data;
+    usize length;
+} UrlUnits;
+
+static bool url_js_space(c16 unit) {
+    return (unit >= 0x09 && unit <= 0x0D) || unit == 0x20 || unit == 0xA0 || unit == 0x1680
+        || (unit >= 0x2000 && unit <= 0x200A) || unit == 0x2028 || unit == 0x2029 || unit == 0x202F
+        || unit == 0x205F || unit == 0x3000 || unit == 0xFEFF;
+}
+
+static bool url_ascii_alnum(c16 unit) {
+    return (unit >= 'a' && unit <= 'z') || (unit >= 'A' && unit <= 'Z') || (unit >= '0' && unit <= '9');
+}
+
+static MalValue url_units_value(MalVm *vm, const c16 *units, usize length) {
+    UrlBuffer buffer = {0};
+    url_buffer_append(&buffer, units, length);
+    if (buffer.status != MAL_TEXT_BUFFER_OK) {
+        mal_text_buffer_dispose(&buffer);
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
+    return mal_value_from_string(mal_text_buffer_finish(&vm->heap, &buffer));
+}
+
+static bool url_units_prefix(UrlUnits *units, const c16 *prefix, usize prefix_length) {
+    c16 *grown = realloc(units->data, (units->length + prefix_length + 1) * sizeof(c16));
+    if (grown == nullptr) return false;
+    memmove(grown + prefix_length, grown, units->length * sizeof(c16));
+    memcpy(grown, prefix, prefix_length * sizeof(c16));
+    units->data = grown;
+    units->length += prefix_length;
+    return true;
+}
+
+static void url_units_drop_front(UrlUnits *units, usize count) {
+    memmove(units->data, units->data + count, (units->length - count) * sizeof(c16));
+    units->length -= count;
+}
+
+static bool url_lower_protocol_is(const c16 *units, usize length, const char *const *names, usize count) {
+    for (usize i = 0; i < count; i++) {
+        usize name_length = strlen(names[i]);
+        if (name_length != length) continue;
+        bool equal = true;
+        for (usize j = 0; j < length && equal; j++) equal = units[j] == (c16) names[i][j];
+        if (equal) return true;
+    }
+    return false;
+}
+
+static const char *const url_slashed_names[] = {"http", "http:", "https", "https:", "ftp", "ftp:", "gopher",
+    "gopher:", "file", "file:", "ws", "ws:", "wss", "wss:"};
+static const char *const url_hostless_names[] = {"javascript", "javascript:"};
+
+static void url_throw_invalid_url(MalVm *vm, MalValue input) {
+    mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Invalid URL", "ERR_INVALID_URL");
+    MalValue error = vm->completion.value;
+    if (!mal_value_is_object(error)) return;
+    MalValue roots[] = {error, input};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    url_set(vm, roots[0], "input", roots[1]);
+    vm->completion.value = roots[0];
+    mal_gc_unroot(&root);
+}
+
+static const char *url_escaped_code(c16 unit) {
+    switch (unit) {
+    case '\t': return "%09";
+    case '\n': return "%0A";
+    case '\r': return "%0D";
+    case ' ': return "%20";
+    case '"': return "%22";
+    case '\'': return "%27";
+    case '<': return "%3C";
+    case '>': return "%3E";
+    case '\\': return "%5C";
+    case '^': return "%5E";
+    case '`': return "%60";
+    case '{': return "%7B";
+    case '|': return "%7C";
+    case '}': return "%7D";
+    default: return nullptr;
+    }
+}
+
+static bool url_set_query(MalVm *vm, MalValue self, const c16 *units, usize length, bool parse_query) {
+    MalValue query = url_units_value(vm, units, length);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) return false;
+    if (parse_query) {
+        MalRootSpan root;
+        mal_gc_root(&root, &query, 1);
+        query = mal_node_querystring_parse(vm, query);
+        mal_gc_unroot(&root);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) return false;
+    }
+    url_set(vm, self, "query", query);
+    return true;
+}
+
+static void url_set_empty_query(MalVm *vm, MalValue self) {
+    url_set(vm, self, "search", mal_value_new_null());
+    url_set(vm, self, "query", mal_value_from_object(mal_object_new(&vm->heap, nullptr)));
+}
+
+static MalValue url_parse_into(MalVm *vm, MalValue self, MalValue input, bool parse_query, bool slashes_denote_host) {
+    if (!mal_value_is_string(input)) {
+        mal_node_throw_invalid_arg_type(vm, "url", "of type string", input);
+        return mal_value_new_undefined();
+    }
+    MalValue roots[] = {self, input, mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalString *source = mal_value_to_string(roots[1]);
+    const c16 *url = mal_string_code_units(source);
+    usize url_length = mal_string_length(source);
+    UrlUnits rest = {.data = malloc((url_length + 1) * sizeof(c16))};
+    MalValue result = mal_value_new_undefined();
+    if (rest.data == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        goto done;
+    }
+    bool has_hash = false, has_at = false, split = false;
+    i64 start = -1, end = -1;
+    bool in_ws = false;
+    for (usize i = 0; i < url_length; i++) {
+        c16 code = url[i];
+        bool is_ws = code < 33 || code == 0xA0 || code == 0xFEFF;
+        if (start == -1) {
+            if (is_ws) continue;
+            start = (i64) i;
+        } else if (in_ws) {
+            if (!is_ws) {
+                end = -1;
+                in_ws = false;
+            }
+        } else if (is_ws) {
+            end = (i64) i;
+            in_ws = true;
+        }
+        if (!split) {
+            if (code == '@') has_at = true;
+            else if (code == '#') has_hash = split = true;
+            else if (code == '?') split = true;
+        } else if (!has_hash && code == '#') {
+            has_hash = true;
+        }
+    }
+    if (start != -1) {
+        usize stop = end == -1 ? url_length : (usize) end;
+        bool converting = true;
+        for (usize i = (usize) start; i < stop; i++) {
+            c16 code = url[i];
+            if (code == '#' || code == '?') converting = false;
+            rest.data[rest.length++] = converting && code == '\\' ? '/' : code;
+        }
+    }
+    url = nullptr;
+
+    if (!slashes_denote_host && !has_hash && !has_at && rest.length > 0 && rest.data[0] == '/') {
+        // simplePathPattern: /^(\/\/?(?!\/)[^?\s]*)(\?[^\s]*)?$/
+        usize i = 1;
+        if (i < rest.length && rest.data[i] == '/') i++;
+        bool simple = !(i < rest.length && rest.data[i] == '/');
+        usize question = rest.length;
+        for (; simple && i < rest.length; i++) {
+            if (rest.data[i] == '?') {
+                question = i;
+                break;
+            }
+            if (url_js_space(rest.data[i])) simple = false;
+        }
+        for (usize j = question; simple && j < rest.length; j++) {
+            if (url_js_space(rest.data[j])) simple = false;
+        }
+        if (simple) {
+            roots[2] = url_units_value(vm, rest.data, rest.length);
+            url_set(vm, roots[0], "path", roots[2]);
+            url_set(vm, roots[0], "href", roots[2]);
+            url_set(vm, roots[0], "pathname", url_units_value(vm, rest.data, question));
+            if (question < rest.length) {
+                url_set(vm, roots[0], "search", url_units_value(vm, rest.data + question, rest.length - question));
+                if (!url_set_query(vm, roots[0], rest.data + question + 1, rest.length - question - 1, parse_query)) {
+                    goto done;
+                }
+            } else if (parse_query) {
+                url_set_empty_query(vm, roots[0]);
+            }
+            result = roots[0];
+            goto done;
+        }
+    }
+
+    // protocolPattern: /^[a-z0-9.+-]+:/i
+    usize proto_length = 0;
+    while (proto_length < rest.length && (url_ascii_alnum(rest.data[proto_length]) || rest.data[proto_length] == '.'
+        || rest.data[proto_length] == '+' || rest.data[proto_length] == '-')) {
+        proto_length++;
+    }
+    bool proto = proto_length > 0 && proto_length < rest.length && rest.data[proto_length] == ':';
+    c16 lower_proto[64];
+    c16 original_proto[64];
+    usize lower_length = 0;
+    if (proto) {
+        proto_length++;
+        if (proto_length > countof(lower_proto)) proto_length = countof(lower_proto);
+        for (usize i = 0; i < proto_length; i++) {
+            c16 unit = rest.data[i];
+            original_proto[i] = unit;
+            lower_proto[i] = unit >= 'A' && unit <= 'Z' ? (c16) (unit + 32) : unit;
+        }
+        lower_length = proto_length;
+        url_set(vm, roots[0], "protocol", url_units_value(vm, lower_proto, lower_length));
+        url_units_drop_front(&rest, proto_length);
+    }
+    bool hostless = proto && url_lower_protocol_is(lower_proto, lower_length, url_hostless_names, 2);
+    bool slashes = false;
+    // hostPattern: /^\/\/[^@/]+@[^@/]+/
+    bool host_pattern = false;
+    if (rest.length > 2 && rest.data[0] == '/' && rest.data[1] == '/') {
+        usize i = 2;
+        while (i < rest.length && rest.data[i] != '@' && rest.data[i] != '/') i++;
+        host_pattern = i > 2 && i < rest.length && rest.data[i] == '@' && i + 1 < rest.length
+            && rest.data[i + 1] != '@' && rest.data[i + 1] != '/';
+    }
+    if (slashes_denote_host || proto || host_pattern) {
+        slashes = rest.length >= 2 && rest.data[0] == '/' && rest.data[1] == '/';
+        if (slashes && !(proto && hostless)) {
+            url_units_drop_front(&rest, 2);
+            url_set(vm, roots[0], "slashes", mal_value_new_boolean(true));
+        }
+    }
+    if (!hostless && (slashes || (proto && !url_lower_protocol_is(original_proto, proto_length, url_slashed_names,
+        countof(url_slashed_names))))) {
+        i64 host_end = -1, at_sign = -1, non_host = -1;
+        for (usize i = 0; i < rest.length; i++) {
+            c16 code = rest.data[i];
+            switch (code) {
+            case '\t':
+            case '\n':
+            case '\r':
+                memmove(rest.data + i, rest.data + i + 1, (rest.length - i - 1) * sizeof(c16));
+                rest.length--;
+                i--;
+                break;
+            case ' ': case '"': case '%': case '\'': case ';': case '<': case '>': case '\\': case '^':
+            case '`': case '{': case '|': case '}':
+                if (non_host == -1) non_host = (i64) i;
+                break;
+            case '#':
+            case '/':
+            case '?':
+                if (non_host == -1) non_host = (i64) i;
+                host_end = (i64) i;
+                break;
+            case '@':
+                at_sign = (i64) i;
+                non_host = -1;
+                break;
+            default:
+                break;
+            }
+            if (host_end != -1) break;
+        }
+        usize host_start = 0;
+        if (at_sign != -1) {
+            MalValue auth = url_units_value(vm, rest.data, (usize) at_sign);
+            if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
+            roots[2] = auth;
+            roots[2] = mal_builtin_uri_decode_known(vm, mal_value_to_string(roots[2]), false);
+            if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
+            url_set(vm, roots[0], "auth", roots[2]);
+            host_start = (usize) at_sign + 1;
+        }
+        usize host_stop = non_host == -1 ? rest.length : (usize) non_host;
+        if (host_stop < host_start) host_stop = host_start;
+        // parseHost: portPattern /:[0-9]*$/ splits the port off the host.
+        usize hostname_stop = host_stop;
+        usize digits = host_stop;
+        while (digits > host_start && rest.data[digits - 1] >= '0' && rest.data[digits - 1] <= '9') digits--;
+        if (digits > host_start && rest.data[digits - 1] == ':') {
+            if (digits < host_stop) {
+                url_set(vm, roots[0], "port", url_units_value(vm, rest.data + digits, host_stop - digits));
+            }
+            hostname_stop = digits - 1;
+        }
+        c16 *hostname = malloc((hostname_stop - host_start + 1) * sizeof(c16));
+        if (hostname == nullptr) {
+            mal_vm_throw_allocation_error(vm);
+            goto done;
+        }
+        usize hostname_length = hostname_stop - host_start;
+        memcpy(hostname, rest.data + host_start, hostname_length * sizeof(c16));
+        if (non_host == -1) rest.length = 0;
+        else url_units_drop_front(&rest, (usize) non_host);
+        bool ipv6 = hostname_length > 0 && hostname[0] == '[' && hostname[hostname_length - 1] == ']';
+        if (!ipv6) {
+            // getHostname: the first '/', '\\', '#', '?' moves the tail into the path; ':' throws.
+            for (usize i = 0; i < hostname_length; i++) {
+                c16 code = hostname[i];
+                if (code == ':') {
+                    free(hostname);
+                    usize input_length = 0;
+                    byte *text = mal_string_to_utf8(mal_value_to_string(roots[1]), &input_length);
+                    char message[512];
+                    snprintf(message, sizeof message, "The argument 'url' %.*s. Received 'Invalid port in url'",
+                        (int) (input_length > 400 ? 400 : input_length), text != nullptr ? text : "");
+                    free(text);
+                    mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, message, "ERR_INVALID_ARG_VALUE");
+                    goto done;
+                }
+                if (code == '/' || code == '\\' || code == '#' || code == '?') {
+                    c16 slash = '/';
+                    if (!url_units_prefix(&rest, hostname + i, hostname_length - i)
+                        || !url_units_prefix(&rest, &slash, 1)) {
+                        free(hostname);
+                        mal_vm_throw_allocation_error(vm);
+                        goto done;
+                    }
+                    hostname_length = i;
+                    break;
+                }
+            }
+        }
+        if (hostname_length > 255) hostname_length = 0;
+        for (usize i = 0; i < hostname_length; i++) {
+            if (hostname[i] >= 'A' && hostname[i] <= 'Z') hostname[i] = (c16) (hostname[i] + 32);
+        }
+        roots[2] = url_units_value(vm, hostname, hostname_length);
+        free(hostname);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
+        if (hostname_length > 0) {
+            MalString *name = mal_value_to_string(roots[2]);
+            const c16 *units = mal_string_code_units(name);
+            usize length = mal_string_length(name);
+            bool ascii = true;
+            for (usize i = 0; i < length; i++) ascii = ascii && units[i] < 0x80;
+            if (!ipv6 && !ascii) {
+                roots[2] = url_domain_convert(vm, &roots[2], 1, false);
+                if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
+                name = mal_value_to_string(roots[2]);
+                units = mal_string_code_units(name);
+                length = mal_string_length(name);
+            }
+            bool forbidden = !ipv6 && length == 0;
+            for (usize i = 0; i < length && !forbidden; i++) {
+                c16 c = units[i];
+                forbidden = c == 0 || c == '\t' || c == '\n' || c == '\r' || c == ' ' || c == '#' || c == '%'
+                    || c == '/' || c == '<' || c == '>' || c == '?' || c == '@' || c == '\\' || c == '^' || c == '|'
+                    || (!ipv6 && (c == ':' || c == '[' || c == ']'));
+            }
+            if (forbidden) {
+                url_throw_invalid_url(vm, roots[1]);
+                goto done;
+            }
+        }
+        MalValue port = mal_value_new_undefined();
+        mal_vm_get_property(vm, roots[0], mal_intrinsic_string_key(vm, (const byte *) "port"), &port);
+        roots[3] = mal_value_is_truthy(port)
+            ? url_concat(vm, roots[2], url_concat(vm, mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) ":")), port))
+            : roots[2];
+        url_set(vm, roots[0], "host", roots[3]);
+        if (ipv6) {
+            MalString *name = mal_value_to_string(roots[2]);
+            roots[2] = url_slice(vm, name, 1, mal_string_length(name) - 1);
+            if (rest.length == 0 || rest.data[0] != '/') {
+                c16 slash = '/';
+                if (!url_units_prefix(&rest, &slash, 1)) {
+                    mal_vm_throw_allocation_error(vm);
+                    goto done;
+                }
+            }
+        }
+        url_set(vm, roots[0], "hostname", roots[2]);
+    }
+    if (!hostless) {
+        usize escaped = 0;
+        for (usize i = 0; i < rest.length; i++) escaped += url_escaped_code(rest.data[i]) != nullptr;
+        if (escaped > 0) {
+            c16 *grown = malloc((rest.length + escaped * 2 + 1) * sizeof(c16));
+            if (grown == nullptr) {
+                mal_vm_throw_allocation_error(vm);
+                goto done;
+            }
+            usize used = 0;
+            for (usize i = 0; i < rest.length; i++) {
+                const char *code = url_escaped_code(rest.data[i]);
+                if (code == nullptr) {
+                    grown[used++] = rest.data[i];
+                } else {
+                    for (int j = 0; j < 3; j++) grown[used++] = (c16) code[j];
+                }
+            }
+            free(rest.data);
+            rest.data = grown;
+            rest.length = used;
+        }
+    }
+    i64 question = -1, hash_index = -1;
+    for (usize i = 0; i < rest.length; i++) {
+        if (rest.data[i] == '#') {
+            url_set(vm, roots[0], "hash", url_units_value(vm, rest.data + i, rest.length - i));
+            hash_index = (i64) i;
+            break;
+        }
+        if (rest.data[i] == '?' && question == -1) question = (i64) i;
+    }
+    if (question != -1) {
+        usize stop = hash_index == -1 ? rest.length : (usize) hash_index;
+        url_set(vm, roots[0], "search", url_units_value(vm, rest.data + question, stop - (usize) question));
+        if (!url_set_query(vm, roots[0], rest.data + question + 1, stop - (usize) question - 1, parse_query)) goto done;
+    } else if (parse_query) {
+        url_set_empty_query(vm, roots[0]);
+    }
+    bool use_question = question != -1 && (hash_index == -1 || question < hash_index);
+    i64 first = use_question ? question : hash_index;
+    if (first == -1) {
+        if (rest.length > 0) url_set(vm, roots[0], "pathname", url_units_value(vm, rest.data, rest.length));
+    } else if (first > 0) {
+        url_set(vm, roots[0], "pathname", url_units_value(vm, rest.data, (usize) first));
+    }
+    MalValue hostname_value = mal_value_new_undefined();
+    MalValue pathname_value = mal_value_new_undefined();
+    mal_vm_get_property(vm, roots[0], mal_intrinsic_string_key(vm, (const byte *) "hostname"), &hostname_value);
+    mal_vm_get_property(vm, roots[0], mal_intrinsic_string_key(vm, (const byte *) "pathname"), &pathname_value);
+    if (proto && url_lower_protocol_is(lower_proto, lower_length, url_slashed_names, countof(url_slashed_names))
+        && mal_value_is_truthy(hostname_value) && !mal_value_is_truthy(pathname_value)) {
+        url_set(vm, roots[0], "pathname", mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "/")));
+    }
+    MalValue search_value = mal_value_new_undefined();
+    mal_vm_get_property(vm, roots[0], mal_intrinsic_string_key(vm, (const byte *) "pathname"), &pathname_value);
+    mal_vm_get_property(vm, roots[0], mal_intrinsic_string_key(vm, (const byte *) "search"), &search_value);
+    if (mal_value_is_truthy(pathname_value) || mal_value_is_truthy(search_value)) {
+        roots[2] = pathname_value;
+        roots[3] = search_value;
+        url_set(vm, roots[0], "path", url_concat(vm, mal_value_is_truthy(roots[2]) ? roots[2] : mal_value_new_undefined(),
+            mal_value_is_truthy(roots[3]) ? roots[3] : mal_value_new_undefined()));
+    }
+    roots[2] = url_format(vm, mal_value_new_undefined(), &roots[0], 1, mal_value_new_undefined(), mal_value_new_undefined());
+    if (vm->completion.kind == MAL_COMPLETION_THROW) goto done;
+    url_set(vm, roots[0], "href", roots[2]);
+    result = roots[0];
+done:
+    free(rest.data);
+    mal_gc_unroot(&root);
+    return vm->completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : result;
+}
+
+static MalValue url_parse(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver;
+    (void) new_target;
+    (void) callee;
+    MalValue roots[] = {url_new_instance(vm, vm->intrinsics[MAL_INTRINSIC_NODE_URL_PROTOTYPE])};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalValue result = url_parse_into(vm, roots[0], argc > 0 ? args[0] : mal_value_new_undefined(),
+        argc > 1 && mal_value_is_truthy(args[1]), argc > 2 && mal_value_is_truthy(args[2]));
+    mal_gc_unroot(&root);
+    return result;
+}
+
+static MalValue url_proto_parse(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) new_target;
+    (void) callee;
+    return url_parse_into(vm, receiver, argc > 0 ? args[0] : mal_value_new_undefined(),
+        argc > 1 && mal_value_is_truthy(args[1]), argc > 2 && mal_value_is_truthy(args[2]));
+}
+
 void mal_host_install_node_url(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
     const MalHostLaunchContext *launch) {
@@ -1438,6 +1800,8 @@ void mal_host_install_node_url(
             url_proto_resolve_object);
         mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[1]), (const byte *) "format", 0,
             url_proto_format);
+        mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[1]), (const byte *) "parse", 3,
+            url_proto_parse);
         mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[0]), (const byte *) "domainToUnicode", 1,
             url_domain_to_unicode);
         vm->intrinsics[MAL_INTRINSIC_NODE_URL_CONSTRUCTOR] = roots[2];
