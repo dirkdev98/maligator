@@ -667,7 +667,7 @@ static void mal_vm_adopt_program_image(MalVm *vm, const MalRuntimeImage *program
     vm->live_runtime_image.source_positions = source_positions;
 	vm->function_cjs_module_bases =
 		calloc((usize) vm->function_capacity, sizeof(i32));
-    vm->call_entries = calloc((usize) vm->function_capacity, sizeof(uptr));
+    vm->call_entries = calloc((usize) vm->function_capacity, sizeof(MalCompiledFunction));
     for (i32 i = 0; i < function_count; i++) mal_vm_refresh_call_entry(vm, i);
 }
 
@@ -1712,13 +1712,13 @@ i32 mal_vm_splice_runtime_image(MalVm *vm, const MalRuntimeImage *loaded) {
             realloc(vm->literal_shape_cache, sizeof(MalShape **) * capacity);
         vm->function_cjs_module_bases =
             realloc(vm->function_cjs_module_bases, sizeof(i32) * capacity);
-        vm->call_entries = realloc(vm->call_entries, sizeof(uptr) * capacity);
+        vm->call_entries = realloc(vm->call_entries, sizeof(MalCompiledFunction) * capacity);
     }
     for (i32 i = fn_base; i < new_functions; i++) {
         vm->property_cache[i] = (MalPropertyCachePool){0};
         vm->literal_shape_cache[i] = nullptr;
         vm->function_cjs_module_bases[i] = cjs_module_base;
-        vm->call_entries[i] = 0;
+        vm->call_entries[i] = nullptr;
     }
 
     // Spliced functions may execute guarded loads before their own literal
@@ -4572,10 +4572,8 @@ __attribute__((noinline)) static MalValue mal_vm_call_compiled_bound_this(
 
 void mal_vm_refresh_call_entry(MalVm *vm, i32 function_index) {
     const MalFunction *function = &vm->runtime_image->functions[function_index];
-    MalCompiledFunction compiled = function->compiled;
-    // Compiled entries are 64-byte aligned, leaving bit 0 free for the mode.
-    vm->call_entries[function_index] = compiled == nullptr || function->is_class_constructor
-        ? 0 : (uptr) compiled | (function->strict ? 0 : 1);
+    vm->call_entries[function_index] = function->strict && !function->is_class_constructor
+        ? function->compiled : nullptr;
 }
 
 MalValue mal_vm_call_cached_value(
@@ -4619,18 +4617,25 @@ MalValue mal_vm_call_cached_value(
             }
         }
 #else
-        uptr entry = (u32) function_index < (u32) vm->runtime_image->function_count
-            ? vm->call_entries[function_index] : 0;
-        if (entry != 0) {
-            MAL_PERF_COUNT(call_cache_compiled_dispatches);
-            // Both paths are tail calls, so the dispatch keeps no frame of its own.
-            if ((entry & 1) != 0 && !mal_value_is_object(this_value))
-                return mal_vm_call_compiled_bound_this(
-                    vm, &vm->runtime_image->functions[function_index], callee, this_value,
-                    args, arg_count);
-            return ((MalCompiledFunction) (entry & ~(uptr) 1))(
-                vm, this_value, args, arg_count, mal_value_new_undefined(),
-                function_object->creation_env, callee, nullptr);
+        if ((u32) function_index < (u32) vm->runtime_image->function_count) {
+            // Every path is a tail call, so the dispatch keeps no frame of its own.
+            MalCompiledFunction strict_entry = vm->call_entries[function_index];
+            if (strict_entry != nullptr) {
+                MAL_PERF_COUNT(call_cache_compiled_dispatches);
+                return strict_entry(
+                    vm, this_value, args, arg_count, mal_value_new_undefined(),
+                    function_object->creation_env, callee, nullptr);
+            }
+            const MalFunction *function = &vm->runtime_image->functions[function_index];
+            if (function->compiled != nullptr && !function->is_class_constructor) {
+                MAL_PERF_COUNT(call_cache_compiled_dispatches);
+                if (!function->strict && !mal_value_is_object(this_value))
+                    return mal_vm_call_compiled_bound_this(
+                        vm, function, callee, this_value, args, arg_count);
+                return function->compiled(
+                    vm, this_value, args, arg_count, mal_value_new_undefined(),
+                    function_object->creation_env, callee, nullptr);
+            }
         }
 #endif
     }
