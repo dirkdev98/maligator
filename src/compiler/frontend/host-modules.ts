@@ -634,8 +634,12 @@ const TLS: HostModuleSpec = {
 		"DEFAULT_ECDH_CURVE",
 		"DEFAULT_MAX_VERSION",
 		"DEFAULT_MIN_VERSION",
+		"SecureContext",
+		"Server",
 		"checkServerIdentity",
 		"connect",
+		"createSecureContext",
+		"createServer",
 		"getCACertificates",
 		"getCiphers",
 	],
@@ -1065,7 +1069,7 @@ const HTTP: HostModuleSpec = {
 
 const HTTPS: HostModuleSpec = {
 	id: "node:https",
-	named: ["Agent", "get", "globalAgent", "request"],
+	named: ["Agent", "Server", "createServer", "get", "globalAgent", "request"],
 	hasDefault: true,
 	installer: hostInstallerSymbol("node:https"),
 };

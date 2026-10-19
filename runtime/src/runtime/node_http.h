@@ -14,3 +14,6 @@ MalValue mal_node_https_request(MalVm *vm, MalValue receiver, const MalValue *ar
     i32 argc, MalValue new_target, MalValue callee);
 MalValue mal_node_https_get(MalVm *vm, MalValue receiver, const MalValue *args,
     i32 argc, MalValue new_target, MalValue callee);
+typedef struct MalTlsServerConfig MalTlsServerConfig;
+/* Takes ownership on success; valid only in the call that started listening. */
+bool mal_node_http_server_set_tls(MalValue server, MalTlsServerConfig *config);

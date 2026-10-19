@@ -8,6 +8,9 @@
 #include <unistd.h>
 
 #include "host.h"
+#if MAL_NODE
+#include "mal_tls.h"
+#endif
 #include "net.h"
 #include "reactor.h"
 #include "vm.h"
@@ -55,6 +58,8 @@ struct MalHttpServer {
     bool closing;
     MalHttpServerCloseCallback close_callback;
     void *close_data;
+    /* Owned; accepted connections then speak TLS in the server role. */
+    MalTlsServerConfig *tls_config;
 };
 
 typedef struct MalHttpWireWrite {
@@ -130,6 +135,13 @@ typedef struct MalHttpConn {
     MalNetEndpoint remote_endpoint;
     bool local_endpoint_known;
     bool remote_endpoint_known;
+    MalTlsClient *tls;
+    /* Ciphertext the socket has not accepted yet; it precedes every later record. */
+    byte *tls_out;
+    usize tls_out_length;
+    usize tls_out_offset;
+    /* The last plaintext read filled its buffer, so the session may hold more. */
+    bool tls_maybe_buffered;
 } MalHttpConn;
 
 void *mal_http_conn_context(const MalHttpConn *conn) {
@@ -218,6 +230,9 @@ static void conn_arm_keep_alive_timeout(MalHttpConn *c) {
 static void server_finish_close(MalHttpServer *server) {
     MalHttpServerCloseCallback callback = server->close_callback;
     void *data = server->close_data;
+#if MAL_NODE
+    mal_tls_server_config_free(&server->tls_config);
+#endif
     free(server);
     if (callback != nullptr) {
         callback(data);
@@ -243,6 +258,10 @@ static void conn_close(MalHttpConn *c) {
         server->connection_count--;
     }
     free(c->rbuf);
+#if MAL_NODE
+    mal_tls_client_free(&c->tls);
+#endif
+    free(c->tls_out);
     if (c->codec_initialized) mal_http_codec_free(&c->codec);
     MalHttpWireWrite *write = c->write_head;
     while (write != nullptr) {
@@ -274,6 +293,10 @@ static bool conn_arm_read(MalHttpConn *c) {
     c->read_op.fd = c->fd;
     c->read_op.interest = MAL_IO_READ;
     c->read_op.waker = (MalWaker) {.fn = conn_read_cb, .data = c};
+    // Plaintext buffered inside the session never makes the socket readable.
+    if (c->tls != nullptr && c->tls_maybe_buffered) {
+        return mal_reactor_defer_op(conn_reactor(c), &c->read_op);
+    }
     return mal_reactor_add_op(conn_reactor(c), &c->read_op);
 }
 
@@ -840,6 +863,124 @@ static void conn_process_stream(MalHttpConn *c) {
     }
 }
 
+#if MAL_NODE
+/* Writes queued ciphertext; false with errno EAGAIN while the socket is full. */
+static bool conn_tls_flush(MalHttpConn *c) {
+    for (;;) {
+        if (c->tls_out == nullptr) {
+            if (mal_tls_client_wants_write(c->tls) <= 0) return true;
+            c->tls_out = malloc(MAL_HTTP_WRITE_TURN);
+            if (c->tls_out == nullptr) {
+                errno = ENOMEM;
+                return false;
+            }
+            usize produced = 0;
+            if (mal_tls_client_write_ciphertext(c->tls, c->tls_out, MAL_HTTP_WRITE_TURN, &produced)
+                != MAL_TLS_STATUS_OK) {
+                errno = EPROTO;
+                return false;
+            }
+            c->tls_out_length = produced;
+            c->tls_out_offset = 0;
+        }
+        while (c->tls_out_offset < c->tls_out_length) {
+            ssize_t n = mal_net_write(c->fd, c->tls_out + c->tls_out_offset,
+                c->tls_out_length - c->tls_out_offset);
+            if (n > 0) {
+                c->tls_out_offset += (usize) n;
+                continue;
+            }
+            if (n < 0 && errno == EINTR) continue;
+            if (n == 0) errno = EIO;
+            return false;
+        }
+        free(c->tls_out);
+        c->tls_out = nullptr;
+        c->tls_out_length = 0;
+        c->tls_out_offset = 0;
+    }
+}
+
+/* Flushes, arming the write op when the socket is full; false after closing. */
+static bool conn_tls_drain(MalHttpConn *c) {
+    if (conn_tls_flush(c)) return true;
+    if ((errno == EAGAIN || errno == EWOULDBLOCK) && (c->write_op.active || conn_arm_write(c))) {
+        return false;
+    }
+    conn_close(c);
+    return false;
+}
+
+static ssize_t conn_tls_read(MalHttpConn *c, char *out, usize length) {
+    for (;;) {
+        usize total = 0;
+        while (total < length) {
+            usize produced = 0;
+            if (mal_tls_client_read_plaintext(c->tls, (byte *) out + total, length - total, &produced)
+                != MAL_TLS_STATUS_OK) {
+                errno = EPROTO;
+                return -1;
+            }
+            if (produced == 0) break;
+            total += produced;
+        }
+        c->tls_maybe_buffered = total == length;
+        if (total > 0) return (ssize_t) total;
+        if (mal_tls_client_peer_closed(c->tls)) return 0;
+        byte cipher[16384];
+        ssize_t n = read(c->fd, cipher, sizeof(cipher));
+        if (n <= 0) return n;
+        usize consumed = 0;
+        int status = mal_tls_client_read_ciphertext(c->tls, cipher, (usize) n, &consumed);
+        // The handshake replies, or the alert explaining a failure, go out before reading on.
+        bool flushed = conn_tls_flush(c);
+        if (status != MAL_TLS_STATUS_OK || consumed != (usize) n) {
+            errno = EPROTO;
+            return -1;
+        }
+        if (!flushed) {
+            if (errno != EAGAIN && errno != EWOULDBLOCK) return -1;
+            if (!c->write_op.active && !conn_arm_write(c)) return -1;
+        }
+    }
+}
+
+static ssize_t conn_tls_writev(MalHttpConn *c, const struct iovec *iov, int count) {
+    if (!conn_tls_flush(c)) return -1;
+    usize total = 0;
+    for (int i = 0; i < count; i++) {
+        usize consumed = 0;
+        if (mal_tls_client_write_plaintext(c->tls, iov[i].iov_base, iov[i].iov_len, &consumed)
+            != MAL_TLS_STATUS_OK) {
+            errno = EPROTO;
+            return -1;
+        }
+        total += consumed;
+        if (consumed < iov[i].iov_len) break;
+    }
+    if (!conn_tls_flush(c) && errno != EAGAIN && errno != EWOULDBLOCK) return -1;
+    if (total == 0) {
+        errno = EAGAIN;
+        return -1;
+    }
+    return (ssize_t) total;
+}
+#endif
+
+static ssize_t conn_read(MalHttpConn *c, char *out, usize length) {
+#if MAL_NODE
+    if (c->tls != nullptr) return conn_tls_read(c, out, length);
+#endif
+    return read(c->fd, out, length);
+}
+
+static ssize_t conn_writev(MalHttpConn *c, const struct iovec *iov, int count) {
+#if MAL_NODE
+    if (c->tls != nullptr) return conn_tls_writev(c, iov, count);
+#endif
+    return mal_net_writev(c->fd, iov, count);
+}
+
 static void conn_read_cb(void *data) {
     MalHttpConn *c = data;
     usize turn = 0;
@@ -863,7 +1004,7 @@ static void conn_read_cb(void *data) {
             available = MAL_HTTP_READ_TURN - turn;
         }
         if (available == 0) break;
-        ssize_t n = read(c->fd, c->rbuf + c->rlen, available);
+        ssize_t n = conn_read(c, c->rbuf + c->rlen, available);
         if (n > 0) {
             usize count = (usize) n;
             if (c->timeout_phase == MAL_HTTP_TIMEOUT_KEEP_ALIVE) {
@@ -893,11 +1034,18 @@ static void conn_read_cb(void *data) {
 static void conn_write_cb(void *data) {
     MalHttpConn *c = data;
     usize turn = 0;
+#if MAL_NODE
+    if (c->tls != nullptr && !conn_tls_drain(c)) return;
+#endif
     while (c->write_head != nullptr && turn < MAL_HTTP_WRITE_TURN) {
         MalHttpWireWrite *write = c->write_head;
         if (write->prefix_offset == write->prefix_length
             && write->offset == write->length
             && write->suffix_offset == write->suffix_length) {
+#if MAL_NODE
+            // A response is complete only once its records have reached the socket.
+            if (c->tls != nullptr && !conn_tls_drain(c)) return;
+#endif
             c->write_head = write->next;
             if (c->write_head == nullptr) c->write_tail = nullptr;
             bool final = write->final;
@@ -975,7 +1123,7 @@ static void conn_write_cb(void *data) {
                 available -= length;
             }
         }
-        ssize_t n = mal_net_writev(c->fd, iov, iov_count);
+        ssize_t n = conn_writev(c, iov, iov_count);
         if (n > 0) {
             usize count = (usize) n;
             turn += count;
@@ -1053,6 +1201,16 @@ static void server_accept_cb(void *data) {
             continue;
         }
         c->codec_initialized = true;
+#if MAL_NODE
+        if (server->tls_config != nullptr
+            && mal_tls_server_create(server->tls_config, &c->tls) != MAL_TLS_STATUS_OK) {
+            mal_http_codec_free(&c->codec);
+            mal_net_close(fd);
+            free(c->rbuf);
+            free(c);
+            continue;
+        }
+#endif
         c->next = server->connections;
         server->connections = c;
         server->connection_count++;
@@ -1147,6 +1305,17 @@ bool mal_http_server_configure_limits(
     server->max_connections = limits->max_connections == 0
         ? MAL_HTTP_DEFAULT_MAX_CONNECTIONS : limits->max_connections;
     return true;
+}
+
+bool mal_http_server_set_tls(MalHttpServer *server, MalTlsServerConfig *config) {
+#if MAL_NODE
+    if (server == nullptr || server->tls_config != nullptr) return false;
+    server->tls_config = config;
+    return true;
+#else
+    (void) server; (void) config;
+    return false;
+#endif
 }
 
 u16 mal_http_server_port(const MalHttpServer *server) {

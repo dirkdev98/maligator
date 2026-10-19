@@ -1,4 +1,4 @@
-/* Flat bounded-buffer TLS client ABI. The opaque handle retains Rustls state but
+/* Flat bounded-buffer TLS session ABI for both roles. The opaque handle retains Rustls state but
  * never pointers supplied by C. Available with Cargo feature `node-tls`. */
 #pragma once
 
@@ -12,8 +12,36 @@ extern "C" {
 #define MAL_TLS_STATUS_OK 0
 #define MAL_TLS_STATUS_INVALID_ARGUMENT -1
 #define MAL_TLS_STATUS_ERROR -2
+#define MAL_TLS_STATUS_BAD_CERT -3
+#define MAL_TLS_STATUS_BAD_KEY -4
+#define MAL_TLS_STATUS_KEY_MISMATCH -5
+#define MAL_TLS_STATUS_BAD_CA -6
+
+#define MAL_TLS_INFO_ALPN 0
+#define MAL_TLS_INFO_PROTOCOL 1
+#define MAL_TLS_INFO_CIPHER 2
+#define MAL_TLS_INFO_SERVER_NAME 3
+#define MAL_TLS_INFO_PEER_CERTIFIED 4
 
 typedef struct MalTlsClient MalTlsClient;
+typedef struct MalTlsServerConfig MalTlsServerConfig;
+
+/* A missing cert or key yields a context whose handshakes fail, as Node's does.
+ * `alpn_wire` is the length-prefixed ALPN list in server preference order. */
+int32_t mal_tls_server_config_create(
+    const uint8_t *cert_pem, size_t cert_pem_len,
+    const uint8_t *key_pem, size_t key_pem_len,
+    const uint8_t *ca_pem, size_t ca_pem_len,
+    const uint8_t *alpn_wire, size_t alpn_wire_len,
+    int32_t request_cert, int32_t reject_unauthorized,
+    MalTlsServerConfig **out_config);
+void mal_tls_server_config_free(MalTlsServerConfig **config);
+/* The session shares the client handle's record I/O entry points. */
+int32_t mal_tls_server_create(
+    const MalTlsServerConfig *config, MalTlsClient **out_handle);
+/* Returns the full value length (copying at most `output_len`), or -1 if absent. */
+intptr_t mal_tls_session_info(
+    const MalTlsClient *handle, int32_t kind, uint8_t *output, size_t output_len);
 
 int32_t mal_tls_client_create(
     const uint8_t *server_name, size_t server_name_len,

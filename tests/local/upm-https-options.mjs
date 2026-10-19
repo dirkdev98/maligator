@@ -24,6 +24,7 @@ let passed = 0,
 	total = 0;
 for (const name of constraints) {
 	for (const agent of [false, true]) {
+		if (name === "ca" && !agent) continue;
 		total++;
 		try {
 			if (agent) new https.Agent({ [name]: "unsupported" });

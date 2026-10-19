@@ -1,10 +1,13 @@
-//! Bounded-buffer Rustls client primitives. Every input/output pointer is borrowed
-//! only for one call; persistent state owns only Rustls objects.
+//! Bounded-buffer Rustls session primitives for both roles. Every input/output
+//! pointer is borrowed only for one call; persistent state owns only Rustls objects.
 
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+use rustls::server::{ResolvesServerCert, WebPkiClientVerifier};
+use rustls::sign::CertifiedKey;
 use rustls::{
-    ClientConfig, ClientConnection, DigitallySignedStruct, RootCertStore, SignatureScheme,
+    ClientConfig, ClientConnection, Connection, DigitallySignedStruct, ProtocolVersion,
+    RootCertStore, ServerConfig, ServerConnection, SignatureScheme,
 };
 use std::collections::VecDeque;
 use std::io::{self, Cursor, Read, Write};
@@ -14,6 +17,16 @@ use std::sync::{Arc, Mutex, OnceLock};
 pub const MAL_TLS_STATUS_OK: i32 = 0;
 pub const MAL_TLS_STATUS_INVALID_ARGUMENT: i32 = -1;
 pub const MAL_TLS_STATUS_ERROR: i32 = -2;
+pub const MAL_TLS_STATUS_BAD_CERT: i32 = -3;
+pub const MAL_TLS_STATUS_BAD_KEY: i32 = -4;
+pub const MAL_TLS_STATUS_KEY_MISMATCH: i32 = -5;
+pub const MAL_TLS_STATUS_BAD_CA: i32 = -6;
+
+pub const MAL_TLS_INFO_ALPN: i32 = 0;
+pub const MAL_TLS_INFO_PROTOCOL: i32 = 1;
+pub const MAL_TLS_INFO_CIPHER: i32 = 2;
+pub const MAL_TLS_INFO_SERVER_NAME: i32 = 3;
+pub const MAL_TLS_INFO_PEER_CERTIFIED: i32 = 4;
 
 #[derive(Debug)]
 struct NoCertificateVerification;
@@ -64,7 +77,7 @@ impl ServerCertVerifier for NoCertificateVerification {
 }
 
 pub struct MalTlsClient {
-    connection: ClientConnection,
+    connection: Connection,
     peer_closed: bool,
     config_id: u64,
     record_header: [u8; 5],
@@ -257,17 +270,236 @@ pub unsafe extern "C" fn mal_tls_client_create(
     let Ok(connection) = ClientConnection::new(config, server_name) else {
         return MAL_TLS_STATUS_ERROR;
     };
-    unsafe {
-        *out_handle = Box::into_raw(Box::new(MalTlsClient {
-            connection,
-            peer_closed: false,
-            config_id,
-            record_header: [0; 5],
-            record_header_length: 0,
-            record_remaining: 0,
-        }))
-    };
+    unsafe { *out_handle = new_session(Connection::Client(connection), config_id) };
     MAL_TLS_STATUS_OK
+}
+
+fn new_session(connection: Connection, config_id: u64) -> *mut MalTlsClient {
+    Box::into_raw(Box::new(MalTlsClient {
+        connection,
+        peer_closed: false,
+        config_id,
+        record_header: [0; 5],
+        record_header_length: 0,
+        record_remaining: 0,
+    }))
+}
+
+pub struct MalTlsServerConfig {
+    config: Arc<ServerConfig>,
+}
+
+#[derive(Debug)]
+struct NoServerCertificate;
+
+// Node accepts a context without credentials and fails each handshake instead.
+impl ResolvesServerCert for NoServerCertificate {
+    fn resolve(&self, _hello: rustls::server::ClientHello<'_>) -> Option<Arc<CertifiedKey>> {
+        None
+    }
+}
+
+fn server_config(
+    cert_pem: &[u8],
+    key_pem: &[u8],
+    ca_pem: &[u8],
+    alpn_wire: &[u8],
+    request_cert: bool,
+    reject_unauthorized: bool,
+) -> Result<ServerConfig, i32> {
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let builder = ServerConfig::builder_with_provider(provider.clone())
+        .with_safe_default_protocol_versions()
+        .map_err(|_| MAL_TLS_STATUS_ERROR)?;
+    let builder = if request_cert && !ca_pem.is_empty() {
+        let mut roots = RootCertStore::empty();
+        for certificate in rustls_pemfile::certs(&mut Cursor::new(ca_pem)) {
+            let certificate = certificate.map_err(|_| MAL_TLS_STATUS_BAD_CA)?;
+            roots.add(certificate).map_err(|_| MAL_TLS_STATUS_BAD_CA)?;
+        }
+        let verifier = WebPkiClientVerifier::builder_with_provider(Arc::new(roots), provider);
+        let verifier = if reject_unauthorized {
+            verifier
+        } else {
+            verifier.allow_unauthenticated()
+        };
+        builder.with_client_cert_verifier(verifier.build().map_err(|_| MAL_TLS_STATUS_BAD_CA)?)
+    } else {
+        builder.with_no_client_auth()
+    };
+    let mut chain = Vec::new();
+    if !cert_pem.is_empty() {
+        for certificate in rustls_pemfile::certs(&mut Cursor::new(cert_pem)) {
+            chain.push(certificate.map_err(|_| MAL_TLS_STATUS_BAD_CERT)?);
+        }
+        if chain.is_empty() {
+            return Err(MAL_TLS_STATUS_BAD_CERT);
+        }
+    }
+    let key = if key_pem.is_empty() {
+        None
+    } else {
+        Some(
+            rustls_pemfile::private_key(&mut Cursor::new(key_pem))
+                .map_err(|_| MAL_TLS_STATUS_BAD_KEY)?
+                .ok_or(MAL_TLS_STATUS_BAD_KEY)?,
+        )
+    };
+    let mut config = match key {
+        Some(key) if !chain.is_empty() => builder
+            .with_single_cert(chain, key)
+            .map_err(|_| MAL_TLS_STATUS_KEY_MISMATCH)?,
+        _ => builder.with_cert_resolver(Arc::new(NoServerCertificate)),
+    };
+    let mut wire = alpn_wire;
+    while let Some((&length, rest)) = wire.split_first() {
+        let length = length as usize;
+        if length == 0 || length > rest.len() {
+            return Err(MAL_TLS_STATUS_INVALID_ARGUMENT);
+        }
+        config.alpn_protocols.push(rest[..length].to_vec());
+        wire = &rest[length..];
+    }
+    Ok(config)
+}
+
+#[no_mangle]
+/// # Safety
+/// Every non-null pointer must be valid for its stated length or output slot.
+pub unsafe extern "C" fn mal_tls_server_config_create(
+    cert_pem: *const u8,
+    cert_pem_len: usize,
+    key_pem: *const u8,
+    key_pem_len: usize,
+    ca_pem: *const u8,
+    ca_pem_len: usize,
+    alpn_wire: *const u8,
+    alpn_wire_len: usize,
+    request_cert: i32,
+    reject_unauthorized: i32,
+    out_config: *mut *mut MalTlsServerConfig,
+) -> i32 {
+    if out_config.is_null() {
+        return MAL_TLS_STATUS_INVALID_ARGUMENT;
+    }
+    unsafe { *out_config = core::ptr::null_mut() };
+    let (Some(cert), Some(key), Some(ca), Some(alpn)) = (unsafe {
+        (
+            input(cert_pem, cert_pem_len),
+            input(key_pem, key_pem_len),
+            input(ca_pem, ca_pem_len),
+            input(alpn_wire, alpn_wire_len),
+        )
+    }) else {
+        return MAL_TLS_STATUS_INVALID_ARGUMENT;
+    };
+    match server_config(
+        cert,
+        key,
+        ca,
+        alpn,
+        request_cert != 0,
+        reject_unauthorized != 0,
+    ) {
+        Ok(config) => {
+            unsafe {
+                *out_config = Box::into_raw(Box::new(MalTlsServerConfig {
+                    config: Arc::new(config),
+                }))
+            };
+            MAL_TLS_STATUS_OK
+        }
+        Err(status) => status,
+    }
+}
+
+#[no_mangle]
+/// # Safety
+/// `config` must be null or a valid slot holding a live or null configuration.
+pub unsafe extern "C" fn mal_tls_server_config_free(config: *mut *mut MalTlsServerConfig) {
+    if config.is_null() {
+        return;
+    }
+    let pointer = unsafe { *config };
+    unsafe { *config = core::ptr::null_mut() };
+    if !pointer.is_null() {
+        drop(unsafe { Box::from_raw(pointer) });
+    }
+}
+
+#[no_mangle]
+/// # Safety
+/// `config` must point to a live configuration and `out_handle` to a writable slot.
+pub unsafe extern "C" fn mal_tls_server_create(
+    config: *const MalTlsServerConfig,
+    out_handle: *mut *mut MalTlsClient,
+) -> i32 {
+    if config.is_null() || out_handle.is_null() {
+        return MAL_TLS_STATUS_INVALID_ARGUMENT;
+    }
+    unsafe { *out_handle = core::ptr::null_mut() };
+    let Ok(connection) = ServerConnection::new(unsafe { &*config }.config.clone()) else {
+        return MAL_TLS_STATUS_ERROR;
+    };
+    unsafe { *out_handle = new_session(Connection::Server(connection), 0) };
+    MAL_TLS_STATUS_OK
+}
+
+#[no_mangle]
+/// # Safety
+/// `handle` must be live; `output` is valid for `output_len` bytes. Returns the
+/// value length, or -1 when the session has no such value yet.
+pub unsafe extern "C" fn mal_tls_session_info(
+    handle: *const MalTlsClient,
+    kind: i32,
+    output_pointer: *mut u8,
+    output_len: usize,
+) -> isize {
+    if handle.is_null() {
+        return -1;
+    }
+    let connection = &unsafe { &*handle }.connection;
+    let owned: String;
+    let value: &[u8] = match kind {
+        MAL_TLS_INFO_ALPN => match connection.alpn_protocol() {
+            Some(alpn) => alpn,
+            None => return -1,
+        },
+        MAL_TLS_INFO_PROTOCOL => match connection.protocol_version() {
+            Some(ProtocolVersion::TLSv1_3) => b"TLSv1.3",
+            Some(ProtocolVersion::TLSv1_2) => b"TLSv1.2",
+            _ => return -1,
+        },
+        MAL_TLS_INFO_CIPHER => match connection
+            .negotiated_cipher_suite()
+            .and_then(|suite| suite.suite().as_str())
+        {
+            // OpenSSL names TLS 1.3 suites by their IANA names, which Rustls prefixes.
+            Some(name) => {
+                owned = name.replacen("TLS13_", "TLS_", 1);
+                owned.as_bytes()
+            }
+            None => return -1,
+        },
+        MAL_TLS_INFO_SERVER_NAME => match connection {
+            Connection::Server(server) => match server.server_name() {
+                Some(name) => name.as_bytes(),
+                None => return -1,
+            },
+            Connection::Client(_) => return -1,
+        },
+        MAL_TLS_INFO_PEER_CERTIFIED => match connection.peer_certificates() {
+            Some(certificates) if !certificates.is_empty() => b"1",
+            _ => return -1,
+        },
+        _ => return -1,
+    };
+    let Some(output) = (unsafe { output(output_pointer, output_len) }) else {
+        return -1;
+    };
+    let length = value.len().min(output.len());
+    output[..length].copy_from_slice(&value[..length]);
+    value.len() as isize
 }
 
 #[no_mangle]

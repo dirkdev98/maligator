@@ -8,6 +8,7 @@
 
 typedef struct MalHost MalHost;
 typedef struct MalTlsClient MalTlsClient;
+typedef struct MalTlsServerConfig MalTlsServerConfig;
 
 typedef enum MalTcpProgressKind {
     MAL_TCP_CONNECTED = 1,
@@ -53,6 +54,12 @@ bool mal_tcp_start_tls(
     const byte *server_name, usize server_name_length,
     const byte *ca_pem, usize ca_pem_length,
     const byte *alpn, usize alpn_length, bool insecure);
+/* Starts the server role on an accepted connection; the session borrows `config`. */
+bool mal_tcp_start_tls_server(
+    MalHost *host, MalHostHandle operation, const MalTlsServerConfig *config);
+/* mal_tls_session_info for the connection's session, or -1 without one. */
+i64 mal_tcp_tls_info(
+    MalHost *host, MalHostHandle operation, int kind, byte *output, usize output_length);
 bool mal_tcp_cancel(MalHost *host, MalHostHandle operation);
 
 /* Listening sockets: 0 or the bind/listen errno. Accepts arrive as MAL_TCP_ACCEPTED

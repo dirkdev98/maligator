@@ -47,6 +47,8 @@ bool mal_http_client_start(
     const char *host_name,
     u16 port,
     bool secure,
+    const byte *ca_pem,
+    usize ca_pem_length,
     bool keep_alive,
     byte *request_head,
     usize request_head_len,

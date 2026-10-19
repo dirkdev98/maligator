@@ -16,6 +16,7 @@
 #include "gc.h"
 #include "heap_string.h"
 #include "host.h"
+#include "mal_tls.h"
 #include "intrinsics.h"
 #include "net.h"
 #include "node_buffer.h"
@@ -78,8 +79,29 @@ typedef struct MalNodeNetSocketState {
     bool read_paused;
     bool ending;
     bool destroyed;
+    bool tls_server;
+    bool secure;
     struct MalNodeNetSocketState *next;
 } MalNodeNetSocketState;
+
+typedef struct MalNodeNetServerState {
+    MalVm *vm;
+    MalValue receiver;
+    MalAsyncContext *async_context;
+#if MAL_REALMS
+    MalRealm *realm;
+#endif
+    MalHostHandle operation;
+    /* Owned; present for tls.Server, whose accepts start the server TLS role. */
+    MalTlsServerConfig *tls_config;
+    u32 connections;
+    bool listening;
+    bool handle_open;
+    /* Until its terminal task drains: the head-only drain needs this state to consume it. */
+    bool listener_live;
+    bool tls_without_cert;
+    struct MalNodeNetServerState *next;
+} MalNodeNetServerState;
 
 // Sockets and their root registration belong to this mutator's isolate.
 static MAL_ISOLATE_LOCAL MalNodeNetSocketState *net_sockets;
@@ -100,11 +122,12 @@ static MalCompletion net_call_method(
     MalVm *vm, MalValue receiver, const char *name, const MalValue *args, i32 argc) {
     MalValue roots[] = {
         receiver, mal_value_new_undefined(), mal_value_new_undefined(),
-        mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined(),
     };
+    if (argc > 3) argc = 3;
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
-    for (i32 i = 0; i < argc && i < 2; i++) roots[2 + i] = args[i];
+    for (i32 i = 0; i < argc; i++) roots[2 + i] = args[i];
     if (!net_get(vm, roots[0], name, &roots[1])) {
         MalCompletion completion = vm->completion;
         mal_gc_unroot(&root);
@@ -784,11 +807,87 @@ static void net_write_complete(MalVm *vm, MalNodeNetSocketState *state, u64 toke
     }
 }
 
+static MalNodeNetServerState *net_server_state(MalValue receiver);
+static MalValue net_coded_error(MalVm *vm, MalIntrinsic prototype, const char *message, const char *code);
+
+static MalValue net_tls_info_value(MalVm *vm, MalNodeNetSocketState *state, int kind) {
+    byte text[256];
+    i64 length = state->destroyed ? -1
+        : mal_tcp_tls_info(mal_host(vm), state->operation, kind, text, sizeof(text));
+    if (length < 0 || (usize) length > sizeof(text)) return mal_value_new_undefined();
+    MalString *string = mal_string_from_utf8(&vm->heap, text, (usize) length);
+    if (string == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
+    return mal_value_from_string(string);
+}
+
+static MalValue net_tls_get_protocol(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) args; (void) argc; (void) new_target; (void) callee;
+    MalNodeNetSocketState *state = net_state(receiver);
+    MalValue value = state == nullptr ? mal_value_new_undefined()
+        : net_tls_info_value(vm, state, MAL_TLS_INFO_PROTOCOL);
+    return mal_value_is_undefined(value) ? mal_value_new_null() : value;
+}
+
+static MalValue net_tls_get_cipher(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) args; (void) argc; (void) new_target; (void) callee;
+    MalNodeNetSocketState *state = net_state(receiver);
+    if (state == nullptr) return mal_value_new_undefined();
+    MalValue roots[] = {
+        net_tls_info_value(vm, state, MAL_TLS_INFO_CIPHER), mal_value_new_undefined(),
+        mal_value_new_undefined(),
+    };
+    if (mal_value_is_undefined(roots[0])) return mal_value_new_undefined();
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    roots[1] = net_tls_info_value(vm, state, MAL_TLS_INFO_PROTOCOL);
+    roots[2] = mal_value_from_object(mal_intrinsic_new_object(vm));
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[2]), (const byte *) "name", roots[0], NET_VISIBLE);
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[2]), (const byte *) "standardName", roots[0], NET_VISIBLE);
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[2]), (const byte *) "version", roots[1], NET_VISIBLE);
+    MalValue result = roots[2];
+    mal_gc_unroot(&root);
+    return result;
+}
+
+/* TLSSocket state Node exposes once the handshake completes. */
+static void net_tls_describe(MalVm *vm, MalNodeNetSocketState *state) {
+    MalValue value = net_tls_info_value(vm, state, MAL_TLS_INFO_ALPN);
+    MalRootSpan root;
+    mal_gc_root(&root, &value, 1);
+    net_set(vm, state->receiver, "alpnProtocol",
+        mal_value_is_undefined(value) ? mal_value_new_boolean(false) : value);
+    if (state->tls_server) {
+        value = net_tls_info_value(vm, state, MAL_TLS_INFO_SERVER_NAME);
+        net_set(vm, state->receiver, "servername",
+            mal_value_is_undefined(value) ? mal_value_new_boolean(false) : value);
+        value = net_tls_info_value(vm, state, MAL_TLS_INFO_PEER_CERTIFIED);
+        net_set(vm, state->receiver, "authorized", mal_value_new_boolean(!mal_value_is_undefined(value)));
+    }
+    mal_intrinsic_define_method_n(vm, mal_value_to_object(state->receiver),
+        (const byte *) "getProtocol", 0, net_tls_get_protocol);
+    mal_intrinsic_define_method_n(vm, mal_value_to_object(state->receiver),
+        (const byte *) "getCipher", 0, net_tls_get_cipher);
+    mal_gc_unroot(&root);
+}
+
 static void net_dispatch_progress_in_context(
     MalVm *vm, MalNodeNetSocketState *state, MalTcpProgress *progress) {
     if (progress->kind == MAL_TCP_SECURE_CONNECTED) {
+        state->secure = true;
         net_set(vm, state->receiver, "encrypted", mal_value_new_boolean(true));
-        net_emit(vm, state->receiver, "secureConnect", nullptr, 0);
+        net_tls_describe(vm, state);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) return;
+        if (state->tls_server) {
+            MalValue socket = state->receiver;
+            net_emit(vm, state->server, "secureConnection", &socket, 1);
+        } else {
+            net_emit(vm, state->receiver, "secureConnect", nullptr, 0);
+        }
         return;
     }
     if (progress->kind == MAL_TCP_CONNECTED) {
@@ -863,7 +962,21 @@ static void net_dispatch_terminal(
     MalValue error = state->destroy_error;
     MalRootSpan root;
     mal_gc_root(&root, &error, 1);
-    if (task->result == MAL_HOST_TERMINAL_ERROR && mal_value_is_nil(error)) {
+    bool tls_client_error = state->tls_server && !state->secure
+        && task->result == MAL_HOST_TERMINAL_ERROR && mal_value_is_nil(error);
+    if (tls_client_error) {
+        MalNodeNetServerState *server = net_server_state(state->server);
+        int code = terminal == nullptr ? EIO : terminal->error;
+        error = code != EPROTO ? net_error(vm, code)
+            : server != nullptr && server->tls_without_cert
+            ? net_coded_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, "no suitable signature algorithm",
+                "ERR_SSL_NO_SUITABLE_SIGNATURE_ALGORITHM")
+            : net_coded_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, "TLS handshake failed",
+                "ERR_SSL_SSL_HANDSHAKE_FAILURE");
+        MalValue args[] = {error, state->receiver};
+        net_emit(vm, state->server, "tlsClientError", args, 2);
+        error = mal_value_new_undefined();
+    } else if (task->result == MAL_HOST_TERMINAL_ERROR && mal_value_is_nil(error)) {
         error = net_error(vm, terminal == nullptr ? EIO : terminal->error);
     }
     if (!mal_value_is_nil(error)) net_emit(vm, state->receiver, "error", &error, 1);
@@ -918,19 +1031,7 @@ static bool net_store_dns_addresses(
     return true;
 }
 
-typedef struct MalNodeNetServerState {
-    MalVm *vm;
-    MalValue receiver;
-    MalAsyncContext *async_context;
-#if MAL_REALMS
-    MalRealm *realm;
-#endif
-    MalHostHandle operation;
-    u32 connections;
-    bool listening;
-    bool handle_open;
-    struct MalNodeNetServerState *next;
-} MalNodeNetServerState;
+
 
 static MAL_ISOLATE_LOCAL MalNodeNetServerState *net_servers;
 
@@ -1047,11 +1148,12 @@ static void net_server_unlink(MalNodeNetServerState *state) {
 
 /* Node's _emitCloseIfDrained: 'close' once the handle is gone and no socket remains. */
 static void net_server_maybe_close(MalVm *vm, MalNodeNetServerState *state) {
-    if (state->handle_open || state->connections > 0) return;
+    if (state->handle_open || state->listener_live || state->connections > 0) return;
     MalValue server = state->receiver;
     MalRootSpan root;
     mal_gc_root(&root, &server, 1);
     net_server_unlink(state);
+    mal_tls_server_config_free(&state->tls_config);
     free(state);
     net_server_emit_later(vm, server, "close", mal_value_new_undefined());
     mal_gc_unroot(&root);
@@ -1149,6 +1251,15 @@ static void net_server_accept(MalVm *vm, MalNodeNetServerState *server, MalHostH
         roots[2] = net_endpoint_family(vm, &local);
         net_set(vm, roots[1], "localFamily", roots[2]);
     }
+    if (server->tls_config != nullptr) {
+        if (!mal_tcp_start_tls_server(mal_host(vm), accepted, server->tls_config)) {
+            (void) mal_tcp_cancel(mal_host(vm), accepted);
+            mal_gc_unroot(&root);
+            return;
+        }
+        state->tls_server = true;
+        state->tls_context = mal_async_context_capture(vm);
+    }
     MalValue pause_on_connect;
     bool paused = net_get(vm, roots[0], "pauseOnConnect", &pause_on_connect) && mal_value_is_truthy(pause_on_connect);
     if (paused) {
@@ -1171,6 +1282,7 @@ static void net_server_dispatch(MalVm *vm, MalNodeNetServerState *state, MalHost
     } else {
         MalTcpTerminal *terminal = data;
         state->handle_open = false;
+        state->listener_live = false;
         state->listening = false;
         if (task->result == MAL_HOST_TERMINAL_ERROR) {
             MalValue error = net_error(vm, terminal == nullptr ? EIO : terminal->error);
@@ -1239,6 +1351,52 @@ static MalValue net_listen_error(MalVm *vm, int error, const char *host, u16 por
     net_set(vm, roots[0], "port", mal_value_from_i32(port));
     mal_gc_unroot(&root);
     return roots[0];
+}
+
+static bool net_utf8_property(MalVm *vm, MalValue object, const char *name, byte **bytes, usize *length) {
+    *bytes = nullptr;
+    *length = 0;
+    MalValue value;
+    if (!net_get(vm, object, name, &value)) return false;
+    if (!mal_value_is_string(value)) return true;
+    *bytes = mal_string_to_utf8(mal_value_to_string(value), length);
+    if (*bytes == nullptr) mal_vm_throw_allocation_error(vm);
+    return *bytes != nullptr;
+}
+
+bool mal_node_net_tls_config(
+    MalVm *vm, MalValue server, MalTlsServerConfig **config, bool *without_cert) {
+    *config = nullptr;
+    *without_cert = false;
+    MalValue creds;
+    if (!net_get(vm, server, "_sharedCreds", &creds)) return false;
+    if (!mal_value_is_object(creds)) return true;
+    MalRootSpan root;
+    mal_gc_root(&root, &creds, 1);
+    byte *pem[4] = {nullptr, nullptr, nullptr, nullptr};
+    usize lengths[4] = {0, 0, 0, 0};
+    static const char *const names[] = {"_malCert", "_malKey", "_malCa", "_malAlpn"};
+    bool ok = true;
+    for (usize i = 0; ok && i < 3; i++) ok = net_utf8_property(vm, creds, names[i], &pem[i], &lengths[i]);
+    if (ok) ok = net_utf8_property(vm, server, names[3], &pem[3], &lengths[3]);
+    MalValue request_cert = mal_value_new_undefined(), reject = mal_value_new_undefined();
+    if (ok) ok = net_get(vm, server, "requestCert", &request_cert) && net_get(vm, server, "rejectUnauthorized", &reject);
+    if (ok) {
+        int status = mal_tls_server_config_create(pem[0], lengths[0], pem[1], lengths[1], pem[2], lengths[2],
+            pem[3], lengths[3], mal_value_is_truthy(request_cert), mal_value_is_truthy(reject), config);
+        *without_cert = lengths[0] == 0 || lengths[1] == 0;
+        if (status != MAL_TLS_STATUS_OK) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, (const byte *) "Failed to create TLS server context");
+            ok = false;
+        }
+    }
+    for (usize i = 0; i < countof(pem); i++) free(pem[i]);
+    mal_gc_unroot(&root);
+    return ok;
+}
+
+static bool net_server_tls_config(MalVm *vm, MalValue server, MalNodeNetServerState *state) {
+    return mal_node_net_tls_config(vm, server, &state->tls_config, &state->tls_without_cert);
 }
 
 static bool net_listen_port(MalVm *vm, MalValue value, u16 *port) {
@@ -1360,9 +1518,15 @@ static MalValue net_server_listen(
     state->realm = vm->current_realm;
 #endif
     state->operation = operation;
+    if (!net_server_tls_config(vm, receiver, state)) {
+        (void) mal_tcp_listen_close(mal_host(vm), operation);
+        free(state);
+        goto done;
+    }
     // A named host goes through Node's async lookup, so `listening` turns true with the event.
     state->listening = default_host;
     state->handle_open = true;
+    state->listener_live = true;
     state->next = net_servers;
     net_servers = state;
     MalValue unref;
@@ -1512,7 +1676,7 @@ static MalValue net_server_async_dispose(
     return roots[0];
 }
 
-static bool net_server_init(MalVm *vm, MalValue server, MalValue options, MalValue listener) {
+bool mal_node_net_server_init(MalVm *vm, MalValue server, MalValue options, MalValue listener) {
     MalValue roots[] = {server, options, listener};
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
@@ -1542,7 +1706,7 @@ static MalValue net_server_new(MalVm *vm, MalObject *prototype, const MalValue *
     MalValue instance = mal_value_from_object(mal_object_new(&vm->heap, prototype));
     MalRootSpan root;
     mal_gc_root(&root, &instance, 1);
-    bool ok = net_server_init(vm, instance, options, listener);
+    bool ok = mal_node_net_server_init(vm, instance, options, listener);
     mal_gc_unroot(&root);
     return ok ? instance : mal_value_new_undefined();
 }
@@ -1554,6 +1718,10 @@ static MalValue net_server_constructor(
     MalValue prototype_value = mal_vm_function_prototype(vm, target);
     return net_server_new(vm, mal_value_is_object(prototype_value) ? mal_value_to_object(prototype_value)
         : mal_value_to_object(net_server_prototype), args, argc);
+}
+
+MalValue mal_node_net_server_prototype(void) {
+    return net_server_prototype;
 }
 
 static MalValue net_create_server(

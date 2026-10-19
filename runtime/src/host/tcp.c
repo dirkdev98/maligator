@@ -109,6 +109,20 @@ static bool tcp_progress(MalTcpConnection *connection, MalTcpProgress *progress)
 static bool tcp_arm_read(MalTcpConnection *connection);
 static bool tcp_flush(MalTcpConnection *connection);
 
+#if MAL_NODE
+/* Best effort: the peer learns why the handshake failed instead of seeing a bare close. */
+static void tcp_tls_send_alert(MalTcpConnection *connection) {
+    byte alert[512];
+    usize produced = 0;
+    if (connection->tls_ciphertext != nullptr
+        || mal_tls_client_write_ciphertext(connection->tls, alert, sizeof(alert), &produced)
+            != MAL_TLS_STATUS_OK) {
+        return;
+    }
+    if (produced > 0) (void) mal_net_write(connection->fd, alert, produced);
+}
+#endif
+
 static void tcp_read_ready(void *data) {
     MalTcpConnection *connection = data;
     byte *bytes = malloc(MAL_TCP_IO_TURN);
@@ -128,6 +142,7 @@ static void tcp_read_ready(void *data) {
                 connection->tls, bytes, (usize) count, &consumed);
             free(bytes);
             if (status != MAL_TLS_STATUS_OK || consumed != (usize) count) {
+                tcp_tls_send_alert(connection);
                 tcp_complete(connection, MAL_HOST_TERMINAL_ERROR, EPROTO);
                 return;
             }
@@ -202,6 +217,12 @@ static void tcp_read_ready(void *data) {
     }
     free(bytes);
     if (count == 0) {
+#if MAL_NODE
+        if (connection->tls != nullptr && !connection->tls_connected_reported) {
+            tcp_complete(connection, MAL_HOST_TERMINAL_ERROR, ECONNRESET);
+            return;
+        }
+#endif
         tcp_complete(connection, MAL_HOST_TERMINAL_OK, 0);
         return;
     }
@@ -585,28 +606,40 @@ int mal_tcp_tls_create_client(
 #endif
 }
 
-bool mal_tcp_start_tls(
-    MalHost *host, MalHostHandle operation,
+#if MAL_NODE
+static bool tcp_start_tls_session(
+    MalHost *host, MalHostHandle operation, bool client,
     const byte *server_name, usize server_name_length,
     const byte *ca_pem, usize ca_pem_length,
-    const byte *alpn, usize alpn_length, bool insecure) {
-#if MAL_NODE
+    const byte *alpn, usize alpn_length, bool insecure,
+    const MalTlsServerConfig *server_config) {
     MalTcpConnection *connection = host == nullptr ? nullptr : tcp_find(host, operation);
-    if (connection == nullptr || connection->connecting || connection->tls != nullptr
-        || server_name == nullptr || server_name_length == 0) {
+    if (connection == nullptr || connection->connecting || connection->tls != nullptr) {
         return false;
     }
-    if (mal_tcp_tls_create_client(server_name, server_name_length,
-            ca_pem, ca_pem_length, alpn, alpn_length,
-            insecure, &connection->tls) != MAL_TLS_STATUS_OK) {
-        return false;
-    }
+    int status = client
+        ? mal_tcp_tls_create_client(server_name, server_name_length,
+            ca_pem, ca_pem_length, alpn, alpn_length, insecure, &connection->tls)
+        : mal_tls_server_create(server_config, &connection->tls);
+    if (status != MAL_TLS_STATUS_OK) return false;
     if (!tcp_flush(connection)) {
         tcp_complete(connection, MAL_HOST_TERMINAL_ERROR,
             errno == 0 ? EPROTO : errno);
         return false;
     }
     return true;
+}
+#endif
+
+bool mal_tcp_start_tls(
+    MalHost *host, MalHostHandle operation,
+    const byte *server_name, usize server_name_length,
+    const byte *ca_pem, usize ca_pem_length,
+    const byte *alpn, usize alpn_length, bool insecure) {
+#if MAL_NODE
+    if (server_name == nullptr || server_name_length == 0) return false;
+    return tcp_start_tls_session(host, operation, true, server_name, server_name_length,
+        ca_pem, ca_pem_length, alpn, alpn_length, insecure, nullptr);
 #else
     (void) host;
     (void) operation;
@@ -618,6 +651,29 @@ bool mal_tcp_start_tls(
     (void) alpn_length;
     (void) insecure;
     return false;
+#endif
+}
+
+bool mal_tcp_start_tls_server(
+    MalHost *host, MalHostHandle operation, const MalTlsServerConfig *config) {
+#if MAL_NODE
+    return config != nullptr && tcp_start_tls_session(host, operation, false,
+        nullptr, 0, nullptr, 0, nullptr, 0, false, config);
+#else
+    (void) host; (void) operation; (void) config;
+    return false;
+#endif
+}
+
+i64 mal_tcp_tls_info(
+    MalHost *host, MalHostHandle operation, int kind, byte *output, usize output_length) {
+#if MAL_NODE
+    MalTcpConnection *connection = host == nullptr ? nullptr : tcp_find(host, operation);
+    if (connection == nullptr || connection->tls == nullptr) return -1;
+    return mal_tls_session_info(connection->tls, kind, output, output_length);
+#else
+    (void) host; (void) operation; (void) kind; (void) output; (void) output_length;
+    return -1;
 #endif
 }
 

@@ -15,6 +15,7 @@
 #include "gc.h"
 #include "heap_string.h"
 #include "intrinsics.h"
+#include "mal_tls.h"
 #include "node_module.h"
 #include "node_net.h"
 #include "object.h"
@@ -58,7 +59,7 @@ static bool node_tls_utf8(
 static const char *const NODE_TLS_UNSUPPORTED_OPTIONS[] = {
     "cert", "key", "pfx", "passphrase", "clientCertEngine", "privateKeyEngine",
     "crl", "ciphers", "sigalgs", "ecdhCurve", "dhparam", "minVersion",
-    "maxVersion", "secureProtocol", "secureContext", "checkServerIdentity",
+    "maxVersion", "secureProtocol", "checkServerIdentity",
     "session", "sessionIdContext", "requestOCSP", "psk", "pskCallback",
 };
 
@@ -149,6 +150,14 @@ static MalValue node_tls_connect(
         || !node_tls_get(vm, roots[0], "ALPNProtocols", &roots[5])) {
         mal_gc_unroot(&root);
         return mal_value_new_undefined();
+    }
+    if (mal_value_is_undefined(roots[3])) {
+        MalValue context;
+        if (!node_tls_get(vm, roots[0], "secureContext", &context)
+            || (mal_value_is_object(context) && !node_tls_get(vm, context, "_malCa", &roots[3]))) {
+            mal_gc_unroot(&root);
+            return mal_value_new_undefined();
+        }
     }
     if (!mal_value_is_object(roots[1])) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
@@ -556,6 +565,268 @@ done:
     return result;
 }
 
+
+static const char *const node_tls_credentials[] = {"_malCert", "_malKey", "_malCa"};
+
+/* Node takes PEM as a string, a Buffer, or an array of either. */
+static bool node_tls_pem(MalVm *vm, MalValue value, const char *name, MalValue *out) {
+    *out = mal_value_new_undefined();
+    if (mal_value_is_undefined(value) || mal_value_is_null(value) || mal_value_is_string(value)) {
+        if (mal_value_is_string(value)) *out = value;
+        return true;
+    }
+    if (!mal_value_is_object(value)) {
+        char message[160];
+        snprintf(message, sizeof(message),
+            "The \"options.%s\" property must be of type string or an instance of Buffer, TypedArray, or DataView.",
+            name);
+        mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, message, "ERR_INVALID_ARG_TYPE");
+        return false;
+    }
+    bool array = mal_value_is_array_object(value);
+    MalValue method;
+    if (!node_tls_get(vm, value, array ? "join" : "toString", &method)) return false;
+    MalValue separator = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "\n"));
+    MalCompletion result = mal_vm_call_value(vm, method, value, &separator, array ? 1 : 0);
+    if (result.kind == MAL_COMPLETION_THROW) return false;
+    *out = result.value;
+    return true;
+}
+
+static bool node_tls_credential_values(MalVm *vm, MalValue options, MalValue *values) {
+    for (usize i = 0; i < 3; i++) values[i] = mal_value_new_undefined();
+    // Like Node's tls.Server, a server reads its own credentials and ignores `secureContext`.
+    if (!mal_value_is_object(options)) return true;
+    static const char *const names[] = {"cert", "key", "ca"};
+    for (usize i = 0; i < 3; i++) {
+        MalValue raw;
+        if (!node_tls_get(vm, options, names[i], &raw) || !node_tls_pem(vm, raw, names[i], &values[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool node_tls_validate_credentials(MalVm *vm, const MalValue *values) {
+    byte *pem[3] = {nullptr, nullptr, nullptr};
+    usize lengths[3] = {0, 0, 0};
+    bool ok = true;
+    for (usize i = 0; ok && i < 3; i++) {
+        if (mal_value_is_string(values[i])) ok = node_tls_utf8(vm, values[i], &pem[i], &lengths[i]);
+    }
+    if (ok) {
+        MalTlsServerConfig *config = nullptr;
+        int status = mal_tls_server_config_create(pem[0], lengths[0], pem[1], lengths[1],
+            pem[2], lengths[2], nullptr, 0, lengths[2] > 0, 1, &config);
+        mal_tls_server_config_free(&config);
+        // OpenSSL's codes and messages, which callers match on.
+        if (status == MAL_TLS_STATUS_BAD_CERT || status == MAL_TLS_STATUS_BAD_CA) {
+            mal_node_throw_code(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+                "error:0480006C:PEM routines::no start line", "ERR_OSSL_PEM_NO_START_LINE");
+            ok = false;
+        } else if (status == MAL_TLS_STATUS_BAD_KEY) {
+            mal_node_throw_code(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+                "error:1E08010C:DECODER routines::unsupported", "ERR_OSSL_UNSUPPORTED");
+            ok = false;
+        } else if (status == MAL_TLS_STATUS_KEY_MISMATCH) {
+            mal_node_throw_code(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+                "error:05800074:x509 certificate routines::key values mismatch",
+                "ERR_OSSL_X509_KEY_VALUES_MISMATCH");
+            ok = false;
+        } else if (status != MAL_TLS_STATUS_OK) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, "Failed to create TLS context");
+            ok = false;
+        }
+    }
+    for (usize i = 0; i < 3; i++) free(pem[i]);
+    return ok;
+}
+
+/* `prototype` is SecureContext.prototype or undefined for a server's private context. */
+static MalValue node_tls_secure_context(MalVm *vm, MalValue options, MalValue prototype) {
+    MalValue roots[] = {options, prototype, mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalValue result = mal_value_new_undefined();
+    if (node_tls_credential_values(vm, roots[0], &roots[2]) && node_tls_validate_credentials(vm, &roots[2])) {
+        MalObject *context = mal_value_is_object(roots[1])
+            ? mal_object_new(&vm->heap, mal_value_to_object(roots[1])) : mal_intrinsic_new_object(vm);
+        roots[5] = mal_value_from_object(context);
+        mal_intrinsic_define_data(vm, context, (const byte *) "context",
+            mal_value_from_object(mal_intrinsic_new_object(vm)), TLS_VISIBLE);
+        for (usize i = 0; i < 3; i++) {
+            mal_intrinsic_define_data(vm, context, (const byte *) node_tls_credentials[i], roots[2 + i],
+                MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+        }
+        result = roots[5];
+    }
+    mal_gc_unroot(&root);
+    return result;
+}
+
+static MalValue node_tls_secure_context_constructor(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver; (void) args; (void) argc;
+    MalValue target = mal_value_is_undefined(new_target) ? callee : new_target;
+    return node_tls_secure_context(vm, mal_value_new_undefined(), mal_vm_function_prototype(vm, target));
+}
+
+static MalValue node_tls_create_secure_context(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver; (void) new_target;
+    MalValue constructor = mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 0);
+    return node_tls_secure_context(vm, argc > 0 ? args[0] : mal_value_new_undefined(),
+        mal_vm_function_prototype(vm, constructor));
+}
+
+/* The server ALPN list in wire format; names stay below 128 bytes so the prefix is one UTF-8 unit. */
+static bool node_tls_server_alpn(MalVm *vm, MalValue value, MalValue *out) {
+    *out = mal_value_new_undefined();
+    if (mal_value_is_undefined(value)) return true;
+    if (!mal_value_is_array_object(value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                           "tls.createServer: ALPNProtocols must be an array of strings");
+        return false;
+    }
+    u32 count = mal_array_object_length(mal_value_to_array_object(value));
+    byte wire[1024];
+    usize length = 0;
+    for (u32 i = 0; i < count; i++) {
+        MalValue element;
+        if (!mal_vm_get_property(vm, value, mal_key_index(i), &element)) return false;
+        byte *name = nullptr;
+        usize name_length = 0;
+        if (!node_tls_utf8(vm, element, &name, &name_length)) return false;
+        if (name_length == 0 || name_length > 127 || length + 1 + name_length > sizeof(wire)) {
+            free(name);
+            mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
+                               "tls.createServer: ALPNProtocols entries must be 1 to 127 bytes");
+            return false;
+        }
+        wire[length++] = (byte) name_length;
+        memcpy(wire + length, name, name_length);
+        length += name_length;
+        free(name);
+    }
+    *out = node_tls_string(vm, (const char *) wire, length);
+    return vm->completion.kind != MAL_COMPLETION_THROW;
+}
+
+bool mal_node_tls_server_setup(MalVm *vm, MalValue server, MalValue options) {
+    // [0] server [1] options [2] credentials [3] scratch
+    MalValue roots[] = {server, options, mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    bool ok = false;
+    roots[2] = node_tls_secure_context(vm, roots[1], mal_value_new_undefined());
+    if (mal_value_is_undefined(roots[2])) goto done;
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]), (const byte *) "_sharedCreds", roots[2],
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    if (mal_value_is_object(roots[1]) && !node_tls_get(vm, roots[1], "ALPNProtocols", &roots[3])) goto done;
+    if (!node_tls_server_alpn(vm, roots[3], &roots[3])) goto done;
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]), (const byte *) "_malAlpn", roots[3],
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    bool request_cert = false;
+    bool reject_unauthorized = true;
+    if (mal_value_is_object(roots[1])) {
+        if (!node_tls_get(vm, roots[1], "requestCert", &roots[3])) goto done;
+        request_cert = mal_value_is_truthy(roots[3]);
+        if (!node_tls_get(vm, roots[1], "rejectUnauthorized", &roots[3])) goto done;
+        reject_unauthorized = !mal_value_is_boolean(roots[3]) || mal_value_is_truthy(roots[3]);
+    }
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]), (const byte *) "requestCert",
+        mal_value_new_boolean(request_cert), TLS_VISIBLE);
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]), (const byte *) "rejectUnauthorized",
+        mal_value_new_boolean(reject_unauthorized), TLS_VISIBLE);
+    ok = vm->completion.kind != MAL_COMPLETION_THROW;
+done:
+    mal_gc_unroot(&root);
+    return ok;
+}
+
+static MalValue node_tls_server_constructor(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver;
+    MalValue target = mal_value_is_undefined(new_target) ? callee : new_target;
+    MalValue options = argc > 0 && !mal_value_is_callable(args[0]) ? args[0] : mal_value_new_undefined();
+    MalValue listener = argc > 0 && mal_value_is_callable(args[0]) ? args[0]
+        : argc > 1 && mal_value_is_callable(args[1]) ? args[1] : mal_value_new_undefined();
+    MalValue roots[] = {mal_vm_function_prototype(vm, target), options, listener};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalValue result = mal_value_new_undefined();
+    MalObject *prototype = mal_value_is_object(roots[0]) ? mal_value_to_object(roots[0])
+        : mal_value_to_object(mal_node_net_server_prototype());
+    roots[0] = mal_value_from_object(mal_object_new(&vm->heap, prototype));
+    if (!mal_node_net_server_init(vm, roots[0], roots[1], mal_value_new_undefined())
+        || !mal_node_tls_server_setup(vm, roots[0], roots[1])) {
+        goto done;
+    }
+    if (mal_value_is_callable(roots[2])) {
+        MalValue on;
+        if (!node_tls_get(vm, roots[0], "on", &on)) goto done;
+        MalValue on_args[] = {
+            mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "secureConnection")), roots[2]};
+        if (mal_vm_call_value(vm, on, roots[0], on_args, 2).kind == MAL_COMPLETION_THROW) goto done;
+    }
+    result = roots[0];
+done:
+    mal_gc_unroot(&root);
+    return result;
+}
+
+static MalValue node_tls_create_server(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver; (void) new_target;
+    MalValue constructor = mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 0);
+    MalCompletion constructed = mal_vm_construct_value(vm, constructor, args, argc);
+    return constructed.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : constructed.value;
+}
+
+static MalValue node_tls_class(
+    MalVm *vm, MalObject *module, const char *name, MalNativeFunctionCallback callback,
+    MalValue parent, const char *factory_name, MalNativeFunctionCallback factory) {
+    MalValue parent_prototype = mal_value_new_undefined();
+    MalValue parent_constructor = mal_value_new_undefined();
+    if (mal_value_is_object(parent)) {
+        parent_prototype = parent;
+        (void) node_tls_get(vm, parent, "constructor", &parent_constructor);
+    }
+    MalValue roots[] = {
+        mal_value_from_object(mal_value_is_object(parent_prototype)
+            ? mal_object_new(&vm->heap, mal_value_to_object(parent_prototype)) : mal_intrinsic_new_object(vm)),
+        parent_constructor, mal_value_new_undefined(), mal_value_new_undefined(),
+    };
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+        mal_intrinsic_ascii(vm, (const byte *) name), 1, callback);
+    mal_native_function_object_set_constructor(constructor);
+    roots[2] = mal_value_from_native_function_object(constructor);
+    if (mal_value_is_object(roots[1])) mal_object_set_prototype((MalObject *) constructor, mal_value_to_object(roots[1]));
+    mal_intrinsic_define_data(vm, (MalObject *) constructor, (const byte *) "prototype", roots[0], MAL_PROPERTY_NONE);
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]), (const byte *) "constructor", roots[2],
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    mal_intrinsic_define_data(vm, module, (const byte *) name, roots[2], TLS_VISIBLE);
+    roots[3] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+        mal_intrinsic_ascii(vm, (const byte *) factory_name), 2, factory, &roots[2], 1));
+    mal_intrinsic_define_data(vm, module, (const byte *) factory_name, roots[3], TLS_VISIBLE);
+    MalValue result = roots[2];
+    mal_gc_unroot(&root);
+    return result;
+}
+
+static void node_tls_install_server(MalVm *vm, MalObject *module, const MalHostLaunchContext *launch) {
+    mal_host_install_node_net(vm, nullptr, 0, launch);
+    (void) node_tls_class(vm, module, "Server", node_tls_server_constructor,
+        mal_node_net_server_prototype(), "createServer", node_tls_create_server);
+    (void) node_tls_class(vm, module, "SecureContext", node_tls_secure_context_constructor,
+        mal_value_new_undefined(), "createSecureContext", node_tls_create_secure_context);
+}
+
 static void node_tls_install_extras(MalVm *vm, MalObject *module) {
     mal_intrinsic_define_method_n(vm, module, (const byte *) "getCiphers", 0, node_tls_get_ciphers);
     mal_intrinsic_define_method_n(vm, module, (const byte *) "getCACertificates", 1, node_tls_get_ca_certificates);
@@ -594,7 +865,6 @@ void mal_host_install_node_tls(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
     const MalHostLaunchContext *launch) {
     if (mal_node_module_install_cached(vm, "node:tls", slots, count)) return;
-    (void) launch;
     MalValue cached = vm->intrinsics[MAL_INTRINSIC_NODE_TLS_MODULE];
     if (!mal_value_is_undefined(cached)) {
         mal_node_module_publish(vm, "node:tls", slots, count, cached);
@@ -610,6 +880,7 @@ void mal_host_install_node_tls(
         vm, mal_value_to_object(module), (const byte *) "connect", connect,
         TLS_VISIBLE);
     node_tls_install_extras(vm, mal_value_to_object(module));
+    node_tls_install_server(vm, mal_value_to_object(module), launch);
     vm->intrinsics[MAL_INTRINSIC_NODE_TLS_MODULE] = module;
     mal_node_module_publish(vm, "node:tls", slots, count, module);
     mal_gc_unroot(&root);

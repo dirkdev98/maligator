@@ -63,6 +63,10 @@ bool mal_http_server_configure_limits(
     MalHttpServer *server, const MalHttpServerLimits *limits);
 
 /* The bound port (host byte order). */
+typedef struct MalTlsClient MalTlsClient;
+typedef struct MalTlsServerConfig MalTlsServerConfig;
+/* Takes ownership; must precede the first accept, i.e. the listen call's first yield. */
+bool mal_http_server_set_tls(MalHttpServer *server, MalTlsServerConfig *config);
 u16 mal_http_server_port(const MalHttpServer *server);
 
 /* Stop accepting and complete once all accepted connections have drained. Close

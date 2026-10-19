@@ -271,6 +271,9 @@ typedef struct MalNodeHttpClientState {
     u16 port;
     bool secure;
     bool keep_alive;
+    /* https `ca`; null trusts the host roots. */
+    char *ca;
+    usize ca_len;
     char *method;
     usize method_len;
     char *path;
@@ -2095,6 +2098,7 @@ static MalNodeHttpClientState *http_client_response_state(MalValue receiver) {
 
 static void http_client_free(MalNodeHttpClientState *state) {
     free(state->host);
+    free(state->ca);
     free(state->method);
     free(state->path);
     free(state->headers);
@@ -2535,7 +2539,8 @@ static bool http_client_start_request(
     HTTP_CLIENT_COPY(host_header, (usize) host_header_length);
 #undef HTTP_CLIENT_COPY
     if (!mal_http_client_start(
-            mal_host(vm), state->host, state->port, state->secure, state->keep_alive, request, request_len,
+            mal_host(vm), state->host, state->port, state->secure,
+            (const byte *) state->ca, state->ca_len, state->keep_alive, request, request_len,
             content_length,
             state->method_len == 4 && memcmp(state->method, "HEAD", 4) == 0,
             state->timeout_ms, &state->operation)) {
@@ -4385,6 +4390,12 @@ static bool http_ipv4_host(MalValue value, char out[16]) {
     return true;
 }
 
+bool mal_node_http_server_set_tls(MalValue server, MalTlsServerConfig *config) {
+    MalNodeHttpServerState *state = http_server_state(server);
+    return state != nullptr && state->native != nullptr
+        && mal_http_server_set_tls(state->native, config);
+}
+
 static MalValue http_server_listen(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
     MalValue new_target, MalValue callee) {
@@ -4917,6 +4928,13 @@ static MalValue http_request_common(
     if (!mal_value_is_undefined(roots[4])
         && !http_client_set_port(vm, roots[4], &state->port)) {
         goto fail_endpoint;
+    }
+    if (state->secure) {
+        if (!http_client_option(vm, roots[0], "ca", &roots[4])) goto fail_endpoint;
+        if (!mal_value_is_undefined(roots[4])
+            && !http_client_replace_string(vm, roots[4], &state->ca, &state->ca_len)) {
+            goto fail_endpoint;
+        }
     }
     if (!http_client_option(vm, roots[0], "path", &roots[5])) goto fail_endpoint;
     if (!mal_value_is_undefined(roots[5])) {

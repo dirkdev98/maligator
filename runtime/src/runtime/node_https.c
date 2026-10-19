@@ -12,6 +12,9 @@
 #include "function_object.h"
 #include "gc.h"
 #include "intrinsics.h"
+#include "mal_tls.h"
+#include "node_net.h"
+#include "node_tls.h"
 #include "object.h"
 #include "object_ops.h"
 #include "vm_ops.h"
@@ -21,6 +24,7 @@
 
 bool mal_node_https_validate_options(MalVm *vm, MalValue options, bool agent, MalValue default_agent) {
     if (!mal_value_is_object(options)) return true;
+    // Requests honour `ca`; agents are refused outright, so theirs would be ignored.
     static const char *unsupported[] = {
         "ca", "servername", "rejectUnauthorized", "checkServerIdentity", "cert", "key",
         "pfx", "passphrase", "secureContext", "secureProtocol", "secureOptions",
@@ -29,7 +33,7 @@ bool mal_node_https_validate_options(MalVm *vm, MalValue options, bool agent, Ma
         "privateKeyEngine", "honorCipherOrder", "crl", "requestOCSP", "createConnection",
         "psk", "pskCallback", "sessionIdContext", "lookup", "localAddress", "localPort", "family", "hints", "defaultPort",
     };
-    for (usize i = 0; i < countof(unsupported); i++) {
+    for (usize i = agent ? 0 : 1; i < countof(unsupported); i++) {
         MalValue value;
         if (!mal_vm_get_property(vm, options, mal_intrinsic_string_key(vm, unsupported[i]), &value)) return false;
         if (!mal_value_is_undefined(value)) {
@@ -83,12 +87,102 @@ static MalValue node_https_agent_destroy(
     return receiver;
 }
 
+static MalValue node_https_server_listen(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) new_target; (void) callee;
+    MalValue roots[] = {receiver, mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalValue result = mal_value_new_undefined();
+    if (!mal_vm_get_property(vm, vm->intrinsics[MAL_INTRINSIC_NODE_HTTP_SERVER_PROTOTYPE],
+            mal_intrinsic_string_key(vm, (const byte *) "listen"), &roots[1])) {
+        goto done;
+    }
+    MalCompletion listened = mal_vm_call_value(vm, roots[1], roots[0], args, argc);
+    if (listened.kind == MAL_COMPLETION_THROW) goto done;
+    roots[1] = listened.value;
+    // The HTTP listener cannot accept before this call yields, so no plaintext connection slips in.
+    MalTlsServerConfig *config = nullptr;
+    bool without_cert = false;
+    if (!mal_node_net_tls_config(vm, roots[0], &config, &without_cert)) goto done;
+    if (config != nullptr && !mal_node_http_server_set_tls(roots[0], config)) {
+        mal_tls_server_config_free(&config);
+        mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, "https.Server: failed to start TLS");
+        goto done;
+    }
+    result = roots[1];
+done:
+    mal_gc_unroot(&root);
+    return result;
+}
+
+static MalValue node_https_server_constructor(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver;
+    MalValue target = mal_value_is_undefined(new_target) ? callee : new_target;
+    MalValue options = argc > 0 && !mal_value_is_callable(args[0]) ? args[0] : mal_value_new_undefined();
+    MalValue roots[] = {mal_vm_function_prototype(vm, target), options};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalValue result = mal_value_new_undefined();
+    MalCompletion server = mal_vm_construct_value(
+        vm, vm->intrinsics[MAL_INTRINSIC_NODE_HTTP_SERVER_CONSTRUCTOR], args, argc);
+    if (server.kind == MAL_COMPLETION_THROW) goto done;
+    if (mal_value_is_object(roots[0])) {
+        mal_object_set_prototype(mal_value_to_object(server.value), mal_value_to_object(roots[0]));
+    }
+    MalValue instance = server.value;
+    roots[0] = instance;
+    if (mal_node_tls_server_setup(vm, roots[0], roots[1])) result = roots[0];
+done:
+    mal_gc_unroot(&root);
+    return result;
+}
+
+static MalValue node_https_create_server(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
+    (void) receiver; (void) new_target;
+    MalValue constructor = mal_native_function_object_get_slot(mal_value_to_native_function_object(callee), 0);
+    MalCompletion constructed = mal_vm_construct_value(vm, constructor, args, argc);
+    return constructed.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : constructed.value;
+}
+
+static void node_https_install_server(MalVm *vm, MalObject *module) {
+    MalValue roots[] = {
+        mal_value_from_object(mal_object_new(&vm->heap,
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_NODE_HTTP_SERVER_PROTOTYPE]))),
+        mal_value_new_undefined(), mal_value_new_undefined(),
+    };
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[0]), (const byte *) "listen", 3,
+        node_https_server_listen);
+    MalNativeFunctionObject *constructor = mal_native_function_object_new_arity(&vm->heap,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+        mal_intrinsic_ascii(vm, (const byte *) "Server"), 2, node_https_server_constructor);
+    mal_native_function_object_set_constructor(constructor);
+    roots[1] = mal_value_from_native_function_object(constructor);
+    mal_object_set_prototype((MalObject *) constructor,
+        mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_NODE_HTTP_SERVER_CONSTRUCTOR]));
+    mal_intrinsic_define_data(vm, (MalObject *) constructor, (const byte *) "prototype", roots[0], MAL_PROPERTY_NONE);
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[0]), (const byte *) "constructor", roots[1],
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_CONFIGURABLE);
+    mal_intrinsic_define_data(vm, module, (const byte *) "Server", roots[1], HTTPS_VISIBLE);
+    roots[2] = mal_value_from_native_function_object(mal_native_function_object_new_with_slots_arity(
+        &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+        mal_intrinsic_ascii(vm, (const byte *) "createServer"), 2, node_https_create_server, &roots[1], 1));
+    mal_intrinsic_define_data(vm, module, (const byte *) "createServer", roots[2], HTTPS_VISIBLE);
+    mal_gc_unroot(&root);
+}
+
 void mal_host_install_node_https(
     MalVm *vm, const MalHostInstallSlot *slots, i32 count,
     const MalHostLaunchContext *launch) {
     (void) launch;
     if (mal_node_module_install_cached(vm, "node:https", slots, count)) return;
     mal_host_install_node_http(vm, nullptr, 0, launch);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) return;
+    mal_host_install_node_net(vm, nullptr, 0, launch);
     if (vm->completion.kind == MAL_COMPLETION_THROW) return;
     enum {
         HTTPS_MODULE,
@@ -148,6 +242,7 @@ void mal_host_install_node_https(
             vm, mal_value_to_object(roots[HTTPS_MODULE]),
             (const byte *) names[i], values[i], HTTPS_VISIBLE);
     }
+    node_https_install_server(vm, mal_value_to_object(roots[HTTPS_MODULE]));
     mal_node_module_publish(vm, "node:https", slots, count, roots[HTTPS_MODULE]);
     mal_gc_unroot(&root);
 }
