@@ -674,6 +674,12 @@ contracts or investigates costs still visible after the string follow-ups.
       closure object the call passes as its callee. Sinking creation into the
       cases that use it, or passing no object when the target never reads its
       callee, would remove most of these allocations.
+- [ ] Create a function's capture environment where its first closure is created.
+      Functions that capture parameters only in some branches allocate the
+      environment on every entry: `remapRuntimeConstantReferences` and
+      `coreAttributeValuesEqual` each allocate about 250,000 in the self-compile,
+      although most of their calls return from a primitive check before any
+      closure exists.
 - [ ] Publish compiled root frames only on paths that can reach a safepoint.
       Small accessors such as the Core store's `instructionKind` and `checkedId`
       link a root frame and clear their GC slots on entry although only their
