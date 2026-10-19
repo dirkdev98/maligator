@@ -4097,8 +4097,19 @@ static MalValue mal_vm_binary_dispatch(MalVm *vm, MalBinaryOp op, MalValue left,
 
             // Spec InstanceofOperator: a callable @@hasInstance method takes
             // the decision (the default lives on Function.prototype).
+            MalKey has_instance_key = mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_HAS_INSTANCE);
+            // %Function.prototype%'s @@hasInstance is non-writable and non-configurable,
+            // so a function inheriting straight from it without an own one uses it.
+            if ((right & MAL_VALUE_CLASS_MASK) == MAL_VALUE_CALLABLE) {
+                const MalObject *callable = mal_value_to_object(right);
+                if (mal_value_from_object(mal_object_prototype(callable)) ==
+                        vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE] &&
+                    !mal_object_get_own(callable, has_instance_key).present) {
+                    return mal_value_new_boolean(mal_vm_ordinary_has_instance(vm, right, left));
+                }
+            }
             MalValue method;
-            if (!mal_vm_get_property(vm, right, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_HAS_INSTANCE), &method)) {
+            if (!mal_vm_get_property(vm, right, has_instance_key, &method)) {
                 return mal_value_new_undefined();
             }
 
@@ -5231,7 +5242,12 @@ bool mal_vm_ordinary_has_instance(MalVm *vm, MalValue target, MalValue value) {
         // that INVOKES a getter-defined `.prototype` and (step 5, ReturnIfAbrupt)
         // propagates a throw. Reading the descriptor's value directly skipped the
         // getter (returning undefined → a spurious TypeError) and swallowed throws.
-        if (!mal_vm_get_property(vm, target, key, &prototype_value)) {
+        MalPropertyLookup own = mal_value_is_proxy_object(target)
+            ? (MalPropertyLookup) {.present = false}
+            : mal_object_get_own(mal_value_to_object(target), key);
+        if (own.present && !(own.desc.flags & MAL_PROPERTY_ACCESSOR)) {
+            prototype_value = own.desc.value;
+        } else if (!mal_vm_get_property(vm, target, key, &prototype_value)) {
             return false;
         }
     }
