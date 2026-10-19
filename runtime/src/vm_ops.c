@@ -4110,6 +4110,13 @@ static MalValue mal_vm_binary_dispatch(MalVm *vm, MalBinaryOp op, MalValue left,
                 return mal_value_new_undefined();
             }
 
+            // %Function.prototype%'s @@hasInstance is non-writable and non-configurable,
+            // so reaching it decides by OrdinaryHasInstance without a call.
+            if (mal_value_is_heap_type(method, MAL_HEAP_NATIVE_FUNCTION_OBJECT) &&
+                ((const MalNativeFunctionObject *) mal_value_to_heap(method))->callback ==
+                    mal_builtin_function_prototype_has_instance) {
+                return mal_value_new_boolean(mal_vm_ordinary_has_instance(vm, right, left));
+            }
             if (mal_value_is_callable(method)) {
                 MalCompletion completion = mal_vm_call_value(vm, method, right, &left, 1);
                 return completion.kind == MAL_COMPLETION_NORMAL

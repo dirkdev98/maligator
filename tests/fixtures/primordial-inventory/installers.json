@@ -57,7 +57,7 @@
 	},
 	{
 		"file": "builtin_function.c",
-		"sha256": "fef7f09578c6ffdf657e10f428f5d7c68350084e797fad46a5dc1b1e2e5e6ca8"
+		"sha256": "29615d720b3ff9866a2b1e15ceae8978f967d39d80e5be61acec36c0615a5fc0"
 	},
 	{
 		"file": "builtin_generator.c",
@@ -729,7 +729,7 @@
 	},
 	{
 		"file": "vm_ops.c",
-		"sha256": "1244713b13ca50be2edcf590424cd877d5f4b0b6bd87ac28179fb2cad67b3355"
+		"sha256": "2c2f9372a418c20e634f4d0f70f988890ec7f33b22f7bf1945783a0a8ece6f49"
 	},
 	{
 		"file": "vm_ops.h",

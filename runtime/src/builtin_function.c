@@ -229,7 +229,7 @@ static MalValue mal_builtin_function_prototype_bind(MalVm *vm, MalValue this_val
     return bound_value;
 }
 
-static MalValue mal_builtin_function_prototype_has_instance(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
+MalValue mal_builtin_function_prototype_has_instance(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     return mal_value_new_boolean(mal_vm_ordinary_has_instance(
         vm,
         this_value,
