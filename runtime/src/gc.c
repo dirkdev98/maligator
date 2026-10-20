@@ -3571,9 +3571,14 @@ static void mal_gc_incremental_safepoint(MalVm *vm) {
         return; // polled for preemption only; nothing owed
     }
 
-    // A collection is due. Decide minor vs. major by the generational cadence.
-    bool major = pressure || (g_gc->collection_index % g_gc->major_every) == 0;
+    // A collection is due. Decide minor vs. major by the generational cadence. Pressure
+    // takes a major only once minors have promoted half a live set since the last one:
+    // until then the old generation holds little garbage, and a live set larger than the
+    // process budget would otherwise pay a futile major for every few chunks it maps.
+    bool major = (pressure && g_gc->promotion_debt >= g_gc->last_major_live_bytes / 2) ||
+        (g_gc->collection_index % g_gc->major_every) == 0;
     if (!major) {
+        g_gc->process_pressure = false;
         // Minor: STW-inline, exactly as today (short by construction).
         g_gc->collection_index++;
         u64 start_ns = mal_gc_pause_begin(vm, false);
