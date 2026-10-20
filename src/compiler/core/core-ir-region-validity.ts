@@ -659,7 +659,8 @@ function verifySpecialization(
 	program: SealedCoreProgram,
 	plan: CoreOptimizationPlan,
 	selection: CorePlanSpecialization,
-	ids: Array<string>,
+	live: ReadonlySet<CoreFunctionId>,
+	ids: Set<string>,
 	claimedInstructions: Map<
 		CoreFunctionId,
 		Map<
@@ -674,15 +675,15 @@ function verifySpecialization(
 	localCandidates: CoreLocalCandidateCache,
 	control: () => CoreControlFlow,
 ): void {
-	if (ids.includes(selection.id)) fail(`duplicate specialization id ${selection.id}`);
-	ids.push(selection.id);
+	if (ids.has(selection.id)) fail(`duplicate specialization id ${selection.id}`);
+	ids.add(selection.id);
 	if (!coreTargetSupportsSpecialization(selection.kind)) {
 		fail(`${selection.id} has no target implementation for ${selection.kind}`);
 	}
 	if (selection.target !== "native" || selection.fallback !== "canonical-core") {
 		fail(`${selection.id} does not retain the canonical generic fallback`);
 	}
-	if (!plan.liveFunctions.includes(selection.function)) {
+	if (!live.has(selection.function)) {
 		fail(`${selection.id} belongs to dead function ${selection.function}`);
 	}
 	const fn = program.function(selection.function);
@@ -777,7 +778,7 @@ function verifySpecialization(
 			fail(`${selection.id} does not anchor a call`);
 		}
 		for (const target of selection.targetFunctions) {
-			if (!plan.liveFunctions.includes(target)) {
+			if (!live.has(target)) {
 				fail(`${selection.id} targets dead function ${target}`);
 			}
 		}
@@ -1641,8 +1642,7 @@ function verifySpecialization(
 			selection.composition !== "exclusive" ||
 			selection.representation !== "guarded-function-call-flattening" ||
 			selection.semanticProtectors.length !== 0 ||
-			(expectedTargets[0] !== undefined &&
-				!plan.liveFunctions.includes(expectedTargets[0]))
+			(expectedTargets[0] !== undefined && !live.has(expectedTargets[0]))
 		) {
 			fail(`${selection.id} has an invalid Function.call certificate`);
 		}
@@ -1861,7 +1861,8 @@ export function verifyCoreOptimizationPlan(
 	}
 
 	const blockProofs = verifyBlockOrders(program, plan);
-	const ids: Array<string> = [];
+	const live = new Set(plan.liveFunctions);
+	const ids = new Set<string>();
 	const claimedInstructions = new Map<
 		CoreFunctionId,
 		Map<
@@ -1902,6 +1903,7 @@ export function verifyCoreOptimizationPlan(
 			program,
 			plan,
 			selection,
+			live,
 			ids,
 			claimedInstructions,
 			blockProofs.get(selection.function)!,
@@ -1935,7 +1937,7 @@ export function verifyCoreOptimizationPlan(
 		if (directCallbackSites.has(key))
 			fail(`direct callback callsite ${key} is duplicated`);
 		directCallbackSites.add(key);
-		if (!plan.liveFunctions.includes(callback.caller)) {
+		if (!live.has(callback.caller)) {
 			fail(`direct callback callsite ${key} is dead`);
 		}
 		const caller = program.function(callback.caller);
@@ -1952,7 +1954,7 @@ export function verifyCoreOptimizationPlan(
 		) {
 			fail(`direct callback callsite ${key} has no current exact target proof`);
 		}
-		if (!plan.liveFunctions.includes(callback.target)) {
+		if (!live.has(callback.target)) {
 			fail(`direct callback callsite ${key} targets dead function ${callback.target}`);
 		}
 	}
@@ -1980,7 +1982,7 @@ export function verifyCoreOptimizationPlan(
 		}
 	>();
 	for (const entry of plan.directEntries) {
-		if (!plan.liveFunctions.includes(entry.function)) {
+		if (!live.has(entry.function)) {
 			fail(`direct entry targets dead function ${entry.function}`);
 		}
 		const fn = program.function(entry.function);
@@ -2132,7 +2134,7 @@ export function verifyCoreOptimizationPlan(
 						(observation.readsCount ||
 							observation.indices.length > 0 ||
 							observation.restStarts.length > 0)) ||
-					!plan.liveFunctions.includes(site.caller) ||
+					!live.has(site.caller) ||
 					!caller.isInstructionLive(site.instruction) ||
 					!blockProofs
 						.get(site.caller)!
@@ -2204,8 +2206,7 @@ export function verifyCoreOptimizationPlan(
 			targets.add(entry.function);
 			if (targets.size > 4) fail(`callsite ${key} selects too many direct entries`);
 			callSites.set(key, { fieldObject: site.fieldObject, targets });
-			if (!plan.liveFunctions.includes(site.caller))
-				fail(`direct entry callsite ${key} is dead`);
+			if (!live.has(site.caller)) fail(`direct entry callsite ${key} is dead`);
 			const caller = program.function(site.caller);
 			if (
 				(site.fieldObject === undefined) !==

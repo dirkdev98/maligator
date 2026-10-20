@@ -1173,7 +1173,8 @@ describe("late Core specialization plan", () => {
 		expect(plan.directEntries.map((entry) => entry.function)).toEqual([callee]);
 		expect(plan.directEntries[0]!.callSites).toHaveLength(4);
 		expect(localScans).toBe(0);
-		expect(plan.statistics.discovery.attempted).toBe(1);
+		expect(plan.statistics.selectedByKind["guarded-direct-call"]).toBe(4);
+		expect(plan.statistics.discovery.attempted).toBe(5);
 		verifyCoreOptimizationPlan(program.seal(), plan, context);
 	});
 

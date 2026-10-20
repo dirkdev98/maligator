@@ -301,6 +301,16 @@ export class CoreTransformCandidateService {
 	}
 
 	offer(candidate: CoreTransformCandidate): boolean {
+		if (!this.consider(candidate)) return false;
+		pushCandidate(this.#queue, candidate);
+		return true;
+	}
+
+	/**
+	 * Count a candidate whose caller applies or declines it immediately instead of
+	 * queueing it; a zero-cost candidate is admitted even after the budget is spent.
+	 */
+	consider(candidate: CoreTransformCandidate): boolean {
 		const caller =
 			this.#known.get(candidate.caller) ??
 			new Map<CoreInstructionId, Array<CoreTransformCandidate>>();
@@ -309,7 +319,6 @@ export class CoreTransformCandidateService {
 		known.push(candidate);
 		caller.set(candidate.site, known);
 		this.#known.set(candidate.caller, caller);
-		pushCandidate(this.#queue, candidate);
 		this.#considered++;
 		return true;
 	}

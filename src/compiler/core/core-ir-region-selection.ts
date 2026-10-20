@@ -128,7 +128,7 @@ interface PendingDirectEntry {
 type PendingCandidate = CorePendingOptimizationCandidate | PendingDirectEntry;
 
 interface CorePlanningOpportunity extends CoreTransformDiscoveryCost {
-	readonly kind: "local" | "direct-entry" | "guarded-call";
+	readonly kind: "local" | "direct-entry" | "guarded-call" | "exact-call";
 	readonly priorityScore: number;
 	readonly resolve: () => ReadonlyArray<PendingCandidate>;
 }
@@ -1213,11 +1213,14 @@ function guardedCallOpportunities(
 			) {
 				continue;
 			}
+			const exact = !site.open && targetFunctions.length === 1;
+			const generatedCode = exact ? 0 : targetFunctions.length;
+			const compilerWork = exact ? 0 : 1;
 			candidates.push({
-				kind: "guarded-call",
+				kind: exact ? "exact-call" : "guarded-call",
 				caller,
-				generatedCodeCost: targetFunctions.length,
-				compilerWorkCost: 1,
+				generatedCodeCost: generatedCode,
+				compilerWorkCost: compilerWork,
 				priorityScore: -(loopBlocks.has(fn.instructionBlock(site.instruction)) ? 32 : 8),
 				resolve: () => {
 					const materialize = (): CorePlanSpecialization =>
@@ -1229,10 +1232,7 @@ function guardedCallOpportunities(
 							claimedInstructions: Object.freeze([site.instruction]),
 							ordinaryBlocks: Object.freeze([fn.instructionBlock(site.instruction)]),
 							exceptionalBlocks: Object.freeze([]),
-							representation:
-								!site.open && targetFunctions.length === 1
-									? "exact-function"
-									: "finite-function-set",
+							representation: exact ? "exact-function" : "finite-function-set",
 							requiredRepresentations: Object.freeze([]),
 							target: "native",
 							fallback: "canonical-core",
@@ -1243,11 +1243,7 @@ function guardedCallOpportunities(
 								mode: "per-use" as const,
 							}),
 							composition: "overlay",
-							cost: Object.freeze({
-								generatedCode: targetFunctions.length,
-								compilerWork: 1,
-								runtimeBenefit: 8,
-							}),
+							cost: Object.freeze({ generatedCode, compilerWork, runtimeBenefit: 8 }),
 						});
 					return [
 						{
@@ -1266,8 +1262,8 @@ function guardedCallOpportunities(
 								priorityClass: 1,
 								priorityScore: 0,
 								targets: targetFunctions,
-								generatedCodeCost: targetFunctions.length,
-								compilerWorkCost: 1,
+								generatedCodeCost: generatedCode,
+								compilerWorkCost: compilerWork,
 								expansive: false,
 							},
 						},
@@ -1939,6 +1935,27 @@ export function buildCoreOptimizationPlan(
 	const specializations: Array<CorePlanSpecialization> = [];
 	const directEntriesByFunction = new Map<CoreFunctionId, Array<CoreDirectEntryPlan>>();
 	for (const opportunity of service.orderDiscovery(opportunities)) {
+		// A proven single target only replaces dispatch, so it neither grows code nor
+		// competes with speculative specializations for the program budget.
+		if (opportunity.kind === "exact-call") {
+			discovery.attempted++;
+			for (const candidate of opportunity.resolve()) {
+				if (isPendingDirectEntry(candidate) || !service.consider(candidate.budget))
+					continue;
+				increment(discoveredByKind, candidate.budget.kind);
+				if (conflicts(candidate.claims, claimed)) {
+					service.recordDeclined("overlap");
+					increment(declinedByPlanReason, "overlap");
+					continue;
+				}
+				service.recordApplied(candidate.budget);
+				increment(selectedByKind, candidate.budget.kind);
+				claim(candidate.claims, claimed);
+				specializations.push(candidate.materialize());
+				options.onMaterialize?.();
+			}
+			continue;
+		}
 		const cost =
 			opportunity.kind === "local" && provenLocal.has(opportunity.caller)
 				? { ...opportunity, compilerWorkCost: 0 }

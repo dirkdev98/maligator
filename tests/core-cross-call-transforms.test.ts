@@ -2111,10 +2111,10 @@ describe("bounded Core cross-call transforms", () => {
 		verifyCoreProgram(optimized!, { stage: "pre-target" });
 	});
 
-	it("keeps the generic call and records its decision only in the plan", () => {
+	it("keeps the call uninlined and records its exact target only in the plan", () => {
 		const program = analysisProgram();
 		const caller = appendCaller(program, 1);
-		appendLeaf(program);
+		const leaf = appendLeaf(program);
 		const result = runTransforms(program, TINY_CODE_BUDGET);
 		const fn = program.function(caller.function);
 		const [call] = callInstructions(program, caller.function);
@@ -2128,11 +2128,18 @@ describe("bounded Core cross-call transforms", () => {
 		expect(attributes.callReturnRepresentation).toBeUndefined();
 		expect(result.statistics.considered).toBe(0);
 		expect(result.statistics.declinedByReason["generated-code-cost"] ?? 0).toBe(0);
-		expect(result.plan.statistics.discovery.attempted).toBe(0);
 		expect(
 			result.plan.statistics.discovery.skippedByReason["generated-code-cost"],
 		).toBeGreaterThan(0);
-		expect(projectCoreSpecializationRecipes(result.plan.recipes)).toEqual([]);
+		expect(projectCoreSpecializationRecipes(result.plan.recipes)).toEqual([
+			expect.objectContaining({
+				kind: "guarded-direct-call",
+				representation: "exact-function",
+				anchors: [call],
+				targetFunctions: [leaf.function],
+			}),
+		]);
+		expect(result.plan.statistics.generatedCodeConsumed).toBe(0);
 	});
 
 	it("shares the whole-program generated-code budget with late specialization", () => {
@@ -2170,7 +2177,21 @@ describe("bounded Core cross-call transforms", () => {
 		});
 		expect(callInstructions(program, inlinedCaller.function)).toEqual([]);
 		expect(callInstructions(program, specializedCaller.function)).toHaveLength(1);
-		expect(projectCoreSpecializationRecipes(result.plan.recipes)).toEqual([]);
+		expect(
+			projectCoreSpecializationRecipes(result.plan.recipes).map(
+				({ kind, representation, function: functionId }) => ({
+					kind,
+					representation,
+					function: functionId,
+				}),
+			),
+		).toEqual([
+			{
+				kind: "guarded-direct-call",
+				representation: "exact-function",
+				function: specializedCaller.function,
+			},
+		]);
 		expect(result.statistics.generatedCodeConsumed).toBe(1);
 		expect(
 			result.report
@@ -2189,7 +2210,7 @@ describe("bounded Core cross-call transforms", () => {
 		).get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, { scope: "program" }).kinds;
 		for (const id of program.functionIds())
 			expect(refreshed.kinds.summary(id)).toEqual(fresh.summary(id));
-		expect(result.plan.statistics.discovery.attempted).toBe(0);
+		expect(result.plan.statistics.discovery.attempted).toBe(1);
 		expect(
 			result.plan.statistics.discovery.skippedByReason["generated-code-cost"],
 		).toBeGreaterThan(0);
