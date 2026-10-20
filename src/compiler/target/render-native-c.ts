@@ -10488,6 +10488,14 @@ function emitInstruction(
 								: `mal_builtin_parse_float_string(${source})`;
 						guard = guards.length === 0 ? "true" : guards.join(" && ");
 						direct = [storeNumber(instruction.dst, expression), poll()];
+					} else if (instruction.operation === "Array.isArray" && first !== undefined) {
+						// Only a proxy needs IsArray's unwrapping and its revoked-proxy TypeError.
+						const input = boxedOperand(first);
+						guard = `!mal_value_is_heap_type(${input}, MAL_HEAP_PROXY_OBJECT)`;
+						direct = [
+							storeBoolean(instruction.dst, `mal_value_is_array_object(${input})`),
+							poll(),
+						];
 					} else if (
 						["isNaN", "isFinite"].includes(instruction.operation) &&
 						first !== undefined
