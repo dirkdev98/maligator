@@ -74,16 +74,14 @@ const instructions: Array<BytecodeInstruction> = [
 	},
 	// Adding y transitions the source object away from the certified {x} shape.
 	{ opcode: "STORE_PROPERTY_STATIC", object: 5, value: 2, stringIndex: 1, icIndex: 3 },
+	// The {y, x} object holds x at slot 1, so neither the {x} row nor its slot key matches.
 	{
 		opcode: "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT",
 		dst: 9,
-		object: 5,
+		object: 7,
 		stringIndex: 0,
 		icIndex: 4,
-		candidates: [
-			{ shapeFunctionIndex: 0, shapeCacheIndex: 1, slot: 0 },
-			{ shapeFunctionIndex: 0, shapeCacheIndex: 2, slot: 1 },
-		],
+		candidates: [{ shapeFunctionIndex: 0, shapeCacheIndex: 1, slot: 0 }],
 	},
 	{ opcode: "CREATE_NUMBER", dst: 11, value: 50 },
 	{

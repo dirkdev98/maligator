@@ -2599,8 +2599,16 @@ function emitCompiledVariant(
 								}
 							: undefined;
 					},
+					// A selected region or numeric worker reads its body better than per-load probes.
 					specialized:
-						worker !== undefined || (nativeContract.literalSwitches?.length ?? 0) > 0,
+						worker !== undefined ||
+						(nativeContract.literalSwitches?.length ?? 0) > 0 ||
+						nativeContract.specializations.length > 0 ||
+						nativeContract.regionActions.length > 0 ||
+						storage.numberRecordRegions.length > 0 ||
+						storage.propertyReadRegions.length > 0 ||
+						storage.propertyReadPairs.length > 0 ||
+						storage.propertyProjections.length > 0,
 					signature,
 					fullSymbol,
 					fullArguments:

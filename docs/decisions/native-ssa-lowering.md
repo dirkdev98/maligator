@@ -179,9 +179,9 @@ happened by then and nothing in the fast entry can allocate, so it needs no fram
 row, root frame or safepoint. A canonical fast body is also exported as a `_try`
 function, and a fast body may call another one's `_try` at a proven exact call
 site. Recursive bodies never qualify, since a body becomes available only after
-its callees do. Entries a numeric worker or literal-switch dispatch already
-serves, and entries whose operator proofs rule out Numbers, keep only their full
-entry.
+its callees do. Entries a numeric worker, literal-switch dispatch, or selected
+region already serves, and entries whose operator proofs rule out Numbers, keep
+only their full entry.
 
 A nested function whose object only ever reaches the callee of exact calls is a
 direct closure: the creating activation stores an empty marker in its binding

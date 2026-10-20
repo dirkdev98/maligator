@@ -57,7 +57,7 @@ int main(void) {
     }
     if (vm.completion.kind != MAL_COMPLETION_NORMAL ||
         !mal_ops_is_number(result) ||
-        mal_ops_number_as_f64(result) != 266.0) {
+        mal_ops_number_as_f64(result) != 267.0) {
         fprintf(
             stderr,
             "known-own-slot result kind=%d numeric=%d value=%g\n",
