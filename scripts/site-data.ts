@@ -259,6 +259,20 @@ function record(value: unknown): Record<string, unknown> | undefined {
 		: undefined;
 }
 
+// The first GitHub-runner baseline predates `source.recorder`; its source digest names it.
+const LEGACY_CI_SOURCE_DIGESTS: ReadonlySet<string> = new Set([
+	"4449052bf96a94e355771ec49fc4318ea42393aaea1e2eb4f4429a8dc1d4c391",
+]);
+
+/** Baselines measured on CI runners, which the site's workstation series leaves out. */
+export function recordedOnCi(value: unknown): boolean {
+	const source = record(record(value)?.source);
+	return (
+		source?.recorder === "github-actions" ||
+		(typeof source?.digest === "string" && LEGACY_CI_SOURCE_DIGESTS.has(source.digest))
+	);
+}
+
 function benchmarkSource(value: unknown): BenchmarkSource | undefined {
 	const source = record(record(value)?.source);
 	if (typeof source?.commit !== "string" || !/^[a-f0-9]{40}$/i.test(source.commit)) {
@@ -345,7 +359,7 @@ export function collectJavascriptHistory(
 ): Array<JavascriptPoint> {
 	const committed: Array<JavascriptPoint> = changesOnly<JavascriptPoint>(
 		revisions.flatMap(({ commit, date, value }) => {
-			const metrics = javascriptMetricsForSite(value);
+			const metrics = recordedOnCi(value) ? undefined : javascriptMetricsForSite(value);
 			return metrics === undefined
 				? []
 				: [
@@ -359,7 +373,9 @@ export function collectJavascriptHistory(
 		}),
 		javascriptSiteMetrics,
 	);
-	const currentMetrics = javascriptMetricsForSite(current);
+	const currentMetrics = recordedOnCi(current)
+		? undefined
+		: javascriptMetricsForSite(current);
 	const latest = committed.at(-1);
 	if (
 		currentMetrics !== undefined &&
@@ -401,7 +417,7 @@ export function collectSelfCompileHistory(
 				(
 					revision,
 				): revision is GitRevision<BenchmarkFile & { selfCompile: SelfCompileMetrics }> =>
-					revision.value.selfCompile !== undefined,
+					revision.value.selfCompile !== undefined && !recordedOnCi(revision.value),
 			)
 			.map(({ commit, date, value }) => ({
 				commit: commit.slice(0, 8),
@@ -411,7 +427,7 @@ export function collectSelfCompileHistory(
 			})),
 		selfCompileMetrics,
 	);
-	const currentMetrics = current.selfCompile;
+	const currentMetrics = recordedOnCi(current) ? undefined : current.selfCompile;
 	if (currentMetrics !== undefined) {
 		const latest = committed.at(-1);
 		const comparable = latest === undefined ? undefined : selfCompileMetrics(latest);

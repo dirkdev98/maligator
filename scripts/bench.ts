@@ -312,6 +312,8 @@ interface BenchmarkSnapshot {
 		readonly digest: string;
 		readonly benchmarkDigest: string;
 		readonly configurationDigest: string;
+		/** Set on GitHub runners, whose results the website keeps out of the workstation series. */
+		readonly recorder?: "github-actions";
 	};
 	javascript?: JavascriptMetrics;
 	http?: HttpMetrics;
@@ -392,6 +394,9 @@ function benchmarkSource(): NonNullable<BenchmarkSnapshot["source"]> {
 				selfCompile: SELF_COMPILE_CONFIG,
 			}),
 		),
+		...(process.env.GITHUB_ACTIONS === "true"
+			? { recorder: "github-actions" as const }
+			: {}),
 	});
 }
 

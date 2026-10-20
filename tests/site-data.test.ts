@@ -260,6 +260,72 @@ test("self-compile history carries measured source only on its unchanged metric 
 	});
 });
 
+test("benchmark history leaves out baselines measured on CI runners", () => {
+	const workstation = { commit: "1".repeat(40), dirty: false };
+	const runner = { ...workstation, recorder: "github-actions" };
+	const legacyRunner = {
+		...workstation,
+		digest: "4449052bf96a94e355771ec49fc4318ea42393aaea1e2eb4f4429a8dc1d4c391",
+	};
+	const revisions = [
+		{
+			commit: "aaaaaaaa1111",
+			date: "2026-08-25T10:00:00Z",
+			value: javascriptBaseline(1_300, { source: workstation }),
+		},
+		{
+			commit: "bbbbbbbb2222",
+			date: "2026-08-26T10:00:00Z",
+			value: javascriptBaseline(900, { source: legacyRunner }),
+		},
+		{
+			commit: "cccccccc3333",
+			date: "2026-08-27T10:00:00Z",
+			value: javascriptBaseline(1_100, { source: workstation }),
+		},
+	];
+	const points = collectJavascriptHistory(
+		revisions,
+		javascriptBaseline(800, { source: runner }),
+		"dddddddd",
+		new Date("2026-08-28T10:00:00Z"),
+	);
+	expect(
+		points.map(({ commit, closedCompiledMs }) => [commit, closedCompiledMs]),
+	).toEqual([
+		["aaaaaaaa", 1_300],
+		["cccccccc", 1_100],
+	]);
+	const selfCompile: SelfCompileMetrics = {
+		world: "closed",
+		maligatorMs: 1_000,
+		nodeMs: 800,
+		maligatorPhases: { graphMs: 10, semanticMs: 20, emitMs: 30, writeMs: 40 },
+		nodePhases: { graphMs: 5, semanticMs: 10, emitMs: 15, writeMs: 20 },
+		runs: 5,
+		units: 3,
+		maligatorCodeUnits: 100,
+		nodeCodeUnits: 100,
+		platform: "linux",
+		arch: "x64",
+		nodeVersion: "v26.12.0",
+	};
+	expect(
+		collectSelfCompileHistory(
+			[
+				{
+					commit: "eeeeeeee4444",
+					date: "2026-08-29T10:00:00Z",
+					value: { selfCompile, source: runner },
+				},
+			],
+			{ selfCompile, source: runner },
+			"ffffffff",
+			new Date("2026-08-30T10:00:00Z"),
+		),
+	).toEqual([]);
+});
+
 test("Test262 site summary keeps skips separate and folds all failure modes", () => {
 	expect(
 		summarizeTest262({

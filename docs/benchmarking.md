@@ -19,6 +19,9 @@ retains the exact revision, runner identity, plan, log, snapshot, and updated ba
 Download and review the successful run's artifact before committing its baseline;
 the workflow does not push changes. A new baseline on a different host does not
 establish a performance improvement against the previous host's results.
+Snapshots measured on GitHub runners record `source.recorder: "github-actions"`,
+and the website's benchmark history leaves them out so its series stays on one
+workstation.
 
 ## Performance entry points
 
