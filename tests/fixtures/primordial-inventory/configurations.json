@@ -6,11 +6,11 @@
 			"platform": "darwin",
 			"arch": "arm64",
 			"source": {
-				"revision": "e2407fd498f7e3a21655f97a3e3399a48c6cb321",
-				"digest": "3a2aa283b1b0b7881fc99256eb0a829c4dc6095abaffc88ff98660a5b81ac7ad",
+				"revision": "a148ae9d9354ada07f374d837e96f0690ea2e596",
+				"digest": "8cf079689b88f09f5da762582891f3163d81065b62bba84cf6b2884d1b2aa60c",
 				"dirty": false,
-				"files": 3694,
-				"installerSha256": "aa10f387b726f1e628ac2f2ed55fe1165a36ecbbb2d54acb76cf6a10c26508dc"
+				"files": 3702,
+				"installerSha256": "ef56a12a61cf46d61228a4ab64a980900886e0c5c61439c122d2112a4ef34259"
 			},
 			"modes": [
 				{
@@ -37,7 +37,7 @@
 				},
 				{
 					"mode": "full",
-					"sha256": "e1531bc589d750a97a41eb1f0be9358e5949b8964228a368aff9c6d369f386f3",
+					"sha256": "36f4b979d3f84e36a2a4f4197137c6eb03e56dd44f249c99002a9040b023ec7b",
 					"phases": [
 						{
 							"phase": "language-initialized",
@@ -49,8 +49,8 @@
 						},
 						{
 							"phase": "host-installed",
-							"nodes": 2993,
-							"descriptors": 9945,
+							"nodes": 3034,
+							"descriptors": 10070,
 							"repeatedOwnKeys": [
 								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
 							]
@@ -59,7 +59,7 @@
 				},
 				{
 					"mode": "mutable",
-					"sha256": "afca52e209ae61dfbc4aac9cf3d03b804527bf623fe7cb1dcd5ede40455a8774",
+					"sha256": "fbf7104c51ec489b17fa15bda5aed68ec79926881101acbb67f8bb4b53ddf0cf",
 					"phases": [
 						{
 							"phase": "language-initialized",
@@ -69,15 +69,15 @@
 						},
 						{
 							"phase": "host-installed",
-							"nodes": 2989,
-							"descriptors": 9936,
+							"nodes": 3030,
+							"descriptors": 10061,
 							"repeatedOwnKeys": []
 						}
 					]
 				},
 				{
 					"mode": "node",
-					"sha256": "5a2f08f2c1fbad788b3fe13b732b5fdf44b05dbedb83821926323f7fbbc8ff71",
+					"sha256": "274d8640a58c15cd82f3909f4d0c4d25e506b50837d507bf95f278ee7aadd76f",
 					"phases": [
 						{
 							"phase": "language-initialized",
@@ -89,8 +89,8 @@
 						},
 						{
 							"phase": "host-installed",
-							"nodes": 2518,
-							"descriptors": 8535,
+							"nodes": 2521,
+							"descriptors": 8544,
 							"repeatedOwnKeys": [
 								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
 							]
@@ -121,7 +121,7 @@
 				},
 				{
 					"mode": "diagnostic",
-					"sha256": "12b5ccb4fa0d3b0e953c8566d8c6b55bdd82525fbaf28ae2b69bc342ef329ef2",
+					"sha256": "8a673bea1e0c72b09e0670ed67229f46f4d30ddeb1cfd3fdad242617095d0930",
 					"phases": [
 						{
 							"phase": "language-initialized",
@@ -133,8 +133,8 @@
 						},
 						{
 							"phase": "host-installed",
-							"nodes": 3001,
-							"descriptors": 9975,
+							"nodes": 3042,
+							"descriptors": 10100,
 							"repeatedOwnKeys": [
 								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
 							]
@@ -143,7 +143,7 @@
 				},
 				{
 					"mode": "no-eval",
-					"sha256": "e1531bc589d750a97a41eb1f0be9358e5949b8964228a368aff9c6d369f386f3",
+					"sha256": "36f4b979d3f84e36a2a4f4197137c6eb03e56dd44f249c99002a9040b023ec7b",
 					"phases": [
 						{
 							"phase": "language-initialized",
@@ -155,8 +155,8 @@
 						},
 						{
 							"phase": "host-installed",
-							"nodes": 2993,
-							"descriptors": 9945,
+							"nodes": 3034,
+							"descriptors": 10070,
 							"repeatedOwnKeys": [
 								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
 							]
@@ -165,7 +165,7 @@
 				},
 				{
 					"mode": "no-realms",
-					"sha256": "9795f19a1350c690be7e83ea4f90783263d1585b51ec9bd608ff49e336255719",
+					"sha256": "81dbd998f1772dd7f4c361794d97c405f9433c72a3f9e052af4b811a4c99ffea",
 					"phases": [
 						{
 							"phase": "language-initialized",
@@ -177,8 +177,8 @@
 						},
 						{
 							"phase": "host-installed",
-							"nodes": 2989,
-							"descriptors": 9933,
+							"nodes": 3030,
+							"descriptors": 10058,
 							"repeatedOwnKeys": [
 								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
 							]
@@ -187,7 +187,7 @@
 				},
 				{
 					"mode": "no-regexp",
-					"sha256": "5b5b4969e2e8e42f70defb29d2b086e5e760af4a7d87b2495ac6068abea692fd",
+					"sha256": "30203829d5879d53b8d536dd7bc0b44fe6c18808bb4937f4f16baf8b1e5d2a6b",
 					"phases": [
 						{
 							"phase": "language-initialized",
@@ -199,8 +199,8 @@
 						},
 						{
 							"phase": "host-installed",
-							"nodes": 2946,
-							"descriptors": 9789,
+							"nodes": 2987,
+							"descriptors": 9914,
 							"repeatedOwnKeys": [
 								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
 							]
@@ -209,7 +209,7 @@
 				},
 				{
 					"mode": "no-temporal",
-					"sha256": "381beb39d987ddca8b34086cfc731620f662ed8d8645b12a2bd12f70b6fc5cc5",
+					"sha256": "73350d6b036afd0044433b692036c0bfacfc46b1383b2a6600f260b2d47703df",
 					"phases": [
 						{
 							"phase": "language-initialized",
@@ -221,8 +221,8 @@
 						},
 						{
 							"phase": "host-installed",
-							"nodes": 2749,
-							"descriptors": 9215,
+							"nodes": 2790,
+							"descriptors": 9340,
 							"repeatedOwnKeys": [
 								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
 							]
@@ -231,7 +231,7 @@
 				},
 				{
 					"mode": "no-intl",
-					"sha256": "5f7e48e0aed5a65de22f2ba93d342980103564a01546acd9ea1efdcac7f7fd0e",
+					"sha256": "8f6dbbc7e49cc451b2c912b8ed4bc0fa84fc690359a9d56c20e0eadce89bb6dd",
 					"phases": [
 						{
 							"phase": "language-initialized",
@@ -243,8 +243,8 @@
 						},
 						{
 							"phase": "host-installed",
-							"nodes": 2917,
-							"descriptors": 9724,
+							"nodes": 2958,
+							"descriptors": 9849,
 							"repeatedOwnKeys": [
 								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
 							]
@@ -253,7 +253,7 @@
 				},
 				{
 					"mode": "intl-collator",
-					"sha256": "c87f1d81ba0288fd5d39d82d66dcae5412864601a9188469c74948d2935b6ac4",
+					"sha256": "8efef58c578c76394844d3de30272a593231f654ac854e6bd9ef3bd4a66b06cc",
 					"phases": [
 						{
 							"phase": "language-initialized",
@@ -265,8 +265,8 @@
 						},
 						{
 							"phase": "host-installed",
-							"nodes": 2943,
-							"descriptors": 9801,
+							"nodes": 2984,
+							"descriptors": 9926,
 							"repeatedOwnKeys": [
 								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
 							]
@@ -275,7 +275,7 @@
 				},
 				{
 					"mode": "intl-number-format",
-					"sha256": "60e5d1e3e774def07cf6e983c648da3b8429817418387bf29cba2462d9e458ae",
+					"sha256": "1481eca2e5289d6b06dd3e7bc6f8ef2d0381ee5c2fb81f79b79bd11a1faf874a",
 					"phases": [
 						{
 							"phase": "language-initialized",
@@ -287,8 +287,8 @@
 						},
 						{
 							"phase": "host-installed",
-							"nodes": 2943,
-							"descriptors": 9801,
+							"nodes": 2984,
+							"descriptors": 9926,
 							"repeatedOwnKeys": [
 								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
 							]
@@ -297,7 +297,7 @@
 				},
 				{
 					"mode": "intl-date-time-format",
-					"sha256": "110527185a8a473533c1faf61dad7f45ed36c4af61b0ebef95beaebb0e474bcc",
+					"sha256": "fbddfcb9ce6fc392c8f11322824f1bdbd840f26cb7e99ba7f12e7d09669a2b52",
 					"phases": [
 						{
 							"phase": "language-initialized",
@@ -309,8 +309,8 @@
 						},
 						{
 							"phase": "host-installed",
-							"nodes": 2945,
-							"descriptors": 9807,
+							"nodes": 2986,
+							"descriptors": 9932,
 							"repeatedOwnKeys": [
 								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
 							]
@@ -319,7 +319,7 @@
 				},
 				{
 					"mode": "intl-plural-rules",
-					"sha256": "0024126ed756dc9c181c980c9a6db21aaeca596c2d1318e197ee50f297485d3a",
+					"sha256": "d124712b522b84df36d7d3b764d8abb03a1294d0258fba218e105b35017ad805",
 					"phases": [
 						{
 							"phase": "language-initialized",
@@ -331,8 +331,8 @@
 						},
 						{
 							"phase": "host-installed",
-							"nodes": 2943,
-							"descriptors": 9801,
+							"nodes": 2984,
+							"descriptors": 9926,
 							"repeatedOwnKeys": [
 								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
 							]
@@ -341,7 +341,7 @@
 				},
 				{
 					"mode": "intl-list-format",
-					"sha256": "16e422a76b7f7b8d899639e45035eba060fa9188d50b1fff5c62e1a7a68f69cb",
+					"sha256": "b87c27555c310ed9c480880d14ebd23828ad27df2c3c1a61121fda4026dedcfa",
 					"phases": [
 						{
 							"phase": "language-initialized",
@@ -353,8 +353,8 @@
 						},
 						{
 							"phase": "host-installed",
-							"nodes": 2944,
-							"descriptors": 9804,
+							"nodes": 2985,
+							"descriptors": 9929,
 							"repeatedOwnKeys": [
 								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
 							]
@@ -363,7 +363,7 @@
 				},
 				{
 					"mode": "intl-segmenter",
-					"sha256": "732f098ab3a234c8bcb037bb0ea85ebfd5087b381c1105b95f3ca3e4448625af",
+					"sha256": "6b2abd9e47faeb8a96fcb63e64a5cec98ed1d6e68f6f449d1dcb4592d445c62f",
 					"phases": [
 						{
 							"phase": "language-initialized",
@@ -375,8 +375,8 @@
 						},
 						{
 							"phase": "host-installed",
-							"nodes": 2948,
-							"descriptors": 9811,
+							"nodes": 2989,
+							"descriptors": 9936,
 							"repeatedOwnKeys": [
 								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
 							]
@@ -385,7 +385,7 @@
 				},
 				{
 					"mode": "intl-display-names",
-					"sha256": "825fba6bbbf1a06d7e7a318f9f631b54d8cdf6d1a6afe8a0732f0409c645e6d1",
+					"sha256": "e3d799391e2dd0104e596461881061e0966338fb027440c553dc946b5db0c57e",
 					"phases": [
 						{
 							"phase": "language-initialized",
@@ -397,8 +397,8 @@
 						},
 						{
 							"phase": "host-installed",
-							"nodes": 2943,
-							"descriptors": 9801,
+							"nodes": 2984,
+							"descriptors": 9926,
 							"repeatedOwnKeys": [
 								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
 							]
@@ -407,7 +407,7 @@
 				},
 				{
 					"mode": "intl-relative-time-format",
-					"sha256": "807cf66475ec449f52d19d7e9101a3ff6932bb91d63dff5480bf01a17099d760",
+					"sha256": "34695b7f55fbef3588ffbe021f27ac49d41e47ee49a7362634f484088dd45814",
 					"phases": [
 						{
 							"phase": "language-initialized",
@@ -419,8 +419,8 @@
 						},
 						{
 							"phase": "host-installed",
-							"nodes": 2944,
-							"descriptors": 9804,
+							"nodes": 2985,
+							"descriptors": 9929,
 							"repeatedOwnKeys": [
 								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
 							]
@@ -429,7 +429,7 @@
 				},
 				{
 					"mode": "intl-duration-format",
-					"sha256": "610325adb9af8f2bc6785ae82eb51aef86398bdfe387333577ed41b22475aa1f",
+					"sha256": "f482921f845a39e4b15416af631dfa8139e74943ef55d763230c698bc7a09973",
 					"phases": [
 						{
 							"phase": "language-initialized",
@@ -441,8 +441,8 @@
 						},
 						{
 							"phase": "host-installed",
-							"nodes": 2944,
-							"descriptors": 9804,
+							"nodes": 2985,
+							"descriptors": 9929,
 							"repeatedOwnKeys": [
 								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
 							]
@@ -455,11 +455,11 @@
 			"platform": "linux",
 			"arch": "x64",
 			"source": {
-				"revision": "e2407fd498f7e3a21655f97a3e3399a48c6cb321",
-				"digest": "3a2aa283b1b0b7881fc99256eb0a829c4dc6095abaffc88ff98660a5b81ac7ad",
+				"revision": "a148ae9d9354ada07f374d837e96f0690ea2e596",
+				"digest": "8cf079689b88f09f5da762582891f3163d81065b62bba84cf6b2884d1b2aa60c",
 				"dirty": false,
-				"files": 3694,
-				"installerSha256": "aa10f387b726f1e628ac2f2ed55fe1165a36ecbbb2d54acb76cf6a10c26508dc"
+				"files": 3702,
+				"installerSha256": "ef56a12a61cf46d61228a4ab64a980900886e0c5c61439c122d2112a4ef34259"
 			},
 			"modes": [
 				{
@@ -486,7 +486,7 @@
 				},
 				{
 					"mode": "full",
-					"sha256": "8566fc4ed168bfe11c6abc8e9181f1f775421943ffaf4e61ac59231facb0af70",
+					"sha256": "6307c37febe6d122abef904e983966535ac63cab9f966f3b598acac0ba879386",
 					"phases": [
 						{
 							"phase": "language-initialized",
@@ -498,8 +498,8 @@
 						},
 						{
 							"phase": "host-installed",
-							"nodes": 2993,
-							"descriptors": 9934,
+							"nodes": 3034,
+							"descriptors": 10059,
 							"repeatedOwnKeys": [
 								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
 							]
@@ -508,7 +508,7 @@
 				},
 				{
 					"mode": "mutable",
-					"sha256": "9097baf97b8b2a0744f47636b6048b74d7b27ca1fe5f9ad2b3205c85e85f9799",
+					"sha256": "68fc76ec99889950e528f8732cd560fad9c3d1a354cd6dfdc3a917977fdab7fb",
 					"phases": [
 						{
 							"phase": "language-initialized",
@@ -518,15 +518,15 @@
 						},
 						{
 							"phase": "host-installed",
-							"nodes": 2989,
-							"descriptors": 9925,
+							"nodes": 3030,
+							"descriptors": 10050,
 							"repeatedOwnKeys": []
 						}
 					]
 				},
 				{
 					"mode": "node",
-					"sha256": "47c5753d181cebac33e4719e388591b6c0645d5c2d34058f3d5886480960ebed",
+					"sha256": "18835d9700c582e41c880ba32e194b45372b3848525ca2df5f654c7d90c20c57",
 					"phases": [
 						{
 							"phase": "language-initialized",
@@ -538,8 +538,8 @@
 						},
 						{
 							"phase": "host-installed",
-							"nodes": 2518,
-							"descriptors": 8524,
+							"nodes": 2521,
+							"descriptors": 8533,
 							"repeatedOwnKeys": [
 								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
 							]
@@ -570,7 +570,7 @@
 				},
 				{
 					"mode": "diagnostic",
-					"sha256": "f753c12c69ad467d351cddfa20205d68d30fd8671e80caae9907b07e860988f9",
+					"sha256": "7b3cb9c5590ffb019877d5346bd86eb548f1350bc2abe24f28fd758648081503",
 					"phases": [
 						{
 							"phase": "language-initialized",
@@ -582,8 +582,8 @@
 						},
 						{
 							"phase": "host-installed",
-							"nodes": 3001,
-							"descriptors": 9964,
+							"nodes": 3042,
+							"descriptors": 10089,
 							"repeatedOwnKeys": [
 								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
 							]
@@ -592,7 +592,7 @@
 				},
 				{
 					"mode": "no-eval",
-					"sha256": "8566fc4ed168bfe11c6abc8e9181f1f775421943ffaf4e61ac59231facb0af70",
+					"sha256": "6307c37febe6d122abef904e983966535ac63cab9f966f3b598acac0ba879386",
 					"phases": [
 						{
 							"phase": "language-initialized",
@@ -604,8 +604,8 @@
 						},
 						{
 							"phase": "host-installed",
-							"nodes": 2993,
-							"descriptors": 9934,
+							"nodes": 3034,
+							"descriptors": 10059,
 							"repeatedOwnKeys": [
 								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
 							]
@@ -614,7 +614,7 @@
 				},
 				{
 					"mode": "no-realms",
-					"sha256": "c1a9a7e00be80d6058fa6ae407e1ae76d6c40ca4b9cfd66deefaf68727e27aaa",
+					"sha256": "ba257945d41623b0a040c51bf7533bf8e76f947139e2f84d4a3ab91ae9c1032e",
 					"phases": [
 						{
 							"phase": "language-initialized",
@@ -626,8 +626,8 @@
 						},
 						{
 							"phase": "host-installed",
-							"nodes": 2989,
-							"descriptors": 9922,
+							"nodes": 3030,
+							"descriptors": 10047,
 							"repeatedOwnKeys": [
 								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
 							]
@@ -636,7 +636,7 @@
 				},
 				{
 					"mode": "no-regexp",
-					"sha256": "821bc8ce47c4ba584446e18e64a43b7f57964f54697e00c2ecd0044e9d37470e",
+					"sha256": "719f26c8c75ceee64c4c360a99dec6ac0d07357d6eb116d5f1da6d60742f88fb",
 					"phases": [
 						{
 							"phase": "language-initialized",
@@ -648,8 +648,8 @@
 						},
 						{
 							"phase": "host-installed",
-							"nodes": 2946,
-							"descriptors": 9778,
+							"nodes": 2987,
+							"descriptors": 9903,
 							"repeatedOwnKeys": [
 								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
 							]
@@ -658,7 +658,7 @@
 				},
 				{
 					"mode": "no-temporal",
-					"sha256": "92fbdbc6f23c596f64f5000964539b270810a9d724b1c7baf040bbcd3f9b83e8",
+					"sha256": "70da41f49b2fa7b3d744875297e602521be42a5e7a0e32e30a726e5a0b871323",
 					"phases": [
 						{
 							"phase": "language-initialized",
@@ -670,8 +670,8 @@
 						},
 						{
 							"phase": "host-installed",
-							"nodes": 2749,
-							"descriptors": 9204,
+							"nodes": 2790,
+							"descriptors": 9329,
 							"repeatedOwnKeys": [
 								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
 							]
@@ -680,7 +680,7 @@
 				},
 				{
 					"mode": "no-intl",
-					"sha256": "d366615a1706a28c7ce0a79bec2d176cc126995c92d9ae8cc9070a00391e9f9c",
+					"sha256": "27f9e8fa0e224aa761bb1964a7ff77d1e8e092af5c682d0e848baa4d08f333e5",
 					"phases": [
 						{
 							"phase": "language-initialized",
@@ -692,8 +692,8 @@
 						},
 						{
 							"phase": "host-installed",
-							"nodes": 2917,
-							"descriptors": 9713,
+							"nodes": 2958,
+							"descriptors": 9838,
 							"repeatedOwnKeys": [
 								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
 							]
@@ -702,7 +702,7 @@
 				},
 				{
 					"mode": "intl-collator",
-					"sha256": "5224251b841f5d4b5c02f5899f1d693cc209988b536bfcb671a328a5eb977dfa",
+					"sha256": "aa4e3220ade3ee20d75a0626e6f3a86b0c64149c17c98f1aa089d6362dc7278f",
 					"phases": [
 						{
 							"phase": "language-initialized",
@@ -714,8 +714,8 @@
 						},
 						{
 							"phase": "host-installed",
-							"nodes": 2943,
-							"descriptors": 9790,
+							"nodes": 2984,
+							"descriptors": 9915,
 							"repeatedOwnKeys": [
 								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
 							]
@@ -724,7 +724,7 @@
 				},
 				{
 					"mode": "intl-number-format",
-					"sha256": "e19c3b0195c02dc0bb133626e4a99ff2f5fc7fe14a2a84db1e3ad1bdede3ec20",
+					"sha256": "1aaf59cac20748488da83c399b0030036d78d3674085a0ff25346a0c3a72ff86",
 					"phases": [
 						{
 							"phase": "language-initialized",
@@ -736,8 +736,8 @@
 						},
 						{
 							"phase": "host-installed",
-							"nodes": 2943,
-							"descriptors": 9790,
+							"nodes": 2984,
+							"descriptors": 9915,
 							"repeatedOwnKeys": [
 								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
 							]
@@ -746,7 +746,7 @@
 				},
 				{
 					"mode": "intl-date-time-format",
-					"sha256": "20fc01ee1d3302f6a49bb3288d25f0c9f7f500fe24b02aa975c98c4cd1b26f8a",
+					"sha256": "60c24ae55e3b234f6b129572ed5ef92d04b07b8d8aba7b08190334b1f2df2b5b",
 					"phases": [
 						{
 							"phase": "language-initialized",
@@ -758,8 +758,8 @@
 						},
 						{
 							"phase": "host-installed",
-							"nodes": 2945,
-							"descriptors": 9796,
+							"nodes": 2986,
+							"descriptors": 9921,
 							"repeatedOwnKeys": [
 								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
 							]
@@ -768,7 +768,7 @@
 				},
 				{
 					"mode": "intl-plural-rules",
-					"sha256": "ba6a886696736de1d11247ec8fb428789a2d290279bec4c6d262a176487e225b",
+					"sha256": "4ba19799ffcfc8aaaa736ae8422430de86bc3b1c3d86665ac8805592576b8bf4",
 					"phases": [
 						{
 							"phase": "language-initialized",
@@ -780,8 +780,8 @@
 						},
 						{
 							"phase": "host-installed",
-							"nodes": 2943,
-							"descriptors": 9790,
+							"nodes": 2984,
+							"descriptors": 9915,
 							"repeatedOwnKeys": [
 								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
 							]
@@ -790,7 +790,7 @@
 				},
 				{
 					"mode": "intl-list-format",
-					"sha256": "39d899a673cdb01bea8a8ccf0d806aa71d47d072148830972790adc8c43f6b0f",
+					"sha256": "6415d3800ec97793fffda7ad83e89f1a3189d36dab3960e30272beda14a3ec15",
 					"phases": [
 						{
 							"phase": "language-initialized",
@@ -802,8 +802,8 @@
 						},
 						{
 							"phase": "host-installed",
-							"nodes": 2944,
-							"descriptors": 9793,
+							"nodes": 2985,
+							"descriptors": 9918,
 							"repeatedOwnKeys": [
 								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
 							]
@@ -812,7 +812,7 @@
 				},
 				{
 					"mode": "intl-segmenter",
-					"sha256": "e03016e2c3dfaf8fb6579c89c305638f04ac52c36a18625a2e546c0f5256eba3",
+					"sha256": "ce00fa94e64e652a4e6c2f8dec86c56f742b27621b422d05ba4a75f32c892731",
 					"phases": [
 						{
 							"phase": "language-initialized",
@@ -824,8 +824,8 @@
 						},
 						{
 							"phase": "host-installed",
-							"nodes": 2948,
-							"descriptors": 9800,
+							"nodes": 2989,
+							"descriptors": 9925,
 							"repeatedOwnKeys": [
 								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
 							]
@@ -834,7 +834,7 @@
 				},
 				{
 					"mode": "intl-display-names",
-					"sha256": "a9ad702e9245846ac2e965a2900bc4f91db8db4c951d4051aa0a3504c35a9e35",
+					"sha256": "e9708f3ecde6096e47681738fcfebc2195439e5727772e16b9edb8b881afe42c",
 					"phases": [
 						{
 							"phase": "language-initialized",
@@ -846,8 +846,8 @@
 						},
 						{
 							"phase": "host-installed",
-							"nodes": 2943,
-							"descriptors": 9790,
+							"nodes": 2984,
+							"descriptors": 9915,
 							"repeatedOwnKeys": [
 								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
 							]
@@ -856,7 +856,7 @@
 				},
 				{
 					"mode": "intl-relative-time-format",
-					"sha256": "6972f1ffbcfe055fe147c8dab7280a1d12733956d812f4b7aaeb4a76c9d66f24",
+					"sha256": "bd35a317a1f90857e5dd7f297dcc4696c90fdcc8df0387198ab595e0ddb6d578",
 					"phases": [
 						{
 							"phase": "language-initialized",
@@ -868,8 +868,8 @@
 						},
 						{
 							"phase": "host-installed",
-							"nodes": 2944,
-							"descriptors": 9793,
+							"nodes": 2985,
+							"descriptors": 9918,
 							"repeatedOwnKeys": [
 								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
 							]
@@ -878,7 +878,7 @@
 				},
 				{
 					"mode": "intl-duration-format",
-					"sha256": "29119fa247cab17951c5a04b835031fcb15558b317de20662c5f5a3fdcedf0b5",
+					"sha256": "021434573335fec34da8876444a8d04a332283759fe2c8eed3169fcca2c08835",
 					"phases": [
 						{
 							"phase": "language-initialized",
@@ -890,8 +890,8 @@
 						},
 						{
 							"phase": "host-installed",
-							"nodes": 2944,
-							"descriptors": 9793,
+							"nodes": 2985,
+							"descriptors": 9918,
 							"repeatedOwnKeys": [
 								{ "owner": "Array.prototype", "keys": ["[\"length\"]"] }
 							]
@@ -83066,6 +83066,75 @@
 		],
 		[
 			"%MAL_INTRINSIC_NODE_HTTP_MODULE%",
+			{ "string": "WebSocket" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_HTTP_MODULE%",
+			{ "string": "MessageEvent" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_HTTP_MODULE%",
+			{ "string": "CloseEvent" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_HTTP_MODULE%",
 			{ "string": "maxHeaderSize" },
 			[
 				"full",
@@ -98762,6 +98831,30 @@
 		],
 		[
 			"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Duplex",
+			{ "string": "from" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Duplex",
 			{ "string": "toWeb" },
 			[
 				"full",
@@ -98787,6 +98880,54 @@
 		[
 			"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Duplex",
 			{ "string": "fromWeb" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Duplex.from",
+			{ "string": "length" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Duplex.from",
+			{ "string": "name" },
 			[
 				"full",
 				"mutable",
@@ -99554,6 +99695,30 @@
 		],
 		[
 			"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable",
+			{ "string": "wrap" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable",
 			{ "string": "toWeb" },
 			[
 				"full",
@@ -99819,6 +99984,30 @@
 		[
 			"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype",
 			{ "string": "read" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype",
+			{ "string": "wrap" },
 			[
 				"full",
 				"mutable",
@@ -100921,6 +101110,54 @@
 			]
 		],
 		[
+			"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.wrap",
+			{ "string": "length" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.wrap",
+			{ "string": "name" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
 			"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype[%Symbol.asyncIterator%]",
 			{ "string": "length" },
 			[
@@ -100994,6 +101231,54 @@
 		],
 		[
 			"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.toWeb",
+			{ "string": "name" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.wrap",
+			{ "string": "length" },
+			[
+				"full",
+				"mutable",
+				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.wrap",
 			{ "string": "name" },
 			[
 				"full",
@@ -195439,6 +195724,98 @@
 		],
 		[
 			"globalThis",
+			{ "string": "MessageEvent" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis",
+			{ "string": "CloseEvent" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis",
+			{ "string": "ErrorEvent" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis",
+			{ "string": "WebSocket" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis",
 			{ "string": "mal" },
 			[
 				"minimal",
@@ -204709,6 +205086,305 @@
 			]
 		],
 		[
+			"globalThis.CloseEvent",
+			{ "string": "length" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.CloseEvent",
+			{ "string": "name" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.CloseEvent",
+			{ "string": "prototype" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.CloseEvent.prototype",
+			{ "string": "constructor" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.CloseEvent.prototype",
+			{ "string": "wasClean" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.CloseEvent.prototype",
+			{ "string": "code" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.CloseEvent.prototype",
+			{ "string": "reason" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.CloseEvent.prototype.code<get>",
+			{ "string": "length" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.CloseEvent.prototype.code<get>",
+			{ "string": "name" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.CloseEvent.prototype.reason<get>",
+			{ "string": "length" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.CloseEvent.prototype.reason<get>",
+			{ "string": "name" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.CloseEvent.prototype.wasClean<get>",
+			{ "string": "length" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.CloseEvent.prototype.wasClean<get>",
+			{ "string": "name" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
 			"globalThis.CompressionStream",
 			{ "string": "length" },
 			[
@@ -207478,6 +208154,443 @@
 				"full",
 				"mutable",
 				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.ErrorEvent",
+			{ "string": "length" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.ErrorEvent",
+			{ "string": "name" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.ErrorEvent",
+			{ "string": "prototype" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.ErrorEvent.prototype",
+			{ "string": "constructor" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.ErrorEvent.prototype",
+			{ "string": "message" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.ErrorEvent.prototype",
+			{ "string": "filename" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.ErrorEvent.prototype",
+			{ "string": "lineno" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.ErrorEvent.prototype",
+			{ "string": "colno" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.ErrorEvent.prototype",
+			{ "string": "error" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.ErrorEvent.prototype.colno<get>",
+			{ "string": "length" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.ErrorEvent.prototype.colno<get>",
+			{ "string": "name" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.ErrorEvent.prototype.error<get>",
+			{ "string": "length" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.ErrorEvent.prototype.error<get>",
+			{ "string": "name" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.ErrorEvent.prototype.filename<get>",
+			{ "string": "length" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.ErrorEvent.prototype.filename<get>",
+			{ "string": "name" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.ErrorEvent.prototype.lineno<get>",
+			{ "string": "length" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.ErrorEvent.prototype.lineno<get>",
+			{ "string": "name" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.ErrorEvent.prototype.message<get>",
+			{ "string": "length" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.ErrorEvent.prototype.message<get>",
+			{ "string": "name" },
+			[
+				"full",
+				"mutable",
 				"diagnostic",
 				"no-eval",
 				"no-realms",
@@ -210576,6 +211689,443 @@
 				"full",
 				"mutable",
 				"node",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.MessageEvent",
+			{ "string": "length" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.MessageEvent",
+			{ "string": "name" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.MessageEvent",
+			{ "string": "prototype" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.MessageEvent.prototype",
+			{ "string": "constructor" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.MessageEvent.prototype",
+			{ "string": "data" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.MessageEvent.prototype",
+			{ "string": "origin" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.MessageEvent.prototype",
+			{ "string": "lastEventId" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.MessageEvent.prototype",
+			{ "string": "source" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.MessageEvent.prototype",
+			{ "string": "ports" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.MessageEvent.prototype.data<get>",
+			{ "string": "length" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.MessageEvent.prototype.data<get>",
+			{ "string": "name" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.MessageEvent.prototype.lastEventId<get>",
+			{ "string": "length" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.MessageEvent.prototype.lastEventId<get>",
+			{ "string": "name" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.MessageEvent.prototype.origin<get>",
+			{ "string": "length" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.MessageEvent.prototype.origin<get>",
+			{ "string": "name" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.MessageEvent.prototype.ports<get>",
+			{ "string": "length" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.MessageEvent.prototype.ports<get>",
+			{ "string": "name" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.MessageEvent.prototype.source<get>",
+			{ "string": "length" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.MessageEvent.prototype.source<get>",
+			{ "string": "name" },
+			[
+				"full",
+				"mutable",
 				"diagnostic",
 				"no-eval",
 				"no-realms",
@@ -227145,6 +228695,1340 @@
 				"mutable",
 				"node",
 				"web",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket",
+			{ "string": "length" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket",
+			{ "string": "name" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket",
+			{ "string": "prototype" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket",
+			{ "string": "CONNECTING" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket",
+			{ "string": "OPEN" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket",
+			{ "string": "CLOSING" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket",
+			{ "string": "CLOSED" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket.prototype",
+			{ "string": "constructor" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket.prototype",
+			{ "string": "close" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket.prototype",
+			{ "string": "send" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket.prototype",
+			{ "string": "readyState" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket.prototype",
+			{ "string": "bufferedAmount" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket.prototype",
+			{ "string": "url" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket.prototype",
+			{ "string": "extensions" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket.prototype",
+			{ "string": "protocol" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket.prototype",
+			{ "string": "onopen" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket.prototype",
+			{ "string": "onerror" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket.prototype",
+			{ "string": "onclose" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket.prototype",
+			{ "string": "onmessage" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket.prototype",
+			{ "string": "binaryType" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket.prototype",
+			{ "string": "CONNECTING" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket.prototype",
+			{ "string": "OPEN" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket.prototype",
+			{ "string": "CLOSING" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket.prototype",
+			{ "string": "CLOSED" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket.prototype.binaryType<get>",
+			{ "string": "length" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket.prototype.binaryType<get>",
+			{ "string": "name" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket.prototype.binaryType<set>",
+			{ "string": "length" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket.prototype.binaryType<set>",
+			{ "string": "name" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket.prototype.bufferedAmount<get>",
+			{ "string": "length" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket.prototype.bufferedAmount<get>",
+			{ "string": "name" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket.prototype.close",
+			{ "string": "length" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket.prototype.close",
+			{ "string": "name" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket.prototype.extensions<get>",
+			{ "string": "length" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket.prototype.extensions<get>",
+			{ "string": "name" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket.prototype.onclose<get>",
+			{ "string": "length" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket.prototype.onclose<get>",
+			{ "string": "name" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket.prototype.onclose<set>",
+			{ "string": "length" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket.prototype.onclose<set>",
+			{ "string": "name" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket.prototype.onerror<get>",
+			{ "string": "length" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket.prototype.onerror<get>",
+			{ "string": "name" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket.prototype.onerror<set>",
+			{ "string": "length" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket.prototype.onerror<set>",
+			{ "string": "name" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket.prototype.onmessage<get>",
+			{ "string": "length" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket.prototype.onmessage<get>",
+			{ "string": "name" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket.prototype.onmessage<set>",
+			{ "string": "length" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket.prototype.onmessage<set>",
+			{ "string": "name" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket.prototype.onopen<get>",
+			{ "string": "length" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket.prototype.onopen<get>",
+			{ "string": "name" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket.prototype.onopen<set>",
+			{ "string": "length" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket.prototype.onopen<set>",
+			{ "string": "name" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket.prototype.protocol<get>",
+			{ "string": "length" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket.prototype.protocol<get>",
+			{ "string": "name" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket.prototype.readyState<get>",
+			{ "string": "length" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket.prototype.readyState<get>",
+			{ "string": "name" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket.prototype.send",
+			{ "string": "length" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket.prototype.send",
+			{ "string": "name" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket.prototype.url<get>",
+			{ "string": "length" },
+			[
+				"full",
+				"mutable",
+				"diagnostic",
+				"no-eval",
+				"no-realms",
+				"no-regexp",
+				"no-temporal",
+				"no-intl",
+				"intl-collator",
+				"intl-number-format",
+				"intl-date-time-format",
+				"intl-plural-rules",
+				"intl-list-format",
+				"intl-segmenter",
+				"intl-display-names",
+				"intl-relative-time-format",
+				"intl-duration-format"
+			]
+		],
+		[
+			"globalThis.WebSocket.prototype.url<get>",
+			{ "string": "name" },
+			[
+				"full",
+				"mutable",
 				"diagnostic",
 				"no-eval",
 				"no-realms",

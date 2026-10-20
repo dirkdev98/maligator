@@ -44287,6 +44287,51 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_MODULE%\",\"WebSocket\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_MODULE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:http\"]",
+				"%MAL_INTRINSIC_NODE_HTTP_MODULE%",
+				"MAL_INTRINSIC_NODE_HTTP_MODULE",
+				"mal_host_install_node_http:default"
+			],
+			"key": "WebSocket",
+			"kind": "data",
+			"operations": ["globalThis.WebSocket"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_MODULE%\",\"MessageEvent\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_MODULE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:http\"]",
+				"%MAL_INTRINSIC_NODE_HTTP_MODULE%",
+				"MAL_INTRINSIC_NODE_HTTP_MODULE",
+				"mal_host_install_node_http:default"
+			],
+			"key": "MessageEvent",
+			"kind": "data",
+			"operations": ["globalThis.CloseEvent"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_MODULE%\",\"CloseEvent\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_MODULE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_BUILTIN_MODULES%[\"node:http\"]",
+				"%MAL_INTRINSIC_NODE_HTTP_MODULE%",
+				"MAL_INTRINSIC_NODE_HTTP_MODULE",
+				"mal_host_install_node_http:default"
+			],
+			"key": "CloseEvent",
+			"kind": "data",
+			"operations": ["globalThis.CloseEvent"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_MODULE%\",\"maxHeaderSize\"]",
 			"owner": "%MAL_INTRINSIC_NODE_HTTP_MODULE%",
 			"ownerPaths": [
@@ -52707,6 +52752,21 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Duplex\",\"from\"]",
+			"owner": "%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Duplex",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Duplex",
+				"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Duplex.prototype.constructor",
+				"MAL_INTRINSIC_NODE_DUPLEX_CONSTRUCTOR",
+				"mal_host_install_node_stream:Duplex"
+			],
+			"key": "from",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Duplex.from"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Duplex\",\"toWeb\"]",
 			"owner": "%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Duplex",
 			"ownerPaths": [
@@ -52734,6 +52794,26 @@
 			"kind": "data",
 			"operations": ["%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Duplex.fromWeb"],
 			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Duplex.from\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Duplex.from",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Duplex.from"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Duplex.from\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Duplex.from",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Duplex.from"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
 			"decisions": []
 		},
 		{
@@ -53127,6 +53207,21 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable\",\"wrap\"]",
+			"owner": "%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable",
+				"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.constructor",
+				"MAL_INTRINSIC_NODE_READABLE_CONSTRUCTOR",
+				"mal_host_install_node_stream:Readable"
+			],
+			"key": "wrap",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.wrap"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable\",\"toWeb\"]",
 			"owner": "%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable",
 			"ownerPaths": [
@@ -53273,6 +53368,19 @@
 			"key": "read",
 			"kind": "data",
 			"operations": ["%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.read"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype\",\"wrap\"]",
+			"owner": "%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype",
+				"MAL_INTRINSIC_NODE_READABLE_PROTOTYPE"
+			],
+			"key": "wrap",
+			"kind": "data",
+			"operations": ["%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.wrap"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -53826,6 +53934,26 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.wrap\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.wrap",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.wrap"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.wrap\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.wrap",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.wrap"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype[%Symbol.asyncIterator%]\",\"length\"]",
 			"owner": "%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype[%Symbol.asyncIterator%]",
 			"ownerPaths": [
@@ -53863,6 +53991,26 @@
 			"id": "[\"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.toWeb\",\"name\"]",
 			"owner": "%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.toWeb",
 			"ownerPaths": ["%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.toWeb"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.wrap\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.wrap",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.wrap"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.wrap\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.wrap",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.wrap"],
 			"key": "name",
 			"kind": "data",
 			"operations": [],
@@ -121188,6 +121336,66 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"globalThis\",\"MessageEvent\"]",
+			"owner": "globalThis",
+			"ownerPaths": [
+				"MAL_INTRINSIC_GLOBAL_THIS",
+				"globalThis",
+				"globalThis.global",
+				"globalThis.globalThis"
+			],
+			"key": "MessageEvent",
+			"kind": "data",
+			"operations": ["globalThis.CloseEvent"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis\",\"CloseEvent\"]",
+			"owner": "globalThis",
+			"ownerPaths": [
+				"MAL_INTRINSIC_GLOBAL_THIS",
+				"globalThis",
+				"globalThis.global",
+				"globalThis.globalThis"
+			],
+			"key": "CloseEvent",
+			"kind": "data",
+			"operations": ["globalThis.CloseEvent"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis\",\"ErrorEvent\"]",
+			"owner": "globalThis",
+			"ownerPaths": [
+				"MAL_INTRINSIC_GLOBAL_THIS",
+				"globalThis",
+				"globalThis.global",
+				"globalThis.globalThis"
+			],
+			"key": "ErrorEvent",
+			"kind": "data",
+			"operations": ["globalThis.CloseEvent"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis\",\"WebSocket\"]",
+			"owner": "globalThis",
+			"ownerPaths": [
+				"MAL_INTRINSIC_GLOBAL_THIS",
+				"globalThis",
+				"globalThis.global",
+				"globalThis.globalThis"
+			],
+			"key": "WebSocket",
+			"kind": "data",
+			"operations": ["globalThis.WebSocket"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
 			"id": "[\"globalThis\",\"mal\"]",
 			"owner": "globalThis",
 			"ownerPaths": [
@@ -125755,6 +125963,151 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"globalThis.CloseEvent\",\"length\"]",
+			"owner": "globalThis.CloseEvent",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_MODULE%.CloseEvent",
+				"globalThis.CloseEvent",
+				"globalThis.CloseEvent.prototype.constructor",
+				"mal_host_install_node_http:CloseEvent"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.CloseEvent\",\"name\"]",
+			"owner": "globalThis.CloseEvent",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_MODULE%.CloseEvent",
+				"globalThis.CloseEvent",
+				"globalThis.CloseEvent.prototype.constructor",
+				"mal_host_install_node_http:CloseEvent"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.CloseEvent\",\"prototype\"]",
+			"owner": "globalThis.CloseEvent",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_MODULE%.CloseEvent",
+				"globalThis.CloseEvent",
+				"globalThis.CloseEvent.prototype.constructor",
+				"mal_host_install_node_http:CloseEvent"
+			],
+			"key": "prototype",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.CloseEvent.prototype\",\"constructor\"]",
+			"owner": "globalThis.CloseEvent.prototype",
+			"ownerPaths": ["globalThis.CloseEvent.prototype"],
+			"key": "constructor",
+			"kind": "data",
+			"operations": ["globalThis.CloseEvent"],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.CloseEvent.prototype\",\"wasClean\"]",
+			"owner": "globalThis.CloseEvent.prototype",
+			"ownerPaths": ["globalThis.CloseEvent.prototype"],
+			"key": "wasClean",
+			"kind": "accessor",
+			"operations": ["globalThis.CloseEvent.prototype.code<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.CloseEvent.prototype\",\"code\"]",
+			"owner": "globalThis.CloseEvent.prototype",
+			"ownerPaths": ["globalThis.CloseEvent.prototype"],
+			"key": "code",
+			"kind": "accessor",
+			"operations": ["globalThis.CloseEvent.prototype.code<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.CloseEvent.prototype\",\"reason\"]",
+			"owner": "globalThis.CloseEvent.prototype",
+			"ownerPaths": ["globalThis.CloseEvent.prototype"],
+			"key": "reason",
+			"kind": "accessor",
+			"operations": ["globalThis.CloseEvent.prototype.code<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.CloseEvent.prototype.code<get>\",\"length\"]",
+			"owner": "globalThis.CloseEvent.prototype.code<get>",
+			"ownerPaths": ["globalThis.CloseEvent.prototype.code<get>"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.CloseEvent.prototype.code<get>\",\"name\"]",
+			"owner": "globalThis.CloseEvent.prototype.code<get>",
+			"ownerPaths": ["globalThis.CloseEvent.prototype.code<get>"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.CloseEvent.prototype.reason<get>\",\"length\"]",
+			"owner": "globalThis.CloseEvent.prototype.reason<get>",
+			"ownerPaths": ["globalThis.CloseEvent.prototype.reason<get>"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.CloseEvent.prototype.reason<get>\",\"name\"]",
+			"owner": "globalThis.CloseEvent.prototype.reason<get>",
+			"ownerPaths": ["globalThis.CloseEvent.prototype.reason<get>"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.CloseEvent.prototype.wasClean<get>\",\"length\"]",
+			"owner": "globalThis.CloseEvent.prototype.wasClean<get>",
+			"ownerPaths": ["globalThis.CloseEvent.prototype.wasClean<get>"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.CloseEvent.prototype.wasClean<get>\",\"name\"]",
+			"owner": "globalThis.CloseEvent.prototype.wasClean<get>",
+			"ownerPaths": ["globalThis.CloseEvent.prototype.wasClean<get>"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
 			"id": "[\"globalThis.CompressionStream\",\"length\"]",
 			"owner": "globalThis.CompressionStream",
 			"ownerPaths": [
@@ -127134,6 +127487,205 @@
 			"id": "[\"globalThis.DecompressionStream.prototype.writable<get>\",\"name\"]",
 			"owner": "globalThis.DecompressionStream.prototype.writable<get>",
 			"ownerPaths": ["globalThis.DecompressionStream.prototype.writable<get>"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.ErrorEvent\",\"length\"]",
+			"owner": "globalThis.ErrorEvent",
+			"ownerPaths": [
+				"globalThis.ErrorEvent",
+				"globalThis.ErrorEvent.prototype.constructor"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.ErrorEvent\",\"name\"]",
+			"owner": "globalThis.ErrorEvent",
+			"ownerPaths": [
+				"globalThis.ErrorEvent",
+				"globalThis.ErrorEvent.prototype.constructor"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.ErrorEvent\",\"prototype\"]",
+			"owner": "globalThis.ErrorEvent",
+			"ownerPaths": [
+				"globalThis.ErrorEvent",
+				"globalThis.ErrorEvent.prototype.constructor"
+			],
+			"key": "prototype",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.ErrorEvent.prototype\",\"constructor\"]",
+			"owner": "globalThis.ErrorEvent.prototype",
+			"ownerPaths": ["globalThis.ErrorEvent.prototype"],
+			"key": "constructor",
+			"kind": "data",
+			"operations": ["globalThis.CloseEvent"],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.ErrorEvent.prototype\",\"message\"]",
+			"owner": "globalThis.ErrorEvent.prototype",
+			"ownerPaths": ["globalThis.ErrorEvent.prototype"],
+			"key": "message",
+			"kind": "accessor",
+			"operations": ["globalThis.CloseEvent.prototype.code<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.ErrorEvent.prototype\",\"filename\"]",
+			"owner": "globalThis.ErrorEvent.prototype",
+			"ownerPaths": ["globalThis.ErrorEvent.prototype"],
+			"key": "filename",
+			"kind": "accessor",
+			"operations": ["globalThis.CloseEvent.prototype.code<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.ErrorEvent.prototype\",\"lineno\"]",
+			"owner": "globalThis.ErrorEvent.prototype",
+			"ownerPaths": ["globalThis.ErrorEvent.prototype"],
+			"key": "lineno",
+			"kind": "accessor",
+			"operations": ["globalThis.CloseEvent.prototype.code<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.ErrorEvent.prototype\",\"colno\"]",
+			"owner": "globalThis.ErrorEvent.prototype",
+			"ownerPaths": ["globalThis.ErrorEvent.prototype"],
+			"key": "colno",
+			"kind": "accessor",
+			"operations": ["globalThis.CloseEvent.prototype.code<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.ErrorEvent.prototype\",\"error\"]",
+			"owner": "globalThis.ErrorEvent.prototype",
+			"ownerPaths": ["globalThis.ErrorEvent.prototype"],
+			"key": "error",
+			"kind": "accessor",
+			"operations": ["globalThis.CloseEvent.prototype.code<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.ErrorEvent.prototype.colno<get>\",\"length\"]",
+			"owner": "globalThis.ErrorEvent.prototype.colno<get>",
+			"ownerPaths": ["globalThis.ErrorEvent.prototype.colno<get>"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.ErrorEvent.prototype.colno<get>\",\"name\"]",
+			"owner": "globalThis.ErrorEvent.prototype.colno<get>",
+			"ownerPaths": ["globalThis.ErrorEvent.prototype.colno<get>"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.ErrorEvent.prototype.error<get>\",\"length\"]",
+			"owner": "globalThis.ErrorEvent.prototype.error<get>",
+			"ownerPaths": ["globalThis.ErrorEvent.prototype.error<get>"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.ErrorEvent.prototype.error<get>\",\"name\"]",
+			"owner": "globalThis.ErrorEvent.prototype.error<get>",
+			"ownerPaths": ["globalThis.ErrorEvent.prototype.error<get>"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.ErrorEvent.prototype.filename<get>\",\"length\"]",
+			"owner": "globalThis.ErrorEvent.prototype.filename<get>",
+			"ownerPaths": ["globalThis.ErrorEvent.prototype.filename<get>"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.ErrorEvent.prototype.filename<get>\",\"name\"]",
+			"owner": "globalThis.ErrorEvent.prototype.filename<get>",
+			"ownerPaths": ["globalThis.ErrorEvent.prototype.filename<get>"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.ErrorEvent.prototype.lineno<get>\",\"length\"]",
+			"owner": "globalThis.ErrorEvent.prototype.lineno<get>",
+			"ownerPaths": ["globalThis.ErrorEvent.prototype.lineno<get>"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.ErrorEvent.prototype.lineno<get>\",\"name\"]",
+			"owner": "globalThis.ErrorEvent.prototype.lineno<get>",
+			"ownerPaths": ["globalThis.ErrorEvent.prototype.lineno<get>"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.ErrorEvent.prototype.message<get>\",\"length\"]",
+			"owner": "globalThis.ErrorEvent.prototype.message<get>",
+			"ownerPaths": ["globalThis.ErrorEvent.prototype.message<get>"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.ErrorEvent.prototype.message<get>\",\"name\"]",
+			"owner": "globalThis.ErrorEvent.prototype.message<get>",
+			"ownerPaths": ["globalThis.ErrorEvent.prototype.message<get>"],
 			"key": "name",
 			"kind": "data",
 			"operations": [],
@@ -128554,6 +129106,211 @@
 			"key": "constructor",
 			"kind": "data",
 			"operations": ["globalThis.MessageChannel"],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessageEvent\",\"length\"]",
+			"owner": "globalThis.MessageEvent",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_MODULE%.MessageEvent",
+				"globalThis.MessageEvent",
+				"globalThis.MessageEvent.prototype.constructor",
+				"mal_host_install_node_http:MessageEvent"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessageEvent\",\"name\"]",
+			"owner": "globalThis.MessageEvent",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_MODULE%.MessageEvent",
+				"globalThis.MessageEvent",
+				"globalThis.MessageEvent.prototype.constructor",
+				"mal_host_install_node_http:MessageEvent"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessageEvent\",\"prototype\"]",
+			"owner": "globalThis.MessageEvent",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_MODULE%.MessageEvent",
+				"globalThis.MessageEvent",
+				"globalThis.MessageEvent.prototype.constructor",
+				"mal_host_install_node_http:MessageEvent"
+			],
+			"key": "prototype",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessageEvent.prototype\",\"constructor\"]",
+			"owner": "globalThis.MessageEvent.prototype",
+			"ownerPaths": ["globalThis.MessageEvent.prototype"],
+			"key": "constructor",
+			"kind": "data",
+			"operations": ["globalThis.CloseEvent"],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessageEvent.prototype\",\"data\"]",
+			"owner": "globalThis.MessageEvent.prototype",
+			"ownerPaths": ["globalThis.MessageEvent.prototype"],
+			"key": "data",
+			"kind": "accessor",
+			"operations": ["globalThis.CloseEvent.prototype.code<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessageEvent.prototype\",\"origin\"]",
+			"owner": "globalThis.MessageEvent.prototype",
+			"ownerPaths": ["globalThis.MessageEvent.prototype"],
+			"key": "origin",
+			"kind": "accessor",
+			"operations": ["globalThis.CloseEvent.prototype.code<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessageEvent.prototype\",\"lastEventId\"]",
+			"owner": "globalThis.MessageEvent.prototype",
+			"ownerPaths": ["globalThis.MessageEvent.prototype"],
+			"key": "lastEventId",
+			"kind": "accessor",
+			"operations": ["globalThis.CloseEvent.prototype.code<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessageEvent.prototype\",\"source\"]",
+			"owner": "globalThis.MessageEvent.prototype",
+			"ownerPaths": ["globalThis.MessageEvent.prototype"],
+			"key": "source",
+			"kind": "accessor",
+			"operations": ["globalThis.CloseEvent.prototype.code<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessageEvent.prototype\",\"ports\"]",
+			"owner": "globalThis.MessageEvent.prototype",
+			"ownerPaths": ["globalThis.MessageEvent.prototype"],
+			"key": "ports",
+			"kind": "accessor",
+			"operations": ["globalThis.CloseEvent.prototype.code<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessageEvent.prototype.data<get>\",\"length\"]",
+			"owner": "globalThis.MessageEvent.prototype.data<get>",
+			"ownerPaths": ["globalThis.MessageEvent.prototype.data<get>"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessageEvent.prototype.data<get>\",\"name\"]",
+			"owner": "globalThis.MessageEvent.prototype.data<get>",
+			"ownerPaths": ["globalThis.MessageEvent.prototype.data<get>"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessageEvent.prototype.lastEventId<get>\",\"length\"]",
+			"owner": "globalThis.MessageEvent.prototype.lastEventId<get>",
+			"ownerPaths": ["globalThis.MessageEvent.prototype.lastEventId<get>"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessageEvent.prototype.lastEventId<get>\",\"name\"]",
+			"owner": "globalThis.MessageEvent.prototype.lastEventId<get>",
+			"ownerPaths": ["globalThis.MessageEvent.prototype.lastEventId<get>"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessageEvent.prototype.origin<get>\",\"length\"]",
+			"owner": "globalThis.MessageEvent.prototype.origin<get>",
+			"ownerPaths": ["globalThis.MessageEvent.prototype.origin<get>"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessageEvent.prototype.origin<get>\",\"name\"]",
+			"owner": "globalThis.MessageEvent.prototype.origin<get>",
+			"ownerPaths": ["globalThis.MessageEvent.prototype.origin<get>"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessageEvent.prototype.ports<get>\",\"length\"]",
+			"owner": "globalThis.MessageEvent.prototype.ports<get>",
+			"ownerPaths": ["globalThis.MessageEvent.prototype.ports<get>"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessageEvent.prototype.ports<get>\",\"name\"]",
+			"owner": "globalThis.MessageEvent.prototype.ports<get>",
+			"ownerPaths": ["globalThis.MessageEvent.prototype.ports<get>"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessageEvent.prototype.source<get>\",\"length\"]",
+			"owner": "globalThis.MessageEvent.prototype.source<get>",
+			"ownerPaths": ["globalThis.MessageEvent.prototype.source<get>"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessageEvent.prototype.source<get>\",\"name\"]",
+			"owner": "globalThis.MessageEvent.prototype.source<get>",
+			"ownerPaths": ["globalThis.MessageEvent.prototype.source<get>"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
 			"task": "H-10",
 			"decisions": []
 		},
@@ -136057,6 +136814,636 @@
 			"id": "[\"globalThis.URLSearchParams.prototype.values\",\"name\"]",
 			"owner": "globalThis.URLSearchParams.prototype.values",
 			"ownerPaths": ["globalThis.URLSearchParams.prototype.values"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket\",\"length\"]",
+			"owner": "globalThis.WebSocket",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_MODULE%.WebSocket",
+				"globalThis.WebSocket",
+				"globalThis.WebSocket.prototype.constructor",
+				"mal_host_install_node_http:WebSocket"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket\",\"name\"]",
+			"owner": "globalThis.WebSocket",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_MODULE%.WebSocket",
+				"globalThis.WebSocket",
+				"globalThis.WebSocket.prototype.constructor",
+				"mal_host_install_node_http:WebSocket"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket\",\"prototype\"]",
+			"owner": "globalThis.WebSocket",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_MODULE%.WebSocket",
+				"globalThis.WebSocket",
+				"globalThis.WebSocket.prototype.constructor",
+				"mal_host_install_node_http:WebSocket"
+			],
+			"key": "prototype",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket\",\"CONNECTING\"]",
+			"owner": "globalThis.WebSocket",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_MODULE%.WebSocket",
+				"globalThis.WebSocket",
+				"globalThis.WebSocket.prototype.constructor",
+				"mal_host_install_node_http:WebSocket"
+			],
+			"key": "CONNECTING",
+			"kind": "data",
+			"operations": [],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket\",\"OPEN\"]",
+			"owner": "globalThis.WebSocket",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_MODULE%.WebSocket",
+				"globalThis.WebSocket",
+				"globalThis.WebSocket.prototype.constructor",
+				"mal_host_install_node_http:WebSocket"
+			],
+			"key": "OPEN",
+			"kind": "data",
+			"operations": [],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket\",\"CLOSING\"]",
+			"owner": "globalThis.WebSocket",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_MODULE%.WebSocket",
+				"globalThis.WebSocket",
+				"globalThis.WebSocket.prototype.constructor",
+				"mal_host_install_node_http:WebSocket"
+			],
+			"key": "CLOSING",
+			"kind": "data",
+			"operations": [],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket\",\"CLOSED\"]",
+			"owner": "globalThis.WebSocket",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_MODULE%.WebSocket",
+				"globalThis.WebSocket",
+				"globalThis.WebSocket.prototype.constructor",
+				"mal_host_install_node_http:WebSocket"
+			],
+			"key": "CLOSED",
+			"kind": "data",
+			"operations": [],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype\",\"constructor\"]",
+			"owner": "globalThis.WebSocket.prototype",
+			"ownerPaths": ["globalThis.WebSocket.prototype"],
+			"key": "constructor",
+			"kind": "data",
+			"operations": ["globalThis.WebSocket"],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype\",\"close\"]",
+			"owner": "globalThis.WebSocket.prototype",
+			"ownerPaths": ["globalThis.WebSocket.prototype"],
+			"key": "close",
+			"kind": "data",
+			"operations": ["globalThis.WebSocket.prototype.close"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype\",\"send\"]",
+			"owner": "globalThis.WebSocket.prototype",
+			"ownerPaths": ["globalThis.WebSocket.prototype"],
+			"key": "send",
+			"kind": "data",
+			"operations": ["globalThis.WebSocket.prototype.send"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype\",\"readyState\"]",
+			"owner": "globalThis.WebSocket.prototype",
+			"ownerPaths": ["globalThis.WebSocket.prototype"],
+			"key": "readyState",
+			"kind": "accessor",
+			"operations": ["globalThis.WebSocket.prototype.binaryType<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype\",\"bufferedAmount\"]",
+			"owner": "globalThis.WebSocket.prototype",
+			"ownerPaths": ["globalThis.WebSocket.prototype"],
+			"key": "bufferedAmount",
+			"kind": "accessor",
+			"operations": ["globalThis.WebSocket.prototype.binaryType<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype\",\"url\"]",
+			"owner": "globalThis.WebSocket.prototype",
+			"ownerPaths": ["globalThis.WebSocket.prototype"],
+			"key": "url",
+			"kind": "accessor",
+			"operations": ["globalThis.WebSocket.prototype.binaryType<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype\",\"extensions\"]",
+			"owner": "globalThis.WebSocket.prototype",
+			"ownerPaths": ["globalThis.WebSocket.prototype"],
+			"key": "extensions",
+			"kind": "accessor",
+			"operations": ["globalThis.WebSocket.prototype.binaryType<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype\",\"protocol\"]",
+			"owner": "globalThis.WebSocket.prototype",
+			"ownerPaths": ["globalThis.WebSocket.prototype"],
+			"key": "protocol",
+			"kind": "accessor",
+			"operations": ["globalThis.WebSocket.prototype.binaryType<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype\",\"onopen\"]",
+			"owner": "globalThis.WebSocket.prototype",
+			"ownerPaths": ["globalThis.WebSocket.prototype"],
+			"key": "onopen",
+			"kind": "accessor",
+			"operations": [
+				"globalThis.WebSocket.prototype.binaryType<get>",
+				"globalThis.WebSocket.prototype.onclose<set>"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype\",\"onerror\"]",
+			"owner": "globalThis.WebSocket.prototype",
+			"ownerPaths": ["globalThis.WebSocket.prototype"],
+			"key": "onerror",
+			"kind": "accessor",
+			"operations": [
+				"globalThis.WebSocket.prototype.binaryType<get>",
+				"globalThis.WebSocket.prototype.onclose<set>"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype\",\"onclose\"]",
+			"owner": "globalThis.WebSocket.prototype",
+			"ownerPaths": ["globalThis.WebSocket.prototype"],
+			"key": "onclose",
+			"kind": "accessor",
+			"operations": [
+				"globalThis.WebSocket.prototype.binaryType<get>",
+				"globalThis.WebSocket.prototype.onclose<set>"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype\",\"onmessage\"]",
+			"owner": "globalThis.WebSocket.prototype",
+			"ownerPaths": ["globalThis.WebSocket.prototype"],
+			"key": "onmessage",
+			"kind": "accessor",
+			"operations": [
+				"globalThis.WebSocket.prototype.binaryType<get>",
+				"globalThis.WebSocket.prototype.onclose<set>"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype\",\"binaryType\"]",
+			"owner": "globalThis.WebSocket.prototype",
+			"ownerPaths": ["globalThis.WebSocket.prototype"],
+			"key": "binaryType",
+			"kind": "accessor",
+			"operations": [
+				"globalThis.WebSocket.prototype.binaryType<get>",
+				"globalThis.WebSocket.prototype.binaryType<set>"
+			],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype\",\"CONNECTING\"]",
+			"owner": "globalThis.WebSocket.prototype",
+			"ownerPaths": ["globalThis.WebSocket.prototype"],
+			"key": "CONNECTING",
+			"kind": "data",
+			"operations": [],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype\",\"OPEN\"]",
+			"owner": "globalThis.WebSocket.prototype",
+			"ownerPaths": ["globalThis.WebSocket.prototype"],
+			"key": "OPEN",
+			"kind": "data",
+			"operations": [],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype\",\"CLOSING\"]",
+			"owner": "globalThis.WebSocket.prototype",
+			"ownerPaths": ["globalThis.WebSocket.prototype"],
+			"key": "CLOSING",
+			"kind": "data",
+			"operations": [],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype\",\"CLOSED\"]",
+			"owner": "globalThis.WebSocket.prototype",
+			"ownerPaths": ["globalThis.WebSocket.prototype"],
+			"key": "CLOSED",
+			"kind": "data",
+			"operations": [],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.binaryType<get>\",\"length\"]",
+			"owner": "globalThis.WebSocket.prototype.binaryType<get>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.binaryType<get>"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.binaryType<get>\",\"name\"]",
+			"owner": "globalThis.WebSocket.prototype.binaryType<get>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.binaryType<get>"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.binaryType<set>\",\"length\"]",
+			"owner": "globalThis.WebSocket.prototype.binaryType<set>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.binaryType<set>"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.binaryType<set>\",\"name\"]",
+			"owner": "globalThis.WebSocket.prototype.binaryType<set>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.binaryType<set>"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.bufferedAmount<get>\",\"length\"]",
+			"owner": "globalThis.WebSocket.prototype.bufferedAmount<get>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.bufferedAmount<get>"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.bufferedAmount<get>\",\"name\"]",
+			"owner": "globalThis.WebSocket.prototype.bufferedAmount<get>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.bufferedAmount<get>"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.close\",\"length\"]",
+			"owner": "globalThis.WebSocket.prototype.close",
+			"ownerPaths": ["globalThis.WebSocket.prototype.close"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.close\",\"name\"]",
+			"owner": "globalThis.WebSocket.prototype.close",
+			"ownerPaths": ["globalThis.WebSocket.prototype.close"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.extensions<get>\",\"length\"]",
+			"owner": "globalThis.WebSocket.prototype.extensions<get>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.extensions<get>"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.extensions<get>\",\"name\"]",
+			"owner": "globalThis.WebSocket.prototype.extensions<get>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.extensions<get>"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.onclose<get>\",\"length\"]",
+			"owner": "globalThis.WebSocket.prototype.onclose<get>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.onclose<get>"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.onclose<get>\",\"name\"]",
+			"owner": "globalThis.WebSocket.prototype.onclose<get>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.onclose<get>"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.onclose<set>\",\"length\"]",
+			"owner": "globalThis.WebSocket.prototype.onclose<set>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.onclose<set>"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.onclose<set>\",\"name\"]",
+			"owner": "globalThis.WebSocket.prototype.onclose<set>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.onclose<set>"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.onerror<get>\",\"length\"]",
+			"owner": "globalThis.WebSocket.prototype.onerror<get>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.onerror<get>"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.onerror<get>\",\"name\"]",
+			"owner": "globalThis.WebSocket.prototype.onerror<get>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.onerror<get>"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.onerror<set>\",\"length\"]",
+			"owner": "globalThis.WebSocket.prototype.onerror<set>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.onerror<set>"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.onerror<set>\",\"name\"]",
+			"owner": "globalThis.WebSocket.prototype.onerror<set>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.onerror<set>"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.onmessage<get>\",\"length\"]",
+			"owner": "globalThis.WebSocket.prototype.onmessage<get>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.onmessage<get>"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.onmessage<get>\",\"name\"]",
+			"owner": "globalThis.WebSocket.prototype.onmessage<get>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.onmessage<get>"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.onmessage<set>\",\"length\"]",
+			"owner": "globalThis.WebSocket.prototype.onmessage<set>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.onmessage<set>"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.onmessage<set>\",\"name\"]",
+			"owner": "globalThis.WebSocket.prototype.onmessage<set>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.onmessage<set>"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.onopen<get>\",\"length\"]",
+			"owner": "globalThis.WebSocket.prototype.onopen<get>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.onopen<get>"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.onopen<get>\",\"name\"]",
+			"owner": "globalThis.WebSocket.prototype.onopen<get>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.onopen<get>"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.onopen<set>\",\"length\"]",
+			"owner": "globalThis.WebSocket.prototype.onopen<set>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.onopen<set>"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.onopen<set>\",\"name\"]",
+			"owner": "globalThis.WebSocket.prototype.onopen<set>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.onopen<set>"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.protocol<get>\",\"length\"]",
+			"owner": "globalThis.WebSocket.prototype.protocol<get>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.protocol<get>"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.protocol<get>\",\"name\"]",
+			"owner": "globalThis.WebSocket.prototype.protocol<get>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.protocol<get>"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.readyState<get>\",\"length\"]",
+			"owner": "globalThis.WebSocket.prototype.readyState<get>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.readyState<get>"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.readyState<get>\",\"name\"]",
+			"owner": "globalThis.WebSocket.prototype.readyState<get>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.readyState<get>"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.send\",\"length\"]",
+			"owner": "globalThis.WebSocket.prototype.send",
+			"ownerPaths": ["globalThis.WebSocket.prototype.send"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.send\",\"name\"]",
+			"owner": "globalThis.WebSocket.prototype.send",
+			"ownerPaths": ["globalThis.WebSocket.prototype.send"],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.url<get>\",\"length\"]",
+			"owner": "globalThis.WebSocket.prototype.url<get>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.url<get>"],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.url<get>\",\"name\"]",
+			"owner": "globalThis.WebSocket.prototype.url<get>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.url<get>"],
 			"key": "name",
 			"kind": "data",
 			"operations": [],
@@ -166669,6 +168056,26 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Duplex.from\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Duplex.from",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Duplex.from"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Duplex.from"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Duplex.from\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Duplex.from",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Duplex.from"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Duplex.from"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Duplex.fromWeb\",\"<call>\"]",
 			"owner": "%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Duplex.fromWeb",
 			"ownerPaths": ["%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Duplex.fromWeb"],
@@ -167363,6 +168770,26 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.wrap\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.wrap",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.wrap"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.wrap"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.wrap\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.wrap",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.wrap"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.wrap"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype[%Symbol.asyncIterator%]\",\"<call>\"]",
 			"owner": "%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype[%Symbol.asyncIterator%]",
 			"ownerPaths": [
@@ -167407,6 +168834,26 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.toWeb"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.wrap\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.wrap",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.wrap"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.wrap"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.wrap\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.wrap",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.wrap"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.wrap"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -273847,6 +275294,96 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"globalThis.CloseEvent\",\"<call>\"]",
+			"owner": "globalThis.CloseEvent",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_MODULE%.CloseEvent",
+				"globalThis.CloseEvent",
+				"globalThis.CloseEvent.prototype.constructor",
+				"mal_host_install_node_http:CloseEvent"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.CloseEvent"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.CloseEvent\",\"<construct>\"]",
+			"owner": "globalThis.CloseEvent",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_MODULE%.CloseEvent",
+				"globalThis.CloseEvent",
+				"globalThis.CloseEvent.prototype.constructor",
+				"mal_host_install_node_http:CloseEvent"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.CloseEvent"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.CloseEvent.prototype.code<get>\",\"<call>\"]",
+			"owner": "globalThis.CloseEvent.prototype.code<get>",
+			"ownerPaths": ["globalThis.CloseEvent.prototype.code<get>"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.CloseEvent.prototype.code<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.CloseEvent.prototype.code<get>\",\"<construct>\"]",
+			"owner": "globalThis.CloseEvent.prototype.code<get>",
+			"ownerPaths": ["globalThis.CloseEvent.prototype.code<get>"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.CloseEvent.prototype.code<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.CloseEvent.prototype.reason<get>\",\"<call>\"]",
+			"owner": "globalThis.CloseEvent.prototype.reason<get>",
+			"ownerPaths": ["globalThis.CloseEvent.prototype.reason<get>"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.CloseEvent.prototype.code<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.CloseEvent.prototype.reason<get>\",\"<construct>\"]",
+			"owner": "globalThis.CloseEvent.prototype.reason<get>",
+			"ownerPaths": ["globalThis.CloseEvent.prototype.reason<get>"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.CloseEvent.prototype.code<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.CloseEvent.prototype.wasClean<get>\",\"<call>\"]",
+			"owner": "globalThis.CloseEvent.prototype.wasClean<get>",
+			"ownerPaths": ["globalThis.CloseEvent.prototype.wasClean<get>"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.CloseEvent.prototype.code<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.CloseEvent.prototype.wasClean<get>\",\"<construct>\"]",
+			"owner": "globalThis.CloseEvent.prototype.wasClean<get>",
+			"ownerPaths": ["globalThis.CloseEvent.prototype.wasClean<get>"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.CloseEvent.prototype.code<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
 			"id": "[\"globalThis.CompressionStream\",\"<call>\"]",
 			"owner": "globalThis.CompressionStream",
 			"ownerPaths": [
@@ -274218,6 +275755,132 @@
 			"kind": "construct",
 			"operations": ["globalThis.CompressionStream.prototype.writable<get>"],
 			"task": "N-03",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.ErrorEvent\",\"<call>\"]",
+			"owner": "globalThis.ErrorEvent",
+			"ownerPaths": [
+				"globalThis.ErrorEvent",
+				"globalThis.ErrorEvent.prototype.constructor"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.CloseEvent"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.ErrorEvent\",\"<construct>\"]",
+			"owner": "globalThis.ErrorEvent",
+			"ownerPaths": [
+				"globalThis.ErrorEvent",
+				"globalThis.ErrorEvent.prototype.constructor"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.CloseEvent"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.ErrorEvent.prototype.colno<get>\",\"<call>\"]",
+			"owner": "globalThis.ErrorEvent.prototype.colno<get>",
+			"ownerPaths": ["globalThis.ErrorEvent.prototype.colno<get>"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.CloseEvent.prototype.code<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.ErrorEvent.prototype.colno<get>\",\"<construct>\"]",
+			"owner": "globalThis.ErrorEvent.prototype.colno<get>",
+			"ownerPaths": ["globalThis.ErrorEvent.prototype.colno<get>"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.CloseEvent.prototype.code<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.ErrorEvent.prototype.error<get>\",\"<call>\"]",
+			"owner": "globalThis.ErrorEvent.prototype.error<get>",
+			"ownerPaths": ["globalThis.ErrorEvent.prototype.error<get>"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.CloseEvent.prototype.code<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.ErrorEvent.prototype.error<get>\",\"<construct>\"]",
+			"owner": "globalThis.ErrorEvent.prototype.error<get>",
+			"ownerPaths": ["globalThis.ErrorEvent.prototype.error<get>"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.CloseEvent.prototype.code<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.ErrorEvent.prototype.filename<get>\",\"<call>\"]",
+			"owner": "globalThis.ErrorEvent.prototype.filename<get>",
+			"ownerPaths": ["globalThis.ErrorEvent.prototype.filename<get>"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.CloseEvent.prototype.code<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.ErrorEvent.prototype.filename<get>\",\"<construct>\"]",
+			"owner": "globalThis.ErrorEvent.prototype.filename<get>",
+			"ownerPaths": ["globalThis.ErrorEvent.prototype.filename<get>"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.CloseEvent.prototype.code<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.ErrorEvent.prototype.lineno<get>\",\"<call>\"]",
+			"owner": "globalThis.ErrorEvent.prototype.lineno<get>",
+			"ownerPaths": ["globalThis.ErrorEvent.prototype.lineno<get>"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.CloseEvent.prototype.code<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.ErrorEvent.prototype.lineno<get>\",\"<construct>\"]",
+			"owner": "globalThis.ErrorEvent.prototype.lineno<get>",
+			"ownerPaths": ["globalThis.ErrorEvent.prototype.lineno<get>"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.CloseEvent.prototype.code<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.ErrorEvent.prototype.message<get>\",\"<call>\"]",
+			"owner": "globalThis.ErrorEvent.prototype.message<get>",
+			"ownerPaths": ["globalThis.ErrorEvent.prototype.message<get>"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.CloseEvent.prototype.code<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.ErrorEvent.prototype.message<get>\",\"<construct>\"]",
+			"owner": "globalThis.ErrorEvent.prototype.message<get>",
+			"ownerPaths": ["globalThis.ErrorEvent.prototype.message<get>"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.CloseEvent.prototype.code<get>"],
+			"task": "C-01",
 			"decisions": []
 		},
 		{
@@ -275001,6 +276664,136 @@
 			"key": "<construct>",
 			"kind": "construct",
 			"operations": ["globalThis.MessageChannel"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessageEvent\",\"<call>\"]",
+			"owner": "globalThis.MessageEvent",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_MODULE%.MessageEvent",
+				"globalThis.MessageEvent",
+				"globalThis.MessageEvent.prototype.constructor",
+				"mal_host_install_node_http:MessageEvent"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.CloseEvent"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessageEvent\",\"<construct>\"]",
+			"owner": "globalThis.MessageEvent",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_MODULE%.MessageEvent",
+				"globalThis.MessageEvent",
+				"globalThis.MessageEvent.prototype.constructor",
+				"mal_host_install_node_http:MessageEvent"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.CloseEvent"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessageEvent.prototype.data<get>\",\"<call>\"]",
+			"owner": "globalThis.MessageEvent.prototype.data<get>",
+			"ownerPaths": ["globalThis.MessageEvent.prototype.data<get>"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.CloseEvent.prototype.code<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessageEvent.prototype.data<get>\",\"<construct>\"]",
+			"owner": "globalThis.MessageEvent.prototype.data<get>",
+			"ownerPaths": ["globalThis.MessageEvent.prototype.data<get>"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.CloseEvent.prototype.code<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessageEvent.prototype.lastEventId<get>\",\"<call>\"]",
+			"owner": "globalThis.MessageEvent.prototype.lastEventId<get>",
+			"ownerPaths": ["globalThis.MessageEvent.prototype.lastEventId<get>"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.CloseEvent.prototype.code<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessageEvent.prototype.lastEventId<get>\",\"<construct>\"]",
+			"owner": "globalThis.MessageEvent.prototype.lastEventId<get>",
+			"ownerPaths": ["globalThis.MessageEvent.prototype.lastEventId<get>"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.CloseEvent.prototype.code<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessageEvent.prototype.origin<get>\",\"<call>\"]",
+			"owner": "globalThis.MessageEvent.prototype.origin<get>",
+			"ownerPaths": ["globalThis.MessageEvent.prototype.origin<get>"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.CloseEvent.prototype.code<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessageEvent.prototype.origin<get>\",\"<construct>\"]",
+			"owner": "globalThis.MessageEvent.prototype.origin<get>",
+			"ownerPaths": ["globalThis.MessageEvent.prototype.origin<get>"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.CloseEvent.prototype.code<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessageEvent.prototype.ports<get>\",\"<call>\"]",
+			"owner": "globalThis.MessageEvent.prototype.ports<get>",
+			"ownerPaths": ["globalThis.MessageEvent.prototype.ports<get>"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.CloseEvent.prototype.code<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessageEvent.prototype.ports<get>\",\"<construct>\"]",
+			"owner": "globalThis.MessageEvent.prototype.ports<get>",
+			"ownerPaths": ["globalThis.MessageEvent.prototype.ports<get>"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.CloseEvent.prototype.code<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessageEvent.prototype.source<get>\",\"<call>\"]",
+			"owner": "globalThis.MessageEvent.prototype.source<get>",
+			"ownerPaths": ["globalThis.MessageEvent.prototype.source<get>"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.CloseEvent.prototype.code<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.MessageEvent.prototype.source<get>\",\"<construct>\"]",
+			"owner": "globalThis.MessageEvent.prototype.source<get>",
+			"ownerPaths": ["globalThis.MessageEvent.prototype.source<get>"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.CloseEvent.prototype.code<get>"],
 			"task": "C-01",
 			"decisions": []
 		},
@@ -279632,6 +281425,376 @@
 			"kind": "construct",
 			"operations": ["globalThis.URLSearchParams.prototype.values"],
 			"task": "N-02",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket\",\"<call>\"]",
+			"owner": "globalThis.WebSocket",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_MODULE%.WebSocket",
+				"globalThis.WebSocket",
+				"globalThis.WebSocket.prototype.constructor",
+				"mal_host_install_node_http:WebSocket"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.WebSocket"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket\",\"<construct>\"]",
+			"owner": "globalThis.WebSocket",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_MODULE%.WebSocket",
+				"globalThis.WebSocket",
+				"globalThis.WebSocket.prototype.constructor",
+				"mal_host_install_node_http:WebSocket"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.WebSocket"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.binaryType<get>\",\"<call>\"]",
+			"owner": "globalThis.WebSocket.prototype.binaryType<get>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.binaryType<get>"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.WebSocket.prototype.binaryType<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.binaryType<get>\",\"<construct>\"]",
+			"owner": "globalThis.WebSocket.prototype.binaryType<get>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.binaryType<get>"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.WebSocket.prototype.binaryType<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.binaryType<set>\",\"<call>\"]",
+			"owner": "globalThis.WebSocket.prototype.binaryType<set>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.binaryType<set>"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.WebSocket.prototype.binaryType<set>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.binaryType<set>\",\"<construct>\"]",
+			"owner": "globalThis.WebSocket.prototype.binaryType<set>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.binaryType<set>"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.WebSocket.prototype.binaryType<set>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.bufferedAmount<get>\",\"<call>\"]",
+			"owner": "globalThis.WebSocket.prototype.bufferedAmount<get>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.bufferedAmount<get>"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.WebSocket.prototype.binaryType<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.bufferedAmount<get>\",\"<construct>\"]",
+			"owner": "globalThis.WebSocket.prototype.bufferedAmount<get>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.bufferedAmount<get>"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.WebSocket.prototype.binaryType<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.close\",\"<call>\"]",
+			"owner": "globalThis.WebSocket.prototype.close",
+			"ownerPaths": ["globalThis.WebSocket.prototype.close"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.WebSocket.prototype.close"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.close\",\"<construct>\"]",
+			"owner": "globalThis.WebSocket.prototype.close",
+			"ownerPaths": ["globalThis.WebSocket.prototype.close"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.WebSocket.prototype.close"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.extensions<get>\",\"<call>\"]",
+			"owner": "globalThis.WebSocket.prototype.extensions<get>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.extensions<get>"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.WebSocket.prototype.binaryType<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.extensions<get>\",\"<construct>\"]",
+			"owner": "globalThis.WebSocket.prototype.extensions<get>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.extensions<get>"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.WebSocket.prototype.binaryType<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.onclose<get>\",\"<call>\"]",
+			"owner": "globalThis.WebSocket.prototype.onclose<get>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.onclose<get>"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.WebSocket.prototype.binaryType<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.onclose<get>\",\"<construct>\"]",
+			"owner": "globalThis.WebSocket.prototype.onclose<get>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.onclose<get>"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.WebSocket.prototype.binaryType<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.onclose<set>\",\"<call>\"]",
+			"owner": "globalThis.WebSocket.prototype.onclose<set>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.onclose<set>"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.WebSocket.prototype.onclose<set>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.onclose<set>\",\"<construct>\"]",
+			"owner": "globalThis.WebSocket.prototype.onclose<set>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.onclose<set>"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.WebSocket.prototype.onclose<set>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.onerror<get>\",\"<call>\"]",
+			"owner": "globalThis.WebSocket.prototype.onerror<get>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.onerror<get>"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.WebSocket.prototype.binaryType<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.onerror<get>\",\"<construct>\"]",
+			"owner": "globalThis.WebSocket.prototype.onerror<get>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.onerror<get>"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.WebSocket.prototype.binaryType<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.onerror<set>\",\"<call>\"]",
+			"owner": "globalThis.WebSocket.prototype.onerror<set>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.onerror<set>"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.WebSocket.prototype.onclose<set>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.onerror<set>\",\"<construct>\"]",
+			"owner": "globalThis.WebSocket.prototype.onerror<set>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.onerror<set>"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.WebSocket.prototype.onclose<set>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.onmessage<get>\",\"<call>\"]",
+			"owner": "globalThis.WebSocket.prototype.onmessage<get>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.onmessage<get>"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.WebSocket.prototype.binaryType<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.onmessage<get>\",\"<construct>\"]",
+			"owner": "globalThis.WebSocket.prototype.onmessage<get>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.onmessage<get>"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.WebSocket.prototype.binaryType<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.onmessage<set>\",\"<call>\"]",
+			"owner": "globalThis.WebSocket.prototype.onmessage<set>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.onmessage<set>"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.WebSocket.prototype.onclose<set>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.onmessage<set>\",\"<construct>\"]",
+			"owner": "globalThis.WebSocket.prototype.onmessage<set>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.onmessage<set>"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.WebSocket.prototype.onclose<set>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.onopen<get>\",\"<call>\"]",
+			"owner": "globalThis.WebSocket.prototype.onopen<get>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.onopen<get>"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.WebSocket.prototype.binaryType<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.onopen<get>\",\"<construct>\"]",
+			"owner": "globalThis.WebSocket.prototype.onopen<get>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.onopen<get>"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.WebSocket.prototype.binaryType<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.onopen<set>\",\"<call>\"]",
+			"owner": "globalThis.WebSocket.prototype.onopen<set>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.onopen<set>"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.WebSocket.prototype.onclose<set>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.onopen<set>\",\"<construct>\"]",
+			"owner": "globalThis.WebSocket.prototype.onopen<set>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.onopen<set>"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.WebSocket.prototype.onclose<set>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.protocol<get>\",\"<call>\"]",
+			"owner": "globalThis.WebSocket.prototype.protocol<get>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.protocol<get>"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.WebSocket.prototype.binaryType<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.protocol<get>\",\"<construct>\"]",
+			"owner": "globalThis.WebSocket.prototype.protocol<get>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.protocol<get>"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.WebSocket.prototype.binaryType<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.readyState<get>\",\"<call>\"]",
+			"owner": "globalThis.WebSocket.prototype.readyState<get>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.readyState<get>"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.WebSocket.prototype.binaryType<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.readyState<get>\",\"<construct>\"]",
+			"owner": "globalThis.WebSocket.prototype.readyState<get>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.readyState<get>"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.WebSocket.prototype.binaryType<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.send\",\"<call>\"]",
+			"owner": "globalThis.WebSocket.prototype.send",
+			"ownerPaths": ["globalThis.WebSocket.prototype.send"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.WebSocket.prototype.send"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.send\",\"<construct>\"]",
+			"owner": "globalThis.WebSocket.prototype.send",
+			"ownerPaths": ["globalThis.WebSocket.prototype.send"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.WebSocket.prototype.send"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.url<get>\",\"<call>\"]",
+			"owner": "globalThis.WebSocket.prototype.url<get>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.url<get>"],
+			"key": "<call>",
+			"kind": "call",
+			"operations": ["globalThis.WebSocket.prototype.binaryType<get>"],
+			"task": "C-01",
+			"decisions": []
+		},
+		{
+			"id": "[\"globalThis.WebSocket.prototype.url<get>\",\"<construct>\"]",
+			"owner": "globalThis.WebSocket.prototype.url<get>",
+			"ownerPaths": ["globalThis.WebSocket.prototype.url<get>"],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": ["globalThis.WebSocket.prototype.binaryType<get>"],
+			"task": "C-01",
 			"decisions": []
 		},
 		{
@@ -294690,6 +296853,16 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_http:CloseEvent\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_http:CloseEvent",
+			"kind": "binding",
+			"operations": ["globalThis.CloseEvent"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"[[roots]]\",\"mal_host_install_node_http:IncomingMessage\"]",
 			"owner": "[[roots]]",
 			"ownerPaths": ["[[roots]]"],
@@ -294706,6 +296879,16 @@
 			"key": "mal_host_install_node_http:METHODS",
 			"kind": "binding",
 			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_http:MessageEvent\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_http:MessageEvent",
+			"kind": "binding",
+			"operations": ["globalThis.CloseEvent"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -294748,6 +296931,16 @@
 			"key": "mal_host_install_node_http:ServerResponse",
 			"kind": "binding",
 			"operations": ["%MAL_INTRINSIC_NODE_HTTP_SERVER_RESPONSE_CONSTRUCTOR%"],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"[[roots]]\",\"mal_host_install_node_http:WebSocket\"]",
+			"owner": "[[roots]]",
+			"ownerPaths": ["[[roots]]"],
+			"key": "mal_host_install_node_http:WebSocket",
+			"kind": "binding",
+			"operations": ["globalThis.WebSocket"],
 			"task": "N-06",
 			"decisions": []
 		},
@@ -303683,6 +305876,10 @@
 			"identities": ["%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Duplex"]
 		},
 		{
+			"id": "%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Duplex.from",
+			"identities": ["%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Duplex.from"]
+		},
+		{
 			"id": "%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Duplex.fromWeb",
 			"identities": ["%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Duplex.fromWeb"]
 		},
@@ -303784,6 +305981,10 @@
 			"identities": ["%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.unpipe"]
 		},
 		{
+			"id": "%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.wrap",
+			"identities": ["%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype.wrap"]
+		},
+		{
 			"id": "%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype[%Symbol.asyncIterator%]",
 			"identities": [
 				"%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.prototype[%Symbol.asyncIterator%]"
@@ -303792,6 +305993,10 @@
 		{
 			"id": "%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.toWeb",
 			"identities": ["%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.toWeb"]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.wrap",
+			"identities": ["%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Readable.wrap"]
 		},
 		{
 			"id": "%MAL_INTRINSIC_NODE_STREAM_CONSTRUCTOR%.Transform",
@@ -306977,6 +309182,32 @@
 			"identities": ["globalThis.ByteLengthQueuingStrategy.prototype.size<get>"]
 		},
 		{
+			"id": "globalThis.CloseEvent",
+			"identities": [
+				"globalThis.CloseEvent",
+				"globalThis.ErrorEvent",
+				"globalThis.MessageEvent"
+			]
+		},
+		{
+			"id": "globalThis.CloseEvent.prototype.code<get>",
+			"identities": [
+				"globalThis.CloseEvent.prototype.code<get>",
+				"globalThis.CloseEvent.prototype.reason<get>",
+				"globalThis.CloseEvent.prototype.wasClean<get>",
+				"globalThis.ErrorEvent.prototype.colno<get>",
+				"globalThis.ErrorEvent.prototype.error<get>",
+				"globalThis.ErrorEvent.prototype.filename<get>",
+				"globalThis.ErrorEvent.prototype.lineno<get>",
+				"globalThis.ErrorEvent.prototype.message<get>",
+				"globalThis.MessageEvent.prototype.data<get>",
+				"globalThis.MessageEvent.prototype.lastEventId<get>",
+				"globalThis.MessageEvent.prototype.origin<get>",
+				"globalThis.MessageEvent.prototype.ports<get>",
+				"globalThis.MessageEvent.prototype.source<get>"
+			]
+		},
+		{
 			"id": "globalThis.CompressionStream",
 			"identities": ["globalThis.CompressionStream"]
 		},
@@ -307790,6 +310021,43 @@
 		{
 			"id": "globalThis.URLSearchParams.prototype.values",
 			"identities": ["globalThis.URLSearchParams.prototype.values"]
+		},
+		{ "id": "globalThis.WebSocket", "identities": ["globalThis.WebSocket"] },
+		{
+			"id": "globalThis.WebSocket.prototype.binaryType<get>",
+			"identities": [
+				"globalThis.WebSocket.prototype.binaryType<get>",
+				"globalThis.WebSocket.prototype.bufferedAmount<get>",
+				"globalThis.WebSocket.prototype.extensions<get>",
+				"globalThis.WebSocket.prototype.onclose<get>",
+				"globalThis.WebSocket.prototype.onerror<get>",
+				"globalThis.WebSocket.prototype.onmessage<get>",
+				"globalThis.WebSocket.prototype.onopen<get>",
+				"globalThis.WebSocket.prototype.protocol<get>",
+				"globalThis.WebSocket.prototype.readyState<get>",
+				"globalThis.WebSocket.prototype.url<get>"
+			]
+		},
+		{
+			"id": "globalThis.WebSocket.prototype.binaryType<set>",
+			"identities": ["globalThis.WebSocket.prototype.binaryType<set>"]
+		},
+		{
+			"id": "globalThis.WebSocket.prototype.close",
+			"identities": ["globalThis.WebSocket.prototype.close"]
+		},
+		{
+			"id": "globalThis.WebSocket.prototype.onclose<set>",
+			"identities": [
+				"globalThis.WebSocket.prototype.onclose<set>",
+				"globalThis.WebSocket.prototype.onerror<set>",
+				"globalThis.WebSocket.prototype.onmessage<set>",
+				"globalThis.WebSocket.prototype.onopen<set>"
+			]
+		},
+		{
+			"id": "globalThis.WebSocket.prototype.send",
+			"identities": ["globalThis.WebSocket.prototype.send"]
 		},
 		{ "id": "globalThis.WritableStream", "identities": ["globalThis.WritableStream"] },
 		{
