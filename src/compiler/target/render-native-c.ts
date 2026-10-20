@@ -945,6 +945,8 @@ function producesNumberFromNumbers(operator: string): boolean {
 	);
 }
 
+const INT32_RESULT_OPERATORS: ReadonlySet<string> = new Set(["&", "|", "^", "<<", ">>"]);
+
 function nativeInt32Expr(operator: string, left: string, right: string): string | null {
 	const bitwise = NATIVE_BITWISE[operator];
 	if (bitwise === undefined) return null;
@@ -9559,11 +9561,24 @@ function emitInstruction(
 						firstOnRight ? `__nf_${fusion.id}_value` : externalExpr,
 					);
 					if (nativeExpr !== null) {
+						const fusedInt32 = `mal_ops_number_to_i32(__nf_${fusion.id}_value)`;
+						const externalInt32 =
+							reps[external] === "int32"
+								? inputValue(external)
+								: `mal_ops_number_to_i32(${externalExpr})`;
+						const int32Result =
+							reps[dst] === "int32" && INT32_RESULT_OPERATORS.has(operator)
+								? nativeInt32Expr(
+										operator,
+										firstOnLeft ? fusedInt32 : externalInt32,
+										firstOnRight ? fusedInt32 : externalInt32,
+									)
+								: null;
 						const result =
 							reps[dst] === "number"
 								? nativeExpr
 								: reps[dst] === "int32"
-									? `mal_ops_number_to_i32(${nativeExpr})`
+									? (int32Result ?? `mal_ops_number_to_i32(${nativeExpr})`)
 									: profileCall("boxing", `mal_ops_number_value(${nativeExpr})`);
 						const guard = externalIsNum
 							? `__nf_${fusion.id}_ok`
@@ -9601,11 +9616,24 @@ function emitInstruction(
 					throwCheck(),
 					`r${dst} = ${reps[dst] === "int32" ? `mal_ops_number_to_i32(mal_ops_number_as_f64(${result}))` : `mal_ops_number_as_f64(${result})`};`,
 				];
-				const expression = nativeNumberExpr(
-					operator,
-					leftIsNum ? num(left) : `mal_ops_number_as_f64(${boxed(left)})`,
-					rightIsNum ? num(right) : `mal_ops_number_as_f64(${boxed(right)})`,
-				);
+				// ToInt32 of an int32 operand or result is the identity, but clang cannot fold FJCVTZS.
+				const int32Input = (register: number): string =>
+					reps[register] === "int32"
+						? inputValue(register)
+						: reps[register] === "number"
+							? `mal_ops_number_to_i32(${inputValue(register)})`
+							: `mal_ops_number_to_i32(mal_ops_number_as_f64(${boxed(register)}))`;
+				const int32Expression = INT32_RESULT_OPERATORS.has(operator)
+					? nativeInt32Expr(operator, int32Input(left), int32Input(right))
+					: null;
+				const expression =
+					int32Expression === null
+						? nativeNumberExpr(
+								operator,
+								leftIsNum ? num(left) : `mal_ops_number_as_f64(${boxed(left)})`,
+								rightIsNum ? num(right) : `mal_ops_number_as_f64(${boxed(right)})`,
+							)
+						: `(f64) (${int32Expression})`;
 				if (expression === null) return fallback;
 				const guards = [
 					...(!leftIsNum ? [`mal_ops_is_number(${boxed(left)})`] : []),
@@ -9613,7 +9641,9 @@ function emitInstruction(
 				];
 				return [
 					`if (${guards.join(" && ")}) {`,
-					`  ${storeNumber(dst, expression)}`,
+					int32Expression !== null && reps[dst] === "int32"
+						? `  r${dst} = ${int32Expression};`
+						: `  ${storeNumber(dst, expression)}`,
 					`} else {`,
 					...fallback.map((line) => `  ${line}`),
 					`}`,
@@ -9857,12 +9887,25 @@ function emitInstruction(
 			// well-predicted bit test and hot arithmetic is overwhelmingly numeric.
 			if (producesNumberFromNumbers(operator)) {
 				const nativeExpr = nativeNumberExpr(operator, numericOf(left), numericOf(right));
+				const int32Expr = INT32_RESULT_OPERATORS.has(operator)
+					? nativeInt32Expr(
+							operator,
+							reps[left] === "int32"
+								? inputValue(left)
+								: `mal_ops_number_to_i32(${numericOf(left)})`,
+							reps[right] === "int32"
+								? inputValue(right)
+								: `mal_ops_number_to_i32(${numericOf(right)})`,
+						)
+					: null;
 				if (nativeExpr !== null) {
 					const fast = profileCall(
 						"boxing",
 						operator === "+" && bothBoxed
 							? `mal_ops_add_numbers(${boxed(left)}, ${boxed(right)})`
-							: `mal_ops_number_value(${nativeExpr})`,
+							: int32Expr !== null
+								? `mal_value_from_i32(${int32Expr})`
+								: `mal_ops_number_value(${nativeExpr})`,
 					);
 					// numberGuard is empty only when both operands are proven numbers but
 					// the dst rep was joined to boxed elsewhere — then native is
