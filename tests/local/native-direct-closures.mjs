@@ -162,8 +162,20 @@ function level1(first) {
 				total += value * second;
 				return total;
 			}
+			// Captures only the outer scopes, starting below this activation.
+			function outerSum(count) {
+				let sum = 0;
+				for (let index = 0; index < count; index++) {
+					try {
+						sum += first + second;
+					} catch {
+						sum = 0;
+					}
+				}
+				return sum;
+			}
 			function both(value) {
-				return scaled(value) + scaled(1);
+				return scaled(value) + scaled(1) + outerSum(value);
 			}
 			return both(third);
 		};

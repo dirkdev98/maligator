@@ -387,12 +387,13 @@ function captureOwnerName(
  * How an exact caller rebuilds the creation environment of a closure whose function
  * object its owner scope may have elided. `scope` and `owner` reuse the owner's
  * activation as-is or as the single tagged owner, `ancestor` tags the one outer
- * owner found from it, `none` captures nothing, and `chain` reuses the activation
- * only when the creator left the callee empty.
+ * owner found from it, `none` captures nothing, and `chain` and `outer-chain`
+ * reuse the activation or the innermost outer owner's scope only when the creator
+ * left the callee empty.
  */
 export type NativeDirectClosureEnvironment =
 	| { readonly kind: "scope" | "none" | "owner" | "chain" }
-	| { readonly kind: "ancestor"; readonly owner: number };
+	| { readonly kind: "ancestor" | "outer-chain"; readonly owner: number };
 
 /** The C environment argument for an exact call, or undefined when it reads the callee. */
 function directClosureEnvironment(
@@ -426,6 +427,8 @@ function directClosureEnvironment(
 			return `mal_env_tag_single_owner(mal_vm_capture_owner_at(${scope}, ${relocation.ownerFunctionIndex(environment.owner)}, 0))`;
 		case "chain":
 			return `(mal_value_is_empty(${callee}) ? ${scope} : mal_value_to_function_object(${callee})->creation_env)`;
+		case "outer-chain":
+			return `(mal_value_is_empty(${callee}) ? mal_vm_capture_owner_at(${scope}, ${relocation.ownerFunctionIndex(environment.owner)}, 0) : mal_value_to_function_object(${callee})->creation_env)`;
 	}
 }
 
@@ -8041,12 +8044,16 @@ function emitInstruction(
 				context.nativePlan?.kind === "direct-closure"
 					? context.directClosures?.get(instruction.functionIndex)
 					: undefined;
+			const start =
+				closure?.kind === "outer-chain"
+					? `mal_vm_capture_owner_at(env, ${relocation.ownerFunctionIndex(closure.owner)}, 0)`
+					: "env";
 			return [
 				...ensureCaptureEnvironment(context.captureShadow, ip),
 				closure === undefined
 					? `r${instruction.dst} = ${create};`
-					: closure.kind === "chain"
-						? `r${instruction.dst} = mal_vm_closure_chain_has_owners(vm, ${relocation.functionIndex(instruction.functionIndex)}, env) ? MAL_VALUE_EMPTY : ${create};`
+					: closure.kind === "chain" || closure.kind === "outer-chain"
+						? `r${instruction.dst} = mal_vm_closure_chain_has_owners(vm, ${relocation.functionIndex(instruction.functionIndex)}, ${start}) ? MAL_VALUE_EMPTY : ${create};`
 						: `r${instruction.dst} = MAL_VALUE_EMPTY;`,
 			];
 		}

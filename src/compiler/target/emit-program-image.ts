@@ -700,7 +700,7 @@ function nativeDirectClosureSites(
 								: { kind: "ancestor", owner: layout[0]! }
 							: layout[layout.length - 1] === owner
 								? { kind: "chain" }
-								: undefined;
+								: { kind: "outer-chain", owner: layout[layout.length - 1]! };
 		sites.set(target, { environment, functions: [...functions.get(target)!] });
 	}
 	return sites;
