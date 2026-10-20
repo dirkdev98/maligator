@@ -613,6 +613,7 @@ typedef struct MalPerfStats {
     u64 ic_load_fallbacks;
     u64 ic_load_slow_mono_hits;
     u64 ic_load_poly_hits;
+    u64 ic_load_slot_key_hits;
     u64 ic_load_mega_hits;
     u64 ic_load_mega_misses;
     u64 ic_load_shape_hits;

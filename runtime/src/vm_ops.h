@@ -1399,13 +1399,34 @@ static inline __attribute__((always_inline)) bool mal_vm_object_try_load_polymor
     return false;
 }
 
+/**
+ * A shape's props are indexed by slot, so a site whose field sits at the same slot
+ * in every shape it meets hits by checking this shape's key at that slot. A fresh
+ * row's zero key never equals a property key.
+ */
+static inline __attribute__((always_inline)) bool mal_vm_object_try_load_slot_key(
+    const MalObject *object, const MalInlineCache *ic, MalValue *out
+) {
+    const MalShape *shape = object->shape;
+    u8 slot = ic->slot;
+    if (ic->mode != MAL_IC_MODE_SHAPE || ic->prim_kind != 0 || slot >= shape->inline_count) {
+        return false;
+    }
+    const MalShapeProp *prop = &shape->props[slot];
+    if (prop->key != ic->key || (prop->attrs & MAL_PROPERTY_ACCESSOR)) return false;
+    MAL_PERF_COUNT(ic_load_slot_key_hits);
+    *out = mal_object_field_load(object, slot);
+    return true;
+}
+
 static inline bool mal_vm_object_try_load_remaining(
     const MalObject *object, MalValue key, MalInlineCache *ic, MalValue *out
 ) {
     if (ic->mode == MAL_IC_MODE_OWN_TABLE) {
         return mal_vm_own_table_try_load(object, key, ic, out);
     }
-    return mal_vm_object_try_load_polymorphic(object, key, ic, out);
+    return (key == ic->key && mal_vm_object_try_load_slot_key(object, ic, out)) ||
+        mal_vm_object_try_load_polymorphic(object, key, ic, out);
 }
 
 static inline bool mal_vm_object_try_load(const MalObject *object, MalValue key, MalInlineCache *ic,
@@ -1839,12 +1860,9 @@ static inline __attribute__((always_inline)) bool mal_vm_property_try_load_stati
             *out = mal_object_field_load(object, ic->slot);
             return true;
         }
-        // Tagged unions alternate between two shapes.
-        if (ic->poly_count > 0 && object->shape == ic->poly_shape[0]) {
-            MAL_PERF_COUNT(ic_load_poly_hits);
-            *out = mal_object_field_load(object, mal_ic_poly_slot(ic, 0));
-            return true;
-        }
+        // Objects from one constructor branch into many shapes that keep its leading
+        // fields at the same slots; the polymorphic rows stay out of line.
+        if (mal_vm_object_try_load_slot_key(object, ic, out)) return true;
     }
     // Prototype methods (`array.pop`, class methods) would otherwise pay the out-of-line probe.
     if (ic->mode == MAL_IC_MODE_INHERITED_VALUE &&

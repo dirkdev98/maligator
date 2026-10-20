@@ -1513,7 +1513,7 @@ static void mal_perf_stats_print(void) {
         "load_own_table_hits=%llu load_own_table_fills=%llu "
         "load_missing_hits=%llu load_missing_fills=%llu "
         "load_fallbacks=%llu load_slow_mono_hits=%llu "
-        "load_poly_hits=%llu load_mega_hits=%llu load_mega_misses=%llu "
+        "load_poly_hits=%llu load_slot_key_hits=%llu load_mega_hits=%llu load_mega_misses=%llu "
         "load_shape_hits=%llu load_shape_fills=%llu load_shape_uncacheable=%llu "
         "load_plain_generic=%llu load_primitive_hits=%llu load_primitive_fills=%llu "
         "load_primitive_uncacheable=%llu load_string_length_hits=%llu "
@@ -1549,6 +1549,7 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.ic_load_fallbacks,
         (unsigned long long) mal_perf_stats.ic_load_slow_mono_hits,
         (unsigned long long) mal_perf_stats.ic_load_poly_hits,
+        (unsigned long long) mal_perf_stats.ic_load_slot_key_hits,
         (unsigned long long) mal_perf_stats.ic_load_mega_hits,
         (unsigned long long) mal_perf_stats.ic_load_mega_misses,
         (unsigned long long) mal_perf_stats.ic_load_shape_hits,
