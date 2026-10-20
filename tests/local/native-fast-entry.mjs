@@ -72,6 +72,14 @@ function isLarge(n) {
 	return n > 10;
 }
 
+function last(stack) {
+	return stack[stack.length - 1];
+}
+
+function at(items, index) {
+	return items[index];
+}
+
 const shapes = [];
 for (let i = 0; i < 8; i++) {
 	const type = { flags: i, objectFlags: i * 10 };
@@ -172,5 +180,33 @@ for (let round = 0; round < 5; round++) {
 let large = 0;
 for (let n = 0; n < 40; n++) if (isLarge(n)) large++;
 log.push(`large ${large} ${isLarge("11")} ${isLarge(11n)}`);
+
+let lastTotal = 0;
+const stacks = [[1, 2, 3], [4], [5, 6]];
+for (let round = 0; round < 3000; round++) lastTotal += last(stacks[round % 3]);
+const holey = [1, , 3];
+const indexed = [0, 1];
+Object.defineProperty(indexed, 1, {
+	get() {
+		log.push("index getter");
+		return 9;
+	},
+});
+const proxied = new Proxy([7, 8], {
+	get(target, key) {
+		log.push(`proxy index ${String(key)}`);
+		return target[key];
+	},
+});
+log.push(`last ${lastTotal} ${last([])} ${last("abc")} ${last(new Int8Array([4, 5]))}`);
+log.push(
+	`at ${[at([1, 2], 1), at([1, 2], 2), at([1, 2], -1), at([1, 2], 0.5), at([1, 2], "1")]}`,
+);
+log.push(
+	`at holes ${at(holey, 1)} ${at(indexed, 1)} ${at(proxied, 0)} ${at({ 0: "object" }, 0)}`,
+);
+Array.prototype[5] = "inherited";
+log.push(`at inherited ${at([1], 5)}`);
+delete Array.prototype[5];
 
 console.log(log.join("\n"));

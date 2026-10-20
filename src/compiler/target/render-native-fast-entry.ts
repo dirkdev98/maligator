@@ -27,10 +27,11 @@ export interface NativeFastEntryInput {
 
 /**
  * A frameless entry for a short loop-free body of side-effect-free reads: it runs the
- * body while every property load hits its cache and every operator stays on Numbers,
- * and otherwise restarts the activation in the full entry. Nothing observable happens
- * before a restart, and nothing can allocate or call, so it needs no frame row, root
- * frame, or safepoint. Undefined when the body needs any of them.
+ * body while every named load hits its cache, every indexed load reads a dense Array
+ * element, and every operator stays on Numbers, and otherwise restarts the activation
+ * in the full entry. Nothing observable happens before a restart, and nothing can
+ * allocate or call, so it needs no frame row, root frame, or safepoint. Undefined
+ * when the body needs any of them.
  */
 export function renderNativeFastEntry(
 	input: NativeFastEntryInput,
@@ -316,6 +317,8 @@ function fastInstruction(
 			}
 			return `if (!mal_vm_property_try_load_static(vm, f${op.object}, &__fast_ic[${op.icIndex}], &f${op.dst})) goto __full;`;
 		}
+		case "LOAD_PROPERTY":
+			return `{ MalArrayObject *const __array = mal_vm_as_array(f${op.object}); if (__array == nullptr || !mal_ops_is_number(f${op.key}) || !mal_vm_array_try_get_index(__array, mal_ops_number_as_f64(f${op.key}), &f${op.dst})) goto __full; }`;
 		case "BINARY":
 			return fastBinary(op);
 		case "UNARY":

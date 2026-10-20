@@ -25,6 +25,8 @@ const NONCOLLECTING_HELPERS = new Set([
 	"mal_value_is_empty",
 	"mal_vm_typeof_compare",
 	"mal_vm_load_captured",
+	"mal_vm_as_array",
+	"mal_vm_array_try_get_index",
 ]);
 
 const template = compileSemanticProgramToProgramImage(
@@ -81,8 +83,9 @@ function fastEntry(fn: BytecodeFunction): ReadonlyArray<string> | undefined {
 const loadCompareReturn: ReadonlyArray<BytecodeInstruction> = [
 	{ opcode: "LOAD_PROPERTY_STATIC", dst: 2, object: 0, stringIndex: 0, icIndex: 0 },
 	{ opcode: "BINARY", dst: 3, left: 2, right: 1, operator: "===" },
-	{ opcode: "JUMP_IF", cond: 3, targetIp: 5 },
-	{ opcode: "BINARY", dst: 4, left: 2, right: 1, operator: "<" },
+	{ opcode: "JUMP_IF", cond: 3, targetIp: 6 },
+	{ opcode: "LOAD_PROPERTY", dst: 4, object: 2, key: 1, icIndex: 1 },
+	{ opcode: "BINARY", dst: 4, left: 4, right: 1, operator: "<" },
 	{ opcode: "RETURN", value: 4 },
 	{ opcode: "RETURN", value: 3 },
 ];
