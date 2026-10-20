@@ -2031,13 +2031,19 @@ static MalValue stream_read_core(MalVm *vm, MalValue receiver, MalValue n_value)
             // Number.parseInt(n, 10)
             MalString *text;
             if (!mal_vm_to_string(vm, n_value, &text)) goto done;
-            usize length = 0;
-            byte *utf8 = mal_string_to_utf8(text, &length);
-            char *end = nullptr;
-            n = utf8 == nullptr ? NAN : strtod(utf8, &end);
-            if (utf8 != nullptr && (end == utf8 || !isfinite(n))) n = NAN;
-            else if (!isnan(n)) n = trunc(n);
-            free(utf8);
+            // Base 10 only: "1e3" reads 1 and "0x10" reads 0, unlike strtod.
+            const c16 *units = mal_string_code_units(text);
+            usize length = mal_string_length(text), at = 0;
+            while (at < length && (units[at] == ' ' || (units[at] >= '\t' && units[at] <= '\r') ||
+                       units[at] == 0xa0 || units[at] == 0xfeff)) {
+                at++;
+            }
+            bool negative = at < length && units[at] == '-';
+            if (at < length && (units[at] == '-' || units[at] == '+')) at++;
+            usize start = at;
+            f64 value = 0;
+            while (at < length && units[at] >= '0' && units[at] <= '9') value = value * 10 + (units[at++] - '0');
+            n = at == start ? NAN : (negative ? -value : value);
         }
     }
     f64 n_orig = n;

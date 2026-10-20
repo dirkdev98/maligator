@@ -217,11 +217,11 @@ static void ws_write_frame(MalWebSocket *ws, u8 opcode, const byte *payload, usi
     if (length < 126) {
         frame[at++] = (byte) (0x80 | length);
     } else if (length <= 0xffff) {
-        frame[at++] = 0x80 | 126;
+        frame[at++] = (byte) (0x80 | 126);
         frame[at++] = (byte) (length >> 8);
         frame[at++] = (byte) length;
     } else {
-        frame[at++] = 0x80 | 127;
+        frame[at++] = (byte) (0x80 | 127);
         for (int i = 7; i >= 0; i--) frame[at++] = (byte) ((u64) length >> (8 * i));
     }
     byte mask[4];
@@ -629,7 +629,8 @@ static MalValue ws_url_part(MalVm *vm, MalValue url, const char *name, char **ou
         return mal_value_new_boolean(false);
     }
     usize length = 0;
-    *out = (char *) mal_string_to_utf8(mal_value_to_string(value), &length);
+    // Callers compare and format these parts as C strings; a serialized URL holds no NUL.
+    (void) mal_string_to_utf8_c_string(mal_value_to_string(value), out, &length);
     return mal_value_new_boolean(*out != nullptr);
 }
 
@@ -662,11 +663,16 @@ static MalValue mal_web_websocket_constructor(
         (void) mal_vm_get_property(vm, error_roots[0], mal_intrinsic_string_key(vm, (const byte *) "name"), &error_roots[1]);
         (void) mal_vm_get_property(vm, error_roots[0], mal_intrinsic_string_key(vm, (const byte *) "message"), &error_roots[2]);
         usize name_length = 0, message_length = 0;
-        byte *name_text = mal_value_is_string(error_roots[1]) ? mal_string_to_utf8(mal_value_to_string(error_roots[1]), &name_length) : nullptr;
-        byte *message_text = mal_value_is_string(error_roots[2]) ? mal_string_to_utf8(mal_value_to_string(error_roots[2]), &message_length) : nullptr;
+        char *name_text = nullptr, *message_text = nullptr;
+        if (mal_value_is_string(error_roots[1])) {
+            (void) mal_string_to_utf8_c_string(mal_value_to_string(error_roots[1]), &name_text, &name_length);
+        }
+        if (mal_value_is_string(error_roots[2])) {
+            (void) mal_string_to_utf8_c_string(mal_value_to_string(error_roots[2]), &message_text, &message_length);
+        }
         char text[256];
-        snprintf(text, sizeof text, "%s: %s", name_text ? (const char *) name_text : "Error",
-            message_text ? (const char *) message_text : "Invalid URL");
+        snprintf(text, sizeof text, "%s: %s", name_text ? name_text : "Error",
+            message_text ? message_text : "Invalid URL");
         free(name_text);
         free(message_text);
         mal_gc_unroot(&error_root);
