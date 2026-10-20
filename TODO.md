@@ -505,6 +505,25 @@ iterator cursor is not, by itself, permission to delete its language object.
       still builds a capture vector per closure per activation; closures with an
       identical layout could share one. Nested functions passed as callbacks, like
       TypeScript's isRelatedTo, keep their object.
+- [ ] Create escaping nested functions on their first escape. checkTypeRelatedTo
+      still allocates seven of its 49 nested functions on every call (isRelatedTo,
+      reportError and others) because a few branches pass them as values, such as
+      `reportErrors ? reportError : undefined` or isRelatedTo passed to
+      getBestMatchingType. Closure creation takes about 3.5% of the TypeScript
+      check. A captured slot could start empty and an explicit allocating Core
+      operation at each value use could create the closure once from the owner's
+      activation, so the calls stay direct and identity stays stable.
+- [ ] Inline `f.call(thisArg, ...)` when `f` is a known script function. A cached
+      call through %Function.prototype.call% now forwards to its receiver, but Core
+      still cannot inline or directly call the target, because nothing proves the
+      function has no own `call` property, and the function-call-chain recipe never
+      reaches prettier's method shim: region discovery runs out of program budget
+      after 22,000 of 39,000 opportunities.
+- [ ] Make prettier's AstPath getters and TypeScript enum reads cheaper. Five
+      prettier rounds call AstPath getters 7.4 million times through the static
+      miss path, and read about 16 million `SyntaxKind` members from dictionary
+      objects through the out-of-line probe, which now saves the registers its
+      other rows need even for this one.
 - [ ] Prove loop-carried bindings initialized. `redundant-tdz-check-folding` gives
       up on any phi cycle, so every `let` updated in a loop keeps its TDZ checks. A
       least fixpoint over moves and block parameters removes them, but made the
