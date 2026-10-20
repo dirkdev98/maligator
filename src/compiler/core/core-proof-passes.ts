@@ -1123,6 +1123,8 @@ const materializeFlowScalars: CoreFunctionPass = {
 				component.some((value) => kinds.scalarKind(value) === undefined)
 			)
 				continue;
+			let scalarUses = 0;
+			let boundaryUses = 0;
 			const rejected = component.some((value) => {
 				if (
 					fn.kernel.valueDefinitionKind(value) === 1 &&
@@ -1135,15 +1137,20 @@ const materializeFlowScalars: CoreFunctionPass = {
 					use = fn.kernel.useNext(use)
 				) {
 					const instruction = fn.kernel.useInstruction(use);
-					if (
-						fn.instructionKind(instruction) === "operation" &&
-						!scalarConsumer(fn, instruction)
-					)
+					if (fn.instructionKind(instruction) !== "operation") continue;
+					if (scalarConsumer(fn, instruction)) {
+						scalarUses++;
+						continue;
+					}
+					// Keys, arguments and stored values box a scalar where they need one.
+					if (!scalarBoundaryConsumer(fn, instruction, fn.kernel.useOperand(use)))
 						return true;
+					boundaryUses++;
 				}
 				return false;
 			});
-			if (rejected) continue;
+			// Only scalar arithmetic or tests pay for the boxing that boundary uses then add.
+			if (rejected || (boundaryUses > 0 && scalarUses === 0)) continue;
 			const exact = component.map((value) => kinds.exactScalar(value));
 			const representation = flowScalarRepresentation(
 				exact as ReadonlyArray<CoreExactScalarKind>,
