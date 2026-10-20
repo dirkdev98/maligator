@@ -70,8 +70,9 @@ export function renderNativeFastEntry(
 	const body: Array<string> = [];
 	let loadsProperties = false;
 	let loadsCaptures = false;
+	const constants = numberConstantRegisters(fn.instructions);
 	for (const [ip, op] of fn.instructions.entries()) {
-		const line = fastInstruction(op, ip, input, fieldLoads, targets, exported);
+		const line = fastInstruction(op, ip, input, fieldLoads, targets, exported, constants);
 		if (line === undefined) return undefined;
 		if (op.opcode === "LOAD_PROPERTY_STATIC" && !fieldLoads.has(ip))
 			loadsProperties = true;
@@ -233,16 +234,52 @@ function fastReturn(
 	}
 }
 
-function numbers(...registers: ReadonlyArray<number>): string {
-	return registers.map((register) => `!mal_ops_is_number(f${register})`).join(" || ");
+/** Registers whose every definition stores the same Number, so uses can read the literal. */
+function numberConstantRegisters(
+	instructions: ReadonlyArray<BytecodeInstruction>,
+): ReadonlyMap<number, number> {
+	const constants = new Map<number, number>();
+	const varying = new Set<number>();
+	for (const op of instructions) {
+		if (!("dst" in op) || typeof op.dst !== "number") continue;
+		if (
+			(op.opcode === "CREATE_NUMBER" || op.opcode === "CREATE_F64") &&
+			!varying.has(op.dst) &&
+			(!constants.has(op.dst) || Object.is(constants.get(op.dst), op.value))
+		) {
+			constants.set(op.dst, op.value);
+			continue;
+		}
+		constants.delete(op.dst);
+		varying.add(op.dst);
+	}
+	return constants;
 }
 
-function number(register: number): string {
-	return `mal_ops_number_as_f64(f${register})`;
+interface FastNumbers {
+	readonly constants: ReadonlyMap<number, number>;
+	readonly literal: (value: number) => string;
 }
 
-function int32(register: number): string {
-	return `mal_ops_number_to_i32(${number(register)})`;
+function numbers(values: FastNumbers, ...registers: ReadonlyArray<number>): string {
+	const checks = registers
+		.filter((register) => !values.constants.has(register))
+		.map((register) => `!mal_ops_is_number(f${register})`);
+	return checks.length === 0 ? "false" : checks.join(" || ");
+}
+
+function number(values: FastNumbers, register: number): string {
+	const constant = values.constants.get(register);
+	return constant === undefined
+		? `mal_ops_number_as_f64(f${register})`
+		: values.literal(constant);
+}
+
+function int32(values: FastNumbers, register: number): string {
+	const constant = values.constants.get(register);
+	return constant === undefined
+		? `mal_ops_number_to_i32(${number(values, register)})`
+		: `((i32) ${constant | 0})`;
 }
 
 const NUMBER_COMPARISONS: ReadonlySet<string> = new Set(["<", "<=", ">", ">="]);
@@ -251,52 +288,54 @@ const NUMBER_OPERATORS: ReadonlySet<string> = new Set(["+", "-", "*", "/"]);
 
 function fastBinary(
 	op: Extract<BytecodeInstruction, { opcode: "BINARY" }>,
+	values: FastNumbers,
 ): string | undefined {
 	const { dst, left, right, operator } = op;
-	const guard = `if (${numbers(left, right)}) goto __full;`;
+	const guard = `if (${numbers(values, left, right)}) goto __full;`;
 	if (operator === "===" || operator === "!==")
 		return `f${dst} = mal_value_new_boolean(${operator === "!==" ? "!" : ""}mal_ops_strict_equal_boxed(f${left}, f${right}));`;
 	if (operator === "==" || operator === "!=") {
 		// Only Number pairs and nullish operands avoid ToPrimitive and string comparison.
 		const not = operator === "!=" ? "!" : "";
-		return `if (mal_ops_is_number(f${left}) && mal_ops_is_number(f${right})) f${dst} = mal_value_new_boolean(${not}(${number(left)} == ${number(right)})); else if (mal_value_is_nil(f${left}) || mal_value_is_nil(f${right})) f${dst} = mal_value_new_boolean(${not}(mal_value_is_nil(f${left}) && mal_value_is_nil(f${right}))); else goto __full;`;
+		return `if (mal_ops_is_number(f${left}) && mal_ops_is_number(f${right})) f${dst} = mal_value_new_boolean(${not}(${number(values, left)} == ${number(values, right)})); else if (mal_value_is_nil(f${left}) || mal_value_is_nil(f${right})) f${dst} = mal_value_new_boolean(${not}(mal_value_is_nil(f${left}) && mal_value_is_nil(f${right}))); else goto __full;`;
 	}
 	if (NUMBER_COMPARISONS.has(operator))
-		return `${guard} f${dst} = mal_value_new_boolean(${number(left)} ${operator} ${number(right)});`;
+		return `${guard} f${dst} = mal_value_new_boolean(${number(values, left)} ${operator} ${number(values, right)});`;
 	if (INT32_OPERATORS.has(operator))
-		return `${guard} f${dst} = mal_value_from_i32(${int32(left)} ${operator} ${int32(right)});`;
+		return `${guard} f${dst} = mal_value_from_i32(${int32(values, left)} ${operator} ${int32(values, right)});`;
 	if (operator === "<<")
-		return `${guard} f${dst} = mal_value_from_i32((i32) ((u32) ${int32(left)} << ((u32) ${int32(right)} & 31u)));`;
+		return `${guard} f${dst} = mal_value_from_i32((i32) ((u32) ${int32(values, left)} << ((u32) ${int32(values, right)} & 31u)));`;
 	if (operator === ">>")
-		return `${guard} f${dst} = mal_value_from_i32(${int32(left)} >> ((u32) ${int32(right)} & 31u));`;
+		return `${guard} f${dst} = mal_value_from_i32(${int32(values, left)} >> ((u32) ${int32(values, right)} & 31u));`;
 	if (operator === ">>>")
-		return `${guard} f${dst} = mal_ops_number_value((f64) ((u32) ${int32(left)} >> ((u32) ${int32(right)} & 31u)));`;
+		return `${guard} f${dst} = mal_ops_number_value((f64) ((u32) ${int32(values, left)} >> ((u32) ${int32(values, right)} & 31u)));`;
 	if (NUMBER_OPERATORS.has(operator))
-		return `${guard} f${dst} = mal_ops_number_value(${number(left)} ${operator} ${number(right)});`;
+		return `${guard} f${dst} = mal_ops_number_value(${number(values, left)} ${operator} ${number(values, right)});`;
 	if (operator === "%")
-		return `${guard} f${dst} = mal_ops_number_value(fmod(${number(left)}, ${number(right)}));`;
+		return `${guard} f${dst} = mal_ops_number_value(fmod(${number(values, left)}, ${number(values, right)}));`;
 	return undefined;
 }
 
 function fastUnary(
 	op: Extract<BytecodeInstruction, { opcode: "UNARY" }>,
+	values: FastNumbers,
 ): string | undefined {
 	const { dst, src, operator } = op;
-	const guard = `if (${numbers(src)}) goto __full;`;
+	const guard = `if (${numbers(values, src)}) goto __full;`;
 	switch (operator) {
 		case "!":
 			return `f${dst} = mal_value_new_boolean(!mal_value_is_truthy(f${src}));`;
 		case "-":
-			return `${guard} f${dst} = mal_ops_number_value(-${number(src)});`;
+			return `${guard} f${dst} = mal_ops_number_value(-${number(values, src)});`;
 		case "+":
 		case "tonumeric":
 			return `${guard} f${dst} = f${src};`;
 		case "~":
-			return `${guard} f${dst} = mal_value_from_i32(~${int32(src)});`;
+			return `${guard} f${dst} = mal_value_from_i32(~${int32(values, src)});`;
 		case "increment":
-			return `${guard} f${dst} = mal_ops_number_value(${number(src)} + 1.0);`;
+			return `${guard} f${dst} = mal_ops_number_value(${number(values, src)} + 1.0);`;
 		case "decrement":
-			return `${guard} f${dst} = mal_ops_number_value(${number(src)} - 1.0);`;
+			return `${guard} f${dst} = mal_ops_number_value(${number(values, src)} - 1.0);`;
 		default:
 			return undefined;
 	}
@@ -309,7 +348,9 @@ function fastInstruction(
 	fieldLoads: ReadonlyMap<number, number>,
 	targets: Set<number>,
 	exported: boolean,
+	constants: ReadonlyMap<number, number>,
 ): string | undefined {
+	const values: FastNumbers = { constants, literal: input.f64Literal };
 	const value = (operand: number): string | undefined => {
 		if (operand >= 0) return `f${operand}`;
 		const decoded = decodeVmValueOperand(operand);
@@ -369,9 +410,9 @@ function fastInstruction(
 		case "LOAD_PROPERTY":
 			return `{ MalArrayObject *const __array = mal_vm_as_array(f${op.object}); if (__array == nullptr || !mal_ops_is_number(f${op.key}) || !mal_vm_array_try_get_index(__array, mal_ops_number_as_f64(f${op.key}), &f${op.dst})) goto __full; }`;
 		case "BINARY":
-			return fastBinary(op);
+			return fastBinary(op, values);
 		case "UNARY":
-			return fastUnary(op);
+			return fastUnary(op, values);
 		case "TYPEOF_COMPARE":
 			return `f${op.dst} = mal_value_new_boolean(${op.negated ? "!" : ""}mal_vm_typeof_compare(f${op.src}, ${emitTypeofResult(op.expected)}));`;
 		case "JUMP":
