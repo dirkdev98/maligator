@@ -122,6 +122,21 @@ describe("native fast entries", () => {
 		expect(unexpectedHelpers(lines!)).toEqual([]);
 	});
 
+	it("read a Number constant's literal instead of converting it per call", () => {
+		const masked: ReadonlyArray<BytecodeInstruction> = [
+			{
+				opcode: "CREATE_NUMBER",
+				dst: 1,
+				value: 1572864,
+			} as unknown as BytecodeInstruction,
+			{ opcode: "BINARY", dst: 2, left: 0, right: 1, operator: "&" },
+			{ opcode: "RETURN", value: 2 },
+		];
+		const text = fastEntry(body(masked))!.join("\n");
+		expect(text).toContain("((i32) 1572864)");
+		expect(text).not.toContain("mal_ops_is_number(f1)");
+	});
+
 	it("reach another fast body only through its exported fast path", () => {
 		const call: ReadonlyArray<BytecodeInstruction> = [
 			{
