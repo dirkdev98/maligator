@@ -205,6 +205,16 @@ function inlineSourcePositions(
 	return result;
 }
 
+const INLINE_ENVIRONMENT_OPCODES: ReadonlySet<string> = new Set([
+	"loadCaptured",
+	"createFunction",
+	"withEnter",
+	"withExit",
+	"withGet",
+	"withResolveBase",
+	"withSet",
+]);
+
 const INLINE_UNSUPPORTED_OPCODES = new Set([
 	"createArgumentsObject",
 	"createRestArguments",
@@ -551,6 +561,7 @@ function directCaptureContext(
 
 function inlineTarget(
 	program: CoreProgram,
+	caller: CoreFunctionStore,
 	target: CoreFunctionId,
 	invocation: "call" | "construct",
 	captureContext?: InlineCaptureContext,
@@ -563,6 +574,8 @@ function inlineTarget(
 	if (
 		fn.isGenerator ||
 		fn.isAsync ||
+		// Strictness belongs to the running function, as an assignment through `with` shows.
+		fn.metadata.strict !== caller.metadata.strict ||
 		(invocation === "call" && fn.metadata.isClassConstructor) ||
 		(invocation === "construct" &&
 			(!fn.metadata.hasPrototype || fn.metadata.isDerivedConstructor)) ||
@@ -612,9 +625,9 @@ function inlineTarget(
 				(invocation !== "construct" && opcode === "loadNewTarget") ||
 				(invocation === "construct" &&
 					["createFunction", "envCopy", "envPop", "envPush"].includes(opcode)) ||
-				// Creating a descendant closure also binds the callee's lexical environment.
-				(["loadCaptured", "createFunction"].includes(opcode) &&
-					captureContext === undefined) ||
+				// Creating a descendant closure also binds the callee's lexical environment,
+				// and `with` references resolve through it too.
+				(INLINE_ENVIRONMENT_OPCODES.has(opcode) && captureContext === undefined) ||
 				(opcode === "loadThis" && !fn.metadata.strict)
 			)
 				return false;
@@ -1045,7 +1058,7 @@ function scalarConstructorMethod(
 	);
 	if (targets?.length !== 1) return undefined;
 	const target = targets[0]!;
-	const inline = inlineTarget(program, target, "call");
+	const inline = inlineTarget(program, fn, target, "call");
 	if (
 		inline === undefined ||
 		!inline.linear ||
@@ -1498,6 +1511,7 @@ function offerFunctionCandidates(
 		if (iteration !== undefined && callback !== undefined && callback !== functionId) {
 			const inline = inlineTarget(
 				program,
+				fn,
 				callback,
 				"call",
 				directCaptureContext(fn, iteration.callback, site.instruction, callback),
@@ -1563,7 +1577,7 @@ function offerFunctionCandidates(
 		if (finiteTargets !== undefined) {
 			const targetSetKind = closedFiniteTargets === undefined ? "open-hints" : "closed";
 			const inlines = finiteTargets.map((target) =>
-				inlineTarget(program, target, invocation),
+				inlineTarget(program, fn, target, invocation),
 			);
 			const generatedCodeCost = inlines.reduce(
 				(cost, inline) =>
@@ -1717,7 +1731,7 @@ function offerFunctionCandidates(
 		const callbackInline =
 			callbackContext === undefined
 				? undefined
-				: inlineTarget(program, consumerProof!.callback, "call", callbackContext);
+				: inlineTarget(program, fn, consumerProof!.callback, "call", callbackContext);
 		// A held callback stays a call, now with an exact callee inside the inlined consumer.
 		const synchronousCallback =
 			callbackInline?.linear || consumerProof?.created === false
@@ -1725,6 +1739,7 @@ function offerFunctionCandidates(
 				: undefined;
 		const inline = inlineTarget(
 			program,
+			fn,
 			target,
 			invocation,
 			captureContext,
@@ -2225,6 +2240,7 @@ function applyLinearInline(
 		selectedInline ??
 		inlineTarget(
 			program,
+			caller,
 			target,
 			descriptor.callTransfer.invocation,
 			applicationCaptureContext(program, caller, callee, candidate.site, target),
@@ -2468,6 +2484,7 @@ function applyGuardedInline(
 	if (callee === undefined) return undefined;
 	const inline = inlineTarget(
 		program,
+		caller,
 		target,
 		descriptor.callTransfer.invocation,
 		applicationCaptureContext(program, caller, callee, candidate.site, target),
@@ -3077,7 +3094,7 @@ function applyFiniteDispatch(
 	const representation = caller.valueRepresentation(result);
 	if (
 		candidate.targets.some((target) => {
-			const inline = inlineTarget(program, target, "call");
+			const inline = inlineTarget(program, caller, target, "call");
 			return (
 				inline === undefined ||
 				inline.returnValues.some(
@@ -3129,6 +3146,7 @@ function applyCandidate(
 				return undefined;
 			const inline = inlineTarget(
 				program,
+				fn,
 				target,
 				"call",
 				directCaptureContext(fn, iteration.callback, candidate.site, target),
@@ -3177,7 +3195,13 @@ function applyCandidate(
 				proof.callback,
 			);
 			if (context === undefined) return undefined;
-			const callback = inlineTarget(program, proof.callback, "call", context);
+			const callback = inlineTarget(
+				program,
+				editor.function,
+				proof.callback,
+				"call",
+				context,
+			);
 			if (!callback?.linear) return undefined;
 			const firstNewInstruction = editor.function.instructionCapacity;
 			const applied = applyGuardedInline(program, candidate, editor, false, proof);
