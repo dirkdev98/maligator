@@ -613,7 +613,7 @@
 	},
 	{
 		"file": "runtime/node_stream.c",
-		"sha256": "6e06d14676e603dee7f0115ae59a9d162b3b75a23163b107c0e9163770d85d13"
+		"sha256": "38aec8a31be0ba1376f9508406e3e9348abc485e16c8b8ce0caff0b40d2f2f3d"
 	},
 	{
 		"file": "runtime/node_stream.h",
@@ -745,7 +745,7 @@
 	},
 	{
 		"file": "runtime/web_websocket.c",
-		"sha256": "bc6409055bbe4636169e04f2d8c28c1d590b3c907b604b3e84fc0779247d35ba"
+		"sha256": "511172ffc64b0494b0c4b0057bf4d90e7e6b27a4718df8c3284b22fc89d23c4b"
 	},
 	{
 		"file": "runtime/web_writable_stream.c",
