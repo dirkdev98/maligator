@@ -16,6 +16,7 @@ const NONCOLLECTING_HELPERS = new Set([
 	"mal_ops_is_number",
 	"mal_ops_number_as_f64",
 	"mal_ops_number_to_i32",
+	"mal_ops_number_value_to_i32",
 	"mal_ops_number_value",
 	"mal_ops_strict_equal_boxed",
 	"mal_value_from_i32",

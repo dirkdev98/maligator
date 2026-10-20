@@ -219,6 +219,13 @@ static inline i32 mal_ops_number_to_i32(f64 number) {
 #endif
 }
 
+/** ToInt32 of a boxed Number; an int32-tagged value already is its own result. */
+static inline i32 mal_ops_number_value_to_i32(MalValue value) {
+    return value >= MAL_VALUE_TAG_BASE
+        ? (i32) (u32) (value & MASK_INT32)
+        : mal_ops_number_to_i32(mal_value_to_f64(value));
+}
+
 /**
  * The result of a function body for the native backend's RETURN: for a
  * [[Construct]] call a non-object completion becomes `this`

@@ -278,7 +278,7 @@ function number(values: FastNumbers, register: number): string {
 function int32(values: FastNumbers, register: number): string {
 	const constant = values.constants.get(register);
 	return constant === undefined
-		? `mal_ops_number_to_i32(${number(values, register)})`
+		? `mal_ops_number_value_to_i32(f${register})`
 		: `((i32) ${constant | 0})`;
 }
 

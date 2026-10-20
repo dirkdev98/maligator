@@ -6482,7 +6482,7 @@ function emitInstruction(
 					? `r${instruction.src}`
 					: reps[instruction.src] === "number"
 						? `mal_ops_number_to_i32(r${instruction.src})`
-						: `mal_ops_number_to_i32(mal_ops_number_as_f64(${boxed(instruction.src)}))`
+						: `mal_ops_number_value_to_i32(${boxed(instruction.src)})`
 				: reps[dst] === "number"
 					? reps[instruction.src] === "number"
 						? num(instruction.src)
@@ -6628,7 +6628,7 @@ function emitInstruction(
 			case "unbox-number":
 				return `mal_ops_number_as_f64(${value})`;
 			case "unbox-int32":
-				return `mal_ops_number_to_i32(mal_ops_number_as_f64(${value}))`;
+				return `mal_ops_number_value_to_i32(${value})`;
 			case "unbox-boolean":
 				return `mal_value_to_boolean(${value})`;
 			case "int32-to-number":
@@ -9632,7 +9632,7 @@ function emitInstruction(
 				const fallback = [
 					`MalValue ${result} = ${profileCall("binary", reentrantValue(`mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`))};`,
 					throwCheck(),
-					`r${dst} = ${reps[dst] === "int32" ? `mal_ops_number_to_i32(mal_ops_number_as_f64(${result}))` : `mal_ops_number_as_f64(${result})`};`,
+					`r${dst} = ${reps[dst] === "int32" ? `mal_ops_number_value_to_i32(${result})` : `mal_ops_number_as_f64(${result})`};`,
 				];
 				// ToInt32 of an int32 operand or result is the identity, but clang cannot fold FJCVTZS.
 				const int32Input = (register: number): string =>
@@ -9640,7 +9640,7 @@ function emitInstruction(
 						? inputValue(register)
 						: reps[register] === "number"
 							? `mal_ops_number_to_i32(${inputValue(register)})`
-							: `mal_ops_number_to_i32(mal_ops_number_as_f64(${boxed(register)}))`;
+							: `mal_ops_number_value_to_i32(${boxed(register)})`;
 				const int32Expression = INT32_RESULT_OPERATORS.has(operator)
 					? nativeInt32Expr(operator, int32Input(left), int32Input(right))
 					: null;
