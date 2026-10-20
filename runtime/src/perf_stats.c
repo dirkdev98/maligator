@@ -1422,7 +1422,7 @@ static void mal_perf_stats_print(void) {
         stderr,
         "[perf-call-cache-stats] probes=%llu exact_identity_hits=%llu "
         "compiled_dispatches=%llu native_exact_hits=%llu "
-        "way_checks=%llu dispatch_misses=%llu native_fills=%llu "
+        "way_checks=%llu dispatch_misses=%llu native_fills=%llu function_call_forwards=%llu "
         "compiled_enters=%llu compiled_debug_frames=%llu "
         "direct_entry_hits=%llu numeric_sort_callback_calls=%llu "
         "numeric_sort_kernel_runs=%llu\n",
@@ -1433,6 +1433,7 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.call_cache_way_checks,
         (unsigned long long) mal_perf_stats.call_cache_dispatch_misses,
         (unsigned long long) mal_perf_stats.call_cache_native_fills,
+        (unsigned long long) mal_perf_stats.call_cache_function_call_forwards,
         (unsigned long long) mal_perf_stats.compiled_enter_calls,
         (unsigned long long) mal_perf_stats.compiled_debug_frame_entries,
         (unsigned long long) mal_perf_stats.direct_entry_hits,

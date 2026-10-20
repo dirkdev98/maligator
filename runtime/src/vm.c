@@ -4533,6 +4533,18 @@ __attribute__((noinline)) static MalCompletion mal_vm_call_cached_fallback(
     const MalValue *args,
     i32 arg_count
 ) {
+    // %Function.prototype.call% only forwards to its receiver, so `f.call(x, ...)` enters f
+    // directly; a non-callable receiver still reaches the builtin and its TypeError.
+    if (callee == vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE_CALL] &&
+        mal_value_is_callable(this_value)) {
+        MAL_PERF_COUNT(call_cache_function_call_forwards);
+        MalValue value = mal_vm_call_cached_value(
+            vm, cc, this_value, arg_count > 0 ? args[0] : mal_value_new_undefined(),
+            arg_count > 1 ? args + 1 : nullptr, arg_count > 1 ? arg_count - 1 : 0);
+        return vm->completion.kind == MAL_COMPLETION_THROW
+            ? vm->completion
+            : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
+    }
     if (cc->heap_identity == vm->heap.identity &&
         cc->epoch == vm->heap.epoch &&
         mal_value_is_native_function_object(callee)) {
