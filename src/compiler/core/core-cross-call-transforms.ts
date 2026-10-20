@@ -1910,6 +1910,8 @@ function specializeCoreCallbackArguments(
 	service: CoreTransformCandidateService,
 	limits: CoreTransformBudgetLimits,
 	liveFunctions: ReadonlySet<CoreFunctionId>,
+	variantsPerTarget: Map<CoreFunctionId, number>,
+	clones: Set<CoreFunctionId>,
 ): ReadonlyArray<CoreFunctionId> {
 	if (!summaries.targets.sourceClosed) return [];
 	const cells = capturedCellWrites(program, true);
@@ -2014,7 +2016,8 @@ function specializeCoreCallbackArguments(
 			caller: group.target,
 			site: representative,
 			revision: summaries.version(group.target),
-			priorityClass: 2,
+			// A clone pays off once the callees it forwards its closures to are specialized too.
+			priorityClass: group.sites.some((site) => clones.has(site.caller)) ? 1 : 2,
 			// Each shared site stops dispatching to every held closure once per consumer loop iteration.
 			priorityScore: inlinePriorityScore(
 				group.sites.length *
@@ -2038,7 +2041,6 @@ function specializeCoreCallbackArguments(
 				signature,
 			);
 	}
-	const variantsPerTarget = new Map<CoreFunctionId, number>();
 	const changed = new Set<CoreFunctionId>();
 	for (
 		let candidate = service.next();
@@ -2058,6 +2060,7 @@ function specializeCoreCallbackArguments(
 			continue;
 		}
 		const variant = cloneCoreFunction(program, program.function(group.target));
+		clones.add(variant);
 		variantsPerTarget.set(group.target, (variantsPerTarget.get(group.target) ?? 0) + 1);
 		changed.add(variant);
 		const editors = new Map<CoreFunctionId, CoreEditor>();
@@ -3339,10 +3342,13 @@ export function runCoreCrossCallTransforms(
 			CALLBACK_SPECIALIZATION_VARIANTS * CALLBACK_SPECIALIZATION_MAX_INSTRUCTIONS,
 		perCallerCompilerWork:
 			2 * CALLBACK_SPECIALIZATION_VARIANTS * CALLBACK_SPECIALIZATION_MAX_INSTRUCTIONS,
-		programGeneratedCode: Math.ceil(phaseLimits.programGeneratedCode / 4),
-		programCompilerWork: Math.ceil(phaseLimits.programCompilerWork / 4),
+		programGeneratedCode: phaseLimits.programGeneratedCode,
+		programCompilerWork: phaseLimits.programCompilerWork,
 	});
-	const cloneService = new CoreTransformCandidateService(cloneLimits);
+	const cloneVariants = new Map<CoreFunctionId, number>();
+	const clones = new Set<CoreFunctionId>();
+	let cloneGeneratedCode = 0;
+	let cloneCompilerWork = 0;
 	const specialized = specializeCoreStaticArguments(
 		program,
 		analyses,
@@ -3363,22 +3369,35 @@ export function runCoreCrossCallTransforms(
 			!(wave === 0 && specialized.length > 0)
 		)
 			break;
-		// Clones of forwarding helpers expose their callees' sites to the next round.
+		// Clones of forwarding helpers expose their callees' sites to the next round. Each
+		// round reconsiders every candidate, since one declined earlier may now fit.
 		const cloned = new Set<CoreFunctionId>();
 		for (let round = 0; round < CALLBACK_SPECIALIZATION_ROUNDS; round++) {
-			// Later rounds keep a share of the budget for the callees that forwarding exposes.
 			const share = (round + 1) / CALLBACK_SPECIALIZATION_ROUNDS;
+			const roundLimits: CoreTransformBudgetLimits = Object.freeze({
+				...cloneLimits,
+				programGeneratedCode: Math.max(
+					0,
+					Math.ceil(cloneLimits.programGeneratedCode * share) - cloneGeneratedCode,
+				),
+				programCompilerWork: Math.max(
+					0,
+					Math.ceil(cloneLimits.programCompilerWork * share) - cloneCompilerWork,
+				),
+			});
+			const roundService = new CoreTransformCandidateService(roundLimits);
 			const changed = specializeCoreCallbackArguments(
 				program,
 				summaries,
-				cloneService,
-				Object.freeze({
-					...cloneLimits,
-					programGeneratedCode: Math.ceil(cloneLimits.programGeneratedCode * share),
-					programCompilerWork: Math.ceil(cloneLimits.programCompilerWork * share),
-				}),
+				roundService,
+				roundLimits,
 				new Set(flow.reachability.liveFunctions),
+				cloneVariants,
+				clones,
 			);
+			const consumed = roundService.statistics();
+			cloneGeneratedCode += consumed.generatedCodeConsumed;
+			cloneCompilerWork += consumed.compilerWorkConsumed;
 			if (changed.length === 0) break;
 			for (const functionId of changed) cloned.add(functionId);
 			flow = analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, { scope: "program" });

@@ -249,10 +249,12 @@ A helper that repeats a callback, by calling it in a loop or forwarding it to a
 function that does, is cloned once for each distinct set of exact closures its
 call sites pass. Each clone is created at those sites, so its parameters become
 exact and its callback calls direct or inlined. Clones run before inline discovery,
-in up to three rounds so a forwarding helper's clone exposes its callee, and draw
-on a quarter of the cross-call budget with at most 16 variants per helper. Without
-profiles every clone counts the same, so a cold site can still take a variant a hot
-one would have used.
+in up to three rounds so a forwarding helper's clone exposes its callee; each round
+reconsiders every candidate under its share of a budget the size of the cross-call
+one, at most 16 variants per helper, and ranks clones that complete such a chain
+first. Without profiles every clone counts the same, so a smaller budget let cold
+sites take the variants hot ones needed: in TypeScript, losing the containsType
+chain alone cost about 4% more instructions.
 
 Candidate claim headers and exact costs participate in ranking and admission before
 target payloads are materialized. Rejected candidates do not receive target blocks,
