@@ -505,6 +505,12 @@ iterator cursor is not, by itself, permission to delete its language object.
       still builds a capture vector per closure per activation; closures with an
       identical layout could share one. Nested functions passed as callbacks, like
       TypeScript's isRelatedTo, keep their object.
+- [ ] Prove loop-carried bindings initialized. `redundant-tdz-check-folding` gives
+      up on any phi cycle, so every `let` updated in a loop keeps its TDZ checks. A
+      least fixpoint over moves and block parameters removes them, but made the
+      TypeScript check run about 3.7% more instructions and 1% more cycles, and
+      the native TDZ-plan tests lose the checks their fixture relies on; find what
+      the removed checks were holding in place first.
 - [ ] Finish specializing higher-order helpers. Callback clones make TypeScript's
       binarySearchKey call getTypeId and compareValues directly, but a hand-written
       monomorphic search is still about 4% faster: compareValues stays a call, and
