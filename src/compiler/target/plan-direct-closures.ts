@@ -1,5 +1,7 @@
 import type { CoreCompilationContext } from "../core/core-compilation.ts";
-import { coreFunctionId } from "../core/core-ir.ts";
+import { buildCoreControlFlow } from "../core/core-ir-control-flow.ts";
+import type { CoreControlFlow } from "../core/core-ir-control-flow.ts";
+import { coreFunctionId, coreInstructionId } from "../core/core-ir.ts";
 import type {
 	CoreFunctionId,
 	CoreInstructionId,
@@ -141,6 +143,31 @@ export function planCoreDirectClosures(
 		}
 		return entry;
 	};
+	const ownerFlows = new Map<CoreFunctionId, CoreControlFlow>();
+	// The owner's own loads read the marker only after the creation has stored it.
+	const storeDominates = (
+		owner: CoreFunctionId,
+		store: CoreInstructionId | undefined,
+		load: CoreInstructionId,
+	): boolean => {
+		if (store === undefined) return false;
+		const fn = program.function(owner);
+		const storeBlock = fn.instructionBlock(store);
+		const loadBlock = fn.instructionBlock(load);
+		if (storeBlock === loadBlock) {
+			for (const instruction of fn.instructionIds(loadBlock)) {
+				if (instruction === store) return true;
+				if (instruction === load) return false;
+			}
+			return false;
+		}
+		let flow = ownerFlows.get(owner);
+		if (flow === undefined) {
+			flow = buildCoreControlFlow(program, owner, { exceptions: true });
+			ownerFlows.set(owner, flow);
+		}
+		return flow.instructionDominatesBlock(storeBlock, loadBlock);
+	};
 	const exactCallee = (
 		fn: CoreFunctionStore,
 		instruction: CoreInstructionId,
@@ -177,6 +204,7 @@ export function planCoreDirectClosures(
 				continue;
 			const ownerCalls: Array<CoreInstructionId> = [];
 			let cell: string | undefined;
+			let cellStore: CoreInstructionId | undefined;
 			let eligible = true;
 			for (
 				let use = creator.kernel.valueFirstUse(value);
@@ -199,6 +227,7 @@ export function planCoreDirectClosures(
 						owner,
 						creator.instructionAttributes(instruction).index as number,
 					);
+					cellStore = coreInstructionId(instruction);
 					continue;
 				}
 				eligible = false;
@@ -216,7 +245,8 @@ export function planCoreDirectClosures(
 					const loaded = result(load.fn, load.instruction);
 					// Resumable bodies render calls without the owner-scope environment.
 					if (
-						load.fn.id === owner ||
+						(load.fn.id === owner &&
+							!storeDominates(owner, cellStore, load.instruction)) ||
 						load.fn.isGenerator ||
 						load.fn.isAsync ||
 						loaded === undefined ||
