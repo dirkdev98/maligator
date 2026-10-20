@@ -39,3 +39,20 @@ export function rootMaskBits(functionSource: string, statement: string): bigint 
 		.split(", ")
 		.reduce((bits, word, index) => bits | (rootMaskWord(word) << BigInt(64 * index)), 0n);
 }
+
+/** Emitted C without the frameless entries that restart in a `_full` body, leaving the canonical bodies. */
+export function withoutNativeFastEntries(source: string): string {
+	const lines = source.split("\n");
+	const kept: Array<string> = [];
+	for (let index = 0; index < lines.length; index++) {
+		if (!/\bmal_(?:compiled|direct)_\w+\([^;]*\) \{$/.test(lines[index]!)) {
+			kept.push(lines[index]!);
+			continue;
+		}
+		const end = lines.indexOf("}", index);
+		const definition = lines.slice(index, end + 1);
+		if (!definition.includes("__full:")) kept.push(...definition);
+		index = end;
+	}
+	return kept.join("\n");
+}

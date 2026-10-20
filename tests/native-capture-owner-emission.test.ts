@@ -6,6 +6,7 @@ import type {
 	BytecodeFunction,
 	BytecodeInstruction,
 } from "../src/compiler/target/runtime-image.ts";
+import { withoutNativeFastEntries } from "./helpers/native-c-source.ts";
 import { resolveNativeLinks, TEST_RELOCATION } from "./helpers/native-relocation.ts";
 import { testPropertyCacheCount } from "./helpers/program-image.ts";
 
@@ -141,7 +142,8 @@ describe("native lexical owner lookup contract", () => {
 				},
 				relocatable,
 			);
-			for (const { source } of [emitted, ...emitted.directEntries]) {
+			for (const entry of [emitted, ...emitted.directEntries]) {
+				const source = withoutNativeFastEntries(entry.source);
 				const owner = (index: number) =>
 					relocatable ? `(__mal_relocation->function_base + ${index})` : `${index}`;
 				expect(source.match(/mal_vm_load_captured_value_at\(/g)).toHaveLength(3);
@@ -338,7 +340,7 @@ describe("native lexical owner lookup contract", () => {
 	);
 
 	it("resolves multiple relocated owners in one call with runtime owner IDs", () => {
-		const { source } = emit(
+		const { source: emitted } = emit(
 			[
 				{ opcode: "LOAD_CAPTURED", dst: 0, ownerFunctionIndex: 5, index: 0 },
 				{ opcode: "LOAD_CAPTURED", dst: 1, ownerFunctionIndex: 2, index: 0 },
@@ -347,6 +349,7 @@ describe("native lexical owner lookup contract", () => {
 			{},
 			true,
 		);
+		const source = withoutNativeFastEntries(emitted);
 		expect(source).toContain(
 			"const i32 __capture_owner_ids[] = { (__mal_relocation->function_base + 2), (__mal_relocation->function_base + 5) };",
 		);

@@ -127,6 +127,7 @@ import type {
 	VmSemanticDependency,
 	VmSemanticProtectorFact,
 } from "./program-image.ts";
+import { renderNativeFastEntry } from "./render-native-fast-entry.ts";
 import {
 	computeArgumentRetentionLimit,
 	decodeVmValueOperand,
@@ -2248,20 +2249,32 @@ function emitCompiledVariant(
 	const directParameters =
 		directEntry === undefined
 			? undefined
-			: (directEntry.argumentRepresentations ?? directEntry.parameterRepresentations).map(
-					(representation, parameter) => `${cTypeOf(representation)} p${parameter}`,
-				);
-	if (directEntry?.fieldParameters !== undefined)
-		directParameters!.push(
-			...directEntry.fieldParameters.representations.map(
-				(rep, field) => `${cTypeOf(rep)} fp${field}`,
-			),
-		);
+			: [
+					...(
+						directEntry.argumentRepresentations ?? directEntry.parameterRepresentations
+					).map((representation, parameter) => ({
+						type: cTypeOf(representation),
+						name: `p${parameter}`,
+					})),
+					...(directEntry.fieldParameters?.representations.map((rep, field) => ({
+						type: cTypeOf(rep),
+						name: `fp${field}`,
+					})) ?? []),
+				];
+	const parameterList =
+		directParameters === undefined
+			? "MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, void *entry_state"
+			: [
+					"MalVm *vm",
+					"MalValue this_value",
+					...directParameters.map(({ type, name }) => `${type} ${name}`),
+					"MalEnv *env",
+					"MalValue callee",
+				].join(", ");
+	const resultType =
+		directEntry === undefined ? "MalValue" : cTypeOf(directEntry.resultRepresentation);
 	// Keep native entries on 64-byte boundaries as neighboring generated code changes.
-	const signature =
-		directEntry === undefined
-			? `${linkage === "static" ? "static " : ""}${NATIVE_ENTRY_ATTRIBUTES}__attribute__((aligned(64))) MalValue ${symbol}(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, void *entry_state) {`
-			: `${linkage === "static" ? "static " : ""}${NATIVE_ENTRY_ATTRIBUTES}__attribute__((aligned(64))) ${cTypeOf(directEntry.resultRepresentation)} ${symbol}(MalVm *vm, MalValue this_value${directParameters!.length === 0 ? "" : `, ${directParameters!.join(", ")}`}, MalEnv *env, MalValue callee) {`;
+	const signature = `${linkage === "static" ? "static " : ""}${NATIVE_ENTRY_ATTRIBUTES}__attribute__((aligned(64))) ${resultType} ${symbol}(${parameterList}) {`;
 	lines.push(`    (void) this_value;`);
 	if (directEntry === undefined) lines.push(`    (void) new_target;`);
 	lines.push(`    (void) env;`);
@@ -2484,10 +2497,7 @@ function emitCompiledVariant(
 		{
 			symbol,
 			signature,
-			resultType:
-				directEntry === undefined
-					? "MalValue"
-					: cTypeOf(directEntry.resultRepresentation),
+			resultType,
 			inactiveRows: rootMaskStatements.declarations,
 			prologue: lines,
 			body: body.lines,
@@ -2499,8 +2509,65 @@ function emitCompiledVariant(
 		},
 		splitPolicy,
 	);
+	const fullSymbol = `${symbol}_full`;
+	const fastEntry =
+		split === undefined
+			? renderNativeFastEntry({
+					fn,
+					directEntry,
+					specialized:
+						worker !== undefined || (nativeContract.literalSwitches?.length ?? 0) > 0,
+					signature,
+					fullSymbol,
+					fullArguments:
+						directParameters === undefined
+							? [
+									"vm",
+									"this_value",
+									"args",
+									"arg_count",
+									"new_target",
+									"env",
+									"callee",
+									"entry_state",
+								]
+							: [
+									"vm",
+									"this_value",
+									...directParameters.map(({ name }) => name),
+									"env",
+									"callee",
+								],
+					prologue:
+						relocatable !== false && relocatable.relocation !== undefined
+							? [
+									`    const MalNativeProgramRelocation *__mal_relocation = ${relocatable.relocation};`,
+								]
+							: [],
+					functionIndex: relocation.functionIndex(index),
+					globalIndex: (global) => relocation.globalIndex(global),
+					stringValue: (string) => relocation.stringValue(string),
+					capturePrologue: [
+						...initializeFixedCaptureOwners(analysis.captures, relocation, true, "env"),
+						...initializeCopiedCaptureValues(analysis.captures, relocation),
+					],
+					capturedLoad: (owner, slot) => {
+						const copied = analysis.copiedCaptures.get(captureValueKey(owner, slot));
+						if (copied !== undefined) return `__capture_value_${copied}`;
+						if (!analysis.stableCaptureOwners.has(owner))
+							return `mal_vm_load_captured(env, ${relocation.ownerFunctionIndex(owner)}, ${slot})`;
+						const name = captureOwnerName(relocation, owner);
+						return analysis.requiredCaptureOwners.has(owner)
+							? `${name}->slots[${slot}]`
+							: `(${name} != nullptr ? ${name}->slots[${slot}] : MAL_VALUE_UNDEFINED)`;
+					},
+					f64Literal: cF64Literal,
+				})
+			: undefined;
 	const definition = split ?? [
-		signature,
+		fastEntry === undefined
+			? signature
+			: `static ${NATIVE_ENTRY_ATTRIBUTES}__attribute__((noinline)) __attribute__((aligned(64))) ${resultType} ${fullSymbol}(${parameterList}) {`,
 		// Each JavaScript arithmetic operation rounds separately, including expression chains.
 		"#pragma STDC FP_CONTRACT OFF",
 		...rootMaskStatements.declarations,
@@ -2510,6 +2577,7 @@ function emitCompiledVariant(
 		...throwExit,
 		"}",
 		...trailer,
+		...(fastEntry ?? []),
 	];
 	const source = [
 		...(relocation.link.length === 0 ? [] : [`extern const i32 ${symbol}_link[];`]),

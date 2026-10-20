@@ -37,7 +37,11 @@ import type {
 } from "../src/compiler/target/runtime-image.ts";
 import { vmSafepointRootMapsAreTrusted } from "../src/compiler/target/runtime-image.ts";
 import { mergeProgramImages } from "../src/test262/program-image-merge.ts";
-import { privateRootRegisters, rootMaskBits } from "./helpers/native-c-source.ts";
+import {
+	privateRootRegisters,
+	rootMaskBits,
+	withoutNativeFastEntries,
+} from "./helpers/native-c-source.ts";
 import {
 	resolveNativeLinks,
 	resolveOverlayUnitLinks,
@@ -88,7 +92,7 @@ function boxedNativeDefinition(
 	const storage =
 		linkage === "static" ? "static " : linkage === "either" ? "(?:static )?" : "";
 	return new RegExp(
-		`^${storage}(?:__attribute__\\(\\([^\\n]*\\)\\) )*MalValue mal_compiled_${index}\\(MalVm \\*vm, MalValue this_value, const MalValue \\*args, i32 arg_count, MalValue new_target, MalEnv \\*env, MalValue callee, void \\*entry_state\\) \\{$`,
+		`^${storage}(?:__attribute__\\(\\([^\\n]*\\)\\) )*MalValue mal_compiled_${index}(?:_full)?\\(MalVm \\*vm, MalValue this_value, const MalValue \\*args, i32 arg_count, MalValue new_target, MalEnv \\*env, MalValue callee, void \\*entry_state\\) \\{$`,
 		"m",
 	);
 }
@@ -2932,7 +2936,9 @@ describe("native update-expression representation", () => {
 					gc: { safepoints: [] },
 				}),
 			);
-			const output = emitProgramImage(image, { compiled: true });
+			const output = withoutNativeFastEntries(
+				emitProgramImage(image, { compiled: true }),
+			);
 			if (representation === "int32") {
 				expect(output).toMatch(/r\d+ = r\d+ & r\d+;/);
 				expect(output).not.toContain("mal_ops_number_to_i32(");
@@ -3774,8 +3780,10 @@ describe("native update-expression representation", () => {
 	});
 
 	it("returns directly from non-constructible functions", () => {
-		const output = emit(
-			`"use strict"; const explicit = (value) => value + 1; const fallthrough = () => {}; globalThis.keep = [explicit, fallthrough];`,
+		const output = withoutNativeFastEntries(
+			emit(
+				`"use strict"; const explicit = (value) => value + 1; const fallthrough = () => {}; globalThis.keep = [explicit, fallthrough];`,
+			),
 		);
 		const explicit = boxedNativeFunction(output, 1);
 		expect(explicit).toMatch(/return r\d+;/);
@@ -5426,7 +5434,9 @@ describe("native static typeof facts", () => {
 		`);
 
 		expect(output).toMatch(boxedNativeDefinition(1, "static"));
-		expect(output.match(/mal_vm_typeof_compare/g)).toHaveLength(1);
+		expect(withoutNativeFastEntries(output).match(/mal_vm_typeof_compare/g)).toHaveLength(
+			1,
+		);
 		expect(output).toContain("mal_vm_binary_op(vm, MAL_BIN_MUL");
 	});
 });
