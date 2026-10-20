@@ -6,6 +6,10 @@ import {
 } from "./core-array-iteration.ts";
 import { coreConstructorSlotReserve } from "./core-constructor-layout.ts";
 import { CoreEditor } from "./core-editor.ts";
+import {
+	coreCaptureOwners,
+	coreSingleActivationFunctions,
+} from "./core-function-activations.ts";
 import { cloneCoreFunction, coreFunctionIsCloneable } from "./core-function-clone.ts";
 import type { CoreCrossCallFunctionOptimizationResult } from "./core-function-optimization-session.ts";
 import {
@@ -367,6 +371,45 @@ function ancestorCaptureContext(
 	return { caller, callee, site };
 }
 
+// Each discovery resets this alongside the captured-cell writes.
+const discoveredSingleActivations = new WeakMap<
+	CoreProgram,
+	ReadonlySet<CoreFunctionId>
+>();
+
+/**
+ * A callee whose captured scopes all run once reads the same environments as a
+ * caller that already captures them, wherever its closure came from, such as a
+ * parameter that only ever receives a module-level helper.
+ */
+function singleActivationCaptureContext(
+	program: CoreProgram,
+	once: ReadonlySet<CoreFunctionId>,
+	caller: CoreFunctionStore,
+	callee: CoreValueId,
+	site: CoreInstructionId,
+	target: CoreFunctionId,
+): InlineCaptureContext | undefined {
+	const fn = program.function(target);
+	const owners = coreCaptureOwners(fn);
+	if (owners.size === 0) return undefined;
+	const callerOwners = coreCaptureOwners(caller);
+	for (const owner of owners)
+		if (
+			!once.has(owner as CoreFunctionId) ||
+			(owner !== caller.id && !callerOwners.has(owner))
+		)
+			return undefined;
+	// A closure created in the copy would bind the caller's scope, not the callee's.
+	for (const instruction of fn.instructionIds())
+		if (
+			fn.instructionKind(instruction) === "operation" &&
+			fn.instructionOpcodeName(instruction) === "createFunction"
+		)
+			return undefined;
+	return { caller, callee, site };
+}
+
 function applicationCaptureContext(
 	program: CoreProgram,
 	caller: CoreFunctionStore,
@@ -375,11 +418,15 @@ function applicationCaptureContext(
 	target: CoreFunctionId,
 ): InlineCaptureContext | undefined {
 	const cells = discoveredCapturedCellWrites.get(program);
+	const once = discoveredSingleActivations.get(program);
 	return (
 		directCaptureContext(caller, callee, site, target) ??
 		(cells === undefined
 			? undefined
-			: ancestorCaptureContext(program, cells, caller, callee, site, target))
+			: ancestorCaptureContext(program, cells, caller, callee, site, target)) ??
+		(once === undefined
+			? undefined
+			: singleActivationCaptureContext(program, once, caller, callee, site, target))
 	);
 }
 
@@ -1400,6 +1447,7 @@ function offerFunctionCandidates(
 	instanceMethodHints: ReadonlyMap<number, ReadonlyArray<CoreFunctionId>>,
 	fieldEntryNominees: ReadonlyMap<number, number>,
 	capturedCells: () => CapturedCellWrites,
+	singleActivations: () => ReadonlySet<CoreFunctionId>,
 	privateNames: CoreModulePrivateNameIndex,
 	readAccessors: boolean,
 	accessorWork?: CoreReadAccessorWork,
@@ -1630,14 +1678,22 @@ function offerFunctionCandidates(
 			localCaptureContext ??
 			(exactTarget === undefined
 				? undefined
-				: ancestorCaptureContext(
+				: (ancestorCaptureContext(
 						program,
 						capturedCells(),
 						fn,
 						site.callee,
 						site.instruction,
 						exactTarget,
-					));
+					) ??
+					singleActivationCaptureContext(
+						program,
+						singleActivations(),
+						fn,
+						site.callee,
+						site.instruction,
+						exactTarget,
+					)));
 		if (localCaptureContext !== undefined) capturedCells();
 		const consumerProof =
 			exactTarget === undefined || open || invocation !== "call"
@@ -2101,6 +2157,15 @@ export function discoverCoreCrossCallCandidates(
 	const instanceMethodHints = coreInstanceMethodHints(program);
 	const fieldEntryNominees = nativeFieldEntryNominees(program, liveFunctions);
 	discoveredCapturedCellWrites.delete(program);
+	discoveredSingleActivations.delete(program);
+	const singleActivations = () => {
+		let once = discoveredSingleActivations.get(program);
+		if (once === undefined) {
+			once = coreSingleActivationFunctions(program, analyses.compilationContext);
+			discoveredSingleActivations.set(program, once);
+		}
+		return once;
+	};
 	const capturedCells = () => {
 		let cells = discoveredCapturedCellWrites.get(program);
 		if (cells === undefined) {
@@ -2125,6 +2190,7 @@ export function discoverCoreCrossCallCandidates(
 			instanceMethodHints,
 			fieldEntryNominees,
 			capturedCells,
+			singleActivations,
 			privateNames,
 			readAccessors,
 			accessorWork,
