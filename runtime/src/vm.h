@@ -1675,6 +1675,13 @@ typedef struct MalVm {
      */
     struct MalInlineCache *inherited_property_stub;
 
+    /**
+     * Static names that no property on a builtin prototype chain answers, by the
+     * chain's intrinsic prototype slot. Valid while the primitive-method protector
+     * holds, since that protector fails on any change to a watched prototype.
+     */
+    struct MalBuiltinMissingRow *builtin_missing_rows;
+
     /** Process launch context retained for host modules loaded from portable wire. */
     MalHostLaunchContext launch;
 

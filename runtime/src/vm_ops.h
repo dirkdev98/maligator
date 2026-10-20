@@ -1173,6 +1173,14 @@ MalPropertyStubEntry *mal_vm_property_stub_cache(MalVm *vm);
 /** Lazily allocate inherited rows, or return null without a cache on allocation failure. */
 MalInlineCache *mal_vm_inherited_property_stub_cache(MalVm *vm);
 
+#define MAL_BUILTIN_MISSING_ROW_BITS 8
+#define MAL_BUILTIN_MISSING_ROW_COUNT (1u << MAL_BUILTIN_MISSING_ROW_BITS)
+
+typedef struct MalBuiltinMissingRow {
+    MalValue key;
+    u32 prototype_slot;
+} MalBuiltinMissingRow;
+
 /**
  * Inline dense-array index access for the native backend (render-native-c), so a `obj[i]`
  * read/write of a dense array is a direct vector load/store rather than a nested

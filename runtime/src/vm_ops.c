@@ -2434,6 +2434,73 @@ MalInlineCache *mal_vm_inherited_property_stub_cache(MalVm *vm) {
     return vm->inherited_property_stub;
 }
 
+static bool mal_ic_key_is_stable_string(MalValue key);
+
+/**
+ * The intrinsic prototype a receiver's lookup starts at, when everything above its
+ * own properties is a builtin chain and it has no own property the key could name.
+ * Strings own only `length` and indices, which a recorded key never is.
+ */
+static i32 mal_vm_builtin_chain_slot(const MalVm *vm, MalValue receiver) {
+    if (mal_value_is_string(receiver)) return MAL_INTRINSIC_STRING_PROTOTYPE;
+    if (mal_ops_is_number(receiver)) return MAL_INTRINSIC_NUMBER_PROTOTYPE;
+    if (mal_value_is_boolean(receiver)) return MAL_INTRINSIC_BOOLEAN_PROTOTYPE;
+    if (!mal_value_is_heap_type(receiver, MAL_HEAP_ARRAY_OBJECT)) return -1;
+    const MalObject *array = (const MalObject *) mal_value_to_heap(receiver);
+    if (array->shape->inline_count != 0 || mal_object_overflow(array) != nullptr ||
+        mal_object_prototype(array) !=
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE])) {
+        return -1;
+    }
+    return MAL_INTRINSIC_ARRAY_PROTOTYPE;
+}
+
+static inline u32 mal_vm_builtin_missing_hash(i32 slot, MalValue key) {
+    u64 bits = (u64) key ^ ((u64) (u32) slot * 0x9E3779B97F4A7C15ULL);
+    return (u32) ((bits ^ (bits >> 29)) >> 4) & (MAL_BUILTIN_MISSING_ROW_COUNT - 1);
+}
+
+/** Whether `key` is known to be absent from the receiver's builtin chain. */
+static bool mal_vm_builtin_chain_missing(const MalVm *vm, MalValue receiver, MalValue key) {
+    if (vm->builtin_missing_rows == nullptr || !mal_vm_primitive_methods_intact(vm)) {
+        return false;
+    }
+    i32 slot = mal_vm_builtin_chain_slot(vm, receiver);
+    if (slot < 0) return false;
+    const MalBuiltinMissingRow *row =
+        &vm->builtin_missing_rows[mal_vm_builtin_missing_hash(slot, key)];
+    return row->key == key && row->prototype_slot == (u32) slot;
+}
+
+/** Record that a load of `key` from the receiver found nothing on its builtin chain. */
+static void mal_vm_builtin_chain_note_missing(MalVm *vm, MalValue receiver, MalValue key) {
+    if (!mal_vm_primitive_methods_intact(vm) || !mal_ic_key_is_stable_string(key)) return;
+    i32 slot = mal_vm_builtin_chain_slot(vm, receiver);
+    if (slot < 0) return;
+    MalKey query = {.kind = MAL_KEY_STRING, .value = key};
+    MalString *name = mal_value_to_string(key);
+    if (mal_array_key_is_length(query) || mal_vm_string_is_canonical_numeric_index(vm, name)) {
+        return;
+    }
+    // A reparented or extended watched prototype fails the protector, so a chain of
+    // watched prototypes stays the one checked here.
+    for (const MalObject *prototype = mal_value_to_object(vm->intrinsics[slot]);
+         prototype != nullptr; prototype = mal_object_prototype(prototype)) {
+        if (!prototype->watched_method_proto || mal_object_get_own(prototype, query).present) {
+            return;
+        }
+    }
+    if (vm->builtin_missing_rows == nullptr) {
+        vm->builtin_missing_rows =
+            calloc(MAL_BUILTIN_MISSING_ROW_COUNT, sizeof(MalBuiltinMissingRow));
+        if (vm->builtin_missing_rows == nullptr) return;
+    }
+    MalBuiltinMissingRow *row =
+        &vm->builtin_missing_rows[mal_vm_builtin_missing_hash(slot, key)];
+    row->key = key;
+    row->prototype_slot = (u32) slot;
+}
+
 /**
  * Shared handler for a compiled static-name site's second-level inherited
  * or missing-chain row. The static probes have already rejected the local
@@ -2662,6 +2729,12 @@ mal_vm_property_try_load_static_remaining(
             mal_vm_watched_try_load_static(vm, receiver, ic, &value) ||
             mal_vm_special_try_load_static(vm, receiver, ic, &value) ||
             mal_vm_inherited_stub_try_load_static(vm, receiver, object, ic, &value);
+    }
+    // A site whose objects fill its row still sees strings and arrays that lack the name.
+    if (!hit && mal_vm_inherited_stub_site(ic) &&
+        mal_vm_builtin_chain_missing(vm, receiver, ic->key)) {
+        MAL_PERF_COUNT(ic_load_builtin_missing_hits);
+        return (MalStaticPropertyProbeResult) {.hit = true, .value = mal_value_new_undefined()};
     }
     return (MalStaticPropertyProbeResult) {
         .hit = hit,
@@ -6739,20 +6812,29 @@ MalValue mal_vm_op_load_property_ic_static_miss(
         return MAL_VALUE_UNDEFINED;
     }
     MalString *name = vm->string_constant_atoms[atom];
+    MalValue name_value = mal_value_from_string(name);
+    if (mal_vm_builtin_chain_missing(vm, object_value, name_value)) {
+        MAL_PERF_COUNT(ic_load_builtin_missing_hits);
+        return MAL_VALUE_UNDEFINED;
+    }
     MalValue roots[] = {object_value};
     MalRootSpan span;
     mal_gc_root(&span, roots, countof(roots));
     MalValue result;
     // A getter row skips the index-name check: an index never shares a string row.
     if (!mal_ic_is_getter_row(ic) ||
-        !mal_vm_getter_row_try_load(vm, object_value, mal_value_from_string(name), ic, &result)) {
+        !mal_vm_getter_row_try_load(vm, object_value, name_value, ic, &result)) {
         // The VM atom is already this property's canonical query key; only an
         // index-shaped name needs the INDEX kind.
         u32 index = 0;
         MalKey key = mal_vm_string_to_array_index(name, &index)
             ? mal_key_index(index)
-            : (MalKey) {.kind = MAL_KEY_STRING, .value = mal_value_from_string(name)};
+            : (MalKey) {.kind = MAL_KEY_STRING, .value = name_value};
         result = mal_vm_op_load_property_ic_keyed(vm, object_value, key, ic, true);
+        if (key.kind == MAL_KEY_STRING && mal_value_is_undefined(result) &&
+            vm->completion.kind != MAL_COMPLETION_THROW) {
+            mal_vm_builtin_chain_note_missing(vm, object_value, name_value);
+        }
     }
     mal_gc_unroot(&span);
     return result;

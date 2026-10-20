@@ -701,6 +701,7 @@ static void mal_vm_init_execution_state(MalVm *vm, const MalRuntimeImage *progra
         calloc((usize) vm->function_capacity, sizeof(MalShape **));
     vm->property_stub = nullptr;
     vm->inherited_property_stub = nullptr;
+    vm->builtin_missing_rows = nullptr;
     vm->launch = (MalHostLaunchContext) {0};
     vm->iterator_result_shape = nullptr;
     vm->regexp_instance_shape = nullptr;
@@ -1081,6 +1082,7 @@ void mal_vm_free(MalVm *vm) {
         }
         free(vm->inherited_property_stub);
     }
+    free(vm->builtin_missing_rows);
     free(vm->interp_call_cache);
     free(vm->global_property_cache);
     // Only heap-resident (generator/async) leftover frames own their buffers;
