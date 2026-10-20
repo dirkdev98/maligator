@@ -485,7 +485,7 @@
 	},
 	{
 		"file": "runtime/node_http.c",
-		"sha256": "48f1c6a8d8c95d92d6855c4a2618b95b8cc7b75d23cbeddeaa2eff6be2a1d9aa"
+		"sha256": "774ddce8771a549fd1d93c90c9f3fdc521b4339bdd61a07cdc03a522030a7218"
 	},
 	{
 		"file": "runtime/node_http.h",
@@ -613,7 +613,7 @@
 	},
 	{
 		"file": "runtime/node_stream.c",
-		"sha256": "36b8bcd95e693da3a77a2eec52683ee8f70526101567805239e0c120c9f35449"
+		"sha256": "6e06d14676e603dee7f0115ae59a9d162b3b75a23163b107c0e9163770d85d13"
 	},
 	{
 		"file": "runtime/node_stream.h",
@@ -744,12 +744,16 @@
 		"sha256": "1f7c470d66c537c45adb1301b055e676345ac1ec56f0989a8fc880b5080aa446"
 	},
 	{
+		"file": "runtime/web_websocket.c",
+		"sha256": "bc6409055bbe4636169e04f2d8c28c1d590b3c907b604b3e84fc0779247d35ba"
+	},
+	{
 		"file": "runtime/web_writable_stream.c",
 		"sha256": "a600b5b6e4c9683ba43b6e3c524ec2e8e7289dfc0151278fe39efffc19e30211"
 	},
 	{
 		"file": "runtime/workers.c",
-		"sha256": "8a8aba3af2146af7d80d08fc4a738a2265177e770f020bccaf0922939ae57c3f"
+		"sha256": "76e4e96c5407bc424506328615fe0f7084a89b021bb8ab63a4a1b8639c5b9ea2"
 	},
 	{
 		"file": "runtime/workers.h",
