@@ -47,6 +47,7 @@ const NODE_DERIVED: Array<Derivation> = [
 		upstream: "lib/internal/util/inspect.js",
 	},
 	{ file: "runtime/src/runtime/node_dgram.c", upstream: "lib/dgram.js" },
+	{ file: "runtime/src/runtime/node_module.c", upstream: "lib/internal/util/inspect.js" },
 	{ file: "runtime/src/runtime/node_net.c", upstream: "lib/net.js, lib/_tls_wrap.js" },
 	{ file: "runtime/src/runtime/node_path.c", upstream: "lib/path.js" },
 	{
@@ -61,6 +62,7 @@ const NODE_DERIVED: Array<Derivation> = [
 	{ file: "runtime/src/runtime/node_tls.c", upstream: "lib/tls.js, lib/_tls_wrap.js" },
 	{ file: "runtime/src/runtime/node_util.c", upstream: "lib/util.js" },
 	{ file: "runtime/src/runtime/node_util_mime.c", upstream: "lib/internal/mime.js" },
+	{ file: "runtime/rust/src/x509.rs", upstream: "src/crypto/crypto_common.cc" },
 ];
 
 const LIBUV_DERIVED: Array<Derivation> = [

@@ -4660,6 +4660,20 @@ static MalNodeHttpSocketState *http_socket_for_receiver(MalValue receiver) {
     return nullptr;
 }
 
+static void http_sni_fail(
+    MalVm *vm, MalNodeHttpSocketState *state, MalValue socket, MalValue server, MalValue error) {
+    state->hello_pending = false;
+    MalValue emitted[] = {
+        mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "tlsClientError")), error, socket};
+    MalRootSpan root;
+    mal_gc_root(&root, emitted, countof(emitted));
+    // The error is reported here, so the close that follows must not report a hang-up too.
+    mal_http_conn_tls_mark_reported(state->conn);
+    (void) http_call_method(vm, server, "emit", emitted, 3);
+    mal_http_conn_abort(state->conn);
+    mal_gc_unroot(&root);
+}
+
 /* Node's loadSNI callback: an error ends the handshake, a context replaces the default. */
 static MalValue http_sni_callback(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
@@ -4674,12 +4688,7 @@ static MalValue http_sni_callback(
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
     if (mal_value_is_truthy(roots[2])) {
-        MalValue emitted[] = {
-            mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "tlsClientError")), roots[2], roots[0]};
-        // The error is reported here, so the close that follows must not report a hang-up too.
-        mal_http_conn_tls_mark_reported(state->conn);
-        (void) http_call_method(vm, roots[1], "emit", emitted, 3);
-        mal_http_conn_abort(state->conn);
+        http_sni_fail(vm, state, roots[0], roots[1], roots[2]);
     } else {
         MalTlsServerConfig *config = mal_value_is_object(roots[3])
             ? mal_node_net_context_config(vm, roots[1], roots[3]) : nullptr;
@@ -4716,7 +4725,15 @@ static bool http_server_drain_hello(MalVm *vm, MalNodeHttpServerState *server) {
             &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
             mal_intrinsic_ascii(vm, (const byte *) ""), 2, http_sni_callback, slots, 2));
         MalValue call_args[] = {roots[3], roots[4]};
-        (void) mal_vm_call_value(vm, roots[1], roots[0], call_args, 2);
+        MalCompletion called = mal_vm_call_value(vm, roots[1], roots[0], call_args, 2);
+        // Node catches an SNICallback that throws and fails the connection with that error;
+        // dropping it would leave the handshake waiting forever.
+        if (called.kind == MAL_COMPLETION_THROW) {
+            roots[3] = called.value;
+            vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+            MalNodeHttpSocketState *socket = http_socket_for_receiver(roots[2]);
+            if (socket != nullptr && socket->conn != nullptr) http_sni_fail(vm, socket, roots[2], roots[0], roots[3]);
+        }
     } else {
         state->hello_pending = false;
         roots[2] = mal_node_net_sni_match(vm, roots[0], (const byte *) state->hello_name, state->hello_name_length);

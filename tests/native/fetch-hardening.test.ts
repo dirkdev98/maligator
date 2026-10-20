@@ -91,6 +91,17 @@ describe("Mal.serve hardening", () => {
 		});
 	});
 
+	it("refuses a hostname it would have to narrow to bind", async () => {
+		await withServer(bin, {}, async (base) => {
+			const response = await rawExchange(
+				base,
+				"GET /hostname-refusal HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+			);
+			expect(statusLine(response)).toBe("HTTP/1.1 200 OK");
+			expect(response.endsWith("\r\n\r\nTypeError")).toBe(true);
+		});
+	});
+
 	// The transport bounds used to be reachable only from the native test main, so a
 	// JS application had no way to tighten them. Zero still selects the engine
 	// default for each field — a bound can be retuned but never switched off.

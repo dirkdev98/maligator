@@ -1,5 +1,8 @@
+// Portions derived from Node.js src/crypto/crypto_common.cc (MIT); see THIRD_PARTY_NOTICES.md.
 //! X.509 DER reading shared by node:tls peer certificates and node:crypto's X509Certificate.
 //! Every function borrows its input; nothing is retained.
+
+use std::borrow::Cow;
 
 pub(crate) fn der(input: &[u8]) -> Option<(u8, &[u8], &[u8])> {
     let (&tag, rest) = input.split_first()?;
@@ -18,6 +21,7 @@ pub(crate) fn der(input: &[u8]) -> Option<(u8, &[u8], &[u8])> {
     (rest.len() >= length).then(|| (tag, &rest[..length], &rest[length..]))
 }
 
+// OpenSSL's short names (OBJ_nid2sn), which Node uses as subject/issuer keys.
 pub(crate) fn attribute_name(oid: &[u8]) -> Option<&'static str> {
     Some(match oid {
         [0x55, 0x04, 0x03] => "CN",
@@ -26,37 +30,274 @@ pub(crate) fn attribute_name(oid: &[u8]) -> Option<&'static str> {
         [0x55, 0x04, 0x06] => "C",
         [0x55, 0x04, 0x07] => "L",
         [0x55, 0x04, 0x08] => "ST",
+        [0x55, 0x04, 0x09] => "street",
         [0x55, 0x04, 0x0a] => "O",
         [0x55, 0x04, 0x0b] => "OU",
+        [0x55, 0x04, 0x0c] => "title",
+        [0x55, 0x04, 0x0d] => "description",
+        [0x55, 0x04, 0x0f] => "businessCategory",
+        [0x55, 0x04, 0x11] => "postalCode",
+        [0x55, 0x04, 0x29] => "name",
         [0x55, 0x04, 0x2a] => "GN",
+        [0x55, 0x04, 0x2b] => "initials",
+        [0x55, 0x04, 0x2c] => "generationQualifier",
+        [0x55, 0x04, 0x2e] => "dnQualifier",
+        [0x55, 0x04, 0x41] => "pseudonym",
+        [0x55, 0x04, 0x61] => "organizationIdentifier",
         [0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09, 0x01] => "emailAddress",
+        [0x09, 0x92, 0x26, 0x89, 0x93, 0xf2, 0x2c, 0x64, 0x01, 0x01] => "UID",
+        [0x09, 0x92, 0x26, 0x89, 0x93, 0xf2, 0x2c, 0x64, 0x01, 0x19] => "DC",
+        [0x2b, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x3c, 0x02, 0x01, 0x01] => "jurisdictionL",
+        [0x2b, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x3c, 0x02, 0x01, 0x02] => "jurisdictionST",
+        [0x2b, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x3c, 0x02, 0x01, 0x03] => "jurisdictionC",
         _ => return None,
     })
 }
 
+fn attribute_key(oid: &[u8]) -> Cow<'static, str> {
+    attribute_name(oid).map_or_else(|| Cow::Owned(oid_text(oid)), Cow::Borrowed)
+}
+
+/// Records `kind | key length | value length | key | NUL | value`, lengths as native-endian
+/// u64. Values are arbitrary UTF-8 (certificate text may hold NUL); keys are short names or
+/// dotted OIDs, so the NUL after a key only spares C a copy.
 pub(crate) fn push_record(out: &mut Vec<u8>, kind: u8, key: &[u8], value: &[u8]) {
     out.push(kind);
+    out.extend_from_slice(&(key.len() as u64).to_ne_bytes());
+    out.extend_from_slice(&(value.len() as u64).to_ne_bytes());
     out.extend_from_slice(key);
     out.push(0);
     out.extend_from_slice(value);
-    out.push(0);
 }
 
-pub(crate) fn push_name(out: &mut Vec<u8>, kind: u8, mut name: &[u8]) -> Option<()> {
+/// An ASN.1 string's text the way OpenSSL's ASN1_STRING_to_UTF8 reads it: BMPString is UCS-2,
+/// UniversalString UCS-4, UTF8String UTF-8, and every single-byte type Latin-1.
+pub(crate) fn decode_string(tag: u8, value: &[u8]) -> String {
+    let unit = |code: u32| char::from_u32(code).unwrap_or(char::REPLACEMENT_CHARACTER);
+    match tag {
+        0x0c => String::from_utf8_lossy(value).into_owned(),
+        0x1e => value.chunks(2).map(|pair| if pair.len() == 2 { unit(u32::from(u16::from_be_bytes([pair[0], pair[1]]))) } else { char::REPLACEMENT_CHARACTER }).collect(),
+        0x1c => value.chunks(4).map(|quad| quad.try_into().map_or(char::REPLACEMENT_CHARACTER, |quad| unit(u32::from_be_bytes(quad)))).collect(),
+        _ => value.iter().map(|&byte| char::from(byte)).collect(),
+    }
+}
+
+pub(crate) struct Attribute<'a> {
+    pub(crate) oid: &'a [u8],
+    pub(crate) tag: u8,
+    pub(crate) value: &'a [u8],
+    pub(crate) value_tlv: &'a [u8],
+}
+
+/// A Name's relative distinguished names in DER order, each with its attributes.
+pub(crate) fn name_rdns(mut name: &[u8]) -> Option<Vec<Vec<Attribute<'_>>>> {
+    let mut rdns = Vec::new();
     while !name.is_empty() {
         let (_, mut set, rest) = der(name)?;
         name = rest;
+        let mut attributes = Vec::new();
         while !set.is_empty() {
             let (_, attribute, rest) = der(set)?;
             set = rest;
-            let (_, oid, value) = der(attribute)?;
-            let (_, value, _) = der(value)?;
-            if let Some(key) = attribute_name(oid) {
-                push_record(out, kind, key.as_bytes(), value);
-            }
+            let (_, oid, value_tlv) = der(attribute)?;
+            let (tag, value, _) = der(value_tlv)?;
+            attributes.push(Attribute { oid, tag, value, value_tlv });
         }
+        rdns.push(attributes);
+    }
+    Some(rdns)
+}
+
+/// getPeerCertificate's subject/issuer entries: every attribute, values unescaped as Node does.
+pub(crate) fn push_name(out: &mut Vec<u8>, kind: u8, name: &[u8]) -> Option<()> {
+    for attribute in name_rdns(name)?.iter().flatten() {
+        let key = attribute_key(attribute.oid);
+        push_record(out, kind, key.as_bytes(), decode_string(attribute.tag, attribute.value).as_bytes());
     }
     Some(())
+}
+
+// X509_NAME_print_ex's ASN1_STRFLGS_ESC_2253 escaping with UTF8_CONVERT and without ESC_MSB;
+// `control` adds ESC_CTRL.
+fn escape_name_value(text: &str, control: bool) -> String {
+    let count = text.chars().count();
+    let mut out = String::with_capacity(text.len());
+    for (index, c) in text.chars().enumerate() {
+        match c {
+            '"' | '+' | ',' | ';' | '<' | '>' | '\\' => {
+                out.push('\\');
+                out.push(c);
+            }
+            '#' if index == 0 => out.push_str("\\#"),
+            ' ' if index == 0 || index + 1 == count => out.push_str("\\ "),
+            '\0'..='\u{1f}' | '\u{7f}' if control => out.push_str(&format!("\\{:02X}", c as u32)),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Node's X509Certificate.subject/issuer: X509_NAME_print_ex with XN_FLAG_SEP_MULTILINE,
+/// XN_FLAG_FN_SN, ASN1_STRFLGS_ESC_2253, ESC_CTRL and UTF8_CONVERT.
+pub(crate) fn name_lines(name: &[u8]) -> Option<String> {
+    let lines: Vec<String> = name_rdns(name)?
+        .iter()
+        .map(|rdn| {
+            rdn.iter()
+                .map(|attribute| {
+                    let value = decode_string(attribute.tag, attribute.value);
+                    format!("{}={}", attribute_key(attribute.oid), escape_name_value(&value, true))
+                })
+                .collect::<Vec<_>>()
+                .join(" + ")
+        })
+        .collect();
+    Some(lines.join("\n"))
+}
+
+// XN_FLAG_RFC2253 without ESC_MSB and ESC_CTRL, which Node uses for DirName alt names.
+fn name_rfc2253(name: &[u8]) -> Option<String> {
+    let rdns: Vec<String> = name_rdns(name)?
+        .iter()
+        .rev()
+        .map(|rdn| {
+            rdn.iter()
+                .map(|attribute| match attribute_name(attribute.oid) {
+                    Some(key) if matches!(attribute.tag, 0x0c | 0x12..=0x16 | 0x19..=0x1c | 0x1e) => {
+                        format!("{key}={}", escape_name_value(&decode_string(attribute.tag, attribute.value), false))
+                    }
+                    key => format!(
+                        "{}=#{}",
+                        key.map_or_else(|| oid_text(attribute.oid), str::to_string),
+                        hex(attribute.value_tlv, false)
+                    ),
+                })
+                .collect::<Vec<_>>()
+                .join("+")
+        })
+        .collect();
+    Some(rdns.join(","))
+}
+
+// Node's PrintAltName: names that could not be split back unambiguously become JSON strings.
+fn push_alt_name(out: &mut Vec<u8>, name: &[u8], utf8: bool, safe_prefix: Option<&str>) {
+    let safe = name.iter().all(|&byte| match byte {
+        b'"' | b'\\' | b',' | b'\'' => false,
+        _ if utf8 => byte >= b' ' && byte != 0x7f,
+        _ => (b' '..=b'~').contains(&byte),
+    });
+    if safe {
+        if let Some(prefix) = safe_prefix {
+            out.extend_from_slice(prefix.as_bytes());
+            out.push(b':');
+        }
+        out.extend_from_slice(name);
+        return;
+    }
+    out.push(b'"');
+    if let Some(prefix) = safe_prefix {
+        out.extend_from_slice(prefix.as_bytes());
+        out.push(b':');
+    }
+    for &byte in name {
+        match byte {
+            b'"' | b'\\' => out.extend_from_slice(&[b'\\', byte]),
+            b' '..=b'~' if byte != b',' => out.push(byte),
+            0x80.. if utf8 => out.push(byte),
+            _ => out.extend_from_slice(format!("\\u{byte:04x}").as_bytes()),
+        }
+    }
+    out.push(b'"');
+}
+
+// Node's PrintGeneralName, OpenSSL 3 build.
+fn push_general_name(out: &mut Vec<u8>, tag: u8, value: &[u8]) -> Option<()> {
+    match tag {
+        0x81 | 0x82 | 0x86 => {
+            out.extend_from_slice(match tag {
+                0x81 => b"email:".as_slice(),
+                0x82 => b"DNS:",
+                _ => b"URI:",
+            });
+            push_alt_name(out, value, false, None);
+        }
+        0xa4 => {
+            let (_, name, _) = der(value)?;
+            out.extend_from_slice(b"DirName:");
+            push_alt_name(out, name_rfc2253(name)?.as_bytes(), true, None);
+        }
+        0x87 => {
+            out.extend_from_slice(b"IP Address:");
+            let text = match value.len() {
+                4 => format!("{}.{}.{}.{}", value[0], value[1], value[2], value[3]),
+                16 => value
+                    .chunks(2)
+                    .map(|pair| format!("{:X}", u16::from_be_bytes([pair[0], pair[1]])))
+                    .collect::<Vec<_>>()
+                    .join(":"),
+                length => format!("<invalid length={length}>"),
+            };
+            out.extend_from_slice(text.as_bytes());
+        }
+        0x88 => out.extend_from_slice(format!("Registered ID:{}", oid_text(value)).as_bytes()),
+        0xa0 => {
+            let (_, type_id, rest) = der(value)?;
+            let (_, explicit, _) = der(rest)?;
+            let (value_tag, name, _) = der(explicit)?;
+            let (prefix, unicode) = match type_id {
+                [0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x08, 0x09] => ("SmtpUTF8Mailbox", true),
+                [0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x08, 0x05] => ("XmppAddr", true),
+                [0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x08, 0x07] => ("SRVName", false),
+                [0x2b, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x14, 0x02, 0x03] => ("UPN", true),
+                [0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x08, 0x08] => ("NAIRealm", true),
+                _ => ("", true),
+            };
+            if prefix.is_empty() || value_tag != if unicode { 0x0c } else { 0x16 } {
+                out.extend_from_slice(b"othername:<unsupported>");
+            } else {
+                out.extend_from_slice(b"othername:");
+                push_alt_name(out, name, unicode, Some(prefix));
+            }
+        }
+        0xa3 => out.extend_from_slice(b"X400Name:<unsupported>"),
+        0xa5 => out.extend_from_slice(b"EdiPartyName:<unsupported>"),
+        _ => return None,
+    }
+    Some(())
+}
+
+/// Node's subjectaltname string: `, `-separated entries in which no separator can be forged.
+pub(crate) fn subject_alt_name_text(mut names: &[u8]) -> Option<String> {
+    let mut out = Vec::new();
+    while !names.is_empty() {
+        let (tag, value, rest) = der(names)?;
+        names = rest;
+        if !out.is_empty() {
+            out.extend_from_slice(b", ");
+        }
+        push_general_name(&mut out, tag, value)?;
+    }
+    Some(String::from_utf8_lossy(&out).into_owned())
+}
+
+/// Node's infoAccess text: one `method - general name` line per access description.
+pub(crate) fn info_access_text(mut descriptions: &[u8]) -> Option<String> {
+    let mut out = Vec::new();
+    while !descriptions.is_empty() {
+        let (_, description, rest) = der(descriptions)?;
+        descriptions = rest;
+        let (_, method, location) = der(description)?;
+        let (tag, location, _) = der(location)?;
+        let method = match method {
+            [0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x30, 0x01] => "OCSP".to_string(),
+            [0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x30, 0x02] => "CA Issuers".to_string(),
+            other => oid_text(other),
+        };
+        out.extend_from_slice(format!("{method} - ").as_bytes());
+        push_general_name(&mut out, tag, location)?;
+        out.push(b'\n');
+    }
+    Some(String::from_utf8_lossy(&out).into_owned())
 }
 
 // OpenSSL's ASN1_TIME_print layout, which Node's valid_from/valid_to expose.
@@ -87,27 +328,6 @@ pub(crate) fn push_time(out: &mut Vec<u8>, key: &[u8], tag: u8, time: &[u8]) -> 
     Some(())
 }
 
-pub(crate) fn push_subject_alt_name(out: &mut Vec<u8>, mut names: &[u8]) -> Option<()> {
-    let mut text = String::new();
-    while !names.is_empty() {
-        let (tag, value, rest) = der(names)?;
-        names = rest;
-        let entry = match tag {
-            0x81 => format!("email:{}", String::from_utf8_lossy(value)),
-            0x82 => format!("DNS:{}", String::from_utf8_lossy(value)),
-            0x86 => format!("URI:{}", String::from_utf8_lossy(value)),
-            0x87 if value.len() == 4 => format!("IP Address:{}.{}.{}.{}", value[0], value[1], value[2], value[3]),
-            _ => continue,
-        };
-        if !text.is_empty() {
-            text.push_str(", ");
-        }
-        text.push_str(&entry);
-    }
-    push_record(out, b'F', b"subjectaltname", text.as_bytes());
-    Some(())
-}
-
 pub(crate) fn hex(bytes: &[u8], separator: bool) -> String {
     let mut text = String::with_capacity(bytes.len() * 3);
     for (index, byte) in bytes.iter().enumerate() {
@@ -119,8 +339,8 @@ pub(crate) fn hex(bytes: &[u8], separator: bool) -> String {
     text
 }
 
-/// Records of `kind key NUL value NUL`: `S`/`I` for subject/issuer attributes, `F` for fields,
-/// in the order Node's getPeerCertificate lists them.
+/// `push_record` records: `S`/`I` for subject/issuer attributes, `F` for fields, in the order
+/// Node's getPeerCertificate lists them.
 pub(crate) fn describe_certificate(certificate: &[u8]) -> Option<Vec<u8>> {
     let (_, body, _) = der(certificate)?;
     let (_, tbs, _) = der(body)?;
@@ -160,7 +380,7 @@ pub(crate) fn describe_certificate(certificate: &[u8]) -> Option<Vec<u8>> {
             }
             if oid == [0x55, 0x1d, 0x11] && tag == 0x04 {
                 let (_, names, _) = der(value)?;
-                push_subject_alt_name(&mut out, names)?;
+                push_record(&mut out, b'F', b"subjectaltname", subject_alt_name_text(names)?.as_bytes());
             }
         }
     }
@@ -285,30 +505,6 @@ pub(crate) fn time_fields(tag: u8, time: &[u8]) -> Option<(String, i64)> {
     let days = era * 146097 + doe - 719468;
     let text = format!("{name} {day:>2} {hour:02}:{minute:02}:{second:02} {year} GMT");
     Some((text, days * 86400 + hour * 3600 + minute * 60 + second))
-}
-
-/// Node's X509Certificate.subject/issuer: one `key=value` line per known attribute.
-pub(crate) fn name_lines(mut name: &[u8]) -> Option<String> {
-    let mut text = String::new();
-    while !name.is_empty() {
-        let (_, mut set, rest) = der(name)?;
-        name = rest;
-        while !set.is_empty() {
-            let (_, attribute, rest) = der(set)?;
-            set = rest;
-            let (_, oid, value) = der(attribute)?;
-            let (_, value, _) = der(value)?;
-            if let Some(key) = attribute_name(oid) {
-                if !text.is_empty() {
-                    text.push('\n');
-                }
-                text.push_str(key);
-                text.push('=');
-                text.push_str(&String::from_utf8_lossy(value));
-            }
-        }
-    }
-    Some(text)
 }
 
 pub(crate) fn oid_text(oid: &[u8]) -> String {

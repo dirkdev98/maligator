@@ -405,6 +405,8 @@ static MalValue node_tls_get_ciphers(
     return result;
 }
 
+// Identity checks compare C strings, so an embedded NUL becomes 0x01: lib/tls.js rejects names
+// holding either, and truncating at the NUL could make a different name match.
 static char *node_tls_c_string(MalVm *vm, MalValue value) {
     MalString *string;
     if (!mal_vm_to_string(vm, value, &string)) return nullptr;
@@ -416,8 +418,127 @@ static char *node_tls_c_string(MalVm *vm, MalValue value) {
         mal_vm_throw_allocation_error(vm);
         return nullptr;
     }
+    for (usize i = 0; i < length; i++) {
+        if (text[i] == '\0') text[i] = '\x01';
+    }
     text[length] = '\0';
     return text;
+}
+
+typedef struct {
+    char **items;
+    usize count;
+    usize capacity;
+} NodeTlsNames;
+
+static void node_tls_names_free(NodeTlsNames *names) {
+    for (usize i = 0; i < names->count; i++) free(names->items[i]);
+    free(names->items);
+}
+
+static bool node_tls_names_push(NodeTlsNames *names, const char *text, usize length) {
+    if (names->count == names->capacity) {
+        usize capacity = names->capacity == 0 ? 8 : names->capacity * 2;
+        char **items = realloc(names->items, capacity * sizeof *items);
+        if (items == nullptr) return false;
+        names->items = items;
+        names->capacity = capacity;
+    }
+    char *item = malloc(length + 1);
+    if (item == nullptr) return false;
+    memcpy(item, text, length);
+    item[length] = '\0';
+    names->items[names->count++] = item;
+    return true;
+}
+
+static int node_tls_hex_digit(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+// JSON.parse of the quoted prefix lib/tls.js's jsonStringPattern accepts; returns the bytes
+// consumed, or 0 when it does not match. Decoded NUL and non-ASCII code points become bytes no
+// host name or IP address can match, which is all the decoded entries are used for.
+static usize node_tls_json_string(const char *text, char *out, usize *used) {
+    usize at = 1;
+    for (;;) {
+        unsigned char c = (unsigned char) text[at];
+        if (c == '"') return at + 1;
+        if (c < 0x20) return 0;
+        if (c != '\\') {
+            out[(*used)++] = (char) c;
+            at++;
+            continue;
+        }
+        char escape = text[at + 1];
+        static const char simple[] = "\"\\/bfnrt";
+        static const char decoded[] = "\"\\/\b\f\n\r\t";
+        const char *match = escape == '\0' ? nullptr : strchr(simple, escape);
+        if (match != nullptr) {
+            out[(*used)++] = decoded[match - simple];
+            at += 2;
+            continue;
+        }
+        if (escape != 'u') return 0;
+        u32 code = 0;
+        for (usize i = 2; i < 6; i++) {
+            int digit = node_tls_hex_digit(text[at + i]);
+            if (digit < 0) return 0;
+            code = code << 4 | (u32) digit;
+        }
+        out[(*used)++] = (char) (code == 0 ? 0x01 : code < 0x80 ? code : 0x80);
+        at += 6;
+    }
+}
+
+// lib/tls.js: a subjectaltname without quotes splits on ", "; one with quotes goes through
+// splitEscapedAltNames, so a separator inside a JSON-quoted entry never starts a new entry.
+static bool node_tls_split_alt_names(MalVm *vm, const char *text, NodeTlsNames *names) {
+    usize length = strlen(text);
+    char *token = malloc(length + 1);
+    if (token == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return false;
+    }
+    bool quoted = strchr(text, '"') != nullptr;
+    usize used = 0;
+    usize offset = 0;
+    bool ok = true;
+    while (ok && offset < length) {
+        const char *separator = quoted ? strchr(text + offset, ',') : strstr(text + offset, ", ");
+        const char *quote = quoted ? strchr(text + offset, '"') : nullptr;
+        if (quote != nullptr && (separator == nullptr || quote < separator)) {
+            usize prefix = (usize) (quote - (text + offset));
+            memcpy(token + used, text + offset, prefix);
+            used += prefix;
+            usize consumed = node_tls_json_string(quote, token, &used);
+            if (consumed == 0) {
+                mal_node_throw_code(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE,
+                    "Invalid subject alternative name string", "ERR_TLS_CERT_ALTNAME_FORMAT");
+                ok = false;
+                break;
+            }
+            offset = (usize) (quote - text) + consumed;
+        } else if (separator != nullptr) {
+            usize prefix = (usize) (separator - (text + offset));
+            memcpy(token + used, text + offset, prefix);
+            used += prefix;
+            ok = node_tls_names_push(names, token, used);
+            used = 0;
+            offset = (usize) (separator - text) + 2;
+        } else {
+            memcpy(token + used, text + offset, length - offset);
+            used += length - offset;
+            offset = length;
+        }
+    }
+    if (ok) ok = node_tls_names_push(names, token, used);
+    if (!ok && vm->completion.kind != MAL_COMPLETION_THROW) mal_vm_throw_allocation_error(vm);
+    free(token);
+    return ok;
 }
 
 /* An IP in canonical text form, or "" when `text` is not an address. */
@@ -451,6 +572,8 @@ static usize node_tls_split_host(char *host, char **parts, usize capacity) {
 static bool node_tls_check_host(char *const *host_parts, usize host_count, const char *pattern_text) {
     if (pattern_text == nullptr || pattern_text[0] == '\0') return false;
     char pattern[512];
+    // A truncated pattern could name a different host.
+    if (strlen(pattern_text) >= sizeof pattern) return false;
     snprintf(pattern, sizeof pattern, "%s", pattern_text);
     char *pattern_parts[64];
     usize pattern_count = node_tls_split_host(pattern, pattern_parts, countof(pattern_parts));
@@ -512,6 +635,9 @@ static MalValue node_tls_check_server_identity(
     char *host = node_tls_c_string(vm, argc > 0 ? args[0] : mal_value_new_undefined());
     char *alt_names = nullptr;
     char *cn = nullptr;
+    NodeTlsNames names = {0};
+    const char **dns = nullptr;
+    char (*ips)[INET6_ADDRSTRLEN] = nullptr;
     MalValue result = mal_value_new_undefined();
     if (host == nullptr) goto done;
     if (!node_tls_get(vm, roots[0], "subject", &roots[1]) || !node_tls_get(vm, roots[0], "subjectaltname", &roots[2])) {
@@ -527,24 +653,21 @@ static MalValue node_tls_check_server_identity(
     }
     usize host_length = strlen(host);
     if (host_length > 0 && host[host_length - 1] == '.') host[--host_length] = '\0';
-    char dns[64][256];
-    char ips[64][INET6_ADDRSTRLEN];
+    if (alt_names != nullptr && !node_tls_split_alt_names(vm, alt_names, &names)) goto done;
+    dns = calloc(names.count + 1, sizeof *dns);
+    ips = calloc(names.count + 1, sizeof *ips);
     usize dns_count = 0, ip_count = 0;
-    if (alt_names != nullptr) {
-        char *copy = strdup(alt_names);
-        for (char *entry = copy, *next; copy != nullptr && entry != nullptr; entry = next) {
-            next = strstr(entry, ", ");
-            if (next != nullptr) {
-                *next = '\0';
-                next += 2;
-            }
-            if (strncmp(entry, "DNS:", 4) == 0 && dns_count < countof(dns)) {
-                snprintf(dns[dns_count++], sizeof dns[0], "%s", entry + 4);
-            } else if (strncmp(entry, "IP Address:", 11) == 0 && ip_count < countof(ips)) {
-                node_tls_canonical_ip(entry + 11, ips[ip_count++], sizeof ips[0]);
-            }
+    if (dns == nullptr || ips == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        goto done;
+    }
+    for (usize i = 0; i < names.count; i++) {
+        const char *entry = names.items[i];
+        if (strncmp(entry, "DNS:", 4) == 0) {
+            dns[dns_count++] = entry + 4;
+        } else if (strncmp(entry, "IP Address:", 11) == 0) {
+            node_tls_canonical_ip(entry + 11, ips[ip_count++], sizeof ips[0]);
         }
-        free(copy);
     }
     bool valid = false;
     char *reason = nullptr;
@@ -566,7 +689,8 @@ static MalValue node_tls_check_server_identity(
         char host_copy[512];
         snprintf(host_copy, sizeof host_copy, "%s", host);
         char *host_parts[64];
-        usize host_count = node_tls_split_host(host_copy, host_parts, countof(host_parts));
+        usize host_count = host_length < sizeof host_copy
+            ? node_tls_split_host(host_copy, host_parts, countof(host_parts)) : countof(host_parts) + 1;
         if (host_count <= countof(host_parts)) {
             if (dns_count > 0) {
                 for (usize i = 0; i < dns_count && !valid; i++) valid = node_tls_check_host(host_parts, host_count, dns[i]);
@@ -601,6 +725,9 @@ static MalValue node_tls_check_server_identity(
     }
     free(reason);
 done:
+    free(dns);
+    free(ips);
+    node_tls_names_free(&names);
     free(host);
     free(alt_names);
     free(cn);

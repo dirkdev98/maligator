@@ -122,17 +122,32 @@ static MalValue dns_string(MalVm *vm, const char *text) {
     return mal_value_from_string(string);
 }
 
-static char *dns_c_string(MalVm *vm, MalValue value) {
-    usize length = 0;
-    byte *utf8 = mal_string_to_utf8(mal_value_to_string(value), &length);
-    char *text = utf8 == nullptr ? nullptr : realloc(utf8, length + 1);
+// `length` receives the UTF-8 length, which exceeds strlen() when the text holds U+0000.
+static char *dns_c_string(MalVm *vm, MalValue value, usize *length) {
+    byte *utf8 = mal_string_to_utf8(mal_value_to_string(value), length);
+    char *text = utf8 == nullptr ? nullptr : realloc(utf8, *length + 1);
     if (text == nullptr) {
         free(utf8);
         mal_vm_throw_allocation_error(vm);
         return nullptr;
     }
-    text[length] = '\0';
+    text[*length] = '\0';
     return text;
+}
+
+static void dns_received(MalVm *vm, MalValue value, char *out, usize capacity) {
+    MalString *string;
+    if (mal_value_is_string(value)) mal_node_inspect_string(mal_value_to_string(value), out, capacity);
+    else if (mal_vm_to_string(vm, value, &string)) mal_node_inspect_string(string, out, capacity);
+    else snprintf(out, capacity, "?");
+}
+
+void mal_node_dns_throw_null_bytes(MalVm *vm, const char *subject, MalValue value) {
+    char received[600];
+    dns_received(vm, value, received, sizeof received);
+    char message[800];
+    snprintf(message, sizeof message, "%s must be a string without null bytes. Received %s", subject, received);
+    mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, message, "ERR_INVALID_ARG_VALUE");
 }
 
 static void dns_set(MalVm *vm, MalValue object, const char *name, MalValue value) {
@@ -187,27 +202,56 @@ static void dns_error_code(int status, int system_errno, const char **code, int 
 
 /* lib/internal/errors.js DNSException: "<syscall> <code>[ <hostname>]", then own errno
  * (undefined for c-ares codes), code, syscall and a non-empty hostname, in that order. */
-static MalValue dns_exception(MalVm *vm, const char *syscall, const char *code, int errno_value,
-    const char *hostname) {
-    if (hostname != nullptr && hostname[0] == '\0') hostname = nullptr;
-    char message[512];
-    if (hostname != nullptr) snprintf(message, sizeof message, "%s %s %s", syscall, code, hostname);
-    else snprintf(message, sizeof message, "%s %s", syscall, code);
-    MalValue error = dns_string(vm, message);
-    if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
-    MalRootSpan root;
-    mal_gc_root(&root, &error, 1);
-    mal_vm_throw_error_value(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, error);
-    error = vm->completion.value;
-    vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
-    if (mal_value_is_object(error)) {
-        dns_set(vm, error, "errno", errno_value != 0 ? mal_value_from_i32(errno_value) : mal_value_new_undefined());
-        dns_set(vm, error, "code", dns_string(vm, code));
-        dns_set(vm, error, "syscall", dns_string(vm, syscall));
-        if (hostname != nullptr) dns_set(vm, error, "hostname", dns_string(vm, hostname));
+static MalValue dns_exception_n(MalVm *vm, const char *syscall, const char *code, int errno_value,
+    const char *hostname, usize hostname_length) {
+    if (hostname != nullptr && hostname_length == 0) hostname = nullptr;
+    usize prefix_length = strlen(syscall) + 1 + strlen(code);
+    usize message_length = prefix_length + (hostname != nullptr ? 1 + hostname_length : 0);
+    char *message = malloc(message_length + 1);
+    if (message == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
     }
+    snprintf(message, prefix_length + 1, "%s %s", syscall, code);
+    if (hostname != nullptr) {
+        message[prefix_length] = ' ';
+        memcpy(message + prefix_length + 1, hostname, hostname_length);
+    }
+    MalString *text = mal_string_from_utf8(&vm->heap, (const byte *) message, message_length);
+    free(message);
+    if (text == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
+    MalValue roots[] = {mal_value_from_string(text), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    if (hostname != nullptr) {
+        MalString *name = mal_string_from_utf8(&vm->heap, (const byte *) hostname, hostname_length);
+        if (name == nullptr) {
+            mal_gc_unroot(&root);
+            mal_vm_throw_allocation_error(vm);
+            return mal_value_new_undefined();
+        }
+        roots[1] = mal_value_from_string(name);
+    }
+    mal_vm_throw_error_value(vm, MAL_INTRINSIC_ERROR_PROTOTYPE, roots[0]);
+    roots[0] = vm->completion.value;
+    vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+    if (mal_value_is_object(roots[0])) {
+        dns_set(vm, roots[0], "errno", errno_value != 0 ? mal_value_from_i32(errno_value) : mal_value_new_undefined());
+        dns_set(vm, roots[0], "code", dns_string(vm, code));
+        dns_set(vm, roots[0], "syscall", dns_string(vm, syscall));
+        if (hostname != nullptr) dns_set(vm, roots[0], "hostname", roots[1]);
+    }
+    MalValue error = roots[0];
     mal_gc_unroot(&root);
     return error;
+}
+
+static MalValue dns_exception(MalVm *vm, const char *syscall, const char *code, int errno_value,
+    const char *hostname) {
+    return dns_exception_n(vm, syscall, code, errno_value, hostname, hostname == nullptr ? 0 : strlen(hostname));
 }
 
 static void dns_job_free(void *data) {
@@ -1085,9 +1129,16 @@ static MalValue dns_lookup_impl(MalVm *vm, const MalValue *args, i32 argc, bool 
     state->all = all;
     state->order = order;
     state->callback = promise ? mal_value_new_undefined() : callback;
-    char *host = dns_c_string(vm, hostname);
+    usize host_length;
+    char *host = dns_c_string(vm, hostname, &host_length);
     if (host == nullptr) {
         free(state);
+        return mal_value_new_undefined();
+    }
+    if (strlen(host) != host_length) {
+        free(host);
+        free(state);
+        mal_node_dns_throw_null_bytes(vm, "The argument 'hostname'", hostname);
         return mal_value_new_undefined();
     }
     int literal = dns_ip_family(host);
@@ -1196,12 +1247,17 @@ static MalValue dns_name_info(MalVm *vm, const MalValue *args, i32 argc, NodeDns
         mal_node_throw_invalid_arg_type(vm, "callback", "of type function", callback);
         return mal_value_new_undefined();
     }
-    char *host = dns_c_string(vm, address);
+    usize host_length;
+    char *host = dns_c_string(vm, address, &host_length);
     if (host == nullptr) return mal_value_new_undefined();
-    if (dns_ip_family(host) == 0) {
-        char message[320];
-        snprintf(message, sizeof message, "The argument '%s' is invalid. Received '%s'",
-            kind == NODE_DNS_REVERSE ? "ip" : "address", host);
+    // Node's lookupService validates the whole string; its reverse passes the text before a NUL.
+    bool null_byte = kind != NODE_DNS_REVERSE && strlen(host) != host_length;
+    if (null_byte || dns_ip_family(host) == 0) {
+        char received[600];
+        dns_received(vm, address, received, sizeof received);
+        char message[800];
+        snprintf(message, sizeof message, "The argument '%s' is invalid. Received %s",
+            kind == NODE_DNS_REVERSE ? "ip" : "address", received);
         free(host);
         mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, message, "ERR_INVALID_ARG_VALUE");
         return mal_value_new_undefined();
@@ -1279,7 +1335,8 @@ static MalValue dns_resolve_typed(MalVm *vm, MalValue callee, const MalValue *ar
     }
     int family = mal_string_equals_ascii(rrtype, "A") ? 4 : mal_string_equals_ascii(rrtype, "AAAA") ? 6 : 0;
     int query_type = family == 0 ? dns_query_type(rrtype) : 0;
-    char *host = dns_c_string(vm, hostname);
+    usize host_length;
+    char *host = dns_c_string(vm, hostname, &host_length);
     if (host == nullptr) return mal_value_new_undefined();
     char syscall[32];
     usize type_length = 0;
@@ -1305,12 +1362,15 @@ static MalValue dns_resolve_typed(MalVm *vm, MalValue callee, const MalValue *ar
     state->family = family;
     state->ttl = ttl;
     state->callback = promise ? mal_value_new_undefined() : callback;
-    if (family == 0 && query_type == 0) {
-        // ANY is not queried: most servers refuse it (RFC 8482).
+    // ANY is not queried: most servers refuse it (RFC 8482). A name holding U+0000 is no DNS
+    // name the transport can encode, and querying the prefix before it would answer for another.
+    bool null_byte = strlen(host) != host_length;
+    if ((family == 0 && query_type == 0) || null_byte) {
         MalValue roots[] = {callback, mal_value_new_undefined(), mal_value_new_undefined()};
         MalRootSpan root;
         mal_gc_root(&root, roots, countof(roots));
-        roots[2] = dns_exception(vm, state->syscall, "ENOTIMP", 0, state->host);
+        roots[2] = null_byte ? dns_exception_n(vm, state->syscall, "ENOTFOUND", 0, host, host_length)
+            : dns_exception(vm, state->syscall, "ENOTIMP", 0, state->host);
         free(host);
         dns_pending_free(state);
         MalValue result = mal_value_new_undefined();
@@ -1474,8 +1534,18 @@ static MalValue dns_set_servers(
             mal_node_throw_invalid_arg_type(vm, name, "of type string", item);
             goto failed;
         }
-        char *text = dns_c_string(vm, item);
+        usize text_length;
+        char *text = dns_c_string(vm, item, &text_length);
         if (text == nullptr) goto failed;
+        if (strlen(text) != text_length) {
+            free(text);
+            char message[800];
+            char received[600];
+            dns_received(vm, item, received, sizeof received);
+            snprintf(message, sizeof message, "Invalid IP address: %.*s", (int) strlen(received) - 2, received + 1);
+            mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, message, "ERR_INVALID_IP_ADDRESS");
+            goto failed;
+        }
         // "[v6]:port" and "v4:port" carry a port; a bare address uses 53.
         char *address = text;
         int port = 53;

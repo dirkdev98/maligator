@@ -1,3 +1,4 @@
+// Portions derived from Node.js lib/internal/util/inspect.js (MIT); see THIRD_PARTY_NOTICES.md.
 #include "node_module.h"
 
 #if MAL_NODE
@@ -170,6 +171,86 @@ static bool mal_node_get_ascii(MalVm *vm, MalValue object, const char *name, Mal
     vm->completion.kind = MAL_COMPLETION_NORMAL;
     vm->completion.value = mal_value_new_undefined();
     return false;
+}
+
+static usize mal_node_put_utf8(char *out, usize at, usize capacity, u32 code) {
+    char bytes[4];
+    usize count = code < 0x80 ? 1 : code < 0x800 ? 2 : code < 0x10000 ? 3 : 4;
+    if (count == 1) bytes[0] = (char) code;
+    else if (count == 2) bytes[0] = (char) (0xc0 | code >> 6), bytes[1] = (char) (0x80 | (code & 0x3f));
+    else if (count == 3) {
+        bytes[0] = (char) (0xe0 | code >> 12), bytes[1] = (char) (0x80 | (code >> 6 & 0x3f));
+        bytes[2] = (char) (0x80 | (code & 0x3f));
+    } else {
+        bytes[0] = (char) (0xf0 | code >> 18), bytes[1] = (char) (0x80 | (code >> 12 & 0x3f));
+        bytes[2] = (char) (0x80 | (code >> 6 & 0x3f)), bytes[3] = (char) (0x80 | (code & 0x3f));
+    }
+    if (at + count >= capacity) return at;
+    memcpy(out + at, bytes, count);
+    return at + count;
+}
+
+// lib/internal/util/inspect.js strEscape, then ERR_INVALID_ARG_VALUE's cut to 128 UTF-16 units.
+void mal_node_inspect_string(MalString *string, char *out, usize capacity) {
+    usize length = mal_string_length(string);
+    const c16 *units = mal_string_code_units(string);
+    bool has_single = false, has_double = false, has_backtick = false, has_template = false;
+    for (usize i = 0; i < length; i++) {
+        has_single |= units[i] == '\'';
+        has_double |= units[i] == '"';
+        has_backtick |= units[i] == '`';
+        has_template |= units[i] == '$' && i + 1 < length && units[i + 1] == '{';
+    }
+    c16 quote = !has_single ? '\'' : !has_double ? '"' : !has_backtick && !has_template ? '`' : '\'';
+    c16 inspected[128];
+    usize count = 0;
+    bool cut = false;
+#define MAL_INSPECT_PUSH(unit) \
+    do { \
+        if (count == countof(inspected)) { \
+            cut = true; \
+            goto encode; \
+        } \
+        inspected[count++] = (c16) (unit); \
+    } while (0)
+    MAL_INSPECT_PUSH(quote);
+    for (usize i = 0; i < length; i++) {
+        c16 unit = units[i];
+        char escape[8] = {0};
+        bool lone = unit >= 0xd800 && unit <= 0xdfff
+            && !(unit <= 0xdbff && i + 1 < length && units[i + 1] >= 0xdc00 && units[i + 1] <= 0xdfff)
+            && !(unit >= 0xdc00 && i > 0 && units[i - 1] >= 0xd800 && units[i - 1] <= 0xdbff);
+        if (unit == '\b') strcpy(escape, "\\b");
+        else if (unit == '\t') strcpy(escape, "\\t");
+        else if (unit == '\n') strcpy(escape, "\\n");
+        else if (unit == '\f') strcpy(escape, "\\f");
+        else if (unit == '\r') strcpy(escape, "\\r");
+        else if (unit < 0x20 || (unit >= 0x7f && unit <= 0x9f)) snprintf(escape, sizeof escape, "\\x%02X", unit);
+        else if (unit == '\\') strcpy(escape, "\\\\");
+        else if (unit == '\'' && quote == '\'') strcpy(escape, "\\'");
+        else if (lone) snprintf(escape, sizeof escape, "\\u%x", unit);
+        if (escape[0] == '\0') {
+            MAL_INSPECT_PUSH(unit);
+        } else {
+            for (const char *c = escape; *c != '\0'; c++) MAL_INSPECT_PUSH(*c);
+        }
+    }
+    MAL_INSPECT_PUSH(quote);
+#undef MAL_INSPECT_PUSH
+encode:;
+    usize at = 0;
+    for (usize i = 0; i < count; i++) {
+        u32 code = inspected[i];
+        if (code >= 0xd800 && code <= 0xdbff && i + 1 < count && inspected[i + 1] >= 0xdc00 && inspected[i + 1] <= 0xdfff) {
+            code = 0x10000 + ((code - 0xd800) << 10) + (u32) (inspected[++i] - 0xdc00);
+        }
+        at = mal_node_put_utf8(out, at, capacity, code);
+    }
+    if (cut && at + 3 < capacity) {
+        memcpy(out + at, "...", 3);
+        at += 3;
+    }
+    out[at] = '\0';
 }
 
 void mal_node_describe_received(MalVm *vm, MalValue value, char *out, usize capacity) {

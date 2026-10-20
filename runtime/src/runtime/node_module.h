@@ -26,6 +26,10 @@ void mal_node_throw_code(MalVm *vm, MalIntrinsic prototype, const char *message,
 /** Node's "Received ..." clause for `value`, as ERR_INVALID_ARG_TYPE renders it. */
 void mal_node_describe_received(MalVm *vm, MalValue value, char *out, usize capacity);
 
+/** util.inspect() of a string as ERR_INVALID_ARG_VALUE's "Received ..." clause renders it,
+ * escaping control characters and cut to 128 characters. */
+void mal_node_inspect_string(MalString *string, char *out, usize capacity);
+
 /** ERR_INVALID_ARG_TYPE; `expected` is the phrase after "must be", such as "of type number". */
 void mal_node_throw_invalid_arg_type(
     MalVm *vm, const char *name, const char *expected, MalValue actual);

@@ -698,7 +698,8 @@ static void conn_stream_error(MalHttpConn *c) {
             conn_close(c);
             return;
         }
-        conn_send_error(c, 400, "Bad Request");
+        if (c->codec.chunk_extensions_overflow) conn_send_error(c, 413, "Payload Too Large");
+        else conn_send_error(c, 400, "Bad Request");
     } else {
         conn_close(c);
     }

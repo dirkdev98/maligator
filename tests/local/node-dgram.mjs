@@ -211,6 +211,16 @@ try {
 	show("pre-aborted", error);
 }
 
+// A host holding U+0000 must not bind the text before it.
+const nulBind = createSocket("udp4");
+try {
+	nulBind.bind(0, "127.0.0.1\0x");
+	console.log("bind NUL no throw");
+} catch (error) {
+	console.log("bind NUL", error.name, error.code, JSON.stringify(error.message));
+}
+nulBind.close();
+
 const idle = createSocket("udp4");
 idle.bind(0, "127.0.0.1", () => {
 	console.log("idle listening");

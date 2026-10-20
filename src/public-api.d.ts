@@ -150,7 +150,8 @@ export interface MaligatorServer {
 export interface MaligatorWebRuntime {
 	/**
 	 * Start an HTTP listener. Requires surface.webPlatform. The current handle exposes
-	 * its bound port; it has no public stop method. Invalid timeout/connection limits throw.
+	 * its bound port; it has no public stop method. Invalid timeout/connection limits throw,
+	 * as does a hostname that is not ASCII or is 64 characters or longer.
 	 * @see https://maligator.ddv.tools/api/runtime#Mal.serve
 	 */
 	serve(options: MaligatorServeOptions): MaligatorServer;

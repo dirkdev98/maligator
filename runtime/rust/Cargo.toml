@@ -65,12 +65,12 @@ flate2 = { version = "1", default-features = false, features = [
 brotli-decompressor = { version = "5", optional = true }
 # Pure-Rust Brotli encoder (no C library); it shares brotli-decompressor above.
 brotli = { version = "8", default-features = false, features = ["std"], optional = true }
-rustls = { version = "0.23", default-features = false, features = [
+# 0.23.46 or later: RUSTSEC-2026-0285.
+rustls = { version = "0.23.46", default-features = false, features = [
 	"ring",
 	"std",
 	"tls12",
 ], optional = true }
-rustls-pemfile = { version = "2", optional = true }
 # Argon2 (RFC 9106) for node:crypto's argon2/argon2Sync. `sru-systems/rust-argon2`
 # rather than RustCrypto's `argon2`: the latter caps associated data at 32 bytes
 # (Params::MAX_DATA_LEN), while Node accepts up to 2^32-1, which would be a
@@ -114,7 +114,7 @@ temporal = ["dep:temporal_capi", "temporal_capi/compiled_data"]
 # node:zlib flat codec primitives (deflate, gzip and Brotli, both directions). The C/JS adapters remain
 # outside this feature; Node builds select it through normalizeNativeFeatures.
 node-zlib = ["dep:flate2", "dep:brotli-decompressor", "dep:brotli"]
-node-tls = ["dep:rustls", "dep:rustls-pemfile", "dep:ring"]
+node-tls = ["dep:rustls", "dep:ring"]
 node-argon2 = ["dep:rust-argon2"]
 node-crypto = [
 	"dep:aes",

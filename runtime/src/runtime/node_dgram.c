@@ -439,7 +439,8 @@ static bool dgram_needs_lookup(MalValue value) {
     char text[MAL_NET_ADDRESS_MAX + 1];
     const c16 *units = mal_string_code_units(string);
     for (usize i = 0; i < length; i++) {
-        if (units[i] > 0x7f) return true;
+        // dns.lookup rejects U+0000 as Node does; the C text would end at it instead.
+        if (units[i] > 0x7f || units[i] == 0) return true;
         text[i] = (char) units[i];
     }
     text[length] = '\0';

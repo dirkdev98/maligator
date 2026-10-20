@@ -803,3 +803,39 @@ console.log(
 		fresh.update("abc").digest("hex").slice(0, 16),
 	);
 }
+
+// tests/fixtures/tls/forged-*-cert.pem: names whose values hold NUL, separators and quotes.
+for (const pem of [
+	`-----BEGIN CERTIFICATE-----
+MIIBlDCCATmgAwIBAgICASMwCgYIKoZIzj0EAwIwRzEYMBYGA1UEAwwPZ3Vlc3QA
+U0NOAGFkbWluMQ0wCwYDVQQLHgQAQQQUMQ0wCwYDVQQLFAQj5CwgMQ0wCwYDVQQL
+HAQAAfYAMB4XDTI2MDEwMTAwMDAwMFoXDTQ2MDEwMTAwMDAwMFowRzEYMBYGA1UE
+AwwPZ3Vlc3QAU0NOAGFkbWluMQ0wCwYDVQQLHgQAQQQUMQ0wCwYDVQQLFAQj5Cwg
+MQ0wCwYDVQQLHAQAAfYAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEqqek976E
+TFDqdpwmyxHiX+A+wZsBgOloV/4WbLv6XnpkGtr27dsu8inB5rh7gFpyL5+7Qm69
+l6OrWvR/bsZ2i6MVMBMwEQYDVR0RBAowCIIGeC50ZXN0MAoGCCqGSM49BAMCA0kA
+MEYCIQDcOzBnLAWsVincQkHArrrA7nzAcfyPachrey8uTdi/vQIhAMNJkogelVWP
+DDWiSUNA1CvE76nRhI+wydJZ2VKk8vtL
+-----END CERTIFICATE-----
+`,
+	`-----BEGIN CERTIFICATE-----
+MIIBmjCCAT+gAwIBAgICASMwCgYIKoZIzj0EAwIwETEPMA0GA1UEAwwGeC50ZXN0
+MB4XDTI2MDEwMTAwMDAwMFoXDTQ2MDEwMTAwMDAwMFowETEPMA0GA1UEAwwGeC50
+ZXN0MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEk+lj8WlVOnXCr9GtgIUVN+8E
+xXrBK2mMCEw3SRTWTAMFdGbcH62wNAQWr2V2ZS+j7+zU//2umj5goM386pHqTqOB
+hjCBgzCBgAYDVR0RBHkwd4YiaHR0cHM6Ly94LnRlc3QsIEROUzp2aWN0aW0uZXhh
+bXBsZYIMZXjkbXBsZS50ZXN0gQ8icXVvdGVkIkB4LnRlc3SHECABDbgAAAAAAAAA
+AAAAAAGHAwECA4gDKgMEpBYwFDESMBAGA1UEAwwJZGlyLCBuYW1lMAoGCCqGSM49
+BAMCA0kAMEYCIQDfdKdzqtFajHNBQ6nkQH6WkhQZcCNUuVBIKaJuyjwpxQIhAOMi
+I7A0Nl3dEeHZxyXBfUItLLqA5fmsxHFIeh5dljfg
+-----END CERTIFICATE-----
+`,
+]) {
+	const forged = new crypto.X509Certificate(pem);
+	const legacy = forged.toLegacyObject();
+	console.log(
+		"forged x509",
+		JSON.stringify([forged.subject, forged.issuer, forged.subjectAltName]),
+		JSON.stringify([legacy.subject, legacy.issuer, legacy.subjectaltname]),
+	);
+}

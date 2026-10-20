@@ -1048,6 +1048,17 @@ entropy, cancellation, and reactor completions.
       Rustls. Keep TLS cancellation and teardown correct under GC stress and partial
       connection failure.
 
+- [ ] Match DNS replies against the question section (2026-10-20 security audit).
+
+- [ ] Align `http.maxHeaderSize` (16 KiB) with the codec's 64 KiB limit and answer
+      HPE_HEADER_OVERFLOW with 431, as Node does.
+
+- [ ] Give the https socket facade `destroyed`, so a throwing SNICallback reports true
+      in `tlsClientError` listeners.
+
+- [ ] Confirm SNI context matching against CVE-2026-48928 once details are published,
+      and SQLite 3.53.3 against CVE-2026-69867.
+
 # WinterTC web platform
 
 The target is the complete ECMA-429 server surface except WebAssembly. Mal.serve

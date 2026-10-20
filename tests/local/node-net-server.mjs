@@ -185,3 +185,16 @@ background.unref();
 background.listen(0, "127.0.0.1", () => {
 	console.log("unref listening", background._unref);
 });
+
+// A host holding U+0000 must not connect to or bind the text before it.
+for (const [label, run] of [
+	["connect NUL", () => net.connect({ host: "127.0.0.1\0.example.invalid", port: 9 })],
+	["listen NUL", () => createServer().listen(0, "127.0.0.1\0x")],
+]) {
+	try {
+		run();
+		console.log(label, "no throw");
+	} catch (error) {
+		console.log(label, error.name, error.code, JSON.stringify(error.message));
+	}
+}

@@ -3733,13 +3733,18 @@ static MalValue mal_serve(
         && mal_value_is_string(hv)) {
         MalString *hs = mal_value_to_string(hv);
         usize hl = mal_string_length(hs);
-        if (hl < sizeof(host)) {
-            const c16 *u = mal_string_code_units(hs);
-            for (usize i = 0; i < hl; i++) {
-                host[i] = (byte) u[i]; // ASCII hostname
-            }
-            host[hl] = '\0';
+        const c16 *u = mal_string_code_units(hs);
+        // Narrowing or dropping a hostname could bind a different address, such as "İ.0.0.0"
+        // becoming 0.0.0.0, so anything that is not short NUL-free ASCII is refused.
+        bool ascii = hl < sizeof(host);
+        for (usize i = 0; ascii && i < hl; i++) ascii = u[i] != 0 && u[i] < 0x80;
+        if (!ascii) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                "serve hostname must be an ASCII host name or address");
+            return mal_value_new_undefined();
         }
+        for (usize i = 0; i < hl; i++) host[i] = (char) u[i];
+        host[hl] = '\0';
     }
 
     MalHttpServerLimits limits = {0};

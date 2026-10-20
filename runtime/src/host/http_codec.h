@@ -73,6 +73,9 @@ typedef struct MalHttpCodec {
     bool skip_header_bytes;
     bool header_name_open;
     bool skip_body;
+    usize chunk_extensions_length;
+    /* The request failed on Node's chunk-extension limit, which Node answers with 413. */
+    bool chunk_extensions_overflow;
 } MalHttpCodec;
 
 bool mal_http_codec_init(MalHttpCodec *codec, llhttp_type_t type);

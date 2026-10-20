@@ -12,3 +12,7 @@ void mal_host_install_node_dns_promises(
 
 /* Callback-style dns.lookup(hostname, options, callback), for modules that resolve names as Node's call it. */
 MalValue mal_node_dns_lookup(MalVm *vm, const MalValue *args, i32 argc);
+
+/* Throws Node's ERR_INVALID_ARG_VALUE for a host name holding U+0000; `subject` is "The argument
+ * 'hostname'" or "The property 'options.host'". */
+void mal_node_dns_throw_null_bytes(MalVm *vm, const char *subject, MalValue value);

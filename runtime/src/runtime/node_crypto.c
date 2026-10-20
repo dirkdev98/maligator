@@ -3546,7 +3546,8 @@ static MalValue crypto_web_aes_gcm(MalVm *vm, const MalValue *args, i32 argc, bo
     u32 kind = key_length == 16 ? 7 : key_length == 24 ? 8 : 9;
     usize body = encrypt ? data.length : data.length - tag_length;
     storage = crypto_cipher_storage(storage_size);
-    out = malloc(body + 32);
+    // The result ArrayBuffer has a u32 length; a longer output would silently lose its tag.
+    out = body <= UINT32_MAX - 32 ? malloc(body + 32) : nullptr;
     if (storage == nullptr || out == nullptr) {
         mal_vm_throw_allocation_error(vm);
         crypto_settle_with_completion(vm, roots[0]);
@@ -5924,6 +5925,15 @@ static MalValue crypto_x509_string(MalVm *vm, const byte *text, usize length) {
     return mal_value_from_string(mal_string_from_utf8(&vm->heap, text, length));
 }
 
+// Rust writes T records as decimal Unix seconds; values are not NUL-terminated.
+static double crypto_x509_seconds(const byte *value, usize length) {
+    char text[32];
+    if (length >= sizeof text) return NAN;
+    memcpy(text, value, length);
+    text[length] = '\0';
+    return strtod(text, nullptr);
+}
+
 /* Builds the hidden field object once; getters read it, as Node's cache does. */
 static MalValue crypto_x509_info_object(MalVm *vm, const byte *der, usize length) {
     intptr_t needed = mal_x509_info(der, length, nullptr, 0);
@@ -5936,13 +5946,12 @@ static MalValue crypto_x509_info_object(MalVm *vm, const byte *der, usize length
         mal_value_new_undefined()};
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
-    for (usize at = 0; at < (usize) needed;) {
-        byte kind = records[at++];
-        const char *key = (const char *) records + at;
-        at += strlen(key) + 1;
-        const byte *value = records + at;
-        usize value_length = strlen((const char *) value);
-        at += value_length + 1;
+    MalX509Record record;
+    for (usize at = 0; mal_x509_record_next(records, (usize) needed, &at, &record);) {
+        byte kind = record.kind;
+        const char *key = record.key;
+        const byte *value = record.value;
+        usize value_length = record.value_length;
         if (kind == 'K') {
             if (mal_value_is_array_object(roots[1])) {
                 roots[2] = crypto_x509_string(vm, value, value_length);
@@ -5955,9 +5964,9 @@ static MalValue crypto_x509_info_object(MalVm *vm, const byte *der, usize length
             roots[1] = mal_value_from_array_object(mal_intrinsic_new_array(vm, 0));
             roots[2] = roots[1];
         } else if (kind == 'T') {
-            roots[2] = mal_value_from_f64(strtod((const char *) value, nullptr) * 1000.0);
+            roots[2] = mal_value_from_f64(crypto_x509_seconds(value, value_length) * 1000.0);
         } else if (kind == 'B') {
-            roots[2] = mal_value_new_boolean(value[0] == '1');
+            roots[2] = mal_value_new_boolean(value_length == 1 && value[0] == '1');
         } else {
             roots[2] = crypto_x509_string(vm, value, value_length);
         }
@@ -6245,6 +6254,29 @@ static MalValue mal_node_crypto_x509_verify(
     return mal_value_new_boolean(valid);
 }
 
+// Node keeps a repeated name attribute (several OU, say) as an array of its values.
+static void crypto_x509_name_add(MalVm *vm, MalValue name, const char *key, MalValue value) {
+    MalKey property = mal_intrinsic_string_key(vm, (const byte *) key);
+    MalPropertyLookup existing = mal_object_get_own(mal_value_to_object(name), property);
+    if (!existing.present) {
+        mal_object_set(mal_value_to_object(name), property, value);
+        return;
+    }
+    MalValue roots[] = {value, existing.desc.value, property.value};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    if (!mal_value_is_array_object(roots[1])) {
+        MalArrayObject *array = mal_intrinsic_new_array(vm, 0);
+        (void) mal_array_object_set(array, mal_key_index(0), roots[1]);
+        roots[1] = mal_value_from_array_object(array);
+        property.value = roots[2];
+        mal_object_set(mal_value_to_object(name), property, roots[1]);
+    }
+    MalArrayObject *array = mal_value_to_array_object(roots[1]);
+    (void) mal_array_object_set(array, mal_key_index(mal_array_object_length(array)), roots[0]);
+    mal_gc_unroot(&root);
+}
+
 static MalValue mal_node_crypto_x509_to_legacy_object(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
     (void) args, (void) argc, (void) new_target, (void) callee;
@@ -6267,13 +6299,10 @@ static MalValue mal_node_crypto_x509_to_legacy_object(
     mal_object_set(object, mal_intrinsic_string_key(vm, (const byte *) "issuer"), roots[2]);
     MalValue info = crypto_x509_own(receiver, crypto_x509_info_symbol);
     bool ca_written = false;
-    for (usize at = 0; at < (usize) needed;) {
-        byte kind = records[at++];
-        const char *key = (const char *) records + at;
-        at += strlen(key) + 1;
-        const byte *value = records + at;
-        usize value_length = strlen((const char *) value);
-        at += value_length + 1;
+    MalX509Record record;
+    for (usize at = 0; mal_x509_record_next(records, (usize) needed, &at, &record);) {
+        byte kind = record.kind;
+        const char *key = record.key;
         if (kind == 'F' && !ca_written && strcmp(key, "subjectaltname") != 0) {
             ca_written = true;
             MalPropertyLookup ca = mal_object_get_own(mal_value_to_object(info), mal_intrinsic_string_key(vm, (const byte *) "ca"));
@@ -6285,9 +6314,12 @@ static MalValue mal_node_crypto_x509_to_legacy_object(
                 mal_intrinsic_string_key(vm, (const byte *) "keyUsage"));
             if (usage.present) mal_object_set(object, mal_intrinsic_string_key(vm, (const byte *) "ext_key_usage"), usage.desc.value);
         }
-        roots[3] = crypto_x509_string(vm, value, value_length);
-        mal_object_set(kind == 'S' ? mal_value_to_object(roots[1]) : kind == 'I' ? mal_value_to_object(roots[2]) : object,
-            mal_intrinsic_string_key(vm, (const byte *) key), roots[3]);
+        roots[3] = crypto_x509_string(vm, record.value, record.value_length);
+        if (kind == 'S' || kind == 'I') {
+            crypto_x509_name_add(vm, kind == 'S' ? roots[1] : roots[2], key, roots[3]);
+        } else {
+            mal_object_set(object, mal_intrinsic_string_key(vm, (const byte *) key), roots[3]);
+        }
     }
     free(records);
     MalPropertyLookup raw = mal_object_get_own(mal_value_to_object(info), mal_intrinsic_string_key(vm, (const byte *) "raw"));

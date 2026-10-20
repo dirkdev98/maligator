@@ -5,6 +5,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "mal_x509_records.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -62,8 +64,8 @@ intptr_t mal_tls_session_info(
 /* The leaf peer certificate's DER length (copying at most `output_len`), or -1 without one. */
 intptr_t mal_tls_session_peer_certificate(
     const MalTlsClient *handle, uint8_t *output, size_t output_len);
-/* Records `kind key NUL value NUL` (S subject, I issuer, F field) describing a DER certificate
- * the way Node's getPeerCertificate does; returns the full length or -1 for malformed DER. */
+/* MalX509Record records (S subject, I issuer, F field) describing a DER certificate the way
+ * Node's getPeerCertificate does; returns the full length or -1 for malformed DER. */
 intptr_t mal_tls_x509_describe(
     const uint8_t *der, size_t der_len, uint8_t *output, size_t output_len);
 int32_t mal_tls_client_create(

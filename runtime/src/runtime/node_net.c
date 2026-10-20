@@ -525,8 +525,10 @@ static MalValue net_socket_constructor(
         ? mal_value_new_undefined() : instance;
 }
 
+// `subject` names the value in Node's error for a host holding U+0000, which a C string would
+// silently cut short.
 static bool net_ascii_string(
-    MalVm *vm, MalValue value, char **out) {
+    MalVm *vm, MalValue value, const char *subject, char **out) {
     MalString *string;
     if (!mal_vm_to_string(vm, value, &string)) return false;
     usize length = mal_string_length(string);
@@ -537,6 +539,11 @@ static bool net_ascii_string(
     }
     const c16 *units = mal_string_code_units(string);
     for (usize i = 0; i < length; i++) {
+        if (units[i] == 0) {
+            free(text);
+            mal_node_dns_throw_null_bytes(vm, subject, value);
+            return false;
+        }
         if (units[i] > 0x7f) {
             free(text);
             mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
@@ -800,7 +807,7 @@ static MalValue net_socket_connect(
         if (!mal_value_is_truthy(roots[2])) {
             roots[2] = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "localhost"));
         }
-        if (!net_ascii_string(vm, roots[2], &host)) goto done;
+        if (!net_ascii_string(vm, roots[2], "The property 'options.host'", &host)) goto done;
     }
     MalNodeNetSocketState *state = calloc(1, sizeof(MalNodeNetSocketState));
     if (state == nullptr) {
@@ -1238,6 +1245,29 @@ static MalValue net_tls_get_cipher(
     return result;
 }
 
+// Node keeps a repeated name attribute (several OU, say) as an array of its values.
+static void net_x509_name_add(MalVm *vm, MalValue name, const char *key, MalValue value) {
+    MalKey property = mal_intrinsic_string_key(vm, (const byte *) key);
+    MalPropertyLookup existing = mal_object_get_own(mal_value_to_object(name), property);
+    if (!existing.present) {
+        mal_object_set(mal_value_to_object(name), property, value);
+        return;
+    }
+    MalValue roots[] = {value, existing.desc.value, property.value};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    if (!mal_value_is_array_object(roots[1])) {
+        MalArrayObject *array = mal_intrinsic_new_array(vm, 0);
+        (void) mal_array_object_set(array, mal_key_index(0), roots[1]);
+        roots[1] = mal_value_from_array_object(array);
+        property.value = roots[2];
+        mal_object_set(mal_value_to_object(name), property, roots[1]);
+    }
+    MalArrayObject *array = mal_value_to_array_object(roots[1]);
+    (void) mal_array_object_set(array, mal_key_index(mal_array_object_length(array)), roots[0]);
+    mal_gc_unroot(&root);
+}
+
 /* TLSSocket state Node exposes once the handshake completes. */
 // Node's TLSSocket.prototype.getPeerCertificate for the leaf; `{}` without a peer certificate.
 static MalValue net_tls_get_peer_certificate(
@@ -1264,15 +1294,14 @@ static MalValue net_tls_get_peer_certificate(
         roots[2] = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
         net_set(vm, roots[0], "subject", roots[1]);
         net_set(vm, roots[0], "issuer", roots[2]);
-        for (usize at = 0; at < (usize) records_length;) {
-            byte kind = records[at++];
-            const char *key = (const char *) records + at;
-            at += strlen(key) + 1;
-            const byte *value = records + at;
-            usize value_length = strlen((const char *) value);
-            at += value_length + 1;
-            roots[3] = mal_value_from_string(mal_string_from_utf8(&vm->heap, value, value_length));
-            net_set(vm, kind == 'S' ? roots[1] : kind == 'I' ? roots[2] : roots[0], key, roots[3]);
+        MalX509Record record;
+        for (usize at = 0; mal_x509_record_next(records, (usize) records_length, &at, &record);) {
+            roots[3] = mal_value_from_string(mal_string_from_utf8(&vm->heap, record.value, record.value_length));
+            if (record.kind == 'S' || record.kind == 'I') {
+                net_x509_name_add(vm, record.kind == 'S' ? roots[1] : roots[2], record.key, roots[3]);
+            } else {
+                net_set(vm, roots[0], record.key, roots[3]);
+            }
         }
         roots[3] = mal_node_buffer_from_owned_bytes(vm, der, (usize) length);
         der = nullptr;
@@ -1362,6 +1391,17 @@ static void net_sni_select(MalVm *vm, MalNodeNetSocketState *state, MalValue con
     (void) mal_tcp_tls_select(mal_host(vm), state->operation, config);
 }
 
+static void net_sni_fail(MalVm *vm, MalNodeNetSocketState *state, MalValue error) {
+    state->sni_pending = false;
+    MalValue roots[] = {error, state->receiver, state->server};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    // Node destroys the socket first, so tlsClientError listeners see it destroyed.
+    (void) net_call_method(vm, roots[1], "destroy", nullptr, 0);
+    (void) net_emit(vm, roots[2], "tlsClientError", roots, 2);
+    mal_gc_unroot(&root);
+}
+
 static MalValue net_sni_callback(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc, MalValue new_target, MalValue callee) {
     (void) receiver, (void) new_target;
@@ -1377,10 +1417,7 @@ static MalValue net_sni_callback(
             "ERR_MULTIPLE_CALLBACK");
         (void) net_call_method(vm, roots[0], "destroy", &roots[1], 1);
     } else if (mal_value_is_truthy(roots[1])) {
-        state->sni_pending = false;
-        MalValue error_args[] = {roots[1], roots[0]};
-        (void) net_emit(vm, state->server, "tlsClientError", error_args, 2);
-        (void) net_call_method(vm, roots[0], "destroy", nullptr, 0);
+        net_sni_fail(vm, state, roots[1]);
     } else {
         net_sni_select(vm, state, roots[2]);
     }
@@ -1435,7 +1472,13 @@ static void net_sni_hello(MalVm *vm, MalNodeNetSocketState *state, MalTcpProgres
             mal_intrinsic_ascii(vm, (const byte *) ""), 2, net_sni_callback, &roots[3], 1));
         MalValue call_args[] = {roots[1], roots[2]};
         MalCompletion called = mal_vm_call_value(vm, roots[0], state->server, call_args, 2);
-        (void) called;
+        // Node catches an SNICallback that throws and fails the connection with that error;
+        // dropping it would leave the handshake waiting forever.
+        if (called.kind == MAL_COMPLETION_THROW) {
+            roots[1] = called.value;
+            vm->completion = (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
+            if (!state->destroyed) net_sni_fail(vm, state, roots[1]);
+        }
         goto done;
     }
     roots[2] = mal_node_net_sni_match(vm, state->server, progress->bytes, progress->length);
@@ -2111,7 +2154,7 @@ static MalValue net_server_lookup_done(
     char *ip = nullptr;
     struct sockaddr_storage address;
     socklen_t length;
-    if (argc > 1 && net_ascii_string(vm, args[1], &ip)) {
+    if (argc > 1 && net_ascii_string(vm, args[1], "The argument 'hostname'", &ip)) {
         if (mal_net_parse_ip(ip, port, &address, &length)) {
             (void) net_server_bind(vm, server, &address, length, backlog, ipv6_only, false, true, ip, port, &(char *) {nullptr});
         } else {
@@ -2182,7 +2225,7 @@ static MalValue net_server_listen(
         default_host = mal_value_is_nil(host_value);
         if (default_host) {
             host = strdup("::");
-        } else if (!net_ascii_string(vm, host_value, &host)) {
+        } else if (!net_ascii_string(vm, host_value, "The argument 'hostname'", &host)) {
             goto done;
         }
         if (host == nullptr) { mal_vm_throw_allocation_error(vm); goto done; }

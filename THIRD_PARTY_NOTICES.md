@@ -23,6 +23,7 @@ and error codes closely:
 | `runtime/src/runtime/node_http.c`                | lib/_http_outgoing.js                                                                                                                                                                                                                                                 |
 | `runtime/src/runtime/node_inspect.c`             | lib/internal/util/inspect.js                                                                                                                                                                                                                                          |
 | `runtime/src/runtime/node_dgram.c`               | lib/dgram.js                                                                                                                                                                                                                                                          |
+| `runtime/src/runtime/node_module.c`              | lib/internal/util/inspect.js                                                                                                                                                                                                                                          |
 | `runtime/src/runtime/node_net.c`                 | lib/net.js, lib/_tls_wrap.js                                                                                                                                                                                                                                          |
 | `runtime/src/runtime/node_path.c`                | lib/path.js                                                                                                                                                                                                                                                           |
 | `runtime/src/runtime/node_url.c`                 | lib/url.js, lib/internal/querystring.js                                                                                                                                                                                                                               |
@@ -30,6 +31,7 @@ and error codes closely:
 | `runtime/src/runtime/node_tls.c`                 | lib/tls.js, lib/_tls_wrap.js                                                                                                                                                                                                                                          |
 | `runtime/src/runtime/node_util.c`                | lib/util.js                                                                                                                                                                                                                                                           |
 | `runtime/src/runtime/node_util_mime.c`           | lib/internal/mime.js                                                                                                                                                                                                                                                  |
+| `runtime/rust/src/x509.rs`                       | src/crypto/crypto_common.cc                                                                                                                                                                                                                                           |
 
 ```text
 Node.js is licensed for use as follows:
@@ -299,10 +301,9 @@ provide, and the recipient may choose among the alternatives their license expre
 | regress                  | 0.11.1                        | MIT OR Apache-2.0                                   |
 | ring                     | 0.17.14                       | Apache-2.0 AND ISC                                  |
 | rust-argon2              | 3.0.0                         | MIT/Apache-2.0                                      |
-| rustls                   | 0.23.42                       | Apache-2.0 OR ISC OR MIT                            |
-| rustls-pemfile           | 2.2.0                         | Apache-2.0 OR ISC OR MIT                            |
+| rustls                   | 0.23.46                       | Apache-2.0 OR ISC OR MIT                            |
 | rustls-pki-types         | 1.15.1                        | MIT OR Apache-2.0                                   |
-| rustls-webpki            | 0.103.13                      | ISC                                                 |
+| rustls-webpki            | 0.103.15                      | ISC                                                 |
 | serde                    | 1.0.228                       | MIT OR Apache-2.0                                   |
 | serde_core               | 1.0.228                       | MIT OR Apache-2.0                                   |
 | serde_derive             | 1.0.228                       | MIT OR Apache-2.0                                   |
@@ -1455,8 +1456,7 @@ Also shipped by:
 - regex-automata 0.4.14 (MIT OR Apache-2.0): LICENSE-APACHE
 - regex-syntax 0.8.11 (MIT OR Apache-2.0): LICENSE-APACHE
 - rust-argon2 3.0.0 (MIT/Apache-2.0): LICENSE-APACHE
-- rustls 0.23.42 (Apache-2.0 OR ISC OR MIT): LICENSE-APACHE
-- rustls-pemfile 2.2.0 (Apache-2.0 OR ISC OR MIT): LICENSE-APACHE
+- rustls 0.23.46 (Apache-2.0 OR ISC OR MIT): LICENSE-APACHE
 - smallvec 1.15.2 (MIT OR Apache-2.0): LICENSE-APACHE
 - stable_deref_trait 1.2.1 (MIT OR Apache-2.0): LICENSE-APACHE
 - wasi 0.11.1+wasi-snapshot-preview1 (Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT): LICENSE-APACHE
@@ -4427,11 +4427,7 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
 
-### rustls 0.23.42 (Apache-2.0 OR ISC OR MIT): LICENSE-ISC
-
-Also shipped by:
-
-- rustls-pemfile 2.2.0 (Apache-2.0 OR ISC OR MIT): LICENSE-ISC
+### rustls 0.23.46 (Apache-2.0 OR ISC OR MIT): LICENSE-ISC
 
 ```text
 ISC License (ISC)
@@ -4451,11 +4447,7 @@ ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
 THIS SOFTWARE.
 ```
 
-### rustls 0.23.42 (Apache-2.0 OR ISC OR MIT): LICENSE-MIT
-
-Also shipped by:
-
-- rustls-pemfile 2.2.0 (Apache-2.0 OR ISC OR MIT): LICENSE-MIT
+### rustls 0.23.46 (Apache-2.0 OR ISC OR MIT): LICENSE-MIT
 
 ```text
 Copyright (c) 2016 Joseph Birr-Pixton <jpixton@gmail.com>
@@ -4483,20 +4475,6 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
-```
-
-### rustls-pemfile 2.2.0 (Apache-2.0 OR ISC OR MIT): LICENSE
-
-```text
-rustls-pemfile is distributed under the following three licenses:
-
-- Apache License version 2.0.
-- MIT license.
-- ISC license.
-
-These are included as LICENSE-APACHE, LICENSE-MIT and LICENSE-ISC
-respectively.  You may use this software under the terms of any
-of these licenses, at your option.
 ```
 
 ### rustls-pki-types 1.15.1 (MIT OR Apache-2.0): LICENSE-APACHE
@@ -4735,7 +4713,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ```
 
-### rustls-webpki 0.103.13 (ISC): LICENSE
+### rustls-webpki 0.103.15 (ISC): LICENSE
 
 ```text
 Except as otherwise noted, this project is licensed under the following

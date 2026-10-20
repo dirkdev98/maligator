@@ -6,6 +6,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "mal_x509_records.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -21,7 +23,7 @@ enum {
 /* DER of the first certificate in PEM or DER input; -1 when text has no certificate block,
  * -2 for malformed DER. */
 intptr_t mal_x509_from_input(const uint8_t *data, size_t len, uint8_t *output, size_t capacity);
-/* Records `kind key NUL value NUL`: F text, T Unix seconds, B "0"/"1", K one keyUsage OID. */
+/* MalX509Record records: F text, T Unix seconds, B "0"/"1", K one keyUsage OID. */
 intptr_t mal_x509_info(const uint8_t *der, size_t len, uint8_t *output, size_t capacity);
 /* Node's toLegacyObject records: S/I subject/issuer attributes and F fields. */
 intptr_t mal_x509_legacy(const uint8_t *der, size_t len, uint8_t *output, size_t capacity);

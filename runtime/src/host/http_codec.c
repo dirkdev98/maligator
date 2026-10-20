@@ -276,6 +276,26 @@ static int codec_message_complete(llhttp_t *parser) {
     return HPE_PAUSED;
 }
 
+// Node's kMaxChunkExtensionsSize (CVE-2024-22019): llhttp alone keeps reading extension bytes
+// for as long as a peer sends them.
+#define MAL_HTTP_CODEC_CHUNK_EXTENSIONS_MAX 16384
+
+static int codec_chunk_extension(llhttp_t *parser, const char *at, size_t length) {
+    (void) at;
+    MalHttpCodec *codec = codec_from_parser(parser);
+    codec->chunk_extensions_length += length;
+    if (codec->chunk_extensions_length > MAL_HTTP_CODEC_CHUNK_EXTENSIONS_MAX) {
+        codec->chunk_extensions_overflow = true;
+        return codec_fail(parser, "HTTP chunk extensions exceed their limit");
+    }
+    return 0;
+}
+
+static int codec_chunk_header(llhttp_t *parser) {
+    codec_from_parser(parser)->chunk_extensions_length = 0;
+    return 0;
+}
+
 bool mal_http_codec_init(MalHttpCodec *codec, llhttp_type_t type) {
     if (codec == nullptr || (type != HTTP_REQUEST && type != HTTP_RESPONSE)) {
         return false;
@@ -291,6 +311,9 @@ bool mal_http_codec_init(MalHttpCodec *codec, llhttp_type_t type) {
     codec->settings.on_headers_complete = codec_headers_complete;
     codec->settings.on_body = codec_body;
     codec->settings.on_message_complete = codec_message_complete;
+    codec->settings.on_chunk_extension_name = codec_chunk_extension;
+    codec->settings.on_chunk_extension_value = codec_chunk_extension;
+    codec->settings.on_chunk_header = codec_chunk_header;
     llhttp_init(&codec->parser, type, &codec->settings);
     codec->parser.data = codec;
     return true;

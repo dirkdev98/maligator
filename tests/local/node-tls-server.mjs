@@ -406,6 +406,37 @@ async function sniCase(label, server, servername) {
 	await sniCase("SNICallback error", server, "localhost");
 }
 
+// An SNICallback that throws fails that connection instead of leaving its handshake pending.
+async function throwingSni(label, server) {
+	const events = [];
+	server.on("tlsClientError", (error, socket) =>
+		events.push(
+			`tlsClientError ${error.message} ${label === "tls" ? socket.destroyed : "-"}`,
+		),
+	);
+	await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+	const socket = await connectClient(server.address().port, {
+		servername: "attacker.example",
+		ca: CA,
+	});
+	socket.on("error", (error) => events.push(`client error ${error.code}`));
+	await new Promise((resolve) => socket.on("close", resolve));
+	server.close();
+	console.log("throwing SNICallback", label, JSON.stringify(events));
+}
+function throwingSniOptions() {
+	return {
+		SNICallback(servername) {
+			throw new Error(`unexpected servername ${servername}`);
+		},
+	};
+}
+await throwingSni("tls", tls.createServer(throwingSniOptions()));
+await throwingSni(
+	"https",
+	https.createServer(throwingSniOptions(), (request, response) => response.end()),
+);
+
 async function clientErrorCode(label, serverOptions, connect) {
 	const server = tls.createServer(serverOptions);
 	const reported = new Promise((resolve) =>
@@ -570,4 +601,100 @@ async function httpsSni(label, server) {
 	);
 	await httpsSni("https sni", server);
 	console.log("https SNICallback names", JSON.stringify(names));
+}
+
+// tests/fixtures/tls/forged-*.pem (make-forged-certs.mjs): a subject CN holding NUL-separated
+// "SCN" records, BMP/T61/Universal strings, and a URI SAN carrying a ", DNS:" separator.
+const FORGED_NAME_CERT = `-----BEGIN CERTIFICATE-----
+MIIBlDCCATmgAwIBAgICASMwCgYIKoZIzj0EAwIwRzEYMBYGA1UEAwwPZ3Vlc3QA
+U0NOAGFkbWluMQ0wCwYDVQQLHgQAQQQUMQ0wCwYDVQQLFAQj5CwgMQ0wCwYDVQQL
+HAQAAfYAMB4XDTI2MDEwMTAwMDAwMFoXDTQ2MDEwMTAwMDAwMFowRzEYMBYGA1UE
+AwwPZ3Vlc3QAU0NOAGFkbWluMQ0wCwYDVQQLHgQAQQQUMQ0wCwYDVQQLFAQj5Cwg
+MQ0wCwYDVQQLHAQAAfYAMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEqqek976E
+TFDqdpwmyxHiX+A+wZsBgOloV/4WbLv6XnpkGtr27dsu8inB5rh7gFpyL5+7Qm69
+l6OrWvR/bsZ2i6MVMBMwEQYDVR0RBAowCIIGeC50ZXN0MAoGCCqGSM49BAMCA0kA
+MEYCIQDcOzBnLAWsVincQkHArrrA7nzAcfyPachrey8uTdi/vQIhAMNJkogelVWP
+DDWiSUNA1CvE76nRhI+wydJZ2VKk8vtL
+-----END CERTIFICATE-----
+`;
+const FORGED_NAME_KEY = `-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgk3tSXUjRr2G490EC
+wOMwK/CrT/UXsKx25MK2q6L/xZ6hRANCAASqp6T3voRMUOp2nCbLEeJf4D7BmwGA
+6WhX/hZsu/peemQa2vbt2y7yKcHmuHuAWnIvn7tCbr2Xo6ta9H9uxnaL
+-----END PRIVATE KEY-----
+`;
+const FORGED_SAN_CERT = `-----BEGIN CERTIFICATE-----
+MIIBmjCCAT+gAwIBAgICASMwCgYIKoZIzj0EAwIwETEPMA0GA1UEAwwGeC50ZXN0
+MB4XDTI2MDEwMTAwMDAwMFoXDTQ2MDEwMTAwMDAwMFowETEPMA0GA1UEAwwGeC50
+ZXN0MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEk+lj8WlVOnXCr9GtgIUVN+8E
+xXrBK2mMCEw3SRTWTAMFdGbcH62wNAQWr2V2ZS+j7+zU//2umj5goM386pHqTqOB
+hjCBgzCBgAYDVR0RBHkwd4YiaHR0cHM6Ly94LnRlc3QsIEROUzp2aWN0aW0uZXhh
+bXBsZYIMZXjkbXBsZS50ZXN0gQ8icXVvdGVkIkB4LnRlc3SHECABDbgAAAAAAAAA
+AAAAAAGHAwECA4gDKgMEpBYwFDESMBAGA1UEAwwJZGlyLCBuYW1lMAoGCCqGSM49
+BAMCA0kAMEYCIQDfdKdzqtFajHNBQ6nkQH6WkhQZcCNUuVBIKaJuyjwpxQIhAOMi
+I7A0Nl3dEeHZxyXBfUItLLqA5fmsxHFIeh5dljfg
+-----END CERTIFICATE-----
+`;
+const FORGED_SAN_KEY = `-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgy2CjEJ1oF/3cRrao
+Y8N8ivoIbsHMkishhihIwp8dpHChRANCAAST6WPxaVU6dcKv0a2AhRU37wTFesEr
+aYwITDdJFNZMAwV0ZtwfrbA0BBavZXZlL6Pv7NT//a6aPmCgzfzqkepO
+-----END PRIVATE KEY-----
+`;
+
+async function forgedPeer(label, cert, key) {
+	const server = tls.createServer({ cert, key }, (socket) =>
+		socket.on("error", () => {}),
+	);
+	await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+	const socket = await connectClient(server.address().port, {
+		servername: "x.test",
+		rejectUnauthorized: false,
+	});
+	const peer = await new Promise((resolve, reject) => {
+		socket.on("secureConnect", () => {
+			resolve(socket.getPeerCertificate());
+			socket.destroy();
+		});
+		socket.on("error", reject);
+	});
+	await new Promise((resolve) => server.close(resolve));
+	console.log(
+		label,
+		"subject",
+		JSON.stringify(peer.subject),
+		"subjectaltname",
+		JSON.stringify(peer.subjectaltname),
+	);
+	for (const host of ["victim.example", "x.test", "admin", "guest", "2001:db8::1"]) {
+		const verdict = tls.checkServerIdentity(host, peer);
+		console.log(
+			label,
+			host,
+			verdict === undefined ? "accepted" : `${verdict.code} ${verdict.reason}`,
+		);
+	}
+}
+await forgedPeer("forged name", FORGED_NAME_CERT, FORGED_NAME_KEY);
+await forgedPeer("forged san", FORGED_SAN_CERT, FORGED_SAN_KEY);
+for (const subjectaltname of [
+	'DNS:"unterminated',
+	'URI:"a\\u002c DNS:x.test", DNS:"x.test"',
+]) {
+	try {
+		const verdict = tls.checkServerIdentity("x.test", { subject: {}, subjectaltname });
+		console.log(
+			"altname format",
+			JSON.stringify(subjectaltname),
+			verdict === undefined ? "accepted" : verdict.code,
+		);
+	} catch (error) {
+		console.log(
+			"altname format",
+			JSON.stringify(subjectaltname),
+			error.name,
+			error.code,
+			error.message,
+		);
+	}
 }

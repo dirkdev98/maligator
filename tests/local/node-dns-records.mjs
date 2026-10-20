@@ -276,4 +276,40 @@ check(
 );
 
 server.close();
+
+// A name holding U+0000 must not resolve as the text before it.
+function nullByteError(run, code, message) {
+	let thrown;
+	try {
+		run();
+	} catch (error) {
+		thrown = error;
+	}
+	check(
+		thrown?.code === code && (message === undefined || thrown.message === message),
+		`${code}: ${thrown?.message}`,
+	);
+}
+nullByteError(
+	() => dns.lookup("localhost\0.example.invalid", () => {}),
+	"ERR_INVALID_ARG_VALUE",
+	"The argument 'hostname' must be a string without null bytes. Received 'localhost\\x00.example.invalid'",
+);
+nullByteError(
+	() => dnsPromises.lookup("localhost\0.example.invalid"),
+	"ERR_INVALID_ARG_VALUE",
+	"The argument 'hostname' must be a string without null bytes. Received 'localhost\\x00.example.invalid'",
+);
+nullByteError(
+	() => dns.lookupService("127.0.0.1\0x", 80, () => {}),
+	"ERR_INVALID_ARG_VALUE",
+	"The argument 'address' is invalid. Received '127.0.0.1\\x00x'",
+);
+nullByteError(
+	() => dns.lookup(`${"a'b\"c".repeat(30)}\0\n\u0085\ud800`, () => {}),
+	"ERR_INVALID_ARG_VALUE",
+	`The argument 'hostname' must be a string without null bytes. Received \`${"a'b\"c".repeat(25)}a'...`,
+);
+nullByteError(() => dns.setServers(["127.0.0.1\0x"]), "ERR_INVALID_IP_ADDRESS");
+
 console.log("node-dns-records PASS");

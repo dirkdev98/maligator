@@ -2,7 +2,10 @@
 //! one call; outputs are written to caller buffers and report their full length.
 
 use crate::crypto_pkey::{base64_decode, base64_encode_lines};
-use crate::x509::{hex, name_lines, oid_text, parse, push_record, signature_algorithm_name, time_fields, der};
+use crate::x509::{
+    der, hex, info_access_text, name_lines, oid_text, parse, push_record, signature_algorithm_name,
+    subject_alt_name_text, time_fields,
+};
 
 unsafe fn input<'a>(pointer: *const u8, length: usize) -> Option<&'a [u8]> {
     if length == 0 {
@@ -68,12 +71,8 @@ fn info(certificate: &[u8]) -> Option<Vec<u8>> {
     for (oid, value) in &parsed.extensions {
         match *oid {
             [0x55, 0x1d, 0x11] => {
-                let mut records = Vec::new();
                 let (_, names, _) = der(value)?;
-                crate::x509::push_subject_alt_name(&mut records, names)?;
-                // push_subject_alt_name writes one `F subjectaltname` record.
-                let value = &records[1 + b"subjectaltname".len() + 1..records.len() - 1];
-                push_record(&mut out, b'F', b"subjectAltName", value);
+                push_record(&mut out, b'F', b"subjectAltName", subject_alt_name_text(names)?.as_bytes());
             }
             [0x55, 0x1d, 0x13] => {
                 let (_, constraints, _) = der(value)?;
@@ -89,23 +88,8 @@ fn info(certificate: &[u8]) -> Option<Vec<u8>> {
                 }
             }
             [0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x01, 0x01] => {
-                let (_, mut descriptions, _) = der(value)?;
-                let mut text = String::new();
-                while !descriptions.is_empty() {
-                    let (_, description, rest) = der(descriptions)?;
-                    descriptions = rest;
-                    let (_, method, location) = der(description)?;
-                    let (tag, location, _) = der(location)?;
-                    let method = match method {
-                        [0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x30, 0x01] => "OCSP".to_string(),
-                        [0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x30, 0x02] => "CA Issuers".to_string(),
-                        other => oid_text(other),
-                    };
-                    if tag == 0x86 {
-                        text.push_str(&format!("{method} - URI:{}\n", String::from_utf8_lossy(location)));
-                    }
-                }
-                push_record(&mut out, b'F', b"infoAccess", text.as_bytes());
+                let (_, descriptions, _) = der(value)?;
+                push_record(&mut out, b'F', b"infoAccess", info_access_text(descriptions)?.as_bytes());
             }
             _ => {}
         }
@@ -139,8 +123,8 @@ fn info(certificate: &[u8]) -> Option<Vec<u8>> {
 #[no_mangle]
 /// # Safety
 /// `der` is valid for `len` bytes and `output` for `capacity`. Returns the full length of
-/// `kind key NUL value NUL` records (F text, T Unix seconds, B boolean, K one keyUsage OID),
-/// or -1 for malformed DER.
+/// `push_record` records (F text, T Unix seconds, B boolean, K one keyUsage OID), or -1 for
+/// malformed DER.
 pub unsafe extern "C" fn mal_x509_info(der: *const u8, len: usize, output: *mut u8, capacity: usize) -> isize {
     match unsafe { input(der, len) }.and_then(info) {
         Some(records) => unsafe { copy_out(&records, output, capacity) },

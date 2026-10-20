@@ -2,7 +2,8 @@
 //! pointer is borrowed only for one call; persistent state owns only Rustls objects.
 
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+use rustls::pki_types::pem::PemObject;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime};
 use rustls::server::danger::{ClientCertVerified, ClientCertVerifier};
 use rustls::server::{Accepted, Acceptor, ResolvesServerCert, WebPkiClientVerifier};
 use rustls::sign::CertifiedKey;
@@ -204,15 +205,13 @@ fn client_identity(cert_pem: &[u8], key_pem: &[u8]) -> Result<Option<ClientIdent
         return Ok(None);
     }
     let mut chain = Vec::new();
-    for certificate in rustls_pemfile::certs(&mut Cursor::new(cert_pem)) {
+    for certificate in CertificateDer::pem_slice_iter(cert_pem) {
         chain.push(certificate.map_err(|_| MAL_TLS_STATUS_BAD_CERT)?);
     }
     if chain.is_empty() {
         return Err(MAL_TLS_STATUS_BAD_CERT);
     }
-    let key = rustls_pemfile::private_key(&mut Cursor::new(key_pem))
-        .map_err(|_| MAL_TLS_STATUS_BAD_KEY)?
-        .ok_or(MAL_TLS_STATUS_BAD_KEY)?;
+    let key = PrivateKeyDer::from_pem_slice(key_pem).map_err(|_| MAL_TLS_STATUS_BAD_KEY)?;
     Ok(Some((chain, key)))
 }
 
@@ -240,7 +239,7 @@ fn client_config(
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let mut roots = RootCertStore::empty();
     let mut added = 0;
-    for certificate in rustls_pemfile::certs(&mut Cursor::new(ca_pem)) {
+    for certificate in CertificateDer::pem_slice_iter(ca_pem) {
         let certificate = certificate.map_err(|_| MAL_TLS_STATUS_INVALID_ARGUMENT)?;
         if roots.add(certificate).is_ok() {
             added += 1;
@@ -501,7 +500,7 @@ fn server_config(
         .map_err(|_| MAL_TLS_STATUS_ERROR)?;
     let builder = if request_cert && !ca_pem.is_empty() {
         let mut roots = RootCertStore::empty();
-        for certificate in rustls_pemfile::certs(&mut Cursor::new(ca_pem)) {
+        for certificate in CertificateDer::pem_slice_iter(ca_pem) {
             let certificate = certificate.map_err(|_| MAL_TLS_STATUS_BAD_CA)?;
             roots.add(certificate).map_err(|_| MAL_TLS_STATUS_BAD_CA)?;
         }
@@ -519,7 +518,7 @@ fn server_config(
     };
     let mut chain = Vec::new();
     if !cert_pem.is_empty() {
-        for certificate in rustls_pemfile::certs(&mut Cursor::new(cert_pem)) {
+        for certificate in CertificateDer::pem_slice_iter(cert_pem) {
             chain.push(certificate.map_err(|_| MAL_TLS_STATUS_BAD_CERT)?);
         }
         if chain.is_empty() {
@@ -529,11 +528,7 @@ fn server_config(
     let key = if key_pem.is_empty() {
         None
     } else {
-        Some(
-            rustls_pemfile::private_key(&mut Cursor::new(key_pem))
-                .map_err(|_| MAL_TLS_STATUS_BAD_KEY)?
-                .ok_or(MAL_TLS_STATUS_BAD_KEY)?,
-        )
+        Some(PrivateKeyDer::from_pem_slice(key_pem).map_err(|_| MAL_TLS_STATUS_BAD_KEY)?)
     };
     let mut config = match key {
         Some(key) if !chain.is_empty() => builder
