@@ -157,6 +157,20 @@ function appendBudgetCaller(
 	return { function: builder.finish(entry).function, call };
 }
 
+/** Two instructions, so its inline still adds code once the replaced call is credited. */
+function appendBudgetLeaf(program: CoreProgram): CoreFunctionId {
+	const builder = new CoreFunctionBuilder(program, {
+		metadata: { sourcePath: "/entry.js" },
+	});
+	const entry = builder.createBlock();
+	const [value] = builder.appendInstruction(entry, "createUndefined", []);
+	const [negated] = builder.appendInstruction(entry, "unary", [value!], {
+		attributes: { operator: "!" },
+	});
+	builder.setTerminator(entry, { kind: "return", value: negated! });
+	return builder.finish(entry).function;
+}
+
 const TINY_CODE_BUDGET: CoreTransformBudgetLimits = {
 	perSiteExpansions: 1,
 	perCallerExpansions: 8,
@@ -393,7 +407,7 @@ describe("bounded Core cross-call transforms", () => {
 			inline: 1,
 		});
 		expect(result.statistics.instructionsIntroduced).toBe(1);
-		expect(result.statistics.generatedCodeConsumed).toBe(1);
+		expect(result.statistics.generatedCodeConsumed).toBe(0);
 		expect(result.statistics.callGraphFunctionsAnalyzed).toBeGreaterThan(2);
 		expect(result.statistics.waves).toBeLessThanOrEqual(2);
 		expect(result.statistics.programFlowResolves).toBe(result.statistics.waves + 1);
@@ -442,7 +456,7 @@ describe("bounded Core cross-call transforms", () => {
 		});
 		builder.setTerminator(exit, { kind: "return", value: result! });
 		const caller = builder.finish(entry).function;
-		appendLeaf(program);
+		appendBudgetLeaf(program);
 
 		const transformed = runTransforms(program, {
 			...TINY_CODE_BUDGET,
@@ -460,7 +474,7 @@ describe("bounded Core cross-call transforms", () => {
 			const program = analysisProgram();
 			const first = appendBudgetCaller(program, 2, reverse);
 			const second = appendBudgetCaller(program, 2, !reverse);
-			appendLeaf(program);
+			appendBudgetLeaf(program);
 			const hot = reverse ? first : second;
 			const cold = reverse ? second : first;
 
@@ -474,6 +488,24 @@ describe("bounded Core cross-call transforms", () => {
 			verifyCoreProgram(program, { stage: "pre-target" });
 		},
 	);
+
+	it("still inlines a body that adds no code once the generated-code budget is spent", () => {
+		const program = analysisProgram();
+		const costly = appendBudgetCaller(program, 2, true);
+		const free = appendBudgetCaller(program, 3, false);
+		appendBudgetLeaf(program);
+		appendLeaf(program);
+
+		const transformed = runTransforms(program, {
+			...TINY_CODE_BUDGET,
+			perCallerGeneratedCode: 1,
+			programGeneratedCode: 1,
+		});
+		expect(callInstructions(program, costly.function)).toEqual([]);
+		expect(callInstructions(program, free.function)).toEqual([]);
+		expect(transformed.statistics.generatedCodeConsumed).toBe(1);
+		verifyCoreProgram(program, { stage: "pre-target" });
+	});
 
 	it("prefers a smaller inline over an earlier larger body at the same frequency", () => {
 		const program = analysisProgram();
@@ -490,12 +522,12 @@ describe("bounded Core cross-call transforms", () => {
 		}
 		builder.setTerminator(entry, { kind: "return", value });
 		builder.finish(entry);
-		appendLeaf(program);
+		appendBudgetLeaf(program);
 
 		const transformed = runTransforms(program, {
 			...TINY_CODE_BUDGET,
-			perCallerGeneratedCode: 3,
-			programGeneratedCode: 3,
+			perCallerGeneratedCode: 2,
+			programGeneratedCode: 2,
 		});
 		expect(callInstructions(program, largeCaller.function)).toEqual([largeCaller.call]);
 		expect(callInstructions(program, smallCaller.function)).toEqual([]);
@@ -507,7 +539,7 @@ describe("bounded Core cross-call transforms", () => {
 		const program = analysisProgram();
 		const guarded = appendBudgetCaller(program, 2, false, true);
 		const exact = appendBudgetCaller(program, 2, false);
-		appendLeaf(program);
+		appendBudgetLeaf(program);
 
 		const transformed = runTransforms(program, {
 			...TINY_CODE_BUDGET,
@@ -2146,7 +2178,7 @@ describe("bounded Core cross-call transforms", () => {
 		const program = analysisProgram();
 		const inlinedCaller = appendCaller(program, 2);
 		const specializedCaller = appendCaller(program, 3);
-		appendLeaf(program);
+		appendBudgetLeaf(program);
 		const builder = new CoreFunctionBuilder(program);
 		const entry = builder.createBlock();
 		const consequent = builder.createBlock();

@@ -1776,14 +1776,17 @@ function offerFunctionCandidates(
 					fn.valueRepresentation(result),
 				),
 			);
-		const generatedCodeCost =
+		// An exact inline replaces its call, so a one-instruction body adds no code.
+		const generatedCodeCost = Math.max(
+			0,
 			(inline?.instructions.length ?? 0) +
-			(inline?.linear === false ? inline.blocks.length : 0) +
-			(synchronousCallback?.created !== true
-				? 0
-				: synchronousCallback.invocations * callbackInline!.instructions.length) +
-			consumerDuplication +
-			(open ? 1 : 0);
+				(inline?.linear === false ? inline.blocks.length : 0) +
+				(synchronousCallback?.created !== true
+					? 0
+					: synchronousCallback.invocations * callbackInline!.instructions.length) +
+				consumerDuplication +
+				(open ? 1 : inline === undefined ? 0 : -1),
+		);
 		const regionCost = readAccessor
 			? coreReadAccessorRegionCost(
 					program,
@@ -3524,7 +3527,12 @@ export function runCoreCrossCallTransforms(
 			candidate = service.next()
 		) {
 			const exhausted = service.programBudgetExhaustionReason(phaseLimits);
-			if (exhausted !== undefined) {
+			// Candidates that add no code still fit once the generated-code budget is spent.
+			if (exhausted === "generated-code-cost" && candidate.generatedCodeCost > 0) {
+				service.recordDeclined(exhausted);
+				continue;
+			}
+			if (exhausted !== undefined && exhausted !== "generated-code-cost") {
 				service.recordDeclined(exhausted);
 				service.discardPending(exhausted);
 				break;
