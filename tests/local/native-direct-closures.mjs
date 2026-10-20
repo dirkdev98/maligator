@@ -131,15 +131,46 @@ function makeCounter(bias) {
 			total += value + bias;
 			return total;
 		}
+		// Captures only the outer factory, found from this activation.
+		function biasOf(times) {
+			let sum = 0;
+			for (let index = 0; index < times; index++) {
+				try {
+					sum += index % 2 === 0 ? bias : -bias;
+				} catch {
+					sum = 0;
+				}
+			}
+			return sum;
+		}
 		function addAll() {
 			for (const value of values) add(value);
-			return add(0);
+			return add(0) + biasOf(values.length);
 		}
 		return addAll();
 	};
 }
 const count = makeCounter(100);
 log.push(count([1, 2]), count([5]));
+
+// The chain starts with the closure's owners but continues past them.
+function level1(first) {
+	return function level2(second) {
+		return function level3(third) {
+			let total = third + first;
+			function scaled(value) {
+				total += value * second;
+				return total;
+			}
+			function both(value) {
+				return scaled(value) + scaled(1);
+			}
+			return both(third);
+		};
+	};
+}
+const level3 = level1(1)(10);
+log.push(level3(2), level3(3));
 
 function immediate(values) {
 	let product = 1;

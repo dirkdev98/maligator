@@ -691,15 +691,15 @@ function nativeDirectClosureSites(
 			guarded.has(target) || (closure.closureCaptureValues?.length ?? 0) > 0
 				? undefined
 				: layout === undefined
-					? "scope"
+					? { kind: "scope" }
 					: layout.length === 0
-						? "none"
+						? { kind: "none" }
 						: layout.length === 1
 							? layout[0] === owner
-								? "owner"
-								: undefined
+								? { kind: "owner" }
+								: { kind: "ancestor", owner: layout[0]! }
 							: layout[layout.length - 1] === owner
-								? "chain"
+								? { kind: "chain" }
 								: undefined;
 		sites.set(target, { environment, functions: [...functions.get(target)!] });
 	}

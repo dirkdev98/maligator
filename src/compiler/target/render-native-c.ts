@@ -386,10 +386,13 @@ function captureOwnerName(
 /**
  * How an exact caller rebuilds the creation environment of a closure whose function
  * object its owner scope may have elided. `scope` and `owner` reuse the owner's
- * activation as-is or as the single tagged owner, `none` captures nothing, and
- * `chain` reuses the activation only when the creator left the callee empty.
+ * activation as-is or as the single tagged owner, `ancestor` tags the one outer
+ * owner found from it, `none` captures nothing, and `chain` reuses the activation
+ * only when the creator left the callee empty.
  */
-export type NativeDirectClosureEnvironment = "scope" | "none" | "owner" | "chain";
+export type NativeDirectClosureEnvironment =
+	| { readonly kind: "scope" | "none" | "owner" | "chain" }
+	| { readonly kind: "ancestor"; readonly owner: number };
 
 /** The C environment argument for an exact call, or undefined when it reads the callee. */
 function directClosureEnvironment(
@@ -407,18 +410,20 @@ function directClosureEnvironment(
 			? undefined
 			: directClosures?.get(plan.directFunctionIndex);
 	if (environment === undefined) return undefined;
-	if (environment === "none") return "nullptr";
+	if (environment.kind === "none") return "nullptr";
 	const scope =
 		owner === functionIndex
 			? "env"
 			: fixedCaptureOwners?.has(owner) === true
 				? captureOwnerName(relocation, owner)
 				: `mal_vm_capture_owner(env, ${relocation.ownerFunctionIndex(owner)})`;
-	switch (environment) {
+	switch (environment.kind) {
 		case "scope":
 			return scope;
 		case "owner":
 			return `mal_env_tag_single_owner(${scope})`;
+		case "ancestor":
+			return `mal_env_tag_single_owner(mal_vm_capture_owner_at(${scope}, ${relocation.ownerFunctionIndex(environment.owner)}, 0))`;
 		case "chain":
 			return `(mal_value_is_empty(${callee}) ? ${scope} : mal_value_to_function_object(${callee})->creation_env)`;
 	}
@@ -8040,8 +8045,8 @@ function emitInstruction(
 				...ensureCaptureEnvironment(context.captureShadow, ip),
 				closure === undefined
 					? `r${instruction.dst} = ${create};`
-					: closure === "chain"
-						? `r${instruction.dst} = mal_vm_closure_chain_is_complete(vm, ${relocation.functionIndex(instruction.functionIndex)}, env) ? MAL_VALUE_EMPTY : ${create};`
+					: closure.kind === "chain"
+						? `r${instruction.dst} = mal_vm_closure_chain_has_owners(vm, ${relocation.functionIndex(instruction.functionIndex)}, env) ? MAL_VALUE_EMPTY : ${create};`
 						: `r${instruction.dst} = MAL_VALUE_EMPTY;`,
 			];
 		}

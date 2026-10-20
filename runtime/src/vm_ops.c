@@ -1772,11 +1772,19 @@ static bool mal_vm_capture_chain_is_complete(MalEnv *env, const i32 *owners, i32
     return env == nullptr;
 }
 
-bool mal_vm_closure_chain_is_complete(MalVm *vm, i32 function_index, MalEnv *creation_env) {
+bool mal_vm_closure_chain_has_owners(MalVm *vm, i32 function_index, MalEnv *creation_env) {
     const MalFunction *definition = &vm->runtime_image->functions[function_index];
-    i32 count = definition->closure_captures != nullptr ? definition->closure_capture_owner_count : -1;
-    return count > 1 && mal_vm_capture_chain_is_complete(
-        creation_env, definition->closure_captures->owners, count);
+    if (definition->closure_captures == nullptr) return false;
+    const i32 *owners = definition->closure_captures->owners;
+    MalEnv *env = creation_env;
+    for (i32 index = definition->closure_capture_owner_count - 1; index >= 0; index--) {
+        if (env == nullptr) return false;
+        bool terminal = mal_env_is_single_owner(env);
+        MalEnv *scope = terminal ? mal_env_untag_single_owner(env) : env;
+        if (scope->function_index != owners[index] || (terminal && index != 0)) return false;
+        env = scope->parent;
+    }
+    return true;
 }
 
 // A value display is terminal; its parent is the allocating function object.

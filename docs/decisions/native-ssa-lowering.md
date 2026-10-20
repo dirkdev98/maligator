@@ -187,10 +187,11 @@ A nested function whose object only ever reaches the callee of exact calls is a
 direct closure: the creating activation stores an empty marker in its binding
 instead of allocating the object. Every caller reaches the creating activation
 through the owner scope it reads the binding from, so it rebuilds the creation
-environment the object would have held: nothing, the activation as a single
-tagged owner, or the activation itself when its scope chain is complete. A chain
-that would need a capture vector still creates the object, and callers branch on
-the marker. Elision needs the creator, the callee and every caller compiled, and
+environment from it: nothing, the activation or the one outer owner as a single
+tagged owner, or the activation itself when its scope chain starts with every
+owner in order, which the callee's owner initialization walks like an exact chain.
+Any other chain still creates the object with its capture vector, and callers
+branch on the marker. Elision needs the creator, the callee and every caller compiled, and
 callers outside generators and async functions; otherwise the object stays.
 
 Ordinary numeric indexed reads and stores defer private-root publication until

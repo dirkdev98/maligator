@@ -499,12 +499,12 @@ iterator cursor is not, by itself, permission to delete its language object.
       short strings go through `memmove` calls (5% of samples) and numbers through
       `mal_text_buffer_append_number` (6%).
 - [ ] Elide the remaining call-only closures. Direct closures cover layouts that
-      capture nothing, only the creating activation, or a complete chain ending in
-      it. Sparse layouts such as TypeScript's `[createTypeChecker,
-      checkTypeRelatedTo]` still build one capture vector per closure per
-      activation (about 4% of a type-check); closures with an identical layout
-      could share one, and layouts that skip the creating activation could be
-      rebuilt from the owner the caller already resolves.
+      capture nothing, one owner, or a chain that starts with the creating
+      activation. A layout that skips an owner, such as a TypeScript checker helper
+      capturing the module scope and checkTypeRelatedTo but not createTypeChecker,
+      still builds a capture vector per closure per activation; closures with an
+      identical layout could share one. Nested functions passed as callbacks, like
+      TypeScript's isRelatedTo, keep their object.
 - [ ] Specialize higher-order helpers for constant function arguments. TypeScript's
       binarySearchKey reaches getTypeId and compareValues through generic calls
       (5% of a type-check in call dispatch), and a 64-element binarySearch loop runs
