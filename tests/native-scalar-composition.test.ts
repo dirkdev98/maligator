@@ -89,7 +89,7 @@ describe("native scalar plans around opaque and exceptional windows", () => {
 				out.native.specializations.some((region) => region.kind === "numeric-fusion"),
 			).toBe(false);
 			expect(out.c.source).toMatch(
-				/MalValue __binary_result_\d+ = [^;]*mal_vm_binary_op[^;]*;\n\s+if \([^\n]+\) goto __throw_exit;\n\s+r\d+ = mal_ops_number_to_i32\(mal_ops_number_as_f64\(__binary_result_\d+\)\);/,
+				/MalValue __binary_result_\d+ = [^;]*mal_vm_binary_op[^;]*;\n\s+if \([^\n]+\) goto __throw_exit;\n\s+r\d+ = mal_ops_number_value_to_i32\(__binary_result_\d+\);/,
 			);
 			expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
 				out.image,
