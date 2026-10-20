@@ -14,6 +14,8 @@ export interface CoreSynchronousCallbackConsumer {
 	readonly callback: CoreFunctionId;
 	readonly argument: CoreValueId;
 	readonly invocations: number;
+	/** The site creates the callback; otherwise the caller passes the one closure it already holds. */
+	readonly created: boolean;
 }
 
 /** A fresh callback can disappear only when the consumer cannot observe or retain its identity. */
@@ -38,10 +40,19 @@ export function coreSynchronousCallbackConsumer(
 	if (!consumer.metadata.strict || consumer.isAsync || consumer.isGenerator)
 		return undefined;
 	const escapes = summaries.summary(target)?.parameterEscape;
+	let held: CoreSynchronousCallbackConsumer | undefined;
 	for (const [parameter, argument] of (call.arguments ?? []).entries()) {
 		if (parameter >= consumer.parameterCount || escapes?.[parameter] !== "invoked")
 			continue;
-		const callback = coreDirectCreatedFunction(caller, argument);
+		const fresh = coreDirectCreatedFunction(caller, argument);
+		const targets = summaries.targets.targets(caller.id, argument);
+		const callback =
+			fresh ??
+			(held === undefined &&
+			!coreCalleeTargetsAreOpen(targets) &&
+			targets.functions.length === 1
+				? targets.functions[0]
+				: undefined);
 		if (callback === undefined) continue;
 		const closure = program.function(callback);
 		if (!closure.metadata.strict || closure.isAsync || closure.isGenerator) continue;
@@ -66,15 +77,18 @@ export function coreSynchronousCallbackConsumer(
 			}
 			calls++;
 		}
-		if (onlyInvoked && calls > 0)
-			return {
-				function: consumer,
-				bodyVersion: consumer.version("body"),
-				parameter,
-				callback,
-				argument,
-				invocations: calls,
-			};
+		if (!onlyInvoked || calls === 0) continue;
+		const proof = {
+			function: consumer,
+			bodyVersion: consumer.version("body"),
+			parameter,
+			callback,
+			argument,
+			invocations: calls,
+			created: fresh !== undefined,
+		};
+		if (proof.created) return proof;
+		held = proof;
 	}
-	return undefined;
+	return held;
 }

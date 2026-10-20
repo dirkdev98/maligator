@@ -203,6 +203,13 @@ Only affected callers, SCC members, and registered consumers are then woken. An
 unchanged summary does not propagate work, and an edit cannot cause every function to
 be revisited merely because the program changed.
 
+Call targets treat each parameter of a closure that some function creates as a
+cell. Every visible call writes its argument's targets into the callee's parameter
+cells, and a function whose identity is published, or flows through an inlined
+constructor result, gets opaque parameters. A closure created and called only by
+known sites therefore sees exactly the closures its callers pass. Entry bodies the
+runtime creates itself keep opaque parameters.
+
 Effect-domain unions use bounded bit masks and interned immutable domain lists.
 Joins reuse an input summary when it already covers the result, and reuse the top
 summary only after both memory dimensions and every independent flag reach top.
@@ -237,6 +244,15 @@ dispatch after accounting for eligibility checks, without assuming an array leng
 Scoring uses the already-demanded CFG and candidate costs; it does not request
 additional proofs. Compiler-work costs remain hard admission limits. This is a
 static scheduling estimate, not a measured runtime benefit or a semantic proof.
+
+A helper that repeats a callback, by calling it in a loop or forwarding it to a
+function that does, is cloned once for each distinct set of exact closures its
+call sites pass. Each clone is created at those sites, so its parameters become
+exact and its callback calls direct or inlined. Clones run before inline discovery,
+in up to three rounds so a forwarding helper's clone exposes its callee, and draw
+on a quarter of the cross-call budget with at most 16 variants per helper. Without
+profiles every clone counts the same, so a cold site can still take a variant a hot
+one would have used.
 
 Candidate claim headers and exact costs participate in ranking and admission before
 target payloads are materialized. Rejected candidates do not receive target blocks,

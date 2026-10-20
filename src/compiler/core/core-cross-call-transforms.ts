@@ -6,6 +6,7 @@ import {
 } from "./core-array-iteration.ts";
 import { coreConstructorSlotReserve } from "./core-constructor-layout.ts";
 import { CoreEditor } from "./core-editor.ts";
+import { cloneCoreFunction, coreFunctionIsCloneable } from "./core-function-clone.ts";
 import type { CoreCrossCallFunctionOptimizationResult } from "./core-function-optimization-session.ts";
 import {
 	coreInstanceMethodHint,
@@ -16,6 +17,7 @@ import { CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE } from "./core-internal-attribut
 import {
 	coreDirectCreatedFunction,
 	coreCalleeTargetsAreOpen,
+	coreCalleeTargetsSingleFunction,
 	coreValueIsLoadedGlobalProperty,
 } from "./core-ir-call-targets.ts";
 import {
@@ -1648,7 +1650,7 @@ function offerFunctionCandidates(
 						target,
 					);
 		const callbackContext =
-			consumerProof === undefined
+			consumerProof?.created !== true
 				? undefined
 				: directCaptureContext(
 						fn,
@@ -1660,7 +1662,11 @@ function offerFunctionCandidates(
 			callbackContext === undefined
 				? undefined
 				: inlineTarget(program, consumerProof!.callback, "call", callbackContext);
-		const synchronousCallback = callbackInline?.linear ? consumerProof : undefined;
+		// A held callback stays a call, now with an exact callee inside the inlined consumer.
+		const synchronousCallback =
+			callbackInline?.linear || consumerProof?.created === false
+				? consumerProof
+				: undefined;
 		const inline = inlineTarget(
 			program,
 			target,
@@ -1702,7 +1708,7 @@ function offerFunctionCandidates(
 		const generatedCodeCost =
 			(inline?.instructions.length ?? 0) +
 			(inline?.linear === false ? inline.blocks.length : 0) +
-			(synchronousCallback === undefined
+			(synchronousCallback?.created !== true
 				? 0
 				: synchronousCallback.invocations * callbackInline!.instructions.length) +
 			consumerDuplication +
@@ -1745,9 +1751,16 @@ function offerFunctionCandidates(
 				site: site.instruction,
 				revision: summaries.version(target),
 				priorityClass:
-					synchronousCallback !== undefined ? 1 : hintedTarget !== undefined ? 3 : 2,
+					synchronousCallback?.created === true ? 1 : hintedTarget !== undefined ? 3 : 2,
+				// A held callback's invocations stop dispatching, once per consumer loop iteration.
 				priorityScore: inlinePriorityScore(
-					loopFrequency * (regionCost?.sites.length ?? 1),
+					loopFrequency *
+						(regionCost?.sites.length ?? 1) *
+						(synchronousCallback?.created === false
+							? 1 +
+								synchronousCallback.invocations *
+									CORE_GENERATED_CODE_COST_WEIGHTS.loopFrequency.base
+							: 1),
 					regionCost?.generatedCode ?? generatedCodeCost,
 					open ? CORE_GENERATED_CODE_COST_WEIGHTS.runtime.guard : 0,
 					regionCost?.loopPrefixCount,
@@ -1760,7 +1773,7 @@ function offerFunctionCandidates(
 					regionCost?.compilerWork ??
 					(inline?.instructions.length ?? 0) +
 						(inline?.function.valueCapacity ?? 0) +
-						(synchronousCallback === undefined
+						(synchronousCallback?.created !== true
 							? 0
 							: synchronousCallback.invocations *
 								(callbackInline!.instructions.length +
@@ -1794,6 +1807,282 @@ function canBridgeInlineResult(
 		destination === "boxed" ||
 		(source === "i32" && destination === "f64")
 	);
+}
+
+const CALLBACK_SPECIALIZATION_EXCLUDED_OPCODES: ReadonlySet<string> = new Set([
+	"loadCallee",
+	"loadArgument",
+	"loadArgumentCount",
+	"loadStaticArgument",
+	"createArgumentsObject",
+	"createRestArguments",
+]);
+
+// A clone created at the call site binds the caller's scope chain instead of the original's.
+const CALLBACK_SPECIALIZATION_SCOPED_OPCODES: ReadonlySet<string> = new Set([
+	"loadCaptured",
+	"storeCaptured",
+	"createFunction",
+]);
+
+const CALLBACK_SPECIALIZATION_VARIANTS = 16;
+const CALLBACK_SPECIALIZATION_ROUNDS = 3;
+const CALLBACK_SPECIALIZATION_MAX_INSTRUCTIONS = 256;
+
+function callbackSpecializationScope(
+	fn: CoreFunctionStore,
+): "unsupported" | "scoped" | "independent" {
+	if (
+		fn.metadata.isClassConstructor ||
+		fn.metadata.isDerivedConstructor ||
+		fn.metadata.capturedCount !== 0 ||
+		fn.metadata.mappedArguments ||
+		fn.liveStorageCounts().instructions > CALLBACK_SPECIALIZATION_MAX_INSTRUCTIONS ||
+		!coreFunctionIsCloneable(fn)
+	)
+		return "unsupported";
+	let scope: "scoped" | "independent" = "independent";
+	for (const instruction of fn.instructionIds()) {
+		if (fn.instructionKind(instruction) !== "operation") continue;
+		const opcode = fn.instructionOpcodeName(instruction);
+		if (CALLBACK_SPECIALIZATION_EXCLUDED_OPCODES.has(opcode)) return "unsupported";
+		if (CALLBACK_SPECIALIZATION_SCOPED_OPCODES.has(opcode)) scope = "scoped";
+	}
+	return scope;
+}
+
+/** The consumer calls the parameter inside a loop, or forwards it to an exact callee that does. */
+function callbackUseRepeats(
+	program: CoreProgram,
+	summaries: CoreProgramSummaries,
+	fn: CoreFunctionStore,
+	parameter: number,
+	depth = 0,
+): boolean {
+	const value = fn.kernel.functionParameter(parameter);
+	let cfg: ReturnType<typeof buildCoreControlFlow> | undefined;
+	for (let use = fn.kernel.valueFirstUse(value); use >= 0; use = fn.kernel.useNext(use)) {
+		if (fn.kernel.useLive(use) === 0) continue;
+		const instruction = coreInstructionId(fn.kernel.useInstruction(use));
+		if (
+			fn.instructionKind(instruction) !== "operation" ||
+			fn.instructionOpcodeName(instruction) !== "call"
+		)
+			continue;
+		const operand = fn.kernel.useOperand(use);
+		if (operand === 0) {
+			cfg ??= buildCoreControlFlow(program, fn.id);
+			if (coreBlockLoopFrequency(cfg, fn.instructionBlock(instruction)) > 1) return true;
+			continue;
+		}
+		const site = summaries.targets.site(fn.id, instruction);
+		const callee =
+			site === undefined ? undefined : coreCalleeTargetsSingleFunction(site.targets);
+		const forwarded = site?.arguments?.indexOf(value) ?? -1;
+		if (
+			depth < 3 &&
+			callee !== undefined &&
+			callee !== fn.id &&
+			forwarded >= 0 &&
+			forwarded < program.function(callee).parameterCount &&
+			callbackUseRepeats(
+				program,
+				summaries,
+				program.function(callee),
+				forwarded,
+				depth + 1,
+			)
+		)
+			return true;
+	}
+	return false;
+}
+
+/**
+ * Clone a function at exact call sites that pass it closures it only invokes. Each
+ * clone is created by its call sites alone, so the program flow gives its
+ * parameters exactly those closures' targets, and later waves call or inline them
+ * directly instead of dispatching. Sites sharing the same closures share a clone.
+ */
+function specializeCoreCallbackArguments(
+	program: CoreProgram,
+	summaries: CoreProgramSummaries,
+	service: CoreTransformCandidateService,
+	limits: CoreTransformBudgetLimits,
+	liveFunctions: ReadonlySet<CoreFunctionId>,
+): ReadonlyArray<CoreFunctionId> {
+	if (!summaries.targets.sourceClosed) return [];
+	const cells = capturedCellWrites(program, true);
+	const scopes = new Map<
+		CoreFunctionId,
+		ReturnType<typeof callbackSpecializationScope>
+	>();
+	const groups = new Map<
+		string,
+		{
+			readonly target: CoreFunctionId;
+			readonly closures: ReadonlyArray<CoreFunctionId>;
+			readonly sites: Array<{
+				readonly caller: CoreFunctionId;
+				readonly instruction: CoreInstructionId;
+			}>;
+		}
+	>();
+	for (const caller of liveFunctions) {
+		const fn = program.function(caller);
+		for (const site of summaries.targets.outgoing(caller)) {
+			const target =
+				site.targets.functions.length === 1 ? site.targets.functions[0]! : undefined;
+			if (
+				target === undefined ||
+				target === caller ||
+				site.open ||
+				!fn.isInstructionLive(site.instruction) ||
+				fn.instructionOpcodeName(site.instruction) !== "call" ||
+				fn.instructionAttributes(site.instruction)[
+					CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE
+				] === true ||
+				site.arguments === undefined
+			)
+				continue;
+			const targetFn = program.function(target);
+			let scope = scopes.get(target);
+			if (scope === undefined) {
+				scope = callbackSpecializationScope(targetFn);
+				scopes.set(target, scope);
+			}
+			if (scope === "unsupported") continue;
+			const escapes = summaries.summary(target)?.parameterEscape;
+			const held: Array<string> = [];
+			const closures: Array<CoreFunctionId> = [];
+			for (let parameter = 0; parameter < targetFn.parameterCount; parameter++) {
+				const argument = site.arguments[parameter];
+				if (
+					argument === undefined ||
+					escapes?.[parameter] !== "invoked" ||
+					!callbackUseRepeats(program, summaries, targetFn, parameter)
+				)
+					continue;
+				const closure = coreCalleeTargetsSingleFunction(
+					summaries.targets.targets(caller, argument),
+				);
+				// A clone's parameters are already exact; cloning it again would only duplicate it.
+				if (
+					closure === undefined ||
+					coreCalleeTargetsSingleFunction(
+						summaries.targets.targets(
+							target,
+							targetFn.kernel.functionParameter(parameter),
+						),
+					) !== undefined
+				)
+					continue;
+				held.push(`${parameter}:${closure}`);
+				closures.push(closure);
+			}
+			if (held.length === 0) continue;
+			if (
+				scope === "scoped" &&
+				ancestorCaptureContext(
+					program,
+					cells,
+					fn,
+					site.callee,
+					site.instruction,
+					target,
+				) === undefined
+			)
+				continue;
+			const signature = `${target}|${held.join(",")}`;
+			const group = groups.get(signature) ?? { target, closures, sites: [] };
+			group.sites.push({ caller, instruction: site.instruction });
+			groups.set(signature, group);
+		}
+	}
+	// A clone grows the program by one copy of its target, whichever sites share it.
+	const candidateKey = (candidate: {
+		readonly site: CoreInstructionId;
+		readonly targets: ReadonlyArray<CoreFunctionId>;
+	}) => `${candidate.site}|${candidate.targets.join(",")}`;
+	const bySite = new Map<string, string>();
+	for (const [signature, group] of groups) {
+		const targetFn = program.function(group.target);
+		const cost = targetFn.liveStorageCounts().instructions;
+		const representative = group.sites[0]!.instruction;
+		const offered = service.offer({
+			kind: "callback-specialization",
+			caller: group.target,
+			site: representative,
+			revision: summaries.version(group.target),
+			priorityClass: 2,
+			// Each shared site stops dispatching to every held closure once per consumer loop iteration.
+			priorityScore: inlinePriorityScore(
+				group.sites.length *
+					(1 +
+						group.closures.length * CORE_GENERATED_CODE_COST_WEIGHTS.loopFrequency.base),
+				cost,
+				0,
+			),
+			targets: [group.target, ...group.closures],
+			generatedCodeCost: cost,
+			compilerWorkCost: cost + targetFn.valueCapacity,
+			// Sites are another function's instructions; the variant cap bounds expansion instead.
+			expansive: false,
+		});
+		if (offered)
+			bySite.set(
+				candidateKey({
+					site: representative,
+					targets: [group.target, ...group.closures],
+				}),
+				signature,
+			);
+	}
+	const variantsPerTarget = new Map<CoreFunctionId, number>();
+	const changed = new Set<CoreFunctionId>();
+	for (
+		let candidate = service.next();
+		candidate !== undefined;
+		candidate = service.next()
+	) {
+		const signature = bySite.get(candidateKey(candidate));
+		const group = signature === undefined ? undefined : groups.get(signature);
+		if (group === undefined) throw new Error("Unexpected callback specialization");
+		const decline = service.admit(candidate, limits);
+		if (decline !== undefined) {
+			service.recordDeclined(decline);
+			continue;
+		}
+		if ((variantsPerTarget.get(group.target) ?? 0) >= CALLBACK_SPECIALIZATION_VARIANTS) {
+			service.recordDeclined("expansion-limit");
+			continue;
+		}
+		const variant = cloneCoreFunction(program, program.function(group.target));
+		variantsPerTarget.set(group.target, (variantsPerTarget.get(group.target) ?? 0) + 1);
+		changed.add(variant);
+		const editors = new Map<CoreFunctionId, CoreEditor>();
+		for (const { caller, instruction } of group.sites) {
+			const fn = program.function(caller);
+			const editor = editors.get(caller) ?? CoreEditor.open(program, caller);
+			editors.set(caller, editor);
+			const operands = materializeInstructionOperands(fn, instruction);
+			operands[0] = editor.insertInstruction(
+				fn.instructionBlock(instruction),
+				instruction,
+				"createFunction",
+				[],
+				{
+					attributes: { functionIndex: variant },
+					sourcePosition: fn.instructionSourcePosition(instruction),
+				},
+			).outputs[0]!;
+			editor.replaceOperands(instruction, operands);
+			changed.add(caller);
+		}
+		for (const editor of editors.values()) editor.commit();
+		service.recordApplied(candidate);
+	}
+	return [...changed];
 }
 
 export function discoverCoreCrossCallCandidates(
@@ -2810,6 +3099,8 @@ function applyCandidate(
 				target,
 			);
 			if (proof === undefined) return undefined;
+			if (!proof.created)
+				return applyGuardedInline(program, candidate, editor, false, proof);
 			const context = directCaptureContext(
 				editor.function,
 				proof.argument,
@@ -3040,6 +3331,18 @@ export function runCoreCrossCallTransforms(
 	let programFlowResolves = 1;
 	let valueKindFolds = 0;
 	const localPlanInputs = new Map<CoreFunctionId, CoreLocalOptimizationPlanInput>();
+	// Clones are new functions rather than growth of their callers, so they draw on a budget of their own.
+	// Each clone is charged to the function it copies; the variant cap bounds that per function.
+	const cloneLimits: CoreTransformBudgetLimits = Object.freeze({
+		...phaseLimits,
+		perCallerGeneratedCode:
+			CALLBACK_SPECIALIZATION_VARIANTS * CALLBACK_SPECIALIZATION_MAX_INSTRUCTIONS,
+		perCallerCompilerWork:
+			2 * CALLBACK_SPECIALIZATION_VARIANTS * CALLBACK_SPECIALIZATION_MAX_INSTRUCTIONS,
+		programGeneratedCode: Math.ceil(phaseLimits.programGeneratedCode / 4),
+		programCompilerWork: Math.ceil(phaseLimits.programCompilerWork / 4),
+	});
+	const cloneService = new CoreTransformCandidateService(cloneLimits);
 	const specialized = specializeCoreStaticArguments(
 		program,
 		analyses,
@@ -3060,6 +3363,28 @@ export function runCoreCrossCallTransforms(
 			!(wave === 0 && specialized.length > 0)
 		)
 			break;
+		// Clones of forwarding helpers expose their callees' sites to the next round.
+		const cloned = new Set<CoreFunctionId>();
+		for (let round = 0; round < CALLBACK_SPECIALIZATION_ROUNDS; round++) {
+			// Later rounds keep a share of the budget for the callees that forwarding exposes.
+			const share = (round + 1) / CALLBACK_SPECIALIZATION_ROUNDS;
+			const changed = specializeCoreCallbackArguments(
+				program,
+				summaries,
+				cloneService,
+				Object.freeze({
+					...cloneLimits,
+					programGeneratedCode: Math.ceil(cloneLimits.programGeneratedCode * share),
+					programCompilerWork: Math.ceil(cloneLimits.programCompilerWork * share),
+				}),
+				new Set(flow.reachability.liveFunctions),
+			);
+			if (changed.length === 0) break;
+			for (const functionId of changed) cloned.add(functionId);
+			flow = analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, { scope: "program" });
+			summaries = flow.summaries;
+			programFlowResolves++;
+		}
 		discoverCoreCrossCallCandidates(
 			program,
 			analyses,
@@ -3077,7 +3402,10 @@ export function runCoreCrossCallTransforms(
 			readValueKinds,
 		);
 		const editors = new Map<CoreFunctionId, CoreEditor>();
-		const appliedCallers = new Set<CoreFunctionId>(wave === 0 ? specialized : []);
+		const appliedCallers = new Set<CoreFunctionId>([
+			...(wave === 0 ? specialized : []),
+			...cloned,
+		]);
 		for (const functionId of appliedCallers)
 			editors.set(functionId, CoreEditor.open(program, functionId));
 		let published = appliedCallers.size !== 0;

@@ -157,89 +157,93 @@ export function planCoreDirectClosures(
 			?.calleeOperand;
 		return callee !== undefined && onlyOperand(fn, instruction, value) === callee;
 	};
-	for (const [target, sites] of creations) {
-		if (sites.length !== 1) continue;
-		const { owner, instruction: creation } = sites[0]!;
-		const callee = program.function(target);
-		const creator = program.function(owner);
-		if (
-			callee.isGenerator ||
-			callee.isAsync ||
-			callee.metadata.isClassConstructor ||
-			callee.metadata.isDerivedConstructor ||
-			creator.isGenerator ||
-			creator.isAsync ||
-			scopeChanging.has(owner) ||
-			readsOwnObject(callee)
-		)
-			continue;
-		const value = result(creator, creation);
-		if (value === undefined || creator.kernel.valueHandlerUseCount(value) !== 0) continue;
-		const ownerCalls: Array<CoreInstructionId> = [];
-		let cell: string | undefined;
-		let eligible = true;
-		for (
-			let use = creator.kernel.valueFirstUse(value);
-			use >= 0;
-			use = creator.kernel.useNext(use)
-		) {
-			const instruction = creator.kernel.useInstruction(use);
-			if (exactCallee(creator, instruction, value, target)) {
-				ownerCalls.push(instruction);
-				continue;
-			}
+	for (const [target, sites] of creations)
+		for (const { owner, instruction: creation } of sites) {
+			const callee = program.function(target);
+			const creator = program.function(owner);
 			if (
-				cell === undefined &&
-				creator.instructionKind(instruction) === "operation" &&
-				creator.instructionOpcodeName(instruction) === "storeCaptured" &&
-				creator.instructionAttributes(instruction).functionIndex === owner &&
-				onlyOperand(creator, instruction, value) === 0
-			) {
-				cell = cellKey(owner, creator.instructionAttributes(instruction).index as number);
+				callee.isGenerator ||
+				callee.isAsync ||
+				callee.metadata.isClassConstructor ||
+				callee.metadata.isDerivedConstructor ||
+				creator.isGenerator ||
+				creator.isAsync ||
+				scopeChanging.has(owner) ||
+				readsOwnObject(callee)
+			)
 				continue;
-			}
-			eligible = false;
-			break;
-		}
-		if (!eligible) continue;
-		const cellCalls: Array<{
-			readonly fn: CoreFunctionStore;
-			readonly instruction: CoreInstructionId;
-		}> = [];
-		if (cell !== undefined) {
-			if (aliased.has(cell) || stores.get(cell) !== 1) continue;
-			for (const load of loads.get(cell) ?? []) {
-				const loaded = result(load.fn, load.instruction);
-				// Resumable bodies render calls without the owner-scope environment.
-				if (
-					load.fn.id === owner ||
-					load.fn.isGenerator ||
-					load.fn.isAsync ||
-					loaded === undefined ||
-					load.fn.kernel.valueHandlerUseCount(loaded) !== 0
-				) {
-					eligible = false;
-					break;
+			const value = result(creator, creation);
+			if (value === undefined || creator.kernel.valueHandlerUseCount(value) !== 0)
+				continue;
+			const ownerCalls: Array<CoreInstructionId> = [];
+			let cell: string | undefined;
+			let eligible = true;
+			for (
+				let use = creator.kernel.valueFirstUse(value);
+				use >= 0;
+				use = creator.kernel.useNext(use)
+			) {
+				const instruction = creator.kernel.useInstruction(use);
+				if (exactCallee(creator, instruction, value, target)) {
+					ownerCalls.push(instruction);
+					continue;
 				}
-				for (
-					let use = load.fn.kernel.valueFirstUse(loaded);
-					use >= 0;
-					use = load.fn.kernel.useNext(use)
+				if (
+					cell === undefined &&
+					creator.instructionKind(instruction) === "operation" &&
+					creator.instructionOpcodeName(instruction) === "storeCaptured" &&
+					creator.instructionAttributes(instruction).functionIndex === owner &&
+					onlyOperand(creator, instruction, value) === 0
 				) {
-					const instruction = load.fn.kernel.useInstruction(use);
-					if (!exactCallee(load.fn, instruction, loaded, target)) {
+					cell = cellKey(
+						owner,
+						creator.instructionAttributes(instruction).index as number,
+					);
+					continue;
+				}
+				eligible = false;
+				break;
+			}
+			// A shared binding cell would hold one creator's marker for every other creator's callers.
+			if (!eligible || (cell !== undefined && sites.length !== 1)) continue;
+			const cellCalls: Array<{
+				readonly fn: CoreFunctionStore;
+				readonly instruction: CoreInstructionId;
+			}> = [];
+			if (cell !== undefined) {
+				if (aliased.has(cell) || stores.get(cell) !== 1) continue;
+				for (const load of loads.get(cell) ?? []) {
+					const loaded = result(load.fn, load.instruction);
+					// Resumable bodies render calls without the owner-scope environment.
+					if (
+						load.fn.id === owner ||
+						load.fn.isGenerator ||
+						load.fn.isAsync ||
+						loaded === undefined ||
+						load.fn.kernel.valueHandlerUseCount(loaded) !== 0
+					) {
 						eligible = false;
 						break;
 					}
-					cellCalls.push({ fn: load.fn, instruction });
+					for (
+						let use = load.fn.kernel.valueFirstUse(loaded);
+						use >= 0;
+						use = load.fn.kernel.useNext(use)
+					) {
+						const instruction = load.fn.kernel.useInstruction(use);
+						if (!exactCallee(load.fn, instruction, loaded, target)) {
+							eligible = false;
+							break;
+						}
+						cellCalls.push({ fn: load.fn, instruction });
+					}
+					if (!eligible) break;
 				}
-				if (!eligible) break;
+				if (!eligible) continue;
 			}
-			if (!eligible) continue;
+			plan(owner).creations.add(creation);
+			for (const instruction of ownerCalls) plan(owner).calls.set(instruction, owner);
+			for (const call of cellCalls) plan(call.fn.id).calls.set(call.instruction, owner);
 		}
-		plan(owner).creations.add(creation);
-		for (const instruction of ownerCalls) plan(owner).calls.set(instruction, owner);
-		for (const call of cellCalls) plan(call.fn.id).calls.set(call.instruction, owner);
-	}
 	return plans;
 }

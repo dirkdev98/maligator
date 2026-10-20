@@ -301,6 +301,15 @@ function globalPropertyCellId(
 	return identities.intern(3, 0, stringIndex);
 }
 
+// A parameter's targets join every visible caller's argument while its function stays private.
+function parameterCellId(
+	identities: CoreGraphIdentityTable,
+	functionId: CoreFunctionId,
+	index: number,
+): CoreCellId {
+	return identities.intern(4, functionId, index);
+}
+
 function functionPropertyId(
 	identities: CoreGraphIdentityTable,
 	functionId: CoreFunctionId,
@@ -779,9 +788,11 @@ function rawInstructionCellId(
 interface CoreFunctionCellAccesses {
 	readonly reads: ReadonlySet<CoreCellId>;
 	readonly writes: ReadonlySet<CoreCellId>;
+	readonly closes: ReadonlySet<CoreCellId>;
 }
 
 function collectFunctionCellAccesses(
+	program: CoreProgram,
 	fn: CoreFunctionStore,
 	localTransfers: CoreProgramFlowLocalTransfers,
 	identities: CoreGraphIdentityTable,
@@ -805,7 +816,21 @@ function collectFunctionCellAccesses(
 			if (opcode === "storeGlobal" || opcode === "storeCaptured") reads.add(id);
 		}
 	}
-	return Object.freeze({ reads, writes });
+	for (let index = 0; index < fn.parameterCount; index++)
+		reads.add(parameterCellId(identities, fn.id, index));
+	// The runtime invokes entry bodies it creates itself; a created closure's callers are visible.
+	const closes = new Set<CoreCellId>();
+	for (let index = 0; index < localTransfers.operationCount; index++) {
+		const instruction = localTransfers.operationAt(index);
+		if (fn.instructionOpcodeName(instruction) !== "createFunction") continue;
+		const target = fn.instructionAttributes(instruction).functionIndex;
+		if (typeof target !== "number" || !program.hasFunction(target as CoreFunctionId))
+			continue;
+		const created = program.function(target as CoreFunctionId);
+		for (let parameter = 0; parameter < created.parameterCount; parameter++)
+			closes.add(parameterCellId(identities, created.id, parameter));
+	}
+	return Object.freeze({ reads, writes, closes });
 }
 
 function instructionCellId(
@@ -879,8 +904,18 @@ function analyzeFunctionTargets(
 		}
 		return true;
 	};
+	const parameterInputs = new Map<CoreCellId, CoreCalleeTargets>();
 	for (let index = 0; index < fn.parameterCount; index++) {
-		raise(fn.kernel.functionParameter(index), CORE_CALLEE_TARGETS_OPAQUE);
+		const key = parameterCellId(identities, fn.id, index);
+		const incoming = trackedCells.has(key)
+			? (cells.get(key) ?? CORE_CALLEE_TARGETS_BOTTOM)
+			: CORE_CALLEE_TARGETS_OPAQUE;
+		if (trackedCells.has(key)) parameterInputs.set(key, incoming);
+		// An opaque contribution means unknown callers; keep their finite hints out of dispatch.
+		raise(
+			fn.kernel.functionParameter(index),
+			incoming.opaque ? CORE_CALLEE_TARGETS_OPAQUE : incoming,
+		);
 	}
 	for (const block of cfg.reversePostorder) enqueue(block);
 	for (let cursor = 0; cursor < queue.length; cursor++) {
@@ -1048,8 +1083,43 @@ function analyzeFunctionTargets(
 			open: coreCalleeTargetsAreOpen(targets),
 		});
 	});
-	const cellInputs = new Map<CoreCellId, CoreCalleeTargets>();
+	const cellInputs = new Map<CoreCellId, CoreCalleeTargets>(parameterInputs);
 	const cellWrites = new Map<CoreCellId, CoreCalleeTargets>();
+	const writeParameters = (
+		target: CoreFunctionId,
+		argument: (index: number) => CoreCalleeTargets,
+	): void => {
+		const count = program.function(target).parameterCount;
+		for (let index = 0; index < count; index++) {
+			const key = parameterCellId(identities, target, index);
+			if (!trackedCells.has(key)) continue;
+			cellWrites.set(
+				key,
+				joinCoreCalleeTargets(
+					cellWrites.get(key) ?? CORE_CALLEE_TARGETS_BOTTOM,
+					argument(index),
+				),
+			);
+		}
+	};
+	const concealParameters = (value: CoreValueId): void => {
+		for (const target of values[value]?.functions ?? [])
+			writeParameters(target, () => CORE_CALLEE_TARGETS_OPAQUE);
+	};
+	for (const site of sites) {
+		const positional =
+			site.aggregateArguments === undefined && site.argumentPrefix === undefined
+				? site.arguments
+				: undefined;
+		for (const target of site.targets.functions)
+			writeParameters(target, (index) => {
+				if (positional === undefined) return CORE_CALLEE_TARGETS_OPAQUE;
+				const argument = positional[index];
+				return argument === undefined
+					? CORE_CALLEE_TARGETS_NON_CALLABLE
+					: (values[argument] ?? CORE_CALLEE_TARGETS_OPEN);
+			});
+	}
 	const propertyInputs = new Map<CoreFunctionPropertyId, CoreCalleeTargets>();
 	const globalWrites = new Map<number, CoreCalleeTargets>();
 	const publishedFunctions = new Set<CoreFunctionId>();
@@ -1060,6 +1130,7 @@ function analyzeFunctionTargets(
 		publishedValues[value] = 1;
 		const targets = values[value];
 		for (const target of targets?.functions ?? []) publishedFunctions.add(target);
+		concealParameters(value);
 		if (targets?.anyScript === true) pendingPublications.push(value);
 	};
 	for (let index = 0; index < localTransfers.operationCount; index++) {
@@ -1074,6 +1145,16 @@ function analyzeFunctionTargets(
 			opcode === "guardBaseConstructorLayout" ||
 			(opcode === "unary" && (operator === "typeof" || operator === "!")) ||
 			(opcode === "binary" && (operator === "===" || operator === "!=="));
+		// An inlined constructor's result may be one of its operands, but is not tracked as such.
+		if (opcode === "baseConstructResult") {
+			const start = fn.kernel.instructionOperandStart(instruction);
+			for (
+				let operand = 0;
+				operand < fn.kernel.instructionOperandCount(instruction);
+				operand++
+			)
+				concealParameters(fn.kernel.operandAt(start + operand));
+		}
 		const key = instructionCellId(fn, instruction, trackedCells, identities);
 		const privateStore =
 			(opcode === "storeGlobal" || opcode === "storeCaptured") &&

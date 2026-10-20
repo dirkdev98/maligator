@@ -395,10 +395,15 @@ export type NativeDirectClosureEnvironment =
 	| { readonly kind: "scope" | "none" | "owner" | "chain" }
 	| { readonly kind: "ancestor" | "outer-chain"; readonly owner: number };
 
+/** Direct closure plans are per creating function: each creator decides its own marker. */
+export function nativeDirectClosureKey(target: number, creator: number): string {
+	return `${target}:${creator}`;
+}
+
 /** The C environment argument for an exact call, or undefined when it reads the callee. */
 function directClosureEnvironment(
 	plan: NativeInstructionPlan | undefined,
-	directClosures: ReadonlyMap<number, NativeDirectClosureEnvironment> | undefined,
+	directClosures: ReadonlyMap<string, NativeDirectClosureEnvironment> | undefined,
 	functionIndex: number | undefined,
 	fixedCaptureOwners: ReadonlySet<number> | undefined,
 	relocation: NativeRelocationExpressions,
@@ -409,7 +414,7 @@ function directClosureEnvironment(
 	const environment =
 		plan.directFunctionIndex === undefined
 			? undefined
-			: directClosures?.get(plan.directFunctionIndex);
+			: directClosures?.get(nativeDirectClosureKey(plan.directFunctionIndex, owner));
 	if (environment === undefined) return undefined;
 	if (environment.kind === "none") return "nullptr";
 	const scope =
@@ -1763,7 +1768,7 @@ function emitCompiledVariant(
 	maxCodeUnits = Infinity,
 	splitPolicy: NativeSplitPolicy = DEFAULT_NATIVE_SPLIT_POLICY,
 	fastTryTargets: ReadonlySet<number> = new Set(),
-	directClosures: ReadonlyMap<number, NativeDirectClosureEnvironment> = new Map(),
+	directClosures: ReadonlyMap<string, NativeDirectClosureEnvironment> = new Map(),
 ): CompiledFunction | null {
 	// Generators and async functions suspend mid-body: they lower to a resumable C
 	// function (a heap register frame + entry dispatch to the saved resume point)
@@ -2907,7 +2912,7 @@ export function emitCompiledFunction(
 	sortKernelEntries: ReadonlySet<string> = new Set(),
 	reductionEntries: ReadonlySet<string> = new Set(),
 	fastTryTargets: ReadonlySet<number> = new Set(),
-	directClosures: ReadonlyMap<number, NativeDirectClosureEnvironment> = new Map(),
+	directClosures: ReadonlyMap<string, NativeDirectClosureEnvironment> = new Map(),
 ): CompiledFunction | null {
 	if (native.storage === undefined)
 		throw new Error("Native rendering requires a lowered storage plan");
@@ -2962,7 +2967,7 @@ export function createNativeFunctionRenderer(): typeof emitCompiledFunction {
 		sortKernelEntries: ReadonlySet<string> = new Set(),
 		reductionEntries: ReadonlySet<string> = new Set(),
 		fastTryTargets: ReadonlySet<number> = new Set(),
-		directClosures: ReadonlyMap<number, NativeDirectClosureEnvironment> = new Map(),
+		directClosures: ReadonlyMap<string, NativeDirectClosureEnvironment> = new Map(),
 	): CompiledFunction | null => {
 		if (native.storage === undefined)
 			throw new Error("Native rendering requires a lowered storage plan");
@@ -3020,7 +3025,7 @@ function renderCompiledFunction(
 	sortKernelEntries: ReadonlySet<string> = new Set(),
 	reductionEntries: ReadonlySet<string> = new Set(),
 	fastTryTargets: ReadonlySet<number> = new Set(),
-	directClosures: ReadonlyMap<number, NativeDirectClosureEnvironment> = new Map(),
+	directClosures: ReadonlyMap<string, NativeDirectClosureEnvironment> = new Map(),
 ): CompiledFunction | null {
 	const fn = native.body;
 	const canonical = emitCompiledVariant(
@@ -4568,7 +4573,7 @@ function emitBody(
 	maxCodeUnits = Infinity,
 	restArgumentRootReleaseIp?: number,
 	captureShadow?: NativeCaptureShadow,
-	directClosures: ReadonlyMap<number, NativeDirectClosureEnvironment> = new Map(),
+	directClosures: ReadonlyMap<string, NativeDirectClosureEnvironment> = new Map(),
 ): EmittedBody | null {
 	const callTransportByIp = new Map(
 		callTransports.map((plan) => [plan.instructionIp, plan]),
@@ -6214,7 +6219,7 @@ interface NativeInstructionContext {
 	readonly ownedCaptureFunctionIndex?: number;
 	/** The rendered function, which owns the scope its direct closures are created in. */
 	readonly functionIndex?: number;
-	readonly directClosures?: ReadonlyMap<number, NativeDirectClosureEnvironment>;
+	readonly directClosures?: ReadonlyMap<string, NativeDirectClosureEnvironment>;
 	readonly captureShadow?: NativeCaptureShadow;
 	readonly fixedCaptureOwners?: ReadonlySet<number>;
 	readonly requiredCaptureOwners?: ReadonlySet<number>;
@@ -8044,7 +8049,12 @@ function emitInstruction(
 			const create = `mal_vm_op_create_function(vm, ${relocation.functionIndex(instruction.functionIndex)}, env)`;
 			const closure =
 				context.nativePlan?.kind === "direct-closure"
-					? context.directClosures?.get(instruction.functionIndex)
+					? context.directClosures?.get(
+							nativeDirectClosureKey(
+								instruction.functionIndex,
+								context.functionIndex ?? -1,
+							),
+						)
 					: undefined;
 			const start =
 				closure?.kind === "outer-chain"

@@ -505,10 +505,11 @@ iterator cursor is not, by itself, permission to delete its language object.
       still builds a capture vector per closure per activation; closures with an
       identical layout could share one. Nested functions passed as callbacks, like
       TypeScript's isRelatedTo, keep their object.
-- [ ] Specialize higher-order helpers for constant function arguments. TypeScript's
-      binarySearchKey reaches getTypeId and compareValues through generic calls
-      (5% of a type-check in call dispatch), and a 64-element binarySearch loop runs
-      8x slower than under Node.
+- [ ] Finish specializing higher-order helpers. Callback clones make TypeScript's
+      binarySearchKey call getTypeId and compareValues directly, but a hand-written
+      monomorphic search is still about 4% faster: compareValues stays a call, and
+      the clone's unused `offset` parameter keeps `low` boxed with TDZ checks. Private
+      clones could also take constant and representation facts from their callers.
 - [ ] Narrow the remaining class accessor gap. Loop sites now probe for a
       uniquely named class getter or setter and inline it behind a function-index
       guard: the `#celsius` getter/setter pair takes 33 ms for 5M iterations

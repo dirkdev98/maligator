@@ -180,6 +180,8 @@ export interface CoreProgramFlowIndexedCallSite<
 export interface CoreProgramFlowFunctionCellAccesses {
 	readonly reads: ReadonlySet<number>;
 	readonly writes: ReadonlySet<number>;
+	/** Cells whose every writer is visible once this function exists, in a closed source. */
+	readonly closes?: ReadonlySet<number>;
 }
 
 export interface CoreProgramFlowLocalCallTargets<
@@ -258,6 +260,7 @@ export interface CoreProgramFlowCallTargetSemantics<
 		program: CoreProgram,
 	): boolean;
 	collectCellAccesses(
+		program: CoreProgram,
 		fn: CoreFunctionStore,
 		transfers: CoreProgramFlowLocalTransfers,
 		identities: Identities,
@@ -1375,7 +1378,12 @@ export class CoreProgramFlowEngine {
 			accessFunctionsScanned++;
 			const oldAccess = cellAccesses.get(functionId);
 			const transfers = this.local(functionId);
-			const nextAccess = semantics.collectCellAccesses(fn, transfers, identities);
+			const nextAccess = semantics.collectCellAccesses(
+				this.#program,
+				fn,
+				transfers,
+				identities,
+			);
 			cellAccesses.set(functionId, nextAccess);
 			for (const key of new Set([...(oldAccess?.reads ?? []), ...nextAccess.reads])) {
 				const readers = mutableCallTargetReaders(cellReaders, previous?.cellReaders, key);
@@ -1458,7 +1466,12 @@ export class CoreProgramFlowEngine {
 		for (const key of propertyKeys) {
 			for (const reader of propertyReaders.get(key) ?? []) changedFunctions.add(reader);
 		}
-		const closedCells = semantics.closedCells(this.#program, context, identities);
+		const closedCells = new Set(
+			semantics.closedCells(this.#program, context, identities),
+		);
+		if (sourceClosed && context?.facts.closure.sourceClosure.kind === "known")
+			for (const access of cellAccesses.values())
+				for (const key of access.closes ?? []) closedCells.add(key);
 		const trackedCells = new Set(closedCells);
 		for (const access of cellAccesses.values()) {
 			for (const key of access.reads) trackedCells.add(key);

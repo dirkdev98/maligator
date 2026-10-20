@@ -16,6 +16,7 @@ import {
 	numericSortKernelDeclaration,
 	numericReductionDeclaration,
 	numericSortKernelDemand,
+	nativeDirectClosureKey,
 } from "./render-native-c.ts";
 import type {
 	CompiledFunction,
@@ -634,8 +635,8 @@ interface NativeCompilationAvailability {
 	directCompiledTargets: Set<number>;
 	/** Functions whose canonical body exports a frameless fast path. */
 	fastTryTargets: Set<number>;
-	/** Closures whose creator and every caller run native code that enters them without an object. */
-	directClosures: Map<number, NativeDirectClosureEnvironment>;
+	/** Closures, by creator, whose creator and every caller run native code that enters them without an object. */
+	directClosures: Map<string, NativeDirectClosureEnvironment>;
 	directCompiledEntries: Map<
 		string,
 		ProgramImage["native"]["functions"][number]["directEntries"][number] & {
@@ -645,6 +646,7 @@ interface NativeCompilationAvailability {
 }
 
 interface NativeDirectClosureSite {
+	readonly target: number;
 	readonly environment: NativeDirectClosureEnvironment | undefined;
 	/** The creating function and every function calling through the owner scope. */
 	readonly functions: ReadonlyArray<number>;
@@ -652,43 +654,51 @@ interface NativeDirectClosureSite {
 
 function nativeDirectClosureSites(
 	image: ProgramImage,
-): Map<number, NativeDirectClosureSite> {
-	const owners = new Map<number, number>();
-	const functions = new Map<number, Set<number>>();
+): Map<string, NativeDirectClosureSite> {
+	const creations = new Map<
+		string,
+		{ readonly target: number; readonly owner: number }
+	>();
+	const functions = new Map<string, Set<number>>();
 	// A typed entry that guards the call identity would read the elided object.
-	const guarded = new Set<number>();
-	const participate = (target: number, functionIndex: number) => {
-		const participants = functions.get(target) ?? new Set<number>();
+	const guarded = new Set<string>();
+	const participate = (key: string, functionIndex: number) => {
+		const participants = functions.get(key) ?? new Set<number>();
 		participants.add(functionIndex);
-		functions.set(target, participants);
+		functions.set(key, participants);
 	};
 	for (const [functionIndex, native] of image.native.functions.entries())
 		for (const [ip, plan] of native.instructions.entries()) {
 			const instruction = native.body.instructions[ip];
 			if (plan?.kind === "direct-closure" && instruction?.opcode === "CREATE_FUNCTION") {
-				owners.set(instruction.functionIndex, functionIndex);
-				participate(instruction.functionIndex, functionIndex);
+				const key = nativeDirectClosureKey(instruction.functionIndex, functionIndex);
+				creations.set(key, { target: instruction.functionIndex, owner: functionIndex });
+				participate(key, functionIndex);
 			} else if (
 				plan?.kind === "call" &&
 				plan.directClosureOwner !== undefined &&
 				plan.directFunctionIndex !== undefined
 			) {
-				participate(plan.directFunctionIndex, functionIndex);
+				const key = nativeDirectClosureKey(
+					plan.directFunctionIndex,
+					plan.directClosureOwner,
+				);
+				participate(key, functionIndex);
 				for (const entry of native.directEntries)
 					for (const call of entry.callOverrides ?? [])
 						if (
 							call.instructionIp === ip &&
 							(call.guarded === true || call.functionIndex !== plan.directFunctionIndex)
 						)
-							guarded.add(plan.directFunctionIndex);
+							guarded.add(key);
 			}
 		}
-	const sites = new Map<number, NativeDirectClosureSite>();
-	for (const [target, owner] of owners) {
+	const sites = new Map<string, NativeDirectClosureSite>();
+	for (const [key, { target, owner }] of creations) {
 		const closure = image.runtime.functions[target]!;
 		const layout = closure.closureCaptureOwners;
 		const environment: NativeDirectClosureEnvironment | undefined =
-			guarded.has(target) || (closure.closureCaptureValues?.length ?? 0) > 0
+			guarded.has(key) || (closure.closureCaptureValues?.length ?? 0) > 0
 				? undefined
 				: layout === undefined
 					? { kind: "scope" }
@@ -701,7 +711,7 @@ function nativeDirectClosureSites(
 							: layout[layout.length - 1] === owner
 								? { kind: "chain" }
 								: { kind: "outer-chain", owner: layout[layout.length - 1]! };
-		sites.set(target, { environment, functions: [...functions.get(target)!] });
+		sites.set(key, { target, environment, functions: [...functions.get(key)!] });
 	}
 	return sites;
 }
@@ -709,7 +719,7 @@ function nativeDirectClosureSites(
 function nativeCompilationAvailability(
 	image: ProgramImage,
 	compiled: ReadonlyArray<CompiledFunction | null>,
-	closureSites: ReadonlyMap<number, NativeDirectClosureSite> = new Map(),
+	closureSites: ReadonlyMap<string, NativeDirectClosureSite> = new Map(),
 ): NativeCompilationAvailability {
 	const compiledTargets = new Set<number>();
 	compiled.forEach((fn, index) => {
@@ -766,14 +776,14 @@ function nativeCompilationAvailability(
 	const fastTryTargets = new Set<number>();
 	for (const target of directCompiledTargets)
 		if (compiled[target]?.trySymbol !== undefined) fastTryTargets.add(target);
-	const directClosures = new Map<number, NativeDirectClosureEnvironment>();
-	for (const [target, site] of closureSites)
+	const directClosures = new Map<string, NativeDirectClosureEnvironment>();
+	for (const [key, site] of closureSites)
 		if (
 			site.environment !== undefined &&
-			directCompiledTargets.has(target) &&
+			directCompiledTargets.has(site.target) &&
 			site.functions.every((functionIndex) => compiled[functionIndex] !== null)
 		)
-			directClosures.set(target, site.environment);
+			directClosures.set(key, site.environment);
 	return { directCompiledTargets, fastTryTargets, directCompiledEntries, directClosures };
 }
 
@@ -954,10 +964,10 @@ function emitNativeFunctions(
 		return { targets: [...targets], entries: [...entries] };
 	});
 	const closureSites = nativeDirectClosureSites(image);
-	const closureParticipation: Array<Array<number>> = [];
-	for (const [target, site] of closureSites)
+	const closureParticipation: Array<Array<string>> = [];
+	for (const [key, site] of closureSites)
 		for (const functionIndex of site.functions)
-			(closureParticipation[functionIndex] ??= []).push(target);
+			(closureParticipation[functionIndex] ??= []).push(key);
 	const cached: Array<{ key: string; emitted: CompiledFunction | null } | undefined> = [];
 	const renderFunction = createNativeFunctionRenderer();
 	const strictCompiledTargets = new Set(
@@ -1032,8 +1042,8 @@ function emitNativeFunctions(
 					: "0";
 		for (const entry of referenced.entries)
 			key += availability.directCompiledEntries.has(entry) ? "1" : "0";
-		for (const target of closureParticipation[functionIndex] ?? [])
-			key += availability.directClosures.has(target) ? "1" : "0";
+		for (const closure of closureParticipation[functionIndex] ?? [])
+			key += availability.directClosures.has(closure) ? "1" : "0";
 		const previous = cached[functionIndex];
 		if (previous?.key === key) return previous.emitted;
 		const emitted = render(functionIndex, availability);
