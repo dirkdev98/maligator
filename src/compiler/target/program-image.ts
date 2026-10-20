@@ -1806,8 +1806,10 @@ export type NativeInstructionPlan =
 			readonly guardedBuiltinCall?: VmGuardedBuiltinCall;
 			readonly exactCollectionReceiver?: CompilerExactCollectionBrand;
 			readonly directStringCharCodeAtPosition?: "inBounds";
+			readonly directClosureOwner?: number;
 	  }
 	| { readonly kind: "construct"; readonly directFunctionIndex: number }
+	| { readonly kind: "direct-closure" }
 	| { readonly kind: "fresh-dense-reserve"; readonly length: number }
 	| { readonly kind: "exact-own-slot"; readonly slot: number }
 	| { readonly kind: "exact-array-length" }
@@ -2323,8 +2325,11 @@ function nativeInstructionPlanFromExecution(
 					guardedBuiltinCall === undefined
 						? undefined
 						: instruction.directStringCharCodeAtPosition,
+				directClosureOwner: instruction.directClosureOwner,
 			};
 		}
+		case "createFunction":
+			return instruction.directClosure === true ? { kind: "direct-closure" } : undefined;
 		case "construct":
 			return instruction.directFunctionIndex === undefined
 				? undefined

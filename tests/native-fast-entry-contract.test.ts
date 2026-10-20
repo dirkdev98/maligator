@@ -73,7 +73,15 @@ function fastEntry(
 		directEntry: undefined,
 		specialized: false,
 		trySymbol: OWN_TRY,
-		calleeTry,
+		calleeTry: (ip, callee) => {
+			const symbol = calleeTry(ip);
+			return symbol === undefined
+				? undefined
+				: {
+						symbol,
+						environment: `mal_value_to_function_object(${callee})->creation_env`,
+					};
+		},
 		signature:
 			"MalValue read(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, void *entry_state) {",
 		fullSymbol: "read_full",

@@ -16,7 +16,7 @@ import type {
 	CoreDirectEntryPlan,
 	CorePlanRepresentation,
 } from "../core/core-ir-regions.ts";
-import { coreBlockId, coreInstructionId } from "../core/core-ir.ts";
+import { coreBlockId, coreFunctionId, coreInstructionId } from "../core/core-ir.ts";
 import type {
 	CoreBlockId,
 	CoreAttributeValue,
@@ -80,6 +80,8 @@ import {
 	executionLoopBackedgeInstructions,
 	executionSafepointRoots,
 } from "./execution-liveness.ts";
+import { planCoreDirectClosures } from "./plan-direct-closures.ts";
+import type { CoreDirectClosurePlan } from "./plan-direct-closures.ts";
 import { verifyCoreTargetBlockLayout } from "./verify-core-target-layout.ts";
 
 export type {
@@ -106,6 +108,8 @@ export interface LowerCoreToCoreTargetOptions {
 	readonly loopBackedgeInstructions?: typeof executionLoopBackedgeInstructions;
 	readonly excludeGuardedDirectCalls?: boolean;
 	readonly preserveResumableRepresentations?: boolean;
+	/** Native callers can enter a closure without its function object. */
+	readonly planDirectClosures?: boolean;
 }
 
 export interface CoreStorageAssignment {
@@ -1528,6 +1532,7 @@ function lowerFunctionToTarget(
 	layoutBlocks: LowerCoreToCoreTargetOptions["layoutBlocks"],
 	createParallelCopyLowerer: LowerCoreToCoreTargetOptions["createParallelCopyLowerer"],
 	preserveResumableRepresentations: boolean,
+	directClosures: CoreDirectClosurePlan | undefined,
 ): CoreTargetFunction {
 	const privatePackedRestElements = new Map(
 		privatePackedRestArrayElements.map((plan) => [plan.instruction, plan]),
@@ -1981,6 +1986,18 @@ function lowerFunctionToTarget(
 			const numericCallback = numericSortCallbacks.get(instruction);
 			if (numericCallback !== undefined && rebuilt.type === "call")
 				rebuilt.numericSortCallback = numericCallback;
+			if (directClosures?.creations.has(instruction) && rebuilt.type === "createFunction")
+				rebuilt.directClosure = true;
+			const directClosureOwner = directClosures?.calls.get(instruction);
+			if (directClosureOwner !== undefined) {
+				// The creator elides the object on the strength of every call being marked.
+				if (rebuilt.type !== "call" || rebuilt.directFunctionIndex === undefined)
+					throw new Error(`Direct closure call ${instruction} lost its exact target`);
+				rebuilt.directClosureOwner = coreTargetFunctionIndex(
+					functionMap,
+					directClosureOwner,
+				);
+			}
 			const directCallback = directBuiltinCallbacks.get(instruction);
 			if (
 				directCallback !== undefined &&
@@ -2670,6 +2687,42 @@ function planCoreTargetRepresentation(
 }
 
 /** Lower sealed Core directly into the generic runtime execution contract. */
+function exactCoreCallTargets(
+	compilation: CoreCompilation,
+	specializationRows: ReadonlyMap<CoreFunctionId, ReadonlyArray<number>>,
+	directEntryTargets: ReadonlyMap<
+		number,
+		ReadonlyMap<CoreInstructionId, { target: CoreFunctionId; guarded: boolean }>
+	>,
+): Map<CoreFunctionId, Map<CoreInstructionId, CoreFunctionId>> {
+	const recipes = compilation.plan.recipes;
+	const exact = new Map<CoreFunctionId, Map<CoreInstructionId, CoreFunctionId>>();
+	const add = (
+		functionId: CoreFunctionId,
+		instruction: CoreInstructionId,
+		target: CoreFunctionId,
+	) => {
+		const calls = exact.get(functionId) ?? new Map<CoreInstructionId, CoreFunctionId>();
+		calls.set(instruction, target);
+		exact.set(functionId, calls);
+	};
+	for (const [functionId, rows] of specializationRows)
+		for (const row of rows) {
+			if (
+				coreSpecializationRecipeKindAt(recipes, row) !== "guarded-direct-call" ||
+				coreSpecializationRecipeRepresentationAt(recipes, row) !== "exact-function"
+			)
+				continue;
+			const targets = coreSpecializationRecipeTargetFunctionsAt(recipes, row);
+			if (targets.length === 1)
+				add(functionId, coreSpecializationRecipeAnchorsAt(recipes, row)[0]!, targets[0]!);
+		}
+	for (const [functionId, calls] of directEntryTargets)
+		for (const [instruction, { target, guarded }] of calls)
+			if (!guarded) add(coreFunctionId(functionId), instruction, target);
+	return exact;
+}
+
 export function lowerCoreCompilationToTargetProgram(
 	compilation: CoreCompilation,
 	options: LowerCoreToCoreTargetOptions,
@@ -2822,6 +2875,15 @@ export function lowerCoreCompilationToTargetProgram(
 		instructions.set(operation.instruction, operation.masks);
 	}
 	const specializedOnly = new Set(compilation.plan.specializedOnlyFunctions ?? []);
+	const directClosures =
+		options.planDirectClosures === true
+			? planCoreDirectClosures(
+					compilation.program,
+					compilation.context,
+					functionMap.executionToCore,
+					exactCoreCallTargets(compilation, specializationRows, directEntryTargets),
+				)
+			: undefined;
 	const functions = functionMap.executionToCore.map((core, execution) => ({
 		...(specializedOnly.has(core) ? { specializedOnly: true as const } : {}),
 		...lowerFunctionToTarget(
@@ -2849,6 +2911,7 @@ export function lowerCoreCompilationToTargetProgram(
 			options.layoutBlocks,
 			options.createParallelCopyLowerer,
 			options.preserveResumableRepresentations === true,
+			directClosures?.get(core),
 		),
 	}));
 	return Object.freeze({

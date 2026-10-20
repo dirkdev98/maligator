@@ -1772,6 +1772,13 @@ static bool mal_vm_capture_chain_is_complete(MalEnv *env, const i32 *owners, i32
     return env == nullptr;
 }
 
+bool mal_vm_closure_chain_is_complete(MalVm *vm, i32 function_index, MalEnv *creation_env) {
+    const MalFunction *definition = &vm->runtime_image->functions[function_index];
+    i32 count = definition->closure_captures != nullptr ? definition->closure_capture_owner_count : -1;
+    return count > 1 && mal_vm_capture_chain_is_complete(
+        creation_env, definition->closure_captures->owners, count);
+}
+
 // A value display is terminal; its parent is the allocating function object.
 static bool mal_vm_capture_value(MalEnv *env, i32 owner_function_index, i32 index, MalValue *value) {
     for (; env != nullptr;) {

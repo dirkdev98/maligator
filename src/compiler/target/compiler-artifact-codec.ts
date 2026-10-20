@@ -97,7 +97,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 247;
+export const COMPILER_ARTIFACT_VERSION = 248;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -2184,6 +2184,15 @@ function writeCompilerArtifact(
 				w.i32(plan.directCallTargetFunctionIndex ?? -1);
 				w.i32(plan.directCallbackFunctionIndex ?? -1);
 				w.i32(plan.directEntryId ?? -1);
+				if (
+					plan.directClosureOwner !== undefined &&
+					(plan.directFunctionIndex === undefined ||
+						!Number.isInteger(plan.directClosureOwner) ||
+						plan.directClosureOwner < 0 ||
+						plan.directClosureOwner >= def.functions.length)
+				)
+					throw new RangeError("program-image-codec: invalid direct closure call");
+				w.i32(plan.directClosureOwner ?? -1);
 				const numericCallback = plan.numericSortCallback;
 				if (numericCallback !== undefined)
 					validateNativeNumericSortCallback(numericCallback, compiler.native.functions);
@@ -2271,6 +2280,11 @@ function writeCompilerArtifact(
 			) {
 				w.u8(21);
 				w.u32(plan.startIndex);
+			} else if (
+				plan.kind === "direct-closure" &&
+				instruction.opcode === "CREATE_FUNCTION"
+			) {
+				w.u8(22);
 			} else if (
 				plan.kind === "exact-typed-array-element" &&
 				(instruction.opcode === "LOAD_PROPERTY" ||
@@ -4636,6 +4650,7 @@ function readCompilerArtifact(
 				const directCallTargetFunctionIndex = r.i32();
 				const directCallbackFunctionIndex = r.i32();
 				const directEntryId = r.i32();
+				const directClosureOwner = r.i32();
 				const numericCallbackTag = r.u8();
 				if (numericCallbackTag > 4)
 					throw new RangeError("Invalid numeric sort callback tag");
@@ -4674,6 +4689,9 @@ function readCompilerArtifact(
 					directCallbackFunctionIndex < -1 ||
 					directCallbackFunctionIndex >= functions.length ||
 					directEntryId < -1 ||
+					directClosureOwner < -1 ||
+					directClosureOwner >= functions.length ||
+					(directClosureOwner >= 0 && directFunctionIndex < 0) ||
 					(directEntryId >= 0 &&
 						((directFunctionIndex < 0 && guardedFunctionIndices.length !== 1) ||
 							directEntryId >= 4)) ||
@@ -4729,6 +4747,7 @@ function readCompilerArtifact(
 					...(directCallTargetFunctionIndex < 0 ? {} : { directCallTargetFunctionIndex }),
 					...(directCallbackFunctionIndex < 0 ? {} : { directCallbackFunctionIndex }),
 					...(directEntryId < 0 ? {} : { directEntryId }),
+					...(directClosureOwner < 0 ? {} : { directClosureOwner }),
 					...(numericSortCallback === undefined ? {} : { numericSortCallback }),
 					...((flags & 1) === 0 ? {} : { directFunctionCall: true }),
 					...((flags & 32) === 0 ? {} : { directStringCharCodeAtPosition: "inBounds" }),
@@ -4799,6 +4818,8 @@ function readCompilerArtifact(
 					kind: "exact-packed-rest-array-length",
 					startIndex: r.u32(),
 				};
+			} else if (tag === 22 && instruction.opcode === "CREATE_FUNCTION") {
+				nativeInstructions[instructionIndex] = { kind: "direct-closure" };
 			} else if (tag === 21 && instruction.opcode === "CREATE_REST_ARGUMENTS") {
 				const startIndex = r.u32();
 				if (startIndex !== instruction.startIndex)

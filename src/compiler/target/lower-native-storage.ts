@@ -863,12 +863,19 @@ export function nativeVariantContract(
 			};
 	}
 	for (const call of entry.callOverrides ?? []) {
+		const canonical = instructions[call.instructionIp];
 		instructions[call.instructionIp] = {
 			kind: "call",
 			...(call.guarded
 				? { guardedFunctionIndices: [call.functionIndex] }
 				: { directFunctionIndex: call.functionIndex }),
 			directEntryId: call.entryId,
+			...(canonical?.kind === "call" &&
+			canonical.directClosureOwner !== undefined &&
+			canonical.directFunctionIndex === call.functionIndex &&
+			call.guarded !== true
+				? { directClosureOwner: canonical.directClosureOwner }
+				: {}),
 		};
 	}
 	return {

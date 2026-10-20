@@ -498,11 +498,13 @@ iterator cursor is not, by itself, permission to delete its language object.
       record seen once per call never builds an escaped-key plan; its keys and
       short strings go through `memmove` calls (5% of samples) and numbers through
       `mal_text_buffer_append_number` (6%).
-- [ ] Create no function object for a nested function declaration whose binding is
-      only ever called directly (never read as a value, reassigned, or visible to
-      eval); its direct calls can take the declaring activation's environment
-      instead of the closure's. TypeScript's checkTypeRelatedTo instantiates about 40
-      nested declarations per call, and closure creation is 8% of a type-check.
+- [ ] Elide the remaining call-only closures. Direct closures cover layouts that
+      capture nothing, only the creating activation, or a complete chain ending in
+      it. Sparse layouts such as TypeScript's `[createTypeChecker,
+      checkTypeRelatedTo]` still build one capture vector per closure per
+      activation (about 4% of a type-check); closures with an identical layout
+      could share one, and layouts that skip the creating activation could be
+      rebuilt from the owner the caller already resolves.
 - [ ] Specialize higher-order helpers for constant function arguments. TypeScript's
       binarySearchKey reaches getTypeId and compareValues through generic calls
       (5% of a type-check in call dispatch), and a 64-element binarySearch loop runs

@@ -25,8 +25,11 @@ export interface NativeFastEntryInput {
 	/** Non-allocating statements that bind what `capturedLoad` reads. */
 	readonly capturePrologue: ReadonlyArray<string>;
 	readonly capturedLoad: (ownerFunctionIndex: number, index: number) => string;
-	/** The fast body a CALL's proven exact target exports, if any. */
-	readonly calleeTry: (ip: number) => string | undefined;
+	/** The fast body a CALL's proven exact target exports, if any, and its environment argument. */
+	readonly calleeTry: (
+		ip: number,
+		callee: string,
+	) => { readonly symbol: string; readonly environment: string } | undefined;
 	readonly f64Literal: (value: number) => string;
 }
 
@@ -386,7 +389,7 @@ function fastInstruction(
 				: fastReturn(returned, exported ? undefined : input.directEntry, exported);
 		}
 		case "CALL": {
-			const callee = input.calleeTry(ip);
+			const callee = op.callee < 0 ? undefined : input.calleeTry(ip, `f${op.callee}`);
 			const receiver = value(op.thisValue);
 			const args = op.arguments.slice(0, op.argumentCount).map(value);
 			if (
@@ -398,7 +401,7 @@ function fastInstruction(
 				return undefined;
 			const list =
 				args.length === 0 ? "nullptr" : `(const MalValue[]){ ${args.join(", ")} }`;
-			return `if (!${callee}(vm, ${receiver}, ${list}, ${args.length}, mal_value_to_function_object(f${op.callee})->creation_env, &f${op.dst})) goto __full;`;
+			return `if (!${callee.symbol}(vm, ${receiver}, ${list}, ${args.length}, ${callee.environment}, &f${op.dst})) goto __full;`;
 		}
 		default:
 			return undefined;

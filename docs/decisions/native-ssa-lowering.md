@@ -183,6 +183,16 @@ its callees do. Entries a numeric worker or literal-switch dispatch already
 serves, and entries whose operator proofs rule out Numbers, keep only their full
 entry.
 
+A nested function whose object only ever reaches the callee of exact calls is a
+direct closure: the creating activation stores an empty marker in its binding
+instead of allocating the object. Every caller reaches the creating activation
+through the owner scope it reads the binding from, so it rebuilds the creation
+environment the object would have held: nothing, the activation as a single
+tagged owner, or the activation itself when its scope chain is complete. A chain
+that would need a capture vector still creates the object, and callers branch on
+the marker. Elision needs the creator, the callee and every caller compiled, and
+callers outside generators and async functions; otherwise the object stays.
+
 Ordinary numeric indexed reads and stores defer private-root publication until
 their dense probe misses. Dense growth may allocate raw storage but does not
 collect inside the probe. Generic fallbacks publish incoming private values and

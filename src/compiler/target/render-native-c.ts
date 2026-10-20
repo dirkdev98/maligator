@@ -383,6 +383,47 @@ function captureOwnerName(
 	return `__capture_owner_${relocation.stem(owner)}`;
 }
 
+/**
+ * How an exact caller rebuilds the creation environment of a closure whose function
+ * object its owner scope may have elided. `scope` and `owner` reuse the owner's
+ * activation as-is or as the single tagged owner, `none` captures nothing, and
+ * `chain` reuses the activation only when the creator left the callee empty.
+ */
+export type NativeDirectClosureEnvironment = "scope" | "none" | "owner" | "chain";
+
+/** The C environment argument for an exact call, or undefined when it reads the callee. */
+function directClosureEnvironment(
+	plan: NativeInstructionPlan | undefined,
+	directClosures: ReadonlyMap<number, NativeDirectClosureEnvironment> | undefined,
+	functionIndex: number | undefined,
+	fixedCaptureOwners: ReadonlySet<number> | undefined,
+	relocation: NativeRelocationExpressions,
+	callee: string,
+): string | undefined {
+	if (plan?.kind !== "call" || plan.directClosureOwner === undefined) return undefined;
+	const owner = plan.directClosureOwner;
+	const environment =
+		plan.directFunctionIndex === undefined
+			? undefined
+			: directClosures?.get(plan.directFunctionIndex);
+	if (environment === undefined) return undefined;
+	if (environment === "none") return "nullptr";
+	const scope =
+		owner === functionIndex
+			? "env"
+			: fixedCaptureOwners?.has(owner) === true
+				? captureOwnerName(relocation, owner)
+				: `mal_vm_capture_owner(env, ${relocation.ownerFunctionIndex(owner)})`;
+	switch (environment) {
+		case "scope":
+			return scope;
+		case "owner":
+			return `mal_env_tag_single_owner(${scope})`;
+		case "chain":
+			return `(mal_value_is_empty(${callee}) ? ${scope} : mal_value_to_function_object(${callee})->creation_env)`;
+	}
+}
+
 function initializeFixedCaptureOwners(
 	captures: NativeCaptureAccessPlan,
 	relocation: NativeRelocationExpressions,
@@ -1712,6 +1753,7 @@ function emitCompiledVariant(
 	maxCodeUnits = Infinity,
 	splitPolicy: NativeSplitPolicy = DEFAULT_NATIVE_SPLIT_POLICY,
 	fastTryTargets: ReadonlySet<number> = new Set(),
+	directClosures: ReadonlyMap<number, NativeDirectClosureEnvironment> = new Map(),
 ): CompiledFunction | null {
 	// Generators and async functions suspend mid-body: they lower to a resumable C
 	// function (a heap register frame + entry dispatch to the saved resume point)
@@ -2234,6 +2276,7 @@ function emitCompiledVariant(
 		maxCodeUnits,
 		restArgumentRootReleaseIp,
 		captureShadow,
+		directClosures,
 	);
 	if (body === null) {
 		return null;
@@ -2523,11 +2566,22 @@ function emitCompiledVariant(
 						directEntry === undefined && native.specializedOnly !== true
 							? `${symbol}_try`
 							: undefined,
-					calleeTry: (ip) => {
+					calleeTry: (ip, callee) => {
 						const plan = native.instructions[ip];
 						const target = plan?.kind === "call" ? plan.directFunctionIndex : undefined;
 						return target !== undefined && fastTryTargets.has(target)
-							? `mal_compiled_${relocation.stem(target)}${suffix}_try`
+							? {
+									symbol: `mal_compiled_${relocation.stem(target)}${suffix}_try`,
+									environment:
+										directClosureEnvironment(
+											plan,
+											directClosures,
+											index,
+											analysis.stableCaptureOwners,
+											relocation,
+											callee,
+										) ?? `mal_value_to_function_object(${callee})->creation_env`,
+								}
 							: undefined;
 					},
 					specialized:
@@ -2843,6 +2897,7 @@ export function emitCompiledFunction(
 	sortKernelEntries: ReadonlySet<string> = new Set(),
 	reductionEntries: ReadonlySet<string> = new Set(),
 	fastTryTargets: ReadonlySet<number> = new Set(),
+	directClosures: ReadonlyMap<number, NativeDirectClosureEnvironment> = new Map(),
 ): CompiledFunction | null {
 	if (native.storage === undefined)
 		throw new Error("Native rendering requires a lowered storage plan");
@@ -2865,6 +2920,7 @@ export function emitCompiledFunction(
 		sortKernelEntries,
 		reductionEntries,
 		fastTryTargets,
+		directClosures,
 	);
 }
 
@@ -2896,6 +2952,7 @@ export function createNativeFunctionRenderer(): typeof emitCompiledFunction {
 		sortKernelEntries: ReadonlySet<string> = new Set(),
 		reductionEntries: ReadonlySet<string> = new Set(),
 		fastTryTargets: ReadonlySet<number> = new Set(),
+		directClosures: ReadonlyMap<number, NativeDirectClosureEnvironment> = new Map(),
 	): CompiledFunction | null => {
 		if (native.storage === undefined)
 			throw new Error("Native rendering requires a lowered storage plan");
@@ -2929,6 +2986,7 @@ export function createNativeFunctionRenderer(): typeof emitCompiledFunction {
 			sortKernelEntries,
 			reductionEntries,
 			fastTryTargets,
+			directClosures,
 		);
 	};
 }
@@ -2952,6 +3010,7 @@ function renderCompiledFunction(
 	sortKernelEntries: ReadonlySet<string> = new Set(),
 	reductionEntries: ReadonlySet<string> = new Set(),
 	fastTryTargets: ReadonlySet<number> = new Set(),
+	directClosures: ReadonlyMap<number, NativeDirectClosureEnvironment> = new Map(),
 ): CompiledFunction | null {
 	const fn = native.body;
 	const canonical = emitCompiledVariant(
@@ -2972,6 +3031,7 @@ function renderCompiledFunction(
 		maxCodeUnits,
 		splitPolicy,
 		fastTryTargets,
+		directClosures,
 	);
 	if (canonical === null) return null;
 	const name = relocatable === false ? index : relocatable.symbolStem;
@@ -2999,6 +3059,7 @@ function renderCompiledFunction(
 			maxCodeUnits,
 			splitPolicy,
 			fastTryTargets,
+			directClosures,
 		);
 		if (emitted === null) return [];
 		const worker = renderNumericLeaf(nativeVariantContract(native, entry), entry);
@@ -4497,6 +4558,7 @@ function emitBody(
 	maxCodeUnits = Infinity,
 	restArgumentRootReleaseIp?: number,
 	captureShadow?: NativeCaptureShadow,
+	directClosures: ReadonlyMap<number, NativeDirectClosureEnvironment> = new Map(),
 ): EmittedBody | null {
 	const callTransportByIp = new Map(
 		callTransports.map((plan) => [plan.instructionIp, plan]),
@@ -5146,6 +5208,8 @@ function emitBody(
 		directCompiledTargets,
 		directCompiledEntries,
 		ownedCaptureFunctionIndex: ownsCaptureEnvironment ? functionIndex : undefined,
+		functionIndex,
+		directClosures,
 		captureShadow,
 		fixedCaptureOwners: stableCaptureOwners,
 		requiredCaptureOwners,
@@ -6138,6 +6202,9 @@ interface NativeInstructionContext {
 	readonly scalarInputValues?: ReadonlyMap<number, string>;
 	readonly inactiveRootMaskStatements?: ReadonlyMap<NativeInactiveRootMask, string>;
 	readonly ownedCaptureFunctionIndex?: number;
+	/** The rendered function, which owns the scope its direct closures are created in. */
+	readonly functionIndex?: number;
+	readonly directClosures?: ReadonlyMap<number, NativeDirectClosureEnvironment>;
 	readonly captureShadow?: NativeCaptureShadow;
 	readonly fixedCaptureOwners?: ReadonlySet<number>;
 	readonly requiredCaptureOwners?: ReadonlySet<number>;
@@ -6485,6 +6552,8 @@ function emitInstruction(
 		stringSplitTrimLengthSite: context.stringSplitTrimLengthSite,
 		iteratorStepInactiveRootMask: context.iteratorStepInactiveRootMask,
 		ownedCaptureFunctionIndex: context.ownedCaptureFunctionIndex,
+		functionIndex: context.functionIndex,
+		directClosures: context.directClosures,
 		captureShadow: context.captureShadow,
 		fixedCaptureOwners: context.fixedCaptureOwners,
 		requiredCaptureOwners: context.requiredCaptureOwners,
@@ -7961,11 +8030,21 @@ function emitInstruction(
 				`r${instruction.dst} = ${callValue(instruction.dst, result)};`,
 			];
 		}
-		case "CREATE_FUNCTION":
+		case "CREATE_FUNCTION": {
+			const create = `mal_vm_op_create_function(vm, ${relocation.functionIndex(instruction.functionIndex)}, env)`;
+			const closure =
+				context.nativePlan?.kind === "direct-closure"
+					? context.directClosures?.get(instruction.functionIndex)
+					: undefined;
 			return [
 				...ensureCaptureEnvironment(context.captureShadow, ip),
-				`r${instruction.dst} = mal_vm_op_create_function(vm, ${relocation.functionIndex(instruction.functionIndex)}, env);`,
+				closure === undefined
+					? `r${instruction.dst} = ${create};`
+					: closure === "chain"
+						? `r${instruction.dst} = mal_vm_closure_chain_is_complete(vm, ${relocation.functionIndex(instruction.functionIndex)}, env) ? MAL_VALUE_EMPTY : ${create};`
+						: `r${instruction.dst} = MAL_VALUE_EMPTY;`,
 			];
+		}
 		case "DEFINE_PROPERTY": {
 			const stringIndex = context.staticDefineStringIndexByIp.get(ip);
 			if (stringIndex !== undefined) {
@@ -11776,8 +11855,17 @@ function emitInstruction(
 						: directCompiledEntries.get(
 								directCompiledEntryKey(target, transport.entryId),
 							);
+				const directCallee = `__direct_callee_${ip}`;
+				const directEnvironment =
+					directClosureEnvironment(
+						callPlan,
+						context.directClosures,
+						context.functionIndex,
+						context.fixedCaptureOwners,
+						relocation,
+						directCallee,
+					) ?? `mal_value_to_function_object(${directCallee})->creation_env`;
 				if (directEntry !== undefined && transport !== undefined) {
-					const directCallee = `__direct_callee_${ip}`;
 					const directValue = `__direct_value_${ip}`;
 					const parameters = directEntryParameters(transport);
 					context.directEntryCalls.set(ip, new Set([target]));
@@ -11787,7 +11875,7 @@ function emitInstruction(
 						`MalValue ${directCallee} = ${boxedOperand(instruction.callee)};`,
 						`MAL_PERF_COUNT(direct_entry_hits);`,
 						...functionDeclaration,
-						`${cTypeOf(directEntry.resultRepresentation)} ${directValue} = mal_direct_${relocation.stem(target)}_${directEntry.id}${suffix}(vm, ${thisArgument}${parameters.length === 0 ? "" : `, ${parameters.join(", ")}`}, mal_value_to_function_object(${directCallee})->creation_env, ${directCallee});`,
+						`${cTypeOf(directEntry.resultRepresentation)} ${directValue} = mal_direct_${relocation.stem(target)}_${directEntry.id}${suffix}(vm, ${thisArgument}${parameters.length === 0 ? "" : `, ${parameters.join(", ")}`}, ${directEnvironment}, ${directCallee});`,
 						`if (MAL_THREW()) ${onThrow()}`,
 						`r${instruction.dst} = ${directResult};`,
 						poll(),
@@ -11795,12 +11883,11 @@ function emitInstruction(
 				}
 				if (directCompiledTargets.has(target)) {
 					nativeCallDecision(context.profile, ip, "call.direct-compiled", "applied");
-					const directCallee = `__direct_callee_${ip}`;
 					const directValue = `__direct_value_${ip}`;
 					return [
 						`MalValue ${directCallee} = ${boxedOperand(instruction.callee)};`,
 						...functionDeclaration,
-						`MalValue ${directValue} = mal_compiled_${relocation.stem(target)}${suffix}(vm, ${thisArgument}, ${argsExpr}, ${args.length}, MAL_VALUE_UNDEFINED, mal_value_to_function_object(${directCallee})->creation_env, ${directCallee}, nullptr);`,
+						`MalValue ${directValue} = mal_compiled_${relocation.stem(target)}${suffix}(vm, ${thisArgument}, ${argsExpr}, ${args.length}, MAL_VALUE_UNDEFINED, ${directEnvironment}, ${directCallee}, nullptr);`,
 						`if (MAL_THREW()) ${onThrow()}`,
 						`r${instruction.dst} = ${callResult(directValue)};`,
 						poll(),

@@ -3309,6 +3309,13 @@ MalValue mal_vm_query_static_data(MalVm *vm, i32 template_offset, i32 query_kind
 MalValue mal_vm_op_create_function(MalVm *vm, i32 function_index, MalEnv *creation_env);
 
 /**
+ * Whether a closure of `function_index` created in `creation_env` would keep that
+ * scope chain as its environment instead of coallocating a capture vector. Native
+ * callers enter such a closure from the owner scope without its function object.
+ */
+bool mal_vm_closure_chain_is_complete(MalVm *vm, i32 function_index, MalEnv *creation_env);
+
+/**
  * Define an own data property (the object-literal / define-semantics path),
  * shared by MAL_OP_DEFINE_PROPERTY and the compiled backend. Key coercion and
  * Proxy traps can run user code; rejected definitions leave a pending throw.

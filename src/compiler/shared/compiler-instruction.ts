@@ -309,6 +309,12 @@ type CompilerOperation =
 			registers: [number];
 
 			functionIndex: number;
+			/**
+			 * NATIVE-ONLY: every use of the closure is an exact call that native code
+			 * enters from the owner scope, so the object is created only when that
+			 * scope cannot supply the closure's creation environment.
+			 */
+			directClosure?: true;
 	  }
 	| {
 			type: "createArgumentsObject";
@@ -418,6 +424,11 @@ type CompilerOperation =
 			guardedFunctionIndices?: ReadonlyArray<number>;
 			/** Native-only ABI sibling selected for this exact direct target. */
 			directEntryId?: number;
+			/**
+			 * NATIVE-ONLY: the exact target is a direct closure created by this function's
+			 * activation; an empty callee means its environment comes from that scope.
+			 */
+			directClosureOwner?: number;
 			numericSortCallback?: CompilerNumericSortCallback;
 			/**
 			 * COMPILE-ONLY: this is an exact `target.call(thisArg, ...args)` property-call
