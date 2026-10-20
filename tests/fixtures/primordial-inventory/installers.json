@@ -429,7 +429,7 @@
 	},
 	{
 		"file": "runtime/node_crypto.c",
-		"sha256": "dfe59efc73d55ac48d750d43a1b9e35ddd2a7d206d43975da2e7d85c325d469d"
+		"sha256": "5ee8610b8c8ad1713c94513c89ac8aefa69ce606896dc991b1ce564c411c855e"
 	},
 	{
 		"file": "runtime/node_crypto.h",
@@ -437,7 +437,7 @@
 	},
 	{
 		"file": "runtime/node_dgram.c",
-		"sha256": "aae3a4809d7a3da84f81211630789e7be94aa2c78ba35b2ee7deef3ef15a78f0"
+		"sha256": "dbdd0467c1921b8ae6d2ba0a1d248aea0999dc7dd74f33b0491538407d7dda81"
 	},
 	{
 		"file": "runtime/node_dgram.h",
@@ -453,11 +453,11 @@
 	},
 	{
 		"file": "runtime/node_dns.c",
-		"sha256": "a71350e416c5088695ca79910e310ec37d75a54738ac2ea3dab71371b2df1d09"
+		"sha256": "972e5f7fbbbf0a930bb273a3c999efca34fa951183e28b2424d7bbffd1ba3a40"
 	},
 	{
 		"file": "runtime/node_dns.h",
-		"sha256": "a2f452a33e0ce05a3b5f92b7c6d8faf9ea0b7e69ddbe8f8e53b9e2c97e6425c3"
+		"sha256": "0bc6d310f8fdd641787582d9a0b57fa79e99d32de2ce7b7c69aae9280be8fd67"
 	},
 	{
 		"file": "runtime/node_domain.c",
@@ -485,7 +485,7 @@
 	},
 	{
 		"file": "runtime/node_http.c",
-		"sha256": "774ddce8771a549fd1d93c90c9f3fdc521b4339bdd61a07cdc03a522030a7218"
+		"sha256": "297c33404c09e9c3a8ce8d13e363c9621835161e5fd529c7a428c97d7b400e04"
 	},
 	{
 		"file": "runtime/node_http.h",
@@ -533,11 +533,11 @@
 	},
 	{
 		"file": "runtime/node_module.c",
-		"sha256": "08807c47fd66678ca5614a70d915d5bf95f08384151af4c785010a476b865421"
+		"sha256": "06ad7949ae0361798159cd317984951b199f06e4bb2282e563661472238036be"
 	},
 	{
 		"file": "runtime/node_module.h",
-		"sha256": "b3fb6bb6072b271057dc37bd053af55a572a34cb5b85149a755eff55da8040e3"
+		"sha256": "536da13bc1689ba6ff2f50b6ee1a387efbb6577face53353678ef3bcbc5d6f0c"
 	},
 	{
 		"file": "runtime/node_module_api.c",
@@ -549,7 +549,7 @@
 	},
 	{
 		"file": "runtime/node_net.c",
-		"sha256": "06b05139f379e513e0257f7ad99cf49acbe457cf6331c7f67b1004ec1f1d0e46"
+		"sha256": "49e86ee0ceec92c9fc735dff01e79b293e69e60742d5f94007935b62b85133b8"
 	},
 	{
 		"file": "runtime/node_net.h",
@@ -637,7 +637,7 @@
 	},
 	{
 		"file": "runtime/node_tls.c",
-		"sha256": "c52f67541657f8811eac41003575f74a679ca9d8e2ed9f1fdddbcd4623631177"
+		"sha256": "05e5379b8880969b32ac8d83718d1c322a6ed9c1b09a8e5846d06cb7ffad2768"
 	},
 	{
 		"file": "runtime/node_tls.h",
@@ -717,7 +717,7 @@
 	},
 	{
 		"file": "runtime/web_fetch.c",
-		"sha256": "cfef76637a40d477abbcf23bf5aced9c9bdaf12e9384dae0305e44e99e1dd7e5"
+		"sha256": "e1a3e0b0bcb7a3866b8d5c86181736095897a374ccfc78f1ed0d93e29f6908fb"
 	},
 	{
 		"file": "runtime/web_globals.c",
@@ -781,6 +781,6 @@
 	},
 	{
 		"file": "vm_ops.h",
-		"sha256": "3f20bfadb687e875f5dd01f918286e4c99329423105d265645c01a0de6fb9d29"
+		"sha256": "87e4908a908cf8921df974aec0f44aa02a7a49d37a4e85eaaf253e318a00626b"
 	}
 ]
