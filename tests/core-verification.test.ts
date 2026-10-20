@@ -61,6 +61,38 @@ describe("Core verification", () => {
 		expect(() => verifyCoreProgram(program)).toThrow(/Rest state escapes/);
 	});
 
+	it.each([
+		["boxed", "string", false],
+		["boxed", "f64", false],
+		["string", "boxed", true],
+		["i32", "f64", true],
+		["string", "string", true],
+	] as const)(
+		"lets a move from %s into %s verify only when it does not unbox: %s",
+		(source, destination, accepted) => {
+			const program = new CoreProgram(coreOpcodeRegistry, { stringConstants: [[0x61]] });
+			const builder = new CoreFunctionBuilder(program);
+			const entry = builder.createBlock();
+			const [value] = builder.appendInstruction(
+				entry,
+				source === "i32" ? "createNumber" : "createString",
+				[],
+				{
+					attributes: source === "i32" ? { value: 1 } : { stringIndex: 0 },
+					outputRepresentations: [source],
+				},
+			);
+			const [moved] = builder.appendInstruction(entry, "move", [value!], {
+				outputRepresentations: [destination],
+			});
+			builder.setTerminator(entry, { kind: "return", value: moved! });
+			builder.finish(entry);
+			const verify = () => verifyCoreProgram(program);
+			if (accepted) expect(verify).not.toThrow();
+			else expect(verify).toThrow(`unboxes to ${destination} without a proof`);
+		},
+	);
+
 	it("verifies repeated uses of value zero after operand replacement and row deletion", () => {
 		const { program, fn, entry, condition } = validBranchProgram();
 		const editor = CoreEditor.open(program, fn.id);

@@ -1749,7 +1749,8 @@ describe("Core control-flow analyses and passes", () => {
 		);
 		const body = builder.createBlock();
 		const exit = builder.createBlock();
-		const [numeric] = builder.appendInstruction(entry, "move", [input!], {
+		const [numeric] = builder.appendInstruction(entry, "unary", [input!], {
+			attributes: { operator: "+" },
 			outputRepresentations: ["f64"],
 		});
 		const [dominating] = builder.appendInstruction(entry, "mathUnaryNumber", [numeric!], {

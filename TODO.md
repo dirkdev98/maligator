@@ -80,6 +80,12 @@ hot consumer needs a stronger proof. An analysis contract may land before its
 consumer with precision, invalidation, and cost tests; it is not a runtime speedup
 until the consumer admits real sites and measurements establish a benefit.
 
+- [ ] Keep `flow-scalar-representation-selection` from leaving `f64 -> i32` moves. A
+      component whose exact kinds are all int32 becomes i32, but members already in
+      f64 stay f64, and the target verifier rejects the moves between them. In the
+      numeric-join test later passes remove them; nothing guarantees that before
+      lowering. The Core verifier rejects only moves that unbox a boxed value.
+
 ## Native SSA storage
 
 The independent target boundary and current storage contract are recorded in

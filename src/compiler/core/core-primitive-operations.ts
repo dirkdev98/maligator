@@ -257,6 +257,24 @@ const wrapperCoercingStringArguments = new Set([
 	"String.prototype.link",
 ]);
 
+function instructionResult(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+): CoreValueId {
+	return fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
+}
+
+// Replacing an instruction keeps its result's representation, which a move may only widen.
+function movesWithoutNarrowing(
+	fn: CoreFunctionStore,
+	value: CoreValueId,
+	instruction: CoreInstructionId,
+): boolean {
+	const from = fn.valueRepresentation(value);
+	const to = fn.valueRepresentation(instructionResult(fn, instruction));
+	return from === to || to === "boxed" || (from === "i32" && to === "f64");
+}
+
 export const lowerPrimitiveOperations: CoreFunctionPass = {
 	name: "lower-primitive-operations",
 	admission: {
@@ -1304,9 +1322,10 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 				}
 			}
 			if (
-				plan.method.endsWith(".prototype.valueOf") ||
-				plan.method === "String.prototype.toString" ||
-				plan.method === "Symbol.prototype[%Symbol.toPrimitive%]"
+				(plan.method.endsWith(".prototype.valueOf") ||
+					plan.method === "String.prototype.toString" ||
+					plan.method === "Symbol.prototype[%Symbol.toPrimitive%]") &&
+				movesWithoutNarrowing(fn, input, plan.instruction)
 			)
 				editor.replaceInstruction(plan.instruction, "move", [input]);
 			else if (plan.method === "Boolean.prototype.toString")
@@ -1357,24 +1376,28 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 							attributes: part.attributes,
 						}).outputs[0]!,
 				);
+				if (values.length === 1) {
+					// A lone Number passes through unary plus unchanged, including -0.
+					if (movesWithoutNarrowing(fn, values[0]!, plan.instruction))
+						editor.replaceInstruction(plan.instruction, "move", values);
+					else
+						editor.replaceInstruction(plan.instruction, "unary", values, {
+							attributes: { operator: "+" },
+						});
+					continue;
+				}
 				editor.replaceInstruction(
 					plan.instruction,
-					values.length === 1
-						? "move"
-						: values.length === 2
-							? "binary"
-							: "preciseNumberSum",
+					values.length === 2 ? "binary" : "preciseNumberSum",
 					values,
 					{
 						attributes:
-							values.length === 1
-								? {}
-								: values.length === 2
-									? { operator: "+" }
-									: {
-											worldAssumptions: fn.instructionAttributes(plan.instruction)
-												.worldAssumptions,
-										},
+							values.length === 2
+								? { operator: "+" }
+								: {
+										worldAssumptions: fn.instructionAttributes(plan.instruction)
+											.worldAssumptions,
+									},
 					},
 				);
 				continue;
@@ -1382,6 +1405,11 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 			if ("stringParts" in plan) {
 				const block = fn.instructionBlock(plan.instruction);
 				const sourcePosition = fn.instructionSourcePosition(plan.instruction);
+				// Every part is a String, so an unboxed String result keeps its representation.
+				const outputRepresentations =
+					fn.valueRepresentation(instructionResult(fn, plan.instruction)) === "string"
+						? (["string"] as const)
+						: undefined;
 				let result: CoreValueId | undefined;
 				for (const part of plan.stringParts) {
 					let input: CoreValueId | undefined;
@@ -1422,6 +1450,7 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 								typeof part === "string"
 									? { stringIndex: stringIndex(part) }
 									: { operator: "tostring" },
+							...(outputRepresentations === undefined ? {} : { outputRepresentations }),
 						},
 					).outputs[0]!;
 					result =
@@ -1432,7 +1461,13 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 									plan.instruction,
 									"binary",
 									[result, value],
-									{ sourcePosition, attributes: { operator: "+" } },
+									{
+										sourcePosition,
+										attributes: { operator: "+" },
+										...(outputRepresentations === undefined
+											? {}
+											: { outputRepresentations }),
+									},
 								).outputs[0]!;
 				}
 				editor.replaceInstruction(plan.instruction, "move", [result!]);
@@ -1449,6 +1484,12 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 			}
 			if ("operation" in plan) {
 				const operation = plan.operation;
+				if (
+					operation.opcode === "move" &&
+					!plan.truthiness &&
+					!movesWithoutNarrowing(fn, operation.inputs[0]!, plan.instruction)
+				)
+					continue;
 				let inputs = operation.inputs;
 				if (plan.truthiness)
 					inputs = editor.insertInstruction(

@@ -14,6 +14,7 @@ import { knownOperationIndex } from "../shared/known-operations.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
 import { isStringCollationPlan } from "../shared/string-collation-plan.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
+import { CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE } from "./core-internal-attributes.ts";
 import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import {
@@ -413,6 +414,17 @@ function verifyInstructionRows(
 					) !== "length")
 			)
 				fail("Invalid primitive String length hint");
+			if (descriptor.opcode === "move" && operandCount === 1 && resultCount === 1) {
+				const source = fn.valueRepresentation(fn.kernel.operandAt(operandStart));
+				const destination = fn.valueRepresentation(fn.kernel.resultAt(resultStart));
+				// A boxed value may hold any type, so only a TDZ check's exact-scalar proof unboxes it.
+				if (
+					source === "boxed" &&
+					destination !== "boxed" &&
+					attributes[CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE] === undefined
+				)
+					fail(`move @${instruction} unboxes to ${destination} without a proof`);
+			}
 			if (descriptor.opcode === "probeRead") {
 				const readKind = attributes.readKind as ProbeReadKind;
 				const accessor = readKind === "getter" || readKind === "setter";
