@@ -2685,11 +2685,14 @@ function typedStackNaN(input) {
 		? "identity"
 		: [String(object.fraction), object.integer, object.flag].join(":");
 }
+// Inputs the compiler cannot see keep `object === input` an identity observation.
+const absentStackInput = globalThis.absentStackInput ?? null;
+const presentStackInput = globalThis.presentStackInput ?? true;
 console.log(
 	"typed-stack-fields",
-	typedStackFields(null),
-	typedStackFields(true),
-	typedStackNaN(null),
+	typedStackFields(absentStackInput),
+	typedStackFields(presentStackInput),
+	typedStackNaN(absentStackInput),
 );
 
 globalThis.makeMixedValue = (marker) => ({

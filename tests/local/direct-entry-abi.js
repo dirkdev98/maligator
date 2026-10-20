@@ -82,17 +82,20 @@ function guardedCaller(value, mode, inspect) {
 globalThis.guardedNumber = guardedNumber;
 globalThis.guardedHeap = guardedHeap;
 globalThis.guardedCaller = guardedCaller;
+// An inspector read from an array is no held callback, so guardedCaller keeps its
+// own direct entry instead of being inlined into this loop.
+const inspectors = [inspectGuardedResult];
 const guardedResults = [];
 for (let mode = 0; mode < 6; mode++)
-	guardedResults.push(guardedCaller(3, mode, inspectGuardedResult));
+	guardedResults.push(guardedCaller(3, mode, inspectors[0]));
 guardedNumber = function guardedReplacement(value, mode) {
 	globalThis.gc?.();
 	if (mode === 4) throw new Error(`fallback:${value}`);
 	return { value };
 };
 const guardMissResults = [
-	guardedCaller(3, 0, inspectGuardedResult),
-	guardedCaller(3, 4, inspectGuardedResult),
+	guardedCaller(3, 0, inspectors[0]),
+	guardedCaller(3, 4, inspectors[0]),
 ];
 
 const guardedObject = guardedHeap(3);

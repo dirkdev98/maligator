@@ -1208,6 +1208,19 @@ export class CoreProgramFlowEpoch {
 	}
 }
 
+function joinCallTargetWrites<Targets>(
+	earlier: ReadonlyMap<number, Targets>,
+	later: ReadonlyMap<number, Targets>,
+	join: (left: Targets, right: Targets) => Targets,
+): ReadonlyMap<number, Targets> {
+	const joined = new Map(earlier);
+	for (const [key, targets] of later) {
+		const prior = joined.get(key);
+		joined.set(key, prior === undefined ? targets : join(prior, targets));
+	}
+	return joined;
+}
+
 function mutableCallTargetWriters<Targets>(
 	index: Map<number, ReadonlyMap<CoreFunctionId, Targets>>,
 	previous: ReadonlyMap<number, ReadonlyMap<CoreFunctionId, Targets>> | undefined,
@@ -1565,11 +1578,14 @@ export class CoreProgramFlowEngine {
 			[...affectedFunctions].sort((left, right) => left - right),
 			(functionId, enqueue) => {
 				const currentLocal = local.get(functionId);
+				const repeated = analyzed.has(functionId);
 				const previousLocal =
-					currentLocal ??
-					(analyzed.has(functionId) ? undefined : previous?.local.get(functionId));
-				removeLocalContributions(functionId, currentLocal);
-				const next = semantics.analyzeLocal(
+					currentLocal ?? (repeated ? undefined : previous?.local.get(functionId));
+				// A rerun only adds to the writes it made earlier in this solve. Replacing
+				// them let a function that writes each of two cells from the other, as a
+				// recursive call with permuted arguments does, swap their values forever.
+				if (!repeated) removeLocalContributions(functionId, currentLocal);
+				const analyzedLocal = semantics.analyzeLocal(
 					this.#program,
 					this.#program.function(functionId),
 					controlFlow(functionId),
@@ -1579,6 +1595,22 @@ export class CoreProgramFlowEngine {
 					this.local(functionId),
 					identities,
 				);
+				const next =
+					repeated && currentLocal !== undefined
+						? {
+								...analyzedLocal,
+								cellWrites: joinCallTargetWrites(
+									currentLocal.cellWrites,
+									analyzedLocal.cellWrites,
+									(left, right) => semantics.join(left, right),
+								),
+								globalWrites: joinCallTargetWrites(
+									currentLocal.globalWrites,
+									analyzedLocal.globalWrites,
+									(left, right) => semantics.join(left, right),
+								),
+							}
+						: analyzedLocal;
 				for (const [key, targets] of next.cellWrites) {
 					cellKeys.add(key);
 					const writers = mutableCallTargetWriters(
