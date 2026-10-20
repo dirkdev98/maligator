@@ -15,6 +15,13 @@
 #include "value_ops.h" // mal_ops_number_value, for the numeric-index fast paths
 #include "vm.h"
 
+#if defined(__clang__) && !defined(__wasm__) && __has_attribute(preserve_most)
+/** Slow-path calls that save the registers they use, so callers' fast paths need not. */
+#define MAL_PRESERVE_MOST __attribute__((preserve_most))
+#else
+#define MAL_PRESERVE_MOST
+#endif
+
 static inline MalValue mal_vm_numeric_typed_array_load_at(
     const byte *at, MalTypedArrayKind kind
 ) {
@@ -1527,8 +1534,9 @@ static inline bool mal_vm_local_watched_primitive_value_try_load_static(
     return true;
 }
 
+
 /** An INHERITED_VALUE row's hit: a prototype data value proven by shape and chain identity. */
-static inline bool mal_vm_inherited_value_try_load(const MalVm *vm, MalValue receiver,
+static inline MAL_PRESERVE_MOST bool mal_vm_inherited_value_try_load(const MalVm *vm, MalValue receiver,
                                                    const MalInlineCache *ic, MalValue *out) {
     if (ic->poly_count > 0) {
         bool dictionary_receiver =
@@ -1830,8 +1838,9 @@ typedef struct MalStaticPropertyProbeResult {
     MalValue value;
 } MalStaticPropertyProbeResult;
 
+
 /** Noncollecting cache probes after the inline own-slot and inherited-value probes miss. */
-__attribute__((noinline)) MalStaticPropertyProbeResult
+__attribute__((noinline)) MAL_PRESERVE_MOST MalStaticPropertyProbeResult
 mal_vm_property_try_load_static_remaining(
     MalVm *vm, MalValue receiver, const MalObject *object,
     MalInlineCache *ic
@@ -1904,7 +1913,7 @@ static inline __attribute__((always_inline)) bool mal_vm_property_try_load_stati
 
 /** Typed arrays whose prototype is the kind prototype or this site's registered
  * intermediate prototype answer when the view has no own named properties. */
-__attribute__((noinline)) bool mal_vm_property_try_load_length_static_remaining(
+__attribute__((noinline)) MAL_PRESERVE_MOST bool mal_vm_property_try_load_length_static_remaining(
     MalVm *vm, MalValue receiver, MalInlineCache *ic, MalValue *out);
 
 /** Static `.length` loads; only the Array row expands at each site. */

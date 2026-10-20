@@ -2568,7 +2568,7 @@ bool mal_vm_array_try_get_absent_index(const MalArrayObject *arr, MalValue *out)
     return false;
 }
 
-bool mal_vm_property_try_load_length_static_remaining(
+MAL_PRESERVE_MOST bool mal_vm_property_try_load_length_static_remaining(
     MalVm *vm, MalValue receiver, MalInlineCache *ic, MalValue *out
 ) {
     if (ic->mode == MAL_IC_MODE_TYPED_ARRAY_LENGTH && mal_vm_primitive_methods_intact(vm) &&
@@ -2594,7 +2594,7 @@ bool mal_vm_property_try_load_length_static_remaining(
 }
 
 // Keep all non-monomorphic static cache hits noncollecting: callers may hold private roots.
-__attribute__((noinline)) MalStaticPropertyProbeResult
+__attribute__((noinline)) MAL_PRESERVE_MOST MalStaticPropertyProbeResult
 mal_vm_property_try_load_static_remaining(
     MalVm *vm, MalValue receiver, const MalObject *object,
     MalInlineCache *ic
