@@ -7,6 +7,7 @@ import {
 	COMPILER_VALUE_KIND_BIGINT,
 	COMPILER_VALUE_KIND_BOOLEAN,
 	COMPILER_VALUE_KIND_NULL,
+	COMPILER_VALUE_KIND_NULLISH,
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE,
 	compilerOperatorInputKindsHaveExactNativeSemantics,
@@ -1414,6 +1415,21 @@ export function coreValueKindObservation(
 	}
 	if (opcode !== "binary" || operandCount !== 2) return undefined;
 	const operator = fn.instructionAttributes(instruction).operator;
+	if (operator === "==" || operator === "!=") {
+		const left = kindMask(operand(0)!);
+		const right = kindMask(operand(1)!);
+		const nullish = (mask: number) =>
+			mask !== 0 && compilerValueKindMaskIsSubset(mask, COMPILER_VALUE_KIND_NULLISH);
+		// No object emulates undefined here, so only undefined and null loosely equal them.
+		const equal =
+			nullish(left) && nullish(right)
+				? true
+				: (nullish(left) && (right & COMPILER_VALUE_KIND_NULLISH) === 0) ||
+					  (nullish(right) && (left & COMPILER_VALUE_KIND_NULLISH) === 0)
+					? false
+					: undefined;
+		return equal === undefined ? undefined : operator === "==" ? equal : !equal;
+	}
 	if (operator !== "===" && operator !== "!==") return undefined;
 	const typeofResult = (value: CoreValueId, other: CoreValueId): boolean | undefined => {
 		if (fn.kernel.valueDefinitionKind(value) !== 1) return undefined;
@@ -1435,10 +1451,17 @@ export function coreValueKindObservation(
 	};
 	const left = operand(0)!;
 	const right = operand(1)!;
+	const leftKind = kindMask(left);
+	const singleton = (mask: number) =>
+		mask === COMPILER_VALUE_KIND_UNDEFINED || mask === COMPILER_VALUE_KIND_NULL;
 	const equal =
 		typeofResult(left, right) ??
 		typeofResult(right, left) ??
-		((kindMask(left) & kindMask(right)) === 0 ? false : undefined);
+		((leftKind & kindMask(right)) === 0
+			? false
+			: singleton(leftKind) && leftKind === kindMask(right)
+				? true
+				: undefined);
 	return equal === undefined ? undefined : operator === "===" ? equal : !equal;
 }
 

@@ -551,7 +551,7 @@ function inlineTarget(
 		}
 		if (visited.has(block)) return true;
 		if (
-			visited.size >= (callbackConsumer ? 64 : 8) ||
+			visited.size >= (callbackConsumer ? 64 : 16) ||
 			(!callbackConsumer && fn.kernel.blockHandlerBlock(block) !== undefined)
 		)
 			return false;

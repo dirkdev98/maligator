@@ -1220,6 +1220,14 @@ function analyzeFunctionTargets(
 			publish(fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator)));
 		}
 	}
+	// A capped callee still invokes the identities it dropped, with arguments no parameter
+	// cell or value kind records, so they become as unknown as published functions.
+	for (const site of sites)
+		if (
+			site.targets.anyScript &&
+			cfg.reachable.has(fn.instructionBlock(site.instruction))
+		)
+			publish(site.callee);
 	// Recover identities discarded by the finite-target cap only at an escaping use.
 	for (let cursor = 0; cursor < pendingPublications.length; cursor++) {
 		const value = pendingPublications[cursor]!;

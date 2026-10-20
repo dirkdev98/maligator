@@ -25,9 +25,13 @@ import {
 } from "../src/compiler/shared/compiler-facts.ts";
 import {
 	COMPILER_VALUE_KIND_BIGINT,
+	COMPILER_VALUE_KIND_NULL,
+	COMPILER_VALUE_KIND_NULLISH,
+	COMPILER_VALUE_KIND_OBJECT,
 	COMPILER_VALUE_KIND_STRING,
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_TOP,
+	COMPILER_VALUE_KIND_UNDEFINED,
 } from "../src/compiler/shared/compiler-value-kinds.ts";
 import { inspectCoreBlockParameters } from "./helpers/core-inspection.ts";
 import { coreFunctionNamed, coreOperations } from "./helpers/core-inspection.ts";
@@ -112,6 +116,53 @@ it("compares typeof with a long UTF-16 constant without a host argument limit", 
 		coreValueKindObservation(program, fn, observation, () => COMPILER_VALUE_KIND_NUMBER),
 	).toBe(false);
 });
+
+it.each([
+	["==", COMPILER_VALUE_KIND_NULL, COMPILER_VALUE_KIND_UNDEFINED, true],
+	["!=", COMPILER_VALUE_KIND_NULLISH, COMPILER_VALUE_KIND_UNDEFINED, false],
+	["==", COMPILER_VALUE_KIND_OBJECT, COMPILER_VALUE_KIND_NULL, false],
+	[
+		"!=",
+		COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_STRING,
+		COMPILER_VALUE_KIND_UNDEFINED,
+		true,
+	],
+	[
+		"==",
+		COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_UNDEFINED,
+		COMPILER_VALUE_KIND_UNDEFINED,
+		undefined,
+	],
+	["==", COMPILER_VALUE_KIND_NUMBER, COMPILER_VALUE_KIND_STRING, undefined],
+	["===", COMPILER_VALUE_KIND_UNDEFINED, COMPILER_VALUE_KIND_UNDEFINED, true],
+	["!==", COMPILER_VALUE_KIND_NULL, COMPILER_VALUE_KIND_NULL, false],
+	["===", COMPILER_VALUE_KIND_NULLISH, COMPILER_VALUE_KIND_UNDEFINED, undefined],
+	["===", COMPILER_VALUE_KIND_NUMBER, COMPILER_VALUE_KIND_NUMBER, undefined],
+] as const)(
+	"decides %s between kinds %i and %i as %s",
+	(operator, left, right, expected) => {
+		const program = analysisProgram();
+		const builder = new CoreFunctionBuilder(program);
+		const block = builder.createBlock();
+		const [first] = builder.appendInstruction(block, "loadGlobal", [], {
+			attributes: { index: 0 },
+		});
+		const [second] = builder.appendInstruction(block, "loadGlobal", [], {
+			attributes: { index: 1 },
+		});
+		const [compared] = builder.appendInstruction(block, "binary", [first!, second!], {
+			attributes: { operator },
+		});
+		const observation = builder.bodyInstructionIds(block).at(-1)!;
+		builder.setTerminator(block, { kind: "return", value: compared! });
+		const fn = program.function(builder.finish(block).function);
+		expect(
+			coreValueKindObservation(program, fn, observation, (value) =>
+				value === first ? left : right,
+			),
+		).toBe(expected);
+	},
+);
 
 it("uses program-flow dirtiness without serialized version or target keys", () => {
 	const source = readFileSync(
@@ -280,6 +331,46 @@ describe("whole-program Core value kinds", () => {
 					opcode === "createBoolean" && attributes.value === true,
 			),
 		).toBe(true);
+	});
+
+	it.each([
+		["every caller omits it", "search(values, 6) + search(values, 7)", false],
+		["one caller passes a number", "search(values, 6) + search(values, 7, 1)", true],
+	])("decides an optional parameter's nullish default when %s", (_name, calls, kept) => {
+		const sourcePath = "optional-parameter.mjs";
+		const source = `function search(values, key, offset) {
+			let low = offset ?? 0;
+			let high = values.length - 1;
+			while (low <= high) {
+				const middle = low + ((high - low) >> 1);
+				if (values[middle] === key) return middle;
+				if (values[middle] < key) low = middle + 1;
+				else high = middle - 1;
+			}
+			return ~low;
+		}
+		const values = globalThis.values ?? [2, 4, 6, 8];
+		globalThis.result = ${calls};`;
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(source, sourcePath, parseModule(source)),
+			{
+				facts: withProgramClosure(
+					compilerProgramFactsFromConfig(resolveBuildConfig({ engine: { eval: false } })),
+					programClosureCertificate({ kind: "whole-program", entry: sourcePath }, [], []),
+				),
+				afterCoreOptimization(program) {
+					optimized = program;
+				},
+			},
+		);
+		const search = coreOperations(coreFunctionNamed(optimized!, "search")!);
+		expect(
+			search.some(
+				({ opcode, attributes }) => opcode === "binary" && attributes.operator === "==",
+			),
+		).toBe(kept);
+		expect(search.some(({ opcode }) => opcode === "throwIfTdz")).toBe(kept);
 	});
 
 	it("keeps parameter observations when open-world callers may add other kinds", () => {
@@ -602,7 +693,7 @@ describe("whole-program Core value kinds", () => {
 	});
 
 	it.each([false, true])(
-		"joins capped call-target inputs with publication=%s",
+		"treats the callees a capped call target drops as published with publication=%s",
 		(published) => {
 			const program = analysisProgram();
 			const caller = new CoreFunctionBuilder(program, { parameterCount: 1 });
@@ -672,10 +763,9 @@ describe("whole-program Core value kinds", () => {
 				scope: "program",
 			}).kinds;
 
-			const expected = published ? COMPILER_VALUE_KIND_TOP : COMPILER_VALUE_KIND_STRING;
-			expect(kinds.values(callerId).kindMask(result!)).toBe(expected);
+			expect(kinds.values(callerId).kindMask(result!)).toBe(COMPILER_VALUE_KIND_TOP);
 			for (const leaf of leaves) {
-				expect(kinds.summary(leaf).parameterKinds).toEqual([expected]);
+				expect(kinds.summary(leaf).parameterKinds).toEqual([COMPILER_VALUE_KIND_TOP]);
 			}
 		},
 	);
@@ -741,7 +831,7 @@ describe("whole-program Core value kinds", () => {
 			expect(kinds.summary(leaf).parameterKinds).toEqual([COMPILER_VALUE_KIND_TOP]);
 	});
 
-	it("dirties the aggregate without invalidating every function", () => {
+	it("keeps a function no call reaches out of the any-script aggregate", () => {
 		const program = analysisProgram();
 		const wildcard = new CoreFunctionBuilder(program, { parameterCount: 1 });
 		const entry = wildcard.createBlock([{ representation: "boxed" }]);
@@ -805,9 +895,7 @@ describe("whole-program Core value kinds", () => {
 		const initial = manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, {
 			scope: "program",
 		}).kinds;
-		expect(initial.summary(isolated.function).parameterKinds).toEqual([
-			COMPILER_VALUE_KIND_STRING,
-		]);
+		expect(initial.summary(isolated.function).parameterKinds).toEqual([0]);
 
 		const editor = CoreEditor.open(program, isolated.function);
 		editor.replaceInstruction(isolatedValueInstruction!, "createUndefined", []);
@@ -819,10 +907,8 @@ describe("whole-program Core value kinds", () => {
 		expect(updated.statistics).toMatchObject({
 			affectedFunctions: 1,
 			functionsReused: 6,
-			aggregateRecomputations: 1,
+			aggregateRecomputations: 0,
 		});
-		expect(updated.summary(isolated.function).parameterKinds).toEqual([
-			COMPILER_VALUE_KIND_STRING,
-		]);
+		expect(updated.summary(isolated.function).parameterKinds).toEqual([0]);
 	});
 });

@@ -73,6 +73,39 @@ function optional(f, value) {
 }
 log.push(optional(undefined, 5), optional(increment, 5));
 
+// A choice among more functions than the target cap still passes each one its
+// callback, though viaA's only exact caller passes increment.
+function viaA(f, x) {
+	return f(x) + 1;
+}
+function viaB(f, x) {
+	return f(x) + 2;
+}
+function viaC(f, x) {
+	return f(x) + 3;
+}
+function viaD(f, x) {
+	return f(x) + 4;
+}
+function viaE(f, x) {
+	return f(x) + 5;
+}
+const picked = [viaA(increment, 1)];
+for (let index = 0; index < 5; index++) {
+	const via =
+		index === 0
+			? viaA
+			: index === 1
+				? viaB
+				: index === 2
+					? viaC
+					: index === 3
+						? viaD
+						: viaE;
+	picked.push(via((value) => value * 10, index));
+}
+log.push(picked.join(","));
+
 // A helper repeating its callback gets a clone per distinct callback set; each
 // clone is created by its call sites and binds the caller's scope chain.
 let helperCalls = 0;
