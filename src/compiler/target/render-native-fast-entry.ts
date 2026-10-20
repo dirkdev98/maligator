@@ -1,6 +1,7 @@
 import { COMPILER_VALUE_KIND_NUMBER } from "../shared/compiler-value-kinds.ts";
 import { emitTypeofResult } from "./emit-program-image.ts";
 import type { NativeDirectEntryPlan, VmRegisterRepresentation } from "./program-image.ts";
+import { decodeVmValueOperand } from "./runtime-image.ts";
 import type { BytecodeFunction, BytecodeInstruction } from "./runtime-image.ts";
 
 const MAXIMUM_FAST_ENTRY_INSTRUCTIONS = 64;
@@ -12,6 +13,8 @@ export interface NativeFastEntryInput {
 	readonly specialized: boolean;
 	/** The original entry signature, ending in `{`. */
 	readonly signature: string;
+	/** The canonical entry also exports its fast body as `trySymbol` for other fast bodies. */
+	readonly trySymbol: string | undefined;
 	readonly fullSymbol: string;
 	readonly fullArguments: ReadonlyArray<string>;
 	readonly prologue: ReadonlyArray<string>;
@@ -22,16 +25,18 @@ export interface NativeFastEntryInput {
 	/** Non-allocating statements that bind what `capturedLoad` reads. */
 	readonly capturePrologue: ReadonlyArray<string>;
 	readonly capturedLoad: (ownerFunctionIndex: number, index: number) => string;
+	/** The fast body a CALL's proven exact target exports, if any. */
+	readonly calleeTry: (ip: number) => string | undefined;
 	readonly f64Literal: (value: number) => string;
 }
 
 /**
  * A frameless entry for a short loop-free body of side-effect-free reads: it runs the
  * body while every named load hits its cache, every indexed load reads a dense Array
- * element, and every operator stays on Numbers, and otherwise restarts the activation
- * in the full entry. Nothing observable happens before a restart, and nothing can
- * allocate or call, so it needs no frame row, root frame, or safepoint. Undefined
- * when the body needs any of them.
+ * element, every operator stays on Numbers, and every call reaches another such body
+ * that succeeds, and otherwise restarts the activation in the full entry. Nothing
+ * observable happens before a restart, and nothing can allocate, so it needs no frame
+ * row, root frame, or safepoint. Undefined when the body needs any of them.
  */
 export function renderNativeFastEntry(
 	input: NativeFastEntryInput,
@@ -53,6 +58,8 @@ export function renderNativeFastEntry(
 		hasCycle(fn.instructions)
 	)
 		return undefined;
+	const exported = input.trySymbol !== undefined;
+	const result = exported ? undefined : directEntry;
 	const fieldLoads = new Map(
 		directEntry?.fieldParameters?.loads.map((load) => [load.instructionIp, load.field]),
 	);
@@ -61,7 +68,7 @@ export function renderNativeFastEntry(
 	let loadsProperties = false;
 	let loadsCaptures = false;
 	for (const [ip, op] of fn.instructions.entries()) {
-		const line = fastInstruction(op, ip, input, fieldLoads, targets);
+		const line = fastInstruction(op, ip, input, fieldLoads, targets, exported);
 		if (line === undefined) return undefined;
 		if (op.opcode === "LOAD_PROPERTY_STATIC" && !fieldLoads.has(ip))
 			loadsProperties = true;
@@ -74,25 +81,17 @@ export function renderNativeFastEntry(
 		lines.push(`    ${line}`);
 	}
 	if (targets.has(fn.instructions.length)) lines.push(`F${fn.instructions.length}:;`);
-	lines.push(`    ${fastReturn("MAL_VALUE_UNDEFINED", directEntry)}`);
+	lines.push(`    ${fastReturn("MAL_VALUE_UNDEFINED", result, exported)}`);
 
 	const registers = Array.from(
 		{ length: fn.registerCount },
 		(_, register) => `f${register}`,
 	);
-	const guards = [
-		"!mal_vm_leaf_unobserved(vm)",
-		"!mal_vm_leaf_stack_available(vm)",
-		...(directEntry === undefined && fn.hasPrototype
-			? ["!mal_value_is_undefined(new_target)"]
-			: []),
-	];
-	return [
-		input.signature,
+	const fast = [
 		"#pragma STDC FP_CONTRACT OFF",
 		...input.prologue,
 		...(registers.length === 0 ? [] : [`    MalValue ${registers.join(", ")};`]),
-		`    if (${guards.join(" || ")}) goto __full;`,
+		"    if (!mal_vm_leaf_unobserved(vm) || !mal_vm_leaf_stack_available(vm)) goto __full;",
 		...(loadsProperties
 			? [
 					`    MalInlineCache *const __fast_ic = vm->property_cache[${input.functionIndex}].sites;`,
@@ -106,11 +105,37 @@ export function renderNativeFastEntry(
 				: `    ${register} = MAL_VALUE_UNDEFINED;`,
 		),
 		...lines,
+	];
+	const full = `    return ${input.fullSymbol}(${input.fullArguments.join(", ")});`;
+	if (!exported)
+		return [
+			input.signature,
+			...(fn.hasPrototype && directEntry === undefined
+				? ["    if (!mal_value_is_undefined(new_target)) goto __full;"]
+				: []),
+			...fast,
+			"__full:",
+			full,
+			"}",
+		];
+	const linkage = input.signature.startsWith("static ") ? "static " : "";
+	return [
+		`${linkage}__attribute__((no_stack_protector)) __attribute__((aligned(64))) bool ${input.trySymbol}(${FAST_TRY_PARAMETERS}) {`,
+		...fast,
 		"__full:",
-		`    return ${input.fullSymbol}(${input.fullArguments.join(", ")});`,
+		"    return false;",
+		"}",
+		input.signature,
+		"    MalValue __fast_result;",
+		`    if (${fn.hasPrototype ? "mal_value_is_undefined(new_target) && " : ""}${input.trySymbol}(vm, this_value, args, arg_count, env, &__fast_result)) return __fast_result;`,
+		full,
 		"}",
 	];
 }
+
+/** Parameters of an exported fast body; it reports success and writes the result. */
+export const FAST_TRY_PARAMETERS =
+	"MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalEnv *env, MalValue *out";
 
 const EQUALITY_OPERATORS: ReadonlySet<string> = new Set(["===", "!==", "==", "!="]);
 
@@ -187,7 +212,9 @@ function fastParameter(
 function fastReturn(
 	value: string,
 	directEntry: NativeDirectEntryPlan | undefined,
+	exported: boolean,
 ): string {
+	if (exported) return `{ *out = ${value}; return true; }`;
 	switch (directEntry?.resultRepresentation) {
 		case undefined:
 		case "boxed":
@@ -278,7 +305,26 @@ function fastInstruction(
 	input: NativeFastEntryInput,
 	fieldLoads: ReadonlyMap<number, number>,
 	targets: Set<number>,
+	exported: boolean,
 ): string | undefined {
+	const value = (operand: number): string | undefined => {
+		if (operand >= 0) return `f${operand}`;
+		const decoded = decodeVmValueOperand(operand);
+		switch (decoded.kind) {
+			case "undefined":
+				return "MAL_VALUE_UNDEFINED";
+			case "null":
+				return "MAL_VALUE_NULL";
+			case "boolean":
+				return decoded.value ? "MAL_VALUE_TRUE" : "MAL_VALUE_FALSE";
+			case "number":
+				return `mal_ops_number_value(${input.f64Literal(decoded.value)})`;
+			case "string":
+				return input.stringValue(decoded.index);
+			default:
+				return undefined;
+		}
+	};
 	const jump = (target: number): string | undefined => {
 		if (target < 0 || target > input.fn.instructions.length) return undefined;
 		targets.add(target);
@@ -333,8 +379,27 @@ function fastInstruction(
 				? undefined
 				: `if (mal_value_is_truthy(f${op.cond})) ${target}`;
 		}
-		case "RETURN":
-			return fastReturn(`f${op.value}`, input.directEntry);
+		case "RETURN": {
+			const returned = value(op.value);
+			return returned === undefined
+				? undefined
+				: fastReturn(returned, exported ? undefined : input.directEntry, exported);
+		}
+		case "CALL": {
+			const callee = input.calleeTry(ip);
+			const receiver = value(op.thisValue);
+			const args = op.arguments.slice(0, op.argumentCount).map(value);
+			if (
+				callee === undefined ||
+				op.callee < 0 ||
+				receiver === undefined ||
+				args.some((arg) => arg === undefined)
+			)
+				return undefined;
+			const list =
+				args.length === 0 ? "nullptr" : `(const MalValue[]){ ${args.join(", ")} }`;
+			return `if (!${callee}(vm, ${receiver}, ${list}, ${args.length}, mal_value_to_function_object(f${op.callee})->creation_env, &f${op.dst})) goto __full;`;
+		}
 		default:
 			return undefined;
 	}

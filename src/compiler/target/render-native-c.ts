@@ -626,6 +626,8 @@ export interface CompiledFunction extends NativeCallCoverage {
 	source: string;
 	/** Relocatable bodies read their image indices from `<symbol>_link`, defined elsewhere. */
 	link?: ReadonlyArray<NativeLinkSlot>;
+	/** The canonical body's exported frameless fast path, which other fast paths call. */
+	trySymbol?: string;
 	/** Additional native-only ordinary-call symbols emitted beside the canonical body. */
 	directEntries: Array<{
 		emittedInstructions: ReadonlySet<number>;
@@ -1709,6 +1711,7 @@ function emitCompiledVariant(
 	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
 	maxCodeUnits = Infinity,
 	splitPolicy: NativeSplitPolicy = DEFAULT_NATIVE_SPLIT_POLICY,
+	fastTryTargets: ReadonlySet<number> = new Set(),
 ): CompiledFunction | null {
 	// Generators and async functions suspend mid-body: they lower to a resumable C
 	// function (a heap register frame + entry dispatch to the saved resume point)
@@ -2515,6 +2518,18 @@ function emitCompiledVariant(
 			? renderNativeFastEntry({
 					fn,
 					directEntry,
+					// A specialized-only body is omitted after emission, taking its fast path with it.
+					trySymbol:
+						directEntry === undefined && native.specializedOnly !== true
+							? `${symbol}_try`
+							: undefined,
+					calleeTry: (ip) => {
+						const plan = native.instructions[ip];
+						const target = plan?.kind === "call" ? plan.directFunctionIndex : undefined;
+						return target !== undefined && fastTryTargets.has(target)
+							? `mal_compiled_${relocation.stem(target)}${suffix}_try`
+							: undefined;
+					},
 					specialized:
 						worker !== undefined || (nativeContract.literalSwitches?.length ?? 0) > 0,
 					signature,
@@ -2588,6 +2603,11 @@ function emitCompiledVariant(
 		symbol,
 		source: source.join("\n"),
 		...(relocation.enabled ? { link: relocation.link } : {}),
+		...(fastEntry !== undefined &&
+		directEntry === undefined &&
+		native.specializedOnly !== true
+			? { trySymbol: `${symbol}_try` }
+			: {}),
 		profileDecisions,
 		emittedInstructions: body.emittedInstructions,
 		directEntryCalls: body.directEntryCalls,
@@ -2822,6 +2842,7 @@ export function emitCompiledFunction(
 	splitPolicy: NativeSplitPolicy = DEFAULT_NATIVE_SPLIT_POLICY,
 	sortKernelEntries: ReadonlySet<string> = new Set(),
 	reductionEntries: ReadonlySet<string> = new Set(),
+	fastTryTargets: ReadonlySet<number> = new Set(),
 ): CompiledFunction | null {
 	if (native.storage === undefined)
 		throw new Error("Native rendering requires a lowered storage plan");
@@ -2843,6 +2864,7 @@ export function emitCompiledFunction(
 		splitPolicy,
 		sortKernelEntries,
 		reductionEntries,
+		fastTryTargets,
 	);
 }
 
@@ -2873,6 +2895,7 @@ export function createNativeFunctionRenderer(): typeof emitCompiledFunction {
 		splitPolicy: NativeSplitPolicy = DEFAULT_NATIVE_SPLIT_POLICY,
 		sortKernelEntries: ReadonlySet<string> = new Set(),
 		reductionEntries: ReadonlySet<string> = new Set(),
+		fastTryTargets: ReadonlySet<number> = new Set(),
 	): CompiledFunction | null => {
 		if (native.storage === undefined)
 			throw new Error("Native rendering requires a lowered storage plan");
@@ -2905,6 +2928,7 @@ export function createNativeFunctionRenderer(): typeof emitCompiledFunction {
 			splitPolicy,
 			sortKernelEntries,
 			reductionEntries,
+			fastTryTargets,
 		);
 	};
 }
@@ -2927,6 +2951,7 @@ function renderCompiledFunction(
 	splitPolicy: NativeSplitPolicy = DEFAULT_NATIVE_SPLIT_POLICY,
 	sortKernelEntries: ReadonlySet<string> = new Set(),
 	reductionEntries: ReadonlySet<string> = new Set(),
+	fastTryTargets: ReadonlySet<number> = new Set(),
 ): CompiledFunction | null {
 	const fn = native.body;
 	const canonical = emitCompiledVariant(
@@ -2946,6 +2971,7 @@ function renderCompiledFunction(
 		stringConstants,
 		maxCodeUnits,
 		splitPolicy,
+		fastTryTargets,
 	);
 	if (canonical === null) return null;
 	const name = relocatable === false ? index : relocatable.symbolStem;
@@ -2972,6 +2998,7 @@ function renderCompiledFunction(
 			stringConstants,
 			maxCodeUnits,
 			splitPolicy,
+			fastTryTargets,
 		);
 		if (emitted === null) return [];
 		const worker = renderNumericLeaf(nativeVariantContract(native, entry), entry);

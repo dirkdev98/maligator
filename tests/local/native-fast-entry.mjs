@@ -72,6 +72,21 @@ function isLarge(n) {
 	return n > 10;
 }
 
+// Callees large enough to stay calls, so one fast body reaches another.
+function kindOf(node) {
+	const kind = node.kind;
+	if (kind === 1) return node.a + node.b;
+	if (kind === 2) return node.a - node.b;
+	if (kind === 3) return node.a * node.b;
+	if (kind === 4) return node.a / node.b;
+	if (kind === 5) return node.a % node.b;
+	return node.a === node.b ? 0 : -1;
+}
+
+function sumKinds(left, right) {
+	return kindOf(left) + kindOf(right);
+}
+
 function last(stack) {
 	return stack[stack.length - 1];
 }
@@ -180,6 +195,28 @@ for (let round = 0; round < 5; round++) {
 let large = 0;
 for (let n = 0; n < 40; n++) if (isLarge(n)) large++;
 log.push(`large ${large} ${isLarge("11")} ${isLarge(11n)}`);
+
+let kinds = 0;
+const kindNodes = [1, 2, 3, 4, 5, 6].map((kind) => ({ kind, a: kind * 3, b: 2 }));
+for (let round = 0; round < 3000; round++)
+	kinds += sumKinds(kindNodes[round % 6], kindNodes[(round + 1) % 6]);
+const lazyNode = {
+	kind: 1,
+	get a() {
+		log.push("node getter");
+		return 5;
+	},
+	b: 1,
+};
+const valuedNode = { kind: 1, a: valued, b: 1 };
+log.push(
+	`kinds ${kinds} ${sumKinds(kindNodes[0], lazyNode)} ${sumKinds(valuedNode, kindNodes[1])}`,
+);
+try {
+	sumKinds(kindNodes[0], null);
+} catch (error) {
+	log.push(`kinds null ${error.constructor.name}`);
+}
 
 let lastTotal = 0;
 const stacks = [[1, 2, 3], [4], [5, 6]];

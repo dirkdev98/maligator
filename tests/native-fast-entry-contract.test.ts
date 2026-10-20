@@ -52,11 +52,28 @@ function body(
 	};
 }
 
-function fastEntry(fn: BytecodeFunction): ReadonlyArray<string> | undefined {
+const OWN_TRY = "mal_compiled_0_try";
+
+/** Runtime helpers a fast body calls beyond the non-collecting ones and its own fast path. */
+function unexpectedHelpers(lines: ReadonlyArray<string>): ReadonlyArray<string> {
+	const helpers = new Set(
+		[...lines.join("\n").matchAll(/\b(mal_[a-z0-9_]+)\(/g)].map((match) => match[1]!),
+	);
+	return [...helpers]
+		.filter((helper) => helper !== OWN_TRY && !NONCOLLECTING_HELPERS.has(helper))
+		.sort();
+}
+
+function fastEntry(
+	fn: BytecodeFunction,
+	calleeTry: (ip: number) => string | undefined = () => undefined,
+): ReadonlyArray<string> | undefined {
 	return renderNativeFastEntry({
 		fn,
 		directEntry: undefined,
 		specialized: false,
+		trySymbol: OWN_TRY,
+		calleeTry,
 		signature:
 			"MalValue read(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, void *entry_state) {",
 		fullSymbol: "read_full",
@@ -94,12 +111,27 @@ describe("native fast entries", () => {
 	it("call only helpers that cannot collect or run JavaScript", () => {
 		const lines = fastEntry(body(loadCompareReturn));
 		expect(lines).toBeDefined();
-		const helpers = new Set(
-			[...lines!.join("\n").matchAll(/\b(mal_[a-z0-9_]+)\(/g)].map((match) => match[1]!),
-		);
-		expect([...helpers].filter((helper) => !NONCOLLECTING_HELPERS.has(helper))).toEqual(
-			[],
-		);
+		expect(unexpectedHelpers(lines!)).toEqual([]);
+	});
+
+	it("reach another fast body only through its exported fast path", () => {
+		const call: ReadonlyArray<BytecodeInstruction> = [
+			{
+				opcode: "CALL",
+				dst: 2,
+				callee: 1,
+				thisValue: -1,
+				argumentCount: 1,
+				arguments: [0],
+			} as unknown as BytecodeInstruction,
+			{ opcode: "RETURN", value: 2 },
+		];
+		expect(fastEntry(body(call))).toBeUndefined();
+		const lines = fastEntry(body(call), () => "mal_compiled_7_try");
+		expect(unexpectedHelpers(lines!)).toEqual([
+			"mal_compiled_7_try",
+			"mal_value_to_function_object",
+		]);
 	});
 
 	it("accept a backward jump to a merge block that does not loop", () => {

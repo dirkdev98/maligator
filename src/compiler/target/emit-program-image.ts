@@ -18,6 +18,7 @@ import {
 	numericSortKernelDemand,
 } from "./render-native-c.ts";
 import type { CompiledFunction } from "./render-native-c.ts";
+import { FAST_TRY_PARAMETERS } from "./render-native-fast-entry.ts";
 import {
 	compressPositions,
 	computeArgumentRetentionLimit,
@@ -628,6 +629,8 @@ interface TranslationUnitPartition {
 
 interface NativeCompilationAvailability {
 	directCompiledTargets: Set<number>;
+	/** Functions whose canonical body exports a frameless fast path. */
+	fastTryTargets: Set<number>;
 	directCompiledEntries: Map<
 		string,
 		ProgramImage["native"]["functions"][number]["directEntries"][number] & {
@@ -692,7 +695,10 @@ function nativeCompilationAvailability(
 			}
 		}
 	}
-	return { directCompiledTargets, directCompiledEntries };
+	const fastTryTargets = new Set<number>();
+	for (const target of directCompiledTargets)
+		if (compiled[target]?.trySymbol !== undefined) fastTryTargets.add(target);
+	return { directCompiledTargets, fastTryTargets, directCompiledEntries };
 }
 
 function omitUnreachableCanonicalBodies(
@@ -755,6 +761,7 @@ function compiledAvailabilityMatches(
 		if (a === null || b === null) return false;
 		if (
 			(a.source.length === 0) !== (b.source.length === 0) ||
+			(a.trySymbol === undefined) !== (b.trySymbol === undefined) ||
 			a.directEntries.length !== b.directEntries.length
 		)
 			return false;
@@ -909,6 +916,7 @@ function emitNativeFunctions(
 			options.nativeFunctionSplit,
 			sortKernelEntries,
 			reductionEntries,
+			availability.fastTryTargets,
 		);
 		if (
 			emitted === null ||
@@ -935,7 +943,11 @@ function emitNativeFunctions(
 		const referenced = references[functionIndex]!;
 		let key = "";
 		for (const target of referenced.targets)
-			key += availability.directCompiledTargets.has(target) ? "1" : "0";
+			key += availability.fastTryTargets.has(target)
+				? "2"
+				: availability.directCompiledTargets.has(target)
+					? "1"
+					: "0";
 		for (const entry of referenced.entries)
 			key += availability.directCompiledEntries.has(entry) ? "1" : "0";
 		const previous = cached[functionIndex];
@@ -947,6 +959,7 @@ function emitNativeFunctions(
 
 	const unavailable: NativeCompilationAvailability = {
 		directCompiledTargets: new Set(),
+		fastTryTargets: new Set(),
 		directCompiledEntries: new Map(),
 	};
 	let compiled = image.runtime.functions.map((_fn, index) => emit(index, unavailable));
@@ -1500,6 +1513,14 @@ function compiledFunctionDeclarations(
 							symbol: fn.symbol,
 							source: `MalValue ${fn.symbol}${COMPILED_FUNCTION_DECLARATION};`,
 						},
+						...(fn.trySymbol === undefined
+							? []
+							: [
+									{
+										symbol: fn.trySymbol,
+										source: `bool ${fn.trySymbol}(${FAST_TRY_PARAMETERS});`,
+									},
+								]),
 					],
 		),
 		...compiled.flatMap((fn) =>
