@@ -1937,6 +1937,35 @@ function callbackSpecializationScope(
 	return scope;
 }
 
+const OMITTED_PARAMETER_COMPARISONS: ReadonlySet<string> = new Set([
+	"===",
+	"!==",
+	"==",
+	"!=",
+]);
+const OMITTED_PARAMETER_CLONE_INSTRUCTIONS = 48;
+
+/** The parameter decides a branch or comparison that an undefined value would fold. */
+function omittedParameterTested(fn: CoreFunctionStore, parameter: number): boolean {
+	const value = fn.kernel.functionParameter(parameter);
+	for (let use = fn.kernel.valueFirstUse(value); use >= 0; use = fn.kernel.useNext(use)) {
+		if (fn.kernel.useLive(use) === 0) continue;
+		const instruction = coreInstructionId(fn.kernel.useInstruction(use));
+		const kind = fn.instructionKind(instruction);
+		if (kind === "branch") return true;
+		if (kind !== "operation") continue;
+		const opcode = fn.instructionOpcodeName(instruction);
+		const operator = fn.instructionAttributes(instruction).operator;
+		if (
+			opcode === "typeofCompare" ||
+			(opcode === "binary" && OMITTED_PARAMETER_COMPARISONS.has(operator as string)) ||
+			(opcode === "unary" && (operator === "!" || operator === "typeof"))
+		)
+			return true;
+	}
+	return false;
+}
+
 /** The consumer calls the parameter inside a loop, or forwards it to an exact callee that does. */
 function callbackUseRepeats(
 	program: CoreProgram,
@@ -2045,6 +2074,17 @@ function specializeCoreCallbackArguments(
 			const closures: Array<CoreFunctionId> = [];
 			for (let parameter = 0; parameter < targetFn.parameterCount; parameter++) {
 				const argument = site.arguments[parameter];
+				// Inside a clone, a helper that only omitting sites call sees the omitted
+				// parameter as undefined, so the loop it guards folds and the helper inlines.
+				if (
+					parameter >= site.arguments.length &&
+					clones.has(caller) &&
+					!clones.has(target) &&
+					targetFn.liveStorageCounts().instructions <=
+						OMITTED_PARAMETER_CLONE_INSTRUCTIONS &&
+					omittedParameterTested(targetFn, parameter)
+				)
+					held.push(`${parameter}:omitted`);
 				if (
 					argument === undefined ||
 					escapes?.[parameter] !== "invoked" ||

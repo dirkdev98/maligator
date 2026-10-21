@@ -42,7 +42,45 @@ const values = globalThis.values ?? [1, 5, 9];
 console.log(each(values, weight), each(values, shift), each(values, weight));
 `;
 
+const omittedSource = `
+function some(array, predicate) {
+	if (array !== undefined) {
+		if (predicate !== undefined) {
+			for (let index = 0; index < array.length; index++) if (predicate(array[index])) return true;
+		} else {
+			return array.length > 0;
+		}
+	}
+	return false;
+}
+function find(values, key, select) {
+	if (!some(values)) return -1;
+	for (let index = 0; index < values.length; index++) if (select(values[index]) === key) return index;
+	return -1;
+}
+function id(value) {
+	return value.id;
+}
+const values = (globalThis.values ?? [1, 2, 3]).map((id) => ({ id }));
+let found = 0;
+for (let round = 0; round < 1000; round++) found += find(values, round % 4, id);
+console.log(found, some(values, (value) => value.id > 2));
+`;
+
 describe("callback specialization", () => {
+	it("folds a helper's omitted argument inside a clone so the helper inlines", () => {
+		const image = compile(omittedSource);
+		const calls = (index: number) =>
+			image.native.functions[index]!.body.instructions.filter(
+				(instruction) => instruction.opcode === "CALL",
+			).length;
+		const clones = functionsNamed(image, "find").filter(
+			(index) => index > functionsNamed(image, "find")[0]!,
+		);
+		expect(clones.length).toBeGreaterThan(0);
+		expect(clones.map(calls)).toContain(0);
+	});
+
 	it("gives a helper one clone per distinct callback it repeats", () => {
 		const image = compile(source);
 		expect(functionsNamed(image, "each").length).toBe(3);
