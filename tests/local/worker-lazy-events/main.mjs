@@ -162,6 +162,9 @@ async function unobservedPortCleanup() {
 			(await bounded(delivered, "unobserved transfer")) === "unused transfer",
 			"Node-only transfer arrives",
 		);
+		// This continuation runs inside the delivering native call, whose frames still hold
+		// the port; a conservative stack scan only stops seeing it once that turn ends.
+		await new Promise((resolve) => setTimeout(resolve, 0));
 		globalThis.__mal_collect_garbage();
 		globalThis.__mal_collect_garbage();
 		await bounded(closed, "unobserved transferred port cleanup");
