@@ -81,7 +81,9 @@ describe("native typed stack fields", () => {
 			).toBe(true);
 		}
 		const output = emitCompiledFunction(native, native.functionIndex, "", false)!.source;
-		expect(output).toContain(`MalValue __gc_slots[${native.storage!.rootSlotCount + 2}];`);
+		expect(output).toContain(
+			`MalValue __gc_slots[${native.storage!.rootSlotCount + 2}];`,
+		);
 		for (const slot of [0, 3])
 			expect(output).toContain(`__stack_object_${plan.allocationIp}_slot_${slot}`);
 		for (const slot of [1, 2])
