@@ -65,7 +65,59 @@ function captures(image: ProgramImage): Array<Array<number> | undefined> {
 	return image.runtime.functions.map((fn) => fn.closureCaptureOwners);
 }
 
+function scopedLayoutImage(
+	functions: Array<{
+		readonly capturedCount: number;
+		readonly instructions: Array<BytecodeInstruction>;
+	}>,
+): ProgramImage {
+	const image = layoutImage(functions.map(({ instructions }) => instructions));
+	return {
+		...image,
+		runtime: {
+			...image.runtime,
+			functions: image.runtime.functions.map((fn, index) => ({
+				...fn,
+				capturedCount: functions[index]!.capturedCount,
+			})),
+		},
+	};
+}
+
 describe("external closure scope requirements", () => {
+	it.each([
+		{ middle: 1, layout: [0, 1, 2] },
+		{ middle: 0, layout: [0, 2] },
+	])(
+		"names a skipped scope with an environment ($middle captured) so the creator's chain holds",
+		({ middle, layout }) => {
+			const image = scopedLayoutImage([
+				{
+					capturedCount: 1,
+					instructions: [{ opcode: "CREATE_FUNCTION", dst: 0, functionIndex: 1 }],
+				},
+				{
+					capturedCount: middle,
+					instructions: [{ opcode: "CREATE_FUNCTION", dst: 0, functionIndex: 2 }],
+				},
+				{
+					capturedCount: 1,
+					instructions: [{ opcode: "CREATE_FUNCTION", dst: 0, functionIndex: 3 }],
+				},
+				{
+					capturedCount: 0,
+					instructions: [
+						{ opcode: "LOAD_CAPTURED", dst: 0, ownerFunctionIndex: 0, index: 0 },
+						{ opcode: "STORE_CAPTURED", src: 0, ownerFunctionIndex: 2, index: 0 },
+					],
+				},
+			]);
+			expect(
+				captures(analyzeClosureCaptures(image, programAnalysisContext()))[3],
+			).toEqual(layout);
+		},
+	);
+
 	it("forwards ancestor state through closures that only create another closure", () => {
 		const image = layoutImage([
 			[{ opcode: "CREATE_FUNCTION", dst: 0, functionIndex: 1 }],

@@ -55,9 +55,43 @@ export function analyzeClosureCaptures(
 	}
 	// Propagating individual requirements visits each function/owner pair once,
 	// including recursive creation graphs and scopes forwarded through many levels.
-	for (let index = 0; index < pending.length; index++) {
-		const { functionIndex, owner } = pending[index]!;
-		for (const creator of creators[functionIndex]!) retain(creator, owner);
+	let propagated = 0;
+	const propagate = () => {
+		for (; propagated < pending.length; propagated++) {
+			const { functionIndex, owner } = pending[propagated]!;
+			for (const creator of creators[functionIndex]!) retain(creator, owner);
+		}
+	};
+	propagate();
+	// A layout that skips a scope its creator's chain holds cannot reuse that chain, so
+	// closures fall back to capture vectors. Every scope a creator's environment links
+	// to stays reachable through it anyway, so naming the skipped scopes costs nothing.
+	const creatorOf = (index: number): number | undefined =>
+		creators[index]!.size === 1 ? [...creators[index]!][0] : undefined;
+	const fillGaps = (index: number): boolean => {
+		const owners = captures[index]!;
+		if (owners.size < 2) return false;
+		const missing = new Set(owners);
+		const gaps: Array<number> = [];
+		for (
+			let ancestor = creatorOf(index);
+			ancestor !== undefined && missing.size > 0;
+			ancestor = creatorOf(ancestor)
+		) {
+			if (localOwners[ancestor]!.size !== 1) return false;
+			if (!missing.delete(ancestor) && functions[ancestor]!.capturedCount > 0)
+				gaps.push(ancestor);
+		}
+		if (missing.size !== 0) return false;
+		const before = owners.size;
+		for (const gap of gaps) retain(index, gap);
+		return owners.size !== before;
+	};
+	for (let round = 0, changed = true; changed && round < 4; round++) {
+		changed = false;
+		for (let index = 0; index < functions.length; index++)
+			if (fillGaps(index)) changed = true;
+		propagate();
 	}
 	return {
 		...image,
