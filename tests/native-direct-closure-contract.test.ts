@@ -98,7 +98,52 @@ function check(values, report) {
 console.log(check(globalThis.values ?? [1, -5, 9, 4], true));
 `;
 
+const sharedLayoutSource = `
+const run = (() => {
+	const scale = 3;
+	function outer(seed) {
+		const offset = seed * 2;
+		function checker(limit) {
+			const pending = [];
+			function down(value) {
+				return value <= 0 ? offset + pending.length + scale : down(value - 1) + 1;
+			}
+			function across(value) {
+				return value <= 0 ? offset - pending.length + scale : across(value - 2) + down(1);
+			}
+			let total = 0;
+			for (let index = 0; index < limit; index++) total += down(index) + across(index);
+			pending.push(total);
+			return total;
+		}
+		return checker;
+	}
+	return (rounds) => {
+		let sum = 0;
+		for (let round = 0; round < rounds; round++) sum += outer(round)(4);
+		return sum;
+	};
+})();
+console.log(run(1000));
+`;
+
 describe("native direct closures", () => {
+	it("share one chain test among the closures an activation creates with one layout", () => {
+		const image = compile(sharedLayoutSource);
+		const down = functionNamed(image, "down");
+		const across = functionNamed(image, "across");
+		const creates = (body: string, target: number) =>
+			body.includes(`mal_vm_closure_chain_has_owners(vm, ${target}, env)`);
+		const bodies = emitProgramImage(image)
+			.split(/\n(?=__attribute__|static __attribute__)/)
+			.filter((body) => creates(body, down) && creates(body, across));
+		expect(bodies.length).toBeGreaterThan(0);
+		for (const body of bodies)
+			expect(body.match(/i8 __closure_chain_\d+ = -1;/g)).toEqual([
+				"i8 __closure_chain_0 = -1;",
+			]);
+	});
+
 	it("create a nested function whose value escapes only where a read lets it escape", () => {
 		const original = compile(escapingSource);
 		for (const image of [

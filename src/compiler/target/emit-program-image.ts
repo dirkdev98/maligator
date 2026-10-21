@@ -721,8 +721,12 @@ function nativeDirectClosureSites(
 								? { kind: "owner" }
 								: { kind: "ancestor", owner: layout[0]! }
 							: layout[layout.length - 1] === owner
-								? { kind: "chain" }
-								: { kind: "outer-chain", owner: layout[layout.length - 1]! };
+								? { kind: "chain", layout: layout.join(",") }
+								: {
+										kind: "outer-chain",
+										owner: layout[layout.length - 1]!,
+										layout: layout.join(","),
+									};
 		sites.set(key, {
 			target,
 			environment,

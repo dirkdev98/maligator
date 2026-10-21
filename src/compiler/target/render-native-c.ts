@@ -392,8 +392,11 @@ function captureOwnerName(
  * left the callee empty.
  */
 export type NativeDirectClosureEnvironment =
-	| { readonly kind: "scope" | "none" | "owner" | "chain" }
-	| { readonly kind: "ancestor" | "outer-chain"; readonly owner: number };
+	| { readonly kind: "scope" | "none" | "owner" }
+	| { readonly kind: "ancestor"; readonly owner: number }
+	/** `layout` names the owners, so closures that share it share their chain test. */
+	| { readonly kind: "chain"; readonly layout: string }
+	| { readonly kind: "outer-chain"; readonly owner: number; readonly layout: string };
 
 /** Direct closure plans are per creating function: each creator decides its own marker. */
 export function nativeDirectClosureKey(target: number, creator: number): string {
@@ -435,6 +438,42 @@ function directClosureEnvironment(
 		case "outer-chain":
 			return `(mal_value_is_empty(${callee}) ? mal_vm_capture_owner_at(${scope}, ${relocation.ownerFunctionIndex(environment.owner)}, 0) : mal_value_to_function_object(${callee})->creation_env)`;
 	}
+}
+
+/**
+ * A chain test reads only the closure's owner layout and the scope it starts from,
+ * and an activation that elides closures never changes its scope, so closures with
+ * equal layouts share one per-activation answer, declared unknown before the body.
+ */
+function nativeClosureChainTests(
+	fn: BytecodeFunction,
+	nativeInstructions: ReadonlyArray<NativeInstructionPlan | undefined>,
+	directClosures: ReadonlyMap<string, NativeDirectClosureEnvironment>,
+	functionIndex: number | undefined,
+	declarations: Array<string>,
+): ReadonlyMap<number, string> {
+	const tests = new Map<number, string>();
+	const shared = new Map<string, string>();
+	for (const [ip, instruction] of fn.instructions.entries()) {
+		if (
+			instruction.opcode !== "CREATE_FUNCTION" ||
+			nativeInstructions[ip]?.kind !== "direct-closure"
+		)
+			continue;
+		const closure = directClosures.get(
+			nativeDirectClosureKey(instruction.functionIndex, functionIndex ?? -1),
+		);
+		if (closure?.kind !== "chain" && closure?.kind !== "outer-chain") continue;
+		const key = `${closure.layout}@${closure.kind === "outer-chain" ? closure.owner : ""}`;
+		let name = shared.get(key);
+		if (name === undefined) {
+			name = `__closure_chain_${shared.size}`;
+			shared.set(key, name);
+			declarations.push(`i8 ${name} = -1;`);
+		}
+		tests.set(ip, name);
+	}
+	return tests;
 }
 
 function initializeFixedCaptureOwners(
@@ -5315,6 +5354,13 @@ function emitBody(
 		polymorphicMethodLoad: false,
 		stringConstantRegisters,
 		relocation,
+		closureChainTests: nativeClosureChainTests(
+			fn,
+			nativeInstructions,
+			directClosures,
+			functionIndex,
+			lines,
+		),
 	};
 	for (const plan of fastPathPlans.mapEntries)
 		lines.push(`u32 __map_entry_${plan.getIp} = 0;`);
@@ -6262,6 +6308,8 @@ interface NativeInstructionContext {
 	/** The rendered function, which owns the scope its direct closures are created in. */
 	readonly functionIndex?: number;
 	readonly directClosures?: ReadonlyMap<string, NativeDirectClosureEnvironment>;
+	/** The activation's memo of each chain test, by creation ip; equal layouts share one. */
+	readonly closureChainTests?: ReadonlyMap<number, string>;
 	readonly captureShadow?: NativeCaptureShadow;
 	readonly fixedCaptureOwners?: ReadonlySet<number>;
 	readonly requiredCaptureOwners?: ReadonlySet<number>;
@@ -8102,13 +8150,20 @@ function emitInstruction(
 				closure?.kind === "outer-chain"
 					? `mal_vm_capture_owner_at(env, ${relocation.ownerFunctionIndex(closure.owner)}, 0)`
 					: "env";
+			if (closure?.kind !== "chain" && closure?.kind !== "outer-chain")
+				return [
+					...ensureCaptureEnvironment(context.captureShadow, ip),
+					closure === undefined
+						? `r${instruction.dst} = ${create};`
+						: `r${instruction.dst} = MAL_VALUE_EMPTY;`,
+				];
+			const chainTest = `mal_vm_closure_chain_has_owners(vm, ${relocation.functionIndex(instruction.functionIndex)}, ${start})`;
+			const memo = context.closureChainTests?.get(ip);
 			return [
 				...ensureCaptureEnvironment(context.captureShadow, ip),
-				closure === undefined
-					? `r${instruction.dst} = ${create};`
-					: closure.kind === "chain" || closure.kind === "outer-chain"
-						? `r${instruction.dst} = mal_vm_closure_chain_has_owners(vm, ${relocation.functionIndex(instruction.functionIndex)}, ${start}) ? MAL_VALUE_EMPTY : ${create};`
-						: `r${instruction.dst} = MAL_VALUE_EMPTY;`,
+				memo === undefined
+					? `r${instruction.dst} = ${chainTest} ? MAL_VALUE_EMPTY : ${create};`
+					: `r${instruction.dst} = (${memo} < 0 ? (${memo} = (i8) ${chainTest}) : ${memo}) ? MAL_VALUE_EMPTY : ${create};`,
 			];
 		}
 		case "DEFINE_PROPERTY": {
