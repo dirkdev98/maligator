@@ -4077,17 +4077,13 @@ describe("native update-expression representation", () => {
 		expect(output).toMatch(/MalValue __direct_value_\d+ = mal_compiled_1\(vm,/);
 	});
 
-	it("emits guarded Function.prototype.call flattening with a shifted exact target", () => {
+	it("enters a Function.prototype.call target's direct entry once the loaded call checks out", () => {
 		const output = emitLocked(`
 			const target = function target(value) { "use strict"; return this === null ? value : 0; };
 			globalThis.result = target.call(null, 1);
 		`);
-		expect(output).toMatch(
-			/mal_vm_call_function_call_direct_compiled\(vm, &__call_caches\[\d+\], 1, mal_compiled_1,/,
-		);
-		expect(output).not.toMatch(
-			/mal_vm_call_function_call_direct_compiled\([^\n]+\);[\s\S]{0,80}mal_vm_call_cached/,
-		);
+		expect(output).toContain("vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE_CALL]");
+		expect(output).toMatch(/mal_direct_1_0\(vm, /);
 	});
 
 	it("flattens literal Reflect argument lists for script calls and construction", () => {
