@@ -769,11 +769,11 @@
 	},
 	{
 		"file": "vm.c",
-		"sha256": "721a7510d0673d3037bdf6dc4ded576914b93ac36dacca0dfebbc63458ae7392"
+		"sha256": "832353690f5b47007606d1bdd0acc0703607352868486b7f277cdc0833693a59"
 	},
 	{
 		"file": "vm.h",
-		"sha256": "c34e7807e285f721f5f84c2de6864e254ad0b4a96366bf5adeb837e1adddcff5"
+		"sha256": "0d2a8cb241e293908142fbf367c4863efe69d91bfe671b10a3ff7d6f7731ec1c"
 	},
 	{
 		"file": "vm_ops.c",
@@ -781,6 +781,6 @@
 	},
 	{
 		"file": "vm_ops.h",
-		"sha256": "7034ffc99c0354ddda65f650b5668f2e8166153e199c3413ad35fe6cda591a46"
+		"sha256": "952ee290addd7bf15f7922517b10101f57be0fac7c0309264f2ef174a9826b91"
 	}
 ]

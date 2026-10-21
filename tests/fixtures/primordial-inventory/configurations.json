@@ -6,11 +6,11 @@
 			"platform": "darwin",
 			"arch": "arm64",
 			"source": {
-				"revision": "43a7bb9372c6e5070dcb27453d5138fcd9fff536",
-				"digest": "a43e08928f487aa6ea202716adf4e31d872a7cdfeb6c2623aeec5368ae4ee40a",
+				"revision": "94dea4c4a09f072c5de9afe901c9fe4cf423634e",
+				"digest": "37184872ea42f3dfe443a1a70a5313d46fb9897938b6872f59a7f6efea4e1205",
 				"dirty": false,
-				"files": 3761,
-				"installerSha256": "9e73bdc139476c957a0cc2c3c3eccb29ee1226ae1c6b152cdeae93ba00612960"
+				"files": 3769,
+				"installerSha256": "a48ce90934f628ddd9408a2c9990bfc112c1278529285d701f497b8fef4e7b4a"
 			},
 			"modes": [
 				{
@@ -455,11 +455,11 @@
 			"platform": "linux",
 			"arch": "x64",
 			"source": {
-				"revision": "43a7bb9372c6e5070dcb27453d5138fcd9fff536",
-				"digest": "a43e08928f487aa6ea202716adf4e31d872a7cdfeb6c2623aeec5368ae4ee40a",
+				"revision": "94dea4c4a09f072c5de9afe901c9fe4cf423634e",
+				"digest": "37184872ea42f3dfe443a1a70a5313d46fb9897938b6872f59a7f6efea4e1205",
 				"dirty": false,
-				"files": 3761,
-				"installerSha256": "9e73bdc139476c957a0cc2c3c3eccb29ee1226ae1c6b152cdeae93ba00612960"
+				"files": 3769,
+				"installerSha256": "a48ce90934f628ddd9408a2c9990bfc112c1278529285d701f497b8fef4e7b4a"
 			},
 			"modes": [
 				{
