@@ -288,6 +288,8 @@ int main(int argc, char **argv) {
     return 1;
 #endif
     mal_gc_test_worker_limit_hook = no_workers;
+    // Every value here is rooted explicitly; stale C locals must not retain cells.
+    mal_gc_test_precise_stack_roots = true;
     MalVm vm;
     mal_vm_init(&vm, &mal_runtime_image);
     bool satb = argc == 2 && strcmp(argv[1], "satb") == 0;
