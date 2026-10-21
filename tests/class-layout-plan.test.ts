@@ -80,3 +80,26 @@ test("method bodies guard their receiver's fields and methods, constructors do n
 	expect(roundTripped.native.classLayouts).toEqual(image.native.classLayouts);
 	expect(classLayoutSites(roundTripped)).toEqual(sites);
 });
+
+test("a name that plain objects own as data keeps its guard only where it is called", () => {
+	const image = compile(`
+		class Kernel {
+			#ops = [1, 2];
+			opcode(index) { return this.#ops[index]; }
+		}
+		const columns = { opcode: [3, 4] };
+		function read(kernel, index) { return kernel.opcode(index) + columns.opcode[index]; }
+		globalThis.total = read(new Kernel(), 1);
+	`);
+	const name = (index: number) =>
+		String.fromCharCode(...(image.runtime.stringConstants[index] ?? []));
+	const read = image.native.functions.find(
+		(fn) => name(fn.body.nameStringIndex) === "read",
+	)!;
+	const sites = read.instructions.flatMap((plan, ip) =>
+		plan?.kind === "class-layout"
+			? [`${read.body.instructions[ip]!.opcode}:${plan.site.kind}`]
+			: [],
+	);
+	expect(sites).toEqual(["LOAD_PROPERTY_STATIC:method"]);
+});

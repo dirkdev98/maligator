@@ -34,17 +34,56 @@ interface PlannedLayout {
 	readonly methods: ReadonlyMap<number, number>;
 }
 
+function rootValue(fn: CoreFunctionStore, value: CoreValueId): CoreValueId {
+	for (let depth = 0; depth < 16; depth++) {
+		if (fn.kernel.valueDefinitionKind(value) !== 1) return value;
+		const instruction = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
+		if (fn.instructionOpcodeName(instruction) !== "move") return value;
+		value = fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction));
+	}
+	return value;
+}
+
 function rootDefinition(
 	fn: CoreFunctionStore,
 	value: CoreValueId,
 ): CoreInstructionId | undefined {
-	for (let depth = 0; depth < 16; depth++) {
-		if (fn.kernel.valueDefinitionKind(value) !== 1) return undefined;
-		const instruction = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
-		if (fn.instructionOpcodeName(instruction) !== "move") return instruction;
-		value = fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction));
+	const root = rootValue(fn, value);
+	return fn.kernel.valueDefinitionKind(root) === 1
+		? coreInstructionId(fn.kernel.valueDefinitionOwner(root))
+		: undefined;
+}
+
+function calledOnReceiver(fn: CoreFunctionStore, load: CoreInstructionId): boolean {
+	if (fn.kernel.instructionResultCount(load) !== 1) return false;
+	const receiver = rootValue(
+		fn,
+		fn.kernel.operandAt(fn.kernel.instructionOperandStart(load)),
+	);
+	const method = fn.kernel.resultAt(fn.kernel.instructionResultStart(load));
+	let calls = 0;
+	for (
+		let use = fn.kernel.valueFirstUse(method);
+		use >= 0;
+		use = fn.kernel.useNext(use)
+	) {
+		if (fn.kernel.useLive(use) === 0) continue;
+		const user = fn.kernel.useInstruction(use);
+		if (fn.instructionKind(user) !== "operation") return false;
+		// Dispatch guards only compare the callee's identity.
+		if (fn.instructionOpcodeName(user) === "guardFunctionIndex") continue;
+		const transfer = fn.registry.byId(fn.instructionOpcode(user)).callTransfer;
+		const start = fn.kernel.instructionOperandStart(user);
+		if (
+			transfer?.invocation !== "call" ||
+			transfer.receiverOperand === undefined ||
+			fn.kernel.operandAt(start + transfer.calleeOperand) !== method ||
+			rootValue(fn, fn.kernel.operandAt(start + transfer.receiverOperand)) !== receiver
+		)
+			return false;
+		calls++;
 	}
-	return undefined;
+	return calls > 0;
 }
 
 /**
@@ -146,8 +185,13 @@ export function planCoreClassLayouts(
 				receiver !== undefined &&
 				fn.instructionOpcodeName(receiver) === "loadThis";
 			// Objects that own the name as data never match a class layout, so a guess by
-			// name would only add a guard to their sites.
-			if (!own && name !== undefined && index.ordinaryKeys.has(name)) continue;
+			// name would only add a guard to their reads; a method call keeps the guess.
+			const guessesData = !own && name !== undefined && index.ordinaryKeys.has(name);
+			const methodCall =
+				guessesData &&
+				opcode === "loadPropertyStatic" &&
+				calledOnReceiver(fn, instruction);
+			if (guessesData && !methodCall) continue;
 			let result: CompilerClassLayoutSite | undefined;
 			if (opcode === "loadPropertyStatic") {
 				const methods = site(own ? family : index.byMethodName.get(name!), (layout) =>
@@ -155,7 +199,7 @@ export function planCoreClassLayouts(
 				);
 				if (methods !== undefined) result = { kind: "method", candidates: methods };
 			}
-			if (result === undefined) {
+			if (result === undefined && !methodCall) {
 				const slots = site(own ? family : index.byKey.get(keyId), (layout) =>
 					layout.slots.get(keyId),
 				);
