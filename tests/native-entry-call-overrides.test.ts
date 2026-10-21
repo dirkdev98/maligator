@@ -172,7 +172,7 @@ describe("native entry call overrides", () => {
 			expect(source).not.toContain("__private_r2 = __gc_slots[");
 			expect(source).toContain("mal_vm_call_cached(vm,");
 			if (available) expect(source).toContain("mal_direct_1_0(");
-			else expect(source).toContain("mal_vm_call_exact_script_compiled_callback(");
+			else expect(source).toMatch(/__guarded_value_\d+_\d+ = mal_compiled_1\(vm,/);
 		},
 	);
 	it.each([
