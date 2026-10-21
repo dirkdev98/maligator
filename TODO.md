@@ -527,8 +527,11 @@ iterator cursor is not, by itself, permission to delete its language object.
 - [ ] Finish specializing higher-order helpers. TypeScript's binarySearchKey clone
       now inlines getTypeId and compareComparableValues, but it is still the
       hottest TypeScript function at about 7%, and `some(array)` at its entry stays
-      a call because its predicate loop blocks inlining; a clone for an omitted
-      predicate would fold to the length test.
+      a call because its predicate loop blocks inlining. Cloning small looping
+      helpers for sites that omit a tested argument folds that loop and inlines
+      the clone: the TypeScript check ran 0.9% fewer cycles, but prettier 1.2% more,
+      with its bundled TypeScript scanner slower and more table lookups. Find what
+      the clones cost prettier before retrying.
 - [ ] Narrow the remaining class accessor gap. Loop sites now probe for a
       uniquely named class getter or setter and inline it behind a function-index
       guard: the `#celsius` getter/setter pair takes 33 ms for 5M iterations
