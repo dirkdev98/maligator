@@ -24,15 +24,26 @@ function ok(name, cond) {
 	}
 }
 
-// --- Plain ephemeron death: entry with an unreachable key. ---
+// Compiled frames are scanned conservatively, so a stale stack word can still pin the
+// last few cells a frame touched. Dead entries are built in bulk and most must go: a
+// fixpoint that treated values as strong would reclaim none of them.
+const DEAD_ENTRIES = 32;
+function reclaimedEntries(refs) {
+	return refs.filter(
+		([key, value]) => key.deref() === undefined && value.deref() === undefined,
+	).length;
+}
+
+// --- Plain ephemeron death: entries with unreachable keys. ---
 const wmPlain = new WeakMap();
-let plainKeyRef, plainValRef;
+const plainRefs = [];
 function buildPlain() {
-	let deadKey = {};
-	let bigVal = { id: "eph-val", big: new Array(2000).fill(7) };
-	wmPlain.set(deadKey, bigVal);
-	plainKeyRef = new WeakRef(deadKey);
-	plainValRef = new WeakRef(bigVal);
+	for (let index = 0; index < DEAD_ENTRIES; index++) {
+		let deadKey = {};
+		let bigVal = { id: "eph-val", big: new Array(2000).fill(7) };
+		wmPlain.set(deadKey, bigVal);
+		plainRefs.push([new WeakRef(deadKey), new WeakRef(bigVal)]);
+	}
 }
 
 // --- Chained ephemeron: wmA[k1] = k2, wmB[k2] = marker. Only k1 is held. ---
@@ -54,13 +65,14 @@ function buildChain() {
 //     correct fixpoint reclaims both; treating the value as unconditionally strong
 //     would leak k (and v) forever. ---
 const wmCycle = new WeakMap();
-let cycKeyRef, cycValRef;
+const cycleRefs = [];
 function buildKeyInOwnValue() {
-	let k = { id: "self-key" };
-	let v = { id: "self-val", backref: k, big: new Array(1000).fill(5) };
-	wmCycle.set(k, v);
-	cycKeyRef = new WeakRef(k);
-	cycValRef = new WeakRef(v);
+	for (let index = 0; index < DEAD_ENTRIES; index++) {
+		let k = { id: "self-key" };
+		let v = { id: "self-val", backref: k, big: new Array(1000).fill(5) };
+		wmCycle.set(k, v);
+		cycleRefs.push([new WeakRef(k), new WeakRef(v)]);
+	}
 }
 
 const turns = [
@@ -89,10 +101,8 @@ const turns = [
 	// Turn 2: the dead entries' targets are reclaimed. Deref confirms both the key
 	// and the value went away in each dead case — no ephemeron leak.
 	function verify() {
-		ok("plain-dead-key-reclaimed", plainKeyRef.deref() === undefined);
-		ok("plain-value-reclaimed", plainValRef.deref() === undefined);
-		ok("keyinvalue-key-reclaimed", cycKeyRef.deref() === undefined);
-		ok("keyinvalue-value-reclaimed", cycValRef.deref() === undefined);
+		ok("plain-dead-entries-reclaimed", reclaimedEntries(plainRefs) >= DEAD_ENTRIES / 2);
+		ok("keyinvalue-entries-reclaimed", reclaimedEntries(cycleRefs) >= DEAD_ENTRIES / 2);
 		// Chain still alive after another collection (k1 still held).
 		gc();
 		ok(
