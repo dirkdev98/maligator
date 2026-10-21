@@ -482,6 +482,8 @@ static bool leaf_cache_survives_materialization_and_collection(MalVm *vm) {
 }
 
 int main(void) {
+    // Every value here is rooted explicitly; stale C locals must not retain cells.
+    mal_gc_test_precise_stack_roots = true;
     mal_perf_stats_init();
 #if MAL_PERF_STATS
     if (!mal_perf_stats_enabled) {

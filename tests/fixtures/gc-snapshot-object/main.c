@@ -37,6 +37,8 @@ static void count_finalized(MalHeapHeader *cell) {
 }
 
 int main(int argc, char **argv) {
+    // Every value here is rooted explicitly; stale C locals must not retain cells.
+    mal_gc_test_precise_stack_roots = true;
     bool pointer_values = argc == 2 && strcmp(argv[1], "pointer") == 0;
     if (argc != 1 && !pointer_values) return 1;
     MalVm vm;

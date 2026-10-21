@@ -20,6 +20,8 @@ static void observe_safe_point(MalVm *vm) {
 } } while (0)
 
 int main(void) {
+    // Every value here is rooted explicitly; stale C locals must not retain cells.
+    mal_gc_test_precise_stack_roots = true;
     MalVm vm;
     i32 status = 1, outer = -1;
     const char *route_name = "setup";

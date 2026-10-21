@@ -136,6 +136,8 @@ static bool stored_names_remain_stable(MalVm *vm) {
 }
 
 int main(void) {
+    // Every value here is rooted explicitly; stale C locals must not retain cells.
+    mal_gc_test_precise_stack_roots = true;
     MalVm vm;
     mal_vm_init(&vm, &mal_runtime_image);
     bool ok = missing_queries_release_storage(&vm) && stored_names_remain_stable(&vm);

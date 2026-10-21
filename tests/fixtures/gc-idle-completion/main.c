@@ -119,6 +119,8 @@ static int check_backstop(void) {
 }
 
 int main(int argc, char **argv) {
+    // Every value here is rooted explicitly; stale C locals must not retain cells.
+    mal_gc_test_precise_stack_roots = true;
     if (argc == 2 && strcmp(argv[1], "backstop") == 0) {
         if (check_backstop() != 0) return 1;
         puts("gc-idle-completion PASS");

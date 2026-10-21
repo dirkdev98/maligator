@@ -81,7 +81,8 @@ static bool growing_preserves_fields(MalVm *vm, u32 mode) {
     mal_gc_root(&roots, live, countof(live));
     if (mode == 3) live[3] = mal_value_from_symbol(mal_symbol_new_private(&vm->heap));
     bool ok = true;
-    for (u32 count = 0; ok && count < MAL_SHAPE_MAX_INLINE_SLOTS; count++) {
+    // Without a constructor reservation an object stays shaped only to the ordinary bound.
+    for (u32 count = 0; ok && count < MAL_SHAPE_ORDINARY_SLOTS; count++) {
         MalValue marker = mal_value_from_i32((i32) count);
         live[0] = mal_value_from_object(mal_object_new_shaped(
             &vm->heap, nullptr, child_shape, &marker, 1));

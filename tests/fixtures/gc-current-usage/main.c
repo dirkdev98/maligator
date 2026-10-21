@@ -133,6 +133,8 @@ static int exercise(void) {
 }
 
 int main(void) {
+    // Every value here is rooted explicitly; stale C locals must not retain cells.
+    mal_gc_test_precise_stack_roots = true;
     int result = exercise();
     if (result != 0) {
         fprintf(stderr, "gc-current-usage failed at line %d\n", result);

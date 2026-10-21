@@ -375,6 +375,8 @@ static int check_borrowed_keys(MalVm *vm) {
 }
 
 int main(void) {
+    // Every value here is rooted explicitly; stale C locals must not retain cells.
+    mal_gc_test_precise_stack_roots = true;
     MalVm vm;
     mal_vm_init(&vm, &mal_runtime_image);
     vm.heap.next_gc_at = SIZE_MAX;

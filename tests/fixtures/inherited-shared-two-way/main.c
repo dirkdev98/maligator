@@ -132,6 +132,8 @@ cleanup:
 }
 
 int main(void) {
+    // Every value here is rooted explicitly; stale C locals must not retain cells.
+    mal_gc_test_precise_stack_roots = true;
     for (i32 run = 0; run < 2; run++) {
         MalVm vm;
         mal_vm_init(&vm, &mal_runtime_image);

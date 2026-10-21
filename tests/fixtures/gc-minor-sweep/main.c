@@ -655,6 +655,8 @@ static bool run_check(bool (*check)(MalHeap *)) {
 }
 
 int main(void) {
+    // Every value here is rooted explicitly; stale C locals must not retain cells.
+    mal_gc_test_precise_stack_roots = true;
     bool (*checks[])(MalHeap *) = {
         major_reclaims_once_and_recycles_blocks,
         minor_preserves_old_cells_and_free_list_members,

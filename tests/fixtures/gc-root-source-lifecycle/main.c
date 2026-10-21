@@ -17,6 +17,8 @@ static void witness_root_scan(MalVm *vm, void *data) {
 }
 
 int main(void) {
+    // Every value here is rooted explicitly; stale C locals must not retain cells.
+    mal_gc_test_precise_stack_roots = true;
     for (int i = 0; i < 16; ++i) {
         MalVm vm;
         mal_vm_init(&vm, &mal_runtime_image);

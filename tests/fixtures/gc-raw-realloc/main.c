@@ -177,6 +177,8 @@ static bool chunk_pressure_consumes_reserve_once(MalHeap *heap) {
 #endif
 
 int main(void) {
+    // Every value here is rooted explicitly; stale C locals must not retain cells.
+    mal_gc_test_precise_stack_roots = true;
     MalHeap heap;
     mal_heap_init(&heap, 0);
     bool passed = grows_block_storage_into_large_storage(&heap)

@@ -348,6 +348,8 @@ static bool cursor_spilled_frontier(MalVm *vm) {
 }
 
 int main(void) {
+    // Every value here is rooted explicitly; stale C locals must not retain cells.
+    mal_gc_test_precise_stack_roots = true;
     mal_perf_stats_init();
     MalVm vm;
     mal_vm_init(&vm, &mal_runtime_image);

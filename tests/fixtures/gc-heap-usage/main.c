@@ -204,6 +204,8 @@ static int check_usage(void) {
 }
 
 int main(void) {
+    // Every value here is rooted explicitly; stale C locals must not retain cells.
+    mal_gc_test_precise_stack_roots = true;
     int result = check_usage();
     if (result != 0) return result;
     if (!warm_classes_charge_and_trim() || !partial_neighbors_preserve_live_buffers()) return 1;

@@ -210,6 +210,8 @@ static bool encoded_storage_trims_to_the_allocator_size_class(MalVm *vm) {
 }
 
 int main(void) {
+    // Every value here is rooted explicitly; stale C locals must not retain cells.
+    mal_gc_test_precise_stack_roots = true;
     MalVm vm;
     mal_vm_init(&vm, &mal_runtime_image);
     bool passed = compact_decode_preserves_code_units_and_failures(&vm)
