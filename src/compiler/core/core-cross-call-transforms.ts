@@ -8,6 +8,7 @@ import { coreConstructorSlotReserve } from "./core-constructor-layout.ts";
 import { CoreEditor } from "./core-editor.ts";
 import {
 	coreCaptureOwners,
+	coreCreatesFunctions,
 	coreSingleActivationFunctions,
 } from "./core-function-activations.ts";
 import { cloneCoreFunction, coreFunctionIsCloneable } from "./core-function-clone.ts";
@@ -436,12 +437,7 @@ function singleActivationCaptureContext(
 		)
 			return undefined;
 	// A closure created in the copy would bind the caller's scope, not the callee's.
-	for (const instruction of fn.instructionIds())
-		if (
-			fn.instructionKind(instruction) === "operation" &&
-			fn.instructionOpcodeName(instruction) === "createFunction"
-		)
-			return undefined;
+	if (coreCreatesFunctions(fn)) return undefined;
 	return { caller, callee, site };
 }
 

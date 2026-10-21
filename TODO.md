@@ -384,14 +384,13 @@ Shared lifetime and fallback rules are recorded in
 
 ## P1: compiler throughput and analysis scalability
 
-- [ ] Find what tripled the self-compile's plan candidates. Between the laptop
-      baselines at ce43414d and 86bfc38a, Core optimization of the compiler's own
-      source grew 36% under Node (22.5 to 30.7 s) and 30% under Maligator, with
-      plan candidates 5,750 to 17,148, plan discovery attempts 1,611 to 12,896 and
-      program functions analyzed 54 to 7,037, while input instructions grew only
-      2.7%. Reverting the call-target fix that keeps a first store into an empty
-      cell private left the TypeScript benchmark's compile time unchanged, so
-      bisect the compiler-scale workload rather than guess.
+- [ ] Bring the Node-hosted self-compile back under 50 s. Since the laptop
+      baseline at ce43414d its Core optimization grew from 22.5 to 30.7 s. An
+      incremental call-target solve no longer reseeds every transitive reader once
+      parameter cells link callers to callees, which brought the whole run from
+      61 to 51 s on the same input. 6ce7d318 still triples plan candidates by
+      planning every exact call outside the budget, and commits from 92b9de18 up
+      to fee61dbd hang on this input, so they cannot be measured one by one.
 - [ ] Invalidate warm frontend caches when module-resolution topology changes.
       The original serial cache can retain a resolved `.mjs` target after a preferred
       extensionless file appears, or retain a package target after a nearer package

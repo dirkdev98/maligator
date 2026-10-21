@@ -1495,22 +1495,10 @@ export class CoreProgramFlowEngine {
 			for (const key of access.reads) trackedCells.add(key);
 			for (const key of access.writes) trackedCells.add(key);
 		}
+		// Readers rerun only when a cell they read changes. Reseeding every transitive reader
+		// of a changed writer reran nearly the whole program once parameter cells linked
+		// each caller to its callees, while any reached state is already a post-fixpoint.
 		const affectedFunctions = new Set(changedFunctions);
-		const dependencyQueue = [...affectedFunctions];
-		for (let cursor = 0; cursor < dependencyQueue.length; cursor++) {
-			const functionId = dependencyQueue[cursor]!;
-			const writeKeys = new Set([
-				...(previous?.local.get(functionId)?.cellWrites.keys() ?? []),
-				...(cellAccesses.get(functionId)?.writes ?? []),
-			]);
-			for (const key of writeKeys) {
-				for (const reader of cellReaders.get(key) ?? []) {
-					if (affectedFunctions.has(reader)) continue;
-					affectedFunctions.add(reader);
-					dependencyQueue.push(reader);
-				}
-			}
-		}
 
 		const cellWriters = new Map(previous?.cellWriters ?? []);
 		const globalStoreWriters = new Map(previous?.globalStoreWriters ?? []);
@@ -1549,11 +1537,13 @@ export class CoreProgramFlowEngine {
 				if (readers.size === 0) propertyReaders.delete(key);
 			}
 		};
+		// A changed writer's rerun recomputes its cells against their previous values, so a
+		// rerun that restores a value wakes none of the cell's readers.
+		const rewrittenKeys = new Set<number>();
 		for (const functionId of affectedFunctions) {
-			removeLocalContributions(
-				functionId,
-				local.get(functionId) ?? previous?.local.get(functionId),
-			);
+			const entry = local.get(functionId) ?? previous?.local.get(functionId);
+			for (const key of entry?.cellWrites.keys() ?? []) rewrittenKeys.add(key);
+			removeLocalContributions(functionId, entry);
 			local.delete(functionId);
 		}
 		for (const key of trackedCells) {
@@ -1574,7 +1564,10 @@ export class CoreProgramFlowEngine {
 			else cells.set(key, next);
 			return !semantics.equal(prior, next);
 		};
-		for (const key of cellKeys) recomputeCell(key);
+		for (const key of cellKeys) {
+			if (rewrittenKeys.has(key) || !recomputeCell(key)) continue;
+			for (const reader of cellReaders.get(key) ?? []) affectedFunctions.add(reader);
+		}
 		let globalStoreAggregateUpdates = 0;
 		const recomputeGlobalStore = (slot: number): void => {
 			globalStoreAggregateUpdates++;

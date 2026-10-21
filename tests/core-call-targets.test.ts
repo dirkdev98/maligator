@@ -286,6 +286,70 @@ describe("incremental Core call graph", () => {
 		});
 	});
 
+	it("reruns only the edited caller when the arguments it passes down a chain keep their targets", () => {
+		const program = analysisProgram();
+		const chainLength = 8;
+		const callback = chainLength + 1;
+		const root = new CoreFunctionBuilder(program);
+		const rootEntry = root.createBlock();
+		const [first] = root.appendInstruction(rootEntry, "createFunction", [], {
+			attributes: { functionIndex: 1 },
+		});
+		const [receiver] = root.appendInstruction(rootEntry, "createUndefined", []);
+		const receiverInstruction = root.bodyInstructionIds(rootEntry).at(-1)!;
+		const [held] = root.appendInstruction(rootEntry, "createFunction", [], {
+			attributes: { functionIndex: callback },
+		});
+		const [rootResult] = root.appendInstruction(rootEntry, "call", [
+			first!,
+			receiver!,
+			held!,
+		]);
+		root.setTerminator(rootEntry, { kind: "return", value: rootResult! });
+		root.finish(rootEntry);
+		for (let index = 1; index <= chainLength; index++) {
+			const link = new CoreFunctionBuilder(program, { parameterCount: 1 });
+			const entry = link.createBlock([{}]);
+			const parameter = link.blockParameterValue(entry, 0);
+			const [undefinedValue] = link.appendInstruction(entry, "createUndefined", []);
+			const [next] =
+				index === chainLength
+					? [parameter]
+					: link.appendInstruction(entry, "createFunction", [], {
+							attributes: { functionIndex: index + 1 },
+						});
+			const [result] = link.appendInstruction(
+				entry,
+				"call",
+				index === chainLength
+					? [next!, undefinedValue!]
+					: [next!, undefinedValue!, parameter],
+			);
+			link.setTerminator(entry, { kind: "return", value: result! });
+			link.finish(entry);
+		}
+		appendLeaf(program);
+		const manager = new CoreAnalysisManager(
+			program,
+			programAnalysisContext(),
+			new CoreOptimizationReportBuilder(program),
+		);
+		manager.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" });
+
+		const editor = CoreEditor.open(program, coreFunctionId(0));
+		editor.replaceInstruction(receiverInstruction, "createNull", []);
+		editor.commit();
+		const second = manager.get(CORE_CALL_GRAPH_ANALYSIS, { scope: "program" });
+
+		expect(
+			second.targets(
+				coreFunctionId(chainLength),
+				program.function(coreFunctionId(chainLength)).kernel.functionParameter(0),
+			).functions,
+		).toEqual([callback]);
+		expect(second.statistics.functionsAnalyzed).toBe(1);
+	});
+
 	it("keeps the call graph cached across representation and source-only edits", () => {
 		const program = analysisProgram();
 		appendCaller(program, 1);

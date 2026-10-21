@@ -105,18 +105,42 @@ export function coreSingleActivationFunctions(
 	return once;
 }
 
+interface CoreCaptureScan {
+	readonly bodyVersion: number;
+	readonly owners: ReadonlySet<number>;
+	readonly createsFunctions: boolean;
+}
+
+// Inline candidates ask about the same callers and targets once per call site.
+const captureScans = new WeakMap<CoreFunctionStore, CoreCaptureScan>();
+
+function coreCaptureScan(fn: CoreFunctionStore): CoreCaptureScan {
+	const bodyVersion = fn.version("body");
+	const cached = captureScans.get(fn);
+	if (cached?.bodyVersion === bodyVersion) return cached;
+	const owners = new Set<number>();
+	let createsFunctions = false;
+	for (const instruction of fn.instructionIds()) {
+		if (fn.instructionKind(instruction) !== "operation") continue;
+		const opcode = fn.instructionOpcodeName(instruction);
+		if (opcode === "createFunction") createsFunctions = true;
+		if (opcode !== "loadCaptured" && opcode !== "storeCaptured") continue;
+		const owner = fn.instructionAttributes(instruction).functionIndex;
+		if (typeof owner === "number") owners.add(owner);
+	}
+	const scan = { bodyVersion, owners, createsFunctions };
+	captureScans.set(fn, scan);
+	return scan;
+}
+
 /**
  * The scopes whose environments a body reads or writes through captured slots,
  * by owner index; negative owners are scopes no Core function owns.
  */
 export function coreCaptureOwners(fn: CoreFunctionStore): ReadonlySet<number> {
-	const owners = new Set<number>();
-	for (const instruction of fn.instructionIds()) {
-		if (fn.instructionKind(instruction) !== "operation") continue;
-		const opcode = fn.instructionOpcodeName(instruction);
-		if (opcode !== "loadCaptured" && opcode !== "storeCaptured") continue;
-		const owner = fn.instructionAttributes(instruction).functionIndex;
-		if (typeof owner === "number") owners.add(owner);
-	}
-	return owners;
+	return coreCaptureScan(fn).owners;
+}
+
+export function coreCreatesFunctions(fn: CoreFunctionStore): boolean {
+	return coreCaptureScan(fn).createsFunctions;
 }

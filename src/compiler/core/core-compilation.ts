@@ -5,6 +5,7 @@ import type { SourceCallSite } from "../frontend/source-function-origins.ts";
 import type { CompilerProgramFacts } from "../shared/compiler-facts.ts";
 import type { VerifiedCoreOptimizationPlan } from "./core-ir-regions.ts";
 import type { CoreProgram, SealedCoreProgram } from "./core-ir.ts";
+import type { CoreFunctionStore } from "./core-store.ts";
 
 /** A captured cell: its function index or negative per-iteration scope id, plus slot. */
 export interface CoreCapturedSlotRef {
@@ -170,6 +171,33 @@ export interface CoreCompilation {
 }
 
 /** Captured cells whose complete write graph is visible to Core. */
+interface CapturedSlotScan {
+	readonly bodyVersion: number;
+	readonly slots: ReadonlyArray<CoreCapturedSlotRef>;
+}
+
+// Program-flow solves rerun this after every edit; unchanged bodies keep their scan.
+const capturedSlotScans = new WeakMap<CoreFunctionStore, CapturedSlotScan>();
+
+function capturedSlotsOf(fn: CoreFunctionStore): ReadonlyArray<CoreCapturedSlotRef> {
+	const bodyVersion = fn.version("body");
+	const cached = capturedSlotScans.get(fn);
+	if (cached !== undefined && cached.bodyVersion === bodyVersion) return cached.slots;
+	const slots: Array<CoreCapturedSlotRef> = [];
+	for (const instruction of fn.instructionIds()) {
+		if (fn.instructionKind(instruction) !== "operation") continue;
+		const opcode = fn.instructionOpcodeName(instruction);
+		if (opcode !== "loadCaptured" && opcode !== "storeCaptured") continue;
+		const attributes = fn.instructionAttributes(instruction);
+		const owner = attributes.functionIndex;
+		const index = attributes.index;
+		if (typeof owner === "number" && typeof index === "number")
+			slots.push({ owner, index });
+	}
+	capturedSlotScans.set(fn, { bodyVersion, slots });
+	return slots;
+}
+
 export function coreClosedCapturedValueSlots(
 	program: CoreProgram,
 	context: CoreCompilationContext | undefined,
@@ -187,30 +215,24 @@ export function coreClosedCapturedValueSlots(
 			mapped.set(functionId, indices);
 		}
 	}
-	for (let index = slots.length - 1; index >= 0; index--) {
-		const slot = slots[index]!;
-		if (mapped.get(slot.owner)?.has(slot.index)) slots.splice(index, 1);
+	const retained = slots.filter((slot) => !mapped.get(slot.owner)?.has(slot.index));
+	const seen = new Map<number, Set<number>>();
+	for (const slot of retained) {
+		const indices = seen.get(slot.owner) ?? new Set<number>();
+		indices.add(slot.index);
+		seen.set(slot.owner, indices);
 	}
 	for (const functionId of program.functionIds()) {
-		const fn = program.function(functionId);
-		for (const instruction of fn.instructionIds()) {
-			if (fn.instructionKind(instruction) !== "operation") continue;
-			const opcode = fn.instructionOpcodeName(instruction);
-			if (opcode !== "loadCaptured" && opcode !== "storeCaptured") {
-				continue;
-			}
-			const attributes = fn.instructionAttributes(instruction);
-			const owner = attributes.functionIndex;
-			const index = attributes.index;
-			if (typeof owner !== "number" || typeof index !== "number") continue;
-			if (
-				!mapped.get(owner)?.has(index) &&
-				!slots.some((slot) => slot.owner === owner && slot.index === index)
-			)
-				slots.push({ owner, index });
+		for (const slot of capturedSlotsOf(program.function(functionId))) {
+			if (mapped.get(slot.owner)?.has(slot.index)) continue;
+			const indices = seen.get(slot.owner) ?? new Set<number>();
+			if (indices.has(slot.index)) continue;
+			indices.add(slot.index);
+			seen.set(slot.owner, indices);
+			retained.push(slot);
 		}
 	}
-	return slots;
+	return retained;
 }
 
 /** Normalize the only semantic-program fields retained after frontend lowering. */
