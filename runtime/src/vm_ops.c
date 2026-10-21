@@ -2593,7 +2593,13 @@ MAL_PRESERVE_MOST bool mal_vm_property_try_load_length_static_remaining(
     return mal_vm_property_try_load_static(vm, receiver, ic, out);
 }
 
+static __attribute__((noinline)) MAL_PRESERVE_MOST MalStaticPropertyProbeResult
+mal_vm_property_try_load_static_rows(
+    MalVm *vm, MalValue receiver, const MalObject *object, MalInlineCache *ic
+);
+
 // Keep all non-monomorphic static cache hits noncollecting: callers may hold private roots.
+// The hottest outcomes return before the row search saves the registers it uses.
 __attribute__((noinline)) MAL_PRESERVE_MOST MalStaticPropertyProbeResult
 mal_vm_property_try_load_static_remaining(
     MalVm *vm, MalValue receiver, const MalObject *object,
@@ -2612,6 +2618,13 @@ mal_vm_property_try_load_static_remaining(
             return (MalStaticPropertyProbeResult) {.hit = true, .value = value};
         }
     }
+    return mal_vm_property_try_load_static_rows(vm, receiver, object, ic);
+}
+
+static __attribute__((noinline)) MAL_PRESERVE_MOST MalStaticPropertyProbeResult
+mal_vm_property_try_load_static_rows(
+    MalVm *vm, MalValue receiver, const MalObject *object, MalInlineCache *ic
+) {
     // A method site that alternates between classes misses its one row for every class
     // but one; the shared stub holds the others, so try it before the unrelated rows.
     if (object != nullptr && ic->mode == MAL_IC_MODE_INHERITED_VALUE && ic->poly_count > 0 &&
@@ -5517,7 +5530,7 @@ bool mal_vm_own_table_try_load(
     }
     MalValue value;
     u8 flags;
-    if (!mal_table_read_entry_hint(mal_object_overflow(object), ic->entry, key, &value, &flags) ||
+    if (!mal_table_named_hint_read(mal_object_overflow(object), ic->entry, key, &value, &flags) ||
         (flags & MAL_PROPERTY_ACCESSOR)) {
         return false;
     }

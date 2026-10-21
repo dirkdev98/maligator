@@ -13,6 +13,8 @@ typedef struct MalSymbol MalSymbol;
 #define MAL_TABLE_SYMBOL (UINT64_C(3) << MAL_TABLE_KIND_SHIFT)
 #define MAL_TABLE_IDENTITY_MASK (UINT64_C(0x0000ffffffffffff) | MAL_TABLE_KIND_MASK)
 #define MAL_TABLE_OWNS_DATA (UINT64_C(1) << 57)
+#define MAL_TABLE_FLAGS_SHIFT 50
+#define MAL_TABLE_FLAGS_MASK (UINT64_C(0x7f) << MAL_TABLE_FLAGS_SHIFT)
 
 typedef struct MalTableEntry {
     // Kind zero is dead; ownership survives deletion until the RAW sidecar is freed.
@@ -57,6 +59,25 @@ static inline bool mal_table_private_hint_read(
     if ((entry->key & MAL_TABLE_IDENTITY_MASK) != (MAL_TABLE_SYMBOL | (symbol & MAKS_PTR)))
         return false;
     *value = entry->payload.value;
+    return true;
+}
+
+/**
+ * Read a string- or symbol-keyed data row through its entry handle without a
+ * lookup. The stored identity must equal the key, so a stale handle misses.
+ */
+static inline bool mal_table_named_hint_read(
+    const MalTable *table, const void *handle, MalValue key, MalValue *value, u8 *property_flags
+) {
+    u64 kind = mal_value_is_string(key) ? MAL_TABLE_STRING
+        : mal_value_is_symbol(key) ? MAL_TABLE_SYMBOL : 0;
+    const MalTableEntry *row = handle == nullptr ? nullptr : mal_table_handle_row(table, handle);
+    if (kind == 0 || row == nullptr ||
+        (row->key & (MAL_TABLE_IDENTITY_MASK | MAL_TABLE_OWNS_DATA)) != (kind | (key & MAKS_PTR))) {
+        return false;
+    }
+    *value = row->payload.value;
+    *property_flags = (u8) ((row->key & MAL_TABLE_FLAGS_MASK) >> MAL_TABLE_FLAGS_SHIFT);
     return true;
 }
 
