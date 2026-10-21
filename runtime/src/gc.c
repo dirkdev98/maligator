@@ -2364,6 +2364,11 @@ static void mal_gc_finalize_cell(MalHeapHeader *cell) {
         case MAL_HEAP_BIGINT:
         case MAL_HEAP_ENV:
             return;
+        case MAL_HEAP_STRING: {
+            MalStringStorage storage = ((const MalString *) cell)->storage;
+            if (storage != MAL_STRING_STORAGE_OWNED && storage != MAL_STRING_STORAGE_BUILDER) return;
+            break;
+        }
         case MAL_HEAP_OBJECT:
         case MAL_HEAP_FUNCTION_OBJECT:
             if (mal_gc_object_owns_nothing((const MalObject *) cell)) return;
