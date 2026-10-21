@@ -167,7 +167,30 @@ function appendBudgetLeaf(program: CoreProgram): CoreFunctionId {
 	const [negated] = builder.appendInstruction(entry, "unary", [value!], {
 		attributes: { operator: "!" },
 	});
-	builder.setTerminator(entry, { kind: "return", value: negated! });
+	const [restored] = builder.appendInstruction(entry, "unary", [negated!], {
+		attributes: { operator: "!" },
+	});
+	builder.setTerminator(entry, { kind: "return", value: restored! });
+	return builder.finish(entry).function;
+}
+
+/** A budget leaf over its argument, which local folding cannot shrink between waves. */
+function appendArgumentBudgetLeaf(program: CoreProgram): CoreFunctionId {
+	const builder = new CoreFunctionBuilder(program, {
+		parameterCount: 1,
+		metadata: { sourcePath: "/entry.js" },
+	});
+	const entry = builder.createBlock([{}]);
+	const [negated] = builder.appendInstruction(
+		entry,
+		"unary",
+		[builder.blockParameterValue(entry, 0)],
+		{ attributes: { operator: "!" } },
+	);
+	const [restored] = builder.appendInstruction(entry, "unary", [negated!], {
+		attributes: { operator: "!" },
+	});
+	builder.setTerminator(entry, { kind: "return", value: restored! });
 	return builder.finish(entry).function;
 }
 
@@ -570,7 +593,7 @@ describe("bounded Core cross-call transforms", () => {
 		const program = analysisProgram();
 		const guarded = appendBudgetCaller(program, 2, false, true);
 		const exact = appendBudgetCaller(program, 2, false);
-		appendBudgetLeaf(program);
+		appendArgumentBudgetLeaf(program);
 
 		const transformed = runTransforms(program, {
 			...TINY_CODE_BUDGET,
@@ -2516,6 +2539,8 @@ describe("bounded Core cross-call transforms", () => {
 		leaf.appendInstruction(body, "typeofCompare", [result!], {
 			attributes: { expected: "boolean" },
 		});
+		// Code the call would not replace keeps the leaf out of the zero inline budget.
+		leaf.appendInstruction(body, "unary", [parameter], { attributes: { operator: "!" } });
 		leaf.setTerminator(body, { kind: "return", value: result! });
 		const fn = leaf.finish(body).function;
 		let introduced = false;

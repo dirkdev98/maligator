@@ -144,6 +144,25 @@ interface InlineTarget {
 	}>;
 }
 
+// Constants become operands or immediates of the instructions that read them.
+const INLINE_CODELESS_OPCODES: ReadonlySet<string> = new Set([
+	"createUndefined",
+	"createNull",
+	"createBoolean",
+	"createI32",
+	"createF64",
+	"createNumber",
+	"createString",
+]);
+
+function inlineCodeSize(inline: InlineTarget): number {
+	let size = 0;
+	for (const instruction of inline.instructions)
+		if (!INLINE_CODELESS_OPCODES.has(inline.function.instructionOpcodeName(instruction)))
+			size++;
+	return size;
+}
+
 function materializeInstructionOperands(
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
@@ -1783,10 +1802,15 @@ function offerFunctionCandidates(
 					fn.valueRepresentation(result),
 				),
 			);
-		// An exact inline replaces its call, so a one-instruction body adds no code.
+		// An exact inline replaces its call, so a body of one instruction and its constant
+		// operands adds no code; a guarded one keeps the call and pays for every instruction.
 		const generatedCodeCost = Math.max(
 			0,
-			(inline?.instructions.length ?? 0) +
+			(inline === undefined
+				? 0
+				: open
+					? inline.instructions.length
+					: inlineCodeSize(inline)) +
 				(inline?.linear === false ? inline.blocks.length : 0) +
 				(synchronousCallback?.created !== true
 					? 0
