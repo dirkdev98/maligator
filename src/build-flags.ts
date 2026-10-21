@@ -290,6 +290,8 @@ const SANITIZER_FLAGS: Record<SanitizerMode, Array<string>> = {
 		"-fsanitize=address,undefined",
 		"-fno-sanitize-recover=all",
 		"-fno-omit-frame-pointer",
+		// Fake stack frames would hide locals from conservative roots and frame records.
+		"-fsanitize-address-use-after-return=never",
 	],
 	ubsan: ["-fsanitize=undefined", "-fno-sanitize-recover=all", "-fno-omit-frame-pointer"],
 	tsan: ["-fsanitize=thread", "-fno-sanitize-recover=all", "-fno-omit-frame-pointer"],

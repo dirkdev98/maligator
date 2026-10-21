@@ -4083,8 +4083,9 @@ typedef struct MalWalkedFrame {
 } MalWalkedFrame;
 
 /* Compiled frames from the innermost outwards, counting past `capacity`. The walk
- * ends at the first frame record that does not lie above the previous one. */
-static __attribute__((noinline)) usize mal_vm_walk_compiled_frames(
+ * ends at the first frame record that does not lie above the previous one. Like the
+ * conservative root scan, it reads other functions' frames, which sanitizers poison. */
+static __attribute__((noinline, no_sanitize("address", "thread"))) usize mal_vm_walk_compiled_frames(
     const MalVm *vm, MalWalkedFrame *out, usize capacity
 ) {
     uptr top = mal_vm_running_stack_top(vm);

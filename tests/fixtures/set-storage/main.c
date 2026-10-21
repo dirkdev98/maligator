@@ -324,6 +324,8 @@ static int check_bytes(MalVm *vm) {
 
 int main(void) {
     MalVm vm;
+    // Every value here is rooted explicitly; stale C locals must not retain cells.
+    mal_gc_test_precise_stack_roots = true;
     mal_vm_init(&vm, &mal_runtime_image);
     vm.heap.next_gc_at = (usize) -1;
     if (check_storage(&vm) || check_clusters(&vm) || check_tagged_tombstones(&vm) ||
