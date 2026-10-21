@@ -30,6 +30,16 @@ try {
 	results.push(write(Object.freeze([4, 5])));
 })();
 
+const sealed = Object.seal([1, 2, 3]);
+try {
+	sealed.length = 1;
+	results.push("sealed written");
+} catch (error) {
+	results.push(error.constructor.name, sealed.length);
+}
+sealed.length = 5;
+results.push(sealed.length);
+
 const pinned = [1, 2, 3, 4];
 Object.defineProperty(pinned, 2, { value: 3, configurable: false });
 try {

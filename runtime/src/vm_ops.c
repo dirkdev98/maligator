@@ -7032,8 +7032,9 @@ void mal_vm_op_store_property_ic(
         mal_value_is_int32(value) && mal_value_to_i32(value) >= 0 &&
         key_value == mal_value_from_string(mal_intrinsic_hot_ascii(vm, MAL_HOT_KEY_LENGTH))) {
         MalArrayObject *array = (MalArrayObject *) mal_value_to_heap(object_value);
-        // Default dense elements cannot block a shrink, so the write always succeeds.
-        if (array->length_writable && !array->dense_deopted && !array->object.is_prototype) {
+        // Configurable dense elements cannot block a shrink, so the write always succeeds.
+        if (array->length_writable && !array->dense_deopted &&
+            array->dense_elements_configurable && !array->object.is_prototype) {
             MAL_PERF_COUNT(ic_store_array_length_hits);
             mal_array_object_set_length(array, (u32) mal_value_to_i32(value));
             return;
