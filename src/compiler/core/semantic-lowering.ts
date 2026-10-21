@@ -96,7 +96,6 @@ import type {
 	CoreInstructionEmitter,
 } from "./core-frontend-construction.ts";
 import { coreOpcodeRegistry } from "./core-ir-opcodes.ts";
-import { verifyCoreProgram } from "./core-ir-verifier.ts";
 import { CORE_SUPER_THIS_STATE_KEY } from "./core-ir.ts";
 import { CoreProgram } from "./core-store.ts";
 import type { CoreSourcePosition } from "./core-store.ts";
@@ -1011,7 +1010,7 @@ export function constructSemanticProgramCore(
 
 	const compilation = finishCoreProgram(program);
 	if (debugEnabled) log.debug(formatCoreProgram(compilation.program));
-	verifyCoreProgram(compilation.program, { stage: "construction" }, compilation.context);
+	// Optimization verifies every constructed or cached program before its first pass.
 	return compilation;
 }
 
