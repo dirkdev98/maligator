@@ -290,11 +290,13 @@ bool mal_ops_strict_equal_distinct(MalValue left, MalValue right);
 
 /**
  * Strict equality where generated code knows neither operand's kind. Every such
- * site expands this, so only identical words and two int32s answer inline.
+ * site expands this, so only identical words, objects and two int32s answer inline.
  */
 static inline bool mal_ops_strict_equal_boxed(MalValue left, MalValue right) {
     // NaN is the only word that is not strictly equal to itself.
     if (left == right) return left != MAL_VALUE_NAN;
+    // An object equals only its own word; only Numbers and String or BigInt contents compare.
+    if (mal_value_is_object(left) || mal_value_is_object(right)) return false;
     if ((left & MAL_VALUE_CLASS_MASK) == MAL_VALUE_INT32 &&
         (right & MAL_VALUE_CLASS_MASK) == MAL_VALUE_INT32) {
         return false;
