@@ -81,7 +81,7 @@
 	},
 	{
 		"file": "builtin_json.c",
-		"sha256": "9603f349ff7faa837ffa81dd4e58d14259c75a8da981aecfe4f89bba7349ec91"
+		"sha256": "c9c65c3ca8c0bef9ef2353b895937c5f23694f1718261d419f37651baff62745"
 	},
 	{
 		"file": "builtin_map.c",
@@ -129,7 +129,7 @@
 	},
 	{
 		"file": "builtin_string.c",
-		"sha256": "3f66b828906a93905644321fb011da97122249bc3a34cf5b787a3ffe56cee5bf"
+		"sha256": "19e37c61bef964eff99c5a2ef5040548c3d0c813fe76ed905b9027c5350262f7"
 	},
 	{
 		"file": "builtin_symbol.c",
@@ -333,7 +333,7 @@
 	},
 	{
 		"file": "object_ops.c",
-		"sha256": "539351bcca3e839a89858c89cb128297361f6c70db636c16c5ad85ab896f2641"
+		"sha256": "ae381f3fd9c7d73b7456f38c7017b7136fdbfb2cd97419309cd6abeade572a62"
 	},
 	{
 		"file": "object_ops.h",
@@ -597,7 +597,7 @@
 	},
 	{
 		"file": "runtime/node_readline.c",
-		"sha256": "a50f4faf11d9d10ea37a192d084b3c2d7564fec348f6223b2fbe95afb60403a7"
+		"sha256": "7e561f3f4d7d42f40c7336588e5d304adc86a43189981a25a7e5f33c08f69995"
 	},
 	{
 		"file": "runtime/node_readline.h",
@@ -729,7 +729,7 @@
 	},
 	{
 		"file": "runtime/web_host_timer.c",
-		"sha256": "d44dcf7d6dd8f3f7d1dd381ab7c76485540e46f3c79f83b5d5110c1824760992"
+		"sha256": "1e21dd2932c9fac729fe36a651f27c29ec4c26e9d1da33f5299b04016b431f6f"
 	},
 	{
 		"file": "runtime/web_readable_stream.c",
@@ -769,18 +769,18 @@
 	},
 	{
 		"file": "vm.c",
-		"sha256": "0229d339704d86e8fca0db877e7e60e99a5d815b8aeaa11a3797f043bc66ad5d"
+		"sha256": "721a7510d0673d3037bdf6dc4ded576914b93ac36dacca0dfebbc63458ae7392"
 	},
 	{
 		"file": "vm.h",
-		"sha256": "bc222e1120d20ef0df05c7d89d94133c1c1fd90beea54fee234a5ee83d07dd1f"
+		"sha256": "c34e7807e285f721f5f84c2de6864e254ad0b4a96366bf5adeb837e1adddcff5"
 	},
 	{
 		"file": "vm_ops.c",
-		"sha256": "9b5db2a3c6354dda36eb0096be68484b11a62d2015f2ef322130afdfb6687d3c"
+		"sha256": "8c2213d1a4af802664976751fb0890083d513aa55735124995b8245c02c2beb2"
 	},
 	{
 		"file": "vm_ops.h",
-		"sha256": "6ec91e841b40118836c521fb173f53cb14b94ce715ecffeaa29b8c58b36381a1"
+		"sha256": "7034ffc99c0354ddda65f650b5668f2e8166153e199c3413ad35fe6cda591a46"
 	}
 ]
