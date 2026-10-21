@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { CORE_MAX_SHAPED_OBJECT_SLOTS } from "../src/compiler/core/core-constructor-layout.ts";
 import { MAX_STRING_CODE_UNITS } from "../src/compiler/shared/compiler-instruction.ts";
 import {
 	COMPILER_ARTIFACT_MAGIC,
@@ -1446,12 +1447,15 @@ describe("program-image-codec", () => {
 						: fn,
 				),
 			});
-		const valid = withReserve(64);
+		const valid = withReserve(CORE_MAX_SHAPED_OBJECT_SLOTS);
 		expect(
 			deserializeCompilerArtifact(serializeCompilerArtifact(valid)).runtime.functions[0]!
 				.constructorSlotReserve,
-		).toBe(64);
-		for (const invalid of [withReserve(65), withReserve(1, true)]) {
+		).toBe(CORE_MAX_SHAPED_OBJECT_SLOTS);
+		for (const invalid of [
+			withReserve(CORE_MAX_SHAPED_OBJECT_SLOTS + 1),
+			withReserve(1, true),
+		]) {
 			expect(() => serializeCompilerArtifact(invalid)).toThrow(
 				/invalid constructor slot reserve/,
 			);

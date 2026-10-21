@@ -2,7 +2,8 @@ import type { CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import type { CoreFunctionStore } from "./core-store.ts";
 
-const MAX_CONSTRUCTOR_SLOT_RESERVE = 64;
+/** The runtime's MAL_SHAPE_MAX_INLINE_SLOTS: a shaped slot index fits in a u8. */
+export const CORE_MAX_SHAPED_OBJECT_SLOTS = 255;
 
 function rootDefinition(
 	fn: CoreFunctionStore,
@@ -67,5 +68,5 @@ export function coreConstructorSlotReserve(fn: CoreFunctionStore): number {
 		const stringIndex = fn.instructionAttributes(definition).stringIndex;
 		if (typeof stringIndex === "number") keys.add(stringIndex);
 	}
-	return Math.min(keys.size + privateElements, MAX_CONSTRUCTOR_SLOT_RESERVE);
+	return Math.min(keys.size + privateElements, CORE_MAX_SHAPED_OBJECT_SLOTS);
 }

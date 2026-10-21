@@ -2204,7 +2204,7 @@ static MalValue mal_json_object_members_finalize(
             shape_values[slot] = members->roots[i * 2 + 1];
             continue;
         }
-        if (shape_count == MAL_SHAPE_MAX_INLINE_SLOTS) {
+        if (shape_count == MAL_SHAPE_ORDINARY_SLOTS) {
             shaped = false;
             break;
         }

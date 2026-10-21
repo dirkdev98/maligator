@@ -1405,7 +1405,7 @@ static void mal_perf_stats_print(void) {
         stderr,
         "[perf-shape-transition-stats] calls=%llu hits=%llu creates=%llu comparisons=%llu "
         "max_comparisons=%llu pointer_hits=%llu content_hits=%llu index_lookups=%llu "
-        "index_hits=%llu index_probes=%llu index_builds=%llu\n",
+        "index_hits=%llu index_probes=%llu index_builds=%llu private_evictions=%llu\n",
         (unsigned long long) mal_perf_stats.shape_transition_calls,
         (unsigned long long) mal_perf_stats.shape_transition_hits,
         (unsigned long long) mal_perf_stats.shape_transition_creates,
@@ -1416,7 +1416,8 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.shape_transition_index_lookups,
         (unsigned long long) mal_perf_stats.shape_transition_index_hits,
         (unsigned long long) mal_perf_stats.shape_transition_index_probes,
-        (unsigned long long) mal_perf_stats.shape_transition_index_builds
+        (unsigned long long) mal_perf_stats.shape_transition_index_builds,
+        (unsigned long long) mal_perf_stats.shape_private_evictions
     );
     fprintf(
         stderr,

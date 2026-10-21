@@ -98,6 +98,16 @@ static inline const MalObjectStorage *mal_object_storage_const(const MalObject *
     return storage;
 }
 
+/**
+ * Whether `object` can take another shaped property. Past the ordinary bound only
+ * capacity reserved for a constructor's declared fields keeps it shaped, so map-like
+ * growth still reaches dictionary mode.
+ */
+static inline bool mal_object_can_add_shaped_property(const MalObject *object) {
+    u32 count = object->shape->inline_count;
+    return count < MAL_SHAPE_ORDINARY_SLOTS || count < object->slot_capacity;
+}
+
 static inline MalObjectStorage *mal_object_storage(MalObject *object) {
     return (MalObjectStorage *) mal_object_storage_const(object);
 }

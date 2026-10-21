@@ -157,7 +157,7 @@ bool mal_object_add_private(MalObject *object, MalKey key, MalValue value) {
     }
     // PrivateFieldAdd ignores [[Extensible]], so frozen receivers still gain slots.
     if (!mal_value_to_symbol(key.value)->private_table_resident &&
-        mal_object_shapes_private(object) && mal_shape_can_add_property(object->shape) &&
+        mal_object_shapes_private(object) && mal_object_can_add_shaped_property(object) &&
         (mal_object_overflow(object) == nullptr ||
          !mal_table_lookup(mal_object_overflow(object), key).present)) {
         if (child == nullptr) {
@@ -237,6 +237,7 @@ static bool mal_object_evict_shaped_private(MalObject *object) {
         shaped_private = !mal_value_is_string(shape->props[i].key);
     }
     if (!shaped_private || shape->tree_root == nullptr) return false;
+    MAL_PERF_COUNT(shape_private_evictions);
     if (mal_object_note_prototype_mutation(object)) {
         MAL_PERF_COUNT(prototype_epoch_define_invalidations);
     }
@@ -570,7 +571,7 @@ MalDefineOwnStatus mal_object_define_own(MalObject *object, MalKey key, const Ma
             mal_object_dictionarize(object);
         } else if (shaped_data && desc->flags == MAL_PROPERTY_WRITABLE &&
                    mal_object_shapes_private(object) &&
-                   mal_shape_can_add_property(object->shape) &&
+                   mal_object_can_add_shaped_property(object) &&
                    (mal_object_overflow(object) == nullptr ||
                     !mal_table_lookup(mal_object_overflow(object), key).present)) {
             return mal_object_add_private(object, key, desc->value)
@@ -652,7 +653,7 @@ MalDefineOwnStatus mal_object_define_own(MalObject *object, MalKey key, const Ma
             // compatibility machinery.
         } else if (mal_object_desc_is_default_data(desc) &&
             !mal_object_has_public_overflow(object) &&
-            (mal_shape_can_add_property(object->shape) ||
+            (mal_object_can_add_shaped_property(object) ||
              (object->extensible && mal_object_evict_shaped_private(object)))) {
             if (!object->extensible) {
                 return MAL_DEFINE_OWN_REJECTED;

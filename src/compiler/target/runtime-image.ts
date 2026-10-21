@@ -1,5 +1,6 @@
 import type { PlatformData } from "../../platform/catalog.ts";
 import type { CoreCompilationContext } from "../core/core-compilation.ts";
+import { CORE_MAX_SHAPED_OBJECT_SLOTS } from "../core/core-constructor-layout.ts";
 import { directBuiltinOperationIds } from "../shared/builtin-registry.ts";
 import type { DirectBuiltinOperationId } from "../shared/builtin-registry.ts";
 import { knownBuiltinCallProves } from "../shared/compiler-facts.ts";
@@ -2124,7 +2125,7 @@ export function validateRuntimeImageMetadata(definition: RuntimeImage): void {
 	for (const fn of definition.functions) {
 		if (
 			!isNonnegativeSafeInteger(fn.constructorSlotReserve) ||
-			fn.constructorSlotReserve > 64 ||
+			fn.constructorSlotReserve > CORE_MAX_SHAPED_OBJECT_SLOTS ||
 			(fn.constructorSlotReserve !== 0 &&
 				(!fn.isClassConstructor || fn.isDerivedConstructor))
 		)

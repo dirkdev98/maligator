@@ -14,7 +14,9 @@
  * shape-tree growth under churn. Framework records such as Express requests and
  * responses carry 40 to 50 properties.
  */
-#define MAL_SHAPE_MAX_INLINE_SLOTS 64
+#define MAL_SHAPE_ORDINARY_SLOTS 64
+/** Constructor reservations may keep a wider class layout shaped, up to the u8 slot index. */
+#define MAL_SHAPE_MAX_INLINE_SLOTS 255
 
 typedef struct MalShape MalShape;
 typedef struct MalShapeTransition MalShapeTransition;
@@ -63,10 +65,6 @@ struct MalShape {
     /** The empty shape this one's transition tree grows from; null for the dictionary sentinel. */
     MalShape *tree_root;
 };
-
-static inline bool mal_shape_can_add_property(const MalShape *shape) {
-    return shape->inline_count < MAL_SHAPE_MAX_INLINE_SLOTS;
-}
 
 static_assert(sizeof(MalShape) <= 64, "MalShape outgrew its 64-byte layout budget");
 

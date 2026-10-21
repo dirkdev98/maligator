@@ -7007,7 +7007,7 @@ static void mal_vm_op_store_object_property_ic(
             return;
         }
         if (idx < 0 && !mal_object_has_public_overflow(object) && object->extensible &&
-            mal_shape_can_add_property(object->shape) &&
+            mal_object_can_add_shaped_property(object) &&
             mal_ic_key_is_stable_string(key_value) &&
             mal_ic_can_apply_transition_store(object, key)) {
             MalShape *source = object->shape;

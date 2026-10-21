@@ -1,4 +1,5 @@
 import type { PlatformData } from "../../platform/catalog.ts";
+import { CORE_MAX_SHAPED_OBJECT_SLOTS } from "../core/core-constructor-layout.ts";
 import {
 	MAX_PRECISE_NUMBER_SUM_INPUTS,
 	MAX_STRING_CODE_UNITS,
@@ -850,7 +851,10 @@ function writeInstructionOperands(w: Writer, i: BytecodeInstruction): void {
 			w.i32(i.dst);
 			return;
 		case "CREATE_BASE_CONSTRUCT_RECEIVER":
-			if (i.constructorSlotReserve < 0 || i.constructorSlotReserve > 64) {
+			if (
+				i.constructorSlotReserve < 0 ||
+				i.constructorSlotReserve > CORE_MAX_SHAPED_OBJECT_SLOTS
+			) {
 				throw new RangeError("program-image-codec: invalid constructor slot reserve");
 			}
 			w.i32(i.dst);
@@ -1710,7 +1714,7 @@ function readInstructionOperands(r: Reader): BytecodeInstruction {
 			} as const;
 			if (
 				instruction.constructorSlotReserve < 0 ||
-				instruction.constructorSlotReserve > 64
+				instruction.constructorSlotReserve > CORE_MAX_SHAPED_OBJECT_SLOTS
 			) {
 				throw new RangeError("program-image-codec: invalid constructor slot reserve");
 			}
