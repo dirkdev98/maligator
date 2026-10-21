@@ -569,6 +569,12 @@ type CompilerOperation =
 
 			functionIndex?: number;
 			index: number;
+			/**
+			 * NATIVE-ONLY, captured loads: the binding holds this closure, whose owner
+			 * may have left the elided-object marker in it. Native code creates the
+			 * object here and stores it back, so this load is a collection point.
+			 */
+			materializeClosure?: number;
 	  }
 	| {
 			// [destination]; the active frame's new.target (undefined for a

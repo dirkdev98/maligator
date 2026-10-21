@@ -900,6 +900,23 @@ function verifyGcRoots(
 			recordedBackedges.add(instruction);
 			continue;
 		}
+		if (safepoint.kind === "closure-materialization") {
+			if (
+				instruction.type !== "loadCaptured" ||
+				instruction.materializeClosure === undefined
+			) {
+				fail(
+					"closure-materialization safepoint does not name a materializing captured load",
+					{
+						functionIndex,
+						block: site.block,
+						instruction: site.index,
+						opcode: instruction.type,
+					},
+				);
+			}
+			continue;
+		}
 		if (safepoint.kind !== "operation") {
 			fail("target safepoint has an unknown kind", { functionIndex });
 		}
@@ -985,6 +1002,18 @@ function verifyGcRoots(
 			covered.add(realized);
 		}
 	}
+	for (const [instruction, site] of model.sites)
+		if (
+			instruction.type === "loadCaptured" &&
+			instruction.materializeClosure !== undefined &&
+			!safepoints.has(instruction)
+		)
+			fail("materializing captured load has no safepoint record", {
+				functionIndex,
+				block: site.block,
+				instruction: site.index,
+				opcode: instruction.type,
+			});
 	for (const { coreInstruction, instruction, reason } of entry?.discharged ?? []) {
 		const site = model.sites.get(instruction);
 		if (

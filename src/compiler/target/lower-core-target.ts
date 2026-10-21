@@ -1903,6 +1903,12 @@ function lowerFunctionToTarget(
 			keyof CoreTargetSafepointRoots
 		>
 	> = [];
+	const pendingClosureMaterializations: Array<
+		Omit<
+			Extract<CoreTargetSafepoint, { kind: "closure-materialization" }>,
+			keyof CoreTargetSafepointRoots
+		>
+	> = [];
 	let edgeSourcePosition = -1;
 	for (const blockId of blockOrder) {
 		const loweredBlock = loweredBlockForCore.get(blockId)!;
@@ -1988,6 +1994,18 @@ function lowerFunctionToTarget(
 				rebuilt.numericSortCallback = numericCallback;
 			if (directClosures?.creations.has(instruction) && rebuilt.type === "createFunction")
 				rebuilt.directClosure = true;
+			const materialization = directClosures?.materializations.get(instruction);
+			if (materialization !== undefined) {
+				// The creator elides the object on the strength of every escaping load being marked.
+				if (rebuilt.type !== "loadCaptured")
+					throw new Error(
+						`Direct closure load ${instruction} lowered to ${rebuilt.type}`,
+					);
+				rebuilt.materializeClosure = coreTargetFunctionIndex(
+					functionMap,
+					materialization.target,
+				);
+			}
 			const directClosureOwner = directClosures?.calls.get(instruction);
 			if (directClosureOwner !== undefined) {
 				// The creator elides the object on the strength of every call being marked.
@@ -2164,6 +2182,11 @@ function lowerFunctionToTarget(
 			}
 			instructions.push(lowered);
 			if (resultMove !== undefined) instructions.push(resultMove);
+			if (materialization !== undefined)
+				pendingClosureMaterializations.push({
+					kind: "closure-materialization",
+					instruction: lowered,
+				});
 			const realizedCoreInstructions = new Set<CoreInstructionId>();
 			if (coreInstructionNeedsOperationSafepoint(coreFunction, instruction)) {
 				realizedCoreInstructions.add(instruction);
@@ -2497,6 +2520,7 @@ function lowerFunctionToTarget(
 	};
 	const pendingSafepoints = [
 		...pendingOperationSafepoints,
+		...pendingClosureMaterializations,
 		...[...loopBackedgeInstructions(analysisFunction)].map((instruction) => ({
 			kind: "loop-backedge" as const,
 			instruction,

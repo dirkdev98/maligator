@@ -10,12 +10,20 @@ import type {
 } from "../core/core-ir.ts";
 import type { CoreFunctionStore } from "../core/core-store.ts";
 
-/** One function's share of the closures whose function objects are never observed. */
+/** One function's share of the closures whose function objects are created only when observed. */
 export interface CoreDirectClosurePlan {
 	readonly creations: ReadonlySet<CoreInstructionId>;
 	/** Exact calls of such a closure, keyed to the function whose activation created it. */
 	readonly calls: ReadonlyMap<CoreInstructionId, CoreFunctionId>;
+	/** Binding loads whose value escapes, so they create the object the first time they run. */
+	readonly materializations: ReadonlyMap<
+		CoreInstructionId,
+		{ readonly target: CoreFunctionId; readonly owner: CoreFunctionId }
+	>;
 }
+
+// The marker would be mistaken for an uninitialized binding.
+const EMPTY_OBSERVING_OPCODES: ReadonlySet<string> = new Set(["throwIfTdz", "isEmpty"]);
 
 const UNOBSERVED_CALLEE_EXCLUSIONS: ReadonlySet<string> = new Set([
 	"loadCallee",
@@ -73,11 +81,13 @@ function result(
 }
 
 /**
- * Find nested functions whose object is only ever the callee of an exact call.
+ * Find nested functions whose object is observed only through their binding cell.
  * Their creating activation can then skip the allocation: native callers
- * rebuild the creation environment from the owner scope they already reach.
- * The binding cell keeps a marker so a creation that would need its own
- * capture vector still materializes the object and its callers fall back to it.
+ * rebuild the creation environment from the owner scope they already reach, and a
+ * binding read whose value escapes creates the object from that scope and stores
+ * it back, so every later read sees the same function. The cell keeps a marker
+ * until then; a creation that would need its own capture vector still
+ * materializes the object and its callers fall back to it.
  */
 export function planCoreDirectClosures(
 	program: SealedCoreProgram,
@@ -135,10 +145,14 @@ export function planCoreDirectClosures(
 			| {
 					creations: Set<CoreInstructionId>;
 					calls: Map<CoreInstructionId, CoreFunctionId>;
+					materializations: Map<
+						CoreInstructionId,
+						{ readonly target: CoreFunctionId; readonly owner: CoreFunctionId }
+					>;
 			  }
 			| undefined;
 		if (entry === undefined) {
-			entry = { creations: new Set(), calls: new Map() };
+			entry = { creations: new Set(), calls: new Map(), materializations: new Map() };
 			plans.set(functionId, entry);
 		}
 		return entry;
@@ -239,6 +253,10 @@ export function planCoreDirectClosures(
 				readonly fn: CoreFunctionStore;
 				readonly instruction: CoreInstructionId;
 			}> = [];
+			const materializations: Array<{
+				readonly fn: CoreFunctionStore;
+				readonly instruction: CoreInstructionId;
+			}> = [];
 			if (cell !== undefined) {
 				if (aliased.has(cell) || stores.get(cell) !== 1) continue;
 				for (const load of loads.get(cell) ?? []) {
@@ -255,25 +273,36 @@ export function planCoreDirectClosures(
 						eligible = false;
 						break;
 					}
+					let escapes = false;
 					for (
 						let use = load.fn.kernel.valueFirstUse(loaded);
 						use >= 0;
 						use = load.fn.kernel.useNext(use)
 					) {
 						const instruction = load.fn.kernel.useInstruction(use);
-						if (!exactCallee(load.fn, instruction, loaded, target)) {
+						if (exactCallee(load.fn, instruction, loaded, target)) {
+							cellCalls.push({ fn: load.fn, instruction });
+							continue;
+						}
+						if (
+							load.fn.instructionKind(instruction) === "operation" &&
+							EMPTY_OBSERVING_OPCODES.has(load.fn.instructionOpcodeName(instruction))
+						) {
 							eligible = false;
 							break;
 						}
-						cellCalls.push({ fn: load.fn, instruction });
+						escapes = true;
 					}
 					if (!eligible) break;
+					if (escapes) materializations.push(load);
 				}
 				if (!eligible) continue;
 			}
 			plan(owner).creations.add(creation);
 			for (const instruction of ownerCalls) plan(owner).calls.set(instruction, owner);
 			for (const call of cellCalls) plan(call.fn.id).calls.set(call.instruction, owner);
+			for (const load of materializations)
+				plan(load.fn.id).materializations.set(load.instruction, { target, owner });
 		}
 	return plans;
 }

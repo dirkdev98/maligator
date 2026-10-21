@@ -503,6 +503,40 @@ function initializeFixedCaptureOwners(
 	);
 }
 
+function renderCapturedLoad(
+	instruction: Extract<BytecodeInstruction, { opcode: "LOAD_CAPTURED" }>,
+	ip: number,
+	context: NativeInstructionContext,
+	relocation: NativeRelocationExpressions,
+): Array<string> {
+	const copied = context.copiedCaptures?.get(
+		captureValueKey(instruction.ownerFunctionIndex, instruction.index),
+	);
+	if (copied !== undefined) return [`r${instruction.dst} = __capture_value_${copied};`];
+	if (context.fixedCaptureOwners?.has(instruction.ownerFunctionIndex)) {
+		const owner = captureOwnerName(relocation, instruction.ownerFunctionIndex);
+		if (context.requiredCaptureOwners?.has(instruction.ownerFunctionIndex))
+			return [`r${instruction.dst} = ${owner}->slots[${instruction.index}];`];
+		return [
+			`r${instruction.dst} = ${owner} != nullptr ? ${owner}->slots[${instruction.index}] : MAL_VALUE_UNDEFINED;`,
+		];
+	}
+	if (instruction.ownerFunctionIndex === context.ownedCaptureFunctionIndex) {
+		const shadow = context.captureShadow;
+		const state = shadow?.plan.states[ip] ?? ENVIRONMENT_PRESENT;
+		const environment = `env->slots[${instruction.index}]`;
+		if (shadow === undefined || (state & ENVIRONMENT_ABSENT) === 0)
+			return [`r${instruction.dst} = ${environment};`];
+		const frame = `__gc_slots[${shadow.base + instruction.index}]`;
+		return [
+			`r${instruction.dst} = ${state === ENVIRONMENT_ABSENT ? frame : `__capture_env_ready ? ${environment} : ${frame}`};`,
+		];
+	}
+	return [
+		`r${instruction.dst} = mal_vm_load_captured(env, ${relocation.ownerFunctionIndex(instruction.ownerFunctionIndex)}, ${instruction.index});`,
+	];
+}
+
 function ensureCaptureEnvironment(
 	shadow: NativeCaptureShadow | undefined,
 	ip: number,
@@ -8163,32 +8197,43 @@ function emitInstruction(
 			// fresh-call parameter (a coroutine resume skips the prologue).
 			return [`r${instruction.dst} = callee;`];
 		case "LOAD_CAPTURED": {
-			const copied = context.copiedCaptures?.get(
-				captureValueKey(instruction.ownerFunctionIndex, instruction.index),
-			);
-			if (copied !== undefined)
-				return [`r${instruction.dst} = __capture_value_${copied};`];
-			if (context.fixedCaptureOwners?.has(instruction.ownerFunctionIndex)) {
-				const owner = captureOwnerName(relocation, instruction.ownerFunctionIndex);
-				if (context.requiredCaptureOwners?.has(instruction.ownerFunctionIndex))
-					return [`r${instruction.dst} = ${owner}->slots[${instruction.index}];`];
-				return [
-					`r${instruction.dst} = ${owner} != nullptr ? ${owner}->slots[${instruction.index}] : MAL_VALUE_UNDEFINED;`,
-				];
-			}
-			if (instruction.ownerFunctionIndex === context.ownedCaptureFunctionIndex) {
-				const shadow = context.captureShadow;
-				const state = shadow?.plan.states[ip] ?? ENVIRONMENT_PRESENT;
-				const environment = `env->slots[${instruction.index}]`;
-				if (shadow === undefined || (state & ENVIRONMENT_ABSENT) === 0)
-					return [`r${instruction.dst} = ${environment};`];
-				const frame = `__gc_slots[${shadow.base + instruction.index}]`;
-				return [
-					`r${instruction.dst} = ${state === ENVIRONMENT_ABSENT ? frame : `__capture_env_ready ? ${environment} : ${frame}`};`,
-				];
-			}
+			const load = renderCapturedLoad(instruction, ip, context, relocation);
+			const materialize = context.nativePlan;
+			if (
+				materialize?.kind !== "closure-materialization" ||
+				context.directClosures?.has(
+					nativeDirectClosureKey(
+						materialize.functionIndex,
+						instruction.ownerFunctionIndex,
+					),
+				) !== true
+			)
+				return load;
+			const owner = instruction.ownerFunctionIndex;
+			const scope = `__closure_scope_${ip}`;
+			const scopeExpression =
+				owner === context.ownedCaptureFunctionIndex
+					? "env"
+					: context.fixedCaptureOwners?.has(owner) === true
+						? captureOwnerName(relocation, owner)
+						: `mal_vm_capture_owner(env, ${relocation.ownerFunctionIndex(owner)})`;
+			// The owner left the marker instead of the object; the first escaping read creates it.
 			return [
-				`r${instruction.dst} = mal_vm_load_captured(env, ${relocation.ownerFunctionIndex(instruction.ownerFunctionIndex)}, ${instruction.index});`,
+				...load,
+				`if (__builtin_expect(mal_value_is_empty(r${instruction.dst}), 0)) {`,
+				...(owner === context.ownedCaptureFunctionIndex
+					? ensureCaptureEnvironment(context.captureShadow, ip).map((line) => `  ${line}`)
+					: []),
+				`  MalEnv *${scope} = ${scopeExpression};`,
+				// A copied capture keeps the marker after an earlier read created the object.
+				`  r${instruction.dst} = ${scope}->slots[${instruction.index}];`,
+				`  if (mal_value_is_empty(r${instruction.dst})) {`,
+				`    r${instruction.dst} = mal_vm_op_create_function(vm, ${relocation.functionIndex(materialize.functionIndex)}, ${scope});`,
+				`    mal_gc_write_barrier(${scope}->slots[${instruction.index}]);`,
+				`    ${scope}->slots[${instruction.index}] = r${instruction.dst};`,
+				`    mal_gc_card(&${scope}->header, r${instruction.dst});`,
+				"  }",
+				"}",
 			];
 		}
 		case "STORE_CAPTURED": {

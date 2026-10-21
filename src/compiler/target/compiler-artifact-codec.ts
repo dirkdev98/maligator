@@ -97,7 +97,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 248;
+export const COMPILER_ARTIFACT_VERSION = 249;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -2285,6 +2285,18 @@ function writeCompilerArtifact(
 				instruction.opcode === "CREATE_FUNCTION"
 			) {
 				w.u8(22);
+			} else if (
+				plan.kind === "closure-materialization" &&
+				instruction.opcode === "LOAD_CAPTURED"
+			) {
+				if (
+					!Number.isInteger(plan.functionIndex) ||
+					plan.functionIndex < 0 ||
+					plan.functionIndex >= def.functions.length
+				)
+					throw new RangeError("program-image-codec: invalid closure materialization");
+				w.u8(23);
+				w.u32(plan.functionIndex);
 			} else if (
 				plan.kind === "exact-typed-array-element" &&
 				(instruction.opcode === "LOAD_PROPERTY" ||
@@ -4820,6 +4832,14 @@ function readCompilerArtifact(
 				};
 			} else if (tag === 22 && instruction.opcode === "CREATE_FUNCTION") {
 				nativeInstructions[instructionIndex] = { kind: "direct-closure" };
+			} else if (tag === 23 && instruction.opcode === "LOAD_CAPTURED") {
+				const functionIndex = r.u32();
+				if (functionIndex >= functions.length)
+					throw new RangeError("program-image-codec: invalid closure materialization");
+				nativeInstructions[instructionIndex] = {
+					kind: "closure-materialization",
+					functionIndex,
+				};
 			} else if (tag === 21 && instruction.opcode === "CREATE_REST_ARGUMENTS") {
 				const startIndex = r.u32();
 				if (startIndex !== instruction.startIndex)

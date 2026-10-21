@@ -1810,6 +1810,8 @@ export type NativeInstructionPlan =
 	  }
 	| { readonly kind: "construct"; readonly directFunctionIndex: number }
 	| { readonly kind: "direct-closure" }
+	/** The captured load creates this closure when its owner left the marker. */
+	| { readonly kind: "closure-materialization"; readonly functionIndex: number }
 	| { readonly kind: "fresh-dense-reserve"; readonly length: number }
 	| { readonly kind: "exact-own-slot"; readonly slot: number }
 	| { readonly kind: "exact-array-length" }
@@ -1902,6 +1904,13 @@ export function createConservativeNativePlan(
 			),
 		),
 	};
+}
+
+// Native code publishes roots at a materializing load exactly as at an operation.
+function nativeSafepointKind(
+	kind: "operation" | "loop-backedge" | "closure-materialization",
+): "operation" | "loop-backedge" {
+	return kind === "closure-materialization" ? "operation" : kind;
 }
 
 /**
@@ -2330,6 +2339,13 @@ function nativeInstructionPlanFromExecution(
 		}
 		case "createFunction":
 			return instruction.directClosure === true ? { kind: "direct-closure" } : undefined;
+		case "loadCaptured":
+			return instruction.materializeClosure === undefined
+				? undefined
+				: {
+						kind: "closure-materialization",
+						functionIndex: instruction.materializeClosure,
+					};
 		case "construct":
 			return instruction.directFunctionIndex === undefined
 				? undefined
@@ -4689,7 +4705,7 @@ function lowerExecutionFunctionToNativePlan(
 				? []
 				: [
 						{
-							kind,
+							kind: nativeSafepointKind(kind),
 							instructionIp,
 							rootRegisters,
 							incomingRootRegisters,
@@ -4756,7 +4772,7 @@ function lowerExecutionFunctionToNativePlan(
 						? []
 						: [
 								{
-									kind,
+									kind: nativeSafepointKind(kind),
 									instructionIp,
 									rootRegisters,
 									incomingRootRegisters,

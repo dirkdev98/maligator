@@ -650,6 +650,8 @@ interface NativeDirectClosureSite {
 	readonly environment: NativeDirectClosureEnvironment | undefined;
 	/** The creating function and every function calling through the owner scope. */
 	readonly functions: ReadonlyArray<number>;
+	/** Some caller enters the target's compiled code directly. */
+	readonly called: boolean;
 }
 
 function nativeDirectClosureSites(
@@ -660,6 +662,7 @@ function nativeDirectClosureSites(
 		{ readonly target: number; readonly owner: number }
 	>();
 	const functions = new Map<string, Set<number>>();
+	const called = new Set<string>();
 	// A typed entry that guards the call identity would read the elided object.
 	const guarded = new Set<string>();
 	const participate = (key: string, functionIndex: number) => {
@@ -675,6 +678,14 @@ function nativeDirectClosureSites(
 				creations.set(key, { target: instruction.functionIndex, owner: functionIndex });
 				participate(key, functionIndex);
 			} else if (
+				plan?.kind === "closure-materialization" &&
+				instruction?.opcode === "LOAD_CAPTURED"
+			) {
+				participate(
+					nativeDirectClosureKey(plan.functionIndex, instruction.ownerFunctionIndex),
+					functionIndex,
+				);
+			} else if (
 				plan?.kind === "call" &&
 				plan.directClosureOwner !== undefined &&
 				plan.directFunctionIndex !== undefined
@@ -684,6 +695,7 @@ function nativeDirectClosureSites(
 					plan.directClosureOwner,
 				);
 				participate(key, functionIndex);
+				called.add(key);
 				for (const entry of native.directEntries)
 					for (const call of entry.callOverrides ?? [])
 						if (
@@ -711,7 +723,12 @@ function nativeDirectClosureSites(
 							: layout[layout.length - 1] === owner
 								? { kind: "chain" }
 								: { kind: "outer-chain", owner: layout[layout.length - 1]! };
-		sites.set(key, { target, environment, functions: [...functions.get(key)!] });
+		sites.set(key, {
+			target,
+			environment,
+			functions: [...functions.get(key)!],
+			called: called.has(key),
+		});
 	}
 	return sites;
 }
@@ -780,7 +797,7 @@ function nativeCompilationAvailability(
 	for (const [key, site] of closureSites)
 		if (
 			site.environment !== undefined &&
-			directCompiledTargets.has(site.target) &&
+			(!site.called || directCompiledTargets.has(site.target)) &&
 			site.functions.every((functionIndex) => compiled[functionIndex] !== null)
 		)
 			directClosures.set(key, site.environment);

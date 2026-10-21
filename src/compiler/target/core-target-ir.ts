@@ -107,6 +107,11 @@ export type CoreTargetSafepoint = CoreTargetSafepointRoots &
 				readonly kind: "loop-backedge";
 				readonly instruction: CompilerInstruction;
 		  }
+		| {
+				/** A captured load that may create the elided closure its binding holds. */
+				readonly kind: "closure-materialization";
+				readonly instruction: CompilerInstruction;
+		  }
 	);
 
 /**

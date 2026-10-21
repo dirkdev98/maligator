@@ -72,7 +72,50 @@ function check(limit, values) {
 console.log(check(3, globalThis.values ?? [1, 5, 9]));
 `;
 
+const escapingSource = `
+function check(values, report) {
+	const errors = [];
+	function reportError(message) {
+		errors.push(message);
+		return errors.length;
+	}
+	function forward(value, callback) {
+		return callback(\`negative \${value}\`);
+	}
+	function visit(value) {
+		if (value >= 0) return reportError.length + value * 2;
+		return report ? forward(value, reportError) : -1;
+	}
+	function sameTwice() {
+		const first = report ? reportError : undefined;
+		return first === (report ? reportError : undefined);
+	}
+	let sum = 0;
+	for (const value of values) sum += visit(value);
+	if (values.length > 3) reportError("long");
+	return [sum, errors.join(), sameTwice()].join(":");
+}
+console.log(check(globalThis.values ?? [1, -5, 9, 4], true));
+`;
+
 describe("native direct closures", () => {
+	it("create a nested function whose value escapes only where a read lets it escape", () => {
+		const original = compile(escapingSource);
+		for (const image of [
+			original,
+			deserializeCompilerArtifact(serializeCompilerArtifact(original)),
+		]) {
+			const reportError = functionNamed(image, "reportError");
+			const output = emitProgramImage(image);
+			expect(output).not.toContain(`mal_vm_op_create_function(vm, ${reportError}, env);`);
+			expect(output).toMatch(
+				new RegExp(
+					`mal_vm_op_create_function\\(vm, ${reportError}, __closure_scope_\\d+\\)`,
+				),
+			);
+		}
+	});
+
 	it("create no function object for a nested function its owner calls through its binding", () => {
 		const image = compile(ownerSource);
 		const step = functionNamed(image, "step");
