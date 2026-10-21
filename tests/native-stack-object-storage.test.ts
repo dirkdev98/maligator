@@ -81,7 +81,7 @@ describe("native typed stack fields", () => {
 			).toBe(true);
 		}
 		const output = emitCompiledFunction(native, native.functionIndex, "", false)!.source;
-		expect(output).toContain(`.slot_count = ${native.storage!.rootSlotCount + 2}`);
+		expect(output).toContain(`MalValue __gc_slots[${native.storage!.rootSlotCount + 2}];`);
 		for (const slot of [0, 3])
 			expect(output).toContain(`__stack_object_${plan.allocationIp}_slot_${slot}`);
 		for (const slot of [1, 2])
@@ -307,7 +307,8 @@ describe("native typed stack fields", () => {
 			expect(source).not.toContain("mal_object_init_embedded_stack(");
 			expect(source).not.toContain("mal_vm_materialize_stack_object");
 		}
-		expect(emitted.source).toContain(`.slot_count = ${native.storage!.rootSlotCount}`);
+		expect(native.storage!.stackRoots).toBe("conservative");
+		expect(emitted.source).not.toContain("MalFrameDescriptor __gc_desc");
 		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
 	});
 
