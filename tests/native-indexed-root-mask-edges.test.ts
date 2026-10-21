@@ -155,6 +155,19 @@ function ordinary(
 	);
 }
 
+/** Int32 keys index the array directly; Number keys still pass through the double probe. */
+function loadProbe(representation: "int32" | "number"): string {
+	return representation === "int32"
+		? "mal_vm_array_try_get_proven_index("
+		: "mal_vm_array_try_get_index(";
+}
+
+function storeProbe(representation: "int32" | "number"): string {
+	return representation === "int32"
+		? "mal_vm_array_try_store_proven_index("
+		: "mal_vm_array_try_store(";
+}
+
 function privateSlot(source: string, register: number): number {
 	expect(privateRootRegisters(source)).toContain(register);
 	const store = source.match(new RegExp(`__gc_slots\\[(\\d+)\\] = r${register};`));
@@ -177,7 +190,7 @@ describe("native numeric indexed-property root publication", () => {
 			);
 			const slot = privateSlot(source, indexedStore.value);
 			const publication = `__gc_slots[${slot}] = r${indexedStore.value};`;
-			const probe = source.indexOf("mal_vm_array_try_store(");
+			const probe = source.indexOf(storeProbe(representation));
 			const miss = source.indexOf("mal_vm_indexed_fast_store_index(", probe);
 			expect(probe).toBeGreaterThan(-1);
 			expect(miss).toBeGreaterThan(probe);
@@ -225,11 +238,11 @@ describe("native numeric indexed-property root publication", () => {
 			privateSlot(source, indexedLoad.dst);
 			privateSlot(source, indexedLoad.object);
 			expect(source.match(/__gc_slots\[\d+\] = r0;/g)).toHaveLength(1);
-			const firstProbe = source.indexOf("mal_vm_array_try_get_index(");
+			const firstProbe = source.indexOf(loadProbe(representation));
 			const mask = source.indexOf("MAL_ROOT_MASK(");
 			expect(firstProbe).toBeGreaterThan(-1);
 			expect(mask).toBeGreaterThan(firstProbe);
-			const secondProbe = source.indexOf("mal_vm_array_try_get_index(", firstProbe + 1);
+			const secondProbe = source.indexOf(loadProbe(representation), firstProbe + 1);
 			for (const probe of [firstProbe, secondProbe]) {
 				const miss = source.indexOf("mal_vm_indexed_fast_load_index(", probe);
 				const fallback = source.lastIndexOf("} else {", miss);
@@ -382,7 +395,7 @@ describe("native numeric indexed-property root publication", () => {
 				`r${key.dst} =`,
 				source.indexOf("mal_vm_op_load_property_ic_static_miss("),
 			);
-			const probe = source.indexOf("mal_vm_array_try_get_index(", start);
+			const probe = source.indexOf(loadProbe(representation), start);
 			const miss = source.indexOf("mal_vm_indexed_fast_load_index(", probe);
 			const fallback = source.lastIndexOf("} else {", miss);
 			expect(probe).toBeGreaterThan(start);
@@ -405,7 +418,7 @@ describe("native numeric indexed-property root publication", () => {
 			`r${key.dst} =`,
 			source.indexOf("mal_vm_op_load_property_ic_static_miss("),
 		);
-		const probe = source.indexOf("mal_vm_array_try_get_index(", start);
+		const probe = source.indexOf("mal_vm_array_try_get_value_index(", start);
 		const helper = source.indexOf("mal_vm_indexed_fast_load(", start);
 		expect(probe).toBeGreaterThan(start);
 		expect(helper).toBeGreaterThan(probe);

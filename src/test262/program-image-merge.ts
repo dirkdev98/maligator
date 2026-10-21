@@ -1,4 +1,6 @@
 import { probeReadIsNamed } from "../compiler/shared/compiler-instruction.ts";
+import type { CompilerClassLayoutSite } from "../compiler/shared/compiler-instruction.ts";
+import type { CoreTargetClassLayout } from "../compiler/target/core-target-ir.ts";
 import type { NativeStoragePlan } from "../compiler/target/lower-native-storage.ts";
 import type {
 	ProgramImage,
@@ -67,6 +69,35 @@ interface RebaseBases {
 	template: number;
 	file: number;
 	position: number;
+	classLayout: number;
+}
+
+function cloneClassLayout(
+	layout: CoreTargetClassLayout,
+	base: RebaseBases,
+): CoreTargetClassLayout {
+	return {
+		constructor: layout.constructor + base.function,
+		keys: layout.keys.map((key) =>
+			key >= 0 ? key + base.string : ~(~key + base.global),
+		),
+		methods: layout.methods.map(
+			(value, index) => value + (index % 2 === 0 ? base.string : base.function),
+		),
+	};
+}
+
+function cloneClassLayoutSite(
+	site: CompilerClassLayoutSite,
+	base: RebaseBases,
+): CompilerClassLayoutSite {
+	return {
+		kind: site.kind,
+		candidates: site.candidates.map((candidate) => ({
+			layout: candidate.layout + base.classLayout,
+			index: candidate.index,
+		})),
+	};
 }
 
 function assertNever(value: never): never {
@@ -126,6 +157,9 @@ function cloneNativeInstructionPlan(
 	}
 	if (plan.kind === "construct") {
 		return { ...plan, directFunctionIndex: plan.directFunctionIndex + base.function };
+	}
+	if (plan.kind === "class-layout") {
+		return { kind: "class-layout", site: cloneClassLayoutSite(plan.site, base) };
 	}
 	return { ...plan };
 }
@@ -643,6 +677,7 @@ export function mergeProgramImages(images: Array<ProgramImage>): MergedProgramIm
 		}));
 	}
 	const functionBases: Array<number> = [];
+	const classLayouts: Array<CoreTargetClassLayout> = [];
 
 	for (const programImage of images) {
 		const runtime = programImage.runtime;
@@ -660,8 +695,11 @@ export function mergeProgramImages(images: Array<ProgramImage>): MergedProgramIm
 			template: mergedRuntime.literalTemplateData.length,
 			file: mergedRuntime.files.length,
 			position: mergedRuntime.sourcePositions.length,
+			classLayout: classLayouts.length,
 		};
 		functionBases.push(base.function);
+		for (const layout of programImage.native.classLayouts ?? [])
+			classLayouts.push(cloneClassLayout(layout, base));
 
 		mergedRuntime.stringConstants.push(
 			...runtime.stringConstants.map((value) => [...value]),
@@ -827,7 +865,11 @@ export function mergeProgramImages(images: Array<ProgramImage>): MergedProgramIm
 	mergedRuntime.functionCount = mergedRuntime.functions.length;
 	const merged: ProgramImage = {
 		runtime: mergedRuntime,
-		native: { semanticProtectors, functions: mergedNativeFunctions },
+		native: {
+			semanticProtectors,
+			functions: mergedNativeFunctions,
+			...(classLayouts.length === 0 ? {} : { classLayouts }),
+		},
 		diagnostics: {},
 	};
 	return { image: merged, functionBases };

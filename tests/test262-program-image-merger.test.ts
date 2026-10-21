@@ -569,6 +569,46 @@ describe("Test262 VM image merger", () => {
 		});
 	});
 
+	it("concatenates class layouts and rebases their sites, keys, and methods", () => {
+		const classImage = () =>
+			withNativeFunctionPlan(
+				image(
+					{
+						functions: [
+							vmFunction([
+								{
+									opcode: "LOAD_PROPERTY_STATIC",
+									dst: 1,
+									object: 0,
+									stringIndex: 0,
+									icIndex: 0,
+								},
+								{ opcode: "RETURN", value: 1 },
+							]),
+						],
+					},
+					{ classLayouts: [{ constructor: 0, keys: [0, ~0], methods: [0, 0] }] },
+				),
+				0,
+				(plan) => ({
+					...plan,
+					instructions: plan.instructions.with(0, {
+						kind: "class-layout",
+						site: { kind: "slot", candidates: [{ layout: 0, index: 1 }] },
+					}),
+				}),
+			);
+		const merged = mergeProgramImages([classImage(), classImage()]).image;
+		expect(merged.native.classLayouts).toEqual([
+			{ constructor: 0, keys: [0, ~0], methods: [0, 0] },
+			{ constructor: 1, keys: [1, ~1], methods: [1, 1] },
+		]);
+		expect(merged.native.functions[1]!.instructions[0]).toEqual({
+			kind: "class-layout",
+			site: { kind: "slot", candidates: [{ layout: 1, index: 1 }] },
+		});
+	});
+
 	it("rejects malformed image counts and literal-template streams", () => {
 		expect(() => mergeProgramImages([image({ functionCount: 2 })])).toThrow(
 			/functionCount/,

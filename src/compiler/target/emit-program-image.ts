@@ -1267,6 +1267,14 @@ function validateImageForEmission(image: ProgramImage): void {
 	);
 	validateRuntimeImageMetadata(image.runtime);
 	validateNativeProgramStorage(image.native, image.runtime.stringConstants);
+	const layoutCount = image.native.classLayouts?.length ?? 0;
+	for (const fn of image.native.functions)
+		for (const plan of fn.instructions)
+			if (
+				plan?.kind === "class-layout" &&
+				plan.site.candidates.some(({ layout }) => layout >= layoutCount)
+			)
+				throw new RangeError("class layout site refers past the image's layout table");
 }
 
 function emitProgramImageParts(
@@ -2937,6 +2945,9 @@ function emitBatchUnits(
 				false,
 				nativeStackRootsAreConservative(image, useCompiled),
 				literalTemplatesSymbol,
+				{},
+				undefined,
+				useCompiled ? image.native.classLayouts : undefined,
 			),
 		);
 		lines.push("");

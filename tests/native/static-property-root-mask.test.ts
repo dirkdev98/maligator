@@ -122,7 +122,7 @@ const publicationKernels = [
 	{
 		name: "retainThroughIndexStore",
 		boundary: "STORE_PROPERTY",
-		probe: "mal_vm_array_try_store",
+		probe: "mal_vm_array_try_store_proven_index",
 		properties: ["value", "receiver"],
 	},
 	{
@@ -147,21 +147,21 @@ const publicationKernels = [
 	{
 		name: "retainThroughIndexLoad",
 		boundary: "LOAD_PROPERTY",
-		probe: "mal_vm_array_try_get_index",
+		probe: "mal_vm_array_try_get_proven_index",
 		properties: ["value", "receiver"],
 		resultPrivate: true,
 	},
 	{
 		name: "retainThroughThrowingIndexLoad",
 		boundary: "LOAD_PROPERTY",
-		probe: "mal_vm_array_try_get_index",
+		probe: "mal_vm_array_try_get_proven_index",
 		properties: ["value", "receiver"],
 		resultPrivate: true,
 	},
 	{
 		name: "detachedIndexHitAcrossPoll",
 		boundary: "LOAD_PROPERTY",
-		probe: "mal_vm_array_try_get_index",
+		probe: "mal_vm_array_try_get_proven_index",
 		properties: ["value", "receiver"],
 		resultPrivate: true,
 	},

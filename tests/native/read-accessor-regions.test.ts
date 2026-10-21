@@ -18,8 +18,8 @@ import { kernelMaterializerSource } from "../helpers/read-accessor-kernel.ts";
 const fixture = "tests/local/read-accessor-regions.mjs";
 const expected = execFileSync(process.execPath, [fixture], { encoding: "utf8" }).trim();
 
-function probeCounters(stderr: string): Record<string, number> {
-	const line = stderr.match(/^\[perf-probe-reads\].*$/m)?.[0] ?? "";
+function probeCounters(stderr: string, family = "probe-reads"): Record<string, number> {
+	const line = stderr.match(new RegExp(`^\\[perf-${family}\\].*$`, "m"))?.[0] ?? "";
 	return Object.fromEntries(
 		[...line.matchAll(/\b(\w+)=(\d+)/g)].map(([, name, value]) => [name!, Number(value)]),
 	);
@@ -368,8 +368,10 @@ console.log(count);`),
 				expect(diagnostic.stdout.trim()).toBe("400");
 				const counters = probeCounters(diagnostic.stderr);
 				if (mode === "dense") {
+					// Without the expansion, private reads guard on class layout cells instead.
+					const controlLayout = probeCounters(control.stderr, "class-layout-stats");
 					expect(counters.private_load_attempts).toBeLessThan(
-						controlCounters.private_load_attempts!,
+						controlCounters.private_load_attempts! + controlLayout.slot_hits!,
 					);
 					expect(counters.private_hint_hits! + counters.private_searches!).toBe(
 						counters.private_attempts,
