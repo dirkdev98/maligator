@@ -68,7 +68,10 @@ function inputs() {
 }
 const rows = [];
 if (mode === "names" || mode === "symbols") {
-	for (const record of inputs()) {
+	// Indexed loops keep inlined calls outside an iterator-close handler, where snapshots apply.
+	const records = inputs();
+	for (let position = 0; position < records.length; position++) {
+		const record = records[position];
 		const expectedSymbol = Object.getOwnPropertySymbols(record)[0];
 		const row = mode === "names" ? names(record, 1, mutate) : symbols(record, 1, mutate);
 		if (mode === "symbols" && (row[1] !== expectedSymbol || row[3] !== expectedSymbol))
@@ -79,9 +82,12 @@ if (mode === "names" || mode === "symbols") {
 	rows.push(
 		mode === "names" ? names(target, 0, unchanged) : symbols(target, 0, unchanged),
 	);
-	for (const empty of [[], new Array(10000)])
+	const empties = [[], new Array(10000)];
+	for (let position = 0; position < empties.length; position++)
 		rows.push(
-			mode === "names" ? names(empty, 0, unchanged) : symbols(empty, 0, unchanged),
+			mode === "names"
+				? names(empties[position], 0, unchanged)
+				: symbols(empties[position], 0, unchanged),
 		);
 } else if (mode === "materialize") {
 	const mutable = process.env.MAL_PRIMORDIALS !== "locked";
