@@ -225,7 +225,7 @@ static bool rl_concat(MalVm *vm, MalString *left, MalString *right, MalString **
         *out = left;
         return true;
     }
-    if (mal_string_new_cons_checked(&vm->heap, left, right, out)) return true;
+    if (mal_string_append_checked(&vm->heap, left, right, out)) return true;
     mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
     return false;
 }

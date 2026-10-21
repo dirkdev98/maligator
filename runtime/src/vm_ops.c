@@ -150,7 +150,7 @@ MalValue mal_vm_concat_strings_known(MalVm *vm, MalString *left, MalString *righ
     if (mal_string_length(left) == 0) return mal_value_from_string(right);
     if (mal_string_length(right) == 0) return mal_value_from_string(left);
     MalString *result;
-    if (!mal_string_new_cons_checked(&vm->heap, left, right, &result)) {
+    if (!mal_string_append_checked(&vm->heap, left, right, &result)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Invalid string length");
         return MAL_VALUE_UNDEFINED;
     }

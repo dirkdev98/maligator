@@ -11,6 +11,12 @@ typedef enum MalStringStorage : u32 {
     MAL_STRING_STORAGE_OWNED,
     MAL_STRING_STORAGE_INLINE,
     MAL_STRING_STORAGE_EXTERNAL,
+    /**
+     * An append buffer: an owned flat payload with spare capacity (kept in `hash`)
+     * that dependent prefixes share. It is never itself a JavaScript value, so its
+     * length may grow while those prefixes keep theirs.
+     */
+    MAL_STRING_STORAGE_BUILDER,
     MAL_STRING_STORAGE_DEPENDENT,
     MAL_STRING_STORAGE_CONS,
 } MalStringStorage;
@@ -105,6 +111,12 @@ MalString *mal_string_new_slice(MalHeap *heap, MalString *parent, usize offset, 
  * Returns false without allocating when the engine string limit would be exceeded.
  */
 bool mal_string_new_cons_checked(MalHeap *heap, MalString *left, MalString *right, MalString **out);
+
+/**
+ * JavaScript string concatenation: a rope as mal_string_new_cons_checked builds, except
+ * that repeated appends extend a shared buffer whose prefixes are the results.
+ */
+bool mal_string_append_checked(MalHeap *heap, MalString *left, MalString *right, MalString **out);
 
 // Parts must remain rooted; overflow returns before allocation, and a sole nonempty part may be reused.
 bool mal_string_new_flat_parts_checked(MalHeap *heap, MalString *const *parts, usize count, MalString **out);

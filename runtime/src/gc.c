@@ -2067,7 +2067,8 @@ static __attribute__((noinline)) void mal_gc_finalize_cell_owned(MalHeapHeader *
     switch (cell->type) {
         case MAL_HEAP_STRING: {
             MalString *string = (MalString *) cell;
-            if (string->storage == MAL_STRING_STORAGE_OWNED) {
+            if (string->storage == MAL_STRING_STORAGE_OWNED ||
+                    string->storage == MAL_STRING_STORAGE_BUILDER) {
                 gc_free_raw(&g_gc_vm->heap, (void *) string->code_units);
                 string->code_units = nullptr;
             }

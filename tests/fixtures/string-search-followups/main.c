@@ -580,7 +580,9 @@ static bool compact_result_boundaries_and_concat_growth(MalVm *vm) {
     }
     MalString *concatenated = mal_value_to_string(roots[1]);
     CHECK(concatenated->length == 8192 && concatenated->latin1);
-    CHECK(concatenated->storage == MAL_STRING_STORAGE_CONS);
+    // Appends grow a shared buffer; either way the copied units below stay linear.
+    CHECK(concatenated->storage == MAL_STRING_STORAGE_CONS ||
+        concatenated->storage == MAL_STRING_STORAGE_DEPENDENT);
     for (usize i = 0; i < concatenated->length; i++) CHECK(mal_string_code_unit_at(concatenated, i) == 'a');
 #if MAL_PERF_STATS
     u64 copied = mal_perf_stats.string_copy_code_units + mal_perf_stats.string_owned_code_units;

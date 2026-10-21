@@ -85,6 +85,14 @@ until the consumer admits real sites and measurements establish a benefit.
       f64 stay f64, and the target verifier rejects the moves between them. In the
       numeric-join test later passes remove them; nothing guarantees that before
       lowering. The Core verifier rejects only moves that unbox a boxed value.
+      `loop-scalar-representation-selection` has the same coupling: it picks one
+      representation for every value connected through any arithmetic operand,
+      so `s += i` keeps `i` in f64, and one CSE'd `0` joins unrelated loops.
+      Choosing per storage web (block parameters and moves) with induction ranges
+      made counters i32, but the C renderer then converted back and forth
+      (`mal_ops_number_to_i32`, `(u32)((f64) r)` remainders, f64 increments) and
+      the allocation phase went from 22 to 41 ms. Integer counters need
+      int-aware rendering of those operations together with the selection.
 
 ## Native SSA storage
 
@@ -251,21 +259,6 @@ The independent target boundary and current storage contract are recorded in
       do, left the shape-analysis cone at 27.8 s while adding 45 Ki code units. A
       hot accessor takes about a quarter of its own samples on its first
       instruction, so entry, not root stores, is where its time goes.
-- [ ] Decide whether native builds should scan C stacks conservatively instead of
-      publishing shadow-stack roots. Root slots, masks and their publication are a
-      large share of the emitted C. A prototype that emitted none of them scanned
-      the running stack after a `setjmp` spill and every suspended fiber from its
-      saved stack pointer, mapping each word, raw or NaN-boxed, to an allocated cell
-      through the chunk index, block cell size and bump pointer. It cut the
-      self-compile C by 22%, its clang CPU by 14% and its Node emission by 35%, and
-      passed the GC stress fixtures. However, self-compile wall time and RSS did not
-      move (168 to 177 s either way), so the gain is build time only. Wasm cannot
-      scan its stack and keeps precise roots, so both modes would stay supported.
-      Stale stack words retain dead objects, which breaks three deterministic
-      WeakRef and ephemeron reclamation tests. Recycled cells keep stale contents,
-      so a dead, half-initialized cell found on the stack would be traced through
-      freed edges unless allocation clears payloads and tracers accept null shapes.
-
 - [ ] Shrink the largest inline expansions in generated code. Uniform tagged
       field slots and the one-compare Number decode cut the self-compiler's text
       from 55.0 to 49.9 MB; the inline static load probe is now about 19
@@ -292,6 +285,65 @@ The independent target boundary and current storage contract are recorded in
       Major-mark workers trace slots while the mutator runs, so stores must stay
       release, but the mutator's own loads could be relaxed. On Apple Silicon
       relaxed loads with release stores changed none of six closure workloads.
+
+## Compiled native output
+
+Native output should read and perform like a compiled language rather than a
+translated interpreter. Compiled code now keeps values in C locals and the
+collector scans native stacks, which took the Node-hosted self-compile from 49.5
+to about 46 s and its C from 176 M to 145 M code units. Measured against Node on
+the default closed world, class accessors over private fields still run 80 ms
+against 15, polymorphic subclass methods 37 against 10, recursive method calls
+86 against 29, and `out += "x" + i` loops 20 against 5. The native self-compiler
+spends about 9% of its run in collector pauses, mostly sweeping young cells, and
+18% of its samples in out-of-line property lookup helpers; inlining the inherited
+method hit alone gained only 1%, so these need structural fixes.
+
+- [ ] Run the frame-pointer stack walk and entry-serviced polls on Linux. Compiled
+      frames keep their stack-trace record on the C stack and calls skip return
+      polls, which took `fib(35)` from 84 to 60 ms (Node: 54) and the native
+      self-compiler from 18.5 to 17.9 s. Both are verified on macOS arm64; the ELF
+      section bounds and the GCC sibling-call fallback are only compile-checked.
+- [ ] Move loop back-edge polls onto the entry limit as well. They still load the
+      isolate record through the GOT and test its flag, where comparing the VM's
+      entry limit word would be one dependent load.
+- [ ] Return a sentinel for abrupt completion instead of reloading
+      `vm->completion.kind` after every call (146 k checks in the self-compile).
+- [ ] Give guarded inline method bodies one receiver guard instead of a probe per
+      access. In `for (...) sum += store.opcode(id)` the inlined body still runs
+      an inherited-method probe, a function-index check, a private-name hint
+      lookup, an indexed probe that reboxes the index and a named probe on the
+      element: about 7.5 ns per call against Node's inlined 0, plus 4.5 ns for the
+      `store.count` getter. A shape guard on the receiver that validates its
+      prototype, private slots and the method slot at once would cover all of it.
+- [ ] Resolve method calls through a sound closed-world call graph. Instance
+      method hints are guarded guesses that the call graph does not see, so
+      parameter, return and effect summaries stop at every method call. Hints now
+      cover subclass overrides, which took the polymorphic kernel from 62 to 39 ms,
+      and recursive methods outside loops get guarded direct calls. A name-based
+      target set that includes every function stored under the name, and every
+      function that escapes into a dynamic-key store, would make these exact.
+- [ ] Prove property names getter-free in the closed world. With source closure,
+      locked primordials and no `Proxy`, a name that no class, object literal or
+      `defineProperty` gives an accessor, and that the primordial catalog lists as
+      no accessor, reads without calling user code. Memory passes could then reuse
+      and hoist such loads; `this.left === null ? 0 : this.left.size()` currently
+      loads `this.left` twice through its inline cache.
+- [ ] Give typed entries an int32 result where ranges allow. Letting a directly
+      self-recursive entry assume its own scalar result (accepted only when the
+      assumption reproduces it) made `fib` return `double`, but it ran 6% slower:
+      the boxed path's int32 adds beat `fadd` latency on the recursion's critical
+      path, and a numeric tree recursion did not move. Scalar returns pay off only
+      with an integer representation for integer-valued results.
+- [ ] Close the rest of the string-append gap. JavaScript `+` now extends a shared
+      append buffer from its longest prefix instead of rebalancing a rope, which took
+      a 1 M-append loop from 129 to 39 ms (Node: 13). What remains per `out += "x" + i`
+      is the tiny-string cache hashing each short `"x" + i` result, the zeroing of
+      every reused cell that conservative roots require, and two cell allocations.
+- [ ] Report renderer bailouts. A `null` from the C renderer silently leaves a
+      function to the bytecode interpreter. The self-compile has none today, but an
+      experiment with int32 loop counters turned four benchmark phases into
+      interpreted code without any diagnostic.
 
 ## World-knowledge ladder
 
@@ -372,6 +424,13 @@ Shared lifetime and fallback rules are recorded in
       receiver/key roots and getter calls; do not cache field payloads or backing
       locations. Keep captured/per-evaluation keys conservative. Confirm admitted
       receiver/key pairs and matched compiler cost before widening scope.
+      Field kinds per allocation site are the missing fact in class-heavy loops:
+      `sum + store.opcode(id)` keeps a generic `+` fallback because `.opcode` of a
+      `{ opcode, a, b }` element is unknown, and that fallback can call user code,
+      so it invalidates every loop-carried accessor prefix. The loop planner also
+      admits only accessors whose last read is indexed and only loops without a
+      parent loop, so `this.#ops[id].opcode` reruns its method, private and indexed
+      probes on every iteration (75 ms against Node's 15 in a 4 M-read kernel).
 
 - [ ] Extend existing scalar-replacement, field-entry, and conditional-materialization
       plans to one real multi-field region unlocked by the preceding facts. Keep

@@ -406,7 +406,7 @@ bool mal_ops_add_checked(MalHeap *heap, MalValue left, MalValue right, MalValue 
             return true;
         }
         MalString *result;
-        if (!mal_string_new_cons_checked(heap, left_string, right_string, &result)) {
+        if (!mal_string_append_checked(heap, left_string, right_string, &result)) {
             return false;
         }
         *out = mal_value_from_string(result);

@@ -2016,7 +2016,7 @@ static bool mal_builtin_string_concat_range_direct(
     }
     if (arg_count == 1 && start == 0 && length == mal_string_length(source)) {
         MalString *concatenated;
-        if (!mal_string_new_cons_checked(&vm->heap, mal_value_to_string(this_value),
+        if (!mal_string_append_checked(&vm->heap, mal_value_to_string(this_value),
                 mal_value_to_string(args[0]), &concatenated)) abort();
         *result = mal_value_from_string(concatenated);
         return true;

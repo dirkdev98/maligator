@@ -848,7 +848,7 @@ MalString *mal_string_new_slice(MalHeap *heap, MalString *parent, usize offset, 
             break;
         }
     }
-    if (offset == 0 && length == parent->length) {
+    if (offset == 0 && length == parent->length && parent->storage != MAL_STRING_STORAGE_BUILDER) {
         MAL_PERF_COUNT(string_slice_full_reuses);
         return parent;
     }
@@ -976,6 +976,60 @@ static MalString *mal_string_join(MalHeap *heap, MalString *left, MalString *rig
     return mal_string_new_cons_node(heap, left, right);
 }
 
+/* Repeated `s += piece` would otherwise rebalance the rope's spine on every append.
+ * The longest prefix of an append buffer extends it in place and each result is
+ * another dependent prefix; a branch from an older prefix stays a rope. */
+#define MAL_STRING_APPEND_PIECE_MAX ((usize) 256)
+#define MAL_STRING_APPEND_MIN_CAPACITY ((usize) 128)
+
+static MalString *mal_string_new_append_buffer(MalHeap *heap, bool latin1, usize capacity) {
+    void *units = mal_heap_alloc_raw_profiled(
+        heap, capacity * (latin1 ? sizeof(u8) : sizeof(c16)), MAL_PROFILE_ALLOCATION_FAMILY_STRING);
+    MAL_PERF_COUNT(string_owned_allocations);
+    MAL_PERF_ADD(string_owned_code_units, capacity);
+    MalString *buffer = mal_heap_alloc(heap, sizeof(MalString), MAL_HEAP_STRING);
+    mal_string_init_flat(buffer, MAL_STRING_STORAGE_BUILDER, latin1, 0);
+    buffer->code_units = units;
+    buffer->hash = capacity;
+    return buffer;
+}
+
+static bool mal_string_try_append(
+    MalHeap *heap, MalString *left, MalString *right, usize length, MalString **out
+) {
+    MalString *buffer = nullptr;
+    if (left->storage == MAL_STRING_STORAGE_DEPENDENT && left->slice_offset == 0 &&
+            left->parent->storage == MAL_STRING_STORAGE_BUILDER &&
+            left->parent->length == left->length) {
+        buffer = left->parent;
+        if (buffer->latin1 && !right->latin1) return false;
+    } else if (left->storage != MAL_STRING_STORAGE_CONS || right->length > MAL_STRING_APPEND_PIECE_MAX) {
+        // Only a rope that an earlier append produced starts a buffer, so a single
+        // concatenation stays one constant-size cons node.
+        return false;
+    }
+    bool latin1 = buffer != nullptr ? buffer->latin1 : left->latin1 && right->latin1;
+    usize unit = latin1 ? sizeof(u8) : sizeof(c16);
+    if (buffer == nullptr || length > buffer->hash) {
+        usize capacity = length * 2 < MAL_STRING_APPEND_MIN_CAPACITY
+            ? MAL_STRING_APPEND_MIN_CAPACITY : length * 2;
+        if (capacity > MAL_STRING_MAX_CODE_UNITS) capacity = MAL_STRING_MAX_CODE_UNITS;
+        MalString *grown = mal_string_new_append_buffer(heap, latin1, capacity);
+        u8 *units = (u8 *) grown->latin1_units;
+        if (buffer != nullptr) memcpy(units, buffer->latin1_units, left->length * unit);
+        else if (latin1) mal_string_copy_latin1_to(left, units);
+        else mal_string_copy_range_to(left, 0, left->length, (c16 *) units);
+        grown->length = left->length;
+        buffer = grown;
+    }
+    u8 *tail = (u8 *) buffer->latin1_units + (usize) buffer->length * unit;
+    if (latin1) mal_string_copy_latin1_to(right, tail);
+    else mal_string_copy_range_to(right, 0, right->length, (c16 *) tail);
+    buffer->length = (u32) length;
+    *out = mal_string_new_dependent_resolved(heap, buffer, 0, length);
+    return true;
+}
+
 bool mal_string_new_cons_checked(MalHeap *heap, MalString *left, MalString *right, MalString **out) {
     if (left == nullptr || right == nullptr || out == nullptr) {
         abort();
@@ -1056,6 +1110,18 @@ bool mal_string_new_cons_checked(MalHeap *heap, MalString *left, MalString *righ
     }
     *out = string;
     return true;
+}
+
+bool mal_string_append_checked(MalHeap *heap, MalString *left, MalString *right, MalString **out) {
+    usize length;
+    if (!mal_checked_size_add(left->length, right->length, MAL_STRING_MAX_CODE_UNITS, &length)) {
+        return false;
+    }
+    if (length > MAL_STRING_INLINE_LATIN1_CODE_UNITS && left->length != 0 && right->length != 0 &&
+            mal_string_try_append(heap, left, right, length, out)) {
+        return true;
+    }
+    return mal_string_new_cons_checked(heap, left, right, out);
 }
 
 static MalString *mal_string_new_latin1(
@@ -1167,7 +1233,12 @@ const c16 *mal_string_flatten(MalString *mutable) {
         const u8 *source = mutable->storage == MAL_STRING_STORAGE_INLINE
             ? mutable->inline_latin1_units : mutable->latin1_units;
         for (usize i = 0; i < mutable->length; i++) units[i] = source[i];
-        if (mutable->storage == MAL_STRING_STORAGE_OWNED) gc_free_raw(heap, (void *) source);
+        if (mutable->storage == MAL_STRING_STORAGE_OWNED ||
+                mutable->storage == MAL_STRING_STORAGE_BUILDER) {
+            gc_free_raw(heap, (void *) source);
+        }
+        // A widened buffer keeps its prefixes but no spare capacity.
+        if (mutable->storage == MAL_STRING_STORAGE_BUILDER) mutable->hash = 0;
         mutable->storage = MAL_STRING_STORAGE_OWNED;
         mutable->latin1 = false;
         mutable->code_units = units;
