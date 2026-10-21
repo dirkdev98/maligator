@@ -524,14 +524,11 @@ iterator cursor is not, by itself, permission to delete its language object.
       TypeScript check run about 3.7% more instructions and 1% more cycles, and
       the native TDZ-plan tests lose the checks their fixture relies on; find what
       the removed checks were holding in place first.
-- [ ] Finish specializing higher-order helpers. Callback clones make TypeScript's
-      binarySearchKey call getTypeId and compareValues directly, and its omitted
-      `offset` now folds so `low` stays a double. compareValues still stays a call:
-      the callee is a parameter, so no capture context proves that the closure's
-      module-scope captures are the clone's own. A function that provably runs once,
-      such as a module or bundle wrapper, would make those captures safe to inline.
-      `some(array)` stays a call because its predicate loop blocks inlining; a clone
-      for an omitted predicate would fold to the length test.
+- [ ] Finish specializing higher-order helpers. TypeScript's binarySearchKey clone
+      now inlines getTypeId and compareComparableValues, but it is still the
+      hottest TypeScript function at about 7%, and `some(array)` at its entry stays
+      a call because its predicate loop blocks inlining; a clone for an omitted
+      predicate would fold to the length test.
 - [ ] Narrow the remaining class accessor gap. Loop sites now probe for a
       uniquely named class getter or setter and inline it behind a function-index
       guard: the `#celsius` getter/setter pair takes 33 ms for 5M iterations
