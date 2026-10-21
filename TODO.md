@@ -384,13 +384,16 @@ Shared lifetime and fallback rules are recorded in
 
 ## P1: compiler throughput and analysis scalability
 
-- [ ] Bring the Node-hosted self-compile back under 50 s. Since the laptop
-      baseline at ce43414d its Core optimization grew from 22.5 to 30.7 s. An
-      incremental call-target solve no longer reseeds every transitive reader once
-      parameter cells link callers to callees, which brought the whole run from
-      61 to 51 s on the same input. 6ce7d318 still triples plan candidates by
-      planning every exact call outside the budget, and commits from 92b9de18 up
-      to fee61dbd hang on this input, so they cannot be measured one by one.
+- [ ] Bring the Node-hosted self-compile toward 40 s. It takes about 49 s on
+      the laptop (57.5 s in the 86bfc38a baseline) now that an incremental
+      call-target solve no longer reseeds every transitive reader, candidate checks
+      reuse their capture and predecessor scans, and construction leaves
+      verification to optimization. The rest is a long tail: Core optimization
+      23.5 s, C emission 8.5 s for 176 million code units, execution-to-image
+      6.8 s, and 5.6 s of collection, which a 64 MB semi-space only cut by 1 s.
+      fold-static-property-reads spends 1.7 s in static-value queries, pass
+      admission checks about 1.2 s, and verification about 4 s. 6ce7d318 still
+      triples plan candidates by planning every exact call outside the budget.
 - [ ] Invalidate warm frontend caches when module-resolution topology changes.
       The original serial cache can retain a resolved `.mjs` target after a preferred
       extensionless file appears, or retain a package target after a nearer package
