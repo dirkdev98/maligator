@@ -7027,6 +7027,18 @@ void mal_vm_op_store_property_ic(
         if (completion.kind != MAL_COMPLETION_NORMAL) vm->completion = completion;
         return;
     }
+    // Stacks truncate through `array.length = n`, the store arrays receive most often.
+    if (mal_value_is_heap_type(object_value, MAL_HEAP_ARRAY_OBJECT) &&
+        mal_value_is_int32(value) && mal_value_to_i32(value) >= 0 &&
+        key_value == mal_value_from_string(mal_intrinsic_hot_ascii(vm, MAL_HOT_KEY_LENGTH))) {
+        MalArrayObject *array = (MalArrayObject *) mal_value_to_heap(object_value);
+        // Default dense elements cannot block a shrink, so the write always succeeds.
+        if (array->length_writable && !array->dense_deopted && !array->object.is_prototype) {
+            MAL_PERF_COUNT(ic_store_array_length_hits);
+            mal_array_object_set_length(array, (u32) mal_value_to_i32(value));
+            return;
+        }
+    }
     if (mal_vm_dictionary_try_overwrite(vm, object_value, key_value, value)) return;
     MAL_PERF_COUNT(ic_store_fallbacks);
     if (!mal_value_is_heap_type(object_value, MAL_HEAP_OBJECT)) {

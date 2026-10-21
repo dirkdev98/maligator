@@ -631,6 +631,7 @@ typedef struct MalPerfStats {
     u64 ic_load_dictionary_direct_hits;
     u64 ic_load_index_string_hits;
     u64 ic_store_dictionary_direct_hits;
+    u64 ic_store_array_length_hits;
     u64 ic_load_watched_hits;
     u64 ic_load_builtin_missing_hits;
     u64 ic_load_watched_fills;

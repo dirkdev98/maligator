@@ -1521,7 +1521,7 @@ static void mal_perf_stats_print(void) {
         "load_array_length_hits=%llu load_typed_array_length_hits=%llu "
         "load_collection_size_hits=%llu load_dictionary_direct_hits=%llu "
         "load_index_string_hits=%llu "
-        "store_dictionary_direct_hits=%llu "
+        "store_dictionary_direct_hits=%llu store_array_length_hits=%llu "
         "load_watched_hits=%llu load_watched_fills=%llu load_builtin_missing_hits=%llu "
         "load_other_generic=%llu inherited_fills=%llu inherited_reject_basic=%llu "
         "inherited_reject_key=%llu inherited_reject_receiver=%llu "
@@ -1567,6 +1567,7 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.ic_load_dictionary_direct_hits,
         (unsigned long long) mal_perf_stats.ic_load_index_string_hits,
         (unsigned long long) mal_perf_stats.ic_store_dictionary_direct_hits,
+        (unsigned long long) mal_perf_stats.ic_store_array_length_hits,
         (unsigned long long) mal_perf_stats.ic_load_watched_hits,
         (unsigned long long) mal_perf_stats.ic_load_watched_fills,
         (unsigned long long) mal_perf_stats.ic_load_builtin_missing_hits,
