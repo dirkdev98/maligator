@@ -335,6 +335,37 @@ describe("bounded Core cross-call transforms", () => {
 		]).toEqual([0, 2, 3]);
 	});
 
+	it("admits inlines into clones from their own allowance once the program budget is spent", () => {
+		const limits = {
+			...TINY_CODE_BUDGET,
+			perCallerGeneratedCode: 8,
+			programGeneratedCode: 2,
+		};
+		const service = new CoreTransformCandidateService(limits);
+		const candidate = (caller: number, clone: boolean): CoreTransformCandidate => ({
+			kind: "inline",
+			caller: caller as never,
+			site: caller as never,
+			revision: 0,
+			priorityClass: 2,
+			priorityScore: -1,
+			targets: [],
+			generatedCodeCost: 2,
+			compilerWorkCost: 1,
+			expansive: false,
+			...(clone ? { cloneSpecialization: true as const } : {}),
+		});
+		const spending = candidate(0, false);
+		expect(service.admit(spending, limits)).toBeUndefined();
+		service.recordApplied(spending);
+		expect(service.admit(candidate(1, false), limits)).toBe("generated-code-cost");
+		const specialization = candidate(2, true);
+		expect(service.admit(specialization, limits)).toBeUndefined();
+		service.recordApplied(specialization);
+		expect(service.admit(candidate(3, true), limits)).toBe("generated-code-cost");
+		expect(service.statistics().generatedCodeConsumed).toBe(4);
+	});
+
 	it("shares discovery and pending selection across callers while preserving caller priority", () => {
 		const service = new CoreTransformCandidateService();
 		const candidate = (

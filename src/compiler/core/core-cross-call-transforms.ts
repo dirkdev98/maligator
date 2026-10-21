@@ -1464,6 +1464,7 @@ function offerFunctionCandidates(
 	privateNames: CoreModulePrivateNameIndex,
 	readAccessors: boolean,
 	accessorWork?: CoreReadAccessorWork,
+	clone = false,
 ): void {
 	const fn = program.function(functionId);
 	const outgoing = summaries.targets.outgoing(functionId);
@@ -1809,6 +1810,8 @@ function offerFunctionCandidates(
 			regionCost?.sites.some((instruction) => offeredReadAccessorSites.has(instruction))
 		)
 			continue;
+		const cloneSpecialization =
+			clone && !open && !readAccessor && synchronousCallback === undefined;
 		const offered = service.offer(
 			Object.freeze({
 				kind:
@@ -1825,7 +1828,11 @@ function offerFunctionCandidates(
 				site: site.instruction,
 				revision: summaries.version(target),
 				priorityClass:
-					synchronousCallback?.created === true ? 1 : hintedTarget !== undefined ? 3 : 2,
+					synchronousCallback?.created === true || cloneSpecialization
+						? 1
+						: hintedTarget !== undefined
+							? 3
+							: 2,
 				// A held callback's invocations stop dispatching, once per consumer loop iteration.
 				priorityScore: inlinePriorityScore(
 					loopFrequency *
@@ -1842,6 +1849,7 @@ function offerFunctionCandidates(
 				targets: Object.freeze([target]),
 				...(regionCost === undefined ? {} : { readAccessorRegion: regionCost.plan }),
 				...(inLoop && readAccessor ? { readAccessorLoopEligible: true as const } : {}),
+				...(cloneSpecialization ? { cloneSpecialization: true as const } : {}),
 				generatedCodeCost: regionCost?.generatedCode ?? generatedCodeCost,
 				compilerWorkCost:
 					regionCost?.compilerWork ??
@@ -2171,6 +2179,7 @@ export function discoverCoreCrossCallCandidates(
 	functions: Iterable<CoreFunctionId> = program.functionIds(),
 	readAccessors = true,
 	accessorWork?: CoreReadAccessorWork,
+	clones: ReadonlySet<CoreFunctionId> = new Set(),
 ): void {
 	const instanceMethodHints = coreInstanceMethodHints(program);
 	const fieldEntryNominees = nativeFieldEntryNominees(program, liveFunctions);
@@ -2212,6 +2221,7 @@ export function discoverCoreCrossCallCandidates(
 			privateNames,
 			readAccessors,
 			accessorWork,
+			clones.has(functionId),
 		);
 	}
 }
@@ -3457,9 +3467,12 @@ export function runCoreCrossCallTransforms(
 	}
 
 	for (let wave = 0; wave < 2; wave++) {
+		// Inlines into clones may expose the callees of inlined forwarders to the next wave.
+		const exhausted = service.programBudgetExhaustionReason(phaseLimits);
 		if (
-			service.programBudgetExhaustionReason(phaseLimits) !== undefined &&
-			!(wave === 0 && specialized.length > 0)
+			exhausted !== undefined &&
+			!(wave === 0 && specialized.length > 0) &&
+			!(wave > 0 && exhausted === "generated-code-cost" && clones.size > 0)
 		)
 			break;
 		// Clones of forwarding helpers expose their callees' sites to the next round. Each
@@ -3506,6 +3519,7 @@ export function runCoreCrossCallTransforms(
 			undefined,
 			readAccessors,
 			accessorWork,
+			clones,
 		);
 		const foldsByCaller = discoverProgramValueKindObservations(
 			program,
@@ -3527,8 +3541,12 @@ export function runCoreCrossCallTransforms(
 			candidate = service.next()
 		) {
 			const exhausted = service.programBudgetExhaustionReason(phaseLimits);
-			// Candidates that add no code still fit once the generated-code budget is spent.
-			if (exhausted === "generated-code-cost" && candidate.generatedCodeCost > 0) {
+			// Candidates that add no code, or complete a clone, still fit.
+			if (
+				exhausted === "generated-code-cost" &&
+				candidate.generatedCodeCost > 0 &&
+				candidate.cloneSpecialization !== true
+			) {
 				service.recordDeclined(exhausted);
 				continue;
 			}
@@ -3639,9 +3657,10 @@ export function runCoreCrossCallTransforms(
 			exactReverseCallerVisits += summaries.statistics.exactReverseCallerVisits;
 			wildcardReverseCallerVisits += summaries.statistics.wildcardReverseCallerVisits;
 		}
+		const spent = service.programBudgetExhaustionReason(phaseLimits);
 		if (
 			wave + 1 === 2 ||
-			service.programBudgetExhaustionReason(phaseLimits) !== undefined
+			(spent !== undefined && (spent !== "generated-code-cost" || clones.size === 0))
 		)
 			break;
 		// Committed edits can introduce consumers without changing published summaries.

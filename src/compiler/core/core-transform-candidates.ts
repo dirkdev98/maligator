@@ -60,6 +60,11 @@ export interface CoreTransformCandidate {
 	readonly compilerWorkCost: number;
 	readonly expansive: boolean;
 	readonly unsupportedReason?: CoreTransformDeclineReason;
+	/**
+	 * An exact inline into a callback clone completes the specialization the clone
+	 * was made for, so it draws on a program allowance of its own.
+	 */
+	readonly cloneSpecialization?: true;
 }
 
 export interface CoreTransformDiscoveryCost {
@@ -286,6 +291,7 @@ export class CoreTransformCandidateService {
 	#applied = 0;
 	#declined = 0;
 	#generatedCode = 0;
+	#cloneGeneratedCode = 0;
 	#compilerWork = 0;
 
 	constructor(
@@ -428,7 +434,11 @@ export class CoreTransformCandidateService {
 		if (
 			caller.generatedCode + candidate.generatedCodeCost >
 				active.perCallerGeneratedCode ||
-			this.#generatedCode + candidate.generatedCodeCost > active.programGeneratedCode
+			(candidate.cloneSpecialization === true
+				? this.#cloneGeneratedCode
+				: this.#generatedCode) +
+				candidate.generatedCodeCost >
+				active.programGeneratedCode
 		)
 			return "generated-code-cost";
 		if (
@@ -487,7 +497,9 @@ export class CoreTransformCandidateService {
 		caller.generatedCode += candidate.generatedCodeCost;
 		caller.compilerWork += candidate.compilerWorkCost;
 		this.#caller.set(candidate.caller, caller);
-		this.#generatedCode += candidate.generatedCodeCost;
+		if (candidate.cloneSpecialization === true)
+			this.#cloneGeneratedCode += candidate.generatedCodeCost;
+		else this.#generatedCode += candidate.generatedCodeCost;
 		this.#compilerWork += candidate.compilerWorkCost;
 		this.#applied++;
 		this.#appliedByKind[candidate.kind]++;
@@ -505,7 +517,7 @@ export class CoreTransformCandidateService {
 			declined: this.#declined,
 			appliedByKind: Object.freeze({ ...this.#appliedByKind }),
 			declinedByReason: Object.freeze({ ...this.#declinedByReason }),
-			generatedCodeConsumed: this.#generatedCode,
+			generatedCodeConsumed: this.#generatedCode + this.#cloneGeneratedCode,
 			compilerWorkConsumed: this.#compilerWork,
 		});
 	}
