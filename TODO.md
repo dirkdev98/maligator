@@ -514,6 +514,9 @@ iterator cursor is not, by itself, permission to delete its language object.
       rest-argument apply into `stringOrArrayAt` (the clone is still about 3% of
       the prettier run). Threading the join, or splitting the apply on the
       callback's result, would let the known path call, and inline, it directly.
+      The clone itself never inlines into the AstPath getters that call it: the
+      inliner rejects `createRestArgumentsState` and `callRestArguments`, and the
+      clone has 18 blocks against the limit of 16.
 - [ ] Make prettier's AstPath getters and TypeScript enum reads cheaper. Five
       prettier rounds call AstPath getters 7.4 million times through the static
       miss path, and read about 16 million `SyntaxKind` members from dictionary
@@ -530,7 +533,10 @@ iterator cursor is not, by itself, permission to delete its language object.
       but it is still the hottest TypeScript function at about 6%. Cloning small
       helpers for every site that omits a tested argument, not just sites inside
       callback clones, cost prettier 1.2% of its cycles, with its bundled
-      TypeScript scanner slower and more table lookups.
+      TypeScript scanner slower and more table lookups. Cloning helpers that
+      callers reach through a module `var` alias, such as prettier's
+      `traverse_doc_default`, behind a function-index guard ran prettier 0.4% more
+      instructions for the same cycles.
 - [ ] Narrow the remaining class accessor gap. Loop sites now probe for a
       uniquely named class getter or setter and inline it behind a function-index
       guard: the `#celsius` getter/setter pair takes 33 ms for 5M iterations

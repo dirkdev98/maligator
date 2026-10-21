@@ -6842,6 +6842,13 @@ MalValue mal_vm_op_load_property_ic_static_miss(
     }
     MalString *name = vm->string_constant_atoms[atom];
     MalValue name_value = mal_value_from_string(name);
+    MalValue result;
+    // A held getter row has its key on the receiver's chain, so the key is not missing,
+    // and nothing here reads the receiver once the getter's own frame has rooted it.
+    if (mal_ic_is_getter_row(ic) &&
+        mal_vm_getter_row_try_load(vm, object_value, name_value, ic, &result)) {
+        return result;
+    }
     if (mal_vm_builtin_chain_missing(vm, object_value, name_value)) {
         MAL_PERF_COUNT(ic_load_builtin_missing_hits);
         return MAL_VALUE_UNDEFINED;
@@ -6849,21 +6856,16 @@ MalValue mal_vm_op_load_property_ic_static_miss(
     MalValue roots[] = {object_value};
     MalRootSpan span;
     mal_gc_root(&span, roots, countof(roots));
-    MalValue result;
-    // A getter row skips the index-name check: an index never shares a string row.
-    if (!mal_ic_is_getter_row(ic) ||
-        !mal_vm_getter_row_try_load(vm, object_value, name_value, ic, &result)) {
-        // The VM atom is already this property's canonical query key; only an
-        // index-shaped name needs the INDEX kind.
-        u32 index = 0;
-        MalKey key = mal_vm_string_to_array_index(name, &index)
-            ? mal_key_index(index)
-            : (MalKey) {.kind = MAL_KEY_STRING, .value = name_value};
-        result = mal_vm_op_load_property_ic_keyed(vm, object_value, key, ic, true);
-        if (key.kind == MAL_KEY_STRING && mal_value_is_undefined(result) &&
-            vm->completion.kind != MAL_COMPLETION_THROW) {
-            mal_vm_builtin_chain_note_missing(vm, object_value, name_value);
-        }
+    // The VM atom is already this property's canonical query key; only an
+    // index-shaped name needs the INDEX kind.
+    u32 index = 0;
+    MalKey key = mal_vm_string_to_array_index(name, &index)
+        ? mal_key_index(index)
+        : (MalKey) {.kind = MAL_KEY_STRING, .value = name_value};
+    result = mal_vm_op_load_property_ic_keyed(vm, object_value, key, ic, true);
+    if (key.kind == MAL_KEY_STRING && mal_value_is_undefined(result) &&
+        vm->completion.kind != MAL_COMPLETION_THROW) {
+        mal_vm_builtin_chain_note_missing(vm, object_value, name_value);
     }
     mal_gc_unroot(&span);
     return result;
