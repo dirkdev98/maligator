@@ -8,22 +8,26 @@ import {
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
 import { emitProgramImage } from "../src/compiler/target/emit-program-image.ts";
+import { lowerNativeStorage } from "../src/compiler/target/lower-native-storage.ts";
 import { validateNativeStorage } from "../src/compiler/target/lower-native-storage.ts";
 import { analyzeNativeBodyFacts } from "../src/compiler/target/native-body-facts.ts";
 import { selectNativeObjectEnumerationSnapshots } from "../src/compiler/target/native-object-enumeration-snapshot.ts";
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
 
 function compile(body: string, primordials: "mutable" | "locked" = "mutable") {
-	return compileSemanticProgramToProgramImage(
-		analyzeSourceAndRunSemanticAnalysis(
-			`globalThis.count=function inspect(record,hook){${body}};`,
-			"/enumeration-snapshot.js",
-		),
-		{
-			facts: compilerProgramFactsFromConfig(
-				resolveBuildConfig({ engine: { primordials } }),
+	return lowerNativeStorage(
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`globalThis.count=function inspect(record,hook){${body}};`,
+				"/enumeration-snapshot.js",
 			),
-		},
+			{
+				facts: compilerProgramFactsFromConfig(
+					resolveBuildConfig({ engine: { primordials } }),
+				),
+			},
+		),
+		"precise",
 	);
 }
 function inspect(image: ReturnType<typeof compile>) {

@@ -9,12 +9,14 @@ __attribute__((noinline)) static bool rejects_large_caller_frame(MalVm *vm) {
     for (usize i = 0; i < sizeof(locals); i++) locals[i] = (byte) i;
     uptr saved_limit = vm->stack_limit;
     vm->stack_limit = (uptr) &locals[sizeof(locals) / 2];
+    mal_vm_sync_entry_stack_limit(vm);
     i32 rows = vm->native_frame_count;
     bool leaf = mal_vm_leaf_stack_available(vm);
     bool entered = mal_vm_enter_compiled(vm, 0);
     bool rejected = !leaf && !entered && vm->completion.kind == MAL_COMPLETION_THROW &&
         vm->native_frame_count == rows;
     vm->stack_limit = saved_limit;
+    mal_vm_sync_entry_stack_limit(vm);
     vm->completion = (MalCompletion) { .kind = MAL_COMPLETION_NORMAL, .value = MAL_VALUE_UNDEFINED };
     return rejected && locals[0] == 0;
 }

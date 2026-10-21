@@ -40,6 +40,10 @@ bool mal_native_overlay_attach_fragment(
         overlay->relocation->global_imports = overlay->global_imports;
         *overlay->relocation_attached = true;
     }
+    if (overlay->conservative_stack_roots) {
+        vm->live_runtime_image.conservative_stack_roots = true;
+        mal_vm_sync_entry_stack_limit(vm);
+    }
     MalFunction *functions = (MalFunction *) vm->runtime_image->functions;
     for (i32 index = 0; index < function_count; index++) {
         if (overlay->entries[index] == nullptr) continue;
@@ -71,6 +75,10 @@ bool mal_compiler_native_attach(
         return false;
     }
     vm->compiler_native_relocation = *relocation;
+    if (overlay->conservative_stack_roots) {
+        vm->live_runtime_image.conservative_stack_roots = true;
+        mal_vm_sync_entry_stack_limit(vm);
+    }
     MalFunction *functions = (MalFunction *) vm->runtime_image->functions;
     for (i32 index = 0; index < function_count; index++) {
         if (overlay->entries[index] == nullptr) continue;

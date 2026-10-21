@@ -118,6 +118,39 @@ describe("compileSemanticProgramToProgramImage", () => {
 		expect(ablated.guardedCalls).toEqual([]);
 	});
 
+	it("guards a recursive instance method call outside loops", () => {
+		const image = compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`
+				class Tree {
+					constructor(left, right) { this.left = left; this.right = right; }
+					size() {
+						const left = this.left === null ? 0 : this.left.size();
+						return 1 + left + (this.right === null ? 0 : this.right.size());
+					}
+				}
+				const leaf = () => new Tree(null, null);
+				globalThis.answer = new Tree(leaf(), new Tree(leaf(), null)).size();
+			`,
+				"guarded-recursive-method.js",
+			),
+			{ optimization: "full" },
+		);
+		const size = image.runtime.functions.findIndex(
+			(fn) =>
+				String.fromCharCode(
+					...(image.runtime.stringConstants[fn.nameStringIndex] ?? []),
+				) === "size",
+		);
+		const selfGuards = image.native.functions[size]!.instructions.filter(
+			(instruction) =>
+				instruction?.kind === "call" &&
+				instruction.guardedFunctionIndices?.includes(size) === true,
+		);
+		expect(size).toBeGreaterThanOrEqual(0);
+		expect(selfGuards).toHaveLength(2);
+	});
+
 	it("omits exactly one internal optimizer family per benchmark ablation", () => {
 		const source = `
 			function sum(values) {

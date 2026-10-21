@@ -165,7 +165,7 @@ MalFiber *mal_fiber_create(
     f->exec.value_stack = malloc(sizeof(MalValue) * (usize) value_stack_capacity);
     f->exec.value_stack_capacity = value_stack_capacity;
     f->exec.value_stack_size = 0;
-    f->exec.frames = malloc(sizeof(MalVmFrame) * MAL_FIBER_DEFAULT_FRAMES);
+    f->exec.frames = malloc(mal_vm_frame_storage_bytes(MAL_FIBER_DEFAULT_FRAMES));
     f->exec.frame_capacity = MAL_FIBER_DEFAULT_FRAMES;
     f->exec.frame_count = 0;
     f->exec.native_frames = nullptr;
@@ -280,6 +280,7 @@ void mal_fiber_load_exec(MalFiber *f, MalVm *vm) {
     vm->proxy_dispatch_depth = f->exec.proxy_dispatch_depth;
     vm->exact_script_call = f->exec.exact_script_call;
     vm->stack_limit = f->exec.stack_limit;
+    mal_vm_sync_entry_stack_limit(vm);
     vm->gc_native_frames = f->exec.gc_native_frames;
     vm->frame_seq = f->exec.frame_seq;
     vm->completion = f->exec.completion;

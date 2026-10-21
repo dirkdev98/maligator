@@ -91,6 +91,8 @@ static MalValue release_worker(
 }
 
 int main(void) {
+    // The test builds precise shadow-frame roots and checks their publication.
+    mal_gc_test_precise_stack_roots = true;
     MalVm vm;
     mal_vm_init(&vm, &mal_runtime_image);
     if (mal_gc_worker_limit(&vm) == 0) {

@@ -12,6 +12,7 @@ import {
 	COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE,
 	compilerOperatorInputKindsHaveExactNativeSemantics,
 	compilerOperatorIsNullishEquality,
+	compilerOperatorIsPrimitiveStringConcatenation,
 	compilerOperatorFixedResultKind,
 	compilerNumericResultKind,
 	COMPILER_NUMERIC_UNARY_OPERATORS as NUMERIC_UNARY_OPERATORS,
@@ -1509,10 +1510,11 @@ export function corePrimitiveOperatorEffectRefinement(
 			compilerValueKindMaskIsSubset(mask, COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE),
 		);
 		stringConcatenation =
-			operator === "+" &&
-			masks.every((mask) =>
-				compilerValueKindMaskIsSubset(mask, COMPILER_VALUE_KIND_STRING),
-			);
+			(operator === "+" &&
+				masks.every((mask) =>
+					compilerValueKindMaskIsSubset(mask, COMPILER_VALUE_KIND_STRING),
+				)) ||
+			compilerOperatorIsPrimitiveStringConcatenation(opcode, operator, masks);
 		primitive =
 			["===", "!=="].includes(operator) ||
 			(NUMERIC_BINARY_OPERATORS.has(operator) && numericPrimitives) ||

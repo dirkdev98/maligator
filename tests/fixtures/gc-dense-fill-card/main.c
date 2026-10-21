@@ -21,6 +21,8 @@ static void count_finalized(MalHeapHeader *cell) {
 }
 
 int main(void) {
+    // Every value here is rooted explicitly; stale C locals must not retain cells.
+    mal_gc_test_precise_stack_roots = true;
     MalVm vm;
     mal_vm_init(&vm, &mal_runtime_image);
     mal_gc_register_finalizer(MAL_HEAP_OBJECT, count_finalized);

@@ -284,9 +284,14 @@ function relocateFunctionReferences(
 	}
 	const guarded = attributes.guardedFunctionIndices;
 	if (isCoreAttributeArray(guarded)) {
-		relocated.guardedFunctionIndices = guarded.map((value) =>
-			typeof value === "number" ? coreTargetFunctionIndex(map, value) : value,
-		);
+		// The runtime image requires an ascending target set; relocation need not preserve order.
+		relocated.guardedFunctionIndices = guarded
+			.map((value) =>
+				typeof value === "number" ? coreTargetFunctionIndex(map, value) : value,
+			)
+			.sort((left, right) =>
+				typeof left === "number" && typeof right === "number" ? left - right : 0,
+			);
 		changed = true;
 	}
 	return changed ? relocated : attributes;

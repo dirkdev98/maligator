@@ -9,6 +9,7 @@ import { ESTREE_STOP, traverseEstree } from "./compiler/frontend/estree-traversa
 import { buildModuleGraph } from "./compiler/frontend/module-graph.ts";
 import { compileEntrypoint } from "./compiler/pipeline/compile-program.ts";
 import { emitProgramTranslationUnits } from "./compiler/target/emit-program-image.ts";
+import { lowerNativeStorage } from "./compiler/target/lower-native-storage.ts";
 
 export function prepareWasmSource(
 	root: string,
@@ -76,10 +77,14 @@ export function prepareWasmSource(
 				},
 			});
 			// The reactor ignores the dev runner's entry path; observable module paths remain keyed.
-			const portable = {
-				...image,
-				runtime: { ...image.runtime, entrypointPath: modulePath(entryPath) },
-			};
+			// Wasm cannot scan its own stack, so its roots stay in shadow frames.
+			const portable = lowerNativeStorage(
+				{
+					...image,
+					runtime: { ...image.runtime, entrypointPath: modulePath(entryPath) },
+				},
+				"precise",
+			);
 			return emitProgramTranslationUnits(portable, { debugInfo: false });
 		},
 	};

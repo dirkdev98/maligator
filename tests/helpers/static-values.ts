@@ -6,6 +6,8 @@ import { compileSemanticProgramToProgramImage } from "../../src/compiler/pipelin
 import { literalPrototypeMethods } from "../../src/compiler/shared/builtin-registry.ts";
 import { compilerProgramFactsFromConfig } from "../../src/compiler/shared/compiler-facts.ts";
 import type { ExecutionProgram } from "../../src/compiler/target/execution-ir.ts";
+import { lowerNativeStorage } from "../../src/compiler/target/lower-native-storage.ts";
+import type { NativeStackRoots } from "../../src/compiler/target/lower-native-storage.ts";
 import { emitCompiledFunction } from "../../src/compiler/target/render-native-c.ts";
 import { coreFunctionNamed, coreOperations } from "./core-inspection.ts";
 import type { CoreOperationInspection } from "./core-inspection.ts";
@@ -17,6 +19,8 @@ export interface StaticValueOptions {
 	profile?: boolean;
 	counters?: boolean;
 	script?: boolean;
+	/** Native root mode to inspect; precise plans expose root slots and publication. */
+	stackRoots?: NativeStackRoots;
 }
 
 export function inspectStaticValueFunction(
@@ -37,7 +41,7 @@ export function inspectStaticValueFunctions(
 	let coreReport: CoreOptimizationReport | undefined;
 	const phases: Record<string, number> = {};
 	const started = performance.now();
-	const image = compileSemanticProgramToProgramImage(
+	const compiled = compileSemanticProgramToProgramImage(
 		analyzeSourceAndRunSemanticAnalysis(
 			source,
 			options.script ? "static-values.js" : "static-values.mjs",
@@ -73,6 +77,10 @@ export function inspectStaticValueFunctions(
 		},
 	);
 	const compileMs = performance.now() - started;
+	const image =
+		options.stackRoots === "conservative"
+			? compiled
+			: lowerNativeStorage(compiled, "precise");
 	return new Map(
 		names.map((name) => {
 			const core = cores.get(name)!;

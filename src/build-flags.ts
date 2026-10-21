@@ -385,6 +385,8 @@ export function ccExtraFlags(
 	return [
 		...platformCcFlags(platform),
 		...optFlags(plan, env),
+		// Stack-trace capture walks frame-pointer chains through runtime and generated frames.
+		"-fno-omit-frame-pointer",
 		...SANITIZER_FLAGS[sanitizerMode(env)],
 		...perfStatsDefines(env),
 	];

@@ -1190,11 +1190,15 @@ function guardedCallOpportunities(
 			globalTargetUses.set(target, (globalTargetUses.get(target) ?? 0) + 1);
 		}
 		for (const site of outgoing) {
-			const hintedTargets =
-				site.targets.functions.length === 0 &&
-				site.open &&
-				loopBlocks.has(fn.instructionBlock(site.instruction))
+			const candidateHints =
+				site.targets.functions.length === 0 && site.open
 					? coreInstanceMethodTargets(fn, site.callee, site.receiver, instanceMethodHints)
+					: undefined;
+			// A method that calls its own name repeats like a loop body, once per visited object.
+			const hintedTargets =
+				loopBlocks.has(fn.instructionBlock(site.instruction)) ||
+				candidateHints?.includes(caller) === true
+					? candidateHints
 					: undefined;
 			const targetFunctions = Object.freeze(
 				hintedTargets === undefined ? [...site.targets.functions] : [...hintedTargets],

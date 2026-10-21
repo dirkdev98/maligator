@@ -20,6 +20,7 @@ import {
 	emitRelocatableNativeOverlayTranslationUnits,
 } from "../src/compiler/target/emit-program-image.ts";
 import type { GeneratedTranslationUnit } from "../src/compiler/target/emit-program-image.ts";
+import { lowerNativeStorage } from "../src/compiler/target/lower-native-storage.ts";
 import { nativeInactiveRootMasks } from "../src/compiler/target/native-root-masks.ts";
 import {
 	vmRegionLicense,
@@ -49,6 +50,7 @@ import {
 	splitSymbolFunctionIndex,
 	TEST_RELOCATION,
 } from "./helpers/native-relocation.ts";
+import { compilePreciseProgramImage } from "./helpers/precise-roots.ts";
 import { testPropertyCacheCount } from "./helpers/program-image.ts";
 import { testProgramImage, withNativeFunctionPlan } from "./helpers/program-image.ts";
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
@@ -829,7 +831,7 @@ describe("emit-program-image instruction packing", () => {
 		const definitions = (source: string) =>
 			[
 				...source.matchAll(
-					/^(?:__attribute__\S* )*MalValue (mal_compiled_\d+_0)\(.*\{$/gm,
+					/^(?:(?:__attribute__\S*|MAL_COMPILED_FRAME) )*MalValue (mal_compiled_\d+_0)\(.*\{$/gm,
 				),
 			].map((match) => match[1]!);
 		const prefixSymbols = definitions(first.shared);
@@ -1663,10 +1665,10 @@ describe("emit-program-image instruction packing", () => {
 				relocation,
 			)!,
 		);
-		expect(callee).toContain(
-			"mal_vm_enter_compiled_row(vm, (__mal_relocation->function_base + 1))",
+		expect(callee).toMatch(
+			/MAL_FRAME_ENTER\(&__frame_record, \w+, \(__mal_relocation->function_base \+ 1\)\)/,
 		);
-		expect(callee).not.toMatch(/mal_vm_enter_compiled_row\(vm, \d/);
+		expect(callee).not.toMatch(/MAL_FRAME_ENTER\(&__frame_record, \w+, \d/);
 	});
 
 	it("rejects an invalid translation-unit budget", () => {
@@ -2776,7 +2778,7 @@ describe("native update-expression representation", () => {
 			"update-expression-representation.js",
 			parseScript(source, { strict: false }),
 		);
-		return compileSemanticProgramToProgramImage(semantic);
+		return compilePreciseProgramImage(semantic);
 	}
 
 	function emit(source: string): string {
@@ -2808,8 +2810,7 @@ describe("native update-expression representation", () => {
 			}
 			globalThis.invoke = invoke;
 		`);
-		expect(output).toContain("mal_vm_call_exact_script_compiled_callback(vm,");
-		expect(output).toContain(".compiled_callback = mal_compiled_");
+		expect(output).toMatch(/MalValue __guarded_value_\d+_\d+ = mal_compiled_\w+\(vm,/);
 		expect(output).toContain("mal_vm_call_cached(vm,");
 	});
 
@@ -2819,7 +2820,7 @@ describe("native update-expression representation", () => {
 			function invoke() { return Target(); }
 			globalThis.invoke = invoke;
 		`);
-		expect(output).not.toContain("mal_vm_call_exact_script_compiled_callback(vm,");
+		expect(output).not.toMatch(/__guarded_value_\d+_\d+ = mal_compiled_/);
 	});
 
 	it.each([
@@ -5355,29 +5356,37 @@ describe("native update-expression representation", () => {
 		).toEqual([]);
 	});
 
-	it("polls only collection operations with exact-root safepoint metadata", () => {
-		const output = emitLocked(`
-			function read(key) {
-				const map = new Map([[key, "value"]]);
-				return map.get(key);
-			}
-			globalThis.read = read;
-		`);
-		const lines = output.split("\n");
-		const poll = /if \(mal_gc_poll_requested\(\)\) \{[^\n]*mal_gc_safepoint\(vm\);/;
-		const constructLine = lines.findIndex((line) =>
-			line.includes("mal_vm_call_known_native"),
-		);
-		const getLine = lines.findIndex((line) => line.includes("mal_builtin_map_get_key"));
+	const mapRead = `
+		function read(key) {
+			const map = new Map([[key, "value"]]);
+			return map.get(key);
+		}
+		globalThis.read = read;
+	`;
+	const safepointPoll =
+		/if \(mal_gc_poll_requested\(\)\) \{[^\n]*mal_gc_safepoint\(vm\);/;
+	const pollsAfter = (lines: ReadonlyArray<string>, call: string, window: number) => {
+		const line = lines.findIndex((candidate) => candidate.includes(call));
+		expect(line).toBeGreaterThanOrEqual(0);
+		return lines
+			.slice(line + 1, line + window)
+			.some((candidate) => safepointPoll.test(candidate));
+	};
 
-		expect(constructLine).toBeGreaterThanOrEqual(0);
-		expect(
-			lines.slice(constructLine + 1, constructLine + 5).some((line) => poll.test(line)),
-		).toBe(true);
-		expect(getLine).toBeGreaterThanOrEqual(0);
-		expect(lines.slice(getLine + 1, getLine + 4).some((line) => poll.test(line))).toBe(
-			false,
-		);
+	it("polls only collection operations with exact-root safepoint metadata", () => {
+		const lines = emitProgramImage(
+			lowerNativeStorage(lockedDefinition(mapRead), "precise"),
+			{
+				compiled: true,
+			},
+		).split("\n");
+		expect(pollsAfter(lines, "mal_vm_call_known_native", 5)).toBe(true);
+		expect(pollsAfter(lines, "mal_builtin_map_get_key", 4)).toBe(false);
+	});
+
+	it("leaves a conservative call's pending poll to the next compiled entry", () => {
+		const lines = emitLocked(mapRead).split("\n");
+		expect(pollsAfter(lines, "mal_vm_call_known_native", 5)).toBe(false);
 	});
 });
 

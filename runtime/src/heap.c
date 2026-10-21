@@ -36,13 +36,7 @@ static inline void mal_heap_sweep_mark_store(MalHeapHeader *header, u8 mark) {
 
 /* Poll only requests mutator service; it does not publish heap or worker data. */
 static inline void mal_heap_maybe_trigger_gc(const MalHeap *heap) {
-    if (heap->bytes_allocated >= heap->next_gc_at) {
-#if defined(__wasi__)
-        mal_gc_poll = true;
-#else
-        atomic_store_explicit(&mal_gc_poll, true, memory_order_relaxed);
-#endif
-    }
+    if (heap->bytes_allocated >= heap->next_gc_at) mal_isolate_request_poll(mal_isolate_locals());
 }
 
 /*
@@ -338,6 +332,13 @@ static MalGcBlock *mal_gc_new_block(MalHeap *heap, u16 size_class, u8 kind) {
         heap->free_blocks = recycled->next_free;
         block_base = (u8 *) recycled;
         sweep_epoch = recycled->sweep_epoch;
+#if !defined(__wasi__)
+        // MADV_FREE leaves page contents undefined; bump cells must start cleared.
+        if (kind == MAL_GC_BLOCK_CELL) {
+            memset(block_base + mal_gc_cell_data_offset(), 0,
+                MAL_GC_BLOCK_SIZE - mal_gc_cell_data_offset());
+        }
+#endif
     } else {
         block_base = (u8 *) chunk->base + chunk->next_block * MAL_GC_BLOCK_SIZE;
         chunk->next_block++;
@@ -455,6 +456,9 @@ static void *mal_gc_alloc_large(MalHeap *heap, usize size, u8 kind) {
     if (rec == nullptr) {
         return nullptr;
     }
+#if !defined(__wasi__)
+    if (kind == MAL_GC_BLOCK_CELL) memset((u8 *) rec + offset, 0, size);
+#endif
     rec->size = size;
     rec->kind = kind;
     rec->accounted = 0;
@@ -503,6 +507,11 @@ static inline __attribute__((always_inline)) void *mal_gc_alloc_in_class(
         heap->cell_free[size_class] = next;
         // Reclaimed cells are scattered; the next pop's link read would otherwise miss.
         __builtin_prefetch(next, 1, 3);
+#if !defined(__wasi__)
+        // A conservative stack word can reach a cell abandoned before its constructor
+        // ran; a cleared payload never holds the previous occupant's edges.
+        memset(cell, 0, g_class_cell_size[size_class]);
+#endif
         MalGcBlock *block = (MalGcBlock *) ((uptr) cell & ~(uptr) (MAL_GC_BLOCK_SIZE - 1));
         mal_gc_track_young_block(heap, block, cell);
         heap->bytes_allocated += g_class_cell_size[size_class];
@@ -1418,3 +1427,79 @@ void *mal_heap_try_realloc_raw_profiled(
     gc_free_raw(heap, ptr);
     return fresh;
 }
+
+#if !defined(__wasi__)
+struct MalHeapLargeRange {
+    uptr start;
+    uptr end;
+};
+
+static int mal_heap_large_range_compare(const void *left, const void *right) {
+    uptr a = ((const MalHeapLargeRange *) left)->start;
+    uptr b = ((const MalHeapLargeRange *) right)->start;
+    return a < b ? -1 : a > b ? 1 : 0;
+}
+
+void mal_heap_cell_index_init(const MalHeap *heap, MalHeapCellIndex *index) {
+    index->heap = heap;
+    index->chunk_low = heap->chunk_count == 0 ? 0 : heap->chunk_bases[0];
+    index->chunk_high = heap->chunk_count == 0
+        ? 0 : heap->chunk_bases[heap->chunk_count - 1] + MAL_GC_CHUNK_SIZE;
+    usize count = 0;
+    for (const MalGcLarge *large = heap->large; large != nullptr; large = large->next) count++;
+    index->large = count == 0 ? nullptr : malloc(count * sizeof(MalHeapLargeRange));
+    if (count != 0 && index->large == nullptr) abort();
+    index->large_count = count;
+    usize next = 0;
+    for (const MalGcLarge *large = heap->large; large != nullptr; large = large->next) {
+        uptr start = (uptr) large + mal_gc_large_data_offset();
+        index->large[next++] = (MalHeapLargeRange) {.start = start, .end = start + large->size};
+    }
+    if (count > 1) qsort(index->large, count, sizeof(MalHeapLargeRange), mal_heap_large_range_compare);
+}
+
+void mal_heap_cell_index_free(MalHeapCellIndex *index) {
+    free(index->large);
+    index->large = nullptr;
+    index->large_count = 0;
+}
+
+static MalHeapHeader *mal_heap_unreclaimed(MalHeapHeader *header) {
+    return (mal_heap_sweep_mark_load(header) & MAL_MARK_FREE) == 0 ? header : nullptr;
+}
+
+MalHeapHeader *mal_heap_cell_index_find(const MalHeapCellIndex *index, uptr address) {
+    const MalHeap *heap = index->heap;
+    if (address >= index->chunk_low && address < index->chunk_high) {
+        usize low = 0;
+        usize high = heap->chunk_count;
+        while (low < high) {
+            usize middle = low + (high - low) / 2;
+            if (heap->chunk_bases[middle] <= address) low = middle + 1;
+            else high = middle;
+        }
+        if (low > 0 && address - heap->chunk_bases[low - 1] < MAL_GC_CHUNK_SIZE) {
+            const MalGcChunk *chunk = heap->chunk_index[low - 1];
+            usize block_index = (address - (uptr) chunk->base) / MAL_GC_BLOCK_SIZE;
+            if (block_index >= chunk->next_block) return nullptr;
+            const MalGcBlock *block =
+                (const MalGcBlock *) ((u8 *) chunk->base + block_index * MAL_GC_BLOCK_SIZE);
+            if (block->kind != MAL_GC_BLOCK_CELL || block->recycled) return nullptr;
+            uptr data = (uptr) block + mal_gc_cell_data_offset();
+            if (address < data || address >= (uptr) block->bump) return nullptr;
+            uptr cell = data + (address - data) / block->cell_size * block->cell_size;
+            if (cell + block->cell_size > (uptr) block->bump) return nullptr;
+            return mal_heap_unreclaimed((MalHeapHeader *) cell);
+        }
+    }
+    usize low = 0;
+    usize high = index->large_count;
+    while (low < high) {
+        usize middle = low + (high - low) / 2;
+        if (index->large[middle].start <= address) low = middle + 1;
+        else high = middle;
+    }
+    if (low == 0 || address >= index->large[low - 1].end) return nullptr;
+    return mal_heap_unreclaimed((MalHeapHeader *) index->large[low - 1].start);
+}
+#endif

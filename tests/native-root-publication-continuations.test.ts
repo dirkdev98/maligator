@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
-import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
@@ -12,9 +11,10 @@ import {
 import { analyzeNativeBodyFacts } from "../src/compiler/target/native-body-facts.ts";
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
 import { positionTableEntries } from "../src/compiler/target/runtime-image.ts";
+import { compilePreciseProgramImage } from "./helpers/precise-roots.ts";
 
 function compile(profile = false) {
-	return compileSemanticProgramToProgramImage(
+	return compilePreciseProgramImage(
 		analyzeSourceAndRunSemanticAnalysis(
 			`function retained(factory, collect) {
 				const held = factory();
@@ -29,7 +29,7 @@ function compile(profile = false) {
 }
 
 function compileForwardBranch(profile: boolean, publishBeforeBranch: boolean) {
-	return compileSemanticProgramToProgramImage(
+	return compilePreciseProgramImage(
 		analyzeSourceAndRunSemanticAnalysis(
 			`function retained(factory, collect, holder, choose) {
 				const held = factory();
@@ -183,7 +183,7 @@ describe("native root publication across ordinary continuations", () => {
 
 	it("rejects forged continuations into a handler or a multiply owned join", () => {
 		const handler = compile().native.functions[1]!;
-		const join = compileSemanticProgramToProgramImage(
+		const join = compilePreciseProgramImage(
 			analyzeSourceAndRunSemanticAnalysis(
 				`function join(factory, collect, choose) {
 					let held;
@@ -252,7 +252,7 @@ describe("native root publication across ordinary continuations", () => {
 		expect(() =>
 			validateNativeStorage({ ...extraPredecessor, storage: original.storage }),
 		).toThrow(/storage plan/);
-		const resumable = compileSemanticProgramToProgramImage(
+		const resumable = compilePreciseProgramImage(
 			analyzeSourceAndRunSemanticAnalysis(
 				"async function retained(value) { await value; return value; } globalThis.retained = retained;",
 				"/root-resume.js",
@@ -262,7 +262,7 @@ describe("native root publication across ordinary continuations", () => {
 	});
 
 	it("keeps selected sparse-region ownership across its ordinary entry", () => {
-		const fn = compileSemanticProgramToProgramImage(
+		const fn = compilePreciseProgramImage(
 			analyzeSourceAndRunSemanticAnalysis(
 				`function retained(factory, collect, left, right) {
 					const held = factory(); collect();

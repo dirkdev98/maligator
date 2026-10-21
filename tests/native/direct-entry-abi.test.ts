@@ -25,6 +25,7 @@ describe("native direct-entry ABI", () => {
 	beforeAll(() => {
 		expected = execFileSync(process.execPath, [fixture], { encoding: "utf8" });
 		const pair = buildBackendPairFromOneProgramImage({
+			nativeStackRoots: "precise",
 			fixture,
 			name: "direct-entry-abi",
 			config: resolveBuildConfig({}),

@@ -73,8 +73,15 @@ export interface NativeNumericWorkerPlan extends NativeScalarStoragePlan {
 	readonly pollingIps: ReadonlyArray<number>;
 }
 
+/**
+ * Native code keeps its live values in C locals and the runtime scans native stacks
+ * for them; Wasm cannot scan its stack and publishes them into a shadow root frame.
+ */
+export type NativeStackRoots = "conservative" | "precise";
+
 export interface NativeStoragePlan
 	extends NativeScalarStoragePlan, NativeRootStoragePlan, NativeFastPathPlans {
+	readonly stackRoots: NativeStackRoots;
 	readonly captures: NativeCaptureAccessPlan;
 	readonly callTransports: ReadonlyArray<NativeCallTransportPlan>;
 	readonly callbackTransports: ReadonlyArray<NativeCallbackTransportPlan>;
@@ -972,6 +979,23 @@ function untracedPrimitiveResultRegisters(
 	return registers;
 }
 
+const CONSERVATIVE_ROOT_STORAGE: Pick<
+	NativeStoragePlan,
+	| "rootRegisters"
+	| "rootSlots"
+	| "rootSlotCount"
+	| "privateRegisters"
+	| "privateCallResultIps"
+	| "entryStableRootRegisters"
+> = Object.freeze({
+	rootRegisters: Object.freeze([]),
+	rootSlots: Object.freeze([]),
+	rootSlotCount: 0,
+	privateRegisters: Object.freeze([]),
+	privateCallResultIps: Object.freeze([]),
+	entryStableRootRegisters: Object.freeze([]),
+});
+
 function rootStorage(
 	native: NativeFunctionPlan,
 	body: NativeStorageBodyFacts,
@@ -1225,6 +1249,7 @@ function lowerStorage(
 	entries: NativeEntryLookup = new Map(),
 	suspension = lowerNativeSuspension(native, body),
 	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
+	stackRoots: NativeStackRoots = "precise",
 ): NativeStoragePlan {
 	const fn = native.body;
 	const fastPaths = selectNativeFastPaths(native, entry, stringConstants, body);
@@ -1305,28 +1330,29 @@ function lowerStorage(
 		),
 		directHeapObjectIps,
 		stackObjects: selectNativeStackObjectStorage(native, new Set(directHeapObjectIps)),
-		...rootStorage(
-			native,
-			body,
-			fastPaths,
-			callTransports,
-			scalar.rematerializedConstantIps,
-			scalar.expressionIps,
-			untracedPrimitiveResultRegisters(native, body, ownership),
-		),
+		stackRoots,
+		...(stackRoots === "conservative"
+			? CONSERVATIVE_ROOT_STORAGE
+			: rootStorage(
+					native,
+					body,
+					fastPaths,
+					callTransports,
+					scalar.rematerializedConstantIps,
+					scalar.expressionIps,
+					untracedPrimitiveResultRegisters(native, body, ownership),
+				)),
 		elidedTdzIps: elidedTdzIps(native, ownership),
-		rootPublicationContinuations: rootPublicationContinuations(
-			native,
-			body,
-			expressionWindows,
-			[
-				...fastPaths.numberRecordRegions.map((plan) => plan.exitIp),
-				...fastPaths.numericLoopRegions.flatMap((plan) => [
-					plan.id,
-					...plan.exits.map((exit) => exit.targetIp),
-				]),
-			],
-		),
+		rootPublicationContinuations:
+			stackRoots === "conservative"
+				? []
+				: rootPublicationContinuations(native, body, expressionWindows, [
+						...fastPaths.numberRecordRegions.map((plan) => plan.exitIp),
+						...fastPaths.numericLoopRegions.flatMap((plan) => [
+							plan.id,
+							...plan.exits.map((exit) => exit.targetIp),
+						]),
+					]),
 		...scalar,
 		numericWorker,
 	};
@@ -1336,6 +1362,7 @@ export function lowerNativeFunctionStorage(
 	native: NativeFunctionPlan,
 	entries: NativeEntryLookup = new Map(),
 	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
+	stackRoots: NativeStackRoots = "precise",
 ): NativeFunctionPlan {
 	const body = storageBodyFacts(native);
 	return {
@@ -1348,6 +1375,7 @@ export function lowerNativeFunctionStorage(
 			entries,
 			undefined,
 			stringConstants,
+			stackRoots,
 		),
 		directEntries: native.directEntries.map((entry) => ({
 			...entry,
@@ -1359,6 +1387,7 @@ export function lowerNativeFunctionStorage(
 				entries,
 				undefined,
 				stringConstants,
+				stackRoots,
 			),
 		})),
 	};
@@ -1380,12 +1409,20 @@ function certifyNativeStorage(
 	certifiedNativeStorage.set(native, stringConstants);
 }
 
-export function lowerNativeStorage(image: ProgramImage): ProgramImage {
+export function lowerNativeStorage(
+	image: ProgramImage,
+	stackRoots: NativeStackRoots = "precise",
+): ProgramImage {
 	const entries = nativeEntryLookup(image.native.functions);
 	const native = {
 		...image.native,
 		functions: image.native.functions.map((native) =>
-			lowerNativeFunctionStorage(native, entries, image.runtime.stringConstants),
+			lowerNativeFunctionStorage(
+				native,
+				entries,
+				image.runtime.stringConstants,
+				stackRoots,
+			),
 		),
 	};
 	certifyNativeStorage(native, image.runtime.stringConstants);
@@ -1629,6 +1666,7 @@ export function validateNativeStorage(
 		return (
 			stored !== undefined &&
 			selected !== undefined &&
+			stored.stackRoots === selected.stackRoots &&
 			nativeCaptureAccessPlansMatch(stored.captures, selected.captures) &&
 			stored.rootSlotCount === selected.rootSlotCount &&
 			nativeCallTransportsMatch(stored.callTransports, selected.callTransports) &&
@@ -1882,10 +1920,13 @@ export function validateNativeStorage(
 	};
 	const matches = (variant: NativeFunctionPlan, entry?: NativeDirectEntryPlan) => {
 		if (variant.storage === undefined) return false;
-		validateNativeRootStorage(variant, variant.storage.rootRegisters, variant.storage, {
-			privateRegisters: new Set(variant.storage.privateRegisters),
-			facts: body,
-		});
+		const stackRoots = variant.storage.stackRoots;
+		if (stackRoots === "precise") {
+			validateNativeRootStorage(variant, variant.storage.rootRegisters, variant.storage, {
+				privateRegisters: new Set(variant.storage.privateRegisters),
+				facts: body,
+			});
+		}
 		const suspension = lowerNativeSuspension(variant, body);
 		const selected = lowerStorage(
 			variant,
@@ -1895,6 +1936,7 @@ export function validateNativeStorage(
 			entries,
 			suspension,
 			stringConstants,
+			stackRoots,
 		);
 		if (!sameScalar(variant.storage, selected)) return false;
 		if (
@@ -1918,10 +1960,12 @@ export function validateNativeStorage(
 		)
 			return false;
 		const retained =
-			sameNumbers(
+			stackRoots === "conservative" ||
+			(sameNumbers(
 				variant.storage.rematerializedConstantIps,
 				selected.rematerializedConstantIps,
-			) && sameNumbers(variant.storage.expressionIps, selected.expressionIps)
+			) &&
+				sameNumbers(variant.storage.expressionIps, selected.expressionIps))
 				? selected
 				: {
 						...selected,

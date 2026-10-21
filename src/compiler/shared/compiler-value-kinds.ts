@@ -153,12 +153,40 @@ export function compilerOperatorIsNullishEquality(
 	);
 }
 
+const COMPILER_VALUE_KIND_PURE_STRING_CONVERSION =
+	COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE | COMPILER_VALUE_KIND_STRING;
+
+/**
+ * `+` with a String operand concatenates; when the other operand is a
+ * primitive whose ToString runs no user code and cannot throw, the whole
+ * operation is a string conversion and a concatenation.
+ */
+export function compilerOperatorIsPrimitiveStringConcatenation(
+	opcode: string,
+	operator: unknown,
+	masks: ReadonlyArray<CompilerValueKindMask>,
+): boolean {
+	return (
+		opcode === "binary" &&
+		operator === "+" &&
+		masks.length === 2 &&
+		masks.some((mask) => mask === COMPILER_VALUE_KIND_STRING) &&
+		masks.every(
+			(mask) =>
+				compilerValueKindMaskIsValid(mask) &&
+				compilerValueKindMaskIsSubset(mask, COMPILER_VALUE_KIND_PURE_STRING_CONVERSION),
+		)
+	);
+}
+
 export function compilerOperatorInputKindsHaveExactNativeSemantics(
 	opcode: string,
 	operator: unknown,
 	masks: ReadonlyArray<CompilerValueKindMask>,
 ): masks is CompilerOperatorInputKindMasks {
 	if (compilerOperatorIsNullishEquality(opcode, operator, masks)) return true;
+	if (compilerOperatorIsPrimitiveStringConcatenation(opcode, operator, masks))
+		return true;
 	if (
 		typeof operator !== "string" ||
 		!masks.every((mask) => compilerValueKindMaskIsValid(mask))

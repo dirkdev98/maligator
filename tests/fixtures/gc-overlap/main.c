@@ -49,6 +49,8 @@ static void release_at_teardown(void) {
 }
 
 int main(void) {
+    // Every value here is rooted explicitly; stale C locals must not retain cells.
+    mal_gc_test_precise_stack_roots = true;
     MalVm vm;
     mal_vm_init(&vm, &mal_runtime_image);
     if (mal_gc_worker_limit(&vm) == 0) {

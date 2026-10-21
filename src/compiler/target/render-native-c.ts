@@ -19,6 +19,7 @@ import {
 	COMPILER_VALUE_KIND_NULLISH,
 	COMPILER_VALUE_KIND_UNDEFINED,
 	compilerOperatorIsNullishEquality,
+	compilerOperatorIsPrimitiveStringConcatenation,
 } from "../shared/compiler-value-kinds.ts";
 import type { CompilerValueKindMask } from "../shared/compiler-value-kinds.ts";
 import {
@@ -242,6 +243,7 @@ interface NativeCaptureShadow {
 	readonly base: number;
 	/** Creates the environment from the shadow slots and assigns `env`. */
 	readonly create: string;
+	readonly rootFrame: boolean;
 }
 
 interface NativeBodyAnalysis {
@@ -584,7 +586,7 @@ function ensureCaptureEnvironment(
 	if (shadow === undefined || (state & ENVIRONMENT_ABSENT) === 0) return [];
 	const create = [
 		shadow.create,
-		"__gc_frame.env = env;",
+		...(shadow.rootFrame ? ["__gc_frame.env = env;"] : []),
 		...(shadow.plan.guarded ? ["__capture_env_ready = true;"] : []),
 	];
 	if (state === ENVIRONMENT_ABSENT) return create;
@@ -729,11 +731,31 @@ export const COMPILED_FUNCTION_DECLARATION =
 // Generated frames index their arrays only by constants, so the per-call canary is waste.
 const NATIVE_ENTRY_ATTRIBUTES = "__attribute__((no_stack_protector)) ";
 
-// An entry pushes its own frame, so call sites carry no bookkeeping; every return pops it.
-const COMPILED_ENTRY_SCOPE = [
-	"    MalVm *const __entered __attribute__((cleanup(mal_vm_leave_compiled_scope))) = vm;",
-	"    (void) __frame_row;",
-];
+// An entry enters its own frame, so call sites carry no bookkeeping; a row build pops it on every return.
+const COMPILED_ENTRY_SCOPE = ["    MAL_FRAME_SCOPE();", "    (void) __frame_row;"];
+
+function frameDescriptorName(symbol: string): string {
+	return `mal_frame_desc_${symbol}`;
+}
+
+function compiledFrameEntry(symbol: string, functionIndex: string): Array<string> {
+	return [
+		"    MalNativeFrame __frame_record;",
+		`    MalNativeFrame *const __frame_row = MAL_FRAME_ENTER(&__frame_record, ${frameDescriptorName(symbol)}, ${functionIndex});`,
+	];
+}
+
+/** Declares `owner`, the C function holding `symbol`'s frame record, then its descriptor. */
+function compiledFrameDescriptor(
+	symbol: string,
+	owner: string,
+	ownerDeclaration: string,
+): Array<string> {
+	return [
+		`${ownerDeclaration};`,
+		`MAL_FRAME_DESC(${frameDescriptorName(symbol)}, ${owner});`,
+	];
+}
 
 /** `name` is the function's index, or its stem in a relocatable overlay. */
 export function nativeCallbackSymbol(
@@ -1979,7 +2001,10 @@ function emitCompiledVariant(
 	// bound instance is live across the rest of the body), initialized from the
 	// EMPTY parameter and read through the TDZ-checked LOAD_THIS / RETURN forms.
 	const thisSlot = fn.isDerivedConstructor ? slotCount : -1;
+	// Stack scanning finds `this_value` while the body still reads it.
+	const conservativeRoots = storage.stackRoots === "conservative";
 	const retainsThis =
+		!conservativeRoots &&
 		!fn.isDerivedConstructor &&
 		nativeContract.gc.safepoints.length > 0 &&
 		fn.instructions.some((instruction) => instruction.opcode === "LOAD_THIS");
@@ -2255,6 +2280,7 @@ function emitCompiledVariant(
 					plan: lazyCaptures,
 					create: `env = mal_env_new_from_frame(vm, env, ${relocation.functionIndex(index)}, ${fn.capturedCount}, ${fn.closureCaptureOwners !== undefined}, &__gc_slots[${nextStackSlot}]);`,
 					base: nextStackSlot,
+					rootFrame: !conservativeRoots,
 				};
 	if (lazyCaptures !== undefined) nextStackSlot += fn.capturedCount;
 	const totalSlots = nextStackSlot;
@@ -2268,7 +2294,11 @@ function emitCompiledVariant(
 	// `this`, this activation's captured env, and/or a reassigned `with` env; every
 	// exit past its link must unlink it.
 	const needsRootFrame =
-		totalSlots > 0 || capturesEnv || hasWith || analysis.captures.copiedValues.length > 0;
+		!conservativeRoots &&
+		(totalSlots > 0 ||
+			capturesEnv ||
+			hasWith ||
+			analysis.captures.copiedValues.length > 0);
 	const retainsForwardedArguments = fn.instructions.some(
 		(instruction) => instruction.opcode === "CALL_REST_ARGUMENTS",
 	);
@@ -2365,6 +2395,7 @@ function emitCompiledVariant(
 		restArgumentRootReleaseIp,
 		captureShadow,
 		directClosures,
+		!conservativeRoots,
 	);
 	if (body === null) {
 		return null;
@@ -2409,6 +2440,7 @@ function emitCompiledVariant(
 		directEntry === undefined ? "MalValue" : cTypeOf(directEntry.resultRepresentation);
 	// Keep native entries on 64-byte boundaries as neighboring generated code changes.
 	const signature = `${linkage === "static" ? "static " : ""}${NATIVE_ENTRY_ATTRIBUTES}__attribute__((aligned(64))) ${resultType} ${symbol}(${parameterList}) {`;
+	const frameSignature = `${linkage === "static" ? "static " : ""}${NATIVE_ENTRY_ATTRIBUTES}MAL_COMPILED_FRAME __attribute__((aligned(64))) ${resultType} ${symbol}(${parameterList}) {`;
 	lines.push(`    (void) this_value;`);
 	if (directEntry === undefined) lines.push(`    (void) new_target;`);
 	lines.push(`    (void) env;`);
@@ -2419,7 +2451,7 @@ function emitCompiledVariant(
 		);
 	if (directEntry === undefined) lines.push(`    (void) entry_state;`);
 	lines.push(
-		`    MalNativeFrame *__frame_row = mal_vm_enter_compiled_row(vm, ${relocation.functionIndex(index)});`,
+		...compiledFrameEntry(symbol, relocation.functionIndex(index)),
 		`    if (__frame_row == nullptr) return ${directEntry === undefined ? "MAL_VALUE_UNDEFINED" : zeroOf(directEntry.resultRepresentation)};`,
 		...COMPILED_ENTRY_SCOPE,
 	);
@@ -2462,6 +2494,9 @@ function emitCompiledVariant(
 	// instruction lowering preserve its existing intermediate/output contracts.
 	if (totalSlots > 0) {
 		lines.push(`    MalValue __gc_slots[${totalSlots}];`);
+		// Without a root frame, only an escaped array keeps stores the collector must see.
+		if (conservativeRoots)
+			lines.push(`    __asm__ volatile("" : : "r"(__gc_slots) : "memory");`);
 	}
 	for (const site of stackObjectSites.values()) {
 		if (site.elided === true) continue;
@@ -2586,7 +2621,7 @@ function emitCompiledVariant(
 	if (capturesEnv && lazyCaptures === undefined) {
 		lines.push(
 			`    env = ${fn.closureCaptureOwners === undefined ? "mal_env_new" : "mal_env_new_compact"}(vm, env, ${relocation.functionIndex(index)}, ${fn.capturedCount});`,
-			`    __gc_frame.env = env;`,
+			...(needsRootFrame ? [`    __gc_frame.env = env;`] : []),
 		);
 	}
 	if (lazyCaptures?.guarded === true) lines.push("    bool __capture_env_ready = false;");
@@ -2630,7 +2665,7 @@ function emitCompiledVariant(
 	const split = splitNativeFunction(
 		{
 			symbol,
-			signature,
+			signature: frameSignature,
 			resultType,
 			inactiveRows: rootMaskStatements.declarations,
 			prologue: lines,
@@ -2732,8 +2767,8 @@ function emitCompiledVariant(
 			: undefined;
 	const definition = split ?? [
 		fastEntry === undefined
-			? signature
-			: `static ${NATIVE_ENTRY_ATTRIBUTES}__attribute__((noinline)) __attribute__((aligned(64))) ${resultType} ${fullSymbol}(${parameterList}) {`,
+			? frameSignature
+			: `static ${NATIVE_ENTRY_ATTRIBUTES}MAL_COMPILED_FRAME __attribute__((noinline)) __attribute__((aligned(64))) ${resultType} ${fullSymbol}(${parameterList}) {`,
 		// Each JavaScript arithmetic operation rounds separately, including expression chains.
 		"#pragma STDC FP_CONTRACT OFF",
 		...rootMaskStatements.declarations,
@@ -2747,6 +2782,17 @@ function emitCompiledVariant(
 	];
 	const source = [
 		...(relocation.link.length === 0 ? [] : [`extern const i32 ${symbol}_link[];`]),
+		...(fastEntry === undefined
+			? compiledFrameDescriptor(
+					symbol,
+					symbol,
+					`${linkage === "static" ? "static " : ""}${resultType} ${symbol}(${parameterList})`,
+				)
+			: compiledFrameDescriptor(
+					symbol,
+					fullSymbol,
+					`static ${resultType} ${fullSymbol}(${parameterList})`,
+				)),
 		...definition,
 	];
 	if (joinedCodeUnits(source) > maxCodeUnits) return null;
@@ -3490,6 +3536,10 @@ function emitResumableFunction(
 		storage.callbackTransports,
 		new Set(storage.rootPublicationContinuations),
 		maxCodeUnits,
+		undefined,
+		undefined,
+		undefined,
+		storage.stackRoots !== "conservative",
 	);
 	if (body === null) {
 		return null;
@@ -3505,8 +3555,15 @@ function emitResumableFunction(
 
 	const lines: Array<string> = [];
 
+	const coroutineParameters =
+		"MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, void *entry_state";
 	lines.push(
-		`${linkage === "static" ? "static " : ""}${NATIVE_ENTRY_ATTRIBUTES}__attribute__((aligned(64))) MalValue ${symbol}(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, void *entry_state) {`,
+		...compiledFrameDescriptor(
+			symbol,
+			symbol,
+			`${linkage === "static" ? "static " : ""}MalValue ${symbol}(${coroutineParameters})`,
+		),
+		`${linkage === "static" ? "static " : ""}${NATIVE_ENTRY_ATTRIBUTES}MAL_COMPILED_FRAME __attribute__((aligned(64))) MalValue ${symbol}(${coroutineParameters}) {`,
 	);
 	lines.push("#pragma STDC FP_CONTRACT OFF");
 	if (relocatable !== false && relocatable.relocation !== undefined)
@@ -3518,7 +3575,7 @@ function emitResumableFunction(
 	lines.push(`    (void) new_target;`);
 	// A refused resume settles the coroutine as the throwing body would.
 	lines.push(
-		`    MalNativeFrame *__frame_row = mal_vm_enter_compiled_row(vm, ${self});`,
+		...compiledFrameEntry(symbol, self),
 		`    if (__frame_row == nullptr) {`,
 		`        if (entry_state != nullptr) mal_vm_op_coroutine_throw_compiled(vm, (MalGeneratorObject *) entry_state, ((MalGeneratorObject *) entry_state)->frame.registers);`,
 		`        return MAL_VALUE_UNDEFINED;`,
@@ -4656,6 +4713,8 @@ function emitBody(
 	restArgumentRootReleaseIp?: number,
 	captureShadow?: NativeCaptureShadow,
 	directClosures: ReadonlyMap<string, NativeDirectClosureEnvironment> = new Map(),
+	// A conservative-root callee services pending polls at its entry instead.
+	callReturnPolls = true,
 ): EmittedBody | null {
 	const callTransportByIp = new Map(
 		callTransports.map((plan) => [plan.instructionIp, plan]),
@@ -5281,6 +5340,7 @@ function emitBody(
 		profile: undefined,
 		gcSafepoint: false,
 		loopPoll: false,
+		callReturnPolls,
 		incomingRootPublication: undefined,
 		eagerIncomingRootPublication: undefined,
 		onIncomingRootPublication: undefined,
@@ -6324,6 +6384,7 @@ interface NativeInstructionContext {
 	readonly nativePlan?: NativeInstructionPlan;
 	readonly gcSafepoint: boolean;
 	readonly loopPoll: boolean;
+	readonly callReturnPolls: boolean;
 	readonly incomingRootPublication?: ReadonlyArray<string>;
 	readonly eagerIncomingRootPublication?: boolean;
 	readonly onIncomingRootPublication?: () => void;
@@ -6460,6 +6521,11 @@ function nativeTypedArrayElementSize(kind: NativeTypedArrayElementKind): number 
 		case "Float64Array":
 			return 8;
 	}
+}
+
+// The unlink text restores `__gc_frame.prev` exactly when the activation linked a root frame.
+function rootFrameEnvUpdate(gcUnlink: string): string {
+	return gcUnlink.includes("__gc_frame.prev") ? " __gc_frame.env = env;" : "";
 }
 
 function emitInstruction(
@@ -6639,6 +6705,7 @@ function emitInstruction(
 		resources,
 		gcSafepoint: context.gcSafepoint,
 		loopPoll: context.loopPoll,
+		callReturnPolls: context.callReturnPolls,
 		incomingRootPublication: context.incomingRootPublication,
 		eagerIncomingRootPublication: context.eagerIncomingRootPublication,
 		onIncomingRootPublication: context.onIncomingRootPublication,
@@ -7009,6 +7076,7 @@ function emitInstruction(
 						? `if (mal_gc_poll_requested()) { ${safepoint()} }`
 						: ""
 					: `if (mal_gc_poll_requested()) { ${cInactiveRootMaskPublication(context.loopBackedgeInactiveRootMask, context.inactiveRootMaskStatements)}; ${safepoint()} }`);
+	const callPoll = (): string => (context.callReturnPolls ? poll() : "");
 	let mathPollText: string | undefined;
 	const mathPoll = (): string =>
 		(mathPollText ??=
@@ -8346,7 +8414,7 @@ function emitInstruction(
 			// LOAD/STORE_CAPTURED + CREATE_FUNCTION read it) and keep the root frame's
 			// env pointer current so the GC roots the live env chain. A capturing loop
 			// always has a root frame (it creates a closure → a MalValue register).
-			const frameUpdate = gcUnlink !== "" ? " __gc_frame.env = env;" : "";
+			const frameUpdate = rootFrameEnvUpdate(gcUnlink);
 			if (instruction.opcode === "ENV_POP") {
 				return [`env = env->parent;${frameUpdate}`];
 			}
@@ -9594,6 +9662,21 @@ function emitInstruction(
 					throwCheck(),
 				];
 			}
+			if (
+				(fusion === undefined || fusion.role === "start") &&
+				exactInputKinds !== undefined &&
+				compilerOperatorIsPrimitiveStringConcatenation(
+					"binary",
+					operator,
+					exactInputKinds,
+				)
+			) {
+				return [
+					...(fusion === undefined ? [] : [`__nf_${fusion.id}_ok = false;`]),
+					`r${dst} = ${profileCall("string", reentrantValue(`mal_vm_concat_primitive_strings(vm, ${boxed(left)}, ${boxed(right)})`))};`,
+					throwCheck(),
+				];
+			}
 			if (fusion?.role === "start" && reps[dst] !== "number") {
 				const nativeExpr = nativeNumberExpr(
 					operator,
@@ -10279,7 +10362,7 @@ function emitInstruction(
 							instruction.dst,
 							instruction.operation === "Number.isNaN" ? "false" : "true",
 						),
-						poll(),
+						callPoll(),
 					];
 				if (predicatePlan.mode === "number") {
 					if (input === undefined)
@@ -10290,7 +10373,7 @@ function emitInstruction(
 						instruction.operation,
 						number,
 					);
-					return [storeBoolean(instruction.dst, predicate), poll()];
+					return [storeBoolean(instruction.dst, predicate), callPoll()];
 				}
 				return [
 					storeBoolean(
@@ -10317,7 +10400,7 @@ function emitInstruction(
 						return [
 							`MalValue ${result} = mal_builtin_string_character_numeric(vm, mal_value_to_string(${boxedOperand(instruction.thisValue)}), 0, mal_string_length(mal_value_to_string(${boxedOperand(instruction.thisValue)})), ${position}, MAL_STRING_CHARACTER_${character});`,
 							`r${instruction.dst} = ${callValue(instruction.dst, result)};`,
-							poll(),
+							callPoll(),
 						];
 					}
 				}
@@ -10330,7 +10413,7 @@ function emitInstruction(
 								instruction.dst,
 								`${instruction.operation === "isNaN" ? "isnan" : "isfinite"}(${number})`,
 							),
-							poll(),
+							callPoll(),
 						];
 				}
 				if (["BigInt.asIntN", "BigInt.asUintN"].includes(instruction.operation)) {
@@ -10343,7 +10426,7 @@ function emitInstruction(
 							`MalValue ${result} = mal_builtin_bigint_width_number(vm, ${bits}, ${input === undefined ? "MAL_VALUE_UNDEFINED" : boxedOperand(input)}, ${instruction.operation === "BigInt.asIntN"});`,
 							throwCheck(),
 							`r${instruction.dst} = ${callValue(instruction.dst, result)};`,
-							poll(),
+							callPoll(),
 						];
 					}
 				}
@@ -10365,7 +10448,7 @@ function emitInstruction(
 							`MalValue ${result} = mal_builtin_bigint_to_string_radix(vm, ${boxedOperand(instruction.thisValue)}, ${radix});`,
 							throwCheck(),
 							`r${instruction.dst} = ${callValue(instruction.dst, result)};`,
-							poll(),
+							callPoll(),
 						];
 					}
 				}
@@ -10377,7 +10460,7 @@ function emitInstruction(
 						context.stringLeafCaches.add(ip);
 						return [
 							`r${instruction.dst} = ${callValue(instruction.dst, profileCall("string", `mal_builtin_string_char_code_at_cached_number(vm, &__string_leaf_cache_${ip}, ${boxedOperand(instruction.thisValue)}, ${position})`))};`,
-							poll(),
+							callPoll(),
 						];
 					}
 				}
@@ -10399,7 +10482,7 @@ function emitInstruction(
 					if (receiver !== null && digits !== undefined)
 						return [
 							`r${instruction.dst} = mal_builtin_number_to_${format[0]}_numeric(vm, ${receiver}, ${digits});`,
-							poll(),
+							callPoll(),
 						];
 				}
 				if (
@@ -10419,14 +10502,14 @@ function emitInstruction(
 							`MalValue ${result} = mal_builtin_string_from_codes_numbers(vm, ${values}, ${arguments_.length}, ${instruction.operation === "String.fromCodePoint" ? "true" : "false"});`,
 							throwCheck(),
 							`r${instruction.dst} = ${callValue(instruction.dst, result)};`,
-							poll(),
+							callPoll(),
 						];
 					}
 				}
 				if (instruction.operation === "Math.random") {
 					return [
 						storeNumber(instruction.dst, "mal_builtin_math_random_number()"),
-						poll(),
+						callPoll(),
 					];
 				}
 				if (instruction.operation === "Math.sumPrecise") {
@@ -10436,7 +10519,7 @@ function emitInstruction(
 						`MalValue ${result} = mal_builtin_math_sum_precise_known(vm, ${items === undefined ? "MAL_VALUE_UNDEFINED" : boxedOperand(items)});`,
 						throwCheck(),
 						`r${instruction.dst} = ${callValue(instruction.dst, result)};`,
-						poll(),
+						callPoll(),
 					];
 				}
 				const numericKernel = MATH_NUMBER_KERNELS[instruction.operation];
@@ -10452,7 +10535,7 @@ function emitInstruction(
 								instruction.operation,
 								`${numericKernel[0]}(${arguments_.join(", ")})`,
 							),
-							poll(),
+							callPoll(),
 						];
 					}
 				}
@@ -10470,7 +10553,7 @@ function emitInstruction(
 							instruction.operation === "Math.hypot"
 								? `mal_builtin_math_hypot_numbers(${values}, ${arguments_.length})`
 								: `mal_builtin_math_min_max_numbers(${values}, ${arguments_.length}, ${instruction.operation === "Math.max" ? "true" : "false"})`;
-						return [storeNumber(instruction.dst, expression), poll()];
+						return [storeNumber(instruction.dst, expression), callPoll()];
 					}
 				}
 				if (
@@ -10491,7 +10574,7 @@ function emitInstruction(
 									)
 								: null;
 					if (expression !== null)
-						return [storeNumber(instruction.dst, expression), poll()];
+						return [storeNumber(instruction.dst, expression), callPoll()];
 				}
 			}
 			if (
@@ -10511,7 +10594,7 @@ function emitInstruction(
 					`MalValue ${value} = mal_vm_call_known_native(vm, ${knownNativeEntries()[knownOperationIndex(instruction.operation)!]}, ${knownOperationIndex(instruction.operation)}, ${boxedOperand(instruction.thisValue)}, ${arguments_}, ${args.length}, ${knownOperationFlags(instruction)});`,
 					throwCheck(),
 					`r${instruction.dst} = ${callValue(instruction.dst, value)};`,
-					poll(),
+					callPoll(),
 				];
 				if (!instruction.construct && instruction.argumentMode === undefined) {
 					let guard: string | undefined;
@@ -10537,7 +10620,7 @@ function emitInstruction(
 								instruction.operation,
 								`${numericKernel[0]}(${numbers.join(", ")})`,
 							),
-							poll(),
+							callPoll(),
 						];
 					} else if (
 						(MATH_UNARY_NATIVE_CALL.has(instruction.operation) && first !== undefined) ||
@@ -10564,7 +10647,7 @@ function emitInstruction(
 							guard = guards.length === 0 ? "true" : guards.join(" && ");
 							direct = [
 								storeMathNumber(instruction.dst, instruction.operation, expression),
-								poll(),
+								callPoll(),
 							];
 						}
 					} else if (
@@ -10588,14 +10671,14 @@ function emitInstruction(
 								? `mal_builtin_parse_int_string(${source}, ${number})`
 								: `mal_builtin_parse_float_string(${source})`;
 						guard = guards.length === 0 ? "true" : guards.join(" && ");
-						direct = [storeNumber(instruction.dst, expression), poll()];
+						direct = [storeNumber(instruction.dst, expression), callPoll()];
 					} else if (instruction.operation === "Array.isArray" && first !== undefined) {
 						// Only a proxy needs IsArray's unwrapping and its revoked-proxy TypeError.
 						const input = boxedOperand(first);
 						guard = `!mal_value_is_heap_type(${input}, MAL_HEAP_PROXY_OBJECT)`;
 						direct = [
 							storeBoolean(instruction.dst, `mal_value_is_array_object(${input})`),
-							poll(),
+							callPoll(),
 						];
 					} else if (
 						["isNaN", "isFinite"].includes(instruction.operation) &&
@@ -10608,7 +10691,7 @@ function emitInstruction(
 								instruction.dst,
 								`${instruction.operation === "isNaN" ? "isnan" : "isfinite"}(mal_ops_number_as_f64(${input}))`,
 							),
-							poll(),
+							callPoll(),
 						];
 					} else if (
 						["BigInt.asIntN", "BigInt.asUintN"].includes(instruction.operation) &&
@@ -10621,7 +10704,7 @@ function emitInstruction(
 							`MalValue ${result} = mal_builtin_bigint_width_number(vm, mal_ops_number_as_f64(${width}), ${second === undefined ? "MAL_VALUE_UNDEFINED" : boxedOperand(second)}, ${instruction.operation === "BigInt.asIntN"});`,
 							throwCheck(),
 							`r${instruction.dst} = ${callValue(instruction.dst, result)};`,
-							poll(),
+							callPoll(),
 						];
 					} else if (
 						instruction.operation === "BigInt.prototype.toString" &&
@@ -10636,7 +10719,7 @@ function emitInstruction(
 							`MalValue ${result} = mal_builtin_bigint_to_string_radix(vm, ${boxedOperand(instruction.thisValue)}, (i32) ${number});`,
 							throwCheck(),
 							`r${instruction.dst} = ${callValue(instruction.dst, result)};`,
-							poll(),
+							callPoll(),
 						];
 					}
 					if (direct !== undefined && guard !== undefined) {
@@ -10664,7 +10747,7 @@ function emitInstruction(
 						`MalValue ${result} = mal_builtin_uri_${uri[0]}_known(vm, mal_value_to_string(${value})${uri[1] === undefined ? "" : `, ${uri[1]}`});`,
 						throwCheck(),
 						`r${instruction.dst} = ${callValue(instruction.dst, result)};`,
-						poll(),
+						callPoll(),
 					];
 					if (operandIsString(input)) return direct;
 					return [
@@ -10691,7 +10774,7 @@ function emitInstruction(
 						`MalValue ${result} = mal_builtin_string_replace_known(vm, mal_value_to_string(${receiver}), mal_value_to_string(${search}), ${replacement === undefined ? "MAL_VALUE_UNDEFINED" : boxedOperand(replacement)}, ${instruction.operation === "String.prototype.replaceAll"});`,
 						throwCheck(),
 						`r${instruction.dst} = ${callValue(instruction.dst, result)};`,
-						poll(),
+						callPoll(),
 					];
 					const guards = [
 						...(operandIsString(instruction.thisValue)
@@ -10749,7 +10832,7 @@ function emitInstruction(
 						`MalValue ${result} = ${expression};`,
 						throwCheck(),
 						`r${instruction.dst} = ${callValue(instruction.dst, result)};`,
-						poll(),
+						callPoll(),
 					];
 					if (transform.receiver === "string") return direct;
 					return [
@@ -10771,7 +10854,7 @@ function emitInstruction(
 						`if (mal_builtin_string_concat_direct(vm, ${boxedOperand(instruction.thisValue)}, ${arguments_}, ${args.length}, &${result})) {`,
 						`  ${throwCheck()}`,
 						`  r${instruction.dst} = ${callValue(instruction.dst, result)};`,
-						`  ${poll()}`,
+						`  ${callPoll()}`,
 						`} else {`,
 						...fallback.map((line) => `  ${line}`),
 						`}`,
@@ -10797,7 +10880,7 @@ function emitInstruction(
 							`MalValue ${result} = mal_builtin_string_pad_numeric(vm, mal_value_to_string(${receiver}), ${length}, ${fill === undefined ? "MAL_VALUE_UNDEFINED" : boxedOperand(fill)}, ${instruction.operation === "String.prototype.padStart" ? "true" : "false"});`,
 							throwCheck(),
 							`r${instruction.dst} = ${callValue(instruction.dst, result)};`,
-							poll(),
+							callPoll(),
 						];
 						if (operandIsString(instruction.thisValue)) return direct;
 						return [
@@ -10836,7 +10919,7 @@ function emitInstruction(
 							`MalValue ${result} = ${expression};`,
 							throwCheck(),
 							`r${instruction.dst} = ${callValue(instruction.dst, result)};`,
-							poll(),
+							callPoll(),
 						];
 						if (operandIsString(instruction.thisValue)) return direct;
 						return [
@@ -10867,7 +10950,7 @@ function emitInstruction(
 							`MalValue ${result};`,
 							`if (mal_builtin_string_character_direct(vm, ${boxedOperand(instruction.thisValue)}, ${position}, MAL_STRING_CHARACTER_${character}, &${result})) {`,
 							`  r${instruction.dst} = ${callValue(instruction.dst, result)};`,
-							`  ${poll()}`,
+							`  ${callPoll()}`,
 							`} else {`,
 							...fallback.map((line) => `  ${line}`),
 							`}`,
@@ -10895,7 +10978,7 @@ function emitInstruction(
 							return [
 								`MalValue ${result} = mal_builtin_string_search_strings(mal_value_to_string(${boxedOperand(instruction.thisValue)}), 0, mal_string_length(mal_value_to_string(${boxedOperand(instruction.thisValue)})), mal_value_to_string(${boxedOperand(instruction.arguments[0])}), ${position}, MAL_STRING_SEARCH_${search[0]});`,
 								`r${instruction.dst} = ${callValue(instruction.dst, result)};`,
-								poll(),
+								callPoll(),
 							];
 						}
 
@@ -10903,7 +10986,7 @@ function emitInstruction(
 							`MalValue ${result};`,
 							`if (mal_builtin_string_search_direct(${boxedOperand(instruction.thisValue)}, ${boxedOperand(instruction.arguments[0])}, ${position}, MAL_STRING_SEARCH_${search[0]}, &${result})) {`,
 							`  r${instruction.dst} = ${callValue(instruction.dst, result)};`,
-							`  ${poll()}`,
+							`  ${callPoll()}`,
 							`} else {`,
 							...fallback.map((line) => `  ${line}`),
 							`}`,
@@ -10941,7 +11024,7 @@ function emitInstruction(
 							`} else {`,
 							...fallback.map((line) => `  ${line}`),
 							`}`,
-							poll(),
+							callPoll(),
 						];
 					}
 				}
@@ -10960,7 +11043,7 @@ function emitInstruction(
 							`${profileCall("regexp", `mal_regexp_exec_capture_projection_locked(${parameters})`)};`,
 							throwCheck(),
 							`__regexp_exec_${projection.callIp}_projected = mal_value_is_boolean(r${instruction.dst});`,
-							poll(),
+							callPoll(),
 						];
 					const callee = `mal_vm_load_primordial(vm, ${knownOperations()[knownOperationIndex(instruction.operation)!]!.node})`;
 					return [
@@ -10971,7 +11054,7 @@ function emitInstruction(
 						`} else {`,
 						...fallback.map((line) => `  ${line}`),
 						`}`,
-						poll(),
+						callPoll(),
 					];
 				}
 				return fallback;
@@ -10984,14 +11067,14 @@ function emitInstruction(
 				return [
 					`r${instruction.dst} = mal_builtin_array_push_contained(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${instruction.arguments.length});`,
 					throwCheck(),
-					poll(),
+					callPoll(),
 				];
 			}
 			if (instruction.operation === "Array.prototype.pop") {
 				return [
 					`r${instruction.dst} = mal_builtin_array_pop_contained(vm, ${boxedOperand(instruction.thisValue)});`,
 					throwCheck(),
-					poll(),
+					callPoll(),
 				];
 			}
 			if (instruction.operation === "Object.hasOwn") {
@@ -11000,7 +11083,7 @@ function emitInstruction(
 						instruction.dst,
 						`mal_builtin_object_has_own_known(vm, ${argsExpr}, ${instruction.arguments.length})`,
 					),
-					poll(),
+					callPoll(),
 				];
 			}
 			if (instruction.operation === "Object.is") {
@@ -11028,14 +11111,14 @@ function emitInstruction(
 				return [
 					`r${instruction.dst} = mal_builtin_object_keys_known(vm, ${argsExpr}, ${instruction.arguments.length});`,
 					throwCheck(),
-					poll(),
+					callPoll(),
 				];
 			}
 			if (instruction.operation === "Object.values") {
 				return [
 					`r${instruction.dst} = mal_builtin_object_values_known(vm, ${argsExpr}, ${instruction.arguments.length});`,
 					throwCheck(),
-					poll(),
+					callPoll(),
 				];
 			}
 			if (instruction.operation === "String.prototype.charCodeAt") {
@@ -11045,7 +11128,7 @@ function emitInstruction(
 					`MalValue ${result} = ${profileCall("string", `mal_builtin_string_char_code_at_known(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${instruction.arguments.length}, &__string_leaf_cache_${ip})`)};`,
 					throwCheck(),
 					`r${instruction.dst} = ${callValue(instruction.dst, result)};`,
-					poll(),
+					callPoll(),
 				];
 			}
 			const collectionCall = fixedCollectionCall(
@@ -11054,7 +11137,7 @@ function emitInstruction(
 				instruction.thisValue,
 				instruction.arguments,
 			);
-			if (collectionCall !== null) return [collectionCall, throwCheck(), poll()];
+			if (collectionCall !== null) return [collectionCall, throwCheck(), callPoll()];
 			if (NUMBER_PREDICATES.has(instruction.operation)) {
 				const input = instruction.arguments[0];
 				return [
@@ -11094,7 +11177,7 @@ function emitInstruction(
 						instruction.dst,
 						`mal_builtin_date_parse_known(vm, ${argsExpr}, ${instruction.arguments.length})`,
 					),
-					poll(),
+					callPoll(),
 				];
 			}
 			if (instruction.operation === "Date.UTC") {
@@ -11103,7 +11186,7 @@ function emitInstruction(
 						instruction.dst,
 						`mal_builtin_date_utc_known(vm, ${argsExpr}, ${instruction.arguments.length})`,
 					),
-					poll(),
+					callPoll(),
 				];
 			}
 			if (instruction.operation !== "String.prototype.split") return null;
@@ -11118,7 +11201,7 @@ function emitInstruction(
 					`  r${instruction.dst} = ${profileCall("string", `mal_builtin_string_split_direct(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${instruction.arguments.length})`)};`,
 					`}`,
 					throwCheck(),
-					poll(),
+					callPoll(),
 				];
 			}
 			if (nativeStringSplitProjectionAction?.role === "call") {
@@ -11140,13 +11223,13 @@ function emitInstruction(
 					`  r${instruction.dst} = ${profileCall("string", `mal_builtin_string_split_direct(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${instruction.arguments.length})`)};`,
 					`}`,
 					throwCheck(),
-					poll(),
+					callPoll(),
 				];
 			}
 			return [
 				`r${instruction.dst} = ${profileCall("string", `mal_builtin_string_split_direct(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${instruction.arguments.length})`)};`,
 				throwCheck(),
-				poll(),
+				callPoll(),
 			];
 		}
 		case "CALL": {
@@ -11173,7 +11256,7 @@ function emitInstruction(
 					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`  r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
 					`}`,
-					poll(),
+					callPoll(),
 				];
 			}
 			if (nativeStringCharCodeAtChainAction?.role === "call") {
@@ -11202,7 +11285,7 @@ function emitInstruction(
 						`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 						`  r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
 						`}`,
-						poll(),
+						callPoll(),
 					];
 				}
 				if (chain.methodIdentity === "authority-invariant") {
@@ -11219,7 +11302,7 @@ function emitInstruction(
 						`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 						`  r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
 						`}`,
-						poll(),
+						callPoll(),
 					];
 				}
 				context.stringLeafCaches.add(ip);
@@ -11233,7 +11316,7 @@ function emitInstruction(
 					`}`,
 					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
-					poll(),
+					callPoll(),
 				];
 			}
 			if (nativeStringSplitCursorAction?.role === "call") {
@@ -11268,7 +11351,7 @@ function emitInstruction(
 					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`  r${instruction.dst} = ${tmp}.value;`,
 					`}`,
-					poll(),
+					callPoll(),
 				];
 			}
 			if (nativeStringSplitCursorAction?.role === "trimCall") {
@@ -11281,7 +11364,7 @@ function emitInstruction(
 					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`  r${instruction.dst} = ${tmp}.value;`,
 					`}`,
-					poll(),
+					callPoll(),
 				];
 			}
 			if (
@@ -11299,7 +11382,7 @@ function emitInstruction(
 						`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 						`  r${instruction.dst} = ${tmp}.value;`,
 						`}`,
-						poll(),
+						callPoll(),
 					];
 				}
 			}
@@ -11322,7 +11405,7 @@ function emitInstruction(
 						`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 						`  r${instruction.dst} = ${reps[instruction.dst] === "number" ? `mal_ops_number_as_f64(${tmp}.value)` : `${tmp}.value`};`,
 						`}`,
-						poll(),
+						callPoll(),
 					];
 				}
 			}
@@ -11345,7 +11428,7 @@ function emitInstruction(
 						`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 						`  r${instruction.dst} = ${reps[instruction.dst] === "number" ? `mal_ops_number_as_f64(${tmp}.value)` : `${tmp}.value`};`,
 						`}`,
-						poll(),
+						callPoll(),
 					];
 				}
 			}
@@ -11379,7 +11462,7 @@ function emitInstruction(
 						`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 						`  r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
 						`}`,
-						poll(),
+						callPoll(),
 					];
 				}
 			}
@@ -11398,7 +11481,7 @@ function emitInstruction(
 						`${profileCall("regexp", `mal_regexp_exec_capture_projection_locked(vm, ${boxedOperand(instruction.thisValue)}, ${boxedOperand(instruction.arguments[0]!)}, (const u32[]){ ${indices} }, (MalValue *[]){ ${outputs} }, ${site.loads.length}, ${spanMask}, __regexp_exec_${projection.callIp}_starts, __regexp_exec_${projection.callIp}_ends, &__gc_slots[${site.subjectSlot}], &r${instruction.dst})`)};`,
 						throwCheck(),
 						`__regexp_exec_${projection.callIp}_projected = mal_value_is_boolean(r${instruction.dst});`,
-						poll(),
+						callPoll(),
 					];
 				}
 				const project = profileCall(
@@ -11416,7 +11499,7 @@ function emitInstruction(
 					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`  r${instruction.dst} = ${tmp}.value;`,
 					`}`,
-					poll(),
+					callPoll(),
 				];
 			}
 
@@ -11444,7 +11527,7 @@ function emitInstruction(
 					`${fast} = ${project};`,
 					`if (${fast}) {`,
 					`  r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
-					`  ${poll()}`,
+					`  ${callPoll()}`,
 					`} else {`,
 					...(propertyLoad === undefined
 						? []
@@ -11455,7 +11538,7 @@ function emitInstruction(
 					`  MalCompletion ${tmp} = ${profileCall("call", `mal_vm_call_cached(vm, ${nativeCallCacheReference(context, ip)}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length})`)};`,
 					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`  r${instruction.dst} = ${tmp}.value;`,
-					`  ${poll()}`,
+					`  ${callPoll()}`,
 					`}`,
 				];
 			}
@@ -11471,7 +11554,7 @@ function emitInstruction(
 						`MalCompletion ${tmp} = mal_builtin_sort_numeric(vm, ${nativeCallCacheReference(context, ip)}, ${numericCallback.operation === "toSorted" ? "true" : "false"}, ${numericCallback.viaCall ? "true" : "false"}, ${relocation.functionIndex(numericCallback.functionIndex)}, ${comparator}, ${entry.leaf ? `${comparator}_sort` : "nullptr"}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 						`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 						`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
-						poll(),
+						callPoll(),
 					];
 				}
 			}
@@ -11509,7 +11592,7 @@ function emitInstruction(
 					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
 					`}`,
-					poll(),
+					callPoll(),
 				];
 			}
 			const numberPredicate = NUMBER_PREDICATES.get(guardedBuiltinOperation ?? "");
@@ -11533,7 +11616,7 @@ function emitInstruction(
 					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
 					`}`,
-					poll(),
+					callPoll(),
 				];
 			}
 			if (
@@ -11581,7 +11664,7 @@ function emitInstruction(
 					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`r${instruction.dst} = ${tmp}.value;`,
 					`}`,
-					poll(),
+					callPoll(),
 				];
 			}
 			if (
@@ -11602,7 +11685,7 @@ function emitInstruction(
 					fixedCollectionCall(operation, instruction.dst, instruction.thisValue, args)!,
 					throwCheck(),
 					...(operation === "Map.prototype.set" || operation === "Set.prototype.add"
-						? [poll()]
+						? [callPoll()]
 						: []),
 				];
 			}
@@ -11731,7 +11814,7 @@ function emitInstruction(
 					`MalCompletion ${tmp} = ${helper}(vm, ${nativeCallCacheReference(context, ip)}, ${arrayIterationOperation}, ${callPlan?.directCallbackFunctionIndex === undefined ? -1 : relocation.functionIndex(callPlan.directCallbackFunctionIndex)}, ${callbackSymbol}, ${numericReduction ? `${callbackSymbol}_reduce, ` : ""}${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
-					poll(),
+					callPoll(),
 				];
 			}
 			if (
@@ -11802,7 +11885,7 @@ function emitInstruction(
 					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`  r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
 					`}`,
-					poll(),
+					callPoll(),
 				];
 			}
 			if (vmCallProvesBuiltin(callPlan, "Array.prototype.push")) {
@@ -11811,7 +11894,7 @@ function emitInstruction(
 					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`r${instruction.dst} = ${tmp}.value;`,
 				];
-				if (args.length !== 1) return [...direct, poll()];
+				if (args.length !== 1) return [...direct, callPoll()];
 				const pushed = `__pushed_${ip}`;
 				return [
 					`MalValue ${pushed};`,
@@ -11820,7 +11903,7 @@ function emitInstruction(
 					"} else {",
 					...direct.map((line) => `  ${line}`),
 					"}",
-					poll(),
+					callPoll(),
 				];
 			}
 			const dequeMethod = (["pop", "shift", "unshift"] as const).find((method) =>
@@ -11831,7 +11914,7 @@ function emitInstruction(
 					`MalCompletion ${tmp} = mal_builtin_array_deque_direct(vm, ${nativeCallCacheReference(context, ip)}, MAL_GUARDED_BUILTIN_ARRAY_${dequeMethod.toUpperCase()}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`r${instruction.dst} = ${tmp}.value;`,
-					poll(),
+					callPoll(),
 				];
 			}
 			if (vmCallProvesBuiltin(callPlan, "Array.prototype.at")) {
@@ -11839,7 +11922,7 @@ function emitInstruction(
 					`MalCompletion ${tmp} = mal_builtin_array_at_direct(vm, ${nativeCallCacheReference(context, ip)}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`r${instruction.dst} = ${tmp}.value;`,
-					poll(),
+					callPoll(),
 				];
 			}
 			if (vmCallProvesBuiltin(callPlan, "String.prototype.charCodeAt")) {
@@ -11848,7 +11931,7 @@ function emitInstruction(
 					const mask = context.charCodeAtCallInactiveRootMask;
 					const charPoll =
 						mask === undefined
-							? poll()
+							? callPoll()
 							: `if (mal_gc_poll_requested()) { ${(context.outgoingRootPublication ?? []).join(" ")} ${cInactiveRootMaskPublication(mask, context.inactiveRootMaskStatements)}; ${safepoint()} }`;
 					return [
 						`MalValue __char_value_${ip};`,
@@ -11883,7 +11966,7 @@ function emitInstruction(
 						`MalCompletion ${tmp} = ${profileCall("string", `mal_builtin_string_char_code_at_direct_in_bounds(vm, ${nativeCallCacheReference(context, ip)}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length}, ${boundedPosition}, &__string_leaf_cache_${ip})`)};`,
 						`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 						`r${instruction.dst} = ${tmp}.value;`,
-						poll(),
+						callPoll(),
 					];
 				}
 				context.stringLeafCaches.add(ip);
@@ -11891,7 +11974,7 @@ function emitInstruction(
 					`MalCompletion ${tmp} = ${profileCall("string", `mal_builtin_string_char_code_at_direct(vm, ${nativeCallCacheReference(context, ip)}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length}, &__string_leaf_cache_${ip})`)};`,
 					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`r${instruction.dst} = ${tmp}.value;`,
-					poll(),
+					callPoll(),
 				];
 			}
 			if (callPlan?.directFunctionCall) {
@@ -11901,7 +11984,7 @@ function emitInstruction(
 					`MalCompletion ${tmp} = mal_vm_call_function_call_direct${compiled ? "_compiled" : ""}(vm, ${nativeCallCacheReference(context, ip)}, ${target === undefined ? -1 : relocation.functionIndex(target)}, ${compiled ? `mal_compiled_${relocation.stem(target)}${suffix}, ` : ""}${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
-					poll(),
+					callPoll(),
 				];
 			}
 			const directEntryParameters = (transport: NativeCallTargetTransport) =>
@@ -11949,7 +12032,6 @@ function emitInstruction(
 				const guardedCallee = `__guarded_callee_${ip}`;
 				const guardedIndex = `__guarded_index_${ip}`;
 				const branches = callPlan.guardedFunctionIndices.flatMap((target, index) => {
-					const exact = `__guarded_compiled_${ip}_${target}`;
 					const transport = context.callTransport?.targets.find(
 						(candidate) => candidate.functionIndex === target,
 					);
@@ -11988,17 +12070,29 @@ function emitInstruction(
 						];
 					}
 
+					if (directCompiledTargets.has(target)) {
+						const value = `__guarded_value_${ip}_${target}`;
+						const receiver = context.strictCompiledTargets.has(target)
+							? boxedOperand(instruction.thisValue)
+							: `mal_vm_callee_this(vm, &vm->runtime_image->functions[${relocation.functionIndex(target)}], ${boxedOperand(instruction.thisValue)})`;
+						return [
+							`${index === 0 ? "if" : "else if"} (${guardedIndex} == ${relocation.functionIndex(target)}) {`,
+							"#if MAL_REALMS",
+							"  MalRealm *__entry_realm = vm->current_realm;",
+							`  mal_vm_realm_switch_to(vm, mal_vm_callee_realm(vm, ${guardedCallee}));`,
+							"#endif",
+							`  MalValue ${value} = mal_compiled_${relocation.stem(target)}${suffix}(vm, ${receiver}, ${argsExpr}, ${args.length}, MAL_VALUE_UNDEFINED, mal_value_to_function_object(${guardedCallee})->creation_env, ${guardedCallee}, nullptr);`,
+							"#if MAL_REALMS",
+							"  mal_vm_realm_switch_to(vm, __entry_realm);",
+							"#endif",
+							`  ${throwCheck()}`,
+							`  r${instruction.dst} = ${callResult(value)};`,
+							"}",
+						];
+					}
 					return [
 						`${index === 0 ? "if" : "else if"} (${guardedIndex} == ${relocation.functionIndex(target)}) {`,
-						`  MalCompletion ${tmp};`,
-						...(directCompiledTargets.has(target)
-							? [
-									`  const MalExactScriptCall ${exact} = { .callee = ${guardedCallee}, .function_index = ${relocation.functionIndex(target)}, .compiled_callback = mal_compiled_${relocation.stem(target)}${suffix}, .env = mal_value_to_function_object(${guardedCallee})->creation_env };`,
-									`  ${tmp} = mal_vm_call_exact_script_compiled_callback(vm, &${exact}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
-								]
-							: [
-									`  ${tmp} = mal_vm_call_exact_script(vm, ${relocation.functionIndex(target)}, ${guardedCallee}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
-								]),
+						`  MalCompletion ${tmp} = mal_vm_call_exact_script(vm, ${relocation.functionIndex(target)}, ${guardedCallee}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 						`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 						`  r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
 						`}`,
@@ -12013,7 +12107,7 @@ function emitInstruction(
 					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`  r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
 					`}`,
-					poll(),
+					callPoll(),
 				];
 			}
 			if (callPlan?.directFunctionIndex !== undefined) {
@@ -12060,7 +12154,7 @@ function emitInstruction(
 						`${cTypeOf(directEntry.resultRepresentation)} ${directValue} = mal_direct_${relocation.stem(target)}_${directEntry.id}${suffix}(vm, ${thisArgument}${parameters.length === 0 ? "" : `, ${parameters.join(", ")}`}, ${directEnvironment}, ${directCallee});`,
 						`if (MAL_THREW()) ${onThrow()}`,
 						`r${instruction.dst} = ${directResult};`,
-						poll(),
+						callPoll(),
 					];
 				}
 				if (directCompiledTargets.has(target)) {
@@ -12072,14 +12166,14 @@ function emitInstruction(
 						`MalValue ${directValue} = mal_compiled_${relocation.stem(target)}${suffix}(vm, ${thisArgument}, ${argsExpr}, ${args.length}, MAL_VALUE_UNDEFINED, ${directEnvironment}, ${directCallee}, nullptr);`,
 						`if (MAL_THREW()) ${onThrow()}`,
 						`r${instruction.dst} = ${callResult(directValue)};`,
-						poll(),
+						callPoll(),
 					];
 				}
 				return [
 					`MalCompletion ${tmp} = ${profileCall("call", `mal_vm_call_direct(vm, ${nativeCallCacheReference(context, ip)}, ${relocation.functionIndex(callPlan.directFunctionIndex)}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length})`)};`,
 					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
-					poll(),
+					callPoll(),
 				];
 			}
 			if (mathCall !== undefined) {
@@ -12126,7 +12220,7 @@ function emitInstruction(
 				`MalCompletion ${tmp} = ${profileCall("call", `mal_vm_call_cached(vm, ${nativeCallCacheReference(context, ip)}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length})`)};`,
 				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 				`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
-				poll(),
+				callPoll(),
 			];
 		}
 		case "CONSTRUCT": {
@@ -12154,7 +12248,7 @@ function emitInstruction(
 				`MalCompletion ${tmp} = ${construct};`,
 				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 				`r${instruction.dst} = ${tmp}.value;`,
-				poll(),
+				callPoll(),
 			];
 		}
 		case "THROW":
@@ -12751,7 +12845,7 @@ function emitInstruction(
 				`MalCompletion ${tmp} = mal_vm_op_call_spread(vm, ${boxed(instruction.callee)}, ${boxed(instruction.thisValue)}, ${boxed(instruction.argumentsArray)});`,
 				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 				`r${instruction.dst} = ${tmp}.value;`,
-				poll(),
+				callPoll(),
 			];
 		}
 		case "CALL_REST_ARGUMENTS": {
@@ -12767,7 +12861,7 @@ function emitInstruction(
 				`MalCompletion ${tmp} = mal_vm_op_call_rest_arguments(vm, ${boxed(instruction.callee)}, ${boxed(instruction.thisValue)}, ${boxed(instruction.receiver)}, args, arg_count, ${instruction.startIndex}, ${restForwardFlags(instruction)}, &r${instruction.state}, ${prefixName}, ${prefix.length});`,
 				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 				`r${instruction.dst} = ${tmp}.value;`,
-				poll(),
+				callPoll(),
 			];
 		}
 		case "CALL_SPREAD_ITERABLE": {
@@ -12783,7 +12877,7 @@ function emitInstruction(
 				`MalCompletion ${tmp} = mal_vm_op_call_spread_iterable(vm, ${boxed(instruction.callee)}, ${boxed(instruction.thisValue)}, ${boxed(instruction.iterable)}, ${prefixName}, ${prefix.length});`,
 				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 				`r${instruction.dst} = ${tmp}.value;`,
-				poll(),
+				callPoll(),
 			];
 		}
 		case "CONSTRUCT_SPREAD": {
@@ -12793,7 +12887,7 @@ function emitInstruction(
 				`MalCompletion ${tmp} = mal_vm_op_construct_spread(vm, ${boxed(instruction.callee)}, ${boxed(instruction.argumentsArray)});`,
 				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 				`r${instruction.dst} = ${tmp}.value;`,
-				poll(),
+				callPoll(),
 			];
 		}
 		case "WITH_ENTER": {
@@ -12802,7 +12896,7 @@ function emitInstruction(
 			// an in-function handler. Keeping the with-object on the env chain (not a
 			// frame-local stack) lets closures created in the body capture it.
 			const tmp = `with_env_${ip}`;
-			const frameUpdate = gcUnlink !== "" ? " __gc_frame.env = env;" : "";
+			const frameUpdate = rootFrameEnvUpdate(gcUnlink);
 			return [
 				`MalEnv *${tmp} = mal_vm_op_with_enter(vm, env, ${boxed(instruction.object)});`,
 				throwCheck(),
@@ -12811,7 +12905,7 @@ function emitInstruction(
 		}
 		case "WITH_EXIT": {
 			// Pop the with-env pushed by the matching WITH_ENTER.
-			const frameUpdate = gcUnlink !== "" ? " __gc_frame.env = env;" : "";
+			const frameUpdate = rootFrameEnvUpdate(gcUnlink);
 			return [`env = env->parent;${frameUpdate}`];
 		}
 		case "WITH_GET":
@@ -12857,7 +12951,7 @@ function emitInstruction(
 				`MalCompletion ${tmp} = mal_vm_op_construct_super(vm, ${boxed(instruction.parent)}, ${boxed(instruction.argumentsArray)}, ${nativeBodyReference(resources, "newTarget")}, ${thisRef}, &${thisRef});`,
 				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 				`r${instruction.dst} = ${thisRef};`,
-				poll(),
+				callPoll(),
 			];
 		}
 		case "CONSTRUCT_SUPER_EXPLICIT": {
@@ -12868,7 +12962,7 @@ function emitInstruction(
 				`MalCompletion ${completion} = mal_vm_op_construct_super(vm, ${boxed(instruction.parent)}, ${boxed(instruction.argumentsArray)}, ${boxed(instruction.newTarget)}, ${boxed(instruction.dst)}, &${boundThis});`,
 				`if (${completion}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 				`r${instruction.dst} = ${boundThis};`,
-				poll(),
+				callPoll(),
 			];
 		}
 		case "SET_THIS":

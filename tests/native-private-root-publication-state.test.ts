@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
-import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 import { lowerNativeFunctionStorage } from "../src/compiler/target/lower-native-storage.ts";
 import { createConservativeNativePlan } from "../src/compiler/target/program-image.ts";
 import type {
@@ -15,6 +14,7 @@ import type {
 	BytecodeInstruction,
 } from "../src/compiler/target/runtime-image.ts";
 import { privateRootRegisters, rootMaskBits } from "./helpers/native-c-source.ts";
+import { compilePreciseProgramImage } from "./helpers/precise-roots.ts";
 import { testPropertyCacheCount } from "./helpers/program-image.ts";
 
 const retained = 2;
@@ -662,7 +662,7 @@ describe("wide private-root publication", () => {
 describe("bounded deferred root publication", () => {
 	it("publishes a long run of live probe results on the hot path instead of in every miss", () => {
 		const names = Array.from({ length: 24 }, (_, index) => `v${index}`);
-		const image = compileSemanticProgramToProgramImage(
+		const image = compilePreciseProgramImage(
 			analyzeSourceAndRunSemanticAnalysis(
 				`globalThis.wide = function wide(source) {
 					${names.map((name, index) => `const ${name} = source.p${index};`).join("\n")}

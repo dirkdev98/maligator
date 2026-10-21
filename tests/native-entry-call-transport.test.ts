@@ -111,6 +111,8 @@ function callGraphImage() {
 }
 
 function skipStorageWithoutFastPaths(reader: Reader): void {
+	const conservativeStackRoots = reader.u8();
+	expect(conservativeStackRoots).toBeLessThan(2);
 	expect(reader.u8()).toBe(0);
 	expect(reader.u8()).toBe(0);
 	expect(reader.i32Array()).toEqual([]);

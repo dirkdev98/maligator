@@ -133,6 +133,7 @@ describe("compiled roots during a concurrent object snapshot", () => {
 				name: "gc-compiled-worker-boundary",
 				mainFile: "tests/fixtures/gc-compiled-worker-boundary/main.c",
 				outDir,
+				nativeStackRoots: "precise",
 			});
 			const image = build.programImage;
 			const regionIndex = image.runtime.functions.findIndex(

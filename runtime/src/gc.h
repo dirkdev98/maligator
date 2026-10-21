@@ -21,7 +21,16 @@ extern void (*mal_gc_test_before_worker_join_hook)(void);
 extern usize (*mal_gc_test_worker_limit_hook)(void);
 /* Tests can make a worker start fail before the first batch is published. */
 extern bool (*mal_gc_test_worker_start_failure_hook)(usize index);
+/* Runtime-only C fixtures that root every value precisely can skip the conservative
+ * stack scan, so stale locals do not keep their deterministic reclamation from
+ * happening. Compiled JavaScript relies on the scan and must never set this. */
+extern bool mal_gc_test_precise_stack_roots;
 #endif
+
+/* Clears stack below the caller that popped frames left behind. The event loop calls it
+ * between tasks, when no JavaScript frame is live, so stale words in that region cannot
+ * keep a previous task's dead values alive for conservative native roots. */
+void mal_gc_clear_unused_native_stack(void);
 
 typedef struct MalGcState MalGcState;
 

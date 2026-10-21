@@ -19,6 +19,7 @@ describe("compact native shadow roots", () => {
 	let interpreted: string;
 	beforeAll(() => {
 		const pair = buildBackendPairFromOneProgramImage({
+			nativeStackRoots: "precise",
 			fixture: "tests/local/native-root-storage.js",
 			name: "native-root-storage",
 			mainFile: HOST_MAIN,

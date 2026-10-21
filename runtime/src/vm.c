@@ -32,6 +32,11 @@
 #include "text_buffer.h"
 #include "value_ops.h"
 #include "vm_load.h"
+
+#if MAL_NATIVE_FRAME_WALK && defined(__APPLE__)
+#include <dlfcn.h>
+#include <mach-o/getsect.h>
+#endif
 #include "vm_ops.h"
 
 static MAL_ISOLATE_LOCAL u64 g_coroutine_buffer_requests = 0;
@@ -562,6 +567,24 @@ static uptr mal_vm_compute_stack_limit(void) {
 #endif
 }
 
+static uptr mal_vm_compute_stack_top(void) {
+#if defined(__APPLE__)
+    return (uptr) pthread_get_stackaddr_np(pthread_self());
+#elif defined(__linux__)
+    pthread_attr_t attr;
+    if (pthread_getattr_np(pthread_self(), &attr) != 0) {
+        return 0;
+    }
+    void *low = nullptr;
+    size_t size = 0;
+    int ok = pthread_attr_getstack(&attr, &low, &size);
+    pthread_attr_destroy(&attr);
+    return ok != 0 || low == nullptr ? 0 : (uptr) low + size;
+#else
+    return 0;
+#endif
+}
+
 /** Phase 1: establish allocation-safe engine state before adopting a program. */
 static void mal_vm_init_engine_state(MalVm *vm) {
     vm->literal_cache_count = 0;
@@ -741,7 +764,7 @@ static void mal_vm_init_execution_state(MalVm *vm, const MalRuntimeImage *progra
     // Fixed-capacity, never reallocated (see MAL_MAX_CALL_FRAMES): keeps every
     // live frame pointer stable across re-entrant calls.
     vm->frame_capacity = MAL_MAX_CALL_FRAMES;
-    vm->frames = malloc(sizeof(MalVmFrame) * (usize) vm->frame_capacity);
+    vm->frames = malloc(mal_vm_frame_storage_bytes(vm->frame_capacity));
     vm->frame_count = 0;
 
     vm->value_stack_capacity = MAL_VALUE_STACK_CAPACITY;
@@ -750,6 +773,8 @@ static void mal_vm_init_execution_state(MalVm *vm, const MalRuntimeImage *progra
     vm->service_epoch = 0;
     vm->proxy_dispatch_depth = 0;
     vm->stack_limit = mal_vm_compute_stack_limit();
+    vm->native_stack_top = mal_vm_compute_stack_top();
+    mal_vm_sync_entry_stack_limit(vm);
     vm->gc_native_frames = 0;
     // Fibers: the main fiber is created at the end of init (once every exec field
     // it adopts is finalized). Null the list heads first so init_main can link on.
@@ -2141,7 +2166,7 @@ bool mal_vm_push_function_frame(
     frame->return_register = return_register;
     frame->caller_frame_index = caller_frame_index;
     frame->enter_seq = vm->frame_seq++;
-    frame->native_depth = (u16) vm->native_frame_count;
+    mal_vm_frame_mark_native_position(frame, vm);
 #if MAL_REALMS
     // Default stamp: the realm current at push time. Call/construct seams that cross
     // into a callee's realm switch to it BEFORE pushing (so this captures the callee
@@ -3832,7 +3857,7 @@ void mal_vm_resume_generator(MalVm *vm, MalGeneratorObject *generator, MalValue 
     // A resumption is a fresh entry on the logical call stack, so it sorts above
     // whatever drove the resume (a microtask, .next() caller) in a capture.
     frame->enter_seq = vm->frame_seq++;
-    frame->native_depth = (u16) vm->native_frame_count;
+    mal_vm_frame_mark_native_position(frame, vm);
 
     // Deliver the sent value and resume mode to the suspended yield expression,
     // which the compiler-emitted dispatch following the yield consults. (A
@@ -3876,12 +3901,49 @@ __attribute__((cold, noinline)) void mal_vm_throw_stack_overflow(MalVm *vm) {
     mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, "Maximum call stack size exceeded");
 }
 
+void mal_vm_sync_entry_stack_limit(MalVm *vm) {
+#if !defined(__wasi__)
+    if (vm->runtime_image != nullptr && vm->runtime_image->conservative_stack_roots) {
+        vm->entry_stack_limit = &mal_isolate_locals()->entry_stack_limit;
+        atomic_store_explicit(vm->entry_stack_limit, vm->stack_limit, memory_order_relaxed);
+        // Stored after the real limit, so a request between the two is not lost.
+        if (mal_gc_poll_requested()) {
+            atomic_store_explicit(vm->entry_stack_limit, UINTPTR_MAX, memory_order_relaxed);
+        }
+        return;
+    }
+    vm->entry_stack_limit = &vm->own_entry_stack_limit;
+    atomic_store_explicit(vm->entry_stack_limit, vm->stack_limit, memory_order_relaxed);
+#else
+    vm->entry_stack_limit = &vm->own_entry_stack_limit;
+    *vm->entry_stack_limit = vm->stack_limit;
+#endif
+}
+
+__attribute__((cold, noinline)) bool mal_vm_enter_compiled_limit(MalVm *vm) {
+    if (mal_vm_native_stack_address() < vm->stack_limit) {
+        mal_vm_throw_stack_overflow(vm);
+        return false;
+    }
+    mal_vm_sync_entry_stack_limit(vm);
+    if (!mal_gc_poll_requested()) return true;
+    mal_gc_safepoint(vm);
+    if (mal_gc_poll_termination(vm)) return false;
+    // A gated or stressed collection leaves the request pending for the next entry.
+    if (mal_gc_poll_requested()) mal_vm_sync_entry_stack_limit(vm);
+    return true;
+}
+
 __attribute__((cold, noinline)) MalNativeFrame *mal_vm_enter_compiled_slow(
     MalVm *vm, i32 function_index
 ) {
     i32 count = vm->native_frame_count;
-    if (mal_vm_native_stack_address() < vm->stack_limit || count >= MAL_NATIVE_CALL_DEPTH_LIMIT) {
+    if (count >= MAL_NATIVE_CALL_DEPTH_LIMIT) {
         mal_vm_throw_stack_overflow(vm);
+        return nullptr;
+    }
+    if (mal_vm_native_stack_address() < mal_vm_entry_stack_limit(vm) &&
+            !mal_vm_enter_compiled_limit(vm)) {
         return nullptr;
     }
     if (vm->native_frames == nullptr) {
@@ -3894,17 +3956,6 @@ __attribute__((cold, noinline)) MalNativeFrame *mal_vm_enter_compiled_slow(
         vm->native_frame_capacity = MAL_NATIVE_CALL_DEPTH_LIMIT;
     }
     return mal_vm_push_native_frame(vm, count, function_index);
-}
-
-/**
- * Mark the top native frame hidden: the compiled function is bailing to the
- * interpreter, whose pushed frame will represent it instead, so a capture must
- * not show it twice. Called from compiled code at the speculative-unbox bail.
- */
-void mal_vm_compiled_bailed(MalVm *vm) {
-    if (vm->native_frame_count > 0) {
-        vm->native_frames[vm->native_frame_count - 1].function_index = -1;
-    }
 }
 
 /** Source position id for an instruction pointer in a function, or -1. */
@@ -3941,49 +3992,226 @@ static MalStackTrace *mal_vm_stack_trace_new(MalVm *vm, usize frame_capacity) {
     return trace;
 }
 
-MalStackTrace *mal_vm_capture_stack(MalVm *vm) {
-    // Both live-frame arrays are already ordered. Merge them from their newest
-    // ends, skipping bailed native duplicates, directly into one coallocated trace
-    // instead of allocating sequence scratch and sorting it.
-    usize frame_capacity;
-    if (!mal_checked_size_add(
-            (usize) vm->frame_count,
-            (usize) vm->native_frame_count,
-            INT_MAX,
-            &frame_capacity)) {
-        mal_vm_throw_allocation_error(vm);
+#if MAL_NATIVE_FRAME_WALK
+/* Every registered descriptor, sorted by code address when a capture needs it.
+ * Registration happens once per generated function and captures are rare next to
+ * calls, so one lock serves both. */
+static pthread_mutex_t g_compiled_frames_lock = PTHREAD_MUTEX_INITIALIZER;
+static MalCompiledFrameDesc **g_compiled_frames;
+static usize g_compiled_frame_count;
+static usize g_compiled_frame_capacity;
+static bool g_compiled_frames_sorted = true;
+static uptr g_compiled_text_start;
+static uptr g_compiled_text_end;
+
+#if !defined(__APPLE__)
+extern const char __start_mal_js_text[] __attribute__((weak));
+extern const char __stop_mal_js_text[] __attribute__((weak));
+#endif
+
+static void mal_compiled_text_bounds(const void *code) {
+#if defined(__APPLE__)
+    Dl_info info;
+    unsigned long size = 0;
+    if (dladdr(code, &info) == 0 || info.dli_fbase == nullptr) return;
+    const u8 *start = getsectiondata(
+        (const struct mach_header_64 *) info.dli_fbase, "__TEXT", "__mal_js", &size);
+    if (start == nullptr) return;
+    g_compiled_text_start = (uptr) start;
+    g_compiled_text_end = (uptr) start + size;
+#else
+    (void) code;
+    g_compiled_text_start = (uptr) __start_mal_js_text;
+    g_compiled_text_end = (uptr) __stop_mal_js_text;
+#endif
+}
+
+void mal_compiled_frame_register(MalCompiledFrameDesc *desc, i32 frame_offset) {
+    pthread_mutex_lock(&g_compiled_frames_lock);
+    if (atomic_load_explicit(&desc->frame_offset, memory_order_relaxed) == 0) {
+        if (g_compiled_frame_count == g_compiled_frame_capacity) {
+            usize capacity = g_compiled_frame_capacity == 0 ? 256 : g_compiled_frame_capacity * 2;
+            MalCompiledFrameDesc **frames = realloc(g_compiled_frames, capacity * sizeof *frames);
+            // Without a slot the function stays out of traces and retries on its next entry.
+            if (frames == nullptr) goto done;
+            g_compiled_frames = frames;
+            g_compiled_frame_capacity = capacity;
+        }
+        if (g_compiled_text_end == 0) mal_compiled_text_bounds(desc->code);
+        g_compiled_frames[g_compiled_frame_count++] = desc;
+        g_compiled_frames_sorted = false;
+        atomic_store_explicit(&desc->frame_offset, frame_offset, memory_order_release);
+    }
+done:
+    pthread_mutex_unlock(&g_compiled_frames_lock);
+}
+
+static int mal_compiled_frame_compare(const void *left, const void *right) {
+    uptr a = (uptr) (*(MalCompiledFrameDesc *const *) left)->code;
+    uptr b = (uptr) (*(MalCompiledFrameDesc *const *) right)->code;
+    return a < b ? -1 : a > b;
+}
+
+static const MalCompiledFrameDesc *mal_compiled_frame_containing(uptr address) {
+    // Unknown bounds leave the record's descriptor check as the only filter.
+    if (g_compiled_text_end != 0 &&
+            (address < g_compiled_text_start || address >= g_compiled_text_end)) {
         return nullptr;
     }
-    MalStackTrace *trace = mal_vm_stack_trace_new(vm, frame_capacity);
+    usize low = 0;
+    usize high = g_compiled_frame_count;
+    while (low < high) {
+        usize middle = low + (high - low) / 2;
+        if ((uptr) g_compiled_frames[middle]->code <= address) low = middle + 1;
+        else high = middle;
+    }
+    return low == 0 ? nullptr : g_compiled_frames[low - 1];
+}
+
+static uptr mal_vm_running_stack_top(const MalVm *vm) {
+    const MalFiber *fiber = vm->current_fiber;
+    if (fiber != nullptr && fiber->stack_base != nullptr) {
+        return (uptr) fiber->stack_base + fiber->stack_size;
+    }
+    return vm->native_stack_top != 0 ? vm->native_stack_top : UINTPTR_MAX;
+}
+
+typedef struct MalWalkedFrame {
+    /** The compiled function's frame pointer, which orders it against interpreted frames. */
+    uptr frame;
+    const MalNativeFrame *record;
+} MalWalkedFrame;
+
+/* Compiled frames from the innermost outwards, counting past `capacity`. The walk
+ * ends at the first frame record that does not lie above the previous one. */
+static __attribute__((noinline)) usize mal_vm_walk_compiled_frames(
+    const MalVm *vm, MalWalkedFrame *out, usize capacity
+) {
+    uptr top = mal_vm_running_stack_top(vm);
+    uptr frame = (uptr) __builtin_frame_address(0);
+    usize count = 0;
+    pthread_mutex_lock(&g_compiled_frames_lock);
+    if (!g_compiled_frames_sorted) {
+        qsort(g_compiled_frames, g_compiled_frame_count, sizeof *g_compiled_frames,
+              mal_compiled_frame_compare);
+        g_compiled_frames_sorted = true;
+    }
+    for (;;) {
+        const uptr *link = (const uptr *) frame;
+        uptr caller = link[0];
+        uptr return_address = link[1];
+        if (caller <= frame || caller >= top || (caller & (sizeof(uptr) - 1)) != 0) break;
+        // A call that ends its function returns to the first byte of the next one.
+        const MalCompiledFrameDesc *desc = mal_compiled_frame_containing(return_address - 1);
+        if (desc != nullptr) {
+            i32 offset = atomic_load_explicit(&desc->frame_offset, memory_order_acquire);
+            const MalNativeFrame *record = (const MalNativeFrame *) ((const char *) caller + offset);
+            if (offset != 0 && (uptr) record > frame && (uptr) (record + 1) <= top &&
+                    record->desc == desc) {
+                if (count < capacity) out[count] = (MalWalkedFrame) {.frame = caller, .record = record};
+                count++;
+            }
+        }
+        frame = caller;
+    }
+    pthread_mutex_unlock(&g_compiled_frames_lock);
+    return count;
+}
+#endif
+
+i32 mal_vm_innermost_compiled_function(MalVm *vm) {
+#if MAL_NATIVE_FRAME_WALK
+    MalWalkedFrame frames[16];
+    usize capacity = sizeof frames / sizeof frames[0];
+    usize count = mal_vm_walk_compiled_frames(vm, frames, capacity);
+    for (usize index = 0; index < count && index < capacity; index++) {
+        if (!mal_native_frame_hidden(frames[index].record)) return frames[index].record->function_index;
+    }
+#else
+    for (i32 index = vm->native_frame_count - 1; index >= 0; index--) {
+        if (!mal_native_frame_hidden(&vm->native_frames[index])) return vm->native_frames[index].function_index;
+    }
+#endif
+    return -1;
+}
+
+static void mal_stack_trace_push_interpreted(MalStackTrace *trace, const MalVmFrame *frame) {
+    // The instruction pointer was advanced past the executing/call
+    // instruction, so ip - 1 is the responsible site (as in unwinding).
+    trace->frames[trace->frame_count++] = (MalStackFrameRecord) {
+        .function_index = frame->function_index,
+        .pos_id = mal_vm_position_for(frame->function, frame->instruction_pointer - 1),
+    };
+}
+
+static void mal_stack_trace_push_native(
+    MalVm *vm, MalStackTrace *trace, const MalNativeFrame *frame
+) {
+    if (mal_native_frame_hidden(frame)) return;
+    trace->frames[trace->frame_count++] = (MalStackFrameRecord) {
+        .function_index = frame->function_index,
+        .pos_id = mal_vm_native_frame_pos_id(vm, frame),
+    };
+}
+
+MalStackTrace *mal_vm_capture_stack(MalVm *vm) {
+    // Both live-frame stacks are already ordered. Merge them from their newest
+    // ends directly into one coallocated trace instead of sorting scratch.
+#if MAL_NATIVE_FRAME_WALK
+    MalWalkedFrame inline_native[128];
+    MalWalkedFrame *native = inline_native;
+    const usize inline_capacity = sizeof inline_native / sizeof inline_native[0];
+    usize native_count = mal_vm_walk_compiled_frames(vm, native, inline_capacity);
+    if (native_count > inline_capacity) {
+        usize bytes;
+        if (!mal_checked_size_multiply(sizeof *native, native_count, SIZE_MAX, &bytes) ||
+                (native = malloc(bytes)) == nullptr) {
+            mal_vm_throw_allocation_error(vm);
+            return nullptr;
+        }
+        usize walked = mal_vm_walk_compiled_frames(vm, native, native_count);
+        if (walked < native_count) native_count = walked;
+    }
+#else
+    usize native_count = (usize) vm->native_frame_count;
+#endif
+    usize frame_capacity;
+    MalStackTrace *trace = nullptr;
+    if (!mal_checked_size_add((usize) vm->frame_count, native_count, INT_MAX, &frame_capacity)) {
+        mal_vm_throw_allocation_error(vm);
+    } else {
+        trace = mal_vm_stack_trace_new(vm, frame_capacity);
+    }
     if (trace == nullptr) {
+#if MAL_NATIVE_FRAME_WALK
+        if (native != inline_native) free(native);
+#endif
         return nullptr;
     }
 
     i32 interpreted = vm->frame_count - 1;
-    i32 native = vm->native_frame_count - 1;
-    while (interpreted >= 0 || native >= 0) {
-        while (native >= 0 && mal_native_frame_hidden(&vm->native_frames[native])) native--;
-        bool take_interpreted = interpreted >= 0;
-        if (take_interpreted && native >= 0) {
-            take_interpreted = native < vm->frames[interpreted].native_depth;
-        }
-        if (take_interpreted) {
-            MalVmFrame *frame = &vm->frames[interpreted--];
-            // The instruction pointer was advanced past the executing/call
-            // instruction, so ip - 1 is the responsible site (as in unwinding).
-            i32 ip = frame->instruction_pointer - 1;
-            trace->frames[trace->frame_count++] = (MalStackFrameRecord) {
-                .function_index = frame->function_index,
-                .pos_id = mal_vm_position_for(frame->function, ip),
-            };
-        } else if (native >= 0) {
-            MalNativeFrame *frame = &vm->native_frames[native--];
-            trace->frames[trace->frame_count++] = (MalStackFrameRecord) {
-                .function_index = frame->function_index,
-                .pos_id = mal_vm_native_frame_pos_id(vm, frame),
-            };
+#if MAL_NATIVE_FRAME_WALK
+    usize next_native = 0;
+    while (interpreted >= 0 || next_native < native_count) {
+        // A compiled frame is newer than an interpreted one exactly when it lies below it.
+        if (interpreted >= 0 && (next_native == native_count ||
+                mal_vm_frame_native_positions(vm)[interpreted] <= native[next_native].frame)) {
+            mal_stack_trace_push_interpreted(trace, &vm->frames[interpreted--]);
+        } else {
+            mal_stack_trace_push_native(vm, trace, native[next_native++].record);
         }
     }
+    if (native != inline_native) free(native);
+#else
+    i32 native = vm->native_frame_count - 1;
+    while (interpreted >= 0 || native >= 0) {
+        if (interpreted >= 0 && (native < 0 || native < vm->frames[interpreted].native_depth)) {
+            mal_stack_trace_push_interpreted(trace, &vm->frames[interpreted--]);
+        } else {
+            mal_stack_trace_push_native(vm, trace, &vm->native_frames[native--]);
+        }
+    }
+#endif
 
     // Async stack stitching (v2): if execution is inside a resumed async
     // function, follow the awaited_by chain to splice the awaiting ancestors'

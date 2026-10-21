@@ -11,9 +11,7 @@ static i32 spin_function_index = -1;
 static bool saw_spin_poll;
 
 static void terminate_at_spin_poll(MalVm *vm) {
-    bool spinning = vm->native_frame_count > 0 &&
-        vm->native_frames[vm->native_frame_count - 1].function_index == spin_function_index;
-    if (spinning) {
+    if (mal_vm_innermost_compiled_function(vm) == spin_function_index) {
         saw_spin_poll = true;
         mal_gc_preempt_hook = nullptr;
         mal_gc_request_termination(mal_gc_current_termination_target(), mal_gc_current_poll_target());

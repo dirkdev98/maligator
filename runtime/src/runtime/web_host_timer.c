@@ -320,6 +320,7 @@ void mal_host_run_event_loop_until(MalVm *vm, bool (*stop)(MalVm *, void *), voi
     i32 macrotasks_since_poll = MAL_HOST_REACTOR_POLL_INTERVAL;
     MalHost *host = mal_host(vm);
     for (;;) {
+        mal_gc_clear_unused_native_stack();
         // A prior macrotask's uncaught throw must survive the next microtask checkpoint.
         if (vm->completion.kind == MAL_COMPLETION_THROW && !mal_host_recover_uncaught(vm)) break;
         if (mal_gc_terminating()) break;

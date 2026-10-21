@@ -670,6 +670,8 @@ static int check_value_profitability(const MalRuntimeImage *image) {
 }
 
 int main(void) {
+    // Every value here is rooted explicitly; stale C locals must not retain cells.
+    mal_gc_test_precise_stack_roots = true;
     const i32 empty_layout[] = { 0 };
     const i32 captured_owner[] = { 1 };
     const i32 captured_owners[] = { 1, 4 };

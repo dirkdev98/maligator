@@ -14,6 +14,8 @@ static usize no_workers(void) {
 }
 
 int main(void) {
+    // Every value here is rooted explicitly; stale C locals must not retain cells.
+    mal_gc_test_precise_stack_roots = true;
     usize chain_count = 512;
     const char *count_env = getenv("MAL_GC_CHAIN_COUNT");
     if (count_env != nullptr) {

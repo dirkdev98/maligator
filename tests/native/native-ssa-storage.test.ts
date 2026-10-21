@@ -27,6 +27,7 @@ describe("independent native SSA storage", () => {
 	beforeAll(() => {
 		expected = execFileSync(process.execPath, [fixture], { encoding: "utf8" });
 		const pair = buildBackendPairFromOneProgramImage({
+			nativeStackRoots: "precise",
 			fixture,
 			name: "native-ssa-storage",
 			mainFile: HOST_MAIN,
@@ -936,6 +937,7 @@ describe("independent native SSA storage", () => {
 			encoding: "utf8",
 		});
 		const pair = buildBackendPairFromOneProgramImage({
+			nativeStackRoots: "precise",
 			fixture: evalFixture,
 			name: "native-compact-suspension-eval",
 			mainFile: HOST_MAIN,

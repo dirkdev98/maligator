@@ -158,6 +158,8 @@ static int check_capacity(usize capacity, usize failure_index, bool start_parked
 }
 
 int main(void) {
+    // Every value here is rooted explicitly; stale C locals must not retain cells.
+    mal_gc_test_precise_stack_roots = true;
     const struct {
         usize requested;
         usize failure_index;

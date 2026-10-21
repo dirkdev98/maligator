@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
-import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
@@ -22,9 +21,10 @@ import type {
 	BytecodeExceptionHandler,
 	BytecodeInstruction,
 } from "../src/compiler/target/runtime-image.ts";
+import { compilePreciseProgramImage } from "./helpers/precise-roots.ts";
 
 function compile() {
-	return compileSemanticProgramToProgramImage(
+	return compilePreciseProgramImage(
 		analyzeSourceAndRunSemanticAnalysis(
 			`globalThis.kernel = function kernel(first, second, consume) {
 				const left = first();
@@ -227,7 +227,7 @@ describe("native physical root storage", () => {
 	});
 
 	it("zeroes only entry storage that a fresh frame can observe before definition", () => {
-		const image = compileSemanticProgramToProgramImage(
+		const image = compilePreciseProgramImage(
 			analyzeSourceAndRunSemanticAnalysis(
 				`globalThis.kernel = function kernel(first, second, consume) {
 					let held = first();

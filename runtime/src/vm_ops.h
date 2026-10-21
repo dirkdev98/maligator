@@ -359,6 +359,8 @@ MalValue mal_vm_add(MalVm *vm, MalValue left, MalValue right);
 
 // Inputs are rooted primitive strings; pending throws and length-limit errors are preserved.
 MalValue mal_vm_concat_strings_known(MalVm *vm, MalString *left, MalString *right);
+// `+` over a String and a primitive whose ToString cannot call user code or throw.
+MalValue mal_vm_concat_primitive_strings(MalVm *vm, MalValue left, MalValue right);
 MalValue mal_vm_string_concat_length(
     MalVm *vm, MalValue prefix_length, MalValue part, u32 following_quasi_length
 );

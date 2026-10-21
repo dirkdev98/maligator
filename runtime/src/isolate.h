@@ -42,6 +42,9 @@ typedef struct MalIsolateLocals {
 #else
     _Atomic bool gc_poll;
     _Atomic bool gc_termination;
+    /* The compiled-entry stack limit of a VM whose calls skip return polls. A request
+     * raises it to UINTPTR_MAX so the next compiled entry services the safepoint. */
+    _Atomic(uptr) entry_stack_limit;
 #endif
     /* Set during an incremental major mark cycle (init-mark → remark). */
     bool gc_marking_active;
@@ -89,6 +92,16 @@ void mal_isolate_release_sole(void);
 #define mal_array_values_callback (mal_isolate_locals()->array_values_callback)
 #define mal_array_iterator_next_callback (mal_isolate_locals()->array_iterator_next_callback)
 #define mal_gc_poll (mal_isolate_locals()->gc_poll)
+
+/* Async-signal-safe: request the isolate's next safepoint at a poll or compiled entry. */
+static inline void mal_isolate_request_poll(MalIsolateLocals *isolate) {
+#if defined(__wasi__)
+    isolate->gc_poll = true;
+#else
+    atomic_store_explicit(&isolate->gc_poll, true, memory_order_release);
+    atomic_store_explicit(&isolate->entry_stack_limit, UINTPTR_MAX, memory_order_relaxed);
+#endif
+}
 #define mal_gc_termination (mal_isolate_locals()->gc_termination)
 #define mal_gc_marking_active (mal_isolate_locals()->gc_marking_active)
 #define mal_array_elements_protector (mal_isolate_locals()->array_elements_protector)

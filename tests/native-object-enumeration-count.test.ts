@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
-import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
 import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
+import { compilePreciseProgramImage } from "./helpers/precise-roots.ts";
 const methods = [
 	"keys",
 	"values",
@@ -21,7 +21,7 @@ describe("count-only enumeration transport", () => {
 		it.each(["mutable", "locked"] as const)(
 			`${method} retains ignored argument evaluation under %s primordials`,
 			(primordials) => {
-				const image = compileSemanticProgramToProgramImage(
+				const image = compilePreciseProgramImage(
 					analyzeSourceAndRunSemanticAnalysis(
 						`globalThis.count=function count(record,observe,unused){const snapshot=${method === "ownKeys" ? "Reflect" : "Object"}.${method}(record,observe(record),unused);return snapshot.length;};`,
 						"extra-count.js",
@@ -56,7 +56,7 @@ describe("count-only enumeration transport", () => {
 		it.each(["mutable", "locked"] as const)(
 			`${method} keeps only the count across later effects under %s primordials`,
 			(primordials) => {
-				const image = compileSemanticProgramToProgramImage(
+				const image = compilePreciseProgramImage(
 					analyzeSourceAndRunSemanticAnalysis(
 						`globalThis.count=function count(record,observe){const snapshot=${method === "ownKeys" ? "Reflect" : "Object"}.${method}(record);observe(record);return snapshot.length+snapshot.length;};`,
 						"count.js",

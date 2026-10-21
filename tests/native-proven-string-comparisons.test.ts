@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_OBJECT,
 	COMPILER_VALUE_KIND_STRING,
 } from "../src/compiler/shared/compiler-value-kinds.ts";
 import {
@@ -90,7 +90,7 @@ describe("proven String operations in boxed storage", () => {
 			instructions[ip] = {
 				kind: "exact-operator-input-kinds",
 				inputKindMasks: [
-					COMPILER_VALUE_KIND_STRING | COMPILER_VALUE_KIND_NUMBER,
+					COMPILER_VALUE_KIND_STRING | COMPILER_VALUE_KIND_OBJECT,
 					COMPILER_VALUE_KIND_STRING,
 				],
 			};

@@ -101,6 +101,8 @@ function directFunctionPrototypeOwner(
 			? undefined
 			: directFunctionPrototypeOwner(program, fn, input, seen);
 	}
+	// A derived class creates its prototype object and installs it on the constructor.
+	if (opcode === "createObject") return installedPrototypeOwner(program, fn, value);
 	if (opcode !== "loadPropertyStatic") return undefined;
 	const stringIndex = fn.instructionAttributes(definition).stringIndex;
 	if (
@@ -111,6 +113,38 @@ function directFunctionPrototypeOwner(
 	}
 	const owner = materializeInstructionOperands(fn, definition)[0];
 	return owner === undefined ? undefined : coreDirectCreatedFunction(fn, owner);
+}
+
+function installedPrototypeOwner(
+	program: CoreProgram,
+	fn: CoreFunctionStore,
+	prototype: CoreValueId,
+): CoreFunctionId | undefined {
+	for (
+		let use = fn.kernel.valueFirstUse(prototype);
+		use >= 0;
+		use = fn.kernel.useNext(use)
+	) {
+		if (fn.kernel.useOperand(use) !== 2) continue;
+		const instruction = fn.kernel.useInstruction(use);
+		if (
+			fn.instructionKind(instruction) !== "operation" ||
+			fn.instructionOpcodeName(instruction) !== "defineProperty"
+		) {
+			continue;
+		}
+		const [owner, key] = materializeInstructionOperands(fn, instruction);
+		const stringIndex = key === undefined ? undefined : directStringIndex(fn, key);
+		if (
+			owner === undefined ||
+			stringIndex === undefined ||
+			!stringConstantEquals(program, stringIndex, "prototype")
+		) {
+			continue;
+		}
+		return coreDirectCreatedFunction(fn, owner);
+	}
+	return undefined;
 }
 
 export function coreInstanceMethodHints(

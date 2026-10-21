@@ -213,6 +213,7 @@ describe("native static-property root-mask publication", () => {
 
 	beforeAll(() => {
 		const result = buildBackendPairFromOneProgramImage({
+			nativeStackRoots: "precise",
 			fixture,
 			name: "static-property-root-mask",
 			mainFile: HOST_MAIN,

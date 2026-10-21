@@ -624,3 +624,26 @@ bool mal_heap_sweep_step(MalHeap *heap, MalHeapFinalizeFn finalize, usize max_bl
 /** Call `visit` on every managed (CELL) cell, in any state. Used by the heap
  * verifier to re-examine each cell's edges after marking. */
 void mal_heap_walk_cells(MalHeap *heap, MalHeapFinalizeFn visit);
+
+#if !defined(__wasi__)
+typedef struct MalHeapLargeRange MalHeapLargeRange;
+
+/**
+ * Address-to-cell lookup for conservative native stack roots. It is built per
+ * root scan: large cells are indexed then, and the heap must not allocate or
+ * sweep while it is in use.
+ */
+typedef struct MalHeapCellIndex {
+    const MalHeap *heap;
+    uptr chunk_low;
+    uptr chunk_high;
+    MalHeapLargeRange *large;
+    usize large_count;
+} MalHeapCellIndex;
+
+void mal_heap_cell_index_init(const MalHeap *heap, MalHeapCellIndex *index);
+void mal_heap_cell_index_free(MalHeapCellIndex *index);
+
+/** The allocated, unreclaimed managed cell containing `address`, or nullptr. */
+MalHeapHeader *mal_heap_cell_index_find(const MalHeapCellIndex *index, uptr address);
+#endif

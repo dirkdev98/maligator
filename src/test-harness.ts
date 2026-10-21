@@ -46,6 +46,8 @@ import {
 } from "./compiler/target/emit-program-image.ts";
 import type { TranslationUnitPolicy } from "./compiler/target/emit-program-image.ts";
 import { emitWorkerImageTranslationUnits } from "./compiler/target/emit-worker-images.ts";
+import { lowerNativeStorage } from "./compiler/target/lower-native-storage.ts";
+import type { NativeStackRoots } from "./compiler/target/lower-native-storage.ts";
 import { serializeRuntimeImage } from "./compiler/target/program-image-codec.ts";
 import type { ProgramImage } from "./compiler/target/program-image.ts";
 import type { NativeSplitPolicy } from "./compiler/target/split-native-function.ts";
@@ -193,6 +195,11 @@ export interface BuildOptions {
 	/** Use the probed production native plan (LTO and stripping where supported). */
 	production?: boolean;
 	/**
+	 * Native root mode. Fixtures that check shadow-frame publication build with the
+	 * precise roots that Wasm emission keeps, and opt out of stack scanning.
+	 */
+	nativeStackRoots?: NativeStackRoots;
+	/**
 	 * Emit bounded, independently cached translation units. Defaults to true so
 	 * internal fixtures exercise the same object-cache path as product builds.
 	 */
@@ -254,7 +261,12 @@ export function buildNativeBinary(options: BuildOptions): string {
 /** Compile and link a fixture, retaining the exact context and linked artifacts. */
 export function buildNativeBinaryResult(options: BuildOptions): BuildNativeBinaryResult {
 	const config = resolveHarnessBuildConfig(options);
-	const { programImage, workerImages } = compileFixtureProgramImage(options, config);
+	const compiled = compileFixtureProgramImage(options, config);
+	const workerImages = compiled.workerImages;
+	const programImage =
+		options.nativeStackRoots === "precise"
+			? lowerNativeStorage(compiled.programImage, "precise")
+			: compiled.programImage;
 	const linked = linkProgramImage(
 		options,
 		config,
@@ -572,10 +584,12 @@ export function buildBackendPairFromOneProgramImage(
 	options: Omit<BuildOptions, "compiled">,
 ): BackendPairResult {
 	const config = resolveHarnessBuildConfig(options);
-	const { programImage: image, workerImages } = compileFixtureProgramImage(
-		options,
-		config,
-	);
+	const fixture = compileFixtureProgramImage(options, config);
+	const workerImages = fixture.workerImages;
+	const image =
+		options.nativeStackRoots === "precise"
+			? lowerNativeStorage(fixture.programImage, "precise")
+			: fixture.programImage;
 	const compiled = linkProgramImage(
 		options,
 		config,

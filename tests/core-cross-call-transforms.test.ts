@@ -1856,6 +1856,46 @@ describe("bounded Core cross-call transforms", () => {
 		).toHaveProperty("size", 2);
 	});
 
+	it("plans finite guarded dispatch over a base method and its subclass overrides", () => {
+		let optimized: CoreProgram | undefined;
+		let report: CoreOptimizationReport | undefined;
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`class Shape { area() { return 0; } }
+				class Square extends Shape {
+					constructor(side) { super(); this.side = side; }
+					area() { return this.side * this.side; }
+				}
+				class Strip extends Shape {
+					constructor(length) { super(); this.length = length; }
+					area() { return this.length; }
+				}
+				function total(shapes) {
+					let sum = 0;
+					for (let index = 0; index < shapes.length; index++) sum += shapes[index].area();
+					return sum;
+				}
+				total([new Square(2), new Strip(3), new Shape()]);`,
+				"core-guarded-subclass-dispatch.js",
+			),
+			{
+				coreInstrumentation: "full",
+				afterCoreOptimization(program, _context, optimizationReport) {
+					optimized = program;
+					report = optimizationReport;
+				},
+			},
+		);
+
+		const guards = coreOperations(coreFunctionNamed(optimized!, "total")!).filter(
+			({ opcode }) => opcode === "guardFunctionIndex",
+		);
+		expect(report!.transforms.appliedByKind["finite-dispatch"]).toBe(1);
+		expect(
+			new Set(guards.map(({ attributes }) => attributes.functionIndex)),
+		).toHaveProperty("size", 3);
+	});
+
 	it("finite-dispatches a private dense array of lexical-this callees", () => {
 		let optimized: CoreProgram | undefined;
 		let report: CoreOptimizationReport | undefined;

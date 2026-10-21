@@ -1142,6 +1142,10 @@ typedef struct MalRuntimeImage {
     i32 function_count;
     const MalFunction *functions;
 
+    /** Compiled functions keep live values in C locals, so collections scan native
+     * stacks. Precise images (Wasm, bytecode wires) publish shadow-frame roots. */
+    bool conservative_stack_roots;
+
     /** Populate split generated tables before their first use. */
     void (*initialize_generated_data)(void);
 
@@ -1344,26 +1348,58 @@ static inline MalEnv *mal_vm_capture_owner_at(MalEnv *env, i32 owner_function_in
     return nullptr;
 }
 
+/*
+ * Compiled frames keep their stack-trace record on their own C stack, and a capture
+ * finds it by walking frame-pointer chains, so a call stores nothing into the VM.
+ * Wasm cannot walk its stack and profile builds sample call-site ids from the rows,
+ * so those builds keep one row per call in vm->native_frames instead.
+ */
+#if !defined(__wasi__) && !MAL_PROFILE && (defined(__APPLE__) || defined(__linux__)) && \
+    (defined(__aarch64__) || defined(__x86_64__))
+#define MAL_NATIVE_FRAME_WALK 1
+#else
+#define MAL_NATIVE_FRAME_WALK 0
+#endif
+
+#if defined(__APPLE__)
+#define MAL_COMPILED_TEXT_SECTION "__TEXT,__mal_js,regular,pure_instructions"
+#else
+// A C-identifier name makes the linker define __start_/__stop_ bounds for it.
+#define MAL_COMPILED_TEXT_SECTION "mal_js_text"
+#endif
+
+struct MalCompiledFrameDesc;
+
 /**
- * A native-backend (compiled) call frame, tracked only for stack traces. The
- * interpreter's frames live in MalVm.frames; compiled functions run on the C
- * stack and are not there, so each compiled entry records a lightweight frame
- * here for itself (mal_vm_enter_compiled in its prologue, mal_vm_leave_compiled on
- * every return), and callers never enter on a callee's behalf.
- * The compiled function writes its current entry in the function's position table
- * into `position_entry` as it runs (statement-granular), so generated code never
- * names an image-wide position id. A function that bailed to the interpreter hides
- * its row (mal_native_frame_hidden): its interpreted frame then represents it, so a
- * capture skips the duplicate. A capture orders this stack against the interpreted
- * frames by their `native_depth`.
+ * A compiled function's stack-trace record: the running function and its current
+ * entry in the function's position table, written statement by statement so
+ * generated code never names an image-wide position id. A hidden record (negative
+ * function index) belongs to a function whose interpreted frame represents it.
+ * A capture orders these records against interpreted frames; see
+ * mal_vm_capture_stack.
  */
 typedef struct MalNativeFrame {
+#if MAL_NATIVE_FRAME_WALK
+    /** Identifies the record a walk found at its function's frame offset. */
+    const struct MalCompiledFrameDesc *desc;
+#endif
     i32 function_index;
     i32 position_entry;
 #if MAL_PROFILE
     i32 site_id;
 #endif
 } MalNativeFrame;
+
+#if MAL_NATIVE_FRAME_WALK
+/** A generated function that owns a frame record; its layout is learned on first entry. */
+typedef struct MalCompiledFrameDesc {
+    const void *code;
+    /** The record's offset from the function's frame pointer; zero until registered. */
+    _Atomic(i32) frame_offset;
+} MalCompiledFrameDesc;
+
+void mal_compiled_frame_register(MalCompiledFrameDesc *desc, i32 frame_offset);
+#endif
 
 static inline bool mal_native_frame_hidden(const MalNativeFrame *frame) {
     return frame->function_index < 0;
@@ -1574,6 +1610,23 @@ typedef struct MalVm {
      * address.
      */
     uptr stack_limit;
+    /**
+     * The limit compiled entries compare against. It holds stack_limit except while
+     * a conservative image's poll is pending: its calls skip return polls, so a
+     * request raises the isolate's word and the next entry services the safepoint.
+     * A precise image points at its own word, since its roots are only published
+     * at polls. See mal_vm_sync_entry_stack_limit.
+     */
+#if defined(__wasi__)
+    uptr *entry_stack_limit;
+    uptr own_entry_stack_limit;
+#else
+    _Atomic(uptr) *entry_stack_limit;
+    _Atomic(uptr) own_entry_stack_limit;
+#endif
+    /** Highest address of the OS thread stack the isolate was created on, or zero
+     * when unknown; the main fiber's conservative root scan ends here. */
+    uptr native_stack_top;
 
     /**
      * Native (compiled-backend) call frames, for stack traces — see
@@ -2178,16 +2231,29 @@ static inline void mal_gc_callee_roots_end(MalCalleeRoots *roots) {
 }
 
 /**
- * Cap on nested compiled-function calls. Each level holds a real C frame (the
- * compiled function plus the dispatch helper), so this is kept well below what
- * an 8 MiB stack tolerates while staying far deeper than any realistic
- * non-tail recursion. Tail self-calls compile to in-place loops and do not
- * count against it.
+ * Cap on nested compiled-function calls in row builds, whose rows are allocated
+ * once at this depth. Each level holds a real C frame (the compiled function plus
+ * the dispatch helper), so this is kept well below what an 8 MiB stack tolerates
+ * while staying far deeper than any realistic non-tail recursion. Walked frames
+ * are bounded by the stack limit alone.
  */
 #define MAL_NATIVE_CALL_DEPTH_LIMIT 6000
 static_assert(MAL_NATIVE_CALL_DEPTH_LIMIT <= UINT16_MAX, "MalVmFrame.native_depth is 16 bits");
 
 void mal_vm_throw_stack_overflow(MalVm *vm);
+
+static inline uptr mal_vm_entry_stack_limit(const MalVm *vm) {
+#if defined(__wasi__)
+    return *vm->entry_stack_limit;
+#else
+    return atomic_load_explicit(vm->entry_stack_limit, memory_order_relaxed);
+#endif
+}
+
+/** Point compiled entries at the right limit word and load the running stack's limit. */
+void mal_vm_sync_entry_stack_limit(MalVm *vm);
+/** An entry below its limit: false after an overflow or termination, else polls serviced. */
+bool mal_vm_enter_compiled_limit(MalVm *vm);
 /** Allocate the frame rows or report the overflow; the entry's row when it proceeds. */
 MalNativeFrame *mal_vm_enter_compiled_slow(MalVm *vm, i32 function_index);
 
@@ -2231,7 +2297,7 @@ static inline MalNativeFrame *mal_vm_enter_compiled_row(MalVm *vm, i32 function_
     MAL_PERF_COUNT(compiled_enter_calls);
     i32 count = vm->native_frame_count;
     // A zero limit admits every address.
-    if (__builtin_expect(mal_vm_native_stack_address() < vm->stack_limit ||
+    if (__builtin_expect(mal_vm_native_stack_address() < mal_vm_entry_stack_limit(vm) ||
                              count >= vm->native_frame_capacity, 0))
         return mal_vm_enter_compiled_slow(vm, function_index);
     return mal_vm_push_native_frame(vm, count, function_index);
@@ -2240,6 +2306,35 @@ static inline MalNativeFrame *mal_vm_enter_compiled_row(MalVm *vm, i32 function_
 static inline bool mal_vm_enter_compiled(MalVm *vm, i32 function_index) {
     return mal_vm_enter_compiled_row(vm, function_index) != nullptr;
 }
+
+#if MAL_NATIVE_FRAME_WALK
+/** The caller-owned record of a walked frame, or nullptr after recording a RangeError. */
+static inline __attribute__((always_inline)) MalNativeFrame *mal_vm_enter_compiled_frame(
+    MalVm *vm, MalNativeFrame *record, MalCompiledFrameDesc *desc, i32 function_index,
+    void *frame_address
+) {
+    MAL_PERF_COUNT(compiled_enter_calls);
+    *record = (MalNativeFrame) {
+        .desc = desc,
+        .function_index = function_index,
+        .position_entry = -1,
+    };
+    // Registered before the stack check: the overflow's own capture walks this frame.
+    if (__builtin_expect(
+            atomic_load_explicit(&desc->frame_offset, memory_order_relaxed) == 0, 0)) {
+        mal_compiled_frame_register(desc, (i32) ((char *) record - (char *) frame_address));
+    }
+    // A zero limit admits every address.
+    if (__builtin_expect(mal_vm_native_stack_address() < mal_vm_entry_stack_limit(vm), 0) &&
+            !mal_vm_enter_compiled_limit(vm)) {
+        return nullptr;
+    }
+    return record;
+}
+#endif
+
+/** The innermost visible compiled JavaScript function on the running stack, or -1. */
+i32 mal_vm_innermost_compiled_function(MalVm *vm);
 
 /** Source position id of entry `entry` in a function's position table, or -1 outside it. */
 static inline i32 mal_function_position_entry_id(const MalFunction *function, i32 entry) {
@@ -2270,12 +2365,6 @@ static inline bool mal_vm_leaf_stack_available(const MalVm *vm) {
     return stack_limit == 0 || mal_vm_native_stack_address() >= stack_limit;
 }
 
-/**
- * Mark the top native frame hidden because the compiled function is bailing to
- * the interpreter (the interpreted frame represents it). Keeps a capture from
- * showing the frame twice. Emitted by the native backend at its unbox bail.
- */
-void mal_vm_compiled_bailed(MalVm *vm);
 
 /**
  * Capture the current synchronous call stack (top frame first), merging the
@@ -2404,16 +2493,38 @@ typedef struct MalVmFrame {
      * Construct frames replace non-object return values with this_value.
      */
     bool is_construct;
+#if !MAL_NATIVE_FRAME_WALK
     /**
      * Native rows live when this frame was pushed or resumed. Both frame stacks are
      * LIFO, so native row n is older than this frame exactly when n < native_depth;
      * stack-trace capture merges the stacks by it. See mal_vm_capture_stack.
      */
     u16 native_depth;
+#endif
 } MalVmFrame;
 
 static_assert(sizeof(MalVmFrame) <= (MAL_REALMS ? 144 : 136),
               "interpreter frame outgrew its packed layout");
+
+#if MAL_NATIVE_FRAME_WALK
+/*
+ * A walked build keeps, after a frame stack's frames in the same allocation, the
+ * frame pointer of the C function that pushed or resumed each frame. Every compiled
+ * frame that activation later runs lies strictly below it and every older one at or
+ * above it, so stack-trace capture merges the two stacks by it.
+ */
+#define mal_vm_frame_storage_bytes(capacity) \
+    ((usize) (capacity) * (sizeof(MalVmFrame) + sizeof(uptr)))
+#define mal_vm_frame_native_positions(vm) ((uptr *) ((vm)->frames + (vm)->frame_capacity))
+// Inlined into its caller this reads the next frame up, which still orders correctly.
+#define mal_vm_frame_mark_native_position(frame, vm) \
+    (mal_vm_frame_native_positions(vm)[(frame) - (vm)->frames] = \
+        *(const uptr *) __builtin_frame_address(0))
+#else
+#define mal_vm_frame_storage_bytes(capacity) ((usize) (capacity) * sizeof(MalVmFrame))
+#define mal_vm_frame_mark_native_position(frame, vm) \
+    ((frame)->native_depth = (u16) (vm)->native_frame_count)
+#endif
 
 typedef MalVmFrame MalCallable;
 

@@ -727,6 +727,7 @@ function firstNativeSafepointReader(bytes: Uint8Array) {
 	expect(reader.u8()).toBe(0); // Unknown closure requirements retain the chain.
 	expect(reader.u8()).toBe(0); // No immutable value captures.
 	expect(reader.i32Array()).toEqual([]);
+	expect(reader.u8()).toBe(0); // Precise stack roots.
 	expect(reader.u8()).toBe(0);
 	expect(reader.u8()).toBe(0);
 	expect(reader.i32Array()).toEqual([]);

@@ -172,6 +172,23 @@ export const NATIVE_C_HEADER_LINES = [
 	"#define MAL_ROOT_MASK_ROW(row) mal_gc_root_frame_set_inactive(&__gc_frame, __gc_inactive_rows[row][0], &__gc_inactive_rows[row][1], countof(__gc_inactive_rows[0]) - 1)",
 	"#define MAL_THREW() (vm->completion.kind == MAL_COMPLETION_THROW)",
 	"#define MAL_FRAME_POS(row, entry) ((row)->position_entry = (entry))",
+	"#if MAL_NATIVE_FRAME_WALK",
+	"#if __has_attribute(disable_tail_calls)",
+	"#define MAL_COMPILED_NO_TAIL_CALLS __attribute__((disable_tail_calls))",
+	"#else",
+	'#define MAL_COMPILED_NO_TAIL_CALLS __attribute__((optimize("no-optimize-sibling-calls")))',
+	"#endif",
+	// A walked frame keeps its own C frame and stays on the stack while its callees run.
+	"#define MAL_COMPILED_FRAME __attribute__((section(MAL_COMPILED_TEXT_SECTION), noinline)) MAL_COMPILED_NO_TAIL_CALLS",
+	"#define MAL_FRAME_DESC(name, owner) static MalCompiledFrameDesc name = { .code = (const void *) (owner) }",
+	"#define MAL_FRAME_ENTER(record, desc, index) mal_vm_enter_compiled_frame(vm, (record), &(desc), (index), __builtin_frame_address(0))",
+	"#define MAL_FRAME_SCOPE() ((void) 0)",
+	"#else",
+	"#define MAL_COMPILED_FRAME",
+	"#define MAL_FRAME_DESC(name, owner) typedef int name",
+	"#define MAL_FRAME_ENTER(record, desc, index) ((void) (record), mal_vm_enter_compiled_row(vm, (index)))",
+	"#define MAL_FRAME_SCOPE() MalVm *const __entered __attribute__((cleanup(mal_vm_leave_compiled_scope))) = vm",
+	"#endif",
 	"#define MAL_STRING_ROW(code_units_value, length_value) { .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_STRING), .storage = MAL_STRING_STORAGE_EXTERNAL, .hash = 0, .length = length_value, .code_units = code_units_value }",
 	"#define MAL_LATIN1_STRING_ROW(units_value, length_value) { .header = MAL_HEAP_HEADER_IMMORTAL(MAL_HEAP_STRING), .storage = MAL_STRING_STORAGE_EXTERNAL, .latin1 = 1, .hash = 0, .length = length_value, .latin1_units = units_value }",
 	"#define MAL_LINE_ENTRY(start_ip_value, pos_id_value) { .start_ip = start_ip_value, .pos_id = pos_id_value }",
@@ -1574,6 +1591,7 @@ function emitProgramImageParts(
 		runtime,
 		suffix,
 		debug,
+		nativeStackRootsAreConservative(image, useCompiled),
 		undefined,
 		options,
 		image.diagnostics.profileSites?.length,
@@ -2187,6 +2205,7 @@ export function emitRelocatableNativeOverlayTranslationUnits(
 		`    .wire_digest = "${wireDigest}",`,
 		`    .function_count = ${compiled.length},`,
 		`    .entries = mal_${name}_native_entries,`,
+		`    .conservative_stack_roots = ${nativeStackRootsAreConservative(image, true)},`,
 		...(target.kind === "fragment"
 			? [
 					`    .relocation = &${relocationCell},`,
@@ -2417,10 +2436,21 @@ export function assetTableLines(
 	return lines;
 }
 
+function nativeStackRootsAreConservative(
+	image: ProgramImage,
+	useCompiled: boolean,
+): boolean {
+	return (
+		useCompiled &&
+		image.native.functions.some((fn) => fn.storage?.stackRoots === "conservative")
+	);
+}
+
 function malRuntimeImageStruct(
 	runtime: RuntimeImage,
 	suffix: string,
 	debug: boolean,
+	conservativeStackRoots: boolean,
 	sharedLiteralTemplates?: string,
 	options: Pick<EmitOptions, "assets" | "maligatorSurface" | "sourcePath"> = {},
 	profileSiteCount?: number,
@@ -2536,6 +2566,7 @@ function malRuntimeImageStruct(
 		`const MalRuntimeImage mal_runtime_image${suffix} = {`,
 		`    .function_count = ${runtime.functionCount},`,
 		`    .functions = mal_functions${suffix},`,
+		`    .conservative_stack_roots = ${conservativeStackRoots},`,
 		"    .initialize_generated_data = nullptr,",
 		`    .string_constant_count = ${runtime.stringConstants.length},`,
 		`    .string_constants = ${runtime.stringConstants.length > 0 ? `mal_strings${suffix}` : "nullptr"},`,
@@ -2871,7 +2902,15 @@ function emitBatchUnits(
 		}
 		lines.push("};", "");
 
-		lines.push(...malRuntimeImageStruct(runtime, suffix, false, literalTemplatesSymbol));
+		lines.push(
+			...malRuntimeImageStruct(
+				runtime,
+				suffix,
+				false,
+				nativeStackRootsAreConservative(image, useCompiled),
+				literalTemplatesSymbol,
+			),
+		);
 		lines.push("");
 	}
 

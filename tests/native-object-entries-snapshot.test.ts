@@ -10,19 +10,23 @@ import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
+import { lowerNativeStorage } from "../src/compiler/target/lower-native-storage.ts";
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
 
 function compile(body: string, primordials: "mutable" | "locked" = "mutable") {
-	return compileSemanticProgramToProgramImage(
-		analyzeSourceAndRunSemanticAnalysis(
-			`globalThis.inspect=function inspect(record,index,observe){${body}};`,
-			"entries.js",
-		),
-		{
-			facts: compilerProgramFactsFromConfig(
-				resolveBuildConfig({ engine: { primordials } }),
+	return lowerNativeStorage(
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`globalThis.inspect=function inspect(record,index,observe){${body}};`,
+				"entries.js",
 			),
-		},
+			{
+				facts: compilerProgramFactsFromConfig(
+					resolveBuildConfig({ engine: { primordials } }),
+				),
+			},
+		),
+		"precise",
 	);
 }
 function inspect(image: ReturnType<typeof compile>) {

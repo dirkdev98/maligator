@@ -105,7 +105,7 @@ static_assert(ATOMIC_BOOL_LOCK_FREE == 2, "GC poll must be signal-safe and lock-
 #endif
 
 MalGcPollTarget *mal_gc_current_poll_target(void) {
-    return (MalGcPollTarget *) &mal_gc_poll;
+    return (MalGcPollTarget *) mal_isolate_locals();
 }
 
 
@@ -134,11 +134,7 @@ bool mal_gc_poll_termination(MalVm *vm) {
 
 void mal_gc_request_safepoint(MalGcPollTarget *target) {
     if (target == nullptr) return;
-#if defined(__wasi__)
-    *(bool *) target = true;
-#else
-    atomic_store_explicit((_Atomic bool *) target, true, memory_order_release);
-#endif
+    mal_isolate_request_poll((MalIsolateLocals *) target);
 }
 
 
@@ -212,6 +208,7 @@ typedef enum MalGcPhase {
 #if !defined(__wasi__)
 #define MAL_GC_WORKER_COUNT 2
 usize (*mal_gc_test_worker_limit_hook)(void) = nullptr;
+bool mal_gc_test_precise_stack_roots = false;
 bool (*mal_gc_test_worker_start_failure_hook)(usize index) = nullptr;
 
 static usize mal_gc_native_worker_limit(
@@ -294,6 +291,11 @@ struct MalGcState {
     MalVm *vm;
     MalGcProcessParticipant *process;
     bool process_pressure;
+#if !defined(__wasi__)
+    /* Lowest mutator stack address of the current pause, after its callee-saved
+     * registers were spilled; zero outside a pause. */
+    uptr conservative_stack_low;
+#endif
     // Grey worklist (explicit, no recursion): shaded-but-not-yet-traced cells.
     MalHeapHeader **grey;
     usize grey_count;
@@ -625,7 +627,7 @@ void mal_gc_satb_record(MalValue old_value) {
         g_gc->satb_count = 0;
         g_gc->satb_drained = 0;
         g_gc->satb_flushes++;
-        mal_gc_poll = true;
+        mal_isolate_request_poll(mal_isolate_locals());
     }
     if (mal_heap_mark_is_current(cell->mark, g_gc_vm->heap.mark_color)) return;
     g_gc->satb[g_gc->satb_count++] = old_value;
@@ -985,7 +987,7 @@ void mal_gc_init(MalVm *vm) {
         if (g->stress_interval < 1) {
             g->stress_interval = 1;
         }
-        mal_gc_poll = true; // make the next loop/call safepoint collect
+        mal_isolate_request_poll(mal_isolate_locals()); // the next safepoint collects
     }
     g->verify_enabled = getenv("MAL_GC_VERIFY") != nullptr;
 
@@ -1344,6 +1346,8 @@ void mal_gc_satb_shade_frame(MalVmFrame *frame) {
 static void mal_gc_trace_object_common_in(MalGcThreadContext *ctx, MalObject *object) {
     mal_gc_mark_object_in(ctx, mal_object_prototype(object));
     const MalShape *shape = object->shape;
+    // A cell found on the stack may have been abandoned before its constructor ran.
+    if (shape == nullptr) return;
     for (u32 i = 0; i < shape->inline_count; ++i) {
         mal_gc_mark_value_in(ctx, shape->props[i].key);
     }
@@ -1860,7 +1864,68 @@ void mal_gc_clear_inactive_root_frame_slots(MalRootFrame *frame) {
     }
 }
 
+#if !defined(__wasi__)
+/* Sanitizers poison parts of live frames; a conservative scan reads them as plain words. */
+__attribute__((no_sanitize("address", "thread")))
+static void mal_gc_scan_native_stack(const MalHeapCellIndex *index, uptr low, uptr high) {
+    low = (low + sizeof(uptr) - 1) & ~(uptr) (sizeof(uptr) - 1);
+    for (uptr cursor = low; cursor < high && high - cursor >= sizeof(uptr);
+            cursor += sizeof(uptr)) {
+        uptr word = *(const volatile uptr *) cursor;
+        // Raw pointers and boxed heap values both keep the address in the low 48 bits.
+        if ((word >> 48) != 0 && word < MAL_VALUE_STRING) continue;
+        MalHeapHeader *cell = mal_heap_cell_index_find(index, word & MAKS_PTR);
+        if (cell == nullptr) continue;
+        // A compact env leaves its parents to whoever holds it, as a frame's env root did.
+        if (cell->type == MAL_HEAP_ENV) mal_gc_trace_env_in(&g_gc_thread, (MalEnv *) cell);
+        else mal_gc_shade_in(&g_gc_thread, cell);
+    }
+}
+
+#define MAL_GC_CLEARED_STACK_BYTES (16u * 1024u)
+
+__attribute__((noinline)) void mal_gc_clear_unused_native_stack(void) {
+    u8 unused[MAL_GC_CLEARED_STACK_BYTES];
+    memset(unused, 0, sizeof(unused));
+    __asm__ volatile("" : : "r"(unused) : "memory");
+}
+
+static uptr mal_gc_fiber_stack_top(const MalVm *vm, const struct MalFiber *fiber) {
+    return fiber == nullptr || fiber->stack_base == nullptr
+        ? vm->native_stack_top
+        : (uptr) fiber->stack_base + fiber->stack_size;
+}
+
+/* Compiled code keeps JavaScript values in C locals and registers. The collector
+ * never moves cells, so every stack word that addresses a live cell is a root. */
+static void mal_gc_scan_native_stacks(MalVm *vm) {
+    uptr low = g_gc->conservative_stack_low;
+    uptr top = mal_gc_fiber_stack_top(vm, vm->current_fiber);
+    if (low == 0 || top == 0 || low > top) abort();
+    MalHeapCellIndex index;
+    mal_heap_cell_index_init(&vm->heap, &index);
+    mal_gc_scan_native_stack(&index, low, top);
+    for (struct MalFiber *f = vm->fibers_head; f != nullptr; f = f->next) {
+        if (f == vm->current_fiber || f->state == MAL_FIBER_FINISHED ||
+            f->state == MAL_FIBER_NEW) {
+            continue;
+        }
+        uptr fiber_top = mal_gc_fiber_stack_top(vm, f);
+        if (fiber_top == 0 || (uptr) f->ctx_sp > fiber_top) abort();
+        mal_gc_scan_native_stack(&index, (uptr) f->ctx_sp, fiber_top);
+    }
+    mal_heap_cell_index_free(&index);
+}
+#else
+void mal_gc_clear_unused_native_stack(void) {}
+#endif
+
 static void mal_gc_scan_roots(MalVm *vm) {
+#if !defined(__wasi__)
+    if (vm->runtime_image->conservative_stack_roots && !mal_gc_test_precise_stack_roots) {
+        mal_gc_scan_native_stacks(vm);
+    }
+#endif
     // The heap-owned transition tree retains keys even when no live object
     // currently owns an intermediate shape.
     mal_shape_visit_transition_keys(&vm->heap, mal_gc_mark_value);
@@ -3454,12 +3519,35 @@ static void mal_gc_cycle_finish_sync(MalVm *vm) {
     }
 }
 
-bool mal_gc_finish_pending_cycle(MalVm *vm) {
-    if (g_gc_vm != vm) abort();
-    if (vm->gc_native_frames != 0 || g_gc->phase == MAL_GC_PHASE_IDLE) return false;
+/* Every pause that scans roots starts here from mutator code. Spilling the
+ * callee-saved registers into this frame puts register-held values on the stack
+ * the conservative scan reads, which ends below this frame's locals. */
+static __attribute__((noinline)) void mal_gc_pause_with_native_roots(
+    MalVm *vm, void (*pause)(MalVm *)
+) {
+#if !defined(__wasi__)
+    __builtin_unwind_init();
+    uptr marker = 0;
+    __asm__ volatile("" : : "r"(&marker) : "memory");
+    uptr previous = g_gc->conservative_stack_low;
+    if (previous == 0) g_gc->conservative_stack_low = (uptr) &marker;
+    pause(vm);
+    g_gc->conservative_stack_low = previous;
+#else
+    pause(vm);
+#endif
+}
+
+static void mal_gc_finish_pending_pause(MalVm *vm) {
     u64 start_ns = mal_gc_pause_begin(vm, true);
     mal_gc_cycle_finish_sync(vm);
     mal_gc_pause_end(vm, true, MAL_GC_PAUSE_FINISH_PENDING, start_ns);
+}
+
+bool mal_gc_finish_pending_cycle(MalVm *vm) {
+    if (g_gc_vm != vm) abort();
+    if (vm->gc_native_frames != 0 || g_gc->phase == MAL_GC_PHASE_IDLE) return false;
+    mal_gc_pause_with_native_roots(vm, mal_gc_finish_pending_pause);
     return true;
 }
 
@@ -3469,8 +3557,7 @@ bool mal_gc_finish_pending_cycle(MalVm *vm) {
  * objects that died after it began (SATB floating garbage) — and then run a fresh
  * synchronous major, which snapshots the CURRENT roots and reclaims that floating
  * garbage too. So gc() matches the STW collector's "reclaim everything dead now". */
-void mal_gc_collect(MalVm *vm) {
-    if (g_gc_vm != vm) abort();
+static void mal_gc_collect_pause(MalVm *vm) {
     u64 start_ns = mal_gc_pause_begin(vm, true);
     g_gc->collection_index++;
     if (g_gc->phase != MAL_GC_PHASE_IDLE) {
@@ -3478,6 +3565,11 @@ void mal_gc_collect(MalVm *vm) {
     }
     mal_gc_collect_sync(vm, true); // fresh full major over the current snapshot
     mal_gc_pause_end(vm, true, MAL_GC_PAUSE_EXPLICIT, start_ns);
+}
+
+void mal_gc_collect(MalVm *vm) {
+    if (g_gc_vm != vm) abort();
+    mal_gc_pause_with_native_roots(vm, mal_gc_collect_pause);
 }
 
 /* Advance an in-flight cycle by one step, or (if idle) decide whether a collection
@@ -3611,16 +3703,21 @@ static void gc_safepoint_step(MalVm *vm);
 void mal_gc_safepoint(MalVm *vm) {
     // Invalidate retained read relationships before any service or re-entry.
     if (vm->service_epoch < 9007199254740991ULL) vm->service_epoch++;
-    gc_safepoint_step(vm);
+    mal_gc_pause_with_native_roots(vm, gc_safepoint_step);
+    // Preemption: this is a safe point to switch fibers (no un-rooted native frame is
+    // live — the gate in the step). It runs after the pause so a collection never
+    // scans one fiber's stack from another's captured boundary.
+    if (vm->gc_native_frames == 0 && mal_gc_preempt_hook != nullptr) {
+        mal_gc_preempt_hook(vm);
+    }
     // Every path through the step may consume the poll; termination must stay observable.
-    if (mal_gc_termination) mal_gc_poll = true;
+    if (mal_gc_termination) mal_isolate_request_poll(mal_isolate_locals());
 }
 
 static void gc_safepoint_step(MalVm *vm) {
-    // Only safe to collect when no native builtin is active: its C-local scratch
-    // is not enumerable as a root, so collecting inside one could free values it
-    // still holds. Compiled frames are fine (they publish root frames); all other
-    // live state is in the interpreter frames + value stack, covered by the scan.
+    // Only safe to collect when no native builtin is active: it may hold derived
+    // pointers into buffers whose owners it no longer references. Compiled frames
+    // are fine; all other live state is in the interpreter frames + value stack.
 	if (vm->gc_native_frames != 0) {
 		return;
 	}
@@ -3630,12 +3727,6 @@ static void gc_safepoint_step(MalVm *vm) {
         mal_gc_print_stats_now();
     }
     mal_gc_incremental_safepoint(vm);
-    // Preemption: this is a safe point to switch fibers (roots are precise here and
-    // no un-rooted native frame is live — the gate above). The scheduler's hook
-    // yields the running fiber if its budget is spent, and returns here on resume.
-    if (mal_gc_preempt_hook != nullptr) {
-        mal_gc_preempt_hook(vm);
-    }
 }
 
 /** Finalize-all visitor: free a live cell's owned side allocations regardless of

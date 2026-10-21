@@ -31,5 +31,7 @@ export function lowerExecutionToProgramImage(
 			),
 			program.context,
 		),
+		// The native runtime scans its C stacks; Wasm emission relowers with precise roots.
+		"conservative",
 	);
 }

@@ -8,6 +8,7 @@ import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
+import { lowerNativeStorage } from "../src/compiler/target/lower-native-storage.ts";
 import { vmRegionActions } from "../src/compiler/target/program-image.ts";
 import type {
 	ProgramImage,
@@ -18,16 +19,19 @@ function compile(
 	body: string,
 	primordials: "locked" | "mutable" = "mutable",
 ): ProgramImage {
-	return compileSemanticProgramToProgramImage(
-		analyzeSourceAndRunSemanticAnalysis(
-			`globalThis.inspect = function(value, start, end, escape, observer) { ${body} };`,
-			"/string-span.js",
-		),
-		{
-			facts: compilerProgramFactsFromConfig(
-				resolveBuildConfig({ engine: { primordials } }),
+	return lowerNativeStorage(
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`globalThis.inspect = function(value, start, end, escape, observer) { ${body} };`,
+				"/string-span.js",
 			),
-		},
+			{
+				facts: compilerProgramFactsFromConfig(
+					resolveBuildConfig({ engine: { primordials } }),
+				),
+			},
+		),
+		"precise",
 	);
 }
 function spans(image: ProgramImage): Array<VmStringSpanRegion> {

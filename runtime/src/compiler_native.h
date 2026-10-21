@@ -6,6 +6,8 @@ typedef struct MalNativeOverlay {
     const char *wire_digest;
     i32 function_count;
     const MalCompiledFunction *entries;
+    /** Attaching these entries makes the host image scan native stacks for roots. */
+    bool conservative_stack_roots;
     /*
      * Process-wide bases of a program fragment, set by its first attach. The eval
      * compiler's overlay leaves both null: each VM splices it at its own position and

@@ -50,6 +50,7 @@ describe("native property read region continuations", () => {
 
 	beforeAll(() => {
 		const pair = buildBackendPairFromOneProgramImage({
+			nativeStackRoots: "precise",
 			fixture: "tests/local/native-property-read-regions.js",
 			name: "native-property-read-regions",
 		});

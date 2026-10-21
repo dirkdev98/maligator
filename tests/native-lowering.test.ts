@@ -27,6 +27,7 @@ import {
 } from "../src/compiler/target/program-image.ts";
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
 import type { BytecodeInstruction } from "../src/compiler/target/runtime-image.ts";
+import { compilePreciseProgramImage } from "./helpers/precise-roots.ts";
 
 const source = `
 function calculate(value) {
@@ -269,7 +270,7 @@ describe("SSA native lowering", () => {
 				.map((name) => `${name}.a`)
 				.join(" + ")};
 		} globalThis.wide = wide;`;
-		const image = compileSemanticProgramToProgramImage(
+		const image = compilePreciseProgramImage(
 			analyzeSourceAndRunSemanticAnalysis(source, "/wide-fallback.js"),
 		);
 		const native = image.native.functions[1]!;

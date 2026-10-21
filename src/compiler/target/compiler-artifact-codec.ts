@@ -97,7 +97,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 249;
+export const COMPILER_ARTIFACT_VERSION = 250;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -738,6 +738,7 @@ export function serializeCompilerArtifact(
 function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): void {
 	if (storage === undefined)
 		throw new Error("Compiler artifact requires native storage plans");
+	w.u8(storage.stackRoots === "conservative" ? 1 : 0);
 	w.u8(storage.captures.ownsEnvironment ? 1 : 0);
 	w.u8(storage.captures.initialization === "complete-layout" ? 1 : 0);
 	w.i32Array([...storage.captures.layout]);
@@ -1164,6 +1165,8 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 }
 
 function readNativeStorage(r: Reader): NativeStoragePlan {
+	const conservativeStackRoots = r.u8();
+	if (conservativeStackRoots > 1) throw new RangeError("Invalid native stack-root mode");
 	const ownsEnvironment = r.u8();
 	const initialization = r.u8();
 	if (ownsEnvironment > 1 || initialization > 1)
@@ -1183,6 +1186,8 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 		fallback: "owner-lookup",
 	};
 	const storage = {
+		stackRoots:
+			conservativeStackRoots === 1 ? ("conservative" as const) : ("precise" as const),
 		captures,
 		rootSlotCount: r.u32(),
 		rootRegisters: r.i32Array(),

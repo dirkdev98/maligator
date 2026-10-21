@@ -10,6 +10,7 @@ import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
+import { lowerNativeStorage } from "../src/compiler/target/lower-native-storage.ts";
 import { validateNativeStackObject } from "../src/compiler/target/native-stack-object.ts";
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
 
@@ -17,12 +18,15 @@ function config(primordials: "mutable" | "locked") {
 	return resolveBuildConfig({ engine: { primordials, eval: false, realms: false } });
 }
 function compile(body: string) {
-	return compileSemanticProgramToProgramImage(
-		analyzeSourceAndRunSemanticAnalysis(
-			`globalThis.inspect=function inspect(input,flag,descriptor){${body}};`,
-			"known-object.js",
+	return lowerNativeStorage(
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`globalThis.inspect=function inspect(input,flag,descriptor){${body}};`,
+				"known-object.js",
+			),
+			{ facts: compilerProgramFactsFromConfig(config("locked")) },
 		),
-		{ facts: compilerProgramFactsFromConfig(config("locked")) },
+		"precise",
 	);
 }
 function named(image: ReturnType<typeof compile>, name = "inspect") {

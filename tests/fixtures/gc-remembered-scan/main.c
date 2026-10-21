@@ -11,6 +11,8 @@ extern const MalRuntimeImage mal_runtime_image;
 #define SLOT_COUNT 8192
 
 int main(int argc, char **argv) {
+    // Every value here is rooted explicitly; stale C locals must not retain cells.
+    mal_gc_test_precise_stack_roots = true;
     bool dense = argc == 2 && strcmp(argv[1], "dense") == 0;
     bool append = argc == 2 && strcmp(argv[1], "append") == 0;
     bool prefix = argc == 2 && strcmp(argv[1], "append-prefix") == 0;

@@ -78,6 +78,8 @@ static void count_finalized(MalHeapHeader *cell) {
 
 int main(void) {
     mal_gc_test_worker_limit_hook = one_worker;
+    // Collections start here with no compiled frame live; locals must not retain cells.
+    mal_gc_test_precise_stack_roots = true;
     MalVm vm;
     mal_vm_init(&vm, &mal_runtime_image);
     if (mal_gc_worker_limit(&vm) == 0) {
