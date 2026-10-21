@@ -67,8 +67,8 @@ export function coreReadAccessorLoopPlan(
 	charge: (work: number) => void,
 ): CoreReadAccessorLoopPlan | undefined {
 	if (
-		![...region.calls.values()].some(
-			({ summary }) => summary.reads.at(-1)?.kind === "indexed",
+		![...region.calls.values()].some(({ summary }) =>
+			summary.reads.some((read) => read.kind === "indexed"),
 		)
 	)
 		return undefined;
@@ -92,11 +92,19 @@ export function coreReadAccessorLoopPlan(
 		loopAnalyses.set(fn, analysis);
 	}
 	const { flow, roots } = analysis;
-	const loop = flow.loops.find((loop) => loop.blocks.has(region.block));
+	// The innermost loop carries the prefix; an enclosing loop re-admits it on each entry.
+	const loop = flow.loops
+		.filter((candidate) => candidate.blocks.has(region.block))
+		.reduce<(typeof flow.loops)[number] | undefined>(
+			(innermost, candidate) =>
+				innermost === undefined || candidate.depth > innermost.depth
+					? candidate
+					: innermost,
+			undefined,
+		);
 	if (
 		loop === undefined ||
 		!loop.canonical ||
-		loop.parentHeader !== undefined ||
 		loop.preheader === undefined ||
 		loop.latches.size !== 1 ||
 		loop.blocks.size > 8 ||
@@ -178,7 +186,7 @@ export function coreReadAccessorLoopPlan(
 				);
 				prefixes.add(parent);
 			}
-			if (call.summary.reads.at(-1)?.kind !== "indexed") return undefined;
+			if (!call.summary.reads.some((read) => read.kind === "indexed")) return undefined;
 			retainedPrefixes.add(parent);
 		} else if (opcode === "loadPrivate") return undefined;
 	}

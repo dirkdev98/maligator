@@ -407,6 +407,22 @@ console.log(count);`),
 		}
 	}, 600_000);
 
+	it("re-admits an inner loop prefix and continues after element and field changes", () => {
+		const fixture = "tests/local/read-accessor-nested-loop-prefixes.mjs";
+		const expected = execFileSync(process.execPath, [fixture], {
+			encoding: "utf8",
+		}).trim();
+		const pair = buildBackendPairFromOneProgramImage({
+			fixture,
+			name: "accessor-nested-loop-continuations",
+			config: resolveBuildConfig({ engine: { primordials: "locked" } }),
+		});
+		for (const binary of [pair.compiled, pair.interpreted]) {
+			expect(runToStdout(binary).trim()).toBe(expected);
+			expect(runToStdout(binary, { env: STRESS_ENV }).trim()).toBe(expected);
+		}
+	}, 600_000);
+
 	it("continues the current iteration after a hole, retirement, or method change", () => {
 		const fixture = "tests/local/read-accessor-loop-prefixes.mjs";
 		const expected = execFileSync(process.execPath, [fixture], {

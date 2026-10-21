@@ -400,6 +400,24 @@ describe("class read-accessor lowering", () => {
 		expect(cfg.loops.length).toBeGreaterThan(0);
 	});
 
+	it("carries a prefix through an inner loop into a trailing element field read", () => {
+		const facts = compilerProgramFactsFromConfig(
+			resolveBuildConfig({ engine: { primordials: "locked" } }),
+		);
+		const input = lowerSemanticProgramToCore(
+			semantic(
+				readFileSync("tests/local/read-accessor-nested-loop-prefixes.mjs", "utf8"),
+			),
+			{ facts },
+		);
+		optimizeCore(input, { verification: "per-pass" });
+		const fn = coreFunctionNamed(input.program, "scan")!;
+		expect(
+			coreOperations(fn).some(({ opcode }) => opcode === "readServiceEpoch"),
+			formatCoreFunction(input.program, fn.id),
+		).toBe(true);
+	});
+
 	it("retains ordinary output writes when a mixed alias can replace push", () => {
 		const facts = compilerProgramFactsFromConfig(
 			resolveBuildConfig({ engine: { primordials: "locked" } }),

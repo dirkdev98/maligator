@@ -309,8 +309,8 @@ export function coreReadAccessorRegionCost(
 	const fn = program.function(candidate.caller);
 	const conditional =
 		candidate.readAccessorLoopEligible === true &&
-		[...region.calls.values()].some(
-			({ summary }) => summary.reads.at(-1)?.kind === "indexed",
+		[...region.calls.values()].some(({ summary }) =>
+			summary.reads.some((read) => read.kind === "indexed"),
 		)
 			? readRegion(program, summaries, candidate, hints, false, work, true)
 			: undefined;
@@ -622,8 +622,10 @@ export function expandCoreReadAccessorRegion(
 				let value = receiver;
 				let reads = call.summary.reads;
 				if (reuse !== undefined) {
+					// The retained prefix ends at the indexed read; it and later reads run per iteration.
+					const indexed = reads.findIndex((read) => read.kind === "indexed");
 					let prefix = loop!.paths.get(operation.inputs[1]!)!;
-					for (const read of reads.slice(0, -1)) {
+					for (const read of reads.slice(0, indexed)) {
 						if (read.kind === "indexed") throw new Error("Unexpected indexed prefix");
 						prefix = accessorPrefixKey(
 							prefix,
@@ -634,7 +636,7 @@ export function expandCoreReadAccessorRegion(
 					value = reuse.get(prefix)!;
 					if (value === undefined)
 						throw new Error(`Missing retained accessor array ${prefix}`);
-					reads = reads.slice(-1);
+					reads = reads.slice(indexed);
 				}
 				for (const read of reads) {
 					if (read.kind === "private") {
