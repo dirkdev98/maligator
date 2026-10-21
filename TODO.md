@@ -291,13 +291,19 @@ The independent target boundary and current storage contract are recorded in
 Native output should read and perform like a compiled language rather than a
 translated interpreter. Compiled code now keeps values in C locals and the
 collector scans native stacks, which took the Node-hosted self-compile from 49.5
-to about 46 s and its C from 176 M to 145 M code units. Measured against Node on
-the default closed world, class accessors over private fields still run 80 ms
-against 15, polymorphic subclass methods 37 against 10, recursive method calls
-86 against 29, and `out += "x" + i` loops 20 against 5. The native self-compiler
-spends about 9% of its run in collector pauses, mostly sweeping young cells, and
-18% of its samples in out-of-line property lookup helpers; inlining the inherited
-method hit alone gained only 1%, so these need structural fixes.
+to about 46 s and its C from 176 M to 142 M code units. Measured against Node on
+the default closed world, class accessors over private fields still run 75 ms
+against 14, polymorphic subclass methods 40 against 10, recursive method calls
+86 against 29, and `out += "x" + i` loops 11 against 5.
+
+The native self-compiler takes about 17.3 s and its profile is flat. Sampled by
+program counter, 36% of its time is compiled JavaScript, 12% property lookup
+helpers, 9% array helpers, 8% the collector, 8% collections and another 8%
+allocation and cell zeroing. Several direct attacks on call overhead did not move
+it: guarded direct calls at every hinted method site (12 K more sites, 9% more C),
+an inline hit path for inherited method caches, and four times the cross-call
+inlining budget. Classes with more than 64 fields did matter: they used to drop
+to dictionary mode, and keeping them shaped saved 4.7%.
 
 - [ ] Run the frame-pointer stack walk and entry-serviced polls on Linux. Compiled
       frames keep their stack-trace record on the C stack and calls skip return
@@ -322,7 +328,9 @@ method hit alone gained only 1%, so these need structural fixes.
       cover subclass overrides, which took the polymorphic kernel from 62 to 39 ms,
       and recursive methods outside loops get guarded direct calls. A name-based
       target set that includes every function stored under the name, and every
-      function that escapes into a dynamic-key store, would make these exact.
+      function that escapes into a dynamic-key store, would make these exact. Note
+      that replacing dispatch alone gains nothing: the value is in exact targets
+      that need no method load and inline without a guard.
 - [ ] Prove property names getter-free in the closed world. With source closure,
       locked primordials and no `Proxy`, a name that no class, object literal or
       `defineProperty` gives an accessor, and that the primordial catalog lists as
@@ -340,6 +348,20 @@ method hit alone gained only 1%, so these need structural fixes.
       a 1 M-append loop from 129 to 39 ms (Node: 13). What remains per `out += "x" + i`
       is the tiny-string cache hashing each short `"x" + i` result, the zeroing of
       every reused cell that conservative roots require, and two cell allocations.
+- [ ] Keep inline cache records off the hit path's extra cache lines. Inherited
+      method loads take about 4% of the self-compiler's samples, mostly on the
+      first loads from the cache record, and an inline hit path changed nothing.
+      Records are 72 bytes, so many hits touch two lines. A 64-byte record with
+      its hot fields first, or shared per-layout cells with compile-time slots,
+      should cut that.
+- [ ] Reclaim dead young cells without visiting them. Minor sweeps take 666 of
+      the 1,596 ms collector time in the self-compiler and inspect 90 M young cells,
+      one header miss per dead cell. Side mark bitmaps plus a bitmap of cells that
+      own external storage would hand dead runs back to the allocator untouched.
+- [ ] Pace concurrent marking against a faster mutator. Peak RSS of the native
+      self-compiler is bimodal at about 1.4 or 2.0 GB. The high runs coincide with
+      a synchronous backstop, fewer major cycles and about three times the
+      over-tenured bytes.
 - [ ] Report renderer bailouts. A `null` from the C renderer silently leaves a
       function to the bytecode interpreter. The self-compile has none today, but an
       experiment with int32 loop counters turned four benchmark phases into
