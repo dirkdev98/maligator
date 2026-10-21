@@ -1327,4 +1327,7 @@ export type CompilerIntrinsic =
 	// result. Not a user-visible global.
 	| "__attachRequireTable"
 	// Builds a module's import.meta.resolve from its URL, filename and resolutions.
-	| "__createImportMetaResolve";
+	| "__createImportMetaResolve"
+	// The realm's %Function.prototype.call%, which guarded `f.call(...)` rewrites compare
+	// a loaded `call` against. Not a user-visible global.
+	| "__functionPrototypeCall";

@@ -1156,10 +1156,12 @@ function analyzeFunctionTargets(
 				concealParameters(fn.kernel.operandAt(start + operand));
 		}
 		const key = instructionCellId(fn, instruction, trackedCells, identities);
+		// Reruns only add writes, so an empty cell must not publish its first value: the
+		// store reads its cell and reruns if the cell later loses its finite targets.
 		const privateStore =
 			(opcode === "storeGlobal" || opcode === "storeCaptured") &&
 			key !== undefined &&
-			cells.get(key)?.anyScript === false;
+			cells.get(key)?.anyScript !== true;
 		if (!observesIdentity && !privateStore) {
 			const start = fn.kernel.instructionOperandStart(instruction);
 			for (
@@ -1321,7 +1323,21 @@ export const CORE_PROGRAM_FLOW_CALL_TARGET_SEMANTICS: CoreProgramFlowCallTargetS
 		for (const { owner, index } of coreClosedCapturedValueSlots(program, context)) {
 			cells.add(capturedCellId(identities, owner, index));
 		}
+		for (const index of moduleVarGlobalSlots(context))
+			cells.add(globalCellId(identities, index));
 		return cells;
+	},
+	initialCells(
+		_program: CoreProgram,
+		context: CoreCompilationContext | undefined,
+		identities: CoreGraphIdentityTable,
+	) {
+		return new Map(
+			moduleVarGlobalSlots(context).map(
+				(index) =>
+					[globalCellId(identities, index), CORE_CALLEE_TARGETS_NON_CALLABLE] as const,
+			),
+		);
 	},
 	analyzeLocal: analyzeFunctionTargets,
 	callSiteEqual,
@@ -1332,6 +1348,14 @@ export const CORE_PROGRAM_FLOW_CALL_TARGET_SEMANTICS: CoreProgramFlowCallTargetS
 	opaque: CORE_CALLEE_TARGETS_OPAQUE,
 	open: CORE_CALLEE_TARGETS_OPEN,
 });
+
+function moduleVarGlobalSlots(
+	context: CoreCompilationContext | undefined,
+): ReadonlyArray<number> {
+	return context?.facts.closure.sourceClosure.kind === "known"
+		? (context.data.moduleVarGlobalSlots ?? [])
+		: [];
+}
 
 export function analyzeCoreCallGraph(
 	program: CoreProgram,

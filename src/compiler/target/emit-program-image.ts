@@ -3297,6 +3297,8 @@ export function emitIntrinsic(
 			return "MAL_INTRINSIC_ATTACH_REQUIRE_TABLE";
 		case "__createImportMetaResolve":
 			return "MAL_INTRINSIC_CREATE_IMPORT_META_RESOLVE";
+		case "__functionPrototypeCall":
+			return "MAL_INTRINSIC_FUNCTION_PROTOTYPE_CALL";
 		case "__newDisposeCapability":
 			return "MAL_INTRINSIC_NEW_DISPOSE_CAPABILITY";
 		case "__addDisposableResource":

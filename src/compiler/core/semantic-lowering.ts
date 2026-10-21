@@ -1027,6 +1027,7 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 		globalCount: program.nextGlobalIndex,
 	});
 	const candidates = coreSingleAssignmentCellCandidates(program);
+	const initializedModuleGlobalSlots = coreInitializedModuleGlobalSlots(program);
 	return {
 		program: program.core,
 		context: {
@@ -1071,7 +1072,11 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 				),
 				singleAssignmentGlobalSlots: candidates.singleAssignmentGlobalSlots,
 				singleAssignmentCapturedSlots: candidates.singleAssignmentCapturedSlots,
-				initializedModuleGlobalSlots: coreInitializedModuleGlobalSlots(program),
+				initializedModuleGlobalSlots,
+				moduleVarGlobalSlots: coreModuleVarGlobalSlots(
+					program,
+					initializedModuleGlobalSlots,
+				),
 				initializedCapturedReads: coreInitializedCapturedReads(program),
 				retainedHostInstallers: [
 					program.hostProcess,
@@ -1121,6 +1126,37 @@ function coreInitializedModuleGlobalSlots(program: CoreFrontendContext): Array<n
 		)) {
 			const location = program.bindingToStorage.get(binding);
 			if (location?.type === "global") slots.add(location.index);
+		}
+	}
+	return [...slots].sort((left, right) => left - right);
+}
+
+/**
+ * Top-level `var` bindings of ES modules outside the initialization prefix. Only
+ * their module stores them, but anything may read one as `undefined` first.
+ */
+function coreModuleVarGlobalSlots(
+	program: CoreFrontendContext,
+	initializedSlots: ReadonlyArray<number>,
+): Array<number> {
+	if (program.evalDirect) return [];
+	const initialized = new Set(initializedSlots);
+	const slots = new Set<number>();
+	for (const file of program.semantic.files) {
+		if (file.type !== "module" || file.commonjs) continue;
+		for (const statement of file.ast.body) {
+			const declaration =
+				statement.type === "ExportNamedDeclaration" ? statement.declaration : statement;
+			if (declaration?.type !== "VariableDeclaration" || declaration.kind !== "var")
+				continue;
+			for (const declarator of declaration.declarations) {
+				if (declarator.id.type !== "Identifier") continue;
+				const binding = file.nodeToBinding.get(declarator.id);
+				const location =
+					binding === undefined ? undefined : program.bindingToStorage.get(binding);
+				if (location?.type === "global" && !initialized.has(location.index))
+					slots.add(location.index);
+			}
 		}
 	}
 	return [...slots].sort((left, right) => left - right);

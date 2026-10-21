@@ -85,6 +85,8 @@ export interface CoreProgramData {
 	readonly singleAssignmentCapturedSlots: ReadonlyArray<CoreCapturedSlotRef>;
 	/** Module bindings that no function except their writers can read uninitialized. */
 	readonly initializedModuleGlobalSlots?: ReadonlyArray<number>;
+	/** Other top-level module `var` slots: only Core stores write them, after `undefined`. */
+	readonly moduleVarGlobalSlots?: ReadonlyArray<number>;
 	/** Captured cells that a function can only read after their initialization. */
 	readonly initializedCapturedReads?: ReadonlyArray<CoreInitializedCapturedRead>;
 	readonly retainedHostInstallers: ReadonlyArray<string>;

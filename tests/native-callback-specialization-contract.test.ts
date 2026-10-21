@@ -61,9 +61,13 @@ function find(values, key, select) {
 function id(value) {
 	return value.id;
 }
+function double(value) {
+	return value.id * 2;
+}
 const values = (globalThis.values ?? [1, 2, 3]).map((id) => ({ id }));
 let found = 0;
-for (let round = 0; round < 1000; round++) found += find(values, round % 4, id);
+for (let round = 0; round < 1000; round++)
+	found += find(values, round % 4, id) + find(values, round % 8, double);
 console.log(found, some(values, (value) => value.id > 2));
 `;
 

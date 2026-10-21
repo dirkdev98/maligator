@@ -13,6 +13,12 @@ import {
 import { cloneCoreFunction, coreFunctionIsCloneable } from "./core-function-clone.ts";
 import type { CoreCrossCallFunctionOptimizationResult } from "./core-function-optimization-session.ts";
 import {
+	coreFunctionPrototypeCall,
+	coreGuardableCall,
+	expandCoreFunctionIndexCall,
+	expandCoreFunctionPrototypeCall,
+} from "./core-function-prototype-call.ts";
+import {
 	coreInstanceMethodHint,
 	coreInstanceMethodHints,
 	coreInstanceMethodTargets,
@@ -2214,6 +2220,460 @@ function specializeCoreCallbackArguments(
 	return [...changed];
 }
 
+const CLOSURE_FACTORY_OPCODES: ReadonlySet<string> = new Set([
+	"loadCaptured",
+	"storeCaptured",
+	"createFunction",
+]);
+
+interface CaptureReferenceIndex {
+	/** Functions with an instruction naming each function index, other than creating it. */
+	readonly referrers: ReadonlyMap<number, ReadonlySet<CoreFunctionId>>;
+	readonly creators: ReadonlyMap<number, ReadonlySet<CoreFunctionId>>;
+}
+
+function captureReferenceIndex(program: CoreProgram): CaptureReferenceIndex {
+	const referrers = new Map<number, Set<CoreFunctionId>>();
+	const creators = new Map<number, Set<CoreFunctionId>>();
+	for (const functionId of program.functionIds()) {
+		const fn = program.function(functionId);
+		for (const instruction of fn.instructionIds()) {
+			if (fn.instructionKind(instruction) !== "operation") continue;
+			const target = fn.instructionAttributes(instruction).functionIndex;
+			if (typeof target !== "number") continue;
+			const index =
+				fn.instructionOpcodeName(instruction) === "createFunction" ? creators : referrers;
+			const functions = index.get(target) ?? new Set<CoreFunctionId>();
+			functions.add(functionId);
+			index.set(target, functions);
+		}
+	}
+	return { referrers, creators };
+}
+
+/**
+ * A small function that only creates closures over its own scope, which nothing
+ * else reads. Cloning it with those closures gives each clone cells of its own.
+ */
+function closureFactoryMembers(
+	program: CoreProgram,
+	factory: CoreFunctionStore,
+	references: () => CaptureReferenceIndex,
+): ReadonlyArray<CoreFunctionId> | undefined {
+	if (
+		factory.metadata.capturedCount === 0 ||
+		factory.metadata.isClassConstructor ||
+		factory.metadata.isDerivedConstructor ||
+		factory.metadata.mappedArguments ||
+		factory.liveStorageCounts().instructions > CALLBACK_SPECIALIZATION_MAX_INSTRUCTIONS ||
+		!coreFunctionIsCloneable(factory)
+	)
+		return undefined;
+	const members = new Set<CoreFunctionId>();
+	const ownsEveryAccess = (fn: CoreFunctionStore, creates: boolean): boolean => {
+		for (const instruction of fn.instructionIds()) {
+			if (fn.instructionKind(instruction) !== "operation") continue;
+			const opcode = fn.instructionOpcodeName(instruction);
+			if (CALLBACK_SPECIALIZATION_EXCLUDED_OPCODES.has(opcode)) return false;
+			if (CAPTURE_ENVIRONMENT_REBINDS.has(opcode) || opcode === "createPrivateNames")
+				return false;
+			if (!CLOSURE_FACTORY_OPCODES.has(opcode)) continue;
+			const target = fn.instructionAttributes(instruction).functionIndex;
+			if (opcode !== "createFunction") {
+				if (target !== factory.id) return false;
+			} else if (!creates || typeof target !== "number") {
+				return false;
+			} else {
+				members.add(target as CoreFunctionId);
+			}
+		}
+		return true;
+	};
+	if (!ownsEveryAccess(factory, true) || members.size === 0) return undefined;
+	for (const member of members) {
+		const fn = program.function(member);
+		if (
+			member === factory.id ||
+			fn.metadata.capturedCount !== 0 ||
+			fn.liveStorageCounts().instructions > CALLBACK_SPECIALIZATION_MAX_INSTRUCTIONS ||
+			!coreFunctionIsCloneable(fn) ||
+			!ownsEveryAccess(fn, false)
+		)
+			return undefined;
+	}
+	const { referrers, creators } = references();
+	for (const referrer of referrers.get(factory.id) ?? [])
+		if (referrer !== factory.id && !members.has(referrer)) return undefined;
+	for (const member of members)
+		for (const creator of creators.get(member) ?? [])
+			if (creator !== factory.id) return undefined;
+	return [...members].sort((left, right) => left - right);
+}
+
+/** Captured slots of `factory` that a member calls, or reads `call` or `apply` from. */
+function closureFactoryInvokedSlots(
+	program: CoreProgram,
+	factory: CoreFunctionId,
+	members: ReadonlyArray<CoreFunctionId>,
+): ReadonlySet<number> {
+	const slots = new Set<number>();
+	for (const member of members) {
+		const fn = program.function(member);
+		for (const instruction of fn.instructionIds()) {
+			if (
+				fn.instructionKind(instruction) !== "operation" ||
+				fn.instructionOpcodeName(instruction) !== "loadCaptured"
+			)
+				continue;
+			const attributes = fn.instructionAttributes(instruction);
+			if (attributes.functionIndex !== factory || typeof attributes.index !== "number")
+				continue;
+			const value = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
+			for (
+				let use = fn.kernel.valueFirstUse(value);
+				use >= 0;
+				use = fn.kernel.useNext(use)
+			) {
+				if (fn.kernel.useLive(use) === 0) continue;
+				const consumer = coreInstructionId(fn.kernel.useInstruction(use));
+				if (fn.instructionKind(consumer) !== "operation") continue;
+				const opcode = fn.instructionOpcodeName(consumer);
+				const first =
+					fn.kernel.operandAt(fn.kernel.instructionOperandStart(consumer)) === value;
+				const name =
+					opcode === "loadPropertyStatic"
+						? String.fromCharCode(
+								...(program.stringConstants[
+									fn.instructionAttributes(consumer).stringIndex as number
+								] ?? []),
+							)
+						: undefined;
+				if (first && (opcode === "call" || name === "call" || name === "apply"))
+					slots.add(attributes.index);
+			}
+		}
+	}
+	return slots;
+}
+
+/** Parameters `factory` stores into the captured slots in `slots`. */
+function closureFactoryParameterSlots(
+	factory: CoreFunctionStore,
+	slots: ReadonlySet<number>,
+): ReadonlySet<number> {
+	const parameters = new Set<number>();
+	for (const instruction of factory.instructionIds()) {
+		if (
+			factory.instructionKind(instruction) !== "operation" ||
+			factory.instructionOpcodeName(instruction) !== "storeCaptured" ||
+			!slots.has(factory.instructionAttributes(instruction).index as number)
+		)
+			continue;
+		const value = factory.kernel.operandAt(
+			factory.kernel.instructionOperandStart(instruction),
+		);
+		for (let parameter = 0; parameter < factory.parameterCount; parameter++)
+			if (factory.kernel.functionParameter(parameter) === value)
+				parameters.add(parameter);
+	}
+	return parameters;
+}
+
+function retargetCapturedOwner(
+	program: CoreProgram,
+	functionId: CoreFunctionId,
+	owner: CoreFunctionId,
+	clone: CoreFunctionId,
+	members: ReadonlyMap<CoreFunctionId, CoreFunctionId>,
+): void {
+	const fn = program.function(functionId);
+	const editor = CoreEditor.open(program, functionId);
+	for (const instruction of [...fn.instructionIds()]) {
+		if (fn.instructionKind(instruction) !== "operation") continue;
+		const opcode = fn.instructionOpcodeName(instruction);
+		if (!CLOSURE_FACTORY_OPCODES.has(opcode)) continue;
+		const attributes = fn.instructionAttributes(instruction);
+		const target = attributes.functionIndex as CoreFunctionId;
+		const next =
+			opcode === "createFunction"
+				? members.get(target)
+				: target === owner
+					? clone
+					: undefined;
+		if (next === undefined) continue;
+		editor.replaceInstruction(
+			instruction,
+			opcode,
+			materializeInstructionOperands(fn, instruction),
+			{
+				attributes: { ...attributes, functionIndex: next },
+				sourcePosition: fn.instructionSourcePosition(instruction),
+				effectRefinement: fn.instructionEffectRefinement(instruction),
+			},
+		);
+	}
+	editor.commit();
+}
+
+/**
+ * Clones a closure factory, with the closures it creates, for callers that pass it
+ * exact callbacks its closures invoke. Each clone's captured cells then hold only
+ * its callers' callbacks, which its closures can call directly or inline.
+ */
+function specializeCoreClosureFactories(
+	program: CoreProgram,
+	summaries: CoreProgramSummaries,
+	service: CoreTransformCandidateService,
+	limits: CoreTransformBudgetLimits,
+	liveFunctions: ReadonlySet<CoreFunctionId>,
+	variantsPerTarget: Map<CoreFunctionId, number>,
+	clones: Set<CoreFunctionId>,
+): ReadonlyArray<CoreFunctionId> {
+	if (!summaries.targets.sourceClosed) return [];
+	let index: CaptureReferenceIndex | undefined;
+	const references = () => (index ??= captureReferenceIndex(program));
+	const factories = new Map<
+		CoreFunctionId,
+		| {
+				readonly members: ReadonlyArray<CoreFunctionId>;
+				readonly parameters: ReadonlySet<number>;
+		  }
+		| undefined
+	>();
+	const groups = new Map<
+		string,
+		{
+			readonly target: CoreFunctionId;
+			readonly members: ReadonlyArray<CoreFunctionId>;
+			readonly closures: ReadonlyArray<CoreFunctionId>;
+			readonly sites: Array<{
+				readonly caller: CoreFunctionId;
+				readonly instruction: CoreInstructionId;
+				readonly callee: CoreValueId;
+				readonly guarded: boolean;
+			}>;
+		}
+	>();
+	for (const caller of liveFunctions) {
+		const fn = program.function(caller);
+		for (const site of summaries.targets.outgoing(caller)) {
+			// A callee that may also be a non-function is guarded by its function index.
+			const target =
+				site.targets.functions.length === 1 &&
+				!site.targets.opaque &&
+				!site.targets.anyScript
+					? site.targets.functions[0]!
+					: undefined;
+			// A clone's cells already hold only its callers' callbacks.
+			if (
+				target === undefined ||
+				target === caller ||
+				clones.has(target) ||
+				site.arguments === undefined ||
+				!fn.isInstructionLive(site.instruction) ||
+				!coreGuardableCall(fn, site.instruction)
+			)
+				continue;
+			if (!factories.has(target)) {
+				const members = closureFactoryMembers(
+					program,
+					program.function(target),
+					references,
+				);
+				factories.set(
+					target,
+					members === undefined
+						? undefined
+						: {
+								members,
+								parameters: closureFactoryParameterSlots(
+									program.function(target),
+									closureFactoryInvokedSlots(program, target, members),
+								),
+							},
+				);
+			}
+			const factory = factories.get(target);
+			if (factory === undefined) continue;
+			const held: Array<string> = [];
+			const closures: Array<CoreFunctionId> = [];
+			for (const parameter of [...factory.parameters].sort(
+				(left, right) => left - right,
+			)) {
+				const argument = site.arguments[parameter];
+				const closure =
+					argument === undefined
+						? undefined
+						: coreCalleeTargetsSingleFunction(
+								summaries.targets.targets(caller, argument),
+							);
+				if (closure === undefined) continue;
+				held.push(`${parameter}:${closure}`);
+				closures.push(closure);
+			}
+			if (held.length === 0) continue;
+			const signature = `${target}|${held.join(",")}`;
+			const group = groups.get(signature) ?? {
+				target,
+				members: factory.members,
+				closures,
+				sites: [],
+			};
+			group.sites.push({
+				caller,
+				instruction: site.instruction,
+				callee: site.callee,
+				guarded: site.open,
+			});
+			groups.set(signature, group);
+		}
+	}
+	const candidateKey = (candidate: {
+		readonly site: CoreInstructionId;
+		readonly targets: ReadonlyArray<CoreFunctionId>;
+	}) => `${candidate.site}|${candidate.targets.join(",")}`;
+	const bySite = new Map<string, string>();
+	for (const [signature, group] of groups) {
+		const cost = [group.target, ...group.members].reduce(
+			(total, functionId) =>
+				total + program.function(functionId).liveStorageCounts().instructions,
+			0,
+		);
+		const representative = group.sites[0]!.instruction;
+		const offered = service.offer({
+			kind: "callback-specialization",
+			caller: group.target,
+			site: representative,
+			revision: summaries.version(group.target),
+			priorityClass: 2,
+			priorityScore: inlinePriorityScore(
+				group.sites.length * (1 + group.closures.length),
+				cost,
+				0,
+			),
+			targets: [group.target, ...group.closures],
+			generatedCodeCost: cost,
+			compilerWorkCost: cost + program.function(group.target).valueCapacity,
+			expansive: false,
+		});
+		if (offered)
+			bySite.set(
+				candidateKey({
+					site: representative,
+					targets: [group.target, ...group.closures],
+				}),
+				signature,
+			);
+	}
+	const changed = new Set<CoreFunctionId>();
+	for (
+		let candidate = service.next();
+		candidate !== undefined;
+		candidate = service.next()
+	) {
+		const signature = bySite.get(candidateKey(candidate));
+		const group = signature === undefined ? undefined : groups.get(signature);
+		if (group === undefined) throw new Error("Unexpected closure factory specialization");
+		const decline = service.admit(candidate, limits);
+		if (decline !== undefined) {
+			service.recordDeclined(decline);
+			continue;
+		}
+		if ((variantsPerTarget.get(group.target) ?? 0) >= CALLBACK_SPECIALIZATION_VARIANTS) {
+			service.recordDeclined("expansion-limit");
+			continue;
+		}
+		const sites = group.sites.filter(
+			({ caller, instruction, callee }) =>
+				program.function(caller).isInstructionLive(instruction) &&
+				program
+					.function(caller)
+					.kernel.operandAt(
+						program.function(caller).kernel.instructionOperandStart(instruction),
+					) === callee,
+		);
+		if (sites.length === 0) {
+			service.recordDeclined("unsupported-graph");
+			continue;
+		}
+		const variant = cloneCoreFunction(program, program.function(group.target));
+		const members = new Map(
+			group.members.map(
+				(member) =>
+					[member, cloneCoreFunction(program, program.function(member))] as const,
+			),
+		);
+		for (const functionId of [variant, ...members.values()]) {
+			retargetCapturedOwner(program, functionId, group.target, variant, members);
+			clones.add(functionId);
+			changed.add(functionId);
+		}
+		variantsPerTarget.set(group.target, (variantsPerTarget.get(group.target) ?? 0) + 1);
+		const editors = new Map<CoreFunctionId, CoreEditor>();
+		for (const { caller, instruction, guarded } of sites) {
+			const fn = program.function(caller);
+			const editor = editors.get(caller) ?? CoreEditor.open(program, caller);
+			editors.set(caller, editor);
+			changed.add(caller);
+			if (guarded) {
+				expandCoreFunctionIndexCall(fn, editor, instruction, group.target, variant);
+				continue;
+			}
+			const operands = materializeInstructionOperands(fn, instruction);
+			operands[0] = editor.insertInstruction(
+				fn.instructionBlock(instruction),
+				instruction,
+				"createFunction",
+				[],
+				{
+					attributes: { functionIndex: variant },
+					sourcePosition: fn.instructionSourcePosition(instruction),
+				},
+			).outputs[0]!;
+			editor.replaceOperands(instruction, operands);
+			changed.add(caller);
+		}
+		for (const editor of editors.values()) editor.commit();
+		service.recordApplied(candidate);
+	}
+	return [...changed];
+}
+
+/** Calls `f` directly from `f.call(...)` sites whose `f` holds known script functions. */
+function devirtualizeCoreFunctionPrototypeCalls(
+	program: CoreProgram,
+	summaries: CoreProgramSummaries,
+	liveFunctions: ReadonlySet<CoreFunctionId>,
+): { readonly changed: ReadonlyArray<CoreFunctionId>; readonly instructions: number } {
+	const changed: Array<CoreFunctionId> = [];
+	let instructions = 0;
+	for (const caller of liveFunctions) {
+		const fn = program.function(caller);
+		if (fn.isAsync || fn.isGenerator) continue;
+		let editor: CoreEditor | undefined;
+		for (const site of [...fn.instructionIds()]) {
+			if (!fn.isInstructionLive(site)) continue;
+			const call = coreFunctionPrototypeCall(program, fn, site);
+			if (
+				call === undefined ||
+				summaries.targets.targets(caller, call.target).functions.length === 0
+			)
+				continue;
+			editor ??= CoreEditor.open(program, caller);
+			instructions += expandCoreFunctionPrototypeCall(
+				fn,
+				editor,
+				site,
+				call,
+			).instructionsIntroduced;
+		}
+		if (editor === undefined) continue;
+		editor.commit();
+		changed.push(caller);
+	}
+	return { changed, instructions };
+}
+
 export function discoverCoreCrossCallCandidates(
 	program: CoreProgram,
 	analyses: CoreAnalysisManager,
@@ -3519,9 +3979,21 @@ export function runCoreCrossCallTransforms(
 			!(wave > 0 && exhausted === "generated-code-cost" && clones.size > 0)
 		)
 			break;
+		const cloned = new Set<CoreFunctionId>();
+		const devirtualized = devirtualizeCoreFunctionPrototypeCalls(
+			program,
+			summaries,
+			new Set(flow.reachability.liveFunctions),
+		);
+		if (devirtualized.changed.length !== 0) {
+			for (const functionId of devirtualized.changed) cloned.add(functionId);
+			instructionsIntroduced += devirtualized.instructions;
+			flow = analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, { scope: "program" });
+			summaries = flow.summaries;
+			programFlowResolves++;
+		}
 		// Clones of forwarding helpers expose their callees' sites to the next round. Each
 		// round reconsiders every candidate, since one declined earlier may now fit.
-		const cloned = new Set<CoreFunctionId>();
 		for (let round = 0; round < CALLBACK_SPECIALIZATION_ROUNDS; round++) {
 			const share = (round + 1) / CALLBACK_SPECIALIZATION_ROUNDS;
 			const roundLimits: CoreTransformBudgetLimits = Object.freeze({
@@ -3536,15 +4008,27 @@ export function runCoreCrossCallTransforms(
 				),
 			});
 			const roundService = new CoreTransformCandidateService(roundLimits);
-			const changed = specializeCoreCallbackArguments(
-				program,
-				summaries,
-				roundService,
-				roundLimits,
-				new Set(flow.reachability.liveFunctions),
-				cloneVariants,
-				clones,
-			);
+			const live = new Set(flow.reachability.liveFunctions);
+			const changed = [
+				...specializeCoreCallbackArguments(
+					program,
+					summaries,
+					roundService,
+					roundLimits,
+					live,
+					cloneVariants,
+					clones,
+				),
+				...specializeCoreClosureFactories(
+					program,
+					summaries,
+					roundService,
+					roundLimits,
+					live,
+					cloneVariants,
+					clones,
+				),
+			];
 			const consumed = roundService.statistics();
 			cloneGeneratedCode += consumed.generatedCodeConsumed;
 			cloneCompilerWork += consumed.compilerWorkConsumed;

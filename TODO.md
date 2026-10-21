@@ -507,12 +507,13 @@ iterator cursor is not, by itself, permission to delete its language object.
       million calls. Passing the creator's chain instead made every call of such a
       closure resolve its owners by lookup and cost 1% of the TypeScript check;
       closures with an identical layout could share one capture vector instead.
-- [ ] Inline `f.call(thisArg, ...)` when `f` is a known script function. A cached
-      call through %Function.prototype.call% now forwards to its receiver, but Core
-      still cannot inline or directly call the target, because nothing proves the
-      function has no own `call` property, and the function-call-chain recipe never
-      reaches prettier's method shim: region discovery runs out of program budget
-      after 22,000 of 39,000 opportunities.
+- [ ] Finish prettier's method shims. Each `createMethodShim` call now gets its own
+      clone whose `getImplementation.call(object)` inlines behind a check of the
+      loaded `call`, but `implementation.apply(object, rest)` still joins the
+      inlined callback's known result with `object[name]`, so it stays a
+      rest-argument apply into `stringOrArrayAt` (the clone is still about 3% of
+      the prettier run). Threading the join, or splitting the apply on the
+      callback's result, would let the known path call, and inline, it directly.
 - [ ] Make prettier's AstPath getters and TypeScript enum reads cheaper. Five
       prettier rounds call AstPath getters 7.4 million times through the static
       miss path, and read about 16 million `SyntaxKind` members from dictionary

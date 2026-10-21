@@ -272,6 +272,12 @@ export interface CoreProgramFlowCallTargetSemantics<
 		context: CoreCompilationContext | undefined,
 		identities: Identities,
 	): ReadonlySet<number>;
+	/** Values closed cells hold before any Core store, where that is not bottom. */
+	initialCells?(
+		program: CoreProgram,
+		context: CoreCompilationContext | undefined,
+		identities: Identities,
+	): ReadonlyMap<number, Targets>;
 	analyzeLocal(
 		program: CoreProgram,
 		fn: CoreFunctionStore,
@@ -1481,6 +1487,9 @@ export class CoreProgramFlowEngine {
 		if (sourceClosed && context?.facts.closure.sourceClosure.kind === "known")
 			for (const access of cellAccesses.values())
 				for (const key of access.closes ?? []) closedCells.add(key);
+		const initialCells =
+			semantics.initialCells?.(this.#program, context, identities) ??
+			new Map<number, Targets>();
 		const trackedCells = new Set(closedCells);
 		for (const access of cellAccesses.values()) {
 			for (const key of access.reads) trackedCells.add(key);
@@ -1556,7 +1565,9 @@ export class CoreProgramFlowEngine {
 		let cellAggregateUpdates = 0;
 		const recomputeCell = (key: number): boolean => {
 			cellAggregateUpdates++;
-			let next = closedCells.has(key) ? semantics.bottom : semantics.opaque;
+			let next = closedCells.has(key)
+				? (initialCells.get(key) ?? semantics.bottom)
+				: semantics.opaque;
 			next = semantics.join(next, joinContributions(cellWriters.get(key)));
 			const prior = cells.get(key) ?? semantics.bottom;
 			if (!trackedCells.has(key) || semantics.isBottom(next)) cells.delete(key);
