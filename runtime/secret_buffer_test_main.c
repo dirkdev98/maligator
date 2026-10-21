@@ -193,6 +193,8 @@ static bool a_transferred_store_stays_sensitive(MalVm *vm) {
 }
 
 int main(void) {
+    // Releases are observed after collections, so stack residue must not root dropped stores.
+    mal_gc_test_precise_stack_roots = true;
     MalVm vm;
     mal_vm_init(&vm, &mal_runtime_image);
     mal_array_buffer_object_set_release_observer(secret_release_observer);

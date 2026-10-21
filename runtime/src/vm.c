@@ -3929,7 +3929,7 @@ __attribute__((cold, noinline)) bool mal_vm_enter_compiled_limit(MalVm *vm) {
         return false;
     }
     mal_vm_sync_entry_stack_limit(vm);
-    if (!mal_gc_poll_requested()) return true;
+    if (!mal_gc_poll_requested() || !mal_gc_entry_poll_due()) return true;
     mal_gc_safepoint(vm);
     if (mal_gc_poll_termination(vm)) return false;
     // A gated or stressed collection leaves the request pending for the next entry.

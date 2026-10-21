@@ -69,6 +69,12 @@ void mal_gc_request_termination(MalGcTerminationTarget *termination, MalGcPollTa
 static inline bool mal_gc_terminating(void) {
     return mal_gc_termination;
 }
+/* Compiled entries service polls that call returns no longer take. A stressed collector
+ * keeps every request pending, so entries collect only on every stride's entry; at each
+ * one a deep recursion would otherwise rescan its whole stack for every frame. */
+#define MAL_GC_STRESS_ENTRY_STRIDE 64u
+bool mal_gc_entry_poll_due(void);
+
 /* At a JS poll site after mal_gc_safepoint: when terminating, leave a throw completion
  * and return true so the caller routes to its throw path. Catch entries refuse it. */
 bool mal_gc_poll_termination(MalVm *vm);

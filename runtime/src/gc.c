@@ -382,6 +382,7 @@ struct MalGcState {
     // Stress mode (MAL_GC_STRESS=N): collect every N gated safepoints.
     i32 stress_interval;
     i32 stress_counter;
+    u32 stress_entry_counter;
     bool verify_enabled;
     bool stats_enabled;
     u32 major_every; // MAL_GC_MAJOR_EVERY
@@ -520,6 +521,11 @@ static void mal_gc_request_stats_snapshot(int signal_number) {
 
 MalHeap *mal_gc_current_heap(void) {
     return &g_gc_vm->heap;
+}
+
+bool mal_gc_entry_poll_due(void) {
+    if (g_gc == nullptr || g_gc->stress_interval == 0) return true;
+    return (++g_gc->stress_entry_counter % MAL_GC_STRESS_ENTRY_STRIDE) == 0;
 }
 
 i32 mal_gc_swap_stress_interval(i32 interval) {
