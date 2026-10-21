@@ -1464,7 +1464,7 @@ function offerFunctionCandidates(
 	privateNames: CoreModulePrivateNameIndex,
 	readAccessors: boolean,
 	accessorWork?: CoreReadAccessorWork,
-	clone = false,
+	clones: ReadonlySet<CoreFunctionId> = new Set(),
 ): void {
 	const fn = program.function(functionId);
 	const outgoing = summaries.targets.outgoing(functionId);
@@ -1810,8 +1810,12 @@ function offerFunctionCandidates(
 			regionCost?.sites.some((instruction) => offeredReadAccessorSites.has(instruction))
 		)
 			continue;
+		// A forwarding clone is the other half of its caller's specialization.
 		const cloneSpecialization =
-			clone && !open && !readAccessor && synchronousCallback === undefined;
+			(clones.has(functionId) || clones.has(target)) &&
+			!open &&
+			!readAccessor &&
+			synchronousCallback === undefined;
 		const offered = service.offer(
 			Object.freeze({
 				kind:
@@ -2221,7 +2225,7 @@ export function discoverCoreCrossCallCandidates(
 			privateNames,
 			readAccessors,
 			accessorWork,
-			clones.has(functionId),
+			clones,
 		);
 	}
 }
