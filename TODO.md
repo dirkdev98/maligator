@@ -697,6 +697,14 @@ contracts or investigates costs still visible after the string follow-ups.
 
 ## Focused performance work
 
+- [ ] Cut the TypeScript checker's small-helper overhead. getObjectFlags (about
+      3% of the check) runs as a frameless fast entry, but each call still pays the
+      compiled call; isSimpleTypeRelatedTo (4%) is too large for one and pays a
+      full frame. Letting fast entries restart the full entry at calls off their
+      first straight-line path made the check 3% slower and prettier 2.4% more
+      instructions, since many activations reach those calls. isConstTypeVariable's
+      `&&`/`||` chains over `flags & X` keep mal_value_is_truthy_primitive at about
+      1.6%; answering int32 truthiness inline was again no better.
 - [ ] Close the closed-compiled JavaScript benchmark's per-call gap. Compiled
       entries now push their own frame row and the cached dispatch tail-calls an
       ordinary compiled callee, yet an unknown-target call still costs 6.4 ns
