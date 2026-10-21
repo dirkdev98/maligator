@@ -49,6 +49,7 @@ import type { CompilerSiteFacts } from "../shared/compiler-facts.ts";
 import { knownFact } from "../shared/compiler-facts.ts";
 import { COMPILER_TWO_ADDRESS_OPERANDS } from "../shared/compiler-instruction.ts";
 import type {
+	CompilerClassLayoutSite,
 	CompilerImmediateValue,
 	CompilerInstruction,
 	CompilerNumericSortCallback,
@@ -80,6 +81,7 @@ import {
 	executionLoopBackedgeInstructions,
 	executionSafepointRoots,
 } from "./execution-liveness.ts";
+import { planCoreClassLayouts } from "./lower-class-layouts.ts";
 import { planCoreDirectClosures } from "./plan-direct-closures.ts";
 import type { CoreDirectClosurePlan } from "./plan-direct-closures.ts";
 import { verifyCoreTargetBlockLayout } from "./verify-core-target-layout.ts";
@@ -1538,6 +1540,7 @@ function lowerFunctionToTarget(
 	createParallelCopyLowerer: LowerCoreToCoreTargetOptions["createParallelCopyLowerer"],
 	preserveResumableRepresentations: boolean,
 	directClosures: CoreDirectClosurePlan | undefined,
+	classLayoutSites: ReadonlyMap<CoreInstructionId, CompilerClassLayoutSite> | undefined,
 ): CoreTargetFunction {
 	const privatePackedRestElements = new Map(
 		privatePackedRestArrayElements.map((plan) => [plan.instruction, plan]),
@@ -1997,6 +2000,15 @@ function lowerFunctionToTarget(
 			const numericCallback = numericSortCallbacks.get(instruction);
 			if (numericCallback !== undefined && rebuilt.type === "call")
 				rebuilt.numericSortCallback = numericCallback;
+			const classLayout = classLayoutSites?.get(instruction);
+			if (
+				classLayout !== undefined &&
+				(rebuilt.type === "loadPropertyStatic" ||
+					rebuilt.type === "storePropertyStatic" ||
+					rebuilt.type === "loadPrivate" ||
+					rebuilt.type === "storePrivate")
+			)
+				rebuilt.classLayout = classLayout;
 			if (directClosures?.creations.has(instruction) && rebuilt.type === "createFunction")
 				rebuilt.directClosure = true;
 			const materialization = directClosures?.materializations.get(instruction);
@@ -2913,6 +2925,7 @@ export function lowerCoreCompilationToTargetProgram(
 					exactCoreCallTargets(compilation, specializationRows, directEntryTargets),
 				)
 			: undefined;
+	const classLayouts = planCoreClassLayouts(compilation, functionMap);
 	const functions = functionMap.executionToCore.map((core, execution) => ({
 		...(specializedOnly.has(core) ? { specializedOnly: true as const } : {}),
 		...lowerFunctionToTarget(
@@ -2941,6 +2954,7 @@ export function lowerCoreCompilationToTargetProgram(
 			options.createParallelCopyLowerer,
 			options.preserveResumableRepresentations === true,
 			directClosures?.get(core),
+			classLayouts.sites.get(core),
 		),
 	}));
 	return Object.freeze({
@@ -2948,5 +2962,6 @@ export function lowerCoreCompilationToTargetProgram(
 		context: compilation.context,
 		functionMap,
 		functions: Object.freeze(functions),
+		classLayouts: Object.freeze(classLayouts.layouts),
 	});
 }

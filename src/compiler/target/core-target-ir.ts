@@ -37,6 +37,17 @@ export interface CoreTargetProgram {
 	readonly context: CoreCompilationContext;
 	readonly functionMap: CoreTargetFunctionMap;
 	readonly functions: ReadonlyArray<CoreTargetFunction>;
+	/** Class layouts that class-member sites name by ordinal. */
+	readonly classLayouts: ReadonlyArray<CoreTargetClassLayout>;
+}
+
+/** A predicted class instance layout, in execution function and image constant indices. */
+export interface CoreTargetClassLayout {
+	readonly constructor: number;
+	/** Own keys in slot order: a string constant index, or `~slot` for a module-private name. */
+	readonly keys: ReadonlyArray<number>;
+	/** Method name string constant index and method function index, pairwise. */
+	readonly methods: ReadonlyArray<number>;
 }
 
 /** Stable Core identities relocated to the dense function table used at runtime. */

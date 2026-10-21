@@ -586,6 +586,11 @@ typedef struct MalPerfStats {
     u64 shape_transition_index_probes;
     u64 shape_transition_index_builds;
     u64 shape_private_evictions;
+    u64 class_layout_admissions;
+    u64 class_layout_rejections;
+    u64 class_layout_slot_hits;
+    u64 class_layout_method_hits;
+    u64 class_layout_misses;
 
     u64 probe_read_attempts[3];
     u64 probe_read_hits[3];

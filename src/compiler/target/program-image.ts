@@ -14,6 +14,7 @@ import type { CompilerFactFlowReport } from "../shared/compiler-diagnostics.ts";
 import { compilerGuardPlan, knownBuiltinCallProves } from "../shared/compiler-facts.ts";
 import type { CompilerGuardPlan, EffectKind } from "../shared/compiler-facts.ts";
 import type {
+	CompilerClassLayoutSite,
 	CompilerExactCollectionBrand,
 	CompilerInstruction,
 	CompilerNumericTypedArrayKind,
@@ -23,6 +24,7 @@ import { compilerOperatorInputKindsHaveExactNativeSemantics } from "../shared/co
 import type { CompilerOperatorInputKindMasks } from "../shared/compiler-value-kinds.ts";
 import { NATIVE_STRING_SWITCH_CASE_LIMIT } from "../shared/native-string-switch.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
+import type { CoreTargetClassLayout } from "./core-target-ir.ts";
 import type {
 	ExecutionFunction,
 	ExecutionProgram,
@@ -811,6 +813,8 @@ export interface NativePlan {
 	/** Runtime-backed proof contracts consumed only while rendering native code. */
 	readonly semanticProtectors: ReadonlyArray<VmSemanticProtectorFact>;
 	readonly functions: ReadonlyArray<NativeFunctionPlan>;
+	/** Layouts admitted into per-VM cells; `class-layout` instruction plans name them by ordinal. */
+	readonly classLayouts?: ReadonlyArray<CoreTargetClassLayout>;
 }
 
 export type VmRegionActionRole =
@@ -1847,7 +1851,8 @@ export type NativeInstructionPlan =
 			readonly inputKindMasks: ReadonlyArray<number>;
 	  }
 	| { readonly kind: "unsigned-arithmetic" }
-	| { readonly kind: "primitive-string-length" };
+	| { readonly kind: "primitive-string-length" }
+	| { readonly kind: "class-layout"; readonly site: CompilerClassLayoutSite };
 
 /**
  * Construct the explicit, fully boxed native contract for a hand-authored or
@@ -2158,12 +2163,37 @@ export function compactProgramImageConstants(
 	};
 }
 
+/** A layout whose names did not survive compaction keeps its ordinal but licenses nothing. */
+function remapClassLayout(
+	layout: CoreTargetClassLayout,
+	compacted: RuntimeImageConstantCompactionResult,
+): CoreTargetClassLayout {
+	const keys: Array<number> = [];
+	for (const key of layout.keys) {
+		const mapped = key < 0 ? key : compacted.stringOldToNew.get(key);
+		if (mapped === undefined)
+			return { constructor: layout.constructor, keys: [], methods: [] };
+		keys.push(mapped);
+	}
+	const methods: Array<number> = [];
+	for (let index = 0; index < layout.methods.length; index += 2) {
+		const name = compacted.stringOldToNew.get(layout.methods[index]!);
+		if (name === undefined)
+			return { constructor: layout.constructor, keys: [], methods: [] };
+		methods.push(name, layout.methods[index + 1]!);
+	}
+	return { constructor: layout.constructor, keys, methods };
+}
+
 function remapNativeConstants(
 	native: NativePlan,
 	compacted: RuntimeImageConstantCompactionResult,
 	bodyFor: (fn: NativeFunctionPlan, index: number) => BytecodeFunction,
 ): NativePlan {
 	if (!compacted.changed) return native;
+	const classLayouts = native.classLayouts?.map((layout) =>
+		remapClassLayout(layout, compacted),
+	);
 	const functions = native.functions.map((fn, index) => ({
 		...fn,
 		body: bodyFor(fn, index),
@@ -2215,7 +2245,11 @@ function remapNativeConstants(
 			return { ...region, separatorStringIndex };
 		}),
 	}));
-	return { ...native, functions };
+	return {
+		...native,
+		functions,
+		...(classLayouts === undefined ? {} : { classLayouts }),
+	};
 }
 
 /** Materialize the native product after its terminal has verified every ABI variant. */
@@ -2261,7 +2295,13 @@ export function lowerVerifiedExecutionToProgramImage(
 	const definition: ProgramImage = {
 		runtime,
 		native: remapNativeConstants(
-			{ semanticProtectors, functions: nativeFunctions },
+			{
+				semanticProtectors,
+				functions: nativeFunctions,
+				...(nativeProgram.classLayouts.length === 0
+					? {}
+					: { classLayouts: nativeProgram.classLayouts }),
+			},
 			nativeRuntimePlan.compacted,
 			// Native wrappers must not publish the compacted snapshot's VM root-map trust.
 			(fn, index) =>
@@ -2374,7 +2414,10 @@ function nativeInstructionPlanFromExecution(
 							? { kind: "contained-fixed-typed-array-length" }
 							: instruction.primitiveStringLength === true
 								? { kind: "primitive-string-length" }
-								: undefined;
+								: instruction.classLayout === undefined ||
+									  instruction.knownOwnSlot !== undefined
+									? undefined
+									: { kind: "class-layout", site: instruction.classLayout };
 		case "loadProperty":
 			return instruction.exactContainedArrayElement === true
 				? { kind: "exact-contained-array-element" }
@@ -2411,9 +2454,16 @@ function nativeInstructionPlanFromExecution(
 							elementKind: instruction.exactTypedArrayKind,
 						};
 		case "storePropertyStatic":
-			return instruction.exactOwnSlot === undefined
+			return instruction.exactOwnSlot !== undefined
+				? { kind: "exact-own-slot", slot: instruction.exactOwnSlot }
+				: instruction.classLayout === undefined || instruction.knownOwnSlot !== undefined
+					? undefined
+					: { kind: "class-layout", site: instruction.classLayout };
+		case "loadPrivate":
+		case "storePrivate":
+			return instruction.classLayout === undefined
 				? undefined
-				: { kind: "exact-own-slot", slot: instruction.exactOwnSlot };
+				: { kind: "class-layout", site: instruction.classLayout };
 		case "callKnown":
 			return instruction.exactInputKindMasks === undefined
 				? undefined

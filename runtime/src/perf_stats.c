@@ -1421,6 +1421,16 @@ static void mal_perf_stats_print(void) {
     );
     fprintf(
         stderr,
+        "[perf-class-layout-stats] admissions=%llu rejections=%llu slot_hits=%llu "
+        "method_hits=%llu misses=%llu\n",
+        (unsigned long long) mal_perf_stats.class_layout_admissions,
+        (unsigned long long) mal_perf_stats.class_layout_rejections,
+        (unsigned long long) mal_perf_stats.class_layout_slot_hits,
+        (unsigned long long) mal_perf_stats.class_layout_method_hits,
+        (unsigned long long) mal_perf_stats.class_layout_misses
+    );
+    fprintf(
+        stderr,
         "[perf-call-cache-stats] probes=%llu exact_identity_hits=%llu "
         "compiled_dispatches=%llu native_exact_hits=%llu "
         "way_checks=%llu dispatch_misses=%llu native_fills=%llu function_call_forwards=%llu "

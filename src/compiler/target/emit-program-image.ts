@@ -3,6 +3,7 @@ import { PROBE_READ_KINDS, probeReadIsNamed } from "../shared/compiler-instructi
 import { knownOperationFlags } from "../shared/known-operations.ts";
 import { knownOperationIndex } from "../shared/known-operations.ts";
 import { staticDataQueryTag } from "../shared/static-data-query.ts";
+import type { CoreTargetClassLayout } from "./core-target-ir.ts";
 import { generatedDeclarationReferences } from "./generated-declaration-references.ts";
 import { GENERATED_PRELUDE_END } from "./generated-prelude.ts";
 import { validateNativeProgramStorage } from "./lower-native-storage.ts";
@@ -164,6 +165,7 @@ export const NATIVE_C_HEADER_LINES = [
 	'#include "builtin_async_iterator.h"',
 	// Compiled coroutines cast their backend entry state to MalGeneratorObject.
 	'#include "generator_object.h"',
+	'#include "class_layout.h"',
 	// Private roots live in C locals and reach the shadow frame only at collecting edges.
 	"typedef MalValue MalPrivateRoot;",
 	// A frame that ever needs a wide row publishes every mask as a row, so this word
@@ -1603,6 +1605,7 @@ function emitProgramImageParts(
 		undefined,
 		options,
 		image.diagnostics.profileSites?.length,
+		useCompiled ? image.native.classLayouts : undefined,
 	)) {
 		lines.push(line);
 	}
@@ -2462,9 +2465,24 @@ function malRuntimeImageStruct(
 	sharedLiteralTemplates?: string,
 	options: Pick<EmitOptions, "assets" | "maligatorSurface" | "sourcePath"> = {},
 	profileSiteCount?: number,
+	classLayouts: ReadonlyArray<CoreTargetClassLayout> = [],
 ): Array<string> {
 	const lines: Array<string> = [];
 	const assets = options.assets ?? [];
+	for (const [index, layout] of classLayouts.entries()) {
+		lines.push(
+			`static const i32 mal_class_layout_${index}_keys${suffix}[] = { ${layout.keys.length === 0 ? "0" : layout.keys.join(", ")} };`,
+			`static const i32 mal_class_layout_${index}_methods${suffix}[] = { ${layout.methods.length === 0 ? "0" : layout.methods.join(", ")} };`,
+		);
+	}
+	if (classLayouts.length > 0) {
+		lines.push(`static const MalClassLayoutDesc mal_class_layouts${suffix}[] = {`);
+		for (const [index, layout] of classLayouts.entries())
+			lines.push(
+				`    { .key_count = ${layout.keys.length}, .method_count = ${layout.methods.length / 2}, .keys = mal_class_layout_${index}_keys${suffix}, .methods = mal_class_layout_${index}_methods${suffix} },`,
+			);
+		lines.push("};", "");
+	}
 	const precompiledShapeRows = runtime.precompiledLiteralShapes;
 	for (let index = 0; index < precompiledShapeRows.length; index++) {
 		const shape = precompiledShapeRows[index]!;
@@ -2584,6 +2602,8 @@ function malRuntimeImageStruct(
 		`    .literal_template_data = ${literalTemplatesSymbol},`,
 		`    .precompiled_literal_shape_count = ${precompiledShapeRows.length},`,
 		`    .precompiled_literal_shapes = ${precompiledShapeRows.length > 0 ? `mal_precompiled_literal_shapes${suffix}` : "nullptr"},`,
+		`    .class_layout_count = ${classLayouts.length},`,
+		`    .class_layouts = ${classLayouts.length > 0 ? `mal_class_layouts${suffix}` : "nullptr"},`,
 		`    .global_count = ${runtime.globalCount},`,
 		`    .entry_path = "${cEscapeString(runtime.entrypointPath)}",`,
 		`    .cjs_module_count = ${runtime.cjsModuleFunctionIndices.length},`,

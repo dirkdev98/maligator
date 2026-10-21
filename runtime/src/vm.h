@@ -1138,6 +1138,16 @@ typedef struct MalPrecompiledLiteralShape {
     const i32 *key_string_indices;
 } MalPrecompiledLiteralShape;
 
+/** A class constructor's predicted instance layout, admitted per receiver by class_layout.c. */
+typedef struct MalClassLayoutDesc {
+    i32 key_count;
+    i32 method_count;
+    /** Own keys in slot order: a string constant index, or ~slot for a module-private name global. */
+    const i32 *keys;
+    /** Method name string constant index and expected function index, pairwise. */
+    const i32 *methods;
+} MalClassLayoutDesc;
+
 typedef struct MalRuntimeImage {
     i32 function_count;
     const MalFunction *functions;
@@ -1172,6 +1182,10 @@ typedef struct MalRuntimeImage {
     /** Deduplicated literal shapes needed before guarded own-slot execution. */
     i32 precompiled_literal_shape_count;
     const MalPrecompiledLiteralShape *precompiled_literal_shapes;
+
+    /** Layouts compiled class-member sites address by ordinal; only a root image has any. */
+    i32 class_layout_count;
+    const MalClassLayoutDesc *class_layouts;
 
     i32 global_count;
 
@@ -1705,6 +1719,10 @@ typedef struct MalVm {
 
     /** Per-function dense shaped-literal memo rows, shared by both backends. */
     struct MalShape ***literal_shape_cache;
+
+    /** One admitted receiver layout per root-image class layout, by ordinal. */
+    struct MalClassLayoutCell *class_cells;
+    i32 class_cell_count;
 
     /**
      * Canonical property atom for each runtime-image string constant. This keeps

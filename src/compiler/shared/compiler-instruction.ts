@@ -79,6 +79,16 @@ export interface CompilerKnownOwnSlot {
 	readonly candidates: ReadonlyArray<CompilerKnownOwnSlotCandidate>;
 }
 
+/**
+ * COMPILE-ONLY class-member site: per candidate, the ordinal of a class layout in
+ * the native plan and the slot (field) or method ordinal (method) it licenses once
+ * the runtime has admitted a receiver of that layout. Every site keeps its fallback.
+ */
+export interface CompilerClassLayoutSite {
+	readonly kind: "slot" | "method";
+	readonly candidates: ReadonlyArray<{ readonly layout: number; readonly index: number }>;
+}
+
 /** One layout admitted by a shared exact-shape case selector. */
 export interface CompilerShapeCaseCandidate {
 	readonly shapeFunctionIndex: number;
@@ -632,6 +642,7 @@ type CompilerOperation =
 			registers: [number, number];
 			stringIndex: number;
 			knownOwnSlot?: CompilerKnownOwnSlot;
+			classLayout?: CompilerClassLayoutSite;
 			/** COMPILE-ONLY: Core proved this receiver remains a contained ordinary
 			 * shaped allocation and this key is its writable data slot. Native code
 			 * may address the slot exactly, without a shape guard, IC, or fallback. */
@@ -685,6 +696,7 @@ type CompilerOperation =
 			registers: [number, number];
 			stringIndex: number;
 			knownOwnSlot?: CompilerKnownOwnSlot;
+			classLayout?: CompilerClassLayoutSite;
 			/** COMPILE-ONLY counterpart of the exact contained-slot load fact. */
 			exactOwnSlot?: number;
 	  }
@@ -928,6 +940,7 @@ type CompilerOperation =
 			type: "loadPrivate";
 
 			registers: [number, number, number];
+			classLayout?: CompilerClassLayoutSite;
 	  }
 	| {
 			type: "guardServiceEpoch";
@@ -950,6 +963,7 @@ type CompilerOperation =
 			type: "storePrivate";
 
 			registers: [number, number, number];
+			classLayout?: CompilerClassLayoutSite;
 	  }
 	| {
 			// [destination, object, key]; the `#x in o` brand check. Yields a

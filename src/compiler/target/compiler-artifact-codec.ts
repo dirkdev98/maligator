@@ -2,6 +2,7 @@ import { coreRegionStrategy } from "../core/core-ir-region-strategies.ts";
 import { CORE_STRING_SPAN_RANGE_METHODS } from "../core/core-ir-regions.ts";
 import type { CorePropertyPlacement } from "../core/core-ir-regions.ts";
 import type {
+	CompilerClassLayoutSite,
 	CompilerExactCollectionBrand,
 	CompilerNumericTypedArrayKind,
 } from "../shared/compiler-instruction.ts";
@@ -11,6 +12,7 @@ import {
 } from "../shared/compiler-value-kinds.ts";
 import type { CompilerOperatorInputKindMasks } from "../shared/compiler-value-kinds.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
+import type { CoreTargetClassLayout } from "./core-target-ir.ts";
 import type { NativeCallbackTransportPlan } from "./lower-native-callbacks.ts";
 import type { NativeCallTransportPlan } from "./lower-native-calls.ts";
 import type { NativeCaptureAccessPlan } from "./lower-native-captures.ts";
@@ -97,7 +99,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 250;
+export const COMPILER_ARTIFACT_VERSION = 251;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -1873,6 +1875,47 @@ function readNativeRootPhase(
 	return phaseRegisters;
 }
 
+function validateClassLayout(layout: CoreTargetClassLayout, def: RuntimeImage): void {
+	const { constructor, keys, methods } = layout;
+	if (
+		!Number.isInteger(constructor) ||
+		constructor < 0 ||
+		constructor >= def.functions.length ||
+		methods.length % 2 !== 0 ||
+		keys.some((key) =>
+			key >= 0 ? key >= def.stringConstants.length : ~key >= def.globalCount,
+		) ||
+		methods.some((value, index) =>
+			index % 2 === 0
+				? value < 0 || value >= def.stringConstants.length
+				: value < 0 || value >= def.functions.length,
+		)
+	)
+		throw new RangeError("program-image-codec: invalid class layout");
+}
+
+function validateClassLayoutSite(
+	site: CompilerClassLayoutSite,
+	opcode: string,
+	layouts: ReadonlyArray<CoreTargetClassLayout> | undefined,
+): void {
+	if (
+		site.candidates.length === 0 ||
+		site.candidates.length > 255 ||
+		(site.kind === "method" && opcode !== "LOAD_PROPERTY_STATIC") ||
+		site.candidates.some(({ layout, index }) => {
+			const target = layouts?.[layout];
+			return (
+				target === undefined ||
+				!Number.isInteger(index) ||
+				index < 0 ||
+				index >= (site.kind === "method" ? target.methods.length / 2 : target.keys.length)
+			);
+		})
+	)
+		throw new RangeError("program-image-codec: invalid class layout site");
+}
+
 function writeCompilerArtifact(
 	w: Writer,
 	def: RuntimeImage,
@@ -1892,6 +1935,14 @@ function writeCompilerArtifact(
 		w.u8(SEMANTIC_PROTECTOR_TAGS[fact.family]);
 		w.u8(dependencyMask);
 		w.u8(obligationMask);
+	}
+	const classLayouts = compiler.native.classLayouts ?? [];
+	w.u32(classLayouts.length);
+	for (const layout of classLayouts) {
+		validateClassLayout(layout, def);
+		w.i32(layout.constructor);
+		w.i32Array([...layout.keys]);
+		w.i32Array([...layout.methods]);
 	}
 
 	// The compiler artifact appends native-only plans to the runtime payload. Its
@@ -2366,6 +2417,25 @@ function writeCompilerArtifact(
 				["+", "-", "*", "%"].includes(instruction.operator)
 			) {
 				w.u8(18);
+			} else if (
+				plan.kind === "class-layout" &&
+				(instruction.opcode === "LOAD_PROPERTY_STATIC" ||
+					instruction.opcode === "STORE_PROPERTY_STATIC" ||
+					instruction.opcode === "LOAD_PRIVATE" ||
+					instruction.opcode === "STORE_PRIVATE")
+			) {
+				validateClassLayoutSite(
+					plan.site,
+					instruction.opcode,
+					compiler.native.classLayouts,
+				);
+				w.u8(24);
+				w.u8(plan.site.kind === "method" ? 1 : 0);
+				w.u8(plan.site.candidates.length);
+				for (const candidate of plan.site.candidates) {
+					w.u32(candidate.layout);
+					w.u32(candidate.index);
+				}
 			} else if (
 				plan.kind === "exact-builtin-input-kinds" &&
 				instruction.opcode === "CALL_KNOWN" &&
@@ -4366,6 +4436,14 @@ function readCompilerArtifact(
 		});
 	}
 
+	const classLayouts: Array<CoreTargetClassLayout> = [];
+	const classLayoutCount = r.count(12);
+	for (let index = 0; index < classLayoutCount; index++) {
+		const layout = { constructor: r.i32(), keys: r.i32Array(), methods: r.i32Array() };
+		validateClassLayout(layout, nativeImage);
+		classLayouts.push(layout);
+	}
+
 	const compilerMetadataFunctionCount = r.count(1);
 	if (compilerMetadataFunctionCount !== functions.length) {
 		throw new Error("program-image-codec: compiler metadata function count mismatch");
@@ -4915,6 +4993,22 @@ function readCompilerArtifact(
 					kind: "exact-own-slot",
 					slot: r.u32(),
 				};
+			} else if (
+				tag === 24 &&
+				(instruction.opcode === "LOAD_PROPERTY_STATIC" ||
+					instruction.opcode === "STORE_PROPERTY_STATIC" ||
+					instruction.opcode === "LOAD_PRIVATE" ||
+					instruction.opcode === "STORE_PRIVATE")
+			) {
+				const kind = r.u8() === 1 ? ("method" as const) : ("slot" as const);
+				const count = r.u8();
+				const candidates = Array.from({ length: count }, () => ({
+					layout: r.u32(),
+					index: r.u32(),
+				}));
+				const site = { kind, candidates };
+				validateClassLayoutSite(site, instruction.opcode, classLayouts);
+				nativeInstructions[instructionIndex] = { kind: "class-layout", site };
 			} else if (
 				tag === 18 &&
 				instruction.opcode === "BINARY" &&
@@ -6093,7 +6187,11 @@ function readCompilerArtifact(
 
 	const definition: ProgramImage = {
 		runtime: runtimeImage,
-		native: { semanticProtectors, functions: nativeFunctions },
+		native: {
+			semanticProtectors,
+			functions: nativeFunctions,
+			...(classLayouts.length === 0 ? {} : { classLayouts }),
+		},
 		diagnostics: {},
 	};
 	for (const [index, fn] of runtimeImage.functions.entries()) {

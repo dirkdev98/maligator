@@ -32,6 +32,7 @@
 #include "text_buffer.h"
 #include "value_ops.h"
 #include "vm_load.h"
+#include "class_layout.h"
 
 #if MAL_NATIVE_FRAME_WALK && defined(__APPLE__)
 #include <dlfcn.h>
@@ -722,6 +723,7 @@ static void mal_vm_init_execution_state(MalVm *vm, const MalRuntimeImage *progra
         calloc((usize) vm->function_capacity, sizeof(MalPropertyCachePool));
     vm->literal_shape_cache =
         calloc((usize) vm->function_capacity, sizeof(MalShape **));
+    mal_vm_class_cells_init(vm, program);
     vm->property_stub = nullptr;
     vm->inherited_property_stub = nullptr;
     vm->builtin_missing_rows = nullptr;
@@ -1097,6 +1099,7 @@ void mal_vm_free(MalVm *vm) {
         }
         free(vm->literal_shape_cache);
     }
+    mal_vm_class_cells_free(vm);
     free(vm->property_stub);
     if (vm->inherited_property_stub != nullptr) {
         for (usize i = 0; i < MAL_INHERITED_STUB_CACHE_ROW_COUNT; i++) {

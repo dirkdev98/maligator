@@ -605,6 +605,42 @@ function initializeCopiedCaptureValues(
 	);
 }
 
+interface ClassLayoutCandidate {
+	readonly layout: number;
+	readonly index: number;
+}
+
+/**
+ * A class-member access that first compares the receiver against shared class
+ * cells. A miss tries to admit the receiver's layout before the original access
+ * runs, so the first fully built instance any site sees enables every site.
+ */
+function classLayoutAccess(
+	kind: "slot" | "method",
+	candidates: ReadonlyArray<ClassLayoutCandidate>,
+	object: string,
+	receiver: string,
+	hit: (candidate: ClassLayoutCandidate) => string,
+	fallback: ReadonlyArray<string>,
+): Array<string> {
+	const guard = kind === "method" ? "MAL_CLASS_METHOD" : "MAL_CLASS_SLOT";
+	return [
+		...candidates.map(
+			(candidate, position) =>
+				`${position === 0 ? "if" : "else if"} (${guard}(${object}, ${candidate.layout})) ${hit(candidate)}`,
+		),
+		"else {",
+		candidates
+			.map(
+				({ layout }, position) =>
+					`${position === 0 ? "MAL_CLASS_MISS" : "MAL_CLASS_LEARN"}(${object}, ${receiver}, ${layout});`,
+			)
+			.join(" "),
+		...fallback,
+		"}",
+	];
+}
+
 function isNumericRep(rep: RegisterRep): boolean {
 	return rep === "number" || rep === "int32";
 }
@@ -6570,6 +6606,8 @@ function emitInstruction(
 	coro: CoroutineContext | null,
 	context: NativeInstructionContext,
 ): Array<string> | null {
+	// Layout ordinals index the root image's cells; overlays carry no layouts.
+	const classLayoutsEnabled = !context.relocation.relative;
 	// Resource discovery stays eager so unused poll text cannot change emitted epilogues.
 	if (
 		handlerIp === undefined &&
@@ -9037,7 +9075,32 @@ function emitInstruction(
 					: "mal_vm_property_try_load_static";
 			const probe = (): string =>
 				`${context.watchedMathCallee === true ? `mal_vm_watched_own_value_try_load_static(vm, ${boxed(instruction.object)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}], &__v_${ip}) || ` : ""}${probeHelper}(vm, ${boxed(instruction.object)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}], &__v_${ip})`;
-			const ordinary = (position: ReadonlyArray<string> = []): Array<string> => [
+			const classLayout =
+				context.nativePlan?.kind === "class-layout" && classLayoutsEnabled
+					? context.nativePlan.site
+					: undefined;
+			const ordinary = (position: ReadonlyArray<string> = []): Array<string> =>
+				classLayout === undefined
+					? inlineCacheLoad(position)
+					: [
+							`{ MalObject *__co_${ip} = mal_vm_as_object(${boxed(instruction.object)});`,
+							...classLayoutAccess(
+								classLayout.kind,
+								classLayout.candidates,
+								`__co_${ip}`,
+								boxed(instruction.object),
+								({ layout, index }) =>
+									`r${instruction.dst} = ${callValue(
+										instruction.dst,
+										classLayout.kind === "method"
+											? `vm->class_cells[${layout}].methods[${index}]`
+											: `mal_object_field_load(__co_${ip}, ${index})`,
+									)};`,
+								inlineCacheLoad(position),
+							),
+							"}",
+						];
+			const inlineCacheLoad = (position: ReadonlyArray<string> = []): Array<string> => [
 				`MalValue __v_${ip};`,
 				`if (${probe()}) {`,
 				`  r${instruction.dst} = ${callValue(instruction.dst, `__v_${ip}`)};`,
@@ -9271,8 +9334,7 @@ function emitInstruction(
 			}
 			const probe = (): string =>
 				`${receiverName} && mal_vm_object_try_store_static(${receiverName}, ${boxed(instruction.value)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}])`;
-			return [
-				`MalObject *${receiverName} = mal_vm_as_object(${boxed(instruction.object)});`,
+			const inlineCacheStore = [
 				`if (!(${probe()})) {`,
 				...slowPathFramePosition(),
 				...(context.incomingRootPublication ?? []).map((line) => `  ${line}`),
@@ -9284,6 +9346,26 @@ function emitInstruction(
 				`  ${profileCall("property", `mal_vm_op_store_property_ic(vm, ${boxed(instruction.object)}, ${key}, ${boxed(instruction.value)}, ${strict}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}])`)};`,
 				`  ${throwCheck()}`,
 				`}`,
+			];
+			const classLayout =
+				context.nativePlan?.kind === "class-layout" &&
+				context.nativePlan.site.kind === "slot" &&
+				classLayoutsEnabled
+					? context.nativePlan.site
+					: undefined;
+			return [
+				`MalObject *${receiverName} = mal_vm_as_object(${boxed(instruction.object)});`,
+				...(classLayout === undefined
+					? inlineCacheStore
+					: classLayoutAccess(
+							"slot",
+							classLayout.candidates,
+							receiverName,
+							boxed(instruction.object),
+							({ index }) =>
+								`mal_vm_object_slot_store(${receiverName}, ${index}, ${boxed(instruction.value)});`,
+							inlineCacheStore,
+						)),
 			];
 		}
 		case "TO_PROPERTY_KEY":
@@ -12788,7 +12870,7 @@ function emitInstruction(
 			];
 		case "LOAD_PRIVATE": {
 			const loaded = `__private_value_${ip}`;
-			return [
+			const hinted = [
 				`MalValue ${loaded};`,
 				`if (mal_vm_private_try_load(${boxed(instruction.object)}, ${boxed(instruction.key)}, &${loaded})) {`,
 				`  r${instruction.dst} = ${loaded};`,
@@ -12803,6 +12885,26 @@ function emitInstruction(
 				`  r${instruction.dst} = mal_vm_op_load_private(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)});`,
 				`  ${throwCheck()}`,
 				`}`,
+			];
+			if (
+				context.nativePlan?.kind !== "class-layout" ||
+				context.nativePlan.site.kind !== "slot" ||
+				!classLayoutsEnabled
+			)
+				return hinted;
+			const object = `__co_${ip}`;
+			return [
+				`{ MalObject *${object} = mal_vm_as_object(${boxed(instruction.object)});`,
+				...classLayoutAccess(
+					"slot",
+					context.nativePlan.site.candidates,
+					object,
+					boxed(instruction.object),
+					({ index }) =>
+						`r${instruction.dst} = mal_object_field_load(${object}, ${index});`,
+					hinted,
+				),
+				"}",
 			];
 		}
 		case "GUARD_SERVICE_EPOCH":
@@ -12836,9 +12938,9 @@ function emitInstruction(
 				storeBoolean(instruction.success, success),
 			];
 		}
-		case "STORE_PRIVATE":
+		case "STORE_PRIVATE": {
 			// PrivateSet; the name must already be installed, else throws.
-			return [
+			const hinted = [
 				`if (!mal_vm_private_try_store(${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)})) {`,
 				...slowPathFramePosition(),
 				...(context.incomingRootPublication ?? []).map((line) => `  ${line}`),
@@ -12851,6 +12953,27 @@ function emitInstruction(
 				`  ${throwCheck()}`,
 				`}`,
 			];
+			if (
+				context.nativePlan?.kind !== "class-layout" ||
+				context.nativePlan.site.kind !== "slot" ||
+				!classLayoutsEnabled
+			)
+				return hinted;
+			const object = `__co_${ip}`;
+			return [
+				`{ MalObject *${object} = mal_vm_as_object(${boxed(instruction.object)});`,
+				...classLayoutAccess(
+					"slot",
+					context.nativePlan.site.candidates,
+					object,
+					boxed(instruction.object),
+					({ index }) =>
+						`mal_vm_object_slot_store(${object}, ${index}, ${boxed(instruction.value)});`,
+					hinted,
+				),
+				"}",
+			];
+		}
 		case "HAS_PRIVATE":
 			// Ergonomic brand check `#x in obj`; a non-object receiver throws.
 			return [
