@@ -8,9 +8,6 @@
 #include "perf_stats.h"
 
 // Diagnostic counters describe the isolate on the current mutator thread.
-static MAL_ISOLATE_LOCAL u64 g_slot_coallocations = 0;
-static MAL_ISOLATE_LOCAL u64 g_slot_grow_migrations = 0;
-static MAL_ISOLATE_LOCAL u64 g_slot_dictionary_migrations = 0;
 
 typedef struct MalPrototypeCacheDependency {
     MalObject *object;
@@ -246,15 +243,15 @@ void mal_object_release_idle_prototype_dependencies(void) {
 }
 
 u64 mal_object_slot_coallocation_count(void) {
-    return g_slot_coallocations;
+    return mal_object_slot_coallocations;
 }
 
 u64 mal_object_slot_grow_migration_count(void) {
-    return g_slot_grow_migrations;
+    return mal_object_slot_grow_migrations;
 }
 
 u64 mal_object_slot_dictionary_migration_count(void) {
-    return g_slot_dictionary_migrations;
+    return mal_object_slot_dictionary_migrations;
 }
 
 static MalObjectStorage *mal_object_externalize(MalObject *object) {
@@ -382,7 +379,7 @@ MalObject *mal_object_new_reserved(MalHeap *heap, MalObject *prototype, u8 capac
         MAL_HEAP_OBJECT);
     mal_object_init_payload(heap, object, prototype, MAL_OBJECT_COMPACT, nullptr);
     object->slot_capacity = capacity;
-    g_slot_coallocations++;
+    mal_object_slot_coallocations++;
     return object;
 }
 
@@ -396,7 +393,7 @@ MalObject *mal_object_new_shaped(MalHeap *heap, MalObject *prototype, MalShape *
     mal_object_init_payload(heap, object, prototype, MAL_OBJECT_COMPACT, shape);
     object->slot_capacity = (u8) count;
     memcpy(mal_object_fields_nonempty(object), values, sizeof(MalValue) * count);
-    g_slot_coallocations++;
+    mal_object_slot_coallocations++;
     return object;
 }
 
@@ -413,7 +410,7 @@ MalObject *mal_object_try_new_shaped(
     mal_object_init_payload(heap, object, prototype, MAL_OBJECT_COMPACT, shape);
     object->slot_capacity = (u8) count;
     memcpy(mal_object_fields_nonempty(object), values, sizeof(MalValue) * count);
-    g_slot_coallocations++;
+    mal_object_slot_coallocations++;
     return object;
 }
 
@@ -470,7 +467,7 @@ void mal_object_grow_slots(MalObject *object, u32 old_count, u32 new_count) {
         slots[i] = old_slots[i];
     }
     if (old_count > 0 && object->header.storage == MAL_HEAP_STORAGE_DYNAMIC) {
-        g_slot_grow_migrations++;
+        mal_object_slot_grow_migrations++;
     }
     mal_object_set_fields_pointer(object, slots);
     object->slots_owned = true;
@@ -480,7 +477,7 @@ void mal_object_grow_slots(MalObject *object, u32 old_count, u32 new_count) {
 void mal_object_record_slot_dictionary_migration(MalObject *object) {
     if (mal_object_fields(object) != nullptr && !object->slots_owned
         && object->header.storage == MAL_HEAP_STORAGE_DYNAMIC) {
-        g_slot_dictionary_migrations++;
+        mal_object_slot_dictionary_migrations++;
     }
 }
 

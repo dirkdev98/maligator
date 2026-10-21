@@ -53,6 +53,11 @@ typedef struct MalIsolateLocals {
     bool primitive_method_protector;
     /* This thread's mal_object_set site table, bound on first use. */
     struct MalObjectSetSite *object_set_sites;
+    /* Object slot storage statistics that every shaped allocation bumps, reported by
+     * MAL_GC_STATS. */
+    u64 object_slot_coallocations;
+    u64 object_slot_grow_migrations;
+    u64 object_slot_dictionary_migrations;
 } MalIsolateLocals;
 
 extern MAL_ISOLATE_LOCAL MalIsolateLocals mal_isolate;
@@ -62,9 +67,12 @@ extern MAL_ISOLATE_LOCAL MalIsolateLocals mal_isolate;
  * thread starts, the only isolate's record is also published here. */
 extern _Atomic(MalIsolateLocals *) mal_sole_isolate;
 
+/* Out of line, so a select cannot compute the thread-local address on every access. */
+MalIsolateLocals *mal_isolate_locals_of_thread(void);
+
 static inline __attribute__((always_inline)) MalIsolateLocals *mal_isolate_locals(void) {
     MalIsolateLocals *sole = atomic_load_explicit(&mal_sole_isolate, memory_order_relaxed);
-    return __builtin_expect(sole != nullptr, 1) ? sole : &mal_isolate;
+    return __builtin_expect(sole != nullptr, 1) ? sole : mal_isolate_locals_of_thread();
 }
 #else
 #define mal_isolate_locals() (&mal_isolate)
@@ -85,3 +93,7 @@ void mal_isolate_release_sole(void);
 #define mal_gc_marking_active (mal_isolate_locals()->gc_marking_active)
 #define mal_array_elements_protector (mal_isolate_locals()->array_elements_protector)
 #define mal_primitive_method_protector (mal_isolate_locals()->primitive_method_protector)
+#define mal_object_slot_coallocations (mal_isolate_locals()->object_slot_coallocations)
+#define mal_object_slot_grow_migrations (mal_isolate_locals()->object_slot_grow_migrations)
+#define mal_object_slot_dictionary_migrations \
+    (mal_isolate_locals()->object_slot_dictionary_migrations)

@@ -87,6 +87,10 @@ void mal_isolate_claim_sole(void) {
     }
 }
 
+__attribute__((noinline)) MalIsolateLocals *mal_isolate_locals_of_thread(void) {
+    return &mal_isolate;
+}
+
 void mal_isolate_release_sole(void) {
     atomic_store_explicit(&g_isolate_threads_started, true, memory_order_release);
     atomic_store_explicit(&mal_sole_isolate, nullptr, memory_order_release);
