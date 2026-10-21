@@ -95,6 +95,10 @@ function at(items, index) {
 	return items[index];
 }
 
+function lengthOf(value) {
+	return value.length;
+}
+
 const shapes = [];
 for (let i = 0; i < 8; i++) {
 	const type = { flags: i, objectFlags: i * 10 };
@@ -135,6 +139,15 @@ for (const receiver of [null, undefined]) {
 	}
 }
 
+let lengths = 0;
+for (let round = 0; round < 1000; round++)
+	lengths += lengthOf(round % 2 ? [1, 2] : "abc");
+log.push(
+	`lengths ${lengths} ${lengthOf({ length: 7 })} ${lengthOf(new Uint8Array(4))} ${lengthOf(function (a, b) {})}`,
+);
+log.push(
+	`wide flags ${flagsOf({ flags: -8, objectFlags: 1 })} ${flagsOf({ flags: 2 ** 32 + 1, objectFlags: 2 })}`,
+);
 for (let round = 0; round < 1000; round++) total += idOf({ id: round });
 log.push(`ids ${total} ${idOf("abc")} ${idOf([1, 2])}`);
 

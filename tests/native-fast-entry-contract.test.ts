@@ -13,6 +13,7 @@ const NONCOLLECTING_HELPERS = new Set([
 	"mal_vm_leaf_stack_available",
 	"mal_value_is_undefined",
 	"mal_vm_property_try_load_static",
+	"mal_vm_property_try_load_length_static",
 	"mal_ops_is_number",
 	"mal_ops_number_as_f64",
 	"mal_ops_number_to_i32",
@@ -54,6 +55,7 @@ function body(
 }
 
 const OWN_TRY = "mal_compiled_0_try";
+const LENGTH_STRING_INDEX = 7;
 
 /** Runtime helpers a fast body calls beyond the non-collecting ones and its own fast path. */
 function unexpectedHelpers(lines: ReadonlyArray<string>): ReadonlyArray<string> {
@@ -100,6 +102,7 @@ function fastEntry(
 		functionIndex: "0",
 		globalIndex: (index) => String(index),
 		stringValue: (index) => `string_${index}`,
+		lengthProperty: (index) => index === LENGTH_STRING_INDEX,
 		capturePrologue: [],
 		capturedLoad: (owner, index) => `mal_vm_load_captured(env, ${owner}, ${index})`,
 		f64Literal: String,
@@ -121,6 +124,35 @@ describe("native fast entries", () => {
 		const lines = fastEntry(body(loadCompareReturn));
 		expect(lines).toBeDefined();
 		expect(unexpectedHelpers(lines!)).toEqual([]);
+	});
+
+	it("read `length` through the probe that answers Arrays and strings inline", () => {
+		const text = fastEntry(
+			body([
+				{
+					opcode: "LOAD_PROPERTY_STATIC",
+					dst: 1,
+					object: 0,
+					stringIndex: LENGTH_STRING_INDEX,
+					icIndex: 0,
+				},
+				{ opcode: "RETURN", value: 1 },
+			]),
+		)!.join("\n");
+		expect(text).toContain("mal_vm_property_try_load_length_static(vm, f0,");
+	});
+
+	it("branch on a bitwise result by testing the integer", () => {
+		const text = fastEntry(
+			body([
+				{ opcode: "BINARY", dst: 2, left: 0, right: 1, operator: "&" },
+				{ opcode: "JUMP_IF", cond: 2, targetIp: 3 },
+				{ opcode: "RETURN", value: 0 },
+				{ opcode: "RETURN", value: 1 },
+			]),
+		)!.join("\n");
+		expect(text).toContain("if (mal_ops_number_value_to_i32(f2) != 0)");
+		expect(text).not.toContain("mal_value_is_truthy(f2)");
 	});
 
 	it("read a Number constant's literal instead of converting it per call", () => {

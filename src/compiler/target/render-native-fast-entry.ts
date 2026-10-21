@@ -22,6 +22,7 @@ export interface NativeFastEntryInput {
 	readonly functionIndex: string;
 	readonly globalIndex: (index: number) => string;
 	readonly stringValue: (index: number) => string;
+	readonly lengthProperty: (stringIndex: number) => boolean;
 	/** Non-allocating statements that bind what `capturedLoad` reads. */
 	readonly capturePrologue: ReadonlyArray<string>;
 	readonly capturedLoad: (ownerFunctionIndex: number, index: number) => string;
@@ -71,8 +72,18 @@ export function renderNativeFastEntry(
 	let loadsProperties = false;
 	let loadsCaptures = false;
 	const constants = numberConstantRegisters(fn.instructions);
+	const integers = int32ResultRegisters(fn.instructions, fn.parameterCount);
 	for (const [ip, op] of fn.instructions.entries()) {
-		const line = fastInstruction(op, ip, input, fieldLoads, targets, exported, constants);
+		const line = fastInstruction(
+			op,
+			ip,
+			input,
+			fieldLoads,
+			targets,
+			exported,
+			constants,
+			integers,
+		);
 		if (line === undefined) return undefined;
 		if (op.opcode === "LOAD_PROPERTY_STATIC" && !fieldLoads.has(ip))
 			loadsProperties = true;
@@ -256,6 +267,31 @@ function numberConstantRegisters(
 	return constants;
 }
 
+/** Registers only int32 operators define, so a branch can test the integer itself. */
+function int32ResultRegisters(
+	instructions: ReadonlyArray<BytecodeInstruction>,
+	parameterCount: number,
+): ReadonlySet<number> {
+	const integers = new Set<number>();
+	const varying = new Set<number>();
+	for (const op of instructions) {
+		if (!("dst" in op) || typeof op.dst !== "number") continue;
+		const integer =
+			(op.opcode === "BINARY" &&
+				(INT32_OPERATORS.has(op.operator) ||
+					op.operator === "<<" ||
+					op.operator === ">>")) ||
+			(op.opcode === "UNARY" && op.operator === "~");
+		if (integer && op.dst >= parameterCount && !varying.has(op.dst)) {
+			integers.add(op.dst);
+			continue;
+		}
+		integers.delete(op.dst);
+		varying.add(op.dst);
+	}
+	return integers;
+}
+
 interface FastNumbers {
 	readonly constants: ReadonlyMap<number, number>;
 	readonly literal: (value: number) => string;
@@ -349,6 +385,7 @@ function fastInstruction(
 	targets: Set<number>,
 	exported: boolean,
 	constants: ReadonlyMap<number, number>,
+	integers: ReadonlySet<number>,
 ): string | undefined {
 	const values: FastNumbers = { constants, literal: input.f64Literal };
 	const value = (operand: number): string | undefined => {
@@ -405,7 +442,10 @@ function fastInstruction(
 					input.directEntry!.fieldParameters!.representations[field]!;
 				return `f${op.dst} = ${boxed(representation, `fp${field}`)};`;
 			}
-			return `if (!mal_vm_property_try_load_static(vm, f${op.object}, &__fast_ic[${op.icIndex}], &f${op.dst})) goto __full;`;
+			const probe = input.lengthProperty(op.stringIndex)
+				? "mal_vm_property_try_load_length_static"
+				: "mal_vm_property_try_load_static";
+			return `if (!${probe}(vm, f${op.object}, &__fast_ic[${op.icIndex}], &f${op.dst})) goto __full;`;
 		}
 		case "LOAD_PROPERTY":
 			return `{ MalArrayObject *const __array = mal_vm_as_array(f${op.object}); if (__array == nullptr || !mal_ops_is_number(f${op.key}) || !mal_vm_array_try_get_index(__array, mal_ops_number_as_f64(f${op.key}), &f${op.dst})) goto __full; }`;
@@ -419,8 +459,9 @@ function fastInstruction(
 			return jump(op.targetIp);
 		case "JUMP_IF": {
 			const target = jump(op.targetIp);
-			return target === undefined
-				? undefined
+			if (target === undefined) return undefined;
+			return integers.has(op.cond)
+				? `if (mal_ops_number_value_to_i32(f${op.cond}) != 0) ${target}`
 				: `if (mal_value_is_truthy(f${op.cond})) ${target}`;
 		}
 		case "RETURN": {

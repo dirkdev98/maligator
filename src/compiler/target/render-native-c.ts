@@ -2712,6 +2712,7 @@ function emitCompiledVariant(
 					functionIndex: relocation.functionIndex(index),
 					globalIndex: (global) => relocation.globalIndex(global),
 					stringValue: (string) => relocation.stringValue(string),
+					lengthProperty: (string) => isLengthPropertyName(stringConstants[string]),
 					capturePrologue: [
 						...initializeFixedCaptureOwners(analysis.captures, relocation, true, "env"),
 						...initializeCopiedCaptureValues(analysis.captures, relocation),
