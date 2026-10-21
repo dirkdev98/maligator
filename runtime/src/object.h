@@ -146,11 +146,18 @@ static inline __attribute__((always_inline)) void mal_object_field_check(
     if (__builtin_expect(ordinal >= object->shape->inline_count, 0)) __builtin_trap();
 }
 
+/** A field whose slot the caller's shape match already proves in range. */
+static inline __attribute__((always_inline)) MalValue mal_object_field_load_shaped(
+    const MalObject *object, u32 ordinal
+) {
+    return ((const MalValue *) mal_object_fields_nonempty(object))[ordinal];
+}
+
 static inline __attribute__((always_inline)) MalValue mal_object_field_load(
     const MalObject *object, u32 ordinal
 ) {
     mal_object_field_check(object, ordinal);
-    return ((const MalValue *) mal_object_fields_nonempty(object))[ordinal];
+    return mal_object_field_load_shaped(object, ordinal);
 }
 
 static inline MalTable *mal_object_overflow(const MalObject *object) {
@@ -176,8 +183,10 @@ static_assert((sizeof(MalObject) + sizeof(void *)) % alignof(MalValue) == 0,
 void mal_object_set_prototype_pointer(MalObject *object, MalObject *prototype);
 void mal_object_set_fields_pointer(MalObject *object, void *fields);
 void mal_object_set_overflow_pointer(MalObject *object, MalTable *overflow);
-static inline void mal_object_field_store(MalObject *object, u32 ordinal, MalValue value) {
-    mal_object_field_check(object, ordinal);
+/** Store to a field whose slot the caller's shape match already proves in range. */
+static inline void mal_object_field_store_shaped(
+    MalObject *object, u32 ordinal, MalValue value
+) {
     MalValue *field = (MalValue *) mal_object_fields_nonempty(object) + ordinal;
     if (!mal_gc_marking_active && !mal_value_is_heap(value)) {
         *field = value;
@@ -186,6 +195,11 @@ static inline void mal_object_field_store(MalObject *object, u32 ordinal, MalVal
     if (mal_gc_marking_active) mal_gc_satb_record(*field);
     *field = value;
     mal_gc_card(&object->header, value);
+}
+
+static inline void mal_object_field_store(MalObject *object, u32 ordinal, MalValue value) {
+    mal_object_field_check(object, ordinal);
+    mal_object_field_store_shaped(object, ordinal, value);
 }
 
 void mal_object_field_initialize(

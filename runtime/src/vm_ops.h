@@ -1287,7 +1287,7 @@ static inline bool mal_vm_try_load_shape_case(
         MAL_PERF_COUNT(shape_case_load_fallbacks);
         return false;
     }
-    *out = mal_object_field_load(object, slot);
+    *out = mal_object_field_load_shaped(object, slot);
     MAL_PERF_COUNT(shape_case_load_hits);
     return true;
 }
@@ -1366,7 +1366,7 @@ static inline __attribute__((always_inline)) bool mal_vm_try_load_known_own_slot
     MAL_PERF_COUNT(known_own_slot_load_probes);
     MalObject *object = mal_vm_as_object(receiver);
     if (object != nullptr && ic->mode == MAL_IC_MODE_SHAPE && object->shape == ic->shape) {
-        *out = mal_object_field_load(object, ic->slot);
+        *out = mal_object_field_load_shaped(object, ic->slot);
         mal_perf_ic_load_mono_hit();
         MAL_PERF_COUNT(known_own_slot_load_hits);
         return true;
@@ -1385,7 +1385,7 @@ static inline bool mal_vm_object_try_load_monomorphic(
 ) {
     if (ic->mode == MAL_IC_MODE_SHAPE && object->shape == ic->shape && key == ic->key) {
         mal_perf_ic_load_mono_hit();
-        *out = mal_object_field_load(object, ic->slot);
+        *out = mal_object_field_load_shaped(object, ic->slot);
         return true;
     }
     return false;
@@ -1398,7 +1398,7 @@ static inline bool mal_vm_object_try_load_monomorphic(
 static inline MalValue mal_vm_object_poly_load(
     const MalObject *object, const MalInlineCache *ic, u8 index
 ) {
-    return mal_object_field_load(object, mal_ic_poly_slot(ic, index));
+    return mal_object_field_load_shaped(object, mal_ic_poly_slot(ic, index));
 }
 
 static inline __attribute__((always_inline)) bool mal_vm_object_try_load_polymorphic(
@@ -1432,7 +1432,7 @@ static inline __attribute__((always_inline)) bool mal_vm_object_try_load_slot_ke
     const MalShapeProp *prop = &shape->props[slot];
     if (prop->key != ic->key || (prop->attrs & MAL_PROPERTY_ACCESSOR)) return false;
     MAL_PERF_COUNT(ic_load_slot_key_hits);
-    *out = mal_object_field_load(object, slot);
+    *out = mal_object_field_load_shaped(object, slot);
     return true;
 }
 
@@ -1876,7 +1876,7 @@ static inline __attribute__((always_inline)) bool mal_vm_property_try_load_stati
     if (object != nullptr && ic->mode == MAL_IC_MODE_SHAPE) {
         if (object->shape == ic->shape) {
             mal_perf_ic_load_mono_hit();
-            *out = mal_object_field_load(object, ic->slot);
+            *out = mal_object_field_load_shaped(object, ic->slot);
             return true;
         }
         // Objects from one constructor branch into many shapes that keep its leading
@@ -2318,7 +2318,7 @@ static inline bool mal_vm_object_try_store(MalObject *object, MalValue key, MalV
         if (mal_object_note_prototype_mutation(object)) {
             MAL_PERF_COUNT(prototype_epoch_define_invalidations);
         }
-        mal_object_field_store(object, ic->slot, value);
+        mal_object_field_store_shaped(object, ic->slot, value);
         return true;
     }
     if (ic->mode == MAL_IC_MODE_SHAPE && ic->poly_count > 0 && key == ic->key) {
@@ -2329,7 +2329,7 @@ static inline bool mal_vm_object_try_store(MalObject *object, MalValue key, MalV
                 if (mal_object_note_prototype_mutation(object)) {
                     MAL_PERF_COUNT(prototype_epoch_define_invalidations);
                 }
-                mal_object_field_store(object, slot, value);
+                mal_object_field_store_shaped(object, slot, value);
                 return true;
             }
         }
@@ -2383,11 +2383,12 @@ static inline bool mal_vm_property_try_store_static(MalValue receiver, MalValue 
  * region, where the region's shape guard has already established that `slot` is a
  * writable data slot on this object's shape (so this runs no user code).
  */
+/** A store to a slot that Core or a matched class layout proves within the shape. */
 static inline void mal_vm_object_slot_store(MalObject *object, u32 slot, MalValue value) {
     if (mal_object_note_prototype_mutation(object)) {
         MAL_PERF_COUNT(prototype_epoch_define_invalidations);
     }
-    mal_object_field_store(object, slot, value);
+    mal_object_field_store_shaped(object, slot, value);
 }
 
 static inline bool mal_vm_constructor_try_begin_initialization(
@@ -3557,7 +3558,7 @@ static inline bool mal_vm_private_try_load(
     i32 slot = mal_vm_private_hint_slot(object, key_value);
     if (slot >= 0) {
         MAL_PERF_COUNT(private_load_hint_hits);
-        *out = mal_object_field_load(object, (u32) slot);
+        *out = mal_object_field_load_shaped(object, (u32) slot);
         return true;
     }
     const MalTable *table = mal_object_overflow(object);
@@ -3575,7 +3576,7 @@ static inline bool mal_vm_private_try_store(
     MalObject *object = mal_value_to_object(object_value);
     i32 slot = mal_vm_private_hint_slot(object, key_value);
     if (slot >= 0) {
-        mal_object_field_store(object, (u32) slot, value);
+        mal_object_field_store_shaped(object, (u32) slot, value);
         return true;
     }
     MalTable *table = mal_object_overflow(object);

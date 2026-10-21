@@ -6276,7 +6276,7 @@ function profileDecisionsForInstruction(
 	} else if (operation === "property") {
 		if (
 			source.includes("mal_vm_object_slot_store(mal_value_to_object(") ||
-			source.includes("mal_object_field_load(mal_value_to_object(")
+			source.includes("mal_object_field_load_shaped(mal_value_to_object(")
 		) {
 			decisions.push(decision("property.exact-own-slot", "applied"));
 		} else if (source.includes("mal_vm_try_load_known_own_slots(")) {
@@ -7733,7 +7733,7 @@ function emitInstruction(
 			case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT":
 				return [
 					"MAL_PERF_COUNT(exact_own_slot_loads);",
-					`r${instruction.dst} = ${callValue(instruction.dst, `mal_object_field_load(mal_value_to_object(${boxed(instruction.object)}), ${nativePlan.slot})`)};`,
+					`r${instruction.dst} = ${callValue(instruction.dst, `mal_object_field_load_shaped(mal_value_to_object(${boxed(instruction.object)}), ${nativePlan.slot})`)};`,
 				];
 			case "STORE_PROPERTY_STATIC":
 			case "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT":
@@ -9094,7 +9094,7 @@ function emitInstruction(
 										instruction.dst,
 										classLayout.kind === "method"
 											? `vm->class_cells[${layout}].methods[${index}]`
-											: `mal_object_field_load(__co_${ip}, ${index})`,
+											: `mal_object_field_load_shaped(__co_${ip}, ${index})`,
 									)};`,
 								inlineCacheLoad(position),
 							),
@@ -12901,7 +12901,7 @@ function emitInstruction(
 					object,
 					boxed(instruction.object),
 					({ index }) =>
-						`r${instruction.dst} = mal_object_field_load(${object}, ${index});`,
+						`r${instruction.dst} = mal_object_field_load_shaped(${object}, ${index});`,
 					hinted,
 				),
 				"}",

@@ -257,7 +257,7 @@ describe("native typed stack fields", () => {
 			for (const { op, ip } of loads) {
 				if (!generic) {
 					expect(output).toContain(
-						`r${op.dst} = mal_ops_number_as_f64(mal_object_field_load(`,
+						`r${op.dst} = mal_ops_number_as_f64(mal_object_field_load_shaped(`,
 					);
 					continue;
 				}
