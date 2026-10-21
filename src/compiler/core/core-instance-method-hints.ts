@@ -186,7 +186,7 @@ export interface CoreAccessorHints {
 }
 
 /** Object keys of a literal template value starting at `position`; returns the next position. */
-function literalTemplateKeys(
+export function literalTemplateKeys(
 	data: ReadonlyArray<number>,
 	position: number,
 	keys: Set<number>,

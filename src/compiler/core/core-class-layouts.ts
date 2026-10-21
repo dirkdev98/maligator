@@ -1,3 +1,4 @@
+import { literalTemplateKeys } from "./core-instance-method-hints.ts";
 import { coreDirectCreatedFunction } from "./core-ir-call-targets.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import type { CoreFunctionId, CoreInstructionId, CoreValueId } from "./core-ir.ts";
@@ -33,6 +34,8 @@ export interface CoreClassLayout {
 
 export interface CoreClassLayoutIndex {
 	readonly layouts: ReadonlyMap<CoreFunctionId, CoreClassLayout>;
+	/** Names some object literal or store outside `this` gives an own data property. */
+	readonly ordinaryKeys: ReadonlySet<number>;
 	/** Instance methods and accessors by the constructor of the class defining them. */
 	readonly methodClass: ReadonlyMap<CoreFunctionId, CoreFunctionId>;
 	/** Each class followed by its transitive subclasses. */
@@ -315,6 +318,43 @@ function walkConstructor(fn: CoreFunctionStore): ConstructorWalk {
 	}
 }
 
+function ordinaryDataKeys(program: CoreProgram): Set<number> {
+	const keys = new Set<number>();
+	for (const functionId of program.functionIds()) {
+		const fn = program.function(functionId);
+		for (const instruction of fn.instructionIds()) {
+			if (fn.instructionKind(instruction) !== "operation") continue;
+			const opcode = fn.instructionOpcodeName(instruction);
+			const attributes = fn.instructionAttributes(instruction);
+			if (opcode === "createObjectShaped" && Array.isArray(attributes.keyStringIndices)) {
+				for (const key of attributes.keyStringIndices)
+					if (typeof key === "number") keys.add(key);
+			} else if (
+				opcode === "instantiateLiteralTemplate" &&
+				typeof attributes.templateOffset === "number"
+			) {
+				literalTemplateKeys(program.literalTemplateData, attributes.templateOffset, keys);
+			} else if (
+				opcode === "storePropertyStatic" ||
+				opcode === "storeProperty" ||
+				// Class members are non-enumerable definitions; literal members are not.
+				(opcode === "defineProperty" && attributes.enumerable !== false)
+			) {
+				const args = operands(fn, instruction);
+				if (args[0] === undefined || isThis(fn, args[0])) continue;
+				const key =
+					opcode === "storePropertyStatic"
+						? (attributes.stringIndex as number | undefined)
+						: args[1] === undefined
+							? undefined
+							: stringIndexOf(fn, args[1]);
+				if (typeof key === "number") keys.add(key);
+			}
+		}
+	}
+	return keys;
+}
+
 export function coreClassLayouts(program: CoreProgram): CoreClassLayoutIndex {
 	const definitions = findClassDefinitions(program);
 	const globals = classGlobals(program);
@@ -407,5 +447,12 @@ export function coreClassLayouts(program: CoreProgram): CoreClassLayoutIndex {
 			byKey.set(id, list);
 		}
 	}
-	return Object.freeze({ layouts, methodClass, family, byMethodName, byKey });
+	return Object.freeze({
+		layouts,
+		ordinaryKeys: ordinaryDataKeys(program),
+		methodClass,
+		family,
+		byMethodName,
+		byKey,
+	});
 }

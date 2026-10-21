@@ -145,6 +145,9 @@ export function planCoreClassLayouts(
 				family !== undefined &&
 				receiver !== undefined &&
 				fn.instructionOpcodeName(receiver) === "loadThis";
+			// Objects that own the name as data never match a class layout, so a guess by
+			// name would only add a guard to their sites.
+			if (!own && name !== undefined && index.ordinaryKeys.has(name)) continue;
 			let result: CompilerClassLayoutSite | undefined;
 			if (opcode === "loadPropertyStatic") {
 				const methods = site(own ? family : index.byMethodName.get(name!), (layout) =>
