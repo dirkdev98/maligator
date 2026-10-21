@@ -500,19 +500,13 @@ iterator cursor is not, by itself, permission to delete its language object.
       `mal_text_buffer_append_number` (6%).
 - [ ] Elide the remaining call-only closures. Direct closures cover layouts that
       capture nothing, one owner, or a chain that starts with the creating
-      activation. A layout that skips an owner, such as a TypeScript checker helper
-      capturing the module scope and checkTypeRelatedTo but not createTypeChecker,
-      still builds a capture vector per closure per activation; closures with an
-      identical layout could share one. Nested functions passed as callbacks, like
-      TypeScript's isRelatedTo, keep their object.
-- [ ] Create escaping nested functions on their first escape. checkTypeRelatedTo
-      still allocates seven of its 49 nested functions on every call (isRelatedTo,
-      reportError and others) because a few branches pass them as values, such as
-      `reportErrors ? reportError : undefined` or isRelatedTo passed to
-      getBestMatchingType. Closure creation takes about 3.5% of the TypeScript
-      check. A captured slot could start empty and an explicit allocating Core
-      operation at each value use could create the closure once from the owner's
-      activation, so the calls stay direct and identity stays stable.
+      activation, and escaping reads create the object on first use. A layout that
+      skips an owner, such as TypeScript's reportError capturing the module scope
+      and checkTypeRelatedTo but not createTypeChecker, still builds a function
+      object per activation: checkTypeRelatedTo creates three of them on each of its
+      million calls. Passing the creator's chain instead made every call of such a
+      closure resolve its owners by lookup and cost 1% of the TypeScript check;
+      closures with an identical layout could share one capture vector instead.
 - [ ] Inline `f.call(thisArg, ...)` when `f` is a known script function. A cached
       call through %Function.prototype.call% now forwards to its receiver, but Core
       still cannot inline or directly call the target, because nothing proves the
