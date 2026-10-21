@@ -2875,8 +2875,9 @@ describe("native update-expression representation", () => {
 		);
 		const output = emitProgramImage(image, { compiled: true });
 		if (kind === "ordinary") {
-			expect(output).toContain("mal_vm_array_try_get_index(");
-			expect(output).toContain("mal_vm_array_try_store(");
+			expect(output).toContain("mal_vm_array_try_get_proven_index(");
+			expect(output).toContain("mal_vm_array_try_store_proven_index(");
+			expect(output).not.toContain("mal_ops_is_number(");
 			expect(output).toContain("mal_vm_indexed_fast_load_index(");
 			expect(output).toContain("mal_vm_indexed_fast_store_index(");
 		} else {

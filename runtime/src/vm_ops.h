@@ -2905,6 +2905,25 @@ static inline __attribute__((always_inline)) bool mal_vm_array_try_get_index(
     return (f64) integer == index && mal_vm_array_try_get_proven_index(arr, integer, out);
 }
 
+/** A non-negative boxed int32, which is always an Array index; any other key returns false. */
+static inline __attribute__((always_inline)) bool mal_vm_int32_index(MalValue key, u32 *index) {
+    u64 offset = key - MAL_VALUE_INT32;
+    *index = (u32) offset;
+    return offset <= INT32_MAX;
+}
+
+/** A boxed Number key reads its element without a detour through double when it is an int32. */
+static inline __attribute__((always_inline)) bool mal_vm_array_try_get_value_index(
+    const MalArrayObject *arr, MalValue key, MalValue *out
+) {
+    u32 index;
+    if (__builtin_expect(mal_vm_int32_index(key, &index), 1)) {
+        return mal_vm_array_try_get_proven_index(arr, index, out);
+    }
+    return mal_ops_is_number(key) &&
+        mal_vm_array_try_get_index(arr, mal_ops_number_as_f64(key), out);
+}
+
 static inline bool mal_vm_private_array_try_get_proven_index(
     const MalArrayObject *arr, u32 index, MalValue *out
 ) {
@@ -2971,28 +2990,42 @@ static inline i32 mal_vm_array_try_get_present_proven_index(
  * a writable length); false when the general [[Set]] is required. Never runs user code.
  * Mirrors the dense Array arms of mal_vm_indexed_fast_store_index exactly.
  */
-static inline bool mal_vm_array_try_store(MalArrayObject *arr, f64 index, MalValue value) {
-    if (index >= 0 && index < (f64) UINT32_MAX) {
-        u32 k = (u32) index;
-        if ((f64) k != index) {
-            return false;
-        }
-        if (mal_array_object_dense_has(arr, k) &&
-            arr->dense_elements_writable) {
-            return mal_array_object_dense_store(arr, k, value) ==
-                MAL_ARRAY_DENSE_APPLIED;
-        }
-        if (!arr->dense_deopted && mal_array_elements_protector && arr->object.extensible &&
-            arr->length_writable && mal_object_prototype(&arr->object) == mal_array_prototype_object) {
-            if (mal_array_object_dense_store(arr, k, value) == MAL_ARRAY_DENSE_APPLIED) {
-                if (k >= arr->length) {
-                    arr->length = k + 1;
-                }
-                return true;
+/** `k` must be an ECMAScript Array index, which excludes UINT32_MAX. */
+static inline bool mal_vm_array_try_store_proven_index(
+    MalArrayObject *arr, u32 k, MalValue value
+) {
+    if (mal_array_object_dense_has(arr, k) && arr->dense_elements_writable) {
+        return mal_array_object_dense_store(arr, k, value) == MAL_ARRAY_DENSE_APPLIED;
+    }
+    if (!arr->dense_deopted && mal_array_elements_protector && arr->object.extensible &&
+        arr->length_writable && mal_object_prototype(&arr->object) == mal_array_prototype_object) {
+        if (mal_array_object_dense_store(arr, k, value) == MAL_ARRAY_DENSE_APPLIED) {
+            if (k >= arr->length) {
+                arr->length = k + 1;
             }
+            return true;
         }
     }
     return false;
+}
+
+static inline bool mal_vm_array_try_store(MalArrayObject *arr, f64 index, MalValue value) {
+    if (index >= 0 && index < (f64) UINT32_MAX) {
+        u32 k = (u32) index;
+        return (f64) k == index && mal_vm_array_try_store_proven_index(arr, k, value);
+    }
+    return false;
+}
+
+static inline bool mal_vm_array_try_store_value_index(
+    MalArrayObject *arr, MalValue key, MalValue value
+) {
+    u32 index;
+    if (__builtin_expect(mal_vm_int32_index(key, &index), 1)) {
+        return mal_vm_array_try_store_proven_index(arr, index, value);
+    }
+    return mal_ops_is_number(key) &&
+        mal_vm_array_try_store(arr, mal_ops_number_as_f64(key), value);
 }
 
 /**

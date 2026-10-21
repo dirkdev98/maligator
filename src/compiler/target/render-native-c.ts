@@ -8939,7 +8939,9 @@ function emitInstruction(
 						? [
 								`MalArrayObject *${receiverName} = mal_vm_as_array(${boxed(instruction.object)});`,
 								`MalValue __v_${ip};`,
-								`if (${receiverName} && mal_vm_array_try_get_index(${receiverName}, ${num(instruction.key)}, &__v_${ip})) {`,
+								reps[instruction.key] === "int32"
+									? `if (${receiverName} && r${instruction.key} >= 0 && mal_vm_array_try_get_proven_index(${receiverName}, (u32) r${instruction.key}, &__v_${ip})) {`
+									: `if (${receiverName} && mal_vm_array_try_get_index(${receiverName}, ${num(instruction.key)}, &__v_${ip})) {`,
 								`  r${instruction.dst} = ${callValue(instruction.dst, `__v_${ip}`)};`,
 								`} else {`,
 								...position,
@@ -8957,7 +8959,7 @@ function emitInstruction(
 								// Dense Array element reads dominate boxed-key loads; other receivers keep the out-of-line helper.
 								`MalArrayObject *${receiverName} = mal_vm_as_array(${boxed(instruction.object)});`,
 								`MalValue __v_${ip};`,
-								`if (${receiverName} && mal_ops_is_number(${boxed(instruction.key)}) && mal_vm_array_try_get_index(${receiverName}, mal_ops_number_as_f64(${boxed(instruction.key)}), &__v_${ip})) {`,
+								`if (${receiverName} && mal_vm_array_try_get_value_index(${receiverName}, ${boxed(instruction.key)}, &__v_${ip})) {`,
 								`  r${instruction.dst} = ${callValue(instruction.dst, `__v_${ip}`)};`,
 								`} else {`,
 								...position,
@@ -9288,7 +9290,9 @@ function emitInstruction(
 					isNumericRep(reps[instruction.key]!)
 						? [
 								`MalArrayObject *${receiverName} = mal_vm_as_array(${boxed(instruction.object)});`,
-								`if (!(${receiverName} && mal_vm_array_try_store(${receiverName}, ${num(instruction.key)}, ${boxed(instruction.value)}))) {`,
+								reps[instruction.key] === "int32"
+									? `if (!(${receiverName} && r${instruction.key} >= 0 && mal_vm_array_try_store_proven_index(${receiverName}, (u32) r${instruction.key}, ${boxed(instruction.value)}))) {`
+									: `if (!(${receiverName} && mal_vm_array_try_store(${receiverName}, ${num(instruction.key)}, ${boxed(instruction.value)}))) {`,
 								...position,
 								...(context.incomingRootPublication ?? []).map((line) => `  ${line}`),
 								...(context.indexedPropertyInactiveRootMask === undefined
@@ -9301,8 +9305,12 @@ function emitInstruction(
 								`}`,
 							]
 						: [
-								`mal_vm_indexed_fast_store(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${strict}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}]);`,
-								throwCheck(),
+								`MalArrayObject *${receiverName} = mal_vm_as_array(${boxed(instruction.object)});`,
+								`if (!(${receiverName} && mal_vm_array_try_store_value_index(${receiverName}, ${boxed(instruction.key)}, ${boxed(instruction.value)}))) {`,
+								...position,
+								`  mal_vm_indexed_fast_store(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${strict}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}]);`,
+								`  ${throwCheck()}`,
+								`}`,
 							];
 				if (
 					indexedLengthLoopAction?.role === "element" &&
