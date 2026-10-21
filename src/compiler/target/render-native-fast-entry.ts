@@ -22,6 +22,7 @@ export interface NativeFastEntryInput {
 	readonly functionIndex: string;
 	readonly globalIndex: (index: number) => string;
 	readonly stringValue: (index: number) => string;
+	readonly stringLength: (index: number) => number | undefined;
 	readonly lengthProperty: (stringIndex: number) => boolean;
 	/** Non-allocating statements that bind what `capturedLoad` reads. */
 	readonly capturePrologue: ReadonlyArray<string>;
@@ -72,6 +73,7 @@ export function renderNativeFastEntry(
 	let loadsProperties = false;
 	let loadsCaptures = false;
 	const constants = numberConstantRegisters(fn.instructions);
+	const strings = stringConstantRegisters(fn.instructions);
 	const integers = int32ResultRegisters(fn.instructions, fn.parameterCount);
 	for (const [ip, op] of fn.instructions.entries()) {
 		const line = fastInstruction(
@@ -82,6 +84,7 @@ export function renderNativeFastEntry(
 			targets,
 			exported,
 			constants,
+			strings,
 			integers,
 		);
 		if (line === undefined) return undefined;
@@ -267,6 +270,28 @@ function numberConstantRegisters(
 	return constants;
 }
 
+/** Registers whose every definition loads the same string constant. */
+function stringConstantRegisters(
+	instructions: ReadonlyArray<BytecodeInstruction>,
+): ReadonlyMap<number, number> {
+	const strings = new Map<number, number>();
+	const varying = new Set<number>();
+	for (const op of instructions) {
+		if (!("dst" in op) || typeof op.dst !== "number") continue;
+		if (
+			op.opcode === "CREATE_STRING" &&
+			!varying.has(op.dst) &&
+			(strings.get(op.dst) ?? op.stringIndex) === op.stringIndex
+		) {
+			strings.set(op.dst, op.stringIndex);
+			continue;
+		}
+		strings.delete(op.dst);
+		varying.add(op.dst);
+	}
+	return strings;
+}
+
 /** Registers only int32 operators define, so a branch can test the integer itself. */
 function int32ResultRegisters(
 	instructions: ReadonlyArray<BytecodeInstruction>,
@@ -295,6 +320,9 @@ function int32ResultRegisters(
 interface FastNumbers {
 	readonly constants: ReadonlyMap<number, number>;
 	readonly literal: (value: number) => string;
+	/** String constant registers and the unit length of each constant. */
+	readonly strings: ReadonlyMap<number, number>;
+	readonly stringLength: (index: number) => number | undefined;
 }
 
 function numbers(values: FastNumbers, ...registers: ReadonlyArray<number>): string {
@@ -328,8 +356,18 @@ function fastBinary(
 ): string | undefined {
 	const { dst, left, right, operator } = op;
 	const guard = `if (${numbers(values, left, right)}) goto __full;`;
-	if (operator === "===" || operator === "!==")
-		return `f${dst} = mal_value_new_boolean(${operator === "!==" ? "!" : ""}mal_ops_strict_equal_boxed(f${left}, f${right}));`;
+	if (operator === "===" || operator === "!==") {
+		const constant = [right, left].find(
+			(register) =>
+				values.strings.has(register) &&
+				values.stringLength(values.strings.get(register)!) !== undefined,
+		);
+		const equal =
+			constant === undefined
+				? `mal_ops_strict_equal_boxed(f${left}, f${right})`
+				: `mal_ops_strict_equal_string_constant(f${constant === right ? left : right}, f${constant}, ${values.stringLength(values.strings.get(constant)!)!})`;
+		return `f${dst} = mal_value_new_boolean(${operator === "!==" ? "!" : ""}${equal});`;
+	}
 	if (operator === "==" || operator === "!=") {
 		// Only Number pairs and nullish operands avoid ToPrimitive and string comparison.
 		const not = operator === "!=" ? "!" : "";
@@ -385,9 +423,15 @@ function fastInstruction(
 	targets: Set<number>,
 	exported: boolean,
 	constants: ReadonlyMap<number, number>,
+	strings: ReadonlyMap<number, number>,
 	integers: ReadonlySet<number>,
 ): string | undefined {
-	const values: FastNumbers = { constants, literal: input.f64Literal };
+	const values: FastNumbers = {
+		constants,
+		literal: input.f64Literal,
+		strings,
+		stringLength: input.stringLength,
+	};
 	const value = (operand: number): string | undefined => {
 		if (operand >= 0) return `f${operand}`;
 		const decoded = decodeVmValueOperand(operand);

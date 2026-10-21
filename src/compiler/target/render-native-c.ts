@@ -2747,6 +2747,7 @@ function emitCompiledVariant(
 					functionIndex: relocation.functionIndex(index),
 					globalIndex: (global) => relocation.globalIndex(global),
 					stringValue: (string) => relocation.stringValue(string),
+					stringLength: (string) => stringConstants[string]?.length,
 					lengthProperty: (string) => isLengthPropertyName(stringConstants[string]),
 					capturePrologue: [
 						...initializeFixedCaptureOwners(analysis.captures, relocation, true, "env"),
@@ -5302,6 +5303,32 @@ function emitBody(
 		if (instruction.opcode === "CREATE_STRING")
 			stringConstantRegisters.set(instruction.dst, instruction.stringIndex);
 	}
+	// Reused registers hold many values, but a straight-line definition still reaches.
+	const stringConstantOperands = new Map<number, Map<number, number>>();
+	for (const [ip, instruction] of fn.instructions.entries()) {
+		if (
+			instruction.opcode !== "BINARY" ||
+			(instruction.operator !== "===" && instruction.operator !== "!==")
+		)
+			continue;
+		for (const register of [instruction.left, instruction.right]) {
+			if (stringConstantRegisters.has(register)) continue;
+			for (
+				let previous = ip - 1;
+				previous >= 0 && !jumpTargets.has(previous + 1);
+				previous--
+			) {
+				const definition = fn.instructions[previous]!;
+				if (!vmInstructionWriteRegisters(definition).includes(register)) continue;
+				if (definition.opcode === "CREATE_STRING") {
+					const operands = stringConstantOperands.get(ip) ?? new Map<number, number>();
+					operands.set(register, definition.stringIndex);
+					stringConstantOperands.set(ip, operands);
+				}
+				break;
+			}
+		}
+	}
 	// Finite dispatch compares one loaded callee against each candidate class's method,
 	// through separate guards or a call plan's guarded targets.
 	const polymorphicMethodLoads = new Set<number>();
@@ -5414,6 +5441,7 @@ function emitBody(
 		slowPathFramePosition: undefined,
 		polymorphicMethodLoad: false,
 		stringConstantRegisters,
+		stringConstantOperands,
 		relocation,
 		closureChainTests: nativeClosureChainTests(
 			fn,
@@ -6429,6 +6457,8 @@ interface NativeInstructionContext {
 	readonly polymorphicMethodLoad?: boolean;
 	/** Registers that read as one string constant, by string index. */
 	readonly stringConstantRegisters?: ReadonlyMap<number, number>;
+	/** String constants that reach a strict comparison's operands, by comparison ip. */
+	readonly stringConstantOperands?: ReadonlyMap<number, ReadonlyMap<number, number>>;
 	readonly numberPredicate?: NativeNumberPredicatePlan;
 	readonly stringTransform?: NativeStringTransformPlan;
 	readonly arrayInitialization?: {
@@ -10022,18 +10052,17 @@ function emitInstruction(
 					: `mal_ops_is_number(${boxed(left)}) && mal_ops_is_number(${boxed(right)})`;
 			if (compare !== undefined) {
 				if (bothBoxed && (operator === "===" || operator === "!==")) {
-					const constantRegister = [right, left].find(
-						(register) =>
-							context.stringConstantRegisters?.has(register) === true &&
-							context.stringConstants[context.stringConstantRegisters.get(register)!] !==
-								undefined,
-					);
+					const constantIndex = (register: number): number | undefined =>
+						context.stringConstantRegisters?.get(register) ??
+						context.stringConstantOperands?.get(ip)?.get(register);
+					const constantRegister = [right, left].find((register) => {
+						const index = constantIndex(register);
+						return index !== undefined && context.stringConstants[index] !== undefined;
+					});
 					const constantLength =
 						constantRegister === undefined
 							? undefined
-							: context.stringConstants[
-									context.stringConstantRegisters!.get(constantRegister)!
-								]!.length;
+							: context.stringConstants[constantIndex(constantRegister)!]!.length;
 					const equal =
 						constantRegister === undefined
 							? `mal_ops_strict_equal_boxed(${boxed(left)}, ${boxed(right)})`
