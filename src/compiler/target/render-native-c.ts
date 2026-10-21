@@ -8255,16 +8255,21 @@ function emitInstruction(
 			}
 			const define = `mal_vm_op_define_property(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${instruction.enumerable}, ${instruction.writable}, ${instruction.configurable});`;
 			const keyRepresentation = reps[instruction.key];
+			const numericKey = keyRepresentation === "number" || keyRepresentation === "int32";
+			// Array literals define their elements with boxed index constants.
 			if (
-				(keyRepresentation === "number" || keyRepresentation === "int32") &&
+				(numericKey || keyRepresentation === "boxed") &&
 				instruction.enumerable &&
 				instruction.writable &&
 				instruction.configurable
 			) {
 				const array = `__define_array_${ip}`;
+				const index = numericKey
+					? num(instruction.key)
+					: `mal_ops_number_as_f64(${boxed(instruction.key)})`;
 				return [
 					`MalArrayObject *${array} = mal_vm_as_array(${boxed(instruction.object)});`,
-					`if (!(${array} && mal_vm_array_try_define_index(${array}, ${num(instruction.key)}, ${boxed(instruction.value)}))) {`,
+					`if (!(${array} && ${numericKey ? "" : `mal_ops_is_number(${boxed(instruction.key)}) && `}mal_vm_array_try_define_index(${array}, ${index}, ${boxed(instruction.value)}))) {`,
 					`  ${define}`,
 					`  ${throwCheck()}`,
 					`}`,
