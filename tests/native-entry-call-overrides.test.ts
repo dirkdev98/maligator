@@ -188,7 +188,7 @@ describe("native entry call overrides", () => {
 			expect(source).toContain(`r2 = ${value};`);
 			expect(source).not.toContain(".value = mal_");
 			expect(source).toContain("mal_vm_call_cached(vm,");
-			expect(source).toContain("mal_vm_realm_switch_to(vm, __entry_realm);");
+			expect(source).toContain("MAL_CALLEE_REALM_LEAVE();");
 		},
 	);
 	it("uses defined Number-to-int32 conversion for an exact typed result", () => {

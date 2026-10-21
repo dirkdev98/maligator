@@ -7965,7 +7965,7 @@ function emitInstruction(
 		);
 		if (rest === null) return null;
 		return [
-			`i32 ${index} = mal_value_is_function_object(${callee}) ? mal_function_object_function_index(mal_value_to_function_object(${callee})) : -1;`,
+			`i32 ${index} = MAL_FUNCTION_INDEX_OF(${callee});`,
 			`if (!(${targets.map((target) => `${index} == ${relocation.functionIndex(target.functionIndex)}`).join(" || ") || "false"})) {`,
 			`  MalShape *${shape} = ${nativeBodyReference(resources, "literalShapes")}[${site.allocation.shapeCacheIndex}];`,
 			`  if (${shape} == nullptr) { ${shape} = mal_shape_from_string_keys(&vm->heap,(MalString *[]){${keys}},${site.allocation.count}); ${nativeBodyReference(resources, "literalShapes")}[${site.allocation.shapeCacheIndex}] = ${shape}; }`,
@@ -12050,20 +12050,12 @@ function emitInstruction(
 						const receiver = context.strictCompiledTargets.has(target)
 							? boxedOperand(instruction.thisValue)
 							: `mal_vm_callee_this(vm, &vm->runtime_image->functions[${relocation.functionIndex(target)}], ${boxedOperand(instruction.thisValue)})`;
-						const restoreRealm = [
-							"#if MAL_REALMS",
-							"  mal_vm_realm_switch_to(vm, __entry_realm);",
-							"#endif",
-						];
 						return [
 							`${index === 0 ? "if" : "else if"} (${guardedIndex} == ${relocation.functionIndex(target)}) {`,
-							"#if MAL_REALMS",
-							"  MalRealm *__entry_realm = vm->current_realm;",
-							`  mal_vm_realm_switch_to(vm, mal_vm_callee_realm(vm, ${guardedCallee}));`,
-							"#endif",
+							`  MAL_CALLEE_REALM_ENTER(${guardedCallee});`,
 							"  MAL_PERF_COUNT(direct_entry_hits);",
 							`  ${cTypeOf(transport.resultRepresentation)} ${value} = mal_direct_${relocation.stem(target)}_${entry.id}${suffix}(vm, ${receiver}${parameters.length === 0 ? "" : `, ${parameters.join(", ")}`}, mal_value_to_function_object(${guardedCallee})->creation_env, ${guardedCallee});`,
-							...restoreRealm,
+							"  MAL_CALLEE_REALM_LEAVE();",
 							`  ${throwCheck()}`,
 							`  r${instruction.dst} = ${convert(transport.result, value)};`,
 							"}",
@@ -12077,14 +12069,9 @@ function emitInstruction(
 							: `mal_vm_callee_this(vm, &vm->runtime_image->functions[${relocation.functionIndex(target)}], ${boxedOperand(instruction.thisValue)})`;
 						return [
 							`${index === 0 ? "if" : "else if"} (${guardedIndex} == ${relocation.functionIndex(target)}) {`,
-							"#if MAL_REALMS",
-							"  MalRealm *__entry_realm = vm->current_realm;",
-							`  mal_vm_realm_switch_to(vm, mal_vm_callee_realm(vm, ${guardedCallee}));`,
-							"#endif",
+							`  MAL_CALLEE_REALM_ENTER(${guardedCallee});`,
 							`  MalValue ${value} = mal_compiled_${relocation.stem(target)}${suffix}(vm, ${receiver}, ${argsExpr}, ${args.length}, MAL_VALUE_UNDEFINED, mal_value_to_function_object(${guardedCallee})->creation_env, ${guardedCallee}, nullptr);`,
-							"#if MAL_REALMS",
-							"  mal_vm_realm_switch_to(vm, __entry_realm);",
-							"#endif",
+							"  MAL_CALLEE_REALM_LEAVE();",
 							`  ${throwCheck()}`,
 							`  r${instruction.dst} = ${callResult(value)};`,
 							"}",
@@ -12100,7 +12087,7 @@ function emitInstruction(
 				});
 				return [
 					`MalValue ${guardedCallee} = ${boxedOperand(instruction.callee)};`,
-					`i32 ${guardedIndex} = mal_value_is_function_object(${guardedCallee}) ? mal_function_object_function_index(mal_value_to_function_object(${guardedCallee})) : -1;`,
+					`i32 ${guardedIndex} = MAL_FUNCTION_INDEX_OF(${guardedCallee});`,
 					...branches,
 					`else {`,
 					`  MalCompletion ${tmp} = ${profileCall("call", `mal_vm_call_cached(vm, ${nativeCallCacheReference(context, ip)}, ${guardedCallee}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length})`)};`,
