@@ -106,7 +106,6 @@ export function renderNativeFastEntry(
 		(_, register) => `f${register}`,
 	);
 	const fast = [
-		"#pragma STDC FP_CONTRACT OFF",
 		...input.prologue,
 		...(registers.length === 0 ? [] : [`    MalValue ${registers.join(", ")};`]),
 		"    if (!mal_vm_leaf_unobserved(vm) || !mal_vm_leaf_stack_available(vm)) goto __full;",
@@ -125,9 +124,12 @@ export function renderNativeFastEntry(
 		...lines,
 	];
 	const full = `    return ${input.fullSymbol}(${input.fullArguments.join(", ")});`;
+	// C admits the pragma only before the body's first statement.
+	const pragma = "#pragma STDC FP_CONTRACT OFF";
 	if (!exported)
 		return [
 			input.signature,
+			pragma,
 			...(fn.hasPrototype && directEntry === undefined
 				? ["    if (!mal_value_is_undefined(new_target)) goto __full;"]
 				: []),
@@ -139,6 +141,7 @@ export function renderNativeFastEntry(
 	const linkage = input.signature.startsWith("static ") ? "static " : "";
 	return [
 		`${linkage}__attribute__((no_stack_protector)) __attribute__((aligned(64))) bool ${input.trySymbol}(${FAST_TRY_PARAMETERS}) {`,
+		pragma,
 		...fast,
 		"__full:",
 		"    return false;",

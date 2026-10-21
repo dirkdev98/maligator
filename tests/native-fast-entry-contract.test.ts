@@ -71,12 +71,13 @@ function unexpectedHelpers(lines: ReadonlyArray<string>): ReadonlyArray<string> 
 function fastEntry(
 	fn: BytecodeFunction,
 	calleeTry: (ip: number) => string | undefined = () => undefined,
+	exported = true,
 ): ReadonlyArray<string> | undefined {
 	return renderNativeFastEntry({
 		fn,
 		directEntry: undefined,
 		specialized: false,
-		trySymbol: OWN_TRY,
+		trySymbol: exported ? OWN_TRY : undefined,
 		calleeTry: (ip, callee) => {
 			const symbol = calleeTry(ip);
 			return symbol === undefined
@@ -122,6 +123,15 @@ const loadCompareReturn: ReadonlyArray<BytecodeInstruction> = [
 ];
 
 describe("native fast entries", () => {
+	it("opens a constructible entry with the floating-point pragma before its new.target guard", () => {
+		const lines = fastEntry(
+			body(loadCompareReturn, { hasPrototype: true }),
+			undefined,
+			false,
+		);
+		expect(lines?.[1]).toBe("#pragma STDC FP_CONTRACT OFF");
+		expect(lines?.[2]).toContain("mal_value_is_undefined(new_target)");
+	});
 	it("call only helpers that cannot collect or run JavaScript", () => {
 		const lines = fastEntry(body(loadCompareReturn));
 		expect(lines).toBeDefined();
