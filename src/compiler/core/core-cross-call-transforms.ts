@@ -461,13 +461,23 @@ function applicationCaptureContext(
 	);
 }
 
-function captureEnvironmentIsStable(
+// Every candidate call site of a large caller asks for the same predecessor edges.
+const blockPredecessors = new WeakMap<
+	CoreFunctionStore,
+	{
+		readonly cfgVersion: number;
+		readonly predecessors: ReadonlyMap<CoreBlockId, ReadonlyArray<CoreBlockId>>;
+	}
+>();
+
+function blockPredecessorsOf(
 	fn: CoreFunctionStore,
-	creation: CoreInstructionId,
-	site: CoreInstructionId,
-): boolean {
-	const creationBlock = fn.instructionBlock(creation);
-	const siteBlock = fn.instructionBlock(site);
+): ReadonlyMap<CoreBlockId, ReadonlyArray<CoreBlockId>> {
+	// An open editor's edits move no version until it commits.
+	const cfgVersion = fn.hasActiveEditor ? undefined : fn.version("cfg");
+	const cached = blockPredecessors.get(fn);
+	if (cfgVersion !== undefined && cached?.cfgVersion === cfgVersion)
+		return cached.predecessors;
 	const predecessors = new Map<CoreBlockId, Array<CoreBlockId>>();
 	for (const block of fn.blockIds()) {
 		const last = fn.kernel.blockLastInstruction(block);
@@ -481,6 +491,18 @@ function captureEnvironmentIsStable(
 			predecessors.set(target, incoming);
 		}
 	}
+	if (cfgVersion !== undefined) blockPredecessors.set(fn, { cfgVersion, predecessors });
+	return predecessors;
+}
+
+function captureEnvironmentIsStable(
+	fn: CoreFunctionStore,
+	creation: CoreInstructionId,
+	site: CoreInstructionId,
+): boolean {
+	const creationBlock = fn.instructionBlock(creation);
+	const siteBlock = fn.instructionBlock(site);
+	const predecessors = blockPredecessorsOf(fn);
 	const canReachSite = new Set<CoreBlockId>([siteBlock]);
 	const reverse = [siteBlock];
 	while (reverse.length > 0 && canReachSite.size <= 64) {

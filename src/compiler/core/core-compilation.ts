@@ -180,9 +180,11 @@ interface CapturedSlotScan {
 const capturedSlotScans = new WeakMap<CoreFunctionStore, CapturedSlotScan>();
 
 function capturedSlotsOf(fn: CoreFunctionStore): ReadonlyArray<CoreCapturedSlotRef> {
-	const bodyVersion = fn.version("body");
+	// An open editor's edits move no version until it commits.
+	const bodyVersion = fn.hasActiveEditor ? undefined : fn.version("body");
 	const cached = capturedSlotScans.get(fn);
-	if (cached !== undefined && cached.bodyVersion === bodyVersion) return cached.slots;
+	if (bodyVersion !== undefined && cached?.bodyVersion === bodyVersion)
+		return cached.slots;
 	const slots: Array<CoreCapturedSlotRef> = [];
 	for (const instruction of fn.instructionIds()) {
 		if (fn.instructionKind(instruction) !== "operation") continue;
@@ -194,7 +196,7 @@ function capturedSlotsOf(fn: CoreFunctionStore): ReadonlyArray<CoreCapturedSlotR
 		if (typeof owner === "number" && typeof index === "number")
 			slots.push({ owner, index });
 	}
-	capturedSlotScans.set(fn, { bodyVersion, slots });
+	if (bodyVersion !== undefined) capturedSlotScans.set(fn, { bodyVersion, slots });
 	return slots;
 }
 

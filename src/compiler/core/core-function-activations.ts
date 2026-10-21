@@ -115,9 +115,10 @@ interface CoreCaptureScan {
 const captureScans = new WeakMap<CoreFunctionStore, CoreCaptureScan>();
 
 function coreCaptureScan(fn: CoreFunctionStore): CoreCaptureScan {
-	const bodyVersion = fn.version("body");
+	// An open editor's edits move no version until it commits.
+	const bodyVersion = fn.hasActiveEditor ? undefined : fn.version("body");
 	const cached = captureScans.get(fn);
-	if (cached?.bodyVersion === bodyVersion) return cached;
+	if (bodyVersion !== undefined && cached?.bodyVersion === bodyVersion) return cached;
 	const owners = new Set<number>();
 	let createsFunctions = false;
 	for (const instruction of fn.instructionIds()) {
@@ -128,8 +129,8 @@ function coreCaptureScan(fn: CoreFunctionStore): CoreCaptureScan {
 		const owner = fn.instructionAttributes(instruction).functionIndex;
 		if (typeof owner === "number") owners.add(owner);
 	}
-	const scan = { bodyVersion, owners, createsFunctions };
-	captureScans.set(fn, scan);
+	const scan = { bodyVersion: bodyVersion ?? -1, owners, createsFunctions };
+	if (bodyVersion !== undefined) captureScans.set(fn, scan);
 	return scan;
 }
 

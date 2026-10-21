@@ -864,14 +864,14 @@ function verifyGcRoots(
 		}
 		safepoints.add(instruction);
 		const unique = new Set<number>();
+		const context = (register: number): ExecutionVerificationContext => ({
+			functionIndex,
+			block: site.block,
+			instruction: site.index,
+			opcode: instruction.type,
+			register,
+		});
 		for (const register of rootRegisters) {
-			const context: ExecutionVerificationContext = {
-				functionIndex,
-				block: site.block,
-				instruction: site.index,
-				opcode: instruction.type,
-				register,
-			};
 			if (
 				!Number.isSafeInteger(register) ||
 				register < 0 ||
@@ -879,13 +879,14 @@ function verifyGcRoots(
 			) {
 				fail(
 					`GC root register is out of bounds for a ${fn.registerCount}-register function`,
-					context,
+					context(register),
 				);
 			}
 			if (!isRooted(fn, register)) {
-				fail("GC root register must carry a traced value", context);
+				fail("GC root register must carry a traced value", context(register));
 			}
-			if (unique.has(register)) fail("GC root register is listed twice", context);
+			if (unique.has(register))
+				fail("GC root register is listed twice", context(register));
 			unique.add(register);
 		}
 		if (safepoint.kind === "loop-backedge") {
