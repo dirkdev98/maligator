@@ -1606,8 +1606,6 @@ const foldRedundantTdzChecks: CoreFunctionPass = {
 		if (checks.length === 0) return undefined;
 		const control = context.analysis(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS).exceptional();
 		const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
-		const known = new Map<CoreValueId, boolean>();
-		const visiting = new Set<CoreValueId>();
 		const initializedGlobals = coreInitializedGlobalSlotMembership(
 			context.compilationContext,
 		);
@@ -1754,55 +1752,85 @@ const foldRedundantTdzChecks: CoreFunctionPass = {
 				isSuperThisStateKey(fn.instructionAttributes(definition).stringIndex)
 			);
 		};
-		const excludesEmpty = (value: CoreValueId): boolean => {
-			const cached = known.get(value);
-			if (cached !== undefined) return cached;
-			if (visiting.has(value)) return false;
-			visiting.add(value);
-			const definitionKind = fn.kernel.valueDefinitionKind(value);
-			const definitionOwner = fn.kernel.valueDefinitionOwner(value);
-			const definitionIndex = fn.kernel.valueDefinitionIndex(value);
-			let result: boolean;
-			if (definitionKind === 0) {
-				const block = coreBlockId(definitionOwner);
-				const parameterRow = fn.kernel.blockParameterStart(block) + definitionIndex;
-				if (
-					fn.kernel.blockParameterRole(parameterRow) === 1 ||
-					isFunctionParameter(fn, value)
-				) {
-					result = true;
-				} else {
-					const incoming = control.predecessors[block] ?? [];
-					result =
-						incoming.length > 0 &&
-						incoming.every((edge) => {
-							const argument =
-								edge.arguments[
-									edge.kind === "exceptional" ? definitionIndex - 1 : definitionIndex
-								];
-							return argument !== undefined && excludesEmpty(argument);
-						});
+		const definitionMayBeEmpty = (instruction: CoreInstructionId): boolean => {
+			const opcode = fn.instructionOpcodeName(instruction);
+			return opcode === "loadProperty" ||
+				opcode === "loadPropertyStatic" ||
+				opcode === "loadPropertyStaticShapeCase"
+				? mayLoadSuperThisState(instruction, opcode)
+				: opcode === "loadGlobal"
+					? !initializedGlobal(instruction)
+					: opcode === "loadCaptured"
+						? !initializedCapture(instruction)
+						: ["createEmpty", "loadLocal", "loadThis"].includes(opcode);
+		};
+		// A cycle of moves and block parameters only forwards what enters it, so
+		// emptiness spreads forward from its sources to a fixpoint.
+		let possiblyEmpty: ReadonlySet<CoreValueId> | undefined;
+		const mayBeEmpty = (value: CoreValueId): boolean => {
+			if (possiblyEmpty !== undefined) return possiblyEmpty.has(value);
+			const empty = new Set<CoreValueId>();
+			const moves: Array<{
+				readonly result: CoreValueId;
+				readonly source: CoreValueId | undefined;
+			}> = [];
+			for (const instruction of fn.instructionIds()) {
+				if (fn.instructionKind(instruction) !== "operation") continue;
+				const resultStart = fn.kernel.instructionResultStart(instruction);
+				const resultCount = fn.kernel.instructionResultCount(instruction);
+				if (resultCount === 0) continue;
+				if (fn.instructionOpcodeName(instruction) === "move") {
+					moves.push({
+						result: fn.kernel.resultAt(resultStart),
+						source: instructionOperand(fn, instruction, 0),
+					});
+				} else if (definitionMayBeEmpty(instruction)) {
+					for (let index = 0; index < resultCount; index++)
+						empty.add(fn.kernel.resultAt(resultStart + index));
 				}
-			} else {
-				const instruction = coreInstructionId(definitionOwner);
-				const opcode = fn.instructionOpcodeName(instruction);
-				const source = instructionOperand(fn, instruction, 0);
-				result =
-					opcode === "move"
-						? source !== undefined && excludesEmpty(source)
-						: opcode === "loadProperty" ||
-							  opcode === "loadPropertyStatic" ||
-							  opcode === "loadPropertyStaticShapeCase"
-							? !mayLoadSuperThisState(instruction, opcode)
-							: opcode === "loadGlobal"
-								? initializedGlobal(instruction)
-								: opcode === "loadCaptured"
-									? initializedCapture(instruction)
-									: !["createEmpty", "loadLocal", "loadThis"].includes(opcode);
 			}
-			visiting.delete(value);
-			known.set(value, result);
-			return result;
+			const parameters: Array<{
+				readonly value: CoreValueId;
+				readonly index: number;
+				readonly incoming: ReadonlyArray<CoreControlEdge>;
+			}> = [];
+			for (const block of fn.blockIds()) {
+				const parameterStart = fn.kernel.blockParameterStart(block);
+				const incoming = control.predecessors[block] ?? [];
+				for (let index = 0; index < fn.kernel.blockParameterCount(block); index++) {
+					const value = fn.kernel.blockParameterValue(parameterStart + index);
+					if (
+						fn.kernel.blockParameterRole(parameterStart + index) === 1 ||
+						isFunctionParameter(fn, value)
+					)
+						continue;
+					if (incoming.length === 0) empty.add(value);
+					else parameters.push({ value, index, incoming });
+				}
+			}
+			for (let changed = true; changed;) {
+				changed = false;
+				for (const { result, source } of moves) {
+					if (empty.has(result) || (source !== undefined && !empty.has(source))) continue;
+					empty.add(result);
+					changed = true;
+				}
+				for (const { value, index, incoming } of parameters) {
+					if (empty.has(value)) continue;
+					if (
+						incoming.some((edge) => {
+							const argument =
+								edge.arguments[edge.kind === "exceptional" ? index - 1 : index];
+							return argument === undefined || empty.has(argument);
+						})
+					) {
+						empty.add(value);
+						changed = true;
+					}
+				}
+			}
+			possiblyEmpty = empty;
+			return empty.has(value);
 		};
 		const redundant: Array<{
 			readonly instruction: CoreInstructionId;
@@ -1812,7 +1840,7 @@ const foldRedundantTdzChecks: CoreFunctionPass = {
 			const input = instructionOperand(fn, instruction, 0);
 			if (
 				input === undefined ||
-				(kinds.kindMask(input) === COMPILER_VALUE_KIND_TOP && !excludesEmpty(input))
+				(kinds.kindMask(input) === COMPILER_VALUE_KIND_TOP && mayBeEmpty(input))
 			)
 				continue;
 			redundant.push({ instruction, input });

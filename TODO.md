@@ -125,10 +125,11 @@ The independent target boundary and current storage contract are recorded in
       self-compile's clang CPU from 352 s to 322 s, but added 4 s of
       single-threaded emission, which cancels the saving at eight jobs.
 - [ ] Fold the TDZ checks that remain on module bindings read through import cycles
-      and immediately invoked setup functions, such as the one that opens meriyah;
-      5,073 of 18,830 checks remain in the self-compile C. Hoisted helpers that
-      inherit the bindings declared before their first reference, and prefixes
-      that continue past calls into data-only dependencies, removed almost none.
+      and immediately invoked setup functions, such as the one that opens meriyah.
+      The self-compile image keeps 2,096 `THROW_IF_TDZ` instructions now that
+      loop-carried values fold. Hoisted helpers that inherit the bindings declared
+      before their first reference, and prefixes that continue past calls into
+      data-only dependencies, removed almost none.
 - [ ] Bring the native self-compile's memory closer to its live set. Peak live
       bytes stay near 900 MB, but maximum RSS is 4.4 GB now that process GC
       pressure backs off past its budget (it was 3.5 GB while pressure forced 183
@@ -416,14 +417,6 @@ Shared lifetime and fallback rules are recorded in
       spends 1.0 s for 40 changed functions. Verification is another 5.5 s (13%),
       most of it independent re-derivation at trust boundaries.
 
-- [ ] redundant-tdz-check-folding treats a value it is still visiting as possibly
-      empty, so a loop value that reaches itself on one edge (a switch's implicit
-      default path, a `left`/`right` swap) keeps its TDZ check. Visiting
-      optimistically, as a greatest fixpoint that caches a true result only once no
-      unfinished ancestor supports it, removes those checks. tests/native-tdz-plan.test.ts
-      depends on its ROTATION fixture keeping one such check, so it needs a fixture
-      whose check Core cannot remove before the change lands.
-
 - [ ] Put aggregate work and memory budgets around analysis extensions, including
       rejected candidates and nested queries, not only admitted entries. Reuse
       versioned queries within their valid lifetime; bound contexts and recursive
@@ -522,12 +515,6 @@ iterator cursor is not, by itself, permission to delete its language object.
       miss path, and read about 16 million `SyntaxKind` members from dictionary
       objects through the out-of-line probe, which now saves the registers its
       other rows need even for this one.
-- [ ] Prove loop-carried bindings initialized. `redundant-tdz-check-folding` gives
-      up on any phi cycle, so every `let` updated in a loop keeps its TDZ checks. A
-      least fixpoint over moves and block parameters removes them, but made the
-      TypeScript check run about 3.7% more instructions and 1% more cycles, and
-      the native TDZ-plan tests lose the checks their fixture relies on; find what
-      the removed checks were holding in place first.
 - [ ] Finish specializing higher-order helpers. TypeScript's binarySearchKey clone
       now inlines getTypeId, compareComparableValues and its `some(array)` test,
       but it is still the hottest TypeScript function at about 6%. Cloning small

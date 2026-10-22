@@ -93,7 +93,6 @@ export interface NativeStoragePlan
 	readonly privateCallResultIps: ReadonlyArray<number>;
 	readonly entryStableRootRegisters: ReadonlyArray<number>;
 	readonly rootPublicationContinuations: ReadonlyArray<number>;
-	readonly elidedTdzIps: ReadonlyArray<number>;
 	readonly numericWorker: NativeNumericWorkerPlan | undefined;
 }
 
@@ -467,21 +466,6 @@ function scalarStorageOwnership(
 		for (const register of body.writes[point.instructionIp]!) borrowed.add(register);
 	}
 	return { blocked, borrowed };
-}
-
-function elidedTdzIps(
-	native: NativeFunctionPlan,
-	{ blocked, borrowed }: NativeScalarOwnership,
-): ReadonlyArray<number> {
-	if (native.storageValues === undefined) return [];
-	return native.body.instructions.flatMap((op, ip) =>
-		op.opcode === "THROW_IF_TDZ" &&
-		!blocked.has(ip) &&
-		!borrowed.has(op.src) &&
-		["number", "int32", "boolean"].includes(native.registerRepresentations[op.src]!)
-			? [ip]
-			: [],
-	);
 }
 
 function scalarStorageUses(
@@ -1366,7 +1350,6 @@ function lowerStorage(
 					scalar.expressionIps,
 					untracedPrimitiveResultRegisters(native, body, ownership),
 				)),
-		elidedTdzIps: elidedTdzIps(native, ownership),
 		rootPublicationContinuations:
 			stackRoots === "conservative"
 				? []
@@ -1933,7 +1916,6 @@ export function validateNativeStorage(
 					"privateCallResultIps",
 					"entryStableRootRegisters",
 					"rootPublicationContinuations",
-					"elidedTdzIps",
 				] as const
 			).every(
 				(key) =>

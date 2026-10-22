@@ -553,18 +553,21 @@ describe("independent native SSA storage", () => {
 		)!;
 		expect(numericRotation).toBeDefined();
 		expect(numericRotation.registerRepresentations[cycleLocals[0]!]).toBe("number");
-		expect(numericRotation.storage!.elidedTdzIps.length).toBeGreaterThan(0);
-		expect(rotation.storage!.elidedTdzIps).toEqual([]);
+		const hasTdzCheck = (fn: (typeof image.native.functions)[number]) =>
+			fn.body.instructions.some((op) => op.opcode === "THROW_IF_TDZ");
+		expect(hasTdzCheck(rotation)).toBe(false);
 		const flags = image.native.functions.find(
 			(fn) =>
 				String.fromCharCode(
 					...(image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
 				) === "rotateFlags",
 		)!;
-		const booleanFlags = flags.directEntries.find((entry) =>
-			entry.parameterRepresentations.slice(0, 2).every((rep) => rep === "boolean"),
-		)!;
-		expect(booleanFlags.storage!.elidedTdzIps.length).toBeGreaterThan(0);
+		expect(
+			flags.directEntries.some((entry) =>
+				entry.parameterRepresentations.slice(0, 2).every((rep) => rep === "boolean"),
+			),
+		).toBe(true);
+		expect(hasTdzCheck(flags)).toBe(false);
 		const early = image.native.functions.find(
 			(fn) =>
 				String.fromCharCode(
@@ -572,9 +575,7 @@ describe("independent native SSA storage", () => {
 				) === "readEarly",
 		)!;
 		expect(early.body.instructions.some((op) => op.opcode === "CREATE_EMPTY")).toBe(true);
-		expect(early.storage!.elidedTdzIps).toEqual([]);
-		for (const entry of early.directEntries)
-			expect(entry.storage!.elidedTdzIps).toEqual([]);
+		expect(hasTdzCheck(early)).toBe(true);
 		const projection = image.native.functions.find(
 			(fn) =>
 				String.fromCharCode(
@@ -587,11 +588,6 @@ describe("independent native SSA storage", () => {
 		)!;
 		expect(scalarProjection).toBeDefined();
 		expect(scalarProjection.storage!.propertyProjections).toHaveLength(1);
-		expect(scalarProjection.storage!.elidedTdzIps.length).toBeGreaterThan(0);
-		for (const ip of scalarProjection.storage!.elidedTdzIps)
-			expect(scalarProjection.storage!.propertyProjections[0]!.claimedIps).not.toContain(
-				ip,
-			);
 		for (const name of ["postProperty", "preProperty", "addProperty", "copyProperty"]) {
 			const fn = image.native.functions.find(
 				(candidate) =>

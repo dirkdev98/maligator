@@ -2462,7 +2462,6 @@ function emitCompiledVariant(
 		rootPublication,
 		new Set(storage.expressionIps),
 		new Set(storage.rematerializedConstantIps),
-		new Set(storage.elidedTdzIps),
 		storage,
 		storage.callTransports,
 		storage.callbackTransports,
@@ -3607,7 +3606,6 @@ function emitResumableFunction(
 		undefined,
 		new Set(storage.expressionIps),
 		new Set(storage.rematerializedConstantIps),
-		new Set(storage.elidedTdzIps),
 		storage,
 		storage.callTransports,
 		storage.callbackTransports,
@@ -4797,7 +4795,6 @@ function emitBody(
 	rootPublication?: NativeRootPublication,
 	expressionIps: ReadonlySet<number> = new Set(),
 	rematerializedConstantIps: ReadonlySet<number> = new Set(),
-	elidedTdzIps: ReadonlySet<number> = new Set(),
 	fastPathPlans: NativeFastPathPlans = {
 		literalPropertyDefinitions: [],
 		mathCalls: [],
@@ -6136,20 +6133,18 @@ function emitBody(
 				? undefined
 				: { store: framePositionStore, consumed: false, elided: false };
 		instructionContext.slowPathFramePosition = slowPathFramePosition;
-		const emitted = elidedTdzIps.has(ip)
-			? []
-			: emitInstruction(
-					fn.instructions[ip]!,
-					ip,
-					suffix,
-					reps,
-					fn.strict,
-					handlerTargets[ip],
-					gcUnlink,
-					thisSlot,
-					coro,
-					instructionContext,
-				);
+		const emitted = emitInstruction(
+			fn.instructions[ip]!,
+			ip,
+			suffix,
+			reps,
+			fn.strict,
+			handlerTargets[ip],
+			gcUnlink,
+			thisSlot,
+			coro,
+			instructionContext,
+		);
 		if (emitted === null) {
 			return null;
 		}

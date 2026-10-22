@@ -206,8 +206,7 @@ describe("native scalar plans around opaque and exceptional windows", () => {
 		const storage = fn.storage!;
 		expect(storage.expressionIps.length).toBeGreaterThan(0);
 		expect(storage.definitionInitializedRegisters.length).toBeGreaterThan(0);
-		for (const ip of [...storage.expressionIps, ...storage.elidedTdzIps])
-			expect(fusion.claimedIps).not.toContain(ip);
+		for (const ip of storage.expressionIps) expect(fusion.claimedIps).not.toContain(ip);
 		const borrowed = fusion.claimedIps.flatMap((ip) => [
 			...vmInstructionReadRegisters(fn.body.instructions[ip]!),
 			...vmInstructionWriteRegisters(fn.body.instructions[ip]!),
@@ -218,7 +217,7 @@ describe("native scalar plans around opaque and exceptional windows", () => {
 		expect(emitCompiledFunction(fn, fn.functionIndex, "", false)).not.toBeNull();
 	});
 
-	it("omits scalar TDZ guards outside a selected property fusion in a typed entry", () => {
+	it("plans a typed entry beside a selected property fusion without TDZ guards on its swap", () => {
 		const image = compileSemanticProgramToProgramImage(
 			analyzeSourceAndRunSemanticAnalysis(
 				`function project(value, left, right, count, callback) {
@@ -238,15 +237,12 @@ describe("native scalar plans around opaque and exceptional windows", () => {
 		expect(fn.specializations.some((region) => region.kind === "numeric-fusion")).toBe(
 			true,
 		);
-		const entry = fn.directEntries.find((candidate) =>
-			candidate.parameterRepresentations.slice(1, 4).every((rep) => rep === "number"),
-		)!;
-		expect(entry.storage!.elidedTdzIps.length).toBeGreaterThan(0);
-		const claimed = fn.specializations.flatMap((region) => region.claimedIps);
-		for (const ip of entry.storage!.elidedTdzIps) {
-			expect(fn.body.instructions[ip]!.opcode).toBe("THROW_IF_TDZ");
-			expect(claimed).not.toContain(ip);
-		}
+		expect(
+			fn.directEntries.some((candidate) =>
+				candidate.parameterRepresentations.slice(1, 4).every((rep) => rep === "number"),
+			),
+		).toBe(true);
+		expect(fn.body.instructions.some((op) => op.opcode === "THROW_IF_TDZ")).toBe(false);
 		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(image));
 		expect(restored.native.functions[1]!.storage).toEqual(fn.storage);
 		expect(
@@ -282,8 +278,7 @@ describe("native scalar plans around opaque and exceptional windows", () => {
 		expect(storage.expressionIps.length).toBeGreaterThan(0);
 		expect(storage.definitionInitializedRegisters.length).toBeGreaterThan(0);
 		expect(storage.rematerializedConstantIps).toEqual([]);
-		for (const ip of [...storage.expressionIps, ...storage.elidedTdzIps])
-			expect(handlers[ip]).toBeUndefined();
+		for (const ip of storage.expressionIps) expect(handlers[ip]).toBeUndefined();
 		const protectedDefinition = fn.body.instructions.findIndex(
 			(op, ip) => handlers[ip] !== undefined && op.opcode === "UNARY",
 		);

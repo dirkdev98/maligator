@@ -370,7 +370,7 @@ describe("whole-program Core value kinds", () => {
 				({ opcode, attributes }) => opcode === "binary" && attributes.operator === "==",
 			),
 		).toBe(kept);
-		expect(search.some(({ opcode }) => opcode === "throwIfTdz")).toBe(kept);
+		expect(search.some(({ opcode }) => opcode === "throwIfTdz")).toBe(false);
 	});
 
 	it("keeps parameter observations when open-world callers may add other kinds", () => {

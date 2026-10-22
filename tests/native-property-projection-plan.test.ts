@@ -104,19 +104,17 @@ describe("persisted native numeric property projections", () => {
 		},
 	);
 
-	it("composes unclaimed scalar expressions and TDZ omissions without borrowing their outputs", () => {
+	it("composes unclaimed scalar expressions without borrowing their outputs", () => {
 		const fn = scalarContract();
 		const plan = fn.storage!.propertyProjections[0]!;
 		expect(plan).toBeDefined();
 		expect(fn.storage!.expressionIps).toContain(6);
-		expect(fn.storage!.elidedTdzIps).toContain(8);
 		expect(plan.borrowedRegisters).not.toContain(6);
 		for (const ip of fn.storage!.expressionIps) expect(plan.claimedIps).not.toContain(ip);
 		for (const local of plan.borrowedRegisters)
 			expect(fn.storage!.privateRegisters).not.toContain(local);
 		const emitted = emitCompiledFunction(fn, 0, "", false)!;
 		expect(emitted.source).toContain("mal_vm_property_try_load_static_number_pair(");
-		expect(emitted.source).not.toContain("mal_vm_op_throw_if_tdz");
 	});
 
 	it("does not carry unmaterialized projection outputs across an adjacent polling jump", () => {

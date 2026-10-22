@@ -864,6 +864,43 @@ describe("Core local canonicalization", () => {
 		expect(opcodes).toContain("throwIfTdz");
 	});
 
+	it("removes TDZ checks from loop cycles that only forward initialized values", () => {
+		const optimized = optimizedClosedModule(
+			`function rotate(left, right, count) {
+				for (let index = 0; index < count; index++) {
+					const saved = left; left = right; right = saved;
+				}
+				return left + right;
+			}
+			function rotateEarly(count) {
+				let left = 1;
+				for (let index = 0; index < count; index++) {
+					const saved = left; left = right; right = saved;
+				}
+				let right = 2;
+				return left + right;
+			}
+			globalThis.results = [rotate(3, 7, 4), rotateEarly(0)];`,
+			"core-tdz-rotation.mjs",
+		);
+		const checks = new Map<string, number>();
+		for (const functionId of optimized.functionIds()) {
+			const fn = optimized.function(functionId);
+			const units = optimized.stringConstants[fn.metadata.nameStringIndex];
+			if (units === undefined) continue;
+			checks.set(
+				String.fromCharCode(...units),
+				[...fn.instructionIds()].filter(
+					(instruction) =>
+						fn.instructionKind(instruction) === "operation" &&
+						fn.instructionOpcodeName(instruction) === "throwIfTdz",
+				).length,
+			);
+		}
+		expect(checks.get("rotate")).toBe(0);
+		expect(checks.get("rotateEarly")).toBeGreaterThan(0);
+	});
+
 	it("removes coercion work already decided by primitive kinds", () => {
 		const program = new CoreProgram(coreOpcodeRegistry, { stringConstants: [[], []] });
 		const build = (coercible: boolean) => {

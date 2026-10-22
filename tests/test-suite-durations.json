@@ -580,7 +580,6 @@
 				"tests/native-string-transform-plans.test.ts": 0.3,
 				"tests/native-suspension-liveness.test.ts": 0.2,
 				"tests/native-suspension-plan.test.ts": 0.2,
-				"tests/native-tdz-plan.test.ts": 0.2,
 				"tests/native-typed-array-loop-plan.test.ts": 2.7,
 				"tests/native-untraced-operator-storage.test.ts": 1.3,
 				"tests/native/activation-input-facts.test.ts": 4.3,
