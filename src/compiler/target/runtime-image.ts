@@ -28,6 +28,7 @@ import {
 import { staticDataQueryKinds } from "../shared/static-data-query.ts";
 import type { StaticDataQueryKind } from "../shared/static-data-query.ts";
 import { isStringCollationPlan } from "../shared/string-collation-plan.ts";
+import { compactRuntimeCaptureStorage } from "./compact-capture-storage.ts";
 import { targetInstructionUsesPropertyCache } from "./core-target-ir.ts";
 import { executionFunctionIndex } from "./execution-ir.ts";
 import type { ExecutionFunction, ExecutionProgram } from "./execution-ir.ts";
@@ -3378,7 +3379,10 @@ export function lowerVerifiedExecutionToRuntimePlan(
 
 export function lowerExecutionToRuntimeImage(program: ExecutionProgram): RuntimeImage {
 	verifyExecutionProgram(program);
-	return lowerVerifiedExecutionToRuntimePlan(program).compacted.runtime;
+	return compactRuntimeCaptureStorage(
+		lowerVerifiedExecutionToRuntimePlan(program).compacted.runtime,
+		program.context,
+	);
 }
 
 function buildHostInstalls(

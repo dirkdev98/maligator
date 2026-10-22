@@ -1,15 +1,50 @@
 import type { CoreCompilationContext } from "../core/core-compilation.ts";
 import type { ProgramImage } from "./program-image.ts";
-import type { BytecodeInstruction } from "./runtime-image.ts";
+import type {
+	BytecodeFunction,
+	BytecodeInstruction,
+	RuntimeImage,
+} from "./runtime-image.ts";
+
+type CaptureStorageTransform = (fn: BytecodeFunction, owner: number) => BytecodeFunction;
 
 /** Compact physical capture slots only after unreachable function bodies are gone. */
 export function compactCaptureStorage(
 	image: ProgramImage,
 	context: CoreCompilationContext,
 ): ProgramImage {
-	if (context.facts.closure.sourceClosure.kind !== "known") return image;
-	const functions = image.runtime.functions;
-	if (functions.every((fn) => fn.capturedCount === 0)) return image;
+	const transform = captureStorageTransform(image.runtime.functions, context);
+	if (transform === undefined) return image;
+	return {
+		...image,
+		runtime: { ...image.runtime, functions: image.runtime.functions.map(transform) },
+		native: {
+			...image.native,
+			functions: image.native.functions.map((fn, index) => ({
+				...fn,
+				body: transform(fn.body, index),
+			})),
+		},
+	};
+}
+
+/** The same compaction for an image that is only interpreted, so both products agree. */
+export function compactRuntimeCaptureStorage(
+	runtime: RuntimeImage,
+	context: CoreCompilationContext,
+): RuntimeImage {
+	const transform = captureStorageTransform(runtime.functions, context);
+	return transform === undefined
+		? runtime
+		: { ...runtime, functions: runtime.functions.map(transform) };
+}
+
+function captureStorageTransform(
+	functions: ReadonlyArray<BytecodeFunction>,
+	context: CoreCompilationContext,
+): CaptureStorageTransform | undefined {
+	if (context.facts.closure.sourceClosure.kind !== "known") return undefined;
+	if (functions.every((fn) => fn.capturedCount === 0)) return undefined;
 	const live = functions.map(() => new Set<number>());
 	const retain = (owner: number, index: number): void => {
 		// Per-iteration scope identities are independent of the function table.
@@ -28,7 +63,7 @@ export function compactCaptureStorage(
 		}
 		for (const instruction of fn.instructions) {
 			// Dynamic scope has implicit readers that are not LOAD_CAPTURED sites.
-			if (instruction.opcode.startsWith("WITH_")) return image;
+			if (instruction.opcode.startsWith("WITH_")) return undefined;
 			if (instruction.opcode === "LOAD_CAPTURED") {
 				retain(instruction.ownerFunctionIndex, instruction.index);
 			} else if (instruction.opcode === "CREATE_PRIVATE_NAMES") {
@@ -46,7 +81,7 @@ export function compactCaptureStorage(
 		}
 		return layout;
 	});
-	if (layouts.every((layout) => layout === undefined)) return image;
+	if (layouts.every((layout) => layout === undefined)) return undefined;
 	const remap = (owner: number, index: number): number => {
 		const layout = layouts[owner];
 		if (owner < 0 || layout === undefined) return index;
@@ -77,7 +112,7 @@ export function compactCaptureStorage(
 		}
 		return { ...operation, index: remap(operation.ownerFunctionIndex, operation.index) };
 	};
-	const transform = (fn: (typeof functions)[number], owner: number) => ({
+	return (fn, owner) => ({
 		...fn,
 		capturedCount: layouts[owner]?.size ?? fn.capturedCount,
 		mappedArgumentSlots: fn.mappedArgumentSlots.map((index) =>
@@ -93,15 +128,4 @@ export function compactCaptureStorage(
 				}),
 		instructions: fn.instructions.map(instruction),
 	});
-	return {
-		...image,
-		runtime: { ...image.runtime, functions: functions.map(transform) },
-		native: {
-			...image.native,
-			functions: image.native.functions.map((fn, index) => ({
-				...fn,
-				body: transform(fn.body, index),
-			})),
-		},
-	};
 }
