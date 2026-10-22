@@ -101,7 +101,8 @@ function replaceFirstCaptureValues(bytes: Uint8Array, record: Uint8Array): Uint8
 	);
 	const bodyCount = reader.count(1);
 	for (let index = 0; index < bodyCount; index++) readRuntimeFunction(reader);
-	expect(reader.u32()).toBe(0);
+	expect(reader.u32()).toBe(0); // Semantic protectors.
+	expect(reader.u32()).toBe(0); // Class layouts.
 	expect(reader.u32()).toBe(2);
 	expect(reader.u8()).toBe(1);
 	expect(reader.i32Array()).toEqual([1]);

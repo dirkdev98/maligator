@@ -158,6 +158,7 @@ function firstOverrideOffset(bytes: Uint8Array): number {
 	const bodyCount = reader.count(1);
 	for (let index = 0; index < bodyCount; index++) readRuntimeFunction(reader);
 	expect(reader.u32()).toBe(0); // Semantic protectors.
+	expect(reader.u32()).toBe(0); // Class layouts.
 	expect(reader.u32()).toBe(2); // Functions.
 	expect(reader.u8()).toBe(0); // Unknown closure layout.
 	expect(reader.u8()).toBe(0); // No immutable value captures.
