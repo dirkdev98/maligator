@@ -17,7 +17,7 @@
  */
 
 #define WIRE_MAGIC 0x574c414du // "MALW" little-endian
-#define WIRE_VERSION 81u
+#define WIRE_VERSION 82u
 #define WIRE_FLAG_HAS_DEBUG 1u
 
 typedef enum WireOp {
@@ -1078,6 +1078,8 @@ static void rd_instruction_operands(Rd *r, MalInstruction *o, I32Builder *side_d
             o->as.load_private.dst = rd_i32(r);
             o->as.load_private.object = rd_i32(r);
             o->as.load_private.key = rd_i32(r);
+            // A cached earlier read of the field serves only compiled code.
+            (void) rd_i32(r);
             return;
         case WIRE_GUARD_SERVICE_EPOCH:
             o->opcode = MAL_OP_GUARD_SERVICE_EPOCH;

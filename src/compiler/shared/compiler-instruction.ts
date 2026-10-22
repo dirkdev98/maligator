@@ -935,11 +935,12 @@ type CompilerOperation =
 			registers: [number, ...Array<number>];
 	  }
 	| {
-			// [destination, object, key]; own-only read keyed by a private
-			// symbol. Throws TypeError when the receiver lacks the member.
+			// [destination, object, key, cached?]; own-only read keyed by a
+			// private symbol. Throws TypeError when the receiver lacks the member.
+			// A cached value that is not empty is this field's current value.
 			type: "loadPrivate";
 
-			registers: [number, number, number];
+			registers: [number, number, number] | [number, number, number, number];
 			classLayout?: CompilerClassLayoutSite;
 	  }
 	| {

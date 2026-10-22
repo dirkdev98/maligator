@@ -2,12 +2,7 @@ import { buildCoreControlFlow, coreCanonicalValueRoots } from "./core-ir-control
 import type { CoreControlFlow, CoreNaturalLoop } from "./core-ir-control-flow.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
 import { coreBlockId, coreInstructionId } from "./core-ir.ts";
-import type {
-	CoreEdge,
-	CoreInstructionId,
-	CoreTerminatorInput,
-	CoreValueId,
-} from "./core-ir.ts";
+import type { CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import type { ReadRegion } from "./core-read-accessor-expansion.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
@@ -314,29 +309,4 @@ export function coreReadAccessorLoopPlan(
 		invalidators,
 		arrayWrites,
 	};
-}
-export function mapAccessorLoopEdges(
-	input: CoreTerminatorInput,
-	map: (edge: CoreEdge) => CoreEdge,
-): CoreTerminatorInput {
-	switch (input.kind) {
-		case "jump":
-			return { ...input, edge: map(input.edge) };
-		case "branch":
-			return {
-				...input,
-				consequent: map(input.consequent),
-				alternate: map(input.alternate),
-			};
-		case "guard":
-			return { ...input, success: map(input.success), fallback: map(input.fallback) };
-		case "switch":
-			return {
-				...input,
-				cases: input.cases.map((entry) => ({ ...entry, edge: map(entry.edge) })),
-				default: map(input.default),
-			};
-		default:
-			return input;
-	}
 }

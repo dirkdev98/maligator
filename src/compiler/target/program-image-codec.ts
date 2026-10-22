@@ -44,7 +44,7 @@ import type {
 
 export const WIRE_MAGIC = 0x574c414d; // "MALW" little-endian
 // Runtime wires are hard cut-overs: stale cached buffers must rebuild.
-export const WIRE_VERSION = 81;
+export const WIRE_VERSION = 82;
 
 /** Canonical wire tags generated into the C runtime from the same registry. */
 export const WIRE_OPCODES = BYTECODE_OPERATIONS;
@@ -1083,11 +1083,16 @@ function writeInstructionOperands(w: Writer, i: BytecodeInstruction): void {
 		case "LOAD_PROPERTY":
 		case "DELETE_PROPERTY":
 		case "TO_PROPERTY_KEY":
-		case "LOAD_PRIVATE":
 		case "HAS_PRIVATE":
 			w.i32(i.dst);
 			w.i32(i.object);
 			w.i32(i.key);
+			return;
+		case "LOAD_PRIVATE":
+			w.i32(i.dst);
+			w.i32(i.object);
+			w.i32(i.key);
+			w.i32(i.cached ?? -1);
 			return;
 		case "GUARD_SERVICE_EPOCH":
 			w.i32(i.dst);
@@ -2108,8 +2113,15 @@ function readInstructionOperands(r: Reader): BytecodeInstruction {
 			return { opcode, dst: r.i32(), object: r.i32(), key: r.i32() };
 		case "TO_PROPERTY_KEY":
 			return { opcode, dst: r.i32(), object: r.i32(), key: r.i32() };
-		case "LOAD_PRIVATE":
-			return { opcode, dst: r.i32(), object: r.i32(), key: r.i32() };
+		case "LOAD_PRIVATE": {
+			const dst = r.i32(),
+				object = r.i32(),
+				key = r.i32(),
+				cached = r.i32();
+			return cached < 0
+				? { opcode, dst, object, key }
+				: { opcode, dst, object, key, cached };
+		}
 		case "GUARD_SERVICE_EPOCH":
 			return { opcode, dst: r.i32(), epoch: r.i32() };
 		case "READ_SERVICE_EPOCH":

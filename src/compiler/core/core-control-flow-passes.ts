@@ -43,6 +43,7 @@ import {
 } from "./core-ir.ts";
 import { CORE_O2_PASS_BUDGETS } from "./core-optimization-families.ts";
 import type { CoreFunctionPass } from "./core-pass.ts";
+import { cacheStablePrivateReads } from "./core-private-read-caching.ts";
 import type { CoreFunctionStore } from "./core-store.ts";
 
 const CONTROL_FLOW_BUDGET = CORE_O2_PASS_BUDGETS["cfg-loop-licm-pre"];
@@ -1447,6 +1448,7 @@ const reduceBoundedRemainders: CoreFunctionPass = {
 export const CORE_CONTROL_FLOW_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	canonicalizeNaturalLoops,
 	hoistLoopInvariants,
+	cacheStablePrivateReads,
 	eliminateDominatedRedundancy,
 	eliminatePartialRedundancy,
 	selectLoopScalarRepresentations,

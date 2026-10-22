@@ -720,7 +720,7 @@ const INPUT_ARITIES = {
 	loadPrimordial: [0, 0],
 	loadLocal: [0, 0],
 	loadNewTarget: [0, 0],
-	loadPrivate: [2, 2],
+	loadPrivate: [2, 3],
 	probeRead: [2, 2],
 	readServiceEpoch: [0, 0],
 	guardServiceEpoch: [1, 1],

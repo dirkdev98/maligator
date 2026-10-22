@@ -1150,3 +1150,30 @@ export function coreTerminatorInput(
 			throw new Error(`Core instruction ${instruction} is not a terminator`);
 	}
 }
+
+/** Rebuilds a terminator input with each successor edge passed through `map`. */
+export function mapCoreTerminatorEdges(
+	input: CoreTerminatorInput,
+	map: (edge: CoreEdge) => CoreEdge,
+): CoreTerminatorInput {
+	switch (input.kind) {
+		case "jump":
+			return { ...input, edge: map(input.edge) };
+		case "branch":
+			return {
+				...input,
+				consequent: map(input.consequent),
+				alternate: map(input.alternate),
+			};
+		case "guard":
+			return { ...input, success: map(input.success), fallback: map(input.fallback) };
+		case "switch":
+			return {
+				...input,
+				cases: input.cases.map((entry) => ({ ...entry, edge: map(entry.edge) })),
+				default: map(input.default),
+			};
+		default:
+			return input;
+	}
+}

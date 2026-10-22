@@ -466,13 +466,16 @@ Shared lifetime and fallback rules are recorded in
       an observable object. Keep numeric signed-zero/overflow constraints and
       pointer-root requirements explicit. Extend the existing bounded range walk
       only for a demonstrated consumer; a larger walk limit is not an optimization.
-      Start with the repeated Core-store private-brand checks: retain the producer's
-      module-singleton private-key provenance, validate initialization and all
-      current writers, and relate later key loads only after a dominating successful
-      private access. `singleAssignmentGlobalSlots` alone is not that proof. Preserve
-      receiver/key roots and getter calls; do not cache field payloads or backing
-      locations. Keep captured/per-evaluation keys conservative. Confirm admitted
-      receiver/key pairs and matched compiler cost before widening scope.
+      Class-private fields have program-wide facts: a field's kinds join every
+      value its writes store, and a field is construction-only when only the
+      activation that added it to an object stores into it. A loop carries such a
+      field of an invariant receiver around its back edge once one read succeeded.
+      Arrays held in private fields still take generic indexed loads, because no
+      fact says what a field's array holds: `this.#opcode[id]` tests for an Array,
+      then a typed array, then calls the IC. Recording the allocation and element
+      kinds each write of such a field stores would let those reads load directly.
+      A brand check followed by a field read of the same class on the same
+      receiver still runs both checks.
       Field kinds per allocation site are the missing fact in class-heavy loops:
       `sum + store.opcode(id)` keeps a generic `+` fallback because `.opcode` of a
       `{ opcode, a, b }` element is unknown, and that fallback can call user code,

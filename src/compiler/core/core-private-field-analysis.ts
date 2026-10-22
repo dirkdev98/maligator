@@ -29,20 +29,65 @@ const FRESH_RECEIVERS: ReadonlySet<string> = new Set([
 	"createObjectShaped",
 ]);
 
-function constructsReceiver(fn: CoreFunctionStore, receiver: CoreValueId): boolean {
+function receiverOpcode(
+	fn: CoreFunctionStore,
+	receiver: CoreValueId,
+): string | undefined {
 	for (let depth = 0; depth < 16; depth++) {
-		if (fn.kernel.valueDefinitionKind(receiver) !== 1) return false;
+		if (fn.kernel.valueDefinitionKind(receiver) !== 1) return undefined;
 		const instruction = coreInstructionId(fn.kernel.valueDefinitionOwner(receiver));
 		const opcode = fn.instructionOpcodeName(instruction);
-		if (opcode === "move") {
-			receiver = fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction));
-			continue;
-		}
-		// A class constructor's own fields are defined on its `this` before any write.
-		if (opcode === "loadThis") return fn.metadata.isClassConstructor;
-		return FRESH_RECEIVERS.has(opcode);
+		if (opcode !== "move") return opcode;
+		receiver = fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction));
 	}
+	return undefined;
+}
+
+function instructionPrecedes(
+	fn: CoreFunctionStore,
+	control: CoreControlFlow,
+	earlier: CoreInstructionId,
+	later: CoreInstructionId,
+): boolean {
+	const block = fn.instructionBlock(earlier);
+	if (block !== fn.instructionBlock(later))
+		return control.dominates(block, fn.instructionBlock(later));
+	for (
+		let next = fn.instructionNext(earlier);
+		next !== undefined;
+		next = fn.instructionNext(next)
+	)
+		if (next === later) return true;
 	return false;
+}
+
+/** Whether only an activation that added the field to the store's receiver can run it. */
+function storesOwnAddition(
+	fn: CoreFunctionStore,
+	control: CoreControlFlow,
+	writes: ReadonlyArray<CorePrivateFieldWrite>,
+	write: CorePrivateFieldWrite,
+): boolean {
+	if (write.defines) return true;
+	if (fn.isGenerator || fn.isAsync) return false;
+	const opcode = receiverOpcode(fn, write.receiver);
+	if (opcode === undefined) return false;
+	if (FRESH_RECEIVERS.has(opcode)) return true;
+	if (opcode !== "loadThis" || !fn.metadata.isClassConstructor) return false;
+	// A base constructor's `this` is fresh, so it holds only fields this activation added.
+	if (!fn.metadata.isDerivedConstructor) return true;
+	// super() binds `this` before defining fields, so a caught definition failure would
+	// leave `this` holding a field that another activation added.
+	return (
+		fn.handlerBlockCount === 0 &&
+		writes.some(
+			(definition) =>
+				definition.defines &&
+				definition.key === write.key &&
+				receiverOpcode(fn, definition.receiver) === "loadThis" &&
+				instructionPrecedes(fn, control, definition.instruction, write.instruction),
+		)
+	);
 }
 
 interface FieldWriter {
@@ -90,11 +135,12 @@ export function analyzeCorePrivateFields(
 			writers.push({ fn, control: buildCoreControlFlow(program, id), writes });
 	}
 	const construction = new Map<string, boolean>();
-	for (const { fn, writes } of writers)
+	for (const { fn, control, writes } of writers)
 		for (const write of writes)
 			construction.set(
 				write.key,
-				(construction.get(write.key) ?? true) && constructsReceiver(fn, write.receiver),
+				(construction.get(write.key) ?? true) &&
+					storesOwnAddition(fn, control, writes, write),
 			);
 	const kinds = new Map<string, number>();
 	let converged = false;

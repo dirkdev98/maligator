@@ -13034,24 +13034,30 @@ function emitInstruction(
 				).map((line) => `  ${line}`),
 				`}`,
 			];
-			if (
+			const object = `__co_${ip}`;
+			const load =
 				context.nativePlan?.kind !== "class-layout" ||
 				context.nativePlan.site.kind !== "slot" ||
 				!classLayoutsEnabled
-			)
-				return hinted;
-			const object = `__co_${ip}`;
+					? hinted
+					: [
+							`{ MalObject *${object} = mal_vm_as_object(${boxed(instruction.object)});`,
+							...classLayoutAccess(
+								"slot",
+								context.nativePlan.site.candidates,
+								object,
+								boxed(instruction.object),
+								({ index }) =>
+									`r${instruction.dst} = ${callValue(instruction.dst, `mal_object_field_load_shaped(${object}, ${index})`)};`,
+								hinted,
+							),
+							"}",
+						];
+			if (instruction.cached === undefined) return load;
 			return [
-				`{ MalObject *${object} = mal_vm_as_object(${boxed(instruction.object)});`,
-				...classLayoutAccess(
-					"slot",
-					context.nativePlan.site.candidates,
-					object,
-					boxed(instruction.object),
-					({ index }) =>
-						`r${instruction.dst} = ${callValue(instruction.dst, `mal_object_field_load_shaped(${object}, ${index})`)};`,
-					hinted,
-				),
+				`if (!mal_value_is_empty(${boxed(instruction.cached)})) r${instruction.dst} = ${callValue(instruction.dst, boxed(instruction.cached))};`,
+				"else {",
+				...load,
 				"}",
 			];
 		}

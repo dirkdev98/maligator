@@ -35,9 +35,45 @@ const source = `
 	}
 	globalThis.fields = new Fields(3);`;
 
-function fieldFacts(evalMode: "disabled" | "runtime") {
+const derivedSource = `
+	class Base {
+		constructor(target) {
+			return target;
+		}
+	}
+	class Guarded extends Base {
+		#mark = 1;
+		constructor(target) {
+			try {
+				super(target);
+			} catch {}
+			this.#mark = 2;
+		}
+		mark() { return this.#mark; }
+	}
+	class Direct extends Base {
+		#tag = 1;
+		constructor(target) {
+			super(target);
+			this.#tag = 2;
+		}
+		tag() { return this.#tag; }
+	}
+	class Outer {
+		#shared = 1;
+		shared() { return this.#shared; }
+		static Inner = class extends Base {
+			constructor(target) {
+				super(target);
+				this.#shared = 2;
+			}
+		};
+	}
+	globalThis.classes = [Guarded, Direct, Outer];`;
+
+function fieldFacts(evalMode: "disabled" | "runtime", program = source) {
 	const core = constructSemanticProgramCore(
-		analyzeSourceAndRunSemanticAnalysis(source, "/fields.js"),
+		analyzeSourceAndRunSemanticAnalysis(program, "/fields.js"),
 		{
 			facts: compilerProgramFactsFromConfig(
 				resolveBuildConfig({ engine: { eval: evalMode === "disabled" ? false : true } }),
@@ -90,6 +126,13 @@ describe("private field facts", () => {
 			kinds: COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_STRING,
 			constructionOnly: false,
 		});
+	});
+
+	it("count a derived constructor's store only after its own definition of the field", () => {
+		const fields = fieldFacts("disabled", derivedSource)!;
+		expect(fields.get("mark")?.constructionOnly).toBe(false);
+		expect(fields.get("tag")?.constructionOnly).toBe(true);
+		expect(fields.get("shared")?.constructionOnly).toBe(false);
 	});
 
 	it("give no facts when direct eval could write private fields", () => {

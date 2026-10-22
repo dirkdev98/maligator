@@ -1295,6 +1295,8 @@ export type BytecodeInstruction =
 			dst: number;
 			object: number;
 			key: number;
+			/** The field's value from an earlier read, or empty; the interpreter ignores it. */
+			cached?: number;
 	  }
 	| {
 			opcode: "STORE_PRIVATE";
@@ -1505,6 +1507,7 @@ const VM_REGISTER_USE_FIELDS = [
 	"iterable",
 	"argumentsArray",
 	"shapeCase",
+	"cached",
 ] as const;
 
 const VM_REGISTER_USE_ARRAY_FIELDS = [
@@ -4457,6 +4460,9 @@ function lowerInstructionToBytecodeInstruction(
 				dst: instruction.registers[0],
 				object: instruction.registers[1],
 				key: instruction.registers[2],
+				...(instruction.registers.length === 4
+					? { cached: instruction.registers[3] }
+					: {}),
 			};
 		case "guardServiceEpoch":
 			return {

@@ -2,7 +2,7 @@ import type { ReadAccessorSummary } from "../shared/effect-summary.ts";
 import type { CoreEditor } from "./core-editor.ts";
 import { coreInstanceMethodHint } from "./core-instance-method-hints.ts";
 import { CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE } from "./core-internal-attributes.ts";
-import { coreTerminatorInput } from "./core-ir-control-flow.ts";
+import { coreTerminatorInput, mapCoreTerminatorEdges } from "./core-ir-control-flow.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
 import type { CoreProgramSummaries } from "./core-ir-summaries.ts";
 import type {
@@ -17,7 +17,6 @@ import {
 	accessorPrefixKey,
 	coreReadAccessorLoopPlan,
 	invalidateCoreReadAccessorLoopAnalysis,
-	mapAccessorLoopEdges,
 } from "./core-read-accessor-loops.ts";
 import type { CoreReadAccessorLoopPlan } from "./core-read-accessor-loops.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
@@ -877,7 +876,7 @@ export function expandCoreReadAccessorRegion(
 			const exitState = invalidated ? initial : state;
 			editor.replaceTerminator(
 				block,
-				mapAccessorLoopEdges(
+				mapCoreTerminatorEdges(
 					coreTerminatorInput(fn, fn.blockTerminator(block)),
 					(edge) =>
 						states.has(edge.block)
@@ -889,7 +888,7 @@ export function expandCoreReadAccessorRegion(
 		const preheader = loop.loop.preheader!;
 		editor.replaceTerminator(
 			preheader,
-			mapAccessorLoopEdges(
+			mapCoreTerminatorEdges(
 				coreTerminatorInput(fn, fn.blockTerminator(preheader)),
 				(edge) =>
 					states.has(edge.block)

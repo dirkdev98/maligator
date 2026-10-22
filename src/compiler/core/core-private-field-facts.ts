@@ -9,7 +9,10 @@ import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 /** What every write of one class-private field can store, and where those writes run. */
 export interface CorePrivateFieldFact {
 	readonly kinds: CompilerValueKindMask;
-	/** Every write stores into an object that the writing activation is constructing. */
+	/**
+	 * Only the activation that added the field to an object stores into it, so the
+	 * field keeps one value while any other non-suspending activation runs.
+	 */
 	readonly constructionOnly: boolean;
 }
 
@@ -19,6 +22,8 @@ export interface CorePrivateFieldWrite {
 	readonly receiver: CoreValueId;
 	/** Undefined for the `undefined` an initializer-less field starts with. */
 	readonly value: CoreValueId | undefined;
+	/** Defining writes throw rather than replace a field the object already has. */
+	readonly defines: boolean;
 }
 
 function definition(
@@ -90,6 +95,7 @@ export class CorePrivateFieldKeys {
 					key,
 					receiver: operand(fn, instruction, 0),
 					value: operand(fn, instruction, 2),
+					defines: opcode === "definePrivate",
 				});
 			} else if (opcode === "initPrivateFields") {
 				const count = fn.kernel.instructionOperandCount(instruction);
@@ -101,6 +107,7 @@ export class CorePrivateFieldKeys {
 						key,
 						receiver: operand(fn, instruction, 0),
 						value: undefined,
+						defines: true,
 					});
 				}
 			}

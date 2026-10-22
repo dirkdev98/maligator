@@ -425,6 +425,13 @@ function verifyInstructionRows(
 				)
 					fail(`move @${instruction} unboxes to ${destination} without a proof`);
 			}
+			// The optional operand is an earlier read of the same field, or empty.
+			if (
+				descriptor.opcode === "loadPrivate" &&
+				operandCount === 3 &&
+				fn.valueRepresentation(fn.kernel.operandAt(operandStart + 2)) !== "boxed"
+			)
+				fail("Invalid cached private read");
 			if (descriptor.opcode === "probeRead") {
 				const readKind = attributes.readKind as ProbeReadKind;
 				const accessor = readKind === "getter" || readKind === "setter";
