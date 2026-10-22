@@ -265,8 +265,7 @@ The independent target boundary and current storage contract are recorded in
       instructions, spent on the value class, heap type, cache mode, shape and
       storage-kind checks. Throw checks, `MAL_FRAME_POS`, root masks and
       safepoint polls were about 5% each of one 800 KB translation unit.
-      `MAL_FRAME_POS` reloads `vm->native_frames` and its count at all 5,030 of
-      its sites, because a nested call can reallocate the frame array. A shape
+      `MAL_FRAME_POS` is now one store into the C-stack frame record. A shape
       root per exotic object kind would let the shape compare imply the heap type.
 - [ ] Reach the remaining hot isolate state without Darwin TLV calls only where a
       profile shows it. On macOS every `_Thread_local` read is a call to
