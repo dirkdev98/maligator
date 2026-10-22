@@ -40,12 +40,11 @@ describe("builtin-only callback entry discovery", () => {
 				const name = String.fromCharCode(
 					...pair.programImage.runtime.stringConstants[callback.body.nameStringIndex]!,
 				);
+				// Captured parameters stay SSA values in their owner, so they can arrive unboxed.
 				expect(transport.parameters).toEqual(
 					name === "mapper"
 						? ["number", "number", "boxed"]
-						: name === "numericReducer"
-							? ["number", "number", "number", "boxed"]
-							: ["boxed", "boxed", "number", "boxed"],
+						: ["number", "number", "number", "boxed"],
 				);
 				expect(transport.parameters.at(-1)).toBe("boxed");
 			}
