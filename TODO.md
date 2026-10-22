@@ -273,11 +273,6 @@ the hot receivers, so field facts stay bounded and consumer-driven as planned be
       is the tiny-string cache hashing each short `"x" + i` result, the zeroing of
       every reused cell that conservative roots require (now inline stores up to
       128 bytes) and two cell allocations.
-- [ ] Keep inline cache records off the hit path's extra cache lines. Inherited
-      method loads take about 2.7% of the self-compiler's samples, down from 4%
-      since class layout cells serve most class methods. Records are 72 bytes, so
-      many hits touch two lines; a 64-byte record with its hot fields first
-      should cut what remains.
 - [ ] Pace concurrent marking against a faster mutator. Peak RSS of the native
       self-compiler is bimodal at about 1.4 or 2.0 GB. The high runs coincide with
       a synchronous backstop, fewer major cycles and about three times the
