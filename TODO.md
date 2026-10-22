@@ -783,10 +783,13 @@ contracts or investigates costs still visible after the string follow-ups.
       does not fire on these loops, and a callback's loop-invariant captured read
       (`value + round`) reloads and rechecks TDZ every element.
 
-- [ ] Explain the per-iteration cost of `map-get-hit-*-selected` loops, about
-      40 ns regardless of size or key domain. At bf289f61 the compiled loop itself
-      held 54% of samples against 26% for the hashed probe. Get line-level samples
-      before changing the guarded collection arm or method capture.
+- [ ] Cut the hinted Map lookup's cost when keys alternate. A `map-get-hit-16`
+      style loop takes 13.6 ns per lookup against Node's 4.2. 60% of its samples
+      are in `mal_map_object_get_hinted`: the Map's one-entry hint misses whenever
+      consecutive lookups use different keys, so each call pays the out-of-line
+      hint check, a SIMD group probe with its register saves and spills, and a hint
+      refresh. The compiled loop's 39% is its two f64-keyed array loads, not the
+      guarded collection arm.
 - [ ] Reduce rope construction cost in append and prepend loops. Balanced joins
       split and rebuild O(log n) nodes per piece; `string-rope-access` still spends
       about 20% in join, split, node allocation and sweep. Copying short pieces into
