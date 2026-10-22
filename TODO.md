@@ -267,12 +267,6 @@ the hot receivers, so field facts stay bounded and consumer-driven as planned be
       no accessor, reads without calling user code. Memory passes could then reuse
       and hoist such loads; `this.left === null ? 0 : this.left.size()` currently
       loads `this.left` twice through its inline cache.
-- [ ] Close the rest of the string-append gap. JavaScript `+` now extends a shared
-      append buffer from its longest prefix instead of rebalancing a rope, which took
-      a 1 M-append loop from 129 to 39 ms (Node: 13). What remains per `out += "x" + i`
-      is the tiny-string cache hashing each short `"x" + i` result, the zeroing of
-      every reused cell that conservative roots require (now inline stores up to
-      128 bytes) and two cell allocations.
 - [ ] Pace concurrent marking against a faster mutator. Peak RSS of the native
       self-compiler is bimodal at about 1.4 or 2.0 GB. The high runs coincide with
       a synchronous backstop, fewer major cycles and about three times the
