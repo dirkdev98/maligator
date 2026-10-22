@@ -6134,7 +6134,7 @@ function emitBody(
 		const slowPathFramePosition =
 			framePositionStore === undefined
 				? undefined
-				: { store: framePositionStore, consumed: false };
+				: { store: framePositionStore, consumed: false, elided: false };
 		instructionContext.slowPathFramePosition = slowPathFramePosition;
 		const emitted = elidedTdzIps.has(ip)
 			? []
@@ -6177,7 +6177,7 @@ function emitBody(
 			// Conditional paths can preserve the old mask or publish the instruction's mask.
 			lastPublishedInactiveRootMask = undefined;
 		}
-		if (slowPathFramePosition !== undefined) {
+		if (slowPathFramePosition !== undefined && !slowPathFramePosition.elided) {
 			if (slowPathFramePosition.consumed) {
 				// Only the slow path published it, so the frame may still hold an older position.
 				lastPublishedPos = -1;
@@ -6498,6 +6498,8 @@ interface NativeFieldCall {
 interface NativeSlowPathFramePosition {
 	readonly store: string;
 	consumed: boolean;
+	/** The instruction's emitted form cannot capture a stack, so it needs no store. */
+	elided: boolean;
 }
 
 interface NativeInstructionContext {
@@ -6980,6 +6982,10 @@ function emitInstruction(
 		if (position === undefined) return [];
 		position.consumed = true;
 		return [`  ${position.store}`];
+	};
+	const elideFramePosition = (): void => {
+		if (context.slowPathFramePosition !== undefined)
+			context.slowPathFramePosition.elided = true;
 	};
 	const boxedLoad = (dst: number, expression: string): Array<string> => {
 		if (reps[dst] === "boxed" || reps[dst] === "string")
@@ -8210,6 +8216,7 @@ function emitInstruction(
 			}
 			return [
 				`if (mal_value_is_empty(${boxed(instruction.src)})) {`,
+				...slowPathFramePosition(),
 				...(context.incomingRootPublication ?? []).map((line) => `  ${line}`),
 				...(context.tdzInactiveRootMask === undefined
 					? []
@@ -10012,6 +10019,7 @@ function emitInstruction(
 							`if (${guard}) {`,
 							`  r${dst} = ${result};`,
 							`} else {`,
+							...slowPathFramePosition(),
 							...(externalIsNum
 								? []
 								: [
@@ -10064,6 +10072,7 @@ function emitInstruction(
 						? `  r${dst} = ${int32Expression};`
 						: `  ${storeNumber(dst, expression)}`,
 					`} else {`,
+					...slowPathFramePosition(),
 					...fallback.map((line) => `  ${line}`),
 					`}`,
 				];
@@ -10081,6 +10090,7 @@ function emitInstruction(
 					nativeInt32Operand(left)!,
 					nativeInt32Operand(right)!,
 				);
+				elideFramePosition();
 				return expr === null ? null : [`r${dst} = ${expr};`];
 			}
 			if (reps[dst] === "number") {
@@ -10088,6 +10098,7 @@ function emitInstruction(
 				if (!leftIsNum || !rightIsNum) {
 					return null;
 				}
+				elideFramePosition();
 				if (dst === left && ["+", "-", "*", "/"].includes(operator)) {
 					return [`r${dst} ${operator}= ${num(right)};`];
 				}
@@ -10098,6 +10109,7 @@ function emitInstruction(
 				return expr === null ? null : [`r${dst} = ${expr};`];
 			}
 			if (operator === "**" && leftIsNum && rightIsNum) {
+				elideFramePosition();
 				return [storeNumber(dst, `mal_number_exponentiate(${num(left)}, ${num(right)})`)];
 			}
 			// Retain the existing epilogue resource even when an exact comparison emits no throw check.
@@ -10124,6 +10136,7 @@ function emitInstruction(
 							? "false"
 							: `mal_value_is_nil(${boxed(other)})`
 						: `${boxed(left)} == ${boxed(right)}`;
+				elideFramePosition();
 				return [
 					storeBoolean(
 						dst,
@@ -10186,10 +10199,12 @@ function emitInstruction(
 					: `${exactNumberOrUndefined(left, exactInputKinds[0])} ${compare} ${exactNumberOrUndefined(right, exactInputKinds[1])}`;
 				const result =
 					operator === "!=" || operator === "!==" ? `!(${positive})` : positive;
+				elideFramePosition();
 				return [storeBoolean(dst, result)];
 			}
 			if (compare !== undefined) {
 				if (leftIsNum && rightIsNum) {
+					elideFramePosition();
 					return [storeBoolean(dst, `${num(left)} ${compare} ${num(right)}`)];
 				}
 				if (
@@ -10200,6 +10215,7 @@ function emitInstruction(
 				) {
 					const a = `mal_value_to_string(${boxed(left)})`,
 						b = `mal_value_to_string(${boxed(right)})`;
+					elideFramePosition();
 					if (!RELATIONAL_COMPARE.has(operator)) {
 						const equal = profileCall("string", `mal_string_equals(${a}, ${b})`);
 						return [
@@ -10258,6 +10274,15 @@ function emitInstruction(
 				// case only for the relational operators (see RELATIONAL_COMPARE).
 				if (!bothBoxed || RELATIONAL_COMPARE.has(operator)) {
 					const fastBool = `${numericOf(left)} ${compare} ${numericOf(right)}`;
+					// With one side a number, a strict comparison against a non-number is unequal.
+					if (!bothBoxed && (operator === "===" || operator === "!==")) {
+						const strict =
+							operator === "==="
+								? `${numberGuard} && ${fastBool}`
+								: `!(${numberGuard}) || ${fastBool}`;
+						elideFramePosition();
+						return [storeBoolean(dst, strict)];
+					}
 					if (binaryOpCanThrow(operator)) {
 						return [
 							`if (${numberGuard}) {`,
@@ -10265,6 +10290,7 @@ function emitInstruction(
 								? `  r${dst} = ${fastBool};`
 								: `  r${dst} = ${profileCall("boxing", `mal_value_new_boolean(${fastBool})`)};`,
 							`} else {`,
+							...slowPathFramePosition(),
 							dstIsBool
 								? `  r${dst} = mal_value_to_boolean(${slow()});`
 								: `  r${dst} = ${slow()};`,
@@ -10329,6 +10355,7 @@ function emitInstruction(
 					// the dst rep was joined to boxed elsewhere — then native is
 					// unconditional and never throws.
 					if (numberGuard === "") {
+						elideFramePosition();
 						return [`r${dst} = ${fast};`];
 					}
 					if (binaryOpCanThrow(operator)) {
@@ -10336,6 +10363,7 @@ function emitInstruction(
 							`if (${numberGuard}) {`,
 							`  r${dst} = ${fast};`,
 							`} else {`,
+							...slowPathFramePosition(),
 							`  r${dst} = ${slow()};`,
 							`  ${throwCheck()}`,
 							`}`,
@@ -12877,6 +12905,7 @@ function emitInstruction(
 									? `r${instruction.value}`
 									: `mal_value_to_boolean(${boxed(instruction.value)})`
 								: boxed(instruction.value);
+				elideFramePosition();
 				return [`${gcUnlink}return ${directValue};`];
 			}
 			const materialize: Array<string> = [];
@@ -12917,6 +12946,7 @@ function emitInstruction(
 					`${gcUnlink}return ${ret};`,
 				];
 			}
+			if (materialize.length === 0) elideFramePosition();
 			if (!hasPrototype) {
 				return [...materialize, `${gcUnlink}return ${value};`];
 			}

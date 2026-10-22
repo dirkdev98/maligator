@@ -2074,6 +2074,12 @@ export function nativeFrameRootRegisters(
 	return [...frameRoots].sort((left, right) => left - right);
 }
 
+function numericRepresentation(
+	representation: VmRegisterRepresentation | undefined,
+): boolean {
+	return representation === "number" || representation === "int32";
+}
+
 export function vmNativeInstructionMayCaptureStack(
 	instruction: BytecodeInstruction,
 	representations: ReadonlyArray<VmRegisterRepresentation>,
@@ -2112,14 +2118,17 @@ export function vmNativeInstructionMayCaptureStack(
 			return false;
 		case "BINARY":
 			return !(
-				(representations[instruction.left] === "number" &&
-					representations[instruction.right] === "number") ||
+				(numericRepresentation(representations[instruction.left]) &&
+					numericRepresentation(representations[instruction.right]) &&
+					instruction.operator !== "in" &&
+					instruction.operator !== "instanceof") ||
 				instruction.operator === "===" ||
 				instruction.operator === "!=="
 			);
 		case "UNARY":
 			return !(
-				representations[instruction.src] === "number" || instruction.operator === "!"
+				numericRepresentation(representations[instruction.src]) ||
+				instruction.operator === "!"
 			);
 		default:
 			return true;
