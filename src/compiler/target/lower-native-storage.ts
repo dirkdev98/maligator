@@ -268,19 +268,25 @@ function storageControlFlow(
 	fn: NativeFunctionPlan["body"],
 	jumpTargets: ReadonlySet<number>,
 	controlBoundaries: ReadonlyArray<boolean>,
+	handlerTargets: ReadonlyArray<number | undefined>,
 ): NativeStorageControlFlow | undefined {
-	if (fn.instructions.length === 0) return undefined;
+	if (fn.instructions.length === 0 || handlerTargets[0] !== undefined) return undefined;
 	const blocks = new Uint32Array(fn.instructions.length);
 	const ends: Array<number> = [];
 	let block = 0;
 	let startsBlock = false;
 	for (let ip = 0; ip < fn.instructions.length; ip++) {
-		if (ip > 0 && (startsBlock || jumpTargets.has(ip))) {
+		// Each protected instruction starts a block, so its exceptional edge can leave
+		// from before its writes.
+		if (
+			ip > 0 &&
+			(startsBlock || jumpTargets.has(ip) || handlerTargets[ip] !== undefined)
+		) {
 			ends.push(ip - 1);
 			block++;
 		}
 		blocks[ip] = block;
-		startsBlock = controlBoundaries[ip]!;
+		startsBlock = controlBoundaries[ip]! || handlerTargets[ip] !== undefined;
 	}
 	ends.push(fn.instructions.length - 1);
 	const successors = ends.map((ip, index) => {
@@ -290,6 +296,19 @@ function storageControlFlow(
 		if (op.opcode === "JUMP_IF") return [...next, blocks[op.targetIp]!];
 		return ["RETURN", "THROW", "TERMINAL_YIELD"].includes(op.opcode) ? [] : next;
 	});
+	if (fn.handlers.length > 0) {
+		const predecessors = ends.map(() => new Array<number>());
+		for (const [from, targets] of successors.entries())
+			for (const target of targets) predecessors[target]!.push(from);
+		for (const [index, end] of ends.entries()) {
+			const start = index === 0 ? 0 : ends[index - 1]! + 1;
+			const handler = handlerTargets[start];
+			if (handler === undefined || start !== end) continue;
+			for (const from of predecessors[index]!)
+				if (!successors[from]!.includes(blocks[handler]!))
+					successors[from]!.push(blocks[handler]!);
+		}
+	}
 	const reachable = (): Uint8Array => {
 		const visited = new Uint8Array(ends.length);
 		const pending = [0];
@@ -384,8 +403,13 @@ function storageBodyFacts(native: NativeFunctionPlan): NativeStorageBodyFacts {
 		get controlFlow() {
 			if (!controlFlowAnalyzed) {
 				controlFlowAnalyzed = true;
-				if (native.storageValues !== undefined && fn.handlers.length === 0)
-					controlFlow = storageControlFlow(fn, jumpTargets, controlBoundaries);
+				if (native.storageValues !== undefined)
+					controlFlow = storageControlFlow(
+						fn,
+						jumpTargets,
+						controlBoundaries,
+						facts.handlerTargets,
+					);
 			}
 			return controlFlow;
 		},
@@ -506,12 +530,12 @@ function definitionInitializedRegisters(
 			: [],
 	);
 	if (eligible.length === 0) return [];
-	// Exception and resume entries need a broader CFG.
+	// Resume entries need a broader CFG; handler entries are its exceptional edges.
 	const selectControlFlow = (): NativeStorageControlFlow | undefined =>
 		native.mode === "direct" &&
 		!fn.isGenerator &&
 		!fn.isAsync &&
-		body.externalEntries.size === 0
+		[...body.externalEntries].every((ip) => body.handlerEntries.has(ip))
 			? body.controlFlow
 			: undefined;
 	const phiControlFlow =

@@ -456,6 +456,27 @@ describe("SSA native lowering", () => {
 		expect(restored.native.functions[1]!.storage).toEqual(native.storage);
 	});
 
+	it("initializes scalar locals at a dominating definition across an exception handler", () => {
+		const image = scalarImage(
+			"const product = a * b; try { globalThis.observe(); } catch { globalThis.recover(); } globalThis.observe(); return product - subtract;",
+		);
+		const native = image.native.functions[1]!;
+		const product = native.body.instructions[multiplicationIp(image)]!;
+		if (product.opcode !== "BINARY") throw new Error("Missing scalar product");
+		expect(native.body.handlers.length).toBeGreaterThan(0);
+		expect(native.storage!.definitionInitializedRegisters).toContain(product.dst);
+	});
+
+	it("keeps entry initialization for a local that a handler can read before its definition", () => {
+		const image = scalarImage(
+			"let product = 0; try { globalThis.observe(); product = a * b; globalThis.observe(); } catch { return product; } return product - subtract;",
+		);
+		const native = image.native.functions[1]!;
+		const product = native.body.instructions[multiplicationIp(image)]!;
+		if (product.opcode !== "BINARY") throw new Error("Missing scalar product");
+		expect(native.storage!.definitionInitializedRegisters).not.toContain(product.dst);
+	});
+
 	it("initializes scalar locals at a dominating definition across branches", () => {
 		const image = scalarImage(
 			"const product = a * b; if (globalThis.condition) globalThis.observe(product); return product - subtract;",
