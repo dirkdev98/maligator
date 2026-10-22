@@ -82,6 +82,8 @@ import {
 	executionSafepointRoots,
 } from "./execution-liveness.ts";
 import { planCoreClassLayouts } from "./lower-class-layouts.ts";
+import { planCoreExactArrayAccesses } from "./lower-exact-arrays.ts";
+import type { CoreExactArrayAccess } from "./lower-exact-arrays.ts";
 import { planCoreDirectClosures } from "./plan-direct-closures.ts";
 import type { CoreDirectClosurePlan } from "./plan-direct-closures.ts";
 import { verifyCoreTargetBlockLayout } from "./verify-core-target-layout.ts";
@@ -1541,6 +1543,7 @@ function lowerFunctionToTarget(
 	preserveResumableRepresentations: boolean,
 	directClosures: CoreDirectClosurePlan | undefined,
 	classLayoutSites: ReadonlyMap<CoreInstructionId, CompilerClassLayoutSite> | undefined,
+	exactArrayAccesses: ReadonlyMap<CoreInstructionId, CoreExactArrayAccess>,
 ): CoreTargetFunction {
 	const privatePackedRestElements = new Map(
 		privatePackedRestArrayElements.map((plan) => [plan.instruction, plan]),
@@ -1602,7 +1605,11 @@ function lowerFunctionToTarget(
 		CoreInstructionId,
 		CoreAttributeValue
 	>();
-	const plannedExactArrayLengths = new Map<CoreInstructionId, CoreAttributeValue>();
+	const plannedExactArrayLengths = new Map<CoreInstructionId, CoreAttributeValue>(
+		[...exactArrayAccesses].flatMap(([instruction, access]) =>
+			access === "length" ? [[instruction, true] as const] : [],
+		),
+	);
 	const plannedDirectStringCharCodeAtPositions = new Map<
 		CoreInstructionId,
 		CoreAttributeValue
@@ -2123,6 +2130,11 @@ function lowerFunctionToTarget(
 					throw new Error("Unsigned arithmetic lost its operation");
 				lowered = { ...lowered, unsignedArithmetic: true };
 			}
+			if (
+				exactArrayAccesses.get(instruction) === "element" &&
+				(lowered.type === "loadProperty" || lowered.type === "storeProperty")
+			)
+				lowered = { ...lowered, exactArrayElement: true };
 			if (privateNumericArrayElements.has(instruction)) {
 				if (lowered.type !== "loadProperty")
 					throw new Error("Private numeric array proof lost its load");
@@ -2955,6 +2967,7 @@ export function lowerCoreCompilationToTargetProgram(
 			options.preserveResumableRepresentations === true,
 			directClosures?.get(core),
 			classLayouts.sites.get(core),
+			planCoreExactArrayAccesses(compilation, core),
 		),
 	}));
 	return Object.freeze({

@@ -71,12 +71,39 @@ const derivedSource = `
 	}
 	globalThis.classes = [Guarded, Direct, Outer];`;
 
+const brandSource = `
+	class Holders {
+		#list = [];
+		#counts = new Int32Array(4);
+		#late;
+		#early;
+		#copied;
+		#either;
+		constructor(flag) {
+			this.#late = Array.from([1, 2]);
+			this.#copied = this.#list;
+			this.#either = flag ? [] : new Int32Array(1);
+			this.observe();
+			this.#early = [];
+		}
+		observe() {}
+		list() { return this.#list; }
+		counts() { return this.#counts; }
+		late() { return this.#late; }
+		early() { return this.#early; }
+		copied() { return this.#copied; }
+		either() { return this.#either; }
+	}
+	globalThis.holders = new Holders(true);`;
+
 function fieldFacts(evalMode: "disabled" | "runtime", program = source) {
 	const core = constructSemanticProgramCore(
 		analyzeSourceAndRunSemanticAnalysis(program, "/fields.js"),
 		{
 			facts: compilerProgramFactsFromConfig(
-				resolveBuildConfig({ engine: { eval: evalMode === "disabled" ? false : true } }),
+				resolveBuildConfig({
+					engine: { primordials: "locked", eval: evalMode === "disabled" ? false : true },
+				}),
 			),
 		},
 		(_phase, run) => run(),
@@ -108,24 +135,48 @@ describe("private field facts", () => {
 		const fields = fieldFacts("disabled")!;
 		expect(fields.get("flag")).toEqual({
 			kinds: COMPILER_VALUE_KIND_BOOLEAN,
+			brand: undefined,
 			constructionOnly: true,
 		});
 		expect(fields.get("count")).toEqual({
 			kinds: COMPILER_VALUE_KIND_NUMBER,
+			brand: undefined,
 			constructionOnly: false,
-		});
-		expect(fields.get("items")).toEqual({
-			kinds: COMPILER_VALUE_KIND_UNDEFINED | COMPILER_VALUE_KIND_OBJECT,
-			constructionOnly: true,
 		});
 		expect(fields.get("value")).toEqual({
 			kinds: COMPILER_VALUE_KIND_TOP,
+			brand: undefined,
 			constructionOnly: true,
 		});
 		expect(fields.get("mixed")).toEqual({
 			kinds: COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_STRING,
+			brand: undefined,
 			constructionOnly: false,
 		});
+	});
+
+	it("drop the initial undefined that the constructor overwrites before anything reads it", () => {
+		const fields = fieldFacts("disabled")!;
+		expect(fields.get("items")).toEqual({
+			kinds: COMPILER_VALUE_KIND_OBJECT,
+			brand: "Array",
+			constructionOnly: true,
+		});
+		const holders = fieldFacts("disabled", brandSource)!;
+		expect(holders.get("late")?.kinds).toBe(COMPILER_VALUE_KIND_OBJECT);
+		expect(holders.get("early")?.kinds).toBe(
+			COMPILER_VALUE_KIND_UNDEFINED | COMPILER_VALUE_KIND_OBJECT,
+		);
+	});
+
+	it("give a field the class all of its values share", () => {
+		const fields = fieldFacts("disabled", brandSource)!;
+		expect(fields.get("list")?.brand).toBe("Array");
+		expect(fields.get("counts")?.brand).toBe("Int32Array");
+		expect(fields.get("late")?.brand).toBe("Array");
+		expect(fields.get("copied")?.brand).toBe("Array");
+		expect(fields.get("either")?.brand).toBeUndefined();
+		expect(fields.get("early")?.brand).toBeUndefined();
 	});
 
 	it("count a derived constructor's store only after its own definition of the field", () => {

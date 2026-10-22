@@ -1837,6 +1837,7 @@ export type NativeInstructionPlan =
 	| { readonly kind: "exact-array-length" }
 	| { readonly kind: "contained-fixed-typed-array-length" }
 	| { readonly kind: "exact-contained-array-element" }
+	| { readonly kind: "exact-array-element" }
 	| {
 			readonly kind: "exact-packed-rest-array-element";
 			readonly startIndex: number;
@@ -1869,6 +1870,13 @@ export type NativeInstructionPlan =
 	| { readonly kind: "unsigned-arithmetic" }
 	| { readonly kind: "primitive-string-length" }
 	| { readonly kind: "class-layout"; readonly site: CompilerClassLayoutSite };
+
+/** Whether an access keeps its ordinary lowering, at most without checks Core proved. */
+export function nativePlanKeepsOrdinaryLowering(
+	plan: NativeInstructionPlan | undefined,
+): boolean {
+	return plan === undefined || plan.kind === "exact-array-element";
+}
 
 /**
  * Construct the explicit, fully boxed native contract for a hand-authored or
@@ -2450,12 +2458,14 @@ function nativeInstructionPlanFromExecution(
 									? { inBounds: true }
 									: {}),
 							}
-						: instruction.exactTypedArrayKind === undefined
-							? undefined
-							: {
+						: instruction.exactTypedArrayKind !== undefined
+							? {
 									kind: "exact-typed-array-element",
 									elementKind: instruction.exactTypedArrayKind,
-								};
+								}
+							: instruction.exactArrayElement === true
+								? { kind: "exact-array-element" }
+								: undefined;
 		case "storeProperty":
 			return instruction.containedFixedTypedArrayKind !== undefined
 				? {
@@ -2463,12 +2473,14 @@ function nativeInstructionPlanFromExecution(
 						elementKind: instruction.containedFixedTypedArrayKind,
 						...(instruction.containedFixedTypedArrayInBounds ? { inBounds: true } : {}),
 					}
-				: instruction.exactTypedArrayKind === undefined
-					? undefined
-					: {
+				: instruction.exactTypedArrayKind !== undefined
+					? {
 							kind: "exact-typed-array-element",
 							elementKind: instruction.exactTypedArrayKind,
-						};
+						}
+					: instruction.exactArrayElement === true
+						? { kind: "exact-array-element" }
+						: undefined;
 		case "storePropertyStatic":
 			return instruction.exactOwnSlot !== undefined
 				? { kind: "exact-own-slot", slot: instruction.exactOwnSlot }

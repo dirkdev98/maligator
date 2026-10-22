@@ -21,6 +21,7 @@ import {
 } from "./native-scalar-operators.ts";
 import { selectNativeSpanContinuations } from "./native-span-continuation.ts";
 import type { NativeSpanContinuation } from "./native-span-continuation.ts";
+import { nativePlanKeepsOrdinaryLowering } from "./program-image.ts";
 import type {
 	NativeDirectEntryPlan,
 	NativeFunctionPlan,
@@ -3161,7 +3162,7 @@ export function selectNativeFastPaths(
 					const kind = native.instructions[candidate]?.kind;
 					return (
 						unavailable(candidate) ||
-						(kind !== undefined &&
+						(!nativePlanKeepsOrdinaryLowering(native.instructions[candidate]) &&
 							!(
 								kind === "exact-builtin-input-kinds" &&
 								nativeNumericBuiltinInstruction(fn.instructions[candidate]!) !== undefined
@@ -3192,7 +3193,8 @@ export function selectNativeFastPaths(
 			fn,
 			indexedLoops,
 			jumpTargets,
-			(ip) => unavailable(ip) || native.instructions[ip] !== undefined,
+			(ip) =>
+				unavailable(ip) || !nativePlanKeepsOrdinaryLowering(native.instructions[ip]),
 		))
 			for (const ip of plan.claimedIps) numericLoopBlocked.add(ip);
 		for (const header of [...body.jumpTargets].sort((a, b) => a - b)) {
@@ -3208,7 +3210,7 @@ export function selectNativeFastPaths(
 					return (
 						numericLoopBlocked.has(candidate) ||
 						// Operand kind proofs refine the double lowering; the region replaces it.
-						(kind !== undefined &&
+						(!nativePlanKeepsOrdinaryLowering(native.instructions[candidate]) &&
 							kind !== "exact-operator-input-kinds" &&
 							kind !== "unsigned-arithmetic" &&
 							!(
@@ -3243,7 +3245,7 @@ export function selectNativeFastPaths(
 		fn,
 		native.registerRepresentations,
 		jumpTargets,
-		(ip) => unavailable(ip) || native.instructions[ip] !== undefined,
+		(ip) => unavailable(ip) || !nativePlanKeepsOrdinaryLowering(native.instructions[ip]),
 		{ kind: "select" },
 		indexedLoops,
 		(ip) => fusions.get(ip),

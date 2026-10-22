@@ -46,7 +46,7 @@ describe("Core local fact bundle", () => {
 		expect(first.index.operations).toHaveLength(1);
 		expect(first.provenance.layouts).toHaveLength(1);
 		expect(first.valueKinds.kindMask(allocation!)).not.toBe(0);
-		expect(first.valueClasses.exactHeapBrand(allocation!)).toBeUndefined();
+		expect(first.valueClasses.exactHeapBrand(allocation!)).toBe("Array");
 		expect(analyses.get(CORE_LOCAL_FACT_BUNDLE_ANALYSIS, request)).toBe(first);
 
 		const unrelatedEditor = CoreEditor.open(program, unrelatedFunction);

@@ -1,4 +1,5 @@
 import type { NativeBodyFacts } from "./native-body-facts.ts";
+import { nativePlanKeepsOrdinaryLowering } from "./program-image.ts";
 import type { NativeFunctionPlan } from "./program-image.ts";
 import { vmInstructionWriteRegisters } from "./runtime-image.ts";
 import type { BytecodeFunction } from "./runtime-image.ts";
@@ -168,7 +169,7 @@ export function nativeProfitablePrivateRootRegisters(
 	for (const [ip, instruction] of fn.instructions.entries()) {
 		for (const register of body?.writes[ip] ?? vmInstructionWriteRegisters(instruction))
 			uses.get(register)?.writes.push(ip);
-		if (native.instructions[ip] === undefined) {
+		if (nativePlanKeepsOrdinaryLowering(native.instructions[ip])) {
 			if (instruction.opcode === "LOAD_PROPERTY_STATIC") {
 				uses.get(instruction.object)?.properties.push(ip);
 				uses.get(instruction.dst)?.properties.push(ip);

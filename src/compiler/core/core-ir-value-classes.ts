@@ -17,6 +17,8 @@ import type {
 import { coreBlockId, coreInstructionId } from "./core-ir.ts";
 import { CORE_OPTIMIZATION_OWNER } from "./core-optimization-owners.ts";
 import type { CoreOptimizationOwnerRunner } from "./core-optimization-owners.ts";
+import { corePrivateFieldFacts } from "./core-private-field-facts.ts";
+import { coreExactArrayFromCallResult } from "./core-static-values.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 import { coreFunctionVersionsAreCurrent } from "./core-store.ts";
 
@@ -25,7 +27,10 @@ export const CORE_EXACT_COLLECTION_BUILTIN_EFFECT_FACT =
 
 export type CoreNumericTypedArrayKind = CompilerNumericTypedArrayKind;
 export type CoreExactCollectionBrand = "Map" | "Set";
-export type CoreExactHeapBrand = CoreNumericTypedArrayKind | CoreExactCollectionBrand;
+export type CoreExactHeapBrand =
+	| CoreNumericTypedArrayKind
+	| CoreExactCollectionBrand
+	| "Array";
 
 const NUMERIC_TYPED_ARRAY_KINDS: ReadonlySet<string> = new Set([
 	"Int8Array",
@@ -256,7 +261,9 @@ export function analyzeCoreValueClasses(
 			)
 				continue;
 			const brand =
-				coreNumericTypedArrayKind(intrinsic) ?? coreExactCollectionBrand(intrinsic);
+				coreNumericTypedArrayKind(intrinsic) ??
+				coreExactCollectionBrand(intrinsic) ??
+				(intrinsic === "Array" ? "Array" : undefined);
 			if (brand !== undefined) {
 				const outputRoot = roots.get(output) ?? output;
 				brands.set(outputRoot, brand);
@@ -265,6 +272,38 @@ export function analyzeCoreValueClasses(
 				seeded++;
 			}
 		}
+	}
+	const fields = corePrivateFieldFacts(program);
+	const isArrayIntrinsic = (value: CoreValueId): boolean => {
+		const root = roots.get(value) ?? value;
+		if (fn.kernel.valueDefinitionKind(root) !== 1) return false;
+		const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(root));
+		return (
+			fn.instructionOpcodeName(definition) === "loadIntrinsic" &&
+			fn.instructionAttributes(definition).intrinsic === "Array"
+		);
+	};
+	for (const instruction of operations) {
+		const opcode = fn.instructionOpcodeName(instruction);
+		const operandStart = fn.kernel.instructionOperandStart(instruction);
+		const brand =
+			opcode === "createArray" ||
+			(context !== undefined &&
+				((opcode === "call" &&
+					fn.kernel.instructionOperandCount(instruction) > 1 &&
+					isArrayIntrinsic(fn.kernel.operandAt(operandStart + 1))) ||
+					(opcode === "callKnown" &&
+						fn.instructionAttributes(instruction).operation === "Array.from")) &&
+				coreExactArrayFromCallResult(program, fn, roots, context, instruction) !==
+					undefined)
+				? "Array"
+				: opcode === "loadPrivate"
+					? fields?.field(fn, fn.kernel.operandAt(operandStart + 1))?.brand
+					: undefined;
+		if (brand === undefined) continue;
+		const output = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
+		brands.set(roots.get(output) ?? output, brand);
+		seeded++;
 	}
 	// These attributes record a proven receiver brand; an element or call result is unrelated.
 	for (const instruction of operations) {

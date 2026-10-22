@@ -99,7 +99,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 252;
+export const COMPILER_ARTIFACT_VERSION = 253;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -2314,6 +2314,12 @@ function writeCompilerArtifact(
 				instruction.opcode === "LOAD_PROPERTY"
 			) {
 				w.u8(15);
+			} else if (
+				plan.kind === "exact-array-element" &&
+				(instruction.opcode === "LOAD_PROPERTY" ||
+					instruction.opcode === "STORE_PROPERTY")
+			) {
+				w.u8(25);
 			} else if (
 				plan.kind === "exact-packed-rest-array-element" &&
 				instruction.opcode === "LOAD_PROPERTY"
@@ -4900,6 +4906,12 @@ function readCompilerArtifact(
 				nativeInstructions[instructionIndex] = {
 					kind: "exact-contained-array-element",
 				};
+			} else if (
+				tag === 25 &&
+				(instruction.opcode === "LOAD_PROPERTY" ||
+					instruction.opcode === "STORE_PROPERTY")
+			) {
+				nativeInstructions[instructionIndex] = { kind: "exact-array-element" };
 			} else if (tag === 19 && instruction.opcode === "LOAD_PROPERTY") {
 				nativeInstructions[instructionIndex] = {
 					kind: "exact-packed-rest-array-element",

@@ -620,6 +620,9 @@ type CompilerOperation =
 			 * primitive Number. Native code may resolve clean holes without prototype
 			 * lookup, but must retain generic fallback for deopted storage and non-indices. */
 			exactContainedArrayElement?: true;
+			/** COMPILE-ONLY: the receiver is an Array exotic object, so native code may
+			 * skip its class test but keeps the element and prototype checks. */
+			exactArrayElement?: true;
 			/** COMPILE-ONLY: the receiver is an unescaped, read-only rest Array whose
 			 * dense storage contains every index below length. */
 			exactPackedRestArrayElement?: true;
@@ -680,6 +683,8 @@ type CompilerOperation =
 
 			// [object, key, value]
 			registers: [number, number, number];
+			/** COMPILE-ONLY: the receiver is an Array exotic object. */
+			exactArrayElement?: true;
 			/** COMPILE-ONLY: Core proved this exact numeric TypedArray brand. Native
 			 * code may skip receiver branding, the property cache, prototype lookup,
 			 * and the generic element-kind dispatch. */

@@ -467,15 +467,17 @@ Shared lifetime and fallback rules are recorded in
       pointer-root requirements explicit. Extend the existing bounded range walk
       only for a demonstrated consumer; a larger walk limit is not an optimization.
       Class-private fields have program-wide facts: a field's kinds join every
-      value its writes store, and a field is construction-only when only the
-      activation that added it to an object stores into it. A loop carries such a
-      field of an invariant receiver around its back edge once one read succeeded.
-      Arrays held in private fields still take generic indexed loads, because no
-      fact says what a field's array holds: `this.#opcode[id]` tests for an Array,
-      then a typed array, then calls the IC. Recording the allocation and element
-      kinds each write of such a field stores would let those reads load directly.
-      A brand check followed by a field read of the same class on the same
-      receiver still runs both checks.
+      value its observable writes store, its brand says when all of those are
+      Arrays or all one TypedArray kind, and it is construction-only when only
+      the activation that added it to an object stores into it. A loop carries
+      such a field of an invariant receiver around its back edge once one read
+      succeeded, and element accesses through an Array-branded field skip the
+      class test. Elements still read as unknown values, so `this.#live[id] !== 1`
+      keeps a generic compare; element kinds would need every store into an array
+      that escapes through the field. Map and Set fields keep their method
+      capture, because the direct call assumes no one added an own `get`. A brand
+      check followed by a field read of the same class on the same receiver still
+      runs both checks.
       Field kinds per allocation site are the missing fact in class-heavy loops:
       `sum + store.opcode(id)` keeps a generic `+` fallback because `.opcode` of a
       `{ opcode, a, b }` element is unknown, and that fallback can call user code,

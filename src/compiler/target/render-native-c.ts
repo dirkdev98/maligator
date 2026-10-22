@@ -9007,19 +9007,29 @@ function emitInstruction(
 			// the stack across the whole function; the temp promotes back to a register once
 			// the try_* helper inlines.
 			const receiverName = `__property_receiver_${ip}`;
+			// An exact Array receiver needs no class test and is never a TypedArray.
+			const exactArray = nativePlan?.kind === "exact-array-element";
+			const arrayReceiver = exactArray
+				? `mal_value_to_array_object(${boxed(instruction.object)})`
+				: `mal_vm_as_array(${boxed(instruction.object)})`;
+			const arrayPresent = exactArray ? "" : `${receiverName} && `;
 			if (instruction.opcode === "LOAD_PROPERTY") {
 				const ordinary = (position: ReadonlyArray<string> = []): Array<string> =>
 					isNumericRep(reps[instruction.key]!)
 						? [
-								`MalArrayObject *${receiverName} = mal_vm_as_array(${boxed(instruction.object)});`,
+								`MalArrayObject *${receiverName} = ${arrayReceiver};`,
 								`MalValue __v_${ip};`,
 								reps[instruction.key] === "int32"
-									? `if (${receiverName} && r${instruction.key} >= 0 && mal_vm_array_try_get_proven_index(${receiverName}, (u32) r${instruction.key}, &__v_${ip})) {`
-									: `if (${receiverName} && mal_vm_array_try_get_index(${receiverName}, ${num(instruction.key)}, &__v_${ip})) {`,
+									? `if (${arrayPresent}r${instruction.key} >= 0 && mal_vm_array_try_get_proven_index(${receiverName}, (u32) r${instruction.key}, &__v_${ip})) {`
+									: `if (${arrayPresent}mal_vm_array_try_get_index(${receiverName}, ${num(instruction.key)}, &__v_${ip})) {`,
 								`  r${instruction.dst} = ${callValue(instruction.dst, `__v_${ip}`)};`,
 								// Numeric TypedArray elements read without allocating, collecting or calling.
-								`} else if (${receiverName} == nullptr && mal_vm_typed_array_try_get_index(${boxed(instruction.object)}, ${num(instruction.key)}, &__v_${ip})) {`,
-								`  r${instruction.dst} = ${callValue(instruction.dst, `__v_${ip}`)};`,
+								...(exactArray
+									? []
+									: [
+											`} else if (${receiverName} == nullptr && mal_vm_typed_array_try_get_index(${boxed(instruction.object)}, ${num(instruction.key)}, &__v_${ip})) {`,
+											`  r${instruction.dst} = ${callValue(instruction.dst, `__v_${ip}`)};`,
+										]),
 								`} else {`,
 								...position,
 								...(context.incomingRootPublication ?? []).map((line) => `  ${line}`),
@@ -9034,9 +9044,9 @@ function emitInstruction(
 							]
 						: [
 								// Dense Array element reads dominate boxed-key loads; other receivers keep the out-of-line helper.
-								`MalArrayObject *${receiverName} = mal_vm_as_array(${boxed(instruction.object)});`,
+								`MalArrayObject *${receiverName} = ${arrayReceiver};`,
 								`MalValue __v_${ip};`,
-								`if (${receiverName} && mal_vm_array_try_get_value_index(${receiverName}, ${boxed(instruction.key)}, &__v_${ip})) {`,
+								`if (${arrayPresent}mal_vm_array_try_get_value_index(${receiverName}, ${boxed(instruction.key)}, &__v_${ip})) {`,
 								`  r${instruction.dst} = ${callValue(instruction.dst, `__v_${ip}`)};`,
 								`} else {`,
 								...position,
@@ -9362,14 +9372,19 @@ function emitInstruction(
 			// See LOAD_PROPERTY: a monomorphic data-slot/dense-element hit runs no user code;
 			// the general [[Set]] fallback keeps the throw check.
 			const receiverName = `__property_receiver_${ip}`;
+			const exactArray = nativePlan?.kind === "exact-array-element";
+			const arrayReceiver = exactArray
+				? `mal_value_to_array_object(${boxed(instruction.object)})`
+				: `mal_vm_as_array(${boxed(instruction.object)})`;
+			const arrayPresent = exactArray ? "" : `${receiverName} && `;
 			if (instruction.opcode === "STORE_PROPERTY") {
 				const ordinary = (position: ReadonlyArray<string> = []): Array<string> =>
 					isNumericRep(reps[instruction.key]!)
 						? [
-								`MalArrayObject *${receiverName} = mal_vm_as_array(${boxed(instruction.object)});`,
+								`MalArrayObject *${receiverName} = ${arrayReceiver};`,
 								reps[instruction.key] === "int32"
-									? `if (!(${receiverName} && r${instruction.key} >= 0 && mal_vm_array_try_store_proven_index(${receiverName}, (u32) r${instruction.key}, ${boxed(instruction.value)}))) {`
-									: `if (!(${receiverName} && mal_vm_array_try_store(${receiverName}, ${num(instruction.key)}, ${boxed(instruction.value)}))) {`,
+									? `if (!(${arrayPresent}r${instruction.key} >= 0 && mal_vm_array_try_store_proven_index(${receiverName}, (u32) r${instruction.key}, ${boxed(instruction.value)}))) {`
+									: `if (!(${arrayPresent}mal_vm_array_try_store(${receiverName}, ${num(instruction.key)}, ${boxed(instruction.value)}))) {`,
 								...position,
 								...(context.incomingRootPublication ?? []).map((line) => `  ${line}`),
 								...(context.indexedPropertyInactiveRootMask === undefined
@@ -9382,8 +9397,8 @@ function emitInstruction(
 								`}`,
 							]
 						: [
-								`MalArrayObject *${receiverName} = mal_vm_as_array(${boxed(instruction.object)});`,
-								`if (!(${receiverName} && mal_vm_array_try_store_value_index(${receiverName}, ${boxed(instruction.key)}, ${boxed(instruction.value)}))) {`,
+								`MalArrayObject *${receiverName} = ${arrayReceiver};`,
+								`if (!(${arrayPresent}mal_vm_array_try_store_value_index(${receiverName}, ${boxed(instruction.key)}, ${boxed(instruction.value)}))) {`,
 								...position,
 								`  mal_vm_indexed_fast_store(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${strict}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}]);`,
 								`  ${throwCheck()}`,
