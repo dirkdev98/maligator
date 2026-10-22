@@ -88,6 +88,7 @@ import {
 	decodeVmValueOperand,
 	validateVmShapeCases,
 	validateRuntimeImageMetadata,
+	vmExceptionHandlerTargets,
 } from "./runtime-image.ts";
 import type {
 	BytecodeFunction,
@@ -3081,6 +3082,7 @@ function bytecodeInstructionDominates(
 	dominatorIp: number,
 	dominatedIp: number,
 ): boolean {
+	const handlers = vmExceptionHandlerTargets(fn.instructions.length, fn.handlers);
 	const reachable = (skippedIp: number | undefined): boolean => {
 		const pending = [0];
 		const visited = new Set<number>();
@@ -3091,6 +3093,8 @@ function bytecodeInstructionDominates(
 			visited.add(ip);
 			const instruction = fn.instructions[ip];
 			if (instruction === undefined) continue;
+			const handler = handlers[ip];
+			if (handler !== undefined) pending.push(handler);
 			if (instruction.opcode === "JUMP") {
 				pending.push(instruction.targetIp);
 				continue;

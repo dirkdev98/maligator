@@ -279,6 +279,46 @@ describe("normal build frontend cache", () => {
 		expect(warmC).toBe(coldC);
 	});
 
+	it("retains indexed-length loops inside exception handlers across a frontend cache hit", () => {
+		const root = temporaryDirectory();
+		const cacheDirectory = path.join(root, "cache");
+		const entrypoint = path.join(root, "entry.js");
+		write(path.join(root, "package.json"), `{"type":"module"}\n`);
+		write(
+			entrypoint,
+			`function frame(name, action) {
+				try {
+					return action();
+				} catch (error) {
+					return error.stack.split("\\n").find((text) => text.includes(name));
+				}
+			}
+			globalThis.result = frame("at", () => { throw new Error("failed"); });\n`,
+		);
+		const compileLocked = () =>
+			compileBuildFrontend({
+				entrypoint,
+				config: resolveBuildConfig({
+					engine: { primordials: "locked", eval: false, realms: false },
+				}),
+				stripTypes: stripCompactTypes,
+				stripperIdentity: "build-frontend-cache-test",
+				cacheDirectory,
+			});
+		const regions = (compiled: ReturnType<typeof compileLocked>) =>
+			compiled.programImage.native.functions.flatMap((fn) =>
+				fn.specializations.filter((region) => region.kind === "indexed-length-loop"),
+			);
+
+		const cold = compileLocked();
+		const warm = compileLocked();
+
+		expect(cold.cache).toBe("miss");
+		expect(warm.cache).toBe("hit");
+		expect(regions(cold)).not.toHaveLength(0);
+		expect(regions(warm)).toEqual(regions(cold));
+	});
+
 	it("retains RegExp.exec projection regions across a frontend cache hit", () => {
 		const root = temporaryDirectory();
 		const cacheDirectory = path.join(root, "cache");
