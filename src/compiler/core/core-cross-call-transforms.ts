@@ -134,6 +134,7 @@ interface InlineTarget {
 	readonly argumentSnapshots: boolean;
 	readonly construction: boolean;
 	readonly linear: boolean;
+	readonly loops: boolean;
 	readonly returnValues: ReadonlyArray<CoreValueId>;
 	readonly function: CoreFunctionStore;
 	readonly returnValue: CoreValueId;
@@ -620,6 +621,8 @@ function inlineTarget(
 	const callbackConsumer =
 		synchronousCallback?.function === fn &&
 		synchronousCallback.bodyVersion === fn.version("body");
+	// A closure whose only use is this call moves its loops here rather than copying them.
+	const loopsAllowed = callbackConsumer || captureContext?.sameScopeChain === true;
 	if (
 		fn.isGenerator ||
 		fn.isAsync ||
@@ -652,11 +655,13 @@ function inlineTarget(
 	const ordered: Array<CoreBlockId> = [];
 	const returns: Array<CoreValueId> = [];
 	let linear = true;
+	let loops = false;
 	let instructionCount = 0;
 	const visit = (block: CoreBlockId): boolean => {
 		if (active.has(block)) {
 			linear = false;
-			return callbackConsumer;
+			loops = true;
+			return loopsAllowed;
 		}
 		if (visited.has(block)) return true;
 		if (
@@ -769,6 +774,7 @@ function inlineTarget(
 		construction: invocation === "construct",
 		function: fn,
 		linear,
+		loops,
 		returnValue: returns[0]!,
 		returnValues: returns,
 		blocks,
@@ -1565,7 +1571,8 @@ function offerFunctionCandidates(
 				"call",
 				directCaptureContext(fn, iteration.callback, site.instruction, callback),
 			);
-			if (inline !== undefined) {
+			// A callback with its own loop would nest it in every expanded call site.
+			if (inline !== undefined && !inline.loops) {
 				const generatedCodeCost = 32 + inline.instructions.length;
 				service.offer({
 					kind: "array-iteration-inline",
@@ -3716,7 +3723,7 @@ function applyCandidate(
 				"call",
 				directCaptureContext(fn, iteration.callback, candidate.site, target),
 			);
-			if (inline === undefined) return undefined;
+			if (inline === undefined || inline.loops) return undefined;
 			const expanded = expandCoreArrayIterationCall(
 				fn,
 				editor,
