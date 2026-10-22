@@ -231,6 +231,9 @@ function inlineSourcePositions(
 	return result;
 }
 
+// The callback runs once per element, so its call site is weighted like a loop body.
+const ARRAY_ITERATION_CALLBACK_EXPOSURE = 8;
+
 const INLINE_ENVIRONMENT_OPCODES: ReadonlySet<string> = new Set([
 	"loadCaptured",
 	"createFunction",
@@ -256,6 +259,9 @@ interface InlineCaptureContext {
 	readonly caller: CoreFunctionStore;
 	readonly callee: CoreValueId;
 	readonly site: CoreInstructionId;
+	// The callee was created in the caller's current scope chain, so its captured
+	// stores reach the same environments from an inlined copy.
+	readonly sameScopeChain?: true;
 }
 
 function immutableCaptureValue(
@@ -599,7 +605,7 @@ function directCaptureContext(
 		if (position < descriptor.callTransfer.arguments.firstOperand) return undefined;
 	}
 	if (uses !== 1) return undefined;
-	return { caller, callee, site };
+	return { caller, callee, site, sameScopeChain: true };
 }
 
 function inlineTarget(
@@ -664,7 +670,8 @@ function inlineTarget(
 			const opcode = fn.instructionOpcodeName(instruction);
 			if (
 				++instructionCount > (callbackConsumer ? 128 : 48) ||
-				INLINE_UNSUPPORTED_OPCODES.has(opcode) ||
+				(INLINE_UNSUPPORTED_OPCODES.has(opcode) &&
+					!(opcode === "storeCaptured" && captureContext?.sameScopeChain === true)) ||
 				(invocation !== "construct" && opcode === "loadNewTarget") ||
 				(invocation === "construct" &&
 					["createFunction", "envCopy", "envPop", "envPush"].includes(opcode)) ||
@@ -1545,9 +1552,7 @@ function offerFunctionCandidates(
 		}
 		const inLoop = loopFrequency > 1;
 		const exposure = loopFrequency;
-		const iteration = inLoop
-			? coreArrayIterationCall(program, fn, site.instruction)
-			: undefined;
+		const iteration = coreArrayIterationCall(program, fn, site.instruction);
 		const callback =
 			iteration === undefined
 				? undefined
@@ -1560,7 +1565,7 @@ function offerFunctionCandidates(
 				"call",
 				directCaptureContext(fn, iteration.callback, site.instruction, callback),
 			);
-			if (inline?.linear) {
+			if (inline !== undefined) {
 				const generatedCodeCost = 32 + inline.instructions.length;
 				service.offer({
 					kind: "array-iteration-inline",
@@ -1569,8 +1574,9 @@ function offerFunctionCandidates(
 					revision: summaries.version(callback),
 					priorityClass: 2,
 					// The eligibility helper replaces builtin dispatch; credit one callback only.
+					// The method is itself a loop over the callback, wherever it is called from.
 					priorityScore: inlinePriorityScore(
-						exposure,
+						exposure * ARRAY_ITERATION_CALLBACK_EXPOSURE,
 						generatedCodeCost,
 						CORE_GENERATED_CODE_COST_WEIGHTS.runtime.admissionCheck,
 					),
@@ -3710,7 +3716,7 @@ function applyCandidate(
 				"call",
 				directCaptureContext(fn, iteration.callback, candidate.site, target),
 			);
-			if (!inline?.linear) return undefined;
+			if (inline === undefined) return undefined;
 			const expanded = expandCoreArrayIterationCall(
 				fn,
 				editor,
