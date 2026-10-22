@@ -3095,6 +3095,28 @@ static inline bool mal_vm_array_push_one_try(
 }
 
 /**
+ * Append one element to a contained Array (dense, extensible, with a writable length)
+ * that has spare capacity; growth and the length boundary stay with the builtin.
+ */
+static inline __attribute__((always_inline)) bool mal_vm_array_contained_push_one(
+    MalValue receiver, MalValue value
+) {
+#if MAL_PERF_STATS
+    // The out-of-line push records element kinds for the perf report.
+    if (mal_perf_stats_enabled) return false;
+#endif
+    MalArrayObject *arr = mal_value_to_array_object(receiver);
+    u32 index = arr->length;
+    if (arr->elements == nullptr || index >= arr->capacity) return false;
+    arr->elements[index] = value;
+    mal_gc_array_card(&arr->object.header, index, value);
+    arr->dense_count = index + 1;
+    arr->length = index + 1;
+    MAL_PERF_COUNT(array_contained_pushes);
+    return true;
+}
+
+/**
  * CreateDataProperty of a default element through the dense vector, mirroring
  * mal_array_object_store's fast arm; false defers to the generic define.
  */

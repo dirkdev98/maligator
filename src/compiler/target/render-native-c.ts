@@ -11225,17 +11225,25 @@ function emitInstruction(
 				? `((MalValue[]){ ${instruction.arguments.map(boxedOperand).join(", ")} })`
 				: "nullptr";
 			if (instruction.operation === "Array.prototype.push") {
-				return [
-					`r${instruction.dst} = mal_builtin_array_push_contained(vm, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${instruction.arguments.length});`,
+				const receiver = boxedOperand(instruction.thisValue);
+				const pushed = [
+					`r${instruction.dst} = mal_builtin_array_push_contained(vm, ${receiver}, ${argsExpr}, ${instruction.arguments.length});`,
 					throwCheck(),
+				];
+				if (instruction.arguments.length !== 1) return [...pushed, callPoll()];
+				return [
+					`if (mal_vm_array_contained_push_one(${receiver}, ${boxedOperand(instruction.arguments[0]!)})) {`,
+					`  ${storeNumber(instruction.dst, `(f64) mal_value_to_array_object(${receiver})->length`)}`,
+					"} else {",
+					...pushed.map((line) => `  ${line}`),
+					"}",
 					callPoll(),
 				];
 			}
+			// Popping a contained Array cannot throw or allocate.
 			if (instruction.operation === "Array.prototype.pop") {
 				return [
 					`r${instruction.dst} = mal_builtin_array_pop_contained(vm, ${boxedOperand(instruction.thisValue)});`,
-					throwCheck(),
-					callPoll(),
 				];
 			}
 			if (instruction.operation === "Object.hasOwn") {
@@ -11298,7 +11306,8 @@ function emitInstruction(
 				instruction.thisValue,
 				instruction.arguments,
 			);
-			if (collectionCall !== null) return [collectionCall, throwCheck(), callPoll()];
+			// Exact Map and Set kernels never complete abruptly.
+			if (collectionCall !== null) return [collectionCall, callPoll()];
 			if (NUMBER_PREDICATES.has(instruction.operation)) {
 				const input = instruction.arguments[0];
 				return [
@@ -11897,7 +11906,6 @@ function emitInstruction(
 				const operation = nativeBuiltinCollectionCallChainAction.chain.operation;
 				return [
 					fixedCollectionCall(operation, instruction.dst, instruction.thisValue, args)!,
-					throwCheck(),
 					...(operation === "Map.prototype.set" || operation === "Set.prototype.add"
 						? [callPoll()]
 						: []),
