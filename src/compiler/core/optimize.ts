@@ -237,10 +237,11 @@ export function optimizeCore(
 	pruneUnusedPlatformAliases(compilation);
 	pruneUnusedPlatformModuleInitializers(compilation);
 	if (ablatedFamily !== "inlining-cross-call") liftLocalCaptureArguments(compilation);
-	if (ablatedFamily !== "memory-ssa-load-store")
-		forwardCoreOwnCapturedLoads(compilation.program, compilation.context);
 	if (ablatedFamily !== "provenance-escape-scalar-replacement")
 		deferCapturedRestMaterialization(compilation);
+	// Rest deferral recognizes a captured rest array by its owner's binding reads.
+	if (ablatedFamily !== "memory-ssa-load-store")
+		forwardCoreOwnCapturedLoads(compilation.program, compilation.context);
 	measurePhase(
 		"dense-generation-barrier",
 		() => compilation.program.finalizeConstructionGeneration(),
