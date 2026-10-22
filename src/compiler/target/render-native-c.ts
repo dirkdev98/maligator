@@ -1188,9 +1188,12 @@ function emitNumericLoopRegion(
 	const readOnly =
 		plan.kind === "fixed-numeric" && plan.views.every((view) => !view.writable);
 	const records = new Set(plan.kind !== "integer" ? (plan.records ?? []) : []);
-	// Length bounds and records exist only for Array views.
-	const arrayOnly =
-		plan.kind === "fixed-numeric" && (plan.boundObject !== undefined || records.size > 0);
+	// Records exist only for Array views.
+	const arrayOnly = plan.kind === "fixed-numeric" && records.size > 0;
+	const lengthLoad =
+		plan.kind === "fixed-numeric" && plan.boundObject !== undefined
+			? fn.instructions[plan.id]
+			: undefined;
 	if (plan.kind === "fixed-numeric") {
 		const comparison =
 			fn.instructions[plan.id + (plan.boundObject === undefined ? 0 : 1)]!;
@@ -1200,14 +1203,36 @@ function emitNumericLoopRegion(
 		const index = local(plan.index),
 			bound = local(plan.bound);
 		// Views are admitted before the range so a length bound can read the admitted length.
+		// A TypedArray's length is an inherited getter, so a length bound also needs the
+		// length load's cache to prove the intrinsic getter.
+		const typedAdmissions =
+			arrayOnly ||
+			lengthLoad?.opcode === "LOAD_PROPERTY_STATIC_ARRAY_LENGTH" ||
+			(plan.boundObject !== undefined &&
+				!plan.views.some((view) => view.object === plan.boundObject))
+				? ["false"]
+				: [
+						...plan.views.map(
+							(view) =>
+								`mal_vm_fixed_numeric_storage(r${view.object}, 0, ${view.writable}, &${id}_v${view.object})`,
+						),
+						...(lengthLoad?.opcode === "LOAD_PROPERTY_STATIC"
+							? [
+									`mal_vm_admit_numeric_typed_array_length(vm, r${plan.boundObject}, &${propertyCache}[${lengthLoad.icIndex}], &${id}_lt, &${id}_ll)`,
+								]
+							: []),
+					];
+		const typedPossible = typedAdmissions[0] !== "false";
 		rangePrelude.push(
-			// A TypedArray's length is an inherited getter that a length bound would bypass.
-			`  bool ${id}_typed = ${arrayOnly ? "false" : plan.views.map((view) => `mal_vm_fixed_numeric_storage(r${view.object}, 0, ${view.writable}, &${id}_v${view.object})`).join(" && ")};`,
+			...(typedPossible && lengthLoad?.opcode === "LOAD_PROPERTY_STATIC"
+				? [`  MalTypedArrayObject *${id}_lt = nullptr;`, `  u32 ${id}_ll = 0;`]
+				: []),
+			`  bool ${id}_typed = ${typedAdmissions.join(" && ")};`,
 			`  bool ${id}_array = ${readOnly ? `!${id}_typed && ${plan.views.map((view) => `mal_vm_dense_number_storage(r${view.object}, &${id}_a${view.object})`).join(" && ")}` : "false"};`,
 		);
 		if (plan.boundObject !== undefined)
 			rangePrelude.push(
-				`  ${bound} = ${id}_array ? (f64) ${id}_a${plan.boundObject}.length : 0.0;`,
+				`  ${bound} = ${typedPossible ? `${id}_typed ? (f64) ${id}_v${plan.boundObject}.length : ` : ""}${readOnly ? `${id}_array ? (f64) ${id}_a${plan.boundObject}.length : ` : ""}0.0;`,
 			);
 		guards.unshift(`(${id}_typed || ${id}_array)`);
 		guards.push(
