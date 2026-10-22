@@ -148,6 +148,7 @@ export const NATIVE_C_HEADER_LINES = [
 	'#include "profile.h"',
 	'#include "builtin_array.h"',
 	'#include "builtin_boolean.h"',
+	'#include "builtin_data_view.h"',
 	'#include "builtin_date.h"',
 	'#include "builtin_object.h"',
 	'#include "builtin_json.h"',

@@ -15,17 +15,6 @@
 #include "vm.h"
 #include "vm_ops.h"
 
-// DataView is the only consumer of this layout, so it lives here. The header
-// must come first (the value boxing casts to MalHeapHeader *).
-typedef struct MalDataViewObject {
-    MalObject object;
-    MalObjectStorage object_storage;
-    MalArrayBufferObject *buffer;
-    u32 byte_offset;
-    u32 byte_length;
-    bool length_tracking;
-} MalDataViewObject;
-
 static u32 mal_data_view_current_length(const MalDataViewObject *view);
 static bool mal_data_view_is_out_of_bounds(const MalDataViewObject *view);
 static bool mal_data_view_extent(
@@ -568,6 +557,25 @@ MAL_DV_SET(mal_dv_set_uint32, DV_UINT32)
 MAL_DV_SET(mal_dv_set_float16, DV_FLOAT16)
 MAL_DV_SET(mal_dv_set_float32, DV_FLOAT32)
 MAL_DV_SET(mal_dv_set_float64, DV_FLOAT64)
+
+const MalNativeFunctionCallback mal_data_view_accessor_callbacks[MAL_DATA_VIEW_ACCESSOR_COUNT] = {
+    [MAL_DATA_VIEW_GET_INT8] = mal_dv_get_int8,
+    [MAL_DATA_VIEW_GET_UINT8] = mal_dv_get_uint8,
+    [MAL_DATA_VIEW_GET_INT16] = mal_dv_get_int16,
+    [MAL_DATA_VIEW_GET_UINT16] = mal_dv_get_uint16,
+    [MAL_DATA_VIEW_GET_INT32] = mal_dv_get_int32,
+    [MAL_DATA_VIEW_GET_UINT32] = mal_dv_get_uint32,
+    [MAL_DATA_VIEW_GET_FLOAT32] = mal_dv_get_float32,
+    [MAL_DATA_VIEW_GET_FLOAT64] = mal_dv_get_float64,
+    [MAL_DATA_VIEW_SET_INT8] = mal_dv_set_int8,
+    [MAL_DATA_VIEW_SET_UINT8] = mal_dv_set_uint8,
+    [MAL_DATA_VIEW_SET_INT16] = mal_dv_set_int16,
+    [MAL_DATA_VIEW_SET_UINT16] = mal_dv_set_uint16,
+    [MAL_DATA_VIEW_SET_INT32] = mal_dv_set_int32,
+    [MAL_DATA_VIEW_SET_UINT32] = mal_dv_set_uint32,
+    [MAL_DATA_VIEW_SET_FLOAT32] = mal_dv_set_float32,
+    [MAL_DATA_VIEW_SET_FLOAT64] = mal_dv_set_float64,
+};
 MAL_DV_SET(mal_dv_set_bigint64, DV_BIGINT64)
 MAL_DV_SET(mal_dv_set_biguint64, DV_BIGUINT64)
 

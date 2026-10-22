@@ -158,6 +158,22 @@ export const VM_GUARDED_BUILTIN_OPERATIONS = [
 	"Boolean",
 	"Boolean.prototype.valueOf",
 	"Boolean.prototype.toString",
+	"DataView.prototype.getInt8",
+	"DataView.prototype.getUint8",
+	"DataView.prototype.getInt16",
+	"DataView.prototype.getUint16",
+	"DataView.prototype.getInt32",
+	"DataView.prototype.getUint32",
+	"DataView.prototype.getFloat32",
+	"DataView.prototype.getFloat64",
+	"DataView.prototype.setInt8",
+	"DataView.prototype.setUint8",
+	"DataView.prototype.setInt16",
+	"DataView.prototype.setUint16",
+	"DataView.prototype.setInt32",
+	"DataView.prototype.setUint32",
+	"DataView.prototype.setFloat32",
+	"DataView.prototype.setFloat64",
 ] as const;
 
 export type VmGuardedBuiltinOperation = (typeof VM_GUARDED_BUILTIN_OPERATIONS)[number];

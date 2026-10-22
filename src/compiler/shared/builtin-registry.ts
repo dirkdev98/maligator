@@ -517,6 +517,18 @@ const iterationInvocationFamilies: ReadonlyArray<BuiltinOperationDescriptor> =
 			: {}),
 	}));
 
+/** DataView element types whose accessors compiled code performs inline; BigInt and Float16 stay generic. */
+export const DATA_VIEW_ACCESSOR_TYPES = [
+	"Int8",
+	"Uint8",
+	"Int16",
+	"Uint16",
+	"Int32",
+	"Uint32",
+	"Float32",
+	"Float64",
+] as const;
+
 export const builtinOperations: ReadonlyArray<BuiltinOperationDescriptor> = [
 	{
 		id: "Object.is",
@@ -848,6 +860,34 @@ export const builtinOperations: ReadonlyArray<BuiltinOperationDescriptor> = [
 		realm: "semantic-identity",
 		lowerings: ["generic", "guarded-native-collection", "exact-builtin-call"],
 	})),
+	...DATA_VIEW_ACCESSOR_TYPES.flatMap((type): Array<BuiltinOperationDescriptor> => [
+		{
+			id: `DataView.prototype.get${type}`,
+			owner: "DataView.prototype",
+			key: `get${type}`,
+			receiver: "any",
+			arity: { minimum: 1 },
+			evaluationOrder: "receiver-then-arguments",
+			coercionOrder: ["byte-offset-index", "little-endian-boolean"],
+			effects: ["coerce", "call-user-code", "throw", "safepoint"],
+			result: "number",
+			realm: "semantic-identity",
+			lowerings: ["generic", "guarded-data-view-access"],
+		},
+		{
+			id: `DataView.prototype.set${type}`,
+			owner: "DataView.prototype",
+			key: `set${type}`,
+			receiver: "any",
+			arity: { minimum: 2 },
+			evaluationOrder: "receiver-then-arguments",
+			coercionOrder: ["byte-offset-index", "value-number", "little-endian-boolean"],
+			effects: ["coerce", "call-user-code", "throw", "safepoint"],
+			result: "undefined",
+			realm: "semantic-identity",
+			lowerings: ["generic", "guarded-data-view-access"],
+		},
+	]),
 	...(["slice", "substring", "substr"] as const).map(
 		(key): BuiltinOperationDescriptor => ({
 			id: `String.prototype.${key}`,

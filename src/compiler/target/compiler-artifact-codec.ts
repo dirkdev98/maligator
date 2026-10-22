@@ -99,7 +99,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 251;
+export const COMPILER_ARTIFACT_VERSION = 252;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -226,6 +226,9 @@ const TAGGED_GUARDED_BUILTIN_OPERATIONS = [
 	...VM_GUARDED_BUILTIN_OPERATIONS.filter((operation) => operation.startsWith("Number.")),
 	...VM_GUARDED_BUILTIN_OPERATIONS.filter(
 		(operation) => operation === "Boolean" || operation.startsWith("Boolean."),
+	),
+	...VM_GUARDED_BUILTIN_OPERATIONS.filter((operation) =>
+		operation.startsWith("DataView.prototype."),
 	),
 ] as const;
 const ARRAY_ITERATION_CALLBACK_OPERATIONS: ReadonlySet<string> = new Set([

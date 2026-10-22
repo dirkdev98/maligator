@@ -2,6 +2,7 @@
 
 #include "./defaults.h"
 #include "array_object.h"
+#include "builtin_data_view.h"
 #include "builtin_iterator.h"
 #include "function_object.h" // mal_function_object_function_index, for the call guard
 #include "heap_symbol.h"
@@ -1050,6 +1051,8 @@ static inline void mal_ic_set_recorded_prototype_epoch(MalInlineCache *ic, u64 e
 // `entry` hints `key`'s own accessor in a dictionary receiver's table. Same-layout
 // receivers own different getter closures, so a hit reads the getter from the receiver.
 #define MAL_IC_MODE_OWN_GETTER 17u
+// A DataView's `byteLength` through the intact accessor; the view's extent is read per hit.
+#define MAL_IC_MODE_DATA_VIEW_BYTE_LENGTH 18u
 
 #define MAL_IC_MISSING_SHAPE_CHAIN 0u
 #define MAL_IC_MISSING_EXACT_CHAIN 1u
@@ -1701,6 +1704,32 @@ static inline bool mal_vm_try_typed_array_length(
 );
 
 /**
+ * A fixed DataView whose `byteLength` resolves to the intact intrinsic getter, read
+ * while its buffer is attached, unshared and still covers it. The getter would throw
+ * for the other views, so they take the full lookup.
+ */
+static inline bool mal_vm_admit_data_view_byte_length(
+    const MalVm *vm, MalValue receiver, u32 *length
+) {
+    if (!mal_vm_primitive_methods_intact(vm) ||
+        !mal_value_is_heap_type(receiver, MAL_HEAP_DATA_VIEW_OBJECT)) {
+        return false;
+    }
+    const MalDataViewObject *view = (const MalDataViewObject *) mal_value_to_heap(receiver);
+    const MalArrayBufferObject *buffer = view->buffer;
+    if (mal_object_prototype(&view->object) !=
+            mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_DATA_VIEW_PROTOTYPE]) ||
+        (view->object.shape != nullptr && view->object.shape->inline_count != 0) ||
+        mal_object_has_public_overflow(&view->object) || view->length_tracking ||
+        buffer->detached || buffer->shared_memory != nullptr ||
+        (u64) view->byte_offset + view->byte_length > buffer->byte_length) {
+        return false;
+    }
+    *length = view->byte_length;
+    return true;
+}
+
+/**
  * A Map or Set whose `size` resolves to the intact intrinsic getter: the watched
  * prototype protector holds, the receiver uses its intrinsic prototype, and an
  * empty own-property layout cannot shadow the accessor.
@@ -1773,6 +1802,13 @@ static inline bool mal_vm_special_try_load(MalVm *vm, MalValue receiver, MalValu
         if (mal_vm_try_typed_array_length(receiver, ic, &array, &length)) {
             *out = mal_value_from_u32(length);
             mal_perf_ic_load_typed_array_length_hit();
+            return true;
+        }
+    }
+    if (ic->mode == MAL_IC_MODE_DATA_VIEW_BYTE_LENGTH) {
+        u32 length;
+        if (mal_vm_admit_data_view_byte_length(vm, receiver, &length)) {
+            *out = mal_value_from_u32(length);
             return true;
         }
     }

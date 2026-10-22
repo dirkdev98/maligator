@@ -7,7 +7,10 @@ import type {
 	CorePropertyPlacement,
 	CoreStringSpanRangeOperation,
 } from "../core/core-ir-regions.ts";
-import { builtinResultIsInt32 } from "../shared/builtin-registry.ts";
+import {
+	builtinResultIsInt32,
+	DATA_VIEW_ACCESSOR_TYPES,
+} from "../shared/builtin-registry.ts";
 import {
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_NULL,
@@ -3970,6 +3973,40 @@ type NativeBuiltinCollectionCallChain = Extract<
 interface NativeBuiltinCollectionCallChainAction {
 	readonly chain: NativeBuiltinCollectionCallChain;
 	readonly role: "property" | "call";
+}
+
+const DATA_VIEW_ELEMENT_SIZES: Readonly<
+	Record<(typeof DATA_VIEW_ACCESSOR_TYPES)[number], number>
+> = {
+	Int8: 1,
+	Uint8: 1,
+	Int16: 2,
+	Uint16: 2,
+	Int32: 4,
+	Uint32: 4,
+	Float32: 4,
+	Float64: 8,
+};
+
+/** The inline DataView access a guarded accessor call performs, if it is one. */
+function dataViewAccessor(
+	operation: string,
+):
+	| { readonly accessor: string; readonly size: number; readonly set: boolean }
+	| undefined {
+	const prefix = "DataView.prototype.";
+	if (!operation.startsWith(prefix)) return undefined;
+	const method = operation.slice(prefix.length);
+	const kind = method.slice(0, 3);
+	const type = DATA_VIEW_ACCESSOR_TYPES.find(
+		(candidate) => method.slice(3) === candidate,
+	);
+	if ((kind !== "get" && kind !== "set") || type === undefined) return undefined;
+	return {
+		accessor: `MAL_DATA_VIEW_${kind.toUpperCase()}_${type.toUpperCase()}`,
+		size: DATA_VIEW_ELEMENT_SIZES[type],
+		set: kind === "set",
+	};
 }
 
 function nativeBuiltinCollectionOperation(
@@ -11683,6 +11720,59 @@ function emitInstruction(
 				}
 			}
 			const guardedBuiltinOperation = callPlan?.guardedBuiltinCall?.operation;
+			const dataViewAccess =
+				guardedBuiltinOperation === undefined
+					? undefined
+					: dataViewAccessor(guardedBuiltinOperation);
+			if (dataViewAccess !== undefined) {
+				const operand = (index: number): number | undefined => args[index];
+				const offset = operand(0);
+				const index =
+					offset === undefined
+						? "0.0"
+						: (nativeNumberOperand(offset) ??
+							`(mal_ops_is_number(${boxedOperand(offset)}) ? mal_ops_number_as_f64(${boxedOperand(offset)}) : -1.0)`);
+				const endian = operand(dataViewAccess.set ? 2 : 1);
+				const littleEndian =
+					endian === undefined
+						? "false"
+						: (nativeBooleanOperand(endian) ??
+							`mal_value_is_truthy(${boxedOperand(endian)})`);
+				const value = dataViewAccess.set ? operand(1) : undefined;
+				const number =
+					value === undefined
+						? dataViewAccess.set
+							? "NAN"
+							: undefined
+						: nativeNumberOperand(value);
+				const bytes = `__data_view_${ip}`;
+				const admitted = [
+					`mal_data_view_accessor_is(${boxedOperand(instruction.callee)}, ${dataViewAccess.accessor})`,
+					...(value !== undefined && number === null
+						? [`mal_ops_is_number(${boxedOperand(value)})`]
+						: []),
+				];
+				const access = dataViewAccess.set
+					? `mal_data_view_write(${bytes}, ${dataViewAccess.accessor}, ${number ?? `mal_ops_number_as_f64(${boxedOperand(value!)})`}, ${littleEndian});`
+					: storeNumber(
+							instruction.dst,
+							`mal_data_view_read(${bytes}, ${dataViewAccess.accessor}, ${littleEndian})`,
+						);
+				return [
+					`byte *${bytes} = ${admitted.join(" && ")} ? mal_data_view_try_bytes(${boxedOperand(instruction.thisValue)}, ${index}, ${dataViewAccess.size}, ${dataViewAccess.set}) : nullptr;`,
+					`if (${bytes} != nullptr) {`,
+					`  ${access}`,
+					...(dataViewAccess.set
+						? [`  r${instruction.dst} = ${callResult("MAL_VALUE_UNDEFINED")};`]
+						: []),
+					`} else {`,
+					`  MalCompletion ${tmp} = ${profileCall("call", `mal_vm_call_cached(vm, ${nativeCallCacheReference(context, ip)}, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length})`)};`,
+					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
+					`  r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
+					`}`,
+					callPoll(),
+				];
+			}
 			if (
 				guardedBuiltinOperation === "Boolean" ||
 				guardedBuiltinOperation === "Boolean.prototype.valueOf" ||

@@ -2738,6 +2738,13 @@ mal_vm_property_try_load_static_rows(
             return (MalStaticPropertyProbeResult) { .hit = true, .value = value };
         }
     }
+    if (ic->mode == MAL_IC_MODE_DATA_VIEW_BYTE_LENGTH) {
+        u32 length;
+        if (mal_vm_admit_data_view_byte_length(vm, receiver, &length)) {
+            return (MalStaticPropertyProbeResult) {
+                .hit = true, .value = mal_value_from_u32(length)};
+        }
+    }
     if (ic->mode == MAL_IC_MODE_COLLECTION_SIZE) {
         usize size;
         if (mal_vm_admit_collection_size(vm, receiver, &size)) {
@@ -6531,6 +6538,17 @@ static MalValue mal_vm_op_load_property_ic_keyed(
             mal_vm_admit_typed_array_length(vm, object_value, ic, &array, &length)) {
             return mal_value_from_u32(length);
         }
+    }
+    u32 data_view_length;
+    if (mal_value_is_data_view_object(object_value) && mal_value_is_string(key_value) &&
+        mal_string_equals_ascii(mal_value_to_string(key_value), "byteLength") &&
+        mal_vm_admit_data_view_byte_length(vm, object_value, &data_view_length)) {
+        if (mal_ic_key_is_stable_string(key_value)) {
+            mal_ic_record_special(
+                vm, ic, MAL_IC_MODE_DATA_VIEW_BYTE_LENGTH, 0, key_value,
+                mal_value_new_undefined(), nullptr);
+        }
+        return mal_value_from_u32(data_view_length);
     }
     usize collection_size;
     if ((mal_value_is_map_object(object_value) || mal_value_is_set_object(object_value)) &&

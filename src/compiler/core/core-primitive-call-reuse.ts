@@ -132,6 +132,7 @@ function candidate(operation: string): boolean {
 		operation.startsWith("Map.prototype.") ||
 		operation.startsWith("Set.prototype.") ||
 		operation.startsWith("Array.prototype.") ||
+		operation.startsWith("DataView.prototype.") ||
 		operation === "Object.hasOwn"
 	)
 		return false;
