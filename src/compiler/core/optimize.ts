@@ -1,6 +1,9 @@
 import { exposeCoreAccessorCalls } from "./core-accessor-calls.ts";
 import { CoreAnalysisManager } from "./core-analysis-manager.ts";
-import { pruneCoreCaptureLiveness } from "./core-capture-liveness.ts";
+import {
+	forwardCoreOwnCapturedLoads,
+	pruneCoreCaptureLiveness,
+} from "./core-capture-liveness.ts";
 import type { ConstructedCoreCompilation, CoreCompilation } from "./core-compilation.ts";
 import {
 	emptyCoreCrossCallTransformResult,
@@ -234,6 +237,8 @@ export function optimizeCore(
 	pruneUnusedPlatformAliases(compilation);
 	pruneUnusedPlatformModuleInitializers(compilation);
 	if (ablatedFamily !== "inlining-cross-call") liftLocalCaptureArguments(compilation);
+	if (ablatedFamily !== "memory-ssa-load-store")
+		forwardCoreOwnCapturedLoads(compilation.program, compilation.context);
 	if (ablatedFamily !== "provenance-escape-scalar-replacement")
 		deferCapturedRestMaterialization(compilation);
 	measurePhase(
