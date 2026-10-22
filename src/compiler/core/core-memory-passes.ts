@@ -2218,7 +2218,9 @@ function conditionalObjectAllocationDestination(
 ): CoreBlockId | undefined {
 	if (
 		fn.instructionKind(instruction) !== "operation" ||
-		!["createObjectShaped", "callKnown"].includes(fn.instructionOpcodeName(instruction))
+		!["createObjectShaped", "callKnown", "createFunction"].includes(
+			fn.instructionOpcodeName(instruction),
+		)
 	)
 		return undefined;
 	if (fn.instructionOpcodeName(instruction) === "callKnown") {
@@ -2262,9 +2264,9 @@ const sinkConditionalObjectAllocations: CoreFunctionPass = {
 	name: "sink-conditional-object-allocations",
 	stage: "memory",
 	requiredFunctionFeatures: CORE_FUNCTION_HAS_BRANCHES,
-	requiredFunctionOpcodesAny: ["createObjectShaped", "callKnown"],
+	requiredFunctionOpcodesAny: ["createObjectShaped", "callKnown", "createFunction"],
 	admission: {
-		predicate: "shaped object or primitive wrapper used only after a branch",
+		predicate: "shaped object, primitive wrapper or closure used only after a branch",
 		hasOpportunity({ program, function: functionId }) {
 			const fn = program.function(functionId);
 			for (const instruction of fn.instructionIds()) {
@@ -2350,12 +2352,19 @@ const sinkConditionalObjectAllocations: CoreFunctionPass = {
 					break;
 				}
 			}
+			const closure = fn.instructionOpcodeName(instruction) === "createFunction";
 			for (
 				let next = fn.instructionNext(instruction);
 				eligible && next !== undefined && fn.instructionKind(next) === "operation";
 				next = fn.instructionNext(next)
 			) {
-				if (coreInstructionEffects(fn, next).maySuspend) eligible = false;
+				const opcode = fn.instructionOpcodeName(next);
+				// A closure binds the scope chain current at its creation.
+				if (
+					coreInstructionEffects(fn, next).maySuspend ||
+					(closure && (opcode.startsWith("env") || opcode.startsWith("with")))
+				)
+					eligible = false;
 			}
 			if (!eligible) continue;
 			const editor = CoreEditor.open(program, item.function);

@@ -1096,6 +1096,46 @@ describe("bounded Core cross-call transforms", () => {
 		).toBe(false);
 	});
 
+	it("expands forEach outside a loop around a branching callback that writes its caller's bindings", () => {
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(
+				`function total(items) {
+					let sum = 0;
+					items.forEach((value) => {
+						if (value > 0) sum += value;
+					});
+					return sum;
+				}
+				globalThis.result = total([1, -2, 3]);`,
+				"core-inline-array-iteration-state.js",
+			),
+			{
+				afterCoreOptimization(program) {
+					optimized = program;
+				},
+			},
+		);
+		const operations = coreOperations(coreFunctionNamed(optimized!, "total")!);
+		const fallback = operations.find(
+			({ opcode, attributes }) =>
+				opcode === "call" && attributes[CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE] === true,
+		);
+		expect(fallback).toBeDefined();
+		// The closure exists only for the fallback; the expanded loop writes `sum` itself.
+		expect(
+			operations
+				.filter(({ opcode }) => opcode === "createFunction")
+				.map(({ block }) => block),
+		).toEqual([fallback!.block]);
+		expect(
+			operations.some(
+				({ opcode, block }) =>
+					opcode === "storeCaptured" && block !== operations[0]!.block,
+			),
+		).toBe(true);
+	});
+
 	it("sinks one-shot captured callbacks into guarded fallbacks", () => {
 		let optimized: CoreProgram | undefined;
 		compileSemanticProgramToProgramImage(
