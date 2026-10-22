@@ -1303,7 +1303,7 @@ function emitNumericLoopRegion(
 	const restart = `{ ${id}_exit = 0; break; }`;
 	const reach = (ip: number): string => {
 		if (ip === plan.id)
-			return `${plan.carried.map((register) => `${start(register)} = ${local(register)};`).join(" ")}${cursor === undefined ? "" : ` ${id}_si = ${cursor}.index;`} if (mal_gc_poll_requested()) ${restart} continue;`;
+			return `${plan.carried.map((register) => `${start(register)} = ${local(register)};`).join(" ")}${cursor === undefined ? "" : ` ${id}_si = ${id}_ci;`} if (mal_gc_poll_requested()) ${restart} continue;`;
 		const exit = exitIndex.get(ip);
 		if (exit !== undefined) return `{ ${id}_exit = ${exit}; break; }`;
 		return `${id}_b${ip} = true;`;
@@ -1340,7 +1340,7 @@ function emitNumericLoopRegion(
 				const element = records.has(op.valueDst)
 					? `if (__builtin_expect(!mal_value_is_heap_type(${id}_e, MAL_HEAP_OBJECT), 0)) ${restart} ${local(op.valueDst)} = ${id}_e;`
 					: `if (__builtin_expect(!mal_ops_is_number(${id}_e), 0)) ${restart} ${local(op.valueDst)} = mal_ops_number_as_f64(${id}_e);`;
-				return `if (${cursor}.done || ${cursor}.index >= ${id}_a.length) { ${cursor}.done = true; ${local(op.doneDst)} = true; } else { if (__builtin_expect(${cursor}.index >= ${id}_a.count, 0)) ${restart} MalValue ${id}_e = ${id}_a.elements[${cursor}.index]; ${element} ${cursor}.index++; ${local(op.doneDst)} = false; }`;
+				return `if (${id}_cd || ${id}_ci >= ${id}_a.length) { ${id}_cd = true; ${local(op.doneDst)} = true; } else { if (__builtin_expect(${id}_ci >= ${id}_a.count, 0)) ${restart} MalValue ${id}_e = ${id}_a.elements[${id}_ci]; ${element} ${id}_ci++; ${local(op.doneDst)} = false; }`;
 			}
 			case "LOAD_PROPERTY_STATIC":
 			case "LOAD_PROPERTY_STATIC_ARRAY_LENGTH":
@@ -1454,7 +1454,14 @@ function emitNumericLoopRegion(
 				(register) =>
 					`    ${kindOf(register) === "boolean" ? "bool" : floating ? "f64" : "i64"} ${start(register)} = ${local(register)};`,
 			),
-			...(cursor === undefined ? [] : [`    u64 ${id}_si = ${cursor}.index;`]),
+			// The cursor lives in memory its helpers can reach; the loop steps a local copy.
+			...(cursor === undefined
+				? []
+				: [
+						`    u64 ${id}_ci = ${cursor}.index;`,
+						`    bool ${id}_cd = ${cursor}.done;`,
+						`    u64 ${id}_si = ${id}_ci;`,
+					]),
 			`    u8 ${id}_exit = 0;`,
 			"    for (;;) {",
 			...heads.slice(1).map((ip) => `      bool ${id}_b${ip} = false;`),
@@ -1478,6 +1485,11 @@ function emitNumericLoopRegion(
 			lines.push(`    if (${id}_exit == ${index + 1}) {`);
 			for (const register of exit.outputs)
 				lines.push(`      ${materialize(register, local(register))}`);
+			if (cursor !== undefined)
+				lines.push(
+					`      ${cursor}.index = ${id}_ci;`,
+					`      ${cursor}.done = ${id}_cd;`,
+				);
 			lines.push(`      goto L${exit.targetIp};`, "    }");
 		}
 		for (const register of plan.carried)

@@ -337,9 +337,10 @@ dictionary mode, and keeping them shaped saved 4.7%.
       length minus one is not provably an int32. A dense receiver's length bound
       would make `lo`, `hi` and `mid` int32 values.
 - [ ] Trim the bookkeeping of dense-number `for...of` regions. Counting below a
-      limit over a 10 K-element array runs 25 ms against Node's 13. Each iteration
-      still tests the cursor's done flag, checks both the array length and the
-      dense count, saves the resume state and polls, around one compare and add.
+      limit over a 10 K-element array runs 17 ms against Node's 13 now that the
+      region steps a local copy of the cursor. Each iteration still tests the done
+      flag, checks both the array length and the dense count, saves the resume
+      state and polls, around one compare and add.
 - [ ] Give inline method bodies typed fields instead of a check per access. Class
       layout cells replaced the per-site probes on class members with a shape
       compare, but `store.kind(i)` in a loop still costs about 15 ns against
