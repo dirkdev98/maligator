@@ -36,7 +36,11 @@
 
 #if MAL_NATIVE_FRAME_WALK && defined(__APPLE__)
 #include <dlfcn.h>
-#include <mach-o/getsect.h>
+#include <mach-o/loader.h>
+// Zig's macOS headers lack <mach-o/getsect.h>; libSystem still exports the function.
+extern uint8_t *getsectiondata(
+    const struct mach_header_64 *mhp, const char *segname, const char *sectname,
+    unsigned long *size);
 #endif
 #include "vm_ops.h"
 
