@@ -1265,7 +1265,7 @@
 						<section class="inventory-group module-group" aria-labelledby="node:buffer">
 							<div class="inventory-heading">
 								<h3 id="node:buffer"><code>node:buffer</code></h3>
-								<span>11 recognized APIs · default export</span>
+								<span>13 recognized APIs · default export</span>
 							</div>
 							<div class="table-wrap">
 								<table>
@@ -1318,6 +1318,14 @@
 										</tr>
 										<tr>
 											<td><code class="api-name">node:buffer#kStringMaxLength</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:buffer#resolveObjectURL</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:buffer#transcode</code></td>
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 									</tbody>
@@ -1568,7 +1576,7 @@
 						<section class="inventory-group module-group" aria-labelledby="node:crypto">
 							<div class="inventory-heading">
 								<h3 id="node:crypto"><code>node:crypto</code></h3>
-								<span>37 recognized APIs · default export</span>
+								<span>48 recognized APIs · default export</span>
 							</div>
 							<div class="table-wrap">
 								<table>
@@ -1588,7 +1596,23 @@
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 										<tr>
+											<td><code class="api-name">node:crypto#Hash</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:crypto#Hmac</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
 											<td><code class="api-name">node:crypto#KeyObject</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:crypto#Sign</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:crypto#Verify</code></td>
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 										<tr>
@@ -1624,22 +1648,42 @@
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 										<tr>
+											<td><code class="api-name">node:crypto#createPrivateKey</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:crypto#createPublicKey</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
 											<td><code class="api-name">node:crypto#createSecretKey</code></td>
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 										<tr>
 											<td><code class="api-name">node:crypto#createSign</code></td>
-											<td><span class="status stub">Shape-only stub</span></td>
+											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 										<tr>
 											<td><code class="api-name">node:crypto#createVerify</code></td>
-											<td><span class="status stub">Shape-only stub</span></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:crypto#generateKey</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:crypto#generateKeyPair</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 										<tr>
 											<td>
 												<code class="api-name">node:crypto#generateKeyPairSync</code>
 											</td>
-											<td><span class="status stub">Shape-only stub</span></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:crypto#generateKeySync</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 										<tr>
 											<td><code class="api-name">node:crypto#getCipherInfo</code></td>
@@ -1718,11 +1762,19 @@
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 										<tr>
+											<td><code class="api-name">node:crypto#sign</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
 											<td><code class="api-name">node:crypto#subtle</code></td>
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 										<tr>
 											<td><code class="api-name">node:crypto#timingSafeEqual</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:crypto#verify</code></td>
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 										<tr>
@@ -2951,7 +3003,7 @@
 						<section class="inventory-group module-group" aria-labelledby="node:http">
 							<div class="inventory-heading">
 								<h3 id="node:http"><code>node:http</code></h3>
-								<span>15 recognized APIs · default export</span>
+								<span>21 recognized APIs · default export</span>
 							</div>
 							<div class="table-wrap">
 								<table>
@@ -2967,7 +3019,15 @@
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 										<tr>
+											<td><code class="api-name">node:http#CloseEvent</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
 											<td><code class="api-name">node:http#METHODS</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:http#MessageEvent</code></td>
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 										<tr>
@@ -2976,6 +3036,10 @@
 										</tr>
 										<tr>
 											<td><code class="api-name">node:http#IncomingMessage</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:http#OutgoingMessage</code></td>
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 										<tr>
@@ -3003,6 +3067,14 @@
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 										<tr>
+											<td><code class="api-name">node:http#isValidHeaderName</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:http#isValidHeaderValue</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
 											<td><code class="api-name">node:http#maxHeaderSize</code></td>
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
@@ -3022,6 +3094,10 @@
 										</tr>
 										<tr>
 											<td><code class="api-name">node:http#validateHeaderValue</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:http#WebSocket</code></td>
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 									</tbody>
@@ -3053,7 +3129,7 @@
 						<section class="inventory-group module-group" aria-labelledby="node:https">
 							<div class="inventory-heading">
 								<h3 id="node:https"><code>node:https</code></h3>
-								<span>4 recognized APIs · default export</span>
+								<span>6 recognized APIs · default export</span>
 							</div>
 							<div class="table-wrap">
 								<table>
@@ -3066,6 +3142,14 @@
 									<tbody>
 										<tr>
 											<td><code class="api-name">node:https#Agent</code></td>
+											<td><span class="status stub">Shape-only stub</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:https#Server</code></td>
+											<td><span class="status stub">Shape-only stub</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:https#createServer</code></td>
 											<td><span class="status stub">Shape-only stub</span></td>
 										</tr>
 										<tr>
@@ -3216,7 +3300,7 @@
 						<section class="inventory-group module-group" aria-labelledby="node:net">
 							<div class="inventory-heading">
 								<h3 id="node:net"><code>node:net</code></h3>
-								<span>8 recognized APIs · default export</span>
+								<span>12 recognized APIs · default export</span>
 							</div>
 							<div class="table-wrap">
 								<table>
@@ -3248,6 +3332,20 @@
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 										<tr>
+											<td>
+												<code class="api-name">node:net#getDefaultAutoSelectFamily</code>
+											</td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td>
+												<code class="api-name"
+													>node:net#getDefaultAutoSelectFamilyAttemptTimeout</code
+												>
+											</td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
 											<td><code class="api-name">node:net#isIP</code></td>
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
@@ -3257,6 +3355,20 @@
 										</tr>
 										<tr>
 											<td><code class="api-name">node:net#isIPv6</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td>
+												<code class="api-name">node:net#setDefaultAutoSelectFamily</code>
+											</td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td>
+												<code class="api-name"
+													>node:net#setDefaultAutoSelectFamilyAttemptTimeout</code
+												>
+											</td>
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 									</tbody>
@@ -4283,7 +4395,7 @@
 						<section class="inventory-group module-group" aria-labelledby="node:stream">
 							<div class="inventory-heading">
 								<h3 id="node:stream"><code>node:stream</code></h3>
-								<span>19 recognized APIs · default export</span>
+								<span>20 recognized APIs · default export</span>
 							</div>
 							<div class="table-wrap">
 								<table>
@@ -4320,6 +4432,10 @@
 										</tr>
 										<tr>
 											<td><code class="api-name">node:stream#addAbortSignal</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:stream#compose</code></td>
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 										<tr>
@@ -4625,7 +4741,7 @@
 						<section class="inventory-group module-group" aria-labelledby="node:sys">
 							<div class="inventory-heading">
 								<h3 id="node:sys"><code>node:sys</code></h3>
-								<span>40 recognized APIs · default export</span>
+								<span>43 recognized APIs · default export</span>
 							</div>
 							<div class="table-wrap">
 								<table>
@@ -4653,6 +4769,10 @@
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 										<tr>
+											<td><code class="api-name">node:sys#_extend</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
 											<td><code class="api-name">node:sys#aborted</code></td>
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
@@ -4666,6 +4786,10 @@
 													>node:sys#convertProcessSignalToExitCode</code
 												>
 											</td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:sys#debounce</code></td>
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 										<tr>
@@ -4732,6 +4856,10 @@
 										</tr>
 										<tr>
 											<td><code class="api-name">node:sys#isDeepStrictEqual</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:sys#markPromiseAsHandled</code></td>
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 										<tr>
@@ -4906,7 +5034,7 @@
 						<section class="inventory-group module-group" aria-labelledby="node:tls">
 							<div class="inventory-heading">
 								<h3 id="node:tls"><code>node:tls</code></h3>
-								<span>10 recognized APIs · default export</span>
+								<span>17 recognized APIs · default export</span>
 							</div>
 							<div class="table-wrap">
 								<table>
@@ -4942,6 +5070,18 @@
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 										<tr>
+											<td><code class="api-name">node:tls#SecureContext</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:tls#Server</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:tls#TLSSocket</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
 											<td><code class="api-name">node:tls#checkServerIdentity</code></td>
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
@@ -4950,11 +5090,31 @@
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 										<tr>
+											<td><code class="api-name">node:tls#createSecureContext</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:tls#createServer</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
 											<td><code class="api-name">node:tls#getCACertificates</code></td>
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 										<tr>
+											<td>
+												<code class="api-name"
+													>node:tls#getCertificateCompressionAlgorithms</code
+												>
+											</td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
 											<td><code class="api-name">node:tls#getCiphers</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:tls#rootCertificates</code></td>
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 									</tbody>
@@ -4994,7 +5154,7 @@
 						<section class="inventory-group module-group" aria-labelledby="node:url">
 							<div class="inventory-heading">
 								<h3 id="node:url"><code>node:url</code></h3>
-								<span>10 recognized APIs · default export</span>
+								<span>12 recognized APIs · default export</span>
 							</div>
 							<div class="table-wrap">
 								<table>
@@ -5042,6 +5202,14 @@
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 										<tr>
+											<td><code class="api-name">node:url#resolve</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:url#resolveObject</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
 											<td><code class="api-name">node:url#urlToHttpOptions</code></td>
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
@@ -5052,7 +5220,7 @@
 						<section class="inventory-group module-group" aria-labelledby="node:util">
 							<div class="inventory-heading">
 								<h3 id="node:util"><code>node:util</code></h3>
-								<span>40 recognized APIs · default export</span>
+								<span>43 recognized APIs · default export</span>
 							</div>
 							<div class="table-wrap">
 								<table>
@@ -5080,6 +5248,10 @@
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 										<tr>
+											<td><code class="api-name">node:util#_extend</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
 											<td><code class="api-name">node:util#aborted</code></td>
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
@@ -5093,6 +5265,10 @@
 													>node:util#convertProcessSignalToExitCode</code
 												>
 											</td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td><code class="api-name">node:util#debounce</code></td>
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 										<tr>
@@ -5159,6 +5335,12 @@
 										</tr>
 										<tr>
 											<td><code class="api-name">node:util#isDeepStrictEqual</code></td>
+											<td><span class="status partial">Partial implementation</span></td>
+										</tr>
+										<tr>
+											<td>
+												<code class="api-name">node:util#markPromiseAsHandled</code>
+											</td>
 											<td><span class="status partial">Partial implementation</span></td>
 										</tr>
 										<tr>
@@ -5602,7 +5784,7 @@
 						>
 							<div class="inventory-heading">
 								<h3 id="node:worker_threads"><code>node:worker_threads</code></h3>
-								<span>13 recognized APIs · default export</span>
+								<span>18 recognized APIs · default export</span>
 							</div>
 							<div class="table-wrap">
 								<table>
@@ -5613,6 +5795,12 @@
 										</tr>
 									</thead>
 									<tbody>
+										<tr>
+											<td>
+												<code class="api-name">node:worker_threads#BroadcastChannel</code>
+											</td>
+											<td><span class="status stub">Shape-only stub</span></td>
+										</tr>
 										<tr>
 											<td>
 												<code class="api-name">node:worker_threads#MessageChannel</code>
@@ -5635,6 +5823,14 @@
 										</tr>
 										<tr>
 											<td>
+												<code class="api-name"
+													>node:worker_threads#getEnvironmentData</code
+												>
+											</td>
+											<td><span class="status stub">Shape-only stub</span></td>
+										</tr>
+										<tr>
+											<td>
 												<code class="api-name">node:worker_threads#isInternalThread</code>
 											</td>
 											<td><span class="status stub">Shape-only stub</span></td>
@@ -5648,7 +5844,23 @@
 										<tr>
 											<td>
 												<code class="api-name"
+													>node:worker_threads#isMarkedAsUntransferable</code
+												>
+											</td>
+											<td><span class="status stub">Shape-only stub</span></td>
+										</tr>
+										<tr>
+											<td>
+												<code class="api-name"
 													>node:worker_threads#markAsUncloneable</code
+												>
+											</td>
+											<td><span class="status stub">Shape-only stub</span></td>
+										</tr>
+										<tr>
+											<td>
+												<code class="api-name"
+													>node:worker_threads#markAsUntransferable</code
 												>
 											</td>
 											<td><span class="status stub">Shape-only stub</span></td>
@@ -5670,6 +5882,14 @@
 										<tr>
 											<td>
 												<code class="api-name">node:worker_threads#resourceLimits</code>
+											</td>
+											<td><span class="status stub">Shape-only stub</span></td>
+										</tr>
+										<tr>
+											<td>
+												<code class="api-name"
+													>node:worker_threads#setEnvironmentData</code
+												>
 											</td>
 											<td><span class="status stub">Shape-only stub</span></td>
 										</tr>
@@ -5890,7 +6110,7 @@
 		</main>
 
 		<footer class="site-footer">
-			<span>Maligator <span data-version>0.1.0-alpha.28</span></span>
+			<span>Maligator <span data-version>0.1.0-alpha.29</span></span>
 			<span>Self-contained. No analytics.</span>
 		</footer>
 	</body>
