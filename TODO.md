@@ -119,25 +119,11 @@ The independent target boundary and current storage contract are recorded in
       also pay for lower thresholds: splitting past 64 Ki into 32 Ki parts cut the
       self-compile's clang CPU from 352 s to 322 s, but added 4 s of
       single-threaded emission, which cancels the saving at eight jobs.
-- [ ] Use dominance for definition-initialized locals in functions with exception
-      handlers. Handler entries currently disable it, so
-      `lowerExecutionFunctionToNativePlan` still zeroes 4,351 registers on every call.
-      Handler edges must leave from before each protected instruction's writes.
-- [ ] Fold the TDZ checks that remain on module and captured bindings. Module
-      bindings initialized before their module can run user code, captured cells
-      read by closures created after their declaration, and an owner's reads after
-      a dominating initialization no longer check; 5,073 of 18,830 checks remain
-      in the self-compile C. Hoisted function declarations still check every outer
-      binding they read, because they exist before the declaration runs; letting
-      a helper inherit the bindings declared before its first reference removed
-      only 10 more in the self-compile, so that was not kept. The merged module
-      init keeps the checks on bindings it writes itself. Most of the rest read
-      module bindings such as `CoreEditor` or `KeywordDescTable`, whose modules
-      sit in an import cycle or initialize them after a statement that calls out.
-      Locked collection constructors and `Object.freeze` over literals already
-      extend the prefix; continuing past calls into dependencies that receive only
-      data changed nothing in the self-compile. What remains are import cycles and
-      immediately invoked setup functions, such as the one that opens meriyah.
+- [ ] Fold the TDZ checks that remain on module bindings read through import cycles
+      and immediately invoked setup functions, such as the one that opens meriyah;
+      5,073 of 18,830 checks remain in the self-compile C. Hoisted helpers that
+      inherit the bindings declared before their first reference, and prefixes
+      that continue past calls into data-only dependencies, removed almost none.
 - [ ] Bring the native self-compile's memory closer to its live set. Peak live
       bytes stay near 900 MB, but maximum RSS is 4.4 GB now that process GC
       pressure backs off past its budget (it was 3.5 GB while pressure forced 183
@@ -149,26 +135,16 @@ The independent target boundary and current storage contract are recorded in
       and 645 MB of it over-tenured. Malloc zones add another 0.96 GB in 10.5
       million allocations outside the GC heap. Fragmentation of partly live blocks
       and promoted garbage are the levers; recycled blocks are already madvised.
-- [ ] Win back the open-compiled allocation phase. Since the inline static
-      property probe keeps only monomorphic and inherited-value hits, that phase
-      runs about 9% slower on the JavaScript benchmark because its polymorphic hits
-      take the out-of-line probe. Reading the GC poll flag through a VM pointer
-      cost the same phase another 20%, so that change was reverted: the pointer
-      load stays in the loop where the thread-local address was hoisted. Testing
-      the alternate shapes in a frameless leaf ahead of the full out-of-line probe
-      made the self-compile 0.8% slower.
 - [ ] Cut the cost of minor sweeps in large programs. The native self-compile
       allocates 71 GB, and minor collections spend 6 s sweeping 616 million young
-      cells, almost all dead; skipping the finalizer's out-of-line calls for plain
-      objects saved 1.5% of that, so touching each dead cell is the cost.
-      Prefetching young cells four ahead made the parser workload's minor sweeps
-      7% slower, and batching their byte accounting per block changed nothing.
-      A census of the parser workload's 21.8 million dead young cells counted
-      6.4 million arrays, 4.0 million closure environments, 3.5 million closures,
-      3.1 million plain objects and 2.6 million iterator objects. Small arrays now
-      keep their elements in their own cell, and Set construction, Set spreads and
-      object spreads no longer allocate iterators or key arrays; fewer dead cells,
-      from escape analysis or allocation-free iteration, are the remaining lever.
+      cells, almost all dead, one header miss per dead cell. Side mark bitmaps plus
+      a bitmap of cells that own external storage would hand dead runs back to the
+      allocator untouched; fewer dead cells, from escape analysis or allocation-free
+      iteration, are the other lever. In the parser workload's 21.8 million dead
+      young cells, arrays (6.4 M), closure environments (4.0 M), closures (3.5 M),
+      plain objects (3.1 M) and iterators (2.6 M) lead. Skipping finalizer calls
+      for plain objects saved 1.5%; prefetching and per-block byte accounting did
+      not help.
 
 - [ ] Share one invocation-local native analysis context across storage, expression,
       root, and fast-path planning. Native read/write, branch, handler, and lazy
@@ -186,59 +162,6 @@ The independent target boundary and current storage contract are recorded in
       publication to a probe's collecting slow path stays renderer-local: eager
       publication is always legal, and the deferral follows fixed render-form
       rules over plan facts rather than a planning choice.
-- [ ] Select the next proof consumer from a measured hot path rather than
-      local-count or plan-kind totals. On the shape-analysis cone the native
-      self-compiler went from 43.4 s to about 29.3 s on one machine (Node: 8.4 s);
-      array for-of loops whose iterator reaches only its steps and closes no longer
-      allocate it (iterator cells were 21% of sampled bytes before that), and
-      inherited getters, alternating prototype methods and empty sites answered by
-      the shared inherited stub no longer take the collecting property slow path
-      (its entries fell from 242 to 52 million). Shrinking the inline static
-      property probe cut 16% of the self-compile text and made the cone 2.5% faster:
-      most samples in hot runtime helpers land on their first instruction, which
-      points at instruction fetch across 44 MB of text rather than their bodies. Self
-      time now puts 26% in generated code, 19% in property caches, 11% in call
-      dispatch, 11% in GC, and 3% in macOS thread-local lookups; call caches and the
-      root-frame head no longer use thread-locals, so the rest comes from safepoint
-      polls, runtime protector flags, and GC allocation state. The hottest
-      generated functions are one-line Core store accessors called through
-      `mal_vm_call_cached`. Measured dead ends: `__builtin_expect` on the
-      generated throw check made the cone 11% slower, and forcing `always_inline`
-      on the hottest small value and cache helpers changed nothing. Hinting
-      single-target methods outside loops changed nothing. Private names of
-      module-level classes now live in module globals, so a guarded inline in
-      another module can read them, but the cone's hot `fn.kernel` accessor
-      sites are still not inlined: the program generated-code budget runs out
-      with 13.5 thousand candidates pending, and exact-target candidates
-      outrank every hinted one. Inlining every candidate of at most 16 units
-      past the budget made the cone 2.6% slower (28.20 against 27.49 s, three
-      pairs), because each inlined accessor still pays the method, field and
-      private probes that V8 hoists out of the loop; ranking hinted inlines
-      among exact ones within the same budget cost 0.8% (28.48 against 28.25 s).
-      Exempting
-      single-target guarded direct calls or small inlines from the program
-      generated-code budget made thousands more sites direct or inlined without
-      changing wall time, because
-      callee frames rather than dispatch carry the per-call cost. Exempting
-      iterator cursors from the four-expansion per-function cap admitted 350 more
-      array cursors but spent the program budget that collection call chains and
-      result virtualization had used, with no wall-time change; doubling the
-      specialization program budget and moving the allocation mark state from
-      thread-locals onto the heap also left wall time unchanged, as did moving the
-      open-world Math call hint from a thread-local into the call-cache row (an
-      open-world copy of the allocation loop stayed at 171 ms; clang hoists the
-      thread-local address out of the loop). Sending an inherited-value miss
-      straight to the shared stub, skipping the row the inline probe had just
-      tried, saved 5% of a three-class method loop and nothing in the benchmark.
-      Hot accessors only
-      sped up once inlining accepted throwing callees and class-scope closures.
-      Inlining the strict `this` check and reading the callee's realm field
-      directly in `mal_vm_call_cached` and guarded direct calls did not change the
-      JavaScript benchmarks either (closed-compiled wall +0.65%), and moving a
-      private field load's root publication into its probe miss, as static loads
-      do, left the shape-analysis cone at 27.8 s while adding 45 Ki code units. A
-      hot accessor takes about a quarter of its own samples on its first
-      instruction, so entry, not root stores, is where its time goes.
 - [ ] Shrink the largest inline expansions in generated code. Uniform tagged
       field slots and the one-compare Number decode cut the self-compiler's text
       from 55.0 to 49.9 MB; the inline static load probe is now about 19
@@ -247,18 +170,13 @@ The independent target boundary and current storage contract are recorded in
       safepoint polls were about 5% each of one 800 KB translation unit.
       `MAL_FRAME_POS` is now one store into the C-stack frame record. A shape
       root per exotic object kind would let the shape compare imply the heap type.
-- [ ] Reach the remaining hot isolate state without Darwin TLV calls only where a
-      profile shows it. On macOS every `_Thread_local` read is a call to
-      `_tlv_get_addr`, which took 4% of native self-compile samples before
-      allocation moved its black-allocation flag and mark color into `MalHeap` (a
-      1% self-compile win) and IC probes read the primitive-method protector
-      through the VM (0.4%). The next candidates measured neutral over 6 pairs:
-      gating barriers on a process-wide count of marking isolates (+0.04%), array
-      element helpers reading the elements protector and Array.prototype through
-      the VM (within noise), and generated polls reading a VM-held pointer to
-      `mal_gc_poll` (+0.12%). Inherited loads (`mal_prototype_chain_epoch`) and
-      root spans still read thread-locals. Workers keep several isolates per
-      process, so this state cannot become process-global.
+- [ ] Reach the remaining thread-locals without a call on macOS, where a profile
+      shows them. Every `_Thread_local` read there is a `_tlv_get_addr` call
+      (Linux reads the thread pointer). Generated code still keeps a thread-local
+      `MalDefinePropertyCache` per static define site (510 in the compiler), and
+      inherited loads (`mal_prototype_chain_epoch`), root spans and the fiber,
+      profile and perf-stats state stay thread-local. Workers keep several isolates
+      per process, so this state cannot become process-global.
 - [ ] Measure sequentially consistent environment slots on Linux x64. `MalEnv`
       slots are `_Atomic`, so every captured store compiles to `XCHG` on x86-64.
       Major-mark workers trace slots while the mutator runs, so stores must stay
@@ -303,8 +221,6 @@ construction Core (allocation sites, merged summaries, saturated generic sets) n
 108 s in Node to converge on the self-compiler, and generic value paths still reached
 the hot receivers, so field facts stay bounded and consumer-driven as planned below.
 
-- [ ] Return a sentinel for abrupt completion instead of reloading
-      `vm->completion.kind` after every call (146 k checks in the self-compile).
 - [ ] Hoist loop-invariant constant bindings and typed-array views. A lookup
       through a module-level `const FLAGS = new Uint8Array(...)` in a loop runs
       54 ms against Node's 14: every iteration reloads the global slot, repeats its
@@ -320,11 +236,6 @@ the hot receivers, so field facts stay bounded and consumer-driven as planned be
       every iteration (94 ms against Node's 24 for 12 M probes), because an Array
       length minus one is not provably an int32. A dense receiver's length bound
       would make `lo`, `hi` and `mid` int32 values.
-- [ ] Trim the bookkeeping of dense-number `for...of` regions. Counting below a
-      limit over a 10 K-element array runs 17 ms against Node's 13 now that the
-      region steps a local copy of the cursor. Each iteration still tests the done
-      flag, checks both the array length and the dense count, saves the resume
-      state and polls, around one compare and add.
 - [ ] Give inline method bodies typed fields instead of a check per access. Class
       layout cells replaced the per-site probes on class members with a shape
       compare, but `store.kind(i)` in a loop still costs about 15 ns against
@@ -352,12 +263,6 @@ the hot receivers, so field facts stay bounded and consumer-driven as planned be
       no accessor, reads without calling user code. Memory passes could then reuse
       and hoist such loads; `this.left === null ? 0 : this.left.size()` currently
       loads `this.left` twice through its inline cache.
-- [ ] Give typed entries an int32 result where ranges allow. Letting a directly
-      self-recursive entry assume its own scalar result (accepted only when the
-      assumption reproduces it) made `fib` return `double`, but it ran 6% slower:
-      the boxed path's int32 adds beat `fadd` latency on the recursion's critical
-      path, and a numeric tree recursion did not move. Scalar returns pay off only
-      with an integer representation for integer-valued results.
 - [ ] Close the rest of the string-append gap. JavaScript `+` now extends a shared
       append buffer from its longest prefix instead of rebalancing a rope, which took
       a 1 M-append loop from 129 to 39 ms (Node: 13). What remains per `out += "x" + i`
@@ -369,10 +274,6 @@ the hot receivers, so field facts stay bounded and consumer-driven as planned be
       since class layout cells serve most class methods. Records are 72 bytes, so
       many hits touch two lines; a 64-byte record with its hot fields first
       should cut what remains.
-- [ ] Reclaim dead young cells without visiting them. Minor sweeps take 666 of
-      the 1,596 ms collector time in the self-compiler and inspect 90 M young cells,
-      one header miss per dead cell. Side mark bitmaps plus a bitmap of cells that
-      own external storage would hand dead runs back to the allocator untouched.
 - [ ] Pace concurrent marking against a faster mutator. Peak RSS of the native
       self-compiler is bimodal at about 1.4 or 2.0 GB. The high runs coincide with
       a synchronous backstop, fewer major cycles and about three times the
@@ -490,16 +391,12 @@ Shared lifetime and fallback rules are recorded in
 
 ## P1: compiler throughput and analysis scalability
 
-- [ ] Bring the Node-hosted self-compile toward 40 s. It takes about 49 s on
-      the laptop (57.5 s in the 86bfc38a baseline) now that an incremental
-      call-target solve no longer reseeds every transitive reader, candidate checks
-      reuse their capture and predecessor scans, and construction leaves
-      verification to optimization. The rest is a long tail: Core optimization
-      23.5 s, C emission 8.5 s for 176 million code units, execution-to-image
-      6.8 s, and 5.6 s of collection, which a 64 MB semi-space only cut by 1 s.
-      fold-static-property-reads spends 1.7 s in static-value queries, pass
-      admission checks about 1.2 s, and verification about 4 s. 6ce7d318 still
-      triples plan candidates by planning every exact call outside the budget.
+- [ ] Bring the Node-hosted self-compile toward 40 s. It takes 46.3 s in the
+      1cf304da baseline: Core optimization 23.8 s, execution to image 5.2 s, Core to
+      execution 3.2 s and Core construction 2.3 s. fold-static-property-reads
+      spends 1.7 s in static-value queries, pass admission checks about 1.2 s, and
+      verification about 4 s. 6ce7d318 still triples plan candidates by planning
+      every exact call outside the budget.
 - [ ] Invalidate warm frontend caches when module-resolution topology changes.
       The original serial cache can retain a resolved `.mjs` target after a preferred
       extensionless file appears, or retain a package target after a nearer package
@@ -561,12 +458,6 @@ Shared lifetime and fallback rules are recorded in
       candidate recognition while preserving exact ranking and costs. Measure the compact
       integer snapshot's retained memory and representative compile time before
       extending these caches.
-
-- [ ] Repair indexed-length-loop region cost verification for the existing
-      `core-primitive-numeric` Array.from length and holey-array checksum cases.
-      Both fail the instruction/cost contract in VM lowering on `0f39d688`, before
-      demand-driven analysis changes. Preserve the region checks and numeric
-      semantics when reconciling discovery, selection, and lowering costs.
 
 - [ ] Add representative small, medium, and large compiler-scaling cases to the
       existing measurement workflow. Alternate Node and rebuilt self-hosted
@@ -647,12 +538,8 @@ iterator cursor is not, by itself, permission to delete its language object.
 - [ ] Finish specializing higher-order helpers. TypeScript's binarySearchKey clone
       now inlines getTypeId, compareComparableValues and its `some(array)` test,
       but it is still the hottest TypeScript function at about 6%. Cloning small
-      helpers for every site that omits a tested argument, not just sites inside
-      callback clones, cost prettier 1.2% of its cycles, with its bundled
-      TypeScript scanner slower and more table lookups. Cloning helpers that
-      callers reach through a module `var` alias, such as prettier's
-      `traverse_doc_default`, behind a function-index guard ran prettier 0.4% more
-      instructions for the same cycles.
+      helpers at every site that omits a tested argument, or behind a module `var`
+      alias, cost prettier 0.4 to 1.2%.
 - [ ] Narrow the remaining class accessor gap. Loop sites now probe for a
       uniquely named class getter or setter and inline it behind a function-index
       guard: the `#celsius` getter/setter pair takes 33 ms for 5M iterations
@@ -685,11 +572,6 @@ iterator cursor is not, by itself, permission to delete its language object.
       and trusting code needs either one fact epoch or per-field dependencies;
       try both. Measure against the loop regions first: so far the large costs are
       boxing on loop-carried chains and call dispatch, which facts alone do not remove.
-- [ ] Recover the small losses of the value-encoding change. Against 843c1983,
-      typed-array-operations went from 296 to 311 ms and value-kinds from 230 to
-      234 ms, with unchanged kernel C; the one-compare decode becomes a select
-      unless clang expects doubles, and forcing branches with an empty asm blocked
-      box/unbox folding (16% slower typed-array loops).
 
 ## P2: composable temporary values
 
@@ -813,29 +695,13 @@ contracts or investigates costs still visible after the string follow-ups.
 
 ## Focused performance work
 
-- [ ] Cut the TypeScript checker's small-helper overhead. getObjectFlags (about
-      3% of the check) runs as a frameless fast entry, but each call still pays the
-      compiled call; isSimpleTypeRelatedTo (4%) is too large for one and pays a
-      full frame. Letting fast entries restart the full entry at calls off their
-      first straight-line path made the check 3% slower and prettier 2.4% more
-      instructions, since many activations reach those calls. isConstTypeVariable's
-      `&&`/`||` chains over `flags & X` keep mal_value_is_truthy_primitive at about
-      1.6%; answering int32 truthiness inline was again no better.
-- [ ] Close the closed-compiled JavaScript benchmark's per-call gap. Compiled
-      entries now push their own frame row and the cached dispatch tail-calls an
-      ordinary compiled callee, yet an unknown-target call still costs 6.4 ns
-      against Node's 4.3 (a four-closure loop, 191 ms against 129) and a five-class
-      method loop 345 ms against 232. The generic entry still unpacks an argument
-      array, publishes a root frame and returns through a completion check. Inlining
-      the three `quote` bodies instead of dispatching to their field entries doubled
-      the three-class loop (106 against 51 ms), so field entries stay preferred, and
-      raising the cross-call inlining budget fourfold made the self-compile 14%
-      slower while Node's run of the same source stayed level. Rows are not the
-      cost: an unsafe build that pushed no frame rows ran the self-compile only
-      0.3% faster. Dispatching through a dense per-VM entry table instead of the
-      callee's metadata row gained 0.8%, while per-site private-load cache rows
-      cost 1% (their lines displace the shared hint path's), and guarded direct
-      calls at hinted method sites outside loops cost 0.65% with Node level.
+- [ ] Close the closed-compiled JavaScript benchmark's per-call gap. An
+      unknown-target call still costs 6.4 ns against Node's 4.3 (a four-closure
+      loop, 191 ms against 129) and a five-class method loop 345 ms against 232. The
+      generic entry still unpacks an argument array, publishes a root frame and
+      returns through a completion check. Frame rows are not the cost (a build
+      without them ran the self-compile 0.3% faster), and field entries beat
+      inlining the `quote` bodies.
 - [ ] Give large functions allocation-free iteration. Region selection spends the
       program generated-code budget after about 1,700 of 28,700 discovery
       opportunities in the self-compile, so functions such as render-native-c's
@@ -867,12 +733,6 @@ contracts or investigates costs still visible after the string follow-ups.
       first; letting inlines of 32 or fewer units bypass that budget grew the
       compiler's own output for `parser.ts` by 49% and made the self-compile 44%
       slower, so the remedy is cheaper calls or a hotness signal, not more inlining.
-- [ ] Reach the remaining thread-locals without a call on macOS. Isolate state
-      and the `mal_object_set` site table go through a plain pointer while one
-      isolate runs, but generated code still keeps a thread-local
-      `MalDefinePropertyCache` per static define site (510 in the compiler), and
-      the fiber, profile and perf-stats state stay thread-local. Each access is a
-      `_tlv_get_addr` call there; Linux reads them from the thread pointer.
 - [ ] Dispatch the objects phase's pricing rules without loading the method. Its
       `rules[i % 3].quote(order)` loop runs 2.9 times slower than Node while the
       particle loop is 1.37 times: the order allocation is already elided and the
