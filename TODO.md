@@ -311,6 +311,18 @@ private-field accessors (1.7% slower) and evaluating each `this` layout guard on
 per activation. Classes with more than 64 fields did matter: they used to drop to
 dictionary mode, and keeping them shaped saved 4.7%.
 
+Hardware counters place the gap in instruction count, not stalls. On the same
+self-compile input (xctrace CPU Counters, M3 Pro), Node's main thread waits on
+instruction delivery in 23% of its cycles and the native compiler in 22%. The native
+one retires useful work in 56% of its cycles against Node's 44%, yet needs 1.9 times
+the cycles, so it executes about 2.4 times the instructions. Ranking inline candidates
+by interprocedural call frequency instead of local loop depth, and charging
+throw-only blocks a quarter of their size, left it at 15.65 s; four times the budget
+on top saved 2% for 27% more compiled code. A whole-program points-to model over
+construction Core (allocation sites, merged summaries, saturated generic sets) needed
+108 s in Node to converge on the self-compiler, and generic value paths still reached
+the hot receivers, so field facts stay bounded and consumer-driven as planned below.
+
 - [ ] Run the frame-pointer stack walk and entry-serviced polls on Linux. Compiled
       frames keep their stack-trace record on the C stack and calls skip return
       polls, which took `fib(35)` from 84 to 60 ms (Node: 54) and the native
