@@ -296,13 +296,17 @@ the default closed world, class accessors over private fields still run 75 ms
 against 14, polymorphic subclass methods 40 against 10, recursive method calls
 86 against 29, and `out += "x" + i` loops 11 against 5.
 
-The native self-compiler takes about 16.2 s and its profile is flat. Sampled by
+The native self-compiler takes about 15.3 s and its profile is flat. Sampled by
 program counter, 37% of its time is compiled JavaScript, 12% the collector and
 allocation, 11% property lookup helpers, 8% collections and 7% array helpers. Class
-members now guard on shared per-class layout cells, which took it from 17.3 s. It
+members now guard on shared per-class layout cells, which took it from 17.3 s.
+Reading owners' own captured bindings as SSA values and sinking closures into the
+fallbacks that use them took it from 16.4 s. It
 makes about 480 M compiled entries per run, yet direct attacks on call overhead
 did not move it: guarded direct calls at every hinted method site (12 K more
-sites, 9% more C), an inline hit path for inherited method caches, four times the
+sites, 9% more C) or after every class-layout method hit (13 K sites), an inline
+hit path for inherited method caches, capturing Map and Set methods before the
+static probe at the 3 K collection calls outside chain regions, four times the
 cross-call inlining budget (90 M fewer entries), frameless fast entries for
 private-field accessors (1.7% slower) and evaluating each `this` layout guard once
 per activation. Classes with more than 64 fields did matter: they used to drop to
@@ -318,6 +322,23 @@ dictionary mode, and keeping them shaped saved 4.7%.
       entry limit word would be one dependent load.
 - [ ] Return a sentinel for abrupt completion instead of reloading
       `vm->completion.kind` after every call (146 k checks in the self-compile).
+- [ ] Hoist loop-invariant constant bindings and typed-array views. A lookup
+      through a module-level `const FLAGS = new Uint8Array(...)` in a loop runs
+      54 ms against Node's 14: every iteration reloads the global slot, repeats its
+      TDZ check, revalidates the view and calls the out-of-line element decoder
+      (a quarter of the samples), then boxes and unboxes the byte. A binding with a
+      single initializing store cannot change once that store has run, so the load
+      and view admission belong in the preheader once the loop body cannot reach
+      the store or detach the buffer.
+- [ ] Keep binary-search style index arithmetic in int32. `(lo + hi) >> 1` over
+      `hi = items.length - 1` runs on doubles and converts `mid` back to an index
+      every iteration (94 ms against Node's 24 for 12 M probes), because an Array
+      length minus one is not provably an int32. A dense receiver's length bound
+      would make `lo`, `hi` and `mid` int32 values.
+- [ ] Trim the bookkeeping of dense-number `for...of` regions. Counting below a
+      limit over a 10 K-element array runs 25 ms against Node's 13. Each iteration
+      still tests the cursor's done flag, checks both the array length and the
+      dense count, saves the resume state and polls, around one compare and add.
 - [ ] Give inline method bodies typed fields instead of a check per access. Class
       layout cells replaced the per-site probes on class members with a shape
       compare, but `store.kind(i)` in a loop still costs about 15 ns against
