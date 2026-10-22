@@ -106,9 +106,10 @@ The independent target boundary and current storage contract are recorded in
 
 - [ ] Spread one split native function over several translation units. Outlining
       functions past 256 Ki into 128 Ki parts cut the self-compile `-O2` unit wall time
-      from 132 s to 59 s at eight jobs, but `emitInstruction`'s parts still compile
-      in one 19–21 s unit, now the slowest. Parts are static and share a per-function
-      transfer struct, so they need external part symbols and a shared struct header.
+      from 132 s to 59 s at eight jobs, but `emitInstruction`'s 252 parts still compile
+      in one 6 MB unit for 19–21 s, now the slowest. `-O1` saves only 15–20% of that
+      unit and grows its object. Parts are static and share a per-function transfer
+      struct, so they need external part symbols and a shared struct header.
 - [ ] Reduce the native splitter's emission cost. It adds about 1.1 s (13%) to Node
       emission of the self-compile program, mostly block parsing and bitset liveness
       over every value local that a part names. In the native self-compiler its
@@ -596,12 +597,6 @@ iterator cursor is not, by itself, permission to delete its language object.
       per-function and whole-program caps; prefer profitable shared mechanisms
       over many clones. Treat measured runtime, analysis time, build memory, and
       code-size tradeoffs as separate acceptance dimensions.
-
-- [ ] Validate a stable per-function optimization policy for pathological generated
-      bodies. A 4.1 MiB self-compile body compiled about 47% faster at `-O1` than
-      `-O2`, but its object grew and linked runtime behavior was not measured. Use
-      source-stable diagnostics rather than generated ordinals, and require matched
-      runtime, startup, binary-size, and correctness evidence before adoption.
 
 ## Compiler infrastructure
 
@@ -1361,60 +1356,22 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
 
 ### Concurrent generational GC experiments
 
-- [ ] Snapshot/dispatch: compare copied heap bytes, discovery yield, preparation,
-      worker CPU, merge, and remark wait on finished app-batch and HTTP binaries.
-      Keep the primitive filter, though its throughput benefit remains unproven.
-      Shape-key omission and active-worker sizing were reverted after application
-      regressions. A ten-pair, 30-second HTTP
-      comparison found Express routes about 0.66% slower than `d149ffe6`, with
-      exact completed-response counts confirming the signal. A newer five-pair
-      routes run had a directionally consistent 1.77% loss and 1.68% more server
-      CPU per completed response, but its GC diagnostic cannot assign the cause:
-      snapshot preparation was only 5.434 ms during an 18-second routes load.
-      A direct ten-pair rollback found no resolved routes throughput or CPU gain
-      from removing the filter, while one diagnostic copied 13.4% more bytes per
-      completion. A separate app diagnostic copied more total values despite
-      primitive filtering while batch counts also rose; filtering within a
-      snapshot does not prove lower application work.
-- [ ] Safe worker traversal: private draining was removed after zero app-batch
-      drain traces and no measured benefit. Revisit only with a representative
-      chain or shared-graph handoff benefit and combined CPU gain.
 - [ ] Barriers: decide dense-fill and scalar captured-store card specialization
       after representative HTTP and compiler comparisons; app-batch screens were
       mixed. Dense reverse removes redundant scans under whole-array tracing and
       had a neutral application cut. Dense shift/copy card narrowing was rolled
       back after a repeated application slowdown; its semantic fixture remains.
       Keep SATB deletion protection independent of generational facts.
-- [ ] Pacing: measure young survival, promotion debt, major reclamation yield,
-      current RAW/reusable/chunk capacity, external pressure, and assist/backstop
-      cost before replacing the eighth-collection cadence. A 15-pair app-batch
-      comparison rejected fixed cadence 16: elapsed/CPU did not improve, and
-      peak RSS rose about 27% in every pair; its 2,000-iteration diagnostic had
-      fewer majors but more minor cell visits and a higher mapped/RSS plateau.
-      Fixed cadence four also failed to improve ordinary throughput materially
-      or lower RSS meaningfully: its 2,000-iteration diagnostic reduced minor
-      cells inspected by 16.5% but added major work and 3.1% total pause time.
-      Neither fixed cadence is a pressure policy.
-      Validate nested cgroup quota discovery on Linux.
+- [ ] Pacing: replace the eighth-collection major cadence with a pressure policy
+      built on young survival, promotion debt, major reclamation yield, RAW and
+      chunk capacity and assist cost. Fixed cadences are not one: 16 raised peak
+      RSS about 27% without improving elapsed or CPU time, and 4 traded fewer
+      minor visits for more major work and 3.1% more pause time.
 - [ ] Bounded slices: retain the skipped-block sweep budget only after combined
       latency review. One instrumented app run had more short major slices and a
       5.998 ms minor pause outlier; repeat before claiming application pause gains.
       Use mutator-only array trace attribution to identify a measured large-container
       or root-scan offender before adding resumable tracing or wider exact liveness.
-- [ ] Minor locality: black-allocation enrollment showed no application gain.
-      The young-position bitmap reduced counted visits but slowed seven paired
-      app-batch runs, so it was reverted. A diagnostic app run inspected about
-      1.26 cells per young cell swept; the stats-only counters were removed after
-      recording their evidence. Test young-block placement only if a workload
-      shows material sweep time from fragmentation, and account for allocation
-      cost and fragmentation. Native finalizers are cleanup-only after the
-      mark/weak fixpoint; they may not allocate from the heap or publish graph edges.
-- [ ] Survivor age: measure post-promotion deaths and allocation during majors;
-      one diagnostic app run reclaimed about 87% of promoted bytes at the next
-      completed major and allocated about 1.3 MB during major marking. This
-      establishes temporary promotion, not its exact death time or a benefit from
-      another young survival. The stats-only counters were removed after the run.
-      Define remembered-set persistence and weak-key liveness before changing age.
 - [ ] Dirty ranges: compare sparse and dense old-container writes with logical
       scanned slots and discoveries on applications. The 8,192-slot sparse array
       fixture shows one discovery from a full-owner scan; cards remain experimental.
@@ -1426,23 +1383,15 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
       The current GC trace retains the entire owner through `iterator->target`.
       Audit direct cursor helpers and preserve SATB before clearing that edge;
       this retention predates the specialized collection stores.
-- [ ] Reclamation: measure fresh allocation during sweep, reusable capacity,
-      mapped and resident memory, page faults, and grow/shrink cycles with the new
-      point-in-time heap-usage counters before replacing global free lists or
-      releasing chunks. A local seven-pair sweep-reserve probe at 16 MiB showed
-      that replacing one quarter of managed cells before their free lists were
-      rebuilt added 4.0625 MiB of mapping, 4.0–4.03125 MiB of peak RSS, and 256–258
-      page faults versus reuse after the cursor; final live bytes matched. Total
-      timing included asymmetric usage scans, so allocation latency remains
-      unmeasured. The prior app diagnostic allocated only 32,800 bytes during major
-      sweep; establish representative long-sweep exposure before adding per-block
-      free lists.
 
 # Triggered work
 
 These are not active tasks and become actionable only when their condition is
 observed.
 
+- Replace global free lists with per-block lists, or release chunks, only when a
+  workload shows long sweep exposure; the app diagnostic allocated 32,800 bytes
+  during major sweep.
 - Elide SATB barriers only if concurrent GC becomes the default and a realistic
   store-heavy workload makes the barrier material.
 - Revisit MalVm and host-structure layout when multiple VMs or isolates are active in
