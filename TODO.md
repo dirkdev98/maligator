@@ -87,7 +87,11 @@ The independent target boundary and current storage contract are recorded in
 - [ ] Extend selected typed call/aggregate transport and expression regions using
       Core proofs, with bounded code-size decisions and matched runtime evidence.
       Move remaining emission-local selection into explicit native plans before
-      claiming the C emitter only renders selected decisions.
+      claiming the C emitter only renders selected decisions. An exact call whose
+      typed entry returns a Number still lands in a boxed register, because local
+      value kinds give call results no kind: the objects phase's pricing loop
+      (59 ms against Node's 25) boxes and unboxes the results of `argumentEdges`
+      and the accumulator on every iteration, and its `%` chains run on doubles.
 
 - [ ] Stream the product CLI's translation units to disk. Its build keeps the CLI's
       emitted C, 650 MB with the worker root's, in memory while it compiles the
@@ -733,22 +737,6 @@ contracts or investigates costs still visible after the string follow-ups.
       first; letting inlines of 32 or fewer units bypass that budget grew the
       compiler's own output for `parser.ts` by 49% and made the self-compile 44%
       slower, so the remedy is cheaper calls or a hotness signal, not more inlining.
-- [ ] Dispatch the objects phase's pricing rules without loading the method. Its
-      `rules[i % 3].quote(order)` loop runs 2.9 times slower than Node while the
-      particle loop is 1.37 times: the order allocation is already elided and the
-      call is a three-way switch over direct entries, but two calls in three load
-      `quote` through the shared inherited stub first (about 5 ns each). With the
-      three classes known, a guard on the receiver's prototype could select the
-      direct entry without the load.
-- [ ] Keep three receivers of a polymorphic method site in its own cache. The
-      objects phase's `rules[i % 3].quote(order)` hits the site's one inherited row
-      for one class in three; the others probe both banks of the shared stub
-      inline at sites whose callee feeds several guarded targets, which still hashes
-      shape, prototype and key on every call. The 72-byte cache row has no room for
-      three shape, prototype and value triples, so extra rows need storage
-      registered for prototype invalidation like the stub's. A two-extra-row
-      experiment improved an isolated three-class loop 7% while its monomorphic
-      control regressed 1.3%; resolve that trade-off before shipping site storage.
 - [ ] Keep Node stream state in native fields. The C stream runtime reads and
       writes its state as own properties named by C strings, about 177 interned
       names per Express JSON request, and its helpers take 7% of that route's
