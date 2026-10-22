@@ -47,6 +47,11 @@ import { stablePartitionHash } from "./stable-partition-hash.ts";
 type VmBinaryOperator = Extract<BytecodeInstruction, { opcode: "BINARY" }>["operator"];
 
 export interface EmitOptions {
+	/**
+	 * Called once for each function the C renderer declines; that function then
+	 * runs in the bytecode interpreter.
+	 */
+	onRendererBailout?: (bailout: { readonly file: string; readonly name: string }) => void;
 	/** Host path normalization for compiled stack traces; virtual paths pass through by default. */
 	sourcePath?: (file: string) => string;
 	/**
@@ -921,6 +926,7 @@ function emitNativeFunctions(
 		/** C expression for the relocation a spliced overlay's link slots are relative to. */
 		relocation?: string;
 		nativeFunctionSplit?: NativeSplitPolicy;
+		onRendererBailout?: EmitOptions["onRendererBailout"];
 	},
 ): {
 	compiled: Array<CompiledFunction | null>;
@@ -1025,6 +1031,7 @@ function emitNativeFunctions(
 	const framePositions = image.runtime.functions.map((fn) =>
 		options.debug ? positionTableEntries(fn) : false,
 	);
+	const bailouts = new Set<number>();
 	const render = (
 		functionIndex: number,
 		availability: NativeCompilationAvailability,
@@ -1059,11 +1066,20 @@ function emitNativeFunctions(
 			availability.fastTryTargets,
 			availability.directClosures,
 		);
-		if (
-			emitted === null ||
-			!fits(emitted.source) ||
-			options.excludedSymbols?.has(emitted.symbol) === true
-		)
+		if (emitted === null) {
+			if (!bailouts.has(functionIndex)) {
+				bailouts.add(functionIndex);
+				const fn = image.runtime.functions[functionIndex]!;
+				options.onRendererBailout?.({
+					file: image.runtime.files[fn.fileIndex] ?? "<unknown>",
+					name: String.fromCharCode(
+						...(image.runtime.stringConstants[fn.nameStringIndex] ?? []),
+					),
+				});
+			}
+			return null;
+		}
+		if (!fits(emitted.source) || options.excludedSymbols?.has(emitted.symbol) === true)
 			return null;
 		const entries = emitted.directEntries.filter(
 			(entry) =>
@@ -1342,6 +1358,7 @@ function emitProgramImageParts(
 		maxCodeUnits: maxCompiledFunctionCodeUnits,
 		excludedSymbols,
 		nativeFunctionSplit: options.nativeFunctionSplit,
+		onRendererBailout: options.onRendererBailout,
 		// Split units are cached objects; stems and link tables keep their text
 		// independent of every other function's image index.
 		...(splitCompiledFunctions

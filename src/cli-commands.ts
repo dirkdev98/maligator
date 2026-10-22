@@ -1048,6 +1048,10 @@ function prepareCommandState(
 							compiled: compiledNativeOutput,
 							assets,
 							maligatorSurface: buildConfig.surface.maligator,
+							onRendererBailout: ({ file, name }) =>
+								reporter.warning(
+									`${file}: ${name || "<anonymous>"} runs in the bytecode interpreter because native code generation declined it`,
+								),
 						}),
 						...emitWorkerImageTranslationUnits(frontend.workerImages, {
 							sourcePath: nativeSourcePath,

@@ -300,6 +300,38 @@ function withSpecializations(
 }
 
 describe("emit-program-image instruction packing", () => {
+	it("reports a function the C renderer declines", () => {
+		const declined: Array<string> = [];
+		let image = testProgramImage({
+			...definition.runtime,
+			files: ["/fixture/entry.mjs"],
+			functions: [
+				{
+					...fn,
+					capturedCount: 0,
+					registerCount: 3,
+					literalShapeCount: 0,
+					propertyIcCount: 0,
+					instructions: [
+						{ opcode: "CREATE_F64", dst: 0, value: 1 },
+						{ opcode: "CREATE_F64", dst: 1, value: 2 },
+						{ opcode: "BINARY", operator: "+", dst: 2, left: 0, right: 1 },
+						{ opcode: "RETURN", value: 2 },
+					],
+				},
+			],
+		});
+		// An int32 sum of two Numbers is not a form the renderer accepts.
+		image = withNativeFunctionPlan(image, 0, (plan) => ({
+			...plan,
+			registerRepresentations: ["number", "number", "int32"],
+			gc: { safepoints: [] },
+		}));
+		emitProgramTranslationUnits(image, {
+			onRendererBailout: ({ file, name }) => declined.push(`${file}:${name}`),
+		});
+		expect(declined).toEqual(["/fixture/entry.mjs:"]);
+	});
 	it("uses one polling typed body across observation modes and preserves bounded sort helpers", () => {
 		const out = inspectStaticValueFunction(
 			`function loop(value,count){for(let index=0;index<count;index++)value=value*1.25-0.5;return value;}

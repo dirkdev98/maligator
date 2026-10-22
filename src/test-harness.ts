@@ -416,6 +416,17 @@ function linkProgramImage(
 		assets: includeConfiguredAssets(config.assets),
 		maligatorSurface: config.surface.maligator,
 		nativeFunctionSplit: options.nativeFunctionSplit,
+		onRendererBailout: ({
+			file,
+			name,
+		}: {
+			readonly file: string;
+			readonly name: string;
+		}) => {
+			throw new Error(
+				`native code generation declined ${file}: ${name || "<anonymous>"}`,
+			);
+		},
 	};
 	const mainSource =
 		options.translationUnits === false

@@ -32,21 +32,6 @@ rooting, and resource-safety defects can interrupt that order.
 
 ## Verification workflow
 
-- [ ] Rerun forwarded-callback native and sanitizer checks after the explicit-GC hook
-      repair in `c0b9efd8`. Cover both backends, primordial modes, GC stress, and
-      realm fallbacks.
-
-- [ ] Complete Linux full-gate verification. Verify the repaired Cargo-cache,
-      subprocess-readiness and HTTP snapshot fixtures on Linux; their focused
-      laptop checks pass. Resolve cold-build timeouts in remaining native/sanitizer
-      suites, the asynchronous
-      crypto event-loop tick assertion, and the compiled WPT harness failure.
-
-- [ ] Resolve the remaining concatenation, typed-array, and retained-graph costs
-      against `d871b66e` with matched kernel measurements. The historical JavaScript
-      phase regressions have recovered; separate profile samples still show possible
-      kernel regressions. Keep representative output parity and phase timing controls.
-
 - [ ] Broaden runtime-gap coverage with enabled RegExp/Intl, pending and rejected
       promises, weak-reference collection, arbitrary-precision BigInt beyond the
       current 128-bit storage, and input-size scaling. Keep conversion costs separate
@@ -184,11 +169,6 @@ The independent target boundary and current storage contract are recorded in
       keep their elements in their own cell, and Set construction, Set spreads and
       object spreads no longer allocate iterators or key arrays; fewer dead cells,
       from escape analysis or allocation-free iteration, are the remaining lever.
-- [ ] Stop fingerprinting every bytecode function with `JSON.stringify` to trust its
-      safepoint root maps (452 ms of a 40 s Node frontend). Only functions that keep
-      bytecode consume the trust. Profile builds also replace `profileSiteIds` in
-      place after trust is established, which silently drops the exact root maps
-      of every interpreted function.
 
 - [ ] Share one invocation-local native analysis context across storage, expression,
       root, and fast-path planning. Native read/write, branch, handler, and lazy
@@ -323,14 +303,6 @@ construction Core (allocation sites, merged summaries, saturated generic sets) n
 108 s in Node to converge on the self-compiler, and generic value paths still reached
 the hot receivers, so field facts stay bounded and consumer-driven as planned below.
 
-- [ ] Run the frame-pointer stack walk and entry-serviced polls on Linux. Compiled
-      frames keep their stack-trace record on the C stack and calls skip return
-      polls, which took `fib(35)` from 84 to 60 ms (Node: 54) and the native
-      self-compiler from 18.5 to 17.9 s. Both are verified on macOS arm64; the ELF
-      section bounds and the GCC sibling-call fallback are only compile-checked.
-- [ ] Move loop back-edge polls onto the entry limit as well. They still load the
-      isolate record through the GOT and test its flag, where comparing the VM's
-      entry limit word would be one dependent load.
 - [ ] Return a sentinel for abrupt completion instead of reloading
       `vm->completion.kind` after every call (146 k checks in the self-compile).
 - [ ] Hoist loop-invariant constant bindings and typed-array views. A lookup
@@ -405,10 +377,6 @@ the hot receivers, so field facts stay bounded and consumer-driven as planned be
       self-compiler is bimodal at about 1.4 or 2.0 GB. The high runs coincide with
       a synchronous backstop, fewer major cycles and about three times the
       over-tenured bytes.
-- [ ] Report renderer bailouts. A `null` from the C renderer silently leaves a
-      function to the bytecode interpreter. The self-compile has none today, but an
-      experiment with int32 loop counters turned four benchmark phases into
-      interpreted code without any diagnostic.
 
 ## World-knowledge ladder
 
