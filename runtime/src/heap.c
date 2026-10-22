@@ -493,6 +493,22 @@ static void *mal_gc_alloc_large(MalHeap *heap, usize size, u8 kind) {
 
 /* A reclaimed cell or the current block's next bump, or nullptr when the class needs a
  * fresh block. */
+/* Small classes clear with constant 16-byte stores: a table-sized memset is a libc call per
+ * reused cell, and a plain loop is turned back into one by loop idiom recognition. */
+static inline __attribute__((always_inline)) void mal_gc_clear_cell(u8 *cell, u32 size) {
+    switch (size) {
+        case 128: memset(cell + 112, 0, 16); [[fallthrough]];
+        case 112: memset(cell + 96, 0, 16); [[fallthrough]];
+        case 96: memset(cell + 80, 0, 16); [[fallthrough]];
+        case 80: memset(cell + 64, 0, 16); [[fallthrough]];
+        case 64: memset(cell + 48, 0, 16); [[fallthrough]];
+        case 48: memset(cell + 32, 0, 16); [[fallthrough]];
+        case 32: memset(cell + 16, 0, 16); [[fallthrough]];
+        case 16: memset(cell, 0, 16); return;
+        default: memset(cell, 0, size); return;
+    }
+}
+
 static inline __attribute__((always_inline)) void *mal_gc_alloc_in_class(
     MalHeap *heap, u16 size_class, u8 kind
 ) {
@@ -510,7 +526,7 @@ static inline __attribute__((always_inline)) void *mal_gc_alloc_in_class(
 #if !defined(__wasi__)
         // A conservative stack word can reach a cell abandoned before its constructor
         // ran; a cleared payload never holds the previous occupant's edges.
-        memset(cell, 0, g_class_cell_size[size_class]);
+        mal_gc_clear_cell(cell, g_class_cell_size[size_class]);
 #endif
         MalGcBlock *block = (MalGcBlock *) ((uptr) cell & ~(uptr) (MAL_GC_BLOCK_SIZE - 1));
         mal_gc_track_young_block(heap, block, cell);
