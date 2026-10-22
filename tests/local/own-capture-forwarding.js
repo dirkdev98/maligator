@@ -130,6 +130,62 @@ function tdz(early) {
 attempt("tdz-early", () => tdz(true));
 attempt("tdz-late", () => tdz(false));
 
+function fold(text) {
+	let hash = 0x811c9dc5;
+	let odd = 0;
+	const append = (start, end) => {
+		for (let i = start; i < end; i++) {
+			hash ^= text.charCodeAt(i);
+			hash = Math.imul(hash, 0x01000193) >>> 0;
+			if (i % 2) odd++;
+		}
+	};
+	append(0, text.length);
+	return [hash, odd];
+}
+results.push(["fold", fold("abcdefghij".repeat(7)), fold("")]);
+
+function mixedKinds(limit) {
+	let value = 0;
+	const read = () => value;
+	for (let i = 0; i < limit; i++) {
+		if (i === 2) value = "two";
+		else if (i === 4) value = { four: true };
+		else if (typeof value === "number") value += 0.5;
+		else value = i;
+	}
+	return [read(), typeof read()];
+}
+results.push(["mixed", mixedKinds(3), mixedKinds(5), mixedKinds(8)]);
+
+function updatedInTry(fail) {
+	let stage = 0;
+	const read = () => stage;
+	for (let i = 0; i < 3; i++) {
+		try {
+			stage += 10;
+			if (fail && i === 1) throw new Error("stop");
+			stage += 1;
+		} catch {
+			return ["caught", read()];
+		}
+	}
+	return ["done", read()];
+}
+results.push(["try-loop", updatedInTry(true), updatedInTry(false)]);
+
+function grid(rows, columns) {
+	let cells = 0;
+	let edge = 0;
+	const visit = (r, c) => {
+		cells++;
+		if (r === 0 || c === 0 || r === rows - 1 || c === columns - 1) edge++;
+	};
+	for (let r = 0; r < rows; r++) for (let c = 0; c < columns; c++) visit(r, c);
+	return [cells, edge];
+}
+results.push(["grid", grid(4, 5), grid(1, 1), grid(0, 3)]);
+
 function* staged() {
 	let x = 1;
 	const read = () => x;

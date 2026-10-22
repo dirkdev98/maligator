@@ -6,12 +6,12 @@ import {
 } from "./core-effect-proof-edits.ts";
 import { removeCoreInstructions } from "./core-instruction-removal.ts";
 import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
-import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreFunctionId, coreInstructionId } from "./core-ir.ts";
 import type {
 	CoreBlockId,
 	CoreFunctionId,
 	CoreInstructionId,
+	CoreRepresentation,
 	CoreValueId,
 } from "./core-ir.ts";
 import type { CoreProgramFlowState } from "./core-program-flow-analysis.ts";
@@ -20,10 +20,61 @@ import type { CoreProgram } from "./core-store.ts";
 
 const key = (owner: unknown, index: unknown) => `${String(owner)}:${String(index)}`;
 
+type SlotValue =
+	| { readonly kind: "value"; readonly value: CoreValueId }
+	| { readonly kind: "phi"; readonly block: CoreBlockId }
+	| { readonly kind: "unknown" };
+
+const UNKNOWN_SLOT: SlotValue = { kind: "unknown" };
+const SLOT_FLOW_ROUNDS = 32;
+const SCALAR_JOIN_REPRESENTATIONS: ReadonlySet<CoreRepresentation> = new Set([
+	"boxed",
+	"f64",
+	"i32",
+	"boolean",
+	"string",
+]);
+
+// Earlier joins in this edit may already have appended arguments to the edge.
+function liveEdgeArguments(
+	fn: CoreFunctionStore,
+	from: CoreBlockId,
+	to: CoreBlockId,
+): ReadonlyArray<CoreValueId> {
+	const terminator = fn.blockTerminator(from);
+	const start = fn.kernel.terminatorEdgeStart(terminator);
+	for (
+		let edge = start;
+		edge < start + fn.kernel.terminatorEdgeCount(terminator);
+		edge++
+	) {
+		if (fn.kernel.terminatorEdgeBlock(edge) !== to) continue;
+		const first = fn.kernel.terminatorEdgeArgumentStart(edge);
+		return Array.from(
+			{ length: fn.kernel.terminatorEdgeArgumentCount(edge) },
+			(_, index) => fn.kernel.operandAt(first + index),
+		);
+	}
+	throw new Error(`Core block ${from} has no edge to ${to}`);
+}
+
+function sameSlotValue(left: SlotValue, right: SlotValue): boolean {
+	switch (left.kind) {
+		case "value":
+			return right.kind === "value" && left.value === right.value;
+		case "phi":
+			return right.kind === "phi" && left.block === right.block;
+		case "unknown":
+			return right.kind === "unknown";
+	}
+}
+
 /**
- * Forward an owner's own captured loads from its stores. Only code nested in the
- * owner names its slots, so once the slot has no other writer, a load observes
- * the nearest dominating store unless another store can run between the two.
+ * Read an owner's own captured slots as SSA values. Only code nested in the owner
+ * names its slots, so once no other function, arguments object or private-name
+ * creation writes a slot, each load sees the value the owner's own stores leave on
+ * every path to it, joined by block parameters where paths disagree. The function
+ * entry and exception handlers keep reading the environment.
  */
 function forwardOwnCapturedLoads(
 	program: CoreProgram,
@@ -31,8 +82,10 @@ function forwardOwnCapturedLoads(
 	foreignWrites: ReadonlySet<string>,
 	edit: () => CoreEditor,
 ): void {
-	const stores = new Map<number, Array<CoreInstructionId>>();
-	const loads: Array<{ instruction: CoreInstructionId; index: number }> = [];
+	const slots = new Map<
+		number,
+		{ loads: Array<CoreInstructionId>; stores: Array<CoreInstructionId> }
+	>();
 	for (const instruction of fn.instructionIds()) {
 		if (fn.instructionKind(instruction) !== "operation") continue;
 		const opcode = fn.instructionOpcodeName(instruction);
@@ -44,104 +97,182 @@ function forwardOwnCapturedLoads(
 			foreignWrites.has(key(fn.id, index))
 		)
 			continue;
-		if (opcode === "loadCaptured") loads.push({ instruction, index });
-		else stores.set(index, [...(stores.get(index) ?? []), instruction]);
-	}
-	if (loads.length === 0 || stores.size === 0) return;
-	let built: CoreControlFlow | undefined;
-	const control = () => (built ??= buildCoreControlFlow(program, fn.id));
-	const positions = new Int32Array(fn.instructionCapacity);
-	for (const block of fn.blockIds()) {
-		let position = 0;
-		for (const instruction of fn.instructionIds(block))
-			positions[instruction] = position++;
-	}
-	const dominates = (first: CoreInstructionId, second: CoreInstructionId): boolean => {
-		const from = fn.instructionBlock(first);
-		const to = fn.instructionBlock(second);
-		return from === to
-			? positions[first]! < positions[second]!
-			: control().reachable.has(to) && control().instructionDominatesBlock(from, to);
-	};
-	const reachedAvoiding = new Map<string, ReadonlySet<CoreBlockId>>();
-	// Blocks entered after leaving `from` without first passing through `barrier`.
-	const reachableAvoiding = (
-		from: CoreBlockId,
-		barrier: CoreBlockId,
-	): ReadonlySet<CoreBlockId> => {
-		const id = `${from}:${barrier}`;
-		let reached = reachedAvoiding.get(id);
-		if (reached !== undefined) return reached;
-		const seen = new Set<CoreBlockId>();
-		const { successors } = control();
-		const queue = (successors[from] ?? []).map((edge) => edge.to);
-		for (let cursor = 0; cursor < queue.length; cursor++) {
-			const next = queue[cursor]!;
-			if (next === barrier || seen.has(next)) continue;
-			seen.add(next);
-			for (const edge of successors[next] ?? []) queue.push(edge.to);
+		let slot = slots.get(index);
+		if (slot === undefined) {
+			slot = { loads: [], stores: [] };
+			slots.set(index, slot);
 		}
-		reached = seen;
-		reachedAvoiding.set(id, reached);
-		return reached;
-	};
-	// Another store can only intervene on a path that leaves the forwarding store's
-	// block and reaches the load without re-entering that block. Stores sharing the
-	// load's block run after the load, so they intervene only around a cycle.
-	const intervenes = (
-		store: CoreInstructionId,
-		other: CoreInstructionId,
-		load: CoreInstructionId,
-	): boolean => {
-		const storeBlock = fn.instructionBlock(store);
-		const loadBlock = fn.instructionBlock(load);
-		const otherBlock = fn.instructionBlock(other);
-		if (storeBlock === loadBlock || otherBlock === storeBlock) return false;
-		if (!reachableAvoiding(storeBlock, storeBlock).has(otherBlock)) return false;
-		return reachableAvoiding(otherBlock, storeBlock).has(loadBlock);
-	};
-	for (const { instruction: load, index } of loads) {
-		const writes = stores.get(index) ?? [];
-		let nearest: CoreInstructionId | undefined;
-		for (const store of writes) {
-			if (dominates(store, load) && (nearest === undefined || dominates(nearest, store)))
-				nearest = store;
+		(opcode === "loadCaptured" ? slot.loads : slot.stores).push(instruction);
+	}
+	for (const [index, slot] of slots)
+		if (slot.loads.length === 0 || slot.stores.length === 0) slots.delete(index);
+	if (slots.size === 0) return;
+	const control = buildCoreControlFlow(program, fn.id);
+	const definition = (value: CoreValueId): string | undefined =>
+		fn.kernel.valueDefinitionKind(value) === 1
+			? fn.instructionOpcodeName(coreInstructionId(fn.kernel.valueDefinitionOwner(value)))
+			: undefined;
+	const stored = (store: CoreInstructionId): CoreValueId =>
+		fn.kernel.operandAt(fn.kernel.instructionOperandStart(store));
+	for (const { loads, stores } of slots.values()) {
+		const storeSet = new Set(stores);
+		const lastStore = new Map<CoreBlockId, CoreValueId>();
+		for (const block of control.reversePostorder) {
+			for (const instruction of fn.instructionIds(block))
+				if (storeSet.has(instruction)) lastStore.set(block, stored(instruction));
 		}
-		if (
-			nearest === undefined ||
-			writes.some(
-				(other) =>
-					other !== nearest &&
-					!dominates(other, nearest) &&
-					intervenes(nearest, other, load),
-			)
-		)
-			continue;
-		const value = fn.kernel.operandAt(fn.kernel.instructionOperandStart(nearest));
-		const result = fn.kernel.resultAt(fn.kernel.instructionResultStart(load));
-		const definition =
-			fn.kernel.valueDefinitionKind(value) === 1
-				? fn.instructionOpcodeName(
-						coreInstructionId(fn.kernel.valueDefinitionOwner(value)),
-					)
-				: undefined;
-		// The TDZ sentinel stays behind its load and check. A nested function's object
-		// is created lazily at the binding reads where it escapes, so only calls bypass them.
-		if (
-			definition === "createEmpty" ||
-			(definition === "createFunction" && !onlyCalled(fn, result))
-		)
-			continue;
-		const editor = edit();
-		if (fn.valueRepresentation(result) === fn.valueRepresentation(value)) {
-			editor.replaceValueUses(result, value);
-			removeInstructionAndOwnedProof(editor, fn, load);
-		} else {
-			const proof = fn.instructionEffectRefinement(load)?.proof;
-			editor.replaceInstruction(load, "move", [value], {
-				sourcePosition: fn.instructionSourcePosition(load),
-			});
-			removeUnsharedProof(editor, fn, proof);
+		const entry = new Map<CoreBlockId, SlotValue>();
+		const exit = (block: CoreBlockId): SlotValue | undefined => {
+			const value = lastStore.get(block);
+			return value === undefined ? entry.get(block) : { kind: "value", value };
+		};
+		// Only ordinary edges carry a block parameter; handlers and the entry keep the slot.
+		const joinable = (block: CoreBlockId): boolean =>
+			block !== fn.entry &&
+			(control.predecessors[block] ?? []).every(
+				(edge, position, edges) =>
+					edge.kind === "ordinary" &&
+					edges.findIndex((other) => other.from === edge.from) === position,
+			);
+		let rounds = 0;
+		for (let changed = true; changed; rounds++) {
+			changed = false;
+			for (const block of control.reversePostorder) {
+				let value: SlotValue | undefined;
+				if (!joinable(block)) value = UNKNOWN_SLOT;
+				else
+					for (const edge of control.predecessors[block] ?? []) {
+						const incoming = exit(edge.from);
+						if (incoming === undefined) continue;
+						value =
+							value === undefined || sameSlotValue(value, incoming)
+								? incoming
+								: { kind: "phi", block };
+					}
+				if (value === undefined) continue;
+				const previous = entry.get(block);
+				if (previous === undefined || !sameSlotValue(previous, value)) {
+					entry.set(block, value);
+					changed = true;
+				}
+			}
+		}
+		if (rounds > SLOT_FLOW_ROUNDS) continue;
+		// A join may not carry the TDZ sentinel or a closure that is created lazily.
+		const joins = new Map<CoreBlockId, boolean>();
+		for (const [block, value] of entry)
+			if (value.kind === "phi" && value.block === block) joins.set(block, true);
+		for (let changed = true; changed;) {
+			changed = false;
+			for (const block of joins.keys()) {
+				if (!joins.get(block)) continue;
+				const valid = (control.predecessors[block] ?? []).every((edge) => {
+					const incoming = exit(edge.from);
+					if (incoming === undefined || incoming.kind === "unknown") return false;
+					if (incoming.kind === "phi") return joins.get(incoming.block) === true;
+					const opcode = definition(incoming.value);
+					return opcode !== "createEmpty" && opcode !== "createFunction";
+				});
+				if (!valid) {
+					joins.set(block, false);
+					changed = true;
+				}
+			}
+		}
+		const representations = new Map<CoreBlockId, CoreRepresentation>();
+		for (let changed = true; changed;) {
+			changed = false;
+			for (const [block, valid] of joins) {
+				if (!valid) continue;
+				let representation: CoreRepresentation | undefined;
+				for (const edge of control.predecessors[block] ?? []) {
+					const incoming = exit(edge.from);
+					const next =
+						incoming?.kind === "value"
+							? fn.valueRepresentation(incoming.value)
+							: incoming?.kind === "phi"
+								? representations.get(incoming.block)
+								: undefined;
+					if (next === undefined) continue;
+					representation =
+						(representation === undefined || representation === next) &&
+						SCALAR_JOIN_REPRESENTATIONS.has(next)
+							? next
+							: "boxed";
+				}
+				if (
+					representation !== undefined &&
+					representations.get(block) !== representation
+				) {
+					representations.set(block, representation);
+					changed = true;
+				}
+			}
+		}
+		const parameters = new Map<CoreBlockId, CoreValueId>();
+		const materialize = (block: CoreBlockId): CoreValueId => {
+			const existing = parameters.get(block);
+			if (existing !== undefined) return existing;
+			const editor = edit();
+			const representation = representations.get(block) ?? "boxed";
+			const parameter = editor.appendBlockParameter(block, { representation });
+			parameters.set(block, parameter);
+			for (const edge of control.predecessors[block] ?? []) {
+				const incoming = exit(edge.from);
+				if (incoming === undefined || incoming.kind === "unknown")
+					throw new Error("Validated captured-slot join lost an incoming value");
+				let value =
+					incoming.kind === "value" ? incoming.value : materialize(incoming.block);
+				if (fn.valueRepresentation(value) !== representation)
+					value = editor.insertInstruction(
+						edge.from,
+						fn.blockTerminator(edge.from),
+						"move",
+						[value],
+						{ outputRepresentations: [representation] },
+					).outputs[0]!;
+				editor.redirectEdge(edge.from, block, {
+					block,
+					arguments: [...liveEdgeArguments(fn, edge.from, block), value],
+				});
+			}
+			return parameter;
+		};
+		for (const load of loads) {
+			const block = fn.instructionBlock(load);
+			if (!control.reachable.has(block)) continue;
+			let reaching = entry.get(block);
+			for (const instruction of fn.instructionIds(block)) {
+				if (instruction === load) break;
+				if (storeSet.has(instruction))
+					reaching = { kind: "value", value: stored(instruction) };
+			}
+			let value: CoreValueId | undefined;
+			const result = fn.kernel.resultAt(fn.kernel.instructionResultStart(load));
+			if (reaching?.kind === "value") {
+				const opcode = definition(reaching.value);
+				// A nested function's object is created lazily at the binding reads where it
+				// escapes, so only calls bypass them.
+				if (
+					opcode === "createEmpty" ||
+					(opcode === "createFunction" && !onlyCalled(fn, result))
+				)
+					continue;
+				value = reaching.value;
+			} else if (reaching?.kind === "phi" && joins.get(reaching.block) === true)
+				value = materialize(reaching.block);
+			if (value === undefined) continue;
+			const editor = edit();
+			if (fn.valueRepresentation(result) === fn.valueRepresentation(value)) {
+				editor.replaceValueUses(result, value);
+				removeInstructionAndOwnedProof(editor, fn, load);
+			} else {
+				const proof = fn.instructionEffectRefinement(load)?.proof;
+				editor.replaceInstruction(load, "move", [value], {
+					sourcePosition: fn.instructionSourcePosition(load),
+				});
+				removeUnsharedProof(editor, fn, proof);
+			}
 		}
 	}
 }
@@ -190,7 +321,6 @@ interface CapturedSlotUses {
 	// Slots that another function, a mapped arguments object or private-name creation writes.
 	readonly foreignWrites: ReadonlySet<string>;
 	readonly implicitReads: ReadonlySet<string>;
-	readonly identities: ReadonlySet<CoreFunctionId>;
 }
 
 // Undefined when dynamic scope can read or write any slot.
@@ -200,7 +330,6 @@ function scanCapturedSlots(
 ): CapturedSlotUses | undefined {
 	const foreignWrites = new Set<string>();
 	const implicitReads = new Set<string>();
-	const identities = new Set<CoreFunctionId>();
 	for (const id of functions) {
 		const fn = program.function(id);
 		for (const index of fn.metadata.mappedArgumentSlots) {
@@ -212,10 +341,7 @@ function scanCapturedSlots(
 			const opcode = fn.instructionOpcodeName(instruction);
 			if (opcode.startsWith("with")) return undefined;
 			const attributes = fn.instructionAttributes(instruction);
-			if (opcode === "createFunction") {
-				if (typeof attributes.functionIndex === "number")
-					identities.add(coreFunctionId(attributes.functionIndex));
-			} else if (opcode === "storeCaptured") {
+			if (opcode === "storeCaptured") {
 				if (attributes.functionIndex !== id)
 					foreignWrites.add(key(attributes.functionIndex, attributes.index));
 			} else if (
@@ -229,7 +355,7 @@ function scanCapturedSlots(
 			}
 		}
 	}
-	return { foreignWrites, implicitReads, identities };
+	return { foreignWrites, implicitReads };
 }
 
 function forwardAllOwnCapturedLoads(
@@ -306,9 +432,8 @@ export function pruneCoreCaptureLiveness(
 		return editor;
 	};
 	const emptied = new Set<CoreFunctionId>();
-	let uses = scanCapturedSlots(program, functions);
 	for (let round = 0; round < 8; round++) {
-		const identities = uses?.identities ?? scanIdentities(program, functions);
+		const identities = scanIdentities(program, functions);
 		for (const id of functions) {
 			const fn = program.function(id);
 			if (
@@ -323,10 +448,13 @@ export function pruneCoreCaptureLiveness(
 				continue;
 			if (emptyBody(edit(id), fn)) emptied.add(id);
 		}
+		const instantiable = instantiableFunctions(program, roots);
+		const live = functions.filter((id) => instantiable.has(id));
+		const uses = scanCapturedSlots(program, live);
 		if (uses === undefined) break;
-		forwardAllOwnCapturedLoads(program, functions, uses.foreignWrites, edit);
+		forwardAllOwnCapturedLoads(program, live, uses.foreignWrites, edit);
 		const readers = new Set(uses.implicitReads);
-		for (const id of functions) {
+		for (const id of live) {
 			const fn = program.function(id);
 			for (const instruction of fn.instructionIds()) {
 				if (
@@ -365,9 +493,33 @@ export function pruneCoreCaptureLiveness(
 			}
 		}
 		if (!released) break;
-		uses = scanCapturedSlots(program, functions);
 	}
 	return [...editors.values()].map((editor) => editor.commit());
+}
+
+// Functions some running code can create; a body nothing creates never runs, even
+// while it stays in the program as an inlining or guard source.
+function instantiableFunctions(
+	program: CoreProgram,
+	roots: ReadonlySet<CoreFunctionId>,
+): ReadonlySet<CoreFunctionId> {
+	const live = new Set(roots);
+	const pending = [...roots];
+	while (pending.length > 0) {
+		const fn = program.function(pending.pop()!);
+		for (const instruction of fn.instructionIds()) {
+			if (
+				fn.instructionKind(instruction) !== "operation" ||
+				fn.instructionOpcodeName(instruction) !== "createFunction"
+			)
+				continue;
+			const target = fn.instructionAttributes(instruction).functionIndex;
+			if (typeof target !== "number" || live.has(coreFunctionId(target))) continue;
+			live.add(coreFunctionId(target));
+			pending.push(coreFunctionId(target));
+		}
+	}
+	return live;
 }
 
 function scanIdentities(
