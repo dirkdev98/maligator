@@ -329,7 +329,9 @@ dictionary mode, and keeping them shaped saved 4.7%.
       (a quarter of the samples), then boxes and unboxes the byte. A binding with a
       single initializing store cannot change once that store has run, so the load
       and view admission belong in the preheader once the loop body cannot reach
-      the store or detach the buffer.
+      the store or detach the buffer. Hoisting only the global load left the kernel
+      at 53 ms and the self-compile unchanged; the per-iteration view admission and
+      element decode are the cost.
 - [ ] Keep binary-search style index arithmetic in int32. `(lo + hi) >> 1` over
       `hi = items.length - 1` runs on doubles and converts `mid` back to an index
       every iteration (94 ms against Node's 24 for 12 M probes), because an Array
