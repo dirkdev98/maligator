@@ -1,6 +1,7 @@
 import type { CompilerNumericTypedArrayKind } from "../shared/compiler-instruction.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
+import { coreGlobalSlotBrands } from "./core-global-slot-facts.ts";
 import {
 	CORE_EXACT_COLLECTION_RECEIVER_ATTRIBUTE,
 	CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE,
@@ -274,6 +275,7 @@ export function analyzeCoreValueClasses(
 		}
 	}
 	const fields = corePrivateFieldFacts(program);
+	const globals = coreGlobalSlotBrands(program);
 	const isArrayIntrinsic = (value: CoreValueId): boolean => {
 		const root = roots.get(value) ?? value;
 		if (fn.kernel.valueDefinitionKind(root) !== 1) return false;
@@ -299,7 +301,9 @@ export function analyzeCoreValueClasses(
 				? "Array"
 				: opcode === "loadPrivate"
 					? fields?.field(fn, fn.kernel.operandAt(operandStart + 1))?.brand
-					: undefined;
+					: opcode === "loadGlobal"
+						? globals?.get(fn.instructionAttributes(instruction).index as number)
+						: undefined;
 		if (brand === undefined) continue;
 		const output = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
 		brands.set(roots.get(output) ?? output, brand);

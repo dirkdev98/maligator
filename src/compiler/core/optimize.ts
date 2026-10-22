@@ -15,6 +15,8 @@ import {
 	CoreFunctionOptimizationSession,
 } from "./core-function-optimization-session.ts";
 import type { CoreFunctionOptimizationPhaseRunner } from "./core-function-optimization-session.ts";
+import { analyzeCoreGlobalSlotBrands } from "./core-global-slot-analysis.ts";
+import { installCoreGlobalSlotBrands } from "./core-global-slot-facts.ts";
 import {
 	buildCoreOptimizationPlan,
 	buildCoreLocalOptimizationPlanInput,
@@ -247,6 +249,10 @@ export function optimizeCore(
 	if (ablatedFamily !== "proof-value-kind-representation") {
 		const fields = analyzeCorePrivateFields(compilation.program, compilation.context);
 		if (fields !== undefined) installCorePrivateFieldFacts(compilation.program, fields);
+		installCoreGlobalSlotBrands(
+			compilation.program,
+			analyzeCoreGlobalSlotBrands(compilation.program, compilation.context),
+		);
 	}
 	measurePhase(
 		"dense-generation-barrier",

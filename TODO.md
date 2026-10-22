@@ -225,16 +225,15 @@ construction Core (allocation sites, merged summaries, saturated generic sets) n
 108 s in Node to converge on the self-compiler, and generic value paths still reached
 the hot receivers, so field facts stay bounded and consumer-driven as planned below.
 
-- [ ] Hoist loop-invariant constant bindings and typed-array views. A lookup
-      through a module-level `const FLAGS = new Uint8Array(...)` in a loop runs
-      54 ms against Node's 14: every iteration reloads the global slot, repeats its
-      TDZ check, revalidates the view and calls the out-of-line element decoder
-      (a quarter of the samples), then boxes and unboxes the byte. A binding with a
-      single initializing store cannot change once that store has run, so the load
-      and view admission belong in the preheader once the loop body cannot reach
-      the store or detach the buffer. Hoisting only the global load left the kernel
-      at 53 ms and the self-compile unchanged; the per-iteration view admission and
-      element decode are the cost.
+- [ ] Unbox typed-array lookup loops. A lookup through a module-level
+      `const FLAGS = new Uint8Array(256)` in a `charCodeAt` loop runs 33 ms against
+      Node's 21, down from 51 now that reads of a constant holding one Array or
+      TypedArray class carry that class. Each iteration still boxes the string
+      length before the compare, tests the `charCodeAt` result's tag, revalidates
+      the view (buffer, detach, sharing, length tracking, bounds) and adds a boxed
+      byte to a boxed sum. Removing the loop's TDZ check on `FLAGS` changed
+      nothing. View admission belongs in the preheader once the body cannot detach
+      or resize the buffer, and the sum needs a number representation.
 - [ ] Keep binary-search style index arithmetic in int32. `(lo + hi) >> 1` over
       `hi = items.length - 1` runs on doubles and converts `mid` back to an index
       every iteration (94 ms against Node's 24 for 12 M probes), because an Array
