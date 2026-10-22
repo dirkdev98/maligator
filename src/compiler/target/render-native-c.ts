@@ -9005,6 +9005,9 @@ function emitInstruction(
 									? `if (${receiverName} && r${instruction.key} >= 0 && mal_vm_array_try_get_proven_index(${receiverName}, (u32) r${instruction.key}, &__v_${ip})) {`
 									: `if (${receiverName} && mal_vm_array_try_get_index(${receiverName}, ${num(instruction.key)}, &__v_${ip})) {`,
 								`  r${instruction.dst} = ${callValue(instruction.dst, `__v_${ip}`)};`,
+								// Numeric TypedArray elements read without allocating, collecting or calling.
+								`} else if (${receiverName} == nullptr && mal_vm_typed_array_try_get_index(${boxed(instruction.object)}, ${num(instruction.key)}, &__v_${ip})) {`,
+								`  r${instruction.dst} = ${callValue(instruction.dst, `__v_${ip}`)};`,
 								`} else {`,
 								...position,
 								...(context.incomingRootPublication ?? []).map((line) => `  ${line}`),
