@@ -369,7 +369,11 @@ the hot receivers, so field facts stay bounded and consumer-driven as planned be
       target set that includes every function stored under the name, and every
       function that escapes into a dynamic-key store, would make these exact. Note
       that replacing dispatch alone gains nothing: the value is in exact targets
-      that need no method load and inline without a guard.
+      that need no method load and inline without a guard. Names alone will not
+      stay exact on the self-compiler: its construction Core calls no dynamic-key
+      read directly, but 747 of them flow into stores and arguments, and copy loops
+      such as `out[k] = src[k]` would put every method behind every name. Key kinds
+      and the receivers' allocation classes have to keep those reads apart.
 - [ ] Prove property names getter-free in the closed world. With source closure,
       locked primordials and no `Proxy`, a name that no class, object literal or
       `defineProperty` gives an accessor, and that the primordial catalog lists as
@@ -484,9 +488,18 @@ Shared lifetime and fallback rules are recorded in
       the activation that added it to an object stores into it. A loop carries
       such a field of an invariant receiver around its back edge once one read
       succeeded, and element accesses through an Array-branded field skip the
-      class test. Elements still read as unknown values, so `this.#live[id] !== 1`
-      keeps a generic compare; element kinds would need every store into an array
-      that escapes through the field. Map and Set fields keep their method
+      class test. Arrays that only private fields hold also have element kinds: every
+      store through any field or allocation that can share them joins in, holes and
+      reads past the end add `undefined`, and with locked primordials `length`,
+      Array.prototype methods, iteration and callbacks without a parameter for the
+      array keep them known. A return, an argument, a capture, or a store whose key
+      may be a string gives up. Method parameters decide in practice: in
+      `kill(id) { this.#live[id] = 0 }` the key is unknown and in
+      `add(op) { this.#ops.push(op) }` the value is, because method calls reach no
+      targets. Of the self-compiler's 94 Array fields, 23 keep known elements and 10
+      narrower than any kind, and its hottest store columns leave through the
+      kernel's column literal, so the native self-compile moved from 15.75 to 15.65 s,
+      within noise. Map and Set fields keep their method
       capture, because the direct call assumes no one added an own `get`. A brand
       check followed by a field read of the same class on the same receiver still
       runs both checks.

@@ -1,3 +1,4 @@
+import { compilerFactIsWorldInvariant } from "../shared/compiler-facts.ts";
 import {
 	COMPILER_VALUE_KIND_OBJECT,
 	COMPILER_VALUE_KIND_TOP,
@@ -18,6 +19,11 @@ import type { CoreValueClassAnalysis } from "./core-ir-value-classes.ts";
 import { CORE_PROGRAM_FLOW_VALUE_KIND_SEMANTICS } from "./core-ir-value-kinds.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import type { CoreBlockId, CoreInstructionId, CoreValueId } from "./core-ir.ts";
+import {
+	CorePrivateFieldElements,
+	coreValueIsNullishConstant,
+} from "./core-private-field-elements.ts";
+import type { CorePrivateElementFunction } from "./core-private-field-elements.ts";
 import {
 	CorePrivateFieldFacts,
 	corePrivateFieldKeys,
@@ -207,6 +213,20 @@ function joinBrand(
 	return previous === undefined || previous === next ? next : null;
 }
 
+interface KindRecord {
+	readonly fn: CoreFunctionStore;
+	readonly control: CoreControlFlow;
+	readonly writer: FieldWriter | undefined;
+	readonly elements: CorePrivateElementFunction | undefined;
+}
+
+function elementPolicyIsLocked(context: CoreCompilationContext): boolean {
+	return (
+		context.facts.world.primordialPolicy === "locked" &&
+		compilerFactIsWorldInvariant(context.facts.protectors.get("array-elements"))
+	);
+}
+
 /**
  * The kinds and class each class-private field can hold: the least fixed point
  * over the values its observable writes store, where a write may itself read
@@ -249,7 +269,6 @@ export function analyzeCorePrivateFields(
 				(construction.get(write.key) ?? true) &&
 					storesOwnAddition(fn, control, writes, write),
 			);
-	const kinds = new Map<string, number>();
 	const brands = new Map<string, CorePrivateFieldBrand | null>();
 	const valueBrand = (
 		{ fn, classes }: FieldWriter,
@@ -266,50 +285,125 @@ export function analyzeCorePrivateFields(
 		const brand = classes.exactHeapBrand(value);
 		return brand === "Array" ? brand : (coreNumericTypedArrayKind(brand) ?? null);
 	};
-	let converged = false;
-	for (let round = 0; round < FIELD_KIND_ROUNDS && !converged; round++) {
-		converged = true;
-		for (const writer of writers) {
-			const { fn, control, observable } = writer;
-			const values = observable.flatMap((write) =>
-				write.value === undefined ? [] : [write.value],
-			);
-			const read = fieldReadMask(keys, fn, kinds);
-			const analysis =
-				values.length === 0
-					? undefined
-					: CORE_PROGRAM_FLOW_VALUE_KIND_SEMANTICS.analyze(fn, control, {
-							demandedValues: values,
-							operationResultMask: read,
-						});
-			for (const write of observable) {
+	let brandsConverged = false;
+	for (let round = 0; round < FIELD_KIND_ROUNDS && !brandsConverged; round++) {
+		brandsConverged = true;
+		for (const writer of writers)
+			for (const write of writer.observable) {
 				const brand = write.value === undefined ? null : valueBrand(writer, write.value);
-				const mask =
-					write.value === undefined
-						? COMPILER_VALUE_KIND_UNDEFINED
-						: brand !== null && brand !== undefined
-							? COMPILER_VALUE_KIND_OBJECT
-							: analysis!.latticeMask(write.value);
-				const previous = kinds.get(write.key) ?? 0;
-				if ((previous | mask) !== previous) {
-					kinds.set(write.key, previous | mask);
-					converged = false;
-				}
 				if (brand === undefined) continue;
 				const joined = joinBrand(brands.get(write.key), brand);
 				if (joined !== brands.get(write.key)) {
 					brands.set(write.key, joined);
-					converged = false;
+					brandsConverged = false;
 				}
 			}
+	}
+	if (!brandsConverged) brands.clear();
+
+	// Element reads and method calls on a nullish holder throw, so it may also hold those.
+	const arrayKeys = new Set<string>();
+	const otherKeys = new Set<string>();
+	for (const writer of writers)
+		for (const write of writer.observable) {
+			if (write.value === undefined || coreValueIsNullishConstant(writer.fn, write.value))
+				continue;
+			if (valueBrand(writer, write.value) === "Array") arrayKeys.add(write.key);
+			else otherKeys.add(write.key);
 		}
+	for (const key of otherKeys) arrayKeys.delete(key);
+	const elements = new CorePrivateFieldElements(program, keys, arrayKeys);
+	const records = new Map<CoreFunctionStore, KindRecord>();
+	for (const writer of writers)
+		records.set(writer.fn, {
+			fn: writer.fn,
+			control: writer.control,
+			writer,
+			elements: undefined,
+		});
+	if (arrayKeys.size > 0 && elementPolicyIsLocked(context)) {
+		for (const id of program.functionIds()) {
+			const fn = program.function(id);
+			const writer = records.get(fn)?.writer;
+			const hidden = new Set<CoreInstructionId>();
+			if (writer !== undefined) {
+				for (const write of writer.writes) hidden.add(write.instruction);
+				for (const write of writer.observable) hidden.delete(write.instruction);
+			}
+			elements.scan(
+				fn,
+				() => writer?.control ?? buildCoreControlFlow(program, id),
+				(instruction) => !hidden.has(instruction),
+			);
+		}
+		for (const record of elements.functions)
+			records.set(record.fn, {
+				fn: record.fn,
+				control: record.control,
+				writer: records.get(record.fn)?.writer,
+				elements: record,
+			});
+	}
+
+	const kinds = new Map<string, number>();
+	const joinFieldKinds = (
+		writer: FieldWriter,
+		mask: (value: CoreValueId) => number,
+	): boolean => {
+		let changed = false;
+		for (const write of writer.observable) {
+			const brand = write.value === undefined ? null : valueBrand(writer, write.value);
+			const kind =
+				write.value === undefined
+					? COMPILER_VALUE_KIND_UNDEFINED
+					: brand !== null && brand !== undefined
+						? COMPILER_VALUE_KIND_OBJECT
+						: mask(write.value);
+			const previous = kinds.get(write.key) ?? 0;
+			if ((previous | kind) === previous) continue;
+			kinds.set(write.key, previous | kind);
+			changed = true;
+		}
+		return changed;
+	};
+	let converged = false;
+	for (let round = 0; round < FIELD_KIND_ROUNDS && !converged; round++) {
+		converged = true;
+		for (const { fn, control, writer, elements: accesses } of records.values()) {
+			const demanded: Array<CoreValueId> = [];
+			for (const write of writer?.observable ?? [])
+				if (write.value !== undefined) demanded.push(write.value);
+			for (const write of accesses?.writes ?? []) demanded.push(write.value);
+			for (const write of accesses?.keyed ?? []) demanded.push(write.key, write.value);
+			if (demanded.length === 0) continue;
+			const read = fieldReadMask(keys, fn, kinds);
+			const analysis = CORE_PROGRAM_FLOW_VALUE_KIND_SEMANTICS.analyze(
+				program,
+				fn,
+				control,
+				{
+					demandedValues: demanded,
+					operationResultMask: read,
+					elementLoadMask: (instruction) => {
+						const holders = accesses?.loads.get(instruction);
+						return holders === undefined ? undefined : elements.loadMask(holders);
+					},
+				},
+			);
+			if (writer !== undefined && joinFieldKinds(writer, analysis.latticeMask))
+				converged = false;
+			if (accesses !== undefined && elements.update(accesses, analysis.latticeMask))
+				converged = false;
+		}
+		if (elements.propagate()) converged = false;
 	}
 	const fields = new Map<string, CorePrivateFieldFact>();
 	for (const [key, constructionOnly] of construction)
 		fields.set(key, {
 			kinds: converged ? (kinds.get(key) ?? 0) : COMPILER_VALUE_KIND_TOP,
-			brand: converged ? (brands.get(key) ?? undefined) : undefined,
+			brand: brands.get(key) ?? undefined,
 			constructionOnly,
+			elements: converged && arrayKeys.has(key) ? elements.elements(key) : undefined,
 		});
 	return new CorePrivateFieldFacts(keys, fields);
 }

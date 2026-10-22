@@ -96,6 +96,32 @@ const brandSource = `
 	}
 	globalThis.holders = new Holders(true);`;
 
+const elementSource = `
+	class Elements {
+		#ids = [];
+		#mixed = [1];
+		#alias;
+		#returned = [];
+		#keyed = [];
+		#visited = [2];
+		#kept = [3];
+		constructor() {
+			for (let index = 0; index < 4; index++) this.#ids.push(index * 2);
+			this.#alias = this.#mixed;
+		}
+		relabel() { this.#alias.push("label"); }
+		set(key) { this.#keyed[key] = 1; }
+		visit() { this.#visited.forEach((value, index, array) => { array[index] = value; }); }
+		returned() { return this.#returned; }
+		merge() { return this.#returned.concat(this.#kept); }
+		ids() { return this.#ids[1]; }
+		mixed() { return this.#mixed[0]; }
+		keyed() { return this.#keyed[0]; }
+		visited() { return this.#visited[0]; }
+		kept() { return this.#kept[0]; }
+	}
+	globalThis.elements = new Elements();`;
+
 function fieldFacts(evalMode: "disabled" | "runtime", program = source) {
 	const core = constructSemanticProgramCore(
 		analyzeSourceAndRunSemanticAnalysis(program, "/fields.js"),
@@ -184,6 +210,26 @@ describe("private field facts", () => {
 		expect(fields.get("mark")?.constructionOnly).toBe(false);
 		expect(fields.get("tag")?.constructionOnly).toBe(true);
 		expect(fields.get("shared")?.constructionOnly).toBe(false);
+	});
+
+	it("join the kinds of every element stored into arrays that only private fields hold", () => {
+		const fields = fieldFacts("disabled", elementSource)!;
+		expect(fields.get("ids")?.elements).toBe(
+			COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_UNDEFINED,
+		);
+		expect(fields.get("mixed")?.elements).toBe(
+			COMPILER_VALUE_KIND_NUMBER |
+				COMPILER_VALUE_KIND_STRING |
+				COMPILER_VALUE_KIND_UNDEFINED,
+		);
+	});
+
+	it("leave elements unknown when other code can reach the array or name another property", () => {
+		const fields = fieldFacts("disabled", elementSource)!;
+		expect(fields.get("returned")?.elements).toBeUndefined();
+		expect(fields.get("keyed")?.elements).toBeUndefined();
+		expect(fields.get("visited")?.elements).toBeUndefined();
+		expect(fields.get("kept")?.elements).toBeUndefined();
 	});
 
 	it("give no facts when direct eval could write private fields", () => {

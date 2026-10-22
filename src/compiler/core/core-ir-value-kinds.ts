@@ -102,6 +102,10 @@ export interface CoreValueKindInputs {
 		instruction: CoreInstructionId,
 		result: CoreValueId,
 	) => CompilerValueKindMask | undefined;
+	/** What a keyed read returns when its key is a number, if the receiver's elements are known. */
+	readonly elementLoadMask?: (
+		instruction: CoreInstructionId,
+	) => CompilerValueKindMask | undefined;
 }
 
 const NON_COERCING_UNARY_OPERATORS: ReadonlySet<string> = new Set([
@@ -200,6 +204,12 @@ const KIND_TRANSFER_COPY = 2;
 const KIND_TRANSFER_NUMERIC_UNARY = 3;
 const KIND_TRANSFER_BINARY = 4;
 const KIND_TRANSFER_ADD = 5;
+const KIND_TRANSFER_ELEMENT = 6;
+
+// A non-number key on an Array whose holders are all known reads its length, a
+// prototype member or nothing, since no one gave it other named properties.
+const NAMED_ARRAY_PROPERTY_KINDS =
+	COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_OBJECT | COMPILER_VALUE_KIND_UNDEFINED;
 
 function transferredKind(
 	kind: number,
@@ -216,6 +226,10 @@ function transferredKind(
 	}
 	const left = mask(inputs[start]! as CoreValueId);
 	if (kind === KIND_TRANSFER_COPY) return left;
+	if (kind === KIND_TRANSFER_ELEMENT)
+		return (left & ~COMPILER_VALUE_KIND_NUMBER) === 0
+			? constant
+			: constant | NAMED_ARRAY_PROPERTY_KINDS;
 	if (kind === KIND_TRANSFER_NUMERIC_UNARY)
 		return compilerNumericResultKind("unary", left);
 	const right = mask(inputs[start + 1]! as CoreValueId);
@@ -633,6 +647,13 @@ function addOperationTransfer(
 		masks[output] = masks[output]! | supplied;
 		return;
 	}
+	const elements = inputs?.elementLoadMask?.(instruction);
+	if (elements !== undefined) {
+		addKindTransfer(buffer, KIND_TRANSFER_ELEMENT, output, elements, [
+			fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction) + 1),
+		]);
+		return;
+	}
 	if (opcode === "callKnown") {
 		const attributes = fn.instructionAttributes(instruction);
 		const result =
@@ -1004,7 +1025,12 @@ function solveCoreValueKinds(
 				joinInputs.push(transferInputs[start + offset]!);
 		}
 	}
-	return { masks, integerRecipes, joinInputs: Uint32Array.from(joinInputs), computed };
+	return {
+		masks,
+		integerRecipes,
+		joinInputs: Uint32Array.from(joinInputs),
+		computed,
+	};
 }
 
 export function analyzeCoreValueKinds(
@@ -1043,15 +1069,13 @@ export const CORE_LOCAL_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreValueKin
 			const cfg = get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request).exceptional();
 			let numericArrayLoads: ReadonlySet<CoreInstructionId> | undefined;
 			const fields = corePrivateFieldFacts(program);
+			const elementLoadMask =
+				fields === undefined
+					? undefined
+					: (instruction: CoreInstructionId) => fields.elementMask(fn, instruction);
 			const operationResultMask = (instruction: CoreInstructionId) => {
 				const opcode = fn.instructionOpcodeName(instruction);
-				if (opcode === "loadPrivate") {
-					const field = fields?.field(
-						fn,
-						fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction) + 1),
-					);
-					return field === undefined || field.kinds === 0 ? undefined : field.kinds;
-				}
+				if (opcode === "loadPrivate") return fields?.readMask(fn, instruction);
 				if (opcode !== "loadProperty") return undefined;
 				return (numericArrayLoads ??= corePrivateNumericArrayLoads(
 					program,
@@ -1065,6 +1089,7 @@ export const CORE_LOCAL_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreValueKin
 			if (context.data.singleAssignmentGlobalSlots.length === 0) {
 				return analyzeCoreValueKinds(fn, cfg, {
 					operationResultMask,
+					elementLoadMask,
 					runOwner,
 					onIntegerWork: integerWorkRecorder(recordResult),
 				});
@@ -1160,6 +1185,7 @@ export const CORE_LOCAL_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreValueKin
 			};
 			return analyzeCoreValueKinds(fn, cfg, {
 				operationResultMask,
+				elementLoadMask,
 				operationResultValue,
 				runOwner,
 				onIntegerWork: integerWorkRecorder(recordResult),
@@ -1192,14 +1218,26 @@ export const CORE_PROGRAM_FLOW_VALUE_KIND_SEMANTICS: CoreProgramFlowValueKindSem
 			return [...values];
 		},
 		analyze(
+			program: CoreProgram,
 			fn: CoreFunctionStore,
 			cfg: CoreControlFlow,
 			inputs: CoreProgramFlowValueKindInputs,
 		) {
+			const fields = corePrivateFieldFacts(program);
 			const { masks, computed } = solveCoreValueKinds(
 				fn,
 				cfg,
-				inputs,
+				fields === undefined
+					? inputs
+					: {
+							...inputs,
+							operationResultMask: (instruction, result) =>
+								inputs.operationResultMask?.(instruction, result) ??
+								fields.readMask(fn, instruction),
+							elementLoadMask: (instruction) =>
+								inputs.elementLoadMask?.(instruction) ??
+								fields.elementMask(fn, instruction),
+						},
 				inputs.demandedValues,
 			);
 			const mask = (value: CoreValueId): number => {

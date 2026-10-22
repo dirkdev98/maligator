@@ -140,6 +140,7 @@ export interface CoreProgramFlowValueKindInputs {
 		instruction: CoreInstructionId,
 		result: CoreValueId,
 	) => number | undefined;
+	readonly elementLoadMask?: (instruction: CoreInstructionId) => number | undefined;
 }
 
 export interface CoreProgramFlowValueKindSemantics<Analysis> {
@@ -148,6 +149,7 @@ export interface CoreProgramFlowValueKindSemantics<Analysis> {
 		fn: CoreFunctionStore,
 	): ReadonlyArray<CoreValueId>;
 	analyze(
+		program: CoreProgram,
 		fn: CoreFunctionStore,
 		controlFlow: CoreControlFlow,
 		inputs: CoreProgramFlowValueKindInputs,
@@ -2366,7 +2368,7 @@ export class CoreProgramFlowEngine {
 						demandedValues = [...roots];
 						demands.set(functionId, demandedValues);
 					}
-					const values = semantics.analyze(fn, cfg, {
+					const values = semantics.analyze(this.#program, fn, cfg, {
 						demandedValues,
 						parameterMasks: summary.parameterKinds,
 						receiverMask: summary.receiverKind,

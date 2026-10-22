@@ -20,6 +20,12 @@ export interface CorePrivateFieldFact {
 	 * field keeps one value while any other non-suspending activation runs.
 	 */
 	readonly constructionOnly: boolean;
+	/**
+	 * What an element read through an Array-branded field can return when its key
+	 * is a number, holes and out-of-range reads included. Undefined when some holder
+	 * of those arrays is not visible to the analysis.
+	 */
+	readonly elements: CompilerValueKindMask | undefined;
 }
 
 export interface CorePrivateFieldWrite {
@@ -167,6 +173,32 @@ export class CorePrivateFieldFacts {
 	field(fn: CoreFunctionStore, value: CoreValueId): CorePrivateFieldFact | undefined {
 		const key = this.keys.key(fn, value);
 		return key === undefined ? undefined : this.#fields.get(key);
+	}
+
+	/** The kinds a private field read can return. */
+	readMask(
+		fn: CoreFunctionStore,
+		instruction: CoreInstructionId,
+	): CompilerValueKindMask | undefined {
+		if (fn.instructionOpcodeName(instruction) !== "loadPrivate") return undefined;
+		const kinds = this.field(fn, operand(fn, instruction, 1))?.kinds;
+		return kinds === 0 ? undefined : kinds;
+	}
+
+	/** The element kinds a keyed read from a private field's array can return. */
+	elementMask(
+		fn: CoreFunctionStore,
+		instruction: CoreInstructionId,
+	): CompilerValueKindMask | undefined {
+		if (
+			fn.instructionOpcodeName(instruction) !== "loadProperty" ||
+			fn.kernel.instructionOperandCount(instruction) !== 2
+		)
+			return undefined;
+		const source = definition(fn, operand(fn, instruction, 0));
+		return source === undefined || fn.instructionOpcodeName(source) !== "loadPrivate"
+			? undefined
+			: this.field(fn, operand(fn, source, 1))?.elements;
 	}
 }
 
