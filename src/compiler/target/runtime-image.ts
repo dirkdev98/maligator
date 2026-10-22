@@ -444,8 +444,33 @@ export interface VmSafepointRootMap {
 
 const trustedVmSafepointRootMaps = new WeakMap<BytecodeFunction, string>();
 
+// Root maps follow the instruction stream and frame layout, so names, positions and
+// profile sites may change without revoking them.
 function vmSafepointRootMapTrustFingerprint(fn: BytecodeFunction): string {
-	return JSON.stringify(fn);
+	return JSON.stringify([
+		fn.instructions,
+		fn.handlers,
+		fn.gcSafepoints,
+		fn.registerCount,
+		fn.parameterCount,
+		fn.needsArguments,
+		fn.mappedArguments,
+		fn.mappedArgumentSlots,
+		fn.argumentSnapshotCount,
+		fn.argumentSnapshotPlan,
+		fn.isGenerator,
+		fn.isAsync,
+	]);
+}
+
+// A copy that keeps the source's instruction stream inherits its trust record; the
+// consumer's check still compares contents, so a stale source cannot pass through.
+function inheritVmSafepointRootMapTrust(
+	source: BytecodeFunction,
+	copy: BytecodeFunction,
+): void {
+	const fingerprint = trustedVmSafepointRootMaps.get(source);
+	if (fingerprint !== undefined) trustedVmSafepointRootMaps.set(copy, fingerprint);
 }
 
 /** Trust never survives serialization or structural cloning. */
@@ -556,9 +581,7 @@ export function withClosureCaptureOwners(
 	closureCaptureOwners: Array<number>,
 ): BytecodeFunction {
 	const result = { ...fn, closureCaptureOwners };
-	if (vmSafepointRootMapsAreTrusted(fn)) {
-		trustedVmSafepointRootMaps.set(result, vmSafepointRootMapTrustFingerprint(result));
-	}
+	inheritVmSafepointRootMapTrust(fn, result);
 	return result;
 }
 
@@ -568,9 +591,7 @@ export function withClosureCaptureValues(
 	closureCaptureValues: Array<ClosureCaptureValue>,
 ): BytecodeFunction {
 	const result = { ...fn, closureCaptureValues };
-	if (vmSafepointRootMapsAreTrusted(fn)) {
-		trustedVmSafepointRootMaps.set(result, vmSafepointRootMapTrustFingerprint(result));
-	}
+	inheritVmSafepointRootMapTrust(fn, result);
 	return result;
 }
 

@@ -527,7 +527,7 @@ describe("Core IR lowering", () => {
 		).toBe(true);
 	});
 
-	it("trusts completed runtime plans and revokes trust after source-position mutation", () => {
+	it("trusts completed runtime plans until their instructions change", () => {
 		const compilation = optimize(`
 			function* keep(value) {
 				const live = { value };
@@ -547,10 +547,12 @@ describe("Core IR lowering", () => {
 		expect(vmSafepointRootMapsAreTrusted(structuredClone(generator))).toBe(false);
 		const ip = generator.positions.findIndex((position) => position >= 0);
 		generator.positions[ip] = -1;
+		expect(vmSafepointRootMapsAreTrusted(generator)).toBe(true);
+		generator.instructions.splice(ip, 0, { opcode: "CREATE_UNDEFINED", dst: 0 });
 		expect(vmSafepointRootMapsAreTrusted(generator)).toBe(false);
 	});
 
-	it("revokes root trust when profiling attaches metadata after final compaction", () => {
+	it("keeps root trust when profiling attaches metadata after final compaction", () => {
 		const compilation = optimize(`
 			function* keep(value) {
 				const live = { value };
@@ -564,7 +566,7 @@ describe("Core IR lowering", () => {
 		const generator = image.runtime.functions.find((fn) => fn.isGenerator)!;
 		expect(generator.profileSiteIds).toHaveLength(generator.instructions.length);
 		expect(image.diagnostics.profileSites?.length).toBeGreaterThan(0);
-		expect(vmSafepointRootMapsAreTrusted(generator)).toBe(false);
+		expect(vmSafepointRootMapsAreTrusted(generator)).toBe(true);
 	});
 
 	it("resolves known shaped origins to dense VM cache rows", () => {
