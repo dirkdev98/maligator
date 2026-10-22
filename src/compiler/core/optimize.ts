@@ -44,6 +44,8 @@ import {
 	pruneUnusedPlatformAliases,
 } from "./core-platform-constants.ts";
 import { pruneUnusedPlatformModuleInitializers } from "./core-platform-modules.ts";
+import { analyzeCorePrivateFields } from "./core-private-field-analysis.ts";
+import { installCorePrivateFieldFacts } from "./core-private-field-facts.ts";
 import { CORE_PROGRAM_FLOW_ANALYSIS } from "./core-program-flow-analysis.ts";
 import { deferCapturedRestMaterialization } from "./core-rest-materialization.ts";
 import {
@@ -242,6 +244,10 @@ export function optimizeCore(
 	// Rest deferral recognizes a captured rest array by its owner's binding reads.
 	if (ablatedFamily !== "memory-ssa-load-store")
 		forwardCoreOwnCapturedLoads(compilation.program, compilation.context);
+	if (ablatedFamily !== "proof-value-kind-representation") {
+		const fields = analyzeCorePrivateFields(compilation.program, compilation.context);
+		if (fields !== undefined) installCorePrivateFieldFacts(compilation.program, fields);
+	}
 	measurePhase(
 		"dense-generation-barrier",
 		() => compilation.program.finalizeConstructionGeneration(),

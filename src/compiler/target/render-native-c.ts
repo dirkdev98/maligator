@@ -13019,7 +13019,7 @@ function emitInstruction(
 			const hinted = [
 				`MalValue ${loaded};`,
 				`if (mal_vm_private_try_load(${boxed(instruction.object)}, ${boxed(instruction.key)}, &${loaded})) {`,
-				`  r${instruction.dst} = ${loaded};`,
+				`  r${instruction.dst} = ${callValue(instruction.dst, loaded)};`,
 				`} else {`,
 				...slowPathFramePosition(),
 				...(context.incomingRootPublication ?? []).map((line) => `  ${line}`),
@@ -13028,8 +13028,10 @@ function emitInstruction(
 					: [
 							`  ${cInactiveRootMaskPublication(context.privateAccessInactiveRootMask, context.inactiveRootMaskStatements)};`,
 						]),
-				`  r${instruction.dst} = mal_vm_op_load_private(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)});`,
-				`  ${throwCheck()}`,
+				...boxedLoad(
+					instruction.dst,
+					`mal_vm_op_load_private(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)})`,
+				).map((line) => `  ${line}`),
 				`}`,
 			];
 			if (
@@ -13047,7 +13049,7 @@ function emitInstruction(
 					object,
 					boxed(instruction.object),
 					({ index }) =>
-						`r${instruction.dst} = mal_object_field_load_shaped(${object}, ${index});`,
+						`r${instruction.dst} = ${callValue(instruction.dst, `mal_object_field_load_shaped(${object}, ${index})`)};`,
 					hinted,
 				),
 				"}",

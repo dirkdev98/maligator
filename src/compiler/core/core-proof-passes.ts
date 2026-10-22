@@ -721,6 +721,8 @@ const SCALAR_PRODUCERS: ReadonlySet<string> = new Set([
 	"loadArgumentCount",
 	"mathUnaryNumber",
 	"mathBinaryNumber",
+	// Field facts give a private read the exact kind every write of its field stores.
+	"loadPrivate",
 ]);
 
 const SCALAR_CONSUMERS: ReadonlySet<string> = new Set([

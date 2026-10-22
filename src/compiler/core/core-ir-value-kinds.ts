@@ -49,6 +49,7 @@ import type {
 import { coreInstructionId } from "./core-ir.ts";
 import { CORE_OPTIMIZATION_OWNER } from "./core-optimization-owners.ts";
 import type { CoreOptimizationOwnerRunner } from "./core-optimization-owners.ts";
+import { corePrivateFieldFacts } from "./core-private-field-facts.ts";
 import { CoreProgramFlowEngine } from "./core-program-flow.ts";
 import type {
 	CoreProgramFlowValueKinds,
@@ -1041,8 +1042,17 @@ export const CORE_LOCAL_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreValueKin
 			const fn = program.function(request.function);
 			const cfg = get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request).exceptional();
 			let numericArrayLoads: ReadonlySet<CoreInstructionId> | undefined;
+			const fields = corePrivateFieldFacts(program);
 			const operationResultMask = (instruction: CoreInstructionId) => {
-				if (fn.instructionOpcodeName(instruction) !== "loadProperty") return undefined;
+				const opcode = fn.instructionOpcodeName(instruction);
+				if (opcode === "loadPrivate") {
+					const field = fields?.field(
+						fn,
+						fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction) + 1),
+					);
+					return field === undefined || field.kinds === 0 ? undefined : field.kinds;
+				}
+				if (opcode !== "loadProperty") return undefined;
 				return (numericArrayLoads ??= corePrivateNumericArrayLoads(
 					program,
 					fn,
