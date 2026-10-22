@@ -24,7 +24,12 @@ describe("direct builtin callback targets", () => {
 		const image = compileSemanticProgramToProgramImage(
 			analyzeSourceAndRunSemanticAnalysis(
 				`const threshold = 2;
-				globalThis.result = [1, 2, 3].some((value) => value > threshold);`,
+				// A callback with its own loop stays a call instead of expanding inline.
+				globalThis.result = [1, 2, 3].some((value) => {
+					let steps = 0;
+					while (steps < value) steps++;
+					return steps > threshold;
+				});`,
 				"direct-array-callback.js",
 			),
 		);
@@ -37,7 +42,7 @@ describe("direct builtin callback targets", () => {
 			`MAL_BUILTIN_ARRAY_ITERATION_SOME, ${target}, mal_compiled_${target}`,
 		);
 		expect(output).not.toContain("MAL_INTRINSIC_ARRAY_ITERATION_ELIGIBLE");
-		expect(output.match(new RegExp(`mal_compiled_${target}\\(`, "g"))).toHaveLength(2);
+		expect(output).not.toMatch(new RegExp(`mal_compiled_${target}\\(vm`));
 	});
 
 	it("keeps callbacks from an open argument generic", () => {

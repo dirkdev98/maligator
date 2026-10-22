@@ -1350,7 +1350,8 @@ describe("late Core specialization plan", () => {
 	it("keeps direct-entry call sites scoped to their caller function", () => {
 		const definition = compileSemanticProgramToProgramImage(
 			analyzeSourceAndRunSemanticAnalysis(
-				`if (!((function () {
+				// Each function escapes, so its one call stays a call rather than inlining.
+				`const outer = function () {
 					let rounds = 1;
 					while (rounds-- > 0) Math.abs(rounds);
 					const nested = function () {
@@ -1358,8 +1359,11 @@ describe("late Core specialization plan", () => {
 						while (count-- > 0) Math.abs(count);
 						return typeof this;
 					};
+					globalThis.keepNested = nested;
 					return nested() === "undefined" && typeof this === "undefined";
-				})())) throw new Error("unexpected this value");`,
+				};
+				globalThis.keepOuter = outer;
+				if (!outer()) throw new Error("unexpected this value");`,
 				"direct-entry-function-local-site.js",
 			),
 		);
