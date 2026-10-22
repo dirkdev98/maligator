@@ -296,14 +296,17 @@ the default closed world, class accessors over private fields still run 75 ms
 against 14, polymorphic subclass methods 40 against 10, recursive method calls
 86 against 29, and `out += "x" + i` loops 11 against 5.
 
-The native self-compiler takes about 17.3 s and its profile is flat. Sampled by
-program counter, 36% of its time is compiled JavaScript, 12% property lookup
-helpers, 9% array helpers, 8% the collector, 8% collections and another 8%
-allocation and cell zeroing. Several direct attacks on call overhead did not move
-it: guarded direct calls at every hinted method site (12 K more sites, 9% more C),
-an inline hit path for inherited method caches, and four times the cross-call
-inlining budget. Classes with more than 64 fields did matter: they used to drop
-to dictionary mode, and keeping them shaped saved 4.7%.
+The native self-compiler takes about 16.2 s and its profile is flat. Sampled by
+program counter, 37% of its time is compiled JavaScript, 12% the collector and
+allocation, 11% property lookup helpers, 8% collections and 7% array helpers. Class
+members now guard on shared per-class layout cells, which took it from 17.3 s. It
+makes about 480 M compiled entries per run, yet direct attacks on call overhead
+did not move it: guarded direct calls at every hinted method site (12 K more
+sites, 9% more C), an inline hit path for inherited method caches, four times the
+cross-call inlining budget (90 M fewer entries), frameless fast entries for
+private-field accessors (1.7% slower) and evaluating each `this` layout guard once
+per activation. Classes with more than 64 fields did matter: they used to drop to
+dictionary mode, and keeping them shaped saved 4.7%.
 
 - [ ] Run the frame-pointer stack walk and entry-serviced polls on Linux. Compiled
       frames keep their stack-trace record on the C stack and calls skip return
@@ -315,13 +318,14 @@ to dictionary mode, and keeping them shaped saved 4.7%.
       entry limit word would be one dependent load.
 - [ ] Return a sentinel for abrupt completion instead of reloading
       `vm->completion.kind` after every call (146 k checks in the self-compile).
-- [ ] Give guarded inline method bodies one receiver guard instead of a probe per
-      access. In `for (...) sum += store.opcode(id)` the inlined body still runs
-      an inherited-method probe, a function-index check, a private-name hint
-      lookup, an indexed probe that reboxes the index and a named probe on the
-      element: about 7.5 ns per call against Node's inlined 0, plus 4.5 ns for the
-      `store.count` getter. A shape guard on the receiver that validates its
-      prototype, private slots and the method slot at once would cover all of it.
+- [ ] Give inline method bodies typed fields instead of a check per access. Class
+      layout cells replaced the per-site probes on class members with a shape
+      compare, but `store.kind(i)` in a loop still costs about 15 ns against
+      Node's 2: every access re-checks the receiver, the array and the key and
+      boxes the result. Reusing one receiver guard per activation saves only 17%
+      of that. The rest needs field kinds (an Array of int32 behind `#opcodes`)
+      flowing into Core value kinds and representations, which means bringing
+      class layouts into Core.
 - [ ] Resolve method calls through a sound closed-world call graph. Instance
       method hints are guarded guesses that the call graph does not see, so
       parameter, return and effect summaries stop at every method call. Hints now
@@ -347,13 +351,13 @@ to dictionary mode, and keeping them shaped saved 4.7%.
       append buffer from its longest prefix instead of rebalancing a rope, which took
       a 1 M-append loop from 129 to 39 ms (Node: 13). What remains per `out += "x" + i`
       is the tiny-string cache hashing each short `"x" + i` result, the zeroing of
-      every reused cell that conservative roots require, and two cell allocations.
+      every reused cell that conservative roots require (now inline stores up to
+      128 bytes) and two cell allocations.
 - [ ] Keep inline cache records off the hit path's extra cache lines. Inherited
-      method loads take about 4% of the self-compiler's samples, mostly on the
-      first loads from the cache record, and an inline hit path changed nothing.
-      Records are 72 bytes, so many hits touch two lines. A 64-byte record with
-      its hot fields first, or shared per-layout cells with compile-time slots,
-      should cut that.
+      method loads take about 2.7% of the self-compiler's samples, down from 4%
+      since class layout cells serve most class methods. Records are 72 bytes, so
+      many hits touch two lines; a 64-byte record with its hot fields first
+      should cut what remains.
 - [ ] Reclaim dead young cells without visiting them. Minor sweeps take 666 of
       the 1,596 ms collector time in the self-compiler and inspect 90 M young cells,
       one header miss per dead cell. Side mark bitmaps plus a bitmap of cells that
