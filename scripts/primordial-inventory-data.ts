@@ -35,6 +35,8 @@ type RawRecord =
 	| { type: "root"; name: string; value: RawValue }
 	| { type: "host-root"; installer: number; name: string; value: RawValue };
 
+const ARRAY_INDEX = /^(?:0|[1-9]\d*)$/;
+
 export interface InventoryHostInstall {
 	readonly installer: string;
 	readonly exports: ReadonlyArray<{ readonly name: string; readonly slot: number }>;
@@ -266,28 +268,50 @@ export function primordialInventoryContract(
 				},
 			};
 		}),
-		nodes: phase.nodes.map((node) => ({
-			...node,
-			descriptors: node.descriptors.map((descriptor) => {
-				const value = descriptor.value;
-				if (
-					phase.phase === "language-initialized" ||
-					node.locked ||
-					node.callable ||
-					value === undefined ||
-					"ref" in value ||
-					(descriptor.flags & 16) !== 0
-				)
-					return descriptor;
-				// Host data is sampled runtime state; its descriptor shape is the catalog contract.
-				return {
-					...descriptor,
-					value: {
-						runtimeKind:
-							"string" in value ? "string" : "bigint" in value ? "bigint" : "primitive",
-					},
-				};
-			}),
-		})),
+		nodes: phase.nodes.map((node) => {
+			// A host value's elements, such as the system CA bundle, vary with the host
+			// image; only its named shape belongs to the contract.
+			const hostElements =
+				phase.phase !== "language-initialized" &&
+				node.id.startsWith("%mal_host_install_") &&
+				node.descriptors.some(
+					(descriptor) =>
+						"string" in descriptor.key && ARRAY_INDEX.test(descriptor.key.string),
+				);
+			return {
+				...node,
+				...(hostElements ? { hostElements: true } : {}),
+				descriptors: node.descriptors
+					.filter(
+						(descriptor) =>
+							!hostElements ||
+							!("string" in descriptor.key && ARRAY_INDEX.test(descriptor.key.string)),
+					)
+					.map((descriptor) => {
+						const value = descriptor.value;
+						if (
+							phase.phase === "language-initialized" ||
+							node.locked ||
+							node.callable ||
+							value === undefined ||
+							"ref" in value ||
+							(descriptor.flags & 16) !== 0
+						)
+							return descriptor;
+						// Host data is sampled runtime state; its descriptor shape is the catalog contract.
+						return {
+							...descriptor,
+							value: {
+								runtimeKind:
+									"string" in value
+										? "string"
+										: "bigint" in value
+											? "bigint"
+											: "primitive",
+							},
+						};
+					}),
+			};
+		}),
 	}));
 }

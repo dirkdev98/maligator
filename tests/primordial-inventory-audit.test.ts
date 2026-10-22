@@ -94,6 +94,38 @@ function changeMetadata(
 	writeFileSync(file, JSON.stringify(metadata));
 }
 
+function hostCertificatePhase(count: number): PrimordialInventoryPhase {
+	const certificates = Array.from({ length: count }, (_, index) => ({
+		key: { string: String(index) },
+		flags: 2,
+		value: { string: `certificate ${index}` },
+	}));
+	return {
+		phase: "host-installed",
+		repeatedOwnKeys: [],
+		roots: [],
+		nodes: [
+			{
+				id: "%mal_host_install_node_tls:rootCertificates%",
+				kind: "object",
+				aliases: [],
+				descriptors: [
+					...certificates,
+					{ key: { string: "length" }, flags: 2, value: { number: count } },
+				],
+			},
+		],
+	} as unknown as PrimordialInventoryPhase;
+}
+
+describe("primordial inventory contract", () => {
+	it("leaves the elements of host-installed values out of the digest", () => {
+		expect(primordialInventoryDigest([hostCertificatePhase(121)])).toBe(
+			primordialInventoryDigest([hostCertificatePhase(122)]),
+		);
+	});
+});
+
 describe("target-specific primordial descriptor audits", () => {
 	it("imports all modes under their captured target without replacing catalog provenance or historical audits", () => {
 		fixture((directory, file) => {
