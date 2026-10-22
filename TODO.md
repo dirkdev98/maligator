@@ -767,11 +767,6 @@ contracts or investigates costs still visible after the string follow-ups.
       loops in `collection-direct`, and selection then dropped every entry-pair
       region, so that typing was reverted. It removed an out-of-line
       RequireObjectCoercible from `counts[i & 15]++` on a constructed typed array.
-- [ ] Re-measure numeric property update plans now that number record regions
-      take over loops that only touch number fields of one receiver. On the
-      particle loop, before regions, they ran 59 ms against 55 ms for generic loads
-      and stores, because their begin and commit checks cost more than the boxing
-      they save. Make them cheaper or drop them where they still apply.
 - [ ] Fuse projected split/trim length consumption without flattening the shared
       rope or repeatedly descending from its root for each field's edges and slice.
       First prove split and trim results and their aliases do not escape through
