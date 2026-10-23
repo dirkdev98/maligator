@@ -115,7 +115,15 @@ bool mal_builtin_math_binary_fast(
 );
 
 // Callers prove canonical identity and numeric inputs; these kernels never coerce.
-f64 mal_builtin_math_clz32_number(f64 argument);
+f64 mal_builtin_math_clz32_number_slow(f64 argument);
+
+static inline __attribute__((always_inline)) f64 mal_builtin_math_clz32_number(f64 argument) {
+    if (argument >= -2147483648.0 && argument < 4294967296.0) {
+        u32 value = (u32) (i64) argument;
+        return value == 0 ? 32 : __builtin_clz(value);
+    }
+    return mal_builtin_math_clz32_number_slow(argument);
+}
 f64 mal_builtin_math_imul_number_slow(f64 left, f64 right);
 
 // Compiled sites call this per multiply, and hash mixing keeps its operands within

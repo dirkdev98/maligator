@@ -237,7 +237,7 @@ static MalValue mal_builtin_math_round(MalVm *vm, MalValue this_value, const Mal
     return mal_builtin_math_round_number(x);
 }
 
-f64 mal_builtin_math_clz32_number(f64 x) {
+f64 mal_builtin_math_clz32_number_slow(f64 x) {
     u32 value = mal_ops_number_to_uint32(x);
     return value == 0 ? 32 : __builtin_clz(value);
 }
