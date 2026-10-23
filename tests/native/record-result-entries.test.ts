@@ -100,6 +100,26 @@ describe("record result entries", () => {
 		expect(functionNamed("retainAll").recordCalls).toBeUndefined();
 	});
 
+	it("hands records in caller storage to callees that take them as record parameters", () => {
+		const recordParameters = (name: string) =>
+			functionNamed(name)
+				.directEntries.flatMap((entry) => entry.recordParameters ?? [])
+				.map((parameter) => parameter.index);
+		for (const callee of ["stretch", "hold", "width", "decodedWeight", "strictWidth"])
+			expect(recordParameters(callee), callee).toEqual([0]);
+		expect(recordParameters("between")).toEqual([0, 1]);
+		// widen takes one record and returns another through the same entry.
+		const widen = functionNamed("widen").directEntries.find(
+			(entry) => entry.recordParameters !== undefined,
+		)!;
+		expect(widen.resultFields).toBeDefined();
+		expect(
+			functionNamed("widened").recordCalls!.some(
+				(site) => (site.passes?.length ?? 0) > 0,
+			),
+		).toBe(true);
+	});
+
 	it("creates a record object only where an observer needs it", () => {
 		const result = spawnSync(compiled, [], {
 			encoding: "utf8",
@@ -110,9 +130,10 @@ describe("record result entries", () => {
 			Number(new RegExp(`${name}=(\\d+)`).exec(result.stderr)?.[1] ?? -1);
 		expect(counter("direct_entry_hits")).toBeGreaterThan(0);
 		// Eleven observed tokens, the returned and the thrown token, three handed-on records,
-		// two observed union records, and 26 tokens passed to widen. Returns of other values
-		// never create one.
-		expect(counter("record_materializations")).toBe(44);
+		// two observed union records, sixteen records a callee keeps, which its caller then
+		// shares, and twenty records pushed in pairs. Returns of other values and records
+		// passed to record parameters never create one.
+		expect(counter("record_materializations")).toBe(54);
 	});
 
 	for (const [backend, binary] of [

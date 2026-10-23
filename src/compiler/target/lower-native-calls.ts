@@ -1,8 +1,10 @@
 import { nativeValueConversion } from "./native-value-transport.ts";
 import type { NativeValueConversion } from "./native-value-transport.ts";
+import { sameNativeRecordLayout } from "./program-image.ts";
 import type {
 	NativeDirectEntryPlan,
 	NativeFunctionPlan,
+	NativeRecordLayout,
 	VmRegisterRepresentation,
 } from "./program-image.ts";
 import { decodeVmValueOperand } from "./runtime-image.ts";
@@ -43,6 +45,42 @@ export function selectNativeCallTransports(
 	entries: NativeEntryLookup,
 ): ReadonlyArray<NativeCallTransportPlan> {
 	if (entries.size === 0) return [];
+	// A record parameter needs a record call that keeps its storage, which in turn
+	// needs its own record entry; drop record calls that get none until both agree.
+	let stored = new Set(native.recordCalls?.map((site) => site.callIp) ?? []);
+	for (;;) {
+		const passes = new Map<string, NativeRecordLayout>();
+		for (const site of native.recordCalls ?? []) {
+			const call = native.instructions[site.callIp];
+			const layout =
+				call?.kind === "call" && stored.has(site.callIp)
+					? entries.get(`${call.directFunctionIndex}:${call.directEntryId}`)?.resultFields
+					: undefined;
+			if (layout !== undefined)
+				for (const pass of site.passes ?? [])
+					passes.set(`${pass.callIp}:${pass.argument}`, layout);
+		}
+		const plans = selectTransports(native, entries, passes);
+		const paired = new Set(
+			plans
+				.filter(
+					(plan) =>
+						entries.get(`${plan.targets[0]!.functionIndex}:${plan.targets[0]!.entryId}`)
+							?.resultFields !== undefined,
+				)
+				.map((plan) => plan.instructionIp),
+		);
+		const next = new Set([...stored].filter((ip) => paired.has(ip)));
+		if (next.size === stored.size) return plans;
+		stored = next;
+	}
+}
+
+function selectTransports(
+	native: NativeFunctionPlan,
+	entries: NativeEntryLookup,
+	passes: ReadonlyMap<string, NativeRecordLayout>,
+): ReadonlyArray<NativeCallTransportPlan> {
 	const plans: Array<NativeCallTransportPlan> = [];
 	const fieldCalls =
 		native.fieldCalls === undefined
@@ -71,10 +109,15 @@ export function selectNativeCallTransports(
 					: undefined);
 			if (entryId === undefined) continue;
 			const entry = entries.get(`${functionIndex}:${entryId}`);
-			// Only a call whose loads read caller storage can take a record entry's result.
+			// Only a call whose loads read caller storage can take a record entry's result,
+			// and only a call that hands over storage of the right fields its record parameters.
 			if (
 				entry === undefined ||
-				recordCalls.has(instructionIp) !== (entry.resultFields !== undefined)
+				recordCalls.has(instructionIp) !== (entry.resultFields !== undefined) ||
+				(entry.recordParameters ?? []).some((parameter) => {
+					const layout = passes.get(`${instructionIp}:${parameter.index}`);
+					return layout === undefined || !sameNativeRecordLayout(layout, parameter);
+				})
 			)
 				continue;
 			const arguments_: Array<NativeValueConversion> = [];

@@ -28,6 +28,7 @@ const representationProofs = new WeakMap<
 		readonly callOverrides: CoreDirectEntryPlan["callOverrides"];
 		readonly fields: CoreDirectEntryPlan["fieldParameters"];
 		readonly resultFields: CoreDirectEntryPlan["resultFields"];
+		readonly recordParameters: CoreDirectEntryPlan["recordParameters"];
 	}
 >();
 
@@ -41,6 +42,7 @@ export function analyzeCoreNativeEntry(
 	exactOperationResultMasks: ReadonlyMap<CoreInstructionId, number> = new Map(),
 	callOverrides?: CoreDirectEntryPlan["callOverrides"],
 	resultFields?: CoreDirectEntryPlan["resultFields"],
+	recordParameters?: CoreDirectEntryPlan["recordParameters"],
 ): {
 	readonly valueRepresentations: ReadonlyArray<CorePlanRepresentation>;
 	readonly resultRepresentation: CorePlanRepresentation;
@@ -147,6 +149,7 @@ export function analyzeCoreNativeEntry(
 		calls: callSites.map((site) => ({ ...site })),
 		callOverrides: callOverrides?.map((site) => ({ ...site })),
 		resultFields,
+		recordParameters,
 	});
 	return {
 		valueRepresentations,
@@ -166,6 +169,7 @@ export function coreNativeEntryProofIsCurrent(
 			entry.constantBooleans === undefined &&
 			entry.fieldParameters === undefined &&
 			entry.resultFields === undefined &&
+			entry.recordParameters === undefined &&
 			entry.operatorInputs === undefined &&
 			entry.callOverrides === undefined
 		);
@@ -186,6 +190,7 @@ export function coreNativeEntryProofIsCurrent(
 		same(proof.arguments, entry.argumentRepresentations) &&
 		proof.constants === entry.constantBooleans &&
 		proof.resultFields === entry.resultFields &&
+		proof.recordParameters === entry.recordParameters &&
 		proof.operatorInputs === entry.operatorInputs &&
 		(proof.callOverrides === undefined
 			? entry.callOverrides === undefined

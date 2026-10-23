@@ -90,10 +90,10 @@ export function connectCoreNativeEntries(
 		return node;
 	};
 	for (const entry of initial) add(entry);
-	// Every variant of a record call's caller reads that call's fields from caller storage.
+	// Every variant of a record call's caller exchanges records through caller storage.
 	const recordCalls = new Set(
 		initial.flatMap((entry) =>
-			entry.resultFields === undefined
+			entry.resultFields === undefined && entry.recordParameters === undefined
 				? []
 				: entry.callSites.map((site) => `${site.caller}:${site.instruction}`),
 		),
@@ -101,7 +101,8 @@ export function connectCoreNativeEntries(
 	const plain = (entry: CoreDirectEntryPlan) =>
 		entry.argumentRepresentations === undefined &&
 		entry.fieldParameters === undefined &&
-		entry.resultFields === undefined;
+		entry.resultFields === undefined &&
+		entry.recordParameters === undefined;
 	const cfg = (functionId: CoreFunctionId) =>
 		analyses
 			.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
@@ -173,8 +174,9 @@ export function connectCoreNativeEntries(
 		const existing = entries.find(
 			({ entry }) =>
 				entry.fieldParameters === undefined &&
-				// Only the calls whose result proof it carries may use a record entry.
+				// Only the calls whose record proofs it carries may use a record entry.
 				entry.resultFields === undefined &&
+				entry.recordParameters === undefined &&
 				entrySignature(entry.parameterRepresentations, entry.argumentRepresentations) ===
 					signature,
 		);

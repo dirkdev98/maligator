@@ -79,6 +79,7 @@ import {
 import type {
 	NativeFunctionPlan,
 	NativeInstructionPlan,
+	NativeRecordUses,
 	ProgramImage,
 	VmGuardedBuiltinCall,
 	VmRegisterRepresentation,
@@ -101,7 +102,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 256;
+export const COMPILER_ARTIFACT_VERSION = 257;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -1919,6 +1920,39 @@ function validateClassLayoutSite(
 		throw new RangeError("program-image-codec: invalid class layout site");
 }
 
+function writeNativeRecordUses(w: Writer, uses: NativeRecordUses): void {
+	for (const accesses of [uses.loads, uses.stores]) {
+		w.u32(accesses.length);
+		for (const access of accesses) {
+			w.u32(access.instructionIp);
+			w.u32(access.field);
+		}
+	}
+	w.u32(uses.observerIps.length);
+	for (const ip of uses.observerIps) w.u32(ip);
+	w.u32(uses.passes?.length ?? 0);
+	for (const pass of uses.passes ?? []) {
+		w.u32(pass.callIp);
+		w.u32(pass.argument);
+	}
+}
+
+function readNativeRecordUses(r: Reader): NativeRecordUses {
+	const accesses = () =>
+		Array.from({ length: r.count(8) }, () => ({
+			instructionIp: r.u32(),
+			field: r.u32(),
+		}));
+	const loads = accesses();
+	const stores = accesses();
+	const observerIps = Array.from({ length: r.count(4) }, () => r.u32());
+	const passes = Array.from({ length: r.count(8) }, () => ({
+		callIp: r.u32(),
+		argument: r.u32(),
+	}));
+	return { loads, stores, observerIps, ...(passes.length === 0 ? {} : { passes }) };
+}
+
 function writeCompilerArtifact(
 	w: Writer,
 	def: RuntimeImage,
@@ -2063,15 +2097,7 @@ function writeCompilerArtifact(
 		w.u32(native.recordCalls?.length ?? 0);
 		for (const site of native.recordCalls ?? []) {
 			w.u32(site.callIp);
-			for (const accesses of [site.loads, site.stores]) {
-				w.u32(accesses.length);
-				for (const access of accesses) {
-					w.u32(access.instructionIp);
-					w.u32(access.field);
-				}
-			}
-			w.u32(site.observerIps.length);
-			for (const ip of site.observerIps) w.u32(ip);
+			writeNativeRecordUses(w, site);
 		}
 		w.u8(native.specializedOnly ? 1 : 0);
 		w.u32(native.directEntries.length);
@@ -2127,6 +2153,18 @@ function writeCompilerArtifact(
 			for (const forward of entry.resultFields?.forwards ?? []) {
 				w.u32(forward.callIp);
 				w.u32(forward.functionIndex);
+			}
+			w.u32(entry.recordParameters?.length ?? 0);
+			for (const parameter of entry.recordParameters ?? []) {
+				w.u32(parameter.index);
+				w.u32(parameter.keys.length);
+				for (const key of parameter.keys) w.u32(key);
+				w.u32(parameter.shapes?.length ?? 0);
+				for (const shape of parameter.shapes ?? []) {
+					w.u32(shape.length);
+					for (const field of shape) w.u32(field);
+				}
+				writeNativeRecordUses(w, parameter);
 			}
 			w.u32(entry.constantBooleans?.length ?? 0);
 			for (const { instructionIp, value } of entry.constantBooleans ?? []) {
@@ -4619,16 +4657,9 @@ function readCompilerArtifact(
 			})),
 		}));
 		const recordCallCount = r.count(8);
-		const readRecordAccesses = () =>
-			Array.from({ length: r.count(8) }, () => ({
-				instructionIp: r.u32(),
-				field: r.u32(),
-			}));
 		const recordCalls = Array.from({ length: recordCallCount }, () => ({
 			callIp: r.u32(),
-			loads: readRecordAccesses(),
-			stores: readRecordAccesses(),
-			observerIps: Array.from({ length: r.count(4) }, () => r.u32()),
+			...readNativeRecordUses(r),
 		}));
 		const specializedOnly = r.u8();
 		if (specializedOnly > 1) throw new RangeError("invalid native body reachability");
@@ -4685,6 +4716,16 @@ function readCompilerArtifact(
 			const resultForwards = Array.from({ length: r.count(8) }, () => ({
 				callIp: r.u32(),
 				functionIndex: r.u32(),
+			}));
+			const recordParameters = Array.from({ length: r.count(12) }, () => ({
+				index: r.u32(),
+				keys: Array.from({ length: r.count(4) }, () => r.u32()),
+				...((shapes: Array<Array<number>>) => (shapes.length === 0 ? {} : { shapes }))(
+					Array.from({ length: r.count(4) }, () =>
+						Array.from({ length: r.count(4) }, () => r.u32()),
+					),
+				),
+				...readNativeRecordUses(r),
 			}));
 			const resultFields =
 				resultKeys.length === 0 &&
@@ -4785,6 +4826,7 @@ function readCompilerArtifact(
 				...(callOverrides.length === 0 ? {} : { callOverrides }),
 				...(fieldParameters === undefined ? {} : { fieldParameters }),
 				...(resultFields === undefined ? {} : { resultFields }),
+				...(recordParameters.length === 0 ? {} : { recordParameters }),
 				registerRepresentations: directRegisterRepresentations,
 				gc: { safepoints: directSafepoints },
 			};

@@ -361,4 +361,208 @@ console.log(last("ab cd"));`,
 			),
 		).toThrow(/record result proof/);
 	});
+
+	it("hands a caller's record to a callee that reads and writes its fields", () => {
+		const { core, named, recordEntry } = compile(
+			"passed",
+			`${scanner}
+function stretch(span, by) {
+	for (let step = 0; step < by; step++) span.end++;
+	return span.end - span.start;
+}
+function stretched(text) {
+	let total = 0;
+	for (let index = 0; index < text.length; ) {
+		const token = scan(text, index);
+		total += stretch(token, 2) + token.end;
+		index = token.end - 1;
+	}
+	return total;
+}
+console.log(stretched("ab cd ef"));`,
+		);
+		const parameters = core.plan.directEntries.find(
+			(entry) => entry.function === named("stretch") && entry.recordParameters,
+		)!.recordParameters!;
+		expect(parameters).toHaveLength(1);
+		expect(parameters[0]!.index).toBe(0);
+		expect(parameters[0]!.keys).toEqual(recordEntry("scan")!.resultFields!.keys);
+		expect(parameters[0]!.uses.stores.length).toBeGreaterThan(0);
+		expect(parameters[0]!.uses.observers).toEqual([]);
+		const site = recordEntry("scan")!.callSites.find(
+			(candidate) => candidate.caller === named("stretched"),
+		)!;
+		expect(site.recordUses!.observers).toEqual([]);
+		expect(site.recordUses!.passes).toEqual([
+			expect.objectContaining({ argument: 0, target: named("stretch") }),
+		]);
+	});
+
+	it("keeps the object for callees that can reach the record otherwise", () => {
+		const { core, named, recordEntry } = compile(
+			"unpassed",
+			`${scanner}
+function viaArguments(span) {
+	let width = 0;
+	for (let index = span.start; index < span.end; index++) width++;
+	return width + arguments[0].end;
+}
+async function later(span) {
+	await null;
+	return span.end;
+}
+function callers(text) {
+	let total = 0;
+	for (let index = 0; index < text.length; ) {
+		const token = scan(text, index);
+		total += viaArguments(token);
+		later(token);
+		index = token.end + 1;
+	}
+	return total;
+}
+console.log(callers("ab cd ef"));`,
+		);
+		for (const callee of ["viaArguments", "later"])
+			expect(
+				core.plan.directEntries.some(
+					(entry) => entry.function === named(callee) && entry.recordParameters,
+				),
+				callee,
+			).toBe(false);
+		const site = recordEntry("scan")?.callSites.find(
+			(candidate) => candidate.caller === named("callers"),
+		);
+		expect(site?.recordUses?.passes).toBeUndefined();
+	});
+
+	it("rejects plans that misstate a record parameter or a pass target", () => {
+		const { core, named, recordEntry } = compile(
+			"forged-parameter",
+			`${scanner}
+function width(span) {
+	let width = 0;
+	for (let index = span.start; index < span.end; index++) width++;
+	return width;
+}
+function widths(text) {
+	let total = 0;
+	for (let index = 0; index < text.length; ) {
+		const token = scan(text, index);
+		total += width(token);
+		index = token.end + 1;
+	}
+	return total;
+}
+function spans(text) {
+	let total = 0;
+	for (let index = 0; index < text.length; ) {
+		const token = scan(text, index);
+		total += token.end - token.start;
+		index = token.end + 1;
+	}
+	return total;
+}
+console.log(widths("ab cd ef"), spans("ab cd ef"));`,
+		);
+		const verify = (directEntries: ReadonlyArray<CoreDirectEntryPlan>) => () =>
+			verifyCoreOptimizationPlan(
+				core.program,
+				{ ...core.plan, directEntries },
+				core.context,
+			);
+		const callee = core.plan.directEntries.find(
+			(entry) => entry.function === named("width") && entry.recordParameters,
+		)!;
+		const parameter = callee.recordParameters![0]!;
+		const recordParameters = Object.freeze([
+			Object.freeze({
+				...parameter,
+				uses: {
+					...parameter.uses,
+					loads: parameter.uses.loads.map((load) => ({ ...load, field: 0 })),
+				},
+			}),
+		]);
+		// A current representation proof isolates the record proof as the one that fails.
+		const variant = analyzeCoreNativeEntry(
+			core.program.function(callee.function),
+			buildCoreControlFlow(core.program, callee.function, { exceptions: true }),
+			callee.parameterRepresentations,
+			undefined,
+			callee.callSites,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			recordParameters,
+		);
+		const forgedCallee = { ...callee, ...variant, recordParameters };
+		expect(
+			verify(
+				core.plan.directEntries.map((entry) => (entry === callee ? forgedCallee : entry)),
+			),
+		).toThrow(/record parameter proof/);
+
+		const producer = recordEntry("scan")!;
+		const callSites = producer.callSites.map((site) =>
+			site.recordUses?.passes === undefined
+				? site
+				: {
+						...site,
+						recordUses: {
+							...site.recordUses,
+							passes: site.recordUses.passes.map((pass) => ({
+								...pass,
+								target: named("widths"),
+							})),
+						},
+					},
+		);
+		const producerVariant = analyzeCoreNativeEntry(
+			core.program.function(producer.function),
+			buildCoreControlFlow(core.program, producer.function, { exceptions: true }),
+			producer.parameterRepresentations,
+			undefined,
+			callSites,
+			undefined,
+			undefined,
+			undefined,
+			producer.resultFields,
+		);
+		const forgedProducer = { ...producer, ...producerVariant, callSites };
+		expect(
+			verify(
+				core.plan.directEntries.map((entry) =>
+					entry === producer ? forgedProducer : entry,
+				),
+			),
+		).toThrow(/record result proof/);
+
+		// Without the record call that keeps it in storage, the callee has no record to read.
+		const unsupplied = producer.callSites.filter(
+			(site) => site.recordUses?.passes === undefined,
+		);
+		const unsuppliedVariant = analyzeCoreNativeEntry(
+			core.program.function(producer.function),
+			buildCoreControlFlow(core.program, producer.function, { exceptions: true }),
+			producer.parameterRepresentations,
+			undefined,
+			unsupplied,
+			undefined,
+			undefined,
+			undefined,
+			producer.resultFields,
+		);
+		expect(unsupplied.length).toBeGreaterThan(0);
+		expect(
+			verify(
+				core.plan.directEntries.map((entry) =>
+					entry === producer
+						? { ...producer, ...unsuppliedVariant, callSites: unsupplied }
+						: entry,
+				),
+			),
+		).toThrow(/record parameter proof/);
+	});
 });

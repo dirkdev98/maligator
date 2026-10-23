@@ -24,6 +24,7 @@ import type {
 	CorePlanRepresentation,
 	CorePlanSpecialization,
 	CoreRecordFieldAccess,
+	CoreRecordUses,
 	VerifiedCoreOptimizationPlan,
 } from "./core-ir-regions.ts";
 import type {
@@ -44,7 +45,10 @@ import {
 	coreFieldArgumentProofIsCurrent,
 	coreRecordKeyAbsent,
 	coreRecordResultFields,
+	coreRecordParameterUses,
+	coreRecordPassKey,
 	coreRecordResultUses,
+	coreSuppliedRecordPasses,
 } from "./core-native-field-analysis.ts";
 import {
 	coreOperatorInputProofIsCurrent,
@@ -1809,6 +1813,7 @@ function immutablePlanCopy(plan: CoreOptimizationPlan): CoreOptimizationPlan {
 			entry.resultFields,
 			...entry.callSites.map((site) => site.fieldValueRepresentations),
 			...entry.callSites.map((site) => site.recordUses),
+			entry.recordParameters,
 		]) {
 			if (payload !== undefined) proofPayloads.add(payload);
 		}
@@ -1906,6 +1911,46 @@ export function verifyCoreOptimizationPlan(
 		}
 		return cfg;
 	};
+	const sameRecordUses = (
+		functionId: CoreFunctionId,
+		current: CoreRecordUses | undefined,
+		claimed: CoreRecordUses,
+	): boolean => {
+		const fn = program.function(functionId);
+		const proof = blockProofs.get(functionId)!;
+		const sameAccesses = (
+			left: ReadonlyArray<CoreRecordFieldAccess>,
+			right: ReadonlyArray<CoreRecordFieldAccess>,
+		) =>
+			left.length === right.length &&
+			left.every(
+				(access, index) =>
+					access.instruction === right[index]!.instruction &&
+					access.field === right[index]!.field &&
+					proof.instructionOrder.has(access.instruction),
+			);
+		const passes = current?.passes ?? [];
+		return (
+			current !== undefined &&
+			sameAccesses(current.loads, claimed.loads) &&
+			sameAccesses(current.stores, claimed.stores) &&
+			sameNumbers(current.observers, claimed.observers) &&
+			current.observers.every(
+				(observer) =>
+					proof.instructionOrder.has(observer) ||
+					(fn.instructionKind(observer) !== "operation" &&
+						proof.included.has(fn.instructionBlock(observer))),
+			) &&
+			passes.length === (claimed.passes?.length ?? 0) &&
+			passes.every(
+				(pass, index) =>
+					pass.instruction === claimed.passes![index]!.instruction &&
+					pass.argument === claimed.passes![index]!.argument &&
+					pass.target === claimed.passes![index]!.target &&
+					proof.instructionOrder.has(pass.instruction),
+			)
+		);
+	};
 	for (const selection of specializations) {
 		verifySpecialization(
 			program,
@@ -1989,6 +2034,8 @@ export function verifyCoreOptimizationPlan(
 			readonly targets: Set<CoreFunctionId>;
 		}
 	>();
+	// A record parameter takes storage only from record calls this plan selects.
+	const suppliedRecordPasses = coreSuppliedRecordPasses(plan.directEntries);
 	for (const entry of plan.directEntries) {
 		if (!live.has(entry.function)) {
 			fail(`direct entry targets dead function ${entry.function}`);
@@ -2065,6 +2112,39 @@ export function verifyCoreOptimizationPlan(
 					`direct entry ${entry.function}:${entry.id} has no current record result proof`,
 				);
 		}
+		if (
+			entry.recordParameters !== undefined &&
+			(entry.recordParameters.length === 0 ||
+				entry.callSites.some((site) =>
+					entry.recordParameters!.some(
+						(parameter) =>
+							!suppliedRecordPasses.has(
+								coreRecordPassKey(site, parameter.index, entry.function, parameter),
+							),
+					),
+				) ||
+				entry.fieldParameters !== undefined ||
+				entry.argumentRepresentations !== undefined ||
+				entry.recordParameters.some(
+					(parameter, index) =>
+						(index > 0 && parameter.index <= entry.recordParameters![index - 1]!.index) ||
+						entry.parameterRepresentations[parameter.index] !== "boxed" ||
+						parameter.uses.passes !== undefined ||
+						!sameRecordUses(
+							entry.function,
+							coreRecordParameterUses(
+								fn,
+								control(entry.function),
+								parameter.index,
+								parameter,
+							),
+							parameter.uses,
+						),
+				))
+		)
+			fail(
+				`direct entry ${entry.function}:${entry.id} has no current record parameter proof`,
+			);
 		const overriddenInstructions = new Set<CoreInstructionId>();
 		for (const call of entry.callOverrides ?? []) {
 			const callee = entriesByKey.get(`${call.target}:${call.entryId}`);
@@ -2288,6 +2368,8 @@ export function verifyCoreOptimizationPlan(
 			)
 				fail(`direct entry callsite ${key} has no current field argument proof`);
 			if (site.recordUses !== undefined) {
+				// Pass targets are planning facts, like forward targets.
+				const claimed = site.recordUses.passes ?? [];
 				const current =
 					entry.resultFields === undefined
 						? undefined
@@ -2296,33 +2378,26 @@ export function verifyCoreOptimizationPlan(
 								control(site.caller),
 								site.instruction,
 								entry.resultFields,
+								(call, argument) => {
+									const target = claimed.find(
+										(pass) => pass.instruction === call && pass.argument === argument,
+									)?.target;
+									return target === undefined ||
+										!live.has(target) ||
+										coreRecordParameterUses(
+											program.function(target),
+											control(target),
+											argument,
+											entry.resultFields!,
+										) === undefined
+										? undefined
+										: target;
+								},
 							);
-				const emitted = blockProofs.get(site.caller)!.instructionOrder;
-				const sameAccesses = (
-					left: ReadonlyArray<CoreRecordFieldAccess>,
-					right: ReadonlyArray<CoreRecordFieldAccess>,
-				) =>
-					left.length === right.length &&
-					left.every(
-						(access, index) =>
-							access.instruction === right[index]!.instruction &&
-							access.field === right[index]!.field &&
-							emitted.has(access.instruction),
-					);
 				if (
 					current === undefined ||
 					site.guarded === true ||
-					!sameAccesses(current.loads, site.recordUses.loads) ||
-					!sameAccesses(current.stores, site.recordUses.stores) ||
-					!sameNumbers(current.observers, site.recordUses.observers) ||
-					current.observers.some(
-						(observer) =>
-							!emitted.has(observer) &&
-							(caller.instructionKind(observer) === "operation" ||
-								!blockProofs
-									.get(site.caller)!
-									.included.has(caller.instructionBlock(observer))),
-					)
+					!sameRecordUses(site.caller, current, site.recordUses)
 				)
 					fail(`direct entry callsite ${key} has no current record result proof`);
 			}

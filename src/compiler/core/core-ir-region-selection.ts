@@ -44,11 +44,15 @@ import {
 import type {
 	CoreDirectEntryCallSite,
 	CoreDirectEntryPlan,
+	CoreEntryRecordParameter,
+	CoreEntryResultFields,
 	CoreOptimizationPlan,
 	CoreOptimizationPlanStatistics,
 	CorePlanRepresentation,
 	CorePlanSpecialization,
 	CorePlanSpecializationKind,
+	CoreRecordLayout,
+	CoreRecordUses,
 } from "./core-ir-regions.ts";
 import type { CoreProgramSummaries } from "./core-ir-summaries.ts";
 import { CORE_LOCAL_VALUE_KIND_ANALYSIS } from "./core-ir-value-kinds.ts";
@@ -69,11 +73,15 @@ import { connectCoreNativeEntries } from "./core-native-entry-graph.ts";
 import {
 	coreReadOnlyParameterFields,
 	coreFieldArgument,
+	coreRecordPassKey,
+	coreSuppliedRecordPasses,
 	coreRecordKeyAbsent,
+	coreRecordParameterUses,
 	coreRecordResultFields,
 	coreRecordResultUses,
 	coreReturnsObjectLiterals,
 } from "./core-native-field-analysis.ts";
+import type { CoreRecordPassTarget } from "./core-native-field-analysis.ts";
 import {
 	coreOperatorInputPlans,
 	coreBuiltinInputPlans,
@@ -127,6 +135,7 @@ interface PendingDirectEntry {
 	readonly operatorInputs?: CoreDirectEntryPlan["operatorInputs"];
 	readonly fieldParameters?: CoreDirectEntryPlan["fieldParameters"];
 	readonly resultFields?: CoreDirectEntryPlan["resultFields"];
+	readonly recordParameters?: CoreDirectEntryPlan["recordParameters"];
 	readonly runtimeBenefit: number;
 }
 
@@ -1294,6 +1303,7 @@ function directEntryOpportunities(
 	) => ReadonlyArray<CorePendingOptimizationCandidate>,
 	context: CoreCompilationContext | undefined,
 ): ReadonlyArray<CorePlanningOpportunity> {
+	const records = new RecordPlanning(program, summaries, analyses, context, live);
 	const loopWeights = new Map<CoreFunctionId, Uint8Array>();
 	const callWeight = (site: CoreDirectEntryCallSite): number => {
 		const caller = program.function(site.caller);
@@ -1520,19 +1530,11 @@ function directEntryOpportunities(
 				let argumentRepresentations: ReadonlyArray<CorePlanRepresentation> | undefined;
 				let constantBooleans: CoreDirectEntryPlan["constantBooleans"];
 				let operatorInputs: CoreDirectEntryPlan["operatorInputs"];
-				const records = needsArity
+				const recordEntries = needsArity
 					? []
-					: recordResultEntries(
-							program,
-							summaries,
-							analyses,
-							context,
-							target,
-							callSites,
-							callWeight,
-						);
+					: records.entries(target, callSites, callWeight);
 				const recordSites = new Set(
-					records.flatMap((record) =>
+					recordEntries.flatMap((record) =>
 						record.callSites.map((site) => `${site.caller}:${site.instruction}`),
 					),
 				);
@@ -1735,13 +1737,13 @@ function directEntryOpportunities(
 					resultRepresentation === undefined ||
 					(resultRepresentation === "boxed" && valueRepresentations === undefined)
 				)
-					return records;
+					return recordEntries;
 				const generatedCode = Math.max(8, [...fn.instructionIds()].length);
 				const compilerWork = generatedCode + fn.valueCapacity;
 				const runtimeBenefit =
 					selectedCalls.reduce((sum, site) => sum + callWeight(site), 0) * 8;
 				return [
-					...records,
+					...recordEntries,
 					{
 						function: target,
 						runtimeBenefit,
@@ -1778,140 +1780,385 @@ function directEntryOpportunities(
 	return candidates;
 }
 
-// Record calls get an entry of their own so other callers keep the ordinary result ABI.
-function recordResultEntries(
-	program: CoreProgram,
-	summaries: CoreProgramSummaries,
-	analyses: CoreAnalysisManager,
-	context: CoreCompilationContext | undefined,
-	target: CoreFunctionId,
-	callSites: ReadonlyArray<CoreDirectEntryCallSite>,
-	callWeight: (site: CoreDirectEntryCallSite) => number,
-): ReadonlyArray<PendingDirectEntry> {
-	const fn = program.function(target);
-	const cfg = analyses
-		.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, { scope: "function", function: target })
-		.exceptional();
-	const world = context?.facts.world;
-	const resultFields = coreRecordResultFields(
-		fn,
-		cfg,
-		(call) => {
-			const site = summaries.targets.site(target, call);
-			const callee = site?.targets.functions[0];
-			if (
-				callee === undefined ||
-				callee === target ||
-				site!.open ||
-				site!.arguments === undefined ||
-				site!.targets.functions.length !== 1
-			)
-				return undefined;
-			const keys = coreRecordResultFields(
-				program.function(callee),
-				analyses
-					.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, { scope: "function", function: callee })
-					.exceptional(),
-			)?.keys;
-			return keys === undefined ? undefined : { target: callee, keys };
-		},
-		world === undefined ? undefined : (key) => coreRecordKeyAbsent(world, program, key),
-		true,
-	);
-	if (resultFields === undefined) return [];
-	const calls = callSites.flatMap((call) => {
-		if (
-			call.guarded === true ||
-			call.numericSortCallback !== undefined ||
-			call.builtinCallbackOperation !== undefined ||
-			call.fieldObject !== undefined
-		)
-			return [];
-		const site = summaries.targets.site(call.caller, call.instruction);
-		if (site?.arguments === undefined || site.open || site.targets.functions.length !== 1)
-			return [];
-		const recordUses = coreRecordResultUses(
-			program.function(call.caller),
-			analyses
-				.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
-					scope: "function",
-					function: call.caller,
-				})
-				.ordinary(),
-			call.instruction,
-			resultFields,
-		);
-		return recordUses === undefined ? [] : [Object.freeze({ ...call, recordUses })];
-	});
-	if (calls.length === 0) return [];
-	const parameterRepresentations = Array.from(
-		{ length: fn.parameterCount },
-		(_, index): CorePlanRepresentation => {
-			let agreed: CorePlanRepresentation | undefined;
-			for (const call of calls) {
-				const argument = summaries.targets.site(call.caller, call.instruction)!
-					.arguments![index];
-				const scalar =
-					argument === undefined
-						? undefined
-						: analyses
-								.get(CORE_LOCAL_VALUE_KIND_ANALYSIS, {
-									scope: "function",
-									function: call.caller,
-								})
-								.scalarKind(argument);
-				const representation = scalar === "number" ? "f64" : (scalar ?? "boxed");
-				if (agreed !== undefined && agreed !== representation) return "boxed";
-				agreed = representation;
-			}
-			return agreed ?? "boxed";
-		},
-	);
-	const sorted = Object.freeze(
-		calls.sort(
-			(left, right) => left.caller - right.caller || left.instruction - right.instruction,
-		),
-	);
-	const variant = analyzeCoreNativeEntry(
-		fn,
-		cfg,
-		parameterRepresentations,
-		undefined,
-		sorted,
-		undefined,
-		undefined,
-		undefined,
-		resultFields,
-	);
-	const generatedCode = Math.max(8, [...fn.instructionIds()].length);
-	// Each call also stops allocating and initializing the record it consumes.
-	const runtimeBenefit = calls.reduce((sum, site) => sum + callWeight(site), 0) * 16;
-	return [
-		{
-			function: target,
-			runtimeBenefit,
-			callSites: sorted,
-			parameterRepresentations,
-			resultRepresentation: variant.resultRepresentation,
-			valueRepresentations: variant.valueRepresentations,
-			...(variant.operatorInputs === undefined
-				? {}
-				: { operatorInputs: variant.operatorInputs }),
-			resultFields,
-			budget: {
-				kind: "direct-entry",
-				caller: target,
-				site: sorted[0]!.instruction,
-				revision: 1,
-				priorityClass: 2,
-				priorityScore: -runtimeBenefit,
-				targets: Object.freeze([target]),
-				generatedCodeCost: generatedCode,
-				compilerWorkCost: generatedCode + fn.valueCapacity,
-				expansive: true,
+function recordLayoutKey(layout: CoreRecordLayout): string {
+	return `${layout.keys.join(",")}/${(layout.shapes ?? []).map((shape) => shape.join(",")).join(";")}`;
+}
+
+/** Record facts of one selection, shared by the entries of producers and of the callees they reach. */
+class RecordPlanning {
+	readonly #program: CoreProgram;
+	readonly #summaries: CoreProgramSummaries;
+	readonly #analyses: CoreAnalysisManager;
+	readonly #context: CoreCompilationContext | undefined;
+	readonly #live: ReadonlySet<CoreFunctionId>;
+	readonly #fields = new Map<CoreFunctionId, CoreEntryResultFields | undefined>();
+	readonly #parameters = new Map<string, CoreRecordUses | undefined>();
+	readonly #results = new Map<string, CoreRecordUses | undefined>();
+
+	constructor(
+		program: CoreProgram,
+		summaries: CoreProgramSummaries,
+		analyses: CoreAnalysisManager,
+		context: CoreCompilationContext | undefined,
+		live: ReadonlySet<CoreFunctionId>,
+	) {
+		this.#program = program;
+		this.#summaries = summaries;
+		this.#analyses = analyses;
+		this.#context = context;
+		this.#live = live;
+	}
+
+	#control(functionId: CoreFunctionId) {
+		return this.#analyses.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
+			scope: "function",
+			function: functionId,
+		});
+	}
+
+	/** The single exact target of a call, when it has one. */
+	exactTarget(
+		caller: CoreFunctionId,
+		call: CoreInstructionId,
+	): CoreFunctionId | undefined {
+		const site = this.#summaries.targets.site(caller, call);
+		const callee = site?.targets.functions[0];
+		return callee === undefined ||
+			site!.open ||
+			site!.arguments === undefined ||
+			site!.targets.functions.length !== 1 ||
+			!this.#live.has(callee)
+			? undefined
+			: callee;
+	}
+
+	fields(producer: CoreFunctionId): CoreEntryResultFields | undefined {
+		if (this.#fields.has(producer)) return this.#fields.get(producer);
+		const world = this.#context?.facts.world;
+		const fields = coreRecordResultFields(
+			this.#program.function(producer),
+			this.#control(producer).exceptional(),
+			(call) => {
+				const callee = this.exactTarget(producer, call);
+				if (callee === undefined || callee === producer) return undefined;
+				const keys = coreRecordResultFields(
+					this.#program.function(callee),
+					this.#control(callee).exceptional(),
+				)?.keys;
+				return keys === undefined ? undefined : { target: callee, keys };
 			},
-		},
-	];
+			world === undefined
+				? undefined
+				: (key) => coreRecordKeyAbsent(world, this.#program, key),
+			true,
+		);
+		this.#fields.set(producer, fields);
+		return fields;
+	}
+
+	parameterUses(
+		callee: CoreFunctionId,
+		index: number,
+		layout: CoreRecordLayout,
+	): CoreRecordUses | undefined {
+		const key = `${callee}:${index}:${recordLayoutKey(layout)}`;
+		if (this.#parameters.has(key)) return this.#parameters.get(key);
+		const uses = coreRecordParameterUses(
+			this.#program.function(callee),
+			this.#control(callee).ordinary(),
+			index,
+			layout,
+		);
+		this.#parameters.set(key, uses);
+		return uses;
+	}
+
+	passTarget(caller: CoreFunctionId, layout: CoreRecordLayout): CoreRecordPassTarget {
+		return (call, argument) => {
+			const callee = this.exactTarget(caller, call);
+			return callee === undefined ||
+				this.parameterUses(callee, argument, layout) === undefined
+				? undefined
+				: callee;
+		};
+	}
+
+	resultUses(
+		caller: CoreFunctionId,
+		call: CoreInstructionId,
+		fields: CoreEntryResultFields,
+	): CoreRecordUses | undefined {
+		const key = `${caller}:${call}`;
+		if (this.#results.has(key)) return this.#results.get(key);
+		const uses = coreRecordResultUses(
+			this.#program.function(caller),
+			this.#control(caller).ordinary(),
+			call,
+			fields,
+			this.passTarget(caller, fields),
+		);
+		this.#results.set(key, uses);
+		return uses;
+	}
+
+	/** The layout of a record call's result that `call` hands over as `argument`. */
+	passedRecord(
+		caller: CoreFunctionId,
+		call: CoreInstructionId,
+		argument: number,
+	): CoreRecordLayout | undefined {
+		const fn = this.#program.function(caller);
+		let value = this.#summaries.targets.site(caller, call)?.arguments?.[argument];
+		while (value !== undefined && fn.kernel.valueDefinitionKind(value) === 1) {
+			const owner = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
+			if (fn.instructionOpcodeName(owner) === "move") {
+				value = fn.kernel.operandAt(fn.kernel.instructionOperandStart(owner));
+				continue;
+			}
+			const producer =
+				fn.instructionOpcodeName(owner) === "call"
+					? this.exactTarget(caller, owner)
+					: undefined;
+			const fields = producer === undefined ? undefined : this.fields(producer);
+			const uses =
+				fields === undefined ? undefined : this.resultUses(caller, owner, fields);
+			return uses?.passes?.some(
+				(pass) => pass.instruction === call && pass.argument === argument,
+			) === true
+				? fields
+				: undefined;
+		}
+		return undefined;
+	}
+
+	/**
+	 * Calls that receive the target's record result in caller storage, or hand it
+	 * records kept in caller storage, get entries of their own, one per combination;
+	 * other callers keep the ordinary ABI.
+	 */
+	entries(
+		target: CoreFunctionId,
+		callSites: ReadonlyArray<CoreDirectEntryCallSite>,
+		callWeight: (site: CoreDirectEntryCallSite) => number,
+	): ReadonlyArray<PendingDirectEntry> {
+		const fields = this.fields(target);
+		const parameterCount = this.#program.function(target).parameterCount;
+		const groups = new Map<
+			string,
+			{
+				readonly resultFields?: CoreEntryResultFields;
+				readonly parameters: ReadonlyArray<{
+					readonly index: number;
+					readonly layout: CoreRecordLayout;
+				}>;
+				readonly calls: Array<CoreDirectEntryCallSite>;
+			}
+		>();
+		for (const call of callSites) {
+			if (
+				call.guarded === true ||
+				call.numericSortCallback !== undefined ||
+				call.builtinCallbackOperation !== undefined ||
+				call.fieldObject !== undefined ||
+				this.exactTarget(call.caller, call.instruction) !== target
+			)
+				continue;
+			const recordUses =
+				fields === undefined
+					? undefined
+					: this.resultUses(call.caller, call.instruction, fields);
+			const parameters = Array.from({ length: parameterCount }, (_, index) => ({
+				index,
+				layout: this.passedRecord(call.caller, call.instruction, index),
+			})).flatMap(({ index, layout }) =>
+				layout === undefined ? [] : [{ index, layout }],
+			);
+			if (recordUses === undefined && parameters.length === 0) continue;
+			const key = `${recordUses === undefined ? "" : "result"}|${parameters
+				.map(({ index, layout }) => `${index}:${recordLayoutKey(layout)}`)
+				.join("|")}`;
+			const group = groups.get(key) ?? {
+				...(recordUses === undefined ? {} : { resultFields: fields }),
+				parameters,
+				calls: [],
+			};
+			group.calls.push(
+				recordUses === undefined ? call : Object.freeze({ ...call, recordUses }),
+			);
+			groups.set(key, group);
+		}
+		// Other callers keep at least one more entry within the per-function limit.
+		return [...groups]
+			.sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+			.slice(0, 3)
+			.flatMap(([, group], index) =>
+				this.#entry(
+					target,
+					group.resultFields,
+					group.parameters,
+					group.calls,
+					index,
+					callWeight,
+				),
+			);
+	}
+
+	#entry(
+		target: CoreFunctionId,
+		resultFields: CoreEntryResultFields | undefined,
+		parameters: ReadonlyArray<{
+			readonly index: number;
+			readonly layout: CoreRecordLayout;
+		}>,
+		calls: Array<CoreDirectEntryCallSite>,
+		revision: number,
+		callWeight: (site: CoreDirectEntryCallSite) => number,
+	): ReadonlyArray<PendingDirectEntry> {
+		const fn = this.#program.function(target);
+		const recordParameters: Array<CoreEntryRecordParameter> = [];
+		for (const { index, layout } of parameters) {
+			const uses = this.parameterUses(target, index, layout);
+			if (uses === undefined) return [];
+			recordParameters.push(
+				Object.freeze({
+					index,
+					keys: layout.keys,
+					...(layout.shapes === undefined ? {} : { shapes: layout.shapes }),
+					uses,
+				}),
+			);
+		}
+		const parameterRepresentations = Array.from(
+			{ length: fn.parameterCount },
+			(_, index): CorePlanRepresentation => {
+				// A record parameter receives caller storage rather than a value.
+				if (parameters.some((parameter) => parameter.index === index)) return "boxed";
+				let agreed: CorePlanRepresentation | undefined;
+				for (const call of calls) {
+					const argument = this.#summaries.targets.site(call.caller, call.instruction)!
+						.arguments![index];
+					const scalar =
+						argument === undefined
+							? undefined
+							: this.#analyses
+									.get(CORE_LOCAL_VALUE_KIND_ANALYSIS, {
+										scope: "function",
+										function: call.caller,
+									})
+									.scalarKind(argument);
+					const representation = scalar === "number" ? "f64" : (scalar ?? "boxed");
+					if (agreed !== undefined && agreed !== representation) return "boxed";
+					agreed = representation;
+				}
+				return agreed ?? "boxed";
+			},
+		);
+		const sorted = Object.freeze(
+			calls.sort(
+				(left, right) =>
+					left.caller - right.caller || left.instruction - right.instruction,
+			),
+		);
+		const frozenParameters =
+			recordParameters.length === 0 ? undefined : Object.freeze(recordParameters);
+		const variant = analyzeCoreNativeEntry(
+			fn,
+			this.#control(target).exceptional(),
+			parameterRepresentations,
+			undefined,
+			sorted,
+			undefined,
+			undefined,
+			undefined,
+			resultFields,
+			frozenParameters,
+		);
+		const generatedCode = Math.max(8, [...fn.instructionIds()].length);
+		// Each call also stops allocating and initializing the records it consumes.
+		const runtimeBenefit = calls.reduce((sum, site) => sum + callWeight(site), 0) * 16;
+		return [
+			{
+				function: target,
+				runtimeBenefit,
+				callSites: sorted,
+				parameterRepresentations,
+				resultRepresentation: variant.resultRepresentation,
+				valueRepresentations: variant.valueRepresentations,
+				...(variant.operatorInputs === undefined
+					? {}
+					: { operatorInputs: variant.operatorInputs }),
+				...(resultFields === undefined ? {} : { resultFields }),
+				...(frozenParameters === undefined ? {} : { recordParameters: frozenParameters }),
+				budget: {
+					kind: "direct-entry",
+					caller: target,
+					site: sorted[0]!.instruction,
+					revision: 1 + revision,
+					priorityClass: 2,
+					priorityScore: -runtimeBenefit,
+					targets: Object.freeze([target]),
+					generatedCodeCost: generatedCode,
+					compilerWorkCost: generatedCode + fn.valueCapacity,
+					expansive: true,
+				},
+			},
+		];
+	}
+}
+
+/**
+ * A record parameter entry keeps the calls whose records a selected record call keeps
+ * in storage and hands to it; the other calls fall back to an ordinary call, and an
+ * entry left without such calls stays as an ordinary entry. Dropping a call can take
+ * a record call's storage away from further calls, so this repeats.
+ */
+function keepSuppliedRecordParameters(
+	program: CoreProgram,
+	analyses: CoreAnalysisManager,
+	entries: ReadonlyArray<CoreDirectEntryPlan>,
+): ReadonlyArray<CoreDirectEntryPlan> {
+	let current = entries;
+	for (;;) {
+		const supplied = coreSuppliedRecordPasses(current);
+		let changed = false;
+		current = current.map((entry) => {
+			if (entry.recordParameters === undefined) return entry;
+			const supplies = entry.callSites.filter((site) =>
+				entry.recordParameters!.every((parameter) =>
+					supplied.has(
+						coreRecordPassKey(site, parameter.index, entry.function, parameter),
+					),
+				),
+			);
+			if (supplies.length === entry.callSites.length) return entry;
+			changed = true;
+			const { recordParameters, ...ordinary } = entry;
+			const callSites = Object.freeze(supplies.length === 0 ? entry.callSites : supplies);
+			const variant = analyzeCoreNativeEntry(
+				program.function(entry.function),
+				analyses
+					.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
+						scope: "function",
+						function: entry.function,
+					})
+					.exceptional(),
+				entry.parameterRepresentations,
+				undefined,
+				callSites,
+				undefined,
+				undefined,
+				undefined,
+				entry.resultFields,
+				supplies.length === 0 ? undefined : recordParameters,
+			);
+			return Object.freeze({
+				...(supplies.length === 0 ? ordinary : entry),
+				...variant,
+				callSites,
+			});
+		});
+		if (!changed) return current;
+	}
 }
 
 /**
@@ -1928,6 +2175,7 @@ function linkRecordForwards(
 		if (
 			entry.resultFields !== undefined &&
 			entry.resultFields.forwards === undefined &&
+			entry.recordParameters === undefined &&
 			!literalEntries.has(entry.function)
 		)
 			literalEntries.set(entry.function, entry);
@@ -1961,6 +2209,7 @@ function linkRecordForwards(
 			undefined,
 			callOverrides,
 			resultFields,
+			entry.recordParameters,
 		);
 		return Object.freeze({ ...entry, ...variant, callOverrides });
 	});
@@ -2283,6 +2532,9 @@ export function buildCoreOptimizationPlan(
 						...(candidate.resultFields === undefined
 							? {}
 							: { resultFields: candidate.resultFields }),
+						...(candidate.recordParameters === undefined
+							? {}
+							: { recordParameters: candidate.recordParameters }),
 						resultRepresentation: candidate.resultRepresentation,
 						...(candidate.valueRepresentations === undefined
 							? {}
@@ -2332,9 +2584,13 @@ export function buildCoreOptimizationPlan(
 			);
 		}),
 	);
-	const initialDirectEntries = [...directEntriesByFunction]
-		.sort(([left], [right]) => left - right)
-		.flatMap(([, entries]) => entries);
+	const initialDirectEntries = keepSuppliedRecordParameters(
+		program,
+		analyses,
+		[...directEntriesByFunction]
+			.sort(([left], [right]) => left - right)
+			.flatMap(([, entries]) => entries),
+	);
 	const connectedEntries =
 		options.context?.facts.closure.sourceClosure.kind !== "known"
 			? initialDirectEntries

@@ -318,6 +318,118 @@ function sharedWidths(text) {
 	return total;
 }
 
+// A callee reads and writes a record its caller keeps; the caller sees the writes.
+function stretch(span, by) {
+	for (let step = 0; step < by; step++) span.end++;
+	return span.end - span.start;
+}
+function stretched(text) {
+	let total = 0;
+	for (let index = 0; index < text.length;) {
+		const token = scan(text, index);
+		total += stretch(token, 2) + token.end;
+		index = token.end - 1;
+	}
+	return total;
+}
+
+// A callee that keeps the record creates its object, which its caller then shares.
+const held = [];
+function hold(span, keep) {
+	let digits = 0;
+	for (let step = 0; step < span.digits; step++) digits++;
+	if (keep) held.push(span);
+	return digits;
+}
+function holding(text) {
+	let total = 0;
+	let count = 0;
+	for (let index = 0; index < text.length;) {
+		const token = scan(text, index);
+		total += hold(token, ++count % 5 === 0);
+		if (count % 5 === 0) {
+			held.push(token);
+			token.start = -count;
+		}
+		index = token.end + 1;
+	}
+	return total;
+}
+
+// One call takes two records, and one instruction observes both.
+function between(left, right) {
+	let gap = 0;
+	for (let index = left.end; index < right.start; index++) gap++;
+	return gap + right.digits - left.digits;
+}
+const pairs = [];
+function gaps(text) {
+	let total = 0;
+	let count = 0;
+	for (let index = 0; index < text.length;) {
+		const first = scan(text, index);
+		const second = scan(text, first.end + 1);
+		total += between(first, second);
+		if (++count % 4 === 0) pairs.push(first, second);
+		index = second.end + 1;
+	}
+	return total;
+}
+
+// A shared object a producer returns reaches the callee as the record itself.
+function width(span) {
+	let width = 0;
+	for (let index = span.start; index < span.end; index++) width++;
+	return width;
+}
+function sharedPassed(text) {
+	let total = 0;
+	for (let index = 0; index < text.length;) {
+		const token = maybeShared(text, index);
+		total += width(token);
+		index = token.start < 0 ? index + 4 : token.end + 1;
+	}
+	return total;
+}
+
+// A union record keeps its missing keys absent in the callee.
+function decodedWeight(decoded) {
+	let weight = decoded.kind.length;
+	for (let step = 0; step < 1; step++)
+		weight += (decoded.register ?? 0) + (decoded.index ?? 0);
+	return weight + (decoded.value === undefined ? 0 : 1000);
+}
+function decodedWeights(operands) {
+	let total = 0;
+	for (const operand of operands) total += decodedWeight(decode(operand));
+	return total;
+}
+
+// A callee can throw after writing to its caller's storage.
+function strictWidth(span) {
+	span.digits = -span.digits;
+	for (let index = span.start; index < span.end; index++)
+		if (span.end - span.start > 5) throw new RangeError("wide");
+	return span.end - span.start;
+}
+function readAfterThrow(text, start) {
+	const token = scan(text, start);
+	const width = strictWidth(token);
+	return width * 10 + token.digits;
+}
+function checkedWidths(text) {
+	let total = 0;
+	for (let index = 0; index < text.length;) {
+		try {
+			total += readAfterThrow(text, index);
+		} catch (error) {
+			total += error instanceof RangeError ? 1000 : 1;
+		}
+		index = scan(text, index).end + 1;
+	}
+	return total;
+}
+
 const text = "a1 bb22 ccc333 dddd4444 ".repeat(20);
 check(tokenLengths(text), 600, "token lengths");
 check(digitCount(text), 200, "digit count");
@@ -363,6 +475,21 @@ check(
 	true,
 	"escaped identity",
 );
+check(stretched(text), 19880, "record parameter writes");
+check(holding(text), 200, "record parameter observer");
+check(held.length, 32, "record parameter observer count");
+check(held[0] === held[1], true, "record parameter identity");
+check(held[0] !== held[2], true, "record parameter freshness");
+check(`${held[0].start}:${held[1].end}`, "-5:26", "record parameter object writes");
+check(gaps(text), 80, "two record parameters");
+check(
+	`${pairs.length}:${pairs[0].end}:${pairs[1].start}`,
+	"20:38:39",
+	"two observed records",
+);
+check(sharedPassed("ab abc abcd abc a"), 7, "shared object as record parameter");
+check(decodedWeights([4, -1, -2, -3, 0]), 1045, "union record parameter");
+check(checkedWidths(text), 41140, "record parameter throws");
 const handlers = attach(["a", "try-b", "cc", "try-dd", "e", "f", "try-g"], []);
 check(
 	handlers.map((environment) => `${environment.state}@${environment.version}`).join(","),

@@ -70,6 +70,7 @@ import type {
 	CoreTargetMove,
 	CoreTargetParallelCopy,
 	CoreTargetProgram,
+	CoreTargetRecordUses,
 	CoreTargetRegisterRepresentation,
 	CoreTargetSafepoint,
 	CoreTargetSafepointRoots,
@@ -1509,6 +1510,31 @@ function lowerCoreSpecializations(
 
 type CoreRecordCalls = ReadonlyMap<CoreInstructionId, CoreRecordUses>;
 
+function lowerRecordUses(
+	uses: CoreRecordUses,
+	loweredInstructions: ReadonlyMap<CoreInstructionId, CompilerInstruction>,
+): CoreTargetRecordUses {
+	return {
+		loads: uses.loads.map(({ instruction, field }) => ({
+			instruction: loweredInstructions.get(instruction)!,
+			field,
+		})),
+		stores: uses.stores.map(({ instruction, field }) => ({
+			instruction: loweredInstructions.get(instruction)!,
+			field,
+		})),
+		observers: uses.observers.map((observer) => loweredInstructions.get(observer)!),
+		...(uses.passes === undefined
+			? {}
+			: {
+					passes: uses.passes.map(({ instruction, argument }) => ({
+						instruction: loweredInstructions.get(instruction)!,
+						argument,
+					})),
+				}),
+	};
+}
+
 interface CoreFieldCall {
 	readonly allocation: CoreInstructionId;
 	readonly call: CoreInstructionId;
@@ -2696,6 +2722,16 @@ function lowerFunctionToTarget(
 									}),
 						},
 					}),
+			...(entry.recordParameters === undefined
+				? {}
+				: {
+						recordParameters: entry.recordParameters.map((parameter) => ({
+							index: parameter.index,
+							keys: parameter.keys,
+							...(parameter.shapes === undefined ? {} : { shapes: parameter.shapes }),
+							...lowerRecordUses(parameter.uses, loweredInstructions),
+						})),
+					}),
 			parameterRepresentations: entry.parameterRepresentations.map(
 				planCoreTargetRepresentation,
 			),
@@ -2762,17 +2798,7 @@ function lowerFunctionToTarget(
 			: {
 					recordCalls: [...recordCalls].map(([call, uses]) => ({
 						call: loweredInstructions.get(call)!,
-						loads: uses.loads.map(({ instruction, field }) => ({
-							instruction: loweredInstructions.get(instruction)!,
-							field,
-						})),
-						stores: uses.stores.map(({ instruction, field }) => ({
-							instruction: loweredInstructions.get(instruction)!,
-							field,
-						})),
-						observers: uses.observers.map((observer) =>
-							loweredInstructions.get(observer)!,
-						),
+						...lowerRecordUses(uses, loweredInstructions),
 					})),
 				}),
 		gc: { safepoints },

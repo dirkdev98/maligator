@@ -144,6 +144,23 @@ export interface CoreTargetDischargedSafepoint {
  * transport proven scalar parameters and/or a proven scalar result without
  * changing the bytecode ABI or making open-world calls depend on speculation.
  */
+/** Every use of a record held in caller storage; see `CoreRecordUses`. */
+export interface CoreTargetRecordUses {
+	readonly loads: ReadonlyArray<{
+		readonly instruction: CompilerInstruction;
+		readonly field: number;
+	}>;
+	readonly stores: ReadonlyArray<{
+		readonly instruction: CompilerInstruction;
+		readonly field: number;
+	}>;
+	readonly observers: ReadonlyArray<CompilerInstruction>;
+	readonly passes?: ReadonlyArray<{
+		readonly instruction: CompilerInstruction;
+		readonly argument: number;
+	}>;
+}
+
 export interface CoreTargetDirectEntry {
 	readonly id: number;
 	readonly callOverrides?: ReadonlyArray<{
@@ -173,6 +190,14 @@ export interface CoreTargetDirectEntry {
 			readonly functionIndex: number;
 		}>;
 	};
+	/** Parameters received as caller storage holding a record, with their uses here. */
+	readonly recordParameters?: ReadonlyArray<
+		CoreTargetRecordUses & {
+			readonly index: number;
+			readonly keys: ReadonlyArray<number>;
+			readonly shapes?: ReadonlyArray<ReadonlyArray<number>>;
+		}
+	>;
 	readonly argumentRepresentations?: ReadonlyArray<CoreTargetRegisterRepresentation>;
 	readonly operatorInputs?: ReadonlyArray<{
 		readonly instruction: CompilerInstruction;
@@ -252,18 +277,9 @@ export interface CoreTargetFunction {
 		}>;
 	}>;
 	/** Calls of record-result entries with every use of their results in this function. */
-	readonly recordCalls?: ReadonlyArray<{
-		readonly call: CompilerInstruction;
-		readonly loads: ReadonlyArray<{
-			readonly instruction: CompilerInstruction;
-			readonly field: number;
-		}>;
-		readonly stores: ReadonlyArray<{
-			readonly instruction: CompilerInstruction;
-			readonly field: number;
-		}>;
-		readonly observers: ReadonlyArray<CompilerInstruction>;
-	}>;
+	readonly recordCalls?: ReadonlyArray<
+		CoreTargetRecordUses & { readonly call: CompilerInstruction }
+	>;
 	readonly capturedCount: number;
 	readonly strict: boolean;
 	readonly isClassConstructor: boolean;

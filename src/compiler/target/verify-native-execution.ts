@@ -54,6 +54,7 @@ export function verifyNativeExecutionProgram(program: ExecutionProgram): void {
 					call.instruction.type !== "call" ||
 					target?.id !== call.entryId ||
 					target.fieldParameters !== undefined ||
+					target.recordParameters !== undefined ||
 					(target.resultFields !== undefined &&
 						(call.guarded === true ||
 							!(entry.resultFields?.forwards ?? []).some(

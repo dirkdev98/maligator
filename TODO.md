@@ -114,11 +114,11 @@ The independent target boundary and current storage contract are recorded in
       that turns it into entry and caller representations.
 - [ ] Admit more record calls. Not admitted yet: calls through instance-method hints,
       which need a guarded fallback that keeps the returned object as the record;
-      records handed to another callee, as in `cost(read(id))` or
-      `operandShape(type, context)`, which takes 401K fresh context objects in the
-      quick self-compile census and reads them only to report a failure; and
-      forwarding more than one call deep, or through a helper that also reads the
-      record. In that census, record calls cover 835K calls, mostly
+      object literals handed to another callee, as in `operandShape(type, context)`,
+      which takes 401K fresh context objects in the quick self-compile census and
+      reads them only to report a failure; record parameters that a callee passes on
+      instead of observing; and forwarding more than one call deep, or through a
+      helper that also reads the record. In that census, record calls cover 835K calls, mostly
       `decodeVmValueOperand`, `coreTerminatorInput`, `valueEnvironment` and
       `copyTerminatorEdge`.
 

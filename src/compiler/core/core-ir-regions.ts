@@ -545,6 +545,35 @@ export interface CoreRecordUses {
 	readonly loads: ReadonlyArray<CoreRecordFieldAccess>;
 	readonly stores: ReadonlyArray<CoreRecordFieldAccess>;
 	readonly observers: ReadonlyArray<CoreInstructionId>;
+	/**
+	 * Exact calls that take the record as an argument a record parameter can read. A call
+	 * that enters no such parameter observes the record instead.
+	 */
+	readonly passes?: ReadonlyArray<CoreRecordPass>;
+}
+
+export interface CoreRecordPass {
+	readonly instruction: CoreInstructionId;
+	readonly argument: number;
+	/** The call's exact target, a planning fact like a forward's. */
+	readonly target: CoreFunctionId;
+}
+
+/** The fields of a record in caller storage, in storage order. */
+export interface CoreRecordLayout {
+	readonly keys: ReadonlyArray<number>;
+	/** Each literal's keys as field indices, when the literals differ; a shape index follows the fields. */
+	readonly shapes?: ReadonlyArray<ReadonlyArray<number>>;
+}
+
+/**
+ * A parameter the entry receives as caller storage holding a record of this layout,
+ * with the parameter's uses in the entry. The entry accesses that storage, and an
+ * observer creates the object there, so the caller sees it as well.
+ */
+export interface CoreEntryRecordParameter extends CoreRecordLayout {
+	readonly index: number;
+	readonly uses: CoreRecordUses;
 }
 
 /**
@@ -552,8 +581,7 @@ export interface CoreRecordUses {
  * each with the same keys and no use but the return, so the entry hands the field
  * values to caller storage instead of creating the object.
  */
-export interface CoreEntryResultFields {
-	readonly keys: ReadonlyArray<number>;
+export interface CoreEntryResultFields extends CoreRecordLayout {
 	readonly allocations: ReadonlyArray<CoreInstructionId>;
 	/**
 	 * When the literals differ in keys, each allocation's keys as field indices in its own
@@ -609,6 +637,7 @@ export interface CoreDirectEntryPlan {
 	readonly resultRepresentation: CorePlanRepresentation;
 	readonly fieldParameters?: CoreEntryFields;
 	readonly resultFields?: CoreEntryResultFields;
+	readonly recordParameters?: ReadonlyArray<CoreEntryRecordParameter>;
 	readonly valueRepresentations?: ReadonlyArray<CorePlanRepresentation>;
 	readonly argumentRepresentations?: ReadonlyArray<CorePlanRepresentation>;
 	readonly operatorInputs?: ReadonlyArray<{

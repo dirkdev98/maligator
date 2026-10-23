@@ -52,7 +52,11 @@ import {
 	NATIVE_BITWISE,
 	NATIVE_COMPARE,
 } from "./native-scalar-operators.ts";
-import { nativeFrameRootRegisters, nativeRecordCallIps } from "./program-image.ts";
+import {
+	nativeFrameRootRegisters,
+	nativeRecordCallIps,
+	nativeRecordParameterIps,
+} from "./program-image.ts";
 import type {
 	NativeDirectEntryPlan,
 	NativeFunctionPlan,
@@ -905,6 +909,9 @@ export function nativeVariantContract(
 			: {
 					recordForwardIps: entry.resultFields.forwards.map((forward) => forward.callIp),
 				}),
+		...(entry.recordParameters === undefined
+			? {}
+			: { recordParameterIps: nativeRecordParameterIps(entry) }),
 	};
 }
 

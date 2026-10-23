@@ -24,7 +24,7 @@ import { compilerOperatorInputKindsHaveExactNativeSemantics } from "../shared/co
 import type { CompilerOperatorInputKindMasks } from "../shared/compiler-value-kinds.ts";
 import { NATIVE_STRING_SWITCH_CASE_LIMIT } from "../shared/native-string-switch.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
-import type { CoreTargetClassLayout } from "./core-target-ir.ts";
+import type { CoreTargetClassLayout, CoreTargetRecordUses } from "./core-target-ir.ts";
 import type {
 	ExecutionFunction,
 	ExecutionProgram,
@@ -1437,6 +1437,8 @@ export interface NativeFunctionPlan {
 	readonly recordCalls?: ReadonlyArray<NativeRecordCall>;
 	/** In a forwarding record entry's contract, the calls that write to its own caller's storage. */
 	readonly recordForwardIps?: ReadonlyArray<number>;
+	/** In a record parameter entry's contract, the instructions that use that parameter. */
+	readonly recordParameterIps?: ReadonlyArray<number>;
 	readonly gc: {
 		readonly safepoints: ReadonlyArray<
 			ExecutionSafepointRoots & {
@@ -1457,12 +1459,30 @@ export interface NativeRecordFieldAccess {
 	readonly field: number;
 }
 
-/** A record call keeps its result in caller storage until an observer needs the object. */
-export interface NativeRecordCall {
-	readonly callIp: number;
+/** Every use of a record kept in caller storage until an observer needs the object. */
+export interface NativeRecordUses {
 	readonly loads: ReadonlyArray<NativeRecordFieldAccess>;
 	readonly stores: ReadonlyArray<NativeRecordFieldAccess>;
 	readonly observerIps: ReadonlyArray<number>;
+	/** Calls that hand the storage to a record parameter; a call without one observes. */
+	readonly passes?: ReadonlyArray<NativeRecordPass>;
+}
+
+export interface NativeRecordPass {
+	readonly callIp: number;
+	readonly argument: number;
+}
+
+/** A record call keeps its result in caller storage. */
+export interface NativeRecordCall extends NativeRecordUses {
+	readonly callIp: number;
+}
+
+/** A parameter received as caller storage holding a record of these fields. */
+export interface NativeRecordParameter extends NativeRecordUses {
+	readonly index: number;
+	readonly keys: ReadonlyArray<number>;
+	readonly shapes?: ReadonlyArray<ReadonlyArray<number>>;
 }
 
 export interface NativeDirectEntryPlan {
@@ -1501,6 +1521,7 @@ export interface NativeDirectEntryPlan {
 			readonly functionIndex: number;
 		}>;
 	};
+	readonly recordParameters?: ReadonlyArray<NativeRecordParameter>;
 	readonly argumentRepresentations?: ReadonlyArray<VmRegisterRepresentation>;
 	readonly operatorInputs?: ReadonlyArray<{
 		readonly instructionIp: number;
@@ -1538,6 +1559,7 @@ export function validateNativeDirectEntry(
 			functions !== undefined &&
 			(target?.id !== call.entryId ||
 				target.fieldParameters !== undefined ||
+				target.recordParameters !== undefined ||
 				(target.resultFields !== undefined &&
 					(call.guarded === true ||
 						!(entry.resultFields?.forwards ?? []).some(
@@ -1599,10 +1621,12 @@ export function validateNativeDirectEntry(
 		}
 	}
 
-	if (entry.resultFields !== undefined) {
+	if (entry.resultFields !== undefined || entry.recordParameters !== undefined) {
 		if (fields !== undefined || entry.argumentRepresentations !== undefined)
 			throw new RangeError("Native record entry combines incompatible transports");
-		validateNativeRecordReturns(fn, entry.resultFields);
+		if (entry.resultFields !== undefined)
+			validateNativeRecordReturns(fn, entry.resultFields);
+		validateNativeRecordParameters(fn, entry);
 	}
 
 	const representations = ["boxed", "int32", "number", "boolean", "string"];
@@ -1741,38 +1765,61 @@ export function validateNativeLiteralSwitches(
 
 const NATIVE_RECORD_FIELD_LIMIT = 16;
 
+function nativeRecordUseIps(uses: NativeRecordUses): ReadonlyArray<number> {
+	return [
+		...uses.loads.map((load) => load.instructionIp),
+		...uses.stores.map((store) => store.instructionIp),
+		...uses.observerIps,
+		...(uses.passes ?? []).map((pass) => pass.callIp),
+	];
+}
+
 /** Record calls and every use of their results render against caller storage, outside other native plans. */
 export function nativeRecordCallIps(native: NativeFunctionPlan): ReadonlySet<number> {
-	return new Set(
-		(native.recordCalls ?? []).flatMap((site) => [
+	return new Set([
+		...(native.recordCalls ?? []).flatMap((site) => [
 			site.callIp,
-			...site.loads.map((load) => load.instructionIp),
-			...site.stores.map((store) => store.instructionIp),
-			...site.observerIps,
+			...nativeRecordUseIps(site),
 		]),
+		...(native.recordParameterIps ?? []),
+	]);
+}
+
+/** The uses of an entry's record parameters render against caller storage, outside other native plans. */
+export function nativeRecordParameterIps(
+	entry: NativeDirectEntryPlan,
+): ReadonlyArray<number> {
+	return [...new Set((entry.recordParameters ?? []).flatMap(nativeRecordUseIps))].sort(
+		(left, right) => left - right,
 	);
 }
 
-/** The registers that hold a record call's result at each ip that reads it. */
-export function nativeRecordAliases(
+/** The register that holds a record call's result, or a record parameter on entry. */
+function nativeRecordSource(
 	fn: BytecodeFunction,
-	site: NativeRecordCall,
-): ReadonlyMap<number, ReadonlyArray<number>> {
+	site: NativeRecordCall | NativeRecordParameter,
+): { readonly producerIp: number; readonly register: number } {
+	if ("index" in site) return { producerIp: -1, register: site.index };
 	const call = fn.instructions[site.callIp];
 	if (call?.opcode !== "CALL") throw new RangeError("Native record call is not a call");
+	return { producerIp: site.callIp, register: call.dst };
+}
+
+/** The registers that hold a record at each ip that reads it. */
+export function nativeRecordAliases(
+	fn: BytecodeFunction,
+	site: NativeRecordCall | NativeRecordParameter,
+): ReadonlyMap<number, ReadonlyArray<number>> {
+	const source = nativeRecordSource(fn, site);
 	const flow = nativeVirtualValueFlow(
 		fn.instructions,
-		site.callIp,
-		call.dst,
+		source.producerIp,
+		source.register,
 		new Set(),
 		vmExceptionHandlerTargets(fn.instructions.length, fn.handlers),
 	);
 	const aliases = new Map<number, ReadonlyArray<number>>();
-	for (const ip of [
-		...site.loads.map((load) => load.instructionIp),
-		...site.stores.map((store) => store.instructionIp),
-		...site.observerIps,
-	]) {
+	for (const ip of nativeRecordUseIps(site)) {
 		const live = flow.get(ip)?.may;
 		const reads = vmInstructionReadRegisters(fn.instructions[ip]!).filter(
 			(register) => live?.has(register) === true,
@@ -1871,15 +1918,15 @@ export function validateNativeRecordCalls(
 	native: NativeFunctionPlan,
 	functions: ReadonlyArray<NativeFunctionPlan>,
 ): void {
-	if ((native.recordCalls?.length ?? 0) === 0) return;
 	function fail(): never {
 		throw new RangeError(
 			`Invalid native record call in function ${native.functionIndex}`,
 		);
 	}
-	if (native.mode !== "direct") fail();
+	if ((native.recordCalls?.length ?? 0) > 0 && native.mode !== "direct") fail();
 	const exceptionTargets = vmExceptionHandlerTargets(fn.instructions.length, fn.handlers);
 	const seen = new Set<number>();
+	const sources: Array<{ layout: NativeRecordLayout; uses: NativeRecordUses }> = [];
 	for (const site of native.recordCalls ?? []) {
 		const call = fn.instructions[site.callIp];
 		const plan = native.instructions[site.callIp];
@@ -1895,42 +1942,204 @@ export function validateNativeRecordCalls(
 			fail();
 		seen.add(site.callIp);
 		const entry = functions[plan.directFunctionIndex]?.directEntries[plan.directEntryId];
-		const keys = entry?.resultFields?.keys;
-		if (keys === undefined || entry?.id !== plan.directEntryId) fail();
-		const aliases = nativeRecordAliases(fn, site);
-		const consumers = new Map<number, ReadonlyArray<number>>();
-		for (const [accesses, opcode] of [
-			[site.loads, "LOAD_PROPERTY_STATIC"],
-			[site.stores, "STORE_PROPERTY_STATIC"],
-		] as const)
-			for (const access of accesses) {
-				const instruction = fn.instructions[access.instructionIp];
-				if (
-					consumers.has(access.instructionIp) ||
-					instruction?.opcode !== opcode ||
-					keys[access.field] !== instruction.stringIndex ||
-					aliases.get(access.instructionIp)?.length !== 1 ||
-					aliases.get(access.instructionIp)![0] !== instruction.object
-				)
-					fail();
-				consumers.set(access.instructionIp, [instruction.object]);
-			}
-		for (const ip of site.observerIps) {
-			const values = aliases.get(ip) ?? [];
-			if (consumers.has(ip) || values.length === 0 || site.observerIps.length > 8) fail();
-			consumers.set(ip, values);
+		const layout = entry?.resultFields;
+		if (layout === undefined || entry?.id !== plan.directEntryId) fail();
+		validateNativeRecordUses(fn, site, layout.keys, fail, exceptionTargets);
+		sources.push({ layout, uses: site });
+	}
+	validateNativeRecordPasses(native, functions, sources, fail);
+}
+
+function nativeRecordUsesOf(
+	uses: CoreTargetRecordUses,
+	ips: ReadonlyMap<CompilerInstruction, number>,
+): NativeRecordUses {
+	const accesses = (
+		list: ReadonlyArray<{
+			readonly instruction: CompilerInstruction;
+			readonly field: number;
+		}>,
+	) =>
+		list
+			.map(({ instruction, field }) => ({ instructionIp: ips.get(instruction)!, field }))
+			.sort((left, right) => left.instructionIp - right.instructionIp);
+	return {
+		loads: accesses(uses.loads),
+		stores: accesses(uses.stores),
+		observerIps: uses.observers
+			.map((observer) => ips.get(observer)!)
+			.sort((left, right) => left - right),
+		...(uses.passes === undefined
+			? {}
+			: {
+					passes: uses.passes
+						.map(({ instruction, argument }) => ({
+							callIp: ips.get(instruction)!,
+							argument,
+						}))
+						.sort(
+							(left, right) =>
+								left.callIp - right.callIp || left.argument - right.argument,
+						),
+				}),
+	};
+}
+
+function validateNativeRecordUses(
+	fn: BytecodeFunction,
+	site: NativeRecordCall | NativeRecordParameter,
+	keys: ReadonlyArray<number>,
+	fail: () => never,
+	exceptionTargets: ReadonlyArray<number | undefined>,
+): void {
+	const aliases = nativeRecordAliases(fn, site);
+	const consumers = new Map<number, ReadonlyArray<number>>();
+	if (site.loads.length > 64 || site.stores.length > 64) fail();
+	for (const [accesses, opcode] of [
+		[site.loads, "LOAD_PROPERTY_STATIC"],
+		[site.stores, "STORE_PROPERTY_STATIC"],
+	] as const)
+		for (const access of accesses) {
+			const instruction = fn.instructions[access.instructionIp];
+			if (
+				consumers.has(access.instructionIp) ||
+				instruction?.opcode !== opcode ||
+				keys[access.field] !== instruction.stringIndex ||
+				aliases.get(access.instructionIp)?.length !== 1 ||
+				aliases.get(access.instructionIp)![0] !== instruction.object
+			)
+				fail();
+			consumers.set(access.instructionIp, [instruction.object]);
 		}
-		validateNativeVirtualValue(
-			fn.instructions,
-			site.callIp,
-			call.dst,
-			consumers,
-			fail,
-			() => false,
-			false,
-			new Set(),
-			exceptionTargets,
-		);
+	for (const ip of site.observerIps) {
+		const values = aliases.get(ip) ?? [];
+		if (consumers.has(ip) || values.length === 0 || site.observerIps.length > 8) fail();
+		consumers.set(ip, values);
+	}
+	for (const pass of site.passes ?? []) {
+		const instruction = fn.instructions[pass.callIp];
+		const values = aliases.get(pass.callIp) ?? [];
+		if (
+			consumers.has(pass.callIp) ||
+			(site.passes?.length ?? 0) > 8 ||
+			instruction?.opcode !== "CALL" ||
+			!(pass.argument >= 0 && pass.argument < instruction.arguments.length) ||
+			values.length !== 1 ||
+			values[0] !== instruction.arguments[pass.argument] ||
+			instruction.callee === values[0] ||
+			instruction.thisValue === values[0] ||
+			instruction.arguments.filter((register) => register === values[0]).length !== 1
+		)
+			fail();
+		consumers.set(pass.callIp, values);
+	}
+	const source = nativeRecordSource(fn, site);
+	validateNativeVirtualValue(
+		fn.instructions,
+		source.producerIp,
+		source.register,
+		consumers,
+		fail,
+		() => false,
+		false,
+		new Set(),
+		exceptionTargets,
+	);
+}
+
+/** The record layout a call's direct entry expects as `argument`, when it takes one. */
+export function nativeRecordParameterOf(
+	functions: ReadonlyArray<NativeFunctionPlan>,
+	plan: NativeInstructionPlan | undefined,
+	argument: number,
+): NativeRecordParameter | undefined {
+	if (
+		plan?.kind !== "call" ||
+		plan.directFunctionIndex === undefined ||
+		plan.directEntryId === undefined
+	)
+		return undefined;
+	return functions[plan.directFunctionIndex]?.directEntries[
+		plan.directEntryId
+	]?.recordParameters?.find((parameter) => parameter.index === argument);
+}
+
+/** A call enters a record parameter only with storage of that layout to hand over. */
+function validateNativeRecordPasses(
+	native: NativeFunctionPlan,
+	functions: ReadonlyArray<NativeFunctionPlan>,
+	sources: ReadonlyArray<{
+		readonly layout: NativeRecordLayout;
+		readonly uses: NativeRecordUses;
+	}>,
+	fail: () => never,
+): void {
+	const handed = new Map<string, NativeRecordLayout>();
+	for (const { layout, uses } of sources)
+		for (const pass of uses.passes ?? [])
+			handed.set(`${pass.callIp}:${pass.argument}`, layout);
+	for (const [ip, plan] of native.instructions.entries()) {
+		if (
+			plan?.kind !== "call" ||
+			plan.directFunctionIndex === undefined ||
+			plan.directEntryId === undefined
+		)
+			continue;
+		const entry = functions[plan.directFunctionIndex]?.directEntries[plan.directEntryId];
+		for (const parameter of entry?.recordParameters ?? []) {
+			const layout = handed.get(`${ip}:${parameter.index}`);
+			if (layout === undefined || !sameNativeRecordLayout(layout, parameter)) fail();
+		}
+	}
+}
+
+export interface NativeRecordLayout {
+	readonly keys: ReadonlyArray<number>;
+	readonly shapes?: ReadonlyArray<ReadonlyArray<number>>;
+}
+
+export function sameNativeRecordLayout(
+	left: NativeRecordLayout,
+	right: NativeRecordLayout,
+): boolean {
+	const same = (a: ReadonlyArray<number>, b: ReadonlyArray<number>) =>
+		a.length === b.length && a.every((value, index) => value === b[index]);
+	return (
+		same(left.keys, right.keys) &&
+		(left.shapes?.length ?? 0) === (right.shapes?.length ?? 0) &&
+		(left.shapes ?? []).every((shape, index) => same(shape, right.shapes![index]!))
+	);
+}
+
+function validateNativeRecordParameters(
+	fn: BytecodeFunction,
+	entry: NativeDirectEntryPlan,
+): void {
+	function fail(): never {
+		throw new RangeError("Invalid native record parameter");
+	}
+	const exceptionTargets = vmExceptionHandlerTargets(fn.instructions.length, fn.handlers);
+	for (const [position, parameter] of (entry.recordParameters ?? []).entries()) {
+		if (
+			fn.mappedArguments ||
+			!(parameter.index >= 0 && parameter.index < fn.parameterCount) ||
+			(position > 0 && parameter.index <= entry.recordParameters![position - 1]!.index) ||
+			entry.parameterRepresentations[parameter.index] !== "boxed" ||
+			parameter.keys.length === 0 ||
+			parameter.keys.length > NATIVE_RECORD_FIELD_LIMIT ||
+			new Set(parameter.keys).size !== parameter.keys.length ||
+			parameter.passes !== undefined ||
+			(parameter.shapes !== undefined &&
+				(parameter.shapes.length === 0 ||
+					parameter.shapes.some(
+						(shape) =>
+							shape.length === 0 ||
+							new Set(shape).size !== shape.length ||
+							shape.some((field) => !(field >= 0 && field < parameter.keys.length)),
+					)))
+		)
+			fail();
+		validateNativeRecordUses(fn, parameter, parameter.keys, fail, exceptionTargets);
 	}
 }
 
@@ -2523,6 +2732,19 @@ function remapNativeConstants(
 								return index;
 							}),
 						},
+					}),
+			...(entry.recordParameters === undefined
+				? {}
+				: {
+						recordParameters: entry.recordParameters.map((parameter) => ({
+							...parameter,
+							keys: parameter.keys.map((key) => {
+								const index = compacted.stringOldToNew.get(key);
+								if (index === undefined)
+									throw new Error(`RuntimeImage removed record parameter field ${key}`);
+								return index;
+							}),
+						})),
 					}),
 		})),
 		specializations: fn.specializations.map((region) => {
@@ -5093,6 +5315,16 @@ function lowerExecutionFunctionToNativePlan(
 					},
 				}),
 		resultRepresentation: entry.resultRepresentation,
+		...(entry.recordParameters === undefined
+			? {}
+			: {
+					recordParameters: entry.recordParameters.map((parameter) => ({
+						index: parameter.index,
+						keys: parameter.keys,
+						...(parameter.shapes === undefined ? {} : { shapes: parameter.shapes }),
+						...nativeRecordUsesOf(parameter, instructionIndexByTargetInstruction),
+					})),
+				}),
 		...(entry.resultFields === undefined
 			? {}
 			: {
@@ -5205,28 +5437,10 @@ function lowerExecutionFunctionToNativePlan(
 			? {}
 			: {
 					recordCalls: fn.recordCalls
-						.map((site) => {
-							const accesses = (
-								list: ReadonlyArray<{
-									readonly instruction: CompilerInstruction;
-									readonly field: number;
-								}>,
-							) =>
-								list
-									.map(({ instruction, field }) => ({
-										instructionIp: instructionIndexByTargetInstruction.get(instruction)!,
-										field,
-									}))
-									.sort((left, right) => left.instructionIp - right.instructionIp);
-							return {
-								callIp: instructionIndexByTargetInstruction.get(site.call)!,
-								loads: accesses(site.loads),
-								stores: accesses(site.stores),
-								observerIps: site.observers
-									.map((observer) => instructionIndexByTargetInstruction.get(observer)!)
-									.sort((left, right) => left - right),
-							};
-						})
+						.map((site) => ({
+							callIp: instructionIndexByTargetInstruction.get(site.call)!,
+							...nativeRecordUsesOf(site, instructionIndexByTargetInstruction),
+						}))
 						.sort((left, right) => left.callIp - right.callIp),
 				}),
 		gc: { safepoints },

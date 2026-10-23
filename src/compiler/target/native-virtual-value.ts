@@ -4,6 +4,7 @@ import {
 } from "./runtime-image.ts";
 import type { BytecodeInstruction } from "./runtime-image.ts";
 
+/** A negative `producerIp` means `result` already holds the value on entry. */
 export function nativeVirtualValueFlow(
 	instructions: ReadonlyArray<BytecodeInstruction>,
 	producerIp: number,
@@ -47,7 +48,8 @@ export function nativeVirtualValueFlow(
 		)
 			pending.push(ip);
 	};
-	add(0, new Set(), new Set(), new Set());
+	const initial = producerIp < 0 ? new Set([result]) : new Set<number>();
+	add(0, initial, initial, new Set());
 	while (pending.length > 0) {
 		const ip = pending.pop()!;
 		const instruction = instructions[ip]!;

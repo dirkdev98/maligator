@@ -285,6 +285,7 @@ function directEntryDeclaration(
 			{ length: entry.resultFieldCount ?? 0 },
 			(_, field) => `MalValue *rf${field}`,
 		),
+		...(entry.recordParameterIndices ?? []).map((index) => `MalValue *rp${index}`),
 	];
 	return `${cType(entry.resultRepresentation)} ${entry.symbol}(MalVm *vm, MalValue this_value${parameters.length === 0 ? "" : `, ${parameters.join(", ")}`}, MalEnv *env, MalValue callee)`;
 }

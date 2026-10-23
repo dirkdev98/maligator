@@ -5,6 +5,7 @@ import type { NativeStoragePlan } from "../compiler/target/lower-native-storage.
 import type {
 	ProgramImage,
 	NativeInstructionPlan,
+	NativeRecordUses,
 	VmRegion,
 } from "../compiler/target/program-image.ts";
 import { rebaseVmValueOperand } from "../compiler/target/runtime-image.ts";
@@ -637,6 +638,17 @@ function cloneLiteralTemplates(
 }
 
 /** Merge immutable images while cloning and rebasing every indexed table. */
+function copyRecordUses(uses: NativeRecordUses): NativeRecordUses {
+	return {
+		loads: uses.loads.map((load) => ({ ...load })),
+		stores: uses.stores.map((store) => ({ ...store })),
+		observerIps: [...uses.observerIps],
+		...(uses.passes === undefined
+			? {}
+			: { passes: uses.passes.map((pass) => ({ ...pass })) }),
+	};
+}
+
 export function mergeProgramImages(images: Array<ProgramImage>): MergedProgramImage {
 	const mergedNativeFunctions: Array<ProgramImage["native"]["functions"][number]> = [];
 	const mergedRuntime: ProgramImage["runtime"] = {
@@ -827,6 +839,18 @@ export function mergeProgramImages(images: Array<ProgramImage>): MergedProgramIm
 												})),
 											}),
 								},
+					...(entry.recordParameters === undefined
+						? {}
+						: {
+								recordParameters: entry.recordParameters.map((parameter) => ({
+									index: parameter.index,
+									keys: parameter.keys.map((key) => key + base.string),
+									...(parameter.shapes === undefined
+										? {}
+										: { shapes: parameter.shapes.map((shape) => [...shape]) }),
+									...copyRecordUses(parameter),
+								})),
+							}),
 					argumentRepresentations: entry.argumentRepresentations?.slice(),
 					operatorInputs: entry.operatorInputs?.map((input) => ({
 						...input,
@@ -864,9 +888,7 @@ export function mergeProgramImages(images: Array<ProgramImage>): MergedProgramIm
 				})),
 				recordCalls: native.recordCalls?.map((site) => ({
 					callIp: site.callIp,
-					loads: site.loads.map((load) => ({ ...load })),
-					stores: site.stores.map((store) => ({ ...store })),
-					observerIps: [...site.observerIps],
+					...copyRecordUses(site),
 				})),
 				gc: {
 					safepoints: native.gc.safepoints.map((safepoint) => ({

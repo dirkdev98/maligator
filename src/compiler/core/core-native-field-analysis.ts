@@ -11,11 +11,19 @@ import type {
 	CoreEntryFields,
 	CoreEntryResultFields,
 	CoreRecordFieldAccess,
+	CoreRecordLayout,
+	CoreRecordPass,
 	CoreRecordUses,
 	CorePlanRepresentation,
 } from "./core-ir-regions.ts";
 import { coreInstructionId } from "./core-ir.ts";
-import type { CoreFunctionId, CoreInstructionId, CoreValueId } from "./core-ir.ts";
+import type {
+	CoreBlockId,
+	CoreFunctionId,
+	CoreInstructionId,
+	CoreValueId,
+} from "./core-ir.ts";
+import { coreArgumentObservation } from "./core-native-entry-analysis.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 import { coreFunctionVersionsAreCurrent } from "./core-store.ts";
 import type { CoreFunctionVersions } from "./core-store.ts";
@@ -427,13 +435,12 @@ const MAX_RECORD_OBSERVERS = 8;
 function alwaysObserved(
 	fn: CoreFunctionStore,
 	cfg: CoreControlFlow,
-	call: CoreInstructionId,
+	start: CoreBlockId,
 	observers: ReadonlySet<CoreInstructionId>,
 ): boolean {
 	const observed = new Set(
 		[...observers].map((observer) => fn.instructionBlock(observer)),
 	);
-	const start = fn.instructionBlock(call);
 	if (observed.has(start)) return true;
 	const seen = new Set([start]);
 	const pending = [start];
@@ -450,36 +457,39 @@ function alwaysObserved(
 }
 
 /**
- * Every use of a call's record result, when caller storage can stand in for it.
- * Reads and writes of its own fields stay accesses; any other use observes the
- * record and must see the object, so it may not be a control-flow edge or handler
- * argument that this function cannot rewrite.
+ * Names the function an exact call hands a record to as `argument`, when that function
+ * can take the record as a record parameter.
  */
-export function coreRecordResultUses(
+export type CoreRecordPassTarget = (
+	call: CoreInstructionId,
+	argument: number,
+) => CoreFunctionId | undefined;
+
+/**
+ * Every use of a record held in storage from `root` on, when that storage can stand in
+ * for the object. Reads and writes of its own fields stay accesses, and exact calls
+ * that `passTarget` names take the storage itself; any other use observes the record
+ * and must see the object, so it may not be a control-flow edge or handler argument
+ * that this function cannot rewrite.
+ */
+function recordUses(
 	fn: CoreFunctionStore,
 	cfg: CoreControlFlow,
-	call: CoreInstructionId,
-	fields: CoreEntryResultFields,
+	root: CoreValueId,
+	start: CoreBlockId,
+	layout: CoreRecordLayout,
+	passTarget?: CoreRecordPassTarget,
 ): CoreRecordUses | undefined {
-	const keys = fields.keys;
+	const keys = layout.keys;
 	// Writing a key some literal lacks would change that record's shape.
 	const storable = (field: number) =>
-		fields.shapes?.every((shape) => shape.includes(field)) ?? true;
-	if (
-		fn.isGenerator ||
-		fn.isAsync ||
-		fn.instructionKind(call) !== "operation" ||
-		fn.instructionOpcodeName(call) !== "call" ||
-		fn.kernel.instructionResultCount(call) !== 1
-	)
-		return undefined;
-	const attributes = fn.instructionAttributes(call);
-	if (attributes.construct || attributes.argumentMode !== undefined) return undefined;
+		layout.shapes?.every((shape) => shape.includes(field)) ?? true;
 	const loads: Array<CoreRecordFieldAccess> = [];
 	const stores: Array<CoreRecordFieldAccess> = [];
 	const observers = new Set<CoreInstructionId>();
+	const passes: Array<CoreRecordPass> = [];
 	const aliases = new Set<CoreValueId>();
-	const pending = [fn.kernel.resultAt(fn.kernel.instructionResultStart(call))];
+	const pending = [root];
 	while (pending.length > 0) {
 		const value = pending.pop()!;
 		if (aliases.has(value)) continue;
@@ -504,8 +514,17 @@ export function coreRecordResultUses(
 				pending.push(fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)));
 				continue;
 			}
+			const operand = fn.kernel.useOperand(use);
+			const target =
+				opcode === "call" && operand >= 2
+					? passTarget?.(instruction, operand - 2)
+					: undefined;
+			if (target !== undefined) {
+				passes.push({ instruction, argument: operand - 2, target });
+				continue;
+			}
 			const field =
-				fn.kernel.useOperand(use) === 0 &&
+				operand === 0 &&
 				(opcode === "loadPropertyStatic" || opcode === "storePropertyStatic")
 					? keys.indexOf(fn.instructionAttributes(instruction).stringIndex as number)
 					: -1;
@@ -515,14 +534,23 @@ export function coreRecordResultUses(
 				(opcode === "loadPropertyStatic" ? loads : stores).push({ instruction, field });
 		}
 	}
+	// A call that also observes the record, or takes it twice, needs the object.
+	for (const pass of passes)
+		if (
+			observers.has(pass.instruction) ||
+			passes.some((other) => other !== pass && other.instruction === pass.instruction)
+		)
+			observers.add(pass.instruction);
+	const passed = passes.filter(({ instruction }) => !observers.has(instruction));
 	// Storing the record into its own field also observes it.
 	const ownStores = stores.filter(({ instruction }) => !observers.has(instruction));
 	if (
 		loads.length > 64 ||
 		ownStores.length > 64 ||
 		observers.size > MAX_RECORD_OBSERVERS ||
-		// An observer on every path would only add a copy after the callee's literal.
-		(observers.size > 0 && alwaysObserved(fn, cfg, call, observers))
+		passed.length > MAX_RECORD_OBSERVERS ||
+		// An observer on every path would only add a copy of the record.
+		(observers.size > 0 && alwaysObserved(fn, cfg, start, observers))
 	)
 		return undefined;
 	const byInstruction = (left: CoreRecordFieldAccess, right: CoreRecordFieldAccess) =>
@@ -533,7 +561,106 @@ export function coreRecordResultUses(
 			ownStores.map((store) => Object.freeze(store)).sort(byInstruction),
 		),
 		observers: Object.freeze([...observers].sort((left, right) => left - right)),
+		...(passed.length === 0
+			? {}
+			: {
+					passes: Object.freeze(
+						passed
+							.map((pass) => Object.freeze(pass))
+							.sort(
+								(left, right) =>
+									left.instruction - right.instruction || left.argument - right.argument,
+							),
+					),
+				}),
 	});
+}
+
+/** Names one record a call hands to one record parameter of `target`. */
+export function coreRecordPassKey(
+	site: { readonly caller: CoreFunctionId; readonly instruction: CoreInstructionId },
+	argument: number,
+	target: CoreFunctionId,
+	layout: CoreRecordLayout,
+): string {
+	return `${site.caller}:${site.instruction}:${argument}:${target}:${layout.keys.join(",")}/${(layout.shapes ?? []).map((shape) => shape.join(",")).join(";")}`;
+}
+
+/** The record passes that record calls of these entries hand over from caller storage. */
+export function coreSuppliedRecordPasses(
+	entries: ReadonlyArray<CoreDirectEntryPlan>,
+): ReadonlySet<string> {
+	const supplied = new Set<string>();
+	for (const entry of entries)
+		if (entry.resultFields !== undefined)
+			for (const site of entry.callSites)
+				for (const pass of site.recordUses?.passes ?? [])
+					supplied.add(
+						coreRecordPassKey(
+							{ caller: site.caller, instruction: pass.instruction },
+							pass.argument,
+							pass.target,
+							entry.resultFields,
+						),
+					);
+	return supplied;
+}
+
+/** Every use of a call's record result, when caller storage can stand in for it. */
+export function coreRecordResultUses(
+	fn: CoreFunctionStore,
+	cfg: CoreControlFlow,
+	call: CoreInstructionId,
+	fields: CoreEntryResultFields,
+	passTarget?: CoreRecordPassTarget,
+): CoreRecordUses | undefined {
+	if (
+		fn.isGenerator ||
+		fn.isAsync ||
+		fn.instructionKind(call) !== "operation" ||
+		fn.instructionOpcodeName(call) !== "call" ||
+		fn.kernel.instructionResultCount(call) !== 1
+	)
+		return undefined;
+	const attributes = fn.instructionAttributes(call);
+	if (attributes.construct || attributes.argumentMode !== undefined) return undefined;
+	return recordUses(
+		fn,
+		cfg,
+		fn.kernel.resultAt(fn.kernel.instructionResultStart(call)),
+		fn.instructionBlock(call),
+		fields,
+		passTarget,
+	);
+}
+
+/**
+ * The uses of parameter `index` when callers hand it over as storage holding a record
+ * of `layout`. The storage lives in the caller's frame, so the parameter may not
+ * outlive the call or be reachable through `arguments`. Its own passes observe it.
+ */
+export function coreRecordParameterUses(
+	fn: CoreFunctionStore,
+	cfg: CoreControlFlow,
+	index: number,
+	layout: CoreRecordLayout,
+): CoreRecordUses | undefined {
+	if (
+		fn.isGenerator ||
+		fn.isAsync ||
+		fn.metadata.isClassConstructor ||
+		fn.metadata.isDerivedConstructor ||
+		index >= fn.parameterCount
+	)
+		return undefined;
+	const observation = coreArgumentObservation(fn);
+	if (
+		observation.kind === "general" ||
+		observation.indices.includes(index) ||
+		observation.restStarts.some((start) => start <= index)
+	)
+		return undefined;
+	return recordUses(fn, cfg, fn.kernel.functionParameter(index), fn.entry, layout);
 }
 
 export function coreFieldArgumentProofIsCurrent(

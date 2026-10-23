@@ -395,7 +395,15 @@ record from then on, for accesses as well as observers. A returned value other t
 the empty value takes the object's place in that cache, so accesses on a shared
 object or an implicit undefined behave as on the ordinary path. A forwarding entry
 passes its own pointers to the callee's record entry, or copies the slots of the
-returned literal when the callee has none. Core re-proves both sides before lowering, the bytecode validators check the
+returned literal when the callee has none. A caller can also hand the storage itself
+to an exact callee whose entry takes that parameter as a record parameter: one
+`MalValue *` to the fields, the object slot and the producer, in that order. The
+callee's accesses and observers use that storage as the caller's would, so a write
+or a created object is the caller's as well. A record parameter may not be reachable
+through `arguments` or outlive the call, and a callee that passes it on observes it.
+A call whose entry takes no record parameter for its argument observes the record
+instead, and transport selection drops a record parameter entry whose caller lost
+its own record entry. Core re-proves both sides before lowering, the bytecode validators check the
 allocation and call result flows, and transport selection pairs a record entry only
 with the calls that carry these plans. Fields travel boxed.
 
