@@ -559,7 +559,7 @@ static MalObject *regexp_exact_last_index_object(
     return object;
 }
 
-static bool regexp_get_last_index(MalVm *vm, MalValue r, i64 *out) {
+static bool regexp_get_last_index_slow(MalVm *vm, MalValue r, i64 *out) {
     MalValue v;
     MalObject *exact = regexp_exact_last_index_object(vm, r);
     if (exact != nullptr) {
@@ -581,7 +581,25 @@ static bool regexp_get_last_index(MalVm *vm, MalValue r, i64 *out) {
     return true;
 }
 
-static bool regexp_set_last_index(MalVm *vm, MalValue r, i64 value) {
+// Every exec reads and writes lastIndex; the exact layout holding a small
+// integer, which a match end always leaves, needs no conversion.
+static inline __attribute__((always_inline)) bool regexp_get_last_index(
+    MalVm *vm, MalValue r, i64 *out
+) {
+    if (mal_value_is_regexp_object(r)) {
+        const MalObject *object = (const MalObject *) mal_value_to_regexp_object(r);
+        if (object->shape == vm->regexp_instance_shape) {
+            MalValue value = mal_object_field_load_shaped(object, 0);
+            if (mal_value_is_int32(value) && mal_value_to_i32(value) >= 0) {
+                *out = mal_value_to_i32(value);
+                return true;
+            }
+        }
+    }
+    return regexp_get_last_index_slow(vm, r, out);
+}
+
+static bool regexp_set_last_index_slow(MalVm *vm, MalValue r, i64 value) {
     // Match ends fit the string-length cap, but the empty-match advance path
     // applies ToLength to user-observable lastIndex and may advance 2^53-1 to
     // exactly 2^53. Preserve that value instead of assuming every write is a
@@ -604,6 +622,19 @@ static bool regexp_set_last_index(MalVm *vm, MalValue r, i64 value) {
         return false;
     }
     return true;
+}
+
+static inline __attribute__((always_inline)) bool regexp_set_last_index(
+    MalVm *vm, MalValue r, i64 value
+) {
+    if (value <= INT32_MAX && mal_value_is_regexp_object(r)) {
+        MalObject *object = (MalObject *) mal_value_to_regexp_object(r);
+        if (object->shape == vm->regexp_instance_shape) {
+            mal_object_field_store_shaped(object, 0, mal_value_from_i32((i32) value));
+            return true;
+        }
+    }
+    return regexp_set_last_index_slow(vm, r, value);
 }
 
 // ---------------------------------------------------------------------------
