@@ -383,6 +383,23 @@ MalObject *mal_object_new_reserved(MalHeap *heap, MalObject *prototype, u8 capac
     return object;
 }
 
+// Records have a few fields; a libc memcpy call per construction costs more than the copy.
+static inline __attribute__((always_inline)) void mal_object_copy_initial_fields(
+    MalValue *fields, const MalValue *values, u32 count
+) {
+    switch (count) {
+        case 8: fields[7] = values[7]; [[fallthrough]];
+        case 7: fields[6] = values[6]; [[fallthrough]];
+        case 6: fields[5] = values[5]; [[fallthrough]];
+        case 5: fields[4] = values[4]; [[fallthrough]];
+        case 4: fields[3] = values[3]; [[fallthrough]];
+        case 3: fields[2] = values[2]; [[fallthrough]];
+        case 2: fields[1] = values[1]; [[fallthrough]];
+        case 1: fields[0] = values[0]; return;
+        default: memcpy(fields, values, sizeof(MalValue) * count); return;
+    }
+}
+
 MalObject *mal_object_new_shaped(MalHeap *heap, MalObject *prototype, MalShape *shape,
                                  const MalValue *values, u32 count) {
     assert(count >= 1 && count <= MAL_SHAPE_MAX_INLINE_SLOTS);
@@ -392,7 +409,7 @@ MalObject *mal_object_new_shaped(MalHeap *heap, MalObject *prototype, MalShape *
         MAL_HEAP_OBJECT);
     mal_object_init_payload(heap, object, prototype, MAL_OBJECT_COMPACT, shape);
     object->slot_capacity = (u8) count;
-    memcpy(mal_object_fields_nonempty(object), values, sizeof(MalValue) * count);
+    mal_object_copy_initial_fields(mal_object_fields_nonempty(object), values, count);
     mal_object_slot_coallocations++;
     return object;
 }
@@ -409,7 +426,7 @@ MalObject *mal_object_try_new_shaped(
     if (object == nullptr) return nullptr;
     mal_object_init_payload(heap, object, prototype, MAL_OBJECT_COMPACT, shape);
     object->slot_capacity = (u8) count;
-    memcpy(mal_object_fields_nonempty(object), values, sizeof(MalValue) * count);
+    mal_object_copy_initial_fields(mal_object_fields_nonempty(object), values, count);
     mal_object_slot_coallocations++;
     return object;
 }
