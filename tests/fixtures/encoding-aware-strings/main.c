@@ -181,22 +181,21 @@ static bool tiny_cache_collisions_preserve_content(MalVm *vm) {
         roots[0] = mal_value_from_string(mal_string_new_latin1_copy(&vm->heap, exact, length));
         free(exact);
         if (length >= 2) {
-            c16 collision[8];
-            for (usize i = 0; i < length; i++) collision[i] = original[i];
-            collision[length >= 6 ? length - 2 : 0] ^= 1;
-            usize slot = mal_string_hash(mal_value_to_string(roots[0])) & (MAL_TINY_STRING_CACHE_CAPACITY - 1);
+            // A colliding string evicts the cached one, so the next copy is a new string.
+            u8 bytes[8];
+            memcpy(bytes, original, length);
+            roots[2] = roots[0];
             bool found = false;
-            for (usize last = 0; last <= 0xff; last++) {
-                collision[length - 1] = (c16) last;
-                if ((mal_string_hash_code_units(collision, length) & (MAL_TINY_STRING_CACHE_CAPACITY - 1)) == slot) {
-                    found = true;
-                    break;
-                }
+            for (usize tail = 0; tail <= 0xffff && !found; tail++) {
+                bytes[length - 2] = (u8) (tail >> 8);
+                bytes[length - 1] = (u8) tail;
+                if (memcmp(bytes, original, length) == 0) continue;
+                roots[1] = mal_value_from_string(mal_string_new_latin1_copy(&vm->heap, bytes, length));
+                MalString *probe = mal_string_new_latin1_copy(&vm->heap, original, length);
+                found = mal_value_from_string(probe) != roots[2];
+                roots[2] = mal_value_from_string(probe);
             }
             CHECK(found);
-            u8 bytes[8];
-            for (usize i = 0; i < length; i++) bytes[i] = (u8) collision[i];
-            roots[1] = mal_value_from_string(mal_string_new_latin1_copy(&vm->heap, bytes, length));
             CHECK(!mal_string_equals(mal_value_to_string(roots[0]), mal_value_to_string(roots[1])));
         }
         MalString *reloaded = mal_string_new_latin1_copy(&vm->heap, original, length);

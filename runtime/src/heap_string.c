@@ -5,6 +5,7 @@
 
 #include "gc.h"
 #include "checked_size.h"
+#include "key.h"
 #include "perf_stats.h"
 #include "profile.h"
 #include "utf16.h"
@@ -132,6 +133,37 @@ static void mal_string_tiny_cache_store(
     cache[index] = replacement;
 }
 
+// The index only has to agree across the Latin-1, UTF-16 and promotion paths. One
+// multiply of the packed units replaces FNV's dependent multiply per unit.
+static usize mal_string_tiny_cache_index_latin1(const u8 *units, usize length) {
+    u64 word = 0;
+    if (length >= sizeof(u32)) {
+        u32 first, last;
+        memcpy(&first, units, sizeof(first));
+        memcpy(&last, units + length - sizeof(last), sizeof(last));
+        word = (u64) first | (u64) last << 32;
+    } else if (length >= sizeof(u16)) {
+        u16 first, last;
+        memcpy(&first, units, sizeof(first));
+        memcpy(&last, units + length - sizeof(last), sizeof(last));
+        word = (u64) first | (u64) last << 16;
+    } else if (length == 1) {
+        word = units[0];
+    }
+    return (usize) mal_key_hash_mix(word + length) & (MAL_TINY_STRING_CACHE_CAPACITY - 1);
+}
+
+static usize mal_string_tiny_cache_index_utf16(const c16 *units, usize length) {
+    u8 narrow[MAL_STRING_INLINE_CODE_UNITS];
+    c16 combined = 0;
+    for (usize i = 0; i < length; i++) {
+        combined |= units[i];
+        narrow[i] = (u8) units[i];
+    }
+    if (combined <= 0xFF) return mal_string_tiny_cache_index_latin1(narrow, length);
+    return (usize) mal_string_hash_code_units(units, length) & (MAL_TINY_STRING_CACHE_CAPACITY - 1);
+}
+
 typedef struct MalTinyStringCacheResult {
     MalString *string;
     bool hit;
@@ -169,8 +201,7 @@ static MalTinyStringCacheResult mal_string_tiny_cache_get_or_create(
         if (*cache_slot == nullptr) abort();
     }
     MalString **cache = *cache_slot;
-    u64 hash = mal_string_hash_code_units(code_units, length);
-    usize index = (usize) hash & (MAL_TINY_STRING_CACHE_CAPACITY - 1);
+    usize index = mal_string_tiny_cache_index_utf16(code_units, length);
     MalString *cached = cache[index];
     if (mal_string_tiny_cache_matches(cached, code_units, length)) {
         MAL_PERF_COUNT(string_tiny_cache_hits);
@@ -183,7 +214,7 @@ static MalTinyStringCacheResult mal_string_tiny_cache_get_or_create(
     }
     MalString *string = mal_heap_alloc(heap, sizeof(MalString), MAL_HEAP_STRING);
     mal_string_init_inline(string, code_units, length);
-    string->hash = hash;
+    string->hash = mal_string_hash_code_units(code_units, length);
     string->hash_valid = true;
     mal_string_tiny_cache_store(heap, index, string);
     return (MalTinyStringCacheResult) {.string = string, .hit = false};
@@ -198,13 +229,7 @@ static MalTinyStringCacheResult mal_string_tiny_cache_get_latin1(
         *cache_slot = calloc(MAL_TINY_STRING_CACHE_CAPACITY, sizeof(**cache_slot));
         if (*cache_slot == nullptr) abort();
     }
-    u64 hash = 0xcbf29ce484222325;
-    // Each Latin-1 unit hashes its byte followed by a zero UTF-16 high byte.
-    MAL_PERF_ADD(string_hash_code_units, length);
-    for (usize i = 0; i < length; i++) {
-        hash = (hash ^ units[i]) * 0x366000002e329ULL;
-    }
-    usize index = (usize) hash & (MAL_TINY_STRING_CACHE_CAPACITY - 1);
+    usize index = mal_string_tiny_cache_index_latin1(units, length);
     MalString *cached = (*cache_slot)[index];
     if (cached != nullptr && cached->length == length &&
         cached->storage != MAL_STRING_STORAGE_DEPENDENT &&
@@ -256,13 +281,17 @@ static MalTinyStringCacheResult mal_string_tiny_cache_get_latin1(
     mal_string_copy_inline_latin1(string->inline_latin1_units, units, length);
     MAL_PERF_COUNT(string_inline_allocations);
     MAL_PERF_ADD(string_inline_code_units, length);
+    u64 hash = 0xcbf29ce484222325;
+    // Each Latin-1 unit hashes its byte followed by a zero UTF-16 high byte.
+    MAL_PERF_ADD(string_hash_code_units, length);
+    for (usize i = 0; i < length; i++) hash = (hash ^ units[i]) * 0x366000002e329ULL;
     string->hash = hash;
     string->hash_valid = true;
     mal_string_tiny_cache_store(heap, index, string);
     return (MalTinyStringCacheResult) {.string = string, .hit = false};
 }
 
-void mal_string_tiny_cache_promote(MalHeap *heap, MalString *atom) {
+void mal_string_tiny_cache_promote(MalHeap *heap, const MalString *entry, MalString *atom) {
     if (atom == nullptr || atom->length > MAL_STRING_INLINE_CODE_UNITS
         || (atom->storage != MAL_STRING_STORAGE_INLINE
             && atom->storage != MAL_STRING_STORAGE_OWNED
@@ -271,10 +300,12 @@ void mal_string_tiny_cache_promote(MalHeap *heap, MalString *atom) {
     }
     MalString **cache = *mal_string_tiny_cache_slot(heap);
     if (cache == nullptr) return;
-    u64 hash = mal_string_hash(atom);
-    usize index = (usize) hash & (MAL_TINY_STRING_CACHE_CAPACITY - 1);
-    if (cache[index] == atom) return;
-    if (cache[index] == nullptr || !mal_string_equals(cache[index], atom)) return;
+    MalStringSegment segment;
+    if (!mal_string_try_get_segment(atom, 0, atom->length, &segment)) return;
+    usize index = segment.latin1
+        ? mal_string_tiny_cache_index_latin1(segment.latin1_units, segment.length)
+        : mal_string_tiny_cache_index_utf16(segment.utf16_units, segment.length);
+    if (cache[index] != entry) return;
     mal_string_tiny_cache_store(heap, index, atom);
     MAL_PERF_COUNT(string_tiny_cache_promotions);
 }

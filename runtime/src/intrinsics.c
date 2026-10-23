@@ -336,17 +336,11 @@ static MalString *mal_property_resolve_string(
     if (string->property_atom) {
         return string;
     }
-    bool tiny_cache_entry =
-        string->length <= MAL_STRING_INLINE_CODE_UNITS
-        && string->hash_valid
-        && vm->tiny_string_cache != nullptr
-        && vm->tiny_string_cache[
-            (usize) string->hash & (MAL_TINY_STRING_CACHE_CAPACITY - 1)]
-            == string;
     MalString *atom = mal_atom_store_find(&vm->atoms, string);
     if (atom != nullptr) {
-        if (tiny_cache_entry) {
-            mal_string_tiny_cache_promote(&vm->heap, atom);
+        // Cache entries are tiny and carry their content hash.
+        if (string->length <= MAL_STRING_INLINE_CODE_UNITS && string->hash_valid) {
+            mal_string_tiny_cache_promote(&vm->heap, string, atom);
         }
         return atom;
     }

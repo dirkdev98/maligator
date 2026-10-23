@@ -35,16 +35,16 @@ ok("lone high surrogate", high.charCodeAt(0) === 0xd83d && high.length === 2);
 ok("lone low surrogate", low.charCodeAt(0) === 0xde00 && low.length === 2);
 ok("split surrogate pair", pair.length === 2 && [...pair][0] === "\ud83d\ude00");
 
-// "1a" and "zb" share the low eight bits of the runtime's content hash. Force
+// "1a" and "mt" share a tiny-cache slot. Force
 // replacement, then atomize a fresh "1a" so the cache must promote the older
 // canonical property atom back into that slot.
 const canonical1a = concatenate("1", "a");
 const keyed = { [canonical1a]: 40 };
-const collidingZb = concatenate("z", "b");
-ok("collision value", collidingZb === "zb");
+const collidingMt = concatenate("m", "t");
+ok("collision value", collidingMt === "mt");
 const fresh1a = concatenate("1", "a");
 if (typeof $262 !== "undefined") $262.gc();
-ok("collision never aliases content", fresh1a === "1a" && fresh1a !== collidingZb);
+ok("collision never aliases content", fresh1a === "1a" && fresh1a !== collidingMt);
 keyed[fresh1a] += 2;
 ok("atom promotion preserves property", keyed["1a"] === 42);
 
