@@ -14,7 +14,7 @@ import type {
 	CorePlanRepresentation,
 } from "./core-ir-regions.ts";
 import { coreInstructionId } from "./core-ir.ts";
-import type { CoreInstructionId, CoreValueId } from "./core-ir.ts";
+import type { CoreFunctionId, CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import type { CoreFunctionStore } from "./core-store.ts";
 import { coreFunctionVersionsAreCurrent } from "./core-store.ts";
 import type { CoreFunctionVersions } from "./core-store.ts";
@@ -274,10 +274,19 @@ export function coreReturnsObjectLiterals(fn: CoreFunctionStore): boolean {
 	return returns > 0;
 }
 
-/** The record every reachable return of `fn` creates, when no other code can observe it. */
+/**
+ * The record every reachable return of `fn` creates, when no other code can observe it.
+ * With `forwardTarget`, a return may also hand back the result of an exact call to a
+ * function whose own returns are such literals, with the same keys.
+ */
 export function coreRecordResultFields(
 	fn: CoreFunctionStore,
 	cfg: CoreControlFlow,
+	forwardTarget?: (
+		call: CoreInstructionId,
+	) =>
+		| { readonly target: CoreFunctionId; readonly keys: ReadonlyArray<number> }
+		| undefined,
 ): CoreEntryResultFields | undefined {
 	if (
 		fn.isGenerator ||
@@ -288,6 +297,11 @@ export function coreRecordResultFields(
 		return undefined;
 	let keys: ReadonlyArray<number> | undefined;
 	const allocations = new Set<CoreInstructionId>();
+	const forwards = new Map<CoreInstructionId, CoreFunctionId>();
+	const sameKeys = (candidate: ReadonlyArray<number>) =>
+		keys === undefined ||
+		(keys.length === candidate.length &&
+			keys.every((key, index) => key === candidate[index]));
 	for (const block of cfg.reachable) {
 		const terminator = fn.blockTerminator(block);
 		if (fn.instructionKind(terminator) !== "return") continue;
@@ -296,20 +310,30 @@ export function coreRecordResultFields(
 			fn,
 			fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator)),
 		);
-		if (
-			allocation === undefined ||
-			fn.instructionOpcodeName(allocation) !== "createObjectShaped"
-		)
-			return undefined;
-		if (allocations.has(allocation)) continue;
+		if (allocation === undefined) return undefined;
+		if (allocations.has(allocation) || forwards.has(allocation)) continue;
+		if (fn.instructionOpcodeName(allocation) === "call") {
+			const forward = forwardTarget?.(allocation);
+			if (
+				forward === undefined ||
+				!sameKeys(forward.keys) ||
+				!onlyReturned(
+					fn,
+					fn.kernel.resultAt(fn.kernel.instructionResultStart(allocation)),
+				)
+			)
+				return undefined;
+			keys ??= forward.keys;
+			forwards.set(allocation, forward.target);
+			continue;
+		}
+		if (fn.instructionOpcodeName(allocation) !== "createObjectShaped") return undefined;
 		const allocationKeys = fn.instructionAttributes(allocation).keyStringIndices;
 		if (
 			!Array.isArray(allocationKeys) ||
 			allocationKeys.length === 0 ||
 			allocationKeys.length > MAX_RESULT_FIELDS ||
-			(keys !== undefined &&
-				(keys.length !== allocationKeys.length ||
-					keys.some((key, index) => key !== allocationKeys[index]))) ||
+			!sameKeys(allocationKeys.map(Number)) ||
 			!onlyReturned(fn, fn.kernel.resultAt(fn.kernel.instructionResultStart(allocation)))
 		)
 			return undefined;
@@ -321,6 +345,15 @@ export function coreRecordResultFields(
 		: Object.freeze({
 				keys,
 				allocations: Object.freeze([...allocations].sort((left, right) => left - right)),
+				...(forwards.size === 0
+					? {}
+					: {
+							forwards: Object.freeze(
+								[...forwards]
+									.sort(([left], [right]) => left - right)
+									.map(([instruction, target]) => Object.freeze({ instruction, target })),
+							),
+						}),
 			});
 }
 

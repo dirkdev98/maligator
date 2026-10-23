@@ -2117,6 +2117,11 @@ function writeCompilerArtifact(
 			for (const key of entry.resultFields?.keys ?? []) w.u32(key);
 			w.u32(entry.resultFields?.allocationIps.length ?? 0);
 			for (const ip of entry.resultFields?.allocationIps ?? []) w.u32(ip);
+			w.u32(entry.resultFields?.forwards?.length ?? 0);
+			for (const forward of entry.resultFields?.forwards ?? []) {
+				w.u32(forward.callIp);
+				w.u32(forward.functionIndex);
+			}
 			w.u32(entry.constantBooleans?.length ?? 0);
 			for (const { instructionIp, value } of entry.constantBooleans ?? []) {
 				if (
@@ -4665,10 +4670,20 @@ function readCompilerArtifact(
 					: { keys: fieldKeys, representations: fieldRepresentations, loads: fieldLoads };
 			const resultKeys = Array.from({ length: r.count(4) }, () => r.u32());
 			const resultAllocationIps = Array.from({ length: r.count(4) }, () => r.u32());
+			const resultForwards = Array.from({ length: r.count(8) }, () => ({
+				callIp: r.u32(),
+				functionIndex: r.u32(),
+			}));
 			const resultFields =
-				resultKeys.length === 0 && resultAllocationIps.length === 0
+				resultKeys.length === 0 &&
+				resultAllocationIps.length === 0 &&
+				resultForwards.length === 0
 					? undefined
-					: { keys: resultKeys, allocationIps: resultAllocationIps };
+					: {
+							keys: resultKeys,
+							allocationIps: resultAllocationIps,
+							...(resultForwards.length === 0 ? {} : { forwards: resultForwards }),
+						};
 			const constantCount = r.count(5);
 			const constantBooleans = Array.from({ length: constantCount }, () => {
 				const instructionIp = r.i32();

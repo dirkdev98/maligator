@@ -1788,7 +1788,25 @@ function recordResultEntries(
 	const cfg = analyses
 		.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, { scope: "function", function: target })
 		.exceptional();
-	const resultFields = coreRecordResultFields(fn, cfg);
+	const resultFields = coreRecordResultFields(fn, cfg, (call) => {
+		const site = summaries.targets.site(target, call);
+		const callee = site?.targets.functions[0];
+		if (
+			callee === undefined ||
+			callee === target ||
+			site!.open ||
+			site!.arguments === undefined ||
+			site!.targets.functions.length !== 1
+		)
+			return undefined;
+		const keys = coreRecordResultFields(
+			program.function(callee),
+			analyses
+				.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, { scope: "function", function: callee })
+				.exceptional(),
+		)?.keys;
+		return keys === undefined ? undefined : { target: callee, keys };
+	});
 	if (resultFields === undefined) return [];
 	const calls = callSites.flatMap((call) => {
 		if (
@@ -1883,6 +1901,58 @@ function recordResultEntries(
 			},
 		},
 	];
+}
+
+/**
+ * A forwarding record entry passes its own caller storage to the record entry of the
+ * function it forwards; without one, it copies the fields of the returned literal.
+ */
+function linkRecordForwards(
+	program: CoreProgram,
+	analyses: CoreAnalysisManager,
+	entries: ReadonlyArray<CoreDirectEntryPlan>,
+): ReadonlyArray<CoreDirectEntryPlan> {
+	const literalEntries = new Map<CoreFunctionId, CoreDirectEntryPlan>();
+	for (const entry of entries)
+		if (
+			entry.resultFields !== undefined &&
+			entry.resultFields.forwards === undefined &&
+			!literalEntries.has(entry.function)
+		)
+			literalEntries.set(entry.function, entry);
+	return entries.map((entry) => {
+		const resultFields = entry.resultFields;
+		if (resultFields?.forwards === undefined) return entry;
+		const callOverrides = Object.freeze(
+			resultFields.forwards.flatMap(({ instruction, target }) => {
+				const callee = literalEntries.get(target);
+				const keys = callee?.resultFields!.keys;
+				return keys === undefined ||
+					keys.length !== resultFields.keys.length ||
+					keys.some((key, index) => key !== resultFields.keys[index])
+					? []
+					: [Object.freeze({ instruction, target, entryId: callee!.id })];
+			}),
+		);
+		if (callOverrides.length === 0) return entry;
+		const variant = analyzeCoreNativeEntry(
+			program.function(entry.function),
+			analyses
+				.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
+					scope: "function",
+					function: entry.function,
+				})
+				.exceptional(),
+			entry.parameterRepresentations,
+			undefined,
+			entry.callSites,
+			undefined,
+			undefined,
+			callOverrides,
+			resultFields,
+		);
+		return Object.freeze({ ...entry, ...variant, callOverrides });
+	});
 }
 
 function conflicts(
@@ -2247,7 +2317,7 @@ export function buildCoreOptimizationPlan(
 	const initialDirectEntries = [...directEntriesByFunction]
 		.sort(([left], [right]) => left - right)
 		.flatMap(([, entries]) => entries);
-	const directEntries =
+	const connectedEntries =
 		options.context?.facts.closure.sourceClosure.kind !== "known"
 			? initialDirectEntries
 			: connectCoreNativeEntries(
@@ -2302,6 +2372,7 @@ export function buildCoreOptimizationPlan(
 						return true;
 					},
 				);
+	const directEntries = linkRecordForwards(program, analyses, connectedEntries);
 	const budgetStatistics = service.statisticsSince(budgetBaseline);
 	const statistics: CoreOptimizationPlanStatistics = Object.freeze({
 		...budgetStatistics,

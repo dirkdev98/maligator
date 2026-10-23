@@ -812,6 +812,14 @@ export function mergeProgramImages(images: Array<ProgramImage>): MergedProgramIm
 							: {
 									keys: entry.resultFields.keys.map((key) => key + base.string),
 									allocationIps: [...entry.resultFields.allocationIps],
+									...(entry.resultFields.forwards === undefined
+										? {}
+										: {
+												forwards: entry.resultFields.forwards.map((forward) => ({
+													callIp: forward.callIp,
+													functionIndex: forward.functionIndex + base.function,
+												})),
+											}),
 								},
 					argumentRepresentations: entry.argumentRepresentations?.slice(),
 					operatorInputs: entry.operatorInputs?.map((input) => ({

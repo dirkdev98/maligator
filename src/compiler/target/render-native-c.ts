@@ -2363,6 +2363,12 @@ function emitCompiledVariant(
 	const fieldCalls = renderFieldCallSlots(fn, nativeContract, () => nextStackSlot++);
 	const records: NativeRecordStorage = {
 		allocations: recordAllocations,
+		forwards: new Map(
+			directEntry?.resultFields?.forwards?.map((forward) => [
+				forward.callIp,
+				directEntry.resultFields!.keys.length,
+			]) ?? [],
+		),
 		...renderRecordCallSlots(
 			fn,
 			nativeContract,
@@ -3511,6 +3517,8 @@ interface NativeRecordSite {
 
 interface NativeRecordStorage {
 	readonly allocations: ReadonlySet<number>;
+	/** Forwarded calls of a record entry, with its field count. */
+	readonly forwards: ReadonlyMap<number, number>;
 	readonly calls: ReadonlyMap<number, NativeRecordSite>;
 	readonly accesses: ReadonlyMap<number, NativeRecordAccess>;
 	readonly observers: ReadonlyMap<number, NativeRecordObserver>;
@@ -3528,6 +3536,7 @@ interface NativeRecordObserver {
 
 const NO_NATIVE_RECORD_STORAGE: NativeRecordStorage = {
 	allocations: new Set(),
+	forwards: new Map(),
 	calls: new Map(),
 	accesses: new Map(),
 	observers: new Map(),
@@ -3543,7 +3552,7 @@ function renderRecordCallSlots(
 	callTransports: ReadonlyArray<NativeCallTransportPlan>,
 	directCompiledEntries: DirectCompiledEntries,
 	allocateSlot: () => number,
-): Omit<NativeRecordStorage, "allocations"> {
+): Omit<NativeRecordStorage, "allocations" | "forwards"> {
 	const calls = new Map<number, NativeRecordSite>();
 	const accesses = new Map<number, NativeRecordAccess>();
 	const observers = new Map<number, NativeRecordObserver>();
@@ -5625,6 +5634,8 @@ function emitBody(
 		fieldCall: undefined,
 		fieldThrowSlots: undefined,
 		recordAllocation: false,
+		recordForward: undefined,
+		recordForwarded: undefined,
 		recordAccess: undefined,
 		recordObserver: undefined,
 		recordCall: undefined,
@@ -6148,6 +6159,7 @@ function emitBody(
 		instructionContext.constantBoolean = directConstantBooleans.get(ip);
 		instructionContext.fieldLoad = fieldLoads.get(ip);
 		instructionContext.recordAllocation = records.allocations.has(ip);
+		instructionContext.recordForward = records.forwards.get(ip);
 		instructionContext.recordAccess = records.accesses.get(ip);
 		instructionContext.recordObserver = records.observers.get(ip);
 		instructionContext.recordCall = records.calls.get(ip);
@@ -6676,6 +6688,10 @@ interface NativeInstructionContext {
 	readonly fieldThrowSlots?: ReadonlyArray<number>;
 	/** A record entry hands this allocation's fields to its caller instead of creating it. */
 	readonly recordAllocation?: boolean;
+	/** A record entry returns this call's record; its fields go to the entry's own caller storage. */
+	readonly recordForward?: number;
+	/** Forwarded calls that reached the callee's record entry with that storage. */
+	readonly recordForwarded?: Set<number>;
 	/** A record field read or written in caller storage. */
 	readonly recordAccess?: NativeRecordAccess;
 	/** A use of a record that needs the object. */
@@ -8162,6 +8178,27 @@ function emitInstruction(
 				"}",
 			];
 		}
+	}
+	if (
+		context.recordForward !== undefined &&
+		context.recordForwarded === undefined &&
+		instruction.opcode === "CALL"
+	) {
+		const forwarded = new Set<number>();
+		const lines = emitGenericInstruction({
+			...context,
+			recordForwarded: forwarded,
+		});
+		if (lines === null || forwarded.has(ip)) return lines;
+		// The callee's literal is fresh and unchanged, so its slots are its fields in key order.
+		return [
+			...lines,
+			...Array.from(
+				{ length: context.recordForward },
+				(_, field) =>
+					`*rf${field} = mal_object_field_load_shaped(mal_value_to_object(${boxed(instruction.dst)}), ${field});`,
+			),
+		];
 	}
 	if (context.recordAllocation === true && instruction.opcode === "CREATE_OBJECT_SHAPED")
 		return [
@@ -12606,17 +12643,24 @@ function emitInstruction(
 					) ?? `mal_value_to_function_object(${directCallee})->creation_env`;
 				if (directEntry !== undefined && transport !== undefined) {
 					const directValue = `__direct_value_${ip}`;
+					const forward =
+						context.recordForwarded !== undefined &&
+						directEntry.resultFields !== undefined;
 					const parameters = [
 						...directEntryParameters(transport),
 						...(context.recordCall?.keys.map(
 							(_, field) => `&__gc_slots[${context.recordCall!.fieldSlot + field}]`,
 						) ?? []),
+						...(forward
+							? directEntry.resultFields.keys.map((_, field) => `rf${field}`)
+							: []),
 					];
 					if (
-						(context.recordCall !== undefined) !==
+						(context.recordCall !== undefined || forward) !==
 						(directEntry.resultFields !== undefined)
 					)
 						throw new Error(`Native record call ${ip} disagrees with its entry`);
+					if (forward) context.recordForwarded.add(ip);
 					context.directEntryCalls.set(ip, new Set([target]));
 					nativeCallDecision(context.profile, ip, "call.direct-native", "applied");
 					const directResult = convert(transport.result, directValue);

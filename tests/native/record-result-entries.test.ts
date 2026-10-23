@@ -75,6 +75,11 @@ describe("record result entries", () => {
 		expect(functionNamed("observed").recordCalls![0]!.observerIps.length).toBeGreaterThan(
 			0,
 		);
+		// A forwarder hands its own caller storage to the producer's record entry, or copies.
+		const forwarding = (name: string) =>
+			functionNamed(name).directEntries.find((entry) => entry.resultFields?.forwards)!;
+		expect(forwarding("nextWord").callOverrides).toHaveLength(1);
+		expect(forwarding("trimmed").callOverrides).toBeUndefined();
 		// Callers that keep the object need the ordinary entry and its fresh allocation.
 		expect(functionNamed("retainAll").recordCalls).toBeUndefined();
 	});

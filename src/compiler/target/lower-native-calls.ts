@@ -48,7 +48,10 @@ export function selectNativeCallTransports(
 		native.fieldCalls === undefined
 			? undefined
 			: new Map(native.fieldCalls.map((site) => [site.callIp, site]));
-	const recordCalls = new Set(native.recordCalls?.map((site) => site.callIp));
+	const recordCalls = new Set([
+		...(native.recordCalls?.map((site) => site.callIp) ?? []),
+		...(native.recordForwardIps ?? []),
+	]);
 	for (const [instructionIp, call] of native.instructions.entries()) {
 		if (call?.kind !== "call" || call.directFunctionCall) continue;
 		const fieldCall = fieldCalls?.get(instructionIp);

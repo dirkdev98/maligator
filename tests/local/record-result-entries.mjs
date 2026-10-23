@@ -186,6 +186,39 @@ function attach(states, handlers) {
 	return handlers;
 }
 
+// A forwarder returns either its own literal or the record of another producer.
+function nextWord(text, start) {
+	let index = start;
+	while (index < text.length && text.charCodeAt(index) === 32) index++;
+	if (index >= text.length) return { start: index, end: index, digits: 0 };
+	return scan(text, index);
+}
+function wordWidths(text) {
+	let total = 0;
+	for (let index = 0; index < text.length;) {
+		const word = nextWord(text, index);
+		total += word.end - word.start + word.digits;
+		index = word.end + 1;
+	}
+	return total;
+}
+
+// Only forwarding reaches this producer, so its forwarder copies the returned literal.
+function trailing(text, start) {
+	let end = text.length;
+	while (end > start && text.charCodeAt(end - 1) === 32) end--;
+	return { start, end, digits: end - start };
+}
+function trimmed(text, start) {
+	let index = start;
+	while (index < text.length && text.charCodeAt(index) === 32) index++;
+	return trailing(text, index);
+}
+function trimmedWidth(text) {
+	const span = trimmed(text, 0);
+	return `${span.start}:${span.end}:${span.digits}`;
+}
+
 const text = "a1 bb22 ccc333 dddd4444 ".repeat(20);
 check(tokenLengths(text), 600, "token lengths");
 check(digitCount(text), 200, "digit count");
@@ -214,6 +247,8 @@ const result = found(text, 3);
 check(`${result?.start}:${result?.end}`, "8:14", "returned observer");
 check(found(text, 9), undefined, "missing observer");
 check(rejected(text), "start,end,digits:8:3", "thrown observer");
+check(wordWidths(`  ${text}   `), 600, "forwarded records");
+check(trimmedWidth("   padded value  "), "3:15:12", "copied forwarded records");
 const handlers = attach(["a", "try-b", "cc", "try-dd", "e", "f", "try-g"], []);
 check(
 	handlers.map((environment) => `${environment.state}@${environment.version}`).join(","),

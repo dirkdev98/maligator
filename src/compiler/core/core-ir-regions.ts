@@ -555,6 +555,16 @@ export interface CoreRecordUses {
 export interface CoreEntryResultFields {
 	readonly keys: ReadonlyArray<number>;
 	readonly allocations: ReadonlyArray<CoreInstructionId>;
+	/**
+	 * Calls whose result the entry returns unchanged. The callee returns one of its own
+	 * literals with the same keys, so its fields can go straight to the caller's storage.
+	 */
+	readonly forwards?: ReadonlyArray<CoreRecordForward>;
+}
+
+export interface CoreRecordForward {
+	readonly instruction: CoreInstructionId;
+	readonly target: CoreFunctionId;
 }
 
 export interface CoreDirectBuiltinCallbackPlan {

@@ -1805,7 +1805,9 @@ function immutablePlanCopy(plan: CoreOptimizationPlan): CoreOptimizationPlan {
 			entry.operatorInputs,
 			entry.constantBooleans,
 			entry.callOverrides,
+			entry.resultFields,
 			...entry.callSites.map((site) => site.fieldValueRepresentations),
+			...entry.callSites.map((site) => site.recordUses),
 		]) {
 			if (payload !== undefined) proofPayloads.add(payload);
 		}
@@ -2010,14 +2012,38 @@ export function verifyCoreOptimizationPlan(
 				`direct entry ${entry.function}:${entry.id} has no current representation proof`,
 			);
 		if (entry.resultFields !== undefined) {
+			// Exact targets are planning facts, like those of unguarded entry call sites.
+			const claimed = new Map(
+				(entry.resultFields.forwards ?? []).map(({ instruction, target }) => [
+					instruction,
+					target,
+				]),
+			);
 			const current = coreRecordResultFields(
 				fn,
 				buildCoreControlFlow(program, entry.function, { exceptions: true }),
+				(call) => {
+					const target = claimed.get(call);
+					if (target === undefined || target === entry.function || !live.has(target))
+						return undefined;
+					const keys = coreRecordResultFields(
+						program.function(target),
+						buildCoreControlFlow(program, target, { exceptions: true }),
+					)?.keys;
+					return keys === undefined ? undefined : { target, keys };
+				},
 			);
 			if (
 				current === undefined ||
 				!sameNumbers(current.keys, entry.resultFields.keys) ||
 				!sameNumbers(current.allocations, entry.resultFields.allocations) ||
+				(current.forwards?.length ?? 0) !== (entry.resultFields.forwards?.length ?? 0) ||
+				(current.forwards ?? []).some(
+					(forward, index) =>
+						forward.instruction !== entry.resultFields!.forwards![index]!.instruction ||
+						forward.target !== entry.resultFields!.forwards![index]!.target ||
+						!emittedInstructions.has(forward.instruction),
+				) ||
 				entry.resultFields.allocations.some(
 					(allocation) => !emittedInstructions.has(allocation),
 				) ||
@@ -2031,12 +2057,23 @@ export function verifyCoreOptimizationPlan(
 		}
 		const overriddenInstructions = new Set<CoreInstructionId>();
 		for (const call of entry.callOverrides ?? []) {
+			const callee = entriesByKey.get(`${call.target}:${call.entryId}`);
 			if (
 				overriddenInstructions.has(call.instruction) ||
 				fn.instructionKind(call.instruction) !== "operation" ||
 				fn.instructionOpcodeName(call.instruction) !== "call" ||
-				!entriesByKey.has(`${call.target}:${call.entryId}`) ||
-				(call.guarded !== undefined && call.guarded !== true)
+				callee === undefined ||
+				(call.guarded !== undefined && call.guarded !== true) ||
+				// A record entry returns through caller storage, which only a forward provides.
+				(callee.resultFields !== undefined &&
+					(call.guarded === true ||
+						callee.resultFields.forwards !== undefined ||
+						!sameNumbers(callee.resultFields.keys, entry.resultFields?.keys ?? []) ||
+						!(entry.resultFields?.forwards ?? []).some(
+							(forward) =>
+								forward.instruction === call.instruction &&
+								forward.target === call.target,
+						)))
 			)
 				fail(`direct entry ${entry.function}:${entry.id} has an invalid call override`);
 			overriddenInstructions.add(call.instruction);

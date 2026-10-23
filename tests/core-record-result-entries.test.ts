@@ -78,6 +78,10 @@ console.log(widths("ab cde f"), retain("ab cd").length);`,
 		);
 		const entry = recordEntry("scan");
 		expect(entry?.resultFields?.allocations).toHaveLength(1);
+		// The verified copy keeps the record proofs that the representation proof compares.
+		expect(() =>
+			verifyCoreOptimizationPlan(core.program, core.plan, core.context),
+		).not.toThrow();
 		expect(entry!.callSites.map((site) => site.caller)).toEqual([named("widths")]);
 		expect(
 			entry!.callSites[0]!.recordUses!.loads.map((load) => load.field).sort(),
@@ -125,6 +129,80 @@ console.log(total, seen.length);`,
 		expect(recordEntry("remembered")).toBeUndefined();
 		expect(recordEntry("optional")).toBeUndefined();
 		expect(recordEntry("reordered")).toBeUndefined();
+	});
+
+	it("forwards a producer's record through a helper that returns it", () => {
+		const { core, named, recordEntry } = compile(
+			"forwarded",
+			`${scanner}
+function word(text, start) {
+	let index = start;
+	while (index < text.length && text.charCodeAt(index) === 32) index++;
+	return scan(text, index);
+}
+function widths(text) {
+	let total = 0;
+	for (let index = 0; index < text.length; ) {
+		const token = word(text, index);
+		total += token.end - token.start;
+		index = token.end + 1;
+	}
+	return total;
+}
+function direct(text) {
+	return scan(text, 0).end;
+}
+console.log(widths("ab  cde f"), direct("ab"));`,
+		);
+		const forwarder = recordEntry("word")!;
+		const producer = recordEntry("scan")!;
+		expect(forwarder.resultFields!.forwards!.map((forward) => forward.target)).toEqual([
+			named("scan"),
+		]);
+		expect(forwarder.callOverrides).toEqual([
+			{
+				instruction: forwarder.resultFields!.forwards![0]!.instruction,
+				target: named("scan"),
+				entryId: producer.id,
+			},
+		]);
+		// Only a forward may route a call to the caller-storage ABI.
+		const stray = core.plan.directEntries.find(
+			(entry) => entry.function === named("widths") && entry.resultFields === undefined,
+		);
+		if (stray !== undefined) {
+			const site = [...core.program.function(named("widths")).instructionIds()].find(
+				(instruction) =>
+					core.program.function(named("widths")).instructionOpcodeName(instruction) ===
+					"call",
+			)!;
+			const callOverrides = [
+				{ instruction: site, target: named("scan"), entryId: producer.id },
+			];
+			const variant = analyzeCoreNativeEntry(
+				core.program.function(stray.function),
+				buildCoreControlFlow(core.program, stray.function, { exceptions: true }),
+				stray.parameterRepresentations,
+				undefined,
+				stray.callSites,
+				undefined,
+				undefined,
+				callOverrides,
+			);
+			const forged = { ...stray, ...variant, callOverrides };
+			expect(() =>
+				verifyCoreOptimizationPlan(
+					core.program,
+					{
+						...core.plan,
+						directEntries: core.plan.directEntries.map((current) =>
+							current === stray ? forged : current,
+						),
+					},
+					core.context,
+				),
+			).toThrow(/invalid call override/);
+		}
 	});
 
 	it("rejects a plan whose caller reads disagree with the current program", () => {

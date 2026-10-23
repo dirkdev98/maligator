@@ -189,6 +189,7 @@ function firstOverrideOffset(bytes: Uint8Array): number {
 	expect(reader.u32()).toBe(0); // Field loads.
 	expect(reader.u32()).toBe(0); // Result field keys.
 	expect(reader.u32()).toBe(0); // Result field allocations.
+	expect(reader.u32()).toBe(0); // Result field forwards.
 	expect(reader.u32()).toBe(0); // Constant booleans.
 	expect(reader.u32()).toBe(0); // Operator inputs.
 	expect(reader.u32()).toBe(1); // Outgoing call overrides.

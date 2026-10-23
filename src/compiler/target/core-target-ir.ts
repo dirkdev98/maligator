@@ -166,6 +166,10 @@ export interface CoreTargetDirectEntry {
 	readonly resultFields?: {
 		readonly keys: ReadonlyArray<number>;
 		readonly allocations: ReadonlyArray<CompilerInstruction>;
+		readonly forwards?: ReadonlyArray<{
+			readonly instruction: CompilerInstruction;
+			readonly functionIndex: number;
+		}>;
 	};
 	readonly argumentRepresentations?: ReadonlyArray<CoreTargetRegisterRepresentation>;
 	readonly operatorInputs?: ReadonlyArray<{

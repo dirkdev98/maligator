@@ -900,6 +900,11 @@ export function nativeVariantContract(
 		gc: entry.gc,
 		instructions,
 		storage: entry.storage,
+		...(entry.resultFields?.forwards === undefined
+			? {}
+			: {
+					recordForwardIps: entry.resultFields.forwards.map((forward) => forward.callIp),
+				}),
 	};
 }
 

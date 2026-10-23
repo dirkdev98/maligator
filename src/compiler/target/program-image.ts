@@ -1435,6 +1435,8 @@ export interface NativeFunctionPlan {
 	}>;
 	/** Calls whose direct entry returns a record's fields; the loads are the result's only reads. */
 	readonly recordCalls?: ReadonlyArray<NativeRecordCall>;
+	/** In a forwarding record entry's contract, the calls that write to its own caller's storage. */
+	readonly recordForwardIps?: ReadonlyArray<number>;
 	readonly gc: {
 		readonly safepoints: ReadonlyArray<
 			ExecutionSafepointRoots & {
@@ -1486,6 +1488,11 @@ export interface NativeDirectEntryPlan {
 	readonly resultFields?: {
 		readonly keys: ReadonlyArray<number>;
 		readonly allocationIps: ReadonlyArray<number>;
+		/** Exact calls of literal record producers whose result is returned unchanged. */
+		readonly forwards?: ReadonlyArray<{
+			readonly callIp: number;
+			readonly functionIndex: number;
+		}>;
 	};
 	readonly argumentRepresentations?: ReadonlyArray<VmRegisterRepresentation>;
 	readonly operatorInputs?: ReadonlyArray<{
@@ -1524,7 +1531,13 @@ export function validateNativeDirectEntry(
 			functions !== undefined &&
 			(target?.id !== call.entryId ||
 				target.fieldParameters !== undefined ||
-				target.resultFields !== undefined ||
+				(target.resultFields !== undefined &&
+					(call.guarded === true ||
+						!(entry.resultFields?.forwards ?? []).some(
+							(forward) =>
+								forward.callIp === call.instructionIp &&
+								forward.functionIndex === call.functionIndex,
+						))) ||
 				(target.argumentRepresentations !== undefined &&
 					target.argumentRepresentations.length !== instruction.argumentCount))
 		)
@@ -1769,21 +1782,26 @@ function validateNativeRecordReturns(
 	function fail(): never {
 		throw new RangeError("Invalid native record result");
 	}
+	const forwardIps = (results.forwards ?? []).map((forward) => forward.callIp);
+	const producers = [...results.allocationIps, ...forwardIps];
 	if (
 		results.keys.length === 0 ||
 		results.keys.length > NATIVE_RECORD_FIELD_LIMIT ||
 		new Set(results.keys).size !== results.keys.length ||
-		results.allocationIps.length === 0 ||
-		new Set(results.allocationIps).size !== results.allocationIps.length
+		producers.length === 0 ||
+		new Set(producers).size !== producers.length
 	)
 		fail();
 	const exceptionTargets = vmExceptionHandlerTargets(fn.instructions.length, fn.handlers);
 	const transported = new Set<number>();
 	let reachable: ReadonlySet<number> | undefined;
-	for (const ip of results.allocationIps) {
+	for (const ip of producers) {
 		const allocation = fn.instructions[ip];
-		if (
+		if (allocation?.opcode === "CALL") {
+			if (!forwardIps.includes(ip)) fail();
+		} else if (
 			allocation?.opcode !== "CREATE_OBJECT_SHAPED" ||
+			forwardIps.includes(ip) ||
 			allocation.keyStringIndices.length !== results.keys.length ||
 			allocation.keyStringIndices.some((key, index) => key !== results.keys[index])
 		)
@@ -5059,6 +5077,16 @@ function lowerExecutionFunctionToNativePlan(
 						allocationIps: entry.resultFields.allocations.map((allocation) =>
 							instructionIndexByTargetInstruction.get(allocation)!,
 						),
+						...(entry.resultFields.forwards === undefined
+							? {}
+							: {
+									forwards: entry.resultFields.forwards.map(
+										({ instruction, functionIndex }) => ({
+											callIp: instructionIndexByTargetInstruction.get(instruction)!,
+											functionIndex,
+										}),
+									),
+								}),
 					},
 				}),
 		...(entry.argumentRepresentations === undefined

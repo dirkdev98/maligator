@@ -2678,6 +2678,16 @@ function lowerFunctionToTarget(
 							allocations: entry.resultFields.allocations.map((allocation) =>
 								loweredInstructions.get(allocation)!,
 							),
+							...(entry.resultFields.forwards === undefined
+								? {}
+								: {
+										forwards: entry.resultFields.forwards.map(
+											({ instruction, target }) => ({
+												instruction: loweredInstructions.get(instruction)!,
+												functionIndex: functionMap.coreToExecution[target]!,
+											}),
+										),
+									}),
 						},
 					}),
 			parameterRepresentations: entry.parameterRepresentations.map(
