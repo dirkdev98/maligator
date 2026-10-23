@@ -1538,6 +1538,27 @@ static bool http_response_name_view(
     return true;
 }
 
+/* Checks a header value segment by segment, copying its bytes when `bytes` is
+ * non-null, so neither a concatenation is flattened nor Latin-1 widened. */
+static bool http_header_value_scan(const MalString *string, byte *bytes) {
+    MalStringIterator iterator;
+    MalStringSegment segment;
+    mal_string_iterator_init(&iterator, string, 0, mal_string_length(string));
+    bool valid = true;
+    while (valid && mal_string_iterator_next(&iterator, &segment)) {
+        for (usize i = 0; i < segment.length; i++) {
+            c16 unit = mal_string_segment_code_unit_at(&segment, i);
+            if (unit != '\t' && (unit < 0x20 || unit == 0x7f || unit > 0xff)) {
+                valid = false;
+                break;
+            }
+            if (bytes != nullptr) *bytes++ = (byte) unit;
+        }
+    }
+    mal_string_iterator_dispose(&iterator);
+    return valid;
+}
+
 static bool http_header_value_valid(MalVm *vm, MalValue value) {
     if (mal_value_is_array_object(value)) {
         MalArrayObject *array = mal_value_to_array_object(value);
@@ -1561,14 +1582,10 @@ static bool http_header_value_valid(MalVm *vm, MalValue value) {
     }
     MalString *string;
     if (!mal_vm_to_string(vm, value, &string)) return false;
-    const c16 *units = mal_string_code_units(string);
-    for (usize i = 0; i < mal_string_length(string); i++) {
-        c16 unit = units[i];
-        if (unit != '\t' && (unit < 0x20 || unit == 0x7f || unit > 0xff)) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                               "Invalid character in HTTP header value");
-            return false;
-        }
+    if (!http_header_value_scan(string, nullptr)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                           "Invalid character in HTTP header value");
+        return false;
     }
     return true;
 }
@@ -1583,25 +1600,17 @@ static bool http_header_value_bytes(
     MalString *string;
     if (!mal_vm_to_string(vm, value, &string)) return false;
     usize length = mal_string_length(string);
-    const c16 *units = mal_string_code_units(string);
-    for (usize i = 0; i < length; i++) {
-        c16 unit = units[i];
-        if (unit != '\t' && (unit < 0x20 || unit == 0x7f || unit > 0xff)) {
-            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                               "Invalid character in HTTP header value");
-            return false;
-        }
-    }
-    if (length == SIZE_MAX) {
-        mal_vm_throw_allocation_error(vm);
-        return false;
-    }
     byte *bytes = malloc(length + 1);
     if (bytes == nullptr) {
         mal_vm_throw_allocation_error(vm);
         return false;
     }
-    for (usize i = 0; i < length; i++) bytes[i] = (byte) units[i];
+    if (!http_header_value_scan(string, bytes)) {
+        free(bytes);
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                           "Invalid character in HTTP header value");
+        return false;
+    }
     bytes[length] = '\0';
     *out = bytes;
     *out_length = length;
