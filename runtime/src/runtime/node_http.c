@@ -1475,6 +1475,12 @@ static MalValue http_new_server_response(MalVm *vm) {
     return result;
 }
 
+// RFC 9110 tchar: visible ASCII without the separators ()<>@,;:\\"/[]?={}.
+static inline bool http_token_unit(c16 unit) {
+    static const u64 token_bits[2] = {0x03ff6cfa00000000ull, 0x57ffffffc7fffffeull};
+    return unit < 128 && ((token_bits[unit >> 6] >> (unit & 63)) & 1) != 0;
+}
+
 static bool http_response_name(
     MalVm *vm, MalValue value, char **out, usize *out_length) {
     if (!mal_value_is_string(value)) {
@@ -1497,11 +1503,7 @@ static bool http_response_name(
     }
     for (usize i = 0; i < length; i++) {
         c16 unit = units[i];
-        bool valid = unit > 0x20 && unit < 0x7f && unit != '(' && unit != ')'
-            && unit != '<' && unit != '>' && unit != '@' && unit != ','
-            && unit != ';' && unit != ':' && unit != '\\' && unit != '"'
-            && unit != '/' && unit != '[' && unit != ']' && unit != '?'
-            && unit != '=' && unit != '{' && unit != '}';
+        bool valid = http_token_unit(unit);
         if (!valid) {
             free(name);
             mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
@@ -1534,11 +1536,7 @@ static bool http_response_name_view(
     }
     for (usize i = 0; i < length; i++) {
         c16 unit = units[i];
-        bool valid = unit > 0x20 && unit < 0x7f && unit != '(' && unit != ')'
-            && unit != '<' && unit != '>' && unit != '@' && unit != ','
-            && unit != ';' && unit != ':' && unit != '\\' && unit != '"'
-            && unit != '/' && unit != '[' && unit != ']' && unit != '?'
-            && unit != '=' && unit != '{' && unit != '}';
+        bool valid = http_token_unit(unit);
         if (!valid) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
                                "Invalid HTTP header name");
