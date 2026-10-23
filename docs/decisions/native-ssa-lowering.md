@@ -375,6 +375,25 @@ materializer roots the vector before allocating the managed cell. The clone pres
 shape, prototype, and current values; allocation errors are checked before frame unlink.
 Boxed-result typed entries share this path. General escaping uses remain excluded.
 
+Record entries return a record through caller storage instead of creating it. Core
+admits one when every reachable return of a function returns one of its own
+`createObjectShaped` literals, all with the same keys and no other use, or forwards
+the result of an exact call to a function whose returns are such literals. Each
+exact, unguarded call site gets the entry only when its result's uses are known:
+static reads and writes of those keys, and observers, which are any other use but a
+control-flow edge or handler argument. A site whose observers lie on every path from
+the call keeps the ordinary entry, since it would only copy the callee's literal. The
+entry takes one `MalValue *` per field after its parameters and writes the literal's
+operands through them where the literal would have been allocated. The caller passes
+rooted frame slots, and its accesses use them until the first observer on a path
+creates the object with `mal_vm_materialize_record`, which takes the prototype from
+the callee's realm. That object is cached for the call and is the record from then on,
+for accesses as well as observers. A forwarding entry passes its own pointers to the
+callee's record entry, or copies the slots of the returned literal when the callee has
+none. Core re-proves both sides before lowering, the bytecode validators check the
+allocation and call result flows, and transport selection pairs a record entry only
+with the calls that carry these plans. Fields travel boxed.
+
 Literal-shape caches are shared by both target bodies. Their slot identities come
 from Core allocation origins, independently of physical block order. Both the wire
 and compiler artifact persist those identities explicitly; validation rejects

@@ -105,6 +105,20 @@ The independent target boundary and current storage contract are recorded in
       value kinds give call results no kind: the objects phase's pricing loop
       (59 ms against Node's 25) boxes and unboxes the results of `argumentEdges`
       and the accumulator on every iteration, and its `%` chains run on doubles.
+- [ ] Give record entries typed fields. Record entries return fields boxed, so a
+      caller's `token.end` stays boxed, `index = token.end + 1` gives the producer a
+      boxed parameter, and the scanning loop in `returned-records` runs generic
+      arithmetic: 90.8 ns/op against Node's 9.6 (118.4 before record entries, on the
+      mjq host). The field kinds depend on the producer's parameter kinds and back,
+      so they need a record dimension in the program value-kind flow and a consumer
+      that turns it into entry and caller representations.
+- [ ] Admit more record calls. Not admitted yet: calls through instance-method hints,
+      which need a guarded fallback that keeps the returned object as the record;
+      records handed to the next callee's field entry, as in `cost(read(id))`;
+      producers whose returns differ in keys, like `decodeVmValueOperand`, the largest
+      returned-record allocator in the quick self-compile census (410K of 124M
+      allocations); and forwarding more than one call deep. In that census, record
+      calls now cover 263K calls, mostly `copyTerminatorEdge` and `valueEnvironment`.
 
 - [ ] Stream the product CLI's translation units to disk. Its build keeps the CLI's
       emitted C, 650 MB with the worker root's, in memory while it compiles the
