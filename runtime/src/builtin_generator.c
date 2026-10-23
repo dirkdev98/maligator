@@ -114,14 +114,15 @@ int mal_generator_try_exact_iterator_step(
     i32 saved_profile_site = vm->profile_current_site_id;
 #endif
     MAL_PROFILE_NATIVE_CALL(vm, next);
-    MalCalleeRoots roots;
-    mal_gc_callee_roots_begin(
-        &roots, iterator, mal_value_new_undefined(), next_method, nullptr, 0);
+    // The intrinsic next is not read after the resume, so only the generator needs a root.
+    MalValue root = iterator;
+    MalRootSpan root_span;
+    mal_gc_root(&root_span, &root, 1);
     vm->gc_native_frames++;
     bool ok = mal_generator_next_pair(
         vm, generator, mal_value_new_undefined(), value_out, done_out);
     vm->gc_native_frames--;
-    mal_gc_callee_roots_end(&roots);
+    mal_gc_unroot(&root_span);
 #if MAL_PROFILE && MAL_PERF_STATS
     vm->profile_current_site_id = saved_profile_site;
 #endif
