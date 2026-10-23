@@ -489,7 +489,7 @@ for (let i = 0; i < 300; i++) evictionKeys[`evict${i}x`] = i;
 const evictors = Object.keys(evictionKeys).map((key) => new RegExp(key));
 const evictorsMatch = evictors.every((pattern, i) => pattern.test(`evict${i}x`));
 check(
-	"a literal keeps matching after other patterns take its template slot",
+	"a literal keeps matching while hundreds of other patterns are templated",
 	evictorsMatch &&
 		evictionSurvivor.exec("a keep7")[1] === "7" &&
 		/keep(\d)/g.test("keep1"),

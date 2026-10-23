@@ -452,7 +452,7 @@ static void regexp_initialize_state(
     object->shape = regexp_instance_shape(vm);
 }
 
-#define REGEXP_TEMPLATE_CAPACITY 64
+#define REGEXP_TEMPLATE_LIMIT 4096
 
 typedef struct RegexpTemplate {
     const MalString *pattern;
@@ -461,47 +461,56 @@ typedef struct RegexpTemplate {
     u32 bits;
 } RegexpTemplate;
 
+/** Open addressing over (pattern, flags) identity; a null pattern marks a free entry. */
 struct MalRegExpTemplates {
-    RegexpTemplate entries[REGEXP_TEMPLATE_CAPACITY];
-    /** Evicted matchers that objects may still borrow, kept until the VM ends. */
-    void **retired;
-    usize retired_count;
-    usize retired_capacity;
+    RegexpTemplate *entries;
+    usize capacity;
+    usize count;
 };
 
 static void regexp_templates_free(MalVm *vm) {
     struct MalRegExpTemplates *templates = vm->regexp_templates;
     if (templates == nullptr) return;
-    for (usize i = 0; i < countof(templates->entries); i++) {
+    for (usize i = 0; i < templates->capacity; i++) {
         mal_regexp_release(templates->entries[i].matcher);
     }
-    for (usize i = 0; i < templates->retired_count; i++) {
-        mal_regexp_release(templates->retired[i]);
-    }
-    free(templates->retired);
+    free(templates->entries);
     free(templates);
     vm->regexp_templates = nullptr;
 }
 
-static bool regexp_templates_retire(struct MalRegExpTemplates *templates, void *matcher) {
-    if (matcher == nullptr) return true;
-    if (templates->retired_count == templates->retired_capacity) {
-        usize capacity = templates->retired_capacity == 0 ? 16 : templates->retired_capacity * 2;
-        void **retired = realloc(templates->retired, capacity * sizeof(*retired));
-        if (retired == nullptr) return false;
-        templates->retired = retired;
-        templates->retired_capacity = capacity;
+static usize regexp_template_home(
+    const struct MalRegExpTemplates *templates, const MalString *pattern, const MalString *flags
+) {
+    u64 key = ((uptr) pattern ^ ((uptr) flags << 1)) * 0x9E3779B97F4A7C15ull;
+    return (usize) (key >> 32) & (templates->capacity - 1);
+}
+
+static bool regexp_templates_grow(struct MalRegExpTemplates *templates) {
+    usize capacity = templates->capacity == 0 ? 64 : templates->capacity * 2;
+    RegexpTemplate *entries = calloc(capacity, sizeof(*entries));
+    if (entries == nullptr) return false;
+    RegexpTemplate *old = templates->entries;
+    usize old_capacity = templates->capacity;
+    templates->entries = entries;
+    templates->capacity = capacity;
+    for (usize i = 0; i < old_capacity; i++) {
+        if (old[i].pattern == nullptr) continue;
+        usize index = regexp_template_home(templates, old[i].pattern, old[i].flags);
+        while (entries[index].pattern != nullptr) index = (index + 1) & (capacity - 1);
+        entries[index] = old[i];
     }
-    templates->retired[templates->retired_count++] = matcher;
+    free(old);
     return true;
 }
 
 // Every regex literal evaluation constructs from the same atom pair. Atoms and
 // image constants live as long as the VM, so their identity names one compiled
-// program and re-evaluation borrows its matcher, skipping flag parsing, the
-// pattern copy, the engine's cache search, a matcher allocation, and the
-// object's reference; any other string takes the full path. The matchers stay
-// alive until the VM ends, so their number is bounded by those strings.
+// program for the VM's lifetime: re-evaluation borrows its matcher, skipping flag
+// parsing, the pattern copy, the engine's cache search, a matcher allocation, and
+// the object's reference. Entries are never evicted, since objects may still borrow
+// them, so pairs past the limit and any other string take the full path. Returns the
+// pair's entry, the free entry it would take, or null.
 static RegexpTemplate *regexp_template_slot(
     MalVm *vm, const MalString *pattern, const MalString *flags
 ) {
@@ -509,8 +518,9 @@ static RegexpTemplate *regexp_template_slot(
         (!flags->property_atom && flags->header.storage != MAL_HEAP_STORAGE_IMMORTAL)) {
         return nullptr;
     }
-    if (vm->regexp_templates == nullptr) {
-        struct MalRegExpTemplates *templates = calloc(1, sizeof(*templates));
+    struct MalRegExpTemplates *templates = vm->regexp_templates;
+    if (templates == nullptr) {
+        templates = calloc(1, sizeof(*templates));
         if (templates == nullptr) return nullptr;
         if (!mal_vm_register_runtime_cleanup(vm, regexp_templates_free)) {
             free(templates);
@@ -518,8 +528,17 @@ static RegexpTemplate *regexp_template_slot(
         }
         vm->regexp_templates = templates;
     }
-    u64 key = ((uptr) pattern ^ ((uptr) flags << 1)) * 0x9E3779B97F4A7C15ull;
-    return &vm->regexp_templates->entries[(key >> 32) & (REGEXP_TEMPLATE_CAPACITY - 1)];
+    if (templates->count < REGEXP_TEMPLATE_LIMIT &&
+        (templates->count + 1) * 2 > templates->capacity && !regexp_templates_grow(templates)) {
+        return nullptr;
+    }
+    usize index = regexp_template_home(templates, pattern, flags);
+    while (templates->entries[index].pattern != nullptr) {
+        RegexpTemplate *entry = &templates->entries[index];
+        if (entry->pattern == pattern && entry->flags == flags) return entry;
+        index = (index + 1) & (templates->capacity - 1);
+    }
+    return templates->count < REGEXP_TEMPLATE_LIMIT ? &templates->entries[index] : nullptr;
 }
 
 static bool regexp_initialize(MalVm *vm, MalRegExpObject *re, MalString *pattern, MalString *flags_str) {
@@ -550,13 +569,14 @@ static bool regexp_initialize(MalVm *vm, MalRegExpObject *re, MalString *pattern
         mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, "invalid regular expression");
         return false;
     }
-    if (template != nullptr && regexp_templates_retire(vm->regexp_templates, template->matcher)) {
+    if (template != nullptr) {
         *template = (RegexpTemplate) {
             .pattern = pattern,
             .flags = flags_str,
             .matcher = matcher,
             .bits = bits,
         };
+        vm->regexp_templates->count++;
         regexp_initialize_state(vm, re, matcher, true, pattern, flags_str, bits);
         return true;
     }
