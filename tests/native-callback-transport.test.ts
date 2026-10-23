@@ -174,7 +174,7 @@ describe("native builtin callback transport", () => {
 						globalThis.collect();
 						return result;
 					};
-					transform(1, 2);
+					globalThis.sample = transform(1, 2);
 					return [1, 2, 3].map(transform);
 				};`,
 				"/callback-budget.js",
