@@ -808,13 +808,12 @@ contracts or investigates costs still visible after the string follow-ups.
       does not fire on these loops, and a callback's loop-invariant captured read
       (`value + round`) reloads and rechecks TDZ every element.
 
-- [ ] Cut the hinted Map lookup's cost when keys alternate. A `map-get-hit-16`
-      style loop takes 13.6 ns per lookup against Node's 4.2. 60% of its samples
-      are in `mal_map_object_get_hinted`: the Map's one-entry hint misses whenever
-      consecutive lookups use different keys, so each call pays the out-of-line
-      hint check, a SIMD group probe with its register saves and spills, and a hint
-      refresh. The compiled loop's 39% is its two f64-keyed array loads, not the
-      guarded collection arm.
+- [ ] Cut the hinted Map lookup's cost when keys alternate. A get on a 4,096-entry
+      Map with alternating keys takes 7.1 ns for int32 keys and 8.6 ns for objects
+      against Node's 4.3 and 4.9. Int32 and identity lookups are frameless leaf
+      calls with a one-multiply hash now; what remains is the dependent probe
+      chain (hash, control group, slot, key) and, at a receiver the compiler
+      cannot type, the method capture guard before every call.
 - [ ] Reduce rope construction cost in append and prepend loops. Balanced joins
       split and rebuild O(log n) nodes per piece; `string-rope-access` still spends
       about 20% in join, split, node allocation and sweep. Copying short pieces into
