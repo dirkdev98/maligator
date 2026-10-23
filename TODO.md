@@ -192,40 +192,21 @@ The independent target boundary and current storage contract are recorded in
 ## Compiled native output
 
 Native output should read and perform like a compiled language rather than a
-translated interpreter. Compiled code now keeps values in C locals and the
-collector scans native stacks, which took the Node-hosted self-compile from 49.5
-to about 46 s and its C from 176 M to 142 M code units. Measured against Node on
-the default closed world, class accessors over private fields still run 75 ms
-against 14, polymorphic subclass methods 40 against 10, recursive method calls
-86 against 29, and `out += "x" + i` loops 11 against 5.
+translated interpreter. Measured against Node on the default closed world, class
+accessors over private fields still run 75 ms against 14, polymorphic subclass
+methods 40 against 10 and recursive method calls 86 against 29.
 
-The native self-compiler takes about 15.3 s and its profile is flat. Sampled by
+The native self-compiler takes about 15.6 s and its profile is flat: sampled by
 program counter, 37% of its time is compiled JavaScript, 12% the collector and
-allocation, 11% property lookup helpers, 8% collections and 7% array helpers. Class
-members now guard on shared per-class layout cells, which took it from 17.3 s.
-Reading owners' own captured bindings as SSA values and sinking closures into the
-fallbacks that use them took it from 16.4 s. It
-makes about 480 M compiled entries per run, yet direct attacks on call overhead
-did not move it: guarded direct calls at every hinted method site (12 K more
-sites, 9% more C) or after every class-layout method hit (13 K sites), an inline
-hit path for inherited method caches, capturing Map and Set methods before the
-static probe at the 3 K collection calls outside chain regions, four times the
-cross-call inlining budget (90 M fewer entries), frameless fast entries for
-private-field accessors (1.7% slower) and evaluating each `this` layout guard once
-per activation. Classes with more than 64 fields did matter: they used to drop to
-dictionary mode, and keeping them shaped saved 4.7%.
-
-Hardware counters place the gap in instruction count, not stalls. On the same
-self-compile input (xctrace CPU Counters, M3 Pro), Node's main thread waits on
-instruction delivery in 23% of its cycles and the native compiler in 22%. The native
-one retires useful work in 56% of its cycles against Node's 44%, yet needs 1.9 times
-the cycles, so it executes about 2.4 times the instructions. Ranking inline candidates
-by interprocedural call frequency instead of local loop depth, and charging
-throw-only blocks a quarter of their size, left it at 15.65 s; four times the budget
-on top saved 2% for 27% more compiled code. A whole-program points-to model over
-construction Core (allocation sites, merged summaries, saturated generic sets) needed
-108 s in Node to converge on the self-compiler, and generic value paths still reached
-the hot receivers, so field facts stay bounded and consumer-driven as planned below.
+allocation, 11% property lookup helpers, 8% collections and 7% array helpers.
+Hardware counters place its gap to Node in instruction count, not stalls: at a
+similar front-end stall rate it retires about 2.4 times Node's instructions. It makes
+about 480 M compiled entries per run, yet cheaper calls alone did not move it:
+guarded direct calls at hinted method sites, inline inherited-method hits, frameless
+accessor entries and up to four times the inlining budget each changed it by 2% or
+less. A whole-program points-to model over construction Core took 108 s in Node to
+converge and still left generic paths at the hot receivers, so field facts stay
+bounded and consumer-driven as planned below.
 
 - [ ] Unbox typed-array lookup loops. A lookup through a module-level
       `const FLAGS = new Uint8Array(256)` in a `charCodeAt` loop runs 33 ms against
@@ -345,27 +326,13 @@ Shared lifetime and fallback rules are recorded in
       an observable object. Keep numeric signed-zero/overflow constraints and
       pointer-root requirements explicit. Extend the existing bounded range walk
       only for a demonstrated consumer; a larger walk limit is not an optimization.
-      Class-private fields have program-wide facts: a field's kinds join every
-      value its observable writes store, its brand says when all of those are
-      Arrays or all one TypedArray kind, and it is construction-only when only
-      the activation that added it to an object stores into it. A loop carries
-      such a field of an invariant receiver around its back edge once one read
-      succeeded, and element accesses through an Array-branded field skip the
-      class test. Arrays that only private fields hold also have element kinds: every
-      store through any field or allocation that can share them joins in, holes and
-      reads past the end add `undefined`, and with locked primordials `length`,
-      Array.prototype methods, iteration and callbacks without a parameter for the
-      array keep them known. A return, an argument, a capture, or a store whose key
-      may be a string gives up. Method parameters decide in practice: in
+      Private field facts (kinds, brands, construction-only fields and the element
+      kinds of arrays only private fields hold) stop at method parameters: in
       `kill(id) { this.#live[id] = 0 }` the key is unknown and in
       `add(op) { this.#ops.push(op) }` the value is, because method calls reach no
-      targets. Of the self-compiler's 94 Array fields, 23 keep known elements and 10
-      narrower than any kind, and its hottest store columns leave through the
-      kernel's column literal, so the native self-compile moved from 15.75 to 15.65 s,
-      within noise. Map and Set fields keep their method
-      capture, because the direct call assumes no one added an own `get`. A brand
-      check followed by a field read of the same class on the same receiver still
-      runs both checks.
+      targets. Of the self-compiler's 94 Array fields, 23 keep known elements, and
+      its native self-compile did not measurably move. A brand check followed by a
+      field read of the same class on the same receiver still runs both checks.
       Field kinds per allocation site are the missing fact in class-heavy loops:
       `sum + store.opcode(id)` keeps a generic `+` fallback because `.opcode` of a
       `{ opcode, a, b }` element is unknown, and that fallback can call user code,
@@ -424,26 +391,13 @@ Shared lifetime and fallback rules are recorded in
       instruction visits, transfer/summary builds, cache reuse, and peak retained
       data in opt-in diagnostics. Do not trade a cheap emitter for hidden planning
       scans, uncontrolled cache growth, or a new unconditional whole-program pass.
-      Memory versions now solve requested partitions, repeated-load proofs start
-      after matching inputs and dominance, and late target payloads are built only
-      after selection. Memory events now belong to requested partitions, heap
-      accesses resolve by allocation root, and layouts/escape proofs are lazy per
-      allocation. Slot-only queries avoid heap provenance entirely. Optional loop
-      and receiver certificates now wait for recipe consumers; numeric-array and
-      closed-global indexes wait for eligible reads. Constant and array-brand
-      queries avoid replaying mutable contents. Scalar-family queries now skip
-      integer propagation, and heap brands skip containment/use/range indexes.
-      Integer proofs follow requested COPY/JOIN dependencies; containment checks
-      follow requested allocation roots. Program kinds now have an independent
-      query and journal cursor; terminal cross-call refreshes update summaries and
-      reachability without solving unused kinds. Static queries skip impossible
-      cell/identity proofs. Memory columns share broad clobbers and compact
-      unobserved intermediate definitions. Remaining work: decode memory accesses
-      by requested family, narrow shared instruction/root/use indexing and partition
-      state to requested reads, query only the needed property contents, and defer
-      candidate recognition while preserving exact ranking and costs. Measure the compact
-      integer snapshot's retained memory and representative compile time before
-      extending these caches.
+      Memory, integer, containment and program-kind queries already solve only the
+      partitions, roots and dependencies a consumer requests. Still to do: decode
+      memory accesses by requested family, narrow shared instruction, root and use
+      indexing and partition state to requested reads, query only the needed property
+      contents, and defer candidate recognition while preserving exact ranking and
+      costs. Measure the compact integer snapshot's retained memory and representative
+      compile time before extending these caches.
 
 - [ ] Add representative small, medium, and large compiler-scaling cases to the
       existing measurement workflow. Alternate Node and rebuilt self-hosted
