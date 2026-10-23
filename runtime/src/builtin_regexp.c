@@ -1926,6 +1926,12 @@ static MalValue regexp_canonical_replace(
         }
     }
 
+    if (offsets.count == 0) {
+        // The result would hold exactly the subject's code units.
+        ret = mal_value_from_string(s);
+        goto done;
+    }
+    mal_text_buffer_hint_capacity(&accumulated, mal_string_length(s));
     bool literal = !regexp_template_has_dollar(replacement, false);
     usize stride = 2 * (usize) offsets.groups;
     usize next_source_position = 0;
