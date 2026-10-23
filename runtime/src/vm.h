@@ -1972,6 +1972,8 @@ typedef struct MalVm {
 
     /** Compiled programs of literal-like RegExp sources, owned by builtin_regexp.c. */
     struct MalRegExpTemplates *regexp_templates;
+    /** Inline caches for mal_vm_get_static, keyed by literal address. */
+    struct MalStaticLoadSites *static_load_sites;
 
     /**
      * Data properties that iteration protocols inherit through watched built-in

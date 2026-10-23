@@ -1135,6 +1135,13 @@ static inline u32 mal_inherited_stub_hash(
  * and cache refill. Stores remain limited to plain shaped data slots.
  */
 MalValue mal_vm_op_load_property_ic(MalVm *vm, MalValue object_value, MalValue key_value, MalInlineCache *ic);
+/**
+ * [[Get]] of the C string literal `name` through a per-VM inline cache keyed by
+ * the literal's address, for runtime code that reads the same names, such as a
+ * stream's `emit`, from objects of a few recurring shapes and prototype chains.
+ * Returns false with a pending throw.
+ */
+bool mal_vm_get_static(MalVm *vm, MalValue receiver, const byte *name, MalValue *out);
 
 /**
  * Continue immediately after the complete generated static-name cache probe misses.

@@ -899,8 +899,7 @@ static bool http_call_method(
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
     for (i32 i = 0; i < argc && i < 3; i++) roots[i + 2] = args[i];
-    bool found = mal_vm_get_property(
-        vm, roots[0], mal_intrinsic_static_string_key(vm, (const byte *) name), &roots[1]);
+    bool found = mal_vm_get_static(vm, roots[0], (const byte *) name, &roots[1]);
     if (found) {
         mal_vm_call_value(vm, roots[1], roots[0], argc > 0 ? roots + 2 : nullptr, argc);
     }

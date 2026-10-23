@@ -70,7 +70,7 @@ static MalValue stream_new_array(MalVm *vm) {
 }
 
 static bool stream_get(MalVm *vm, MalValue object, const char *name, MalValue *out) {
-    return mal_vm_get_property(vm, object, stream_static_key(vm, name), out);
+    return mal_vm_get_static(vm, object, (const byte *) name, out);
 }
 
 // Readable decoding goes through a real node:string_decoder StringDecoder, as in Node.

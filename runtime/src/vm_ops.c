@@ -6880,6 +6880,51 @@ MalValue mal_vm_op_load_property_ic(
         vm, object_value, key_value, ic, false);
 }
 
+#define MAL_STATIC_LOAD_SITE_COUNT 64
+
+typedef struct MalStaticLoadSite {
+    const byte *name;
+    MalInlineCache ic;
+} MalStaticLoadSite;
+
+struct MalStaticLoadSites {
+    MalStaticLoadSite sites[MAL_STATIC_LOAD_SITE_COUNT];
+};
+
+static void mal_vm_static_load_sites_free(MalVm *vm) {
+    struct MalStaticLoadSites *table = vm->static_load_sites;
+    if (table == nullptr) return;
+    for (usize i = 0; i < countof(table->sites); i++) {
+        mal_object_unregister_prototype_cache(&table->sites[i].ic);
+    }
+    free(table);
+    vm->static_load_sites = nullptr;
+}
+
+bool mal_vm_get_static(MalVm *vm, MalValue receiver, const byte *name, MalValue *out) {
+    MalKey key = mal_intrinsic_static_string_key(vm, name);
+    struct MalStaticLoadSites *table = vm->static_load_sites;
+    if (table == nullptr) {
+        table = calloc(1, sizeof(*table));
+        if (table == nullptr || !mal_vm_register_runtime_cleanup(vm, mal_vm_static_load_sites_free)) {
+            free(table);
+            return mal_vm_get_property(vm, receiver, key, out);
+        }
+        vm->static_load_sites = table;
+    }
+    MalStaticLoadSite *site = &table->sites[
+        (u32) (((uptr) name * 0x9E3779B97F4A7C15ull) >> 32) & (MAL_STATIC_LOAD_SITE_COUNT - 1)];
+    // The inline probe trusts the site for its key, so a site never changes names in place.
+    if (site->name != name) {
+        mal_object_unregister_prototype_cache(&site->ic);
+        site->ic = (MalInlineCache) {0};
+        site->name = name;
+    }
+    if (mal_vm_property_try_load_static(vm, receiver, &site->ic, out)) return true;
+    *out = mal_vm_op_load_property_ic(vm, receiver, key.value, &site->ic);
+    return vm->completion.kind != MAL_COMPLETION_THROW;
+}
+
 MalValue mal_vm_op_load_property_ic_static_miss(
     MalVm *vm, MalValue object_value, i32 atom, MalInlineCache *ic
 ) {

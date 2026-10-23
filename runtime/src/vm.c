@@ -897,6 +897,7 @@ static void mal_vm_init_language_state(MalVm *vm, const MalRuntimeImage *program
         vm->static_slot_cache[i] = (MalStaticSlotCacheEntry) {0};
     }
     vm->regexp_templates = nullptr;
+    vm->static_load_sites = nullptr;
     for (u32 i = 0; i < MAL_WATCHED_LOOKUP_CACHE_CAPACITY; i++) {
         vm->watched_lookup_cache[i] = (MalWatchedLookupEntry) {0};
     }
