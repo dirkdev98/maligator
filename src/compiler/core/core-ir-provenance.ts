@@ -3308,7 +3308,6 @@ function iteratorResultVirtualizationCandidates(
 }
 
 function iteratorEntryPairVirtualizationCandidates(
-	program: CoreProgram,
 	fn: CoreFunctionStore,
 	control: CoreControlFlow,
 	roots: ReadonlyMap<CoreValueId, CoreValueId>,
@@ -3336,46 +3335,15 @@ function iteratorEntryPairVirtualizationCandidates(
 			fn.instructionOpcodeName(cursorInitialize) !== "getIterator" ||
 			instructionResult(fn, cursorInitialize, 0) !==
 				instructionOperand(fn, outerStep, 0) ||
-			instructionResult(fn, cursorInitialize, 1) !== instructionOperand(fn, outerStep, 1)
-		)
-			continue;
-		const source = instructionOperand(fn, cursorInitialize, 0);
-		const sourceDefinition =
-			source === undefined ? undefined : specializationDefinition(fn, roots, source);
-		const sourceAttributes =
-			sourceDefinition === undefined ? {} : fn.instructionAttributes(sourceDefinition);
-		const sourceOpcode =
-			sourceDefinition === undefined
-				? undefined
-				: fn.instructionOpcodeName(sourceDefinition);
-		const knownEntryCall = sourceAttributes.knownBuiltinCall as
-			| { readonly operation?: unknown }
-			| undefined;
-		let arrayEntries =
-			(sourceOpcode === "callKnown" &&
-				sourceAttributes.operation === "Array.prototype.entries") ||
-			(sourceOpcode === "call" &&
-				knownEntryCall?.operation === "Array.prototype.entries");
-		if (!arrayEntries && sourceOpcode === "call" && sourceDefinition !== undefined) {
-			const callee = instructionOperand(fn, sourceDefinition, 0);
-			const property =
-				callee === undefined ? undefined : specializationDefinition(fn, roots, callee);
-			const stringIndex =
-				property !== undefined &&
-				fn.instructionOpcodeName(property) === "loadPropertyStatic"
-					? fn.instructionAttributes(property).stringIndex
-					: undefined;
-			arrayEntries =
-				typeof stringIndex === "number" &&
-				stringConstantEquals(program.stringConstants[stringIndex], "entries");
-		}
-		// Construction bounds candidate search; the runtime cursor guard proves the collection kind.
-		if (
-			sourceAttributes.exactCollectionReceiver !== "Map" &&
-			sourceAttributes.exactCollectionReceiver !== "Set" &&
-			sourceOpcode !== "construct" &&
-			!(sourceOpcode === "callKnown" && sourceAttributes.construct === true) &&
-			!arrayEntries
+			instructionResult(fn, cursorInitialize, 1) !==
+				instructionOperand(fn, outerStep, 1) ||
+			// A destructuring pattern steps its iterator once per element and keeps its
+			// deferred Array cursor; only a loop's single step owns the cursor.
+			(index.uses.get(root(instructionOperand(fn, outerStep, 0)!)) ?? []).some(
+				({ instruction }) =>
+					instruction !== outerStep &&
+					fn.instructionOpcodeName(instruction) === "iteratorStep",
+			)
 		)
 			continue;
 		const pair = instructionResult(fn, outerStep, 0)!;
@@ -4623,7 +4591,7 @@ function discoverCandidates(
 			? iteratorResultVirtualizationCandidates(fn, control, index)
 			: []),
 		...(requested("iterator-entry-pair-virtualization")
-			? iteratorEntryPairVirtualizationCandidates(program, fn, control, roots, index)
+			? iteratorEntryPairVirtualizationCandidates(fn, control, roots, index)
 			: []),
 		...(requested("string-char-code-at-chain")
 			? stringCharCodeAtCandidates(program, fn, control, loops, roots, index)

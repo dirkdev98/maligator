@@ -2199,7 +2199,7 @@ static MalValue mal_builtin_object_from_entries(MalVm *vm, MalValue this_value, 
 
     while (true) {
         bool done;
-        bool borrowed_pair = mal_vm_iterator_step_entry_pair_protocol_cursor(
+        bool borrowed_pair = mal_vm_iterator_step_collection_entry_pair(
             vm, &record, &roots[2], &roots[3], &done);
         if (!borrowed_pair) {
             // An Array entries getter can throw after advancing; never replay that step.

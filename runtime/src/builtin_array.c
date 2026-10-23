@@ -2291,11 +2291,13 @@ bool mal_builtin_array_pair_destructure_try(
         return false;
     }
     MalArrayObject *array = mal_value_to_array_object(source);
-    if (mal_object_prototype(&array->object) !=
+    MalObject *object = &array->object;
+    // An empty own-property layout cannot hold an @@iterator override.
+    if (mal_object_prototype(object) !=
             mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_ARRAY_PROTOTYPE]) ||
-        mal_object_get_own(
-            &array->object,
-            mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_ITERATOR)).present) {
+        ((object->shape->inline_count != 0 || mal_object_overflow(object) != nullptr) &&
+         mal_object_get_own(
+             object, mal_intrinsic_symbol_key(vm, MAL_INTRINSIC_SYMBOL_ITERATOR)).present)) {
         return false;
     }
 

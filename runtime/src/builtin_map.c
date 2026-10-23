@@ -132,7 +132,7 @@ static MalValue mal_builtin_map_construct(
 
     while (true) {
         bool done;
-        bool borrowed = mal_vm_iterator_step_entry_pair_protocol_cursor(
+        bool borrowed = mal_vm_iterator_step_collection_entry_pair(
             vm, &record, &roots[3], &roots[4], &done);
         // A borrowed Array entry can advance and then throw from its element Get.
         if (!borrowed && vm->completion.kind != MAL_COMPLETION_NORMAL) goto done;

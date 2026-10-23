@@ -3593,6 +3593,28 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("mal_vm_iterator_step(vm,");
 	});
 
+	it("virtualizes entry pairs of a parameter iterable behind the runtime cursor guard", () => {
+		const definition = lower(`
+			function visit(pairs) {
+				let total = 0;
+				for (const [key, value] of pairs) total += key + value;
+				return total;
+			}
+			globalThis.visit = visit;
+		`);
+		const regions = specializations(definition).filter(
+			(region) => region.kind === "iterator-entry-pair-virtualization",
+		);
+		expect(regions).toHaveLength(1);
+		expect(regions[0]).toMatchObject({
+			runtimeGuard: "exact-entry-pair-cursor",
+			fallback: "materialize-entry-pair-then-iterate",
+		});
+		const output = emitProgramImage(definition, { compiled: true });
+		expect(output).toContain("mal_vm_iterator_step_entry_pair_protocol_cursor(vm,");
+		expect(output).toContain("mal_vm_iterator_step(vm,");
+	});
+
 	it.each([
 		["Map", 'new Map([["x", [1, 2]]])'],
 		["Array entries", "[[1, 2]].entries()"],

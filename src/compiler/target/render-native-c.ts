@@ -5200,7 +5200,8 @@ function emitBody(
 			role: "close",
 		});
 	}
-	// Pair and entry-pair fast paths rewrite the iterator registers they share.
+	// Pair and entry-pair fast paths rewrite the inner iterator registers they share;
+	// an entry-pair outer step steps a deferred loop cursor itself.
 	const deferredIteratorCursors = new Set<number>();
 	for (const { cursor, role } of nativeIteratorCursorActionByIp.values()) {
 		if (
@@ -5210,7 +5211,8 @@ function emitBody(
 			[cursor.initializeIp, ...cursor.stepIps, ...cursor.closeIps].some(
 				(ip) =>
 					nativeArrayPairDestructureActionByIp.has(ip) ||
-					nativeIteratorEntryPairVirtualizationActionByIp.has(ip),
+					(nativeIteratorEntryPairVirtualizationActionByIp.get(ip)?.role ??
+						"outerStep") !== "outerStep",
 			)
 		)
 			continue;
@@ -13148,13 +13150,27 @@ function emitInstruction(
 				const rec = `iter_rec_${ip}`;
 				const val = `iter_val_${ip}`;
 				const done = `iter_done_${ip}`;
+				const pairStep = `mal_vm_iterator_step_entry_pair_protocol_cursor(vm, &${rec}, &__iter_entry_pair_${ip}_first, &__iter_entry_pair_${ip}_second, &${done})`;
+				const ordinaryStep = `mal_vm_iterator_step(vm, &${rec}, &${val}, &${done})`;
+				const deferred =
+					deferredIteratorCursor && nativeIteratorCursorAction?.role === "step"
+						? `__iter_deferred_${nativeIteratorCursorAction.cursor.initializeIp}`
+						: undefined;
 				return [
 					`MalIteratorRecord ${rec} = { .iterator = ${boxed(instruction.iterator)}, .next_method = ${boxed(instruction.next)} };`,
 					`MalValue ${val} = MAL_VALUE_UNDEFINED; bool ${done};`,
-					`__iter_entry_pair_${ip}_fast = ${regionAdmissionGuard(region.license)} && mal_vm_iterator_step_entry_pair_protocol_cursor(vm, &${rec}, &__iter_entry_pair_${ip}_first, &__iter_entry_pair_${ip}_second, &${done});`,
+					`__iter_entry_pair_${ip}_fast = ${regionAdmissionGuard(region.license)} && ${
+						deferred === undefined
+							? pairStep
+							: `(${deferred}.active ? mal_vm_array_values_deferred_entry_pair_step(vm, ${boxed(instruction.iterator)}, &${deferred}, &__iter_entry_pair_${ip}_first, &__iter_entry_pair_${ip}_second, &${done}) : ${pairStep})`
+					};`,
 					`if (!__iter_entry_pair_${ip}_fast && MAL_THREW()) ${onThrow()}`,
 					`if (__iter_entry_pair_${ip}_fast) { MAL_PERF_COUNT(iterator_entry_pair_hits); } else { MAL_PERF_COUNT(iterator_entry_pair_fallbacks); }`,
-					`if (!__iter_entry_pair_${ip}_fast && !mal_vm_iterator_step(vm, &${rec}, &${val}, &${done})) ${onThrow()}`,
+					`if (!__iter_entry_pair_${ip}_fast && !${
+						deferred === undefined
+							? ordinaryStep
+							: `(${deferred}.active ? mal_vm_array_values_deferred_step(vm, ${boxed(instruction.iterator)}, &${deferred}, &${val}, &${done}) : ${ordinaryStep})`
+					}) ${onThrow()}`,
 					`r${instruction.valueDst} = __iter_entry_pair_${ip}_fast ? MAL_VALUE_UNDEFINED : ${val};`,
 					reps[instruction.doneDst] === "boolean"
 						? `r${instruction.doneDst} = ${done};`

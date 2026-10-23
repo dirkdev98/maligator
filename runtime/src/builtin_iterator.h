@@ -51,6 +51,18 @@ typedef struct MalArrayValuesDeferredCursor {
 bool mal_vm_array_values_deferred_begin(
     MalVm *vm, MalValue source, MalArrayValuesDeferredCursor *cursor);
 
+/**
+ * The `[first, second]` destructuring of a deferred step whose element is a dense
+ * Array pair. False leaves the cursor for the caller's ordinary deferred step.
+ */
+bool mal_vm_array_values_deferred_entry_pair_step(
+    MalVm *vm,
+    MalValue array,
+    MalArrayValuesDeferredCursor *cursor,
+    MalValue *first_out,
+    MalValue *second_out,
+    bool *done_out);
+
 /** The Get %ArrayIteratorPrototype%.next performs for an index without dense storage. */
 bool mal_vm_array_values_deferred_get(
     MalVm *vm, MalValue array, u64 index, MalValue *value_out);
@@ -74,8 +86,21 @@ bool mal_vm_iterator_step_protocol_cursor(
     MalValue *value_out,
     bool *done_out);
 
+/** Steps an exact Map/Set/Array entries cursor without materializing its pair. */
+bool mal_vm_iterator_step_collection_entry_pair(
+    MalVm *vm,
+    const MalIteratorRecord *record,
+    MalValue *first_out,
+    MalValue *second_out,
+    bool *done_out);
+
+/**
+ * The `[first, second]` destructuring of one for-of step: collection entries, or
+ * an Array element that destructures as a dense pair. False leaves the iterator
+ * where an ordinary step resumes, unless a collection step threw.
+ */
 bool mal_vm_iterator_step_entry_pair_protocol_cursor(
-	MalVm *vm,
+    MalVm *vm,
     const MalIteratorRecord *record,
     MalValue *first_out,
     MalValue *second_out,

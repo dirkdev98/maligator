@@ -668,8 +668,8 @@ compiler explicitly enables intrinsic global reads for its own implementation.
 This does not freeze properties or grant immutable-binding facts, and the mode is
 not propagated to the user source it compiles. Replacing a public constructor or
 globalThis therefore affects dynamic user code without redirecting compiler internals.
-Existing entry-pair regions admit constructed iterator sources through their exact
-runtime cursor guard; they do not require an immutable public constructor binding.
+Entry-pair regions admit any iterator source through their exact runtime cursor
+guard; they do not require an immutable public constructor binding.
 
 Canonical function comparisons use the inventory's object identity, independently
 of native callback sharing. This folds repeated references across effects while
