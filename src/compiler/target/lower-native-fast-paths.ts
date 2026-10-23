@@ -3412,6 +3412,16 @@ export function selectNativeFastPaths(
 				cursorSteps,
 			);
 			if (plan === undefined) continue;
+			// Without a counter the trip count is unknown, and exact element accesses are
+			// already cheaper than admitting a view for a few iterations.
+			if (
+				plan.kind === "fixed-numeric" &&
+				plan.counter === undefined &&
+				plan.claimedIps.some(
+					(ip) => native.instructions[ip]?.kind === "exact-typed-array-element",
+				)
+			)
+				continue;
 			const members = new Set(plan.claimedIps);
 			// A retained fallback fusion cannot carry its private intermediate across a region boundary.
 			if (
