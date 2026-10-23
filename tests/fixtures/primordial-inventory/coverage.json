@@ -63558,6 +63558,32 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_REGEXP_LEGACY_STATE%\",\"23\"]",
+			"owner": "%MAL_INTRINSIC_REGEXP_LEGACY_STATE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_REGEXP_LEGACY_STATE%",
+				"MAL_INTRINSIC_REGEXP_LEGACY_STATE"
+			],
+			"key": "23",
+			"kind": "data",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_REGEXP_LEGACY_STATE%\",\"24\"]",
+			"owner": "%MAL_INTRINSIC_REGEXP_LEGACY_STATE%",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_REGEXP_LEGACY_STATE%",
+				"MAL_INTRINSIC_REGEXP_LEGACY_STATE"
+			],
+			"key": "24",
+			"kind": "data",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_REGEXP_LEGACY_STATE%\",\"length\"]",
 			"owner": "%MAL_INTRINSIC_REGEXP_LEGACY_STATE%",
 			"ownerPaths": [
