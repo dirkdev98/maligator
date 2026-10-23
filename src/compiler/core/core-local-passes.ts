@@ -3249,10 +3249,19 @@ export const CORE_CONSTRUCTION_NORMALIZATION_PASSES: ReadonlyArray<CoreFunctionP
 	removeUnreachableBlocks,
 ];
 
+// Late body edits rarely leave blocks to merge or parameters to fold; removed edges do.
+function afterLateCfgEdits(pass: CoreFunctionPass): CoreFunctionPass {
+	return { ...pass, wakesOn: ["cfg"] };
+}
+
 export const CORE_LATE_CANONICALIZATION_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	forwardRestArguments,
 	rewriteExactBuiltinCalls,
 	foldPrimitiveCoercions,
+	afterLateCfgEdits(canonicalizeBlockParameters),
+	afterLateCfgEdits(simplifyBlockParameters),
+	afterLateCfgEdits(eliminateForwardingBlocks),
+	afterLateCfgEdits(mergeLinearBlocks),
 	foldValueKindObservations,
 	foldRedundantTdzChecks,
 	removeBuiltinErrorContinuations,

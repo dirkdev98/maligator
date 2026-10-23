@@ -769,6 +769,34 @@ describe("Core SSA and CFG cleanup", () => {
 		expect(blocks(result.fn)).toHaveLength(1);
 		expect(inspectCoreBlockHandler(result.fn, result.fn.entry)).toBeUndefined();
 	});
+
+	it("folds a finally's rethrow once number proofs remove its exceptional entry", () => {
+		const constructed = lowerSemanticProgramToCore(
+			analyzeSourceAndRunSemanticAnalysis(
+				`globalThis.run = function run(count) {
+					let checksum = 0;
+					for (let index = 0; index < count; index++) {
+						try {
+							checksum += (index * 3) & 255;
+						} finally {
+							checksum ^= index & 7;
+						}
+					}
+					return checksum;
+				};`,
+				"finally-without-throw.js",
+			),
+		);
+		const optimized = optimizeCore(constructed).compilation;
+		const run = [...optimized.program.functionIds()]
+			.map((functionId) => optimized.program.function(functionId))
+			.find((fn) => fn.parameterCount === 1)!;
+		const terminators = blocks(run).map(
+			(block) => inspectCoreTerminatorPayload(run, run.blockTerminator(block)).kind,
+		);
+		expect(terminators).toContain("return");
+		expect(terminators).not.toContain("throw");
+	});
 });
 
 describe("Core to target boundary", () => {
