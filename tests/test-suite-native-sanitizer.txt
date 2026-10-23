@@ -73,6 +73,7 @@ tests/native/native-integer-loop-regions.test.ts
 tests/native/typed-array-dynamic-receiver.test.ts
 tests/native/fixed-typed-array-region.test.ts
 tests/native/typed-array-length-bound.test.ts
+tests/native/string-scan-region.test.ts
 tests/native/dense-array-number-region.test.ts
 tests/native/static-property-projection.test.ts
 tests/native/writable-stream.test.ts

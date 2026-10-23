@@ -59,6 +59,7 @@ import type {
 	NativeLazyCaptureEnvironment,
 } from "./lower-native-captures.ts";
 import {
+	numericLoopCodeUnitMethods,
 	numericLoopOrder,
 	nativeNumericBuiltinInstruction,
 	lowerNativeFastPaths,
@@ -1252,6 +1253,9 @@ function integralLoopRegisters(
 				return rangeOf(op.src);
 			case "LOAD_PROPERTY":
 				return elementLoads;
+			// A region admits a call only as a string's code unit read.
+			case "CALL":
+				return { low: 0, high: 0xffff };
 			default: {
 				const builtin = nativeNumericBuiltinInstruction(op);
 				return builtin?.operation === "Math.imul"
@@ -1310,10 +1314,25 @@ function emitNumericLoopRegion(
 ): ReadonlyArray<string> {
 	const members = new Set(plan.claimedIps.filter((ip) => ip !== plan.entryIp));
 	const order = numericLoopOrder(fn, plan.id, members, true);
+	// A region admits a call only as a string's code unit read.
+	const codeUnitReads = new Set(
+		[...members].filter((ip) => fn.instructions[ip]?.opcode === "CALL"),
+	);
 	const flow =
 		order === undefined
 			? undefined
-			: numberRecordDataflow(fn, order, -1, reps, plan.kind !== "integer");
+			: numberRecordDataflow(
+					fn,
+					order,
+					-1,
+					reps,
+					plan.kind !== "integer",
+					codeUnitReads.size === 0 ? undefined : codeUnitReads,
+				);
+	const codeUnitMethods =
+		order === undefined
+			? new Set<number>()
+			: numericLoopCodeUnitMethods(fn, order, codeUnitReads);
 	if (order === undefined || flow === undefined)
 		throw new Error("Invalid native integer loop region");
 	const floating = plan.kind !== "integer";
@@ -1435,6 +1454,9 @@ function emitNumericLoopRegion(
 	);
 	// Records exist only for Array views.
 	const arrayOnly = plan.kind === "fixed-numeric" && records.size > 0;
+	// A region reads either strings or element views.
+	const textual =
+		plan.kind === "fixed-numeric" && plan.views.some((view) => view.text === true);
 	const boundObject = counter?.boundObject;
 	const lengthLoad =
 		counter !== undefined && boundObject !== undefined
@@ -1449,7 +1471,21 @@ function emitNumericLoopRegion(
 			: undefined;
 	if (boundObject !== undefined && lengthLoad === undefined)
 		throw new Error("Invalid typed loop length load");
-	if (plan.kind === "fixed-numeric") {
+	if (textual) {
+		// The reads come from guarded builtin calls licensed by locked primordials, where a
+		// primitive string's `charCodeAt` is the builtin, so admitting the string suffices.
+		rangePrelude.push(
+			`  bool ${id}_typed = ${plan.views
+				.map((view) => `mal_string_unit_span(r${view.object}, &${id}_s${view.object})`)
+				.join(" && ")};`,
+			`  bool ${id}_array = false;`,
+		);
+		if (counter !== undefined && boundObject !== undefined)
+			rangePrelude.push(
+				`  ${local(counter.bound)} = ${id}_typed ? (f64) ${id}_s${boundObject}.length : 0.0;`,
+			);
+		guards.unshift(`${id}_typed`);
+	} else if (plan.kind === "fixed-numeric") {
 		// Views are admitted before the range so a length bound can read the admitted length.
 		// A TypedArray's length is an inherited getter, so a length bound also needs the
 		// length load's cache to prove the intrinsic getter.
@@ -1522,7 +1558,9 @@ function emitNumericLoopRegion(
 			const high = `(${ascending ? last : index} + ${cF64Literal(view.maxOffset + 1)})`;
 			if (view.minOffset !== 0) guards.push(`${low} >= 0.0`);
 			guards.push(`${high} <= UINT32_MAX`);
-			typedViewGuards.push(`(u32) ${high} <= ${id}_v${view.object}.length`);
+			typedViewGuards.push(
+				`(u32) ${high} <= ${id}_${textual ? "s" : "v"}${view.object}.length`,
+			);
 			arrayViewGuards.push(`(u32) ${high} <= ${id}_a${view.object}.count`);
 		}
 	}
@@ -1588,7 +1626,10 @@ function emitNumericLoopRegion(
 	const int32 = (register: number) => `mal_safe_integer_to_i32(${local(register)})`;
 	const checked = (call: string, dst: number) =>
 		`if (__builtin_expect(!${call.replace("%DST%", `&${local(dst)}`)}, 0)) ${restart}`;
-	const statement = (ip: number, mode: "f64" | "typed" | "integer" | "array"): string => {
+	const statement = (
+		ip: number,
+		mode: "f64" | "typed" | "integer" | "array" | "text",
+	): string => {
 		const op = fn.instructions[ip]!;
 		switch (op.opcode) {
 			case "CALL_KNOWN":
@@ -1625,12 +1666,28 @@ function emitNumericLoopRegion(
 			}
 			case "LOAD_PROPERTY_STATIC":
 			case "LOAD_PROPERTY_STATIC_ARRAY_LENGTH":
+				// Admission already proved the method its code unit read ignores.
+				if (codeUnitMethods.has(ip)) return "";
 				if (op.opcode === "LOAD_PROPERTY_STATIC" && records.has(op.object))
 					// The site's own-slot row proves the field; any other row ends the iteration.
 					return `{ const MalObject *${id}_o = (const MalObject *) mal_value_to_heap(${local(op.object)}); if (__builtin_expect(${id}_o->shape != ${id}_shape${op.icIndex}, 0)) ${restart} MalValue ${id}_f = ((const MalValue *) mal_object_fields_nonempty(${id}_o))[${id}_slot${op.icIndex}]; if (__builtin_expect(!mal_ops_is_number(${id}_f), 0)) ${restart} ${local(op.dst)} = mal_ops_number_as_f64(${id}_f); }`;
 				if (boundObject === undefined || op.object !== boundObject)
 					throw new Error("Invalid numeric loop length load");
-				return `${local(op.dst)} = (f64) ${id}_${mode === "array" ? "a" : "v"}${op.object}.length;`;
+				return `${local(op.dst)} = (f64) ${id}_${mode === "array" ? "a" : mode === "text" ? "s" : "v"}${op.object}.length;`;
+			case "CALL": {
+				const argument = op.arguments[0];
+				if (mode !== "text" || argument === undefined)
+					throw new Error("Invalid numeric loop code unit read");
+				const key = integral.has(argument) ? local(argument) : num(argument);
+				const length = `${id}_s${op.thisValue}.length`;
+				// `charCodeAt` past the end is NaN, which the original loop produces.
+				const bound = !checkedViews.has(op.thisValue)
+					? ""
+					: integral.has(argument)
+						? `if (__builtin_expect(!(${key} >= 0 && ${key} < (i64) ${length}), 0)) ${restart} `
+						: `if (__builtin_expect(!(${key} >= 0.0 && ${key} < (f64) ${length}) || ${key} != trunc(${key}), 0)) ${restart} `;
+				return `{ ${bound}${local(op.dst)} = ${integral.has(op.dst) ? "(i64)" : "(f64)"} mal_string_unit_span_at(&${id}_s${op.thisValue}, (u32) ${key}); }`;
+			}
 			case "LOAD_PROPERTY": {
 				const key = integral.has(op.key) ? local(op.key) : num(op.key);
 				const length = `${id}_${mode === "array" ? "a" : "v"}${op.object}.${mode === "array" ? "count" : "length"}`;
@@ -1785,7 +1842,7 @@ function emitNumericLoopRegion(
 		),
 	];
 	const loopBody = (
-		mode: "f64" | "typed" | "integer" | "array",
+		mode: "f64" | "typed" | "integer" | "array" | "text",
 	): ReadonlyArray<string> => {
 		integral = mode === "integer" ? integerIntegral : baseIntegral;
 		const lines = [
@@ -1855,8 +1912,9 @@ function emitNumericLoopRegion(
 		integral = baseIntegral;
 		return lines;
 	};
-	const typedBodies =
-		plan.kind === "fixed-numeric"
+	const typedBodies = textual
+		? ["    MAL_PERF_COUNT(fixed_typed_array_region_admissions);", ...loopBody("text")]
+		: plan.kind === "fixed-numeric"
 			? [
 					"    MAL_PERF_COUNT(fixed_typed_array_region_admissions);",
 					...((counter?.stride ?? 1) > 1
@@ -1905,12 +1963,14 @@ function emitNumericLoopRegion(
 		];
 	return [
 		"{",
-		...(plan.kind === "fixed-numeric"
-			? plan.views.flatMap((view) => [
-					...(lengthBound ? [] : [`  MalTypedArraySpan ${id}_v${view.object} = {0};`]),
-					...(readOnly ? [`  MalDenseNumberSpan ${id}_a${view.object} = {0};`] : []),
-				])
-			: []),
+		...(textual
+			? plan.views.map((view) => `  MalStringUnitSpan ${id}_s${view.object} = {0};`)
+			: plan.kind === "fixed-numeric"
+				? plan.views.flatMap((view) => [
+						...(lengthBound ? [] : [`  MalTypedArraySpan ${id}_v${view.object} = {0};`]),
+						...(readOnly ? [`  MalDenseNumberSpan ${id}_a${view.object} = {0};`] : []),
+					])
+				: []),
 		...[...flow.kinds].map(([register, kind]) =>
 			records.has(register)
 				? `  MalValue ${local(register)} = MAL_VALUE_UNDEFINED;`
@@ -1922,7 +1982,7 @@ function emitNumericLoopRegion(
 			: [
 					`  if (${[...guards, ...typedViewGuards].join(" && ") || "true"}) {`,
 					...typedBodies,
-					...(readOnly
+					...(readOnly && !textual
 						? [
 								`  } else if (${[...guards, ...arrayViewGuards].join(" && ")}) {`,
 								...arrayBody(),

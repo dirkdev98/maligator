@@ -60,6 +60,40 @@ MalValue mal_builtin_string_char_code_at_rope_in_bounds(
     MalVm *vm, MalStringLeafReadCache *cache, MalValue this_value, usize position
 );
 
+/** A flat or sliced string's code units, borrowed like typed-array bytes until a poll. */
+typedef struct MalStringUnitSpan {
+    const u8 *latin1;
+    const c16 *units;
+    u32 length;
+} MalStringUnitSpan;
+
+/** The code units of a string a loop region reads; ropes decline. */
+static inline bool mal_string_unit_span(MalValue value, MalStringUnitSpan *span) {
+    if (!mal_value_is_string(value)) return false;
+    const MalString *string = mal_value_to_string(value);
+    const MalString *flat = string;
+    usize offset = 0;
+    if (string->storage == MAL_STRING_STORAGE_DEPENDENT) {
+        flat = string->parent;
+        offset = string->slice_offset;
+    } else if (string->storage > MAL_STRING_STORAGE_DEPENDENT) {
+        return false;
+    }
+    bool inline_units = flat->storage == MAL_STRING_STORAGE_INLINE;
+    *span = (MalStringUnitSpan) {
+        .latin1 = !flat->latin1 ? nullptr
+            : (inline_units ? flat->inline_latin1_units : flat->latin1_units) + offset,
+        .units = flat->latin1 ? nullptr
+            : (inline_units ? flat->inline_code_units : flat->code_units) + offset,
+        .length = string->length,
+    };
+    return true;
+}
+
+static inline u32 mal_string_unit_span_at(const MalStringUnitSpan *span, u32 index) {
+    return span->latin1 != nullptr ? span->latin1[index] : span->units[index];
+}
+
 /** Flat in-range reads stay in generated code, which compilers otherwise call out
  * of line once a kernel carries its rope and conversion paths inline. */
 static inline __attribute__((always_inline)) bool mal_builtin_string_char_code_at_flat(

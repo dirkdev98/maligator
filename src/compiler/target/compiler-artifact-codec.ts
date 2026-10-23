@@ -102,7 +102,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 262;
+export const COMPILER_ARTIFACT_VERSION = 263;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -901,6 +901,7 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 				w.i32(view.minOffset);
 				w.i32(view.maxOffset);
 				w.u8(view.checked === true ? 1 : 0);
+				w.u8(view.text === true ? 1 : 0);
 			}
 		}
 		w.i32(plan.id);
@@ -1443,14 +1444,17 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 									if (writable > 1) throw new RangeError("Invalid numeric loop view");
 									const minOffset = r.i32(),
 										maxOffset = r.i32(),
-										checked = r.u8();
-									if (checked > 1) throw new RangeError("Invalid numeric loop view");
+										checked = r.u8(),
+										text = r.u8();
+									if (checked > 1 || text > 1)
+										throw new RangeError("Invalid numeric loop view");
 									return {
 										object,
 										writable: writable === 1,
 										minOffset,
 										maxOffset,
 										...(checked === 1 ? { checked: true as const } : {}),
+										...(text === 1 ? { text: true as const } : {}),
 									};
 								}),
 							};

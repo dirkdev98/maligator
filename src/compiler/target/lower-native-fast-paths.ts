@@ -220,6 +220,8 @@ export type NativeNumericLoopRegionPlan = NativeNumericLoopRegionBase &
 					readonly maxOffset: number;
 					/** Read through keys unrelated to the index, each checked against the view's length. */
 					readonly checked?: true;
+					/** A primitive string read through a world-licensed `charCodeAt`. */
+					readonly text?: true;
 				}>;
 		  }
 	);
@@ -1113,10 +1115,16 @@ export function numberRecordDataflow(
 	exitIp: number,
 	representations: ReadonlyArray<VmRegisterRepresentation>,
 	indexed = false,
+	// `charCodeAt` calls a string region reads as code units.
+	codeUnitReads?: ReadonlySet<number>,
 ): NativeNumberRecordDataflow | undefined {
 	const kinds = new Map<number, NativeNumberRecordKind>();
 	const inputs = new Set<number>();
 	const written = new Set<number>();
+	const methods =
+		codeUnitReads === undefined
+			? new Set<number>()
+			: numericLoopCodeUnitMethods(fn, order, codeUnitReads);
 	const numericReads = new Set<number>();
 	const intrinsics = new Set<number>();
 	const unify = (register: number, kind: NativeNumberRecordKind): boolean => {
@@ -1152,85 +1160,107 @@ export function numberRecordDataflow(
 			return kind !== undefined && !intrinsics.has(register) && unify(register, kind);
 		};
 		let admitted: boolean;
-		switch (instruction.opcode) {
-			case "CALL_KNOWN":
-			case "MATH_UNARY_NUMBER":
-			case "MATH_BINARY_NUMBER": {
-				const builtin = nativeNumericBuiltinInstruction(instruction);
-				admitted =
-					builtin !== undefined &&
-					builtin.arguments.every(
-						(argument) => argument.kind === "number" || read(argument.register, "number"),
-					) &&
-					write(instruction.dst, builtin.resultKind);
-				break;
+		const codeUnit =
+			codeUnitReads === undefined
+				? undefined
+				: numericLoopCodeUnitRead(fn, ip, codeUnitReads);
+		if (codeUnit !== undefined) {
+			// Every write of the callee loads the method from this receiver, so one this
+			// iteration made it the builtin.
+			admitted =
+				intrinsics.has(codeUnit.callee) &&
+				before.has(codeUnit.callee) &&
+				read(codeUnit.key, "number") &&
+				write(codeUnit.dst, "number");
+		} else if (methods.has(ip) && instruction.opcode === "LOAD_PROPERTY_STATIC") {
+			// Like an intrinsic, the method may only be the callee the next call ignores.
+			admitted = !kinds.has(instruction.dst) && !inputs.has(instruction.dst);
+			intrinsics.add(instruction.dst);
+		} else
+			switch (instruction.opcode) {
+				case "CALL_KNOWN":
+				case "MATH_UNARY_NUMBER":
+				case "MATH_BINARY_NUMBER": {
+					const builtin = nativeNumericBuiltinInstruction(instruction);
+					admitted =
+						builtin !== undefined &&
+						builtin.arguments.every(
+							(argument) =>
+								argument.kind === "number" || read(argument.register, "number"),
+						) &&
+						write(instruction.dst, builtin.resultKind);
+					break;
+				}
+				case "LOAD_PROPERTY":
+					admitted =
+						indexed &&
+						read(instruction.key, "number") &&
+						write(instruction.dst, "number");
+					break;
+				case "STORE_PROPERTY":
+					admitted =
+						indexed &&
+						read(instruction.key, "number") &&
+						read(instruction.value, "number");
+					break;
+				case "LOAD_PROPERTY_STATIC_ARRAY_LENGTH":
+					admitted = indexed && write(instruction.dst, "number");
+					break;
+				case "REQUIRE_COERCIBLE":
+					admitted = indexed;
+					break;
+				case "ITERATOR_STEP":
+					admitted =
+						indexed &&
+						write(instruction.valueDst, "number") &&
+						write(instruction.doneDst, "boolean");
+					break;
+				case "LOAD_PROPERTY_STATIC":
+				case "CREATE_NUMBER":
+				case "CREATE_F64":
+					admitted = write(instruction.dst, "number");
+					break;
+				case "CREATE_BOOLEAN":
+					admitted = write(instruction.dst, "boolean");
+					break;
+				// The load can neither collect nor throw, so the region performs it on the register
+				// itself; inside, only a numeric builtin's ignored receiver may name that register.
+				case "LOAD_INTRINSIC":
+					admitted =
+						!kinds.has(instruction.dst) &&
+						!inputs.has(instruction.dst) &&
+						!written.has(instruction.dst);
+					intrinsics.add(instruction.dst);
+					break;
+				case "STORE_PROPERTY_STATIC":
+					admitted = read(instruction.value, "number");
+					break;
+				case "MOVE":
+					admitted =
+						read(instruction.src) && write(instruction.dst, kinds.get(instruction.src));
+					break;
+				case "BINARY":
+					admitted =
+						read(instruction.left, "number") &&
+						read(instruction.right, "number") &&
+						write(
+							instruction.dst,
+							NATIVE_NUMBER_BINARY_OPERATORS.has(instruction.operator)
+								? "number"
+								: "boolean",
+						);
+					break;
+				case "UNARY":
+					admitted =
+						read(instruction.src, instruction.operator === "!" ? undefined : "number") &&
+						write(instruction.dst, instruction.operator === "!" ? "boolean" : "number");
+					break;
+				case "JUMP_IF":
+					admitted = read(instruction.cond);
+					break;
+				default:
+					admitted = instruction.opcode === "JUMP";
 			}
-			case "LOAD_PROPERTY":
-				admitted =
-					indexed && read(instruction.key, "number") && write(instruction.dst, "number");
-				break;
-			case "STORE_PROPERTY":
-				admitted =
-					indexed && read(instruction.key, "number") && read(instruction.value, "number");
-				break;
-			case "LOAD_PROPERTY_STATIC_ARRAY_LENGTH":
-				admitted = indexed && write(instruction.dst, "number");
-				break;
-			case "REQUIRE_COERCIBLE":
-				admitted = indexed;
-				break;
-			case "ITERATOR_STEP":
-				admitted =
-					indexed &&
-					write(instruction.valueDst, "number") &&
-					write(instruction.doneDst, "boolean");
-				break;
-			case "LOAD_PROPERTY_STATIC":
-			case "CREATE_NUMBER":
-			case "CREATE_F64":
-				admitted = write(instruction.dst, "number");
-				break;
-			case "CREATE_BOOLEAN":
-				admitted = write(instruction.dst, "boolean");
-				break;
-			// The load can neither collect nor throw, so the region performs it on the register
-			// itself; inside, only a numeric builtin's ignored receiver may name that register.
-			case "LOAD_INTRINSIC":
-				admitted =
-					!kinds.has(instruction.dst) &&
-					!inputs.has(instruction.dst) &&
-					!written.has(instruction.dst);
-				intrinsics.add(instruction.dst);
-				break;
-			case "STORE_PROPERTY_STATIC":
-				admitted = read(instruction.value, "number");
-				break;
-			case "MOVE":
-				admitted =
-					read(instruction.src) && write(instruction.dst, kinds.get(instruction.src));
-				break;
-			case "BINARY":
-				admitted =
-					read(instruction.left, "number") &&
-					read(instruction.right, "number") &&
-					write(
-						instruction.dst,
-						NATIVE_NUMBER_BINARY_OPERATORS.has(instruction.operator)
-							? "number"
-							: "boolean",
-					);
-				break;
-			case "UNARY":
-				admitted =
-					read(instruction.src, instruction.operator === "!" ? undefined : "number") &&
-					write(instruction.dst, instruction.operator === "!" ? "boolean" : "number");
-				break;
-			case "JUMP_IF":
-				admitted = read(instruction.cond);
-				break;
-			default:
-				admitted = instruction.opcode === "JUMP";
-		}
 		if (!admitted) return undefined;
 		const after = new Set(before);
 		for (const register of vmInstructionWriteRegisters(instruction)) after.add(register);
@@ -1745,6 +1775,7 @@ function numericLoopIndexFacts(
 	body: NativeBodyFacts,
 	shape: NativeNumericLoopShape,
 	index: number,
+	keys: ReadonlyMap<number, number>,
 ): {
 	readonly offsets: ReadonlyMap<number, number>;
 	readonly increments: ReadonlyMap<number, number>;
@@ -1770,8 +1801,9 @@ function numericLoopIndexFacts(
 			for (const register of vmInstructionWriteRegisters(fn.instructions[member]!))
 				facts.delete(register);
 		const op = fn.instructions[ip]!;
-		if (op.opcode === "LOAD_PROPERTY" || op.opcode === "STORE_PROPERTY") {
-			const key = facts.get(op.key);
+		const keyRegister = keys.get(ip);
+		if (keyRegister !== undefined) {
+			const key = facts.get(keyRegister);
 			if (key?.base === "index") offsets.set(ip, key.offset);
 		}
 		let result: NumericLoopIndexFact | undefined;
@@ -1975,7 +2007,7 @@ function fixedNumericLoopCounter(
 	shape: NativeNumericLoopShape,
 	body: NativeBodyFacts,
 	lengthLoads: ReadonlySet<number>,
-	memory: ReadonlyArray<{ readonly ip: number }>,
+	memory: ReadonlyArray<NumericLoopAccess>,
 ):
 	| {
 			readonly counter: NativeNumericLoopCounter;
@@ -2059,7 +2091,13 @@ function fixedNumericLoopCounter(
 		shape.members.has(comparisonIp + 2)
 	)
 		return undefined;
-	const { offsets, increments } = numericLoopIndexFacts(fn, body, shape, index);
+	const { offsets, increments } = numericLoopIndexFacts(
+		fn,
+		body,
+		shape,
+		index,
+		new Map(memory.map((access) => [access.ip, access.op.key])),
+	);
 	const indexWrites = shape.order.filter((ip) =>
 		vmInstructionWriteRegisters(fn.instructions[ip]!).includes(index),
 	);
@@ -2133,23 +2171,85 @@ function fixedNumericLoopCounter(
 	};
 }
 
+interface NumericLoopAccess {
+	readonly ip: number;
+	readonly op:
+		| Extract<BytecodeInstruction, { opcode: "LOAD_PROPERTY" | "STORE_PROPERTY" }>
+		| {
+				readonly opcode: "LOAD_PROPERTY";
+				readonly object: number;
+				readonly key: number;
+				readonly dst: number;
+		  };
+	readonly text?: true;
+}
+
+/** The `charCodeAt` call at `ip` as a read of its receiver's code unit. */
+function numericLoopCodeUnitRead(
+	fn: BytecodeFunction,
+	ip: number,
+	codeUnitReads: ReadonlySet<number>,
+):
+	| {
+			readonly object: number;
+			readonly key: number;
+			readonly dst: number;
+			readonly callee: number;
+	  }
+	| undefined {
+	const call = fn.instructions[ip];
+	return codeUnitReads.has(ip) && call?.opcode === "CALL" && call.arguments.length === 1
+		? {
+				object: call.thisValue,
+				key: call.arguments[0]!,
+				dst: call.dst,
+				callee: call.callee,
+			}
+		: undefined;
+}
+
+/** The loads whose only use is as the callee of a code unit read, which a region skips. */
+export function numericLoopCodeUnitMethods(
+	fn: BytecodeFunction,
+	order: ReadonlyArray<number>,
+	codeUnitReads: ReadonlySet<number>,
+): ReadonlySet<number> {
+	const callees = new Set(
+		order.flatMap((ip) => {
+			const read = numericLoopCodeUnitRead(fn, ip, codeUnitReads);
+			return read === undefined ? [] : [read.callee];
+		}),
+	);
+	return new Set(
+		order.filter((ip) => {
+			const op = fn.instructions[ip]!;
+			return op.opcode === "LOAD_PROPERTY_STATIC" && callees.has(op.dst);
+		}),
+	);
+}
+
 function fixedNumericLoopStorage(
 	fn: BytecodeFunction,
 	shape: NativeNumericLoopShape,
 	body: NativeBodyFacts,
 	lengthLoads: ReadonlySet<number>,
+	codeUnitReads: ReadonlySet<number>,
 ):
 	| Pick<
 			Extract<NativeNumericLoopRegionPlan, { kind: "fixed-numeric" }>,
 			"counter" | "records" | "views"
 	  >
 	| undefined {
-	const memory = shape.order.flatMap((ip) => {
+	const memory = shape.order.flatMap((ip): Array<NumericLoopAccess> => {
 		const op = fn.instructions[ip]!;
-		return op.opcode === "LOAD_PROPERTY" || op.opcode === "STORE_PROPERTY"
-			? [{ ip, op }]
-			: [];
+		if (op.opcode === "LOAD_PROPERTY" || op.opcode === "STORE_PROPERTY")
+			return [{ ip, op }];
+		const read = numericLoopCodeUnitRead(fn, ip, codeUnitReads);
+		return read === undefined
+			? []
+			: [{ ip, op: { opcode: "LOAD_PROPERTY", ...read }, text: true }];
 	});
+	const methodLoads = numericLoopCodeUnitMethods(fn, shape.order, codeUnitReads);
 	if (memory.length === 0 || memory.length > FIXED_NUMERIC_LOOP_ACCESS_LIMIT)
 		return undefined;
 	const counted = fixedNumericLoopCounter(fn, shape, body, lengthLoads, memory);
@@ -2158,9 +2258,17 @@ function fixedNumericLoopStorage(
 	const bound = counted?.counter.bound;
 	const views = new Map<
 		number,
-		{ writable: boolean; minOffset: number; maxOffset: number; checked?: true }
+		{
+			writable: boolean;
+			minOffset: number;
+			maxOffset: number;
+			checked?: true;
+			text?: true;
+		}
 	>();
-	for (const { ip, op } of memory) {
+	// A region reads either strings or element views, so one admission covers its kind.
+	if (new Set(memory.map((access) => access.text === true)).size > 1) return undefined;
+	for (const { ip, op, text } of memory) {
 		const offset = offsets.get(ip);
 		const previous = views.get(op.object);
 		// Without a counter, every access is a read that checks its own key. Stores stay
@@ -2172,6 +2280,7 @@ function fixedNumericLoopStorage(
 				minOffset: previous?.minOffset ?? 0,
 				maxOffset: previous?.maxOffset ?? 0,
 				checked: true,
+				...(text === true ? { text: true as const } : {}),
 			});
 			continue;
 		}
@@ -2180,6 +2289,7 @@ function fixedNumericLoopStorage(
 			minOffset: Math.min(previous?.minOffset ?? offset, offset),
 			maxOffset: Math.max(previous?.maxOffset ?? offset, offset),
 			...(previous?.checked === true ? { checked: true as const } : {}),
+			...(text === true ? { text: true as const } : {}),
 		});
 	}
 	// A failed checked read restarts the iteration in the original code, which would
@@ -2201,12 +2311,20 @@ function fixedNumericLoopStorage(
 		)
 	)
 		return undefined;
+	const textual = memory.some((access) => access.text === true);
 	if (lengthLoad !== undefined && !views.has(lengthLoad.object))
-		views.set(lengthLoad.object, { writable: false, minOffset: 0, maxOffset: 0 });
+		views.set(lengthLoad.object, {
+			writable: false,
+			minOffset: 0,
+			maxOffset: 0,
+			...(textual ? { text: true as const } : {}),
+		});
 	const records = numericLoopRecords(
 		fn,
 		shape,
-		memory.flatMap(({ op }) => (op.opcode === "LOAD_PROPERTY" ? [op.dst] : [])),
+		memory.flatMap(({ op, text }) =>
+			op.opcode === "LOAD_PROPERTY" && text !== true ? [op.dst] : [],
+		),
 	);
 	if (records === undefined) return undefined;
 	// Stores admit only TypedArray views, whose length no store changes; records and
@@ -2223,9 +2341,24 @@ function fixedNumericLoopStorage(
 		(counted !== undefined && (views.has(counted.counter.index) || views.has(bound!)))
 	)
 		return undefined;
+	const codeUnitCalls = new Set(
+		memory.flatMap((access) => (access.text === true ? [access.ip] : [])),
+	);
 	for (const ip of shape.order) {
-		if (ip === lengthLoad?.ip) continue;
+		if (ip === lengthLoad?.ip || codeUnitCalls.has(ip)) continue;
 		const op = fn.instructions[ip]!;
+		// Only code unit reads use the method, so the region need not produce it.
+		if (methodLoads.has(ip) && op.opcode === "LOAD_PROPERTY_STATIC") {
+			if (
+				shape.order.some(
+					(other) =>
+						!codeUnitCalls.has(other) &&
+						vmInstructionReadRegisters(fn.instructions[other]!).includes(op.dst),
+				)
+			)
+				return undefined;
+			continue;
+		}
 		if (op.opcode === "LOAD_PROPERTY_STATIC" && records.has(op.object)) continue;
 		if (op.opcode === "REQUIRE_COERCIBLE" && records.has(op.src)) continue;
 		if (
@@ -2358,6 +2491,7 @@ function lowerNumericLoopRegion(
 	conflicts: (ip: number) => boolean,
 	lengthLoads: ReadonlySet<number>,
 	cursorSteps: ReadonlyMap<number, { initializeIp: number; iterator: number }>,
+	codeUnitReads: ReadonlySet<number>,
 ): NativeNumericLoopRegionPlan | undefined {
 	const first = fn.instructions[header];
 	const cursor = first?.opcode === "ITERATOR_STEP" ? cursorSteps.get(header) : undefined;
@@ -2382,7 +2516,7 @@ function lowerNumericLoopRegion(
 	const shape = numericLoopShape(fn, body, header, true);
 	if (shape === undefined || conflicts(shape.entryIp) || shape.order.some(conflicts))
 		return undefined;
-	const storage = fixedNumericLoopStorage(fn, shape, body, lengthLoads);
+	const storage = fixedNumericLoopStorage(fn, shape, body, lengthLoads, codeUnitReads);
 	if (storage === undefined && !integerLoopInstruction(first)) return undefined;
 	if (
 		(storage === undefined &&
@@ -2403,6 +2537,9 @@ function lowerNumericLoopRegion(
 		-1,
 		representations,
 		storage !== undefined,
+		storage?.views.some((view) => view.text === true) === true
+			? codeUnitReads
+			: undefined,
 	);
 	if (flow === undefined) return undefined;
 	const inputs = new Set(flow.inputs);
@@ -3313,7 +3450,8 @@ export function selectNativeFastPaths(
 	const mapEntryBlocked = new Set(blocked);
 	const snapshotOverlayIps = new Set<number>();
 	const snapshotBlocked = new Set(blocked);
-	// Numeric loop regions keep indexed-length loop and Array cursor code as their fallback.
+	// Numeric loop regions keep indexed-length loop, Array cursor and charCodeAt chain code
+	// as their fallback.
 	const numericLoopBlocked = new Set(blocked);
 	const cursorSteps = new Map<number, { initializeIp: number; iterator: number }>();
 	// An Array view's length is an own data property, so any `.length` load can bound its loop.
@@ -3341,7 +3479,8 @@ export function selectNativeFastPaths(
 			region.kind !== "numeric-fusion" &&
 			region.kind !== "indexed-length-loop" &&
 			region.kind !== "array-values-iterator-cursor" &&
-			region.kind !== "iterator-result-virtualization"
+			region.kind !== "iterator-result-virtualization" &&
+			region.kind !== "string-char-code-at-chain"
 		) {
 			numericLoopBlocked.add(action.ip);
 			for (const ip of region.claimedIps) numericLoopBlocked.add(ip);
@@ -3488,6 +3627,33 @@ export function selectNativeFastPaths(
 				unavailable(ip) || !nativePlanKeepsOrdinaryLowering(native.instructions[ip]),
 		))
 			for (const ip of plan.claimedIps) numericLoopBlocked.add(ip);
+		// World facts alone make these the builtin on any primitive string, so a region
+		// reads their code units directly once its entry admits the string.
+		const calleeWriters = new Map<number, Array<BytecodeInstruction>>();
+		for (const op of fn.instructions)
+			for (const register of vmInstructionWriteRegisters(op))
+				calleeWriters.set(register, [...(calleeWriters.get(register) ?? []), op]);
+		const codeUnitReads = new Set(
+			fn.instructions.flatMap((call, ip) => {
+				const plan = native.instructions[ip];
+				return call.opcode === "CALL" &&
+					plan?.kind === "call" &&
+					plan.guardedBuiltinCall?.operation === "String.prototype.charCodeAt" &&
+					plan.guardedBuiltinCall.guard.dependencies.every(
+						(dependency) => dependency.kind === "world",
+					) &&
+					call.callee !== call.thisValue &&
+					(calleeWriters.get(call.callee) ?? []).every(
+						(writer) =>
+							writer.opcode === "LOAD_PROPERTY_STATIC" &&
+							writer.object === call.thisValue &&
+							String.fromCharCode(...(stringConstants[writer.stringIndex] ?? [])) ===
+								"charCodeAt",
+					)
+					? [ip]
+					: [];
+			}),
+		);
 		for (const header of [...body.jumpTargets].sort((a, b) => a - b)) {
 			if (numericLoopBlocked.has(header)) continue;
 			const plan = lowerNumericLoopRegion(
@@ -3505,6 +3671,8 @@ export function selectNativeFastPaths(
 							kind !== "exact-operator-input-kinds" &&
 							kind !== "unsigned-arithmetic" &&
 							kind !== "exact-typed-array-element" &&
+							!(kind === "call" && codeUnitReads.has(candidate)) &&
+							kind !== "primitive-string-length" &&
 							!(
 								kind === "exact-builtin-input-kinds" &&
 								nativeNumericBuiltinInstruction(fn.instructions[candidate]!) !== undefined
@@ -3513,6 +3681,7 @@ export function selectNativeFastPaths(
 				},
 				lengthLoads,
 				cursorSteps,
+				codeUnitReads,
 			);
 			if (plan === undefined) continue;
 			// Without a counter the trip count is unknown, and exact element accesses are
