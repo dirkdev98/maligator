@@ -1678,6 +1678,23 @@ static MalValue regexp_proto_search(MalVm *vm, MalValue this_value, const MalVal
         return mal_value_new_undefined();
     }
 
+    // A canonical instance keeps a writable lastIndex in its one data slot, so a
+    // Number there is saved, zeroed, and restored without property operations.
+    MalRegExpObject *canonical;
+    if (regexp_canonical_instance(vm, this_value, &canonical)) {
+        MalObject *object = (MalObject *) canonical;
+        u32 slot = object->shape->props[0].slot;
+        MalValue previous = mal_object_field_load(object, slot);
+        if (mal_ops_is_number(previous)) {
+            mal_object_field_store(object, slot, mal_value_from_i32(0));
+            MalValue found = regexp_builtin_exec(
+                vm, canonical, this_value, s, REGEXP_BUILTIN_EXEC_INDEX_ONLY, true, nullptr);
+            if (regexp_threw(vm)) return mal_value_new_undefined();
+            mal_object_field_store(object, slot, previous);
+            return mal_value_is_null(found) ? mal_value_from_i32(-1) : mal_ops_number_value(mal_ops_to_number(found));
+        }
+    }
+
     MalValue previous_last_index;
     if (!mal_vm_get_property(vm, this_value, mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_LAST_INDEX), &previous_last_index)) {
         return mal_value_new_undefined();
@@ -1691,7 +1708,6 @@ static MalValue regexp_proto_search(MalVm *vm, MalValue this_value, const MalVal
     bool ok;
     bool index_only = false;
     MalValue result;
-    MalRegExpObject *canonical;
     if (regexp_canonical_instance(vm, this_value, &canonical)) {
         // Canonical @@search observes only null versus the result's `index`.
         // Execute that closed consumer directly so the full match Array, matched
@@ -1743,6 +1759,50 @@ static MalValue regexp_proto_search(MalVm *vm, MalValue this_value, const MalVal
 // RegExp.prototype[@@match]
 // ---------------------------------------------------------------------------
 
+// The global loop of @@match for a canonical instance: its flags getter and exec are
+// the built-ins, so match ranges replace the result arrays the loop would only index.
+static MalValue regexp_canonical_match_global(
+    MalVm *vm, MalRegExpObject *re, MalValue rx, MalString *s
+) {
+    bool full_unicode = (re->flag_bits & (MAL_REGEXP_JS_UNICODE | MAL_REGEXP_JS_UNICODE_SETS)) != 0;
+    if (!regexp_set_last_index(vm, rx, 0)) return mal_value_new_undefined();
+    RegexpMatchOffsets offsets = {0};
+    RegexpCaptureProjection projection = {.offsets = &offsets};
+    MalValue ret = mal_value_new_undefined();
+    while (true) {
+        usize previous = offsets.count;
+        MalValue result = regexp_builtin_exec(
+            vm, re, rx, s, REGEXP_BUILTIN_EXEC_OFFSETS, false, &projection);
+        if (regexp_threw(vm)) goto done;
+        if (mal_value_is_null(result)) break;
+        if (offsets.pairs[previous] == offsets.pairs[previous + 1]) {
+            i64 this_index;
+            if (!regexp_get_last_index(vm, rx, &this_index) ||
+                !regexp_set_last_index(
+                    vm, rx, regexp_advance_string_index(s, this_index, full_unicode))) {
+                goto done;
+            }
+        }
+    }
+    if (offsets.count == 0) {
+        ret = mal_value_new_null();
+        goto done;
+    }
+    usize stride = 2 * (usize) offsets.groups;
+    MalArrayObject *array = mal_intrinsic_new_array(vm, 0);
+    u32 n = 0;
+    for (usize at = 0; at < offsets.count; at += stride) {
+        mal_array_object_store(
+            array, mal_key_index(n++),
+            regexp_substring(vm, s, offsets.pairs[at], offsets.pairs[at + 1]));
+    }
+    ret = mal_value_from_object((MalObject *) array);
+
+done:
+    if (offsets.pairs != nullptr) free(offsets.pairs);
+    return ret;
+}
+
 static MalValue regexp_proto_match(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
     (void) callee;
@@ -1753,6 +1813,14 @@ static MalValue regexp_proto_match(MalVm *vm, MalValue this_value, const MalValu
     MalString *s;
     if (!mal_vm_to_string(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &s)) {
         return mal_value_new_undefined();
+    }
+    MalRegExpObject *canonical;
+    if (regexp_canonical_instance(vm, this_value, &canonical)) {
+        if ((canonical->flag_bits & MAL_REGEXP_JS_GLOBAL) != 0) {
+            return regexp_canonical_match_global(vm, canonical, this_value, s);
+        }
+        return regexp_builtin_exec(
+            vm, canonical, this_value, s, REGEXP_BUILTIN_EXEC_RESULT, false, nullptr);
     }
     MalString *flags;
     if (!regexp_flags_string(vm, this_value, &flags)) {

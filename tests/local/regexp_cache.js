@@ -525,6 +525,33 @@ check(
 		RegExp.$1 === "2",
 );
 
+const globalDigits = /\d*/g;
+globalDigits.lastIndex = 4;
+const globalMatched = "a12b3".match(globalDigits);
+const afterGlobalMatch = [globalDigits.lastIndex, RegExp.lastMatch];
+const searchGlobal = /\d/g;
+searchGlobal.lastIndex = 5;
+const searchSticky = /\d/y;
+searchSticky.lastIndex = -0;
+const searched = [
+	"ab1".search(searchGlobal),
+	searchGlobal.lastIndex,
+	"1ab".search(searchSticky),
+	"ab1".search(searchSticky),
+	Object.is(searchSticky.lastIndex, -0),
+];
+const firstOnly = "x7y8".match(/(\d)/);
+check(
+	"match and search keep lastIndex, empty matches, and legacy statics",
+	JSON.stringify([
+		globalMatched,
+		afterGlobalMatch,
+		searched,
+		[firstOnly[0], firstOnly[1], firstOnly.index, firstOnly.input],
+		"none".match(/\d/g),
+	]) === '[["","12","","3",""],[0,""],[2,5,0,-1,true],["7","7",1,"x7y8"],null]',
+);
+
 let invalidCount = 0;
 for (let i = 0; i < 2; i++) {
 	try {
