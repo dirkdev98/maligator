@@ -2165,7 +2165,10 @@ static MalValue regexp_canonical_replace_function(
     bool nominated =
         (vm->exact_script_call == nullptr || vm->exact_script_call->callee != replacer) &&
         mal_vm_prepare_builtin_callback(vm, replacer, &runtime_callback);
-    if (nominated) vm->exact_script_call = &runtime_callback;
+    if (nominated) {
+        vm->exact_script_call = &runtime_callback;
+        MAL_PERF_COUNT(regexp_replace_runtime_callback_nominations);
+    }
     mal_gc_native_rooted_begin(vm);
 
     usize next_source_position = 0;
