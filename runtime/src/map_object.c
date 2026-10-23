@@ -480,19 +480,65 @@ static inline __attribute__((always_inline)) u32 mal_map_storage_find_hinted(
     return entry;
 }
 
-u32 mal_map_object_find_hinted(MalMapObject *map, MalValue key) {
+// Hashed int32 and identity keys compare by their bits, so their lookup calls nothing. The
+// entry points tail-call a general variant for small storage and other domains, which keeps
+// the common lookup a leaf without a frame or callee-saved spills.
+static inline bool mal_map_storage_finds_bits(const MalMapStorage *storage) {
+    return storage != nullptr && storage->payload != nullptr &&
+        (storage->domain == MAL_MAP_KEYS_INT32 || storage->domain == MAL_MAP_KEYS_IDENTITY);
+}
+
+static inline __attribute__((always_inline)) u32 mal_map_storage_find_bits(
+    MalMapStorage *storage, MalValue key
+) {
+    MAL_PERF_COUNT(map_get_set_cache_checks);
+    if (storage->entry_hint != 0 && storage->hint_key == key) {
+        MAL_PERF_COUNT(map_get_set_cache_hits);
+        return storage->entry_hint;
+    }
+    MAL_PERF_COUNT(map_get_set_cache_misses);
+    i32 int_key = 0;
+    if (!mal_map_query_in_domain(storage, key, &int_key)) return 0;
+    u32 slot = storage->domain == MAL_MAP_KEYS_INT32
+        ? mal_map_probe_in(storage, MAL_MAP_KEYS_INT32, key, int_key, mal_key_hash_mix(key), false)
+        : mal_map_probe_in(storage, MAL_MAP_KEYS_IDENTITY, key, 0, mal_key_hash_mix(key), false);
+    if (slot == UINT32_MAX) return 0;
+    u32 entry = (u32) storage->slots[slot] + 1;
+    mal_map_storage_remember_entry(storage, entry);
+    return entry;
+}
+
+static __attribute__((noinline)) u32 mal_map_object_find_hinted_general(
+    MalMapObject *map, MalValue key
+) {
     return mal_map_storage_find_hinted(map->entries, key);
 }
 
-MalValue mal_map_object_get_hinted(MalMapObject *map, MalValue key) {
+u32 mal_map_object_find_hinted(MalMapObject *map, MalValue key) {
+    MalMapStorage *storage = map->entries;
+    if (!mal_map_storage_finds_bits(storage)) return mal_map_object_find_hinted_general(map, key);
+    return mal_map_storage_find_bits(storage, key);
+}
+
+static __attribute__((noinline)) MalValue mal_map_object_get_hinted_general(
+    MalMapObject *map, MalValue key
+) {
     MalMapStorage *storage = map->entries;
     u32 entry = mal_map_storage_find_hinted(storage, key);
     return entry == 0 ? MAL_VALUE_UNDEFINED : mal_map_value_at(storage, entry - 1);
 }
 
+MalValue mal_map_object_get_hinted(MalMapObject *map, MalValue key) {
+    MalMapStorage *storage = map->entries;
+    if (!mal_map_storage_finds_bits(storage)) return mal_map_object_get_hinted_general(map, key);
+    u32 entry = mal_map_storage_find_bits(storage, key);
+    return entry == 0 ? MAL_VALUE_UNDEFINED : mal_map_value_at(storage, entry - 1);
+}
+
 MalValue mal_map_object_get_borrowed(MalMapObject *map, MalValue key, u32 *entry_out) {
     MalMapStorage *storage = map->entries;
-    u32 entry = mal_map_storage_find_hinted(storage, key);
+    u32 entry = mal_map_storage_finds_bits(storage)
+        ? mal_map_storage_find_bits(storage, key) : mal_map_storage_find_hinted(storage, key);
     MalValue value = entry == 0 ? MAL_VALUE_UNDEFINED : mal_map_value_at(storage, entry - 1);
     *entry_out = entry;
     return value;
