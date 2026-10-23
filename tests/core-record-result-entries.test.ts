@@ -101,7 +101,7 @@ console.log(widths("ab cde f"), retain("ab cd").length);`,
 			).toBe(false);
 	});
 
-	it("keeps the object when the producer can expose it or returns other values", () => {
+	it("keeps the object when the producer can expose it or reorders its keys", () => {
 		const { recordEntry } = compile(
 			"declined",
 			`const seen = [];
@@ -112,11 +112,6 @@ function remembered(text, start) {
 	seen.push(token);
 	return token;
 }
-function optional(text, start) {
-	let end = start;
-	while (end < text.length && text.charCodeAt(end) !== 32) end++;
-	return end === start ? null : { start, end };
-}
 function reordered(text, start) {
 	let end = start;
 	while (end < text.length && text.charCodeAt(end) !== 32) end++;
@@ -125,14 +120,44 @@ function reordered(text, start) {
 let total = 0;
 for (let index = 0; index < 8; index++) {
 	total += remembered("ab cd ef", index).end;
-	total += optional("ab cd ef", index)?.end ?? 0;
 	total += reordered("ab cd ef", index).end;
 }
 console.log(total, seen.length);`,
 		);
 		expect(recordEntry("remembered")).toBeUndefined();
-		expect(recordEntry("optional")).toBeUndefined();
 		expect(recordEntry("reordered")).toBeUndefined();
+	});
+
+	it("lets a producer return other values next to its record", () => {
+		const { recordEntry } = compile(
+			"escaped",
+			`const empty = { start: 0, end: 0 };
+function optional(text, start) {
+	let end = start;
+	while (end < text.length && text.charCodeAt(end) !== 32) end++;
+	if (end === start) return empty;
+	if (end - start > 4) return;
+	return { start, end };
+}
+function literalOnly(text, start) {
+	let end = start;
+	while (end < text.length && text.charCodeAt(end) !== 32) end++;
+	return { start, end };
+}
+let total = 0;
+for (let index = 0; index < 8; index++) {
+	try {
+		total += optional("ab cd efghij", index).end;
+	} catch {
+		total++;
+	}
+	total += literalOnly("ab cd ef", index).end;
+}
+console.log(total);`,
+		);
+		expect(recordEntry("optional")?.resultFields?.escapes).toBe(true);
+		expect(recordEntry("literalOnly")?.resultFields).toBeDefined();
+		expect(recordEntry("literalOnly")?.resultFields?.escapes).toBeUndefined();
 	});
 
 	it("forwards a producer's record through a helper that returns it", () => {
@@ -279,6 +304,50 @@ console.log(last("ab cd"));`,
 			entry.resultFields,
 		);
 		const forged = { ...entry, ...variant, callSites };
+		expect(() =>
+			verifyCoreOptimizationPlan(
+				core.program,
+				{
+					...core.plan,
+					directEntries: core.plan.directEntries.map((current) =>
+						current === entry ? forged : current,
+					),
+				},
+				core.context,
+			),
+		).toThrow(/record result proof/);
+	});
+
+	it("rejects a plan that hides a producer's other returns", () => {
+		const { core, recordEntry } = compile(
+			"hidden",
+			`function scan(text, start) {
+	let end = start;
+	while (end < text.length && text.charCodeAt(end) !== 32) end++;
+	if (end === start) return;
+	return { start, end };
+}
+function last(text) {
+	let end = 0;
+	for (let index = 0; index < text.length; index = end + 1) end = scan(text, index).end;
+	return end;
+}
+console.log(last("ab cd"));`,
+		);
+		const entry = recordEntry("scan")!;
+		const { escapes: _escapes, ...resultFields } = entry.resultFields!;
+		const variant = analyzeCoreNativeEntry(
+			core.program.function(entry.function),
+			buildCoreControlFlow(core.program, entry.function, { exceptions: true }),
+			entry.parameterRepresentations,
+			undefined,
+			entry.callSites,
+			undefined,
+			undefined,
+			undefined,
+			resultFields,
+		);
+		const forged = { ...entry, ...variant, resultFields };
 		expect(() =>
 			verifyCoreOptimizationPlan(
 				core.program,

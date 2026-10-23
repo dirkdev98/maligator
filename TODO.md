@@ -114,11 +114,13 @@ The independent target boundary and current storage contract are recorded in
       that turns it into entry and caller representations.
 - [ ] Admit more record calls. Not admitted yet: calls through instance-method hints,
       which need a guarded fallback that keeps the returned object as the record;
-      records handed to the next callee's field entry, as in `cost(read(id))`;
-      producers whose returns differ in keys, like `decodeVmValueOperand`, the largest
-      returned-record allocator in the quick self-compile census (410K of 124M
-      allocations); and forwarding more than one call deep. In that census, record
-      calls now cover 263K calls, mostly `copyTerminatorEdge` and `valueEnvironment`.
+      records handed to another callee, as in `cost(read(id))` or
+      `operandShape(type, context)`, which takes 401K fresh context objects in the
+      quick self-compile census and reads them only to report a failure; and
+      forwarding more than one call deep, or through a helper that also reads the
+      record. In that census, record calls cover 835K calls, mostly
+      `decodeVmValueOperand`, `coreTerminatorInput`, `valueEnvironment` and
+      `copyTerminatorEdge`.
 
 - [ ] Stream the product CLI's translation units to disk. Its build keeps the CLI's
       emitted C, 650 MB with the worker root's, in memory while it compiles the

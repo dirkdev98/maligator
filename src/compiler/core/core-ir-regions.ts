@@ -561,6 +561,11 @@ export interface CoreEntryResultFields {
 	 */
 	readonly shapes?: ReadonlyArray<ReadonlyArray<number>>;
 	/**
+	 * Some reachable return hands back another value. The entry returns it as usual, and
+	 * the empty value for a record in caller storage.
+	 */
+	readonly escapes?: true;
+	/**
 	 * Calls whose result the entry returns unchanged. The callee returns one of its own
 	 * literals with the same keys, so its fields can go straight to the caller's storage.
 	 */

@@ -3532,9 +3532,11 @@ interface NativeRecordSite {
 	readonly fieldSlot: number;
 	readonly keys: ReadonlyArray<number>;
 	readonly shapes?: ReadonlyArray<ReadonlyArray<number>>;
-	/** Present when an observer can create the object; undefined until one does. */
+	/** Present when an observer or the callee can supply the object; empty until then. */
 	readonly objectSlot?: number;
 	readonly calleeSlot?: number;
+	/** The callee may return another value, which is then the record itself. */
+	readonly escapes?: true;
 }
 
 interface NativeRecordStorage {
@@ -3601,13 +3603,16 @@ function renderRecordCallSlots(
 		for (let field = 1; field < nativeRecordSlotCount(entry.resultFields); field++)
 			allocateSlot();
 		const observed = plan.observerIps.length > 0;
+		const escapes = entry.resultFields.escapes === true;
 		const site: NativeRecordSite = {
 			fieldSlot,
 			keys,
 			...(entry.resultFields.shapes === undefined
 				? {}
 				: { shapes: entry.resultFields.shapes }),
-			...(observed ? { objectSlot: allocateSlot(), calleeSlot: allocateSlot() } : {}),
+			...(observed || escapes ? { objectSlot: allocateSlot() } : {}),
+			...(observed ? { calleeSlot: allocateSlot() } : {}),
+			...(escapes ? { escapes: true as const } : {}),
 		};
 		calls.set(plan.callIp, site);
 		for (const access of [...plan.loads, ...plan.stores])
@@ -8236,6 +8241,7 @@ function emitInstruction(
 				(_, field) =>
 					`*rf${field} = mal_object_field_load_shaped(mal_value_to_object(${boxed(instruction.dst)}), ${field});`,
 			),
+			`r${instruction.dst} = MAL_VALUE_EMPTY;`,
 		];
 	}
 	if (
@@ -8252,7 +8258,8 @@ function emitInstruction(
 				.filter((field) => !fields.includes(field))
 				.map((field) => `*rf${field} = MAL_VALUE_UNDEFINED;`),
 			...(shape === undefined ? [] : [`*rf${count} = mal_value_from_i32(${shape});`]),
-			`r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
+			// The empty value tells the caller its storage holds the record.
+			`r${instruction.dst} = MAL_VALUE_EMPTY;`,
 		];
 	}
 	if (
@@ -8272,7 +8279,7 @@ function emitInstruction(
 		if (ordinary === null) return null;
 		const object = `__gc_slots[${site.objectSlot}]`;
 		return [
-			`if (mal_value_is_undefined(${object})) {`,
+			`if (${object} == MAL_VALUE_EMPTY) {`,
 			`  ${virtual}`,
 			`} else {`,
 			`  r${instruction.object} = ${object};`,
@@ -8296,7 +8303,7 @@ function emitInstruction(
 			`${object} = mal_vm_materialize_record(vm, __gc_slots[${site.calleeSlot!}], (MalString *[]){${fields.map(atom).join(", ")}}, (MalValue[]){${fields.map((field) => `__gc_slots[${site.fieldSlot + field}]`).join(", ")}}, ${fields.length});`;
 		const shapeIndex = `mal_value_to_i32(__gc_slots[${site.fieldSlot + site.keys.length}])`;
 		return [
-			`if (mal_value_is_undefined(${object})) {`,
+			`if (${object} == MAL_VALUE_EMPTY) {`,
 			...(site.shapes === undefined
 				? [`  ${materialize(site.keys.map((_, field) => field))}`]
 				: site.shapes.map(
@@ -12741,8 +12748,15 @@ function emitInstruction(
 						...(context.recordCall?.objectSlot === undefined
 							? []
 							: [
-									`__gc_slots[${context.recordCall.objectSlot}] = MAL_VALUE_UNDEFINED;`,
-									`__gc_slots[${context.recordCall.calleeSlot!}] = ${directCallee};`,
+									// Another returned value is the record itself, as if observed.
+									context.recordCall.escapes
+										? `__gc_slots[${context.recordCall.objectSlot}] = ${boxed(instruction.dst)};`
+										: `__gc_slots[${context.recordCall.objectSlot}] = MAL_VALUE_EMPTY;`,
+									...(context.recordCall.calleeSlot === undefined
+										? []
+										: [
+												`__gc_slots[${context.recordCall.calleeSlot}] = ${directCallee};`,
+											]),
 								]),
 						callPoll(),
 					];

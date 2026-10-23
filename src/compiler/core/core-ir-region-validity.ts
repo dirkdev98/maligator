@@ -2036,11 +2036,13 @@ export function verifyCoreOptimizationPlan(
 				context === undefined
 					? undefined
 					: (key) => coreRecordKeyAbsent(context.facts.world, program, key),
+				true,
 			);
 			if (
 				current === undefined ||
 				!sameNumbers(current.keys, entry.resultFields.keys) ||
 				!sameNumbers(current.allocations, entry.resultFields.allocations) ||
+				current.escapes !== entry.resultFields.escapes ||
 				(current.shapes?.length ?? 0) !== (entry.resultFields.shapes?.length ?? 0) ||
 				(current.shapes ?? []).some(
 					(shape, index) => !sameNumbers(shape, entry.resultFields!.shapes![index]!),

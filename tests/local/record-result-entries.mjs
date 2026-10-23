@@ -270,6 +270,54 @@ function widened(text, every) {
 	return total;
 }
 
+// Returns that hand back other values keep them: undefined still throws on a read,
+// and a shared object stays itself.
+function terminator(kind, value) {
+	for (let guard = 0; guard < 1; guard++) if (kind === "never") throw new Error("never");
+	switch (kind) {
+		case "jump":
+			return { kind, target: value };
+		case "branch":
+			return { kind, condition: value > 2, target: value + 1 };
+		case "return":
+			return { kind, value };
+	}
+}
+function targets(kinds) {
+	let total = 0;
+	for (let index = 0; index < kinds.length; index++) {
+		try {
+			const input = terminator(kinds[index], index);
+			total += (input.target ?? 0) + (input.condition ? 100 : 0) + (input.value ?? 0);
+		} catch (error) {
+			total += error instanceof TypeError ? 1000 : 1;
+		}
+	}
+	return total;
+}
+const sharedToken = { start: -1, end: -1, digits: 0 };
+function maybeShared(text, start) {
+	let end = start;
+	while (end < text.length && text.charCodeAt(end) !== 32) end++;
+	if (end - start === 3) return sharedToken;
+	return { start, end, digits: 0 };
+}
+const sharedSeen = [];
+function sharedWidths(text) {
+	let total = 0;
+	for (let index = 0; index < text.length;) {
+		const token = maybeShared(text, index);
+		if (token.start < 0) {
+			sharedSeen.push(token);
+			index += 4;
+			continue;
+		}
+		total += token.end - token.start;
+		index = token.end + 1;
+	}
+	return total;
+}
+
 const text = "a1 bb22 ccc333 dddd4444 ".repeat(20);
 check(tokenLengths(text), 600, "token lengths");
 check(digitCount(text), 200, "digit count");
@@ -308,6 +356,13 @@ check(
 );
 check(decodedSeen[0].register, 7, "union store");
 check(widened(text, 3), 517, "observed record into record call");
+check(targets(["jump", "branch", "return", "other", "branch"]), 1109, "escaped returns");
+check(sharedWidths("ab abc abcd abc a"), 7, "escaped shared object");
+check(
+	sharedSeen.length === 2 && sharedSeen.every((token) => token === sharedToken),
+	true,
+	"escaped identity",
+);
 const handlers = attach(["a", "try-b", "cc", "try-dd", "e", "f", "try-g"], []);
 check(
 	handlers.map((environment) => `${environment.state}@${environment.version}`).join(","),

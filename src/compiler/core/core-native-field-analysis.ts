@@ -215,7 +215,7 @@ export function coreFieldArgument(
 	};
 }
 
-const MAX_RESULT_FIELDS = 8;
+const MAX_RESULT_FIELDS = 16;
 
 function onlyReturned(fn: CoreFunctionStore, value: CoreValueId): boolean {
 	const pending = [value];
@@ -302,6 +302,7 @@ export function coreReturnsObjectLiterals(fn: CoreFunctionStore): boolean {
  * With `forwardTarget`, a return may also hand back the result of an exact call to a
  * function whose own returns are such literals, with the same keys. With `absentKey`,
  * literals may differ in keys when a read of each missing key provably finds nothing.
+ * With `escapes`, other returns may hand back any value as long as one returns a record.
  */
 export function coreRecordResultFields(
 	fn: CoreFunctionStore,
@@ -312,6 +313,7 @@ export function coreRecordResultFields(
 		| { readonly target: CoreFunctionId; readonly keys: ReadonlyArray<number> }
 		| undefined,
 	absentKey?: (key: number) => boolean,
+	escapes = false,
 ): CoreEntryResultFields | undefined {
 	if (
 		fn.isGenerator ||
@@ -324,6 +326,7 @@ export function coreRecordResultFields(
 	const allocations = new Map<CoreInstructionId, ReadonlyArray<number>>();
 	const forwards = new Map<CoreInstructionId, CoreFunctionId>();
 	let union = false;
+	let escaped = false;
 	const sameKeys = (candidate: ReadonlyArray<number>) =>
 		keys === undefined ||
 		(keys.length === candidate.length &&
@@ -336,13 +339,21 @@ export function coreRecordResultFields(
 			fn,
 			fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator)),
 		);
-		if (allocation === undefined) return undefined;
+		const opcode =
+			allocation === undefined ? undefined : fn.instructionOpcodeName(allocation);
+		const forward =
+			opcode === "call" && !union ? forwardTarget?.(allocation!) : undefined;
+		if (
+			allocation === undefined ||
+			(opcode === "call" ? forward === undefined : opcode !== "createObjectShaped")
+		) {
+			if (!escapes) return undefined;
+			escaped = true;
+			continue;
+		}
 		if (allocations.has(allocation) || forwards.has(allocation)) continue;
-		if (fn.instructionOpcodeName(allocation) === "call") {
-			const forward = forwardTarget?.(allocation);
+		if (forward !== undefined) {
 			if (
-				forward === undefined ||
-				union ||
 				!sameKeys(forward.keys) ||
 				!onlyReturned(
 					fn,
@@ -354,7 +365,6 @@ export function coreRecordResultFields(
 			forwards.set(allocation, forward.target);
 			continue;
 		}
-		if (fn.instructionOpcodeName(allocation) !== "createObjectShaped") return undefined;
 		const allocationKeys = fn.instructionAttributes(allocation).keyStringIndices;
 		if (
 			!Array.isArray(allocationKeys) ||
@@ -399,6 +409,7 @@ export function coreRecordResultFields(
 		keys,
 		allocations: Object.freeze(ordered),
 		...(shapes === undefined ? {} : { shapes }),
+		...(escaped ? { escapes: true as const } : {}),
 		...(forwards.size === 0
 			? {}
 			: {

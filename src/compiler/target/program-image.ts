@@ -1493,6 +1493,8 @@ export interface NativeDirectEntryPlan {
 		 * own order. The entry then writes a shape index after the fields.
 		 */
 		readonly shapes?: ReadonlyArray<ReadonlyArray<number>>;
+		/** Other returns hand back their value; a record return hands back the empty value. */
+		readonly escapes?: true;
 		/** Exact calls of literal record producers whose result is returned unchanged. */
 		readonly forwards?: ReadonlyArray<{
 			readonly callIp: number;
@@ -1737,7 +1739,7 @@ export function validateNativeLiteralSwitches(
 	}
 }
 
-const NATIVE_RECORD_FIELD_LIMIT = 8;
+const NATIVE_RECORD_FIELD_LIMIT = 16;
 
 /** Record calls and every use of their results render against caller storage, outside other native plans. */
 export function nativeRecordCallIps(native: NativeFunctionPlan): ReadonlySet<number> {
@@ -1857,9 +1859,10 @@ function validateNativeRecordReturns(
 			transported.add(returnIp);
 		}
 	}
-	for (const [ip, instruction] of fn.instructions.entries())
-		if (instruction.opcode === "RETURN" && reachable!.has(ip) && !transported.has(ip))
-			fail();
+	if (results.escapes === undefined)
+		for (const [ip, instruction] of fn.instructions.entries())
+			if (instruction.opcode === "RETURN" && reachable!.has(ip) && !transported.has(ip))
+				fail();
 }
 
 /** A record call's result register reaches only its field loads, and its entry returns those fields. */
@@ -5101,6 +5104,9 @@ function lowerExecutionFunctionToNativePlan(
 						...(entry.resultFields.shapes === undefined
 							? {}
 							: { shapes: entry.resultFields.shapes }),
+						...(entry.resultFields.escapes === undefined
+							? {}
+							: { escapes: true as const }),
 						...(entry.resultFields.forwards === undefined
 							? {}
 							: {

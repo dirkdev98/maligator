@@ -1816,6 +1816,7 @@ function recordResultEntries(
 			return keys === undefined ? undefined : { target: callee, keys };
 		},
 		world === undefined ? undefined : (key) => coreRecordKeyAbsent(world, program, key),
+		true,
 	);
 	if (resultFields === undefined) return [];
 	const calls = callSites.flatMap((call) => {

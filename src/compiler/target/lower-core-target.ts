@@ -2681,6 +2681,9 @@ function lowerFunctionToTarget(
 							...(entry.resultFields.shapes === undefined
 								? {}
 								: { shapes: entry.resultFields.shapes }),
+							...(entry.resultFields.escapes === undefined
+								? {}
+								: { escapes: true as const }),
 							...(entry.resultFields.forwards === undefined
 								? {}
 								: {

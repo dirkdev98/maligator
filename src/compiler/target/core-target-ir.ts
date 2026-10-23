@@ -167,6 +167,7 @@ export interface CoreTargetDirectEntry {
 		readonly keys: ReadonlyArray<number>;
 		readonly allocations: ReadonlyArray<CompilerInstruction>;
 		readonly shapes?: ReadonlyArray<ReadonlyArray<number>>;
+		readonly escapes?: true;
 		readonly forwards?: ReadonlyArray<{
 			readonly instruction: CompilerInstruction;
 			readonly functionIndex: number;

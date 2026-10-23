@@ -51,7 +51,14 @@ describe("record result entries", () => {
 	};
 
 	it("returns the fields of out-of-line producers to field-reading callers", () => {
-		for (const producer of ["scan", "describe", "classify", "depth"])
+		for (const producer of [
+			"scan",
+			"describe",
+			"classify",
+			"depth",
+			"terminator",
+			"maybeShared",
+		])
 			expect(
 				functionNamed(producer).directEntries.some((entry) => entry.resultFields),
 				producer,
@@ -72,6 +79,8 @@ describe("record result entries", () => {
 			"attach",
 			"decodeAll",
 			"widened",
+			"targets",
+			"sharedWidths",
 		])
 			expect(functionNamed(caller).recordCalls?.length ?? 0, caller).toBeGreaterThan(0);
 		expect(functionNamed("observed").recordCalls![0]!.observerIps.length).toBeGreaterThan(
@@ -101,8 +110,9 @@ describe("record result entries", () => {
 			Number(new RegExp(`${name}=(\\d+)`).exec(result.stderr)?.[1] ?? -1);
 		expect(counter("direct_entry_hits")).toBeGreaterThan(0);
 		// Eleven observed tokens, the returned and the thrown token, three handed-on records,
-		// and two observed union records.
-		expect(counter("record_materializations")).toBe(18);
+		// two observed union records, and 26 tokens passed to widen. Returns of other values
+		// never create one.
+		expect(counter("record_materializations")).toBe(44);
 	});
 
 	for (const [backend, binary] of [

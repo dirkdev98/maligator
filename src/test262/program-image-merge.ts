@@ -815,6 +815,9 @@ export function mergeProgramImages(images: Array<ProgramImage>): MergedProgramIm
 									...(entry.resultFields.shapes === undefined
 										? {}
 										: { shapes: entry.resultFields.shapes.map((shape) => [...shape]) }),
+									...(entry.resultFields.escapes === undefined
+										? {}
+										: { escapes: true as const }),
 									...(entry.resultFields.forwards === undefined
 										? {}
 										: {

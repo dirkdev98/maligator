@@ -101,7 +101,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 255;
+export const COMPILER_ARTIFACT_VERSION = 256;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -2117,6 +2117,7 @@ function writeCompilerArtifact(
 			for (const key of entry.resultFields?.keys ?? []) w.u32(key);
 			w.u32(entry.resultFields?.allocationIps.length ?? 0);
 			for (const ip of entry.resultFields?.allocationIps ?? []) w.u32(ip);
+			w.u8(entry.resultFields?.escapes ? 1 : 0);
 			w.u32(entry.resultFields?.shapes?.length ?? 0);
 			for (const shape of entry.resultFields?.shapes ?? []) {
 				w.u32(shape.length);
@@ -4675,6 +4676,9 @@ function readCompilerArtifact(
 					: { keys: fieldKeys, representations: fieldRepresentations, loads: fieldLoads };
 			const resultKeys = Array.from({ length: r.count(4) }, () => r.u32());
 			const resultAllocationIps = Array.from({ length: r.count(4) }, () => r.u32());
+			const resultEscapes = r.u8();
+			if (resultEscapes > 1)
+				throw new RangeError("program-image-codec: invalid record escapes");
 			const resultShapes = Array.from({ length: r.count(4) }, () =>
 				Array.from({ length: r.count(4) }, () => r.u32()),
 			);
@@ -4691,6 +4695,7 @@ function readCompilerArtifact(
 							keys: resultKeys,
 							allocationIps: resultAllocationIps,
 							...(resultShapes.length === 0 ? {} : { shapes: resultShapes }),
+							...(resultEscapes === 1 ? { escapes: true as const } : {}),
 							...(resultForwards.length === 0 ? {} : { forwards: resultForwards }),
 						};
 			const constantCount = r.count(5);
