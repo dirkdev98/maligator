@@ -197,7 +197,9 @@ The independent target boundary and current storage contract are recorded in
       young cells, arrays (6.4 M), closure environments (4.0 M), closures (3.5 M),
       plain objects (3.1 M) and iterators (2.6 M) lead. Skipping finalizer calls
       for plain objects saved 1.5%; prefetching and per-block byte accounting did
-      not help.
+      not help. Neither did a fixed nursery: capping minors at 1 to 8 MB left a
+      retention-churn loop's minor sweep time at 30 to 34 ms, the same as the
+      live-set-proportional trigger, and added majors.
 
 - [ ] Share one invocation-local native analysis context across storage, expression,
       root, and fast-path planning. Native read/write, branch, handler, and lazy
