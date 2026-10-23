@@ -518,7 +518,7 @@ static void mal_perf_stats_print(void) {
     fprintf(stderr,
         "[perf-json-stats] shape_plans=%llu shape_plan_bytes=%llu shape_plan_hits=%llu "
         "escaped_key_code_units=%llu escaped_key_reuses=%llu escaped_key_capacity_bytes=%llu "
-        "plan_table_bytes=%llu plain_fallbacks=%llu plain_discarded_code_units=%llu "
+        "plan_table_bytes=%llu plain_fallbacks=%llu flat_records=%llu plain_discarded_code_units=%llu "
         "quote_latin1_code_units=%llu quote_utf16_code_units=%llu quote_utf16_scalar_probes=%llu "
         "parser_backward_seeks=%llu reviver_index_entries=%llu reviver_index_probes=%llu\n",
         (unsigned long long) mal_perf_stats.json_shape_plans,
@@ -529,6 +529,7 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.json_escaped_key_capacity_bytes,
         (unsigned long long) mal_perf_stats.json_plan_table_bytes,
         (unsigned long long) mal_perf_stats.json_plain_fallbacks,
+        (unsigned long long) mal_perf_stats.json_flat_records,
         (unsigned long long) mal_perf_stats.json_plain_discarded_code_units,
         (unsigned long long) mal_perf_stats.json_quote_latin1_code_units,
         (unsigned long long) mal_perf_stats.json_quote_utf16_code_units,

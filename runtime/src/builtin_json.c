@@ -1252,6 +1252,105 @@ static bool mal_json_plain_key(
     return true;
 }
 
+#define MAL_JSON_FLAT_RECORD_MEMBERS 16
+
+typedef struct MalJsonFlatMember {
+    MalValue value;
+    const u8 *units;
+    u32 width;
+} MalJsonFlatMember;
+
+static u32 mal_json_i32_width(i32 value) {
+    u32 magnitude = value < 0 ? (u32) -(i64) value : (u32) value;
+    u32 width = value < 0 ? 2 : 1;
+    while (magnitude >= 10) {
+        magnitude /= 10;
+        width++;
+    }
+    return width;
+}
+
+/**
+ * Writes a cached-plan record whose members are int32s, booleans, null, or
+ * Latin-1 strings without escapes in one reservation, as the member loop would.
+ * Any other record returns false before writing; such members can have no
+ * object values, so the record cannot be its own ancestor.
+ */
+static bool mal_json_plain_flat_record(
+    MalJsonBuilder *builder, const MalObject *object, const MalJsonShapePlan *plan
+) {
+    MalTextBuffer *buffer = &builder->buffer;
+    const MalTextBuffer *keys = &plan->escaped_keys.buffer;
+    if (buffer->utf16 || keys->utf16 || plan->count == 0 ||
+        plan->count > MAL_JSON_FLAT_RECORD_MEMBERS) return false;
+    MalJsonFlatMember members[MAL_JSON_FLAT_RECORD_MEMBERS];
+    usize needed = 1 + plan->count;
+    for (usize i = 0; i < plan->count; i++) {
+        const MalJsonKeyPlan *key = &plan->keys[i];
+        if (key->length == 0) return false;
+        MalValue value = mal_object_field_load(object, key->slot);
+        MalJsonFlatMember *member = &members[i];
+        member->units = nullptr;
+        if (mal_value_is_int32(value)) {
+            member->value = value;
+            member->width = mal_json_i32_width(mal_value_to_i32(value));
+        } else if (mal_value_is_boolean(value)) {
+            member->value = value;
+            member->width = mal_value_to_boolean(value) ? 4 : 5;
+        } else if (mal_value_is_null(value)) {
+            member->value = value;
+            member->width = 4;
+        } else if (mal_value_is_string(value)) {
+            const MalString *string = mal_value_to_string(value);
+            usize length = mal_string_length(string);
+            MalStringSegment segment;
+            if (length > UINT32_MAX - 2 ||
+                !mal_string_try_get_segment(string, 0, length, &segment) || !segment.latin1 ||
+                mal_json_latin1_safe_run(segment.latin1_units, length) != length) return false;
+            member->value = value;
+            member->units = segment.latin1_units;
+            member->width = (u32) length + 2;
+        } else {
+            return false;
+        }
+        needed += key->length + member->width;
+    }
+    if (!mal_text_buffer_fits(buffer, needed) &&
+        mal_text_buffer_reserve(buffer, needed) != MAL_TEXT_BUFFER_OK) return false;
+    u8 *out = (u8 *) buffer->data + buffer->length;
+    *out++ = '{';
+    for (usize i = 0; i < plan->count; i++) {
+        if (i != 0) *out++ = ',';
+        const MalJsonKeyPlan *key = &plan->keys[i];
+        mal_text_buffer_copy_bytes(out, (const u8 *) keys->data + key->offset, key->length);
+        out += key->length;
+        const MalJsonFlatMember *member = &members[i];
+        if (mal_value_is_int32(member->value)) {
+            i32 number = mal_value_to_i32(member->value);
+            u32 magnitude = number < 0 ? (u32) -(i64) number : (u32) number;
+            u8 *digit = out + member->width;
+            do {
+                *--digit = (u8) ('0' + magnitude % 10);
+                magnitude /= 10;
+            } while (magnitude != 0);
+            if (number < 0) *--digit = '-';
+        } else if (member->units != nullptr) {
+            out[0] = '"';
+            mal_text_buffer_copy_bytes(out + 1, member->units, member->width - 2);
+            out[member->width - 1] = '"';
+        } else {
+            const char *literal = mal_value_is_null(member->value)
+                ? "null" : mal_value_to_boolean(member->value) ? "true" : "false";
+            memcpy(out, literal, member->width);
+        }
+        out += member->width;
+    }
+    *out = '}';
+    buffer->length += needed;
+    MAL_PERF_COUNT(json_flat_records);
+    return true;
+}
+
 static bool mal_json_plain_frame(
     MalJsonPlainState *state, MalValue value, MalJsonFrame *frame
 ) {
@@ -1397,6 +1496,31 @@ done:
     return result;
 }
 
+static void mal_json_plain_push_frame(
+    MalJsonPlainState *state, MalObject *object, const MalJsonFrame *frame
+) {
+    if (state->count >= MAL_JSON_SCANNED_ANCESTORS) {
+        mal_json_pointer_insert(&state->active, object, nullptr);
+    }
+    if (state->count == state->capacity) {
+        usize capacity;
+        usize bytes;
+        if (!mal_checked_size_growth(
+                state->capacity, state->count + 1, 16, SIZE_MAX, &capacity) ||
+            !mal_checked_size_multiply(
+                capacity, sizeof(MalJsonFrame), SIZE_MAX, &bytes)) abort();
+        MalJsonFrame *frames = state->frames == state->inline_frames
+            ? malloc(bytes) : realloc(state->frames, bytes);
+        if (frames == nullptr) abort();
+        if (state->frames == state->inline_frames) {
+            memcpy(frames, state->inline_frames, sizeof(state->inline_frames));
+        }
+        state->frames = frames;
+        state->capacity = capacity;
+    }
+    state->frames[state->count++] = *frame;
+}
+
 static bool mal_json_try_serialize_plain(
     MalJsonState *generic, MalJsonBuilder *builder, MalValue root,
     MalJsonResult *result
@@ -1444,27 +1568,12 @@ static bool mal_json_try_serialize_plain(
                     "Converting circular structure to JSON");
                 goto failed;
             }
-            if (state.count >= MAL_JSON_SCANNED_ANCESTORS) {
-                mal_json_pointer_insert(&state.active, object, nullptr);
+            // A flat record is written whole, so the parent continues with its next member.
+            if (frame.array || !frame.cached_plan ||
+                !mal_json_plain_flat_record(builder, object, frame.plan)) {
+                mal_json_plain_push_frame(&state, object, &frame);
+                if (!mal_json_builder_push(builder, frame.array ? '[' : '{')) goto failed;
             }
-            if (state.count == state.capacity) {
-                usize capacity;
-                usize bytes;
-                if (!mal_checked_size_growth(
-                        state.capacity, state.count + 1, 16, SIZE_MAX, &capacity) ||
-                    !mal_checked_size_multiply(
-                        capacity, sizeof(MalJsonFrame), SIZE_MAX, &bytes)) abort();
-                MalJsonFrame *frames = state.frames == state.inline_frames
-                    ? malloc(bytes) : realloc(state.frames, bytes);
-                if (frames == nullptr) abort();
-                if (state.frames == state.inline_frames) {
-                    memcpy(frames, state.inline_frames, sizeof(state.inline_frames));
-                }
-                state.frames = frames;
-                state.capacity = capacity;
-            }
-            state.frames[state.count++] = frame;
-            if (!mal_json_builder_push(builder, frame.array ? '[' : '{')) goto failed;
         } else if (mal_value_is_int32(value)) {
             if (mal_text_buffer_append_i32(&builder->buffer, mal_value_to_i32(value)) !=
                 MAL_TEXT_BUFFER_OK) {

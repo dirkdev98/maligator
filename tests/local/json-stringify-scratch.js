@@ -529,4 +529,44 @@ check(
 	"a large array outgrows its size hint",
 );
 
+// Repeated records of one cached shape are written whole when every member is a
+// flat scalar; each kind of member outside that set keeps the general path.
+const flatRows = [
+	{ id: 1, name: "plain", ok: true, none: null },
+	{ id: -2147483648, name: 'quote"d', ok: false, none: null },
+	{ id: 2147483647, name: "line\nbreak", ok: true, none: null },
+	{ id: 0, name: "café", ok: false, none: null },
+	{ id: -0, name: "x", ok: true, none: null },
+	{ id: 1.5, name: "", ok: true, none: null },
+	{ id: 7, name: "tail", ok: true, none: undefined },
+	{ id: 8, name: "nested", ok: true, none: { deep: [1, "x"] } },
+	{ id: 9, name: "wide ☃", ok: false, none: null },
+	{ id: 10, name: "after wide", ok: false, none: null },
+];
+const wideRecord = {};
+for (let i = 0; i < 17; i++) wideRecord["f" + i] = i;
+const quotedKeys = [
+	{ 'a"b': 1, "c\\d": "e" },
+	{ 'a"b': 2, "c\\d": "f" },
+];
+const unicodeKeys = [{ к: 1 }, { к: 2 }];
+check(
+	JSON.stringify(flatRows) ===
+		'[{"id":1,"name":"plain","ok":true,"none":null},{"id":-2147483648,"name":"quote\\"d","ok":false,"none":null},{"id":2147483647,"name":"line\\nbreak","ok":true,"none":null},{"id":0,"name":"café","ok":false,"none":null},{"id":0,"name":"x","ok":true,"none":null},{"id":1.5,"name":"","ok":true,"none":null},{"id":7,"name":"tail","ok":true},{"id":8,"name":"nested","ok":true,"none":{"deep":[1,"x"]}},{"id":9,"name":"wide ☃","ok":false,"none":null},{"id":10,"name":"after wide","ok":false,"none":null}]',
+	"flat records match member-wise output",
+);
+check(
+	JSON.stringify([wideRecord, wideRecord]) ===
+		'[{"f0":0,"f1":1,"f2":2,"f3":3,"f4":4,"f5":5,"f6":6,"f7":7,"f8":8,"f9":9,"f10":10,"f11":11,"f12":12,"f13":13,"f14":14,"f15":15,"f16":16},{"f0":0,"f1":1,"f2":2,"f3":3,"f4":4,"f5":5,"f6":6,"f7":7,"f8":8,"f9":9,"f10":10,"f11":11,"f12":12,"f13":13,"f14":14,"f15":15,"f16":16}]',
+	"records wider than the flat path still serialize",
+);
+check(
+	JSON.stringify(quotedKeys) === '[{"a\\"b":1,"c\\\\d":"e"},{"a\\"b":2,"c\\\\d":"f"}]',
+	"escaped keys repeat verbatim",
+);
+check(
+	JSON.stringify(unicodeKeys) === '[{"к":1},{"к":2}]',
+	"wide keys keep the general path",
+);
+
 console.log(failed ? "json-stringify-scratch FAIL" : "json-stringify-scratch PASS");

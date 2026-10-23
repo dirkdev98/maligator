@@ -190,6 +190,7 @@ typedef struct MalPerfStats {
     u64 json_escaped_key_capacity_bytes;
     u64 json_plan_table_bytes;
     u64 json_plain_fallbacks;
+    u64 json_flat_records;
     u64 json_plain_discarded_code_units;
     u64 json_quote_latin1_code_units;
     u64 json_quote_utf16_code_units;
