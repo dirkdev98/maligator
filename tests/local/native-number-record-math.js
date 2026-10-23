@@ -26,17 +26,24 @@ function missing(record) {
 	record.y = Math.max(record.y, null, true);
 	return record.x + record.y;
 }
+function interleaved(record, scale) {
+	record.y = record.y * scale + record.z;
+	record.x = Math.round(record.x + record.y);
+	return record.x - record.y;
+}
 globalThis.recordClamp = clamp;
 globalThis.recordRound = round;
 globalThis.recordVector = vector;
 globalThis.recordInteger = integer;
 globalThis.recordMissing = missing;
+globalThis.recordInterleaved = interleaved;
 const kernels = {
 	clamp: globalThis.recordClamp,
 	round: globalThis.recordRound,
 	vector: globalThis.recordVector,
 	integer: globalThis.recordInteger,
 	missing: globalThis.recordMissing,
+	interleaved: globalThis.recordInterleaved,
 };
 function scalar(value) {
 	if (Object.is(value, -0)) return "-0";

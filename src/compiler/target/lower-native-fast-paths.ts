@@ -1018,6 +1018,7 @@ function numberRecordInstruction(
 		case "CREATE_NUMBER":
 		case "CREATE_F64":
 		case "CREATE_BOOLEAN":
+		case "LOAD_INTRINSIC":
 			return instruction.dst !== object;
 		case "MOVE":
 			return instruction.dst !== object && instruction.src !== object;
@@ -1105,6 +1106,7 @@ export function numberRecordDataflow(
 	const inputs = new Set<number>();
 	const written = new Set<number>();
 	const numericReads = new Set<number>();
+	const intrinsics = new Set<number>();
 	const unify = (register: number, kind: NativeNumberRecordKind): boolean => {
 		const known = kinds.get(register);
 		if (known === undefined) kinds.set(register, kind);
@@ -1121,6 +1123,7 @@ export function numberRecordDataflow(
 		const before = assigned.get(ip)!;
 		const instruction = fn.instructions[ip]!;
 		const read = (register: number, kind?: NativeNumberRecordKind): boolean => {
+			if (intrinsics.has(register)) return false;
 			if (!before.has(register)) {
 				inputs.add(register);
 				const input = numberRecordInputKind(representations[register]);
@@ -1134,7 +1137,7 @@ export function numberRecordDataflow(
 			kind: NativeNumberRecordKind | undefined,
 		): boolean => {
 			written.add(register);
-			return kind !== undefined && unify(register, kind);
+			return kind !== undefined && !intrinsics.has(register) && unify(register, kind);
 		};
 		let admitted: boolean;
 		switch (instruction.opcode) {
@@ -1177,6 +1180,15 @@ export function numberRecordDataflow(
 				break;
 			case "CREATE_BOOLEAN":
 				admitted = write(instruction.dst, "boolean");
+				break;
+			// The load can neither collect nor throw, so the region performs it on the register
+			// itself; inside, only a numeric builtin's ignored receiver may name that register.
+			case "LOAD_INTRINSIC":
+				admitted =
+					!kinds.has(instruction.dst) &&
+					!inputs.has(instruction.dst) &&
+					!written.has(instruction.dst);
+				intrinsics.add(instruction.dst);
 				break;
 			case "STORE_PROPERTY_STATIC":
 				admitted = read(instruction.value, "number");

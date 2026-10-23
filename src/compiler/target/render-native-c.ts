@@ -1832,6 +1832,8 @@ function emitNumberRecordRegion(
 				return `${local(op.dst)} = ${cF64Literal(op.value)};`;
 			case "CREATE_BOOLEAN":
 				return `${local(op.dst)} = ${op.value};`;
+			case "LOAD_INTRINSIC":
+				return `r${op.dst} = vm->intrinsics[${emitIntrinsic(op.intrinsic)}];`;
 			case "MOVE":
 				return `${local(op.dst)} = ${local(op.src)};`;
 			case "BINARY": {

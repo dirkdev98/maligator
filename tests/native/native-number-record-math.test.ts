@@ -38,7 +38,7 @@ describe("numeric record state across proven Math bodies", () => {
 				.sort();
 			expect(selected).toEqual(
 				primordials === "locked"
-					? ["clamp", "integer", "missing", "round", "vector"]
+					? ["clamp", "integer", "interleaved", "missing", "round", "vector"]
 					: [],
 			);
 			for (const mode of [
@@ -47,6 +47,7 @@ describe("numeric record state across proven Math bodies", () => {
 				"vector",
 				"integer",
 				"missing",
+				"interleaved",
 				"fallback",
 				"effects",
 			]) {

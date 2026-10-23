@@ -133,6 +133,24 @@ describe("native number record regions", () => {
 		expect(emitCompiledFunction(image.native.functions[1]!, 1, "", false)).not.toBeNull();
 	});
 
+	it("keeps a Math load between field updates inside one region", () => {
+		const image = compile(
+			"record.vy = record.vy + 0.01 * record.mass; record.x = Math.round(record.x + record.vy); return record.x - record.vy;",
+			"locked",
+		);
+		const plans = regions(image);
+		expect(plans).toHaveLength(1);
+		expect(fieldNames(image, plans[0]!)).toEqual(["vy=", "mass", "x="]);
+		const fn = image.native.functions[1]!;
+		expect(
+			plans[0]!.claimedIps.some(
+				(ip) => fn.body.instructions[ip]!.opcode === "LOAD_INTRINSIC",
+			),
+		).toBe(true);
+		expect(fn.body.instructions[plans[0]!.exitIp]!.opcode).toBe("RETURN");
+		expect(emitCompiledFunction(fn, 1, "", false)).not.toBeNull();
+	});
+
 	it("guards a dynamic Math operand before changing any fields", () => {
 		const [plan] = regions(
 			compile(
