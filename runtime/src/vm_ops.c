@@ -4488,6 +4488,10 @@ MalValue mal_vm_unary_op(MalVm *vm, MalUnaryOp op, MalValue value) {
                     "Cannot convert a BigInt value to a number");
                 return mal_value_new_undefined();
             }
+            if (mal_value_is_string(value)) {
+                MalString *string = mal_value_to_string(value);
+                return mal_ops_string_range_to_number(string, 0, string->length);
+            }
             return mal_ops_number_value(mal_ops_to_number(value));
         case MAL_UNARY_BIT_NOT:
             if (mal_value_is_bigint(value)) {

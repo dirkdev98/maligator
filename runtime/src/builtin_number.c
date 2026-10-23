@@ -220,6 +220,9 @@ static MalValue mal_builtin_number_constructor(MalVm *vm, MalValue this_value, c
         // and infinities. Construction still stores that primitive in a fresh
         // wrapper below.
         number = args[0];
+    } else if (mal_value_is_string(args[0])) {
+        MalString *string = mal_value_to_string(args[0]);
+        number = mal_ops_string_range_to_number(string, 0, string->length);
     } else {
         number = mal_ops_number_value(mal_ops_to_number(args[0]));
     }

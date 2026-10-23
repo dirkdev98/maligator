@@ -201,6 +201,17 @@ MalValue mal_ops_string_range_to_number(MalString *string, usize offset, usize c
         if (!segment.latin1) {
             return mal_ops_string_units_to_number(segment.utf16_units, count);
         }
+        // Captured or split-out digits are the common operand; nine digits stay below 2^31.
+        if (count != 0 && count <= 9) {
+            u32 magnitude = 0;
+            usize digits = 0;
+            for (; digits < count; digits++) {
+                u32 digit = (u32) segment.latin1_units[digits] - '0';
+                if (digit > 9) break;
+                magnitude = magnitude * 10 + digit;
+            }
+            if (digits == count) return mal_value_from_i32((i32) magnitude);
+        }
         usize start = 0;
         usize end = count;
         while (start < end && mal_ecma_is_string_whitespace(segment.latin1_units[start])) start++;
