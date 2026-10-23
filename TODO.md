@@ -747,6 +747,13 @@ contracts or investigates costs still visible after the string follow-ups.
 
 ## Focused performance work
 
+- [ ] Dispatch chains of string comparisons on length. A quick self-compile makes
+      187M strict comparisons against string literals: 4.4M hit on identity, 170M
+      fail on length and 13M compare equal-length units, about 2 to 3% of the run.
+      Each comparison is already inline, and a `switch` over string cases already
+      dispatches on length or hash. The volume likely comes from `===` chains such as
+      `op.opcode === "A" || op.opcode === "B"` and `if`/`else if` ladders over one
+      subject, which test every literal in turn.
 - [ ] Construct derived classes without the generic super path. `new Pair(l, r)`
       with `super(l)` into a one-field base takes 116 ns against Node's 5.6
       (`constructor-derived-super-retained`). The construct inliner refuses
