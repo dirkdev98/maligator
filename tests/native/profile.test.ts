@@ -120,7 +120,11 @@ describe("production profile recorder", () => {
 		expect(view.getBigUint64(40, true)).toBe(524_288n);
 		expect(bytes.subarray(48, 80).toString("hex")).toBe(captureIdentity);
 		expect(view.getUint32(80, true)).toBe(0);
-		expect(view.getUint8(84)).toBe(1);
+		// Allocation samples may precede the first CPU tick in a short run.
+		const kinds = Array.from({ length: recordCount }, (_, index) =>
+			view.getUint8(84 + index * 40),
+		);
+		expect(kinds).toContain(1);
 		expect(bytes.byteLength).toBe(84 + recordCount * 40 + frameCount * 12);
 	});
 
