@@ -239,11 +239,26 @@ void mal_string_get_leaf_range(
     const MalString *string, usize offset, const MalString **leaf_out,
     usize *leaf_offset_out, usize *available_out);
 
+MalStringSegment mal_string_flat_segment_resolved(MalString *string);
+
 /** Return the whole string as one borrowed leaf segment. A rope spanning leaves
  * is flattened in place in its compact encoding; Latin-1 content is never
  * widened. Root the string first: flattening allocates. The segment remains
  * valid while the string is rooted and not materialized by a UTF-16 bridge. */
-MalStringSegment mal_string_flat_segment(MalString *string);
+static inline MalStringSegment mal_string_flat_segment(MalString *string) {
+    if (string->storage >= MAL_STRING_STORAGE_DEPENDENT) {
+        return mal_string_flat_segment_resolved(string);
+    }
+    MalStringSegment segment = {.latin1 = string->latin1, .length = string->length};
+    if (string->latin1) {
+        segment.latin1_units = string->storage == MAL_STRING_STORAGE_INLINE
+            ? string->inline_latin1_units : string->latin1_units;
+    } else {
+        segment.utf16_units = string->storage == MAL_STRING_STORAGE_INLINE
+            ? string->inline_code_units : string->code_units;
+    }
+    return segment;
+}
 
 typedef struct MalStringIteratorPart {
     const MalString *string;

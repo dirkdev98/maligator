@@ -1370,7 +1370,7 @@ static void mal_string_flatten_cons_into(MalString *mutable, void *destination, 
     }
 }
 
-MalStringSegment mal_string_flat_segment(MalString *string) {
+MalStringSegment mal_string_flat_segment_resolved(MalString *string) {
     MalStringSegment segment;
     if (mal_string_try_get_segment(string, 0, string->length, &segment)) return segment;
     if (string->latin1) {

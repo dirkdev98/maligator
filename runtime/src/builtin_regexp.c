@@ -292,14 +292,18 @@ static bool regexp_parse_flags(MalString *flags, u32 *out_bits) {
     return true;
 }
 
-static MalShape *regexp_instance_shape(MalVm *vm) {
-    if (vm->regexp_instance_shape == nullptr) {
-        vm->regexp_instance_shape = mal_shape_add_property(
-            mal_shape_root(&vm->heap),
-            mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_LAST_INDEX),
-            MAL_PROPERTY_WRITABLE);
-    }
+static __attribute__((noinline)) MalShape *regexp_instance_shape_create(MalVm *vm) {
+    vm->regexp_instance_shape = mal_shape_add_property(
+        mal_shape_root(&vm->heap),
+        mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_LAST_INDEX),
+        MAL_PROPERTY_WRITABLE);
     return vm->regexp_instance_shape;
+}
+
+// The one-time creation stays out of line so the canonical check saves no registers.
+static inline MalShape *regexp_instance_shape(MalVm *vm) {
+    MalShape *shape = vm->regexp_instance_shape;
+    return shape != nullptr ? shape : regexp_instance_shape_create(vm);
 }
 
 // Exact type + layout reject subclasses, proxies, own overrides, descriptor
