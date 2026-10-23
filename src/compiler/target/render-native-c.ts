@@ -1357,7 +1357,7 @@ function emitNumericLoopRegion(
 			case "LOAD_PROPERTY_STATIC_ARRAY_LENGTH":
 				if (op.opcode === "LOAD_PROPERTY_STATIC" && records.has(op.object))
 					// The site's own-slot row proves the field; any other row ends the iteration.
-					return `{ const MalObject *${id}_o = (const MalObject *) mal_value_to_heap(${local(op.object)}); const MalInlineCache *${id}_c = &${propertyCache}[${op.icIndex}]; if (__builtin_expect(${id}_c->mode != MAL_IC_MODE_SHAPE || ${id}_o->shape != ${id}_c->shape, 0)) ${restart} MalValue ${id}_f = ((const MalValue *) mal_object_fields_nonempty(${id}_o))[${id}_c->slot]; if (__builtin_expect(!mal_ops_is_number(${id}_f), 0)) ${restart} ${local(op.dst)} = mal_ops_number_as_f64(${id}_f); }`;
+					return `{ const MalObject *${id}_o = (const MalObject *) mal_value_to_heap(${local(op.object)}); if (__builtin_expect(${id}_o->shape != ${id}_shape${op.icIndex}, 0)) ${restart} MalValue ${id}_f = ((const MalValue *) mal_object_fields_nonempty(${id}_o))[${id}_slot${op.icIndex}]; if (__builtin_expect(!mal_ops_is_number(${id}_f), 0)) ${restart} ${local(op.dst)} = mal_ops_number_as_f64(${id}_f); }`;
 				if (plan.kind !== "fixed-numeric" || op.object !== plan.boundObject)
 					throw new Error("Invalid numeric loop length load");
 				return `${local(op.dst)} = (f64) ${id}_${mode === "array" ? "a" : "v"}${op.object}.length;`;
@@ -1463,8 +1463,23 @@ function emitNumericLoopRegion(
 				throw new Error(`Invalid native integer loop instruction ${op.opcode}`);
 		}
 	};
+	// Nothing in a region updates a cache, and every restart re-enters through the header.
+	const fieldCaches = [
+		...new Set(
+			order.flatMap((ip) => {
+				const op = fn.instructions[ip]!;
+				return op.opcode === "LOAD_PROPERTY_STATIC" && records.has(op.object)
+					? [op.icIndex]
+					: [];
+			}),
+		),
+	];
 	const loopBody = (mode: "f64" | "typed" | "array"): ReadonlyArray<string> => {
 		const lines = [
+			...fieldCaches.flatMap((cache) => [
+				`    const struct MalShape *${id}_shape${cache} = ${propertyCache}[${cache}].mode == MAL_IC_MODE_SHAPE ? ${propertyCache}[${cache}].shape : nullptr;`,
+				`    u8 ${id}_slot${cache} = ${propertyCache}[${cache}].slot;`,
+			]),
 			...plan.carried.map(
 				(register) =>
 					`    ${kindOf(register) === "boolean" ? "bool" : floating ? "f64" : "i64"} ${start(register)} = ${local(register)};`,
