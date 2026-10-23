@@ -580,6 +580,11 @@ iterator cursor is not, by itself, permission to delete its language object.
       loop-carried values travel through the generator's blocks as parameters.
       Without a finally, `break` and a throw from the body need no generator
       return, and a throw from the generator leaves the loop unclosed as it does now.
+      The self-compile's hot generators are class methods, such as
+      `CoreFunctionStore#bodyInstructionIds`, `valueIds` and `#liveInstructionIds`,
+      which read `this` and private fields and are reached through a method load.
+      Covering them takes a guarded method target with the generic `for-of` as
+      fallback, and a `this` binding, on top of the splice.
 
 ## P2: composable temporary values
 
