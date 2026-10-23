@@ -42,6 +42,12 @@ rooting, and resource-safety defects can interrupt that order.
       path does not change that file set. Capture recursive directory membership and
       exercise add/remove changes without editing an existing source dependency.
 
+- [ ] Find why `tests/native/node-fs-watch.test.ts` takes minutes on the macOS
+      Native remainder runner. Its three tests take 5 to 8 s on Linux, but on macOS
+      they ranged from 22 s to 972 s over ten runs on 2026-10-22 and 23, and one run
+      hit the 20-minute hook timeout. The spread predates that night's compiler
+      changes, so it points at the watcher or the runner rather than the build.
+
 # Compiler and Core IR
 
 ## Core IR contract
