@@ -1300,7 +1300,7 @@ function emitNumericLoopRegion(
 	propertyCache: string,
 ): ReadonlyArray<string> {
 	const members = new Set(plan.claimedIps.filter((ip) => ip !== plan.entryIp));
-	const order = numericLoopOrder(fn, plan.id, members);
+	const order = numericLoopOrder(fn, plan.id, members, true);
 	const flow =
 		order === undefined
 			? undefined
@@ -1517,14 +1517,23 @@ function emitNumericLoopRegion(
 	);
 	const headSet = new Set(heads);
 	const exitIndex = new Map(plan.exits.map((exit, index) => [exit.targetIp, index + 1]));
+	// An exit to a member is an inner loop's header, where its back edge leaves to poll.
+	const innerHeaders = new Set(
+		plan.exits.flatMap((exit) => (members.has(exit.targetIp) ? [exit.targetIp] : [])),
+	);
+	const position = new Map(order.map((ip, index) => [ip, index]));
+	// Inner loops jump backward, which forward block flags cannot express.
+	const label = (mode: string, ip: number) => `${id}_${mode}_L${ip}`;
 	// Iterations restart from their saved start, so a guard never resumes mid-iteration.
 	const restart = `{ ${id}_exit = 0; break; }`;
-	const reach = (ip: number): string => {
+	const reach = (ip: number, from: number, mode: string): string => {
 		if (ip === plan.id)
 			return `${plan.carried.map((register) => `${start(register)} = ${local(register)};`).join(" ")}${cursor === undefined ? "" : ` ${id}_si = ${id}_ci;`} if (mal_gc_poll_requested_in(${id}_isolate)) ${restart} continue;`;
+		if (innerHeaders.has(ip))
+			return `${position.get(ip)! <= position.get(from)! ? `if (mal_gc_poll_requested_in(${id}_isolate)) { ${id}_exit = ${exitIndex.get(ip)}; break; } ` : ""}goto ${label(mode, ip)};`;
 		const exit = exitIndex.get(ip);
 		if (exit !== undefined) return `{ ${id}_exit = ${exit}; break; }`;
-		return `${id}_b${ip} = true;`;
+		return innerHeaders.size > 0 ? `goto ${label(mode, ip)};` : `${id}_b${ip} = true;`;
 	};
 	const truthy = (register: number) =>
 		kindOf(register) === "boolean"
@@ -1713,9 +1722,9 @@ function emitNumericLoopRegion(
 				}
 			}
 			case "JUMP":
-				return reach(op.targetIp);
+				return reach(op.targetIp, ip, mode);
 			case "JUMP_IF":
-				return `if (${truthy(op.cond)}) { ${reach(op.targetIp)} } else { ${reach(ip + 1)} }`;
+				return `if (${truthy(op.cond)}) { ${reach(op.targetIp, ip, mode)} } else { ${reach(ip + 1, ip, mode)} }`;
 			default:
 				throw new Error(`Invalid native integer loop instruction ${op.opcode}`);
 		}
@@ -1752,16 +1761,24 @@ function emitNumericLoopRegion(
 			// Region instructions make no calls, so the thread's isolate cannot change inside.
 			`    MalIsolateLocals *${id}_isolate = mal_isolate_locals();`,
 			"    for (;;) {",
-			...heads.slice(1).map((ip) => `      bool ${id}_b${ip} = false;`),
+			...(innerHeaders.size > 0
+				? []
+				: heads.slice(1).map((ip) => `      bool ${id}_b${ip} = false;`)),
 		];
 		for (const head of heads) {
-			lines.push(head === plan.id ? "      {" : `      if (${id}_b${head}) {`);
+			lines.push(
+				head === plan.id
+					? "      {"
+					: innerHeaders.size > 0
+						? `      ${label(mode, head)}: {`
+						: `      if (${id}_b${head}) {`,
+			);
 			let ip = head;
 			for (;;) {
 				lines.push(`        ${statement(ip, mode)}`);
 				if (isBranch(ip)) break;
 				if (!members.has(ip + 1) || headSet.has(ip + 1)) {
-					lines.push(`        ${reach(ip + 1)}`);
+					lines.push(`        ${reach(ip + 1, ip, mode)}`);
 					break;
 				}
 				ip++;

@@ -118,6 +118,8 @@ describe("fixed TypedArray storage regions", () => {
 				).length;
 			expect(checkedRegions("readThenBump")).toBeGreaterThan(0);
 			expect(checkedRegions("propagateKinds")).toBeGreaterThan(0);
+			for (const name of ["unionRoots", "windowSums", "settle"])
+				expect(checkedRegions(name), name).toBeGreaterThan(0);
 			expect(checkedRegions("bumpThenRead")).toBe(0);
 			for (const binary of [pair.compiled, pair.interpreted])
 				for (const stress of [{}, STRESS_ENV])

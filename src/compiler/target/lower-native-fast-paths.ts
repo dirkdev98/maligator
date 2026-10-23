@@ -1237,6 +1237,21 @@ export function numberRecordDataflow(
 		for (const successor of numberRecordSuccessors(instruction, ip))
 			join(successor, after);
 	}
+	// A move into a register read as a Number reads its source as one too.
+	for (let changed = true; changed;) {
+		changed = false;
+		for (const ip of order) {
+			const instruction = fn.instructions[ip]!;
+			if (
+				instruction.opcode === "MOVE" &&
+				numericReads.has(instruction.dst) &&
+				!numericReads.has(instruction.src)
+			) {
+				numericReads.add(instruction.src);
+				changed = true;
+			}
+		}
+	}
 	// A boxed value only tested or moved is as likely a Boolean, which the guard would always decline.
 	for (const register of inputs)
 		if (representations[register] === "boxed" && !numericReads.has(register))
@@ -1509,19 +1524,23 @@ function bytecodePredecessors(
 
 export interface NativeNumericLoopShape {
 	readonly members: ReadonlySet<number>;
-	/** Members in an order that visits each after its predecessors within one iteration. */
+	/** Members in an order that visits each after its forward predecessors within one iteration. */
 	readonly order: ReadonlyArray<number>;
 	readonly entryIp: number;
+	/** The header of each loop nested in this one, with that loop's members. */
+	readonly inner: ReadonlyMap<number, ReadonlySet<number>>;
 }
 
 /**
- * The innermost loop headed at `header` when control enters it only through one
- * jump to the header and its body is acyclic apart from the edges back to the header.
+ * The loop headed at `header` when control enters it only through one jump to the
+ * header and its body is acyclic apart from the edges back to the header, or with
+ * `nested`, apart from the back edges of reducible loops inside it.
  */
 export function numericLoopShape(
 	fn: BytecodeFunction,
 	body: NativeBodyFacts,
 	header: number,
+	nested = false,
 ): NativeNumericLoopShape | undefined {
 	if (body.externalEntries.has(header)) return undefined;
 	const predecessors = bytecodePredecessors(fn, body, header);
@@ -1568,21 +1587,27 @@ export function numericLoopShape(
 		)
 			return undefined;
 	}
-	const order = numericLoopOrder(fn, header, members);
-	return order === undefined ? undefined : { members, order, entryIp };
+	const order = numericLoopOrder(fn, header, members, nested);
+	if (order === undefined) return undefined;
+	const inner = numericLoopInnerBodies(fn, header, members, order);
+	return inner === undefined ? undefined : { members, order, entryIp, inner };
 }
 
-/** One iteration's members in topological order, when only edges to the header close a cycle. */
+/**
+ * One iteration's members in topological order of its forward edges, when only edges
+ * to the header close a cycle, or with `nested`, also edges back to an open inner header.
+ */
 export function numericLoopOrder(
 	fn: BytecodeFunction,
 	header: number,
 	members: ReadonlySet<number>,
+	nested = false,
 ): ReadonlyArray<number> | undefined {
 	const state = new Map<number, "open" | "done">();
 	const postorder: Array<number> = [];
 	const visit = (ip: number): boolean => {
 		const seen = state.get(ip);
-		if (seen !== undefined) return seen === "done";
+		if (seen !== undefined) return seen === "done" || nested;
 		state.set(ip, "open");
 		for (const successor of numberRecordSuccessors(fn.instructions[ip]!, ip))
 			if (successor !== header && members.has(successor) && !visit(successor))
@@ -1594,6 +1619,60 @@ export function numericLoopOrder(
 	return visit(header) && postorder.length === members.size
 		? postorder.reverse()
 		: undefined;
+}
+
+/**
+ * Each inner loop's members, keyed by its header, when every edge against the order
+ * targets a header that dominates its source, so the inner loops are reducible.
+ */
+export function numericLoopInnerBodies(
+	fn: BytecodeFunction,
+	header: number,
+	members: ReadonlySet<number>,
+	order: ReadonlyArray<number>,
+): Map<number, Set<number>> | undefined {
+	const position = new Map(order.map((ip, index) => [ip, index]));
+	const predecessors = new Map<number, Array<number>>();
+	for (const ip of order)
+		for (const successor of numberRecordSuccessors(fn.instructions[ip]!, ip))
+			if (successor !== header && members.has(successor))
+				predecessors.set(successor, [...(predecessors.get(successor) ?? []), ip]);
+	const bodies = new Map<number, Set<number>>();
+	for (const source of order)
+		for (const target of numberRecordSuccessors(fn.instructions[source]!, source)) {
+			if (
+				target === header ||
+				!members.has(target) ||
+				position.get(target)! > position.get(source)!
+			)
+				continue;
+			const reached = new Set<number>([header]);
+			const pending = [header];
+			while (pending.length > 0) {
+				const ip = pending.pop()!;
+				for (const successor of numberRecordSuccessors(fn.instructions[ip]!, ip))
+					if (
+						successor !== target &&
+						successor !== header &&
+						members.has(successor) &&
+						!reached.has(successor)
+					) {
+						reached.add(successor);
+						pending.push(successor);
+					}
+			}
+			if (reached.has(source)) return undefined;
+			const loop = bodies.get(target) ?? new Set([target]);
+			const walk = [source];
+			while (walk.length > 0) {
+				const ip = walk.pop()!;
+				if (loop.has(ip)) continue;
+				loop.add(ip);
+				walk.push(...(predecessors.get(ip) ?? []));
+			}
+			bodies.set(target, loop);
+		}
+	return bodies;
 }
 
 type NumericLoopIndexFact = {
@@ -1686,6 +1765,10 @@ function numericLoopIndexFacts(
 	const increments = new Map<number, number>();
 	for (const ip of shape.order) {
 		const facts = new Map(before.get(ip));
+		// Its forward predecessors miss what the inner loop's own iterations write.
+		for (const member of shape.inner.get(ip) ?? [])
+			for (const register of vmInstructionWriteRegisters(fn.instructions[member]!))
+				facts.delete(register);
 		const op = fn.instructions[ip]!;
 		if (op.opcode === "LOAD_PROPERTY" || op.opcode === "STORE_PROPERTY") {
 			const key = facts.get(op.key);
@@ -1989,6 +2072,12 @@ function fixedNumericLoopCounter(
 	});
 	if (candidates.length !== 1) return undefined;
 	const [incrementIp, stride] = candidates[0]!;
+	if (
+		[...shape.inner.values()].some(
+			(loop) => loop.has(incrementIp) || loop.has(indexWrites[0]!),
+		)
+	)
+		return undefined;
 	const ascending = leftWritten
 		? comparison.operator === "<" || comparison.operator === "<="
 		: comparison.operator === ">" || comparison.operator === ">=";
@@ -1997,11 +2086,20 @@ function fixedNumericLoopCounter(
 	if (!("dst" in increment) || increment.dst === index) return undefined;
 	if (
 		update.src !== increment.dst ||
-		shape.order.indexOf(indexWrites[0]!) <= shape.order.indexOf(incrementIp) ||
-		shape.order.indexOf(incrementIp) <
-			Math.max(...memory.map(({ ip }) => shape.order.indexOf(ip)))
+		shape.order.indexOf(indexWrites[0]!) <= shape.order.indexOf(incrementIp)
 	)
 		return undefined;
+	// Every access sees this iteration's index, so none may follow the increment.
+	const afterIncrement = new Set<number>();
+	const following = numberRecordSuccessors(increment, incrementIp);
+	while (following.length > 0) {
+		const ip = following.pop()!;
+		if (ip === shape.order[0] || !shape.members.has(ip) || afterIncrement.has(ip))
+			continue;
+		afterIncrement.add(ip);
+		following.push(...numberRecordSuccessors(fn.instructions[ip]!, ip));
+	}
+	if (memory.some(({ ip }) => afterIncrement.has(ip))) return undefined;
 	if (
 		shape.order.some(
 			(ip) =>
@@ -2281,7 +2379,7 @@ function lowerNumericLoopRegion(
 		conflicts(header)
 	)
 		return undefined;
-	const shape = numericLoopShape(fn, body, header);
+	const shape = numericLoopShape(fn, body, header, true);
 	if (shape === undefined || conflicts(shape.entryIp) || shape.order.some(conflicts))
 		return undefined;
 	const storage = fixedNumericLoopStorage(fn, shape, body, lengthLoads);
@@ -2314,7 +2412,9 @@ function lowerNumericLoopRegion(
 			if (!shape.members.has(successor)) targets.add(successor);
 	if (targets.size === 0) return undefined;
 	const exits: Array<NativeNumericLoopRegionPlan["exits"][number]> = [];
-	for (const targetIp of [...targets].sort((a, b) => a - b)) {
+	// An inner back edge polls by leaving at its header, since the iteration's stores
+	// already happened and a restart would repeat them.
+	for (const targetIp of [...targets, ...shape.inner.keys()].sort((a, b) => a - b)) {
 		if (targetIp >= fn.instructions.length) return undefined;
 		const outputs = registersLiveAt(fn, body, targetIp, flow.written);
 		const assigned = flow.assigned.get(targetIp) ?? new Set<number>();
@@ -2344,6 +2444,9 @@ function lowerNumericLoopRegion(
 		exits.some((exit) => exit.outputs.some((register) => records.has(register)))
 	)
 		return undefined;
+	// Field reads guard on shapes the original loop caches, and a restart finishes the
+	// whole region there; an inner loop entered per iteration retries once they are warm.
+	if (shape.inner.size > 0 && records.size > 0) return undefined;
 	const claimedIps = [...shape.members, shape.entryIp].sort((a, b) => a - b);
 	return Object.freeze({
 		...(storage === undefined

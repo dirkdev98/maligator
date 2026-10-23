@@ -403,6 +403,74 @@ function propagateKinds(size, spread) {
 	return [checksum, ...values(kinds.slice(0, 6))];
 }
 results.push(propagateKinds(64, 0), propagateKinds(64, 9), propagateKinds(1, 0));
+// Inner loops run inside their enclosing region and leave through their own header.
+function unionRoots(parents, rounds) {
+	let checksum = 0;
+	for (let round = 0; round < rounds; round++)
+		for (let value = 0; value < parents.length; value++) {
+			let root = value;
+			while (parents[root] !== root) root = parents[root];
+			parents[value] = root;
+			checksum = (checksum + root) % 1_000_003;
+		}
+	return [checksum, ...values(parents.slice(0, 9))];
+}
+function windowSums(input, width) {
+	let total = 0;
+	for (let i = 0; i < input.length; i++) {
+		let k = i;
+		while (k < i + width) {
+			total += input[k];
+			k++;
+		}
+	}
+	return total;
+}
+function firstRepeat(input) {
+	for (let i = 0; i < input.length; i++)
+		for (let j = i + 1; j < input.length; j++)
+			if (input[j] === input[i]) return i * 100 + j;
+	return -1;
+}
+function settle(levels, sources) {
+	let passes = 0;
+	let changed = true;
+	for (let pass = 0; pass < 8 && changed; pass++) {
+		changed = false;
+		for (let index = 1; index < levels.length; index++) {
+			const level = levels[sources[index]] + 1;
+			if (level < levels[index]) {
+				levels[index] = level;
+				changed = true;
+			}
+		}
+		passes++;
+	}
+	return [passes, ...values(levels)];
+}
+for (const Ctor of [Float64Array, Int32Array, Uint8Array]) {
+	results.push(
+		unionRoots(
+			Ctor.from({ length: 40 }, (_, i) => (i % 8 === 0 ? i : i - 1)),
+			3,
+		),
+		windowSums(
+			Ctor.from({ length: 12 }, (_, i) => i * 3),
+			3,
+		),
+		windowSums(new Ctor(0), 2),
+		firstRepeat(Ctor.from([4, 8, 15, 16, 23, 42, 15, 8])),
+		firstRepeat(Ctor.from([1, 2, 3])),
+		settle(
+			Ctor.from({ length: 10 }, (_, i) => (i === 0 ? 0 : 99)),
+			Uint32Array.from({ length: 10 }, (_, i) => (i * 7) % 10),
+		),
+		settle(
+			Ctor.from({ length: 6 }, (_, i) => (i === 0 ? 0 : 99)),
+			Uint32Array.from({ length: 6 }, (_, i) => (i === 3 ? 9 : Math.max(0, i - 1))),
+		),
+	);
+}
 for (const run of [bumpThenRead, readThenBump]) {
 	results.push(run(new Float64Array(8), new Float64Array(20).fill(2), 8));
 	results.push(run(new Int16Array(6), new Uint8Array(40).fill(3), 6));

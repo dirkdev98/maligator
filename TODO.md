@@ -566,10 +566,12 @@ iterator cursor is not, by itself, permission to delete its language object.
       store (7.3 against 2.4). Both need side exits that leave mid-iteration with
       the live registers, which in turn needs every fallback plan's state, such as
       indexed-length kinds and fusion flags, to be valid at the exit.
-      A region also cannot contain an inner loop. The union-find walk in
-      `canonical-roots` runs its inner `while` as a region but re-admits the view
-      once per outer element, which costs about 18 ns per element against Node's
-      4.3.
+      A region with inner loops is entered once, so a single restart finishes the
+      whole loop in the original code. Regions over records therefore stay
+      innermost, because their field guards fail until the original loop has
+      cached the shapes. Retrying a region after the original code completes an
+      iteration would let them nest, and would also stop one hole or out-of-range
+      key from leaving a long loop generic.
       Frame-local shape snapshots for plain static loads and stores in loops made
       such a loop about 8% faster but the self-compiler's parser slice 1.7 to 2.6%
       slower, so they serve number-record regions only.
