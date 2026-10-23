@@ -122,9 +122,17 @@ The independent target boundary and current storage contract are recorded in
       more than one call deep, or through a helper that also reads the record. In the
       quick self-compile census, record calls cover 892K calls, mostly
       `decodeVmValueOperand`, `coreTerminatorInput`, `valueEnvironment` and
-      `copyTerminatorEdge`, and record parameters take 840K calls, mostly the 401K
-      context literals `operandShape` reads only to report a failure and the 241K
-      edges `CoreEditor#touchEdge` keeps only when they are new.
+      `copyTerminatorEdge`, and record parameters take 186K calls.
+- [ ] Weigh record entries against other plans in the code budget. The 401K context
+      literals `operandShape` reads only to report a failure, and the 241K edges
+      `CoreEditor#touchEdge` keeps only when they are new, qualify as record
+      parameters, but their entries miss the quick self-compile's generated-code
+      budget. Giving callees that take records the 16× planning weight of record
+      producers admitted them, displaced 77 array iterator cursors and 67 iterator
+      result virtualizations, and slowed the self-compile run by 1.5%. Direct-entry
+      opportunities sum their call weights while local ones take their best
+      instruction, so a flat weight cannot trade saved records against saved
+      iterators.
 
 - [ ] Stream the product CLI's translation units to disk. Its build keeps the CLI's
       emitted C, 650 MB with the worker root's, in memory while it compiles the

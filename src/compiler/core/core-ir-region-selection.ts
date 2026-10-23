@@ -1461,13 +1461,12 @@ function directEntryOpportunities(
 			caller: target,
 			generatedCodeCost,
 			compilerWorkCost: generatedCodeCost + fn.valueCapacity,
-			// Callers of a record producer, or callers that hand it records, can also stop
-			// allocating those records.
+			// A record producer's callers can also stop allocating its result. Callees that
+			// take records get no such weight: under the self-compile's code budget it
+			// displaced iterator cursors worth more than the records it saved.
 			priorityScore:
 				-callSites.reduce((sum, site) => sum + callWeight(site), 0) *
-				(coreReturnsObjectLiterals(fn) || records.takesRecords(target, callSites)
-					? 16
-					: 8),
+				(coreReturnsObjectLiterals(fn) ? 16 : 8),
 			resolve: () => {
 				const fn = program.function(target);
 				const summary = summaries.summary(target);
@@ -1927,23 +1926,6 @@ class RecordPlanning {
 					);
 		this.#objects.set(key, uses);
 		return uses;
-	}
-
-	/** Some call hands `target` a record it could take as a record parameter. */
-	takesRecords(
-		target: CoreFunctionId,
-		callSites: ReadonlyArray<CoreDirectEntryCallSite>,
-	): boolean {
-		const parameterCount = this.#program.function(target).parameterCount;
-		return callSites.some(
-			(site) =>
-				site.guarded !== true &&
-				this.exactTarget(site.caller, site.instruction) === target &&
-				Array.from({ length: parameterCount }, (_, index) => index).some(
-					(index) =>
-						this.passedRecord(site.caller, site.instruction, index) !== undefined,
-				),
-		);
 	}
 
 	/**
