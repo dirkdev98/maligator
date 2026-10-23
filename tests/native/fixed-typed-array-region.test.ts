@@ -102,6 +102,22 @@ describe("fixed TypedArray storage regions", () => {
 					.flatMap((fn) => fn.storage!.numericLoopRegions)
 					.some((plan) => plan.kind === "fixed-numeric"),
 			).toBe(true);
+			const checkedRegions = (name: string) =>
+				(
+					pair.programImage.native.functions.find(
+						(fn) =>
+							String.fromCharCode(
+								...(pair.programImage.runtime.stringConstants[fn.body.nameStringIndex] ??
+									[]),
+							) === name,
+					)?.storage?.numericLoopRegions ?? []
+				).filter(
+					(plan) =>
+						plan.kind === "fixed-numeric" &&
+						plan.views.some((view) => view.checked === true),
+				).length;
+			expect(checkedRegions("readThenBump")).toBeGreaterThan(0);
+			expect(checkedRegions("bumpThenRead")).toBe(0);
 			for (const binary of [pair.compiled, pair.interpreted])
 				for (const stress of [{}, STRESS_ENV])
 					expect(

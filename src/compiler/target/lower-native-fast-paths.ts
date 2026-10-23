@@ -2086,6 +2086,25 @@ function fixedNumericLoopStorage(
 	// A checked view keeps no index range, so a store into it could not be proven in bounds.
 	if ([...views.values()].some((view) => view.checked === true && view.writable))
 		return undefined;
+	// A failed checked read restarts the iteration in the original code, which would
+	// repeat any store the iteration already made.
+	const afterStores = new Set<number>();
+	const pending = memory.flatMap(({ ip, op }) =>
+		op.opcode === "STORE_PROPERTY" ? numberRecordSuccessors(op, ip) : [],
+	);
+	while (pending.length > 0) {
+		const ip = pending.pop()!;
+		if (ip === shape.order[0] || !shape.members.has(ip) || afterStores.has(ip)) continue;
+		afterStores.add(ip);
+		pending.push(...numberRecordSuccessors(fn.instructions[ip]!, ip));
+	}
+	if (
+		memory.some(
+			({ ip, op }) =>
+				op.opcode === "LOAD_PROPERTY" && !offsets.has(ip) && afterStores.has(ip),
+		)
+	)
+		return undefined;
 	if (lengthLoad !== undefined && !views.has(lengthLoad.object))
 		views.set(lengthLoad.object, { writable: false, minOffset: 0, maxOffset: 0 });
 	const records = numericLoopRecords(

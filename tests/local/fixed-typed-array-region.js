@@ -368,4 +368,25 @@ for (let round = 0; round < 12; round++) {
 	gc?.();
 }
 results.push(values(affineLarge.slice(0, 8)), values(affineLarge.slice(-8)));
+// A spread read past the table's end sends the iteration back to the original loop.
+function bumpThenRead(output, table, count) {
+	let total = 0;
+	for (let i = 0; i < count; i++) {
+		output[i] = output[i] + 1;
+		total += table[i * 5];
+	}
+	return [total, ...values(output)];
+}
+function readThenBump(output, table, count) {
+	let total = 0;
+	for (let i = 0; i < count; i++) {
+		total += table[i * 5];
+		output[i] = output[i] + 1;
+	}
+	return [total, ...values(output)];
+}
+for (const run of [bumpThenRead, readThenBump]) {
+	results.push(run(new Float64Array(8), new Float64Array(20).fill(2), 8));
+	results.push(run(new Int16Array(6), new Uint8Array(40).fill(3), 6));
+}
 console.log(JSON.stringify(results));
