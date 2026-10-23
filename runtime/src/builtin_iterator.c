@@ -1126,22 +1126,26 @@ bool mal_vm_iterator_step(MalVm *vm, const MalIteratorRecord *record, MalValue *
         }
     }
 
-    int helper_step = mal_builtin_iterator_helper_try_step(
-        vm, record, value_out, done_out);
-    if (helper_step != 0) {
-        return helper_step > 0;
-    }
+    // Each exact step admits only its own iterator type, so generators, the most
+    // common kind left, skip the other probes.
+    if (mal_value_is_generator_object(record->iterator)) {
+        int generator_step = mal_generator_try_exact_iterator_step(
+            vm, record->iterator, record->next_method, value_out, done_out);
+        if (generator_step != 0) {
+            return generator_step > 0;
+        }
+    } else {
+        int helper_step = mal_builtin_iterator_helper_try_step(
+            vm, record, value_out, done_out);
+        if (helper_step != 0) {
+            return helper_step > 0;
+        }
 
-    int regexp_step = mal_regexp_try_exact_iterator_step(
-        vm, record->iterator, record->next_method, value_out, done_out);
-    if (regexp_step != 0) {
-        return regexp_step > 0;
-    }
-
-    int generator_step = mal_generator_try_exact_iterator_step(
-        vm, record->iterator, record->next_method, value_out, done_out);
-    if (generator_step != 0) {
-        return generator_step > 0;
+        int regexp_step = mal_regexp_try_exact_iterator_step(
+            vm, record->iterator, record->next_method, value_out, done_out);
+        if (regexp_step != 0) {
+            return regexp_step > 0;
+        }
     }
 
     MalCompletion completion = mal_vm_call_value(vm, record->next_method, record->iterator, nullptr, 0);
