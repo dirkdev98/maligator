@@ -734,6 +734,16 @@ contracts or investigates costs still visible after the string follow-ups.
       returns through a completion check. Frame rows are not the cost (a build
       without them ran the self-compile 0.3% faster), and field entries beat
       inlining the `quote` bodies.
+- [ ] Keep the objects phase's order checksum unboxed. The order loop takes 47.9 ms
+      against Node's 19.7. The loop without calls costs 11 ms against 12.3, and `quote`
+      alone adds 9.7 ms, but each further term of the checksum sum then adds 7 to 12 ms
+      more than it does on its own, even the inlined `argumentEdges` arithmetic. The
+      dispatched `quote` result stays boxed because the fallback call can return anything,
+      so each later add boxes a known Number again to test it, and `% MOD` runs the
+      generic remainder with a branch on the operand range and a 64-bit division, all on
+      the loop-carried checksum. The `accumulator` closure stays a call as well: the
+      inliner rejects captured bindings unless the closure was created in the caller's
+      scope chain.
 - [ ] Run inlined `filter` callbacks over an unknown dense Array without per-element
       dispatch. `values.filter((value) => (value & 7) === (round & 7))` over 1024
       numbers takes 5.0 ns per element against Node's 1.2 (3.9 with a constant in
