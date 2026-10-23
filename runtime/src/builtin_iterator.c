@@ -1008,17 +1008,24 @@ bool mal_vm_get_iterator_from_method(
         return false;
     }
 
-    MalCompletion completion = mal_vm_call_value(vm, method, value, nullptr, 0);
-    if (completion.kind != MAL_COMPLETION_NORMAL) {
-        return false;
+    MalValue iterator = value;
+    // %IteratorPrototype%[@@iterator], which generators inherit, only returns its receiver.
+    if (!mal_value_is_native_function_object(method) ||
+        mal_native_function_object_callback(mal_value_to_native_function_object(method)) !=
+            mal_builtin_iterator_prototype_iterator) {
+        MalCompletion completion = mal_vm_call_value(vm, method, value, nullptr, 0);
+        if (completion.kind != MAL_COMPLETION_NORMAL) {
+            return false;
+        }
+        iterator = completion.value;
     }
 
-    if (!mal_value_is_object(completion.value)) {
+    if (!mal_value_is_object(iterator)) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "Iterator is not an object");
         return false;
     }
 
-    return mal_vm_iterator_record_from(vm, completion.value, record_out);
+    return mal_vm_iterator_record_from(vm, iterator, record_out);
 }
 
 bool mal_vm_builtin_iterator_size_hint(

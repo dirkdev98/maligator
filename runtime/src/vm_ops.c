@@ -9466,8 +9466,9 @@ MalObject *mal_vm_generator_instance_prototype(
     MalKey prototype_key = mal_intrinsic_hot_string_key(
         vm, MAL_HOT_KEY_PROTOTYPE);
     if (!mal_value_is_proxy_object(callee)) {
-        MalPropertyLookup own = mal_object_get_own(
-            mal_value_to_object(callee), prototype_key);
+        // Every generator call reads it; the static slot cache spares the shape search.
+        MalPropertyLookup own = mal_object_get_own_static(
+            vm, mal_value_to_object(callee), (const byte *) "prototype");
         if (own.present && !(own.desc.flags & MAL_PROPERTY_ACCESSOR)) {
             return mal_value_is_object(own.desc.value)
                 ? mal_value_to_object(own.desc.value)

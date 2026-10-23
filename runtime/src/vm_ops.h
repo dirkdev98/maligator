@@ -3304,6 +3304,8 @@ static inline bool mal_vm_iterator_try_string_cursor_step(
 static inline bool mal_vm_iterator_try_string_step(
     MalVm *vm, const MalIteratorRecord *record, MalValue *value_out, bool *done_out
 ) {
+    // Generators and other non-builtin iterators skip the out-of-line cursor probe each step.
+    if (!mal_value_is_iterator_object(record->iterator)) return false;
     MalIteratorObject *iterator = mal_vm_iterator_protocol_cursor(
         record, MAL_ITERATOR_CURSOR_STRING_VALUES);
     return iterator != nullptr &&
