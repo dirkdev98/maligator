@@ -145,6 +145,7 @@ import {
 	decodeVmValueOperand,
 	restForwardFlags,
 	vmExceptionHandlerTargets as exceptionHandlerTargets,
+	vmInstructionReadRegisters,
 	vmInstructionUsesRegister,
 	vmInstructionWriteRegisters,
 } from "./runtime-image.ts";
@@ -1164,6 +1165,10 @@ function integralLoopRegisters(
 	inputs: ReadonlyArray<number>,
 	// Registers whose every value in the region the entry guards already bound.
 	pinned: ReadonlyMap<number, IntegerRange>,
+	// The values an element load can produce, when every view holds integers.
+	elementLoads?: IntegerRange,
+	// Registers that stay doubles, as inputs whose entry admits fractions do.
+	doubles: ReadonlySet<number> = new Set(),
 ): Set<number> {
 	const writers = new Map<number, Array<BytecodeInstruction>>();
 	for (const ip of order) {
@@ -1202,10 +1207,12 @@ function integralLoopRegisters(
 		]),
 		...[...writers.keys()]
 			.filter((register) => flow.kinds.get(register) === "number")
-			.map((register): [number, IntegerRange] => [
+			.map((register): [number, IntegerRange | "unbounded"] => [
 				register,
-				pinned.get(register) ??
-					(inputs.includes(register) ? ADMITTED_INPUT_RANGE : { low: 0, high: 0 }),
+				doubles.has(register)
+					? "unbounded"
+					: (pinned.get(register) ??
+						(inputs.includes(register) ? ADMITTED_INPUT_RANGE : { low: 0, high: 0 })),
 			]),
 	]);
 	const rangeOf = (register: number): IntegerRange | undefined => {
@@ -1243,6 +1250,8 @@ function integralLoopRegisters(
 				return Object.is(op.value, -0) ? undefined : safe(op.value, op.value);
 			case "MOVE":
 				return rangeOf(op.src);
+			case "LOAD_PROPERTY":
+				return elementLoads;
 			default: {
 				const builtin = nativeNumericBuiltinInstruction(op);
 				return builtin?.operation === "Math.imul"
@@ -1329,9 +1338,44 @@ function emitNumericLoopRegion(
 			pinned.set(counter.index, { low, high });
 	}
 	// Integer locals spare the double round trip that each ToInt32 would otherwise take.
-	const integral = floating
+	const baseIntegral = floating
 		? integralLoopRegisters(fn, order, flow, plan.inputs, pinned)
 		: new Set<number>();
+	// Over views of integer kinds, element loads are integers too. Inputs keep the
+	// representation their shared entry admits.
+	const integerIntegral =
+		plan.kind === "fixed-numeric"
+			? integralLoopRegisters(
+					fn,
+					order,
+					flow,
+					plan.inputs,
+					pinned,
+					ADMITTED_INPUT_RANGE,
+					new Set(plan.inputs.filter((register) => !baseIntegral.has(register))),
+				)
+			: baseIntegral;
+	const integerOnly = [...integerIntegral].filter(
+		(register) => !baseIntegral.has(register),
+	);
+	// Integer views pay where an int32 conversion or a key would otherwise convert a double.
+	const integerBody = order.some((ip) => {
+		const op = fn.instructions[ip]!;
+		const operands =
+			op.opcode === "LOAD_PROPERTY" || op.opcode === "STORE_PROPERTY"
+				? [op.key]
+				: (op.opcode === "BINARY" &&
+							(INT32_BINARY_OPERATORS.has(op.operator) || op.operator === ">>>")) ||
+					  (op.opcode === "UNARY" && op.operator === "~") ||
+					  ["Math.imul", "Math.clz32"].includes(
+							nativeNumericBuiltinInstruction(op)?.operation ?? "",
+					  )
+					? vmInstructionReadRegisters(op)
+					: [];
+		return operands.some((register) => integerOnly.includes(register));
+	});
+	// Each loop body renders its statements against its own mode's representations.
+	let integral = baseIntegral;
 	const cType = (register: number) =>
 		kindOf(register) === "boolean"
 			? "bool"
@@ -1544,7 +1588,7 @@ function emitNumericLoopRegion(
 	const int32 = (register: number) => `mal_safe_integer_to_i32(${local(register)})`;
 	const checked = (call: string, dst: number) =>
 		`if (__builtin_expect(!${call.replace("%DST%", `&${local(dst)}`)}, 0)) ${restart}`;
-	const statement = (ip: number, mode: "f64" | "typed" | "array"): string => {
+	const statement = (ip: number, mode: "f64" | "typed" | "integer" | "array"): string => {
 		const op = fn.instructions[ip]!;
 		switch (op.opcode) {
 			case "CALL_KNOWN":
@@ -1602,7 +1646,7 @@ function emitNumericLoopRegion(
 					return `{ ${bound}MalValue ${id}_e = ${id}_a${op.object}.elements[(u32) ${key}]; if (__builtin_expect(!mal_ops_is_number(${id}_e), 0)) ${restart} ${local(op.dst)} = mal_ops_number_as_f64(${id}_e); }`;
 				return mode === "f64"
 					? `{ ${bound}${local(op.dst)} = mal_scalar_f64_from_bits(mal_scalar_load_native_u64(${id}_v${op.object}.data + (usize)(u32) ${key} * 8)); }`
-					: `{ ${bound}${local(op.dst)} = mal_vm_fixed_numeric_load(&${id}_v${op.object}, (u32) ${key}); }`;
+					: `{ ${bound}${local(op.dst)} = ${integral.has(op.dst) ? "(i64) " : ""}mal_vm_fixed_numeric_load(&${id}_v${op.object}, (u32) ${key}); }`;
 			}
 			case "STORE_PROPERTY": {
 				if (mode === "array") throw new Error("Invalid dense Array loop store");
@@ -1740,8 +1784,15 @@ function emitNumericLoopRegion(
 			}),
 		),
 	];
-	const loopBody = (mode: "f64" | "typed" | "array"): ReadonlyArray<string> => {
+	const loopBody = (
+		mode: "f64" | "typed" | "integer" | "array",
+	): ReadonlyArray<string> => {
+		integral = mode === "integer" ? integerIntegral : baseIntegral;
 		const lines = [
+			// Inner declarations shadow the shared locals that hold doubles elsewhere.
+			...(mode === "integer"
+				? integerOnly.map((register) => `    i64 ${local(register)} = 0;`)
+				: []),
 			...fieldCaches.flatMap((cache) => [
 				`    const struct MalShape *${id}_shape${cache} = ${propertyCache}[${cache}].mode == MAL_IC_MODE_SHAPE ? ${propertyCache}[${cache}].shape : nullptr;`,
 				`    u8 ${id}_slot${cache} = ${propertyCache}[${cache}].slot;`,
@@ -1801,6 +1852,7 @@ function emitNumericLoopRegion(
 			lines.push(`    ${materialize(register, start(register))}`);
 		if (cursor !== undefined) lines.push(`    ${cursor}.index = ${id}_si;`);
 		lines.push(`    goto L${plan.id};`);
+		integral = baseIntegral;
 		return lines;
 	};
 	const typedBodies =
@@ -1821,6 +1873,12 @@ function emitNumericLoopRegion(
 					`    if (${plan.views.map((view) => `${id}_v${view.object}.kind == MAL_TA_FLOAT64`).join(" && ")}) {`,
 					"      MAL_PERF_COUNT(fixed_typed_array_region_f64_admissions);",
 					...loopBody("f64").map((line) => `  ${line}`),
+					...(!integerBody
+						? []
+						: [
+								`    } else if (${plan.views.map((view) => `${id}_v${view.object}.kind < MAL_TA_FLOAT32`).join(" && ")}) {`,
+								...loopBody("integer").map((line) => `  ${line}`),
+							]),
 					"    } else {",
 					...loopBody("typed").map((line) => `  ${line}`),
 					"    }",

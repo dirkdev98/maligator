@@ -403,6 +403,45 @@ function propagateKinds(size, spread) {
 	return [checksum, ...values(kinds.slice(0, 6))];
 }
 results.push(propagateKinds(64, 0), propagateKinds(64, 9), propagateKinds(1, 0));
+// Views of integer kinds keep element arithmetic in integers; other kinds keep doubles.
+function hashElements(input, seed) {
+	let hash = seed;
+	for (let i = 0; i < input.length; i++) hash = (Math.imul(hash, 31) + input[i]) | 0;
+	return hash;
+}
+function mixedElements(left, right) {
+	let total = 0;
+	for (let i = 0; i < left.length; i++) total = (total + left[i] - right[i]) | 0;
+	return total;
+}
+function bucketCounts(input, buckets) {
+	for (let i = 0; i < input.length; i++) buckets[input[i] & 7] += input[i] >>> 1;
+	return values(buckets);
+}
+const elementSamples = [
+	0,
+	1,
+	-1,
+	127,
+	128,
+	255,
+	256,
+	65535,
+	2 ** 31 - 1,
+	2 ** 31,
+	2 ** 32 - 1,
+	0.5,
+	-0.5,
+];
+for (const Ctor of numericKinds)
+	results.push([
+		Ctor.name,
+		hashElements(Ctor.from(elementSamples), 7),
+		hashElements(new Ctor(0), -0),
+		mixedElements(Ctor.from(elementSamples), Int32Array.from(elementSamples)),
+		mixedElements(Ctor.from(elementSamples), Float64Array.from(elementSamples)),
+		bucketCounts(Ctor.from(elementSamples), new Float64Array(8)),
+	]);
 // Inner loops run inside their enclosing region and leave through their own header.
 function unionRoots(parents, rounds) {
 	let checksum = 0;
