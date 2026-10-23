@@ -367,6 +367,38 @@ check(
 	"a1b22c".split(/[0-9]+/).join("|") === "a|b|c",
 );
 
+const manyFields = Array.from({ length: 200 }, (_, i) => `field-${i}`).join(",");
+const manyPairs = Array.from({ length: 150 }, (_, i) => `v${i}`).join("::");
+const ropeFields = Array.from({ length: 90 }, (_, i) => "r" + i).reduce(
+	(a, b) => a + "," + b,
+);
+const wideFields = Array.from({ length: 100 }, (_, i) => `\u0101${i}`).join(",");
+let projectedLength = 0;
+for (let i = 0; i < 3; i++) {
+	projectedLength +=
+		manyFields.split(",")[120 + i].length + manyPairs.split("::")[140].length;
+}
+check(
+	"splits past the planned matches keep fields, limits, and projections",
+	JSON.stringify([
+		manyFields.split(",").length,
+		manyFields.split(",")[150],
+		manyFields.split(",", 100).length,
+		manyFields.split(",", 100)[99],
+		manyPairs.split("::").length,
+		manyPairs.split("::")[149],
+		manyPairs.split("::", 70)[69],
+		ropeFields.split(",").length,
+		ropeFields.split(",")[89],
+		wideFields.split(",").length,
+		wideFields.split(",")[99],
+		(manyFields + ",").split(",").length,
+		manyFields.split(",field-1").length,
+		projectedLength,
+	]) ===
+		'[200,"field-150",100,"field-99",150,"v149","v69",90,"r89",100,"\u010199",201,112,39]',
+);
+
 let churnChecksum = 0;
 for (let i = 0; i < 400; i++) {
 	const parts = ("a,b,c,d,e,f,g,h," + i).split(",");

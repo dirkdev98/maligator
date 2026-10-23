@@ -3417,6 +3417,19 @@ static void mal_builtin_string_split_append(MalArrayObject *result, MalValue val
 
 #define MAL_STRING_SPLIT_MATCH_PLAN_CAPACITY 64u
 
+// Short pieces of a flat Latin-1 subject copy straight from its payload; the whole string,
+// empty pieces, and longer ones keep the slice rules.
+static inline MalValue mal_builtin_string_split_piece(
+    MalVm *vm, MalString *string, const MalStringSegment *flat, usize start, usize length
+) {
+    if (flat != nullptr && length != 0 && length < string->length &&
+        length <= MAL_STRING_INLINE_LATIN1_CODE_UNITS) {
+        return mal_value_from_string(
+            mal_string_new_latin1_copy(&vm->heap, flat->latin1_units + start, length));
+    }
+    return mal_builtin_string_slice(vm, string, start, length);
+}
+
 static bool mal_builtin_string_split_plan_matches(
     MalString *string, MalString *separator, u32 limit,
     usize *match_offsets, u32 *match_count, usize *overflow_match_position
@@ -3587,11 +3600,14 @@ static MalValue mal_builtin_string_prototype_split(MalVm *vm, MalValue this_valu
         (void) mal_array_object_fresh_dense_reserve_exact(result, match_count + 1);
     }
 
+    // A flat Latin-1 subject keeps its payload for the whole split: no piece widens it.
+    bool flat_latin1 = string->storage < MAL_STRING_STORAGE_DEPENDENT && string->latin1;
+    MalStringSegment flat = flat_latin1 ? mal_string_flat_segment(string) : (MalStringSegment) {0};
     usize segment_start = 0;
     for (u32 i = 0; i < match_count; i++) {
         usize match_position = match_offsets[i];
-        MalValue segment = mal_builtin_string_slice(
-            vm, string, segment_start, match_position - segment_start);
+        MalValue segment = mal_builtin_string_split_piece(
+            vm, string, flat_latin1 ? &flat : nullptr, segment_start, match_position - segment_start);
         mal_builtin_string_split_append(result, segment);
         result_length++;
         if (result_length == lim) goto split_done;
@@ -3599,13 +3615,28 @@ static MalValue mal_builtin_string_prototype_split(MalVm *vm, MalValue this_valu
     }
 
     if (plan_complete) {
-        MalValue segment =
-            mal_builtin_string_slice(vm, string, segment_start, length - segment_start);
+        MalValue segment = mal_builtin_string_split_piece(
+            vm, string, flat_latin1 ? &flat : nullptr, segment_start, length - segment_start);
         mal_builtin_string_split_append(result, segment);
         goto split_done;
     }
 
     usize position = overflow_match_position;
+    if (flat_latin1) {
+        while (true) {
+            mal_builtin_string_split_append(result, mal_builtin_string_split_piece(
+                vm, string, &flat, segment_start, position - segment_start));
+            result_length++;
+            if (result_length == lim) goto split_done;
+            segment_start = position + separator_length;
+            i64 match_position = mal_builtin_string_find(string, separator, segment_start, length);
+            if (match_position < 0) break;
+            position = (usize) match_position;
+        }
+        mal_builtin_string_split_append(result, mal_builtin_string_split_piece(
+            vm, string, &flat, segment_start, length - segment_start));
+        goto split_done;
+    }
     MalBuiltinStringSearch cursor;
     mal_builtin_string_search_cursor_init(
         &cursor, string, separator, position + separator_length, false, 0, SIZE_MAX);
@@ -3703,7 +3734,22 @@ static bool mal_builtin_string_split_projection_impl(
         segment_start = match_position + separator_length;
     }
 
-    if (!plan_complete) {
+    if (!plan_complete && string->storage < MAL_STRING_STORAGE_DEPENDENT) {
+        // A leaf finds each later match with a word scan; ropes keep one cursor.
+        usize match_position = overflow_match_position;
+        while (true) {
+            if (next_output < output_count && indices[next_output] == total_match_count) {
+                starts[next_output] = segment_start;
+                ends[next_output] = match_position;
+                next_output++;
+            }
+            total_match_count++;
+            segment_start = match_position + separator_length;
+            i64 next_match = mal_builtin_string_find(string, separator, segment_start, length);
+            if (next_match < 0) break;
+            match_position = (usize) next_match;
+        }
+    } else if (!plan_complete) {
         usize match_position = overflow_match_position;
         MalBuiltinStringSearch cursor;
         mal_builtin_string_search_cursor_init(
