@@ -498,7 +498,7 @@ static bool regexp_initialize(MalVm *vm, MalRegExpObject *re, MalString *pattern
     RegexpTemplate *template = regexp_template_slot(vm, pattern, flags_str);
     if (template != nullptr && template->pattern == pattern && template->flags == flags_str) {
         regexp_initialize_state(
-            vm, re, mal_regexp_clone_fresh(template->matcher), pattern, flags_str, template->bits);
+            vm, re, mal_regexp_clone_template(template->matcher), pattern, flags_str, template->bits);
         return true;
     }
     u32 bits;

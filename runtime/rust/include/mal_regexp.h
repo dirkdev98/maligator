@@ -26,8 +26,9 @@ extern "C" {
  * v3: added immutable-subject identity and execution-path reporting.
  * v4: added conservative allocation-free literal/class execution plans.
  * v5: added compact Latin-1 subject execution.
- * v6: added fresh-state cloning of an existing compiled pattern. */
-#define MAL_REGEXP_ABI_VERSION 6u
+ * v6: added fresh-state cloning of an existing compiled pattern.
+ * v7: added template cloning that leaves compile-cache recency alone. */
+#define MAL_REGEXP_ABI_VERSION 7u
 
 /* Returns the ABI version compiled into the linked archive. */
 uint32_t mal_regexp_abi_version(void);
@@ -56,6 +57,10 @@ void *mal_regexp_compile(const uint16_t *pattern, size_t pattern_len, uint32_t f
 /* Share only immutable code with a live handle; the fresh mutable state and
  * ownership are independent. Null input returns NULL; free the result normally. */
 void *mal_regexp_clone_fresh(const void *handle);
+
+/* Like mal_regexp_clone_fresh, for a template the caller retains: the template
+ * keeps the engine code alive, so the compile cache's recency is left alone. */
+void *mal_regexp_clone_template(const void *handle);
 
 /* Free an owned compiled-pattern handle (null-tolerant, so the GC finalizer is
  * idempotent after nulling the field). ABI v2+. */

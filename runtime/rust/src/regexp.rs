@@ -31,7 +31,7 @@ use crate::ffi::{nullable_slice, nullable_u16_slice, write_utf8};
 /// v4: added conservative allocation-free literal/class execution plans.
 /// v5: added compact Latin-1 subject execution.
 /// v6: added fresh-state cloning of an existing compiled pattern.
-pub const MAL_REGEXP_ABI_VERSION: u32 = 6;
+pub const MAL_REGEXP_ABI_VERSION: u32 = 7;
 
 const EXEC_ASCII: u32 = 1 << 0;
 const EXEC_CACHE_HIT: u32 = 1 << 1;
@@ -1257,6 +1257,22 @@ pub unsafe extern "C" fn mal_regexp_clone_fresh(
             }
         }
     });
+    clone_compiled(source)
+}
+
+/// Share a retained template's engine code. The template keeps the program
+/// alive, so the compile cache's recency is left alone; a null source returns null.
+#[no_mangle]
+pub unsafe extern "C" fn mal_regexp_clone_template(
+    handle: *const core::ffi::c_void,
+) -> *mut core::ffi::c_void {
+    if handle.is_null() {
+        return core::ptr::null_mut();
+    }
+    clone_compiled(unsafe { &*(handle as *const CompiledPattern) })
+}
+
+fn clone_compiled(source: &CompiledPattern) -> *mut core::ffi::c_void {
     let boxed = Box::new(CompiledPattern::fresh(
         Arc::clone(&source.re),
         source.fast.clone(),
@@ -1745,6 +1761,38 @@ mod tests {
         unsafe {
             mal_regexp_free(first);
             mal_regexp_free(second);
+        }
+    }
+
+    #[test]
+    fn template_clone_shares_code_without_refreshing_the_compile_cache() {
+        clear_cache();
+        assert!(unsafe { mal_regexp_clone_template(core::ptr::null()) }.is_null());
+        let template = unsafe { handle(&utf16("a+"), 0) };
+        let newer = unsafe { handle(&utf16("b+"), 0) };
+        let clone = unsafe { mal_regexp_clone_template(template) };
+        let newest_is_b = PATTERN_CACHE.with(|cache| {
+            let newer_re = unsafe { &(*(newer as *const CompiledPattern)).re };
+            cache
+                .borrow()
+                .front()
+                .is_some_and(|entry| Arc::ptr_eq(&entry.re, newer_re))
+        });
+        assert!(newest_is_b);
+        {
+            let original = unsafe { &*(template as *const CompiledPattern) };
+            let copy = unsafe { &*(clone as *const CompiledPattern) };
+            assert!(Arc::ptr_eq(&original.re, &copy.re));
+            assert!(copy.subject_cache.is_none());
+        }
+        let mut caps = [-1; 2];
+        let mut flags = 0;
+        assert_eq!(unsafe { exec_latin1(clone, b"xaa", 1, 7, &mut caps, &mut flags) }, 1);
+        assert_eq!(caps, [1, 3]);
+        unsafe {
+            mal_regexp_free(clone);
+            mal_regexp_free(newer);
+            mal_regexp_free(template);
         }
     }
 
