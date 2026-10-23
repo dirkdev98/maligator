@@ -502,11 +502,11 @@ iterator cursor is not, by itself, permission to delete its language object.
       check and snapshot entry, and the function call of each small kernel.
 
 - [ ] Close the rest of the `JSON.stringify` small-record gap. 300k calls on a
-      five-field record take 63 ms against Node's 23 now that the output buffer is
-      sized from the root and shape and prototype proofs persist across calls. A
-      record seen once per call never builds an escaped-key plan; its keys and
-      short strings go through `memmove` calls (5% of samples) and numbers through
-      `mal_text_buffer_append_number` (6%).
+      five-field record take 26 ms against Node's 20. Shape plans persist across
+      calls, and an unused map or list no longer costs a libc call. Most remaining
+      samples are inside `mal_builtin_json_stringify` itself; the plain frame
+      walk, string segment lookup, output buffer growth and the result string's
+      allocation take 3 to 6% each.
 - [ ] Elide the remaining call-only closures. Direct closures cover layouts that
       capture nothing, one owner, or a chain that starts with the creating
       activation, and escaping reads create the object on first use. A layout that
