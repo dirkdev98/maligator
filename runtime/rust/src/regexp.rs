@@ -186,7 +186,8 @@ enum FastNode {
         inner: core::ops::Range<usize>,
         optional: bool,
     },
-    /// Alternatives whose first units are disjoint, so at most one can start at a position.
+    /// Alternatives tried in order: their first units are disjoint, so at most one can start
+    /// at a position, or the match ends with the alternation.
     Alternation {
         alternatives: Box<[(Box<[FastNode]>, core::ops::Range<usize>)]>,
     },
@@ -546,11 +547,13 @@ fn fast_follow(nodes: &[FastNode], outer: &FastClass) -> FastClass {
 /// continuation can neither consume a unit of the run nor end the match inside it. An
 /// optional group or a loop needs the same disjointness and a body that always consumes,
 /// so skipping it or stopping earlier cannot succeed where taking it failed. Alternatives
-/// need disjoint first units and must not match empty except at the end, so no other
-/// alternative could start where the taken one did.
-fn fast_nodes_are_greedy_safe(nodes: &[FastNode], outer: &FastClass) -> bool {
+/// need disjoint first units and must not match empty, so no other alternative could start
+/// where the taken one did, unless the match ends with the alternation: nothing can then
+/// fail after the first alternative that matches, so trying them in order is exact.
+fn fast_nodes_are_greedy_safe(nodes: &[FastNode], outer: &FastClass, terminal: bool) -> bool {
     for (index, node) in nodes.iter().enumerate() {
         let follow = fast_follow(&nodes[index + 1..], outer);
+        let ends_match = terminal && index + 1 == nodes.len();
         match node {
             FastNode::Repeat { class, min, max } if min != max && class.intersects(&follow) => {
                 return false;
@@ -562,7 +565,7 @@ fn fast_nodes_are_greedy_safe(nodes: &[FastNode], outer: &FastClass) -> bool {
                         return false;
                     }
                 }
-                if !fast_nodes_are_greedy_safe(body, &follow) {
+                if !fast_nodes_are_greedy_safe(body, &follow, ends_match) {
                     return false;
                 }
             }
@@ -570,9 +573,8 @@ fn fast_nodes_are_greedy_safe(nodes: &[FastNode], outer: &FastClass) -> bool {
                 let mut seen = FastClass::empty();
                 for (body, _) in alternatives.iter() {
                     let (first, end) = fast_first(body);
-                    if end == FastFirstEnd::Nullable
-                        || first.intersects(&seen)
-                        || !fast_nodes_are_greedy_safe(body, &follow)
+                    if (!ends_match && (end == FastFirstEnd::Nullable || first.intersects(&seen)))
+                        || !fast_nodes_are_greedy_safe(body, &follow, ends_match)
                     {
                         return false;
                     }
@@ -583,7 +585,7 @@ fn fast_nodes_are_greedy_safe(nodes: &[FastNode], outer: &FastClass) -> bool {
                 let (first, end) = fast_first(body);
                 if end != FastFirstEnd::Consumes
                     || (min != max && first.intersects(&follow))
-                    || !fast_nodes_are_greedy_safe(body, &first.union(&follow))
+                    || !fast_nodes_are_greedy_safe(body, &first.union(&follow), false)
                 {
                     return false;
                 }
@@ -968,7 +970,7 @@ fn compile_fast_pattern(units: &[u16], flags: u32) -> Option<FastPattern> {
     if parser.position != units.len()
         || nodes.is_empty()
         || (anchored_start && top_level_alternation)
-        || !fast_nodes_are_greedy_safe(&nodes, &FastClass::empty())
+        || !fast_nodes_are_greedy_safe(&nodes, &FastClass::empty(), true)
     {
         return None;
     }
@@ -2038,13 +2040,17 @@ mod tests {
         assert!(compile_fast_pattern(&utf16("(a*)?"), 0).is_none());
         assert!(compile_fast_pattern(&utf16("a+?"), 0).is_none());
         assert!(compile_fast_pattern(&utf16("a|b"), 0).is_some());
-        assert!(compile_fast_pattern(&utf16("ab|ac"), 0).is_none());
-        assert!(compile_fast_pattern(&utf16("a|"), 0).is_none());
+        assert!(compile_fast_pattern(&utf16("ab|ac"), 0).is_some());
+        assert!(compile_fast_pattern(&utf16("a|"), 0).is_some());
+        assert!(compile_fast_pattern(&utf16("(?:a|ab)c"), 0).is_none());
+        assert!(compile_fast_pattern(&utf16("(?:a|ab)$"), 0).is_none());
+        assert!(compile_fast_pattern(&utf16("(?:|a)b"), 0).is_none());
+        assert!(compile_fast_pattern(&utf16("(?:a|ab)+"), 0).is_none());
         assert!(compile_fast_pattern(&utf16("^a|b"), 0).is_none());
         assert!(compile_fast_pattern(&utf16("(a)*"), 0).is_none());
         assert!(compile_fast_pattern(&utf16("(?:a*)*"), 0).is_none());
         assert!(compile_fast_pattern(&utf16("(?:ab)*a"), 0).is_none());
-        assert!(compile_fast_pattern(&utf16(r":\d{4}$|[^0-9a-z]"), 0).is_none());
+        assert!(compile_fast_pattern(&utf16(r":\d{4}$|[^0-9a-z]"), 0).is_some());
         assert!(compile_fast_pattern(&utf16(r"\bword"), 0).is_none());
         assert!(compile_fast_pattern(&utf16("x{2,1}"), 0).is_none());
         assert!(compile_fast_pattern(&utf16("a{"), 0).is_none());
@@ -2156,6 +2162,14 @@ mod tests {
             (r#"(foo|bar)baz"#, "barbaz", 0),
             (r#"(?:(a)|b)c"#, "bc", 0),
             (r#"(?:a|b)(c|d)?"#, "ad", FLAG_IGNORE_CASE),
+            (r#":\d{4}$|[^0-9a-z]"#, "cp:1252", 0),
+            (r#":\d{4}$|[^0-9a-z]"#, "a:12b-", 0),
+            (r#"a|ab"#, "xab", 0),
+            (r#"(ab)|(a)"#, "xab", 0),
+            (r#"x(?:a|ab)"#, "xab", 0),
+            (r#"x(a|ab)?"#, "xab", 0),
+            (r#"a|"#, "ba", 0),
+            (r#"a(?:b|bc)"#, "ABC", FLAG_IGNORE_CASE),
         ];
         let extras = [
             'a', 'b', 'c', 'x', 'y', 'Z', '0', '9', ' ', '/', ';', '=', ',', '-', '.', '\t',
