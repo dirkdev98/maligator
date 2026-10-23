@@ -307,11 +307,10 @@ static void client_fail(MalHttpClient *client, const char *message) {
  */
 static void client_arm_timeout(MalHttpClient *client) {
     if (client->operation == 0) return;
-    mal_reactor_cancel_timer(&client->host->reactor, &client->timeout);
     i64 now = mal_reactor_now_ns();
-    client->timeout.deadline_ns = client->timeout_ns > INT64_MAX - now
-        ? INT64_MAX : now + client->timeout_ns;
-    mal_reactor_add_timer(&client->host->reactor, &client->timeout);
+    mal_reactor_rearm_timer(
+        &client->host->reactor, &client->timeout,
+        client->timeout_ns > INT64_MAX - now ? INT64_MAX : now + client->timeout_ns);
 }
 
 static void client_timeout_cb(void *data) {

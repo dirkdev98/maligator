@@ -109,6 +109,7 @@ void mal_reactor_add_timer(MalReactor *r, MalTimer *t) {
     i32 i = r->timer_count++;
     r->timers[i] = t;
     t->heap_index = i;
+    t->postponed_ns = 0;
     t->sequence = r->next_timer_sequence++;
     mal_timer_sift_up(r, i);
 }
@@ -128,11 +129,25 @@ static MalTimer *mal_timer_remove_at(MalReactor *r, i32 i) {
     return removed;
 }
 
+static bool mal_timer_queued(const MalReactor *r, const MalTimer *t) {
+    return t->heap_index >= 0 && t->heap_index < r->timer_count &&
+        r->timers[t->heap_index] == t;
+}
+
 void mal_reactor_cancel_timer(MalReactor *r, MalTimer *t) {
-    if (t->heap_index >= 0 && t->heap_index < r->timer_count &&
-        r->timers[t->heap_index] == t) {
+    if (mal_timer_queued(r, t)) {
         mal_timer_remove_at(r, t->heap_index);
     }
+}
+
+void mal_reactor_rearm_timer(MalReactor *r, MalTimer *t, i64 deadline_ns) {
+    if (mal_timer_queued(r, t) && deadline_ns >= t->deadline_ns) {
+        t->postponed_ns = deadline_ns;
+        return;
+    }
+    mal_reactor_cancel_timer(r, t);
+    t->deadline_ns = deadline_ns;
+    mal_reactor_add_timer(r, t);
 }
 
 /* ---------------------------------------------------------------------------
@@ -847,6 +862,11 @@ static void mal_reactor_pump(MalReactor *r, bool blocking) {
     i64 now = mal_reactor_now_ns();
     while (r->timer_count > 0 && r->timers[0]->deadline_ns <= now) {
         MalTimer *t = mal_timer_remove_at(r, 0);
+        if (t->postponed_ns > t->deadline_ns) {
+            t->deadline_ns = t->postponed_ns;
+            mal_reactor_add_timer(r, t);
+            continue;
+        }
         t->waker.fn(t->waker.data);
     }
 }

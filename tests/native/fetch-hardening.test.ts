@@ -151,6 +151,50 @@ describe("Mal.serve hardening", () => {
 		});
 	});
 
+	it("keeps an active keep-alive connection past its first idle deadline", async () => {
+		await withServer(limitsBin, {}, async (base) => {
+			const url = new URL(base);
+			const socket = connect(Number(url.port), url.hostname);
+			await new Promise<void>((resolve, reject) => {
+				socket.once("connect", () => resolve());
+				socket.once("error", reject);
+			});
+			let received = "";
+			socket.on("data", (chunk: Buffer) => {
+				received += chunk.toString("latin1");
+			});
+			const closed = new Promise<number>((resolve) => {
+				socket.once("close", () => resolve(Date.now()));
+			});
+			const responses = () => received.split("HTTP/1.1 200").length - 1;
+			// keepAliveTimeout: 400 — each exchange lands well inside the idle window
+			// and the series spans three of them.
+			for (let exchange = 1; exchange <= 6; exchange++) {
+				socket.write("GET /limits HTTP/1.1\r\nHost: x\r\n\r\n");
+				const deadline = Date.now() + 2000;
+				while (responses() < exchange && Date.now() < deadline) {
+					await new Promise<void>((resolve) => {
+						setTimeout(resolve, 10);
+					});
+				}
+				expect(responses()).toBe(exchange);
+				await new Promise<void>((resolve) => {
+					setTimeout(resolve, 200);
+				});
+			}
+			expect(socket.destroyed).toBe(false);
+			const idleSince = Date.now();
+			const closedAt = await Promise.race([
+				closed,
+				new Promise<number>((resolve) => {
+					setTimeout(() => resolve(Number.POSITIVE_INFINITY), 3000);
+				}),
+			]);
+			socket.destroy();
+			expect(closedAt - idleSince).toBeLessThan(1500);
+		});
+	});
+
 	// Mal.serve and node:http share one llhttp parser, so the ambiguous framing that
 	// creates proxy differentials must be rejected here too, not just in the codec
 	// unit test. These are single malformed messages, not a smuggling chain.

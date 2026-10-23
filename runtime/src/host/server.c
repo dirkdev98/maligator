@@ -214,13 +214,12 @@ static void conn_timeout_cb(void *data) {
 
 static void conn_arm_timeout(
     MalHttpConn *c, MalHttpTimeoutPhase phase, i64 duration_ns) {
-    mal_reactor_cancel_timer(conn_reactor(c), &c->timeout);
     i64 now = mal_reactor_now_ns();
-    c->timeout.deadline_ns = duration_ns > INT64_MAX - now
-        ? INT64_MAX : now + duration_ns;
     c->timeout.waker = (MalWaker) {.fn = conn_timeout_cb, .data = c};
     c->timeout_phase = phase;
-    mal_reactor_add_timer(conn_reactor(c), &c->timeout);
+    mal_reactor_rearm_timer(
+        conn_reactor(c), &c->timeout,
+        duration_ns > INT64_MAX - now ? INT64_MAX : now + duration_ns);
 }
 
 static void conn_arm_headers_timeout(MalHttpConn *c) {

@@ -58,7 +58,10 @@ static_assert(sizeof(MalOp) <= 48, "MalOp outgrew its 48-byte layout");
  * deadline. Storage is caller-owned; `heap_index` is the reactor's, -1 when not
  * queued. */
 typedef struct MalTimer {
+    /* The heap key: the deadline the timer surfaces at. */
     i64 deadline_ns;
+    /* A re-armed deadline later than the key, applied when the key surfaces. */
+    i64 postponed_ns;
     MalWaker waker;
     i32 heap_index;
     u64 sequence;
@@ -131,6 +134,12 @@ bool mal_reactor_cancel_op(MalReactor *r, MalOp *op);
 /* Register / cancel a one-shot timer. */
 void mal_reactor_add_timer(MalReactor *r, MalTimer *t);
 void mal_reactor_cancel_timer(MalReactor *r, MalTimer *t);
+
+/* Move a timer's deadline, queueing it if needed. A queued timer that only moves
+ * later keeps its heap slot and is re-keyed when that slot comes due, so an
+ * inactivity timeout re-armed on every exchange costs no heap work. Equal
+ * deadlines then fire in re-key order, which suits only such timeouts. */
+void mal_reactor_rearm_timer(MalReactor *r, MalTimer *t, i64 deadline_ns);
 
 /* Block until the nearest timer deadline or an fd event (or return immediately if
  * nothing is pending), firing wakers for everything that became ready. */
