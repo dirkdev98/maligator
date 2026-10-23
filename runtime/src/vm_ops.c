@@ -945,6 +945,28 @@ MalValue mal_vm_create_object_shaped(MalVm *vm, MalShape *shape, const MalValue 
     return mal_value_from_object(object);
 }
 
+MalValue mal_vm_materialize_record(
+    MalVm *vm, MalValue callee, MalString **keys, MalValue *values, u32 count) {
+    assert(count >= 1 && count <= MAL_SHAPE_MAX_INLINE_SLOTS);
+    // The callee's literal would have taken its prototype from the callee's realm.
+#if MAL_REALMS
+    MalValue prototype =
+        mal_vm_callee_realm(vm, callee)->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE];
+#else
+    (void) callee;
+    MalValue prototype = vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE];
+#endif
+    MalShape *shape = mal_shape_from_string_keys(&vm->heap, keys, count);
+    MalObject *object = mal_object_try_new_shaped(
+        &vm->heap, mal_value_to_object(prototype), shape, values, count);
+    if (object == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return MAL_VALUE_UNDEFINED;
+    }
+    MAL_PERF_COUNT(record_materializations);
+    return mal_value_from_object(object);
+}
+
 void mal_op_create_object(MalCallable *callable, const MalInstruction *instruction) {
     callable->registers[instruction->as.create_object.dst] = mal_vm_op_create_object(callable->vm);
 }

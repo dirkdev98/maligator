@@ -1435,7 +1435,7 @@ static void mal_perf_stats_print(void) {
         "compiled_dispatches=%llu native_exact_hits=%llu "
         "way_checks=%llu dispatch_misses=%llu native_fills=%llu function_call_forwards=%llu "
         "compiled_enters=%llu compiled_debug_frames=%llu "
-        "direct_entry_hits=%llu numeric_sort_callback_calls=%llu "
+        "direct_entry_hits=%llu record_materializations=%llu numeric_sort_callback_calls=%llu "
         "numeric_sort_kernel_runs=%llu\n",
         (unsigned long long) mal_perf_stats.call_cache_probes,
         (unsigned long long) mal_perf_stats.call_cache_exact_identity_hits,
@@ -1448,6 +1448,7 @@ static void mal_perf_stats_print(void) {
         (unsigned long long) mal_perf_stats.compiled_enter_calls,
         (unsigned long long) mal_perf_stats.compiled_debug_frame_entries,
         (unsigned long long) mal_perf_stats.direct_entry_hits,
+        (unsigned long long) mal_perf_stats.record_materializations,
         (unsigned long long) mal_perf_stats.numeric_sort_callback_calls,
         (unsigned long long) mal_perf_stats.numeric_sort_kernel_runs
     );

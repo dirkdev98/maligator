@@ -2063,11 +2063,15 @@ function writeCompilerArtifact(
 		w.u32(native.recordCalls?.length ?? 0);
 		for (const site of native.recordCalls ?? []) {
 			w.u32(site.callIp);
-			w.u32(site.loads.length);
-			for (const load of site.loads) {
-				w.u32(load.instructionIp);
-				w.u32(load.field);
+			for (const accesses of [site.loads, site.stores]) {
+				w.u32(accesses.length);
+				for (const access of accesses) {
+					w.u32(access.instructionIp);
+					w.u32(access.field);
+				}
 			}
+			w.u32(site.observerIps.length);
+			for (const ip of site.observerIps) w.u32(ip);
 		}
 		w.u8(native.specializedOnly ? 1 : 0);
 		w.u32(native.directEntries.length);
@@ -4604,12 +4608,16 @@ function readCompilerArtifact(
 			})),
 		}));
 		const recordCallCount = r.count(8);
-		const recordCalls = Array.from({ length: recordCallCount }, () => ({
-			callIp: r.u32(),
-			loads: Array.from({ length: r.count(8) }, () => ({
+		const readRecordAccesses = () =>
+			Array.from({ length: r.count(8) }, () => ({
 				instructionIp: r.u32(),
 				field: r.u32(),
-			})),
+			}));
+		const recordCalls = Array.from({ length: recordCallCount }, () => ({
+			callIp: r.u32(),
+			loads: readRecordAccesses(),
+			stores: readRecordAccesses(),
+			observerIps: Array.from({ length: r.count(4) }, () => r.u32()),
 		}));
 		const specializedOnly = r.u8();
 		if (specializedOnly > 1) throw new RangeError("invalid native body reachability");

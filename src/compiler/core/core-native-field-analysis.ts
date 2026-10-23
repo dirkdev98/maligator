@@ -7,9 +7,10 @@ import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import type { CoreLocalFactBundle } from "./core-ir-provenance.ts";
 import type {
 	CoreDirectEntryPlan,
-	CoreEntryFieldLoad,
 	CoreEntryFields,
 	CoreEntryResultFields,
+	CoreRecordFieldAccess,
+	CoreRecordUses,
 	CorePlanRepresentation,
 } from "./core-ir-regions.ts";
 import { coreInstructionId } from "./core-ir.ts";
@@ -302,12 +303,19 @@ export function coreRecordResultFields(
 			});
 }
 
-/** The reads of a call's result, when they are its only uses and name returned fields. */
-export function coreRecordResultLoads(
+const MAX_RECORD_OBSERVERS = 8;
+
+/**
+ * Every use of a call's record result, when caller storage can stand in for it.
+ * Reads and writes of its own fields stay accesses; any other use observes the
+ * record and must see the object, so it may not be a control-flow edge or handler
+ * argument that this function cannot rewrite.
+ */
+export function coreRecordResultUses(
 	fn: CoreFunctionStore,
 	call: CoreInstructionId,
 	keys: ReadonlyArray<number>,
-): ReadonlyArray<CoreEntryFieldLoad> | undefined {
+): CoreRecordUses | undefined {
 	if (
 		fn.isGenerator ||
 		fn.isAsync ||
@@ -318,31 +326,69 @@ export function coreRecordResultLoads(
 		return undefined;
 	const attributes = fn.instructionAttributes(call);
 	if (attributes.construct || attributes.argumentMode !== undefined) return undefined;
-	const result = fn.kernel.resultAt(fn.kernel.instructionResultStart(call));
-	if (fn.kernel.valueHandlerUseCount(result) > 0) return undefined;
-	const loads: Array<CoreEntryFieldLoad> = [];
-	for (
-		let use = fn.kernel.valueFirstUse(result);
-		use >= 0;
-		use = fn.kernel.useNext(use)
-	) {
-		if (fn.kernel.useLive(use) === 0) continue;
-		const instruction = fn.kernel.useInstruction(use);
-		if (
-			fn.instructionKind(instruction) !== "operation" ||
-			fn.instructionOpcodeName(instruction) !== "loadPropertyStatic" ||
-			fn.kernel.useOperand(use) !== 0
-		)
-			return undefined;
-		const field = keys.indexOf(
-			fn.instructionAttributes(instruction).stringIndex as number,
-		);
-		if (field < 0) return undefined;
-		loads.push(Object.freeze({ instruction, field }));
+	const loads: Array<CoreRecordFieldAccess> = [];
+	const stores: Array<CoreRecordFieldAccess> = [];
+	const observers = new Set<CoreInstructionId>();
+	const aliases = new Set<CoreValueId>();
+	const pending = [fn.kernel.resultAt(fn.kernel.instructionResultStart(call))];
+	while (pending.length > 0) {
+		const value = pending.pop()!;
+		if (aliases.has(value)) continue;
+		aliases.add(value);
+		if (fn.kernel.valueHandlerUseCount(value) > 0) return undefined;
+		for (
+			let use = fn.kernel.valueFirstUse(value);
+			use >= 0;
+			use = fn.kernel.useNext(use)
+		) {
+			if (fn.kernel.useLive(use) === 0) continue;
+			const instruction = fn.kernel.useInstruction(use);
+			const kind = fn.instructionKind(instruction);
+			if (kind === "return" || kind === "throw") {
+				observers.add(instruction);
+				continue;
+			}
+			if (kind !== "operation") return undefined;
+			const opcode = fn.instructionOpcodeName(instruction);
+			if (opcode === "rootUse") continue;
+			if (opcode === "move") {
+				pending.push(fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)));
+				continue;
+			}
+			const field =
+				fn.kernel.useOperand(use) === 0 &&
+				(opcode === "loadPropertyStatic" || opcode === "storePropertyStatic")
+					? keys.indexOf(fn.instructionAttributes(instruction).stringIndex as number)
+					: -1;
+			if (field < 0) observers.add(instruction);
+			else
+				(opcode === "loadPropertyStatic" ? loads : stores).push({ instruction, field });
+		}
 	}
-	return loads.length > 64
-		? undefined
-		: Object.freeze(loads.sort((left, right) => left.instruction - right.instruction));
+	// Storing the record into its own field also observes it.
+	const ownStores = stores.filter(({ instruction }) => !observers.has(instruction));
+	const accesses = loads.length + ownStores.length;
+	if (
+		loads.length > 64 ||
+		ownStores.length > 64 ||
+		observers.size > MAX_RECORD_OBSERVERS ||
+		// An observer on every path would only add a copy after the callee's literal.
+		(observers.size > 0 &&
+			(accesses === 0 ||
+				[...observers].some(
+					(observer) => fn.instructionBlock(observer) === fn.instructionBlock(call),
+				)))
+	)
+		return undefined;
+	const byInstruction = (left: CoreRecordFieldAccess, right: CoreRecordFieldAccess) =>
+		left.instruction - right.instruction;
+	return Object.freeze({
+		loads: Object.freeze(loads.map((load) => Object.freeze(load)).sort(byInstruction)),
+		stores: Object.freeze(
+			ownStores.map((store) => Object.freeze(store)).sort(byInstruction),
+		),
+		observers: Object.freeze([...observers].sort((left, right) => left - right)),
+	});
 }
 
 export function coreFieldArgumentProofIsCurrent(

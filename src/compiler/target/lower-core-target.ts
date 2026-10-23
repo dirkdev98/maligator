@@ -14,8 +14,8 @@ import {
 import type {
 	CoreAllocatedRegion,
 	CoreDirectEntryPlan,
-	CoreEntryFieldLoad,
 	CorePlanRepresentation,
+	CoreRecordUses,
 } from "../core/core-ir-regions.ts";
 import { coreBlockId, coreFunctionId, coreInstructionId } from "../core/core-ir.ts";
 import type {
@@ -1507,7 +1507,7 @@ function lowerCoreSpecializations(
 	return regions;
 }
 
-type CoreRecordCalls = ReadonlyMap<CoreInstructionId, ReadonlyArray<CoreEntryFieldLoad>>;
+type CoreRecordCalls = ReadonlyMap<CoreInstructionId, CoreRecordUses>;
 
 interface CoreFieldCall {
 	readonly allocation: CoreInstructionId;
@@ -2744,12 +2744,19 @@ function lowerFunctionToTarget(
 		...(recordCalls.size === 0
 			? {}
 			: {
-					recordCalls: [...recordCalls].map(([call, loads]) => ({
+					recordCalls: [...recordCalls].map(([call, uses]) => ({
 						call: loweredInstructions.get(call)!,
-						loads: loads.map(({ instruction, field }) => ({
+						loads: uses.loads.map(({ instruction, field }) => ({
 							instruction: loweredInstructions.get(instruction)!,
 							field,
 						})),
+						stores: uses.stores.map(({ instruction, field }) => ({
+							instruction: loweredInstructions.get(instruction)!,
+							field,
+						})),
+						observers: uses.observers.map((observer) =>
+							loweredInstructions.get(observer)!,
+						),
 					})),
 				}),
 		gc: { safepoints },
@@ -2814,10 +2821,7 @@ export function lowerCoreCompilationToTargetProgram(
 		Map<CoreInstructionId, CompilerNumericSortCallback>
 	>();
 	const fieldCallPlans = new Map<number, Map<CoreInstructionId, CoreFieldCall>>();
-	const recordCalls = new Map<
-		number,
-		Map<CoreInstructionId, ReadonlyArray<CoreEntryFieldLoad>>
-	>();
+	const recordCalls = new Map<number, Map<CoreInstructionId, CoreRecordUses>>();
 	const directEntryTargets = new Map<
 		number,
 		Map<CoreInstructionId, { target: CoreFunctionId; guarded: boolean }>
@@ -2881,12 +2885,11 @@ export function lowerCoreCompilationToTargetProgram(
 				fieldCallPlans.set(site.caller, calls);
 				continue;
 			}
-			if (site.resultLoads !== undefined) {
-				const loads =
-					recordCalls.get(site.caller) ??
-					new Map<CoreInstructionId, ReadonlyArray<CoreEntryFieldLoad>>();
-				loads.set(site.instruction, site.resultLoads);
-				recordCalls.set(site.caller, loads);
+			if (site.recordUses !== undefined) {
+				const calls =
+					recordCalls.get(site.caller) ?? new Map<CoreInstructionId, CoreRecordUses>();
+				calls.set(site.instruction, site.recordUses);
+				recordCalls.set(site.caller, calls);
 			}
 			const calls =
 				directEntryIds.get(site.caller) ?? new Map<CoreInstructionId, number>();

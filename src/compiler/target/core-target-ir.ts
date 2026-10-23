@@ -245,13 +245,18 @@ export interface CoreTargetFunction {
 			readonly entryId: number;
 		}>;
 	}>;
-	/** Calls of record-result entries and the field reads that are their results' only uses. */
+	/** Calls of record-result entries with every use of their results in this function. */
 	readonly recordCalls?: ReadonlyArray<{
 		readonly call: CompilerInstruction;
 		readonly loads: ReadonlyArray<{
 			readonly instruction: CompilerInstruction;
 			readonly field: number;
 		}>;
+		readonly stores: ReadonlyArray<{
+			readonly instruction: CompilerInstruction;
+			readonly field: number;
+		}>;
+		readonly observers: ReadonlyArray<CompilerInstruction>;
 	}>;
 	readonly capturedCount: number;
 	readonly strict: boolean;

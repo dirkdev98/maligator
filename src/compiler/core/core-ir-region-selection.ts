@@ -70,7 +70,7 @@ import {
 	coreReadOnlyParameterFields,
 	coreFieldArgument,
 	coreRecordResultFields,
-	coreRecordResultLoads,
+	coreRecordResultUses,
 } from "./core-native-field-analysis.ts";
 import {
 	coreOperatorInputPlans,
@@ -1797,12 +1797,12 @@ function recordResultEntries(
 		const site = summaries.targets.site(call.caller, call.instruction);
 		if (site?.arguments === undefined || site.open || site.targets.functions.length !== 1)
 			return [];
-		const resultLoads = coreRecordResultLoads(
+		const recordUses = coreRecordResultUses(
 			program.function(call.caller),
 			call.instruction,
 			resultFields.keys,
 		);
-		return resultLoads === undefined ? [] : [Object.freeze({ ...call, resultLoads })];
+		return recordUses === undefined ? [] : [Object.freeze({ ...call, recordUses })];
 	});
 	if (calls.length === 0) return [];
 	const parameterRepresentations = Array.from(

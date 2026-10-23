@@ -48,6 +48,7 @@ import {
 	lowerVerifiedTargetsToRuntimePlans,
 	validateRuntimeImageMetadata,
 	validateVmPropertyCacheLayout,
+	vmInstructionReadRegisters,
 	vmInstructionUsesPropertyCache,
 	vmExceptionHandlerTargets,
 } from "./runtime-image.ts";
@@ -1449,12 +1450,17 @@ export interface NativeFunctionPlan {
 	readonly compilerSiteIds?: ReadonlyArray<string | undefined>;
 }
 
+export interface NativeRecordFieldAccess {
+	readonly instructionIp: number;
+	readonly field: number;
+}
+
+/** A record call keeps its result in caller storage until an observer needs the object. */
 export interface NativeRecordCall {
 	readonly callIp: number;
-	readonly loads: ReadonlyArray<{
-		readonly instructionIp: number;
-		readonly field: number;
-	}>;
+	readonly loads: ReadonlyArray<NativeRecordFieldAccess>;
+	readonly stores: ReadonlyArray<NativeRecordFieldAccess>;
+	readonly observerIps: ReadonlyArray<number>;
 }
 
 export interface NativeDirectEntryPlan {
@@ -1715,14 +1721,45 @@ export function validateNativeLiteralSwitches(
 
 const NATIVE_RECORD_FIELD_LIMIT = 8;
 
-/** Record calls and their field loads render against caller storage, outside other native plans. */
+/** Record calls and every use of their results render against caller storage, outside other native plans. */
 export function nativeRecordCallIps(native: NativeFunctionPlan): ReadonlySet<number> {
 	return new Set(
 		(native.recordCalls ?? []).flatMap((site) => [
 			site.callIp,
 			...site.loads.map((load) => load.instructionIp),
+			...site.stores.map((store) => store.instructionIp),
+			...site.observerIps,
 		]),
 	);
+}
+
+/** The registers that hold a record call's result at each ip that reads it. */
+export function nativeRecordAliases(
+	fn: BytecodeFunction,
+	site: NativeRecordCall,
+): ReadonlyMap<number, ReadonlyArray<number>> {
+	const call = fn.instructions[site.callIp];
+	if (call?.opcode !== "CALL") throw new RangeError("Native record call is not a call");
+	const flow = nativeVirtualValueFlow(
+		fn.instructions,
+		site.callIp,
+		call.dst,
+		new Set(),
+		vmExceptionHandlerTargets(fn.instructions.length, fn.handlers),
+	);
+	const aliases = new Map<number, ReadonlyArray<number>>();
+	for (const ip of [
+		...site.loads.map((load) => load.instructionIp),
+		...site.stores.map((store) => store.instructionIp),
+		...site.observerIps,
+	]) {
+		const live = flow.get(ip)?.may;
+		const reads = vmInstructionReadRegisters(fn.instructions[ip]!).filter(
+			(register) => live?.has(register) === true,
+		);
+		aliases.set(ip, [...new Set(reads)]);
+	}
+	return aliases;
 }
 
 function validateNativeRecordReturns(
@@ -1818,23 +1855,36 @@ export function validateNativeRecordCalls(
 		const entry = functions[plan.directFunctionIndex]?.directEntries[plan.directEntryId];
 		const keys = entry?.resultFields?.keys;
 		if (keys === undefined || entry?.id !== plan.directEntryId) fail();
-		const loads = new Map<number, ReadonlyArray<number>>();
-		for (const load of site.loads) {
-			const instruction = fn.instructions[load.instructionIp];
-			if (
-				loads.has(load.instructionIp) ||
-				instruction?.opcode !== "LOAD_PROPERTY_STATIC" ||
-				instruction.object !== call.dst ||
-				keys[load.field] !== instruction.stringIndex
-			)
-				fail();
-			loads.set(load.instructionIp, [call.dst]);
+		const aliases = nativeRecordAliases(fn, site);
+		const consumers = new Map<number, ReadonlyArray<number>>();
+		for (const [accesses, opcode] of [
+			[site.loads, "LOAD_PROPERTY_STATIC"],
+			[site.stores, "STORE_PROPERTY_STATIC"],
+		] as const)
+			for (const access of accesses) {
+				const instruction = fn.instructions[access.instructionIp];
+				if (
+					consumers.has(access.instructionIp) ||
+					instruction?.opcode !== opcode ||
+					keys[access.field] !== instruction.stringIndex ||
+					aliases.get(access.instructionIp)?.length !== 1 ||
+					aliases.get(access.instructionIp)![0] !== instruction.object
+				)
+					fail();
+				consumers.set(access.instructionIp, [instruction.object]);
+			}
+		for (const ip of site.observerIps) {
+			const values = aliases.get(ip) ?? [];
+			if (consumers.has(ip) || values.length === 0 || site.observerIps.length > 8) fail();
+			consumers.set(ip, values);
 		}
+		if (site.observerIps.length > 0 && site.loads.length + site.stores.length === 0)
+			fail();
 		validateNativeVirtualValue(
 			fn.instructions,
 			site.callIp,
 			call.dst,
-			loads,
+			consumers,
 			fail,
 			() => false,
 			false,
@@ -5099,15 +5149,28 @@ function lowerExecutionFunctionToNativePlan(
 			? {}
 			: {
 					recordCalls: fn.recordCalls
-						.map((site) => ({
-							callIp: instructionIndexByTargetInstruction.get(site.call)!,
-							loads: site.loads
-								.map(({ instruction, field }) => ({
-									instructionIp: instructionIndexByTargetInstruction.get(instruction)!,
-									field,
-								}))
-								.sort((left, right) => left.instructionIp - right.instructionIp),
-						}))
+						.map((site) => {
+							const accesses = (
+								list: ReadonlyArray<{
+									readonly instruction: CompilerInstruction;
+									readonly field: number;
+								}>,
+							) =>
+								list
+									.map(({ instruction, field }) => ({
+										instructionIp: instructionIndexByTargetInstruction.get(instruction)!,
+										field,
+									}))
+									.sort((left, right) => left.instructionIp - right.instructionIp);
+							return {
+								callIp: instructionIndexByTargetInstruction.get(site.call)!,
+								loads: accesses(site.loads),
+								stores: accesses(site.stores),
+								observerIps: site.observers
+									.map((observer) => instructionIndexByTargetInstruction.get(observer)!)
+									.sort((left, right) => left - right),
+							};
+						})
 						.sort((left, right) => left.callIp - right.callIp),
 				}),
 		gc: { safepoints },

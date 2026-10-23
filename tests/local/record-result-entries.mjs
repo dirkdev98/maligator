@@ -127,6 +127,51 @@ function discard(text) {
 	return calls;
 }
 
+// Observers on rare paths need the object; later reads must see what they did to it.
+const kept = [];
+function bump(token) {
+	token.end += 1000;
+}
+function observed(text, every) {
+	let total = 0;
+	let count = 0;
+	for (let index = 0; index < text.length;) {
+		const token = scan(text, index);
+		token.digits *= 2;
+		count++;
+		if (count % every === 0) {
+			kept.push(token);
+			kept.push(token);
+			bump(token);
+		}
+		total += token.end - token.start + token.digits;
+		index = (token.end % 1000) + 1;
+	}
+	return total;
+}
+
+function found(text, digits) {
+	for (let index = 0; index < text.length;) {
+		const token = scan(text, index);
+		if (token.digits === digits) return token;
+		index = token.end + 1;
+	}
+	return undefined;
+}
+
+function rejected(text) {
+	try {
+		for (let index = 0; index < text.length;) {
+			const token = scan(text, index);
+			if (token.digits > 2) throw token;
+			index = token.end + 1;
+		}
+	} catch (error) {
+		return `${Object.keys(error).join(",")}:${error.start}:${error.digits}`;
+	}
+	return "none";
+}
+
 const text = "a1 bb22 ccc333 dddd4444 ".repeat(20);
 check(tokenLengths(text), 600, "token lengths");
 check(digitCount(text), 200, "digit count");
@@ -145,4 +190,14 @@ const tree = [[[], [[]]], [], [[[[]]]]];
 const measured = depth(tree);
 check(`${measured.size}:${measured.deepest}`, "10:4", "recursive records");
 check(discard(text), 160, "discarded records");
+check(observed(text, 7), 11800, "observed records");
+check(kept.length, 22, "observed count");
+check(kept[0] === kept[1], true, "observed identity");
+check(kept[0] !== kept[2], true, "observed freshness");
+check(`${kept[0].end}:${kept[0].digits}`, "1038:6", "observed mutation");
+check(Object.getPrototypeOf(kept[3]) === Object.prototype, true, "observed prototype");
+const result = found(text, 3);
+check(`${result?.start}:${result?.end}`, "8:14", "returned observer");
+check(found(text, 9), undefined, "missing observer");
+check(rejected(text), "start,end,digits:8:3", "thrown observer");
 console.log("record-result-entries PASS");

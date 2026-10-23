@@ -112,6 +112,7 @@ import {
 	nativeFrameRootRegisters,
 	nativeLoopUpdateTransportsValue,
 	nativeInstructionEffects,
+	nativeRecordAliases,
 	vmCallProvesBuiltin,
 	validateNativeDirectEntry,
 	validateNativeLiteralSwitches,
@@ -2363,6 +2364,7 @@ function emitCompiledVariant(
 	const records: NativeRecordStorage = {
 		allocations: recordAllocations,
 		...renderRecordCallSlots(
+			fn,
 			nativeContract,
 			storage.callTransports,
 			directCompiledEntries,
@@ -3498,34 +3500,56 @@ function unboxedSnapshot(rep: RegisterRep, value: string): string {
 	return value;
 }
 
+/** One record call's rooted caller storage: its fields in key order, then the object once created. */
+interface NativeRecordSite {
+	readonly fieldSlot: number;
+	readonly keys: ReadonlyArray<number>;
+	/** Present when an observer can create the object; undefined until one does. */
+	readonly objectSlot?: number;
+	readonly calleeSlot?: number;
+}
+
 interface NativeRecordStorage {
 	readonly allocations: ReadonlySet<number>;
-	readonly loads: ReadonlyMap<number, number>;
-	readonly calls: ReadonlyMap<number, ReadonlyArray<number>>;
+	readonly calls: ReadonlyMap<number, NativeRecordSite>;
+	readonly accesses: ReadonlyMap<number, NativeRecordAccess>;
+	readonly observers: ReadonlyMap<number, NativeRecordObserver>;
+}
+
+interface NativeRecordAccess {
+	readonly site: NativeRecordSite;
+	readonly field: number;
+}
+
+interface NativeRecordObserver {
+	readonly site: NativeRecordSite;
+	readonly aliases: ReadonlyArray<number>;
 }
 
 const NO_NATIVE_RECORD_STORAGE: NativeRecordStorage = {
 	allocations: new Set(),
-	loads: new Map(),
 	calls: new Map(),
+	accesses: new Map(),
+	observers: new Map(),
 };
 
 /**
  * Caller storage for record calls this variant sends to an emitted record entry.
- * Each field gets a rooted slot that the entry fills and the call's loads read;
- * calls that fall back to an ordinary entry keep their ordinary loads.
+ * Calls that fall back to an ordinary entry keep their ordinary result and uses.
  */
 function renderRecordCallSlots(
+	fn: BytecodeFunction,
 	native: NativeFunctionPlan,
 	callTransports: ReadonlyArray<NativeCallTransportPlan>,
 	directCompiledEntries: DirectCompiledEntries,
 	allocateSlot: () => number,
-): Pick<NativeRecordStorage, "loads" | "calls"> {
-	const loads = new Map<number, number>();
-	const calls = new Map<number, ReadonlyArray<number>>();
+): Omit<NativeRecordStorage, "allocations"> {
+	const calls = new Map<number, NativeRecordSite>();
+	const accesses = new Map<number, NativeRecordAccess>();
+	const observers = new Map<number, NativeRecordObserver>();
 	const transports = new Map(callTransports.map((plan) => [plan.instructionIp, plan]));
-	for (const site of native.recordCalls ?? []) {
-		const target = transports.get(site.callIp)?.targets[0];
+	for (const plan of native.recordCalls ?? []) {
+		const target = transports.get(plan.callIp)?.targets[0];
 		const entry =
 			target === undefined
 				? undefined
@@ -3533,11 +3557,24 @@ function renderRecordCallSlots(
 						directCompiledEntryKey(target.functionIndex, target.entryId),
 					);
 		if (entry?.resultFields === undefined) continue;
-		const slots = entry.resultFields.keys.map(allocateSlot);
-		calls.set(site.callIp, slots);
-		for (const load of site.loads) loads.set(load.instructionIp, slots[load.field]!);
+		const keys = entry.resultFields.keys;
+		const fieldSlot = allocateSlot();
+		for (let field = 1; field < keys.length; field++) allocateSlot();
+		const observed = plan.observerIps.length > 0;
+		const site: NativeRecordSite = {
+			fieldSlot,
+			keys,
+			...(observed ? { objectSlot: allocateSlot(), calleeSlot: allocateSlot() } : {}),
+		};
+		calls.set(plan.callIp, site);
+		for (const access of [...plan.loads, ...plan.stores])
+			accesses.set(access.instructionIp, { site, field: access.field });
+		if (!observed) continue;
+		const aliases = nativeRecordAliases(fn, plan);
+		for (const ip of plan.observerIps)
+			observers.set(ip, { site, aliases: aliases.get(ip) ?? [] });
 	}
-	return { loads, calls };
+	return { calls, accesses, observers };
 }
 
 function renderFieldCallSlots(
@@ -5588,7 +5625,8 @@ function emitBody(
 		fieldCall: undefined,
 		fieldThrowSlots: undefined,
 		recordAllocation: false,
-		recordLoad: undefined,
+		recordAccess: undefined,
+		recordObserver: undefined,
 		recordCall: undefined,
 		mathCall: undefined,
 		numberPredicate: undefined,
@@ -6110,7 +6148,8 @@ function emitBody(
 		instructionContext.constantBoolean = directConstantBooleans.get(ip);
 		instructionContext.fieldLoad = fieldLoads.get(ip);
 		instructionContext.recordAllocation = records.allocations.has(ip);
-		instructionContext.recordLoad = records.loads.get(ip);
+		instructionContext.recordAccess = records.accesses.get(ip);
+		instructionContext.recordObserver = records.observers.get(ip);
 		instructionContext.recordCall = records.calls.get(ip);
 		instructionContext.fieldAllocation = fieldAllocations.get(ip);
 		instructionContext.fieldCall = fieldCallSites.get(ip);
@@ -6637,10 +6676,12 @@ interface NativeInstructionContext {
 	readonly fieldThrowSlots?: ReadonlyArray<number>;
 	/** A record entry hands this allocation's fields to its caller instead of creating it. */
 	readonly recordAllocation?: boolean;
-	/** The caller storage slot of the record field this load reads. */
-	readonly recordLoad?: number;
-	/** The caller storage slots a record call's entry fills. */
-	readonly recordCall?: ReadonlyArray<number>;
+	/** A record field read or written in caller storage. */
+	readonly recordAccess?: NativeRecordAccess;
+	/** A use of a record that needs the object. */
+	readonly recordObserver?: NativeRecordObserver;
+	/** The caller storage a record call's entry fills. */
+	readonly recordCall?: NativeRecordSite;
 	readonly callTransport?: NativeCallTransportPlan;
 	readonly callbackTransport?: NativeCallbackTransportPlan;
 	readonly mathCall: NativeMathCallPlan | undefined;
@@ -8129,10 +8170,48 @@ function emitInstruction(
 			),
 			`r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
 		];
-	if (context.recordLoad !== undefined && instruction.opcode === "LOAD_PROPERTY_STATIC")
+	if (
+		context.recordAccess !== undefined &&
+		(instruction.opcode === "LOAD_PROPERTY_STATIC" ||
+			instruction.opcode === "STORE_PROPERTY_STATIC")
+	) {
+		const { site, field } = context.recordAccess;
+		const slot = `__gc_slots[${site.fieldSlot + field}]`;
+		const virtual =
+			instruction.opcode === "LOAD_PROPERTY_STATIC"
+				? `r${instruction.dst} = ${callValue(instruction.dst, slot)};`
+				: `${slot} = ${boxed(instruction.value)};`;
+		if (site.objectSlot === undefined) return [virtual];
+		// Once an observer created the object, it is the record: accesses go through it.
+		const ordinary = emitGenericInstruction();
+		if (ordinary === null) return null;
+		const object = `__gc_slots[${site.objectSlot}]`;
 		return [
-			`r${instruction.dst} = ${callValue(instruction.dst, `__gc_slots[${context.recordLoad}]`)};`,
+			`if (mal_value_is_undefined(${object})) {`,
+			`  ${virtual}`,
+			`} else {`,
+			`  r${instruction.object} = ${object};`,
+			...ordinary.map((line) => `  ${line}`),
+			`}`,
 		];
+	}
+	if (context.recordObserver !== undefined) {
+		const { site, aliases } = context.recordObserver;
+		const object = `__gc_slots[${site.objectSlot!}]`;
+		const ordinary = emitGenericInstruction();
+		if (ordinary === null) return null;
+		const keys = site.keys
+			.map((key) => `vm->string_constant_atoms[${relocation.stringIndex(key)}]`)
+			.join(", ");
+		return [
+			`if (mal_value_is_undefined(${object})) {`,
+			`  ${object} = mal_vm_materialize_record(vm, __gc_slots[${site.calleeSlot!}], (MalString *[]){${keys}}, &__gc_slots[${site.fieldSlot}], ${site.keys.length});`,
+			`  ${throwCheck()}`,
+			`}`,
+			...aliases.map((register) => `r${register} = ${object};`),
+			...ordinary,
+		];
+	}
 	if (context.fieldLoad !== undefined && instruction.opcode === "LOAD_PROPERTY_STATIC")
 		return [
 			context.fieldLoad.representation === "number"
@@ -12529,7 +12608,9 @@ function emitInstruction(
 					const directValue = `__direct_value_${ip}`;
 					const parameters = [
 						...directEntryParameters(transport),
-						...(context.recordCall ?? []).map((slot) => `&__gc_slots[${slot}]`),
+						...(context.recordCall?.keys.map(
+							(_, field) => `&__gc_slots[${context.recordCall!.fieldSlot + field}]`,
+						) ?? []),
 					];
 					if (
 						(context.recordCall !== undefined) !==
@@ -12546,6 +12627,12 @@ function emitInstruction(
 						`${cTypeOf(directEntry.resultRepresentation)} ${directValue} = mal_direct_${relocation.stem(target)}_${directEntry.id}${suffix}(vm, ${thisArgument}${parameters.length === 0 ? "" : `, ${parameters.join(", ")}`}, ${directEnvironment}, ${directCallee});`,
 						`if (MAL_THREW()) ${onThrow()}`,
 						`r${instruction.dst} = ${directResult};`,
+						...(context.recordCall?.objectSlot === undefined
+							? []
+							: [
+									`__gc_slots[${context.recordCall.objectSlot}] = MAL_VALUE_UNDEFINED;`,
+									`__gc_slots[${context.recordCall.calleeSlot!}] = ${directCallee};`,
+								]),
 						callPoll(),
 					];
 				}

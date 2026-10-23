@@ -851,6 +851,8 @@ export function mergeProgramImages(images: Array<ProgramImage>): MergedProgramIm
 				recordCalls: native.recordCalls?.map((site) => ({
 					callIp: site.callIp,
 					loads: site.loads.map((load) => ({ ...load })),
+					stores: site.stores.map((store) => ({ ...store })),
+					observerIps: [...site.observerIps],
 				})),
 				gc: {
 					safepoints: native.gc.safepoints.map((safepoint) => ({

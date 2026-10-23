@@ -220,7 +220,7 @@ export function coreNativeEntryProofIsCurrent(
 				(site.guarded === true) === (current.guarded === true) &&
 				site.fieldObject === current.fieldObject &&
 				site.fieldValueRepresentations === current.fieldValueRepresentations &&
-				site.resultLoads === current.resultLoads &&
+				site.recordUses === current.recordUses &&
 				site.builtinCallbackOperation === current.builtinCallbackOperation &&
 				site.builtinCallbackNumbers === current.builtinCallbackNumbers &&
 				site.numericSortCallback === current.numericSortCallback &&

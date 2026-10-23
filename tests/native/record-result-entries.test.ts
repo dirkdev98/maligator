@@ -30,6 +30,7 @@ describe("record result entries", () => {
 			name: "record-result-entries",
 			mainFile: HOST_MAIN,
 			outDir,
+			environment: { ...process.env, MAL_PERF_STATS: "1" },
 		}));
 	});
 
@@ -62,20 +63,29 @@ describe("record result entries", () => {
 			"describeAll",
 			"guarded",
 			"depth",
+			"observed",
+			"found",
+			"rejected",
 		])
 			expect(functionNamed(caller).recordCalls?.length ?? 0, caller).toBeGreaterThan(0);
+		expect(functionNamed("observed").recordCalls![0]!.observerIps.length).toBeGreaterThan(
+			0,
+		);
 		// Callers that keep the object need the ordinary entry and its fresh allocation.
 		expect(functionNamed("retainAll").recordCalls).toBeUndefined();
 	});
 
-	it("enters the record entries at run time", () => {
+	it("creates a record object only where an observer needs it", () => {
 		const result = spawnSync(compiled, [], {
 			encoding: "utf8",
 			env: { ...process.env, MAL_PERF_STATS: "1" },
 		});
 		expect(result.status, result.stderr || result.stdout).toBe(0);
-		const hits = Number(/direct_entry_hits=(\d+)/.exec(result.stderr)?.[1] ?? -1);
-		expect(hits).toBeGreaterThan(0);
+		const counter = (name: string) =>
+			Number(new RegExp(`${name}=(\\d+)`).exec(result.stderr)?.[1] ?? -1);
+		expect(counter("direct_entry_hits")).toBeGreaterThan(0);
+		// Eleven observed tokens in `observed`, plus the returned and the thrown token.
+		expect(counter("record_materializations")).toBe(13);
 	});
 
 	for (const [backend, binary] of [

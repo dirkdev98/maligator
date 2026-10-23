@@ -3413,6 +3413,13 @@ MalValue mal_vm_materialize_stack_object_fields(
 u64 mal_vm_stack_object_materialization_count(void);
 
 /**
+ * Create the object a record entry returned through caller storage, once some use
+ * needs it. `values` are the caller's rooted field slots in key order.
+ */
+MalValue mal_vm_materialize_record(
+    MalVm *vm, MalValue callee, struct MalString **keys, MalValue *values, u32 count);
+
+/**
  * Create a plain object directly in `shape` (built from the literal's static
  * keys) with `count` inline slots filled from `values` in key order. The
  * Both backends cache the immutable shape per literal site. See

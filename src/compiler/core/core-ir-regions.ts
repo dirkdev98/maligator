@@ -527,13 +527,24 @@ export interface CoreDirectEntryCallSite {
 	readonly numericSortCallbackViaCall?: true;
 	readonly fieldObject?: CoreInstructionId;
 	readonly fieldValueRepresentations?: ReadonlyArray<CorePlanRepresentation>;
-	/** The only uses of the call's result: reads of fields the entry returns in caller storage. */
-	readonly resultLoads?: ReadonlyArray<CoreEntryFieldLoad>;
+	/** Every use of the call's record result, whose fields the entry returns in caller storage. */
+	readonly recordUses?: CoreRecordUses;
 }
 
-export interface CoreEntryFieldLoad {
+export interface CoreRecordFieldAccess {
 	readonly instruction: CoreInstructionId;
 	readonly field: number;
+}
+
+/**
+ * The uses of a record kept in caller storage. Field reads and writes use that
+ * storage until the first observer on a path creates the object from it; from
+ * then on the object is the record, for these accesses as well.
+ */
+export interface CoreRecordUses {
+	readonly loads: ReadonlyArray<CoreRecordFieldAccess>;
+	readonly stores: ReadonlyArray<CoreRecordFieldAccess>;
+	readonly observers: ReadonlyArray<CoreInstructionId>;
 }
 
 /**

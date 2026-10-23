@@ -3,8 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../src/build-config.ts";
+import { buildCoreControlFlow } from "../src/compiler/core/core-ir-control-flow.ts";
 import { verifyCoreOptimizationPlan } from "../src/compiler/core/core-ir-region-validity.ts";
 import type { CoreDirectEntryPlan } from "../src/compiler/core/core-ir-regions.ts";
+import { analyzeCoreNativeEntry } from "../src/compiler/core/core-native-entry-analysis.ts";
 import { optimizeSemanticProgramToCore } from "../src/compiler/pipeline/compile-core-common.ts";
 import { analyzeEntrypoint } from "../src/compiler/pipeline/compile-program-common.ts";
 
@@ -77,9 +79,9 @@ console.log(widths("ab cde f"), retain("ab cd").length);`,
 		const entry = recordEntry("scan");
 		expect(entry?.resultFields?.allocations).toHaveLength(1);
 		expect(entry!.callSites.map((site) => site.caller)).toEqual([named("widths")]);
-		expect(entry!.callSites[0]!.resultLoads!.map((load) => load.field).sort()).toEqual([
-			0, 1, 1,
-		]);
+		expect(
+			entry!.callSites[0]!.recordUses!.loads.map((load) => load.field).sort(),
+		).toEqual([0, 1, 1]);
 		// No variant of a caller may route its record call to an ordinary-result entry.
 		for (const caller of core.plan.directEntries.filter(
 			(candidate) => candidate.function === named("widths"),
@@ -138,15 +140,28 @@ console.log(last("ab cd"));`,
 		);
 		const entry = recordEntry("scan")!;
 		const site = entry.callSites[0]!;
-		const forged = {
-			...entry,
-			callSites: [
-				{
-					...site,
-					resultLoads: site.resultLoads!.map((load) => ({ ...load, field: 0 })),
+		const callSites = [
+			{
+				...site,
+				recordUses: {
+					...site.recordUses!,
+					loads: site.recordUses!.loads.map((load) => ({ ...load, field: 0 })),
 				},
-			],
-		};
+			},
+		];
+		// A current representation proof isolates the record proof as the one that fails.
+		const variant = analyzeCoreNativeEntry(
+			core.program.function(entry.function),
+			buildCoreControlFlow(core.program, entry.function, { exceptions: true }),
+			entry.parameterRepresentations,
+			undefined,
+			callSites,
+			undefined,
+			undefined,
+			undefined,
+			entry.resultFields,
+		);
+		const forged = { ...entry, ...variant, callSites };
 		expect(() =>
 			verifyCoreOptimizationPlan(
 				core.program,
@@ -158,6 +173,6 @@ console.log(last("ab cd"));`,
 				},
 				core.context,
 			),
-		).toThrow(/record result proof|representation proof/);
+		).toThrow(/record result proof/);
 	});
 });

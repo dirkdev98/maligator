@@ -23,6 +23,7 @@ import type {
 	CorePlanCost,
 	CorePlanRepresentation,
 	CorePlanSpecialization,
+	CoreRecordFieldAccess,
 	VerifiedCoreOptimizationPlan,
 } from "./core-ir-regions.ts";
 import type {
@@ -42,7 +43,7 @@ import {
 import {
 	coreFieldArgumentProofIsCurrent,
 	coreRecordResultFields,
-	coreRecordResultLoads,
+	coreRecordResultUses,
 } from "./core-native-field-analysis.ts";
 import {
 	coreOperatorInputProofIsCurrent,
@@ -2022,7 +2023,7 @@ export function verifyCoreOptimizationPlan(
 				) ||
 				entry.fieldParameters !== undefined ||
 				entry.argumentRepresentations !== undefined ||
-				entry.callSites.some((site) => site.resultLoads === undefined)
+				entry.callSites.some((site) => site.recordUses === undefined)
 			)
 				fail(
 					`direct entry ${entry.function}:${entry.id} has no current record result proof`,
@@ -2239,21 +2240,36 @@ export function verifyCoreOptimizationPlan(
 					!coreFieldArgumentProofIsCurrent(caller, site, entry.fieldParameters!))
 			)
 				fail(`direct entry callsite ${key} has no current field argument proof`);
-			if (site.resultLoads !== undefined) {
-				const loads =
+			if (site.recordUses !== undefined) {
+				const current =
 					entry.resultFields === undefined
 						? undefined
-						: coreRecordResultLoads(caller, site.instruction, entry.resultFields.keys);
+						: coreRecordResultUses(caller, site.instruction, entry.resultFields.keys);
 				const emitted = blockProofs.get(site.caller)!.instructionOrder;
+				const sameAccesses = (
+					left: ReadonlyArray<CoreRecordFieldAccess>,
+					right: ReadonlyArray<CoreRecordFieldAccess>,
+				) =>
+					left.length === right.length &&
+					left.every(
+						(access, index) =>
+							access.instruction === right[index]!.instruction &&
+							access.field === right[index]!.field &&
+							emitted.has(access.instruction),
+					);
 				if (
-					loads === undefined ||
+					current === undefined ||
 					site.guarded === true ||
-					loads.length !== site.resultLoads.length ||
-					loads.some(
-						(load, index) =>
-							load.instruction !== site.resultLoads![index]!.instruction ||
-							load.field !== site.resultLoads![index]!.field ||
-							!emitted.has(load.instruction),
+					!sameAccesses(current.loads, site.recordUses.loads) ||
+					!sameAccesses(current.stores, site.recordUses.stores) ||
+					!sameNumbers(current.observers, site.recordUses.observers) ||
+					current.observers.some(
+						(observer) =>
+							!emitted.has(observer) &&
+							(caller.instructionKind(observer) === "operation" ||
+								!blockProofs
+									.get(site.caller)!
+									.included.has(caller.instructionBlock(observer))),
 					)
 				)
 					fail(`direct entry callsite ${key} has no current record result proof`);
