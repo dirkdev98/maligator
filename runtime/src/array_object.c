@@ -620,10 +620,17 @@ MalArrayObject *mal_array_object_new(MalHeap *heap, MalObject *prototype) {
 MalArrayObject *mal_array_object_new_from_values(
     MalHeap *heap, MalObject *prototype, const MalValue *values, u32 count
 ) {
-    MalArrayObject *array = mal_array_object_new_reserved(heap, prototype, count);
-    if (count > 0) {
-        mal_array_object_dense_build_values_reserved(array, 0, values, count);
+    u32 inline_capacity = mal_array_object_inline_capacity_for(count);
+    MalArrayObject *array = mal_array_object_new_inline(heap, prototype, inline_capacity);
+    if (count == 0) return array;
+    // A literal that fits its cell needs no reservation call to adopt the inline elements.
+    if (count <= inline_capacity) {
+        array->elements = mal_array_object_inline_elements(array);
+        array->capacity = inline_capacity;
+    } else if (!mal_array_object_fresh_dense_reserve_exact(array, count)) {
+        abort();
     }
+    mal_array_object_dense_build_values_reserved(array, 0, values, count);
     return array;
 }
 
