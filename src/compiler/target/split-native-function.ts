@@ -58,7 +58,7 @@ export function splitNativeFunction(
 		return undefined;
 	try {
 		const frame = buildFrame(source);
-		const graph = scanBlocks(source, frame);
+		const graph = scanBlocks(source, frame, policy);
 		let prologueCodeUnits = 0;
 		for (const line of source.prologue) prologueCodeUnits += line.length + 1;
 		const partition = partitionBlocks(graph, policy, prologueCodeUnits);
@@ -1206,18 +1206,42 @@ function isLabelLine(line: string): boolean {
 	return true;
 }
 
-function scanBlocks(source: NativeSplitSource, frame: Frame): Graph {
+function scanBlocks(
+	source: NativeSplitSource,
+	frame: Frame,
+	policy: NativeSplitPolicy,
+): Graph {
 	const { body, unitStarts } = source;
+	// Straight-line code longer than a part, such as a module's run of binding
+	// initializations, gets labels between instructions so the partition can divide it.
+	const cutCodeUnits = Math.max(1, Math.floor(policy.partCodeUnits / 4));
+	let nextLabel = 0;
+	for (const line of [...body, `${source.fallOffLabel}:;`])
+		if (isLabelLine(line)) nextLabel = Math.max(nextLabel, Number(line.slice(1, -2)) + 1);
 	const ranges: Array<ReadonlyArray<string>> = [];
 	let blockStart = unitStarts[0]!;
+	let blockLabel: string | undefined;
+	let blockCodeUnits = 0;
+	const close = (end: number) => {
+		const lines = body.slice(blockStart, end);
+		ranges.push(blockLabel === undefined ? lines : [blockLabel, ...lines]);
+	};
 	for (let unit = 1; unit < unitStarts.length; unit++) {
 		const start = unitStarts[unit]!;
-		if (start < body.length && start > blockStart && isLabelLine(body[start]!)) {
-			ranges.push(body.slice(blockStart, start));
-			blockStart = start;
-		}
+		for (let line = unitStarts[unit - 1]!; line < start; line++)
+			blockCodeUnits += body[line]!.length + 1;
+		if (start >= body.length || start <= blockStart) continue;
+		if (isLabelLine(body[start]!)) {
+			close(start);
+			blockLabel = undefined;
+		} else if (blockCodeUnits >= cutCodeUnits) {
+			close(start);
+			blockLabel = `L${nextLabel++}:;`;
+		} else continue;
+		blockStart = start;
+		blockCodeUnits = 0;
 	}
-	if (body.length > blockStart) ranges.push(body.slice(blockStart));
+	if (body.length > blockStart) close(body.length);
 	if (ranges.length === 0) decline("empty body");
 	ranges.push([`${source.fallOffLabel}:;`, ...source.fallOff]);
 	const labels = new Map<string, number>();

@@ -249,3 +249,114 @@ console.log(
 		]),
 	),
 );
+
+// A run of loads with no branch between them still divides at instruction boundaries.
+let copy0,
+	copy1,
+	copy2,
+	copy3,
+	copy4,
+	copy5,
+	copy6,
+	copy7,
+	copy8,
+	copy9,
+	copy10,
+	copy11,
+	copy12,
+	copy13,
+	copy14,
+	copy15,
+	copy16,
+	copy17,
+	copy18,
+	copy19;
+function unpack(record) {
+	copy0 = record.field0;
+	copy1 = record.field1;
+	copy2 = record.field2;
+	copy3 = record.field3;
+	copy4 = record.field4;
+	copy5 = record.field5;
+	copy6 = record.field6;
+	copy7 = record.field7;
+	copy8 = record.field8;
+	copy9 = record.field9;
+	copy10 = record.field10;
+	copy11 = record.field11;
+	copy12 = record.field12;
+	copy13 = record.field13;
+	copy14 = record.field14;
+	copy15 = record.field15;
+	copy16 = record.field16;
+	copy17 = record.field17;
+	copy18 = record.field18;
+	copy19 = record.field19;
+	const local20 = record.field20;
+	const local21 = record.field21;
+	const local22 = record.field22;
+	const local23 = record.field23;
+	const local24 = record.field24;
+	const local25 = record.field25;
+	const local26 = record.field26;
+	const local27 = record.field27;
+	const local28 = record.field28;
+	const local29 = record.field29;
+	const local30 = record.field30;
+	const local31 = record.field31;
+	const local32 = record.field32;
+	const local33 = record.field33;
+	const local34 = record.field34;
+	const local35 = record.field35;
+	const local36 = record.field36;
+	const local37 = record.field37;
+	const local38 = record.field38;
+	const local39 = record.field39;
+	return [
+		copy0,
+		copy1,
+		copy2,
+		copy3,
+		copy4,
+		copy5,
+		copy6,
+		copy7,
+		copy8,
+		copy9,
+		copy10,
+		copy11,
+		copy12,
+		copy13,
+		copy14,
+		copy15,
+		copy16,
+		copy17,
+		copy18,
+		copy19,
+		local20,
+		local21,
+		local22,
+		local23,
+		local24,
+		local25,
+		local26,
+		local27,
+		local28,
+		local29,
+		local30,
+		local31,
+		local32,
+		local33,
+		local34,
+		local35,
+		local36,
+		local37,
+		local38,
+		local39,
+	].join(",");
+}
+const unpacked = {};
+for (let index = 0; index < 40; index++) unpacked[`field${index}`] = index * 3;
+console.log(unpack(unpacked));
+unpacked.field7 = "seven";
+console.log(unpack(unpacked));

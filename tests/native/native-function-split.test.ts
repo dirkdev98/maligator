@@ -47,7 +47,7 @@ describe("outlined native function parts", () => {
 	}, 600_000);
 
 	it("outlines each large fixture function", () => {
-		for (const name of ["interpret", "classify", "survey"]) {
+		for (const name of ["interpret", "classify", "survey", "unpack"]) {
 			const native = functionNamed(image, name);
 			const emitted = emitCompiledFunction(
 				native,
