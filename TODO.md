@@ -42,6 +42,13 @@ rooting, and resource-safety defects can interrupt that order.
       path does not change that file set. Capture recursive directory membership and
       exercise add/remove changes without editing an existing source dependency.
 
+- [ ] Isolate `tests/native/forwarded-sort-callback.test.ts` from the eval
+      compiler's own sorts. It counts process-wide comparator nominations, and in
+      plain native builds the eval compiler runs as compiled code whose `.sort` calls
+      nominate their comparators too: the `fallbacks` case reads 22 and the eval
+      case 42 where the test expects 0 and 1. CI runs it only under sanitizers,
+      where the eval compiler is interpreted, so it passes there.
+
 - [ ] Find why `tests/native/node-fs-watch.test.ts` takes minutes on the macOS
       Native remainder runner. Its three tests take 5 to 8 s on Linux, but on macOS
       they ranged from 22 s to 972 s over ten runs on 2026-10-22 and 23, and one run
@@ -629,6 +636,14 @@ only reproducible input.
       runtime-helper, and direct-native allocations. OOM must remain catchable without
       corruption, lost roots, recursive failure, or partial observable objects.
 
+- [ ] Keep suspended generator frames in GC-managed storage. Compiled coroutines
+      take their register and argument buffers from a malloc'd pool, so a
+      generator that dies suspended needs a finalizer to return them. In the
+      JavaScript benchmark's async phase every generator ends suspended in its
+      `finally`, and that finalization is 11% of the phase (55 ms per round
+      against Node's 39). The compiled code allocates the registers before the
+      generator exists, so the change spans code emission and the coroutine runtime.
+
 - [ ] Deterministically release nonescaping RegExp and ICU handles at compiled scope
       end once ownership analysis proves their lifetime. Retain finalization for every
       uncertain path.
@@ -827,6 +842,13 @@ contracts or investigates costs still visible after the string follow-ups.
       `super.m()` in the first iteration's subclass calls the last iteration's
       base. Factory functions are unaffected because each call owns its slots.
       Give such evaluations their own class scope, as per-iteration bindings do.
+
+- [ ] Materialize a script function's lazy `prototype` before the function stops
+      being extensible. `Object.freeze`, `Object.seal`, `Object.preventExtensions`
+      and `Reflect.preventExtensions` on a constructor or generator whose
+      `prototype` was never read leave it without one, because the later lazy
+      definition is rejected: `Object.getOwnPropertyNames(Object.freeze(function f() {}))`
+      lists `length,name` where Node lists `length,name,prototype`.
 
 - [ ] Fix remaining RegExp @@replace protocol and coercion cases. Prefer shared
       replacement semantics over case-specific branches.
