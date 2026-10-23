@@ -18,6 +18,9 @@
 #include "array_object.h"
 #include "web_events_object.h"
 #include <time.h>
+#if defined(__aarch64__) && defined(__ARM_FEATURE_SHA2)
+#include <arm_neon.h>
+#endif
 #include "builtin_data_view.h"
 #include "builtin_math.h"
 #include "function_object.h"
@@ -72,6 +75,35 @@ static void mal_sha1_init(MalSha1 *ctx) {
     ctx->block_len = 0;
 }
 
+#if defined(__aarch64__) && defined(__ARM_FEATURE_SHA2)
+// Etags hash every response body; the SHA-1 instructions run four rounds per step.
+static void mal_sha1_compress(MalSha1 *ctx, const u8 *p) {
+    static const u32 round_constants[4] = {0x5a827999, 0x6ed9eba1, 0x8f1bbcdc, 0xca62c1d6};
+    uint32x4_t schedule[4];
+    for (int i = 0; i < 4; i++) {
+        schedule[i] = vreinterpretq_u32_u8(vrev32q_u8(vld1q_u8(p + i * 16)));
+    }
+    uint32x4_t initial_abcd = vld1q_u32(ctx->state);
+    uint32x4_t abcd = initial_abcd;
+    u32 e = ctx->state[4];
+    for (int group = 0; group < 20; group++) {
+        uint32x4_t words = vaddq_u32(schedule[group & 3], vdupq_n_u32(round_constants[group / 5]));
+        u32 next_e = vsha1h_u32(vgetq_lane_u32(abcd, 0));
+        if (group < 5) abcd = vsha1cq_u32(abcd, e, words);
+        else if (group >= 10 && group < 15) abcd = vsha1mq_u32(abcd, e, words);
+        else abcd = vsha1pq_u32(abcd, e, words);
+        e = next_e;
+        if (group < 16) {
+            schedule[group & 3] = vsha1su1q_u32(
+                vsha1su0q_u32(
+                    schedule[group & 3], schedule[(group + 1) & 3], schedule[(group + 2) & 3]),
+                schedule[(group + 3) & 3]);
+        }
+    }
+    vst1q_u32(ctx->state, vaddq_u32(initial_abcd, abcd));
+    ctx->state[4] += e;
+}
+#else
 static void mal_sha1_compress(MalSha1 *ctx, const u8 *p) {
     u32 w[80];
     for (int i = 0; i < 16; i++) {
@@ -112,10 +144,22 @@ static void mal_sha1_compress(MalSha1 *ctx, const u8 *p) {
     ctx->state[3] += d;
     ctx->state[4] += e;
 }
+#endif
 
 static void mal_sha1_update(MalSha1 *ctx, const u8 *data, usize len) {
-    for (usize i = 0; i < len; i++) {
-        ctx->block[ctx->block_len++] = data[i];
+    while (len != 0) {
+        if (ctx->block_len == 0 && len >= 64) {
+            mal_sha1_compress(ctx, data);
+            ctx->bit_len += 512;
+            data += 64;
+            len -= 64;
+            continue;
+        }
+        usize take = 64 - ctx->block_len < len ? 64 - ctx->block_len : len;
+        memcpy(ctx->block + ctx->block_len, data, take);
+        ctx->block_len += take;
+        data += take;
+        len -= take;
         if (ctx->block_len == 64) {
             mal_sha1_compress(ctx, ctx->block);
             ctx->bit_len += 512;
