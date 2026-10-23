@@ -17,6 +17,18 @@ typedef struct MalAsciiAtomCacheEntry {
     MalString *atom;
 } MalAsciiAtomCacheEntry;
 
+#define MAL_STATIC_SLOT_CACHE_CAPACITY 1024
+static_assert(
+    (MAL_STATIC_SLOT_CACHE_CAPACITY & (MAL_STATIC_SLOT_CACHE_CAPACITY - 1)) == 0,
+    "static slot cache capacity must be a power of two");
+
+/** Where a static runtime name sits in one shape; -1 records that the shape lacks it. */
+typedef struct MalStaticSlotCacheEntry {
+    const byte *name;
+    const struct MalShape *shape;
+    i32 index;
+} MalStaticSlotCacheEntry;
+
 /** Request-hot internal ASCII names cached per VM by mal_intrinsic_ascii. */
 typedef enum MalHotIntrinsicKey {
     MAL_HOT_KEY_EMPTY,
@@ -546,6 +558,13 @@ MalKey mal_intrinsic_string_key(MalVm *vm, const byte *name);
 
 /** name is immutable, NUL-terminated ASCII storage that outlives this VM. */
 MalKey mal_intrinsic_static_string_key(MalVm *vm, const byte *name);
+
+/**
+ * mal_object_get_own for a string literal `name`, which the runtime keeps reading
+ * from objects of a few recurring shapes. Like mal_intrinsic_static_string_key, it
+ * identifies the name by its address.
+ */
+MalPropertyLookup mal_object_get_own_static(MalVm *vm, const MalObject *object, const byte *name);
 
 /** Build a string property key directly from a measured hot-key identifier. */
 MalKey mal_intrinsic_hot_string_key(MalVm *vm, MalHotIntrinsicKey key);

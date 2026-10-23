@@ -46,7 +46,7 @@ static MalValue stream_own(MalVm *vm, MalValue object, const char *name) {
         return mal_value_new_undefined();
     }
     MalPropertyLookup lookup =
-        mal_object_get_own(mal_value_to_object(object), stream_static_key(vm, name));
+        mal_object_get_own_static(vm, mal_value_to_object(object), (const byte *) name);
     return lookup.present ? lookup.desc.value : mal_value_new_undefined();
 }
 

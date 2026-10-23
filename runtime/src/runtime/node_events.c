@@ -78,7 +78,7 @@ static MalObject *ee_events(MalVm *vm, MalValue receiver, bool create) {
     if (!ee_require_receiver(vm, receiver, &object)) {
         return nullptr;
     }
-    MalPropertyLookup lookup = mal_object_get_own(object, ee_hot_key(vm, MAL_HOT_KEY_EVENTS));
+    MalPropertyLookup lookup = mal_object_get_own_static(vm, object, (const byte *) "_events");
     if (lookup.present && mal_value_is_object(lookup.desc.value)) {
         return mal_value_to_object(lookup.desc.value);
     }
@@ -91,7 +91,7 @@ static MalObject *ee_events(MalVm *vm, MalValue receiver, bool create) {
     mal_gc_root(&root, &events_value, 1);
     mal_object_set(object, ee_hot_key(vm, MAL_HOT_KEY_EVENTS), events_value);
     mal_object_set(object, ee_hot_key(vm, MAL_HOT_KEY_EVENTS_COUNT), mal_value_from_i32(0));
-    if (!mal_object_get_own(object, ee_name_key(vm, "_maxListeners")).present) {
+    if (!mal_object_get_own_static(vm, object, (const byte *) "_maxListeners").present) {
         mal_object_set(object, ee_name_key(vm, "_maxListeners"), mal_value_new_undefined());
     }
     mal_gc_unroot(&root);
@@ -105,7 +105,7 @@ static void ee_set_event_count(MalVm *vm, MalValue receiver, i32 count) {
 
 static i32 ee_event_count(MalVm *vm, MalValue receiver) {
     MalPropertyLookup lookup =
-        mal_object_get_own(mal_value_to_object(receiver), ee_hot_key(vm, MAL_HOT_KEY_EVENTS_COUNT));
+        mal_object_get_own_static(vm, mal_value_to_object(receiver), (const byte *) "_eventsCount");
     return lookup.present && mal_value_is_int32(lookup.desc.value)
         ? mal_value_to_i32(lookup.desc.value)
         : 0;
@@ -757,7 +757,7 @@ static MalValue ee_get_max_listeners(
         return mal_value_new_undefined();
     }
     MalPropertyLookup lookup =
-        mal_object_get_own(object, ee_name_key(vm, "_maxListeners"));
+        mal_object_get_own_static(vm, object, (const byte *) "_maxListeners");
     return lookup.present && mal_ops_is_number(lookup.desc.value)
         ? lookup.desc.value : mal_ops_number_value(ee_default_max_listeners);
 }

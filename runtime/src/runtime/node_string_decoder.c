@@ -111,8 +111,8 @@ static bool sd_read_state(
     if (!branded.present || !mal_value_is_object(branded.desc.value)) goto mismatch;
 
     MalObject *object = mal_value_to_object(branded.desc.value);
-    MalPropertyLookup encoding = mal_object_get_own(object, sd_name_key(vm, "encoding"));
-    MalPropertyLookup pending = mal_object_get_own(object, sd_name_key(vm, "pending"));
+    MalPropertyLookup encoding = mal_object_get_own_static(vm, object, (const byte *) "encoding");
+    MalPropertyLookup pending = mal_object_get_own_static(vm, object, (const byte *) "pending");
     if (!encoding.present || !mal_value_is_int32(encoding.desc.value) ||
         !pending.present || !mal_value_is_int32(pending.desc.value)) {
         goto mismatch;

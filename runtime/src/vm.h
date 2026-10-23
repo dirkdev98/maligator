@@ -1967,6 +1967,9 @@ typedef struct MalVm {
      */
     MalAsciiAtomCacheEntry ascii_atom_cache[MAL_ASCII_ATOM_CACHE_CAPACITY];
 
+    /** Shape positions of static names, filled by mal_object_get_own_static. */
+    MalStaticSlotCacheEntry static_slot_cache[MAL_STATIC_SLOT_CACHE_CAPACITY];
+
     /**
      * Data properties that iteration protocols inherit through watched built-in
      * prototypes, keyed by the receiver's prototype. Entries are consulted only

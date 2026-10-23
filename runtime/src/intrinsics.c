@@ -414,6 +414,35 @@ MalKey mal_intrinsic_static_string_key(MalVm *vm, const byte *name) {
     return (MalKey) {.kind = MAL_KEY_STRING, .value = mal_value_from_string(atom)};
 }
 
+MalPropertyLookup mal_object_get_own_static(MalVm *vm, const MalObject *object, const byte *name) {
+    const MalShape *shape = object->shape;
+    MalStaticSlotCacheEntry *entry = &vm->static_slot_cache[
+        (u32) ((((uptr) name ^ ((uptr) shape >> 4)) * 0x9E3779B97F4A7C15ull) >> 32) &
+        (MAL_STATIC_SLOT_CACHE_CAPACITY - 1)];
+    // Shapes never change their props, but an overflow table can still hold the name.
+    bool shape_only = mal_object_overflow(object) == nullptr || object->overflow_private_only;
+    if (entry->name == name && entry->shape == shape && (entry->index >= 0 || shape_only)) {
+        if (entry->index < 0) return (MalPropertyLookup) {.present = false, .entry = nullptr};
+        const MalShapeProp *prop = &shape->props[entry->index];
+        return (MalPropertyLookup) {
+            .present = true,
+            .entry = nullptr,
+            .desc = {
+                .flags = (MalPropertyFlags) prop->attrs,
+                .value = mal_object_field_load(object, prop->slot),
+                .getter = mal_value_new_undefined(),
+                .setter = mal_value_new_undefined(),
+            },
+        };
+    }
+    MalKey key = mal_intrinsic_static_string_key(vm, name);
+    if (object->header.type != MAL_HEAP_ARRAY_OBJECT && shape != mal_shape_dictionary_empty()) {
+        i32 index = mal_shape_find(shape, key, MAL_SHAPE_FIND_GET_OWN);
+        if (index >= 0 || shape_only) *entry = (MalStaticSlotCacheEntry) {name, shape, index};
+    }
+    return mal_object_get_own(object, key);
+}
+
 MalKey mal_intrinsic_hot_string_key(MalVm *vm, MalHotIntrinsicKey key) {
     return (MalKey) {
         .kind = MAL_KEY_STRING,
