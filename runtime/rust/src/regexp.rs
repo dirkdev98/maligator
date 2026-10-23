@@ -1003,6 +1003,8 @@ const RESULT_MEMO_STARTS: usize = 8;
 /// A match depends only on the subject's code units and the start position.
 struct ResultMemo {
     subject: Vec<u8>,
+    /// EXEC_ASCII or EXEC_NON_ASCII: the matcher a hit stands in for.
+    subject_class: u32,
     results: Vec<(usize, Option<Match>)>,
 }
 
@@ -1017,12 +1019,13 @@ impl ResultMemo {
             .map(|(_, found)| found)
     }
 
-    fn record(&mut self, subject: &[u8], start: usize, found: &Option<Match>) {
+    fn record(&mut self, subject: &[u8], subject_class: u32, start: usize, found: &Option<Match>) {
         if self.subject.as_slice() != subject {
             self.subject.clear();
             self.subject.extend_from_slice(subject);
             self.results.clear();
         }
+        self.subject_class = subject_class;
         if self.results.len() == RESULT_MEMO_STARTS {
             self.results.remove(0);
         }
@@ -1544,14 +1547,11 @@ pub unsafe extern "C" fn mal_regexp_exec_latin1(
 
     let memoized = subject_len <= RESULT_MEMO_SUBJECT_BYTES;
     if memoized {
-        if let Some(found) = cp
-            .result_memo
-            .as_ref()
-            .and_then(|memo| memo.lookup(subj, start))
-            .cloned()
-        {
+        if let Some((found, subject_class)) = cp.result_memo.as_ref().and_then(|memo| {
+            memo.lookup(subj, start).map(|found| (found.clone(), memo.subject_class))
+        }) {
             if !execution_flags_out.is_null() {
-                unsafe { *execution_flags_out = EXEC_LATIN1 | EXEC_CACHE_HIT };
+                unsafe { *execution_flags_out = EXEC_LATIN1 | EXEC_CACHE_HIT | subject_class };
             }
             return finish_exec(cp, found, caps_out, caps_cap);
         }
@@ -1620,9 +1620,10 @@ pub unsafe extern "C" fn mal_regexp_exec_latin1(
         cp.result_memo
             .get_or_insert_with(|| ResultMemo {
                 subject: Vec::new(),
+                subject_class: 0,
                 results: Vec::new(),
             })
-            .record(subj, start, &found);
+            .record(subj, execution_flags & (EXEC_ASCII | EXEC_NON_ASCII), start, &found);
     }
     finish_exec(cp, found, caps_out, caps_cap)
 }
