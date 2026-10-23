@@ -812,12 +812,6 @@ contracts or investigates costs still visible after the string follow-ups.
 - [ ] Fix remaining RegExp @@replace protocol and coercion cases. Prefer shared
       replacement semantics over case-specific branches.
 
-- [ ] Set `RegExp.lastParen` from the last capture group. The legacy-features
-      proposal and V8 use the last element of the captured values, an empty String
-      when that group did not participate, for any group count; the runtime returns
-      the highest participating group up to `$9`, and `tests/local/regexp_cache.js`
-      asserts that (`/(a)(b)(c)?/` yields "b" instead of "").
-
 - [ ] Fix remaining arguments-object legacy caller and parameter-expression behavior.
       Cover strict, sloppy, mapped, and unmapped forms.
       A statically declared sloppy function returning its mapped arguments can

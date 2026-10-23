@@ -83,6 +83,9 @@ typedef enum RegexpLegacySlot {
     REGEXP_LEGACY_SLOT_SUBJECT,
     REGEXP_LEGACY_SLOT_MATCH_START,
     REGEXP_LEGACY_SLOT_MATCH_END,
+    /** The last group of the pattern, which `lastParen` reads however many there are. */
+    REGEXP_LEGACY_SLOT_LAST_PAREN_START,
+    REGEXP_LEGACY_SLOT_LAST_PAREN_END,
     /** Recorded paren pairs; later pairs read as non-participating. */
     REGEXP_LEGACY_SLOT_PAREN_RECORDED,
     REGEXP_LEGACY_SLOT_PAREN_START,
@@ -136,6 +139,11 @@ static void regexp_legacy_update(
     regexp_legacy_store(vm, REGEXP_LEGACY_SLOT_SUBJECT, subject_value);
     regexp_legacy_store_position(vm, REGEXP_LEGACY_SLOT_MATCH_START, captures[0]);
     regexp_legacy_store_position(vm, REGEXP_LEGACY_SLOT_MATCH_END, captures[1]);
+    i32 last = group_count - 1;
+    regexp_legacy_store_position(
+        vm, REGEXP_LEGACY_SLOT_LAST_PAREN_START, last > 0 ? captures[2 * last] : -1);
+    regexp_legacy_store_position(
+        vm, REGEXP_LEGACY_SLOT_LAST_PAREN_END, last > 0 ? captures[2 * last + 1] : -1);
     i32 recorded = group_count - 1 < REGEXP_LEGACY_PAREN_COUNT
         ? group_count - 1 : REGEXP_LEGACY_PAREN_COUNT;
     regexp_legacy_store_position(vm, REGEXP_LEGACY_SLOT_PAREN_RECORDED, recorded);
@@ -177,13 +185,12 @@ static MalValue regexp_legacy_read(MalVm *vm, RegexpLegacyField field) {
     case REGEXP_LEGACY_RIGHT_CONTEXT:
         return regexp_substring(
             vm, subject, match_end, (i32) mal_string_length(subject));
-    case REGEXP_LEGACY_LAST_PAREN:
-        for (i32 group = REGEXP_LEGACY_PAREN_COUNT; group >= 1; group--) {
-            if (regexp_legacy_paren_participated(vm, group)) {
-                return regexp_legacy_paren(vm, subject, group);
-            }
-        }
-        return mal_value_from_string(mal_intrinsic_ascii(vm, ""));
+    case REGEXP_LEGACY_LAST_PAREN: {
+        i32 start = regexp_legacy_load_position(vm, REGEXP_LEGACY_SLOT_LAST_PAREN_START);
+        if (start < 0) return mal_value_from_string(mal_intrinsic_ascii(vm, ""));
+        return regexp_substring(
+            vm, subject, start, regexp_legacy_load_position(vm, REGEXP_LEGACY_SLOT_LAST_PAREN_END));
+    }
     default:
         return regexp_legacy_paren(vm, subject, (i32) (field - REGEXP_LEGACY_PAREN_1) + 1);
     }

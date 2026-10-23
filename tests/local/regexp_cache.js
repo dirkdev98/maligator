@@ -41,7 +41,7 @@ check(
 	"legacy RegExp statics preserve the last successful match",
 	RegExp.input === "prefix-ab-suffix" &&
 		RegExp.lastMatch === "ab" &&
-		RegExp.lastParen === "b" &&
+		RegExp.lastParen === "" &&
 		RegExp.leftContext === "prefix-" &&
 		RegExp.rightContext === "-suffix" &&
 		RegExp.$1 === "a" &&
@@ -70,6 +70,14 @@ check(
 		RegExp.leftContext === "Ā-" &&
 		RegExp.rightContext === "Ă",
 );
+/(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)/.exec("abcdefghij");
+check(
+	"legacy lastParen reads the pattern's last group past $9",
+	RegExp.lastParen === "j" && RegExp["$+"] === "j" && RegExp.$9 === "i",
+);
+/x/.exec("x");
+check("legacy lastParen is empty without groups", RegExp.lastParen === "");
+/x(ā)|(y)/.test("Ā-yĂ");
 /z/.test("no match");
 check("a failed match leaves the legacy RegExp statics", RegExp.lastMatch === "y");
 
