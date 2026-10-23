@@ -835,9 +835,8 @@ contracts or investigates costs still visible after the string follow-ups.
       dependent multiply per code unit.
 
 - [ ] Remove per-match allocations from RegExp execution. regress builds a fresh
-      backtracking executor for every exec, and each RegExp literal evaluation
-      allocates a compiled-pattern handle freed at finalization; together with
-      result arrays they dominate `primordial-string-regexp-projections`. In the
+      backtracking executor for every exec; together with result arrays it
+      dominates `primordial-string-regexp-projections`. In the
       Express in-process route RegExp execution took about 11% of the samples:
       backtracking under a third of that and malloc/free about as much, from each
       match's capture vector and from widening Latin-1 subjects for patterns with
