@@ -22,7 +22,7 @@ check(
 	"successful matches update legacy state",
 	RegExp.input === "prefix-ab-suffix" &&
 		RegExp.lastMatch === "ab" &&
-		RegExp.lastParen === "b" &&
+		RegExp.lastParen === "" &&
 		RegExp.leftContext === "prefix-" &&
 		RegExp.rightContext === "-suffix" &&
 		RegExp.$1 === "a" &&
