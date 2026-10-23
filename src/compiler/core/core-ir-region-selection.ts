@@ -117,7 +117,7 @@ import type {
 type CorePendingClaims = Pick<
 	CorePlanSpecialization,
 	"function" | "composition" | "claimedInstructions"
-> & { readonly kind: CorePlanSpecializationKind | "field-call" | "record-object" };
+> & { readonly kind: CorePlanSpecializationKind | "field-call" | "record-storage" };
 
 export interface CorePendingOptimizationCandidate {
 	readonly budget: CoreTransformCandidate;
@@ -2273,6 +2273,46 @@ function linkRecordForwards(
 	});
 }
 
+/**
+ * The instructions a record entry renders against caller storage: its calls, the
+ * literals it keeps there, and every access and pass of those records and of its
+ * record parameters. Other plans may not lower them; observers stay shared, since
+ * they only need the object first.
+ */
+function recordStorageClaims(
+	candidate: PendingDirectEntry,
+	site: CoreDirectEntryCallSite,
+): ReadonlyArray<CorePendingClaims> {
+	const owned = (uses: CoreRecordUses) => [
+		...uses.loads.map((load) => load.instruction),
+		...uses.stores.map((store) => store.instruction),
+		...(uses.passes ?? []).map((pass) => pass.instruction),
+	];
+	const claim = (
+		functionId: CoreFunctionId,
+		claimedInstructions: ReadonlyArray<CoreInstructionId>,
+	): CorePendingClaims => ({
+		function: functionId,
+		kind: "record-storage",
+		composition: "exclusive",
+		claimedInstructions,
+	});
+	return [
+		...(site.recordUses === undefined
+			? []
+			: [claim(site.caller, [site.instruction, ...owned(site.recordUses)])]),
+		...(site.recordObjects ?? []).map((object) =>
+			claim(site.caller, [object.allocation, ...owned(object.uses)]),
+		),
+		// The callee's record parameters claim once, with its first call site.
+		...(site === candidate.callSites[0]
+			? (candidate.recordParameters ?? []).map((parameter) =>
+					claim(candidate.function, owned(parameter.uses)),
+				)
+			: []),
+	];
+}
+
 function conflicts(
 	selection: CorePendingClaims,
 	claimed: ReadonlyMap<CoreFunctionId, ReadonlyMap<CoreInstructionId, ClaimState>>,
@@ -2282,9 +2322,17 @@ function conflicts(
 		const state = owned?.get(instruction);
 		if (state === undefined) return false;
 		if (selection.kind === "field-call" && state.overlays.has("field-call")) return false;
-		// Calls that hand over the same literal share its storage.
-		if (selection.kind === "record-object" && state.overlays.has("record-object"))
-			return false;
+		// Record entries share caller storage, and their calls are exact, so an exact-call
+		// plan composes with them; any other plan would lower those instructions itself.
+		if (selection.kind === "record-storage")
+			return (
+				state.exclusive ||
+				[...state.overlays].some(
+					(kind) => kind !== "record-storage" && kind !== "guarded-direct-call",
+				)
+			);
+		if (state.overlays.has("record-storage") && selection.kind !== "guarded-direct-call")
+			return true;
 		if (selection.kind === "guarded-direct-call" && state.exclusive) return true;
 		if (
 			selection.composition === "exclusive" &&
@@ -2300,7 +2348,7 @@ function conflicts(
 
 interface ClaimState {
 	exclusive: boolean;
-	readonly overlays: Set<CorePlanSpecializationKind | "field-call" | "record-object">;
+	readonly overlays: Set<CorePlanSpecializationKind | "field-call" | "record-storage">;
 }
 
 function claim(
@@ -2314,11 +2362,12 @@ function claim(
 			exclusive: false,
 			overlays: new Set(),
 		};
-		if (selection.composition === "exclusive") state.exclusive = true;
+		if (selection.composition === "exclusive" && selection.kind !== "record-storage")
+			state.exclusive = true;
 		if (
 			selection.composition !== "exclusive" ||
 			selection.kind === "field-call" ||
-			selection.kind === "record-object"
+			selection.kind === "record-storage"
 		)
 			state.overlays.add(selection.kind);
 		owned.set(instruction, state);
@@ -2557,12 +2606,7 @@ export function buildCoreOptimizationPlan(
 										claimedInstructions: [site.fieldObject],
 									},
 								]),
-						...(site.recordObjects ?? []).map((object) => ({
-							function: site.caller,
-							kind: "record-object" as const,
-							composition: "exclusive" as const,
-							claimedInstructions: [object.allocation],
-						})),
+						...recordStorageClaims(candidate, site),
 					])
 				: [candidate.claims];
 			let reason: CoreTransformDeclineReason | undefined = service.admit(budget);

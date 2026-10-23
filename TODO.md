@@ -132,7 +132,10 @@ The independent target boundary and current storage contract are recorded in
       result virtualizations, and slowed the self-compile run by 1.5%. Direct-entry
       opportunities sum their call weights while local ones take their best
       instruction, so a flat weight cannot trade saved records against saved
-      iterators.
+      iterators. Limiting the weight to callees of at most 64 instructions kept
+      `operandShape` and `#touchEdge` while losing only 5 cursors and 9
+      virtualizations, yet the run was still 1.2% slower (16.13 s against 15.94 s,
+      three interleaved pairs), with 8.8% more time in the emit phase.
 
 - [ ] Stream the product CLI's translation units to disk. Its build keeps the CLI's
       emitted C, 650 MB with the worker root's, in memory while it compiles the

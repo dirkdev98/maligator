@@ -495,6 +495,26 @@ function codeAt(text, position) {
 	return text.charCodeAt(position);
 }
 
+// One call hands over a record literal and creates another literal's stack object.
+const lastOthers = [];
+function spanPlus(span, other) {
+	lastOthers[0] = other;
+	let length = 0;
+	for (let index = span.start; index < span.end; index++) length++;
+	return length + other.k;
+}
+function spanSums(count) {
+	let total = 0;
+	for (let index = 0; index < count; index++) {
+		const span = { start: index, end: index + 3 };
+		const other = { k: index };
+		if (index % 2 === 0) other.k = index * 2;
+		total += other.k;
+		total += spanPlus(span, other);
+	}
+	return total;
+}
+
 const text = "a1 bb22 ccc333 dddd4444 ".repeat(20);
 check(tokenLengths(text), 600, "token lengths");
 check(digitCount(text), 200, "digit count");
@@ -583,6 +603,8 @@ check(
 	"record parameter coerced by a builtin",
 );
 check(positionCoercions, 1, "record parameter coercions");
+check(spanSums(10), 160, "record literal beside a stack object");
+check(lastOthers[0].k, 9, "stack object beside a record literal");
 const handlers = attach(["a", "try-b", "cc", "try-dd", "e", "f", "try-g"], []);
 check(
 	handlers.map((environment) => `${environment.state}@${environment.version}`).join(","),
