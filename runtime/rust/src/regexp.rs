@@ -989,9 +989,45 @@ struct CompiledPattern {
     /// folding, while ECMAScript may require Unicode-aware canonicalization.
     ascii_eligible: bool,
     subject_cache: Option<SubjectCache>,
+    result_memo: Option<ResultMemo>,
     last: Option<Match>,
     fast_last_groups: i32,
     fast_last_captures: [i32; FAST_CAPTURE_SLOTS],
+}
+
+const RESULT_MEMO_SUBJECT_BYTES: usize = 256;
+const RESULT_MEMO_STARTS: usize = 8;
+
+/// Short Latin-1 subjects such as header values recur from request to request
+/// in fresh strings, so a pattern keeps the matches it found in the last one.
+/// A match depends only on the subject's code units and the start position.
+struct ResultMemo {
+    subject: Vec<u8>,
+    results: Vec<(usize, Option<Match>)>,
+}
+
+impl ResultMemo {
+    fn lookup(&self, subject: &[u8], start: usize) -> Option<&Option<Match>> {
+        if self.subject.as_slice() != subject {
+            return None;
+        }
+        self.results
+            .iter()
+            .find(|(memo_start, _)| *memo_start == start)
+            .map(|(_, found)| found)
+    }
+
+    fn record(&mut self, subject: &[u8], start: usize, found: &Option<Match>) {
+        if self.subject.as_slice() != subject {
+            self.subject.clear();
+            self.subject.extend_from_slice(subject);
+            self.results.clear();
+        }
+        if self.results.len() == RESULT_MEMO_STARTS {
+            self.results.remove(0);
+        }
+        self.results.push((start, found.clone()));
+    }
 }
 
 impl CompiledPattern {
@@ -1007,6 +1043,7 @@ impl CompiledPattern {
             unicode_mode,
             ascii_eligible,
             subject_cache: None,
+            result_memo: None,
             last: None,
             fast_last_groups: 0,
             fast_last_captures: [-1; FAST_CAPTURE_SLOTS],
@@ -1505,6 +1542,21 @@ pub unsafe extern "C" fn mal_regexp_exec_latin1(
         return fast_exec(cp, subj, start, caps_out, caps_cap);
     }
 
+    let memoized = subject_len <= RESULT_MEMO_SUBJECT_BYTES;
+    if memoized {
+        if let Some(found) = cp
+            .result_memo
+            .as_ref()
+            .and_then(|memo| memo.lookup(subj, start))
+            .cloned()
+        {
+            if !execution_flags_out.is_null() {
+                unsafe { *execution_flags_out = EXEC_LATIN1 | EXEC_CACHE_HIT };
+            }
+            return finish_exec(cp, found, caps_out, caps_cap);
+        }
+    }
+
     let string_identity = subject_identity as usize;
     let mut execution_flags = EXEC_LATIN1;
     let cache_hit = cp.subject_cache.as_ref().is_some_and(|cache| {
@@ -1563,6 +1615,14 @@ pub unsafe extern "C" fn mal_regexp_exec_latin1(
     };
     if !execution_flags_out.is_null() {
         unsafe { *execution_flags_out = execution_flags };
+    }
+    if memoized {
+        cp.result_memo
+            .get_or_insert_with(|| ResultMemo {
+                subject: Vec::new(),
+                results: Vec::new(),
+            })
+            .record(subj, start, &found);
     }
     finish_exec(cp, found, caps_out, caps_cap)
 }
