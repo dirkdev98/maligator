@@ -3600,6 +3600,16 @@ MalValue mal_vm_call_known_native(MalVm *vm, MalNativeFunctionCallback callback,
             return completion.value;
         }
     }
+    // `new P(...)` of a loaded primordial with P as new.target, such as a regex literal.
+    if (flags == 1 && callback != nullptr && (u32) operation < MAL_KNOWN_OPERATION_COUNT) {
+        MalValue loaded = vm->known_primordial_values[nodes[operation]];
+        if (loaded != 0 && receiver == loaded) {
+            MalCompletion completion =
+                mal_vm_construct_exact_native(vm, callback, loaded, args, count, receiver);
+            if (completion.kind == MAL_COMPLETION_THROW) vm->completion = completion;
+            return completion.value;
+        }
+    }
 #endif
     i32 mode = flags >> 1;
     bool construct = (flags & 1) != 0;
