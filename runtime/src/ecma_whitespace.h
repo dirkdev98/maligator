@@ -5,6 +5,8 @@
 /* ECMAScript String WhiteSpace plus LineTerminator code points. Grammar-specific
  * sets such as JSON whitespace and WHATWG ASCII whitespace intentionally differ. */
 static inline bool mal_ecma_is_string_whitespace(c16 unit) {
+    // Printable ASCII and the C1 controls hold none; the switch stays off their hot path.
+    if (unit > 0x0020 && unit < 0x00A0) return false;
     switch (unit) {
         case 0x0009:
         case 0x000A:
