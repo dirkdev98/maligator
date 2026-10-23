@@ -1,8 +1,9 @@
-import type { KnownBuiltinCall } from "../shared/compiler-facts.ts";
+import type { KnownBuiltinCall, WorldFacts } from "../shared/compiler-facts.ts";
 import {
 	compilerFactIsWorldInvariant,
 	knownBuiltinCallProves,
 } from "../shared/compiler-facts.ts";
+import { provePrimordialAccess } from "../shared/primordial-catalog.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import type { CoreLocalFactBundle } from "./core-ir-provenance.ts";
 import type {
@@ -15,7 +16,7 @@ import type {
 } from "./core-ir-regions.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import type { CoreFunctionId, CoreInstructionId, CoreValueId } from "./core-ir.ts";
-import type { CoreFunctionStore } from "./core-store.ts";
+import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 import { coreFunctionVersionsAreCurrent } from "./core-store.ts";
 import type { CoreFunctionVersions } from "./core-store.ts";
 
@@ -253,6 +254,28 @@ function returnedAllocation(
 	return undefined;
 }
 
+/** A key no locked `Object.prototype` has, so reading it from a plain literal finds undefined. */
+export function coreRecordKeyAbsent(
+	world: WorldFacts,
+	program: CoreProgram,
+	key: number,
+): boolean {
+	return (
+		provePrimordialAccess(
+			world,
+			{
+				kind: "fresh-allocation",
+				prototype: "Object.prototype",
+				realm: "current",
+				ownKeys: [],
+				ownKeysComplete: true,
+				stableUntilRead: true,
+			},
+			program.stringConstantText(key),
+		)?.kind === "absent"
+	);
+}
+
 /** Whether every return of `fn` returns an object literal: the cheap shape of a record producer. */
 export function coreReturnsObjectLiterals(fn: CoreFunctionStore): boolean {
 	let returns = 0;
@@ -277,7 +300,8 @@ export function coreReturnsObjectLiterals(fn: CoreFunctionStore): boolean {
 /**
  * The record every reachable return of `fn` creates, when no other code can observe it.
  * With `forwardTarget`, a return may also hand back the result of an exact call to a
- * function whose own returns are such literals, with the same keys.
+ * function whose own returns are such literals, with the same keys. With `absentKey`,
+ * literals may differ in keys when a read of each missing key provably finds nothing.
  */
 export function coreRecordResultFields(
 	fn: CoreFunctionStore,
@@ -287,6 +311,7 @@ export function coreRecordResultFields(
 	) =>
 		| { readonly target: CoreFunctionId; readonly keys: ReadonlyArray<number> }
 		| undefined,
+	absentKey?: (key: number) => boolean,
 ): CoreEntryResultFields | undefined {
 	if (
 		fn.isGenerator ||
@@ -296,8 +321,9 @@ export function coreRecordResultFields(
 	)
 		return undefined;
 	let keys: ReadonlyArray<number> | undefined;
-	const allocations = new Set<CoreInstructionId>();
+	const allocations = new Map<CoreInstructionId, ReadonlyArray<number>>();
 	const forwards = new Map<CoreInstructionId, CoreFunctionId>();
+	let union = false;
 	const sameKeys = (candidate: ReadonlyArray<number>) =>
 		keys === undefined ||
 		(keys.length === candidate.length &&
@@ -316,6 +342,7 @@ export function coreRecordResultFields(
 			const forward = forwardTarget?.(allocation);
 			if (
 				forward === undefined ||
+				union ||
 				!sameKeys(forward.keys) ||
 				!onlyReturned(
 					fn,
@@ -333,28 +360,55 @@ export function coreRecordResultFields(
 			!Array.isArray(allocationKeys) ||
 			allocationKeys.length === 0 ||
 			allocationKeys.length > MAX_RESULT_FIELDS ||
-			!sameKeys(allocationKeys.map(Number)) ||
 			!onlyReturned(fn, fn.kernel.resultAt(fn.kernel.instructionResultStart(allocation)))
 		)
 			return undefined;
-		keys ??= Object.freeze(allocationKeys.map(Number));
-		allocations.add(allocation);
+		const own = Object.freeze(allocationKeys.map(Number));
+		if (!sameKeys(own)) {
+			if (absentKey === undefined || forwards.size > 0) return undefined;
+			union = true;
+		}
+		keys ??= own;
+		allocations.set(allocation, own);
 	}
-	return keys === undefined
-		? undefined
-		: Object.freeze({
-				keys,
-				allocations: Object.freeze([...allocations].sort((left, right) => left - right)),
-				...(forwards.size === 0
-					? {}
-					: {
-							forwards: Object.freeze(
-								[...forwards]
-									.sort(([left], [right]) => left - right)
-									.map(([instruction, target]) => Object.freeze({ instruction, target })),
-							),
-						}),
-			});
+	if (keys === undefined) return undefined;
+	const ordered = [...allocations.keys()].sort((left, right) => left - right);
+	let shapes: ReadonlyArray<ReadonlyArray<number>> | undefined;
+	if (union) {
+		const all: Array<number> = [];
+		for (const allocation of ordered)
+			for (const key of allocations.get(allocation)!)
+				if (!all.includes(key)) all.push(key);
+		if (
+			all.length > MAX_RESULT_FIELDS ||
+			all.some(
+				(key) =>
+					ordered.some((allocation) => !allocations.get(allocation)!.includes(key)) &&
+					!absentKey!(key),
+			)
+		)
+			return undefined;
+		keys = Object.freeze(all);
+		shapes = Object.freeze(
+			ordered.map((allocation) =>
+				Object.freeze(allocations.get(allocation)!.map((key) => all.indexOf(key))),
+			),
+		);
+	}
+	return Object.freeze({
+		keys,
+		allocations: Object.freeze(ordered),
+		...(shapes === undefined ? {} : { shapes }),
+		...(forwards.size === 0
+			? {}
+			: {
+					forwards: Object.freeze(
+						[...forwards]
+							.sort(([left], [right]) => left - right)
+							.map(([instruction, target]) => Object.freeze({ instruction, target })),
+					),
+				}),
+	});
 }
 
 const MAX_RECORD_OBSERVERS = 8;
@@ -394,8 +448,12 @@ export function coreRecordResultUses(
 	fn: CoreFunctionStore,
 	cfg: CoreControlFlow,
 	call: CoreInstructionId,
-	keys: ReadonlyArray<number>,
+	fields: CoreEntryResultFields,
 ): CoreRecordUses | undefined {
+	const keys = fields.keys;
+	// Writing a key some literal lacks would change that record's shape.
+	const storable = (field: number) =>
+		fields.shapes?.every((shape) => shape.includes(field)) ?? true;
 	if (
 		fn.isGenerator ||
 		fn.isAsync ||
@@ -440,7 +498,8 @@ export function coreRecordResultUses(
 				(opcode === "loadPropertyStatic" || opcode === "storePropertyStatic")
 					? keys.indexOf(fn.instructionAttributes(instruction).stringIndex as number)
 					: -1;
-			if (field < 0) observers.add(instruction);
+			if (field < 0 || (opcode === "storePropertyStatic" && !storable(field)))
+				observers.add(instruction);
 			else
 				(opcode === "loadPropertyStatic" ? loads : stores).push({ instruction, field });
 		}

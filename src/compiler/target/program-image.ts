@@ -1488,6 +1488,11 @@ export interface NativeDirectEntryPlan {
 	readonly resultFields?: {
 		readonly keys: ReadonlyArray<number>;
 		readonly allocationIps: ReadonlyArray<number>;
+		/**
+		 * For literals that differ in keys, each allocation's keys as field indices in its
+		 * own order. The entry then writes a shape index after the fields.
+		 */
+		readonly shapes?: ReadonlyArray<ReadonlyArray<number>>;
 		/** Exact calls of literal record producers whose result is returned unchanged. */
 		readonly forwards?: ReadonlyArray<{
 			readonly callIp: number;
@@ -1788,6 +1793,15 @@ function validateNativeRecordReturns(
 		results.keys.length === 0 ||
 		results.keys.length > NATIVE_RECORD_FIELD_LIMIT ||
 		new Set(results.keys).size !== results.keys.length ||
+		(results.shapes !== undefined &&
+			(forwardIps.length > 0 ||
+				results.shapes.length !== results.allocationIps.length ||
+				results.shapes.some(
+					(shape) =>
+						shape.length === 0 ||
+						new Set(shape).size !== shape.length ||
+						shape.some((field) => !(field >= 0 && field < results.keys.length)),
+				))) ||
 		producers.length === 0 ||
 		new Set(producers).size !== producers.length
 	)
@@ -1799,13 +1813,20 @@ function validateNativeRecordReturns(
 		const allocation = fn.instructions[ip];
 		if (allocation?.opcode === "CALL") {
 			if (!forwardIps.includes(ip)) fail();
-		} else if (
-			allocation?.opcode !== "CREATE_OBJECT_SHAPED" ||
-			forwardIps.includes(ip) ||
-			allocation.keyStringIndices.length !== results.keys.length ||
-			allocation.keyStringIndices.some((key, index) => key !== results.keys[index])
-		)
-			fail();
+		} else {
+			const shape =
+				results.shapes?.[results.allocationIps.indexOf(ip)] ??
+				results.keys.map((_, field) => field);
+			if (
+				allocation?.opcode !== "CREATE_OBJECT_SHAPED" ||
+				forwardIps.includes(ip) ||
+				allocation.keyStringIndices.length !== shape.length ||
+				allocation.keyStringIndices.some(
+					(key, index) => key !== results.keys[shape[index]!],
+				)
+			)
+				fail();
+		}
 		const flow = nativeVirtualValueFlow(
 			fn.instructions,
 			ip,
@@ -5077,6 +5098,9 @@ function lowerExecutionFunctionToNativePlan(
 						allocationIps: entry.resultFields.allocations.map((allocation) =>
 							instructionIndexByTargetInstruction.get(allocation)!,
 						),
+						...(entry.resultFields.shapes === undefined
+							? {}
+							: { shapes: entry.resultFields.shapes }),
 						...(entry.resultFields.forwards === undefined
 							? {}
 							: {

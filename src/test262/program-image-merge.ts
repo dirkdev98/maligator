@@ -812,6 +812,9 @@ export function mergeProgramImages(images: Array<ProgramImage>): MergedProgramIm
 							: {
 									keys: entry.resultFields.keys.map((key) => key + base.string),
 									allocationIps: [...entry.resultFields.allocationIps],
+									...(entry.resultFields.shapes === undefined
+										? {}
+										: { shapes: entry.resultFields.shapes.map((shape) => [...shape]) }),
 									...(entry.resultFields.forwards === undefined
 										? {}
 										: {

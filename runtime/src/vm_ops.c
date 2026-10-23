@@ -956,9 +956,13 @@ MalValue mal_vm_materialize_record(
     (void) callee;
     MalValue prototype = vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE];
 #endif
+    // A union record's values arrive in a temporary array that only this span roots.
+    MalRootSpan roots;
+    mal_gc_root(&roots, values, (i32) count);
     MalShape *shape = mal_shape_from_string_keys(&vm->heap, keys, count);
     MalObject *object = mal_object_try_new_shaped(
         &vm->heap, mal_value_to_object(prototype), shape, values, count);
+    mal_gc_unroot(&roots);
     if (object == nullptr) {
         mal_vm_throw_allocation_error(vm);
         return MAL_VALUE_UNDEFINED;

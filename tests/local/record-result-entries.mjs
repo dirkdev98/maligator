@@ -219,6 +219,35 @@ function trimmedWidth(text) {
 	return `${span.start}:${span.end}:${span.digits}`;
 }
 
+// Literals with different keys: a missing key reads as undefined, as no prototype has it.
+function decode(operand) {
+	for (let guard = 0; guard < 1; guard++)
+		if (operand === -1000) throw new Error("bad operand");
+	if (operand >= 0) return { kind: "register", register: operand };
+	switch (operand) {
+		case -1:
+			return { kind: "undefined" };
+		case -2:
+			return { value: false, kind: "boolean" };
+	}
+	return { kind: "string", index: -operand };
+}
+const decodedSeen = [];
+function decodeAll(operands) {
+	let summary = "";
+	for (const operand of operands) {
+		const decoded = decode(operand);
+		if (decoded.kind === "boolean") decoded.kind = "flag";
+		summary += `${decoded.kind[0]}${decoded.register ?? ""}${decoded.index ?? ""}${decoded.value === undefined ? "" : "v"};`;
+		if (operand === -3) decodedSeen.push(decoded);
+		if (operand === -1) {
+			decoded.register = 7;
+			decodedSeen.push(decoded);
+		}
+	}
+	return summary;
+}
+
 const text = "a1 bb22 ccc333 dddd4444 ".repeat(20);
 check(tokenLengths(text), 600, "token lengths");
 check(digitCount(text), 200, "digit count");
@@ -249,6 +278,13 @@ check(found(text, 9), undefined, "missing observer");
 check(rejected(text), "start,end,digits:8:3", "thrown observer");
 check(wordWidths(`  ${text}   `), 600, "forwarded records");
 check(trimmedWidth("   padded value  "), "3:15:12", "copied forwarded records");
+check(decodeAll([4, -1, -2, -3, 0]), "r4;u;fv;s3;r0;", "union records");
+check(
+	decodedSeen.map((record) => Object.keys(record).join("+")).join(","),
+	"kind+register,kind+index",
+	"union shapes",
+);
+check(decodedSeen[0].register, 7, "union store");
 const handlers = attach(["a", "try-b", "cc", "try-dd", "e", "f", "try-g"], []);
 check(
 	handlers.map((environment) => `${environment.state}@${environment.version}`).join(","),

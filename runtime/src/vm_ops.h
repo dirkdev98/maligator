@@ -3414,7 +3414,7 @@ u64 mal_vm_stack_object_materialization_count(void);
 
 /**
  * Create the object a record entry returned through caller storage, once some use
- * needs it. `values` are the caller's rooted field slots in key order.
+ * needs it, from `values` in the order of `keys`.
  */
 MalValue mal_vm_materialize_record(
     MalVm *vm, MalValue callee, struct MalString **keys, MalValue *values, u32 count);

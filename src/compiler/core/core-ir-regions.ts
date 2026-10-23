@@ -556,6 +556,11 @@ export interface CoreEntryResultFields {
 	readonly keys: ReadonlyArray<number>;
 	readonly allocations: ReadonlyArray<CoreInstructionId>;
 	/**
+	 * When the literals differ in keys, each allocation's keys as field indices in its own
+	 * key order. A missing field reads as undefined, as its key is on no prototype.
+	 */
+	readonly shapes?: ReadonlyArray<ReadonlyArray<number>>;
+	/**
 	 * Calls whose result the entry returns unchanged. The callee returns one of its own
 	 * literals with the same keys, so its fields can go straight to the caller's storage.
 	 */

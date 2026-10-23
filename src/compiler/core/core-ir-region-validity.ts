@@ -42,6 +42,7 @@ import {
 } from "./core-native-entry-analysis.ts";
 import {
 	coreFieldArgumentProofIsCurrent,
+	coreRecordKeyAbsent,
 	coreRecordResultFields,
 	coreRecordResultUses,
 } from "./core-native-field-analysis.ts";
@@ -2032,11 +2033,18 @@ export function verifyCoreOptimizationPlan(
 					)?.keys;
 					return keys === undefined ? undefined : { target, keys };
 				},
+				context === undefined
+					? undefined
+					: (key) => coreRecordKeyAbsent(context.facts.world, program, key),
 			);
 			if (
 				current === undefined ||
 				!sameNumbers(current.keys, entry.resultFields.keys) ||
 				!sameNumbers(current.allocations, entry.resultFields.allocations) ||
+				(current.shapes?.length ?? 0) !== (entry.resultFields.shapes?.length ?? 0) ||
+				(current.shapes ?? []).some(
+					(shape, index) => !sameNumbers(shape, entry.resultFields!.shapes![index]!),
+				) ||
 				(current.forwards?.length ?? 0) !== (entry.resultFields.forwards?.length ?? 0) ||
 				(current.forwards ?? []).some(
 					(forward, index) =>
@@ -2285,7 +2293,7 @@ export function verifyCoreOptimizationPlan(
 								caller,
 								control(site.caller),
 								site.instruction,
-								entry.resultFields.keys,
+								entry.resultFields,
 							);
 				const emitted = blockProofs.get(site.caller)!.instructionOrder;
 				const sameAccesses = (

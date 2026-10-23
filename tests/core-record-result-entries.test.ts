@@ -22,12 +22,16 @@ function scan(text, start) {
 }
 `;
 
-function compile(name: string, source: string) {
+function compile(
+	name: string,
+	source: string,
+	config: Parameters<typeof resolveBuildConfig>[0] = {},
+) {
 	const file = join(directory, `${name}.mjs`);
 	writeFileSync(file, source);
 	const analysis = analyzeEntrypoint(
 		file,
-		{ buildConfig: resolveBuildConfig({}), stripTypes: (text) => text },
+		{ buildConfig: resolveBuildConfig(config), stripTypes: (text) => text },
 		(_phase, run) => run(),
 	);
 	const core = optimizeSemanticProgramToCore(
@@ -203,6 +207,41 @@ console.log(widths("ab  cde f"), direct("ab"));`,
 				),
 			).toThrow(/invalid call override/);
 		}
+	});
+
+	const decoder = `
+function decode(operand) {
+	for (let guard = 0; guard < 1; guard++) if (operand === -1000) throw new Error("bad");
+	if (operand >= 0) return { kind: "register", register: operand };
+	if (operand === -1) return { kind: "undefined" };
+	return { kind: "string", index: -operand };
+}
+function count(operands, registers) {
+	let valid = 0;
+	for (const operand of operands) {
+		const decoded = decode(operand);
+		if (decoded.kind !== "register" || decoded.register < registers) valid++;
+	}
+	return valid;
+}
+console.log(count([1, -1, -4, 9], 4));`;
+
+	it("returns literals with different keys when locked primordials prove the missing keys", () => {
+		const { core, recordEntry } = compile("union", decoder);
+		const entry = recordEntry("decode")!;
+		const keys = entry.resultFields!.keys.map((key) =>
+			core.program.stringConstantText(key),
+		);
+		expect(keys).toEqual(["kind", "register", "index"]);
+		expect(entry.resultFields!.shapes).toEqual([[0, 1], [0], [0, 2]]);
+		expect(entry.callSites).toHaveLength(1);
+	});
+
+	it("keeps literals with different keys on the heap when primordials can change", () => {
+		const { recordEntry } = compile("union-mutable", decoder, {
+			engine: { primordials: "mutable" },
+		});
+		expect(recordEntry("decode")).toBeUndefined();
 	});
 
 	it("rejects a plan whose caller reads disagree with the current program", () => {

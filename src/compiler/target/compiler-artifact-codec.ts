@@ -2117,6 +2117,11 @@ function writeCompilerArtifact(
 			for (const key of entry.resultFields?.keys ?? []) w.u32(key);
 			w.u32(entry.resultFields?.allocationIps.length ?? 0);
 			for (const ip of entry.resultFields?.allocationIps ?? []) w.u32(ip);
+			w.u32(entry.resultFields?.shapes?.length ?? 0);
+			for (const shape of entry.resultFields?.shapes ?? []) {
+				w.u32(shape.length);
+				for (const field of shape) w.u32(field);
+			}
 			w.u32(entry.resultFields?.forwards?.length ?? 0);
 			for (const forward of entry.resultFields?.forwards ?? []) {
 				w.u32(forward.callIp);
@@ -4670,6 +4675,9 @@ function readCompilerArtifact(
 					: { keys: fieldKeys, representations: fieldRepresentations, loads: fieldLoads };
 			const resultKeys = Array.from({ length: r.count(4) }, () => r.u32());
 			const resultAllocationIps = Array.from({ length: r.count(4) }, () => r.u32());
+			const resultShapes = Array.from({ length: r.count(4) }, () =>
+				Array.from({ length: r.count(4) }, () => r.u32()),
+			);
 			const resultForwards = Array.from({ length: r.count(8) }, () => ({
 				callIp: r.u32(),
 				functionIndex: r.u32(),
@@ -4682,6 +4690,7 @@ function readCompilerArtifact(
 					: {
 							keys: resultKeys,
 							allocationIps: resultAllocationIps,
+							...(resultShapes.length === 0 ? {} : { shapes: resultShapes }),
 							...(resultForwards.length === 0 ? {} : { forwards: resultForwards }),
 						};
 			const constantCount = r.count(5);

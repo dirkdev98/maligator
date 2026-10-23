@@ -69,6 +69,7 @@ import { connectCoreNativeEntries } from "./core-native-entry-graph.ts";
 import {
 	coreReadOnlyParameterFields,
 	coreFieldArgument,
+	coreRecordKeyAbsent,
 	coreRecordResultFields,
 	coreRecordResultUses,
 	coreReturnsObjectLiterals,
@@ -1291,6 +1292,7 @@ function directEntryOpportunities(
 	localCandidates: (
 		functionId: CoreFunctionId,
 	) => ReadonlyArray<CorePendingOptimizationCandidate>,
+	context: CoreCompilationContext | undefined,
 ): ReadonlyArray<CorePlanningOpportunity> {
 	const loopWeights = new Map<CoreFunctionId, Uint8Array>();
 	const callWeight = (site: CoreDirectEntryCallSite): number => {
@@ -1524,6 +1526,7 @@ function directEntryOpportunities(
 							program,
 							summaries,
 							analyses,
+							context,
 							target,
 							callSites,
 							callWeight,
@@ -1780,6 +1783,7 @@ function recordResultEntries(
 	program: CoreProgram,
 	summaries: CoreProgramSummaries,
 	analyses: CoreAnalysisManager,
+	context: CoreCompilationContext | undefined,
 	target: CoreFunctionId,
 	callSites: ReadonlyArray<CoreDirectEntryCallSite>,
 	callWeight: (site: CoreDirectEntryCallSite) => number,
@@ -1788,25 +1792,31 @@ function recordResultEntries(
 	const cfg = analyses
 		.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, { scope: "function", function: target })
 		.exceptional();
-	const resultFields = coreRecordResultFields(fn, cfg, (call) => {
-		const site = summaries.targets.site(target, call);
-		const callee = site?.targets.functions[0];
-		if (
-			callee === undefined ||
-			callee === target ||
-			site!.open ||
-			site!.arguments === undefined ||
-			site!.targets.functions.length !== 1
-		)
-			return undefined;
-		const keys = coreRecordResultFields(
-			program.function(callee),
-			analyses
-				.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, { scope: "function", function: callee })
-				.exceptional(),
-		)?.keys;
-		return keys === undefined ? undefined : { target: callee, keys };
-	});
+	const world = context?.facts.world;
+	const resultFields = coreRecordResultFields(
+		fn,
+		cfg,
+		(call) => {
+			const site = summaries.targets.site(target, call);
+			const callee = site?.targets.functions[0];
+			if (
+				callee === undefined ||
+				callee === target ||
+				site!.open ||
+				site!.arguments === undefined ||
+				site!.targets.functions.length !== 1
+			)
+				return undefined;
+			const keys = coreRecordResultFields(
+				program.function(callee),
+				analyses
+					.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, { scope: "function", function: callee })
+					.exceptional(),
+			)?.keys;
+			return keys === undefined ? undefined : { target: callee, keys };
+		},
+		world === undefined ? undefined : (key) => coreRecordKeyAbsent(world, program, key),
+	);
 	if (resultFields === undefined) return [];
 	const calls = callSites.flatMap((call) => {
 		if (
@@ -1828,7 +1838,7 @@ function recordResultEntries(
 				})
 				.ordinary(),
 			call.instruction,
-			resultFields.keys,
+			resultFields,
 		);
 		return recordUses === undefined ? [] : [Object.freeze({ ...call, recordUses })];
 	});
@@ -2104,7 +2114,14 @@ export function buildCoreOptimizationPlan(
 			...guardedCallOpportunities(program, summaries, liveFunctions, analyses),
 		);
 		opportunities.push(
-			...directEntryOpportunities(program, summaries, live, analyses, resolveLocal),
+			...directEntryOpportunities(
+				program,
+				summaries,
+				live,
+				analyses,
+				resolveLocal,
+				options.context,
+			),
 		);
 	}
 	opportunities.sort((left, right) => {

@@ -2678,6 +2678,9 @@ function lowerFunctionToTarget(
 							allocations: entry.resultFields.allocations.map((allocation) =>
 								loweredInstructions.get(allocation)!,
 							),
+							...(entry.resultFields.shapes === undefined
+								? {}
+								: { shapes: entry.resultFields.shapes }),
 							...(entry.resultFields.forwards === undefined
 								? {}
 								: {

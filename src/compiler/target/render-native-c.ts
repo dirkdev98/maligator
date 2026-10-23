@@ -2094,7 +2094,19 @@ function emitCompiledVariant(
 		nativeContract.regionActions,
 	);
 	const directHeapObjectIps = new Set(storage.directHeapObjectIps);
-	const recordAllocations = new Set(directEntry?.resultFields?.allocationIps ?? []);
+	const recordAllocations = new Map(
+		directEntry?.resultFields?.allocationIps.map((ip, index) => {
+			const shape = directEntry.resultFields!.shapes?.[index];
+			return [
+				ip,
+				{
+					fields: shape ?? directEntry.resultFields!.keys.map((_, field) => field),
+					...(shape === undefined ? {} : { shape: index }),
+					count: directEntry.resultFields!.keys.length,
+				},
+			] as const;
+		}) ?? [],
+	);
 	const stackObjectSites = new Map<number, StackObjectSite>();
 	let nextStackSlot = stackSlotsBase;
 	for (const action of topology.actionsByKind.get("stack-object-plan") ?? []) {
@@ -2532,10 +2544,10 @@ function emitCompiledVariant(
 						type: cTypeOf(rep),
 						name: `fp${field}`,
 					})) ?? []),
-					...(directEntry.resultFields?.keys.map((_, field) => ({
-						type: "MalValue *",
-						name: `rf${field}`,
-					})) ?? []),
+					...Array.from(
+						{ length: nativeRecordSlotCount(directEntry.resultFields) },
+						(_, field) => ({ type: "MalValue *", name: `rf${field}` }),
+					),
 				];
 	const parameterList =
 		directParameters === undefined
@@ -3379,7 +3391,7 @@ function renderCompiledFunction(
 			],
 			...(entry.resultFields === undefined
 				? {}
-				: { resultFieldCount: entry.resultFields.keys.length }),
+				: { resultFieldCount: nativeRecordSlotCount(entry.resultFields) }),
 			resultRepresentation: entry.resultRepresentation,
 		})),
 	};
@@ -3506,17 +3518,35 @@ function unboxedSnapshot(rep: RegisterRep, value: string): string {
 	return value;
 }
 
+/** Caller storage slots of a record: its fields, then the shape index of a union. */
+function nativeRecordSlotCount(
+	fields: NativeDirectEntryPlan["resultFields"] | undefined,
+): number {
+	return fields === undefined
+		? 0
+		: fields.keys.length + (fields.shapes === undefined ? 0 : 1);
+}
+
 /** One record call's rooted caller storage: its fields in key order, then the object once created. */
 interface NativeRecordSite {
 	readonly fieldSlot: number;
 	readonly keys: ReadonlyArray<number>;
+	readonly shapes?: ReadonlyArray<ReadonlyArray<number>>;
 	/** Present when an observer can create the object; undefined until one does. */
 	readonly objectSlot?: number;
 	readonly calleeSlot?: number;
 }
 
 interface NativeRecordStorage {
-	readonly allocations: ReadonlySet<number>;
+	/** A record entry's allocations, with their field indices and shape index. */
+	readonly allocations: ReadonlyMap<
+		number,
+		{
+			readonly fields: ReadonlyArray<number>;
+			readonly shape?: number;
+			readonly count: number;
+		}
+	>;
 	/** Forwarded calls of a record entry, with its field count. */
 	readonly forwards: ReadonlyMap<number, number>;
 	readonly calls: ReadonlyMap<number, NativeRecordSite>;
@@ -3535,7 +3565,7 @@ interface NativeRecordObserver {
 }
 
 const NO_NATIVE_RECORD_STORAGE: NativeRecordStorage = {
-	allocations: new Set(),
+	allocations: new Map(),
 	forwards: new Map(),
 	calls: new Map(),
 	accesses: new Map(),
@@ -3568,11 +3598,15 @@ function renderRecordCallSlots(
 		if (entry?.resultFields === undefined) continue;
 		const keys = entry.resultFields.keys;
 		const fieldSlot = allocateSlot();
-		for (let field = 1; field < keys.length; field++) allocateSlot();
+		for (let field = 1; field < nativeRecordSlotCount(entry.resultFields); field++)
+			allocateSlot();
 		const observed = plan.observerIps.length > 0;
 		const site: NativeRecordSite = {
 			fieldSlot,
 			keys,
+			...(entry.resultFields.shapes === undefined
+				? {}
+				: { shapes: entry.resultFields.shapes }),
 			...(observed ? { objectSlot: allocateSlot(), calleeSlot: allocateSlot() } : {}),
 		};
 		calls.set(plan.callIp, site);
@@ -5633,7 +5667,7 @@ function emitBody(
 		fieldAllocation: undefined,
 		fieldCall: undefined,
 		fieldThrowSlots: undefined,
-		recordAllocation: false,
+		recordAllocation: undefined,
 		recordForward: undefined,
 		recordForwarded: undefined,
 		recordAccess: undefined,
@@ -6158,7 +6192,7 @@ function emitBody(
 		instructionContext.stackObjectInheritedAccess = stackObjectInheritedAccesses.get(ip);
 		instructionContext.constantBoolean = directConstantBooleans.get(ip);
 		instructionContext.fieldLoad = fieldLoads.get(ip);
-		instructionContext.recordAllocation = records.allocations.has(ip);
+		instructionContext.recordAllocation = records.allocations.get(ip);
 		instructionContext.recordForward = records.forwards.get(ip);
 		instructionContext.recordAccess = records.accesses.get(ip);
 		instructionContext.recordObserver = records.observers.get(ip);
@@ -6687,7 +6721,11 @@ interface NativeInstructionContext {
 	readonly fieldEntryCall?: NativeFieldCall;
 	readonly fieldThrowSlots?: ReadonlyArray<number>;
 	/** A record entry hands this allocation's fields to its caller instead of creating it. */
-	readonly recordAllocation?: boolean;
+	readonly recordAllocation?: {
+		readonly fields: ReadonlyArray<number>;
+		readonly shape?: number;
+		readonly count: number;
+	};
 	/** A record entry returns this call's record; its fields go to the entry's own caller storage. */
 	readonly recordForward?: number;
 	/** Forwarded calls that reached the callee's record entry with that storage. */
@@ -8200,13 +8238,23 @@ function emitInstruction(
 			),
 		];
 	}
-	if (context.recordAllocation === true && instruction.opcode === "CREATE_OBJECT_SHAPED")
+	if (
+		context.recordAllocation !== undefined &&
+		instruction.opcode === "CREATE_OBJECT_SHAPED"
+	) {
+		const { fields, shape, count } = context.recordAllocation;
 		return [
 			...instruction.valueRegisters.map(
-				(register, field) => `*rf${field} = ${boxed(register)};`,
+				(register, index) => `*rf${fields[index]!} = ${boxed(register)};`,
 			),
+			// A field this literal lacks reads as undefined, since no prototype has its key.
+			...Array.from({ length: count }, (_, field) => field)
+				.filter((field) => !fields.includes(field))
+				.map((field) => `*rf${field} = MAL_VALUE_UNDEFINED;`),
+			...(shape === undefined ? [] : [`*rf${count} = mal_value_from_i32(${shape});`]),
 			`r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
 		];
+	}
 	if (
 		context.recordAccess !== undefined &&
 		(instruction.opcode === "LOAD_PROPERTY_STATIC" ||
@@ -8237,12 +8285,19 @@ function emitInstruction(
 		const object = `__gc_slots[${site.objectSlot!}]`;
 		const ordinary = emitGenericInstruction();
 		if (ordinary === null) return null;
-		const keys = site.keys
-			.map((key) => `vm->string_constant_atoms[${relocation.stringIndex(key)}]`)
-			.join(", ");
+		const atom = (field: number) =>
+			`vm->string_constant_atoms[${relocation.stringIndex(site.keys[field]!)}]`;
+		const materialize = (fields: ReadonlyArray<number>) =>
+			`${object} = mal_vm_materialize_record(vm, __gc_slots[${site.calleeSlot!}], (MalString *[]){${fields.map(atom).join(", ")}}, (MalValue[]){${fields.map((field) => `__gc_slots[${site.fieldSlot + field}]`).join(", ")}}, ${fields.length});`;
+		const shapeIndex = `mal_value_to_i32(__gc_slots[${site.fieldSlot + site.keys.length}])`;
 		return [
 			`if (mal_value_is_undefined(${object})) {`,
-			`  ${object} = mal_vm_materialize_record(vm, __gc_slots[${site.calleeSlot!}], (MalString *[]){${keys}}, &__gc_slots[${site.fieldSlot}], ${site.keys.length});`,
+			...(site.shapes === undefined
+				? [`  ${materialize(site.keys.map((_, field) => field))}`]
+				: site.shapes.map(
+						(fields, shape) =>
+							`  ${shape === 0 ? "" : "else "}if (${shapeIndex} == ${shape}) ${materialize(fields)}`,
+					)),
 			`  ${throwCheck()}`,
 			`}`,
 			...aliases.map((register) => `r${register} = ${object};`),
@@ -12648,9 +12703,16 @@ function emitInstruction(
 						directEntry.resultFields !== undefined;
 					const parameters = [
 						...directEntryParameters(transport),
-						...(context.recordCall?.keys.map(
-							(_, field) => `&__gc_slots[${context.recordCall!.fieldSlot + field}]`,
-						) ?? []),
+						...(context.recordCall === undefined
+							? []
+							: Array.from(
+									{
+										length:
+											context.recordCall.keys.length +
+											(context.recordCall.shapes === undefined ? 0 : 1),
+									},
+									(_, field) => `&__gc_slots[${context.recordCall!.fieldSlot + field}]`,
+								)),
 						...(forward
 							? directEntry.resultFields.keys.map((_, field) => `rf${field}`)
 							: []),

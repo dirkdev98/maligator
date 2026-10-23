@@ -70,6 +70,7 @@ describe("record result entries", () => {
 			"found",
 			"rejected",
 			"attach",
+			"decodeAll",
 		])
 			expect(functionNamed(caller).recordCalls?.length ?? 0, caller).toBeGreaterThan(0);
 		expect(functionNamed("observed").recordCalls![0]!.observerIps.length).toBeGreaterThan(
@@ -80,6 +81,11 @@ describe("record result entries", () => {
 			functionNamed(name).directEntries.find((entry) => entry.resultFields?.forwards)!;
 		expect(forwarding("nextWord").callOverrides).toHaveLength(1);
 		expect(forwarding("trimmed").callOverrides).toBeUndefined();
+		// Literals with different keys share one ABI with a shape index after the fields.
+		expect(
+			functionNamed("decode").directEntries.find((entry) => entry.resultFields)!
+				.resultFields!.shapes,
+		).toHaveLength(4);
 		// Callers that keep the object need the ordinary entry and its fresh allocation.
 		expect(functionNamed("retainAll").recordCalls).toBeUndefined();
 	});
@@ -93,8 +99,9 @@ describe("record result entries", () => {
 		const counter = (name: string) =>
 			Number(new RegExp(`${name}=(\\d+)`).exec(result.stderr)?.[1] ?? -1);
 		expect(counter("direct_entry_hits")).toBeGreaterThan(0);
-		// Eleven observed tokens, the returned and the thrown token, and three handed-on records.
-		expect(counter("record_materializations")).toBe(16);
+		// Eleven observed tokens, the returned and the thrown token, three handed-on records,
+		// and two observed union records.
+		expect(counter("record_materializations")).toBe(18);
 	});
 
 	for (const [backend, binary] of [
