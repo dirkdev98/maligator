@@ -673,12 +673,6 @@ contracts or investigates costs still visible after the string follow-ups.
       code calls generically, because top-level declarations become captured
       module bindings that the finite target analysis does not follow.
       `finite-call-target-dispatch` compiles its fixture as a script until then.
-- [ ] Prefer Map entry-pair virtualization when other iterator regions also apply
-      to a loop. Typing construct results as objects let iterator-result
-      virtualization and array cursors apply to `for (const [k, v] of new Map())`
-      loops in `collection-direct`, and selection then dropped every entry-pair
-      region, so that typing was reverted. It removed an out-of-line
-      RequireObjectCoercible from `counts[i & 15]++` on a constructed typed array.
 - [ ] Fuse projected split/trim length consumption without flattening the shared
       rope or repeatedly descending from its root for each field's edges and slice.
       First prove split and trim results and their aliases do not escape through

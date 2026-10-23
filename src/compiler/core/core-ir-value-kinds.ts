@@ -638,6 +638,14 @@ function addOperationTransfer(
 		masks[output] = masks[output]! | COMPILER_VALUE_KIND_NUMBER;
 		return;
 	}
+	if (
+		opcode === "construct" ||
+		opcode === "constructSpread" ||
+		(opcode === "callKnown" && fn.instructionAttributes(instruction).construct === true)
+	) {
+		masks[output] = masks[output]! | COMPILER_VALUE_KIND_OBJECT;
+		return;
+	}
 	if (opcode === "loadThis" && inputs?.receiverMask !== undefined) {
 		masks[output] = masks[output]! | inputs.receiverMask;
 		return;
