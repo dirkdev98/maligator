@@ -654,10 +654,6 @@ MalArrayObject *mal_array_object_try_new(MalHeap *heap, MalObject *prototype) {
     return array;
 }
 
-u32 mal_array_object_length(const MalArrayObject *array) {
-    return array->length;
-}
-
 static int mal_array_compare_indices_descending(const void *left, const void *right) {
     u32 left_index = *(const u32 *) left;
     u32 right_index = *(const u32 *) right;

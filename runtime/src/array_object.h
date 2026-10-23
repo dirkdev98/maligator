@@ -300,10 +300,9 @@ MalArrayObject *mal_array_object_new_reserved(
 );
 MalArrayObject *mal_array_object_try_new(MalHeap *heap, MalObject *prototype);
 
-/**
- * Return the raw array length field.
- */
-u32 mal_array_object_length(const MalArrayObject *array);
+static inline u32 mal_array_object_length(const MalArrayObject *array) {
+    return array->length;
+}
 
 /**
  * Update the raw array length field.
