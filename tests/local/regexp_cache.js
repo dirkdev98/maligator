@@ -682,6 +682,23 @@ check(
 	stickyFound.join(",") === "12;,345;" && sticky.lastIndex === 0,
 );
 
+function literal() {
+	return /lit(e)ral/gi;
+}
+const literals = [literal(), literal()];
+literals[0].lastIndex = 4;
+const literalMatch = literals[0].exec("xLITERAL LITERAL");
+check(
+	"each literal evaluation creates its own object",
+	literals[0] !== literals[1] &&
+		literals[1].lastIndex === 0 &&
+		literalMatch.index === 9 &&
+		literalMatch[1] === "E" &&
+		literals[0].source === "lit(e)ral" &&
+		literals[0].flags === "gi" &&
+		Object.getPrototypeOf(literals[1]) === RegExp.prototype,
+);
+
 let passed = 0;
 for (const [name, condition] of results) {
 	if (condition) passed++;

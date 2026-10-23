@@ -11582,6 +11582,25 @@ function emitInstruction(
 				}
 			}
 			if (
+				instruction.operation === "RegExp" &&
+				instruction.construct &&
+				instruction.argumentMode === undefined &&
+				instruction.arguments.length === 2
+			) {
+				const [pattern, flags] = instruction.arguments.map(decodeVmValueOperand);
+				// With two strings, constructing %RegExp% as its own new.target is RegExpCreate:
+				// IsRegExp is false and %RegExp%.prototype is non-writable and non-configurable.
+				if (pattern?.kind === "string" && flags?.kind === "string") {
+					const value = `known_result_${ip}`;
+					return [
+						`MalValue ${value} = mal_regexp_create(vm, &vm->runtime_image->string_constants[${relocation.stringIndex(pattern.index)}], &vm->runtime_image->string_constants[${relocation.stringIndex(flags.index)}]);`,
+						throwCheck(),
+						`r${instruction.dst} = ${callValue(instruction.dst, value)};`,
+						callPoll(),
+					];
+				}
+			}
+			if (
 				instruction.specialized === undefined &&
 				!(
 					(instruction.operation === "String.prototype.split" ||
