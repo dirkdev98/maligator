@@ -1976,6 +1976,8 @@ typedef struct MalVm {
     struct MalStaticLoadSites *static_load_sites;
     /** JSON.parse's keys by source bytes and last record shape, owned by builtin_json.c. */
     struct MalJsonKeyCache *json_key_cache;
+    /** JSON.stringify's escaped-key plans by shape, owned by builtin_json.c. */
+    struct MalJsonPlanCache *json_plan_cache;
 
     /**
      * Data properties that iteration protocols inherit through watched built-in

@@ -961,6 +961,11 @@ typedef struct MalJsonPlainState {
     usize count;
     usize capacity;
     usize cache_data_bytes;
+    // Plans and their escaped keys, which outlive the call in the VM's plan cache.
+    usize plan_bytes;
+    // Shapes this call has laid out; the cache's own count spans earlier calls.
+    usize call_shapes;
+    struct MalJsonPlanCache *plan_cache;
     usize prototype_eviction_slot;
     // The traversal runs no JavaScript, so the last proven layout and prototype
     // stay valid for the rest of the call; record arrays repeat both.
@@ -1023,6 +1028,7 @@ static bool mal_json_plain_shape(
 ) {
     if (object->shape == nullptr || mal_object_has_public_overflow(object) ||
         object->is_arguments || object->is_raw_json) return false;
+    state->call_shapes++;
     MalJsonPointerEntry *cached = mal_json_pointer_find(&state->shapes, object->shape);
     if (cached != nullptr && cached->value != nullptr) {
         MAL_PERF_COUNT(json_shape_plan_hits);
@@ -1069,6 +1075,7 @@ static bool mal_json_plain_shape(
     MalJsonShapePlan *plan = calloc(1, bytes);
     if (plan == nullptr) abort();
     state->cache_data_bytes += bytes;
+    state->plan_bytes += bytes;
     MAL_PERF_COUNT(json_shape_plans);
     MAL_PERF_ADD(json_shape_plan_bytes, bytes);
     plan->escaped_keys.vm = state->vm;
@@ -1093,7 +1100,7 @@ static bool mal_json_plain_shared_key(
     MalJsonPlainState *state, MalJsonBuilder *builder,
     MalJsonKeyPlan *key
 ) {
-    bool cache = state->shapes.count > 1;
+    bool cache = state->call_shapes > 1;
     MalJsonPointerEntry *cached = cache ? mal_json_pointer_find(&state->keys, key->key) : nullptr;
     MalJsonEscapedKey *escaped = cached == nullptr ? nullptr : cached->value;
     if (escaped != nullptr) {
@@ -1244,8 +1251,9 @@ static bool mal_json_plain_key(
         : mal_text_buffer_append_latin1(
             keys, (const u8 *) builder->buffer.data + start, length);
     if (status != MAL_TEXT_BUFFER_OK) return mal_json_throw_string_length(builder->vm);
-    state->cache_data_bytes +=
-        keys->capacity * (keys->utf16 ? sizeof(c16) : sizeof(u8)) - old_bytes;
+    usize grown = keys->capacity * (keys->utf16 ? sizeof(c16) : sizeof(u8)) - old_bytes;
+    state->cache_data_bytes += grown;
+    state->plan_bytes += grown;
     key->offset = required - length;
     key->length = length;
     MAL_PERF_ADD(json_escaped_key_code_units, length);
@@ -1385,9 +1393,9 @@ static bool mal_json_plain_frame(
     return true;
 }
 
-static void mal_json_plain_dispose(MalJsonPlainState *state) {
-    for (usize i = 0; i < state->shapes.capacity; i++) {
-        MalJsonPointerEntry *entry = &state->shapes.entries[i];
+static void mal_json_shape_plans_free(MalJsonPointerMap *shapes) {
+    for (usize i = 0; i < shapes->capacity; i++) {
+        MalJsonPointerEntry *entry = &shapes->entries[i];
         if (entry->key != nullptr && entry->value != nullptr) {
             MalJsonShapePlan *plan = entry->value;
             MAL_PERF_ADD(json_escaped_key_capacity_bytes,
@@ -1395,6 +1403,63 @@ static void mal_json_plain_dispose(MalJsonPlainState *state) {
             mal_text_buffer_dispose(&plan->escaped_keys.buffer);
             free(plan);
         }
+    }
+}
+
+/**
+ * Shapes never die before their heap, so a plan stays exact across calls: a
+ * response object serialized on every request reuses its escaped keys. A nested
+ * stringify, reached through the generic path's toJSON or replacer calls, finds
+ * the cache borrowed and keeps call-local plans.
+ */
+struct MalJsonPlanCache {
+    MalJsonPointerMap shapes;
+    usize plan_bytes;
+    bool borrowed;
+};
+
+static void mal_json_plan_cache_clear(struct MalJsonPlanCache *plans) {
+    mal_json_shape_plans_free(&plans->shapes);
+    mal_json_pointer_dispose(&plans->shapes);
+    mal_json_pointer_init(&plans->shapes);
+    plans->plan_bytes = 0;
+}
+
+static void mal_json_plan_cache_free(MalVm *vm) {
+    mal_json_plan_cache_clear(vm->json_plan_cache);
+    free(vm->json_plan_cache);
+    vm->json_plan_cache = nullptr;
+}
+
+static struct MalJsonPlanCache *mal_json_plan_cache_borrow(MalVm *vm) {
+    struct MalJsonPlanCache *plans = vm->json_plan_cache;
+    if (plans == nullptr) {
+        plans = calloc(1, sizeof(*plans));
+        if (plans == nullptr) return nullptr;
+        if (!mal_vm_register_runtime_cleanup(vm, mal_json_plan_cache_free)) {
+            free(plans);
+            return nullptr;
+        }
+        mal_json_pointer_init(&plans->shapes);
+        vm->json_plan_cache = plans;
+    }
+    if (plans->borrowed) return nullptr;
+    // Shapes outnumbering the budget start over rather than keeping the first ones.
+    if (plans->shapes.count >= MAL_JSON_PLAN_ENTRY_LIMIT ||
+        plans->plan_bytes > MAL_JSON_PLAN_DATA_BUDGET / 2) {
+        mal_json_plan_cache_clear(plans);
+    }
+    plans->borrowed = true;
+    return plans;
+}
+
+static void mal_json_plain_dispose(MalJsonPlainState *state) {
+    if (state->plan_cache != nullptr) {
+        mal_json_pointer_move(&state->plan_cache->shapes, &state->shapes);
+        state->plan_cache->plan_bytes = state->plan_bytes;
+        state->plan_cache->borrowed = false;
+    } else {
+        mal_json_shape_plans_free(&state->shapes);
     }
     for (usize i = 0; i < state->keys.capacity; i++) free(state->keys.entries[i].value);
     MAL_PERF_ADD(json_escaped_key_capacity_bytes,
@@ -1532,6 +1597,13 @@ static bool mal_json_try_serialize_plain(
     state.vm = generic->vm;
     state.to_json = mal_intrinsic_static_string_key(generic->vm, "toJSON");
     mal_json_pointer_init(&state.shapes);
+    state.plan_cache = mal_json_plan_cache_borrow(generic->vm);
+    state.plan_bytes = 0;
+    if (state.plan_cache != nullptr) {
+        mal_json_pointer_move(&state.shapes, &state.plan_cache->shapes);
+        state.plan_bytes = state.plan_cache->plan_bytes;
+    }
+    state.call_shapes = 0;
     mal_json_pointer_init(&state.keys);
     mal_json_pointer_init(&state.prototypes);
     mal_json_pointer_init(&state.active);
@@ -1539,7 +1611,7 @@ static bool mal_json_try_serialize_plain(
     state.frames = state.inline_frames;
     state.count = 0;
     state.capacity = MAL_JSON_INLINE_FRAMES;
-    state.cache_data_bytes = 0;
+    state.cache_data_bytes = state.plan_bytes;
     state.prototype_eviction_slot = 0;
     state.last_shape = nullptr;
     state.last_plan = nullptr;

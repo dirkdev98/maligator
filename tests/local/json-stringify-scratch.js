@@ -569,4 +569,39 @@ check(
 	"wide keys keep the general path",
 );
 
+// Shape plans outlive a call; a stringify nested in toJSON keeps its own.
+let acrossCalls = true;
+for (let i = 0; i < 6; i++) {
+	acrossCalls &&= JSON.stringify({ id: i, tag: "a" }) === '{"id":' + i + ',"tag":"a"}';
+}
+check(acrossCalls, "a shape reuses its plan across calls");
+const reentrant = {
+	outer: 1,
+	inner: {
+		toJSON() {
+			return JSON.stringify([
+				{ outer: 2, inner: 3 },
+				{ outer: 4, inner: 5 },
+				{ outer: 6, inner: 7 },
+			]);
+		},
+	},
+};
+for (let i = 0; i < 3; i++) {
+	check(
+		JSON.stringify([reentrant, reentrant]) ===
+			'[{"outer":1,"inner":"[{\\"outer\\":2,\\"inner\\":3},{\\"outer\\":4,\\"inner\\":5},{\\"outer\\":6,\\"inner\\":7}]"},{"outer":1,"inner":"[{\\"outer\\":2,\\"inner\\":3},{\\"outer\\":4,\\"inner\\":5},{\\"outer\\":6,\\"inner\\":7}]"}]',
+		"a nested stringify keeps its own plans",
+	);
+}
+const manyShapes = [];
+for (let i = 0; i < 300; i++) manyShapes.push({ ["k" + i]: i, v: i });
+let manyOk = true;
+for (let round = 0; round < 3; round++) {
+	for (let i = 0; i < 300; i++) {
+		manyOk &&= JSON.stringify(manyShapes[i]) === '{"k' + i + '":' + i + ',"v":' + i + "}";
+	}
+}
+check(manyOk, "more shapes than the plan cache holds start it over");
+
 console.log(failed ? "json-stringify-scratch FAIL" : "json-stringify-scratch PASS");
