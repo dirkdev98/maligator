@@ -850,13 +850,6 @@ contracts or investigates costs still visible after the string follow-ups.
 
 ## Active correctness clusters
 
-- [ ] Restore the interpreted `await using` Test262 results. Against the
-      1 October baseline, 15 tests under `language/statements/await-using` and
-      `for-of/head-await-using-bound-names-fordecl-tdz.js` now fail in the
-      interpreted backend while passing compiled: use-before-initialization
-      reads and initializer `Symbol.asyncDispose`/`Symbol.dispose` validation.
-      They fail at HEAD without tonight's TDZ fold, so bisect from the baseline.
-
 - [ ] Mint private names per class evaluation inside loops. A class expression
       evaluated by each iteration of a loop in one activation keeps its private
       names in that activation's captured slots, so every evaluation overwrites

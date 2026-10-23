@@ -2215,6 +2215,9 @@ static bool mal_vm_unwind_to_handler(MalVm *vm, i32 target_frame_count) {
         }
 
         if (innermost == nullptr) {
+            // An async body's uncaught throw rejects its promise; its callers'
+            // handlers never see it, even before the first await.
+            if (frame->generator != nullptr && frame->generator->is_async) return false;
             continue;
         }
 
