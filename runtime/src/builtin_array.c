@@ -593,6 +593,58 @@ static bool mal_builtin_array_numeric_search_words(
     return true;
 }
 
+typedef u64 MalWordLanes __attribute__((vector_size(16)));
+
+static bool mal_builtin_array_block_has_word(
+    const MalValue *block, MalWordLanes first, MalWordLanes second
+) {
+    MalWordLanes a, b, c, d;
+    memcpy(&a, block, sizeof(a));
+    memcpy(&b, block + 2, sizeof(b));
+    memcpy(&c, block + 4, sizeof(c));
+    memcpy(&d, block + 6, sizeof(d));
+    MalWordLanes hits = (MalWordLanes) (
+        (a == first) | (a == second) | (b == first) | (b == second) |
+        (c == first) | (c == second) | (d == first) | (d == second));
+    return (hits[0] | hits[1]) != 0;
+}
+
+// Compilers keep an early-exit scan scalar, so whole blocks of eight elements are
+// rejected with vector compares before the scalar scan locates the hit.
+static u32 mal_builtin_array_find_word(
+    const MalValue *elements, u32 start, u32 end, MalValue first, MalValue second
+) {
+    MalWordLanes first_lanes = {first, first};
+    MalWordLanes second_lanes = {second, second};
+    u32 index = start;
+    while (end - index >= 8 &&
+           !mal_builtin_array_block_has_word(elements + index, first_lanes, second_lanes)) {
+        index += 8;
+    }
+    for (; index < end; index++) {
+        if (elements[index] == first || elements[index] == second) return index;
+    }
+    return UINT32_MAX;
+}
+
+// Searches elements [0, last] from `last` down.
+static u32 mal_builtin_array_find_word_reverse(
+    const MalValue *elements, u32 last, MalValue first, MalValue second
+) {
+    MalWordLanes first_lanes = {first, first};
+    MalWordLanes second_lanes = {second, second};
+    u32 bound = last + 1;
+    while (bound >= 8 &&
+           !mal_builtin_array_block_has_word(elements + bound - 8, first_lanes, second_lanes)) {
+        bound -= 8;
+    }
+    while (bound > 0) {
+        bound--;
+        if (elements[bound] == first || elements[bound] == second) return bound;
+    }
+    return UINT32_MAX;
+}
+
 static MalValue mal_builtin_array_dense_numeric_index_of(
     const MalArrayObject *array, MalValue search, u32 start
 ) {
@@ -602,13 +654,10 @@ static MalValue mal_builtin_array_dense_numeric_index_of(
     MalValue first;
     MalValue second;
     if (mal_builtin_array_numeric_search_words(search, &first, &second)) {
-        for (u32 index = start; index < end; index++) {
-            MalValue element = array->elements[index];
-            if (element == first || element == second) {
-                return mal_value_from_u32(index);
-            }
-        }
-        return mal_value_from_i32(-1);
+        u32 found = start < end
+            ? mal_builtin_array_find_word(array->elements, start, end, first, second)
+            : UINT32_MAX;
+        return found == UINT32_MAX ? mal_value_from_i32(-1) : mal_value_from_u32(found);
     }
 
     bool int32_search = mal_value_is_int32(search);
@@ -637,15 +686,8 @@ static MalValue mal_builtin_array_dense_numeric_last_index_of(
     MalValue first;
     MalValue second;
     if (mal_builtin_array_numeric_search_words(search, &first, &second)) {
-        for (;;) {
-            MalValue element = array->elements[index];
-            if (element == first || element == second) {
-                return mal_value_from_u32(index);
-            }
-            if (index == 0) break;
-            index--;
-        }
-        return mal_value_from_i32(-1);
+        u32 found = mal_builtin_array_find_word_reverse(array->elements, index, first, second);
+        return found == UINT32_MAX ? mal_value_from_i32(-1) : mal_value_from_u32(found);
     }
 
     bool int32_search = mal_value_is_int32(search);
@@ -673,11 +715,8 @@ static bool mal_builtin_array_dense_numeric_includes(
     MalValue first;
     MalValue second;
     if (mal_builtin_array_numeric_search_words(search, &first, &second)) {
-        for (u32 index = start; index < end; index++) {
-            MalValue element = array->elements[index];
-            if (element == first || element == second) return true;
-        }
-        return false;
+        return start < end &&
+            mal_builtin_array_find_word(array->elements, start, end, first, second) != UINT32_MAX;
     }
 
     bool int32_search = mal_value_is_int32(search);
