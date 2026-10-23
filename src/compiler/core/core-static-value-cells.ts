@@ -1,4 +1,5 @@
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
+import { coreReadsGlobalBindingInitialized } from "./core-compilation.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreInstructionId } from "./core-ir.ts";
@@ -67,6 +68,7 @@ export class CoreStaticCellIndex {
 	readonly #closed: Set<string>;
 	readonly #initialized: ReadonlySet<string>;
 	readonly #initializedReads: ReadonlySet<string>;
+	readonly #context: CoreCompilationContext;
 	readonly #functions = new Map<CoreFunctionId, Map<string, Array<CellAccess>>>();
 	readonly #cells = new Map<string, Map<CoreFunctionId, Array<CellAccess>>>();
 	readonly #facts = new Map<
@@ -81,6 +83,7 @@ export class CoreStaticCellIndex {
 	#proofWork = 0;
 	constructor(program: CoreProgram, context: CoreCompilationContext) {
 		this.#program = program;
+		this.#context = context;
 		this.#closed = new Set([
 			...context.data.singleAssignmentGlobalSlots.map((slot) => `global:${slot}`),
 			...context.data.singleAssignmentCapturedSlots.map(
@@ -179,6 +182,13 @@ export class CoreStaticCellIndex {
 						?.some((access) => access.write) ?? false
 				)) ||
 			this.#initializedReads.has(`${fn.id}:${key}`) ||
+			(fn.instructionOpcodeName(load) === "loadGlobal" &&
+				coreReadsGlobalBindingInitialized(
+					this.#context,
+					fn.id,
+					fn.metadata.sourcePath,
+					fn.instructionAttributes(load).index as number,
+				)) ||
 			hasInitializationCheck(fn, load, value, consumer);
 		let checkedInitialization: boolean | undefined;
 		if (requestedKey !== undefined && this.#facts.get(key) === undefined) {

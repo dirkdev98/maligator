@@ -613,14 +613,14 @@ it.each(["Global", "Captured"] as const)(
 	},
 );
 
-it("reuses immutable private globals across helpers while leaving TDZ checks and the shared allocation intact", () => {
+it("reuses immutable private globals across helpers created after their initialization", () => {
 	const inspected = inspectStaticValueFunction(
 		"const xs=[10,20]; const probe=()=>xs[0]+xs.length; globalThis.probe=probe;",
 		"probe",
 	);
 	expect(inspected.structure.genericLookups).toBe(0);
 	expect(inspected.core.some((operation) => operation.opcode === "throwIfTdz")).toBe(
-		true,
+		false,
 	);
 });
 

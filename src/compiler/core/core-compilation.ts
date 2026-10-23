@@ -86,13 +86,38 @@ export interface CoreProgramData {
 	readonly singleAssignmentCapturedSlots: ReadonlyArray<CoreCapturedSlotRef>;
 	/** Module bindings that no function except their writers can read uninitialized. */
 	readonly initializedModuleGlobalSlots?: ReadonlyArray<number>;
+	/**
+	 * A module's lexical binding slots and every module that imports it through eager
+	 * static edges. Outside import cycles those importers' functions only run after
+	 * the module finished evaluating, so they never read one of its bindings empty.
+	 */
+	readonly importedModuleBindings?: ReadonlyArray<CoreImportedModuleBindings>;
 	/** Other top-level module `var` slots: only Core stores write them, after `undefined`. */
 	readonly moduleVarGlobalSlots?: ReadonlyArray<number>;
 	/** Captured cells that a function can only read after their initialization. */
 	readonly initializedCapturedReads?: ReadonlyArray<CoreInitializedCapturedRead>;
+	/** Top-level lexical bindings that a function can only read after their initialization. */
+	readonly initializedModuleBindingReads?: ReadonlyArray<CoreInitializedModuleBindingReads>;
 	readonly retainedHostInstallers: ReadonlyArray<string>;
 	/** Present only for an image of a relocatable program. */
 	readonly moduleLinks?: CoreModuleLinks;
+}
+
+/**
+ * One source file's top-level lexical binding slots in declaration order, and the
+ * functions created only after the first `count` of them were initialized.
+ */
+export interface CoreInitializedModuleBindingReads {
+	readonly slots: ReadonlyArray<number>;
+	readonly functions: ReadonlyArray<{
+		readonly function: number;
+		readonly count: number;
+	}>;
+}
+
+export interface CoreImportedModuleBindings {
+	readonly slots: ReadonlyArray<number>;
+	readonly importers: ReadonlyArray<string>;
 }
 
 /** Analysis and diagnostics that accompany, but are not part of, canonical SSA. */
@@ -134,6 +159,89 @@ export function coreInitializedGlobalSlotMembership(
 		initializedGlobalSlotMembershipBySource.set(slots, membership);
 	}
 	return membership;
+}
+
+const importedModuleBindingReadersBySource = new WeakMap<
+	ReadonlyArray<CoreImportedModuleBindings>,
+	ReadonlyMap<number, ReadonlySet<string>>
+>();
+
+/** Whether a function from the module at `readerPath` always reads `slot` initialized. */
+export function coreReadsImportedBindingInitialized(
+	context: CoreCompilationContext,
+	readerPath: string,
+	slot: number,
+): boolean {
+	const bindings = context.data.importedModuleBindings;
+	if (bindings === undefined) return false;
+	let readers = importedModuleBindingReadersBySource.get(bindings);
+	if (readers === undefined) {
+		const map = new Map<number, ReadonlySet<string>>();
+		for (const { slots, importers } of bindings) {
+			const set = new Set(importers);
+			for (const bindingSlot of slots) map.set(bindingSlot, set);
+		}
+		readers = map;
+		importedModuleBindingReadersBySource.set(bindings, readers);
+	}
+	return readers.get(slot)?.has(readerPath) === true;
+}
+
+const initializedModuleBindingReadsBySource = new WeakMap<
+	ReadonlyArray<CoreInitializedModuleBindingReads>,
+	{
+		readonly slotOrder: ReadonlyMap<
+			number,
+			{ readonly file: number; readonly order: number }
+		>;
+		readonly functionPrefix: ReadonlyMap<
+			number,
+			{ readonly file: number; readonly count: number }
+		>;
+	}
+>();
+
+/** Whether function `functionIndex` was created after its file initialized `slot`. */
+export function coreReadsModuleBindingInitialized(
+	context: CoreCompilationContext,
+	functionIndex: number,
+	slot: number,
+): boolean {
+	const reads = context.data.initializedModuleBindingReads;
+	if (reads === undefined) return false;
+	let index = initializedModuleBindingReadsBySource.get(reads);
+	if (index === undefined) {
+		const slotOrder = new Map<number, { file: number; order: number }>();
+		const functionPrefix = new Map<number, { file: number; count: number }>();
+		reads.forEach(({ slots, functions }, file) => {
+			slots.forEach((bindingSlot, order) => slotOrder.set(bindingSlot, { file, order }));
+			for (const { function: owner, count } of functions)
+				functionPrefix.set(owner, { file, count });
+		});
+		index = { slotOrder, functionPrefix };
+		initializedModuleBindingReadsBySource.set(reads, index);
+	}
+	const binding = index.slotOrder.get(slot);
+	const prefix = index.functionPrefix.get(functionIndex);
+	return (
+		binding !== undefined &&
+		prefix !== undefined &&
+		binding.file === prefix.file &&
+		binding.order < prefix.count
+	);
+}
+
+/** Whether a function's reads of a module binding slot always find it initialized. */
+export function coreReadsGlobalBindingInitialized(
+	context: CoreCompilationContext,
+	functionIndex: number,
+	sourcePath: string,
+	slot: number,
+): boolean {
+	return (
+		coreReadsModuleBindingInitialized(context, functionIndex, slot) ||
+		coreReadsImportedBindingInitialized(context, sourcePath, slot)
+	);
 }
 
 const initializedCapturedReadMembershipBySource = new WeakMap<

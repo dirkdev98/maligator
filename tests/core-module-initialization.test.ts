@@ -90,6 +90,57 @@ describe("module bindings initialized before user code", () => {
 		expect(opcodes).toContain("throwIfTdz");
 	});
 
+	it("drops the check in an importer although the owner calls out before initializing", () => {
+		const opcodes = readerOpcodes({
+			"entry.mjs": entry,
+			"limits.mjs": `
+				import { LIMIT } from "./bound.mjs";
+				export function reader(value) { return value % LIMIT; }
+			`,
+			"bound.mjs": `
+				globalThis.early = (() => globalThis.early ?? 1)();
+				export const LIMIT = 7;
+			`,
+		});
+		expect(opcodes).not.toContain("throwIfTdz");
+	});
+
+	it("keeps the check in an importer that shares an import cycle with the owner", () => {
+		const opcodes = readerOpcodes({
+			"entry.mjs": entry,
+			"limits.mjs": `
+				import { LIMIT } from "./bound.mjs";
+				export function reader(value) { return value % LIMIT; }
+			`,
+			"bound.mjs": `
+				import { reader } from "./limits.mjs";
+				globalThis.early = (() => { try { return reader(1); } catch { return "tdz"; } })();
+				export const LIMIT = 7;
+			`,
+		});
+		expect(opcodes).toContain("throwIfTdz");
+	});
+
+	it.each([
+		["after", false],
+		["before", true],
+	] as const)(
+		"treats a module closure created %s the declaration accordingly",
+		(placement, checked) => {
+			const reader = "export const reader = (value) => value % LIMIT;";
+			const opcodes = readerOpcodes({
+				"entry.mjs": entry,
+				"limits.mjs": `
+					${placement === "before" ? reader : ""}
+					globalThis.early = (() => globalThis.early ?? 1)();
+					const LIMIT = 7;
+					${placement === "after" ? reader : ""}
+				`,
+			});
+			expect(opcodes.includes("throwIfTdz")).toBe(checked);
+		},
+	);
+
 	it("keeps the check for a module in an import cycle", () => {
 		const opcodes = readerOpcodes({
 			"entry.mjs": entry,

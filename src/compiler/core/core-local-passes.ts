@@ -30,6 +30,8 @@ import {
 import {
 	coreInitializedCapturedReadMembership,
 	coreInitializedGlobalSlotMembership,
+	coreReadsImportedBindingInitialized,
+	coreReadsModuleBindingInitialized,
 } from "./core-compilation.ts";
 import { CoreEditor } from "./core-editor.ts";
 import { CORE_FUNCTION_HAS_EDGE_ARGUMENTS } from "./core-function-features.ts";
@@ -1708,7 +1710,21 @@ const foldRedundantTdzChecks: CoreFunctionPass = {
 		let writtenGlobals: ReadonlySet<unknown> | undefined;
 		const initializedGlobal = (load: CoreInstructionId): boolean => {
 			const index = fn.instructionAttributes(load).index;
-			if (typeof index !== "number" || !initializedGlobals.has(index)) return false;
+			if (typeof index !== "number") return false;
+			if (
+				coreReadsModuleBindingInitialized(
+					context.compilationContext,
+					item.function,
+					index,
+				) ||
+				coreReadsImportedBindingInitialized(
+					context.compilationContext,
+					fn.metadata.sourcePath,
+					index,
+				)
+			)
+				return true;
+			if (!initializedGlobals.has(index)) return false;
 			writtenGlobals ??= new Set(
 				[...fn.instructionIds()].flatMap((instruction) =>
 					fn.instructionKind(instruction) === "operation" &&

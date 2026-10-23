@@ -126,10 +126,13 @@ The independent target boundary and current storage contract are recorded in
       single-threaded emission, which cancels the saving at eight jobs.
 - [ ] Fold the TDZ checks that remain on module bindings read through import cycles
       and immediately invoked setup functions, such as the one that opens meriyah.
-      The self-compile image keeps 2,096 `THROW_IF_TDZ` instructions now that
-      loop-carried values fold. Hoisted helpers that inherit the bindings declared
-      before their first reference, and prefixes that continue past calls into
-      data-only dependencies, removed almost none.
+      The self-compile Core keeps 1,600 checks: 1,067 on module bindings, 491 on
+      captured cells and 42 on loop values. Importers outside a cycle and closures
+      created after the declaration already read module bindings initialized; what
+      remains are reads inside import cycles and from hoisted functions. Hoisted
+      helpers that inherit the bindings declared before their first reference, and
+      prefixes that continue past calls into data-only dependencies, removed almost
+      none.
 - [ ] Bring the native self-compile's memory closer to its live set. Peak live
       bytes stay near 900 MB, but maximum RSS is 4.4 GB now that process GC
       pressure backs off past its budget (it was 3.5 GB while pressure forced 183

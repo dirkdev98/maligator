@@ -80,6 +80,8 @@ import type {
 	CoreInitializedCapturedRead,
 	ConstructedCoreCompilation,
 	CoreHostInstallCandidate,
+	CoreImportedModuleBindings,
+	CoreInitializedModuleBindingReads,
 	CoreModuleInterface,
 	CoreModuleLink,
 	CoreModuleLinks,
@@ -1072,11 +1074,12 @@ function finishCoreProgram(program: CoreFrontendContext): ConstructedCoreCompila
 				singleAssignmentGlobalSlots: candidates.singleAssignmentGlobalSlots,
 				singleAssignmentCapturedSlots: candidates.singleAssignmentCapturedSlots,
 				initializedModuleGlobalSlots,
+				importedModuleBindings: coreImportedModuleBindings(program),
 				moduleVarGlobalSlots: coreModuleVarGlobalSlots(
 					program,
 					initializedModuleGlobalSlots,
 				),
-				initializedCapturedReads: coreInitializedCapturedReads(program),
+				...coreInitializedLexicalReads(program),
 				retainedHostInstallers: [
 					program.hostProcess,
 					program.hostBuffer,
@@ -1128,6 +1131,74 @@ function coreInitializedModuleGlobalSlots(program: CoreFrontendContext): Array<n
 		}
 	}
 	return [...slots].sort((left, right) => left - right);
+}
+
+/**
+ * Lexical bindings of each ES module that importers reach only after it evaluated.
+ *
+ * A function can read another module's binding only through an import, so its
+ * module transitively imports the owner. Outside an import cycle the owner finishes
+ * evaluating before any such importer starts, and no function of an importer is
+ * reachable earlier. Deferred, dynamic and CommonJS edges keep that order out of
+ * reach, as do the owners the initialization prefix also leaves out.
+ */
+function coreImportedModuleBindings(
+	program: CoreFrontendContext,
+): Array<CoreImportedModuleBindings> {
+	const graph = program.semantic.graph;
+	if (program.evalDirect || graph === undefined) return [];
+	const cyclic = new Set(graph.cycles.flat());
+	const directImporters = new Map<string, Array<string>>();
+	for (const [path, record] of graph.modules) {
+		for (const dependency of record.dependencies) {
+			if (
+				(dependency.kind !== "import" && dependency.kind !== "export") ||
+				dependency.resolvedPath === null
+			)
+				continue;
+			const importers = directImporters.get(dependency.resolvedPath) ?? [];
+			importers.push(path);
+			directImporters.set(dependency.resolvedPath, importers);
+		}
+	}
+	const result: Array<CoreImportedModuleBindings> = [];
+	for (const file of program.semantic.files) {
+		if (
+			file.type !== "module" ||
+			file.commonjs ||
+			cyclic.has(file.path) ||
+			graph.modules.get(file.path)?.platform?.evaluation === "side-effect-free" ||
+			(program.cjsImports.get(file.path)?.length ?? 0) > 0
+		)
+			continue;
+		const importers = new Set<string>();
+		const work = [file.path];
+		for (let path = work.pop(); path !== undefined; path = work.pop()) {
+			for (const importer of directImporters.get(path) ?? []) {
+				if (importer === file.path || importers.has(importer)) continue;
+				importers.add(importer);
+				work.push(importer);
+			}
+		}
+		if (importers.size === 0) continue;
+		const slots = new Set<number>();
+		for (const [node, binding] of file.nodeToBinding) {
+			if (
+				binding.declarationNode !== node ||
+				binding.imported === true ||
+				binding.kind === "var"
+			)
+				continue;
+			const location = program.bindingToStorage.get(binding);
+			if (location?.type === "global") slots.add(location.index);
+		}
+		if (slots.size > 0)
+			result.push({
+				slots: [...slots].sort((left, right) => left - right),
+				importers: [...importers].sort(),
+			});
+	}
+	return result;
 }
 
 /**
@@ -1389,11 +1460,17 @@ function moduleInitializationPrefix(
  * created at their list's entry, and switch cases can be entered past a
  * declaration, so neither gains the bindings of their own list.
  */
-function coreInitializedCapturedReads(
-	program: CoreFrontendContext,
-): Array<CoreInitializedCapturedRead> {
+function coreInitializedLexicalReads(program: CoreFrontendContext): {
+	initializedCapturedReads: Array<CoreInitializedCapturedRead>;
+	initializedModuleBindingReads: Array<CoreInitializedModuleBindingReads>;
+} {
 	const reads: Array<CoreInitializedCapturedRead> = [];
+	const moduleReads: Array<CoreInitializedModuleBindingReads> = [];
 	for (const file of program.semantic.files) {
+		// Top-level lexical bindings stored in global slots, in declaration order.
+		const topLevelOrder = new Map<Binding, number>();
+		const topLevelSlots: Array<number> = [];
+		const functionPrefixes: Array<{ function: number; count: number }> = [];
 		const declared = (node: ESTree.Node | null | undefined): Array<Binding> => {
 			if (node === null || node === undefined) return [];
 			const declaration =
@@ -1440,8 +1517,10 @@ function coreInitializedCapturedReads(
 			initialized: ReadonlySet<Binding>,
 		): void => {
 			const functionIndex = program.nodeToFunctionCache.get(node)?.fnIndex;
-			if (functionIndex !== undefined)
+			if (functionIndex !== undefined) {
+				let topLevel = 0;
 				for (const binding of initialized) {
+					if (topLevelOrder.has(binding)) topLevel++;
 					const location = program.bindingToStorage.get(binding);
 					if (location?.type === "captured")
 						reads.push({
@@ -1450,6 +1529,9 @@ function coreInitializedCapturedReads(
 							index: location.index,
 						});
 				}
+				if (topLevel > 0)
+					functionPrefixes.push({ function: functionIndex, count: topLevel });
+			}
 			visit(node.params, initialized);
 			if (node.body?.type === "BlockStatement")
 				visitList(node.body.body, initialized, true);
@@ -1468,7 +1550,16 @@ function coreInitializedCapturedReads(
 			for (const statement of statements) {
 				if (hoisted(statement) !== undefined) continue;
 				visit(statement, initialized);
-				if (ordered) initialized = including(initialized, declared(statement));
+				if (!ordered) continue;
+				const bindings = declared(statement);
+				if (statements === file.ast.body)
+					for (const binding of bindings) {
+						const location = program.bindingToStorage.get(binding);
+						if (location?.type !== "global" || topLevelOrder.has(binding)) continue;
+						topLevelOrder.set(binding, topLevelSlots.length);
+						topLevelSlots.push(location.index);
+					}
+				initialized = including(initialized, bindings);
 			}
 		};
 		const visit = (root: unknown, initialized: ReadonlySet<Binding>): void => {
@@ -1515,8 +1606,10 @@ function coreInitializedCapturedReads(
 			});
 		};
 		visit(file.ast, new Set());
+		if (functionPrefixes.length > 0)
+			moduleReads.push({ slots: topLevelSlots, functions: functionPrefixes });
 	}
-	return reads;
+	return { initializedCapturedReads: reads, initializedModuleBindingReads: moduleReads };
 }
 
 /**
