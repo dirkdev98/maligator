@@ -2115,4 +2115,46 @@ describe("Core local memory, provenance, and escape optimization", () => {
 		expect(dense?.allocation).toBeTypeOf("number");
 		expect(discovery.candidates.some(({ kind }) => kind === "numeric-fusion")).toBe(true);
 	});
+
+	it.each([
+		[
+			"folds the length of a literal read by index",
+			"const xs = [10, 20, 30]; let s = 0; for (let i = 0; i < index; i++) s += xs[i % xs.length]; return s;",
+			true,
+			0,
+		],
+		[
+			"folds the length of a literal with a hole",
+			"const xs = [1, , 3]; let s = 0; for (let i = 0; i < index; i++) s += xs[i % xs.length] ?? 0; return s;",
+			true,
+			0,
+		],
+		[
+			"keeps the length when a mutable prototype may answer an element read",
+			"const xs = [10, 20, 30]; let s = 0; for (let i = 0; i < index; i++) s += xs[i % xs.length]; return s;",
+			false,
+			1,
+		],
+		[
+			"keeps the length after the literal escapes",
+			"const xs = [10, 20, 30]; consume(xs); let s = 0; for (let i = 0; i < index; i++) s += xs[i % xs.length]; return s;",
+			true,
+			1,
+		],
+		[
+			"keeps the length when a store may extend the literal",
+			"const xs = [10, 20, 30]; let s = 0; for (let i = 0; i < index; i++) { xs[i] = i; s += xs.length; } return s;",
+			true,
+			1,
+		],
+	] as const)("%s", (_name, body, locked, lengthLoads) => {
+		const result = inspectStaticValueFunction(
+			`function probe(index, consume) { ${body} } globalThis.probe = probe;`,
+			"probe",
+			{ locked },
+		);
+		expect(
+			result.core.filter(({ opcode }) => opcode === "loadPropertyStatic"),
+		).toHaveLength(lengthLoads);
+	});
 });
