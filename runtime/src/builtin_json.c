@@ -2042,7 +2042,40 @@ static bool mal_json_number_consume(
     return true;
 }
 
+// Most JSON numbers are short integers inside one Latin-1 segment; they need
+// neither the decimal token nor the per-character consume checks.
+static bool mal_json_try_parse_small_integer(MalJsonParser *parser, MalValue *out) {
+    usize offset = parser->position - parser->segment_start;
+    if (!parser->segment.latin1 || offset >= parser->segment.length) return false;
+    const u8 *units = parser->segment.latin1_units + offset;
+    usize available = parser->segment.length - offset;
+    bool negative = units[0] == '-';
+    usize start = negative ? 1 : 0;
+    usize position = start;
+    u64 magnitude = 0;
+    if (position < available && units[position] == '0') {
+        position++;
+    } else {
+        while (position < available && (u32) (units[position] - '0') < 10 &&
+               position - start < 15) {
+            magnitude = magnitude * 10 + (u32) (units[position] - '0');
+            position++;
+        }
+    }
+    // The general path handles a missing digit, a number reaching the segment's
+    // end, more digits, a fraction, and an exponent.
+    if (position == start || position >= available) return false;
+    u8 next = units[position];
+    if ((u32) (next - '0') < 10 || next == '.' || next == 'e' || next == 'E') return false;
+    parser->position += position;
+    *out = negative && magnitude == 0 ? MAL_VALUE_NEGATIVE_ZERO
+        : mal_ops_number_value(negative ? -(f64) magnitude : (f64) magnitude);
+    return true;
+}
+
 static MalValue mal_json_parse_number(MalJsonParser *parser) {
+    MalValue small;
+    if (mal_json_try_parse_small_integer(parser, &small)) return small;
     MalJsonNumberToken token;
     token.data = token.inline_data;
     token.length = 0;
