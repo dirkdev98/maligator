@@ -484,8 +484,12 @@ static MalValue ee_emit(
     MalValue event_root = event.value;
     MalRootSpan root;
     mal_gc_root(&root, &event_root, 1);
+    // Listeners may run for as long as a program does; the call seam roots the receiver and
+    // arguments, and the emit roots its event and listener snapshot.
+    mal_gc_native_rooted_begin(vm);
     bool emitted = ee_emit_key(vm, receiver, event, argc > 1 ? args + 1 : nullptr,
                                argc > 1 ? argc - 1 : 0);
+    mal_gc_native_rooted_end(vm);
     mal_gc_unroot(&root);
     return mal_value_new_boolean(emitted);
 }

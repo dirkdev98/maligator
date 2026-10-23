@@ -19,6 +19,7 @@ describe("node:events", () => {
 	let cjsCompiled: string;
 	let cjsInterpreted: string;
 	let perfCompiled: string;
+	let gcCompiled: string;
 
 	beforeAll(() => {
 		esmCompiled = buildNativeBinary({
@@ -59,6 +60,13 @@ describe("node:events", () => {
 			nodeEnabled: true,
 			environment: { ...process.env, MAL_PERF_STATS: "1" },
 		});
+		gcCompiled = buildNativeBinary({
+			fixture: "tests/local/node-events-gc.cjs",
+			name: "node-events-gc-compiled",
+			mainFile: HOST_MAIN,
+			outDir,
+			nodeEnabled: true,
+		});
 	}, 1_200_000);
 
 	it("passes ESM compiled", () => {
@@ -80,6 +88,17 @@ describe("node:events", () => {
 	it("passes under MAL_GC_STRESS + MAL_GC_VERIFY", () => {
 		assertResultPass(runToStdout(esmCompiled, { env: STRESS_ENV }));
 		assertResultPass(runToStdout(cjsCompiled, { env: STRESS_ENV }));
+	});
+
+	it("collects while listeners of a JavaScript emit run", () => {
+		const result = spawnSync(gcCompiled, [], {
+			env: { ...process.env, MAL_GC_STATS: "1" },
+			encoding: "utf-8",
+		});
+		expect(result.status, result.stderr || result.stdout).toBe(0);
+		expect(result.stdout).toBe("node-events-gc PASS\n");
+		const collections = Number(result.stderr.match(/\bcollections=(\d+)/)?.[1]);
+		expect(collections).toBeGreaterThanOrEqual(3);
 	});
 
 	it("reports singleton storage and array transitions exactly", () => {
