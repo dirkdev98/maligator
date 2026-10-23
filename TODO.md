@@ -724,6 +724,16 @@ contracts or investigates costs still visible after the string follow-ups.
       returns through a completion check. Frame rows are not the cost (a build
       without them ran the self-compile 0.3% faster), and field entries beat
       inlining the `quote` bodies.
+- [ ] Run inlined `filter` callbacks over an unknown dense Array without per-element
+      dispatch. `values.filter((value) => (value & 7) === (round & 7))` over 1024
+      numbers takes 5.0 ns per element against Node's 1.2 (3.9 with a constant in
+      place of the captured `round`). Each element pays a generic `index in array`
+      hole test with a boxed result, an element load that dispatches on the
+      Array kind, and a reload of the captured binding: loop-invariant code motion
+      keeps it in the loop because the `in` test and the load may call user code
+      on an arbitrary receiver. The array is not known to be packed, so the
+      region needs the dense storage check at entry that numeric loop regions use,
+      plus the appends to the result array.
 - [ ] Give large functions allocation-free iteration. Region selection spends the
       program generated-code budget after about 1,700 of 28,700 discovery
       opportunities in the self-compile, so functions such as render-native-c's
