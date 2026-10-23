@@ -437,10 +437,14 @@ static void regexp_initialize_state(
     re->source = pattern;
     re->flags = flags_str;
     re->flag_bits = bits;
-    // lastIndex is a { writable, !enumerable, !configurable } own data property.
-    MalValue last_index = mal_value_from_i32(0);
-    mal_object_set_shaped_values(
-        (MalObject *) re, regexp_instance_shape(vm), &last_index, 1);
+    // lastIndex is a { writable, !enumerable, !configurable } own data property,
+    // stored in the object's own cell so a RegExp needs no separate field array.
+    MalObject *object = (MalObject *) re;
+    assert(object->shape->inline_count == 0 && mal_object_fields(object) == nullptr);
+    re->last_index_field = mal_value_from_i32(0);
+    mal_object_set_fields_pointer(object, &re->last_index_field);
+    object->slot_capacity = 1;
+    object->shape = regexp_instance_shape(vm);
 }
 
 #define REGEXP_TEMPLATE_CAPACITY 64

@@ -40,6 +40,8 @@ typedef struct MalRegExpObject {
     u32 flag_bits;        // parsed MalRegExpFlag bits (cache of `flags`)
     // [[LegacyFeaturesEnabled]]: false only for instances of RegExp subclasses.
     bool legacy_features;
+    // The lastIndex slot's storage until another property grows the fields.
+    MalValue last_index_field;
 } MalRegExpObject;
 
 /**

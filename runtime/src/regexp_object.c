@@ -7,6 +7,7 @@ void mal_regexp_object_init(MalHeap *heap, MalRegExpObject *regexp, MalObject *p
     regexp->flags = nullptr;
     regexp->flag_bits = 0;
     regexp->legacy_features = true;
+    regexp->last_index_field = mal_value_new_undefined();
 }
 
 MalRegExpObject *mal_regexp_object_new(MalHeap *heap, MalObject *prototype) {
