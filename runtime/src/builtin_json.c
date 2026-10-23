@@ -1301,6 +1301,20 @@ static MalValue mal_json_frame_key(const MalJsonFrame *frame, usize position) {
         ? prop->key : mal_value_new_undefined();
 }
 
+// Ancestors below this depth are found by scanning the frame stack; only deeper
+// frames enter the active set, so shallow documents never hash an object.
+#define MAL_JSON_SCANNED_ANCESTORS 64
+
+static bool mal_json_plain_is_active(MalJsonPlainState *state, const MalObject *object) {
+    usize scanned = state->count < MAL_JSON_SCANNED_ANCESTORS
+        ? state->count : MAL_JSON_SCANNED_ANCESTORS;
+    for (usize i = 0; i < scanned; i++) {
+        if (mal_value_to_object(state->frames[i].value) == object) return true;
+    }
+    return state->count > MAL_JSON_SCANNED_ANCESTORS &&
+        mal_json_pointer_find(&state->active, object) != nullptr;
+}
+
 static MalJsonResult mal_json_resume_generic(
     MalJsonPlainState *plain, MalJsonState *generic, MalJsonBuilder *builder
 ) {
@@ -1323,6 +1337,9 @@ static MalJsonResult mal_json_resume_generic(
                 }
             }
         }
+    }
+    for (usize i = 0; i < plain->count && i < MAL_JSON_SCANNED_ANCESTORS; i++) {
+        mal_json_pointer_insert(&plain->active, mal_value_to_object(plain->frames[i].value), nullptr);
     }
     mal_json_pointer_move(&generic->active, &plain->active);
     MalJsonResult result = MAL_JSON_THROW;
@@ -1400,12 +1417,14 @@ static bool mal_json_try_serialize_plain(
             } else if (!mal_json_plain_frame(&state, value, &frame)) {
                 goto unsupported;
             }
-            if (mal_json_pointer_find(&state.active, object) != nullptr) {
+            if (mal_json_plain_is_active(&state, object)) {
                 mal_vm_throw_error(generic->vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
                     "Converting circular structure to JSON");
                 goto failed;
             }
-            mal_json_pointer_insert(&state.active, object, nullptr);
+            if (state.count >= MAL_JSON_SCANNED_ANCESTORS) {
+                mal_json_pointer_insert(&state.active, object, nullptr);
+            }
             if (state.count == state.capacity) {
                 usize capacity;
                 usize bytes;
@@ -1436,7 +1455,9 @@ static bool mal_json_try_serialize_plain(
             MalJsonFrame *frame = &state.frames[state.count - 1];
             if (frame->position == frame->count) {
                 if (!mal_json_builder_push(builder, frame->array ? ']' : '}')) goto failed;
-                mal_json_pointer_remove(&state.active, mal_value_to_object(frame->value));
+                if (state.count > MAL_JSON_SCANNED_ANCESTORS) {
+                    mal_json_pointer_remove(&state.active, mal_value_to_object(frame->value));
+                }
                 state.count--;
                 continue;
             }
