@@ -401,4 +401,18 @@ check(
 	JSON.stringify(JSON.parse('{"after":42}')) === '{"after":42}',
 	"JSON remains usable after abrupt completion",
 );
+// Cached keys of one length that differ in a single position stay distinct.
+let distinctKeys = true;
+for (let length = 1; length <= 25; length++) {
+	for (let position = 0; position < length; position++) {
+		const base = "k".repeat(length);
+		const other = base.slice(0, position) + "q" + base.slice(position + 1);
+		for (let round = 0; round < 2; round++) {
+			const parsed = JSON.parse('{"' + base + '":1,"' + other + '":2}');
+			distinctKeys &&= parsed[base] === 1 && parsed[other] === 2;
+			distinctKeys &&= Object.keys(parsed).join() === base + "," + other;
+		}
+	}
+}
+check(distinctKeys, "cached keys compare every byte");
 console.log(failed ? "json-algorithms FAIL" : "json-algorithms PASS");

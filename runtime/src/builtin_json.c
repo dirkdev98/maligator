@@ -2588,6 +2588,39 @@ static u32 mal_json_key_hash(const u8 *bytes, usize length) {
     return hash;
 }
 
+/** Cached keys are a few bytes long, where a libc call costs more than the compare;
+ * overlapping fixed-size loads cover every length without reading past either range. */
+static inline bool mal_json_key_bytes_equal(const u8 *left, const u8 *right, usize length) {
+    if (length > 16) {
+        u64 a[2], b[2], tail_a, tail_b;
+        memcpy(a, left, 16);
+        memcpy(b, right, 16);
+        memcpy(&tail_a, left + length - 8, 8);
+        memcpy(&tail_b, right + length - 8, 8);
+        return ((a[0] ^ b[0]) | (a[1] ^ b[1]) | (tail_a ^ tail_b)) == 0;
+    }
+    if (length >= 8) {
+        u64 head_a, head_b, tail_a, tail_b;
+        memcpy(&head_a, left, 8);
+        memcpy(&head_b, right, 8);
+        memcpy(&tail_a, left + length - 8, 8);
+        memcpy(&tail_b, right + length - 8, 8);
+        return ((head_a ^ head_b) | (tail_a ^ tail_b)) == 0;
+    }
+    if (length >= 4) {
+        u32 head_a, head_b, tail_a, tail_b;
+        memcpy(&head_a, left, 4);
+        memcpy(&head_b, right, 4);
+        memcpy(&tail_a, left + length - 4, 4);
+        memcpy(&tail_b, right + length - 4, 4);
+        return ((head_a ^ head_b) | (tail_a ^ tail_b)) == 0;
+    }
+    for (usize i = 0; i < length; i++) {
+        if (left[i] != right[i]) return false;
+    }
+    return true;
+}
+
 // The opening quote is consumed; the key's closing quote is consumed on success.
 static bool mal_json_parse_key(MalJsonParser *parser, MalKey *out) {
     struct MalJsonKeyCache *cache = mal_json_key_cache(parser->vm);
@@ -2605,7 +2638,7 @@ static bool mal_json_parse_key(MalJsonParser *parser, MalKey *out) {
             entry = &cache->entries[
                 mal_json_key_hash(units, length) & (MAL_JSON_KEY_CACHE_ENTRIES - 1)];
             if (entry->filled && entry->length == length &&
-                memcmp(entry->bytes, units, length) == 0) {
+                mal_json_key_bytes_equal(entry->bytes, units, length)) {
                 parser->position += length + 1;
                 *out = entry->key;
                 return true;
