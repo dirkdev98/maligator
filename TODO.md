@@ -558,6 +558,18 @@ iterator cursor is not, by itself, permission to delete its language object.
       through polymorphic rows, nested records, stores to records and calls in the
       body still decline, and a guard failure finishes the whole loop in the
       original code.
+      A failed guard restarts its whole iteration in the original loop, so no guard
+      may follow a store in the same iteration. That keeps stores at keys from
+      records or other views out of regions: `core-to-execution` writes typed
+      images at `instruction.id * 2` (9.1 ns per operation against Node's 2.4),
+      and `optimizer-queue` appends with `queue[length++] = index` after a
+      store (7.3 against 2.4). Both need side exits that leave mid-iteration with
+      the live registers, which in turn needs every fallback plan's state, such as
+      indexed-length kinds and fusion flags, to be valid at the exit.
+      A region also cannot contain an inner loop. The union-find walk in
+      `canonical-roots` runs its inner `while` as a region but re-admits the view
+      once per outer element, which costs about 18 ns per element against Node's
+      4.3.
       Frame-local shape snapshots for plain static loads and stores in loops made
       such a loop about 8% faster but the self-compiler's parser slice 1.7 to 2.6%
       slower, so they serve number-record regions only.
@@ -736,16 +748,13 @@ contracts or investigates costs still visible after the string follow-ups.
       returns through a completion check. Frame rows are not the cost (a build
       without them ran the self-compile 0.3% faster), and field entries beat
       inlining the `quote` bodies.
-- [ ] Keep the objects phase's order checksum unboxed. The order loop takes 47.9 ms
-      against Node's 19.7. The loop without calls costs 11 ms against 12.3, and `quote`
-      alone adds 9.7 ms, but each further term of the checksum sum then adds 7 to 12 ms
-      more than it does on its own, even the inlined `argumentEdges` arithmetic. The
-      dispatched `quote` result stays boxed because the fallback call can return anything,
-      so each later add boxes a known Number again to test it, and `% MOD` runs the
-      generic remainder with a branch on the operand range and a 64-bit division, all on
-      the loop-carried checksum. The `accumulator` closure stays a call as well: the
-      inliner rejects captured bindings unless the closure was created in the caller's
-      scope chain.
+- [ ] Close the rest of the objects phase's order loop. It takes 35.7 ms against
+      Node's 19.3, down from 47.9 now that a chain of generic adds keeps its sum
+      unboxed. The dispatched `quote` result is still boxed because the fallback call
+      can return anything, and `% MOD` runs the generic remainder on the
+      loop-carried checksum. The `accumulator` closure stays a call as well: the
+      inliner rejects captured bindings unless the closure was created in the
+      caller's scope chain.
 - [ ] Run inlined `filter` callbacks over an unknown dense Array without per-element
       dispatch. `values.filter((value) => (value & 7) === (round & 7))` over 1024
       numbers takes 5.0 ns per element against Node's 1.2 (3.9 with a constant in
