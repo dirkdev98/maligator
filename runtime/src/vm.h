@@ -2746,30 +2746,14 @@ MalCompletion mal_vm_call_value(
     i32 arg_count
 );
 
-/** A site accumulates up to this many exact native callees before overflow stays on full dispatch. */
-#define MAL_CALL_CACHE_WAYS 4u
-
-/**
- * Exact native-callee cache for the native backend. Ordinary compiled functions dispatch from
- * their live runtime-image row, while native callbacks need an identity guard before bypassing
- * generic dispatch. Cached callees are unrooted, so heap identity and epoch prevent reuse after
- * VM destruction or a sweep.
- */
-typedef struct MalCallCache {
-    MalValue callee[MAL_CALL_CACHE_WAYS];
-    u32 count;
-    u32 epoch;
-    u64 heap_identity;
-} MalCallCache;
-
-/** Cached [[Call]] whose completion is left in vm->completion; an ordinary compiled
- * callee is entered as a tail call, since it owns its activation. */
 /** Recompute a function's call_entries row after its compiled entry changes. */
 void mal_vm_refresh_call_entry(MalVm *vm, i32 function_index);
 
+/** [[Call]] from a compiled site, with its completion left in vm->completion. An ordinary
+ * compiled callee is entered as a tail call, since it owns its activation, and a plain
+ * native callee is entered without the generic call's bound and proxy resolution. */
 MalValue mal_vm_call_cached_value(
     MalVm *vm,
-    MalCallCache *cc,
     MalValue callee,
     MalValue this_value,
     const MalValue *args,
@@ -2778,13 +2762,12 @@ MalValue mal_vm_call_cached_value(
 
 static inline MalCompletion mal_vm_call_cached(
     MalVm *vm,
-    MalCallCache *cc,
     MalValue callee,
     MalValue this_value,
     const MalValue *args,
     i32 arg_count
 ) {
-    MalValue value = mal_vm_call_cached_value(vm, cc, callee, this_value, args, arg_count);
+    MalValue value = mal_vm_call_cached_value(vm, callee, this_value, args, arg_count);
     return vm->completion.kind == MAL_COMPLETION_THROW
         ? vm->completion
         : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
@@ -2808,13 +2791,12 @@ MalCompletion mal_vm_call_exact_native(
 
 /**
  * Guarded direct script-function call for native sites with an exact static target.
- * A matching live plain closure bypasses MalCallCache and generic dispatch while
+ * A matching live plain closure bypasses generic dispatch while
  * retaining its own environment, realm, identity, and this binding. Guard misses
  * use the ordinary cached call path.
  */
 MalCompletion mal_vm_call_direct(
     MalVm *vm,
-    MalCallCache *fallback_cache,
     i32 expected_function_index,
     MalValue callee,
     MalValue this_value,
@@ -2847,7 +2829,6 @@ MalCompletion mal_vm_call_exact_script(
  */
 MalCompletion mal_vm_call_function_call_direct(
     MalVm *vm,
-    MalCallCache *fallback_cache,
     i32 expected_function_index,
     MalValue call_method,
     MalValue target,
@@ -3018,7 +2999,6 @@ static inline __attribute__((always_inline)) bool mal_vm_call_numeric_reduce_cal
 static inline __attribute__((always_inline)) MalCompletion
 mal_vm_call_function_call_direct_compiled(
     MalVm *vm,
-    MalCallCache *fallback_cache,
     i32 expected_function_index,
     MalCompiledFunction callback,
     MalValue call_method,
@@ -3045,7 +3025,7 @@ mal_vm_call_function_call_direct_compiled(
             arg_count > 1 ? args + 1 : nullptr, arg_count > 1 ? arg_count - 1 : 0);
     }
     return mal_vm_call_function_call_direct(
-        vm, fallback_cache, expected_function_index, call_method, target, args, arg_count);
+        vm, expected_function_index, call_method, target, args, arg_count);
 }
 
 /**

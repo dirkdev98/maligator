@@ -43,7 +43,6 @@ bool mal_builtin_array_default_map_guard(MalVm *vm, MalValue receiver);
  */
 MalCompletion mal_builtin_array_push_direct(
     MalVm *vm,
-    MalCallCache *fallback_cache,
     MalValue callee,
     MalValue this_value,
     const MalValue *args,
@@ -69,7 +68,6 @@ bool mal_builtin_array_deque_try_direct(
 
 MalCompletion mal_builtin_array_deque_direct(
     MalVm *vm,
-    MalCallCache *fallback_cache,
     MalGuardedBuiltinCallOp operation,
     MalValue callee,
     MalValue this_value,
@@ -94,7 +92,6 @@ bool mal_builtin_array_at_try_direct(
 
 MalCompletion mal_builtin_array_at_direct(
     MalVm *vm,
-    MalCallCache *fallback_cache,
     MalValue callee,
     MalValue this_value,
     const MalValue *args,
@@ -148,7 +145,6 @@ typedef enum MalBuiltinArrayIterationOp {
  */
 MalCompletion mal_builtin_array_iteration_direct(
     MalVm *vm,
-    MalCallCache *fallback_cache,
     MalBuiltinArrayIterationOp operation,
     i32 callback_function_index,
     MalCompiledFunction compiled_callback,
@@ -160,7 +156,6 @@ MalCompletion mal_builtin_array_iteration_direct(
 
 MalCompletion mal_builtin_array_numeric_reduce_direct(
     MalVm *vm,
-    MalCallCache *fallback_cache,
     MalBuiltinArrayIterationOp operation,
     i32 callback_function_index,
     MalCompiledFunction compiled_callback,

@@ -418,7 +418,6 @@ MalValue mal_builtin_map_set_known(
 
 MalCompletion mal_builtin_collection_direct(
     MalVm *vm,
-    MalCallCache *fallback_cache,
     MalGuardedBuiltinCallOp operation,
     MalBuiltinCollectionReceiverFact receiver_fact,
     MalValue callee,
@@ -567,7 +566,7 @@ MalCompletion mal_builtin_collection_direct(
 
     MAL_PERF_COUNT(collection_direct_fallbacks);
     return mal_vm_call_cached(
-        vm, fallback_cache, callee, this_value, args, arg_count);
+        vm, callee, this_value, args, arg_count);
 }
 
 static MalValue mal_builtin_map_prototype_has(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -739,12 +738,11 @@ MalValue mal_builtin_map_prototype_for_each(MalVm *vm, MalValue this_value, cons
     MalRootSpan callback_span;
     mal_gc_root(&callback_span, callback_args, countof(callback_args));
     mal_gc_native_rooted_begin(vm);
-    MalCallCache callback_cache = {0};
     while (mal_map_iter_next(&iter, &callback_args[1], &callback_args[0])) {
         MalExactScriptCall *exact = vm->exact_script_call;
         MalCompletion completion = exact != nullptr && exact->callee == args[0]
             ? mal_vm_call_builtin_callback(vm, args[0], this_arg, callback_args, 3)
-            : mal_vm_call_cached(vm, &callback_cache, args[0], this_arg, callback_args, 3);
+            : mal_vm_call_cached(vm, args[0], this_arg, callback_args, 3);
         if (completion.kind != MAL_COMPLETION_NORMAL) break;
     }
     mal_gc_native_rooted_end(vm);

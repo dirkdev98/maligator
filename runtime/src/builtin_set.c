@@ -355,13 +355,12 @@ MalValue mal_builtin_set_prototype_for_each(MalVm *vm, MalValue this_value, cons
     mal_gc_root(&span, callback_args, countof(callback_args));
     mal_gc_native_rooted_begin(vm);
     MalValue key;
-    MalCallCache callback_cache = {0};
     while (mal_set_iter_next(&iter, &key)) {
         callback_args[0] = callback_args[1] = key;
         MalExactScriptCall *exact = vm->exact_script_call;
         MalCompletion completion = exact != nullptr && exact->callee == args[0]
             ? mal_vm_call_builtin_callback(vm, args[0], this_arg, callback_args, 3)
-            : mal_vm_call_cached(vm, &callback_cache, args[0], this_arg, callback_args, 3);
+            : mal_vm_call_cached(vm, args[0], this_arg, callback_args, 3);
         if (completion.kind != MAL_COMPLETION_NORMAL) break;
     }
     mal_gc_native_rooted_end(vm);

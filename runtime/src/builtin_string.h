@@ -140,7 +140,6 @@ bool mal_builtin_string_char_code_at_try(
  */
 MalCompletion mal_builtin_string_char_code_at_direct(
     MalVm *vm,
-    MalCallCache *fallback_cache,
     MalValue callee,
     MalValue this_value,
     const MalValue *args,
@@ -153,7 +152,6 @@ MalCompletion mal_builtin_string_char_code_at_direct(
  * The cast happens only after the live receiver and builtin identity guards pass. */
 MalCompletion mal_builtin_string_char_code_at_direct_in_bounds(
     MalVm *vm,
-    MalCallCache *fallback_cache,
     MalValue callee,
     MalValue this_value,
     const MalValue *args,

@@ -39,15 +39,14 @@ int main(void) {
     MalRootSpan callee_root;
     mal_gc_root(&callee_root, &callee, 1);
     MalValue args[] = {mal_value_from_i32(1), callee};
-    MalCallCache cache = {0};
     if (!result_is_277(mal_vm_call_direct(
-            &vm, &cache, target, callee, mal_value_new_undefined(), args, 2))) {
+            &vm, target, callee, mal_value_new_undefined(), args, 2))) {
         return 2;
     }
 
     // A wrong expected index must guard-miss and preserve behavior via call_cached.
     if (!result_is_277(mal_vm_call_direct(
-            &vm, &cache, 0, callee, mal_value_new_undefined(), args, 2))) {
+            &vm, 0, callee, mal_value_new_undefined(), args, 2))) {
         return 3;
     }
 
@@ -55,7 +54,7 @@ int main(void) {
     // compiled and interpreted definitions, with thisArg removed from its args.
     MalValue call_args[] = {mal_value_new_undefined(), args[0], args[1]};
     if (!result_is_277(mal_vm_call_function_call_direct(
-            &vm, &cache, target,
+            &vm, target,
             vm.intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE_CALL], callee,
             call_args, 3))) {
         return 4;

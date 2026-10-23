@@ -881,7 +881,6 @@ done:
 
 static bool mal_builtin_array_from_map(
     MalVm *vm,
-    MalCallCache *call_cache,
     MalValue map_fn,
     MalValue this_arg,
     u32 index,
@@ -895,7 +894,7 @@ static bool mal_builtin_array_from_map(
     MalCompletion completion = vm->exact_script_call != nullptr &&
         vm->exact_script_call->callee == map_fn
         ? mal_vm_call_builtin_callback(vm, map_fn, this_arg, mapped_args, 2)
-        : mal_vm_call_cached(vm, call_cache, map_fn, this_arg, mapped_args, 2);
+        : mal_vm_call_cached(vm, map_fn, this_arg, mapped_args, 2);
     if (completion.kind != MAL_COMPLETION_NORMAL) {
         vm->completion = completion;
         return false;
@@ -1000,7 +999,6 @@ static MalValue mal_builtin_array_from(MalVm *vm, MalValue this_value, const Mal
     direct_array_copy = direct_array_copy &&
         mal_value_to_native_function_object(method)->realm == vm->current_realm;
 #endif
-    MalCallCache map_call_cache = {0};
     MalExactScriptCall runtime_callback;
     bool nominated = false;
 
@@ -1085,7 +1083,7 @@ static MalValue mal_builtin_array_from(MalVm *vm, MalValue this_value, const Mal
 
             roots[1] = element;
             if (!mal_builtin_array_from_map(
-                    vm, &map_call_cache, map_fn, this_arg, index, &element)) {
+                    vm, map_fn, this_arg, index, &element)) {
                 mal_vm_iterator_close(vm, &record);
                 goto iter_done;
             }
@@ -1173,7 +1171,7 @@ static MalValue mal_builtin_array_from(MalVm *vm, MalValue this_value, const Mal
         roots[1] = element;
 
         if (!mal_builtin_array_from_map(
-                vm, &map_call_cache, map_fn, this_arg, index, &element)) {
+                vm, map_fn, this_arg, index, &element)) {
             goto done;
         }
         roots[1] = element;
@@ -2316,7 +2314,6 @@ bool mal_builtin_array_pair_destructure_try(
 
 MalCompletion mal_builtin_array_push_direct(
     MalVm *vm,
-    MalCallCache *fallback_cache,
     MalValue callee,
     MalValue this_value,
     const MalValue *args,
@@ -2337,7 +2334,7 @@ MalCompletion mal_builtin_array_push_direct(
 
     MAL_PERF_COUNT(array_push_direct_fallbacks);
     return mal_vm_call_cached(
-        vm, fallback_cache, callee, this_value, args, arg_count);
+        vm, callee, this_value, args, arg_count);
 }
 
 static MalValue mal_builtin_array_pop(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -2599,7 +2596,6 @@ bool mal_builtin_array_deque_try_direct(
 
 MalCompletion mal_builtin_array_deque_direct(
     MalVm *vm,
-    MalCallCache *fallback_cache,
     MalGuardedBuiltinCallOp operation,
     MalValue callee,
     MalValue this_value,
@@ -2613,7 +2609,7 @@ MalCompletion mal_builtin_array_deque_direct(
         return (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = result};
     }
     MAL_PERF_COUNT(array_deque_direct_fallbacks);
-    return mal_vm_call_cached(vm, fallback_cache, callee, this_value, args, arg_count);
+    return mal_vm_call_cached(vm, callee, this_value, args, arg_count);
 }
 
 static MalValue mal_builtin_array_slice(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -3322,7 +3318,6 @@ bool mal_builtin_array_at_try_direct(
 
 MalCompletion mal_builtin_array_at_direct(
     MalVm *vm,
-    MalCallCache *fallback_cache,
     MalValue callee,
     MalValue this_value,
     const MalValue *args,
@@ -3337,7 +3332,7 @@ MalCompletion mal_builtin_array_at_direct(
         };
     }
     return mal_vm_call_cached(
-        vm, fallback_cache, callee, this_value, args, arg_count);
+        vm, callee, this_value, args, arg_count);
 }
 
 static MalValue mal_builtin_array_find_last(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
@@ -3734,7 +3729,7 @@ done:
  * elements and holes up front. A NaN comparator result counts as equal.
  */
 static bool mal_builtin_array_sort_order(
-    MalVm *vm, MalCallCache *comparator_cache, MalValue comparator, MalValue left, MalValue right,
+    MalVm *vm, MalValue comparator, MalValue left, MalValue right,
     f64 *order_out
 ) {
     // Both sort entry points validate the comparator once before collecting elements.
@@ -3749,7 +3744,7 @@ static bool mal_builtin_array_sort_order(
         MalCompletion completion = exact != nullptr && exact->callee == comparator
             ? mal_vm_call_builtin_callback(vm, comparator, mal_value_new_undefined(), args, 2)
             : mal_vm_call_cached(
-                vm, comparator_cache, comparator, mal_value_new_undefined(), args, 2);
+                vm, comparator, mal_value_new_undefined(), args, 2);
         if (completion.kind != MAL_COMPLETION_NORMAL) {
             mal_gc_unroot(&args_span);
             vm->completion = completion;
@@ -3797,7 +3792,7 @@ static bool mal_builtin_array_sort_order(
 }
 
 static bool mal_builtin_array_sort_pair_order(
-    MalVm *vm, MalCallCache *comparator_cache, MalValue comparator, bool keyed,
+    MalVm *vm, MalValue comparator, bool keyed,
     MalValue left, MalValue left_key, MalValue right, MalValue right_key, f64 *order_out
 ) {
     if (keyed) {
@@ -3805,7 +3800,7 @@ static bool mal_builtin_array_sort_pair_order(
             mal_value_to_string(left_key), mal_value_to_string(right_key));
         return true;
     }
-    return mal_builtin_array_sort_order(vm, comparator_cache, comparator, left, right, order_out);
+    return mal_builtin_array_sort_order(vm, comparator, left, right, order_out);
 }
 
 /**
@@ -3853,7 +3848,6 @@ static bool mal_builtin_array_sort_values(
     bool ok = true;
     bool keyed = default_keys != nullptr;
     // Compiled comparators dispatch directly; every other callable keeps generic [[Call]].
-    MalCallCache comparator_cache = {0};
 
     MalExactScriptCall runtime_callback;
     bool nominated = (vm->exact_script_call == nullptr ||
@@ -3900,7 +3894,7 @@ static bool mal_builtin_array_sort_values(
                 while (hole > low) {
                     f64 order;
                     ok = mal_builtin_array_sort_pair_order(
-                        vm, &comparator_cache, comparator, keyed, values[hole - 1],
+                        vm, comparator, keyed, values[hole - 1],
                         keyed ? default_keys[hole - 1] : mal_value_new_undefined(), scratch[index],
                         keyed ? key_scratch[index] : mal_value_new_undefined(), &order);
                     if (!ok || order <= 0) break;
@@ -3918,7 +3912,7 @@ static bool mal_builtin_array_sort_values(
                 high = count - middle > width ? middle + width : count;
                 f64 order;
                 ok = mal_builtin_array_sort_pair_order(
-                    vm, &comparator_cache, comparator, keyed, values[middle - 1],
+                    vm, comparator, keyed, values[middle - 1],
                     keyed ? default_keys[middle - 1] : mal_value_new_undefined(), values[middle],
                     keyed ? default_keys[middle] : mal_value_new_undefined(), &order);
                 if (!ok || order <= 0) continue;
@@ -3930,7 +3924,7 @@ static bool mal_builtin_array_sort_values(
                 u32 out = low;
                 while (left < length && right < high) {
                     ok = mal_builtin_array_sort_pair_order(
-                        vm, &comparator_cache, comparator, keyed, scratch[left],
+                        vm, comparator, keyed, scratch[left],
                         keyed ? key_scratch[left] : mal_value_new_undefined(), values[right],
                         keyed ? default_keys[right] : mal_value_new_undefined(), &order);
                     if (!ok) break;
@@ -5338,7 +5332,6 @@ bool mal_builtin_array_default_map_guard(MalVm *vm, MalValue receiver) {
 
 static MalCompletion mal_builtin_array_iteration_direct_impl(
     MalVm *vm,
-    MalCallCache *fallback_cache,
     MalBuiltinArrayIterationOp operation,
     i32 callback_function_index,
     MalCompiledFunction compiled_callback,
@@ -5498,27 +5491,27 @@ static MalCompletion mal_builtin_array_iteration_direct_impl(
 
     MAL_PERF_COUNT(array_iteration_direct_fallbacks);
     return mal_vm_call_cached(
-        vm, fallback_cache, callee, this_value, args, arg_count);
+        vm, callee, this_value, args, arg_count);
 }
 
 MalCompletion mal_builtin_array_iteration_direct(
-    MalVm *vm, MalCallCache *fallback_cache, MalBuiltinArrayIterationOp operation,
+    MalVm *vm, MalBuiltinArrayIterationOp operation,
     i32 callback_function_index, MalCompiledFunction compiled_callback,
     MalValue callee, MalValue this_value, const MalValue *args, i32 arg_count
 ) {
     return mal_builtin_array_iteration_direct_impl(
-        vm, fallback_cache, operation, callback_function_index, compiled_callback,
+        vm, operation, callback_function_index, compiled_callback,
         nullptr, callee, this_value, args, arg_count);
 }
 
 MalCompletion mal_builtin_array_numeric_reduce_direct(
-    MalVm *vm, MalCallCache *fallback_cache, MalBuiltinArrayIterationOp operation,
+    MalVm *vm, MalBuiltinArrayIterationOp operation,
     i32 callback_function_index, MalCompiledFunction compiled_callback,
     MalNumericReduceCallback numeric_reduce_callback,
     MalValue callee, MalValue this_value, const MalValue *args, i32 arg_count
 ) {
     return mal_builtin_array_iteration_direct_impl(
-        vm, fallback_cache, operation, callback_function_index, compiled_callback,
+        vm, operation, callback_function_index, compiled_callback,
         numeric_reduce_callback, callee, this_value, args, arg_count);
 }
 

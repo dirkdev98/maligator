@@ -164,13 +164,6 @@ void mal_vm_ensure_function_caches(MalVm *vm, i32 function_index) {
     mal_vm_seed_function_known_own_slot_ics(vm, function, pool);
 }
 
-MalCallCache *mal_vm_create_function_call_caches(MalVm *vm, i32 function_index, i32 count) {
-    MalCallCache *caches = calloc(count > 0 ? (usize) count : 1, sizeof(MalCallCache));
-    if (caches == nullptr) abort();
-    vm->property_cache[function_index].call_sites = caches;
-    return caches;
-}
-
 static void mal_vm_materialize_precompiled_literal_shapes(
     MalVm *vm, const MalRuntimeImage *program, i32 function_base, i32 string_base);
 
@@ -1106,7 +1099,6 @@ void mal_vm_free(MalVm *vm) {
                 }
             }
             free(pool->sites);
-            free(pool->call_sites);
         }
         free(vm->property_cache);
     }
@@ -4793,7 +4785,6 @@ MalCompletion mal_vm_call_value(
 // Native callee roots stay out of the compiled-call frame used by recursive JS middleware.
 __attribute__((noinline)) static MalCompletion mal_vm_call_cached_fallback(
     MalVm *vm,
-    MalCallCache *cc,
     MalValue callee,
     MalValue this_value,
     const MalValue *args,
@@ -4805,14 +4796,14 @@ __attribute__((noinline)) static MalCompletion mal_vm_call_cached_fallback(
         mal_value_is_callable(this_value)) {
         MAL_PERF_COUNT(call_cache_function_call_forwards);
         MalValue value = mal_vm_call_cached_value(
-            vm, cc, this_value, arg_count > 0 ? args[0] : mal_value_new_undefined(),
+            vm, this_value, arg_count > 0 ? args[0] : mal_value_new_undefined(),
             arg_count > 1 ? args + 1 : nullptr, arg_count > 1 ? arg_count - 1 : 0);
         return vm->completion.kind == MAL_COMPLETION_THROW
             ? vm->completion
             : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
     }
     // %Function.prototype.apply% likewise only spreads its list into a call of its receiver,
-    // and entering the receiver here lets this site's cache keep it.
+    // which can then take the compiled or native dispatch below instead of generic [[Call]].
     if (mal_value_is_native_function_object(callee) &&
         mal_native_function_object_callback(mal_value_to_native_function_object(callee)) ==
             mal_builtin_function_prototype_apply &&
@@ -4836,7 +4827,7 @@ __attribute__((noinline)) static MalCompletion mal_vm_call_cached_fallback(
         MalRootSpan args_span;
         mal_gc_root(&args_span, call_args, call_arg_count);
         MalValue value = mal_vm_call_cached_value(
-            vm, cc, this_value, arg_count > 0 ? args[0] : mal_value_new_undefined(),
+            vm, this_value, arg_count > 0 ? args[0] : mal_value_new_undefined(),
             call_arg_count > 0 ? call_args : nullptr, call_arg_count);
         mal_gc_unroot(&args_span);
         if (call_args != inline_args) free(call_args);
@@ -4844,88 +4835,55 @@ __attribute__((noinline)) static MalCompletion mal_vm_call_cached_fallback(
             ? vm->completion
             : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
     }
-    if (cc->heap_identity == vm->heap.identity &&
-        cc->epoch == vm->heap.epoch &&
-        mal_value_is_native_function_object(callee)) {
-        // Native callbacks are cacheable only by exact object identity. The
-        // cached pointer must never be reused outside its heap lifetime/epoch.
-        for (u32 v = 0; v < cc->count; v++) {
-            MAL_PERF_COUNT(call_cache_way_checks);
-            if (cc->callee[v] != callee) {
-                continue;
-            }
-            MalNativeFunctionObject *native_function =
-                mal_value_to_native_function_object(callee);
-            MAL_PROFILE_NATIVE_CALL(vm, native_function);
-            MalNativeFunctionCallback callback =
-                mal_native_function_object_callback(native_function);
-            MAL_PERF_COUNT(call_cache_exact_identity_hits);
-            MAL_PERF_COUNT(call_cache_native_exact_hits);
-            if (mal_perf_stats_enabled) {
-                MalString *native_name = mal_native_function_object_name(native_function);
-                if (native_name != nullptr) {
-                    mal_perf_native_call_name(
-                        native_name);
-                }
-            }
-#if MAL_REALMS
-            MalRealm *saved_realm = vm->current_realm;
-            mal_vm_realm_switch_to(vm, mal_vm_callee_realm(vm, callee));
-#endif
-            MalCalleeRoots ncr;
-            mal_gc_callee_roots_begin(&ncr, this_value, mal_value_new_undefined(),
-                                      callee, args, arg_count);
-            vm->gc_native_frames++;
-#if MAL_PROFILE && MAL_PERF_STATS
-            i32 saved_profile_site = vm->profile_current_site_id;
-#endif
-            MalValue value = callback(
-                vm, this_value, args, arg_count, mal_value_new_undefined(), callee);
-#if MAL_PROFILE && MAL_PERF_STATS
-            vm->profile_current_site_id = saved_profile_site;
-#endif
-            vm->gc_native_frames--;
-            mal_gc_callee_roots_end(&ncr);
-#if MAL_REALMS
-            mal_vm_realm_switch_to(vm, saved_realm);
-#endif
-            return vm->completion.kind == MAL_COMPLETION_THROW
-                ? vm->completion
-                : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
+    // A plain native needs none of the generic call's bound or proxy resolution.
+    if (mal_value_is_native_function_object(callee)) {
+        MalNativeFunctionObject *native_function = mal_value_to_native_function_object(callee);
+        MAL_PROFILE_NATIVE_CALL(vm, native_function);
+        MalNativeFunctionCallback callback = mal_native_function_object_callback(native_function);
+        MAL_PERF_COUNT(call_cache_native_dispatches);
+        if (mal_perf_stats_enabled) {
+            MalString *native_name = mal_native_function_object_name(native_function);
+            if (native_name != nullptr) mal_perf_native_call_name(native_name);
         }
+#if MAL_REALMS
+        MalRealm *saved_realm = vm->current_realm;
+        mal_vm_realm_switch_to(vm, mal_vm_callee_realm(vm, callee));
+#endif
+        MalCalleeRoots ncr;
+        mal_gc_callee_roots_begin(&ncr, this_value, mal_value_new_undefined(),
+                                  callee, args, arg_count);
+        vm->gc_native_frames++;
+#if MAL_PROFILE && MAL_PERF_STATS
+        i32 saved_profile_site = vm->profile_current_site_id;
+#endif
+        MalValue value = callback(
+            vm, this_value, args, arg_count, mal_value_new_undefined(), callee);
+#if MAL_PROFILE && MAL_PERF_STATS
+        vm->profile_current_site_id = saved_profile_site;
+#endif
+        vm->gc_native_frames--;
+        mal_gc_callee_roots_end(&ncr);
+#if MAL_REALMS
+        mal_vm_realm_switch_to(vm, saved_realm);
+#endif
+        return vm->completion.kind == MAL_COMPLETION_THROW
+            ? vm->completion
+            : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
     }
 
     MAL_PERF_COUNT(call_cache_dispatch_misses);
-    MalCompletion completion = mal_vm_call_value(vm, callee, this_value, args, arg_count);
-    if (mal_value_is_native_function_object(callee)) {
-        if (cc->heap_identity != vm->heap.identity || cc->epoch != vm->heap.epoch) {
-            cc->count = 0;
-            cc->heap_identity = vm->heap.identity;
-            cc->epoch = vm->heap.epoch;
-        }
-        bool present = false;
-        for (u32 v = 0; v < cc->count; v++) {
-            present = present || cc->callee[v] == callee;
-        }
-        if (!present && cc->count < MAL_CALL_CACHE_WAYS) {
-            u32 v = cc->count++;
-            cc->callee[v] = callee;
-            MAL_PERF_COUNT(call_cache_native_fills);
-        }
-    }
-    return completion;
+    return mal_vm_call_value(vm, callee, this_value, args, arg_count);
 }
 
 __attribute__((noinline)) static MalValue mal_vm_call_cached_value_fallback(
     MalVm *vm,
-    MalCallCache *cc,
     MalValue callee,
     MalValue this_value,
     const MalValue *args,
     i32 arg_count
 ) {
     MalCompletion completion =
-        mal_vm_call_cached_fallback(vm, cc, callee, this_value, args, arg_count);
+        mal_vm_call_cached_fallback(vm, callee, this_value, args, arg_count);
     if (completion.kind != MAL_COMPLETION_THROW) return completion.value;
     vm->completion = completion;
     return MAL_VALUE_UNDEFINED;
@@ -4954,7 +4912,6 @@ void mal_vm_refresh_call_entry(MalVm *vm, i32 function_index) {
 
 MalValue mal_vm_call_cached_value(
     MalVm *vm,
-    MalCallCache *cc,
     MalValue callee,
     MalValue this_value,
     const MalValue *args,
@@ -5015,7 +4972,7 @@ MalValue mal_vm_call_cached_value(
         }
 #endif
     }
-    return mal_vm_call_cached_value_fallback(vm, cc, callee, this_value, args, arg_count);
+    return mal_vm_call_cached_value_fallback(vm, callee, this_value, args, arg_count);
 }
 
 bool mal_vm_prepare_builtin_callback(MalVm *vm, MalValue callback, MalExactScriptCall *exact) {
@@ -5144,7 +5101,6 @@ MalCompletion mal_vm_call_exact_native(
 
 MalCompletion mal_vm_call_direct(
     MalVm *vm,
-    MalCallCache *fallback_cache,
     i32 expected_function_index,
     MalValue callee,
     MalValue this_value,
@@ -5158,13 +5114,13 @@ MalCompletion mal_vm_call_direct(
         expected_function_index < 0 ||
         expected_function_index >= vm->runtime_image->function_count) {
         return mal_vm_call_cached(
-            vm, fallback_cache, callee, this_value, args, arg_count);
+            vm, callee, this_value, args, arg_count);
     }
 
     MalFunctionObject *function_object = mal_value_to_function_object(callee);
     if (mal_function_object_function_index(function_object) != expected_function_index) {
         return mal_vm_call_cached(
-            vm, fallback_cache, callee, this_value, args, arg_count);
+            vm, callee, this_value, args, arg_count);
     }
     return mal_vm_call_exact_script(
         vm, expected_function_index, callee, this_value, args, arg_count);
@@ -5172,7 +5128,6 @@ MalCompletion mal_vm_call_direct(
 
 MalCompletion mal_vm_call_function_call_direct(
     MalVm *vm,
-    MalCallCache *fallback_cache,
     i32 expected_function_index,
     MalValue call_method,
     MalValue target,
@@ -5185,7 +5140,7 @@ MalCompletion mal_vm_call_function_call_direct(
     if (call_method != vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE_CALL] ||
         !mal_value_is_native_function_object(call_method)) {
         return mal_vm_call_cached(
-            vm, fallback_cache, call_method, target, args, arg_count);
+            vm, call_method, target, args, arg_count);
     }
 
     MalValue this_value = arg_count > 0 ? args[0] : mal_value_new_undefined();
@@ -5193,11 +5148,11 @@ MalCompletion mal_vm_call_function_call_direct(
     i32 target_arg_count = arg_count > 1 ? arg_count - 1 : 0;
     if (expected_function_index >= 0) {
         return mal_vm_call_direct(
-            vm, fallback_cache, expected_function_index, target, this_value,
+            vm, expected_function_index, target, this_value,
             target_args, target_arg_count);
     }
     return mal_vm_call_cached(
-        vm, fallback_cache, target, this_value, target_args, target_arg_count);
+        vm, target, this_value, target_args, target_arg_count);
 }
 
 MalCompletion mal_vm_construct_value(MalVm *vm, MalValue callee, const MalValue *args, i32 arg_count) {

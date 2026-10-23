@@ -65,8 +65,8 @@ const proxied = new Proxy(function (value) {
 }, {});
 ok("proxy fallback", invoke({ fn: proxied }, 41, proxied) === 42);
 
-ok("native fill", invoke({ fn: Number }, "42", Number) === 42);
-ok("native exact identity", invoke({ fn: Number }, "42", Number) === 42);
+ok("native dispatch", invoke({ fn: Number }, "42", Number) === 42);
+ok("repeated native dispatch", invoke({ fn: Number }, "42", Number) === 42);
 
 const interpreted = eval("(function(value) { return value + 2; })");
 ok("interpreted fallback", invoke({ fn: interpreted }, 40, interpreted) === 42);

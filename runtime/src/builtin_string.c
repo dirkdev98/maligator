@@ -1197,7 +1197,7 @@ bool mal_builtin_string_char_code_at_try(
 }
 
 MalCompletion mal_builtin_string_char_code_at_direct(
-    MalVm *vm, MalCallCache *fallback_cache, MalValue callee,
+    MalVm *vm, MalValue callee,
     MalValue this_value, const MalValue *args, i32 arg_count,
     MalStringLeafReadCache *leaf_cache
 ) {
@@ -1207,12 +1207,11 @@ MalCompletion mal_builtin_string_char_code_at_direct(
         return (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = result};
     }
     MAL_PERF_COUNT(string_char_code_at_direct_fallbacks);
-    return mal_vm_call_cached(vm, fallback_cache, callee, this_value, args, arg_count);
+    return mal_vm_call_cached(vm, callee, this_value, args, arg_count);
 }
 
 MalCompletion mal_builtin_string_char_code_at_direct_in_bounds(
     MalVm *vm,
-    MalCallCache *fallback_cache,
     MalValue callee,
     MalValue this_value,
     const MalValue *args,
@@ -1237,7 +1236,7 @@ MalCompletion mal_builtin_string_char_code_at_direct_in_bounds(
 
     MAL_PERF_COUNT(string_char_code_at_direct_fallbacks);
     return mal_vm_call_cached(
-        vm, fallback_cache, callee, this_value, args, arg_count);
+        vm, callee, this_value, args, arg_count);
 }
 
 MalValue mal_builtin_string_char_code_at_rope_in_bounds(

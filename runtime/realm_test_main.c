@@ -403,16 +403,15 @@ int main(void) {
         call_cache_closures[1] = mal_vm_op_create_function(
             &vm, call_cache_function_index, nullptr);
         mal_realm_switch(&vm, realm_one);
-        MalCallCache call_cache = {0};
         call_cache_one = mal_vm_call_cached(
-            &vm, &call_cache, call_cache_closures[0], mal_value_new_undefined(), nullptr, 0);
+            &vm, call_cache_closures[0], mal_value_new_undefined(), nullptr, 0);
         call_cache_two = mal_vm_call_cached(
-            &vm, &call_cache, call_cache_closures[1], mal_value_new_undefined(), nullptr, 0);
+            &vm, call_cache_closures[1], mal_value_new_undefined(), nullptr, 0);
         uptr stack_limit = vm.stack_limit;
         vm.stack_limit = (uptr) -1;
         mal_vm_sync_entry_stack_limit(&vm);
         MalCompletion call_cache_overflow = mal_vm_call_cached(
-            &vm, &call_cache, call_cache_closures[1], mal_value_new_undefined(), nullptr, 0);
+            &vm, call_cache_closures[1], mal_value_new_undefined(), nullptr, 0);
         call_cache_overflow_realm =
             call_cache_overflow.kind == MAL_COMPLETION_THROW &&
             mal_value_is_object(call_cache_overflow.value) &&

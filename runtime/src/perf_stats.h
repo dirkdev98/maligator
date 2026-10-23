@@ -444,12 +444,9 @@ typedef struct MalPerfStats {
 	u64 json_stringify_runtime_callback_nominations;
 
 	u64 call_cache_probes;
-    u64 call_cache_exact_identity_hits;
     u64 call_cache_compiled_dispatches;
-    u64 call_cache_native_exact_hits;
-    u64 call_cache_way_checks;
+    u64 call_cache_native_dispatches;
     u64 call_cache_dispatch_misses;
-    u64 call_cache_native_fills;
     u64 call_cache_function_call_forwards;
     u64 call_cache_function_apply_forwards;
     u64 compiled_enter_calls;

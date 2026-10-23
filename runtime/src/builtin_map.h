@@ -57,7 +57,6 @@ MalValue mal_builtin_map_delete_known(
  */
 MalCompletion mal_builtin_collection_direct(
     MalVm *vm,
-    MalCallCache *fallback_cache,
     MalGuardedBuiltinCallOp operation,
     MalBuiltinCollectionReceiverFact receiver_fact,
     MalValue callee,

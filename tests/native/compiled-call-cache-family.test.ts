@@ -28,7 +28,7 @@ function callCacheReport(stderr: string): string {
 	return line;
 }
 
-describe("compiled call dispatch and native call caches", () => {
+describe("compiled and native call dispatch", () => {
 	let instrumented: string;
 	let multiVm: string;
 
@@ -63,14 +63,14 @@ describe("compiled call dispatch and native call caches", () => {
 		);
 	}, 360_000);
 
-	it("does not reuse exact identities across sequential VMs", () => {
+	it("dispatches the same calls in sequential VMs", () => {
 		assertExactLines(runToStdout(multiVm, { env: { MAL_HOST_GC: "1" } }), [
 			...expected,
 			...expected,
 		]);
 	});
 
-	it("reports direct compiled dispatch and exact native cache mechanisms", () => {
+	it("reports direct compiled and native dispatch", () => {
 		const result = spawnSync(instrumented, [], {
 			env: { ...process.env, MAL_HOST_GC: "1", MAL_PERF_STATS: "1" },
 			encoding: "utf-8",
@@ -80,21 +80,13 @@ describe("compiled call dispatch and native call caches", () => {
 
 		const report = callCacheReport(result.stderr);
 		const probes = strictField(report, "probes");
-		const exactHits = strictField(report, "exact_identity_hits");
 		const compiledDispatches = strictField(report, "compiled_dispatches");
-		const nativeExactHits = strictField(report, "native_exact_hits");
-		const wayChecks = strictField(report, "way_checks");
+		const nativeDispatches = strictField(report, "native_dispatches");
 		const misses = strictField(report, "dispatch_misses");
-		const nativeFills = strictField(report, "native_fills");
 
-		expect(exactHits).toBeGreaterThan(0);
 		expect(compiledDispatches).toBeGreaterThan(150);
-		expect(nativeExactHits).toBeGreaterThan(0);
-		expect(nativeExactHits).toBe(exactHits);
-		expect(wayChecks).toBeGreaterThanOrEqual(nativeExactHits);
+		expect(nativeDispatches).toBeGreaterThan(0);
 		expect(misses).toBeGreaterThan(0);
-		expect(nativeFills).toBeGreaterThan(0);
-		expect(compiledDispatches + nativeExactHits + misses).toBe(probes);
-		expect(nativeFills).toBeLessThanOrEqual(misses);
+		expect(compiledDispatches + nativeDispatches + misses).toBe(probes);
 	});
 });

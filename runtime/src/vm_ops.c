@@ -9719,14 +9719,14 @@ void mal_vm_op_await_compiled(
 }
 
 MalCompletion mal_builtin_sort_numeric(
-    MalVm *vm, MalCallCache *fallback_cache, bool copy, bool via_call, i32 function_index,
+    MalVm *vm, bool copy, bool via_call, i32 function_index,
     MalNumericSortComparator comparator, MalNumericSortKernel kernel, MalValue callee,
     MalValue receiver, const MalValue *args, i32 arg_count
 ) {
     MalNativeFunctionCallback expected = mal_value_is_native_function_object(callee)
         ? mal_native_function_object_callback(mal_value_to_native_function_object(callee)) : nullptr;
     if (arg_count != (via_call ? 2 : 1))
-        return mal_vm_call_cached(vm, fallback_cache, callee, receiver, args, arg_count);
+        return mal_vm_call_cached(vm, callee, receiver, args, arg_count);
     MalValue sort_callee = via_call ? receiver : callee;
     MalValue sort_receiver = via_call ? args[0] : receiver;
     MalValue callback = args[via_call ? 1 : 0];
@@ -9745,7 +9745,7 @@ MalCompletion mal_builtin_sort_numeric(
     admitted = admitted && mal_vm_callee_realm(vm, callee) == vm->current_realm &&
         mal_vm_callee_realm(vm, sort_callee) == vm->current_realm;
 #endif
-    if (!admitted) return mal_vm_call_cached(vm, fallback_cache, callee, receiver, args, arg_count);
+    if (!admitted) return mal_vm_call_cached(vm, callee, receiver, args, arg_count);
     MalExactScriptCall exact = {
         .previous = vm->exact_script_call,
         .callee = callback,

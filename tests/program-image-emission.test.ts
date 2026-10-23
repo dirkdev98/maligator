@@ -1612,14 +1612,12 @@ describe("emit-program-image instruction packing", () => {
 		const emit = (budget: number) =>
 			emitProgramTranslationUnitSources(image, {}, budget).join("\n");
 		expect(emit(60_000)).toMatch(
-			/mal_vm_call_function_call_direct_compiled\(vm, &__call_caches\[\d+\], 1, mal_compiled_1,/,
+			/mal_vm_call_function_call_direct_compiled\(vm, 1, mal_compiled_1,/,
 		);
 		const rejected = emit(15_000);
 		expect(rejected).not.toContain("mal_compiled_1");
 		expect(rejected).not.toContain("mal_vm_call_function_call_direct_compiled(");
-		expect(rejected).toMatch(
-			/mal_vm_call_function_call_direct\(vm, &__call_caches\[\d+\], 1,/,
-		);
+		expect(rejected).toMatch(/mal_vm_call_function_call_direct\(vm, 1,/);
 	});
 
 	it("reports exact typed calls without inventing a callee identity guard", () => {
@@ -3875,10 +3873,10 @@ describe("native update-expression representation", () => {
 		expect(output).not.toContain("mal_builtin_math_binary_number_known");
 		expect(output).not.toMatch(/MAL_ROOT_MASK\([^)]+\);\n\s+if \(mal_builtin_math_/);
 		expect(output).toMatch(
-			/if \(mal_builtin_math_unary_callee_matches[^\n]+\) \{[\s\S]*?\} else \{\n\s+(MAL_ROOT_MASK\(0x[\da-f]+\));\n\s+[^\n]*&__call_caches\[\d+\][\s\S]*?\n\s+\}\n\s+if \(mal_gc_poll_requested\(\)\) \{ \1; mal_gc_safepoint\(vm\); if \(mal_gc_poll_termination\(vm\)\) (?:\{ (?:__private_r\d+ = __gc_slots\[\d+\]; )+)?goto __throw_exit; (?:\} )?\}/,
+			/if \(mal_builtin_math_unary_callee_matches[^\n]+\) \{[\s\S]*?\} else \{\n\s+(MAL_ROOT_MASK\(0x[\da-f]+\));\n\s+[^\n]*mal_vm_call_cached\([\s\S]*?\n\s+\}\n\s+if \(mal_gc_poll_requested\(\)\) \{ \1; mal_gc_safepoint\(vm\); if \(mal_gc_poll_termination\(vm\)\) (?:\{ (?:__private_r\d+ = __gc_slots\[\d+\]; )+)?goto __throw_exit; (?:\} )?\}/,
 		);
 		expect(output).toMatch(
-			/if \(mal_builtin_math_binary_callee_matches[^\n]+\) \{[\s\S]*?\} else \{\n\s+(MAL_ROOT_MASK\(0x[\da-f]+\));\n\s+[^\n]*&__call_caches\[\d+\][\s\S]*?\n\s+\}\n\s+if \(mal_gc_poll_requested\(\)\) \{ \1; mal_gc_safepoint\(vm\); if \(mal_gc_poll_termination\(vm\)\) (?:\{ (?:__private_r\d+ = __gc_slots\[\d+\]; )+)?goto __throw_exit; (?:\} )?\}/,
+			/if \(mal_builtin_math_binary_callee_matches[^\n]+\) \{[\s\S]*?\} else \{\n\s+(MAL_ROOT_MASK\(0x[\da-f]+\));\n\s+[^\n]*mal_vm_call_cached\([\s\S]*?\n\s+\}\n\s+if \(mal_gc_poll_requested\(\)\) \{ \1; mal_gc_safepoint\(vm\); if \(mal_gc_poll_termination\(vm\)\) (?:\{ (?:__private_r\d+ = __gc_slots\[\d+\]; )+)?goto __throw_exit; (?:\} )?\}/,
 		);
 
 		const lockedOutput = emitLocked(source);
@@ -4169,9 +4167,7 @@ describe("native update-expression representation", () => {
 			const slice = Array.prototype.slice;
 			globalThis.result = slice.call([1, 2], 1);
 		`);
-		expect(output).toMatch(
-			/mal_vm_call_function_call_direct\(vm, &__call_caches\[\d+\], -1,/,
-		);
+		expect(output).toMatch(/mal_vm_call_function_call_direct\(vm, -1,/);
 	});
 
 	it("emits guarded direct construction for exact ordinary script constructors", () => {
@@ -4187,7 +4183,7 @@ describe("native update-expression representation", () => {
 			const values = [];
 			globalThis.length = values.push(1, 2, 3);
 		`);
-		expect(output).toContain("mal_builtin_array_push_direct(vm, &__call_caches[");
+		expect(output).toContain("mal_builtin_array_push_direct(vm, ");
 		expect(output).toContain(", 3, nullptr);");
 	});
 
@@ -4196,7 +4192,7 @@ describe("native update-expression representation", () => {
 			function last(values) { return values.at(-1); }
 			globalThis.result = last([1, 2, 3]);
 		`);
-		expect(output).toContain("mal_builtin_array_at_direct(vm, &__call_caches[");
+		expect(output).toContain("mal_builtin_array_at_direct(vm, ");
 	});
 
 	it("consumes the Core-owned String charCodeAt operation chain", () => {
@@ -4224,9 +4220,7 @@ describe("native update-expression representation", () => {
 		expect(output).toContain("mal_vm_local_watched_primitive_value_try_load_static");
 		expect(output).toContain("__string_char_code_at_");
 		expect(output).toContain("mal_vm_op_load_property_ic(vm,");
-		expect(output).toContain(
-			"mal_builtin_string_char_code_at_direct(vm, &__call_caches[",
-		);
+		expect(output).toContain("mal_builtin_string_char_code_at_direct(vm, ");
 		expect(output).toContain(", 1);");
 
 		const semantic = analyzeSourceAndRunSemanticAnalysis(
@@ -4245,9 +4239,7 @@ describe("native update-expression representation", () => {
 		);
 		expect(lockedOutput).toContain("mal_builtin_string_char_code_at_known(vm,");
 		expect(lockedOutput).toContain("mal_vm_op_load_property_ic(vm,");
-		expect(lockedOutput).not.toContain(
-			"mal_builtin_string_char_code_at_direct(vm, &__call_caches[",
-		);
+		expect(lockedOutput).not.toContain("mal_builtin_string_char_code_at_direct(vm, ");
 	});
 
 	it("consumes the Core-certified bounded String relation in the backend", () => {
@@ -5360,7 +5352,7 @@ describe("native update-expression representation", () => {
 		const output = emitProgramImage(definition, { compiled: true });
 		expect(output).toContain("mal_vm_try_capture_collection_method(vm,");
 		expect(output).toContain("mal_vm_op_load_property_ic_static_miss(vm,");
-		expect(output).toContain("mal_builtin_collection_direct(vm, &__call_caches[");
+		expect(output).toContain("mal_builtin_collection_direct(vm, ");
 		expect(output).toContain("MAL_GUARDED_BUILTIN_MAP_GET");
 		expect(output).toContain("MAL_GUARDED_BUILTIN_MAP_SET");
 		expect(output).toContain("MAL_GUARDED_BUILTIN_SET_ADD");

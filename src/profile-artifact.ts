@@ -234,7 +234,7 @@ const REMARK_EXPLANATIONS: Record<string, string> = {
 	"call.builtin-direct": "call uses a semantics-preserving runtime direct helper",
 	"call.direct-compiled": "call targets compiled code directly",
 	"call.direct-native": "call uses the native-number compiled ABI",
-	"call.inline-cache": "dynamic call retains its runtime target cache",
+	"call.runtime-dispatch": "dynamic call dispatches through the runtime by callee kind",
 	"call.projected": "call result is projected behind a semantic fallback",
 	"call.generic": "call stayed on generic dispatch",
 	"call.guarded": "compiler emitted guarded direct dispatch",
