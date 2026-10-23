@@ -714,22 +714,21 @@ function lowerPropertyProjection(
 			break;
 	}
 	if (steps.length === 0) return undefined;
-	// A fusion start leaves its result unmaterialized for its finish. Rendering
-	// publishes a start only from the final step, so every other fused step needs its
-	// partner inside this projection.
+	// A fused step leaves its result unmaterialized for the next step, which consumes it.
+	// Rendering publishes such a value only from a final start, so every other fused value
+	// must pass between neighboring steps of this projection, through a chain's links too.
 	for (const [index, step] of steps.entries()) {
-		const fusion = terminalFusion(step.ip);
-		// A chain link both consumes and leaves an unmaterialized value; projections pair only.
-		if (fusion?.role === "link") return undefined;
-		if (fusion === undefined || (fusion.role === "start" && index === steps.length - 1))
-			continue;
+		const role = terminalFusion(step.ip)?.role;
+		if (role === undefined) continue;
+		const previous = index === 0 ? undefined : terminalFusion(steps[index - 1]!.ip)?.role;
+		const next =
+			index === steps.length - 1 ? undefined : terminalFusion(steps[index + 1]!.ip)?.role;
+		if (role !== "start" && previous !== "start" && previous !== "link") return undefined;
 		if (
-			!steps.some((other) => {
-				const partner = terminalFusion(other.ip);
-				return (
-					other !== step && partner?.id === fusion.id && partner.role !== fusion.role
-				);
-			})
+			role !== "finish" &&
+			next !== "finish" &&
+			next !== "link" &&
+			!(role === "start" && next === undefined)
 		)
 			return undefined;
 	}
