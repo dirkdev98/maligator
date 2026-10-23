@@ -375,8 +375,31 @@ static usize mal_builtin_string_segment_find_unit(
         return mal_builtin_string_find_unit(segment->utf16_units, start, segment->length, unit);
     }
     if (unit > 0xff) return segment->length;
-    const u8 *match = memchr(segment->latin1_units + start, (u8) unit, segment->length - start);
-    return match == nullptr ? segment->length : (usize) (match - segment->latin1_units);
+    // Split and search separators are usually a few units apart, where a libc memchr call
+    // costs more than the scan; the first 32 units go eight at a time inline.
+    const u8 *units = segment->latin1_units;
+    usize length = segment->length;
+    u64 pattern = UINT64_C(0x0101010101010101) * (u8) unit;
+    usize position = start;
+    usize inline_end = length - start > 32 ? start + 32 : length;
+    while (position + 8 <= inline_end) {
+        u64 word;
+        memcpy(&word, units + position, sizeof(word));
+        u64 difference = word ^ pattern;
+        // The lowest flagged byte is always a real match; borrows only flag bytes above it.
+        u64 found = (difference - UINT64_C(0x0101010101010101)) & ~difference &
+            UINT64_C(0x8080808080808080);
+        if (found != 0) return position + ((usize) __builtin_ctzll(found) >> 3);
+        position += 8;
+    }
+    if (inline_end == length) {
+        for (; position < length; position++) {
+            if (units[position] == (u8) unit) return position;
+        }
+        return length;
+    }
+    const u8 *match = memchr(units + position, (u8) unit, length - position);
+    return match == nullptr ? length : (usize) (match - units);
 }
 
 static usize mal_builtin_string_segment_reverse_find_unit(
