@@ -52,6 +52,11 @@ describe("dense Array number loop regions", () => {
 			expect(
 				regionPlans(pair, "sumHoisted").some((plan) => plan.kind === "fixed-numeric"),
 			).toBe(true);
+			// Math calls are known builtins only under locked primordials.
+			for (const name of primordials === "locked"
+				? ["fnvHash", "bitMix", "clzSum"]
+				: ["bitMix"])
+				expect(regionPlans(pair, name).length, name).toBeGreaterThan(0);
 			for (const name of ["lookupSum", "recordLookup"])
 				expect(
 					regionPlans(pair, name).some(

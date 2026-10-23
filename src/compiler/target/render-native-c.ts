@@ -72,6 +72,7 @@ import type {
 	NativeNumericLoopRegionPlan,
 	NativeMathCallPlan,
 	NativeNumberPredicatePlan,
+	NativeNumberRecordDataflow,
 	NativeNumberRecordRegionPlan,
 	NativePairedArrayLoopAction,
 	NativePropertyNumericUpdateAction,
@@ -1138,6 +1139,66 @@ function nativeNumberExpr(operator: string, left: string, right: string): string
 	return null;
 }
 
+const INTEGRAL_BINARY_OPERATORS: ReadonlySet<string> = new Set([
+	"&",
+	"|",
+	"^",
+	"<<",
+	">>",
+	">>>",
+]);
+
+/** Registers whose every write in the region yields an integer in [-2^31, 2^32), never -0. */
+function integralLoopRegisters(
+	fn: BytecodeFunction,
+	order: ReadonlyArray<number>,
+	flow: NativeNumberRecordDataflow,
+): Set<number> {
+	const writers = new Map<number, Array<BytecodeInstruction>>();
+	for (const ip of order) {
+		const op = fn.instructions[ip]!;
+		for (const register of vmInstructionWriteRegisters(op)) {
+			const ops = writers.get(register) ?? [];
+			ops.push(op);
+			writers.set(register, ops);
+		}
+	}
+	const integral = new Set(
+		[...writers.keys()].filter((register) => flow.kinds.get(register) === "number"),
+	);
+	const produces = (op: BytecodeInstruction): boolean => {
+		switch (op.opcode) {
+			case "BINARY":
+				return INTEGRAL_BINARY_OPERATORS.has(op.operator);
+			case "UNARY":
+				return op.operator === "~";
+			case "CREATE_NUMBER":
+			case "CREATE_F64":
+				return (
+					Number.isInteger(op.value) &&
+					!Object.is(op.value, -0) &&
+					op.value >= -2147483648 &&
+					op.value <= 4294967295
+				);
+			case "MOVE":
+				return integral.has(op.src);
+			default: {
+				const builtin = nativeNumericBuiltinInstruction(op);
+				return builtin?.operation === "Math.imul" || builtin?.operation === "Math.clz32";
+			}
+		}
+	};
+	for (let changed = true; changed;) {
+		changed = false;
+		for (const register of [...integral])
+			if (!writers.get(register)!.every(produces)) {
+				integral.delete(register);
+				changed = true;
+			}
+	}
+	return integral;
+}
+
 // Forward block flags preserve whole-label splitting while both loop modes retain their original fallback.
 function emitNumericLoopRegion(
 	fn: BytecodeFunction,
@@ -1165,6 +1226,21 @@ function emitNumericLoopRegion(
 	};
 	const local = (register: number) => `${id}_r${register}`;
 	const start = (register: number) => `${id}_s${register}`;
+	// Bitwise results are exact integers; keeping them in integer locals spares the
+	// double round trip that each ToInt32 would otherwise take.
+	const integral = floating ? integralLoopRegisters(fn, order, flow) : new Set<number>();
+	const cType = (register: number) =>
+		kindOf(register) === "boolean"
+			? "bool"
+			: !floating || integral.has(register)
+				? "i64"
+				: "f64";
+	const num = (register: number) =>
+		integral.has(register) ? `(f64) ${local(register)}` : local(register);
+	const intOf = (register: number) =>
+		integral.has(register)
+			? `(i32) ${local(register)}`
+			: `mal_ops_number_to_i32(${local(register)})`;
 	const guards: Array<string> = [];
 	const typedViewGuards: Array<string> = [];
 	const arrayViewGuards: Array<string> = [];
@@ -1187,6 +1263,12 @@ function emitNumericLoopRegion(
 				? `mal_ops_number_as_f64(r${register})`
 				: `(f64) r${register}`;
 		if (representation === "boxed") guards.push(`mal_ops_is_number(r${register})`);
+		if (integral.has(register)) {
+			const admitted = `${representation === "boxed" ? `mal_ops_is_number(r${register}) && ` : ""}${value} == trunc(${value}) && ${value} >= -2147483648.0 && ${value} <= 4294967295.0 && (${value} != 0.0 || !signbit(${value}))`;
+			guards.push(`(${admitted})`);
+			initial.set(register, `(${admitted}) ? (i64) ${value} : 0`);
+			continue;
+		}
 		if (floating)
 			initial.set(
 				register,
@@ -1328,7 +1410,7 @@ function emitNumericLoopRegion(
 	const truthy = (register: number) =>
 		kindOf(register) === "boolean"
 			? local(register)
-			: floating
+			: floating && !integral.has(register)
 				? `mal_number_is_truthy(${local(register)})`
 				: `${local(register)} != 0`;
 	const int32 = (register: number) => `mal_safe_integer_to_i32(${local(register)})`;
@@ -1342,10 +1424,20 @@ function emitNumericLoopRegion(
 			case "MATH_BINARY_NUMBER": {
 				const builtin = floating ? nativeNumericBuiltinInstruction(op) : undefined;
 				if (builtin === undefined) throw new Error("Invalid numeric loop builtin");
+				if (integral.has(op.dst)) {
+					const [first, second] = builtin.arguments.map((argument) =>
+						argument.kind === "number"
+							? `(i32) ${argument.value | 0}`
+							: intOf(argument.register),
+					);
+					return builtin.operation === "Math.imul"
+						? `${local(op.dst)} = (i64) (i32) ((u32) ${first} * (u32) ${second});`
+						: `{ u32 ${id}_z = (u32) ${first}; ${local(op.dst)} = ${id}_z == 0 ? 32 : __builtin_clz(${id}_z); }`;
+				}
 				const arguments_ = builtin.arguments.map((argument) =>
 					argument.kind === "number"
 						? cF64Literal(argument.value)
-						: local(argument.register),
+						: num(argument.register),
 				);
 				const expression = nativeNumericBuiltinExpr(builtin.operation, arguments_);
 				if (expression === null)
@@ -1368,7 +1460,7 @@ function emitNumericLoopRegion(
 					throw new Error("Invalid numeric loop length load");
 				return `${local(op.dst)} = (f64) ${id}_${mode === "array" ? "a" : "v"}${op.object}.length;`;
 			case "LOAD_PROPERTY": {
-				const key = local(op.key);
+				const key = num(op.key);
 				// Any other key leaves the view to the generic load, which handles holes and non-indices.
 				const bound = checkedViews.has(op.object)
 					? `if (__builtin_expect(!(${key} >= 0.0 && ${key} < (f64) ${id}_${mode === "array" ? "a" : "v"}${op.object}.${mode === "array" ? "count" : "length"}) || ${key} != trunc(${key}), 0)) ${restart} `
@@ -1384,27 +1476,44 @@ function emitNumericLoopRegion(
 			case "STORE_PROPERTY":
 				if (mode === "array") throw new Error("Invalid dense Array loop store");
 				return mode === "f64"
-					? `mal_scalar_store_native_u64(${id}_v${op.object}.data + (usize)(u32) ${local(op.key)} * 8, mal_scalar_f64_to_bits(${local(op.value)}));`
-					: `mal_vm_fixed_numeric_store(&${id}_v${op.object}, (u32) ${local(op.key)}, ${local(op.value)});`;
+					? `mal_scalar_store_native_u64(${id}_v${op.object}.data + (usize)(u32) ${num(op.key)} * 8, mal_scalar_f64_to_bits(${num(op.value)}));`
+					: `mal_vm_fixed_numeric_store(&${id}_v${op.object}, (u32) ${num(op.key)}, ${num(op.value)});`;
 			case "REQUIRE_COERCIBLE":
 				// The element load already restarted the iteration for anything but an object.
 				if (!records.has(op.src)) throw new Error("Invalid numeric loop coercible check");
 				return "";
 			case "CREATE_NUMBER":
 			case "CREATE_F64":
-				return `${local(op.dst)} = ${floating ? cF64Literal(op.value) : `INT64_C(${op.value})`};`;
+				return `${local(op.dst)} = ${floating && !integral.has(op.dst) ? cF64Literal(op.value) : `INT64_C(${op.value})`};`;
 			case "CREATE_BOOLEAN":
 				return `${local(op.dst)} = ${op.value};`;
 			case "MOVE":
-				return `${local(op.dst)} = ${local(op.src)};`;
+				return `${local(op.dst)} = ${integral.has(op.dst) ? local(op.src) : num(op.src)};`;
 			case "BINARY": {
 				const compare = NATIVE_COMPARE[op.operator];
 				if (compare !== undefined)
-					return `${local(op.dst)} = ${local(op.left)} ${op.operator === "===" || op.operator === "==" ? "==" : op.operator === "!==" || op.operator === "!=" ? "!=" : compare} ${local(op.right)};`;
+					return `${local(op.dst)} = ${num(op.left)} ${op.operator === "===" || op.operator === "==" ? "==" : op.operator === "!==" || op.operator === "!=" ? "!=" : compare} ${num(op.right)};`;
 				const left = local(op.left);
 				const right = local(op.right);
+				if (floating && integral.has(op.dst)) {
+					const shift = `((u32) ${intOf(op.right)} & 31u)`;
+					switch (op.operator) {
+						case "&":
+						case "|":
+						case "^":
+							return `${local(op.dst)} = (i64) (${intOf(op.left)} ${op.operator} ${intOf(op.right)});`;
+						case "<<":
+							return `${local(op.dst)} = (i64) (i32) ((u32) ${intOf(op.left)} << ${shift});`;
+						case ">>":
+							return `${local(op.dst)} = (i64) (${intOf(op.left)} >> ${shift});`;
+						case ">>>":
+							return `${local(op.dst)} = (i64) ((u32) ${intOf(op.left)} >> ${shift});`;
+						default:
+							throw new Error(`Invalid integral loop operator ${op.operator}`);
+					}
+				}
 				if (floating) {
-					const expression = nativeNumberExpr(op.operator, left, right);
+					const expression = nativeNumberExpr(op.operator, num(op.left), num(op.right));
 					if (expression === null) throw new Error("Invalid numeric loop operator");
 					return `${local(op.dst)} = ${expression};`;
 				}
@@ -1436,7 +1545,9 @@ function emitNumericLoopRegion(
 				}
 			}
 			case "UNARY": {
-				const source = local(op.src);
+				const source = floating ? num(op.src) : local(op.src);
+				if (floating && op.operator === "~")
+					return `${local(op.dst)} = ${integral.has(op.dst) ? "(i64)" : "(f64)"} ~${intOf(op.src)};`;
 				if (floating) {
 					const expression =
 						op.operator === "-"
@@ -1493,8 +1604,7 @@ function emitNumericLoopRegion(
 				`    u8 ${id}_slot${cache} = ${propertyCache}[${cache}].slot;`,
 			]),
 			...plan.carried.map(
-				(register) =>
-					`    ${kindOf(register) === "boolean" ? "bool" : floating ? "f64" : "i64"} ${start(register)} = ${local(register)};`,
+				(register) => `    ${cType(register)} ${start(register)} = ${local(register)};`,
 			),
 			// The cursor lives in memory its helpers can reach; the loop steps a local copy.
 			...(cursor === undefined
@@ -1575,7 +1685,7 @@ function emitNumericLoopRegion(
 			...[...flow.kinds].map(([register, kind]) =>
 				records.has(register)
 					? `  MalValue ${local(register)} = MAL_VALUE_UNDEFINED;`
-					: `  ${kind === "boolean" ? "bool" : "f64"} ${local(register)} = ${initial.get(register) ?? (kind === "boolean" ? "false" : "0")};`,
+					: `  ${cType(register)} ${local(register)} = ${initial.get(register) ?? (kind === "boolean" ? "false" : "0")};`,
 			),
 			`  if (${[`${cursor}.active`, `mal_vm_dense_number_storage(r${plan.iterator}, &${id}_a)`, ...guards].join(" && ")}) {`,
 			...arrayBody(),
@@ -1593,7 +1703,7 @@ function emitNumericLoopRegion(
 		...[...flow.kinds].map(([register, kind]) =>
 			records.has(register)
 				? `  MalValue ${local(register)} = MAL_VALUE_UNDEFINED;`
-				: `  ${kind === "boolean" ? "bool" : floating ? "f64" : "i64"} ${local(register)} = ${initial.get(register) ?? (kind === "boolean" ? "false" : "0")};`,
+				: `  ${cType(register)} ${local(register)} = ${initial.get(register) ?? (kind === "boolean" ? "false" : "0")};`,
 		),
 		...rangePrelude,
 		...(lengthBound

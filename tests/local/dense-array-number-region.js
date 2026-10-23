@@ -42,6 +42,30 @@ function centroidOf(points) {
 	return `${sx},${sy}`;
 }
 
+function fnvHash(values, seed) {
+	let hash = seed;
+	for (let index = 0; index < values.length; index++)
+		hash = Math.imul(hash ^ values[index], 0x01000193) >>> 0;
+	return hash;
+}
+
+function bitMix(values, seed) {
+	let low = seed;
+	let high = 0;
+	for (const value of values) {
+		low = (low << 3) ^ ~value;
+		high = (high | (value >> 1)) + (low & 255);
+	}
+	return `${low},${high},${Object.is(low, -0)}`;
+}
+
+function clzSum(values, seed) {
+	let total = 0;
+	for (let index = 0; index < values.length; index++)
+		total += Math.clz32(values[index] ^ seed);
+	return total;
+}
+
 function lookupSum(table, count, mask) {
 	let total = 0;
 	for (let index = 0; index < count; index++) total += table[index & mask];
@@ -162,6 +186,17 @@ lines.push(`for-of string ${sumOf([1, "b", 2])}`);
 lines.push(`for-of empty ${sumOf([])}`);
 lines.push(`for-of records ${centroidOf(records)}`);
 lines.push(`for-of mixed records ${centroidOf([{ x: 1, y: 2 }, { y: 3, x: 4 }, 5])}`);
+const hashed = Array.from({ length: 64 }, (_, index) => (index * 2654435761) % 1000003);
+lines.push(`fnv ${fnvHash(hashed, 0x811c9dc5)}`);
+lines.push(`fnv fractional seed ${fnvHash(hashed, 1.5)}`);
+lines.push(`fnv empty negative zero ${Object.is(fnvHash([], -0), -0)}`);
+lines.push(
+	`fnv odd elements ${fnvHash([1.5, -2.25, 2 ** 40 + 3, -(2 ** 33), 4294967295], 7)}`,
+);
+lines.push(`bit mix ${bitMix([1, -2, 3, 0x7fffffff, -0x80000000], 5)}`);
+lines.push(`bit mix empty ${bitMix([], -0)}`);
+lines.push(`bit mix large seed ${bitMix([3, 4], 4294967295)}`);
+lines.push(`clz ${clzSum([0, 1, -1, 2 ** 31, 0.5, 2 ** 40], 6)}`);
 lines.push(`lookup ${lookupSum([1, 2, 3, 4], 100, 3)}`);
 lines.push(`lookup past the end ${lookupSum([1, 2, 3], 10, 3)}`);
 lines.push(`lookup hole ${lookupSum([1, , 3, 4], 10, 3)}`);
