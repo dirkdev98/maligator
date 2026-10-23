@@ -163,7 +163,13 @@ static const char *const async_hook_names[HOOK_COUNT] = {
 
 static MAL_ISOLATE_LOCAL u64 async_current_trigger_id;
 
+/* Until a hook is first enabled there is no hook list, so the far more frequent
+ * emits skip the module and symbol-registry lookups. */
+static MAL_ISOLATE_LOCAL bool async_hooks_listed;
+
 static MalArrayObject *async_enabled_hooks(MalVm *vm, bool create) {
+    if (create) async_hooks_listed = true;
+    else if (!async_hooks_listed) return nullptr;
     MalValue module = mal_node_module_get_cached(vm, "node:async_hooks");
     if (!mal_value_is_object(module)) return nullptr;
     MalKey key = mal_key_from_value(mal_node_registered_symbol(vm, "maligator.async_hooks.enabled"));
