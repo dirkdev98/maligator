@@ -1358,6 +1358,16 @@ static bool http_can_construct_canonical(
         && mal_object_get_prototype(readable_object) == stream;
 }
 
+/* Requests and responses carry the runtime's stream and dispatch fields plus what
+ * frameworks add per request (Express sets about fifteen on each request), and
+ * an emitter's _events holds a handful of event names. Reserving that up front
+ * replaces a chain of slot migrations per request with one allocation. */
+enum {
+    HTTP_INCOMING_MESSAGE_SLOTS = 48,
+    HTTP_SERVER_RESPONSE_SLOTS = 32,
+    HTTP_EVENTS_SLOTS = 8,
+};
+
 static MalValue http_new_incoming_message(MalVm *vm) {
     MalValue constructor =
         vm->intrinsics[MAL_INTRINSIC_NODE_HTTP_INCOMING_MESSAGE_CONSTRUCTOR];
@@ -1379,8 +1389,10 @@ static MalValue http_new_incoming_message(MalVm *vm) {
     };
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
-    roots[0] = mal_value_from_object(mal_object_new(&vm->heap, prototype));
-    roots[1] = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
+    roots[0] = mal_value_from_object(
+        mal_object_new_reserved(&vm->heap, prototype, HTTP_INCOMING_MESSAGE_SLOTS));
+    roots[1] = mal_value_from_object(
+        mal_object_new_reserved(&vm->heap, nullptr, HTTP_EVENTS_SLOTS));
     roots[2] = mal_value_from_object(mal_intrinsic_new_object(vm));
     roots[3] = mal_value_from_array_object(mal_intrinsic_new_dense_array(vm, 0));
     roots[4] = mal_value_from_array_object(mal_intrinsic_new_dense_array(vm, 0));
@@ -1439,8 +1451,10 @@ static MalValue http_new_server_response(MalVm *vm) {
     MalValue roots[] = {mal_value_new_undefined(), mal_value_new_undefined()};
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
-    roots[0] = mal_value_from_object(mal_object_new(&vm->heap, prototype));
-    roots[1] = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
+    roots[0] = mal_value_from_object(
+        mal_object_new_reserved(&vm->heap, prototype, HTTP_SERVER_RESPONSE_SLOTS));
+    roots[1] = mal_value_from_object(
+        mal_object_new_reserved(&vm->heap, nullptr, HTTP_EVENTS_SLOTS));
     http_server_response_shapes(vm);
     static const char *names[] = {
         "_events", "_eventsCount", "_maxListeners", "destroyed", "_malStreamKind",
@@ -3654,7 +3668,9 @@ static bool http_request_headers(
     }
     MalRootSpan canonical_root;
     mal_gc_root(&canonical_root, canonical_names, (i32) state->header_count);
-    roots[0] = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
+    roots[0] = mal_value_from_object(
+        mal_object_new_reserved(&vm->heap, nullptr, (u8) (state->header_count < MAL_SHAPE_ORDINARY_SLOTS
+            ? state->header_count : MAL_SHAPE_ORDINARY_SLOTS)));
     roots[1] = mal_value_from_array_object(
         mal_intrinsic_new_dense_array(vm, (u32) (state->header_count * 2)));
     MalArrayObject *raw = mal_value_to_array_object(roots[1]);
