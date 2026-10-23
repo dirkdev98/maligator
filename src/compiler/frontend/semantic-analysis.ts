@@ -25,6 +25,9 @@ export interface SemanticFile {
 	strict: boolean;
 	ast: ESTree.Program;
 
+	/** Owned by the toolchain, like the Node globals prelude, rather than the application. */
+	toolchain?: true;
+
 	/**
 	 * A CommonJS module. Its top level is the body of a wrapper function
 	 * `(module, exports, require, __filename, __dirname)`, so those names are

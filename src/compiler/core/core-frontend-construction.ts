@@ -572,6 +572,7 @@ export class DirectCoreFunctionConstruction {
 		const isClassConstructor = this.#fn.classContext?.isConstructor ?? false;
 		return {
 			sourcePath: this.#fn.semanticFile.path,
+			...(this.#fn.semanticFile.toolchain === true ? { toolchain: true as const } : {}),
 			...(this.#fn.sourceOrigin === undefined
 				? {}
 				: { sourceOrigin: this.#fn.sourceOrigin }),

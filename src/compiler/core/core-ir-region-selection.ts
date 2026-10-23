@@ -1177,6 +1177,7 @@ function guardedCallOpportunities(
 	summaries: CoreProgramSummaries,
 	liveFunctions: ReadonlyArray<CoreFunctionId>,
 	analyses: CoreAnalysisManager,
+	localClaims: (caller: CoreFunctionId, instruction: CoreInstructionId) => boolean,
 ): ReadonlyArray<CorePlanningOpportunity> {
 	const candidates: Array<CorePlanningOpportunity> = [];
 	const instanceMethodHints = coreInstanceMethodHints(program);
@@ -1217,6 +1218,8 @@ function guardedCallOpportunities(
 				candidateHints?.includes(caller) === true
 					? candidateHints
 					: undefined;
+			// A method name only guesses the callee; a local plan for the call knows more.
+			if (hintedTargets !== undefined && localClaims(caller, site.instruction)) continue;
 			const targetFunctions = Object.freeze(
 				hintedTargets === undefined ? [...site.targets.functions] : [...hintedTargets],
 			);
@@ -1428,7 +1431,12 @@ function directEntryOpportunities(
 				if (fn.instructionOpcodeName(load) === "loadPropertyStatic") {
 					const key = fn.instructionAttributes(load).stringIndex;
 					if (typeof key === "number") {
-						targets = methods.get(key) ?? [];
+						// The toolchain's own methods guess callees only for toolchain code.
+						targets = (methods.get(key) ?? []).filter(
+							(target) =>
+								fn.metadata.toolchain === true ||
+								program.function(target).metadata.toolchain !== true,
+						);
 						speculative = true;
 					}
 				}
@@ -2483,7 +2491,16 @@ export function buildCoreOptimizationPlan(
 			});
 		}
 		opportunities.push(
-			...guardedCallOpportunities(program, summaries, liveFunctions, analyses),
+			...guardedCallOpportunities(
+				program,
+				summaries,
+				liveFunctions,
+				analyses,
+				(caller, instruction) =>
+					resolveLocal(caller).some((candidate) =>
+						candidate.claims.claimedInstructions.includes(instruction),
+					),
+			),
 		);
 		opportunities.push(
 			...directEntryOpportunities(

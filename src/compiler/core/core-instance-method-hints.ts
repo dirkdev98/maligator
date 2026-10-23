@@ -147,9 +147,16 @@ function installedPrototypeOwner(
 	return undefined;
 }
 
-export function coreInstanceMethodHints(
-	program: CoreProgram,
-): ReadonlyMap<number, ReadonlyArray<CoreFunctionId>> {
+/**
+ * Class methods by name, which guess the callee of a method call. The toolchain's own
+ * classes guess only for toolchain code: their names say nothing about application calls.
+ */
+export interface CoreInstanceMethodHints {
+	readonly toolchain: ReadonlyMap<number, ReadonlyArray<CoreFunctionId>>;
+	readonly application: ReadonlyMap<number, ReadonlyArray<CoreFunctionId>>;
+}
+
+export function coreInstanceMethodHints(program: CoreProgram): CoreInstanceMethodHints {
 	const hints = new Map<number, Array<CoreFunctionId>>();
 	for (const functionId of program.functionIds()) {
 		const fn = program.function(functionId);
@@ -175,7 +182,14 @@ export function coreInstanceMethodHints(
 			hints.set(stringIndex, targets);
 		}
 	}
-	return hints;
+	const application = new Map<number, ReadonlyArray<CoreFunctionId>>();
+	for (const [stringIndex, targets] of hints) {
+		const owned = targets.filter(
+			(target) => program.function(target).metadata.toolchain !== true,
+		);
+		if (owned.length > 0) application.set(stringIndex, owned);
+	}
+	return { toolchain: hints, application };
 }
 
 export interface CoreAccessorHints {
@@ -304,7 +318,7 @@ export function coreInstanceMethodTargets(
 	fn: CoreFunctionStore,
 	callee: CoreValueId,
 	receiver: CoreValueId | undefined,
-	hints: ReadonlyMap<number, ReadonlyArray<CoreFunctionId>>,
+	hints: CoreInstanceMethodHints,
 ): ReadonlyArray<CoreFunctionId> | undefined {
 	const accessor = accessorProbe(fn, callee);
 	if (accessor !== undefined)
@@ -320,7 +334,9 @@ export function coreInstanceMethodTargets(
 	) {
 		return undefined;
 	}
-	const targets = hints.get(load.stringIndex);
+	const targets = (
+		fn.metadata.toolchain === true ? hints.toolchain : hints.application
+	).get(load.stringIndex);
 	return targets !== undefined && targets.length <= 4 ? targets : undefined;
 }
 
@@ -328,7 +344,7 @@ export function coreInstanceMethodHint(
 	fn: CoreFunctionStore,
 	callee: CoreValueId,
 	receiver: CoreValueId | undefined,
-	hints: ReadonlyMap<number, ReadonlyArray<CoreFunctionId>>,
+	hints: CoreInstanceMethodHints,
 ): CoreFunctionId | undefined {
 	const targets = coreInstanceMethodTargets(fn, callee, receiver, hints);
 	return targets?.length === 1 ? targets[0] : undefined;

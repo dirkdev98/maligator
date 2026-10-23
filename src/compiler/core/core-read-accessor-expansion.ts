@@ -1,6 +1,7 @@
 import type { ReadAccessorSummary } from "../shared/effect-summary.ts";
 import type { CoreEditor } from "./core-editor.ts";
 import { coreInstanceMethodHint } from "./core-instance-method-hints.ts";
+import type { CoreInstanceMethodHints } from "./core-instance-method-hints.ts";
 import { CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE } from "./core-internal-attributes.ts";
 import { coreTerminatorInput, mapCoreTerminatorEdges } from "./core-ir-control-flow.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
@@ -193,7 +194,7 @@ function readRegion(
 	program: CoreProgram,
 	summaries: CoreProgramSummaries,
 	candidate: ReadAccessorAnchor,
-	hints: ReadonlyMap<number, ReadonlyArray<CoreFunctionId>>,
+	hints: CoreInstanceMethodHints,
 	reusePlan = true,
 	work?: CoreReadAccessorWork,
 	conditionalNumbers = false,
@@ -292,7 +293,7 @@ export function coreReadAccessorRegionCost(
 	program: CoreProgram,
 	summaries: CoreProgramSummaries,
 	candidate: ReadAccessorAnchor,
-	hints: ReadonlyMap<number, ReadonlyArray<CoreFunctionId>>,
+	hints: CoreInstanceMethodHints,
 	work?: CoreReadAccessorWork,
 ):
 	| {
@@ -375,7 +376,7 @@ export function expandCoreReadAccessorRegion(
 	names: CoreModulePrivateNameIndex,
 	candidate: CoreTransformCandidate,
 	editor: CoreEditor,
-	hints: ReadonlyMap<number, ReadonlyArray<CoreFunctionId>>,
+	hints: CoreInstanceMethodHints,
 	work?: CoreReadAccessorWork,
 ): { instructionsIntroduced: number; blocksIntroduced: number } | undefined {
 	const fn = program.function(candidate.caller);

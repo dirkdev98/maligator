@@ -24,6 +24,7 @@ import {
 	coreInstanceMethodHints,
 	coreInstanceMethodTargets,
 } from "./core-instance-method-hints.ts";
+import type { CoreInstanceMethodHints } from "./core-instance-method-hints.ts";
 import { CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE } from "./core-internal-attributes.ts";
 import {
 	coreDirectCreatedFunction,
@@ -124,7 +125,7 @@ const readAccessorInputs = new WeakMap<
 	CoreProgram,
 	{
 		names: CoreModulePrivateNameIndex;
-		hints: ReadonlyMap<number, ReadonlyArray<CoreFunctionId>>;
+		hints: CoreInstanceMethodHints;
 		work?: CoreReadAccessorWork;
 	}
 >();
@@ -1069,7 +1070,7 @@ function scalarConstructorMethod(
 	callResult: CoreValueId,
 	originalTerminator: CoreInstructionId,
 	layout: ScalarConstructorLayout,
-	instanceMethodHints: ReadonlyMap<number, ReadonlyArray<CoreFunctionId>>,
+	instanceMethodHints: CoreInstanceMethodHints,
 ): ConstructorConsumerPlan | undefined {
 	if (!layout.returnsReceiver || tail.length < 2) return undefined;
 	const [lookup, call] = tail;
@@ -1261,7 +1262,7 @@ function constructorConsumerPlan(
 	callResult: CoreValueId,
 	originalTerminator: CoreInstructionId,
 	layout: ScalarConstructorLayout,
-	instanceMethodHints: ReadonlyMap<number, ReadonlyArray<CoreFunctionId>>,
+	instanceMethodHints: CoreInstanceMethodHints,
 ): ConstructorConsumerPlan | undefined {
 	return (
 		scalarConstructorMethod(
@@ -1358,7 +1359,7 @@ function guardedConstructorConsumerDuplication(
 	inline: InlineTarget | undefined,
 	site: CoreInstructionId,
 	result: CoreValueId | undefined,
-	instanceMethodHints: ReadonlyMap<number, ReadonlyArray<CoreFunctionId>>,
+	instanceMethodHints: CoreInstanceMethodHints,
 ): number {
 	if (inline === undefined || result === undefined) return 0;
 	const layout = scalarConstructorLayout(program, inline);
@@ -1492,7 +1493,7 @@ function coreInstanceMethodHintsForAccessor(
 	fn: CoreFunctionStore,
 	callee: CoreValueId,
 	receiver: CoreValueId | undefined,
-	hints: ReadonlyMap<number, ReadonlyArray<CoreFunctionId>>,
+	hints: CoreInstanceMethodHints,
 	summaries: CoreProgramSummaries,
 	privateNames: CoreModulePrivateNameIndex,
 ): boolean {
@@ -1513,7 +1514,7 @@ function offerFunctionCandidates(
 	summaries: CoreProgramSummaries,
 	service: CoreTransformCandidateService,
 	functionId: CoreFunctionId,
-	instanceMethodHints: ReadonlyMap<number, ReadonlyArray<CoreFunctionId>>,
+	instanceMethodHints: CoreInstanceMethodHints,
 	fieldEntryNominees: ReadonlyMap<number, number>,
 	capturedCells: () => CapturedCellWrites,
 	singleActivations: () => ReadonlySet<CoreFunctionId>,
