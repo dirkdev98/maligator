@@ -552,6 +552,31 @@ check(
 	]) === '[["","12","","3",""],[0,""],[2,5,0,-1,true],["7","7",1,"x7y8"],null]',
 );
 
+const replacerSeen = [];
+const replacerRegExp = /(\d)(x)?/g;
+const replacedByFunction = "a1b2x3".replace(
+	replacerRegExp,
+	(match, digit, x, offset, whole) => {
+		replacerSeen.push([match, digit, x === undefined ? "u" : x, offset, whole.length]);
+		replacerRegExp.lastIndex = 0;
+		/z(z)/.test("zz");
+		return `<${digit}>`;
+	},
+);
+const replacedOnce = "k9k9".replace(/k(\d)/, (match, digit) => digit + digit);
+check(
+	"replace calls back with every collected match before reading new state",
+	JSON.stringify([
+		replacedByFunction,
+		replacerSeen,
+		replacedOnce,
+		RegExp.lastMatch,
+		RegExp.$1,
+		replacerRegExp.lastIndex,
+	]) ===
+		'["a<1>b<2><3>",[["1","1","u",1,6],["2x","2","x",3,6],["3","3","u",5,6]],"99k9","k9","9",0]',
+);
+
 let invalidCount = 0;
 for (let i = 0; i < 2; i++) {
 	try {

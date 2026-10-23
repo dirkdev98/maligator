@@ -2110,6 +2110,112 @@ done:
     return ret;
 }
 
+// A canonical instance's result arrays are never observable, so the replacer receives
+// substrings of the collected ranges. Every match is still collected before the first
+// call, as the specification orders it. Named groups stay on the general path.
+static MalValue regexp_canonical_replace_function(
+    MalVm *vm, MalRegExpObject *re, MalValue rx, MalString *s, MalValue replacer
+) {
+    bool global = (re->flag_bits & MAL_REGEXP_JS_GLOBAL) != 0;
+    bool full_unicode = (re->flag_bits & (MAL_REGEXP_JS_UNICODE | MAL_REGEXP_JS_UNICODE_SETS)) != 0;
+    if (global && !regexp_set_last_index(vm, rx, 0)) {
+        return mal_value_new_undefined();
+    }
+    RegexpMatchOffsets offsets = {0};
+    RegexpCaptureProjection projection = {.offsets = &offsets};
+    while (true) {
+        usize previous = offsets.count;
+        MalValue result = regexp_builtin_exec(
+            vm, re, rx, s, REGEXP_BUILTIN_EXEC_OFFSETS, false, &projection);
+        if (regexp_threw(vm)) {
+            if (offsets.pairs != nullptr) free(offsets.pairs);
+            return mal_value_new_undefined();
+        }
+        if (mal_value_is_null(result) || !global) break;
+        if (offsets.pairs[previous] == offsets.pairs[previous + 1]) {
+            i64 this_index;
+            if (!regexp_get_last_index(vm, rx, &this_index) ||
+                !regexp_set_last_index(
+                    vm, rx, regexp_advance_string_index(s, this_index, full_unicode))) {
+                if (offsets.pairs != nullptr) free(offsets.pairs);
+                return mal_value_new_undefined();
+            }
+        }
+    }
+    if (offsets.count == 0) return mal_value_from_string(s);
+
+    usize groups = (usize) offsets.groups;
+    MalValue inline_args[16];
+    MalValue *call_args = groups + 2 <= countof(inline_args)
+        ? inline_args : malloc(sizeof(MalValue) * (groups + 2));
+    if (call_args == nullptr) {
+        free(offsets.pairs);
+        regexp_throw_string_length(vm);
+        return mal_value_new_undefined();
+    }
+    RegexpBuilder accumulated = {0};
+    mal_text_buffer_hint_capacity(&accumulated, mal_string_length(s));
+    MalValue ret = mal_value_new_undefined();
+    MalValue roots[3] = {mal_value_from_string(s), replacer, mal_value_new_undefined()};
+    MalRootSpan roots_span;
+    MalRootSpan args_span;
+    mal_gc_root(&roots_span, roots, countof(roots));
+    mal_gc_root(&args_span, call_args, 0);
+    MalExactScriptCall runtime_callback;
+    bool nominated =
+        (vm->exact_script_call == nullptr || vm->exact_script_call->callee != replacer) &&
+        mal_vm_prepare_builtin_callback(vm, replacer, &runtime_callback);
+    if (nominated) vm->exact_script_call = &runtime_callback;
+    mal_gc_native_rooted_begin(vm);
+
+    usize next_source_position = 0;
+    for (usize at = 0; at < offsets.count; at += 2 * groups) {
+        const int32_t *pairs = offsets.pairs + at;
+        i32 argc = 0;
+        for (usize group = 0; group < groups; group++) {
+            call_args[argc] = pairs[2 * group] < 0
+                ? mal_value_new_undefined()
+                : regexp_substring(vm, s, pairs[2 * group], pairs[2 * group + 1]);
+            args_span.count = ++argc;
+        }
+        call_args[argc++] = mal_value_from_i32(pairs[0]);
+        call_args[argc++] = mal_value_from_string(s);
+        args_span.count = argc;
+        MalCompletion completion = mal_vm_call_builtin_callback(
+            vm, replacer, mal_value_new_undefined(), call_args, argc);
+        if (completion.kind == MAL_COMPLETION_THROW) goto done;
+        roots[2] = completion.value;
+        MalString *replacement;
+        if (!mal_vm_to_string(vm, roots[2], &replacement)) goto done;
+        roots[2] = mal_value_from_string(replacement);
+        usize position = (usize) pairs[0];
+        if (position >= next_source_position) {
+            if (!regexp_builder_append_range(
+                    vm, &accumulated, s, next_source_position, position - next_source_position) ||
+                !regexp_builder_append_string(vm, &accumulated, replacement)) {
+                goto done;
+            }
+            next_source_position = (usize) pairs[1];
+        }
+    }
+    usize length = mal_string_length(s);
+    if (next_source_position < length && !regexp_builder_append_range(
+            vm, &accumulated, s, next_source_position, length - next_source_position)) {
+        goto done;
+    }
+    ret = regexp_builder_finish(vm, &accumulated);
+
+done:
+    mal_gc_native_rooted_end(vm);
+    if (nominated) vm->exact_script_call = runtime_callback.previous;
+    mal_gc_unroot(&args_span);
+    mal_gc_unroot(&roots_span);
+    if (call_args != inline_args) free(call_args);
+    free(offsets.pairs);
+    mal_text_buffer_dispose(&accumulated);
+    return ret;
+}
+
 static MalValue regexp_proto_replace(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
     (void) callee;
@@ -2133,10 +2239,14 @@ static MalValue regexp_proto_replace(MalVm *vm, MalValue this_value, const MalVa
     }
 
     MalRegExpObject *canonical;
-    if (!functional && regexp_canonical_instance(vm, this_value, &canonical) &&
-        (!regexp_template_has_dollar(replace_string, true) ||
-            !regexp_source_may_name_groups(canonical->source))) {
-        return regexp_canonical_replace(vm, canonical, this_value, s, replace_string);
+    if (regexp_canonical_instance(vm, this_value, &canonical)) {
+        if (functional && !regexp_source_may_name_groups(canonical->source)) {
+            return regexp_canonical_replace_function(vm, canonical, this_value, s, replace_value);
+        }
+        if (!functional && (!regexp_template_has_dollar(replace_string, true) ||
+                !regexp_source_may_name_groups(canonical->source))) {
+            return regexp_canonical_replace(vm, canonical, this_value, s, replace_string);
+        }
     }
 
     MalString *flags;
