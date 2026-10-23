@@ -635,7 +635,11 @@ static MalValue mal_intrinsic_cjs_require_callback(MalVm *vm, MalValue this_valu
         return mal_value_new_undefined();
     }
 
-    return mal_vm_cjs_require(vm, mal_value_to_i32(args[0]));
+    // A module body can be the whole program; it must be able to collect while it runs.
+    mal_gc_native_rooted_begin(vm);
+    MalValue exports = mal_vm_cjs_require(vm, mal_value_to_i32(args[0]));
+    mal_gc_native_rooted_end(vm);
+    return exports;
 }
 
 void mal_intrinsics_init(MalVm *vm) {

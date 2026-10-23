@@ -989,6 +989,8 @@ MalValue mal_vm_cjs_require(MalVm *vm, i32 id) {
     };
     i32 function_index = vm->runtime_image->cjs_module_function_indices[id];
     const MalFunction *function = &vm->runtime_image->functions[function_index];
+    MalRootSpan args_span;
+    mal_gc_root(&args_span, args, countof(args));
     if (function->compiled != nullptr) {
         function->compiled(
             vm, exports_value, args, 5, mal_value_new_undefined(), nullptr,
@@ -1000,6 +1002,9 @@ MalValue mal_vm_cjs_require(MalVm *vm, i32 id) {
             mal_value_new_undefined(), nullptr
         );
     }
+    mal_gc_unroot(&args_span);
+    // The body may splice in another image, which reallocates the registry.
+    slot = &vm->cjs_registry[id];
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
         // Node removes a module whose evaluation failed. A later require must run
         // a fresh module object rather than return this attempt's partial exports.
