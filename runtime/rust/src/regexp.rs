@@ -26,12 +26,14 @@ use regress::{AsciiMatches, Flags, Match, Regex};
 use crate::ffi::{nullable_slice, nullable_u16_slice, write_utf8};
 
 /// ABI version, mirrored by MAL_REGEXP_ABI_VERSION in mal_regexp.h.
-/// v2: added `mal_regexp_free` (GC finalization, gc_todo.md D2).
+/// v2: added `mal_regexp_free` (GC finalization).
 /// v3: added immutable-subject identity and execution-path reporting.
 /// v4: added conservative allocation-free literal/class execution plans.
 /// v5: added compact Latin-1 subject execution.
 /// v6: added fresh-state cloning of an existing compiled pattern.
-pub const MAL_REGEXP_ABI_VERSION: u32 = 7;
+/// v7: added template cloning that leaves compile-cache recency alone.
+/// v8: handles are shared through `mal_regexp_retain`/`mal_regexp_release`.
+pub const MAL_REGEXP_ABI_VERSION: u32 = 8;
 
 const EXEC_ASCII: u32 = 1 << 0;
 const EXEC_CACHE_HIT: u32 = 1 << 1;
@@ -1001,8 +1003,12 @@ thread_local! {
 /// groups) before issuing the next exec, so caching `last` here is sound and
 /// lets named groups be queried after a match without re-running it. A `Match`
 /// owns all of its data (it does not borrow the subject), so it is safe to
-/// retain past the exec call.
+/// retain past the exec call. That same discipline lets RegExp objects of one
+/// source and flags share a handle: every cache below is a pure function of the
+/// pattern, subject and start position.
 struct CompiledPattern {
+    /// Owners on the handle's single mutator thread; the last release frees it.
+    refs: u32,
     re: Arc<Regex>,
     fast: Option<Arc<FastPattern>>,
     /// `u`/`v` patterns match over code points; everything else over code units.
@@ -1064,6 +1070,7 @@ impl CompiledPattern {
         ascii_eligible: bool,
     ) -> Self {
         Self {
+            refs: 1,
             re,
             fast,
             unicode_mode,
@@ -1229,7 +1236,7 @@ fn compile_pattern(units: &[u16], flags: u32) -> Option<CompiledPatternParts> {
 
 /// Compile a pattern (UTF-16) with the given flag bitmask. Returns an opaque,
 /// leaked handle (a boxed `CompiledPattern`), or NULL if the pattern is invalid
-/// — the C side maps NULL to a SyntaxError. Freed by the C side via mal_regexp_free.
+/// — the C side maps NULL to a SyntaxError. The caller owns one reference.
 #[no_mangle]
 pub unsafe extern "C" fn mal_regexp_compile(
     pattern: *const u16,
@@ -1258,61 +1265,30 @@ pub unsafe extern "C" fn mal_regexp_compile(
     }
 }
 
-/// Share immutable engine code with a live handle, retaining no match or subject state.
-/// The returned handle has independent ownership; a null source returns null.
+/// Add an owner to a live handle and return it; a null handle returns null.
 #[no_mangle]
-pub unsafe extern "C" fn mal_regexp_clone_fresh(
-    handle: *const core::ffi::c_void,
+pub unsafe extern "C" fn mal_regexp_retain(
+    handle: *mut core::ffi::c_void,
 ) -> *mut core::ffi::c_void {
-    if handle.is_null() {
-        return core::ptr::null_mut();
+    if !handle.is_null() {
+        let pattern = unsafe { &mut *(handle as *mut CompiledPattern) };
+        pattern.refs += 1;
     }
-    let source = unsafe { &*(handle as *const CompiledPattern) };
-    // Cloning replaces a compile-cache hit, so it must preserve that entry's recency.
-    PATTERN_CACHE.with(|cache| {
-        let mut cache = cache.borrow_mut();
-        if let Some(index) = cache
-            .iter()
-            .position(|entry| Arc::ptr_eq(&entry.re, &source.re))
-        {
-            if let Some(entry) = cache.remove(index) {
-                cache.push_front(entry);
-            }
-        }
-    });
-    clone_compiled(source)
+    handle
 }
 
-/// Share a retained template's engine code. The template keeps the program
-/// alive, so the compile cache's recency is left alone; a null source returns null.
-#[no_mangle]
-pub unsafe extern "C" fn mal_regexp_clone_template(
-    handle: *const core::ffi::c_void,
-) -> *mut core::ffi::c_void {
-    if handle.is_null() {
-        return core::ptr::null_mut();
-    }
-    clone_compiled(unsafe { &*(handle as *const CompiledPattern) })
-}
-
-fn clone_compiled(source: &CompiledPattern) -> *mut core::ffi::c_void {
-    let boxed = Box::new(CompiledPattern::fresh(
-        Arc::clone(&source.re),
-        source.fast.clone(),
-        source.unicode_mode,
-        source.ascii_eligible,
-    ));
-    Box::into_raw(boxed) as *mut core::ffi::c_void
-}
-
-/// Free an owned compiled-pattern handle. Null-tolerant, so
+/// Drop one owner of a handle, freeing it with the last. Null-tolerant, so
 /// the GC finalizer (which nulls the field after the call) is idempotent.
 #[no_mangle]
-pub unsafe extern "C" fn mal_regexp_free(handle: *mut core::ffi::c_void) {
+pub unsafe extern "C" fn mal_regexp_release(handle: *mut core::ffi::c_void) {
     if handle.is_null() {
         return;
     }
-    drop(unsafe { Box::from_raw(handle as *mut CompiledPattern) });
+    let pattern = unsafe { &mut *(handle as *mut CompiledPattern) };
+    pattern.refs -= 1;
+    if pattern.refs == 0 {
+        drop(unsafe { Box::from_raw(handle as *mut CompiledPattern) });
+    }
 }
 
 /// Write a match's group ranges into `out` as (start, end) i32 pairs (pair 0 is
@@ -1587,7 +1563,8 @@ pub unsafe extern "C" fn mal_regexp_exec_latin1(
     let memoized = subject_len <= RESULT_MEMO_SUBJECT_BYTES;
     if memoized {
         if let Some((found, subject_class)) = cp.result_memo.as_ref().and_then(|memo| {
-            memo.lookup(subj, start).map(|found| (found.clone(), memo.subject_class))
+            memo.lookup(subj, start)
+                .map(|found| (found.clone(), memo.subject_class))
         }) {
             if !execution_flags_out.is_null() {
                 unsafe { *execution_flags_out = EXEC_LATIN1 | EXEC_CACHE_HIT | subject_class };
@@ -1662,7 +1639,12 @@ pub unsafe extern "C" fn mal_regexp_exec_latin1(
                 subject_class: 0,
                 results: Vec::new(),
             })
-            .record(subj, execution_flags & (EXEC_ASCII | EXEC_NON_ASCII), start, &found);
+            .record(
+                subj,
+                execution_flags & (EXEC_ASCII | EXEC_NON_ASCII),
+                start,
+                &found,
+            );
     }
     finish_exec(cp, found, caps_out, caps_cap)
 }
@@ -1782,161 +1764,28 @@ mod tests {
         assert!(second_pattern.last.is_none());
 
         unsafe {
-            mal_regexp_free(first);
-            mal_regexp_free(second);
+            mal_regexp_release(first);
+            mal_regexp_release(second);
         }
     }
 
     #[test]
-    fn template_clone_shares_code_without_refreshing_the_compile_cache() {
+    fn retained_handle_outlives_all_but_its_last_release() {
         clear_cache();
-        assert!(unsafe { mal_regexp_clone_template(core::ptr::null()) }.is_null());
-        let template = unsafe { handle(&utf16("a+"), 0) };
-        let newer = unsafe { handle(&utf16("b+"), 0) };
-        let clone = unsafe { mal_regexp_clone_template(template) };
-        let newest_is_b = PATTERN_CACHE.with(|cache| {
-            let newer_re = unsafe { &(*(newer as *const CompiledPattern)).re };
-            cache
-                .borrow()
-                .front()
-                .is_some_and(|entry| Arc::ptr_eq(&entry.re, newer_re))
-        });
-        assert!(newest_is_b);
-        {
-            let original = unsafe { &*(template as *const CompiledPattern) };
-            let copy = unsafe { &*(clone as *const CompiledPattern) };
-            assert!(Arc::ptr_eq(&original.re, &copy.re));
-            assert!(copy.subject_cache.is_none());
-        }
-        let mut caps = [-1; 2];
-        let mut flags = 0;
-        assert_eq!(unsafe { exec_latin1(clone, b"xaa", 1, 7, &mut caps, &mut flags) }, 1);
-        assert_eq!(caps, [1, 3]);
-        unsafe {
-            mal_regexp_free(clone);
-            mal_regexp_free(newer);
-            mal_regexp_free(template);
-        }
-    }
-
-    #[test]
-    fn fresh_clone_owns_code_but_not_the_sources_subject_or_captures() {
-        clear_cache();
-        assert!(unsafe { mal_regexp_clone_fresh(core::ptr::null()) }.is_null());
-        let pattern = utf16("(?<letter>a)(b)?");
-        let source = unsafe { handle(&pattern, FLAG_UNICODE) };
-        let mut source_caps = [-1; 6];
-        let mut flags = 0;
-        assert_eq!(
-            unsafe { exec_latin1(source, b"zab", 1, 7, &mut source_caps, &mut flags) },
-            3
-        );
-        assert_eq!(source_caps, [1, 3, 1, 2, 2, 3]);
-        let cloned = unsafe { mal_regexp_clone_fresh(source) };
-        assert!(!cloned.is_null());
-        assert_ne!(source, cloned);
-        {
-            let original = unsafe { &*(source as *const CompiledPattern) };
-            let copy = unsafe { &*(cloned as *const CompiledPattern) };
-            assert!(Arc::ptr_eq(&original.re, &copy.re));
-            assert!(original.subject_cache.is_some());
-            assert!(copy.subject_cache.is_none());
-            assert!(copy.unicode_mode);
-        }
-        let mut clone_caps = [-1; 6];
-        assert_eq!(
-            unsafe { mal_regexp_copy_captures(cloned, clone_caps.as_mut_ptr(), 6) },
-            0
-        );
-        assert_eq!(unsafe { mal_regexp_named_group_count(cloned) }, 0);
-        assert_eq!(
-            unsafe { exec_latin1(cloned, b"a", 2, 7, &mut clone_caps, &mut flags) },
-            3
-        );
-        assert_eq!(clone_caps, [0, 1, 0, 1, -1, -1]);
-        assert_eq!(unsafe { mal_regexp_named_group_count(cloned) }, 1);
-        let mut retained = [-1; 6];
-        assert_eq!(
-            unsafe { mal_regexp_copy_captures(source, retained.as_mut_ptr(), 6) },
-            3
-        );
-        assert_eq!(retained, source_caps);
-        clear_cache();
-        unsafe { mal_regexp_free(source) };
-        assert_eq!(
-            unsafe { exec_latin1(cloned, b"xab", 3, 7, &mut clone_caps, &mut flags) },
-            3
-        );
-        assert_eq!(clone_caps, [1, 3, 1, 2, 2, 3]);
-        assert_eq!(cache_len(), 0);
-        unsafe { mal_regexp_free(cloned) };
-    }
-
-    #[test]
-    fn fresh_clone_keeps_existing_compiled_code_hot_across_unrelated_constructions() {
-        clear_cache();
-        let pattern = utf16("(cache-hot+)");
+        assert!(unsafe { mal_regexp_retain(core::ptr::null_mut()) }.is_null());
+        let pattern = utf16("(a)(b)?");
         let source = unsafe { handle(&pattern, 0) };
-        for index in 0..PATTERN_CACHE_CAPACITY + 2 {
-            let other = utf16(&format!("other-{index}"));
-            let handle = unsafe { handle(&other, 0) };
-            unsafe { mal_regexp_free(handle) };
-            let clone = unsafe { mal_regexp_clone_fresh(source) };
-            unsafe { mal_regexp_free(clone) };
-        }
-        let recreated = unsafe { handle(&pattern, 0) };
-        let original = unsafe { &*(source as *const CompiledPattern) };
-        let warm = unsafe { &*(recreated as *const CompiledPattern) };
-        assert!(Arc::ptr_eq(&original.re, &warm.re));
-        assert_eq!(cache_len(), PATTERN_CACHE_CAPACITY);
-        unsafe {
-            mal_regexp_free(source);
-            mal_regexp_free(recreated);
-        }
-    }
-
-    #[test]
-    fn fresh_clone_shares_fast_plan_but_keeps_capture_slots_independent() {
-        clear_cache();
-        let pattern = utf16("id=([0-9]+);");
-        let source = unsafe { handle(&pattern, 0) };
-        let mut source_caps = [-1; 4];
+        let shared = unsafe { mal_regexp_retain(source) };
+        assert_eq!(source, shared);
+        unsafe { mal_regexp_release(source) };
+        let mut caps = [-1; 6];
         let mut flags = 0;
         assert_eq!(
-            unsafe { exec_latin1(source, b"id=12;", 1, 7, &mut source_caps, &mut flags) },
-            2
+            unsafe { exec_latin1(shared, b"zab", 1, 7, &mut caps, &mut flags) },
+            3
         );
-        assert_eq!(flags, EXEC_FAST | EXEC_LATIN1);
-        let cloned = unsafe { mal_regexp_clone_fresh(source) };
-        assert!(!cloned.is_null());
-        {
-            let original = unsafe { &*(source as *const CompiledPattern) };
-            let copy = unsafe { &*(cloned as *const CompiledPattern) };
-            assert!(Arc::ptr_eq(
-                original.fast.as_ref().unwrap(),
-                copy.fast.as_ref().unwrap()
-            ));
-        }
-        let mut clone_caps = [-1; 4];
-        assert_eq!(
-            unsafe { mal_regexp_copy_captures(cloned, clone_caps.as_mut_ptr(), 4) },
-            0
-        );
-        assert_eq!(
-            unsafe { exec_latin1(cloned, b"id=345;", 2, 7, &mut clone_caps, &mut flags) },
-            2
-        );
-        assert_eq!(clone_caps, [0, 7, 3, 6]);
-        let mut retained = [-1; 4];
-        assert_eq!(
-            unsafe { mal_regexp_copy_captures(source, retained.as_mut_ptr(), 4) },
-            2
-        );
-        assert_eq!(retained, [0, 6, 3, 5]);
-        unsafe {
-            mal_regexp_free(source);
-            mal_regexp_free(cloned);
-        }
+        assert_eq!(caps, [1, 3, 1, 2, 2, 3]);
+        unsafe { mal_regexp_release(shared) };
     }
 
     #[test]
@@ -2001,8 +1850,8 @@ mod tests {
         assert_eq!(retained, first_caps);
 
         unsafe {
-            mal_regexp_free(first);
-            mal_regexp_free(second);
+            mal_regexp_release(first);
+            mal_regexp_release(second);
         }
     }
 
@@ -2042,7 +1891,7 @@ mod tests {
             assert_eq!(caps, [7, 15, 13, 15]);
         }
 
-        unsafe { mal_regexp_free(compiled) };
+        unsafe { mal_regexp_release(compiled) };
     }
 
     #[test]
@@ -2084,7 +1933,7 @@ mod tests {
             5
         );
         assert_eq!(retained, captures);
-        unsafe { mal_regexp_free(compiled) };
+        unsafe { mal_regexp_release(compiled) };
     }
 
     #[test]
@@ -2349,7 +2198,7 @@ mod tests {
             assert_eq!(caps, [0, 1]);
         }
 
-        unsafe { mal_regexp_free(compiled) };
+        unsafe { mal_regexp_release(compiled) };
     }
 
     unsafe fn exec_latin1(
@@ -2403,7 +2252,7 @@ mod tests {
             assert_eq!(caps, [7, 15, 13, 15]);
         }
 
-        unsafe { mal_regexp_free(compiled) };
+        unsafe { mal_regexp_release(compiled) };
     }
 
     #[test]
@@ -2435,7 +2284,7 @@ mod tests {
         assert_eq!(flags, EXEC_LATIN1 | EXEC_NON_ASCII | EXEC_CACHE_FILL);
         assert_eq!(caps, [0, 6, 3, 4, 5, 6]);
 
-        unsafe { mal_regexp_free(compiled) };
+        unsafe { mal_regexp_release(compiled) };
     }
 
     #[test]
@@ -2455,7 +2304,7 @@ mod tests {
         assert_eq!(flags & EXEC_ASCII, 0);
         assert_eq!(caps, [1, 2]);
 
-        unsafe { mal_regexp_free(compiled) };
+        unsafe { mal_regexp_release(compiled) };
     }
 
     #[test]
@@ -2477,7 +2326,7 @@ mod tests {
         assert_eq!(flags, EXEC_FAST | EXEC_LATIN1);
         assert_eq!(caps, [8, 15, 11, 14]);
 
-        unsafe { mal_regexp_free(compiled) };
+        unsafe { mal_regexp_release(compiled) };
     }
 
     #[test]
@@ -2518,7 +2367,7 @@ mod tests {
         assert_eq!(flags, EXEC_CACHE_FILL);
         assert_eq!(caps, [1, 3]);
 
-        unsafe { mal_regexp_free(compiled) };
+        unsafe { mal_regexp_release(compiled) };
     }
 
     #[test]
@@ -2548,8 +2397,8 @@ mod tests {
             .unwrap();
         assert!(Arc::ptr_eq(first_fast, second_fast));
         unsafe {
-            mal_regexp_free(first);
-            mal_regexp_free(second);
+            mal_regexp_release(first);
+            mal_regexp_release(second);
         }
     }
 

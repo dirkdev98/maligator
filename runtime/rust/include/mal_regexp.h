@@ -27,8 +27,9 @@ extern "C" {
  * v4: added conservative allocation-free literal/class execution plans.
  * v5: added compact Latin-1 subject execution.
  * v6: added fresh-state cloning of an existing compiled pattern.
- * v7: added template cloning that leaves compile-cache recency alone. */
-#define MAL_REGEXP_ABI_VERSION 7u
+ * v7: added template cloning that leaves compile-cache recency alone.
+ * v8: handles are shared through mal_regexp_retain/mal_regexp_release. */
+#define MAL_REGEXP_ABI_VERSION 8u
 
 /* Returns the ABI version compiled into the linked archive. */
 uint32_t mal_regexp_abi_version(void);
@@ -49,22 +50,18 @@ uint32_t mal_regexp_abi_version(void);
 #define MAL_REGEXP_EXEC_FAST        (1u << 4)
 #define MAL_REGEXP_EXEC_LATIN1      (1u << 5)
 
-/* Compile `pattern` (UTF-16) with `flags`. Returns an opaque, leaked handle, or
- * NULL when the pattern is invalid (the C side throws SyntaxError). The handle
- * lives as long as the owning RegExp object; freed by mal_regexp_free. */
+/* Compile `pattern` (UTF-16) with `flags`. Returns an opaque handle the caller
+ * owns one reference to, or NULL when the pattern is invalid (the C side throws
+ * SyntaxError). */
 void *mal_regexp_compile(const uint16_t *pattern, size_t pattern_len, uint32_t flags);
 
-/* Share only immutable code with a live handle; the fresh mutable state and
- * ownership are independent. Null input returns NULL; free the result normally. */
-void *mal_regexp_clone_fresh(const void *handle);
+/* Add an owner to a live handle and return it; NULL returns NULL. Owners share
+ * the last-match state, which every exec consumer reads before the next exec. */
+void *mal_regexp_retain(void *handle);
 
-/* Like mal_regexp_clone_fresh, for a template the caller retains: the template
- * keeps the engine code alive, so the compile cache's recency is left alone. */
-void *mal_regexp_clone_template(const void *handle);
-
-/* Free an owned compiled-pattern handle (null-tolerant, so the GC finalizer is
- * idempotent after nulling the field). ABI v2+. */
-void mal_regexp_free(void *handle);
+/* Drop one owner, freeing the handle with the last (null-tolerant, so the GC
+ * finalizer is idempotent after nulling the field). */
+void mal_regexp_release(void *handle);
 
 /* Execute `handle` against `subject` (UTF-16) starting at code-unit index
  * `start`. `subject_identity` is the owning immutable MalString cell; the heap

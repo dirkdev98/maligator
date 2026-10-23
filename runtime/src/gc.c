@@ -2231,10 +2231,10 @@ static __attribute__((noinline)) void mal_gc_finalize_cell_owned(MalHeapHeader *
         case MAL_HEAP_REGEXP_OBJECT: {
 #if MAL_REGEXP
             // No regexp objects are ever allocated under engine.regexp:false, so this
-            // finalizer is dead there — and mal_regexp_free (regress FFI) isn't linked.
+            // finalizer is dead there — and mal_regexp_release (regress FFI) isn't linked.
             MalRegExpObject *re = (MalRegExpObject *) cell;
             if (re->matcher != nullptr) {
-                mal_regexp_free(re->matcher);
+                mal_regexp_release(re->matcher);
                 re->matcher = nullptr;
             }
 #endif

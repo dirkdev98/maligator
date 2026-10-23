@@ -89,7 +89,7 @@ typedef size_t usize;
 // `engine.regexp` is false, which compiles builtin_regexp.c / regexp_object.c away
 // (RegExp is not installed → `typeof RegExp === "undefined"`), makes the String
 // regex methods (match / matchAll / search, which coerce their arg to a RegExp)
-// throw, and guards the GC finalizer's `mal_regexp_free`. Must be kept in lockstep
+// throw, and guards the GC finalizer's `mal_regexp_release`. Must be kept in lockstep
 // with the Rust crate's `regexp` Cargo feature (rust-build.ts) — with it off the
 // regress FFI symbols are not linked, so a stray call would fail to link. Pure
 // string ops (split / replace / includes with a string arg) are unaffected.

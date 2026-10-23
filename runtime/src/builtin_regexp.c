@@ -464,7 +464,7 @@ static void regexp_templates_free(MalVm *vm) {
     struct MalRegExpTemplates *templates = vm->regexp_templates;
     if (templates == nullptr) return;
     for (usize i = 0; i < countof(templates->entries); i++) {
-        mal_regexp_free(templates->entries[i].matcher);
+        mal_regexp_release(templates->entries[i].matcher);
     }
     free(templates);
     vm->regexp_templates = nullptr;
@@ -472,8 +472,9 @@ static void regexp_templates_free(MalVm *vm) {
 
 // Every regex literal evaluation constructs from the same atom pair. Atoms and
 // image constants live as long as the VM, so their identity names one compiled
-// program and re-evaluation skips flag parsing, the pattern copy, and the
-// engine's content-keyed cache search; any other string takes the full path.
+// program and re-evaluation shares its matcher, skipping flag parsing, the
+// pattern copy, the engine's cache search, and a matcher allocation; any other
+// string takes the full path.
 static RegexpTemplate *regexp_template_slot(
     MalVm *vm, const MalString *pattern, const MalString *flags
 ) {
@@ -498,7 +499,7 @@ static bool regexp_initialize(MalVm *vm, MalRegExpObject *re, MalString *pattern
     RegexpTemplate *template = regexp_template_slot(vm, pattern, flags_str);
     if (template != nullptr && template->pattern == pattern && template->flags == flags_str) {
         regexp_initialize_state(
-            vm, re, mal_regexp_clone_template(template->matcher), pattern, flags_str, template->bits);
+            vm, re, mal_regexp_retain(template->matcher), pattern, flags_str, template->bits);
         return true;
     }
     u32 bits;
@@ -523,11 +524,11 @@ static bool regexp_initialize(MalVm *vm, MalRegExpObject *re, MalString *pattern
         return false;
     }
     if (template != nullptr) {
-        mal_regexp_free(template->matcher);
+        mal_regexp_release(template->matcher);
         *template = (RegexpTemplate) {
             .pattern = pattern,
             .flags = flags_str,
-            .matcher = mal_regexp_clone_fresh(matcher),
+            .matcher = mal_regexp_retain(matcher),
             .bits = bits,
         };
     }
@@ -1258,7 +1259,7 @@ static MalValue regexp_proto_compile(MalVm *vm, MalValue this_value, const MalVa
         return mal_value_new_undefined();
     }
     // No exec keeps the old matcher across user code, so it can go right away.
-    mal_regexp_free(re->matcher);
+    mal_regexp_release(re->matcher);
     re->matcher = matcher;
     re->source = p_str;
     re->flags = f_str;
@@ -2476,9 +2477,9 @@ static MalValue regexp_proto_match_all(MalVm *vm, MalValue this_value, const Mal
         MalString *flags = regexp_canonical_flags_string(vm, canonical);
         MalObject *prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_REGEXP_PROTOTYPE]);
         MalRegExpObject *clone = mal_regexp_object_new(&vm->heap, prototype);
-        void *compiled = mal_regexp_clone_fresh(canonical->matcher);
-        assert(compiled != nullptr);
-        regexp_initialize_state(vm, clone, compiled, canonical->source, flags, canonical->flag_bits);
+        regexp_initialize_state(
+            vm, clone, mal_regexp_retain(canonical->matcher), canonical->source, flags,
+            canonical->flag_bits);
         matcher = mal_value_from_regexp_object(clone);
         if (regexp_threw(vm)) {
             return mal_value_new_undefined();
