@@ -2151,9 +2151,8 @@ static bool http_string_equal_ci(MalValue value, const char *ascii) {
     return mal_string_equals_ascii_ci(mal_value_to_string(value), ascii);
 }
 
-static bool http_block_append(
-    char **block, usize *length, usize *capacity,
-    const char *bytes, usize count) {
+static bool http_block_reserve(
+    char **block, usize *length, usize *capacity, usize count) {
     if (count > SIZE_MAX - *length) return false;
     usize required = *length + count;
     if (required > *capacity) {
@@ -2170,25 +2169,47 @@ static bool http_block_append(
         *block = grown;
         *capacity = next;
     }
+    return true;
+}
+
+static bool http_block_append(
+    char **block, usize *length, usize *capacity,
+    const char *bytes, usize count) {
+    if (!http_block_reserve(block, length, capacity, count)) return false;
     memcpy(*block + *length, bytes, count);
-    *length = required;
+    *length += count;
     return true;
 }
 
 static bool http_serialize_header_line(
     MalVm *vm, char **block, usize *length, usize *capacity,
     const char *name, usize name_length, MalValue value) {
-    byte *bytes;
-    usize value_length;
-    if (!http_header_value_bytes(vm, value, &bytes, &value_length)) return false;
-    bool appended = http_block_append(block, length, capacity, name, name_length)
-        && http_block_append(block, length, capacity, ": ", 2)
-        && http_block_append(
-            block, length, capacity, (const char *) bytes, value_length)
-        && http_block_append(block, length, capacity, "\r\n", 2);
-    free(bytes);
-    if (!appended) mal_vm_throw_allocation_error(vm);
-    return appended;
+    if (mal_value_is_undefined(value)) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                           "Invalid value for HTTP header");
+        return false;
+    }
+    MalString *string;
+    if (!mal_vm_to_string(vm, value, &string)) return false;
+    usize start = *length;
+    usize value_length = mal_string_length(string);
+    if (!http_block_append(block, length, capacity, name, name_length) ||
+        !http_block_append(block, length, capacity, ": ", 2) ||
+        !http_block_reserve(block, length, capacity, value_length + 2)) {
+        mal_vm_throw_allocation_error(vm);
+        return false;
+    }
+    // The value's bytes go straight into the block; a rejected value leaves no line.
+    if (!http_header_value_scan(string, (byte *) *block + *length)) {
+        *length = start;
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                           "Invalid character in HTTP header value");
+        return false;
+    }
+    *length += value_length;
+    memcpy(*block + *length, "\r\n", 2);
+    *length += 2;
+    return true;
 }
 
 static bool http_serialize_header(
