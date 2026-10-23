@@ -3588,6 +3588,19 @@ MalValue mal_vm_call_known_native(MalVm *vm, MalNativeFunctionCallback callback,
 #include "generated/known_primordials.inc"
 #undef MAL_KNOWN_OPERATION
     };
+#if !MAL_REALMS
+    // A plain call to a loaded primordial cannot collect before the exact call roots
+    // its own operands, so it needs neither this frame's roots nor its value stack.
+    if (flags == 0 && callback != nullptr && (u32) operation < MAL_KNOWN_OPERATION_COUNT) {
+        MalValue loaded = vm->known_primordial_values[nodes[operation]];
+        if (loaded != 0) {
+            MalCompletion completion =
+                mal_vm_call_exact_native(vm, callback, loaded, receiver, args, count);
+            if (completion.kind == MAL_COMPLETION_THROW) vm->completion = completion;
+            return completion.value;
+        }
+    }
+#endif
     i32 mode = flags >> 1;
     bool construct = (flags & 1) != 0;
     if (operation < 0 || operation >= MAL_KNOWN_OPERATION_COUNT || flags < 0 || flags > 9 || (mode != 0 && count < 1)) {
