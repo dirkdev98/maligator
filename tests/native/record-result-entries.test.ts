@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { resolveBuildConfig } from "../../src/build-config.ts";
 import type { ProgramImage } from "../../src/compiler/target/program-image.ts";
 import {
 	assertExactLines,
@@ -29,6 +30,8 @@ describe("record result entries", () => {
 			fixture: "tests/local/record-result-entries.mjs",
 			name: "record-result-entries",
 			mainFile: HOST_MAIN,
+			// Calls stay exact only without eval; realms keep the callee-realm materializer honest.
+			config: resolveBuildConfig({ engine: { realms: true } }),
 			outDir,
 			environment: { ...process.env, MAL_PERF_STATS: "1" },
 		}));
