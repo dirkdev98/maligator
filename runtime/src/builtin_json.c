@@ -962,6 +962,11 @@ typedef struct MalJsonPlainState {
     usize capacity;
     usize cache_data_bytes;
     usize prototype_eviction_slot;
+    // The traversal runs no JavaScript, so the last proven layout and prototype
+    // stay valid for the rest of the call; record arrays repeat both.
+    const MalShape *last_shape;
+    MalJsonShapePlan *last_plan;
+    const MalObject *last_prototype;
     MalJsonFrame inline_frames[MAL_JSON_INLINE_FRAMES];
 } MalJsonPlainState;
 
@@ -1260,11 +1265,25 @@ static bool mal_json_plain_frame(
         frame->array = true;
         frame->count = array->length;
     } else if (object->header.type == MAL_HEAP_OBJECT) {
-        if (!mal_json_plain_shape(state, object, frame)) return false;
+        if (object->shape == state->last_shape && !mal_object_has_public_overflow(object) &&
+            !object->is_arguments && !object->is_raw_json) {
+            frame->plan = state->last_plan;
+            frame->count = state->last_plan->count;
+            frame->cached_plan = true;
+        } else if (!mal_json_plain_shape(state, object, frame)) {
+            return false;
+        } else if (frame->cached_plan) {
+            state->last_shape = object->shape;
+            state->last_plan = frame->plan;
+        }
     } else {
         return false;
     }
-    return mal_json_plain_prototype(state, mal_object_prototype(object));
+    MalObject *prototype = mal_object_prototype(object);
+    if (prototype != nullptr && prototype == state->last_prototype) return true;
+    if (!mal_json_plain_prototype(state, prototype)) return false;
+    state->last_prototype = prototype;
+    return true;
 }
 
 static void mal_json_plain_dispose(MalJsonPlainState *state) {
@@ -1398,6 +1417,9 @@ static bool mal_json_try_serialize_plain(
     state.capacity = MAL_JSON_INLINE_FRAMES;
     state.cache_data_bytes = 0;
     state.prototype_eviction_slot = 0;
+    state.last_shape = nullptr;
+    state.last_plan = nullptr;
+    state.last_prototype = nullptr;
     // Before fallback, descendants and prototypes remain reachable from root:
     // the plain traversal never invokes JS or changes a property.
     MalRootSpan span;
