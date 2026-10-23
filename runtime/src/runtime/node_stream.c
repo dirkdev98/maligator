@@ -129,7 +129,7 @@ static bool stream_emit(
     MalVm *vm, MalValue receiver, const char *name, const MalValue *args, i32 argc) {
     MalValue roots[4] = {
         receiver,
-        mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) name)),
+        stream_static_key(vm, name).value,
         mal_value_new_undefined(),
         mal_value_new_undefined(),
     };

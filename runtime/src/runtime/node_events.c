@@ -250,7 +250,8 @@ static bool ee_has_listeners(MalVm *vm, MalValue receiver, const char *name) {
     if (events == nullptr) {
         return false;
     }
-    return ee_listener_length(ee_listener_value(events, ee_name_key(vm, name))) > 0;
+    MalPropertyLookup listeners = mal_object_get_own_static(vm, events, (const byte *) name);
+    return listeners.present && ee_listener_length(listeners.desc.value) > 0;
 }
 
 static void ee_store_listener(MalVm *vm, MalValue receiver, MalObject *events,

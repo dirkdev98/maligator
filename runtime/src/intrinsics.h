@@ -7,7 +7,7 @@
 
 typedef struct MalVm MalVm;
 
-#define MAL_ASCII_ATOM_CACHE_CAPACITY 256
+#define MAL_ASCII_ATOM_CACHE_CAPACITY 1024
 static_assert(
     (MAL_ASCII_ATOM_CACHE_CAPACITY & (MAL_ASCII_ATOM_CACHE_CAPACITY - 1)) == 0,
     "ASCII atom cache capacity must be a power of two");
