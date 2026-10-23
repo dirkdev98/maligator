@@ -829,6 +829,8 @@ export interface CompiledFunction extends NativeCallCoverage {
 		 */
 		source: string;
 		parameterRepresentations: ReadonlyArray<VmRegisterRepresentation>;
+		/** Caller storage pointers that follow the parameters of a record entry. */
+		resultFieldCount?: number;
 		resultRepresentation: VmRegisterRepresentation;
 		leaf?: true;
 		callbackSymbol?: string;
@@ -2091,6 +2093,7 @@ function emitCompiledVariant(
 		nativeContract.regionActions,
 	);
 	const directHeapObjectIps = new Set(storage.directHeapObjectIps);
+	const recordAllocations = new Set(directEntry?.resultFields?.allocationIps ?? []);
 	const stackObjectSites = new Map<number, StackObjectSite>();
 	let nextStackSlot = stackSlotsBase;
 	for (const action of topology.actionsByKind.get("stack-object-plan") ?? []) {
@@ -2113,7 +2116,11 @@ function emitCompiledVariant(
 				`Invalid stack-object metadata at instruction ${site.allocationIp}`,
 			);
 		}
-		if (directHeapObjectIps.has(site.allocationIp)) continue;
+		if (
+			directHeapObjectIps.has(site.allocationIp) ||
+			recordAllocations.has(site.allocationIp)
+		)
+			continue;
 		const fieldRepresentations = nativeContract.storage!.stackObjects.find(
 			(plan) => plan.allocationIp === site.allocationIp,
 		)?.slotRepresentations;
@@ -2148,7 +2155,11 @@ function emitCompiledVariant(
 		const region = nativeContract.specializations[action.regionIndex];
 		if (region?.kind !== "stack-object-plan" || action.role === "allocate") continue;
 		const planSite = region.sites[action.primaryIndex ?? -1];
-		if (planSite !== undefined && directHeapObjectIps.has(planSite.allocationIp))
+		if (
+			planSite !== undefined &&
+			(directHeapObjectIps.has(planSite.allocationIp) ||
+				recordAllocations.has(planSite.allocationIp))
+		)
 			continue;
 		const site =
 			planSite === undefined ? undefined : stackObjectSites.get(planSite.allocationIp);
@@ -2349,6 +2360,15 @@ function emitCompiledVariant(
 		});
 	}
 	const fieldCalls = renderFieldCallSlots(fn, nativeContract, () => nextStackSlot++);
+	const records: NativeRecordStorage = {
+		allocations: recordAllocations,
+		...renderRecordCallSlots(
+			nativeContract,
+			storage.callTransports,
+			directCompiledEntries,
+			() => nextStackSlot++,
+		),
+	};
 	const captureShadow: NativeCaptureShadow | undefined =
 		lazyCaptures === undefined
 			? undefined
@@ -2471,10 +2491,14 @@ function emitCompiledVariant(
 		captureShadow,
 		directClosures,
 		!conservativeRoots,
+		records,
 	);
 	if (body === null) {
 		return null;
 	}
+	for (const ip of records.calls.keys())
+		if (!body.directEntryCalls.has(ip))
+			throw new Error(`Native record call ${ip} did not reach its record entry`);
 	const privateRegisters = new Set(rootPublication.slots.keys());
 
 	// Defensive: a register operand of -1 (a "no register" sentinel beyond the
@@ -2499,6 +2523,10 @@ function emitCompiledVariant(
 					...(directEntry.fieldParameters?.representations.map((rep, field) => ({
 						type: cTypeOf(rep),
 						name: `fp${field}`,
+					})) ?? []),
+					...(directEntry.resultFields?.keys.map((_, field) => ({
+						type: "MalValue *",
+						name: `rf${field}`,
 					})) ?? []),
 				];
 	const parameterList =
@@ -2755,7 +2783,7 @@ function emitCompiledVariant(
 	);
 	const fullSymbol = `${symbol}_full`;
 	const fastEntry =
-		split === undefined
+		split === undefined && directEntry?.resultFields === undefined
 			? renderNativeFastEntry({
 					fn,
 					directEntry,
@@ -3341,6 +3369,9 @@ function renderCompiledFunction(
 				...(entry.argumentRepresentations ?? entry.parameterRepresentations),
 				...(entry.fieldParameters?.representations ?? []),
 			],
+			...(entry.resultFields === undefined
+				? {}
+				: { resultFieldCount: entry.resultFields.keys.length }),
 			resultRepresentation: entry.resultRepresentation,
 		})),
 	};
@@ -3465,6 +3496,48 @@ function unboxedSnapshot(rep: RegisterRep, value: string): string {
 	if (rep === "int32") return `(i32)mal_ops_number_as_f64(${value})`;
 	if (rep === "boolean") return `mal_value_to_boolean(${value})`;
 	return value;
+}
+
+interface NativeRecordStorage {
+	readonly allocations: ReadonlySet<number>;
+	readonly loads: ReadonlyMap<number, number>;
+	readonly calls: ReadonlyMap<number, ReadonlyArray<number>>;
+}
+
+const NO_NATIVE_RECORD_STORAGE: NativeRecordStorage = {
+	allocations: new Set(),
+	loads: new Map(),
+	calls: new Map(),
+};
+
+/**
+ * Caller storage for record calls this variant sends to an emitted record entry.
+ * Each field gets a rooted slot that the entry fills and the call's loads read;
+ * calls that fall back to an ordinary entry keep their ordinary loads.
+ */
+function renderRecordCallSlots(
+	native: NativeFunctionPlan,
+	callTransports: ReadonlyArray<NativeCallTransportPlan>,
+	directCompiledEntries: DirectCompiledEntries,
+	allocateSlot: () => number,
+): Pick<NativeRecordStorage, "loads" | "calls"> {
+	const loads = new Map<number, number>();
+	const calls = new Map<number, ReadonlyArray<number>>();
+	const transports = new Map(callTransports.map((plan) => [plan.instructionIp, plan]));
+	for (const site of native.recordCalls ?? []) {
+		const target = transports.get(site.callIp)?.targets[0];
+		const entry =
+			target === undefined
+				? undefined
+				: directCompiledEntries.get(
+						directCompiledEntryKey(target.functionIndex, target.entryId),
+					);
+		if (entry?.resultFields === undefined) continue;
+		const slots = entry.resultFields.keys.map(allocateSlot);
+		calls.set(site.callIp, slots);
+		for (const load of site.loads) loads.set(load.instructionIp, slots[load.field]!);
+	}
+	return { loads, calls };
 }
 
 function renderFieldCallSlots(
@@ -4823,6 +4896,7 @@ function emitBody(
 	directClosures: ReadonlyMap<string, NativeDirectClosureEnvironment> = new Map(),
 	// A conservative-root callee services pending polls at its entry instead.
 	callReturnPolls = true,
+	records: NativeRecordStorage = NO_NATIVE_RECORD_STORAGE,
 ): EmittedBody | null {
 	const callTransportByIp = new Map(
 		callTransports.map((plan) => [plan.instructionIp, plan]),
@@ -5513,6 +5587,9 @@ function emitBody(
 		fieldAllocation: undefined,
 		fieldCall: undefined,
 		fieldThrowSlots: undefined,
+		recordAllocation: false,
+		recordLoad: undefined,
+		recordCall: undefined,
 		mathCall: undefined,
 		numberPredicate: undefined,
 		stringTransform: undefined,
@@ -6032,6 +6109,9 @@ function emitBody(
 		instructionContext.stackObjectInheritedAccess = stackObjectInheritedAccesses.get(ip);
 		instructionContext.constantBoolean = directConstantBooleans.get(ip);
 		instructionContext.fieldLoad = fieldLoads.get(ip);
+		instructionContext.recordAllocation = records.allocations.has(ip);
+		instructionContext.recordLoad = records.loads.get(ip);
+		instructionContext.recordCall = records.calls.get(ip);
 		instructionContext.fieldAllocation = fieldAllocations.get(ip);
 		instructionContext.fieldCall = fieldCallSites.get(ip);
 		instructionContext.fieldThrowSlots =
@@ -6555,6 +6635,12 @@ interface NativeInstructionContext {
 	readonly fieldCall?: NativeFieldCall;
 	readonly fieldEntryCall?: NativeFieldCall;
 	readonly fieldThrowSlots?: ReadonlyArray<number>;
+	/** A record entry hands this allocation's fields to its caller instead of creating it. */
+	readonly recordAllocation?: boolean;
+	/** The caller storage slot of the record field this load reads. */
+	readonly recordLoad?: number;
+	/** The caller storage slots a record call's entry fills. */
+	readonly recordCall?: ReadonlyArray<number>;
 	readonly callTransport?: NativeCallTransportPlan;
 	readonly callbackTransport?: NativeCallbackTransportPlan;
 	readonly mathCall: NativeMathCallPlan | undefined;
@@ -8036,6 +8122,17 @@ function emitInstruction(
 			];
 		}
 	}
+	if (context.recordAllocation === true && instruction.opcode === "CREATE_OBJECT_SHAPED")
+		return [
+			...instruction.valueRegisters.map(
+				(register, field) => `*rf${field} = ${boxed(register)};`,
+			),
+			`r${instruction.dst} = MAL_VALUE_UNDEFINED;`,
+		];
+	if (context.recordLoad !== undefined && instruction.opcode === "LOAD_PROPERTY_STATIC")
+		return [
+			`r${instruction.dst} = ${callValue(instruction.dst, `__gc_slots[${context.recordLoad}]`)};`,
+		];
 	if (context.fieldLoad !== undefined && instruction.opcode === "LOAD_PROPERTY_STATIC")
 		return [
 			context.fieldLoad.representation === "number"
@@ -12430,7 +12527,15 @@ function emitInstruction(
 					) ?? `mal_value_to_function_object(${directCallee})->creation_env`;
 				if (directEntry !== undefined && transport !== undefined) {
 					const directValue = `__direct_value_${ip}`;
-					const parameters = directEntryParameters(transport);
+					const parameters = [
+						...directEntryParameters(transport),
+						...(context.recordCall ?? []).map((slot) => `&__gc_slots[${slot}]`),
+					];
+					if (
+						(context.recordCall !== undefined) !==
+						(directEntry.resultFields !== undefined)
+					)
+						throw new Error(`Native record call ${ip} disagrees with its entry`);
 					context.directEntryCalls.set(ip, new Set([target]));
 					nativeCallDecision(context.profile, ip, "call.direct-native", "applied");
 					const directResult = convert(transport.result, directValue);

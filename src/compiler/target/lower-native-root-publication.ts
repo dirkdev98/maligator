@@ -1,7 +1,7 @@
 import type { NativeCallTransportPlan } from "./lower-native-calls.ts";
 import { nativeProfitablePrivateRootRegisters } from "./lower-native-root-profitability.ts";
 import type { NativeBodyFacts } from "./native-body-facts.ts";
-import { nativePlanKeepsOrdinaryLowering } from "./program-image.ts";
+import { nativePlanKeepsOrdinaryLowering, nativeRecordCallIps } from "./program-image.ts";
 import type { NativeFunctionPlan } from "./program-image.ts";
 import {
 	vmInstructionReadRegisters,
@@ -28,6 +28,7 @@ export function nativePrivateCallResultIps(
 		for (const ip of region.claimedIps) conflicts.add(ip);
 	for (const call of native.fieldCalls ?? [])
 		for (let ip = call.allocationIp; ip <= call.callIp; ip++) conflicts.add(ip);
+	for (const ip of nativeRecordCallIps(native)) conflicts.add(ip);
 	const transportedCalls = new Set(
 		callTransports
 			.filter(

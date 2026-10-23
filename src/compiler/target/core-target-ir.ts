@@ -162,6 +162,11 @@ export interface CoreTargetDirectEntry {
 			readonly field: number;
 		}>;
 	};
+	/** Returns write these record fields to caller storage instead of the object. */
+	readonly resultFields?: {
+		readonly keys: ReadonlyArray<number>;
+		readonly allocations: ReadonlyArray<CompilerInstruction>;
+	};
 	readonly argumentRepresentations?: ReadonlyArray<CoreTargetRegisterRepresentation>;
 	readonly operatorInputs?: ReadonlyArray<{
 		readonly instruction: CompilerInstruction;
@@ -238,6 +243,14 @@ export interface CoreTargetFunction {
 		readonly entries: ReadonlyArray<{
 			readonly functionIndex: number;
 			readonly entryId: number;
+		}>;
+	}>;
+	/** Calls of record-result entries and the field reads that are their results' only uses. */
+	readonly recordCalls?: ReadonlyArray<{
+		readonly call: CompilerInstruction;
+		readonly loads: ReadonlyArray<{
+			readonly instruction: CompilerInstruction;
+			readonly field: number;
 		}>;
 	}>;
 	readonly capturedCount: number;

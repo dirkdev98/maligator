@@ -68,6 +68,7 @@ import {
 	validateNativeBodyAbis,
 	validateNativeDirectEntry,
 	validateNativeFieldCalls,
+	validateNativeRecordCalls,
 	validateNativeLiteralSwitches,
 	validateNativeNumericSortCallback,
 	vmRegionActions,
@@ -100,7 +101,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 254;
+export const COMPILER_ARTIFACT_VERSION = 255;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -1974,6 +1975,7 @@ function writeCompilerArtifact(
 			}
 		}
 		validateNativeFieldCalls(fn, native, compiler.native.functions);
+		validateNativeRecordCalls(fn, native, compiler.native.functions);
 		validateNativeLiteralSwitches(fn, native);
 		const representationTag = (representation: string): number =>
 			representation === "boxed"
@@ -2058,6 +2060,15 @@ function writeCompilerArtifact(
 				w.u32(entry.entryId);
 			}
 		}
+		w.u32(native.recordCalls?.length ?? 0);
+		for (const site of native.recordCalls ?? []) {
+			w.u32(site.callIp);
+			w.u32(site.loads.length);
+			for (const load of site.loads) {
+				w.u32(load.instructionIp);
+				w.u32(load.field);
+			}
+		}
 		w.u8(native.specializedOnly ? 1 : 0);
 		w.u32(native.directEntries.length);
 		for (const [entryIndex, entry] of native.directEntries.entries()) {
@@ -2098,6 +2109,10 @@ function writeCompilerArtifact(
 				w.u32(load.instructionIp);
 				w.u32(load.field);
 			}
+			w.u32(entry.resultFields?.keys.length ?? 0);
+			for (const key of entry.resultFields?.keys ?? []) w.u32(key);
+			w.u32(entry.resultFields?.allocationIps.length ?? 0);
+			for (const ip of entry.resultFields?.allocationIps ?? []) w.u32(ip);
 			w.u32(entry.constantBooleans?.length ?? 0);
 			for (const { instructionIp, value } of entry.constantBooleans ?? []) {
 				if (
@@ -4588,6 +4603,14 @@ function readCompilerArtifact(
 				entryId: r.u32(),
 			})),
 		}));
+		const recordCallCount = r.count(8);
+		const recordCalls = Array.from({ length: recordCallCount }, () => ({
+			callIp: r.u32(),
+			loads: Array.from({ length: r.count(8) }, () => ({
+				instructionIp: r.u32(),
+				field: r.u32(),
+			})),
+		}));
 		const specializedOnly = r.u8();
 		if (specializedOnly > 1) throw new RangeError("invalid native body reachability");
 		const directEntryCount = r.count(1);
@@ -4632,6 +4655,12 @@ function readCompilerArtifact(
 				fieldKeyCount === 0
 					? undefined
 					: { keys: fieldKeys, representations: fieldRepresentations, loads: fieldLoads };
+			const resultKeys = Array.from({ length: r.count(4) }, () => r.u32());
+			const resultAllocationIps = Array.from({ length: r.count(4) }, () => r.u32());
+			const resultFields =
+				resultKeys.length === 0 && resultAllocationIps.length === 0
+					? undefined
+					: { keys: resultKeys, allocationIps: resultAllocationIps };
 			const constantCount = r.count(5);
 			const constantBooleans = Array.from({ length: constantCount }, () => {
 				const instructionIp = r.i32();
@@ -4718,6 +4747,7 @@ function readCompilerArtifact(
 				...(operatorInputs.length === 0 ? {} : { operatorInputs }),
 				...(callOverrides.length === 0 ? {} : { callOverrides }),
 				...(fieldParameters === undefined ? {} : { fieldParameters }),
+				...(resultFields === undefined ? {} : { resultFields }),
 				registerRepresentations: directRegisterRepresentations,
 				gc: { safepoints: directSafepoints },
 			};
@@ -6162,6 +6192,7 @@ function readCompilerArtifact(
 			registerRepresentations,
 			directEntries,
 			...(fieldCallCount === 0 ? {} : { fieldCalls }),
+			...(recordCallCount === 0 ? {} : { recordCalls }),
 			...(literalSwitchCount === 0 ? {} : { literalSwitches }),
 			gc: { safepoints },
 			instructions: nativeInstructions,
@@ -6175,6 +6206,7 @@ function readCompilerArtifact(
 		for (const entry of native.directEntries)
 			validateNativeDirectEntry(functions[native.functionIndex]!, entry, nativeFunctions);
 		validateNativeFieldCalls(functions[native.functionIndex]!, native, nativeFunctions);
+		validateNativeRecordCalls(functions[native.functionIndex]!, native, nativeFunctions);
 		validateNativeLiteralSwitches(functions[native.functionIndex]!, native);
 		for (const plan of native.instructions) {
 			if (plan?.kind !== "call") continue;

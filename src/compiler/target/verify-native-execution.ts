@@ -54,6 +54,7 @@ export function verifyNativeExecutionProgram(program: ExecutionProgram): void {
 					call.instruction.type !== "call" ||
 					target?.id !== call.entryId ||
 					target.fieldParameters !== undefined ||
+					target.resultFields !== undefined ||
 					(target.argumentRepresentations !== undefined &&
 						target.argumentRepresentations.length !==
 							call.instruction.registers.length - 3) ||

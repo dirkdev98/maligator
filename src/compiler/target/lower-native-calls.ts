@@ -48,6 +48,7 @@ export function selectNativeCallTransports(
 		native.fieldCalls === undefined
 			? undefined
 			: new Map(native.fieldCalls.map((site) => [site.callIp, site]));
+	const recordCalls = new Set(native.recordCalls?.map((site) => site.callIp));
 	for (const [instructionIp, call] of native.instructions.entries()) {
 		if (call?.kind !== "call" || call.directFunctionCall) continue;
 		const fieldCall = fieldCalls?.get(instructionIp);
@@ -67,7 +68,12 @@ export function selectNativeCallTransports(
 					: undefined);
 			if (entryId === undefined) continue;
 			const entry = entries.get(`${functionIndex}:${entryId}`);
-			if (entry === undefined) continue;
+			// Only a call whose loads read caller storage can take a record entry's result.
+			if (
+				entry === undefined ||
+				recordCalls.has(instructionIp) !== (entry.resultFields !== undefined)
+			)
+				continue;
 			const arguments_: Array<NativeValueConversion> = [];
 			const parameters = entry.argumentRepresentations ?? entry.parameterRepresentations;
 			for (const [parameter, target] of parameters.entries()) {

@@ -41,6 +41,7 @@ export function selectNativeCallbackTransports(
 			if (entry === undefined) break;
 			if (
 				entry.fieldParameters !== undefined ||
+				entry.resultFields !== undefined ||
 				(entry.argumentRepresentations !== undefined &&
 					entry.argumentRepresentations.length !== arity)
 			)

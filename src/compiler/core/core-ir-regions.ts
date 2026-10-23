@@ -527,6 +527,23 @@ export interface CoreDirectEntryCallSite {
 	readonly numericSortCallbackViaCall?: true;
 	readonly fieldObject?: CoreInstructionId;
 	readonly fieldValueRepresentations?: ReadonlyArray<CorePlanRepresentation>;
+	/** The only uses of the call's result: reads of fields the entry returns in caller storage. */
+	readonly resultLoads?: ReadonlyArray<CoreEntryFieldLoad>;
+}
+
+export interface CoreEntryFieldLoad {
+	readonly instruction: CoreInstructionId;
+	readonly field: number;
+}
+
+/**
+ * Every reachable return of the entry returns one of these fresh object literals,
+ * each with the same keys and no use but the return, so the entry hands the field
+ * values to caller storage instead of creating the object.
+ */
+export interface CoreEntryResultFields {
+	readonly keys: ReadonlyArray<number>;
+	readonly allocations: ReadonlyArray<CoreInstructionId>;
 }
 
 export interface CoreDirectBuiltinCallbackPlan {
@@ -560,6 +577,7 @@ export interface CoreDirectEntryPlan {
 	readonly parameterRepresentations: ReadonlyArray<CorePlanRepresentation>;
 	readonly resultRepresentation: CorePlanRepresentation;
 	readonly fieldParameters?: CoreEntryFields;
+	readonly resultFields?: CoreEntryResultFields;
 	readonly valueRepresentations?: ReadonlyArray<CorePlanRepresentation>;
 	readonly argumentRepresentations?: ReadonlyArray<CorePlanRepresentation>;
 	readonly operatorInputs?: ReadonlyArray<{

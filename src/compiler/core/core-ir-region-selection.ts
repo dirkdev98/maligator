@@ -69,6 +69,8 @@ import { connectCoreNativeEntries } from "./core-native-entry-graph.ts";
 import {
 	coreReadOnlyParameterFields,
 	coreFieldArgument,
+	coreRecordResultFields,
+	coreRecordResultLoads,
 } from "./core-native-field-analysis.ts";
 import {
 	coreOperatorInputPlans,
@@ -122,6 +124,7 @@ interface PendingDirectEntry {
 	readonly constantBooleans?: CoreDirectEntryPlan["constantBooleans"];
 	readonly operatorInputs?: CoreDirectEntryPlan["operatorInputs"];
 	readonly fieldParameters?: CoreDirectEntryPlan["fieldParameters"];
+	readonly resultFields?: CoreDirectEntryPlan["resultFields"];
 	readonly runtimeBenefit: number;
 }
 
@@ -1511,9 +1514,27 @@ function directEntryOpportunities(
 				let argumentRepresentations: ReadonlyArray<CorePlanRepresentation> | undefined;
 				let constantBooleans: CoreDirectEntryPlan["constantBooleans"];
 				let operatorInputs: CoreDirectEntryPlan["operatorInputs"];
+				const records = needsArity
+					? []
+					: recordResultEntries(
+							program,
+							summaries,
+							analyses,
+							target,
+							callSites,
+							callWeight,
+						);
+				const recordSites = new Set(
+					records.flatMap((record) =>
+						record.callSites.map((site) => `${site.caller}:${site.instruction}`),
+					),
+				);
+				const ordinaryCalls = callSites.filter(
+					(call) => !recordSites.has(`${call.caller}:${call.instruction}`),
+				);
 				// A single guarded target compares the callee's function index before entering;
 				// only field entries may share one site between several targets.
-				let selectedCalls = callSites.filter(
+				let selectedCalls = ordinaryCalls.filter(
 					(call) =>
 						call.numericSortCallback !== undefined ||
 						singleTargetGuards.has(call) ||
@@ -1530,7 +1551,7 @@ function directEntryOpportunities(
 						.exceptional();
 					const fields = coreReadOnlyParameterFields(fn, cfg);
 					if (fields !== undefined) {
-						const fieldCalls = callSites.flatMap((call) => {
+						const fieldCalls = ordinaryCalls.flatMap((call) => {
 							const site = summaries.targets.site(call.caller, call.instruction);
 							if (site?.arguments?.length !== 1) return [];
 							const facts = analyses.get(CORE_LOCAL_FACT_BUNDLE_ANALYSIS, {
@@ -1707,12 +1728,13 @@ function directEntryOpportunities(
 					resultRepresentation === undefined ||
 					(resultRepresentation === "boxed" && valueRepresentations === undefined)
 				)
-					return [];
+					return records;
 				const generatedCode = Math.max(8, [...fn.instructionIds()].length);
 				const compilerWork = generatedCode + fn.valueCapacity;
 				const runtimeBenefit =
 					selectedCalls.reduce((sum, site) => sum + callWeight(site), 0) * 8;
 				return [
+					...records,
 					{
 						function: target,
 						runtimeBenefit,
@@ -1747,6 +1769,110 @@ function directEntryOpportunities(
 		});
 	}
 	return candidates;
+}
+
+// Record calls get an entry of their own so other callers keep the ordinary result ABI.
+function recordResultEntries(
+	program: CoreProgram,
+	summaries: CoreProgramSummaries,
+	analyses: CoreAnalysisManager,
+	target: CoreFunctionId,
+	callSites: ReadonlyArray<CoreDirectEntryCallSite>,
+	callWeight: (site: CoreDirectEntryCallSite) => number,
+): ReadonlyArray<PendingDirectEntry> {
+	const fn = program.function(target);
+	const cfg = analyses
+		.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, { scope: "function", function: target })
+		.exceptional();
+	const resultFields = coreRecordResultFields(fn, cfg);
+	if (resultFields === undefined) return [];
+	const calls = callSites.flatMap((call) => {
+		if (
+			call.guarded === true ||
+			call.numericSortCallback !== undefined ||
+			call.builtinCallbackOperation !== undefined ||
+			call.fieldObject !== undefined
+		)
+			return [];
+		const site = summaries.targets.site(call.caller, call.instruction);
+		if (site?.arguments === undefined || site.open || site.targets.functions.length !== 1)
+			return [];
+		const resultLoads = coreRecordResultLoads(
+			program.function(call.caller),
+			call.instruction,
+			resultFields.keys,
+		);
+		return resultLoads === undefined ? [] : [Object.freeze({ ...call, resultLoads })];
+	});
+	if (calls.length === 0) return [];
+	const parameterRepresentations = Array.from(
+		{ length: fn.parameterCount },
+		(_, index): CorePlanRepresentation => {
+			let agreed: CorePlanRepresentation | undefined;
+			for (const call of calls) {
+				const argument = summaries.targets.site(call.caller, call.instruction)!
+					.arguments![index];
+				const scalar =
+					argument === undefined
+						? undefined
+						: analyses
+								.get(CORE_LOCAL_VALUE_KIND_ANALYSIS, {
+									scope: "function",
+									function: call.caller,
+								})
+								.scalarKind(argument);
+				const representation = scalar === "number" ? "f64" : (scalar ?? "boxed");
+				if (agreed !== undefined && agreed !== representation) return "boxed";
+				agreed = representation;
+			}
+			return agreed ?? "boxed";
+		},
+	);
+	const sorted = Object.freeze(
+		calls.sort(
+			(left, right) => left.caller - right.caller || left.instruction - right.instruction,
+		),
+	);
+	const variant = analyzeCoreNativeEntry(
+		fn,
+		cfg,
+		parameterRepresentations,
+		undefined,
+		sorted,
+		undefined,
+		undefined,
+		undefined,
+		resultFields,
+	);
+	const generatedCode = Math.max(8, [...fn.instructionIds()].length);
+	// Each call also stops allocating and initializing the record it consumes.
+	const runtimeBenefit = calls.reduce((sum, site) => sum + callWeight(site), 0) * 16;
+	return [
+		{
+			function: target,
+			runtimeBenefit,
+			callSites: sorted,
+			parameterRepresentations,
+			resultRepresentation: variant.resultRepresentation,
+			valueRepresentations: variant.valueRepresentations,
+			...(variant.operatorInputs === undefined
+				? {}
+				: { operatorInputs: variant.operatorInputs }),
+			resultFields,
+			budget: {
+				kind: "direct-entry",
+				caller: target,
+				site: sorted[0]!.instruction,
+				revision: 1,
+				priorityClass: 2,
+				priorityScore: -runtimeBenefit,
+				targets: Object.freeze([target]),
+				generatedCodeCost: generatedCode,
+				compilerWorkCost: generatedCode + fn.valueCapacity,
+				expansive: true,
+			},
+		},
+	];
 }
 
 function conflicts(
@@ -2056,6 +2182,9 @@ export function buildCoreOptimizationPlan(
 						...(candidate.fieldParameters === undefined
 							? {}
 							: { fieldParameters: candidate.fieldParameters }),
+						...(candidate.resultFields === undefined
+							? {}
+							: { resultFields: candidate.resultFields }),
 						resultRepresentation: candidate.resultRepresentation,
 						...(candidate.valueRepresentations === undefined
 							? {}

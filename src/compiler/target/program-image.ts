@@ -35,6 +35,10 @@ import { lowerNativeFunctionStorage } from "./lower-native-storage.ts";
 import type { NativeStoragePlan } from "./lower-native-storage.ts";
 import { validateNativeStackObject } from "./native-stack-object.ts";
 import { validateNativeStringSpan } from "./native-string-span.ts";
+import {
+	nativeVirtualValueFlow,
+	validateNativeVirtualValue,
+} from "./native-virtual-value.ts";
 import { buildProfileMetadata } from "./profile-metadata.ts";
 import type { CompilerRemark, ProfileSite } from "./profile-metadata.ts";
 import { remapRuntimeFunctionConstants } from "./runtime-image.ts";
@@ -1428,6 +1432,8 @@ export interface NativeFunctionPlan {
 			readonly entryId: number;
 		}>;
 	}>;
+	/** Calls whose direct entry returns a record's fields; the loads are the result's only reads. */
+	readonly recordCalls?: ReadonlyArray<NativeRecordCall>;
 	readonly gc: {
 		readonly safepoints: ReadonlyArray<
 			ExecutionSafepointRoots & {
@@ -1441,6 +1447,14 @@ export interface NativeFunctionPlan {
 	readonly specializations: ReadonlyArray<VmRegion>;
 	readonly regionActions: ReadonlyArray<VmRegionAction>;
 	readonly compilerSiteIds?: ReadonlyArray<string | undefined>;
+}
+
+export interface NativeRecordCall {
+	readonly callIp: number;
+	readonly loads: ReadonlyArray<{
+		readonly instructionIp: number;
+		readonly field: number;
+	}>;
 }
 
 export interface NativeDirectEntryPlan {
@@ -1461,6 +1475,11 @@ export interface NativeDirectEntryPlan {
 			readonly instructionIp: number;
 			readonly field: number;
 		}>;
+	};
+	/** Every return hands these fields of a fresh record to the caller's storage. */
+	readonly resultFields?: {
+		readonly keys: ReadonlyArray<number>;
+		readonly allocationIps: ReadonlyArray<number>;
 	};
 	readonly argumentRepresentations?: ReadonlyArray<VmRegisterRepresentation>;
 	readonly operatorInputs?: ReadonlyArray<{
@@ -1499,6 +1518,7 @@ export function validateNativeDirectEntry(
 			functions !== undefined &&
 			(target?.id !== call.entryId ||
 				target.fieldParameters !== undefined ||
+				target.resultFields !== undefined ||
 				(target.argumentRepresentations !== undefined &&
 					target.argumentRepresentations.length !== instruction.argumentCount))
 		)
@@ -1551,6 +1571,12 @@ export function validateNativeDirectEntry(
 				throw new RangeError("Invalid native entry field load");
 			seen.add(load.instructionIp);
 		}
+	}
+
+	if (entry.resultFields !== undefined) {
+		if (fields !== undefined || entry.argumentRepresentations !== undefined)
+			throw new RangeError("Native record entry combines incompatible transports");
+		validateNativeRecordReturns(fn, entry.resultFields);
 	}
 
 	const representations = ["boxed", "int32", "number", "boolean", "string"];
@@ -1684,6 +1710,137 @@ export function validateNativeLiteralSwitches(
 			fail();
 		for (let ip = site.instructionIp + 1; ip <= site.endIp; ip++)
 			if (jumpTargets.has(ip)) fail();
+	}
+}
+
+const NATIVE_RECORD_FIELD_LIMIT = 8;
+
+/** Record calls and their field loads render against caller storage, outside other native plans. */
+export function nativeRecordCallIps(native: NativeFunctionPlan): ReadonlySet<number> {
+	return new Set(
+		(native.recordCalls ?? []).flatMap((site) => [
+			site.callIp,
+			...site.loads.map((load) => load.instructionIp),
+		]),
+	);
+}
+
+function validateNativeRecordReturns(
+	fn: BytecodeFunction,
+	results: NonNullable<NativeDirectEntryPlan["resultFields"]>,
+): void {
+	function fail(): never {
+		throw new RangeError("Invalid native record result");
+	}
+	if (
+		results.keys.length === 0 ||
+		results.keys.length > NATIVE_RECORD_FIELD_LIMIT ||
+		new Set(results.keys).size !== results.keys.length ||
+		results.allocationIps.length === 0 ||
+		new Set(results.allocationIps).size !== results.allocationIps.length
+	)
+		fail();
+	const exceptionTargets = vmExceptionHandlerTargets(fn.instructions.length, fn.handlers);
+	const transported = new Set<number>();
+	let reachable: ReadonlySet<number> | undefined;
+	for (const ip of results.allocationIps) {
+		const allocation = fn.instructions[ip];
+		if (
+			allocation?.opcode !== "CREATE_OBJECT_SHAPED" ||
+			allocation.keyStringIndices.length !== results.keys.length ||
+			allocation.keyStringIndices.some((key, index) => key !== results.keys[index])
+		)
+			fail();
+		const flow = nativeVirtualValueFlow(
+			fn.instructions,
+			ip,
+			allocation.dst,
+			new Set(),
+			exceptionTargets,
+		);
+		reachable ??= new Set(flow.keys());
+		const returns = new Map<number, ReadonlyArray<number>>();
+		for (const [returnIp, aliases] of flow) {
+			const instruction = fn.instructions[returnIp]!;
+			if (instruction.opcode === "RETURN" && aliases.may.has(instruction.value))
+				returns.set(returnIp, [instruction.value]);
+		}
+		validateNativeVirtualValue(
+			fn.instructions,
+			ip,
+			allocation.dst,
+			returns,
+			fail,
+			() => false,
+			false,
+			new Set(),
+			exceptionTargets,
+		);
+		for (const returnIp of returns.keys()) {
+			if (transported.has(returnIp)) fail();
+			transported.add(returnIp);
+		}
+	}
+	for (const [ip, instruction] of fn.instructions.entries())
+		if (instruction.opcode === "RETURN" && reachable!.has(ip) && !transported.has(ip))
+			fail();
+}
+
+/** A record call's result register reaches only its field loads, and its entry returns those fields. */
+export function validateNativeRecordCalls(
+	fn: BytecodeFunction,
+	native: NativeFunctionPlan,
+	functions: ReadonlyArray<NativeFunctionPlan>,
+): void {
+	if ((native.recordCalls?.length ?? 0) === 0) return;
+	function fail(): never {
+		throw new RangeError(
+			`Invalid native record call in function ${native.functionIndex}`,
+		);
+	}
+	if (native.mode !== "direct") fail();
+	const exceptionTargets = vmExceptionHandlerTargets(fn.instructions.length, fn.handlers);
+	const seen = new Set<number>();
+	for (const site of native.recordCalls ?? []) {
+		const call = fn.instructions[site.callIp];
+		const plan = native.instructions[site.callIp];
+		if (
+			seen.has(site.callIp) ||
+			call?.opcode !== "CALL" ||
+			plan?.kind !== "call" ||
+			plan.directFunctionIndex === undefined ||
+			plan.directEntryId === undefined ||
+			(plan.guardedFunctionIndices?.length ?? 0) > 0 ||
+			site.loads.length > 64
+		)
+			fail();
+		seen.add(site.callIp);
+		const entry = functions[plan.directFunctionIndex]?.directEntries[plan.directEntryId];
+		const keys = entry?.resultFields?.keys;
+		if (keys === undefined || entry?.id !== plan.directEntryId) fail();
+		const loads = new Map<number, ReadonlyArray<number>>();
+		for (const load of site.loads) {
+			const instruction = fn.instructions[load.instructionIp];
+			if (
+				loads.has(load.instructionIp) ||
+				instruction?.opcode !== "LOAD_PROPERTY_STATIC" ||
+				instruction.object !== call.dst ||
+				keys[load.field] !== instruction.stringIndex
+			)
+				fail();
+			loads.set(load.instructionIp, [call.dst]);
+		}
+		validateNativeVirtualValue(
+			fn.instructions,
+			site.callIp,
+			call.dst,
+			loads,
+			fail,
+			() => false,
+			false,
+			new Set(),
+			exceptionTargets,
+		);
 	}
 }
 
@@ -2260,6 +2417,19 @@ function remapNativeConstants(
 								const index = compacted.stringOldToNew.get(key);
 								if (index === undefined)
 									throw new Error(`RuntimeImage removed entry field ${key}`);
+								return index;
+							}),
+						},
+					}),
+			...(entry.resultFields === undefined
+				? {}
+				: {
+						resultFields: {
+							...entry.resultFields,
+							keys: entry.resultFields.keys.map((key) => {
+								const index = compacted.stringOldToNew.get(key);
+								if (index === undefined)
+									throw new Error(`RuntimeImage removed result field ${key}`);
 								return index;
 							}),
 						},
@@ -4833,6 +5003,16 @@ function lowerExecutionFunctionToNativePlan(
 					},
 				}),
 		resultRepresentation: entry.resultRepresentation,
+		...(entry.resultFields === undefined
+			? {}
+			: {
+					resultFields: {
+						keys: entry.resultFields.keys,
+						allocationIps: entry.resultFields.allocations.map((allocation) =>
+							instructionIndexByTargetInstruction.get(allocation)!,
+						),
+					},
+				}),
 		...(entry.argumentRepresentations === undefined
 			? {}
 			: { argumentRepresentations: [...entry.argumentRepresentations] }),
@@ -4914,6 +5094,21 @@ function lowerExecutionFunctionToNativePlan(
 						valueRepresentations: site.valueRepresentations,
 						entries: site.entries,
 					})),
+				}),
+		...(fn.recordCalls === undefined
+			? {}
+			: {
+					recordCalls: fn.recordCalls
+						.map((site) => ({
+							callIp: instructionIndexByTargetInstruction.get(site.call)!,
+							loads: site.loads
+								.map(({ instruction, field }) => ({
+									instructionIp: instructionIndexByTargetInstruction.get(instruction)!,
+									field,
+								}))
+								.sort((left, right) => left.instructionIp - right.instructionIp),
+						}))
+						.sort((left, right) => left.callIp - right.callIp),
 				}),
 		gc: { safepoints },
 		instructions: nativeInstructions,

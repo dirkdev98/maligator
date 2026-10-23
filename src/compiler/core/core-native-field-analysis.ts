@@ -7,7 +7,9 @@ import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import type { CoreLocalFactBundle } from "./core-ir-provenance.ts";
 import type {
 	CoreDirectEntryPlan,
+	CoreEntryFieldLoad,
 	CoreEntryFields,
+	CoreEntryResultFields,
 	CorePlanRepresentation,
 } from "./core-ir-regions.ts";
 import { coreInstructionId } from "./core-ir.ts";
@@ -209,6 +211,138 @@ export function coreFieldArgument(
 			),
 		}),
 	};
+}
+
+const MAX_RESULT_FIELDS = 8;
+
+function onlyReturned(fn: CoreFunctionStore, value: CoreValueId): boolean {
+	const pending = [value];
+	while (pending.length > 0) {
+		const current = pending.pop()!;
+		if (fn.kernel.valueHandlerUseCount(current) > 0) return false;
+		for (
+			let use = fn.kernel.valueFirstUse(current);
+			use >= 0;
+			use = fn.kernel.useNext(use)
+		) {
+			if (fn.kernel.useLive(use) === 0) continue;
+			const instruction = fn.kernel.useInstruction(use);
+			const kind = fn.instructionKind(instruction);
+			if (kind === "return") continue;
+			if (kind !== "operation") return false;
+			const opcode = fn.instructionOpcodeName(instruction);
+			if (opcode === "rootUse") continue;
+			if (opcode !== "move") return false;
+			pending.push(fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)));
+		}
+	}
+	return true;
+}
+
+function returnedAllocation(
+	fn: CoreFunctionStore,
+	value: CoreValueId,
+): CoreInstructionId | undefined {
+	for (let depth = 0; depth < 16; depth++) {
+		if (fn.kernel.valueDefinitionKind(value) !== 1) return undefined;
+		const instruction = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
+		if (fn.instructionOpcodeName(instruction) !== "move") return instruction;
+		value = fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction));
+	}
+	return undefined;
+}
+
+/** The record every reachable return of `fn` creates, when no other code can observe it. */
+export function coreRecordResultFields(
+	fn: CoreFunctionStore,
+	cfg: CoreControlFlow,
+): CoreEntryResultFields | undefined {
+	if (
+		fn.isGenerator ||
+		fn.isAsync ||
+		fn.metadata.isClassConstructor ||
+		fn.metadata.isDerivedConstructor
+	)
+		return undefined;
+	let keys: ReadonlyArray<number> | undefined;
+	const allocations = new Set<CoreInstructionId>();
+	for (const block of cfg.reachable) {
+		const terminator = fn.blockTerminator(block);
+		if (fn.instructionKind(terminator) !== "return") continue;
+		if (fn.kernel.instructionOperandCount(terminator) !== 1) return undefined;
+		const allocation = returnedAllocation(
+			fn,
+			fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator)),
+		);
+		if (
+			allocation === undefined ||
+			fn.instructionOpcodeName(allocation) !== "createObjectShaped"
+		)
+			return undefined;
+		if (allocations.has(allocation)) continue;
+		const allocationKeys = fn.instructionAttributes(allocation).keyStringIndices;
+		if (
+			!Array.isArray(allocationKeys) ||
+			allocationKeys.length === 0 ||
+			allocationKeys.length > MAX_RESULT_FIELDS ||
+			(keys !== undefined &&
+				(keys.length !== allocationKeys.length ||
+					keys.some((key, index) => key !== allocationKeys[index]))) ||
+			!onlyReturned(fn, fn.kernel.resultAt(fn.kernel.instructionResultStart(allocation)))
+		)
+			return undefined;
+		keys ??= Object.freeze(allocationKeys.map(Number));
+		allocations.add(allocation);
+	}
+	return keys === undefined
+		? undefined
+		: Object.freeze({
+				keys,
+				allocations: Object.freeze([...allocations].sort((left, right) => left - right)),
+			});
+}
+
+/** The reads of a call's result, when they are its only uses and name returned fields. */
+export function coreRecordResultLoads(
+	fn: CoreFunctionStore,
+	call: CoreInstructionId,
+	keys: ReadonlyArray<number>,
+): ReadonlyArray<CoreEntryFieldLoad> | undefined {
+	if (
+		fn.isGenerator ||
+		fn.isAsync ||
+		fn.instructionKind(call) !== "operation" ||
+		fn.instructionOpcodeName(call) !== "call" ||
+		fn.kernel.instructionResultCount(call) !== 1
+	)
+		return undefined;
+	const attributes = fn.instructionAttributes(call);
+	if (attributes.construct || attributes.argumentMode !== undefined) return undefined;
+	const result = fn.kernel.resultAt(fn.kernel.instructionResultStart(call));
+	if (fn.kernel.valueHandlerUseCount(result) > 0) return undefined;
+	const loads: Array<CoreEntryFieldLoad> = [];
+	for (
+		let use = fn.kernel.valueFirstUse(result);
+		use >= 0;
+		use = fn.kernel.useNext(use)
+	) {
+		if (fn.kernel.useLive(use) === 0) continue;
+		const instruction = fn.kernel.useInstruction(use);
+		if (
+			fn.instructionKind(instruction) !== "operation" ||
+			fn.instructionOpcodeName(instruction) !== "loadPropertyStatic" ||
+			fn.kernel.useOperand(use) !== 0
+		)
+			return undefined;
+		const field = keys.indexOf(
+			fn.instructionAttributes(instruction).stringIndex as number,
+		);
+		if (field < 0) return undefined;
+		loads.push(Object.freeze({ instruction, field }));
+	}
+	return loads.length > 64
+		? undefined
+		: Object.freeze(loads.sort((left, right) => left.instruction - right.instruction));
 }
 
 export function coreFieldArgumentProofIsCurrent(

@@ -176,6 +176,7 @@ function firstOverrideOffset(bytes: Uint8Array): number {
 	for (let index = 0; index < registerCount; index++) reader.u8();
 	expect(reader.u32()).toBe(0); // Literal switches.
 	expect(reader.u32()).toBe(0); // Field calls.
+	expect(reader.u32()).toBe(0); // Record calls.
 	expect(reader.u8()).toBe(0); // Canonical body retained.
 	expect(reader.u32()).toBe(1); // Direct entries.
 	skipStorageWithoutFastPaths(reader);
@@ -186,6 +187,8 @@ function firstOverrideOffset(bytes: Uint8Array): number {
 	expect(reader.i32()).toBe(-1); // No argument slice specialization.
 	expect(reader.u32()).toBe(0); // Field keys.
 	expect(reader.u32()).toBe(0); // Field loads.
+	expect(reader.u32()).toBe(0); // Result field keys.
+	expect(reader.u32()).toBe(0); // Result field allocations.
 	expect(reader.u32()).toBe(0); // Constant booleans.
 	expect(reader.u32()).toBe(0); // Operator inputs.
 	expect(reader.u32()).toBe(1); // Outgoing call overrides.

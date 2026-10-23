@@ -39,7 +39,11 @@ import {
 	coreArgumentObservation,
 	coreNativeEntryProofIsCurrent,
 } from "./core-native-entry-analysis.ts";
-import { coreFieldArgumentProofIsCurrent } from "./core-native-field-analysis.ts";
+import {
+	coreFieldArgumentProofIsCurrent,
+	coreRecordResultFields,
+	coreRecordResultLoads,
+} from "./core-native-field-analysis.ts";
 import {
 	coreOperatorInputProofIsCurrent,
 	coreBuiltinInputProofIsCurrent,
@@ -2004,6 +2008,26 @@ export function verifyCoreOptimizationPlan(
 			fail(
 				`direct entry ${entry.function}:${entry.id} has no current representation proof`,
 			);
+		if (entry.resultFields !== undefined) {
+			const current = coreRecordResultFields(
+				fn,
+				buildCoreControlFlow(program, entry.function, { exceptions: true }),
+			);
+			if (
+				current === undefined ||
+				!sameNumbers(current.keys, entry.resultFields.keys) ||
+				!sameNumbers(current.allocations, entry.resultFields.allocations) ||
+				entry.resultFields.allocations.some(
+					(allocation) => !emittedInstructions.has(allocation),
+				) ||
+				entry.fieldParameters !== undefined ||
+				entry.argumentRepresentations !== undefined ||
+				entry.callSites.some((site) => site.resultLoads === undefined)
+			)
+				fail(
+					`direct entry ${entry.function}:${entry.id} has no current record result proof`,
+				);
+		}
 		const overriddenInstructions = new Set<CoreInstructionId>();
 		for (const call of entry.callOverrides ?? []) {
 			if (
@@ -2215,6 +2239,25 @@ export function verifyCoreOptimizationPlan(
 					!coreFieldArgumentProofIsCurrent(caller, site, entry.fieldParameters!))
 			)
 				fail(`direct entry callsite ${key} has no current field argument proof`);
+			if (site.resultLoads !== undefined) {
+				const loads =
+					entry.resultFields === undefined
+						? undefined
+						: coreRecordResultLoads(caller, site.instruction, entry.resultFields.keys);
+				const emitted = blockProofs.get(site.caller)!.instructionOrder;
+				if (
+					loads === undefined ||
+					site.guarded === true ||
+					loads.length !== site.resultLoads.length ||
+					loads.some(
+						(load, index) =>
+							load.instruction !== site.resultLoads![index]!.instruction ||
+							load.field !== site.resultLoads![index]!.field ||
+							!emitted.has(load.instruction),
+					)
+				)
+					fail(`direct entry callsite ${key} has no current record result proof`);
+			}
 			requireInstruction(caller, site.instruction, "direct-entry callsite", key);
 			if (
 				!blockProofs

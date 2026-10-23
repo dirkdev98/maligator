@@ -27,6 +27,7 @@ const representationProofs = new WeakMap<
 		readonly calls: CoreDirectEntryPlan["callSites"];
 		readonly callOverrides: CoreDirectEntryPlan["callOverrides"];
 		readonly fields: CoreDirectEntryPlan["fieldParameters"];
+		readonly resultFields: CoreDirectEntryPlan["resultFields"];
 	}
 >();
 
@@ -39,6 +40,7 @@ export function analyzeCoreNativeEntry(
 	fields?: CoreDirectEntryPlan["fieldParameters"],
 	exactOperationResultMasks: ReadonlyMap<CoreInstructionId, number> = new Map(),
 	callOverrides?: CoreDirectEntryPlan["callOverrides"],
+	resultFields?: CoreDirectEntryPlan["resultFields"],
 ): {
 	readonly valueRepresentations: ReadonlyArray<CorePlanRepresentation>;
 	readonly resultRepresentation: CorePlanRepresentation;
@@ -144,6 +146,7 @@ export function analyzeCoreNativeEntry(
 					},
 		calls: callSites.map((site) => ({ ...site })),
 		callOverrides: callOverrides?.map((site) => ({ ...site })),
+		resultFields,
 	});
 	return {
 		valueRepresentations,
@@ -162,6 +165,7 @@ export function coreNativeEntryProofIsCurrent(
 			entry.argumentRepresentations === undefined &&
 			entry.constantBooleans === undefined &&
 			entry.fieldParameters === undefined &&
+			entry.resultFields === undefined &&
 			entry.operatorInputs === undefined &&
 			entry.callOverrides === undefined
 		);
@@ -181,6 +185,7 @@ export function coreNativeEntryProofIsCurrent(
 		same(proof.parameters, entry.parameterRepresentations) &&
 		same(proof.arguments, entry.argumentRepresentations) &&
 		proof.constants === entry.constantBooleans &&
+		proof.resultFields === entry.resultFields &&
 		proof.operatorInputs === entry.operatorInputs &&
 		(proof.callOverrides === undefined
 			? entry.callOverrides === undefined
@@ -215,6 +220,7 @@ export function coreNativeEntryProofIsCurrent(
 				(site.guarded === true) === (current.guarded === true) &&
 				site.fieldObject === current.fieldObject &&
 				site.fieldValueRepresentations === current.fieldValueRepresentations &&
+				site.resultLoads === current.resultLoads &&
 				site.builtinCallbackOperation === current.builtinCallbackOperation &&
 				site.builtinCallbackNumbers === current.builtinCallbackNumbers &&
 				site.numericSortCallback === current.numericSortCallback &&

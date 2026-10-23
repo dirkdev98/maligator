@@ -806,6 +806,13 @@ export function mergeProgramImages(images: Array<ProgramImage>): MergedProgramIm
 									representations: entry.fieldParameters.representations,
 									loads: entry.fieldParameters.loads.map((load) => ({ ...load })),
 								},
+					resultFields:
+						entry.resultFields === undefined
+							? undefined
+							: {
+									keys: entry.resultFields.keys.map((key) => key + base.string),
+									allocationIps: [...entry.resultFields.allocationIps],
+								},
 					argumentRepresentations: entry.argumentRepresentations?.slice(),
 					operatorInputs: entry.operatorInputs?.map((input) => ({
 						...input,
@@ -840,6 +847,10 @@ export function mergeProgramImages(images: Array<ProgramImage>): MergedProgramIm
 						...entry,
 						functionIndex: entry.functionIndex + base.function,
 					})),
+				})),
+				recordCalls: native.recordCalls?.map((site) => ({
+					callIp: site.callIp,
+					loads: site.loads.map((load) => ({ ...load })),
 				})),
 				gc: {
 					safepoints: native.gc.safepoints.map((safepoint) => ({

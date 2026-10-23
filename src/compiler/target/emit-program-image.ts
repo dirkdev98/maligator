@@ -9,7 +9,11 @@ import { GENERATED_PRELUDE_END } from "./generated-prelude.ts";
 import { validateNativeProgramStorage } from "./lower-native-storage.ts";
 import { finalizeCompilerRemarks } from "./profile-metadata.ts";
 import type { ProgramImage } from "./program-image.ts";
-import { validateNativeBodyAbis, validateNativeDirectEntry } from "./program-image.ts";
+import {
+	validateNativeBodyAbis,
+	validateNativeDirectEntry,
+	validateNativeRecordCalls,
+} from "./program-image.ts";
 import {
 	COMPILED_FUNCTION_DECLARATION,
 	directCompiledEntryKey,
@@ -273,9 +277,15 @@ function directEntryDeclaration(
 				: representation === "boolean"
 					? "bool"
 					: "MalValue";
-	const parameters = entry.parameterRepresentations.map(
-		(representation, index) => `${cType(representation)} p${index}`,
-	);
+	const parameters = [
+		...entry.parameterRepresentations.map(
+			(representation, index) => `${cType(representation)} p${index}`,
+		),
+		...Array.from(
+			{ length: entry.resultFieldCount ?? 0 },
+			(_, field) => `MalValue *rf${field}`,
+		),
+	];
 	return `${cType(entry.resultRepresentation)} ${entry.symbol}(MalVm *vm, MalValue this_value${parameters.length === 0 ? "" : `, ${parameters.join(", ")}`}, MalEnv *env, MalValue callee)`;
 }
 
@@ -972,6 +982,7 @@ function emitNativeFunctions(
 				targets.add(plan.functionIndex);
 				entries.add(directCompiledEntryKey(plan.functionIndex, plan.entryId));
 			}
+		validateNativeRecordCalls(native.body, native, image.native.functions);
 		for (const entry of native.directEntries) {
 			validateNativeDirectEntry(native.body, entry, image.native.functions);
 			for (const call of entry.callOverrides ?? []) {

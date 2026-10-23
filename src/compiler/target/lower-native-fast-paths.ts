@@ -21,7 +21,7 @@ import {
 } from "./native-scalar-operators.ts";
 import { selectNativeSpanContinuations } from "./native-span-continuation.ts";
 import type { NativeSpanContinuation } from "./native-span-continuation.ts";
-import { nativePlanKeepsOrdinaryLowering } from "./program-image.ts";
+import { nativePlanKeepsOrdinaryLowering, nativeRecordCallIps } from "./program-image.ts";
 import type {
 	NativeDirectEntryPlan,
 	NativeFunctionPlan,
@@ -3003,9 +3003,10 @@ export function selectNativeFastPaths(
 				transparent.add(ip + 1);
 		}
 	}
-	const blocked = new Set(
-		entry?.fieldParameters?.loads.map((load) => load.instructionIp),
-	);
+	const blocked = new Set([
+		...(entry?.fieldParameters?.loads.map((load) => load.instructionIp) ?? []),
+		...nativeRecordCallIps(native),
+	]);
 	// A physically forward copy edge can still poll on a native or exceptional cycle.
 	const pollingEdges = new Set(
 		native.gc.safepoints.flatMap((point) =>
@@ -3269,6 +3270,7 @@ export function selectNativeFastPaths(
 			native,
 			new Set([
 				...(entry?.fieldParameters?.loads.map((load) => load.instructionIp) ?? []),
+				...nativeRecordCallIps(native),
 				...(native.fieldCalls ?? []).flatMap((site) =>
 					Array.from(
 						{ length: site.callIp - site.allocationIp + 1 },

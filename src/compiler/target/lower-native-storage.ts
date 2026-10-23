@@ -52,7 +52,7 @@ import {
 	NATIVE_BITWISE,
 	NATIVE_COMPARE,
 } from "./native-scalar-operators.ts";
-import { nativeFrameRootRegisters } from "./program-image.ts";
+import { nativeFrameRootRegisters, nativeRecordCallIps } from "./program-image.ts";
 import type {
 	NativeDirectEntryPlan,
 	NativeFunctionPlan,
@@ -429,6 +429,7 @@ function scalarStorageOwnership(
 	for (const action of native.regionActions) blocked.add(action.ip);
 	for (const site of native.fieldCalls ?? [])
 		for (let ip = site.allocationIp; ip <= site.callIp; ip++) blocked.add(ip);
+	for (const ip of nativeRecordCallIps(native)) blocked.add(ip);
 	for (const site of native.literalSwitches ?? [])
 		for (let ip = site.instructionIp; ip <= site.endIp; ip++) blocked.add(ip);
 	const handlers = body.handlerTargets;
@@ -1145,6 +1146,7 @@ function instructionLocalRoots(
 		for (const ip of region.claimedIps) regional[ip] = 1;
 	for (const call of native.fieldCalls ?? [])
 		for (let ip = call.allocationIp; ip <= call.callIp; ip++) regional[ip] = 1;
+	for (const ip of nativeRecordCallIps(native)) regional[ip] = 1;
 	// Expressions render at their consumer, after their operands' VM reads.
 	for (const ip of expressionIps) regional[ip] = 1;
 	for (let ip = 0; ip < regional.length; ip++) {
@@ -1242,6 +1244,7 @@ function rootPublicationContinuations(
 	for (const exit of exits) blocked.add(exit);
 	for (const action of native.regionActions) blocked.add(action.ip);
 	for (const site of native.fieldCalls ?? []) blockSpan([site.allocationIp, site.callIp]);
+	for (const ip of nativeRecordCallIps(native)) blockSpan([ip]);
 	for (const site of native.literalSwitches ?? [])
 		blockSpan([site.instructionIp, site.endIp]);
 	return targets.filter(

@@ -14,6 +14,7 @@ import {
 import type {
 	CoreAllocatedRegion,
 	CoreDirectEntryPlan,
+	CoreEntryFieldLoad,
 	CorePlanRepresentation,
 } from "../core/core-ir-regions.ts";
 import { coreBlockId, coreFunctionId, coreInstructionId } from "../core/core-ir.ts";
@@ -1506,6 +1507,8 @@ function lowerCoreSpecializations(
 	return regions;
 }
 
+type CoreRecordCalls = ReadonlyMap<CoreInstructionId, ReadonlyArray<CoreEntryFieldLoad>>;
+
 interface CoreFieldCall {
 	readonly allocation: CoreInstructionId;
 	readonly call: CoreInstructionId;
@@ -1526,6 +1529,7 @@ function lowerFunctionToTarget(
 	directEntryPlans: ReadonlyArray<CoreDirectEntryPlan>,
 	directBuiltinCallbacks: ReadonlyMap<CoreInstructionId, CoreFunctionId>,
 	fieldCallPlans: ReadonlyArray<CoreFieldCall>,
+	recordCalls: CoreRecordCalls,
 	unsignedArithmetic: ReadonlySet<CoreInstructionId>,
 	privateNumericArrayElements: ReadonlySet<CoreInstructionId>,
 	privatePackedRestArrayElements: ReadonlyArray<CorePrivatePackedRestArrayElementPlan>,
@@ -2666,6 +2670,16 @@ function lowerFunctionToTarget(
 							})),
 						},
 					}),
+			...(entry.resultFields === undefined
+				? {}
+				: {
+						resultFields: {
+							keys: entry.resultFields.keys,
+							allocations: entry.resultFields.allocations.map((allocation) =>
+								loweredInstructions.get(allocation)!,
+							),
+						},
+					}),
 			parameterRepresentations: entry.parameterRepresentations.map(
 				planCoreTargetRepresentation,
 			),
@@ -2725,6 +2739,17 @@ function lowerFunctionToTarget(
 							planCoreTargetRepresentation,
 						),
 						entries: site.entries,
+					})),
+				}),
+		...(recordCalls.size === 0
+			? {}
+			: {
+					recordCalls: [...recordCalls].map(([call, loads]) => ({
+						call: loweredInstructions.get(call)!,
+						loads: loads.map(({ instruction, field }) => ({
+							instruction: loweredInstructions.get(instruction)!,
+							field,
+						})),
 					})),
 				}),
 		gc: { safepoints },
@@ -2789,6 +2814,10 @@ export function lowerCoreCompilationToTargetProgram(
 		Map<CoreInstructionId, CompilerNumericSortCallback>
 	>();
 	const fieldCallPlans = new Map<number, Map<CoreInstructionId, CoreFieldCall>>();
+	const recordCalls = new Map<
+		number,
+		Map<CoreInstructionId, ReadonlyArray<CoreEntryFieldLoad>>
+	>();
 	const directEntryTargets = new Map<
 		number,
 		Map<CoreInstructionId, { target: CoreFunctionId; guarded: boolean }>
@@ -2851,6 +2880,13 @@ export function lowerCoreCompilationToTargetProgram(
 				calls.set(site.instruction, call);
 				fieldCallPlans.set(site.caller, calls);
 				continue;
+			}
+			if (site.resultLoads !== undefined) {
+				const loads =
+					recordCalls.get(site.caller) ??
+					new Map<CoreInstructionId, ReadonlyArray<CoreEntryFieldLoad>>();
+				loads.set(site.instruction, site.resultLoads);
+				recordCalls.set(site.caller, loads);
 			}
 			const calls =
 				directEntryIds.get(site.caller) ?? new Map<CoreInstructionId, number>();
@@ -2950,6 +2986,7 @@ export function lowerCoreCompilationToTargetProgram(
 			directEntryPlans.get(core) ?? [],
 			directBuiltinCallbacks.get(core) ?? new Map(),
 			[...(fieldCallPlans.get(core)?.values() ?? [])],
+			recordCalls.get(core) ?? new Map(),
 			unsignedArithmetic.get(core) ?? new Set(),
 			privateNumericArrayElements.get(core) ?? new Set(),
 			privatePackedRestArrayElements.get(core) ?? [],
