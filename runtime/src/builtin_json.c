@@ -1349,10 +1349,12 @@ static bool mal_json_plain_flat_record(
             out[0] = '"';
             mal_text_buffer_copy_bytes(out + 1, member->units, member->width - 2);
             out[member->width - 1] = '"';
+        } else if (mal_value_is_null(member->value)) {
+            memcpy(out, "null", 4);
+        } else if (mal_value_to_boolean(member->value)) {
+            memcpy(out, "true", 4);
         } else {
-            const char *literal = mal_value_is_null(member->value)
-                ? "null" : mal_value_to_boolean(member->value) ? "true" : "false";
-            memcpy(out, literal, member->width);
+            memcpy(out, "false", 5);
         }
         out += member->width;
     }
@@ -1749,9 +1751,14 @@ static MalValue mal_builtin_json_stringify(MalVm *vm, MalValue this_value, const
     MalValue replacer = arg_count >= 2 ? args[1] : mal_value_new_undefined();
     MalValue space = arg_count >= 3 ? args[2] : mal_value_new_undefined();
 
-    MalJsonState state = {0};
+    // Field by field: a designated initializer would zero the inline cycle table.
+    MalJsonState state;
     state.vm = vm;
     state.replacer_fn = mal_value_new_undefined();
+    state.has_property_list = false;
+    state.gap = nullptr;
+    state.gap_length = 0;
+    mal_json_pointer_init(&state.active);
     mal_rooted_value_list_init(&state.property_list);
 
     // Replacer: a callable is the ReplacerFunction; an array builds the
@@ -1824,7 +1831,8 @@ static MalValue mal_builtin_json_stringify(MalVm *vm, MalValue this_value, const
     MalValue empty_key = mal_value_from_string(mal_intrinsic_hot_ascii(vm, MAL_HOT_KEY_EMPTY));
     MalJsonBuilder builder = {.vm = vm, .buffer = {.heap = &vm->heap}};
     // Size the first allocation from the root's members, about 16 units each, so a
-    // small record is written once instead of regrown from 16 units three times.
+    // small record is written once instead of regrown from 16 units three times. The
+    // floor covers a small nested response such as {"body":{...}}, whose root has one.
     if (mal_value_is_heap_type(value, MAL_HEAP_OBJECT) ||
         mal_value_is_heap_type(value, MAL_HEAP_ARRAY_OBJECT)) {
         const MalObject *object = mal_value_to_object(value);
@@ -1832,7 +1840,7 @@ static MalValue mal_builtin_json_stringify(MalVm *vm, MalValue this_value, const
             ? mal_value_to_array_object(value)->length
             : object->shape != nullptr ? object->shape->inline_count : 0;
         mal_text_buffer_hint_capacity(
-            &builder.buffer, members < 64 ? members * 16 + 2 : 1024);
+            &builder.buffer, members < 4 ? 64 : members < 64 ? members * 16 + 2 : 1024);
     }
     MalKey root_key = {.kind = MAL_KEY_STRING, .value = empty_key};
     MalValue holder = mal_value_new_undefined();
