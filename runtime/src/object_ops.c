@@ -792,6 +792,22 @@ bool mal_object_try_append_shaped_values(
     return true;
 }
 
+// Shifts later fields down onto the shape a fresh object with the remaining
+// properties has, so deletion keeps the object shaped and its sites shared.
+static bool mal_object_remove_shaped(MalObject *object, u32 index) {
+    MalShape *shape = object->shape;
+    MalShape *next = mal_shape_remove_property(mal_gc_current_heap(), shape, index);
+    if (next == nullptr) return false;
+    u32 count = shape->inline_count;
+    MalValue *fields = mal_object_fields_nonempty(object);
+    // Every moved slot is overwritten, so shade each for the snapshot barrier.
+    for (u32 i = index; i < count; i++) mal_gc_write_barrier(fields[i]);
+    memmove(fields + index, fields + index + 1, sizeof(MalValue) * (count - 1 - index));
+    fields[count - 1] = mal_value_new_undefined();
+    object->shape = next;
+    return true;
+}
+
 bool mal_object_delete_own(MalObject *object, MalKey key) {
     if (mal_object_note_prototype_mutation(object)) {
         MAL_PERF_COUNT(prototype_epoch_delete_invalidations);
@@ -831,11 +847,12 @@ bool mal_object_delete_own(MalObject *object, MalKey key) {
     mal_gc_write_barrier(lookup.desc.getter);
     mal_gc_write_barrier(lookup.desc.setter);
 
-    // A shape is a fixed layout, so removing a shaped property drops the object
-    // to dictionary mode first, then deletes from the table.
-    if (key.kind == MAL_KEY_STRING &&
-        mal_shape_find(object->shape, key, MAL_SHAPE_FIND_DELETE_OWN) >= 0) {
-        mal_object_dictionarize(object);
+    if (key.kind == MAL_KEY_STRING) {
+        i32 index = mal_shape_find(object->shape, key, MAL_SHAPE_FIND_DELETE_OWN);
+        if (index >= 0) {
+            if (mal_object_remove_shaped(object, (u32) index)) return true;
+            mal_object_dictionarize(object);
+        }
     }
     if (mal_object_overflow(object) != nullptr) {
         return mal_table_delete(mal_object_overflow(object), key);

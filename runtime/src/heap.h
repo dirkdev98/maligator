@@ -112,6 +112,8 @@ typedef struct MalHeap {
     usize black_alloc_bytes;
     /** Heap-lifetime root of this isolate's hidden-class transition tree. */
     MalShape *shape_root;
+    /** Shapes that property deletion may still create; the tree never frees one. */
+    u32 shape_removal_budget;
     /** Canonical metadata keys reused by every native function allocation. */
     MalString *native_function_length_key;
     MalString *native_function_name_key;

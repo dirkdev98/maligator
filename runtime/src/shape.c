@@ -213,6 +213,7 @@ void mal_shape_heap_init(MalHeap *heap) {
     heap->shape_root = malloc(sizeof(MalShape));
     mal_shape_init_empty(heap->shape_root);
     heap->shape_root->tree_root = heap->shape_root;
+    heap->shape_removal_budget = MAL_SHAPE_REMOVAL_BUDGET;
 }
 
 static void mal_shape_free_children(MalShape *shape) {
@@ -326,6 +327,26 @@ MalShape *mal_shape_find_add_transition(MalShape *shape, MalKey key, u8 attrs) {
         }
     }
     return nullptr;
+}
+
+MalShape *mal_shape_remove_property(MalHeap *heap, MalShape *shape, u32 index) {
+    if (shape->tree_root == nullptr || shape->inline_count > MAL_SHAPE_ORDINARY_SLOTS) {
+        return nullptr;
+    }
+    MalShape *next = shape->tree_root;
+    for (u32 i = 0; i < shape->inline_count; i++) {
+        if (i == index) continue;
+        const MalShapeProp *prop = &shape->props[i];
+        MalKey key = mal_key_from_value(prop->key);
+        MalShape *child = mal_shape_find_add_transition(next, key, prop->attrs);
+        if (child == nullptr) {
+            if (heap->shape_removal_budget == 0) return nullptr;
+            heap->shape_removal_budget--;
+            child = mal_shape_add_property(next, key, prop->attrs);
+        }
+        next = child;
+    }
+    return next;
 }
 
 MalShape *mal_shape_add_property(MalShape *shape, MalKey key, u8 attrs) {

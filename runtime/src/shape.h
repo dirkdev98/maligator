@@ -17,6 +17,8 @@
 #define MAL_SHAPE_ORDINARY_SLOTS 64
 /** Constructor reservations may keep a wider class layout shaped, up to the u8 slot index. */
 #define MAL_SHAPE_MAX_INLINE_SLOTS 255
+/** Shapes per heap that deletion may create; churn beyond it falls back to dictionary mode. */
+#define MAL_SHAPE_REMOVAL_BUDGET 4096
 
 typedef struct MalShape MalShape;
 typedef struct MalShapeTransition MalShapeTransition;
@@ -138,6 +140,13 @@ static inline i32 mal_shape_find(
  * return the same child. The new property occupies slot `shape->inline_count`.
  */
 MalShape *mal_shape_add_property(MalShape *shape, MalKey key, u8 attrs);
+
+/**
+ * The interned shape holding `shape`'s properties except `index`, in order, as
+ * a fresh object adding them would reach. Null for wide or treeless shapes and
+ * once deletions have created the heap's budget of shapes.
+ */
+MalShape *mal_shape_remove_property(MalHeap *heap, MalShape *shape, u32 index);
 
 /** The interned child for adding `key` with `attrs`, or null before its first addition. */
 MalShape *mal_shape_find_add_transition(MalShape *shape, MalKey key, u8 attrs);
