@@ -4150,57 +4150,67 @@ MalCompletion mal_builtin_sort_numeric(
     MalNumericSortComparator comparator, MalNumericSortKernel kernel, MalValue callee,
     MalValue receiver, const MalValue *args, i32 arg_count);
 
+/** Elements each sort block orders by insertion before the merges start. */
+#define MAL_SORT_INSERTION_BLOCK 16u
+
 /**
- * Stable bottom-up merge sort of Number values under a comparator leaf, which
- * cannot run JavaScript, collect or throw. It makes the generic merge's decisions,
- * which an inconsistent comparator can observe. Generated code instantiates it once
- * per leaf so the comparison compiles into the merge loop. `keys` holds 2 * count
- * doubles; merging decoded keys keeps value decoding off the merge's serial chain.
+ * Stable merge sort of Number values under a comparator leaf, which cannot run
+ * JavaScript, collect or throw. It makes the generic sort's decisions, which an
+ * inconsistent comparator can observe: insertion within blocks, then bottom-up
+ * merges that skip already ordered halves and stage only the left half. Generated
+ * code instantiates it once per leaf so the comparison compiles into the loops.
+ * `keys` holds 2 * count doubles; merging decoded keys keeps value decoding off the
+ * merge's serial chain.
  */
 static inline __attribute__((always_inline)) void mal_numeric_leaf_merge_sort(
     MalValue *values, MalValue *scratch, f64 *keys, u32 count,
     f64 (*compare)(f64 left, f64 right)
 ) {
     for (u32 index = 0; index < count; index++) keys[index] = mal_ops_number_as_f64(values[index]);
-    MalValue *from = values;
-    MalValue *to = scratch;
-    f64 *key_from = keys;
-    f64 *key_to = keys + count;
-    for (u32 width = 1; width < count;) {
-        for (u32 low = 0; low < count;) {
-            u32 middle = width < count - low ? low + width : count;
-            u32 high = width < count - middle ? middle + width : count;
-            u32 left = low;
+    for (u32 low = 0, high; low < count; low = high) {
+        high = count - low < MAL_SORT_INSERTION_BLOCK ? count : low + MAL_SORT_INSERTION_BLOCK;
+        for (u32 index = low + 1; index < high; index++) {
+            MalValue value = values[index];
+            f64 key = keys[index];
+            u32 hole = index;
+            while (hole > low) {
+                MAL_PERF_COUNT(numeric_sort_callback_calls);
+                // A NaN order keeps elements in place, as the generic sort's zero does.
+                if (!(compare(keys[hole - 1], key) > 0)) break;
+                values[hole] = values[hole - 1];
+                keys[hole] = keys[hole - 1];
+                hole--;
+            }
+            values[hole] = value;
+            keys[hole] = key;
+        }
+    }
+    f64 *left_keys = keys + count;
+    for (u32 width = MAL_SORT_INSERTION_BLOCK; width < count; width *= 2) {
+        for (u32 low = 0, high; count - low > width; low = high) {
+            u32 middle = low + width;
+            high = count - middle > width ? middle + width : count;
+            MAL_PERF_COUNT(numeric_sort_callback_calls);
+            if (!(compare(keys[middle - 1], keys[middle]) > 0)) continue;
+            u32 length = middle - low;
+            memcpy(scratch, values + low, sizeof(MalValue) * length);
+            memcpy(left_keys, keys + low, sizeof(f64) * length);
+            u32 left = 0;
             u32 right = middle;
             u32 out = low;
-            while (left < middle && right < high) {
+            while (left < length && right < high) {
                 MAL_PERF_COUNT(numeric_sort_callback_calls);
                 // Merge decisions on unsorted input are unpredictable; select instead of branching.
-                bool take_right = compare(key_from[left], key_from[right]) > 0;
-                u32 source = take_right ? right : left;
-                to[out] = from[source];
-                key_to[out++] = key_from[source];
+                bool take_right = compare(left_keys[left], keys[right]) > 0;
+                values[out] = take_right ? values[right] : scratch[left];
+                keys[out] = take_right ? keys[right] : left_keys[left];
+                out++;
                 right += take_right;
                 left += !take_right;
             }
-            for (; left < middle; left++, out++) {
-                to[out] = from[left];
-                key_to[out] = key_from[left];
-            }
-            for (; right < high; right++, out++) {
-                to[out] = from[right];
-                key_to[out] = key_from[right];
-            }
-            low = high;
+            memcpy(values + out, scratch + left, sizeof(MalValue) * (length - left));
+            memcpy(keys + out, left_keys + left, sizeof(f64) * (length - left));
         }
-        MalValue *swap = from;
-        from = to;
-        to = swap;
-        f64 *key_swap = key_from;
-        key_from = key_to;
-        key_to = key_swap;
         if (width > count / 2) break;
-        width *= 2;
     }
-    if (from != values) memcpy(values, from, sizeof(MalValue) * count);
 }

@@ -3755,9 +3755,22 @@ static bool mal_builtin_array_sort_order(
     return true;
 }
 
+static bool mal_builtin_array_sort_pair_order(
+    MalVm *vm, MalCallCache *comparator_cache, MalValue comparator, bool keyed,
+    MalValue left, MalValue left_key, MalValue right, MalValue right_key, f64 *order_out
+) {
+    if (keyed) {
+        *order_out = (f64) mal_string_compare(
+            mal_value_to_string(left_key), mal_value_to_string(right_key));
+        return true;
+    }
+    return mal_builtin_array_sort_order(vm, comparator_cache, comparator, left, right, order_out);
+}
+
 /**
- * Stable bottom-up merge sort over a value buffer. Returns false when the
- * comparator threw; the buffer contents are unspecified in that case.
+ * Stable merge sort over a value buffer: insertion within blocks, then bottom-up
+ * merges that skip already ordered halves. Returns false when the comparator threw;
+ * the buffer contents are unspecified in that case.
  */
 static bool mal_builtin_array_sort_values(
     MalVm *vm,
@@ -3796,11 +3809,8 @@ static bool mal_builtin_array_sort_values(
         mal_gc_root(&keys_span, default_keys, (i32) count);
         mal_gc_root(&key_scratch_span, key_scratch, (i32) count);
     }
-    MalValue *from = values;
-    MalValue *to = scratch;
-    MalValue *key_from = default_keys;
-    MalValue *key_to = key_scratch;
     bool ok = true;
+    bool keyed = default_keys != nullptr;
     // Compiled comparators dispatch directly; every other callable keeps generic [[Call]].
     MalCallCache comparator_cache = {0};
 
@@ -3836,63 +3846,77 @@ static bool mal_builtin_array_sort_values(
         MAL_PERF_COUNT(numeric_sort_kernel_runs);
         numeric_leaf->numeric_sort_kernel(values, scratch, keys, count);
         mal_vm_leave_compiled(vm);
-    } else for (u32 width = 1; ok && width < count;) {
-        for (u32 low = 0; ok && low < count;) {
-            u32 middle = width < count - low ? low + width : count;
-            u32 high = width < count - middle ? middle + width : count;
-            u32 left = low;
-            u32 right = middle;
-            u32 out = low;
-
-            while (ok && left < middle && right < high) {
-                f64 order;
-                if (key_from != nullptr) {
-                    order = (f64) mal_string_compare(
-                        mal_value_to_string(key_from[left]),
-                        mal_value_to_string(key_from[right]));
-                } else {
-                    ok = mal_builtin_array_sort_order(
-                        vm, &comparator_cache, comparator, from[left], from[right], &order);
+    } else {
+        // The decisions mirror mal_numeric_leaf_merge_sort, so a leaf comparator orders
+        // the same way on either path. An element awaiting its place stays in its rooted
+        // scratch slot while comparators run.
+        for (u32 low = 0, high; ok && low < count; low = high) {
+            high = count - low < MAL_SORT_INSERTION_BLOCK ? count : low + MAL_SORT_INSERTION_BLOCK;
+            for (u32 index = low + 1; ok && index < high; index++) {
+                scratch[index] = values[index];
+                if (keyed) key_scratch[index] = default_keys[index];
+                u32 hole = index;
+                while (hole > low) {
+                    f64 order;
+                    ok = mal_builtin_array_sort_pair_order(
+                        vm, &comparator_cache, comparator, keyed, values[hole - 1],
+                        keyed ? default_keys[hole - 1] : mal_value_new_undefined(), scratch[index],
+                        keyed ? key_scratch[index] : mal_value_new_undefined(), &order);
+                    if (!ok || order <= 0) break;
+                    values[hole] = values[hole - 1];
+                    if (keyed) default_keys[hole] = default_keys[hole - 1];
+                    hole--;
                 }
-                if (ok) {
-                    u32 source = order <= 0 ? left++ : right++;
-                    to[out] = from[source];
-                    if (key_to != nullptr) {
-                        key_to[out] = key_from[source];
+                values[hole] = scratch[index];
+                if (keyed) default_keys[hole] = key_scratch[index];
+            }
+        }
+        for (u32 width = MAL_SORT_INSERTION_BLOCK; ok && width < count; width *= 2) {
+            for (u32 low = 0, high; ok && count - low > width; low = high) {
+                u32 middle = low + width;
+                high = count - middle > width ? middle + width : count;
+                f64 order;
+                ok = mal_builtin_array_sort_pair_order(
+                    vm, &comparator_cache, comparator, keyed, values[middle - 1],
+                    keyed ? default_keys[middle - 1] : mal_value_new_undefined(), values[middle],
+                    keyed ? default_keys[middle] : mal_value_new_undefined(), &order);
+                if (!ok || order <= 0) continue;
+                u32 length = middle - low;
+                memcpy(scratch, values + low, sizeof(MalValue) * length);
+                if (keyed) memcpy(key_scratch, default_keys + low, sizeof(MalValue) * length);
+                u32 left = 0;
+                u32 right = middle;
+                u32 out = low;
+                while (left < length && right < high) {
+                    ok = mal_builtin_array_sort_pair_order(
+                        vm, &comparator_cache, comparator, keyed, scratch[left],
+                        keyed ? key_scratch[left] : mal_value_new_undefined(), values[right],
+                        keyed ? default_keys[right] : mal_value_new_undefined(), &order);
+                    if (!ok) break;
+                    if (order <= 0) {
+                        values[out] = scratch[left];
+                        if (keyed) default_keys[out] = key_scratch[left];
+                        left++;
+                    } else {
+                        values[out] = values[right];
+                        if (keyed) default_keys[out] = default_keys[right];
+                        right++;
                     }
                     out++;
                 }
+                // A throwing comparator leaves the rest of the left half in rooted scratch.
+                if (!ok) break;
+                memcpy(values + out, scratch + left, sizeof(MalValue) * (length - left));
+                if (keyed) {
+                    memcpy(default_keys + out, key_scratch + left, sizeof(MalValue) * (length - left));
+                }
             }
-            while (left < middle) {
-                to[out] = from[left];
-                if (key_to != nullptr) key_to[out] = key_from[left];
-                out++;
-                left++;
-            }
-            while (right < high) {
-                to[out] = from[right];
-                if (key_to != nullptr) key_to[out] = key_from[right];
-                out++;
-                right++;
-            }
-            low = high;
+            if (width > count / 2) break;
         }
-
-        MalValue *swap = from;
-        from = to;
-        to = swap;
-        swap = key_from;
-        key_from = key_to;
-        key_to = swap;
-        if (width > count / 2) break;
-        width *= 2;
     }
 
     free(keys);
     if (nominated) vm->exact_script_call = runtime_callback.previous;
-    if (ok && from != values) {
-        memcpy(values, from, sizeof(MalValue) * count);
-    }
 
     if (default_keys != nullptr) {
         mal_gc_unroot(&key_scratch_span);
