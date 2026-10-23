@@ -3077,7 +3077,7 @@ static inline bool mal_vm_array_push_one_try(
     }
     u32 index = arr->length;
     arr->elements[index] = value;
-    mal_gc_array_card(&arr->object.header, index, value);
+    mal_array_object_card(arr, index, value);
     arr->dense_count = index + 1;
     arr->length = index + 1;
     MAL_PERF_COUNT(array_push_direct_hits);
@@ -3100,7 +3100,7 @@ static inline __attribute__((always_inline)) bool mal_vm_array_contained_push_on
     u32 index = arr->length;
     if (arr->elements == nullptr || index >= arr->capacity) return false;
     arr->elements[index] = value;
-    mal_gc_array_card(&arr->object.header, index, value);
+    mal_array_object_card(arr, index, value);
     arr->dense_count = index + 1;
     arr->length = index + 1;
     MAL_PERF_COUNT(array_contained_pushes);

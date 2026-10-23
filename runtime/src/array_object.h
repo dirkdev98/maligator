@@ -60,6 +60,18 @@ typedef struct MalArrayObject {
 } MalArrayObject;
 
 #define MAL_ARRAY_MINOR_SCAN_MAX ((u32) ((1u << 23) - 1))
+
+/* Indexed card barrier for an element store. Primitive elements, young arrays and stores
+ * at or above a remembered array's scan frontier never reach the out-of-line update. */
+static inline void mal_array_object_card(MalArrayObject *array, u32 index, MalValue value) {
+    MalHeapHeader *owner = &array->object.header;
+    if (!mal_value_is_heap(value) || !mal_heap_mark_is_old(owner->mark)) return;
+    if (owner->dirty == MAL_REMEMBERED_FULL ||
+        (owner->dirty == MAL_REMEMBERED_ARRAY_RANGE && index >= array->minor_scan_start)) {
+        return;
+    }
+    mal_gc_array_card_slow(owner, index, value);
+}
 #define MAL_ARRAY_INLINE_CAPACITY_MAX 8u
 
 static_assert(sizeof(MalArrayObject) <= 64, "MalArrayObject outgrew its 64-byte size class");
@@ -268,7 +280,7 @@ static inline MalArrayDenseStore mal_array_object_dense_store(
     if (index == array->dense_count && index < array->capacity && array->elements != nullptr) {
         array->elements[index] = value;
         array->dense_count = index + 1;
-        mal_gc_array_card(&array->object.header, index, value);
+        mal_array_object_card(array, index, value);
         return MAL_ARRAY_DENSE_APPLIED;
     }
 #endif

@@ -206,7 +206,7 @@ bool mal_array_object_fresh_dense_append(MalArrayObject *array, MalValue value) 
     mal_array_object_perf_observe_value(array, value);
     array->dense_count = index + 1;
     array->length = index + 1;
-    mal_gc_array_card(&array->object.header, index, value);
+    mal_array_object_card(array, index, value);
     mal_perf_collection_mutation(array, array->length);
     MAL_PERF_COUNT(array_fresh_dense_stores);
     return true;
@@ -227,7 +227,7 @@ void mal_array_object_fresh_dense_append_reserved(
     mal_array_object_perf_observe_value(array, value);
     array->dense_count = index + 1;
     array->length = index + 1;
-    mal_gc_array_card(&array->object.header, index, value);
+    mal_array_object_card(array, index, value);
     mal_perf_collection_mutation(array, array->length);
     MAL_PERF_COUNT(array_fresh_dense_stores);
 }
@@ -253,7 +253,7 @@ bool mal_array_object_dense_append_many(
         MalValue value = values[i];
         array->elements[start + i] = value;
         mal_array_object_perf_observe_value(array, value);
-        mal_gc_array_card(&array->object.header, start + i, value);
+        mal_array_object_card(array, start + i, value);
     }
     array->dense_count = end;
     array->length = end;
@@ -285,7 +285,7 @@ bool mal_array_object_contained_dense_push(
         MalValue value = values[i];
         array->elements[start + i] = value;
         mal_array_object_perf_observe_value(array, value);
-        mal_gc_array_card(&array->object.header, start + i, value);
+        mal_array_object_card(array, start + i, value);
     }
     array->dense_count = end;
     array->length = end;
@@ -558,7 +558,7 @@ MalArrayDenseStore mal_array_object_dense_store_general(MalArrayObject *array, u
         mal_gc_write_barrier(array->elements[index]);
         array->elements[index] = value;
         mal_array_object_perf_observe_value(array, value);
-        mal_gc_array_card(&array->object.header, index, value);
+        mal_array_object_card(array, index, value);
         mal_perf_collection_mutation(array, array->length);
         return MAL_ARRAY_DENSE_APPLIED;
     }
@@ -581,7 +581,7 @@ MalArrayDenseStore mal_array_object_dense_store_general(MalArrayObject *array, u
     array->elements[index] = value;
     mal_array_object_perf_observe_value(array, value);
     array->dense_count = index + 1;
-    mal_gc_array_card(&array->object.header, index, value);
+    mal_array_object_card(array, index, value);
     mal_perf_collection_mutation(array, array->length > index ? array->length : index + 1);
     return MAL_ARRAY_DENSE_APPLIED;
 }
