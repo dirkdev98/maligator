@@ -488,12 +488,17 @@ static MalValue sd_constructor(
     roots[1] = mal_value_from_object(mal_object_new(
         &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE])));
 
+    // Only the private brand reaches this state, so its fields take the default
+    // attributes that keep the object shaped.
     MalObject *state = mal_value_to_object(roots[1]);
+    MalPropertyFlags field_flags =
+        MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE;
     mal_intrinsic_define_data(vm, state, (const byte *) "encoding",
-                              mal_value_from_i32((i32) encoding), MAL_PROPERTY_NONE);
+                              mal_value_from_i32((i32) encoding), field_flags);
     mal_intrinsic_define_data(vm, state, (const byte *) "pending",
-                              mal_value_from_i32(0), MAL_PROPERTY_WRITABLE);
-    MalPropertyDesc state_desc = mal_intrinsic_data_desc(roots[1], MAL_PROPERTY_NONE);
+                              mal_value_from_i32(0), field_flags);
+    // JavaScript cannot reach a private brand, and only a writable one stays in the shape.
+    MalPropertyDesc state_desc = mal_intrinsic_data_desc(roots[1], MAL_PROPERTY_WRITABLE);
     mal_object_define_own(
         mal_value_to_object(roots[0]),
         (MalKey) {.kind = MAL_KEY_SYMBOL, .value = roots[3]}, &state_desc);

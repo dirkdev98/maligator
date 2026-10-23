@@ -954,7 +954,8 @@ static MalValue mal_node_crypto_new_state(
     memcpy(buffer->data, initial, sizeof(*initial));
     roots[1] = mal_value_from_object(
         mal_object_new(&vm->heap, mal_value_to_object(roots[3])));
-    MalPropertyDesc state_desc = mal_intrinsic_data_desc(roots[0], MAL_PROPERTY_NONE);
+    // JavaScript cannot reach a private brand, and only a writable one stays in the shape.
+    MalPropertyDesc state_desc = mal_intrinsic_data_desc(roots[0], MAL_PROPERTY_WRITABLE);
     mal_object_define_own(mal_value_to_object(roots[1]),
         (MalKey) {.kind = MAL_KEY_SYMBOL, .value = roots[2]}, &state_desc);
     MalValue result = roots[1];

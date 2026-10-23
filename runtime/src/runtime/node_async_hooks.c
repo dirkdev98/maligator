@@ -35,7 +35,8 @@ static MalValue async_private_state(MalValue receiver, MalValue brand) {
 
 static void async_define_private_state(
     MalObject *object, MalValue brand, MalValue state) {
-    MalPropertyDesc desc = mal_intrinsic_data_desc(state, MAL_PROPERTY_NONE);
+    // JavaScript cannot reach a private brand, and only a writable one stays in the shape.
+    MalPropertyDesc desc = mal_intrinsic_data_desc(state, MAL_PROPERTY_WRITABLE);
     mal_object_define_own(
         object, (MalKey) {.kind = MAL_KEY_SYMBOL, .value = brand}, &desc);
 }
