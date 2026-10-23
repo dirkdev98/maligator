@@ -752,9 +752,11 @@ contracts or investigates costs still visible after the string follow-ups.
       fulfillment/rejection order.
 
 - [ ] Fix default-export initialization and live bindings in self-importing modules.
-      `instn-named-bndng-dflt-gen-anon.js` segfaults in compiled mode and reports a
-      non-callable value in wire mode; adjacent default function, class, and expression
-      cases also fail. Preserve namespace TDZ checks during cycles.
+      A module that imports its own default binding reads it without a TDZ error
+      before the `export default` runs: `instn-named-bndng-dflt-expr.js`, `-cls.js`,
+      `-named.js` and `-star.js` expect a ReferenceError and get none in compiled and
+      wire builds. The function
+      and generator defaults pass. Preserve namespace TDZ checks during cycles.
 
 - [ ] Implement import-defer syntax and semantics. Integrate it with linking,
       evaluation state, cycles, and failure propagation.
