@@ -52,7 +52,7 @@ describe("dense Array number loop regions", () => {
 			expect(
 				regionPlans(pair, "sumHoisted").some((plan) => plan.kind === "fixed-numeric"),
 			).toBe(true);
-			for (const name of ["sumOf", "centroidOf"])
+			for (const name of ["sumOf", "centroidOf", "destructuredCentroidOf"])
 				expect(
 					regionPlans(pair, name).some((plan) => plan.kind === "array-iteration"),
 					name,

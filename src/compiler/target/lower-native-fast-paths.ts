@@ -1159,6 +1159,9 @@ export function numberRecordDataflow(
 			case "LOAD_PROPERTY_STATIC_ARRAY_LENGTH":
 				admitted = indexed && write(instruction.dst, "number");
 				break;
+			case "REQUIRE_COERCIBLE":
+				admitted = indexed;
+				break;
 			case "ITERATOR_STEP":
 				admitted =
 					indexed &&
@@ -1798,6 +1801,8 @@ function numericLoopRecords(
 				continue;
 			}
 			if (op.opcode === "MOVE" && candidates.has(op.dst)) continue;
+			// Destructuring's check passes for every element the region admits as an object.
+			if (op.opcode === "REQUIRE_COERCIBLE") continue;
 			candidates.delete(register);
 		}
 	}
@@ -1950,6 +1955,7 @@ function fixedNumericLoopStorage(
 		if (ip === lengthLoad?.ip) continue;
 		const op = fn.instructions[ip]!;
 		if (op.opcode === "LOAD_PROPERTY_STATIC" && records.has(op.object)) continue;
+		if (op.opcode === "REQUIRE_COERCIBLE" && records.has(op.src)) continue;
 		if (
 			vmInstructionWriteRegisters(op).some(
 				(register) => register === bound || views.has(register),
@@ -2011,6 +2017,7 @@ function lowerArrayIterationRegion(
 		if (ip === header) continue;
 		const op = fn.instructions[ip]!;
 		if (op.opcode === "LOAD_PROPERTY_STATIC" && records.has(op.object)) continue;
+		if (op.opcode === "REQUIRE_COERCIBLE" && records.has(op.src)) continue;
 		if (
 			(op.opcode !== "CREATE_NUMBER" &&
 				op.opcode !== "CREATE_F64" &&

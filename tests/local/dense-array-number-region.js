@@ -42,6 +42,16 @@ function centroidOf(points) {
 	return `${sx},${sy}`;
 }
 
+function destructuredCentroidOf(points) {
+	let sx = 0;
+	let sy = 0;
+	for (const { x, y } of points) {
+		sx += x;
+		sy += y;
+	}
+	return `${sx},${sy}`;
+}
+
 function sumUntilNegative(values) {
 	let total = 0;
 	for (const value of values) {
@@ -128,6 +138,15 @@ lines.push(`for-of string ${sumOf([1, "b", 2])}`);
 lines.push(`for-of empty ${sumOf([])}`);
 lines.push(`for-of records ${centroidOf(records)}`);
 lines.push(`for-of mixed records ${centroidOf([{ x: 1, y: 2 }, { y: 3, x: 4 }, 5])}`);
+lines.push(`for-of destructured records ${destructuredCentroidOf(records)}`);
+lines.push(
+	`for-of destructured mixed records ${destructuredCentroidOf([{ x: 1, y: 2 }, { y: 3, x: 4 }, 5])}`,
+);
+try {
+	destructuredCentroidOf([{ x: 1, y: 2 }, null, { x: 3, y: 4 }]);
+} catch (error) {
+	lines.push(`for-of destructured null ${error instanceof TypeError}`);
+}
 lines.push(`for-of break ${sumUntilNegative([1, 2, 3, -1, 100])}`);
 if (process.env.DENSE_ARRAY_PROTOTYPE_HOLE === "1") {
 	Array.prototype[1] = 100;

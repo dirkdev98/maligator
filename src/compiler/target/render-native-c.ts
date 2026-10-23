@@ -1374,6 +1374,10 @@ function emitNumericLoopRegion(
 				return mode === "f64"
 					? `mal_scalar_store_native_u64(${id}_v${op.object}.data + (usize)(u32) ${local(op.key)} * 8, mal_scalar_f64_to_bits(${local(op.value)}));`
 					: `mal_vm_fixed_numeric_store(&${id}_v${op.object}, (u32) ${local(op.key)}, ${local(op.value)});`;
+			case "REQUIRE_COERCIBLE":
+				// The element load already restarted the iteration for anything but an object.
+				if (!records.has(op.src)) throw new Error("Invalid numeric loop coercible check");
+				return "";
 			case "CREATE_NUMBER":
 			case "CREATE_F64":
 				return `${local(op.dst)} = ${floating ? cF64Literal(op.value) : `INT64_C(${op.value})`};`;
@@ -1881,6 +1885,11 @@ const EMPTY_ROOT_PUBLICATION: ReadonlyArray<string> = Object.freeze([]);
  * keeps later misses short and a function's C linear in its live roots.
  */
 const MAX_DEFERRED_ROOT_PUBLICATION_STORES = 8;
+// Each throws only for one rejected value, so its roots and position belong on that path.
+const VALUE_GUARD_OPCODES: ReadonlySet<string> = new Set([
+	"THROW_IF_TDZ",
+	"REQUIRE_COERCIBLE",
+]);
 const EMPTY_ROOTED_OUTPUTS: ReadonlyArray<number> = Object.freeze([]);
 
 function nativeRootPublicationPoint(
@@ -5773,7 +5782,7 @@ function emitBody(
 		rootedOutputReloads: undefined,
 		loopBackedgeInactiveRootMask: undefined,
 		mathCallInactiveRootMask: undefined,
-		tdzInactiveRootMask: undefined,
+		valueGuardInactiveRootMask: undefined,
 		knownOwnSlotLoadInactiveRootMask: undefined,
 		staticPropertyLoadInactiveRootMask: undefined,
 		privateAccessInactiveRootMask: undefined,
@@ -6089,8 +6098,8 @@ function emitBody(
 		// Only selected private values need the operator's mask on its fallback edge.
 		const eagerOperatorRootPublication =
 			deferredOperatorRoots && (rootPublication?.slots.size ?? 0) === 0;
-		const deferredTdzRoots =
-			deferrableRoots && fn.instructions[ip]!.opcode === "THROW_IF_TDZ";
+		const deferredValueGuardRoots =
+			deferrableRoots && VALUE_GUARD_OPCODES.has(fn.instructions[ip]!.opcode);
 		const deferredForInRoots =
 			deferrableRoots && fn.instructions[ip]!.opcode === "FOR_IN_HAS";
 		const iteratorCursorAction = nativeIteratorCursorActionByIp.get(ip);
@@ -6135,7 +6144,7 @@ function emitBody(
 			!deferredIndexedPropertyRoots &&
 			!deferredStaticPropertyWriteRoots &&
 			!deferredOperatorRoots &&
-			!deferredTdzRoots &&
+			!deferredValueGuardRoots &&
 			!deferredForInRoots &&
 			!deferredIteratorRoots &&
 			!deferredCharCodeAtRoots &&
@@ -6203,9 +6212,9 @@ function emitBody(
 			inactiveRootMask !== lastPublishedInactiveRootMask
 				? inactiveRootMask
 				: undefined;
-		const tdzInactiveRootMask =
+		const valueGuardInactiveRootMask =
 			safepointKind === "operation" &&
-			fn.instructions[ip]!.opcode === "THROW_IF_TDZ" &&
+			VALUE_GUARD_OPCODES.has(fn.instructions[ip]!.opcode) &&
 			inactiveRootMask !== lastPublishedInactiveRootMask
 				? inactiveRootMask
 				: undefined;
@@ -6244,7 +6253,7 @@ function emitBody(
 			loopBackedgeInactiveRootMask === undefined &&
 			operatorInactiveRootMask === undefined &&
 			mathCallInactiveRootMask === undefined &&
-			tdzInactiveRootMask === undefined &&
+			valueGuardInactiveRootMask === undefined &&
 			knownOwnSlotLoadInactiveRootMask === undefined &&
 			staticPropertyLoadInactiveRootMask === undefined &&
 			privateAccessInactiveRootMask === undefined &&
@@ -6263,7 +6272,7 @@ function emitBody(
 			loopBackedgeInactiveRootMask === undefined &&
 			operatorInactiveRootMask === undefined &&
 			mathCallInactiveRootMask === undefined &&
-			tdzInactiveRootMask === undefined &&
+			valueGuardInactiveRootMask === undefined &&
 			knownOwnSlotLoadInactiveRootMask === undefined &&
 			staticPropertyLoadInactiveRootMask === undefined &&
 			privateAccessInactiveRootMask === undefined &&
@@ -6290,7 +6299,7 @@ function emitBody(
 			deferredIndexedPropertyRoots ||
 			deferredStaticPropertyWriteRoots ||
 			deferredOperatorRoots ||
-			deferredTdzRoots ||
+			deferredValueGuardRoots ||
 			deferredForInRoots ||
 			deferredIteratorRoots ||
 			deferredCharCodeAtRoots
@@ -6312,7 +6321,7 @@ function emitBody(
 		instructionContext.rootedOutputReloads = rootedOutputReloads;
 		instructionContext.loopBackedgeInactiveRootMask = loopBackedgeInactiveRootMask;
 		instructionContext.mathCallInactiveRootMask = mathCallInactiveRootMask;
-		instructionContext.tdzInactiveRootMask = tdzInactiveRootMask;
+		instructionContext.valueGuardInactiveRootMask = valueGuardInactiveRootMask;
 		instructionContext.knownOwnSlotLoadInactiveRootMask =
 			knownOwnSlotLoadInactiveRootMask;
 		instructionContext.staticPropertyLoadInactiveRootMask =
@@ -6466,7 +6475,7 @@ function emitBody(
 		} else if (
 			operatorMaskEmitted ||
 			mathCallInactiveRootMask !== undefined ||
-			tdzInactiveRootMask !== undefined ||
+			valueGuardInactiveRootMask !== undefined ||
 			knownOwnSlotLoadInactiveRootMask !== undefined ||
 			staticPropertyLoadInactiveRootMask !== undefined ||
 			privateAccessInactiveRootMask !== undefined ||
@@ -6833,7 +6842,7 @@ interface NativeInstructionContext {
 	readonly rootedOutputReloads?: ReadonlyArray<string>;
 	readonly loopBackedgeInactiveRootMask?: NativeInactiveRootMask;
 	readonly mathCallInactiveRootMask?: NativeInactiveRootMask;
-	readonly tdzInactiveRootMask?: NativeInactiveRootMask;
+	readonly valueGuardInactiveRootMask?: NativeInactiveRootMask;
 	readonly knownOwnSlotLoadInactiveRootMask?: NativeInactiveRootMask;
 	readonly staticPropertyLoadInactiveRootMask?: NativeInactiveRootMask;
 	readonly privateAccessInactiveRootMask?: NativeInactiveRootMask;
@@ -7178,7 +7187,7 @@ function emitInstruction(
 		rootedOutputReloads: context.rootedOutputReloads,
 		loopBackedgeInactiveRootMask: context.loopBackedgeInactiveRootMask,
 		mathCallInactiveRootMask: context.mathCallInactiveRootMask,
-		tdzInactiveRootMask: context.tdzInactiveRootMask,
+		valueGuardInactiveRootMask: context.valueGuardInactiveRootMask,
 		knownOwnSlotLoadInactiveRootMask: context.knownOwnSlotLoadInactiveRootMask,
 		staticPropertyLoadInactiveRootMask: context.staticPropertyLoadInactiveRootMask,
 		privateAccessInactiveRootMask: context.privateAccessInactiveRootMask,
@@ -8666,10 +8675,10 @@ function emitInstruction(
 				`if (mal_value_is_empty(${boxed(instruction.src)})) {`,
 				...slowPathFramePosition(),
 				...(context.incomingRootPublication ?? []).map((line) => `  ${line}`),
-				...(context.tdzInactiveRootMask === undefined
+				...(context.valueGuardInactiveRootMask === undefined
 					? []
 					: [
-							`  ${cInactiveRootMaskPublication(context.tdzInactiveRootMask, context.inactiveRootMaskStatements)};`,
+							`  ${cInactiveRootMaskPublication(context.valueGuardInactiveRootMask, context.inactiveRootMaskStatements)};`,
 						]),
 				`  mal_vm_op_throw_if_tdz(vm, ${boxed(instruction.src)}, ${relocation.stringIndex(instruction.nameStringIndex)});`,
 				`  ${throwCheck()}`,
@@ -13066,8 +13075,17 @@ function emitInstruction(
 		case "REQUIRE_COERCIBLE":
 			if (reps[instruction.src] !== "boxed") return [];
 			return [
-				`mal_vm_op_require_coercible(vm, ${boxed(instruction.src)});`,
-				throwCheck(),
+				`if (mal_value_is_nil(${boxed(instruction.src)})) {`,
+				...slowPathFramePosition(),
+				...(context.incomingRootPublication ?? []).map((line) => `  ${line}`),
+				...(context.valueGuardInactiveRootMask === undefined
+					? []
+					: [
+							`  ${cInactiveRootMaskPublication(context.valueGuardInactiveRootMask, context.inactiveRootMaskStatements)};`,
+						]),
+				`  mal_vm_op_require_coercible(vm, ${boxed(instruction.src)});`,
+				`  ${throwCheck()}`,
+				`}`,
 			];
 		case "GET_ITERATOR": {
 			const rec = `iter_rec_${ip}`;
