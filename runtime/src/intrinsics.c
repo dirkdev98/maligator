@@ -1073,6 +1073,7 @@ static void mal_intrinsics_init_global_this(MalVm *vm) {
     // the harness asks (MAL_HOST_GC); the prelude captures it then deletes the
     // global, so it never pollutes a test body's global object.
     if (getenv("MAL_HOST_GC") != nullptr) {
+        mal_gc_expect_explicit_collections(vm);
         mal_intrinsic_define_method(vm, global_this, "__mal_collect_garbage", mal_intrinsic_host_gc);
         mal_intrinsic_define_method(vm, global_this, "__mal_gc_live_bytes", mal_intrinsic_gc_live_bytes);
     }

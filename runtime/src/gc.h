@@ -31,6 +31,9 @@ extern bool mal_gc_test_precise_stack_roots;
  * between tasks, when no JavaScript frame is live, so stale words in that region cannot
  * keep a previous task's dead values alive for conservative native roots. */
 void mal_gc_clear_unused_native_stack(void);
+bool mal_gc_native_stack_clear_due(MalVm *vm);
+/** A program that can request collections expects them to find its garbage promptly. */
+void mal_gc_expect_explicit_collections(MalVm *vm);
 
 typedef struct MalGcState MalGcState;
 

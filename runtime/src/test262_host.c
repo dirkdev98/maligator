@@ -170,6 +170,7 @@ void mal_test262_install(MalVm *vm) {
     mal_intrinsic_define_data(vm, host, "global", mal_realm_global(vm->current_realm), flags);
     mal_intrinsic_define_method_n(vm, host, "createRealm", 0, mal_test262_create_realm);
     mal_intrinsic_define_method_n(vm, host, "evalScript", 1, mal_test262_eval_script);
+    mal_gc_expect_explicit_collections(vm);
     mal_intrinsic_define_method_n(vm, host, "gc", 0, mal_test262_gc);
     mal_intrinsic_define_method_n(
         vm,

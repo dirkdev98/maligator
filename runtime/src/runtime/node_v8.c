@@ -32,6 +32,7 @@ static MalValue node_v8_set_flags_from_string(
     if (mal_string_equals(string, mal_intrinsic_ascii(vm, "--expose_gc")) ||
         mal_string_equals(string, mal_intrinsic_ascii(vm, "--expose-gc"))) {
         vm->node_v8_expose_gc = true;
+        mal_gc_expect_explicit_collections(vm);
     }
     return mal_value_new_undefined();
 }

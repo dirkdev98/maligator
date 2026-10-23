@@ -295,6 +295,9 @@ struct MalGcState {
     /* Lowest mutator stack address of the current pause, after its callee-saved
      * registers were spilled; zero outside a pause. */
     uptr conservative_stack_low;
+    // Heap allocation when the event loop last asked whether to clear its stack.
+    usize stack_clear_allocated;
+    bool explicit_collections;
 #endif
     // Grey worklist (explicit, no recursion): shaded-but-not-yet-traced cells.
     MalHeapHeader **grey;
@@ -1889,11 +1892,31 @@ static void mal_gc_scan_native_stack(const MalHeapCellIndex *index, uptr low, up
 }
 
 #define MAL_GC_CLEARED_STACK_BYTES (16u * 1024u)
+#define MAL_GC_STACK_CLEAR_WINDOW ((usize) 256 * 1024)
 
 __attribute__((noinline)) void mal_gc_clear_unused_native_stack(void) {
     u8 unused[MAL_GC_CLEARED_STACK_BYTES];
     memset(unused, 0, sizeof(unused));
     __asm__ volatile("" : : "r"(unused) : "memory");
+}
+
+/* Stale words below the event loop matter only to a pause that scans the frames later
+ * built over them, and clearing before every task is a measurable share of a request
+ * loop. The loop clears once a collection is within a few tasks' allocation, during a
+ * cycle, or when the program can request collections and expects them to be prompt. */
+bool mal_gc_native_stack_clear_due(MalVm *vm) {
+    if (g_gc_vm != vm) return true;
+    usize allocated = vm->heap.bytes_allocated;
+    usize step = allocated - g_gc->stack_clear_allocated;
+    g_gc->stack_clear_allocated = allocated;
+    if (g_gc->explicit_collections || g_gc->stress_interval != 0 ||
+            g_gc->phase != MAL_GC_PHASE_IDLE || g_gc->process_pressure) {
+        return true;
+    }
+    usize next = vm->heap.next_gc_at;
+    if (next == (usize) -1) return false;
+    usize window = step > MAL_GC_STACK_CLEAR_WINDOW / 4 ? step * 4 : MAL_GC_STACK_CLEAR_WINDOW;
+    return allocated >= next || next - allocated <= window;
 }
 
 static uptr mal_gc_fiber_stack_top(const MalVm *vm, const struct MalFiber *fiber) {
@@ -1924,6 +1947,10 @@ static void mal_gc_scan_native_stacks(MalVm *vm) {
 }
 #else
 void mal_gc_clear_unused_native_stack(void) {}
+bool mal_gc_native_stack_clear_due(MalVm *vm) {
+    (void) vm;
+    return false;
+}
 #endif
 
 static void mal_gc_scan_roots(MalVm *vm) {
@@ -3579,8 +3606,17 @@ static void mal_gc_collect_pause(MalVm *vm) {
     mal_gc_pause_end(vm, true, MAL_GC_PAUSE_EXPLICIT, start_ns);
 }
 
+void mal_gc_expect_explicit_collections(MalVm *vm) {
+#if !defined(__wasi__)
+    vm->gc->explicit_collections = true;
+#else
+    (void) vm;
+#endif
+}
+
 void mal_gc_collect(MalVm *vm) {
     if (g_gc_vm != vm) abort();
+    mal_gc_expect_explicit_collections(vm);
     mal_gc_pause_with_native_roots(vm, mal_gc_collect_pause);
 }
 
