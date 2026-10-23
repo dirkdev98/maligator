@@ -46,6 +46,29 @@ const customDecoded = parse("a+b=c+d", null, null, {
 check(customDecoded["[a%20b]"] === "[c%20d]", "custom decoder and plus handling");
 check(parse("bad=%GG&utf8=%C3%A9").bad === "%GG", "malformed escape fallback");
 check(parse("bad=%GG&utf8=%C3%A9").utf8 === "é", "UTF-8 decode");
+const latin1Parsed = parse("café=crème+brûlée&plain=a+b+c");
+check(
+	latin1Parsed["café"] === "crème brûlée" && latin1Parsed.plain === "a b c",
+	"Latin-1 source plus decoding",
+);
+const utf16Parsed = parse("中=文+字&e=%E4%B8%AD");
+check(utf16Parsed["中"] === "文 字" && utf16Parsed.e === "中", "UTF-16 source decoding");
+check(
+	parse(`long=${"%41".repeat(40)}+x`).long === `${"A".repeat(40)} x`,
+	"long percent-encoded component",
+);
+check(Object.keys(parse("a=1&b=2", "a=1&b=2")).length === 0, "separator equal to source");
+const widenedOrder = [];
+const widenedParsed = parse("k=café&é=v&z=中", null, null, {
+	decodeURIComponent(value) {
+		widenedOrder.push(value);
+		return decodeURIComponent(value);
+	},
+});
+check(
+	widenedOrder.join(",") === "k,café,é,v,z,中" && widenedParsed.z === "中",
+	"custom decoder over mixed encodings",
+);
 
 check(escape("a b/é") === "a%20b%2F%C3%A9", "escape UTF-8");
 check(unescape("a%20b+") === "a b+", "unescape leaves plus by default");

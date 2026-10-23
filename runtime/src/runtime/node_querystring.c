@@ -45,24 +45,32 @@ static MalValue qs_builder_finish(MalVm *vm, MalTextBuffer *builder) {
     return mal_value_from_string(mal_text_buffer_finish(&vm->heap, builder));
 }
 
-static bool qs_contains(const c16 *units, usize length, c16 needle) {
-    for (usize i = 0; i < length; i++) {
-        if (units[i] == needle) return true;
+// Parsing reads the source in its own encoding; widening a Latin-1 body to UTF-16 cost
+// an allocation and copy per parse and doubled the string for every later reader.
+static inline c16 qs_unit(const MalStringSegment *segment, usize index) {
+    return segment->latin1 ? segment->latin1_units[index] : segment->utf16_units[index];
+}
+
+static bool qs_contains(const MalStringSegment *segment, usize start, usize length, c16 needle) {
+    for (usize i = start; i < start + length; i++) {
+        if (qs_unit(segment, i) == needle) return true;
     }
     return false;
 }
 
 static usize qs_find(
-    const c16 *units, usize length, usize start,
+    const MalStringSegment *segment, usize length, usize start,
     const c16 *needle, usize needle_length
 ) {
     if (needle_length == 0 || needle_length > length - start) return length;
     usize limit = length - needle_length;
     for (usize i = start; i <= limit; i++) {
-        if (units[i] == needle[0]
-            && memcmp(units + i, needle, needle_length * sizeof(c16)) == 0) {
-            return i;
+        if (qs_unit(segment, i) != needle[0]) continue;
+        usize matched = 1;
+        while (matched < needle_length && qs_unit(segment, i + matched) == needle[matched]) {
+            matched++;
         }
+        if (matched == needle_length) return i;
     }
     return length;
 }
@@ -73,24 +81,43 @@ static MalValue qs_decode_native(
     MalVm *vm, MalString *source, usize start, usize length,
     bool decode_spaces
 ) {
-    const c16 *units = mal_string_code_units(source) + start;
-    bool has_plus = decode_spaces && qs_contains(units, length, '+');
-    bool has_percent = qs_contains(units, length, '%');
+    MalStringSegment segment = mal_string_flat_segment(source);
+    bool has_plus = decode_spaces && qs_contains(&segment, start, length, '+');
+    bool has_percent = qs_contains(&segment, start, length, '%');
     if (!has_plus && !has_percent) {
         return mal_value_from_string(
             mal_string_new_slice(&vm->heap, source, start, length));
     }
     if (!has_percent) {
+        if (segment.latin1) {
+            u8 *decoded = mal_heap_alloc_raw(&vm->heap, length);
+            for (usize i = 0; i < length; i++) {
+                u8 unit = segment.latin1_units[start + i];
+                decoded[i] = unit == '+' ? ' ' : unit;
+            }
+            return mal_value_from_string(
+                mal_string_new_latin1_owned(&vm->heap, decoded, length));
+        }
         c16 *decoded = mal_heap_alloc_raw(&vm->heap, length * sizeof(*decoded));
         for (usize i = 0; i < length; i++) {
-            decoded[i] = units[i] == '+' ? ' ' : units[i];
+            c16 unit = segment.utf16_units[start + i];
+            decoded[i] = unit == '+' ? ' ' : unit;
         }
         return mal_value_from_string(
             mal_string_new_owned(&vm->heap, decoded, length));
     }
 
+    // Percent escapes decode through UTF-8, which reads only this component's UTF-16 units.
+    c16 inline_units[64];
+    c16 *units = length <= countof(inline_units) ? inline_units : malloc(sizeof(c16) * length);
+    if (units == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return mal_value_new_undefined();
+    }
+    for (usize i = 0; i < length; i++) units[i] = qs_unit(&segment, start + i);
     usize utf8_length;
     byte *utf8 = mal_utf8_encode(units, length, &utf8_length);
+    if (units != inline_units) free(units);
     if (utf8 == nullptr) {
         mal_vm_throw_allocation_error(vm);
         return mal_value_new_undefined();
@@ -131,17 +158,18 @@ static MalValue qs_decode_native(
 static MalValue qs_prepare_custom_decode(
     MalVm *vm, MalString *source, usize start, usize length
 ) {
-    const c16 *units = mal_string_code_units(source) + start;
-    if (!qs_contains(units, length, '+')) {
+    MalStringSegment segment = mal_string_flat_segment(source);
+    if (!qs_contains(&segment, start, length, '+')) {
         return mal_value_from_string(
             mal_string_new_slice(&vm->heap, source, start, length));
     }
     MalTextBuffer builder = {0};
     for (usize i = 0; i < length; i++) {
-        if (units[i] == '+') {
+        c16 unit = qs_unit(&segment, start + i);
+        if (unit == '+') {
             mal_text_buffer_append_ascii(&builder, (const byte *) "%20");
         } else {
-            mal_text_buffer_push(&builder, units[i]);
+            mal_text_buffer_push(&builder, unit);
         }
     }
     return qs_builder_finish(vm, &builder);
@@ -224,22 +252,23 @@ static MalValue qs_parse(
     }
     if (!mal_value_is_callable(roots[3])) roots[3] = mal_value_new_undefined();
 
-    const c16 *units = mal_string_code_units(source);
-    usize length = mal_string_length(source);
     const c16 *separator_units = mal_string_code_units(separator);
     usize separator_length = mal_string_length(separator);
     const c16 *equal_units = mal_string_code_units(equal);
     usize equal_length = mal_string_length(equal);
+    // After the widening above, which reaches the source when it is also a delimiter.
+    MalStringSegment segment = mal_string_flat_segment(source);
+    usize length = segment.length;
     usize start = 0;
     while (start < length && (unlimited || remaining > 0)) {
         usize end = qs_find(
-            units, length, start, separator_units, separator_length);
+            &segment, length, start, separator_units, separator_length);
         if (end == start) {
             start = end == length ? length : end + separator_length;
             continue;
         }
         usize assignment = qs_find(
-            units, end, start, equal_units, equal_length);
+            &segment, end, start, equal_units, equal_length);
         roots[4] = qs_decode_component(
             vm, source, start, assignment - start, roots[3]);
         if (vm->completion.kind == MAL_COMPLETION_THROW) {
@@ -278,6 +307,8 @@ static MalValue qs_parse(
         }
         if (!unlimited) remaining -= 1;
         start = end == length ? length : end + separator_length;
+        // A custom decoder may have widened the source to UTF-16.
+        segment = mal_string_flat_segment(source);
     }
     MalValue result = roots[0];
     mal_gc_unroot(&root);
