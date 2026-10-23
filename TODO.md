@@ -741,6 +741,17 @@ contracts or investigates costs still visible after the string follow-ups.
 
 ## Focused performance work
 
+- [ ] Construct derived classes without the generic super path. `new Pair(l, r)`
+      with `super(l)` into a one-field base takes 116 ns against Node's 5.6
+      (`constructor-derived-super-retained`). The construct inliner refuses
+      derived constructors, so the site goes through `mal_vm_construct_value`.
+      Inside, `super(l)` allocates an argument Array for `constructSuper`, the
+      base constructs its receiver for its own one field, and the derived
+      field then grows the slots through malloc, which also costs a finalizer.
+      Inlining the derived body at a construct site needs `constructSuper` to
+      become an inlined base construction with `new.target` as the receiver's
+      prototype source and a slot reserve for every class in the chain, behind a
+      guard that the constructor's prototype is still the heritage.
 - [ ] Close the closed-compiled JavaScript benchmark's per-call gap. An
       unknown-target call still costs 6.4 ns against Node's 4.3 (a four-closure
       loop, 191 ms against 129) and a five-class method loop 345 ms against 232. The
