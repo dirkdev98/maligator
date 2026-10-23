@@ -15,9 +15,23 @@ const fixture = "tests/local/typed-array-length-bound.js";
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-typed-length-bound-"));
 afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 
+function regionPlans(
+	pair: ReturnType<typeof buildBackendPairFromOneProgramImage>,
+	name: string,
+) {
+	const fn = pair.programImage.native.functions.find(
+		(candidate) =>
+			String.fromCharCode(
+				...(pair.programImage.runtime.stringConstants[candidate.body.nameStringIndex] ??
+					[]),
+			) === name,
+	);
+	return fn?.storage?.numericLoopRegions ?? [];
+}
+
 describe("TypedArray loops bounded by their length", () => {
 	it.each(["mutable", "locked"] as const)(
-		"read fixed views directly while the length getter stays intrinsic (%s primordials)",
+		"read and write fixed views directly while the length getter stays intrinsic (%s primordials)",
 		(primordials) => {
 			const pair = buildBackendPairFromOneProgramImage({
 				fixture,
@@ -29,6 +43,16 @@ describe("TypedArray loops bounded by their length", () => {
 				}),
 				environment: { ...process.env, MAL_PERF_STATS: "1" },
 			});
+			for (const name of ["scaleInPlace", "copyScaled"])
+				expect(
+					regionPlans(pair, name).some(
+						(plan) =>
+							plan.kind === "fixed-numeric" &&
+							plan.boundObject !== undefined &&
+							plan.views.some((view) => view.writable),
+					),
+					name,
+				).toBe(true);
 			const node = execFileSync(process.execPath, [fixture], { encoding: "utf8" });
 			// Locked primordials reject redefining the intrinsic getter.
 			const expected =

@@ -1973,9 +1973,12 @@ function fixedNumericLoopStorage(
 		memory.flatMap(({ op }) => (op.opcode === "LOAD_PROPERTY" ? [op.dst] : [])),
 	);
 	if (records === undefined) return undefined;
-	// Only read-only Array views admit a length bound or records, so stores keep their kinds.
+	// Stores admit only TypedArray views, whose length no store changes; records and
+	// a known Array length need Array views, which stay read-only so stores keep their kinds.
 	if (
-		(lengthLoad !== undefined || records.size > 0) &&
+		(records.size > 0 ||
+			(lengthLoad !== undefined &&
+				header.opcode === "LOAD_PROPERTY_STATIC_ARRAY_LENGTH")) &&
 		[...views.values()].some((view) => view.writable)
 	)
 		return undefined;
