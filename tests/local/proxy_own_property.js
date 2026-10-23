@@ -1167,6 +1167,26 @@ check(
 		Object.getPrototypeOf(cyclePrototypeBase) === Object.prototype,
 );
 
+const applyTrapped = new Proxy(
+	function target() {
+		return "target";
+	},
+	{
+		apply(target, self, args) {
+			return `trap ${self.tag} ${args.join(",")}`;
+		},
+	},
+);
+const boundProxy = applyTrapped.bind({ tag: "bound" }, 1);
+check(
+	"a bound callable proxy calls its apply trap through every call path",
+	boundProxy(2) === "trap bound 1,2" &&
+		boundProxy.call({ tag: "ignored" }, 3) === "trap bound 1,3" &&
+		Reflect.apply(boundProxy, null, [4]) === "trap bound 1,4" &&
+		[5].map(boundProxy)[0] === "trap bound 1,5,0,5" &&
+		boundProxy.bind(null, 6)(7) === "trap bound 1,6,7",
+);
+
 let passed = 0;
 for (const [name, ok] of results) {
 	if (ok) passed++;

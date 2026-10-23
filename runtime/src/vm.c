@@ -4681,6 +4681,17 @@ MalCompletion mal_vm_call_value(
     MalBoundResolution resolution = mal_bound_function_object_resolve(
         callee, this_value, args, arg_count, true,
         inline_args, countof(inline_args));
+    // A bound function's target can be a callable proxy, which only its apply trap calls.
+    if (mal_value_is_proxy_object(resolution.callee)) {
+        MalCompletion proxy_completion = mal_proxy_apply(
+            vm, mal_value_to_proxy_object(resolution.callee), resolution.this_value,
+            resolution.args, resolution.arg_count);
+        free(resolution.owned_args);
+#if MAL_PROFILE && MAL_PERF_STATS
+        vm->profile_current_site_id = saved_profile_site;
+#endif
+        return proxy_completion;
+    }
     MalCompletion completion = {.kind = MAL_COMPLETION_NORMAL, .value = mal_value_new_undefined()};
 
 #if MAL_REALMS

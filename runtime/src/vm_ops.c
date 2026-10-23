@@ -2885,6 +2885,22 @@ static void mal_vm_call_dispatch(MalVm *vm, MalValue callee, MalValue this_value
         callee, this_value, &vm->value_stack[base], argument_count, true,
         inline_args, countof(inline_args));
 
+    // A bound function's target can be a callable proxy, which only its apply trap calls.
+    if (mal_value_is_proxy_object(resolution.callee)) {
+        i32 caller_frame_index = vm->frame_count - 1;
+        MalCompletion completion = mal_proxy_apply(
+            vm, mal_value_to_proxy_object(resolution.callee), resolution.this_value,
+            resolution.args, resolution.arg_count);
+        if (completion.kind != MAL_COMPLETION_NORMAL) {
+            vm->completion = completion;
+        } else {
+            vm->frames[caller_frame_index].registers[dst] = completion.value;
+        }
+        vm->value_stack_size = base;
+        free(resolution.owned_args);
+        return;
+    }
+
     if (mal_value_is_function_object(resolution.callee)) {
         mal_vm_remarshal_bound_args(vm, base, &resolution);
         if (vm->completion.kind != MAL_COMPLETION_THROW) {
