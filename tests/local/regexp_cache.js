@@ -502,6 +502,29 @@ check(
 	recompiled.exec("new5")[1] === "5" && recompiled.lastIndex === 4 && /old/.test("old"),
 );
 
+const splitReceiver = /(-)?\s*,\s*/g;
+splitReceiver.lastIndex = 3;
+const splitCases = [
+	"a , b,-c ,d".split(splitReceiver),
+	"a,b,c,d".split(/,/, 2),
+	"abc".split(/(?:)/),
+	"abc".split(/x*/),
+	"".split(/x/),
+	"".split(/x*/),
+	",a,,b,".split(/,/),
+	"\u0100x,y".split(/,/),
+	("ab" + ",cd").split(/,/y),
+	"a1b22c".split(/(\d)(\d)?/),
+];
+check(
+	"split follows the sticky splitter algorithm without touching the receiver",
+	JSON.stringify(splitCases) ===
+		'[["a",null,"b",null,"-c",null,"d"],["a","b"],["a","b","c"],["a","b","c"],[""],[],["","a","","b",""],["\u0100x","y"],["ab","cd"],["a","1",null,"b","2","2","c"]]' &&
+		splitReceiver.lastIndex === 3 &&
+		RegExp.lastMatch === "22" &&
+		RegExp.$1 === "2",
+);
+
 let invalidCount = 0;
 for (let i = 0; i < 2; i++) {
 	try {

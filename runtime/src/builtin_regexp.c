@@ -2347,6 +2347,65 @@ done:
 // RegExp.prototype[@@split]
 // ---------------------------------------------------------------------------
 
+// With RegExp.prototype and %RegExp% untouched, the sticky splitter SpeciesConstructor
+// builds is unobservable, and probing it at each position from q finds the match one
+// forward search from q finds. The receiver's lastIndex is never involved. False
+// leaves the specification path to run; true stores the result or a pending throw.
+static bool regexp_canonical_split(
+    MalVm *vm, MalRegExpObject *re, MalString *s, u32 limit, MalValue *out
+) {
+    MalArrayObject *array = mal_intrinsic_new_array(vm, 0);
+    *out = mal_value_from_object((MalObject *) array);
+    if (limit == 0) return true;
+    usize size = mal_string_length(s);
+    MalStringSegment subject = mal_string_flat_segment(s);
+    int32_t caps[64];
+    u32 array_len = 0;
+    usize p = 0;
+    usize q = 0;
+    do {
+        u32 execution_flags = 0;
+        int32_t ngroups = subject.latin1
+            ? mal_regexp_exec_latin1(
+                re->matcher, subject.latin1_units, size, q, s,
+                vm->heap.identity, vm->heap.epoch, caps, 64, &execution_flags)
+            : mal_regexp_exec(
+                re->matcher, (const uint16_t *) subject.utf16_units, size, q, s,
+                vm->heap.identity, vm->heap.epoch, caps, 64, &execution_flags);
+        if (ngroups < 0) {
+            mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "regular expression execution failed");
+            *out = mal_value_new_undefined();
+            return true;
+        }
+        if (ngroups > 32) return false;
+        if (ngroups == 0 || (size > 0 && (usize) caps[0] >= size)) break;
+        regexp_legacy_update(vm, s, caps, ngroups);
+        if (size == 0) return true;
+        q = (usize) caps[0];
+        usize e = (usize) caps[1];
+        if (e == p) {
+            q++;
+            continue;
+        }
+        mal_array_object_store(
+            array, mal_key_index(array_len++), regexp_substring(vm, s, (i32) p, (i32) q));
+        if (array_len == limit) return true;
+        for (int32_t group = 1; group < ngroups; group++) {
+            int32_t start = caps[2 * group];
+            MalValue capture = start < 0
+                ? mal_value_new_undefined()
+                : regexp_substring(vm, s, start, caps[2 * group + 1]);
+            mal_array_object_store(array, mal_key_index(array_len++), capture);
+            if (array_len == limit) return true;
+        }
+        p = e;
+        q = p;
+    } while (q < size);
+    mal_array_object_store(
+        array, mal_key_index(array_len), regexp_substring(vm, s, (i32) p, (i32) size));
+    return true;
+}
+
 static MalValue regexp_proto_split(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
     (void) callee;
@@ -2359,6 +2418,19 @@ static MalValue regexp_proto_split(MalVm *vm, MalValue this_value, const MalValu
         return mal_value_new_undefined();
     }
     MalValue limit_value = arg_count >= 2 ? args[1] : mal_value_new_undefined();
+
+    // Unicode mode advances by code points, which a forward search would not reproduce;
+    // a limit that is not already a Number could run user code mid-algorithm.
+    MalRegExpObject *canonical;
+    if (regexp_canonical_instance(vm, this_value, &canonical) &&
+        (canonical->flag_bits & (MAL_REGEXP_JS_UNICODE | MAL_REGEXP_JS_UNICODE_SETS)) == 0 &&
+        (mal_value_is_undefined(limit_value) || mal_ops_is_number(limit_value))) {
+        u32 canonical_limit = mal_value_is_undefined(limit_value)
+            ? 0xFFFFFFFFu
+            : mal_ops_number_to_uint32(mal_ops_number_as_f64(limit_value));
+        MalValue result;
+        if (regexp_canonical_split(vm, canonical, s, canonical_limit, &result)) return result;
+    }
 
     // Build the sticky splitter via SpeciesConstructor.
     bool ok;
