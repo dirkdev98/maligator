@@ -1618,7 +1618,8 @@ export function validateNativeStorage(
 								view.object === expected.views[i]!.object &&
 								view.writable === expected.views[i]!.writable &&
 								view.minOffset === expected.views[i]!.minOffset &&
-								view.maxOffset === expected.views[i]!.maxOffset,
+								view.maxOffset === expected.views[i]!.maxOffset &&
+								view.checked === expected.views[i]!.checked,
 						))) &&
 				plan.id === expected.id &&
 				plan.entryIp === expected.entryIp &&

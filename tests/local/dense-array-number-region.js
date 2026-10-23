@@ -42,6 +42,30 @@ function centroidOf(points) {
 	return `${sx},${sy}`;
 }
 
+function lookupSum(table, count, mask) {
+	let total = 0;
+	for (let index = 0; index < count; index++) total += table[index & mask];
+	return total;
+}
+
+function shiftedLookupSum(table, count) {
+	let total = 0;
+	for (let index = 0; index < count; index++) total += table[(index & 3) - 1];
+	return total;
+}
+
+function halfLookupSum(table, count) {
+	let total = 0;
+	for (let index = 0; index < count; index++) total += table[(index & 3) / 2];
+	return total;
+}
+
+function recordLookup(points, count, mask) {
+	let total = 0;
+	for (let index = 0; index < count; index++) total += points[index & mask].x;
+	return total;
+}
+
 function destructuredCentroidOf(points) {
 	let sx = 0;
 	let sy = 0;
@@ -138,6 +162,22 @@ lines.push(`for-of string ${sumOf([1, "b", 2])}`);
 lines.push(`for-of empty ${sumOf([])}`);
 lines.push(`for-of records ${centroidOf(records)}`);
 lines.push(`for-of mixed records ${centroidOf([{ x: 1, y: 2 }, { y: 3, x: 4 }, 5])}`);
+lines.push(`lookup ${lookupSum([1, 2, 3, 4], 100, 3)}`);
+lines.push(`lookup past the end ${lookupSum([1, 2, 3], 10, 3)}`);
+lines.push(`lookup hole ${lookupSum([1, , 3, 4], 10, 3)}`);
+lines.push(`lookup Float64Array ${lookupSum(new Float64Array([0.5, 1.5]), 10, 1)}`);
+lines.push(`lookup Int16Array ${lookupSum(new Int16Array([1, -2, 3, 4]), 10, 3)}`);
+const negative = [10, 20, 30];
+negative[-1] = 5;
+lines.push(`lookup negative key ${shiftedLookupSum(negative, 12)}`);
+const fractional = [10, 20, 30];
+fractional["0.5"] = 7;
+fractional["1.5"] = 9;
+lines.push(`lookup fractional key ${halfLookupSum(fractional, 12)}`);
+lines.push(`lookup records ${recordLookup(records, 64, 15)}`);
+lines.push(
+	`lookup mixed records ${recordLookup([{ x: 1 }, { y: 2, x: 3 }, { x: "4" }, 5], 8, 3)}`,
+);
 lines.push(`for-of destructured records ${destructuredCentroidOf(records)}`);
 lines.push(
 	`for-of destructured mixed records ${destructuredCentroidOf([{ x: 1, y: 2 }, { y: 3, x: 4 }, 5])}`,

@@ -161,6 +161,29 @@ describe("fixed TypedArray loop storage", () => {
 		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
 		expect(emitCompiledFunction(native, 1, "", false)).not.toBeNull();
 	});
+	it("checks a read whose key is not the loop index against its view", () => {
+		const image = compile(
+			"let total=0;for(let i=0;i<count;i++)total+=left[i&7];return total;",
+		);
+		const native = image.native.functions[1]!;
+		const plan = native.storage!.numericLoopRegions.find(
+			(plan) => plan.kind === "fixed-numeric",
+		);
+		if (plan?.kind !== "fixed-numeric") throw new Error("Missing checked lookup storage");
+		expect(plan.views).toEqual([
+			expect.objectContaining({ writable: false, checked: true }),
+		]);
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
+		expect(emitCompiledFunction(native, 1, "", false)).not.toBeNull();
+	});
+	it("declines a store whose key is not the loop index", () => {
+		const image = compile("for(let i=0;i<count;i++)output[i&7]=left[i];return output;");
+		expect(
+			image.native.functions[1]!.storage!.numericLoopRegions.filter(
+				(plan) => plan.kind === "fixed-numeric",
+			),
+		).toEqual([]);
+	});
 	it("retains all eight owners for a seven-input numeric kernel", () => {
 		const image = compile(
 			"for(let i=0;i<count;i++)output[i]=left[i]+right[i]+a[i]+b[i]+c[i]+d[i]+e[i];return output;",

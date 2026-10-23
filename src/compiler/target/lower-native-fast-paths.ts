@@ -208,6 +208,8 @@ export type NativeNumericLoopRegionPlan = NativeNumericLoopRegionBase &
 					readonly writable: boolean;
 					readonly minOffset: number;
 					readonly maxOffset: number;
+					/** Read through keys unrelated to the index, each checked against the view's length. */
+					readonly checked?: true;
 				}>;
 		  }
 	);
@@ -1924,18 +1926,31 @@ function fixedNumericLoopStorage(
 	}
 	const views = new Map<
 		number,
-		{ writable: boolean; minOffset: number; maxOffset: number }
+		{ writable: boolean; minOffset: number; maxOffset: number; checked?: true }
 	>();
 	for (const { ip, op } of memory) {
 		const offset = offsets.get(ip);
-		if (offset === undefined) return undefined;
 		const previous = views.get(op.object);
+		if (offset === undefined) {
+			if (op.opcode !== "LOAD_PROPERTY") return undefined;
+			views.set(op.object, {
+				writable: previous?.writable === true,
+				minOffset: previous?.minOffset ?? 0,
+				maxOffset: previous?.maxOffset ?? 0,
+				checked: true,
+			});
+			continue;
+		}
 		views.set(op.object, {
 			writable: previous?.writable === true || op.opcode === "STORE_PROPERTY",
 			minOffset: Math.min(previous?.minOffset ?? offset, offset),
 			maxOffset: Math.max(previous?.maxOffset ?? offset, offset),
+			...(previous?.checked === true ? { checked: true as const } : {}),
 		});
 	}
+	// A checked view keeps no index range, so a store into it could not be proven in bounds.
+	if ([...views.values()].some((view) => view.checked === true && view.writable))
+		return undefined;
 	if (lengthLoad !== undefined && !views.has(lengthLoad.object))
 		views.set(lengthLoad.object, { writable: false, minOffset: 0, maxOffset: 0 });
 	const records = numericLoopRecords(

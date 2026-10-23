@@ -1199,6 +1199,11 @@ function emitNumericLoopRegion(
 	const readOnly =
 		plan.kind === "fixed-numeric" && plan.views.every((view) => !view.writable);
 	const records = new Set(plan.kind !== "integer" ? (plan.records ?? []) : []);
+	const checkedViews = new Set(
+		plan.kind === "fixed-numeric"
+			? plan.views.flatMap((view) => (view.checked === true ? [view.object] : []))
+			: [],
+	);
 	// Records exist only for Array views.
 	const arrayOnly = plan.kind === "fixed-numeric" && records.size > 0;
 	const lengthLoad =
@@ -1269,6 +1274,7 @@ function emitNumericLoopRegion(
 		guards.length = 0;
 		guards.push(range);
 		for (const view of plan.views) {
+			if (view.checked === true) continue;
 			const low = `(${ascending ? index : last} + ${cF64Literal(view.minOffset)})`;
 			const high = `(${ascending ? last : index} + ${cF64Literal(view.maxOffset + 1)})`;
 			if (view.minOffset !== 0) guards.push(`${low} >= 0.0`);
@@ -1361,14 +1367,20 @@ function emitNumericLoopRegion(
 				if (plan.kind !== "fixed-numeric" || op.object !== plan.boundObject)
 					throw new Error("Invalid numeric loop length load");
 				return `${local(op.dst)} = (f64) ${id}_${mode === "array" ? "a" : "v"}${op.object}.length;`;
-			case "LOAD_PROPERTY":
+			case "LOAD_PROPERTY": {
+				const key = local(op.key);
+				// Any other key leaves the view to the generic load, which handles holes and non-indices.
+				const bound = checkedViews.has(op.object)
+					? `if (__builtin_expect(!(${key} >= 0.0 && ${key} < (f64) ${id}_${mode === "array" ? "a" : "v"}${op.object}.${mode === "array" ? "count" : "length"}) || ${key} != trunc(${key}), 0)) ${restart} `
+					: "";
 				if (mode === "array" && records.has(op.dst))
-					return `{ MalValue ${id}_e = ${id}_a${op.object}.elements[(u32) ${local(op.key)}]; if (__builtin_expect(!mal_value_is_heap_type(${id}_e, MAL_HEAP_OBJECT), 0)) ${restart} ${local(op.dst)} = ${id}_e; }`;
+					return `{ ${bound}MalValue ${id}_e = ${id}_a${op.object}.elements[(u32) ${key}]; if (__builtin_expect(!mal_value_is_heap_type(${id}_e, MAL_HEAP_OBJECT), 0)) ${restart} ${local(op.dst)} = ${id}_e; }`;
 				if (mode === "array")
-					return `{ MalValue ${id}_e = ${id}_a${op.object}.elements[(u32) ${local(op.key)}]; if (__builtin_expect(!mal_ops_is_number(${id}_e), 0)) ${restart} ${local(op.dst)} = mal_ops_number_as_f64(${id}_e); }`;
+					return `{ ${bound}MalValue ${id}_e = ${id}_a${op.object}.elements[(u32) ${key}]; if (__builtin_expect(!mal_ops_is_number(${id}_e), 0)) ${restart} ${local(op.dst)} = mal_ops_number_as_f64(${id}_e); }`;
 				return mode === "f64"
-					? `${local(op.dst)} = mal_scalar_f64_from_bits(mal_scalar_load_native_u64(${id}_v${op.object}.data + (usize)(u32) ${local(op.key)} * 8));`
-					: `${local(op.dst)} = mal_vm_fixed_numeric_load(&${id}_v${op.object}, (u32) ${local(op.key)});`;
+					? `{ ${bound}${local(op.dst)} = mal_scalar_f64_from_bits(mal_scalar_load_native_u64(${id}_v${op.object}.data + (usize)(u32) ${key} * 8)); }`
+					: `{ ${bound}${local(op.dst)} = mal_vm_fixed_numeric_load(&${id}_v${op.object}, (u32) ${key}); }`;
+			}
 			case "STORE_PROPERTY":
 				if (mode === "array") throw new Error("Invalid dense Array loop store");
 				return mode === "f64"
