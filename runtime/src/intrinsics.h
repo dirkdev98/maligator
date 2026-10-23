@@ -559,12 +559,9 @@ MalKey mal_intrinsic_string_key(MalVm *vm, const byte *name);
 /** name is immutable, NUL-terminated ASCII storage that outlives this VM. */
 MalKey mal_intrinsic_static_string_key(MalVm *vm, const byte *name);
 
-/**
- * mal_object_get_own for a string literal `name`, which the runtime keeps reading
- * from objects of a few recurring shapes. Like mal_intrinsic_static_string_key, it
- * identifies the name by its address.
- */
-MalPropertyLookup mal_object_get_own_static(MalVm *vm, const MalObject *object, const byte *name);
+/** mal_object_get_own_static past its cached shape position; see vm.h. */
+MalPropertyLookup mal_object_get_own_static_resolve(
+    MalVm *vm, const MalObject *object, const byte *name);
 
 /** Build a string property key directly from a measured hot-key identifier. */
 MalKey mal_intrinsic_hot_string_key(MalVm *vm, MalHotIntrinsicKey key);

@@ -2146,6 +2146,39 @@ typedef struct MalVm {
     } private_append_cache[128];
 } MalVm;
 
+static inline u32 mal_static_slot_cache_index(const MalShape *shape, const byte *name) {
+    return (u32) ((((uptr) name ^ ((uptr) shape >> 4)) * 0x9E3779B97F4A7C15ull) >> 32) &
+        (MAL_STATIC_SLOT_CACHE_CAPACITY - 1);
+}
+
+/**
+ * mal_object_get_own for a string literal `name`, which the runtime keeps reading
+ * from objects of a few recurring shapes. Like mal_intrinsic_static_string_key, it
+ * identifies the name by its address. Native glue reads such fields many times per
+ * call, so a cached shape position resolves without a call.
+ */
+static inline MalPropertyLookup mal_object_get_own_static(
+    MalVm *vm, const MalObject *object, const byte *name
+) {
+    const MalShape *shape = object->shape;
+    const MalStaticSlotCacheEntry *entry =
+        &vm->static_slot_cache[mal_static_slot_cache_index(shape, name)];
+    if (entry->name == name && entry->shape == shape && entry->index >= 0) {
+        const MalShapeProp *prop = &shape->props[entry->index];
+        return (MalPropertyLookup) {
+            .present = true,
+            .entry = nullptr,
+            .desc = {
+                .flags = (MalPropertyFlags) prop->attrs,
+                .value = mal_object_field_load(object, prop->slot),
+                .getter = mal_value_new_undefined(),
+                .setter = mal_value_new_undefined(),
+            },
+        };
+    }
+    return mal_object_get_own_static_resolve(vm, object, name);
+}
+
 /** Every engine heap is the unique inline heap of one MalVm. */
 static inline MalVm *mal_vm_from_heap(MalHeap *heap) {
     return (MalVm *) ((byte *) heap - offsetof(MalVm, heap));

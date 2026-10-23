@@ -408,11 +408,12 @@ MalKey mal_intrinsic_static_string_key(MalVm *vm, const byte *name) {
     return (MalKey) {.kind = MAL_KEY_STRING, .value = mal_value_from_string(atom)};
 }
 
-MalPropertyLookup mal_object_get_own_static(MalVm *vm, const MalObject *object, const byte *name) {
+MalPropertyLookup mal_object_get_own_static_resolve(
+    MalVm *vm, const MalObject *object, const byte *name
+) {
     const MalShape *shape = object->shape;
-    MalStaticSlotCacheEntry *entry = &vm->static_slot_cache[
-        (u32) ((((uptr) name ^ ((uptr) shape >> 4)) * 0x9E3779B97F4A7C15ull) >> 32) &
-        (MAL_STATIC_SLOT_CACHE_CAPACITY - 1)];
+    MalStaticSlotCacheEntry *entry =
+        &vm->static_slot_cache[mal_static_slot_cache_index(shape, name)];
     // Shapes never change their props, but an overflow table can still hold the name.
     bool shape_only = mal_object_overflow(object) == nullptr || object->overflow_private_only;
     if (entry->name == name && entry->shape == shape && (entry->index >= 0 || shape_only)) {
