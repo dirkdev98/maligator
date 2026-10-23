@@ -2,11 +2,33 @@
 
 #include <time.h>
 
+#if defined(__APPLE__)
+#include <mach/mach_time.h>
+
+// Nanoseconds per tick as a whole part and a 64-bit binary fraction, so a read
+// multiplies instead of dividing by the runtime timebase.
+static u64 mal_monotonic_whole_ns;
+static u64 mal_monotonic_fraction_ns;
+
+// Set before any thread can read the clock, so readers never see half a ratio.
+__attribute__((constructor)) static void mal_monotonic_timebase_init(void) {
+    mach_timebase_info_data_t timebase;
+    if (mach_timebase_info(&timebase) != KERN_SUCCESS || timebase.denom == 0) {
+        timebase = (mach_timebase_info_data_t) {.numer = 1, .denom = 1};
+    }
+    mal_monotonic_whole_ns = timebase.numer / timebase.denom;
+    mal_monotonic_fraction_ns =
+        (u64) (((unsigned __int128) (timebase.numer % timebase.denom) << 64) / timebase.denom);
+}
+#endif
+
 u64 mal_monotonic_now_ns(void) {
 #if defined(__APPLE__)
-    // Darwin derives CLOCK_MONOTONIC from the wall clock and boot time through two libc
-    // calls; the raw clock counts the same time, sleep included, from the commpage.
-    return clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+    // CLOCK_MONOTONIC_RAW counts these ticks, sleep included, but its libc wrapper
+    // costs more than the read. The truncated fraction loses under a nanosecond.
+    u64 ticks = mach_continuous_time();
+    return ticks * mal_monotonic_whole_ns +
+        (u64) (((unsigned __int128) ticks * mal_monotonic_fraction_ns) >> 64);
 #else
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
