@@ -686,14 +686,6 @@ contracts or investigates costs still visible after the string follow-ups.
       the materializing implementation, with complete output checks and
       GC/materialization safety.
 
-- [ ] Investigate a bounded repeated-miss probe before property-query normalization,
-      where already-string keys can avoid repeated constant-name and atom-table
-      lookup. Preserve coercion and prototype invalidation, bound retained storage,
-      and require repeated-miss gains without taxing existing atoms or unique-name
-      churn. Keep the three property-query benchmark controls together.
-      The rooted dynamic-key miss case in `property-transition-cache.test.ts` still
-      performs 16,384 comparisons against its 1,026 bound.
-
 - [ ] Extend the inline Array iteration expansion to flatMap, findLast,
       findLastIndex and unseeded reduce, each with fixture coverage of holes,
       receiver mutation and fallback receivers. Expanded sites still run the
