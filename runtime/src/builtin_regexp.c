@@ -2033,7 +2033,7 @@ static MalValue regexp_canonical_replace(
     ret = regexp_builder_finish(vm, &accumulated);
 
 done:
-    free(offsets.pairs);
+    if (offsets.pairs != nullptr) free(offsets.pairs);
     mal_text_buffer_dispose(&accumulated);
     return ret;
 }

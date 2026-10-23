@@ -427,7 +427,12 @@ impl FastPattern {
         start: usize,
         slots: &mut [i32; FAST_CAPTURE_SLOTS],
     ) -> bool {
-        slots[2..2 + self.capture_count * 2].fill(-1);
+        // A fill of fixed length is a few vector stores; a variable one calls memset.
+        if self.capture_count <= 8 {
+            slots[2..18].fill(-1);
+        } else {
+            slots[2..2 + self.capture_count * 2].fill(-1);
+        }
         if self.anchored_start {
             return start == 0 && self.match_at(subject, 0, slots);
         }
@@ -1329,7 +1334,10 @@ unsafe fn copy_cached_captures(
 ) -> i32 {
     let slots = ((groups.max(0) as usize) * 2).min(cap.max(0) as usize);
     if !out.is_null() && slots > 0 {
-        unsafe { core::ptr::copy_nonoverlapping(cached.as_ptr(), out, slots) };
+        // Slots past the groups are scratch the caller never reads; copying a fixed
+        // count avoids a memcpy call.
+        let count = if slots <= 16 && cap >= 16 { 16 } else { slots };
+        unsafe { core::ptr::copy_nonoverlapping(cached.as_ptr(), out, count) };
     }
     groups
 }
@@ -1437,6 +1445,46 @@ pub unsafe extern "C" fn mal_regexp_exec(
     caps_cap: i32,
     execution_flags_out: *mut u32,
 ) -> i32 {
+    // Allocation-free plans answer before the general path's frame and caches.
+    if !handle.is_null() {
+        let cp = unsafe { &mut *(handle as *mut CompiledPattern) };
+        if cp.fast.is_some() && start <= subject_len {
+            if !execution_flags_out.is_null() {
+                unsafe { *execution_flags_out = EXEC_FAST };
+            }
+            let subj = unsafe { nullable_u16_slice(subject, subject_len) };
+            return fast_exec(cp, subj, start, caps_out, caps_cap);
+        }
+    }
+    unsafe {
+        exec_general(
+            handle,
+            subject,
+            subject_len,
+            start,
+            subject_identity,
+            heap_identity,
+            heap_epoch,
+            caps_out,
+            caps_cap,
+            execution_flags_out,
+        )
+    }
+}
+
+#[inline(never)]
+unsafe fn exec_general(
+    handle: *mut core::ffi::c_void,
+    subject: *const u16,
+    subject_len: usize,
+    start: usize,
+    subject_identity: *const core::ffi::c_void,
+    heap_identity: u64,
+    heap_epoch: u32,
+    caps_out: *mut i32,
+    caps_cap: i32,
+    execution_flags_out: *mut u32,
+) -> i32 {
     if !execution_flags_out.is_null() {
         unsafe { *execution_flags_out = 0 };
     }
@@ -1527,6 +1575,46 @@ pub unsafe extern "C" fn mal_regexp_exec(
 /// code-unit indices because every Latin-1 byte is exactly one code unit.
 #[no_mangle]
 pub unsafe extern "C" fn mal_regexp_exec_latin1(
+    handle: *mut core::ffi::c_void,
+    subject: *const u8,
+    subject_len: usize,
+    start: usize,
+    subject_identity: *const core::ffi::c_void,
+    heap_identity: u64,
+    heap_epoch: u32,
+    caps_out: *mut i32,
+    caps_cap: i32,
+    execution_flags_out: *mut u32,
+) -> i32 {
+    // Allocation-free plans answer before the general path's frame and caches.
+    if !handle.is_null() {
+        let cp = unsafe { &mut *(handle as *mut CompiledPattern) };
+        if cp.fast.is_some() && start <= subject_len {
+            if !execution_flags_out.is_null() {
+                unsafe { *execution_flags_out = EXEC_FAST | EXEC_LATIN1 };
+            }
+            let subj = unsafe { nullable_slice(subject, subject_len) };
+            return fast_exec(cp, subj, start, caps_out, caps_cap);
+        }
+    }
+    unsafe {
+        exec_latin1_general(
+            handle,
+            subject,
+            subject_len,
+            start,
+            subject_identity,
+            heap_identity,
+            heap_epoch,
+            caps_out,
+            caps_cap,
+            execution_flags_out,
+        )
+    }
+}
+
+#[inline(never)]
+unsafe fn exec_latin1_general(
     handle: *mut core::ffi::c_void,
     subject: *const u8,
     subject_len: usize,
