@@ -814,7 +814,9 @@ function verifySpecialization(
 					].sort((left, right) => left - right);
 		if (
 			selection.anchors.length !== 1 ||
-			selection.claimedInstructions.length !== 2 ||
+			selection.claimedInstructions.length < 2 ||
+			(selection.representation === "binary-pairs-truncating-i32" &&
+				selection.claimedInstructions.length !== 2) ||
 			selection.composition !== "overlay" ||
 			(selection.representation !== "binary-pairs-f64" &&
 				selection.representation !== "binary-pairs-truncating-i32") ||
@@ -824,41 +826,49 @@ function verifySpecialization(
 			fail(`${selection.id} has an invalid numeric-fusion certificate`);
 		}
 		const anchor = selection.anchors[0]!;
-		if (
-			fn.instructionKind(anchor) !== "operation" ||
-			fn.instructionOpcodeName(anchor) !== "binary" ||
-			!coreTargetSupportsNumericFusionOperator(
-				fn.instructionAttributes(anchor).operator,
-				"start",
-			)
-		) {
-			fail(`${selection.id} does not anchor a supported generic binary operation`);
-		}
-		const result =
-			fn.kernel.instructionResultCount(anchor) === 0
-				? undefined
-				: fn.kernel.resultAt(fn.kernel.instructionResultStart(anchor));
-		if (result === undefined || selection.claimedInstructions[0] !== anchor) {
+		if (selection.claimedInstructions[0] !== anchor) {
 			fail(`${selection.id} has no numeric-fusion continuation`);
 		}
-		const finish = selection.claimedInstructions[1]!;
-		let finishResultUses = 0;
-		const finishOperandStart = fn.kernel.instructionOperandStart(finish);
-		const finishOperandCount = fn.kernel.instructionOperandCount(finish);
-		for (let index = 0; index < finishOperandCount; index++) {
-			if (fn.kernel.operandAt(finishOperandStart + index) === result) finishResultUses++;
-		}
-		if (
-			fn.instructionKind(finish) !== "operation" ||
-			fn.instructionOpcodeName(finish) !== "binary" ||
-			!coreTargetSupportsNumericFusionOperator(
-				fn.instructionAttributes(finish).operator,
-				"finish",
-			) ||
-			finishResultUses !== 1 ||
-			blocks.instructionOrder.get(anchor)! >= blocks.instructionOrder.get(finish)!
-		) {
-			fail(`${selection.id} has an invalid numeric-fusion continuation @${finish}`);
+		// Every link but the last starts a pair whose single result the next one finishes.
+		for (let link = 0; link + 1 < selection.claimedInstructions.length; link++) {
+			const first = selection.claimedInstructions[link]!;
+			const finish = selection.claimedInstructions[link + 1]!;
+			if (
+				fn.instructionKind(first) !== "operation" ||
+				fn.instructionOpcodeName(first) !== "binary" ||
+				!coreTargetSupportsNumericFusionOperator(
+					fn.instructionAttributes(first).operator,
+					"start",
+				)
+			) {
+				fail(`${selection.id} does not anchor a supported generic binary operation`);
+			}
+			const result =
+				fn.kernel.instructionResultCount(first) === 0
+					? undefined
+					: fn.kernel.resultAt(fn.kernel.instructionResultStart(first));
+			if (result === undefined) {
+				fail(`${selection.id} has no numeric-fusion continuation`);
+			}
+			let finishResultUses = 0;
+			const finishOperandStart = fn.kernel.instructionOperandStart(finish);
+			const finishOperandCount = fn.kernel.instructionOperandCount(finish);
+			for (let index = 0; index < finishOperandCount; index++) {
+				if (fn.kernel.operandAt(finishOperandStart + index) === result)
+					finishResultUses++;
+			}
+			if (
+				fn.instructionKind(finish) !== "operation" ||
+				fn.instructionOpcodeName(finish) !== "binary" ||
+				!coreTargetSupportsNumericFusionOperator(
+					fn.instructionAttributes(finish).operator,
+					"finish",
+				) ||
+				finishResultUses !== 1 ||
+				blocks.instructionOrder.get(first)! >= blocks.instructionOrder.get(finish)!
+			) {
+				fail(`${selection.id} has an invalid numeric-fusion continuation @${finish}`);
+			}
 		}
 		if (
 			candidate?.kind !== "numeric-fusion" ||

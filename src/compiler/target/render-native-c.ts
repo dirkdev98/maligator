@@ -4653,7 +4653,7 @@ function inheritedStackObjectProtectorGuard(site: StackObjectSite): string {
 }
 
 interface NativeNumericFusionAction {
-	readonly role: "start" | "finish";
+	readonly role: "start" | "finish" | "link";
 	readonly truncating: boolean;
 	readonly id: number;
 	readonly first: Extract<BytecodeInstruction, { opcode: "BINARY" }>;
@@ -5267,15 +5267,45 @@ function emitBody(
 		),
 	);
 	const numericFusionActionByIp = new Map<number, NativeNumericFusionAction>();
+	const fusionCandidatesByIp = new Map<number, Array<NativeNumericFusionAction>>();
 	for (const candidate of topology.numericFusionCandidates) {
-		if (numericFusionActionByIp.has(candidate.instructionIp))
-			throw new Error("Invalid numeric-fusion region");
 		if (
 			nativeInstructions[candidate.action.id]?.kind === "unsigned-arithmetic" ||
 			nativeInstructions[candidate.finishIp]?.kind === "unsigned-arithmetic"
 		)
 			continue;
-		numericFusionActionByIp.set(candidate.instructionIp, candidate.action);
+		const actions = fusionCandidatesByIp.get(candidate.instructionIp) ?? [];
+		actions.push(candidate.action);
+		fusionCandidatesByIp.set(candidate.instructionIp, actions);
+	}
+	// A chain keeps its head's temporaries: each link continues the value it consumes in place.
+	const chainHeads = new Map<number, number>();
+	for (const ip of [...fusionCandidatesByIp.keys()].sort((left, right) => left - right)) {
+		const actions = fusionCandidatesByIp.get(ip)!;
+		const finish = actions.find(({ role }) => role === "finish");
+		const start = actions.find(({ role }) => role === "start");
+		if (
+			actions.length > 2 ||
+			(actions.length === 2 && (finish === undefined || start === undefined))
+		)
+			throw new Error("Invalid numeric-fusion region");
+		const incoming =
+			finish === undefined
+				? undefined
+				: { ...finish, id: chainHeads.get(finish.id) ?? finish.id };
+		if (incoming === undefined || start === undefined) {
+			numericFusionActionByIp.set(ip, incoming ?? start!);
+			continue;
+		}
+		const instruction = fn.instructions[ip];
+		if (incoming.truncating || start.truncating || instruction?.opcode !== "BINARY")
+			throw new Error("Invalid numeric-fusion region");
+		// Each pair keeps its value unmaterialized only while its start's result is boxed.
+		const incomingFused = reps[incoming.first.dst] !== "number";
+		if (incomingFused && reps[instruction.dst] !== "number") {
+			numericFusionActionByIp.set(ip, { ...incoming, role: "link" });
+			chainHeads.set(ip, incoming.id);
+		} else numericFusionActionByIp.set(ip, incomingFused ? incoming : start);
 	}
 	const nativeArrayPresenceProjectionActionByIp = new Map<
 		number,
@@ -10462,6 +10492,37 @@ function emitInstruction(
 					...(fusion === undefined ? [] : [`__nf_${fusion.id}_ok = false;`]),
 					`r${dst} = ${profileCall("string", reentrantValue(`mal_vm_concat_primitive_strings(vm, ${boxed(left)}, ${boxed(right)})`))};`,
 					throwCheck(),
+				];
+			}
+			if (fusion?.role === "link") {
+				const firstOnLeft = left === fusion.first.dst;
+				const external = firstOnLeft ? right : left;
+				const externalIsNum = isNumericRep(reps[external]!);
+				const externalExpr = externalIsNum
+					? num(external)
+					: `mal_ops_number_as_f64(${boxed(external)})`;
+				const value = `__nf_${fusion.id}_value`;
+				const nativeExpr = nativeNumberExpr(
+					operator,
+					firstOnLeft ? value : externalExpr,
+					firstOnLeft ? externalExpr : value,
+				);
+				if (nativeExpr === null) throw new Error("Invalid numeric-fusion link");
+				const slow = profileCall(
+					"binary",
+					reentrantValue(
+						`mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`,
+					),
+				);
+				return [
+					`if (__nf_${fusion.id}_ok${externalIsNum ? "" : ` && mal_ops_is_number(${boxed(external)})`}) {`,
+					`  ${value} = ${nativeExpr};`,
+					`} else {`,
+					`  if (__nf_${fusion.id}_ok) r${fusion.first.dst} = ${profileCall("boxing", `mal_ops_number_value(${value})`)};`,
+					`  __nf_${fusion.id}_ok = false;`,
+					`  r${dst} = ${slow};`,
+					`  ${throwCheck()}`,
+					`}`,
 				];
 			}
 			if (fusion?.role === "start" && reps[dst] !== "number") {

@@ -3816,7 +3816,11 @@ function lowerExecutionFunctionToNativePlan(
 			const resolvedPairs = pairs as Array<
 				(typeof pairs)[number] & { firstIp: number; finishIp: number }
 			>;
-			const payloadIps = resolvedPairs.flatMap((pair) => [pair.firstIp, pair.finishIp]);
+			// A chain's pairs share their link ips: each pair starts where the previous one finished.
+			const payloadIps = [
+				...resolvedPairs.map((pair) => pair.firstIp),
+				resolvedPairs.at(-1)!.finishIp,
+			];
 			const startOperators = new Set([
 				"+",
 				"-",
@@ -3849,7 +3853,13 @@ function lowerExecutionFunctionToNativePlan(
 				payloadIps.length === resolvedClaimedIps.length &&
 				payloadIps.every((ip) => resolvedClaimedIps.includes(ip)) &&
 				region.cost.score === resolvedPairs.length &&
-				region.cost.metadataOperations === payloadIps.length;
+				region.cost.metadataOperations === payloadIps.length &&
+				(region.representation !== "binary-pairs-truncating-i32" ||
+					resolvedPairs.length === 1) &&
+				resolvedPairs.every(
+					(pair, index) =>
+						index === 0 || pair.firstIp === resolvedPairs[index - 1]!.finishIp,
+				);
 			for (const pair of resolvedPairs) {
 				const first = instructions[pair.firstIp];
 				const finish = instructions[pair.finishIp];

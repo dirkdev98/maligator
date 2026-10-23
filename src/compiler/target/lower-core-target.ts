@@ -599,14 +599,17 @@ function lowerCoreSpecializations(
 			if (loweredAnchor.type !== "binary") {
 				throw new Error(`Core numeric plan ${id} does not lower to binary`);
 			}
-			const result =
-				fn.kernel.instructionResultCount(anchor) === 0
-					? undefined
-					: fn.kernel.resultAt(fn.kernel.instructionResultStart(anchor));
-			if (result === undefined) {
-				throw new Error(`Core numeric plan ${id} has no result`);
-			}
-			const pairs = claims.slice(1).map((instruction) => {
+			// A chain lowers to consecutive pairs; each finish but the last starts the next.
+			const pairs = claims.slice(1).map((instruction, link) => {
+				const start = claims[link]!;
+				const result =
+					fn.kernel.instructionResultCount(start) === 0
+						? undefined
+						: fn.kernel.resultAt(fn.kernel.instructionResultStart(start));
+				if (result === undefined) {
+					throw new Error(`Core numeric plan ${id} has no result`);
+				}
+				const first = requireInstruction(start);
 				const lowered = requireInstruction(instruction);
 				const operandStart = fn.kernel.instructionOperandStart(instruction);
 				const operandCount = fn.kernel.instructionOperandCount(instruction);
@@ -617,11 +620,15 @@ function lowerCoreSpecializations(
 						break;
 					}
 				}
-				if (lowered.type !== "binary" || (input !== 0 && input !== 1)) {
+				if (
+					first.type !== "binary" ||
+					lowered.type !== "binary" ||
+					(input !== 0 && input !== 1)
+				) {
 					throw new Error(`Core numeric plan ${id} has an invalid finish`);
 				}
 				return {
-					first: loweredAnchor,
+					first,
 					finish: lowered,
 					firstUsePosition: (input + 1) as 1 | 2,
 				};

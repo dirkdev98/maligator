@@ -582,7 +582,7 @@ function lowerPropertyProjection(
 	conflicts: (ip: number) => boolean,
 	terminalFusion: (
 		ip: number,
-	) => { readonly id: number; readonly role: "start" | "finish" } | undefined,
+	) => { readonly id: number; readonly role: "start" | "finish" | "link" } | undefined,
 	transparentJumpTargets: ReadonlySet<number>,
 	handlerTargets: ReadonlyArray<number | undefined>,
 	body?: NativeBodyFacts,
@@ -707,6 +707,8 @@ function lowerPropertyProjection(
 	// partner inside this projection.
 	for (const [index, step] of steps.entries()) {
 		const fusion = terminalFusion(step.ip);
+		// A chain link both consumes and leaves an unmaterialized value; projections pair only.
+		if (fusion?.role === "link") return undefined;
 		if (fusion === undefined || (fusion.role === "start" && index === steps.length - 1))
 			continue;
 		if (
@@ -2472,8 +2474,9 @@ export function lowerNativeFastPaths(
 	indexedLoops: ReadonlyArray<NativeIndexedLoopElement> = [],
 	terminalFusion: (
 		ip: number,
-	) => { readonly id: number; readonly role: "start" | "finish" } | undefined = () =>
-		undefined,
+	) =>
+		| { readonly id: number; readonly role: "start" | "finish" | "link" }
+		| undefined = () => undefined,
 	transparentJumpTargets: ReadonlySet<number> = new Set(),
 	materializeUpdateOutputs = true,
 	selectUpdates = true,
@@ -3054,7 +3057,11 @@ export function selectNativeFastPaths(
 		for (let ip = site.instructionIp; ip <= site.endIp; ip++) blocked.add(ip);
 	const fusions = new Map<
 		number,
-		{ readonly id: number; readonly finishIp: number; readonly role: "start" | "finish" }
+		{
+			readonly id: number;
+			readonly finishIp: number;
+			readonly role: "start" | "finish" | "link";
+		}
 	>();
 	const mapEntryBlocked = new Set(blocked);
 	const snapshotOverlayIps = new Set<number>();
@@ -3110,11 +3117,13 @@ export function selectNativeFastPaths(
 				) {
 					if (action.role !== "start" && action.role !== "finish")
 						throw new Error("Invalid numeric-fusion action");
-					fusions.set(action.ip, {
-						id: pair.firstIp,
-						finishIp: pair.finishIp,
-						role: action.role,
-					});
+					// A chain's interior finishes one pair and starts the next.
+					fusions.set(
+						action.ip,
+						fusions.has(action.ip)
+							? { id: pair.firstIp, finishIp: pair.finishIp, role: "link" }
+							: { id: pair.firstIp, finishIp: pair.finishIp, role: action.role },
+					);
 				}
 				break;
 			}

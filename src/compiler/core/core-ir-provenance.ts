@@ -1136,6 +1136,7 @@ export interface CoreLocalSpecializationCandidates {
 }
 
 const MAX_FRESH_DENSE_INDEXED_RESERVE = 65_536;
+const NUMERIC_FUSION_CHAIN_LIMIT = 16;
 const FRESH_DENSE_NUMERIC_OPERATORS: ReadonlySet<string> = new Set([
 	"+",
 	"-",
@@ -4625,6 +4626,11 @@ function discoverCandidates(
 		: [];
 	const exactInt32 = (value: CoreValueId): boolean =>
 		valueKinds().exactScalar(value) === "int32";
+	const numericPairs = new Map<
+		CoreInstructionId,
+		{ readonly user: CoreInstructionId; readonly truncating: boolean }
+	>();
+	const numericFinishes = new Set<CoreInstructionId>();
 	for (const instruction of numericInstructions) {
 		if (
 			!control.reachable.has(fn.instructionBlock(instruction)) ||
@@ -4672,11 +4678,24 @@ function discoverCandidates(
 				instructionOperand(fn, user, instructionOperand(fn, user, 0) === output ? 1 : 0)!,
 			);
 		if (!truncating && fn.valueRepresentation(output) !== "boxed") continue;
-		addNumeric(
-			instruction,
-			[instruction, user],
-			truncating ? "binary-pairs-truncating-i32" : "binary-pairs-f64",
-		);
+		numericPairs.set(instruction, { user, truncating });
+		if (!truncating) numericFinishes.add(user);
+	}
+	for (const [instruction, { user, truncating }] of numericPairs) {
+		if (truncating) {
+			addNumeric(instruction, [instruction, user], "binary-pairs-truncating-i32");
+			continue;
+		}
+		// A chain starts where no fused pair ends, so its interior never starts a shorter one.
+		if (numericFinishes.has(instruction)) continue;
+		const chain = [instruction, user];
+		for (
+			let next = numericPairs.get(user);
+			next !== undefined && !next.truncating && chain.length < NUMERIC_FUSION_CHAIN_LIMIT;
+			next = numericPairs.get(next.user)
+		)
+			chain.push(next.user);
+		addNumeric(instruction, chain, "binary-pairs-f64");
 	}
 	const values = Object.freeze(candidates);
 	return Object.freeze({

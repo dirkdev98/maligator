@@ -102,7 +102,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 259;
+export const COMPILER_ARTIFACT_VERSION = 260;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -3085,7 +3085,11 @@ function validateNumericFusionRegion(
 	fn: BytecodeFunction,
 	region: Extract<VmRegion, { kind: "numeric-fusion" }>,
 ): void {
-	const payloadIps = region.pairs.flatMap((pair) => [pair.firstIp, pair.finishIp]);
+	// A chain's pairs share their link ips: each pair starts where the previous one finished.
+	const payloadIps = [
+		...region.pairs.map((pair) => pair.firstIp),
+		region.pairs.at(-1)?.finishIp ?? -1,
+	];
 	const startOperators = new Set([
 		"+",
 		"-",
@@ -3125,6 +3129,11 @@ function validateNumericFusionRegion(
 				: "int32-operands") ||
 		region.pairs.length === 0 ||
 		region.pairs.length > 32 ||
+		(region.representation === "binary-pairs-truncating-i32" &&
+			region.pairs.length !== 1) ||
+		region.pairs.some(
+			(pair, index) => index > 0 && pair.firstIp !== region.pairs[index - 1]!.finishIp,
+		) ||
 		region.anchors.length !== 2 ||
 		region.anchors[0] !== region.pairs[0]!.firstIp ||
 		region.anchors[1] !== region.pairs[0]!.finishIp ||
