@@ -1443,6 +1443,17 @@ static bool mal_json_try_serialize_plain(
             }
             state.frames[state.count++] = frame;
             if (!mal_json_builder_push(builder, frame.array ? '[' : '{')) goto failed;
+        } else if (mal_value_is_int32(value)) {
+            if (mal_text_buffer_append_i32(&builder->buffer, mal_value_to_i32(value)) !=
+                MAL_TEXT_BUFFER_OK) {
+                mal_json_throw_string_length(generic->vm);
+                goto failed;
+            }
+        } else if (mal_value_is_boolean(value)) {
+            if (!mal_json_builder_push_ascii(
+                    builder, mal_value_to_boolean(value) ? "true" : "false")) {
+                goto failed;
+            }
         } else {
             // BigInt can inherit toJSON, so it must take the observable path.
             if (mal_value_is_bigint(value)) goto unsupported;
