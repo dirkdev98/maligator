@@ -81,7 +81,7 @@
 	},
 	{
 		"file": "builtin_json.c",
-		"sha256": "af4c8568ead97b41faa7f3b56f3a336396c819ebae4be7d49f7029b10c523960"
+		"sha256": "01da1b3092e3bddb6bb54b4ca19139d766e3e11c6084ee3e4a533473756f4d45"
 	},
 	{
 		"file": "builtin_map.c",
@@ -89,7 +89,7 @@
 	},
 	{
 		"file": "builtin_math.c",
-		"sha256": "afee13937faca200717bfbc740dc6225a2e21803e3d18100c287fa04fd9a4870"
+		"sha256": "e4c910c0489559ee18e568b7ae39cc2fc82a970347b55c0789f34e6663e38b81"
 	},
 	{
 		"file": "builtin_number.c",
@@ -129,7 +129,7 @@
 	},
 	{
 		"file": "builtin_string.c",
-		"sha256": "cdea1975bf56978e1bc816c794872ea8ce53b2b46b4899fa0d2cfdbc070f71c8"
+		"sha256": "ad7c3ade56b9c909b346fc9c3a62af593b6ef61146da115f3be8b11ec8cffc92"
 	},
 	{
 		"file": "builtin_symbol.c",
@@ -469,7 +469,7 @@
 	},
 	{
 		"file": "runtime/node_events.c",
-		"sha256": "ed04d097b6e2e2a88dbda35caac78ce6d11af65246361fda608d09251d52dc85"
+		"sha256": "a78e0917583e59ab4c5683f4bcbe6c1762c5c679b46695241ee34c8ffe747044"
 	},
 	{
 		"file": "runtime/node_events.h",
@@ -589,7 +589,7 @@
 	},
 	{
 		"file": "runtime/node_querystring.c",
-		"sha256": "f571076c81efb738fd3dd94c594d730d1659e2ff15952fb3ba65fbc2ee3cd9e4"
+		"sha256": "9c927cabb159c4584e17798ab2d4723bcd4bc144500374723c6f49c46ec3c721"
 	},
 	{
 		"file": "runtime/node_querystring.h",
@@ -769,7 +769,7 @@
 	},
 	{
 		"file": "vm.c",
-		"sha256": "e12d3036b48dd88913dc8e29e02db40afbd98528fc88286ec8800ca11bfa8c11"
+		"sha256": "304ca2904a73b45ab3abe8393e674b8251a6dd9330c8653fd106fb3c74ea4078"
 	},
 	{
 		"file": "vm.h",
