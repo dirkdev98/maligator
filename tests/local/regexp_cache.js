@@ -603,6 +603,19 @@ check(
 		'["a[1]b[2]",0,"2","a1b","--b","-ba","-\u{1F600}-x-","a[y]b[y]","y","",["utf8","iso88591","cp12"],["-"],"-"]',
 );
 
+const literalReplacements = [
+	"x".repeat(300).replace(/x/g, ""),
+	"ab".repeat(200).replace(/a/g, "c") === "cb".repeat(200),
+	"aéb".replace(/é/g, "Ā"),
+	"q%5Bz%5d".replace(/%5B/gi, "[").replace(/%5D/gi, "]"),
+	RegExp.lastMatch,
+	RegExp.rightContext,
+];
+check(
+	"literal replacements of every result length keep the subject between matches",
+	JSON.stringify(literalReplacements) === '["",true,"aĀb","q[z]","%5d",""]',
+);
+
 let invalidCount = 0;
 for (let i = 0; i < 2; i++) {
 	try {

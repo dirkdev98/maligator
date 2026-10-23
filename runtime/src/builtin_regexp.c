@@ -2098,7 +2098,11 @@ static bool regexp_get_substitution(
     return regexp_builder_append_range(vm, out, replacement, literal_start, rlen - literal_start);
 }
 
-static bool regexp_template_has_dollar(const MalString *replacement, bool named_only) {
+static bool regexp_template_has_dollar(MalString *replacement, bool named_only) {
+    if (!named_only && replacement->storage < MAL_STRING_STORAGE_DEPENDENT && replacement->latin1) {
+        MalStringSegment segment = mal_string_flat_segment(replacement);
+        return memchr(segment.latin1_units, '$', segment.length) != nullptr;
+    }
     usize length = mal_string_length(replacement);
     for (usize i = 0; i < length; i++) {
         if (mal_string_code_unit_at(replacement, i) != '$') continue;
@@ -2125,8 +2129,41 @@ static bool regexp_source_may_name_groups(const MalString *source) {
 // With a string template, a canonical instance observes only lastIndex and the
 // legacy statics, so the collected matches stay offset pairs instead of the
 // result Arrays the generic algorithm materializes and reads back.
+// A short Latin-1 result is assembled on the stack and copied once, instead of growing
+// a raw-allocated buffer that the finished string then adopts or copies.
+static bool regexp_replace_literal_small(
+    MalVm *vm, MalString *s, MalString *replacement, const RegexpMatchOffsets *offsets,
+    MalValue *out
+) {
+    if (s->storage >= MAL_STRING_STORAGE_DEPENDENT ||
+        replacement->storage >= MAL_STRING_STORAGE_DEPENDENT || !s->latin1 || !replacement->latin1) {
+        return false;
+    }
+    MalStringSegment subject = mal_string_flat_segment(s);
+    MalStringSegment piece = mal_string_flat_segment(replacement);
+    u8 units[256];
+    usize length = 0;
+    usize next_source_position = 0;
+    for (usize at = 0; at < offsets->count; at += 2 * (usize) offsets->groups) {
+        usize position = (usize) offsets->pairs[at];
+        if (position < next_source_position) continue;
+        usize kept = position - next_source_position;
+        if (kept + piece.length > sizeof(units) - length) return false;
+        memcpy(units + length, subject.latin1_units + next_source_position, kept);
+        memcpy(units + length + kept, piece.latin1_units, piece.length);
+        length += kept + piece.length;
+        next_source_position = (usize) offsets->pairs[at + 1];
+    }
+    usize tail = subject.length - next_source_position;
+    if (tail > sizeof(units) - length) return false;
+    memcpy(units + length, subject.latin1_units + next_source_position, tail);
+    *out = mal_value_from_string(mal_string_new_latin1_copy(&vm->heap, units, length + tail));
+    return true;
+}
+
 static MalValue regexp_canonical_replace(
-    MalVm *vm, MalRegExpObject *re, MalValue rx, MalString *s, MalString *replacement
+    MalVm *vm, MalRegExpObject *re, MalValue rx, MalString *s, MalString *replacement,
+    bool literal
 ) {
     RegexpMatchOffsets offsets = {0};
     RegexpBuilder accumulated = {0};
@@ -2138,8 +2175,8 @@ static MalValue regexp_canonical_replace(
         ret = mal_value_from_string(s);
         goto done;
     }
+    if (literal && regexp_replace_literal_small(vm, s, replacement, &offsets, &ret)) goto done;
     mal_text_buffer_hint_capacity(&accumulated, mal_string_length(s));
-    bool literal = !regexp_template_has_dollar(replacement, false);
     usize stride = 2 * (usize) offsets.groups;
     usize next_source_position = 0;
     for (usize at = 0; at < offsets.count; at += stride) {
@@ -2292,9 +2329,10 @@ static MalValue regexp_proto_replace(MalVm *vm, MalValue this_value, const MalVa
         if (functional && !regexp_source_may_name_groups(canonical->source)) {
             return regexp_canonical_replace_function(vm, canonical, this_value, s, replace_value);
         }
-        if (!functional && (!regexp_template_has_dollar(replace_string, true) ||
+        bool literal = !functional && !regexp_template_has_dollar(replace_string, false);
+        if (!functional && (literal || !regexp_template_has_dollar(replace_string, true) ||
                 !regexp_source_may_name_groups(canonical->source))) {
-            return regexp_canonical_replace(vm, canonical, this_value, s, replace_string);
+            return regexp_canonical_replace(vm, canonical, this_value, s, replace_string, literal);
         }
     }
 
