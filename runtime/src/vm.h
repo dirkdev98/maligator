@@ -1974,6 +1974,8 @@ typedef struct MalVm {
     struct MalRegExpTemplates *regexp_templates;
     /** Inline caches for mal_vm_get_static, keyed by literal address. */
     struct MalStaticLoadSites *static_load_sites;
+    /** JSON.parse's keys by source bytes and last record shape, owned by builtin_json.c. */
+    struct MalJsonKeyCache *json_key_cache;
 
     /**
      * Data properties that iteration protocols inherit through watched built-in

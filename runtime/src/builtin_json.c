@@ -2174,11 +2174,75 @@ static void mal_json_object_members_dispose(MalJsonObjectMembers *members) {
     }
 }
 
+#define MAL_JSON_KEY_CACHE_ENTRIES 256
+#define MAL_JSON_KEY_CACHE_BYTES 24
+#define MAL_JSON_SHAPE_MEMO_KEYS 16
+
+typedef struct MalJsonKeyCacheEntry {
+    bool filled;
+    u8 length;
+    u8 bytes[MAL_JSON_KEY_CACHE_BYTES];
+    MalKey key;
+} MalJsonKeyCacheEntry;
+
+/**
+ * Records repeat their keys within one document and across documents. Entries
+ * hold index keys or atoms, which the collector always retains, so a short
+ * escape-free key resolves from its source bytes without a string, and a record
+ * whose keys repeat the last one's reuses its shape.
+ */
+struct MalJsonKeyCache {
+    MalJsonKeyCacheEntry entries[MAL_JSON_KEY_CACHE_ENTRIES];
+    MalShape *shape;
+    u32 shape_count;
+    MalValue shape_keys[MAL_JSON_SHAPE_MEMO_KEYS];
+};
+
+static void mal_json_key_cache_free(MalVm *vm) {
+    free(vm->json_key_cache);
+    vm->json_key_cache = nullptr;
+}
+
+static struct MalJsonKeyCache *mal_json_key_cache(MalVm *vm) {
+    if (vm->json_key_cache == nullptr) {
+        struct MalJsonKeyCache *cache = calloc(1, sizeof(*cache));
+        if (cache == nullptr) return nullptr;
+        if (!mal_vm_register_runtime_cleanup(vm, mal_json_key_cache_free)) {
+            free(cache);
+            return nullptr;
+        }
+        vm->json_key_cache = cache;
+    }
+    return vm->json_key_cache;
+}
+
+static bool mal_json_key_is_retained(MalKey key) {
+    return key.kind == MAL_KEY_INDEX ||
+        (key.kind == MAL_KEY_STRING && mal_value_to_string(key.value)->property_atom);
+}
+
 static MalValue mal_json_object_members_finalize(
     MalJsonParser *parser, MalJsonObjectMembers *members
 ) {
     if (members->count == 0) {
         return mal_value_from_object(mal_intrinsic_new_object(parser->vm));
+    }
+
+    struct MalJsonKeyCache *cache = parser->vm->json_key_cache;
+    if (cache != nullptr && cache->shape != nullptr && cache->shape_count == members->count) {
+        MalValue values[MAL_JSON_SHAPE_MEMO_KEYS];
+        usize i = 0;
+        while (i < members->count && members->keys[i].kind == MAL_KEY_STRING &&
+               members->keys[i].value == cache->shape_keys[i]) {
+            values[i] = members->roots[i * 2 + 1];
+            i++;
+        }
+        if (i == members->count) {
+            MalObject *prototype = mal_value_to_object(
+                parser->vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
+            return mal_value_from_object(mal_object_new_shaped(
+                &parser->vm->heap, prototype, cache->shape, values, (u32) i));
+        }
     }
 
     MalString *shape_keys[MAL_SHAPE_MAX_INLINE_SLOTS];
@@ -2216,6 +2280,18 @@ static MalValue mal_json_object_members_finalize(
     if (shaped) {
         MalShape *shape =
             mal_shape_from_string_keys(&parser->vm->heap, shape_keys, shape_count);
+        bool memoizable = cache != nullptr && shape_count == members->count &&
+            shape_count <= MAL_JSON_SHAPE_MEMO_KEYS;
+        for (u32 i = 0; memoizable && i < shape_count; i++) {
+            memoizable = shape_keys[i]->property_atom;
+        }
+        if (memoizable) {
+            cache->shape = shape;
+            cache->shape_count = shape_count;
+            for (u32 i = 0; i < shape_count; i++) {
+                cache->shape_keys[i] = mal_value_from_string(shape_keys[i]);
+            }
+        }
         MalObject *prototype = mal_value_to_object(
             parser->vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
         return mal_value_from_object(mal_object_new_shaped(
@@ -2236,6 +2312,52 @@ static MalValue mal_json_object_members_finalize(
     }
     mal_gc_unroot(&object_span);
     return object_value;
+}
+
+static u32 mal_json_key_hash(const u8 *bytes, usize length) {
+    u32 hash = 2166136261u ^ (u32) length;
+    for (usize i = 0; i < length; i++) hash = (hash ^ bytes[i]) * 16777619u;
+    return hash;
+}
+
+// The opening quote is consumed; the key's closing quote is consumed on success.
+static bool mal_json_parse_key(MalJsonParser *parser, MalKey *out) {
+    struct MalJsonKeyCache *cache = mal_json_key_cache(parser->vm);
+    MalJsonKeyCacheEntry *entry = nullptr;
+    u8 bytes[MAL_JSON_KEY_CACHE_BYTES];
+    usize length = 0;
+    usize offset = parser->position - parser->segment_start;
+    if (cache != nullptr && parser->segment.latin1 && offset < parser->segment.length) {
+        const u8 *units = parser->segment.latin1_units + offset;
+        usize available = parser->segment.length - offset;
+        usize window = available < MAL_JSON_KEY_CACHE_BYTES + 1
+            ? available : MAL_JSON_KEY_CACHE_BYTES + 1;
+        length = mal_json_latin1_safe_run(units, window);
+        if (length < window && units[length] == '"') {
+            entry = &cache->entries[
+                mal_json_key_hash(units, length) & (MAL_JSON_KEY_CACHE_ENTRIES - 1)];
+            if (entry->filled && entry->length == length &&
+                memcmp(entry->bytes, units, length) == 0) {
+                parser->position += length + 1;
+                *out = entry->key;
+                return true;
+            }
+            memcpy(bytes, units, length);
+        }
+    }
+
+    MalValue key = mal_json_parse_string(parser);
+    if (parser->vm->completion.kind == MAL_COMPLETION_THROW) return false;
+    MalRootSpan key_span;
+    mal_gc_root(&key_span, &key, 1);
+    bool converted = mal_vm_value_to_property_key(parser->vm, key, out);
+    mal_gc_unroot(&key_span);
+    if (!converted) return false;
+    if (entry != nullptr && mal_json_key_is_retained(*out)) {
+        *entry = (MalJsonKeyCacheEntry) {.filled = true, .length = (u8) length, .key = *out};
+        memcpy(entry->bytes, bytes, length);
+    }
+    return true;
 }
 
 static MalValue mal_json_parse_object_staged(
@@ -2259,27 +2381,15 @@ static MalValue mal_json_parse_object_staged(
             goto fail;
         }
 
-        MalValue key = mal_json_parse_string(parser);
-        if (parser->vm->completion.kind == MAL_COMPLETION_THROW) {
-            goto fail;
-        }
-        MalRootSpan key_span;
-        mal_gc_root(&key_span, &key, 1);
+        MalKey property_key;
+        if (!mal_json_parse_key(parser, &property_key)) goto fail;
+        mal_json_object_members_append_key(&members, property_key);
 
         mal_json_skip_whitespace(parser);
         if (!mal_json_consume(parser, ':')) {
-            mal_gc_unroot(&key_span);
             mal_json_parse_error(parser);
             goto fail;
         }
-
-        MalKey property_key;
-        if (!mal_vm_value_to_property_key(parser->vm, key, &property_key)) {
-            mal_gc_unroot(&key_span);
-            goto fail;
-        }
-        mal_json_object_members_append_key(&members, property_key);
-        mal_gc_unroot(&key_span);
 
         MalJsonParseNode *value_node = nullptr;
         MalValue value = mal_json_parse_value(parser, &value_node);
