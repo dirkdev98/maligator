@@ -552,10 +552,10 @@ iterator cursor is not, by itself, permission to delete its language object.
 - [ ] Widen numeric loop regions beyond plain Array element and record sums.
       Index and for-of loops over Arrays now keep their sums in f64 locals,
       including fields of record elements (`sx += p.x` 5.7 to 1.7 ns per element,
-      Node 1.0; `record-array-traversal` 532 to 250 ms, Node 109). Bounds such as
-      `values.length - 1`, field reads through polymorphic rows, nested records,
-      stores to records and calls in the body still decline, and a guard failure
-      finishes the whole loop in the original code.
+      Node 1.0; `record-array-traversal` 532 to 250 ms, Node 109). Field reads
+      through polymorphic rows, nested records, stores to records and calls in the
+      body still decline, and a guard failure finishes the whole loop in the
+      original code.
       Frame-local shape snapshots for plain static loads and stores in loops made
       such a loop about 8% faster but the self-compiler's parser slice 1.7 to 2.6%
       slower, so they serve number-record regions only.

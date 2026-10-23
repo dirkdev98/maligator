@@ -90,6 +90,13 @@ function descendingPairs(values) {
 	return `${total},${index}`;
 }
 
+function adjacentDifferences(values) {
+	let total = 0;
+	let index = 0;
+	for (; index + 1 < values.length; index++) total += values[index + 1] - values[index];
+	return `${total},${index}`;
+}
+
 function lookupSum(table, count, mask) {
 	let total = 0;
 	for (let index = 0; index < count; index++) total += table[index & mask];
@@ -238,6 +245,11 @@ lines.push(`span empty ${widestSpan([])}`);
 lines.push(`descending ${descendingPairs([1, 2, 3, 4, 5, 6, 7])}`);
 lines.push(`descending even ${descendingPairs([1.5, 2, 3, 4])}`);
 lines.push(`descending hole ${descendingPairs([1, 2, , 4, 5])}`);
+lines.push(`adjacent ${adjacentDifferences([1, 4, 9, 16, 25.5])}`);
+lines.push(`adjacent single ${adjacentDifferences([7])}`);
+lines.push(`adjacent empty ${adjacentDifferences([])}`);
+lines.push(`adjacent hole ${adjacentDifferences([1, 2, , 4])}`);
+lines.push(`adjacent string ${adjacentDifferences([1, 2, "3", 4])}`);
 lines.push(`lookup ${lookupSum([1, 2, 3, 4], 100, 3)}`);
 lines.push(`lookup past the end ${lookupSum([1, 2, 3], 10, 3)}`);
 lines.push(`lookup hole ${lookupSum([1, , 3, 4], 10, 3)}`);

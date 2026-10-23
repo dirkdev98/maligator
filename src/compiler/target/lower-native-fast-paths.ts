@@ -198,6 +198,10 @@ export type NativeNumericLoopRegionPlan = NativeNumericLoopRegionBase &
 				readonly kind: "fixed-numeric";
 				readonly index: number;
 				readonly bound: number;
+				/** The header comparison, whose operands may each be `index` or `bound` plus a constant. */
+				readonly comparison: number;
+				/** The loop continues while `index` compares to `bound + limitOffset` as the comparison does. */
+				readonly limitOffset: number;
 				/** The view whose length the header loads into `bound` on every iteration. */
 				readonly boundObject?: number;
 				/** Registers holding an Array view's object element, used only to read its fields. */
@@ -1595,22 +1599,16 @@ function numericLoopOffset(value: number): boolean {
 	return Number.isInteger(value) && value >= -0x80000000 && value <= 0x7fffffff;
 }
 
-function numericLoopIndexFacts(
+/** Loop invariants whose last write on the entry path is an offset-sized integer constant. */
+function numericLoopEntryConstants(
 	fn: BytecodeFunction,
 	body: NativeBodyFacts,
 	shape: NativeNumericLoopShape,
-	index: number,
-): {
-	readonly offsets: ReadonlyMap<number, number>;
-	readonly increments: ReadonlyMap<number, number>;
-} {
-	const written = new Set(
+): Map<number, number> {
+	const seen = new Set(
 		shape.order.flatMap((ip) => vmInstructionWriteRegisters(fn.instructions[ip]!)),
 	);
-	const initial = new Map<number, NumericLoopIndexFact>([
-		[index, { base: "index", offset: 0 }],
-	]);
-	const seen = new Set(written);
+	const constants = new Map<number, number>();
 	let cursor = shape.entryIp;
 	const visited = new Set<number>();
 	// Only a unique predecessor chain proves hoisted constants on every entry path.
@@ -1629,10 +1627,52 @@ function numericLoopIndexFacts(
 				(op.opcode === "CREATE_NUMBER" || op.opcode === "CREATE_F64") &&
 				numericLoopOffset(op.value)
 			)
-				initial.set(register, { base: "constant", offset: op.value });
+				constants.set(register, op.value);
 		}
 		cursor = ip;
 	}
+	return constants;
+}
+
+/** A write of `src` plus a constant, as `+`, `-`, increment or decrement. */
+function numericLoopConstantStep(
+	op: BytecodeInstruction,
+	constants: ReadonlyMap<number, number>,
+): { readonly dst: number; readonly src: number; readonly offset: number } | undefined {
+	if (
+		op.opcode === "UNARY" &&
+		(op.operator === "increment" || op.operator === "decrement")
+	)
+		return { dst: op.dst, src: op.src, offset: op.operator === "increment" ? 1 : -1 };
+	if (op.opcode !== "BINARY" || (op.operator !== "+" && op.operator !== "-"))
+		return undefined;
+	const right = constants.get(op.right);
+	if (right !== undefined)
+		return { dst: op.dst, src: op.left, offset: op.operator === "+" ? right : -right };
+	const left = constants.get(op.left);
+	return left !== undefined && op.operator === "+"
+		? { dst: op.dst, src: op.right, offset: left }
+		: undefined;
+}
+
+function numericLoopIndexFacts(
+	fn: BytecodeFunction,
+	body: NativeBodyFacts,
+	shape: NativeNumericLoopShape,
+	index: number,
+): {
+	readonly offsets: ReadonlyMap<number, number>;
+	readonly increments: ReadonlyMap<number, number>;
+} {
+	const initial = new Map<number, NumericLoopIndexFact>([
+		...[...numericLoopEntryConstants(fn, body, shape)].map(
+			([register, offset]): [number, NumericLoopIndexFact] => [
+				register,
+				{ base: "constant", offset },
+			],
+		),
+		[index, { base: "index", offset: 0 }],
+	]);
 	const before = new Map<number, Map<number, NumericLoopIndexFact>>([
 		[shape.order[0]!, initial],
 	]);
@@ -1848,7 +1888,14 @@ function fixedNumericLoopStorage(
 ):
 	| Pick<
 			Extract<NativeNumericLoopRegionPlan, { kind: "fixed-numeric" }>,
-			"index" | "bound" | "boundObject" | "records" | "stride" | "views"
+			| "index"
+			| "bound"
+			| "comparison"
+			| "limitOffset"
+			| "boundObject"
+			| "records"
+			| "stride"
+			| "views"
 	  >
 	| undefined {
 	const memory = shape.order.flatMap((ip) => {
@@ -1859,31 +1906,69 @@ function fixedNumericLoopStorage(
 	});
 	if (memory.length === 0 || memory.length > FIXED_NUMERIC_LOOP_ACCESS_LIMIT)
 		return undefined;
-	// A length-load header reloads a view's length, which no region instruction can change.
-	const header = fn.instructions[shape.order[0]!]!;
-	const lengthLoad =
-		lengthLoads.has(shape.order[0]!) &&
-		(header.opcode === "LOAD_PROPERTY_STATIC" ||
-			header.opcode === "LOAD_PROPERTY_STATIC_ARRAY_LENGTH")
-			? { ip: shape.order[0]!, object: header.object, dst: header.dst }
-			: undefined;
-	const comparisonIp = shape.order[0]! + (lengthLoad === undefined ? 0 : 1);
-	const comparison = fn.instructions[comparisonIp]!;
+	// Before comparing, the header may reload a view's length, which no region instruction
+	// can change, and step either operand by a constant, as `i + 1 < a.length` does.
+	const constants = numericLoopEntryConstants(fn, body, shape);
+	let lengthLoad: { ip: number; object: number; dst: number } | undefined;
+	let step: { ip: number; dst: number; src: number; offset: number } | undefined;
+	let comparisonIp: number | undefined;
+	for (const [position, ip] of shape.order.slice(0, 4).entries()) {
+		const op = fn.instructions[ip]!;
+		if (ip !== shape.order[0]! + position) return undefined;
+		if (op.opcode === "BINARY" && ["<", "<=", ">", ">="].includes(op.operator)) {
+			comparisonIp = ip;
+			break;
+		}
+		if (
+			lengthLoad === undefined &&
+			lengthLoads.has(ip) &&
+			(op.opcode === "LOAD_PROPERTY_STATIC" ||
+				op.opcode === "LOAD_PROPERTY_STATIC_ARRAY_LENGTH")
+		) {
+			lengthLoad = { ip, object: op.object, dst: op.dst };
+			continue;
+		}
+		if (
+			(op.opcode === "CREATE_NUMBER" || op.opcode === "CREATE_F64") &&
+			numericLoopOffset(op.value)
+		) {
+			constants.set(op.dst, op.value);
+			continue;
+		}
+		const constantStep =
+			step === undefined ? numericLoopConstantStep(op, constants) : undefined;
+		if (constantStep === undefined) return undefined;
+		step = { ip, ...constantStep };
+	}
+	const comparison =
+		comparisonIp === undefined ? undefined : fn.instructions[comparisonIp];
+	if (comparisonIp === undefined || comparison?.opcode !== "BINARY") return undefined;
 	if (
-		comparison.opcode !== "BINARY" ||
-		!["<", "<=", ">", ">="].includes(comparison.operator) ||
-		(lengthLoad !== undefined && shape.order[1] !== comparisonIp)
+		step !== undefined &&
+		((comparison.left !== step.dst && comparison.right !== step.dst) ||
+			shape.order.some((ip) => ip !== step.ip && body.writes[ip]!.includes(step.dst)))
 	)
 		return undefined;
+	const operand = (register: number) =>
+		register === step?.dst
+			? { register: step.src, offset: step.offset }
+			: { register, offset: 0 };
 	const writtenInLoop = (register: number) =>
 		shape.order.some(
 			(ip) => ip !== lengthLoad?.ip && body.writes[ip]!.includes(register),
 		);
-	const leftWritten = writtenInLoop(comparison.left);
-	const rightWritten = writtenInLoop(comparison.right);
+	const left = operand(comparison.left);
+	const right = operand(comparison.right);
+	const leftWritten = writtenInLoop(left.register);
+	const rightWritten = writtenInLoop(right.register);
 	if (leftWritten === rightWritten) return undefined;
-	const index = leftWritten ? comparison.left : comparison.right;
-	const bound = leftWritten ? comparison.right : comparison.left;
+	const index = leftWritten ? left.register : right.register;
+	const bound = leftWritten ? right.register : left.register;
+	// `index + a < bound + b` continues exactly while `index < bound + (b - a)`.
+	const limitOffset = leftWritten
+		? right.offset - left.offset
+		: left.offset - right.offset;
+	if (!numericLoopOffset(limitOffset)) return undefined;
 	if (lengthLoad !== undefined && bound !== lengthLoad.dst) return undefined;
 	const branch = fn.instructions[comparisonIp + 1];
 	if (
@@ -1977,8 +2062,8 @@ function fixedNumericLoopStorage(
 	// a known Array length need Array views, which stay read-only so stores keep their kinds.
 	if (
 		(records.size > 0 ||
-			(lengthLoad !== undefined &&
-				header.opcode === "LOAD_PROPERTY_STATIC_ARRAY_LENGTH")) &&
+			fn.instructions[lengthLoad?.ip ?? -1]?.opcode ===
+				"LOAD_PROPERTY_STATIC_ARRAY_LENGTH") &&
 		[...views.values()].some((view) => view.writable)
 	)
 		return undefined;
@@ -2007,6 +2092,8 @@ function fixedNumericLoopStorage(
 	return {
 		index,
 		bound,
+		comparison: comparisonIp,
+		limitOffset,
 		...(lengthLoad === undefined ? {} : { boundObject: lengthLoad.object }),
 		...(records.size === 0 ? {} : { records: [...records].sort((a, b) => a - b) }),
 		stride,

@@ -43,6 +43,13 @@ describe("TypedArray loops bounded by their length", () => {
 				}),
 				environment: { ...process.env, MAL_PERF_STATS: "1" },
 			});
+			for (const name of ["forwardDeltas", "trailingDeltas", "backwardPairs"])
+				expect(
+					regionPlans(pair, name).some(
+						(plan) => plan.kind === "fixed-numeric" && plan.limitOffset !== 0,
+					),
+					name,
+				).toBe(true);
 			for (const name of ["scaleInPlace", "copyScaled"])
 				expect(
 					regionPlans(pair, name).some(

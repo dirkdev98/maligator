@@ -64,6 +64,14 @@ describe("dense Array number loop regions", () => {
 					]
 				: ["bitMix", "widestSpan", "descendingPairs"])
 				expect(regionPlans(pair, name).length, name).toBeGreaterThan(0);
+			expect(
+				regionPlans(pair, "adjacentDifferences").some(
+					(plan) =>
+						plan.kind === "fixed-numeric" &&
+						plan.boundObject !== undefined &&
+						plan.limitOffset === -1,
+				),
+			).toBe(true);
 			for (const name of ["lookupSum", "recordLookup"])
 				expect(
 					regionPlans(pair, name).some(

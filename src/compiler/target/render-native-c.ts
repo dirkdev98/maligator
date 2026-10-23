@@ -1392,16 +1392,31 @@ function emitNumericLoopRegion(
 	const arrayOnly = plan.kind === "fixed-numeric" && records.size > 0;
 	const lengthLoad =
 		plan.kind === "fixed-numeric" && plan.boundObject !== undefined
-			? fn.instructions[plan.id]
+			? fn.instructions
+					.slice(plan.id, plan.comparison)
+					.find(
+						(op) =>
+							(op.opcode === "LOAD_PROPERTY_STATIC" ||
+								op.opcode === "LOAD_PROPERTY_STATIC_ARRAY_LENGTH") &&
+							op.dst === plan.bound,
+					)
 			: undefined;
+	if (
+		plan.kind === "fixed-numeric" &&
+		plan.boundObject !== undefined &&
+		lengthLoad === undefined
+	)
+		throw new Error("Invalid typed loop length load");
 	if (plan.kind === "fixed-numeric") {
-		const comparison =
-			fn.instructions[plan.id + (plan.boundObject === undefined ? 0 : 1)]!;
+		const comparison = fn.instructions[plan.comparison]!;
 		if (comparison.opcode !== "BINARY") throw new Error("Invalid typed loop comparison");
 		const ascending = plan.stride > 0;
 		const inclusive = comparison.operator === "<=" || comparison.operator === ">=";
-		const index = local(plan.index),
-			bound = local(plan.bound);
+		const index = local(plan.index);
+		const bound =
+			plan.limitOffset === 0
+				? local(plan.bound)
+				: `(${local(plan.bound)} + ${cF64Literal(plan.limitOffset)})`;
 		// Views are admitted before the range so a length bound can read the admitted length.
 		// A TypedArray's length is an inherited getter, so a length bound also needs the
 		// length load's cache to prove the intrinsic getter.
@@ -1432,7 +1447,7 @@ function emitNumericLoopRegion(
 		);
 		if (plan.boundObject !== undefined)
 			rangePrelude.push(
-				`  ${bound} = ${typedPossible ? `${id}_typed ? (f64) ${id}_v${plan.boundObject}.length : ` : ""}${readOnly ? `${id}_array ? (f64) ${id}_a${plan.boundObject}.length : ` : ""}0.0;`,
+				`  ${local(plan.bound)} = ${typedPossible ? `${id}_typed ? (f64) ${id}_v${plan.boundObject}.length : ` : ""}${readOnly ? `${id}_array ? (f64) ${id}_a${plan.boundObject}.length : ` : ""}0.0;`,
 			);
 		guards.unshift(`(${id}_typed || ${id}_array)`);
 		guards.push(

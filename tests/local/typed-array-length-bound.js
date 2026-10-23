@@ -11,6 +11,24 @@ function scaled(values, factor) {
 	for (let i = 0; i < values.length; i++) total += values[i] * factor;
 	return total;
 }
+function forwardDeltas(values) {
+	let total = 0;
+	let i = 0;
+	for (; i + 1 < values.length; i++) total += values[i + 1] - values[i];
+	return `${total},${i}`;
+}
+function trailingDeltas(values) {
+	let total = 0;
+	let i = 0;
+	for (; i < values.length - 1; i++) total += values[i] * 2 - values[i + 1];
+	return `${total},${i}`;
+}
+function backwardPairs(values) {
+	let total = 0;
+	let i = values.length - 1;
+	for (; i - 1 >= 0; i--) total += values[i] * values[i - 1];
+	return `${total},${i}`;
+}
 function scaleInPlace(values, factor) {
 	for (let i = 0; i < values.length; i++) values[i] = values[i] * factor;
 	return show(values);
@@ -41,6 +59,15 @@ for (const Ctor of kinds) {
 	for (let round = 0; round < 50; round++) sum(values);
 	results.push([Ctor.name, sum(values), scaled(values, 0.5), sum(new Ctor(0))]);
 	results.push([
+		`${Ctor.name} offsets`,
+		forwardDeltas(values),
+		trailingDeltas(values),
+		backwardPairs(values),
+		forwardDeltas(new Ctor(1)),
+		trailingDeltas(new Ctor(0)),
+		backwardPairs(new Ctor(1)),
+	]);
+	results.push([
 		`${Ctor.name} stores`,
 		scaleInPlace(values, 3),
 		scaleInPlace(values, -0.5),
@@ -65,7 +92,7 @@ results.push(["special", String(sum(special))]);
 // An own `length` shadows the intrinsic getter.
 const own = new Float64Array([1, 2, 3, 4]);
 Object.defineProperty(own, "length", { value: 2 });
-results.push(["own-length", sum(own), scaleInPlace(own, 2)]);
+results.push(["own-length", sum(own), forwardDeltas(own), scaleInPlace(own, 2)]);
 
 // Resizable buffers and length-tracking views keep the generic path.
 const resizable = new ArrayBuffer(32, { maxByteLength: 64 });
