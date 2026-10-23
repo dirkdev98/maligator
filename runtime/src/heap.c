@@ -495,16 +495,23 @@ static void *mal_gc_alloc_large(MalHeap *heap, usize size, u8 kind) {
  * fresh block. */
 /* Small classes clear with constant 16-byte stores: a table-sized memset is a libc call per
  * reused cell, and a plain loop is turned back into one by loop idiom recognition. */
+// Clang otherwise lowered the final 16-byte clear to a bzero call on every reuse.
+#if defined(__has_builtin) && __has_builtin(__builtin_memset_inline)
+#define mal_gc_clear_16(pointer) __builtin_memset_inline((pointer), 0, 16)
+#else
+#define mal_gc_clear_16(pointer) memset((pointer), 0, 16)
+#endif
+
 static inline __attribute__((always_inline)) void mal_gc_clear_cell(u8 *cell, u32 size) {
     switch (size) {
-        case 128: memset(cell + 112, 0, 16); [[fallthrough]];
-        case 112: memset(cell + 96, 0, 16); [[fallthrough]];
-        case 96: memset(cell + 80, 0, 16); [[fallthrough]];
-        case 80: memset(cell + 64, 0, 16); [[fallthrough]];
-        case 64: memset(cell + 48, 0, 16); [[fallthrough]];
-        case 48: memset(cell + 32, 0, 16); [[fallthrough]];
-        case 32: memset(cell + 16, 0, 16); [[fallthrough]];
-        case 16: memset(cell, 0, 16); return;
+        case 128: mal_gc_clear_16(cell + 112); [[fallthrough]];
+        case 112: mal_gc_clear_16(cell + 96); [[fallthrough]];
+        case 96: mal_gc_clear_16(cell + 80); [[fallthrough]];
+        case 80: mal_gc_clear_16(cell + 64); [[fallthrough]];
+        case 64: mal_gc_clear_16(cell + 48); [[fallthrough]];
+        case 48: mal_gc_clear_16(cell + 32); [[fallthrough]];
+        case 32: mal_gc_clear_16(cell + 16); [[fallthrough]];
+        case 16: mal_gc_clear_16(cell); return;
         default: memset(cell, 0, size); return;
     }
 }
