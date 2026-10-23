@@ -401,11 +401,15 @@ to an exact callee whose entry takes that parameter as a record parameter: one
 callee's accesses and observers use that storage as the caller's would, so a write
 or a created object is the caller's as well. A record parameter may not be reachable
 through `arguments` or outlive the call, and a callee that passes it on observes it.
-A call whose entry takes no record parameter for its argument observes the record
-instead, and transport selection drops a record parameter entry whose caller lost
-its own record entry. Core re-proves both sides before lowering, the bytecode validators check the
-allocation and call result flows, and transport selection pairs a record entry only
-with the calls that carry these plans. Fields travel boxed.
+An object literal that a call hands to a record parameter lives in the same kind of
+storage, with the prototype the literal would have had in the producer slot. Each
+call that hands it over carries its uses and claims the allocation, so no stack
+object takes it. A call whose entry takes no record parameter for its argument
+observes the record instead, and a record parameter entry keeps only the calls
+whose records a selected record call or literal supplies. Core re-proves both sides
+before lowering, the bytecode validators check the allocation and call result
+flows, and transport selection pairs a record entry only with the calls that carry
+these plans. Fields travel boxed.
 
 Literal-shape caches are shared by both target bodies. Their slot identities come
 from Core allocation origins, independently of physical block order. Both the wire

@@ -111,16 +111,20 @@ The independent target boundary and current storage contract are recorded in
       arithmetic: 90.8 ns/op against Node's 9.6 (118.4 before record entries, on the
       mjq host). The field kinds depend on the producer's parameter kinds and back,
       so they need a record dimension in the program value-kind flow and a consumer
-      that turns it into entry and caller representations.
+      that turns it into entry and caller representations. Typed fields alone buy
+      little there: forcing a numeric index with `| 0` took a local run from 44 to
+      37.6 ns/op against Node's 6.3. Most of the rest is the scanner calling
+      `mal_builtin_string_char_code_at_known` twice per character on a boxed string
+      parameter.
 - [ ] Admit more record calls. Not admitted yet: calls through instance-method hints,
       which need a guarded fallback that keeps the returned object as the record;
-      object literals handed to another callee, as in `operandShape(type, context)`,
-      which takes 401K fresh context objects in the quick self-compile census and
-      reads them only to report a failure; record parameters that a callee passes on
-      instead of observing; and forwarding more than one call deep, or through a
-      helper that also reads the record. In that census, record calls cover 835K calls, mostly
+      record parameters that a callee passes on instead of observing; and forwarding
+      more than one call deep, or through a helper that also reads the record. In the
+      quick self-compile census, record calls cover 892K calls, mostly
       `decodeVmValueOperand`, `coreTerminatorInput`, `valueEnvironment` and
-      `copyTerminatorEdge`.
+      `copyTerminatorEdge`, and record parameters take 840K calls, mostly the 401K
+      context literals `operandShape` reads only to report a failure and the 241K
+      edges `CoreEditor#touchEdge` keeps only when they are new.
 
 - [ ] Stream the product CLI's translation units to disk. Its build keeps the CLI's
       emitted C, 650 MB with the worker root's, in memory while it compiles the
