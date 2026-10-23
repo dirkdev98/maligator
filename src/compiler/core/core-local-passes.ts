@@ -195,6 +195,29 @@ function sameHandler(
 // blocks. An effect-free block can run under its predecessor's handler unobservably;
 // absorbing it keeps same-block fusions available inside try regions. Allocations stay
 // outside so handler scoping cannot block their sinking.
+function resultUsedOutside(
+	fn: CoreFunctionStore,
+	block: CoreBlockId,
+	merged: CoreBlockId,
+): boolean {
+	for (const instruction of fn.bodyInstructionIds(block)) {
+		const start = fn.kernel.instructionResultStart(instruction);
+		for (let index = 0; index < fn.kernel.instructionResultCount(instruction); index++) {
+			const value = fn.kernel.resultAt(start + index);
+			if (fn.kernel.valueHandlerUseCount(value) !== 0) return true;
+			for (
+				let use = fn.kernel.valueFirstUse(value);
+				use >= 0;
+				use = fn.kernel.useNext(use)
+			) {
+				const user = fn.instructionBlock(fn.kernel.useInstruction(use));
+				if (user !== block && user !== merged) return true;
+			}
+		}
+	}
+	return false;
+}
+
 function absorbableUnderHandler(
 	fn: CoreFunctionStore,
 	predecessor: CoreBlockId,
@@ -2197,7 +2220,12 @@ const mergeLinearBlocks: CoreFunctionPass = {
 	run(context) {
 		const { program, item, remainingEdits } = context;
 		const fn = program.function(item.function);
-		const control = context.analysis(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS).structural;
+		const bundle = context.analysis(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS);
+		const control = bundle.structural;
+		const throwsToHandler = (block: CoreBlockId) =>
+			(bundle.exceptional().successors[block] ?? []).some(
+				({ kind }) => kind === "exceptional",
+			);
 		let selected: Array<{
 			readonly predecessor: CoreBlockId;
 			readonly target: CoreBlockId;
@@ -2231,6 +2259,13 @@ const mergeLinearBlocks: CoreFunctionPass = {
 			const parameterCount = fn.kernel.blockParameterCount(target);
 			if (parameterCount !== predecessorEdge.arguments.length) continue;
 			if (selectedBlocks.has(predecessor) || selectedBlocks.has(target)) continue;
+			// A result reaches the handler only from a block that cannot throw into it.
+			if (
+				throwsToHandler(target) &&
+				!throwsToHandler(predecessor) &&
+				resultUsedOutside(fn, predecessor, target)
+			)
+				continue;
 			const bodyInstructions = [...fn.bodyInstructionIds(target)];
 			const parameters = Array.from({ length: parameterCount }, (_, index) =>
 				fn.kernel.blockParameterValue(parameterStart + index),

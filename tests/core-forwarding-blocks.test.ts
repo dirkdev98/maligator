@@ -497,6 +497,46 @@ describe("Core empty forwarding blocks", () => {
 		expect(result.fn.isValueLive(exitParameter)).toBe(false);
 	});
 
+	it("keeps a block that cannot throw apart from a throwing successor its handler reads from", () => {
+		const { program, builder } = fixture(2);
+		const entry = builder.createBlock([{}, {}]);
+		const [input, callee] = parameters(builder, entry);
+		const definer = builder.createBlock();
+		const thrower = builder.createBlock();
+		const exit = builder.createBlock();
+		const handler = builder.createBlock([{ role: "exception" }]);
+		builder.setTerminator(entry, {
+			kind: "jump",
+			edge: { block: definer, arguments: [] },
+		});
+		const [copy] = builder.appendInstruction(definer, "move", [input!]);
+		builder.setHandler(definer, handler);
+		builder.setTerminator(definer, {
+			kind: "jump",
+			edge: { block: thrower, arguments: [] },
+		});
+		builder.appendInstruction(thrower, "call", [callee!, callee!]);
+		builder.setHandler(thrower, handler);
+		builder.setTerminator(thrower, {
+			kind: "jump",
+			edge: { block: exit, arguments: [] },
+		});
+		builder.setTerminator(exit, { kind: "return", value: input! });
+		builder.setTerminator(handler, { kind: "return", value: copy! });
+		const function_ = builder.finish(entry).function;
+		const context = programAnalysisContext();
+		const report = new CoreOptimizationReportBuilder(program);
+		const analyses = new CoreAnalysisManager(program, context, report);
+		const pass = CORE_LOCAL_CANONICALIZATION_PASSES.find(
+			({ name }) => name === "linear-block-merging",
+		)!;
+		new CoreFunctionPassScheduler(program, context, analyses, report, function_, {
+			verification: "per-pass",
+		}).runComponent("canonicalize", [pass]);
+		const fn = program.function(function_);
+		expect(fn.isBlockLive(thrower)).toBe(true);
+	});
+
 	it("substitutes a linear block parameter in every call operand", () => {
 		const { program, builder } = fixture(1);
 		const entry = builder.createBlock([{}]);
