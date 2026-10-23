@@ -3136,7 +3136,9 @@ static void mal_gc_weak_pass(void) {
 // its young children, WITHOUT re-marking the old generation — that is the work it
 // saves over a full mark. The set is rebuilt every collection.
 
-void mal_gc_remember(MalHeapHeader *owner) {
+// Kept out of line: inlined by LTO, its collector thread-local was hoisted into a
+// _tlv_get_addr call at the top of every array constructor on Darwin.
+__attribute__((noinline)) void mal_gc_remember(MalHeapHeader *owner) {
     if (owner->type == MAL_HEAP_ARRAY_OBJECT) {
         ((MalArrayObject *) owner)->minor_scan_start = 0;
     }
