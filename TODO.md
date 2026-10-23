@@ -1038,6 +1038,12 @@ entropy, cancellation, and reactor completions.
 - [ ] Confirm SNI context matching against CVE-2026-48928 once details are published,
       and SQLite 3.53.3 against CVE-2026-69867.
 
+- [ ] Stop re-arming epoll for every exchange on Linux. Each read op re-arms its
+      EPOLLONESHOT registration with an `epoll_ctl`, so a keep-alive connection pays
+      a syscall per request. kqueue now submits registrations with the next wait,
+      which gained 1.5% on Express routes; epoll cannot batch, so it needs
+      persistent registrations whose unused directions are dropped lazily.
+
 # WinterTC web platform
 
 The target is the complete ECMA-429 server surface except WebAssembly. Mal.serve
