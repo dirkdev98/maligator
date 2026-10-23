@@ -435,7 +435,9 @@ MalValue mal_map_storage_value(const MalMapStorage *storage, u32 entry) {
     return mal_map_value_at(storage, entry - 1);
 }
 
-static u32 mal_map_storage_entry_hint(const MalMapStorage *storage, MalValue key) {
+static inline __attribute__((always_inline)) u32 mal_map_storage_entry_hint(
+    const MalMapStorage *storage, MalValue key
+) {
     if (storage == nullptr || storage->entry_hint == 0) return 0;
     if (storage->hint_key == key) return storage->entry_hint;
     if (!mal_value_is_string(key) && !mal_value_is_bigint(key)) return 0;
@@ -620,9 +622,19 @@ void mal_map_object_update_entry(MalMapObject *map, u32 entry, MalValue key, Mal
 
 void mal_map_object_set_hinted(MalMapObject *map, MalValue key, MalValue value) {
     u32 entry = mal_map_storage_counted_hint(map->entries, key);
-    if (entry == 0) entry = mal_map_object_upsert_canonical(map, key, nullptr);
-    mal_map_object_update_entry(map, entry, key, value);
-    mal_map_storage_remember_entry(map->entries, entry);
+    bool inserted = false;
+    if (entry == 0) entry = mal_map_object_upsert_canonical(map, key, &inserted);
+    MalMapStorage *storage = map->entries;
+    if (inserted) {
+        // The new entry holds this exact key and an undefined value, so nothing
+        // needs a barrier or compaction.
+        *mal_map_value_slot(storage, entry - 1) = value;
+        mal_gc_card(&map->object.header, value);
+        mal_perf_collection_mutation(map, storage->size);
+    } else {
+        mal_map_object_update_entry(map, entry, key, value);
+    }
+    mal_map_storage_remember_entry(storage, entry);
 }
 
 void mal_map_object_set_canonical(MalMapObject *map, MalValue key, MalValue value) {
