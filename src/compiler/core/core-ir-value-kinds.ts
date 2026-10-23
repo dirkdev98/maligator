@@ -32,6 +32,7 @@ import type {
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
 import { coreClosedGlobalSlotMembership } from "./core-compilation.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
+import { CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE } from "./core-internal-attributes.ts";
 import type { CoreCallGraphIndex } from "./core-ir-call-targets.ts";
 import {
 	CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
@@ -39,6 +40,7 @@ import {
 	coreTerminatorInput,
 } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
+import { coreNumericTypedArrayKind } from "./core-ir-value-classes.ts";
 import type {
 	CoreFunctionId,
 	CoreBlockId,
@@ -104,6 +106,13 @@ export interface CoreValueKindInputs {
 	) => CompilerValueKindMask | undefined;
 	/** What a keyed read returns when its key is a number, if the receiver's elements are known. */
 	readonly elementLoadMask?: (
+		instruction: CoreInstructionId,
+	) => CompilerValueKindMask | undefined;
+	/**
+	 * What a keyed read of a numeric TypedArray returns for a Number key. Any other
+	 * key can reach an expando or a prototype member.
+	 */
+	readonly typedElementLoadMask?: (
 		instruction: CoreInstructionId,
 	) => CompilerValueKindMask | undefined;
 }
@@ -205,6 +214,7 @@ const KIND_TRANSFER_NUMERIC_UNARY = 3;
 const KIND_TRANSFER_BINARY = 4;
 const KIND_TRANSFER_ADD = 5;
 const KIND_TRANSFER_ELEMENT = 6;
+const KIND_TRANSFER_TYPED_ELEMENT = 7;
 
 // A non-number key on an Array whose holders are all known reads its length, a
 // prototype member or nothing, since no one gave it other named properties.
@@ -230,6 +240,11 @@ function transferredKind(
 		return (left & ~COMPILER_VALUE_KIND_NUMBER) === 0
 			? constant
 			: constant | NAMED_ARRAY_PROPERTY_KINDS;
+	// A Number key always takes the integer-indexed path, which never reads the prototype.
+	if (kind === KIND_TRANSFER_TYPED_ELEMENT)
+		return (left & ~COMPILER_VALUE_KIND_NUMBER) === 0
+			? constant
+			: COMPILER_VALUE_KIND_TOP;
 	if (kind === KIND_TRANSFER_NUMERIC_UNARY)
 		return compilerNumericResultKind("unary", left);
 	const right = mask(inputs[start + 1]! as CoreValueId);
@@ -662,6 +677,13 @@ function addOperationTransfer(
 		]);
 		return;
 	}
+	const typedElements = inputs?.typedElementLoadMask?.(instruction);
+	if (typedElements !== undefined) {
+		addKindTransfer(buffer, KIND_TRANSFER_TYPED_ELEMENT, output, typedElements, [
+			fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction) + 1),
+		]);
+		return;
+	}
 	if (opcode === "callKnown") {
 		const attributes = fn.instructionAttributes(instruction);
 		const result =
@@ -1081,6 +1103,14 @@ export const CORE_LOCAL_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreValueKin
 				fields === undefined
 					? undefined
 					: (instruction: CoreInstructionId) => fields.elementMask(fn, instruction);
+			// Memory planning records the receiver's exact TypedArray kind on the load itself.
+			const typedElementLoadMask = (instruction: CoreInstructionId) =>
+				fn.instructionOpcodeName(instruction) === "loadProperty" &&
+				coreNumericTypedArrayKind(
+					fn.instructionAttributes(instruction)[CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE],
+				) !== undefined
+					? COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_UNDEFINED
+					: undefined;
 			const operationResultMask = (instruction: CoreInstructionId) => {
 				const opcode = fn.instructionOpcodeName(instruction);
 				if (opcode === "loadPrivate") return fields?.readMask(fn, instruction);
@@ -1098,6 +1128,7 @@ export const CORE_LOCAL_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreValueKin
 				return analyzeCoreValueKinds(fn, cfg, {
 					operationResultMask,
 					elementLoadMask,
+					typedElementLoadMask,
 					runOwner,
 					onIntegerWork: integerWorkRecorder(recordResult),
 				});
@@ -1194,6 +1225,7 @@ export const CORE_LOCAL_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreValueKin
 			return analyzeCoreValueKinds(fn, cfg, {
 				operationResultMask,
 				elementLoadMask,
+				typedElementLoadMask,
 				operationResultValue,
 				runOwner,
 				onIntegerWork: integerWorkRecorder(recordResult),

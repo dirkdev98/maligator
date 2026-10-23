@@ -212,14 +212,14 @@ converge and still left generic paths at the hot receivers, so field facts stay
 bounded and consumer-driven as planned below.
 
 - [ ] Unbox typed-array lookup loops. A lookup through a module-level
-      `const FLAGS = new Uint8Array(256)` in a `charCodeAt` loop runs 33 ms against
-      Node's 21, down from 51 now that reads of a constant holding one Array or
-      TypedArray class carry that class. Each iteration still boxes the string
-      length before the compare, tests the `charCodeAt` result's tag, revalidates
-      the view (buffer, detach, sharing, length tracking, bounds) and adds a boxed
-      byte to a boxed sum. Removing the loop's TDZ check on `FLAGS` changed
-      nothing. View admission belongs in the preheader once the body cannot detach
-      or resize the buffer, and the sum needs a number representation.
+      `const FLAGS = new Uint8Array(256)` in a `charCodeAt` loop runs 28 ms against
+      Node's 21, down from 51: reads of a constant holding one Array or TypedArray
+      class carry that class, and the element read's `number | undefined` kind keeps
+      the sum in a double. Each iteration still boxes the string length before the
+      compare, tests the `charCodeAt` result's tag and revalidates the view (buffer,
+      detach, sharing, length tracking, bounds). Removing the loop's TDZ check on
+      `FLAGS` changed nothing. View admission belongs in the preheader once the body
+      cannot detach or resize the buffer.
 - [ ] Keep binary-search style index arithmetic in int32. `(lo + hi) >> 1` over
       `hi = items.length - 1` runs on doubles and converts `mid` back to an index
       every iteration (94 ms against Node's 24 for 12 M probes), because an Array
