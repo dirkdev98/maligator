@@ -442,7 +442,7 @@ bool mal_set_object_has(const MalSetObject *set, MalValue value) {
     return mal_set_object_has_canonical(set, mal_collection_key_from_value(value).value);
 }
 
-void mal_set_object_add_canonical(MalSetObject *set, MalValue key) {
+static __attribute__((noinline)) void mal_set_object_add_general(MalSetObject *set, MalValue key) {
     MalSetStorage *storage = mal_set_object_storage(set);
     if (mal_set_should_compact(storage)) mal_set_compact(storage);
     MalSetKeyDomain key_domain = storage->domain == MAL_SET_KEYS_GENERIC
@@ -512,6 +512,28 @@ void mal_set_object_add_canonical(MalSetObject *set, MalValue key) {
     storage->size++;
     mal_gc_card(&set->object.header, key);
     mal_perf_collection_mutation(set, storage->size);
+}
+
+// Adding a present int32 or identity member changes nothing, so finding it is the leaf
+// probe of has; every other add tail-calls the general path.
+void mal_set_object_add_canonical(MalSetObject *set, MalValue key) {
+    const MalSetStorage *storage = set->entries;
+    if (storage != nullptr && storage->payload != nullptr) {
+        u32 slot = UINT32_MAX;
+        i32 int_key;
+        if (storage->domain == MAL_SET_KEYS_INT32) {
+            if (mal_set_int32_query(key, &int_key)) {
+                slot = mal_set_probe_in(
+                    storage, MAL_SET_KEYS_INT32, key, int_key, mal_key_hash_mix(key), false);
+            }
+        } else if (storage->domain == MAL_SET_KEYS_IDENTITY &&
+            mal_set_key_domain(key) == MAL_SET_KEYS_IDENTITY) {
+            slot = mal_set_probe_in(
+                storage, MAL_SET_KEYS_IDENTITY, key, 0, mal_key_hash_mix(key), false);
+        }
+        if (slot != UINT32_MAX) return;
+    }
+    mal_set_object_add_general(set, key);
 }
 
 void mal_set_object_add(MalSetObject *set, MalValue value) {
