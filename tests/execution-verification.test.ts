@@ -129,7 +129,9 @@ const ARGUMENT_ENTRY_SOURCE = `
 		const edges = function (value) {
 			const first = arguments.length > 0 ? arguments[0] : value;
 			const second = arguments.length > 1 ? arguments[1] : 13;
-			return first * 3 + second * 5 + arguments.length;
+			// A body past the inline budget keeps the call, so the entry receives the arguments.
+			const spread = ((first + 1) * (second ^ 1)) + ((first + 2) * (second ^ 2)) + ((first + 3) * (second ^ 3)) + ((first + 4) * (second ^ 4)) + ((first + 5) * (second ^ 5)) + ((first + 6) * (second ^ 6)) + ((first + 7) * (second ^ 7)) + ((first + 8) * (second ^ 8));
+			return first * 3 + second * 5 + arguments.length + spread;
 		};
 		let total = 0;
 		for (let index = 0; index < 16; index++) total += edges(index, index + 1, index + 2);

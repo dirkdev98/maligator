@@ -82,8 +82,8 @@ describe("static arguments access", () => {
 			expect(line).toBeDefined();
 			const field = (key: string): number =>
 				Number(line?.match(new RegExp(`${key}=([0-9]+)`))?.[1] ?? -1);
-			expect(field("logical_values")).toBe(44);
-			expect(field("destination_writes")).toBe(name === "interpreted" ? 43 : 44);
+			expect(field("logical_values")).toBe(43);
+			expect(field("destination_writes")).toBe(name === "interpreted" ? 42 : 43);
 			expect(field("temporary_copies")).toBe(name === "interpreted" ? 2 : 0);
 		});
 	}

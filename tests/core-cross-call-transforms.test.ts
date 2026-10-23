@@ -30,10 +30,15 @@ import type {
 	CoreTransformCandidate,
 } from "../src/compiler/core/core-transform-candidates.ts";
 import { optimizeCore } from "../src/compiler/core/optimize.ts";
+import { parseModule } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 import { compileEntrypoint } from "../src/compiler/pipeline/compile-program.ts";
-import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
+import {
+	compilerProgramFactsFromConfig,
+	programClosureCertificate,
+	withProgramClosure,
+} from "../src/compiler/shared/compiler-facts.ts";
 import {
 	inspectCoreBlockHandler,
 	inspectCoreBlockParameters,
@@ -1118,10 +1123,45 @@ describe("bounded Core cross-call transforms", () => {
 		expect(coreOperations(captured).some(({ opcode }) => opcode === "loadCaptured")).toBe(
 			false,
 		);
-		expect(coreOperations(counted).some(({ opcode }) => opcode === "call")).toBe(true);
+		// The inlined count is the call's own argument count, not the caller's.
+		expect(coreOperations(counted).some(({ opcode }) => opcode === "call")).toBe(false);
 		expect(
 			coreOperations(counted).some(({ opcode }) => opcode === "loadArgumentCount"),
 		).toBe(false);
+		expect(
+			coreOperations(counted).some(
+				({ opcode, attributes }) => opcode === "createNumber" && attributes.value === 2,
+			),
+		).toBe(true);
+	});
+
+	it("inlines static argument reads only within the arguments a call passes", () => {
+		let optimized: CoreProgram | undefined;
+		const sourcePath = "core-inline-static-arguments.mjs";
+		const source = `function edges(value) { return arguments.length > 2 ? arguments[2] : value; }
+			function within(count) { let sum = 0; for (let i = 0; i < count; i++) sum += edges(i, 1, 2); return sum; }
+			function beyond(count) { let sum = 0; for (let i = 0; i < count; i++) sum += edges(i); return sum; }
+			within(1);
+			beyond(1);`;
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(source, sourcePath, parseModule(source)),
+			{
+				facts: withProgramClosure(
+					compilerProgramFactsFromConfig(resolveBuildConfig({ engine: { eval: false } })),
+					programClosureCertificate({ kind: "whole-program", entry: sourcePath }, [], []),
+				),
+				afterCoreOptimization(program) {
+					optimized = program;
+				},
+			},
+		);
+		const calls = (name: string) =>
+			coreOperations(coreFunctionNamed(optimized!, name)!).filter(
+				({ opcode }) => opcode === "call",
+			);
+		expect(calls("within")).toEqual([]);
+		// The call passes no third argument, so reading it needs a real arguments object.
+		expect(calls("beyond")).toHaveLength(1);
 	});
 
 	it("expands forEach outside a loop around a branching callback that writes its caller's bindings", () => {

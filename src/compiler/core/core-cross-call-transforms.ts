@@ -251,9 +251,7 @@ const INLINE_UNSUPPORTED_OPCODES = new Set([
 	"createRestArguments",
 	"createRestArgumentsState",
 	"callRestArguments",
-	"loadArgumentCount",
 	"loadCallee",
-	"loadStaticArgument",
 	"storeCaptured",
 ]);
 
@@ -610,6 +608,16 @@ function directCaptureContext(
 	return { caller, callee, site, sameScopeChain: true };
 }
 
+function positionalArgumentCount(
+	fn: CoreFunctionStore,
+	call: CoreInstructionId,
+): number | undefined {
+	const transfer = fn.registry.byId(fn.instructionOpcode(call)).callTransfer;
+	return transfer?.arguments.kind === "positional"
+		? fn.kernel.instructionOperandCount(call) - transfer.arguments.firstOperand
+		: undefined;
+}
+
 function inlineTarget(
 	program: CoreProgram,
 	caller: CoreFunctionStore,
@@ -617,6 +625,8 @@ function inlineTarget(
 	invocation: "call" | "construct",
 	captureContext?: InlineCaptureContext,
 	synchronousCallback?: CoreSynchronousCallbackConsumer,
+	// A site's positional argument count; reads of `arguments` resolve against it.
+	argumentCount?: number,
 ): InlineTarget | undefined {
 	const fn = program.function(target);
 	const callbackConsumer =
@@ -674,6 +684,16 @@ function inlineTarget(
 		active.add(block);
 		for (const instruction of fn.bodyInstructionIds(block)) {
 			const opcode = fn.instructionOpcodeName(instruction);
+			if (opcode === "loadArgumentCount" || opcode === "loadStaticArgument") {
+				const index = fn.instructionAttributes(instruction).index;
+				// Past the passed arguments a static read needs a real arguments object.
+				if (
+					argumentCount === undefined ||
+					(opcode === "loadStaticArgument" &&
+						(typeof index !== "number" || index >= argumentCount))
+				)
+					return false;
+			}
 			if (
 				++instructionCount > (callbackConsumer ? 128 : 48) ||
 				(INLINE_UNSUPPORTED_OPCODES.has(opcode) &&
@@ -1635,7 +1655,15 @@ function offerFunctionCandidates(
 		if (finiteTargets !== undefined) {
 			const targetSetKind = closedFiniteTargets === undefined ? "open-hints" : "closed";
 			const inlines = finiteTargets.map((target) =>
-				inlineTarget(program, fn, target, invocation),
+				inlineTarget(
+					program,
+					fn,
+					target,
+					invocation,
+					undefined,
+					undefined,
+					positionalArgumentCount(fn, site.instruction),
+				),
 			);
 			const generatedCodeCost = inlines.reduce(
 				(cost, inline) =>
@@ -1802,6 +1830,7 @@ function offerFunctionCandidates(
 			invocation,
 			captureContext,
 			synchronousCallback,
+			positionalArgumentCount(fn, site.instruction),
 		);
 		const singleUseGlobal =
 			coreValueIsLoadedGlobalProperty(fn, site.callee) &&
@@ -2817,6 +2846,8 @@ function applyLinearInline(
 			target,
 			descriptor.callTransfer.invocation,
 			applicationCaptureContext(program, caller, callee, candidate.site, target),
+			undefined,
+			positionalArgumentCount(caller, candidate.site),
 		);
 	if (inline === undefined) return undefined;
 	if (inline.construction) return applyGuardedInline(program, candidate, editor, false);
@@ -2954,6 +2985,55 @@ function applyLinearInline(
 				introduced++;
 				continue;
 			}
+			if (opcode === "loadArgumentCount") {
+				const output = materializeInstructionResults(inline.function, instruction)[0];
+				if (output === undefined) return undefined;
+				const created = editor.insertInstruction(
+					block,
+					candidate.site,
+					"createNumber",
+					[],
+					{
+						attributes: { value: arguments_.length },
+						sourcePosition: sourcePositions.get(instruction),
+					},
+				);
+				values.set(output, created.outputs[0]!);
+				introduced++;
+				continue;
+			}
+			if (opcode === "loadStaticArgument") {
+				const [output, fallback] = materializeInstructionResults(
+					inline.function,
+					instruction,
+				);
+				const [direct, unmade] = materializeInstructionOperands(
+					inline.function,
+					instruction,
+				);
+				const index = inline.function.instructionAttributes(instruction).index;
+				const value = direct === undefined ? undefined : values.get(direct);
+				const state = unmade === undefined ? undefined : values.get(unmade);
+				if (
+					output === undefined ||
+					fallback === undefined ||
+					value === undefined ||
+					state === undefined ||
+					typeof index !== "number" ||
+					index >= arguments_.length
+				)
+					return undefined;
+				values.set(
+					output,
+					bridgeValue(
+						value,
+						inline.function.valueRepresentation(output),
+						sourcePositions.get(instruction),
+					),
+				);
+				values.set(fallback, state);
+				continue;
+			}
 			if (opcode === "loadThis") {
 				const output =
 					inline.function.kernel.instructionResultCount(instruction) === 0
@@ -3062,6 +3142,7 @@ function applyGuardedInline(
 		descriptor.callTransfer.invocation,
 		applicationCaptureContext(program, caller, callee, candidate.site, target),
 		synchronousCallback,
+		positionalArgumentCount(caller, candidate.site),
 	);
 	if (inline === undefined) return undefined;
 	if (
@@ -3453,6 +3534,51 @@ function applyGuardedInline(
 				introduced++;
 				continue;
 			}
+			if (opcode === "loadArgumentCount") {
+				const output = materializeInstructionResults(inline.function, instruction)[0];
+				if (output === undefined)
+					throw new Error("Validated guarded inline argument count is invalid");
+				const created = editor.appendInstruction(destination, "createNumber", [], {
+					attributes: { value: arguments_.length },
+					sourcePosition: sourcePositions.get(instruction),
+				});
+				values.set(output, created.outputs[0]!);
+				introduced++;
+				continue;
+			}
+			if (opcode === "loadStaticArgument") {
+				const [output, fallback] = materializeInstructionResults(
+					inline.function,
+					instruction,
+				);
+				const [direct, unmade] = materializeInstructionOperands(
+					inline.function,
+					instruction,
+				);
+				const index = inline.function.instructionAttributes(instruction).index;
+				const value = direct === undefined ? undefined : values.get(direct);
+				const state = unmade === undefined ? undefined : values.get(unmade);
+				if (
+					output === undefined ||
+					fallback === undefined ||
+					value === undefined ||
+					state === undefined ||
+					typeof index !== "number" ||
+					index >= arguments_.length
+				)
+					throw new Error("Validated guarded inline static argument is invalid");
+				values.set(
+					output,
+					bridgeValue(
+						destination,
+						value,
+						inline.function.valueRepresentation(output),
+						sourcePositions.get(instruction),
+					),
+				);
+				values.set(fallback, state);
+				continue;
+			}
 			if (opcode === "loadNewTarget") {
 				const output = materializeInstructionResults(inline.function, instruction)[0];
 				if (output === undefined)
@@ -3667,7 +3793,15 @@ function applyFiniteDispatch(
 	const representation = caller.valueRepresentation(result);
 	if (
 		candidate.targets.some((target) => {
-			const inline = inlineTarget(program, caller, target, "call");
+			const inline = inlineTarget(
+				program,
+				caller,
+				target,
+				"call",
+				undefined,
+				undefined,
+				positionalArgumentCount(caller, candidate.site),
+			);
 			return (
 				inline === undefined ||
 				inline.returnValues.some(
