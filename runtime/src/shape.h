@@ -21,6 +21,7 @@
 typedef struct MalShape MalShape;
 typedef struct MalShapeTransition MalShapeTransition;
 typedef struct MalShapeTransitionIndex MalShapeTransitionIndex;
+typedef struct MalShapeFindIndex MalShapeFindIndex;
 
 /**
  * Immutable proof that one shaped-object layout is the exact default-data
@@ -64,6 +65,8 @@ struct MalShape {
     struct MalArrayObject *for_in_keys;
     /** The empty shape this one's transition tree grows from; null for the dictionary sentinel. */
     MalShape *tree_root;
+    /** Hashed positions of a wide shape's keys, built by its first lookup. */
+    MalShapeFindIndex *find_index;
 };
 
 static_assert(sizeof(MalShape) <= 64, "MalShape outgrew its 64-byte layout budget");
@@ -83,7 +86,7 @@ static inline MalShape *mal_shape_root(MalHeap *heap) {
  */
 MalShape *mal_shape_dictionary_empty(void);
 
-/** Multi-property shape lookup, including the per-thread hashed lookup cache. */
+/** Multi-property shape lookup through the shape's own hashed key index. */
 i32 mal_shape_find_wide(
     const MalShape *shape, MalKey key, MalShapeFindCaller caller);
 

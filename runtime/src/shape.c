@@ -10,23 +10,16 @@
 static_assert(MAL_SHAPE_FIND_CALLER_COUNT == MAL_PERF_SHAPE_CALLER_COUNT, "shape caller stats mismatch");
 
 #define MAL_SHAPE_TRANSITION_INDEX_THRESHOLD 8
-#define MAL_SHAPE_FIND_CACHE_SET_COUNT 512
-#define MAL_SHAPE_FIND_CACHE_WAYS 2
-#define MAL_SHAPE_FIND_CACHE_THRESHOLD 4
+// Below this width a linear scan of the props beats hashing the key.
+#define MAL_SHAPE_FIND_INDEX_THRESHOLD 4
 
-typedef struct MalShapeFindCacheSet {
-    const MalShape *shape[MAL_SHAPE_FIND_CACHE_WAYS];
-    MalValue key[MAL_SHAPE_FIND_CACHE_WAYS];
-    u64 hash[MAL_SHAPE_FIND_CACHE_WAYS];
-    i32 result[MAL_SHAPE_FIND_CACHE_WAYS];
-    u8 next_victim;
-} MalShapeFindCacheSet;
-
-static_assert(sizeof(MalShapeFindCacheSet) == (sizeof(void *) == 8 ? 64 : 56),
-              "two-way shape cache set must retain its pointer-width-specific layout");
-
-static _Thread_local MalShapeFindCacheSet
-    mal_shape_find_cache[MAL_SHAPE_FIND_CACHE_SET_COUNT];
+/* Open addressing over the props: an entry holds the key's 32-bit hash above the
+ * prop index plus one, so zero marks an empty slot and most mismatches never load
+ * the key. Shapes never change their props, so the index is built once. */
+struct MalShapeFindIndex {
+    u32 mask;
+    u64 entries[];
+};
 
 typedef enum MalShapeTransitionKind {
     MAL_SHAPE_TRANSITION_ADD,
@@ -68,39 +61,14 @@ static bool mal_shape_transition_hash(MalKey key, u8 attrs, u64 *out) {
     return true;
 }
 
-static bool mal_shape_find_hash(MalKey key, u64 *out) {
-    if (mal_value_is_string(key.value)) {
-        MalString *string = mal_value_to_string(key.value);
-        *out = mal_string_hash(string);
-        return true;
-    }
-    *out = key.value;
-    return true;
+static u32 mal_shape_find_key_hash(MalValue key) {
+    u64 hash = mal_value_is_string(key)
+        ? mal_string_hash(mal_value_to_string(key))
+        : key * 0x9E3779B97F4A7C15ull;
+    return (u32) (hash ^ (hash >> 32));
 }
 
-static MalShapeFindCacheSet *mal_shape_find_cache_set(
-    const MalShape *shape, u64 hash) {
-    uintptr_t pointer = (uintptr_t) shape >> 4;
-    usize slot = (usize) (pointer ^ hash ^ (hash >> 32))
-        & (MAL_SHAPE_FIND_CACHE_SET_COUNT - 1);
-    return &mal_shape_find_cache[slot];
-}
-
-static void mal_shape_find_cache_fill(
-    MalShapeFindCacheSet *set, const MalShape *shape, MalValue key,
-    u64 hash, i32 result
-) {
-    u8 way = set->shape[0] == nullptr ? 0
-        : set->shape[1] == nullptr ? 1
-        : set->next_victim;
-    set->shape[way] = shape;
-    set->key[way] = key;
-    set->hash[way] = hash;
-    set->result[way] = result;
-    set->next_victim = way ^ 1;
-}
-
-static void mal_shape_find_record_cached(
+static void mal_shape_find_record(
     const MalShape *shape, MalKey key, MalShapeFindCaller caller, i32 result) {
     if (!mal_perf_stats_enabled) return;
     MalPerfShapeStats *stats = &mal_perf_stats.shapes[caller];
@@ -118,6 +86,23 @@ static void mal_shape_find_record_cached(
         stats->max_width = shape->inline_count;
     }
     if (stats->max_comparisons == 0) stats->max_comparisons = 1;
+}
+
+static MalShapeFindIndex *mal_shape_find_index_build(MalShape *shape) {
+    u32 capacity = 16;
+    while (capacity < (u32) shape->inline_count * 2) capacity *= 2;
+    MalShapeFindIndex *index =
+        calloc(1, sizeof(MalShapeFindIndex) + sizeof(u64) * capacity);
+    if (index == nullptr) abort();
+    index->mask = capacity - 1;
+    for (u32 i = 0; i < shape->inline_count; i++) {
+        u32 hash = mal_shape_find_key_hash(shape->props[i].key);
+        u32 slot = hash & index->mask;
+        while (index->entries[slot] != 0) slot = (slot + 1) & index->mask;
+        index->entries[slot] = ((u64) hash << 32) | (i + 1);
+    }
+    shape->find_index = index;
+    return index;
 }
 
 static MalShapeTransitionIndex *mal_shape_transition_index_new(u32 capacity) {
@@ -228,7 +213,6 @@ void mal_shape_heap_init(MalHeap *heap) {
     heap->shape_root = malloc(sizeof(MalShape));
     mal_shape_init_empty(heap->shape_root);
     heap->shape_root->tree_root = heap->shape_root;
-    memset(mal_shape_find_cache, 0, sizeof(mal_shape_find_cache));
 }
 
 static void mal_shape_free_children(MalShape *shape) {
@@ -237,6 +221,7 @@ static void mal_shape_free_children(MalShape *shape) {
         MalShapeTransition *next = transition->next;
         mal_shape_free_children(transition->child);
         free(transition->child->transition_index);
+        free(transition->child->find_index);
         free(transition->child->props);
         free(transition->child);
         free(transition);
@@ -250,8 +235,6 @@ void mal_shape_heap_free(MalHeap *heap) {
     free(heap->shape_root->transition_index);
     free(heap->shape_root);
     heap->shape_root = nullptr;
-    // The TLS cache may otherwise retain freed pointers into a later heap lifetime.
-    memset(mal_shape_find_cache, 0, sizeof(mal_shape_find_cache));
 }
 
 MalShape *mal_shape_dictionary_empty(void) {
@@ -266,20 +249,24 @@ bool mal_shape_attrs_are_default(u8 attrs) {
 i32 mal_shape_find_wide(const MalShape *shape, MalKey key, MalShapeFindCaller caller) {
     // Empty and single-property shapes are handled by the header fast path.
     if (shape->inline_count <= 1) abort();
-    u64 hash = 0;
-    MalShapeFindCacheSet *cache_set = nullptr;
-    if (shape->inline_count >= MAL_SHAPE_FIND_CACHE_THRESHOLD
-        && mal_shape_find_hash(key, &hash)) {
-        cache_set = mal_shape_find_cache_set(shape, hash);
-        for (u8 way = 0; way < MAL_SHAPE_FIND_CACHE_WAYS; way++) {
-            if (cache_set->shape[way] == shape && cache_set->hash[way] == hash
-                && mal_key_value_equals(cache_set->key[way], key.value)) {
-                cache_set->next_victim = way ^ 1;
-                mal_shape_find_record_cached(
-                    shape, key, caller, cache_set->result[way]);
-                return cache_set->result[way];
+    if (shape->inline_count >= MAL_SHAPE_FIND_INDEX_THRESHOLD) {
+        const MalShapeFindIndex *index = shape->find_index != nullptr
+            ? shape->find_index
+            : mal_shape_find_index_build((MalShape *) shape);
+        u32 hash = mal_shape_find_key_hash(key.value);
+        u32 slot = hash & index->mask;
+        i32 result = -1;
+        for (u64 entry = index->entries[slot]; entry != 0;
+                slot = (slot + 1) & index->mask, entry = index->entries[slot]) {
+            if ((u32) (entry >> 32) != hash) continue;
+            i32 candidate = (i32) (u32) entry - 1;
+            if (mal_key_value_equals(shape->props[candidate].key, key.value)) {
+                result = candidate;
+                break;
             }
         }
+        mal_shape_find_record(shape, key, caller, result);
+        return result;
     }
     for (u32 i = 0; i < shape->inline_count; ++i) {
         if (mal_key_value_equals(shape->props[i].key, key.value)) {
@@ -295,10 +282,6 @@ i32 mal_shape_find_wide(const MalShape *shape, MalKey key, MalShapeFindCaller ca
                 if (shape->props[i].key == key.value) stats->pointer_hits++;
                 else stats->content_hits++;
             }
-            if (cache_set != nullptr) {
-                mal_shape_find_cache_fill(
-                    cache_set, shape, shape->props[i].key, hash, (i32) i);
-            }
             return (i32) i;
         }
     }
@@ -310,14 +293,6 @@ i32 mal_shape_find_wide(const MalShape *shape, MalKey key, MalShapeFindCaller ca
         stats->comparisons += shape->inline_count;
         if (shape->inline_count > stats->max_width) stats->max_width = shape->inline_count;
         if (shape->inline_count > stats->max_comparisons) stats->max_comparisons = shape->inline_count;
-    }
-    if (cache_set != nullptr && mal_value_is_string(key.value)) {
-        MalString *string = mal_value_to_string(key.value);
-        // The untraced cache may retain dynamic atoms because their VM roots outlive it.
-        if (string->header.storage == MAL_HEAP_STORAGE_IMMORTAL ||
-            string->property_atom) {
-            mal_shape_find_cache_fill(cache_set, shape, key.value, hash, -1);
-        }
     }
     return -1;
 }
