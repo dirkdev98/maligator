@@ -4782,6 +4782,39 @@ MalCompletion mal_vm_call_value(
     return completion;
 }
 
+static inline __attribute__((always_inline)) MalValue mal_vm_call_native_value(
+    MalVm *vm, MalValue callee, MalValue this_value, const MalValue *args, i32 arg_count
+) {
+    MalNativeFunctionObject *native_function = mal_value_to_native_function_object(callee);
+    MAL_PROFILE_NATIVE_CALL(vm, native_function);
+    MalNativeFunctionCallback callback = mal_native_function_object_callback(native_function);
+    MAL_PERF_COUNT(call_cache_native_dispatches);
+    if (mal_perf_stats_enabled) {
+        MalString *native_name = mal_native_function_object_name(native_function);
+        if (native_name != nullptr) mal_perf_native_call_name(native_name);
+    }
+#if MAL_REALMS
+    MalRealm *saved_realm = vm->current_realm;
+    mal_vm_realm_switch_to(vm, mal_vm_callee_realm(vm, callee));
+#endif
+    MalCalleeRoots ncr;
+    mal_gc_callee_roots_begin(&ncr, this_value, mal_value_new_undefined(), callee, args, arg_count);
+    vm->gc_native_frames++;
+#if MAL_PROFILE && MAL_PERF_STATS
+    i32 saved_profile_site = vm->profile_current_site_id;
+#endif
+    MalValue value = callback(vm, this_value, args, arg_count, mal_value_new_undefined(), callee);
+#if MAL_PROFILE && MAL_PERF_STATS
+    vm->profile_current_site_id = saved_profile_site;
+#endif
+    vm->gc_native_frames--;
+    mal_gc_callee_roots_end(&ncr);
+#if MAL_REALMS
+    mal_vm_realm_switch_to(vm, saved_realm);
+#endif
+    return value;
+}
+
 // Native callee roots stay out of the compiled-call frame used by recursive JS middleware.
 __attribute__((noinline)) static MalCompletion mal_vm_call_cached_fallback(
     MalVm *vm,
@@ -4837,35 +4870,7 @@ __attribute__((noinline)) static MalCompletion mal_vm_call_cached_fallback(
     }
     // A plain native needs none of the generic call's bound or proxy resolution.
     if (mal_value_is_native_function_object(callee)) {
-        MalNativeFunctionObject *native_function = mal_value_to_native_function_object(callee);
-        MAL_PROFILE_NATIVE_CALL(vm, native_function);
-        MalNativeFunctionCallback callback = mal_native_function_object_callback(native_function);
-        MAL_PERF_COUNT(call_cache_native_dispatches);
-        if (mal_perf_stats_enabled) {
-            MalString *native_name = mal_native_function_object_name(native_function);
-            if (native_name != nullptr) mal_perf_native_call_name(native_name);
-        }
-#if MAL_REALMS
-        MalRealm *saved_realm = vm->current_realm;
-        mal_vm_realm_switch_to(vm, mal_vm_callee_realm(vm, callee));
-#endif
-        MalCalleeRoots ncr;
-        mal_gc_callee_roots_begin(&ncr, this_value, mal_value_new_undefined(),
-                                  callee, args, arg_count);
-        vm->gc_native_frames++;
-#if MAL_PROFILE && MAL_PERF_STATS
-        i32 saved_profile_site = vm->profile_current_site_id;
-#endif
-        MalValue value = callback(
-            vm, this_value, args, arg_count, mal_value_new_undefined(), callee);
-#if MAL_PROFILE && MAL_PERF_STATS
-        vm->profile_current_site_id = saved_profile_site;
-#endif
-        vm->gc_native_frames--;
-        mal_gc_callee_roots_end(&ncr);
-#if MAL_REALMS
-        mal_vm_realm_switch_to(vm, saved_realm);
-#endif
+        MalValue value = mal_vm_call_native_value(vm, callee, this_value, args, arg_count);
         return vm->completion.kind == MAL_COMPLETION_THROW
             ? vm->completion
             : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
@@ -4882,6 +4887,15 @@ __attribute__((noinline)) static MalValue mal_vm_call_cached_value_fallback(
     const MalValue *args,
     i32 arg_count
 ) {
+    // A plain native is the common miss of the compiled-function probe; only the call and
+    // apply builtins, which forward to their receiver, and non-natives go further.
+    if (mal_value_is_native_function_object(callee) &&
+        callee != vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE_CALL] &&
+        mal_native_function_object_callback(mal_value_to_native_function_object(callee)) !=
+            mal_builtin_function_prototype_apply) {
+        MalValue value = mal_vm_call_native_value(vm, callee, this_value, args, arg_count);
+        return vm->completion.kind == MAL_COMPLETION_THROW ? MAL_VALUE_UNDEFINED : value;
+    }
     MalCompletion completion =
         mal_vm_call_cached_fallback(vm, callee, this_value, args, arg_count);
     if (completion.kind != MAL_COMPLETION_THROW) return completion.value;
