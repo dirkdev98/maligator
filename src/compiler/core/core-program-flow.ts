@@ -2395,15 +2395,19 @@ export class CoreProgramFlowEngine {
 					valueAnalyses.set(functionId, values);
 					functionsEvaluated++;
 					let returnKind = 0;
-					for (const block of cfg.reachable) {
-						const terminator = fn.blockTerminator(block);
-						if (fn.instructionKind(terminator) === "return") {
-							returnKind |= semantics.latticeMask(
-								values,
-								fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator)),
-							);
+					// A call to an async function or a generator returns its promise or iterator;
+					// the body's return value only settles or completes that object.
+					if (fn.isAsync || fn.isGenerator) returnKind = semantics.object;
+					else
+						for (const block of cfg.reachable) {
+							const terminator = fn.blockTerminator(block);
+							if (fn.instructionKind(terminator) === "return") {
+								returnKind |= semantics.latticeMask(
+									values,
+									fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator)),
+								);
+							}
 						}
-					}
 					if (returnKind !== summary.returnKind) {
 						summaries.set(functionId, { ...summary, returnKind });
 						for (const caller of targets.graph.exactCallers(functionId)) {

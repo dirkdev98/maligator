@@ -373,6 +373,34 @@ describe("whole-program Core value kinds", () => {
 		expect(search.some(({ opcode }) => opcode === "throwIfTdz")).toBe(false);
 	});
 
+	it.each([
+		["an async function", "async function produce() { return 1; }"],
+		["a generator", "function* produce() { return 1; }"],
+		["an async generator", "async function* produce() { return 1; }"],
+	])("types a call to %s by the object it returns", (_name, declaration) => {
+		const sourcePath = "suspending-result.mjs";
+		const source = `${declaration}
+function isNumber() { return typeof produce() === "number"; }
+globalThis.result = isNumber();`;
+		let optimized: CoreProgram | undefined;
+		compileSemanticProgramToProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(source, sourcePath, parseModule(source)),
+			{
+				facts: withProgramClosure(
+					compilerProgramFactsFromConfig(resolveBuildConfig({ engine: { eval: false } })),
+					programClosureCertificate({ kind: "whole-program", entry: sourcePath }, [], []),
+				),
+				afterCoreOptimization(program) {
+					optimized = program;
+				},
+			},
+		);
+		const constants = coreOperations(coreFunctionNamed(optimized!, "isNumber")!).filter(
+			({ opcode }) => opcode === "createBoolean",
+		);
+		expect(constants).toEqual([]);
+	});
+
 	it("keeps parameter observations when open-world callers may add other kinds", () => {
 		const { program: optimized } = compileRecursiveObservation(false);
 		const observe = coreFunctionNamed(optimized, "observe")!;
