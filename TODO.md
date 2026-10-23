@@ -569,9 +569,13 @@ iterator cursor is not, by itself, permission to delete its language object.
       A region with inner loops is entered once, so a single restart finishes the
       whole loop in the original code. Regions over records therefore stay
       innermost, because their field guards fail until the original loop has
-      cached the shapes. Retrying a region after the original code completes an
-      iteration would let them nest, and would also stop one hole or out-of-range
-      key from leaving a long loop generic.
+      cached the shapes. A retry that jumped from the original header back to the
+      region's entry after one generic iteration made the nested union-find loop
+      14% slower without any restart, likely because the backward jump merged the
+      region into the original loop's cycle. Nesting a counted inner loop also
+      turns its accesses into checked reads with a double index: an `imul` sum over
+      record fields ran 35 ms nested against 28 innermost. Inner loops need their own
+      counters, with range guards at each inner entry, before records can nest.
       Frame-local shape snapshots for plain static loads and stores in loops made
       such a loop about 8% faster but the self-compiler's parser slice 1.7 to 2.6%
       slower, so they serve number-record regions only.
