@@ -1,5 +1,6 @@
 #include "http_codec.h"
 
+#include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -94,8 +95,10 @@ static int codec_message_begin(llhttp_t *parser) {
     if (codec->head != nullptr || codec->event_head != nullptr) {
         return codec_fail(parser, "HTTP head was not consumed");
     }
-    codec->head = calloc(1, sizeof(*codec->head));
+    codec->head = malloc(sizeof(*codec->head));
     if (codec->head == nullptr) return codec_fail(parser, "HTTP head allocation failed");
+    // The inline field and arena storage is only read up to its recorded lengths.
+    memset(codec->head, 0, offsetof(MalHttpCodecHead, inline_fields));
     codec->head->arena = codec->head->inline_arena;
     codec->head->arena_capacity = MAL_HTTP_CODEC_INLINE_ARENA;
     codec->head->fields = codec->head->inline_fields;
