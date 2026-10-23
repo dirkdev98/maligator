@@ -2291,14 +2291,17 @@ static inline void mal_gc_callee_roots_begin(
     roots->receiver_slots[0] = this_value;
     roots->receiver_slots[1] = new_target;
     roots->receiver_slots[2] = callee;
-    mal_gc_root(&roots->receiver_span, roots->receiver_slots, 3);
+    MalIsolateLocals *isolate = mal_isolate_locals();
+    roots->receiver_span = (MalRootSpan) {
+        .slots = roots->receiver_slots, .count = 3, .prev = isolate->root_span_head};
     // Cast away const: the collector only reads (shades) these slots.
-    mal_gc_root(&roots->args_span, (MalValue *) args, arg_count);
+    roots->args_span = (MalRootSpan) {
+        .slots = (MalValue *) args, .count = arg_count, .prev = &roots->receiver_span};
+    isolate->root_span_head = &roots->args_span;
 }
 
 static inline void mal_gc_callee_roots_end(MalCalleeRoots *roots) {
-    mal_gc_unroot(&roots->args_span);
-    mal_gc_unroot(&roots->receiver_span);
+    mal_isolate_locals()->root_span_head = roots->receiver_span.prev;
 }
 
 /**

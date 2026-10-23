@@ -296,13 +296,15 @@ typedef struct MalRootSpan {
 } MalRootSpan;
 
 
+// The isolate record is an atomic load the compiler cannot merge, so read it once.
 static inline void mal_gc_root(MalRootSpan *span, MalValue *slots, i32 count) {
+    MalIsolateLocals *isolate = mal_isolate_locals();
     span->slots = slots;
     span->count = count;
-    span->prev = mal_root_span_head;
-    mal_root_span_head = span;
+    span->prev = isolate->root_span_head;
+    isolate->root_span_head = span;
 }
 
 static inline void mal_gc_unroot(MalRootSpan *span) {
-    mal_root_span_head = span->prev;
+    mal_isolate_locals()->root_span_head = span->prev;
 }
