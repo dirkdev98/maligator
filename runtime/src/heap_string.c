@@ -48,31 +48,6 @@ static inline void mal_perf_string_allocation(usize length) {
 }
 #endif
 
-// A variable-length memcpy is a libc call; inline payloads fit two overlapping word moves.
-static inline void mal_string_copy_inline_latin1(u8 *destination, const u8 *source, usize length) {
-    if (length >= sizeof(u64)) {
-        u64 head, tail;
-        memcpy(&head, source, sizeof(head));
-        memcpy(&tail, source + length - sizeof(tail), sizeof(tail));
-        memcpy(destination, &head, sizeof(head));
-        memcpy(destination + length - sizeof(tail), &tail, sizeof(tail));
-    } else if (length >= sizeof(u32)) {
-        u32 head, tail;
-        memcpy(&head, source, sizeof(head));
-        memcpy(&tail, source + length - sizeof(tail), sizeof(tail));
-        memcpy(destination, &head, sizeof(head));
-        memcpy(destination + length - sizeof(tail), &tail, sizeof(tail));
-    } else if (length >= sizeof(u16)) {
-        u16 head, tail;
-        memcpy(&head, source, sizeof(head));
-        memcpy(&tail, source + length - sizeof(tail), sizeof(tail));
-        memcpy(destination, &head, sizeof(head));
-        memcpy(destination + length - sizeof(tail), &tail, sizeof(tail));
-    } else if (length == 1) {
-        destination[0] = source[0];
-    }
-}
-
 // The header belongs to the allocator, which already set its type and initial mark.
 static void mal_string_init_flat(
     MalString *string, MalStringStorage storage, bool latin1, usize length

@@ -2727,9 +2727,24 @@ static bool mal_builtin_string_latin1_upper_expanding(MalVm *vm, MalString *stri
     return true;
 }
 
-static MalValue mal_builtin_string_case_range_impl(MalVm *vm, MalString *string, usize start, usize length, bool to_upper, MalUnicodeLocale locale) {
-    MAL_PERF_COUNT(string_case_calls);
-    MAL_PERF_ADD(string_case_input_code_units, length);
+// Flips the case bit of every ASCII letter of the other case in eight ASCII bytes at once;
+// returns false when a byte is outside ASCII.
+static inline bool mal_builtin_string_ascii_case_word(u64 *word, bool to_upper, bool *changed) {
+    const u64 ones = 0x0101010101010101ull;
+    const u64 highs = 0x8080808080808080ull;
+    if ((*word & highs) != 0) return false;
+    u8 first = to_upper ? 'a' : 'A';
+    u64 at_least_first = *word + ones * (u8) (0x80 - first);
+    u64 beyond_last = *word + ones * (u8) (0x80 - (first + 25) - 1);
+    u64 letters = at_least_first & ~beyond_last & highs;
+    *word ^= letters >> 2;
+    *changed |= letters != 0;
+    return true;
+}
+
+// The general path's Unicode scratch would make every short ASCII conversion save and
+// restore every callee-saved register and guard the stack.
+static __attribute__((noinline)) MalValue mal_builtin_string_case_range_general(MalVm *vm, MalString *string, usize start, usize length, bool to_upper, MalUnicodeLocale locale) {
     if (locale == MAL_UNICODE_LOCALE_ROOT && length <= MAL_STRING_INLINE_LATIN1_CODE_UNITS) {
         MalStringSegment segment;
         if (mal_string_try_get_segment(string, start, length, &segment)) {
@@ -2808,6 +2823,30 @@ static MalValue mal_builtin_string_case_range_impl(MalVm *vm, MalString *string,
         ? mal_string_new_latin1_copy(&vm->heap, units, length)
         : mal_string_new_latin1_owned(&vm->heap, units, length));
     return result;
+}
+
+static MalValue mal_builtin_string_case_range_impl(MalVm *vm, MalString *string, usize start, usize length, bool to_upper, MalUnicodeLocale locale) {
+    MAL_PERF_COUNT(string_case_calls);
+    MAL_PERF_ADD(string_case_input_code_units, length);
+    MalStringSegment segment;
+    if (locale == MAL_UNICODE_LOCALE_ROOT && length <= MAL_STRING_INLINE_LATIN1_CODE_UNITS &&
+        mal_string_try_get_segment(string, start, length, &segment) && segment.latin1) {
+        u64 words[2] = {0, 0};
+        mal_string_copy_inline_latin1((u8 *) words, segment.latin1_units, length);
+        bool changed = false;
+        if (mal_builtin_string_ascii_case_word(&words[0], to_upper, &changed) &&
+            mal_builtin_string_ascii_case_word(&words[1], to_upper, &changed)) {
+            if (!changed) {
+                MAL_PERF_COUNT(string_case_reuses);
+                return mal_builtin_string_slice(vm, string, start, length);
+            }
+            MAL_PERF_COUNT(string_case_changed_allocations);
+            MAL_PERF_ADD(string_case_changed_code_units, length);
+            return mal_value_from_string(
+                mal_string_new_latin1_copy(&vm->heap, (const u8 *) words, length));
+        }
+    }
+    return mal_builtin_string_case_range_general(vm, string, start, length, to_upper, locale);
 }
 
 static MalValue mal_builtin_string_case_range(MalVm *vm, MalString *string, usize start, usize length, bool upper, MalUnicodeLocale locale) {

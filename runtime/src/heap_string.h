@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string.h>
+
 #include "./defaults.h"
 #include "heap.h"
 #include "perf_stats.h"
@@ -146,6 +148,31 @@ const c16 *mal_string_flatten(MalString *string);
  * Return contiguous UTF-16 storage, widening or flattening when needed. Its
  * address stays valid while the string is rooted. Prefer segments for traversal.
  */
+// A variable-length memcpy is a libc call; inline payloads fit two overlapping word moves.
+static inline void mal_string_copy_inline_latin1(u8 *destination, const u8 *source, usize length) {
+    if (length >= sizeof(u64)) {
+        u64 head, tail;
+        memcpy(&head, source, sizeof(head));
+        memcpy(&tail, source + length - sizeof(tail), sizeof(tail));
+        memcpy(destination, &head, sizeof(head));
+        memcpy(destination + length - sizeof(tail), &tail, sizeof(tail));
+    } else if (length >= sizeof(u32)) {
+        u32 head, tail;
+        memcpy(&head, source, sizeof(head));
+        memcpy(&tail, source + length - sizeof(tail), sizeof(tail));
+        memcpy(destination, &head, sizeof(head));
+        memcpy(destination + length - sizeof(tail), &tail, sizeof(tail));
+    } else if (length >= sizeof(u16)) {
+        u16 head, tail;
+        memcpy(&head, source, sizeof(head));
+        memcpy(&tail, source + length - sizeof(tail), sizeof(tail));
+        memcpy(destination, &head, sizeof(head));
+        memcpy(destination + length - sizeof(tail), &tail, sizeof(tail));
+    } else if (length == 1) {
+        destination[0] = source[0];
+    }
+}
+
 static inline const c16 *mal_string_code_units(const MalString *string) {
     // C memory operations require nonnull pointers, including empty wire strings.
     if (string->length == 0 ||
