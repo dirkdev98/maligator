@@ -66,6 +66,30 @@ function clzSum(values, seed) {
 	return total;
 }
 
+function wrappingRecordSum(points, seed) {
+	let sum = seed;
+	for (let index = 0; index < points.length; index++)
+		sum = (sum + Math.imul(points[index].x, points[index].y)) | 0;
+	return sum;
+}
+
+function widestSpan(values) {
+	let widest = 0;
+	let last = 0;
+	for (const value of values) {
+		last = (value >>> 0) - (value | 0);
+		if (last > widest) widest = last;
+	}
+	return `${widest},${last},${Object.is(last, -0)}`;
+}
+
+function descendingPairs(values) {
+	let total = 0;
+	let index = values.length - 1;
+	for (; index >= 0; index -= 2) total += values[index] * index;
+	return `${total},${index}`;
+}
+
 function lookupSum(table, count, mask) {
 	let total = 0;
 	for (let index = 0; index < count; index++) total += table[index & mask];
@@ -197,6 +221,23 @@ lines.push(`bit mix ${bitMix([1, -2, 3, 0x7fffffff, -0x80000000], 5)}`);
 lines.push(`bit mix empty ${bitMix([], -0)}`);
 lines.push(`bit mix large seed ${bitMix([3, 4], 4294967295)}`);
 lines.push(`clz ${clzSum([0, 1, -1, 2 ** 31, 0.5, 2 ** 40], 6)}`);
+const products = Array.from({ length: 64 }, (_, index) => ({
+	x: (index * 2654435761) % 4294967296,
+	y: (index * 40503) | 0,
+}));
+lines.push(`wrapping sum ${wrappingRecordSum(products, 0)}`);
+lines.push(`wrapping sum unsigned seed ${wrappingRecordSum(products, 4294967295)}`);
+lines.push(`wrapping sum fractional seed ${wrappingRecordSum(products, 0.5)}`);
+lines.push(`wrapping sum wide seed ${wrappingRecordSum(products, 2 ** 40)}`);
+lines.push(`wrapping sum negative zero ${Object.is(wrappingRecordSum([], -0), -0)}`);
+lines.push(
+	`wrapping sum fractional field ${wrappingRecordSum([{ x: 2.5, y: 3 }, ...products], 7)}`,
+);
+lines.push(`span ${widestSpan([-1, 2 ** 31, 5, -(2 ** 31), 0.5, -0])}`);
+lines.push(`span empty ${widestSpan([])}`);
+lines.push(`descending ${descendingPairs([1, 2, 3, 4, 5, 6, 7])}`);
+lines.push(`descending even ${descendingPairs([1.5, 2, 3, 4])}`);
+lines.push(`descending hole ${descendingPairs([1, 2, , 4, 5])}`);
 lines.push(`lookup ${lookupSum([1, 2, 3, 4], 100, 3)}`);
 lines.push(`lookup past the end ${lookupSum([1, 2, 3], 10, 3)}`);
 lines.push(`lookup hole ${lookupSum([1, , 3, 4], 10, 3)}`);

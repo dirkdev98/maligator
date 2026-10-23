@@ -47,13 +47,18 @@ usize mal_gc_worker_limit(MalVm *vm);
 
 
 /* Poll sites only choose whether to enter mal_gc_safepoint, whose exchange acquires the
- * request; a sequentially consistent read would order every loop backedge and call return. */
-static inline __attribute__((always_inline)) bool mal_gc_poll_requested(void) {
+ * request; a sequentially consistent read would order every loop backedge and call return.
+ * A loop without calls can look up its isolate once and poll that record. */
+static inline __attribute__((always_inline)) bool mal_gc_poll_requested_in(MalIsolateLocals *isolate) {
 #if defined(__wasi__)
-    return mal_gc_poll;
+    return isolate->gc_poll;
 #else
-    return atomic_load_explicit(&mal_gc_poll, memory_order_relaxed);
+    return atomic_load_explicit(&isolate->gc_poll, memory_order_relaxed);
 #endif
+}
+
+static inline __attribute__((always_inline)) bool mal_gc_poll_requested(void) {
+    return mal_gc_poll_requested_in(mal_isolate_locals());
 }
 
 typedef struct MalGcPollTarget MalGcPollTarget;

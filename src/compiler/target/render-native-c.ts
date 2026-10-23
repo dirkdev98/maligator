@@ -1139,20 +1139,31 @@ function nativeNumberExpr(operator: string, left: string, right: string): string
 	return null;
 }
 
-const INTEGRAL_BINARY_OPERATORS: ReadonlySet<string> = new Set([
-	"&",
-	"|",
-	"^",
-	"<<",
-	">>",
-	">>>",
-]);
+const INT32_BINARY_OPERATORS: ReadonlySet<string> = new Set(["&", "|", "^", "<<", ">>"]);
 
-/** Registers whose every write in the region yields an integer in [-2^31, 2^32), never -0. */
+interface IntegerRange {
+	readonly low: number;
+	readonly high: number;
+}
+
+const INT32_RANGE: IntegerRange = { low: -(2 ** 31), high: 2 ** 31 - 1 };
+const UINT32_RANGE: IntegerRange = { low: 0, high: 2 ** 32 - 1 };
+// The entry guard admits a carried input into an integer local only within this range.
+const ADMITTED_INPUT_RANGE: IntegerRange = { low: -(2 ** 31), high: 2 ** 32 - 1 };
+// A range still growing after this many rounds is an accumulator with no bound.
+const INTEGER_RANGE_ROUNDS = 8;
+
+/**
+ * Registers whose every write in the region yields a safe integer, never -0. Doubles
+ * and int64 agree exactly on sums and differences of such values.
+ */
 function integralLoopRegisters(
 	fn: BytecodeFunction,
 	order: ReadonlyArray<number>,
 	flow: NativeNumberRecordDataflow,
+	inputs: ReadonlyArray<number>,
+	// Registers whose every value in the region the entry guards already bound.
+	pinned: ReadonlyMap<number, IntegerRange>,
 ): Set<number> {
 	const writers = new Map<number, Array<BytecodeInstruction>>();
 	for (const ip of order) {
@@ -1163,40 +1174,122 @@ function integralLoopRegisters(
 			writers.set(register, ops);
 		}
 	}
-	const integral = new Set(
-		[...writers.keys()].filter((register) => flow.kinds.get(register) === "number"),
+	const functionWrites = new Map<number, Array<BytecodeInstruction>>();
+	for (const op of fn.instructions)
+		for (const register of vmInstructionWriteRegisters(op))
+			if (inputs.includes(register) && !writers.has(register))
+				functionWrites.set(register, [...(functionWrites.get(register) ?? []), op]);
+	// The entry guard bounds any integral input; only loop invariants that can hold nothing
+	// but an admissible constant join, so a fractional invariant never declines the region.
+	const constants = [...functionWrites].flatMap(([register, [op, ...others]]) =>
+		register >= fn.parameterCount &&
+		others.length === 0 &&
+		(op?.opcode === "CREATE_NUMBER" || op?.opcode === "CREATE_F64") &&
+		flow.kinds.get(register) === "number" &&
+		Number.isInteger(op.value) &&
+		!Object.is(op.value, -0) &&
+		op.value >= ADMITTED_INPUT_RANGE.low &&
+		op.value <= ADMITTED_INPUT_RANGE.high
+			? [register]
+			: [],
 	);
-	const produces = (op: BytecodeInstruction): boolean => {
+	const fixed = new Set([...constants, ...pinned.keys()]);
+	// Registers that are not inputs start from their local's zero initializer.
+	const ranges = new Map<number, IntegerRange | "unbounded">([
+		...constants.map((register): [number, IntegerRange] => [
+			register,
+			ADMITTED_INPUT_RANGE,
+		]),
+		...[...writers.keys()]
+			.filter((register) => flow.kinds.get(register) === "number")
+			.map((register): [number, IntegerRange] => [
+				register,
+				pinned.get(register) ??
+					(inputs.includes(register) ? ADMITTED_INPUT_RANGE : { low: 0, high: 0 }),
+			]),
+	]);
+	const rangeOf = (register: number): IntegerRange | undefined => {
+		const range = ranges.get(register);
+		return range === "unbounded" ? undefined : range;
+	};
+	// Rounding never brings an unsafe bound back into the safe range, so the check is exact.
+	const safe = (low: number, high: number): IntegerRange | undefined =>
+		Number.isSafeInteger(low) && Number.isSafeInteger(high) ? { low, high } : undefined;
+	const written = (op: BytecodeInstruction): IntegerRange | undefined => {
 		switch (op.opcode) {
-			case "BINARY":
-				return INTEGRAL_BINARY_OPERATORS.has(op.operator);
-			case "UNARY":
-				return op.operator === "~";
+			case "BINARY": {
+				if (INT32_BINARY_OPERATORS.has(op.operator)) return INT32_RANGE;
+				if (op.operator === ">>>") return UINT32_RANGE;
+				const left = rangeOf(op.left);
+				const right = rangeOf(op.right);
+				if (left === undefined || right === undefined) return undefined;
+				// Neither a sum nor a difference of integers that are not -0 is -0.
+				if (op.operator === "+")
+					return safe(left.low + right.low, left.high + right.high);
+				if (op.operator === "-")
+					return safe(left.low - right.high, left.high - right.low);
+				return undefined;
+			}
+			case "UNARY": {
+				if (op.operator === "~") return INT32_RANGE;
+				const source = rangeOf(op.src);
+				if (source === undefined) return undefined;
+				if (op.operator === "increment") return safe(source.low + 1, source.high + 1);
+				if (op.operator === "decrement") return safe(source.low - 1, source.high - 1);
+				return undefined;
+			}
 			case "CREATE_NUMBER":
 			case "CREATE_F64":
-				return (
-					Number.isInteger(op.value) &&
-					!Object.is(op.value, -0) &&
-					op.value >= -2147483648 &&
-					op.value <= 4294967295
-				);
+				return Object.is(op.value, -0) ? undefined : safe(op.value, op.value);
 			case "MOVE":
-				return integral.has(op.src);
+				return rangeOf(op.src);
 			default: {
 				const builtin = nativeNumericBuiltinInstruction(op);
-				return builtin?.operation === "Math.imul" || builtin?.operation === "Math.clz32";
+				return builtin?.operation === "Math.imul"
+					? INT32_RANGE
+					: builtin?.operation === "Math.clz32"
+						? { low: 0, high: 32 }
+						: undefined;
 			}
 		}
 	};
+	const rounds = new Map<number, number>();
 	for (let changed = true; changed;) {
 		changed = false;
-		for (const register of [...integral])
-			if (!writers.get(register)!.every(produces)) {
-				integral.delete(register);
-				changed = true;
+		for (const [register, current] of ranges) {
+			if (current === "unbounded") continue;
+			if (fixed.has(register)) {
+				// A pin holds only while every write it guards stays an integer.
+				if (writers.get(register)?.every((op) => written(op) !== undefined) === false) {
+					ranges.set(register, "unbounded");
+					changed = true;
+				}
+				continue;
 			}
+			let { low, high } = current;
+			let bounded = true;
+			for (const op of writers.get(register)!) {
+				const range = written(op);
+				if (range === undefined) {
+					bounded = false;
+					break;
+				}
+				low = Math.min(low, range.low);
+				high = Math.max(high, range.high);
+			}
+			if (bounded && low === current.low && high === current.high) continue;
+			const round = (rounds.get(register) ?? 0) + 1;
+			rounds.set(register, round);
+			ranges.set(
+				register,
+				bounded && round <= INTEGER_RANGE_ROUNDS ? { low, high } : "unbounded",
+			);
+			changed = true;
+		}
 	}
-	return integral;
+	return new Set(
+		[...ranges].flatMap(([register, range]) => (range === "unbounded" ? [] : [register])),
+	);
 }
 
 // Forward block flags preserve whole-label splitting while both loop modes retain their original fallback.
@@ -1226,9 +1319,18 @@ function emitNumericLoopRegion(
 	};
 	const local = (register: number) => `${id}_r${register}`;
 	const start = (register: number) => `${id}_s${register}`;
-	// Bitwise results are exact integers; keeping them in integer locals spares the
-	// double round trip that each ToInt32 would otherwise take.
-	const integral = floating ? integralLoopRegisters(fn, order, flow) : new Set<number>();
+	// The header keeps the index within its guarded range, and the final step leaves it by one stride.
+	const pinned = new Map<number, IntegerRange>();
+	if (plan.kind === "fixed-numeric") {
+		const low = Math.min(0, plan.stride);
+		const high = UINT32_RANGE.high + Math.max(0, plan.stride);
+		if (Number.isSafeInteger(low) && Number.isSafeInteger(high))
+			pinned.set(plan.index, { low, high });
+	}
+	// Integer locals spare the double round trip that each ToInt32 would otherwise take.
+	const integral = floating
+		? integralLoopRegisters(fn, order, flow, plan.inputs, pinned)
+		: new Set<number>();
 	const cType = (register: number) =>
 		kindOf(register) === "boolean"
 			? "bool"
@@ -1239,7 +1341,7 @@ function emitNumericLoopRegion(
 		integral.has(register) ? `(f64) ${local(register)}` : local(register);
 	const intOf = (register: number) =>
 		integral.has(register)
-			? `(i32) ${local(register)}`
+			? `mal_safe_integer_to_i32(${local(register)})`
 			: `mal_ops_number_to_i32(${local(register)})`;
 	const guards: Array<string> = [];
 	const typedViewGuards: Array<string> = [];
@@ -1402,7 +1504,7 @@ function emitNumericLoopRegion(
 	const restart = `{ ${id}_exit = 0; break; }`;
 	const reach = (ip: number): string => {
 		if (ip === plan.id)
-			return `${plan.carried.map((register) => `${start(register)} = ${local(register)};`).join(" ")}${cursor === undefined ? "" : ` ${id}_si = ${id}_ci;`} if (mal_gc_poll_requested()) ${restart} continue;`;
+			return `${plan.carried.map((register) => `${start(register)} = ${local(register)};`).join(" ")}${cursor === undefined ? "" : ` ${id}_si = ${id}_ci;`} if (mal_gc_poll_requested_in(${id}_isolate)) ${restart} continue;`;
 		const exit = exitIndex.get(ip);
 		if (exit !== undefined) return `{ ${id}_exit = ${exit}; break; }`;
 		return `${id}_b${ip} = true;`;
@@ -1460,11 +1562,14 @@ function emitNumericLoopRegion(
 					throw new Error("Invalid numeric loop length load");
 				return `${local(op.dst)} = (f64) ${id}_${mode === "array" ? "a" : "v"}${op.object}.length;`;
 			case "LOAD_PROPERTY": {
-				const key = num(op.key);
+				const key = integral.has(op.key) ? local(op.key) : num(op.key);
+				const length = `${id}_${mode === "array" ? "a" : "v"}${op.object}.${mode === "array" ? "count" : "length"}`;
 				// Any other key leaves the view to the generic load, which handles holes and non-indices.
-				const bound = checkedViews.has(op.object)
-					? `if (__builtin_expect(!(${key} >= 0.0 && ${key} < (f64) ${id}_${mode === "array" ? "a" : "v"}${op.object}.${mode === "array" ? "count" : "length"}) || ${key} != trunc(${key}), 0)) ${restart} `
-					: "";
+				const bound = !checkedViews.has(op.object)
+					? ""
+					: integral.has(op.key)
+						? `if (__builtin_expect(!(${key} >= 0 && ${key} < (i64) ${length}), 0)) ${restart} `
+						: `if (__builtin_expect(!(${key} >= 0.0 && ${key} < (f64) ${length}) || ${key} != trunc(${key}), 0)) ${restart} `;
 				if (mode === "array" && records.has(op.dst))
 					return `{ ${bound}MalValue ${id}_e = ${id}_a${op.object}.elements[(u32) ${key}]; if (__builtin_expect(!mal_value_is_heap_type(${id}_e, MAL_HEAP_OBJECT), 0)) ${restart} ${local(op.dst)} = ${id}_e; }`;
 				if (mode === "array")
@@ -1473,11 +1578,13 @@ function emitNumericLoopRegion(
 					? `{ ${bound}${local(op.dst)} = mal_scalar_f64_from_bits(mal_scalar_load_native_u64(${id}_v${op.object}.data + (usize)(u32) ${key} * 8)); }`
 					: `{ ${bound}${local(op.dst)} = mal_vm_fixed_numeric_load(&${id}_v${op.object}, (u32) ${key}); }`;
 			}
-			case "STORE_PROPERTY":
+			case "STORE_PROPERTY": {
 				if (mode === "array") throw new Error("Invalid dense Array loop store");
+				const key = integral.has(op.key) ? local(op.key) : num(op.key);
 				return mode === "f64"
-					? `mal_scalar_store_native_u64(${id}_v${op.object}.data + (usize)(u32) ${num(op.key)} * 8, mal_scalar_f64_to_bits(${num(op.value)}));`
-					: `mal_vm_fixed_numeric_store(&${id}_v${op.object}, (u32) ${num(op.key)}, ${num(op.value)});`;
+					? `mal_scalar_store_native_u64(${id}_v${op.object}.data + (usize)(u32) ${key} * 8, mal_scalar_f64_to_bits(${num(op.value)}));`
+					: `mal_vm_fixed_numeric_store(&${id}_v${op.object}, (u32) ${key}, ${num(op.value)});`;
+			}
 			case "REQUIRE_COERCIBLE":
 				// The element load already restarted the iteration for anything but an object.
 				if (!records.has(op.src)) throw new Error("Invalid numeric loop coercible check");
@@ -1491,13 +1598,18 @@ function emitNumericLoopRegion(
 				return `${local(op.dst)} = ${integral.has(op.dst) ? local(op.src) : num(op.src)};`;
 			case "BINARY": {
 				const compare = NATIVE_COMPARE[op.operator];
-				if (compare !== undefined)
-					return `${local(op.dst)} = ${num(op.left)} ${op.operator === "===" || op.operator === "==" ? "==" : op.operator === "!==" || op.operator === "!=" ? "!=" : compare} ${num(op.right)};`;
+				if (compare !== undefined) {
+					const exact = integral.has(op.left) && integral.has(op.right);
+					return `${local(op.dst)} = ${exact ? local(op.left) : num(op.left)} ${op.operator === "===" || op.operator === "==" ? "==" : op.operator === "!==" || op.operator === "!=" ? "!=" : compare} ${exact ? local(op.right) : num(op.right)};`;
+				}
 				const left = local(op.left);
 				const right = local(op.right);
 				if (floating && integral.has(op.dst)) {
 					const shift = `((u32) ${intOf(op.right)} & 31u)`;
 					switch (op.operator) {
+						case "+":
+						case "-":
+							return `${local(op.dst)} = ${left} ${op.operator} ${right};`;
 						case "&":
 						case "|":
 						case "^":
@@ -1548,6 +1660,11 @@ function emitNumericLoopRegion(
 				const source = floating ? num(op.src) : local(op.src);
 				if (floating && op.operator === "~")
 					return `${local(op.dst)} = ${integral.has(op.dst) ? "(i64)" : "(f64)"} ~${intOf(op.src)};`;
+				if (floating && integral.has(op.dst)) {
+					if (op.operator !== "increment" && op.operator !== "decrement")
+						throw new Error(`Invalid integral loop operator ${op.operator}`);
+					return `${local(op.dst)} = ${local(op.src)} ${op.operator === "increment" ? "+" : "-"} 1;`;
+				}
 				if (floating) {
 					const expression =
 						op.operator === "-"
@@ -1615,6 +1732,8 @@ function emitNumericLoopRegion(
 						`    u64 ${id}_si = ${id}_ci;`,
 					]),
 			`    u8 ${id}_exit = 0;`,
+			// Region instructions make no calls, so the thread's isolate cannot change inside.
+			`    MalIsolateLocals *${id}_isolate = mal_isolate_locals();`,
 			"    for (;;) {",
 			...heads.slice(1).map((ip) => `      bool ${id}_b${ip} = false;`),
 		];
