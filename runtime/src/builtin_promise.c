@@ -36,10 +36,10 @@ enum {
 };
 
 // Diagnostic counters describe the isolate on the current mutator thread.
-static MAL_ISOLATE_LOCAL u64 g_direct_capabilities = 0;
-static MAL_ISOLATE_LOCAL u64 g_direct_fallback_pairs = 0;
-static MAL_ISOLATE_LOCAL u64 g_direct_intrinsic_creations = 0;
-static MAL_ISOLATE_LOCAL u64 g_direct_async_results = 0;
+#define g_direct_capabilities (mal_isolate_locals()->promise_direct_capabilities)
+#define g_direct_fallback_pairs (mal_isolate_locals()->promise_direct_fallback_pairs)
+#define g_direct_intrinsic_creations (mal_isolate_locals()->promise_direct_intrinsic_creations)
+#define g_direct_async_results (mal_isolate_locals()->promise_direct_async_results)
 
 u64 mal_promise_direct_capability_count(void) {
     return g_direct_capabilities;

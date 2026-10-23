@@ -61,6 +61,23 @@ typedef struct MalIsolateLocals {
     u64 object_slot_coallocations;
     u64 object_slot_grow_migrations;
     u64 object_slot_dictionary_migrations;
+    /* Suspendable-frame buffer, microtask, and promise statistics that every generator,
+     * job, and capability bumps, reported by MAL_COROUTINE_STATS and MAL_GC_STATS. */
+    u64 coroutine_buffer_requests;
+    u64 coroutine_buffer_allocations;
+    u64 coroutine_buffer_reuses;
+    u64 coroutine_buffer_releases;
+    u64 coroutine_buffer_pooled;
+    u64 coroutine_buffer_dropped;
+    u64 coroutine_buffer_peak_retained_bytes;
+    u64 job_allocations;
+    u64 reaction_allocations;
+    u64 job_reuses;
+    u64 reaction_reuses;
+    u64 promise_direct_capabilities;
+    u64 promise_direct_fallback_pairs;
+    u64 promise_direct_intrinsic_creations;
+    u64 promise_direct_async_results;
 } MalIsolateLocals;
 
 extern MAL_ISOLATE_LOCAL MalIsolateLocals mal_isolate;

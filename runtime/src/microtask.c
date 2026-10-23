@@ -14,10 +14,10 @@
 #include "vm.h"
 
 // Diagnostic counters describe the isolate on the current mutator thread.
-static MAL_ISOLATE_LOCAL u64 g_job_allocations = 0;
-static MAL_ISOLATE_LOCAL u64 g_reaction_allocations = 0;
-static MAL_ISOLATE_LOCAL u64 g_job_reuses = 0;
-static MAL_ISOLATE_LOCAL u64 g_reaction_reuses = 0;
+#define g_job_allocations (mal_isolate_locals()->job_allocations)
+#define g_reaction_allocations (mal_isolate_locals()->reaction_allocations)
+#define g_job_reuses (mal_isolate_locals()->job_reuses)
+#define g_reaction_reuses (mal_isolate_locals()->reaction_reuses)
 
 // Six blocks hold 4,092 jobs, matching the old 4,096-node pool's 192 KiB budget.
 #define MAL_PROMISE_JOB_BLOCK_SIZE 32768

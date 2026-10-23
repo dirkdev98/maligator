@@ -45,13 +45,14 @@ extern uint8_t *getsectiondata(
 #endif
 #include "vm_ops.h"
 
-static MAL_ISOLATE_LOCAL u64 g_coroutine_buffer_requests = 0;
-static MAL_ISOLATE_LOCAL u64 g_coroutine_buffer_allocations = 0;
-static MAL_ISOLATE_LOCAL u64 g_coroutine_buffer_reuses = 0;
-static MAL_ISOLATE_LOCAL u64 g_coroutine_buffer_releases = 0;
-static MAL_ISOLATE_LOCAL u64 g_coroutine_buffer_pooled = 0;
-static MAL_ISOLATE_LOCAL u64 g_coroutine_buffer_dropped = 0;
-static MAL_ISOLATE_LOCAL u64 g_coroutine_buffer_peak_retained_bytes = 0;
+#define g_coroutine_buffer_requests (mal_isolate_locals()->coroutine_buffer_requests)
+#define g_coroutine_buffer_allocations (mal_isolate_locals()->coroutine_buffer_allocations)
+#define g_coroutine_buffer_reuses (mal_isolate_locals()->coroutine_buffer_reuses)
+#define g_coroutine_buffer_releases (mal_isolate_locals()->coroutine_buffer_releases)
+#define g_coroutine_buffer_pooled (mal_isolate_locals()->coroutine_buffer_pooled)
+#define g_coroutine_buffer_dropped (mal_isolate_locals()->coroutine_buffer_dropped)
+#define g_coroutine_buffer_peak_retained_bytes \
+    (mal_isolate_locals()->coroutine_buffer_peak_retained_bytes)
 static MAL_ISOLATE_LOCAL u64 g_loaded_instruction_count = 0;
 static MAL_ISOLATE_LOCAL u64 g_loaded_instruction_data_count = 0;
 
