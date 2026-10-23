@@ -811,11 +811,13 @@ typedef enum RegexpBuiltinExecResult {
     REGEXP_BUILTIN_EXEC_OFFSETS,
 } RegexpBuiltinExecResult;
 
+// Holds a pointer into itself while the inline pairs suffice, so it never moves.
 typedef struct RegexpMatchOffsets {
     int32_t *pairs;
     usize count;
     usize capacity;
     int32_t groups;
+    int32_t inline_pairs[32];
 } RegexpMatchOffsets;
 
 typedef struct RegexpCaptureProjection {
@@ -832,14 +834,20 @@ typedef struct RegexpCaptureProjection {
 
 static bool regexp_match_offsets_append(RegexpMatchOffsets *offsets, const int32_t *caps, int32_t ngroups) {
     usize entries = 2 * (usize) ngroups;
+    if (offsets->capacity == 0) {
+        offsets->pairs = offsets->inline_pairs;
+        offsets->capacity = countof(offsets->inline_pairs);
+    }
     if (offsets->capacity - offsets->count < entries) {
-        usize capacity = offsets->capacity == 0 ? 16 : offsets->capacity;
+        usize capacity = offsets->capacity;
         while (capacity - offsets->count < entries) {
             if (capacity > SIZE_MAX / (2 * sizeof(int32_t))) return false;
             capacity *= 2;
         }
-        int32_t *pairs = realloc(offsets->pairs, capacity * sizeof(int32_t));
+        bool inline_storage = offsets->pairs == offsets->inline_pairs;
+        int32_t *pairs = realloc(inline_storage ? nullptr : offsets->pairs, capacity * sizeof(int32_t));
         if (pairs == nullptr) return false;
+        if (inline_storage) memcpy(pairs, offsets->inline_pairs, offsets->count * sizeof(int32_t));
         offsets->pairs = pairs;
         offsets->capacity = capacity;
     }
@@ -847,6 +855,50 @@ static bool regexp_match_offsets_append(RegexpMatchOffsets *offsets, const int32
     offsets->count += entries;
     offsets->groups = ngroups;
     return true;
+}
+
+static void regexp_match_offsets_dispose(RegexpMatchOffsets *offsets) {
+    if (offsets->pairs != offsets->inline_pairs) free(offsets->pairs);
+}
+
+// Runs the matcher from `start`: the group count with the captures in `caps`, 0
+// without a match, or -1 with a pending throw.
+static int32_t regexp_matcher_exec(
+    MalVm *vm, MalRegExpObject *re, MalString *s, usize start, int32_t *caps, int32_t caps_cap
+) {
+    u32 execution_flags = 0;
+    usize length = mal_string_length(s);
+    MalStringSegment subject = mal_string_flat_segment(s);
+    int32_t ngroups = subject.latin1
+        ? mal_regexp_exec_latin1(
+            re->matcher, subject.latin1_units, length, start, s,
+            vm->heap.identity, vm->heap.epoch, caps, caps_cap, &execution_flags)
+        : mal_regexp_exec(
+            re->matcher, (const uint16_t *) subject.utf16_units, length, start, s,
+            vm->heap.identity, vm->heap.epoch, caps, caps_cap, &execution_flags);
+    MAL_PERF_COUNT(regexp_exec_calls);
+    if ((execution_flags & MAL_REGEXP_EXEC_LATIN1) != 0) MAL_PERF_COUNT(regexp_latin1_exec_calls);
+    if ((execution_flags & MAL_REGEXP_EXEC_FAST) != 0) {
+        MAL_PERF_COUNT(regexp_fast_exec_calls);
+    } else if ((execution_flags & MAL_REGEXP_EXEC_ASCII) != 0) {
+        MAL_PERF_COUNT(regexp_ascii_exec_calls);
+        if ((execution_flags & MAL_REGEXP_EXEC_CACHE_HIT) != 0) {
+            MAL_PERF_COUNT(regexp_ascii_cache_hits);
+        } else if ((execution_flags & MAL_REGEXP_EXEC_CACHE_FILL) != 0) {
+            MAL_PERF_COUNT(regexp_ascii_cache_fills);
+        }
+    } else {
+        MAL_PERF_COUNT(regexp_utf16_exec_calls);
+        if ((execution_flags & MAL_REGEXP_EXEC_CACHE_HIT) != 0) {
+            MAL_PERF_COUNT(regexp_utf16_cache_hits);
+        } else if ((execution_flags & MAL_REGEXP_EXEC_CACHE_FILL) != 0) {
+            MAL_PERF_COUNT(regexp_utf16_cache_fills);
+        }
+    }
+    if (ngroups < 0) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "regular expression execution failed");
+    }
+    return ngroups;
 }
 
 // RegExpBuiltinExec(R, S): the matcher-backed exec. Returns the result array, or
@@ -886,38 +938,8 @@ static MalValue regexp_builtin_exec(
 
     int32_t stack_caps[64];
     int32_t *caps = stack_caps;
-    u32 execution_flags = 0;
-    MalStringSegment subject = mal_string_flat_segment(s);
-    int32_t ngroups = subject.latin1
-        ? mal_regexp_exec_latin1(
-            re->matcher, subject.latin1_units, length, (size_t) last_index, s,
-            vm->heap.identity, vm->heap.epoch, caps, 64, &execution_flags)
-        : mal_regexp_exec(
-            re->matcher, (const uint16_t *) subject.utf16_units, length, (size_t) last_index, s,
-            vm->heap.identity, vm->heap.epoch, caps, 64, &execution_flags);
-    MAL_PERF_COUNT(regexp_exec_calls);
-    if ((execution_flags & MAL_REGEXP_EXEC_LATIN1) != 0) MAL_PERF_COUNT(regexp_latin1_exec_calls);
-    if ((execution_flags & MAL_REGEXP_EXEC_FAST) != 0) {
-        MAL_PERF_COUNT(regexp_fast_exec_calls);
-    } else if ((execution_flags & MAL_REGEXP_EXEC_ASCII) != 0) {
-        MAL_PERF_COUNT(regexp_ascii_exec_calls);
-        if ((execution_flags & MAL_REGEXP_EXEC_CACHE_HIT) != 0) {
-            MAL_PERF_COUNT(regexp_ascii_cache_hits);
-        } else if ((execution_flags & MAL_REGEXP_EXEC_CACHE_FILL) != 0) {
-            MAL_PERF_COUNT(regexp_ascii_cache_fills);
-        }
-    } else {
-        MAL_PERF_COUNT(regexp_utf16_exec_calls);
-        if ((execution_flags & MAL_REGEXP_EXEC_CACHE_HIT) != 0) {
-            MAL_PERF_COUNT(regexp_utf16_cache_hits);
-        } else if ((execution_flags & MAL_REGEXP_EXEC_CACHE_FILL) != 0) {
-            MAL_PERF_COUNT(regexp_utf16_cache_fills);
-        }
-    }
-    if (ngroups < 0) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, "regular expression execution failed");
-        return mal_value_new_undefined();
-    }
+    int32_t ngroups = regexp_matcher_exec(vm, re, s, (usize) last_index, caps, 64);
+    if (ngroups < 0) return mal_value_new_undefined();
     if (ngroups == 0) {
         if (global || sticky) {
             if (!regexp_set_last_index(vm, r_value, 0)) {
@@ -1779,31 +1801,76 @@ static MalValue regexp_proto_search(MalVm *vm, MalValue this_value, const MalVal
 // RegExp.prototype[@@match]
 // ---------------------------------------------------------------------------
 
+// The global exec loop of a canonical instance, run to its failing exec. No JS runs
+// before it returns, so only the loop's final state is observable: lastIndex is the 0
+// stored up front, as the failing exec leaves it, and the legacy statics describe the
+// last match.
+static bool regexp_canonical_collect_global(
+    MalVm *vm, MalRegExpObject *re, MalValue rx, MalString *s, RegexpMatchOffsets *offsets
+) {
+    if (!regexp_set_last_index(vm, rx, 0)) return false;
+    bool sticky = (re->flag_bits & MAL_REGEXP_JS_STICKY) != 0;
+    bool full_unicode = (re->flag_bits & (MAL_REGEXP_JS_UNICODE | MAL_REGEXP_JS_UNICODE_SETS)) != 0;
+    usize length = mal_string_length(s);
+    int32_t stack_caps[64];
+    int32_t *wide_caps = nullptr;
+    bool ok = true;
+    usize position = 0;
+    while (position <= length) {
+        int32_t ngroups = regexp_matcher_exec(vm, re, s, position, stack_caps, 64);
+        if (ngroups <= 0) {
+            ok = ngroups == 0;
+            break;
+        }
+        const int32_t *caps = stack_caps;
+        if (ngroups > 32) {
+            if (wide_caps == nullptr) wide_caps = malloc(2 * sizeof(int32_t) * (usize) ngroups);
+            if (wide_caps == nullptr) {
+                regexp_throw_string_length(vm);
+                ok = false;
+                break;
+            }
+            mal_regexp_copy_captures(re->matcher, wide_caps, 2 * ngroups);
+            caps = wide_caps;
+        }
+        if (sticky && (usize) caps[0] != position) break;
+        if (!regexp_match_offsets_append(offsets, caps, ngroups)) {
+            regexp_throw_string_length(vm);
+            ok = false;
+            break;
+        }
+        position = caps[1] != caps[0]
+            ? (usize) caps[1]
+            : (usize) regexp_advance_string_index(s, caps[1], full_unicode);
+    }
+    if (ok && offsets->count > 0) {
+        regexp_legacy_update(
+            vm, s, offsets->pairs + offsets->count - 2 * (usize) offsets->groups, offsets->groups);
+    }
+    free(wide_caps);
+    return ok;
+}
+
+// The matches @@replace substitutes: every match of a global instance, else at most one.
+static bool regexp_canonical_collect(
+    MalVm *vm, MalRegExpObject *re, MalValue rx, MalString *s, RegexpMatchOffsets *offsets
+) {
+    if ((re->flag_bits & MAL_REGEXP_JS_GLOBAL) != 0) {
+        return regexp_canonical_collect_global(vm, re, rx, s, offsets);
+    }
+    RegexpCaptureProjection projection = {.offsets = offsets};
+    regexp_builtin_exec(vm, re, rx, s, REGEXP_BUILTIN_EXEC_OFFSETS, false, &projection);
+    return !regexp_threw(vm);
+}
+
 // The global loop of @@match for a canonical instance: its flags getter and exec are
 // the built-ins, so match ranges replace the result arrays the loop would only index.
 static MalValue regexp_canonical_match_global(
     MalVm *vm, MalRegExpObject *re, MalValue rx, MalString *s
 ) {
-    bool full_unicode = (re->flag_bits & (MAL_REGEXP_JS_UNICODE | MAL_REGEXP_JS_UNICODE_SETS)) != 0;
-    if (!regexp_set_last_index(vm, rx, 0)) return mal_value_new_undefined();
     RegexpMatchOffsets offsets = {0};
-    RegexpCaptureProjection projection = {.offsets = &offsets};
     MalValue ret = mal_value_new_undefined();
-    while (true) {
-        usize previous = offsets.count;
-        MalValue result = regexp_builtin_exec(
-            vm, re, rx, s, REGEXP_BUILTIN_EXEC_OFFSETS, false, &projection);
-        if (regexp_threw(vm)) goto done;
-        if (mal_value_is_null(result)) break;
-        if (offsets.pairs[previous] == offsets.pairs[previous + 1]) {
-            i64 this_index;
-            if (!regexp_get_last_index(vm, rx, &this_index) ||
-                !regexp_set_last_index(
-                    vm, rx, regexp_advance_string_index(s, this_index, full_unicode))) {
-                goto done;
-            }
-        }
-    }
+    if (!regexp_canonical_collect_global(vm, re, rx, s, &offsets)) goto done;
     if (offsets.count == 0) {
         ret = mal_value_new_null();
         goto done;
@@ -1819,7 +1886,7 @@ static MalValue regexp_canonical_match_global(
     ret = mal_value_from_object((MalObject *) array);
 
 done:
-    if (offsets.pairs != nullptr) free(offsets.pairs);
+    regexp_match_offsets_dispose(&offsets);
     return ret;
 }
 
@@ -2061,30 +2128,10 @@ static bool regexp_source_may_name_groups(const MalString *source) {
 static MalValue regexp_canonical_replace(
     MalVm *vm, MalRegExpObject *re, MalValue rx, MalString *s, MalString *replacement
 ) {
-    bool global = (re->flag_bits & MAL_REGEXP_JS_GLOBAL) != 0;
-    bool full_unicode = (re->flag_bits & (MAL_REGEXP_JS_UNICODE | MAL_REGEXP_JS_UNICODE_SETS)) != 0;
-    if (global && !regexp_set_last_index(vm, rx, 0)) {
-        return mal_value_new_undefined();
-    }
     RegexpMatchOffsets offsets = {0};
-    RegexpCaptureProjection projection = {.offsets = &offsets};
     RegexpBuilder accumulated = {0};
     MalValue ret = mal_value_new_undefined();
-    while (true) {
-        usize previous = offsets.count;
-        MalValue result = regexp_builtin_exec(
-            vm, re, rx, s, REGEXP_BUILTIN_EXEC_OFFSETS, false, &projection);
-        if (regexp_threw(vm)) goto done;
-        if (mal_value_is_null(result) || !global) break;
-        if (offsets.pairs[previous] == offsets.pairs[previous + 1]) {
-            i64 this_index;
-            if (!regexp_get_last_index(vm, rx, &this_index) ||
-                !regexp_set_last_index(
-                    vm, rx, regexp_advance_string_index(s, this_index, full_unicode))) {
-                goto done;
-            }
-        }
-    }
+    if (!regexp_canonical_collect(vm, re, rx, s, &offsets)) goto done;
 
     if (offsets.count == 0) {
         // The result would hold exactly the subject's code units.
@@ -2125,7 +2172,7 @@ static MalValue regexp_canonical_replace(
     ret = regexp_builder_finish(vm, &accumulated);
 
 done:
-    if (offsets.pairs != nullptr) free(offsets.pairs);
+    regexp_match_offsets_dispose(&offsets);
     mal_text_buffer_dispose(&accumulated);
     return ret;
 }
@@ -2136,31 +2183,10 @@ done:
 static MalValue regexp_canonical_replace_function(
     MalVm *vm, MalRegExpObject *re, MalValue rx, MalString *s, MalValue replacer
 ) {
-    bool global = (re->flag_bits & MAL_REGEXP_JS_GLOBAL) != 0;
-    bool full_unicode = (re->flag_bits & (MAL_REGEXP_JS_UNICODE | MAL_REGEXP_JS_UNICODE_SETS)) != 0;
-    if (global && !regexp_set_last_index(vm, rx, 0)) {
-        return mal_value_new_undefined();
-    }
     RegexpMatchOffsets offsets = {0};
-    RegexpCaptureProjection projection = {.offsets = &offsets};
-    while (true) {
-        usize previous = offsets.count;
-        MalValue result = regexp_builtin_exec(
-            vm, re, rx, s, REGEXP_BUILTIN_EXEC_OFFSETS, false, &projection);
-        if (regexp_threw(vm)) {
-            if (offsets.pairs != nullptr) free(offsets.pairs);
-            return mal_value_new_undefined();
-        }
-        if (mal_value_is_null(result) || !global) break;
-        if (offsets.pairs[previous] == offsets.pairs[previous + 1]) {
-            i64 this_index;
-            if (!regexp_get_last_index(vm, rx, &this_index) ||
-                !regexp_set_last_index(
-                    vm, rx, regexp_advance_string_index(s, this_index, full_unicode))) {
-                if (offsets.pairs != nullptr) free(offsets.pairs);
-                return mal_value_new_undefined();
-            }
-        }
+    if (!regexp_canonical_collect(vm, re, rx, s, &offsets)) {
+        regexp_match_offsets_dispose(&offsets);
+        return mal_value_new_undefined();
     }
     if (offsets.count == 0) return mal_value_from_string(s);
 
@@ -2169,7 +2195,7 @@ static MalValue regexp_canonical_replace_function(
     MalValue *call_args = groups + 2 <= countof(inline_args)
         ? inline_args : malloc(sizeof(MalValue) * (groups + 2));
     if (call_args == nullptr) {
-        free(offsets.pairs);
+        regexp_match_offsets_dispose(&offsets);
         regexp_throw_string_length(vm);
         return mal_value_new_undefined();
     }
@@ -2234,7 +2260,7 @@ done:
     mal_gc_unroot(&args_span);
     mal_gc_unroot(&roots_span);
     if (call_args != inline_args) free(call_args);
-    free(offsets.pairs);
+    regexp_match_offsets_dispose(&offsets);
     mal_text_buffer_dispose(&accumulated);
     return ret;
 }

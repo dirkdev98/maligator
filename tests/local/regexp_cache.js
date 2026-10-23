@@ -577,6 +577,32 @@ check(
 		'["a<1>b<2><3>",[["1","1","u",1,6],["2x","2","x",3,6],["3","3","u",5,6]],"99k9","k9","9",0]',
 );
 
+const templateGlobal = /(\d)/g;
+templateGlobal.lastIndex = 2;
+const wideGroups = new RegExp("(x)?".repeat(32) + "(y)", "g");
+const collected = [
+	"a1b2".replace(templateGlobal, "[$1]"),
+	templateGlobal.lastIndex,
+	RegExp.lastMatch,
+	RegExp.leftContext,
+	"aab".replace(/a/gy, "-"),
+	"aba".replace(/a/gy, "-"),
+	"\u{1F600}x".replace(/(?:)/gu, "-"),
+	"ayby".replace(wideGroups, "[$33]"),
+	RegExp.lastMatch,
+	RegExp.$9,
+	["utf-8", "ISO-8859-1:1987", "cp:12"].map((name) =>
+		name.toLowerCase().replace(/:\d{4}$|[^0-9a-z]/g, ""),
+	),
+	"x-1".match(/:\d{4}$|[^0-9a-z]/g),
+	RegExp.lastMatch,
+];
+check(
+	"global replace and match leave the final exec's lastIndex and legacy statics",
+	JSON.stringify(collected) ===
+		'["a[1]b[2]",0,"2","a1b","--b","-ba","-\u{1F600}-x-","a[y]b[y]","y","",["utf8","iso88591","cp12"],["-"],"-"]',
+);
+
 let invalidCount = 0;
 for (let i = 0; i < 2; i++) {
 	try {
