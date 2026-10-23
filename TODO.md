@@ -703,6 +703,14 @@ only reproducible input.
       against Node's 39). The compiled code allocates the registers before the
       generator exists, so the change spans code emission and the coroutine runtime.
 
+- [ ] Store an arguments object's indexed elements densely. Mapped and unmapped
+      arguments objects keep every index in a property table, so creating one with
+      16 values upserts 16 entries and each `arguments[i]` read hashes its key. An
+      opaque callee that returns its strict `arguments` costs 340 ns per call against
+      Node's 6.6 (`call-arguments-escape`). Dense storage needs define, delete,
+      freeze, and own-key order to understand it, and a move to the table once an
+      index gets non-default attributes.
+
 - [ ] Deterministically release nonescaping RegExp and ICU handles at compiled scope
       end once ownership analysis proves their lifetime. Retain finalization for every
       uncertain path.
