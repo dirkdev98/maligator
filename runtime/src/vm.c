@@ -12,6 +12,7 @@
 #include "async_function.h"
 #include "builtin_async_generator.h"
 #include "builtin_finalization_registry.h"
+#include "builtin_function.h"
 #include "builtin_math.h"
 #include "bound_function_object.h"
 #include "builtin_object.h"
@@ -4806,6 +4807,39 @@ __attribute__((noinline)) static MalCompletion mal_vm_call_cached_fallback(
         MalValue value = mal_vm_call_cached_value(
             vm, cc, this_value, arg_count > 0 ? args[0] : mal_value_new_undefined(),
             arg_count > 1 ? args + 1 : nullptr, arg_count > 1 ? arg_count - 1 : 0);
+        return vm->completion.kind == MAL_COMPLETION_THROW
+            ? vm->completion
+            : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};
+    }
+    // %Function.prototype.apply% likewise only spreads its list into a call of its receiver,
+    // and entering the receiver here lets this site's cache keep it.
+    if (mal_value_is_native_function_object(callee) &&
+        mal_native_function_object_callback(mal_value_to_native_function_object(callee)) ==
+            mal_builtin_function_prototype_apply &&
+#if MAL_REALMS
+        mal_vm_callee_realm(vm, callee) == vm->current_realm &&
+#endif
+        mal_value_is_callable(this_value)) {
+        MAL_PERF_COUNT(call_cache_function_apply_forwards);
+        MalValue list = arg_count > 1 ? args[1] : mal_value_new_undefined();
+        MalValue inline_args[8];
+        MalValue *call_args = inline_args;
+        i32 call_arg_count = 0;
+        if (!mal_value_is_nil(list)) {
+            // Its getters may run JavaScript; collection stays off until the list is rooted.
+            vm->gc_native_frames++;
+            bool listed = mal_vm_create_list_from_array_like(
+                vm, list, inline_args, countof(inline_args), &call_args, &call_arg_count);
+            vm->gc_native_frames--;
+            if (!listed) return vm->completion;
+        }
+        MalRootSpan args_span;
+        mal_gc_root(&args_span, call_args, call_arg_count);
+        MalValue value = mal_vm_call_cached_value(
+            vm, cc, this_value, arg_count > 0 ? args[0] : mal_value_new_undefined(),
+            call_arg_count > 0 ? call_args : nullptr, call_arg_count);
+        mal_gc_unroot(&args_span);
+        if (call_args != inline_args) free(call_args);
         return vm->completion.kind == MAL_COMPLETION_THROW
             ? vm->completion
             : (MalCompletion) {.kind = MAL_COMPLETION_NORMAL, .value = value};

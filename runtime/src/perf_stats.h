@@ -451,6 +451,7 @@ typedef struct MalPerfStats {
     u64 call_cache_dispatch_misses;
     u64 call_cache_native_fills;
     u64 call_cache_function_call_forwards;
+    u64 call_cache_function_apply_forwards;
     u64 compiled_enter_calls;
     u64 compiled_debug_frame_entries;
 

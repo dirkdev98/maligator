@@ -15,7 +15,7 @@ afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 
 const fixture = "tests/local/function-call-forwarding.mjs";
 
-describe("calls through Function.prototype.call", () => {
+describe("calls through Function.prototype.call and apply", () => {
 	let expected: string;
 	let compiled: string;
 	let interpreted: string;
