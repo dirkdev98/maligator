@@ -3,6 +3,7 @@
 #include <assert.h>
 #include <math.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "ascii.h"
 #include "array_object.h"
@@ -656,7 +657,15 @@ typedef enum RegexpBuiltinExecResult {
     REGEXP_BUILTIN_EXEC_MATCH_ONLY,
     REGEXP_BUILTIN_EXEC_INDEX_ONLY,
     REGEXP_BUILTIN_EXEC_CAPTURE_PROJECTION,
+    REGEXP_BUILTIN_EXEC_OFFSETS,
 } RegexpBuiltinExecResult;
+
+typedef struct RegexpMatchOffsets {
+    int32_t *pairs;
+    usize count;
+    usize capacity;
+    int32_t groups;
+} RegexpMatchOffsets;
 
 typedef struct RegexpCaptureProjection {
     const u32 *indices;
@@ -667,13 +676,34 @@ typedef struct RegexpCaptureProjection {
     i32 *ends;
     i32 *match_start;
     i32 *match_end;
+    RegexpMatchOffsets *offsets;
 } RegexpCaptureProjection;
+
+static bool regexp_match_offsets_append(RegexpMatchOffsets *offsets, const int32_t *caps, int32_t ngroups) {
+    usize entries = 2 * (usize) ngroups;
+    if (offsets->capacity - offsets->count < entries) {
+        usize capacity = offsets->capacity == 0 ? 16 : offsets->capacity;
+        while (capacity - offsets->count < entries) {
+            if (capacity > SIZE_MAX / (2 * sizeof(int32_t))) return false;
+            capacity *= 2;
+        }
+        int32_t *pairs = realloc(offsets->pairs, capacity * sizeof(int32_t));
+        if (pairs == nullptr) return false;
+        offsets->pairs = pairs;
+        offsets->capacity = capacity;
+    }
+    memcpy(offsets->pairs + offsets->count, caps, entries * sizeof(int32_t));
+    offsets->count += entries;
+    offsets->groups = ngroups;
+    return true;
+}
 
 // RegExpBuiltinExec(R, S): the matcher-backed exec. Returns the result array, or
 // null on no match, or undefined with a pending throw on error. The closed
 // consumers used by test() and canonical @@search do not materialize that array:
-// MATCH_ONLY returns true, while INDEX_ONLY returns the match-start number. In
-// both cases lastIndex and matcher state still follow the ordinary algorithm.
+// MATCH_ONLY returns true, INDEX_ONLY returns the match-start number, and OFFSETS
+// appends every capture pair and returns true. In each case lastIndex and
+// matcher state still follow the ordinary algorithm.
 static MalValue regexp_builtin_exec(
     MalVm *vm, MalRegExpObject *re, MalValue r_value, MalString *s,
     RegexpBuiltinExecResult result_kind, bool last_index_known_zero,
@@ -803,6 +833,18 @@ static MalValue regexp_builtin_exec(
             free(caps);
         }
         return mal_value_from_f64((f64) match_start);
+    }
+
+    if (result_kind == REGEXP_BUILTIN_EXEC_OFFSETS) {
+        bool stored = regexp_match_offsets_append(projection->offsets, caps, ngroups);
+        if (heap_caps) {
+            free(caps);
+        }
+        if (!stored) {
+            regexp_throw_string_length(vm);
+            return mal_value_new_undefined();
+        }
+        return mal_value_new_boolean(true);
     }
 
     if (result_kind == REGEXP_BUILTIN_EXEC_CAPTURE_PROJECTION) {
@@ -1621,15 +1663,26 @@ static MalValue regexp_proto_match(MalVm *vm, MalValue this_value, const MalValu
 // ---------------------------------------------------------------------------
 
 // GetSubstitution(matched, str, position, captures[], capture_count, named, replacement).
-// captures entries are ToString'd strings or undefined; named is the groups
-// object or undefined. Appends the expanded replacement into `out`.
+// Captures are either ToString'd strings or undefined, or match-offset pairs
+// into str (-1 when unmatched) whose matched text is str's own range; named is
+// the groups object or undefined. Appends the expanded replacement into `out`.
+typedef struct RegexpSubstitutionMatch {
+    MalString *matched;
+    usize matched_offset;
+    usize matched_length;
+    const MalValue *captures;
+    const int32_t *capture_offsets;
+    i64 capture_count;
+} RegexpSubstitutionMatch;
+
 static bool regexp_get_substitution(
-    MalVm *vm, MalString *matched, MalString *str, i64 position, const MalValue *captures, i64 capture_count,
+    MalVm *vm, const RegexpSubstitutionMatch *match, MalString *str, i64 position,
     MalValue named, MalString *replacement, RegexpBuilder *out
 ) {
     usize rlen = mal_string_length(replacement);
-    usize match_len = mal_string_length(matched);
+    usize match_len = match->matched_length;
     usize str_len = mal_string_length(str);
+    i64 capture_count = match->capture_count;
 
     // Units outside recognized `$` forms, including unrecognized `$`, copy as runs.
     usize literal_start = 0;
@@ -1653,7 +1706,8 @@ static bool regexp_get_substitution(
             literal_start = i;
             continue;
         } else if (next == '&') {
-            inserted = matched;
+            inserted = match->matched;
+            inserted_offset = match->matched_offset;
             inserted_length = match_len;
             consumed = 2;
         } else if (next == '`') {
@@ -1686,9 +1740,15 @@ static bool regexp_get_substitution(
                 i++;
                 continue;
             }
-            MalValue capture = captures[n - 1];
-            if (!mal_value_is_undefined(capture)) {
-                inserted = mal_value_to_string(capture);
+            if (match->capture_offsets != nullptr) {
+                int32_t start = match->capture_offsets[2 * (n - 1)];
+                if (start >= 0) {
+                    inserted = str;
+                    inserted_offset = (usize) start;
+                    inserted_length = (usize) (match->capture_offsets[2 * (n - 1) + 1] - start);
+                }
+            } else if (!mal_value_is_undefined(match->captures[n - 1])) {
+                inserted = mal_value_to_string(match->captures[n - 1]);
                 inserted_length = mal_string_length(inserted);
             }
         } else if (next == '<' && !mal_value_is_undefined(named)) {
@@ -1740,6 +1800,99 @@ static bool regexp_get_substitution(
     return regexp_builder_append_range(vm, out, replacement, literal_start, rlen - literal_start);
 }
 
+static bool regexp_template_has_dollar(const MalString *replacement, bool named_only) {
+    usize length = mal_string_length(replacement);
+    for (usize i = 0; i < length; i++) {
+        if (mal_string_code_unit_at(replacement, i) != '$') continue;
+        if (!named_only) return true;
+        if (i + 1 < length && mal_string_code_unit_at(replacement, i + 1) == '<') return true;
+    }
+    return false;
+}
+
+// Over-approximates named groups from the source; escaped or class-contained
+// `(?<name` text only costs the generic path.
+static bool regexp_source_may_name_groups(const MalString *source) {
+    usize length = mal_string_length(source);
+    for (usize i = 0; i + 3 < length; i++) {
+        if (mal_string_code_unit_at(source, i) != '(' ||
+            mal_string_code_unit_at(source, i + 1) != '?' ||
+            mal_string_code_unit_at(source, i + 2) != '<') continue;
+        c16 next = mal_string_code_unit_at(source, i + 3);
+        if (next != '=' && next != '!') return true;
+    }
+    return false;
+}
+
+// With a string template, a canonical instance observes only lastIndex and the
+// legacy statics, so the collected matches stay offset pairs instead of the
+// result Arrays the generic algorithm materializes and reads back.
+static MalValue regexp_canonical_replace(
+    MalVm *vm, MalRegExpObject *re, MalValue rx, MalString *s, MalString *replacement
+) {
+    bool global = (re->flag_bits & MAL_REGEXP_JS_GLOBAL) != 0;
+    bool full_unicode = (re->flag_bits & (MAL_REGEXP_JS_UNICODE | MAL_REGEXP_JS_UNICODE_SETS)) != 0;
+    if (global && !regexp_set_last_index(vm, rx, 0)) {
+        return mal_value_new_undefined();
+    }
+    RegexpMatchOffsets offsets = {0};
+    RegexpCaptureProjection projection = {.offsets = &offsets};
+    RegexpBuilder accumulated = {0};
+    MalValue ret = mal_value_new_undefined();
+    while (true) {
+        usize previous = offsets.count;
+        MalValue result = regexp_builtin_exec(
+            vm, re, rx, s, REGEXP_BUILTIN_EXEC_OFFSETS, false, &projection);
+        if (regexp_threw(vm)) goto done;
+        if (mal_value_is_null(result) || !global) break;
+        if (offsets.pairs[previous] == offsets.pairs[previous + 1]) {
+            i64 this_index;
+            if (!regexp_get_last_index(vm, rx, &this_index) ||
+                !regexp_set_last_index(
+                    vm, rx, regexp_advance_string_index(s, this_index, full_unicode))) {
+                goto done;
+            }
+        }
+    }
+
+    bool literal = !regexp_template_has_dollar(replacement, false);
+    usize stride = 2 * (usize) offsets.groups;
+    usize next_source_position = 0;
+    for (usize at = 0; at < offsets.count; at += stride) {
+        const int32_t *pairs = offsets.pairs + at;
+        usize position = (usize) pairs[0];
+        if (position < next_source_position) continue;
+        RegexpSubstitutionMatch match = {
+            .matched = s,
+            .matched_offset = position,
+            .matched_length = (usize) (pairs[1] - pairs[0]),
+            .capture_offsets = pairs + 2,
+            .capture_count = offsets.groups - 1,
+        };
+        if (!regexp_builder_append_range(
+                vm, &accumulated, s, next_source_position, position - next_source_position) ||
+            !(literal
+                ? regexp_builder_append_string(vm, &accumulated, replacement)
+                : regexp_get_substitution(
+                    vm, &match, s, (i64) position, mal_value_new_undefined(), replacement,
+                    &accumulated))) {
+            goto done;
+        }
+        next_source_position = position + match.matched_length;
+    }
+    usize length = mal_string_length(s);
+    if (next_source_position < length && !regexp_builder_append_range(
+            vm, &accumulated, s, next_source_position, length - next_source_position)) {
+        goto done;
+    }
+    ret = regexp_builder_finish(vm, &accumulated);
+
+done:
+    free(offsets.pairs);
+    mal_text_buffer_dispose(&accumulated);
+    return ret;
+}
+
 static MalValue regexp_proto_replace(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) new_target;
     (void) callee;
@@ -1760,6 +1913,13 @@ static MalValue regexp_proto_replace(MalVm *vm, MalValue this_value, const MalVa
         if (!mal_vm_to_string(vm, replace_value, &replace_string)) {
             return mal_value_new_undefined();
         }
+    }
+
+    MalRegExpObject *canonical;
+    if (!functional && regexp_canonical_instance(vm, this_value, &canonical) &&
+        (!regexp_template_has_dollar(replace_string, true) ||
+            !regexp_source_may_name_groups(canonical->source))) {
+        return regexp_canonical_replace(vm, canonical, this_value, s, replace_string);
     }
 
     MalString *flags;
@@ -1993,7 +2153,13 @@ static MalValue regexp_proto_replace(MalVm *vm, MalValue this_value, const MalVa
                     goto done;
                 }
             } else {
-                if (!regexp_get_substitution(vm, matched, s, position, captures, n_captures, named_captures, replace_string, &accumulated)) {
+                RegexpSubstitutionMatch match = {
+                    .matched = matched,
+                    .matched_length = matched_len,
+                    .captures = captures,
+                    .capture_count = n_captures,
+                };
+                if (!regexp_get_substitution(vm, &match, s, position, named_captures, replace_string, &accumulated)) {
                     goto done;
                 }
             }
