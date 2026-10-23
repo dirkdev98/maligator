@@ -40,6 +40,61 @@ export function selectNativeArrayInitializations(
 		fn.instructions.length > ARRAY_INITIALIZATION_LIMITS.maximumFunctionInstructions
 	)
 		return plans;
+	let entryChain: Map<number, number> | undefined;
+	let entryKeys: Map<number, { readonly step: number; readonly key: string }> | undefined;
+	// LICM hoists constant keys out of loops. The entry chain runs before every instruction
+	// off it, so a key it writes once holds at any later store.
+	const entryKey = (register: number, allocationIp: number): string | undefined => {
+		if (entryChain === undefined || entryKeys === undefined) {
+			entryChain = new Map();
+			entryKeys = new Map();
+			const predecessors = (ip: number) =>
+				(body.branchSources.get(ip)?.length ?? 0) +
+				(ip > 0 &&
+				!["JUMP", "RETURN", "THROW", "TERMINAL_YIELD"].includes(
+					fn.instructions[ip - 1]!.opcode,
+				)
+					? 1
+					: 0);
+			for (
+				let ip = 0, step = 0;
+				ip < fn.instructions.length &&
+				!entryChain.has(ip) &&
+				!body.externalEntries.has(ip) &&
+				body.handlerTargets[ip] === undefined &&
+				predecessors(ip) === (step === 0 ? 0 : 1);
+				step++
+			) {
+				const op = fn.instructions[ip]!;
+				entryChain.set(ip, step);
+				if (op.opcode === "CREATE_STRING") {
+					const key = initializationStringKey(strings, op.stringIndex);
+					if (key !== undefined) entryKeys.set(op.dst, { step, key });
+				} else if (op.opcode === "CREATE_NUMBER" || op.opcode === "CREATE_F64")
+					entryKeys.set(op.dst, { step, key: String(op.value) });
+				if (op.opcode === "JUMP") ip = op.targetIp;
+				else if (
+					["JUMP_IF", "RETURN", "THROW", "TERMINAL_YIELD", "YIELD", "AWAIT"].includes(
+						op.opcode,
+					)
+				)
+					break;
+				else ip++;
+			}
+			const writeCounts = new Map<number, number>();
+			for (const writtenRegisters of body.writes)
+				for (const written of writtenRegisters)
+					writeCounts.set(written, (writeCounts.get(written) ?? 0) + 1);
+			for (const written of entryKeys.keys())
+				if (writeCounts.get(written) !== 1) entryKeys.delete(written);
+		}
+		const entry = entryKeys.get(register);
+		const allocationStep = entryChain.get(allocationIp);
+		return entry !== undefined &&
+			(allocationStep === undefined || entry.step < allocationStep)
+			? entry.key
+			: undefined;
+	};
 	let attempted = 0;
 	for (const [allocationIp, allocation] of fn.instructions.entries()) {
 		if (
@@ -142,7 +197,9 @@ export function selectNativeArrayInitializations(
 					: key.kind === "number"
 						? String(key.value)
 						: key.kind === "register"
-							? (keys.get(key.register) ?? preparedKey(key.register))
+							? (keys.get(key.register) ??
+								preparedKey(key.register) ??
+								entryKey(key.register, allocationIp))
 							: undefined;
 			if (property !== String(values.length)) break;
 
@@ -201,7 +258,9 @@ export function selectNativeArrayInitializations(
 						: key.kind === "number"
 							? String(key.value)
 							: key.kind === "register"
-								? (keys.get(key.register) ?? preparedKey(key.register))
+								? (keys.get(key.register) ??
+									preparedKey(key.register) ??
+									entryKey(key.register, allocationIp))
 								: undefined;
 				if (property !== String(values.length)) break;
 				stores.push(ip);

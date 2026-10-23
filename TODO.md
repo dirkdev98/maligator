@@ -576,6 +576,13 @@ iterator cursor is not, by itself, permission to delete its language object.
       UTF-16 indexing, source lifetime, case-conversion semantics, length limits,
       effects, and fallback materialization. Distinguish string allocation costs
       from RegExp/native-kernel costs that more compiler analysis will not remove.
+- [ ] Allocate a fresh literal only on the paths where it escapes. A loop that
+      builds `[index, index + 1, index * 2]` from an inlined helper, reads its
+      elements and length, and publishes it every 1024th iteration has every read
+      forwarded, yet still allocates and initializes the array on each iteration:
+      about 32 ns/op natively against Node's 7.8. Moving the allocation and its
+      initializing stores into the publishing branch needs the stores' values to
+      stay available there and the escape to be the only remaining use.
 
 ## P2: source closure and generated-code profitability
 

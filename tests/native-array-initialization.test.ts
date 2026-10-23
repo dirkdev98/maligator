@@ -10,7 +10,9 @@ import {
 import { emitProgramImage } from "../src/compiler/target/emit-program-image.ts";
 import { validateNativeStorage } from "../src/compiler/target/lower-native-storage.ts";
 import { selectNativeArrayInitializations } from "../src/compiler/target/native-array-initialization.ts";
+import type { NativeArrayInitialization } from "../src/compiler/target/native-array-initialization.ts";
 import { analyzeNativeBodyFacts } from "../src/compiler/target/native-body-facts.ts";
+import type { NativeFunctionPlan } from "../src/compiler/target/program-image.ts";
 import { decodeVmValueOperand } from "../src/compiler/target/runtime-image.ts";
 import type { BytecodeInstruction } from "../src/compiler/target/runtime-image.ts";
 
@@ -36,6 +38,21 @@ function classify(image: ReturnType<typeof compile>) {
 	);
 	if (native === undefined) throw new Error("Missing classify function");
 	return native;
+}
+/** Leaves the plan's keys provable only by the bounded scan before the allocation. */
+function withoutFunctionWideKeys(
+	body: NativeFunctionPlan["body"],
+	plan: NativeArrayInitialization,
+): NativeFunctionPlan["body"] {
+	const rewrites = plan.stores.flatMap((ip): ReadonlyArray<BytecodeInstruction> => {
+		const store = body.instructions[ip]!;
+		if (store.opcode !== "DEFINE_PROPERTY") throw new Error("Missing initializer");
+		const key = decodeVmValueOperand(store.key);
+		return key.kind === "register"
+			? [{ opcode: "CREATE_NUMBER", dst: key.register, value: -1 }]
+			: [];
+	});
+	return { ...body, instructions: [...body.instructions, ...rewrites] };
 }
 
 describe("fresh Array initialization regions", () => {
@@ -96,7 +113,7 @@ describe("fresh Array initialization regions", () => {
 			[0, plan.stores.at(-1)!, false],
 		] as const) {
 			const body = {
-				...native.body,
+				...withoutFunctionWideKeys(native.body, plan),
 				handlers: [{ startIp, endIp, handlerIp }],
 			};
 			const selected = selectNativeArrayInitializations(
@@ -370,9 +387,10 @@ describe("fresh Array initialization regions", () => {
 			{ opcode: "MOVE", dst: key.register, src: 0 },
 			{ opcode: "JUMP", targetIp: plan!.allocationIp + 1 },
 		] satisfies ReadonlyArray<BytecodeInstruction>) {
+			const scanned = withoutFunctionWideKeys(native.body, plan!);
 			const body = {
-				...native.body,
-				instructions: native.body.instructions.toSpliced(plan!.allocationIp, 0, inserted),
+				...scanned,
+				instructions: scanned.instructions.toSpliced(plan!.allocationIp, 0, inserted),
 			};
 			expect(
 				selectNativeArrayInitializations(
@@ -409,9 +427,10 @@ describe("fresh Array initialization regions", () => {
 		const image = compile("source=+source;return [source+1,escape,observe];");
 		const native = classify(image);
 		const plan = native.storage!.arrayInitializations[0]!;
+		const scanned = withoutFunctionWideKeys(native.body, plan);
 		const body = {
-			...native.body,
-			instructions: native.body.instructions.toSpliced(
+			...scanned,
+			instructions: scanned.instructions.toSpliced(
 				plan.allocationIp,
 				0,
 				...Array.from({ length: 129 }, (): BytecodeInstruction => ({
@@ -429,6 +448,30 @@ describe("fresh Array initialization regions", () => {
 				() => false,
 			),
 		).toEqual([]);
+	});
+	it("trusts keys hoisted above a loop only while the entry chain writes them once", () => {
+		const image = compile(
+			"source=+source;for(let index=0;index<source;index++)escape([index,index+1,index*2]);",
+		);
+		const native = classify(image);
+		const [plan] = native.storage!.arrayInitializations;
+		expect(plan?.mode).toBe("prepared");
+		const select = (body: NativeFunctionPlan["body"]) =>
+			selectNativeArrayInitializations(
+				{ ...native, body },
+				analyzeNativeBodyFacts(body),
+				image.runtime.stringConstants,
+				() => false,
+			);
+		expect(select(native.body)).toEqual([plan]);
+		const protectedEntry = {
+			...native.body,
+			handlers: [
+				{ startIp: 0, endIp: 0, handlerIp: native.body.instructions.length - 1 },
+			],
+		};
+		expect(select(withoutFunctionWideKeys(native.body, plan!))).toEqual([]);
+		expect(select(protectedEntry)).toEqual([]);
 	});
 	it("invalidates a prepared key overwritten by the array allocation", () => {
 		const image = compile("return [source,escape];");
