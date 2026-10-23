@@ -552,7 +552,7 @@ bool mal_array_object_dense_splice(
     return true;
 }
 
-MalArrayDenseStore mal_array_object_dense_store(MalArrayObject *array, u32 index, MalValue value) {
+MalArrayDenseStore mal_array_object_dense_store_general(MalArrayObject *array, u32 index, MalValue value) {
     // Overwrite within the existing dense region (shade the replaced reference).
     if (array->elements != nullptr && index < array->dense_count) {
         mal_gc_write_barrier(array->elements[index]);

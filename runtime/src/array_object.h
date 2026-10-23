@@ -257,7 +257,23 @@ typedef enum MalArrayDenseStore {
  * deoptimizes the array and stores via the table. Caller must have checked dense mode
  * and that the descriptor is default-data.
  */
-MalArrayDenseStore mal_array_object_dense_store(MalArrayObject *array, u32 index, MalValue value);
+MalArrayDenseStore mal_array_object_dense_store_general(MalArrayObject *array, u32 index, MalValue value);
+
+/* Literals and pushes append into capacity reserved beforehand, which needs no
+ * gap fill or growth and should not cost a call per element. */
+static inline MalArrayDenseStore mal_array_object_dense_store(
+    MalArrayObject *array, u32 index, MalValue value
+) {
+#if !MAL_PERF_STATS
+    if (index == array->dense_count && index < array->capacity && array->elements != nullptr) {
+        array->elements[index] = value;
+        array->dense_count = index + 1;
+        mal_gc_array_card(&array->object.header, index, value);
+        return MAL_ARRAY_DENSE_APPLIED;
+    }
+#endif
+    return mal_array_object_dense_store_general(array, index, value);
+}
 
 /** Delete a dense element (mark it a hole). No-op if `index` is out of the region. */
 void mal_array_object_dense_delete(MalArrayObject *array, u32 index);
