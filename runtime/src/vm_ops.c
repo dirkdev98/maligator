@@ -2641,6 +2641,20 @@ mal_vm_property_try_load_static_rows(
     MalVm *vm, MalValue receiver, const MalObject *object, MalInlineCache *ic
 );
 
+// The chain check stays out of the front, whose every caller would otherwise pay for
+// the registers it saves.
+static __attribute__((noinline)) MAL_PRESERVE_MOST MalStaticPropertyProbeResult
+mal_vm_property_try_load_static_missing(
+    MalVm *vm, MalValue receiver, const MalObject *object, MalInlineCache *ic
+) {
+    MalValue value;
+    if (mal_vm_inherited_try_load_static(vm, receiver, ic, &value) ||
+        (object != nullptr && mal_vm_object_try_load_polymorphic(object, ic->key, ic, &value))) {
+        return (MalStaticPropertyProbeResult) {.hit = true, .value = value};
+    }
+    return mal_vm_property_try_load_static_rows(vm, receiver, object, ic);
+}
+
 // Keep all non-monomorphic static cache hits noncollecting: callers may hold private roots.
 // The hottest outcomes return before the row search saves the registers it uses.
 __attribute__((noinline)) MAL_PRESERVE_MOST MalStaticPropertyProbeResult
@@ -2660,6 +2674,10 @@ mal_vm_property_try_load_static_remaining(
         if (own != nullptr && mal_vm_own_table_try_load(own, ic->key, ic, &value)) {
             return (MalStaticPropertyProbeResult) {.hit = true, .value = value};
         }
+    }
+    // Option bags read many absent keys; each read otherwise passes every row below.
+    if (ic->mode == MAL_IC_MODE_MISSING) {
+        return mal_vm_property_try_load_static_missing(vm, receiver, object, ic);
     }
     // Primitive methods, such as a scanner's `text.charCodeAt`, and alternate shapes are
     // the next most common rows, and neither needs a register the front cannot spare.
