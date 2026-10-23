@@ -357,17 +357,28 @@ static void mal_reactor_free_token_list(MalReactorToken *token) {
 }
 
 #if MAL_REACTOR_KQUEUE
+static_assert(MAL_REACTOR_CHANGE_CAPACITY <= MAL_REACTOR_MAX_EVENTS,
+    "Every rejected change must fit the wait's event list");
+
+/* Registrations ride along with the next wait instead of costing a syscall each.
+ * A rejected one, such as for a closed descriptor, comes back as an EV_ERROR event
+ * and wakes its op like readiness, so the op's own I/O call reports the error. */
 static bool mal_backend_add_interest(MalReactor *r, MalReactorFd *state, MalIoInterest interest) {
     MalReactorToken *token = mal_reactor_token(r, state);
     if (token == nullptr) {
         return false;
     }
-    struct kevent kev;
     i16 filter = interest == MAL_IO_WRITE ? EVFILT_WRITE : EVFILT_READ;
-    EV_SET(&kev, (uintptr_t) state->fd, filter, EV_ADD | EV_ONESHOT, 0, 0, token);
-    if (kevent(r->backend_fd, &kev, 1, nullptr, 0, nullptr) < 0) {
-        free(token);
-        return false;
+    if (r->change_count < MAL_REACTOR_CHANGE_CAPACITY) {
+        r->changes[r->change_count++] =
+            (MalReactorChange) {.fd = state->fd, .filter = filter, .token = token};
+    } else {
+        struct kevent kev;
+        EV_SET(&kev, (uintptr_t) state->fd, filter, EV_ADD | EV_ONESHOT, 0, 0, token);
+        if (kevent(r->backend_fd, &kev, 1, nullptr, 0, nullptr) < 0) {
+            free(token);
+            return false;
+        }
     }
     MalReactorToken **slot =
         interest == MAL_IO_READ ? &state->read_token : &state->write_token;
@@ -377,12 +388,23 @@ static bool mal_backend_add_interest(MalReactor *r, MalReactorFd *state, MalIoIn
 }
 
 static bool mal_backend_del_interest(MalReactor *r, MalReactorFd *state, MalIoInterest interest) {
-    struct kevent kev;
     i16 filter = interest == MAL_IO_WRITE ? EVFILT_WRITE : EVFILT_READ;
-    EV_SET(&kev, (uintptr_t) state->fd, filter, EV_DELETE, 0, 0, nullptr);
-    if (kevent(r->backend_fd, &kev, 1, nullptr, 0, nullptr) < 0 && errno != ENOENT &&
-        errno != EBADF) {
-        return false;
+    // An op holds at most one registration, so an unsubmitted one is all there is.
+    bool pending = false;
+    for (i32 i = 0; i < r->change_count; i++) {
+        if (r->changes[i].fd == state->fd && r->changes[i].filter == filter) {
+            r->changes[i] = r->changes[--r->change_count];
+            pending = true;
+            break;
+        }
+    }
+    if (!pending) {
+        struct kevent kev;
+        EV_SET(&kev, (uintptr_t) state->fd, filter, EV_DELETE, 0, 0, nullptr);
+        if (kevent(r->backend_fd, &kev, 1, nullptr, 0, nullptr) < 0 && errno != ENOENT &&
+            errno != EBADF) {
+            return false;
+        }
     }
     MalReactorToken **slot =
         interest == MAL_IO_READ ? &state->read_token : &state->write_token;
@@ -473,7 +495,15 @@ static void mal_backend_wait(MalReactor *r, i64 timeout_ns) {
         ts.tv_nsec = (long) (timeout_ns % 1000000000);
         tsp = &ts;
     }
-    int n = kevent(r->backend_fd, nullptr, 0, evs, MAL_REACTOR_MAX_EVENTS, tsp);
+    struct kevent changes[MAL_REACTOR_CHANGE_CAPACITY];
+    i32 change_count = r->change_count;
+    for (i32 i = 0; i < change_count; i++) {
+        EV_SET(&changes[i], (uintptr_t) r->changes[i].fd, r->changes[i].filter,
+            EV_ADD | EV_ONESHOT, 0, 0, r->changes[i].token);
+    }
+    // The kernel applies a change list before it waits, even when the wait is interrupted.
+    r->change_count = 0;
+    int n = kevent(r->backend_fd, changes, change_count, evs, MAL_REACTOR_MAX_EVENTS, tsp);
     for (int i = 0; i < n; i++) {
         if (evs[i].udata == r) {
             mal_reactor_dispatch_wake(r);
@@ -571,6 +601,7 @@ void mal_reactor_init(MalReactor *r) {
     r->retired_tokens = nullptr;
     r->free_tokens = nullptr;
     r->next_generation = 0;
+    r->change_count = 0;
     (void) mal_backend_add_wake(r);
 }
 

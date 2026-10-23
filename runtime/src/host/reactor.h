@@ -67,6 +67,15 @@ typedef struct MalTimer {
     u64 sequence;
 } MalTimer;
 
+#define MAL_REACTOR_CHANGE_CAPACITY 32
+
+/* A kqueue registration awaiting submission with the next backend wait. */
+typedef struct MalReactorChange {
+    int fd;
+    i16 filter;
+    void *token;
+} MalReactorChange;
+
 struct MalReactor {
     int backend_fd; /* kqueue / epoll descriptor */
     int wake_read_fd;
@@ -100,6 +109,9 @@ struct MalReactor {
     MalReactorToken *retired_tokens;
     MalReactorToken *free_tokens;
     u64 next_generation;
+
+    MalReactorChange changes[MAL_REACTOR_CHANGE_CAPACITY];
+    i32 change_count;
 };
 
 void mal_reactor_init(MalReactor *r);
