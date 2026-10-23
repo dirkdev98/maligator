@@ -295,6 +295,22 @@ impl FastPattern {
             .all(|(expected, unit)| unit.code_unit() == *expected)
     }
 
+    #[inline(always)]
+    fn repeat_end<U: SubjectUnit>(
+        class: &FastClass,
+        min: u32,
+        max: u32,
+        subject: &[U],
+        position: usize,
+    ) -> Option<usize> {
+        let limit = subject.len().min(position.saturating_add(max as usize));
+        let mut end = position;
+        while end < limit && class.contains(subject[end].code_unit()) {
+            end += 1;
+        }
+        (end - position >= min as usize).then_some(end)
+    }
+
     /// `captures` holds a start and end per group, -1 when the group did not participate.
     fn match_nodes<U: SubjectUnit>(
         nodes: &[FastNode],
@@ -311,14 +327,21 @@ impl FastPattern {
                     position += literal.len();
                 }
                 FastNode::Repeat { class, min, max } => {
-                    let limit = subject.len().min(position.saturating_add(*max as usize));
-                    let mut end = position;
-                    while end < limit && class.contains(subject[end].code_unit()) {
-                        end += 1;
-                    }
-                    if end - position < *min as usize {
-                        return None;
-                    }
+                    position = Self::repeat_end(class, *min, *max, subject, position)?;
+                }
+                // A capture around one repeat, such as `([a-z]+)`, needs no nested sequence.
+                FastNode::Group {
+                    body,
+                    capture: Some(index),
+                    optional: false,
+                    ..
+                } if matches!(body.as_ref(), [FastNode::Repeat { .. }]) => {
+                    let [FastNode::Repeat { class, min, max }] = body.as_ref() else {
+                        unreachable!()
+                    };
+                    let end = Self::repeat_end(class, *min, *max, subject, position)?;
+                    captures[index * 2] = position as i32;
+                    captures[index * 2 + 1] = end as i32;
                     position = end;
                 }
                 FastNode::Group {
