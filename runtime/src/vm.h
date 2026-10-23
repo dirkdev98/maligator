@@ -1970,6 +1970,9 @@ typedef struct MalVm {
     /** Shape positions of static names, filled by mal_object_get_own_static. */
     MalStaticSlotCacheEntry static_slot_cache[MAL_STATIC_SLOT_CACHE_CAPACITY];
 
+    /** Compiled programs of literal-like RegExp sources, owned by builtin_regexp.c. */
+    struct MalRegExpTemplates *regexp_templates;
+
     /**
      * Data properties that iteration protocols inherit through watched built-in
      * prototypes, keyed by the receiver's prototype. Entries are consulted only
