@@ -71,6 +71,7 @@ describe("record result entries", () => {
 			"rejected",
 			"attach",
 			"decodeAll",
+			"widened",
 		])
 			expect(functionNamed(caller).recordCalls?.length ?? 0, caller).toBeGreaterThan(0);
 		expect(functionNamed("observed").recordCalls![0]!.observerIps.length).toBeGreaterThan(

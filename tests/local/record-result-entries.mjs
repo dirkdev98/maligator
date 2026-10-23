@@ -248,6 +248,28 @@ function decodeAll(operands) {
 	return summary;
 }
 
+// A call that observes one record can return another one through caller storage.
+function widen(token, by) {
+	let end = token.end;
+	for (let step = 0; step < by; step++) end++;
+	return { start: token.start, end, digits: token.digits };
+}
+function widened(text, every) {
+	let total = 0;
+	let count = 0;
+	for (let index = 0; index < text.length;) {
+		const token = scan(text, index);
+		let span = token.end - token.start;
+		if (++count % every === 0) {
+			const wide = widen(token, 2);
+			span = wide.end - wide.start + wide.digits;
+		}
+		total += span;
+		index = token.end + 1;
+	}
+	return total;
+}
+
 const text = "a1 bb22 ccc333 dddd4444 ".repeat(20);
 check(tokenLengths(text), 600, "token lengths");
 check(digitCount(text), 200, "digit count");
@@ -285,6 +307,7 @@ check(
 	"union shapes",
 );
 check(decodedSeen[0].register, 7, "union store");
+check(widened(text, 3), 517, "observed record into record call");
 const handlers = attach(["a", "try-b", "cc", "try-dd", "e", "f", "try-g"], []);
 check(
 	handlers.map((environment) => `${environment.state}@${environment.version}`).join(","),

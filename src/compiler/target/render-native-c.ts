@@ -8283,7 +8283,12 @@ function emitInstruction(
 	if (context.recordObserver !== undefined) {
 		const { site, aliases } = context.recordObserver;
 		const object = `__gc_slots[${site.objectSlot!}]`;
-		const ordinary = emitGenericInstruction();
+		// The observing call can itself return a record through caller storage.
+		const ordinary = emitGenericInstruction({
+			recordCall: context.recordCall,
+			recordForward: context.recordForward,
+			recordForwarded: context.recordForwarded,
+		});
 		if (ordinary === null) return null;
 		const atom = (field: number) =>
 			`vm->string_constant_atoms[${relocation.stringIndex(site.keys[field]!)}]`;
