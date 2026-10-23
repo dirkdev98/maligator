@@ -1,14 +1,14 @@
 {
   "sha": "3655e7464de3d52643ecddd4b5f9f4f3e7f62398",
   "summary": {
-    "FAILED": 914,
-    "PASSED": 52664
+    "FAILED": 913,
+    "PASSED": 52665
   },
   "skips": {},
   "code": {
     "compiledFiles": 94218,
     "functionCount": 2985900,
-    "instructionCount": 109804800
+    "instructionCount": 110043208
   },
   "results": {
     "test/annexB/built-ins/Array/from/iterator-method-emulates-undefined.js": "FAILED",
@@ -13092,7 +13092,7 @@
     "test/staging/sm/Exceptions/error-property-enumerability.js": "PASSED",
     "test/staging/sm/Function/Function-with-eval.js": "PASSED",
     "test/staging/sm/Function/arguments-parameter-shadowing.js": "FAILED",
-    "test/staging/sm/Function/bound-non-constructable.js": "FAILED",
+    "test/staging/sm/Function/bound-non-constructable.js": "PASSED",
     "test/staging/sm/Function/configurable-length.js": "PASSED",
     "test/staging/sm/Function/function-call.js": "PASSED",
     "test/staging/sm/Function/function-name-assignment.js": "FAILED",
