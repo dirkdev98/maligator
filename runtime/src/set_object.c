@@ -178,17 +178,21 @@ static u32 mal_set_find_slot(const MalSetStorage *storage, MalValue key, u64 has
     return mal_set_probe(storage, key, int_key, hash, true);
 }
 
+static inline bool mal_set_int32_query(MalValue key, i32 *int_key) {
+    if (!mal_value_is_f64(key)) return false;
+    f64 number = mal_value_to_f64(key);
+    if (!(number >= INT32_MIN && number <= INT32_MAX)) return false;
+    *int_key = (i32) number;
+    return (f64) *int_key == number;
+}
+
 // Returns the index bucket of an equal live member in hashed storage, or UINT32_MAX.
 static inline __attribute__((always_inline)) u32 mal_set_lookup_slot(
     const MalSetStorage *storage, MalValue key
 ) {
     i32 int_key = 0;
     if (storage->domain == MAL_SET_KEYS_INT32) {
-        if (!mal_value_is_f64(key)) return UINT32_MAX;
-        f64 number = mal_value_to_f64(key);
-        if (!(number >= INT32_MIN && number <= INT32_MAX)) return UINT32_MAX;
-        int_key = (i32) number;
-        if ((f64) int_key != number) return UINT32_MAX;
+        if (!mal_set_int32_query(key, &int_key)) return UINT32_MAX;
     } else if (storage->domain == MAL_SET_KEYS_STRING) {
         if (!mal_value_is_string(key)) return UINT32_MAX;
     } else if (!mal_set_accepts_query(storage, key)) {
@@ -406,9 +410,32 @@ static void mal_set_perf_query(MalValue key) {
 #endif
 }
 
+static __attribute__((noinline)) bool mal_set_storage_has_general(
+    const MalSetStorage *storage, MalValue key
+) {
+    return mal_set_storage_has(storage, key);
+}
+
+// Hashed int32 and identity members compare by their bits, so their lookup calls nothing and
+// stays a leaf; small storage and other domains take the general path through a tail call.
 bool mal_set_object_has_canonical(const MalSetObject *set, MalValue key) {
     mal_set_perf_query(key);
-    return mal_set_storage_has(set->entries, key);
+    const MalSetStorage *storage = set->entries;
+    if (storage == nullptr || storage->payload == nullptr) {
+        return mal_set_storage_has_general(storage, key);
+    }
+    u32 slot;
+    if (storage->domain == MAL_SET_KEYS_INT32) {
+        i32 int_key;
+        if (!mal_set_int32_query(key, &int_key)) return false;
+        slot = mal_set_probe_in(storage, MAL_SET_KEYS_INT32, key, int_key, mal_key_hash_mix(key), false);
+    } else if (storage->domain == MAL_SET_KEYS_IDENTITY) {
+        if (mal_set_key_domain(key) != MAL_SET_KEYS_IDENTITY) return false;
+        slot = mal_set_probe_in(storage, MAL_SET_KEYS_IDENTITY, key, 0, mal_key_hash_mix(key), false);
+    } else {
+        return mal_set_storage_has_general(storage, key);
+    }
+    return slot != UINT32_MAX;
 }
 
 bool mal_set_object_has(const MalSetObject *set, MalValue value) {
