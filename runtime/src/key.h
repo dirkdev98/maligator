@@ -139,14 +139,11 @@ static inline bool mal_key_value_equals(MalValue left, MalValue right) {
     return false;
 }
 
+// Every lookup waits on this: one folded 64x64->128 multiply reaches both the group bits
+// (low) and the tag bits (high) in half the latency of a two-round finalizer.
 static inline u64 mal_key_hash_mix(u64 value) {
-    value ^= value >> 30;
-    value *= 0xbf58476d1ce4e5b9;
-    value ^= value >> 27;
-    value *= 0x94d049bb133111eb;
-    value ^= value >> 31;
-
-    return value;
+    u128 product = (u128) value * 0xa0761d6478bd642full;
+    return (u64) product ^ (u64) (product >> 64);
 }
 
 static inline u64 mal_key_hash_value(MalValue value) {
