@@ -1956,7 +1956,9 @@ bool mal_vm_get_prototype_from_constructor(
     MalObject **prototype_out
 ) {
     MalHeap *heap = &vm->heap;
-    bool function = mal_value_is_function_object(constructor);
+    // A built-in constructor's `prototype` is fixed like a class's, so both use the cache.
+    bool function = mal_value_is_function_object(constructor) ||
+        mal_value_is_native_function_object(constructor);
     if (function) {
         const void *identity = mal_value_to_heap(constructor);
         for (usize i = 0; i < countof(heap->fixed_constructor_prototypes); i++) {
@@ -1971,7 +1973,8 @@ bool mal_vm_get_prototype_from_constructor(
     MalKey key = mal_intrinsic_hot_string_key(vm, MAL_HOT_KEY_PROTOTYPE);
     MalValue prototype;
     // An own data property is what [[Get]] returns; a script function creates its
-    // `prototype` lazily, so only an absent one needs the generic path.
+    // `prototype` lazily and a native one may lack it, so only an absent one needs
+    // the generic path.
     MalPropertyLookup own = function
         ? mal_object_get_own(mal_value_to_object(constructor), key)
         : (MalPropertyLookup) {0};
