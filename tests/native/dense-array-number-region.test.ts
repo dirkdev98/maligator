@@ -46,7 +46,8 @@ describe("dense Array number loop regions", () => {
 			});
 			expect(
 				regionPlans(pair, "sumReloaded").some(
-					(plan) => plan.kind === "fixed-numeric" && plan.boundObject !== undefined,
+					(plan) =>
+						plan.kind === "fixed-numeric" && plan.counter?.boundObject !== undefined,
 				),
 			).toBe(true);
 			expect(
@@ -68,10 +69,17 @@ describe("dense Array number loop regions", () => {
 				regionPlans(pair, "adjacentDifferences").some(
 					(plan) =>
 						plan.kind === "fixed-numeric" &&
-						plan.boundObject !== undefined &&
-						plan.limitOffset === -1,
+						plan.counter?.boundObject !== undefined &&
+						plan.counter.limitOffset === -1,
 				),
 			).toBe(true);
+			for (const name of ["binarySearch", "probeSlot"])
+				expect(
+					regionPlans(pair, name).some(
+						(plan) => plan.kind === "fixed-numeric" && plan.counter === undefined,
+					),
+					name,
+				).toBe(true);
 			for (const name of ["lookupSum", "recordLookup"])
 				expect(
 					regionPlans(pair, name).some(

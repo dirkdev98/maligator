@@ -1607,13 +1607,13 @@ export function validateNativeStorage(
 						(plan.records ?? []).join() === (expected.records ?? []).join())) &&
 				(plan.kind !== "fixed-numeric" ||
 					(expected.kind === "fixed-numeric" &&
-						plan.index === expected.index &&
-						plan.bound === expected.bound &&
-						plan.comparison === expected.comparison &&
-						plan.limitOffset === expected.limitOffset &&
-						plan.boundObject === expected.boundObject &&
+						plan.counter?.index === expected.counter?.index &&
+						plan.counter?.bound === expected.counter?.bound &&
+						plan.counter?.boundObject === expected.counter?.boundObject &&
+						plan.counter?.comparison === expected.counter?.comparison &&
+						plan.counter?.limitOffset === expected.counter?.limitOffset &&
+						plan.counter?.stride === expected.counter?.stride &&
 						(plan.records ?? []).join() === (expected.records ?? []).join() &&
-						plan.stride === expected.stride &&
 						plan.views.length === expected.views.length &&
 						plan.views.every(
 							(view, i) =>

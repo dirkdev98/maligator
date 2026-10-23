@@ -184,6 +184,19 @@ interface NativeNumericLoopRegionBase {
 	readonly fallback: "original-instructions";
 }
 
+/** A counted loop's index, which the header compares with a bound and each iteration steps once. */
+export interface NativeNumericLoopCounter {
+	readonly index: number;
+	readonly bound: number;
+	/** The view whose length the header loads into `bound` on every iteration. */
+	readonly boundObject?: number;
+	/** The header comparison, whose operands may each be `index` or `bound` plus a constant. */
+	readonly comparison: number;
+	/** The loop continues while `index` compares to `bound + limitOffset` as the comparison does. */
+	readonly limitOffset: number;
+	readonly stride: number;
+}
+
 export type NativeNumericLoopRegionPlan = NativeNumericLoopRegionBase &
 	(
 		| { readonly kind: "integer" }
@@ -196,17 +209,10 @@ export type NativeNumericLoopRegionPlan = NativeNumericLoopRegionBase &
 		  }
 		| {
 				readonly kind: "fixed-numeric";
-				readonly index: number;
-				readonly bound: number;
-				/** The header comparison, whose operands may each be `index` or `bound` plus a constant. */
-				readonly comparison: number;
-				/** The loop continues while `index` compares to `bound + limitOffset` as the comparison does. */
-				readonly limitOffset: number;
-				/** The view whose length the header loads into `bound` on every iteration. */
-				readonly boundObject?: number;
+				/** Absent when every view access is a read that checks its own key. */
+				readonly counter?: NativeNumericLoopCounter;
 				/** Registers holding an Array view's object element, used only to read its fields. */
 				readonly records?: ReadonlyArray<number>;
-				readonly stride: number;
 				readonly views: ReadonlyArray<{
 					readonly object: number;
 					readonly writable: boolean;
@@ -1880,32 +1886,24 @@ function numericLoopRecords(
 	return candidates;
 }
 
-function fixedNumericLoopStorage(
+/** The index a counted loop compares and steps, with each access's offset from it. */
+function fixedNumericLoopCounter(
 	fn: BytecodeFunction,
 	shape: NativeNumericLoopShape,
 	body: NativeBodyFacts,
 	lengthLoads: ReadonlySet<number>,
+	memory: ReadonlyArray<{ readonly ip: number }>,
 ):
-	| Pick<
-			Extract<NativeNumericLoopRegionPlan, { kind: "fixed-numeric" }>,
-			| "index"
-			| "bound"
-			| "comparison"
-			| "limitOffset"
-			| "boundObject"
-			| "records"
-			| "stride"
-			| "views"
-	  >
+	| {
+			readonly counter: NativeNumericLoopCounter;
+			readonly offsets: ReadonlyMap<number, number>;
+			readonly lengthLoad?: {
+				readonly ip: number;
+				readonly object: number;
+				readonly dst: number;
+			};
+	  }
 	| undefined {
-	const memory = shape.order.flatMap((ip) => {
-		const op = fn.instructions[ip]!;
-		return op.opcode === "LOAD_PROPERTY" || op.opcode === "STORE_PROPERTY"
-			? [{ ip, op }]
-			: [];
-	});
-	if (memory.length === 0 || memory.length > FIXED_NUMERIC_LOOP_ACCESS_LIMIT)
-		return undefined;
 	// Before comparing, the header may reload a view's length, which no region instruction
 	// can change, and step either operand by a constant, as `i + 1 < a.length` does.
 	const constants = numericLoopEntryConstants(fn, body, shape);
@@ -2023,6 +2021,43 @@ function fixedNumericLoopStorage(
 			pending.push(...numberRecordSuccessors(fn.instructions[ip]!, ip));
 		}
 	}
+	return {
+		counter: {
+			index,
+			bound,
+			...(lengthLoad === undefined ? {} : { boundObject: lengthLoad.object }),
+			comparison: comparisonIp,
+			limitOffset,
+			stride,
+		},
+		offsets,
+		...(lengthLoad === undefined ? {} : { lengthLoad }),
+	};
+}
+
+function fixedNumericLoopStorage(
+	fn: BytecodeFunction,
+	shape: NativeNumericLoopShape,
+	body: NativeBodyFacts,
+	lengthLoads: ReadonlySet<number>,
+):
+	| Pick<
+			Extract<NativeNumericLoopRegionPlan, { kind: "fixed-numeric" }>,
+			"counter" | "records" | "views"
+	  >
+	| undefined {
+	const memory = shape.order.flatMap((ip) => {
+		const op = fn.instructions[ip]!;
+		return op.opcode === "LOAD_PROPERTY" || op.opcode === "STORE_PROPERTY"
+			? [{ ip, op }]
+			: [];
+	});
+	if (memory.length === 0 || memory.length > FIXED_NUMERIC_LOOP_ACCESS_LIMIT)
+		return undefined;
+	const counted = fixedNumericLoopCounter(fn, shape, body, lengthLoads, memory);
+	const offsets = counted?.offsets ?? new Map<number, number>();
+	const lengthLoad = counted?.lengthLoad;
+	const bound = counted?.counter.bound;
 	const views = new Map<
 		number,
 		{ writable: boolean; minOffset: number; maxOffset: number; checked?: true }
@@ -2030,6 +2065,7 @@ function fixedNumericLoopStorage(
 	for (const { ip, op } of memory) {
 		const offset = offsets.get(ip);
 		const previous = views.get(op.object);
+		// Without a counter, every access is a read that checks its own key.
 		if (offset === undefined) {
 			if (op.opcode !== "LOAD_PROPERTY") return undefined;
 			views.set(op.object, {
@@ -2067,7 +2103,11 @@ function fixedNumericLoopStorage(
 		[...views.values()].some((view) => view.writable)
 	)
 		return undefined;
-	if (views.size > 8 || views.has(index) || views.has(bound)) return undefined;
+	if (
+		views.size > 8 ||
+		(counted !== undefined && (views.has(counted.counter.index) || views.has(bound!)))
+	)
+		return undefined;
 	for (const ip of shape.order) {
 		if (ip === lengthLoad?.ip) continue;
 		const op = fn.instructions[ip]!;
@@ -2090,13 +2130,8 @@ function fixedNumericLoopStorage(
 			return undefined;
 	}
 	return {
-		index,
-		bound,
-		comparison: comparisonIp,
-		limitOffset,
-		...(lengthLoad === undefined ? {} : { boundObject: lengthLoad.object }),
+		...(counted === undefined ? {} : { counter: counted.counter }),
 		...(records.size === 0 ? {} : { records: [...records].sort((a, b) => a - b) }),
-		stride,
 		views: [...views].map(([object, window]) => ({ object, ...window })),
 	};
 }
@@ -2220,10 +2255,12 @@ function lowerNumericLoopRegion(
 			conflicts,
 			cursor,
 		);
-	// Fixed-storage headers are comparisons or a view's length load.
+	// Fixed-storage headers are comparisons, a view's length load, or a checked element read.
 	if (
 		first === undefined ||
-		(!integerLoopInstruction(first) && !lengthLoads.has(header)) ||
+		(!integerLoopInstruction(first) &&
+			!lengthLoads.has(header) &&
+			first.opcode !== "LOAD_PROPERTY") ||
 		conflicts(header)
 	)
 		return undefined;

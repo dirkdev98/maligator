@@ -1320,12 +1320,13 @@ function emitNumericLoopRegion(
 	const local = (register: number) => `${id}_r${register}`;
 	const start = (register: number) => `${id}_s${register}`;
 	// The header keeps the index within its guarded range, and the final step leaves it by one stride.
+	const counter = plan.kind === "fixed-numeric" ? plan.counter : undefined;
 	const pinned = new Map<number, IntegerRange>();
-	if (plan.kind === "fixed-numeric") {
-		const low = Math.min(0, plan.stride);
-		const high = UINT32_RANGE.high + Math.max(0, plan.stride);
+	if (counter !== undefined) {
+		const low = Math.min(0, counter.stride);
+		const high = UINT32_RANGE.high + Math.max(0, counter.stride);
 		if (Number.isSafeInteger(low) && Number.isSafeInteger(high))
-			pinned.set(plan.index, { low, high });
+			pinned.set(counter.index, { low, high });
 	}
 	// Integer locals spare the double round trip that each ToInt32 would otherwise take.
 	const integral = floating
@@ -1390,41 +1391,29 @@ function emitNumericLoopRegion(
 	);
 	// Records exist only for Array views.
 	const arrayOnly = plan.kind === "fixed-numeric" && records.size > 0;
+	const boundObject = counter?.boundObject;
 	const lengthLoad =
-		plan.kind === "fixed-numeric" && plan.boundObject !== undefined
+		counter !== undefined && boundObject !== undefined
 			? fn.instructions
-					.slice(plan.id, plan.comparison)
+					.slice(plan.id, counter.comparison)
 					.find(
 						(op) =>
 							(op.opcode === "LOAD_PROPERTY_STATIC" ||
 								op.opcode === "LOAD_PROPERTY_STATIC_ARRAY_LENGTH") &&
-							op.dst === plan.bound,
+							op.dst === counter.bound,
 					)
 			: undefined;
-	if (
-		plan.kind === "fixed-numeric" &&
-		plan.boundObject !== undefined &&
-		lengthLoad === undefined
-	)
+	if (boundObject !== undefined && lengthLoad === undefined)
 		throw new Error("Invalid typed loop length load");
 	if (plan.kind === "fixed-numeric") {
-		const comparison = fn.instructions[plan.comparison]!;
-		if (comparison.opcode !== "BINARY") throw new Error("Invalid typed loop comparison");
-		const ascending = plan.stride > 0;
-		const inclusive = comparison.operator === "<=" || comparison.operator === ">=";
-		const index = local(plan.index);
-		const bound =
-			plan.limitOffset === 0
-				? local(plan.bound)
-				: `(${local(plan.bound)} + ${cF64Literal(plan.limitOffset)})`;
 		// Views are admitted before the range so a length bound can read the admitted length.
 		// A TypedArray's length is an inherited getter, so a length bound also needs the
 		// length load's cache to prove the intrinsic getter.
 		const typedAdmissions =
 			arrayOnly ||
 			lengthLoad?.opcode === "LOAD_PROPERTY_STATIC_ARRAY_LENGTH" ||
-			(plan.boundObject !== undefined &&
-				!plan.views.some((view) => view.object === plan.boundObject))
+			(boundObject !== undefined &&
+				!plan.views.some((view) => view.object === boundObject))
 				? ["false"]
 				: [
 						...plan.views.map(
@@ -1433,7 +1422,7 @@ function emitNumericLoopRegion(
 						),
 						...(lengthLoad?.opcode === "LOAD_PROPERTY_STATIC"
 							? [
-									`mal_vm_admit_numeric_typed_array_length(vm, r${plan.boundObject}, &${propertyCache}[${lengthLoad.icIndex}], &${id}_lt, &${id}_ll)`,
+									`mal_vm_admit_numeric_typed_array_length(vm, r${boundObject}, &${propertyCache}[${lengthLoad.icIndex}], &${id}_lt, &${id}_ll)`,
 								]
 							: []),
 					];
@@ -1445,11 +1434,22 @@ function emitNumericLoopRegion(
 			`  bool ${id}_typed = ${typedAdmissions.join(" && ")};`,
 			`  bool ${id}_array = ${readOnly ? `!${id}_typed && ${plan.views.map((view) => `mal_vm_dense_number_storage(r${view.object}, &${id}_a${view.object})`).join(" && ")}` : "false"};`,
 		);
-		if (plan.boundObject !== undefined)
+		if (counter !== undefined && boundObject !== undefined)
 			rangePrelude.push(
-				`  ${local(plan.bound)} = ${typedPossible ? `${id}_typed ? (f64) ${id}_v${plan.boundObject}.length : ` : ""}${readOnly ? `${id}_array ? (f64) ${id}_a${plan.boundObject}.length : ` : ""}0.0;`,
+				`  ${local(counter.bound)} = ${typedPossible ? `${id}_typed ? (f64) ${id}_v${boundObject}.length : ` : ""}${readOnly ? `${id}_array ? (f64) ${id}_a${boundObject}.length : ` : ""}0.0;`,
 			);
 		guards.unshift(`(${id}_typed || ${id}_array)`);
+	}
+	if (counter !== undefined) {
+		const comparison = fn.instructions[counter.comparison]!;
+		if (comparison.opcode !== "BINARY") throw new Error("Invalid typed loop comparison");
+		const ascending = counter.stride > 0;
+		const inclusive = comparison.operator === "<=" || comparison.operator === ">=";
+		const index = local(counter.index);
+		const bound =
+			counter.limitOffset === 0
+				? local(counter.bound)
+				: `(${local(counter.bound)} + ${cF64Literal(counter.limitOffset)})`;
 		guards.push(
 			`${index} >= 0.0`,
 			`${index} <= UINT32_MAX`,
@@ -1464,7 +1464,7 @@ function emitNumericLoopRegion(
 		const distance = ascending
 			? `((u64) ${limit} - (u64) ${index})`
 			: `((u64) ${index} - (u64) ${limit})`;
-		const stride = Math.abs(plan.stride);
+		const stride = Math.abs(counter.stride);
 		rangePrelude.push(
 			`  bool ${range} = ${guards.join(" && ")};`,
 			// The direction and endpoint guards make both unsigned operands a nonempty integral range.
@@ -1472,7 +1472,7 @@ function emitNumericLoopRegion(
 		);
 		guards.length = 0;
 		guards.push(range);
-		for (const view of plan.views) {
+		for (const view of plan.kind === "fixed-numeric" ? plan.views : []) {
 			if (view.checked === true) continue;
 			const low = `(${ascending ? index : last} + ${cF64Literal(view.minOffset)})`;
 			const high = `(${ascending ? last : index} + ${cF64Literal(view.maxOffset + 1)})`;
@@ -1481,6 +1481,8 @@ function emitNumericLoopRegion(
 			typedViewGuards.push(`(u32) ${high} <= ${id}_v${view.object}.length`);
 			arrayViewGuards.push(`(u32) ${high} <= ${id}_a${view.object}.count`);
 		}
+	}
+	if (plan.kind === "fixed-numeric") {
 		typedViewGuards.unshift(`${id}_typed`);
 		arrayViewGuards.unshift(`${id}_array`);
 	}
@@ -1573,7 +1575,7 @@ function emitNumericLoopRegion(
 				if (op.opcode === "LOAD_PROPERTY_STATIC" && records.has(op.object))
 					// The site's own-slot row proves the field; any other row ends the iteration.
 					return `{ const MalObject *${id}_o = (const MalObject *) mal_value_to_heap(${local(op.object)}); if (__builtin_expect(${id}_o->shape != ${id}_shape${op.icIndex}, 0)) ${restart} MalValue ${id}_f = ((const MalValue *) mal_object_fields_nonempty(${id}_o))[${id}_slot${op.icIndex}]; if (__builtin_expect(!mal_ops_is_number(${id}_f), 0)) ${restart} ${local(op.dst)} = mal_ops_number_as_f64(${id}_f); }`;
-				if (plan.kind !== "fixed-numeric" || op.object !== plan.boundObject)
+				if (boundObject === undefined || op.object !== boundObject)
 					throw new Error("Invalid numeric loop length load");
 				return `${local(op.dst)} = (f64) ${id}_${mode === "array" ? "a" : "v"}${op.object}.length;`;
 			case "LOAD_PROPERTY": {
@@ -1788,7 +1790,7 @@ function emitNumericLoopRegion(
 		plan.kind === "fixed-numeric"
 			? [
 					"    MAL_PERF_COUNT(fixed_typed_array_region_admissions);",
-					...(plan.stride > 1
+					...((counter?.stride ?? 1) > 1
 						? ["    MAL_PERF_COUNT(fixed_typed_array_stride_regions);"]
 						: []),
 					...(plan.views.some((view) => view.minOffset !== 0 || view.maxOffset !== 0)

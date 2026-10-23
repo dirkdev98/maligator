@@ -45,7 +45,7 @@ describe("fixed TypedArray storage regions", () => {
 				)!;
 				expect(
 					fn?.storage!.numericLoopRegions.some(
-						(plan) => plan.kind === "fixed-numeric" && plan.stride === stride,
+						(plan) => plan.kind === "fixed-numeric" && plan.counter?.stride === stride,
 					),
 					name,
 				).toBe(true);

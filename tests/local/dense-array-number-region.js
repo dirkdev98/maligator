@@ -97,6 +97,29 @@ function adjacentDifferences(values) {
 	return `${total},${index}`;
 }
 
+function binarySearch(items, target) {
+	let lo = 0;
+	let hi = items.length - 1;
+	while (lo <= hi) {
+		const mid = (lo + hi) >> 1;
+		const value = items[mid];
+		if (value === target) return mid;
+		if (value < target) lo = mid + 1;
+		else hi = mid - 1;
+	}
+	return -1 - lo;
+}
+
+function probeSlot(table, key, mask) {
+	let slot = (key * 31) & mask;
+	let steps = 0;
+	while (table[slot] !== 0 && table[slot] !== key) {
+		slot = (slot + 1) & mask;
+		steps++;
+	}
+	return `${slot},${steps}`;
+}
+
 function lookupSum(table, count, mask) {
 	let total = 0;
 	for (let index = 0; index < count; index++) total += table[index & mask];
@@ -250,6 +273,31 @@ lines.push(`adjacent single ${adjacentDifferences([7])}`);
 lines.push(`adjacent empty ${adjacentDifferences([])}`);
 lines.push(`adjacent hole ${adjacentDifferences([1, 2, , 4])}`);
 lines.push(`adjacent string ${adjacentDifferences([1, 2, "3", 4])}`);
+const sorted = Array.from({ length: 100 }, (_, index) => index * 3 - 50);
+const searches = [-50, -49, 0, 1, 247, 248, 1000, -1000, 0.5, NaN];
+lines.push(`search ${searches.map((target) => binarySearch(sorted, target)).join(",")}`);
+lines.push(
+	`search Float64Array ${searches.map((target) => binarySearch(new Float64Array(sorted), target)).join(",")}`,
+);
+lines.push(
+	`search Int8Array ${searches.map((target) => binarySearch(new Int8Array([-50, -3, 0, 4, 90]), target)).join(",")}`,
+);
+lines.push(`search empty ${binarySearch([], 3)}`);
+lines.push(
+	`search hole ${binarySearch([1, 3, , 7, 9], 7)},${binarySearch([1, 3, , 7, 9], 4)}`,
+);
+lines.push(
+	`search string ${binarySearch([1, 3, "5", 7, 9], 5)},${binarySearch([1, 3, "5", 7, 9], 8)}`,
+);
+lines.push(`search fractional ${binarySearch([0.5, 1.5, 2.5, 3.5], 2.5)}`);
+const slots = new Int32Array(16);
+for (const key of [5, 21, 37, 9])
+	slots[Number(probeSlot(slots, key, 15).split(",")[0])] = key;
+lines.push(
+	`probe ${[5, 21, 37, 9, 53, 0].map((key) => probeSlot(slots, key, 15)).join(" ")}`,
+);
+lines.push(`probe past the end ${probeSlot(new Int32Array([7, 7, 7, 0]), 3, 7)}`);
+lines.push(`probe Array ${probeSlot([0, 0, 0, 5, 21, 0, 0, 0], 21, 7)}`);
 lines.push(`lookup ${lookupSum([1, 2, 3, 4], 100, 3)}`);
 lines.push(`lookup past the end ${lookupSum([1, 2, 3], 10, 3)}`);
 lines.push(`lookup hole ${lookupSum([1, , 3, 4], 10, 3)}`);

@@ -46,7 +46,8 @@ describe("TypedArray loops bounded by their length", () => {
 			for (const name of ["forwardDeltas", "trailingDeltas", "backwardPairs"])
 				expect(
 					regionPlans(pair, name).some(
-						(plan) => plan.kind === "fixed-numeric" && plan.limitOffset !== 0,
+						(plan) =>
+							plan.kind === "fixed-numeric" && (plan.counter?.limitOffset ?? 0) !== 0,
 					),
 					name,
 				).toBe(true);
@@ -55,7 +56,7 @@ describe("TypedArray loops bounded by their length", () => {
 					regionPlans(pair, name).some(
 						(plan) =>
 							plan.kind === "fixed-numeric" &&
-							plan.boundObject !== undefined &&
+							plan.counter?.boundObject !== undefined &&
 							plan.views.some((view) => view.writable),
 					),
 					name,

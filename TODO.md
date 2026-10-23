@@ -266,11 +266,13 @@ bounded and consumer-driven as planned below.
       detach, sharing, length tracking, bounds). Removing the loop's TDZ check on
       `FLAGS` changed nothing. View admission belongs in the preheader once the body
       cannot detach or resize the buffer.
-- [ ] Keep binary-search style index arithmetic in int32. `(lo + hi) >> 1` over
-      `hi = items.length - 1` runs on doubles and converts `mid` back to an index
-      every iteration (94 ms against Node's 24 for 12 M probes), because an Array
-      length minus one is not provably an int32. A dense receiver's length bound
-      would make `lo`, `hi` and `mid` int32 values.
+- [ ] Keep binary searches off the element-load latency chain. A loop region
+      without a counter now keeps `lo`, `hi` and `mid` in integer locals (12 M
+      probes 96 to 53 ms, Node 13; random targets 105 to 67 ms, Node 56). Clang
+      turns the bound updates into selects, so every iteration waits for the
+      element load and compare, while Node's predicted branches run ahead. A search
+      that leaves the region, such as one over records or with a call in its body,
+      still runs on doubles.
 - [ ] Give inline method bodies typed fields instead of a check per access. Class
       layout cells replaced the per-site probes on class members with a shape
       compare, but `store.kind(i)` in a loop still costs about 15 ns against

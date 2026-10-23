@@ -208,7 +208,7 @@ describe("fixed TypedArray loop storage", () => {
 			(plan) => plan.kind === "fixed-numeric",
 		);
 		if (plan?.kind !== "fixed-numeric") throw new Error("Missing interleaved storage");
-		expect(plan.stride).toBe(8);
+		expect(plan.counter?.stride).toBe(8);
 		expect(plan.views).toHaveLength(4);
 		expect(plan.views.every((view) => view.minOffset === 0 && view.maxOffset === 7)).toBe(
 			true,
@@ -258,7 +258,7 @@ describe("fixed TypedArray loop storage", () => {
 			);
 			const plan = image.native.functions[1]!.storage!.numericLoopRegions[0];
 			if (plan?.kind !== "fixed-numeric") throw new Error("Missing strided region");
-			expect(plan.stride).toBe(
+			expect(plan.counter?.stride).toBe(
 				update === "i++" || update === "i+=1"
 					? 1
 					: update === "i=i+4"
@@ -285,7 +285,7 @@ describe("fixed TypedArray loop storage", () => {
 			const fn = image.native.functions[1]!;
 			const plan = fn.storage!.numericLoopRegions[0];
 			if (plan?.kind !== "fixed-numeric") throw new Error("Missing interleaved region");
-			expect(plan.stride).toBe(lanes);
+			expect(plan.counter?.stride).toBe(lanes);
 			expect(
 				plan.views.every((view) => view.minOffset === 0 && view.maxOffset === lanes - 1),
 			).toBe(true);
@@ -316,7 +316,7 @@ describe("fixed TypedArray loop storage", () => {
 		const plan = native.storage!.numericLoopRegions[0];
 		if (plan?.kind !== "fixed-numeric")
 			throw new Error("Missing directed storage region");
-		expect(plan.stride).toBe(stride);
+		expect(plan.counter?.stride).toBe(stride);
 		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
 		expect(emitCompiledFunction(native, 1, "", false)).not.toBeNull();
 	});
@@ -327,7 +327,7 @@ describe("fixed TypedArray loop storage", () => {
 		const native = image.native.functions[1]!;
 		const plan = native.storage!.numericLoopRegions[0];
 		if (plan?.kind !== "fixed-numeric") throw new Error("Missing descending region");
-		expect(plan.stride).toBe(-3);
+		expect(plan.counter?.stride).toBe(-3);
 		expect(
 			plan.views.every((view) => view.minOffset === -3 && view.maxOffset === -1),
 		).toBe(true);
@@ -424,7 +424,9 @@ describe("fixed TypedArray loop storage", () => {
 			"for(let i=0;i<count;i++){const key=i+1;output[key]=left[key]+right[key];}",
 		).native.functions[1]!;
 		const [plan] = native.storage!.numericLoopRegions;
-		if (plan?.kind !== "fixed-numeric") throw new Error("Missing storage region");
+		if (plan?.kind !== "fixed-numeric" || plan.counter === undefined)
+			throw new Error("Missing storage region");
+		const { index } = plan.counter;
 		const original = native.body.instructions;
 		const firstMemory = original.findIndex((op) => op.opcode === "LOAD_PROPERTY");
 		const load = original[firstMemory]!;
@@ -435,11 +437,11 @@ describe("fixed TypedArray loop storage", () => {
 		const incrementIp = original.findIndex(
 			(op) => op.opcode === "UNARY" && op.operator === "increment",
 		);
-		const update: BytecodeInstruction = { opcode: "MOVE", dst: plan.index, src: 4 };
+		const update: BytecodeInstruction = { opcode: "MOVE", dst: index, src: 4 };
 		for (const earlyUpdate of [false, true]) {
 			const instructions: Array<BytecodeInstruction> = [
 				...original.slice(0, keyIp),
-				{ opcode: "MOVE", dst: load.key, src: plan.index },
+				{ opcode: "MOVE", dst: load.key, src: index },
 				...(earlyUpdate ? [update] : []),
 				...original.slice(firstMemory, incrementIp),
 				{ opcode: "UNARY", operator: "increment", dst: 4, src: load.key },
@@ -466,11 +468,13 @@ describe("fixed TypedArray loop storage", () => {
 		const native = compile("for(let i=0;i<count;i+=2){output[i]=left[i]+right[i];}")
 			.native.functions[1]!;
 		const plan = native.storage!.numericLoopRegions[0];
-		if (plan?.kind !== "fixed-numeric") throw new Error("Missing strided region");
+		if (plan?.kind !== "fixed-numeric" || plan.counter === undefined)
+			throw new Error("Missing strided region");
+		const { index } = plan.counter;
 		const original = native.body.instructions;
 		const updateIp = original.findIndex(
 			(op, ip) =>
-				plan.claimedIps.includes(ip) && op.opcode === "MOVE" && op.dst === plan.index,
+				plan.claimedIps.includes(ip) && op.opcode === "MOVE" && op.dst === index,
 		);
 		const update = original[updateIp]!;
 		if (update.opcode !== "MOVE") throw new Error("Missing index update");
@@ -495,7 +499,7 @@ describe("fixed TypedArray loop storage", () => {
 		expect(plan?.kind).toBe("fixed-numeric");
 		if (plan?.kind !== "fixed-numeric") throw new Error("Missing storage region");
 		expect(plan.views.map((view) => view.writable)).toEqual([false, false, true]);
-		expect(plan.carried).toContain(plan.index);
+		expect(plan.carried).toContain(plan.counter?.index);
 		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
 		const emitted = emitCompiledFunction(native, 1, "", false)!.source;
 		expect(emitted.match(/mal_vm_fixed_numeric_storage\(/g)).toHaveLength(
@@ -588,15 +592,22 @@ describe("fixed TypedArray loop storage", () => {
 		const image = compile(body),
 			native = image.native.functions[1]!;
 		const plan = native.storage!.numericLoopRegions[0]!;
-		if (plan.kind !== "fixed-numeric") throw new Error("Missing storage region");
+		if (plan.kind !== "fixed-numeric" || plan.counter === undefined)
+			throw new Error("Missing storage region");
+		const { counter } = plan;
 		for (const forged of [
-			{ ...plan, stride: 0 },
-			{ ...plan, stride: -1 },
-			{ ...plan, stride: 2 },
-			{ ...plan, stride: 0.5 },
-			{ ...plan, stride: 2147483648 },
-			{ ...plan, stride: undefined } as unknown as NativeNumericLoopRegionPlan,
-			{ ...plan, bound: plan.index },
+			{ ...plan, counter: { ...counter, stride: 0 } },
+			{ ...plan, counter: { ...counter, stride: -1 } },
+			{ ...plan, counter: { ...counter, stride: 2 } },
+			{ ...plan, counter: { ...counter, stride: 0.5 } },
+			{ ...plan, counter: { ...counter, stride: 2147483648 } },
+			{
+				...plan,
+				counter: { ...counter, stride: undefined },
+			} as unknown as NativeNumericLoopRegionPlan,
+			{ ...plan, counter: { ...counter, bound: counter.index } },
+			{ ...plan, counter: { ...counter, limitOffset: -1 } },
+			{ ...plan, counter: undefined },
 			{ ...plan, views: plan.views.slice(1) },
 			{ ...plan, views: plan.views.map((view) => ({ ...view, writable: false })) },
 			{ ...plan, kind: "integer" as const },
@@ -607,7 +618,7 @@ describe("fixed TypedArray loop storage", () => {
 				views: plan.views.map(({ minOffset: _minimum, ...view }) => view),
 			} as unknown as NativeNumericLoopRegionPlan,
 
-			{ ...plan, carried: plan.carried.filter((register) => register !== plan.index) },
+			{ ...plan, carried: plan.carried.filter((register) => register !== counter.index) },
 		])
 			expect(() =>
 				serializeCompilerArtifact({

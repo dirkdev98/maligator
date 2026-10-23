@@ -102,7 +102,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 261;
+export const COMPILER_ARTIFACT_VERSION = 262;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -883,13 +883,17 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 			w.i32Array([...(plan.records ?? [])]);
 		}
 		if (plan.kind === "fixed-numeric") {
-			w.i32(plan.index);
-			w.i32(plan.bound);
-			w.i32(plan.comparison);
-			w.i32(plan.limitOffset);
-			w.i32(plan.boundObject ?? -1);
+			const counter = plan.counter;
+			w.u8(counter === undefined ? 0 : 1);
+			if (counter !== undefined) {
+				w.i32(counter.index);
+				w.i32(counter.bound);
+				w.i32(counter.boundObject ?? -1);
+				w.i32(counter.comparison);
+				w.i32(counter.limitOffset);
+				w.i32(counter.stride);
+			}
 			w.i32Array([...(plan.records ?? [])]);
-			w.i32(plan.stride);
 			w.u32(plan.views.length);
 			for (const view of plan.views) {
 				w.i32(view.object);
@@ -1410,21 +1414,29 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 							};
 						})()
 					: (() => {
-							const index = r.i32(),
-								bound = r.i32(),
-								comparison = r.i32(),
-								limitOffset = r.i32(),
-								boundObject = r.i32(),
-								records = r.i32Array();
+							const counted = r.u8();
+							if (counted > 1) throw new RangeError("Invalid numeric loop counter");
+							const counter =
+								counted === 0
+									? undefined
+									: (() => {
+											const index = r.i32(),
+												bound = r.i32(),
+												boundObject = r.i32();
+											return {
+												index,
+												bound,
+												...(boundObject === -1 ? {} : { boundObject }),
+												comparison: r.i32(),
+												limitOffset: r.i32(),
+												stride: r.i32(),
+											};
+										})();
+							const records = r.i32Array();
 							return {
 								kind: "fixed-numeric" as const,
-								index,
-								bound,
-								comparison,
-								limitOffset,
-								...(boundObject === -1 ? {} : { boundObject }),
+								...(counter === undefined ? {} : { counter }),
 								...(records.length === 0 ? {} : { records }),
-								stride: r.i32(),
 								views: Array.from({ length: r.count(13) }, () => {
 									const object = r.i32(),
 										writable = r.u8();
