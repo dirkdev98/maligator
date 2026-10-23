@@ -118,6 +118,12 @@ describe("record result entries", () => {
 				(site) => (site.passes?.length ?? 0) > 0,
 			),
 		).toBe(true);
+		// Object literals handed to record parameters live in their caller's storage.
+		expect(recordParameters("shapeOf")).toEqual([1]);
+		for (const callee of ["shift", "lengthOf"])
+			expect(recordParameters(callee), callee).toEqual([0]);
+		for (const caller of ["shapes", "shiftedLengths"])
+			expect(functionNamed(caller).recordObjects?.length, caller).toBe(1);
 	});
 
 	it("creates a record object only where an observer needs it", () => {
@@ -131,9 +137,10 @@ describe("record result entries", () => {
 		expect(counter("direct_entry_hits")).toBeGreaterThan(0);
 		// Eleven observed tokens, the returned and the thrown token, three handed-on records,
 		// two observed union records, sixteen records a callee keeps, which its caller then
-		// shares, and twenty records pushed in pairs. Returns of other values and records
-		// passed to record parameters never create one.
-		expect(counter("record_materializations")).toBe(54);
+		// shares, twenty records pushed in pairs, one rejected context literal and four kept
+		// spans. Returns of other values and records passed to record parameters never
+		// create one.
+		expect(counter("record_materializations")).toBe(59);
 	});
 
 	for (const [backend, binary] of [

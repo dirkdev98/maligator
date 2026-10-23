@@ -1435,6 +1435,8 @@ export interface NativeFunctionPlan {
 	}>;
 	/** Calls whose direct entry returns a record's fields; the loads are the result's only reads. */
 	readonly recordCalls?: ReadonlyArray<NativeRecordCall>;
+	/** Object literals kept in caller storage because calls hand them to record parameters. */
+	readonly recordObjects?: ReadonlyArray<NativeRecordObject>;
 	/** In a forwarding record entry's contract, the calls that write to its own caller's storage. */
 	readonly recordForwardIps?: ReadonlyArray<number>;
 	/** In a record parameter entry's contract, the instructions that use that parameter. */
@@ -1476,6 +1478,11 @@ export interface NativeRecordPass {
 /** A record call keeps its result in caller storage. */
 export interface NativeRecordCall extends NativeRecordUses {
 	readonly callIp: number;
+}
+
+/** An object literal kept in caller storage; its keys are the record's fields. */
+export interface NativeRecordObject extends NativeRecordUses {
+	readonly allocationIp: number;
 }
 
 /** A parameter received as caller storage holding a record of these fields. */
@@ -1781,7 +1788,12 @@ export function nativeRecordCallIps(native: NativeFunctionPlan): ReadonlySet<num
 			site.callIp,
 			...nativeRecordUseIps(site),
 		]),
+		...(native.recordObjects ?? []).flatMap((site) => [
+			site.allocationIp,
+			...nativeRecordUseIps(site),
+		]),
 		...(native.recordParameterIps ?? []),
+		...(native.recordForwardIps ?? []),
 	]);
 }
 
@@ -1794,12 +1806,18 @@ export function nativeRecordParameterIps(
 	);
 }
 
-/** The register that holds a record call's result, or a record parameter on entry. */
+/** The register that holds a record call's result, a literal, or a record parameter on entry. */
 function nativeRecordSource(
 	fn: BytecodeFunction,
-	site: NativeRecordCall | NativeRecordParameter,
+	site: NativeRecordCall | NativeRecordObject | NativeRecordParameter,
 ): { readonly producerIp: number; readonly register: number } {
 	if ("index" in site) return { producerIp: -1, register: site.index };
+	if ("allocationIp" in site) {
+		const allocation = fn.instructions[site.allocationIp];
+		if (allocation?.opcode !== "CREATE_OBJECT_SHAPED")
+			throw new RangeError("Native record object is not an object literal");
+		return { producerIp: site.allocationIp, register: allocation.dst };
+	}
 	const call = fn.instructions[site.callIp];
 	if (call?.opcode !== "CALL") throw new RangeError("Native record call is not a call");
 	return { producerIp: site.callIp, register: call.dst };
@@ -1808,7 +1826,7 @@ function nativeRecordSource(
 /** The registers that hold a record at each ip that reads it. */
 export function nativeRecordAliases(
 	fn: BytecodeFunction,
-	site: NativeRecordCall | NativeRecordParameter,
+	site: NativeRecordCall | NativeRecordObject | NativeRecordParameter,
 ): ReadonlyMap<number, ReadonlyArray<number>> {
 	const source = nativeRecordSource(fn, site);
 	const flow = nativeVirtualValueFlow(
@@ -1947,6 +1965,29 @@ export function validateNativeRecordCalls(
 		validateNativeRecordUses(fn, site, layout.keys, fail, exceptionTargets);
 		sources.push({ layout, uses: site });
 	}
+	const allocations = new Set<number>();
+	for (const site of native.recordObjects ?? []) {
+		const allocation = fn.instructions[site.allocationIp];
+		if (
+			allocations.has(site.allocationIp) ||
+			native.mode !== "direct" ||
+			allocation?.opcode !== "CREATE_OBJECT_SHAPED" ||
+			allocation.keyStringIndices.length === 0 ||
+			allocation.keyStringIndices.length > NATIVE_RECORD_FIELD_LIMIT ||
+			new Set(allocation.keyStringIndices).size !== allocation.keyStringIndices.length ||
+			(site.passes?.length ?? 0) === 0
+		)
+			fail();
+		allocations.add(site.allocationIp);
+		validateNativeRecordUses(
+			fn,
+			site,
+			allocation.keyStringIndices,
+			fail,
+			exceptionTargets,
+		);
+		sources.push({ layout: { keys: allocation.keyStringIndices }, uses: site });
+	}
 	validateNativeRecordPasses(native, functions, sources, fail);
 }
 
@@ -1985,9 +2026,30 @@ function nativeRecordUsesOf(
 	};
 }
 
+// A literal's known shape lowers its accesses to known own slots, with the same operands.
+function nativeRecordAccessInstruction(
+	instruction: BytecodeInstruction | undefined,
+	store: boolean,
+): instruction is Extract<
+	BytecodeInstruction,
+	{
+		opcode:
+			| "LOAD_PROPERTY_STATIC"
+			| "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT"
+			| "STORE_PROPERTY_STATIC"
+			| "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT";
+	}
+> {
+	return store
+		? instruction?.opcode === "STORE_PROPERTY_STATIC" ||
+				instruction?.opcode === "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT"
+		: instruction?.opcode === "LOAD_PROPERTY_STATIC" ||
+				instruction?.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT";
+}
+
 function validateNativeRecordUses(
 	fn: BytecodeFunction,
-	site: NativeRecordCall | NativeRecordParameter,
+	site: NativeRecordCall | NativeRecordObject | NativeRecordParameter,
 	keys: ReadonlyArray<number>,
 	fail: () => never,
 	exceptionTargets: ReadonlyArray<number | undefined>,
@@ -1995,15 +2057,15 @@ function validateNativeRecordUses(
 	const aliases = nativeRecordAliases(fn, site);
 	const consumers = new Map<number, ReadonlyArray<number>>();
 	if (site.loads.length > 64 || site.stores.length > 64) fail();
-	for (const [accesses, opcode] of [
-		[site.loads, "LOAD_PROPERTY_STATIC"],
-		[site.stores, "STORE_PROPERTY_STATIC"],
+	for (const [accesses, store] of [
+		[site.loads, false],
+		[site.stores, true],
 	] as const)
 		for (const access of accesses) {
 			const instruction = fn.instructions[access.instructionIp];
 			if (
 				consumers.has(access.instructionIp) ||
-				instruction?.opcode !== opcode ||
+				!nativeRecordAccessInstruction(instruction, store) ||
 				keys[access.field] !== instruction.stringIndex ||
 				aliases.get(access.instructionIp)?.length !== 1 ||
 				aliases.get(access.instructionIp)![0] !== instruction.object
@@ -5442,6 +5504,16 @@ function lowerExecutionFunctionToNativePlan(
 							...nativeRecordUsesOf(site, instructionIndexByTargetInstruction),
 						}))
 						.sort((left, right) => left.callIp - right.callIp),
+				}),
+		...(fn.recordObjects === undefined
+			? {}
+			: {
+					recordObjects: fn.recordObjects
+						.map((site) => ({
+							allocationIp: instructionIndexByTargetInstruction.get(site.allocation)!,
+							...nativeRecordUsesOf(site, instructionIndexByTargetInstruction),
+						}))
+						.sort((left, right) => left.allocationIp - right.allocationIp),
 				}),
 		gc: { safepoints },
 		instructions: nativeInstructions,

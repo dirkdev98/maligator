@@ -60,6 +60,14 @@ export function selectNativeCallTransports(
 				for (const pass of site.passes ?? [])
 					passes.set(`${pass.callIp}:${pass.argument}`, layout);
 		}
+		for (const site of native.recordObjects ?? []) {
+			const allocation = native.body.instructions[site.allocationIp];
+			if (allocation?.opcode !== "CREATE_OBJECT_SHAPED") continue;
+			for (const pass of site.passes ?? [])
+				passes.set(`${pass.callIp}:${pass.argument}`, {
+					keys: allocation.keyStringIndices,
+				});
+		}
 		const plans = selectTransports(native, entries, passes);
 		const paired = new Set(
 			plans

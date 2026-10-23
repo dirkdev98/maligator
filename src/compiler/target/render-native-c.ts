@@ -127,6 +127,7 @@ import type {
 	NativeInstructionPlan,
 	NativeRecordCall,
 	NativeRecordLayout,
+	NativeRecordObject,
 	NativeRecordParameter,
 	NativeRecordPass,
 	VmGuardPlan,
@@ -3597,6 +3598,8 @@ interface NativeRecordStorage {
 	/** Forwarded calls of a record entry, with its field count. */
 	readonly forwards: ReadonlyMap<number, number>;
 	readonly calls: ReadonlyMap<number, NativeRecordSite>;
+	/** Object literals created in caller storage. */
+	readonly objects: ReadonlyMap<number, NativeRecordSite>;
 	readonly accesses: ReadonlyMap<number, NativeRecordAccess>;
 	readonly observers: ReadonlyMap<number, ReadonlyArray<NativeRecordObserver>>;
 	/** Calls that hand records' storage to the record parameters of their entries. */
@@ -3622,6 +3625,7 @@ const NO_NATIVE_RECORD_STORAGE: NativeRecordStorage = {
 	allocations: new Map(),
 	forwards: new Map(),
 	calls: new Map(),
+	objects: new Map(),
 	accesses: new Map(),
 	observers: new Map(),
 	passes: new Map(),
@@ -3640,6 +3644,7 @@ function renderRecordCallSlots(
 	directEntry: NativeDirectEntryPlan | undefined,
 ): Omit<NativeRecordStorage, "allocations" | "forwards"> {
 	const calls = new Map<number, NativeRecordSite>();
+	const objects = new Map<number, NativeRecordSite>();
 	const accesses = new Map<number, NativeRecordAccess>();
 	const observers = new Map<number, Array<NativeRecordObserver>>();
 	const passes = new Map<number, Array<NativeRecordPassSite>>();
@@ -3654,7 +3659,7 @@ function renderRecordCallSlots(
 	};
 	const addUses = (
 		site: NativeRecordSite,
-		uses: NativeRecordCall | NativeRecordParameter,
+		uses: NativeRecordCall | NativeRecordObject | NativeRecordParameter,
 		passed: ReadonlyArray<NativeRecordPass>,
 	) => {
 		for (const access of [...uses.loads, ...uses.stores])
@@ -3722,7 +3727,32 @@ function renderRecordCallSlots(
 		calls.set(plan.callIp, site);
 		addUses(site, plan, passed);
 	}
-	return { calls, accesses, observers, passes };
+	for (const plan of native.recordObjects ?? []) {
+		const allocation = fn.instructions[plan.allocationIp];
+		if (allocation?.opcode !== "CREATE_OBJECT_SHAPED")
+			throw new Error(
+				`Native record object ${plan.allocationIp} is not an object literal`,
+			);
+		const layout = { keys: allocation.keyStringIndices };
+		const passed = (plan.passes ?? []).filter((pass) => {
+			const parameter = entryOf(pass.callIp)?.recordParameters?.find(
+				(candidate) => candidate.index === pass.argument,
+			);
+			return parameter !== undefined && sameNativeRecordLayout(layout, parameter);
+		});
+		const fieldSlot = allocateSlot();
+		// Fields, then the object and the producer whose realm an object created from them takes.
+		for (let slot = 1; slot < layout.keys.length + 2; slot++) allocateSlot();
+		const site: NativeRecordSite = {
+			fieldSlot,
+			keys: layout.keys,
+			object: true,
+			producer: true,
+		};
+		objects.set(plan.allocationIp, site);
+		addUses(site, plan, passed);
+	}
+	return { calls, objects, accesses, observers, passes };
 }
 
 function renderFieldCallSlots(
@@ -5773,6 +5803,7 @@ function emitBody(
 		fieldCall: undefined,
 		fieldThrowSlots: undefined,
 		recordAllocation: undefined,
+		recordObject: undefined,
 		recordForward: undefined,
 		recordForwarded: undefined,
 		recordAccess: undefined,
@@ -6299,6 +6330,7 @@ function emitBody(
 		instructionContext.constantBoolean = directConstantBooleans.get(ip);
 		instructionContext.fieldLoad = fieldLoads.get(ip);
 		instructionContext.recordAllocation = records.allocations.get(ip);
+		instructionContext.recordObject = records.objects.get(ip);
 		instructionContext.recordForward = records.forwards.get(ip);
 		instructionContext.recordAccess = records.accesses.get(ip);
 		instructionContext.recordObservers = records.observers.get(ip);
@@ -6827,6 +6859,8 @@ interface NativeInstructionContext {
 	readonly fieldCall?: NativeFieldCall;
 	readonly fieldEntryCall?: NativeFieldCall;
 	readonly fieldThrowSlots?: ReadonlyArray<number>;
+	/** An object literal created in caller storage instead of on the heap. */
+	readonly recordObject?: NativeRecordSite;
 	/** A record entry hands this allocation's fields to its caller instead of creating it. */
 	readonly recordAllocation?: {
 		readonly fields: ReadonlyArray<number>;
@@ -7170,6 +7204,11 @@ function emitInstruction(
 		fieldThrowSlots: context.fieldThrowSlots,
 		callTransport: context.callTransport,
 		callbackTransport: context.callbackTransport,
+		// A call's record ABI holds on whichever path emits the call.
+		recordCall: context.recordCall,
+		recordPasses: context.recordPasses,
+		recordForward: context.recordForward,
+		recordForwarded: context.recordForwarded,
 		mathCall,
 		numberPredicate: context.numberPredicate,
 		stringTransform: context.stringTransform,
@@ -8349,6 +8388,21 @@ function emitInstruction(
 		];
 	}
 	if (
+		context.recordObject !== undefined &&
+		instruction.opcode === "CREATE_OBJECT_SHAPED"
+	) {
+		const site = context.recordObject;
+		return [
+			...instruction.valueRegisters.map(
+				(register, field) => `${recordSlot(site, field)} = ${boxed(register)};`,
+			),
+			`${recordObject(site)} = MAL_VALUE_EMPTY;`,
+			// The prototype the literal would have had, wherever its object is created.
+			`${recordProducer(site)} = vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE];`,
+			`r${instruction.dst} = MAL_VALUE_EMPTY;`,
+		];
+	}
+	if (
 		context.recordAllocation !== undefined &&
 		instruction.opcode === "CREATE_OBJECT_SHAPED"
 	) {
@@ -8369,12 +8423,15 @@ function emitInstruction(
 	if (
 		context.recordAccess !== undefined &&
 		(instruction.opcode === "LOAD_PROPERTY_STATIC" ||
-			instruction.opcode === "STORE_PROPERTY_STATIC")
+			instruction.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT" ||
+			instruction.opcode === "STORE_PROPERTY_STATIC" ||
+			instruction.opcode === "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT")
 	) {
 		const { site, field } = context.recordAccess;
 		const slot = recordSlot(site, field);
 		const virtual =
-			instruction.opcode === "LOAD_PROPERTY_STATIC"
+			instruction.opcode === "LOAD_PROPERTY_STATIC" ||
+			instruction.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT"
 				? `r${instruction.dst} = ${callValue(instruction.dst, slot)};`
 				: `${slot} = ${boxed(instruction.value)};`;
 		if (site.object === undefined) return [virtual];
@@ -8392,13 +8449,7 @@ function emitInstruction(
 		];
 	}
 	if (context.recordObservers !== undefined) {
-		// The observing call can itself return a record or hand others over through caller storage.
-		const ordinary = emitGenericInstruction({
-			recordCall: context.recordCall,
-			recordPasses: context.recordPasses,
-			recordForward: context.recordForward,
-			recordForwarded: context.recordForwarded,
-		});
+		const ordinary = emitGenericInstruction();
 		if (ordinary === null) return null;
 		return [
 			...context.recordObservers.flatMap(({ site, aliases }) => {
@@ -12847,7 +12898,9 @@ function emitInstruction(
 						recordArguments.some((site) => site === undefined) ||
 						recordArguments.length !== (context.recordPasses?.length ?? 0)
 					)
-						throw new Error(`Native record call ${ip} disagrees with its entry`);
+						throw new Error(
+							`Native record call ${ip} in function ${context.functionIndex} disagrees with its entry`,
+						);
 					if (forward) context.recordForwarded.add(ip);
 					context.directEntryCalls.set(ip, new Set([target]));
 					nativeCallDecision(context.profile, ip, "call.direct-native", "applied");

@@ -565,4 +565,82 @@ console.log(widths("ab cd ef"), spans("ab cd ef"));`,
 			),
 		).toThrow(/record parameter proof/);
 	});
+
+	it("keeps an object literal a callee takes as a record parameter in caller storage", () => {
+		const { core, named } = compile(
+			"literal",
+			`const failures = [];
+function reject(message, context) {
+	failures.push(context);
+	throw new RangeError(message);
+}
+const KNOWN = { move: 2 };
+function shapeOf(type, context) {
+	const shape = KNOWN[type];
+	if (shape !== undefined) return shape;
+	for (let step = 0; step < 1; step++) if (type === "bad") reject("unknown", context);
+	context.opcode = type.toUpperCase();
+	return type.length;
+}
+function shapes(types) {
+	let total = 0;
+	for (let index = 0; index < types.length; index++) {
+		const context = { index, opcode: types[index] };
+		total += shapeOf(types[index], context);
+		if (context.opcode !== types[index]) total += 100;
+	}
+	return total;
+}
+console.log(shapes(["move", "add"]));`,
+		);
+		const entry = core.plan.directEntries.find(
+			(candidate) =>
+				candidate.function === named("shapeOf") && candidate.recordParameters,
+		)!;
+		expect(entry.recordParameters!.map((parameter) => parameter.index)).toEqual([1]);
+		const site = entry.callSites[0]!;
+		expect(site.recordObjects?.map((object) => object.argument)).toEqual([1]);
+		const object = site.recordObjects![0]!;
+		expect(object.uses.loads.length).toBeGreaterThan(0);
+
+		const callSites = [
+			{
+				...site,
+				recordObjects: [
+					{
+						...object,
+						uses: {
+							...object.uses,
+							loads: object.uses.loads.map((load) => ({ ...load, field: 0 })),
+						},
+					},
+				],
+			},
+		];
+		const variant = analyzeCoreNativeEntry(
+			core.program.function(entry.function),
+			buildCoreControlFlow(core.program, entry.function, { exceptions: true }),
+			entry.parameterRepresentations,
+			undefined,
+			callSites,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			entry.recordParameters,
+		);
+		const forged = { ...entry, ...variant, callSites };
+		expect(() =>
+			verifyCoreOptimizationPlan(
+				core.program,
+				{
+					...core.plan,
+					directEntries: core.plan.directEntries.map((current) =>
+						current === entry ? forged : current,
+					),
+				},
+				core.context,
+			),
+		).toThrow(/record object proof/);
+	});
 });

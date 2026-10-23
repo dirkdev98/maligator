@@ -529,6 +529,18 @@ export interface CoreDirectEntryCallSite {
 	readonly fieldValueRepresentations?: ReadonlyArray<CorePlanRepresentation>;
 	/** Every use of the call's record result, whose fields the entry returns in caller storage. */
 	readonly recordUses?: CoreRecordUses;
+	/** Object literals this call hands to record parameters, kept in caller storage instead. */
+	readonly recordObjects?: ReadonlyArray<CoreRecordObject>;
+}
+
+/**
+ * An object literal the caller keeps in storage, with every use of it, because a call
+ * hands it to a record parameter. Every call that does so carries the same uses.
+ */
+export interface CoreRecordObject {
+	readonly argument: number;
+	readonly allocation: CoreInstructionId;
+	readonly uses: CoreRecordUses;
 }
 
 export interface CoreRecordFieldAccess {

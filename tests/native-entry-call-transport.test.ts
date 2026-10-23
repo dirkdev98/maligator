@@ -177,6 +177,7 @@ function firstOverrideOffset(bytes: Uint8Array): number {
 	expect(reader.u32()).toBe(0); // Literal switches.
 	expect(reader.u32()).toBe(0); // Field calls.
 	expect(reader.u32()).toBe(0); // Record calls.
+	expect(reader.u32()).toBe(0); // Record objects.
 	expect(reader.u8()).toBe(0); // Canonical body retained.
 	expect(reader.u32()).toBe(1); // Direct entries.
 	skipStorageWithoutFastPaths(reader);

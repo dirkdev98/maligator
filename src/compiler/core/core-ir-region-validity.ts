@@ -45,6 +45,8 @@ import {
 	coreFieldArgumentProofIsCurrent,
 	coreRecordKeyAbsent,
 	coreRecordResultFields,
+	coreRecordObjectLayout,
+	coreRecordObjectUses,
 	coreRecordParameterUses,
 	coreRecordPassKey,
 	coreRecordResultUses,
@@ -1813,6 +1815,7 @@ function immutablePlanCopy(plan: CoreOptimizationPlan): CoreOptimizationPlan {
 			entry.resultFields,
 			...entry.callSites.map((site) => site.fieldValueRepresentations),
 			...entry.callSites.map((site) => site.recordUses),
+			...entry.callSites.map((site) => site.recordObjects),
 			entry.recordParameters,
 		]) {
 			if (payload !== undefined) proofPayloads.add(payload);
@@ -2036,6 +2039,15 @@ export function verifyCoreOptimizationPlan(
 	>();
 	// A record parameter takes storage only from record calls this plan selects.
 	const suppliedRecordPasses = coreSuppliedRecordPasses(plan.directEntries);
+	// A literal in caller storage is no stack object, and every call carries its same uses.
+	const stackObjects = new Set(
+		specializations.flatMap((selection) =>
+			selection.kind === "stack-object-plan"
+				? [`${selection.function}:${selection.stackObject.allocation}`]
+				: [],
+		),
+	);
+	const recordObjectUses = new Map<string, CoreRecordUses>();
 	for (const entry of plan.directEntries) {
 		if (!live.has(entry.function)) {
 			fail(`direct entry targets dead function ${entry.function}`);
@@ -2367,6 +2379,58 @@ export function verifyCoreOptimizationPlan(
 					!coreFieldArgumentProofIsCurrent(caller, site, entry.fieldParameters!))
 			)
 				fail(`direct entry callsite ${key} has no current field argument proof`);
+			for (const [position, object] of (site.recordObjects ?? []).entries()) {
+				const parameter = entry.recordParameters?.find(
+					(candidate) => candidate.index === object.argument,
+				);
+				const layout = coreRecordObjectLayout(caller, object.allocation);
+				const claimed = object.uses.passes ?? [];
+				const objectKey = `${site.caller}:${object.allocation}`;
+				const prior = recordObjectUses.get(objectKey);
+				if (
+					parameter === undefined ||
+					layout === undefined ||
+					parameter.shapes !== undefined ||
+					!sameNumbers(layout.keys, parameter.keys) ||
+					(position > 0 &&
+						object.argument <= site.recordObjects![position - 1]!.argument) ||
+					stackObjects.has(objectKey) ||
+					(prior !== undefined && prior !== object.uses) ||
+					!blockProofs.get(site.caller)!.instructionOrder.has(object.allocation) ||
+					!claimed.some(
+						(pass) =>
+							pass.instruction === site.instruction &&
+							pass.argument === object.argument &&
+							pass.target === entry.function,
+					) ||
+					!sameRecordUses(
+						site.caller,
+						coreRecordObjectUses(
+							caller,
+							control(site.caller),
+							object.allocation,
+							(call, argument) => {
+								const target = claimed.find(
+									(pass) => pass.instruction === call && pass.argument === argument,
+								)?.target;
+								return target === undefined ||
+									!live.has(target) ||
+									coreRecordParameterUses(
+										program.function(target),
+										control(target),
+										argument,
+										layout,
+									) === undefined
+									? undefined
+									: target;
+							},
+						),
+						object.uses,
+					)
+				)
+					fail(`direct entry callsite ${key} has no current record object proof`);
+				recordObjectUses.set(objectKey, object.uses);
+			}
 			if (site.recordUses !== undefined) {
 				// Pass targets are planning facts, like forward targets.
 				const claimed = site.recordUses.passes ?? [];

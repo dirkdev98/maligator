@@ -102,7 +102,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 257;
+export const COMPILER_ARTIFACT_VERSION = 258;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -2097,6 +2097,11 @@ function writeCompilerArtifact(
 		w.u32(native.recordCalls?.length ?? 0);
 		for (const site of native.recordCalls ?? []) {
 			w.u32(site.callIp);
+			writeNativeRecordUses(w, site);
+		}
+		w.u32(native.recordObjects?.length ?? 0);
+		for (const site of native.recordObjects ?? []) {
+			w.u32(site.allocationIp);
 			writeNativeRecordUses(w, site);
 		}
 		w.u8(native.specializedOnly ? 1 : 0);
@@ -4661,6 +4666,10 @@ function readCompilerArtifact(
 			callIp: r.u32(),
 			...readNativeRecordUses(r),
 		}));
+		const recordObjects = Array.from({ length: r.count(8) }, () => ({
+			allocationIp: r.u32(),
+			...readNativeRecordUses(r),
+		}));
 		const specializedOnly = r.u8();
 		if (specializedOnly > 1) throw new RangeError("invalid native body reachability");
 		const directEntryCount = r.count(1);
@@ -6272,6 +6281,7 @@ function readCompilerArtifact(
 			directEntries,
 			...(fieldCallCount === 0 ? {} : { fieldCalls }),
 			...(recordCallCount === 0 ? {} : { recordCalls }),
+			...(recordObjects.length === 0 ? {} : { recordObjects }),
 			...(literalSwitchCount === 0 ? {} : { literalSwitches }),
 			gc: { safepoints },
 			instructions: nativeInstructions,

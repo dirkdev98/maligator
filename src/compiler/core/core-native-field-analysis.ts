@@ -586,14 +586,17 @@ export function coreRecordPassKey(
 	return `${site.caller}:${site.instruction}:${argument}:${target}:${layout.keys.join(",")}/${(layout.shapes ?? []).map((shape) => shape.join(",")).join(";")}`;
 }
 
-/** The record passes that record calls of these entries hand over from caller storage. */
+/**
+ * The record passes that record calls of these entries hand over from caller storage.
+ * A call that hands over an object literal carries that literal's storage itself.
+ */
 export function coreSuppliedRecordPasses(
 	entries: ReadonlyArray<CoreDirectEntryPlan>,
 ): ReadonlySet<string> {
 	const supplied = new Set<string>();
 	for (const entry of entries)
-		if (entry.resultFields !== undefined)
-			for (const site of entry.callSites)
+		for (const site of entry.callSites) {
+			if (entry.resultFields !== undefined)
 				for (const pass of site.recordUses?.passes ?? [])
 					supplied.add(
 						coreRecordPassKey(
@@ -603,6 +606,14 @@ export function coreSuppliedRecordPasses(
 							entry.resultFields,
 						),
 					);
+			for (const object of site.recordObjects ?? []) {
+				const layout = entry.recordParameters?.find(
+					(parameter) => parameter.index === object.argument,
+				);
+				if (layout !== undefined)
+					supplied.add(coreRecordPassKey(site, object.argument, entry.function, layout));
+			}
+		}
 	return supplied;
 }
 
@@ -632,6 +643,50 @@ export function coreRecordResultUses(
 		fields,
 		passTarget,
 	);
+}
+
+/** The fields of an object literal that caller storage can hold. */
+export function coreRecordObjectLayout(
+	fn: CoreFunctionStore,
+	allocation: CoreInstructionId,
+): CoreRecordLayout | undefined {
+	if (
+		fn.isGenerator ||
+		fn.isAsync ||
+		fn.instructionKind(allocation) !== "operation" ||
+		fn.instructionOpcodeName(allocation) !== "createObjectShaped" ||
+		fn.kernel.instructionResultCount(allocation) !== 1
+	)
+		return undefined;
+	const keys = fn.instructionAttributes(allocation).keyStringIndices;
+	if (
+		!Array.isArray(keys) ||
+		keys.length === 0 ||
+		keys.length > MAX_RESULT_FIELDS ||
+		new Set(keys).size !== keys.length
+	)
+		return undefined;
+	return Object.freeze({ keys: Object.freeze(keys.map(Number)) });
+}
+
+/** Every use of an object literal, when caller storage can stand in for it. */
+export function coreRecordObjectUses(
+	fn: CoreFunctionStore,
+	cfg: CoreControlFlow,
+	allocation: CoreInstructionId,
+	passTarget: CoreRecordPassTarget,
+): CoreRecordUses | undefined {
+	const layout = coreRecordObjectLayout(fn, allocation);
+	return layout === undefined
+		? undefined
+		: recordUses(
+				fn,
+				cfg,
+				fn.kernel.resultAt(fn.kernel.instructionResultStart(allocation)),
+				fn.instructionBlock(allocation),
+				layout,
+				passTarget,
+			);
 }
 
 /**

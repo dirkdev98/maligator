@@ -52,6 +52,7 @@ import type {
 	CorePlanSpecialization,
 	CorePlanSpecializationKind,
 	CoreRecordLayout,
+	CoreRecordObject,
 	CoreRecordUses,
 } from "./core-ir-regions.ts";
 import type { CoreProgramSummaries } from "./core-ir-summaries.ts";
@@ -76,6 +77,8 @@ import {
 	coreRecordPassKey,
 	coreSuppliedRecordPasses,
 	coreRecordKeyAbsent,
+	coreRecordObjectLayout,
+	coreRecordObjectUses,
 	coreRecordParameterUses,
 	coreRecordResultFields,
 	coreRecordResultUses,
@@ -114,7 +117,7 @@ import type {
 type CorePendingClaims = Pick<
 	CorePlanSpecialization,
 	"function" | "composition" | "claimedInstructions"
-> & { readonly kind: CorePlanSpecializationKind | "field-call" };
+> & { readonly kind: CorePlanSpecializationKind | "field-call" | "record-object" };
 
 export interface CorePendingOptimizationCandidate {
 	readonly budget: CoreTransformCandidate;
@@ -1301,9 +1304,8 @@ function directEntryOpportunities(
 	localCandidates: (
 		functionId: CoreFunctionId,
 	) => ReadonlyArray<CorePendingOptimizationCandidate>,
-	context: CoreCompilationContext | undefined,
+	records: RecordPlanning,
 ): ReadonlyArray<CorePlanningOpportunity> {
-	const records = new RecordPlanning(program, summaries, analyses, context, live);
 	const loopWeights = new Map<CoreFunctionId, Uint8Array>();
 	const callWeight = (site: CoreDirectEntryCallSite): number => {
 		const caller = program.function(site.caller);
@@ -1459,10 +1461,13 @@ function directEntryOpportunities(
 			caller: target,
 			generatedCodeCost,
 			compilerWorkCost: generatedCodeCost + fn.valueCapacity,
-			// A record producer's callers can also stop allocating its result.
+			// Callers of a record producer, or callers that hand it records, can also stop
+			// allocating those records.
 			priorityScore:
 				-callSites.reduce((sum, site) => sum + callWeight(site), 0) *
-				(coreReturnsObjectLiterals(fn) ? 16 : 8),
+				(coreReturnsObjectLiterals(fn) || records.takesRecords(target, callSites)
+					? 16
+					: 8),
 			resolve: () => {
 				const fn = program.function(target);
 				const summary = summaries.summary(target);
@@ -1794,6 +1799,7 @@ class RecordPlanning {
 	readonly #fields = new Map<CoreFunctionId, CoreEntryResultFields | undefined>();
 	readonly #parameters = new Map<string, CoreRecordUses | undefined>();
 	readonly #results = new Map<string, CoreRecordUses | undefined>();
+	readonly #objects = new Map<string, CoreRecordUses | undefined>();
 
 	constructor(
 		program: CoreProgram,
@@ -1902,30 +1908,81 @@ class RecordPlanning {
 	}
 
 	/** The layout of a record call's result that `call` hands over as `argument`. */
+	objectUses(
+		caller: CoreFunctionId,
+		allocation: CoreInstructionId,
+	): CoreRecordUses | undefined {
+		const key = `${caller}:${allocation}`;
+		if (this.#objects.has(key)) return this.#objects.get(key);
+		const fn = this.#program.function(caller);
+		const layout = coreRecordObjectLayout(fn, allocation);
+		const uses =
+			layout === undefined
+				? undefined
+				: coreRecordObjectUses(
+						fn,
+						this.#control(caller).ordinary(),
+						allocation,
+						this.passTarget(caller, layout),
+					);
+		this.#objects.set(key, uses);
+		return uses;
+	}
+
+	/** Some call hands `target` a record it could take as a record parameter. */
+	takesRecords(
+		target: CoreFunctionId,
+		callSites: ReadonlyArray<CoreDirectEntryCallSite>,
+	): boolean {
+		const parameterCount = this.#program.function(target).parameterCount;
+		return callSites.some(
+			(site) =>
+				site.guarded !== true &&
+				this.exactTarget(site.caller, site.instruction) === target &&
+				Array.from({ length: parameterCount }, (_, index) => index).some(
+					(index) =>
+						this.passedRecord(site.caller, site.instruction, index) !== undefined,
+				),
+		);
+	}
+
+	/**
+	 * The layout of a record that `call` hands over as `argument` from caller storage: a
+	 * record call's result, or an object literal that then lives in that storage.
+	 */
 	passedRecord(
 		caller: CoreFunctionId,
 		call: CoreInstructionId,
 		argument: number,
-	): CoreRecordLayout | undefined {
+	):
+		| { readonly layout: CoreRecordLayout; readonly object?: CoreRecordObject }
+		| undefined {
 		const fn = this.#program.function(caller);
 		let value = this.#summaries.targets.site(caller, call)?.arguments?.[argument];
 		while (value !== undefined && fn.kernel.valueDefinitionKind(value) === 1) {
 			const owner = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
-			if (fn.instructionOpcodeName(owner) === "move") {
+			const opcode = fn.instructionOpcodeName(owner);
+			if (opcode === "move") {
 				value = fn.kernel.operandAt(fn.kernel.instructionOperandStart(owner));
 				continue;
 			}
-			const producer =
-				fn.instructionOpcodeName(owner) === "call"
-					? this.exactTarget(caller, owner)
+			const passes = (uses: CoreRecordUses | undefined) =>
+				uses?.passes?.some(
+					(pass) => pass.instruction === call && pass.argument === argument,
+				) === true;
+			if (opcode === "createObjectShaped") {
+				const uses = this.objectUses(caller, owner);
+				return passes(uses)
+					? {
+							layout: coreRecordObjectLayout(fn, owner)!,
+							object: Object.freeze({ argument, allocation: owner, uses: uses! }),
+						}
 					: undefined;
+			}
+			const producer = opcode === "call" ? this.exactTarget(caller, owner) : undefined;
 			const fields = producer === undefined ? undefined : this.fields(producer);
-			const uses =
-				fields === undefined ? undefined : this.resultUses(caller, owner, fields);
-			return uses?.passes?.some(
-				(pass) => pass.instruction === call && pass.argument === argument,
-			) === true
-				? fields
+			return fields !== undefined && passes(this.resultUses(caller, owner, fields))
+				? { layout: fields }
 				: undefined;
 		}
 		return undefined;
@@ -1967,11 +2024,15 @@ class RecordPlanning {
 				fields === undefined
 					? undefined
 					: this.resultUses(call.caller, call.instruction, fields);
-			const parameters = Array.from({ length: parameterCount }, (_, index) => ({
+			const passed = Array.from({ length: parameterCount }, (_, index) => ({
 				index,
-				layout: this.passedRecord(call.caller, call.instruction, index),
-			})).flatMap(({ index, layout }) =>
-				layout === undefined ? [] : [{ index, layout }],
+				record: this.passedRecord(call.caller, call.instruction, index),
+			}));
+			const parameters = passed.flatMap(({ index, record }) =>
+				record === undefined ? [] : [{ index, layout: record.layout }],
+			);
+			const recordObjects = passed.flatMap(({ record }) =>
+				record?.object === undefined ? [] : [record.object],
 			);
 			if (recordUses === undefined && parameters.length === 0) continue;
 			const key = `${recordUses === undefined ? "" : "result"}|${parameters
@@ -1983,7 +2044,15 @@ class RecordPlanning {
 				calls: [],
 			};
 			group.calls.push(
-				recordUses === undefined ? call : Object.freeze({ ...call, recordUses }),
+				recordUses === undefined && recordObjects.length === 0
+					? call
+					: Object.freeze({
+							...call,
+							...(recordUses === undefined ? {} : { recordUses }),
+							...(recordObjects.length === 0
+								? {}
+								: { recordObjects: Object.freeze(recordObjects) }),
+						}),
 			);
 			groups.set(key, group);
 		}
@@ -2133,7 +2202,14 @@ function keepSuppliedRecordParameters(
 			if (supplies.length === entry.callSites.length) return entry;
 			changed = true;
 			const { recordParameters, ...ordinary } = entry;
-			const callSites = Object.freeze(supplies.length === 0 ? entry.callSites : supplies);
+			const callSites = Object.freeze(
+				supplies.length > 0
+					? supplies
+					: entry.callSites.map((site) => {
+							const { recordObjects: _objects, ...plain } = site;
+							return Object.freeze(plain);
+						}),
+			);
 			const variant = analyzeCoreNativeEntry(
 				program.function(entry.function),
 				analyses
@@ -2224,6 +2300,9 @@ function conflicts(
 		const state = owned?.get(instruction);
 		if (state === undefined) return false;
 		if (selection.kind === "field-call" && state.overlays.has("field-call")) return false;
+		// Calls that hand over the same literal share its storage.
+		if (selection.kind === "record-object" && state.overlays.has("record-object"))
+			return false;
 		if (selection.kind === "guarded-direct-call" && state.exclusive) return true;
 		if (
 			selection.composition === "exclusive" &&
@@ -2239,7 +2318,7 @@ function conflicts(
 
 interface ClaimState {
 	exclusive: boolean;
-	readonly overlays: Set<CorePlanSpecializationKind | "field-call">;
+	readonly overlays: Set<CorePlanSpecializationKind | "field-call" | "record-object">;
 }
 
 function claim(
@@ -2254,7 +2333,11 @@ function claim(
 			overlays: new Set(),
 		};
 		if (selection.composition === "exclusive") state.exclusive = true;
-		if (selection.composition !== "exclusive" || selection.kind === "field-call")
+		if (
+			selection.composition !== "exclusive" ||
+			selection.kind === "field-call" ||
+			selection.kind === "record-object"
+		)
 			state.overlays.add(selection.kind);
 		owned.set(instruction, state);
 	}
@@ -2285,6 +2368,7 @@ export function buildCoreOptimizationPlan(
 ): CoreOptimizationPlan {
 	const discoveryStartedAt = options.onPhase === undefined ? 0 : Date.now();
 	const live = new Set(liveFunctions);
+	const records = new RecordPlanning(program, summaries, analyses, options.context, live);
 	const opportunities: Array<CorePlanningOpportunity> = [];
 	const localInputs = new Map<CoreFunctionId, CoreLocalOptimizationPlanInput>();
 	for (const input of options.localInputs ?? []) {
@@ -2337,6 +2421,13 @@ export function buildCoreOptimizationPlan(
 		const costModel = coreGeneratedCodeCostModel(fn, cfg);
 		const pending: Array<CorePendingOptimizationCandidate> = [];
 		for (const candidate of candidates) {
+			// A stack object creates the object at every call it is handed to; caller
+			// storage hands record parameters the fields instead.
+			if (
+				candidate.kind === "stack-object" &&
+				(records.objectUses(functionId, candidate.allocation)?.passes?.length ?? 0) > 0
+			)
+				continue;
 			const planned = pendingLocalCandidate(
 				program,
 				candidate,
@@ -2370,7 +2461,7 @@ export function buildCoreOptimizationPlan(
 				live,
 				analyses,
 				resolveLocal,
-				options.context,
+				records,
 			),
 		);
 	}
@@ -2473,8 +2564,8 @@ export function buildCoreOptimizationPlan(
 			}
 			const candidate = byBudget.get(budget)!;
 			const claims: ReadonlyArray<CorePendingClaims> = isPendingDirectEntry(candidate)
-				? candidate.callSites.flatMap((site) =>
-						site.fieldObject === undefined
+				? candidate.callSites.flatMap((site) => [
+						...(site.fieldObject === undefined
 							? []
 							: [
 									{
@@ -2483,8 +2574,14 @@ export function buildCoreOptimizationPlan(
 										composition: "exclusive" as const,
 										claimedInstructions: [site.fieldObject],
 									},
-								],
-					)
+								]),
+						...(site.recordObjects ?? []).map((object) => ({
+							function: site.caller,
+							kind: "record-object" as const,
+							composition: "exclusive" as const,
+							claimedInstructions: [object.allocation],
+						})),
+					])
 				: [candidate.claims];
 			let reason: CoreTransformDeclineReason | undefined = service.admit(budget);
 			if (

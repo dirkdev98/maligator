@@ -3413,11 +3413,12 @@ MalValue mal_vm_materialize_stack_object_fields(
 u64 mal_vm_stack_object_materialization_count(void);
 
 /**
- * Create the object a record entry returned through caller storage, once some use
- * needs it, from `values` in the order of `keys`.
+ * Create the object of a record kept in caller storage, once some use needs it, from
+ * `values` in the order of `keys`. `producer` is the callee whose literal a record
+ * entry returned there, or the prototype of a literal created there.
  */
 MalValue mal_vm_materialize_record(
-    MalVm *vm, MalValue callee, struct MalString **keys, MalValue *values, u32 count);
+    MalVm *vm, MalValue producer, struct MalString **keys, MalValue *values, u32 count);
 
 /**
  * Create a plain object directly in `shape` (built from the literal's static

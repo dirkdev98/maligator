@@ -1508,7 +1508,12 @@ function lowerCoreSpecializations(
 	return regions;
 }
 
-type CoreRecordCalls = ReadonlyMap<CoreInstructionId, CoreRecordUses>;
+interface CoreRecordCalls {
+	readonly calls: ReadonlyMap<CoreInstructionId, CoreRecordUses>;
+	readonly objects: ReadonlyMap<CoreInstructionId, CoreRecordUses>;
+}
+
+const NO_CORE_RECORD_CALLS: CoreRecordCalls = { calls: new Map(), objects: new Map() };
 
 function lowerRecordUses(
 	uses: CoreRecordUses,
@@ -2793,11 +2798,19 @@ function lowerFunctionToTarget(
 						entries: site.entries,
 					})),
 				}),
-		...(recordCalls.size === 0
+		...(recordCalls.calls.size === 0
 			? {}
 			: {
-					recordCalls: [...recordCalls].map(([call, uses]) => ({
+					recordCalls: [...recordCalls.calls].map(([call, uses]) => ({
 						call: loweredInstructions.get(call)!,
+						...lowerRecordUses(uses, loweredInstructions),
+					})),
+				}),
+		...(recordCalls.objects.size === 0
+			? {}
+			: {
+					recordObjects: [...recordCalls.objects].map(([allocation, uses]) => ({
+						allocation: loweredInstructions.get(allocation)!,
 						...lowerRecordUses(uses, loweredInstructions),
 					})),
 				}),
@@ -2863,7 +2876,13 @@ export function lowerCoreCompilationToTargetProgram(
 		Map<CoreInstructionId, CompilerNumericSortCallback>
 	>();
 	const fieldCallPlans = new Map<number, Map<CoreInstructionId, CoreFieldCall>>();
-	const recordCalls = new Map<number, Map<CoreInstructionId, CoreRecordUses>>();
+	const recordCalls = new Map<
+		number,
+		{
+			calls: Map<CoreInstructionId, CoreRecordUses>;
+			objects: Map<CoreInstructionId, CoreRecordUses>;
+		}
+	>();
 	const directEntryTargets = new Map<
 		number,
 		Map<CoreInstructionId, { target: CoreFunctionId; guarded: boolean }>
@@ -2927,11 +2946,17 @@ export function lowerCoreCompilationToTargetProgram(
 				fieldCallPlans.set(site.caller, calls);
 				continue;
 			}
-			if (site.recordUses !== undefined) {
-				const calls =
-					recordCalls.get(site.caller) ?? new Map<CoreInstructionId, CoreRecordUses>();
-				calls.set(site.instruction, site.recordUses);
-				recordCalls.set(site.caller, calls);
+			if (site.recordUses !== undefined || site.recordObjects !== undefined) {
+				const records = recordCalls.get(site.caller) ?? {
+					calls: new Map<CoreInstructionId, CoreRecordUses>(),
+					objects: new Map<CoreInstructionId, CoreRecordUses>(),
+				};
+				if (site.recordUses !== undefined)
+					records.calls.set(site.instruction, site.recordUses);
+				// Every call that hands over a literal carries its same uses.
+				for (const object of site.recordObjects ?? [])
+					records.objects.set(object.allocation, object.uses);
+				recordCalls.set(site.caller, records);
 			}
 			const calls =
 				directEntryIds.get(site.caller) ?? new Map<CoreInstructionId, number>();
@@ -3031,7 +3056,7 @@ export function lowerCoreCompilationToTargetProgram(
 			directEntryPlans.get(core) ?? [],
 			directBuiltinCallbacks.get(core) ?? new Map(),
 			[...(fieldCallPlans.get(core)?.values() ?? [])],
-			recordCalls.get(core) ?? new Map(),
+			recordCalls.get(core) ?? NO_CORE_RECORD_CALLS,
 			unsignedArithmetic.get(core) ?? new Set(),
 			privateNumericArrayElements.get(core) ?? new Set(),
 			privatePackedRestArrayElements.get(core) ?? [],

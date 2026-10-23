@@ -280,6 +280,10 @@ export interface CoreTargetFunction {
 	readonly recordCalls?: ReadonlyArray<
 		CoreTargetRecordUses & { readonly call: CompilerInstruction }
 	>;
+	/** Object literals kept in caller storage for record parameters, with every use. */
+	readonly recordObjects?: ReadonlyArray<
+		CoreTargetRecordUses & { readonly allocation: CompilerInstruction }
+	>;
 	readonly capturedCount: number;
 	readonly strict: boolean;
 	readonly isClassConstructor: boolean;

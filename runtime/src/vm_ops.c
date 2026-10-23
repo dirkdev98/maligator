@@ -946,14 +946,17 @@ MalValue mal_vm_create_object_shaped(MalVm *vm, MalShape *shape, const MalValue 
 }
 
 MalValue mal_vm_materialize_record(
-    MalVm *vm, MalValue callee, MalString **keys, MalValue *values, u32 count) {
+    MalVm *vm, MalValue producer, MalString **keys, MalValue *values, u32 count) {
     assert(count >= 1 && count <= MAL_SHAPE_MAX_INLINE_SLOTS);
-    // The callee's literal would have taken its prototype from the callee's realm.
 #if MAL_REALMS
+    // A callee's literal would have taken its prototype from the callee's realm.
     MalValue prototype =
-        mal_vm_callee_realm(vm, callee)->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE];
+        mal_value_is_function_object(producer) || mal_value_is_native_function_object(producer) ||
+                mal_value_is_empty(producer)
+            ? mal_vm_callee_realm(vm, producer)->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]
+            : producer;
 #else
-    (void) callee;
+    (void) producer;
     MalValue prototype = vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE];
 #endif
     // A union record's values arrive in a temporary array that only this span roots.

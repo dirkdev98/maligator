@@ -430,6 +430,62 @@ function checkedWidths(text) {
 	return total;
 }
 
+// An object literal handed to record parameters stays in its caller's storage.
+const contextFailures = [];
+function reject(message, context) {
+	contextFailures.push(context);
+	throw new RangeError(`${message} ${context.index}:${context.opcode}`);
+}
+const KNOWN_SHAPES = { move: 2, jump: 0 };
+function shapeOf(type, context) {
+	const shape = KNOWN_SHAPES[type];
+	if (shape !== undefined) return shape;
+	for (let step = 0; step < 1; step++) if (type === "bad") reject("unknown", context);
+	context.opcode = type.toUpperCase();
+	return type.length;
+}
+function shapes(types) {
+	let total = 0;
+	for (let index = 0; index < types.length; index++) {
+		const context = { block: 0, index, opcode: types[index] };
+		if (types[index] === "") reject("empty", context);
+		total += shapeOf(types[index], context);
+		if (context.opcode !== types[index]) total += 100;
+	}
+	return total;
+}
+function rejectedShape(types) {
+	try {
+		return String(shapes(types));
+	} catch (error) {
+		const context = contextFailures.at(-1);
+		return `${error.message}:${context.opcode}:${Object.keys(context).join("+")}`;
+	}
+}
+
+function lengthOf(span) {
+	let length = 0;
+	for (let index = span.start; index < span.end; index++) length++;
+	return length;
+}
+function shift(span, by) {
+	for (let step = 0; step < by; step++) {
+		span.start++;
+		span.end += 2;
+	}
+}
+const shiftedSpans = [];
+function shiftedLengths(count) {
+	let total = 0;
+	for (let index = 0; index < count; index++) {
+		const span = { start: index, end: index * 2 };
+		shift(span, 1);
+		total += lengthOf(span) + span.end;
+		if (index % 4 === 3) shiftedSpans.push(span);
+	}
+	return total;
+}
+
 const text = "a1 bb22 ccc333 dddd4444 ".repeat(20);
 check(tokenLengths(text), 600, "token lengths");
 check(digitCount(text), 200, "digit count");
@@ -490,6 +546,23 @@ check(
 check(sharedPassed("ab abc abcd abc a"), 7, "shared object as record parameter");
 check(decodedWeights([4, -1, -2, -3, 0]), 1045, "union record parameter");
 check(checkedWidths(text), 41140, "record parameter throws");
+check(
+	rejectedShape(["move", "jump", "add", "move"]),
+	"107",
+	"literal record parameter writes",
+);
+check(
+	rejectedShape(["move", "bad"]),
+	"unknown 1:bad:bad:block+index+opcode",
+	"literal record parameter observer",
+);
+check(contextFailures.length, 1, "literal record parameter observer count");
+check(shiftedLengths(16), 408, "literal handed to two record parameters");
+check(
+	`${shiftedSpans.length}:${shiftedSpans[0].start}:${shiftedSpans[0].end}:${shiftedSpans[0] !== shiftedSpans[1]}`,
+	"4:4:8:true",
+	"literal record parameter identity",
+);
 const handlers = attach(["a", "try-b", "cc", "try-dd", "e", "f", "try-g"], []);
 check(
 	handlers.map((environment) => `${environment.state}@${environment.version}`).join(","),
