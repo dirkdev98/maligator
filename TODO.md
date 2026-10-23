@@ -252,6 +252,19 @@ bounded and consumer-driven as planned below.
       read directly, but 747 of them flow into stores and arguments, and copy loops
       such as `out[k] = src[k]` would put every method behind every name. Key kinds
       and the receivers' allocation classes have to keep those reads apart.
+      Class granularity alone does not get there. A whole-program flow of class
+      instances, prototypes and functions over construction Core took 9.4 s in Node
+      on the 7,600 self-compile functions and resolved none of its 25,229 named
+      calls: instances pass through arrays, object literals, `Array.from` callbacks
+      and destructured returns, where a class-level model loses them. Once an
+      instance can hide among unknown values, a computed store on an unknown
+      receiver (`integerRecipes[current.value] = 0` on a destructured typed array)
+      may set `__proto__` or shadow a member, and a computed read may return
+      `__defineGetter__`, so its class's chain is no longer exact. The
+      `class-methods` case and the objects phase pricing loop hold their instances
+      in arrays too. Exact targets need allocation-site cells for arrays and
+      records, with models of builtin callbacks and iteration, before class facts
+      pay off.
 - [ ] Prove property names getter-free in the closed world. With source closure,
       locked primordials and no `Proxy`, a name that no class, object literal or
       `defineProperty` gives an accessor, and that the primordial catalog lists as
