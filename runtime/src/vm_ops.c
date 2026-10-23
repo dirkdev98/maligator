@@ -9537,10 +9537,6 @@ MalGeneratorObject *mal_vm_op_generator_start_compiled(
 void mal_vm_op_yield_compiled(
     MalVm *vm, MalGeneratorObject *generator, MalValue yielded, i32 value_dst,
     i32 mode_dst, i32 resume_ip, i32 suspend_position_entry, MalEnv *env) {
-    // The caller completes its snapshot and unlinks before this helper can resume or free it.
-    MalValue roots[] = {mal_value_from_object((MalObject *) generator), yielded};
-    MalRootSpan root_span;
-    mal_gc_root(&root_span, roots, 2);
     // Snapshot replacement shades its old slots; these independently traced fields need barriers too.
     mal_gc_write_barrier(generator->yielded_value);
     generator->yielded_value = yielded;
@@ -9559,10 +9555,14 @@ void mal_vm_op_yield_compiled(
     // An async generator's yield settles the front request promise with
     // { value, done: false } and drives the next request (the yielded value was
     // already awaited by the compiler-inserted await preceding this yield).
+    // Only that settlement allocates; the caller unlinked its frame, so root the generator.
     if (generator->is_async_generator) {
+        MalValue root = mal_value_from_object((MalObject *) generator);
+        MalRootSpan root_span;
+        mal_gc_root(&root_span, &root, 1);
         mal_async_generator_yield(vm, generator);
+        mal_gc_unroot(&root_span);
     }
-    mal_gc_unroot(&root_span);
 }
 
 void mal_vm_op_terminal_yield_compiled(
