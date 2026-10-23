@@ -130,7 +130,7 @@ void mal_rooted_value_list_append(MalRootedValueList *list, MalValue value) {
 
 void mal_rooted_value_list_dispose(MalRootedValueList *list) {
     mal_gc_unroot(&list->root_span);
-    free(list->values);
+    if (list->values != nullptr) free(list->values);
     *list = (MalRootedValueList) {0};
 }
 

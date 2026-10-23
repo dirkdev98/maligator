@@ -289,8 +289,9 @@ static void mal_json_pointer_init(MalJsonPointerMap *map) {
     map->used = 0;
 }
 
+// Most stringify calls leave several maps unused; a free(nullptr) still costs a libc call.
 static void mal_json_pointer_dispose(MalJsonPointerMap *map) {
-    if (map->entries != map->inline_entries) free(map->entries);
+    if (map->entries != nullptr && map->entries != map->inline_entries) free(map->entries);
 }
 
 static void mal_json_pointer_move(MalJsonPointerMap *to, MalJsonPointerMap *from) {
@@ -952,7 +953,9 @@ typedef struct MalJsonFrame {
 typedef struct MalJsonPlainState {
     MalVm *vm;
     MalKey to_json;
-    MalJsonPointerMap shapes;
+    // The plan cache's own map when borrowed, so its plans need no copy in or out.
+    MalJsonPointerMap *shapes;
+    MalJsonPointerMap own_shapes;
     MalJsonPointerMap keys;
     MalTextBuffer shared_escaped_keys;
     MalJsonPointerMap prototypes;
@@ -1029,7 +1032,7 @@ static bool mal_json_plain_shape(
     if (object->shape == nullptr || mal_object_has_public_overflow(object) ||
         object->is_arguments || object->is_raw_json) return false;
     state->call_shapes++;
-    MalJsonPointerEntry *cached = mal_json_pointer_find(&state->shapes, object->shape);
+    MalJsonPointerEntry *cached = mal_json_pointer_find(state->shapes, object->shape);
     if (cached != nullptr && cached->value != nullptr) {
         MAL_PERF_COUNT(json_shape_plan_hits);
         frame->plan = cached->value;
@@ -1056,8 +1059,8 @@ static bool mal_json_plain_shape(
     frame->count = shape->inline_count;
     // Null entries retain eligibility without building an escaped-key plan before reuse.
     if (cached == nullptr) {
-        if (state->shapes.count < MAL_JSON_PLAN_ENTRY_LIMIT) {
-            mal_json_pointer_insert(&state->shapes, shape, nullptr);
+        if (state->shapes->count < MAL_JSON_PLAN_ENTRY_LIMIT) {
+            mal_json_pointer_insert(state->shapes, shape, nullptr);
         }
         return true;
     }
@@ -1088,7 +1091,7 @@ static bool mal_json_plain_shape(
             };
         }
     }
-    mal_json_pointer_insert(&state->shapes, object->shape, plan);
+    mal_json_pointer_insert(state->shapes, object->shape, plan);
     frame->plan = plan;
     frame->count = plan->count;
     frame->cached_plan = true;
@@ -1455,11 +1458,10 @@ static struct MalJsonPlanCache *mal_json_plan_cache_borrow(MalVm *vm) {
 
 static void mal_json_plain_dispose(MalJsonPlainState *state) {
     if (state->plan_cache != nullptr) {
-        mal_json_pointer_move(&state->plan_cache->shapes, &state->shapes);
         state->plan_cache->plan_bytes = state->plan_bytes;
         state->plan_cache->borrowed = false;
     } else {
-        mal_json_shape_plans_free(&state->shapes);
+        mal_json_shape_plans_free(&state->own_shapes);
     }
     for (usize i = 0; i < state->keys.capacity; i++) free(state->keys.entries[i].value);
     MAL_PERF_ADD(json_escaped_key_capacity_bytes,
@@ -1467,8 +1469,8 @@ static void mal_json_plain_dispose(MalJsonPlainState *state) {
     mal_text_buffer_dispose(&state->shared_escaped_keys);
     mal_json_pointer_dispose(&state->keys);
     MAL_PERF_ADD(json_plan_table_bytes,
-        (state->shapes.capacity + state->prototypes.capacity + state->keys.capacity) * sizeof(MalJsonPointerEntry));
-    mal_json_pointer_dispose(&state->shapes);
+        (state->shapes->capacity + state->prototypes.capacity + state->keys.capacity) * sizeof(MalJsonPointerEntry));
+    mal_json_pointer_dispose(&state->own_shapes);
     mal_json_pointer_dispose(&state->prototypes);
     mal_json_pointer_dispose(&state->active);
     if (state->frames != state->inline_frames) free(state->frames);
@@ -1596,11 +1598,12 @@ static bool mal_json_try_serialize_plain(
     MalJsonPlainState state;
     state.vm = generic->vm;
     state.to_json = mal_intrinsic_static_string_key(generic->vm, "toJSON");
-    mal_json_pointer_init(&state.shapes);
+    mal_json_pointer_init(&state.own_shapes);
     state.plan_cache = mal_json_plan_cache_borrow(generic->vm);
+    state.shapes = &state.own_shapes;
     state.plan_bytes = 0;
     if (state.plan_cache != nullptr) {
-        mal_json_pointer_move(&state.shapes, &state.plan_cache->shapes);
+        state.shapes = &state.plan_cache->shapes;
         state.plan_bytes = state.plan_cache->plan_bytes;
     }
     state.call_shapes = 0;
@@ -1818,8 +1821,8 @@ static MalValue mal_builtin_json_stringify(MalVm *vm, MalValue this_value, const
         vm->exact_script_call = &runtime_callback;
         MAL_PERF_COUNT(json_stringify_runtime_callback_nominations);
     }
-    MalValue empty_key = mal_value_from_string(mal_intrinsic_ascii(vm, ""));
-    MalJsonBuilder builder = {.vm = vm};
+    MalValue empty_key = mal_value_from_string(mal_intrinsic_hot_ascii(vm, MAL_HOT_KEY_EMPTY));
+    MalJsonBuilder builder = {.vm = vm, .buffer = {.heap = &vm->heap}};
     // Size the first allocation from the root's members, about 16 units each, so a
     // small record is written once instead of regrown from 16 units three times.
     if (mal_value_is_heap_type(value, MAL_HEAP_OBJECT) ||
@@ -3177,7 +3180,7 @@ static MalValue mal_builtin_json_parse(MalVm *vm, MalValue this_value, const Mal
     // rooted in {"" : result}.
     if (track_source) {
         MalObject *root = mal_intrinsic_new_object(vm);
-        MalValue empty_key = mal_value_from_string(mal_intrinsic_ascii(vm, ""));
+        MalValue empty_key = mal_value_from_string(mal_intrinsic_hot_ascii(vm, MAL_HOT_KEY_EMPTY));
         mal_intrinsic_define_data(vm, root, "", result, MAL_PROPERTY_WRITABLE | MAL_PROPERTY_ENUMERABLE | MAL_PROPERTY_CONFIGURABLE);
         MalExactScriptCall runtime_callback;
         bool nominated = (vm->exact_script_call == nullptr ||
