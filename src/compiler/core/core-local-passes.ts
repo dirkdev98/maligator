@@ -3250,6 +3250,7 @@ export const CORE_CONSTRUCTION_NORMALIZATION_PASSES: ReadonlyArray<CoreFunctionP
 ];
 
 // Late body edits rarely leave blocks to merge or parameters to fold; removed edges do.
+// Forwarding elimination stays out: it would undo the preheaders that loop analyses need.
 function afterLateCfgEdits(pass: CoreFunctionPass): CoreFunctionPass {
 	return { ...pass, wakesOn: ["cfg"] };
 }
@@ -3260,7 +3261,6 @@ export const CORE_LATE_CANONICALIZATION_PASSES: ReadonlyArray<CoreFunctionPass> 
 	foldPrimitiveCoercions,
 	afterLateCfgEdits(canonicalizeBlockParameters),
 	afterLateCfgEdits(simplifyBlockParameters),
-	afterLateCfgEdits(eliminateForwardingBlocks),
 	afterLateCfgEdits(mergeLinearBlocks),
 	foldValueKindObservations,
 	foldRedundantTdzChecks,
