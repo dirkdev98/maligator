@@ -2065,7 +2065,8 @@ function fixedNumericLoopStorage(
 	for (const { ip, op } of memory) {
 		const offset = offsets.get(ip);
 		const previous = views.get(op.object);
-		// Without a counter, every access is a read that checks its own key.
+		// Without a counter, every access is a read that checks its own key. Stores stay
+		// at counted keys, whose range the entry guards prove even in a checked view.
 		if (offset === undefined) {
 			if (op.opcode !== "LOAD_PROPERTY") return undefined;
 			views.set(op.object, {
@@ -2083,9 +2084,6 @@ function fixedNumericLoopStorage(
 			...(previous?.checked === true ? { checked: true as const } : {}),
 		});
 	}
-	// A checked view keeps no index range, so a store into it could not be proven in bounds.
-	if ([...views.values()].some((view) => view.checked === true && view.writable))
-		return undefined;
 	// A failed checked read restarts the iteration in the original code, which would
 	// repeat any store the iteration already made.
 	const afterStores = new Set<number>();
@@ -3403,6 +3401,7 @@ export function selectNativeFastPaths(
 						(!nativePlanKeepsOrdinaryLowering(native.instructions[candidate]) &&
 							kind !== "exact-operator-input-kinds" &&
 							kind !== "unsigned-arithmetic" &&
+							kind !== "exact-typed-array-element" &&
 							!(
 								kind === "exact-builtin-input-kinds" &&
 								nativeNumericBuiltinInstruction(fn.instructions[candidate]!) !== undefined

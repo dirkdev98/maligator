@@ -1473,7 +1473,7 @@ function emitNumericLoopRegion(
 		guards.length = 0;
 		guards.push(range);
 		for (const view of plan.kind === "fixed-numeric" ? plan.views : []) {
-			if (view.checked === true) continue;
+			if (view.checked === true && !view.writable) continue;
 			const low = `(${ascending ? index : last} + ${cF64Literal(view.minOffset)})`;
 			const high = `(${ascending ? last : index} + ${cF64Literal(view.maxOffset + 1)})`;
 			if (view.minOffset !== 0) guards.push(`${low} >= 0.0`);

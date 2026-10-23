@@ -385,6 +385,24 @@ function readThenBump(output, table, count) {
 	}
 	return [total, ...values(output)];
 }
+// Locally constructed views carry exact element kinds; the loop reads one through
+// another view's keys and writes it back at the counter.
+function propagateKinds(size, spread) {
+	const kinds = new Uint16Array(size);
+	const operands = Uint32Array.from(
+		kinds,
+		(_, index) => (index * 17 + spread) % (size + spread),
+	);
+	let checksum = 0;
+	for (let pass = 0; pass < 3; pass++)
+		for (let index = 1; index < kinds.length; index++) {
+			const kind = kinds[operands[index]] | (1 << ((index + pass) & 7));
+			if (kind !== kinds[index]) kinds[index] = kind;
+			checksum = (checksum + kind) % 1_000_003;
+		}
+	return [checksum, ...values(kinds.slice(0, 6))];
+}
+results.push(propagateKinds(64, 0), propagateKinds(64, 9), propagateKinds(1, 0));
 for (const run of [bumpThenRead, readThenBump]) {
 	results.push(run(new Float64Array(8), new Float64Array(20).fill(2), 8));
 	results.push(run(new Int16Array(6), new Uint8Array(40).fill(3), 6));
