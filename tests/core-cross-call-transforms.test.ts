@@ -304,6 +304,34 @@ describe("bounded Core cross-call transforms", () => {
 		expect(source).not.toMatch(/finishCrossCallWave/);
 	});
 
+	it("keeps a direct entry's call site out of its target's site limits", () => {
+		const service = new CoreTransformCandidateService({
+			perSiteExpansions: 1,
+			perCallerExpansions: 4,
+			perCallerGeneratedCode: 10,
+			perCallerCompilerWork: 10,
+			programGeneratedCode: 10,
+			programCompilerWork: 10,
+		});
+		const candidate = (kind: CoreTransformCandidate["kind"]): CoreTransformCandidate => ({
+			kind,
+			caller: 0 as never,
+			site: 1 as never,
+			revision: 0,
+			priorityClass: 0,
+			priorityScore: 0,
+			targets: [0 as never],
+			generatedCodeCost: 1,
+			compilerWorkCost: 1,
+			expansive: true,
+		});
+		service.recordApplied(candidate("stack-object-plan"));
+		expect(service.admit(candidate("direct-entry"))).toBeUndefined();
+		service.recordApplied(candidate("direct-entry"));
+		expect(service.admit(candidate("direct-entry"))).toBeUndefined();
+		expect(service.admit(candidate("stack-object-plan"))).toBe("expansion-limit");
+	});
+
 	it("deduplicates candidates and enforces site, caller, and compiler-work limits", () => {
 		const service = new CoreTransformCandidateService({
 			perSiteExpansions: 1,

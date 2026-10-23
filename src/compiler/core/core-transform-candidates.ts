@@ -224,6 +224,11 @@ function roundRobinByCaller<Value extends { readonly caller: CoreFunctionId }>(
 	return ordered;
 }
 
+// A direct entry copies its target as a whole; its site names a call in another function.
+function hasCallerSite(candidate: CoreTransformCandidate): boolean {
+	return candidate.kind !== "direct-entry";
+}
+
 function sameCandidateIdentity(
 	left: CoreTransformCandidate,
 	right: CoreTransformCandidate,
@@ -426,7 +431,8 @@ export class CoreTransformCandidateService {
 		if (candidate.expansive) {
 			const siteExpansions = this.#siteExpansions.get(candidate.caller);
 			if (
-				(siteExpansions?.get(candidate.site) ?? 0) >= active.perSiteExpansions ||
+				(hasCallerSite(candidate) &&
+					(siteExpansions?.get(candidate.site) ?? 0) >= active.perSiteExpansions) ||
 				caller.expansions >= active.perCallerExpansions
 			)
 				return "expansion-limit";
@@ -486,8 +492,8 @@ export class CoreTransformCandidateService {
 			generatedCode: 0,
 			compilerWork: 0,
 		};
-		if (candidate.expansive) {
-			caller.expansions++;
+		if (candidate.expansive) caller.expansions++;
+		if (candidate.expansive && hasCallerSite(candidate)) {
 			const siteExpansions =
 				this.#siteExpansions.get(candidate.caller) ??
 				new Map<CoreInstructionId, number>();
