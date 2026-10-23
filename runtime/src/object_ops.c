@@ -536,6 +536,18 @@ MalPropertyResolution mal_object_resolve_property(const MalObject *object, MalKe
     return mal_object_resolve_property_with_entry(object, key, nullptr);
 }
 
+// Script functions already keep non-default `length` and `name` slots, so their
+// lazily created `prototype` and static members stay shaped as well. Native
+// builtins keep such properties in their tables, where watched-intrinsic caches
+// expect them.
+static bool mal_object_shapes_attributed_data(
+    const MalObject *object, const MalPropertyDesc *desc
+) {
+    return object->header.type == MAL_HEAP_FUNCTION_OBJECT &&
+        !mal_object_desc_is_accessor(*desc) &&
+        (desc->flags & ~(MalPropertyFlags) MAL_DEFAULT_DATA_FLAGS) == 0;
+}
+
 MalDefineOwnStatus mal_object_define_own(MalObject *object, MalKey key, const MalPropertyDesc *desc) {
     if (mal_object_note_prototype_mutation(object)) {
         MAL_PERF_COUNT(prototype_epoch_define_invalidations);
@@ -651,15 +663,17 @@ MalDefineOwnStatus mal_object_define_own(MalObject *object, MalKey key, const Ma
             }
             // An attribute transition needs the dictionary's full descriptor
             // compatibility machinery.
-        } else if (mal_object_desc_is_default_data(desc) &&
+        } else if ((mal_object_desc_is_default_data(desc) ||
+                    mal_object_shapes_attributed_data(object, desc)) &&
             !mal_object_has_public_overflow(object) &&
             (mal_object_can_add_shaped_property(object) ||
              (object->extensible && mal_object_evict_shaped_private(object)))) {
             if (!object->extensible) {
                 return MAL_DEFINE_OWN_REJECTED;
             }
-            MalShape *child =
-                mal_shape_add_property(object->shape, key, (u8) MAL_DEFAULT_DATA_FLAGS);
+            MalShape *child = mal_shape_add_property(
+                object->shape, key,
+                (u8) (mal_object_desc_is_default_data(desc) ? MAL_DEFAULT_DATA_FLAGS : desc->flags));
             u32 count = child->inline_count;
             mal_object_grow_slots(object, object->shape->inline_count, count);
             mal_object_field_initialize(object, child, count - 1, desc->value);
