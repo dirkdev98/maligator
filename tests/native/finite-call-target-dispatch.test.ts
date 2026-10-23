@@ -23,7 +23,7 @@ describe("finite script call-target dispatch", () => {
 			fixture: "tests/local/finite-call-target-dispatch.js",
 			name: "finite-call-target-dispatch",
 			outDir,
-			// Module-scope bindings are captured, and their call targets are not yet bounded.
+			// A module stores its function declarations outside the body that writes their properties.
 			entryGoal: "script",
 		});
 		interpreted = pair.interpreted;

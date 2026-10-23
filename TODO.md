@@ -673,8 +673,12 @@ contracts or investigates costs still visible after the string follow-ups.
 - [ ] Bound the call targets of methods stored on module-scope objects. In a
       script, `holder.run(value)` with `holder.run` assigned two functions
       dispatches to both through a finite guarded set; as an ES module the same
-      code calls generically, because top-level declarations become captured
-      module bindings that the finite target analysis does not follow.
+      code calls generically. Module function declarations are stored into their
+      slots by the module's instantiation function, while `holder.run = first`
+      runs in its body, and the program-flow engine collects known-function
+      property writes per function, resolving a receiver slot only from a store in
+      that same function. Resolving closed slots from every function's stores needs
+      a cross-function dependency in that incremental collection.
       `finite-call-target-dispatch` compiles its fixture as a script until then.
 - [ ] Fuse projected split/trim length consumption without flattening the shared
       rope or repeatedly descending from its root for each field's edges and slice.
