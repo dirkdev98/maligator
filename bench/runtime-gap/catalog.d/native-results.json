@@ -19,6 +19,19 @@
 			"sourceSeam": "src/compiler/core/core-native-entry-graph.ts",
 			"fixture": "cases/connected-boxed-results.mjs",
 			"controls": ["connected-numeric-helpers", "connected-captured-helpers"]
+		},
+		{
+			"id": "returned-records",
+			"group": "runtime",
+			"suite": "runtime",
+			"owner": "object allocation and short-lived records",
+			"category": "allocation-gc",
+			"mechanisms": ["native-call-boundary", "allocation-gc", "typed-results"],
+			"inputShape": "An out-of-line tokenizer helper returns a fresh three-field record per token; its only caller reads the fields and drops the record.",
+			"unit": "logical operation",
+			"sourceSeam": "src/compiler/core/core-native-field-analysis.ts; src/compiler/target/render-native-c.ts",
+			"fixture": "cases/returned-records.mjs",
+			"controls": ["short-lived-records"]
 		}
 	]
 }
