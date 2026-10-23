@@ -136,8 +136,13 @@ static void regexp_legacy_update(
     MalVm *vm, MalString *subject, const int32_t *captures, int32_t group_count
 ) {
     MalValue subject_value = mal_value_from_string(subject);
-    regexp_legacy_store(vm, REGEXP_LEGACY_SLOT_INPUT, subject_value);
-    regexp_legacy_store(vm, REGEXP_LEGACY_SLOT_SUBJECT, subject_value);
+    // A loop over one subject would otherwise card the old state array on every match.
+    if (regexp_legacy_load(vm, REGEXP_LEGACY_SLOT_INPUT) != subject_value) {
+        regexp_legacy_store(vm, REGEXP_LEGACY_SLOT_INPUT, subject_value);
+    }
+    if (regexp_legacy_load(vm, REGEXP_LEGACY_SLOT_SUBJECT) != subject_value) {
+        regexp_legacy_store(vm, REGEXP_LEGACY_SLOT_SUBJECT, subject_value);
+    }
     regexp_legacy_store_position(vm, REGEXP_LEGACY_SLOT_MATCH_START, captures[0]);
     regexp_legacy_store_position(vm, REGEXP_LEGACY_SLOT_MATCH_END, captures[1]);
     i32 last = group_count - 1;
