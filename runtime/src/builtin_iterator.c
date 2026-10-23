@@ -785,7 +785,9 @@ static bool mal_vm_watched_inherited_get(
         if (key.kind != MAL_KEY_SYMBOL) return false;
         prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_STRING_PROTOTYPE]);
     } else {
-        if (!mal_value_is_heap_type(receiver, MAL_HEAP_ARRAY_OBJECT) &&
+        bool generator = mal_value_is_heap_type(receiver, MAL_HEAP_GENERATOR_OBJECT);
+        if (!generator &&
+            !mal_value_is_heap_type(receiver, MAL_HEAP_ARRAY_OBJECT) &&
             !mal_value_is_heap_type(receiver, MAL_HEAP_MAP_OBJECT) &&
             !mal_value_is_heap_type(receiver, MAL_HEAP_SET_OBJECT) &&
             !mal_value_is_heap_type(receiver, MAL_HEAP_ITERATOR_OBJECT) &&
@@ -799,6 +801,16 @@ static bool mal_vm_watched_inherited_get(
             return false;
         }
         prototype = mal_object_prototype(object);
+        // A generator first inherits from its function's ordinary prototype object,
+        // which nothing watches, so that one object is checked on every lookup.
+        if (generator && prototype != nullptr && !prototype->watched_method_proto) {
+            if (prototype->header.type != MAL_HEAP_OBJECT ||
+                ((prototype->shape->inline_count != 0 || mal_object_overflow(prototype) != nullptr) &&
+                 mal_object_get_own(prototype, key).present)) {
+                return false;
+            }
+            prototype = mal_object_prototype(prototype);
+        }
     }
     if (prototype == nullptr || !prototype->watched_method_proto) return false;
     u64 hash = ((u64) (uptr) prototype >> 4) ^ (key.value * UINT64_C(0x9e3779b97f4a7c15));
