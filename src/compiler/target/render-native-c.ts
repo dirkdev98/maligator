@@ -7563,6 +7563,45 @@ function emitInstruction(
 				: [
 						`  ${cInactiveRootMaskPublication(context.mathCallInactiveRootMask, context.inactiveRootMaskStatements)};`,
 					]);
+	// An observer needs the record's object in its registers, however the instruction renders.
+	if (context.recordObservers !== undefined) {
+		const ordinary = emitInstruction(
+			instruction,
+			ip,
+			suffix,
+			reps,
+			strict,
+			handlerIp,
+			gcUnlink,
+			thisSlot,
+			coro,
+			{ ...context, recordObservers: undefined },
+		);
+		if (ordinary === null) return null;
+		return [
+			...context.recordObservers.flatMap(({ site, aliases }) => {
+				const object = recordObject(site);
+				const atom = (field: number) =>
+					`vm->string_constant_atoms[${relocation.stringIndex(site.keys[field]!)}]`;
+				const materialize = (fields: ReadonlyArray<number>) =>
+					`${object} = mal_vm_materialize_record(vm, ${recordProducer(site)}, (MalString *[]){${fields.map(atom).join(", ")}}, (MalValue[]){${fields.map((field) => recordSlot(site, field)).join(", ")}}, ${fields.length});`;
+				const shapeIndex = `mal_value_to_i32(${recordSlot(site, site.keys.length)})`;
+				return [
+					`if (${object} == MAL_VALUE_EMPTY) {`,
+					...(site.shapes === undefined
+						? [`  ${materialize(site.keys.map((_, field) => field))}`]
+						: site.shapes.map(
+								(fields, shape) =>
+									`  ${shape === 0 ? "" : "else "}if (${shapeIndex} == ${shape}) ${materialize(fields)}`,
+							)),
+					`  ${throwCheck()}`,
+					`}`,
+					...aliases.map((register) => `r${register} = ${object};`),
+				];
+			}),
+			...ordinary,
+		];
+	}
 	if (context.arrayInitialization !== undefined) {
 		const plan = context.arrayInitialization;
 		if (ip !== plan.allocationIp) {
@@ -8446,33 +8485,6 @@ function emitInstruction(
 			`  r${instruction.object} = ${object};`,
 			...ordinary.map((line) => `  ${line}`),
 			`}`,
-		];
-	}
-	if (context.recordObservers !== undefined) {
-		const ordinary = emitGenericInstruction();
-		if (ordinary === null) return null;
-		return [
-			...context.recordObservers.flatMap(({ site, aliases }) => {
-				const object = recordObject(site);
-				const atom = (field: number) =>
-					`vm->string_constant_atoms[${relocation.stringIndex(site.keys[field]!)}]`;
-				const materialize = (fields: ReadonlyArray<number>) =>
-					`${object} = mal_vm_materialize_record(vm, ${recordProducer(site)}, (MalString *[]){${fields.map(atom).join(", ")}}, (MalValue[]){${fields.map((field) => recordSlot(site, field)).join(", ")}}, ${fields.length});`;
-				const shapeIndex = `mal_value_to_i32(${recordSlot(site, site.keys.length)})`;
-				return [
-					`if (${object} == MAL_VALUE_EMPTY) {`,
-					...(site.shapes === undefined
-						? [`  ${materialize(site.keys.map((_, field) => field))}`]
-						: site.shapes.map(
-								(fields, shape) =>
-									`  ${shape === 0 ? "" : "else "}if (${shapeIndex} == ${shape}) ${materialize(fields)}`,
-							)),
-					`  ${throwCheck()}`,
-					`}`,
-					...aliases.map((register) => `r${register} = ${object};`),
-				];
-			}),
-			...ordinary,
 		];
 	}
 	if (context.fieldLoad !== undefined && instruction.opcode === "LOAD_PROPERTY_STATIC")

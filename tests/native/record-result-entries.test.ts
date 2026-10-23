@@ -137,10 +137,10 @@ describe("record result entries", () => {
 		expect(counter("direct_entry_hits")).toBeGreaterThan(0);
 		// Eleven observed tokens, the returned and the thrown token, three handed-on records,
 		// two observed union records, sixteen records a callee keeps, which its caller then
-		// shares, twenty records pushed in pairs, one rejected context literal and four kept
-		// spans. Returns of other values and records passed to record parameters never
-		// create one.
-		expect(counter("record_materializations")).toBe(59);
+		// shares, twenty records pushed in pairs, one rejected context literal, four kept
+		// spans and one position charCodeAt coerces. Returns of other values and records
+		// passed to record parameters never create one.
+		expect(counter("record_materializations")).toBe(60);
 	});
 
 	for (const [backend, binary] of [

@@ -486,6 +486,15 @@ function shiftedLengths(count) {
 	return total;
 }
 
+// A builtin that coerces a record parameter sees the object and its methods.
+let positionCoercions = 0;
+function codeAt(text, position) {
+	let length = 0;
+	for (let index = 0; index < text.length; index++) length++;
+	if (length === 0) return -1;
+	return text.charCodeAt(position);
+}
+
 const text = "a1 bb22 ccc333 dddd4444 ".repeat(20);
 check(tokenLengths(text), 600, "token lengths");
 check(digitCount(text), 200, "digit count");
@@ -563,6 +572,17 @@ check(
 	"4:4:8:true",
 	"literal record parameter identity",
 );
+check(
+	codeAt("x12", {
+		valueOf() {
+			positionCoercions++;
+			return 1;
+		},
+	}),
+	49,
+	"record parameter coerced by a builtin",
+);
+check(positionCoercions, 1, "record parameter coercions");
 const handlers = attach(["a", "try-b", "cc", "try-dd", "e", "f", "try-g"], []);
 check(
 	handlers.map((environment) => `${environment.state}@${environment.version}`).join(","),

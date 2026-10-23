@@ -1989,6 +1989,26 @@ export function validateNativeRecordCalls(
 		sources.push({ layout: { keys: allocation.keyStringIndices }, uses: site });
 	}
 	validateNativeRecordPasses(native, functions, sources, fail);
+	// A region renders the instructions it claims; only an observer's object composes with that.
+	const claimed = new Set(native.specializations.flatMap((region) => region.claimedIps));
+	const owned = (uses: NativeRecordUses) => [
+		...uses.loads.map((load) => load.instructionIp),
+		...uses.stores.map((store) => store.instructionIp),
+		...(uses.passes ?? []).map((pass) => pass.callIp),
+	];
+	if (
+		[
+			...(native.recordCalls ?? []).flatMap((site) => [site.callIp, ...owned(site)]),
+			...(native.recordObjects ?? []).flatMap((site) => [
+				site.allocationIp,
+				...owned(site),
+			]),
+			...native.directEntries.flatMap((entry) =>
+				(entry.recordParameters ?? []).flatMap(owned),
+			),
+		].some((ip) => claimed.has(ip))
+	)
+		fail();
 }
 
 function nativeRecordUsesOf(
