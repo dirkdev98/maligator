@@ -453,7 +453,7 @@ if (typeof __mal_fail_next_cell_allocation === "function") {
 	}
 	let materializeOom = false;
 	try {
-		failConditionalReturn(true);
+		globalThis.oomResult = failConditionalReturn(true);
 	} catch (error) {
 		materializeOom = error instanceof Error;
 	}
