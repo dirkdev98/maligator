@@ -430,10 +430,11 @@ static MalValue regexp_escape_pattern(MalVm *vm, MalString *src) {
 }
 
 static void regexp_initialize_state(
-    MalVm *vm, MalRegExpObject *re, void *matcher, MalString *pattern,
+    MalVm *vm, MalRegExpObject *re, void *matcher, bool borrowed, MalString *pattern,
     MalString *flags_str, u32 bits
 ) {
     re->matcher = matcher;
+    re->matcher_borrowed = borrowed;
     re->source = pattern;
     re->flags = flags_str;
     re->flag_bits = bits;
@@ -458,6 +459,10 @@ typedef struct RegexpTemplate {
 
 struct MalRegExpTemplates {
     RegexpTemplate entries[REGEXP_TEMPLATE_CAPACITY];
+    /** Evicted matchers that objects may still borrow, kept until the VM ends. */
+    void **retired;
+    usize retired_count;
+    usize retired_capacity;
 };
 
 static void regexp_templates_free(MalVm *vm) {
@@ -466,15 +471,33 @@ static void regexp_templates_free(MalVm *vm) {
     for (usize i = 0; i < countof(templates->entries); i++) {
         mal_regexp_release(templates->entries[i].matcher);
     }
+    for (usize i = 0; i < templates->retired_count; i++) {
+        mal_regexp_release(templates->retired[i]);
+    }
+    free(templates->retired);
     free(templates);
     vm->regexp_templates = nullptr;
 }
 
+static bool regexp_templates_retire(struct MalRegExpTemplates *templates, void *matcher) {
+    if (matcher == nullptr) return true;
+    if (templates->retired_count == templates->retired_capacity) {
+        usize capacity = templates->retired_capacity == 0 ? 16 : templates->retired_capacity * 2;
+        void **retired = realloc(templates->retired, capacity * sizeof(*retired));
+        if (retired == nullptr) return false;
+        templates->retired = retired;
+        templates->retired_capacity = capacity;
+    }
+    templates->retired[templates->retired_count++] = matcher;
+    return true;
+}
+
 // Every regex literal evaluation constructs from the same atom pair. Atoms and
 // image constants live as long as the VM, so their identity names one compiled
-// program and re-evaluation shares its matcher, skipping flag parsing, the
-// pattern copy, the engine's cache search, and a matcher allocation; any other
-// string takes the full path.
+// program and re-evaluation borrows its matcher, skipping flag parsing, the
+// pattern copy, the engine's cache search, a matcher allocation, and the
+// object's reference; any other string takes the full path. The matchers stay
+// alive until the VM ends, so their number is bounded by those strings.
 static RegexpTemplate *regexp_template_slot(
     MalVm *vm, const MalString *pattern, const MalString *flags
 ) {
@@ -499,7 +522,7 @@ static bool regexp_initialize(MalVm *vm, MalRegExpObject *re, MalString *pattern
     RegexpTemplate *template = regexp_template_slot(vm, pattern, flags_str);
     if (template != nullptr && template->pattern == pattern && template->flags == flags_str) {
         regexp_initialize_state(
-            vm, re, mal_regexp_retain(template->matcher), pattern, flags_str, template->bits);
+            vm, re, template->matcher, true, pattern, flags_str, template->bits);
         return true;
     }
     u32 bits;
@@ -523,16 +546,17 @@ static bool regexp_initialize(MalVm *vm, MalRegExpObject *re, MalString *pattern
         mal_vm_throw_error(vm, MAL_INTRINSIC_SYNTAX_ERROR_PROTOTYPE, "invalid regular expression");
         return false;
     }
-    if (template != nullptr) {
-        mal_regexp_release(template->matcher);
+    if (template != nullptr && regexp_templates_retire(vm->regexp_templates, template->matcher)) {
         *template = (RegexpTemplate) {
             .pattern = pattern,
             .flags = flags_str,
-            .matcher = mal_regexp_retain(matcher),
+            .matcher = matcher,
             .bits = bits,
         };
+        regexp_initialize_state(vm, re, matcher, true, pattern, flags_str, bits);
+        return true;
     }
-    regexp_initialize_state(vm, re, matcher, pattern, flags_str, bits);
+    regexp_initialize_state(vm, re, matcher, false, pattern, flags_str, bits);
     return true;
 }
 
@@ -1101,6 +1125,17 @@ static bool regexp_is_regexp(MalVm *vm, MalValue arg, bool *out) {
 
 static MalValue regexp_constructor(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {
     (void) this_value;
+    // A regex literal: string operands run no IsRegExp or ToString step, and the
+    // intrinsic new.target names the intrinsic prototype.
+    if (arg_count == 2 && new_target == vm->intrinsics[MAL_INTRINSIC_REGEXP_CONSTRUCTOR] &&
+        mal_value_is_string(args[0]) && mal_value_is_string(args[1])) {
+        MalRegExpObject *re = mal_regexp_object_new(
+            &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_REGEXP_PROTOTYPE]));
+        if (!regexp_initialize(vm, re, mal_value_to_string(args[0]), mal_value_to_string(args[1]))) {
+            return mal_value_new_undefined();
+        }
+        return mal_value_from_regexp_object(re);
+    }
     MalValue pattern = arg_count >= 1 ? args[0] : mal_value_new_undefined();
     MalValue flags = arg_count >= 2 ? args[1] : mal_value_new_undefined();
 
@@ -1259,8 +1294,9 @@ static MalValue regexp_proto_compile(MalVm *vm, MalValue this_value, const MalVa
         return mal_value_new_undefined();
     }
     // No exec keeps the old matcher across user code, so it can go right away.
-    mal_regexp_release(re->matcher);
+    if (!re->matcher_borrowed) mal_regexp_release(re->matcher);
     re->matcher = matcher;
+    re->matcher_borrowed = false;
     re->source = p_str;
     re->flags = f_str;
     re->flag_bits = bits;
@@ -2478,8 +2514,9 @@ static MalValue regexp_proto_match_all(MalVm *vm, MalValue this_value, const Mal
         MalObject *prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_REGEXP_PROTOTYPE]);
         MalRegExpObject *clone = mal_regexp_object_new(&vm->heap, prototype);
         regexp_initialize_state(
-            vm, clone, mal_regexp_retain(canonical->matcher), canonical->source, flags,
-            canonical->flag_bits);
+            vm, clone,
+            canonical->matcher_borrowed ? canonical->matcher : mal_regexp_retain(canonical->matcher),
+            canonical->matcher_borrowed, canonical->source, flags, canonical->flag_bits);
         matcher = mal_value_from_regexp_object(clone);
         if (regexp_threw(vm)) {
             return mal_value_new_undefined();
@@ -2614,22 +2651,27 @@ int mal_regexp_try_exact_iterator_step(
     return ok ? 1 : -1;
 }
 
-static MalNativeFunctionCallback regexp_exact_string_protocol_callback(i32 symbol_slot) {
+static i32 regexp_exact_string_protocol(i32 symbol_slot) {
     switch (symbol_slot) {
         case MAL_INTRINSIC_SYMBOL_MATCH:
-            return regexp_proto_match;
+            return 0;
         case MAL_INTRINSIC_SYMBOL_MATCH_ALL:
-            return regexp_proto_match_all;
+            return 1;
         case MAL_INTRINSIC_SYMBOL_SEARCH:
-            return regexp_proto_search;
+            return 2;
         case MAL_INTRINSIC_SYMBOL_REPLACE:
-            return regexp_proto_replace;
+            return 3;
         case MAL_INTRINSIC_SYMBOL_SPLIT:
-            return regexp_proto_split;
+            return 4;
         default:
-            return nullptr;
+            return -1;
     }
 }
+
+static const MalNativeFunctionCallback regexp_exact_string_protocol_callbacks[] = {
+    regexp_proto_match, regexp_proto_match_all, regexp_proto_search, regexp_proto_replace,
+    regexp_proto_split,
+};
 
 bool mal_regexp_try_exact_string_dispatch(
     MalVm *vm, MalValue regexp, i32 symbol_slot, MalValue string,
@@ -2640,32 +2682,48 @@ bool mal_regexp_try_exact_string_dispatch(
         return false;
     }
 
+    i32 protocol = regexp_exact_string_protocol(symbol_slot);
+    if (protocol < 0) return false;
+    MalNativeFunctionCallback callback = regexp_exact_string_protocol_callbacks[protocol];
     MalObject *object = (MalObject *) mal_value_to_regexp_object(regexp);
     MalObject *prototype = mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_REGEXP_PROTOTYPE]);
-    if (mal_object_get_prototype(object) != prototype) {
-        return false;
-    }
-
-    MalKey key = mal_intrinsic_symbol_key(vm, (MalIntrinsic) symbol_slot);
-    if (mal_object_get_own(object, key).present) {
-        return false;
-    }
-    MalPropertyLookup lookup = mal_object_get_own(prototype, key);
-    if (!lookup.present || (lookup.desc.flags & MAL_PROPERTY_ACCESSOR) != 0 ||
-        !mal_value_is_native_function_object(lookup.desc.value)) {
-        return false;
-    }
-
-    MalNativeFunctionCallback callback =
-        mal_native_function_object_callback(mal_value_to_native_function_object(lookup.desc.value));
-    if (callback != regexp_exact_string_protocol_callback(symbol_slot)) {
-        return false;
-    }
+    // A canonical instance owns no symbol-keyed method, and while the watched
+    // prototype is untouched the method read from it last time is still its own.
+    MalValue method = vm->regexp_protocol_methods[protocol].method;
 #if MAL_REALMS
-    if (mal_vm_callee_realm(vm, lookup.desc.value) != vm->current_realm) {
-        return false;
-    }
+    // A collected realm's prototype could share an address with a live one.
+    bool cached = false;
+#else
+    MalRegExpObject *canonical;
+    bool cached = vm->regexp_protocol_methods[protocol].prototype == prototype &&
+        regexp_canonical_instance(vm, regexp, &canonical);
 #endif
+    if (!cached) {
+        if (mal_object_get_prototype(object) != prototype) {
+            return false;
+        }
+        MalKey key = mal_intrinsic_symbol_key(vm, (MalIntrinsic) symbol_slot);
+        if (mal_object_get_own(object, key).present) {
+            return false;
+        }
+        MalPropertyLookup lookup = mal_object_get_own(prototype, key);
+        if (!lookup.present || (lookup.desc.flags & MAL_PROPERTY_ACCESSOR) != 0 ||
+            !mal_value_is_native_function_object(lookup.desc.value) ||
+            mal_native_function_object_callback(
+                mal_value_to_native_function_object(lookup.desc.value)) != callback) {
+            return false;
+        }
+#if MAL_REALMS
+        if (mal_vm_callee_realm(vm, lookup.desc.value) != vm->current_realm) {
+            return false;
+        }
+#endif
+        method = lookup.desc.value;
+        if (!MAL_REALMS && mal_vm_primitive_methods_intact(vm)) {
+            vm->regexp_protocol_methods[protocol].prototype = prototype;
+            vm->regexp_protocol_methods[protocol].method = method;
+        }
+    }
 
     MalValue args[3];
     args[0] = string;
@@ -2676,11 +2734,11 @@ bool mal_regexp_try_exact_string_dispatch(
 
     MalCalleeRoots roots;
     mal_gc_callee_roots_begin(
-        &roots, regexp, mal_value_new_undefined(), lookup.desc.value, args, arg_count);
-    MAL_PROFILE_NATIVE_CALL(vm, mal_value_to_native_function_object(lookup.desc.value));
+        &roots, regexp, mal_value_new_undefined(), method, args, arg_count);
+    MAL_PROFILE_NATIVE_CALL(vm, mal_value_to_native_function_object(method));
     vm->gc_native_frames++;
     MalValue result = callback(
-        vm, regexp, args, arg_count, mal_value_new_undefined(), lookup.desc.value);
+        vm, regexp, args, arg_count, mal_value_new_undefined(), method);
     vm->gc_native_frames--;
     mal_gc_callee_roots_end(&roots);
     *out = vm->completion.kind == MAL_COMPLETION_THROW

@@ -40,6 +40,8 @@ typedef struct MalRegExpObject {
     u32 flag_bits;        // parsed MalRegExpFlag bits (cache of `flags`)
     // [[LegacyFeaturesEnabled]]: false only for instances of RegExp subclasses.
     bool legacy_features;
+    // The VM's literal templates own the matcher, so the object holds no reference.
+    bool matcher_borrowed;
     // The lastIndex slot's storage until another property grows the fields.
     MalValue last_index_field;
 } MalRegExpObject;

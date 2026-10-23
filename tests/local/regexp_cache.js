@@ -483,6 +483,25 @@ check(
 		shaped.lastIndex === 0,
 );
 
+const evictionSurvivor = /keep(\d)/g;
+const evictionKeys = {};
+for (let i = 0; i < 300; i++) evictionKeys[`evict${i}x`] = i;
+const evictors = Object.keys(evictionKeys).map((key) => new RegExp(key));
+const evictorsMatch = evictors.every((pattern, i) => pattern.test(`evict${i}x`));
+check(
+	"a literal keeps matching after other patterns take its template slot",
+	evictorsMatch &&
+		evictionSurvivor.exec("a keep7")[1] === "7" &&
+		/keep(\d)/g.test("keep1"),
+);
+
+const recompiled = /old/;
+recompiled.compile("new(\\d)", "g");
+check(
+	"compile replaces a literal's matcher without touching the literal's other objects",
+	recompiled.exec("new5")[1] === "5" && recompiled.lastIndex === 4 && /old/.test("old"),
+);
+
 let invalidCount = 0;
 for (let i = 0; i < 2; i++) {
 	try {

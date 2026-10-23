@@ -2233,10 +2233,10 @@ static __attribute__((noinline)) void mal_gc_finalize_cell_owned(MalHeapHeader *
             // No regexp objects are ever allocated under engine.regexp:false, so this
             // finalizer is dead there — and mal_regexp_release (regress FFI) isn't linked.
             MalRegExpObject *re = (MalRegExpObject *) cell;
-            if (re->matcher != nullptr) {
+            if (re->matcher != nullptr && !re->matcher_borrowed) {
                 mal_regexp_release(re->matcher);
-                re->matcher = nullptr;
             }
+            re->matcher = nullptr;
 #endif
             break;
         }
@@ -2406,6 +2406,14 @@ static void mal_gc_finalize_cell(MalHeapHeader *cell) {
         case MAL_HEAP_FUNCTION_OBJECT:
             if (mal_gc_object_owns_nothing((const MalObject *) cell)) return;
             break;
+        case MAL_HEAP_REGEXP_OBJECT: {
+            const MalRegExpObject *re = (const MalRegExpObject *) cell;
+            if ((re->matcher == nullptr || re->matcher_borrowed) &&
+                mal_gc_object_owns_nothing(&re->object)) {
+                return;
+            }
+            break;
+        }
 #if !MAL_PERF_STATS
         case MAL_HEAP_ARRAY_OBJECT: {
             const MalArrayObject *array = (const MalArrayObject *) cell;

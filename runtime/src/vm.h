@@ -1972,6 +1972,14 @@ typedef struct MalVm {
 
     /** Compiled programs of literal-like RegExp sources, owned by builtin_regexp.c. */
     struct MalRegExpTemplates *regexp_templates;
+    /**
+     * RegExp.prototype's match, matchAll, replace, search, and split methods by the
+     * prototype they were read from; trusted only while watched methods are intact.
+     */
+    struct {
+        const struct MalObject *prototype;
+        MalValue method;
+    } regexp_protocol_methods[5];
     /** Inline caches for mal_vm_get_static, keyed by literal address. */
     struct MalStaticLoadSites *static_load_sites;
     /** JSON.parse's keys by source bytes and last record shape, owned by builtin_json.c. */
