@@ -253,6 +253,27 @@ function returnedAllocation(
 	return undefined;
 }
 
+/** Whether every return of `fn` returns an object literal: the cheap shape of a record producer. */
+export function coreReturnsObjectLiterals(fn: CoreFunctionStore): boolean {
+	let returns = 0;
+	for (const block of fn.blockIds()) {
+		const terminator = fn.blockTerminator(block);
+		if (fn.instructionKind(terminator) !== "return") continue;
+		if (fn.kernel.instructionOperandCount(terminator) !== 1) return false;
+		const allocation = returnedAllocation(
+			fn,
+			fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator)),
+		);
+		if (
+			allocation === undefined ||
+			fn.instructionOpcodeName(allocation) !== "createObjectShaped"
+		)
+			return false;
+		returns++;
+	}
+	return returns > 0;
+}
+
 /** The record every reachable return of `fn` creates, when no other code can observe it. */
 export function coreRecordResultFields(
 	fn: CoreFunctionStore,
@@ -305,6 +326,31 @@ export function coreRecordResultFields(
 
 const MAX_RECORD_OBSERVERS = 8;
 
+function alwaysObserved(
+	fn: CoreFunctionStore,
+	cfg: CoreControlFlow,
+	call: CoreInstructionId,
+	observers: ReadonlySet<CoreInstructionId>,
+): boolean {
+	const observed = new Set(
+		[...observers].map((observer) => fn.instructionBlock(observer)),
+	);
+	const start = fn.instructionBlock(call);
+	if (observed.has(start)) return true;
+	const seen = new Set([start]);
+	const pending = [start];
+	while (pending.length > 0) {
+		const successors = cfg.successors[pending.pop()!] ?? [];
+		if (successors.length === 0) return false;
+		for (const { to } of successors) {
+			if (observed.has(to) || seen.has(to)) continue;
+			seen.add(to);
+			pending.push(to);
+		}
+	}
+	return true;
+}
+
 /**
  * Every use of a call's record result, when caller storage can stand in for it.
  * Reads and writes of its own fields stay accesses; any other use observes the
@@ -313,6 +359,7 @@ const MAX_RECORD_OBSERVERS = 8;
  */
 export function coreRecordResultUses(
 	fn: CoreFunctionStore,
+	cfg: CoreControlFlow,
 	call: CoreInstructionId,
 	keys: ReadonlyArray<number>,
 ): CoreRecordUses | undefined {
@@ -367,17 +414,12 @@ export function coreRecordResultUses(
 	}
 	// Storing the record into its own field also observes it.
 	const ownStores = stores.filter(({ instruction }) => !observers.has(instruction));
-	const accesses = loads.length + ownStores.length;
 	if (
 		loads.length > 64 ||
 		ownStores.length > 64 ||
 		observers.size > MAX_RECORD_OBSERVERS ||
 		// An observer on every path would only add a copy after the callee's literal.
-		(observers.size > 0 &&
-			(accesses === 0 ||
-				[...observers].some(
-					(observer) => fn.instructionBlock(observer) === fn.instructionBlock(call),
-				)))
+		(observers.size > 0 && alwaysObserved(fn, cfg, call, observers))
 	)
 		return undefined;
 	const byInstruction = (left: CoreRecordFieldAccess, right: CoreRecordFieldAccess) =>

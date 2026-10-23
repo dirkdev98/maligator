@@ -71,6 +71,7 @@ import {
 	coreFieldArgument,
 	coreRecordResultFields,
 	coreRecordResultUses,
+	coreReturnsObjectLiterals,
 } from "./core-native-field-analysis.ts";
 import {
 	coreOperatorInputPlans,
@@ -1446,7 +1447,10 @@ function directEntryOpportunities(
 			caller: target,
 			generatedCodeCost,
 			compilerWorkCost: generatedCodeCost + fn.valueCapacity,
-			priorityScore: -callSites.reduce((sum, site) => sum + callWeight(site), 0) * 8,
+			// A record producer's callers can also stop allocating its result.
+			priorityScore:
+				-callSites.reduce((sum, site) => sum + callWeight(site), 0) *
+				(coreReturnsObjectLiterals(fn) ? 16 : 8),
 			resolve: () => {
 				const fn = program.function(target);
 				const summary = summaries.summary(target);
@@ -1799,6 +1803,12 @@ function recordResultEntries(
 			return [];
 		const recordUses = coreRecordResultUses(
 			program.function(call.caller),
+			analyses
+				.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
+					scope: "function",
+					function: call.caller,
+				})
+				.ordinary(),
 			call.instruction,
 			resultFields.keys,
 		);

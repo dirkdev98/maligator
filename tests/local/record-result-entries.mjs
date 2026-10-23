@@ -172,6 +172,20 @@ function rejected(text) {
 	return "none";
 }
 
+// A record that only a rare branch hands on needs no object on the common path.
+function environmentOf(states, index) {
+	let version = 0;
+	for (let step = 0; step <= index % 5; step++) version += states[index].length;
+	return { state: states[index], version };
+}
+function attach(states, handlers) {
+	for (let index = 0; index < states.length; index++) {
+		const environment = environmentOf(states, index);
+		if (states[index].startsWith("try")) handlers.push(environment);
+	}
+	return handlers;
+}
+
 const text = "a1 bb22 ccc333 dddd4444 ".repeat(20);
 check(tokenLengths(text), 600, "token lengths");
 check(digitCount(text), 200, "digit count");
@@ -200,4 +214,10 @@ const result = found(text, 3);
 check(`${result?.start}:${result?.end}`, "8:14", "returned observer");
 check(found(text, 9), undefined, "missing observer");
 check(rejected(text), "start,end,digits:8:3", "thrown observer");
+const handlers = attach(["a", "try-b", "cc", "try-dd", "e", "f", "try-g"], []);
+check(
+	handlers.map((environment) => `${environment.state}@${environment.version}`).join(","),
+	"try-b@10,try-dd@24,try-g@10",
+	"handed-on records",
+);
 console.log("record-result-entries PASS");

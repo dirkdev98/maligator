@@ -2244,7 +2244,12 @@ export function verifyCoreOptimizationPlan(
 				const current =
 					entry.resultFields === undefined
 						? undefined
-						: coreRecordResultUses(caller, site.instruction, entry.resultFields.keys);
+						: coreRecordResultUses(
+								caller,
+								control(site.caller),
+								site.instruction,
+								entry.resultFields.keys,
+							);
 				const emitted = blockProofs.get(site.caller)!.instructionOrder;
 				const sameAccesses = (
 					left: ReadonlyArray<CoreRecordFieldAccess>,

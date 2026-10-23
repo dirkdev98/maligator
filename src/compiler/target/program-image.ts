@@ -1878,8 +1878,6 @@ export function validateNativeRecordCalls(
 			if (consumers.has(ip) || values.length === 0 || site.observerIps.length > 8) fail();
 			consumers.set(ip, values);
 		}
-		if (site.observerIps.length > 0 && site.loads.length + site.stores.length === 0)
-			fail();
 		validateNativeVirtualValue(
 			fn.instructions,
 			site.callIp,

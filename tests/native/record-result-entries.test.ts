@@ -66,6 +66,7 @@ describe("record result entries", () => {
 			"observed",
 			"found",
 			"rejected",
+			"attach",
 		])
 			expect(functionNamed(caller).recordCalls?.length ?? 0, caller).toBeGreaterThan(0);
 		expect(functionNamed("observed").recordCalls![0]!.observerIps.length).toBeGreaterThan(
@@ -84,8 +85,8 @@ describe("record result entries", () => {
 		const counter = (name: string) =>
 			Number(new RegExp(`${name}=(\\d+)`).exec(result.stderr)?.[1] ?? -1);
 		expect(counter("direct_entry_hits")).toBeGreaterThan(0);
-		// Eleven observed tokens in `observed`, plus the returned and the thrown token.
-		expect(counter("record_materializations")).toBe(13);
+		// Eleven observed tokens, the returned and the thrown token, and three handed-on records.
+		expect(counter("record_materializations")).toBe(16);
 	});
 
 	for (const [backend, binary] of [
