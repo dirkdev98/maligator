@@ -253,10 +253,8 @@ static MalValue mal_builtin_math_clz32(MalVm *vm, MalValue this_value, const Mal
     return mal_ops_number_value(mal_builtin_math_clz32_number(x));
 }
 
-f64 mal_builtin_math_imul_number(f64 left, f64 right) {
-    u32 a = mal_ops_number_to_uint32(left);
-    u32 b = mal_ops_number_to_uint32(right);
-    return (i32) (a * b);
+f64 mal_builtin_math_imul_number_slow(f64 left, f64 right) {
+    return (i32) (mal_ops_number_to_uint32(left) * mal_ops_number_to_uint32(right));
 }
 
 static MalValue mal_builtin_math_imul(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalValue callee) {

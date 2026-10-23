@@ -116,7 +116,17 @@ bool mal_builtin_math_binary_fast(
 
 // Callers prove canonical identity and numeric inputs; these kernels never coerce.
 f64 mal_builtin_math_clz32_number(f64 argument);
-f64 mal_builtin_math_imul_number(f64 left, f64 right);
+f64 mal_builtin_math_imul_number_slow(f64 left, f64 right);
+
+// Compiled sites call this per multiply, and hash mixing keeps its operands within
+// [-2^31, 2^32), where truncating through i64 is exactly ToUint32.
+static inline __attribute__((always_inline)) f64 mal_builtin_math_imul_number(f64 left, f64 right) {
+    if (left >= -2147483648.0 && left < 4294967296.0 &&
+        right >= -2147483648.0 && right < 4294967296.0) {
+        return (i32) ((u32) (i64) left * (u32) (i64) right);
+    }
+    return mal_builtin_math_imul_number_slow(left, right);
+}
 f64 mal_builtin_math_pow_number(f64 base, f64 exponent);
 f64 mal_builtin_math_f16round_number(f64 argument);
 f64 mal_builtin_math_hypot_numbers(const f64 *arguments, i32 argument_count);
