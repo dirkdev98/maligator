@@ -48,6 +48,17 @@ static inline bool mal_ascii_units_equal_ci(
 static inline bool mal_string_equals_ascii(const MalString *string, const char *ascii) {
     usize length = mal_string_length(string);
     if (length != strlen(ascii)) return false;
+    if (length == 0) return true;
+    if (string->storage < MAL_STRING_STORAGE_DEPENDENT) {
+        if (string->latin1) {
+            return memcmp(string->storage == MAL_STRING_STORAGE_INLINE
+                ? string->inline_latin1_units : string->latin1_units, ascii, length) == 0;
+        }
+        for (usize i = 0; i < length; i++) {
+            if (mal_string_flat_code_unit_at(string, i) != (c16) (u8) ascii[i]) return false;
+        }
+        return true;
+    }
     MalStringIterator iterator;
     MalStringSegment segment;
     mal_string_iterator_init(&iterator, string, 0, length);
@@ -74,6 +85,13 @@ static inline bool mal_string_equals_ascii(const MalString *string, const char *
 static inline bool mal_string_equals_ascii_ci(const MalString *string, const char *ascii) {
     usize length = mal_string_length(string);
     if (length != strlen(ascii)) return false;
+    if (string->storage < MAL_STRING_STORAGE_DEPENDENT) {
+        for (usize i = 0; i < length; i++) {
+            if (mal_ascii_to_lower(mal_string_flat_code_unit_at(string, i)) !=
+                mal_ascii_to_lower((c16) (u8) ascii[i])) return false;
+        }
+        return true;
+    }
     MalStringIterator iterator;
     MalStringSegment segment;
     mal_string_iterator_init(&iterator, string, 0, length);
