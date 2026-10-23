@@ -2212,17 +2212,33 @@ const refineStackObjectCellRepresentations: CoreFunctionPass = {
 	},
 };
 
+/** A store that fills a fresh array without using it as a key or value. */
+function arrayInitializer(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+	array: CoreValueId,
+): boolean {
+	return (
+		fn.instructionKind(instruction) === "operation" &&
+		fn.instructionOpcodeName(instruction) === "defineProperty" &&
+		instructionOperandAt(fn, instruction, 0) === array &&
+		instructionOperandAt(fn, instruction, 1) !== array &&
+		instructionOperandAt(fn, instruction, 2) !== array
+	);
+}
+
 function conditionalObjectAllocationDestination(
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
 ): CoreBlockId | undefined {
 	if (
 		fn.instructionKind(instruction) !== "operation" ||
-		!["createObjectShaped", "callKnown", "createFunction"].includes(
+		!["createObjectShaped", "createArray", "callKnown", "createFunction"].includes(
 			fn.instructionOpcodeName(instruction),
 		)
 	)
 		return undefined;
+	const array = fn.instructionOpcodeName(instruction) === "createArray";
 	if (fn.instructionOpcodeName(instruction) === "callKnown") {
 		const attributes = fn.instructionAttributes(instruction);
 		if (
@@ -2247,7 +2263,9 @@ function conditionalObjectAllocationDestination(
 		use >= 0;
 		use = fn.kernel.useNext(use)
 	) {
-		const block = fn.instructionBlock(fn.kernel.useInstruction(use));
+		const user = fn.kernel.useInstruction(use);
+		const block = fn.instructionBlock(user);
+		if (array && block === source && arrayInitializer(fn, user, result)) continue;
 		if (block === source || (destination !== undefined && block !== destination)) {
 			return undefined;
 		}
@@ -2264,9 +2282,15 @@ const sinkConditionalObjectAllocations: CoreFunctionPass = {
 	name: "sink-conditional-object-allocations",
 	stage: "memory",
 	requiredFunctionFeatures: CORE_FUNCTION_HAS_BRANCHES,
-	requiredFunctionOpcodesAny: ["createObjectShaped", "callKnown", "createFunction"],
+	requiredFunctionOpcodesAny: [
+		"createObjectShaped",
+		"createArray",
+		"callKnown",
+		"createFunction",
+	],
 	admission: {
-		predicate: "shaped object, primitive wrapper or closure used only after a branch",
+		predicate:
+			"shaped object, fresh array, primitive wrapper or closure used only after a branch",
 		hasOpportunity({ program, function: functionId }) {
 			const fn = program.function(functionId);
 			for (const instruction of fn.instructionIds()) {
@@ -2353,11 +2377,25 @@ const sinkConditionalObjectAllocations: CoreFunctionPass = {
 				}
 			}
 			const closure = fn.instructionOpcodeName(instruction) === "createFunction";
+			const initializers: Array<CoreInstructionId> = [];
 			for (
 				let next = fn.instructionNext(instruction);
 				eligible && next !== undefined && fn.instructionKind(next) === "operation";
 				next = fn.instructionNext(next)
 			) {
+				if (
+					fn.instructionOpcodeName(instruction) === "createArray" &&
+					arrayInitializer(fn, next, result)
+				) {
+					initializers.push(next);
+					if (
+						fn.instructionEffectRefinement(next) !== undefined ||
+						factInstructions.has(next) ||
+						kinds.scalarKind(instructionOperandAt(fn, next, 1)!) === undefined ||
+						kinds.scalarKind(instructionOperandAt(fn, next, 2)!) === undefined
+					)
+						eligible = false;
+				}
 				const opcode = fn.instructionOpcodeName(next);
 				// A closure binds the scope chain current at its creation.
 				if (
@@ -2368,11 +2406,9 @@ const sinkConditionalObjectAllocations: CoreFunctionPass = {
 			}
 			if (!eligible) continue;
 			const editor = CoreEditor.open(program, item.function);
-			editor.moveInstruction(
-				instruction,
-				destination,
-				coreInstructionId(fn.kernel.blockFirstInstruction(destination)),
-			);
+			const anchor = coreInstructionId(fn.kernel.blockFirstInstruction(destination));
+			for (const moved of [instruction, ...initializers])
+				editor.moveInstruction(moved, destination, anchor);
 			return editor.commit();
 		}
 		return undefined;

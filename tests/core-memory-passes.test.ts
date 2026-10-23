@@ -993,7 +993,7 @@ describe("Core local memory, provenance, and escape optimization", () => {
 	);
 
 	it.each(
-		["shaped", "Boolean", "Number", "String", "Object", "new Object"].flatMap(
+		["shaped", "array", "Boolean", "Number", "String", "Object", "new Object"].flatMap(
 			(allocation) =>
 				[
 					"conditional",
@@ -1041,28 +1041,36 @@ describe("Core local memory, provenance, and escape optimization", () => {
 					? builder.appendInstruction(entry, "createObjectShaped", [payload], {
 							attributes: { keyStringIndices: [0] },
 						})
-					: builder.appendInstruction(
-							entry,
-							"callKnown",
-							[
-								scenario === "new-target"
-									? flag
-									: allocation === "Object"
-										? undefinedValue!
-										: target!,
-								payload,
-								...(scenario === "weak-extra" ? [flag] : []),
-							],
-							{
-								attributes: {
-									operation,
-									construct: allocation !== "Object",
-									worldAssumptions: {
-										...builtinWorldAssumptions(operation, "exact-builtin-proof"),
+					: allocation === "array"
+						? builder.appendInstruction(entry, "createArray", [], {
+								attributes: { length: 1 },
+							})
+						: builder.appendInstruction(
+								entry,
+								"callKnown",
+								[
+									scenario === "new-target"
+										? flag
+										: allocation === "Object"
+											? undefinedValue!
+											: target!,
+									payload,
+									...(scenario === "weak-extra" ? [flag] : []),
+								],
+								{
+									attributes: {
+										operation,
+										construct: allocation !== "Object",
+										worldAssumptions: {
+											...builtinWorldAssumptions(operation, "exact-builtin-proof"),
+										},
 									},
 								},
-							},
-						);
+							);
+			if (allocation === "array")
+				builder.appendInstruction(entry, "defineProperty", [object!, seven!, payload], {
+					attributes: { enumerable: true },
+				});
 			if (scenario === "source-use") {
 				builder.appendInstruction(entry, "rootUse", [object!]);
 			}
@@ -1121,11 +1129,19 @@ describe("Core local memory, provenance, and escape optimization", () => {
 			}).runComponent("memory", [pass]);
 			expect(fn.instructionBlock(definition.instruction)).toBe(
 				scenario === "conditional" ||
-					(allocation === "shaped" &&
+					((allocation === "shaped" || allocation === "array") &&
 						["mutable", "realm", "new-target", "weak-extra"].includes(scenario))
 					? used
 					: entry,
 			);
+			for (const instruction of fn.instructionIds())
+				if (
+					fn.instructionKind(instruction) === "operation" &&
+					fn.instructionOpcodeName(instruction) === "defineProperty"
+				)
+					expect(fn.instructionBlock(instruction)).toBe(
+						fn.instructionBlock(definition.instruction),
+					);
 		},
 	);
 
