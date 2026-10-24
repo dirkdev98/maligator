@@ -998,6 +998,14 @@ contracts or investigates costs still visible after the string follow-ups.
 
 ## Active correctness clusters
 
+- [ ] Cover the conservative stack scan's single-owner env walk with a regression
+      test. A closure that keeps only its own scope, run after the enclosing scope
+      dies, aborted with "attempted to shade a reclaimed cell" before e59c19f8 in a
+      CLI `--production` build under `MAL_GC_STRESS=1` alone (verification hides it),
+      even at 10 closures by 4 rounds by 50 allocations. The test harness's builds of
+      the same program, production or not, keep a different stack layout and never
+      reproduce it, so a harness fixture cannot guard the fix as it stands.
+
 - [ ] Give the HTTP client's error a code when a peer closes a reused keep-alive socket
       before responding. Node rejects such a request with `ECONNRESET` ("socket hang
       up"); ours rejects with an error whose `code` is undefined. Our server no longer
