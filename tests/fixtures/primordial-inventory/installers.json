@@ -113,7 +113,7 @@
 	},
 	{
 		"file": "builtin_regexp.c",
-		"sha256": "a436a78f2275451360308f3768552111bef582f6e9daee4f273c729eb2c69d29"
+		"sha256": "9475276947b220a1fff94bd1574fa9e5dcbb2cdc3f031682a404493b8d277cbc"
 	},
 	{
 		"file": "builtin_set.c",
@@ -485,7 +485,7 @@
 	},
 	{
 		"file": "runtime/node_http.c",
-		"sha256": "f9723d770b996b16894ebd441c576a579941e4ef923ba58af175daa9d0d89b9c"
+		"sha256": "ddbb49ad3dbf29959a43a260279e0dfbd9fccfe398f80f176f9744baee5399c1"
 	},
 	{
 		"file": "runtime/node_http.h",
@@ -781,6 +781,6 @@
 	},
 	{
 		"file": "vm_ops.h",
-		"sha256": "213f2539b7f2a4bfd8991fbf7a0d2986d4279cc29edc4ad957123333923b6082"
+		"sha256": "3e302d467277eb900cb29e5a5d6ab4ef8a13ded1b2541208bd7fdd08bd58a139"
 	}
 ]
