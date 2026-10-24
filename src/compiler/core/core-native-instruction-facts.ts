@@ -156,6 +156,8 @@ function instructionIntegerRanges(
 	const operator = attributes.operator;
 	const bounds =
 		fn.instructionKind(instruction) === "branch" ||
+		fn.instructionKind(instruction) === "guard" ||
+		fn.instructionKind(instruction) === "switch" ||
 		(opcode === "unary" && operator === "!") ||
 		(opcode === "binary" && boundBinaryConsumers.has(operator as string)) ||
 		((opcode === "callKnown" ||

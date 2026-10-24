@@ -5261,7 +5261,7 @@ function emitStringSwitch(
 	>,
 	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
 	suffix: string,
-	representation: RegisterRep,
+	selectorKind: CompilerValueKindMask,
 	relocation: NativeRelocationExpressions,
 	branch: (target: number, branchIp: number) => string,
 ):
@@ -5271,7 +5271,7 @@ function emitStringSwitch(
 	  }
 	| undefined {
 	const fallback = branch(site.defaultIp, site.endIp);
-	if (representation !== "boxed" && representation !== "string")
+	if ((selectorKind & COMPILER_VALUE_KIND_STRING) === 0)
 		return { lines: [fallback], strategy: "non-string" };
 	const labels: Array<{
 		stringIndex: number;
@@ -5317,7 +5317,7 @@ function emitStringSwitch(
 					: "direct";
 	const value = `__switch_${site.instructionIp}`;
 	const lines: Array<string> = [];
-	if (representation === "boxed")
+	if (selectorKind !== COMPILER_VALUE_KIND_STRING)
 		lines.push(`if (!mal_value_is_string(r${site.selector})) { ${fallback} }`);
 	lines.push(`MalString *${value} = mal_value_to_string(r${site.selector});`);
 	const compare = (label: (typeof labels)[number]) =>
@@ -6622,6 +6622,17 @@ function emitBody(
 		const literalSwitch = switches.get(ip);
 		if (literalSwitch !== undefined) {
 			knownPublishedPrivateRoots.clear();
+			const selector = literalSwitch.selector;
+			const representation = reps[selector]!;
+			const selectorFacts = nativeFacts?.[literalSwitch.instructionIp + 1];
+			const selectorKind =
+				representation === "boxed"
+					? (instructionInputKind(selectorFacts, selector) ?? COMPILER_VALUE_KIND_TOP)
+					: representation === "string"
+						? COMPILER_VALUE_KIND_STRING
+						: representation === "boolean"
+							? COMPILER_VALUE_KIND_BOOLEAN
+							: COMPILER_VALUE_KIND_NUMBER;
 			const branch = (target: number, branchIp: number) => {
 				const mask = inactiveRootMasks.get(branchIp);
 				if (gcSafepointKinds.get(branchIp) !== "loop-backedge") return `goto L${target};`;
@@ -6645,7 +6656,7 @@ function emitBody(
 					literalSwitch,
 					stringConstants,
 					suffix,
-					reps[literalSwitch.selector]!,
+					selectorKind,
 					relocation,
 					branch,
 				);
@@ -6666,24 +6677,39 @@ function emitBody(
 				}
 			} else {
 				const fallback = branch(literalSwitch.defaultIp, literalSwitch.endIp);
-				const selector = literalSwitch.selector;
-				const representation = reps[selector];
-				if (representation === "boolean" || representation === "string")
+				const range = instructionInputIntegerRange(selectorFacts, selector);
+				const matchPossible =
+					range === undefined ||
+					literalSwitch.cases.some(
+						(label) => label.value >= range.minimum && label.value <= range.maximum,
+					);
+				if ((selectorKind & COMPILER_VALUE_KIND_NUMBER) === 0 || !matchPossible)
 					lines.push(fallback);
 				else {
-					if (representation === "boxed")
+					if (selectorKind !== COMPILER_VALUE_KIND_NUMBER)
 						lines.push(`if (!mal_ops_is_number(r${selector})) { ${fallback} }`);
 					const value = `__switch_${ip}`;
-					lines.push(
-						`f64 ${value} = ${representation === "boxed" ? `mal_ops_number_as_f64(r${selector})` : `r${selector}`};`,
-					);
-					if (representation !== "int32")
+					const number =
+						representation === "boxed"
+							? `mal_ops_number_as_f64(r${selector})`
+							: `r${selector}`;
+					const int32 = representation === "int32" || compilerIntegerRangeIsInt32(range);
+					if (!int32) {
+						lines.push(`f64 ${value} = ${number};`);
 						lines.push(
 							`if (!(${value} >= -2147483648.0 && ${value} <= 2147483647.0 && ${value} == trunc(${value}))) { ${fallback} }`,
 						);
-					lines.push(`switch ((i32) ${value}) {`);
+					}
+					lines.push(
+						`switch (${representation === "int32" ? number : `(i32) (${int32 ? number : value})`}) {`,
+					);
 					const seen = new Set<number>();
 					for (const [index, label] of literalSwitch.cases.entries()) {
+						if (
+							range !== undefined &&
+							(label.value < range.minimum || label.value > range.maximum)
+						)
+							continue;
 						if (seen.has(label.value)) continue;
 						seen.add(label.value);
 						lines.push(

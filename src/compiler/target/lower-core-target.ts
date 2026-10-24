@@ -68,6 +68,7 @@ import {
 import { INSTRUCTION_MAY_THROW } from "../shared/instruction-facts.ts";
 import { encodeInstructionEffects } from "../shared/instruction-facts.ts";
 import { compilerIntegerRangesEqual } from "../shared/integer-range.ts";
+import type { CompilerIntegerRange } from "../shared/integer-range.ts";
 import { knownOperationIndex, knownOperations } from "../shared/known-operations.ts";
 import { NATIVE_STRING_SWITCH_CASE_LIMIT } from "../shared/native-string-switch.ts";
 import {
@@ -77,6 +78,7 @@ import {
 } from "./core-operation-contract.ts";
 import type {
 	CoreTargetBlockOrderSpan,
+	CoreTargetDirectEntry,
 	CoreTargetFunction,
 	CoreTargetFunctionMap,
 	CoreTargetMove,
@@ -365,6 +367,28 @@ function lowerCoreImmediate(
 				facts,
 			};
 	}
+}
+
+function lowerSwitchEntryFacts(
+	comparisons: ReadonlyArray<CompilerInstruction>,
+	selectorKind: number,
+	selectorRange: CompilerIntegerRange | undefined,
+): Array<NonNullable<CoreTargetDirectEntry["instructionFacts"]>[number]> {
+	return comparisons.map((comparison) => {
+		const literalKind = comparison.facts?.inputKindMasks?.[1];
+		if (literalKind === undefined)
+			throw new Error("Switch comparison lost its literal kind");
+		const ranges = [selectorRange, comparison.facts?.inputIntegerRanges?.[1]];
+		return {
+			instruction: comparison,
+			masks: [selectorKind, literalKind],
+			results: [COMPILER_VALUE_KIND_BOOLEAN],
+			...(ranges.some((range) => range !== undefined)
+				? { inputIntegerRanges: ranges }
+				: {}),
+			effectMask: 0,
+		};
+	});
 }
 
 function coreImmediateValue(
@@ -1645,6 +1669,10 @@ function lowerFunctionToTarget(
 		NonNullable<CoreTargetFunction["literalSwitches"]>[number]
 	> = [];
 	const loweredInstructions = new Map<CoreInstructionId, CompilerInstruction>();
+	const loweredSwitchComparisons = new Map<
+		CoreInstructionId,
+		Array<CompilerInstruction>
+	>();
 	const guardedTargets = new Map<CoreInstructionId, ReadonlyArray<CoreFunctionId>>();
 	const exactCallTargets = new Set<CoreInstructionId>();
 	for (const row of recipeRows) {
@@ -2391,21 +2419,21 @@ function lowerFunctionToTarget(
 				loweredInstructions.set(terminatorId, lowered);
 				break;
 			}
-			case "guard":
-				instructions.push(
-					{
-						type: "jumpIf",
-						facts: terminatorFacts,
-						registers: [registerForValue(kernel.operandAt(terminatorOperandStart))],
-						blocks: [lowerTerminatorEdge(terminatorEdgeStart, edgeSourcePosition)],
-					},
-					{
-						type: "jump",
-						facts: { effectMask: 0 },
-						blocks: [lowerTerminatorEdge(terminatorEdgeStart + 1, edgeSourcePosition)],
-					},
-				);
+			case "guard": {
+				const lowered: Extract<CompilerInstruction, { type: "jumpIf" }> = {
+					type: "jumpIf",
+					facts: terminatorFacts,
+					registers: [registerForValue(kernel.operandAt(terminatorOperandStart))],
+					blocks: [lowerTerminatorEdge(terminatorEdgeStart, edgeSourcePosition)],
+				};
+				instructions.push(lowered, {
+					type: "jump",
+					facts: { effectMask: 0 },
+					blocks: [lowerTerminatorEdge(terminatorEdgeStart + 1, edgeSourcePosition)],
+				});
+				loweredInstructions.set(terminatorId, lowered);
 				break;
+			}
 			case "return":
 			case "throw": {
 				const lowered: Extract<CompilerInstruction, { type: "return" | "throw" }> = {
@@ -2421,6 +2449,8 @@ function lowerFunctionToTarget(
 				const start = instructions.length;
 				const selector = registerForValue(kernel.operandAt(terminatorOperandStart));
 				const selectorKind = terminatorKinds?.masks[0] ?? COMPILER_VALUE_KIND_TOP;
+				const comparisons: Array<CompilerInstruction> = [];
+				loweredSwitchComparisons.set(terminatorId, comparisons);
 				const immediates = new Map<CoreRepresentation, number>();
 				let matches: number | undefined;
 				const cases: Array<{ value: number; block: number }> = [];
@@ -2485,36 +2515,34 @@ function lowerFunctionToTarget(
 						terminatorKinds?.inputIntegerRanges?.[0],
 						caseRange,
 					];
-					instructions.push(
-						lowerCoreImmediate(caseValue, immediate),
-						{
-							type: "binary",
+					const comparison: CompilerInstruction = {
+						type: "binary",
+						registers: [matches, selector, immediate],
+						operator: "===",
+						facts: {
+							inputKindMasks: [selectorKind, IMMEDIATE_KIND_MASKS[caseValue.kind]],
+							resultKindMasks: [COMPILER_VALUE_KIND_BOOLEAN],
+							...(inputIntegerRanges.some((range) => range !== undefined)
+								? { inputIntegerRanges }
+								: {}),
 							registers: [matches, selector, immediate],
-							operator: "===",
-							facts: {
-								inputKindMasks: [selectorKind, IMMEDIATE_KIND_MASKS[caseValue.kind]],
-								resultKindMasks: [COMPILER_VALUE_KIND_BOOLEAN],
-								...(inputIntegerRanges.some((range) => range !== undefined)
-									? { inputIntegerRanges }
-									: {}),
-								registers: [matches, selector, immediate],
-								inputOffset: 1,
-								effectMask: 0,
-							},
+							inputOffset: 1,
+							effectMask: 0,
 						},
-						{
-							type: "jumpIf",
+					};
+					comparisons.push(comparison);
+					instructions.push(lowerCoreImmediate(caseValue, immediate), comparison, {
+						type: "jumpIf",
+						registers: [matches],
+						blocks: [targetBlock],
+						facts: {
+							inputKindMasks: [COMPILER_VALUE_KIND_BOOLEAN],
+							resultKindMasks: [],
 							registers: [matches],
-							blocks: [targetBlock],
-							facts: {
-								inputKindMasks: [COMPILER_VALUE_KIND_BOOLEAN],
-								resultKindMasks: [],
-								registers: [matches],
-								inputOffset: 0,
-								effectMask: 0,
-							},
+							inputOffset: 0,
+							effectMask: 0,
 						},
-					);
+					});
 				}
 				const defaultBlock = lowerTerminatorEdge(
 					terminatorEdgeStart + terminatorEdgeCount - 1,
@@ -2774,7 +2802,11 @@ function lowerFunctionToTarget(
 				left.every((mask, index) => mask === right[index]));
 		const entryFacts = entry.instructionFacts?.filter(
 			({ instruction, masks, results, inputIntegerRanges, effectMask }) => {
-				if (!loweredInstructions.has(instruction)) return false;
+				if (
+					!loweredInstructions.has(instruction) &&
+					!loweredSwitchComparisons.has(instruction)
+				)
+					return false;
 				const canonical = instructionFacts[instruction];
 				return (
 					canonical === undefined ||
@@ -2807,14 +2839,33 @@ function lowerFunctionToTarget(
 			...(entryFacts === undefined || entryFacts.length === 0
 				? {}
 				: {
-						instructionFacts: entryFacts.map(
-							({ instruction, masks, results, inputIntegerRanges, effectMask }) => ({
-								instruction: loweredInstructions.get(instruction)!,
+						instructionFacts: entryFacts.flatMap(
+							({
+								instruction,
 								masks,
 								results,
-								...(inputIntegerRanges === undefined ? {} : { inputIntegerRanges }),
+								inputIntegerRanges,
 								effectMask,
-							}),
+							}): Array<
+								NonNullable<CoreTargetDirectEntry["instructionFacts"]>[number]
+							> => {
+								const comparisons = loweredSwitchComparisons.get(instruction);
+								if (comparisons !== undefined)
+									return lowerSwitchEntryFacts(
+										comparisons,
+										masks[0] ?? COMPILER_VALUE_KIND_TOP,
+										inputIntegerRanges?.[0],
+									);
+								return [
+									{
+										instruction: loweredInstructions.get(instruction)!,
+										masks,
+										results,
+										...(inputIntegerRanges === undefined ? {} : { inputIntegerRanges }),
+										effectMask,
+									},
+								];
+							},
 						),
 					}),
 			...(entry.fieldParameters === undefined
