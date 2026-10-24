@@ -1,0 +1,255 @@
+name: Primordial catalog
+
+# Linux captures detect a changed descriptor graph. Only then do the macOS captures the
+# compiler catalog is generated from run, and the refreshed catalog lands on main.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Capture macOS and refresh even when the Linux graph is unchanged
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: primordial-catalog
+  cancel-in-progress: false
+
+jobs:
+  revision:
+    name: Resolve main
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    outputs:
+      sha: ${{ steps.main.outputs.sha }}
+    steps:
+      # A queued run starts from the newest main, which includes the previous run's refresh.
+      - name: Resolve the newest main
+        id: main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)" >> "$GITHUB_OUTPUT"
+
+  linux:
+    name: Linux capture ${{ matrix.shard }}
+    needs: revision
+    runs-on: ubuntu-26.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      # The cache-line save step deletes the snapshot it superseded.
+      actions: write
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - name: Check out the captured revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.revision.outputs.sha }}
+          persist-credentials: false
+
+      - name: Set up Linux
+        uses: ./.github/actions/setup-linux
+        with:
+          native-cache: linux-primordial-${{ matrix.shard }}
+
+      - name: Check the runner environment
+        run: npm run env:check -- --json
+
+      - name: Capture native descriptors
+        run: node scripts/primordial-inventory.ts --shard=${{ matrix.shard }}/4 .cache/primordial-catalog
+
+      - name: Retain the captures
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: primordial-linux-${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .cache/primordial-catalog/inventory-*.json
+            .cache/primordial-catalog/inventory-*.jsonl
+            .cache/primordial-catalog/native-bindings.json
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 14
+
+      - name: Retain native libraries for later runs
+        if: always()
+        uses: ./.github/actions/save-native-cache
+
+  detect:
+    name: Compare the Linux graph
+    needs: [revision, linux]
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    outputs:
+      changed: ${{ steps.compare.outputs.changed }}
+      modes: ${{ steps.compare.outputs.modes }}
+    steps:
+      - name: Check out the captured revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.revision.outputs.sha }}
+          persist-credentials: false
+
+      - name: Set up Linux
+        uses: ./.github/actions/setup-linux
+
+      - name: Download the Linux captures
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: primordial-linux-*-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/primordial-catalog/linux
+          merge-multiple: true
+
+      - name: Compare with the recorded Linux audit
+        id: compare
+        run: |
+          node scripts/primordial-inventory-audit.ts --check .cache/primordial-catalog/linux > "$RUNNER_TEMP/linux-check.json"
+          cat "$RUNNER_TEMP/linux-check.json"
+          echo "changed=$(jq '.changedModes | length > 0' "$RUNNER_TEMP/linux-check.json")" >> "$GITHUB_OUTPUT"
+          echo "modes=$(jq -r '.changedModes | join(", ")' "$RUNNER_TEMP/linux-check.json")" >> "$GITHUB_OUTPUT"
+
+  darwin:
+    name: macOS capture ${{ matrix.shard }}
+    needs: [revision, detect]
+    if: needs.detect.outputs.changed == 'true' || inputs.force
+    runs-on: macos-15
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      # The cache-line save step deletes the snapshot it superseded.
+      actions: write
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - name: Check out the captured revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.revision.outputs.sha }}
+          persist-credentials: false
+
+      - name: Set up macOS
+        uses: ./.github/actions/setup-macos
+        with:
+          native-cache: darwin-primordial-${{ matrix.shard }}
+
+      - name: Check the runner environment
+        run: npm run env:check -- --json
+
+      - name: Capture native descriptors
+        run: node scripts/primordial-inventory.ts --shard=${{ matrix.shard }}/4 .cache/primordial-catalog
+
+      - name: Retain the captures
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: primordial-darwin-${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .cache/primordial-catalog/inventory-*.json
+            .cache/primordial-catalog/inventory-*.jsonl
+            .cache/primordial-catalog/native-bindings.json
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 14
+
+      - name: Retain native libraries for later runs
+        if: always()
+        uses: ./.github/actions/save-native-cache
+
+  refresh:
+    name: Refresh the catalog
+    needs: [revision, detect, darwin]
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    permissions:
+      # Commits the refreshed catalog and starts CI for that commit.
+      contents: write
+      actions: write
+    steps:
+      - name: Check out the captured revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.revision.outputs.sha }}
+
+      - name: Set up Linux
+        uses: ./.github/actions/setup-linux
+
+      - name: Check the runner environment
+        run: npm run env:check -- --json
+
+      - name: Download the Linux captures
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: primordial-linux-*-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/primordial-catalog/linux
+          merge-multiple: true
+
+      - name: Download the macOS captures
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: primordial-darwin-*-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/primordial-catalog/darwin
+          merge-multiple: true
+
+      # Generation checks the captures against the untouched checkout, so it runs first.
+      - name: Regenerate the catalog from the macOS captures
+        run: node scripts/generate-primordial-catalog.ts .cache/primordial-catalog/darwin
+
+      - name: Import the Linux audit
+        run: node scripts/primordial-inventory-audit.ts .cache/primordial-catalog/linux
+
+      - name: Regenerate the coverage ledger
+        run: node scripts/generate-static-value-coverage.ts
+
+      - name: Format the generated files
+        run: >-
+          npx --no-install oxfmt src/compiler/shared/primordial-catalog-data.ts
+          src/compiler/shared/known-native-entries.ts tests/fixtures/primordial-inventory
+
+      - name: Check the refreshed catalog
+        run: npm run test:unit -- tests/primordial-catalog.test.ts tests/known-operations.test.ts
+
+      # A refresh of an older main still lands; the queued run captures what changed since.
+      - name: Commit the refresh
+        id: commit
+        env:
+          CAPTURED: ${{ needs.revision.outputs.sha }}
+          MODES: ${{ needs.detect.outputs.modes }}
+        shell: bash
+        run: |
+          git add --all -- runtime/src src/compiler/shared tests/fixtures/primordial-inventory
+          if git diff --cached --quiet; then
+            echo "The captures match the committed catalog."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit --quiet --file - <<MESSAGE
+          primordials: refresh the catalog for ${CAPTURED:0:8}
+
+          Linux modes with a changed descriptor graph: ${MODES:-none}.
+          MESSAGE
+          git fetch --quiet origin main
+          if ! git rebase --quiet origin/main; then
+            git rebase --abort
+            echo "main changed the refreshed files after ${CAPTURED:0:8}; the queued run refreshes them."
+            exit 0
+          fi
+          git push origin HEAD:main
+          echo "pushed=true" >> "$GITHUB_OUTPUT"
+
+      # Pushes made with the workflow token start no workflows, so CI is requested explicitly.
+      - name: Verify the refreshed main
+        if: steps.commit.outputs.pushed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run ci.yml --ref main

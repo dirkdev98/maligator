@@ -104,9 +104,9 @@ instead of substituting a local gate. Check is a curated gate, not every native
 fixture or the full standards corpus; use `test:help`, tier `--list`/`--plan=json`,
 the manifests and [CI coverage](docs/testing.md#github-actions) for exact coverage.
 
-Captures and audits run on CI too. After changing a native installer, dispatch the
-Native primordial audit workflow for both targets when authorized to, then import
-its captures; see the
+Captures run on CI too. The Primordial catalog workflow commits a refreshed catalog
+after a push to `main` changes the descriptor graph. Dispatch it with `force` when
+authorized to for a change only the macOS runtime installs; see the
 [inventory workflow](docs/decisions/static-value-foundations.md#native-inventory-and-coverage).
 
 Follow [test placement](docs/testing.md#test-placement) when adding tests. Ask if the

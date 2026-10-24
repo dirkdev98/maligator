@@ -1,19 +1,14 @@
-import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import type { ResolvedBuildConfig } from "../src/build-config.ts";
-import {
-	primordialInstallerSourceInventory,
-	primordialInventoryDigest,
-} from "./primordial-catalog-data.ts";
+import { primordialInventoryDigest } from "./primordial-catalog-data.ts";
 import {
 	primordialInventoryConfig,
 	primordialInventoryModes,
 } from "./primordial-inventory-config.ts";
 import type { PrimordialInventoryPhase } from "./primordial-inventory-data.ts";
-import { captureVerificationSource } from "./verification-source.ts";
 import type { VerificationSource } from "./verification-source.ts";
 
 export interface PrimordialInventoryTarget {
@@ -21,15 +16,11 @@ export interface PrimordialInventoryTarget {
 	arch: string;
 }
 
-export interface PrimordialInventorySource extends VerificationSource {
-	installerSha256: string;
-}
-
 export interface PrimordialInventoryMetadata extends PrimordialInventoryTarget {
-	schemaVersion: 1;
+	schemaVersion: 2;
 	mode: string;
 	config: ResolvedBuildConfig;
-	source: PrimordialInventorySource;
+	source: VerificationSource;
 	phaseDigest: string;
 }
 
@@ -46,7 +37,7 @@ export interface PrimordialInventoryModeAudit {
 
 export interface PrimordialTargetAudit extends PrimordialInventoryTarget {
 	modes: Array<PrimordialInventoryModeAudit>;
-	source?: PrimordialInventorySource;
+	source?: VerificationSource;
 }
 
 export interface PrimordialInventoryConfigurations {
@@ -78,21 +69,6 @@ function validTarget(target: PrimordialInventoryTarget | undefined) {
 }
 
 const sha256 = /^[a-f0-9]{64}$/;
-
-export function capturePrimordialInventorySource(
-	root: string,
-): PrimordialInventorySource {
-	return {
-		...captureVerificationSource(root),
-		installerSha256: primordialInstallerFingerprint(),
-	};
-}
-
-export function primordialInstallerFingerprint(): string {
-	return createHash("sha256")
-		.update(JSON.stringify(primordialInstallerSourceInventory()))
-		.digest("hex");
-}
 
 export function readPrimordialInventoryConfigurations(
 	file: string,
@@ -164,12 +140,11 @@ export function readPrimordialInventoryCaptures(
 		) as PrimordialInventoryMetadata;
 		const source = metadata.source;
 		if (
-			metadata.schemaVersion !== 1 ||
+			metadata.schemaVersion !== 2 ||
 			metadata.mode !== mode ||
 			!validTarget(metadata) ||
 			source === undefined ||
 			!sha256.test(source.digest) ||
-			!sha256.test(source.installerSha256) ||
 			!(source.revision === null || /^[a-f0-9]{40}$/.test(source.revision)) ||
 			typeof source.dirty !== "boolean" ||
 			!Number.isSafeInteger(source.files) ||
@@ -210,7 +185,7 @@ export function readPrimordialInventoryCaptures(
 		if (!sameTarget(capture.metadata, first.metadata))
 			throw new Error(`Mixed capture targets at ${capture.mode}`);
 		if (!isDeepStrictEqual(capture.metadata.source, first.metadata.source))
-			throw new Error(`Mixed capture source or installer identities at ${capture.mode}`);
+			throw new Error(`Mixed capture sources at ${capture.mode}`);
 	}
 	return captures;
 }
@@ -248,6 +223,19 @@ export function withPrimordialInventoryAudit(
 	return { ...configurations, audits };
 }
 
+export function changedPrimordialInventoryModes(
+	configurations: PrimordialInventoryConfigurations,
+	audit: PrimordialTargetAudit,
+): Array<string> {
+	const recorded = configurations.audits.find((prior) => sameTarget(prior, audit));
+	return audit.modes
+		.filter(
+			(row) =>
+				recorded?.modes.find((prior) => prior.mode === row.mode)?.sha256 !== row.sha256,
+		)
+		.map((row) => row.mode);
+}
+
 export function importPrimordialInventoryAudit(
 	directory: string,
 	configurationsFile: string,
@@ -266,14 +254,28 @@ if (
 	process.argv[1] !== undefined &&
 	path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 ) {
-	const directory = process.argv[2];
-	if (directory === undefined || process.argv.length > 4)
+	const check = process.argv[2] === "--check";
+	const [directory, configurationsFile, ...extra] = process.argv.slice(check ? 3 : 2);
+	if (directory === undefined || extra.length > 0)
 		throw new Error(
-			"Usage: node scripts/primordial-inventory-audit.ts CAPTURE_DIR [CONFIGURATIONS_FILE]",
+			"Usage: node scripts/primordial-inventory-audit.ts [--check] CAPTURE_DIR [CONFIGURATIONS_FILE]",
 		);
 	const file = path.resolve(
-		process.argv[3] ?? "tests/fixtures/primordial-inventory/configurations.json",
+		configurationsFile ?? "tests/fixtures/primordial-inventory/configurations.json",
 	);
-	const audit = importPrimordialInventoryAudit(path.resolve(directory), file);
-	console.log(`${file}: ${audit.platform}/${audit.arch}, ${audit.modes.length} modes`);
+	if (check) {
+		const audit = primordialInventoryAudit(
+			readPrimordialInventoryCaptures(path.resolve(directory)),
+		);
+		const changedModes = changedPrimordialInventoryModes(
+			readPrimordialInventoryConfigurations(file),
+			audit,
+		);
+		console.log(
+			JSON.stringify({ platform: audit.platform, arch: audit.arch, changedModes }),
+		);
+	} else {
+		const audit = importPrimordialInventoryAudit(path.resolve(directory), file);
+		console.log(`${file}: ${audit.platform}/${audit.arch}, ${audit.modes.length} modes`);
+	}
 }

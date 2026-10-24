@@ -390,52 +390,57 @@ coercions and prototype lookup retain their original runtime order.
 
 ## Native inventory and coverage
 
-Run the environment probe first. Capture each mode exported by
-`scripts/primordial-inventory-config.ts` into one directory:
+The **Primordial catalog** workflow keeps the catalog in step with the runtime. After
+every push to `main` it captures each mode exported by
+`scripts/primordial-inventory-config.ts` on Linux x64 and compares the descriptor digests
+with the recorded Linux audit. Only a changed graph starts the macOS ARM captures, which
+the catalog is generated from. The workflow then regenerates the catalog, the known
+operation, native entry and builtin registry includes and the coverage ledger, imports
+both target audits and commits the result to `main`.
+
+Linux captures cannot see a change that only the macOS runtime installs, such as a
+platform-specific host constant. Dispatch the workflow with `force` for such a change; it
+then captures macOS and refreshes regardless of the Linux comparison.
+
+To see whether a local change alters the graph, capture every mode and compare it with
+the recorded audit for the host target:
 
 ```sh
 npm run env:check -- --json
-node scripts/primordial-inventory.ts full .cache/primordial-inventory
+node scripts/primordial-inventory.ts --all .cache/primordial-inventory
+node scripts/primordial-inventory-audit.ts --check .cache/primordial-inventory
 ```
 
-Repeat that capture for every listed mode, then regenerate the shared graph and
-coverage ledger:
+A single mode or `--shard=INDEX/COUNT` replaces `--all` for a partial capture. A complete
+capture on the catalog target (macOS ARM) regenerates the catalog locally, as the
+workflow does:
 
 ```sh
 node scripts/generate-primordial-catalog.ts .cache/primordial-inventory
 node scripts/generate-static-value-coverage.ts
 npm run test:unit -- --run tests/primordial-catalog.test.ts
-npm run test:unit:full-only -- --run tests/primordial-inventory.test.ts tests/primordial-inventory-intl.test.ts
 ```
 
-The tracked coverage ledger owns its seed assignments and expansion obligations, so
-regeneration does not depend on workspace-only planning files.
+Generation rejects captures whose source digest differs from the checkout, so it runs
+before any other edit. The tracked coverage ledger owns its seed assignments and
+expansion obligations, so regeneration does not depend on workspace-only planning files.
 
 The matrix records both language initialization and host installation, including
 individual Intl services and diagnostic installers. Raw JSONL retains every native
 record. Normalized records retain duplicate-key anomalies explicitly. Mutable host
 primitive values are runtime data, not compiler constants. Host graph snapshots are
-target-specific; a new target needs a native audit. Source installer fingerprints
-make an unaudited installer edit fail the normal unit lane.
+target-specific; a new target needs a native audit.
 
 `configurations.json` keeps separate native audits for each platform and architecture.
-The native matrix requires a complete audit for its target before starting builds;
-descriptor mismatches retain normalized records, raw JSONL and capture identity under
-`.cache/primordial-inventory-failures/`.
-
-The manual **Native primordial audit** workflow captures all modes on Linux x64 or
-macOS ARM in four shards. Download and combine its artifacts into one directory,
-review the descriptor changes, then import that target's audit:
+Importing a target's captures records its audit without regenerating the catalog:
 
 ```sh
-node scripts/primordial-inventory-audit.ts .cache/primordial-audit
+node scripts/primordial-inventory-audit.ts .cache/primordial-inventory
 ```
 
-The importer verifies complete mode coverage, matching source and installer identities,
-resolved configurations, target identity and descriptor digests. It uses the captured
-target even when importing on another host. Importing an audit preserves other targets
-and does not regenerate the compiler catalog or its availability ledger; catalog
-regeneration remains the separate command above.
+The importer verifies complete mode coverage, a shared source identity, resolved
+configurations, target identity and descriptor digests. It uses the captured target even
+when importing on another host and preserves the audits of other targets.
 
 Every discovered descriptor receives a coverage row and an owning later slice.
 Every axis/profile cell remains pending until it has the appropriate positive and

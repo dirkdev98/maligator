@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { readdirSync, readFileSync } from "node:fs";
 import type {
 	PrimordialCatalog,
 	PrimordialNode,
@@ -57,23 +56,6 @@ export function packPrimordialCatalog(
 		node.aliases,
 	]);
 	return { nodes, roots: normalized.roots.map((root) => [root.name, value(root.value)]) };
-}
-
-export function primordialInstallerSourceInventory() {
-	return readdirSync("runtime/src", { recursive: true, encoding: "utf8" })
-		.filter((file) => /\.(c|h|inc)$/.test(file))
-		.sort()
-		.flatMap((file) => {
-			const source = readFileSync(`runtime/src/${file}`, "utf8");
-			if (
-				!file.endsWith(".inc") &&
-				!/mal_intrinsic_define|mal_host_install|mal_object_define|mal_vm_install|MalIntrinsic|MAL_PRIMORDIAL|MAL_LITERAL_PROTOTYPE/.test(
-					source,
-				)
-			)
-				return [];
-			return [{ file, sha256: createHash("sha256").update(source).digest("hex") }];
-		});
 }
 
 export function mergePrimordialInventories(

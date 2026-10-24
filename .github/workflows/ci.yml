@@ -4,6 +4,8 @@ on:
   pull_request:
   push:
     branches: [main]
+  # The primordial catalog workflow starts CI for the refresh commits it pushes.
+  workflow_dispatch:
 
 permissions:
   contents: read

@@ -259,23 +259,24 @@ the Linux shards of both dimensions start a PostgreSQL 17 container and set the
 suites run there (the large-types suite under the sanitizers); macOS shards skip them.
 
 Extended CI also runs on pushes to `main` and manual dispatch. Independent Linux
-jobs exercise the full-only unit manifest (the two primordial inventory files and the
-rest in three jobs), Wasm build and parity, the self-hosted native-build and CLI
-checks, the self-hosted compiler differential, and compiled WPT. One job runs the
+jobs exercise the full-only unit manifest, Wasm build and parity, the self-hosted
+native-build and CLI checks, the self-hosted compiler differential, and compiled WPT. One job runs the
 short checks in sequence: the self-hosted frontend, strip and wire differentials,
 Rust runtime tests, and the focused Test262 and WPT GC dimensions. The slow-unit and
 Wasm jobs install WASI SDK 34. Compiler logs, CLI acceptance records, parity output, and
 standards reports remain tied to the tested revision. The full Test262 corpus runs in
 its own workflow after CI; these jobs do not update either baseline.
 
-The manual **Native primordial audit** workflow captures every descriptor inventory
-mode for one selected native target, using four shards. It retains raw records,
-normalized graphs and source metadata for fourteen days. These are inputs for a
-reviewed target audit, not a passing verification gate. It only runs from `main`, so a
-change to installer sources lands first and its imported audit follows; the inventory
-tests in Extended CI fail in between. See the
+The **Primordial catalog** workflow runs on pushes to `main` and manual dispatch. Four
+Linux shards capture every descriptor inventory mode of the newest `main` and compare the
+digests with the recorded Linux audit. A changed graph, or a dispatch with `force`, adds
+four macOS shards and a job that regenerates the catalog and its generated files from
+both captures, runs the catalog unit tests, commits the refresh to `main` and dispatches
+CI for it. Runs queue instead of cancelling each other. A refresh of an older revision
+is rebased onto `main`, and the queued run captures whatever changed since. Captures are
+retained for fourteen days. See the
 [inventory workflow](decisions/static-value-foundations.md#native-inventory-and-coverage)
-for import and matrix verification.
+for local captures and imports.
 
 Linux jobs run on Ubuntu 26.04 with its Clang 21, the compiler the remote verification
 host uses. The workflows use four workers per Linux job and three macOS workers

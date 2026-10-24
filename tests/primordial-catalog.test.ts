@@ -1,6 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { primordialInstallerSourceInventory } from "../scripts/primordial-catalog-data.ts";
 import {
 	summarizeStaticValueCoverage,
 	validateStaticValueCoverage,
@@ -195,13 +194,6 @@ describe("shared primordial catalog and coverage obligations", () => {
 		},
 	);
 
-	it("requires an audited source inventory whenever an installer changes", () => {
-		expect(primordialInstallerSourceInventory()).toEqual(
-			JSON.parse(
-				readFileSync("tests/fixtures/primordial-inventory/installers.json", "utf8"),
-			),
-		);
-	});
 	it("covers every native-discovered descriptor without claiming pending work is complete", () => {
 		expect(() =>
 			validateStaticValueCoverage(coverage, catalog, coverageEvidence),

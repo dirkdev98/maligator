@@ -11,10 +11,13 @@ import { hostExecutionTarget, resolveExecution } from "../src/platform/execution
 import { buildNativeProgramImage } from "../src/test-harness.ts";
 import { writePrimordialInventoryDriver } from "../tests/helpers/primordial-inventory.ts";
 import { primordialInventoryDigest } from "./primordial-catalog-data.ts";
-import { capturePrimordialInventorySource } from "./primordial-inventory-audit.ts";
 import type { PrimordialInventoryMetadata } from "./primordial-inventory-audit.ts";
-import { primordialInventoryConfig } from "./primordial-inventory-config.ts";
+import {
+	primordialInventoryConfig,
+	primordialInventoryModes,
+} from "./primordial-inventory-config.ts";
 import { normalizePrimordialInventory } from "./primordial-inventory-data.ts";
+import { captureVerificationSource } from "./verification-source.ts";
 
 export function capturePrimordialInventory(mode: string, outDir: string) {
 	mkdirSync(outDir, { recursive: true });
@@ -22,7 +25,7 @@ export function capturePrimordialInventory(mode: string, outDir: string) {
 	const metadataFile = path.join(outDir, `inventory-${mode}-metadata.json`);
 	// A failed recapture must not retain an earlier completion certificate.
 	rmSync(metadataFile, { force: true });
-	const source = capturePrimordialInventorySource(process.cwd());
+	const source = captureVerificationSource(process.cwd());
 	const modules = [
 		...(config.surface.node ? HOST_MODULES.keys() : []),
 		// Public source namespaces retain their private native substrate without exposing reserved imports.
@@ -145,10 +148,10 @@ export function capturePrimordialInventory(mode: string, outDir: string) {
 			2,
 		)}\n`,
 	);
-	if (!isDeepStrictEqual(source, capturePrimordialInventorySource(process.cwd())))
+	if (!isDeepStrictEqual(source, captureVerificationSource(process.cwd())))
 		throw new Error("Source changed during primordial inventory capture");
 	const metadata: PrimordialInventoryMetadata = {
-		schemaVersion: 1,
+		schemaVersion: 2,
 		platform: process.platform,
 		arch: process.arch,
 		mode,
@@ -165,12 +168,33 @@ export function capturePrimordialInventory(mode: string, outDir: string) {
 }
 
 if (process.argv[1]?.endsWith("/primordial-inventory.ts")) {
-	const mode = process.argv[2];
-	if (mode === undefined)
+	const selection = process.argv[2];
+	const shard = /^--shard=(\d+)\/(\d+)$/.exec(selection ?? "");
+	if (
+		selection === undefined ||
+		(selection.startsWith("--") && selection !== "--all" && shard === null)
+	)
 		throw new Error(
-			"Usage: node scripts/primordial-inventory.ts MODE [output-directory]",
+			"Usage: node scripts/primordial-inventory.ts MODE|--all|--shard=INDEX/COUNT [output-directory]",
 		);
+	const modes =
+		selection === "--all"
+			? primordialInventoryModes
+			: shard === null
+				? [selection]
+				: primordialInventoryModes.filter(
+						(_, index) => index % Number(shard[2]) === Number(shard[1]),
+					);
+	if (modes.length === 0) throw new Error(`No inventory modes in ${selection}`);
 	const outDir = path.resolve(process.argv[3] ?? ".cache/primordial-inventory");
-	capturePrimordialInventory(mode, outDir);
-	console.log(path.join(outDir, `inventory-${mode}.jsonl`));
+	// Later modes still capture after a failure so one run retains every mode's evidence.
+	for (const mode of modes) {
+		try {
+			capturePrimordialInventory(mode, outDir);
+			console.log(path.join(outDir, `inventory-${mode}.jsonl`));
+		} catch (error) {
+			console.error(`Capturing ${mode} failed:`, error);
+			process.exitCode = 1;
+		}
+	}
 }

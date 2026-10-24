@@ -100,31 +100,6 @@ describe("GitHub Actions", () => {
 		expect(workflow.jobs["linux-lanes"]?.strategy?.["fail-fast"]).toBe(false);
 	});
 
-	it("splits the full-only unit manifest across Extended CI jobs without gaps", () => {
-		const workflow = parse(
-			readFileSync(path.join(githubRoot, "workflows/extended-ci.yml"), "utf8"),
-		) as {
-			jobs: {
-				"slow-units": {
-					strategy: { matrix: { include: Array<{ files?: string; exclude?: string }> } };
-				};
-			};
-		};
-		const manifest = readFileSync(
-			path.join(githubRoot, "../tests/test-suite-unit-full-only.txt"),
-			"utf8",
-		)
-			.split("\n")
-			.map((line) => line.trim())
-			.filter((line) => line.length > 0 && !line.startsWith("#"));
-		const selected = workflow.jobs["slow-units"].strategy.matrix.include.flatMap(
-			({ files, exclude }) =>
-				files?.split(" ") ??
-				manifest.filter((file) => exclude === undefined || !file.includes(exclude)),
-		);
-		expect(selected.sort()).toEqual([...manifest].sort());
-	});
-
 	it("does not use runner-local contexts in job-level environment expressions", () => {
 		const violations: Array<string> = [];
 		for (const file of yamlFiles(path.join(githubRoot, "workflows"))) {

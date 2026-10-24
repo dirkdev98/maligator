@@ -12,20 +12,19 @@ import {
 import type {
 	PrimordialInventoryConfigurations,
 	PrimordialInventoryMetadata,
-	PrimordialInventorySource,
 } from "../scripts/primordial-inventory-audit.ts";
 import {
 	primordialInventoryConfig,
 	primordialInventoryModes,
 } from "../scripts/primordial-inventory-config.ts";
 import type { PrimordialInventoryPhase } from "../scripts/primordial-inventory-data.ts";
+import type { VerificationSource } from "../scripts/verification-source.ts";
 
-const source: PrimordialInventorySource = {
+const source: VerificationSource = {
 	revision: "a".repeat(40),
 	digest: "b".repeat(64),
 	dirty: false,
 	files: 12,
-	installerSha256: "c".repeat(64),
 };
 const phases: Array<PrimordialInventoryPhase> = [
 	"language-initialized",
@@ -61,7 +60,7 @@ function fixture(run: (directory: string, configurations: string) => void) {
 		writeFileSync(configurations, JSON.stringify(historical));
 		for (const mode of primordialInventoryModes) {
 			const metadata: PrimordialInventoryMetadata = {
-				schemaVersion: 1,
+				schemaVersion: 2,
 				platform: "linux",
 				arch: "x64",
 				mode,
@@ -92,6 +91,40 @@ function changeMetadata(
 	const metadata = JSON.parse(readFileSync(file, "utf8")) as PrimordialInventoryMetadata;
 	change(metadata);
 	writeFileSync(file, JSON.stringify(metadata));
+}
+
+function recaptureWithChangedGraph(directory: string, mode: string) {
+	const changed: Array<PrimordialInventoryPhase> = phases.map((phase) => ({
+		...phase,
+		nodes: phase.nodes.map((node) => ({
+			...node,
+			descriptors: [{ key: { string: "added" }, flags: 2, value: { string: "value" } }],
+		})),
+	}));
+	writeFileSync(path.join(directory, `inventory-${mode}.json`), JSON.stringify(changed));
+	const file = path.join(directory, `inventory-${mode}-metadata.json`);
+	const metadata = JSON.parse(readFileSync(file, "utf8")) as PrimordialInventoryMetadata;
+	metadata.phaseDigest = primordialInventoryDigest(changed);
+	writeFileSync(file, JSON.stringify(metadata));
+}
+
+function checkCaptures(directory: string, configurations: string) {
+	const result = spawnSync(
+		process.execPath,
+		[
+			path.resolve("scripts/primordial-inventory-audit.ts"),
+			"--check",
+			directory,
+			configurations,
+		],
+		{ encoding: "utf8", timeout: 10_000 },
+	);
+	expect(result.status, result.stderr).toBe(0);
+	return JSON.parse(result.stdout) as {
+		platform: string;
+		arch: string;
+		changedModes: Array<string>;
+	};
 }
 
 function hostCertificatePhase(count: number): PrimordialInventoryPhase {
@@ -188,13 +221,6 @@ describe("target-specific primordial descriptor audits", () => {
 				}),
 		],
 		[
-			"mixed installers",
-			(directory: string) =>
-				changeMetadata(directory, (metadata) => {
-					metadata.source.installerSha256 = "f".repeat(64);
-				}),
-		],
-		[
 			"wrong mode",
 			(directory: string) =>
 				changeMetadata(directory, (metadata) => {
@@ -277,13 +303,30 @@ describe("target-specific primordial descriptor audits", () => {
 		});
 	});
 
-	it("rejects historical installer captures before catalog generation can write outputs", () => {
+	it("reports every mode as changed for a target without a recorded audit", () => {
 		fixture((directory, file) => {
-			mkdirSync(path.join(directory, "runtime/src"), { recursive: true });
-			writeFileSync(
-				path.join(directory, "runtime/src/fixture.c"),
-				"void mal_intrinsic_define(void);\n",
-			);
+			const before = readFileSync(file, "utf8");
+			expect(checkCaptures(directory, file)).toEqual({
+				platform: "linux",
+				arch: "x64",
+				changedModes: primordialInventoryModes,
+			});
+			expect(readFileSync(file, "utf8")).toBe(before);
+		});
+	});
+
+	it("reports only the modes whose descriptor graph differs from the recorded audit", () => {
+		fixture((directory, file) => {
+			importPrimordialInventoryAudit(directory, file);
+			expect(checkCaptures(directory, file).changedModes).toEqual([]);
+			recaptureWithChangedGraph(directory, "node");
+			expect(checkCaptures(directory, file).changedModes).toEqual(["node"]);
+		});
+	});
+
+	it("rejects captures of other sources before catalog generation can write outputs", () => {
+		fixture((directory, file) => {
+			expect(spawnSync("git", ["init", "--quiet"], { cwd: directory }).status).toBe(0);
 			mkdirSync(path.join(directory, "src/compiler/shared"), { recursive: true });
 			const catalog = path.join(
 				directory,
@@ -302,7 +345,7 @@ describe("target-specific primordial descriptor audits", () => {
 			);
 			expect(result.status, result.stderr).toBe(1);
 			expect(result.stderr).toContain(
-				"Captured primordial installer inventory differs from current sources",
+				"Captured primordial inventories differ from the current sources",
 			);
 			expect(readFileSync(catalog, "utf8")).toBe("unchanged catalog\n");
 			expect(readFileSync(file, "utf8")).toBe(before);

@@ -4,10 +4,8 @@ import * as path from "node:path";
 import {
 	packPrimordialCatalog,
 	mergePrimordialInventories,
-	primordialInstallerSourceInventory,
 } from "./primordial-catalog-data.ts";
 import {
-	primordialInstallerFingerprint,
 	primordialInventoryAudit,
 	readPrimordialInventoryCaptures,
 	readPrimordialInventoryConfigurations,
@@ -15,6 +13,7 @@ import {
 	withPrimordialInventoryAudit,
 } from "./primordial-inventory-audit.ts";
 import { primordialInventoryModes } from "./primordial-inventory-config.ts";
+import { captureVerificationSource } from "./verification-source.ts";
 
 const directory = path.resolve(process.argv[2] ?? ".cache/primordial-inventory");
 const selection = process.argv[3];
@@ -34,8 +33,8 @@ const matrix = readPrimordialInventoryCaptures(directory, [
 	"full",
 	...modes.filter((mode) => mode !== "full"),
 ]);
-if (matrix[0]!.metadata.source.installerSha256 !== primordialInstallerFingerprint())
-	throw new Error("Captured primordial installer inventory differs from current sources");
+if (matrix[0]!.metadata.source.digest !== captureVerificationSource(process.cwd()).digest)
+	throw new Error("Captured primordial inventories differ from the current sources");
 const phases = matrix[0]!.phases;
 const language = phases.find((phase) => phase.phase === "language-initialized");
 const installed = phases.find((phase) => phase.phase === "host-installed");
@@ -145,11 +144,10 @@ execFileSync(
 	],
 	{ stdio: "inherit" },
 );
+execFileSync(process.execPath, ["scripts/generate-builtin-registry.ts"], {
+	stdio: "inherit",
+});
 mkdirSync(fixtureDirectory, { recursive: true });
-writeFileSync(
-	`${fixtureDirectory}/installers.json`,
-	`${JSON.stringify(primordialInstallerSourceInventory(), null, 2)}\n`,
-);
 writeFileSync(
 	`${fixtureDirectory}/language.json`,
 	`${JSON.stringify(packPrimordialCatalog(language))}\n`,

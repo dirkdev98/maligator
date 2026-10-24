@@ -150,28 +150,13 @@ jobs:
           retention-days: 7
 
   slow-units:
-    name: Slow unit integration (${{ matrix.part }})
+    name: Slow unit integration
     runs-on: ubuntu-26.04
     timeout-minutes: 120
     permissions:
       contents: read
       # The cache-line save step deletes the snapshot it superseded.
       actions: write
-    strategy:
-      fail-fast: false
-      matrix:
-        # The primordial inventory builds one runtime per mode; its two files run
-        # beside the rest of the full-only manifest instead of after it.
-        include:
-          - part: inventory
-            cache: inventory
-            files: tests/primordial-inventory.test.ts
-          - part: Intl inventory
-            cache: intl-inventory
-            files: tests/primordial-inventory-intl.test.ts
-          - part: integration
-            cache: integration
-            exclude: tests/primordial-inventory
     steps:
       - name: Check out the tested revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -182,7 +167,7 @@ jobs:
         uses: ./.github/actions/setup-linux
         with:
           cache-test262: "true"
-          native-cache: linux-slow-${{ matrix.cache }}
+          native-cache: linux-slow-integration
 
       - name: Set up WASI
         uses: ./.github/actions/setup-wasi
@@ -192,14 +177,7 @@ jobs:
 
       - name: Run slow unit integration tests
         shell: bash
-        env:
-          FILES: ${{ matrix.files }}
-          EXCLUDE: ${{ matrix.exclude }}
-        run: |
-          if [ -z "$FILES" ]; then
-            FILES="$(grep -vE '^[[:space:]]*(#|$)' tests/test-suite-unit-full-only.txt | grep -vF "$EXCLUDE" | tr '\n' ' ')"
-          fi
-          npm run test:unit:full-only -- $FILES
+        run: npm run test:unit:full-only -- $(grep -vE '^[[:space:]]*(#|$)' tests/test-suite-unit-full-only.txt)
 
       - name: Retain native libraries for later runs
         if: always()
