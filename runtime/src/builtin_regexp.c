@@ -99,13 +99,17 @@ static MalArrayObject *regexp_legacy_state(MalVm *vm) {
         vm->intrinsics[MAL_INTRINSIC_REGEXP_LEGACY_STATE]);
 }
 
-static void regexp_legacy_store(MalVm *vm, RegexpLegacySlot slot, MalValue value) {
-    MalArrayObject *state = regexp_legacy_state(vm);
-    // This private intrinsic stays dense; no property descriptor can intercept replacement.
+// This private intrinsic stays dense and unobserved, so a replacement needs only the
+// collector's barriers, not the general element store.
+static void regexp_legacy_replace(MalArrayObject *state, RegexpLegacySlot slot, MalValue value) {
     assert((u32) slot < state->dense_count);
-    MalArrayDenseStore stored = mal_array_object_dense_store(state, (u32) slot, value);
-    assert(stored == MAL_ARRAY_DENSE_APPLIED);
-    (void) stored;
+    mal_gc_write_barrier(state->elements[slot]);
+    state->elements[slot] = value;
+    mal_array_object_card(state, (u32) slot, value);
+}
+
+static void regexp_legacy_store(MalVm *vm, RegexpLegacySlot slot, MalValue value) {
+    regexp_legacy_replace(regexp_legacy_state(vm), slot, value);
 }
 
 static MalValue regexp_legacy_load(MalVm *vm, RegexpLegacySlot slot) {
@@ -122,8 +126,7 @@ static i32 regexp_legacy_load_position(MalVm *vm, RegexpLegacySlot slot) {
 
 // Position slots only ever hold Numbers: replacing one shades no reference and
 // publishes no young edge, so neither the SATB barrier nor a card mark applies.
-static void regexp_legacy_store_position(MalVm *vm, RegexpLegacySlot slot, i32 position) {
-    MalArrayObject *state = regexp_legacy_state(vm);
+static void regexp_legacy_store_position(MalArrayObject *state, RegexpLegacySlot slot, i32 position) {
     assert((u32) slot < state->dense_count && mal_value_is_int32(state->elements[slot]));
     state->elements[slot] = mal_value_from_i32(position);
 }
@@ -135,28 +138,29 @@ static RegexpLegacySlot regexp_legacy_paren_start_slot(i32 group) {
 static void regexp_legacy_update(
     MalVm *vm, MalString *subject, const int32_t *captures, int32_t group_count
 ) {
+    MalArrayObject *state = regexp_legacy_state(vm);
     MalValue subject_value = mal_value_from_string(subject);
     // A loop over one subject would otherwise card the old state array on every match.
-    if (regexp_legacy_load(vm, REGEXP_LEGACY_SLOT_INPUT) != subject_value) {
-        regexp_legacy_store(vm, REGEXP_LEGACY_SLOT_INPUT, subject_value);
+    if (state->elements[REGEXP_LEGACY_SLOT_INPUT] != subject_value) {
+        regexp_legacy_replace(state, REGEXP_LEGACY_SLOT_INPUT, subject_value);
     }
-    if (regexp_legacy_load(vm, REGEXP_LEGACY_SLOT_SUBJECT) != subject_value) {
-        regexp_legacy_store(vm, REGEXP_LEGACY_SLOT_SUBJECT, subject_value);
+    if (state->elements[REGEXP_LEGACY_SLOT_SUBJECT] != subject_value) {
+        regexp_legacy_replace(state, REGEXP_LEGACY_SLOT_SUBJECT, subject_value);
     }
-    regexp_legacy_store_position(vm, REGEXP_LEGACY_SLOT_MATCH_START, captures[0]);
-    regexp_legacy_store_position(vm, REGEXP_LEGACY_SLOT_MATCH_END, captures[1]);
+    regexp_legacy_store_position(state, REGEXP_LEGACY_SLOT_MATCH_START, captures[0]);
+    regexp_legacy_store_position(state, REGEXP_LEGACY_SLOT_MATCH_END, captures[1]);
     i32 last = group_count - 1;
     regexp_legacy_store_position(
-        vm, REGEXP_LEGACY_SLOT_LAST_PAREN_START, last > 0 ? captures[2 * last] : -1);
+        state, REGEXP_LEGACY_SLOT_LAST_PAREN_START, last > 0 ? captures[2 * last] : -1);
     regexp_legacy_store_position(
-        vm, REGEXP_LEGACY_SLOT_LAST_PAREN_END, last > 0 ? captures[2 * last + 1] : -1);
+        state, REGEXP_LEGACY_SLOT_LAST_PAREN_END, last > 0 ? captures[2 * last + 1] : -1);
     i32 recorded = group_count - 1 < REGEXP_LEGACY_PAREN_COUNT
         ? group_count - 1 : REGEXP_LEGACY_PAREN_COUNT;
-    regexp_legacy_store_position(vm, REGEXP_LEGACY_SLOT_PAREN_RECORDED, recorded);
+    regexp_legacy_store_position(state, REGEXP_LEGACY_SLOT_PAREN_RECORDED, recorded);
     for (i32 group = 1; group <= recorded; group++) {
         RegexpLegacySlot start = regexp_legacy_paren_start_slot(group);
-        regexp_legacy_store_position(vm, start, captures[2 * group]);
-        regexp_legacy_store_position(vm, (RegexpLegacySlot) (start + 1), captures[2 * group + 1]);
+        regexp_legacy_store_position(state, start, captures[2 * group]);
+        regexp_legacy_store_position(state, (RegexpLegacySlot) (start + 1), captures[2 * group + 1]);
     }
 }
 
