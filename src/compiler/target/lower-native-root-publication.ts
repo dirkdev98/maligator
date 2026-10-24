@@ -176,10 +176,9 @@ export function nativePrivateRootRegisters(
 	for (const [ip, instruction] of fn.instructions.entries()) {
 		if (candidates.size === 0) break;
 		const writes = body?.writes[ip] ?? vmInstructionWriteRegisters(instruction);
-		// Exact operator kinds refine ordinary final-value expressions, not storage.
-		const hasStorageSpecialization =
-			!nativePlanKeepsOrdinaryLowering(native.instructions[ip]) &&
-			native.instructions[ip]?.kind !== "exact-operator-input-kinds";
+		const hasStorageSpecialization = !nativePlanKeepsOrdinaryLowering(
+			native.instructions[ip],
+		);
 		const rootedOutputs =
 			nativeRootedOutputRegisters(instruction, ip, privateCallResultIps).length > 0 &&
 			safepointIps.has(ip);

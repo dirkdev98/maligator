@@ -3,13 +3,15 @@ import {
 	COMPILER_VALUE_KIND_BOOLEAN,
 	COMPILER_VALUE_KIND_STRING,
 	COMPILER_VALUE_KIND_TOP,
-	compilerOperatorInputKindsHaveExactNativeSemantics,
 } from "../shared/compiler-value-kinds.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
 import type { CoreDirectEntryPlan, CorePlanRepresentation } from "./core-ir-regions.ts";
 import type { CoreValueKindAnalysis } from "./core-ir-value-kinds.ts";
-import { analyzeCoreValueKinds } from "./core-ir-value-kinds.ts";
+import {
+	analyzeCoreValueKinds,
+	coreOperatorInputKindMasks,
+} from "./core-ir-value-kinds.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import type { CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import { coreFunctionVersionsAreCurrent } from "./core-store.ts";
@@ -85,18 +87,10 @@ export function analyzeCoreNativeEntry(
 		instructions.flatMap((instruction) => {
 			const opcode = fn.instructionOpcodeName(instruction);
 			if (opcode !== "unary" && opcode !== "binary") return [];
-			const start = fn.kernel.instructionOperandStart(instruction);
-			const masks = Array.from(
-				{ length: fn.kernel.instructionOperandCount(instruction) },
-				(_, i) => kinds.kindMask(fn.kernel.operandAt(start + i)),
-			);
-			return compilerOperatorInputKindsHaveExactNativeSemantics(
-				opcode,
-				fn.instructionAttributes(instruction).operator,
-				masks,
-			)
-				? [Object.freeze({ instruction, masks: Object.freeze(masks) })]
-				: [];
+			const masks = coreOperatorInputKindMasks(fn, instruction, kinds);
+			return masks === undefined
+				? []
+				: [Object.freeze({ instruction, masks: Object.freeze(masks) })];
 		}),
 	);
 	const operatorInputs = inputs.length === 0 ? undefined : inputs;

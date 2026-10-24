@@ -75,6 +75,7 @@ function fastEntry(
 ): ReadonlyArray<string> | undefined {
 	return renderNativeFastEntry({
 		fn,
+		operatorInputs: [],
 		directEntry: undefined,
 		specialized: false,
 		trySymbol: exported ? OWN_TRY : undefined,

@@ -1,6 +1,14 @@
-import { COMPILER_VALUE_KIND_NUMBER } from "../shared/compiler-value-kinds.ts";
+import {
+	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_TOP,
+	COMPILER_VALUE_KIND_NULLISH,
+} from "../shared/compiler-value-kinds.ts";
 import { emitTypeofResult } from "./emit-program-image.ts";
-import type { NativeDirectEntryPlan, VmRegisterRepresentation } from "./program-image.ts";
+import type {
+	NativeDirectEntryPlan,
+	NativeFunctionPlan,
+	VmRegisterRepresentation,
+} from "./program-image.ts";
 import { decodeVmValueOperand } from "./runtime-image.ts";
 import type { BytecodeFunction, BytecodeInstruction } from "./runtime-image.ts";
 
@@ -8,6 +16,7 @@ const MAXIMUM_FAST_ENTRY_INSTRUCTIONS = 64;
 
 export interface NativeFastEntryInput {
 	readonly fn: BytecodeFunction;
+	readonly operatorInputs: NativeFunctionPlan["instructions"];
 	readonly directEntry: NativeDirectEntryPlan | undefined;
 	/** The full entry already answers this body without a frame or with a better dispatch. */
 	readonly specialized: boolean;
@@ -321,6 +330,7 @@ function int32ResultRegisters(
 }
 
 interface FastNumbers {
+	readonly kind: (register: number) => number;
 	readonly constants: ReadonlyMap<number, number>;
 	readonly literal: (value: number) => string;
 	/** String constant registers and the unit length of each constant. */
@@ -329,8 +339,18 @@ interface FastNumbers {
 }
 
 function numbers(values: FastNumbers, ...registers: ReadonlyArray<number>): string {
+	if (
+		registers.some(
+			(register) => (values.kind(register) & COMPILER_VALUE_KIND_NUMBER) === 0,
+		)
+	)
+		return "true";
 	const checks = registers
-		.filter((register) => !values.constants.has(register))
+		.filter(
+			(register) =>
+				!values.constants.has(register) &&
+				values.kind(register) !== COMPILER_VALUE_KIND_NUMBER,
+		)
 		.map((register) => `!mal_ops_is_number(f${register})`);
 	return checks.length === 0 ? "false" : checks.join(" || ");
 }
@@ -358,7 +378,8 @@ function fastBinary(
 	values: FastNumbers,
 ): string | undefined {
 	const { dst, left, right, operator } = op;
-	const guard = `if (${numbers(values, left, right)}) goto __full;`;
+	const numberFailure = numbers(values, left, right);
+	const guard = numberFailure === "false" ? "" : `if (${numberFailure}) goto __full;`;
 	if (operator === "===" || operator === "!==") {
 		const constant = [right, left].find(
 			(register) =>
@@ -372,10 +393,21 @@ function fastBinary(
 		return `f${dst} = mal_value_new_boolean(${operator === "!==" ? "!" : ""}${equal});`;
 	}
 	if (operator === "==" || operator === "!=") {
-		// Only Number pairs and nullish operands avoid ToPrimitive and string comparison.
 		const not = operator === "!=" ? "!" : "";
-		return `if (mal_ops_is_number(f${left}) && mal_ops_is_number(f${right})) f${dst} = mal_value_new_boolean(${not}(${number(values, left)} == ${number(values, right)})); else if (mal_value_is_nil(f${left}) || mal_value_is_nil(f${right})) f${dst} = mal_value_new_boolean(${not}(mal_value_is_nil(f${left}) && mal_value_is_nil(f${right}))); else goto __full;`;
+		const numeric = `f${dst} = mal_value_new_boolean(${not}(${number(values, left)} == ${number(values, right)}));`;
+		if (numberFailure === "false") return numeric;
+		const nullish =
+			(values.kind(left) | values.kind(right)) & COMPILER_VALUE_KIND_NULLISH;
+		if (numberFailure === "true" && nullish === 0) return undefined;
+		const fallback =
+			nullish === 0
+				? "goto __full;"
+				: `if (mal_value_is_nil(f${left}) || mal_value_is_nil(f${right})) f${dst} = mal_value_new_boolean(${not}(mal_value_is_nil(f${left}) && mal_value_is_nil(f${right}))); else goto __full;`;
+		return numberFailure === "true"
+			? fallback
+			: `if (!(${numberFailure})) ${numeric} else ${fallback}`;
 	}
+	if (numberFailure === "true") return undefined;
 	if (NUMBER_COMPARISONS.has(operator))
 		return `${guard} f${dst} = mal_value_new_boolean(${number(values, left)} ${operator} ${number(values, right)});`;
 	if (INT32_OPERATORS.has(operator))
@@ -398,7 +430,9 @@ function fastUnary(
 	values: FastNumbers,
 ): string | undefined {
 	const { dst, src, operator } = op;
-	const guard = `if (${numbers(values, src)}) goto __full;`;
+	const numberFailure = numbers(values, src);
+	if (operator !== "!" && numberFailure === "true") return undefined;
+	const guard = numberFailure === "false" ? "" : `if (${numberFailure}) goto __full;`;
 	switch (operator) {
 		case "!":
 			return `f${dst} = mal_value_new_boolean(!mal_value_is_truthy(f${src}));`;
@@ -429,7 +463,18 @@ function fastInstruction(
 	strings: ReadonlyMap<number, number>,
 	integers: ReadonlySet<number>,
 ): string | undefined {
+	const plan = input.operatorInputs[ip];
 	const values: FastNumbers = {
+		kind(register) {
+			if (plan?.kind === "operator-input-kinds") {
+				if (op.opcode === "UNARY" && op.src === register) return plan.inputKindMasks[0];
+				if (op.opcode === "BINARY") {
+					if (op.left === register) return plan.inputKindMasks[0];
+					if (op.right === register) return plan.inputKindMasks[1]!;
+				}
+			}
+			return COMPILER_VALUE_KIND_TOP;
+		},
 		constants,
 		literal: input.f64Literal,
 		strings,

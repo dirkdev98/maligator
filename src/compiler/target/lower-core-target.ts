@@ -2217,9 +2217,9 @@ function lowerFunctionToTarget(
 			}
 			const inputMasks = operatorInputs.get(instruction);
 			if (lowered.type === "binary" && inputMasks?.length === 2)
-				lowered = { ...lowered, exactInputKindMasks: inputMasks };
+				lowered = { ...lowered, inputKindMasks: inputMasks };
 			if (lowered.type === "unary" && inputMasks?.length === 1)
-				lowered = { ...lowered, exactInputKindMasks: inputMasks };
+				lowered = { ...lowered, inputKindMasks: inputMasks };
 			loweredInstructions.set(instruction, lowered);
 			if (siteFacts.size > 0) {
 				const site = siteFacts.get(

@@ -13,6 +13,7 @@ import {
 } from "../shared/builtin-registry.ts";
 import {
 	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_TOP,
 	COMPILER_VALUE_KIND_NULL,
 	COMPILER_VALUE_KIND_STRING,
 	COMPILER_VALUE_KIND_BOOLEAN,
@@ -3259,6 +3260,7 @@ function emitCompiledVariant(
 		directEntry?.recordParameters === undefined
 			? renderNativeFastEntry({
 					fn,
+					operatorInputs: nativeContract.instructions,
 					directEntry,
 					// A specialized-only body is omitted after emission, taking its fast path with it.
 					trySymbol:
@@ -5566,7 +5568,14 @@ function emitBody(
 	for (const candidate of topology.numericFusionCandidates) {
 		if (
 			nativeInstructions[candidate.action.id]?.kind === "unsigned-arithmetic" ||
-			nativeInstructions[candidate.finishIp]?.kind === "unsigned-arithmetic"
+			nativeInstructions[candidate.finishIp]?.kind === "unsigned-arithmetic" ||
+			[candidate.action.id, candidate.finishIp].some((ip) => {
+				const plan = nativeInstructions[ip];
+				return (
+					plan?.kind === "operator-input-kinds" &&
+					plan.inputKindMasks.some((mask) => (mask & COMPILER_VALUE_KIND_NUMBER) === 0)
+				);
+			})
 		)
 			continue;
 		const actions = fusionCandidatesByIp.get(candidate.instructionIp) ?? [];
@@ -7858,7 +7867,19 @@ function emitInstruction(
 		if (body === undefined) return null;
 		return body.boolean ? storeBoolean(dst, body.call) : `r${dst} = ${body.call};`;
 	};
-	const builtinOperandKind = (operand: number): CompilerValueKindMask | undefined => {
+	const operandKind = (operand: number): CompilerValueKindMask | undefined => {
+		const representation = operandRep(operand);
+		if (isNumericRep(representation)) return COMPILER_VALUE_KIND_NUMBER;
+		if (representation === "boolean") return COMPILER_VALUE_KIND_BOOLEAN;
+		if (representation === "string") return COMPILER_VALUE_KIND_STRING;
+		if (nativePlan?.kind === "operator-input-kinds") {
+			if (instruction.opcode === "UNARY" && instruction.src === operand)
+				return nativePlan.inputKindMasks[0];
+			if (instruction.opcode === "BINARY") {
+				if (instruction.left === operand) return nativePlan.inputKindMasks[0];
+				if (instruction.right === operand) return nativePlan.inputKindMasks[1];
+			}
+		}
 		if (
 			nativePlan?.kind !== "exact-builtin-input-kinds" ||
 			instruction.opcode !== "CALL_KNOWN"
@@ -7870,14 +7891,14 @@ function emitInstruction(
 	};
 	const operandIsString = (operand: number): boolean =>
 		operandRep(operand) === "string" ||
-		builtinOperandKind(operand) === COMPILER_VALUE_KIND_STRING;
+		operandKind(operand) === COMPILER_VALUE_KIND_STRING;
 
 	const nativeNumberOperand = (operand: number): string | null => {
 		const decoded = decodeVmValueOperand(operand);
 		if (decoded.kind === "register") {
 			return isNumericRep(reps[decoded.register]!)
 				? num(decoded.register)
-				: builtinOperandKind(operand) === COMPILER_VALUE_KIND_NUMBER
+				: operandKind(operand) === COMPILER_VALUE_KIND_NUMBER
 					? `mal_ops_number_as_f64(${boxedOperand(operand)})`
 					: null;
 		}
@@ -7890,7 +7911,9 @@ function emitInstruction(
 				? inputValue(decoded.register)
 				: reps[decoded.register] === "number"
 					? `mal_ops_number_to_i32(${inputValue(decoded.register)})`
-					: null;
+					: operandKind(operand) === COMPILER_VALUE_KIND_NUMBER
+						? `mal_ops_number_value_to_i32(${boxedOperand(operand)})`
+						: null;
 		}
 		return decoded.kind === "number" ? String(decoded.value) : null;
 	};
@@ -7899,7 +7922,7 @@ function emitInstruction(
 		if (decoded.kind === "register") {
 			return reps[decoded.register] === "boolean"
 				? inputValue(decoded.register)
-				: builtinOperandKind(operand) === COMPILER_VALUE_KIND_BOOLEAN
+				: operandKind(operand) === COMPILER_VALUE_KIND_BOOLEAN
 					? `mal_value_to_boolean(${boxedOperand(operand)})`
 					: null;
 		}
@@ -10547,7 +10570,7 @@ function emitInstruction(
 				const membershipIp = nativeArrayPresenceProjectionAction.membershipIp;
 				const loadIp = nativeArrayPresenceProjectionAction.indexed.loadIp;
 				const state = `__array_presence_${membershipIp}_state`;
-				const probe = `${state} = __indexed_length_${loadIp}_kind == 1 ? mal_vm_array_try_get_present_proven_index(__indexed_length_${loadIp}_array, (u32) ${num(instruction.left)}, &__array_presence_${membershipIp}_value) : -1;`;
+				const probe = `${state} = __indexed_length_${loadIp}_kind == 1 ? mal_vm_array_try_get_present_proven_index(__indexed_length_${loadIp}_array, (u32) ${typedNumber(instruction.left)}, &__array_presence_${membershipIp}_value) : -1;`;
 				return [
 					probe,
 					`if (${state} >= 0) {`,
@@ -10570,7 +10593,7 @@ function emitInstruction(
 						case "register":
 							return reps[value.register] === "boxed"
 								? `mal_ops_number_as_f64(r${value.register})`
-								: num(value.register);
+								: typedNumber(value.register);
 					}
 				};
 				const step = plan.steps[index]!;
@@ -10628,7 +10651,7 @@ function emitInstruction(
 					reps[register] === "int32"
 						? `r${register}`
 						: reps[register] === "number"
-							? `(i32)(${num(register)})`
+							? `(i32)(${typedNumber(register)})`
 							: `mal_value_to_i32(${boxed(register)})`;
 				const integerGuard = (register: number): string =>
 					reps[register] === "int32"
@@ -10672,7 +10695,7 @@ function emitInstruction(
 			if (nativePlan?.kind === "unsigned-arithmetic") {
 				const number = (register: number) =>
 					isNumericRep(reps[register]!)
-						? num(register)
+						? typedNumber(register)
 						: `mal_ops_number_as_f64(${boxed(register)})`;
 				return [
 					storeNumber(
@@ -10681,8 +10704,15 @@ function emitInstruction(
 					),
 				];
 			}
-			const leftIsNum = isNumericRep(reps[left]!);
-			const rightIsNum = isNumericRep(reps[right]!);
+			const leftIsNum =
+				isNumericRep(reps[left]!) || operandKind(left) === COMPILER_VALUE_KIND_NUMBER;
+			const rightIsNum =
+				isNumericRep(reps[right]!) || operandKind(right) === COMPILER_VALUE_KIND_NUMBER;
+			const numbersPossible =
+				((operandKind(left) ?? COMPILER_VALUE_KIND_TOP) & COMPILER_VALUE_KIND_NUMBER) !==
+					0 &&
+				((operandKind(right) ?? COMPILER_VALUE_KIND_TOP) & COMPILER_VALUE_KIND_NUMBER) !==
+					0;
 			const dstIsBool = reps[dst] === "boolean";
 			const compare = NATIVE_COMPARE[operator];
 			if (reps[left] === "boolean" || reps[right] === "boolean") {
@@ -10699,22 +10729,22 @@ function emitInstruction(
 				}
 			}
 			const fusion = numericFusionAction;
-			const exactInputKinds =
-				nativePlan?.kind === "exact-operator-input-kinds" &&
+			const inputKinds =
+				nativePlan?.kind === "operator-input-kinds" &&
 				nativePlan.inputKindMasks.length === 2
 					? nativePlan.inputKindMasks
 					: undefined;
 			if (
-				exactInputKinds !== undefined &&
+				inputKinds !== undefined &&
 				(!leftIsNum || !rightIsNum || operator === "**") &&
 				(fusion === undefined ||
 					reps[fusion.role === "start" ? dst : fusion.first.dst] === "number") &&
-				exactInputKinds.every((mask) =>
+				inputKinds.every((mask) =>
 					compilerValueKindMaskIsSubset(mask, COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE),
 				)
 			) {
-				const a = exactPrimitiveNumber(left, exactInputKinds[0]);
-				const b = exactPrimitiveNumber(right, exactInputKinds[1]);
+				const a = exactPrimitiveNumber(left, inputKinds[0]);
+				const b = exactPrimitiveNumber(right, inputKinds[1]);
 				if (RELATIONAL_COMPARE.has(operator))
 					return [storeBoolean(dst, `${a} ${compare} ${b}`)];
 				const expression =
@@ -10735,7 +10765,7 @@ function emitInstruction(
 				const other = indexedLengthLoopAction.site.lengthPosition === 1 ? right : left;
 				const otherNumber = reverse
 					? `mal_ops_number_as_f64(${boxed(other)})`
-					: num(other);
+					: typedNumber(other);
 				const fast =
 					indexedLengthLoopAction.site.lengthPosition === 1
 						? `${length} ${compareOperator} ${otherNumber}`
@@ -10752,10 +10782,10 @@ function emitInstruction(
 			}
 			if (operator === "in") {
 				const membership = `__array_has_${ip}`;
-				const fastMembership = `mal_vm_array_try_has(mal_vm_as_array(${boxed(right)}), ${leftIsNum ? num(left) : `mal_ops_number_as_f64(${boxed(left)})`})`;
+				const fastMembership = `mal_vm_array_try_has(mal_vm_as_array(${boxed(right)}), ${leftIsNum ? typedNumber(left) : `mal_ops_number_as_f64(${boxed(left)})`})`;
 				const ownKey = `mal_vm_shape_has_own_key(vm, ${boxed(right)}, ${boxed(left)}) ? 1 : -1`;
 				return [
-					`i32 ${membership} = ${leftIsNum ? fastMembership : `mal_ops_is_number(${boxed(left)}) ? ${fastMembership} : ${ownKey}`};`,
+					`i32 ${membership} = ${leftIsNum ? fastMembership : ((operandKind(left) ?? COMPILER_VALUE_KIND_TOP) & COMPILER_VALUE_KIND_NUMBER) !== 0 ? `mal_ops_is_number(${boxed(left)}) ? ${fastMembership} : ${ownKey}` : ownKey};`,
 					`if (${membership} >= 0) {`,
 					dstIsBool
 						? `  r${dst} = ${membership} != 0;`
@@ -10771,9 +10801,8 @@ function emitInstruction(
 			if (
 				operator === "+" &&
 				(fusion === undefined || fusion.role === "start") &&
-				(reps[left] === "string" ||
-					exactInputKinds?.[0] === COMPILER_VALUE_KIND_STRING) &&
-				(reps[right] === "string" || exactInputKinds?.[1] === COMPILER_VALUE_KIND_STRING)
+				(reps[left] === "string" || inputKinds?.[0] === COMPILER_VALUE_KIND_STRING) &&
+				(reps[right] === "string" || inputKinds?.[1] === COMPILER_VALUE_KIND_STRING)
 			) {
 				// A String start selects the fusion's boxed fallback for its matching finish.
 				return [
@@ -10784,12 +10813,8 @@ function emitInstruction(
 			}
 			if (
 				(fusion === undefined || fusion.role === "start") &&
-				exactInputKinds !== undefined &&
-				compilerOperatorIsPrimitiveStringConcatenation(
-					"binary",
-					operator,
-					exactInputKinds,
-				)
+				inputKinds !== undefined &&
+				compilerOperatorIsPrimitiveStringConcatenation("binary", operator, inputKinds)
 			) {
 				return [
 					...(fusion === undefined ? [] : [`__nf_${fusion.id}_ok = false;`]),
@@ -10800,9 +10825,11 @@ function emitInstruction(
 			if (fusion?.role === "link") {
 				const firstOnLeft = left === fusion.first.dst;
 				const external = firstOnLeft ? right : left;
-				const externalIsNum = isNumericRep(reps[external]!);
+				const externalIsNum =
+					isNumericRep(reps[external]!) ||
+					operandKind(external) === COMPILER_VALUE_KIND_NUMBER;
 				const externalExpr = externalIsNum
-					? num(external)
+					? typedNumber(external)
 					: `mal_ops_number_as_f64(${boxed(external)})`;
 				const value = `__nf_${fusion.id}_value`;
 				const nativeExpr = nativeNumberExpr(
@@ -10831,8 +10858,8 @@ function emitInstruction(
 			if (fusion?.role === "start" && reps[dst] !== "number") {
 				const nativeExpr = nativeNumberExpr(
 					operator,
-					leftIsNum ? num(left) : `mal_ops_number_as_f64(${boxed(left)})`,
-					rightIsNum ? num(right) : `mal_ops_number_as_f64(${boxed(right)})`,
+					leftIsNum ? typedNumber(left) : `mal_ops_number_as_f64(${boxed(left)})`,
+					rightIsNum ? typedNumber(right) : `mal_ops_number_as_f64(${boxed(right)})`,
 				);
 				if (nativeExpr !== null) {
 					const guards: Array<string> = [];
@@ -10864,17 +10891,19 @@ function emitInstruction(
 				const firstExpr = nativeNumberExpr(
 					first.operator,
 					firstLeftIsNum
-						? num(first.left)
+						? typedNumber(first.left)
 						: `mal_ops_number_as_f64(${boxed(first.left)})`,
 					firstRightIsNum
-						? num(first.right)
+						? typedNumber(first.right)
 						: `mal_ops_number_as_f64(${boxed(first.right)})`,
 				);
 				if ((firstOnLeft || firstOnRight) && firstExpr !== null) {
 					const external = firstOnLeft ? right : left;
-					const externalIsNum = isNumericRep(reps[external]!);
+					const externalIsNum =
+						isNumericRep(reps[external]!) ||
+						operandKind(external) === COMPILER_VALUE_KIND_NUMBER;
 					const externalExpr = externalIsNum
-						? num(external)
+						? typedNumber(external)
 						: `mal_ops_number_as_f64(${boxed(external)})`;
 					const compare = NATIVE_COMPARE[operator];
 					if (compare !== undefined) {
@@ -10970,6 +10999,7 @@ function emitInstruction(
 					throwCheck(),
 					`r${dst} = ${reps[dst] === "int32" ? `mal_ops_number_value_to_i32(${result})` : `mal_ops_number_as_f64(${result})`};`,
 				];
+				if (!numbersPossible) return fallback;
 				// ToInt32 of an int32 operand or result is the identity, but clang cannot fold FJCVTZS.
 				const int32Input = (register: number): string =>
 					reps[register] === "int32"
@@ -10984,8 +11014,10 @@ function emitInstruction(
 					int32Expression === null
 						? nativeNumberExpr(
 								operator,
-								leftIsNum ? num(left) : `mal_ops_number_as_f64(${boxed(left)})`,
-								rightIsNum ? num(right) : `mal_ops_number_as_f64(${boxed(right)})`,
+								leftIsNum ? typedNumber(left) : `mal_ops_number_as_f64(${boxed(left)})`,
+								rightIsNum
+									? typedNumber(right)
+									: `mal_ops_number_as_f64(${boxed(right)})`,
 							)
 						: `(f64) (${int32Expression})`;
 				if (expression === null) return fallback;
@@ -11027,17 +11059,22 @@ function emitInstruction(
 				}
 				elideFramePosition();
 				if (dst === left && ["+", "-", "*", "/"].includes(operator)) {
-					return [`r${dst} ${operator}= ${num(right)};`];
+					return [`r${dst} ${operator}= ${typedNumber(right)};`];
 				}
 				if (dst === right && (operator === "+" || operator === "*")) {
-					return [`r${dst} ${operator}= ${num(left)};`];
+					return [`r${dst} ${operator}= ${typedNumber(left)};`];
 				}
-				const expr = nativeNumberExpr(operator, num(left), num(right));
+				const expr = nativeNumberExpr(operator, typedNumber(left), typedNumber(right));
 				return expr === null ? null : [`r${dst} = ${expr};`];
 			}
 			if (operator === "**" && leftIsNum && rightIsNum) {
 				elideFramePosition();
-				return [storeNumber(dst, `mal_number_exponentiate(${num(left)}, ${num(right)})`)];
+				return [
+					storeNumber(
+						dst,
+						`mal_number_exponentiate(${typedNumber(left)}, ${typedNumber(right)})`,
+					),
+				];
 			}
 			// Retain the existing epilogue resource even when an exact comparison emits no throw check.
 			if (handlerIp === undefined) nativeBodyReference(resources, "throwExit");
@@ -11048,11 +11085,11 @@ function emitInstruction(
 						? `r${r}`
 						: `mal_ops_number_as_f64(${boxed(r)})`;
 			if (
-				exactInputKinds !== undefined &&
-				compilerOperatorIsNullishEquality("binary", operator, exactInputKinds)
+				inputKinds !== undefined &&
+				compilerOperatorIsNullishEquality("binary", operator, inputKinds)
 			) {
 				const other = compilerValueKindMaskIsSubset(
-					exactInputKinds[1],
+					inputKinds[1],
 					COMPILER_VALUE_KIND_NULLISH,
 				)
 					? left
@@ -11073,8 +11110,8 @@ function emitInstruction(
 			}
 			// Exact Number/undefined domains require neither coercion nor a speculative fallback.
 			if (
-				exactInputKinds !== undefined &&
-				exactInputKinds.every(
+				inputKinds !== undefined &&
+				inputKinds.every(
 					(mask) => (mask & ~COMPILER_VALUE_KIND_NUMBER_OR_UNDEFINED) === 0,
 				) &&
 				compare !== undefined
@@ -11122,8 +11159,8 @@ function emitInstruction(
 				};
 				const equality = ["==", "!=", "===", "!=="].includes(operator);
 				const positive = equality
-					? exactNumberOrUndefinedEquality(exactInputKinds[0], exactInputKinds[1])
-					: `${exactNumberOrUndefined(left, exactInputKinds[0])} ${compare} ${exactNumberOrUndefined(right, exactInputKinds[1])}`;
+					? exactNumberOrUndefinedEquality(inputKinds[0], inputKinds[1])
+					: `${exactNumberOrUndefined(left, inputKinds[0])} ${compare} ${exactNumberOrUndefined(right, inputKinds[1])}`;
 				const result =
 					operator === "!=" || operator === "!==" ? `!(${positive})` : positive;
 				elideFramePosition();
@@ -11132,13 +11169,13 @@ function emitInstruction(
 			if (compare !== undefined) {
 				if (leftIsNum && rightIsNum) {
 					elideFramePosition();
-					return [storeBoolean(dst, `${num(left)} ${compare} ${num(right)}`)];
+					return [
+						storeBoolean(dst, `${typedNumber(left)} ${compare} ${typedNumber(right)}`),
+					];
 				}
 				if (
-					(reps[left] === "string" ||
-						exactInputKinds?.[0] === COMPILER_VALUE_KIND_STRING) &&
-					(reps[right] === "string" ||
-						exactInputKinds?.[1] === COMPILER_VALUE_KIND_STRING)
+					(reps[left] === "string" || inputKinds?.[0] === COMPILER_VALUE_KIND_STRING) &&
+					(reps[right] === "string" || inputKinds?.[1] === COMPILER_VALUE_KIND_STRING)
 				) {
 					const a = `mal_value_to_string(${boxed(left)})`,
 						b = `mal_value_to_string(${boxed(right)})`;
@@ -11199,7 +11236,7 @@ function emitInstruction(
 				// Speculate a numeric compare when there is a numeric prior: always in
 				// the mixed case (one operand proven number), and in the both-boxed
 				// case only for the relational operators (see RELATIONAL_COMPARE).
-				if (!bothBoxed || RELATIONAL_COMPARE.has(operator)) {
+				if (numbersPossible && (!bothBoxed || RELATIONAL_COMPARE.has(operator))) {
 					const fastBool = `${numericOf(left)} ${compare} ${numericOf(right)}`;
 					// With one side a number, a strict comparison against a non-number is unequal.
 					if (!bothBoxed && (operator === "===" || operator === "!==")) {
@@ -11256,7 +11293,7 @@ function emitInstruction(
 			// branch is not taken. This covers both the mixed and both-boxed cases;
 			// for both-boxed there is no static proof, but the guard is a cheap,
 			// well-predicted bit test and hot arithmetic is overwhelmingly numeric.
-			if (producesNumberFromNumbers(operator)) {
+			if (numbersPossible && producesNumberFromNumbers(operator)) {
 				const nativeExpr = nativeNumberExpr(operator, numericOf(left), numericOf(right));
 				const int32Expr = INT32_RESULT_OPERATORS.has(operator)
 					? nativeInt32Expr(
@@ -11362,7 +11399,7 @@ function emitInstruction(
 			if (
 				operator === "tostring" &&
 				(reps[src] === "boolean" ||
-					(nativePlan?.kind === "exact-operator-input-kinds" &&
+					(nativePlan?.kind === "operator-input-kinds" &&
 						nativePlan.inputKindMasks.length === 1 &&
 						nativePlan.inputKindMasks[0] === COMPILER_VALUE_KIND_BOOLEAN))
 			) {
@@ -11372,8 +11409,12 @@ function emitInstruction(
 				return [`r${dst} = ${callValue(dst, text)};`, poll()];
 			}
 			if (
-				nativePlan?.kind === "exact-operator-input-kinds" &&
+				nativePlan?.kind === "operator-input-kinds" &&
 				nativePlan.inputKindMasks.length === 1 &&
+				compilerValueKindMaskIsSubset(
+					nativePlan.inputKindMasks[0],
+					COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE,
+				) &&
 				!isNumericRep(reps[src]!)
 			) {
 				const value = exactPrimitiveNumber(src, nativePlan.inputKindMasks[0]);

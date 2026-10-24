@@ -3217,7 +3217,7 @@ describe("proven Boolean text conversion", () => {
 		expect(
 			decoded.native.functions.flatMap((fn) => fn.instructions ?? []),
 		).toContainEqual({
-			kind: "exact-operator-input-kinds",
+			kind: "operator-input-kinds",
 			inputKindMasks: [COMPILER_VALUE_KIND_BOOLEAN],
 		});
 	});

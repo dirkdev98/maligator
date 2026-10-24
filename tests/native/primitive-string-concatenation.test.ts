@@ -9,6 +9,7 @@ import {
 	buildBackendPairFromOneProgramImage,
 	HOST_MAIN,
 	runToStdout,
+	STRESS_ENV,
 } from "../../src/test-harness.ts";
 
 describe("String concatenation with proven primitive operands", () => {
@@ -29,7 +30,7 @@ describe("String concatenation with proven primitive operands", () => {
 			fn.body.instructions.flatMap((op, ip) => {
 				const proof = fn.instructions[ip];
 				return op.opcode === "BINARY" &&
-					proof?.kind === "exact-operator-input-kinds" &&
+					proof?.kind === "operator-input-kinds" &&
 					!proof.inputKindMasks.every((mask) => mask === 16) &&
 					compilerOperatorIsPrimitiveStringConcatenation(
 						"binary",
@@ -41,7 +42,8 @@ describe("String concatenation with proven primitive operands", () => {
 			}),
 		);
 		expect(mixedConcatenations.length).toBeGreaterThan(0);
-		expect(runToStdout(pair.compiled)).toBe(expected);
-		expect(runToStdout(pair.interpreted)).toBe(expected);
+		for (const binary of [pair.compiled, pair.interpreted])
+			for (const env of [{}, STRESS_ENV])
+				expect(runToStdout(binary, { env })).toBe(expected);
 	});
 });

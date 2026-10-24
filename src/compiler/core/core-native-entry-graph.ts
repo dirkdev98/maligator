@@ -6,6 +6,7 @@ import {
 	COMPILER_VALUE_KIND_BOOLEAN,
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_STRING,
+	compilerOperatorInputKindsHaveExactNativeSemantics,
 } from "../shared/compiler-value-kinds.ts";
 import type { CoreAnalysisManager } from "./core-analysis-manager.ts";
 import { CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE } from "./core-internal-attributes.ts";
@@ -375,7 +376,12 @@ export function connectCoreNativeEntries(
 			const gain = (candidate.operatorInputs ?? []).some(
 				(site) =>
 					!baselineNumbers.has(site.instruction) &&
-					site.masks.every((mask) => mask === COMPILER_VALUE_KIND_NUMBER),
+					site.masks.every((mask) => mask === COMPILER_VALUE_KIND_NUMBER) &&
+					compilerOperatorInputKindsHaveExactNativeSemantics(
+						fn.instructionOpcodeName(site.instruction),
+						fn.instructionAttributes(site.instruction).operator,
+						site.masks,
+					),
 			);
 			if (gain) {
 				representations = nominated;

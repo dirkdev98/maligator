@@ -596,10 +596,16 @@ reads. The result remains a primitive string, including when it escapes or is
 retained across suspension.
 
 Exact Boolean text observations normalize to Core ToString and select the VM's hot
-true/false strings. Native operator input certificates retain semantic Boolean kinds
-when a physical register also serves unrelated boxed values. Selection queries the
-current local kind analysis for conversions introduced after effect refinement;
-function versions protect the resulting proof. Method and String calls still require
+true/false strings. Native operator input kinds come from the current local kind
+analysis independently of effect refinements, including when a physical register
+also serves unrelated boxed values. A mask is an upper bound: it may include unknown
+operands, objects, Symbols, or BigInts. It licenses only decisions whose own input
+requirements hold. In particular, a String operand excludes numeric addition while
+an unknown opposite operand retains ToPrimitive, exceptions, collection, and user
+code. Primitive kernels, expression motion, and untraced storage each retain their
+separate legality checks. Function versions and entry-specific analyses protect
+these facts through lowering; compiler artifacts validate arity and kind masks.
+Method and String calls still require
 proven callee identity, while implicit conversion does not consult those properties.
 Unknown and mixed kinds retain generic conversion, including wrapper coercion.
 

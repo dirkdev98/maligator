@@ -179,6 +179,17 @@ export function compilerOperatorIsPrimitiveStringConcatenation(
 	);
 }
 
+export function compilerOperatorInputKindMasksAreValid(
+	opcode: string,
+	masks: ReadonlyArray<CompilerValueKindMask>,
+): masks is CompilerOperatorInputKindMasks {
+	return (
+		((opcode === "unary" && masks.length === 1) ||
+			(opcode === "binary" && masks.length === 2)) &&
+		masks.every((mask) => compilerValueKindMaskIsValid(mask, { allowTop: true }))
+	);
+}
+
 export function compilerOperatorInputKindsHaveExactNativeSemantics(
 	opcode: string,
 	operator: unknown,

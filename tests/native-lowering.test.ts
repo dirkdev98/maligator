@@ -860,7 +860,7 @@ describe("SSA native lowering", () => {
 					instructions: [
 						mask === undefined
 							? undefined
-							: { kind: "exact-operator-input-kinds", inputKindMasks: [mask] },
+							: { kind: "operator-input-kinds", inputKindMasks: [mask] },
 						undefined,
 						undefined,
 						undefined,

@@ -214,7 +214,7 @@ effects. The same audit of every physical definition, native-region intermediate
 and out-parameter use, and the same collecting-loop profitability filter still
 apply, including when later instructions reuse either physical register.
 Closure creation assigns its destination only after the value-returning runtime
-factory finishes. Exact operator-kind annotations refine ordinary final-value
-expressions without adding intermediate storage. Both can share a private result
+factory finishes. Operator-kind annotations describe ordinary final-value
+expressions without adding intermediate storage or proving effect freedom. Both can share a private result
 register with an indexed read; native regions and compound out-parameters retain
 their separate continuously rooted contracts.

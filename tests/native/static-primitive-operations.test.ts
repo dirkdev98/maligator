@@ -51,7 +51,7 @@ console.log(used(long,long),discarded(long,long));
 							if (
 								op.opcode !== "BINARY" ||
 								op.operator !== "+" ||
-								proof?.kind !== "exact-operator-input-kinds" ||
+								proof?.kind !== "operator-input-kinds" ||
 								!proof.inputKindMasks.every((mask) => mask === 16)
 							)
 								continue;
@@ -82,7 +82,7 @@ console.log(used(long,long),discarded(long,long));
 						(op, ip) =>
 							op.opcode === "BINARY" &&
 							op.operator === "+" &&
-							fn.instructions[ip]?.kind === "exact-operator-input-kinds",
+							fn.instructions[ip]?.kind === "operator-input-kinds",
 					)
 				)
 					continue;

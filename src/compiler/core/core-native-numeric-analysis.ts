@@ -14,7 +14,7 @@ import {
 	CORE_LOCAL_VALUE_KIND_ANALYSIS,
 	corePrivatePackedRestArrays,
 	corePrivateNumericArrayLoads,
-	coreExactOperatorInputKindMasks,
+	coreOperatorInputKindMasks,
 } from "./core-ir-value-kinds.ts";
 import type { CoreValueKindAnalysis } from "./core-ir-value-kinds.ts";
 import { coreBlockId, coreInstructionId } from "./core-ir.ts";
@@ -296,25 +296,16 @@ export function coreOperatorInputPlans(
 	const plans: Array<CoreOperatorInputPlan> = [];
 	for (const functionId of functions) {
 		const fn = program.function(functionId);
+		let kinds: CoreValueKindAnalysis | undefined;
 		for (const instruction of fn.instructionIds()) {
 			if (fn.instructionKind(instruction) !== "operation") continue;
 			const opcode = fn.instructionOpcodeName(instruction);
 			if (opcode !== "unary" && opcode !== "binary") continue;
-			let masks = coreExactOperatorInputKindMasks(fn, instruction);
-			if (
-				masks === undefined &&
-				opcode === "unary" &&
-				fn.instructionAttributes(instruction).operator === "tostring"
-			) {
-				// Memory transforms can introduce conversions after primitive effect refinement.
-				const kinds = analyses.get(CORE_LOCAL_VALUE_KIND_ANALYSIS, {
-					scope: "function",
-					function: functionId,
-				});
-				const input = fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction));
-				if (kinds.kindMask(input) === COMPILER_VALUE_KIND_BOOLEAN)
-					masks = [COMPILER_VALUE_KIND_BOOLEAN];
-			}
+			kinds ??= analyses.get(CORE_LOCAL_VALUE_KIND_ANALYSIS, {
+				scope: "function",
+				function: functionId,
+			});
+			const masks = coreOperatorInputKindMasks(fn, instruction, kinds);
 			if (masks === undefined) continue;
 			const plan = Object.freeze({
 				function: functionId,

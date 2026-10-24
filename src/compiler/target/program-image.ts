@@ -20,7 +20,7 @@ import type {
 	CompilerNumericTypedArrayKind,
 	CompilerNumericSortCallback,
 } from "../shared/compiler-instruction.ts";
-import { compilerOperatorInputKindsHaveExactNativeSemantics } from "../shared/compiler-value-kinds.ts";
+import { compilerOperatorInputKindMasksAreValid } from "../shared/compiler-value-kinds.ts";
 import type { CompilerOperatorInputKindMasks } from "../shared/compiler-value-kinds.ts";
 import { NATIVE_STRING_SWITCH_CASE_LIMIT } from "../shared/native-string-switch.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
@@ -1586,11 +1586,7 @@ export function validateNativeDirectEntry(
 			seenInputs.has(instructionIp) ||
 			instruction === undefined ||
 			(instruction.opcode !== "BINARY" && instruction.opcode !== "UNARY") ||
-			!compilerOperatorInputKindsHaveExactNativeSemantics(
-				instruction.opcode.toLowerCase(),
-				instruction.operator,
-				masks,
-			)
+			!compilerOperatorInputKindMasksAreValid(instruction.opcode.toLowerCase(), masks)
 		)
 			throw new RangeError("Invalid native operator input kinds");
 		seenInputs.add(instructionIp);
@@ -2398,7 +2394,7 @@ export type NativeInstructionPlan =
 			readonly elementKind: CompilerNumericTypedArrayKind;
 	  }
 	| {
-			readonly kind: "exact-operator-input-kinds";
+			readonly kind: "operator-input-kinds";
 			readonly inputKindMasks: CompilerOperatorInputKindMasks;
 	  }
 	| {
@@ -2413,7 +2409,11 @@ export type NativeInstructionPlan =
 export function nativePlanKeepsOrdinaryLowering(
 	plan: NativeInstructionPlan | undefined,
 ): boolean {
-	return plan === undefined || plan.kind === "exact-array-element";
+	return (
+		plan === undefined ||
+		plan.kind === "exact-array-element" ||
+		plan.kind === "operator-input-kinds"
+	);
 }
 
 /**
@@ -3076,11 +3076,11 @@ function nativeInstructionPlanFromExecution(
 		case "binary":
 			if (instruction.type === "binary" && instruction.unsignedArithmetic)
 				return { kind: "unsigned-arithmetic" };
-			return instruction.exactInputKindMasks === undefined
+			return instruction.inputKindMasks === undefined
 				? undefined
 				: {
-						kind: "exact-operator-input-kinds",
-						inputKindMasks: instruction.exactInputKindMasks,
+						kind: "operator-input-kinds",
+						inputKindMasks: instruction.inputKindMasks,
 					};
 		case "createRestArguments":
 			return instruction.virtualPackedRest === true

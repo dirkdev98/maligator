@@ -1,3 +1,4 @@
+import { COMPILER_VALUE_KIND_NUMBER } from "../shared/compiler-value-kinds.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
 import { stringConstantEquals } from "../shared/string-constant.ts";
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
@@ -4631,6 +4632,13 @@ function discoverCandidates(
 		{ readonly user: CoreInstructionId; readonly truncating: boolean }
 	>();
 	const numericFinishes = new Set<CoreInstructionId>();
+	const numberInputsPossible = (instruction: CoreInstructionId): boolean =>
+		[0, 1].every(
+			(position) =>
+				(valueKinds().kindMask(instructionOperand(fn, instruction, position)!) &
+					COMPILER_VALUE_KIND_NUMBER) !==
+				0,
+		);
 	for (const instruction of numericInstructions) {
 		if (
 			!control.reachable.has(fn.instructionBlock(instruction)) ||
@@ -4678,6 +4686,7 @@ function discoverCandidates(
 				instructionOperand(fn, user, instructionOperand(fn, user, 0) === output ? 1 : 0)!,
 			);
 		if (!truncating && fn.valueRepresentation(output) !== "boxed") continue;
+		if (!numberInputsPossible(instruction) || !numberInputsPossible(user)) continue;
 		numericPairs.set(instruction, { user, truncating });
 		if (!truncating) numericFinishes.add(user);
 	}

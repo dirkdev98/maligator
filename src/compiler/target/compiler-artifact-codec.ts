@@ -7,7 +7,7 @@ import type {
 	CompilerNumericTypedArrayKind,
 } from "../shared/compiler-instruction.ts";
 import {
-	compilerOperatorInputKindsHaveExactNativeSemantics,
+	compilerOperatorInputKindMasksAreValid,
 	compilerBuiltinInputKindsAreValid,
 } from "../shared/compiler-value-kinds.ts";
 import type { CompilerOperatorInputKindMasks } from "../shared/compiler-value-kinds.ts";
@@ -102,7 +102,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 263;
+export const COMPILER_ARTIFACT_VERSION = 264;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -2561,17 +2561,16 @@ function writeCompilerArtifact(
 				w.u8(19);
 				for (const mask of plan.inputKindMasks) w.u8(mask);
 			} else if (
-				plan.kind === "exact-operator-input-kinds" &&
+				plan.kind === "operator-input-kinds" &&
 				(instruction.opcode === "BINARY" || instruction.opcode === "UNARY")
 			) {
 				if (
-					!compilerOperatorInputKindsHaveExactNativeSemantics(
+					!compilerOperatorInputKindMasksAreValid(
 						instruction.opcode.toLowerCase(),
-						instruction.operator,
 						plan.inputKindMasks,
 					)
 				) {
-					throw new RangeError("program-image-codec: invalid exact binary kind masks");
+					throw new RangeError("program-image-codec: invalid operator kind masks");
 				}
 				w.u8(17);
 				w.u8(plan.inputKindMasks[0]);
@@ -5211,15 +5210,11 @@ function readCompilerArtifact(
 				const masks: CompilerOperatorInputKindMasks =
 					instruction.opcode === "BINARY" ? [r.u8(), r.u8()] : [r.u8()];
 				if (
-					!compilerOperatorInputKindsHaveExactNativeSemantics(
-						instruction.opcode.toLowerCase(),
-						instruction.operator,
-						masks,
-					)
+					!compilerOperatorInputKindMasksAreValid(instruction.opcode.toLowerCase(), masks)
 				)
-					throw new RangeError("program-image-codec: invalid exact operator kind masks");
+					throw new RangeError("program-image-codec: invalid operator kind masks");
 				nativeInstructions[instructionIndex] = {
-					kind: "exact-operator-input-kinds",
+					kind: "operator-input-kinds",
 					inputKindMasks: masks,
 				};
 			} else {

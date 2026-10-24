@@ -1168,7 +1168,7 @@ type CompilerOperation =
 			registers: [number, number, number];
 
 			unsignedArithmetic?: true;
-			exactInputKindMasks?: readonly [CompilerValueKindMask, CompilerValueKindMask];
+			inputKindMasks?: readonly [CompilerValueKindMask, CompilerValueKindMask];
 
 			operator:
 				| "+"
@@ -1196,7 +1196,7 @@ type CompilerOperation =
 	  }
 	| {
 			type: "unary";
-			exactInputKindMasks?: readonly [CompilerValueKindMask];
+			inputKindMasks?: readonly [CompilerValueKindMask];
 
 			// [destination, operand]
 			registers: [number, number];

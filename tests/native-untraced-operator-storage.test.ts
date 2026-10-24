@@ -69,7 +69,7 @@ describe("untraced boxed operator storage", () => {
 			);
 			const op = out.native.body.instructions[ip]!;
 			if (op.opcode !== "UNARY") throw new Error("Missing numeric primitive unary");
-			expect(out.native.instructions[ip]?.kind).toBe("exact-operator-input-kinds");
+			expect(out.native.instructions[ip]?.kind).toBe("operator-input-kinds");
 			expect(out.native.registerRepresentations[op.dst]).toBe("boxed");
 			expect(out.native.storage!.rootRegisters).not.toContain(op.dst);
 			expect(out.native.storage!.expressionIps).not.toContain(ip);
@@ -243,7 +243,7 @@ describe("untraced boxed operator storage", () => {
 		const instructions = out.native.instructions.map((plan, ip) =>
 			ip === out.ip
 				? {
-						kind: "exact-operator-input-kinds" as const,
+						kind: "operator-input-kinds" as const,
 						inputKindMasks: [
 							COMPILER_VALUE_KIND_NUMBER |
 								COMPILER_VALUE_KIND_STRING |

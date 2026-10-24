@@ -323,7 +323,7 @@ describe("native numeric indexed-property root publication", () => {
 			[point(0, [0, 5], [0, 3, 5]), point(1, [0, 3, 5], [0, 5]), point(3, [0], [0, 3])],
 			"number",
 			undefined,
-			{ kind: "exact-operator-input-kinds", inputKindMasks: [8, 8] },
+			{ kind: "operator-input-kinds", inputKindMasks: [8, 8] },
 		);
 		const slot = privateSlot(source, 3);
 		const create = source.indexOf("r3 = mal_vm_op_create_function(");

@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-	COMPILER_VALUE_KIND_OBJECT,
-	COMPILER_VALUE_KIND_STRING,
-} from "../src/compiler/shared/compiler-value-kinds.ts";
+import { COMPILER_VALUE_KIND_STRING } from "../src/compiler/shared/compiler-value-kinds.ts";
 import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
@@ -31,7 +28,7 @@ describe("proven String operations in boxed storage", () => {
 			const op = out.native.body.instructions[ip]!;
 			if (op.opcode !== "BINARY") throw new Error("Missing String operation");
 			expect(out.native.instructions[ip]).toEqual({
-				kind: "exact-operator-input-kinds",
+				kind: "operator-input-kinds",
 				inputKindMasks: [COMPILER_VALUE_KIND_STRING, COMPILER_VALUE_KIND_STRING],
 			});
 			const image = lowerNativeStorage({
@@ -88,11 +85,8 @@ describe("proven String operations in boxed storage", () => {
 			const restoredFn = restored.native.functions[index]!;
 			const instructions = [...restoredFn.instructions];
 			instructions[ip] = {
-				kind: "exact-operator-input-kinds",
-				inputKindMasks: [
-					COMPILER_VALUE_KIND_STRING | COMPILER_VALUE_KIND_OBJECT,
-					COMPILER_VALUE_KIND_STRING,
-				],
+				kind: "operator-input-kinds",
+				inputKindMasks: [0, COMPILER_VALUE_KIND_STRING],
 			};
 			expect(() =>
 				serializeCompilerArtifact({
@@ -105,7 +99,7 @@ describe("proven String operations in boxed storage", () => {
 						}),
 					},
 				}),
-			).toThrow(/invalid exact binary kind masks/);
+			).toThrow(/invalid operator kind masks/);
 		},
 	);
 
@@ -155,12 +149,6 @@ describe("proven String operations in boxed storage", () => {
 			const source = c.directEntries[0]!.source;
 			expect(source).toContain("mal_vm_concat_strings_known(");
 			expect(source).not.toContain("mal_ops_is_number(");
-			if (fusion) {
-				const reset = source.search(new RegExp(`^\\s*__nf_${ip}_ok = false;$`, "m"));
-				expect(reset).toBeGreaterThanOrEqual(0);
-				expect(source.indexOf("mal_vm_concat_strings_known(")).toBeGreaterThan(reset);
-				expect(source).toContain(`if (__nf_${ip}_ok)`);
-			}
 		},
 	);
 

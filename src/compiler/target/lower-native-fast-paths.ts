@@ -2941,6 +2941,7 @@ export function lowerNativeFastPaths(
 	materializeUpdateOutputs = true,
 	selectUpdates = true,
 	body?: NativeBodyFacts,
+	numberInputsPossible: (ip: number) => boolean = () => true,
 ): NativeFastPathLowering {
 	let propertyLoadIps: ReadonlyArray<number> = [];
 	if (selection.kind === "select") {
@@ -3000,6 +3001,7 @@ export function lowerNativeFastPaths(
 				jumpTargets,
 				(candidate) =>
 					conflicts(candidate) ||
+					!numberInputsPossible(candidate) ||
 					pairedArrayLoopActions.has(candidate) ||
 					propertyNumericUpdateActions.has(candidate),
 				transparentJumpTargets,
@@ -3034,6 +3036,7 @@ export function lowerNativeFastPaths(
 			jumpTargets,
 			(candidate) =>
 				conflicts(candidate) ||
+				!numberInputsPossible(candidate) ||
 				pairedArrayLoopActions.has(candidate) ||
 				propertyNumericUpdateActions.has(candidate) ||
 				propertyProjectionActions.has(candidate),
@@ -3511,6 +3514,16 @@ export function selectNativeFastPaths(
 		),
 	);
 	const unavailable = (ip: number) => blocked.has(ip) || pollingEdges.has(ip);
+	const numberInputsPossible = (ip: number): boolean => {
+		const op = fn.instructions[ip];
+		if (op?.opcode === "UNARY" && (op.operator === "!" || op.operator === "typeof"))
+			return true;
+		const plan = native.instructions[ip];
+		return (
+			plan?.kind !== "operator-input-kinds" ||
+			plan.inputKindMasks.every((mask) => (mask & COMPILER_VALUE_KIND_NUMBER) !== 0)
+		);
+	};
 	for (const site of native.fieldCalls ?? [])
 		for (let ip = site.allocationIp; ip <= site.callIp; ip++) blocked.add(ip);
 	for (const site of native.literalSwitches ?? [])
@@ -3668,6 +3681,7 @@ export function selectNativeFastPaths(
 					const kind = native.instructions[candidate]?.kind;
 					return (
 						unavailable(candidate) ||
+						!numberInputsPossible(candidate) ||
 						(!nativePlanKeepsOrdinaryLowering(native.instructions[candidate]) &&
 							!(
 								kind === "exact-builtin-input-kinds" &&
@@ -3742,9 +3756,9 @@ export function selectNativeFastPaths(
 					const kind = native.instructions[candidate]?.kind;
 					return (
 						numericLoopBlocked.has(candidate) ||
+						!numberInputsPossible(candidate) ||
 						// Operand kind proofs refine the double lowering; the region replaces it.
 						(!nativePlanKeepsOrdinaryLowering(native.instructions[candidate]) &&
-							kind !== "exact-operator-input-kinds" &&
 							kind !== "unsigned-arithmetic" &&
 							kind !== "exact-typed-array-element" &&
 							!(kind === "call" && codeUnitReads.has(candidate)) &&
@@ -3802,6 +3816,7 @@ export function selectNativeFastPaths(
 		// Fusion can keep a preceding RHS in its private temporary rather than the semantic local.
 		!native.specializations.some((region) => region.kind === "numeric-fusion"),
 		body,
+		numberInputsPossible,
 	);
 	return {
 		literalPropertyDefinitions,

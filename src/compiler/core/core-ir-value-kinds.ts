@@ -1554,6 +1554,24 @@ export function coreValueKindObservation(
 	return equal === undefined ? undefined : operator === "===" ? equal : !equal;
 }
 
+export function coreOperatorInputKindMasks(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+	kinds: CoreValueKindAnalysis,
+): CompilerOperatorInputKindMasks | undefined {
+	const opcode = fn.instructionOpcodeName(instruction);
+	const start = fn.kernel.instructionOperandStart(instruction);
+	const left = kinds.kindMask(fn.kernel.operandAt(start));
+	if (left === 0) return undefined;
+	if (opcode === "unary") return left === COMPILER_VALUE_KIND_TOP ? undefined : [left];
+	if (opcode !== "binary") return undefined;
+	const right = kinds.kindMask(fn.kernel.operandAt(start + 1));
+	if (right === 0) return undefined;
+	return left === COMPILER_VALUE_KIND_TOP && right === COMPILER_VALUE_KIND_TOP
+		? undefined
+		: [left, right];
+}
+
 export function coreExactOperatorInputKindMasks(
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,

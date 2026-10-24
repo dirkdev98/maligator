@@ -118,7 +118,7 @@ describe("certified primitive numeric lowering", () => {
 			(instruction, index) =>
 				instruction.opcode === "BINARY" &&
 				instruction.operator === "+" &&
-				native.instructions[index]?.kind === "exact-operator-input-kinds" &&
+				native.instructions[index]?.kind === "operator-input-kinds" &&
 				native.instructions[index].inputKindMasks[0] === COMPILER_VALUE_KIND_NUMBER &&
 				native.instructions[index].inputKindMasks[1] === COMPILER_VALUE_KIND_NUMBER,
 		);
@@ -127,7 +127,7 @@ describe("certified primitive numeric lowering", () => {
 			(instruction, index) =>
 				instruction.opcode === "UNARY" &&
 				instruction.operator === "+" &&
-				native.instructions[index]?.kind === "exact-operator-input-kinds" &&
+				native.instructions[index]?.kind === "operator-input-kinds" &&
 				native.instructions[index].inputKindMasks[0] ===
 					(COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_UNDEFINED),
 		);
@@ -195,7 +195,7 @@ describe("certified primitive numeric lowering", () => {
 					return (
 						instruction.opcode === "UNARY" &&
 						instruction.operator === "+" &&
-						plan?.kind === "exact-operator-input-kinds" &&
+						plan?.kind === "operator-input-kinds" &&
 						plan.inputKindMasks[0] ===
 							(COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_UNDEFINED)
 					);
@@ -238,14 +238,14 @@ describe("certified primitive numeric lowering", () => {
 			const index = image.native.functions.findIndex((fn) =>
 				fn.instructions.some(
 					(plan) =>
-						plan?.kind === "exact-operator-input-kinds" &&
+						plan?.kind === "operator-input-kinds" &&
 						plan.inputKindMasks[0] === COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE,
 				),
 			);
 			expect(index).toBeGreaterThanOrEqual(0);
 			const native = image.native.functions[index]!;
 			expect(native.instructions).toContainEqual({
-				kind: "exact-operator-input-kinds",
+				kind: "operator-input-kinds",
 				inputKindMasks: [
 					COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE,
 					COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE,
@@ -255,7 +255,7 @@ describe("certified primitive numeric lowering", () => {
 			expect(emitted).not.toBeNull();
 			const operatorIp = native.instructions.findIndex(
 				(plan) =>
-					plan?.kind === "exact-operator-input-kinds" &&
+					plan?.kind === "operator-input-kinds" &&
 					plan.inputKindMasks[0] === COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE,
 			);
 			expect(
@@ -280,8 +280,7 @@ describe("certified primitive numeric lowering", () => {
 			);
 			const index = image.native.functions.findIndex((fn) =>
 				fn.instructions.some(
-					(op) =>
-						op?.kind === "exact-operator-input-kinds" && op.inputKindMasks.length === 1,
+					(op) => op?.kind === "operator-input-kinds" && op.inputKindMasks.length === 1,
 				),
 			);
 			expect(index).toBeGreaterThanOrEqual(0);

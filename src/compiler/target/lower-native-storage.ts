@@ -447,12 +447,9 @@ function scalarStorageOwnership(
 			handlers[ip] !== undefined ||
 			["CATCH", "TRY_BEGIN", "TRY_END"].includes(op.opcode) ||
 			(plan !== undefined &&
-				![
-					"exact-operator-input-kinds",
-					"unsigned-arithmetic",
-					"call",
-					"construct",
-				].includes(plan.kind))
+				!["operator-input-kinds", "unsigned-arithmetic", "call", "construct"].includes(
+					plan.kind,
+				))
 		)
 			blocked.add(ip);
 	}
@@ -642,7 +639,7 @@ function pureScalarOperation(
 	const numericInput = (local: number, index: number) =>
 		numeric(local) ||
 		plan?.kind === "unsigned-arithmetic" ||
-		(plan?.kind === "exact-operator-input-kinds" &&
+		(plan?.kind === "operator-input-kinds" &&
 			plan.inputKindMasks[index] === COMPILER_VALUE_KIND_NUMBER);
 	switch (op.opcode) {
 		case "CREATE_NUMBER":
@@ -878,7 +875,7 @@ export function nativeVariantContract(
 	for (const { instructionIp, masks } of entry.operatorInputs ?? []) {
 		if (instructions[instructionIp]?.kind !== "unsigned-arithmetic")
 			instructions[instructionIp] = {
-				kind: "exact-operator-input-kinds",
+				kind: "operator-input-kinds",
 				inputKindMasks: masks,
 			};
 	}
@@ -928,15 +925,7 @@ function immediateOperatorResult(
 			fixed,
 			COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_BOOLEAN,
 		);
-	const masks =
-		plan?.kind === "exact-operator-input-kinds" &&
-		compilerOperatorInputKindsHaveExactNativeSemantics(
-			opcode,
-			op.operator,
-			plan.inputKindMasks,
-		)
-			? plan.inputKindMasks
-			: undefined;
+	const masks = plan?.kind === "operator-input-kinds" ? plan.inputKindMasks : undefined;
 	const kind = (local: number, index: number): number => {
 		switch (reps[local]) {
 			case "number":
@@ -1132,10 +1121,10 @@ function rootStorage(
 	};
 }
 
-// Ordinary call and exact-operator rendering touch operands only within their own instruction.
+// Calls and operators touch operands only within their own instruction.
 const INSTRUCTION_LOCAL_PLAN_KINDS: ReadonlySet<string> = new Set([
 	"call",
-	"exact-operator-input-kinds",
+	"operator-input-kinds",
 ]);
 
 /** Continuously rooted registers whose emitted storage accesses are their VM reads and writes. */
@@ -2028,7 +2017,6 @@ import {
 	COMPILER_VALUE_KIND_BOOLEAN,
 	compilerOperatorFixedResultKind,
 	compilerValueKindMaskIsSubset,
-	compilerOperatorInputKindsHaveExactNativeSemantics,
 	compilerNumericResultKind,
 	COMPILER_NUMERIC_UNARY_OPERATORS,
 	COMPILER_NUMERIC_BINARY_OPERATORS,
