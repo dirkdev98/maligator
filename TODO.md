@@ -229,6 +229,12 @@ The independent target boundary and current storage contract are recorded in
       publication to a probe's collecting slow path stays renderer-local: eager
       publication is always legal, and the deferral follows fixed render-form
       rules over plan facts rather than a planning choice.
+- [ ] Fold `Array.isArray` observations of primitive kind unions before lowering.
+      A `number | undefined` input retains its kind mask in native lowering but
+      still emits a proxy guard, builtin fallback, throw check, and root publication.
+      Consume the fact in Core observation folding while preserving argument
+      evaluation and builtin identity requirements; unknown and Object inputs must
+      retain revoked-proxy behavior.
 - [ ] Shrink the largest inline expansions in generated code. Uniform tagged
       field slots and the one-compare Number decode cut the self-compiler's text
       from 55.0 to 49.9 MB; the inline static load probe is now about 19
@@ -581,15 +587,9 @@ iterator cursor is not, by itself, permission to delete its language object.
 - [ ] Let integer loop regions hold a numeric fusion whose ends are both inside. They
       decline every fusion, so `count = (count + 1) | 0` over a boxed count stepping
       by a captured value takes 486 ms for 40M iterations against Node's 12; allowing
-      contained fusions made it 23 ms. That change made a profiled helper in
-      `tests/core-local-capture-arguments.test.ts` (loop-carried values) fail
-      deserialization. Fast-path selection admits loop and record regions only in
-      functions without `profileSiteIds`, and the compiler artifact codec drops
-      profile sites, so validating a round-tripped profiled image selects regions
-      its stored plans never had. Any region that becomes admissible in such a
-      function hits the same mismatch. Persist profile sites (or a profiled flag)
-      in the artifact, or make selection independent of them, before allowing
-      fusions again.
+      contained fusions made it 23 ms. Admit contained fusions with storage and
+      profile plans validated together; compiler artifacts now preserve profile
+      sites and instruction-site maps across restoration.
 - [ ] Widen numeric loop regions beyond plain Array element and record sums.
       Index and for-of loops over Arrays now keep their sums in f64 locals,
       including fields of record elements (`sx += p.x` 5.7 to 1.7 ns per element,
