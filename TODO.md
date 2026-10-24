@@ -229,12 +229,6 @@ The independent target boundary and current storage contract are recorded in
       publication to a probe's collecting slow path stays renderer-local: eager
       publication is always legal, and the deferral follows fixed render-form
       rules over plan facts rather than a planning choice.
-- [ ] Fold kind-determined Number predicates before Core control-flow cleanup.
-      `Number.isFinite` on String/null, `Number.isInteger` on Symbol/Boolean,
-      and `Number.isSafeInteger` on BigInt/undefined already select non-number
-      native plans, but still emit `result = false; if (result)` and the dead
-      branch's coercive operations. Preserve argument effects and mutable
-      builtin identity fallbacks when moving these constants upstream.
 - [ ] Normalize primitive conversion calls from semantic kind unions. `String`
       and `Number` calls on `number | undefined` still use the builtin dispatcher.
       Retain extra argument effects and the distinct Symbol, BigInt, omitted-argument,

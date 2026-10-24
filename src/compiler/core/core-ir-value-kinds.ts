@@ -30,6 +30,7 @@ import type {
 	CompilerOperatorInputKindMasks,
 	CompilerValueKindMask,
 } from "../shared/compiler-value-kinds.ts";
+import type { CompilerIntegerRange } from "../shared/integer-range.ts";
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
 import { coreClosedGlobalSlotMembership } from "./core-compilation.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
@@ -1496,7 +1497,10 @@ export function coreValueKindObservation(
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
 	kindMask: (value: CoreValueId) => CompilerValueKindMask,
-	nonNaN?: (value: CoreValueId, consumer: CoreInstructionId) => boolean,
+	integerRange?: (
+		value: CoreValueId,
+		consumer: CoreInstructionId,
+	) => CompilerIntegerRange | undefined,
 ): boolean | undefined {
 	if (
 		fn.instructionKind(instruction) !== "operation" ||
@@ -1533,6 +1537,26 @@ export function coreValueKindObservation(
 	if (opcode === "callKnown") {
 		const attributes = fn.instructionAttributes(instruction);
 		if (attributes.construct || attributes.argumentMode !== undefined) return undefined;
+		switch (attributes.operation) {
+			case "Number.isNaN":
+			case "Number.isFinite":
+			case "Number.isInteger":
+			case "Number.isSafeInteger": {
+				const input = operand(1);
+				const mask =
+					input === undefined ? COMPILER_VALUE_KIND_UNDEFINED : kindMask(input);
+				if (
+					compilerValueKindMaskIsSubset(
+						mask,
+						COMPILER_VALUE_KIND_TOP & ~COMPILER_VALUE_KIND_NUMBER,
+					)
+				)
+					return false;
+				return input !== undefined && integerRange?.(input, instruction) !== undefined
+					? attributes.operation !== "Number.isNaN"
+					: undefined;
+			}
+		}
 		if (attributes.operation === "Array.isArray") {
 			const input = operand(1);
 			const mask = input === undefined ? COMPILER_VALUE_KIND_UNDEFINED : kindMask(input);
@@ -1583,7 +1607,7 @@ export function coreValueKindObservation(
 				kindMask(left),
 				COMPILER_VALUE_KIND_TOP & ~COMPILER_VALUE_KIND_NUMBER,
 			) ||
-				nonNaN?.(left, instruction) === true)
+				integerRange?.(left, instruction) !== undefined)
 		)
 			return operator === "==" || operator === "===";
 		if (distinctFreshAllocations(fn, left, right))

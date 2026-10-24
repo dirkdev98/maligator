@@ -97,12 +97,16 @@ Exact builtin calls consume the catalog's primitive result kinds as well as thei
 existing identity proof. Scalar Date and Object helpers capture and check throwing
 results before conversion. Clock reads and mutable collection queries retain
 their effects; primitive result kinds do not admit deterministic call reuse.
-Number predicates persist a boxed, non-number, int32 or Number kernel mode per
+Remaining Number predicates persist a boxed, non-number, int32 or Number kernel mode per
 native entry, consuming decoded constants, physical representations and exact
 builtin argument masks. Int32 predicates produce constant Booleans; Number kernels
 preserve NaN, infinity and signed-zero semantics. Ignored argument producers still
 execute, and rendering preserves each selected mode's original polling behavior.
 Artifact validation independently rederives ordinary and typed-entry choices.
+Core folds all four Number predicates from non-Number kind unions and safe integer
+range proofs before control-flow cleanup, removing impossible branches from both
+backend images. Argument effects remain observable, and a Number kind alone does
+not prove finiteness, integrality, safety, or the absence of NaN.
 Core folds `Array.isArray` observations when local or interprocedural kind facts
 exclude Object, so both backends receive a constant Boolean without call, throw,
 or root obligations for the predicate. Argument producers retain their effects.

@@ -24,6 +24,7 @@ import {
 	authorityFallback,
 	normalizeFactRequirements,
 } from "../shared/fact-implication.ts";
+import { COMPILER_INT32_RANGE } from "../shared/integer-range.ts";
 import {
 	coreInitializedCapturedReadMembership,
 	coreInitializedGlobalSlotMembership,
@@ -1253,14 +1254,21 @@ const foldValueKindObservations: CoreFunctionPass = {
 			readonly result: boolean;
 		}> = [];
 		const kindMask = (value: CoreValueId) => kinds.kindMask(value);
-		const nonNaN = (value: CoreValueId, consumer: CoreInstructionId) =>
-			kinds.exactScalar(value) === "int32" ||
-			context
-				.analysis(CORE_LOOP_INDUCTION_ANALYSIS)
-				.range(value, fn.instructionBlock(consumer)) !== undefined;
+		const integerRange = (value: CoreValueId, consumer: CoreInstructionId) =>
+			kinds.exactScalar(value) === "int32"
+				? COMPILER_INT32_RANGE
+				: context
+						.analysis(CORE_LOOP_INDUCTION_ANALYSIS)
+						.range(value, fn.instructionBlock(consumer));
 		for (const instruction of fn.instructionIds()) {
 			if (fn.instructionKind(instruction) !== "operation") continue;
-			const result = coreValueKindObservation(program, fn, instruction, kindMask, nonNaN);
+			const result = coreValueKindObservation(
+				program,
+				fn,
+				instruction,
+				kindMask,
+				integerRange,
+			);
 			if (result !== undefined) replacements.push({ instruction, result });
 		}
 		if (replacements.length === 0) return undefined;
