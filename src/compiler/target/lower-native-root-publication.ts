@@ -43,10 +43,9 @@ export function nativePrivateCallResultIps(
 		const op = fn.instructions[instructionIp];
 		if (op?.opcode !== "CALL" || conflicts.has(instructionIp)) continue;
 		const call = native.instructions[instructionIp];
-		// Selected script transports assign only the final value, including guard misses.
 		if (
-			call === undefined ||
-			(call.kind === "call" &&
+			nativePlanHasFinalValueStorage(op, call) ||
+			(call?.kind === "call" &&
 				native.registerRepresentations[op.dst] === "boxed" &&
 				transportedCalls.has(instructionIp) &&
 				(call.directFunctionIndex !== undefined ||

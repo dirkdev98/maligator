@@ -237,6 +237,36 @@ function consumeViewRead(holder) {
 }
 globalThis.consumeViewRead = consumeViewRead;
 
+function replaceBoolean(holder) {
+	const method = Boolean;
+	let value = holder.value;
+	holder.value = null;
+	try {
+		value = method(value);
+		gc();
+		return [holder.marker, value];
+	} catch (error) {
+		gc();
+		return [value.marker, error.marker];
+	}
+}
+globalThis.replaceBoolean = replaceBoolean;
+
+function replaceFinite(holder) {
+	const method = Number.isFinite;
+	let value = holder.value;
+	holder.value = null;
+	try {
+		value = method(value);
+		gc();
+		return [holder.marker, value];
+	} catch (error) {
+		gc();
+		return [value.marker, error.marker];
+	}
+}
+globalThis.replaceFinite = replaceFinite;
+
 function view() {
 	return new DataView(new Uint8Array([0x34, 0x12]).buffer);
 }
@@ -325,6 +355,40 @@ for (const [name, owner, key, expected] of [
 			throw { marker: "thrown" };
 		};
 		invokeConsumer(name, "thrown");
+	} finally {
+		owner[key] = original;
+	}
+}
+
+function invokeReplacement(name, expected) {
+	const id = ++marker;
+	const holder = { marker: id, value: { marker: id } };
+	const result = globalThis[name](holder);
+	const actual = result[1];
+	if (
+		holder.value !== null ||
+		result[0] !== id ||
+		(actual && typeof actual === "object" ? actual.marker : actual) !== expected
+	)
+		throw new Error("lost replacement in " + name);
+}
+for (const [name, owner, key, expected] of [
+	["replaceBoolean", globalThis, "Boolean", true],
+	["replaceFinite", Number, "isFinite", false],
+]) {
+	const original = owner[key];
+	try {
+		invokeReplacement(name, expected);
+		owner[key] = function () {
+			gc();
+			return { marker: "returned" };
+		};
+		invokeReplacement(name, "returned");
+		owner[key] = function () {
+			gc();
+			throw { marker: "thrown" };
+		};
+		invokeReplacement(name, "thrown");
 	} finally {
 		owner[key] = original;
 	}

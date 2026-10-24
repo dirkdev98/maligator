@@ -461,7 +461,7 @@ describe("private-root publication state at collecting edges", () => {
 	});
 
 	it.each(["callee", "receiver", "argument"] as const)(
-		"publishes charCodeAt's reused %s before binding its rooted destination",
+		"publishes charCodeAt's reused %s on the collecting fallback and outgoing poll",
 		(role) => {
 			const reused: BytecodeInstruction = {
 				opcode: "CALL",
@@ -476,16 +476,17 @@ describe("private-root publication state at collecting edges", () => {
 			});
 			const publication = privatePublication(source);
 			const slot = publication.slice(0, publication.indexOf(" ="));
-			const propertyMiss = source.indexOf("mal_vm_op_load_property_ic_static_miss");
-			const alias = source.indexOf(`#define r${retained} (${slot})`, propertyMiss);
-			expect(alias).toBeGreaterThan(propertyMiss);
-			expect(source.lastIndexOf(`\n    ${publication}`, alias)).toBeGreaterThan(
-				propertyMiss,
-			);
+			const miss = source.indexOf("mal_builtin_string_char_code_at_direct(vm");
+			const fallback = source.lastIndexOf("} else {", miss);
+			expect(fallback).toBeGreaterThan(propertyMissPath(source, 0).end);
+			expect(source).not.toContain(`#define r${retained} (${slot})`);
+			expect(source).not.toContain(`__private_r${retained} = ${slot};`);
+			expect(source.slice(fallback, miss)).toContain(publication);
+			expect(source).toContain("mal_builtin_string_char_code_at_try(");
+			const after = afterCallResult(source, 1);
 			expect(
-				source.indexOf("mal_builtin_string_char_code_at_direct(vm", alias),
-			).toBeGreaterThan(alias);
-			expect(source).not.toContain("mal_builtin_string_char_code_at_try(");
+				source.slice(after, source.indexOf("mal_gc_safepoint(vm)", after)),
+			).toContain(publication);
 		},
 	);
 
@@ -658,7 +659,7 @@ describe("private-root publication state at collecting edges", () => {
 			(["callee", "receiver", "argument"] as const).map((role) => ({ operation, role })),
 		),
 	)(
-		"publishes $operation's reused $role before aliasing the result",
+		"keeps $operation's reused $role private until the collecting fallback or poll",
 		({ operation, role }) => {
 			const reused: BytecodeInstruction = {
 				opcode: "CALL",
@@ -674,9 +675,19 @@ describe("private-root publication state at collecting edges", () => {
 			const publication = privatePublication(source);
 			const slot = publication.slice(0, publication.indexOf(" ="));
 			const propertyMiss = propertyMissPath(source, 0).end;
-			const alias = source.indexOf(`#define r${retained} (${slot})`, propertyMiss);
-			expect(alias).toBeGreaterThan(propertyMiss);
-			expect(hasIncomingCopy(source.slice(propertyMiss, alias), publication)).toBe(true);
+			const miss = source.indexOf("MalCompletion call_result_1", propertyMiss);
+			const fallback = source.lastIndexOf("} else {", miss);
+			expect(fallback).toBeGreaterThan(propertyMiss);
+			expect(source).not.toContain(`#define r${retained} (${slot})`);
+			expect(source).not.toContain(`__private_r${retained} = ${slot};`);
+			expect(hasIncomingCopy(source.slice(propertyMiss, fallback), publication)).toBe(
+				false,
+			);
+			expect(source.slice(fallback, miss)).toContain(publication);
+			const after = afterCallResult(source, 1);
+			expect(
+				source.slice(after, source.indexOf("mal_gc_safepoint(vm)", after)),
+			).toContain(publication);
 		},
 	);
 

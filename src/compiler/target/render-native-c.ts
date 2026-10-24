@@ -1215,8 +1215,6 @@ export function cF64Literal(value: number): string {
 	return value.toExponential();
 }
 
-const THROWING_UNARY_OPERATORS = new Set(["+", "tonumeric", "tostring"]);
-
 /**
  * The relational comparisons. When BOTH operands are boxed (no static proof
  * either is a number) the backend still speculates a numeric compare for these —
@@ -10944,6 +10942,10 @@ function emitInstruction(
 					storeBoolean(instruction.dst, context.constantBoolean ? "true" : "false"),
 				];
 			const { dst, left, right, operator } = instruction;
+			const effects = nativeInstructionEffects(instruction, context.facts);
+			const canThrow =
+				binaryOpCanThrow(operator) && (effects.throwing || effects.reentry);
+			if (!canThrow) elideFramePosition();
 			const rangedComparison = compilerIntegerRangeComparison(
 				operator,
 				instructionInputIntegerRange(context.facts, left),
@@ -11102,7 +11104,7 @@ function emitInstruction(
 					dstIsBool
 						? `  r${dst} = mal_value_to_boolean(${profileCall("binary", reentrantValue(`mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`))});`
 						: `  r${dst} = ${profileCall("binary", reentrantValue(`mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`))};`,
-					`  ${throwCheck()}`,
+					...(canThrow ? [`  ${throwCheck()}`] : []),
 					`}`,
 				];
 			}
@@ -11116,7 +11118,7 @@ function emitInstruction(
 				return [
 					...(fusion === undefined ? [] : [`__nf_${fusion.id}_ok = false;`]),
 					`r${dst} = ${profileCall("string", reentrantValue(`mal_vm_concat_strings_known(vm, mal_value_to_string(${boxed(left)}), mal_value_to_string(${boxed(right)}))`))};`,
-					throwCheck(),
+					...(canThrow ? [throwCheck()] : []),
 				];
 			}
 			if (
@@ -11127,7 +11129,7 @@ function emitInstruction(
 				return [
 					...(fusion === undefined ? [] : [`__nf_${fusion.id}_ok = false;`]),
 					`r${dst} = ${profileCall("string", reentrantValue(`mal_vm_concat_primitive_strings(vm, ${boxed(left)}, ${boxed(right)})`))};`,
-					throwCheck(),
+					...(canThrow ? [throwCheck()] : []),
 				];
 			}
 			if (fusion?.role === "link") {
@@ -11159,7 +11161,7 @@ function emitInstruction(
 					`  if (__nf_${fusion.id}_ok) r${fusion.first.dst} = ${profileCall("boxing", `mal_ops_number_value(${value})`)};`,
 					`  __nf_${fusion.id}_ok = false;`,
 					`  r${dst} = ${slow};`,
-					`  ${throwCheck()}`,
+					...(canThrow ? [`  ${throwCheck()}`] : []),
 					`}`,
 				];
 			}
@@ -11185,7 +11187,7 @@ function emitInstruction(
 						`  __nf_${fusion.id}_value = ${nativeExpr};`,
 						`} else {`,
 						`  r${dst} = ${slow};`,
-						`  ${throwCheck()}`,
+						...(canThrow ? [`  ${throwCheck()}`] : []),
 						`}`,
 					];
 				}
@@ -11241,7 +11243,7 @@ function emitInstruction(
 							reps[dst] === "boolean"
 								? `  r${dst} = mal_value_to_boolean(${slow});`
 								: `  r${dst} = ${slow};`,
-							...(binaryOpCanThrow(operator) ? [`  ${throwCheck()}`] : []),
+							...(canThrow ? [`  ${throwCheck()}`] : []),
 							`}`,
 						];
 					}
@@ -11290,7 +11292,7 @@ function emitInstruction(
 										`  if (__nf_${fusion.id}_ok) r${first.dst} = ${profileCall("boxing", `mal_ops_number_value(__nf_${fusion.id}_value)`)};`,
 									]),
 							`  MalValue __binary_result_${ip} = ${slow};`,
-							`  ${throwCheck()}`,
+							...(canThrow ? [`  ${throwCheck()}`] : []),
 							`  r${dst} = ${callValue(dst, `__binary_result_${ip}`)};`,
 							`}`,
 						];
@@ -11304,7 +11306,7 @@ function emitInstruction(
 				const result = `__binary_result_${ip}`;
 				const fallback = [
 					`MalValue ${result} = ${profileCall("binary", reentrantValue(`mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`))};`,
-					throwCheck(),
+					...(canThrow ? [throwCheck()] : []),
 					`r${dst} = ${reps[dst] === "int32" ? `mal_ops_number_value_to_i32(${result})` : `mal_ops_number_as_f64(${result})`};`,
 				];
 				if (!numbersPossible) return fallback;
@@ -11392,8 +11394,6 @@ function emitInstruction(
 					),
 				];
 			}
-			// Retain the existing epilogue resource even when an exact comparison emits no throw check.
-			if (handlerIp === undefined) nativeBodyReference(resources, "throwExit");
 			const numericOf = (r: number): string =>
 				reps[r] === "int32"
 					? `(f64) r${r}`
@@ -11547,7 +11547,7 @@ function emitInstruction(
 							: `mal_ops_strict_equal_string_constant(${boxed(constantRegister === right ? left : right)}, ${boxed(constantRegister)}, ${constantLength})`;
 					return [storeBoolean(dst, operator === "!==" ? `!${equal}` : equal)];
 				}
-				const completionCheck = binaryOpCanThrow(operator) ? throwCheck() : undefined;
+				const completionCheck = canThrow ? throwCheck() : undefined;
 				const compareCheck = completionCheck === undefined ? [] : [completionCheck];
 				// Speculate a numeric compare when there is a numeric prior: always in
 				// the mixed case (one operand proven number), and in the both-boxed
@@ -11563,7 +11563,7 @@ function emitInstruction(
 						elideFramePosition();
 						return [storeBoolean(dst, strict)];
 					}
-					if (binaryOpCanThrow(operator)) {
+					if (canThrow) {
 						return [
 							`if (${numberGuard}) {`,
 							dstIsBool
@@ -11649,7 +11649,7 @@ function emitInstruction(
 						elideFramePosition();
 						return [`r${dst} = ${fast};`];
 					}
-					if (binaryOpCanThrow(operator)) {
+					if (canThrow) {
 						return [
 							`if (${numberGuard}) {`,
 							`  r${dst} = ${fast};`,
@@ -11663,12 +11663,8 @@ function emitInstruction(
 					return [`r${dst} = ${numberGuard} ? ${fast} : ${slow()};`];
 				}
 			}
-			// Fully general fallback: `**`, `in`, `instanceof`, or a string/bigint
-			// operand. Any non-comparison op can throw (BigInt domain errors), so
-			// propagate the completion — previously only `in`/`instanceof` did, which
-			// silently swallowed BigInt TypeErrors/RangeErrors here.
 			const lowered = [`r${dst} = ${slow()};`];
-			if (binaryOpCanThrow(operator)) {
+			if (canThrow) {
 				lowered.push(throwCheck());
 			}
 			return lowered;
@@ -11728,6 +11724,9 @@ function emitInstruction(
 				const text = `mal_value_from_string(mal_intrinsic_hot_ascii(vm, ${value} ? MAL_HOT_KEY_TRUE : MAL_HOT_KEY_FALSE))`;
 				return [`r${dst} = ${callValue(dst, text)};`, poll()];
 			}
+			const effects = nativeInstructionEffects(instruction, context.facts);
+			const canThrow = effects.throwing || effects.reentry;
+			if (!canThrow) elideFramePosition();
 			if (
 				context.facts?.inputKindMasks !== undefined &&
 				context.facts.inputKindMasks.length === 1 &&
@@ -11790,16 +11789,14 @@ function emitInstruction(
 				if (expression !== null && reps[dst] !== "boolean" && reps[dst] !== "int32")
 					return [storeNumber(dst, expression)];
 			}
-			// A number-represented ToNumeric result is proven not to be a BigInt.
-			if ((operator === "+" || operator === "tonumeric") && reps[dst] === "number") {
+			if (isNumericRep(reps[dst]!)) {
 				const value = `unary_number_${ip}`;
 				return [
 					`MalValue ${value} = ${profileCall("unary", `mal_vm_unary_op_fast(vm, ${emitUnaryOperator(operator)}, ${boxed(src)})`)};`,
-					throwCheck(),
+					...(canThrow ? [throwCheck()] : []),
 					`r${dst} = ${callValue(dst, value)};`,
 				];
 			}
-			if (isNumericRep(reps[dst]!)) return null;
 			if (operator === "!") {
 				const negated = `!(${truthy(src)})`;
 				return [
@@ -11815,7 +11812,7 @@ function emitInstruction(
 			const lowered = [
 				`r${dst} = ${profileCall("unary", `mal_vm_unary_op_fast(vm, ${emitUnaryOperator(operator)}, ${boxed(src)})`)};`,
 			];
-			if (THROWING_UNARY_OPERATORS.has(operator)) {
+			if (canThrow) {
 				lowered.push(throwCheck());
 			}
 			return lowered;

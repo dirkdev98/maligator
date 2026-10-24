@@ -27,10 +27,66 @@ import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
+import { lowerNativeStorage } from "../src/compiler/target/lower-native-storage.ts";
 import { nativeInstructionEffects } from "../src/compiler/target/program-image.ts";
+import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
+import { positionTableEntries } from "../src/compiler/target/runtime-image.ts";
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 describe("independent native instruction facts", () => {
+	it.each([
+		["binary", "(flag?!!input:null)<undefined", "BINARY"],
+		["unary", "+(flag?!!input:null)", "UNARY"],
+		["integer unary", "~(flag?!!input:null)", "UNARY"],
+		["negation", "-(flag?!!input:null)", "UNARY"],
+	] as const)(
+		"uses %s completion effects independently of operand kinds",
+		(_name, expression, opcode) => {
+			const out = inspectStaticValueFunction(
+				`function compute(input,flag){return ${expression};}globalThis.compute=compute;`,
+				"compute",
+			);
+			const ip = out.native.body.instructions.findLastIndex(
+				(op) => op.opcode === opcode && op.operator !== "!",
+			);
+			expect(out.native.facts?.[ip]?.effectMask).toBe(0);
+			for (const effectMask of [
+				0,
+				INSTRUCTION_MAY_THROW,
+				INSTRUCTION_CALLS_USER_CODE,
+				undefined,
+			]) {
+				const facts = out.native.facts!.with(
+					ip,
+					effectMask === undefined ? undefined : { effectMask },
+				);
+				const image = lowerNativeStorage({
+					...out.image,
+					native: {
+						...out.image.native,
+						functions: out.image.native.functions.with(out.native.functionIndex, {
+							...out.native,
+							facts,
+						}),
+					},
+				});
+				const restored = deserializeCompilerArtifact(serializeCompilerArtifact(image));
+				const native = restored.native.functions[out.native.functionIndex]!;
+				const c = emitCompiledFunction(
+					native,
+					native.functionIndex,
+					"",
+					positionTableEntries(restored.runtime.functions[native.functionIndex]!),
+				)!.source;
+				expect(c).toContain(
+					opcode === "BINARY" ? "mal_vm_binary_op(" : "mal_vm_unary_op_fast(",
+				);
+				expect(c.includes("MAL_THREW()")).toBe(effectMask !== 0);
+				expect(c.includes("MAL_FRAME_POS(")).toBe(effectMask !== 0);
+			}
+		},
+	);
+
 	it.each(["&", "|", "^", "<<", ">>", ">>>"])(
 		"retains int32 input precision through floating joins for %s without removing right coercion",
 		(operator) => {
