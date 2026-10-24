@@ -243,6 +243,8 @@ typedef struct MalNodeHttpRequestState {
     usize active_write_bytes;
     u64 next_write_token;
     u64 ready_write_token;
+    // A write acknowledgement waits here while another ready kind holds the queue slot.
+    bool write_ready_pending;
     MalNodeHttpRequestBody *body_head;
     MalNodeHttpRequestBody *body_tail;
     bool request_transport_complete;
@@ -610,6 +612,13 @@ static void http_request_maybe_complete(MalNodeHttpRequestState *request) {
     if (request->response_terminal_delivered
         && request->request_terminal_delivered) {
         http_request_queue_completion(request);
+    }
+}
+
+// The pending write gates the response's next segment, including its final one.
+static void http_request_schedule_write(MalNodeHttpRequestState *request) {
+    if (request->ready_kind == HTTP_REQUEST_READY_NONE && request->write_ready_pending) {
+        (void) http_request_enqueue_ready(request, HTTP_REQUEST_READY_WRITE);
     }
 }
 
@@ -3037,7 +3046,8 @@ static MalValue http_client_end(
 static void http_response_write_ready(void *data, u64 token) {
     MalNodeHttpRequestState *state = data;
     state->ready_write_token = token;
-    (void) http_request_enqueue_ready(state, HTTP_REQUEST_READY_WRITE);
+    state->write_ready_pending = true;
+    http_request_schedule_write(state);
 }
 
 static bool http_response_content_length(
@@ -3377,6 +3387,7 @@ static void http_request_dispatch_read(
         http_request_maybe_complete(state);
     }
     if (vm->completion.kind != MAL_COMPLETION_THROW) {
+        http_request_schedule_write(state);
         http_request_schedule_read(state);
     }
 }
@@ -4410,6 +4421,7 @@ bool mal_node_http_drain(MalVm *vm) {
             } else {
                 http_request_dispatch(vm, request);
                 if (vm->completion.kind != MAL_COMPLETION_THROW) {
+                    http_request_schedule_write(request);
                     http_request_schedule_response(request);
                     http_request_schedule_read(request);
                 }
@@ -4423,9 +4435,11 @@ bool mal_node_http_drain(MalVm *vm) {
 #if MAL_REALMS
             mal_realm_switch(vm, saved_realm);
 #endif
+            http_request_schedule_write(request);
             http_request_schedule_response(request);
             http_request_schedule_read(request);
         } else if (kind == HTTP_REQUEST_READY_WRITE) {
+            request->write_ready_pending = false;
 #if MAL_REALMS
             MalRealm *saved_realm = vm->current_realm;
             mal_realm_switch(vm, request->realm);
@@ -4434,6 +4448,7 @@ bool mal_node_http_drain(MalVm *vm) {
 #if MAL_REALMS
             mal_realm_switch(vm, saved_realm);
 #endif
+            http_request_schedule_write(request);
             http_request_schedule_response(request);
             http_request_schedule_read(request);
             if (request->finish_pending
@@ -4450,6 +4465,7 @@ bool mal_node_http_drain(MalVm *vm) {
 #if MAL_REALMS
             mal_realm_switch(vm, saved_realm);
 #endif
+            http_request_schedule_write(request);
             http_request_schedule_read(request);
         } else if (kind == HTTP_REQUEST_READY_COMPLETION) {
             request->finish_pending = false;
