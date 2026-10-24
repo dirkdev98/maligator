@@ -3214,12 +3214,11 @@ describe("proven Boolean text conversion", () => {
 		expect(result.c.source).not.toContain("mal_vm_unary_op");
 		expect(result.core.some((operation) => operation.opcode === "callKnown")).toBe(false);
 		const decoded = deserializeCompilerArtifact(serializeCompilerArtifact(result.image));
-		expect(
-			decoded.native.functions.flatMap((fn) => fn.instructions ?? []),
-		).toContainEqual({
-			kind: "operator-input-kinds",
-			inputKindMasks: [COMPILER_VALUE_KIND_BOOLEAN],
-		});
+		expect(decoded.native.functions.flatMap((fn) => fn.facts ?? [])).toContainEqual(
+			expect.objectContaining({
+				inputKindMasks: [COMPILER_VALUE_KIND_BOOLEAN],
+			}),
+		);
 	});
 	it.each(["`${x ? true : 7}`", "`${x}`", "x.toString()", "String(x)"])(
 		"preserves generic conversion for %s",

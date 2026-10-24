@@ -1,6 +1,6 @@
 import type { DirectBuiltinOperationId } from "./builtin-registry.ts";
 import type { KnownBuiltinCall } from "./compiler-facts.ts";
-import type { CompilerValueKindMask } from "./compiler-value-kinds.ts";
+import type { InstructionFacts } from "./instruction-facts.ts";
 import type { KnownBuiltinError } from "./known-builtin-errors.ts";
 import type { KnownArgumentMode } from "./known-operations.ts";
 import type { StaticDataQueryKind } from "./static-data-query.ts";
@@ -102,7 +102,10 @@ export interface CompilerNumericSortCallback {
 	readonly entryId: number;
 }
 
-export type CompilerInstruction = CompilerOperation & { readonly sourceCall?: number };
+export type CompilerInstruction = CompilerOperation & {
+	readonly sourceCall?: number;
+	readonly facts?: InstructionFacts;
+};
 
 type CompilerOperation =
 	| {
@@ -509,7 +512,6 @@ type CompilerOperation =
 	  }
 	| {
 			type: "callKnown";
-			exactInputKindMasks?: ReadonlyArray<CompilerValueKindMask>;
 			registers: [number, number, ...Array<number>];
 			operation: string;
 			construct?: true;
@@ -1168,7 +1170,6 @@ type CompilerOperation =
 			registers: [number, number, number];
 
 			unsignedArithmetic?: true;
-			inputKindMasks?: readonly [CompilerValueKindMask, CompilerValueKindMask];
 
 			operator:
 				| "+"
@@ -1196,7 +1197,6 @@ type CompilerOperation =
 	  }
 	| {
 			type: "unary";
-			inputKindMasks?: readonly [CompilerValueKindMask];
 
 			// [destination, operand]
 			registers: [number, number];

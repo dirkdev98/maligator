@@ -64,12 +64,13 @@ describe("catalogued primitive builtin result storage", () => {
 		const op = out.native.body.instructions[ip]!;
 		if (op.opcode !== "CALL_KNOWN") throw new Error("Missing predicate");
 		expect(out.native.registerRepresentations[op.arguments[0]!]).toBe("boxed");
-		const instructions = [...out.native.instructions];
-		instructions[ip] = {
-			kind: "exact-builtin-input-kinds",
+		const facts = [
+			...(out.native.facts ?? new Array(out.native.instructions.length).fill(undefined)),
+		];
+		facts[ip] = {
 			inputKindMasks: [COMPILER_VALUE_KIND_TOP, COMPILER_VALUE_KIND_NUMBER],
 		};
-		const native = lowerNativeFunctionStorage({ ...out.native, instructions });
+		const native = lowerNativeFunctionStorage({ ...out.native, facts });
 		expect(native.storage!.numberPredicates[0]!.mode).toBe("number");
 		const image = {
 			...out.image,
@@ -81,11 +82,10 @@ describe("catalogued primitive builtin result storage", () => {
 			},
 		};
 		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
-		instructions[ip] = {
-			kind: "exact-builtin-input-kinds",
+		facts[ip] = {
 			inputKindMasks: [COMPILER_VALUE_KIND_TOP, COMPILER_VALUE_KIND_TOP],
 		};
-		expect(() => validateNativeStorage({ ...native, instructions })).toThrow(
+		expect(() => validateNativeStorage({ ...native, facts })).toThrow(
 			/invalid or stale storage plan/,
 		);
 	});
@@ -181,14 +181,23 @@ describe("catalogued primitive builtin result storage", () => {
 		if (op?.opcode !== "CALL_KNOWN") throw new Error("Missing Number call");
 		const storageValues = [...out.native.storageValues!];
 		if (kind === "synthetic") storageValues[op.dst] = -1;
-		else if (kind === "second writer")
+		else if (kind === "second writer") {
 			instructions.push({ opcode: "MOVE", dst: op.dst, src: op.dst });
-		else if (kind === "input alias") instructions[ip] = { ...op, arguments: [op.dst] };
+		} else if (kind === "input alias") instructions[ip] = { ...op, arguments: [op.dst] };
 		else if (kind === "construct") instructions[ip] = { ...op, construct: true };
 		else if (kind === "spread") instructions[ip] = { ...op, argumentMode: "array" };
 		else if (kind === "heap result") instructions[ip] = { ...op, operation: "String" };
 		const native = {
 			...out.native,
+			facts: [
+				...out.native.facts!,
+				...Array.from(
+					{ length: instructions.length - out.native.facts!.length },
+					() => undefined,
+				),
+			].map((fact, index) =>
+				index === ip && instructions[ip] !== op ? undefined : fact,
+			),
 			storageValues: kind === "raw storage" ? undefined : storageValues,
 			body: { ...out.native.body, instructions },
 		};

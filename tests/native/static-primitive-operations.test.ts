@@ -47,11 +47,11 @@ console.log(used(long,long),discarded(long,long));
 					functions: pair.programImage.native.functions.map((fn) => {
 						const inputs = new Set<number>();
 						for (const [ip, op] of fn.body.instructions.entries()) {
-							const proof = fn.instructions[ip];
+							const proof = fn.facts?.[ip];
 							if (
 								op.opcode !== "BINARY" ||
 								op.operator !== "+" ||
-								proof?.kind !== "operator-input-kinds" ||
+								proof?.inputKindMasks === undefined ||
 								!proof.inputKindMasks.every((mask) => mask === 16)
 							)
 								continue;
@@ -82,7 +82,7 @@ console.log(used(long,long),discarded(long,long));
 						(op, ip) =>
 							op.opcode === "BINARY" &&
 							op.operator === "+" &&
-							fn.instructions[ip]?.kind === "operator-input-kinds",
+							fn.facts?.[ip]?.inputKindMasks !== undefined,
 					)
 				)
 					continue;

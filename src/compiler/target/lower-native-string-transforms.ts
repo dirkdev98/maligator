@@ -121,19 +121,16 @@ export function selectNativeStringTransform(
 	)
 		return undefined;
 	const receiver = decodeVmValueOperand(op.thisValue);
-	const proof = native.instructions[instructionIp];
+	const masks = native.facts?.[instructionIp]?.inputKindMasks;
 	const site: NativeStringTransformSite = {
 		instructionIp,
 		receiver:
 			receiver.kind === "string" ||
 			(receiver.kind === "register" &&
 				native.registerRepresentations[receiver.register] === "string") ||
-			(proof?.kind === "exact-builtin-input-kinds" &&
-				compilerBuiltinInputKindsAreValid(
-					proof.inputKindMasks,
-					op.arguments.length + 1,
-				) &&
-				proof.inputKindMasks[0] === COMPILER_VALUE_KIND_STRING)
+			(masks !== undefined &&
+				compilerBuiltinInputKindsAreValid(masks, op.arguments.length + 1) &&
+				masks[0] === COMPILER_VALUE_KIND_STRING)
 				? "string"
 				: "guarded",
 		fallback: "original-call",

@@ -367,14 +367,15 @@ export function connectCoreNativeEntries(
 				guardedCalls,
 			);
 			const baselineNumbers = new Set(
-				(baseline.operatorInputs ?? [])
+				(baseline.instructionFacts ?? [])
 					.filter((site) =>
 						site.masks.every((mask) => mask === COMPILER_VALUE_KIND_NUMBER),
 					)
 					.map((site) => site.instruction),
 			);
-			const gain = (candidate.operatorInputs ?? []).some(
+			const gain = (candidate.instructionFacts ?? []).some(
 				(site) =>
+					fn.instructionKind(site.instruction) === "operation" &&
 					!baselineNumbers.has(site.instruction) &&
 					site.masks.every((mask) => mask === COMPILER_VALUE_KIND_NUMBER) &&
 					compilerOperatorInputKindsHaveExactNativeSemantics(

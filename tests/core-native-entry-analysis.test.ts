@@ -86,16 +86,24 @@ describe("reachable native-entry annotations", () => {
 		expect(cfg.reachable.has(dead)).toBe(false);
 		const result = analyzeCoreNativeEntry(program.function(id), cfg, [], ["f64"], []);
 		const expected = new Set([liveComparison, handlerComparison]);
-		expect(new Set(result.operatorInputs?.map(({ instruction }) => instruction))).toEqual(
-			expected,
-		);
+		expect(
+			new Set(
+				result.instructionFacts
+					?.filter(
+						({ instruction }) =>
+							program.function(id).instructionKind(instruction) === "operation" &&
+							program.function(id).instructionOpcodeName(instruction) === "binary",
+					)
+					.map(({ instruction }) => instruction),
+			),
+		).toEqual(expected);
 		expect(
 			new Set(result.constantBooleans?.map(({ instruction }) => instruction)),
 		).toEqual(expected);
 		expect(
-			result.operatorInputs?.every(({ masks }) =>
-				masks.every((mask) => mask === COMPILER_VALUE_KIND_NUMBER),
-			),
+			result.instructionFacts
+				?.filter(({ instruction }) => expected.has(instruction))
+				.every(({ masks }) => masks.every((mask) => mask === COMPILER_VALUE_KIND_NUMBER)),
 		).toBe(true);
 		expect(result.constantBooleans?.every(({ value }) => value)).toBe(true);
 	});

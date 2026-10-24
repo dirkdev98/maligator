@@ -857,10 +857,8 @@ describe("SSA native lowering", () => {
 			]) {
 				const native = lowerNativeFunctionStorage({
 					...base,
-					instructions: [
-						mask === undefined
-							? undefined
-							: { kind: "operator-input-kinds", inputKindMasks: [mask] },
+					facts: [
+						mask === undefined ? undefined : { inputKindMasks: [mask] },
 						undefined,
 						undefined,
 						undefined,

@@ -3439,14 +3439,11 @@ export function selectNativeFastPaths(
 				input?.kind === "register"
 					? native.registerRepresentations[input.register]
 					: undefined;
-			const proof = native.instructions[ip];
+			const masks = native.facts?.[ip]?.inputKindMasks;
 			const exactNumber =
-				proof?.kind === "exact-builtin-input-kinds" &&
-				compilerBuiltinInputKindsAreValid(
-					proof.inputKindMasks,
-					op.arguments.length + 1,
-				) &&
-				proof.inputKindMasks[1] === COMPILER_VALUE_KIND_NUMBER;
+				masks !== undefined &&
+				compilerBuiltinInputKindsAreValid(masks, op.arguments.length + 1) &&
+				masks[1] === COMPILER_VALUE_KIND_NUMBER;
 			const mode =
 				input === undefined ||
 				(input.kind !== "register" && input.kind !== "number") ||
@@ -3516,12 +3513,13 @@ export function selectNativeFastPaths(
 	const unavailable = (ip: number) => blocked.has(ip) || pollingEdges.has(ip);
 	const numberInputsPossible = (ip: number): boolean => {
 		const op = fn.instructions[ip];
+		if (op?.opcode !== "BINARY" && op?.opcode !== "UNARY") return true;
 		if (op?.opcode === "UNARY" && (op.operator === "!" || op.operator === "typeof"))
 			return true;
-		const plan = native.instructions[ip];
+		const masks = native.facts?.[ip]?.inputKindMasks;
 		return (
-			plan?.kind !== "operator-input-kinds" ||
-			plan.inputKindMasks.every((mask) => (mask & COMPILER_VALUE_KIND_NUMBER) !== 0)
+			masks === undefined ||
+			masks.every((mask) => (mask & COMPILER_VALUE_KIND_NUMBER) !== 0)
 		);
 	};
 	for (const site of native.fieldCalls ?? [])
@@ -3678,15 +3676,10 @@ export function selectNativeFastPaths(
 				native.registerRepresentations,
 				body,
 				(candidate) => {
-					const kind = native.instructions[candidate]?.kind;
 					return (
 						unavailable(candidate) ||
 						!numberInputsPossible(candidate) ||
-						(!nativePlanKeepsOrdinaryLowering(native.instructions[candidate]) &&
-							!(
-								kind === "exact-builtin-input-kinds" &&
-								nativeNumericBuiltinInstruction(fn.instructions[candidate]!) !== undefined
-							))
+						!nativePlanKeepsOrdinaryLowering(native.instructions[candidate])
 					);
 				},
 				loops[ip] === 1,
@@ -3762,11 +3755,7 @@ export function selectNativeFastPaths(
 							kind !== "unsigned-arithmetic" &&
 							kind !== "exact-typed-array-element" &&
 							!(kind === "call" && codeUnitReads.has(candidate)) &&
-							kind !== "primitive-string-length" &&
-							!(
-								kind === "exact-builtin-input-kinds" &&
-								nativeNumericBuiltinInstruction(fn.instructions[candidate]!) !== undefined
-							))
+							kind !== "primitive-string-length")
 					);
 				},
 				lengthLoads,

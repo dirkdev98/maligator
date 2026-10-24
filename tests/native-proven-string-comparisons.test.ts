@@ -27,8 +27,7 @@ describe("proven String operations in boxed storage", () => {
 			);
 			const op = out.native.body.instructions[ip]!;
 			if (op.opcode !== "BINARY") throw new Error("Missing String operation");
-			expect(out.native.instructions[ip]).toEqual({
-				kind: "operator-input-kinds",
+			expect(out.native.facts?.[ip]).toMatchObject({
 				inputKindMasks: [COMPILER_VALUE_KIND_STRING, COMPILER_VALUE_KIND_STRING],
 			});
 			const image = lowerNativeStorage({
@@ -83,9 +82,8 @@ describe("proven String operations in boxed storage", () => {
 			expect(c.source).not.toContain("mal_ops_is_number(");
 			expect(c.source.includes("MAL_PROFILE_SITE_RUNTIME_STRING")).toBe(profile);
 			const restoredFn = restored.native.functions[index]!;
-			const instructions = [...restoredFn.instructions];
-			instructions[ip] = {
-				kind: "operator-input-kinds",
+			const facts = [...restoredFn.facts!];
+			facts[ip] = {
 				inputKindMasks: [0, COMPILER_VALUE_KIND_STRING],
 			};
 			expect(() =>
@@ -95,11 +93,11 @@ describe("proven String operations in boxed storage", () => {
 						...restored.native,
 						functions: restored.native.functions.with(index, {
 							...restoredFn,
-							instructions,
+							facts,
 						}),
 					},
 				}),
-			).toThrow(/invalid operator kind masks/);
+			).toThrow(/Invalid native instruction facts/);
 		},
 	);
 
@@ -116,10 +114,12 @@ describe("proven String operations in boxed storage", () => {
 			if (op.opcode !== "BINARY") throw new Error("Missing concat");
 			const ip = out.native.body.instructions.indexOf(op);
 			const entry = out.native.directEntries[0]!;
-			expect(entry.operatorInputs).toContainEqual({
-				instructionIp: ip,
-				masks: [COMPILER_VALUE_KIND_STRING, COMPILER_VALUE_KIND_STRING],
-			});
+			expect(entry.instructionFacts).toContainEqual(
+				expect.objectContaining({
+					instructionIp: ip,
+					masks: [COMPILER_VALUE_KIND_STRING, COMPILER_VALUE_KIND_STRING],
+				}),
+			);
 			expect(
 				out.native.specializations.some((region) => region.kind === "numeric-fusion"),
 			).toBe(fusion);

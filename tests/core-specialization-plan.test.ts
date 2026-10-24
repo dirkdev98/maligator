@@ -1229,7 +1229,7 @@ describe("late Core specialization plan", () => {
 		editor.commit();
 		const changed = { ...plan, version: corePlanVersionStamp(program) };
 		expect(() => verifyCoreOptimizationPlan(program.seal(), changed, context)).toThrow(
-			/reachability proof/,
+			/instruction kinds have no current kind proof/,
 		);
 	});
 
@@ -1334,7 +1334,7 @@ describe("late Core specialization plan", () => {
 		const compilation = optimizeSemanticProgramToCore(semantic, {}, (_phase, run) =>
 			run(),
 		);
-		expect(compilation.plan.operatorInputs!.length).toBeGreaterThan(0);
+		expect(compilation.plan.instructionFacts!.length).toBeGreaterThan(0);
 		expect(
 			compilation.plan.directEntries.some(
 				(entry) => entry.valueRepresentations !== undefined,
@@ -1343,7 +1343,7 @@ describe("late Core specialization plan", () => {
 		const verified = verifyCoreOptimizationPlan(compilation.program, {
 			...compilation.plan,
 		});
-		expect(verified.operatorInputs).toEqual(compilation.plan.operatorInputs);
+		expect(verified.instructionFacts).toEqual(compilation.plan.instructionFacts);
 		expect(verified.directEntries).toEqual(compilation.plan.directEntries);
 	});
 

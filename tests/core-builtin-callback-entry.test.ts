@@ -424,7 +424,7 @@ describe("native entries from builtin callback invocation facts", () => {
 				operation !== "reduce" ? ["f64", "f64", "boxed"] : ["f64", "f64", "f64", "boxed"],
 			);
 			expect(
-				entry.operatorInputs!.some((site) =>
+				entry.instructionFacts!.some((site) =>
 					site.masks.every((mask) => mask === COMPILER_VALUE_KIND_NUMBER),
 				),
 			).toBe(true);

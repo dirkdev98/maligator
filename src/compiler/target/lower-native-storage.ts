@@ -1,4 +1,6 @@
 import { builtinPrimitiveResult } from "../shared/builtin-registry.ts";
+import { instructionResultKind } from "../shared/instruction-facts.ts";
+import type { InstructionFacts } from "../shared/instruction-facts.ts";
 import {
 	nativeCallbackTransportsMatch,
 	selectNativeCallbackTransports,
@@ -53,6 +55,7 @@ import {
 	NATIVE_COMPARE,
 } from "./native-scalar-operators.ts";
 import {
+	validateNativeInstructionFacts,
 	nativeFrameRootRegisters,
 	nativeRecordCallIps,
 	nativeRecordParameterIps,
@@ -152,7 +155,7 @@ function selectNumericWorker(
 				return (
 					vmInstructionReadRegisters(op).every(
 						(local) => numeric(local) || reps[local] === "boolean",
-					) && pureScalarOperation(op, reps, native.instructions[ip])
+					) && pureScalarOperation(op, reps, native.instructions[ip], native.facts?.[ip])
 				);
 			case "RETURN":
 				return numeric(op.value);
@@ -447,9 +450,7 @@ function scalarStorageOwnership(
 			handlers[ip] !== undefined ||
 			["CATCH", "TRY_BEGIN", "TRY_END"].includes(op.opcode) ||
 			(plan !== undefined &&
-				!["operator-input-kinds", "unsigned-arithmetic", "call", "construct"].includes(
-					plan.kind,
-				))
+				!["unsigned-arithmetic", "call", "construct"].includes(plan.kind))
 		)
 			blocked.add(ip);
 	}
@@ -630,6 +631,7 @@ function pureScalarOperation(
 	op: BytecodeInstruction,
 	reps: NativeFunctionPlan["registerRepresentations"],
 	plan?: NativeFunctionPlan["instructions"][number],
+	facts?: InstructionFacts,
 ): boolean {
 	const numeric = (local: number) => reps[local] === "number" || reps[local] === "int32";
 	const numberResult = (local: number) =>
@@ -639,8 +641,7 @@ function pureScalarOperation(
 	const numericInput = (local: number, index: number) =>
 		numeric(local) ||
 		plan?.kind === "unsigned-arithmetic" ||
-		(plan?.kind === "operator-input-kinds" &&
-			plan.inputKindMasks[index] === COMPILER_VALUE_KIND_NUMBER);
+		facts?.inputKindMasks?.[index] === COMPILER_VALUE_KIND_NUMBER;
 	switch (op.opcode) {
 		case "CREATE_NUMBER":
 		case "CREATE_F64":
@@ -769,6 +770,7 @@ function expressionIps(
 				fn.instructions[ip]!,
 				native.registerRepresentations,
 				native.instructions[ip],
+				native.facts?.[ip],
 			)
 				? 2
 				: 1;
@@ -872,12 +874,26 @@ export function nativeVariantContract(
 	entry: NativeDirectEntryPlan,
 ): NativeFunctionPlan {
 	const instructions = [...native.instructions];
-	for (const { instructionIp, masks } of entry.operatorInputs ?? []) {
-		if (instructions[instructionIp]?.kind !== "unsigned-arithmetic")
-			instructions[instructionIp] = {
-				kind: "operator-input-kinds",
-				inputKindMasks: masks,
-			};
+	const facts = [
+		...(native.facts ??
+			new Array<InstructionFacts | undefined>(native.instructions.length)),
+	];
+	for (const { instructionIp, masks, results, effectMask } of entry.instructionFacts ??
+		[]) {
+		const canonical = facts[instructionIp];
+		if (
+			(canonical?.inputKindMasks !== undefined &&
+				canonical.inputKindMasks.length !== masks.length) ||
+			(canonical?.resultKindMasks !== undefined &&
+				canonical.resultKindMasks.length !== results.length)
+		)
+			throw new RangeError("Invalid native instruction kinds arity");
+		facts[instructionIp] = {
+			...facts[instructionIp],
+			inputKindMasks: masks,
+			resultKindMasks: results,
+			effectMask,
+		};
 	}
 	for (const call of entry.callOverrides ?? []) {
 		const canonical = instructions[call.instructionIp];
@@ -900,6 +916,7 @@ export function nativeVariantContract(
 		registerRepresentations: entry.registerRepresentations,
 		gc: entry.gc,
 		instructions,
+		facts,
 		storage: entry.storage,
 		...(entry.resultFields?.forwards === undefined
 			? {}
@@ -916,8 +933,9 @@ function immediateOperatorResult(
 	op: Extract<BytecodeInstruction, { opcode: "UNARY" | "BINARY" }>,
 	reps: NativeFunctionPlan["registerRepresentations"],
 	plan: NativeFunctionPlan["instructions"][number],
+	facts?: InstructionFacts,
 ): boolean {
-	if (pureScalarOperation(op, reps, plan)) return true;
+	if (pureScalarOperation(op, reps, plan, facts)) return true;
 	const opcode = op.opcode === "UNARY" ? "unary" : "binary";
 	const fixed = compilerOperatorFixedResultKind(opcode, op.operator);
 	if (fixed !== undefined)
@@ -925,7 +943,7 @@ function immediateOperatorResult(
 			fixed,
 			COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_BOOLEAN,
 		);
-	const masks = plan?.kind === "operator-input-kinds" ? plan.inputKindMasks : undefined;
+	const masks = facts?.inputKindMasks;
 	const kind = (local: number, index: number): number => {
 		switch (reps[local]) {
 			case "number":
@@ -962,19 +980,28 @@ function untracedPrimitiveResultRegisters(
 	const registers = new Set<number>();
 	if (native.storageValues === undefined) return registers;
 	for (const [ip, op] of native.body.instructions.entries()) {
-		if (op.opcode !== "UNARY" && op.opcode !== "BINARY" && op.opcode !== "CALL_KNOWN")
-			continue;
+		if (!("dst" in op)) continue;
+		const resultKind = instructionResultKind(native.facts?.[ip], op.dst);
 		const immediate =
-			op.opcode === "CALL_KNOWN"
-				? !op.construct &&
-					op.argumentMode === undefined &&
-					!body.reads[ip]!.includes(op.dst) &&
-					["number", "boolean"].includes(builtinPrimitiveResult(op.operation) ?? "")
-				: immediateOperatorResult(
-						op,
-						native.registerRepresentations,
-						native.instructions[ip],
-					);
+			!body.reads[ip]!.includes(op.dst) &&
+			(resultKind !== undefined
+				? compilerValueKindMaskIsSubset(
+						resultKind,
+						COMPILER_VALUE_KIND_NUMBER |
+							COMPILER_VALUE_KIND_BOOLEAN |
+							COMPILER_VALUE_KIND_NULLISH,
+					)
+				: op.opcode === "CALL_KNOWN"
+					? !op.construct &&
+						op.argumentMode === undefined &&
+						["number", "boolean"].includes(builtinPrimitiveResult(op.operation) ?? "")
+					: (op.opcode === "UNARY" || op.opcode === "BINARY") &&
+						immediateOperatorResult(
+							op,
+							native.registerRepresentations,
+							native.instructions[ip],
+							native.facts?.[ip],
+						));
 		if (
 			!blocked.has(ip) &&
 			!borrowed.has(op.dst) &&
@@ -1122,10 +1149,7 @@ function rootStorage(
 }
 
 // Calls and operators touch operands only within their own instruction.
-const INSTRUCTION_LOCAL_PLAN_KINDS: ReadonlySet<string> = new Set([
-	"call",
-	"operator-input-kinds",
-]);
+const INSTRUCTION_LOCAL_PLAN_KINDS: ReadonlySet<string> = new Set(["call"]);
 
 /** Continuously rooted registers whose emitted storage accesses are their VM reads and writes. */
 function instructionLocalRoots(
@@ -1456,6 +1480,7 @@ export function validateNativeStorage(
 	entries: NativeEntryLookup = new Map(),
 	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
 ): void {
+	validateNativeInstructionFacts(native.body, native.facts);
 	// Recompute body facts at this trust boundary; callers can replace or mutate an image.
 	const body = storageBodyFacts(native);
 	const sameNumbers = (left: ReadonlyArray<number>, right: ReadonlyArray<number>) =>
@@ -2022,4 +2047,5 @@ import {
 	COMPILER_NUMERIC_BINARY_OPERATORS,
 	COMPILER_VALUE_KIND_STRING,
 	COMPILER_VALUE_KIND_TOP,
+	COMPILER_VALUE_KIND_NULLISH,
 } from "../shared/compiler-value-kinds.ts";

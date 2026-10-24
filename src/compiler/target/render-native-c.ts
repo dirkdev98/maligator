@@ -26,6 +26,8 @@ import {
 	compilerOperatorIsPrimitiveStringConcatenation,
 } from "../shared/compiler-value-kinds.ts";
 import type { CompilerValueKindMask } from "../shared/compiler-value-kinds.ts";
+import { instructionInputKind } from "../shared/instruction-facts.ts";
+import type { InstructionFacts } from "../shared/instruction-facts.ts";
 import {
 	knownBuiltinErrors,
 	knownBuiltinErrorPrototype,
@@ -302,7 +304,7 @@ function deferredRestArgumentRootIp(native: NativeFunctionPlan): number | undefi
 		if (ip === materialization || ip < 0 || ip >= seen.length || seen[ip] !== 0) continue;
 		seen[ip] = 1;
 		const instruction = fn.instructions[ip]!;
-		const effects = nativeInstructionEffects(instruction);
+		const effects = nativeInstructionEffects(instruction, native.facts?.[ip]);
 		if (
 			safepoints.get(ip) === "loop-backedge" ||
 			(safepoints.has(ip) && (effects.collection || effects.reentry))
@@ -2915,6 +2917,7 @@ function emitCompiledVariant(
 		nativeContract.specializations,
 		nativeContract.regionActions,
 		nativeContract.instructions,
+		nativeContract.facts,
 		inactiveRootMasks,
 		rootMaskStatements.statements,
 		gcSafepointKinds,
@@ -3260,7 +3263,7 @@ function emitCompiledVariant(
 		directEntry?.recordParameters === undefined
 			? renderNativeFastEntry({
 					fn,
-					operatorInputs: nativeContract.instructions,
+					facts: nativeContract.facts,
 					directEntry,
 					// A specialized-only body is omitted after emission, taking its fast path with it.
 					trySymbol:
@@ -4297,6 +4300,7 @@ function emitResumableFunction(
 		native.specializations,
 		native.regionActions,
 		native.instructions,
+		native.facts,
 		inactiveRootMasks,
 		rootMaskStatements.statements,
 		new Map(
@@ -5461,6 +5465,7 @@ function emitBody(
 	specializations: ReadonlyArray<VmRegion>,
 	regionActions: ReadonlyArray<VmRegionAction>,
 	nativeInstructions: ReadonlyArray<NativeInstructionPlan | undefined>,
+	nativeFacts: NativeFunctionPlan["facts"],
 	inactiveRootMasks: ReadonlyMap<number, NativeInactiveRootMask>,
 	inactiveRootMaskStatements: ReadonlyMap<NativeInactiveRootMask, string>,
 	gcSafepointKinds: ReadonlyMap<
@@ -5570,10 +5575,10 @@ function emitBody(
 			nativeInstructions[candidate.action.id]?.kind === "unsigned-arithmetic" ||
 			nativeInstructions[candidate.finishIp]?.kind === "unsigned-arithmetic" ||
 			[candidate.action.id, candidate.finishIp].some((ip) => {
-				const plan = nativeInstructions[ip];
+				const masks = nativeFacts?.[ip]?.inputKindMasks;
 				return (
-					plan?.kind === "operator-input-kinds" &&
-					plan.inputKindMasks.some((mask) => (mask & COMPILER_VALUE_KIND_NUMBER) === 0)
+					masks !== undefined &&
+					masks.some((mask) => (mask & COMPILER_VALUE_KIND_NUMBER) === 0)
 				);
 			})
 		)
@@ -6592,7 +6597,7 @@ function emitBody(
 			!nativeRegExpIteratorProjectionActionByIp.has(ip) &&
 			!nativeStringSpanActionByIp.has(ip) &&
 			!nativeBuiltinCollectionCallChainActionByIp.has(ip);
-		const effects = nativeInstructionEffects(fn.instructions[ip]!);
+		const effects = nativeInstructionEffects(fn.instructions[ip]!, nativeFacts?.[ip]);
 		const publishesIncomingRoots =
 			safepointKind !== "loop-backedge" &&
 			!deferredPropertyRoots &&
@@ -6745,6 +6750,7 @@ function emitBody(
 		emittedInstructions.add(ip);
 		let operatorMaskEmitted = false;
 		instructionContext.nativePlan = nativeInstructions[ip];
+		instructionContext.facts = nativeFacts?.[ip];
 		instructionContext.profileSiteId = fn.profileSiteIds?.[ip];
 		instructionContext.profile = instructionProfile;
 		instructionContext.gcSafepoint = safepointKind !== undefined;
@@ -7281,6 +7287,7 @@ interface NativeInstructionContext {
 	readonly profileSiteId?: number;
 	readonly profile?: NativeInstructionProfile;
 	readonly nativePlan?: NativeInstructionPlan;
+	readonly facts?: InstructionFacts;
 	readonly gcSafepoint: boolean;
 	readonly loopPoll: boolean;
 	readonly callReturnPolls: boolean;
@@ -7532,15 +7539,21 @@ function emitInstruction(
 	const num = (r: number): string =>
 		reps[r] === "int32" ? `(f64) ${inputValue(r)}` : inputValue(r);
 	const truthy = (r: number): string =>
-		reps[r] === "boolean"
-			? `r${r}`
-			: reps[r] === "int32"
-				? `(r${r} != 0)`
-				: reps[r] === "number"
-					? `mal_number_is_truthy(r${r})`
-					: reps[r] === "string"
-						? `(mal_string_length(mal_value_to_string(r${r})) != 0)`
-						: `mal_value_is_truthy(r${r})`;
+		reps[r] === "boxed" &&
+		instructionInputKind(context.facts, r) === COMPILER_VALUE_KIND_BOOLEAN
+			? `mal_value_to_boolean(r${r})`
+			: reps[r] === "boxed" &&
+				  instructionInputKind(context.facts, r) === COMPILER_VALUE_KIND_NUMBER
+				? `mal_number_is_truthy(mal_ops_number_as_f64(r${r}))`
+				: reps[r] === "boolean"
+					? `r${r}`
+					: reps[r] === "int32"
+						? `(r${r} != 0)`
+						: reps[r] === "number"
+							? `mal_number_is_truthy(r${r})`
+							: reps[r] === "string"
+								? `(mal_string_length(mal_value_to_string(r${r})) != 0)`
+								: `mal_value_is_truthy(r${r})`;
 	if (
 		instruction.opcode === "MOVE" &&
 		context.propertyNumericUpdateAction === undefined &&
@@ -7624,6 +7637,7 @@ function emitInstruction(
 		profileSiteId: context.profileSiteId,
 		profile: context.profile,
 		nativePlan,
+		facts: context.facts,
 		resources,
 		gcSafepoint: context.gcSafepoint,
 		loopPoll: context.loopPoll,
@@ -7872,22 +7886,24 @@ function emitInstruction(
 		if (isNumericRep(representation)) return COMPILER_VALUE_KIND_NUMBER;
 		if (representation === "boolean") return COMPILER_VALUE_KIND_BOOLEAN;
 		if (representation === "string") return COMPILER_VALUE_KIND_STRING;
-		if (nativePlan?.kind === "operator-input-kinds") {
+		const semantic = instructionInputKind(context.facts, operand);
+		if (semantic !== undefined) return semantic;
+		if (context.facts?.inputKindMasks !== undefined) {
 			if (instruction.opcode === "UNARY" && instruction.src === operand)
-				return nativePlan.inputKindMasks[0];
+				return context.facts.inputKindMasks[0]!;
 			if (instruction.opcode === "BINARY") {
-				if (instruction.left === operand) return nativePlan.inputKindMasks[0];
-				if (instruction.right === operand) return nativePlan.inputKindMasks[1];
+				if (instruction.left === operand) return context.facts.inputKindMasks[0]!;
+				if (instruction.right === operand) return context.facts.inputKindMasks[1]!;
 			}
 		}
 		if (
-			nativePlan?.kind !== "exact-builtin-input-kinds" ||
+			context.facts?.inputKindMasks === undefined ||
 			instruction.opcode !== "CALL_KNOWN"
 		)
 			return undefined;
-		if (operand === instruction.thisValue) return nativePlan.inputKindMasks[0];
+		if (operand === instruction.thisValue) return context.facts.inputKindMasks[0]!;
 		const index = instruction.arguments.indexOf(operand);
-		return index < 0 ? undefined : nativePlan.inputKindMasks[index + 1];
+		return index < 0 ? undefined : context.facts.inputKindMasks[index + 1];
 	};
 	const operandIsString = (operand: number): boolean =>
 		operandRep(operand) === "string" ||
@@ -10730,9 +10746,9 @@ function emitInstruction(
 			}
 			const fusion = numericFusionAction;
 			const inputKinds =
-				nativePlan?.kind === "operator-input-kinds" &&
-				nativePlan.inputKindMasks.length === 2
-					? nativePlan.inputKindMasks
+				context.facts?.inputKindMasks !== undefined &&
+				context.facts.inputKindMasks.length === 2
+					? context.facts.inputKindMasks
 					: undefined;
 			if (
 				inputKinds !== undefined &&
@@ -10743,8 +10759,8 @@ function emitInstruction(
 					compilerValueKindMaskIsSubset(mask, COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE),
 				)
 			) {
-				const a = exactPrimitiveNumber(left, inputKinds[0]);
-				const b = exactPrimitiveNumber(right, inputKinds[1]);
+				const a = exactPrimitiveNumber(left, inputKinds[0]!);
+				const b = exactPrimitiveNumber(right, inputKinds[1]!);
 				if (RELATIONAL_COMPARE.has(operator))
 					return [storeBoolean(dst, `${a} ${compare} ${b}`)];
 				const expression =
@@ -11089,7 +11105,7 @@ function emitInstruction(
 				compilerOperatorIsNullishEquality("binary", operator, inputKinds)
 			) {
 				const other = compilerValueKindMaskIsSubset(
-					inputKinds[1],
+					inputKinds[1]!,
 					COMPILER_VALUE_KIND_NULLISH,
 				)
 					? left
@@ -11159,8 +11175,8 @@ function emitInstruction(
 				};
 				const equality = ["==", "!=", "===", "!=="].includes(operator);
 				const positive = equality
-					? exactNumberOrUndefinedEquality(inputKinds[0], inputKinds[1])
-					: `${exactNumberOrUndefined(left, inputKinds[0])} ${compare} ${exactNumberOrUndefined(right, inputKinds[1])}`;
+					? exactNumberOrUndefinedEquality(inputKinds[0]!, inputKinds[1]!)
+					: `${exactNumberOrUndefined(left, inputKinds[0]!)} ${compare} ${exactNumberOrUndefined(right, inputKinds[1]!)}`;
 				const result =
 					operator === "!=" || operator === "!==" ? `!(${positive})` : positive;
 				elideFramePosition();
@@ -11399,9 +11415,9 @@ function emitInstruction(
 			if (
 				operator === "tostring" &&
 				(reps[src] === "boolean" ||
-					(nativePlan?.kind === "operator-input-kinds" &&
-						nativePlan.inputKindMasks.length === 1 &&
-						nativePlan.inputKindMasks[0] === COMPILER_VALUE_KIND_BOOLEAN))
+					(context.facts?.inputKindMasks !== undefined &&
+						context.facts.inputKindMasks.length === 1 &&
+						context.facts.inputKindMasks[0]! === COMPILER_VALUE_KIND_BOOLEAN))
 			) {
 				const value =
 					reps[src] === "boolean" ? `r${src}` : `mal_value_to_boolean(${boxed(src)})`;
@@ -11409,15 +11425,15 @@ function emitInstruction(
 				return [`r${dst} = ${callValue(dst, text)};`, poll()];
 			}
 			if (
-				nativePlan?.kind === "operator-input-kinds" &&
-				nativePlan.inputKindMasks.length === 1 &&
+				context.facts?.inputKindMasks !== undefined &&
+				context.facts.inputKindMasks.length === 1 &&
 				compilerValueKindMaskIsSubset(
-					nativePlan.inputKindMasks[0],
+					context.facts.inputKindMasks[0]!,
 					COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE,
 				) &&
 				!isNumericRep(reps[src]!)
 			) {
-				const value = exactPrimitiveNumber(src, nativePlan.inputKindMasks[0]);
+				const value = exactPrimitiveNumber(src, context.facts.inputKindMasks[0]!);
 				const expression =
 					operator === "-"
 						? `-(${value})`

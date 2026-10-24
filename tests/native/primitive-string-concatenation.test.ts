@@ -28,9 +28,9 @@ describe("String concatenation with proven primitive operands", () => {
 		});
 		const mixedConcatenations = pair.programImage.native.functions.flatMap((fn) =>
 			fn.body.instructions.flatMap((op, ip) => {
-				const proof = fn.instructions[ip];
+				const proof = fn.facts?.[ip];
 				return op.opcode === "BINARY" &&
-					proof?.kind === "operator-input-kinds" &&
+					proof?.inputKindMasks !== undefined &&
 					!proof.inputKindMasks.every((mask) => mask === 16) &&
 					compilerOperatorIsPrimitiveStringConcatenation(
 						"binary",

@@ -85,3 +85,46 @@ try {
 } catch (error) {
 	console.log(error === failure);
 }
+
+function ordinaryKinds(input, flag) {
+	const value = flag ? String(input) : Symbol("input");
+	console.log(Number.isFinite(value), Number.isNaN(value));
+	try {
+		return Math.abs(value);
+	} catch (error) {
+		return error.name;
+	}
+}
+console.log(ordinaryKinds(-7, true), ordinaryKinds(-7, false));
+console.log(Math.abs.call(7, undefined), Math.abs.call("receiver", null));
+
+const searchEffects = [];
+function search(receiver, needle, position) {
+	return String.prototype.includes.call(receiver, needle, position);
+}
+function converted(label, value) {
+	return {
+		[Symbol.toPrimitive](hint) {
+			searchEffects.push(label + ":" + hint);
+			return value;
+		},
+	};
+}
+console.log(
+	search(
+		converted("receiver", "abc"),
+		converted("needle", "b"),
+		converted("position", 1),
+	),
+	searchEffects.join(","),
+);
+searchEffects.length = 0;
+try {
+	search(
+		converted("receiver", "abc"),
+		converted("needle", Symbol("needle")),
+		converted("position", 1),
+	);
+} catch (error) {
+	console.log(error.name, searchEffects.join(","));
+}

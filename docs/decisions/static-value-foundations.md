@@ -596,16 +596,27 @@ reads. The result remains a primitive string, including when it escapes or is
 retained across suspension.
 
 Exact Boolean text observations normalize to Core ToString and select the VM's hot
-true/false strings. Native operator input kinds come from the current local kind
-analysis independently of effect refinements, including when a physical register
-also serves unrelated boxed values. A mask is an upper bound: it may include unknown
-operands, objects, Symbols, or BigInts. It licenses only decisions whose own input
-requirements hold. In particular, a String operand excludes numeric addition while
-an unknown opposite operand retains ToPrimitive, exceptions, collection, and user
-code. Primitive kernels, expression motion, and untraced storage each retain their
-separate legality checks. Function versions and entry-specific analyses protect
-these facts through lowering; compiler artifacts validate arity and kind masks.
-Method and String calls still require
+true/false strings. Every instruction retains independent input and normal-result
+kind masks, including unions, across canonical and specialized entry lowering.
+Semantic kinds describe an SSA value at its use; physical register representations
+join every value assigned that storage. Register allocation relocates input and
+result facts separately, including constrained operands and immediate arguments.
+
+Native semantic facts occupy a separate table from lowering strategies. Range,
+shape, identity, and representation strategies can coexist with operand kinds and
+the complete effect summary: reads and writes in every domain, throwing,
+suspension, collection, and unaccounted user code. A mask is an upper bound and
+licenses only decisions whose own requirements hold. A String operand excludes
+numeric addition while an unknown opposite operand retains ToPrimitive, exceptions,
+collection, and user code. Primitive kernels, expression motion, and untraced
+storage retain separate legality checks; normal-result masks can exclude pointer
+roots without claiming the producing operation is pure.
+
+Function versions and entry-specific analyses protect these facts through lowering;
+compiler artifacts validate masks, effect bits, register references, and arity.
+Generic branches retain the same semantic facts. Native helper effects remain a
+separate contract: call boundaries and fallible allocation helpers can impose
+obligations beyond the semantic summary. Method and String calls still require
 proven callee identity, while implicit conversion does not consult those properties.
 Unknown and mixed kinds retain generic conversion, including wrapper coercion.
 

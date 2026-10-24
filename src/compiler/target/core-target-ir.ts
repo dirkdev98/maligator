@@ -8,7 +8,6 @@ import type {
 } from "../core/core-ir.ts";
 import type { CompilerInstruction } from "../shared/compiler-instruction.ts";
 import { probeReadKindIsNamed } from "../shared/compiler-instruction.ts";
-import type { CompilerOperatorInputKindMasks } from "../shared/compiler-value-kinds.ts";
 
 export function targetInstructionUsesPropertyCache(
 	instruction: CompilerInstruction,
@@ -199,9 +198,11 @@ export interface CoreTargetDirectEntry {
 		}
 	>;
 	readonly argumentRepresentations?: ReadonlyArray<CoreTargetRegisterRepresentation>;
-	readonly operatorInputs?: ReadonlyArray<{
+	readonly instructionFacts?: ReadonlyArray<{
 		readonly instruction: CompilerInstruction;
-		readonly masks: CompilerOperatorInputKindMasks;
+		readonly masks: ReadonlyArray<number>;
+		readonly results: ReadonlyArray<number>;
+		readonly effectMask: number;
 	}>;
 	readonly constantBooleans?: ReadonlyArray<{
 		readonly instruction: CompilerInstruction;

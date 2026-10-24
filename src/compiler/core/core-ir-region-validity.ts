@@ -52,9 +52,8 @@ import {
 	coreRecordResultUses,
 	coreSuppliedRecordPasses,
 } from "./core-native-field-analysis.ts";
+import { coreInstructionFactProofIsCurrent } from "./core-native-instruction-facts.ts";
 import {
-	coreOperatorInputProofIsCurrent,
-	coreBuiltinInputProofIsCurrent,
 	corePrivateNumericArrayElementProofIsCurrent,
 	corePrivatePackedRestArrayElementProofIsCurrent,
 	coreUnsignedArithmeticProofIsCurrent,
@@ -1808,8 +1807,7 @@ function total(counts: Readonly<Record<string, number>>): number {
 function immutablePlanCopy(plan: CoreOptimizationPlan): CoreOptimizationPlan {
 	// These deeply frozen payloads retain proof identities across verified plan copies.
 	const proofPayloads = new Set<object>([
-		...(plan.operatorInputs ?? []),
-		...(plan.builtinInputs ?? []),
+		...(plan.instructionFacts ?? []),
 		...(plan.privateNumericArrayElements ?? []),
 		...(plan.privatePackedRestArrayElements ?? []),
 		...(plan.unsignedArithmetic ?? []),
@@ -1819,7 +1817,7 @@ function immutablePlanCopy(plan: CoreOptimizationPlan): CoreOptimizationPlan {
 	for (const entry of plan.directEntries) {
 		for (const payload of [
 			entry.valueRepresentations,
-			entry.operatorInputs,
+			entry.instructionFacts,
 			entry.constantBooleans,
 			entry.callOverrides,
 			entry.resultFields,
@@ -1977,13 +1975,9 @@ export function verifyCoreOptimizationPlan(
 			() => control(selection.function),
 		);
 	}
-	for (const operation of plan.builtinInputs ?? []) {
-		if (!coreBuiltinInputProofIsCurrent(program, operation))
-			fail("builtin inputs have no current kind proof");
-	}
-	for (const operation of plan.operatorInputs ?? []) {
-		if (!coreOperatorInputProofIsCurrent(program, operation))
-			fail("operator inputs have no current kind proof");
+	for (const operation of plan.instructionFacts ?? []) {
+		if (!coreInstructionFactProofIsCurrent(program, operation))
+			fail("instruction kinds have no current kind proof");
 	}
 	for (const operation of plan.privateNumericArrayElements ?? []) {
 		if (!corePrivateNumericArrayElementProofIsCurrent(program, operation, context))
@@ -2065,13 +2059,22 @@ export function verifyCoreOptimizationPlan(
 		const fn = program.function(entry.function);
 		const emittedInstructions = blockProofs.get(entry.function)!.instructionOrder;
 		for (const records of [
-			entry.operatorInputs,
+			entry.instructionFacts,
 			entry.constantBooleans,
 			entry.fieldParameters?.loads,
 			entry.callOverrides,
 		]) {
 			for (const { instruction } of records ?? []) {
-				if (!emittedInstructions.has(instruction))
+				if (
+					!emittedInstructions.has(instruction) &&
+					!(
+						records === entry.instructionFacts &&
+						blockProofs
+							.get(entry.function)!
+							.included.has(fn.instructionBlock(instruction)) &&
+						fn.blockTerminator(fn.instructionBlock(instruction)) === instruction
+					)
+				)
 					fail(
 						`direct entry ${entry.function}:${entry.id} metadata names an instruction omitted from target lowering`,
 					);

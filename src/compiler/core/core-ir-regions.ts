@@ -1,6 +1,5 @@
 import type { CompilerGuardPlan, KnownBuiltinCall } from "../shared/compiler-facts.ts";
 import type { CompilerInstruction } from "../shared/compiler-instruction.ts";
-import type { CompilerOperatorInputKindMasks } from "../shared/compiler-value-kinds.ts";
 import type { CoreExactCollectionBrand } from "./core-ir-value-classes.ts";
 import type {
 	CoreBlockId,
@@ -9,9 +8,8 @@ import type {
 	CoreRepresentation,
 	CoreValueId,
 } from "./core-ir.ts";
+import type { CoreInstructionFactPlan } from "./core-native-instruction-facts.ts";
 import type {
-	CoreBuiltinInputPlan,
-	CoreOperatorInputPlan,
 	CorePrivateNumericArrayElementPlan,
 	CorePrivatePackedRestArrayElementPlan,
 	CoreUnsignedArithmeticPlan,
@@ -652,9 +650,11 @@ export interface CoreDirectEntryPlan {
 	readonly recordParameters?: ReadonlyArray<CoreEntryRecordParameter>;
 	readonly valueRepresentations?: ReadonlyArray<CorePlanRepresentation>;
 	readonly argumentRepresentations?: ReadonlyArray<CorePlanRepresentation>;
-	readonly operatorInputs?: ReadonlyArray<{
+	readonly instructionFacts?: ReadonlyArray<{
 		readonly instruction: CoreInstructionId;
-		readonly masks: CompilerOperatorInputKindMasks;
+		readonly masks: ReadonlyArray<number>;
+		readonly results: ReadonlyArray<number>;
+		readonly effectMask: number;
 	}>;
 	readonly constantBooleans?: ReadonlyArray<{
 		readonly instruction: CoreInstructionId;
@@ -699,8 +699,7 @@ export interface CoreOptimizationPlan {
 	}>;
 	readonly directEntries: ReadonlyArray<CoreDirectEntryPlan>;
 	readonly directBuiltinCallbacks?: ReadonlyArray<CoreDirectBuiltinCallbackPlan>;
-	readonly operatorInputs?: ReadonlyArray<CoreOperatorInputPlan>;
-	readonly builtinInputs?: ReadonlyArray<CoreBuiltinInputPlan>;
+	readonly instructionFacts?: ReadonlyArray<CoreInstructionFactPlan>;
 	readonly privateNumericArrayElements?: ReadonlyArray<CorePrivateNumericArrayElementPlan>;
 	readonly privatePackedRestArrayElements?: ReadonlyArray<CorePrivatePackedRestArrayElementPlan>;
 	readonly unsignedArithmetic?: ReadonlyArray<CoreUnsignedArithmeticPlan>;

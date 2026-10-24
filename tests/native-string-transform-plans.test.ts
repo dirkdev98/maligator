@@ -105,19 +105,19 @@ describe("persisted native String transforms", () => {
 	it("consumes exact receiver facts without removing boxed receiver roots", () => {
 		const out = inspect("String.prototype.trim.call(input)");
 		const ip = out.native.storage!.stringTransforms[0]!.instructionIp;
-		const instructions = [...out.native.instructions];
-		instructions[ip] = {
-			kind: "exact-builtin-input-kinds",
+		const facts = [
+			...(out.native.facts ?? new Array(out.native.instructions.length).fill(undefined)),
+		];
+		facts[ip] = {
 			inputKindMasks: [COMPILER_VALUE_KIND_STRING],
 		};
-		const native = lowerNativeFunctionStorage({ ...out.native, instructions });
+		const native = lowerNativeFunctionStorage({ ...out.native, facts });
 		expect(native.storage!.stringTransforms[0]!.receiver).toBe("string");
 		expect(native.storage!.rootRegisters).toContain(0);
-		instructions[ip] = {
-			kind: "exact-builtin-input-kinds",
+		facts[ip] = {
 			inputKindMasks: [COMPILER_VALUE_KIND_TOP],
 		};
-		expect(() => validateNativeStorage({ ...native, instructions })).toThrow(
+		expect(() => validateNativeStorage({ ...native, facts })).toThrow(
 			/invalid or stale storage plan/,
 		);
 	});

@@ -3,6 +3,7 @@ import {
 	COMPILER_VALUE_KIND_TOP,
 	COMPILER_VALUE_KIND_NULLISH,
 } from "../shared/compiler-value-kinds.ts";
+import { instructionInputKind } from "../shared/instruction-facts.ts";
 import { emitTypeofResult } from "./emit-program-image.ts";
 import type {
 	NativeDirectEntryPlan,
@@ -16,7 +17,7 @@ const MAXIMUM_FAST_ENTRY_INSTRUCTIONS = 64;
 
 export interface NativeFastEntryInput {
 	readonly fn: BytecodeFunction;
-	readonly operatorInputs: NativeFunctionPlan["instructions"];
+	readonly facts: NativeFunctionPlan["facts"];
 	readonly directEntry: NativeDirectEntryPlan | undefined;
 	/** The full entry already answers this body without a frame or with a better dispatch. */
 	readonly specialized: boolean;
@@ -174,7 +175,7 @@ function alwaysRestarts(
 	fn: BytecodeFunction,
 	directEntry: NativeDirectEntryPlan | undefined,
 ): boolean {
-	return (directEntry?.operatorInputs ?? []).some(({ instructionIp, masks }) => {
+	return (directEntry?.instructionFacts ?? []).some(({ instructionIp, masks }) => {
 		const op = fn.instructions[instructionIp];
 		const numeric =
 			(op?.opcode === "BINARY" && !EQUALITY_OPERATORS.has(op.operator)) ||
@@ -463,14 +464,16 @@ function fastInstruction(
 	strings: ReadonlyMap<number, number>,
 	integers: ReadonlySet<number>,
 ): string | undefined {
-	const plan = input.operatorInputs[ip];
+	const masks = input.facts?.[ip]?.inputKindMasks;
 	const values: FastNumbers = {
 		kind(register) {
-			if (plan?.kind === "operator-input-kinds") {
-				if (op.opcode === "UNARY" && op.src === register) return plan.inputKindMasks[0];
+			const kind = instructionInputKind(input.facts?.[ip], register);
+			if (kind !== undefined) return kind;
+			if (masks !== undefined) {
+				if (op.opcode === "UNARY" && op.src === register) return masks[0]!;
 				if (op.opcode === "BINARY") {
-					if (op.left === register) return plan.inputKindMasks[0];
-					if (op.right === register) return plan.inputKindMasks[1]!;
+					if (op.left === register) return masks[0]!;
+					if (op.right === register) return masks[1]!;
 				}
 			}
 			return COMPILER_VALUE_KIND_TOP;

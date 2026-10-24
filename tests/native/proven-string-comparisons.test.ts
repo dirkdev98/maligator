@@ -48,8 +48,7 @@ describe("proven boxed String operations", () => {
 					const op = fn.body.instructions.find((op) => op.opcode === "BINARY");
 					if (op?.opcode !== "BINARY") throw new Error("Missing String comparison");
 					const ip = fn.body.instructions.indexOf(op);
-					expect(fn.instructions[ip]).toMatchObject({
-						kind: "operator-input-kinds",
+					expect(fn.facts?.[ip]).toMatchObject({
 						inputKindMasks: [16, 16],
 					});
 					comparisons++;

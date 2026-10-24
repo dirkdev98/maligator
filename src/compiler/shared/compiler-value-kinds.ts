@@ -285,13 +285,6 @@ export function compilerBuiltinInputKindsAreValid(
 	return (
 		masks.length === operandCount &&
 		masks.length >= 1 &&
-		masks.length <= 17 &&
-		masks.every(
-			(mask) =>
-				mask === COMPILER_VALUE_KIND_BOOLEAN ||
-				mask === COMPILER_VALUE_KIND_NUMBER ||
-				mask === COMPILER_VALUE_KIND_STRING ||
-				mask === COMPILER_VALUE_KIND_TOP,
-		)
+		masks.every((mask) => compilerValueKindMaskIsValid(mask, { allowTop: true }))
 	);
 }

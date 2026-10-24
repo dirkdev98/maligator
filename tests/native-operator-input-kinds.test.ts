@@ -32,8 +32,7 @@ describe("partial operator input kinds", () => {
 			const ip = out.native.body.instructions.findIndex((op) => op.opcode === "BINARY");
 			const op = out.native.body.instructions[ip]!;
 			if (op.opcode !== "BINARY") throw new Error("Missing addition");
-			expect(out.native.instructions[ip]).toEqual({
-				kind: "operator-input-kinds",
+			expect(out.native.facts?.[ip]).toMatchObject({
 				inputKindMasks: expression.startsWith("left")
 					? [COMPILER_VALUE_KIND_TOP, COMPILER_VALUE_KIND_STRING]
 					: [COMPILER_VALUE_KIND_STRING, COMPILER_VALUE_KIND_TOP],
@@ -99,7 +98,7 @@ describe("partial operator input kinds", () => {
 		);
 		expect(
 			out.native.directEntries.some((entry) =>
-				entry.operatorInputs?.some(
+				entry.instructionFacts?.some(
 					({ masks }) =>
 						masks[0] === COMPILER_VALUE_KIND_TOP &&
 						masks[1] === COMPILER_VALUE_KIND_STRING,

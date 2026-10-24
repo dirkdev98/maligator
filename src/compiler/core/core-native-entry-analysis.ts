@@ -8,12 +8,10 @@ import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
 import type { CoreDirectEntryPlan, CorePlanRepresentation } from "./core-ir-regions.ts";
 import type { CoreValueKindAnalysis } from "./core-ir-value-kinds.ts";
-import {
-	analyzeCoreValueKinds,
-	coreOperatorInputKindMasks,
-} from "./core-ir-value-kinds.ts";
+import { analyzeCoreValueKinds } from "./core-ir-value-kinds.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import type { CoreInstructionId, CoreValueId } from "./core-ir.ts";
+import { coreInstructionFacts } from "./core-native-instruction-facts.ts";
 import { coreFunctionVersionsAreCurrent } from "./core-store.ts";
 import type { CoreFunctionStore, CoreFunctionVersions } from "./core-store.ts";
 
@@ -24,7 +22,7 @@ const representationProofs = new WeakMap<
 		readonly versions: CoreFunctionVersions;
 		readonly parameters: ReadonlyArray<CorePlanRepresentation>;
 		readonly arguments: ReadonlyArray<CorePlanRepresentation> | undefined;
-		readonly operatorInputs: CoreDirectEntryPlan["operatorInputs"];
+		readonly instructionFacts: CoreDirectEntryPlan["instructionFacts"];
 		readonly constants: CoreDirectEntryPlan["constantBooleans"];
 		readonly calls: CoreDirectEntryPlan["callSites"];
 		readonly callOverrides: CoreDirectEntryPlan["callOverrides"];
@@ -49,7 +47,7 @@ export function analyzeCoreNativeEntry(
 	readonly valueRepresentations: ReadonlyArray<CorePlanRepresentation>;
 	readonly resultRepresentation: CorePlanRepresentation;
 	readonly constantBooleans?: CoreDirectEntryPlan["constantBooleans"];
-	readonly operatorInputs?: CoreDirectEntryPlan["operatorInputs"];
+	readonly instructionFacts?: CoreDirectEntryPlan["instructionFacts"];
 } {
 	const mask = (representation: CorePlanRepresentation | undefined) =>
 		representation === "f64"
@@ -82,18 +80,19 @@ export function analyzeCoreNativeEntry(
 	});
 	const instructions = cfg.reversePostorder.flatMap((block) => [
 		...fn.bodyInstructionIds(block),
+		fn.blockTerminator(block),
 	]);
 	const inputs = Object.freeze(
 		instructions.flatMap((instruction) => {
-			const opcode = fn.instructionOpcodeName(instruction);
-			if (opcode !== "unary" && opcode !== "binary") return [];
-			const masks = coreOperatorInputKindMasks(fn, instruction, kinds);
-			return masks === undefined
-				? []
-				: [Object.freeze({ instruction, masks: Object.freeze(masks) })];
+			return [
+				Object.freeze({
+					instruction,
+					...coreInstructionFacts(fn, instruction, kinds),
+				}),
+			];
 		}),
 	);
-	const operatorInputs = inputs.length === 0 ? undefined : inputs;
+	const instructionFacts = inputs.length === 0 ? undefined : inputs;
 	const constants =
 		arguments_ === undefined
 			? []
@@ -130,7 +129,7 @@ export function analyzeCoreNativeEntry(
 		parameters: [...parameters],
 		arguments: arguments_ === undefined ? undefined : [...arguments_],
 		constants: constantBooleans,
-		operatorInputs,
+		instructionFacts,
 		fields:
 			fields === undefined
 				? undefined
@@ -148,7 +147,7 @@ export function analyzeCoreNativeEntry(
 	return {
 		valueRepresentations,
 		resultRepresentation,
-		operatorInputs,
+		instructionFacts,
 		...(constantBooleans === undefined ? {} : { constantBooleans }),
 	};
 }
@@ -164,7 +163,7 @@ export function coreNativeEntryProofIsCurrent(
 			entry.fieldParameters === undefined &&
 			entry.resultFields === undefined &&
 			entry.recordParameters === undefined &&
-			entry.operatorInputs === undefined &&
+			entry.instructionFacts === undefined &&
 			entry.callOverrides === undefined
 		);
 	const proof = representationProofs.get(entry.valueRepresentations);
@@ -185,7 +184,7 @@ export function coreNativeEntryProofIsCurrent(
 		proof.constants === entry.constantBooleans &&
 		proof.resultFields === entry.resultFields &&
 		proof.recordParameters === entry.recordParameters &&
-		proof.operatorInputs === entry.operatorInputs &&
+		proof.instructionFacts === entry.instructionFacts &&
 		(proof.callOverrides === undefined
 			? entry.callOverrides === undefined
 			: entry.callOverrides !== undefined &&
@@ -263,6 +262,7 @@ function coreFixedArityComparisons(
 	};
 	const constants: Array<{ instruction: CoreInstructionId; value: boolean }> = [];
 	for (const instruction of instructions) {
+		if (fn.instructionKind(instruction) !== "operation") continue;
 		if (fn.instructionOpcodeName(instruction) !== "binary") continue;
 		const start = fn.kernel.instructionOperandStart(instruction);
 		const left = fn.kernel.operandAt(start);

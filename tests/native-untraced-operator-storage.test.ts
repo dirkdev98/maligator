@@ -69,7 +69,7 @@ describe("untraced boxed operator storage", () => {
 			);
 			const op = out.native.body.instructions[ip]!;
 			if (op.opcode !== "UNARY") throw new Error("Missing numeric primitive unary");
-			expect(out.native.instructions[ip]?.kind).toBe("operator-input-kinds");
+			expect(out.native.facts?.[ip]?.inputKindMasks).toBeDefined();
 			expect(out.native.registerRepresentations[op.dst]).toBe("boxed");
 			expect(out.native.storage!.rootRegisters).not.toContain(op.dst);
 			expect(out.native.storage!.expressionIps).not.toContain(ip);
@@ -179,6 +179,7 @@ describe("untraced boxed operator storage", () => {
 		if (op.opcode !== "UNARY") throw new Error("Missing coercive plus");
 		const native = lowerNativeFunctionStorage({
 			...out.native,
+			facts: out.native.facts!.map((fact, index) => (index === ip ? undefined : fact)),
 			body: {
 				...out.native.body,
 				instructions: out.native.body.instructions.map((op, index) =>
@@ -240,10 +241,9 @@ describe("untraced boxed operator storage", () => {
 
 	it("restores a traced local when both operands can produce a heap BigInt result", () => {
 		const out = storedOperator("a*b");
-		const instructions = out.native.instructions.map((plan, ip) =>
+		const facts = out.native.facts!.map((plan, ip) =>
 			ip === out.ip
 				? {
-						kind: "operator-input-kinds" as const,
 						inputKindMasks: [
 							COMPILER_VALUE_KIND_NUMBER |
 								COMPILER_VALUE_KIND_STRING |
@@ -262,7 +262,7 @@ describe("untraced boxed operator storage", () => {
 		);
 		const native = lowerNativeFunctionStorage({
 			...out.native,
-			instructions,
+			facts,
 			registerRepresentations: reps,
 		});
 		expect(native.storage!.rootRegisters).toContain(out.op.dst);

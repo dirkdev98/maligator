@@ -205,9 +205,7 @@ describe("boxed scalar expressions at phi boundaries", () => {
 		const op = out.native.body.instructions[ip]!;
 		if (op.opcode !== "BINARY") throw new Error("Missing product");
 		expect(out.native.registerRepresentations[op.left]).toBe("boxed");
-		expect(out.native.instructions[ip]).toMatchObject({
-			kind: "operator-input-kinds",
-		});
+		expect(out.native.facts?.[ip]?.inputKindMasks).toBeDefined();
 		expect(out.native.storage!.expressionIps).not.toContain(ip);
 	});
 
