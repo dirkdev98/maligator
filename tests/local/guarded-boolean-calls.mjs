@@ -201,4 +201,152 @@ for (const key of ["valueOf", "toString"]) {
 	);
 }
 check(coercions === 0, "no user coercions");
+
+function objectBoolean(value, extra = () => {}) {
+	const input = { value };
+	return Boolean(input, extra());
+}
+function positiveBoolean(value, extra = () => {}) {
+	const input = (value >>> 0) + 1;
+	return Boolean(input, extra());
+}
+function unsignedBoolean(value, extra = () => {}) {
+	const input = value >>> 0;
+	return Boolean(input, extra());
+}
+function stringBoolean(value, extra = () => {}) {
+	const input = "" + value;
+	return Boolean(input, extra());
+}
+function optionalBoolean(value, flag, extra = () => {}) {
+	const input = flag ? +value : undefined;
+	return Boolean(input, extra());
+}
+function numberBoolean(value, flag) {
+	const input = flag ? +value : !!value;
+	return Boolean(input);
+}
+function stringBigintBoolean(value, flag) {
+	const input = flag ? "" + value : 0n;
+	return Boolean(input);
+}
+function* narrowedSuspended(value) {
+	const input = value >>> 0;
+	return Boolean(input, yield 1);
+}
+for (const value of [0, -0, NaN, Infinity, -1, 1, 2 ** 32 - 1, "", "0", "x"]) {
+	check(objectBoolean(value) === true, "known object is truthy");
+	check(positiveBoolean(value) === true, "positive range is truthy");
+	check(unsignedBoolean(value) === !!(value >>> 0), "unsigned range excludes NaN");
+	check(stringBoolean(value) === !!("" + value), "known String conversion");
+	for (const flag of [false, true]) {
+		check(
+			optionalBoolean(value, flag) === (flag && !!+value),
+			"Number or undefined union",
+		);
+		check(
+			numberBoolean(value, flag) === (flag ? !!+value : !!value),
+			"Number or Boolean union",
+		);
+		check(
+			stringBigintBoolean(value, flag) === (flag && !!("" + value)),
+			"String or BigInt union",
+		);
+	}
+}
+for (const [invoke, input, expected, validate] of [
+	[objectBoolean, poison, true, (value) => value.value === poison],
+	[positiveBoolean, -1, true, (value) => value === 2 ** 32],
+	[unsignedBoolean, 0, false, (value) => value === 0],
+	[stringBoolean, "", false, (value) => value === ""],
+	[
+		(value, extra) => optionalBoolean(value, true, extra),
+		NaN,
+		false,
+		(value) => NativeBoolean(value) === false,
+	],
+]) {
+	const descriptor = Object.getOwnPropertyDescriptor(globalThis, "Boolean");
+	try {
+		check(
+			invoke(input, () => {
+				globalThis.Boolean = () => marker;
+				if (typeof gc === "function") gc();
+			}) === expected,
+			"narrowed call keeps the captured builtin",
+		);
+		globalThis.Boolean = function (value) {
+			check(
+				this === undefined && arguments.length === 2 && validate(value),
+				"narrowed fallback ABI",
+			);
+			return marker;
+		};
+		check(invoke(input) === marker, "narrowed call keeps arbitrary fallback result");
+		globalThis.Boolean = new Proxy(NativeBoolean, {
+			apply() {
+				return marker;
+			},
+		});
+		check(invoke(input) === marker, "narrowed call does not bypass a proxy");
+	} finally {
+		Object.defineProperty(globalThis, "Boolean", descriptor);
+	}
+}
+for (const value of [0, 1]) {
+	const descriptor = Object.getOwnPropertyDescriptor(globalThis, "Boolean");
+	try {
+		const iterator = narrowedSuspended(value);
+		check(iterator.next().value === 1, "narrowed suspension point");
+		globalThis.Boolean = () => marker;
+		if (typeof gc === "function") gc();
+		check(
+			iterator.next().value === !!value,
+			"narrowed suspension keeps captured callee and scalar value",
+		);
+	} finally {
+		Object.defineProperty(globalThis, "Boolean", descriptor);
+	}
+}
+
+const conversionEvents = [];
+try {
+	Object.defineProperty(globalThis, "Boolean", {
+		configurable: true,
+		get() {
+			conversionEvents.push("get");
+			return NativeBoolean;
+		},
+	});
+	check(
+		positiveBoolean(
+			{
+				valueOf() {
+					conversionEvents.push("coerce");
+					return 0;
+				},
+			},
+			() => conversionEvents.push("argument"),
+		) === true,
+		"constant truthiness keeps coercion",
+	);
+	check(
+		conversionEvents.join() === "coerce,get,argument",
+		"producer remains before callee lookup",
+	);
+	const failure = {};
+	let caught;
+	try {
+		positiveBoolean({
+			valueOf() {
+				throw failure;
+			},
+		});
+	} catch (error) {
+		caught = error;
+	}
+	check(caught === failure, "constant truthiness keeps producer throw");
+} finally {
+	Object.defineProperty(globalThis, "Boolean", globalDescriptor);
+}
 console.log("boolean guards passed");

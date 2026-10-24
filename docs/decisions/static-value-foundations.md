@@ -254,6 +254,14 @@ These folds replace the observation after receiver and argument producers have
 executed; construction and argument-list expansion remain separate operations.
 Removing an identity observation can expose an allocation for scalar replacement.
 
+Native ToBoolean lowering shares representation, kind-union and integer-range
+consumers across scalar expressions, numeric regions and ordinary bodies. Guarded
+Boolean calls and DataView endianness use the same conversion inside their admitted
+branch. Number predicates also fold non-Number kind unions inside the callee guard.
+The ordinary-call fallback retains the original operands, completion handling, root
+publication and polling. Producer effects run before either branch; narrowing does
+not authorize skipping their coercions or moving them across a callee lookup.
+
 Effect metadata preserves independent reads and writes for every effect domain,
 plus throwing, suspension, collection and user-code flags. Semantic purity alone
 does not discharge a native helper's allocation failure, polling or root obligations.

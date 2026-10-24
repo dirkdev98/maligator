@@ -175,4 +175,24 @@ function lengths(view, rounds) {
 }
 results.push(["lengths", lengths(view, 100), lengths(offsetView, 100)]);
 
+function positiveEndian(view, value) {
+	const little = (value >>> 0) + 1;
+	return view.getUint16(0, little);
+}
+function objectEndian(view, value) {
+	return view.getUint16(0, { value });
+}
+function optionalEndian(view, value, flag) {
+	const little = flag ? +value : undefined;
+	return view.getUint16(0, little);
+}
+const truthView = new DataView(new ArrayBuffer(4));
+truthView.setUint8(0, 1);
+truthView.setUint8(1, 2);
+for (const value of [0, -0, NaN, 1, -1, Infinity]) {
+	attempt("positive-endian", () => positiveEndian(truthView, value));
+	attempt("object-endian", () => objectEndian(truthView, value));
+	attempt("number-endian", () => optionalEndian(truthView, value, true));
+	attempt("undefined-endian", () => optionalEndian(truthView, value, false));
+}
 console.log(JSON.stringify(results));

@@ -19,6 +19,7 @@ import {
 	COMPILER_VALUE_KIND_NULL,
 	COMPILER_VALUE_KIND_STRING,
 	COMPILER_VALUE_KIND_BOOLEAN,
+	COMPILER_VALUE_KIND_BIGINT,
 	COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE,
 	compilerValueKindMaskIsSubset,
 	COMPILER_VALUE_KIND_NUMBER_OR_UNDEFINED,
@@ -671,6 +672,102 @@ function classLayoutAccess(
 
 function isNumericRep(rep: RegisterRep): boolean {
 	return rep === "number" || rep === "int32";
+}
+
+function nativeNumberTruthiness(
+	value: string,
+	range: CompilerIntegerRange | undefined,
+	integer = false,
+): string {
+	const constant = compilerIntegerRangeTruthiness(range);
+	return constant !== undefined
+		? String(constant)
+		: integer || range !== undefined
+			? `(${value} != 0)`
+			: `mal_number_is_truthy(${value})`;
+}
+
+// Operand expressions are pure reads; JavaScript producers have already executed.
+function nativeTruthiness(
+	value: string,
+	representation: RegisterRep,
+	kind: CompilerValueKindMask,
+	range?: CompilerIntegerRange,
+): string {
+	const ranged = compilerIntegerRangeTruthiness(range);
+	if (ranged !== undefined) return String(ranged);
+	if (representation === "boolean") return value;
+	if (isNumericRep(representation))
+		return nativeNumberTruthiness(value, range, representation === "int32");
+	const mask =
+		representation === "string"
+			? COMPILER_VALUE_KIND_STRING
+			: range !== undefined
+				? COMPILER_VALUE_KIND_NUMBER
+				: kind || COMPILER_VALUE_KIND_TOP;
+	const constant = compilerValueKindTruthiness(mask);
+	if (constant !== undefined) return String(constant);
+	if (mask === COMPILER_VALUE_KIND_TOP) return `mal_value_is_truthy(${value})`;
+	const nil = (kinds: number): string =>
+		kinds === COMPILER_VALUE_KIND_UNDEFINED
+			? `mal_value_is_undefined(${value})`
+			: kinds === COMPILER_VALUE_KIND_NULL
+				? `mal_value_is_null(${value})`
+				: `mal_value_is_nil(${value})`;
+	let remaining =
+		mask &
+		~(
+			COMPILER_VALUE_KIND_NUMBER |
+			COMPILER_VALUE_KIND_BOOLEAN |
+			COMPILER_VALUE_KIND_STRING |
+			COMPILER_VALUE_KIND_BIGINT
+		);
+	const terminal = compilerValueKindTruthiness(remaining);
+	let expression =
+		remaining === 0
+			? undefined
+			: terminal === undefined
+				? `!${nil(remaining & COMPILER_VALUE_KIND_NULLISH)}`
+				: String(terminal);
+	for (const scalar of [
+		COMPILER_VALUE_KIND_BIGINT,
+		COMPILER_VALUE_KIND_STRING,
+		COMPILER_VALUE_KIND_BOOLEAN,
+		COMPILER_VALUE_KIND_NUMBER,
+	]) {
+		if ((mask & scalar) === 0) continue;
+		const test =
+			scalar === COMPILER_VALUE_KIND_BIGINT
+				? `mal_value_is_bigint(${value})`
+				: scalar === COMPILER_VALUE_KIND_STRING
+					? `mal_value_is_string(${value})`
+					: scalar === COMPILER_VALUE_KIND_BOOLEAN
+						? `mal_value_is_boolean(${value})`
+						: `mal_ops_is_number(${value})`;
+		const truth =
+			scalar === COMPILER_VALUE_KIND_BIGINT
+				? `(mal_bigint_value(mal_value_to_bigint(${value})) != 0)`
+				: scalar === COMPILER_VALUE_KIND_STRING
+					? `(mal_string_length(mal_value_to_string(${value})) != 0)`
+					: scalar === COMPILER_VALUE_KIND_BOOLEAN
+						? `mal_value_to_boolean(${value})`
+						: nativeNumberTruthiness(`mal_ops_number_as_f64(${value})`, range);
+		if (expression === undefined) expression = truth;
+		else if (expression === "false")
+			expression =
+				scalar === COMPILER_VALUE_KIND_BOOLEAN
+					? `(${value} == MAL_VALUE_TRUE)`
+					: `(!${nil(remaining)} && ${truth})`;
+		else if (expression === "true")
+			expression =
+				scalar === COMPILER_VALUE_KIND_BOOLEAN
+					? `(${value} != MAL_VALUE_FALSE)`
+					: `(!${test} || ${truth})`;
+		else expression = `(${test} ? ${truth} : ${expression})`;
+
+		remaining |= scalar;
+	}
+	return expression ?? `mal_value_is_truthy(${value})`;
 }
 
 export interface BackendProfileDecision {
@@ -1692,17 +1789,15 @@ function emitNumericLoopRegion(
 		if (exit !== undefined) return `{ ${id}_exit = ${exit}; break; }`;
 		return innerHeaders.size > 0 ? `goto ${label(mode, ip)};` : `${id}_b${ip} = true;`;
 	};
-	const truthy = (register: number, ip: number): string => {
-		const ranged = compilerIntegerRangeTruthiness(
-			instructionInputIntegerRange(facts?.[ip], register),
-		);
-		if (ranged !== undefined) return String(ranged);
-		return kindOf(register) === "boolean"
+	const truthy = (register: number, ip: number): string =>
+		kindOf(register) === "boolean"
 			? local(register)
-			: floating && !integral.has(register)
-				? `mal_number_is_truthy(${local(register)})`
-				: `${local(register)} != 0`;
-	};
+			: nativeNumberTruthiness(
+					local(register),
+					instructionInputIntegerRange(facts?.[ip], register),
+					!floating || integral.has(register),
+				);
+
 	const int32 = (register: number) => `mal_safe_integer_to_i32(${local(register)})`;
 	const checked = (call: string, dst: number) =>
 		`if (__builtin_expect(!${call.replace("%DST%", `&${local(dst)}`)}, 0)) ${restart}`;
@@ -2179,15 +2274,14 @@ function emitNumberRecordRegion(
 	);
 	const headSet = new Set(heads);
 	const reach = (ip: number) => (ip === plan.exitIp ? "" : `${id}_b${ip} = true;`);
-	const truthy = (register: number, ip: number): string => {
-		const ranged = compilerIntegerRangeTruthiness(
-			instructionInputIntegerRange(facts?.[ip], register),
-		);
-		if (ranged !== undefined) return String(ranged);
-		return kindOf(register) === "boolean"
+	const truthy = (register: number, ip: number): string =>
+		kindOf(register) === "boolean"
 			? local(register)
-			: `mal_number_is_truthy(${local(register)})`;
-	};
+			: nativeNumberTruthiness(
+					local(register),
+					instructionInputIntegerRange(facts?.[ip], register),
+				);
+
 	const statement = (ip: number): string => {
 		const op = fn.instructions[ip]!;
 		switch (op.opcode) {
@@ -3546,18 +3640,17 @@ function renderScalarExpression(
 		case "MOVE":
 			return `r${op.src}`;
 		case "UNARY": {
-			const ranged = compilerIntegerRangeTruthiness(
-				instructionInputIntegerRange(facts, op.src),
-			);
-			if (op.operator === "!" && ranged !== undefined)
-				return booleanResult(op.dst, String(!ranged));
 			if (op.operator === "!")
 				return booleanResult(
 					op.dst,
-					reps[op.src] === "boolean"
-						? `!r${op.src}`
-						: `!mal_number_is_truthy(${number(op.src)})`,
+					`!(${nativeTruthiness(
+						`r${op.src}`,
+						reps[op.src]!,
+						instructionInputKind(facts, op.src) ?? COMPILER_VALUE_KIND_TOP,
+						instructionInputIntegerRange(facts, op.src),
+					)})`,
 				);
+
 			if (op.operator === "~")
 				return reps[op.dst] === "int32"
 					? `~${int32(op.src)}`
@@ -7686,27 +7779,14 @@ function emitInstruction(
 					: inputValue(r);
 	const num = (r: number): string =>
 		reps[r] === "int32" ? `(f64) ${inputValue(r)}` : inputValue(r);
-	const truthy = (r: number): string => {
-		const ranged = compilerIntegerRangeTruthiness(
+	const truthy = (r: number): string =>
+		nativeTruthiness(
+			inputValue(r),
+			reps[r]!,
+			instructionInputKind(context.facts, r) ?? COMPILER_VALUE_KIND_TOP,
 			instructionInputIntegerRange(context.facts, r),
 		);
-		if (ranged !== undefined) return String(ranged);
-		if (reps[r] === "boolean") return `r${r}`;
-		if (reps[r] === "int32") return `(r${r} != 0)`;
-		if (reps[r] === "number") return `mal_number_is_truthy(r${r})`;
-		const kind =
-			reps[r] === "string"
-				? COMPILER_VALUE_KIND_STRING
-				: (instructionInputKind(context.facts, r) ?? COMPILER_VALUE_KIND_TOP);
-		const constant = compilerValueKindTruthiness(kind);
-		if (constant !== undefined) return constant ? "true" : "false";
-		if (kind === COMPILER_VALUE_KIND_BOOLEAN) return `mal_value_to_boolean(r${r})`;
-		if (kind === COMPILER_VALUE_KIND_NUMBER)
-			return `mal_number_is_truthy(mal_ops_number_as_f64(r${r}))`;
-		if (kind === COMPILER_VALUE_KIND_STRING)
-			return `(mal_string_length(mal_value_to_string(r${r})) != 0)`;
-		return `mal_value_is_truthy(r${r})`;
-	};
+
 	if (
 		instruction.opcode === "MOVE" &&
 		context.propertyNumericUpdateAction === undefined &&
@@ -8098,6 +8178,31 @@ function emitInstruction(
 					: null;
 		}
 		return decoded.kind === "boolean" ? (decoded.value ? "true" : "false") : null;
+	};
+	const operandTruthy = (operand: number): string => {
+		const decoded = decodeVmValueOperand(operand);
+		switch (decoded.kind) {
+			case "undefined":
+			case "null":
+				return "false";
+			case "boolean":
+				return String(decoded.value);
+			case "number":
+				return String(decoded.value !== 0);
+			case "string": {
+				const text = context.stringConstants[decoded.index];
+				return text === undefined
+					? nativeTruthiness(boxedOperand(operand), "string", COMPILER_VALUE_KIND_STRING)
+					: String(text.length !== 0);
+			}
+			case "register":
+				return nativeTruthiness(
+					inputValue(decoded.register),
+					reps[decoded.register]!,
+					operandKind(operand) ?? COMPILER_VALUE_KIND_TOP,
+					instructionInputIntegerRange(context.facts, decoded.register),
+				);
+		}
 	};
 	const coerciveNumberOperand = (operand: number): string | null => {
 		const boolean = nativeBooleanOperand(operand);
@@ -13021,11 +13126,7 @@ function emitInstruction(
 						: (nativeNumberOperand(offset) ??
 							`(mal_ops_is_number(${boxedOperand(offset)}) ? mal_ops_number_as_f64(${boxedOperand(offset)}) : -1.0)`);
 				const endian = operand(dataViewAccess.set ? 2 : 1);
-				const littleEndian =
-					endian === undefined
-						? "false"
-						: (nativeBooleanOperand(endian) ??
-							`mal_value_is_truthy(${boxedOperand(endian)})`);
+				const littleEndian = endian === undefined ? "false" : operandTruthy(endian);
 				const value = dataViewAccess.set ? operand(1) : undefined;
 				const number =
 					value === undefined
@@ -13072,8 +13173,7 @@ function emitInstruction(
 					"Boolean.prototype.toString": "MAL_BOOLEAN_TO_STRING",
 				}[guardedBuiltinOperation];
 				const receiver = boxedOperand(instruction.thisValue);
-				const argument =
-					args.length === 0 ? "MAL_VALUE_UNDEFINED" : boxedOperand(args[0]!);
+				const argument = args[0];
 				const primitiveReceiver = nativeBooleanOperand(instruction.thisValue);
 				const receiverGuard =
 					operation === "MAL_BOOLEAN_CALL" || primitiveReceiver !== null
@@ -13082,7 +13182,10 @@ function emitInstruction(
 				const boolean = primitiveReceiver ?? `mal_value_to_boolean(${receiver})`;
 				const result =
 					operation === "MAL_BOOLEAN_CALL"
-						? storeBoolean(instruction.dst, `mal_value_is_truthy(${argument})`)
+						? storeBoolean(
+								instruction.dst,
+								argument === undefined ? "false" : operandTruthy(argument),
+							)
 						: operation === "MAL_BOOLEAN_VALUE_OF"
 							? storeBoolean(instruction.dst, boolean)
 							: `r${instruction.dst} = ${callResult(`mal_value_from_string(mal_intrinsic_hot_ascii(vm, ${boolean} ? MAL_HOT_KEY_TRUE : MAL_HOT_KEY_FALSE))`)};`;
@@ -13107,7 +13210,10 @@ function emitInstruction(
 						? guardedBuiltinOperation === "Number.isNaN"
 							? "false"
 							: "true"
-						: argument === undefined
+						: argument === undefined ||
+							  ((operandKind(argument) ?? COMPILER_VALUE_KIND_TOP) &
+									COMPILER_VALUE_KIND_NUMBER) ===
+									0
 							? "false"
 							: number === null
 								? boxedNumberPredicateExpression(
@@ -14149,21 +14255,18 @@ function emitInstruction(
 				...(instruction.targetIp === ip + 1 ? [] : [`goto L${instruction.targetIp};`]),
 			];
 		case "JUMP_IF": {
-			const ranged = compilerIntegerRangeTruthiness(
-				instructionInputIntegerRange(context.facts, instruction.cond),
-			);
-			if (ranged === false) return [];
-			if (ranged === true)
+			const condition = truthy(instruction.cond);
+			if (condition === "false") return [];
+			if (condition === "true")
 				return [
 					...(context.loopPoll ? [poll()] : []),
 					...(instruction.targetIp === ip + 1 ? [] : [`goto L${instruction.targetIp};`]),
 				];
 			return context.loopPoll
-				? [
-						`if (${truthy(instruction.cond)}) { ${poll()} goto L${instruction.targetIp}; }`,
-					]
-				: [`if (${truthy(instruction.cond)}) goto L${instruction.targetIp};`];
+				? [`if (${condition}) { ${poll()} goto L${instruction.targetIp}; }`]
+				: [`if (${condition}) goto L${instruction.targetIp};`];
 		}
+
 		case "RETURN": {
 			// Register -1 is the "no value" sentinel (a synthesized empty return).
 			let value =
