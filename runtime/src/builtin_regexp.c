@@ -1384,6 +1384,21 @@ static MalValue regexp_proto_test(MalVm *vm, MalValue this_value, const MalValue
     if (!mal_vm_to_string(vm, arg_count >= 1 ? args[0] : mal_value_new_undefined(), &s)) {
         return mal_value_new_undefined();
     }
+    // Without g or y the builtin exec only reads lastIndex, which a Number keeps pure,
+    // and matches from the start.
+    MalRegExpObject *canonical;
+    if (regexp_canonical_instance(vm, this_value, &canonical) &&
+        (canonical->flag_bits & (MAL_REGEXP_JS_GLOBAL | MAL_REGEXP_JS_STICKY)) == 0 &&
+        mal_ops_is_number(mal_object_field_load(
+            &canonical->object, canonical->object.shape->props[0].slot))) {
+        int32_t caps[64];
+        int32_t ngroups = regexp_matcher_exec(vm, canonical, s, 0, caps, 64);
+        if (ngroups <= 32) {
+            if (ngroups < 0) return mal_value_new_undefined();
+            if (ngroups > 0) regexp_legacy_update(vm, s, caps, ngroups);
+            return mal_value_new_boolean(ngroups > 0);
+        }
+    }
     bool ok;
     MalValue match = regexp_exec_abstract(vm, this_value, s, true, &ok);
     if (!ok) {

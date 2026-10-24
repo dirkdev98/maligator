@@ -603,6 +603,32 @@ check(
 		'["a[1]b[2]",0,"2","a1b","--b","-ba","-\u{1F600}-x-","a[y]b[y]","y","",["utf8","iso88591","cp12"],["-"],"-"]',
 );
 
+const coercedTest = /b/;
+let lastIndexReads = 0;
+coercedTest.lastIndex = {
+	valueOf() {
+		lastIndexReads++;
+		return 5;
+	},
+};
+const wideTest = new RegExp("(x)?".repeat(32) + "(y)");
+const testResults = [
+	coercedTest.test("abc"),
+	lastIndexReads,
+	typeof coercedTest.lastIndex,
+	/c(d)?/.test("acd"),
+	RegExp.$1,
+	/q/.test("acd"),
+	RegExp.lastMatch,
+	wideTest.test("zy"),
+	RegExp.lastMatch,
+	RegExp.leftContext,
+];
+check(
+	"test() reads lastIndex and records the legacy statics without g or y",
+	JSON.stringify(testResults) === '[true,1,"object",true,"d",false,"cd",true,"y","z"]',
+);
+
 const literalReplacements = [
 	"x".repeat(300).replace(/x/g, ""),
 	"ab".repeat(200).replace(/a/g, "c") === "cb".repeat(200),
