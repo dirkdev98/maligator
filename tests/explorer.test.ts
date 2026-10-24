@@ -45,12 +45,12 @@ describe("explorer compilation", () => {
 		);
 	});
 
-	it("compiles every builtin through both lowerings without executing source", () => {
+	it("compiles every builtin to mapped C without executing source", () => {
 		for (const sample of SAMPLES) {
 			const result = compileExplorer(sample.source, sample.config ?? {});
-			expect(result.modes.generic.optimizedCore).toBe(result.modes.full.optimizedCore);
-			expect(result.modes.full.stats.functions).toBeGreaterThan(0);
-			expect(result.modes.full.wire.slice(0, 4)).toEqual([77, 65, 76, 87]);
+			expect(result.stats.functions).toBeGreaterThan(0);
+			expect(result.mapping.functions.length).toBeGreaterThan(0);
+			expect(result.mapping.ranges.length).toBeGreaterThan(0);
 		}
 		expect(request('throw new Error("must not execute"); for (;;) {}').ok).toBe(true);
 	});

@@ -124,3 +124,20 @@ worker examples also run in the native developer gate.
 Favicon files are resized from `mascot.webp` and served at the site root. Explorer
 assets are built into `.cache/explorer-site/current`; its external CSS keeps its own
 CSP free of inline scripts and styles.
+
+The Explorer compares editable JavaScript/TypeScript with emitted C. Statement
+selections and optional linked scrolling use metadata collected by the native C
+renderer. Native functions are shown initially; the runtime tables toggle reveals
+the complete translation unit. Copy and Download always include the complete C.
+Editing source or build settings pauses linking until recompilation. Outlined native
+bodies report function-level attribution; other mappings retain statement positions
+and inline caller chains. Compiler stages remain available through `npm run explore:outputs`.
+
+A source location can own several separate C regions. The matching-region controls
+cycle between them, including blocks placed after a jump, while the source selection
+highlights every match. Loop initializer, condition, and update expressions retain
+their own positions; C navigation reports both source line and column.
+
+Fused numeric-loop and number-record regions retain the positions of all instructions
+claimed by their native plan and are labelled as combined source regions. Their C
+can correspond to several JavaScript locations at once.

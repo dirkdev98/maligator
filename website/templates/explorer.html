@@ -7,7 +7,7 @@
 		<meta name="color-scheme" content="light" />
 		<meta
 			name="description"
-			content="Edit JavaScript and explore Maligator's compiler stages locally in your browser."
+			content="See how Maligator compiles your JavaScript to C, with linked source navigation. Compilation stays in your browser."
 		/>
 		<title>Compiler explorer — Maligator</title>
 		<link rel="stylesheet" href="__EXPLORER_CSS__" />
@@ -20,168 +20,187 @@
 		<main>
 			<div class="intro">
 				<div>
-					<p class="eyebrow">Inside the compiler</p>
-					<h1>Follow your JavaScript to C.</h1>
-					<p>Paste JavaScript or TypeScript. Compilation stays in your browser.</p>
+					<p class="eyebrow">Compiler explorer</p>
+					<h1>JavaScript, meet C.</h1>
+					<p>Edit the source. Inspect the C. Follow the connection.</p>
 				</div>
+				<p class="local-note">
+					<span class="local-dot" aria-hidden="true"></span> Compiled in your browser.<br /><span
+						>Your code stays on your device.</span
+					>
+				</p>
 			</div>
-			<section class="input-panel" aria-label="Source and build settings">
-				<div class="editor">
-					<div class="editor-toolbar">
-						<label for="example"
-							>Example
-							<select id="example"></select></label
-						><button id="reset" type="button">Reset example</button>
-						<span id="source-size"></span>
-					</div>
-					<label class="sr-only" for="source">Source code</label>
-					<textarea
-						id="source"
-						spellcheck="false"
-						autocapitalize="off"
-						autocomplete="off"
-						aria-describedby="source-help"
-					></textarea>
-					<div class="editor-footer">
-						<p id="source-help">
-							Types stripped automatically · 64 KiB maximum · single file
-						</p>
+			<section class="workspace" aria-label="JavaScript to C comparison">
+				<div class="workspace-toolbar">
+					<label class="example-control" for="example"
+						>Example
+						<select id="example"></select
+					></label>
+					<button id="reset" type="button">Reset</button>
+					<div class="workspace-actions">
+						<label class="link-control"
+							><input id="linked" type="checkbox" checked />Linked scrolling</label
+						><button
+							id="settings-toggle"
+							type="button"
+							aria-expanded="false"
+							aria-controls="settings"
+						>
+							Build settings</button
+						><button class="primary" id="compile" type="button">
+							Compile <kbd>⌘ / Ctrl ↵</kbd></button
+						><button id="cancel" type="button" hidden>Cancel</button>
 					</div>
 				</div>
-				<aside class="editor-options">
-					<div class="compile-actions">
-						<button class="primary" id="compile" type="button">
-							Compile <kbd>⌘ / Ctrl ↵</kbd></button
-						><button id="cancel" type="button" disabled>Cancel</button>
-					</div>
-					<details class="settings">
-						<summary>Build settings</summary>
-						<p>Restrictive defaults. Features configure the emitted program.</p>
+				<div class="settings" id="settings" hidden>
+					<div class="settings-selects">
 						<label for="primordials"
 							>Primordials<select id="primordials">
 								<option value="locked">Locked</option>
 								<option value="mutable">Mutable</option>
 							</select></label
-						>
-						<label for="eval"
+						><label for="eval"
 							>Dynamic compilation<select id="eval">
 								<option value="compile-check">Reject visible eval / Function</option>
 								<option value="false">Disabled at runtime</option>
 								<option value="true">Enabled</option>
 							</select></label
-						>
-						<div class="toggles">
-							<label><input id="regexp" type="checkbox" />RegExp</label
-							><label><input id="realms" type="checkbox" />Realms</label
-							><label><input id="temporal" type="checkbox" />Temporal</label
-							><label><input id="intl" type="checkbox" />Intl (all)</label
-							><label><input id="webPlatform" type="checkbox" />Web platform</label
-							><label><input id="node" type="checkbox" />Node surface</label
-							><label><input id="maligator" type="checkbox" />Maligator surface</label>
-						</div>
-						<p>
-							Some settings affect runtime linking, so stage text may stay the same.
-							Enabling a surface does not enable imports.
-						</p>
-						<button id="download-config" type="button">Download build config</button>
-					</details>
-				</aside>
-			</section>
-			<div class="status" id="status" role="status" aria-live="polite">
-				Ready to compile.
-			</div>
-			<pre id="diagnostics" class="diagnostics" hidden></pre>
-			<section class="results" aria-label="Compiler output">
-				<div class="result-heading">
-					<div>
-						<p class="eyebrow" id="example-group"></p>
-						<h2 id="example-title"></h2>
-						<p id="example-summary"></p>
+						><button id="download-config" type="button">Download build config</button>
 					</div>
-					<span id="result-state" class="badge">No result yet</span>
+					<div class="toggles">
+						<label><input id="regexp" type="checkbox" />RegExp</label
+						><label><input id="realms" type="checkbox" />Realms</label
+						><label><input id="temporal" type="checkbox" />Temporal</label
+						><label><input id="intl" type="checkbox" />Intl</label
+						><label><input id="webPlatform" type="checkbox" />Web platform</label
+						><label><input id="node" type="checkbox" />Node surface</label
+						><label><input id="maligator" type="checkbox" />Maligator surface</label>
+					</div>
+					<p>
+						Features configure the emitted program. Imports are unavailable in this
+						single-file explorer.
+					</p>
 				</div>
-				<div class="pipeline-toolbar">
-					<nav id="stages" aria-label="Compiler stages"></nav>
-					<label><input id="compare" type="checkbox" />Compare generic / full</label>
+				<div class="connection-bar">
+					<span class="connection-mark" aria-hidden="true">↔</span>
+					<p id="mapping-help">
+						Select a source statement or a C line to see how they connect.
+					</p>
+					<nav
+						class="range-navigation"
+						id="range-navigation"
+						aria-label="Matching C regions"
+						hidden
+					>
+						<button id="previous-range" type="button" aria-label="Previous C region">
+							←
+						</button>
+						<span id="range-position"></span>
+						<button id="next-range" type="button" aria-label="Next C region">→</button>
+					</nav>
+					<span id="mapping-state">Statement mappings</span>
 				</div>
-				<div class="focus-toolbar">
-					<label for="trail"
-						>Follow a construct
-						<select id="trail"></select></label
-					><label for="search"
-						>Find in output
-						<input
-							id="search"
-							type="search"
-							placeholder="Instruction, name, or text" /></label
-					><button id="find" type="button">Find</button
-					><button id="download-wire" type="button" disabled>Download MALW</button>
-				</div>
-				<p class="explanation" id="explanation"></p>
 				<div class="panes">
-					<article class="pane">
+					<article class="pane source-pane" aria-label="Source">
 						<header>
 							<div>
-								<p class="eyebrow" id="left-kind"></p>
-								<h3 id="left-title"></h3>
+								<span class="pane-index">01</span>
+								<h2>JavaScript <span>/ TypeScript</span></h2>
 							</div>
-							<div>
-								<button id="left-copy" type="button" disabled>Copy</button
-								><button id="left-save" type="button" disabled>Download</button>
-							</div>
+							<span id="source-size" class="pane-meta"></span>
 						</header>
-						<pre
-							class="code"
-							id="left-code"
-							tabindex="0"
-							aria-label="Left compiler output"
-						></pre>
+						<div class="pane-tools">
+							<p id="example-summary"></p>
+							<button id="source-copy" type="button">Copy</button>
+						</div>
+						<div class="code-editor" id="source-editor">
+							<pre class="code-paint" aria-hidden="true"></pre>
+							<pre class="code-gutter" aria-hidden="true"></pre>
+							<label class="sr-only" for="source">JavaScript or TypeScript source</label
+							><textarea
+								id="source"
+								wrap="off"
+								spellcheck="false"
+								autocapitalize="off"
+								autocomplete="off"
+								aria-describedby="source-help"
+							></textarea>
+						</div>
 						<footer>
-							<button id="left-previous" type="button">Previous lines</button
-							><span id="left-page"></span
-							><button id="left-next" type="button">Next lines</button>
+							<span id="source-location">Ln 1, Col 1</span
+							><span id="source-help">Types erased · 64 KiB limit</span>
 						</footer>
 					</article>
-					<article class="pane">
+					<article class="pane c-pane" aria-label="Emitted C">
 						<header>
 							<div>
-								<p class="eyebrow" id="right-kind"></p>
-								<h3 id="right-title"></h3>
+								<span class="pane-index">02</span>
+								<h2>Emitted C</h2>
+								<span class="output-badge" id="result-state">Ready when you are</span>
 							</div>
-							<div>
-								<button id="right-copy" type="button" disabled>Copy</button
-								><button id="right-save" type="button" disabled>Download</button>
+							<div class="pane-actions">
+								<button id="c-copy" type="button" disabled>Copy</button
+								><button id="c-save" type="button" disabled>Download</button>
 							</div>
 						</header>
-						<pre
-							class="code"
-							id="right-code"
-							tabindex="0"
-							aria-label="Right compiler output"
-						></pre>
+						<div class="pane-tools">
+							<label class="sr-only" for="function">C function</label
+							><select id="function" disabled>
+								<option value="">All functions</option></select
+							><label class="tables-control"
+								><input id="tables" type="checkbox" />Runtime tables</label
+							>
+						</div>
+						<div class="code-editor" id="c-editor">
+							<pre class="code-paint" aria-hidden="true"></pre>
+							<pre class="code-gutter" aria-hidden="true"></pre>
+							<label class="sr-only" for="c-output">Emitted C code</label
+							><textarea
+								id="c-output"
+								wrap="off"
+								readonly
+								spellcheck="false"
+								aria-describedby="mapping-help"
+							></textarea>
+							<div class="empty-state" id="empty-state">
+								<span aria-hidden="true">JS <span>→</span> C</span>
+								<h3>A closer look at your code.</h3>
+								<p>
+									Compile an example to explore its native output.<br />Select a line on
+									either side to follow it across.
+								</p>
+								<button id="empty-compile" type="button">
+									Compile example <span aria-hidden="true">↗</span>
+								</button>
+							</div>
+						</div>
 						<footer>
-							<button id="right-previous" type="button">Previous lines</button
-							><span id="right-page"></span
-							><button id="right-next" type="button">Next lines</button>
+							<span id="c-location">No output yet</span><span id="c-lines"></span>
 						</footer>
 					</article>
 				</div>
-				<div class="result-footer">
-					<p id="statistics"></p>
-					<p id="world"></p>
-				</div>
-				<details id="structure">
-					<summary>Image structure and effective configuration</summary>
-					<pre id="structure-content"></pre>
-				</details>
 			</section>
+			<div class="result-bar">
+				<p id="status" role="status" aria-live="polite">
+					Choose an example or paste your code, then compile.
+				</p>
+				<p id="statistics"></p>
+			</div>
+			<pre id="diagnostics" class="diagnostics" role="alert" hidden></pre>
+			<div class="explorer-notes">
+				<p>
+					<strong>From source to native.</strong> The C includes Maligator’s runtime calls
+					and selected native specializations, ready for the native toolchain.
+				</p>
+				<p>
+					Optimizations can combine, move, or remove source statements. Highlighting
+					follows the positions retained by the compiler.
+				</p>
+			</div>
 		</main>
 		__SITE_FOOTER__
 		<noscript
-			><p>
-				This explorer needs JavaScript and WebAssembly. Enable JavaScript to compile
-				locally.
-			</p></noscript
+			><p>This explorer needs JavaScript and WebAssembly to compile locally.</p></noscript
 		>
 		<script id="explorer-data" type="application/json">
 			__EXPLORER_DATA__

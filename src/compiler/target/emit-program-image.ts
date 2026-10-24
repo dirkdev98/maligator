@@ -7,6 +7,8 @@ import type { CoreTargetClassLayout } from "./core-target-ir.ts";
 import { generatedDeclarationReferences } from "./generated-declaration-references.ts";
 import { GENERATED_PRELUDE_END } from "./generated-prelude.ts";
 import { validateNativeProgramStorage } from "./lower-native-storage.ts";
+import { shiftNativeSourceRanges } from "./native-source-map.ts";
+import type { NativeSourceRange } from "./native-source-map.ts";
 import { finalizeCompilerRemarks } from "./profile-metadata.ts";
 import type { ProgramImage } from "./program-image.ts";
 import {
@@ -636,11 +638,58 @@ export function emitProgramImage(image: ProgramImage, options: EmitOptions = {})
 		.join("\n");
 }
 
+export interface EmittedCSourceMap {
+	source: string;
+	ranges: Array<NativeSourceRange & { functionIndex: number; symbol: string }>;
+	functions: Array<{ functionIndex: number; symbol: string; start: number; end: number }>;
+}
+
+export function emitProgramImageWithSourceMap(
+	image: ProgramImage,
+	options: EmitOptions = {},
+): EmittedCSourceMap {
+	const emitted = emitProgramImageParts(
+		image,
+		options,
+		false,
+		undefined,
+		undefined,
+		true,
+	);
+	const parts = emitted.parts.map((part) =>
+		typeof part === "string" ? part : part.join("\n"),
+	);
+	const offsets = [0];
+	for (const part of parts) offsets.push(offsets.at(-1)! + part.length + 1);
+	return {
+		source: parts.join("\n"),
+		ranges: emitted.sourceMapParts.flatMap((part) =>
+			shiftNativeSourceRanges(part.ranges, offsets[part.part]!).map((range) => ({
+				...range,
+				functionIndex: part.functionIndex,
+				symbol: part.symbol,
+			})),
+		),
+		functions: emitted.sourceMapParts.map((part) => ({
+			functionIndex: part.functionIndex,
+			symbol: part.symbol,
+			start: offsets[part.part]!,
+			end: offsets[part.part]! + parts[part.part]!.length,
+		})),
+	};
+}
+
 type ProgramSourcePart = string | ReadonlyArray<string>;
 
 interface EmittedProgramImageParts {
 	parts: ReadonlyArray<ProgramSourcePart>;
 	compiled: Array<CompiledFunction | null>;
+	sourceMapParts: Array<{
+		part: number;
+		functionIndex: number;
+		symbol: string;
+		ranges: ReadonlyArray<NativeSourceRange>;
+	}>;
 }
 
 interface ExternalDataDefinition {
@@ -928,6 +977,7 @@ function emitNativeFunctions(
 		useCompiled: boolean;
 		suffix: string;
 		debug: boolean;
+		captureSourceMap?: boolean;
 		linkage: "static" | "external";
 		maxCodeUnits?: number;
 		/** Definitions that do not fit one translation unit with their declarations. */
@@ -1041,7 +1091,12 @@ function emitNativeFunctions(
 		image.runtime.functions.flatMap((fn, index) => (fn.strict ? [index] : [])),
 	);
 	const framePositions = image.runtime.functions.map((fn) =>
-		options.debug ? positionTableEntries(fn) : false,
+		options.debug
+			? Object.assign(
+					positionTableEntries(fn),
+					options.captureSourceMap ? { captureSourceMap: true } : {},
+				)
+			: false,
 	);
 	const bailouts = new Set<number>();
 	const render = (
@@ -1312,8 +1367,10 @@ function emitProgramImageParts(
 	splitCompiledFunctions: boolean,
 	maxCompiledFunctionCodeUnits?: number,
 	excludedSymbols?: ReadonlySet<string>,
+	captureSourceMap = false,
 ): EmittedProgramImageParts {
 	validateImageForEmission(image);
+	const sourceMapParts: EmittedProgramImageParts["sourceMapParts"] = [];
 	const runtime = image.runtime;
 	const suffix = options.symbolSuffix ?? "";
 	const debug = options.debugInfo !== false;
@@ -1363,6 +1420,7 @@ function emitProgramImageParts(
 	// split build can independently reject a canonical body or typed sibling, and
 	// no remaining caller may retain a reference to a body that was not emitted.
 	const nativeEmission = emitNativeFunctions(image, {
+		captureSourceMap,
 		useCompiled,
 		suffix,
 		debug,
@@ -1438,14 +1496,28 @@ function emitProgramImageParts(
 			lines.push("#undef MAL_DECLARE_COMPILED", "");
 		}
 	} else {
-		for (const fn of compiled) {
-			if (fn !== null) {
-				lines.push(
-					fn.source,
-					...fn.directEntries.flatMap((entry) => ["", entry.source]),
-					"",
-				);
+		for (const [functionIndex, fn] of compiled.entries()) {
+			if (fn === null) continue;
+			if (captureSourceMap && fn.source.length > 0)
+				sourceMapParts.push({
+					part: lines.length,
+					functionIndex,
+					symbol: fn.symbol,
+					ranges: fn.sourceMap ?? [],
+				});
+			lines.push(fn.source);
+			for (const entry of fn.directEntries) {
+				lines.push("");
+				if (captureSourceMap)
+					sourceMapParts.push({
+						part: lines.length,
+						functionIndex,
+						symbol: entry.symbol,
+						ranges: entry.sourceMap ?? [],
+					});
+				lines.push(entry.source);
 			}
+			lines.push("");
 		}
 	}
 
@@ -1648,7 +1720,7 @@ function emitProgramImageParts(
 		lines.push(line);
 	}
 
-	return { parts: lines, compiled };
+	return { parts: lines, compiled, sourceMapParts };
 }
 
 function generatedHeaderFiles(lines: ReadonlyArray<string>): Array<string> {

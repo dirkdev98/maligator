@@ -1,18 +1,5 @@
-import { compileExplorerCore, compileMode } from "./compiler.ts";
+import { compileExplorerCore, compileExplorerComparison } from "./compiler.ts";
 import { EXPLORER_LIMITS, EXPLORER_SCHEMA, utf8ByteLength } from "./config.ts";
-
-function outputMode(result: ReturnType<typeof compileMode>) {
-	return {
-		optimizedCore: result.optimizedCore,
-		target: result.target,
-		malw: result.malw,
-		hex: result.hex,
-		c: result.c,
-		wire: Array.from(result.wire),
-		structure: result.structure,
-		stats: result.stats,
-	};
-}
 
 export function compileExplorer(source: string, config: unknown = {}) {
 	const compiled = compileExplorerCore(source, config);
@@ -22,11 +9,7 @@ export function compileExplorer(source: string, config: unknown = {}) {
 		world: compiled.facts.world,
 		closure: compiled.facts.closure,
 		diagnostics: compiled.diagnostics,
-		preCore: compiled.preCore,
-		modes: {
-			generic: outputMode(compileMode(compiled, "generic")),
-			full: outputMode(compileMode(compiled, "full")),
-		},
+		...compileExplorerComparison(compiled),
 	};
 }
 

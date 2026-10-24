@@ -1,5 +1,10 @@
 import { COMPILER_VALUE_KIND_NUMBER } from "../shared/compiler-value-kinds.ts";
 import { emitTypeofResult } from "./emit-program-image.ts";
+import {
+	nativeInstructionSourceRanges,
+	shiftNativeSourceRanges,
+} from "./native-source-map.ts";
+import type { NativeSourceRange } from "./native-source-map.ts";
 import type { NativeDirectEntryPlan, VmRegisterRepresentation } from "./program-image.ts";
 import { decodeVmValueOperand } from "./runtime-image.ts";
 import type { BytecodeFunction, BytecodeInstruction } from "./runtime-image.ts";
@@ -7,6 +12,7 @@ import type { BytecodeFunction, BytecodeInstruction } from "./runtime-image.ts";
 const MAXIMUM_FAST_ENTRY_INSTRUCTIONS = 64;
 
 export interface NativeFastEntryInput {
+	readonly onSourceMap?: (ranges: ReadonlyArray<NativeSourceRange>) => void;
 	readonly fn: BytecodeFunction;
 	readonly directEntry: NativeDirectEntryPlan | undefined;
 	/** The full entry already answers this body without a frame or with a better dispatch. */
@@ -94,10 +100,13 @@ export function renderNativeFastEntry(
 		body.push(line);
 	}
 	const lines: Array<string> = [];
+	const starts: Array<number> = [];
 	for (const [ip, line] of body.entries()) {
 		if (targets.has(ip)) lines.push(`F${ip}:;`);
+		starts.push(lines.length);
 		lines.push(`    ${line}`);
 	}
+	const mappedLineCount = lines.length;
 	if (targets.has(fn.instructions.length)) lines.push(`F${fn.instructions.length}:;`);
 	lines.push(`    ${fastReturn("MAL_VALUE_UNDEFINED", result, exported)}`);
 
@@ -126,8 +135,31 @@ export function renderNativeFastEntry(
 	const full = `    return ${input.fullSymbol}(${input.fullArguments.join(", ")});`;
 	// C admits the pragma only before the body's first statement.
 	const pragma = "#pragma STDC FP_CONTRACT OFF";
+	const emit = (output: ReadonlyArray<string>): ReadonlyArray<string> => {
+		// The fast body follows its prologue; suffix text is deliberately unmapped.
+		const fastStart = exported
+			? 2
+			: 2 + (fn.hasPrototype && directEntry === undefined ? 1 : 0);
+		const prefix = output.slice(0, fastStart).join("\n");
+		const prologue = fast.slice(0, fast.length - lines.length).join("\n");
+		const offset =
+			(fastStart === 0 ? 0 : prefix.length + 1) +
+			(prologue.length === 0 ? 0 : prologue.length + 1);
+		input.onSourceMap?.(
+			shiftNativeSourceRanges(
+				nativeInstructionSourceRanges(
+					fn,
+					lines.slice(0, mappedLineCount),
+					starts,
+					starts.map((_, ip) => ip),
+				),
+				offset,
+			),
+		);
+		return output;
+	};
 	if (!exported)
-		return [
+		return emit([
 			input.signature,
 			pragma,
 			...(fn.hasPrototype && directEntry === undefined
@@ -137,9 +169,9 @@ export function renderNativeFastEntry(
 			"__full:",
 			full,
 			"}",
-		];
+		]);
 	const linkage = input.signature.startsWith("static ") ? "static " : "";
-	return [
+	return emit([
 		`${linkage}__attribute__((no_stack_protector)) __attribute__((aligned(64))) bool ${input.trySymbol}(${FAST_TRY_PARAMETERS}) {`,
 		pragma,
 		...fast,
@@ -151,7 +183,7 @@ export function renderNativeFastEntry(
 		`    if (${fn.hasPrototype ? "mal_value_is_undefined(new_target) && " : ""}${input.trySymbol}(vm, this_value, args, arg_count, env, &__fast_result)) return __fast_result;`,
 		full,
 		"}",
-	];
+	]);
 }
 
 /** Parameters of an exported fast body; it reports success and writes the result. */

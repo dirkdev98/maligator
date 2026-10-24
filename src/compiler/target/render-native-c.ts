@@ -106,6 +106,11 @@ import {
 	boxedNumberPredicateExpression,
 	nativeNumberPredicateExpression,
 } from "./native-scalar-operators.ts";
+import {
+	nativeInstructionSourceRanges,
+	shiftNativeSourceRanges,
+} from "./native-source-map.ts";
+import type { NativeSourceRange } from "./native-source-map.ts";
 import type { NativeSpanConsumer } from "./native-span-continuation.ts";
 import { nativeValueConversion } from "./native-value-transport.ts";
 import type { NativeValueConversion } from "./native-value-transport.ts";
@@ -816,6 +821,7 @@ export function nativeCallbackSymbol(
 }
 
 export interface CompiledFunction extends NativeCallCoverage {
+	sourceMap?: ReadonlyArray<NativeSourceRange>;
 	/** The C symbol to install as MalFunction.compiled. */
 	symbol: string;
 	/** Final decisions from the exact emitted variant, never an exploratory pass. */
@@ -828,6 +834,7 @@ export interface CompiledFunction extends NativeCallCoverage {
 	trySymbol?: string;
 	/** Additional native-only ordinary-call symbols emitted beside the canonical body. */
 	directEntries: Array<{
+		sourceMap?: ReadonlyArray<NativeSourceRange>;
 		emittedInstructions: ReadonlySet<number>;
 		directEntryCalls: ReadonlyMap<number, ReadonlySet<number>>;
 		id: number;
@@ -974,7 +981,9 @@ const UNRELOCATED_NATIVE_EXPRESSIONS = nativeRelocationExpressions(undefined);
  * Debug emission publishes a frame's source position as the matching entry of the
  * image function's position table (see `positionTableEntries`).
  */
-export type NativeFramePositions = ReadonlyMap<number, number>;
+export type NativeFramePositions = ReadonlyMap<number, number> & {
+	readonly captureSourceMap?: boolean;
+};
 
 function nativePositionEntry(
 	positions: NativeFramePositions,
@@ -3253,12 +3262,19 @@ function emitCompiledVariant(
 		splitPolicy,
 	);
 	const fullSymbol = `${symbol}_full`;
+	let fastSourceMap: ReadonlyArray<NativeSourceRange> = [];
 	const fastEntry =
 		split === undefined &&
 		directEntry?.resultFields === undefined &&
 		directEntry?.recordParameters === undefined
 			? renderNativeFastEntry({
 					fn,
+					onSourceMap:
+						debug !== false && debug.captureSourceMap
+							? (ranges) => {
+									fastSourceMap = ranges;
+								}
+							: undefined,
 					directEntry,
 					// A specialized-only body is omitted after emission, taking its fast path with it.
 					trySymbol:
@@ -3342,6 +3358,15 @@ function emitCompiledVariant(
 					f64Literal: cF64Literal,
 				})
 			: undefined;
+	const bodyOffset =
+		joinedCodeUnits([
+			fastEntry === undefined
+				? frameSignature
+				: `static ${NATIVE_ENTRY_ATTRIBUTES}MAL_COMPILED_FRAME __attribute__((noinline)) __attribute__((aligned(64))) ${resultType} ${fullSymbol}(${parameterList}) {`,
+			"#pragma STDC FP_CONTRACT OFF",
+			...rootMaskStatements.declarations,
+			...lines,
+		]) + 1;
 	const definition = split ?? [
 		fastEntry === undefined
 			? frameSignature
@@ -3373,7 +3398,33 @@ function emitCompiledVariant(
 		...definition,
 	];
 	if (joinedCodeUnits(source) > maxCodeUnits) return null;
+	const definitionOffset =
+		joinedCodeUnits(source.slice(0, source.length - definition.length)) + 1;
+	const sourceMap =
+		body.sourceMap === undefined
+			? undefined
+			: split === undefined
+				? [
+						...shiftNativeSourceRanges(body.sourceMap, definitionOffset + bodyOffset),
+						...shiftNativeSourceRanges(
+							fastSourceMap,
+							definitionOffset +
+								joinedCodeUnits(
+									definition.slice(0, definition.length - (fastEntry?.length ?? 0)),
+								) +
+								1,
+						),
+					]
+				: [
+						{
+							start: definitionOffset,
+							end: joinedCodeUnits(source),
+							positions: [...new Set(fn.positions.filter((pos) => pos >= 0))],
+							precision: "function" as const,
+						},
+					];
 	return {
+		...(sourceMap === undefined ? {} : { sourceMap }),
 		symbol,
 		source: source.join("\n"),
 		...(relocation.enabled ? { link: relocation.link } : {}),
@@ -3508,6 +3559,7 @@ function renderScalarExpression(
 function renderNumericLeaf(
 	native: NativeFunctionPlan,
 	entry: NativeDirectEntryPlan,
+	onSourceMap?: (ranges: ReadonlyArray<NativeSourceRange>) => void,
 ): Array<string> | null {
 	const fn = native.body;
 	const storage = entry.storage;
@@ -3538,6 +3590,8 @@ function renderNumericLeaf(
 		),
 	);
 	const body: Array<string> = [];
+	const starts: Array<number> = [];
+	const ips: Array<number> = [];
 	for (const [ip, op] of fn.instructions.entries()) {
 		if (jumpTargets.has(ip)) body.push(`L${ip}:;`);
 		if (expressionIps.has(ip) || fallthroughJumps.has(ip)) continue;
@@ -3578,6 +3632,8 @@ function renderNumericLeaf(
 			default:
 				throw new Error("Invalid selected numeric worker instruction");
 		}
+		starts.push(body.length);
+		ips.push(ip);
 		body.push(line);
 	}
 	const declarations: Array<string> = [];
@@ -3592,6 +3648,12 @@ function renderNumericLeaf(
 			declarations.push(`${cTypeOf(rep)} r${r}${initial};`);
 		}
 	}
+	onSourceMap?.(
+		shiftNativeSourceRanges(
+			nativeInstructionSourceRanges(fn, body, starts, ips),
+			declarations.length === 0 ? 0 : joinedCodeUnits(declarations) + 1,
+		),
+	);
 	return [
 		...declarations,
 		...body,
@@ -3782,7 +3844,16 @@ function renderCompiledFunction(
 			directClosures,
 		);
 		if (emitted === null) return [];
-		const worker = renderNumericLeaf(nativeVariantContract(native, entry), entry);
+		let leafSourceMap: ReadonlyArray<NativeSourceRange> = [];
+		const worker = renderNumericLeaf(
+			nativeVariantContract(native, entry),
+			entry,
+			debug !== false && debug.captureSourceMap
+				? (ranges) => {
+						leafSourceMap = ranges;
+					}
+				: undefined,
+		);
 		if (worker === null)
 			return [{ entry, emitted, leaf: undefined, sortSymbol: undefined }];
 		const parameters = entry.parameterRepresentations
@@ -3801,6 +3872,29 @@ function renderCompiledFunction(
 			numericSortKernelEntry(entry)
 				? `${emitted.symbol}_sort`
 				: undefined;
+		const leafPrefix = `static __attribute__((aligned(64))) f64 ${symbol}(${parameters.join(", ") || "void"}) {\n#pragma STDC FP_CONTRACT OFF\n`;
+		const inserted = `    if (mal_vm_leaf_unobserved(vm) && mal_vm_leaf_stack_available(vm)) return ${symbol}(${args.join(", ")});\n`;
+		const insertionOffset =
+			emitted.source.indexOf("#pragma STDC FP_CONTRACT OFF\n") +
+			"#pragma STDC FP_CONTRACT OFF\n".length;
+		const sourceMap =
+			emitted.sourceMap === undefined
+				? undefined
+				: [
+						...shiftNativeSourceRanges(leafSourceMap, leafPrefix.length),
+						...shiftNativeSourceRanges(
+							emitted.sourceMap.map((range) => ({
+								...range,
+								start:
+									range.start >= insertionOffset
+										? range.start + inserted.length
+										: range.start,
+								end:
+									range.end >= insertionOffset ? range.end + inserted.length : range.end,
+							})),
+							leafPrefix.length + worker.join("\n").length + 3,
+						),
+					];
 		const source = `static __attribute__((aligned(64))) f64 ${symbol}(${parameters.join(", ") || "void"}) {\n#pragma STDC FP_CONTRACT OFF\n${worker.join("\n")}\n}\n${emitted.source.replace(
 			"#pragma STDC FP_CONTRACT OFF\n",
 			`#pragma STDC FP_CONTRACT OFF\n    if (mal_vm_leaf_unobserved(vm) && mal_vm_leaf_stack_available(vm)) return ${symbol}(${args.join(", ")});\n`,
@@ -3808,7 +3902,7 @@ function renderCompiledFunction(
 		return [
 			{
 				entry,
-				emitted: { ...emitted, source },
+				emitted: { ...emitted, source, sourceMap },
 				leaf: true as const,
 				sortSymbol,
 			},
@@ -3819,6 +3913,7 @@ function renderCompiledFunction(
 		directEntries: variants.map(({ entry, emitted, leaf, sortSymbol }) => ({
 			...(leaf === undefined ? {} : { leaf }),
 			...(sortSymbol === undefined ? {} : { sortSymbol }),
+			...(emitted.sourceMap === undefined ? {} : { sourceMap: emitted.sourceMap }),
 			emittedInstructions: emitted.emittedInstructions,
 			directEntryCalls: emitted.directEntryCalls,
 			id: entry.id,
@@ -4523,6 +4618,7 @@ function emitResumableFunction(
 	}
 	lines.push(`    }`);
 
+	const bodyOffset = joinedCodeUnits(lines) + 1;
 	for (const line of body.lines) {
 		lines.push(line);
 	}
@@ -4553,6 +4649,14 @@ function emitResumableFunction(
 	return {
 		symbol,
 		source: lines.join("\n"),
+		...(body.sourceMap === undefined
+			? {}
+			: {
+					sourceMap: shiftNativeSourceRanges(
+						body.sourceMap,
+						bodyOffset + (relocation.link.length > 0 ? lines[0]!.length + 1 : 0),
+					),
+				}),
 		...(relocatable === false ? {} : { link: relocation.link }),
 		profileDecisions,
 		emittedInstructions: body.emittedInstructions,
@@ -4976,6 +5080,7 @@ interface EmittedBody extends NativeCallCoverage {
 	readonly lines: Array<string>;
 	/** Line index of each instruction's emission; earlier lines declare body state. */
 	readonly unitStarts: ReadonlyArray<number>;
+	readonly sourceMap?: ReadonlyArray<NativeSourceRange>;
 	readonly invocationPreamble: Array<string>;
 	readonly resources: ReadonlySet<NativeBodyResource>;
 }
@@ -6331,12 +6436,15 @@ function emitBody(
 	let measuredLines = 0;
 	let measuredCodeUnits = 0;
 	const unitStarts: Array<number> = [];
+	const unitIps: Array<number> | undefined =
+		debug !== false && debug.captureSourceMap ? [] : undefined;
 	for (let ip = 0; ip < fn.instructions.length; ip++) {
 		// Give up before an over-budget body is complete, let alone joined into one string.
 		for (; measuredLines < lines.length; measuredLines++)
 			measuredCodeUnits += lines[measuredLines]!.length + 1;
 		if (measuredCodeUnits > maxCodeUnits) return null;
 		unitStarts.push(lines.length);
+		unitIps?.push(ip);
 		for (const slot of fieldCallSites.get(ip - 1)?.boxedSlots ?? [])
 			if (slot !== undefined) activeFieldSlots.delete(slot);
 		for (const slot of fieldAllocations.get(ip - 1)?.boxedSlots ?? [])
@@ -7020,6 +7128,22 @@ function emitBody(
 	return {
 		lines,
 		unitStarts: unitStarts.map((start) => start + declarationCount),
+		...(unitIps === undefined
+			? {}
+			: {
+					sourceMap: nativeInstructionSourceRanges(
+						fn,
+						lines,
+						unitStarts.map((start) => start + declarationCount),
+						unitIps,
+						unitIps.map((ip) =>
+							[
+								...(integerLoopRegionByEntry.get(ip)?.claimedIps ?? []),
+								...(numberRecordRegionById.get(ip)?.claimedIps ?? []),
+							].map((claimed) => fn.positions[claimed] ?? -1),
+						),
+					),
+				}),
 		resources,
 		invocationPreamble,
 		emittedInstructions,

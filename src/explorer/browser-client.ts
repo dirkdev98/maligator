@@ -157,11 +157,7 @@ export class ExplorerClient {
 			}
 		});
 		this.#checkCurrent(id);
-		const bytes =
-			JSON.stringify(output.result).length * 2 +
-			(output.result.modes.full.wire.length + output.result.modes.generic.wire.length) *
-				8 +
-			4096;
+		const bytes = JSON.stringify(output.result).length * 2 + 4096;
 		if (bytes <= EXPLORER_LIMITS.cacheBytes) {
 			while (
 				this.#cache.size >= EXPLORER_LIMITS.cacheEntries ||

@@ -1,6 +1,6 @@
 import { resolveBuildConfig } from "../build-config-values.ts";
 
-export const EXPLORER_SCHEMA = 3;
+export const EXPLORER_SCHEMA = 4;
 export const EXPLORER_SOURCE_PATH = "output-explorer/snippet.ts";
 export const EXPLORER_LIMITS = Object.freeze({
 	sourceBytes: 64 * 1024,

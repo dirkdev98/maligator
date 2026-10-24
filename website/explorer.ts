@@ -8,7 +8,7 @@ import {
 } from "../src/explorer/config.ts";
 import type { ExplorerConfig } from "../src/explorer/config.ts";
 import type { ExplorerSiteData } from "../src/explorer/protocol.ts";
-import type { Sample, ViewId } from "../src/explorer/samples.ts";
+import { ExplorerCodeView } from "./explorer-code-view.ts";
 
 function element<T extends HTMLElement = HTMLElement>(id: string): T {
 	const value = document.getElementById(id);
@@ -17,11 +17,12 @@ function element<T extends HTMLElement = HTMLElement>(id: string): T {
 }
 
 const data = JSON.parse(element("explorer-data").textContent) as ExplorerSiteData;
-const source = element<HTMLTextAreaElement>("source");
+const source = new ExplorerCodeView(element("source-editor"));
+const output = new ExplorerCodeView(element("c-editor"));
 const examples = element<HTMLSelectElement>("example");
-const trails = element<HTMLSelectElement>("trail");
-const search = element<HTMLInputElement>("search");
-const compare = element<HTMLInputElement>("compare");
+const functions = element<HTMLSelectElement>("function");
+const tables = element<HTMLInputElement>("tables");
+const linked = element<HTMLInputElement>("linked");
 const booleanSettings = [
 	"regexp",
 	"realms",
@@ -31,63 +32,16 @@ const booleanSettings = [
 	"node",
 	"maligator",
 ] as const;
-const stages = [
-	{
-		id: "preCore",
-		label: "1 · Initial Core",
-		left: "source",
-		leftTitle: "Your source",
-		rightTitle: "Core before optimization",
-		explanation: "The source becomes an SSA graph before compiler optimizations.",
-	},
-	{
-		id: "optimizedCore",
-		label: "2 · Optimized Core",
-		left: "preCore",
-		leftTitle: "Core before optimization",
-		rightTitle: "Optimized Core",
-		explanation:
-			"Constants, control flow and program facts shape the optimized SSA graph.",
-	},
-	{
-		id: "target",
-		label: "3 · Target",
-		left: "optimizedCore",
-		leftTitle: "Optimized Core",
-		rightTitle: "Target and native plan",
-		explanation:
-			"The graph lowers to allocated terminal operations and selected native specializations.",
-	},
-	{
-		id: "malw",
-		label: "4 · MALW",
-		left: "target",
-		leftTitle: "Target",
-		rightTitle: "Decoded MALW and hex",
-		explanation:
-			"The runtime image contains instructions, constant pools, handlers and GC safepoints.",
-	},
-	{
-		id: "c",
-		label: "5 · C",
-		left: "target",
-		leftTitle: "Target",
-		rightTitle: "Emitted C",
-		explanation:
-			"Native function bodies and runtime-image tables, ready for the native toolchain.",
-	},
-] as const;
-type Side = "left" | "right";
-let stage: number = 0;
+type MappingRange = ExplorerResult["mapping"]["ranges"][number];
 let result: ExplorerResult | undefined;
 let compiledSource = "";
 let requestVersion = 0;
-const pages: Record<Side, number> = { left: 0, right: 0 };
-const outputs: Record<Side, { text: string; view: ViewId }> = {
-	left: { text: "", view: "source" },
-	right: { text: "", view: "preCore" },
-};
-const PAGE_LINES = 300;
+let activeSymbol: string | undefined;
+let cLines: Array<string> = [];
+let sourceRanges = new Map<number, Array<MappingRange>>();
+let stale = false;
+let matchedRanges: ReadonlyArray<MappingRange> = [];
+let matchedIndex = 0;
 
 function status(message: string, state = "ready"): void {
 	element("status").textContent = message;
@@ -97,15 +51,11 @@ function status(message: string, state = "ready"): void {
 const client = new ExplorerClient(data, (state) =>
 	status(
 		state === "loading"
-			? `Loading the compiler locally (${(data.compressedBytes / 1024 / 1024).toFixed(1)} MiB compressed)…`
+			? `Loading the compiler (${(data.compressedBytes / 1024 / 1024).toFixed(1)} MiB)…`
 			: "Compiling locally…",
 		state,
 	),
 );
-
-function selectedSample(): Sample {
-	return data.samples.find((sample) => sample.id === examples.value) ?? data.samples[0]!;
-}
 
 function settings(): ExplorerConfig {
 	const config: Record<string, unknown> = {
@@ -118,261 +68,302 @@ function settings(): ExplorerConfig {
 	return normalizeExplorerConfig(config);
 }
 
-function applySettings(config: ExplorerConfig): void {
-	element<HTMLSelectElement>("primordials").value = config.primordials;
-	element<HTMLSelectElement>("eval").value = String(config.eval);
-	for (const key of booleanSettings) element<HTMLInputElement>(key).checked = config[key];
+function clearHighlights(): void {
+	source.highlight([]);
+	output.highlight([]);
+	element("range-navigation").hidden = true;
+	element("mapping-help").textContent =
+		"Select a source statement or a C line to see how they connect.";
+}
+
+function setMatchingRanges(
+	ranges: ReadonlyArray<MappingRange>,
+	selected: MappingRange,
+): void {
+	matchedRanges = ranges;
+	matchedIndex = Math.max(0, ranges.indexOf(selected));
+	element("range-navigation").hidden = ranges.length < 2;
+	element("range-position").textContent = `${matchedIndex + 1} of ${ranges.length}`;
+}
+
+function revealRange(range: MappingRange): void {
+	activeSymbol = range.symbol;
+	if (!tables.checked && functions.value !== "" && functions.value !== range.symbol) {
+		functions.value = range.symbol;
+		renderC();
+	}
+	output.highlight(matchedRanges);
+	output.reveal(range.startLine);
 }
 
 function refreshInput(): void {
-	const bytes = utf8ByteLength(source.value);
+	const sample = data.samples.find((item) => item.id === examples.value);
+	if (sample !== undefined)
+		element("example-summary").textContent =
+			source.text === sample.source ? sample.title : "Your code";
+	const bytes = utf8ByteLength(source.text);
 	element("source-size").textContent = `${(bytes / 1024).toFixed(1)} / 64 KiB`;
-	const stale =
+	stale =
 		result !== undefined &&
-		(source.value !== compiledSource ||
+		(source.text !== compiledSource ||
 			JSON.stringify(settings()) !== JSON.stringify(result.config));
 	const badge = element("result-state");
 	badge.textContent =
-		result === undefined
-			? "No result yet"
-			: stale
-				? "Previous result · edits not compiled"
-				: "Up to date";
+		result === undefined ? "Ready when you are" : stale ? "Out of date" : "Up to date";
 	badge.dataset.stale = String(stale);
+	element("mapping-state").textContent = stale
+		? "Linking paused"
+		: linked.checked
+			? "Scrolling linked"
+			: "Scrolling independent";
+	if (stale) {
+		clearHighlights();
+		element("mapping-help").textContent =
+			"Showing the previous compilation. Compile your edits to reconnect the panes.";
+	} else
+		element("mapping-help").textContent =
+			"Select a source statement or a C line to see how they connect.";
 }
 
 function loadSample(): void {
-	const sample = selectedSample();
-	source.value = sample.source;
-	stage = 0;
-	applySettings(normalizeExplorerConfig(sample.config ?? EXPLORER_DEFAULT_CONFIG));
-	element("example-group").textContent = sample.group;
-	element("example-title").textContent = sample.title;
-	element("example-summary").textContent = sample.summary;
-	trails.replaceChildren(
-		new Option("Whole stage", ""),
-		...sample.trails.map((trail, index) => new Option(trail.title, String(index))),
-	);
-	search.value = "";
+	const sample =
+		data.samples.find((item) => item.id === examples.value) ?? data.samples[0]!;
+	source.setText(sample.source);
+	const config = normalizeExplorerConfig(sample.config ?? EXPLORER_DEFAULT_CONFIG);
+	element<HTMLSelectElement>("primordials").value = config.primordials;
+	element<HTMLSelectElement>("eval").value = String(config.eval);
+	for (const key of booleanSettings) element<HTMLInputElement>(key).checked = config[key];
+	element("example-summary").textContent = sample.title;
+	element("example-summary").title = sample.summary;
 	refreshInput();
 	const url = new URL(location.href);
 	url.searchParams.set("sample", sample.id);
 	history.replaceState(null, "", url);
 }
 
+function renderC(): void {
+	if (result === undefined) return;
+	const selected = result.mapping.functions.find((fn) => fn.symbol === functions.value);
+	const all = result.mapping.functions;
+	const first = tables.checked ? 1 : (selected?.startLine ?? all[0]?.startLine ?? 1);
+	const last = tables.checked
+		? cLines.length
+		: (selected?.endLine ?? all.at(-1)?.endLine ?? cLines.length);
+	output.setText(cLines.slice(first - 1, last).join("\n"), first);
+	element("c-lines").textContent =
+		`${first.toLocaleString()}–${last.toLocaleString()} of ${cLines.length.toLocaleString()} lines`;
+	element("c-location").textContent = tables.checked
+		? "Complete program"
+		: selected === undefined
+			? "Native functions · tables hidden"
+			: selected.symbol;
+}
+
+function chooseRange(ranges: ReadonlyArray<MappingRange>): MappingRange | undefined {
+	return (
+		ranges.find(
+			(range) =>
+				range.symbol === activeSymbol &&
+				range.endLine >= output.firstLine &&
+				range.startLine <= output.lastLine,
+		) ??
+		ranges.find((range) => range.symbol === activeSymbol) ??
+		ranges[0]
+	);
+}
+
+function precisionLabel(range: MappingRange): string {
+	return range.precision === "function"
+		? " · function-level mapping"
+		: range.precision === "region"
+			? " · combined source region"
+			: "";
+}
+
+function showSourceLine(
+	line: number,
+	scroll: boolean,
+	preferred?: MappingRange,
+): boolean {
+	if (stale || result === undefined) return false;
+	const ranges = sourceRanges.get(line) ?? [];
+	const selected = preferred ?? chooseRange(ranges);
+	source.highlight([{ startLine: line, endLine: line }]);
+	output.highlight(ranges);
+	if (selected === undefined) {
+		element("range-navigation").hidden = true;
+		element("mapping-help").textContent =
+			`Source line ${line} has no mapped C. The compiler may have combined or removed it.`;
+		return false;
+	}
+	setMatchingRanges(ranges, selected);
+	activeSymbol = selected.symbol;
+	if (scroll) revealRange(selected);
+	element("mapping-help").textContent =
+		`Source line ${line} ↔ ${ranges.length} C region${ranges.length === 1 ? "" : "s"} · ${selected.symbol}${precisionLabel(selected)}`;
+	return true;
+}
+
+function showCLine(line: number, scroll: boolean): void {
+	if (stale || result === undefined) return;
+	const range = result.mapping.ranges.find(
+		(item) => line >= item.startLine && line <= item.endLine,
+	);
+	if (range === undefined) {
+		clearHighlights();
+		element("mapping-help").textContent =
+			`C line ${line} is compiler scaffolding without a source statement mapping.`;
+		return;
+	}
+	activeSymbol = range.symbol;
+	const origins = [...new Set(range.origins.map((origin) => origin.line))];
+	setMatchingRanges(sourceRanges.get(origins[0]!) ?? [range], range);
+	source.highlight(origins.map((origin) => ({ startLine: origin, endLine: origin })));
+	output.highlight([range]);
+	if (scroll) source.reveal(origins[0]!);
+	element("mapping-help").textContent =
+		`C lines ${range.startLine}–${range.endLine} ↔ source ${[...new Set(range.origins.map((origin) => `${origin.line}:${origin.column + 1}`))].join(", ")}${range.origins.some((origin) => origin.inlined) ? " · includes inlined code" : ""}${precisionLabel(range)}`;
+}
+
+for (const direction of ["previous", "next"] as const)
+	element(`${direction}-range`).onclick = () => {
+		if (stale || matchedRanges.length === 0) return;
+		matchedIndex =
+			(matchedIndex + (direction === "next" ? 1 : -1) + matchedRanges.length) %
+			matchedRanges.length;
+		const range = matchedRanges[matchedIndex]!;
+		setMatchingRanges(matchedRanges, range);
+		revealRange(range);
+		element("mapping-help").textContent =
+			`C lines ${range.startLine}–${range.endLine} ↔ source ${[...new Set(range.origins.map((origin) => `${origin.line}:${origin.column + 1}`))].join(", ")} · ${range.symbol}${precisionLabel(range)}`;
+	};
+
+source.onSelect = (line, column) => {
+	source.reveal(line);
+	element("source-location").textContent = `Ln ${line}, Col ${column}`;
+	showSourceLine(line, true);
+};
+output.onSelect = (line, column) => {
+	output.reveal(line);
+	element("c-location").textContent = `Ln ${line}, Col ${column}`;
+	showCLine(line, true);
+};
+source.onEdit = refreshInput;
+source.onScroll = (first, last) => {
+	if (!linked.checked || stale || result === undefined) return;
+	for (let line = first; line <= last; line++)
+		if (sourceRanges.has(line)) {
+			showSourceLine(line, true);
+			break;
+		}
+};
+output.onScroll = (first, last) => {
+	if (!linked.checked || stale || result === undefined) return;
+	const range = result.mapping.ranges.find(
+		(item) => item.startLine <= last && item.endLine >= first,
+	);
+	if (range !== undefined) showCLine(Math.max(first, range.startLine), true);
+};
+
 function setBusy(busy: boolean): void {
 	element<HTMLButtonElement>("compile").disabled = busy;
-	element<HTMLButtonElement>("cancel").disabled = !busy;
+	element("cancel").hidden = !busy;
+	element("c-editor").setAttribute("aria-busy", String(busy));
 }
 
 async function compile(): Promise<void> {
 	const version = ++requestVersion;
-	const input = source.value;
+	const input = source.text;
 	setBusy(true);
 	element("diagnostics").hidden = true;
 	try {
-		const output = await client.compile(input, settings());
+		const compiled = await client.compile(input, settings());
 		if (version !== requestVersion) return;
-		result = output.result;
+		result = compiled.result;
 		compiledSource = input;
+		activeSymbol = undefined;
+		cLines = result.c.split("\n");
+		sourceRanges = new Map();
+		for (const range of result.mapping.ranges)
+			for (const line of new Set(range.origins.map((origin) => origin.line))) {
+				const ranges = sourceRanges.get(line) ?? [];
+				ranges.push(range);
+				sourceRanges.set(line, ranges);
+			}
+		functions.replaceChildren(
+			new Option("All native functions", ""),
+			...result.mapping.functions.map(
+				(fn) => new Option(`${fn.name} · ${fn.symbol}`, fn.symbol),
+			),
+		);
+		functions.disabled = false;
+		tables.checked = false;
+		renderC();
+		element("empty-state").hidden = true;
+		for (const id of ["c-copy", "c-save"])
+			element<HTMLButtonElement>(id).disabled = false;
 		status(
-			output.cached
+			compiled.cached
 				? "Loaded from this tab’s result cache."
-				: `Compiled locally in ${output.milliseconds.toFixed(0)} ms · ${(output.memoryBytes / 1024 / 1024).toFixed(1)} MiB Wasm memory.`,
+				: `Compiled locally in ${compiled.milliseconds.toFixed(0)} ms · ${(compiled.memoryBytes / 1024 / 1024).toFixed(1)} MiB Wasm memory.`,
 		);
 		const diagnostics = element("diagnostics");
 		diagnostics.hidden = result.diagnostics.length === 0;
 		diagnostics.textContent = result.diagnostics
-			.map(
-				(diagnostic) =>
-					`${diagnostic.severity}: ${diagnostic.message} (${diagnostic.line}:${diagnostic.column})`,
-			)
+			.map((item) => `${item.severity}: ${item.message} (${item.line}:${item.column})`)
 			.join("\n");
-		pages.left = pages.right = 0;
-		render(true);
+		element("statistics").textContent =
+			`${result.stats.functions} functions · ${result.stats.cLines.toLocaleString()} C lines`;
 		refreshInput();
+		if (!stale) {
+			const first = result.mapping.ranges.find(
+				(range) => range.precision === "statement" && range.endLine > range.startLine,
+			);
+			if (first !== undefined) showSourceLine(first.origins[0]!.line, true, first);
+		}
 	} catch (error) {
 		if (version !== requestVersion) return;
-		const message = error instanceof Error ? error.message : String(error);
+		const cancelled = error instanceof ExplorerClientError && error.kind === "cancelled";
 		status(
-			error instanceof ExplorerClientError && error.kind === "cancelled"
+			cancelled
 				? "Compilation cancelled."
-				: "Compilation did not complete. You can edit and try again.",
-			"error",
+				: "Compilation did not complete. Edit your code and try again.",
+			cancelled ? "ready" : "error",
 		);
-		element("diagnostics").hidden = false;
-		element("diagnostics").textContent = message;
+		element("diagnostics").hidden = cancelled;
+		element("diagnostics").textContent =
+			error instanceof Error ? error.message : String(error);
 		refreshInput();
 	} finally {
 		if (version === requestVersion) setBusy(false);
 	}
 }
 
-function viewText(view: ViewId, mode: "generic" | "full"): string {
-	if (result === undefined) return "Compile a snippet to inspect this stage.";
-	if (view === "source") return compiledSource;
-	if (view === "preCore") return result.preCore;
-	if (view === "malw")
-		return `${result.modes[mode].malw}\n\nHex dump\n${result.modes[mode].hex}`;
-	return result.modes[mode][view];
-}
-
-function queryFor(view: ViewId): string {
-	if (search.value !== "") return search.value;
-	if (trails.value === "") return "";
-	return selectedSample().trails[Number(trails.value)]?.queries[view] ?? "";
-}
-
-function renderPane(
-	side: Side,
-	view: ViewId,
-	mode: "generic" | "full",
-	title: string,
-	focus: boolean,
-): void {
-	const text = viewText(view, mode);
-	outputs[side] = { text, view };
-	element(`${side}-kind`).textContent = compare.checked
-		? `${mode} target lowering`
-		: side === "left"
-			? "Input stage"
-			: "Output stage";
-	element(`${side}-title`).textContent = title;
-	const lines = text.split("\n");
-	const query = queryFor(view);
-	const firstMatch = query === "" ? -1 : lines.findIndex((line) => line.includes(query));
-	if (focus && firstMatch >= 0) pages[side] = Math.floor(firstMatch / PAGE_LINES);
-	pages[side] = Math.min(pages[side], Math.floor((lines.length - 1) / PAGE_LINES));
-	const start = pages[side] * PAGE_LINES;
-	const nodes = lines.slice(start, start + PAGE_LINES).map((line, offset) => {
-		const row = document.createElement("span");
-		row.className = "code-line";
-		const number = document.createElement("span");
-		number.className = "line-number";
-		number.textContent = String(start + offset + 1);
-		number.setAttribute("aria-hidden", "true");
-		row.append(number);
-		const index = query === "" ? -1 : line.indexOf(query);
-		if (index < 0) row.append(document.createTextNode(line || " "));
-		else {
-			const mark = document.createElement("mark");
-			mark.textContent = line.slice(index, index + query.length);
-			row.append(
-				document.createTextNode(line.slice(0, index)),
-				mark,
-				document.createTextNode(line.slice(index + query.length)),
-			);
-		}
-		return row;
-	});
-	const code = element(`${side}-code`);
-	code.replaceChildren(...nodes);
-	if (focus && firstMatch >= start && firstMatch < start + PAGE_LINES)
-		code.scrollTop = (firstMatch - start) * 20;
-	else code.scrollTop = 0;
-	element(`${side}-page`).textContent =
-		`${start + 1}–${Math.min(lines.length, start + PAGE_LINES)} of ${lines.length} lines${query !== "" && firstMatch < 0 ? " · no match" : ""}`;
-	element<HTMLButtonElement>(`${side}-previous`).disabled = pages[side] === 0;
-	element<HTMLButtonElement>(`${side}-next`).disabled =
-		start + PAGE_LINES >= lines.length;
-	for (const action of ["copy", "save"])
-		element<HTMLButtonElement>(`${side}-${action}`).disabled = result === undefined;
-}
-
-function render(focus = false): void {
-	const selected = stages[stage]!;
-	for (const [index] of stages.entries())
-		element(`stage-${index}`).setAttribute("aria-pressed", String(index === stage));
-	const trail =
-		trails.value === "" ? undefined : selectedSample().trails[Number(trails.value)];
-	element("explanation").textContent =
-		`${trail?.explanation ?? selected.explanation}${compare.checked ? " Generic uses the same optimized Core with late specialization disabled." : ""}`;
-	renderPane(
-		"left",
-		compare.checked ? selected.id : selected.left,
-		compare.checked ? "generic" : "full",
-		compare.checked ? `Generic · ${selected.rightTitle}` : selected.leftTitle,
-		focus,
-	);
-	renderPane(
-		"right",
-		selected.id,
-		"full",
-		compare.checked ? `Full · ${selected.rightTitle}` : selected.rightTitle,
-		focus,
-	);
-	element<HTMLButtonElement>("download-wire").disabled = result === undefined;
-	if (result !== undefined) {
-		const stats = result.modes.full.stats;
-		element("statistics").textContent =
-			`${stats.functions} functions · ${stats.instructions} instructions · ${stats.safepoints} safepoints · ${stats.wireBytes.toLocaleString()} MALW bytes · ${stats.cLines.toLocaleString()} C lines`;
-		element("world").textContent =
-			`Primordials ${result.world.primordialPolicy} · source ${result.closure.sourceClosure.kind === "known" ? "closed" : "open"}`;
-	}
-	if (element<HTMLDetailsElement>("structure").open) renderStructure();
-}
-
-function renderStructure(): void {
-	element("structure-content").textContent =
-		result === undefined
-			? "Compile a snippet first."
-			: JSON.stringify(
-					{
-						config: explorerBuildConfig(result.config),
-						world: result.world,
-						closure: result.closure,
-						...result.modes.full.structure,
-					},
-					null,
-					2,
-				);
-}
-
-function download(name: string, contents: string | Uint8Array): void {
-	const blob = new Blob(
-		[typeof contents === "string" ? contents : (contents as Uint8Array<ArrayBuffer>)],
-		{
-			type:
-				typeof contents === "string"
-					? "text/plain;charset=utf-8"
-					: "application/octet-stream",
-		},
-	);
-	const url = URL.createObjectURL(blob);
-	const anchor = document.createElement("a");
-	anchor.href = url;
-	anchor.download = name;
-	anchor.click();
+function download(name: string, text: string): void {
+	const url = URL.createObjectURL(new Blob([text], { type: "text/plain;charset=utf-8" }));
+	const link = document.createElement("a");
+	link.href = url;
+	link.download = name;
+	link.click();
 	setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-for (const sample of data.samples)
-	examples.add(new Option(`${sample.group} · ${sample.title}`, sample.id));
+for (const sample of data.samples) examples.add(new Option(sample.title, sample.id));
 const requested = new URL(location.href).searchParams.get("sample");
-if (data.samples.some((sample) => sample.id === requested)) examples.value = requested!;
+examples.value = data.samples.some((sample) => sample.id === requested)
+	? requested!
+	: "control-flow";
 element("version").textContent =
 	`Maligator ${data.version}\nCompiler ${data.identity.slice(0, 12)}`;
-for (const [index, candidate] of stages.entries()) {
-	const button = document.createElement("button");
-	button.id = `stage-${index}`;
-	button.type = "button";
-	button.textContent = candidate.label;
-	button.onclick = () => {
-		stage = index;
-		pages.left = pages.right = 0;
-		render(true);
+for (const id of ["compile", "empty-compile"])
+	element(id).onclick = () => {
+		void compile();
 	};
-	element("stages").append(button);
-}
-element("compile").onclick = () => {
-	void compile();
-};
 element("cancel").onclick = () => {
 	requestVersion++;
 	client.cancel();
 	setBusy(false);
 	status("Compilation cancelled.");
-	refreshInput();
 };
 examples.onchange = () => {
 	loadSample();
@@ -382,57 +373,35 @@ element("reset").onclick = () => {
 	loadSample();
 	void compile();
 };
-source.oninput = refreshInput;
-document.addEventListener("keydown", (event) => {
-	if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-		event.preventDefault();
-		void compile();
-	}
-});
+element("settings-toggle").onclick = () => {
+	const panel = element("settings");
+	panel.hidden = !panel.hidden;
+	element("settings-toggle").setAttribute("aria-expanded", String(!panel.hidden));
+};
 for (const key of ["primordials", "eval", ...booleanSettings])
 	element(key).onchange = refreshInput;
-trails.onchange = () => {
-	search.value = "";
-	pages.left = pages.right = 0;
-	render(true);
+linked.onchange = refreshInput;
+functions.onchange = () => {
+	tables.checked = false;
+	activeSymbol = functions.value || undefined;
+	renderC();
+	clearHighlights();
 };
-compare.onchange = () => {
-	pages.left = pages.right = 0;
-	render(true);
+tables.onchange = () => {
+	functions.value = "";
+	renderC();
+	clearHighlights();
 };
-element("find").onclick = () => render(true);
-search.onkeydown = (event) => {
-	if (event.key === "Enter") render(true);
-};
-element<HTMLDetailsElement>("structure").ontoggle = () => {
-	if (element<HTMLDetailsElement>("structure").open) renderStructure();
-};
-for (const side of ["left", "right"] as const) {
-	element(`${side}-previous`).onclick = () => {
-		pages[side] = Math.max(0, pages[side] - 1);
-		render();
-	};
-	element(`${side}-next`).onclick = () => {
-		pages[side]++;
-		render();
-	};
+for (const side of ["source", "c"] as const)
 	element(`${side}-copy`).onclick = () => {
-		void navigator.clipboard.writeText(outputs[side].text).then(
-			() => status("Output copied."),
-			() => status("Copy is unavailable; use Download instead.", "error"),
+		const text = side === "source" ? source.text : (result?.c ?? "");
+		void navigator.clipboard.writeText(text).then(
+			() => status("Code copied."),
+			() => status("Copy is unavailable. Select the code or use Download.", "error"),
 		);
 	};
-	element(`${side}-save`).onclick = () => {
-		const view = outputs[side].view;
-		download(
-			view === "c" ? "program.c" : view === "source" ? "snippet.ts" : `${view}.txt`,
-			outputs[side].text,
-		);
-	};
-}
-element("download-wire").onclick = () => {
-	if (result !== undefined)
-		download("program.malw", new Uint8Array(result.modes.full.wire));
+element("c-save").onclick = () => {
+	if (result !== undefined) download("program.c", result.c);
 };
 element("download-config").onclick = () => {
 	const config = explorerBuildConfig(settings());
@@ -441,8 +410,11 @@ element("download-config").onclick = () => {
 		`import { defineBuild } from "@maligator/cli";\n\nexport default defineBuild(${JSON.stringify({ entry: "snippet.ts", engine: config.engine, surface: config.surface }, null, 2)});\n`,
 	);
 };
+document.addEventListener("keydown", (event) => {
+	if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+		event.preventDefault();
+		void compile();
+	}
+});
 addEventListener("pagehide", () => client.dispose());
-if (matchMedia("(max-width: 1000px)").matches)
-	document.querySelector<HTMLDetailsElement>(".settings")!.open = false;
 loadSample();
-render();

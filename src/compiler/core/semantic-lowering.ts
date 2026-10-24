@@ -8078,6 +8078,7 @@ function compileForStatementBody(
 	}
 
 	const initCursor: CoreFrontendCursor = { block };
+	if (statement.init) emitSourcePos(program, block, statement.init);
 	if (statement.init?.type === "VariableDeclaration") {
 		compileVariableDeclaration(program, fn, block, statement.init);
 		// The declaration manages its own cursor; re-resolve the tail block.
@@ -8112,6 +8113,7 @@ function compileForStatementBody(
 	(fn.loops ??= []).push(loop);
 
 	const headerCursor: CoreFrontendCursor = { block: fn.blocks[headerIdx]! };
+	emitSourcePos(program, headerCursor.block, statement.test ?? statement);
 	let branch: BranchJumps;
 	if (statement.test) {
 		branch = compileBranch(program, fn, headerCursor, statement.test);
@@ -8137,6 +8139,7 @@ function compileForStatementBody(
 	});
 
 	const updateCursor: CoreFrontendCursor = { block: fn.blocks[updateIdx]! };
+	emitSourcePos(program, updateCursor.block, statement.update ?? statement);
 	// CreatePerIterationEnvironment: copy the bindings forward (Li→Li+1) before the
 	// increment, so the increment and next test/body run in the fresh env.
 	if (perIter) {

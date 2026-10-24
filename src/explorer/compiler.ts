@@ -18,7 +18,10 @@ import {
 	compilerProgramFactsFromConfig,
 	withProgramClosure,
 } from "../compiler/shared/compiler-facts.ts";
-import { emitProgramImage } from "../compiler/target/emit-program-image.ts";
+import {
+	emitProgramImage,
+	emitProgramImageWithSourceMap,
+} from "../compiler/target/emit-program-image.ts";
 import type {
 	ExecutionFunction,
 	ExecutionProgram,
@@ -395,9 +398,10 @@ function genericReport(
 	});
 }
 
-export function compileMode(
+function lowerExplorerMode(
 	compiled: ReturnType<typeof compileExplorerCore>,
 	mode: ModeId,
+	captureSourceMap = false,
 ) {
 	const plan =
 		mode === "full"
@@ -418,7 +422,76 @@ export function compileMode(
 		lowerCoreCompilationToNativeProgram(optimized),
 	);
 	const wire = serializeRuntimeImage(image.runtime, { debugInfo: true });
-	const c = emitProgramImage(image, { compiled: true, debugInfo: true });
+	const sourceMap = captureSourceMap
+		? emitProgramImageWithSourceMap(image, { compiled: true, debugInfo: true })
+		: undefined;
+	const c =
+		sourceMap?.source ?? emitProgramImage(image, { compiled: true, debugInfo: true });
+	return { plan, optimized, execution, image, wire, c, sourceMap };
+}
+
+export function compileExplorerComparison(
+	compiled: ReturnType<typeof compileExplorerCore>,
+) {
+	const { image, wire, c, sourceMap } = lowerExplorerMode(compiled, "full", true);
+	const offsets = [0];
+	for (let offset = 0; offset < c.length; offset++)
+		if (c[offset] === "\n") offsets.push(offset + 1);
+	const lineAt = (offset: number) => {
+		let low = 0;
+		let high = offsets.length;
+		while (low + 1 < high) {
+			const middle = (low + high) >>> 1;
+			if (offsets[middle]! <= offset) low = middle;
+			else high = middle;
+		}
+		return low + 1;
+	};
+	return {
+		c,
+		mapping: {
+			ranges: sourceMap!.ranges.map((range) => ({
+				startLine: lineAt(range.start),
+				endLine: lineAt(range.end - 1),
+				functionIndex: range.functionIndex,
+				symbol: range.symbol,
+				precision: range.precision,
+				origins: range.positions.flatMap((id) => {
+					const origins: Array<{ line: number; column: number; inlined: boolean }> = [];
+					const seen = new Set<number>();
+					while (id >= 0 && !seen.has(id)) {
+						seen.add(id);
+						const pos = image.runtime.sourcePositions[id];
+						if (pos === undefined) break;
+						origins.push({
+							line: pos.line,
+							column: pos.column,
+							inlined: pos.inlinedFunctionIndex !== undefined,
+						});
+						id = pos.callerPosId ?? -1;
+					}
+					return origins;
+				}),
+			})),
+			functions: sourceMap!.functions.map((fn) => ({
+				...fn,
+				name: functionName(image.runtime, image.runtime.functions[fn.functionIndex]!),
+				startLine: lineAt(fn.start),
+				endLine: lineAt(fn.end - 1),
+			})),
+		},
+		stats: summarizeRuntime(image.runtime, wire, c),
+	};
+}
+
+export function compileMode(
+	compiled: ReturnType<typeof compileExplorerCore>,
+	mode: ModeId,
+) {
+	const { plan, optimized, execution, image, wire, c } = lowerExplorerMode(
+		compiled,
+		mode,
+	);
 	return {
 		preCore: compiled.preCore,
 		optimizedCore: formatCore(optimized.program),
