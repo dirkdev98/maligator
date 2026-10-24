@@ -15,8 +15,7 @@ import type { NativeMapEntryPlan } from "./native-map-entry-plan.ts";
 import { selectNativeObjectEnumerationSnapshots } from "./native-object-enumeration-snapshot.ts";
 import type { NativeObjectEnumerationSnapshotPlan } from "./native-object-enumeration-snapshot.ts";
 import {
-	MATH_UNARY_NATIVE_CALL,
-	MATH_BINARY_OPERATIONS,
+	nativeGuardedMathArity,
 	NUMBER_PREDICATES,
 	nativeMathNumberArity,
 } from "./native-scalar-operators.ts";
@@ -3478,12 +3477,7 @@ export function selectNativeFastPaths(
 		const plan = native.instructions[ip];
 		const builtin = plan?.kind === "call" ? plan.guardedBuiltinCall : undefined;
 		if (op.opcode !== "CALL" || builtin === undefined) continue;
-		const arity =
-			op.arguments.length === 1 && MATH_UNARY_NATIVE_CALL.has(builtin.operation)
-				? 1
-				: op.arguments.length === 2 && MATH_BINARY_OPERATIONS.has(builtin.operation)
-					? 2
-					: undefined;
+		const arity = nativeGuardedMathArity(builtin.operation, op.arguments.length);
 		if (arity === undefined) continue;
 		mathCalls.push({
 			instructionIp: ip,

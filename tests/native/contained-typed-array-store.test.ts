@@ -67,6 +67,7 @@ describe("contained numeric TypedArray stores", () => {
 			fixture,
 			name: "contained-typed-stores",
 			outDir,
+			nativeStackRoots: "precise",
 			config: resolveBuildConfig({}),
 		});
 		({ compiled, interpreted } = pair);

@@ -106,6 +106,7 @@ function emit(
 		nativeInstructions?: ReadonlyMap<number, NativeInstructionPlan>;
 		capturedCount?: number;
 		registerCount?: number;
+		literalShapeCount?: number;
 	} = {},
 ): string {
 	const fn: BytecodeFunction = {
@@ -127,7 +128,7 @@ function emit(
 		constructorSlotReserve: 0,
 		hasPrototype: false,
 		propertyIcCount: testPropertyCacheCount(instructions),
-		literalShapeCount: 0,
+		literalShapeCount: options.literalShapeCount ?? 0,
 		instructions,
 		handlers: options.handlers ?? [],
 		fileIndex: -1,
@@ -498,7 +499,7 @@ describe("private-root publication state at collecting edges", () => {
 	it.each(guardedCalls)(
 		"publishes %s roots in the fallback and poll while leaving its hit private",
 		(operation) => {
-			const args = operation === "Math.min" ? [3, 5] : [3];
+			const args = operation === "Math.min" ? [retained, 3] : [retained];
 			const source = emit(
 				[load, call(4, args), call(), returned],
 				[point(0, [0, 1], live), point(1), point(2)],
@@ -524,6 +525,129 @@ describe("private-root publication state at collecting edges", () => {
 			expect(source.slice(after, poll)).toContain(publication);
 			expect(source.slice(after, poll)).toContain("MAL_ROOT_MASK(");
 			expect(hasIncomingCopy(beforeCall(source, 2, poll), publication)).toBe(true);
+		},
+	);
+
+	it.each(["own-load", "own-store", "array-length"] as const)(
+		"publishes private values only on the %s fallback and subsequent collecting edge",
+		(kind) => {
+			const candidates = [{ shapeFunctionIndex: 0, shapeCacheIndex: 0, slot: 0 }];
+			const access: BytecodeInstruction =
+				kind === "own-store"
+					? {
+							opcode: "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT",
+							object: retained,
+							value: 0,
+							stringIndex: 0,
+							icIndex: 1,
+							candidates,
+						}
+					: kind === "own-load"
+						? {
+								opcode: "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT",
+								object: retained,
+								dst: 3,
+								stringIndex: 0,
+								icIndex: 1,
+								candidates,
+							}
+						: {
+								opcode: "LOAD_PROPERTY_STATIC_ARRAY_LENGTH",
+								object: retained,
+								dst: 3,
+								stringIndex: 0,
+								icIndex: 1,
+							};
+			const source = emit(
+				[load, access, call(), returned],
+				[point(0, [0, 1], live), point(1, live, [...live, 3]), point(2)],
+				{ literalShapeCount: 1 },
+			);
+			const publication = privatePublication(source);
+			const propertyEnd = propertyMissPath(source, 0).end;
+			const helper =
+				kind === "own-store"
+					? "mal_vm_op_store_property_ic"
+					: "mal_vm_op_load_property_ic(vm";
+			const miss = source.indexOf(helper, propertyEnd);
+			const fallback =
+				kind === "own-store"
+					? source.lastIndexOf("if (!mal_vm_try_store_known_own_slots", miss)
+					: source.lastIndexOf("} else {", miss);
+			expect(fallback).toBeGreaterThan(propertyEnd);
+			expect(hasIncomingCopy(source.slice(propertyEnd, fallback), publication)).toBe(
+				false,
+			);
+			expect(source.slice(fallback, miss)).toContain(publication);
+			expect(source.slice(fallback, miss)).toContain("MAL_ROOT_MASK(");
+			expect(hasIncomingCopy(beforeCall(source, 2, miss), publication)).toBe(true);
+		},
+	);
+
+	it.each([
+		{ kind: "exact-own-slot", slot: 0 },
+		{ kind: "exact-array-length" },
+		{ kind: "contained-fixed-typed-array-length" },
+		{ kind: "exact-typed-array-element", elementKind: "Float64Array" },
+		{ kind: "contained-fixed-typed-array-element", elementKind: "Float64Array" },
+	] satisfies ReadonlyArray<NativeInstructionPlan>)(
+		"keeps final-value $kind operands private through their admitted lowering",
+		(plan) => {
+			const element =
+				plan.kind === "exact-typed-array-element" ||
+				plan.kind === "contained-fixed-typed-array-element";
+			const access: BytecodeInstruction = element
+				? { opcode: "LOAD_PROPERTY", object: retained, dst: 3, key: 5, icIndex: 1 }
+				: { ...load, object: retained, dst: 3, icIndex: 1 };
+			const source = emit(
+				[load, access, call(), returned],
+				[point(0, [0, 1], live), point(1, live, [...live, 3]), point(2)],
+				{ nativeInstructions: new Map([[1, plan]]) },
+			);
+			expect(privateRootRegisters(source)).toContain(retained);
+			expect(source).toContain("mal_vm_call_cached");
+		},
+	);
+
+	it("publishes the original receiver before a guarded own-slot load reuses its private register", () => {
+		const source = emit(
+			[
+				load,
+				{
+					opcode: "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT",
+					object: retained,
+					dst: retained,
+					stringIndex: 0,
+					icIndex: 1,
+					candidates: [{ shapeFunctionIndex: 0, shapeCacheIndex: 0, slot: 0 }],
+				},
+				call(),
+				returned,
+			],
+			[point(0, [0, 1], live), point(1, live, live), point(2)],
+			{ literalShapeCount: 1 },
+		);
+		const publication = privatePublication(source);
+		const miss = source.indexOf(
+			"mal_vm_op_load_property_ic(vm",
+			propertyMissPath(source, 0).end,
+		);
+		const fallback = source.lastIndexOf("} else {", miss);
+		expect(source.slice(fallback, miss)).toContain(publication);
+		expect(hasIncomingCopy(beforeCall(source, 2, miss), publication)).toBe(true);
+	});
+
+	it.each([
+		"Array.prototype.push",
+		"String.prototype.split",
+		"Map.prototype.get",
+	] as const)(
+		"retains continuous operands for the unmodeled %s storage contract",
+		(operation) => {
+			const source = emit([load, call(), returned], [point(0, [0, 1], live), point(1)], {
+				nativeInstructions: new Map([[1, guardedPlan(operation)]]),
+			});
+			expect(privateRootRegisters(source)).not.toContain(retained);
 		},
 	);
 

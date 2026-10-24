@@ -1,7 +1,7 @@
 import type { NativeCallTransportPlan } from "./lower-native-calls.ts";
 import { nativeProfitablePrivateRootRegisters } from "./lower-native-root-profitability.ts";
 import type { NativeBodyFacts } from "./native-body-facts.ts";
-import { nativePlanKeepsOrdinaryLowering, nativeRecordCallIps } from "./program-image.ts";
+import { nativePlanHasFinalValueStorage, nativeRecordCallIps } from "./program-image.ts";
 import type { NativeFunctionPlan } from "./program-image.ts";
 import {
 	vmInstructionReadRegisters,
@@ -98,6 +98,8 @@ const PRIVATE_RESULT_OPCODES = new Set([
 	"LOAD_INTRINSIC",
 	"LOAD_PROPERTY",
 	"LOAD_PROPERTY_STATIC",
+	"LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT",
+	"LOAD_PROPERTY_STATIC_ARRAY_LENGTH",
 	"ITERATOR_STEP",
 	"BINARY",
 	"UNARY",
@@ -123,14 +125,16 @@ export function nativePrivateRootRegisters(
 	);
 	for (const [ip, instruction] of fn.instructions.entries()) {
 		if (
-			instruction.opcode === "LOAD_PROPERTY_STATIC" &&
-			nativePlanKeepsOrdinaryLowering(native.instructions[ip])
+			(instruction.opcode === "LOAD_PROPERTY_STATIC" ||
+				instruction.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT" ||
+				instruction.opcode === "LOAD_PROPERTY_STATIC_ARRAY_LENGTH") &&
+			nativePlanHasFinalValueStorage(instruction, native.instructions[ip])
 		) {
 			if (frameRegisters.has(instruction.object)) candidates.add(instruction.object);
 			if (frameRegisters.has(instruction.dst)) candidates.add(instruction.dst);
 		} else if (
 			instruction.opcode === "LOAD_PROPERTY" &&
-			nativePlanKeepsOrdinaryLowering(native.instructions[ip]) &&
+			nativePlanHasFinalValueStorage(instruction, native.instructions[ip]) &&
 			(native.registerRepresentations[instruction.key] === "int32" ||
 				native.registerRepresentations[instruction.key] === "number") &&
 			frameRegisters.has(instruction.dst)
@@ -144,7 +148,7 @@ export function nativePrivateRootRegisters(
 	for (const [ip, instruction] of fn.instructions.entries()) {
 		if (
 			instruction.opcode === "LOAD_PROPERTY" &&
-			nativePlanKeepsOrdinaryLowering(native.instructions[ip]) &&
+			nativePlanHasFinalValueStorage(instruction, native.instructions[ip]) &&
 			(native.registerRepresentations[instruction.key] === "int32" ||
 				native.registerRepresentations[instruction.key] === "number") &&
 			frameRegisters.has(instruction.object)
@@ -176,7 +180,8 @@ export function nativePrivateRootRegisters(
 	for (const [ip, instruction] of fn.instructions.entries()) {
 		if (candidates.size === 0) break;
 		const writes = body?.writes[ip] ?? vmInstructionWriteRegisters(instruction);
-		const hasStorageSpecialization = !nativePlanKeepsOrdinaryLowering(
+		const hasStorageSpecialization = !nativePlanHasFinalValueStorage(
+			instruction,
 			native.instructions[ip],
 		);
 		const rootedOutputs =

@@ -56,6 +56,17 @@ export const MATH_UNARY_NATIVE_CALL: ReadonlyMap<string, string | null> = new Ma
 
 export const MATH_BINARY_OPERATIONS = new Set(["Math.min", "Math.max"]);
 
+export function nativeGuardedMathArity(
+	operation: string,
+	argumentCount: number,
+): 1 | 2 | undefined {
+	return argumentCount === 1 && MATH_UNARY_NATIVE_CALL.has(operation)
+		? 1
+		: argumentCount === 2 && MATH_BINARY_OPERATIONS.has(operation)
+			? 2
+			: undefined;
+}
+
 export const MATH_NUMBER_KERNELS: Readonly<Record<string, readonly [string, number]>> = {
 	"Math.clz32": ["mal_builtin_math_clz32_number", 1],
 	"Math.f16round": ["mal_builtin_math_f16round_number", 1],

@@ -178,6 +178,65 @@ function retainCharCode(holder, input) {
 }
 globalThis.retainCharCode = retainCharCode;
 
+function consumeBoolean(holder) {
+	const method = Boolean;
+	const value = holder.value;
+	holder.value = null;
+	try {
+		const result = method(value);
+		gc();
+		return [value.marker, result];
+	} catch (error) {
+		gc();
+		return [value.marker, error.marker];
+	}
+}
+globalThis.consumeBoolean = consumeBoolean;
+
+function consumeFinite(holder) {
+	const number = Number;
+	const value = holder.value;
+	holder.value = null;
+	try {
+		const result = number.isFinite(value);
+		gc();
+		return [value.marker, result];
+	} catch (error) {
+		gc();
+		return [value.marker, error.marker];
+	}
+}
+globalThis.consumeFinite = consumeFinite;
+
+function consumeAbs(holder) {
+	const math = Math;
+	const value = holder.value;
+	holder.value = null;
+	try {
+		const result = math.abs(value);
+		gc();
+		return [value.marker, result];
+	} catch (error) {
+		gc();
+		return [value.marker, error.marker];
+	}
+}
+globalThis.consumeAbs = consumeAbs;
+
+function consumeViewRead(holder) {
+	const value = holder.value;
+	holder.value = null;
+	try {
+		const result = value.getUint16(0, true);
+		gc();
+		return [value.marker, result];
+	} catch (error) {
+		gc();
+		return [value.marker, error.marker];
+	}
+}
+globalThis.consumeViewRead = consumeViewRead;
+
 function view() {
 	return new DataView(new Uint8Array([0x34, 0x12]).buffer);
 }
@@ -224,4 +283,51 @@ for (const [name, owner, key, input, expected] of cases) {
 		owner[key] = original;
 	}
 }
+function invokeConsumer(name, expected) {
+	const id = ++marker;
+	const holder =
+		name === "consumeViewRead"
+			? { value: view() }
+			: {
+					value: {
+						[Symbol.toPrimitive]() {
+							gc();
+							return -7;
+						},
+					},
+				};
+	holder.value.marker = id;
+	const result = globalThis[name](holder);
+	const actual = result[1];
+	if (
+		holder.value !== null ||
+		result[0] !== id ||
+		(actual && typeof actual === "object" ? actual.marker : actual) !== expected
+	)
+		throw new Error("lost private operand in " + name);
+}
+for (const [name, owner, key, expected] of [
+	["consumeBoolean", globalThis, "Boolean", true],
+	["consumeFinite", Number, "isFinite", false],
+	["consumeAbs", Math, "abs", 7],
+	["consumeViewRead", DataView.prototype, "getUint16", 0x1234],
+]) {
+	const original = owner[key];
+	try {
+		invokeConsumer(name, expected);
+		owner[key] = function () {
+			gc();
+			return { marker: "returned" };
+		};
+		invokeConsumer(name, "returned");
+		owner[key] = function () {
+			gc();
+			throw { marker: "thrown" };
+		};
+		invokeConsumer(name, "thrown");
+	} finally {
+		owner[key] = original;
+	}
+}
+
 console.log("guarded-call-roots PASS");

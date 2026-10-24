@@ -6470,7 +6470,7 @@ function emitBody(
 		rootedOutputReloads: undefined,
 		loopBackedgeInactiveRootMask: undefined,
 		valueGuardInactiveRootMask: undefined,
-		knownOwnSlotLoadInactiveRootMask: undefined,
+		guardedPropertyLoadInactiveRootMask: undefined,
 		staticPropertyLoadInactiveRootMask: undefined,
 		privateAccessInactiveRootMask: undefined,
 		indexedPropertyInactiveRootMask: undefined,
@@ -6755,7 +6755,9 @@ function emitBody(
 			incomingRootPublication.length <= MAX_DEFERRED_ROOT_PUBLICATION_STORES;
 		const deferredPropertyRoots =
 			deferrableRoots &&
-			fn.instructions[ip]!.opcode === "LOAD_PROPERTY_STATIC" &&
+			(fn.instructions[ip]!.opcode === "LOAD_PROPERTY_STATIC" ||
+				fn.instructions[ip]!.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT" ||
+				fn.instructions[ip]!.opcode === "LOAD_PROPERTY_STATIC_ARRAY_LENGTH") &&
 			!staticPropertyProjectionConflicts(ip);
 		const indexedPropertyInstruction = fn.instructions[ip]!;
 		// Dense growth can allocate, but its allocator never collects inside the probe.
@@ -6780,6 +6782,8 @@ function emitBody(
 		const deferredStaticPropertyWriteRoots =
 			deferrableRoots &&
 			(staticPropertyWriteInstruction.opcode === "STORE_PROPERTY_STATIC" ||
+				staticPropertyWriteInstruction.opcode ===
+					"STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT" ||
 				(hasPrivateRoots &&
 					staticPropertyWriteInstruction.opcode === "DEFINE_PROPERTY" &&
 					staticPropertyWriteInstruction.enumerable &&
@@ -6927,9 +6931,10 @@ function emitBody(
 			inactiveRootMask !== lastPublishedInactiveRootMask
 				? inactiveRootMask
 				: undefined;
-		const knownOwnSlotLoadInactiveRootMask =
+		const guardedPropertyLoadInactiveRootMask =
 			safepointKind === "operation" &&
-			fn.instructions[ip]!.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT" &&
+			(fn.instructions[ip]!.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT" ||
+				fn.instructions[ip]!.opcode === "LOAD_PROPERTY_STATIC_ARRAY_LENGTH") &&
 			inactiveRootMask !== lastPublishedInactiveRootMask
 				? inactiveRootMask
 				: undefined;
@@ -6962,7 +6967,7 @@ function emitBody(
 			loopBackedgeInactiveRootMask === undefined &&
 			operatorInactiveRootMask === undefined &&
 			valueGuardInactiveRootMask === undefined &&
-			knownOwnSlotLoadInactiveRootMask === undefined &&
+			guardedPropertyLoadInactiveRootMask === undefined &&
 			staticPropertyLoadInactiveRootMask === undefined &&
 			privateAccessInactiveRootMask === undefined &&
 			indexedPropertyInactiveRootMask === undefined &&
@@ -6980,7 +6985,7 @@ function emitBody(
 			loopBackedgeInactiveRootMask === undefined &&
 			operatorInactiveRootMask === undefined &&
 			valueGuardInactiveRootMask === undefined &&
-			knownOwnSlotLoadInactiveRootMask === undefined &&
+			guardedPropertyLoadInactiveRootMask === undefined &&
 			staticPropertyLoadInactiveRootMask === undefined &&
 			privateAccessInactiveRootMask === undefined &&
 			indexedPropertyInactiveRootMask === undefined &&
@@ -7029,8 +7034,8 @@ function emitBody(
 		instructionContext.rootedOutputReloads = rootedOutputReloads;
 		instructionContext.loopBackedgeInactiveRootMask = loopBackedgeInactiveRootMask;
 		instructionContext.valueGuardInactiveRootMask = valueGuardInactiveRootMask;
-		instructionContext.knownOwnSlotLoadInactiveRootMask =
-			knownOwnSlotLoadInactiveRootMask;
+		instructionContext.guardedPropertyLoadInactiveRootMask =
+			guardedPropertyLoadInactiveRootMask;
 		instructionContext.staticPropertyLoadInactiveRootMask =
 			staticPropertyLoadInactiveRootMask;
 		instructionContext.privateAccessInactiveRootMask = privateAccessInactiveRootMask;
@@ -7182,7 +7187,7 @@ function emitBody(
 		} else if (
 			operatorMaskEmitted ||
 			valueGuardInactiveRootMask !== undefined ||
-			knownOwnSlotLoadInactiveRootMask !== undefined ||
+			guardedPropertyLoadInactiveRootMask !== undefined ||
 			staticPropertyLoadInactiveRootMask !== undefined ||
 			privateAccessInactiveRootMask !== undefined ||
 			indexedPropertyInactiveRootMask !== undefined ||
@@ -7542,7 +7547,7 @@ interface NativeInstructionContext {
 	readonly rootedOutputReloads?: ReadonlyArray<string>;
 	readonly loopBackedgeInactiveRootMask?: NativeInactiveRootMask;
 	readonly valueGuardInactiveRootMask?: NativeInactiveRootMask;
-	readonly knownOwnSlotLoadInactiveRootMask?: NativeInactiveRootMask;
+	readonly guardedPropertyLoadInactiveRootMask?: NativeInactiveRootMask;
 	readonly staticPropertyLoadInactiveRootMask?: NativeInactiveRootMask;
 	readonly privateAccessInactiveRootMask?: NativeInactiveRootMask;
 	readonly indexedPropertyInactiveRootMask?: NativeInactiveRootMask;
@@ -7884,7 +7889,7 @@ function emitInstruction(
 		rootedOutputReloads: context.rootedOutputReloads,
 		loopBackedgeInactiveRootMask: context.loopBackedgeInactiveRootMask,
 		valueGuardInactiveRootMask: context.valueGuardInactiveRootMask,
-		knownOwnSlotLoadInactiveRootMask: context.knownOwnSlotLoadInactiveRootMask,
+		guardedPropertyLoadInactiveRootMask: context.guardedPropertyLoadInactiveRootMask,
 		staticPropertyLoadInactiveRootMask: context.staticPropertyLoadInactiveRootMask,
 		privateAccessInactiveRootMask: context.privateAccessInactiveRootMask,
 		indexedPropertyInactiveRootMask: context.indexedPropertyInactiveRootMask,
@@ -9799,10 +9804,11 @@ function emitInstruction(
 				`if (mal_vm_try_load_known_own_slots(vm, ${boxed(instruction.object)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}], ${instruction.candidates.length}, __known_own_slot_candidates_${ip}, &__known_own_slot_${ip})) {`,
 				`  r${instruction.dst} = ${callValue(instruction.dst, `__known_own_slot_${ip}`)};`,
 				`} else {`,
-				...(context.knownOwnSlotLoadInactiveRootMask === undefined
+				...(context.incomingRootPublication ?? []).map((line) => `  ${line}`),
+				...(context.guardedPropertyLoadInactiveRootMask === undefined
 					? []
 					: [
-							`  ${cInactiveRootMaskPublication(context.knownOwnSlotLoadInactiveRootMask, context.inactiveRootMaskStatements)};`,
+							`  ${cInactiveRootMaskPublication(context.guardedPropertyLoadInactiveRootMask, context.inactiveRootMaskStatements)};`,
 						]),
 				...boxedLoad(
 					instruction.dst,
@@ -9861,6 +9867,12 @@ function emitInstruction(
 			return [
 				`${relocation.enabled ? "" : "static "}const i32 __known_own_slot_store_candidates_${ip}[] = { ${candidates.join(", ")} };`,
 				`if (!mal_vm_try_store_known_own_slots(vm, ${boxed(instruction.object)}, ${boxed(instruction.value)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}], ${instruction.candidates.length}, __known_own_slot_store_candidates_${ip})) {`,
+				...(context.incomingRootPublication ?? []).map((line) => `  ${line}`),
+				...(context.staticPropertyWriteInactiveRootMask === undefined
+					? []
+					: [
+							`  ${cInactiveRootMaskPublication(context.staticPropertyWriteInactiveRootMask, context.inactiveRootMaskStatements)};`,
+						]),
 				`  ${profileCall("property", `mal_vm_op_store_property_ic(vm, ${boxed(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(instruction.stringIndex)}]), ${boxed(instruction.value)}, ${strict}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}])`)};`,
 				`  ${throwCheck()}`,
 				`}`,
@@ -9875,6 +9887,12 @@ function emitInstruction(
 				`if (mal_value_is_heap_type(${boxed(instruction.object)}, MAL_HEAP_ARRAY_OBJECT)) {`,
 				`  ${direct}`,
 				`} else {`,
+				...(context.incomingRootPublication ?? []).map((line) => `  ${line}`),
+				...(context.guardedPropertyLoadInactiveRootMask === undefined
+					? []
+					: [
+							`  ${cInactiveRootMaskPublication(context.guardedPropertyLoadInactiveRootMask, context.inactiveRootMaskStatements)};`,
+						]),
 				...boxedLoad(
 					instruction.dst,
 					profileCall(

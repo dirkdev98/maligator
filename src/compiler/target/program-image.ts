@@ -43,6 +43,7 @@ import type {
 import { collectCompilerFactFlowReport } from "./fact-flow-report.ts";
 import { lowerNativeFunctionStorage } from "./lower-native-storage.ts";
 import type { NativeStoragePlan } from "./lower-native-storage.ts";
+import { nativeGuardedMathArity } from "./native-scalar-operators.ts";
 import { validateNativeStackObject } from "./native-stack-object.ts";
 import { validateNativeStringSpan } from "./native-string-span.ts";
 import {
@@ -2527,6 +2528,59 @@ export function nativePlanKeepsOrdinaryLowering(
 	plan: NativeInstructionPlan | undefined,
 ): boolean {
 	return plan === undefined || plan.kind === "exact-array-element";
+}
+
+/** These lowerings read operands by value and assign final outputs; their fallbacks may still collect. */
+export function nativePlanHasFinalValueStorage(
+	instruction: BytecodeInstruction,
+	plan: NativeInstructionPlan | undefined,
+): boolean {
+	if (plan === undefined || nativePlanKeepsOrdinaryLowering(plan)) return true;
+	switch (plan.kind) {
+		case "call": {
+			const operation = plan.guardedBuiltinCall?.operation;
+			return (
+				instruction.opcode === "CALL" &&
+				operation !== undefined &&
+				plan.numericSortCallback === undefined &&
+				plan.directFunctionIndex === undefined &&
+				plan.directEntryId === undefined &&
+				plan.guardedFunctionIndices === undefined &&
+				plan.directFunctionCall === undefined &&
+				plan.directCallbackFunctionIndex === undefined &&
+				(nativeGuardedBuiltinEffects(operation) !== undefined ||
+					nativeGuardedMathArity(operation, instruction.arguments.length) !== undefined)
+			);
+		}
+		case "exact-own-slot":
+			return (
+				instruction.opcode === "LOAD_PROPERTY_STATIC" ||
+				instruction.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT" ||
+				instruction.opcode === "STORE_PROPERTY_STATIC" ||
+				instruction.opcode === "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT"
+			);
+		case "exact-array-length":
+		case "contained-fixed-typed-array-length":
+			return (
+				instruction.opcode === "LOAD_PROPERTY_STATIC" ||
+				instruction.opcode === "LOAD_PROPERTY_STATIC_ARRAY_LENGTH"
+			);
+		case "exact-packed-rest-array-length":
+		case "primitive-string-length":
+			return instruction.opcode === "LOAD_PROPERTY_STATIC";
+		case "exact-packed-rest-array-element":
+		case "exact-contained-array-element":
+			return instruction.opcode === "LOAD_PROPERTY";
+		case "exact-typed-array-element":
+		case "contained-fixed-typed-array-element":
+			return (
+				instruction.opcode === "LOAD_PROPERTY" || instruction.opcode === "STORE_PROPERTY"
+			);
+		case "unsigned-arithmetic":
+			return instruction.opcode === "BINARY";
+		default:
+			return false;
+	}
 }
 
 /**

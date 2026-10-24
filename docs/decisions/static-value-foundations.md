@@ -270,6 +270,14 @@ noncollecting hit. Reused rooted input/output registers, resumable bodies and
 specialized region obligations retain eager incoming publication. A conditional
 publication never establishes that the following instruction has published roots.
 
+Native storage separately records which plans consume operands by value and assign
+only final outputs. Guarded scalar calls, direct own-slot and length accesses, and
+array/typed-array element lowerings can keep those operands private without
+weakening the fallback's effects. Region-borrowed values and materialization
+contracts retain continuous roots. Guarded own-slot reads/writes and array-length
+reads publish incoming private values on the generic fallback; later collecting
+instructions cannot assume that conditional publication executed.
+
 Effect metadata preserves independent reads and writes for every effect domain,
 plus throwing, suspension, collection and user-code flags. Semantic purity alone
 does not discharge a native helper's allocation failure, polling or root obligations.

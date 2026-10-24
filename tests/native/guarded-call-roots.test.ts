@@ -37,7 +37,7 @@ it.each([false, true])(
 				const name = String.fromCharCode(
 					...(programImage.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
 				);
-				if (!name.startsWith("retain")) continue;
+				if (!name.startsWith("retain") && !name.startsWith("consume")) continue;
 				kernels++;
 				const held = fn.body.instructions.find(
 					(op) =>
@@ -56,7 +56,7 @@ it.each([false, true])(
 					/mal_(?:builtin_(?:boolean|number_predicate|math_[a-z]+)_callee_matches|data_view_accessor_is|builtin_string_char_code_at_(?:try|direct))/,
 				);
 			}
-			expect(kernels).toBe(12);
+			expect(kernels).toBe(16);
 			for (const binary of [compiled, interpreted]) {
 				for (const stress of [{}, STRESS_ENV])
 					expect(runToStdout(binary, { env: { MAL_HOST_GC: "1", ...stress } })).toBe(
