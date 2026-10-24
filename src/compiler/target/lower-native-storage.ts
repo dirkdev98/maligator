@@ -50,6 +50,11 @@ import type { NativeSuspensionPlan } from "./lower-native-suspension.ts";
 import { analyzeNativeBodyFacts } from "./native-body-facts.ts";
 import type { NativeBodyFacts } from "./native-body-facts.ts";
 import {
+	selectNativeControlFlow,
+	nativeControlFlowPlansMatch,
+} from "./native-control-flow.ts";
+import type { NativeControlFlowPlan } from "./native-control-flow.ts";
+import {
 	NATIVE_ARITH,
 	NATIVE_BITWISE,
 	NATIVE_COMPARE,
@@ -101,6 +106,7 @@ export interface NativeStoragePlan
 	readonly entryStableRootRegisters: ReadonlyArray<number>;
 	readonly rootPublicationContinuations: ReadonlyArray<number>;
 	readonly numericWorker: NativeNumericWorkerPlan | undefined;
+	readonly controlFlow?: NativeControlFlowPlan;
 }
 
 function selectNumericWorker(
@@ -1360,6 +1366,10 @@ function lowerStorage(
 	const callTransports = selectNativeCallTransports(native, entries);
 	const scalar = scalarStorage(native);
 	const directHeapObjectIps = selectNativeDirectHeapObjects(native);
+	const controlFlow = selectNativeControlFlow(native, body, stringConstants, {
+		constants: entry?.constantBooleans,
+		externalEntries: expressionWindows.flatMap((window) => window.claimedIps),
+	});
 	return {
 		...fastPaths,
 		captures: body.captures,
@@ -1402,6 +1412,7 @@ function lowerStorage(
 					]),
 		...scalar,
 		numericWorker,
+		...(controlFlow === undefined ? {} : { controlFlow }),
 	};
 }
 
@@ -1990,6 +2001,8 @@ export function validateNativeStorage(
 			stackRoots,
 		);
 		if (!sameScalar(variant.storage, selected)) return false;
+		if (!nativeControlFlowPlansMatch(variant.storage.controlFlow, selected.controlFlow))
+			return false;
 		if (
 			!sameNumbers(variant.storage.expressionIps, selected.expressionIps) &&
 			!sameNumbers(

@@ -236,6 +236,8 @@ The independent target boundary and current storage contract are recorded in
       canonical body correctly retains the unknown-input branch. Share a validated
       entry-specific reachability plan across storage, safepoints, specializations,
       and C emission while preserving canonical fallbacks and external entries.
+      Native storage now persists and independently validates that branch/reachability
+      plan; connecting its consumers is still unfinished.
 - [ ] Normalize primitive conversion calls from semantic kind unions. `String`
       and `Number` calls on `number | undefined` still use the builtin dispatcher.
       Retain extra argument effects and the distinct Symbol, BigInt, omitted-argument,

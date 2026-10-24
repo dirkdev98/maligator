@@ -110,7 +110,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 279;
+export const COMPILER_ARTIFACT_VERSION = 280;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -1185,6 +1185,15 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 				break;
 		}
 	}
+	w.u8(storage.controlFlow === undefined ? 0 : 1);
+	if (storage.controlFlow !== undefined) {
+		w.u32(storage.controlFlow.branches.length);
+		for (const branch of storage.controlFlow.branches) {
+			w.i32(branch.instructionIp);
+			w.i32(branch.targetIp);
+		}
+		w.i32Array([...storage.controlFlow.unreachableIps]);
+	}
 }
 
 function writeIntegerRanges(
@@ -1882,8 +1891,21 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 			}
 		},
 	);
+	const hasControlFlow = r.u8();
+	if (hasControlFlow > 1) throw new RangeError("Invalid native control-flow selection");
+	const controlFlow =
+		hasControlFlow === 0
+			? undefined
+			: {
+					branches: Array.from({ length: r.count(2) }, () => ({
+						instructionIp: r.i32(),
+						targetIp: r.i32(),
+					})),
+					unreachableIps: r.i32Array(),
+				};
 	return {
 		...storage,
+		...(controlFlow === undefined ? {} : { controlFlow }),
 		literalPropertyDefinitions,
 		mathCalls,
 		numberPredicates,

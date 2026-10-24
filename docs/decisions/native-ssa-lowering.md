@@ -143,6 +143,14 @@ storage. An empty or all-unknown instruction-site map still preserves profiling
 restrictions on producer selection. Runtime wires omit these host tables; source
 origins and optimizer remarks remain diagnostic sidecars.
 
+Native storage retains a per-variant control-flow plan with constant branch
+destinations and unreachable instruction indices. Single-writer truth values flow
+through copies and negation only when their definitions cover every entry path;
+joins with multiple writers remain unknown. Handlers, resume points, switches and
+selected region continuations are separate roots. Proof walks share a bounded work
+budget and copy chains use an iterative traversal. Artifact validation rederives the
+plan independently, preserving the ordinary instruction and profiling namespaces.
+
 Read/write occurrences, branch sources, handler and resume entries, and handler
 targets are shared by storage and fast-path consumers. Property-window selection
 visits the shared ordered static-load index; dense window scans still check every
