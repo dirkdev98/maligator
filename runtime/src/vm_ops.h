@@ -2563,19 +2563,21 @@ static inline bool mal_vm_dense_number_storage(MalValue receiver, MalDenseNumber
     return true;
 }
 
+// Each width scales the index by a constant, which keeps a multiply by the span's
+// element size out of every element address.
 static inline f64 mal_vm_fixed_numeric_load(const MalTypedArraySpan *span, u32 index) {
-    const byte *at = span->data + (usize) index * span->element_size;
     if (span->kind == MAL_TA_FLOAT64)
-        return mal_scalar_f64_from_bits(mal_scalar_load_native_u64(at));
+        return mal_scalar_f64_from_bits(
+            mal_scalar_load_native_u64(span->data + (usize) index * 8));
     if (span->element_size == 1) {
-        u8 bits = mal_scalar_load_native_u8(at);
+        u8 bits = mal_scalar_load_native_u8(span->data + index);
         return span->kind == MAL_TA_INT8 ? (f64) mal_scalar_i8_from_bits(bits) : (f64) bits;
     }
     if (span->element_size == 2) {
-        u16 bits = mal_scalar_load_native_u16(at);
+        u16 bits = mal_scalar_load_native_u16(span->data + (usize) index * 2);
         return span->kind == MAL_TA_INT16 ? (f64) mal_scalar_i16_from_bits(bits) : (f64) bits;
     }
-    u32 bits = mal_scalar_load_native_u32(at);
+    u32 bits = mal_scalar_load_native_u32(span->data + (usize) index * 4);
     if (span->kind == MAL_TA_FLOAT32) return (f64) mal_scalar_f32_from_bits(bits);
     return span->kind == MAL_TA_INT32 ? (f64) mal_scalar_i32_from_bits(bits) : (f64) bits;
 }
@@ -2600,18 +2602,19 @@ static inline i64 mal_vm_fixed_integer_load(const MalTypedArraySpan *span, u32 i
 static inline void mal_vm_fixed_numeric_store(
     const MalTypedArraySpan *span, u32 index, f64 number
 ) {
-    byte *at = span->data + (usize) index * span->element_size;
     if (span->kind == MAL_TA_FLOAT64) {
-        mal_scalar_store_native_u64(at, mal_scalar_f64_to_bits(number));
+        mal_scalar_store_native_u64(
+            span->data + (usize) index * 8, mal_scalar_f64_to_bits(number));
     } else if (span->kind == MAL_TA_UINT8_CLAMPED) {
-        mal_scalar_store_native_u8(at, mal_typed_array_to_uint8_clamp(number));
+        mal_scalar_store_native_u8(span->data + index, mal_typed_array_to_uint8_clamp(number));
     } else {
         u32 bits = span->kind == MAL_TA_FLOAT32
             ? mal_scalar_f32_to_bits((f32) number)
             : mal_ops_number_to_uint32(number);
-        if (span->element_size == 1) mal_scalar_store_native_u8(at, (u8) bits);
-        else if (span->element_size == 2) mal_scalar_store_native_u16(at, (u16) bits);
-        else mal_scalar_store_native_u32(at, bits);
+        if (span->element_size == 1) mal_scalar_store_native_u8(span->data + index, (u8) bits);
+        else if (span->element_size == 2)
+            mal_scalar_store_native_u16(span->data + (usize) index * 2, (u16) bits);
+        else mal_scalar_store_native_u32(span->data + (usize) index * 4, bits);
     }
 }
 
