@@ -187,6 +187,40 @@ describe("normal build frontend cache", () => {
 		expect(run("./second.mjs").cache).toBe("miss");
 	});
 
+	it("keeps a profiled compile out of the unprofiled cache entry", () => {
+		const root = temporaryDirectory();
+		const cacheDirectory = path.join(root, "cache");
+		const entrypoint = path.join(root, "entry.mjs");
+		write(path.join(root, "package.json"), `{"type":"module"}\n`);
+		write(
+			entrypoint,
+			`function sum(values) {
+				let total = 0;
+				for (let i = 0; i < values.length; i++) total += values[i] * 2;
+				return total;
+			}
+			console.log(sum(new Float64Array([1, 2, 3])));\n`,
+		);
+		// The CLI forces profiled compiles, which still publish where fragments do not apply.
+		compileBuildFrontend({
+			entrypoint,
+			config: resolveBuildConfig({}),
+			stripTypes: stripCompactTypes,
+			stripperIdentity: "build-frontend-cache-test",
+			cacheDirectory,
+			profile: true,
+			forceCompile: true,
+		});
+		const plain = compile(entrypoint, cacheDirectory);
+		expect(plain.cache).toBe("miss");
+		expect(
+			plain.programImage.native.functions.some(
+				(fn) => (fn.storage?.numericLoopRegions.length ?? 0) > 0,
+			),
+		).toBe(true);
+		expect(compile(entrypoint, cacheDirectory).programImage).toBeDefined();
+	});
+
 	it("stores and replays structured primordial diagnostics", () => {
 		const root = temporaryDirectory();
 		const cacheDirectory = path.join(root, "cache");

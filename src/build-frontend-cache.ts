@@ -245,6 +245,8 @@ function cacheIdentity(options: CompileBuildFrontendOptions): string {
 			nodeGlobals:
 				nodeGlobalsSource === undefined ? undefined : digest(nodeGlobalsSource),
 			optimization: options.optimization ?? "full",
+			// Profiled images keep per-instruction sites and select different native plans.
+			profile: options.profile === true,
 			relocatable: options.relocatable === true,
 			interpreted: options.interpreted === true,
 			enforcePolicies: options.enforcePolicies !== false,
