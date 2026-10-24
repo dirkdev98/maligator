@@ -100,13 +100,6 @@ until the consumer admits real sites and measurements establish a benefit.
 The independent target boundary and current storage contract are recorded in
 [native SSA lowering](docs/decisions/native-ssa-lowering.md).
 
-- [ ] Use operand kinds when rendering captured-store card barriers. Both fixed
-      owner and owned-environment stores test only physical Number/Boolean
-      representations. A boxed `flag ? +input : null` reaches `STORE_CAPTURED`
-      with a `Number | null` fact yet still emits `mal_gc_card`. Omit the card
-      barrier for proven non-heap values while preserving the old-value write
-      barrier and heap-valued fallback; verify collecting closures and old owners.
-
 - [ ] Define profiled compiler-artifact restoration. The codec omits profile-site
       tables, but stored native plans retain profiling restrictions. A profiled
       `globalThis.result = [1, 2, 3]` fails restoration with an invalid storage plan

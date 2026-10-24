@@ -6,9 +6,14 @@ import { expect, it } from "vitest";
 import { resolveBuildConfig } from "../../src/build-config.ts";
 import { compileEntrypoint } from "../../src/compiler/pipeline/compile-program.ts";
 import {
+	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_NULL,
+} from "../../src/compiler/shared/compiler-value-kinds.ts";
+import {
 	buildBackendPairFromOneProgramImage,
 	buildNativeBinary,
 	buildNativeProgramImage,
+	HOST_MAIN,
 	runToStdout,
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
@@ -56,27 +61,57 @@ it("preserves closure cells and lexical identities across native and generic cal
 	}
 }, 600_000);
 
-it("preserves changing primitive and heap capture stores across collection and reentry", () => {
-	const fixture = "tests/local/closure-capture-stores.js";
-	const expected = execFileSync(process.execPath, [fixture], { encoding: "utf8" });
-	const outDir = mkdtempSync(join(tmpdir(), "mal-closure-capture-stores-"));
-	try {
-		const pair = buildBackendPairFromOneProgramImage({
-			fixture,
-			name: "closure-capture-stores",
-			config: resolveBuildConfig({
-				engine: { primordials: "locked", eval: false, realms: false },
-			}),
-			outDir,
+it.each([
+	{ primordials: "locked", profile: false },
+	{ primordials: "mutable", profile: false },
+	{ primordials: "locked", profile: true },
+] as const)(
+	"preserves capture stores across collection and reentry with $primordials primordials and profiling $profile",
+	({ primordials, profile }) => {
+		const fixture = "tests/local/closure-capture-stores.js";
+		const expected = execFileSync(process.execPath, ["--expose-gc", fixture], {
+			encoding: "utf8",
 		});
-		for (const binary of [pair.compiled, pair.interpreted]) {
-			expect(runToStdout(binary)).toBe(expected);
-			expect(runToStdout(binary, { env: STRESS_ENV, timeoutMs: 60_000 })).toBe(expected);
+		const outDir = mkdtempSync(join(tmpdir(), "mal-closure-capture-stores-"));
+		try {
+			const pair = buildBackendPairFromOneProgramImage({
+				fixture,
+				name: "closure-capture-stores",
+				mainFile: HOST_MAIN,
+				nativeStackRoots: "precise",
+				profileEnabled: profile,
+				environment: profile ? { ...process.env, MAL_PERF_STATS: "1" } : process.env,
+				config: resolveBuildConfig({
+					engine: { primordials, eval: false, realms: false },
+				}),
+				outDir,
+			});
+			const stores = pair.programImage.native.functions.flatMap((fn) =>
+				fn.body.instructions.flatMap((op, ip) =>
+					op.opcode === "STORE_CAPTURED" &&
+					fn.facts?.[ip]?.inputKindMasks?.[0] ===
+						(COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_NULL)
+						? [op]
+						: [],
+				),
+			);
+			expect(stores.some((op) => op.ownerFunctionIndex < 0)).toBe(true);
+			expect(stores.some((op) => op.ownerFunctionIndex >= 0)).toBe(true);
+			for (const binary of [pair.compiled, pair.interpreted]) {
+				expect(runToStdout(binary, { env: { MAL_HOST_GC: "1" } })).toBe(expected);
+				expect(
+					runToStdout(binary, {
+						env: { ...STRESS_ENV, MAL_HOST_GC: "1" },
+						timeoutMs: 60_000,
+					}),
+				).toBe(expected);
+			}
+		} finally {
+			rmSync(outDir, { recursive: true, force: true });
 		}
-	} finally {
-		rmSync(outDir, { recursive: true, force: true });
-	}
-}, 600_000);
+	},
+	600_000,
+);
 
 it("preserves observable closures across the private bridge under collection", () => {
 	const fixture = "tests/local/closure-private-bridge.js";

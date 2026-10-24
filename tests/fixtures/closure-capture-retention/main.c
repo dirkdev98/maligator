@@ -126,7 +126,7 @@ static int check_retention(const MalRuntimeImage *image) {
     if (finalized[0] != 1 || finalized[1] != 0 ||
         finalized[2] != 0 || finalized[3] != 0) return 3;
 
-    mal_vm_store_captured(left, 1, 0, roots[3]);
+    mal_vm_store_captured(left, 1, 0, roots[3], true);
     if (mal_vm_load_captured(right, 1, 0) != roots[3] ||
         mal_vm_load_captured(multiple, 1, 0) != roots[3]) return 4;
     const i32 parameter_map[] = { 0 };
@@ -333,8 +333,8 @@ static int check_lookup_and_reexport(const MalRuntimeImage *image) {
         mal_vm_capture_owner_at(single, 1, 0) != nearest ||
         mal_vm_capture_owner_at(single, 1, 8) != nearest ||
         mal_vm_capture_owner_at(single, 4, 0) != nullptr) return 25;
-    mal_vm_store_captured(selected, 1, 0, mal_value_from_i32(33));
-    mal_vm_store_captured(selected, 4, 0, mal_value_from_i32(55));
+    mal_vm_store_captured(selected, 1, 0, mal_value_from_i32(33), false);
+    mal_vm_store_captured(selected, 4, 0, mal_value_from_i32(55), false);
     if (mal_vm_load_captured(source, 1, 0) != mal_value_from_i32(11) ||
         mal_vm_load_captured(single, 1, 0) != mal_value_from_i32(33) ||
         mal_vm_load_captured(source, 4, 0) != mal_value_from_i32(55)) return 26;
@@ -481,7 +481,7 @@ static int check_value_captures(const MalRuntimeImage *image) {
             mal_value_to_heap(mal_vm_load_captured_value_at(values, 1, 2, 0)) != tracked[2] ||
             mal_value_to_heap(mal_vm_load_captured_value_at(values, 1, 2, 99)) != tracked[2] ||
             !mal_value_is_undefined(mal_vm_load_captured(values, 1, 1))) return 63;
-    mal_vm_store_captured(values, 1, 0, mal_value_from_i32(99));
+    mal_vm_store_captured(values, 1, 0, mal_value_from_i32(99), false);
     if (mal_value_to_heap(mal_vm_load_captured(values, 1, 0)) != tracked[0]) return 64;
     roots[2] = mal_vm_op_create_function(&vm, 6, values);
     roots[3] = mal_vm_op_create_function(&vm, 9, values);
@@ -635,6 +635,52 @@ static int check_value_construction_during_marking(const MalRuntimeImage *image)
     return 0;
 }
 
+static int check_capture_store_barriers(const MalRuntimeImage *image) {
+    for (i32 dynamic = 0; dynamic < 2; dynamic++) {
+        for (usize i = 0; i < countof(tracked); i++) tracked[i] = nullptr;
+        MalVm vm;
+        mal_vm_init(&vm, image);
+        MalEnv *ballast = mal_env_new(&vm, nullptr, 99, 9000);
+        for (i32 i = 0; i < ballast->slot_count; i++) {
+            ballast->slots[i] = mal_value_from_object(mal_object_new(&vm.heap, nullptr));
+        }
+        MalValue roots[] = { mal_value_from_heap(&ballast->header), MAL_VALUE_UNDEFINED };
+        MalRootSpan span;
+        mal_gc_root(&span, roots, countof(roots));
+        MalEnv *owner = mal_env_new(&vm, nullptr, 1, 1);
+        owner->slots[0] = tracked_object(&vm, 0);
+        // Function 6 has no capture-layout certificate, so its parent remains a traced chain.
+        MalEnv *scope = dynamic ? mal_env_new(&vm, owner, 6, 0) : owner;
+        tracked_object(&vm, 1);
+        vm.heap.next_gc_at = 1;
+        mal_gc_poll = true;
+        mal_gc_safepoint(&vm);
+        if (!mal_gc_marking_active) return 100;
+        roots[1] = mal_value_from_heap(&scope->header);
+        mal_vm_store_captured(scope, 1, 0, mal_value_from_i32(42), false);
+        if (!mal_gc_finish_pending_cycle(&vm)) return 101;
+        if (finalized[0] != 0) return 104;
+        if (finalized[1] != 1) return 105;
+        if (!mal_heap_mark_is_old(owner->header.mark)) return 106;
+        if (owner->slots[0] != mal_value_from_i32(42)) return 107;
+
+        mal_vm_store_captured(scope, 1, 0, tracked_object(&vm, 2), true);
+        tracked_object(&vm, 3);
+        u8 major_color = vm.heap.mark_color;
+        vm.heap.next_gc_at = 1;
+        mal_gc_poll = true;
+        mal_gc_safepoint(&vm);
+        if (vm.heap.black_alloc || vm.heap.mark_color != major_color || finalized[2] != 0 ||
+            finalized[3] != 1 || mal_value_to_heap(owner->slots[0]) != tracked[2]) return 102;
+        mal_vm_store_captured(scope, 1, 0, MAL_VALUE_NULL, false);
+        mal_gc_collect(&vm);
+        if (finalized[0] != 1 || finalized[2] != 1 || owner->slots[0] != MAL_VALUE_NULL) return 103;
+        mal_gc_unroot(&span);
+        mal_vm_free(&vm);
+    }
+    return 0;
+}
+
 static int check_value_profitability(const MalRuntimeImage *image) {
     for (usize i = 0; i < countof(tracked); i++) tracked[i] = nullptr;
     MalVm vm;
@@ -741,6 +787,7 @@ int main(void) {
     if (result == 0) result = check_value_fallback(&image);
     if (result == 0) result = check_value_snapshot(&image);
     if (result == 0) result = check_value_construction_during_marking(&image);
+    if (result == 0) result = check_capture_store_barriers(&image);
     if (result == 0) result = check_value_profitability(&image);
     mal_gc_register_finalizer(MAL_HEAP_OBJECT, nullptr);
     mal_gc_register_finalizer(MAL_HEAP_FUNCTION_OBJECT, nullptr);

@@ -2076,12 +2076,14 @@ MalValue mal_vm_load_captured_slow(MalEnv *env, i32 owner_function_index, i32 in
         ? value : mal_value_new_undefined();
 }
 
-void mal_vm_store_captured_slow(MalEnv *env, i32 owner_function_index, i32 index, MalValue value) {
+void mal_vm_store_captured_slow(
+    MalEnv *env, i32 owner_function_index, i32 index, MalValue value, bool needs_card
+) {
     MalEnv *owner = mal_vm_capture_owner(env, owner_function_index);
     if (owner == nullptr) return;
     mal_gc_write_barrier(owner->slots[index]);
     owner->slots[index] = value;
-    mal_gc_card(&owner->header, value);
+    if (needs_card) mal_gc_card(&owner->header, value);
 }
 
 void mal_op_load_captured(MalCallable *callable, const MalInstruction *instruction) {
@@ -2121,7 +2123,7 @@ void mal_op_store_captured(MalCallable *callable, const MalInstruction *instruct
         callable->env,
         instruction->as.store_captured.owner_function_index,
         instruction->as.store_captured.index,
-        callable->registers[instruction->as.store_captured.src]
+        callable->registers[instruction->as.store_captured.src], true
     );
 }
 
@@ -9225,7 +9227,7 @@ void mal_vm_op_create_private_names(
 ) {
     for (i32 i = 0; i < count; i++) {
         mal_vm_store_captured(
-            env, owner_function_index, captured_indices[i], mal_vm_op_create_private_name(vm));
+            env, owner_function_index, captured_indices[i], mal_vm_op_create_private_name(vm), true);
     }
 }
 

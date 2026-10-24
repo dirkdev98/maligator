@@ -841,19 +841,20 @@ static inline MalValue mal_vm_load_captured_value_at(
     return mal_vm_load_captured(env, owner_function_index, index);
 }
 
-void mal_vm_store_captured_slow(MalEnv *env, i32 owner_function_index, i32 index, MalValue value);
+void mal_vm_store_captured_slow(
+    MalEnv *env, i32 owner_function_index, i32 index, MalValue value, bool needs_card);
 
 static inline void mal_vm_store_captured(
-    MalEnv *env, i32 owner_function_index, i32 index, MalValue value
+    MalEnv *env, i32 owner_function_index, i32 index, MalValue value, bool needs_card
 ) {
     MalEnv *scope = mal_env_untag_single_owner(env);
     if (scope != nullptr && scope->function_index == owner_function_index) {
         mal_gc_write_barrier(scope->slots[index]);
         scope->slots[index] = value;
-        mal_gc_card(&scope->header, value);
+        if (needs_card) mal_gc_card(&scope->header, value);
         return;
     }
-    mal_vm_store_captured_slow(env, owner_function_index, index, value);
+    mal_vm_store_captured_slow(env, owner_function_index, index, value, needs_card);
 }
 
 void mal_op_load_property(MalCallable *callable, const MalInstruction *instruction);

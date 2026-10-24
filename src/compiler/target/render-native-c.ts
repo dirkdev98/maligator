@@ -9755,50 +9755,43 @@ function emitInstruction(
 			];
 		}
 		case "STORE_CAPTURED": {
-			if (context.fixedCaptureOwners?.has(instruction.ownerFunctionIndex)) {
-				const owner = captureOwnerName(relocation, instruction.ownerFunctionIndex);
-				const primitive =
-					reps[instruction.src] === "number" ||
-					reps[instruction.src] === "int32" ||
-					reps[instruction.src] === "boolean";
-				const store = [
-					`mal_gc_write_barrier(${owner}->slots[${instruction.index}]);`,
-					`${owner}->slots[${instruction.index}] = ${boxed(instruction.src)};`,
-					...(!primitive
-						? [`mal_gc_card(&${owner}->header, ${boxed(instruction.src)});`]
-						: []),
+			const needsCard = !compilerValueKindMaskIsSubset(
+				operandKind(instruction.src) ?? COMPILER_VALUE_KIND_TOP,
+				COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE,
+			);
+			const fixedOwner = context.fixedCaptureOwners?.has(instruction.ownerFunctionIndex);
+			const owner = fixedOwner
+				? captureOwnerName(relocation, instruction.ownerFunctionIndex)
+				: instruction.ownerFunctionIndex === context.ownedCaptureFunctionIndex
+					? "env"
+					: undefined;
+			if (owner === undefined)
+				return [
+					`mal_vm_store_captured(env, ${relocation.ownerFunctionIndex(instruction.ownerFunctionIndex)}, ${instruction.index}, ${boxed(instruction.src)}, ${needsCard});`,
 				];
+			const store = [
+				`mal_gc_write_barrier(${owner}->slots[${instruction.index}]);`,
+				`${owner}->slots[${instruction.index}] = ${boxed(instruction.src)};`,
+				...(needsCard
+					? [`mal_gc_card(&${owner}->header, ${boxed(instruction.src)});`]
+					: []),
+			];
+			if (fixedOwner) {
 				if (context.requiredCaptureOwners?.has(instruction.ownerFunctionIndex))
 					return store;
 				return [`if (${owner} != nullptr) {`, ...store.map((line) => `  ${line}`), `}`];
 			}
-			if (instruction.ownerFunctionIndex === context.ownedCaptureFunctionIndex) {
-				const primitive =
-					reps[instruction.src] === "number" ||
-					reps[instruction.src] === "int32" ||
-					reps[instruction.src] === "boolean";
-				const store = [
-					`mal_gc_write_barrier(env->slots[${instruction.index}]);`,
-					`env->slots[${instruction.index}] = ${boxed(instruction.src)};`,
-					...(!primitive
-						? [`mal_gc_card(&env->header, ${boxed(instruction.src)});`]
-						: []),
-				];
-				const shadow = context.captureShadow;
-				const state = shadow?.plan.states[ip] ?? ENVIRONMENT_PRESENT;
-				if (shadow === undefined || (state & ENVIRONMENT_ABSENT) === 0) return store;
-				const frame = `__gc_slots[${shadow.base + instruction.index}] = ${boxed(instruction.src)};`;
-				if (state === ENVIRONMENT_ABSENT) return [frame];
-				return [
-					"if (__capture_env_ready) {",
-					...store.map((line) => `  ${line}`),
-					"} else {",
-					`  ${frame}`,
-					"}",
-				];
-			}
+			const shadow = context.captureShadow;
+			const state = shadow?.plan.states[ip] ?? ENVIRONMENT_PRESENT;
+			if (shadow === undefined || (state & ENVIRONMENT_ABSENT) === 0) return store;
+			const frame = `__gc_slots[${shadow.base + instruction.index}] = ${boxed(instruction.src)};`;
+			if (state === ENVIRONMENT_ABSENT) return [frame];
 			return [
-				`mal_vm_store_captured(env, ${relocation.ownerFunctionIndex(instruction.ownerFunctionIndex)}, ${instruction.index}, ${boxed(instruction.src)});`,
+				"if (__capture_env_ready) {",
+				...store.map((line) => `  ${line}`),
+				"} else {",
+				`  ${frame}`,
+				"}",
 			];
 		}
 		case "ENV_PUSH":
