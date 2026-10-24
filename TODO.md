@@ -955,6 +955,16 @@ contracts or investigates costs still visible after the string follow-ups.
 
 ## Active correctness clusters
 
+- [ ] Find the edge that frees a live compact env's parent around HTTP client
+      callbacks. A loopback client that reuses a keep-alive socket just as the server's
+      `keepAliveTimeout` (50 ms) closes it, with request gaps between 44 and 56 ms,
+      aborts under `MAL_GC_STRESS=1` with "attempted to shade a reclaimed cell". The
+      native stack scan finds a live env during a callback emitted from
+      `http_client_dispatch_terminal` and follows its compact parent into a freed cell.
+      It reproduces at e44e209d, not only on newer trees, and hides under
+      `MAL_GC_VERIFY=1`. The same race also fails some reused-socket requests with an
+      error whose `code` is undefined, where Node completes every request.
+
 - [ ] Mint private names per class evaluation inside loops. A class expression
       evaluated by each iteration of a loop in one activation keeps its private
       names in that activation's captured slots, so every evaluation overwrites
