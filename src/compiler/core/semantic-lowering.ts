@@ -1466,7 +1466,21 @@ function coreInitializedLexicalReads(program: CoreFrontendContext): {
 } {
 	const reads: Array<CoreInitializedCapturedRead> = [];
 	const moduleReads: Array<CoreInitializedModuleBindingReads> = [];
+	const cyclic = new Set(program.semantic.graph?.cycles.flat());
 	for (const file of program.semantic.files) {
+		// Only references reach a hoisted declaration of a function body, a CommonJS module
+		// or an ES module outside import cycles; a script's are also global properties.
+		const reachable =
+			!program.evalDirect && (file.strict || !file.scopes.some((scope) => scope.dynamic));
+		const programReach =
+			reachable &&
+			!file.hasDirectEval.has(file.ast) &&
+			(file.commonjs === true ||
+				(file.type === "module" &&
+					!cyclic.has(file.path) &&
+					program.semantic.graph?.modules.get(file.path)?.platform?.evaluation !==
+						"side-effect-free" &&
+					(program.cjsImports.get(file.path)?.length ?? 0) === 0));
 		// Top-level lexical bindings stored in global slots, in declaration order.
 		const topLevelOrder = new Map<Binding, number>();
 		const topLevelSlots: Array<number> = [];
@@ -1534,32 +1548,137 @@ function coreInitializedLexicalReads(program: CoreFrontendContext): {
 			}
 			visit(node.params, initialized);
 			if (node.body?.type === "BlockStatement")
-				visitList(node.body.body, initialized, true);
+				visitList(
+					node.body.body,
+					initialized,
+					true,
+					reachable && !file.hasDirectEval.has(node),
+				);
 			else visit(node.body, initialized);
+		};
+		// The top-level statement of a list that holds a node, by source position.
+		const statementAt = (
+			statements: ReadonlyArray<ESTree.Node>,
+			node: ESTree.Node,
+		): number | undefined => {
+			const at = node.loc?.start;
+			if (at === undefined) return undefined;
+			const before = (left: ESTree.Position, right: ESTree.Position) =>
+				left.line < right.line ||
+				(left.line === right.line && left.column < right.column);
+			let low = 0;
+			let high = statements.length - 1;
+			let found = -1;
+			while (low <= high) {
+				const middle = (low + high) >> 1;
+				const start = statements[middle]!.loc?.start;
+				if (start === undefined) return undefined;
+				if (before(at, start)) high = middle - 1;
+				else {
+					found = middle;
+					low = middle + 1;
+				}
+			}
+			const end = found < 0 ? undefined : statements[found]!.loc?.end;
+			return end !== undefined && before(at, end) ? found : undefined;
+		};
+		// A hoisted declaration exists from its list's entry but runs only once control
+		// reaches a reference to it: a later statement that names it, or another hoisted
+		// declaration that names it and can run by then.
+		const hoistedRunStarts = (
+			statements: ReadonlyArray<ESTree.Node>,
+		): Map<number, number> => {
+			const exportedAfterEvaluation =
+				statements === file.ast.body && file.type === "module" && file.commonjs !== true;
+			const owners = new Map<Binding, number>();
+			const starts = new Map<number, number>();
+			for (const [index, statement] of statements.entries()) {
+				const id = hoisted(statement)?.id;
+				if (id === undefined) continue;
+				starts.set(index, statements.length);
+				const binding = id === null ? undefined : file.nodeToBinding.get(id);
+				if (binding !== undefined) owners.set(binding, index);
+			}
+			const callers = new Map<number, Array<number>>();
+			for (const index of starts.keys()) {
+				const id = hoisted(statements[index]!)!.id;
+				const binding = id === null ? undefined : file.nodeToBinding.get(id);
+				// A replaced duplicate or a nameless declaration keeps the list's entry.
+				if (binding === undefined || owners.get(binding) !== index) {
+					starts.set(index, 0);
+					continue;
+				}
+				for (const usage of binding.usageNodes) {
+					// Positions of another file's nodes say nothing about this list. An importer
+					// reaches an ES module's export only after the module evaluated.
+					if (file.nodeToBinding.get(usage) !== binding) {
+						if (exportedAfterEvaluation) continue;
+						starts.set(index, 0);
+						break;
+					}
+					const at = statementAt(statements, usage);
+					if (at === undefined) {
+						starts.set(index, 0);
+						break;
+					}
+					if (at === index) continue;
+					if (starts.has(at)) callers.set(at, [...(callers.get(at) ?? []), index]);
+					else starts.set(index, Math.min(starts.get(index)!, at));
+				}
+			}
+			for (let changed = true; changed;) {
+				changed = false;
+				for (const [caller, callees] of callers)
+					for (const callee of callees)
+						if (starts.get(caller)! < starts.get(callee)!) {
+							starts.set(callee, starts.get(caller)!);
+							changed = true;
+						}
+			}
+			return starts;
 		};
 		const visitList = (
 			statements: ReadonlyArray<ESTree.Node>,
 			entry: ReadonlySet<Binding>,
 			ordered: boolean,
+			hoistedReach = false,
 		): void => {
-			for (const statement of statements) {
+			const declaredBy = statements.map((statement) =>
+				ordered && hoisted(statement) === undefined ? declared(statement) : [],
+			);
+			if (statements === file.ast.body)
+				for (const binding of declaredBy.flat()) {
+					const location = program.bindingToStorage.get(binding);
+					if (location?.type !== "global" || topLevelOrder.has(binding)) continue;
+					topLevelOrder.set(binding, topLevelSlots.length);
+					topLevelSlots.push(location.index);
+				}
+			const starts = hoistedReach
+				? hoistedRunStarts(statements)
+				: new Map<number, number>();
+			const startingAt = new Map<number, Array<number>>();
+			for (const [index, statement] of statements.entries())
+				if (hoisted(statement) !== undefined) {
+					const start = starts.get(index) ?? 0;
+					startingAt.set(start, [...(startingAt.get(start) ?? []), index]);
+				}
+			const hoistedEntries = new Map<number, ReadonlySet<Binding>>();
+			let prefix = entry;
+			for (let index = 0; index <= statements.length; index++) {
+				for (const declaration of startingAt.get(index) ?? [])
+					hoistedEntries.set(declaration, prefix);
+				if (index < statements.length) prefix = including(prefix, declaredBy[index]!);
+			}
+			for (const [index, statement] of statements.entries()) {
 				const declaration = hoisted(statement);
-				if (declaration !== undefined) visitFunction(declaration, entry);
+				if (declaration !== undefined)
+					visitFunction(declaration, hoistedEntries.get(index)!);
 			}
 			let initialized = entry;
-			for (const statement of statements) {
+			for (const [index, statement] of statements.entries()) {
 				if (hoisted(statement) !== undefined) continue;
 				visit(statement, initialized);
-				if (!ordered) continue;
-				const bindings = declared(statement);
-				if (statements === file.ast.body)
-					for (const binding of bindings) {
-						const location = program.bindingToStorage.get(binding);
-						if (location?.type !== "global" || topLevelOrder.has(binding)) continue;
-						topLevelOrder.set(binding, topLevelSlots.length);
-						topLevelSlots.push(location.index);
-					}
-				initialized = including(initialized, bindings);
+				initialized = including(initialized, declaredBy[index]!);
 			}
 		};
 		const visit = (root: unknown, initialized: ReadonlySet<Binding>): void => {
@@ -1571,6 +1690,8 @@ function coreInitializedLexicalReads(program: CoreFrontendContext): {
 						visitFunction(node, initialized);
 						return ESTREE_SKIP;
 					case "Program":
+						visitList(node.body, initialized, true, programReach);
+						return ESTREE_SKIP;
 					case "BlockStatement":
 					case "StaticBlock":
 						visitList(node.body, initialized, true);

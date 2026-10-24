@@ -63,6 +63,7 @@ describe("module bindings initialized before user code", () => {
 				{
 					"entry.mjs": entry,
 					"limits.mjs": `
+						const readers = [reader];
 						const NAMES = new Set(["a", "b"]);
 						const PAIRS = new Map([["a", 1]]);
 						const TABLE = Object.freeze({ scale: 3 });
@@ -141,6 +142,33 @@ describe("module bindings initialized before user code", () => {
 		},
 	);
 
+	it.each([
+		["only after the declaration", false, "", "globalThis.result = reader;"],
+		["before the declaration", true, "globalThis.early = reader;", ""],
+		[
+			"through another hoisted function before the declaration",
+			true,
+			"globalThis.early = relay;",
+			"",
+		],
+	] as const)(
+		"treats a hoisted function referenced %s accordingly after a call-out",
+		(_placement, checked, before, after) => {
+			const opcodes = readerOpcodes({
+				"entry.mjs": entry,
+				"limits.mjs": `
+					globalThis.seed = Number(globalThis.seed ?? "1");
+					${before}
+					const LIMIT = 7;
+					export function reader(value) { return value % LIMIT; }
+					function relay(value) { return reader(value); }
+					${after}
+				`,
+			});
+			expect(opcodes.includes("throwIfTdz")).toBe(checked);
+		},
+	);
+
 	it("keeps the check for a module in an import cycle", () => {
 		const opcodes = readerOpcodes({
 			"entry.mjs": entry,
@@ -204,6 +232,26 @@ describe("captured bindings initialized before their closures exist", () => {
 				["hoisted", "before", "skipped"],
 			),
 		).toEqual({ hoisted: true, before: true, skipped: true });
+	});
+
+	it("drops the check for hoisted functions that nothing reaches before the declaration", () => {
+		expect(
+			capturedReaders(
+				`function outer(items) {
+					const total = items.reduce((sum, item) => sum + item, 0);
+					const scale = total + 1;
+					function late() { return scale; }
+					function early() { return limit; }
+					function relayed() { return limit + 1; }
+					function relay() { return relayed(); }
+					const keep = [early, relay];
+					const limit = keep.length;
+					return [late, keep];
+				}
+				globalThis.outer = outer;`,
+				["late", "early", "relayed"],
+			),
+		).toEqual({ late: false, early: true, relayed: true });
 	});
 
 	it("drops the owner's check after a dominating initialization only", () => {
