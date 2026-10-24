@@ -229,6 +229,13 @@ The independent target boundary and current storage contract are recorded in
       publication to a probe's collecting slow path stays renderer-local: eager
       publication is always legal, and the deferral follows fixed render-form
       rules over plan facts rather than a planning choice.
+- [ ] Propagate typed-entry constants through native control-flow and root planning.
+      A String entry for `Number.isFinite`, `Number.isInteger`, or
+      `Number.isSafeInteger` selects a non-number predicate plan but still emits
+      `result = false; if (result)` and the dead branch's coercive addition. The
+      canonical body correctly retains the unknown-input branch. Share a validated
+      entry-specific reachability plan across storage, safepoints, specializations,
+      and C emission while preserving canonical fallbacks and external entries.
 - [ ] Normalize primitive conversion calls from semantic kind unions. `String`
       and `Number` calls on `number | undefined` still use the builtin dispatcher.
       Retain extra argument effects and the distinct Symbol, BigInt, omitted-argument,
