@@ -257,6 +257,13 @@ less. A whole-program points-to model over construction Core took 108 s in Node 
 converge and still left generic paths at the hot receivers, so field facts stay
 bounded and consumer-driven as planned below.
 
+- [ ] Guard `Math.imul`, `Math.clz32`, `Math.pow` and `Math.atan2` like the other
+      `Math` calls. With eval or realms enabled, the default, a known builtin call
+      keeps a fallback obligation, and only operations in
+      `VM_GUARDED_BUILTIN_OPERATIONS` then lower to a guarded inline kernel. These
+      four become fully generic calls: an FNV loop with `Math.imul` runs about five
+      times slower than Node, and the call keeps the loop out of a region. Their
+      callee checks need `MAL_MATH_*` entries in the runtime's Math builtins.
 - [ ] Keep binary searches off the element-load latency chain. A loop region
       without a counter now keeps `lo`, `hi` and `mid` in integer locals (12 M
       probes 96 to 53 ms, Node 13; random targets 105 to 67 ms, Node 56). Clang
