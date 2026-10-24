@@ -955,11 +955,11 @@ contracts or investigates costs still visible after the string follow-ups.
 
 ## Active correctness clusters
 
-- [ ] Retry or fail cleanly when the HTTP client reuses a keep-alive socket that the
-      server is closing. A loopback client whose request gaps straddle the server's
-      `keepAliveTimeout` (50 ms, gaps from 44 to 56 ms) fails some of those requests
-      with an error whose `code` is undefined; Node completes every one, since its
-      server closes idle sockets a little after the timeout it advertises.
+- [ ] Give the HTTP client's error a code when a peer closes a reused keep-alive socket
+      before responding. Node rejects such a request with `ECONNRESET` ("socket hang
+      up"); ours rejects with an error whose `code` is undefined. Our server no longer
+      provokes this, since it closes idle sockets a second after `keepAliveTimeout` as
+      Node does, but other servers close at the deadline itself.
 
 - [ ] Mint private names per class evaluation inside loops. A class expression
       evaluated by each iteration of a loop in one activation keeps its private

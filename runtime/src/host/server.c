@@ -230,8 +230,13 @@ static void conn_arm_request_timeout(MalHttpConn *c) {
     conn_arm_timeout(c, MAL_HTTP_TIMEOUT_REQUEST, c->server->request_timeout_ns);
 }
 
+// Node's keepAliveTimeoutBuffer: an idle socket closes a second after keepAliveTimeout,
+// so a client that reuses it near that deadline does not race the close.
+#define MAL_HTTP_KEEP_ALIVE_CLOSE_BUFFER_NS ((i64) 1000 * 1000000)
+
 static void conn_arm_keep_alive_timeout(MalHttpConn *c) {
-    conn_arm_timeout(c, MAL_HTTP_TIMEOUT_KEEP_ALIVE, c->server->keep_alive_timeout_ns);
+    conn_arm_timeout(c, MAL_HTTP_TIMEOUT_KEEP_ALIVE,
+        c->server->keep_alive_timeout_ns + MAL_HTTP_KEEP_ALIVE_CLOSE_BUFFER_NS);
 }
 
 static void server_finish_close(MalHttpServer *server) {
