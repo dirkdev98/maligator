@@ -1,5 +1,6 @@
 import type { CompilerGuardPlan, KnownBuiltinCall } from "../shared/compiler-facts.ts";
 import type { CompilerInstruction } from "../shared/compiler-instruction.ts";
+import type { CompilerIntegerRange } from "../shared/integer-range.ts";
 import type { CoreExactCollectionBrand } from "./core-ir-value-classes.ts";
 import type {
 	CoreBlockId,
@@ -654,7 +655,7 @@ export interface CoreDirectEntryPlan {
 		readonly instruction: CoreInstructionId;
 		readonly masks: ReadonlyArray<number>;
 		readonly results: ReadonlyArray<number>;
-		readonly int32Inputs?: ReadonlyArray<boolean>;
+		readonly inputIntegerRanges?: ReadonlyArray<CompilerIntegerRange | undefined>;
 		readonly effectMask: number;
 	}>;
 	readonly constantBooleans?: ReadonlyArray<{

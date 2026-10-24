@@ -59,6 +59,7 @@ import type {
 } from "../shared/compiler-instruction.ts";
 import { INSTRUCTION_MAY_THROW } from "../shared/instruction-facts.ts";
 import { encodeInstructionEffects } from "../shared/instruction-facts.ts";
+import { compilerIntegerRangesEqual } from "../shared/integer-range.ts";
 import { knownOperationIndex, knownOperations } from "../shared/known-operations.ts";
 import { NATIVE_STRING_SWITCH_CASE_LIMIT } from "../shared/native-string-switch.ts";
 import {
@@ -2220,9 +2221,9 @@ function lowerFunctionToTarget(
 						: {
 								inputKindMasks: kinds.masks,
 								resultKindMasks: kinds.results,
-								...(kinds.int32Inputs === undefined
+								...(kinds.inputIntegerRanges === undefined
 									? {}
-									: { int32Inputs: kinds.int32Inputs }),
+									: { inputIntegerRanges: kinds.inputIntegerRanges }),
 								registers: loweredRegisters,
 								inputOffset,
 							}),
@@ -2324,9 +2325,9 @@ function lowerFunctionToTarget(
 				: {
 						inputKindMasks: terminatorKinds.masks,
 						resultKindMasks: terminatorKinds.results,
-						...(terminatorKinds.int32Inputs === undefined
+						...(terminatorKinds.inputIntegerRanges === undefined
 							? {}
-							: { int32Inputs: terminatorKinds.int32Inputs }),
+							: { inputIntegerRanges: terminatorKinds.inputIntegerRanges }),
 						registers: Array.from(
 							{ length: kernel.instructionOperandCount(terminatorId) },
 							(_, index) =>
@@ -2713,18 +2714,19 @@ function lowerFunctionToTarget(
 			(left.length === right.length &&
 				left.every((mask, index) => mask === right[index]));
 		const entryFacts = entry.instructionFacts?.filter(
-			({ instruction, masks, results, int32Inputs, effectMask }) => {
+			({ instruction, masks, results, inputIntegerRanges, effectMask }) => {
 				if (!loweredInstructions.has(instruction)) return false;
 				const canonical = instructionFacts[instruction];
 				return (
 					canonical === undefined ||
 					!sameMasks(canonical.masks, masks) ||
 					!sameMasks(canonical.results, results) ||
-					(canonical.int32Inputs !== int32Inputs &&
-						(canonical.int32Inputs === undefined ||
-							int32Inputs === undefined ||
-							canonical.int32Inputs.some(
-								(integer, index) => integer !== int32Inputs[index],
+					(canonical.inputIntegerRanges !== inputIntegerRanges &&
+						(canonical.inputIntegerRanges === undefined ||
+							inputIntegerRanges === undefined ||
+							canonical.inputIntegerRanges.some(
+								(range, index) =>
+									!compilerIntegerRangesEqual(range, inputIntegerRanges[index]),
 							))) ||
 					canonical.effectMask !== effectMask
 				);
@@ -2747,11 +2749,11 @@ function lowerFunctionToTarget(
 				? {}
 				: {
 						instructionFacts: entryFacts.map(
-							({ instruction, masks, results, int32Inputs, effectMask }) => ({
+							({ instruction, masks, results, inputIntegerRanges, effectMask }) => ({
 								instruction: loweredInstructions.get(instruction)!,
 								masks,
 								results,
-								...(int32Inputs === undefined ? {} : { int32Inputs }),
+								...(inputIntegerRanges === undefined ? {} : { inputIntegerRanges }),
 								effectMask,
 							}),
 						),

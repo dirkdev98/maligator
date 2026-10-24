@@ -22,6 +22,7 @@ import {
 	instructionInputKind,
 	instructionResultKind,
 } from "../src/compiler/shared/instruction-facts.ts";
+import { COMPILER_INT32_RANGE } from "../src/compiler/shared/integer-range.ts";
 import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
@@ -67,7 +68,7 @@ describe("independent native instruction facts", () => {
 					`function${generator ? "*" : ""} compute(input,other,flag,gate){const n=flag?(input|0):(other>>1);${generator ? "yield n;" : "gate(n);"}return Number.${method}(n);}globalThis.compute=compute;`,
 					"compute",
 				);
-				expect(out.native.storage!.numberPredicates[0]!.mode).toBe("int32");
+				expect(out.native.storage!.numberPredicates[0]!.mode).toBe("integer");
 				expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
 					out.image,
 				);
@@ -84,26 +85,26 @@ describe("independent native instruction facts", () => {
 	});
 
 	it("validates int32 refinements against their input kinds and arity", () => {
-		for (const [int32Inputs, valid] of [
-			[[true], false],
-			[[false, true], true],
-			[[true, false], false],
+		for (const [inputIntegerRanges, valid] of [
+			[[COMPILER_INT32_RANGE], false],
+			[[undefined, COMPILER_INT32_RANGE], true],
+			[[COMPILER_INT32_RANGE, undefined], false],
 		] as const)
 			expect(
 				instructionFactsAreValid({
 					inputKindMasks: [COMPILER_VALUE_KIND_STRING, COMPILER_VALUE_KIND_NUMBER],
-					int32Inputs,
+					inputIntegerRanges,
 				}),
 			).toBe(valid);
 		expect(
 			instructionInputIsInt32(
-				{ registers: [0, 0], inputOffset: 1, int32Inputs: [true] },
+				{ registers: [0, 0], inputOffset: 1, inputIntegerRanges: [COMPILER_INT32_RANGE] },
 				0,
 			),
 		).toBe(true);
 		expect(
 			instructionInputIsInt32(
-				{ registers: [-1], inputOffset: 0, int32Inputs: [true] },
+				{ registers: [-1], inputOffset: 0, inputIntegerRanges: [COMPILER_INT32_RANGE] },
 				-1,
 			),
 		).toBe(false);

@@ -1,9 +1,9 @@
 import { COMPILER_VALUE_KIND_NUMBER } from "../shared/compiler-value-kinds.ts";
+import type { CompilerIntegerRange } from "../shared/integer-range.ts";
 import type { CoreAnalysisManager } from "./core-analysis-manager.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import { CORE_CONTROL_FLOW_BUNDLE_ANALYSIS } from "./core-ir-control-flow.ts";
 import { CORE_LOOP_INDUCTION_ANALYSIS } from "./core-ir-loops.ts";
-import type { CoreNumericRange } from "./core-ir-loops.ts";
 import {
 	CORE_LOCAL_VALUE_KIND_ANALYSIS,
 	corePrivatePackedRestArrays,
@@ -214,7 +214,9 @@ export function coreUnsignedArithmeticPlans(
 			function: functionId,
 		});
 		const admitted = new Set<CoreInstructionId>();
-		const unsigned = (range: CoreNumericRange | undefined): range is CoreNumericRange =>
+		const unsigned = (
+			range: CompilerIntegerRange | undefined,
+		): range is CompilerIntegerRange =>
 			range !== undefined && range.minimum >= 0 && range.maximum <= 0xffff_ffff;
 		for (const consumer of consumers) {
 			let remaining = 32;

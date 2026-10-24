@@ -1,3 +1,4 @@
+import type { CompilerIntegerRange } from "../shared/integer-range.ts";
 import { CoreEditor } from "./core-editor.ts";
 import { CORE_FUNCTION_HAS_BACKEDGES } from "./core-function-features.ts";
 import {
@@ -7,11 +8,7 @@ import {
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreInstructionInputsEqual } from "./core-ir-equality.ts";
 import { CORE_LOOP_INDUCTION_ANALYSIS } from "./core-ir-loops.ts";
-import type {
-	CoreLoopComparison,
-	CoreLoopInductionAnalysis,
-	CoreNumericRange,
-} from "./core-ir-loops.ts";
+import type { CoreLoopComparison, CoreLoopInductionAnalysis } from "./core-ir-loops.ts";
 import {
 	CoreMemoryLocationTable,
 	coreMemoryAccesses,
@@ -970,7 +967,7 @@ const eliminatePartialRedundancy: CoreFunctionPass = {
 
 function proveComparison(
 	operator: CoreLoopComparison,
-	range: CoreNumericRange,
+	range: CompilerIntegerRange,
 	bound: number,
 ): boolean | undefined {
 	switch (operator) {

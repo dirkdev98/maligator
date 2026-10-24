@@ -168,3 +168,69 @@ try {
 } catch (error) {
 	console.log("integer gate", error.message, observations);
 }
+
+function rangedOperations(input, gate) {
+	const unsigned = input >>> 0;
+	const bounded = (unsigned & 65535) + 1;
+	gate(bounded);
+	return [
+		Number.isSafeInteger(unsigned),
+		Number.isInteger(unsigned * 2 + 1),
+		Math.abs(unsigned),
+		Math.sign(bounded),
+		Math.min(bounded, 0),
+		Math.max(bounded, 0),
+		bounded ? 7 : 9,
+		bounded < 0,
+		bounded > 65536,
+		bounded === 0,
+		bounded ^ 7,
+		unsigned ^ 7,
+	];
+}
+function rangeControls(input) {
+	const value = +input;
+	const possibleNegativeZero = (input >>> 0) * -1;
+	return [
+		Math.abs(value),
+		Math.sign(value),
+		Math.min(value, 0),
+		Math.max(value, 0),
+		1 / Math.abs(possibleNegativeZero),
+		1 / Math.sign(possibleNegativeZero),
+		Number.isSafeInteger(value * 9007199254740991 + 1),
+	];
+}
+function scopedRange(input, gate) {
+	const value = input >>> 0;
+	if (value < 16) {
+		gate(value);
+		return [Math.abs(value - 32), Math.sign(value - 32)];
+	}
+	return [Math.abs(value - 32), Math.sign(value - 32)];
+}
+function* suspendedRange(input) {
+	const value = ((input >>> 0) & 65535) + 1;
+	yield value;
+	return [Number.isSafeInteger(value), Math.sign(value), value ? value ^ 7 : -1];
+}
+function rangedLoop(count) {
+	let checksum = 0;
+	for (let index = 0; index < count; index++) {
+		const value = ((index >>> 0) & 255) + 1;
+		checksum += value ? Math.min(value, 0) + Math.max(value, 0) : -999;
+	}
+	return checksum;
+}
+for (const edge of [...numericEdges, 15, 16, 31, 32]) {
+	console.log("ranged", rangedOperations(edge, observe).map(show).join(" "));
+	console.log("range controls", rangeControls(edge).map(show).join(" "));
+	console.log("scoped range", scopedRange(edge, observe).map(show).join(" "));
+	const iterator = suspendedRange(edge);
+	console.log(
+		"suspended range",
+		show(iterator.next().value),
+		iterator.next().value.map(show).join(" "),
+	);
+}
+console.log("ranged loop", rangedLoop(1000), observations);

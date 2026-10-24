@@ -8,6 +8,7 @@ import type {
 } from "../core/core-ir.ts";
 import type { CompilerInstruction } from "../shared/compiler-instruction.ts";
 import { probeReadKindIsNamed } from "../shared/compiler-instruction.ts";
+import type { CompilerIntegerRange } from "../shared/integer-range.ts";
 
 export function targetInstructionUsesPropertyCache(
 	instruction: CompilerInstruction,
@@ -202,7 +203,7 @@ export interface CoreTargetDirectEntry {
 		readonly instruction: CompilerInstruction;
 		readonly masks: ReadonlyArray<number>;
 		readonly results: ReadonlyArray<number>;
-		readonly int32Inputs?: ReadonlyArray<boolean>;
+		readonly inputIntegerRanges?: ReadonlyArray<CompilerIntegerRange | undefined>;
 		readonly effectMask: number;
 	}>;
 	readonly constantBooleans?: ReadonlyArray<{

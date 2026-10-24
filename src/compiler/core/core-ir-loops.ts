@@ -1,3 +1,5 @@
+import { COMPILER_INT32_RANGE } from "../shared/integer-range.ts";
+import type { CompilerIntegerRange } from "../shared/integer-range.ts";
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
 import {
 	CORE_CANONICAL_VALUE_ROOTS_ANALYSIS,
@@ -12,14 +14,7 @@ import type { CoreFunctionStore } from "./core-store.ts";
 
 export type CoreLoopComparison = "<" | "<=" | ">" | ">=";
 
-export interface CoreNumericRange {
-	readonly minimum: number;
-	readonly maximum: number;
-	readonly exactSafeIntegers: true;
-	readonly excludesNegativeZero: true;
-}
-
-export interface CoreInductionRange extends CoreNumericRange {
+export interface CoreInductionRange extends CompilerIntegerRange {
 	readonly first: number;
 	readonly last: number;
 	readonly finalUpdate: number;
@@ -50,17 +45,11 @@ export interface CoreLoopInductionAnalysis {
 	readonly inductions: ReadonlyArray<CoreInductionVariable>;
 	readonly hasNumericRanges: boolean;
 	induction(value: CoreValueId): CoreInductionVariable | undefined;
-	range(value: CoreValueId, block?: CoreBlockId): CoreNumericRange | undefined;
+	range(value: CoreValueId, block?: CoreBlockId): CompilerIntegerRange | undefined;
 }
 
 const SAFE_MINIMUM = -Number.MAX_SAFE_INTEGER;
 const SAFE_MAXIMUM = Number.MAX_SAFE_INTEGER;
-const I32_RANGE: CoreNumericRange = Object.freeze({
-	minimum: -0x8000_0000,
-	maximum: 0x7fff_ffff,
-	exactSafeIntegers: true,
-	excludesNegativeZero: true,
-});
 
 function definitionInstruction(
 	fn: CoreFunctionStore,
@@ -77,7 +66,10 @@ function operand(fn: CoreFunctionStore, instruction: CoreInstructionId, index: n
 		: undefined;
 }
 
-function numericRange(minimum: number, maximum = minimum): CoreNumericRange | undefined {
+function numericRange(
+	minimum: number,
+	maximum = minimum,
+): CompilerIntegerRange | undefined {
 	return Number.isSafeInteger(minimum) &&
 		Number.isSafeInteger(maximum) &&
 		minimum <= maximum &&
@@ -333,13 +325,13 @@ function loopComparison(
 interface PathRefinement {
 	readonly block: CoreBlockId;
 	readonly subject: CoreValueId;
-	readonly range: CoreNumericRange;
+	readonly range: CompilerIntegerRange;
 }
 
 function branchRange(
 	operator: CoreLoopComparison,
 	bound: number,
-): CoreNumericRange | undefined {
+): CompilerIntegerRange | undefined {
 	switch (operator) {
 		case "<":
 			return numericRange(SAFE_MINIMUM, bound - 1);
@@ -361,9 +353,13 @@ export function analyzeCoreLoopInductions(
 	const root = (value: CoreValueId): CoreValueId => canonical.get(value) ?? value;
 	const numericRepresentation = (value: CoreValueId): "f64" | "i32" | undefined => {
 		const representation = fn.valueRepresentation(value);
-		if (representation === "f64" || representation === "i32") return representation;
+		if (representation === "i32") return representation;
 		const scalar = exactScalar?.(value);
-		return scalar === "int32" ? "i32" : scalar === "number" ? "f64" : undefined;
+		return scalar === "int32"
+			? "i32"
+			: representation === "f64" || scalar === "number"
+				? "f64"
+				: undefined;
 	};
 	const inductions: Array<CoreInductionVariable> = [];
 	for (const loop of cfg.loops) {
@@ -481,9 +477,9 @@ export function analyzeCoreLoopInductions(
 		}
 	}
 	const intersect = (
-		left: CoreNumericRange,
-		right: CoreNumericRange,
-	): CoreNumericRange | undefined =>
+		left: CompilerIntegerRange,
+		right: CompilerIntegerRange,
+	): CompilerIntegerRange | undefined =>
 		numericRange(
 			Math.max(left.minimum, right.minimum),
 			Math.min(left.maximum, right.maximum),
@@ -497,13 +493,13 @@ export function analyzeCoreLoopInductions(
 	}
 	const memo = new Map<
 		CoreBlockId | undefined,
-		Map<CoreValueId, CoreNumericRange | undefined>
+		Map<CoreValueId, CompilerIntegerRange | undefined>
 	>();
 	const query = (
 		value: CoreValueId,
 		block: CoreBlockId | undefined,
 		budget: { remaining: number },
-	): CoreNumericRange | undefined => {
+	): CompilerIntegerRange | undefined => {
 		const resolved = root(value);
 		let cache = memo.get(block);
 		if (cache === undefined) {
@@ -516,7 +512,7 @@ export function analyzeCoreLoopInductions(
 		const induction = byRoot.get(resolved);
 		const update = byUpdate.get(resolved);
 		const exact = exactNumber(fn, resolved, root);
-		let range: CoreNumericRange | undefined;
+		let range: CompilerIntegerRange | undefined;
 		if (induction?.range !== undefined) {
 			const body =
 				block !== undefined &&
@@ -524,7 +520,7 @@ export function analyzeCoreLoopInductions(
 				induction.loop.blocks.has(block) &&
 				cfg.dominates(induction.comparison.body, block);
 			range = body
-				? induction.range
+				? numericRange(induction.range.minimum, induction.range.maximum)
 				: numericRange(
 						Math.min(induction.range.minimum, induction.range.finalUpdate),
 						Math.max(induction.range.maximum, induction.range.finalUpdate),
@@ -581,7 +577,7 @@ export function analyzeCoreLoopInductions(
 				}
 			}
 			if (range === undefined && numericRepresentation(resolved) === "i32")
-				range = I32_RANGE;
+				range = COMPILER_INT32_RANGE;
 		}
 		if (range !== undefined && block !== undefined) {
 			let current: CoreBlockId | null = block;

@@ -30,6 +30,7 @@ import {
 } from "../shared/instruction-facts.ts";
 import { instructionFactsAreValid } from "../shared/instruction-facts.ts";
 import type { InstructionFacts } from "../shared/instruction-facts.ts";
+import type { CompilerIntegerRange } from "../shared/integer-range.ts";
 import { NATIVE_STRING_SWITCH_CASE_LIMIT } from "../shared/native-string-switch.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
 import type { CoreTargetClassLayout, CoreTargetRecordUses } from "./core-target-ir.ts";
@@ -1594,7 +1595,7 @@ export interface NativeDirectEntryPlan {
 		readonly instructionIp: number;
 		readonly masks: ReadonlyArray<number>;
 		readonly results: ReadonlyArray<number>;
-		readonly int32Inputs?: ReadonlyArray<boolean>;
+		readonly inputIntegerRanges?: ReadonlyArray<CompilerIntegerRange | undefined>;
 		readonly effectMask: number;
 	}>;
 	readonly constantBooleans?: ReadonlyArray<{
@@ -1647,14 +1648,14 @@ export function validateNativeDirectEntry(
 		instructionIp,
 		masks,
 		results,
-		int32Inputs,
+		inputIntegerRanges,
 		effectMask,
 	} of entry.instructionFacts ?? []) {
 		if (
 			!instructionFactsAreValid({
 				inputKindMasks: masks,
 				resultKindMasks: results,
-				int32Inputs,
+				inputIntegerRanges,
 				effectMask,
 			}) ||
 			seenInputs.has(instructionIp) ||
@@ -5452,11 +5453,11 @@ function lowerExecutionFunctionToNativePlan(
 			? {}
 			: {
 					instructionFacts: entry.instructionFacts.map(
-						({ instruction, masks, results, int32Inputs, effectMask }) => ({
+						({ instruction, masks, results, inputIntegerRanges, effectMask }) => ({
 							instructionIp: instructionIndexByTargetInstruction.get(instruction)!,
 							masks,
 							results,
-							...(int32Inputs === undefined ? {} : { int32Inputs }),
+							...(inputIntegerRanges === undefined ? {} : { inputIntegerRanges }),
 							effectMask,
 						}),
 					),

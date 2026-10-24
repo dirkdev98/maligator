@@ -230,13 +230,20 @@ views distinguish inputs from results even when constrained storage reuses a reg
 Negative immediate placeholders never establish register identity. Compiler artifacts
 serialize the independent dimensions and invalidate older schemas together.
 
-An int32 input refinement proves a primitive Number within the signed 32-bit range,
-excluding negative zero. Floating storage and copies do not erase that proof; joins
+Integer input ranges prove primitive safe-integer Numbers and exclude negative zero.
+Int32 and uint32 domains share compact interval encodings; other bounds use the same
+range contract. Floating storage and copies do not erase an integer proof; joins
 require every incoming value to satisfy it, and unseeded cycles remain unknown.
-Emission can then use an ordinary C cast for ToInt32 and constant Number predicates.
-The proof survives boxing and suspension, while coercive operands and argument
-evaluation retain their own effects and fallback paths. Scalar expressions, fast
-entries, numeric regions and canonical bodies consume the same instruction facts.
+The existing bounded range analysis answers queries at each consumer's block, so
+dominated branch refinements cannot leak into other paths. Range analysis is lazy
+and demanded by consumers rather than repeated for every value.
+
+Emission uses ordinary C casts only within int32 bounds, folds Number predicates
+for all safe-integer ranges, and consumes bounds in comparisons, truthiness and
+numeric Math operations. The proof survives boxing and suspension, while coercive
+operands and argument evaluation retain their own effects and fallback paths.
+Scalar expressions, fast entries, numeric regions and canonical bodies consume the
+same instruction facts.
 
 Effect metadata preserves independent reads and writes for every effect domain,
 plus throwing, suspension, collection and user-code flags. Semantic purity alone

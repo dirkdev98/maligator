@@ -30,9 +30,16 @@ import {
 import type { CompilerValueKindMask } from "../shared/compiler-value-kinds.ts";
 import {
 	instructionInputIsInt32,
+	instructionInputIntegerRange,
 	instructionInputKind,
 } from "../shared/instruction-facts.ts";
 import type { InstructionFacts } from "../shared/instruction-facts.ts";
+import type { CompilerIntegerRange } from "../shared/integer-range.ts";
+import {
+	compilerIntegerRangeIsInt32,
+	compilerIntegerRangeTruthiness,
+	compilerIntegerRangeComparison,
+} from "../shared/integer-range.ts";
 import {
 	knownBuiltinErrors,
 	knownBuiltinErrorPrototype,
@@ -675,7 +682,22 @@ export interface BackendProfileDecision {
 	details?: Record<string, string | number | boolean>;
 }
 
-function nativeMathUnaryExpr(operation: string, argument: string): string | null {
+function nativeMathUnaryExpr(
+	operation: string,
+	argument: string,
+	range?: CompilerIntegerRange,
+): string | null {
+	if (range !== undefined) {
+		if (operation === "Math.abs") {
+			if (range.minimum >= 0) return argument;
+			if (range.maximum < 0) return `-(${argument})`;
+		}
+		if (operation === "Math.sign") {
+			if (range.minimum > 0) return "1.0";
+			if (range.maximum < 0) return "-1.0";
+			if (range.minimum === 0 && range.maximum === 0) return "0.0";
+		}
+	}
 	const nativeCall = MATH_UNARY_NATIVE_CALL.get(operation);
 	if (nativeCall === undefined) return null;
 	if (nativeCall !== null) return `${nativeCall}(${argument})`;
@@ -747,30 +769,37 @@ function nativeMathBinaryExpr(
 	operation: string,
 	left: string,
 	right: string,
+	ranges?: ReadonlyArray<CompilerIntegerRange | undefined>,
 ): string | null {
 	if (!MATH_BINARY_OPERATIONS.has(operation)) return null;
+	const a = ranges?.[0],
+		b = ranges?.[1];
+	if (a !== undefined && b !== undefined) {
+		if (a.maximum <= b.minimum) return operation === "Math.min" ? left : right;
+		if (b.maximum <= a.minimum) return operation === "Math.min" ? right : left;
+	}
 	return `mal_number_min_max(${left}, ${right}, ${operation === "Math.max"})`;
 }
 
 function nativeNumericBuiltinExpr(
 	operation: string,
 	arguments_: ReadonlyArray<string>,
-	inputIsInt32 = false,
+	ranges?: ReadonlyArray<CompilerIntegerRange | undefined>,
 ): string | null {
 	if (NUMBER_PREDICATES.has(operation))
 		return arguments_.length === 0
 			? "false"
 			: arguments_.length === 1
-				? inputIsInt32
+				? ranges?.[0] !== undefined
 					? operation === "Number.isNaN"
 						? "false"
 						: "true"
 					: nativeNumberPredicateExpression(operation, arguments_[0]!)
 				: null;
 	if (arguments_.length === 1 && MATH_UNARY_NATIVE_CALL.has(operation))
-		return nativeMathUnaryExpr(operation, arguments_[0]!);
+		return nativeMathUnaryExpr(operation, arguments_[0]!, ranges?.[0]);
 	if (arguments_.length === 2 && MATH_BINARY_OPERATIONS.has(operation))
-		return nativeMathBinaryExpr(operation, arguments_[0]!, arguments_[1]!);
+		return nativeMathBinaryExpr(operation, arguments_[0]!, arguments_[1]!, ranges);
 	const kernel = MATH_NUMBER_KERNELS[operation];
 	if (kernel !== undefined && arguments_.length === kernel[1])
 		return `${kernel[0]}(${arguments_.join(", ")})`;
@@ -1142,14 +1171,20 @@ function nativeNumberExpr(
 	operator: string,
 	left: string,
 	right: string,
-	int32Inputs?: ReadonlyArray<boolean>,
+	inputIntegerRanges?: ReadonlyArray<CompilerIntegerRange | undefined>,
 ): string | null {
 	const arith = NATIVE_ARITH[operator];
 	if (arith !== undefined) {
 		return `${left} ${arith} ${right}`;
 	}
-	const left32 = numberToInt32(left, int32Inputs?.[0]);
-	const right32 = numberToInt32(right, int32Inputs?.[1]);
+	const left32 = numberToInt32(
+		left,
+		compilerIntegerRangeIsInt32(inputIntegerRanges?.[0]),
+	);
+	const right32 = numberToInt32(
+		right,
+		compilerIntegerRangeIsInt32(inputIntegerRanges?.[1]),
+	);
 	const bitwise = nativeInt32Expr(operator, left32, right32);
 	if (bitwise !== null) return `(f64) (${bitwise})`;
 	if (operator === ">>>") {
@@ -1657,12 +1692,17 @@ function emitNumericLoopRegion(
 		if (exit !== undefined) return `{ ${id}_exit = ${exit}; break; }`;
 		return innerHeaders.size > 0 ? `goto ${label(mode, ip)};` : `${id}_b${ip} = true;`;
 	};
-	const truthy = (register: number) =>
-		kindOf(register) === "boolean"
+	const truthy = (register: number, ip: number): string => {
+		const ranged = compilerIntegerRangeTruthiness(
+			instructionInputIntegerRange(facts?.[ip], register),
+		);
+		if (ranged !== undefined) return String(ranged);
+		return kindOf(register) === "boolean"
 			? local(register)
 			: floating && !integral.has(register)
 				? `mal_number_is_truthy(${local(register)})`
 				: `${local(register)} != 0`;
+	};
 	const int32 = (register: number) => `mal_safe_integer_to_i32(${local(register)})`;
 	const checked = (call: string, dst: number) =>
 		`if (__builtin_expect(!${call.replace("%DST%", `&${local(dst)}`)}, 0)) ${restart}`;
@@ -1695,7 +1735,7 @@ function emitNumericLoopRegion(
 				const expression = nativeNumericBuiltinExpr(
 					builtin.operation,
 					arguments_,
-					facts?.[ip]?.int32Inputs?.[1],
+					facts?.[ip]?.inputIntegerRanges?.slice(op.opcode === "CALL_KNOWN" ? 1 : 0),
 				);
 				if (expression === null)
 					throw new Error("Invalid numeric loop builtin expression");
@@ -1775,6 +1815,12 @@ function emitNumericLoopRegion(
 			case "MOVE":
 				return `${local(op.dst)} = ${integral.has(op.dst) ? local(op.src) : num(op.src)};`;
 			case "BINARY": {
+				const compared = compilerIntegerRangeComparison(
+					op.operator,
+					instructionInputIntegerRange(facts?.[ip], op.left),
+					instructionInputIntegerRange(facts?.[ip], op.right),
+				);
+				if (compared !== undefined) return `${local(op.dst)} = ${compared};`;
 				const compare = NATIVE_COMPARE[op.operator];
 				if (compare !== undefined) {
 					const exact = integral.has(op.left) && integral.has(op.right);
@@ -1807,7 +1853,7 @@ function emitNumericLoopRegion(
 						op.operator,
 						num(op.left),
 						num(op.right),
-						facts?.[ip]?.int32Inputs,
+						facts?.[ip]?.inputIntegerRanges,
 					);
 					if (expression === null) throw new Error("Invalid numeric loop operator");
 					return `${local(op.dst)} = ${expression};`;
@@ -1859,7 +1905,7 @@ function emitNumericLoopRegion(
 									: op.operator === "~"
 										? `(f64) ~${numberToInt32(source, instructionInputIsInt32(facts?.[ip], op.src))}`
 										: op.operator === "!"
-											? `!(${truthy(op.src)})`
+											? `!(${truthy(op.src, ip)})`
 											: source;
 					return `${local(op.dst)} = ${expression};`;
 				}
@@ -1873,15 +1919,21 @@ function emitNumericLoopRegion(
 					case "~":
 						return `${local(op.dst)} = (i64) ~${int32(op.src)};`;
 					case "!":
-						return `${local(op.dst)} = !(${truthy(op.src)});`;
+						return `${local(op.dst)} = !(${truthy(op.src, ip)});`;
 					default:
 						return `${local(op.dst)} = ${source};`;
 				}
 			}
 			case "JUMP":
 				return reach(op.targetIp, ip, mode);
-			case "JUMP_IF":
-				return `if (${truthy(op.cond)}) { ${reach(op.targetIp, ip, mode)} } else { ${reach(ip + 1, ip, mode)} }`;
+			case "JUMP_IF": {
+				const ranged = compilerIntegerRangeTruthiness(
+					instructionInputIntegerRange(facts?.[ip], op.cond),
+				);
+				return ranged === undefined
+					? `if (${truthy(op.cond, ip)}) { ${reach(op.targetIp, ip, mode)} } else { ${reach(ip + 1, ip, mode)} }`
+					: reach(ranged ? op.targetIp : ip + 1, ip, mode);
+			}
 			default:
 				throw new Error(`Invalid native integer loop instruction ${op.opcode}`);
 		}
@@ -2127,10 +2179,15 @@ function emitNumberRecordRegion(
 	);
 	const headSet = new Set(heads);
 	const reach = (ip: number) => (ip === plan.exitIp ? "" : `${id}_b${ip} = true;`);
-	const truthy = (register: number) =>
-		kindOf(register) === "boolean"
+	const truthy = (register: number, ip: number): string => {
+		const ranged = compilerIntegerRangeTruthiness(
+			instructionInputIntegerRange(facts?.[ip], register),
+		);
+		if (ranged !== undefined) return String(ranged);
+		return kindOf(register) === "boolean"
 			? local(register)
 			: `mal_number_is_truthy(${local(register)})`;
+	};
 	const statement = (ip: number): string => {
 		const op = fn.instructions[ip]!;
 		switch (op.opcode) {
@@ -2147,7 +2204,7 @@ function emitNumberRecordRegion(
 				const expression = nativeNumericBuiltinExpr(
 					builtin.operation,
 					arguments_,
-					facts?.[ip]?.int32Inputs?.[1],
+					facts?.[ip]?.inputIntegerRanges?.slice(op.opcode === "CALL_KNOWN" ? 1 : 0),
 				);
 				if (expression === null)
 					throw new Error("Invalid numeric record builtin expression");
@@ -2167,6 +2224,12 @@ function emitNumberRecordRegion(
 			case "MOVE":
 				return `${local(op.dst)} = ${local(op.src)};`;
 			case "BINARY": {
+				const compared = compilerIntegerRangeComparison(
+					op.operator,
+					instructionInputIntegerRange(facts?.[ip], op.left),
+					instructionInputIntegerRange(facts?.[ip], op.right),
+				);
+				if (compared !== undefined) return `${local(op.dst)} = ${compared};`;
 				const compare = NATIVE_COMPARE[op.operator];
 				const expression =
 					compare === undefined
@@ -2174,7 +2237,7 @@ function emitNumberRecordRegion(
 								op.operator,
 								local(op.left),
 								local(op.right),
-								facts?.[ip]?.int32Inputs,
+								facts?.[ip]?.inputIntegerRanges,
 							)
 						: `${local(op.left)} ${compare} ${local(op.right)}`;
 				if (expression === null) throw new Error("Invalid native number record operator");
@@ -2192,14 +2255,20 @@ function emitNumberRecordRegion(
 								: op.operator === "~"
 									? `(f64) ~${numberToInt32(source, instructionInputIsInt32(facts?.[ip], op.src))}`
 									: op.operator === "!"
-										? `!${truthy(op.src)}`
+										? `!${truthy(op.src, ip)}`
 										: source;
 				return `${local(op.dst)} = ${expression};`;
 			}
 			case "JUMP":
 				return reach(op.targetIp);
-			case "JUMP_IF":
-				return `if (${truthy(op.cond)}) { ${reach(op.targetIp)} } else { ${reach(ip + 1)} }`;
+			case "JUMP_IF": {
+				const ranged = compilerIntegerRangeTruthiness(
+					instructionInputIntegerRange(facts?.[ip], op.cond),
+				);
+				return ranged === undefined
+					? `if (${truthy(op.cond, ip)}) { ${reach(op.targetIp)} } else { ${reach(ip + 1)} }`
+					: reach(ranged ? op.targetIp : ip + 1);
+			}
 			default:
 				throw new Error(`Invalid native number record instruction ${op.opcode}`);
 		}
@@ -3476,7 +3545,12 @@ function renderScalarExpression(
 				: String(op.value);
 		case "MOVE":
 			return `r${op.src}`;
-		case "UNARY":
+		case "UNARY": {
+			const ranged = compilerIntegerRangeTruthiness(
+				instructionInputIntegerRange(facts, op.src),
+			);
+			if (op.operator === "!" && ranged !== undefined)
+				return booleanResult(op.dst, String(!ranged));
 			if (op.operator === "!")
 				return booleanResult(
 					op.dst,
@@ -3496,7 +3570,14 @@ function renderScalarExpression(
 					`${number(op.src)} ${op.operator === "increment" ? "+" : "-"} 1.0`,
 				);
 			return numberResult(op.dst, `${op.operator === "-" ? "-" : ""}(${number(op.src)})`);
+		}
 		case "BINARY": {
+			const compared = compilerIntegerRangeComparison(
+				op.operator,
+				instructionInputIntegerRange(facts, op.left),
+				instructionInputIntegerRange(facts, op.right),
+			);
+			if (compared !== undefined) return booleanResult(op.dst, String(compared));
 			if (plan?.kind === "unsigned-arithmetic") {
 				const expression = nativeUnsignedExpr(
 					op.operator,
@@ -3533,7 +3614,11 @@ function renderScalarExpression(
 			return numberResult(op.dst, expression);
 		}
 		case "MATH_UNARY_NUMBER": {
-			const expression = nativeMathUnaryExpr(op.operation, number(op.src));
+			const expression = nativeMathUnaryExpr(
+				op.operation,
+				number(op.src),
+				instructionInputIntegerRange(facts, op.src),
+			);
 			if (expression === null)
 				throw new Error("Invalid lowered native unary Math expression");
 			return expression;
@@ -3543,6 +3628,7 @@ function renderScalarExpression(
 				op.operation,
 				number(op.left),
 				number(op.right),
+				facts?.inputIntegerRanges,
 			);
 			if (expression === null)
 				throw new Error("Invalid lowered native binary Math expression");
@@ -7601,6 +7687,10 @@ function emitInstruction(
 	const num = (r: number): string =>
 		reps[r] === "int32" ? `(f64) ${inputValue(r)}` : inputValue(r);
 	const truthy = (r: number): string => {
+		const ranged = compilerIntegerRangeTruthiness(
+			instructionInputIntegerRange(context.facts, r),
+		);
+		if (ranged !== undefined) return String(ranged);
 		if (reps[r] === "boolean") return `r${r}`;
 		if (reps[r] === "int32") return `(r${r} != 0)`;
 		if (reps[r] === "number") return `mal_number_is_truthy(r${r})`;
@@ -10726,6 +10816,13 @@ function emitInstruction(
 					storeBoolean(instruction.dst, context.constantBoolean ? "true" : "false"),
 				];
 			const { dst, left, right, operator } = instruction;
+			const rangedComparison = compilerIntegerRangeComparison(
+				operator,
+				instructionInputIntegerRange(context.facts, left),
+				instructionInputIntegerRange(context.facts, right),
+			);
+			if (rangedComparison !== undefined)
+				return [storeBoolean(dst, String(rangedComparison))];
 			if (numericFusionAction?.truncating) {
 				const fusion = numericFusionAction;
 				const integer = (register: number): string =>
@@ -10807,7 +10904,7 @@ function emitInstruction(
 					const expression =
 						operator === "**"
 							? `mal_number_exponentiate(${a}, ${b})`
-							: nativeNumberExpr(operator, a, b, context.facts?.int32Inputs);
+							: nativeNumberExpr(operator, a, b, context.facts?.inputIntegerRanges);
 					if (expression !== null) return [storeNumber(dst, expression)];
 				}
 			}
@@ -10833,7 +10930,7 @@ function emitInstruction(
 				const expression =
 					operator === "**"
 						? `mal_number_exponentiate(${a}, ${b})`
-						: nativeNumberExpr(operator, a, b, context.facts?.int32Inputs);
+						: nativeNumberExpr(operator, a, b, context.facts?.inputIntegerRanges);
 				if (expression !== null) return [storeNumber(dst, expression)];
 			}
 			if (indexedLengthLoopAction?.role === "compare") {
@@ -11103,7 +11200,7 @@ function emitInstruction(
 								rightIsNum
 									? typedNumber(right)
 									: `mal_ops_number_as_f64(${boxed(right)})`,
-								context.facts?.int32Inputs,
+								context.facts?.inputIntegerRanges,
 							)
 						: `(f64) (${int32Expression})`;
 				if (expression === null) return fallback;
@@ -11154,7 +11251,7 @@ function emitInstruction(
 					operator,
 					typedNumber(left),
 					typedNumber(right),
-					context.facts?.int32Inputs,
+					context.facts?.inputIntegerRanges,
 				);
 				return expr === null ? null : [`r${dst} = ${expr};`];
 			}
@@ -11389,7 +11486,7 @@ function emitInstruction(
 					operator,
 					numericOf(left),
 					numericOf(right),
-					context.facts?.int32Inputs,
+					context.facts?.inputIntegerRanges,
 				);
 				const int32Expr = INT32_RESULT_OPERATORS.has(operator)
 					? nativeInt32Expr(
@@ -11599,6 +11696,7 @@ function emitInstruction(
 			const expression = nativeMathUnaryExpr(
 				instruction.operation,
 				typedNumber(instruction.src),
+				instructionInputIntegerRange(context.facts, instruction.src),
 			);
 			return expression === null ? null : [storeNumber(instruction.dst, expression)];
 		}
@@ -11607,6 +11705,7 @@ function emitInstruction(
 				instruction.operation,
 				typedNumber(instruction.left),
 				typedNumber(instruction.right),
+				context.facts?.inputIntegerRanges,
 			);
 			return expression === null ? null : [storeNumber(instruction.dst, expression)];
 		}
@@ -11663,7 +11762,7 @@ function emitInstruction(
 				const input = instruction.arguments[0];
 				if (predicatePlan.mode === "non-number")
 					return [storeBoolean(instruction.dst, "false")];
-				if (predicatePlan.mode === "int32")
+				if (predicatePlan.mode === "integer")
 					return [
 						storeBoolean(
 							instruction.dst,
@@ -11857,9 +11956,16 @@ function emitInstruction(
 								? "nullptr"
 								: `((f64[]){ ${arguments_.join(", ")} })`;
 						const expression =
-							instruction.operation === "Math.hypot"
-								? `mal_builtin_math_hypot_numbers(${values}, ${arguments_.length})`
-								: `mal_builtin_math_min_max_numbers(${values}, ${arguments_.length}, ${instruction.operation === "Math.max" ? "true" : "false"})`;
+							arguments_.length === 2 && instruction.operation !== "Math.hypot"
+								? nativeMathBinaryExpr(
+										instruction.operation,
+										arguments_[0]!,
+										arguments_[1]!,
+										context.facts?.inputIntegerRanges?.slice(1),
+									)!
+								: instruction.operation === "Math.hypot"
+									? `mal_builtin_math_hypot_numbers(${values}, ${arguments_.length})`
+									: `mal_builtin_math_min_max_numbers(${values}, ${arguments_.length}, ${instruction.operation === "Math.max" ? "true" : "false"})`;
 						return [storeNumber(instruction.dst, expression), callPoll()];
 					}
 				}
@@ -11870,7 +11976,11 @@ function emitInstruction(
 					const arguments_ = instruction.arguments.map(nativeNumberOperand);
 					const expression =
 						arguments_.length >= 1 && arguments_[0] !== null
-							? nativeMathUnaryExpr(instruction.operation, arguments_[0]!)
+							? nativeMathUnaryExpr(
+									instruction.operation,
+									arguments_[0]!,
+									context.facts?.inputIntegerRanges?.[1],
+								)
 							: arguments_.length === 2 &&
 								  arguments_.every((value) => value !== null) &&
 								  MATH_BINARY_OPERATIONS.has(instruction.operation)
@@ -11967,8 +12077,13 @@ function emitInstruction(
 									instruction.operation,
 									number(first!),
 									number(second!),
+									context.facts?.inputIntegerRanges?.slice(1),
 								)
-							: nativeMathUnaryExpr(instruction.operation, number(first!));
+							: nativeMathUnaryExpr(
+									instruction.operation,
+									number(first!),
+									instructionInputIntegerRange(context.facts, first!),
+								);
 						if (expression !== null) {
 							guard = guards.length === 0 ? "true" : guards.join(" && ");
 							direct = [
@@ -12988,14 +13103,19 @@ function emitInstruction(
 				const argument = args[0];
 				const number = argument === undefined ? null : nativeNumberOperand(argument);
 				const test =
-					argument === undefined
-						? "false"
-						: number === null
-							? boxedNumberPredicateExpression(
-									guardedBuiltinOperation!,
-									boxedOperand(argument),
-								)
-							: nativeNumberPredicateExpression(guardedBuiltinOperation!, number);
+					argument !== undefined &&
+					instructionInputIntegerRange(context.facts, argument) !== undefined
+						? guardedBuiltinOperation === "Number.isNaN"
+							? "false"
+							: "true"
+						: argument === undefined
+							? "false"
+							: number === null
+								? boxedNumberPredicateExpression(
+										guardedBuiltinOperation!,
+										boxedOperand(argument),
+									)
+								: nativeNumberPredicateExpression(guardedBuiltinOperation!, number);
 				return [
 					`if (mal_builtin_number_predicate_callee_matches(${numberPredicate}, ${boxedOperand(instruction.callee)})) {`,
 					storeBoolean(instruction.dst, test),
@@ -13597,8 +13717,19 @@ function emitInstruction(
 				const { operation } = mathCall;
 				const kernel = (values: ReadonlyArray<string>): string | null =>
 					mathCall.arity === 1
-						? nativeMathUnaryExpr(operation, values[0]!)
-						: nativeMathBinaryExpr(operation, values[0]!, values[1]!);
+						? nativeMathUnaryExpr(
+								operation,
+								values[0]!,
+								args[0] === undefined
+									? undefined
+									: instructionInputIntegerRange(context.facts, args[0]),
+							)
+						: nativeMathBinaryExpr(
+								operation,
+								values[0]!,
+								values[1]!,
+								context.facts?.inputIntegerRanges?.slice(2),
+							);
 				const nativeOperands = instruction.arguments.map(nativeNumberOperand);
 				const expression = kernel(
 					instruction.arguments.map(
@@ -14018,12 +14149,22 @@ function emitInstruction(
 				...(context.loopPoll ? [poll()] : []),
 				...(instruction.targetIp === ip + 1 ? [] : [`goto L${instruction.targetIp};`]),
 			];
-		case "JUMP_IF":
+		case "JUMP_IF": {
+			const ranged = compilerIntegerRangeTruthiness(
+				instructionInputIntegerRange(context.facts, instruction.cond),
+			);
+			if (ranged === false) return [];
+			if (ranged === true)
+				return [
+					...(context.loopPoll ? [poll()] : []),
+					...(instruction.targetIp === ip + 1 ? [] : [`goto L${instruction.targetIp};`]),
+				];
 			return context.loopPoll
 				? [
 						`if (${truthy(instruction.cond)}) { ${poll()} goto L${instruction.targetIp}; }`,
 					]
 				: [`if (${truthy(instruction.cond)}) goto L${instruction.targetIp};`];
+		}
 		case "RETURN": {
 			// Register -1 is the "no value" sentinel (a synthesized empty return).
 			let value =

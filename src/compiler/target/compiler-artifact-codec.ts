@@ -7,6 +7,13 @@ import type {
 	CompilerNumericTypedArrayKind,
 } from "../shared/compiler-instruction.ts";
 import type { InstructionFacts } from "../shared/instruction-facts.ts";
+import type { CompilerIntegerRange } from "../shared/integer-range.ts";
+import {
+	COMPILER_INT32_RANGE,
+	COMPILER_UINT32_RANGE,
+	compilerIntegerRangesEqual,
+	compilerIntegerRangeIsValid,
+} from "../shared/integer-range.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
 import type { CoreTargetClassLayout } from "./core-target-ir.ts";
 import type { NativeCallbackTransportPlan } from "./lower-native-callbacks.ts";
@@ -99,7 +106,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 267;
+export const COMPILER_ARTIFACT_VERSION = 268;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -1176,14 +1183,43 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 	}
 }
 
-function readInt32Inputs(r: Reader): ReadonlyArray<boolean> | undefined {
+function writeIntegerRanges(
+	w: Writer,
+	ranges: ReadonlyArray<CompilerIntegerRange | undefined> | undefined,
+): void {
+	w.u32(ranges?.length ?? 0);
+	for (const range of ranges ?? []) {
+		if (range === undefined) w.u8(0);
+		else if (compilerIntegerRangesEqual(range, COMPILER_INT32_RANGE)) w.u8(1);
+		else if (compilerIntegerRangesEqual(range, COMPILER_UINT32_RANGE)) w.u8(2);
+		else {
+			w.u8(3);
+			w.f64(range.minimum);
+			w.f64(range.maximum);
+		}
+	}
+}
+
+function readIntegerRanges(
+	r: Reader,
+): ReadonlyArray<CompilerIntegerRange | undefined> | undefined {
 	const count = r.count(1);
 	if (count === 0) return undefined;
 	return Array.from({ length: count }, () => {
-		const integer = r.u8();
-		if (integer > 1)
-			throw new RangeError("program-image-codec: invalid int32 input fact");
-		return integer === 1;
+		const tag = r.u8();
+		if (tag === 0) return undefined;
+		if (tag === 1) return COMPILER_INT32_RANGE;
+		if (tag === 2) return COMPILER_UINT32_RANGE;
+		if (tag !== 3) throw new RangeError("program-image-codec: invalid integer range tag");
+		const range: CompilerIntegerRange = {
+			minimum: r.f64(),
+			maximum: r.f64(),
+			exactSafeIntegers: true,
+			excludesNegativeZero: true,
+		};
+		if (!compilerIntegerRangeIsValid(range))
+			throw new RangeError("program-image-codec: invalid integer range");
+		return range;
 	});
 }
 
@@ -2222,7 +2258,7 @@ function writeCompilerArtifact(
 				instructionIp,
 				masks,
 				results,
-				int32Inputs,
+				inputIntegerRanges,
 				effectMask,
 			} of entry.instructionFacts ?? []) {
 				w.u32(instructionIp);
@@ -2230,8 +2266,7 @@ function writeCompilerArtifact(
 				for (const mask of masks) w.u8(mask);
 				w.u32(results.length);
 				for (const mask of results) w.u8(mask);
-				w.u32(int32Inputs?.length ?? 0);
-				for (const integer of int32Inputs ?? []) w.u8(integer ? 1 : 0);
+				writeIntegerRanges(w, inputIntegerRanges);
 				w.u32(effectMask);
 			}
 			w.u32(entry.callOverrides?.length ?? 0);
@@ -2286,8 +2321,7 @@ function writeCompilerArtifact(
 						for (const mask of masks) w.u8(mask);
 					}
 				}
-				w.u32(facts.int32Inputs?.length ?? 0);
-				for (const integer of facts.int32Inputs ?? []) w.u8(integer ? 1 : 0);
+				writeIntegerRanges(w, facts.inputIntegerRanges);
 				w.u8(facts.registers === undefined ? 0 : 1);
 				if (facts.registers !== undefined) {
 					w.i32Array([...facts.registers]);
@@ -4813,12 +4847,12 @@ function readCompilerArtifact(
 				const instructionIp = r.u32();
 				const masks = Array.from({ length: r.count(1) }, () => r.u8());
 				const results = Array.from({ length: r.count(1) }, () => r.u8());
-				const int32Inputs = readInt32Inputs(r);
+				const inputIntegerRanges = readIntegerRanges(r);
 				return {
 					instructionIp,
 					masks,
 					results,
-					...(int32Inputs === undefined ? {} : { int32Inputs }),
+					...(inputIntegerRanges === undefined ? {} : { inputIntegerRanges }),
 					effectMask: r.u32(),
 				};
 			});
@@ -4929,14 +4963,14 @@ function readCompilerArtifact(
 				const resultKindMasks = readOptional(() =>
 					Array.from({ length: r.count(1) }, () => r.u8()),
 				);
-				const int32Inputs = readInt32Inputs(r);
+				const inputIntegerRanges = readIntegerRanges(r);
 				const registers = readOptional(() => r.i32Array());
 				const inputOffset = registers === undefined ? undefined : r.u32();
 				facts[ip] = {
 					...(effectMask === undefined ? {} : { effectMask }),
 					...(inputKindMasks === undefined ? {} : { inputKindMasks }),
 					...(resultKindMasks === undefined ? {} : { resultKindMasks }),
-					...(int32Inputs === undefined ? {} : { int32Inputs }),
+					...(inputIntegerRanges === undefined ? {} : { inputIntegerRanges }),
 					...(registers === undefined ? {} : { registers, inputOffset }),
 				};
 			}

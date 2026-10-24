@@ -888,7 +888,7 @@ export function nativeVariantContract(
 		instructionIp,
 		masks,
 		results,
-		int32Inputs,
+		inputIntegerRanges,
 		effectMask,
 	} of entry.instructionFacts ?? []) {
 		const canonical = facts?.[instructionIp];
@@ -903,7 +903,7 @@ export function nativeVariantContract(
 			...canonical,
 			inputKindMasks: masks,
 			resultKindMasks: results,
-			int32Inputs,
+			inputIntegerRanges,
 			effectMask,
 		};
 	}

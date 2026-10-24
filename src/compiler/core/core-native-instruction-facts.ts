@@ -3,12 +3,25 @@ import {
 	encodeInstructionEffects,
 	INSTRUCTION_MAY_THROW,
 } from "../shared/instruction-facts.ts";
+import type { CompilerIntegerRange } from "../shared/integer-range.ts";
+import {
+	COMPILER_INT32_RANGE,
+	COMPILER_UINT32_RANGE,
+	compilerIntegerRangesEqual,
+} from "../shared/integer-range.ts";
 import type { CoreAnalysisManager } from "./core-analysis-manager.ts";
+import { CORE_LOOP_INDUCTION_ANALYSIS } from "./core-ir-loops.ts";
+import type { CoreLoopInductionAnalysis } from "./core-ir-loops.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
 import { corePrimitiveOperatorEffectRefinement } from "./core-ir-value-kinds.ts";
 import { CORE_LOCAL_VALUE_KIND_ANALYSIS } from "./core-ir-value-kinds.ts";
 import type { CoreValueKindAnalysis } from "./core-ir-value-kinds.ts";
-import type { CoreFunctionId, CoreInstructionId } from "./core-ir.ts";
+import type {
+	CoreFunctionId,
+	CoreInstructionId,
+	CoreValueId,
+	CoreBlockId,
+} from "./core-ir.ts";
 import { coreFunctionVersionsAreCurrent } from "./core-store.ts";
 import type {
 	CoreFunctionStore,
@@ -19,7 +32,7 @@ import type {
 export interface CoreInstructionFacts {
 	readonly masks: ReadonlyArray<number>;
 	readonly results: ReadonlyArray<number>;
-	readonly int32Inputs?: ReadonlyArray<boolean>;
+	readonly inputIntegerRanges?: ReadonlyArray<CompilerIntegerRange | undefined>;
 	readonly effectMask: number;
 }
 
@@ -57,12 +70,18 @@ export function coreInstructionFactPlans(
 			function: functionId,
 		});
 		const proof = { fn, versions: fn.versions };
+		let ranges: CoreLoopInductionAnalysis | undefined;
+		const range: CoreInstructionRangeQuery = (value, block) =>
+			(ranges ??= analyses.get(CORE_LOOP_INDUCTION_ANALYSIS, {
+				scope: "function",
+				function: functionId,
+			})).range(value, block);
 		const instructions = new Array<CoreInstructionFacts | undefined>(
 			fn.instructionCapacity,
 		);
 		for (const instruction of fn.instructionIds())
 			instructions[instruction] = Object.freeze(
-				coreInstructionFacts(fn, instruction, kinds, false),
+				coreInstructionFacts(fn, instruction, kinds, false, range),
 			);
 		const plan = Object.freeze({
 			function: functionId,
@@ -77,31 +96,116 @@ export function coreInstructionFactPlans(
 const emptyMasks: ReadonlyArray<number> = Object.freeze([]);
 const singleMasks = new Map<number, ReadonlyArray<number>>();
 const pairMasks = new Map<number, ReadonlyArray<number>>();
-const singleInt32Input = Object.freeze([true]);
+export type CoreInstructionRangeQuery = (
+	value: CoreValueId,
+	block: CoreBlockId,
+) => CompilerIntegerRange | undefined;
+
+const singleInt32Input = Object.freeze([COMPILER_INT32_RANGE]);
 const pairInt32Inputs = Object.freeze([
 	undefined,
-	Object.freeze([true, false]),
-	Object.freeze([false, true]),
-	Object.freeze([true, true]),
+	Object.freeze([COMPILER_INT32_RANGE, undefined]),
+	Object.freeze([undefined, COMPILER_INT32_RANGE]),
+	Object.freeze([COMPILER_INT32_RANGE, COMPILER_INT32_RANGE]),
+]);
+const boundBinaryConsumers: ReadonlySet<string> = new Set([
+	"<",
+	"<=",
+	">",
+	">=",
+	"==",
+	"!=",
+	"===",
+	"!==",
+]);
+const integerBinaryConsumers: ReadonlySet<string> = new Set([
+	"&",
+	"|",
+	"^",
+	"<<",
+	">>",
+	">>>",
+]);
+const boundBuiltinConsumers: ReadonlySet<string> = new Set([
+	"Math.abs",
+	"Math.sign",
+	"Math.min",
+	"Math.max",
+]);
+const integerBuiltinConsumers: ReadonlySet<string> = new Set([
+	"Number.isNaN",
+	"Number.isFinite",
+	"Number.isInteger",
+	"Number.isSafeInteger",
+	"Math.imul",
+	"Math.clz32",
 ]);
 
-function instructionInt32Inputs(
+function instructionIntegerRanges(
 	fn: CoreFunctionStore,
 	kinds: CoreValueKindAnalysis,
+	instruction: CoreInstructionId,
 	start: number,
 	count: number,
-): ReadonlyArray<boolean> | undefined {
+	query?: CoreInstructionRangeQuery,
+): ReadonlyArray<CompilerIntegerRange | undefined> | undefined {
 	if (count === 0) return undefined;
-	const first = kinds.exactScalar(fn.kernel.operandAt(start)) === "int32";
-	if (count === 1) return first ? singleInt32Input : undefined;
-	const second = kinds.exactScalar(fn.kernel.operandAt(start + 1)) === "int32";
-	if (count === 2) return pairInt32Inputs[(first ? 1 : 0) | (second ? 2 : 0)];
+	const operation = fn.instructionKind(instruction) === "operation";
+	const opcode = operation ? fn.instructionOpcodeName(instruction) : "";
+	const attributes = operation ? fn.instructionAttributes(instruction) : {};
+	const operator = attributes.operator;
+	const bounds =
+		fn.instructionKind(instruction) === "branch" ||
+		(opcode === "unary" && operator === "!") ||
+		(opcode === "binary" && boundBinaryConsumers.has(operator as string)) ||
+		((opcode === "callKnown" ||
+			opcode === "mathUnaryNumber" ||
+			opcode === "mathBinaryNumber") &&
+			boundBuiltinConsumers.has(attributes.operation as string));
+	const integer =
+		bounds ||
+		opcode === "call" ||
+		(opcode === "unary" && operator === "~") ||
+		(opcode === "binary" && integerBinaryConsumers.has(operator as string)) ||
+		(opcode === "callKnown" &&
+			integerBuiltinConsumers.has(attributes.operation as string));
+	// Branch refinements belong to the observation, not to every later use of the value.
+	const block = fn.instructionBlock(instruction);
+	const inputRange = (index: number): CompilerIntegerRange | undefined => {
+		const value = fn.kernel.operandAt(start + index);
+		const scalar = kinds.exactScalar(value);
+		if (scalar !== "number" && scalar !== "int32") return undefined;
+		if (scalar === "int32" && !bounds) return COMPILER_INT32_RANGE;
+		const range = integer ? query?.(value, block) : undefined;
+		if (range === undefined) return scalar === "int32" ? COMPILER_INT32_RANGE : undefined;
+		if (compilerIntegerRangesEqual(range, COMPILER_INT32_RANGE))
+			return COMPILER_INT32_RANGE;
+		if (compilerIntegerRangesEqual(range, COMPILER_UINT32_RANGE))
+			return COMPILER_UINT32_RANGE;
+		return Object.freeze(range);
+	};
+	const first = inputRange(0);
+	if (count === 1)
+		return first === COMPILER_INT32_RANGE
+			? singleInt32Input
+			: first === undefined
+				? undefined
+				: Object.freeze([first]);
+	const second = inputRange(1);
+	if (
+		count === 2 &&
+		(first === undefined || first === COMPILER_INT32_RANGE) &&
+		(second === undefined || second === COMPILER_INT32_RANGE)
+	)
+		return pairInt32Inputs[
+			(first === undefined ? 0 : 1) | (second === undefined ? 0 : 2)
+		];
 	const values = [first, second];
-	let any = first || second;
+	let any = first !== undefined || second !== undefined;
 	for (let index = 2; index < count; index++) {
-		const integer = kinds.exactScalar(fn.kernel.operandAt(start + index)) === "int32";
-		values.push(integer);
-		any ||= integer;
+		const range = inputRange(index);
+		values.push(range);
+		any ||= range !== undefined;
 	}
 	return any ? Object.freeze(values) : undefined;
 }
@@ -153,6 +257,7 @@ export function coreInstructionFacts(
 	instruction: CoreInstructionId,
 	kinds: CoreValueKindAnalysis,
 	refineEffects = true,
+	range?: CoreInstructionRangeQuery,
 ): CoreInstructionFacts {
 	const kernel = fn.kernel;
 	const input = kernel.instructionOperandStart(instruction);
@@ -164,15 +269,17 @@ export function coreInstructionFacts(
 		kernel.instructionOperandCount(instruction),
 		false,
 	);
-	const int32Inputs = instructionInt32Inputs(
+	const inputIntegerRanges = instructionIntegerRanges(
 		fn,
 		kinds,
+		instruction,
 		input,
 		kernel.instructionOperandCount(instruction),
+		range,
 	);
 	return {
 		masks,
-		...(int32Inputs === undefined ? {} : { int32Inputs }),
+		...(inputIntegerRanges === undefined ? {} : { inputIntegerRanges }),
 		effectMask:
 			fn.instructionKind(instruction) === "operation"
 				? encodeInstructionEffects(

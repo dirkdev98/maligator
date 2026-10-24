@@ -5,6 +5,9 @@ import {
 	COMPILER_VALUE_KIND_TOP,
 } from "../shared/compiler-value-kinds.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
+import { coreCanonicalValueRoots } from "./core-ir-control-flow.ts";
+import { analyzeCoreLoopInductions } from "./core-ir-loops.ts";
+import type { CoreLoopInductionAnalysis } from "./core-ir-loops.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
 import type { CoreDirectEntryPlan, CorePlanRepresentation } from "./core-ir-regions.ts";
 import type { CoreValueKindAnalysis } from "./core-ir-value-kinds.ts";
@@ -12,6 +15,7 @@ import { analyzeCoreValueKinds } from "./core-ir-value-kinds.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import type { CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import { coreInstructionFacts } from "./core-native-instruction-facts.ts";
+import type { CoreInstructionRangeQuery } from "./core-native-instruction-facts.ts";
 import { coreFunctionVersionsAreCurrent } from "./core-store.ts";
 import type { CoreFunctionStore, CoreFunctionVersions } from "./core-store.ts";
 
@@ -82,12 +86,20 @@ export function analyzeCoreNativeEntry(
 		...fn.bodyInstructionIds(block),
 		fn.blockTerminator(block),
 	]);
+	let ranges: CoreLoopInductionAnalysis | undefined;
+	const range: CoreInstructionRangeQuery = (value, block) =>
+		(ranges ??= analyzeCoreLoopInductions(
+			fn,
+			cfg,
+			coreCanonicalValueRoots(fn, cfg),
+			(value) => kinds.exactScalar(value),
+		)).range(value, block);
 	const inputs = Object.freeze(
 		instructions.flatMap((instruction) => {
 			return [
 				Object.freeze({
 					instruction,
-					...coreInstructionFacts(fn, instruction, kinds),
+					...coreInstructionFacts(fn, instruction, kinds, true, range),
 				}),
 			];
 		}),

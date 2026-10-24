@@ -278,7 +278,7 @@ export interface NativeMathCallPlan {
 export const NATIVE_NUMBER_PREDICATE_MODES = [
 	"boxed",
 	"non-number",
-	"int32",
+	"integer",
 	"number",
 ] as const;
 
@@ -3453,8 +3453,8 @@ export function selectNativeFastPaths(
 				(masks !== undefined &&
 					((masks[1] ?? COMPILER_VALUE_KIND_TOP) & COMPILER_VALUE_KIND_NUMBER) === 0)
 					? "non-number"
-					: rep === "int32" || native.facts?.[ip]?.int32Inputs?.[1] === true
-						? "int32"
+					: rep === "int32" || native.facts?.[ip]?.inputIntegerRanges?.[1] !== undefined
+						? "integer"
 						: input.kind === "number" || rep === "number" || exactNumber
 							? "number"
 							: "boxed";

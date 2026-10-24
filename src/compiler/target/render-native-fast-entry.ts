@@ -7,8 +7,14 @@ import {
 } from "../shared/compiler-value-kinds.ts";
 import {
 	instructionInputIsInt32,
+	instructionInputIntegerRange,
 	instructionInputKind,
 } from "../shared/instruction-facts.ts";
+import type { CompilerIntegerRange } from "../shared/integer-range.ts";
+import {
+	compilerIntegerRangeComparison,
+	compilerIntegerRangeTruthiness,
+} from "../shared/integer-range.ts";
 import { emitTypeofResult } from "./emit-program-image.ts";
 import type {
 	NativeDirectEntryPlan,
@@ -338,6 +344,7 @@ function int32ResultRegisters(
 interface FastNumbers {
 	readonly kind: (register: number) => number;
 	readonly isInt32: (register: number) => boolean;
+	readonly range: (register: number) => CompilerIntegerRange | undefined;
 	readonly constants: ReadonlyMap<number, number>;
 	readonly literal: (value: number) => string;
 	/** String constant registers and the unit length of each constant. */
@@ -387,6 +394,13 @@ function fastBinary(
 	values: FastNumbers,
 ): string | undefined {
 	const { dst, left, right, operator } = op;
+	const compared = compilerIntegerRangeComparison(
+		operator,
+		values.range(left),
+		values.range(right),
+	);
+	if (compared !== undefined)
+		return `f${dst} = ${compared ? "MAL_VALUE_TRUE" : "MAL_VALUE_FALSE"};`;
 	const numberFailure = numbers(values, left, right);
 	const guard = numberFailure === "false" ? "" : `if (${numberFailure}) goto __full;`;
 	if (operator === "===" || operator === "!==") {
@@ -444,7 +458,9 @@ function fastUnary(
 	const guard = numberFailure === "false" ? "" : `if (${numberFailure}) goto __full;`;
 	switch (operator) {
 		case "!": {
-			const constant = compilerValueKindTruthiness(values.kind(src));
+			const constant =
+				compilerIntegerRangeTruthiness(values.range(src)) ??
+				compilerValueKindTruthiness(values.kind(src));
 			return constant === undefined
 				? `f${dst} = mal_value_new_boolean(!mal_value_is_truthy(f${src}));`
 				: `f${dst} = ${constant ? "MAL_VALUE_FALSE" : "MAL_VALUE_TRUE"};`;
@@ -478,6 +494,7 @@ function fastInstruction(
 ): string | undefined {
 	const masks = input.facts?.[ip]?.inputKindMasks;
 	const values: FastNumbers = {
+		range: (register) => instructionInputIntegerRange(input.facts?.[ip], register),
 		isInt32: (register) => instructionInputIsInt32(input.facts?.[ip], register),
 		kind(register) {
 			const kind = instructionInputKind(input.facts?.[ip], register);
@@ -572,7 +589,9 @@ function fastInstruction(
 		case "JUMP_IF": {
 			const target = jump(op.targetIp);
 			if (target === undefined) return undefined;
-			const constant = compilerValueKindTruthiness(values.kind(op.cond));
+			const constant =
+				compilerIntegerRangeTruthiness(values.range(op.cond)) ??
+				compilerValueKindTruthiness(values.kind(op.cond));
 			if (constant !== undefined) return constant ? target : "";
 			return integers.has(op.cond)
 				? `if (mal_ops_number_value_to_i32(f${op.cond}) != 0) ${target}`

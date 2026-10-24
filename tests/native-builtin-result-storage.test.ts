@@ -96,7 +96,7 @@ describe("catalogued primitive builtin result storage", () => {
 			for (const [expression, mode] of [
 				["input", "boxed"],
 				["+input", "number"],
-				["input|0", "int32"],
+				["input|0", "integer"],
 				["String(input)", "non-number"],
 			] as const) {
 				const out = inspectStaticValueFunction(
@@ -113,11 +113,13 @@ describe("catalogued primitive builtin result storage", () => {
 						...out.native,
 						storage: {
 							...out.native.storage!,
-							numberPredicates: [{ ...plan, mode: mode === "boxed" ? "int32" : "boxed" }],
+							numberPredicates: [
+								{ ...plan, mode: mode === "boxed" ? "integer" : "boxed" },
+							],
 						},
 					}),
 				).toThrow(/invalid or stale storage plan/);
-				if (mode === "int32") {
+				if (mode === "integer") {
 					const op = out.native.body.instructions[plan.instructionIp]!;
 					if (op.opcode !== "CALL_KNOWN") throw new Error("Missing planned predicate");
 					expect(out.c.source).toContain(
