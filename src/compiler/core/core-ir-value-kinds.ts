@@ -1495,6 +1495,7 @@ export function coreValueKindObservation(
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
 	kindMask: (value: CoreValueId) => CompilerValueKindMask,
+	nonNaN?: (value: CoreValueId, consumer: CoreInstructionId) => boolean,
 ): boolean | undefined {
 	if (
 		fn.instructionKind(instruction) !== "operation" ||
@@ -1517,16 +1518,70 @@ export function coreValueKindObservation(
 	}
 	if (opcode === "unary" && fn.instructionAttributes(instruction).operator === "!") {
 		const input = operand(0);
-		return input !== undefined &&
-			compilerValueKindMaskIsSubset(
-				kindMask(input),
-				COMPILER_VALUE_KIND_UNDEFINED | COMPILER_VALUE_KIND_NULL,
-			)
+		if (input === undefined) return undefined;
+		const mask = kindMask(input);
+		return compilerValueKindMaskIsSubset(mask, COMPILER_VALUE_KIND_NULLISH)
 			? true
+			: compilerValueKindMaskIsSubset(
+						mask,
+						COMPILER_VALUE_KIND_OBJECT | COMPILER_VALUE_KIND_SYMBOL,
+				  )
+				? false
+				: undefined;
+	}
+	if (opcode === "callKnown") {
+		const attributes = fn.instructionAttributes(instruction);
+		if (
+			attributes.operation !== "Object.is" ||
+			attributes.construct ||
+			attributes.argumentMode !== undefined
+		)
+			return undefined;
+		const left = operand(1);
+		const right = operand(2);
+		if (left === right) return true;
+		const leftMask = left === undefined ? COMPILER_VALUE_KIND_UNDEFINED : kindMask(left);
+		const rightMask =
+			right === undefined ? COMPILER_VALUE_KIND_UNDEFINED : kindMask(right);
+		if (
+			((leftMask || COMPILER_VALUE_KIND_TOP) & (rightMask || COMPILER_VALUE_KIND_TOP)) ===
+			0
+		)
+			return false;
+		if (
+			leftMask === rightMask &&
+			(leftMask === COMPILER_VALUE_KIND_UNDEFINED ||
+				leftMask === COMPILER_VALUE_KIND_NULL)
+		)
+			return true;
+		return left !== undefined &&
+			right !== undefined &&
+			distinctFreshAllocations(fn, left, right)
+			? false
 			: undefined;
 	}
 	if (opcode !== "binary" || operandCount !== 2) return undefined;
 	const operator = fn.instructionAttributes(instruction).operator;
+	const left = operand(0)!;
+	const right = operand(1)!;
+	if (
+		operator === "==" ||
+		operator === "!=" ||
+		operator === "===" ||
+		operator === "!=="
+	) {
+		if (
+			left === right &&
+			(compilerValueKindMaskIsSubset(
+				kindMask(left),
+				COMPILER_VALUE_KIND_TOP & ~COMPILER_VALUE_KIND_NUMBER,
+			) ||
+				nonNaN?.(left, instruction) === true)
+		)
+			return operator === "==" || operator === "===";
+		if (distinctFreshAllocations(fn, left, right))
+			return operator === "!=" || operator === "!==";
+	}
 	if (operator === "==" || operator === "!=") {
 		const left = kindMask(operand(0)!);
 		const right = kindMask(operand(1)!);
@@ -1561,8 +1616,6 @@ export function coreValueKindObservation(
 		const actual = exactPrimitiveTypeof(kindMask(input));
 		return actual === undefined ? undefined : actual === expected;
 	};
-	const left = operand(0)!;
-	const right = operand(1)!;
 	const leftKind = kindMask(left);
 	const singleton = (mask: number) =>
 		mask === COMPILER_VALUE_KIND_UNDEFINED || mask === COMPILER_VALUE_KIND_NULL;
@@ -1575,6 +1628,21 @@ export function coreValueKindObservation(
 				? true
 				: undefined);
 	return equal === undefined ? undefined : operator === "===" ? equal : !equal;
+}
+
+function distinctFreshAllocations(
+	fn: CoreFunctionStore,
+	left: CoreValueId,
+	right: CoreValueId,
+): boolean {
+	if (left === right) return false;
+	return valueIsFreshAllocation(fn, left) && valueIsFreshAllocation(fn, right);
+}
+
+function valueIsFreshAllocation(fn: CoreFunctionStore, value: CoreValueId): boolean {
+	if (fn.kernel.valueDefinitionKind(value) !== 1) return false;
+	const instruction = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
+	return fn.registry.byId(fn.instructionOpcode(instruction)).allocation !== undefined;
 }
 
 export function coreOperatorInputKindMasks(

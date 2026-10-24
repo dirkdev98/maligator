@@ -245,6 +245,15 @@ operands and argument evaluation retain their own effects and fallback paths.
 Scalar expressions, fast entries, numeric regions and canonical bodies consume the
 same instruction facts.
 
+Core shares Boolean observation queries between local folding, program-flow demands
+and cross-call specialization. Exact `Object.is` calls fold for the same SSA value,
+disjoint value kinds and distinct fresh allocation identities. Strict and loose
+reflexive comparisons also consume integer bounds to exclude NaN. Constant SameValue
+evaluation preserves NaN equivalence and the distinction between signed zeros.
+These folds replace the observation after receiver and argument producers have
+executed; construction and argument-list expansion remain separate operations.
+Removing an identity observation can expose an allocation for scalar replacement.
+
 Effect metadata preserves independent reads and writes for every effect domain,
 plus throwing, suspension, collection and user-code flags. Semantic purity alone
 does not discharge a native helper's allocation failure, polling or root obligations.

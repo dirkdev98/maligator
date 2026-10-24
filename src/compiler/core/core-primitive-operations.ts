@@ -49,6 +49,50 @@ const noncoercingNumberPredicates = new Set([
 	"Number.isInteger",
 	"Number.isSafeInteger",
 ]);
+
+function staticIdentityEqual(
+	analysis: CoreStaticValueAnalysis,
+	leftValue: CoreValueId,
+	rightValue: CoreValueId,
+	consumer: CoreInstructionId,
+): boolean | undefined {
+	const left = analysis.queryAt(leftValue, consumer);
+	if (
+		left.kind !== "known" ||
+		!["symbol", "function", "array", "object"].includes(left.brand)
+	)
+		return undefined;
+	const right = analysis.queryAt(rightValue, consumer);
+	if (
+		right.kind !== "known" ||
+		(left.brand === "symbol"
+			? right.brand !== "symbol"
+			: !["function", "array", "object"].includes(right.brand))
+	)
+		return undefined;
+	const a = left.identity;
+	const b = right.identity;
+	if (
+		a === undefined ||
+		b === undefined ||
+		!["fresh-per-evaluation", "symbol-registry", "intrinsic"].includes(a.kind) ||
+		!["fresh-per-evaluation", "symbol-registry", "intrinsic"].includes(b.kind)
+	)
+		return undefined;
+	// An allocation site can name different loop iterations; only SSA identity proves reflexivity.
+	if (
+		a.kind === "fresh-per-evaluation" &&
+		b.kind === a.kind &&
+		a.function === b.function &&
+		a.value === b.value
+	)
+		return undefined;
+	return (
+		(a.kind === "symbol-registry" || a.kind === "intrinsic") &&
+		b.kind === a.kind &&
+		a.key === b.key
+	);
+}
 const wrapperPayloadMethods = new Set([
 	"Boolean.prototype.valueOf",
 	"Boolean.prototype.toString",
@@ -373,6 +417,7 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 		let sequenceEdits = 0;
 		for (const instruction of fn.instructionIds()) {
 			if (plans.length * 4 + sequenceEdits + 4 > context.remainingEdits) break;
+			if (fn.instructionKind(instruction) !== "operation") continue;
 			if (
 				fn.instructionKind(instruction) === "operation" &&
 				fn.instructionOpcodeName(instruction) === "unary"
@@ -414,64 +459,44 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 				}
 				continue;
 			}
+			const opcode = fn.instructionOpcodeName(instruction);
+			const identityAttributes = fn.instructionAttributes(instruction);
+			const sameValue =
+				opcode === "callKnown" &&
+				identityAttributes.operation === "Object.is" &&
+				!identityAttributes.construct &&
+				identityAttributes.argumentMode === undefined;
+			const comparison =
+				opcode === "binary" &&
+				["===", "!==", "==", "!="].includes(identityAttributes.operator as string);
 			if (
-				fn.instructionKind(instruction) === "operation" &&
-				fn.instructionOpcodeName(instruction) === "binary" &&
-				["===", "!==", "==", "!="].includes(
-					fn.instructionAttributes(instruction).operator as string,
-				)
+				(sameValue && fn.kernel.instructionOperandCount(instruction) >= 3) ||
+				comparison
 			) {
-				const start = fn.kernel.instructionOperandStart(instruction);
-				const left = analysis.queryAt(fn.kernel.operandAt(start), instruction);
-				if (
-					left.kind !== "known" ||
-					(left.brand !== "symbol" &&
-						(left.brand !== "function" || left.identity?.kind !== "intrinsic")) ||
-					left.identity === undefined ||
-					!["fresh-per-evaluation", "symbol-registry", "intrinsic"].includes(
-						left.identity.kind,
-					)
-				)
+				const start =
+					fn.kernel.instructionOperandStart(instruction) + (sameValue ? 1 : 0);
+				const equal = staticIdentityEqual(
+					analysis,
+					fn.kernel.operandAt(start),
+					fn.kernel.operandAt(start + 1),
+					instruction,
+				);
+				if (equal !== undefined) {
+					plans.push({
+						instruction,
+						value: {
+							kind: "boolean",
+							value:
+								!sameValue &&
+								(identityAttributes.operator === "!==" ||
+									identityAttributes.operator === "!=")
+									? !equal
+									: equal,
+						},
+					});
 					continue;
-				const right = analysis.queryAt(fn.kernel.operandAt(start + 1), instruction);
-				if (
-					right.kind === "known" &&
-					((left.brand === "symbol" && right.brand === "symbol") ||
-						(left.brand === "function" &&
-							right.brand === "function" &&
-							right.identity?.kind === "intrinsic"))
-				) {
-					const a = left.identity,
-						b = right.identity;
-					if (
-						b !== undefined &&
-						["fresh-per-evaluation", "symbol-registry", "intrinsic"].includes(b.kind)
-					) {
-						if (
-							a.kind === "fresh-per-evaluation" &&
-							b.kind === "fresh-per-evaluation" &&
-							a.function === b.function &&
-							a.value === b.value
-						)
-							continue;
-						const same =
-							(a.kind === "symbol-registry" || a.kind === "intrinsic") &&
-							b.kind === a.kind &&
-							a.key === b.key;
-						plans.push({
-							instruction,
-							value: {
-								kind: "boolean",
-								value: (
-									fn.instructionAttributes(instruction).operator as string
-								).startsWith("!")
-									? !same
-									: same,
-							},
-						});
-					}
 				}
-				continue;
+				if (comparison) continue;
 			}
 			if (
 				fn.instructionKind(instruction) !== "operation" ||
@@ -486,6 +511,7 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 				!/^(Boolean|Number|String|BigInt|Symbol|Math)(\.|$)/.test(operation) &&
 				![
 					"Object",
+					"Object.is",
 					"Object.prototype.toString",
 					"Object.prototype.toLocaleString",
 					"Object.prototype.valueOf",

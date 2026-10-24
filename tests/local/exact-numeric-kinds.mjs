@@ -331,3 +331,175 @@ function* scalarAcrossYield(value) {
 const scalarIterator = scalarAcrossYield(noncoercible);
 console.log("scalar suspended", scalarIterator.next().value.value === noncoercible);
 console.log("scalar resumed", scalarIterator.next().value.join(" "));
+
+let identityEffects = "";
+function identityExtra(value, gate) {
+	return Object.is(value, value, gate());
+}
+function identityShape(value, gate) {
+	const item = { value: gate(value) };
+	return Object.is(item, item) ? item.value : "unreachable";
+}
+function identityDistinct(value, gate) {
+	const left = { value: gate(value) };
+	const right = { value: gate(value) };
+	return [Object.is(left, right), left === right, left == right, left !== right];
+}
+function identityDisjoint(value, text) {
+	return Object.is(+value, String(text));
+}
+function identityControl(left, right) {
+	return [Object.is(left, right), left === right, left == right];
+}
+for (const value of [
+	noncoercible,
+	Symbol("identity"),
+	7n,
+	undefined,
+	null,
+	-0,
+	NaN,
+	Infinity,
+	2.5,
+]) {
+	const same = identityExtra(value, () => {
+		identityEffects += "a";
+	});
+	const item = identityShape(value, (input) => {
+		identityEffects += "b";
+		return input;
+	});
+	const distinct = identityDistinct(value, (input) => {
+		identityEffects += "c";
+		return input;
+	});
+	console.log("identity folds", same, Object.is(item, value), distinct.join(" "));
+}
+console.log("identity effects", identityEffects);
+try {
+	identityExtra(noncoercible, () => {
+		throw new Error("identity extra");
+	});
+} catch (error) {
+	console.log("identity extra throw", error.message);
+}
+for (const [left, right] of [
+	[NaN, NaN],
+	[-0, 0],
+	[0, -0],
+	[7n, 7],
+	[noncoercible, noncoercible],
+]) {
+	try {
+		console.log("identity controls", identityControl(left, right).join(" "));
+	} catch (error) {
+		console.log("identity controls throw", error.message);
+	}
+}
+console.log(
+	"identity disjoint",
+	identityDisjoint(
+		{
+			valueOf() {
+				identityEffects += "d";
+				return 4;
+			},
+		},
+		{
+			toString() {
+				identityEffects += "e";
+				return "4";
+			},
+		},
+	),
+	identityEffects,
+);
+let identityReads = 0;
+const changingIdentity = {
+	get value() {
+		identityReads++;
+		return identityReads % 2 ? noncoercible : {};
+	},
+};
+console.log(
+	"identity getters",
+	Object.is(changingIdentity.value, changingIdentity.value),
+	identityReads,
+);
+function* identitySuspended(value) {
+	const item = { value };
+	yield item;
+	return Object.is(item, item) ? item.value : undefined;
+}
+const identityIterator = identitySuspended(noncoercible);
+console.log("identity yield", identityIterator.next().value.value === noncoercible);
+console.log("identity return", identityIterator.next().value === noncoercible);
+const identityHistory = [];
+for (let index = 0; index < 3; index++) {
+	const item = { index };
+	identityHistory.push(item);
+	console.log(
+		"identity iterations",
+		Object.is(item, identityHistory[index]),
+		Object.is(item, identityHistory[0]),
+	);
+}
+console.log(
+	"identity constants",
+	Object.is(NaN, NaN),
+	Object.is(-0, 0),
+	Object.is(0, -0),
+	Object.is(),
+	Object.is(undefined),
+	Object.is(7n, 7),
+);
+try {
+	new Object.is(((identityEffects += "f"), 1), ((identityEffects += "g"), 1));
+} catch (error) {
+	console.log("identity construction", error instanceof TypeError, identityEffects);
+}
+let identityListReads = 0;
+console.log(
+	"identity constructors",
+	Object.is(
+		new Date({
+			valueOf() {
+				identityEffects += "h";
+				return 0;
+			},
+		}),
+		new Date({
+			valueOf() {
+				identityEffects += "i";
+				return 0;
+			},
+		}),
+	),
+	identityEffects,
+	Object.is(
+		function first() {},
+		function second() {},
+	),
+	Object.is(Object.prototype, Array.prototype),
+);
+console.log(
+	"identity symbols",
+	Object.is(Symbol.for("identity"), Symbol.for("identity")),
+	Object.is(Symbol.iterator, Symbol.asyncIterator),
+	Object.is(Symbol("same"), Symbol("same")),
+	Object.is(Math.max, Math.min),
+);
+try {
+	Reflect.construct(Object.is, {
+		get length() {
+			identityListReads++;
+			return 0;
+		},
+	});
+} catch (error) {
+	console.log(
+		"identity reflect construction",
+		error instanceof TypeError,
+		identityListReads,
+	);
+}

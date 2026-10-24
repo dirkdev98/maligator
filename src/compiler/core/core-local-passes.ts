@@ -12,11 +12,8 @@ import {
 } from "../shared/compiler-facts.ts";
 import type { KnownBuiltinCall } from "../shared/compiler-facts.ts";
 import {
-	COMPILER_VALUE_KIND_BIGINT,
-	COMPILER_VALUE_KIND_BOOLEAN,
 	COMPILER_VALUE_KIND_NULL,
 	COMPILER_VALUE_KIND_NUMBER,
-	COMPILER_VALUE_KIND_OBJECT,
 	COMPILER_VALUE_KIND_STRING,
 	COMPILER_VALUE_KIND_SYMBOL,
 	COMPILER_VALUE_KIND_TOP,
@@ -44,7 +41,10 @@ import {
 import type { CoreControlEdge } from "./core-ir-control-flow.ts";
 import { CORE_LOCAL_EXCEPTION_FLOW_ANALYSIS } from "./core-ir-exception-flow.ts";
 import { CORE_LOOP_INDUCTION_ANALYSIS } from "./core-ir-loops.ts";
-import { CORE_LOCAL_VALUE_KIND_ANALYSIS } from "./core-ir-value-kinds.ts";
+import {
+	CORE_LOCAL_VALUE_KIND_ANALYSIS,
+	coreValueKindObservation,
+} from "./core-ir-value-kinds.ts";
 import type { CoreValueKindAnalysis } from "./core-ir-value-kinds.ts";
 import {
 	CORE_SUPER_THIS_STATE_KEY,
@@ -1236,47 +1236,11 @@ const rewriteExactBuiltinCalls: CoreFunctionPass = {
 	},
 };
 
-function exactPrimitiveTypeof(mask: number): string | undefined {
-	if (mask === COMPILER_VALUE_KIND_UNDEFINED) return "undefined";
-	if (mask === COMPILER_VALUE_KIND_NULL) return "object";
-	if (mask === COMPILER_VALUE_KIND_BOOLEAN) return "boolean";
-	if (mask === COMPILER_VALUE_KIND_NUMBER) return "number";
-	if (mask === COMPILER_VALUE_KIND_STRING) return "string";
-	if (mask === COMPILER_VALUE_KIND_BIGINT) return "bigint";
-	if (mask === COMPILER_VALUE_KIND_SYMBOL) return "symbol";
-	return undefined;
-}
-
-function typeofObservation(
-	program: CoreProgram,
-	fn: CoreFunctionStore,
-	value: CoreValueId,
-	other: CoreValueId,
-	kindMask: (value: CoreValueId) => number,
-): boolean | undefined {
-	const definition = definingInstruction(fn, value);
-	if (
-		definition === undefined ||
-		fn.instructionKind(definition) !== "operation" ||
-		fn.instructionOpcodeName(definition) !== "unary" ||
-		fn.instructionAttributes(definition).operator !== "typeof"
-	)
-		return undefined;
-	const input = instructionOperand(fn, definition, 0);
-	const constant = constantForValue(fn, other);
-	if (input === undefined || constant?.kind !== "string") return undefined;
-	const actual = exactPrimitiveTypeof(kindMask(input));
-	const expected = String.fromCharCode(
-		...(program.stringConstants[constant.index] ?? []),
-	);
-	return actual === undefined ? undefined : actual === expected;
-}
-
 const foldValueKindObservations: CoreFunctionPass = {
 	name: "value-kind-observation-folding",
 	stage: "canonicalize",
-	requiredFunctionOpcodesAny: ["unary", "binary"],
-	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS],
+	requiredFunctionOpcodesAny: ["unary", "binary", "typeofCompare", "callKnown"],
+	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS, CORE_LOOP_INDUCTION_ANALYSIS],
 	wakesOn: ["body", "cfg", "representations"],
 	changes: LOCAL_CHANGES,
 	budget: LOCAL_BUDGET,
@@ -1288,60 +1252,15 @@ const foldValueKindObservations: CoreFunctionPass = {
 			readonly instruction: CoreInstructionId;
 			readonly result: boolean;
 		}> = [];
+		const kindMask = (value: CoreValueId) => kinds.kindMask(value);
+		const nonNaN = (value: CoreValueId, consumer: CoreInstructionId) =>
+			kinds.exactScalar(value) === "int32" ||
+			context
+				.analysis(CORE_LOOP_INDUCTION_ANALYSIS)
+				.range(value, fn.instructionBlock(consumer)) !== undefined;
 		for (const instruction of fn.instructionIds()) {
 			if (fn.instructionKind(instruction) !== "operation") continue;
-			const opcode = fn.instructionOpcodeName(instruction);
-			let result: boolean | undefined;
-			if (opcode === "unary" && fn.instructionAttributes(instruction).operator === "!") {
-				const input = instructionOperand(fn, instruction, 0);
-				if (input === undefined) continue;
-				const mask = kinds.kindMask(input);
-				if (
-					compilerValueKindMaskIsSubset(
-						mask,
-						COMPILER_VALUE_KIND_UNDEFINED | COMPILER_VALUE_KIND_NULL,
-					)
-				)
-					result = true;
-				else if (
-					compilerValueKindMaskIsSubset(
-						mask,
-						COMPILER_VALUE_KIND_OBJECT | COMPILER_VALUE_KIND_SYMBOL,
-					)
-				)
-					result = false;
-			} else if (
-				opcode === "binary" &&
-				fn.kernel.instructionOperandCount(instruction) === 2
-			) {
-				const left = instructionOperand(fn, instruction, 0)!;
-				const right = instructionOperand(fn, instruction, 1)!;
-				const operator = fn.instructionAttributes(instruction).operator;
-				if (
-					left === right &&
-					(operator === "===" ||
-						operator === "!==" ||
-						operator === "==" ||
-						operator === "!=") &&
-					(compilerValueKindMaskIsSubset(
-						kinds.kindMask(left),
-						COMPILER_VALUE_KIND_TOP & ~COMPILER_VALUE_KIND_NUMBER,
-					) ||
-						kinds.exactScalar(left) === "int32")
-				) {
-					result = operator === "===" || operator === "==";
-				} else if (operator === "===" || operator === "!==") {
-					const typeofResult =
-						typeofObservation(program, fn, left, right, (value) =>
-							kinds.kindMask(value),
-						) ??
-						typeofObservation(program, fn, right, left, (value) => kinds.kindMask(value));
-					const equal =
-						typeofResult ??
-						((kinds.kindMask(left) & kinds.kindMask(right)) === 0 ? false : undefined);
-					result = equal === undefined ? undefined : operator === "===" ? equal : !equal;
-				}
-			}
+			const result = coreValueKindObservation(program, fn, instruction, kindMask, nonNaN);
 			if (result !== undefined) replacements.push({ instruction, result });
 		}
 		if (replacements.length === 0) return undefined;

@@ -385,6 +385,16 @@ export function evaluateConstantBuiltin(
 			return failure("uri");
 		}
 	}
+	if (operation === "Object.is") {
+		const second = argument(1);
+		if (first === undefined || second === undefined) return unsupported();
+		return boolean(
+			Object.is(
+				first.kind === "undefined" ? undefined : first.value,
+				second.kind === "undefined" ? undefined : second.value,
+			),
+		);
+	}
 	if (operation === "Boolean")
 		return first === undefined
 			? unsupported()
