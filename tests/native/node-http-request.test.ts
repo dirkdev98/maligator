@@ -62,6 +62,98 @@ describe("node:http request bridge", () => {
 		return value;
 	}
 
+	async function rawExchange(
+		port: number,
+		path: string,
+		method = "GET",
+	): Promise<{ status: string; headers: Array<[string, string]>; body: string }> {
+		const response = await new Promise<string>((resolve, reject) => {
+			const socket = createConnection({ host: "127.0.0.1", port }, () => {
+				socket.write(
+					`${method} ${path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n`,
+				);
+			});
+			let text = "";
+			socket.setEncoding("latin1");
+			socket.on("data", (chunk: string) => (text += chunk));
+			socket.on("end", () => resolve(text));
+			socket.once("error", reject);
+		});
+		const headEnd = response.indexOf("\r\n\r\n");
+		const [status = "", ...lines] = response.slice(0, headEnd).split("\r\n");
+		const headers = lines.map((line): [string, string] => {
+			const colon = line.indexOf(":");
+			return [line.slice(0, colon).toLowerCase(), line.slice(colon + 1).trim()];
+		});
+		return { status, headers, body: response.slice(headEnd + 4) };
+	}
+
+	async function checkWriteHeadAndClose(base: string): Promise<void> {
+		const port = Number(new URL(base).port);
+		const ownHeaders = (headers: Array<[string, string]>) =>
+			headers.filter(([name]) => name.startsWith("x-"));
+		const framing = (headers: Array<[string, string]>) =>
+			headers.filter(
+				([name]) => name === "content-length" || name === "transfer-encoding",
+			);
+
+		const explicit = await rawExchange(port, "/write-head");
+		expect(explicit.status).toBe("HTTP/1.1 404 Not Found");
+		expect(ownHeaders(explicit.headers)).toEqual([
+			["x-kept", "kept"],
+			["x-replaced", "new"],
+			["x-added", "a"],
+			["x-added", "b"],
+		]);
+		expect(framing(explicit.headers)).toEqual([["transfer-encoding", "chunked"]]);
+		expect(explicit.body).toBe("8\r\nexplicit\r\n0\r\n\r\n");
+
+		const list = await rawExchange(port, "/write-head-list");
+		expect(list.status).toBe("HTTP/1.1 201 Made It");
+		expect(ownHeaders(list.headers)).toEqual([
+			["x-dup", "1"],
+			["x-dup", "2"],
+		]);
+		expect(list.body).toBe("4\r\nlist\r\n0\r\n\r\n");
+
+		for (const method of ["GET", "HEAD"]) {
+			const length = await rawExchange(port, "/write-head-length", method);
+			expect(length.status).toBe("HTTP/1.1 200 OK");
+			expect(framing(length.headers)).toEqual([["content-length", "6"]]);
+			expect(length.body).toBe(method === "GET" ? "length" : "");
+		}
+
+		const invalid = await fetch(`${base}/write-head-invalid`);
+		expect(invalid.status).toBe(200);
+		expect(await invalid.text()).toBe("invalid");
+
+		const wrapped = await fetch(`${base}/write-head-wrapped`);
+		expect(wrapped.status).toBe(202);
+		expect(wrapped.headers.get("x-from-wrapper")).toBe("wrapped");
+		expect(wrapped.headers.get("transfer-encoding")).toBe("chunked");
+		expect(await wrapped.text()).toBe("wrapped");
+
+		const wrappedEnd = await fetch(`${base}/write-head-wrapped-end`);
+		expect(wrappedEnd.headers.get("x-from-wrapper")).toBe("end");
+		expect(wrappedEnd.headers.get("content-length")).toBe("5");
+		expect(await wrappedEnd.text()).toBe("ended");
+
+		expect(await fetch(`${base}/close-events`).then((response) => response.text())).toBe(
+			"closing",
+		);
+		let closeEvents = "";
+		for (let attempt = 0; attempt < 100; attempt++) {
+			closeEvents = await fetch(`${base}/close-events-status`).then((response) =>
+				response.text(),
+			);
+			if (closeEvents.includes("close")) break;
+			await new Promise<void>((resolve) => {
+				setTimeout(resolve, 10);
+			});
+		}
+		expect(closeEvents).toBe("finish:false,close:true");
+	}
+
 	async function checkBridge(base: string): Promise<void> {
 		const port = Number(new URL(base).port);
 		const manyRequestHeaders: Record<string, string> = {};
@@ -247,6 +339,13 @@ describe("node:http request bridge", () => {
 		}
 	});
 
+	it("commits writeHead heads and closes finished responses", async () => {
+		for (const binary of binaries) {
+			await withServer(binary, {}, checkWriteHeadAndClose);
+		}
+		await withServer(binaries[0]!, STRESS_ENV, checkWriteHeadAndClose);
+	});
+
 	it("streams responses with bounded backpressure and wire-correct framing", async () => {
 		const runs = [
 			{ binary: binaries[0]!, env: {} },
@@ -325,7 +424,9 @@ describe("node:http request bridge", () => {
 				expect(reentrant.status).toBe(500);
 				expect(await reentrant.text()).toBe("request handler error");
 				const removeAfterWrite = await fetch(`${base}/remove-after-write`);
-				expect(await removeAfterWrite.text()).toBe("aServerResponse is not writable");
+				expect(await removeAfterWrite.text()).toBe(
+					"aCannot remove headers after they are sent to the client",
+				);
 
 				for (const length of ["1e2", "9223372036854775808"]) {
 					const invalid = await fetch(`${base}/invalid-content-length/${length}`);

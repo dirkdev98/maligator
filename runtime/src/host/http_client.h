@@ -8,11 +8,23 @@ typedef struct MalTlsClientIdentity MalTlsClientIdentity;
 
 typedef struct MalHost MalHost;
 
+typedef enum MalHttpClientFailure {
+    MAL_HTTP_CLIENT_FAILURE_OTHER = 0,
+    /* The inactivity deadline fired rather than the peer or the socket failing, so
+     * the runtime can emit the timeout half of its API contract before the error. */
+    MAL_HTTP_CLIENT_FAILURE_TIMEOUT,
+    /* The peer closed the connection before a response head arrived, which a
+     * reused keep-alive connection meets when the server closes it meanwhile. */
+    MAL_HTTP_CLIENT_FAILURE_PEER_CLOSED,
+    /* A socket call failed with `error_number`; `syscall` names the call. */
+    MAL_HTTP_CLIENT_FAILURE_SOCKET,
+} MalHttpClientFailure;
+
 typedef struct MalHttpClientResult {
     char *error;
-    /* The deadline fired rather than the peer or the socket failing, so the
-     * runtime can emit the timeout half of its API contract before the error. */
-    bool timed_out;
+    MalHttpClientFailure failure;
+    int error_number;
+    const char *syscall;
 } MalHttpClientResult;
 
 typedef enum MalHttpClientProgressKind {

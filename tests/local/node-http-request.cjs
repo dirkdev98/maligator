@@ -11,6 +11,7 @@ let earlyUnreadEnded = false;
 let abortedUpload = "0:false:false:false";
 let destroyedUpload = "false:false:false:0";
 let malformedUpload = "false:false:false";
+let closeEvents = [];
 
 Object.defineProperty(Object.prototype, "__httpSocketRealmMarker", {
 	value: "request-realm",
@@ -39,6 +40,15 @@ function throwsMessage(callback, message) {
 		return false;
 	} catch (error) {
 		return error.message === message;
+	}
+}
+
+function thrownError(callback) {
+	try {
+		callback();
+		return "none";
+	} catch (error) {
+		return `${error.name}:${error.code}:${error.message}`;
 	}
 }
 
@@ -754,6 +764,91 @@ const server = http.createServer(function (request, response) {
 	if (request.url === "/connection-close") {
 		response.setHeader("Connection", "close");
 		response.end("connection-closed");
+		return;
+	}
+
+	if (request.url === "/write-head") {
+		response.setHeader("X-Kept", "kept");
+		response.setHeader("X-Replaced", "old");
+		const returned = response.writeHead(404, {
+			"X-Replaced": "new",
+			"X-Added": ["a", "b"],
+		});
+		const sent = "Error:ERR_HTTP_HEADERS_SENT:Cannot";
+		const checks = [
+			returned === response,
+			response.headersSent === true,
+			response.statusCode === 404,
+			response.statusMessage === "Not Found",
+			thrownError(() => response.setHeader("X-Late", "1")) ===
+				`${sent} set headers after they are sent to the client`,
+			thrownError(() => response.removeHeader("X-Kept")) ===
+				`${sent} remove headers after they are sent to the client`,
+			thrownError(() => response.writeHead(200)) ===
+				`${sent} write headers after they are sent to the client`,
+		];
+		response.end(checks.every(Boolean) ? "explicit" : "write head mismatch");
+		return;
+	}
+
+	if (request.url === "/write-head-list") {
+		response.writeHead(201, "Made It", ["X-Dup", "1", "x-dup", "2"]).end("list");
+		return;
+	}
+
+	if (request.url === "/write-head-length") {
+		response.writeHead(200, { "Content-Length": 6 });
+		response.end("length");
+		return;
+	}
+
+	if (request.url === "/write-head-invalid") {
+		const invalidStatus = "RangeError:ERR_HTTP_INVALID_STATUS_CODE:Invalid status code:";
+		const checks = [
+			thrownError(() => response.writeHead(99)) === `${invalidStatus} 99`,
+			thrownError(() => response.writeHead("abc")) === `${invalidStatus} abc`,
+			thrownError(() => response.writeHead(200, ["X-Odd"])) ===
+				"TypeError:ERR_INVALID_ARG_VALUE:The argument 'headers' is invalid. Received [ 'X-Odd' ]",
+			response.headersSent === false,
+		];
+		response.end(checks.every(Boolean) ? "invalid" : "invalid write head mismatch");
+		return;
+	}
+
+	if (request.url === "/write-head-wrapped") {
+		const writeHead = response.writeHead;
+		const calls = [];
+		response.writeHead = function (...args) {
+			calls.push(`${JSON.stringify(args)}:${this.headersSent}`);
+			this.setHeader("X-From-Wrapper", "wrapped");
+			return writeHead.apply(this, args);
+		};
+		response.statusCode = 202;
+		response.write("wrap");
+		response.end(calls.join("|") === "[202]:false" ? "ped" : "wrapper mismatch");
+		return;
+	}
+
+	if (request.url === "/write-head-wrapped-end") {
+		const writeHead = response.writeHead;
+		response.writeHead = function (statusCode) {
+			this.setHeader("X-From-Wrapper", "end");
+			return writeHead.call(this, statusCode);
+		};
+		response.end("ended");
+		return;
+	}
+
+	if (request.url === "/close-events") {
+		closeEvents = [];
+		response.on("finish", () => closeEvents.push(`finish:${response.destroyed}`));
+		response.on("close", () => closeEvents.push(`close:${response.destroyed}`));
+		response.end("closing");
+		return;
+	}
+
+	if (request.url === "/close-events-status") {
+		response.end(closeEvents.join(","));
 		return;
 	}
 

@@ -1006,12 +1006,6 @@ contracts or investigates costs still visible after the string follow-ups.
       the same program, production or not, keep a different stack layout and never
       reproduce it, so a harness fixture cannot guard the fix as it stands.
 
-- [ ] Give the HTTP client's error a code when a peer closes a reused keep-alive socket
-      before responding. Node rejects such a request with `ECONNRESET` ("socket hang
-      up"); ours rejects with an error whose `code` is undefined. Our server no longer
-      provokes this, since it closes idle sockets a second after `keepAliveTimeout` as
-      Node does, but other servers close at the deadline itself.
-
 - [ ] Mint private names per class evaluation inside loops. A class expression
       evaluated by each iteration of a loop in one activation keeps its private
       names in that activation's captured slots, so every evaluation overwrites

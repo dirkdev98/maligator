@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
+import type { Server, Socket } from "node:net";
 import { createServer } from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -14,40 +15,81 @@ import {
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-node-http-client-"));
 afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 
+function buildClient(fixture: string, name: string, compiled: boolean): string {
+	return buildNativeBinary({
+		fixture,
+		name,
+		mainFile: HOST_MAIN,
+		outDir,
+		nodeEnabled: true,
+		evalEnabled: false,
+		realmsEnabled: false,
+		intlEnabled: false,
+		temporalEnabled: false,
+		compiled,
+	});
+}
+
+async function listen(server: Server): Promise<number> {
+	await new Promise<void>((resolve, reject) => {
+		server.once("error", reject);
+		server.listen(0, "127.0.0.1", resolve);
+	});
+	const address = server.address();
+	if (address === null || typeof address === "string") {
+		throw new Error("missing loopback server address");
+	}
+	return address.port;
+}
+
+function runClient(binary: string, env: NodeJS.ProcessEnv): Promise<string> {
+	return new Promise<string>((resolve, reject) => {
+		const child = spawn(binary, [], {
+			stdio: ["ignore", "pipe", "pipe"],
+			env: { ...process.env, ...env },
+		});
+		let stdout = "";
+		let stderr = "";
+		child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
+		child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
+		const timer = setTimeout(() => {
+			child.kill();
+			reject(new Error(`${path.basename(binary)} timed out`));
+		}, 5000);
+		child.once("exit", (code) => {
+			clearTimeout(timer);
+			if (code === 0) resolve(stdout);
+			else reject(new Error(`${path.basename(binary)} failed: ${stderr}${stdout}`));
+		});
+	});
+}
+
 describe("node:http outbound client", () => {
 	let binaries: Array<string>;
 	let earlyCloseBinaries: Array<string>;
+	let reusedCloseBinary: string;
 
 	beforeAll(() => {
 		binaries = [true, false].map((compiled) =>
-			buildNativeBinary({
-				fixture: "tests/local/node-http-client-loopback.cjs",
-				name: compiled ? "node-http-client-compiled" : "node-http-client-interpreted",
-				mainFile: HOST_MAIN,
-				outDir,
-				nodeEnabled: true,
-				evalEnabled: false,
-				realmsEnabled: false,
-				intlEnabled: false,
-				temporalEnabled: false,
+			buildClient(
+				"tests/local/node-http-client-loopback.cjs",
+				compiled ? "node-http-client-compiled" : "node-http-client-interpreted",
 				compiled,
-			}),
+			),
 		);
 		earlyCloseBinaries = [true, false].map((compiled) =>
-			buildNativeBinary({
-				fixture: "tests/local/node-http-client-early-close.cjs",
-				name: compiled
+			buildClient(
+				"tests/local/node-http-client-early-close.cjs",
+				compiled
 					? "node-http-client-early-close-compiled"
 					: "node-http-client-early-close-interpreted",
-				mainFile: HOST_MAIN,
-				outDir,
-				nodeEnabled: true,
-				evalEnabled: false,
-				realmsEnabled: false,
-				intlEnabled: false,
-				temporalEnabled: false,
 				compiled,
-			}),
+			),
+		);
+		reusedCloseBinary = buildClient(
+			"tests/local/node-http-client-reused-close.cjs",
+			"node-http-client-reused-close",
+			true,
 		);
 	});
 
@@ -79,37 +121,11 @@ describe("node:http outbound client", () => {
 				);
 			});
 		});
-		await new Promise<void>((resolve, reject) => {
-			server.once("error", reject);
-			server.listen(0, "127.0.0.1", resolve);
-		});
-		const address = server.address();
-		if (address === null || typeof address === "string") {
-			throw new Error("missing early-close server address");
-		}
+		const port = await listen(server);
 		try {
 			for (const binary of earlyCloseBinaries) {
-				const output = await new Promise<string>((resolve, reject) => {
-					const child = spawn(binary, [], {
-						stdio: ["ignore", "pipe", "pipe"],
-						env: {
-							...process.env,
-							MAL_HTTP_EARLY_CLOSE_PORT: String(address.port),
-						},
-					});
-					let stdout = "";
-					let stderr = "";
-					child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
-					child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
-					const timer = setTimeout(() => {
-						child.kill();
-						reject(new Error("early-close client timed out"));
-					}, 5000);
-					child.once("exit", (code) => {
-						clearTimeout(timer);
-						if (code === 0) resolve(stdout);
-						else reject(new Error(`early-close client failed: ${stderr}${stdout}`));
-					});
+				const output = await runClient(binary, {
+					MAL_HTTP_EARLY_CLOSE_PORT: String(port),
 				});
 				expect(output).toContain("HTTP CLIENT EARLY CLOSE PASS");
 			}
@@ -117,6 +133,57 @@ describe("node:http outbound client", () => {
 			await new Promise<void>((resolve) => {
 				server.close(() => resolve());
 			});
+		}
+	});
+
+	it("gives Node's errors when a server drops a reused keep-alive socket", async () => {
+		const closings = [
+			{
+				close: (socket: Socket) => socket.end(),
+				error: { message: "socket hang up", code: "ECONNRESET" },
+			},
+			{
+				close: (socket: Socket) => socket.resetAndDestroy(),
+				error: {
+					message: "read ECONNRESET",
+					code: "ECONNRESET",
+					syscall: "read",
+					errno: -os.constants.errno.ECONNRESET,
+				},
+			},
+		];
+		for (const { close, error } of closings) {
+			let droppedReusedSocket = false;
+			const server = createServer((socket) => {
+				let pending = "";
+				let served = 0;
+				socket.on("error", () => {});
+				socket.on("data", (chunk) => {
+					pending += chunk.toString("latin1");
+					while (pending.includes("\r\n\r\n")) {
+						pending = pending.slice(pending.indexOf("\r\n\r\n") + 4);
+						served++;
+						if (served === 1) {
+							socket.write("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
+						} else {
+							droppedReusedSocket = true;
+							close(socket);
+						}
+					}
+				});
+			});
+			const port = await listen(server);
+			try {
+				const output = await runClient(reusedCloseBinary, {
+					MAL_HTTP_REUSED_CLOSE_PORT: String(port),
+				});
+				expect(droppedReusedSocket).toBe(true);
+				expect(JSON.parse(output)).toEqual(error);
+			} finally {
+				await new Promise<void>((resolve) => {
+					server.close(() => resolve());
+				});
+			}
 		}
 	});
 });

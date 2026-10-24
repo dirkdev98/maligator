@@ -21,8 +21,10 @@
 #include "host.h"
 #include "http_client.h"
 #include "intrinsics.h"
+#include "node_inspect.h"
 #include "node_module.h"
 #include "node_net.h"
+#include "posix_fs.h"
 #include "mal_tls.h"
 #include "node_stream.h"
 #include "node_buffer.h"
@@ -243,6 +245,8 @@ typedef struct MalNodeHttpRequestState {
     usize active_write_bytes;
     u64 next_write_token;
     u64 ready_write_token;
+    // The framing an implicit commit asked for, read by a writeHead that a wrapper reaches.
+    i64 implicit_length;
     // A write acknowledgement waits here while another ready kind holds the queue slot.
     bool write_ready_pending;
     MalNodeHttpRequestBody *body_head;
@@ -266,6 +270,9 @@ typedef struct MalNodeHttpRequestState {
     bool response_succeeded;
     bool response_failed;
     bool committing_headers;
+    bool head_committed;
+    bool implicit_commit;
+    bool implicit_streaming;
     bool ending;
     bool ended;
     bool response_indexed;
@@ -967,6 +974,19 @@ static void http_define_own(
 static MalValue http_ascii_value(MalVm *vm, const char *bytes, usize length) {
     return mal_value_from_string(
         mal_string_new_ascii(&vm->heap, (const byte *) bytes, length));
+}
+
+static bool http_native_is(MalValue value, MalNativeFunctionCallback callback) {
+    return mal_value_is_native_function_object(value)
+        && mal_value_to_native_function_object(value)->callback == callback;
+}
+
+static void http_throw_headers_sent(MalVm *vm, const char *action) {
+    char message[64];
+    snprintf(message, sizeof message,
+             "Cannot %s headers after they are sent to the client", action);
+    mal_node_throw_code(
+        vm, MAL_INTRINSIC_ERROR_PROTOTYPE, message, "ERR_HTTP_HEADERS_SENT");
 }
 
 static MalValue http_socket_address(
@@ -1841,51 +1861,80 @@ static bool http_response_headers_reserve(
     return true;
 }
 
-static MalValue http_response_set_header(
-    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
-    MalValue new_target, MalValue callee) {
-    (void) new_target;
-    (void) callee;
-    MalNodeHttpRequestState *state = http_response_state(receiver);
-    if (state == nullptr || state->ending || state->ended
-        || state->response_in_flight || state->committing_headers) {
+/* Node's ERR_HTTP_HEADERS_SENT once the head is committed. A response without a live
+ * exchange, or one serializing its head right now, rejects changes as well. */
+static bool http_response_headers_mutable(
+    MalVm *vm, MalNodeHttpRequestState *state, const char *action) {
+    if (state != nullptr && state->head_committed) {
+        http_throw_headers_sent(vm, action);
+        return false;
+    }
+    if (state == nullptr || state->committing_headers) {
         mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
                            "ServerResponse is not writable");
+        return false;
+    }
+    return true;
+}
+
+// appendHeader's value list: one level of each array, in order.
+static MalValue http_header_values_concat(MalVm *vm, MalValue first, MalValue second) {
+    MalValue parts[] = {first, second};
+    MalRootSpan root;
+    mal_gc_root(&root, parts, countof(parts));
+    u64 count = 0;
+    for (usize i = 0; i < countof(parts); i++) {
+        count += mal_value_is_array_object(parts[i])
+            ? mal_array_object_length(mal_value_to_array_object(parts[i])) : 1;
+    }
+    if (count > INT32_MAX) {
+        mal_gc_unroot(&root);
+        mal_vm_throw_allocation_error(vm);
         return mal_value_new_undefined();
     }
-    if (argc < 2) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
-                           "setHeader requires a name and value");
-        return mal_value_new_undefined();
+    MalArrayObject *combined = mal_intrinsic_new_dense_array(vm, (u32) count);
+    u32 index = 0;
+    for (usize i = 0; i < countof(parts); i++) {
+        if (!mal_value_is_array_object(parts[i])) {
+            mal_array_object_store(combined, mal_key_index(index++), parts[i]);
+            continue;
+        }
+        MalArrayObject *array = mal_value_to_array_object(parts[i]);
+        for (u32 j = 0; j < mal_array_object_length(array); j++) {
+            MalValue element = mal_value_new_undefined();
+            (void) mal_array_object_dense_get(array, j, &element);
+            mal_array_object_store(combined, mal_key_index(index++), element);
+        }
     }
+    mal_gc_unroot(&root);
+    return mal_value_from_array_object(combined);
+}
+
+static bool http_response_store_header(
+    MalVm *vm, MalNodeHttpRequestState *state, MalValue name_value,
+    MalValue value, bool append) {
     MalNodeHttpResponseNameView name;
-    if (!http_response_name_view(vm, args[0], &name)) {
-        return mal_value_new_undefined();
-    }
-    if (!http_header_value_valid(vm, args[1])) {
-        return mal_value_new_undefined();
-    }
-    if (state->ending || state->ended || state->response_in_flight
-        || state->committing_headers) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
-                           "ServerResponse is not writable");
-        return mal_value_new_undefined();
+    // Converting the value runs user code, which can commit the head meanwhile.
+    if (!http_response_name_view(vm, name_value, &name)
+        || !http_header_value_valid(vm, value)
+        || !http_response_headers_mutable(vm, state, append ? "append" : "set")) {
+        return false;
     }
     i64 index = http_response_header_view_index(state, &name);
     if (index < 0) {
         if (state->response_header_count == MAL_NODE_HTTP_MAX_RESPONSE_HEADERS) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
                                "Too many response headers");
-            return mal_value_new_undefined();
+            return false;
         }
         if (!http_response_headers_reserve(
                 state, state->response_header_count + 1)) {
             mal_vm_throw_error(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE,
                                "Response header allocation failed");
-            return mal_value_new_undefined();
+            return false;
         }
         char *stored_name = http_response_name_materialize(vm, &name);
-        if (stored_name == nullptr) return mal_value_new_undefined();
+        if (stored_name == nullptr) return false;
         index = (i64) state->response_header_count++;
         state->response_headers[index].name = stored_name;
         state->response_headers[index].name_len = name.length;
@@ -1896,11 +1945,43 @@ static MalValue http_response_set_header(
             mal_perf_stats.http_response_header_max_count =
                 state->response_header_count;
         }
+    } else if (append) {
+        value = http_header_values_concat(
+            vm, state->response_headers[index].value, value);
+        if (vm->completion.kind == MAL_COMPLETION_THROW) return false;
     } else {
         MAL_PERF_COUNT(http_response_header_replacements);
         MAL_PERF_COUNT(http_response_header_allocation_free_lookups);
     }
-    state->response_headers[index].value = args[1];
+    state->response_headers[index].value = value;
+    return true;
+}
+
+static void http_response_delete_header(MalNodeHttpRequestState *state, i64 index) {
+    free(state->response_headers[index].name);
+    for (usize i = (usize) index + 1; i < state->response_header_count; i++) {
+        state->response_headers[i - 1] = state->response_headers[i];
+    }
+    state->response_header_count--;
+}
+
+static MalValue http_response_set_header(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) new_target;
+    (void) callee;
+    MalNodeHttpRequestState *state = http_response_state(receiver);
+    if (!http_response_headers_mutable(vm, state, "set")) {
+        return mal_value_new_undefined();
+    }
+    if (argc < 2) {
+        mal_vm_throw_error(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                           "setHeader requires a name and value");
+        return mal_value_new_undefined();
+    }
+    if (!http_response_store_header(vm, state, args[0], args[1], false)) {
+        return mal_value_new_undefined();
+    }
     return receiver;
 }
 
@@ -1938,12 +2019,8 @@ static MalValue http_response_remove_header(
     (void) new_target;
     (void) callee;
     MalNodeHttpRequestState *state = http_response_state(receiver);
-    if (state == nullptr || state->ending || state->ended || argc < 1) {
-        return mal_value_new_undefined();
-    }
-    if (state->response_in_flight || state->committing_headers) {
-        mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
-                           "ServerResponse is not writable");
+    if (state == nullptr || argc < 1) return mal_value_new_undefined();
+    if (!http_response_headers_mutable(vm, state, "remove")) {
         return mal_value_new_undefined();
     }
     MalNodeHttpResponseNameView name;
@@ -1952,13 +2029,7 @@ static MalValue http_response_remove_header(
     }
     i64 index = http_response_header_view_index(state, &name);
     MAL_PERF_COUNT(http_response_header_allocation_free_lookups);
-    if (index >= 0) {
-        free(state->response_headers[index].name);
-        for (usize i = (usize) index + 1; i < state->response_header_count; i++) {
-            state->response_headers[i - 1] = state->response_headers[i];
-        }
-        state->response_header_count--;
-    }
+    if (index >= 0) http_response_delete_header(state, index);
     return mal_value_new_undefined();
 }
 
@@ -2016,6 +2087,9 @@ static MalValue http_response_get_header_names(
 }
 
 static bool http_response_start(
+    MalVm *vm, MalNodeHttpRequestState *state, MalValue receiver,
+    i64 automatic_length, bool streaming);
+static bool http_response_start_implicit(
     MalVm *vm, MalNodeHttpRequestState *state, MalValue receiver,
     i64 automatic_length, bool streaming);
 static bool http_response_pump(MalNodeHttpRequestState *state);
@@ -2134,7 +2208,7 @@ static MalValue http_response_write(
     if (!http_response_enqueue(vm, state, bytes, length, callback, false)) {
         return mal_value_new_undefined();
     }
-    if (!http_response_start(vm, state, receiver, -1, true)) {
+    if (!http_response_start_implicit(vm, state, receiver, -1, true)) {
         http_response_rollback_enqueue(state, previous_tail);
         return mal_value_new_undefined();
     }
@@ -3135,7 +3209,11 @@ static bool http_response_start_commit(
     }
     byte *status_message = nullptr;
     const char *reason = http_status_reason((int) status_number);
-    if (!mal_value_is_undefined(status_message_value)) {
+    if (mal_value_is_nil(status_message_value)) {
+        // Node's writeHead, which commits its implicit heads too, records the default.
+        http_define(vm, receiver, "statusMessage", mal_value_from_string(
+            mal_intrinsic_ascii(vm, (const byte *) reason)));
+    } else {
         usize status_message_length;
         if (!http_header_value_bytes(
                 vm, status_message_value, &status_message,
@@ -3174,6 +3252,7 @@ static bool http_response_start_commit(
         return false;
     }
     state->response_in_flight = true;
+    state->head_committed = true;
     http_define(vm, receiver, "headersSent", mal_value_new_boolean(true));
     return true;
 }
@@ -3192,6 +3271,219 @@ static bool http_response_start(
         vm, state, receiver, automatic_length, streaming);
     state->committing_headers = false;
     return started;
+}
+
+static void http_throw_invalid_status(MalVm *vm, MalValue value) {
+    MalString *string;
+    if (!mal_vm_to_string(vm, value, &string)) return;
+    usize length;
+    byte *text = mal_string_to_utf8(string, &length);
+    char *message = text == nullptr ? nullptr : malloc(length + 32);
+    if (message == nullptr) {
+        free(text);
+        mal_vm_throw_allocation_error(vm);
+        return;
+    }
+    snprintf(message, length + 32, "Invalid status code: %.*s", (int) length,
+             (const char *) text);
+    free(text);
+    mal_node_throw_code(vm, MAL_INTRINSIC_RANGE_ERROR_PROTOTYPE, message,
+                        "ERR_HTTP_INVALID_STATUS_CODE");
+    free(message);
+}
+
+static void http_throw_invalid_header_list(MalVm *vm, MalValue headers) {
+    MalTextBuffer text = {0};
+    mal_text_buffer_append_ascii(
+        &text, (const byte *) "The argument 'headers' is invalid. Received ");
+    MalNodeInspectOptions options = {.options = mal_value_new_undefined()};
+    if (!mal_node_util_inspect_into(vm, &text, headers, &options)) {
+        mal_text_buffer_dispose(&text);
+        return;
+    }
+    usize length;
+    byte *message = mal_string_to_utf8(mal_text_buffer_finish(&vm->heap, &text), &length);
+    if (message == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return;
+    }
+    mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, (const char *) message,
+                        "ERR_INVALID_ARG_VALUE");
+    free(message);
+}
+
+/* writeHead's headers: an object's own enumerable keys replace headers as setHeader
+ * does, and a flat [name, value, ...] list first removes its names, then appends
+ * each pair so that repeated names all reach the wire. */
+static bool http_response_merge_head_headers(
+    MalVm *vm, MalNodeHttpRequestState *state, MalValue headers) {
+    MalValue roots[] = {
+        headers, mal_value_new_undefined(), mal_value_new_undefined(),
+        mal_value_new_undefined(),
+    };
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    bool ok = true;
+    if (mal_value_is_array_object(roots[0])) {
+        MalArrayObject *list = mal_value_to_array_object(roots[0]);
+        if (mal_array_object_length(list) % 2 != 0) {
+            http_throw_invalid_header_list(vm, roots[0]);
+            ok = false;
+        }
+        for (u32 i = 0; ok && i < mal_array_object_length(list); i += 2) {
+            ok = mal_vm_get_property(vm, roots[0], mal_key_index(i), &roots[1]);
+            // Node's removeHeader("") finds nothing rather than rejecting the name.
+            if (!ok || (mal_value_is_string(roots[1])
+                        && mal_string_length(mal_value_to_string(roots[1])) == 0)) {
+                continue;
+            }
+            MalNodeHttpResponseNameView name;
+            ok = http_response_name_view(vm, roots[1], &name)
+                && http_response_headers_mutable(vm, state, "remove");
+            if (!ok) break;
+            i64 index = http_response_header_view_index(state, &name);
+            if (index >= 0) http_response_delete_header(state, index);
+        }
+        for (u32 i = 0; ok && i < mal_array_object_length(list); i += 2) {
+            ok = mal_vm_get_property(vm, roots[0], mal_key_index(i), &roots[1])
+                && mal_vm_get_property(vm, roots[0], mal_key_index(i + 1), &roots[2]);
+            if (ok && mal_value_is_truthy(roots[1])) {
+                ok = http_response_store_header(vm, state, roots[1], roots[2], true);
+            }
+        }
+    } else if (mal_value_is_object(roots[0])) {
+        ok = mal_vm_own_property_keys(vm, roots[0], &roots[3]);
+        MalArrayObject *keys = ok ? mal_value_to_array_object(roots[3]) : nullptr;
+        for (u32 i = 0; ok && i < mal_array_object_length(keys); i++) {
+            (void) mal_array_object_dense_get(keys, i, &roots[1]);
+            if (!mal_value_is_string(roots[1])
+                || mal_string_length(mal_value_to_string(roots[1])) == 0) {
+                continue;
+            }
+            MalKey key;
+            bool present;
+            MalPropertyDesc desc;
+            ok = mal_vm_value_to_property_key(vm, roots[1], &key)
+                && mal_vm_get_own_property(vm, roots[0], key, &present, &desc);
+            if (!ok || !present || !(desc.flags & MAL_PROPERTY_ENUMERABLE)) continue;
+            ok = mal_vm_get_property(vm, roots[0], key, &roots[2])
+                && http_response_store_header(vm, state, roots[1], roots[2], false);
+        }
+    }
+    mal_gc_unroot(&root);
+    return ok;
+}
+
+// Node's ServerResponse.prototype.writeHead. The head commits here, so it is framed
+// as Node frames a head that writeHead stored: chunked unless it has a length.
+static MalValue http_response_write_head(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) new_target;
+    (void) callee;
+    MalNodeHttpRequestState *state = http_response_state(receiver);
+    if (!http_response_headers_mutable(vm, state, "write")) {
+        return mal_value_new_undefined();
+    }
+    MalValue roots[] = {
+        receiver,
+        argc > 0 ? args[0] : mal_value_new_undefined(),
+        argc > 1 ? args[1] : mal_value_new_undefined(),
+        argc > 2 ? args[2] : mal_value_new_undefined(),
+        mal_value_new_undefined(),
+    };
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    f64 number;
+    bool ok = mal_vm_to_number(vm, roots[1], &number);
+    i32 status = ok ? mal_ops_number_to_i32(number) : 0;
+    if (ok && (status < 100 || status > 999)) {
+        http_throw_invalid_status(vm, roots[1]);
+        ok = false;
+    }
+    if (ok && mal_value_is_string(roots[2])) {
+        http_define(vm, roots[0], "statusMessage", roots[2]);
+    } else if (ok) {
+        ok = mal_vm_get_static(vm, roots[0], (const byte *) "statusMessage", &roots[4]);
+        if (ok && !mal_value_is_truthy(roots[4])) {
+            http_define(vm, roots[0], "statusMessage", mal_value_from_string(
+                mal_intrinsic_ascii(vm, (const byte *) http_status_reason(status))));
+        }
+        if (mal_value_is_nil(roots[3])) roots[3] = roots[2];
+    }
+    if (ok) {
+        http_define(vm, roots[0], "statusCode", mal_value_from_i32(status));
+        ok = http_response_merge_head_headers(vm, state, roots[3]);
+    }
+    if (ok && state->response_failed) {
+        // With the exchange gone the head is only recorded, as Node stores it unsent.
+        state->head_committed = true;
+        http_define(vm, roots[0], "headersSent", mal_value_new_boolean(true));
+    } else if (ok) {
+        bool implicit = state->implicit_commit;
+        ok = http_response_start(
+            vm, state, roots[0], implicit ? state->implicit_length : -1,
+            !implicit || state->implicit_streaming);
+    }
+    mal_gc_unroot(&root);
+    return ok ? receiver : mal_value_new_undefined();
+}
+
+// Node's ServerResponse.prototype._implicitHeader.
+static MalValue http_response_implicit_header(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) args;
+    (void) argc;
+    (void) new_target;
+    (void) callee;
+    MalValue roots[] = {receiver, mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    if (mal_vm_get_static(vm, roots[0], (const byte *) "statusCode", &roots[1])) {
+        (void) http_call_method(vm, roots[0], "writeHead", &roots[1], 1);
+    }
+    mal_gc_unroot(&root);
+    return mal_value_new_undefined();
+}
+
+/* Node commits an implicit head through this._implicitHeader(), which calls
+ * this.writeHead(this.statusCode); middleware such as on-headers wraps writeHead to
+ * adjust headers first. Untouched methods commit directly, and a wrapper that
+ * returns without committing still gets the head that the write needs. */
+static bool http_response_start_implicit(
+    MalVm *vm, MalNodeHttpRequestState *state, MalValue receiver,
+    i64 automatic_length, bool streaming) {
+    if (state->head_committed) return true;
+    MalValue roots[] = {receiver, mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    bool ok = mal_vm_get_static(
+        vm, roots[0], (const byte *) "_implicitHeader", &roots[1]);
+    bool implicit_header_wrapped =
+        ok && !http_native_is(roots[1], http_response_implicit_header);
+    bool write_head_wrapped = false;
+    if (ok && !implicit_header_wrapped) {
+        ok = mal_vm_get_static(vm, roots[0], (const byte *) "writeHead", &roots[1]);
+        write_head_wrapped = ok && !http_native_is(roots[1], http_response_write_head);
+    }
+    if (implicit_header_wrapped || write_head_wrapped) {
+        state->implicit_commit = true;
+        state->implicit_length = automatic_length;
+        state->implicit_streaming = streaming;
+        if (implicit_header_wrapped) {
+            mal_vm_call_value(vm, roots[1], roots[0], nullptr, 0);
+        } else {
+            (void) http_response_implicit_header(
+                vm, roots[0], nullptr, 0, mal_value_new_undefined(),
+                mal_value_new_undefined());
+        }
+        state->implicit_commit = false;
+        ok = vm->completion.kind != MAL_COMPLETION_THROW;
+    }
+    ok = ok && http_response_start(vm, state, roots[0], automatic_length, streaming);
+    mal_gc_unroot(&root);
+    return ok;
 }
 
 static bool http_response_pump(MalNodeHttpRequestState *state) {
@@ -3405,6 +3697,11 @@ static void http_response_dispatch_terminal(
             vm, request->response, "writableFinished",
             mal_value_new_boolean(true));
         http_emit(vm, request->response, "finish");
+        if (vm->completion.kind != MAL_COMPLETION_THROW) {
+            http_define(
+                vm, request->response, "destroyed", mal_value_new_boolean(true));
+            http_emit(vm, request->response, "close");
+        }
     } else if (!mal_value_is_undefined(request->response)) {
         http_define(
             vm, request->response, "destroyed",
@@ -3501,7 +3798,7 @@ static MalValue http_response_end(
         state->ending = false;
         return mal_value_new_undefined();
     }
-    if (!http_response_start(
+    if (!http_response_start_implicit(
             vm, state, receiver, fresh_response ? (i64) length : -1,
             !fresh_response)) {
         http_response_rollback_enqueue(state, previous_tail);
@@ -3751,6 +4048,7 @@ static void http_request_fail(MalNodeHttpRequestState *state, const char *messag
     }
     if (!state->ended && state->conn != nullptr) {
         state->response_in_flight = true;
+        state->head_committed = true;
         mal_http_conn_on_response_complete(
             state->conn, http_response_complete, state);
         mal_http_conn_respond(
@@ -3908,6 +4206,44 @@ static MalValue http_client_error(MalVm *vm, const char *message) {
         .value = mal_value_new_undefined(),
     };
     return error;
+}
+
+/* Node's error for a failed exchange: a peer that hangs up before any response gives
+ * "socket hang up" with ECONNRESET, a failed socket call gives libuv's
+ * "read ECONNRESET" with errno, code and syscall, and a deadline gives ETIMEDOUT. */
+static MalValue http_client_failure_error(
+    MalVm *vm, bool hung_up, const MalHttpClientResult *result) {
+    MalValue roots[] = {mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    const char *code = nullptr;
+    const char *syscall = nullptr;
+    if (hung_up) {
+        roots[0] = http_client_error(vm, "socket hang up");
+        code = "ECONNRESET";
+    } else if (result != nullptr && result->failure == MAL_HTTP_CLIENT_FAILURE_SOCKET) {
+        code = mal_posix_fs_errno_name(result->error_number);
+        syscall = result->syscall;
+        char message[64];
+        snprintf(message, sizeof message, "%s %s", syscall, code);
+        roots[0] = http_client_error(vm, message);
+        http_define(vm, roots[0], "errno", mal_value_from_i32(-result->error_number));
+    } else {
+        roots[0] = http_client_error(vm, result == nullptr ? nullptr : result->error);
+        if (result != nullptr && result->failure == MAL_HTTP_CLIENT_FAILURE_TIMEOUT) {
+            code = "ETIMEDOUT";
+        }
+    }
+    if (code != nullptr) {
+        roots[1] = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) code));
+        http_define(vm, roots[0], "code", roots[1]);
+    }
+    if (syscall != nullptr) {
+        roots[1] = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) syscall));
+        http_define(vm, roots[0], "syscall", roots[1]);
+    }
+    mal_gc_unroot(&root);
+    return roots[0];
 }
 
 static bool http_client_response_headers(
@@ -4171,27 +4507,18 @@ static void http_client_dispatch_terminal(
     MalValue error = state->destroy_error;
     MalRootSpan root;
     mal_gc_root(&root, &error, 1);
+    MalHttpClientFailure failure = result == nullptr
+        ? MAL_HTTP_CLIENT_FAILURE_OTHER : result->failure;
     if (!success && mal_value_is_nil(error)) {
-        const char *message = result == nullptr ? nullptr : result->error;
-        if (task->result == MAL_HOST_TERMINAL_CANCELLED && state->ended) {
-            message = "socket hang up";
-        }
-        error = http_client_error(vm, message);
-        if (task->result == MAL_HOST_TERMINAL_CANCELLED && state->ended) {
-            http_define(vm, error, "code",
-                mal_value_from_string(
-                    mal_intrinsic_ascii(vm, (const byte *) "ECONNRESET")));
-        }
-        if (result != nullptr && result->timed_out) {
-            http_define(vm, error, "code",
-                mal_value_from_string(
-                    mal_intrinsic_ascii(vm, (const byte *) "ETIMEDOUT")));
-        }
+        error = http_client_failure_error(
+            vm, failure == MAL_HTTP_CLIENT_FAILURE_PEER_CLOSED
+                || (task->result == MAL_HOST_TERMINAL_CANCELLED && state->ended),
+            result);
     }
     // Node's contract for a socket deadline: 'timeout' first, then the error the
     // deadline caused, then 'close'. This runs once per request, so a listener that
     // destroys the request from 'timeout' cannot produce a second terminal pass.
-    if (!success && result != nullptr && result->timed_out
+    if (!success && failure == MAL_HTTP_CLIENT_FAILURE_TIMEOUT
         && vm->completion.kind != MAL_COMPLETION_THROW) {
         http_emit(vm, state->request, "timeout");
     }
@@ -5729,6 +6056,12 @@ void mal_host_install_node_http(
     mal_intrinsic_define_method_n(
         vm, mal_value_to_object(roots[2]), (const byte *) "getHeaderNames", 0,
         http_response_get_header_names);
+    mal_intrinsic_define_method_n(
+        vm, mal_value_to_object(roots[2]), (const byte *) "writeHead", 3,
+        http_response_write_head);
+    mal_intrinsic_define_method_n(
+        vm, mal_value_to_object(roots[2]), (const byte *) "_implicitHeader", 0,
+        http_response_implicit_header);
     mal_intrinsic_define_method_n(
         vm, mal_value_to_object(roots[2]), (const byte *) "write", 3,
         http_response_write);

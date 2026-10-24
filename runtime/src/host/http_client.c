@@ -74,6 +74,7 @@ typedef struct MalHttpClient {
     bool connecting;
     bool read_ended;
     bool read_failed;
+    int read_error;
     bool request_chunked;
     bool request_final_queued;
     bool request_complete;
@@ -293,10 +294,31 @@ static void client_complete(
     client_destroy(client);
 }
 
-static void client_fail(MalHttpClient *client, const char *message) {
+static void client_fail_as(
+    MalHttpClient *client, const char *message, MalHttpClientFailure failure,
+    int error_number, const char *syscall) {
     MalHttpClientResult *result = calloc(1, sizeof(*result));
-    if (result != nullptr) result->error = client_copy(message, strlen(message));
+    if (result != nullptr) {
+        result->error = client_copy(message, strlen(message));
+        result->failure = failure;
+        result->error_number = error_number;
+        result->syscall = syscall;
+    }
     client_complete(client, MAL_HOST_TERMINAL_ERROR, result);
+}
+
+static void client_fail(MalHttpClient *client, const char *message) {
+    client_fail_as(client, message, MAL_HTTP_CLIENT_FAILURE_OTHER, 0, nullptr);
+}
+
+// TLS failures carry their own message; a plain read failure carries its errno.
+static void client_fail_read(MalHttpClient *client) {
+    if (client->tls_error != nullptr) {
+        client_fail(client, client->tls_error);
+    } else {
+        client_fail_as(client, "HTTP response read failed",
+                       MAL_HTTP_CLIENT_FAILURE_SOCKET, client->read_error, "read");
+    }
 }
 
 /*
@@ -314,13 +336,8 @@ static void client_arm_timeout(MalHttpClient *client) {
 }
 
 static void client_timeout_cb(void *data) {
-    MalHttpClient *client = data;
-    MalHttpClientResult *result = calloc(1, sizeof(*result));
-    if (result != nullptr) {
-        result->error = client_copy("HTTP request timed out", 22);
-        result->timed_out = true;
-    }
-    client_complete(client, MAL_HOST_TERMINAL_ERROR, result);
+    client_fail_as(data, "HTTP request timed out", MAL_HTTP_CLIENT_FAILURE_TIMEOUT,
+                   0, nullptr);
 }
 
 static bool client_progress(
@@ -485,17 +502,18 @@ static void client_process_response(MalHttpClient *client) {
         }
         if (result == MAL_HTTP_CODEC_EVENT || consumed > 0) continue;
         if (client->read_failed) {
-            client_fail(client, client->tls_error == nullptr ? "HTTP response read failed" : client->tls_error);
+            client_fail_read(client);
             return;
         }
         if (client->read_ended) {
             result = mal_http_codec_finish(&client->codec);
-            if (result == MAL_HTTP_CODEC_ERROR) {
-                client_fail(client, "Truncated HTTP response");
-                return;
-            }
             if (result == MAL_HTTP_CODEC_EVENT) continue;
-            client_fail(client, "Truncated HTTP response");
+            if (client->response_head_seen) {
+                client_fail(client, "Truncated HTTP response");
+            } else {
+                client_fail_as(client, "HTTP peer closed before responding",
+                               MAL_HTTP_CLIENT_FAILURE_PEER_CLOSED, 0, nullptr);
+            }
             return;
         }
         if (!client_arm_read(client)) {
@@ -645,7 +663,8 @@ static void client_read_ready(void *data) {
                 }
                 return;
             }
-            client_fail(client, client->tls_error == nullptr ? "HTTP response read failed" : client->tls_error);
+            client->read_error = errno;
+            client_fail_read(client);
             return;
         }
         if (!client_arm_read(client)) {
@@ -691,6 +710,7 @@ static void client_read_ready(void *data) {
         if (errno == EINTR) continue;
         if (errno == EAGAIN || errno == EWOULDBLOCK) break;
         client->read_failed = true;
+        client->read_error = errno;
         break;
     }
     MalHost *host = client->host;
@@ -803,7 +823,13 @@ static void client_write_ready(void *data) {
             }
             return;
         }
-        client_fail(client, "HTTP request write failed");
+        // A TLS write only encrypts into a buffer; the socket write happens in the flush.
+        if (client->tls != nullptr) {
+            client_fail(client, "HTTP request write failed");
+        } else {
+            client_fail_as(client, "HTTP request write failed",
+                           MAL_HTTP_CLIENT_FAILURE_SOCKET, errno, "write");
+        }
         return;
     }
     if (client->write_head != nullptr && !client_arm_write(client)) {
