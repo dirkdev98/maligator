@@ -363,6 +363,14 @@ Runtime eval may remove source closure without invalidating authority closure.
 Shared lifetime and fallback rules are recorded in
 [runtime region contracts](docs/decisions/runtime-region-contracts.md).
 
+- [ ] Sort records without a generic comparator call per comparison. The
+      runtime-gap `candidate-ranking` case sorts 4096 `{ id, benefit, cost }` records
+      by `benefit - cost`, then `id`: 25 ns per comparison natively against Node's
+      6.4 (sort 732 against 188 ms over 600 rounds). Every comparison enters the
+      comparator through its generic compiled entry with an argument array, loads
+      the fields through property caches and boxes the result. Deciding number
+      truthiness inline at the comparator's `||` changed nothing, although samples
+      land in `mal_value_is_truthy_primitive`.
 - [ ] Complete shared builtin callback invocation contracts beyond the existing
       argument-kind/arity descriptors: receiver, return
       use, invocation multiplicity, retention, and synchronous versus deferred
