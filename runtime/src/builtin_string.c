@@ -2745,6 +2745,35 @@ static inline bool mal_builtin_string_ascii_case_word(u64 *word, bool to_upper, 
 // The general path's Unicode scratch would make every short ASCII conversion save and
 // restore every callee-saved register and guard the stack.
 static __attribute__((noinline)) MalValue mal_builtin_string_case_range_general(MalVm *vm, MalString *string, usize start, usize length, bool to_upper, MalUnicodeLocale locale) {
+    MalStringSegment flat;
+    u8 ascii_units[256];
+    if (locale == MAL_UNICODE_LOCALE_ROOT && length <= sizeof(ascii_units) &&
+        mal_string_try_get_segment(string, start, length, &flat) && flat.latin1) {
+        bool ascii = true;
+        bool changed = false;
+        usize i = 0;
+        for (; ascii && i + sizeof(u64) <= length; i += sizeof(u64)) {
+            u64 word;
+            memcpy(&word, flat.latin1_units + i, sizeof(word));
+            ascii = mal_builtin_string_ascii_case_word(&word, to_upper, &changed);
+            memcpy(ascii_units + i, &word, sizeof(word));
+        }
+        if (ascii && i < length) {
+            u64 word = 0;
+            for (usize k = i; k < length; k++) word |= (u64) flat.latin1_units[k] << (8 * (k - i));
+            ascii = mal_builtin_string_ascii_case_word(&word, to_upper, &changed);
+            for (usize k = i; k < length; k++) ascii_units[k] = (u8) (word >> (8 * (k - i)));
+        }
+        if (ascii) {
+            if (!changed) {
+                MAL_PERF_COUNT(string_case_reuses);
+                return mal_builtin_string_slice(vm, string, start, length);
+            }
+            MAL_PERF_COUNT(string_case_changed_allocations);
+            MAL_PERF_ADD(string_case_changed_code_units, length);
+            return mal_value_from_string(mal_string_new_latin1_copy(&vm->heap, ascii_units, length));
+        }
+    }
     if (locale == MAL_UNICODE_LOCALE_ROOT && length <= MAL_STRING_INLINE_LATIN1_CODE_UNITS) {
         MalStringSegment segment;
         if (mal_string_try_get_segment(string, start, length, &segment)) {

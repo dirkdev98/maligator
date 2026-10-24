@@ -76,6 +76,12 @@ if (["range", "split", "regexp", "nested"].includes(mode)) {
 		"\ud801\udc00",
 		"\ud801\udc28",
 		"x😀Y",
+		"Content-Type: Application/JSON",
+		"application/x-www-form-urlencoded",
+		"MULTIPART/FORM-DATA; BOUNDARY=ABC",
+		"Twenty ASCII units, then é and more",
+		"Ab".repeat(127),
+		"Ab".repeat(130),
 	]) {
 		rows.push(visit(source(text), false), visit(source(text), true));
 	}
