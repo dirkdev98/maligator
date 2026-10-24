@@ -1264,8 +1264,8 @@ static void http_server_response_shapes(MalVm *vm) {
         "_events", "_eventsCount", "_maxListeners", "destroyed", "_malStreamKind",
     };
     static const char *constructor_names[] = {
-        "statusCode", "statusMessage", "headersSent", "finished", "writableEnded",
-        "writableFinished",
+        "statusCode", "statusMessage", "headersSent", "_header", "finished",
+        "writableEnded", "writableFinished",
     };
     static const char *dispatch_names[] = {"socket", "connection"};
     static_assert(countof(parent_names) + countof(constructor_names)
@@ -1511,15 +1511,16 @@ static MalValue http_new_server_response(MalVm *vm) {
     http_server_response_shapes(vm);
     static const char *names[] = {
         "_events", "_eventsCount", "_maxListeners", "destroyed", "_malStreamKind",
-        "statusCode", "statusMessage", "headersSent", "finished", "writableEnded",
-        "writableFinished",
+        "statusCode", "statusMessage", "headersSent", "_header", "finished",
+        "writableEnded", "writableFinished",
     };
     MalValue values[] = {
         roots[1], mal_value_from_i32(0), mal_value_new_undefined(),
         mal_value_new_boolean(false), mal_value_from_i32(STREAM_LEGACY),
         mal_value_from_i32(200), mal_value_new_undefined(),
+        mal_value_new_boolean(false), mal_value_new_null(),
         mal_value_new_boolean(false), mal_value_new_boolean(false),
-        mal_value_new_boolean(false), mal_value_new_boolean(false),
+        mal_value_new_boolean(false),
     };
     http_initialize_shaped_object(
         vm, roots[0], &vm->node_http_server_response_root_append_plan,
@@ -3187,6 +3188,18 @@ static bool http_response_content_length(
     return true;
 }
 
+typedef struct MalNodeHttpHeadText {
+    MalVm *vm;
+    // Rooted by the caller.
+    MalValue *text;
+} MalNodeHttpHeadText;
+
+static void http_response_head_text(void *data, const byte *head, usize length) {
+    MalNodeHttpHeadText *sink = data;
+    *sink->text = mal_value_from_string(
+        mal_string_new_latin1_copy(&sink->vm->heap, (const u8 *) head, length));
+}
+
 static bool http_response_start_commit(
     MalVm *vm, MalNodeHttpRequestState *state, MalValue receiver,
     i64 automatic_length, bool streaming) {
@@ -3266,15 +3279,21 @@ static bool http_response_start_commit(
     mal_http_conn_on_response_complete(state->conn, http_response_complete, state);
     mal_http_conn_on_response_write(
         state->conn, http_response_write_ready, state);
+    // Node's `_header`: the head exactly as it went on the wire.
+    MalValue head_text = mal_value_new_null();
+    MalRootSpan head_root;
+    mal_gc_root(&head_root, &head_text, 1);
+    MalNodeHttpHeadText sink = {vm, &head_text};
     bool started = mal_http_conn_response_start(
         state->conn, (int) status_number, reason,
         headers == nullptr ? "" : headers, headers_length,
         declared_content_length,
         state->suppress_response_body ? 0 : declared_content_length,
-        chunked);
+        chunked, http_response_head_text, &sink);
     free(status_message);
     free(headers);
     if (!started) {
+        mal_gc_unroot(&head_root);
         mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
                            "Failed to start HTTP response");
         return false;
@@ -3282,6 +3301,8 @@ static bool http_response_start_commit(
     state->response_in_flight = true;
     state->head_committed = true;
     http_define(vm, receiver, "headersSent", mal_value_new_boolean(true));
+    http_define(vm, receiver, "_header", head_text);
+    mal_gc_unroot(&head_root);
     return true;
 }
 
@@ -3397,6 +3418,58 @@ static bool http_response_merge_head_headers(
     return ok;
 }
 
+/* The head of a response whose connection failed: status line and headers, without
+ * the framing fields the transport would have added. */
+static bool http_response_record_head(
+    MalVm *vm, MalNodeHttpRequestState *state, MalValue receiver, i32 status) {
+    MalValue message = mal_value_new_undefined();
+    MalRootSpan root;
+    mal_gc_root(&root, &message, 1);
+    byte *reason_bytes = nullptr;
+    usize reason_length = 0;
+    char *headers = nullptr;
+    usize headers_length = 0;
+    char *head = nullptr;
+    usize head_length = 0;
+    usize head_capacity = 0;
+    bool ok = mal_vm_get_static(vm, receiver, (const byte *) "statusMessage", &message)
+        && (mal_value_is_nil(message)
+            || http_header_value_bytes(vm, message, &reason_bytes, &reason_length))
+        && http_response_serialize_headers(vm, state, &headers, &headers_length);
+    mal_gc_unroot(&root);
+    if (ok) {
+        const char *reason = reason_bytes != nullptr
+            ? (const char *) reason_bytes : http_status_reason(status);
+        char status_line[32];
+        int status_length = snprintf(status_line, sizeof status_line, "HTTP/1.1 %d ", status);
+        ok = http_block_append(&head, &head_length, &head_capacity, status_line,
+                               (usize) status_length)
+            && http_block_append(&head, &head_length, &head_capacity, reason,
+                                 reason_bytes != nullptr ? reason_length : strlen(reason))
+            && http_block_append(&head, &head_length, &head_capacity, "\r\n", 2)
+            && http_block_append(&head, &head_length, &head_capacity,
+                                 headers == nullptr ? "" : headers, headers_length)
+            && http_block_append(&head, &head_length, &head_capacity, "\r\n", 2);
+        if (!ok) mal_vm_throw_allocation_error(vm);
+    }
+    free(reason_bytes);
+    free(headers);
+    if (!ok) {
+        free(head);
+        return false;
+    }
+    MalValue head_text = mal_value_new_null();
+    MalRootSpan head_root;
+    mal_gc_root(&head_root, &head_text, 1);
+    http_response_head_text(&(MalNodeHttpHeadText) {vm, &head_text}, (const byte *) head, head_length);
+    free(head);
+    state->head_committed = true;
+    http_define(vm, receiver, "headersSent", mal_value_new_boolean(true));
+    http_define(vm, receiver, "_header", head_text);
+    mal_gc_unroot(&head_root);
+    return true;
+}
+
 // Node's ServerResponse.prototype.writeHead. The head commits here, so it is framed
 // as Node frames a head that writeHead stored: chunked unless it has a length.
 static MalValue http_response_write_head(
@@ -3440,8 +3513,7 @@ static MalValue http_response_write_head(
     }
     if (ok && state->response_failed) {
         // With the exchange gone the head is only recorded, as Node stores it unsent.
-        state->head_committed = true;
-        http_define(vm, roots[0], "headersSent", mal_value_new_boolean(true));
+        ok = http_response_record_head(vm, state, roots[0], status);
     } else if (ok) {
         bool implicit = state->implicit_commit;
         ok = http_response_start(
@@ -5556,8 +5628,9 @@ static MalValue http_server_response_constructor(
         http_server_response_shapes(vm);
         MalValue values[] = {
             mal_value_from_i32(200), mal_value_new_undefined(),
+            mal_value_new_boolean(false), mal_value_new_null(),
             mal_value_new_boolean(false), mal_value_new_boolean(false),
-            mal_value_new_boolean(false), mal_value_new_boolean(false),
+            mal_value_new_boolean(false),
         };
         if (mal_object_try_append_shaped_values(
                 mal_value_to_object(result),
@@ -5573,9 +5646,10 @@ static MalValue http_server_response_constructor(
             http_define_own(vm, result, "statusCode", values[0]);
             http_define_own(vm, result, "statusMessage", values[1]);
             http_define_own(vm, result, "headersSent", values[2]);
-            http_define_own(vm, result, "finished", values[3]);
-            http_define_own(vm, result, "writableEnded", values[4]);
-            http_define_own(vm, result, "writableFinished", values[5]);
+            http_define_own(vm, result, "_header", values[3]);
+            http_define_own(vm, result, "finished", values[4]);
+            http_define_own(vm, result, "writableEnded", values[5]);
+            http_define_own(vm, result, "writableFinished", values[6]);
         }
     }
     return result;

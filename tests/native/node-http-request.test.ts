@@ -66,7 +66,12 @@ describe("node:http request bridge", () => {
 		port: number,
 		path: string,
 		method = "GET",
-	): Promise<{ status: string; headers: Array<[string, string]>; body: string }> {
+	): Promise<{
+		status: string;
+		headers: Array<[string, string]>;
+		head: string;
+		body: string;
+	}> {
 		const response = await new Promise<string>((resolve, reject) => {
 			const socket = createConnection({ host: "127.0.0.1", port }, () => {
 				socket.write(
@@ -85,7 +90,24 @@ describe("node:http request bridge", () => {
 			const colon = line.indexOf(":");
 			return [line.slice(0, colon).toLowerCase(), line.slice(colon + 1).trim()];
 		});
-		return { status, headers, body: response.slice(headEnd + 4) };
+		return {
+			status,
+			headers,
+			head: response.slice(0, headEnd + 4),
+			body: response.slice(headEnd + 4),
+		};
+	}
+
+	function dechunk(body: string): string {
+		let decoded = "";
+		let rest = body;
+		for (;;) {
+			const sizeEnd = rest.indexOf("\r\n");
+			const size = Number.parseInt(rest.slice(0, sizeEnd), 16);
+			if (size === 0) return decoded;
+			decoded += rest.slice(sizeEnd + 2, sizeEnd + 2 + size);
+			rest = rest.slice(sizeEnd + 2 + size + 2);
+		}
 	}
 
 	async function checkWriteHeadAndClose(base: string): Promise<void> {
@@ -152,6 +174,26 @@ describe("node:http request bridge", () => {
 			});
 		}
 		expect(closeEvents).toBe("finish:false,close:true");
+
+		const explicitHead = await rawExchange(port, "/head-explicit-text");
+		const explicitText = JSON.parse(dechunk(explicitHead.body)) as Record<
+			string,
+			unknown
+		>;
+		expect(explicitText.before).toBeNull();
+		expect(explicitText.header).toBe(explicitHead.head);
+		expect(explicitHead.head).toContain("x-head: explicit\r\n");
+
+		const implicitHead = await rawExchange(port, "/head-implicit-text");
+		expect(dechunk(implicitHead.body)).toBe("x");
+		const implicitText: unknown = await fetch(`${base}/head-implicit-status`).then(
+			(response) => response.json(),
+		);
+		expect(implicitText).toBe(implicitHead.head);
+
+		const guarded = await rawExchange(port, "/head-guard");
+		expect(guarded.status).toBe("HTTP/1.1 200 OK");
+		expect(dechunk(guarded.body)).toBe("abc");
 	}
 
 	async function checkBridge(base: string): Promise<void> {
@@ -780,9 +822,9 @@ describe("node:http request bridge", () => {
 		expect(field(line, "incoming_message_shape_append_fallbacks")).toBe(1);
 		expect(field(line, "incoming_message_slot_growths_avoided")).toBe(1105);
 		expect(field(line, "response_constructor_shape_append_batches")).toBe(86);
-		expect(field(line, "response_constructor_shape_append_slots")).toBe(516);
+		expect(field(line, "response_constructor_shape_append_slots")).toBe(602);
 		expect(field(line, "response_constructor_shape_append_fallbacks")).toBe(1);
-		expect(field(line, "response_constructor_slot_growths_avoided")).toBe(430);
+		expect(field(line, "response_constructor_slot_growths_avoided")).toBe(516);
 		expect(field(line, "response_shape_append_batches")).toBe(85);
 		expect(field(line, "response_shape_append_slots")).toBe(170);
 		expect(field(line, "response_shape_append_fallbacks")).toBe(1);

@@ -379,7 +379,9 @@ bool mal_http_conn_response_start(
     usize headers_len,
     i64 declared_content_length,
     i64 expected_body_length,
-    bool chunked) {
+    bool chunked,
+    MalHttpResponseHeadSink head_sink,
+    void *head_data) {
     static const char default_ct[] = "Content-Type: text/plain; charset=utf-8\r\n";
     if (c == nullptr || reason == nullptr || status < 100 || status > 999
         || c->response_started || c->response_ended
@@ -470,6 +472,8 @@ bool mal_http_conn_response_start(
     }
     memcpy(write->bytes + offset, framing, framing_length);
     write->length = total;
+    // The queue may send and free the write before this returns.
+    if (head_sink != nullptr) head_sink(head_data, write->bytes, total);
     c->response_started = true;
     c->response_chunked = chunked;
     c->response_remaining = expected_body_length;
@@ -559,7 +563,7 @@ void mal_http_conn_respond_framed(
     i64 declared_content_length) {
     if (!mal_http_conn_response_start(
             c, status, reason, headers, headers_len,
-            declared_content_length, (i64) body_len, false)) {
+            declared_content_length, (i64) body_len, false, nullptr, nullptr)) {
         conn_close(c);
         return;
     }

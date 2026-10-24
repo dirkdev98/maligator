@@ -132,11 +132,15 @@ void mal_http_conn_respond_framed(
     usize body_len,
     i64 declared_content_length);
 
+/* Receives the response head as it will be sent; the bytes live only for the call. */
+typedef void (*MalHttpResponseHeadSink)(void *data, const byte *head, usize length);
+
 /* Incremental response transport. Start commits the head and selects fixed-length
  * or chunked framing. `expected_body_length` validates transferred bytes separately
  * from framing (HEAD advertises a length but transfers none). Successful writes
  * take ownership of `bytes`; each non-final token is reported after its bytes reach
- * the socket. `end_stream` drives the response-complete callback after flush. */
+ * the socket. `end_stream` drives the response-complete callback after flush. A
+ * non-null `head_sink` sees the head before start returns. */
 bool mal_http_conn_response_start(
     MalHttpConn *conn,
     int status,
@@ -145,7 +149,9 @@ bool mal_http_conn_response_start(
     usize headers_len,
     i64 declared_content_length,
     i64 expected_body_length,
-    bool chunked);
+    bool chunked,
+    MalHttpResponseHeadSink head_sink,
+    void *head_data);
 bool mal_http_conn_response_write_owned(
     MalHttpConn *conn,
     byte *bytes,

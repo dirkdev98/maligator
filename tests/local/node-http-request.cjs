@@ -12,6 +12,7 @@ let abortedUpload = "0:false:false:false";
 let destroyedUpload = "false:false:false:0";
 let malformedUpload = "false:false:false";
 let closeEvents = [];
+const headTexts = {};
 
 Object.defineProperty(Object.prototype, "__httpSocketRealmMarker", {
 	value: "request-realm",
@@ -205,9 +206,9 @@ const server = http.createServer(function (request, response) {
 			Array.isArray(request.rawTrailers),
 			request.trailers !== request.headers,
 			Object.getOwnPropertyNames(response).join(",") ===
-				"_events,_eventsCount,_maxListeners,destroyed,_malStreamKind,statusCode,statusMessage,headersSent,finished,writableEnded,writableFinished,socket,connection",
+				"_events,_eventsCount,_maxListeners,destroyed,_malStreamKind,statusCode,statusMessage,headersSent,_header,finished,writableEnded,writableFinished,socket,connection",
 			Object.keys(response).join(",") ===
-				"_events,_eventsCount,_maxListeners,destroyed,_malStreamKind,statusCode,statusMessage,headersSent,finished,writableEnded,writableFinished,socket,connection",
+				"_events,_eventsCount,_maxListeners,destroyed,_malStreamKind,statusCode,statusMessage,headersSent,_header,finished,writableEnded,writableFinished,socket,connection",
 			visibleDataProperty(response, "socket", request.socket),
 			visibleDataProperty(response, "connection", request.socket),
 			response.socket === response.connection,
@@ -220,6 +221,7 @@ const server = http.createServer(function (request, response) {
 			visibleDataProperty(response, "statusCode", 200),
 			visibleDataProperty(response, "statusMessage", undefined),
 			visibleDataProperty(response, "headersSent", false),
+			visibleDataProperty(response, "_header", null),
 			visibleDataProperty(response, "finished", false),
 			visibleDataProperty(response, "writableEnded", false),
 			visibleDataProperty(response, "writableFinished", false),
@@ -259,6 +261,7 @@ const server = http.createServer(function (request, response) {
 			["statusCode", 200],
 			["statusMessage", undefined],
 			["headersSent", false],
+			["_header", null],
 			["finished", false],
 			["writableEnded", false],
 			["writableFinished", false],
@@ -296,8 +299,8 @@ const server = http.createServer(function (request, response) {
 			request.__httpRequestRealmMarker === "request-realm",
 			!Object.prototype.hasOwnProperty.call(response, "_malStreamKind"),
 			response._malStreamKind === undefined,
-			names.slice(-8).join(",") ===
-				"statusCode,statusMessage,headersSent,finished,writableEnded,writableFinished,socket,connection",
+			names.slice(-9).join(",") ===
+				"statusCode,statusMessage,headersSent,_header,finished,writableEnded,writableFinished,socket,connection",
 			constructorDescriptorsMatch,
 			socketDescriptor.value === request.socket,
 			socketDescriptor.writable === true,
@@ -836,6 +839,44 @@ const server = http.createServer(function (request, response) {
 			return writeHead.call(this, statusCode);
 		};
 		response.end("ended");
+		return;
+	}
+
+	if (request.url === "/head-explicit-text") {
+		response.setHeader("X-Head", "explicit");
+		const before = response._header;
+		response.writeHead(201);
+		response.end(JSON.stringify({ before, header: response._header }));
+		return;
+	}
+
+	if (request.url === "/head-implicit-text") {
+		response.write("x");
+		headTexts.implicit = response._header;
+		response.end();
+		return;
+	}
+
+	if (request.url === "/head-implicit-status") {
+		response.end(JSON.stringify(headTexts.implicit));
+		return;
+	}
+
+	if (request.url === "/head-guard") {
+		// compression before 1.8 commits the head through _header and _implicitHeader.
+		const write = response.write;
+		const end = response.end;
+		response.write = function (chunk) {
+			if (!this._header) this._implicitHeader();
+			return write.call(this, chunk);
+		};
+		response.end = function (chunk) {
+			if (!this._header) this._implicitHeader();
+			return end.call(this, chunk);
+		};
+		response.write("a");
+		response.write("b");
+		response.end("c");
 		return;
 	}
 
