@@ -442,6 +442,27 @@ for (const Ctor of numericKinds)
 		mixedElements(Ctor.from(elementSamples), Float64Array.from(elementSamples)),
 		bucketCounts(Ctor.from(elementSamples), new Float64Array(8)),
 	]);
+// A table in a global binding is a checked view; a shorter table reads undefined.
+let table = null;
+function tableMix(input) {
+	let mix = 0;
+	for (let i = 0; i < input.length; i++)
+		mix = (table[(mix ^ input[i]) & 15] ^ (mix >>> 4)) | 0;
+	return mix;
+}
+const tableInput = Uint8Array.from(elementSamples);
+for (const Ctor of numericKinds) {
+	table = Ctor.from(elementSamples.concat(elementSamples).slice(0, 16));
+	results.push([
+		`table ${Ctor.name}`,
+		tableMix(tableInput),
+		tableMix(Int16Array.from(elementSamples)),
+	]);
+	table = Ctor.from(elementSamples.slice(0, 8));
+	results.push([`short table ${Ctor.name}`, tableMix(tableInput)]);
+}
+table = elementSamples;
+results.push(["table Array", tableMix(tableInput)]);
 // Inner loops run inside their enclosing region and leave through their own header.
 function unionRoots(parents, rounds) {
 	let checksum = 0;

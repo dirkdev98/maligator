@@ -257,15 +257,6 @@ less. A whole-program points-to model over construction Core took 108 s in Node 
 converge and still left generic paths at the hot receivers, so field facts stay
 bounded and consumer-driven as planned below.
 
-- [ ] Unbox typed-array lookup loops. A lookup through a module-level
-      `const FLAGS = new Uint8Array(256)` in a `charCodeAt` loop runs 28 ms against
-      Node's 21, down from 51: reads of a constant holding one Array or TypedArray
-      class carry that class, and the element read's `number | undefined` kind keeps
-      the sum in a double. Each iteration still boxes the string length before the
-      compare, tests the `charCodeAt` result's tag and revalidates the view (buffer,
-      detach, sharing, length tracking, bounds). Removing the loop's TDZ check on
-      `FLAGS` changed nothing. View admission belongs in the preheader once the body
-      cannot detach or resize the buffer.
 - [ ] Keep binary searches off the element-load latency chain. A loop region
       without a counter now keeps `lo`, `hi` and `mid` in integer locals (12 M
       probes 96 to 53 ms, Node 13; random targets 105 to 67 ms, Node 56). Clang

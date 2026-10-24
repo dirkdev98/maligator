@@ -1311,6 +1311,8 @@ function emitNumericLoopRegion(
 	plan: NativeNumericLoopRegionPlan,
 	reps: ReadonlyArray<VmRegisterRepresentation>,
 	propertyCache: string,
+	// The C statement that performs the binding load at an instruction.
+	bindingLoad: (ip: number) => string,
 ): ReadonlyArray<string> {
 	const members = new Set(plan.claimedIps.filter((ip) => ip !== plan.entryIp));
 	const order = numericLoopOrder(fn, plan.id, members, true);
@@ -1454,9 +1456,12 @@ function emitNumericLoopRegion(
 	);
 	// Records exist only for Array views.
 	const arrayOnly = plan.kind === "fixed-numeric" && records.size > 0;
-	// A region reads either strings or element views.
-	const textual =
-		plan.kind === "fixed-numeric" && plan.views.some((view) => view.text === true);
+	const views = plan.kind === "fixed-numeric" ? plan.views : [];
+	const textViews = views.filter((view) => view.text === true);
+	const elementViews = views.filter((view) => view.text !== true);
+	const textObjects = new Set(textViews.map((view) => view.object));
+	// A region reading only strings has one body; element views pick theirs by kind.
+	const textual = textViews.length > 0 && elementViews.length === 0;
 	const boundObject = counter?.boundObject;
 	const lengthLoad =
 		counter !== undefined && boundObject !== undefined
@@ -1471,19 +1476,29 @@ function emitNumericLoopRegion(
 			: undefined;
 	if (boundObject !== undefined && lengthLoad === undefined)
 		throw new Error("Invalid typed loop length load");
-	if (textual) {
-		// The reads come from guarded builtin calls licensed by locked primordials, where a
-		// primitive string's `charCodeAt` is the builtin, so admitting the string suffices.
+	// Inputs and views read these registers, so the loads precede every local.
+	const bindingLoads = order.flatMap((ip) => {
+		const op = fn.instructions[ip]!;
+		if (op.opcode !== "LOAD_GLOBAL" && op.opcode !== "LOAD_CAPTURED") return [];
+		guards.unshift(`!mal_value_is_empty(r${op.dst})`);
+		return [`  ${bindingLoad(ip)}`];
+	});
+	// The reads come from guarded builtin calls licensed by locked primordials, where a
+	// primitive string's `charCodeAt` is the builtin, so admitting the string suffices.
+	if (textViews.length > 0)
 		rangePrelude.push(
-			`  bool ${id}_typed = ${plan.views
+			`  bool ${id}_text = ${textViews
 				.map((view) => `mal_string_unit_span(r${view.object}, &${id}_s${view.object})`)
 				.join(" && ")};`,
-			`  bool ${id}_array = false;`,
 		);
-		if (counter !== undefined && boundObject !== undefined)
-			rangePrelude.push(
-				`  ${local(counter.bound)} = ${id}_typed ? (f64) ${id}_s${boundObject}.length : 0.0;`,
-			);
+	// A primitive string's length is its own, so the string's admission proves the bound.
+	const textBound = boundObject !== undefined && textObjects.has(boundObject);
+	if (counter !== undefined && textBound)
+		rangePrelude.push(
+			`  ${local(counter.bound)} = ${id}_text ? (f64) ${id}_s${boundObject}.length : 0.0;`,
+		);
+	if (textual) {
+		rangePrelude.push(`  bool ${id}_typed = ${id}_text;`, `  bool ${id}_array = false;`);
 		guards.unshift(`${id}_typed`);
 	} else if (plan.kind === "fixed-numeric") {
 		// Views are admitted before the range so a length bound can read the admitted length.
@@ -1492,15 +1507,14 @@ function emitNumericLoopRegion(
 		const typedAdmissions =
 			arrayOnly ||
 			lengthLoad?.opcode === "LOAD_PROPERTY_STATIC_ARRAY_LENGTH" ||
-			(boundObject !== undefined &&
-				!plan.views.some((view) => view.object === boundObject))
+			(boundObject !== undefined && !views.some((view) => view.object === boundObject))
 				? ["false"]
 				: [
-						...plan.views.map(
+						...elementViews.map(
 							(view) =>
 								`mal_vm_fixed_numeric_storage(r${view.object}, 0, ${view.writable}, &${id}_v${view.object})`,
 						),
-						...(lengthLoad?.opcode === "LOAD_PROPERTY_STATIC"
+						...(lengthLoad?.opcode === "LOAD_PROPERTY_STATIC" && !textBound
 							? [
 									`mal_vm_admit_numeric_typed_array_length(vm, r${boundObject}, &${propertyCache}[${lengthLoad.icIndex}], &${id}_lt, &${id}_ll)`,
 								]
@@ -1508,17 +1522,18 @@ function emitNumericLoopRegion(
 					];
 		const typedPossible = typedAdmissions[0] !== "false";
 		rangePrelude.push(
-			...(typedPossible && lengthLoad?.opcode === "LOAD_PROPERTY_STATIC"
+			...(typedPossible && lengthLoad?.opcode === "LOAD_PROPERTY_STATIC" && !textBound
 				? [`  MalTypedArrayObject *${id}_lt = nullptr;`, `  u32 ${id}_ll = 0;`]
 				: []),
 			`  bool ${id}_typed = ${typedAdmissions.join(" && ")};`,
-			`  bool ${id}_array = ${readOnly ? `!${id}_typed && ${plan.views.map((view) => `mal_vm_dense_number_storage(r${view.object}, &${id}_a${view.object})`).join(" && ")}` : "false"};`,
+			`  bool ${id}_array = ${readOnly ? `!${id}_typed && ${elementViews.map((view) => `mal_vm_dense_number_storage(r${view.object}, &${id}_a${view.object})`).join(" && ")}` : "false"};`,
 		);
-		if (counter !== undefined && boundObject !== undefined)
+		if (counter !== undefined && boundObject !== undefined && !textBound)
 			rangePrelude.push(
 				`  ${local(counter.bound)} = ${typedPossible ? `${id}_typed ? (f64) ${id}_v${boundObject}.length : ` : ""}${readOnly ? `${id}_array ? (f64) ${id}_a${boundObject}.length : ` : ""}0.0;`,
 			);
 		guards.unshift(`(${id}_typed || ${id}_array)`);
+		if (textViews.length > 0) guards.unshift(`${id}_text`);
 	}
 	if (counter !== undefined) {
 		const comparison = fn.instructions[counter.comparison]!;
@@ -1552,15 +1567,18 @@ function emitNumericLoopRegion(
 		);
 		guards.length = 0;
 		guards.push(range);
-		for (const view of plan.kind === "fixed-numeric" ? plan.views : []) {
+		for (const view of views) {
 			if (view.checked === true && !view.writable) continue;
 			const low = `(${ascending ? index : last} + ${cF64Literal(view.minOffset)})`;
 			const high = `(${ascending ? last : index} + ${cF64Literal(view.maxOffset + 1)})`;
 			if (view.minOffset !== 0) guards.push(`${low} >= 0.0`);
 			guards.push(`${high} <= UINT32_MAX`);
-			typedViewGuards.push(
-				`(u32) ${high} <= ${id}_${textual ? "s" : "v"}${view.object}.length`,
-			);
+			if (view.text === true) {
+				typedViewGuards.push(`(u32) ${high} <= ${id}_s${view.object}.length`);
+				arrayViewGuards.push(`(u32) ${high} <= ${id}_s${view.object}.length`);
+				continue;
+			}
+			typedViewGuards.push(`(u32) ${high} <= ${id}_v${view.object}.length`);
 			arrayViewGuards.push(`(u32) ${high} <= ${id}_a${view.object}.count`);
 		}
 	}
@@ -1673,10 +1691,10 @@ function emitNumericLoopRegion(
 					return `{ const MalObject *${id}_o = (const MalObject *) mal_value_to_heap(${local(op.object)}); if (__builtin_expect(${id}_o->shape != ${id}_shape${op.icIndex}, 0)) ${restart} MalValue ${id}_f = ((const MalValue *) mal_object_fields_nonempty(${id}_o))[${id}_slot${op.icIndex}]; if (__builtin_expect(!mal_ops_is_number(${id}_f), 0)) ${restart} ${local(op.dst)} = mal_ops_number_as_f64(${id}_f); }`;
 				if (boundObject === undefined || op.object !== boundObject)
 					throw new Error("Invalid numeric loop length load");
-				return `${local(op.dst)} = (f64) ${id}_${mode === "array" ? "a" : mode === "text" ? "s" : "v"}${op.object}.length;`;
+				return `${local(op.dst)} = (f64) ${id}_${textObjects.has(op.object) ? "s" : mode === "array" ? "a" : "v"}${op.object}.length;`;
 			case "CALL": {
 				const argument = op.arguments[0];
-				if (mode !== "text" || argument === undefined)
+				if (!textObjects.has(op.thisValue) || argument === undefined)
 					throw new Error("Invalid numeric loop code unit read");
 				const key = integral.has(argument) ? local(argument) : num(argument);
 				const length = `${id}_s${op.thisValue}.length`;
@@ -1701,9 +1719,11 @@ function emitNumericLoopRegion(
 					return `{ ${bound}MalValue ${id}_e = ${id}_a${op.object}.elements[(u32) ${key}]; if (__builtin_expect(!mal_value_is_heap_type(${id}_e, MAL_HEAP_OBJECT), 0)) ${restart} ${local(op.dst)} = ${id}_e; }`;
 				if (mode === "array")
 					return `{ ${bound}MalValue ${id}_e = ${id}_a${op.object}.elements[(u32) ${key}]; if (__builtin_expect(!mal_ops_is_number(${id}_e), 0)) ${restart} ${local(op.dst)} = mal_ops_number_as_f64(${id}_e); }`;
-				return mode === "f64"
-					? `{ ${bound}${local(op.dst)} = mal_scalar_f64_from_bits(mal_scalar_load_native_u64(${id}_v${op.object}.data + (usize)(u32) ${key} * 8)); }`
-					: `{ ${bound}${local(op.dst)} = ${integral.has(op.dst) ? "(i64) " : ""}mal_vm_fixed_numeric_load(&${id}_v${op.object}, (u32) ${key}); }`;
+				if (mode === "f64")
+					return `{ ${bound}${local(op.dst)} = mal_scalar_f64_from_bits(mal_scalar_load_native_u64(${id}_v${op.object}.data + (usize)(u32) ${key} * 8)); }`;
+				if (mode === "integer" && integral.has(op.dst))
+					return `{ ${bound}${local(op.dst)} = mal_vm_fixed_integer_load(&${id}_v${op.object}, (u32) ${key}); }`;
+				return `{ ${bound}${local(op.dst)} = ${integral.has(op.dst) ? "(i64) " : ""}mal_vm_fixed_numeric_load(&${id}_v${op.object}, (u32) ${key}); }`;
 			}
 			case "STORE_PROPERTY": {
 				if (mode === "array") throw new Error("Invalid dense Array loop store");
@@ -1715,6 +1735,11 @@ function emitNumericLoopRegion(
 			case "REQUIRE_COERCIBLE":
 				// The element load already restarted the iteration for anything but an object.
 				if (!records.has(op.src)) throw new Error("Invalid numeric loop coercible check");
+				return "";
+			// The entry loaded the binding and declined its dead zone; nothing inside stores it.
+			case "LOAD_GLOBAL":
+			case "LOAD_CAPTURED":
+			case "THROW_IF_TDZ":
 				return "";
 			case "CREATE_NUMBER":
 			case "CREATE_F64":
@@ -1920,21 +1945,21 @@ function emitNumericLoopRegion(
 					...((counter?.stride ?? 1) > 1
 						? ["    MAL_PERF_COUNT(fixed_typed_array_stride_regions);"]
 						: []),
-					...(plan.views.some((view) => view.minOffset !== 0 || view.maxOffset !== 0)
+					...(views.some((view) => view.minOffset !== 0 || view.maxOffset !== 0)
 						? ["    MAL_PERF_COUNT(fixed_typed_array_affine_regions);"]
 						: []),
-					...plan.views.map(
+					...elementViews.map(
 						(view) =>
 							`    MAL_PERF_COUNT(fixed_typed_array_region_views[${id}_v${view.object}.kind]);`,
 					),
 					// One bounded specialization keeps kind dispatch out of the established Float64 loop.
-					`    if (${plan.views.map((view) => `${id}_v${view.object}.kind == MAL_TA_FLOAT64`).join(" && ")}) {`,
+					`    if (${elementViews.map((view) => `${id}_v${view.object}.kind == MAL_TA_FLOAT64`).join(" && ")}) {`,
 					"      MAL_PERF_COUNT(fixed_typed_array_region_f64_admissions);",
 					...loopBody("f64").map((line) => `  ${line}`),
 					...(!integerBody
 						? []
 						: [
-								`    } else if (${plan.views.map((view) => `${id}_v${view.object}.kind < MAL_TA_FLOAT32`).join(" && ")}) {`,
+								`    } else if (${elementViews.map((view) => `${id}_v${view.object}.kind < MAL_TA_FLOAT32`).join(" && ")}) {`,
 								...loopBody("integer").map((line) => `  ${line}`),
 							]),
 					"    } else {",
@@ -1963,14 +1988,12 @@ function emitNumericLoopRegion(
 		];
 	return [
 		"{",
-		...(textual
-			? plan.views.map((view) => `  MalStringUnitSpan ${id}_s${view.object} = {0};`)
-			: plan.kind === "fixed-numeric"
-				? plan.views.flatMap((view) => [
-						...(lengthBound ? [] : [`  MalTypedArraySpan ${id}_v${view.object} = {0};`]),
-						...(readOnly ? [`  MalDenseNumberSpan ${id}_a${view.object} = {0};`] : []),
-					])
-				: []),
+		...bindingLoads,
+		...textViews.map((view) => `  MalStringUnitSpan ${id}_s${view.object} = {0};`),
+		...elementViews.flatMap((view) => [
+			...(lengthBound ? [] : [`  MalTypedArraySpan ${id}_v${view.object} = {0};`]),
+			...(readOnly ? [`  MalDenseNumberSpan ${id}_a${view.object} = {0};`] : []),
+		]),
 		...[...flow.kinds].map(([register, kind]) =>
 			records.has(register)
 				? `  MalValue ${local(register)} = MAL_VALUE_UNDEFINED;`
@@ -6426,6 +6449,19 @@ function emitBody(
 				integerLoop,
 				reps,
 				nativeBodyReference(resources, "propertyCache"),
+				(bindingIp) => {
+					const binding = fn.instructions[bindingIp]!;
+					if (binding.opcode === "LOAD_GLOBAL")
+						return `r${binding.dst} = vm->globals[${relocation.globalIndex(binding.index)}];`;
+					if (binding.opcode === "LOAD_CAPTURED")
+						return renderCapturedLoad(
+							binding,
+							bindingIp,
+							instructionContext,
+							relocation,
+						).join(" ");
+					throw new Error("Invalid numeric loop binding load");
+				},
 			))
 				lines.push(`    ${line}`);
 		const numberRecord = numberRecordRegionById.get(ip);

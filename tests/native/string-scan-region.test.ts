@@ -54,6 +54,13 @@ describe("string scan loop regions", () => {
 				"evenUnits",
 				"lastDigitRun",
 				"countWords",
+				"tokenEnd",
+				"crcText",
+				"classWeights",
+				"swappedSum",
+				"lateSum",
+				"fieldEnd",
+				"weighted",
 			])
 				expect(textRegions(pair, name).length > 0, name).toBe(primordials === "locked");
 			const expected = execFileSync(process.execPath, [fixture], { encoding: "utf8" });

@@ -2580,6 +2580,21 @@ static inline f64 mal_vm_fixed_numeric_load(const MalTypedArraySpan *span, u32 i
     return span->kind == MAL_TA_INT32 ? (f64) mal_scalar_i32_from_bits(bits) : (f64) bits;
 }
 
+/** Requires an integer kind below MAL_TA_FLOAT32. */
+static inline i64 mal_vm_fixed_integer_load(const MalTypedArraySpan *span, u32 index) {
+    const byte *at = span->data + (usize) index * span->element_size;
+    if (span->element_size == 1) {
+        u8 bits = mal_scalar_load_native_u8(at);
+        return span->kind == MAL_TA_INT8 ? (i64) mal_scalar_i8_from_bits(bits) : (i64) bits;
+    }
+    if (span->element_size == 2) {
+        u16 bits = mal_scalar_load_native_u16(at);
+        return span->kind == MAL_TA_INT16 ? (i64) mal_scalar_i16_from_bits(bits) : (i64) bits;
+    }
+    u32 bits = mal_scalar_load_native_u32(at);
+    return span->kind == MAL_TA_INT32 ? (i64) mal_scalar_i32_from_bits(bits) : (i64) bits;
+}
+
 static inline void mal_vm_fixed_numeric_store(
     const MalTypedArraySpan *span, u32 index, f64 number
 ) {

@@ -1126,6 +1126,7 @@ export function numberRecordDataflow(
 			: numericLoopCodeUnitMethods(fn, order, codeUnitReads);
 	const numericReads = new Set<number>();
 	const intrinsics = new Set<number>();
+	const bindings = new Set<number>();
 	const unify = (register: number, kind: NativeNumberRecordKind): boolean => {
 		const known = kinds.get(register);
 		if (known === undefined) kinds.set(register, kind);
@@ -1231,6 +1232,16 @@ export function numberRecordDataflow(
 						!written.has(instruction.dst);
 					intrinsics.add(instruction.dst);
 					break;
+				// A region neither calls out nor stores bindings, so the entry loads each binding
+				// once into its register, which reads inside then see as an input.
+				case "LOAD_GLOBAL":
+				case "LOAD_CAPTURED":
+					admitted = indexed && representations[instruction.dst] === "boxed";
+					bindings.add(instruction.dst);
+					break;
+				case "THROW_IF_TDZ":
+					admitted = bindings.has(instruction.src);
+					break;
 				case "STORE_PROPERTY_STATIC":
 					admitted = read(instruction.value, "number");
 					break;
@@ -1262,7 +1273,9 @@ export function numberRecordDataflow(
 			}
 		if (!admitted) return undefined;
 		const after = new Set(before);
-		for (const register of vmInstructionWriteRegisters(instruction)) after.add(register);
+		if (instruction.opcode !== "LOAD_GLOBAL" && instruction.opcode !== "LOAD_CAPTURED")
+			for (const register of vmInstructionWriteRegisters(instruction))
+				after.add(register);
 		for (const successor of numberRecordSuccessors(instruction, ip))
 			join(successor, after);
 	}
@@ -2265,11 +2278,12 @@ function fixedNumericLoopStorage(
 			text?: true;
 		}
 	>();
-	// A region reads either strings or element views, so one admission covers its kind.
-	if (new Set(memory.map((access) => access.text === true)).size > 1) return undefined;
 	for (const { ip, op, text } of memory) {
 		const offset = offsets.get(ip);
 		const previous = views.get(op.object);
+		// One admission decides whether a view is a string or an element view.
+		if (previous !== undefined && (previous.text === true) !== (text === true))
+			return undefined;
 		// Without a counter, every access is a read that checks its own key. Stores stay
 		// at counted keys, whose range the entry guards prove even in a checked view.
 		if (offset === undefined) {
@@ -2310,14 +2324,40 @@ function fixedNumericLoopStorage(
 		)
 	)
 		return undefined;
-	const textual = memory.some((access) => access.text === true);
-	if (lengthLoad !== undefined && !views.has(lengthLoad.object))
+	const bindings = new Set<number>();
+	for (const ip of shape.order) {
+		const op = fn.instructions[ip]!;
+		if (op.opcode !== "LOAD_GLOBAL" && op.opcode !== "LOAD_CAPTURED") continue;
+		// A function's own capture environment may not exist yet where the loop starts.
+		if (
+			op.opcode === "LOAD_CAPTURED" &&
+			(fn.capturedCount > 0 || op.ownerFunctionIndex < 0)
+		)
+			return undefined;
+		if (
+			shape.order.some(
+				(other) =>
+					other !== ip &&
+					vmInstructionWriteRegisters(fn.instructions[other]!).includes(op.dst),
+			)
+		)
+			return undefined;
+		bindings.add(op.dst);
+	}
+	// The entry loads each binding into its register, which only a header that read the
+	// register before reloading it could observe.
+	if (registersLiveAt(fn, body, shape.order[0]!, bindings).length > 0) return undefined;
+	const textual = new Set(memory.map((access) => access.text === true));
+	if (lengthLoad !== undefined && !views.has(lengthLoad.object)) {
+		// A length bound whose object no access reads takes the kind of every other view.
+		if (textual.size > 1) return undefined;
 		views.set(lengthLoad.object, {
 			writable: false,
 			minOffset: 0,
 			maxOffset: 0,
-			...(textual ? { text: true as const } : {}),
+			...(textual.has(true) ? { text: true as const } : {}),
 		});
+	}
 	const records = numericLoopRecords(
 		fn,
 		shape,
@@ -2325,7 +2365,8 @@ function fixedNumericLoopStorage(
 			op.opcode === "LOAD_PROPERTY" && text !== true ? [op.dst] : [],
 		),
 	);
-	if (records === undefined) return undefined;
+	// Record regions admit Array views only, never string spans.
+	if (records === undefined || (records.size > 0 && textual.has(true))) return undefined;
 	// Stores admit only TypedArray views, whose length no store changes; records and
 	// a known Array length need Array views, which stay read-only so stores keep their kinds.
 	if (
@@ -2360,6 +2401,13 @@ function fixedNumericLoopStorage(
 		}
 		if (op.opcode === "LOAD_PROPERTY_STATIC" && records.has(op.object)) continue;
 		if (op.opcode === "REQUIRE_COERCIBLE" && records.has(op.src)) continue;
+		// The entry declines a binding still in its temporal dead zone.
+		if (
+			op.opcode === "LOAD_GLOBAL" ||
+			op.opcode === "LOAD_CAPTURED" ||
+			(op.opcode === "THROW_IF_TDZ" && bindings.has(op.src))
+		)
+			continue;
 		if (
 			vmInstructionWriteRegisters(op).some(
 				(register) => register === bound || views.has(register),

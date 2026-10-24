@@ -53,6 +53,93 @@ function countWords(str) {
 	return words;
 }
 
+// Tables in global bindings: units past a table's end read undefined in the original loop.
+function tokenEnd(str, from) {
+	let i = from;
+	while (i < str.length && TOKEN[str.charCodeAt(i)] === 1) i++;
+	return i;
+}
+
+function crcText(str) {
+	let crc = -1;
+	for (let i = 0; i < str.length; i++)
+		crc = CRC_TABLE[(crc ^ str.charCodeAt(i)) & 0xff] ^ (crc >>> 8);
+	return (crc ^ -1) >>> 0;
+}
+
+function classWeights(str) {
+	let total = 0;
+	for (let i = 0; i < str.length; i++) total += WEIGHTS[str.charCodeAt(i) & 7];
+	return total;
+}
+
+function swappedSum(str) {
+	let total = 0;
+	for (let i = 0; i < str.length; i++) total += swapped[str.charCodeAt(i) & 3];
+	return total;
+}
+
+function lateSum(str) {
+	let total = 0;
+	for (let i = 0; i < str.length; i++) total += LATE[str.charCodeAt(i) & 1];
+	return total;
+}
+
+// Bindings of an enclosing function, as at a CommonJS module's top level.
+function makeFieldScanner(log) {
+	for (const sample of ["", "a,b"]) {
+		try {
+			log.push(fieldEnd(sample, 0));
+		} catch (error) {
+			log.push(error.constructor.name);
+		}
+	}
+	const COMMA = 0x2c;
+	const WEIGHT = new Uint8Array([3, 1, 4, 1]);
+	let offset = 1;
+	function fieldEnd(str, from) {
+		let i = from;
+		while (i < str.length && str.charCodeAt(i) !== COMMA) i++;
+		return i;
+	}
+	function weighted(str) {
+		let total = 0;
+		for (let i = 0; i < str.length; i++)
+			total += WEIGHT[(str.charCodeAt(i) + offset) & 3];
+		return total;
+	}
+	return {
+		fieldEnd,
+		weighted,
+		shift(by) {
+			offset = by;
+		},
+	};
+}
+const fieldLog = [];
+const fields = makeFieldScanner(fieldLog);
+
+const beforeInit = [];
+for (const sample of ["", "ab"]) {
+	try {
+		beforeInit.push(lateSum(sample));
+	} catch (error) {
+		beforeInit.push(error.constructor.name);
+	}
+}
+const LATE = new Int16Array([-3, 5]);
+const TOKEN = new Uint8Array(128);
+for (const char of "!#$%&'*+-.^_`|~0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+	TOKEN[char.charCodeAt(0)] = 1;
+const CRC_TABLE = new Int32Array(256);
+for (let n = 0; n < 256; n++) {
+	let c = n;
+	for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+	CRC_TABLE[n] = c;
+}
+const WEIGHTS = [0.5, 1, 2, -4, 8, 16.25, 32, 64];
+let swapped = new Float64Array([1.5, 2, 3, 4]);
+
 const lines = [];
 const samples = [
 	"application/x-www-form-urlencoded",
@@ -81,8 +168,28 @@ for (const sample of [...samples, sliced, rope]) {
 			evenUnits(sample, sample.length),
 			lastDigitRun(sample + "123"),
 			countWords(sample),
+			tokenEnd(sample, start),
+			crcText(sample),
+			classWeights(sample),
+			swappedSum(sample),
+			lateSum(sample),
+			fields.fieldEnd(sample, 0),
+			fields.weighted(sample),
 		].join(" "),
 	);
+}
+lines.push(`before init ${beforeInit.join(" ")} ${fieldLog.join(" ")}`);
+for (const by of [2, 0.5, -1, "1", 2 ** 53]) {
+	fields.shift(by);
+	lines.push(`shifted ${by} ${fields.weighted("abcdefgh")}`);
+}
+for (const table of [[7, 8, 9, 10], new Uint16Array([65535, 1, 2, 3]), { 0: 1 }, null]) {
+	swapped = table;
+	try {
+		lines.push(`swapped ${swappedSum("abcd")} ${swappedSum("")}`);
+	} catch (error) {
+		lines.push(`swapped ${error.constructor.name}`);
+	}
 }
 lines.push(`fractional start ${skipValue("ab;cd", 0.5, 5)}`);
 lines.push(`negative start ${skipValue("ab;cd", -2, 5)}`);
