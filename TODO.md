@@ -48,6 +48,9 @@ rooting, and resource-safety defects can interrupt that order.
       nominate their comparators too: the `fallbacks` case reads 22 and the eval
       case 42 where the test expects 0 and 1. CI runs it only under sanitizers,
       where the eval compiler is interpreted, so it passes there.
+      `tests/native/forwarded-from-mapper.test.ts` fails the same way under the
+      plain runner through the eval compiler's `Array.from` mappers (`fallbacks`
+      reads 39 Array nominations where it expects 0).
 
 - [ ] Find why `tests/native/node-fs-watch.test.ts` takes minutes on the macOS
       Native remainder runner. Its three tests take 5 to 8 s on Linux, but on macOS
@@ -171,12 +174,13 @@ The independent target boundary and current storage contract are recorded in
 - [ ] Fold the TDZ checks that remain on module bindings read through import cycles
       and immediately invoked setup functions, such as the one that opens meriyah.
       The self-compile Core keeps 1,600 checks: 1,067 on module bindings, 491 on
-      captured cells and 42 on loop values. Importers outside a cycle and closures
-      created after the declaration already read module bindings initialized; what
-      remains are reads inside import cycles and from hoisted functions. Hoisted
-      helpers that inherit the bindings declared before their first reference, and
-      prefixes that continue past calls into data-only dependencies, removed almost
-      none.
+      captured cells and 42 on loop values. Importers outside a cycle, closures
+      created after the declaration and hoisted functions referenced only after it
+      (in function bodies, CommonJS modules and acyclic ES modules) already read
+      their bindings initialized. The hoisted rule pays in CommonJS libraries but
+      removes almost none of the self-compile's checks; those are reads inside
+      import cycles. Prefixes that continue past calls into data-only dependencies
+      removed almost none either.
 - [ ] Bring the native self-compile's memory closer to its live set. Peak live
       bytes stay near 900 MB, but maximum RSS is 4.4 GB now that process GC
       pressure backs off past its budget (it was 3.5 GB while pressure forced 183
@@ -888,10 +892,12 @@ contracts or investigates costs still visible after the string follow-ups.
       Set `forEach`, user `find` methods); measure that tax before widening.
 
 - [ ] Cut the per-element cost of expanded Array iteration loops: `array-map`
-      still spends about 24 ns per element against Node's 2.5 ns. The HasProperty
-      test and element load stay separate because the array presence projection
-      does not fire on these loops, and a callback's loop-invariant captured read
-      (`value + round`) reloads and rechecks TDZ every element.
+      spends 6.1 ns per element against Node's 1.3. The HasProperty test still boxes
+      its result for a truthiness test, separate from the element load, because the
+      array presence projection does not fire on these loops; the callback's
+      loop-invariant captured read (`value + round`) reloads through
+      `mal_vm_load_captured` every element; and each result goes through
+      `mal_vm_array_try_define_index`.
 
 - [ ] Cut the hinted Map lookup's cost when keys alternate. A get on a 4,096-entry
       Map with alternating keys takes 7.1 ns for int32 keys and 8.6 ns for objects
