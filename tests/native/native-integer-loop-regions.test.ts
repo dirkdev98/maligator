@@ -20,7 +20,6 @@ const kernels = [
 	"bitsUpTo",
 	"scaledSum",
 	"capturedSum",
-	"fusedSteps",
 ];
 const expected = ["native-integer-loop-regions PASS"];
 

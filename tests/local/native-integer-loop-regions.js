@@ -84,8 +84,7 @@ function bitsUpTo(limit) {
 	return sum;
 }
 
-// A fused chain over a boxed count runs inside the region; leaving the safe range
-// restarts the iteration in the original loop, which recomputes the whole chain.
+// A fused chain over a boxed count, through overflow past the safe range.
 function fusedSteps(limit, step, scale) {
 	let count = 0;
 	for (let index = 0; index < limit; index += step) count = (count * scale + 1) | 0;

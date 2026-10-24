@@ -3777,7 +3777,9 @@ export function selectNativeFastPaths(
 					const fusion = fusions.get(ip);
 					return (
 						fusion !== undefined &&
-						(!members.has(fusion.id) || !members.has(fusion.finishIp))
+						(plan.kind === "integer" ||
+							!members.has(fusion.id) ||
+							!members.has(fusion.finishIp))
 					);
 				})
 			)
