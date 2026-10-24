@@ -171,6 +171,13 @@ The independent target boundary and current storage contract are recorded in
       also pay for lower thresholds: splitting past 64 Ki into 32 Ki parts cut the
       self-compile's clang CPU from 352 s to 322 s, but added 4 s of
       single-threaded emission, which cancels the saving at eight jobs.
+- [ ] Hoist labelled function declarations in sloppy function bodies. Annex B makes
+      `label: function f() {}` a top-level var-scoped declaration initialized at
+      entry, so `f()` before it runs `f`; Maligator throws a TypeError in both
+      backends where Node runs it (Test262's staging
+      `block-scoped-functions-annex-b-label.js` fails too). Once hoisted,
+      `coreInitializedLexicalReads` must treat them as hoisted: it visits them at
+      their statement, so `f` would read a later `const` without its TDZ check.
 - [ ] Fold the TDZ checks that remain on module bindings read through import cycles
       and immediately invoked setup functions, such as the one that opens meriyah.
       The self-compile Core keeps 1,600 checks: 1,067 on module bindings, 491 on
