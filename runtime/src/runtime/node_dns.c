@@ -175,8 +175,7 @@ static int dns_ip_family(const char *text) {
     return 0;
 }
 
-/* libuv's UV_EAI_* errno values, which Node reports beside the code. */
-static void dns_error_code(int status, int system_errno, const char **code, int *errno_out) {
+void mal_node_dns_error_code(int status, int system_errno, const char **code, int *errno_out) {
     switch (status) {
         case EAI_NONAME:
 #if defined(EAI_NODATA) && EAI_NODATA != EAI_NONAME
@@ -916,7 +915,7 @@ static bool dns_drain(MalVm *vm) {
     } else if (task.result == MAL_HOST_TERMINAL_CANCELLED || job == nullptr || job->status != 0) {
         const char *code;
         int errno_value;
-        dns_error_code(job == nullptr ? EAI_FAIL : job->status,
+        mal_node_dns_error_code(job == nullptr ? EAI_FAIL : job->status,
             job == nullptr ? 0 : job->system_errno, &code, &errno_value);
         roots[2] = dns_exception(vm, state->syscall, code, errno_value, state->host);
     } else {

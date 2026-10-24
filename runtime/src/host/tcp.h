@@ -79,6 +79,8 @@ bool mal_tcp_start_tls_server(
 i64 mal_tcp_tls_info(
     MalHost *host, MalHostHandle operation, int kind, byte *output, usize output_length);
 bool mal_tcp_cancel(MalHost *host, MalHostHandle operation);
+/* Cancel like mal_tcp_cancel, but abort an open connection with an RST. */
+bool mal_tcp_reset(MalHost *host, MalHostHandle operation);
 
 /* Listening sockets: 0 or the bind/listen errno. Accepts arrive as MAL_TCP_ACCEPTED
  * progress on `operation`; close completes it with an OK terminal. */

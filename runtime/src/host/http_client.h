@@ -1,6 +1,9 @@
 #pragma once
 
+#include <netinet/in.h>
+
 #include "./defaults.h"
+#include "dns.h"
 #include "host_task.h"
 #include "http_codec.h"
 
@@ -13,11 +16,17 @@ typedef enum MalHttpClientFailure {
     /* The inactivity deadline fired rather than the peer or the socket failing, so
      * the runtime can emit the timeout half of its API contract before the error. */
     MAL_HTTP_CLIENT_FAILURE_TIMEOUT,
-    /* The peer closed the connection before a response head arrived, which a
-     * reused keep-alive connection meets when the server closes it meanwhile. */
+    /* The peer closed the connection before the response completed. Before a head
+     * arrives, a reused keep-alive connection meets this when the server closes it
+     * meanwhile. */
     MAL_HTTP_CLIENT_FAILURE_PEER_CLOSED,
-    /* A socket call failed with `error_number`; `syscall` names the call. */
+    /* A read or write on the connection failed with `error_number`; `syscall` names
+     * the call. */
     MAL_HTTP_CLIENT_FAILURE_SOCKET,
+    /* Connecting to `address`:`port` failed with `error_number`. */
+    MAL_HTTP_CLIENT_FAILURE_CONNECT,
+    /* Resolving the host name failed as `resolution` describes. */
+    MAL_HTTP_CLIENT_FAILURE_RESOLUTION,
 } MalHttpClientFailure;
 
 typedef struct MalHttpClientResult {
@@ -25,6 +34,9 @@ typedef struct MalHttpClientResult {
     MalHttpClientFailure failure;
     int error_number;
     const char *syscall;
+    MalDnsError resolution;
+    char address[INET6_ADDRSTRLEN];
+    u16 port;
 } MalHttpClientResult;
 
 typedef enum MalHttpClientProgressKind {
@@ -53,6 +65,7 @@ typedef enum MalHttpClientWriteResult {
  * ownership of request_head on success. A negative content length selects chunked
  * framing; nonnegative lengths are validated across accepted writes. keep_alive
  * permits bounded reuse only after a clean complete exchange; uploads are never replayed.
+ * `reused` reports whether the request took an idle keep-alive connection.
  *
  * timeout_ms bounds inactivity across connect, response headers, and every gap
  * between reads; zero selects the built-in default, so no request is unbounded. */
@@ -70,7 +83,8 @@ bool mal_http_client_start(
     i64 content_length,
     bool head_request,
     u32 timeout_ms,
-    MalHostHandle *operation);
+    MalHostHandle *operation,
+    bool *reused);
 
 /* Retune the inactivity deadline of a running request (zero selects the default).
  * The new window starts now. False means the operation is no longer active. */

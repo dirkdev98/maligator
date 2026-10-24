@@ -1417,7 +1417,15 @@ options)` wrapping with a deferred start, and `setDefaultCACertificates`.
 
 - [ ] Complete observable node:http and node:net behavior beyond Express and
       postgres.js. Add socket APIs, Agent reuse, validation, lifecycle, cancellation,
-      and error ordering over shared transport.
+      and error ordering over shared transport. Known differences: the HTTP client
+      keeps one idle pool for every Agent, so a new keep-alive Agent can report
+      `reusedSocket` on its first request and `agent.destroy()` closes every idle
+      connection; it tries one address per request where Node falls back and
+      reports an AggregateError (`localhost` with nothing listening); https agents
+      reject pooling options. ServerResponse sends header names lowercased, lets
+      getHeader see headers passed only to writeHead, and lacks `_header`, which the
+      compression middleware reads. Stream destroy() emits 'error' and 'close'
+      synchronously where Node defers them a tick.
 
 - [ ] Close measured Express performance gaps without regressing fixture behavior or
       bare-server throughput. Profile before selecting compiler or runtime work.

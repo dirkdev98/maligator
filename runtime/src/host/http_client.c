@@ -1,5 +1,6 @@
 #include "http_client.h"
 
+#include <arpa/inet.h>
 #include <errno.h>
 #include <netdb.h>
 #include <stdio.h>
@@ -75,6 +76,10 @@ typedef struct MalHttpClient {
     bool read_ended;
     bool read_failed;
     int read_error;
+    // The address being connected, so that a failure can name it.
+    struct sockaddr_storage peer;
+    // A connect that failed before the operation went live, reported from the timer.
+    int connect_error;
     bool request_chunked;
     bool request_final_queued;
     bool request_complete;
@@ -294,21 +299,33 @@ static void client_complete(
     client_destroy(client);
 }
 
-static void client_fail_as(
-    MalHttpClient *client, const char *message, MalHttpClientFailure failure,
-    int error_number, const char *syscall) {
+static MalHttpClientResult *client_result(
+    const char *message, MalHttpClientFailure failure) {
     MalHttpClientResult *result = calloc(1, sizeof(*result));
     if (result != nullptr) {
         result->error = client_copy(message, strlen(message));
         result->failure = failure;
-        result->error_number = error_number;
-        result->syscall = syscall;
     }
-    client_complete(client, MAL_HOST_TERMINAL_ERROR, result);
+    return result;
+}
+
+static void client_fail_as(
+    MalHttpClient *client, const char *message, MalHttpClientFailure failure) {
+    client_complete(client, MAL_HOST_TERMINAL_ERROR, client_result(message, failure));
 }
 
 static void client_fail(MalHttpClient *client, const char *message) {
-    client_fail_as(client, message, MAL_HTTP_CLIENT_FAILURE_OTHER, 0, nullptr);
+    client_fail_as(client, message, MAL_HTTP_CLIENT_FAILURE_OTHER);
+}
+
+static void client_fail_socket(
+    MalHttpClient *client, const char *message, const char *syscall, int error) {
+    MalHttpClientResult *result = client_result(message, MAL_HTTP_CLIENT_FAILURE_SOCKET);
+    if (result != nullptr) {
+        result->error_number = error;
+        result->syscall = syscall;
+    }
+    client_complete(client, MAL_HOST_TERMINAL_ERROR, result);
 }
 
 // TLS failures carry their own message; a plain read failure carries its errno.
@@ -316,9 +333,42 @@ static void client_fail_read(MalHttpClient *client) {
     if (client->tls_error != nullptr) {
         client_fail(client, client->tls_error);
     } else {
-        client_fail_as(client, "HTTP response read failed",
-                       MAL_HTTP_CLIENT_FAILURE_SOCKET, client->read_error, "read");
+        client_fail_socket(client, "HTTP response read failed", "read", client->read_error);
     }
+}
+
+static void client_fail_connect(MalHttpClient *client, int error) {
+    MalHttpClientResult *result = client_result(
+        "HTTP connection failed", MAL_HTTP_CLIENT_FAILURE_CONNECT);
+    if (result != nullptr) {
+        result->error_number = error;
+        result->syscall = "connect";
+        if (client->peer.ss_family == AF_INET6) {
+            const struct sockaddr_in6 *peer = (const struct sockaddr_in6 *) &client->peer;
+            inet_ntop(AF_INET6, &peer->sin6_addr, result->address, sizeof(result->address));
+            result->port = ntohs(peer->sin6_port);
+        } else {
+            const struct sockaddr_in *peer = (const struct sockaddr_in *) &client->peer;
+            inet_ntop(AF_INET, &peer->sin_addr, result->address, sizeof(result->address));
+            result->port = ntohs(peer->sin_port);
+        }
+    }
+    client_complete(client, MAL_HOST_TERMINAL_ERROR, result);
+}
+
+static void client_fail_resolution(MalHttpClient *client, MalDnsError error) {
+    MalHttpClientResult *result = client_result(
+        "HTTP hostname resolution failed", MAL_HTTP_CLIENT_FAILURE_RESOLUTION);
+    if (result != nullptr) result->resolution = error;
+    client_complete(client, MAL_HOST_TERMINAL_ERROR, result);
+}
+
+static bool client_connect(
+    MalHttpClient *client, const struct sockaddr *address, socklen_t length) {
+    memcpy(&client->peer, address, length);
+    client->fd = mal_net_connect_address(address, length);
+    client->connect_error = client->fd < 0 ? errno : 0;
+    return client->fd >= 0;
 }
 
 /*
@@ -336,8 +386,12 @@ static void client_arm_timeout(MalHttpClient *client) {
 }
 
 static void client_timeout_cb(void *data) {
-    client_fail_as(data, "HTTP request timed out", MAL_HTTP_CLIENT_FAILURE_TIMEOUT,
-                   0, nullptr);
+    MalHttpClient *client = data;
+    if (client->connect_error != 0) {
+        client_fail_connect(client, client->connect_error);
+        return;
+    }
+    client_fail_as(client, "HTTP request timed out", MAL_HTTP_CLIENT_FAILURE_TIMEOUT);
 }
 
 static bool client_progress(
@@ -508,12 +562,9 @@ static void client_process_response(MalHttpClient *client) {
         if (client->read_ended) {
             result = mal_http_codec_finish(&client->codec);
             if (result == MAL_HTTP_CODEC_EVENT) continue;
-            if (client->response_head_seen) {
-                client_fail(client, "Truncated HTTP response");
-            } else {
-                client_fail_as(client, "HTTP peer closed before responding",
-                               MAL_HTTP_CLIENT_FAILURE_PEER_CLOSED, 0, nullptr);
-            }
+            client_fail_as(client, client->response_head_seen
+                    ? "Truncated HTTP response" : "HTTP peer closed before responding",
+                MAL_HTTP_CLIENT_FAILURE_PEER_CLOSED);
             return;
         }
         if (!client_arm_read(client)) {
@@ -729,7 +780,7 @@ static void client_write_ready(void *data) {
     if (client->connecting) {
         int error = mal_net_socket_error(client->fd);
         if (error != 0) {
-            client_fail(client, "HTTP connection failed");
+            client_fail_connect(client, error);
             return;
         }
         client->connecting = false;
@@ -827,8 +878,7 @@ static void client_write_ready(void *data) {
         if (client->tls != nullptr) {
             client_fail(client, "HTTP request write failed");
         } else {
-            client_fail_as(client, "HTTP request write failed",
-                           MAL_HTTP_CLIENT_FAILURE_SOCKET, errno, "write");
+            client_fail_socket(client, "HTTP request write failed", "write", errno);
         }
         return;
     }
@@ -842,10 +892,10 @@ bool mal_http_client_start(
     const byte *ca_pem, usize ca_pem_length, const MalTlsClientIdentity *identity,
     bool keep_alive, byte *request_head,
     usize request_head_len, i64 content_length, bool head_request,
-    u32 timeout_ms, MalHostHandle *operation) {
+    u32 timeout_ms, MalHostHandle *operation, bool *reused_out) {
     if (host == nullptr || host_name == nullptr || request_head == nullptr
         || request_head_len == 0 || content_length < -1 || operation == nullptr
-        || !mal_host_operation_start(&host->tasks, operation)) {
+        || reused_out == nullptr || !mal_host_operation_start(&host->tasks, operation)) {
         return false;
     }
     MalHttpClient *client = calloc(1, sizeof(*client));
@@ -918,8 +968,10 @@ bool mal_http_client_start(
     if (reused) {
         if (!client_arm_write(client) || !client_arm_read(client)) goto fail_linked;
     } else if (mal_net_parse_ip(host_name, port, &address, &address_length)) {
-        client->fd = mal_net_connect_address((const struct sockaddr *)&address, address_length);
-        if (client->fd < 0 || !client_arm_write(client)) goto fail_linked;
+        if (client_connect(client, (const struct sockaddr *) &address, address_length)
+            && !client_arm_write(client)) {
+            goto fail_linked;
+        }
     } else {
         MalHttpClientDns *resolution = calloc(1, sizeof(*resolution));
         if (resolution == nullptr) goto fail_linked;
@@ -937,7 +989,13 @@ bool mal_http_client_start(
     if (!mal_host_operation_activate(&host->tasks, *operation)) {
         goto fail_linked;
     }
+    // A refused connect is the request's failure, not its start's: the caller still
+    // queues the body, so the deadline timer reports it on the next reactor turn.
+    if (client->connect_error != 0) {
+        mal_reactor_rearm_timer(&host->reactor, &client->timeout, mal_reactor_now_ns());
+    }
     free(request_head);
+    *reused_out = reused;
     return true;
 
 fail_linked:
@@ -962,18 +1020,27 @@ bool mal_http_client_drain_dns(MalHost *host) {
     MalHttpClient *client = resolution->client;
     if (client != nullptr) {
         client->resolution = nullptr;
-        if (task.kind == MAL_HOST_TASK_TERMINAL && task.result == MAL_HOST_TERMINAL_OK && task.data != nullptr) {
-            const MalDnsResult *result = task.data;
-            for (usize i = 0; i < mal_dns_result_address_count(result); i++) {
-                socklen_t length;
-                const struct sockaddr *address = mal_dns_result_address(result, i, &length);
-                if (address->sa_family != AF_INET) continue;
-                client->fd = mal_net_connect_address(address, length);
-                if (client->fd >= 0) break;
+        const MalDnsResult *result = task.data;
+        if (task.kind != MAL_HOST_TASK_TERMINAL || task.result != MAL_HOST_TERMINAL_OK
+            || result == nullptr) {
+            client_fail_resolution(client, mal_dns_result_error(result));
+        } else {
+            // IPv4 first: one attempt per request cannot fall back from a refused ::1
+            // to a 127.0.0.1 listener the way Node's interleaved attempts do.
+            static const int families[] = {AF_INET, AF_INET6};
+            for (usize f = 0; f < countof(families) && client->fd < 0; f++) {
+                for (usize i = 0; i < mal_dns_result_address_count(result); i++) {
+                    socklen_t length;
+                    const struct sockaddr *address = mal_dns_result_address(result, i, &length);
+                    if (address->sa_family == families[f]
+                        && client_connect(client, address, length)) {
+                        break;
+                    }
+                }
             }
+            if (client->fd < 0) client_fail_connect(client, client->connect_error);
+            else if (!client_arm_write(client)) client_fail(client, "Failed to wait for HTTP connection");
         }
-        if (client->fd < 0) client_fail(client, "HTTP hostname resolution or connection failed");
-        else if (!client_arm_write(client)) client_fail(client, "Failed to wait for HTTP connection");
     }
     mal_host_task_release(&host->tasks, &task);
     free(resolution);

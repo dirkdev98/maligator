@@ -21,6 +21,8 @@
 #include "host.h"
 #include "http_client.h"
 #include "intrinsics.h"
+#include "node_dns.h"
+#include "node_events.h"
 #include "node_inspect.h"
 #include "node_module.h"
 #include "node_net.h"
@@ -364,11 +366,15 @@ static MAL_ISOLATE_LOCAL MalNodeHttpRequestState **http_request_index;
 static MAL_ISOLATE_LOCAL usize http_request_index_capacity;
 static MAL_ISOLATE_LOCAL usize http_request_index_count;
 static MAL_ISOLATE_LOCAL MalNodeHttpClientState *http_clients;
+// Clients dispatching their terminal: unlinked so lookups miss them, but still traced.
+static MAL_ISOLATE_LOCAL MalNodeHttpClientState *http_clients_terminating;
 static MAL_ISOLATE_LOCAL bool http_roots_installed;
 static void http_response_complete(void *data, bool success);
 static void http_queue_request_body(void *data, byte *owned_bytes, usize length);
 static void http_queue_request_end(void *data, bool success);
 static MalValue http_client_error(MalVm *vm, const char *message);
+static void http_define(MalVm *vm, MalValue receiver, const char *name, MalValue value);
+static bool http_emit(MalVm *vm, MalValue receiver, const char *event);
 static MalNodeHttpClientState *http_client_response_state(MalValue receiver);
 static void http_client_cancel(
     MalVm *vm, MalNodeHttpClientState *state, bool aborted, MalValue error);
@@ -767,6 +773,14 @@ static MalValue http_incoming_destroy(
         }
         http_client_cancel(
             vm, client, false, client->response_destroy_error);
+        // Node's IncomingMessage._destroy aborts a response not yet read to its end at once.
+        MalValue ended = mal_value_new_undefined();
+        if (!client->response_complete
+            || (mal_vm_get_static(vm, receiver, (const byte *) "readableEnded", &ended)
+                && !mal_value_is_truthy(ended))) {
+            http_define(vm, receiver, "aborted", mal_value_new_boolean(true));
+            http_emit(vm, receiver, "aborted");
+        }
         return receiver;
     }
     MalObject *prototype = mal_value_to_object(
@@ -929,6 +943,17 @@ static bool http_emit(MalVm *vm, MalValue receiver, const char *event) {
     MalRootSpan root;
     mal_gc_root(&root, &name, 1);
     bool ok = http_call_method(vm, receiver, "emit", &name, 1);
+    mal_gc_unroot(&root);
+    return ok;
+}
+
+static bool http_emit_error(MalVm *vm, MalValue receiver, MalValue error) {
+    MalValue args[] = {
+        mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "error")), error,
+    };
+    MalRootSpan root;
+    mal_gc_root(&root, args, countof(args));
+    bool ok = http_call_method(vm, receiver, "emit", args, 2);
     mal_gc_unroot(&root);
     return ok;
 }
@@ -2852,19 +2877,22 @@ static bool http_client_start_request(
     MalTlsClientIdentity identity = {
         (const byte *) state->cert, state->cert_len, (const byte *) state->key, state->key_len,
     };
+    bool reused;
     if (!mal_http_client_start(
             mal_host(vm), state->host, state->port, state->secure,
             (const byte *) state->ca, state->ca_len, &identity, state->keep_alive,
             request, request_len,
             content_length,
             state->method_len == 4 && memcmp(state->method, "HEAD", 4) == 0,
-            state->timeout_ms, &state->operation)) {
+            state->timeout_ms, &state->operation, &reused)) {
         free(request);
         mal_vm_throw_error(vm, MAL_INTRINSIC_ERROR_PROTOTYPE,
                            "Failed to start HTTP request");
         return false;
     }
     state->headers_committed = true;
+    // Node learns this when the agent assigns a socket; ours picks one as the head commits.
+    http_define(vm, state->request, "reusedSocket", mal_value_new_boolean(reused));
     return true;
 }
 
@@ -3292,12 +3320,13 @@ static void http_throw_invalid_status(MalVm *vm, MalValue value) {
     free(message);
 }
 
-static void http_throw_invalid_header_list(MalVm *vm, MalValue headers) {
+// ERR_INVALID_ARG_VALUE: `reason` is the sentence before " Received <inspected value>".
+static void http_throw_invalid_arg_value(MalVm *vm, const char *reason, MalValue value) {
     MalTextBuffer text = {0};
-    mal_text_buffer_append_ascii(
-        &text, (const byte *) "The argument 'headers' is invalid. Received ");
+    mal_text_buffer_append_ascii(&text, (const byte *) reason);
+    mal_text_buffer_append_ascii(&text, (const byte *) " Received ");
     MalNodeInspectOptions options = {.options = mal_value_new_undefined()};
-    if (!mal_node_util_inspect_into(vm, &text, headers, &options)) {
+    if (!mal_node_util_inspect_into(vm, &text, value, &options)) {
         mal_text_buffer_dispose(&text);
         return;
     }
@@ -3327,7 +3356,8 @@ static bool http_response_merge_head_headers(
     if (mal_value_is_array_object(roots[0])) {
         MalArrayObject *list = mal_value_to_array_object(roots[0]);
         if (mal_array_object_length(list) % 2 != 0) {
-            http_throw_invalid_header_list(vm, roots[0]);
+            http_throw_invalid_arg_value(
+                vm, "The argument 'headers' is invalid.", roots[0]);
             ok = false;
         }
         for (u32 i = 0; ok && i < mal_array_object_length(list); i += 2) {
@@ -3828,6 +3858,21 @@ static MalValue http_response_end(
     return receiver;
 }
 
+static void http_client_mark(MalNodeHttpClientState *state) {
+    mal_gc_mark_value(state->request);
+    mal_gc_mark_value(state->response);
+    mal_gc_mark_value(state->end_callback);
+    mal_gc_mark_value(state->destroy_error);
+    mal_gc_mark_value(state->response_destroy_error);
+    mal_gc_mark_value(mal_async_internal_value((MalHeapHeader *) state->async_context));
+    mal_gc_mark_value(mal_async_internal_value((MalHeapHeader *) state->end_context));
+    for (MalNodeHttpResponseWrite *write = state->write_head;
+         write != nullptr; write = write->next) {
+        mal_gc_mark_value(write->callback);
+        mal_gc_mark_value(mal_async_internal_value((MalHeapHeader *) write->async_context));
+    }
+}
+
 static void http_scan_roots(MalVm *vm, void *data) {
     (void) data;
     // Keep the socket and its listeners alive between requests until transport close.
@@ -3867,23 +3912,11 @@ static void http_scan_roots(MalVm *vm, void *data) {
     }
     for (MalNodeHttpClientState *state = http_clients; state != nullptr;
          state = state->next) {
-        if (state->vm == vm) {
-            mal_gc_mark_value(state->request);
-            mal_gc_mark_value(state->response);
-            mal_gc_mark_value(state->end_callback);
-            mal_gc_mark_value(state->destroy_error);
-            mal_gc_mark_value(state->response_destroy_error);
-            mal_gc_mark_value(mal_async_internal_value(
-                (MalHeapHeader *) state->async_context));
-            mal_gc_mark_value(mal_async_internal_value(
-                (MalHeapHeader *) state->end_context));
-            for (MalNodeHttpResponseWrite *write = state->write_head;
-                 write != nullptr; write = write->next) {
-                mal_gc_mark_value(write->callback);
-                mal_gc_mark_value(mal_async_internal_value(
-                    (MalHeapHeader *) write->async_context));
-            }
-        }
+        if (state->vm == vm) http_client_mark(state);
+    }
+    for (MalNodeHttpClientState *state = http_clients_terminating; state != nullptr;
+         state = state->next) {
+        if (state->vm == vm) http_client_mark(state);
     }
 }
 
@@ -4208,39 +4241,71 @@ static MalValue http_client_error(MalVm *vm, const char *message) {
     return error;
 }
 
-/* Node's error for a failed exchange: a peer that hangs up before any response gives
- * "socket hang up" with ECONNRESET, a failed socket call gives libuv's
- * "read ECONNRESET" with errno, code and syscall, and a deadline gives ETIMEDOUT. */
-static MalValue http_client_failure_error(
-    MalVm *vm, bool hung_up, const MalHttpClientResult *result) {
-    MalValue roots[] = {mal_value_new_undefined(), mal_value_new_undefined()};
+static MalValue http_client_coded_error(MalVm *vm, const char *message, const char *code) {
+    MalValue roots[] = {http_client_error(vm, message), mal_value_new_undefined()};
     MalRootSpan root;
     mal_gc_root(&root, roots, countof(roots));
-    const char *code = nullptr;
-    const char *syscall = nullptr;
-    if (hung_up) {
-        roots[0] = http_client_error(vm, "socket hang up");
-        code = "ECONNRESET";
-    } else if (result != nullptr && result->failure == MAL_HTTP_CLIENT_FAILURE_SOCKET) {
-        code = mal_posix_fs_errno_name(result->error_number);
-        syscall = result->syscall;
-        char message[64];
-        snprintf(message, sizeof message, "%s %s", syscall, code);
-        roots[0] = http_client_error(vm, message);
-        http_define(vm, roots[0], "errno", mal_value_from_i32(-result->error_number));
+    roots[1] = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) code));
+    http_define(vm, roots[0], "code", roots[1]);
+    mal_gc_unroot(&root);
+    return roots[0];
+}
+
+/* Node's error for a failed exchange: a peer that hangs up before any response gives
+ * "socket hang up" with ECONNRESET, a failed socket call gives libuv's
+ * "connect ECONNREFUSED 127.0.0.1:80" or "read ECONNRESET" with errno, code and
+ * syscall, a failed lookup gives "getaddrinfo ENOTFOUND host", and a deadline gives
+ * ETIMEDOUT. */
+static MalValue http_client_failure_error(
+    MalVm *vm, const MalNodeHttpClientState *state, bool hung_up,
+    const MalHttpClientResult *result) {
+    MalHttpClientFailure failure = result == nullptr
+        ? MAL_HTTP_CLIENT_FAILURE_OTHER : result->failure;
+    if (hung_up) return http_client_coded_error(vm, "socket hang up", "ECONNRESET");
+    if (failure == MAL_HTTP_CLIENT_FAILURE_TIMEOUT) {
+        return http_client_coded_error(vm, result->error, "ETIMEDOUT");
+    }
+    if (failure != MAL_HTTP_CLIENT_FAILURE_SOCKET
+        && failure != MAL_HTTP_CLIENT_FAILURE_CONNECT
+        && failure != MAL_HTTP_CLIENT_FAILURE_RESOLUTION) {
+        return http_client_error(vm, result == nullptr ? nullptr : result->error);
+    }
+    const char *code;
+    const char *syscall = result->syscall;
+    int error_number = -result->error_number;
+    char message[512];
+    if (failure == MAL_HTTP_CLIENT_FAILURE_RESOLUTION) {
+        mal_node_dns_error_code(
+            result->resolution.kind == MAL_DNS_ERROR_SYSTEM
+                ? EAI_SYSTEM : result->resolution.resolver_code,
+            result->resolution.system_errno, &code, &error_number);
+        syscall = "getaddrinfo";
+        snprintf(message, sizeof message, "%s %s %s", syscall, code, state->host);
     } else {
-        roots[0] = http_client_error(vm, result == nullptr ? nullptr : result->error);
-        if (result != nullptr && result->failure == MAL_HTTP_CLIENT_FAILURE_TIMEOUT) {
-            code = "ETIMEDOUT";
+        code = mal_posix_fs_errno_name(result->error_number);
+        if (failure == MAL_HTTP_CLIENT_FAILURE_CONNECT) {
+            snprintf(message, sizeof message, "%s %s %s:%u", syscall, code,
+                     result->address, (unsigned) result->port);
+        } else {
+            snprintf(message, sizeof message, "%s %s", syscall, code);
         }
     }
-    if (code != nullptr) {
-        roots[1] = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) code));
-        http_define(vm, roots[0], "code", roots[1]);
-    }
-    if (syscall != nullptr) {
-        roots[1] = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) syscall));
-        http_define(vm, roots[0], "syscall", roots[1]);
+    MalValue roots[] = {http_client_error(vm, message), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    http_define(vm, roots[0], "errno", mal_value_from_i32(error_number));
+    roots[1] = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) code));
+    http_define(vm, roots[0], "code", roots[1]);
+    roots[1] = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) syscall));
+    http_define(vm, roots[0], "syscall", roots[1]);
+    if (failure == MAL_HTTP_CLIENT_FAILURE_CONNECT) {
+        roots[1] = http_ascii_value(vm, result->address, strlen(result->address));
+        http_define(vm, roots[0], "address", roots[1]);
+        http_define(vm, roots[0], "port", mal_value_from_i32(result->port));
+    } else if (failure == MAL_HTTP_CLIENT_FAILURE_RESOLUTION) {
+        roots[1] = mal_value_from_string(mal_string_from_utf8(
+            &vm->heap, (const byte *) state->host, strlen(state->host)));
+        http_define(vm, roots[0], "hostname", roots[1]);
     }
     mal_gc_unroot(&root);
     return roots[0];
@@ -4495,6 +4560,60 @@ static void http_client_dispatch_progress(
                        "Unknown HTTP client progress");
 }
 
+// Calls each pending upload callback once with `error`.
+static void http_client_fail_writes(
+    MalVm *vm, MalNodeHttpClientState *state, MalValue error) {
+    if (mal_value_is_nil(error) || vm->completion.kind == MAL_COMPLETION_THROW) return;
+    usize callback_count = 0;
+    for (MalNodeHttpResponseWrite *write = state->write_head;
+         write != nullptr; write = write->next) {
+        if (!mal_value_is_undefined(write->callback)) callback_count++;
+    }
+    MalValue *callbacks = callback_count == 0 || callback_count > INT32_MAX
+        ? nullptr : malloc(callback_count * sizeof(*callbacks));
+    MalAsyncContext **callback_contexts =
+        callbacks == nullptr ? nullptr
+                             : malloc(callback_count * sizeof(*callback_contexts));
+    if (callbacks != nullptr && callback_contexts != nullptr) {
+        usize callback_index = 0;
+        for (MalNodeHttpResponseWrite *write = state->write_head;
+             write != nullptr; write = write->next) {
+            if (mal_value_is_undefined(write->callback)) continue;
+            callbacks[callback_index++] = write->callback;
+            callback_contexts[callback_index - 1] = write->async_context;
+            write->callback = mal_value_new_undefined();
+        }
+        MalRootSpan callbacks_root;
+        mal_gc_root(&callbacks_root, callbacks, (i32) callback_count);
+        MalRootSpan error_root;
+        mal_gc_root(&error_root, &error, 1);
+        for (usize i = 0; i < callback_count; i++) {
+            MalAsyncContextScope scope;
+            mal_async_context_scope_enter(vm, &scope, callback_contexts[i]);
+            mal_vm_call_value(vm, callbacks[i], mal_value_new_undefined(), &error, 1);
+            mal_async_context_scope_exit(vm, &scope);
+            if (vm->completion.kind == MAL_COMPLETION_THROW) break;
+        }
+        mal_gc_unroot(&error_root);
+        mal_gc_unroot(&callbacks_root);
+    }
+    free(callback_contexts);
+    free(callbacks);
+}
+
+// Node's IncomingMessage reports a destroy error only to 'error' listeners it already has.
+static void http_client_close_response(
+    MalVm *vm, MalNodeHttpClientState *state, MalValue error) {
+    if (vm->completion.kind == MAL_COMPLETION_THROW) return;
+    if (!mal_value_is_nil(error)
+        && mal_node_events_listener_count(vm, state->response, "error") > 0) {
+        http_emit_error(vm, state->response, error);
+    }
+    if (vm->completion.kind != MAL_COMPLETION_THROW) {
+        http_emit(vm, state->response, "close");
+    }
+}
+
 static void http_client_dispatch_terminal(
     MalVm *vm, MalNodeHttpClientState *state, MalHostTask *task,
     const MalHttpClientResult *result) {
@@ -4504,16 +4623,25 @@ static void http_client_dispatch_terminal(
 #endif
     bool success = !state->cancelled && task->result == MAL_HOST_TERMINAL_OK
         && state->upload_complete && state->response_complete;
-    MalValue error = state->destroy_error;
-    MalRootSpan root;
-    mal_gc_root(&root, &error, 1);
     MalHttpClientFailure failure = result == nullptr
         ? MAL_HTTP_CLIENT_FAILURE_OTHER : result->failure;
-    if (!success && mal_value_is_nil(error)) {
-        error = http_client_failure_error(
-            vm, failure == MAL_HTTP_CLIENT_FAILURE_PEER_CLOSED
-                || (task->result == MAL_HOST_TERMINAL_CANCELLED && state->ended),
-            result);
+    bool hung_up = failure == MAL_HTTP_CLIENT_FAILURE_PEER_CLOSED
+        || (task->result == MAL_HOST_TERMINAL_CANCELLED && state->ended);
+    bool response_cut = !success && state->response_head_seen && !state->response_complete;
+    bool before_connection = failure == MAL_HTTP_CLIENT_FAILURE_CONNECT
+        || failure == MAL_HTTP_CLIENT_FAILURE_RESOLUTION;
+    // [0] is the request's error and [1] the response's.
+    MalValue errors[] = {state->destroy_error, mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, errors, countof(errors));
+    if (state->response_destroyed) {
+        errors[1] = errors[0];
+    } else if (!success) {
+        // A hang-up that cuts a response short is the response's failure alone.
+        if (mal_value_is_nil(errors[0]) && !(response_cut && hung_up)) {
+            errors[0] = http_client_failure_error(vm, state, hung_up, result);
+        }
+        if (response_cut) errors[1] = http_client_coded_error(vm, "aborted", "ECONNRESET");
     }
     // Node's contract for a socket deadline: 'timeout' first, then the error the
     // deadline caused, then 'close'. This runs once per request, so a listener that
@@ -4522,73 +4650,49 @@ static void http_client_dispatch_terminal(
         && vm->completion.kind != MAL_COMPLETION_THROW) {
         http_emit(vm, state->request, "timeout");
     }
-    if (!success && !mal_value_is_nil(error)) {
-        usize callback_count = 0;
-        for (MalNodeHttpResponseWrite *write = state->write_head;
-             write != nullptr; write = write->next) {
-            if (!mal_value_is_undefined(write->callback)) callback_count++;
-        }
-        MalValue *callbacks = callback_count == 0 || callback_count > INT32_MAX
-            ? nullptr : malloc(callback_count * sizeof(*callbacks));
-        MalAsyncContext **callback_contexts =
-            callbacks == nullptr ? nullptr
-                                 : malloc(callback_count * sizeof(*callback_contexts));
-        if (callbacks != nullptr && callback_contexts != nullptr) {
-            usize callback_index = 0;
-            for (MalNodeHttpResponseWrite *write = state->write_head;
-                 write != nullptr; write = write->next) {
-                if (mal_value_is_undefined(write->callback)) continue;
-                callbacks[callback_index++] = write->callback;
-                callback_contexts[callback_index - 1] = write->async_context;
-                write->callback = mal_value_new_undefined();
-            }
-            MalRootSpan callbacks_root;
-            mal_gc_root(&callbacks_root, callbacks, (i32) callback_count);
-            for (usize i = 0; i < callback_count; i++) {
-                MalAsyncContextScope scope;
-                mal_async_context_scope_enter(
-                    vm, &scope, callback_contexts[i]);
-                mal_vm_call_value(
-                    vm, callbacks[i], mal_value_new_undefined(), &error, 1);
-                mal_async_context_scope_exit(vm, &scope);
-                if (vm->completion.kind == MAL_COMPLETION_THROW) break;
-            }
-            mal_gc_unroot(&callbacks_root);
-        }
-        free(callback_contexts);
-        free(callbacks);
+    if (!success && !before_connection) {
+        http_client_fail_writes(
+            vm, state, mal_value_is_nil(errors[0]) ? errors[1] : errors[0]);
     }
     if (state->aborted && vm->completion.kind != MAL_COMPLETION_THROW) {
         http_emit(vm, state->request, "abort");
     }
-    if (!success && vm->completion.kind != MAL_COMPLETION_THROW
-        && !mal_value_is_nil(error)) {
-        MalValue error_target = state->response_destroyed
-            && state->response_head_seen ? state->response : state->request;
-        (void) http_call_method(vm, error_target, "emit", (MalValue[]) {
-            mal_value_from_string(
-                mal_intrinsic_ascii(vm, (const byte *) "error")),
-            error,
-        }, 2);
+    if (!mal_value_is_nil(errors[0]) && vm->completion.kind != MAL_COMPLETION_THROW) {
+        http_emit_error(vm, state->request, errors[0]);
     }
-    if (!success && state->response_head_seen && !state->response_complete
+    if (response_cut && !state->response_destroyed
         && vm->completion.kind != MAL_COMPLETION_THROW) {
         http_define(vm, state->response, "aborted", mal_value_new_boolean(true));
         http_define(vm, state->response, "destroyed", mal_value_new_boolean(true));
         http_define(vm, state->response, "readable", mal_value_new_boolean(false));
         http_emit(vm, state->response, "aborted");
-        if (vm->completion.kind != MAL_COMPLETION_THROW) {
-            http_emit(vm, state->response, "close");
-        }
     }
+    // res.destroy() closes the response before the request; a response the connection
+    // cut short closes after it, as Node's socket close handler orders them.
+    if (state->response_destroyed) http_client_close_response(vm, state, errors[1]);
     http_define(vm, state->request, "destroyed", mal_value_new_boolean(true));
     http_define(vm, state->request, "writable", mal_value_new_boolean(false));
-    if (state->ended) {
-        http_define(
-            vm, state->request, "writableFinished", mal_value_new_boolean(true));
-    }
     if (vm->completion.kind != MAL_COMPLETION_THROW) {
         http_emit(vm, state->request, "close");
+    }
+    if (response_cut && !state->response_destroyed) {
+        http_client_close_response(vm, state, errors[1]);
+    }
+    if (before_connection && vm->completion.kind != MAL_COMPLETION_THROW) {
+        // Node fails writes queued on a socket that never connected after it closes.
+        errors[1] = http_client_coded_error(
+            vm, "Socket closed before the connection was established",
+            "ERR_SOCKET_CLOSED_BEFORE_CONNECTION");
+        http_client_fail_writes(vm, state, errors[1]);
+        // end()'s callback waits for 'finish', which a request that never connected
+        // cannot reach; Node fails it with the writes.
+        if (!mal_value_is_undefined(state->end_callback)
+            && vm->completion.kind != MAL_COMPLETION_THROW) {
+            MalAsyncContextScope scope;
+            mal_async_context_scope_enter(vm, &scope, state->end_context);
+            mal_vm_call_value(vm, state->end_callback, mal_value_new_undefined(), &errors[1], 1);
+            mal_async_context_scope_exit(vm, &scope);
+        }
     }
     mal_gc_unroot(&root);
     if (vm->completion.kind == MAL_COMPLETION_THROW) {
@@ -4602,6 +4706,16 @@ static void http_client_dispatch_terminal(
 #endif
 }
 
+static void http_client_dispatch_terminating(
+    MalVm *vm, MalNodeHttpClientState *state, MalHostTask *task,
+    const MalHttpClientResult *result) {
+    state->next = http_clients_terminating;
+    http_clients_terminating = state;
+    http_client_dispatch_terminal(vm, state, task, result);
+    http_clients_terminating = state->next;
+    http_client_free(state);
+}
+
 static bool http_client_drain(MalVm *vm) {
     MalHost *host = mal_host(vm);
     if (host == nullptr) return false;
@@ -4612,12 +4726,6 @@ static bool http_client_drain(MalVm *vm) {
             pending_link = &state->next;
             continue;
         }
-        MalValue roots[] = {
-            state->request, state->response, state->end_callback,
-            state->destroy_error, state->response_destroy_error,
-        };
-        MalRootSpan root;
-        mal_gc_root(&root, roots, countof(roots));
         MalAsyncContextScope async_scope;
         mal_async_context_scope_enter(
             vm, &async_scope, state->async_context);
@@ -4626,10 +4734,8 @@ static bool http_client_drain(MalVm *vm) {
             .kind = MAL_HOST_TASK_TERMINAL,
             .result = MAL_HOST_TERMINAL_CANCELLED,
         };
-        http_client_dispatch_terminal(vm, state, &task, nullptr);
+        http_client_dispatch_terminating(vm, state, &task, nullptr);
         mal_async_context_scope_exit(vm, &async_scope);
-        http_client_free(state);
-        mal_gc_unroot(&root);
         return true;
     }
     if (mal_host_tasks_pending(&host->tasks) == 0) return false;
@@ -4672,8 +4778,7 @@ static bool http_client_drain(MalVm *vm) {
         mal_http_client_progress_free(data);
     } else {
         *link = state->next;
-        http_client_dispatch_terminal(vm, state, &task, data);
-        http_client_free(state);
+        http_client_dispatch_terminating(vm, state, &task, data);
         mal_http_client_result_free(data);
     }
     mal_async_context_scope_exit(vm, &async_scope);
@@ -5442,6 +5547,7 @@ static MalValue http_client_request_constructor(
         http_define_own(vm, result, "writableFinished", mal_value_new_boolean(false));
         http_define_own(vm, result, "destroyed", mal_value_new_boolean(false));
         http_define_own(vm, result, "aborted", mal_value_new_boolean(false));
+        http_define_own(vm, result, "reusedSocket", mal_value_new_boolean(false));
     }
     return result;
 }
@@ -5813,7 +5919,16 @@ static MalValue http_request_common(
         goto fail_state;
     }
     if (!http_client_option(vm, roots[0], "agent", &roots[6])) goto fail_state;
-    if (!mal_value_is_undefined(roots[6])) state->keep_alive = false;
+    // An agent keeps connections only when it pools them; `agent: false` is a new,
+    // non-pooling Agent, and no agent means the keep-alive globalAgent.
+    if (!mal_value_is_nil(roots[6])) {
+        MalValue keep_alive = mal_value_new_undefined();
+        if (mal_value_is_object(roots[6])
+            && !mal_vm_get_static(vm, roots[6], (const byte *) "keepAlive", &keep_alive)) {
+            goto fail_state;
+        }
+        state->keep_alive = mal_value_is_truthy(keep_alive);
+    }
     if (!http_client_option(vm, roots[0], "headers", &roots[3])
         || !http_client_serialize_headers(
             vm, roots[3], &state->headers, &state->headers_len,
@@ -5910,18 +6025,127 @@ static MalValue http_constructor(
     return value;
 }
 
+// `options[name] || fallback`, as Node's Agent constructor reads each option.
+static bool http_agent_option(
+    MalVm *vm, MalValue options, const char *name, MalValue fallback, MalValue *out) {
+    if (!mal_vm_get_property(
+            vm, options, mal_intrinsic_string_key(vm, (const byte *) name), out)) {
+        return false;
+    }
+    if (!mal_value_is_truthy(*out)) *out = fallback;
+    return true;
+}
+
+/* Node's Agent records its options as these properties. The transport keeps one idle
+ * connection pool of its own, so only keepAlive changes how requests behave. */
 static MalValue http_agent_constructor(
     MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
     MalValue new_target, MalValue callee) {
     (void) receiver;
-    (void) args;
-    (void) argc;
     MalValue target = mal_value_is_undefined(new_target) ? callee : new_target;
     MalValue prototype_value = mal_vm_function_prototype(vm, target);
+    if (vm->completion.kind == MAL_COMPLETION_THROW) return mal_value_new_undefined();
     MalObject *prototype = mal_value_is_object(prototype_value)
         ? mal_value_to_object(prototype_value)
         : mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_OBJECT_PROTOTYPE]);
-    return mal_value_from_object(mal_object_new(&vm->heap, prototype));
+    MalValue roots[] = {
+        mal_value_from_object(mal_object_new(&vm->heap, prototype)),
+        mal_value_new_undefined(), mal_value_new_undefined(), mal_value_new_undefined(),
+        callee,
+    };
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    MalValue options = argc > 0 ? args[0] : mal_value_new_undefined();
+    bool ok = mal_vm_call_value(
+            vm, vm->intrinsics[MAL_INTRINSIC_NODE_EVENT_EMITTER_CONSTRUCTOR], roots[0],
+            nullptr, 0).kind != MAL_COMPLETION_THROW;
+    if (ok) {
+        roots[1] = mal_value_is_nil(options)
+            ? mal_value_from_object(mal_intrinsic_new_object(vm))
+            : mal_vm_op_copy_data_properties(vm, options, nullptr, 0);
+        ok = vm->completion.kind != MAL_COMPLETION_THROW;
+    }
+    if (ok) {
+        mal_object_set_prototype(mal_value_to_object(roots[1]), nullptr);
+        http_define_own(vm, roots[0], "options", roots[1]);
+        ok = http_agent_option(vm, roots[1], "defaultPort", mal_value_from_i32(80), &roots[2]);
+    }
+    if (ok) {
+        http_define_own(vm, roots[0], "defaultPort", roots[2]);
+        ok = http_agent_option(vm, roots[1], "protocol", mal_value_from_string(
+            mal_intrinsic_ascii(vm, (const byte *) "http:")), &roots[2]);
+    }
+    if (ok) {
+        http_define_own(vm, roots[0], "protocol", roots[2]);
+        ok = mal_vm_get_static(vm, roots[1], (const byte *) "noDelay", &roots[2]);
+    }
+    if (ok) {
+        if (mal_value_is_undefined(roots[2])) {
+            http_define(vm, roots[1], "noDelay", mal_value_new_boolean(true));
+        }
+        http_define(vm, roots[1], "path", mal_value_new_null());
+        static const char *pools[] = {"requests", "sockets", "freeSockets"};
+        for (usize i = 0; i < countof(pools); i++) {
+            roots[2] = mal_value_from_object(mal_object_new(&vm->heap, nullptr));
+            http_define_own(vm, roots[0], pools[i], roots[2]);
+        }
+        ok = http_agent_option(
+            vm, roots[1], "keepAliveMsecs", mal_value_from_i32(1000), &roots[2]);
+    }
+    if (ok) {
+        http_define_own(vm, roots[0], "keepAliveMsecs", roots[2]);
+        ok = http_agent_option(
+            vm, roots[1], "keepAlive", mal_value_new_boolean(false), &roots[2]);
+    }
+    if (ok) {
+        http_define_own(vm, roots[0], "keepAlive", roots[2]);
+        ok = mal_vm_get_static(vm, roots[4], (const byte *) "defaultMaxSockets", &roots[3])
+            && http_agent_option(vm, roots[1], "maxSockets", roots[3], &roots[2]);
+    }
+    if (ok) {
+        http_define_own(vm, roots[0], "maxSockets", roots[2]);
+        ok = http_agent_option(
+            vm, roots[1], "maxFreeSockets", mal_value_from_i32(256), &roots[2]);
+    }
+    if (ok) {
+        http_define_own(vm, roots[0], "maxFreeSockets", roots[2]);
+        ok = http_agent_option(vm, roots[1], "scheduling", mal_value_from_string(
+            mal_intrinsic_ascii(vm, (const byte *) "lifo")), &roots[2]);
+    }
+    if (ok) {
+        http_define_own(vm, roots[0], "scheduling", roots[2]);
+        ok = mal_vm_get_static(vm, roots[1], (const byte *) "maxTotalSockets", &roots[3]);
+    }
+    if (ok) {
+        http_define_own(vm, roots[0], "maxTotalSockets", roots[3]);
+        http_define_own(vm, roots[0], "totalSocketCount", mal_value_from_i32(0));
+        MalValue buffer = mal_value_new_undefined();
+        ok = mal_vm_get_static(
+            vm, roots[1], (const byte *) "agentKeepAliveTimeoutBuffer", &buffer);
+        bool usable = ok && mal_ops_is_number(buffer)
+            && isfinite(mal_ops_number_as_f64(buffer)) && mal_ops_number_as_f64(buffer) >= 0;
+        http_define_own(vm, roots[0], "agentKeepAliveTimeoutBuffer",
+                        usable ? buffer : mal_value_from_i32(1000));
+    }
+    if (ok && !(mal_value_is_string(roots[2])
+                && (mal_string_equals_ascii(mal_value_to_string(roots[2]), "fifo")
+                    || mal_string_equals_ascii(mal_value_to_string(roots[2]), "lifo")))) {
+        http_throw_invalid_arg_value(
+            vm, "The argument 'scheduling' must be one of: 'fifo', 'lifo'.", roots[2]);
+        ok = false;
+    }
+    if (ok && mal_value_is_undefined(roots[3])) {
+        http_define_own(vm, roots[0], "maxTotalSockets", mal_value_from_f64(INFINITY));
+    } else if (ok && !mal_ops_is_number(roots[3])) {
+        mal_node_throw_invalid_arg_type(vm, "maxTotalSockets", "of type number", roots[3]);
+        ok = false;
+    } else if (ok && !(mal_ops_number_as_f64(roots[3]) >= 1)) {
+        mal_node_throw_out_of_range(vm, "maxTotalSockets", ">= 1", roots[3]);
+        ok = false;
+    }
+    MalValue result = ok ? roots[0] : mal_value_new_undefined();
+    mal_gc_unroot(&root);
+    return result;
 }
 
 static MalValue http_agent_destroy(
@@ -6165,14 +6389,28 @@ void mal_host_install_node_http(
         http_is_valid_header_name);
     mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[0]), (const byte *) "isValidHeaderValue", 2,
         http_is_valid_header_value);
-    roots[16] = mal_value_from_object(mal_intrinsic_new_object(vm));
+    roots[16] = mal_value_from_object(mal_object_new(
+        &vm->heap, mal_value_to_object(
+            vm->intrinsics[MAL_INTRINSIC_NODE_EVENT_EMITTER_PROTOTYPE])));
     mal_intrinsic_define_method_n(
         vm, mal_value_to_object(roots[16]), (const byte *) "destroy", 0,
         http_agent_destroy);
     roots[17] = http_constructor(
         vm, "Agent", 1, http_agent_constructor, roots[16]);
-    roots[18] = mal_value_from_object(mal_object_new(
-        &vm->heap, mal_value_to_object(roots[16])));
+    mal_object_set_prototype(mal_value_to_object(roots[17]), mal_value_to_object(
+        vm->intrinsics[MAL_INTRINSIC_NODE_EVENT_EMITTER_CONSTRUCTOR]));
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[17]),
+        (const byte *) "defaultMaxSockets", mal_value_from_f64(INFINITY), HTTP_VISIBLE);
+    // Node's globalAgent: new Agent({ keepAlive: true, scheduling: 'lifo', timeout: 5000 }).
+    roots[18] = mal_value_from_object(mal_intrinsic_new_object(vm));
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[18]), (const byte *) "keepAlive",
+        mal_value_new_boolean(true), HTTP_VISIBLE);
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[18]), (const byte *) "scheduling",
+        mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "lifo")), HTTP_VISIBLE);
+    mal_intrinsic_define_data(vm, mal_value_to_object(roots[18]), (const byte *) "timeout",
+        mal_value_from_i32(5000), HTTP_VISIBLE);
+    roots[18] = http_agent_constructor(vm, mal_value_new_undefined(), &roots[18], 1,
+                                       roots[17], roots[17]);
 
     mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[0]), (const byte *) "setMaxIdleHTTPParsers", 1,
         http_set_max_idle_parsers);

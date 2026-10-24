@@ -978,6 +978,12 @@ bool mal_tcp_cancel(MalHost *host, MalHostHandle operation) {
     return mal_host_operation_cancel(&host->tasks, operation);
 }
 
+bool mal_tcp_reset(MalHost *host, MalHostHandle operation) {
+    MalTcpConnection *connection = tcp_find(host, operation);
+    if (connection != nullptr) mal_net_reset_on_close(connection->fd);
+    return mal_tcp_cancel(host, operation);
+}
+
 void mal_tcp_shutdown(MalHost *host) {
     if (host == nullptr) return;
     for (MalTcpListener *listener = tcp_listeners, *next; listener != nullptr; listener = next) {

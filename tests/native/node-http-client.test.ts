@@ -42,9 +42,13 @@ async function listen(server: Server): Promise<number> {
 	return address.port;
 }
 
-function runClient(binary: string, env: NodeJS.ProcessEnv): Promise<string> {
+function runClient(
+	binary: string,
+	env: NodeJS.ProcessEnv,
+	args: Array<string> = [],
+): Promise<string> {
 	return new Promise<string>((resolve, reject) => {
-		const child = spawn(binary, [], {
+		const child = spawn(binary, args, {
 			stdio: ["ignore", "pipe", "pipe"],
 			env: { ...process.env, ...env },
 		});
@@ -55,7 +59,7 @@ function runClient(binary: string, env: NodeJS.ProcessEnv): Promise<string> {
 		const timer = setTimeout(() => {
 			child.kill();
 			reject(new Error(`${path.basename(binary)} timed out`));
-		}, 5000);
+		}, 15000);
 		child.once("exit", (code) => {
 			clearTimeout(timer);
 			if (code === 0) resolve(stdout);
@@ -64,10 +68,43 @@ function runClient(binary: string, env: NodeJS.ProcessEnv): Promise<string> {
 	});
 }
 
+/* Answers each request with its connection's ordinal and Connection header, so a client
+ * can tell reuse apart; the cut and partial paths stop after three of ten body bytes. */
+function failurePeer(): Server {
+	let connections = 0;
+	return createServer((socket) => {
+		const connection = ++connections;
+		let pending = "";
+		socket.on("error", () => {});
+		socket.on("data", (chunk) => {
+			pending += chunk.toString("latin1");
+			while (pending.includes("\r\n\r\n")) {
+				const head = pending.slice(0, pending.indexOf("\r\n\r\n"));
+				pending = pending.slice(head.length + 4);
+				const target = head.split(" ")[1];
+				if (
+					target === "/truncate-fin" ||
+					target === "/truncate-rst" ||
+					target === "/partial"
+				) {
+					socket.write("HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nabc");
+					if (target === "/truncate-fin") setTimeout(() => socket.end(), 20);
+					if (target === "/truncate-rst") setTimeout(() => socket.resetAndDestroy(), 20);
+					continue;
+				}
+				const header = /\r\nconnection: *([^\r]*)/i.exec(head)?.[1] ?? "none";
+				const body = `${connection}:${header}`;
+				socket.write(`HTTP/1.1 200 OK\r\nContent-Length: ${body.length}\r\n\r\n${body}`);
+			}
+		});
+	});
+}
+
 describe("node:http outbound client", () => {
 	let binaries: Array<string>;
 	let earlyCloseBinaries: Array<string>;
 	let reusedCloseBinary: string;
+	let failuresBinary: string;
 
 	beforeAll(() => {
 		binaries = [true, false].map((compiled) =>
@@ -89,6 +126,11 @@ describe("node:http outbound client", () => {
 		reusedCloseBinary = buildClient(
 			"tests/local/node-http-client-reused-close.cjs",
 			"node-http-client-reused-close",
+			true,
+		);
+		failuresBinary = buildClient(
+			"tests/local/node-http-client-failures.cjs",
+			"node-http-client-failures",
 			true,
 		);
 	});
@@ -185,5 +227,45 @@ describe("node:http outbound client", () => {
 				});
 			}
 		}
+	});
+
+	it("reports failed connections, cut responses and agent pooling as Node does", async () => {
+		const fixture = "tests/local/node-http-client-failures.cjs";
+		const outputs: Array<string> = [];
+		for (const [command, args, env] of [
+			[process.execPath, [fixture], {}],
+			[failuresBinary, [], {}],
+			[failuresBinary, [], STRESS_ENV],
+		] as const) {
+			const peers = [failurePeer(), failurePeer()];
+			const [port, poolPort] = await Promise.all(peers.map(listen));
+			try {
+				outputs.push(
+					await runClient(
+						command,
+						{
+							...env,
+							MAL_HTTP_FAILURES_PORT: String(port),
+							MAL_HTTP_FAILURES_POOL_PORT: String(poolPort),
+						},
+						[...args],
+					),
+				);
+			} finally {
+				await Promise.all(
+					peers.map(
+						(peer) =>
+							new Promise<void>((resolve) => {
+								peer.close(() => resolve());
+							}),
+					),
+				);
+			}
+		}
+		const [node, maligator, stressed] = outputs;
+		expect(node).toContain("default second: reused=true same=true connection=keep-alive");
+		expect(node).toContain('"code":"ECONNREFUSED"');
+		expect(maligator).toBe(node);
+		expect(stressed).toBe(node);
 	});
 });

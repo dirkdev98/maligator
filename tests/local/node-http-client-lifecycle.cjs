@@ -160,17 +160,22 @@ function runDestroyResponse(port) {
 				responseEvents.push("close");
 				check(response.destroyed, "response destroy marks destroyed");
 				check(
-					responseEvents.join(",") === "error,aborted,close",
+					responseEvents.join(",") === "aborted,error,close",
 					"response destroy events",
 				);
 			});
 			response.destroy(responseDestroyError);
+			check(responseEvents.join(",") === "aborted", "response destroy aborts at once");
 		},
 	);
-	request.on("error", () => check(false, "response destroy request error"));
+	request.on("error", (error) => {
+		check(error === responseDestroyError, "response destroy request error identity");
+		requestEvents.push("error");
+	});
 	request.on("close", () => {
 		requestEvents.push("close");
-		check(requestEvents.join(",") === "close", "response destroy request close");
+		check(responseEvents.at(-1) === "close", "response closes before its request");
+		check(requestEvents.join(",") === "error,close", "response destroy request events");
 		runNormal(port);
 	});
 	request.end();
@@ -191,14 +196,20 @@ function runRefused(port) {
 	request.on("close", () => {
 		events.push("close");
 		check(events.join(",") === "error,close", "refused terminal event order");
+		check(requestError.code === "ECONNREFUSED", "refused error code");
 		check(request.destroyed, "refused request destroyed");
-		check(request.writableFinished, "refused write side finished");
-		check(writeErrors.length === 2, "refused write callback count");
-		check(
-			writeErrors[0] === requestError && writeErrors[1] === requestError,
-			"refused write callback error",
-		);
-		finish();
+		check(!request.writableFinished, "refused writes never finish");
+		check(writeErrors.length === 0, "refused writes fail after close");
+		setTimeout(() => {
+			check(writeErrors.length === 2, "refused write callback count");
+			check(
+				writeErrors.every(
+					(error) => error.code === "ERR_SOCKET_CLOSED_BEFORE_CONNECTION",
+				),
+				"refused write callback error",
+			);
+			finish();
+		}, 10);
 	});
 	request.write("body", (error) => {
 		writeErrors.push(error);

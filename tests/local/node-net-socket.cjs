@@ -178,10 +178,77 @@ function runCancellation(port) {
 		events.push("close");
 		check(events.join(",") === "error,close", "cancellation event order");
 		check(hadError === true, "cancellation hadError");
-		server.close(() => runRefused(port));
+		server.close(() => runReset(port));
 	});
 	check(socket.destroy(expected) === socket, "destroy return");
 	check(socket.destroyed === true, "destroy immediate state");
+}
+
+function runReset(refusedPort) {
+	const peerErrors = [];
+	const peer = net.createServer((socket) => {
+		socket.on("error", (error) => peerErrors.push(error.code));
+		socket.resume();
+	});
+	peer.listen(0, "127.0.0.1", () => {
+		const port = peer.address().port;
+		const connected = net.connect(port, "127.0.0.1", () => {
+			check(connected.resetAndDestroy() === connected, "resetAndDestroy return");
+			check(connected.destroyed, "resetAndDestroy destroys at once");
+		});
+		connected.on("error", (error) => check(false, "reset socket error " + error.code));
+		connected.on("close", (hadError) => {
+			check(hadError === false, "reset close hadError");
+			runConnectingReset(port);
+		});
+	});
+
+	function runConnectingReset(port) {
+		const events = [];
+		const connecting = net.connect(port, "127.0.0.1");
+		connecting.on("connect", () => events.push("connect"));
+		connecting.on("error", (error) => events.push("error:" + error.code));
+		connecting.on("close", (hadError) => {
+			events.push("close:" + hadError);
+			check(events.join(",") === "connect,close:false", "connecting reset events");
+			runUnconnectedReset();
+		});
+		check(
+			connecting.resetAndDestroy() === connecting,
+			"connecting resetAndDestroy return",
+		);
+		check(!connecting.destroyed, "connecting reset waits for the connection");
+	}
+
+	function runUnconnectedReset() {
+		const events = [];
+		const unconnected = new net.Socket();
+		unconnected.on("error", (error) => events.push("error:" + error.code));
+		unconnected.on("close", () => {
+			events.push("close");
+			check(
+				events.join(",") === "error:ERR_SOCKET_CLOSED,close",
+				"unconnected reset events: " + events.join(","),
+			);
+			awaitPeerResets(0);
+		});
+		check(
+			unconnected.resetAndDestroy() === unconnected,
+			"unconnected resetAndDestroy return",
+		);
+	}
+
+	function awaitPeerResets(attempt) {
+		if (peerErrors.length < 2 && attempt < 100) {
+			setTimeout(() => awaitPeerResets(attempt + 1), 10);
+			return;
+		}
+		check(
+			peerErrors.join(",") === "ECONNRESET,ECONNRESET",
+			"peer sees resets: " + peerErrors.join(","),
+		);
+		peer.close(() => runRefused(refusedPort));
+	}
 }
 
 function runRefused(port) {

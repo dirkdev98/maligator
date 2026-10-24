@@ -242,6 +242,11 @@ int mal_net_socket_error(int fd) {
     return err;
 }
 
+void mal_net_reset_on_close(int fd) {
+    struct linger abort_on_close = {.l_onoff = 1, .l_linger = 0};
+    (void) setsockopt(fd, SOL_SOCKET, SO_LINGER, &abort_on_close, sizeof(abort_on_close));
+}
+
 void mal_net_close(int fd) {
     if (fd >= 0) {
         close(fd);

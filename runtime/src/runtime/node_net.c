@@ -1031,7 +1031,16 @@ static MalValue net_socket_destroy(
     (void) new_target;
     (void) callee;
     MalNodeNetSocketState *state = net_state(receiver);
-    if (state == nullptr || state->destroyed) return receiver;
+    if (state == nullptr) {
+        // A socket that never connected has no transport, so the stream base destroys it.
+        MalValue method;
+        MalValue prototype = vm->intrinsics[MAL_INTRINSIC_NODE_DUPLEX_PROTOTYPE];
+        if (!net_get(vm, prototype, "destroy", &method)) return mal_value_new_undefined();
+        MalCompletion completion = mal_vm_call_value(vm, method, receiver, args, argc);
+        return completion.kind == MAL_COMPLETION_THROW
+            ? mal_value_new_undefined() : completion.value;
+    }
+    if (state->destroyed) return receiver;
     state->destroyed = true;
     state->destroy_error = argc > 0 ? args[0] : mal_value_new_undefined();
     net_set(vm, receiver, "destroyed", mal_value_new_boolean(true));
@@ -1041,6 +1050,56 @@ static MalValue net_socket_destroy(
         mal_tcp_cancel(mal_host(vm), state->operation);
     }
     return receiver;
+}
+
+static void net_socket_reset(MalVm *vm, MalValue receiver, MalNodeNetSocketState *state) {
+    state->destroyed = true;
+    state->destroy_error = mal_value_new_undefined();
+    net_set(vm, receiver, "destroyed", mal_value_new_boolean(true));
+    mal_tcp_reset(mal_host(vm), state->operation);
+}
+
+/* Slots: [socket]; a reset requested while connecting waits for the connection. */
+static MalValue net_reset_on_connect(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) receiver; (void) args; (void) argc; (void) new_target;
+    MalValue socket = mal_native_function_object_get_slot(
+        mal_value_to_native_function_object(callee), 0);
+    MalNodeNetSocketState *state = net_state(socket);
+    if (state != nullptr && !state->destroyed) net_socket_reset(vm, socket, state);
+    return mal_value_new_undefined();
+}
+
+// Node's Socket.prototype.resetAndDestroy: close a TCP connection with an RST.
+static MalValue net_socket_reset_and_destroy(
+    MalVm *vm, MalValue receiver, const MalValue *args, i32 argc,
+    MalValue new_target, MalValue callee) {
+    (void) args; (void) argc; (void) new_target; (void) callee;
+    MalNodeNetSocketState *state = net_state(receiver);
+    MalValue roots[] = {receiver, mal_value_new_undefined(), mal_value_new_undefined()};
+    MalRootSpan root;
+    mal_gc_root(&root, roots, countof(roots));
+    if (state == nullptr || state->destroyed) {
+        roots[1] = net_coded_error(
+            vm, MAL_INTRINSIC_ERROR_PROTOTYPE, "Socket is closed", "ERR_SOCKET_CLOSED");
+        (void) net_call_method(vm, roots[0], "destroy", &roots[1], 1);
+    } else if (state->path != nullptr || state->secure || state->tls_server) {
+        mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                            "This handle type cannot be sent", "ERR_INVALID_HANDLE_TYPE");
+    } else if (!state->connected) {
+        roots[1] = mal_value_from_string(mal_intrinsic_ascii(vm, (const byte *) "connect"));
+        roots[2] = mal_value_from_native_function_object(
+            mal_native_function_object_new_with_slots(
+                &vm->heap, mal_value_to_object(vm->intrinsics[MAL_INTRINSIC_FUNCTION_PROTOTYPE]),
+                mal_intrinsic_ascii(vm, (const byte *) "reset"), net_reset_on_connect,
+                roots, 1));
+        (void) net_call_method(vm, roots[0], "once", roots + 1, 2);
+    } else {
+        net_socket_reset(vm, roots[0], state);
+    }
+    mal_gc_unroot(&root);
+    return vm->completion.kind == MAL_COMPLETION_THROW ? mal_value_new_undefined() : receiver;
 }
 
 static MalValue net_call_readable_method(
@@ -2564,6 +2623,8 @@ void mal_host_install_node_net(
         (const byte *) "end", 3, net_socket_end);
     mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[1]),
         (const byte *) "destroy", 1, net_socket_destroy);
+    mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[1]),
+        (const byte *) "resetAndDestroy", 0, net_socket_reset_and_destroy);
     mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[1]),
         (const byte *) "pause", 0, net_socket_pause);
     mal_intrinsic_define_method_n(vm, mal_value_to_object(roots[1]),
