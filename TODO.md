@@ -100,6 +100,12 @@ until the consumer admits real sites and measurements establish a benefit.
 The independent target boundary and current storage contract are recorded in
 [native SSA lowering](docs/decisions/native-ssa-lowering.md).
 
+- [ ] Select a dedicated non-heap helper for dynamic captured stores. The shared
+      boolean argument also charges unknown-value stores: the frozen full workload
+      removes 95 card calls but adds arguments to 2,545 unknown-value calls and
+      78 non-heap calls, growing C by 12,249 bytes. Keep the ordinary store kernel
+      free of that proof argument while sharing owner lookup and retaining SATB.
+
 - [ ] Define profiled compiler-artifact restoration. The codec omits profile-site
       tables, but stored native plans retain profiling restrictions. A profiled
       `globalThis.result = [1, 2, 3]` fails restoration with an invalid storage plan
