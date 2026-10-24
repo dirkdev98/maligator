@@ -315,3 +315,17 @@ export function compilerTypeofComparison(
 	if (expected === "object") return mask === COMPILER_VALUE_KIND_NULL ? true : undefined;
 	return compilerValueKindMaskIsSubset(mask, kind) ? true : undefined;
 }
+
+export function compilerValueKindTruthiness(
+	mask: CompilerValueKindMask,
+): boolean | undefined {
+	if (compilerValueKindMaskIsSubset(mask, COMPILER_VALUE_KIND_NULLISH)) return false;
+	if (
+		compilerValueKindMaskIsSubset(
+			mask,
+			COMPILER_VALUE_KIND_OBJECT | COMPILER_VALUE_KIND_SYMBOL,
+		)
+	)
+		return true;
+	return undefined;
+}

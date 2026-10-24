@@ -1,5 +1,6 @@
 import {
 	compilerTypeofComparison,
+	compilerValueKindTruthiness,
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_TOP,
 	COMPILER_VALUE_KIND_NULLISH,
@@ -436,8 +437,12 @@ function fastUnary(
 	if (operator !== "!" && numberFailure === "true") return undefined;
 	const guard = numberFailure === "false" ? "" : `if (${numberFailure}) goto __full;`;
 	switch (operator) {
-		case "!":
-			return `f${dst} = mal_value_new_boolean(!mal_value_is_truthy(f${src}));`;
+		case "!": {
+			const constant = compilerValueKindTruthiness(values.kind(src));
+			return constant === undefined
+				? `f${dst} = mal_value_new_boolean(!mal_value_is_truthy(f${src}));`
+				: `f${dst} = ${constant ? "MAL_VALUE_FALSE" : "MAL_VALUE_TRUE"};`;
+		}
 		case "-":
 			return `${guard} f${dst} = mal_ops_number_value(-${number(values, src)});`;
 		case "+":
@@ -560,6 +565,8 @@ function fastInstruction(
 		case "JUMP_IF": {
 			const target = jump(op.targetIp);
 			if (target === undefined) return undefined;
+			const constant = compilerValueKindTruthiness(values.kind(op.cond));
+			if (constant !== undefined) return constant ? target : "";
 			return integers.has(op.cond)
 				? `if (mal_ops_number_value_to_i32(f${op.cond}) != 0) ${target}`
 				: `if (mal_value_is_truthy(f${op.cond})) ${target}`;

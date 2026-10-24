@@ -140,3 +140,19 @@ try {
 } catch (error) {
 	console.log(error.name, searchEffects.join(","));
 }
+
+function truthyKinds(input, flag) {
+	const value = flag
+		? Symbol(String(input))
+		: {
+				valueOf() {
+					throw new Error("Boolean coercion called user code");
+				},
+			};
+	return value ? !value : true;
+}
+function nilKinds(flag) {
+	const value = flag ? null : undefined;
+	return value ? false : !value;
+}
+console.log(truthyKinds(7, true), truthyKinds(7, false), nilKinds(true), nilKinds(false));

@@ -13,6 +13,7 @@ import {
 } from "../shared/builtin-registry.ts";
 import {
 	compilerTypeofComparison,
+	compilerValueKindTruthiness,
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_TOP,
 	COMPILER_VALUE_KIND_NULL,
@@ -7539,22 +7540,23 @@ function emitInstruction(
 					: inputValue(r);
 	const num = (r: number): string =>
 		reps[r] === "int32" ? `(f64) ${inputValue(r)}` : inputValue(r);
-	const truthy = (r: number): string =>
-		reps[r] === "boxed" &&
-		instructionInputKind(context.facts, r) === COMPILER_VALUE_KIND_BOOLEAN
-			? `mal_value_to_boolean(r${r})`
-			: reps[r] === "boxed" &&
-				  instructionInputKind(context.facts, r) === COMPILER_VALUE_KIND_NUMBER
-				? `mal_number_is_truthy(mal_ops_number_as_f64(r${r}))`
-				: reps[r] === "boolean"
-					? `r${r}`
-					: reps[r] === "int32"
-						? `(r${r} != 0)`
-						: reps[r] === "number"
-							? `mal_number_is_truthy(r${r})`
-							: reps[r] === "string"
-								? `(mal_string_length(mal_value_to_string(r${r})) != 0)`
-								: `mal_value_is_truthy(r${r})`;
+	const truthy = (r: number): string => {
+		if (reps[r] === "boolean") return `r${r}`;
+		if (reps[r] === "int32") return `(r${r} != 0)`;
+		if (reps[r] === "number") return `mal_number_is_truthy(r${r})`;
+		const kind =
+			reps[r] === "string"
+				? COMPILER_VALUE_KIND_STRING
+				: (instructionInputKind(context.facts, r) ?? COMPILER_VALUE_KIND_TOP);
+		const constant = compilerValueKindTruthiness(kind);
+		if (constant !== undefined) return constant ? "true" : "false";
+		if (kind === COMPILER_VALUE_KIND_BOOLEAN) return `mal_value_to_boolean(r${r})`;
+		if (kind === COMPILER_VALUE_KIND_NUMBER)
+			return `mal_number_is_truthy(mal_ops_number_as_f64(r${r}))`;
+		if (kind === COMPILER_VALUE_KIND_STRING)
+			return `(mal_string_length(mal_value_to_string(r${r})) != 0)`;
+		return `mal_value_is_truthy(r${r})`;
+	};
 	if (
 		instruction.opcode === "MOVE" &&
 		context.propertyNumericUpdateAction === undefined &&

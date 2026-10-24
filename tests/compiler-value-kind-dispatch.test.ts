@@ -11,6 +11,7 @@ import {
 	compilerNumericResultKind,
 	compilerOperatorInputKindsHaveExactNativeSemantics as exactNativeKinds,
 	compilerTypeofComparison,
+	compilerValueKindTruthiness,
 } from "../src/compiler/shared/compiler-value-kinds.ts";
 
 const singleKinds = (mask: number): ReadonlyArray<number> =>
@@ -191,4 +192,27 @@ describe("Compiler value-kind operator dispatch", () => {
 			}
 		}
 	});
+});
+
+it("matches JavaScript Boolean observations for every kind union", () => {
+	const values: ReadonlyArray<ReadonlyArray<unknown>> = [
+		[undefined],
+		[null],
+		[false, true],
+		[0, -0, NaN, Infinity],
+		["", "x"],
+		[0n, 1n],
+		[Symbol("x")],
+		[{}, [], () => {}],
+	];
+	for (let mask = 1; mask <= TOP; mask++) {
+		const outcomes = new Set<boolean>();
+		for (const [bit, representatives] of values.entries())
+			if ((mask & (1 << bit)) !== 0)
+				for (const value of representatives) outcomes.add(Boolean(value));
+		equal(
+			compilerValueKindTruthiness(mask),
+			outcomes.size === 1 ? [...outcomes][0] : undefined,
+		);
+	}
 });
