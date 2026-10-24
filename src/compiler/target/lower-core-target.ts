@@ -2220,8 +2220,7 @@ function lowerFunctionToTarget(
 			const resultCount = kernel.instructionResultCount(instruction);
 			const inputRegisters = inputCount === 0 ? [] : loweredRegisters.slice(-inputCount);
 			const resultRegisters = loweredRegisters.slice(0, resultCount);
-			lowered = {
-				...lowered,
+			Object.assign(lowered, {
 				facts: {
 					...(kinds === undefined
 						? {}
@@ -2235,7 +2234,7 @@ function lowerFunctionToTarget(
 						kinds?.effectMask ??
 						encodeInstructionEffects(coreInstructionEffects(coreFunction, instruction)),
 				},
-			};
+			});
 			loweredInstructions.set(instruction, lowered);
 			if (siteFacts.size > 0) {
 				const site = siteFacts.get(
@@ -2712,6 +2711,22 @@ function lowerFunctionToTarget(
 				}
 			}
 		}
+		const sameMasks = (left: ReadonlyArray<number>, right: ReadonlyArray<number>) =>
+			left === right ||
+			(left.length === right.length &&
+				left.every((mask, index) => mask === right[index]));
+		const entryFacts = entry.instructionFacts?.filter(
+			({ instruction, masks, results, effectMask }) => {
+				if (!loweredInstructions.has(instruction)) return false;
+				const canonical = instructionFacts.get(instruction);
+				return (
+					canonical === undefined ||
+					!sameMasks(canonical.masks, masks) ||
+					!sameMasks(canonical.results, results) ||
+					canonical.effectMask !== effectMask
+				);
+			},
+		);
 		return {
 			id: entry.id,
 			...(entry.callOverrides === undefined
@@ -2725,17 +2740,17 @@ function lowerFunctionToTarget(
 							}),
 						),
 					}),
-			...(entry.instructionFacts === undefined
+			...(entryFacts === undefined || entryFacts.length === 0
 				? {}
 				: {
-						instructionFacts: entry.instructionFacts
-							.filter(({ instruction }) => loweredInstructions.has(instruction))
-							.map(({ instruction, masks, results, effectMask }) => ({
+						instructionFacts: entryFacts.map(
+							({ instruction, masks, results, effectMask }) => ({
 								instruction: loweredInstructions.get(instruction)!,
 								masks,
 								results,
 								effectMask,
-							})),
+							}),
+						),
 					}),
 			...(entry.fieldParameters === undefined
 				? {}

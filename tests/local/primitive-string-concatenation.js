@@ -98,6 +98,18 @@ function ordinaryKinds(input, flag) {
 console.log(ordinaryKinds(-7, true), ordinaryKinds(-7, false));
 console.log(Math.abs.call(7, undefined), Math.abs.call("receiver", null));
 
+function classify(input, flag) {
+	const value = flag ? String(input) : Symbol("input");
+	return [
+		typeof value === "number",
+		typeof value === "object",
+		typeof value === "function",
+		typeof value === "string",
+		Number.isInteger(value),
+	].join(",");
+}
+console.log(classify(7, true), classify(7, false));
+
 const searchEffects = [];
 function search(receiver, needle, position) {
 	return String.prototype.includes.call(receiver, needle, position);

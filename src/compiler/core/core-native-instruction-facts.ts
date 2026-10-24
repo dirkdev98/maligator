@@ -52,23 +52,71 @@ export function coreInstructionFactPlans(
 			scope: "function",
 			function: functionId,
 		});
+		const proof = { fn, versions: fn.versions };
 		for (const instruction of fn.instructionIds()) {
 			const plan = Object.freeze({
 				function: functionId,
 				instruction,
-				...coreInstructionFacts(fn, instruction, kinds),
+				...coreInstructionFacts(fn, instruction, kinds, false),
 			});
-			kindProofs.set(plan, { fn, versions: fn.versions });
+			kindProofs.set(plan, proof);
 			plans.push(plan);
 		}
 	}
 	return Object.freeze(plans);
 }
 
+const emptyMasks: ReadonlyArray<number> = Object.freeze([]);
+const singleMasks = new Map<number, ReadonlyArray<number>>();
+const pairMasks = new Map<number, ReadonlyArray<number>>();
+
+function instructionMasks(
+	fn: CoreFunctionStore,
+	kinds: CoreValueKindAnalysis,
+	start: number,
+	count: number,
+	result: boolean,
+): ReadonlyArray<number> {
+	if (count === 0) return emptyMasks;
+	const kernel = fn.kernel;
+	const first =
+		kinds.kindMask(result ? kernel.resultAt(start) : kernel.operandAt(start)) ||
+		COMPILER_VALUE_KIND_TOP;
+	if (count === 1) {
+		let masks = singleMasks.get(first);
+		if (masks === undefined) {
+			masks = Object.freeze([first]);
+			singleMasks.set(first, masks);
+		}
+		return masks;
+	}
+	const second =
+		kinds.kindMask(result ? kernel.resultAt(start + 1) : kernel.operandAt(start + 1)) ||
+		COMPILER_VALUE_KIND_TOP;
+	if (count === 2) {
+		const key = first * 256 + second;
+		let masks = pairMasks.get(key);
+		if (masks === undefined) {
+			masks = Object.freeze([first, second]);
+			pairMasks.set(key, masks);
+		}
+		return masks;
+	}
+	const values = [first, second];
+	for (let index = 2; index < count; index++)
+		values.push(
+			kinds.kindMask(
+				result ? kernel.resultAt(start + index) : kernel.operandAt(start + index),
+			) || COMPILER_VALUE_KIND_TOP,
+		);
+	return Object.freeze(values);
+}
+
 export function coreInstructionFacts(
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
 	kinds: CoreValueKindAnalysis,
+	refineEffects = true,
 ): {
 	readonly masks: ReadonlyArray<number>;
 	readonly results: ReadonlyArray<number>;
@@ -77,30 +125,31 @@ export function coreInstructionFacts(
 	const kernel = fn.kernel;
 	const input = kernel.instructionOperandStart(instruction);
 	const output = kernel.instructionResultStart(instruction);
-	const masks = Object.freeze(
-		Array.from(
-			{ length: kernel.instructionOperandCount(instruction) },
-			(_, index) =>
-				kinds.kindMask(kernel.operandAt(input + index)) || COMPILER_VALUE_KIND_TOP,
-		),
+	const masks = instructionMasks(
+		fn,
+		kinds,
+		input,
+		kernel.instructionOperandCount(instruction),
+		false,
 	);
 	return {
 		masks,
 		effectMask:
 			fn.instructionKind(instruction) === "operation"
 				? encodeInstructionEffects(
-						corePrimitiveOperatorEffectRefinement(fn, instruction, masks) ??
-							coreInstructionEffects(fn, instruction),
+						(refineEffects
+							? corePrimitiveOperatorEffectRefinement(fn, instruction, masks)
+							: undefined) ?? coreInstructionEffects(fn, instruction),
 					)
 				: fn.instructionKind(instruction) === "throw"
 					? INSTRUCTION_MAY_THROW
 					: 0,
-		results: Object.freeze(
-			Array.from(
-				{ length: kernel.instructionResultCount(instruction) },
-				(_, index) =>
-					kinds.kindMask(kernel.resultAt(output + index)) || COMPILER_VALUE_KIND_TOP,
-			),
+		results: instructionMasks(
+			fn,
+			kinds,
+			output,
+			kernel.instructionResultCount(instruction),
+			true,
 		),
 	};
 }

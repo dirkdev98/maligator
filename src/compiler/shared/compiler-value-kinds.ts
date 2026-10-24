@@ -1,3 +1,4 @@
+import type { CompilerTypeofResult } from "./compiler-instruction.ts";
 /**
  * Closed ECMAScript value-kind lattice shared by Core proof production and
  * target-plan consumers. These are semantic kinds, not physical register
@@ -287,4 +288,30 @@ export function compilerBuiltinInputKindsAreValid(
 		masks.length >= 1 &&
 		masks.every((mask) => compilerValueKindMaskIsValid(mask, { allowTop: true }))
 	);
+}
+
+export function compilerTypeofComparison(
+	mask: CompilerValueKindMask,
+	expected: CompilerTypeofResult,
+): boolean | undefined {
+	const kind =
+		expected === "undefined"
+			? COMPILER_VALUE_KIND_UNDEFINED
+			: expected === "boolean"
+				? COMPILER_VALUE_KIND_BOOLEAN
+				: expected === "number"
+					? COMPILER_VALUE_KIND_NUMBER
+					: expected === "string"
+						? COMPILER_VALUE_KIND_STRING
+						: expected === "bigint"
+							? COMPILER_VALUE_KIND_BIGINT
+							: expected === "symbol"
+								? COMPILER_VALUE_KIND_SYMBOL
+								: expected === "object"
+									? COMPILER_VALUE_KIND_OBJECT | COMPILER_VALUE_KIND_NULL
+									: COMPILER_VALUE_KIND_OBJECT;
+	if ((mask & kind) === 0) return false;
+	if (expected === "function") return undefined;
+	if (expected === "object") return mask === COMPILER_VALUE_KIND_NULL ? true : undefined;
+	return compilerValueKindMaskIsSubset(mask, kind) ? true : undefined;
 }

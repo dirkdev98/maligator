@@ -1,4 +1,5 @@
 import {
+	compilerTypeofComparison,
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_TOP,
 	COMPILER_VALUE_KIND_NULLISH,
@@ -548,8 +549,12 @@ function fastInstruction(
 			return fastBinary(op, values);
 		case "UNARY":
 			return fastUnary(op, values);
-		case "TYPEOF_COMPARE":
+		case "TYPEOF_COMPARE": {
+			const result = compilerTypeofComparison(values.kind(op.src), op.expected);
+			if (result !== undefined)
+				return `f${op.dst} = ${result !== op.negated ? "MAL_VALUE_TRUE" : "MAL_VALUE_FALSE"};`;
 			return `f${op.dst} = mal_value_new_boolean(${op.negated ? "!" : ""}mal_vm_typeof_compare(f${op.src}, ${emitTypeofResult(op.expected)}));`;
+		}
 		case "JUMP":
 			return jump(op.targetIp);
 		case "JUMP_IF": {

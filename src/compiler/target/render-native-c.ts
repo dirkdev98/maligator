@@ -12,6 +12,7 @@ import {
 	DATA_VIEW_ACCESSOR_TYPES,
 } from "../shared/builtin-registry.ts";
 import {
+	compilerTypeofComparison,
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_TOP,
 	COMPILER_VALUE_KIND_NULL,
@@ -11364,21 +11365,12 @@ function emitInstruction(
 		}
 		case "TYPEOF_COMPARE": {
 			const { dst, src, expected, negated } = instruction;
-			// Native register representations are stronger than a runtime typeof
-			// query: a number-rep register can only hold a JS Number and a
-			// boolean-rep register can only hold a JS Boolean. Consume that static
-			// proof directly instead of boxing the scalar only to classify it again.
-			// Boxed values retain the generic classifier because their precise
-			// primitive/object/callable kind is not represented by this lattice yet.
-			const proven = isNumericRep(reps[src]!)
-				? "number"
-				: reps[src] === "boolean"
-					? "boolean"
-					: reps[src] === "string"
-						? "string"
-						: undefined;
+			const proven = compilerTypeofComparison(
+				operandKind(src) ?? COMPILER_VALUE_KIND_TOP,
+				expected,
+			);
 			if (proven !== undefined) {
-				const value = (proven === expected) !== negated;
+				const value = proven !== negated;
 				return [
 					reps[dst] === "boolean"
 						? `r${dst} = ${value ? "true" : "false"};`
@@ -11395,6 +11387,8 @@ function emitInstruction(
 		}
 		case "UNARY": {
 			const { dst, src, operator } = instruction;
+			if (operator === "tostring" && operandIsString(src))
+				return [`r${dst} = ${boxed(src)};`];
 			if (
 				indexedLengthLoopAction?.role === "coerce" ||
 				indexedLengthLoopAction?.role === "update"

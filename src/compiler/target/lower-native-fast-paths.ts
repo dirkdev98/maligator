@@ -1,5 +1,6 @@
 import {
 	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_TOP,
 	compilerBuiltinInputKindsAreValid,
 } from "../shared/compiler-value-kinds.ts";
 import { bytecodeLoopInstructions } from "./bytecode-loops.ts";
@@ -3448,7 +3449,9 @@ export function selectNativeFastPaths(
 				input === undefined ||
 				(input.kind !== "register" && input.kind !== "number") ||
 				rep === "string" ||
-				rep === "boolean"
+				rep === "boolean" ||
+				(masks !== undefined &&
+					((masks[1] ?? COMPILER_VALUE_KIND_TOP) & COMPILER_VALUE_KIND_NUMBER) === 0)
 					? "non-number"
 					: rep === "int32"
 						? "int32"

@@ -27,6 +27,23 @@ import { nativeInstructionEffects } from "../src/compiler/target/program-image.t
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 describe("independent native instruction facts", () => {
+	it("does not reuse encoded effects when a caller mutates an unfrozen summary", () => {
+		const effects = { ...NO_EFFECT_SUMMARY, mayThrow: false };
+		expect(encodeInstructionEffects(effects)).toBe(0);
+		effects.mayThrow = true;
+		expect(encodeInstructionEffects(effects)).toBe(INSTRUCTION_MAY_THROW);
+	});
+
+	it("eliminates predicates excluded by a union while retaining its possible typeof result", () => {
+		const out = inspectStaticValueFunction(
+			"function compute(input,flag){const value=flag?String(input):Symbol('x');return Number.isFinite(value)||(typeof value==='number')||(typeof value==='string');}globalThis.compute=compute;",
+			"compute",
+		);
+		expect(out.native.storage!.numberPredicates[0]!.mode).toBe("non-number");
+		expect(out.c.source).not.toContain("mal_ops_is_number(");
+		expect(out.c.source).toContain("mal_vm_typeof_compare(");
+	});
+
 	it("does not treat immediate placeholders as register identities", () => {
 		expect(
 			instructionInputKind(

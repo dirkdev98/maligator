@@ -17,21 +17,31 @@ export interface InstructionFacts {
 	readonly effectMask?: number;
 }
 
+const encodedEffects = new WeakMap<EffectSummary, number>();
+
 export function encodeInstructionEffects(effects: EffectSummary): number {
+	const encoded = encodedEffects.get(effects);
+	if (encoded !== undefined) return encoded;
 	let reads = 0,
 		writes = 0;
 	for (let index = 0; index < EFFECT_DOMAINS.length; index++) {
 		if (effects.reads.includes(EFFECT_DOMAINS[index]!)) reads |= 1 << index;
 		if (effects.writes.includes(EFFECT_DOMAINS[index]!)) writes |= 1 << index;
 	}
-	return (
+	const mask =
 		reads |
 		(writes << EFFECT_DOMAINS.length) |
 		(effects.mayThrow ? INSTRUCTION_MAY_THROW : 0) |
 		(effects.maySuspend ? INSTRUCTION_MAY_SUSPEND : 0) |
 		(effects.mayGc ? INSTRUCTION_MAY_GC : 0) |
-		(effects.callsUserCode ? INSTRUCTION_CALLS_USER_CODE : 0)
-	);
+		(effects.callsUserCode ? INSTRUCTION_CALLS_USER_CODE : 0);
+	if (
+		Object.isFrozen(effects) &&
+		Object.isFrozen(effects.reads) &&
+		Object.isFrozen(effects.writes)
+	)
+		encodedEffects.set(effects, mask);
+	return mask;
 }
 
 export function decodeInstructionEffects(mask: number): EffectSummary {

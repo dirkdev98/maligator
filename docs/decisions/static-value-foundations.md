@@ -602,6 +602,10 @@ Semantic kinds describe an SSA value at its use; physical register representatio
 join every value assigned that storage. Register allocation relocates input and
 result facts separately, including constrained operands and immediate arguments.
 
+Repeated one- and two-operand kind sequences share immutable tables bounded by the
+eight-bit kind domain. Specialized entries inherit canonical facts and transport
+only changed dimensions. Effect encodings are reused only for deeply frozen summaries.
+
 Native semantic facts occupy a separate table from lowering strategies. Range,
 shape, identity, and representation strategies can coexist with operand kinds and
 the complete effect summary: reads and writes in every domain, throwing,
