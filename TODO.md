@@ -364,6 +364,15 @@ Runtime eval may remove source closure without invalidating authority closure.
 Shared lifetime and fallback rules are recorded in
 [runtime region contracts](docs/decisions/runtime-region-contracts.md).
 
+- [ ] Find where the runtime-gap `spread-computed-update-read-*` loops spend their
+      time. `checksum = (checksum + copies[i & 31][key]) | 0`, with a module-level
+      `const key = "p3"` and 32 objects from `{ ...source, [key]: value }`, takes
+      5.7 ns per iteration against Node's 0.9. Samples put 55% in
+      `mal_vm_indexed_load_keyed` and `mal_vm_object_try_load`, yet the keyed path
+      itself is not the cost: a prototype that turned the read into a named
+      `loadPropertyStatic` (folding the proven string binding, leaving canonical
+      numeric strings keyed) kept the loop at 57 ms. The lookup on objects built by
+      a spread plus a computed key is the next suspect.
 - [ ] Sort records without a generic comparator call per comparison. The
       runtime-gap `candidate-ranking` case sorts 4096 `{ id, benefit, cost }` records
       by `benefit - cost`, then `id`: 25 ns per comparison natively against Node's
