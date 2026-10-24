@@ -105,7 +105,7 @@ describe("persisted native boxed property read pairs", () => {
 		)!;
 		for (const { ip } of fn.storage!.propertyReadPairs[0]!.loads)
 			expect(emitted.source).toContain(
-				`MAL_PROFILE_SITE_EVENT(vm, ${fn.body.profileSiteIds![ip]}, MAL_PROFILE_SITE_EXECUTION, 1)`,
+				`MAL_PROFILE_SITE(vm, ${fn.body.profileSiteIds![ip]})`,
 			);
 	});
 

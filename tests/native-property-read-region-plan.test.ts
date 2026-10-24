@@ -188,7 +188,7 @@ describe("persisted native property read regions", () => {
 		)!;
 		for (const { ip } of fn.storage!.propertyReadRegions[0]!.loads)
 			expect(emitted.source).toContain(
-				`MAL_PROFILE_SITE_EVENT(vm, ${fn.body.profileSiteIds![ip]}, MAL_PROFILE_SITE_EXECUTION, 1)`,
+				`MAL_PROFILE_SITE(vm, ${fn.body.profileSiteIds![ip]})`,
 			);
 	});
 

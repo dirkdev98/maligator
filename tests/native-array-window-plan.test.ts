@@ -157,9 +157,7 @@ describe("persisted array ownership windows", () => {
 				positionTableEntries(image.runtime.functions[1]!),
 			)!.source;
 			for (const ip of plan.claimedIps)
-				expect(source).toContain(
-					`MAL_PROFILE_SITE_EVENT(vm, ${100 + ip}, MAL_PROFILE_SITE_EXECUTION, 1)`,
-				);
+				expect(source).toContain(`MAL_PROFILE_SITE(vm, ${100 + ip})`);
 		},
 	);
 });

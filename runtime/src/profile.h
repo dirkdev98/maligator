@@ -144,3 +144,12 @@ static inline void mal_profile_mark_worker_cpu_possible(void) {}
 #define MAL_PROFILE_RUNTIME_VALUE(vm, site_id, event, value) (value)
 #define MAL_PROFILE_NATIVE_CALL(vm, function) ((void) 0)
 #endif
+
+// Profiled functions emit these at every instruction and before every call that can
+// capture the stack, so short lines keep the largest functions within the translation
+// unit limit.
+#define MAL_FRAME_SITE(vm, site) \
+    ((vm)->native_frames[(vm)->native_frame_count - 1].site_id = (site))
+#define MAL_PROFILE_SITE(vm, site) \
+    (MAL_PROFILE_CURRENT_SITE((vm), (site)), \
+     MAL_PROFILE_SITE_EVENT((vm), (site), MAL_PROFILE_SITE_EXECUTION, 1))

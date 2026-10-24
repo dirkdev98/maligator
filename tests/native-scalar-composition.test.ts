@@ -149,7 +149,7 @@ describe("native scalar plans around opaque and exceptional windows", () => {
 		if (op.opcode !== "BINARY") throw new Error("Missing profiled product");
 		expect(out.native.registerRepresentations[op.dst]).toBe("number");
 		expect(out.native.storage!.expressionIps).toEqual([]);
-		expect(out.c.source).toContain("MAL_PROFILE_SITE_EXECUTION");
+		expect(out.c.source).toContain("MAL_PROFILE_SITE(vm, ");
 		expect(out.c.source).toContain("mal_vm_binary_op");
 		expect(out.c.source).toContain(`mal_ops_number_as_f64(__binary_result_`);
 	});
@@ -470,7 +470,7 @@ describe("existing-proof scalar expression consumers", () => {
 		);
 		expect(loadIp).toBeGreaterThanOrEqual(0);
 		const site = out.native.body.profileSiteIds![loadIp]!;
-		expect(out.c.source).toContain(`MAL_PROFILE_CURRENT_SITE(vm, ${site});`);
+		expect(out.c.source).toContain(`MAL_PROFILE_SITE(vm, ${site});`);
 		expect(out.c.source).not.toContain("__indexed_key_");
 	});
 
@@ -600,10 +600,7 @@ describe("existing-proof scalar expression consumers", () => {
 		);
 		expect(callIp).toBeGreaterThanOrEqual(0);
 		const site = out.native.body.profileSiteIds![callIp]!;
-		expect(out.c.source).toContain(`MAL_PROFILE_CURRENT_SITE(vm, ${site});`);
-		expect(out.c.source).toContain(
-			`MAL_PROFILE_SITE_EVENT(vm, ${site}, MAL_PROFILE_SITE_EXECUTION, 1);`,
-		);
+		expect(out.c.source).toContain(`MAL_PROFILE_SITE(vm, ${site});`);
 		expect(out.c.source).not.toContain("__known_argument_");
 	});
 
@@ -700,10 +697,7 @@ describe("existing-proof scalar expression consumers", () => {
 		);
 		expect(ip).toBeGreaterThanOrEqual(0);
 		const site = native.body.profileSiteIds![ip]!;
-		expect(output).toContain(`MAL_PROFILE_CURRENT_SITE(vm, ${site});`);
-		expect(output).toContain(
-			`MAL_PROFILE_SITE_EVENT(vm, ${site}, MAL_PROFILE_SITE_EXECUTION, 1);`,
-		);
+		expect(output).toContain(`MAL_PROFILE_SITE(vm, ${site});`);
 		expect(output).toContain("mal_vm_unary_op_fast(vm, MAL_UNARY_PLUS,");
 	});
 
@@ -967,7 +961,7 @@ describe("native polling numeric worker plans", () => {
 		expect(entry.storage!.numericWorker!.rematerializedConstantIps).toEqual([]);
 		const emitted = out.c.directEntries.find((candidate) => candidate.id === entry.id)!;
 		for (const site of out.native.body.profileSiteIds!.filter((site) => site >= 0)) {
-			const event = `MAL_PROFILE_SITE_EVENT(vm, ${site}, MAL_PROFILE_SITE_EXECUTION, 1);`;
+			const event = `MAL_PROFILE_SITE(vm, ${site});`;
 			expect(emitted.source.split(event)).toHaveLength(2);
 		}
 	});

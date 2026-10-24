@@ -260,6 +260,6 @@ describe("boxed scalar expressions at phi boundaries", () => {
 	it("retains profiled boxed operator sites", () => {
 		const out = conditional("a<b", true);
 		expect(out.native.storage!.expressionIps).toEqual([]);
-		expect(out.c.source).toContain("MAL_PROFILE_SITE_EXECUTION");
+		expect(out.c.source).toContain("MAL_PROFILE_SITE(vm, ");
 	});
 });

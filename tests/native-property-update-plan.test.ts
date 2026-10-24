@@ -108,7 +108,7 @@ describe("native SSA property update plans", () => {
 		)!;
 		for (const ip of plan.claimedIps)
 			expect(emitted.source).toContain(
-				`MAL_PROFILE_SITE_EVENT(vm, ${profiled.body.profileSiteIds![ip]}, MAL_PROFILE_SITE_EXECUTION, 1)`,
+				`MAL_PROFILE_SITE(vm, ${profiled.body.profileSiteIds![ip]})`,
 			);
 		const instructions = original.body.instructions.toSpliced(3, 0, {
 			opcode: "JUMP",

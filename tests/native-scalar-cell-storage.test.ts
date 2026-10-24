@@ -92,8 +92,6 @@ describe("existing scalar proofs at cell stores", () => {
 		);
 		expect(out.native.storage!.expressionIps).toEqual([]);
 		for (const site of out.native.body.profileSiteIds!.filter((site) => site >= 0))
-			expect(out.c.source).toContain(
-				`MAL_PROFILE_SITE_EVENT(vm, ${site}, MAL_PROFILE_SITE_EXECUTION, 1);`,
-			);
+			expect(out.c.source).toContain(`MAL_PROFILE_SITE(vm, ${site});`);
 	});
 });

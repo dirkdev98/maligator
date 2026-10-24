@@ -6949,16 +6949,11 @@ function emitBody(
 			nativeInstructionMayCaptureStack(fn.instructions[ip]!, reps) &&
 			profileSiteId !== lastPublishedSite
 		) {
-			lines.push(
-				`    vm->native_frames[vm->native_frame_count - 1].site_id = ${profileSiteId};`,
-			);
+			lines.push(`    MAL_FRAME_SITE(vm, ${profileSiteId});`);
 			lastPublishedSite = profileSiteId;
 		}
 		if (profileSiteId >= 0) {
-			lines.push(
-				`    MAL_PROFILE_CURRENT_SITE(vm, ${profileSiteId});`,
-				`    MAL_PROFILE_SITE_EVENT(vm, ${profileSiteId}, MAL_PROFILE_SITE_EXECUTION, 1);`,
-			);
+			lines.push(`    MAL_PROFILE_SITE(vm, ${profileSiteId});`);
 			const operationSite = profileOperationInstruction(fn.instructions[ip]!);
 			const boxingSite = profileBoxesNativeValue(emitted);
 			if (operationSite || boxingSite) {

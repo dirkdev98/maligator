@@ -160,7 +160,7 @@ describe("untraced boxed operator storage", () => {
 		if (op.opcode !== "UNARY") throw new Error("Missing coercive plus");
 		expect(out.native.storage!.rootRegisters).not.toContain(op.dst);
 		expect(out.native.storage!.expressionIps).toEqual([]);
-		expect(out.c.source).toContain("MAL_PROFILE_SITE_EXECUTION");
+		expect(out.c.source).toContain("MAL_PROFILE_SITE(vm, ");
 		expect(out.c.source).toContain("mal_vm_unary_op");
 		expect(out.c.source).toMatch(
 			/mal_vm_unary_op_fast[^;]+;\n\s+if \([^\n]+\) goto __throw_exit;/,
@@ -226,7 +226,7 @@ describe("untraced boxed operator storage", () => {
 		const out = storedOperator("a*b", true);
 		expect(out.native.storage!.expressionIps).toEqual([]);
 		expect(out.native.storage!.rootRegisters).not.toContain(out.op.dst);
-		expect(out.c.source).toContain("MAL_PROFILE_SITE_EXECUTION");
+		expect(out.c.source).toContain("MAL_PROFILE_SITE(vm, ");
 	});
 
 	it("requires real SSA storage identity for the exclusion", () => {

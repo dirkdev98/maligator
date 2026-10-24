@@ -61,7 +61,7 @@ describe("native iterator done storage", () => {
 	it("preserves profile sites and materialized Boolean assignments", () => {
 		const out = iteratorKernel(true);
 		expect(out.native.storage!.rootRegisters).not.toContain(out.op.doneDst);
-		expect(out.c.source).toContain("MAL_PROFILE_SITE_EXECUTION");
+		expect(out.c.source).toContain("MAL_PROFILE_SITE(vm, ");
 		expect(out.c.source).toContain("mal_value_new_boolean");
 		expect(out.native.storage!.expressionIps).not.toContain(out.ip);
 	});

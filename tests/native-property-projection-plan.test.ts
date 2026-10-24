@@ -143,7 +143,7 @@ describe("persisted native numeric property projections", () => {
 		for (const ip of fn.storage!.propertyProjections[0]!.claimedIps) {
 			expect(emitted.emittedInstructions.has(ip)).toBe(true);
 			expect(emitted.source).toContain(
-				`MAL_PROFILE_SITE_EVENT(vm, ${fn.body.profileSiteIds![ip]}, MAL_PROFILE_SITE_EXECUTION, 1)`,
+				`MAL_PROFILE_SITE(vm, ${fn.body.profileSiteIds![ip]})`,
 			);
 		}
 	});
