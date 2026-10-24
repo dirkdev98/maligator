@@ -215,6 +215,37 @@ the value is a proved primitive BigInt or Boolean and the shared evaluator certi
 the width conversion. Value producers remain; other value kinds keep their
 conversion and errors even when the width is zero.
 
+## Instruction facts through native lowering
+
+Semantic input and result facts travel independently of an instruction's selected
+lowering strategy and effect summary. A known String operand rules out the numeric
+addition branch even when converting the other operand can call user code or throw.
+That partial fact cannot suppress the conversion, its producer effects, or the
+exception path. Complete kind masks retain unions and unknown values explicitly.
+
+Core records these facts in an immutable instruction table with one function-version
+proof. Target and native lowering preserve the table alongside strategy metadata;
+specialized entries overlay only their differences from the canonical facts. Register
+views distinguish inputs from results even when constrained storage reuses a register.
+Negative immediate placeholders never establish register identity. Compiler artifacts
+serialize the independent dimensions and invalidate older schemas together.
+
+An int32 input refinement proves a primitive Number within the signed 32-bit range,
+excluding negative zero. Floating storage and copies do not erase that proof; joins
+require every incoming value to satisfy it, and unseeded cycles remain unknown.
+Emission can then use an ordinary C cast for ToInt32 and constant Number predicates.
+The proof survives boxing and suspension, while coercive operands and argument
+evaluation retain their own effects and fallback paths. Scalar expressions, fast
+entries, numeric regions and canonical bodies consume the same instruction facts.
+
+Effect metadata preserves independent reads and writes for every effect domain,
+plus throwing, suspension, collection and user-code flags. Semantic purity alone
+does not discharge a native helper's allocation failure, polling or root obligations.
+Operator helpers implement the refined semantic effects directly; calls and allocation
+helpers retain their separate runtime contracts. Identity, shape and mutable-content
+proofs also retain their observation and invalidation requirements rather than
+becoming timeless register properties.
+
 ## Known operations
 
 An exact callable identity becomes `callKnown` independently of receiver storage.
