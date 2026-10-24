@@ -16,12 +16,15 @@ import type {
 	CoreProgram,
 } from "./core-store.ts";
 
-export interface CoreInstructionFactPlan {
-	readonly function: CoreFunctionId;
-	readonly instruction: CoreInstructionId;
+export interface CoreInstructionFacts {
 	readonly masks: ReadonlyArray<number>;
 	readonly results: ReadonlyArray<number>;
 	readonly effectMask: number;
+}
+
+export interface CoreInstructionFactPlan {
+	readonly function: CoreFunctionId;
+	readonly instructions: ReadonlyArray<CoreInstructionFacts | undefined>;
 }
 
 const kindProofs = new WeakMap<
@@ -53,15 +56,19 @@ export function coreInstructionFactPlans(
 			function: functionId,
 		});
 		const proof = { fn, versions: fn.versions };
-		for (const instruction of fn.instructionIds()) {
-			const plan = Object.freeze({
-				function: functionId,
-				instruction,
-				...coreInstructionFacts(fn, instruction, kinds, false),
-			});
-			kindProofs.set(plan, proof);
-			plans.push(plan);
-		}
+		const instructions = new Array<CoreInstructionFacts | undefined>(
+			fn.instructionCapacity,
+		);
+		for (const instruction of fn.instructionIds())
+			instructions[instruction] = Object.freeze(
+				coreInstructionFacts(fn, instruction, kinds, false),
+			);
+		const plan = Object.freeze({
+			function: functionId,
+			instructions: Object.freeze(instructions),
+		});
+		kindProofs.set(plan, proof);
+		plans.push(plan);
 	}
 	return Object.freeze(plans);
 }
@@ -117,11 +124,7 @@ export function coreInstructionFacts(
 	instruction: CoreInstructionId,
 	kinds: CoreValueKindAnalysis,
 	refineEffects = true,
-): {
-	readonly masks: ReadonlyArray<number>;
-	readonly results: ReadonlyArray<number>;
-	readonly effectMask: number;
-} {
+): CoreInstructionFacts {
 	const kernel = fn.kernel;
 	const input = kernel.instructionOperandStart(instruction);
 	const output = kernel.instructionResultStart(instruction);

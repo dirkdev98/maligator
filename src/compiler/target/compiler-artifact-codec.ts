@@ -99,7 +99,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 265;
+export const COMPILER_ARTIFACT_VERSION = 266;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -2272,9 +2272,10 @@ function writeCompilerArtifact(
 						for (const mask of masks) w.u8(mask);
 					}
 				}
-				for (const registers of [facts.inputRegisters, facts.resultRegisters]) {
-					w.u8(registers === undefined ? 0 : 1);
-					if (registers !== undefined) w.i32Array([...registers]);
+				w.u8(facts.registers === undefined ? 0 : 1);
+				if (facts.registers !== undefined) {
+					w.i32Array([...facts.registers]);
+					w.u32(facts.inputOffset!);
 				}
 			}
 		}
@@ -4905,14 +4906,13 @@ function readCompilerArtifact(
 				const resultKindMasks = readOptional(() =>
 					Array.from({ length: r.count(1) }, () => r.u8()),
 				);
-				const inputRegisters = readOptional(() => r.i32Array());
-				const resultRegisters = readOptional(() => r.i32Array());
+				const registers = readOptional(() => r.i32Array());
+				const inputOffset = registers === undefined ? undefined : r.u32();
 				facts[ip] = {
 					...(effectMask === undefined ? {} : { effectMask }),
 					...(inputKindMasks === undefined ? {} : { inputKindMasks }),
 					...(resultKindMasks === undefined ? {} : { resultKindMasks }),
-					...(inputRegisters === undefined ? {} : { inputRegisters }),
-					...(resultRegisters === undefined ? {} : { resultRegisters }),
+					...(registers === undefined ? {} : { registers, inputOffset }),
 				};
 			}
 			validateNativeInstructionFacts(fn, facts);

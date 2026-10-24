@@ -873,14 +873,20 @@ export function nativeVariantContract(
 	native: NativeFunctionPlan,
 	entry: NativeDirectEntryPlan,
 ): NativeFunctionPlan {
-	const instructions = [...native.instructions];
-	const facts = [
-		...(native.facts ??
-			new Array<InstructionFacts | undefined>(native.instructions.length)),
-	];
+	const instructionOverrides = entry.callOverrides?.length
+		? [...native.instructions]
+		: undefined;
+	const instructions = instructionOverrides ?? native.instructions;
+	const factOverrides = entry.instructionFacts?.length
+		? [
+				...(native.facts ??
+					new Array<InstructionFacts | undefined>(native.instructions.length)),
+			]
+		: undefined;
+	const facts = factOverrides ?? native.facts;
 	for (const { instructionIp, masks, results, effectMask } of entry.instructionFacts ??
 		[]) {
-		const canonical = facts[instructionIp];
+		const canonical = facts?.[instructionIp];
 		if (
 			(canonical?.inputKindMasks !== undefined &&
 				canonical.inputKindMasks.length !== masks.length) ||
@@ -888,8 +894,8 @@ export function nativeVariantContract(
 				canonical.resultKindMasks.length !== results.length)
 		)
 			throw new RangeError("Invalid native instruction kinds arity");
-		facts[instructionIp] = {
-			...facts[instructionIp],
+		factOverrides![instructionIp] = {
+			...canonical,
 			inputKindMasks: masks,
 			resultKindMasks: results,
 			effectMask,
@@ -897,7 +903,7 @@ export function nativeVariantContract(
 	}
 	for (const call of entry.callOverrides ?? []) {
 		const canonical = instructions[call.instructionIp];
-		instructions[call.instructionIp] = {
+		instructionOverrides![call.instructionIp] = {
 			kind: "call",
 			...(call.guarded
 				? { guardedFunctionIndices: [call.functionIndex] }

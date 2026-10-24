@@ -12,8 +12,8 @@ const EFFECT_MASK = (INSTRUCTION_CALLS_USER_CODE << 1) - 1;
 export interface InstructionFacts {
 	readonly inputKindMasks?: ReadonlyArray<CompilerValueKindMask>;
 	readonly resultKindMasks?: ReadonlyArray<CompilerValueKindMask>;
-	readonly inputRegisters?: ReadonlyArray<number>;
-	readonly resultRegisters?: ReadonlyArray<number>;
+	readonly registers?: ReadonlyArray<number>;
+	readonly inputOffset?: number;
 	readonly effectMask?: number;
 }
 
@@ -72,15 +72,20 @@ export function instructionEffectMaskIsValid(mask: unknown): mask is number {
 export function instructionFactsAreValid(facts: InstructionFacts): boolean {
 	return (
 		(facts.effectMask === undefined || instructionEffectMaskIsValid(facts.effectMask)) &&
-		[facts.inputKindMasks, facts.resultKindMasks].every(
-			(masks) =>
-				masks === undefined ||
-				masks.every((mask) => compilerValueKindMaskIsValid(mask, { allowTop: true })),
-		) &&
-		(facts.inputRegisters === undefined ||
-			facts.inputRegisters.length === facts.inputKindMasks?.length) &&
-		(facts.resultRegisters === undefined ||
-			facts.resultRegisters.length === facts.resultKindMasks?.length) &&
+		(facts.inputKindMasks === undefined ||
+			facts.inputKindMasks.every((mask) =>
+				compilerValueKindMaskIsValid(mask, { allowTop: true }),
+			)) &&
+		(facts.resultKindMasks === undefined ||
+			facts.resultKindMasks.every((mask) =>
+				compilerValueKindMaskIsValid(mask, { allowTop: true }),
+			)) &&
+		(facts.registers === undefined
+			? facts.inputOffset === undefined
+			: Number.isInteger(facts.inputOffset) &&
+				facts.inputOffset! >= (facts.resultKindMasks?.length ?? 0) &&
+				facts.inputOffset! + (facts.inputKindMasks?.length ?? 0) ===
+					facts.registers.length) &&
 		(facts.effectMask !== undefined ||
 			facts.inputKindMasks !== undefined ||
 			facts.resultKindMasks !== undefined)
@@ -91,15 +96,17 @@ export function instructionInputKind(
 	facts: InstructionFacts | undefined,
 	register: number,
 ): CompilerValueKindMask | undefined {
-	if (register < 0) return undefined;
-	const index = facts?.inputRegisters?.indexOf(register) ?? -1;
-	return index < 0 ? undefined : facts?.inputKindMasks?.[index];
+	if (register < 0 || facts?.inputOffset === undefined) return undefined;
+	const index = facts.registers?.indexOf(register, facts.inputOffset) ?? -1;
+	return index < facts.inputOffset
+		? undefined
+		: facts.inputKindMasks?.[index - facts.inputOffset];
 }
 
 export function instructionResultKind(
 	facts: InstructionFacts | undefined,
 	register: number,
 ): CompilerValueKindMask | undefined {
-	const index = facts?.resultRegisters?.indexOf(register) ?? -1;
+	const index = facts?.registers?.indexOf(register) ?? -1;
 	return index < 0 ? undefined : facts?.resultKindMasks?.[index];
 }

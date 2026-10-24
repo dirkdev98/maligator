@@ -18,6 +18,7 @@ import {
 	INSTRUCTION_MAY_THROW,
 	instructionEffectMaskIsValid,
 	instructionInputKind,
+	instructionResultKind,
 } from "../src/compiler/shared/instruction-facts.ts";
 import {
 	deserializeCompilerArtifact,
@@ -27,6 +28,16 @@ import { nativeInstructionEffects } from "../src/compiler/target/program-image.t
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 describe("independent native instruction facts", () => {
+	it("distinguishes an input String from its Number result in constrained storage", () => {
+		const facts = {
+			registers: [0, 0],
+			inputOffset: 1,
+			inputKindMasks: [COMPILER_VALUE_KIND_STRING],
+			resultKindMasks: [COMPILER_VALUE_KIND_NUMBER],
+		};
+		expect(instructionInputKind(facts, 0)).toBe(COMPILER_VALUE_KIND_STRING);
+		expect(instructionResultKind(facts, 0)).toBe(COMPILER_VALUE_KIND_NUMBER);
+	});
 	it("does not reuse encoded effects when a caller mutates an unfrozen summary", () => {
 		const effects = { ...NO_EFFECT_SUMMARY, mayThrow: false };
 		expect(encodeInstructionEffects(effects)).toBe(0);
@@ -48,7 +59,8 @@ describe("independent native instruction facts", () => {
 		expect(
 			instructionInputKind(
 				{
-					inputRegisters: [-1, -1],
+					registers: [-1, -1],
+					inputOffset: 0,
 					inputKindMasks: [COMPILER_VALUE_KIND_NUMBER, COMPILER_VALUE_KIND_STRING],
 				},
 				-1,

@@ -602,6 +602,10 @@ Semantic kinds describe an SSA value at its use; physical register representatio
 join every value assigned that storage. Register allocation relocates input and
 result facts separately, including constrained operands and immediate arguments.
 
+Function-scoped fact tables carry one versioned proof and use dense instruction
+indices. Register facts reference the existing operand list, with an explicit
+input offset so constrained input/output aliases remain distinct.
+
 Repeated one- and two-operand kind sequences share immutable tables bounded by the
 eight-bit kind domain. Specialized entries inherit canonical facts and transport
 only changed dimensions. Effect encodings are reused only for deeply frozen summaries.

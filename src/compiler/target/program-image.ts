@@ -1430,16 +1430,14 @@ export function validateNativeInstructionFacts(
 		if (fact === undefined) continue;
 		if (!instructionFactsAreValid(fact))
 			throw new RangeError("Invalid native instruction facts");
-		for (const registers of [fact.inputRegisters, fact.resultRegisters]) {
-			if (
-				registers?.some(
-					(register) =>
-						!Number.isInteger(register) || register < -1 || register >= fn.registerCount,
-				)
+		if (
+			fact.registers?.some(
+				(register) =>
+					!Number.isInteger(register) || register < -1 || register >= fn.registerCount,
 			)
-				throw new RangeError("Invalid native fact register");
-		}
-		if (fact.inputRegisters === undefined && fact.inputKindMasks !== undefined) {
+		)
+			throw new RangeError("Invalid native fact register");
+		if (fact.registers === undefined && fact.inputKindMasks !== undefined) {
 			const op = fn.instructions[ip]!;
 			const count =
 				op.opcode === "UNARY"

@@ -29,6 +29,7 @@ import type {
 	CoreRepresentation,
 	CoreValueId,
 } from "../core/core-ir.ts";
+import type { CoreInstructionFacts } from "../core/core-native-instruction-facts.ts";
 import type { CorePrivatePackedRestArrayElementPlan } from "../core/core-native-numeric-analysis.ts";
 import { assertCoreOptimizationPlanCertificate } from "../core/core-optimization-plan-certificate.ts";
 import {
@@ -1573,14 +1574,7 @@ function lowerFunctionToTarget(
 	unsignedArithmetic: ReadonlySet<CoreInstructionId>,
 	privateNumericArrayElements: ReadonlySet<CoreInstructionId>,
 	privatePackedRestArrayElements: ReadonlyArray<CorePrivatePackedRestArrayElementPlan>,
-	instructionFacts: ReadonlyMap<
-		CoreInstructionId,
-		{
-			readonly masks: ReadonlyArray<number>;
-			readonly results: ReadonlyArray<number>;
-			readonly effectMask: number;
-		}
-	>,
+	instructionFacts: ReadonlyArray<CoreInstructionFacts | undefined>,
 	recipeTable: CoreSpecializationRecipeTable,
 	recipeRows: ReadonlyArray<number>,
 	blockOrder: ReadonlyArray<CoreBlockId>,
@@ -2214,12 +2208,11 @@ function lowerFunctionToTarget(
 					throw new Error("Private packed rest array proof lost its allocation");
 				lowered = { ...lowered, virtualPackedRest: true };
 			}
-			const kinds = instructionFacts.get(instruction);
+			const kinds = instructionFacts[instruction];
 			const loweredRegisters = "registers" in lowered ? lowered.registers : [];
 			const inputCount = kernel.instructionOperandCount(instruction);
 			const resultCount = kernel.instructionResultCount(instruction);
-			const inputRegisters = inputCount === 0 ? [] : loweredRegisters.slice(-inputCount);
-			const resultRegisters = loweredRegisters.slice(0, resultCount);
+			const inputOffset = loweredRegisters.length - inputCount;
 			Object.assign(lowered, {
 				facts: {
 					...(kinds === undefined
@@ -2227,8 +2220,8 @@ function lowerFunctionToTarget(
 						: {
 								inputKindMasks: kinds.masks,
 								resultKindMasks: kinds.results,
-								inputRegisters,
-								resultRegisters,
+								registers: loweredRegisters,
+								inputOffset,
 							}),
 					effectMask:
 						kinds?.effectMask ??
@@ -2263,8 +2256,6 @@ function lowerFunctionToTarget(
 					});
 					registers[twoAddress.result] = constrained;
 					registers[twoAddress.operand] = constrained;
-					inputRegisters[twoAddress.operand - resultCount] = constrained;
-					resultRegisters[twoAddress.result] = constrained;
 					resultMove = { type: "move", registers: [destination, constrained] };
 				}
 			}
@@ -2323,19 +2314,19 @@ function lowerFunctionToTarget(
 			instructions.findLast((instruction) => instruction.type === "sourcePos")?.pos ??
 			edgeSourcePosition;
 		instructions.push(...sourcePositionMarker(terminatorPosition));
-		const terminatorKinds = instructionFacts.get(terminatorId);
+		const terminatorKinds = instructionFacts[terminatorId];
 		const terminatorFacts = {
 			...(terminatorKinds === undefined
 				? {}
 				: {
 						inputKindMasks: terminatorKinds.masks,
 						resultKindMasks: terminatorKinds.results,
-						inputRegisters: Array.from(
+						registers: Array.from(
 							{ length: kernel.instructionOperandCount(terminatorId) },
 							(_, index) =>
 								registerForValue(kernel.operandAt(terminatorOperandStart + index)),
 						),
-						resultRegisters: [],
+						inputOffset: 0,
 					}),
 			effectMask:
 				terminatorKinds?.effectMask ??
@@ -2718,7 +2709,7 @@ function lowerFunctionToTarget(
 		const entryFacts = entry.instructionFacts?.filter(
 			({ instruction, masks, results, effectMask }) => {
 				if (!loweredInstructions.has(instruction)) return false;
-				const canonical = instructionFacts.get(instruction);
+				const canonical = instructionFacts[instruction];
 				return (
 					canonical === undefined ||
 					!sameMasks(canonical.masks, masks) ||
@@ -3074,25 +3065,12 @@ export function lowerCoreCompilationToTargetProgram(
 		}
 		instructions.push(operation);
 	}
-	const instructionFacts = new Map<
-		CoreFunctionId,
-		Map<
-			CoreInstructionId,
-			{
-				readonly masks: ReadonlyArray<number>;
-				readonly results: ReadonlyArray<number>;
-				readonly effectMask: number;
-			}
-		>
-	>();
-	for (const operation of compilation.plan.instructionFacts ?? []) {
-		let instructions = instructionFacts.get(operation.function);
-		if (instructions === undefined) {
-			instructions = new Map();
-			instructionFacts.set(operation.function, instructions);
-		}
-		instructions.set(operation.instruction, operation);
-	}
+	const instructionFacts = new Map(
+		(compilation.plan.instructionFacts ?? []).map((plan) => [
+			plan.function,
+			plan.instructions,
+		]),
+	);
 	const specializedOnly = new Set(compilation.plan.specializedOnlyFunctions ?? []);
 	const directClosures =
 		options.planDirectClosures === true
@@ -3120,7 +3098,7 @@ export function lowerCoreCompilationToTargetProgram(
 			unsignedArithmetic.get(core) ?? new Set(),
 			privateNumericArrayElements.get(core) ?? new Set(),
 			privatePackedRestArrayElements.get(core) ?? [],
-			instructionFacts.get(core) ?? new Map(),
+			instructionFacts.get(core) ?? [],
 			compilation.plan.recipes,
 			specializationRows.get(core) ?? [],
 			blockOrders.get(core)!,
