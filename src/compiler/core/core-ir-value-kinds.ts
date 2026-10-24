@@ -1532,12 +1532,18 @@ export function coreValueKindObservation(
 	}
 	if (opcode === "callKnown") {
 		const attributes = fn.instructionAttributes(instruction);
-		if (
-			attributes.operation !== "Object.is" ||
-			attributes.construct ||
-			attributes.argumentMode !== undefined
-		)
-			return undefined;
+		if (attributes.construct || attributes.argumentMode !== undefined) return undefined;
+		if (attributes.operation === "Array.isArray") {
+			const input = operand(1);
+			const mask = input === undefined ? COMPILER_VALUE_KIND_UNDEFINED : kindMask(input);
+			return compilerValueKindMaskIsSubset(
+				mask,
+				COMPILER_VALUE_KIND_TOP & ~COMPILER_VALUE_KIND_OBJECT,
+			)
+				? false
+				: undefined;
+		}
+		if (attributes.operation !== "Object.is") return undefined;
 		const left = operand(1);
 		const right = operand(2);
 		if (left === right) return true;

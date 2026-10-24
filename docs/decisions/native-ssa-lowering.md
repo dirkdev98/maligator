@@ -103,6 +103,11 @@ builtin argument masks. Int32 predicates produce constant Booleans; Number kerne
 preserve NaN, infinity and signed-zero semantics. Ignored argument producers still
 execute, and rendering preserves each selected mode's original polling behavior.
 Artifact validation independently rederives ordinary and typed-entry choices.
+Core folds `Array.isArray` observations when local or interprocedural kind facts
+exclude Object, so both backends receive a constant Boolean without call, throw,
+or root obligations for the predicate. Argument producers retain their effects.
+Unknown and Object-containing unions retain proxy handling, and mutable builtin
+lookups retain their identity guards and fallbacks.
 Captured and module cell stores consume existing scalar result proofs at operand
 zero without joining the cell's other writers into the producer's scalar component.
 Their values stay scalar until the store boxes them. Captured writes retain the

@@ -229,12 +229,6 @@ The independent target boundary and current storage contract are recorded in
       publication to a probe's collecting slow path stays renderer-local: eager
       publication is always legal, and the deferral follows fixed render-form
       rules over plan facts rather than a planning choice.
-- [ ] Fold `Array.isArray` observations of primitive kind unions before lowering.
-      A `number | undefined` input retains its kind mask in native lowering but
-      still emits a proxy guard, builtin fallback, throw check, and root publication.
-      Consume the fact in Core observation folding while preserving argument
-      evaluation and builtin identity requirements; unknown and Object inputs must
-      retain revoked-proxy behavior.
 - [ ] Shrink the largest inline expansions in generated code. Uniform tagged
       field slots and the one-compare Number decode cut the self-compiler's text
       from 55.0 to 49.9 MB; the inline static load probe is now about 19
