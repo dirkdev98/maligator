@@ -10,6 +10,7 @@ import {
 	compilerBuiltinInputKindsAreValid,
 	compilerNumericResultKind,
 	compilerOperatorInputKindsHaveExactNativeSemantics as exactNativeKinds,
+	compilerTypeofComparison,
 } from "../src/compiler/shared/compiler-value-kinds.ts";
 
 const singleKinds = (mask: number): ReadonlyArray<number> =>
@@ -145,14 +146,49 @@ describe("Compiler value-kind operator dispatch", () => {
 		equal(exactNativeKinds("unary", undefined, [8]), false);
 	});
 
-	it("preserves builtin mask membership and argument-count limits", () => {
+	it("preserves every builtin kind union independently of kernel arity limits", () => {
 		for (let mask = 0; mask <= 256; mask++) {
-			equal(compilerBuiltinInputKindsAreValid([mask], 1), [4, 8, 16, 255].includes(mask));
+			equal(compilerBuiltinInputKindsAreValid([mask], 1), mask > 0 && mask < 256);
 		}
 		equal(compilerBuiltinInputKindsAreValid([4, 8, 16, 255], 4), true);
 		equal(compilerBuiltinInputKindsAreValid(new Array<number>(17).fill(8), 17), true);
-		equal(compilerBuiltinInputKindsAreValid(new Array<number>(18).fill(8), 18), false);
+		equal(compilerBuiltinInputKindsAreValid(new Array<number>(18).fill(8), 18), true);
 		equal(compilerBuiltinInputKindsAreValid([], 0), false);
 		equal(compilerBuiltinInputKindsAreValid([8], 2), false);
+	});
+
+	it("matches JavaScript typeof observations for every kind union", () => {
+		const values: ReadonlyArray<ReadonlyArray<unknown>> = [
+			[undefined],
+			[null],
+			[false, true],
+			[0, -0, NaN, Infinity],
+			["", "x"],
+			[1n],
+			[Symbol("x")],
+			[{}, [], () => {}],
+		];
+		const results = [
+			"undefined",
+			"object",
+			"boolean",
+			"number",
+			"string",
+			"bigint",
+			"symbol",
+			"function",
+		] as const;
+		for (let mask = 1; mask <= TOP; mask++) {
+			for (const result of results) {
+				const outcomes = new Set<boolean>();
+				for (const [bit, representatives] of values.entries())
+					if ((mask & (1 << bit)) !== 0)
+						for (const value of representatives) outcomes.add(typeof value === result);
+				equal(
+					compilerTypeofComparison(mask, result),
+					outcomes.size === 1 ? [...outcomes][0] : undefined,
+				);
+			}
+		}
 	});
 });
