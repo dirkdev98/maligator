@@ -654,6 +654,7 @@ export interface CoreDirectEntryPlan {
 		readonly instruction: CoreInstructionId;
 		readonly masks: ReadonlyArray<number>;
 		readonly results: ReadonlyArray<number>;
+		readonly int32Inputs?: ReadonlyArray<boolean>;
 		readonly effectMask: number;
 	}>;
 	readonly constantBooleans?: ReadonlyArray<{

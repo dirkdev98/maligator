@@ -99,7 +99,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 266;
+export const COMPILER_ARTIFACT_VERSION = 267;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -1176,6 +1176,17 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 	}
 }
 
+function readInt32Inputs(r: Reader): ReadonlyArray<boolean> | undefined {
+	const count = r.count(1);
+	if (count === 0) return undefined;
+	return Array.from({ length: count }, () => {
+		const integer = r.u8();
+		if (integer > 1)
+			throw new RangeError("program-image-codec: invalid int32 input fact");
+		return integer === 1;
+	});
+}
+
 function readNativeStorage(r: Reader): NativeStoragePlan {
 	const conservativeStackRoots = r.u8();
 	if (conservativeStackRoots > 1) throw new RangeError("Invalid native stack-root mode");
@@ -2211,6 +2222,7 @@ function writeCompilerArtifact(
 				instructionIp,
 				masks,
 				results,
+				int32Inputs,
 				effectMask,
 			} of entry.instructionFacts ?? []) {
 				w.u32(instructionIp);
@@ -2218,6 +2230,8 @@ function writeCompilerArtifact(
 				for (const mask of masks) w.u8(mask);
 				w.u32(results.length);
 				for (const mask of results) w.u8(mask);
+				w.u32(int32Inputs?.length ?? 0);
+				for (const integer of int32Inputs ?? []) w.u8(integer ? 1 : 0);
 				w.u32(effectMask);
 			}
 			w.u32(entry.callOverrides?.length ?? 0);
@@ -2272,6 +2286,8 @@ function writeCompilerArtifact(
 						for (const mask of masks) w.u8(mask);
 					}
 				}
+				w.u32(facts.int32Inputs?.length ?? 0);
+				for (const integer of facts.int32Inputs ?? []) w.u8(integer ? 1 : 0);
 				w.u8(facts.registers === undefined ? 0 : 1);
 				if (facts.registers !== undefined) {
 					w.i32Array([...facts.registers]);
@@ -4793,11 +4809,18 @@ function readCompilerArtifact(
 					throw new Error("program-image-codec: invalid direct-entry comparison");
 				return { instructionIp, value: value === 1 };
 			});
-			const instructionFacts = Array.from({ length: r.count(16) }, () => {
+			const instructionFacts = Array.from({ length: r.count(20) }, () => {
 				const instructionIp = r.u32();
 				const masks = Array.from({ length: r.count(1) }, () => r.u8());
 				const results = Array.from({ length: r.count(1) }, () => r.u8());
-				return { instructionIp, masks, results, effectMask: r.u32() };
+				const int32Inputs = readInt32Inputs(r);
+				return {
+					instructionIp,
+					masks,
+					results,
+					...(int32Inputs === undefined ? {} : { int32Inputs }),
+					effectMask: r.u32(),
+				};
 			});
 			const callOverrides = Array.from({ length: r.count(4) }, () => {
 				const instructionIp = r.u32();
@@ -4906,12 +4929,14 @@ function readCompilerArtifact(
 				const resultKindMasks = readOptional(() =>
 					Array.from({ length: r.count(1) }, () => r.u8()),
 				);
+				const int32Inputs = readInt32Inputs(r);
 				const registers = readOptional(() => r.i32Array());
 				const inputOffset = registers === undefined ? undefined : r.u32();
 				facts[ip] = {
 					...(effectMask === undefined ? {} : { effectMask }),
 					...(inputKindMasks === undefined ? {} : { inputKindMasks }),
 					...(resultKindMasks === undefined ? {} : { resultKindMasks }),
+					...(int32Inputs === undefined ? {} : { int32Inputs }),
 					...(registers === undefined ? {} : { registers, inputOffset }),
 				};
 			}

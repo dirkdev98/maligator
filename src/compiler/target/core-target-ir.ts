@@ -202,6 +202,7 @@ export interface CoreTargetDirectEntry {
 		readonly instruction: CompilerInstruction;
 		readonly masks: ReadonlyArray<number>;
 		readonly results: ReadonlyArray<number>;
+		readonly int32Inputs?: ReadonlyArray<boolean>;
 		readonly effectMask: number;
 	}>;
 	readonly constantBooleans?: ReadonlyArray<{

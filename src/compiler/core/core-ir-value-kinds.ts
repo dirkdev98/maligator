@@ -854,6 +854,15 @@ function solveCoreValueKinds(
 		demandedValues === undefined ? fn.valueCapacity : 0,
 	);
 	const numericIntegerSeeds: Array<CoreValueId> = [];
+	const joinInputs: Array<number> = [];
+	const integerJoin = (values: ReadonlyArray<CoreValueId>): number => {
+		if (values.length === 0) return 0;
+		if (values.length === 1) return values[0]! + 1;
+		const recipe = -joinInputs.length - 3;
+		joinInputs.push(values.length);
+		for (const value of values) joinInputs.push(value);
+		return recipe;
+	};
 	const transfers: KindTransferBuffer = {
 		kinds: [],
 		outputs: [],
@@ -876,12 +885,29 @@ function solveCoreValueKinds(
 		if (demandedValues === undefined && fn.valueRepresentation(parameter) === "i32")
 			integerRecipes[parameter] = INTEGER_PROOF_EXACT;
 		const formalIndex = formalParameters[parameter]!;
-		if (
-			representation !== undefined ||
+		const boundary =
 			formalIndex >= 0 ||
 			fn.kernel.blockParameterRole(row) === 1 ||
-			incoming.length === 0
+			incoming.length === 0;
+		let incomingValues: Array<CoreValueId> | undefined;
+		if (
+			!boundary &&
+			(representation === undefined ||
+				(demandedValues === undefined && representation === COMPILER_VALUE_KIND_NUMBER))
 		) {
+			incomingValues = [];
+			for (const edge of incoming) {
+				const value = edge.arguments[edge.kind === "exceptional" ? index - 1 : index];
+				if (value !== undefined) incomingValues.push(value);
+			}
+			if (
+				demandedValues === undefined &&
+				representation === COMPILER_VALUE_KIND_NUMBER &&
+				fn.valueRepresentation(parameter) !== "i32"
+			)
+				integerRecipes[parameter] = integerJoin(incomingValues);
+		}
+		if (representation !== undefined || boundary) {
 			const kind =
 				representation ??
 				(formalIndex < 0
@@ -889,11 +915,6 @@ function solveCoreValueKinds(
 					: (inputs?.parameterMasks?.[formalIndex] ?? COMPILER_VALUE_KIND_TOP));
 			masks[parameter] = masks[parameter]! | kind;
 			return;
-		}
-		const incomingValues: Array<CoreValueId> = [];
-		for (const edge of incoming) {
-			const value = edge.arguments[edge.kind === "exceptional" ? index - 1 : index];
-			if (value !== undefined) incomingValues.push(value);
 		}
 		addKindTransfer(transfers, KIND_TRANSFER_JOIN, parameter, 0, incomingValues);
 	};
@@ -913,6 +934,9 @@ function solveCoreValueKinds(
 				builtinResultIsInt32(attributes.operation))
 		) {
 			integerRecipes[output] = INTEGER_PROOF_EXACT;
+		} else if (opcode === "move" && fn.valueRepresentation(output) === "f64") {
+			integerRecipes[output] =
+				fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction)) + 1;
 		} else if (
 			(opcode === "unary" && operator === "~") ||
 			(opcode === "binary" &&
@@ -1019,7 +1043,6 @@ function solveCoreValueKinds(
 		masks[output] = next;
 		wakeDependents(output, queued, queue);
 	}
-	const joinInputs: Array<number> = [];
 	for (const value of numericIntegerSeeds)
 		if (masks[value] === COMPILER_VALUE_KIND_NUMBER)
 			integerRecipes[value] = INTEGER_PROOF_EXACT;
@@ -1032,7 +1055,7 @@ function solveCoreValueKinds(
 		const kind = transferKinds[index]!;
 		if (
 			masks[output] !== COMPILER_VALUE_KIND_NUMBER ||
-			integerRecipes[output] === INTEGER_PROOF_EXACT ||
+			integerRecipes[output] !== 0 ||
 			(kind !== KIND_TRANSFER_JOIN && kind !== KIND_TRANSFER_COPY)
 		)
 			continue;

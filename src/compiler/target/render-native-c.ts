@@ -28,7 +28,10 @@ import {
 	compilerOperatorIsPrimitiveStringConcatenation,
 } from "../shared/compiler-value-kinds.ts";
 import type { CompilerValueKindMask } from "../shared/compiler-value-kinds.ts";
-import { instructionInputKind } from "../shared/instruction-facts.ts";
+import {
+	instructionInputIsInt32,
+	instructionInputKind,
+} from "../shared/instruction-facts.ts";
 import type { InstructionFacts } from "../shared/instruction-facts.ts";
 import {
 	knownBuiltinErrors,
@@ -752,12 +755,17 @@ function nativeMathBinaryExpr(
 function nativeNumericBuiltinExpr(
 	operation: string,
 	arguments_: ReadonlyArray<string>,
+	inputIsInt32 = false,
 ): string | null {
 	if (NUMBER_PREDICATES.has(operation))
 		return arguments_.length === 0
 			? "false"
 			: arguments_.length === 1
-				? nativeNumberPredicateExpression(operation, arguments_[0]!)
+				? inputIsInt32
+					? operation === "Number.isNaN"
+						? "false"
+						: "true"
+					: nativeNumberPredicateExpression(operation, arguments_[0]!)
 				: null;
 	if (arguments_.length === 1 && MATH_UNARY_NATIVE_CALL.has(operation))
 		return nativeMathUnaryExpr(operation, arguments_[0]!);
@@ -1126,19 +1134,26 @@ function isLengthPropertyName(units: ReadonlyArray<number> | undefined): boolean
 	);
 }
 
-function nativeNumberExpr(operator: string, left: string, right: string): string | null {
+function numberToInt32(value: string, isInt32 = false): string {
+	return isInt32 ? `((i32) ${value})` : `mal_ops_number_to_i32(${value})`;
+}
+
+function nativeNumberExpr(
+	operator: string,
+	left: string,
+	right: string,
+	int32Inputs?: ReadonlyArray<boolean>,
+): string | null {
 	const arith = NATIVE_ARITH[operator];
 	if (arith !== undefined) {
 		return `${left} ${arith} ${right}`;
 	}
-	const bitwise = nativeInt32Expr(
-		operator,
-		`mal_ops_number_to_i32(${left})`,
-		`mal_ops_number_to_i32(${right})`,
-	);
+	const left32 = numberToInt32(left, int32Inputs?.[0]);
+	const right32 = numberToInt32(right, int32Inputs?.[1]);
+	const bitwise = nativeInt32Expr(operator, left32, right32);
 	if (bitwise !== null) return `(f64) (${bitwise})`;
 	if (operator === ">>>") {
-		return `(f64) ((u32) mal_ops_number_to_i32(${left}) >> (mal_ops_number_to_i32(${right}) & 0x1F))`;
+		return `(f64) ((u32) ${left32} >> (${right32} & 0x1F))`;
 	}
 	if (operator === "%") {
 		return `mal_number_remainder(${left}, ${right})`;
@@ -1318,6 +1333,7 @@ function emitNumericLoopRegion(
 	propertyCache: string,
 	// The C statement that performs the binding load at an instruction.
 	bindingLoad: (ip: number) => string,
+	facts: NativeFunctionPlan["facts"],
 ): ReadonlyArray<string> {
 	const members = new Set(plan.claimedIps.filter((ip) => ip !== plan.entryIp));
 	const order = numericLoopOrder(fn, plan.id, members, true);
@@ -1411,10 +1427,10 @@ function emitNumericLoopRegion(
 				: "f64";
 	const num = (register: number) =>
 		integral.has(register) ? `(f64) ${local(register)}` : local(register);
-	const intOf = (register: number) =>
+	const intOf = (register: number, ip: number) =>
 		integral.has(register)
 			? `mal_safe_integer_to_i32(${local(register)})`
-			: `mal_ops_number_to_i32(${local(register)})`;
+			: numberToInt32(local(register), instructionInputIsInt32(facts?.[ip], register));
 	const guards: Array<string> = [];
 	const typedViewGuards: Array<string> = [];
 	const arrayViewGuards: Array<string> = [];
@@ -1665,7 +1681,7 @@ function emitNumericLoopRegion(
 					const [first, second] = builtin.arguments.map((argument) =>
 						argument.kind === "number"
 							? `(i32) ${argument.value | 0}`
-							: intOf(argument.register),
+							: intOf(argument.register, ip),
 					);
 					return builtin.operation === "Math.imul"
 						? `${local(op.dst)} = (i64) (i32) ((u32) ${first} * (u32) ${second});`
@@ -1676,7 +1692,11 @@ function emitNumericLoopRegion(
 						? cF64Literal(argument.value)
 						: num(argument.register),
 				);
-				const expression = nativeNumericBuiltinExpr(builtin.operation, arguments_);
+				const expression = nativeNumericBuiltinExpr(
+					builtin.operation,
+					arguments_,
+					facts?.[ip]?.int32Inputs?.[1],
+				);
 				if (expression === null)
 					throw new Error("Invalid numeric loop builtin expression");
 				return `${local(op.dst)} = ${expression};`;
@@ -1763,7 +1783,7 @@ function emitNumericLoopRegion(
 				const left = local(op.left);
 				const right = local(op.right);
 				if (floating && integral.has(op.dst)) {
-					const shift = `((u32) ${intOf(op.right)} & 31u)`;
+					const shift = `((u32) ${intOf(op.right, ip)} & 31u)`;
 					switch (op.operator) {
 						case "+":
 						case "-":
@@ -1771,19 +1791,24 @@ function emitNumericLoopRegion(
 						case "&":
 						case "|":
 						case "^":
-							return `${local(op.dst)} = (i64) (${intOf(op.left)} ${op.operator} ${intOf(op.right)});`;
+							return `${local(op.dst)} = (i64) (${intOf(op.left, ip)} ${op.operator} ${intOf(op.right, ip)});`;
 						case "<<":
-							return `${local(op.dst)} = (i64) (i32) ((u32) ${intOf(op.left)} << ${shift});`;
+							return `${local(op.dst)} = (i64) (i32) ((u32) ${intOf(op.left, ip)} << ${shift});`;
 						case ">>":
-							return `${local(op.dst)} = (i64) (${intOf(op.left)} >> ${shift});`;
+							return `${local(op.dst)} = (i64) (${intOf(op.left, ip)} >> ${shift});`;
 						case ">>>":
-							return `${local(op.dst)} = (i64) ((u32) ${intOf(op.left)} >> ${shift});`;
+							return `${local(op.dst)} = (i64) ((u32) ${intOf(op.left, ip)} >> ${shift});`;
 						default:
 							throw new Error(`Invalid integral loop operator ${op.operator}`);
 					}
 				}
 				if (floating) {
-					const expression = nativeNumberExpr(op.operator, num(op.left), num(op.right));
+					const expression = nativeNumberExpr(
+						op.operator,
+						num(op.left),
+						num(op.right),
+						facts?.[ip]?.int32Inputs,
+					);
 					if (expression === null) throw new Error("Invalid numeric loop operator");
 					return `${local(op.dst)} = ${expression};`;
 				}
@@ -1817,7 +1842,7 @@ function emitNumericLoopRegion(
 			case "UNARY": {
 				const source = floating ? num(op.src) : local(op.src);
 				if (floating && op.operator === "~")
-					return `${local(op.dst)} = ${integral.has(op.dst) ? "(i64)" : "(f64)"} ~${intOf(op.src)};`;
+					return `${local(op.dst)} = ${integral.has(op.dst) ? "(i64)" : "(f64)"} ~${intOf(op.src, ip)};`;
 				if (floating && integral.has(op.dst)) {
 					if (op.operator !== "increment" && op.operator !== "decrement")
 						throw new Error(`Invalid integral loop operator ${op.operator}`);
@@ -1832,7 +1857,7 @@ function emitNumericLoopRegion(
 								: op.operator === "decrement"
 									? `${source} - 1.0`
 									: op.operator === "~"
-										? `(f64) ~mal_ops_number_to_i32(${source})`
+										? `(f64) ~${numberToInt32(source, instructionInputIsInt32(facts?.[ip], op.src))}`
 										: op.operator === "!"
 											? `!(${truthy(op.src)})`
 											: source;
@@ -2029,6 +2054,7 @@ function emitNumberRecordRegion(
 	reps: ReadonlyArray<VmRegisterRepresentation>,
 	propertyCache: string,
 	shapeSnapshots: Set<number> | undefined,
+	facts: NativeFunctionPlan["facts"],
 ): ReadonlyArray<string> {
 	const members = new Set(plan.claimedIps);
 	const order = numberRecordOrder(fn, plan.id, plan.exitIp, (ip) => members.has(ip));
@@ -2118,7 +2144,11 @@ function emitNumberRecordRegion(
 						? cF64Literal(argument.value)
 						: local(argument.register),
 				);
-				const expression = nativeNumericBuiltinExpr(builtin.operation, arguments_);
+				const expression = nativeNumericBuiltinExpr(
+					builtin.operation,
+					arguments_,
+					facts?.[ip]?.int32Inputs?.[1],
+				);
 				if (expression === null)
 					throw new Error("Invalid numeric record builtin expression");
 				return `${local(op.dst)} = ${expression};`;
@@ -2140,7 +2170,12 @@ function emitNumberRecordRegion(
 				const compare = NATIVE_COMPARE[op.operator];
 				const expression =
 					compare === undefined
-						? nativeNumberExpr(op.operator, local(op.left), local(op.right))
+						? nativeNumberExpr(
+								op.operator,
+								local(op.left),
+								local(op.right),
+								facts?.[ip]?.int32Inputs,
+							)
 						: `${local(op.left)} ${compare} ${local(op.right)}`;
 				if (expression === null) throw new Error("Invalid native number record operator");
 				return `${local(op.dst)} = ${expression};`;
@@ -2155,7 +2190,7 @@ function emitNumberRecordRegion(
 							: op.operator === "decrement"
 								? `${source} - 1.0`
 								: op.operator === "~"
-									? `(f64) ~mal_ops_number_to_i32(${source})`
+									? `(f64) ~${numberToInt32(source, instructionInputIsInt32(facts?.[ip], op.src))}`
 									: op.operator === "!"
 										? `!${truthy(op.src)}`
 										: source;
@@ -2908,6 +2943,7 @@ function emitCompiledVariant(
 					nativeContract.instructions[ip],
 					relocation,
 					suffix,
+					nativeContract.facts?.[ip],
 				),
 			];
 		}),
@@ -3402,11 +3438,16 @@ function renderScalarExpression(
 	plan?: NativeInstructionPlan,
 	relocation: NativeRelocationExpressions = UNRELOCATED_NATIVE_EXPRESSIONS,
 	suffix = "",
+	facts?: InstructionFacts,
 ): string {
 	const number = (local: number) =>
 		reps[local] === "boxed" ? `mal_ops_number_as_f64(r${local})` : `(f64) r${local}`;
 	const int32 = (local: number) =>
-		reps[local] === "int32" ? `r${local}` : `mal_ops_number_to_i32(${number(local)})`;
+		reps[local] === "int32"
+			? `r${local}`
+			: instructionInputIsInt32(facts, local)
+				? `((i32) ${number(local)})`
+				: `mal_ops_number_to_i32(${number(local)})`;
 	const numberResult = (dst: number, expression: string) =>
 		reps[dst] === "boxed" ? `mal_ops_number_value(${expression})` : expression;
 	const booleanResult = (dst: number, expression: string) =>
@@ -3533,7 +3574,17 @@ function renderNumericLeaf(
 		[...expressionIps].map((ip) => {
 			const op = fn.instructions[ip]!;
 			if (!("dst" in op)) throw new Error("Native expression lacks a destination");
-			return [op.dst, renderScalarExpression(op, reps, native.instructions[ip])];
+			return [
+				op.dst,
+				renderScalarExpression(
+					op,
+					reps,
+					native.instructions[ip],
+					undefined,
+					"",
+					native.facts?.[ip],
+				),
+			];
 		}),
 	);
 	const fallthroughJumps = new Set(leaf.fallthroughJumpIps);
@@ -3577,7 +3628,7 @@ function renderNumericLeaf(
 			case "UNARY":
 			case "MATH_UNARY_NUMBER":
 			case "MATH_BINARY_NUMBER":
-				line = `r${op.dst} = ${renderScalarExpression(op, reps, native.instructions[ip])};`;
+				line = `r${op.dst} = ${renderScalarExpression(op, reps, native.instructions[ip], undefined, "", native.facts?.[ip])};`;
 				break;
 			case "RETURN":
 				line = `return ${number(op.value)};`;
@@ -4291,7 +4342,14 @@ function emitResumableFunction(
 			if (!("dst" in op)) throw new Error("Native expression lacks a destination");
 			return [
 				op.dst,
-				renderScalarExpression(op, reps, native.instructions[ip], relocation, suffix),
+				renderScalarExpression(
+					op,
+					reps,
+					native.instructions[ip],
+					relocation,
+					suffix,
+					native.facts?.[ip],
+				),
 			];
 		}),
 	);
@@ -6479,6 +6537,7 @@ function emitBody(
 						).join(" ");
 					throw new Error("Invalid numeric loop binding load");
 				},
+				nativeFacts,
 			))
 				lines.push(`    ${line}`);
 		const numberRecord = numberRecordRegionById.get(ip);
@@ -6489,6 +6548,7 @@ function emitBody(
 				reps,
 				nativeBodyReference(resources, "propertyCache"),
 				loopInstructions[ip] === 1 ? shapeSnapshots : undefined,
+				nativeFacts,
 			))
 				lines.push(`    ${line}`);
 		const safepointKind = gcSafepointKinds.get(ip);
@@ -7928,11 +7988,13 @@ function emitInstruction(
 		if (decoded.kind === "register") {
 			return reps[decoded.register] === "int32"
 				? inputValue(decoded.register)
-				: reps[decoded.register] === "number"
-					? `mal_ops_number_to_i32(${inputValue(decoded.register)})`
-					: operandKind(operand) === COMPILER_VALUE_KIND_NUMBER
-						? `mal_ops_number_value_to_i32(${boxedOperand(operand)})`
-						: null;
+				: instructionInputIsInt32(context.facts, decoded.register)
+					? `((i32) ${nativeNumberOperand(operand)!})`
+					: reps[decoded.register] === "number"
+						? `mal_ops_number_to_i32(${inputValue(decoded.register)})`
+						: operandKind(operand) === COMPILER_VALUE_KIND_NUMBER
+							? `mal_ops_number_value_to_i32(${boxedOperand(operand)})`
+							: null;
 		}
 		return decoded.kind === "number" ? String(decoded.value) : null;
 	};
@@ -10669,11 +10731,13 @@ function emitInstruction(
 				const integer = (register: number): string =>
 					reps[register] === "int32"
 						? `r${register}`
-						: reps[register] === "number"
-							? `(i32)(${typedNumber(register)})`
-							: `mal_value_to_i32(${boxed(register)})`;
+						: instructionInputIsInt32(context.facts, register)
+							? nativeInt32Operand(register)!
+							: reps[register] === "number"
+								? `(i32)(${typedNumber(register)})`
+								: `mal_value_to_i32(${boxed(register)})`;
 				const integerGuard = (register: number): string =>
-					reps[register] === "int32"
+					reps[register] === "int32" || instructionInputIsInt32(context.facts, register)
 						? "true"
 						: reps[register] === "number"
 							? `(r${register} >= -2147483648.0 && r${register} <= 2147483647.0 && r${register} == trunc(r${register}))`
@@ -10743,7 +10807,7 @@ function emitInstruction(
 					const expression =
 						operator === "**"
 							? `mal_number_exponentiate(${a}, ${b})`
-							: nativeNumberExpr(operator, a, b);
+							: nativeNumberExpr(operator, a, b, context.facts?.int32Inputs);
 					if (expression !== null) return [storeNumber(dst, expression)];
 				}
 			}
@@ -10769,7 +10833,7 @@ function emitInstruction(
 				const expression =
 					operator === "**"
 						? `mal_number_exponentiate(${a}, ${b})`
-						: nativeNumberExpr(operator, a, b);
+						: nativeNumberExpr(operator, a, b, context.facts?.int32Inputs);
 				if (expression !== null) return [storeNumber(dst, expression)];
 			}
 			if (indexedLengthLoopAction?.role === "compare") {
@@ -11023,9 +11087,11 @@ function emitInstruction(
 				const int32Input = (register: number): string =>
 					reps[register] === "int32"
 						? inputValue(register)
-						: reps[register] === "number"
-							? `mal_ops_number_to_i32(${inputValue(register)})`
-							: `mal_ops_number_value_to_i32(${boxed(register)})`;
+						: instructionInputIsInt32(context.facts, register)
+							? nativeInt32Operand(register)!
+							: reps[register] === "number"
+								? `mal_ops_number_to_i32(${inputValue(register)})`
+								: `mal_ops_number_value_to_i32(${boxed(register)})`;
 				const int32Expression = INT32_RESULT_OPERATORS.has(operator)
 					? nativeInt32Expr(operator, int32Input(left), int32Input(right))
 					: null;
@@ -11037,6 +11103,7 @@ function emitInstruction(
 								rightIsNum
 									? typedNumber(right)
 									: `mal_ops_number_as_f64(${boxed(right)})`,
+								context.facts?.int32Inputs,
 							)
 						: `(f64) (${int32Expression})`;
 				if (expression === null) return fallback;
@@ -11083,7 +11150,12 @@ function emitInstruction(
 				if (dst === right && (operator === "+" || operator === "*")) {
 					return [`r${dst} ${operator}= ${typedNumber(left)};`];
 				}
-				const expr = nativeNumberExpr(operator, typedNumber(left), typedNumber(right));
+				const expr = nativeNumberExpr(
+					operator,
+					typedNumber(left),
+					typedNumber(right),
+					context.facts?.int32Inputs,
+				);
 				return expr === null ? null : [`r${dst} = ${expr};`];
 			}
 			if (operator === "**" && leftIsNum && rightIsNum) {
@@ -11313,16 +11385,27 @@ function emitInstruction(
 			// for both-boxed there is no static proof, but the guard is a cheap,
 			// well-predicted bit test and hot arithmetic is overwhelmingly numeric.
 			if (numbersPossible && producesNumberFromNumbers(operator)) {
-				const nativeExpr = nativeNumberExpr(operator, numericOf(left), numericOf(right));
+				const nativeExpr = nativeNumberExpr(
+					operator,
+					numericOf(left),
+					numericOf(right),
+					context.facts?.int32Inputs,
+				);
 				const int32Expr = INT32_RESULT_OPERATORS.has(operator)
 					? nativeInt32Expr(
 							operator,
 							reps[left] === "int32"
 								? inputValue(left)
-								: `mal_ops_number_to_i32(${numericOf(left)})`,
+								: numberToInt32(
+										numericOf(left),
+										instructionInputIsInt32(context.facts, left),
+									),
 							reps[right] === "int32"
 								? inputValue(right)
-								: `mal_ops_number_to_i32(${numericOf(right)})`,
+								: numberToInt32(
+										numericOf(right),
+										instructionInputIsInt32(context.facts, right),
+									),
 						)
 					: null;
 				if (nativeExpr !== null) {
@@ -11436,7 +11519,7 @@ function emitInstruction(
 						: operator === "+" || operator === "tonumeric"
 							? value
 							: operator === "~"
-								? `(f64)(~mal_ops_number_to_i32(${value}))`
+								? `(f64)(~${numberToInt32(value, instructionInputIsInt32(context.facts, src))})`
 								: operator === "increment" || operator === "decrement"
 									? `${value} ${operator === "increment" ? "+" : "-"} 1.0`
 									: null;

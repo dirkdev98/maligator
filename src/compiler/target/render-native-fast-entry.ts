@@ -5,7 +5,10 @@ import {
 	COMPILER_VALUE_KIND_TOP,
 	COMPILER_VALUE_KIND_NULLISH,
 } from "../shared/compiler-value-kinds.ts";
-import { instructionInputKind } from "../shared/instruction-facts.ts";
+import {
+	instructionInputIsInt32,
+	instructionInputKind,
+} from "../shared/instruction-facts.ts";
 import { emitTypeofResult } from "./emit-program-image.ts";
 import type {
 	NativeDirectEntryPlan,
@@ -334,6 +337,7 @@ function int32ResultRegisters(
 
 interface FastNumbers {
 	readonly kind: (register: number) => number;
+	readonly isInt32: (register: number) => boolean;
 	readonly constants: ReadonlyMap<number, number>;
 	readonly literal: (value: number) => string;
 	/** String constant registers and the unit length of each constant. */
@@ -368,7 +372,9 @@ function number(values: FastNumbers, register: number): string {
 function int32(values: FastNumbers, register: number): string {
 	const constant = values.constants.get(register);
 	return constant === undefined
-		? `mal_ops_number_value_to_i32(f${register})`
+		? values.isInt32(register)
+			? `((i32) ${number(values, register)})`
+			: `mal_ops_number_value_to_i32(f${register})`
 		: `((i32) ${constant | 0})`;
 }
 
@@ -472,6 +478,7 @@ function fastInstruction(
 ): string | undefined {
 	const masks = input.facts?.[ip]?.inputKindMasks;
 	const values: FastNumbers = {
+		isInt32: (register) => instructionInputIsInt32(input.facts?.[ip], register),
 		kind(register) {
 			const kind = instructionInputKind(input.facts?.[ip], register);
 			if (kind !== undefined) return kind;

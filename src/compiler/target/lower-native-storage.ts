@@ -884,8 +884,13 @@ export function nativeVariantContract(
 			]
 		: undefined;
 	const facts = factOverrides ?? native.facts;
-	for (const { instructionIp, masks, results, effectMask } of entry.instructionFacts ??
-		[]) {
+	for (const {
+		instructionIp,
+		masks,
+		results,
+		int32Inputs,
+		effectMask,
+	} of entry.instructionFacts ?? []) {
 		const canonical = facts?.[instructionIp];
 		if (
 			(canonical?.inputKindMasks !== undefined &&
@@ -898,6 +903,7 @@ export function nativeVariantContract(
 			...canonical,
 			inputKindMasks: masks,
 			resultKindMasks: results,
+			int32Inputs,
 			effectMask,
 		};
 	}

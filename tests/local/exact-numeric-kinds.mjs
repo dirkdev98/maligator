@@ -57,3 +57,114 @@ console.log(
 		.map((value) => show(-value))
 		.join(" "),
 );
+
+function integerJoin(left, right, flag, gate, shift) {
+	const value = flag ? left | 0 : right >> 1;
+	gate(value);
+	return [
+		value & shift,
+		value | shift,
+		value ^ shift,
+		value << shift,
+		value >> shift,
+		value >>> shift,
+		~value,
+		Number.isNaN(value),
+		Number.isFinite(value),
+		Number.isInteger(value),
+		Number.isSafeInteger(value),
+	];
+}
+function numericJoin(left, right, flag) {
+	const value = flag ? left | 0 : +right;
+	return [value & 7, Number.isInteger(value), Number.isSafeInteger(value), 1 / value];
+}
+function* suspendedInteger(left, right, flag) {
+	const value = flag ? left | 0 : right >> 1;
+	yield value;
+	return [value ^ 7, ~value, Number.isSafeInteger(value)];
+}
+const numericEdges = [
+	-0,
+	0.5,
+	-2147483648,
+	2147483647,
+	2147483648,
+	4294967295,
+	9007199254740991,
+	9007199254740992,
+	NaN,
+	Infinity,
+	-Infinity,
+	undefined,
+	"-2147483649",
+];
+let observations = 0;
+function observe(value) {
+	observations++;
+	globalThis.observedInteger = { value };
+}
+for (const edge of numericEdges) {
+	for (const flag of [false, true]) {
+		const shifts = {
+			valueOf() {
+				observations++;
+				return 35;
+			},
+		};
+		console.log(
+			"integer join",
+			integerJoin(edge, edge, flag, observe, shifts).map(show).join(" "),
+		);
+		console.log("numeric join", numericJoin(edge, edge, flag).map(show).join(" "));
+		const iterator = suspendedInteger(edge, edge, flag);
+		console.log(
+			"suspended integer",
+			show(iterator.next().value),
+			iterator.next().value.map(show).join(" "),
+		);
+	}
+}
+for (const input of [
+	3n,
+	Symbol("integer"),
+	{
+		valueOf() {
+			throw new Error("input");
+		},
+	},
+]) {
+	try {
+		integerJoin(input, input, true, observe, 1);
+	} catch (error) {
+		console.log("integer input", error.constructor.name, observations);
+	}
+}
+for (const shift of [
+	3n,
+	Symbol("shift"),
+	{
+		valueOf() {
+			throw new Error("shift");
+		},
+	},
+]) {
+	try {
+		integerJoin(17, 17, true, observe, shift);
+	} catch (error) {
+		console.log("integer shift", error.constructor.name, observations);
+	}
+}
+try {
+	integerJoin(
+		17,
+		17,
+		true,
+		() => {
+			throw new Error("gate");
+		},
+		1,
+	);
+} catch (error) {
+	console.log("integer gate", error.message, observations);
+}

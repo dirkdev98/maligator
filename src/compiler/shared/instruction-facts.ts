@@ -1,5 +1,8 @@
 import type { CompilerValueKindMask } from "./compiler-value-kinds.ts";
-import { compilerValueKindMaskIsValid } from "./compiler-value-kinds.ts";
+import {
+	compilerValueKindMaskIsValid,
+	COMPILER_VALUE_KIND_NUMBER,
+} from "./compiler-value-kinds.ts";
 import type { EffectSummary } from "./effect-summary.ts";
 import { EFFECT_DOMAINS } from "./effect-summary.ts";
 
@@ -12,6 +15,8 @@ const EFFECT_MASK = (INSTRUCTION_CALLS_USER_CODE << 1) - 1;
 export interface InstructionFacts {
 	readonly inputKindMasks?: ReadonlyArray<CompilerValueKindMask>;
 	readonly resultKindMasks?: ReadonlyArray<CompilerValueKindMask>;
+	/** Exact primitive Numbers in signed 32-bit range, excluding negative zero. */
+	readonly int32Inputs?: ReadonlyArray<boolean>;
 	readonly registers?: ReadonlyArray<number>;
 	readonly inputOffset?: number;
 	readonly effectMask?: number;
@@ -80,6 +85,13 @@ export function instructionFactsAreValid(facts: InstructionFacts): boolean {
 			facts.resultKindMasks.every((mask) =>
 				compilerValueKindMaskIsValid(mask, { allowTop: true }),
 			)) &&
+		(facts.int32Inputs === undefined ||
+			(facts.int32Inputs.length === facts.inputKindMasks?.length &&
+				facts.int32Inputs.every(
+					(integer, index) =>
+						typeof integer === "boolean" &&
+						(!integer || facts.inputKindMasks?.[index] === COMPILER_VALUE_KIND_NUMBER),
+				))) &&
 		(facts.registers === undefined
 			? facts.inputOffset === undefined
 			: Number.isInteger(facts.inputOffset) &&
@@ -109,4 +121,16 @@ export function instructionResultKind(
 ): CompilerValueKindMask | undefined {
 	const index = facts?.registers?.indexOf(register) ?? -1;
 	return index < 0 ? undefined : facts?.resultKindMasks?.[index];
+}
+
+export function instructionInputIsInt32(
+	facts: InstructionFacts | undefined,
+	register: number,
+): boolean {
+	if (register < 0 || facts?.int32Inputs === undefined || facts.inputOffset === undefined)
+		return false;
+	const index = facts.registers?.indexOf(register, facts.inputOffset) ?? -1;
+	return (
+		index >= facts.inputOffset && facts.int32Inputs[index - facts.inputOffset] === true
+	);
 }

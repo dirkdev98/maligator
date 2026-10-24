@@ -28,10 +28,7 @@ import {
 	INSTRUCTION_CALLS_USER_CODE,
 	INSTRUCTION_MAY_SUSPEND,
 } from "../shared/instruction-facts.ts";
-import {
-	instructionFactsAreValid,
-	instructionEffectMaskIsValid,
-} from "../shared/instruction-facts.ts";
+import { instructionFactsAreValid } from "../shared/instruction-facts.ts";
 import type { InstructionFacts } from "../shared/instruction-facts.ts";
 import { NATIVE_STRING_SWITCH_CASE_LIMIT } from "../shared/native-string-switch.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
@@ -1597,6 +1594,7 @@ export interface NativeDirectEntryPlan {
 		readonly instructionIp: number;
 		readonly masks: ReadonlyArray<number>;
 		readonly results: ReadonlyArray<number>;
+		readonly int32Inputs?: ReadonlyArray<boolean>;
 		readonly effectMask: number;
 	}>;
 	readonly constantBooleans?: ReadonlyArray<{
@@ -1645,10 +1643,20 @@ export function validateNativeDirectEntry(
 			throw new RangeError("Native direct-entry call override names an incompatible ABI");
 	}
 	const seenInputs = new Set<number>();
-	for (const { instructionIp, masks, results, effectMask } of entry.instructionFacts ??
-		[]) {
+	for (const {
+		instructionIp,
+		masks,
+		results,
+		int32Inputs,
+		effectMask,
+	} of entry.instructionFacts ?? []) {
 		if (
-			!instructionEffectMaskIsValid(effectMask) ||
+			!instructionFactsAreValid({
+				inputKindMasks: masks,
+				resultKindMasks: results,
+				int32Inputs,
+				effectMask,
+			}) ||
 			seenInputs.has(instructionIp) ||
 			!Number.isInteger(instructionIp) ||
 			fn.instructions[instructionIp] === undefined ||
@@ -5444,10 +5452,11 @@ function lowerExecutionFunctionToNativePlan(
 			? {}
 			: {
 					instructionFacts: entry.instructionFacts.map(
-						({ instruction, masks, results, effectMask }) => ({
+						({ instruction, masks, results, int32Inputs, effectMask }) => ({
 							instructionIp: instructionIndexByTargetInstruction.get(instruction)!,
 							masks,
 							results,
+							...(int32Inputs === undefined ? {} : { int32Inputs }),
 							effectMask,
 						}),
 					),

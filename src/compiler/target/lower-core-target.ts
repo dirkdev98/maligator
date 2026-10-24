@@ -2220,6 +2220,9 @@ function lowerFunctionToTarget(
 						: {
 								inputKindMasks: kinds.masks,
 								resultKindMasks: kinds.results,
+								...(kinds.int32Inputs === undefined
+									? {}
+									: { int32Inputs: kinds.int32Inputs }),
 								registers: loweredRegisters,
 								inputOffset,
 							}),
@@ -2321,6 +2324,9 @@ function lowerFunctionToTarget(
 				: {
 						inputKindMasks: terminatorKinds.masks,
 						resultKindMasks: terminatorKinds.results,
+						...(terminatorKinds.int32Inputs === undefined
+							? {}
+							: { int32Inputs: terminatorKinds.int32Inputs }),
 						registers: Array.from(
 							{ length: kernel.instructionOperandCount(terminatorId) },
 							(_, index) =>
@@ -2707,13 +2713,19 @@ function lowerFunctionToTarget(
 			(left.length === right.length &&
 				left.every((mask, index) => mask === right[index]));
 		const entryFacts = entry.instructionFacts?.filter(
-			({ instruction, masks, results, effectMask }) => {
+			({ instruction, masks, results, int32Inputs, effectMask }) => {
 				if (!loweredInstructions.has(instruction)) return false;
 				const canonical = instructionFacts[instruction];
 				return (
 					canonical === undefined ||
 					!sameMasks(canonical.masks, masks) ||
 					!sameMasks(canonical.results, results) ||
+					(canonical.int32Inputs !== int32Inputs &&
+						(canonical.int32Inputs === undefined ||
+							int32Inputs === undefined ||
+							canonical.int32Inputs.some(
+								(integer, index) => integer !== int32Inputs[index],
+							))) ||
 					canonical.effectMask !== effectMask
 				);
 			},
@@ -2735,10 +2747,11 @@ function lowerFunctionToTarget(
 				? {}
 				: {
 						instructionFacts: entryFacts.map(
-							({ instruction, masks, results, effectMask }) => ({
+							({ instruction, masks, results, int32Inputs, effectMask }) => ({
 								instruction: loweredInstructions.get(instruction)!,
 								masks,
 								results,
+								...(int32Inputs === undefined ? {} : { int32Inputs }),
 								effectMask,
 							}),
 						),

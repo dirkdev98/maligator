@@ -17,6 +17,8 @@ import {
 	INSTRUCTION_MAY_SUSPEND,
 	INSTRUCTION_MAY_THROW,
 	instructionEffectMaskIsValid,
+	instructionFactsAreValid,
+	instructionInputIsInt32,
 	instructionInputKind,
 	instructionResultKind,
 } from "../src/compiler/shared/instruction-facts.ts";
@@ -28,6 +30,84 @@ import { nativeInstructionEffects } from "../src/compiler/target/program-image.t
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 describe("independent native instruction facts", () => {
+	it.each(["&", "|", "^", "<<", ">>", ">>>"])(
+		"retains int32 input precision through floating joins for %s without removing right coercion",
+		(operator) => {
+			const out = inspectStaticValueFunction(
+				`function compute(input,other,flag,gate,shift){const n=flag?(input|0):(other>>1);gate(n);return n${operator}shift;}globalThis.compute=compute;`,
+				"compute",
+			);
+			const ip = out.native.body.instructions.findIndex(
+				(op) =>
+					op.opcode === "BINARY" &&
+					op.operator === operator &&
+					op.right < out.native.body.parameterCount,
+			);
+			const op = out.native.body.instructions[ip]!;
+			if (op.opcode !== "BINARY") throw new Error("Missing final bitwise operation");
+			expect(instructionInputIsInt32(out.native.facts?.[ip], op.left)).toBe(true);
+			expect(instructionInputIsInt32(out.native.facts?.[ip], op.right)).toBe(false);
+			expect(decodeInstructionEffects(out.native.facts![ip]!.effectMask!).mayThrow).toBe(
+				true,
+			);
+			expect(out.c.source).not.toContain(`mal_ops_number_to_i32(r${op.left})`);
+			expect(out.c.source).not.toContain(`mal_ops_number_value_to_i32(r${op.left})`);
+			expect(out.c.source).toContain("MAL_THREW()");
+			expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
+				out.image,
+			);
+		},
+	);
+
+	it.each(["isFinite", "isInteger", "isSafeInteger"])(
+		"folds Number.%s for int32 joins even across suspension",
+		(method) => {
+			for (const generator of [false, true]) {
+				const out = inspectStaticValueFunction(
+					`function${generator ? "*" : ""} compute(input,other,flag,gate){const n=flag?(input|0):(other>>1);${generator ? "yield n;" : "gate(n);"}return Number.${method}(n);}globalThis.compute=compute;`,
+					"compute",
+				);
+				expect(out.native.storage!.numberPredicates[0]!.mode).toBe("int32");
+				expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
+					out.image,
+				);
+			}
+		},
+	);
+
+	it("keeps an unproved numeric phi outside the int32 refinement", () => {
+		const out = inspectStaticValueFunction(
+			"function compute(input,other,flag,gate){const n=flag?(input|0):+other;gate(n);return (n&7)+Number.isSafeInteger(n);}globalThis.compute=compute;",
+			"compute",
+		);
+		expect(out.native.storage!.numberPredicates[0]!.mode).toBe("number");
+	});
+
+	it("validates int32 refinements against their input kinds and arity", () => {
+		for (const [int32Inputs, valid] of [
+			[[true], false],
+			[[false, true], true],
+			[[true, false], false],
+		] as const)
+			expect(
+				instructionFactsAreValid({
+					inputKindMasks: [COMPILER_VALUE_KIND_STRING, COMPILER_VALUE_KIND_NUMBER],
+					int32Inputs,
+				}),
+			).toBe(valid);
+		expect(
+			instructionInputIsInt32(
+				{ registers: [0, 0], inputOffset: 1, int32Inputs: [true] },
+				0,
+			),
+		).toBe(true);
+		expect(
+			instructionInputIsInt32(
+				{ registers: [-1], inputOffset: 0, int32Inputs: [true] },
+				-1,
+			),
+		).toBe(false);
+	});
 	it("distinguishes an input String from its Number result in constrained storage", () => {
 		const facts = {
 			registers: [0, 0],

@@ -19,6 +19,7 @@ import type {
 export interface CoreInstructionFacts {
 	readonly masks: ReadonlyArray<number>;
 	readonly results: ReadonlyArray<number>;
+	readonly int32Inputs?: ReadonlyArray<boolean>;
 	readonly effectMask: number;
 }
 
@@ -76,6 +77,34 @@ export function coreInstructionFactPlans(
 const emptyMasks: ReadonlyArray<number> = Object.freeze([]);
 const singleMasks = new Map<number, ReadonlyArray<number>>();
 const pairMasks = new Map<number, ReadonlyArray<number>>();
+const singleInt32Input = Object.freeze([true]);
+const pairInt32Inputs = Object.freeze([
+	undefined,
+	Object.freeze([true, false]),
+	Object.freeze([false, true]),
+	Object.freeze([true, true]),
+]);
+
+function instructionInt32Inputs(
+	fn: CoreFunctionStore,
+	kinds: CoreValueKindAnalysis,
+	start: number,
+	count: number,
+): ReadonlyArray<boolean> | undefined {
+	if (count === 0) return undefined;
+	const first = kinds.exactScalar(fn.kernel.operandAt(start)) === "int32";
+	if (count === 1) return first ? singleInt32Input : undefined;
+	const second = kinds.exactScalar(fn.kernel.operandAt(start + 1)) === "int32";
+	if (count === 2) return pairInt32Inputs[(first ? 1 : 0) | (second ? 2 : 0)];
+	const values = [first, second];
+	let any = first || second;
+	for (let index = 2; index < count; index++) {
+		const integer = kinds.exactScalar(fn.kernel.operandAt(start + index)) === "int32";
+		values.push(integer);
+		any ||= integer;
+	}
+	return any ? Object.freeze(values) : undefined;
+}
 
 function instructionMasks(
 	fn: CoreFunctionStore,
@@ -135,8 +164,15 @@ export function coreInstructionFacts(
 		kernel.instructionOperandCount(instruction),
 		false,
 	);
+	const int32Inputs = instructionInt32Inputs(
+		fn,
+		kinds,
+		input,
+		kernel.instructionOperandCount(instruction),
+	);
 	return {
 		masks,
+		...(int32Inputs === undefined ? {} : { int32Inputs }),
 		effectMask:
 			fn.instructionKind(instruction) === "operation"
 				? encodeInstructionEffects(

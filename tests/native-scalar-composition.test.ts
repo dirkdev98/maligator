@@ -1032,6 +1032,7 @@ describe("native polling numeric worker plans", () => {
 		const native = {
 			...out.native,
 			instructions: [...out.native.instructions, undefined],
+			facts: [...out.native.facts!, undefined],
 			body: {
 				...out.native.body,
 				instructions: [

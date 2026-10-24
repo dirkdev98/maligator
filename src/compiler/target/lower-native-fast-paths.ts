@@ -3453,7 +3453,7 @@ export function selectNativeFastPaths(
 				(masks !== undefined &&
 					((masks[1] ?? COMPILER_VALUE_KIND_TOP) & COMPILER_VALUE_KIND_NUMBER) === 0)
 					? "non-number"
-					: rep === "int32"
+					: rep === "int32" || native.facts?.[ip]?.int32Inputs?.[1] === true
 						? "int32"
 						: input.kind === "number" || rep === "number" || exactNumber
 							? "number"
