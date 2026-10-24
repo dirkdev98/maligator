@@ -9767,7 +9767,7 @@ function emitInstruction(
 					: undefined;
 			if (owner === undefined)
 				return [
-					`mal_vm_store_captured(env, ${relocation.ownerFunctionIndex(instruction.ownerFunctionIndex)}, ${instruction.index}, ${boxed(instruction.src)}, ${needsCard});`,
+					`${needsCard ? "mal_vm_store_captured" : "mal_vm_store_captured_non_heap"}(env, ${relocation.ownerFunctionIndex(instruction.ownerFunctionIndex)}, ${instruction.index}, ${boxed(instruction.src)});`,
 				];
 			const store = [
 				`mal_gc_write_barrier(${owner}->slots[${instruction.index}]);`,

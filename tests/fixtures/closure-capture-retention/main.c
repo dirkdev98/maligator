@@ -126,7 +126,7 @@ static int check_retention(const MalRuntimeImage *image) {
     if (finalized[0] != 1 || finalized[1] != 0 ||
         finalized[2] != 0 || finalized[3] != 0) return 3;
 
-    mal_vm_store_captured(left, 1, 0, roots[3], true);
+    mal_vm_store_captured(left, 1, 0, roots[3]);
     if (mal_vm_load_captured(right, 1, 0) != roots[3] ||
         mal_vm_load_captured(multiple, 1, 0) != roots[3]) return 4;
     const i32 parameter_map[] = { 0 };
@@ -333,8 +333,8 @@ static int check_lookup_and_reexport(const MalRuntimeImage *image) {
         mal_vm_capture_owner_at(single, 1, 0) != nearest ||
         mal_vm_capture_owner_at(single, 1, 8) != nearest ||
         mal_vm_capture_owner_at(single, 4, 0) != nullptr) return 25;
-    mal_vm_store_captured(selected, 1, 0, mal_value_from_i32(33), false);
-    mal_vm_store_captured(selected, 4, 0, mal_value_from_i32(55), false);
+    mal_vm_store_captured_non_heap(selected, 1, 0, mal_value_from_i32(33));
+    mal_vm_store_captured_non_heap(selected, 4, 0, mal_value_from_i32(55));
     if (mal_vm_load_captured(source, 1, 0) != mal_value_from_i32(11) ||
         mal_vm_load_captured(single, 1, 0) != mal_value_from_i32(33) ||
         mal_vm_load_captured(source, 4, 0) != mal_value_from_i32(55)) return 26;
@@ -481,7 +481,7 @@ static int check_value_captures(const MalRuntimeImage *image) {
             mal_value_to_heap(mal_vm_load_captured_value_at(values, 1, 2, 0)) != tracked[2] ||
             mal_value_to_heap(mal_vm_load_captured_value_at(values, 1, 2, 99)) != tracked[2] ||
             !mal_value_is_undefined(mal_vm_load_captured(values, 1, 1))) return 63;
-    mal_vm_store_captured(values, 1, 0, mal_value_from_i32(99), false);
+    mal_vm_store_captured_non_heap(values, 1, 0, mal_value_from_i32(99));
     if (mal_value_to_heap(mal_vm_load_captured(values, 1, 0)) != tracked[0]) return 64;
     roots[2] = mal_vm_op_create_function(&vm, 6, values);
     roots[3] = mal_vm_op_create_function(&vm, 9, values);
@@ -657,14 +657,14 @@ static int check_capture_store_barriers(const MalRuntimeImage *image) {
         mal_gc_safepoint(&vm);
         if (!mal_gc_marking_active) return 100;
         roots[1] = mal_value_from_heap(&scope->header);
-        mal_vm_store_captured(scope, 1, 0, mal_value_from_i32(42), false);
+        mal_vm_store_captured_non_heap(scope, 1, 0, mal_value_from_i32(42));
         if (!mal_gc_finish_pending_cycle(&vm)) return 101;
         if (finalized[0] != 0) return 104;
         if (finalized[1] != 1) return 105;
         if (!mal_heap_mark_is_old(owner->header.mark)) return 106;
         if (owner->slots[0] != mal_value_from_i32(42)) return 107;
 
-        mal_vm_store_captured(scope, 1, 0, tracked_object(&vm, 2), true);
+        mal_vm_store_captured(scope, 1, 0, tracked_object(&vm, 2));
         tracked_object(&vm, 3);
         u8 major_color = vm.heap.mark_color;
         vm.heap.next_gc_at = 1;
@@ -672,7 +672,7 @@ static int check_capture_store_barriers(const MalRuntimeImage *image) {
         mal_gc_safepoint(&vm);
         if (vm.heap.black_alloc || vm.heap.mark_color != major_color || finalized[2] != 0 ||
             finalized[3] != 1 || mal_value_to_heap(owner->slots[0]) != tracked[2]) return 102;
-        mal_vm_store_captured(scope, 1, 0, MAL_VALUE_NULL, false);
+        mal_vm_store_captured_non_heap(scope, 1, 0, MAL_VALUE_NULL);
         mal_gc_collect(&vm);
         if (finalized[0] != 1 || finalized[2] != 1 || owner->slots[0] != MAL_VALUE_NULL) return 103;
         mal_gc_unroot(&span);

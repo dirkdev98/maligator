@@ -130,7 +130,7 @@ describe("local native input admission", () => {
 				[representation, "boxed"],
 				{ capturedCount: 1 },
 			);
-			expect(rebound).toContain("mal_vm_store_captured(");
+			expect(rebound).toContain("mal_vm_store_captured_non_heap(");
 		}
 		const pointer = emitInputContract(
 			[

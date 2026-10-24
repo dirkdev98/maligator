@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
 	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_UNDEFINED,
+	COMPILER_VALUE_KIND_BOOLEAN,
 	COMPILER_VALUE_KIND_NULL,
 	COMPILER_VALUE_KIND_STRING,
 	COMPILER_VALUE_KIND_BIGINT,
@@ -62,7 +64,15 @@ function emitStore(owner: "owned" | "fixed" | "dynamic", mask: number | undefine
 	)!.source;
 }
 
-const nonHeapMasks = Array.from({ length: 15 }, (_, index) => index + 1);
+const nonHeapMasks = [
+	COMPILER_VALUE_KIND_UNDEFINED,
+	COMPILER_VALUE_KIND_NULL,
+	COMPILER_VALUE_KIND_BOOLEAN,
+	COMPILER_VALUE_KIND_NUMBER,
+].reduce<Array<number>>(
+	(masks, kind) => [...masks, kind, ...masks.map((mask) => mask | kind)],
+	[],
+);
 const heapMasks = [
 	COMPILER_VALUE_KIND_STRING,
 	COMPILER_VALUE_KIND_BIGINT,
@@ -87,7 +97,7 @@ describe.each(["owned", "fixed", "dynamic"] as const)(
 				const source = emitStore(owner, mask);
 				if (owner === "dynamic") {
 					expect(source).toContain(
-						`mal_vm_store_captured(env, -2, 0, r0, ${needsCard});`,
+						`${needsCard ? "mal_vm_store_captured" : "mal_vm_store_captured_non_heap"}(env, -2, 0, r0);`,
 					);
 				} else {
 					const scope = owner === "owned" ? "env" : "__capture_owner_2";
