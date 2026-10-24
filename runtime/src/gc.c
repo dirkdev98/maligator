@@ -1874,8 +1874,6 @@ void mal_gc_clear_inactive_root_frame_slots(MalRootFrame *frame) {
 }
 
 #if !defined(__wasi__)
-/* Sanitizers poison parts of live frames; a conservative scan reads them as plain words. */
-__attribute__((no_sanitize("address", "thread")))
 // A stack word may be a frame's own env, whose compact parents only the stack holds, or
 // an owner that a single-owner closure unpacked into a local, whose lexical parent may
 // already be dead and reclaimed. Follow a parent only while it is still an allocated cell.
@@ -1895,6 +1893,8 @@ static void mal_gc_trace_stack_env(const MalHeapCellIndex *index, MalEnv *env) {
     }
 }
 
+/* Sanitizers poison parts of live frames; a conservative scan reads them as plain words. */
+__attribute__((no_sanitize("address", "thread")))
 static void mal_gc_scan_native_stack(const MalHeapCellIndex *index, uptr low, uptr high) {
     low = (low + sizeof(uptr) - 1) & ~(uptr) (sizeof(uptr) - 1);
     for (uptr cursor = low; cursor < high && high - cursor >= sizeof(uptr);
