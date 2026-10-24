@@ -1876,6 +1876,25 @@ void mal_gc_clear_inactive_root_frame_slots(MalRootFrame *frame) {
 #if !defined(__wasi__)
 /* Sanitizers poison parts of live frames; a conservative scan reads them as plain words. */
 __attribute__((no_sanitize("address", "thread")))
+// A stack word may be a frame's own env, whose compact parents only the stack holds, or
+// an owner that a single-owner closure unpacked into a local, whose lexical parent may
+// already be dead and reclaimed. Follow a parent only while it is still an allocated cell.
+static void mal_gc_trace_stack_env(const MalHeapCellIndex *index, MalEnv *env) {
+    for (;;) {
+        mal_gc_shade_in(&g_gc_thread, &env->header);
+        if (!env->compact_parent || env->parent == nullptr) return;
+        MalEnv *parent = env->parent;
+        MalHeapHeader *cell = mal_heap_cell_index_find(
+            index, (uptr) mal_env_untag_single_owner(parent));
+        if (cell == nullptr) return;
+        if (cell->type != MAL_HEAP_ENV || mal_env_is_single_owner(parent)) {
+            mal_gc_shade_in(&g_gc_thread, cell);
+            return;
+        }
+        env = (MalEnv *) cell;
+    }
+}
+
 static void mal_gc_scan_native_stack(const MalHeapCellIndex *index, uptr low, uptr high) {
     low = (low + sizeof(uptr) - 1) & ~(uptr) (sizeof(uptr) - 1);
     for (uptr cursor = low; cursor < high && high - cursor >= sizeof(uptr);
@@ -1885,8 +1904,7 @@ static void mal_gc_scan_native_stack(const MalHeapCellIndex *index, uptr low, up
         if ((word >> 48) != 0 && word < MAL_VALUE_STRING) continue;
         MalHeapHeader *cell = mal_heap_cell_index_find(index, word & MAKS_PTR);
         if (cell == nullptr) continue;
-        // A compact env leaves its parents to whoever holds it, as a frame's env root did.
-        if (cell->type == MAL_HEAP_ENV) mal_gc_trace_env_in(&g_gc_thread, (MalEnv *) cell);
+        if (cell->type == MAL_HEAP_ENV) mal_gc_trace_stack_env(index, (MalEnv *) cell);
         else mal_gc_shade_in(&g_gc_thread, cell);
     }
 }
