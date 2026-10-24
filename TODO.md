@@ -100,6 +100,13 @@ until the consumer admits real sites and measurements establish a benefit.
 The independent target boundary and current storage contract are recorded in
 [native SSA lowering](docs/decisions/native-ssa-lowering.md).
 
+- [ ] Carry selected-entry selector facts through expanded switch terminators.
+      Canonical selector kinds and ranges reach generated comparisons, but entry
+      facts still require one lowered instruction per Core instruction, so switch
+      selectors lose their narrower entry facts. Expand those facts onto each
+      generated comparison while retaining its literal, Boolean result, and effects;
+      verify restored entries and runtime dispatch.
+
 - [ ] Extend selected typed call/aggregate transport and expression regions using
       Core proofs, with bounded code-size decisions and matched runtime evidence.
       Move remaining emission-local selection into explicit native plans before

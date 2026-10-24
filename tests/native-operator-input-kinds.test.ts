@@ -9,9 +9,41 @@ import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
+import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 describe("partial operator input kinds", () => {
+	it("uses comparison facts in a numeric fusion's boxed fallback", () => {
+		const out = inspectStaticValueFunction(
+			"function compute(left,right,flag){const a=flag?String(left):+left;return (a+3)<+right;}globalThis.compute=compute;",
+			"compute",
+		);
+		expect(
+			out.native.specializations.some((region) => region.kind === "numeric-fusion"),
+		).toBe(true);
+		expect(out.c.source).toContain("mal_ops_less_than(");
+		expect(out.c.source).not.toContain("mal_vm_binary_op(vm, MAL_BIN_LT,");
+	});
+
+	it.each([
+		["String(left)<+right", "mal_ops_less_than("],
+		["(flag?String(left):+left)==+right", "mal_ops_equal("],
+		["BigInt(left)==String(right)", "mal_ops_equal("],
+	] as const)(
+		"uses a value helper for %s after restoring independent effect and operand facts",
+		(expression, helper) => {
+			const out = inspectStaticValueFunction(
+				`function compute(left,right,flag){return ${expression};}globalThis.compute=compute;`,
+				"compute",
+			);
+			const restored = deserializeCompilerArtifact(serializeCompilerArtifact(out.image));
+			const native = restored.native.functions[out.native.functionIndex]!;
+			const c = emitCompiledFunction(native, native.functionIndex, "", false)!.source;
+			expect(c).toContain(helper);
+			expect(c).not.toContain("mal_vm_binary_op(");
+		},
+	);
+
 	it("validates partial knowledge without certifying primitive effects", () => {
 		const masks = [COMPILER_VALUE_KIND_TOP, COMPILER_VALUE_KIND_STRING];
 		expect(compilerOperatorInputKindMasksAreValid("binary", masks)).toBe(true);

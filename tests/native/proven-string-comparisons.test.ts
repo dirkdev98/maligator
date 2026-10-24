@@ -49,7 +49,7 @@ describe("proven boxed String operations", () => {
 					if (op?.opcode !== "BINARY") throw new Error("Missing String comparison");
 					const ip = fn.body.instructions.indexOf(op);
 					expect(fn.facts?.[ip]).toMatchObject({
-						inputKindMasks: [16, 16],
+						inputKindMasks: name === "boxedMixedLt" ? [16, 8] : [16, 16],
 					});
 					comparisons++;
 					return {
@@ -69,7 +69,7 @@ describe("proven boxed String operations", () => {
 				}),
 			},
 		});
-		expect(comparisons).toBe(9);
+		expect(comparisons).toBe(10);
 		compiled = buildNativeProgramImage(
 			deserializeCompilerArtifact(serializeCompilerArtifact(image)),
 			{

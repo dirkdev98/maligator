@@ -13,6 +13,7 @@ import {
 } from "../shared/builtin-registry.ts";
 import {
 	compilerTypeofComparison,
+	compilerComparisonInputKindsAvoidObjectCoercion,
 	compilerValueKindTruthiness,
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_TOP,
@@ -1225,6 +1226,16 @@ export function cF64Literal(value: number): string {
  * speculates every comparison, equality included: there the numeric prior is real.
  */
 const RELATIONAL_COMPARE = new Set<string>(["<", "<=", ">", ">="]);
+const BOXED_COMPARE: Readonly<Record<string, string>> = {
+	"<": "mal_ops_less_than",
+	"<=": "mal_ops_less_equal",
+	">": "mal_ops_greater_than",
+	">=": "mal_ops_greater_equal",
+	"==": "mal_ops_equal",
+	"!=": "mal_ops_not_equal",
+	"===": "mal_ops_strict_equal",
+	"!==": "mal_ops_strict_not_equal",
+};
 
 // Exponentiation has a separate proven-input path because its target representation stays boxed.
 function producesNumberFromNumbers(operator: string): boolean {
@@ -10943,6 +10954,22 @@ function emitInstruction(
 				];
 			const { dst, left, right, operator } = instruction;
 			const effects = nativeInstructionEffects(instruction, context.facts);
+			const inputKinds =
+				context.facts?.inputKindMasks !== undefined &&
+				context.facts.inputKindMasks.length === 2
+					? context.facts.inputKindMasks
+					: undefined;
+			const binaryValue = (): string => {
+				const comparison = BOXED_COMPARE[operator];
+				// Value helpers neither invoke object hooks nor report Symbol comparison errors.
+				return comparison !== undefined &&
+					!effects.throwing &&
+					!effects.reentry &&
+					inputKinds !== undefined &&
+					compilerComparisonInputKindsAvoidObjectCoercion(operator, inputKinds)
+					? `${comparison}(${boxed(left)}, ${boxed(right)})`
+					: `mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`;
+			};
 			const canThrow =
 				binaryOpCanThrow(operator) && (effects.throwing || effects.reentry);
 			if (!canThrow) elideFramePosition();
@@ -11039,11 +11066,6 @@ function emitInstruction(
 				}
 			}
 			const fusion = numericFusionAction;
-			const inputKinds =
-				context.facts?.inputKindMasks !== undefined &&
-				context.facts.inputKindMasks.length === 2
-					? context.facts.inputKindMasks
-					: undefined;
 			if (
 				inputKinds !== undefined &&
 				(!leftIsNum || !rightIsNum || operator === "**") &&
@@ -11102,8 +11124,8 @@ function emitInstruction(
 						: `  r${dst} = mal_value_new_boolean(${membership} != 0);`,
 					`} else {`,
 					dstIsBool
-						? `  r${dst} = mal_value_to_boolean(${profileCall("binary", reentrantValue(`mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`))});`
-						: `  r${dst} = ${profileCall("binary", reentrantValue(`mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`))};`,
+						? `  r${dst} = mal_value_to_boolean(${profileCall("binary", reentrantValue(binaryValue()))});`
+						: `  r${dst} = ${profileCall("binary", reentrantValue(binaryValue()))};`,
 					...(canThrow ? [`  ${throwCheck()}`] : []),
 					`}`,
 				];
@@ -11148,12 +11170,7 @@ function emitInstruction(
 					firstOnLeft ? externalExpr : value,
 				);
 				if (nativeExpr === null) throw new Error("Invalid numeric-fusion link");
-				const slow = profileCall(
-					"binary",
-					reentrantValue(
-						`mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`,
-					),
-				);
+				const slow = profileCall("binary", reentrantValue(binaryValue()));
 				return [
 					`if (__nf_${fusion.id}_ok${externalIsNum ? "" : ` && mal_ops_is_number(${boxed(external)})`}) {`,
 					`  ${value} = ${nativeExpr};`,
@@ -11175,12 +11192,7 @@ function emitInstruction(
 					const guards: Array<string> = [];
 					if (!leftIsNum) guards.push(`mal_ops_is_number(${boxed(left)})`);
 					if (!rightIsNum) guards.push(`mal_ops_is_number(${boxed(right)})`);
-					const slow = profileCall(
-						"binary",
-						reentrantValue(
-							`mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`,
-						),
-					);
+					const slow = profileCall("binary", reentrantValue(binaryValue()));
 					return [
 						`__nf_${fusion.id}_ok = ${guards.length === 0 ? "true" : guards.join(" && ")};`,
 						`if (__nf_${fusion.id}_ok) {`,
@@ -11223,12 +11235,7 @@ function emitInstruction(
 						const fast = firstOnLeft
 							? `__nf_${fusion.id}_value ${compare} ${externalExpr}`
 							: `${externalExpr} ${compare} __nf_${fusion.id}_value`;
-						const slow = profileCall(
-							"binary",
-							reentrantValue(
-								`mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`,
-							),
-						);
+						const slow = profileCall("binary", reentrantValue(binaryValue()));
 						return [
 							`if (${guard}) {`,
 							reps[dst] === "boolean"
@@ -11275,12 +11282,7 @@ function emitInstruction(
 						const guard = externalIsNum
 							? `__nf_${fusion.id}_ok`
 							: `__nf_${fusion.id}_ok && mal_ops_is_number(${boxed(external)})`;
-						const slow = profileCall(
-							"binary",
-							reentrantValue(
-								`mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`,
-							),
-						);
+						const slow = profileCall("binary", reentrantValue(binaryValue()));
 						return [
 							`if (${guard}) {`,
 							`  r${dst} = ${result};`,
@@ -11305,7 +11307,7 @@ function emitInstruction(
 			) {
 				const result = `__binary_result_${ip}`;
 				const fallback = [
-					`MalValue ${result} = ${profileCall("binary", reentrantValue(`mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`))};`,
+					`MalValue ${result} = ${profileCall("binary", reentrantValue(binaryValue()))};`,
 					...(canThrow ? [throwCheck()] : []),
 					`r${dst} = ${reps[dst] === "int32" ? `mal_ops_number_value_to_i32(${result})` : `mal_ops_number_as_f64(${result})`};`,
 				];
@@ -11513,13 +11515,7 @@ function emitInstruction(
 					];
 				}
 			}
-			const slow = (): string =>
-				profileCall(
-					"binary",
-					reentrantValue(
-						`mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`,
-					),
-				);
+			const slow = (): string => profileCall("binary", reentrantValue(binaryValue()));
 			const bothBoxed = !leftIsNum && !rightIsNum;
 			const numberGuard = leftIsNum
 				? rightIsNum

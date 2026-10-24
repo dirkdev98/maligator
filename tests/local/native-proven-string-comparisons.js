@@ -52,6 +52,12 @@ function boxedConcat(left, right, gate) {
 	gate();
 	return a + b;
 }
+function boxedMixedLt(left, right, gate) {
+	const a = String(left);
+	const b = +right;
+	gate();
+	return a < b;
+}
 globalThis.stringKernels = [
 	boxedLt,
 	boxedLe,
@@ -62,6 +68,7 @@ globalThis.stringKernels = [
 	boxedStrictEq,
 	boxedStrictNe,
 	boxedConcat,
+	boxedMixedLt,
 ];
 const gc = globalThis.__mal_collect_garbage ?? (() => {});
 const pairs = [

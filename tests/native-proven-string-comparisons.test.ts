@@ -10,6 +10,27 @@ import { positionTableEntries } from "../src/compiler/target/runtime-image.ts";
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 describe("proven String operations in boxed storage", () => {
+	it.each(["<", "<=", ">", ">=", "==", "!=", "===", "!=="])(
+		"omits roots for noncollecting String %s kernels across artifact restoration",
+		(operator) => {
+			const out = inspectStaticValueFunction(
+				`function compute(left,right){return (typeof left)${operator}(typeof right);}globalThis.compute=compute;`,
+				"compute",
+			);
+			const ip = out.native.body.instructions.findIndex((op) => op.opcode === "BINARY");
+			expect(out.native.facts?.[ip]?.effectMask).toBe(0);
+			expect(out.native.gc.safepoints.some((point) => point.instructionIp === ip)).toBe(
+				false,
+			);
+			const restored = deserializeCompilerArtifact(serializeCompilerArtifact(out.image));
+			const native = restored.native.functions[out.native.functionIndex]!;
+			expect(native.storage!.rootRegisters).toEqual([]);
+			expect(
+				emitCompiledFunction(native, native.functionIndex, "", false)!.source,
+			).not.toContain("MalRootFrame");
+		},
+	);
+
 	it.each(
 		["+", "<", "<=", ">", ">=", "==", "!=", "===", "!=="].flatMap((operator) =>
 			[false, true].map((profile) => [operator, profile] as const),

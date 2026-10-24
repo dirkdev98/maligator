@@ -11,6 +11,7 @@ import {
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE,
 	compilerOperatorInputKindsHaveExactNativeSemantics,
+	compilerComparisonInputKindsAvoidObjectCoercion,
 	compilerOperatorIsNullishEquality,
 	compilerOperatorIsPrimitiveStringConcatenation,
 	compilerOperatorFixedResultKind,
@@ -1692,7 +1693,7 @@ export function corePrimitiveOperatorEffectRefinement(
 	const operator = fn.instructionAttributes(instruction).operator;
 	let primitive = false;
 	let gcFree = false;
-	let stringConcatenation = false;
+	let mayThrow = false;
 	if (opcode === "unary" && masks.length === 1 && typeof operator === "string") {
 		const numericPrimitive = compilerValueKindMaskIsSubset(
 			masks[0]!,
@@ -1703,34 +1704,54 @@ export function corePrimitiveOperatorEffectRefinement(
 			(NUMERIC_UNARY_OPERATORS.has(operator) && numericPrimitive);
 		gcFree = NON_COERCING_UNARY_OPERATORS.has(operator) || numericPrimitive;
 	} else if (opcode === "binary" && masks.length === 2 && typeof operator === "string") {
+		const left = masks[0]!,
+			right = masks[1]!;
+		const strict = operator === "===" || operator === "!==";
+		const equality = strict || operator === "==" || operator === "!=";
+		const nonReentrantComparison = compilerComparisonInputKindsAvoidObjectCoercion(
+			operator,
+			masks,
+		);
+		const comparisonThrows =
+			nonReentrantComparison &&
+			!equality &&
+			((left | right) & COMPILER_VALUE_KIND_SYMBOL) !== 0;
+		// BigInt comparison with String may materialize UTF-16 parsing storage.
+		const comparisonMaterializes =
+			((left & COMPILER_VALUE_KIND_STRING) !== 0 &&
+				(right & COMPILER_VALUE_KIND_BIGINT) !== 0) ||
+			((right & COMPILER_VALUE_KIND_STRING) !== 0 &&
+				(left & COMPILER_VALUE_KIND_BIGINT) !== 0);
 		const numericPrimitives = masks.every((mask) =>
 			compilerValueKindMaskIsSubset(mask, COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE),
 		);
-		stringConcatenation =
+		const stringConcatenation =
 			(operator === "+" &&
 				masks.every((mask) =>
 					compilerValueKindMaskIsSubset(mask, COMPILER_VALUE_KIND_STRING),
 				)) ||
 			compilerOperatorIsPrimitiveStringConcatenation(opcode, operator, masks);
 		primitive =
-			["===", "!=="].includes(operator) ||
+			nonReentrantComparison ||
 			(NUMERIC_BINARY_OPERATORS.has(operator) && numericPrimitives) ||
 			stringConcatenation ||
 			compilerOperatorInputKindsHaveExactNativeSemantics(opcode, operator, masks);
 		gcFree =
-			["===", "!=="].includes(operator) ||
+			strict ||
+			(nonReentrantComparison && !comparisonThrows && !comparisonMaterializes) ||
 			compilerOperatorIsNullishEquality(opcode, operator, masks) ||
 			(numericPrimitives &&
 				(NUMERIC_BINARY_OPERATORS.has(operator) ||
 					compilerOperatorFixedResultKind(opcode, operator) ===
 						COMPILER_VALUE_KIND_BOOLEAN));
+		mayThrow = stringConcatenation || comparisonThrows;
 	}
 	if (!primitive) return undefined;
 	const baseline = fn.registry.byId(fn.instructionOpcode(instruction)).effects;
 	return {
 		reads: baseline.reads.filter((domain) => domain !== "host"),
 		writes: baseline.writes.filter((domain) => domain !== "host"),
-		mayThrow: stringConcatenation && baseline.mayThrow,
+		mayThrow: mayThrow && baseline.mayThrow,
 		maySuspend: baseline.maySuspend,
 		mayGc: gcFree ? false : baseline.mayGc,
 		callsUserCode: false,

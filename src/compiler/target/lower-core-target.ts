@@ -57,6 +57,14 @@ import type {
 	CompilerInstruction,
 	CompilerNumericSortCallback,
 } from "../shared/compiler-instruction.ts";
+import {
+	COMPILER_VALUE_KIND_BOOLEAN,
+	COMPILER_VALUE_KIND_NULL,
+	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_STRING,
+	COMPILER_VALUE_KIND_TOP,
+	COMPILER_VALUE_KIND_UNDEFINED,
+} from "../shared/compiler-value-kinds.ts";
 import { INSTRUCTION_MAY_THROW } from "../shared/instruction-facts.ts";
 import { encodeInstructionEffects } from "../shared/instruction-facts.ts";
 import { compilerIntegerRangesEqual } from "../shared/integer-range.ts";
@@ -311,32 +319,50 @@ function sourcePositionMarker(position: number | undefined): Array<CompilerInstr
 	return position === undefined ? [] : [{ type: "sourcePos", pos: position }];
 }
 
+const IMMEDIATE_KIND_MASKS = {
+	undefined: COMPILER_VALUE_KIND_UNDEFINED,
+	null: COMPILER_VALUE_KIND_NULL,
+	boolean: COMPILER_VALUE_KIND_BOOLEAN,
+	number: COMPILER_VALUE_KIND_NUMBER,
+	string: COMPILER_VALUE_KIND_STRING,
+};
+
 function lowerCoreImmediate(
 	value: CoreImmediate,
 	destination: number,
 ): CompilerInstruction {
+	const facts = {
+		inputKindMasks: [],
+		resultKindMasks: [IMMEDIATE_KIND_MASKS[value.kind]],
+		registers: [destination],
+		inputOffset: 1,
+		effectMask: 0,
+	};
 	switch (value.kind) {
 		case "undefined":
-			return { type: "createUndefined", registers: [destination] };
+			return { type: "createUndefined", registers: [destination], facts };
 		case "null":
-			return { type: "createNull", registers: [destination] };
+			return { type: "createNull", registers: [destination], facts };
 		case "boolean":
 			return {
 				type: "createBoolean",
 				registers: [destination],
 				value: value.value,
+				facts,
 			};
 		case "number":
 			return {
 				type: "createNumber",
 				registers: [destination],
 				value: value.value,
+				facts,
 			};
 		case "string":
 			return {
 				type: "createString",
 				registers: [destination],
 				stringIndex: value.index,
+				facts,
 			};
 	}
 }
@@ -2359,6 +2385,7 @@ function lowerFunctionToTarget(
 				};
 				instructions.push(lowered, {
 					type: "jump",
+					facts: { effectMask: 0 },
 					blocks: [lowerTerminatorEdge(terminatorEdgeStart + 1, edgeSourcePosition)],
 				});
 				loweredInstructions.set(terminatorId, lowered);
@@ -2374,6 +2401,7 @@ function lowerFunctionToTarget(
 					},
 					{
 						type: "jump",
+						facts: { effectMask: 0 },
 						blocks: [lowerTerminatorEdge(terminatorEdgeStart + 1, edgeSourcePosition)],
 					},
 				);
@@ -2391,6 +2419,8 @@ function lowerFunctionToTarget(
 			}
 			case "switch": {
 				const start = instructions.length;
+				const selector = registerForValue(kernel.operandAt(terminatorOperandStart));
+				const selectorKind = terminatorKinds?.masks[0] ?? COMPILER_VALUE_KIND_TOP;
 				const immediates = new Map<CoreRepresentation, number>();
 				let matches: number | undefined;
 				const cases: Array<{ value: number; block: number }> = [];
@@ -2440,21 +2470,49 @@ function lowerFunctionToTarget(
 						temporaryRegisters.push(matches);
 						registerRepresentations.set(matches, "boolean");
 					}
+					const caseRange =
+						caseValue.kind === "number" &&
+						Number.isSafeInteger(caseValue.value) &&
+						!Object.is(caseValue.value, -0)
+							? {
+									minimum: caseValue.value,
+									maximum: caseValue.value,
+									exactSafeIntegers: true as const,
+									excludesNegativeZero: true as const,
+								}
+							: undefined;
+					const inputIntegerRanges = [
+						terminatorKinds?.inputIntegerRanges?.[0],
+						caseRange,
+					];
 					instructions.push(
 						lowerCoreImmediate(caseValue, immediate),
 						{
 							type: "binary",
-							registers: [
-								matches,
-								registerForValue(kernel.operandAt(terminatorOperandStart)),
-								immediate,
-							],
+							registers: [matches, selector, immediate],
 							operator: "===",
+							facts: {
+								inputKindMasks: [selectorKind, IMMEDIATE_KIND_MASKS[caseValue.kind]],
+								resultKindMasks: [COMPILER_VALUE_KIND_BOOLEAN],
+								...(inputIntegerRanges.some((range) => range !== undefined)
+									? { inputIntegerRanges }
+									: {}),
+								registers: [matches, selector, immediate],
+								inputOffset: 1,
+								effectMask: 0,
+							},
 						},
 						{
 							type: "jumpIf",
 							registers: [matches],
 							blocks: [targetBlock],
+							facts: {
+								inputKindMasks: [COMPILER_VALUE_KIND_BOOLEAN],
+								resultKindMasks: [],
+								registers: [matches],
+								inputOffset: 0,
+								effectMask: 0,
+							},
 						},
 					);
 				}
@@ -2464,6 +2522,7 @@ function lowerFunctionToTarget(
 				);
 				instructions.push({
 					type: "jump",
+					facts: { effectMask: 0 },
 					blocks: [defaultBlock],
 				});
 				if (numeric || strings) {

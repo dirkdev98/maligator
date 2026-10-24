@@ -258,6 +258,29 @@ export function compilerOperatorInputKindsHaveExactNativeSemantics(
 	return masks.every((mask) => compilerValueKindMaskIsSubset(mask, allowed));
 }
 
+export function compilerComparisonInputKindsAvoidObjectCoercion(
+	operator: string,
+	masks: ReadonlyArray<CompilerValueKindMask>,
+): boolean {
+	if (
+		compilerOperatorFixedResultKind("binary", operator) !== COMPILER_VALUE_KIND_BOOLEAN ||
+		masks.length !== 2 ||
+		!masks.every((mask) => compilerValueKindMaskIsValid(mask, { allowTop: true }))
+	)
+		return false;
+	if (operator === "===" || operator === "!==") return true;
+	const left = masks[0]!,
+		right = masks[1]!;
+	if (operator !== "==" && operator !== "!=")
+		return ((left | right) & COMPILER_VALUE_KIND_OBJECT) === 0;
+	const coerciblePrimitive =
+		COMPILER_VALUE_KIND_TOP & ~(COMPILER_VALUE_KIND_OBJECT | COMPILER_VALUE_KIND_NULLISH);
+	return !(
+		((left & COMPILER_VALUE_KIND_OBJECT) !== 0 && (right & coerciblePrimitive) !== 0) ||
+		((right & COMPILER_VALUE_KIND_OBJECT) !== 0 && (left & coerciblePrimitive) !== 0)
+	);
+}
+
 export function compilerValueKindMaskIsValid(
 	value: unknown,
 	options: { readonly allowEmpty?: boolean; readonly allowTop?: boolean } = {},
