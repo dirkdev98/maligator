@@ -1189,6 +1189,13 @@ void mal_heap_sweep_minor(MalHeap *heap, MalHeapFinalizeFn finalize) {
         if (heap->gc_stats) {
             heap->minor_blocks_inspected++;
         }
+        // Finalizers release raw payloads, never cells, so the block's cell frees and
+        // their bytes accumulate locally and publish once.
+        u32 cell_size = block->cell_size;
+        bool reclaimable = mal_gc_cell_reclaimable(cell_size);
+        bool poison = heap->poison_on_free;
+        void *free_head = heap->cell_free[block->size_class];
+        usize freed = 0;
         for (usize word = 0; word < countof(young_cells); word++) {
             u64 remaining = young_cells[word];
             if (heap->gc_stats) heap->minor_cells_inspected += (usize) __builtin_popcountll(remaining);
@@ -1202,20 +1209,20 @@ void mal_heap_sweep_minor(MalHeap *heap, MalHeapFinalizeFn finalize) {
                     block_live++;
                 } else if ((mark & MAL_MARK_FREE) == 0) {
                     finalize(header);
-                    if (heap->current_usage.managed_owned_bytes < block->cell_size) abort();
-                    heap->current_usage.managed_owned_bytes -= block->cell_size;
+                    freed += cell_size;
                     mal_heap_sweep_mark_store(header, MAL_MARK_FREE);
-                    if (heap->poison_on_free) {
-                        mal_gc_poison_cell(cell, block->cell_size, free_offset);
-                    }
+                    if (poison) mal_gc_poison_cell(cell, cell_size, free_offset);
                     // Already-FREE cells remain linked; adding them again creates cycles.
-                    if (mal_gc_cell_reclaimable(block->cell_size)) {
-                        *(void **) (cell + free_offset) = heap->cell_free[block->size_class];
-                        heap->cell_free[block->size_class] = cell;
+                    if (reclaimable) {
+                        *(void **) (cell + free_offset) = free_head;
+                        free_head = cell;
                     }
                 }
             }
         }
+        heap->cell_free[block->size_class] = free_head;
+        if (heap->current_usage.managed_owned_bytes < freed) abort();
+        heap->current_usage.managed_owned_bytes -= freed;
         // Only newly allocated cells were visited; old survivors remain accounted for.
         heap->live_bytes += block_live * block->cell_size;
         block->live += block_live;
