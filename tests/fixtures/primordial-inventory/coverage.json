@@ -44509,6 +44509,20 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_MODULE%.Agent\",\"defaultMaxSockets\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_MODULE%.Agent",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_MODULE%.Agent",
+				"%MAL_INTRINSIC_NODE_HTTP_MODULE%.Agent.prototype.constructor",
+				"mal_host_install_node_http:Agent"
+			],
+			"key": "defaultMaxSockets",
+			"kind": "data",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_MODULE%.Agent.prototype\",\"destroy\"]",
 			"owner": "%MAL_INTRINSIC_NODE_HTTP_MODULE%.Agent.prototype",
 			"ownerPaths": ["%MAL_INTRINSIC_NODE_HTTP_MODULE%.Agent.prototype"],
@@ -46093,6 +46107,277 @@
 			"kind": "data",
 			"operations": [],
 			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent\",\"_events\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent",
+				"mal_host_install_node_http:globalAgent"
+			],
+			"key": "_events",
+			"kind": "data",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent\",\"_eventsCount\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent",
+				"mal_host_install_node_http:globalAgent"
+			],
+			"key": "_eventsCount",
+			"kind": "data",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent\",\"_maxListeners\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent",
+				"mal_host_install_node_http:globalAgent"
+			],
+			"key": "_maxListeners",
+			"kind": "data",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent\",\"options\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent",
+				"mal_host_install_node_http:globalAgent"
+			],
+			"key": "options",
+			"kind": "data",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent\",\"defaultPort\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent",
+				"mal_host_install_node_http:globalAgent"
+			],
+			"key": "defaultPort",
+			"kind": "data",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent\",\"protocol\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent",
+				"mal_host_install_node_http:globalAgent"
+			],
+			"key": "protocol",
+			"kind": "data",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent\",\"requests\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent",
+				"mal_host_install_node_http:globalAgent"
+			],
+			"key": "requests",
+			"kind": "data",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent\",\"sockets\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent",
+				"mal_host_install_node_http:globalAgent"
+			],
+			"key": "sockets",
+			"kind": "data",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent\",\"freeSockets\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent",
+				"mal_host_install_node_http:globalAgent"
+			],
+			"key": "freeSockets",
+			"kind": "data",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent\",\"keepAliveMsecs\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent",
+				"mal_host_install_node_http:globalAgent"
+			],
+			"key": "keepAliveMsecs",
+			"kind": "data",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent\",\"keepAlive\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent",
+				"mal_host_install_node_http:globalAgent"
+			],
+			"key": "keepAlive",
+			"kind": "data",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent\",\"maxSockets\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent",
+				"mal_host_install_node_http:globalAgent"
+			],
+			"key": "maxSockets",
+			"kind": "data",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent\",\"maxFreeSockets\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent",
+				"mal_host_install_node_http:globalAgent"
+			],
+			"key": "maxFreeSockets",
+			"kind": "data",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent\",\"scheduling\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent",
+				"mal_host_install_node_http:globalAgent"
+			],
+			"key": "scheduling",
+			"kind": "data",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent\",\"maxTotalSockets\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent",
+				"mal_host_install_node_http:globalAgent"
+			],
+			"key": "maxTotalSockets",
+			"kind": "data",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent\",\"totalSocketCount\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent",
+				"mal_host_install_node_http:globalAgent"
+			],
+			"key": "totalSocketCount",
+			"kind": "data",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent\",\"agentKeepAliveTimeoutBuffer\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent",
+				"mal_host_install_node_http:globalAgent"
+			],
+			"key": "agentKeepAliveTimeoutBuffer",
+			"kind": "data",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent.options\",\"keepAlive\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent.options",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent.options"],
+			"key": "keepAlive",
+			"kind": "data",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent.options\",\"scheduling\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent.options",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent.options"],
+			"key": "scheduling",
+			"kind": "data",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent.options\",\"timeout\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent.options",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent.options"],
+			"key": "timeout",
+			"kind": "data",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent.options\",\"noDelay\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent.options",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent.options"],
+			"key": "noDelay",
+			"kind": "data",
+			"operations": [],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent.options\",\"path\"]",
+			"owner": "%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent.options",
+			"ownerPaths": ["%MAL_INTRINSIC_NODE_HTTP_MODULE%.globalAgent.options"],
+			"key": "path",
+			"kind": "data",
+			"operations": [],
+			"task": "N-06",
 			"decisions": []
 		},
 		{
@@ -55820,6 +56105,22 @@
 			"decisions": []
 		},
 		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]]\",\"resetAndDestroy\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]]",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.[[Prototype]].prototype",
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]]",
+				"MAL_INTRINSIC_NODE_NET_SOCKET_PROTOTYPE"
+			],
+			"key": "resetAndDestroy",
+			"kind": "data",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]].resetAndDestroy"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
 			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]]\",\"pause\"]",
 			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]]",
 			"ownerPaths": [
@@ -55986,6 +56287,30 @@
 			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]].pause",
 			"ownerPaths": [
 				"%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]].pause"
+			],
+			"key": "name",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]].resetAndDestroy\",\"length\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]].resetAndDestroy",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]].resetAndDestroy"
+			],
+			"key": "length",
+			"kind": "data",
+			"operations": [],
+			"task": "H-10",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]].resetAndDestroy\",\"name\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]].resetAndDestroy",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]].resetAndDestroy"
 			],
 			"key": "name",
 			"kind": "data",
@@ -168417,6 +168742,34 @@
 			"kind": "construct",
 			"operations": [
 				"%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]].pause"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]].resetAndDestroy\",\"<call>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]].resetAndDestroy",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]].resetAndDestroy"
+			],
+			"key": "<call>",
+			"kind": "call",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]].resetAndDestroy"
+			],
+			"task": "N-06",
+			"decisions": []
+		},
+		{
+			"id": "[\"%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]].resetAndDestroy\",\"<construct>\"]",
+			"owner": "%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]].resetAndDestroy",
+			"ownerPaths": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]].resetAndDestroy"
+			],
+			"key": "<construct>",
+			"kind": "construct",
+			"operations": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]].resetAndDestroy"
 			],
 			"task": "N-06",
 			"decisions": []
@@ -304662,6 +305015,12 @@
 			"id": "%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]].pause",
 			"identities": [
 				"%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]].pause"
+			]
+		},
+		{
+			"id": "%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]].resetAndDestroy",
+			"identities": [
+				"%MAL_INTRINSIC_NODE_TLS_MODULE%.TLSSocket.prototype.[[Prototype]].resetAndDestroy"
 			]
 		},
 		{
