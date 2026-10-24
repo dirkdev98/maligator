@@ -1116,6 +1116,8 @@ export function numberRecordDataflow(
 	indexed = false,
 	// `charCodeAt` calls a string region reads as code units.
 	codeUnitReads?: ReadonlySet<number>,
+	// Loop regions load the bindings they read at entry; record regions do not.
+	bindingLoads = indexed,
 ): NativeNumberRecordDataflow | undefined {
 	const kinds = new Map<number, NativeNumberRecordKind>();
 	const inputs = new Set<number>();
@@ -1236,7 +1238,7 @@ export function numberRecordDataflow(
 				// once into its register, which reads inside then see as an input.
 				case "LOAD_GLOBAL":
 				case "LOAD_CAPTURED":
-					admitted = indexed && representations[instruction.dst] === "boxed";
+					admitted = bindingLoads && representations[instruction.dst] === "boxed";
 					bindings.add(instruction.dst);
 					break;
 				case "THROW_IF_TDZ":
@@ -2240,6 +2242,42 @@ export function numericLoopCodeUnitMethods(
 	);
 }
 
+/**
+ * Registers a loop loads from globals or enclosing functions' bindings, which its region
+ * loads once at entry: nothing in a region calls out or stores a binding.
+ */
+function numericLoopBindings(
+	fn: BytecodeFunction,
+	shape: NativeNumericLoopShape,
+	body: NativeBodyFacts,
+): ReadonlySet<number> | undefined {
+	const bindings = new Set<number>();
+	for (const ip of shape.order) {
+		const op = fn.instructions[ip]!;
+		if (op.opcode !== "LOAD_GLOBAL" && op.opcode !== "LOAD_CAPTURED") continue;
+		// A function's own capture environment may not exist yet where the loop starts.
+		if (
+			op.opcode === "LOAD_CAPTURED" &&
+			(fn.capturedCount > 0 || op.ownerFunctionIndex < 0)
+		)
+			return undefined;
+		if (
+			shape.order.some(
+				(other) =>
+					other !== ip &&
+					vmInstructionWriteRegisters(fn.instructions[other]!).includes(op.dst),
+			)
+		)
+			return undefined;
+		bindings.add(op.dst);
+	}
+	// The entry loads each binding into its register, which only a header that read the
+	// register before reloading it could observe.
+	return registersLiveAt(fn, body, shape.order[0]!, bindings).length > 0
+		? undefined
+		: bindings;
+}
+
 function fixedNumericLoopStorage(
 	fn: BytecodeFunction,
 	shape: NativeNumericLoopShape,
@@ -2324,29 +2362,8 @@ function fixedNumericLoopStorage(
 		)
 	)
 		return undefined;
-	const bindings = new Set<number>();
-	for (const ip of shape.order) {
-		const op = fn.instructions[ip]!;
-		if (op.opcode !== "LOAD_GLOBAL" && op.opcode !== "LOAD_CAPTURED") continue;
-		// A function's own capture environment may not exist yet where the loop starts.
-		if (
-			op.opcode === "LOAD_CAPTURED" &&
-			(fn.capturedCount > 0 || op.ownerFunctionIndex < 0)
-		)
-			return undefined;
-		if (
-			shape.order.some(
-				(other) =>
-					other !== ip &&
-					vmInstructionWriteRegisters(fn.instructions[other]!).includes(op.dst),
-			)
-		)
-			return undefined;
-		bindings.add(op.dst);
-	}
-	// The entry loads each binding into its register, which only a header that read the
-	// register before reloading it could observe.
-	if (registersLiveAt(fn, body, shape.order[0]!, bindings).length > 0) return undefined;
+	const bindings = numericLoopBindings(fn, shape, body);
+	if (bindings === undefined) return undefined;
 	const textual = new Set(memory.map((access) => access.text === true));
 	if (lengthLoad !== undefined && !views.has(lengthLoad.object)) {
 		// A length bound whose object no access reads takes the kind of every other view.
@@ -2565,9 +2582,20 @@ function lowerNumericLoopRegion(
 		return undefined;
 	const storage = fixedNumericLoopStorage(fn, shape, body, lengthLoads, codeUnitReads);
 	if (storage === undefined && !integerLoopInstruction(first)) return undefined;
+	const bindings =
+		storage === undefined ? numericLoopBindings(fn, shape, body) : new Set<number>();
+	if (bindings === undefined) return undefined;
 	if (
 		(storage === undefined &&
-			shape.order.some((ip) => !integerLoopInstruction(fn.instructions[ip]!))) ||
+			shape.order.some((ip) => {
+				const op = fn.instructions[ip]!;
+				return (
+					!integerLoopInstruction(op) &&
+					op.opcode !== "LOAD_GLOBAL" &&
+					op.opcode !== "LOAD_CAPTURED" &&
+					!(op.opcode === "THROW_IF_TDZ" && bindings.has(op.src))
+				);
+			})) ||
 		(storage === undefined &&
 			!shape.order.some((ip) => {
 				const instruction = fn.instructions[ip]!;
@@ -2587,6 +2615,7 @@ function lowerNumericLoopRegion(
 		storage?.views.some((view) => view.text === true) === true
 			? codeUnitReads
 			: undefined,
+		true,
 	);
 	if (flow === undefined) return undefined;
 	const inputs = new Set(flow.inputs);

@@ -84,6 +84,31 @@ function bitsUpTo(limit) {
 	return sum;
 }
 
+// Bindings of the script and of an enclosing function, loaded once per entry.
+function scaledSum(limit) {
+	let sum = 0;
+	for (let index = 0; index < limit; index++) sum = (sum + index * SCALE) | 0;
+	return sum;
+}
+
+function makeScaler(factor) {
+	function capturedSum(limit) {
+		let sum = 0;
+		for (let index = 0; index < limit; index++) sum = (sum + index * factor) | 0;
+		return sum;
+	}
+	return capturedSum;
+}
+
+const beforeScale = [0, 3].map((limit) => {
+	try {
+		return scaledSum(limit);
+	} catch (error) {
+		return error.constructor.name;
+	}
+});
+let SCALE = 3;
+
 function reference(name, values) {
 	const expected = {
 		collatz: [0, 111, 7, 350],
@@ -117,6 +142,22 @@ check(parityRun(1000) === 500, "Boolean loop state");
 check(bitsUpTo(100) === 342, "small sum");
 check(bitsUpTo("100") === 342, "string bound");
 check(collatzSteps(2 ** 60) === 60, "power of two above the safe range");
+
+check(
+	JSON.stringify(beforeScale) === '[0,"ReferenceError"]',
+	"scale before initialization",
+);
+const scaled = [];
+for (const scale of [3, 0.5, -2, "2", 2 ** 40]) {
+	SCALE = scale;
+	scaled.push(scaledSum(100));
+}
+check(JSON.stringify(scaled) === "[14850,2450,-9900,9900,0]", "scaled sums");
+check(
+	JSON.stringify([7, 2.5, "3"].map((factor) => makeScaler(factor)(100))) ===
+		"[34650,12350,14850]",
+	"captured factors",
+);
 
 let total = 0;
 for (let start = 1; start < 3_000; start++)

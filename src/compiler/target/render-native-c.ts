@@ -1330,6 +1330,7 @@ function emitNumericLoopRegion(
 					reps,
 					plan.kind !== "integer",
 					codeUnitReads.size === 0 ? undefined : codeUnitReads,
+					true,
 				);
 	const codeUnitMethods =
 		order === undefined

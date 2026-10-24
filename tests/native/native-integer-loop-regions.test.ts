@@ -18,6 +18,8 @@ const kernels = [
 	"remainderByZero",
 	"parityRun",
 	"bitsUpTo",
+	"scaledSum",
+	"capturedSum",
 ];
 const expected = ["native-integer-loop-regions PASS"];
 
