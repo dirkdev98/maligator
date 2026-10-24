@@ -1197,6 +1197,32 @@ const NATIVE_FALLIBLE_ALLOCATION_EFFECTS: NativeEdgeEffects = Object.freeze({
 	throwing: true,
 });
 
+const NATIVE_BUFFER_WRITE_EFFECTS: NativeEdgeEffects = Object.freeze({
+	...nativeStaticPropertyEffects.probe,
+	invalidation: true,
+});
+
+/** Includes admission and the inline hit; the ordinary CALL miss keeps its own effects. */
+export function nativeGuardedBuiltinEffects(
+	operation: VmGuardedBuiltinOperation,
+): NativeEdgeEffects | undefined {
+	if (operation === "String.prototype.charCodeAt")
+		return nativeStaticPropertyEffects.probe;
+	const descriptor = builtinOperationDescriptor(operation);
+	if (
+		descriptor?.lowerings.includes("guarded-number-predicate") ||
+		descriptor?.lowerings.includes("guarded-boolean")
+	)
+		return operation === "Boolean.prototype.toString"
+			? NATIVE_ALLOCATION_EFFECTS
+			: nativeStaticPropertyEffects.probe;
+	if (descriptor?.lowerings.includes("guarded-data-view-access"))
+		return descriptor.key.startsWith("set")
+			? NATIVE_BUFFER_WRITE_EFFECTS
+			: nativeStaticPropertyEffects.probe;
+	return undefined;
+}
+
 /** Allocation requests a later poll; these creation helpers never collect or reenter. */
 export function nativeInstructionEffects(
 	instruction: BytecodeInstruction,

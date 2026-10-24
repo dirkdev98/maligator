@@ -130,6 +130,7 @@ import {
 	nativeFrameRootRegisters,
 	nativeLoopUpdateTransportsValue,
 	nativeInstructionEffects,
+	nativeGuardedBuiltinEffects,
 	nativeRecordAliases,
 	sameNativeRecordLayout,
 	vmCallProvesBuiltin,
@@ -6468,15 +6469,14 @@ function emitBody(
 		outgoingRootPublication: undefined,
 		rootedOutputReloads: undefined,
 		loopBackedgeInactiveRootMask: undefined,
-		mathCallInactiveRootMask: undefined,
 		valueGuardInactiveRootMask: undefined,
 		knownOwnSlotLoadInactiveRootMask: undefined,
 		staticPropertyLoadInactiveRootMask: undefined,
 		privateAccessInactiveRootMask: undefined,
 		indexedPropertyInactiveRootMask: undefined,
 		staticPropertyWriteInactiveRootMask: undefined,
-		charCodeAtCallRootPublication: undefined,
-		charCodeAtCallInactiveRootMask: undefined,
+		guardedCallRootPublication: undefined,
+		guardedCallInactiveRootMask: undefined,
 		iteratorStepRootPublication: undefined,
 		iteratorStepInactiveRootMask: undefined,
 		stackObjectSite: undefined,
@@ -6816,21 +6816,32 @@ function emitBody(
 			!nativeArrayPairDestructureActionByIp.has(ip) &&
 			!nativeIteratorEntryPairVirtualizationActionByIp.has(ip) &&
 			!nativeRegExpIteratorProjectionActionByIp.has(ip);
-		const charCodeAtInstruction = fn.instructions[ip]!;
-		const charCodeAtPlan = nativeInstructions[ip];
-		const deferredCharCodeAtRoots =
+		const guardedCallInstruction = fn.instructions[ip]!;
+		const guardedCallPlan = nativeInstructions[ip];
+		const guardedCallEffects =
+			guardedCallPlan?.kind === "call" && guardedCallPlan.guardedBuiltinCall !== undefined
+				? nativeGuardedBuiltinEffects(guardedCallPlan.guardedBuiltinCall.operation)
+				: undefined;
+		const deferredGuardedCallRoots =
 			deferrableRoots &&
 			coro === null &&
-			charCodeAtInstruction.opcode === "CALL" &&
-			charCodeAtPlan?.kind === "call" &&
-			vmCallProvesBuiltin(charCodeAtPlan, "String.prototype.charCodeAt") &&
+			guardedCallInstruction.opcode === "CALL" &&
+			guardedCallPlan?.kind === "call" &&
+			(mathCalls.has(ip) ||
+				(guardedCallEffects !== undefined &&
+					!guardedCallEffects.collection &&
+					!guardedCallEffects.reentry)) &&
 			// Rooted outputs alias shadow storage before dispatch, including reused inputs.
 			!rootedOutputs.some((register) =>
-				vmInstructionUsesRegister(charCodeAtInstruction, register),
+				vmInstructionUsesRegister(guardedCallInstruction, register),
 			) &&
-			charCodeAtPlan.numericSortCallback === undefined &&
+			guardedCallPlan.numericSortCallback === undefined &&
+			guardedCallPlan.directFunctionIndex === undefined &&
+			guardedCallPlan.directEntryId === undefined &&
+			guardedCallPlan.guardedFunctionIndices === undefined &&
+			guardedCallPlan.directFunctionCall === undefined &&
+			guardedCallPlan.directCallbackFunctionIndex === undefined &&
 			!fieldCallSites.has(ip) &&
-			!mathCalls.has(ip) &&
 			!nativeStringCharCodeAtChainActionByIp.has(ip) &&
 			!nativeStringSplitCursorActionByIp.has(ip) &&
 			!nativeStringSplitProjectionActionByIp.has(ip) &&
@@ -6849,7 +6860,7 @@ function emitBody(
 			!deferredValueGuardRoots &&
 			!deferredForInRoots &&
 			!deferredIteratorRoots &&
-			!deferredCharCodeAtRoots &&
+			!deferredGuardedCallRoots &&
 			(effects.collection || effects.reentry);
 		// Only rendered strings escape this map, so the body can update it in place.
 		if (rootPublication !== undefined && hasPrivateRoots) {
@@ -6899,18 +6910,14 @@ function emitBody(
 			deferredIteratorRoots && inactiveRootMask !== lastPublishedInactiveRootMask
 				? inactiveRootMask
 				: undefined;
-		const charCodeAtCallInactiveRootMask =
-			deferredCharCodeAtRoots && inactiveRootMask !== lastPublishedInactiveRootMask
+		const guardedCallInactiveRootMask =
+			(deferredGuardedCallRoots ||
+				(safepointKind === "operation" && mathCalls.has(ip))) &&
+			inactiveRootMask !== lastPublishedInactiveRootMask
 				? inactiveRootMask
 				: undefined;
 		const loopBackedgeInactiveRootMask =
 			safepointKind === "loop-backedge" &&
-			inactiveRootMask !== lastPublishedInactiveRootMask
-				? inactiveRootMask
-				: undefined;
-		const mathCallInactiveRootMask =
-			safepointKind === "operation" &&
-			mathCalls.has(ip) &&
 			inactiveRootMask !== lastPublishedInactiveRootMask
 				? inactiveRootMask
 				: undefined;
@@ -6954,7 +6961,6 @@ function emitBody(
 			inactiveRootMask !== undefined &&
 			loopBackedgeInactiveRootMask === undefined &&
 			operatorInactiveRootMask === undefined &&
-			mathCallInactiveRootMask === undefined &&
 			valueGuardInactiveRootMask === undefined &&
 			knownOwnSlotLoadInactiveRootMask === undefined &&
 			staticPropertyLoadInactiveRootMask === undefined &&
@@ -6962,7 +6968,7 @@ function emitBody(
 			indexedPropertyInactiveRootMask === undefined &&
 			staticPropertyWriteInactiveRootMask === undefined &&
 			iteratorStepInactiveRootMask === undefined &&
-			charCodeAtCallInactiveRootMask === undefined &&
+			guardedCallInactiveRootMask === undefined &&
 			inactiveRootMask !== lastPublishedInactiveRootMask
 		) {
 			lines.push(
@@ -6973,7 +6979,6 @@ function emitBody(
 			inactiveRootMask !== undefined &&
 			loopBackedgeInactiveRootMask === undefined &&
 			operatorInactiveRootMask === undefined &&
-			mathCallInactiveRootMask === undefined &&
 			valueGuardInactiveRootMask === undefined &&
 			knownOwnSlotLoadInactiveRootMask === undefined &&
 			staticPropertyLoadInactiveRootMask === undefined &&
@@ -6981,7 +6986,7 @@ function emitBody(
 			indexedPropertyInactiveRootMask === undefined &&
 			staticPropertyWriteInactiveRootMask === undefined &&
 			iteratorStepInactiveRootMask === undefined &&
-			charCodeAtCallInactiveRootMask === undefined
+			guardedCallInactiveRootMask === undefined
 		) {
 			lastPublishedInactiveRootMask = inactiveRootMask;
 		}
@@ -7005,7 +7010,7 @@ function emitBody(
 			deferredValueGuardRoots ||
 			deferredForInRoots ||
 			deferredIteratorRoots ||
-			deferredCharCodeAtRoots
+			deferredGuardedCallRoots
 				? operatorInactiveRootMask === undefined
 					? incomingRootPublication
 					: [
@@ -7023,7 +7028,6 @@ function emitBody(
 		instructionContext.outgoingRootPublication = outgoingRootPublication;
 		instructionContext.rootedOutputReloads = rootedOutputReloads;
 		instructionContext.loopBackedgeInactiveRootMask = loopBackedgeInactiveRootMask;
-		instructionContext.mathCallInactiveRootMask = mathCallInactiveRootMask;
 		instructionContext.valueGuardInactiveRootMask = valueGuardInactiveRootMask;
 		instructionContext.knownOwnSlotLoadInactiveRootMask =
 			knownOwnSlotLoadInactiveRootMask;
@@ -7033,8 +7037,8 @@ function emitBody(
 		instructionContext.indexedPropertyInactiveRootMask = indexedPropertyInactiveRootMask;
 		instructionContext.staticPropertyWriteInactiveRootMask =
 			staticPropertyWriteInactiveRootMask;
-		instructionContext.charCodeAtCallRootPublication = deferredCharCodeAtRoots;
-		instructionContext.charCodeAtCallInactiveRootMask = charCodeAtCallInactiveRootMask;
+		instructionContext.guardedCallRootPublication = deferredGuardedCallRoots;
+		instructionContext.guardedCallInactiveRootMask = guardedCallInactiveRootMask;
 		instructionContext.iteratorStepRootPublication = deferredIteratorRoots;
 		instructionContext.iteratorStepInactiveRootMask = iteratorStepInactiveRootMask;
 		instructionContext.stackObjectSite = stackObjectSites.get(ip);
@@ -7177,7 +7181,6 @@ function emitBody(
 			lastPublishedInactiveRootMask = operatorInactiveRootMask;
 		} else if (
 			operatorMaskEmitted ||
-			mathCallInactiveRootMask !== undefined ||
 			valueGuardInactiveRootMask !== undefined ||
 			knownOwnSlotLoadInactiveRootMask !== undefined ||
 			staticPropertyLoadInactiveRootMask !== undefined ||
@@ -7185,7 +7188,7 @@ function emitBody(
 			indexedPropertyInactiveRootMask !== undefined ||
 			staticPropertyWriteInactiveRootMask !== undefined ||
 			iteratorStepInactiveRootMask !== undefined ||
-			charCodeAtCallInactiveRootMask !== undefined
+			guardedCallInactiveRootMask !== undefined
 		) {
 			// Conditional paths can preserve the old mask or publish the instruction's mask.
 			lastPublishedInactiveRootMask = undefined;
@@ -7538,15 +7541,14 @@ interface NativeInstructionContext {
 	readonly outgoingRootPublication?: ReadonlyArray<string>;
 	readonly rootedOutputReloads?: ReadonlyArray<string>;
 	readonly loopBackedgeInactiveRootMask?: NativeInactiveRootMask;
-	readonly mathCallInactiveRootMask?: NativeInactiveRootMask;
 	readonly valueGuardInactiveRootMask?: NativeInactiveRootMask;
 	readonly knownOwnSlotLoadInactiveRootMask?: NativeInactiveRootMask;
 	readonly staticPropertyLoadInactiveRootMask?: NativeInactiveRootMask;
 	readonly privateAccessInactiveRootMask?: NativeInactiveRootMask;
 	readonly indexedPropertyInactiveRootMask?: NativeInactiveRootMask;
 	readonly staticPropertyWriteInactiveRootMask?: NativeInactiveRootMask;
-	readonly charCodeAtCallRootPublication?: boolean;
-	readonly charCodeAtCallInactiveRootMask?: NativeInactiveRootMask;
+	readonly guardedCallRootPublication?: boolean;
+	readonly guardedCallInactiveRootMask?: NativeInactiveRootMask;
 	readonly iteratorStepRootPublication?: boolean;
 	readonly iteratorStepInactiveRootMask?: NativeInactiveRootMask;
 	readonly stackObjectSite?: StackObjectSite;
@@ -7717,7 +7719,7 @@ function emitInstruction(
 		((context.outgoingRootPublication?.length ?? 0) > 0 ||
 			context.loopBackedgeInactiveRootMask !== undefined ||
 			context.gcSafepoint ||
-			context.mathCallInactiveRootMask !== undefined)
+			context.guardedCallInactiveRootMask !== undefined)
 	)
 		nativeBodyReference(context.resources, "throwExit");
 	if (context.propertyNumericUpdateAction === undefined) {
@@ -7881,15 +7883,14 @@ function emitInstruction(
 		outgoingRootPublication: context.outgoingRootPublication,
 		rootedOutputReloads: context.rootedOutputReloads,
 		loopBackedgeInactiveRootMask: context.loopBackedgeInactiveRootMask,
-		mathCallInactiveRootMask: context.mathCallInactiveRootMask,
 		valueGuardInactiveRootMask: context.valueGuardInactiveRootMask,
 		knownOwnSlotLoadInactiveRootMask: context.knownOwnSlotLoadInactiveRootMask,
 		staticPropertyLoadInactiveRootMask: context.staticPropertyLoadInactiveRootMask,
 		privateAccessInactiveRootMask: context.privateAccessInactiveRootMask,
 		indexedPropertyInactiveRootMask: context.indexedPropertyInactiveRootMask,
 		staticPropertyWriteInactiveRootMask: context.staticPropertyWriteInactiveRootMask,
-		charCodeAtCallRootPublication: context.charCodeAtCallRootPublication,
-		charCodeAtCallInactiveRootMask: context.charCodeAtCallInactiveRootMask,
+		guardedCallRootPublication: context.guardedCallRootPublication,
+		guardedCallInactiveRootMask: context.guardedCallInactiveRootMask,
 		iteratorStepRootPublication: context.iteratorStepRootPublication,
 		stringSplitTrimLengthSite: context.stringSplitTrimLengthSite,
 		iteratorStepInactiveRootMask: context.iteratorStepInactiveRootMask,
@@ -8297,21 +8298,25 @@ function emitInstruction(
 						? `if (mal_gc_poll_requested()) { ${safepoint()} }`
 						: ""
 					: `if (mal_gc_poll_requested()) { ${cInactiveRootMaskPublication(context.loopBackedgeInactiveRootMask, context.inactiveRootMaskStatements)}; ${safepoint()} }`);
-	const callPoll = (): string => (context.callReturnPolls ? poll() : "");
-	let mathPollText: string | undefined;
-	const mathPoll = (): string =>
-		(mathPollText ??=
-			context.mathCallInactiveRootMask === undefined
+	let guardedCallPollText: string | undefined;
+	const guardedCallPoll = (): string =>
+		(guardedCallPollText ??=
+			context.guardedCallInactiveRootMask === undefined
 				? poll()
-				: `if (mal_gc_poll_requested()) { ${(context.outgoingRootPublication ?? []).map((line) => `${line} `).join("")}${cInactiveRootMaskPublication(context.mathCallInactiveRootMask, context.inactiveRootMaskStatements)}; ${safepoint()} }`);
-	let mathFallbackText: ReadonlyArray<string> | undefined;
-	const mathFallbackRootPublication = (): ReadonlyArray<string> =>
-		(mathFallbackText ??=
-			context.mathCallInactiveRootMask === undefined
-				? EMPTY_ROOT_PUBLICATION
+				: `if (mal_gc_poll_requested()) { ${(context.outgoingRootPublication ?? []).map((line) => `${line} `).join("")}${cInactiveRootMaskPublication(context.guardedCallInactiveRootMask, context.inactiveRootMaskStatements)}; ${safepoint()} }`);
+	const callPoll = (): string => (context.callReturnPolls ? guardedCallPoll() : "");
+	let guardedCallFallbackText: ReadonlyArray<string> | undefined;
+	const guardedCallFallbackRootPublication = (): ReadonlyArray<string> =>
+		(guardedCallFallbackText ??= [
+			...(context.guardedCallRootPublication
+				? (context.incomingRootPublication ?? []).map((line) => `  ${line}`)
+				: []),
+			...(context.guardedCallInactiveRootMask === undefined
+				? []
 				: [
-						`  ${cInactiveRootMaskPublication(context.mathCallInactiveRootMask, context.inactiveRootMaskStatements)};`,
-					]);
+						`  ${cInactiveRootMaskPublication(context.guardedCallInactiveRootMask, context.inactiveRootMaskStatements)};`,
+					]),
+		]);
 	// An observer needs the record's object in its registers, however the instruction renders.
 	if (context.recordObservers !== undefined) {
 		const ordinary = emitInstruction(
@@ -13155,6 +13160,7 @@ function emitInstruction(
 						? [`  r${instruction.dst} = ${callResult("MAL_VALUE_UNDEFINED")};`]
 						: []),
 					`} else {`,
+					...guardedCallFallbackRootPublication(),
 					`  MalCompletion ${tmp} = ${profileCall("call", `mal_vm_call_cached(vm, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length})`)};`,
 					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`  r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
@@ -13193,6 +13199,7 @@ function emitInstruction(
 					`if (mal_builtin_boolean_callee_matches(${operation}, ${boxedOperand(instruction.callee)})${receiverGuard}) {`,
 					result,
 					`} else {`,
+					...guardedCallFallbackRootPublication(),
 					`MalCompletion ${tmp} = mal_vm_call_cached(vm, ${boxedOperand(instruction.callee)}, ${receiver}, ${argsExpr}, ${args.length});`,
 					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
@@ -13225,6 +13232,7 @@ function emitInstruction(
 					`if (mal_builtin_number_predicate_callee_matches(${numberPredicate}, ${boxedOperand(instruction.callee)})) {`,
 					storeBoolean(instruction.dst, test),
 					`} else {`,
+					...guardedCallFallbackRootPublication(),
 					`MalCompletion ${tmp} = mal_vm_call_cached(vm, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
@@ -13538,24 +13546,16 @@ function emitInstruction(
 				];
 			}
 			if (vmCallProvesBuiltin(callPlan, "String.prototype.charCodeAt")) {
-				if (context.charCodeAtCallRootPublication) {
+				if (context.guardedCallRootPublication) {
 					context.stringLeafCaches.add(ip);
-					const mask = context.charCodeAtCallInactiveRootMask;
-					const charPoll =
-						mask === undefined
-							? callPoll()
-							: `if (mal_gc_poll_requested()) { ${(context.outgoingRootPublication ?? []).join(" ")} ${cInactiveRootMaskPublication(mask, context.inactiveRootMaskStatements)}; ${safepoint()} }`;
+					const mask = context.guardedCallInactiveRootMask;
+					const charPoll = mask === undefined ? callPoll() : guardedCallPoll();
 					return [
 						`MalValue __char_value_${ip};`,
 						`if (mal_builtin_string_char_code_at_try(vm, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length}, &__string_leaf_cache_${ip}, &__char_value_${ip})) {`,
 						`  r${instruction.dst} = ${callResult(`__char_value_${ip}`)};`,
 						`} else {`,
-						...(context.incomingRootPublication ?? []).map((line) => `  ${line}`),
-						...(mask === undefined
-							? []
-							: [
-									`  ${cInactiveRootMaskPublication(mask, context.inactiveRootMaskStatements)};`,
-								]),
+						...guardedCallFallbackRootPublication(),
 						`  MalCompletion ${tmp} = mal_builtin_string_char_code_at_direct(vm, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length}, &__string_leaf_cache_${ip});`,
 						`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 						`  r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
@@ -13858,12 +13858,12 @@ function emitInstruction(
 					`if (${guards.join(" && ")}) {`,
 					`  ${storeMathNumber(instruction.dst, operation, expression)}`,
 					`} else {`,
-					...mathFallbackRootPublication(),
+					...guardedCallFallbackRootPublication(),
 					`  MalCompletion ${tmp} = ${profileCall("call", `mal_vm_call_cached(vm, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length})`)};`,
 					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`  r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
 					`}`,
-					mathPoll(),
+					guardedCallPoll(),
 				];
 			}
 			// A per-site polymorphic call cache: exact native callees and ordinary compiled

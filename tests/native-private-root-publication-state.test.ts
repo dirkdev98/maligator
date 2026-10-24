@@ -5,6 +5,7 @@ import { createConservativeNativePlan } from "../src/compiler/target/program-ima
 import type {
 	NativeFunctionPlan,
 	NativeInstructionPlan,
+	VmGuardedBuiltinOperation,
 } from "../src/compiler/target/program-image.ts";
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
 import { vmInstructionWriteRegisters } from "../src/compiler/target/runtime-image.ts";
@@ -45,6 +46,40 @@ const charCodeAtPlan = {
 		},
 	},
 } satisfies NativeInstructionPlan;
+
+const guardedCalls: ReadonlyArray<VmGuardedBuiltinOperation> = [
+	"Boolean",
+	"Boolean.prototype.valueOf",
+	"Boolean.prototype.toString",
+	"Number.isNaN",
+	"Number.isFinite",
+	"Number.isInteger",
+	"Number.isSafeInteger",
+	"Math.abs",
+	"Math.min",
+	"String.prototype.charCodeAt",
+	...(["get", "set"] as const).flatMap((access) =>
+		(
+			[
+				"Int8",
+				"Uint8",
+				"Int16",
+				"Uint16",
+				"Int32",
+				"Uint32",
+				"Float32",
+				"Float64",
+			] as const
+		).map((type) => `DataView.prototype.${access}${type}` as const),
+	),
+];
+
+function guardedPlan(operation: VmGuardedBuiltinOperation): NativeInstructionPlan {
+	return {
+		kind: "call",
+		guardedBuiltinCall: { ...charCodeAtPlan.guardedBuiltinCall, operation },
+	};
+}
 
 function point(
 	instructionIp: number,
@@ -459,6 +494,67 @@ describe("private-root publication state at collecting edges", () => {
 		});
 		expect(source).toContain("mal_builtin_string_char_code_at_try(");
 	});
+
+	it.each(guardedCalls)(
+		"publishes %s roots in the fallback and poll while leaving its hit private",
+		(operation) => {
+			const args = operation === "Math.min" ? [3, 5] : [3];
+			const source = emit(
+				[load, call(4, args), call(), returned],
+				[point(0, [0, 1], live), point(1), point(2)],
+				{ nativeInstructions: new Map([[1, guardedPlan(operation)]]) },
+			);
+			const publication = privatePublication(source);
+			const propertyMiss = propertyMissPath(source, 0).end;
+			const helper =
+				operation === "String.prototype.charCodeAt"
+					? "mal_builtin_string_char_code_at_direct(vm"
+					: "MalCompletion call_result_1 = mal_vm_call_cached";
+			const miss = source.indexOf(helper, propertyMiss);
+			const fallback = source.lastIndexOf("} else {", miss);
+			expect(fallback).toBeGreaterThan(propertyMiss);
+			expect(hasIncomingCopy(source.slice(propertyMiss, fallback), publication)).toBe(
+				false,
+			);
+			expect(source.slice(fallback, miss)).toContain(publication);
+			expect(source.slice(fallback, miss)).toContain("MAL_ROOT_MASK(");
+			const after = afterCallResult(source, 1);
+			const poll = source.indexOf("mal_gc_safepoint(vm)", after);
+			expect(poll).toBeGreaterThan(after);
+			expect(source.slice(after, poll)).toContain(publication);
+			expect(source.slice(after, poll)).toContain("MAL_ROOT_MASK(");
+			expect(hasIncomingCopy(beforeCall(source, 2, poll), publication)).toBe(true);
+		},
+	);
+
+	it.each(
+		(
+			["Boolean", "Number.isFinite", "DataView.prototype.getUint16", "Math.abs"] as const
+		).flatMap((operation) =>
+			(["callee", "receiver", "argument"] as const).map((role) => ({ operation, role })),
+		),
+	)(
+		"publishes $operation's reused $role before aliasing the result",
+		({ operation, role }) => {
+			const reused: BytecodeInstruction = {
+				opcode: "CALL",
+				dst: retained,
+				callee: role === "callee" ? retained : 1,
+				thisValue: role === "receiver" ? retained : 0,
+				argumentCount: 1,
+				arguments: [role === "argument" ? retained : 3],
+			};
+			const source = emit([load, reused, returned], [point(0, [0, 1], live), point(1)], {
+				nativeInstructions: new Map([[1, guardedPlan(operation)]]),
+			});
+			const publication = privatePublication(source);
+			const slot = publication.slice(0, publication.indexOf(" ="));
+			const propertyMiss = propertyMissPath(source, 0).end;
+			const alias = source.indexOf(`#define r${retained} (${slot})`, propertyMiss);
+			expect(alias).toBeGreaterThan(propertyMiss);
+			expect(hasIncomingCopy(source.slice(propertyMiss, alias), publication)).toBe(true);
+		},
+	);
 
 	it("takes an ordinary call's throw edge before assigning its private result and republishes catch roots", () => {
 		const source = emit(

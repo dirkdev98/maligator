@@ -262,6 +262,14 @@ The ordinary-call fallback retains the original operands, completion handling, r
 publication and polling. Producer effects run before either branch; narrowing does
 not authorize skipping their coercions or moving them across a callee lookup.
 
+Guarded native calls also distinguish the admitted kernel's effects from the
+ordinary CALL fallback. Boolean, Number predicates, scalar Math, DataView access
+and charCodeAt publish private roots and inactive masks on the collecting fallback
+and requested outgoing poll. They leave private values unpublished on a
+noncollecting hit. Reused rooted input/output registers, resumable bodies and
+specialized region obligations retain eager incoming publication. A conditional
+publication never establishes that the following instruction has published roots.
+
 Effect metadata preserves independent reads and writes for every effect domain,
 plus throwing, suspension, collection and user-code flags. Semantic purity alone
 does not discharge a native helper's allocation failure, polling or root obligations.
