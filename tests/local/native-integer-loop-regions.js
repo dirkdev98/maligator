@@ -84,6 +84,14 @@ function bitsUpTo(limit) {
 	return sum;
 }
 
+// A fused chain over a boxed count runs inside the region; leaving the safe range
+// restarts the iteration in the original loop, which recomputes the whole chain.
+function fusedSteps(limit, step, scale) {
+	let count = 0;
+	for (let index = 0; index < limit; index += step) count = (count * scale + 1) | 0;
+	return count;
+}
+
 // Bindings of the script and of an enclosing function, loaded once per entry.
 function scaledSum(limit) {
 	let sum = 0;
@@ -143,6 +151,16 @@ check(bitsUpTo(100) === 342, "small sum");
 check(bitsUpTo("100") === 342, "string bound");
 check(collatzSteps(2 ** 60) === 60, "power of two above the safe range");
 
+check(
+	JSON.stringify([
+		fusedSteps(1000, 1, 3),
+		fusedSteps(1000, 3, 2 ** 30),
+		fusedSteps(100, 0.5, -7),
+		fusedSteps(10, 1, "3"),
+		fusedSteps(10, 1, 2 ** 53),
+	]) === "[-371446384,1073741825,2045412584,29524,0]",
+	"fused steps",
+);
 check(
 	JSON.stringify(beforeScale) === '[0,"ReferenceError"]',
 	"scale before initialization",
