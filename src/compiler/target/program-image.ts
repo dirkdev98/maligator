@@ -33,6 +33,7 @@ import type { InstructionFacts } from "../shared/instruction-facts.ts";
 import type { CompilerIntegerRange } from "../shared/integer-range.ts";
 import { NATIVE_STRING_SWITCH_CASE_LIMIT } from "../shared/native-string-switch.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
+import { scalarBuiltinInvocationEffects } from "../shared/scalar-builtin-effects.ts";
 import type { CoreTargetClassLayout, CoreTargetRecordUses } from "./core-target-ir.ts";
 import type {
 	ExecutionFunction,
@@ -1218,6 +1219,15 @@ export function nativeInstructionEffects(
 		};
 	}
 	switch (instruction.opcode) {
+		case "CALL_KNOWN":
+			return !instruction.construct &&
+				instruction.argumentMode === undefined &&
+				scalarBuiltinInvocationEffects(instruction.operation) !== undefined
+				? nativeStaticPropertyEffects.probe
+				: nativeStaticPropertyEffects.miss;
+		case "MATH_UNARY_NUMBER":
+		case "MATH_BINARY_NUMBER":
+			return nativeStaticPropertyEffects.probe;
 		case "MOVE":
 		case "LOAD_CALLEE":
 		case "LOAD_ARGUMENT":

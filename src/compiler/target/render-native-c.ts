@@ -11768,7 +11768,6 @@ function emitInstruction(
 							instruction.dst,
 							instruction.operation === "Number.isNaN" ? "false" : "true",
 						),
-						callPoll(),
 					];
 				if (predicatePlan.mode === "number") {
 					if (input === undefined)
@@ -11779,7 +11778,7 @@ function emitInstruction(
 						instruction.operation,
 						number,
 					);
-					return [storeBoolean(instruction.dst, predicate), callPoll()];
+					return [storeBoolean(instruction.dst, predicate)];
 				}
 				return [
 					storeBoolean(

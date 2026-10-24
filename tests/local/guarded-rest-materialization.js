@@ -1,4 +1,15 @@
 const collect = globalThis.__mal_collect_garbage || globalThis.gc || (() => {});
+globalThis.scalarRest = function scalarRest(...args) {
+	if (!Number.isFinite(arguments.length)) return false;
+	globalThis.scalarReader = () => args;
+	return args;
+};
+for (let index = 0; index < 30; index++) {
+	const result = globalThis.scalarRest({ id: index }, { id: index + 1 });
+	collect();
+	if (globalThis.scalarReader() !== result || result[1].id !== index + 1)
+		throw new Error("scalar rest roots");
+}
 function check(condition, message) {
 	if (!condition) throw new Error(message);
 }

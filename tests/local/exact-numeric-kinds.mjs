@@ -234,3 +234,100 @@ for (const edge of [...numericEdges, 15, 16, 31, 32]) {
 	);
 }
 console.log("ranged loop", rangedLoop(1000), observations);
+
+let scalarEffects = "";
+function scalarArgument(tag, value) {
+	scalarEffects += tag;
+	return value;
+}
+const noncoercible = {
+	[Symbol.toPrimitive]() {
+		throw new Error("unexpected coercion");
+	},
+};
+function scalarPredicates(value) {
+	return [
+		Number.isFinite(value),
+		Number.isInteger(value),
+		Number.isNaN(value),
+		Number.isSafeInteger(value),
+		Object.is(value, value),
+	];
+}
+function unusedScalarCalls(value) {
+	Number.isFinite(scalarArgument("a", value), scalarArgument("b", noncoercible));
+	Number.isInteger(scalarArgument("c", value));
+	Number.isNaN(scalarArgument("d", value));
+	Number.isSafeInteger(scalarArgument("e", value));
+	Object.is(scalarArgument("f", value), scalarArgument("g", value));
+}
+for (const value of [
+	noncoercible,
+	Symbol("scalar"),
+	7n,
+	undefined,
+	-0,
+	NaN,
+	Infinity,
+	2.5,
+]) {
+	console.log("scalar predicates", scalarPredicates(value).join(" "));
+	unusedScalarCalls(value);
+}
+console.log("unused scalar arguments", scalarEffects);
+try {
+	Number.isFinite(
+		scalarArgument("h", noncoercible),
+		(() => {
+			scalarEffects += "i";
+			throw new Error("scalar argument");
+		})(),
+	);
+} catch (error) {
+	console.log("scalar argument throw", error.message, scalarEffects);
+}
+try {
+	new Number.isFinite(scalarArgument("j", 1));
+} catch (error) {
+	console.log("scalar construct", error instanceof TypeError, scalarEffects);
+}
+const scalarArgumentList = {
+	get length() {
+		scalarEffects += "k";
+		return 1;
+	},
+	get 0() {
+		scalarEffects += "l";
+		return 7;
+	},
+};
+console.log(
+	"scalar apply",
+	Number.isFinite.apply(null, scalarArgumentList),
+	scalarEffects,
+);
+function scalarSpread(input) {
+	Number.isSafeInteger(...input);
+	return "expanded";
+}
+console.log(
+	"scalar spread",
+	scalarSpread({
+		*[Symbol.iterator]() {
+			scalarEffects += "m";
+			yield noncoercible;
+			scalarEffects += "n";
+			yield 1;
+		},
+	}),
+	scalarEffects,
+);
+function* scalarAcrossYield(value) {
+	const hold = { value };
+	const finite = Number.isFinite(value);
+	yield hold;
+	return [finite, hold.value === value];
+}
+const scalarIterator = scalarAcrossYield(noncoercible);
+console.log("scalar suspended", scalarIterator.next().value.value === noncoercible);
+console.log("scalar resumed", scalarIterator.next().value.join(" "));

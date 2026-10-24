@@ -253,6 +253,14 @@ helpers retain their separate runtime contracts. Identity, shape and mutable-con
 proofs also retain their observation and invalidation requirements rather than
 becoming timeless register properties.
 
+Exact scalar builtin kernels consume the registry's invocation effects in Core and
+native lowering. Number predicates and `Object.is` are pure even for unknown boxed
+inputs; `Date.now` retains its host read. Their ordinary calls need neither an
+operation GC point nor incoming root publication. Unused pure calls disappear after
+their argument producers have executed. Construction, argument-list expansion and
+receiver brand checks retain their own effects. Removing a scalar invocation's
+poll does not remove loop-backedge polling or the roots required by later calls.
+
 ## Known operations
 
 An exact callable identity becomes `callKnown` independently of receiver storage.

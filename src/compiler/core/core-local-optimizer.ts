@@ -6,6 +6,7 @@ import {
 	scanCoreFunctionFeatures,
 } from "./core-function-features.ts";
 import { coreAttributeValueHash } from "./core-ir-equality.ts";
+import { coreInstructionEffects } from "./core-ir-opcodes.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import type {
 	CoreAttributeValue,
@@ -324,7 +325,11 @@ export class CoreLocalRuleRegistry {
 			}
 		}
 		for (const descriptor of program.registry.entries()) {
-			if (descriptor.discardable || descriptor.opcode === "unary") {
+			if (
+				descriptor.discardable ||
+				descriptor.opcode === "unary" ||
+				descriptor.opcode === "callKnown"
+			) {
 				this.dispatch[descriptor.id] =
 					(this.dispatch[descriptor.id] ?? 0) | DEAD_CODE_RULE;
 			}
@@ -917,9 +922,22 @@ export class CoreLocalOptimizer {
 			this.#fn.instructionOpcode(instruction),
 		);
 		if (!descriptor.discardable) {
-			if (descriptor.opcode !== "unary") return false;
-			const operator = this.#fn.instructionAttributes(instruction).operator;
-			if (operator !== "typeof" && operator !== "!") return false;
+			if (descriptor.opcode === "callKnown") {
+				const effects = coreInstructionEffects(this.#fn, instruction);
+				if (
+					effects.reads.length > 0 ||
+					effects.writes.length > 0 ||
+					effects.mayThrow ||
+					effects.maySuspend ||
+					effects.mayGc ||
+					effects.callsUserCode
+				)
+					return false;
+			} else {
+				if (descriptor.opcode !== "unary") return false;
+				const operator = this.#fn.instructionAttributes(instruction).operator;
+				if (operator !== "typeof" && operator !== "!") return false;
+			}
 		}
 		const resultStart = this.#fn.kernel.instructionResultStart(instruction);
 		const resultCount = this.#fn.kernel.instructionResultCount(instruction);
