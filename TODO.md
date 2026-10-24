@@ -196,8 +196,9 @@ The independent target boundary and current storage contract are recorded in
       iteration, are the other lever. In the parser workload's 21.8 million dead
       young cells, arrays (6.4 M), closure environments (4.0 M), closures (3.5 M),
       plain objects (3.1 M) and iterators (2.6 M) lead. Skipping finalizer calls
-      for plain objects saved 1.5%; prefetching and per-block byte accounting did
-      not help. Neither did a fixed nursery: capping minors at 1 to 8 MB left a
+      for plain objects saved 1.5%; prefetching did not help, and publishing a
+      block's freed bytes and free-list links once saves about nine instructions
+      per dead cell but no measurable time. Neither did a fixed nursery: capping minors at 1 to 8 MB left a
       retention-churn loop's minor sweep time at 30 to 34 ms, the same as the
       live-set-proportional trigger, and added majors.
 
