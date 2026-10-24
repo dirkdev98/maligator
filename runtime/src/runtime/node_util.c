@@ -1873,13 +1873,8 @@ static MalValue util_convert_signal_to_exit_code(
         mal_text_buffer_dispose(&text);
         return mal_value_new_undefined();
     }
-    MalString *message = mal_text_buffer_finish(&vm->heap, &text);
-    usize byte_length;
-    byte *bytes = mal_string_to_utf8(message, &byte_length);
-    if (bytes != nullptr) {
-        mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, (const char *) bytes, "ERR_INVALID_ARG_VALUE");
-        free(bytes);
-    }
+    mal_node_throw_code_string(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+        mal_text_buffer_finish(&vm->heap, &text), "ERR_INVALID_ARG_VALUE");
     return mal_value_new_undefined();
 }
 

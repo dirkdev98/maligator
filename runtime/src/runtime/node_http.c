@@ -3330,15 +3330,8 @@ static void http_throw_invalid_arg_value(MalVm *vm, const char *reason, MalValue
         mal_text_buffer_dispose(&text);
         return;
     }
-    usize length;
-    byte *message = mal_string_to_utf8(mal_text_buffer_finish(&vm->heap, &text), &length);
-    if (message == nullptr) {
-        mal_vm_throw_allocation_error(vm);
-        return;
-    }
-    mal_node_throw_code(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE, (const char *) message,
-                        "ERR_INVALID_ARG_VALUE");
-    free(message);
+    mal_node_throw_code_string(vm, MAL_INTRINSIC_TYPE_ERROR_PROTOTYPE,
+                               mal_text_buffer_finish(&vm->heap, &text), "ERR_INVALID_ARG_VALUE");
 }
 
 /* writeHead's headers: an object's own enumerable keys replace headers as setHeader

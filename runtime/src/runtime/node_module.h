@@ -23,6 +23,10 @@ extern MalNodeBrandCheck mal_node_crypto_key_brand;
 /** Throw `prototype` with `message` and a Node `code` property such as ERR_INVALID_ARG_TYPE. */
 void mal_node_throw_code(MalVm *vm, MalIntrinsic prototype, const char *message, const char *code);
 
+/** mal_node_throw_code with a message the engine already holds as a string. */
+void mal_node_throw_code_string(
+    MalVm *vm, MalIntrinsic prototype, MalString *message, const char *code);
+
 /** Node's "Received ..." clause for `value`, as ERR_INVALID_ARG_TYPE renders it. */
 void mal_node_describe_received(MalVm *vm, MalValue value, char *out, usize capacity);
 

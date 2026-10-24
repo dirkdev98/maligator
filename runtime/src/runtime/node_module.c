@@ -87,7 +87,16 @@ void mal_node_throw_code(MalVm *vm, MalIntrinsic prototype, const char *message,
         mal_vm_throw_allocation_error(vm);
         return;
     }
-    MalValue text_value = mal_value_from_string(text);
+    mal_node_throw_code_string(vm, prototype, text, code);
+}
+
+void mal_node_throw_code_string(
+    MalVm *vm, MalIntrinsic prototype, MalString *message, const char *code) {
+    if (message == nullptr) {
+        mal_vm_throw_allocation_error(vm);
+        return;
+    }
+    MalValue text_value = mal_value_from_string(message);
     MalRootSpan text_root;
     mal_gc_root(&text_root, &text_value, 1);
     mal_vm_throw_error_value(vm, prototype, text_value);
