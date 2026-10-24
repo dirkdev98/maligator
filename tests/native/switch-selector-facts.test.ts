@@ -43,10 +43,7 @@ it.each([
 				{ facts: compilerProgramFactsFromConfig(config), profile },
 			);
 			const boxed = boxSwitchLocals(compiled);
-			// Compiler artifacts omit profile-site tables; instrumented bodies retain their live tables.
-			const image = profile
-				? boxed
-				: deserializeCompilerArtifact(serializeCompilerArtifact(boxed));
+			const image = deserializeCompilerArtifact(serializeCompilerArtifact(boxed));
 			const functions = image.native.functions.filter(
 				(fn) => (fn.literalSwitches?.length ?? 0) > 0,
 			);

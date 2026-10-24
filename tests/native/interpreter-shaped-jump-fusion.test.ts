@@ -95,7 +95,7 @@ const base = testProgramImage({
 });
 const definition: ProgramImage = {
 	...base,
-	diagnostics: { profileSites },
+	profiling: { sites: profileSites },
 };
 
 function run(environment: NodeJS.ProcessEnv = {}) {

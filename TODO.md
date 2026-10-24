@@ -100,13 +100,6 @@ until the consumer admits real sites and measurements establish a benefit.
 The independent target boundary and current storage contract are recorded in
 [native SSA lowering](docs/decisions/native-ssa-lowering.md).
 
-- [ ] Define profiled compiler-artifact restoration. The codec omits profile-site
-      tables, but stored native plans retain profiling restrictions. A profiled
-      `globalThis.result = [1, 2, 3]` fails restoration with an invalid storage plan
-      on `0a2cde61` too: array initialization is admitted again,
-      changing definition initialization and root slots. Preserve or rebind the
-      instrumentation contract before validating such artifacts.
-
 - [ ] Extend selected typed call/aggregate transport and expression regions using
       Core proofs, with bounded code-size decisions and matched runtime evidence.
       Move remaining emission-local selection into explicit native plans before

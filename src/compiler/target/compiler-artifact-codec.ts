@@ -15,6 +15,10 @@ import {
 	compilerIntegerRangeIsValid,
 } from "../shared/integer-range.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
+import {
+	readCompilerProfiling,
+	writeCompilerProfiling,
+} from "./compiler-profile-codec.ts";
 import type { CoreTargetClassLayout } from "./core-target-ir.ts";
 import type { NativeCallbackTransportPlan } from "./lower-native-callbacks.ts";
 import type { NativeCallTransportPlan } from "./lower-native-calls.ts";
@@ -106,7 +110,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 278;
+export const COMPILER_ARTIFACT_VERSION = 279;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -2030,6 +2034,7 @@ function writeCompilerArtifact(
 	def: RuntimeImage,
 	compiler: ProgramImage,
 ): void {
+	writeCompilerProfiling(w, compiler);
 	const semanticProtectors = [...compiler.native.semanticProtectors];
 	if (
 		semanticProtectors.length > 3 ||
@@ -4567,6 +4572,7 @@ function readCompilerArtifact(
 	nativeImage: RuntimeImage,
 ): ProgramImage {
 	const { functions, stringConstants } = nativeImage;
+	const profiling = readCompilerProfiling(r, runtimeImage.functions, functions);
 	const semanticProtectorCount = r.count(3);
 	if (semanticProtectorCount > 3) {
 		throw new RangeError("program-image-codec: too many semantic protector facts");
@@ -6371,6 +6377,9 @@ function readCompilerArtifact(
 		const nativeFunction: NativeFunctionPlan = {
 			storage,
 			body: fn,
+			...(profiling.compilerSiteIds?.[functionIndex] === undefined
+				? {}
+				: { compilerSiteIds: profiling.compilerSiteIds[functionIndex] }),
 			...(storageValues.length === 0 ? {} : { storageValues }),
 			...(specializedOnly ? { specializedOnly: true as const } : {}),
 			functionIndex,
@@ -6424,6 +6433,7 @@ function readCompilerArtifact(
 
 	const definition: ProgramImage = {
 		runtime: runtimeImage,
+		...(profiling.profiling === undefined ? {} : { profiling: profiling.profiling }),
 		native: {
 			semanticProtectors,
 			functions: nativeFunctions,

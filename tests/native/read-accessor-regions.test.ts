@@ -84,7 +84,7 @@ console.log(JSON.stringify({ count: output.length, sum }));`,
 					...(built.programImage.runtime.stringConstants[fn.nameStringIndex] ?? []),
 				),
 			);
-			const sites = built.programImage.diagnostics.profileSites ?? [];
+			const sites = built.programImage.profiling?.sites ?? [];
 			for (const kind of ["operands", "results", "edge"]) {
 				const name =
 					kind === "operands"
@@ -312,7 +312,7 @@ console.log(count);`),
 				"instructionOperandCount",
 				"operandAt",
 			]);
-			const sites = built.programImage.diagnostics.profileSites ?? [];
+			const sites = built.programImage.profiling?.sites ?? [];
 			for (const name of accessors)
 				expect(
 					sites.some((site) => names[site.functionIndex] === name),

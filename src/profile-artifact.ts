@@ -101,7 +101,7 @@ export interface PreparedProfile {
 		file: string;
 		identity: ProfileFunctionIdentity;
 	}>;
-	sites: Array<ProfileSite>;
+	sites: ReadonlyArray<ProfileSite>;
 	remarks: Array<CompilerRemark>;
 	coreOptimizationReport?: CoreOptimizationReport;
 	coreOptimizationPlan?: CoreOptimizationPlan;
@@ -308,7 +308,7 @@ export function prepareProfile(
 			file: image.runtime.files[fn.fileIndex] ?? "<unknown>",
 			identity: identities[index]!,
 		})),
-		sites: image.diagnostics.profileSites ?? [],
+		sites: image.profiling?.sites ?? [],
 		remarks: image.diagnostics.profileRemarks ?? [],
 		coreOptimizationReport: optimization.coreOptimizationReport,
 		coreOptimizationPlan: optimization.coreOptimizationPlan,

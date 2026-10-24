@@ -830,12 +830,12 @@ export function vmCallProvesBuiltin(
 export interface ProgramImage {
 	readonly runtime: RuntimeImage;
 	readonly native: NativePlan;
+	readonly profiling?: { readonly sites: ReadonlyArray<ProfileSite> };
 	/** What later images of a relocatable program compile against; never serialized. */
 	readonly moduleInterfaces?: ReadonlyArray<CoreModuleInterface>;
 	readonly diagnostics: {
 		sourceCallSites?: ReadonlyArray<SourceCallSite>;
 		profileFunctions?: ReadonlyArray<SourceFunctionOrigin | undefined>;
-		profileSites?: Array<ProfileSite>;
 		profileRemarks?: Array<CompilerRemark>;
 		factFlow?: CompilerFactFlowReport;
 	};
@@ -3056,7 +3056,7 @@ export function lowerVerifiedExecutionToProgramImage(
 		}
 		return { family, guard };
 	});
-	const definition: ProgramImage = {
+	let definition: ProgramImage = {
 		runtime,
 		native: remapNativeConstants(
 			{
@@ -3080,7 +3080,7 @@ export function lowerVerifiedExecutionToProgramImage(
 		definition.diagnostics.profileFunctions = program.functionMap.executionToCore.map(
 			(id) => program.core.function(id).metadata.sourceOrigin,
 		);
-		if (profile) buildProfileMetadata(program.core, context, definition);
+		definition = buildProfileMetadata(program.core, context, definition);
 	}
 	if (profile) {
 		definition.diagnostics.factFlow = collectCompilerFactFlowReport(

@@ -106,8 +106,10 @@ Artifact validation independently rederives ordinary and typed-entry choices.
 Captured and module cell stores consume existing scalar result proofs at operand
 zero without joining the cell's other writers into the producer's scalar component.
 Their values stay scalar until the store boxes them. Captured writes retain the
-old-slot barrier; only immediate Number and Boolean values skip new-value carding.
-Dynamic strings and generic arithmetic results keep traced storage and carding.
+old-slot SATB barrier. Semantic Number, Boolean, null and undefined input facts
+omit new-value cards independently of boxed storage, including unions of those
+kinds. Dynamic owner lookup selects an ordinary or non-heap entry into a shared
+store kernel; heap-valued and unknown inputs retain carding.
 Single-write boxed iterator done outputs also omit roots when the existing private
 output contract certifies final-value ownership. Every ordinary, cursor and projected
 step writes a Boolean; default initialization is undefined. Iterator values stay
@@ -124,6 +126,14 @@ defaults. These choices are persisted and validated independently of expression
 selection, including profiled artifacts. Decoded body facts are shared within a
 planning invocation; representations, ownership and suspension reads remain per
 variant, and validation rebuilds facts at the image trust boundary.
+
+`ProgramImage.profiling` owns the dense site catalog because it controls emitted
+counter storage. Compiler artifacts preserve that catalog, separate runtime and
+native instruction-site maps, and native compiler-site identities before validating
+storage. An empty or all-unknown instruction-site map still preserves profiling
+restrictions on producer selection. Runtime wires omit these host tables; source
+origins and optimizer remarks remain diagnostic sidecars.
+
 Read/write occurrences, branch sources, handler and resume entries, and handler
 targets are shared by storage and fast-path consumers. Property-window selection
 visits the shared ordered static-load index; dense window scans still check every
