@@ -776,9 +776,13 @@ contracts or investigates costs still visible after the string follow-ups.
       Node's 19.3, down from 47.9 now that a chain of generic adds keeps its sum
       unboxed. The dispatched `quote` result is still boxed because the fallback call
       can return anything, and `% MOD` runs the generic remainder on the
-      loop-carried checksum. The `accumulator` closure stays a call as well: the
-      inliner rejects captured bindings unless the closure was created in the
-      caller's scope chain.
+      loop-carried checksum. The dispatch itself runs twice: three class cell checks
+      pick the method, then its function index is compared with the same three
+      targets once to decide whether to build `order` and once to pick the direct
+      entry. A class cell's method is runtime state, so calling each entry straight
+      from its class branch needs a fact that nothing reassigns `quote`. The
+      `accumulator` closure stays a call as well: the inliner rejects captured
+      bindings unless the closure was created in the caller's scope chain.
 - [ ] Run inlined `filter` callbacks over an unknown dense Array without per-element
       dispatch. `values.filter((value) => (value & 7) === (round & 7))` over 1024
       numbers takes 5.0 ns per element against Node's 1.2 (3.9 with a constant in
