@@ -285,6 +285,10 @@ The independent target boundary and current storage contract are recorded in
       Coercibility guards consume non-nullish kind unions in full and resumable
       bodies. Frameless entries perform only a rejecting nil probe and leave error
       construction and frame metadata to the full fallback.
+      Generic and exact indexed accesses consume Number and integer-range facts
+      through boxed keys and values. Frameless reads share those proofs; numeric
+      misses retain deferred root publication and check completion before decoding
+      scalar results. Non-numeric keys retain their coercing fallback.
 - [x] Normalize primitive conversion calls from semantic kind unions. Eligible
       `Number` and `String` calls use unary conversions, carrying kind and effect
       proofs into native storage, full entries and frameless numeric paths.

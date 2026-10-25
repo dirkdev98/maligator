@@ -6,8 +6,10 @@ import {
 	COMPILER_VALUE_KIND_NULLISH,
 	COMPILER_VALUE_KIND_OBJECT,
 	COMPILER_VALUE_KIND_SYMBOL,
+	COMPILER_VALUE_KIND_NUMBER,
 } from "../src/compiler/shared/compiler-value-kinds.ts";
 import type { InstructionFacts } from "../src/compiler/shared/instruction-facts.ts";
+import { COMPILER_INT32_RANGE } from "../src/compiler/shared/integer-range.ts";
 import { analyzeNativeBodyFacts } from "../src/compiler/target/native-body-facts.ts";
 import type { NativeControlFlowPlan } from "../src/compiler/target/native-control-flow.ts";
 import { selectNativeStringComparisons } from "../src/compiler/target/native-string-comparisons.ts";
@@ -43,6 +45,7 @@ const NONCOLLECTING_HELPERS = new Set([
 	"mal_vm_load_captured",
 	"mal_vm_as_array",
 	"mal_vm_array_try_get_index",
+	"mal_vm_array_try_get_proven_index",
 ]);
 
 const template = compileSemanticProgramToProgramImage(
@@ -70,6 +73,34 @@ function body(
 
 const OWN_TRY = "mal_compiled_0_try";
 const LENGTH_STRING_INDEX = 7;
+
+it("uses Number and nonnegative integer proofs in frameless indexed reads", () => {
+	const fn = body([
+		{ opcode: "LOAD_PROPERTY", object: 0, key: 1, dst: 2, icIndex: 0 },
+		{ opcode: "RETURN", value: 2 },
+	]);
+	for (const range of [
+		undefined,
+		COMPILER_INT32_RANGE,
+		{ ...COMPILER_INT32_RANGE, minimum: 0 },
+	]) {
+		const lines = fastEntry(fn, () => undefined, true, undefined, [
+			{
+				registers: [2, 0, 1],
+				inputOffset: 1,
+				inputKindMasks: [COMPILER_VALUE_KIND_OBJECT, COMPILER_VALUE_KIND_NUMBER],
+				resultKindMasks: [COMPILER_VALUE_KIND_TOP],
+				inputIntegerRanges: [undefined, range],
+			},
+		])!;
+		expect(lines).toBeDefined();
+		expect(unexpectedHelpers(lines)).toEqual([]);
+		const c = lines.join("\n");
+		expect(c).not.toContain("mal_ops_is_number(f1)");
+		expect(c.includes("mal_vm_array_try_get_proven_index(")).toBe(range !== undefined);
+		expect(c.includes("< 0")).toBe(range !== undefined && range.minimum < 0);
+	}
+});
 
 it.each([
 	COMPILER_VALUE_KIND_TOP,

@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import {
+	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_TOP,
+} from "../src/compiler/shared/compiler-value-kinds.ts";
 import { lowerNativeFunctionStorage } from "../src/compiler/target/lower-native-storage.ts";
 import { createConservativeNativePlan } from "../src/compiler/target/program-image.ts";
 import type {
@@ -107,6 +111,7 @@ function emit(
 	keyRepresentation: VmRegisterRepresentation = "number",
 	plan?: NativeFunctionPlan["instructions"][number],
 	operatorPlan?: NonNullable<NativeFunctionPlan["facts"]>[number],
+	boxedNumberKey = false,
 ): string {
 	const native = createConservativeNativePlan([body]).functions[0]!;
 	return emitCompiledFunction(
@@ -124,7 +129,18 @@ function emit(
 			facts: body.instructions.map((instruction) =>
 				instruction.opcode === "BINARY" || instruction.opcode === "UNARY"
 					? operatorPlan
-					: undefined,
+					: boxedNumberKey && instruction.opcode === "STORE_PROPERTY"
+						? {
+								registers: [instruction.object, instruction.key, instruction.value],
+								inputOffset: 0,
+								inputKindMasks: [
+									COMPILER_VALUE_KIND_TOP,
+									COMPILER_VALUE_KIND_NUMBER,
+									COMPILER_VALUE_KIND_TOP,
+								],
+								resultKindMasks: [],
+							}
+						: undefined,
 			),
 			gc: { safepoints },
 		}),
@@ -179,6 +195,30 @@ function privateSlot(source: string, register: number): number {
 }
 
 describe("native numeric indexed-property root publication", () => {
+	it("defers boxed Number store roots until the numeric probe misses", () => {
+		const source = emit(
+			fn([retainedLoad, key, indexedStore, call, { opcode: "RETURN", value: 6 }]),
+			[
+				point(0, [0, 5], [0, 1, 5]),
+				point(2, [0, 1, 2, 5], [0, 1, 5]),
+				point(3, [0, 1, 3, 4, 5], [6]),
+			],
+			"boxed",
+			undefined,
+			undefined,
+			true,
+		);
+		const slot = privateSlot(source, indexedStore.value);
+		const publication = `__gc_slots[${slot}] = r${indexedStore.value};`;
+		const probe = source.indexOf("mal_vm_array_try_store(");
+		const miss = source.indexOf("mal_vm_indexed_fast_store_index(", probe);
+		expect(probe).toBeGreaterThan(0);
+		expect(miss).toBeGreaterThan(probe);
+		expect(source.slice(probe, miss)).toContain(publication);
+		const priorMiss = source.indexOf("mal_vm_op_load_property_ic_static_miss(");
+		const priorEnd = source.indexOf("\n    }", priorMiss);
+		expect(source.slice(priorEnd, probe)).not.toContain(publication);
+	});
 	it.each(["int32", "number"] as const)(
 		"publishes private store inputs only when the %s dense probe misses",
 		(representation) => {

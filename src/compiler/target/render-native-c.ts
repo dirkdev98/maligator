@@ -6955,7 +6955,9 @@ function emitBody(
 			hasPrivateRoots &&
 			(indexedPropertyInstruction.opcode === "LOAD_PROPERTY" ||
 				indexedPropertyInstruction.opcode === "STORE_PROPERTY") &&
-			isNumericRep(reps[indexedPropertyInstruction.key]!) &&
+			(isNumericRep(reps[indexedPropertyInstruction.key]!) ||
+				instructionInputKind(nativeFacts?.[ip], indexedPropertyInstruction.key) ===
+					COMPILER_VALUE_KIND_NUMBER) &&
 			!staticPropertyProjectionConflicts(ip) &&
 			!stackObjectMaterializations.has(ip) &&
 			!nativeArrayPresenceProjectionActionByIp.has(ip) &&
@@ -8420,7 +8422,7 @@ function emitInstruction(
 		const boolean = nativeBooleanOperand(operand);
 		return boolean === null ? nativeNumberOperand(operand) : `(${boolean} ? 1.0 : 0.0)`;
 	};
-	// Typed Math operands remain numbers when coroutine storage boxes their registers.
+	// Typed numeric contracts survive boxed coroutine and entry storage.
 	const typedNumber = (r: number): string =>
 		reps[r] === "number" || reps[r] === "int32"
 			? num(r)
@@ -9250,13 +9252,13 @@ function emitInstruction(
 			indexedLengthLoopAction?.role === "element" &&
 			indexedLengthLoopAction.element?.kind === "load" &&
 			indexedLengthLoopAction.element.arrayIndexIsUint32
-				? `mal_vm_private_array_try_get_proven_index(${array}, (u32) ${num(instruction.key)}, &${value})`
-				: `mal_vm_private_array_try_get_index(${array}, ${num(instruction.key)}, &${value})`;
+				? `mal_vm_private_array_try_get_proven_index(${array}, (u32) ${typedNumber(instruction.key)}, &${value})`
+				: `mal_vm_private_array_try_get_index(${array}, ${typedNumber(instruction.key)}, &${value})`;
 		return [
 			"MAL_PERF_COUNT(array_contained_element_reads);",
 			`MalValue ${value};`,
 			`if (!${load}) {`,
-			`  ${value} = ${profileCall("property", `mal_vm_indexed_fast_load_index(vm, ${boxed(instruction.object)}, ${num(instruction.key)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}])`)};`,
+			`  ${value} = ${profileCall("property", `mal_vm_indexed_fast_load_index(vm, ${boxed(instruction.object)}, ${typedNumber(instruction.key)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}])`)};`,
 			`  ${throwCheck()}`,
 			`}`,
 			`r${instruction.dst} = ${callValue(instruction.dst, value)};`,
@@ -9269,14 +9271,13 @@ function emitInstruction(
 		const kind = nativeTypedArrayKind(nativePlan.elementKind);
 		const elementSize = nativeTypedArrayElementSize(nativePlan.elementKind);
 		if (instruction.opcode === "LOAD_PROPERTY") {
+			const numericKey = nativeNumberOperand(instruction.key);
+			const index = numericKey ?? `mal_ops_number_as_f64(${boxed(instruction.key)})`;
 			if (
 				nativePlan.kind === "contained-fixed-typed-array-element" &&
 				nativePlan.inBounds
 			) {
 				const array = `__typed_load_${ip}`;
-				const index = isNumericRep(reps[instruction.key]!)
-					? num(instruction.key)
-					: `mal_ops_number_as_f64(${boxed(instruction.key)})`;
 				const bits = `mal_scalar_load_native_u${elementSize * 8}(${array}->buffer->data + ${array}->byte_offset + (usize)(u32)(${index}) * ${elementSize})`;
 				const value =
 					nativePlan.elementKind === "Float64Array"
@@ -9291,17 +9292,27 @@ function emitInstruction(
 					storeNumber(instruction.dst, `(f64)(${value})`),
 				];
 			}
-			const exactLoad = `${nativePlan.kind === "contained-fixed-typed-array-element" ? "mal_vm_contained_fixed_numeric_typed_array_load" : "mal_vm_exact_numeric_typed_array_load"}(mal_value_to_typed_array_object(${boxed(instruction.object)}), mal_vm_typed_array_numeric_index(${isNumericRep(reps[instruction.key]!) ? num(instruction.key) : `mal_ops_number_as_f64(${boxed(instruction.key)})`}), ${kind}, ${elementSize})`;
-			if (isNumericRep(reps[instruction.key]!)) {
+			const exactLoad = `${nativePlan.kind === "contained-fixed-typed-array-element" ? "mal_vm_contained_fixed_numeric_typed_array_load" : "mal_vm_exact_numeric_typed_array_load"}(mal_value_to_typed_array_object(${boxed(instruction.object)}), mal_vm_typed_array_numeric_index(${index}), ${kind}, ${elementSize})`;
+			if (numericKey !== null) {
+				elideFramePosition();
 				return [
 					"MAL_PERF_COUNT(exact_typed_array_loads);",
-					`r${instruction.dst} = ${exactLoad};`,
+					`r${instruction.dst} = ${callValue(instruction.dst, exactLoad)};`,
 				];
 			}
+			if (
+				((operandKind(instruction.key) ?? COMPILER_VALUE_KIND_TOP) &
+					COMPILER_VALUE_KIND_NUMBER) ===
+				0
+			)
+				return [
+					`r${instruction.dst} = ${profileCall("property", `mal_vm_op_load_property_ic(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}])`)};`,
+					throwCheck(),
+				];
 			return [
 				`if (mal_ops_is_number(${boxed(instruction.key)})) {`,
 				"  MAL_PERF_COUNT(exact_typed_array_loads);",
-				`  r${instruction.dst} = ${exactLoad};`,
+				`  r${instruction.dst} = ${callValue(instruction.dst, exactLoad)};`,
 				"} else {",
 				`  r${instruction.dst} = ${profileCall("property", `mal_vm_op_load_property_ic(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}])`)};`,
 				`  ${throwCheck()}`,
@@ -9309,11 +9320,14 @@ function emitInstruction(
 			];
 		}
 		if (instruction.opcode === "STORE_PROPERTY") {
+			const numericKey = nativeNumberOperand(instruction.key);
+			const numericValue = nativeNumberOperand(instruction.value);
+			const key = numericKey ?? `mal_ops_number_as_f64(${boxed(instruction.key)})`;
 			// Containment prevents buffer exposure; numeric operands need no observable coercion.
 			if (
 				nativePlan.kind === "contained-fixed-typed-array-element" &&
-				(nativePlan.inBounds || isNumericRep(reps[instruction.key]!)) &&
-				isNumericRep(reps[instruction.value]!)
+				(nativePlan.inBounds || numericKey !== null) &&
+				numericValue !== null
 			) {
 				const array = `__typed_store_${ip}`;
 				const index = `__typed_store_index_${ip}`;
@@ -9321,22 +9335,31 @@ function emitInstruction(
 					nativePlan.elementKind === "Uint8ClampedArray"
 						? reps[instruction.value] === "int32"
 							? `(r${instruction.value} <= 0 ? 0 : r${instruction.value} >= 255 ? 255 : (u8) r${instruction.value})`
-							: `mal_typed_array_to_uint8_clamp(${num(instruction.value)})`
+							: `mal_typed_array_to_uint8_clamp(${numericValue})`
 						: nativePlan.elementKind === "Float64Array"
-							? `mal_scalar_f64_to_bits(${num(instruction.value)})`
+							? `mal_scalar_f64_to_bits(${numericValue})`
 							: nativePlan.elementKind === "Float32Array"
-								? `mal_scalar_f32_to_bits((f32) ${num(instruction.value)})`
+								? `mal_scalar_f32_to_bits((f32) ${numericValue})`
 								: `(u${elementSize * 8}) ${nativeInt32Operand(instruction.value)!}`;
 				return [
 					`MalTypedArrayObject *${array} = mal_value_to_typed_array_object(${boxed(instruction.object)});`,
-					`u32 ${index} = ${nativePlan.inBounds ? `(u32)(${isNumericRep(reps[instruction.key]!) ? num(instruction.key) : `mal_ops_number_as_f64(${boxed(instruction.key)})`})` : `mal_vm_typed_array_numeric_index(${num(instruction.key)})`};`,
+					`u32 ${index} = ${nativePlan.inBounds ? `(u32)(${key})` : `mal_vm_typed_array_numeric_index(${key})`};`,
 					...(nativePlan.inBounds ? [] : [`if (${index} < ${array}->length) {`]),
 					`  mal_scalar_store_native_u${elementSize * 8}(${array}->buffer->data + ${array}->byte_offset + (usize) ${index} * ${elementSize}, ${storedBits});`,
 					...(nativePlan.inBounds ? [] : [`}`]),
 				];
 			}
-			const exactStore = `mal_vm_numeric_typed_array_store_known_receiver(vm, mal_value_to_typed_array_object(${boxed(instruction.object)}), ${isNumericRep(reps[instruction.key]!) ? num(instruction.key) : `mal_ops_number_as_f64(${boxed(instruction.key)})`}, ${boxed(instruction.value)}, ${strict});`;
-			if (isNumericRep(reps[instruction.key]!)) return [exactStore, throwCheck()];
+			const exactStore = `mal_vm_numeric_typed_array_store_known_receiver(vm, mal_value_to_typed_array_object(${boxed(instruction.object)}), ${key}, ${boxed(instruction.value)}, ${strict});`;
+			if (numericKey !== null) return [exactStore, throwCheck()];
+			if (
+				((operandKind(instruction.key) ?? COMPILER_VALUE_KIND_TOP) &
+					COMPILER_VALUE_KIND_NUMBER) ===
+				0
+			)
+				return [
+					`mal_vm_indexed_fast_store(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${strict}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}]);`,
+					throwCheck(),
+				];
 			return [
 				`if (mal_ops_is_number(${boxed(instruction.key)})) {`,
 				`  ${exactStore}`,
@@ -10406,12 +10429,7 @@ function emitInstruction(
 					`}`,
 				];
 			}
-			// Per-site monomorphic inline cache (a static, zero-initialized → starts empty).
-			// A hit is a direct slot/element read with no shape search or key conversion, and
-			// runs no user code. The hit writes a short-lived temp,
-			// not &r${dst}: address-taking the long-lived destination register would pin it to
-			// the stack across the whole function; the temp promotes back to a register once
-			// the try_* helper inlines.
+			// Cache hits cannot collect; misses publish roots before calling user code.
 			const receiverName = `__property_receiver_${ip}`;
 			// An exact Array receiver needs no class test and is never a TypedArray.
 			const exactArray = nativePlan?.kind === "exact-array-element";
@@ -10420,46 +10438,63 @@ function emitInstruction(
 				: `mal_vm_as_array(${boxed(instruction.object)})`;
 			const arrayPresent = exactArray ? "" : `${receiverName} && `;
 			if (instruction.opcode === "LOAD_PROPERTY") {
-				const ordinary = (position: ReadonlyArray<string> = []): Array<string> =>
-					isNumericRep(reps[instruction.key]!)
-						? [
-								`MalArrayObject *${receiverName} = ${arrayReceiver};`,
-								`MalValue __v_${ip};`,
-								reps[instruction.key] === "int32"
-									? `if (${arrayPresent}r${instruction.key} >= 0 && mal_vm_array_try_get_proven_index(${receiverName}, (u32) r${instruction.key}, &__v_${ip})) {`
-									: `if (${arrayPresent}mal_vm_array_try_get_index(${receiverName}, ${num(instruction.key)}, &__v_${ip})) {`,
-								`  r${instruction.dst} = ${callValue(instruction.dst, `__v_${ip}`)};`,
-								// Numeric TypedArray elements read without allocating, collecting or calling.
-								...(exactArray
-									? []
-									: [
-											`} else if (${receiverName} == nullptr && mal_vm_typed_array_try_get_index(${boxed(instruction.object)}, ${num(instruction.key)}, &__v_${ip})) {`,
-											`  r${instruction.dst} = ${callValue(instruction.dst, `__v_${ip}`)};`,
-										]),
-								`} else {`,
-								...position,
-								...(context.incomingRootPublication ?? []).map((line) => `  ${line}`),
-								...(context.indexedPropertyInactiveRootMask === undefined
-									? []
-									: [
-											`  ${cInactiveRootMaskPublication(context.indexedPropertyInactiveRootMask, context.inactiveRootMaskStatements)};`,
-										]),
-								`  r${instruction.dst} = ${profileCall("property", `mal_vm_indexed_fast_load_index(vm, ${boxed(instruction.object)}, ${num(instruction.key)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}])`)};`,
-								`  ${throwCheck()}`,
-								`}`,
-							]
+				const numericKey = nativeNumberOperand(instruction.key);
+				const int32Key =
+					numericKey !== null &&
+					(reps[instruction.key] === "int32" ||
+						instructionInputIsInt32(context.facts, instruction.key))
+						? nativeInt32Operand(instruction.key)
+						: null;
+				const indexBound =
+					(instructionInputIntegerRange(context.facts, instruction.key)?.minimum ?? -1) >=
+					0
+						? ""
+						: `${int32Key} >= 0 && `;
+				const fallback = (position: ReadonlyArray<string>): Array<string> => [
+					...position,
+					...(context.incomingRootPublication ?? []).map((line) => `  ${line}`),
+					...(context.indexedPropertyInactiveRootMask === undefined
+						? []
 						: [
-								// Dense Array element reads dominate boxed-key loads; other receivers keep the out-of-line helper.
-								`MalArrayObject *${receiverName} = ${arrayReceiver};`,
-								`MalValue __v_${ip};`,
-								`if (${arrayPresent}mal_vm_array_try_get_value_index(${receiverName}, ${boxed(instruction.key)}, &__v_${ip})) {`,
-								`  r${instruction.dst} = ${callValue(instruction.dst, `__v_${ip}`)};`,
-								`} else {`,
-								...position,
-								`  r${instruction.dst} = mal_vm_indexed_fast_load(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}]);`,
-								`  ${throwCheck()}`,
-								`}`,
-							];
+								`  ${cInactiveRootMaskPublication(context.indexedPropertyInactiveRootMask, context.inactiveRootMaskStatements)};`,
+							]),
+					...boxedLoad(
+						instruction.dst,
+						numericKey !== null
+							? profileCall(
+									"property",
+									`mal_vm_indexed_fast_load_index(vm, ${boxed(instruction.object)}, ${numericKey}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}])`,
+								)
+							: `mal_vm_indexed_fast_load(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}])`,
+					).map((line) => `  ${line}`),
+				];
+				const ordinary = (position: ReadonlyArray<string> = []): Array<string> => {
+					if (
+						((operandKind(instruction.key) ?? COMPILER_VALUE_KIND_TOP) &
+							COMPILER_VALUE_KIND_NUMBER) ===
+						0
+					)
+						return fallback(position);
+					return [
+						`MalArrayObject *${receiverName} = ${arrayReceiver};`,
+						`MalValue __v_${ip};`,
+						int32Key !== null
+							? `if (${arrayPresent}${indexBound}mal_vm_array_try_get_proven_index(${receiverName}, (u32) ${int32Key}, &__v_${ip})) {`
+							: numericKey !== null
+								? `if (${arrayPresent}mal_vm_array_try_get_index(${receiverName}, ${numericKey}, &__v_${ip})) {`
+								: `if (${arrayPresent}mal_vm_array_try_get_value_index(${receiverName}, ${boxed(instruction.key)}, &__v_${ip})) {`,
+						`  r${instruction.dst} = ${callValue(instruction.dst, `__v_${ip}`)};`,
+						...(numericKey === null || exactArray
+							? []
+							: [
+									`} else if (${receiverName} == nullptr && mal_vm_typed_array_try_get_index(${boxed(instruction.object)}, ${numericKey}, &__v_${ip})) {`,
+									`  r${instruction.dst} = ${callValue(instruction.dst, `__v_${ip}`)};`,
+								]),
+						`} else {`,
+						...fallback(position),
+						`}`,
+					];
+				};
 				if (nativeArrayPresenceProjectionAction?.role === "load") {
 					const membershipIp = nativeArrayPresenceProjectionAction.membershipIp;
 					const state = `__array_presence_${membershipIp}_state`;
@@ -10477,7 +10512,7 @@ function emitInstruction(
 					const { plan } = pairedArrayLoopAction;
 					return [
 						`MalValue __paired_element_${ip};`,
-						`if (__paired_array_${plan.id}_fast && __paired_array_${plan.id}_secondary == mal_vm_as_array(${boxed(instruction.object)}) && mal_vm_array_try_get_proven_index(__paired_array_${plan.id}_secondary, (u32) ${num(instruction.key)}, &__paired_element_${ip})) {`,
+						`if (__paired_array_${plan.id}_fast && __paired_array_${plan.id}_secondary == mal_vm_as_array(${boxed(instruction.object)}) && mal_vm_array_try_get_proven_index(__paired_array_${plan.id}_secondary, (u32) ${typedNumber(instruction.key)}, &__paired_element_${ip})) {`,
 						`  r${instruction.dst} = ${callValue(instruction.dst, `__paired_element_${ip}`)};`,
 						`} else {`,
 						...ordinary().map((line) => `  ${line}`),
@@ -10491,13 +10526,14 @@ function emitInstruction(
 					const id = indexedLengthLoopAction.loadIp;
 					const numericKeyGuard =
 						indexedLengthLoopAction.site.reverseInduction !== undefined &&
-						!isNumericRep(reps[instruction.key]!)
+						nativeNumberOperand(instruction.key) === null
 							? `mal_ops_is_number(${boxed(instruction.key)}) && `
 							: "";
 					const numericKey =
-						indexedLengthLoopAction.site.reverseInduction !== undefined
+						nativeNumberOperand(instruction.key) ??
+						(indexedLengthLoopAction.site.reverseInduction !== undefined
 							? `mal_ops_number_as_f64(${boxed(instruction.key)})`
-							: num(instruction.key);
+							: typedNumber(instruction.key));
 					const arrayLoad = indexedLengthLoopAction.element.arrayIndexIsUint32
 						? `mal_vm_array_try_get_proven_index(__indexed_length_${id}_array, (u32) ${numericKey}, &__indexed_element_${ip})`
 						: `mal_vm_array_try_get_index(__indexed_length_${id}_array, ${numericKey}, &__indexed_element_${ip})`;
@@ -10784,32 +10820,49 @@ function emitInstruction(
 				: `mal_vm_as_array(${boxed(instruction.object)})`;
 			const arrayPresent = exactArray ? "" : `${receiverName} && `;
 			if (instruction.opcode === "STORE_PROPERTY") {
-				const ordinary = (position: ReadonlyArray<string> = []): Array<string> =>
-					isNumericRep(reps[instruction.key]!)
-						? [
-								`MalArrayObject *${receiverName} = ${arrayReceiver};`,
-								reps[instruction.key] === "int32"
-									? `if (!(${arrayPresent}r${instruction.key} >= 0 && mal_vm_array_try_store_proven_index(${receiverName}, (u32) r${instruction.key}, ${boxed(instruction.value)}))) {`
-									: `if (!(${arrayPresent}mal_vm_array_try_store(${receiverName}, ${num(instruction.key)}, ${boxed(instruction.value)}))) {`,
-								...position,
-								...(context.incomingRootPublication ?? []).map((line) => `  ${line}`),
-								...(context.indexedPropertyInactiveRootMask === undefined
-									? []
-									: [
-											`  ${cInactiveRootMaskPublication(context.indexedPropertyInactiveRootMask, context.inactiveRootMaskStatements)};`,
-										]),
-								`  ${profileCall("property", `mal_vm_indexed_fast_store_index(vm, ${boxed(instruction.object)}, ${num(instruction.key)}, ${boxed(instruction.value)}, ${strict}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}])`)};`,
-								`  ${throwCheck()}`,
-								`}`,
-							]
+				const numericKey = nativeNumberOperand(instruction.key);
+				const int32Key =
+					numericKey !== null &&
+					(reps[instruction.key] === "int32" ||
+						instructionInputIsInt32(context.facts, instruction.key))
+						? nativeInt32Operand(instruction.key)
+						: null;
+				const indexBound =
+					(instructionInputIntegerRange(context.facts, instruction.key)?.minimum ?? -1) >=
+					0
+						? ""
+						: `${int32Key} >= 0 && `;
+				const fallback = (position: ReadonlyArray<string>): Array<string> => [
+					...position,
+					...(context.incomingRootPublication ?? []).map((line) => `  ${line}`),
+					...(context.indexedPropertyInactiveRootMask === undefined
+						? []
 						: [
-								`MalArrayObject *${receiverName} = ${arrayReceiver};`,
-								`if (!(${arrayPresent}mal_vm_array_try_store_value_index(${receiverName}, ${boxed(instruction.key)}, ${boxed(instruction.value)}))) {`,
-								...position,
-								`  mal_vm_indexed_fast_store(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${strict}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}]);`,
-								`  ${throwCheck()}`,
-								`}`,
-							];
+								`  ${cInactiveRootMaskPublication(context.indexedPropertyInactiveRootMask, context.inactiveRootMaskStatements)};`,
+							]),
+					numericKey !== null
+						? `  ${profileCall("property", `mal_vm_indexed_fast_store_index(vm, ${boxed(instruction.object)}, ${numericKey}, ${boxed(instruction.value)}, ${strict}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}])`)};`
+						: `  mal_vm_indexed_fast_store(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${strict}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}]);`,
+					`  ${throwCheck()}`,
+				];
+				const ordinary = (position: ReadonlyArray<string> = []): Array<string> => {
+					if (
+						((operandKind(instruction.key) ?? COMPILER_VALUE_KIND_TOP) &
+							COMPILER_VALUE_KIND_NUMBER) ===
+						0
+					)
+						return fallback(position);
+					return [
+						`MalArrayObject *${receiverName} = ${arrayReceiver};`,
+						int32Key !== null
+							? `if (!(${arrayPresent}${indexBound}mal_vm_array_try_store_proven_index(${receiverName}, (u32) ${int32Key}, ${boxed(instruction.value)}))) {`
+							: numericKey !== null
+								? `if (!(${arrayPresent}mal_vm_array_try_store(${receiverName}, ${numericKey}, ${boxed(instruction.value)}))) {`
+								: `if (!(${arrayPresent}mal_vm_array_try_store_value_index(${receiverName}, ${boxed(instruction.key)}, ${boxed(instruction.value)}))) {`,
+						...fallback(position),
+						`}`,
+					];
+				};
 				if (
 					indexedLengthLoopAction?.role === "element" &&
 					indexedLengthLoopAction.element?.kind === "store"
@@ -10817,13 +10870,14 @@ function emitInstruction(
 					const id = indexedLengthLoopAction.loadIp;
 					const numericKeyGuard =
 						indexedLengthLoopAction.site.reverseInduction !== undefined &&
-						!isNumericRep(reps[instruction.key]!)
+						nativeNumberOperand(instruction.key) === null
 							? `mal_ops_is_number(${boxed(instruction.key)}) && `
 							: "";
 					const numericKey =
-						indexedLengthLoopAction.site.reverseInduction !== undefined
+						nativeNumberOperand(instruction.key) ??
+						(indexedLengthLoopAction.site.reverseInduction !== undefined
 							? `mal_ops_number_as_f64(${boxed(instruction.key)})`
-							: num(instruction.key);
+							: typedNumber(instruction.key));
 					return [
 						`if (__indexed_length_${id}_kind == 1 && ${numericKeyGuard}mal_vm_array_try_store(__indexed_length_${id}_array, ${numericKey}, ${boxed(instruction.value)})) {`,
 						`} else if (__indexed_length_${id}_kind == 2) {`,
@@ -10834,9 +10888,7 @@ function emitInstruction(
 						`}`,
 					];
 				}
-				return isNumericRep(reps[instruction.key]!)
-					? ordinary(slowPathFramePosition())
-					: ordinary();
+				return numericKey !== null ? ordinary(slowPathFramePosition()) : ordinary();
 			}
 			const probe = (): string =>
 				`${receiverName} && mal_vm_object_try_store_static(${receiverName}, ${boxed(instruction.value)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}])`;

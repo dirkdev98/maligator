@@ -695,8 +695,19 @@ function fastInstruction(
 				: "mal_vm_property_try_load_static";
 			return `if (!${probe}(vm, f${op.object}, &__fast_ic[${op.icIndex}], &f${op.dst})) goto __full;`;
 		}
-		case "LOAD_PROPERTY":
-			return `{ MalArrayObject *const __array = mal_vm_as_array(f${op.object}); if (__array == nullptr || !mal_ops_is_number(f${op.key}) || !mal_vm_array_try_get_index(__array, mal_ops_number_as_f64(f${op.key}), &f${op.dst})) goto __full; }`;
+		case "LOAD_PROPERTY": {
+			const failure = numbers(values, op.key);
+			if (failure === "true") return undefined;
+			const guard = failure === "false" ? "" : `${failure} || `;
+			const integral = values.isInt32(op.key) || integers.has(op.key);
+			const index = integral ? int32(values, op.key) : number(values, op.key);
+			const bound =
+				integral && (values.range(op.key)?.minimum ?? -1) < 0 ? `${index} < 0 || ` : "";
+			const probe = integral
+				? `mal_vm_array_try_get_proven_index(__array, (u32) ${index}, &f${op.dst})`
+				: `mal_vm_array_try_get_index(__array, ${index}, &f${op.dst})`;
+			return `{ MalArrayObject *const __array = mal_vm_as_array(f${op.object}); if (__array == nullptr || ${guard}${bound}!${probe}) goto __full; }`;
+		}
 		case "BINARY":
 			return fastBinary(op, values);
 		case "UNARY":
