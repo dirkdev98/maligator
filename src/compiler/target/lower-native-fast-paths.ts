@@ -3417,7 +3417,7 @@ export function analyzeNativeFastPaths(
 	body = analyzeNativeBodyFacts(native.body),
 ): {
 	readonly plans: NativeFastPathPlans;
-	readonly refineVirtualValues: (body: NativeBodyFacts) => NativeFastPathPlans;
+	readonly refineOverlays: (body: NativeBodyFacts) => NativeFastPathPlans;
 } {
 	const fn = native.body;
 	const { handlerEntries, jumpTargets, branchSources } = body;
@@ -3875,7 +3875,7 @@ export function analyzeNativeFastPaths(
 	};
 	return {
 		plans,
-		refineVirtualValues(projected) {
+		refineOverlays(projected) {
 			if (projected.projection === undefined) return plans;
 			// Overlay consumers own storage but never introduce helper entry points.
 			const reserved = new Set<number>();
@@ -3883,6 +3883,8 @@ export function analyzeNativeFastPaths(
 				for (const ip of window.claimedIps) reserved.add(ip);
 			const unavailable = new Set([...spanBlocked, ...reserved]);
 			for (const plan of plans.objectEnumerationSnapshots)
+				for (const ip of plan.claimedIps) unavailable.add(ip);
+			for (const plan of plans.mapEntries)
 				for (const ip of plan.claimedIps) unavailable.add(ip);
 			const spanContinuations = selectNativeSpanContinuations(
 				native,
@@ -3893,14 +3895,23 @@ export function analyzeNativeFastPaths(
 			const enumerationUnavailable = new Set([...enumerationBlocked, ...reserved]);
 			for (const plan of spanContinuations)
 				for (const ip of plan.claimedIps) enumerationUnavailable.add(ip);
+			for (const plan of plans.mapEntries)
+				for (const ip of plan.claimedIps) enumerationUnavailable.add(ip);
+			const objectEnumerationSnapshots = selectNativeObjectEnumerationSnapshots(
+				native,
+				projected,
+				stringConstants,
+				(ip) => enumerationUnavailable.has(ip),
+			);
+			const mapUnavailable = new Set([...mapEntryBlocked, ...pollingEdges, ...reserved]);
+			for (const plan of [...spanContinuations, ...objectEnumerationSnapshots])
+				for (const ip of plan.claimedIps) mapUnavailable.add(ip);
 			return {
 				...plans,
 				spanContinuations,
-				objectEnumerationSnapshots: selectNativeObjectEnumerationSnapshots(
-					native,
-					projected,
-					stringConstants,
-					(ip) => enumerationUnavailable.has(ip),
+				objectEnumerationSnapshots,
+				mapEntries: selectNativeMapEntries(native, projected, (ip) =>
+					mapUnavailable.has(ip),
 				),
 			};
 		},
@@ -3909,7 +3920,7 @@ export function analyzeNativeFastPaths(
 
 export function nativeFastPathWindows(
 	fastPaths: NativeFastPathPlans,
-	includeVirtualValues = true,
+	includeOverlays = true,
 ) {
 	return [
 		...fastPaths.propertyProjections,
@@ -3919,9 +3930,12 @@ export function nativeFastPathWindows(
 		...fastPaths.numberRecordRegions,
 		...fastPaths.numericLoopRegions,
 		...fastPaths.arrayInitializations,
-		...fastPaths.mapEntries,
-		...(includeVirtualValues
-			? [...fastPaths.objectEnumerationSnapshots, ...fastPaths.spanContinuations]
+		...(includeOverlays
+			? [
+					...fastPaths.mapEntries,
+					...fastPaths.objectEnumerationSnapshots,
+					...fastPaths.spanContinuations,
+				]
 			: []),
 		...fastPaths.pairedArrayLoops,
 		...fastPaths.arrayPresence,

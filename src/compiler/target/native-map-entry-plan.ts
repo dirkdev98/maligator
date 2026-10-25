@@ -1,6 +1,5 @@
 import type { NativeBodyFacts } from "./native-body-facts.ts";
 import type { NativeFunctionPlan } from "./program-image.ts";
-import { vmInstructionWriteRegisters } from "./runtime-image.ts";
 
 export interface NativeMapEntryPlan {
 	readonly getIp: number;
@@ -13,14 +12,18 @@ function entryPaths(native: NativeFunctionPlan, body: NativeBodyFacts) {
 	const successors = native.body.instructions.map(() => new Array<number>());
 	const predecessors = native.body.instructions.map(() => new Array<number>());
 	for (const [ip, op] of native.body.instructions.entries()) {
+		if (body.projection?.unreachable.has(ip)) continue;
 		const add = (target: number) => {
 			if (target < 0 || target >= successors.length || successors[ip]!.includes(target))
 				return;
 			successors[ip]!.push(target);
 			predecessors[target]!.push(ip);
 		};
-		if (op.opcode === "JUMP" || op.opcode === "JUMP_IF") add(op.targetIp);
+		const fixed = body.projection?.branches.get(ip);
+		if (fixed !== undefined) add(fixed);
+		else if (op.opcode === "JUMP" || op.opcode === "JUMP_IF") add(op.targetIp);
 		if (
+			fixed === undefined &&
 			op.opcode !== "JUMP" &&
 			op.opcode !== "RETURN" &&
 			op.opcode !== "THROW" &&
@@ -72,6 +75,7 @@ export function selectNativeMapEntries(
 	const originOf = (register: number) => origins.get(register) ?? `register:${register}`;
 	// Origins only predict reuse: each update revalidates the current receiver, live index and key.
 	for (const [ip, op] of fn.instructions.entries()) {
+		if (body.projection?.unreachable.has(ip)) continue;
 		const plan = native.instructions[ip];
 		const operation =
 			op.opcode === "CALL_KNOWN"
@@ -99,7 +103,7 @@ export function selectNativeMapEntries(
 				: op.opcode === "LOAD_GLOBAL"
 					? `global:${op.index}`
 					: undefined;
-		for (const register of vmInstructionWriteRegisters(op))
+		for (const register of body.writes[ip]!)
 			origins.set(register, `value:${ip}:${register}`);
 		if (origin !== undefined && "dst" in op) origins.set(op.dst, origin);
 	}

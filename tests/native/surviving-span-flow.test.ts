@@ -97,6 +97,18 @@ it.each(["mutable", "locked"] as const)(
 					),
 				),
 			).toBe(true);
+			const reuse = restored.native.functions.find(
+				(fn) =>
+					String.fromCharCode(
+						...(restored.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+					) === "mapReusePath",
+			)!;
+			expect(reuse.storage!.mapEntries).toHaveLength(2);
+			const reuseEntry = reuse.directEntries.find(
+				(entry) => entry.parameterRepresentations[1] === "string",
+			)!;
+			expect(reuseEntry).toBeDefined();
+			expect(reuseEntry.storage!.mapEntries).toEqual([]);
 			for (const compiled of [true, false]) {
 				const binary = buildNativeProgramImage(restored, {
 					name: `surviving-span-${primordials}-${compiled}`,

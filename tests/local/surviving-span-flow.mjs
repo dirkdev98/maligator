@@ -9,6 +9,20 @@ function collectionPath(record, flag) {
 	if (flag !== flag) record.set(1, "dead");
 	return record.get(2);
 }
+function mapReusePath(record, flag, observe) {
+	const first = record.get(1);
+	const second = record.get(2);
+	observe(record);
+	if (flag !== flag) {
+		record.set(1, first);
+		record.set(2, second);
+	}
+	return [first, second];
+}
+function invalidateEntries(record) {
+	collect();
+	if (record instanceof Map) record.clear();
+}
 function observe(value) {
 	observed++;
 	collect();
@@ -96,7 +110,18 @@ try {
 	rows.push(error.name);
 }
 globalThis.collectionPath = collectionPath;
+globalThis.mapReusePath = mapReusePath;
 rows.push(collectionPath(new Map([[2, { label: "direct" }]]), "string"));
+rows.push(
+	mapReusePath(
+		new Map([
+			[1, { label: "first" }],
+			[2, { label: "second" }],
+		]),
+		"string",
+		invalidateEntries,
+	),
+);
 const collectingMethods = {
 	get set() {
 		collect();
@@ -138,6 +163,11 @@ for (const record of [
 	for (const flag of ["string", NaN]) {
 		try {
 			rows.push(collectionPath(record, flag));
+		} catch (error) {
+			rows.push(error.name, error.message === "live-set");
+		}
+		try {
+			rows.push(mapReusePath(record, flag, invalidateEntries));
 		} catch (error) {
 			rows.push(error.name, error.message === "live-set");
 		}

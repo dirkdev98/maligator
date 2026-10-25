@@ -261,8 +261,9 @@ The independent target boundary and current storage contract are recorded in
       lifetimes, retaining fallback materialization and profiled observations.
       Map hint sites also have Core collection-chain entry certificates; retiring
       dead certificates now closes helper reachability from surviving entries while
-      retaining every continuation of a live helper. Map reuse hints still need
-      projected lifetime selection before their own entry roots can be retired.
+      retaining every continuation of a live helper. Map reuse hints also consume
+      projected edges and aliases; dead endpoints no longer retain hint locals or
+      their Core call chains, while live updates retain receiver and key checks.
 - [x] Normalize primitive conversion calls from semantic kind unions. Eligible
       `Number` and `String` calls use unary conversions, carrying kind and effect
       proofs into native storage, full entries and frameless numeric paths.
