@@ -1,19 +1,42 @@
-import { execFileSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { createInterface } from "node:readline";
 import { beforeAll, describe, expect, it } from "vitest";
 import { HOST_MODULES } from "../../src/compiler/frontend/host-modules.ts";
 import { buildNativeBinary, HOST_MAIN } from "../../src/test-harness.ts";
 
-function retainedHostInstallers(binary: string): Array<string> {
-	return execFileSync("nm", ["-g", binary], { encoding: "utf-8" })
-		.split("\n")
-		.filter((line) => /\sT\s/.test(line))
-		.map((line) => line.trim().split(/\s+/).at(-1) ?? "")
-		.map((symbol) => (symbol.startsWith("_") ? symbol.slice(1) : symbol))
-		.filter((symbol) => symbol.startsWith("mal_host_install_"))
-		.sort();
+async function retainedHostInstallers(binary: string): Promise<Array<string>> {
+	const child = spawn("nm", ["-g", binary], { stdio: ["ignore", "pipe", "pipe"] });
+	const symbols: Array<string> = [];
+	let stderr = "";
+	child.stderr.setEncoding("utf-8");
+	child.stderr.on("data", (chunk: string) => {
+		stderr = (stderr + chunk).slice(-8192);
+	});
+	const completion = new Promise<void>((resolve, reject) => {
+		child.on("error", reject);
+		child.on("close", (code, signal) => {
+			if (code === 0) resolve();
+			else reject(new Error(`nm failed (${signal ?? code}): ${stderr}`));
+		});
+	});
+	await Promise.all([
+		completion,
+		(async () => {
+			for await (const line of createInterface({
+				input: child.stdout,
+				crlfDelay: Infinity,
+			})) {
+				if (!/\sT\s/.test(line)) continue;
+				const raw = line.trim().split(/\s+/).at(-1) ?? "";
+				const symbol = raw.startsWith("_") ? raw.slice(1) : raw;
+				if (symbol.startsWith("mal_host_install_")) symbols.push(symbol);
+			}
+		})(),
+	]);
+	return symbols.sort();
 }
 
 // The host main always links the application API and the worker runtime it shuts down,
@@ -30,10 +53,10 @@ describe("node host installer link retention", () => {
 	let bufferInstallers: Array<string>;
 	let deadBufferInstallers: Array<string>;
 
-	function installers(fixture: string, name: string): Array<string> {
+	async function installers(fixture: string, name: string): Promise<Array<string>> {
 		const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-node-link-retention-"));
 		try {
-			return retainedHostInstallers(
+			return await retainedHostInstallers(
 				buildNativeBinary({
 					fixture,
 					name,
@@ -47,18 +70,21 @@ describe("node host installer link retention", () => {
 		}
 	}
 
-	beforeAll(() => {
-		pathInstallers = installers("tests/local/node-link-path.mjs", "node-link-path");
-		processInstallers = installers(
+	beforeAll(async () => {
+		pathInstallers = await installers("tests/local/node-link-path.mjs", "node-link-path");
+		processInstallers = await installers(
 			"tests/local/node-link-process.mjs",
 			"node-link-process",
 		);
-		deadPathInstallers = installers(
+		deadPathInstallers = await installers(
 			"tests/local/node-link-dead-path.mjs",
 			"node-link-dead-path",
 		);
-		bufferInstallers = installers("tests/local/node-link-buffer.mjs", "node-link-buffer");
-		deadBufferInstallers = installers(
+		bufferInstallers = await installers(
+			"tests/local/node-link-buffer.mjs",
+			"node-link-buffer",
+		);
+		deadBufferInstallers = await installers(
 			"tests/local/node-link-dead-buffer.mjs",
 			"node-link-dead-buffer",
 		);

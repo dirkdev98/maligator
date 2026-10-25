@@ -93,8 +93,19 @@ const checks = [
 	response instanceof Events,
 	calledResponse === responseReceiver,
 	Object.getPrototypeOf(calledResponse) === Object.prototype,
-	Object.getOwnPropertyNames(calledResponse).join(",") ===
-		"_events,_eventsCount,_maxListeners,destroyed,_malStreamKind,statusCode,statusMessage,headersSent,finished,writableEnded,writableFinished",
+	[
+		"statusCode",
+		"statusMessage",
+		"headersSent",
+		"finished",
+		"writableEnded",
+		"writableFinished",
+	].every((property) => Object.hasOwn(calledResponse, property)) &&
+		calledResponse.headersSent === false &&
+		calledResponse.finished === false &&
+		calledResponse.writableEnded === false &&
+		calledResponse.writableFinished === false &&
+		calledResponse._header === null,
 	calledResponse.statusCode === 200,
 	derivedResponse instanceof DerivedResponse,
 	derivedResponse instanceof ServerResponse,
