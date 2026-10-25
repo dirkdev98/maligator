@@ -4,8 +4,60 @@ import {
 	COMPILER_VALUE_KIND_BOOLEAN,
 	COMPILER_VALUE_KIND_STRING,
 	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE,
+	COMPILER_NUMERIC_BINARY_OPERATORS,
+	compilerValueKindMaskIsSubset,
 } from "../shared/compiler-value-kinds.ts";
 import type { CompilerValueKindMask } from "../shared/compiler-value-kinds.ts";
+
+// Guards license primitive Number conversion; a fallback must retain the original operands.
+export function nativeBinaryNumberInputs(
+	operator: string,
+	leftKind: CompilerValueKindMask,
+	rightKind: CompilerValueKindMask,
+	left: string,
+	right: string,
+):
+	| {
+			readonly masks: readonly [CompilerValueKindMask, CompilerValueKindMask];
+			readonly guard: string;
+	  }
+	| undefined {
+	const relational =
+		operator === "<" || operator === "<=" || operator === ">" || operator === ">=";
+	if (!relational && !COMPILER_NUMERIC_BINARY_OPERATORS.has(operator)) return undefined;
+	const guards: Array<string> = [];
+	const input = (kind: CompilerValueKindMask, value: string): CompilerValueKindMask => {
+		if (!compilerValueKindMaskIsSubset(kind, COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE)) {
+			if ((kind & COMPILER_VALUE_KIND_NUMBER) === 0) return 0;
+			guards.push(`mal_ops_is_number(${value})`);
+			return COMPILER_VALUE_KIND_NUMBER;
+		}
+		if (operator !== "+" || (kind & COMPILER_VALUE_KIND_STRING) === 0) return kind;
+		guards.push(`!mal_value_is_string(${value})`);
+		return kind & ~COMPILER_VALUE_KIND_STRING;
+	};
+	const leftMask = input(leftKind, left);
+	const rightMask = input(rightKind, right);
+	if (leftMask === 0 || rightMask === 0) return undefined;
+	if (relational && (leftMask & rightMask & COMPILER_VALUE_KIND_STRING) !== 0) {
+		// Two Strings compare lexically; converting either of them changes the result.
+		const strings = [
+			[leftMask, left],
+			[rightMask, right],
+		] as const;
+		const tests = [
+			...new Set(
+				strings
+					.filter(([mask]) => mask !== COMPILER_VALUE_KIND_STRING)
+					.map(([, value]) => `mal_value_is_string(${value})`),
+			),
+		];
+		if (tests.length === 0) return undefined;
+		guards.push(`!(${tests.join(" && ")})`);
+	}
+	return { masks: [leftMask, rightMask], guard: [...new Set(guards)].join(" && ") };
+}
 
 // Callers exclude Object, Symbol and BigInt; the final arm deliberately has no tag test.
 export function nativePrimitiveNumberExpression(

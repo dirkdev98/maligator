@@ -380,6 +380,94 @@ const primitiveBinary = {
 	},
 };
 globalThis.primitiveBinary = primitiveBinary;
+
+function framedPrimitiveBinary(operator, value, right, flag, gate) {
+	gate();
+	const left = flag ? (value ? true : null) : "2";
+	switch (operator) {
+		case "add":
+			return left + right;
+		case "subtract":
+			return left - right;
+		case "multiply":
+			return left * right;
+		case "divide":
+			return left / right;
+		case "remainder":
+			return left % right;
+		case "power":
+			return left ** right;
+		case "and":
+			return left & right;
+		case "or":
+			return left | right;
+		case "xor":
+			return left ^ right;
+		case "shiftLeft":
+			return left << right;
+		case "shiftRight":
+			return left >> right;
+		case "shiftUnsigned":
+			return left >>> right;
+		case "less":
+			return left < right;
+		case "lessEqual":
+			return left <= right;
+		case "greater":
+			return left > right;
+		case "greaterEqual":
+			return left >= right;
+	}
+}
+
+function* resumedPrimitiveBinary(operator, value, right, flag) {
+	const left = flag ? (value ? true : null) : "2";
+	yield left;
+	switch (operator) {
+		case "add":
+			return left + right;
+		case "subtract":
+			return left - right;
+		case "multiply":
+			return left * right;
+		case "divide":
+			return left / right;
+		case "remainder":
+			return left % right;
+		case "power":
+			return left ** right;
+		case "and":
+			return left & right;
+		case "or":
+			return left | right;
+		case "xor":
+			return left ^ right;
+		case "shiftLeft":
+			return left << right;
+		case "shiftRight":
+			return left >> right;
+		case "shiftUnsigned":
+			return left >>> right;
+		case "less":
+			return left < right;
+		case "lessEqual":
+			return left <= right;
+		case "greater":
+			return left > right;
+		case "greaterEqual":
+			return left >= right;
+	}
+}
+
+globalThis.framedPrimitiveBinary = framedPrimitiveBinary;
+globalThis.resumedPrimitiveBinary = resumedPrimitiveBinary;
+const binaryFrameGate = () => log.push("binary frame");
+const coercionThrows = {
+	[Symbol.toPrimitive](hint) {
+		log.push(`binary coercion throw ${hint}`);
+		throw new RangeError("binary coercion");
+	},
+};
 const primitiveOperands = [
 	0,
 	-0,
@@ -397,19 +485,45 @@ const primitiveOperands = [
 	"2",
 	2n,
 	valued,
+	coercionThrows,
 	Symbol("binary"),
 ];
 for (const operation of Object.keys(primitiveBinary)) {
 	for (const flag of [true, false]) {
 		for (const value of [true, false]) {
 			for (const right of primitiveOperands) {
-				try {
-					const result = globalThis.primitiveBinary[operation](value, right, flag);
-					log.push(
-						`binary ${operation} ${flag} ${value} ${String(result)} ${Object.is(result, -0)}`,
-					);
-				} catch (error) {
-					log.push(`binary ${operation} ${flag} ${value} ${error.name}`);
+				for (const mode of ["fast", "full", "resume"]) {
+					try {
+						let result;
+						if (mode === "fast")
+							result = globalThis.primitiveBinary[operation](value, right, flag);
+						else if (mode === "full")
+							result = globalThis.framedPrimitiveBinary(
+								operation,
+								value,
+								right,
+								flag,
+								binaryFrameGate,
+							);
+						else {
+							const coroutine = globalThis.resumedPrimitiveBinary(
+								operation,
+								value,
+								right,
+								flag,
+							);
+							const yielded = coroutine.next();
+							log.push(`binary yielded ${yielded.done} ${String(yielded.value)}`);
+							const finished = coroutine.next();
+							log.push(`binary finished ${finished.done}`);
+							result = finished.value;
+						}
+						log.push(
+							`binary ${mode} ${operation} ${flag} ${value} ${String(result)} ${Object.is(result, -0)}`,
+						);
+					} catch (error) {
+						log.push(`binary ${mode} ${operation} ${flag} ${value} ${error.name}`);
+					}
 				}
 			}
 		}

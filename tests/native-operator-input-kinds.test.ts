@@ -26,7 +26,6 @@ describe("partial operator input kinds", () => {
 	});
 
 	it.each([
-		["String(left)<+right", "mal_ops_less_than("],
 		["(flag?String(left):+left)==+right", "mal_ops_equal("],
 		["BigInt(left)==String(right)", "mal_ops_equal("],
 	] as const)(
@@ -103,16 +102,38 @@ describe("partial operator input kinds", () => {
 		"==",
 		"!=",
 	])(
-		"retains the coercive %s operation when a String operand excludes two Numbers",
+		"retains the coercive %s fallback while consuming the independent String operand",
 		(operator) => {
 			const out = inspectStaticValueFunction(
 				`function compute(left,right,gate){const text=String(right);gate();return left ${operator} text;}globalThis.compute=compute;`,
 				"compute",
 			);
 			expect(out.c.source).toContain("mal_vm_binary_op(");
-			expect(out.c.source).not.toContain("mal_ops_is_number(");
+			const op = out.native.body.instructions.find(
+				(instruction) =>
+					instruction.opcode === "BINARY" && instruction.operator === operator,
+			);
+			if (op?.opcode !== "BINARY") throw new Error("Missing binary operation");
+			expect(out.c.source).not.toContain(`mal_ops_is_number(r${op.right})`);
+			expect(out.c.source.includes(`mal_ops_is_number(r${op.left})`)).toBe(
+				!["+", "==", "!="].includes(operator),
+			);
+			if (!["+", "==", "!="].includes(operator))
+				expect(out.c.source).toContain(`mal_ops_to_number(r${op.right})`);
 		},
 	);
+
+	it("compares proven String and Number inputs without VM dispatch after restoration", () => {
+		const out = inspectStaticValueFunction(
+			"function compute(left,right){return String(left)<+right;}globalThis.compute=compute;",
+			"compute",
+		);
+		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(out.image));
+		const native = restored.native.functions[out.native.functionIndex]!;
+		const source = emitCompiledFunction(native, native.functionIndex, "", false)!.source;
+		expect(source).toContain("mal_ops_to_number(");
+		expect(source).not.toContain("mal_vm_binary_op(");
+	});
 
 	it("keeps Number speculation for unions that still contain Numbers", () => {
 		const out = inspectStaticValueFunction(

@@ -6,6 +6,9 @@ import {
 	COMPILER_VALUE_KIND_SYMBOL,
 	COMPILER_VALUE_KIND_TOP,
 	COMPILER_VALUE_KIND_NULLISH,
+	COMPILER_VALUE_KIND_BOOLEAN,
+	COMPILER_VALUE_KIND_NULL,
+	COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE,
 } from "../src/compiler/shared/compiler-value-kinds.ts";
 import type { InstructionFacts } from "../src/compiler/shared/instruction-facts.ts";
 import { lowerNativeFunctionStorage } from "../src/compiler/target/lower-native-storage.ts";
@@ -76,6 +79,116 @@ function emitInputContract(
 }
 
 describe("local native input admission", () => {
+	it.each([
+		"+",
+		"-",
+		"*",
+		"/",
+		"%",
+		"**",
+		"&",
+		"|",
+		"^",
+		"<<",
+		">>",
+		">>>",
+		"<",
+		"<=",
+		">",
+		">=",
+	] as const)(
+		"uses independent primitive operands in full and resumable %s branches",
+		(operator) => {
+			const comparison = ["<", "<=", ">", ">="].includes(operator);
+			const integer = ["&", "|", "^", "<<", ">>"].includes(operator);
+			const results: Array<VmRegisterRepresentation> = ["boxed"];
+			if (operator !== "+")
+				results.push(comparison ? "boolean" : integer ? "int32" : "number");
+			for (const isGenerator of [false, true])
+				for (const representation of results)
+					for (const position of [0, 1])
+						for (const known of [
+							COMPILER_VALUE_KIND_BOOLEAN | COMPILER_VALUE_KIND_NULL,
+							COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE,
+						]) {
+							const instructions: Array<BytecodeInstruction> = [
+								...(isGenerator
+									? [
+											{ opcode: "GENERATOR_START" } as const,
+											{
+												opcode: "YIELD",
+												yieldedSrc: 0,
+												valueDst: 4,
+												modeDst: 5,
+											} as const,
+										]
+									: [
+											{
+												opcode: "CALL",
+												dst: 4,
+												callee: 2,
+												thisValue: -1,
+												argumentCount: 0,
+												arguments: [],
+											} satisfies BytecodeInstruction,
+										]),
+								{ opcode: "BINARY", dst: 3, left: 0, right: 1, operator },
+								{ opcode: "RETURN", value: 3 },
+							];
+							const ip = instructions.length - 2;
+							const masks = [COMPILER_VALUE_KIND_TOP, COMPILER_VALUE_KIND_TOP];
+							masks[position] = known;
+							const facts = new Array<InstructionFacts | undefined>(instructions.length);
+							facts[ip] = { registers: [3, 0, 1], inputOffset: 1, inputKindMasks: masks };
+							const source = emitInputContract(
+								instructions,
+								["boxed", "boxed", "boxed", representation, "boxed", "boxed"],
+								{ isGenerator, parameterCount: 3 },
+								facts,
+							);
+							expect(source).toContain(`mal_ops_is_number(r${1 - position})`);
+							expect(source).not.toContain(`mal_ops_is_number(r${position})`);
+							expect(source).toContain("mal_vm_binary_op(");
+							expect(source).toContain("MAL_THREW()");
+							if (operator === "+" && (known & COMPILER_VALUE_KIND_STRING) !== 0)
+								expect(source).toContain(`!mal_value_is_string(r${position})`);
+							if (operator === "**") expect(source).toContain("mal_number_exponentiate(");
+						}
+		},
+	);
+
+	it.each(["<", "<=", ">", ">="] as const)(
+		"keeps lexical String pairs outside full and resumable numeric %s branches",
+		(operator) => {
+			for (const isGenerator of [false, true]) {
+				const instructions: Array<BytecodeInstruction> = [
+					...(isGenerator ? [{ opcode: "GENERATOR_START" } as const] : []),
+					{ opcode: "BINARY", dst: 2, left: 0, right: 1, operator },
+					{ opcode: "RETURN", value: 2 },
+				];
+				const facts = new Array<InstructionFacts | undefined>(instructions.length);
+				facts[instructions.length - 2] = {
+					registers: [2, 0, 1],
+					inputOffset: 1,
+					inputKindMasks: [
+						COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE,
+						COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE,
+					],
+				};
+				const source = emitInputContract(
+					instructions,
+					["boxed", "boxed", "boolean"],
+					{ isGenerator, parameterCount: 2 },
+					facts,
+				);
+				expect(source).toContain("!(mal_value_is_string(r0) && mal_value_is_string(r1))");
+				expect(source).toContain("mal_ops_to_number(r0)");
+				expect(source).toContain("mal_ops_to_number(r1)");
+				expect(source).toContain("mal_vm_binary_op(");
+			}
+		},
+	);
+
 	it("uses non-nullish boxed facts for full and resumable coercibility guards", () => {
 		for (const generator of [false, true]) {
 			for (const kind of [

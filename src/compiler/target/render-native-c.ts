@@ -127,6 +127,7 @@ import {
 	NUMBER_PREDICATES,
 	boxedNumberPredicateExpression,
 	nativeNumberPredicateExpression,
+	nativeBinaryNumberInputs,
 	nativePrimitiveNumberExpression,
 } from "./native-scalar-operators.ts";
 import {
@@ -1253,13 +1254,13 @@ const BOXED_COMPARE: Readonly<Record<string, string>> = {
 	"!==": "mal_ops_strict_not_equal",
 };
 
-// Exponentiation has a separate proven-input path because its target representation stays boxed.
 function producesNumberFromNumbers(operator: string): boolean {
 	return (
 		operator in NATIVE_ARITH ||
 		operator in NATIVE_BITWISE ||
 		operator === ">>>" ||
-		operator === "%"
+		operator === "%" ||
+		operator === "**"
 	);
 }
 
@@ -1316,6 +1317,7 @@ function nativeNumberExpr(
 	if (operator === "%") {
 		return `mal_number_remainder(${left}, ${right})`;
 	}
+	if (operator === "**") return `mal_number_exponentiate(${left}, ${right})`;
 	return null;
 }
 
@@ -11535,6 +11537,19 @@ function emitInstruction(
 					}
 				}
 			}
+			const numericInputs = nativeBinaryNumberInputs(
+				operator,
+				leftIsNum
+					? COMPILER_VALUE_KIND_NUMBER
+					: (operandKind(left) ?? COMPILER_VALUE_KIND_TOP),
+				rightIsNum
+					? COMPILER_VALUE_KIND_NUMBER
+					: (operandKind(right) ?? COMPILER_VALUE_KIND_TOP),
+				boxed(left),
+				boxed(right),
+			);
+			const numericOperand = (register: number): string =>
+				exactPrimitiveNumber(register, numericInputs!.masks[register === left ? 0 : 1]);
 			if (
 				(reps[dst] === "number" || reps[dst] === "int32") &&
 				(!leftIsNum || !rightIsNum)
@@ -11545,16 +11560,18 @@ function emitInstruction(
 					...(canThrow ? [throwCheck()] : []),
 					`r${dst} = ${reps[dst] === "int32" ? `mal_ops_number_value_to_i32(${result})` : `mal_ops_number_as_f64(${result})`};`,
 				];
-				if (!numbersPossible) return fallback;
+				if (numericInputs === undefined) return fallback;
 				// ToInt32 of an int32 operand or result is the identity, but clang cannot fold FJCVTZS.
 				const int32Input = (register: number): string =>
-					reps[register] === "int32"
-						? inputValue(register)
-						: instructionInputIsInt32(context.facts, register)
-							? nativeInt32Operand(register)!
-							: reps[register] === "number"
-								? `mal_ops_number_to_i32(${inputValue(register)})`
-								: `mal_ops_number_value_to_i32(${boxed(register)})`;
+					numericInputs.masks[register === left ? 0 : 1] !== COMPILER_VALUE_KIND_NUMBER
+						? `mal_ops_number_to_i32(${numericOperand(register)})`
+						: reps[register] === "int32"
+							? inputValue(register)
+							: instructionInputIsInt32(context.facts, register)
+								? nativeInt32Operand(register)!
+								: reps[register] === "number"
+									? `mal_ops_number_to_i32(${inputValue(register)})`
+									: `mal_ops_number_value_to_i32(${boxed(register)})`;
 				const int32Expression = INT32_RESULT_OPERATORS.has(operator)
 					? nativeInt32Expr(operator, int32Input(left), int32Input(right))
 					: null;
@@ -11562,23 +11579,23 @@ function emitInstruction(
 					int32Expression === null
 						? nativeNumberExpr(
 								operator,
-								leftIsNum ? typedNumber(left) : `mal_ops_number_as_f64(${boxed(left)})`,
-								rightIsNum
-									? typedNumber(right)
-									: `mal_ops_number_as_f64(${boxed(right)})`,
+								numericOperand(left),
+								numericOperand(right),
 								context.facts?.inputIntegerRanges,
 							)
 						: `(f64) (${int32Expression})`;
 				if (expression === null) return fallback;
-				const guards = [
-					...(!leftIsNum ? [`mal_ops_is_number(${boxed(left)})`] : []),
-					...(!rightIsNum ? [`mal_ops_is_number(${boxed(right)})`] : []),
-				];
-				return [
-					`if (${guards.join(" && ")}) {`,
+				const fast =
 					int32Expression !== null && reps[dst] === "int32"
-						? `  r${dst} = ${int32Expression};`
-						: `  ${storeNumber(dst, expression)}`,
+						? `r${dst} = ${int32Expression};`
+						: storeNumber(dst, expression);
+				if (numericInputs.guard === "") {
+					elideFramePosition();
+					return [fast];
+				}
+				return [
+					`if (${numericInputs.guard}) {`,
+					`  ${fast}`,
 					`} else {`,
 					...slowPathFramePosition(),
 					...fallback.map((line) => `  ${line}`),
@@ -11779,11 +11796,19 @@ function emitInstruction(
 				}
 				const completionCheck = canThrow ? throwCheck() : undefined;
 				const compareCheck = completionCheck === undefined ? [] : [completionCheck];
-				// Speculate a numeric compare when there is a numeric prior: always in
-				// the mixed case (one operand proven number), and in the both-boxed
-				// case only for the relational operators (see RELATIONAL_COMPARE).
-				if (numbersPossible && (!bothBoxed || RELATIONAL_COMPARE.has(operator))) {
-					const fastBool = `${numericOf(left)} ${compare} ${numericOf(right)}`;
+				if (
+					(numericInputs !== undefined && RELATIONAL_COMPARE.has(operator)) ||
+					(numbersPossible && !bothBoxed)
+				) {
+					const guard = numericInputs?.guard ?? numberGuard;
+					const fastBool =
+						numericInputs === undefined
+							? `${numericOf(left)} ${compare} ${numericOf(right)}`
+							: `${numericOperand(left)} ${compare} ${numericOperand(right)}`;
+					if (guard === "") {
+						elideFramePosition();
+						return [storeBoolean(dst, fastBool)];
+					}
 					// With one side a number, a strict comparison against a non-number is unequal.
 					if (!bothBoxed && (operator === "===" || operator === "!==")) {
 						const strict =
@@ -11795,7 +11820,7 @@ function emitInstruction(
 					}
 					if (canThrow) {
 						return [
-							`if (${numberGuard}) {`,
+							`if (${guard}) {`,
 							dstIsBool
 								? `  r${dst} = ${fastBool};`
 								: `  r${dst} = ${profileCall("boxing", `mal_value_new_boolean(${fastBool})`)};`,
@@ -11810,8 +11835,8 @@ function emitInstruction(
 					}
 					return [
 						dstIsBool
-							? `r${dst} = ${numberGuard} ? (${fastBool}) : mal_value_to_boolean(${slow()});`
-							: `r${dst} = ${numberGuard} ? ${profileCall("boxing", `mal_value_new_boolean(${fastBool})`)} : ${slow()};`,
+							? `r${dst} = ${guard} ? (${fastBool}) : mal_value_to_boolean(${slow()});`
+							: `r${dst} = ${guard} ? ${profileCall("boxing", `mal_value_new_boolean(${fastBool})`)} : ${slow()};`,
 						...compareCheck,
 					];
 				}
@@ -11827,23 +11852,11 @@ function emitInstruction(
 			if (dstIsBool) {
 				return null;
 			}
-			// Number-producing op with at least one boxed operand (both-proven-number
-			// takes the number-rep path above). Speculate the boxed operand(s) are
-			// numbers and take the native double op when they are, else the
-			// fully-general op. `mal_ops_number_as_f64` recovers a number's exact f64
-			// and `mal_ops_number_value` re-boxes with the interpreter's int32/-0/NaN
-			// canonicalization, so the fast path is observably identical to the
-			// fallback — including `%` (mal_number_remainder) and the bitwise/shift
-			// ops (ToInt32). `+` stays correct: the guard rejects a boxed string, so
-			// the string-concat branch of the slow op is only reached when the native
-			// branch is not taken. This covers both the mixed and both-boxed cases;
-			// for both-boxed there is no static proof, but the guard is a cheap,
-			// well-predicted bit test and hot arithmetic is overwhelmingly numeric.
-			if (numbersPossible && producesNumberFromNumbers(operator)) {
+			if (numericInputs !== undefined && producesNumberFromNumbers(operator)) {
 				const nativeExpr = nativeNumberExpr(
 					operator,
-					numericOf(left),
-					numericOf(right),
+					numericOperand(left),
+					numericOperand(right),
 					context.facts?.inputIntegerRanges,
 				);
 				const int32Expr = INT32_RESULT_OPERATORS.has(operator)
@@ -11852,13 +11865,13 @@ function emitInstruction(
 							reps[left] === "int32"
 								? inputValue(left)
 								: numberToInt32(
-										numericOf(left),
+										numericOperand(left),
 										instructionInputIsInt32(context.facts, left),
 									),
 							reps[right] === "int32"
 								? inputValue(right)
 								: numberToInt32(
-										numericOf(right),
+										numericOperand(right),
 										instructionInputIsInt32(context.facts, right),
 									),
 						)
@@ -11866,22 +11879,21 @@ function emitInstruction(
 				if (nativeExpr !== null) {
 					const fast = profileCall(
 						"boxing",
-						operator === "+" && bothBoxed
+						operator === "+" &&
+							bothBoxed &&
+							numericInputs.masks.every((mask) => mask === COMPILER_VALUE_KIND_NUMBER)
 							? `mal_ops_add_numbers(${boxed(left)}, ${boxed(right)})`
 							: int32Expr !== null
 								? `mal_value_from_i32(${int32Expr})`
 								: `mal_ops_number_value(${nativeExpr})`,
 					);
-					// numberGuard is empty only when both operands are proven numbers but
-					// the dst rep was joined to boxed elsewhere — then native is
-					// unconditional and never throws.
-					if (numberGuard === "") {
+					if (numericInputs.guard === "") {
 						elideFramePosition();
 						return [`r${dst} = ${fast};`];
 					}
 					if (canThrow) {
 						return [
-							`if (${numberGuard}) {`,
+							`if (${numericInputs.guard}) {`,
 							`  r${dst} = ${fast};`,
 							`} else {`,
 							...slowPathFramePosition(),
@@ -11890,7 +11902,7 @@ function emitInstruction(
 							`}`,
 						];
 					}
-					return [`r${dst} = ${numberGuard} ? ${fast} : ${slow()};`];
+					return [`r${dst} = ${numericInputs.guard} ? ${fast} : ${slow()};`];
 				}
 			}
 			const lowered = [`r${dst} = ${slow()};`];

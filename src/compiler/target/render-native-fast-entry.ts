@@ -4,7 +4,6 @@ import {
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_TOP,
 	COMPILER_VALUE_KIND_NULLISH,
-	COMPILER_VALUE_KIND_STRING,
 	COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE,
 	compilerValueKindMaskIsSubset,
 } from "../shared/compiler-value-kinds.ts";
@@ -20,7 +19,10 @@ import {
 } from "../shared/integer-range.ts";
 import { emitTypeofResult } from "./emit-program-image.ts";
 import type { NativeControlFlowPlan } from "./native-control-flow.ts";
-import { nativePrimitiveNumberExpression } from "./native-scalar-operators.ts";
+import {
+	nativeBinaryNumberInputs,
+	nativePrimitiveNumberExpression,
+} from "./native-scalar-operators.ts";
 import {
 	nativeInstructionSourceRanges,
 	shiftNativeSourceRanges,
@@ -562,51 +564,24 @@ function fastBinary(
 			? fallback
 			: `if (!(${numberFailure})) ${numeric} else ${fallback}`;
 	}
-	const converts = new Map<number, number>();
-	const guards: Array<string> = [];
-	for (const register of [left, right]) {
-		if (converts.has(register) || values.constants.has(register)) continue;
-		let kind = values.kind(register);
-		if (
-			kind === COMPILER_VALUE_KIND_NUMBER ||
-			!compilerValueKindMaskIsSubset(kind, COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE)
-		)
-			continue;
-		if (operator === "+" && (kind & COMPILER_VALUE_KIND_STRING) !== 0) {
-			if (kind === COMPILER_VALUE_KIND_STRING) return undefined;
-			guards.push(`mal_value_is_string(f${register})`);
-			kind &= ~COMPILER_VALUE_KIND_STRING;
-		}
-		converts.set(register, kind);
-	}
-	const numberFailure = numbers(
-		values,
-		...[left, right].filter((register) => !converts.has(register)),
+	const inputs = nativeBinaryNumberInputs(
+		operator,
+		values.constants.has(left) ? COMPILER_VALUE_KIND_NUMBER : values.kind(left),
+		values.constants.has(right) ? COMPILER_VALUE_KIND_NUMBER : values.kind(right),
+		`f${left}`,
+		`f${right}`,
 	);
-	if (numberFailure === "true") return undefined;
-	if (numberFailure !== "false") guards.unshift(numberFailure);
-	// A guarded Number rules out a String pair; two converted operands may still compare lexically.
-	if (
-		NUMBER_COMPARISONS.has(operator) &&
-		[left, right].every(
-			(register) => ((converts.get(register) ?? 0) & COMPILER_VALUE_KIND_STRING) !== 0,
-		)
-	) {
-		const strings = [...new Set([left, right])]
-			.filter((register) => converts.get(register) !== COMPILER_VALUE_KIND_STRING)
-			.map((register) => `mal_value_is_string(f${register})`);
-		if (strings.length === 0) return undefined;
-		guards.push(`(${strings.join(" && ")})`);
-	}
-	const guard = guards.length === 0 ? "" : `if (${guards.join(" || ")}) goto __full;`;
+	if (inputs === undefined) return undefined;
+	const mask = (register: number) => inputs.masks[register === left ? 0 : 1];
+	const guard = inputs.guard === "" ? "" : `if (!(${inputs.guard})) goto __full;`;
 	const numeric = (register: number) =>
-		converts.has(register)
-			? nativePrimitiveNumberExpression(`f${register}`, converts.get(register)!)
-			: number(values, register);
+		mask(register) === COMPILER_VALUE_KIND_NUMBER
+			? number(values, register)
+			: nativePrimitiveNumberExpression(`f${register}`, mask(register));
 	const integer = (register: number) =>
-		converts.has(register)
-			? `mal_ops_number_to_i32(${numeric(register)})`
-			: int32(values, register);
+		mask(register) === COMPILER_VALUE_KIND_NUMBER
+			? int32(values, register)
+			: `mal_ops_number_to_i32(${numeric(register)})`;
 	if (NUMBER_COMPARISONS.has(operator))
 		return `${guard} f${dst} = mal_value_new_boolean(${numeric(left)} ${operator} ${numeric(right)});`;
 	if (INT32_OPERATORS.has(operator))
