@@ -43,7 +43,7 @@ export function projectNativeBodyFacts(
 	);
 	const entries = new Set(
 		[...nativeControlFlowEntries(native, body, externalEntries).roots].filter(
-			(ip) => ip >= 0 && ip < count,
+			(ip) => ip >= 0 && ip < count && !unreachable.has(ip),
 		),
 	);
 	const external = new Set([...entries].filter((ip) => ip !== 0));

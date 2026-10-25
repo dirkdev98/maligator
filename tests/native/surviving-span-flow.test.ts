@@ -24,7 +24,7 @@ import {
 } from "../../src/test-harness.ts";
 
 it.each(["mutable", "locked"] as const)(
-	"preserves surviving span aliases and collecting fallbacks under %s primordials",
+	"preserves surviving virtual values, helper entries and collecting fallbacks under %s primordials",
 	(primordials) => {
 		const directory = mkdtempSync(join(tmpdir(), "mal-surviving-span-"));
 		try {
@@ -80,6 +80,23 @@ it.each(["mutable", "locked"] as const)(
 			}
 			expect(sources).toEqual(new Set(["split", "regexp"]));
 			expect(overwriteSelected).toBe(true);
+			const collection = restored.native.functions.find(
+				(fn) =>
+					String.fromCharCode(
+						...(restored.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+					) === "collectionPath",
+			)!;
+			const collectionEntry = collection.directEntries.find(
+				(entry) => entry.parameterRepresentations[1] === "string",
+			)!;
+			expect(collectionEntry).toBeDefined();
+			expect(
+				collection.specializations.some((region) =>
+					region.claimedIps.every((ip) =>
+						collectionEntry.storage!.controlFlow!.unreachableIps.includes(ip),
+					),
+				),
+			).toBe(true);
 			for (const compiled of [true, false]) {
 				const binary = buildNativeProgramImage(restored, {
 					name: `surviving-span-${primordials}-${compiled}`,

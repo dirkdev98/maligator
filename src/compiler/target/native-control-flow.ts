@@ -36,9 +36,16 @@ export function nativeControlFlowEntries(
 	native: NativeFunctionPlan,
 	body: NativeBodyFacts,
 	externalEntries: ReadonlyArray<number> = [],
-): { readonly roots: ReadonlySet<number>; readonly owned: Uint8Array } {
+): {
+	readonly roots: ReadonlySet<number>;
+	readonly unconditionalRoots: ReadonlySet<number>;
+	readonly continuationGroups: ReadonlyArray<ReadonlyArray<number>>;
+	readonly owned: Uint8Array;
+} {
 	const count = native.body.instructions.length;
 	const roots = new Set([0, ...body.externalEntries, ...externalEntries]);
+	const unconditionalRoots = new Set(roots);
+	const continuationGroups: Array<ReadonlyArray<number>> = [];
 	const owned = new Uint8Array(count);
 	for (const ip of externalEntries) owned[ip] = 1;
 	// Selected regions can continue at ordinary labels without following the bytecode edge.
@@ -49,6 +56,7 @@ export function nativeControlFlowEntries(
 			...region.claimedIps,
 			...region.controlFlow.ordinaryBlockIps,
 		];
+		continuationGroups.push(ips);
 		let firstIp = count;
 		let lastIp = -1;
 		for (const ip of ips) {
@@ -60,15 +68,20 @@ export function nativeControlFlowEntries(
 	}
 	for (const site of native.literalSwitches ?? []) {
 		owned.fill(1, site.instructionIp, site.endIp + 1);
-		for (const entry of site.cases) roots.add(entry.targetIp);
+		for (const entry of site.cases) {
+			roots.add(entry.targetIp);
+			unconditionalRoots.add(entry.targetIp);
+		}
 		roots.add(site.defaultIp);
+		unconditionalRoots.add(site.defaultIp);
 	}
 	for (const site of native.fieldCalls ?? [])
 		for (let ip = site.allocationIp; ip <= site.callIp; ip++) {
 			roots.add(ip);
+			unconditionalRoots.add(ip);
 			owned[ip] = 1;
 		}
-	return { roots, owned };
+	return { roots, unconditionalRoots, continuationGroups, owned };
 }
 
 export function nativeControlFlowContract(
@@ -120,11 +133,8 @@ export function selectNativeControlFlow(
 			first[ip] = ip + 1;
 	}
 	// Region-owned polling can run independently of the ordinary branch.
-	const { roots, owned } = nativeControlFlowEntries(
-		native,
-		body,
-		options.externalEntries,
-	);
+	const { roots, unconditionalRoots, continuationGroups, owned } =
+		nativeControlFlowEntries(native, body, options.externalEntries);
 	const fixed = new Map(
 		options.constants?.map(({ instructionIp, value }) => [instructionIp, value]),
 	);
@@ -360,15 +370,29 @@ export function selectNativeControlFlow(
 	}
 	if (decisions.size === 0) return undefined;
 	const reachable = new Uint8Array(count);
+	const groupsByIp = new Map<number, Array<number>>();
+	for (const [index, group] of continuationGroups.entries())
+		for (const ip of group) {
+			const groups = groupsByIp.get(ip) ?? [];
+			groups.push(index);
+			groupsByIp.set(ip, groups);
+		}
+	const activeGroups = new Uint8Array(continuationGroups.length);
 	pending.length = 0;
 	const push = (ip: number) => {
 		if (ip < 0 || ip >= count || reachable[ip]) return;
 		reachable[ip] = 1;
 		pending.push(ip);
 	};
-	for (const root of roots) push(root);
+	for (const root of unconditionalRoots) push(root);
 	while (pending.length > 0) {
 		const ip = pending.pop()!;
+		// A reachable helper can enter any of its certified ordinary continuations.
+		for (const group of groupsByIp.get(ip) ?? []) {
+			if (activeGroups[group]) continue;
+			activeGroups[group] = 1;
+			for (const continuation of continuationGroups[group]!) push(continuation);
+		}
 		const target = decisions.get(ip);
 		if (target !== undefined) push(target);
 		else {

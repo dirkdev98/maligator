@@ -43,7 +43,9 @@ export function selectNativeStringComparisons(
 			targetIp,
 		]),
 	);
-	const roots = nativeControlFlowEntries(native, body, options.externalEntries).roots;
+	const roots =
+		body.projection?.entries ??
+		nativeControlFlowEntries(native, body, options.externalEntries).roots;
 	const predecessors = new Array<Array<number> | undefined>(fn.instructions.length);
 	const add = (from: number, to: number): void => {
 		if (to < 0 || to >= fn.instructions.length) return;

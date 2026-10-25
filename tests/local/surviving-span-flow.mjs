@@ -5,6 +5,10 @@ function collect() {
 		globalThis.__mal_collect_garbage();
 	if (typeof globalThis.gc === "function") globalThis.gc();
 }
+function collectionPath(record, flag) {
+	if (flag !== flag) record.set(1, "dead");
+	return record.get(2);
+}
 function observe(value) {
 	observed++;
 	collect();
@@ -90,5 +94,53 @@ try {
 	capturedObserver("no-match", "string", observe);
 } catch (error) {
 	rows.push(error.name);
+}
+globalThis.collectionPath = collectionPath;
+rows.push(collectionPath(new Map([[2, { label: "direct" }]]), "string"));
+const collectingMethods = {
+	get set() {
+		collect();
+		rows.push("set-getter");
+		return function (key, value) {
+			collect();
+			rows.push(["set-call", key, value, this === collectingMethods]);
+			return this;
+		};
+	},
+	get get() {
+		collect();
+		rows.push("get-getter");
+		return function (key) {
+			collect();
+			return ["get-call", key, this === collectingMethods];
+		};
+	},
+};
+const throwingSetter = {
+	get set() {
+		collect();
+		throw new Error("live-set");
+	},
+	get(key) {
+		collect();
+		return { key, label: "surviving-get" };
+	},
+};
+for (const record of [
+	new Map([[2, { label: "managed" }]]),
+	collectingMethods,
+	throwingSetter,
+	Object.create(Map.prototype),
+	new Proxy(new Map(), {}),
+	null,
+	undefined,
+]) {
+	for (const flag of ["string", NaN]) {
+		try {
+			rows.push(collectionPath(record, flag));
+		} catch (error) {
+			rows.push(error.name, error.message === "live-set");
+		}
+	}
 }
 console.log(JSON.stringify([rows, observed]));
