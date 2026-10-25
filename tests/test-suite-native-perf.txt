@@ -10,6 +10,7 @@ tests/native/collection-perf-stats.test.ts
 tests/native/compiled-call-cache-family.test.ts
 tests/native/coroutine-pool.test.ts
 tests/native/direct-known-call.test.ts
+tests/native/entry-pair-parameters.test.ts
 tests/native/error-capture-stack.test.ts
 tests/native/fresh-dense-indexed-reserve.test.ts
 tests/native/function-own-slot-cache.test.ts

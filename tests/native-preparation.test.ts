@@ -43,6 +43,7 @@ describe("native runtime preparation", () => {
 		"map-get-set-cache.test.ts",
 		"array-push-direct.test.ts",
 		"collection-direct.test.ts",
+		"entry-pair-parameters.test.ts",
 		"object-rest-shaped.test.ts",
 		"own-table-property-cache.test.ts",
 	])("prepares default surfaces and instrumentation for %s before hooks", (file) => {
