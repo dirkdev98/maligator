@@ -129,7 +129,7 @@ function graph(
 	});
 	let admitted = 0;
 	let analysesRun = 0;
-	const entries = connectCoreNativeEntries(
+	const { entries } = connectCoreNativeEntries(
 		program,
 		summaries,
 		analyses,
@@ -216,7 +216,7 @@ describe("connected native entry contracts", () => {
 				fallback: "canonical-core",
 				cost: { generatedCode: 8, compilerWork: 8, runtimeBenefit: 8 },
 			};
-			const entries = connectCoreNativeEntries(
+			const { entries } = connectCoreNativeEntries(
 				program,
 				summaries,
 				analyses,

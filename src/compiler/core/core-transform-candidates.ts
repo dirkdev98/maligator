@@ -43,7 +43,8 @@ export type CoreTransformDeclineReason =
 	| "overlap"
 	| "stale-anchor"
 	| "representation"
-	| "target-support";
+	| "target-support"
+	| "unreferenced-entry";
 
 export interface CoreTransformCandidate {
 	readonly kind: CoreTransformKind;
@@ -180,6 +181,7 @@ function declineReasonCounts(): Record<CoreTransformDeclineReason, number> {
 		"stale-anchor": 0,
 		representation: 0,
 		"target-support": 0,
+		"unreferenced-entry": 0,
 	};
 }
 
@@ -290,6 +292,7 @@ export class CoreTransformCandidateService {
 	#fairCursor = 0;
 	readonly #appliedByKind = transformKindCounts();
 	readonly #declinedByReason = declineReasonCounts();
+	readonly #retirableEntries = new WeakSet<CoreTransformCandidate>();
 	readonly #siteExpansions = new Map<CoreFunctionId, Map<CoreInstructionId, number>>();
 	readonly #caller = new Map<CoreFunctionId, CallerConsumption>();
 	#considered = 0;
@@ -509,6 +512,24 @@ export class CoreTransformCandidateService {
 		this.#compilerWork += candidate.compilerWorkCost;
 		this.#applied++;
 		this.#appliedByKind[candidate.kind]++;
+		if (
+			candidate.kind === "direct-entry" &&
+			!candidate.expansive &&
+			!candidate.cloneSpecialization
+		)
+			this.#retirableEntries.add(candidate);
+	}
+
+	// Return spent proof work for discovery accounting; only generated-code capacity is released.
+	recordRetiredEntry(candidate: CoreTransformCandidate): number {
+		if (!this.#retirableEntries.delete(candidate))
+			throw new RangeError("Native entry was not provisionally admitted");
+		this.#caller.get(candidate.caller)!.generatedCode -= candidate.generatedCodeCost;
+		this.#generatedCode -= candidate.generatedCodeCost;
+		this.#applied--;
+		this.#appliedByKind[candidate.kind]--;
+		this.recordDeclined("unreferenced-entry");
+		return candidate.compilerWorkCost;
 	}
 
 	recordDeclined(reason: CoreTransformDeclineReason): void {

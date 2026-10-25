@@ -23,6 +23,7 @@ import {
 	analyzeCoreNativeEntry,
 	coreNativeEntryControlFlow,
 	coreArgumentObservation,
+	compactCoreNativeEntries,
 } from "./core-native-entry-analysis.ts";
 import type { CoreProgram } from "./core-store.ts";
 
@@ -36,6 +37,12 @@ interface EntryNode {
 interface EntryCall {
 	readonly callee: EntryNode;
 	readonly guarded: boolean;
+}
+
+export interface CoreNativeEntryGraph {
+	readonly entries: ReadonlyArray<CoreDirectEntryPlan>;
+	/** Original IDs identify the provisional budgets, before surviving siblings are compacted. */
+	readonly retiredEntries: ReadonlyArray<CoreDirectEntryPlan>;
 }
 
 function resultMask(representation: CorePlanRepresentation): number | undefined {
@@ -67,10 +74,12 @@ export function connectCoreNativeEntries(
 		instruction: CoreInstructionId,
 		generatedCode: number,
 		compilerWork: number,
+		entryId: number,
 	) => boolean,
 	admitAnalysis: (functionId: CoreFunctionId, compilerWork: number) => boolean,
-): ReadonlyArray<CoreDirectEntryPlan> {
+): CoreNativeEntryGraph {
 	const nodes = new Map<CoreFunctionId, Array<EntryNode>>();
+	const roots = new Set<EntryNode>();
 	const pending: Array<EntryNode> = [];
 	const queued = new Set<EntryNode>();
 	const enqueue = (node: EntryNode) => {
@@ -91,7 +100,7 @@ export function connectCoreNativeEntries(
 		enqueue(node);
 		return node;
 	};
-	for (const entry of initial) add(entry);
+	for (const entry of initial) roots.add(add(entry));
 	// Every variant of a record call's caller exchanges records through caller storage.
 	const recordCalls = new Set(
 		initial.flatMap((entry) =>
@@ -198,7 +207,7 @@ export function connectCoreNativeEntries(
 		if (
 			resultOnly
 				? !admitAnalysis(target, compilerWork)
-				: !admit(target, instruction, generatedCode, compilerWork)
+				: !admit(target, instruction, generatedCode, compilerWork, entries.length)
 		)
 			return undefined;
 		const variant =
@@ -207,7 +216,7 @@ export function connectCoreNativeEntries(
 		if (
 			resultOnly &&
 			(variant.resultRepresentation === "boxed" ||
-				!admit(target, instruction, generatedCode, 0))
+				!admit(target, instruction, generatedCode, 0, entries.length))
 		)
 			return undefined;
 		return add(
@@ -391,7 +400,7 @@ export function connectCoreNativeEntries(
 			}
 		}
 		if (representations.every((rep) => rep === "boxed")) continue;
-		request(
+		const seeded = request(
 			seed.target,
 			calls[0]!.instruction,
 			parametersFor(representations),
@@ -399,6 +408,7 @@ export function connectCoreNativeEntries(
 			variant,
 			seed.exactArity ? representations : undefined,
 		);
+		if (seeded !== undefined) roots.add(seeded);
 	}
 	for (let cursor = 0; cursor < pending.length; cursor++) {
 		const node = pending[cursor]!;
@@ -510,7 +520,39 @@ export function connectCoreNativeEntries(
 		if (variant.resultRepresentation !== entry.resultRepresentation)
 			for (const dependent of node.dependents) enqueue(dependent);
 	}
-	return [...nodes]
+	const retained = new Set(roots);
+	const required = [...roots];
+	for (let cursor = 0; cursor < required.length; cursor++) {
+		const node = required[cursor]!;
+		const fn = program.function(node.entry.function);
+		const reachable = coreNativeEntryControlFlow(fn, node.entry)?.blocks;
+		for (const call of node.entry.callOverrides ?? []) {
+			if (
+				reachable !== undefined &&
+				!reachable.has(fn.instructionBlock(call.instruction))
+			)
+				continue;
+			const callee = nodes
+				.get(call.target)
+				?.find(({ entry }) => entry.id === call.entryId);
+			if (callee === undefined) throw new RangeError("Dangling native entry nomination");
+			if (!retained.has(callee)) {
+				retained.add(callee);
+				required.push(callee);
+			}
+		}
+	}
+	// Semantic return facts survive retirement of the emitted ABI, keeping loop proofs monotone.
+	const ordered = [...nodes]
 		.sort(([left], [right]) => left - right)
-		.flatMap(([, entries]) => entries.map(({ entry }) => entry));
+		.flatMap(([, entries]) => entries);
+	return {
+		entries: compactCoreNativeEntries(
+			program,
+			ordered.filter((node) => retained.has(node)).map((node) => node.entry),
+		),
+		retiredEntries: ordered
+			.filter((node) => !retained.has(node))
+			.map((node) => node.entry),
+	};
 }

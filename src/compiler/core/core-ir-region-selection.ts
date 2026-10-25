@@ -2727,9 +2727,13 @@ export function buildCoreOptimizationPlan(
 			.sort(([left], [right]) => left - right)
 			.flatMap(([, entries]) => entries),
 	);
-	const connectedEntries =
+	const connectedAdmissions = new Map<
+		CoreFunctionId,
+		Map<number, CoreTransformCandidate>
+	>();
+	const connected =
 		options.context?.facts.closure.sourceClosure.kind !== "known"
-			? initialDirectEntries
+			? { entries: initialDirectEntries, retiredEntries: [] }
 			: connectCoreNativeEntries(
 					program,
 					summaries,
@@ -2737,7 +2741,7 @@ export function buildCoreOptimizationPlan(
 					live,
 					initialDirectEntries,
 					directBuiltinCallbacks,
-					(target, instruction, generatedCode, compilerWork) => {
+					(target, instruction, generatedCode, compilerWork, entryId) => {
 						const budget: CoreTransformCandidate = {
 							kind: "direct-entry",
 							caller: target,
@@ -2762,6 +2766,11 @@ export function buildCoreOptimizationPlan(
 							return false;
 						}
 						service.recordApplied(budget);
+						const siblings =
+							connectedAdmissions.get(target) ??
+							new Map<number, CoreTransformCandidate>();
+						siblings.set(entryId, budget);
+						connectedAdmissions.set(target, siblings);
 						selectedExpansionsByFunction.set(
 							target,
 							(selectedExpansionsByFunction.get(target) ?? 0) + 1,
@@ -2782,7 +2791,14 @@ export function buildCoreOptimizationPlan(
 						return true;
 					},
 				);
-	const directEntries = linkRecordForwards(program, analyses, connectedEntries);
+	for (const entry of connected.retiredEntries) {
+		const budget = connectedAdmissions.get(entry.function)?.get(entry.id);
+		if (budget === undefined) throw new Error("Unadmitted native entry retired");
+		discovery.compilerWork += service.recordRetiredEntry(budget);
+		selectedByKind["direct-entry"]!--;
+		increment(declinedByPlanReason, "unreferenced-entry");
+	}
+	const directEntries = linkRecordForwards(program, analyses, connected.entries);
 	const budgetStatistics = service.statisticsSince(budgetBaseline);
 	const statistics: CoreOptimizationPlanStatistics = Object.freeze({
 		...budgetStatistics,

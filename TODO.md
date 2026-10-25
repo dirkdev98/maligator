@@ -249,8 +249,10 @@ The independent target boundary and current storage contract are recorded in
       and lifetime analyses. String comparison length proofs now join surviving
       literal definitions and copies, retaining unknown handler, resume and helper
       entries; full, frameless and resumable branches consume the validated plan.
-      Retire callee nominations
-      when a later refinement makes their call unreachable.
+      Connected entry finalization now retires callee nominations made unreachable
+      by later return facts, prunes unrooted sibling components and compacts IDs
+      without changing semantic proofs. Retired code capacity is released while
+      spent proof work remains charged as discovery.
 - [x] Normalize primitive conversion calls from semantic kind unions. Eligible
       `Number` and `String` calls use unary conversions, carrying kind and effect
       proofs into native storage, full entries and frameless numeric paths.

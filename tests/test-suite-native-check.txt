@@ -34,6 +34,7 @@ tests/native/proven-string-comparisons.test.ts
 tests/native/string-comparison-facts.test.ts
 tests/native/native-numeric-workers.test.ts
 tests/native/native-reachability-entries.test.ts
+tests/native/native-entry-retention.test.ts
 tests/native/static-data-query.test.ts
 tests/native/static-primitive-operations.test.ts
 tests/native/primitive-conversion-unions.test.ts

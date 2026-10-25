@@ -94,7 +94,7 @@ function resultGraph(
 	};
 	const admissions: Array<{ target: CoreFunctionId; code: number; work: number }> = [];
 	const discoveries: Array<{ target: CoreFunctionId; work: number }> = [];
-	const entries = connectCoreNativeEntries(
+	const { entries } = connectCoreNativeEntries(
 		program,
 		summaries,
 		analyses,

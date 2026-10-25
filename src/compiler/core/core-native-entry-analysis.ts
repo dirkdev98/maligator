@@ -251,6 +251,56 @@ export function coreNativeEntryControlFlow(
 		: undefined;
 }
 
+// Compact only references to these same proven contracts; dead calls retain their semantic facts.
+export function compactCoreNativeEntries(
+	program: CoreProgram,
+	entries: ReadonlyArray<CoreDirectEntryPlan>,
+): ReadonlyArray<CoreDirectEntryPlan> {
+	const ids = new Map<CoreDirectEntryPlan["function"], Map<number, number>>();
+	for (const entry of entries) {
+		if (!coreNativeEntryProofIsCurrent(program.function(entry.function), entry))
+			throw new RangeError("Cannot reindex an unproven native entry");
+		const siblings = ids.get(entry.function) ?? new Map<number, number>();
+		if (siblings.has(entry.id)) throw new RangeError("Duplicate native entry ID");
+		siblings.set(entry.id, siblings.size);
+		ids.set(entry.function, siblings);
+	}
+	return entries.map((entry) => {
+		const fn = program.function(entry.function);
+		const reachable = coreNativeEntryControlFlow(fn, entry)?.blocks;
+		const calls = entry.callOverrides
+			?.filter(
+				(call) =>
+					reachable === undefined || reachable.has(fn.instructionBlock(call.instruction)),
+			)
+			.map((call) => {
+				const entryId = ids.get(call.target)?.get(call.entryId);
+				if (entryId === undefined) throw new RangeError("Dangling native entry override");
+				return entryId === call.entryId ? call : Object.freeze({ ...call, entryId });
+			});
+		const id = ids.get(entry.function)!.get(entry.id)!;
+		const changed =
+			calls !== undefined &&
+			(calls.length !== entry.callOverrides!.length ||
+				calls.some((call, index) => call !== entry.callOverrides![index]));
+		if (!changed) return id === entry.id ? entry : Object.freeze({ ...entry, id });
+		const overrides = Object.freeze(calls);
+		const previous = entry.valueRepresentations!;
+		// A new array owns the rebound proof; other consumers may retain the old numbering.
+		const values = Object.freeze([...previous]);
+		representationProofs.set(values, {
+			...representationProofs.get(previous)!,
+			callOverrides: overrides.map((call) => ({ ...call })),
+		});
+		return Object.freeze({
+			...entry,
+			id,
+			callOverrides: overrides,
+			valueRepresentations: values,
+		});
+	});
+}
+
 export function coreNativeEntryProofIsCurrent(
 	fn: CoreFunctionStore,
 	entry: CoreDirectEntryPlan,
