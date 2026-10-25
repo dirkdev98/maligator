@@ -73,6 +73,20 @@ describe("planned String comparison lengths", () => {
 			"mal_ops_strict_equal_boxed(",
 		);
 	});
+	it("carries a successful String key conversion into a later equality", () => {
+		const native = fixture([
+			{ opcode: "CREATE_STRING", dst: 2, stringIndex: 1 },
+			{ opcode: "TO_PROPERTY_KEY", dst: 3, object: 1, key: 2 },
+			{ opcode: "BINARY", dst: 4, left: 0, right: 3, operator: "===" },
+			{ opcode: "RETURN", value: 4 },
+		]);
+		expect(native.storage!.stringComparisons).toEqual([
+			{ instructionIp: 2, register: 3, length: 5, kind: "boxed" },
+		]);
+		const emitted = emitCompiledFunction(native, 0, "", false)!.source;
+		expect(emitted).toContain("mal_vm_op_to_property_key(");
+		expect(emitted).toContain("mal_ops_strict_equal_string_constant(");
+	});
 	it("ignores a dead non-String writer after refining an edge", () => {
 		const native = fixture([
 			{ opcode: "CREATE_BOOLEAN", dst: 2, value: true },

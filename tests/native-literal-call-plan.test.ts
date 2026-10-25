@@ -116,6 +116,46 @@ describe("persisted literal and Math call choices", () => {
 		});
 		expect(changed.native.functions[0]!.storage!.literalPropertyDefinitions).toEqual([]);
 	});
+	it.each([0, 1])(
+		"requires literal identity across a key join with alternative %i",
+		(alternative) => {
+			const image = propertyImage("field");
+			const original = image.native.functions[0]!.body;
+			const instructions = [
+				{ opcode: "CREATE_OBJECT", dst: 1 },
+				{ opcode: "JUMP_IF", cond: 0, targetIp: 4 },
+				{ opcode: "CREATE_STRING", dst: 2, stringIndex: 0 },
+				{ opcode: "JUMP", targetIp: 6 },
+				{ opcode: "CREATE_STRING", dst: 2, stringIndex: alternative },
+				{ opcode: "JUMP", targetIp: 6 },
+				{ opcode: "TO_PROPERTY_KEY", dst: 3, object: 1, key: 2 },
+				{
+					opcode: "DEFINE_PROPERTY",
+					object: 1,
+					key: 3,
+					value: 0,
+					enumerable: true,
+					writable: true,
+					configurable: true,
+				},
+				{ opcode: "RETURN", value: 1 },
+			] satisfies typeof original.instructions;
+			const body = {
+				...original,
+				parameterCount: 1,
+				registerCount: 4,
+				instructions,
+				positions: instructions.map(() => 0),
+			};
+			const strings = ["field", "other"].map((value) =>
+				[...value].map((c) => c.charCodeAt(0)),
+			);
+			const native = createConservativeNativePlan([body], strings).functions[0]!;
+			expect(native.storage!.literalPropertyDefinitions).toEqual(
+				alternative === 0 ? [{ instructionIp: 7, stringIndex: 0 }] : [],
+			);
+		},
+	);
 
 	it("persists guarded unary and binary calls and rejects a mismatched arity", () => {
 		const image = mathImage();

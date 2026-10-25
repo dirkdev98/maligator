@@ -22,6 +22,7 @@ import {
 } from "./native-scalar-operators.ts";
 import { selectNativeSpanContinuations } from "./native-span-continuation.ts";
 import type { NativeSpanContinuation } from "./native-span-continuation.ts";
+import { createNativeStringLiteralQuery } from "./native-string-literals.ts";
 import { nativePlanKeepsOrdinaryLowering, nativeRecordCallIps } from "./program-image.ts";
 import type {
 	NativeDirectEntryPlan,
@@ -3411,6 +3412,41 @@ function stringConstantIsArrayIndex(units: ReadonlyArray<number>): boolean {
 	return true;
 }
 
+function selectLiteralPropertyDefinitions(
+	native: NativeFunctionPlan,
+	body: NativeBodyFacts,
+	strings: ReadonlyArray<ReadonlyArray<number>>,
+	groups: ReadonlyArray<ReadonlyArray<number>>,
+): Array<NativeLiteralPropertyDefinitionPlan> {
+	if (!native.body.instructions.some((op) => op.opcode === "CREATE_STRING")) return [];
+	let literalAt: ReturnType<typeof createNativeStringLiteralQuery> | undefined;
+	const plans: Array<NativeLiteralPropertyDefinitionPlan> = [];
+	for (const [ip, op] of native.body.instructions.entries()) {
+		if (op.opcode !== "DEFINE_PROPERTY" || body.projection?.unreachable.has(ip)) continue;
+		const representation = native.registerRepresentations[op.key];
+		if (
+			representation === "number" ||
+			representation === "int32" ||
+			representation === "boolean"
+		)
+			continue;
+		const prior = native.body.instructions[ip - 1];
+		const index =
+			prior?.opcode === "CREATE_STRING" &&
+			prior.dst === op.key &&
+			!body.jumpTargets.has(ip)
+				? prior.stringIndex
+				: (literalAt ??= createNativeStringLiteralQuery(native, body, {
+						externalGroups: groups,
+						literalFact: (index) => index,
+					}))(ip, op.key);
+		const units = index === undefined ? undefined : strings[index];
+		if (index !== undefined && units !== undefined && !stringConstantIsArrayIndex(units))
+			plans.push({ instructionIp: ip, stringIndex: index });
+	}
+	return plans;
+}
+
 export function analyzeNativeFastPaths(
 	native: NativeFunctionPlan,
 	entry?: NativeDirectEntryPlan,
@@ -3878,11 +3914,18 @@ export function analyzeNativeFastPaths(
 	return {
 		plans,
 		refineForControlFlow(projected) {
-			if (projected.projection === undefined) return plans;
+			const windows = nativeFastPathWindows(plans, false);
+			const literalPropertyDefinitions = selectLiteralPropertyDefinitions(
+				native,
+				projected,
+				stringConstants,
+				windows.map((window) => window.claimedIps),
+			);
+			if (projected.projection === undefined)
+				return { ...plans, literalPropertyDefinitions };
 			// Overlay consumers own storage but never introduce helper entry points.
 			const reserved = new Set<number>();
-			for (const window of nativeFastPathWindows(plans, false))
-				for (const ip of window.claimedIps) reserved.add(ip);
+			for (const window of windows) for (const ip of window.claimedIps) reserved.add(ip);
 			const unavailable = new Set([...spanBlocked, ...reserved]);
 			for (const plan of plans.objectEnumerationSnapshots)
 				for (const ip of plan.claimedIps) unavailable.add(ip);
@@ -3947,7 +3990,7 @@ export function analyzeNativeFastPaths(
 			const { constructorInitialization, privateFieldReserve, ...remaining } = plans;
 			return {
 				...remaining,
-				literalPropertyDefinitions: plans.literalPropertyDefinitions.filter(liveSite),
+				literalPropertyDefinitions,
 				mathCalls: plans.mathCalls.filter(liveSite),
 				numberPredicates: plans.numberPredicates.filter(liveSite),
 				stringTransforms: plans.stringTransforms.filter(liveSite),

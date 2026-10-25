@@ -276,6 +276,9 @@ The independent target boundary and current storage contract are recorded in
       Array initializer discovery follows unique surviving edges across proven
       branches, retaining source store sites and live initializer effects. Holes,
       protected incremental ranges and independent helper entries retain fallback.
+      Static property definitions now join reaching String identities through
+      copies and key conversions on the same graph. Conversion effects stay at
+      their source sites; unknown and indexed keys keep their existing paths.
 - [x] Normalize primitive conversion calls from semantic kind unions. Eligible
       `Number` and `String` calls use unary conversions, carrying kind and effect
       proofs into native storage, full entries and frameless numeric paths.
