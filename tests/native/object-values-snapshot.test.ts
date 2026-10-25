@@ -61,6 +61,22 @@ describe("Object enumeration snapshots", () => {
 						),
 					),
 				).toBe(true);
+				const surviving = pair.programImage.native.functions.find(
+					(fn) =>
+						String.fromCharCode(
+							...(pair.programImage.runtime.stringConstants[fn.body.nameStringIndex] ??
+								[]),
+						) === "survivingValueIndex",
+				)!;
+				expect(surviving.storage!.objectEnumerationSnapshots).toEqual([]);
+				const entry = surviving.directEntries.find(
+					(e) => e.parameterRepresentations[1] === "string",
+				)!;
+				expect(entry).toBeDefined();
+				expect(entry.storage!.objectEnumerationSnapshots).toHaveLength(1);
+				expect(
+					entry.storage!.objectEnumerationSnapshots[0]!.elementIps.length,
+				).toBeGreaterThan(0);
 			} else {
 				for (const [name, family] of [
 					["keysAfterHandler", "keys"],

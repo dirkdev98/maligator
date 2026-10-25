@@ -257,6 +257,10 @@ The independent target boundary and current storage contract are recorded in
       entry's surviving edges. Overlay consumers retain storage ownership without
       becoming helper entry roots; dead observers and overwrites no longer pin
       materialization. Generic span fallbacks retain String comparison length facts.
+      Enumeration counts and snapshots now use the same projected virtual-value
+      lifetimes, retaining fallback materialization and profiled observations.
+      Map hint sites also have Core collection-chain entry certificates; retiring
+      dead certificates needs a conditional helper-entry reachability contract.
 - [x] Normalize primitive conversion calls from semantic kind unions. Eligible
       `Number` and `String` calls use unary conversions, carrying kind and effect
       proofs into native storage, full entries and frameless numeric paths.

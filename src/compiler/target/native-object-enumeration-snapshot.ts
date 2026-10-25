@@ -5,7 +5,6 @@ import {
 	validateNativeVirtualValue,
 } from "./native-virtual-value.ts";
 import type { NativeFunctionPlan } from "./program-image.ts";
-import { vmInstructionReadRegisters } from "./runtime-image.ts";
 
 export const NATIVE_ENUMERATION_SNAPSHOT_CAPACITY = 16;
 export const NATIVE_ENUMERATION_SNAPSHOT_KINDS = [
@@ -51,6 +50,7 @@ export function selectNativeObjectEnumerationSnapshots(
 		if (
 			(call.opcode !== "CALL" && call.opcode !== "CALL_KNOWN") ||
 			call.arguments.length === 0 ||
+			body.projection?.unreachable.has(ip) ||
 			body.handlerTargets[ip] !== undefined ||
 			unavailable(ip)
 		)
@@ -114,6 +114,7 @@ export function selectNativeObjectEnumerationSnapshots(
 			call.dst,
 			undefined,
 			body.handlerTargets,
+			body,
 		);
 		const consumers = new Map<number, ReadonlyArray<number>>();
 		const lengthIps: Array<number> = [],
@@ -130,7 +131,7 @@ export function selectNativeObjectEnumerationSnapshots(
 			}
 			if (consumerIp === ip) continue;
 			const op = fn.instructions[consumerIp]!;
-			const reads = vmInstructionReadRegisters(op).filter((r) => aliases.may.has(r));
+			const reads = body.reads[consumerIp]!.filter((r) => aliases.may.has(r));
 			if (!reads.length || op.opcode === "MOVE" || op.opcode === "THROW_IF_TDZ") continue;
 			if (reads.length !== 1 || !aliases.must.has(reads[0]!) || unavailable(consumerIp)) {
 				safe = false;
@@ -164,6 +165,7 @@ export function selectNativeObjectEnumerationSnapshots(
 				false,
 				undefined,
 				body.handlerTargets,
+				body,
 			);
 		} catch (error) {
 			if (!(error instanceof RangeError)) throw error;

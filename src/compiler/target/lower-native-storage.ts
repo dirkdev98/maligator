@@ -1391,7 +1391,7 @@ function lowerStorage(
 		externalEntries,
 	});
 	body = projectStorageBodyFacts(native, body, controlFlow, externalEntries);
-	const fastPaths = selection.refineSpanContinuations(body.accesses);
+	const fastPaths = selection.refineVirtualValues(body.accesses);
 	const expressionWindows = nativeFastPathWindows(fastPaths);
 	const gcCertificate = native.gc;
 	native = nativeControlFlowContract(native, controlFlow);

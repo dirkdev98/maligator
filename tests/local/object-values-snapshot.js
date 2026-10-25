@@ -1,5 +1,17 @@
 const gc = globalThis.__mal_collect_garbage ?? globalThis.gc;
 const rows = [];
+function survivingValueCount(record, flag, observe) {
+	let values = Object.values(record);
+	if (flag !== flag) values = observe(values);
+	observe(record);
+	return values.length;
+}
+function survivingValueIndex(record, flag, index, observe) {
+	const values = Object.values(record);
+	if (flag !== flag) observe(values);
+	observe(record);
+	return [values.length, values[index]];
+}
 function inspect(record, index, observe) {
 	const values = Object.values(record);
 	observe(record);
@@ -219,5 +231,61 @@ if (typeof process === "undefined" || process.env.MAL_PRIMORDIALS !== "locked") 
 		}),
 		calls,
 	);
+}
+function collectingSnapshotObserver(value) {
+	if (typeof gc === "function") gc();
+	if (Array.isArray(value)) value[0] = "observed";
+	else if (value && typeof value === "object") {
+		value.changed = "late";
+		delete value.first;
+	}
+	return ["replacement"];
+}
+rows.push(
+	survivingValueCount({ first: "direct" }, "string", collectingSnapshotObserver),
+	survivingValueCount({ first: "direct" }, NaN, collectingSnapshotObserver),
+	survivingValueIndex({ first: "direct" }, "string", 0, collectingSnapshotObserver),
+	survivingValueIndex({ first: "direct" }, NaN, 0, collectingSnapshotObserver),
+);
+for (const record of [
+	{ first: { label: "surviving" }, second: undefined },
+	boundary,
+	large,
+	accessors,
+	proxy,
+	"ab𝄞",
+	null,
+	undefined,
+]) {
+	try {
+		rows.push(survivingValueCount(record, "string", collectingSnapshotObserver));
+		rows.push(survivingValueCount(record, NaN, collectingSnapshotObserver));
+		for (const index of [
+			0,
+			"0",
+			17,
+			Symbol("missing"),
+			{
+				toString() {
+					events.push("snapshot-key");
+					if (typeof gc === "function") gc();
+					return "0";
+				},
+			},
+		]) {
+			rows.push(survivingValueIndex(record, "string", index, collectingSnapshotObserver));
+			rows.push(survivingValueIndex(record, NaN, index, collectingSnapshotObserver));
+		}
+	} catch (error) {
+		rows.push(error.name);
+	}
+}
+try {
+	survivingValueCount({ first: 1 }, NaN, () => {
+		if (typeof gc === "function") gc();
+		throw new Error("snapshot observer");
+	});
+} catch (error) {
+	rows.push(error.message);
 }
 console.log(JSON.stringify(rows));

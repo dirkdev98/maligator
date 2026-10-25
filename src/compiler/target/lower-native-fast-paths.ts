@@ -3417,7 +3417,7 @@ export function analyzeNativeFastPaths(
 	body = analyzeNativeBodyFacts(native.body),
 ): {
 	readonly plans: NativeFastPathPlans;
-	readonly refineSpanContinuations: (body: NativeBodyFacts) => NativeFastPathPlans;
+	readonly refineVirtualValues: (body: NativeBodyFacts) => NativeFastPathPlans;
 } {
 	const fn = native.body;
 	const { handlerEntries, jumpTargets, branchSources } = body;
@@ -3628,6 +3628,11 @@ export function analyzeNativeFastPaths(
 		numericLoopBlocked.add(ip);
 	};
 	const spanBlocked = new Set([...blocked, ...pollingEdges, ...fusions.keys()]);
+	const enumerationBlocked = new Set([
+		...[...blocked].filter((ip) => !snapshotOverlayIps.has(ip)),
+		...snapshotBlocked,
+		...pollingEdges,
+	]);
 	const spanContinuations = selectNativeSpanContinuations(
 		native,
 		body,
@@ -3870,19 +3875,32 @@ export function analyzeNativeFastPaths(
 	};
 	return {
 		plans,
-		refineSpanContinuations(projected) {
+		refineVirtualValues(projected) {
 			if (projected.projection === undefined) return plans;
 			// Overlay consumers own storage but never introduce helper entry points.
-			const unavailable = new Set(spanBlocked);
+			const reserved = new Set<number>();
 			for (const window of nativeFastPathWindows(plans, false))
-				for (const ip of window.claimedIps) unavailable.add(ip);
+				for (const ip of window.claimedIps) reserved.add(ip);
+			const unavailable = new Set([...spanBlocked, ...reserved]);
+			for (const plan of plans.objectEnumerationSnapshots)
+				for (const ip of plan.claimedIps) unavailable.add(ip);
+			const spanContinuations = selectNativeSpanContinuations(
+				native,
+				projected,
+				stringConstants,
+				(ip) => unavailable.has(ip),
+			);
+			const enumerationUnavailable = new Set([...enumerationBlocked, ...reserved]);
+			for (const plan of spanContinuations)
+				for (const ip of plan.claimedIps) enumerationUnavailable.add(ip);
 			return {
 				...plans,
-				spanContinuations: selectNativeSpanContinuations(
+				spanContinuations,
+				objectEnumerationSnapshots: selectNativeObjectEnumerationSnapshots(
 					native,
 					projected,
 					stringConstants,
-					(ip) => unavailable.has(ip),
+					(ip) => enumerationUnavailable.has(ip),
 				),
 			};
 		},
@@ -3891,7 +3909,7 @@ export function analyzeNativeFastPaths(
 
 export function nativeFastPathWindows(
 	fastPaths: NativeFastPathPlans,
-	includeSpanContinuations = true,
+	includeVirtualValues = true,
 ) {
 	return [
 		...fastPaths.propertyProjections,
@@ -3902,8 +3920,9 @@ export function nativeFastPathWindows(
 		...fastPaths.numericLoopRegions,
 		...fastPaths.arrayInitializations,
 		...fastPaths.mapEntries,
-		...fastPaths.objectEnumerationSnapshots,
-		...(includeSpanContinuations ? fastPaths.spanContinuations : []),
+		...(includeVirtualValues
+			? [...fastPaths.objectEnumerationSnapshots, ...fastPaths.spanContinuations]
+			: []),
 		...fastPaths.pairedArrayLoops,
 		...fastPaths.arrayPresence,
 		...fastPaths.arrayPairDestructure,
