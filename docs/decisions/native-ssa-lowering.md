@@ -184,6 +184,23 @@ entries, typed entries and availability passes. Physical slots, generated names,
 entry representations and unsigned-fusion suppression remain local to each variant.
 A fresh emission rebuilds this analysis after image mutation.
 
+Numeric-fusion discovery and entry admission share the emitter's operand-kind rule.
+Known primitive unions can convert to Number independently of the other operand's
+effects. Addition excludes its String arm; equality retains Number-only admission,
+and relational String pairs keep lexical comparison on the original fallback.
+Starts, links and finishes consume the same partial facts in full and resumable
+entries. A nontruncating fusion carries only boxed intermediates in its `f64`
+temporary; a failed guard materializes that value before coercion, root publication
+or re-entry. Scalar results retain their existing completion-before-decode contract.
+Numeric overlays preserve the original operations, so frameless entries can prove
+their own scalar paths without inheriting the full entry's fusion state or losing
+eligibility merely because that state exists.
+Fusion overlays still block scalar rescheduling, but preserve ordinary value-kind
+definitions for tracing proofs. Primitive and immortal-literal phi inputs therefore
+keep their untraced status, while borrowed suspension values and potentially managed
+origins retain roots. An elided boxed intermediate keeps continuously rooted fallback
+storage because its semantic definition may leave that storage unwritten.
+
 Capture-owner access is also a persisted native plan. It records external owner
 lookups, original copied-value descriptor ordinals, and eligibility for direct
 access to the function's own environment. Environment-stack operations disable

@@ -516,11 +516,23 @@ function scalarStorageOwnership(
 		Pick<NativePropertyProjectionPlan, "claimedIps" | "borrowedRegisters">
 	>,
 	suspension?: NativeSuspensionPlan,
+	purpose: "scheduling" | "value-lifetime" = "scheduling",
 ): NativeScalarOwnership {
 	const fn = native.body;
-	const blocked = new Set(native.specializations.flatMap((region) => region.claimedIps));
+	const blocked = new Set(
+		native.specializations.flatMap((region) =>
+			purpose === "value-lifetime" && region.kind === "numeric-fusion"
+				? []
+				: region.claimedIps,
+		),
+	);
 	for (const plan of projections) for (const ip of plan.claimedIps) blocked.add(ip);
-	for (const action of native.regionActions) blocked.add(action.ip);
+	for (const action of native.regionActions)
+		if (
+			purpose !== "value-lifetime" ||
+			native.specializations[action.regionIndex]?.kind !== "numeric-fusion"
+		)
+			blocked.add(action.ip);
 	for (const site of native.fieldCalls ?? [])
 		for (let ip = site.allocationIp; ip <= site.callIp; ip++) blocked.add(ip);
 	for (const ip of nativeRecordCallIps(native)) blocked.add(ip);
@@ -1520,7 +1532,16 @@ function lowerStorage(
 					untracedValueRegisters(
 						native,
 						body,
-						ownership,
+						// Fusion overlays preserve value kinds while blocking scalar rescheduling.
+						native.specializations.some((region) => region.kind === "numeric-fusion")
+							? scalarStorageOwnership(
+									native,
+									body,
+									expressionWindows,
+									suspension,
+									"value-lifetime",
+								)
+							: ownership,
 						scalar.rematerializedConstantIps,
 					),
 					gcCertificate,
@@ -2282,6 +2303,7 @@ export function validateNativeStorage(
 									projected,
 									nativeFastPathWindows(selected),
 									suspension,
+									"value-lifetime",
 								),
 								variant.storage.rematerializedConstantIps,
 							),

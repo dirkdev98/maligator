@@ -1118,7 +1118,7 @@ export interface CoreAllocatedNumericFusionRegion extends CoreAllocatedRegionEnv
 	"structural"
 > {
 	readonly composition: "overlay";
-	readonly runtimeGuard: "number-operands" | "int32-operands";
+	readonly runtimeGuard: "primitive-number-operands" | "int32-operands";
 	readonly pairs: ReadonlyArray<{
 		readonly first: Extract<CompilerInstruction, { type: "binary" }>;
 		readonly finish: Extract<CompilerInstruction, { type: "binary" }>;

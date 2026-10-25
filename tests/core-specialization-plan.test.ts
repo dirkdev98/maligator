@@ -1040,7 +1040,7 @@ describe("late Core specialization plan", () => {
 				kind: "numeric-fusion",
 				representation: "binary-pairs-f64",
 				composition: "overlay",
-				runtimeGuard: "number-operands",
+				runtimeGuard: "primitive-number-operands",
 			},
 		]);
 		expect(

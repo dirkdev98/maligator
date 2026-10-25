@@ -742,7 +742,7 @@ export type VmNumericFusionRegion = VmRegionEnvelope<
 	"none"
 > & {
 	readonly composition: "overlay";
-	readonly runtimeGuard: "number-operands" | "int32-operands";
+	readonly runtimeGuard: "primitive-number-operands" | "int32-operands";
 	readonly pairs: ReadonlyArray<{
 		readonly firstIp: number;
 		readonly finishIp: number;
@@ -3952,7 +3952,7 @@ function lowerExecutionFunctionToNativePlan(
 				region.composition !== "overlay" ||
 				region.runtimeGuard !==
 					(region.representation === "binary-pairs-f64"
-						? "number-operands"
+						? "primitive-number-operands"
 						: "int32-operands") ||
 				region.controlFlow.ordinaryBlocks.length === 0 ||
 				region.controlFlow.exceptionalBlocks.length !== 0 ||

@@ -31,6 +31,7 @@ import {
 	COMPILER_VALUE_KIND_UNDEFINED,
 	compilerOperatorIsNullishEquality,
 	compilerOperatorIsPrimitiveStringConcatenation,
+	compilerNumberFastPathInputKind,
 } from "../shared/compiler-value-kinds.ts";
 import type { CompilerValueKindMask } from "../shared/compiler-value-kinds.ts";
 import {
@@ -3539,12 +3540,18 @@ function emitCompiledVariant(
 								}
 							: undefined;
 					},
-					// A selected region or numeric worker reads its body better than per-load probes.
+					// Numeric overlays preserve the bytecode a frameless entry proves independently.
 					specialized:
 						worker !== undefined ||
 						(nativeContract.literalSwitches?.length ?? 0) > 0 ||
-						nativeContract.specializations.length > 0 ||
-						nativeContract.regionActions.length > 0 ||
+						nativeContract.specializations.some(
+							(region) => region.kind !== "numeric-fusion",
+						) ||
+						nativeContract.regionActions.some(
+							(action) =>
+								nativeContract.specializations[action.regionIndex]?.kind !==
+								"numeric-fusion",
+						) ||
 						storage.numberRecordRegions.length > 0 ||
 						storage.propertyReadRegions.length > 0 ||
 						storage.propertyReadPairs.length > 0 ||
@@ -6008,9 +6015,13 @@ function emitBody(
 			nativeInstructions[candidate.finishIp]?.kind === "unsigned-arithmetic" ||
 			[candidate.action.id, candidate.finishIp].some((ip) => {
 				const masks = nativeFacts?.[ip]?.inputKindMasks;
+				const instruction = fn.instructions[ip];
 				return (
+					instruction?.opcode === "BINARY" &&
 					masks !== undefined &&
-					masks.some((mask) => (mask & COMPILER_VALUE_KIND_NUMBER) === 0)
+					masks.some(
+						(mask) => compilerNumberFastPathInputKind(instruction.operator, mask) === 0,
+					)
 				);
 			})
 		)
@@ -6042,8 +6053,8 @@ function emitBody(
 		if (incoming.truncating || start.truncating || instruction?.opcode !== "BINARY")
 			throw new Error("Invalid numeric-fusion region");
 		// Each pair keeps its value unmaterialized only while its start's result is boxed.
-		const incomingFused = reps[incoming.first.dst] !== "number";
-		if (incomingFused && reps[instruction.dst] !== "number") {
+		const incomingFused = reps[incoming.first.dst] === "boxed";
+		if (incomingFused && reps[instruction.dst] === "boxed") {
 			numericFusionActionByIp.set(ip, { ...incoming, role: "link" });
 			chainHeads.set(ip, incoming.id);
 		} else numericFusionActionByIp.set(ip, incomingFused ? incoming : start);
@@ -6474,7 +6485,7 @@ function emitBody(
 		if (
 			instruction.opcode === "BINARY" &&
 			fusion?.role === "start" &&
-			(fusion.truncating || reps[instruction.dst] !== "number")
+			(fusion.truncating || reps[instruction.dst] === "boxed")
 		) {
 			const id = fusion.id;
 			if (fusion.truncating) {
@@ -11151,7 +11162,7 @@ function emitInstruction(
 				const startsFusion =
 					last &&
 					numericFusionAction?.role === "start" &&
-					reps[instruction.dst] !== "number";
+					reps[instruction.dst] === "boxed";
 				const fallback = startsFusion
 					? emitInstruction(
 							instruction,
@@ -11306,7 +11317,7 @@ function emitInstruction(
 				inputKinds !== undefined &&
 				(!leftIsNum || !rightIsNum || operator === "**") &&
 				(fusion === undefined ||
-					reps[fusion.role === "start" ? dst : fusion.first.dst] === "number") &&
+					reps[fusion.role === "start" ? dst : fusion.first.dst] !== "boxed") &&
 				inputKinds.every((mask) =>
 					compilerValueKindMaskIsSubset(mask, COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE),
 				)
@@ -11390,162 +11401,20 @@ function emitInstruction(
 					...(canThrow ? [throwCheck()] : []),
 				];
 			}
-			if (fusion?.role === "link") {
-				const firstOnLeft = left === fusion.first.dst;
-				const external = firstOnLeft ? right : left;
-				const externalIsNum =
-					isNumericRep(reps[external]!) ||
-					operandKind(external) === COMPILER_VALUE_KIND_NUMBER;
-				const externalExpr = externalIsNum
-					? typedNumber(external)
-					: `mal_ops_number_as_f64(${boxed(external)})`;
-				const value = `__nf_${fusion.id}_value`;
-				const nativeExpr = nativeNumberExpr(
-					operator,
-					firstOnLeft ? value : externalExpr,
-					firstOnLeft ? externalExpr : value,
-				);
-				if (nativeExpr === null) throw new Error("Invalid numeric-fusion link");
-				const slow = profileCall("binary", reentrantValue(binaryValue()));
-				return [
-					`if (__nf_${fusion.id}_ok${externalIsNum ? "" : ` && mal_ops_is_number(${boxed(external)})`}) {`,
-					`  ${value} = ${nativeExpr};`,
-					`} else {`,
-					`  if (__nf_${fusion.id}_ok) r${fusion.first.dst} = ${profileCall("boxing", `mal_ops_number_value(${value})`)};`,
-					`  __nf_${fusion.id}_ok = false;`,
-					`  r${dst} = ${slow};`,
-					...(canThrow ? [`  ${throwCheck()}`] : []),
-					`}`,
-				];
-			}
-			if (fusion?.role === "start" && reps[dst] !== "number") {
-				const nativeExpr = nativeNumberExpr(
-					operator,
-					leftIsNum ? typedNumber(left) : `mal_ops_number_as_f64(${boxed(left)})`,
-					rightIsNum ? typedNumber(right) : `mal_ops_number_as_f64(${boxed(right)})`,
-				);
-				if (nativeExpr !== null) {
-					const guards: Array<string> = [];
-					if (!leftIsNum) guards.push(`mal_ops_is_number(${boxed(left)})`);
-					if (!rightIsNum) guards.push(`mal_ops_is_number(${boxed(right)})`);
-					const slow = profileCall("binary", reentrantValue(binaryValue()));
-					return [
-						`__nf_${fusion.id}_ok = ${guards.length === 0 ? "true" : guards.join(" && ")};`,
-						`if (__nf_${fusion.id}_ok) {`,
-						`  __nf_${fusion.id}_value = ${nativeExpr};`,
-						`} else {`,
-						`  r${dst} = ${slow};`,
-						...(canThrow ? [`  ${throwCheck()}`] : []),
-						`}`,
-					];
-				}
-			}
-			if (fusion?.role === "finish" && reps[fusion.first.dst] !== "number") {
-				const first = fusion.first;
-				const firstOnLeft = left === first.dst;
-				const firstOnRight = right === first.dst;
-				const firstLeftIsNum = isNumericRep(reps[first.left]!);
-				const firstRightIsNum = isNumericRep(reps[first.right]!);
-				const firstExpr = nativeNumberExpr(
-					first.operator,
-					firstLeftIsNum
-						? typedNumber(first.left)
-						: `mal_ops_number_as_f64(${boxed(first.left)})`,
-					firstRightIsNum
-						? typedNumber(first.right)
-						: `mal_ops_number_as_f64(${boxed(first.right)})`,
-				);
-				if ((firstOnLeft || firstOnRight) && firstExpr !== null) {
-					const external = firstOnLeft ? right : left;
-					const externalIsNum =
-						isNumericRep(reps[external]!) ||
-						operandKind(external) === COMPILER_VALUE_KIND_NUMBER;
-					const externalExpr = externalIsNum
-						? typedNumber(external)
-						: `mal_ops_number_as_f64(${boxed(external)})`;
-					const compare = NATIVE_COMPARE[operator];
-					if (compare !== undefined) {
-						const guard = externalIsNum
-							? `__nf_${fusion.id}_ok`
-							: `__nf_${fusion.id}_ok && mal_ops_is_number(${boxed(external)})`;
-						const fast = firstOnLeft
-							? `__nf_${fusion.id}_value ${compare} ${externalExpr}`
-							: `${externalExpr} ${compare} __nf_${fusion.id}_value`;
-						const slow = profileCall("binary", reentrantValue(binaryValue()));
-						return [
-							`if (${guard}) {`,
-							reps[dst] === "boolean"
-								? `  r${dst} = ${fast};`
-								: `  r${dst} = ${profileCall("boxing", `mal_value_new_boolean(${fast})`)};`,
-							`} else {`,
-							...(externalIsNum
-								? []
-								: [
-										`  if (__nf_${fusion.id}_ok) r${first.dst} = ${profileCall("boxing", `mal_ops_number_value(__nf_${fusion.id}_value)`)};`,
-									]),
-							reps[dst] === "boolean"
-								? `  r${dst} = mal_value_to_boolean(${slow});`
-								: `  r${dst} = ${slow};`,
-							...(canThrow ? [`  ${throwCheck()}`] : []),
-							`}`,
-						];
-					}
-					const nativeExpr = nativeNumberExpr(
-						operator,
-						firstOnLeft ? `__nf_${fusion.id}_value` : externalExpr,
-						firstOnRight ? `__nf_${fusion.id}_value` : externalExpr,
-					);
-					if (nativeExpr !== null) {
-						const fusedInt32 = `mal_ops_number_to_i32(__nf_${fusion.id}_value)`;
-						const externalInt32 =
-							reps[external] === "int32"
-								? inputValue(external)
-								: `mal_ops_number_to_i32(${externalExpr})`;
-						const int32Result =
-							reps[dst] === "int32" && INT32_RESULT_OPERATORS.has(operator)
-								? nativeInt32Expr(
-										operator,
-										firstOnLeft ? fusedInt32 : externalInt32,
-										firstOnRight ? fusedInt32 : externalInt32,
-									)
-								: null;
-						const result =
-							reps[dst] === "number"
-								? nativeExpr
-								: reps[dst] === "int32"
-									? (int32Result ?? `mal_ops_number_to_i32(${nativeExpr})`)
-									: profileCall("boxing", `mal_ops_number_value(${nativeExpr})`);
-						const guard = externalIsNum
-							? `__nf_${fusion.id}_ok`
-							: `__nf_${fusion.id}_ok && mal_ops_is_number(${boxed(external)})`;
-						const slow = profileCall("binary", reentrantValue(binaryValue()));
-						return [
-							`if (${guard}) {`,
-							`  r${dst} = ${result};`,
-							`} else {`,
-							...slowPathFramePosition(),
-							...(externalIsNum
-								? []
-								: [
-										`  if (__nf_${fusion.id}_ok) r${first.dst} = ${profileCall("boxing", `mal_ops_number_value(__nf_${fusion.id}_value)`)};`,
-									]),
-							`  MalValue __binary_result_${ip} = ${slow};`,
-							...(canThrow ? [`  ${throwCheck()}`] : []),
-							`  r${dst} = ${callValue(dst, `__binary_result_${ip}`)};`,
-							`}`,
-						];
-					}
-				}
-			}
+			const fusedInput =
+				fusion !== undefined && fusion.role !== "start" ? fusion.first.dst : undefined;
 			const numericInputs =
-				(!leftIsNum || !rightIsNum || reps[dst] === "boxed") &&
+				(!leftIsNum ||
+					!rightIsNum ||
+					reps[dst] === "boxed" ||
+					fusedInput !== undefined) &&
 				(producesNumberFromNumbers(operator) || RELATIONAL_COMPARE.has(operator))
 					? nativeBinaryNumberInputs(
 							operator,
-							leftIsNum
+							left === fusedInput || leftIsNum
 								? COMPILER_VALUE_KIND_NUMBER
 								: (operandKind(left) ?? COMPILER_VALUE_KIND_TOP),
-							rightIsNum
+							right === fusedInput || rightIsNum
 								? COMPILER_VALUE_KIND_NUMBER
 								: (operandKind(right) ?? COMPILER_VALUE_KIND_TOP),
 							boxed(left),
@@ -11554,6 +11423,143 @@ function emitInstruction(
 					: undefined;
 			const numericOperand = (register: number): string =>
 				exactPrimitiveNumber(register, numericInputs!.masks[register === left ? 0 : 1]);
+			if (fusion?.role === "link") {
+				const firstOnLeft = left === fusion.first.dst;
+				const external = firstOnLeft ? right : left;
+				const value = `__nf_${fusion.id}_value`;
+				const slow = profileCall("binary", reentrantValue(binaryValue()));
+				const fallback = [
+					...(numericInputs?.guard === ""
+						? []
+						: [
+								`if (__nf_${fusion.id}_ok) r${fusion.first.dst} = ${profileCall("boxing", `mal_ops_number_value(${value})`)};`,
+								`__nf_${fusion.id}_ok = false;`,
+							]),
+					`r${dst} = ${slow};`,
+					...(canThrow ? [throwCheck()] : []),
+				];
+				if (numericInputs === undefined) return fallback;
+				const externalExpr = numericOperand(external);
+				const nativeExpr = nativeNumberExpr(
+					operator,
+					firstOnLeft ? value : externalExpr,
+					firstOnLeft ? externalExpr : value,
+				);
+				if (nativeExpr === null) throw new Error("Invalid numeric-fusion link");
+				return [
+					`if (__nf_${fusion.id}_ok${numericInputs.guard === "" ? "" : ` && ${numericInputs.guard}`}) {`,
+					`  ${value} = ${nativeExpr};`,
+					`} else {`,
+					...fallback.map((line) => `  ${line}`),
+					`}`,
+				];
+			}
+			if (fusion?.role === "start" && reps[dst] === "boxed") {
+				if (numericInputs === undefined) {
+					const fallback = emitGenericInstruction();
+					if (fallback === null) return null;
+					return [`__nf_${fusion.id}_ok = false;`, ...fallback];
+				}
+				const nativeExpr = nativeNumberExpr(
+					operator,
+					numericOperand(left),
+					numericOperand(right),
+				);
+				if (nativeExpr === null) throw new Error("Invalid numeric-fusion start");
+				if (numericInputs.guard === "")
+					return [
+						`__nf_${fusion.id}_ok = true;`,
+						`__nf_${fusion.id}_value = ${nativeExpr};`,
+					];
+				const slow = profileCall("binary", reentrantValue(binaryValue()));
+				return [
+					`__nf_${fusion.id}_ok = ${numericInputs.guard};`,
+					`if (__nf_${fusion.id}_ok) {`,
+					`  __nf_${fusion.id}_value = ${nativeExpr};`,
+					`} else {`,
+					`  r${dst} = ${slow};`,
+					...(canThrow ? [`  ${throwCheck()}`] : []),
+					`}`,
+				];
+			}
+			if (fusion?.role === "finish" && reps[fusion.first.dst] === "boxed") {
+				const first = fusion.first;
+				const firstOnLeft = left === first.dst;
+				const external = firstOnLeft ? right : left;
+				const comparison = NATIVE_COMPARE[operator];
+				const equality = comparison !== undefined && !RELATIONAL_COMPARE.has(operator);
+				const externalIsNum =
+					isNumericRep(reps[external]!) ||
+					operandKind(external) === COMPILER_VALUE_KIND_NUMBER;
+				const externalGuard = equality
+					? externalIsNum
+						? ""
+						: `mal_ops_is_number(${boxed(external)})`
+					: numericInputs?.guard;
+				const slow = profileCall("binary", reentrantValue(binaryValue()));
+				const fallback = [
+					...(canThrow ? slowPathFramePosition() : []),
+					...(externalGuard === ""
+						? []
+						: [
+								`if (__nf_${fusion.id}_ok) r${first.dst} = ${profileCall("boxing", `mal_ops_number_value(__nf_${fusion.id}_value)`)};`,
+							]),
+					...(comparison !== undefined
+						? [
+								reps[dst] === "boolean"
+									? `r${dst} = mal_value_to_boolean(${slow});`
+									: `r${dst} = ${slow};`,
+								...(canThrow ? [throwCheck()] : []),
+							]
+						: [
+								`MalValue __binary_result_${ip} = ${slow};`,
+								...(canThrow ? [throwCheck()] : []),
+								`r${dst} = ${callValue(dst, `__binary_result_${ip}`)};`,
+							]),
+				];
+				if (externalGuard === undefined) return fallback;
+				const externalExpr = equality
+					? externalIsNum
+						? typedNumber(external)
+						: `mal_ops_number_as_f64(${boxed(external)})`
+					: numericOperand(external);
+				const fusedValue = `__nf_${fusion.id}_value`;
+				let result: string;
+				if (comparison !== undefined) {
+					const expression = firstOnLeft
+						? `${fusedValue} ${comparison} ${externalExpr}`
+						: `${externalExpr} ${comparison} ${fusedValue}`;
+					result = storeBoolean(dst, expression);
+				} else {
+					const nativeExpr = nativeNumberExpr(
+						operator,
+						firstOnLeft ? fusedValue : externalExpr,
+						firstOnLeft ? externalExpr : fusedValue,
+					);
+					if (nativeExpr === null) throw new Error("Invalid numeric-fusion finish");
+					const fusedInt32 = `mal_ops_number_to_i32(${fusedValue})`;
+					const externalInt32 =
+						reps[external] === "int32"
+							? inputValue(external)
+							: `mal_ops_number_to_i32(${externalExpr})`;
+					const int32Result =
+						reps[dst] === "int32" && INT32_RESULT_OPERATORS.has(operator)
+							? nativeInt32Expr(
+									operator,
+									firstOnLeft ? fusedInt32 : externalInt32,
+									firstOnLeft ? externalInt32 : fusedInt32,
+								)
+							: null;
+					result = `r${dst} = ${reps[dst] === "number" ? nativeExpr : reps[dst] === "int32" ? (int32Result ?? `mal_ops_number_to_i32(${nativeExpr})`) : profileCall("boxing", `mal_ops_number_value(${nativeExpr})`)};`;
+				}
+				return [
+					`if (__nf_${fusion.id}_ok${externalGuard === "" ? "" : ` && ${externalGuard}`}) {`,
+					`  ${result}`,
+					`} else {`,
+					...fallback.map((line) => `  ${line}`),
+					`}`,
+				];
+			}
 			if (
 				(reps[dst] === "number" || reps[dst] === "int32") &&
 				(!leftIsNum || !rightIsNum)

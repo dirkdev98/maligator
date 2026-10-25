@@ -85,6 +85,21 @@ export const COMPILER_NUMERIC_BINARY_OPERATORS: ReadonlySet<string> = new Set([
 	">>>",
 ]);
 
+// Equality must compare kinds before conversion; addition must retain concatenating Strings.
+export function compilerNumberFastPathInputKind(
+	operator: string,
+	kind: CompilerValueKindMask,
+): CompilerValueKindMask {
+	if (kind === COMPILER_VALUE_KIND_NUMBER) return kind;
+	if (operator === "===" || operator === "!==" || operator === "==" || operator === "!=")
+		return kind & COMPILER_VALUE_KIND_NUMBER;
+	return compilerValueKindMaskIsSubset(kind, COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE)
+		? operator === "+"
+			? kind & ~COMPILER_VALUE_KIND_STRING
+			: kind
+		: kind & COMPILER_VALUE_KIND_NUMBER;
+}
+
 // Primitive kinds ToPrimitive can produce from each kind; objects can produce any of them.
 const MAY_BECOME_STRING = COMPILER_VALUE_KIND_STRING | COMPILER_VALUE_KIND_OBJECT;
 const MAY_BECOME_BIGINT = COMPILER_VALUE_KIND_BIGINT | COMPILER_VALUE_KIND_OBJECT;

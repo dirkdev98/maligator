@@ -7,6 +7,7 @@ import {
 	COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE,
 	COMPILER_NUMERIC_BINARY_OPERATORS,
 	compilerValueKindMaskIsSubset,
+	compilerNumberFastPathInputKind,
 } from "../shared/compiler-value-kinds.ts";
 import type { CompilerValueKindMask } from "../shared/compiler-value-kinds.ts";
 
@@ -26,8 +27,8 @@ export function nativeBinaryNumberInputs(
 	const relational =
 		operator === "<" || operator === "<=" || operator === ">" || operator === ">=";
 	if (!relational && !COMPILER_NUMERIC_BINARY_OPERATORS.has(operator)) return undefined;
-	const leftMask = nativeNumberInputKind(operator, leftKind);
-	const rightMask = nativeNumberInputKind(operator, rightKind);
+	const leftMask = compilerNumberFastPathInputKind(operator, leftKind);
+	const rightMask = compilerNumberFastPathInputKind(operator, rightKind);
 	if (leftMask === 0 || rightMask === 0) return undefined;
 	const leftGuard = nativeNumberInputGuard(leftKind, leftMask, left);
 	const rightGuard = nativeNumberInputGuard(rightKind, rightMask, right);
@@ -53,17 +54,6 @@ export function nativeBinaryNumberInputs(
 		guard = guard === "" ? `!(${strings})` : `${guard} && !(${strings})`;
 	}
 	return { masks: [leftMask, rightMask], guard };
-}
-
-function nativeNumberInputKind(
-	operator: string,
-	kind: CompilerValueKindMask,
-): CompilerValueKindMask {
-	return compilerValueKindMaskIsSubset(kind, COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE)
-		? operator === "+"
-			? kind & ~COMPILER_VALUE_KIND_STRING
-			: kind
-		: kind & COMPILER_VALUE_KIND_NUMBER;
 }
 
 function nativeNumberInputGuard(

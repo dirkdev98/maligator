@@ -711,7 +711,7 @@ function lowerCoreSpecializations(
 					coreSpecializationRecipeRepresentationAt(recipeTable, row) ===
 					"binary-pairs-truncating-i32"
 						? "int32-operands"
-						: "number-operands",
+						: "primitive-number-operands",
 				pairs,
 			});
 			continue;
