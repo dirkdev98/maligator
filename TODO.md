@@ -229,6 +229,8 @@ The independent target boundary and current storage contract are recorded in
       publication to a probe's collecting slow path stays renderer-local: eager
       publication is always legal, and the deferral follows fixed render-form
       rules over plan facts rather than a planning choice.
+      Fast-entry `calleeTry` selection still reads canonical instruction plans;
+      consume the typed entry's call overrides in that dispatch choice.
 - [ ] Use typed-entry reachable edges in surviving liveness, scalar use and result ABI
       decisions. A validated per-variant plan now removes impossible C branches and
       unreachable safepoints, eliminating the dead coercive addition and root frame
