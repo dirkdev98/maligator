@@ -29,6 +29,7 @@ import type {
 	CoreRepresentation,
 	CoreValueId,
 } from "../core/core-ir.ts";
+import { coreNativeEntryControlFlow } from "../core/core-native-entry-analysis.ts";
 import type { CoreInstructionFacts } from "../core/core-native-instruction-facts.ts";
 import type { CorePrivatePackedRestArrayElementPlan } from "../core/core-native-numeric-analysis.ts";
 import { assertCoreOptimizationPlanCertificate } from "../core/core-optimization-plan-certificate.ts";
@@ -1954,9 +1955,11 @@ function lowerFunctionToTarget(
 	);
 
 	const parallelCopies: Array<CoreTargetParallelCopy> = [];
+	const edgeCopies: Array<{ edge: number; copy: CoreTargetParallelCopy }> = [];
 	const temporaryRegisters: Array<number> = [];
 	const kernel = coreFunction.kernel;
 	const edgeBlock = (
+		edge: number,
 		target: CoreBlockId,
 		argumentStart: number,
 		argumentCount: number,
@@ -1985,11 +1988,13 @@ function lowerFunctionToTarget(
 				source: registerForValue(kernel.operandAt(argumentStart + index)),
 			};
 		}
-		const copy =
+		const realization =
 			copyLowerer?.lower(assignments) ??
 			parallelMoves(assignments, nextRegister, registerRepresentations);
-		if (copy.moves.length === 0) return targetBlock;
-		parallelCopies.push({ kind: "edge", assignments, ...copy });
+		if (realization.moves.length === 0) return targetBlock;
+		const copy: CoreTargetParallelCopy = { kind: "edge", assignments, ...realization };
+		parallelCopies.push(copy);
+		edgeCopies.push({ edge, copy });
 		temporaryRegisters.push(...copy.temporaries);
 		const block = blocks.length;
 		blocks.push({
@@ -2005,6 +2010,7 @@ function lowerFunctionToTarget(
 		sourcePosition: number | undefined,
 	): number =>
 		edgeBlock(
+			edge,
 			kernel.terminatorEdgeBlock(edge),
 			kernel.terminatorEdgeArgumentStart(edge),
 			kernel.terminatorEdgeArgumentCount(edge),
@@ -2741,6 +2747,15 @@ function lowerFunctionToTarget(
 				instructionOrder.get(right.instruction)!,
 		);
 	const directEntries = directEntryPlans.map((entry, entryIndex) => {
+		const control =
+			allocation.storageValues === undefined
+				? undefined
+				: coreNativeEntryControlFlow(coreFunction, entry);
+		const unreachableCopies =
+			control === undefined
+				? []
+				: edgeCopies.filter(({ edge }) => !control.ordinaryEdges.has(edge));
+		const unreachableMoves = new Set(unreachableCopies.flatMap(({ copy }) => copy.moves));
 		const suppliedArguments = entry.argumentRepresentations?.length;
 		const dischargedArgumentRead = (safepoint: CoreTargetSafepoint): boolean =>
 			suppliedArguments !== undefined &&
@@ -2765,12 +2780,13 @@ function lowerFunctionToTarget(
 		for (const [temporary, profile] of copyLowerer?.temporaryRepresentations ?? [])
 			representations[temporary] = profile[entryIndex]!;
 		if (entry.valueRepresentations !== undefined) {
-			// A reused boxed source cannot be unboxed by an ordinary edge copy.
+			// Only reachable copies can constrain the entry's physical phi storage.
 			const outgoing = new Map<number, Array<number>>();
 			for (const block of blocks)
 				for (const instruction of block.instructions) {
 					if (
 						instruction.type !== "move" ||
+						unreachableMoves.has(instruction) ||
 						instruction.exactScalarAfterTdz !== undefined
 					)
 						continue;
@@ -2825,6 +2841,9 @@ function lowerFunctionToTarget(
 		);
 		return {
 			id: entry.id,
+			...(unreachableCopies.length === 0
+				? {}
+				: { unreachableCopies: { source: entry, copies: unreachableCopies } }),
 			...(entry.callOverrides === undefined
 				? {}
 				: {

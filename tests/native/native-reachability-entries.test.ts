@@ -50,6 +50,12 @@ it.each([false, true])(
 				["narrowNumber", "number"],
 				["narrowBoolean", "boolean"],
 				["narrowString", "string"],
+				["phiNumber", "number"],
+				["phiText", "string"],
+				["phiCascade", "number"],
+				["phiNumberFromString", "number"],
+				["phiTextFromNumber", "string"],
+				["phiBoolean", "boolean"],
 			] as const) {
 				const fn = restored.native.functions.find(
 					(fn) =>

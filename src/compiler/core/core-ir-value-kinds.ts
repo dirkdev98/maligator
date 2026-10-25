@@ -41,7 +41,7 @@ import {
 	coreCanonicalValueRoots,
 	coreTerminatorInput,
 } from "./core-ir-control-flow.ts";
-import type { CoreControlFlow } from "./core-ir-control-flow.ts";
+import type { CoreControlFlow, CoreControlEdge } from "./core-ir-control-flow.ts";
 import { coreNumericTypedArrayKind } from "./core-ir-value-classes.ts";
 import type {
 	CoreFunctionId,
@@ -98,6 +98,7 @@ export interface CoreValueKindInputs {
 	readonly onIntegerWork?: (values: number) => void;
 	readonly parameterMasks?: ReadonlyArray<CompilerValueKindMask>;
 	readonly receiverMask?: CompilerValueKindMask;
+	readonly controlEdges?: ReadonlySet<CoreControlEdge>;
 	readonly operationResultValue?: (
 		instruction: CoreInstructionId,
 		result: CoreValueId,
@@ -878,8 +879,20 @@ function solveCoreValueKinds(
 	for (let index = 0; index < fn.parameterCount; index++) {
 		formalParameters[fn.kernel.functionParameter(index)] = index;
 	}
+	const filteredIncoming =
+		inputs?.controlEdges === undefined
+			? undefined
+			: new Map<CoreBlockId, ReadonlyArray<CoreControlEdge>>();
 	const addParameter = (block: CoreBlockId, index: number): void => {
-		const incoming = cfg.predecessors[block] ?? [];
+		let incoming = cfg.predecessors[block] ?? [];
+		if (filteredIncoming !== undefined) {
+			const known = filteredIncoming.get(block);
+			if (known !== undefined) incoming = known;
+			else {
+				incoming = incoming.filter((edge) => inputs!.controlEdges!.has(edge));
+				filteredIncoming.set(block, incoming);
+			}
+		}
 		const parameterStart = fn.kernel.blockParameterStart(block);
 		const row = parameterStart + index;
 		const parameter = fn.kernel.blockParameterValue(row);

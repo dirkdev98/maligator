@@ -10,11 +10,15 @@ import { analyzeCoreLoopInductions } from "./core-ir-loops.ts";
 import type { CoreLoopInductionAnalysis } from "./core-ir-loops.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
 import type { CoreDirectEntryPlan, CorePlanRepresentation } from "./core-ir-regions.ts";
-import type { CoreValueKindAnalysis } from "./core-ir-value-kinds.ts";
+import type {
+	CoreValueKindAnalysis,
+	CoreValueKindInputs,
+} from "./core-ir-value-kinds.ts";
 import { analyzeCoreValueKinds } from "./core-ir-value-kinds.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import type { CoreInstructionId, CoreValueId } from "./core-ir.ts";
-import { coreNativeEntryReachableBlocks } from "./core-native-entry-reachability.ts";
+import { analyzeCoreNativeEntryControlFlow } from "./core-native-entry-reachability.ts";
+import type { CoreNativeEntryControlFlow } from "./core-native-entry-reachability.ts";
 import { coreInstructionFacts } from "./core-native-instruction-facts.ts";
 import type { CoreInstructionRangeQuery } from "./core-native-instruction-facts.ts";
 import { coreFunctionVersionsAreCurrent } from "./core-store.ts";
@@ -30,6 +34,7 @@ const representationProofs = new WeakMap<
 		readonly fn: CoreFunctionStore;
 		readonly versions: CoreFunctionVersions;
 		readonly resultRepresentation: CorePlanRepresentation;
+		readonly controlFlow: CoreNativeEntryControlFlow | undefined;
 		readonly parameters: ReadonlyArray<CorePlanRepresentation>;
 		readonly arguments: ReadonlyArray<CorePlanRepresentation> | undefined;
 		readonly instructionFacts: CoreDirectEntryPlan["instructionFacts"];
@@ -68,7 +73,7 @@ export function analyzeCoreNativeEntry(
 				: representation === "string"
 					? COMPILER_VALUE_KIND_STRING
 					: COMPILER_VALUE_KIND_TOP;
-	const kinds = analyzeCoreValueKinds(fn, cfg, {
+	const kindInputs: CoreValueKindInputs = {
 		parameterMasks: parameters.map(mask),
 		operationResultMask(instruction, result) {
 			const exact = exactOperationResultMasks.get(instruction);
@@ -88,19 +93,86 @@ export function analyzeCoreNativeEntry(
 				return mask(arguments_[fn.instructionAttributes(instruction).index as number]);
 			return undefined;
 		},
-	});
+	};
+	let kinds = analyzeCoreValueKinds(fn, cfg, kindInputs);
 	const instructions = cfg.reversePostorder.flatMap((block) => [
 		...fn.bodyInstructionIds(block),
 		fn.blockTerminator(block),
 	]);
 	let ranges: CoreLoopInductionAnalysis | undefined;
+	let controlFlow: CoreNativeEntryControlFlow | undefined;
 	const range: CoreInstructionRangeQuery = (value, block) =>
 		(ranges ??= analyzeCoreLoopInductions(
 			fn,
 			cfg,
-			coreCanonicalValueRoots(fn, cfg),
+			coreCanonicalValueRoots(fn, cfg, controlFlow?.edges),
 			(value) => kinds.exactScalar(value),
 		)).range(value, block);
+	let constants =
+		arguments_ === undefined
+			? []
+			: coreFixedArityComparisons(fn, instructions, kinds, arguments_.length);
+	const hasMerge = [...fn.blockIds()].some(
+		(block) =>
+			block !== fn.entry &&
+			fn.kernel.blockParameterCount(block) > 0 &&
+			(cfg.predecessors[block]?.length ?? 0) > 1,
+	);
+	const returnValues = [...fn.blockIds()].flatMap((block) => {
+		const terminator = fn.blockTerminator(block);
+		return fn.instructionKind(terminator) === "return"
+			? [
+					{
+						block,
+						value: fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator)),
+					},
+				]
+			: [];
+	});
+	const distinct = new Set(
+		returnValues.map(({ value }) => kinds.scalarKind(value) ?? "boxed"),
+	);
+	controlFlow =
+		hasMerge ||
+		distinct.size > 1 ||
+		instructions.some(
+			(instruction) =>
+				fn.instructionKind(instruction) === "operation" &&
+				fn.instructionOpcodeName(instruction) === "call",
+		)
+			? analyzeCoreNativeEntryControlFlow(program, fn, cfg, kinds, constants, range)
+			: undefined;
+	if (hasMerge && controlFlow !== undefined) {
+		// Exhausting the monotone refinement budget leaves conservative facts.
+		let previousSize = cfg.successors.reduce(
+			(count, edges) => count + (edges?.length ?? 0),
+			0,
+		);
+		const cost = Math.max(1, instructions.length + fn.valueCapacity);
+		let remaining = Math.max(4096, instructions.length * 8);
+		while (controlFlow.edges.size < previousSize && remaining >= cost) {
+			remaining -= cost;
+			previousSize = controlFlow.edges.size;
+			kinds = analyzeCoreValueKinds(fn, cfg, {
+				...kindInputs,
+				controlEdges: controlFlow.edges,
+			});
+			ranges = undefined;
+			constants =
+				arguments_ === undefined
+					? []
+					: coreFixedArityComparisons(fn, instructions, kinds, arguments_.length);
+			controlFlow = analyzeCoreNativeEntryControlFlow(
+				program,
+				fn,
+				cfg,
+				kinds,
+				constants,
+				range,
+				controlFlow.edges,
+			);
+		}
+	}
 	const inputs = Object.freeze(
 		instructions.flatMap((instruction) => {
 			return [
@@ -112,10 +184,6 @@ export function analyzeCoreNativeEntry(
 		}),
 	);
 	const instructionFacts = inputs.length === 0 ? undefined : inputs;
-	const constants =
-		arguments_ === undefined
-			? []
-			: coreFixedArityComparisons(fn, instructions, kinds, arguments_.length);
 	const constantBooleans =
 		constants.length === 0
 			? undefined
@@ -128,40 +196,22 @@ export function analyzeCoreNativeEntry(
 			return scalar === "number" ? "f64" : (scalar ?? "boxed");
 		}),
 	);
-	const returns = [...fn.blockIds()].flatMap((block) => {
-		const terminator = fn.blockTerminator(block);
-		return fn.instructionKind(terminator) === "return"
-			? [
-					{
-						block,
-						representation:
-							valueRepresentations[
-								fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator))
-							]!,
-					},
-				]
-			: [];
-	});
-	const distinct = new Set(returns.map(({ representation }) => representation));
-	const reachable =
-		distinct.size > 1
-			? coreNativeEntryReachableBlocks(program, fn, cfg, kinds, constants, range)
-			: undefined;
-	const liveReturns =
-		reachable === undefined
-			? returns
-			: returns.filter(({ block }) => reachable.has(block));
+	const liveReturns = returnValues.filter(
+		({ block }) => controlFlow === undefined || controlFlow.blocks.has(block),
+	);
 	const resultRepresentation =
 		liveReturns.length > 0 &&
 		liveReturns.every(
-			({ representation }) => representation === liveReturns[0]!.representation,
+			({ value }) =>
+				valueRepresentations[value] === valueRepresentations[liveReturns[0]!.value],
 		)
-			? liveReturns[0]!.representation
+			? valueRepresentations[liveReturns[0]!.value]!
 			: "boxed";
 	representationProofs.set(valueRepresentations, {
 		fn,
 		versions: fn.versions,
 		resultRepresentation,
+		controlFlow,
 		parameters: [...parameters],
 		arguments: arguments_ === undefined ? undefined : [...arguments_],
 		constants: constantBooleans,
@@ -186,6 +236,19 @@ export function analyzeCoreNativeEntry(
 		instructionFacts,
 		...(constantBooleans === undefined ? {} : { constantBooleans }),
 	};
+}
+
+export function coreNativeEntryControlFlow(
+	fn: CoreFunctionStore,
+	entry: CoreDirectEntryPlan,
+): CoreNativeEntryControlFlow | undefined {
+	const proof =
+		entry.valueRepresentations === undefined
+			? undefined
+			: representationProofs.get(entry.valueRepresentations);
+	return proof?.fn === fn && coreFunctionVersionsAreCurrent(fn, proof.versions)
+		? proof.controlFlow
+		: undefined;
 }
 
 export function coreNativeEntryProofIsCurrent(

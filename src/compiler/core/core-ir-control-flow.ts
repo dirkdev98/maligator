@@ -942,6 +942,7 @@ class SparseCanonicalValueRoots extends Map<CoreValueId, CoreValueId> {
 export function coreCanonicalValueRoots(
 	fn: CoreFunctionStore,
 	cfg: CoreControlFlow,
+	controlEdges?: ReadonlySet<CoreControlEdge>,
 ): ReadonlyMap<CoreValueId, CoreValueId> {
 	const dependencies = new Array<ReadonlyArray<CoreValueId> | undefined>(
 		fn.valueCapacity,
@@ -949,7 +950,11 @@ export function coreCanonicalValueRoots(
 	const nodes: Array<CoreValueId> = [];
 	const moveOpcode = fn.registry.get("move")?.id;
 	for (const block of fn.blockIds()) {
-		const incoming = cfg.predecessors[block] ?? [];
+		const predecessors = cfg.predecessors[block] ?? [];
+		const incoming =
+			controlEdges === undefined
+				? predecessors
+				: predecessors.filter((edge) => controlEdges.has(edge));
 		if (incoming.length === 0) continue;
 		const parameterStart = fn.kernel.blockParameterStart(block);
 		const parameterCount = fn.kernel.blockParameterCount(block);

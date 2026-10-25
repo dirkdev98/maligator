@@ -344,7 +344,10 @@ function verifyRegisterPlan(model: FunctionModel): void {
 	}
 }
 
-function verifyInstructionOperands(model: FunctionModel): void {
+function verifyInstructionOperands(
+	model: FunctionModel,
+	unreachableMoves?: ReadonlySet<CompilerInstruction>,
+): void {
 	const { fn, functionIndex } = model;
 	for (const [block, { instructions }] of fn.blocks.entries()) {
 		let previousSemanticInstruction: CompilerInstruction | undefined;
@@ -442,7 +445,8 @@ function verifyInstructionOperands(model: FunctionModel): void {
 					destinationRepresentation !== sourceRepresentation &&
 					!isBoxed(fn, destination) &&
 					!provenNarrowing &&
-					!numericWidening
+					!numericWidening &&
+					!unreachableMoves?.has(instruction)
 				) {
 					fail("move must not narrow its source register class", {
 						...context,
@@ -542,6 +546,7 @@ function simulateParallelCopy(
 	model: FunctionModel,
 	copy: ExecutionParallelCopy,
 	context: ExecutionVerificationContext,
+	unreachable: boolean,
 ): void {
 	const { fn } = model;
 	const declaredTemporaries = new Set(fn.temporaryRegisters);
@@ -580,7 +585,8 @@ function simulateParallelCopy(
 		if (
 			destinationRepresentation !== sourceRepresentation &&
 			!(sourceRepresentation === "int32" && destinationRepresentation === "number") &&
-			!isBoxed(fn, destination)
+			!isBoxed(fn, destination) &&
+			!unreachable
 		) {
 			fail("parallel copy must not narrow a source register class", {
 				...context,
@@ -643,7 +649,10 @@ function simulateParallelCopy(
 	}
 }
 
-function verifyParallelCopies(model: FunctionModel): void {
+function verifyParallelCopies(
+	model: FunctionModel,
+	unreachableMoves?: ReadonlySet<CompilerInstruction>,
+): void {
 	const { fn, functionIndex } = model;
 	const claimed = new Set<CompilerInstruction>();
 	for (const copy of fn.parallelCopies) {
@@ -686,7 +695,12 @@ function verifyParallelCopies(model: FunctionModel): void {
 				);
 			}
 		}
-		simulateParallelCopy(model, copy, context);
+		simulateParallelCopy(
+			model,
+			copy,
+			context,
+			copy.moves.every((move) => unreachableMoves?.has(move) === true),
+		);
 	}
 }
 
@@ -1166,10 +1180,11 @@ export function verifyExecutionFunctionRepresentationVariant(
 	functionIndex: number,
 	loopBackedgeInstructions = executionLoopBackedgeInstructions,
 	entry?: Parameters<typeof verifyGcRoots>[3],
+	unreachableMoves?: ReadonlySet<CompilerInstruction>,
 ): void {
 	const model = buildFunctionModel(fn, functionIndex);
-	verifyInstructionOperands(model);
-	verifyParallelCopies(model);
+	verifyInstructionOperands(model, unreachableMoves);
+	verifyParallelCopies(model, unreachableMoves);
 	verifyGcRoots(model, core, loopBackedgeInstructions, entry);
 }
 

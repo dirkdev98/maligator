@@ -30,6 +30,37 @@ function narrowString(input, flag) {
 globalThis.narrowNumber = narrowNumber;
 globalThis.narrowBoolean = narrowBoolean;
 globalThis.narrowString = narrowString;
+function phiNumber(input, flag) {
+	const value = flag === flag ? 7 : input;
+	return value + 1;
+}
+function phiText(input, flag) {
+	const value = flag === flag ? "prefix" : input;
+	return value + ":";
+}
+function phiCascade(input, flag) {
+	const first = flag === flag ? "prefix" : input;
+	const value = Number.isNaN(first) ? input : 7;
+	return value + 1;
+}
+function phiNumberFromString(input, flag) {
+	const value = flag === flag ? 7 : input;
+	return value + 1;
+}
+function phiTextFromNumber(input, flag) {
+	const value = flag === flag ? "prefix" : input;
+	return value + ":";
+}
+function phiBoolean(input, flag) {
+	const value = flag === flag ? false : input;
+	return value;
+}
+globalThis.phiNumber = phiNumber;
+globalThis.phiText = phiText;
+globalThis.phiCascade = phiCascade;
+globalThis.phiNumberFromString = phiNumberFromString;
+globalThis.phiTextFromNumber = phiTextFromNumber;
+globalThis.phiBoolean = phiBoolean;
 globalThis.abiFallback = { marker: "fallback" };
 const abiEvents = [];
 const convertible = {
@@ -64,6 +95,43 @@ try {
 } catch (error) {
 	if (!(error instanceof TypeError)) throw error;
 	abiEvents.push(`abi:${error.name}`);
+}
+const beforePhi = abiEvents.length;
+if (phiNumber(convertible, !!globalThis.flag) !== 8) throw new Error("phi Number");
+if (phiText(convertible, !!globalThis.flag) !== "prefix:") throw new Error("phi String");
+if (phiCascade(convertible, !!globalThis.flag) !== 8) throw new Error("phi cascade");
+if (phiNumberFromString(String(globalThis.input), !!globalThis.flag) !== 8)
+	throw new Error("String to Number phi");
+if (phiTextFromNumber(+globalThis.input, !!globalThis.flag) !== "prefix:")
+	throw new Error("Number to String phi");
+if (phiBoolean(String(globalThis.input), !!globalThis.flag) !== false)
+	throw new Error("String to Boolean phi");
+if (abiEvents.length !== beforePhi) throw new Error("typed phi coerced dead input");
+if (globalThis.phiNumber(convertible, NaN) !== 8) throw new Error("canonical phi Number");
+if (globalThis.phiText(convertible, NaN) !== "7:")
+	throw new Error("canonical phi String");
+if (!Number.isNaN(globalThis.phiCascade(NaN, NaN))) throw new Error("canonical phi NaN");
+if (globalThis.phiNumberFromString("input", NaN) !== "input1")
+	throw new Error("canonical String phi");
+if (globalThis.phiTextFromNumber(5, NaN) !== "5:")
+	throw new Error("canonical Number phi");
+if (globalThis.phiBoolean(convertible, NaN) !== convertible)
+	throw new Error("canonical Boolean phi");
+for (const fn of [globalThis.phiNumber, globalThis.phiText]) {
+	try {
+		fn(Symbol("phi"), NaN);
+		throw new Error("canonical phi lost Symbol throw");
+	} catch (error) {
+		if (!(error instanceof TypeError)) throw error;
+		abiEvents.push(`phi:${error.name}`);
+	}
+}
+try {
+	globalThis.phiNumber(1n, NaN);
+	throw new Error("canonical phi lost BigInt throw");
+} catch (error) {
+	if (!(error instanceof TypeError)) throw error;
+	abiEvents.push(`phi:bigint:${error.name}`);
 }
 globalThis.refinedFallback = function (value) {
 	events.push(`fallback:${String(value)}`);

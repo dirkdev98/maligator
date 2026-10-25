@@ -245,8 +245,9 @@ The independent target boundary and current storage contract are recorded in
       Return ABI proofs now join reachable returns using existing kind and range
       observations, preserving handler entry contracts; callers consume those
       scalar results through existing typed transports. Scalar-use and definition
-      analyses still scan the original instructions. Phi representations still
-      join values from both ordinary edges before per-entry reachability.
+      analyses still scan the original instructions. Carry edge projections into
+      remaining shape, lifetime and constant-String identity analyses, and retire
+      callee nominations when a later refinement makes their call unreachable.
 - [ ] Normalize primitive conversion calls from semantic kind unions. `String`
       and `Number` calls on `number | undefined` still use the builtin dispatcher.
       Retain extra argument effects and the distinct Symbol, BigInt, omitted-argument,

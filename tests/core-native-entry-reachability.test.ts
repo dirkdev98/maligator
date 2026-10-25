@@ -3,12 +3,19 @@ import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import { buildCoreControlFlow } from "../src/compiler/core/core-ir-control-flow.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
 import { analyzeCoreValueKinds } from "../src/compiler/core/core-ir-value-kinds.ts";
-import { coreNativeEntryReachableBlocks } from "../src/compiler/core/core-native-entry-reachability.ts";
+import { analyzeCoreNativeEntryControlFlow } from "../src/compiler/core/core-native-entry-reachability.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
 import {
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_BOOLEAN,
 } from "../src/compiler/shared/compiler-value-kinds.ts";
+
+const safeRange = (minimum: number, maximum: number) => ({
+	minimum,
+	maximum,
+	exactSafeIntegers: true as const,
+	excludesNegativeZero: true as const,
+});
 
 it.each(["negation", "comparison"])(
 	"keeps %s input ranges local to their consumer",
@@ -61,7 +68,7 @@ it.each(["negation", "comparison"])(
 		const kinds = analyzeCoreValueKinds(fn, cfg, {
 			parameterMasks: [COMPILER_VALUE_KIND_NUMBER, COMPILER_VALUE_KIND_BOOLEAN],
 		});
-		const reachable = coreNativeEntryReachableBlocks(
+		const reachable = analyzeCoreNativeEntryControlFlow(
 			program,
 			fn,
 			cfg,
@@ -69,15 +76,17 @@ it.each(["negation", "comparison"])(
 			[],
 			(value, block) =>
 				value === zero
-					? { minimum: 0, maximum: 0 }
+					? safeRange(0, 0)
 					: value !== input
 						? undefined
 						: block === first
-							? { minimum: 1, maximum: 3 }
+							? safeRange(1, 3)
 							: block === second
-								? { minimum: 0, maximum: 0 }
+								? safeRange(0, 0)
 								: undefined,
 		);
-		expect(reachable).toEqual(new Set([entry, first, second, firstFalse, secondFalse]));
+		expect(reachable.blocks).toEqual(
+			new Set([entry, first, second, firstFalse, secondFalse]),
+		);
 	},
 );

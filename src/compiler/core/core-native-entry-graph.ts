@@ -21,6 +21,7 @@ import type { CoreProgramSummaries } from "./core-ir-summaries.ts";
 import type { CoreFunctionId, CoreInstructionId } from "./core-ir.ts";
 import {
 	analyzeCoreNativeEntry,
+	coreNativeEntryControlFlow,
 	coreArgumentObservation,
 } from "./core-native-entry-analysis.ts";
 import type { CoreProgram } from "./core-store.ts";
@@ -411,7 +412,8 @@ export function connectCoreNativeEntries(
 			!admitAnalysis(entry.function, fn.valueCapacity + [...fn.instructionIds()].length)
 		)
 			continue;
-		const reachable = cfg(entry.function).reachable;
+		const reachable =
+			coreNativeEntryControlFlow(fn, entry)?.blocks ?? cfg(entry.function).reachable;
 		const newCalls: Array<[CoreInstructionId, EntryCall]> = [];
 		for (const site of outgoing) {
 			if (

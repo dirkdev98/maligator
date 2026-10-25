@@ -146,6 +146,95 @@ function graph(
 }
 
 describe("connected native entry contracts", () => {
+	it.each(["boolean", "string", "f64"] as const)(
+		"nominates outgoing calls only on reachable %s entry paths",
+		(representation) => {
+			const program = analysisProgram();
+			const caller = new CoreFunctionBuilder(program, {
+				parameterCount: 1,
+				metadata: { strict: true },
+			});
+			const callee = new CoreFunctionBuilder(program, {
+				parameterCount: 1,
+				metadata: { strict: true },
+			});
+			const leaf = callee.createBlock([{}]);
+			const [converted] = callee.appendInstruction(
+				leaf,
+				"unary",
+				[callee.blockParameterValue(leaf, 0)],
+				{ attributes: { operator: "+" } },
+			);
+			callee.setTerminator(leaf, { kind: "return", value: converted! });
+			callee.finish(leaf);
+			const entry = caller.createBlock([{}]),
+				yes = caller.createBlock(),
+				no = caller.createBlock();
+			const flag = caller.blockParameterValue(entry, 0);
+			const [condition] = caller.appendInstruction(entry, "binary", [flag, flag], {
+				attributes: { operator: "===" },
+			});
+			caller.setTerminator(entry, {
+				kind: "branch",
+				condition: condition!,
+				consequent: { block: yes, arguments: [] },
+				alternate: { block: no, arguments: [] },
+			});
+			const [seven] = caller.appendInstruction(yes, "createNumber", [], {
+				attributes: { value: 7 },
+			});
+			caller.setTerminator(yes, { kind: "return", value: seven! });
+			const [target] = caller.appendInstruction(no, "createFunction", [], {
+				attributes: { functionIndex: callee.functionId },
+			});
+			const [receiver] = caller.appendInstruction(no, "createUndefined", []);
+			const [result] = caller.appendInstruction(no, "call", [target!, receiver!, flag]);
+			const canonicalCall = caller.bodyInstructionIds(no).at(-1)!;
+			caller.setTerminator(no, { kind: "return", value: result! });
+			caller.finish(entry);
+			const analyses = new CoreAnalysisManager(
+				program,
+				programAnalysisContext(),
+				new CoreOptimizationReportBuilder(program),
+			);
+			const summaries = analyses.get(CORE_PROGRAM_SUMMARIES_ANALYSIS, {
+				scope: "program",
+			});
+			const initial: CoreDirectEntryPlan = {
+				id: 0,
+				function: caller.functionId,
+				callSites: [],
+				parameterRepresentations: [representation],
+				...analyzeCoreNativeEntry(
+					program,
+					buildCoreControlFlow(program, caller.functionId),
+					[representation],
+					undefined,
+					[],
+				),
+				target: "native",
+				fallback: "canonical-core",
+				cost: { generatedCode: 8, compilerWork: 8, runtimeBenefit: 8 },
+			};
+			const entries = connectCoreNativeEntries(
+				program,
+				summaries,
+				analyses,
+				new Set(program.functionIds()),
+				[initial],
+				[],
+				() => true,
+				() => true,
+			);
+			expect(entries.some((entry) => entry.function === callee.functionId)).toBe(
+				representation === "f64",
+			);
+			expect(program.function(caller.functionId).isInstructionLive(canonicalCall)).toBe(
+				true,
+			);
+		},
+	);
+
 	it("does not import a later scalar callee result through a guarded edge", () => {
 		const image = compile(`
 			function guardedHelper(x, bias) {

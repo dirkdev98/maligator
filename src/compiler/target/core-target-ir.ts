@@ -1,5 +1,8 @@
 import type { CoreCompilationContext } from "../core/core-compilation.ts";
-import type { CoreAllocatedRegion } from "../core/core-ir-regions.ts";
+import type {
+	CoreAllocatedRegion,
+	CoreDirectEntryPlan,
+} from "../core/core-ir-regions.ts";
 import type {
 	CoreBlockId,
 	CoreFunctionId,
@@ -163,6 +166,13 @@ export interface CoreTargetRecordUses {
 
 export interface CoreTargetDirectEntry {
 	readonly id: number;
+	readonly unreachableCopies?: {
+		readonly source: CoreDirectEntryPlan;
+		readonly copies: ReadonlyArray<{
+			readonly edge: number;
+			readonly copy: CoreTargetParallelCopy;
+		}>;
+	};
 	readonly callOverrides?: ReadonlyArray<{
 		readonly instruction: CompilerInstruction;
 		readonly functionIndex: number;

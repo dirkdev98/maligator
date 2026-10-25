@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { CoreRepresentation } from "../src/compiler/core/core-ir.ts";
+import { coreNativeEntryControlFlow } from "../src/compiler/core/core-native-entry-analysis.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { optimizeSemanticProgramToCore } from "../src/compiler/pipeline/compile-core-common.ts";
 import type { CoreTargetRegisterRepresentation } from "../src/compiler/target/core-target-ir.ts";
@@ -21,13 +22,17 @@ const ROTATION = `function rotate(left, right, count) {
 globalThis.rotate = rotate;
 globalThis.result = rotate(3, 7, 4);`;
 
-function rotation() {
+function nativeProgram(source: string) {
 	const core = optimizeSemanticProgramToCore(
-		analyzeSourceAndRunSemanticAnalysis(ROTATION, "/native-copies.js"),
+		analyzeSourceAndRunSemanticAnalysis(source, "/native-copies.js"),
 		{},
 		(_phase, run) => run(),
 	);
-	const program = lowerCoreCompilationToNativeProgram(core);
+	return lowerCoreCompilationToNativeProgram(core);
+}
+
+function rotation() {
+	const program = nativeProgram(ROTATION);
 	const fn = program.functions.find((fn) => fn.parameterCount === 3)!;
 	const copies = fn.parallelCopies.filter((copy) => copy.temporaries.length > 0);
 	return { program, fn, copies };
@@ -127,6 +132,75 @@ describe("native parallel copies", () => {
 			fn.gc.safepoints.every((point) => !point.rootRegisters.includes(scratch)),
 		).toBe(true);
 	});
+
+	it.each([
+		["7", "number", "globalThis.input", "boxed"],
+		['"text"', "string", "globalThis.input", "boxed"],
+		["false", "boolean", "globalThis.input", "boxed"],
+		["7", "number", "typeof globalThis.input", "string"],
+		['"text"', "string", "+globalThis.input", "number"],
+		["false", "boolean", "typeof globalThis.input", "string"],
+	] as const)(
+		"keeps %s as %s when the unreachable input %s uses %s storage",
+		(value, representation, input, inputRepresentation) => {
+			const program = nativeProgram(`function choose(input, flag) {
+				const value = flag === flag ? ${value} : input;
+				return value;
+			}
+			globalThis.choose = choose;
+			globalThis.result = choose(${input}, !!globalThis.flag);`);
+			const fn = program.functions.find((fn) => fn.parameterCount === 2)!;
+			const entry = fn.directEntries.find((entry) => entry.unreachableCopies)!;
+			const proof = entry.unreachableCopies!;
+			const { copy } = proof.copies[0]!;
+			const { destination, source } = copy.assignments[0]!;
+			expect(fn.registerRepresentations[destination]).toBe("boxed");
+			expect(entry.registerRepresentations[source]).toBe(inputRepresentation);
+			expect(entry.registerRepresentations[destination]).toBe(representation);
+			expect(entry.resultRepresentation).toBe(representation);
+			expect(() => verifyNativeExecutionProgram({ ...program })).not.toThrow();
+			const replace = (patch: Partial<typeof entry>) =>
+				replaceFunction(program, {
+					...fn,
+					directEntries: fn.directEntries.with(entry.id, { ...entry, ...patch }),
+				});
+			expect(() =>
+				verifyNativeExecutionProgram(replace({ unreachableCopies: undefined })),
+			).toThrow("move must not narrow its source register class");
+			const core = program.core.function(proof.source.function);
+			const reachable = coreNativeEntryControlFlow(core, proof.source)!.ordinaryEdges;
+			expect(() =>
+				verifyNativeExecutionProgram(
+					replace({
+						unreachableCopies: {
+							...proof,
+							copies: [{ edge: reachable.values().next().value!, copy }],
+						},
+					}),
+				),
+			).toThrow("invalid unreachable-copy proof");
+			expect(() =>
+				verifyNativeExecutionProgram(
+					replace({
+						unreachableCopies: {
+							...proof,
+							source: {
+								...proof.source,
+								valueRepresentations: [...proof.source.valueRepresentations!],
+							},
+						},
+					}),
+				),
+			).toThrow("invalid unreachable-copy proof");
+			const wrongValues = [...fn.storageValues];
+			wrongValues[destination] = fn.storageValues[source]!;
+			expect(() =>
+				verifyNativeExecutionProgram(
+					replaceFunction(program, { ...fn, storageValues: wrongValues }),
+				),
+			).toThrow("invalid unreachable-copy proof");
+		},
+	);
 
 	it("requires a scratch save in every copy even after earlier copies used it", () => {
 		const { program, fn, copies } = rotation();

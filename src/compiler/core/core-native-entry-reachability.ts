@@ -6,7 +6,7 @@ import {
 	compilerIntegerRangeTruthiness,
 	compilerIntegerRangeComparison,
 } from "../shared/integer-range.ts";
-import type { CoreControlFlow } from "./core-ir-control-flow.ts";
+import type { CoreControlFlow, CoreControlEdge } from "./core-ir-control-flow.ts";
 import { coreValueKindObservation } from "./core-ir-value-kinds.ts";
 import type { CoreValueKindAnalysis } from "./core-ir-value-kinds.ts";
 import { coreInstructionId } from "./core-ir.ts";
@@ -14,7 +14,13 @@ import type { CoreBlockId, CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import type { CoreInstructionRangeQuery } from "./core-native-instruction-facts.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
-export function coreNativeEntryReachableBlocks(
+export interface CoreNativeEntryControlFlow {
+	readonly blocks: ReadonlySet<CoreBlockId>;
+	readonly edges: ReadonlySet<CoreControlEdge>;
+	readonly ordinaryEdges: ReadonlySet<number>;
+}
+
+export function analyzeCoreNativeEntryControlFlow(
 	program: CoreProgram,
 	fn: CoreFunctionStore,
 	cfg: CoreControlFlow,
@@ -24,7 +30,8 @@ export function coreNativeEntryReachableBlocks(
 		readonly value: boolean;
 	}>,
 	range: CoreInstructionRangeQuery,
-): ReadonlySet<CoreBlockId> {
+	allowedEdges?: ReadonlySet<CoreControlEdge>,
+): CoreNativeEntryControlFlow {
 	const fixed = new Map(constants.map(({ instruction, value }) => [instruction, value]));
 	// Consumer-local ranges cannot become globally cached facts about an SSA value.
 	const memo = new Map<CoreValueId, boolean | undefined>();
@@ -111,6 +118,8 @@ export function coreNativeEntryReachableBlocks(
 		return result;
 	};
 	const reachable = new Set<CoreBlockId>();
+	const edges = new Set<CoreControlEdge>();
+	const ordinaryEdges = new Set<number>();
 	const pending = [fn.entry];
 	// Handler entry contracts survive independently of ordinary branch pruning.
 	for (let index = 0; index < fn.handlerBlockCount; index++) {
@@ -122,7 +131,7 @@ export function coreNativeEntryReachableBlocks(
 		if (reachable.has(block)) continue;
 		reachable.add(block);
 		const terminator = fn.blockTerminator(block);
-		let target: CoreBlockId | undefined;
+		let selected: CoreControlEdge | undefined;
 		if (fn.instructionKind(terminator) === "branch") {
 			const condition = fn.kernel.operandAt(
 				fn.kernel.instructionOperandStart(terminator),
@@ -133,13 +142,21 @@ export function coreNativeEntryReachableBlocks(
 					? compilerIntegerRangeTruthiness(range(condition, block))
 					: undefined);
 			if (decision !== undefined)
-				target = fn.kernel.terminatorEdgeBlock(
-					fn.kernel.terminatorEdgeStart(terminator) + (decision ? 0 : 1),
-				);
+				selected = cfg.successors[block]!.filter((edge) => edge.kind === "ordinary")[
+					decision ? 0 : 1
+				];
 		}
-		for (const edge of cfg.successors[block] ?? [])
-			if (target === undefined || edge.kind === "exceptional" || edge.to === target)
+		let ordinal = fn.kernel.terminatorEdgeStart(terminator);
+		for (const edge of cfg.successors[block] ?? []) {
+			const ordinary = edge.kind === "ordinary" ? ordinal++ : undefined;
+			if (allowedEdges !== undefined && !allowedEdges.has(edge)) continue;
+			// Distinct branch edges can carry different phi arguments to the same block.
+			if (selected === undefined || edge.kind === "exceptional" || edge === selected) {
+				edges.add(edge);
+				if (ordinary !== undefined) ordinaryEdges.add(ordinary);
 				pending.push(edge.to);
+			}
+		}
 	}
-	return reachable;
+	return { blocks: reachable, edges, ordinaryEdges };
 }

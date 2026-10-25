@@ -91,7 +91,7 @@ describe("boxed scalar expressions at phi boundaries", () => {
 		["a<b", "<", "mal_value_new_boolean("],
 		["a===b", "===", "mal_value_new_boolean("],
 		["a!==b", "!==", "mal_value_new_boolean("],
-		["!a", "!", "mal_value_new_boolean(!mal_number_is_truthy("],
+		["!a", "!", "mal_value_new_boolean("],
 		["-a", "-", "mal_ops_number_value(-("],
 		["~a", "~", "mal_value_from_i32(~"],
 	])(
