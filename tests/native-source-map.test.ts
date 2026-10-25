@@ -58,6 +58,38 @@ describe("emitted C source mapping", () => {
 		}
 	});
 
+	it("maps a frameless restart to the unsupported call without mapping the pruned tail", () => {
+		const source = [
+			"function select(flag, value, callback) {",
+			"  if (flag) return value.id;",
+			"  callback(value);",
+			"  return value.id;",
+			"}",
+			"globalThis.select = select;",
+		].join("\n");
+		const result = compileExplorerComparison(compileExplorerCore(source));
+		const lines = result.c.split("\n");
+		const bodies = (line: number) =>
+			result.mapping.ranges
+				.filter((range) => range.origins.some((origin) => origin.line === line))
+				.map((range) => lines.slice(range.startLine - 1, range.endLine).join("\n"));
+		expect(bodies(3).some((body) => body.includes("goto __full;"))).toBe(true);
+		expect(
+			result.mapping.ranges.some(
+				(range) =>
+					lines
+						.slice(range.startLine - 1, range.endLine)
+						.join("\n")
+						.includes("goto __full;") &&
+					range.origins.some((origin) => origin.line === 4),
+			),
+		).toBe(false);
+		expect(bodies(3).some((body) => body.includes("mal_vm_call_cached"))).toBe(true);
+		expect(
+			bodies(4).filter((body) => body.includes("mal_vm_property_try_load_static")),
+		).toHaveLength(1);
+	});
+
 	it("maps a jumped-to error constructor as another region of its source line", () => {
 		const sample = SAMPLES.find((item) => item.id === "exceptions")!;
 		const result = compileExplorerComparison(compileExplorerCore(sample.source));

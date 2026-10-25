@@ -289,6 +289,10 @@ The independent target boundary and current storage contract are recorded in
       through boxed keys and values. Frameless reads share those proofs; numeric
       misses retain deferred root publication and check completion before decoding
       scalar results. Non-numeric keys retain their coercing fallback.
+      Frameless admission now stops individual paths before unsupported effects,
+      retaining successful sibling returns and pruning state beyond each restart.
+      Primitive unary facts also govern typed-entry admission; fallback retains
+      original arguments and reachable fast loops still require a full frame.
 - [x] Normalize primitive conversion calls from semantic kind unions. Eligible
       `Number` and `String` calls use unary conversions, carrying kind and effect
       proofs into native storage, full entries and frameless numeric paths.

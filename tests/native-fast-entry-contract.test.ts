@@ -7,6 +7,7 @@ import {
 	COMPILER_VALUE_KIND_OBJECT,
 	COMPILER_VALUE_KIND_SYMBOL,
 	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_BOOLEAN,
 } from "../src/compiler/shared/compiler-value-kinds.ts";
 import type { InstructionFacts } from "../src/compiler/shared/instruction-facts.ts";
 import { COMPILER_INT32_RANGE } from "../src/compiler/shared/integer-range.ts";
@@ -14,6 +15,7 @@ import { analyzeNativeBodyFacts } from "../src/compiler/target/native-body-facts
 import type { NativeControlFlowPlan } from "../src/compiler/target/native-control-flow.ts";
 import { selectNativeStringComparisons } from "../src/compiler/target/native-string-comparisons.ts";
 import { createConservativeNativePlan } from "../src/compiler/target/program-image.ts";
+import type { NativeDirectEntryPlan } from "../src/compiler/target/program-image.ts";
 import { renderNativeFastEntry } from "../src/compiler/target/render-native-fast-entry.ts";
 import type {
 	BytecodeFunction,
@@ -38,6 +40,7 @@ const NONCOLLECTING_HELPERS = new Set([
 	"mal_value_to_string",
 	"mal_value_from_i32",
 	"mal_value_new_boolean",
+	"mal_value_to_boolean",
 	"mal_value_is_truthy",
 	"mal_value_is_nil",
 	"mal_value_is_empty",
@@ -115,6 +118,10 @@ it.each([
 	const lines = fastEntry(fn, () => undefined, true, undefined, [
 		{ registers: [0], inputOffset: 0, inputKindMasks: [kind], resultKindMasks: [] },
 	]);
+	if (kind === COMPILER_VALUE_KIND_NULLISH) {
+		expect(lines).toBeUndefined();
+		return;
+	}
 	expect(lines).toBeDefined();
 	expect(unexpectedHelpers(lines!)).toEqual([]);
 	expect(lines!.join("\n").includes("mal_value_is_nil(f0)")).toBe(
@@ -138,6 +145,7 @@ function fastEntry(
 	exported = true,
 	controlFlow?: NativeControlFlowPlan,
 	facts: ReadonlyArray<InstructionFacts | undefined> = [],
+	directEntry?: NativeDirectEntryPlan,
 ): ReadonlyArray<string> | undefined {
 	return renderNativeFastEntry({
 		controlFlow,
@@ -149,7 +157,7 @@ function fastEntry(
 		),
 		fn,
 		facts,
-		directEntry: undefined,
+		directEntry,
 		specialized: false,
 		trySymbol: exported ? OWN_TRY : undefined,
 		calleeTry: (ip, callee) => {
@@ -161,19 +169,22 @@ function fastEntry(
 						environment: `mal_value_to_function_object(${callee})->creation_env`,
 					};
 		},
-		signature:
-			"MalValue read(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, void *entry_state) {",
+		signature: directEntry
+			? "f64 read(MalVm *vm, MalValue this_value, bool p0, MalEnv *env, MalValue callee) {"
+			: "MalValue read(MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalValue new_target, MalEnv *env, MalValue callee, void *entry_state) {",
 		fullSymbol: "read_full",
-		fullArguments: [
-			"vm",
-			"this_value",
-			"args",
-			"arg_count",
-			"new_target",
-			"env",
-			"callee",
-			"entry_state",
-		],
+		fullArguments: directEntry
+			? ["vm", "this_value", "p0", "env", "callee"]
+			: [
+					"vm",
+					"this_value",
+					"args",
+					"arg_count",
+					"new_target",
+					"env",
+					"callee",
+					"entry_state",
+				],
 		prologue: [],
 		functionIndex: "0",
 		globalIndex: (index) => String(index),
@@ -196,6 +207,135 @@ const loadCompareReturn: ReadonlyArray<BytecodeInstruction> = [
 ];
 
 describe("native fast entries", () => {
+	it("restarts before an unsupported branch and prunes its reads, writes and cycles", () => {
+		const fn = body(
+			[
+				{ opcode: "JUMP_IF", cond: 0, targetIp: 5 },
+				{
+					opcode: "CALL",
+					dst: 3,
+					callee: 1,
+					thisValue: -1,
+					argumentCount: 0,
+					arguments: [],
+				},
+				{
+					opcode: "LOAD_PROPERTY_STATIC",
+					dst: 200,
+					object: 1,
+					stringIndex: 0,
+					icIndex: 0,
+				},
+				{ opcode: "LOAD_CAPTURED", dst: 201, ownerFunctionIndex: 0, index: 0 },
+				{ opcode: "JUMP", targetIp: 2 },
+				{ opcode: "RETURN", value: 1 },
+			],
+			{ registerCount: 202 },
+		);
+		const lines = fastEntry(fn)!;
+		expect(lines).toBeDefined();
+		expect(unexpectedHelpers(lines)).toEqual([]);
+		const c = lines.join("\n");
+		expect(c).toContain("if (mal_value_is_truthy(f0)) goto F5;");
+		expect(c).not.toContain("f200");
+		expect(c).not.toContain("f201");
+		expect(c).not.toContain("__fast_ic");
+		expect(c).toContain(
+			"return read_full(vm, this_value, args, arg_count, new_target, env, callee, entry_state);",
+		);
+	});
+
+	it("does not borrow register definitions that follow a restart", () => {
+		const c = fastEntry(
+			body([
+				{ opcode: "JUMP_IF", cond: 0, targetIp: 4 },
+				{
+					opcode: "CALL",
+					dst: 3,
+					callee: 1,
+					thisValue: -1,
+					argumentCount: 0,
+					arguments: [],
+				},
+				{ opcode: "CREATE_NUMBER", dst: 2, value: 99 },
+				{ opcode: "JUMP", targetIp: 4 },
+				{ opcode: "BINARY", dst: 3, left: 2, right: 1, operator: "+" },
+				{ opcode: "RETURN", value: 3 },
+			]),
+		)!.join("\n");
+		expect(c).toContain("f2 = MAL_VALUE_UNDEFINED;");
+		expect(c).toContain("mal_ops_number_as_f64(f2)");
+		expect(c).not.toContain("99");
+	});
+
+	it("keeps a sibling return when facts rule out a numeric indexed read", () => {
+		const fn = body([
+			{ opcode: "JUMP_IF", cond: 0, targetIp: 3 },
+			{ opcode: "LOAD_PROPERTY", dst: 2, object: 1, key: 0, icIndex: 0 },
+			{ opcode: "RETURN", value: 2 },
+			{ opcode: "RETURN", value: 1 },
+		]);
+		const c = fastEntry(fn, undefined, true, undefined, [
+			undefined,
+			{
+				registers: [2, 1, 0],
+				inputOffset: 1,
+				inputKindMasks: [COMPILER_VALUE_KIND_OBJECT, COMPILER_VALUE_KIND_SYMBOL],
+				resultKindMasks: [COMPILER_VALUE_KIND_TOP],
+			},
+		])!.join("\n");
+		expect(c).not.toContain("mal_vm_array_try_get");
+		expect(c).not.toContain("f2");
+		expect(c).toContain("F3:;");
+	});
+
+	it.each(["-", "+", "~", "tonumeric", "increment", "decrement"] as const)(
+		"admits a Boolean direct entry for primitive unary %s",
+		(operator) => {
+			const fn = body(
+				[
+					{ opcode: "UNARY", dst: 1, src: 0, operator },
+					{ opcode: "RETURN", value: 1 },
+				],
+				{ parameterCount: 1 },
+			);
+			const entry: NativeDirectEntryPlan = {
+				id: 0,
+				parameterRepresentations: ["boolean"],
+				resultRepresentation: "number",
+				registerRepresentations: ["boolean", "number"],
+				gc: { safepoints: [] },
+				instructionFacts: [
+					{
+						instructionIp: 0,
+						masks: [COMPILER_VALUE_KIND_BOOLEAN],
+						results: [COMPILER_VALUE_KIND_NUMBER],
+						effectMask: 0,
+					},
+				],
+			};
+			const lines = fastEntry(
+				fn,
+				undefined,
+				false,
+				undefined,
+				[
+					{
+						inputKindMasks: [COMPILER_VALUE_KIND_BOOLEAN],
+						resultKindMasks: [COMPILER_VALUE_KIND_NUMBER],
+					},
+				],
+				entry,
+			)!;
+			expect(lines).toBeDefined();
+			expect(unexpectedHelpers(lines)).toEqual([]);
+			const c = lines.join("\n");
+			expect(c).toContain("f0 = mal_value_new_boolean(p0);");
+			expect(c).not.toContain("mal_ops_is_number(f0)");
+			expect(c).toContain("return read_full(vm, this_value, p0, env, callee);");
+		},
+	);
+
 	it("omits unreachable stores and cycles without renumbering surviving labels", () => {
 		const fn = body([
 			{ opcode: "CREATE_BOOLEAN", dst: 2, value: true },
@@ -210,7 +350,7 @@ describe("native fast entries", () => {
 			{ opcode: "JUMP", targetIp: 1 },
 			{ opcode: "RETURN", value: 1 },
 		]);
-		expect(fastEntry(fn)).toBeUndefined();
+		expect(fastEntry(fn)).toBeDefined();
 		const lines = fastEntry(fn, undefined, true, {
 			branches: [{ instructionIp: 1, targetIp: 4 }],
 			unreachableIps: [2, 3],

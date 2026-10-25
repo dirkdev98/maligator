@@ -1,6 +1,4 @@
-// Small read-only functions take a frameless entry that restarts in the full entry
-// whenever a load misses or an operand is not a Number. Every case below forces a
-// restart at a different point and checks that nothing observable ran twice.
+// Restarting must preserve the original arguments and never replay JavaScript effects.
 const log = [];
 
 function flagsOf(type) {
@@ -258,5 +256,61 @@ log.push(
 Array.prototype[5] = "inherited";
 log.push(`at inherited ${at([1], 5)}`);
 delete Array.prototype[5];
+
+function branchEffect(flag, node, callback) {
+	const first = node.value;
+	if (flag) return first + 1;
+	node = callback(node);
+	return first + node.value;
+}
+
+function branchConversion(flag, value) {
+	if (flag) return value === null;
+	return -value;
+}
+
+function branchStore(flag, node) {
+	if (flag) return node.value;
+	node.value += 1;
+	return node.value;
+}
+
+globalThis.branchEffect = branchEffect;
+globalThis.branchConversion = branchConversion;
+globalThis.branchStore = branchStore;
+const changed = { value: 4 };
+const callback = (node) => {
+	log.push(`callback ${node.value}`);
+	if (typeof globalThis.gc === "function") globalThis.gc();
+	return { value: node.value + 10 };
+};
+for (const flag of [true, false, true, false]) {
+	log.push(`branch ${globalThis.branchEffect(flag, changed, callback)}`);
+	log.push(`store ${globalThis.branchStore(flag, changed)} ${changed.value}`);
+}
+const getterNode = {
+	get value() {
+		log.push("branch getter");
+		return 5;
+	},
+};
+log.push(`branch getter result ${globalThis.branchEffect(false, getterNode, callback)}`);
+try {
+	globalThis.branchEffect(false, changed, () => {
+		log.push("throwing callback");
+		throw new RangeError("callback");
+	});
+} catch (error) {
+	log.push(`branch throw ${error.name}`);
+}
+for (const value of [true, false, null, undefined, 0, -0, 1n, "4", valued, Symbol("s")]) {
+	log.push(`convert branch ${globalThis.branchConversion(true, value)}`);
+	try {
+		const result = globalThis.branchConversion(false, value);
+		log.push(`convert result ${String(result)} ${Object.is(result, -0)}`);
+	} catch (error) {
+		log.push(`convert throw ${error.name}`);
+	}
+}
 
 console.log(log.join("\n"));

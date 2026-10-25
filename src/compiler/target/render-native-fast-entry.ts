@@ -73,14 +73,7 @@ export interface NativeFastEntryInput {
 	readonly f64Literal: (value: number) => string;
 }
 
-/**
- * A frameless entry for a short loop-free body of side-effect-free reads: it runs the
- * body while every named load hits its cache, every indexed load reads a dense Array
- * element, every operator stays on Numbers, and every call reaches another such body
- * that succeeds, and otherwise restarts the activation in the full entry. Nothing
- * observable happens before a restart, and nothing can allocate, so it needs no frame
- * row, root frame, or safepoint. Undefined when the body needs any of them.
- */
+/** A fast path may restart only before JavaScript effects or allocation, using the original arguments. */
 export function renderNativeFastEntry(
 	input: NativeFastEntryInput,
 ): ReadonlyArray<string> | undefined {
@@ -95,7 +88,6 @@ export function renderNativeFastEntry(
 	);
 	if (
 		input.specialized ||
-		alwaysRestarts(fn, directEntry, new Set([...unreachable, ...elided])) ||
 		fn.isGenerator ||
 		fn.isAsync ||
 		fn.isClassConstructor ||
@@ -108,39 +100,71 @@ export function renderNativeFastEntry(
 		fn.instructions.length - unreachable.size > MAXIMUM_FAST_ENTRY_INSTRUCTIONS
 	)
 		return undefined;
-	const graph = fastEntryGraph(fn.instructions, branches, unreachable);
+	const fieldLoads = new Map(
+		directEntry?.fieldParameters?.loads.map((load) => [load.instructionIp, load.field]),
+	);
+	const stringComparisons = new Map(
+		input.stringComparisons.map((plan) => [plan.instructionIp, plan]),
+	);
+	const exported = input.trySymbol !== undefined;
+	const rejected = new Set<number>();
+	for (const [ip, op] of fn.instructions.entries()) {
+		if (unreachable.has(ip) || elided.has(ip)) continue;
+		const target = branches.get(ip);
+		if (
+			fastInstruction(
+				target === undefined ? op : { opcode: "JUMP", targetIp: target },
+				ip,
+				input,
+				fieldLoads,
+				new Set(),
+				exported,
+				new Map(),
+				stringComparisons.get(ip),
+				new Set(),
+			) === undefined
+		)
+			rejected.add(ip);
+	}
+	const graph = fastEntryGraph(fn.instructions, branches, unreachable, rejected);
 	if (hasCycle(graph)) return undefined;
+	const fallsThrough =
+		fn.instructions.length === 0 ||
+		[...graph.values()].some((next) => next.includes(fn.instructions.length));
+	if (
+		!fallsThrough &&
+		![...graph.keys()].some(
+			(ip) => !rejected.has(ip) && fn.instructions[ip]!.opcode === "RETURN",
+		)
+	)
+		return undefined;
 	const accesses = new Map(
 		[...graph.keys()].map((ip) => [
 			ip,
 			{
 				reads:
-					branches.has(ip) || elided.has(ip)
+					branches.has(ip) || elided.has(ip) || rejected.has(ip)
 						? []
 						: vmInstructionReadRegisters(fn.instructions[ip]!),
-				writes: elided.has(ip) ? [] : vmInstructionWriteRegisters(fn.instructions[ip]!),
+				writes:
+					elided.has(ip) || rejected.has(ip)
+						? []
+						: vmInstructionWriteRegisters(fn.instructions[ip]!),
 			},
 		]),
 	);
 	const registers = new Set<number>();
 	for (const { reads, writes } of accesses.values())
 		for (const register of [...reads, ...writes]) registers.add(register);
-	const exported = input.trySymbol !== undefined;
 	const result = exported ? undefined : directEntry;
-	const fieldLoads = new Map(
-		directEntry?.fieldParameters?.loads.map((load) => [load.instructionIp, load.field]),
-	);
 	const targets = new Set<number>();
 	const body: Array<readonly [number, string]> = [];
 	let loadsProperties = false;
 	let loadsCaptures = false;
 	const instructions = [...graph.keys()]
-		.filter((ip) => !elided.has(ip))
+		.filter((ip) => !elided.has(ip) && !rejected.has(ip))
 		.map((ip) => fn.instructions[ip]!);
 	const constants = numberConstantRegisters(instructions, registers);
-	const stringComparisons = new Map(
-		input.stringComparisons.map((plan) => [plan.instructionIp, plan]),
-	);
 	const integers = int32ResultRegisters(instructions, fn.parameterCount, registers);
 	const initialized = initializedFastRegisters(graph, accesses, registers);
 	for (const register of constants.keys())
@@ -148,7 +172,11 @@ export function renderNativeFastEntry(
 	for (const register of integers)
 		if (!initialized.has(register)) integers.delete(register);
 	for (const [ip, op] of fn.instructions.entries()) {
-		if (unreachable.has(ip)) continue;
+		if (!graph.has(ip)) continue;
+		if (rejected.has(ip)) {
+			body.push([ip, "goto __full;"]);
+			continue;
+		}
 		if (elided.has(ip)) {
 			body.push([ip, ""]);
 			continue;
@@ -225,7 +253,17 @@ export function renderNativeFastEntry(
 			(prologue.length === 0 ? 0 : prologue.length + 1);
 		input.onSourceMap?.(
 			shiftNativeSourceRanges(
-				nativeInstructionSourceRanges(fn, lines.slice(0, mappedLineCount), starts, ips),
+				nativeInstructionSourceRanges(
+					{
+						...fn,
+						positions: fn.positions.map((position, ip) =>
+							graph.has(ip) ? position : -1,
+						),
+					},
+					lines.slice(0, mappedLineCount),
+					starts,
+					ips,
+				),
 				offset,
 			),
 		);
@@ -263,36 +301,22 @@ export function renderNativeFastEntry(
 export const FAST_TRY_PARAMETERS =
 	"MalVm *vm, MalValue this_value, const MalValue *args, i32 arg_count, MalEnv *env, MalValue *out";
 
-const EQUALITY_OPERATORS: ReadonlySet<string> = new Set(["===", "!==", "==", "!="]);
-
-// An operator proven never to see a Number would restart on every call.
-function alwaysRestarts(
-	fn: BytecodeFunction,
-	directEntry: NativeDirectEntryPlan | undefined,
-	unreachable: ReadonlySet<number>,
-): boolean {
-	return (directEntry?.instructionFacts ?? []).some(({ instructionIp, masks }) => {
-		if (unreachable.has(instructionIp)) return false;
-		const op = fn.instructions[instructionIp];
-		const numeric =
-			(op?.opcode === "BINARY" && !EQUALITY_OPERATORS.has(op.operator)) ||
-			(op?.opcode === "UNARY" && op.operator !== "!");
-		return numeric && masks.some((mask) => (mask & COMPILER_VALUE_KIND_NUMBER) === 0);
-	});
-}
-
 function fastEntryGraph(
 	instructions: ReadonlyArray<BytecodeInstruction>,
 	branches: ReadonlyMap<number, number>,
 	unreachable: ReadonlySet<number>,
+	rejected: ReadonlySet<number>,
 ): ReadonlyMap<number, ReadonlyArray<number>> {
 	const graph = new Map<number, ReadonlyArray<number>>();
-	for (const [ip, op] of instructions.entries()) {
-		if (unreachable.has(ip)) continue;
+	const pending = [0];
+	while (pending.length > 0) {
+		const ip = pending.pop()!;
+		const op = instructions[ip];
+		if (op === undefined || unreachable.has(ip) || graph.has(ip)) continue;
 		const target = branches.get(ip);
-		graph.set(
-			ip,
-			target !== undefined
+		const next = rejected.has(ip)
+			? []
+			: target !== undefined
 				? [target]
 				: op.opcode === "RETURN"
 					? []
@@ -300,8 +324,9 @@ function fastEntryGraph(
 						? [op.targetIp]
 						: op.opcode === "JUMP_IF"
 							? [op.targetIp, ip + 1]
-							: [ip + 1],
-		);
+							: [ip + 1];
+		graph.set(ip, next);
+		pending.push(...next);
 	}
 	return graph;
 }
@@ -677,7 +702,7 @@ function fastInstruction(
 			const kind = values.kind(op.src);
 			if ((kind & COMPILER_VALUE_KIND_NULLISH) === 0) return "";
 			return compilerValueKindMaskIsSubset(kind, COMPILER_VALUE_KIND_NULLISH)
-				? "goto __full;"
+				? undefined
 				: `if (mal_value_is_nil(f${op.src})) goto __full;`;
 		}
 		case "LOAD_THIS":
