@@ -61,6 +61,7 @@ describe("normal call result integer ranges", () => {
 			});
 			expect(out.native.registerRepresentations[op.dst]).toBe("int32");
 			expect(out.c.source).not.toContain("mal_number_remainder(");
+			expect(out.c.source).not.toMatch(/\(u32\)\s*\(\(f64\)\s*r\d+\)/);
 			expect(facts.effectMask! & INSTRUCTION_CALLS_USER_CODE).not.toBe(0);
 			expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
 				out.image,
@@ -207,6 +208,7 @@ describe("normal call result integer ranges", () => {
 		expect(c).not.toContain("mal_number_remainder(");
 		expect(c).toContain("% (u32)");
 		expect(c).not.toContain("mal_ops_number_to_i32(");
+		expect(c).not.toMatch(/\(u32\)\s*\(\(f64\)\s*r\d+\)/);
 	});
 
 	it("decodes a bounded floating ABI result after checking completion in every call branch", () => {

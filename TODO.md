@@ -115,7 +115,9 @@ The independent target boundary and current storage contract are recorded in
       components before publication, with conservative widening for growing ranges.
       Complete int-aware arithmetic
       rendering with storage-web selection so modulo chains retain integer storage
-      without f64 round trips.
+      without f64 round trips. Operand rendering now avoids promoting scalar storage
+      immediately before integer conversions, including unsigned expression chains;
+      intermediate Number result storage still forces some round trips.
       Preserve normal return operand identity itself for identity comparisons and
       liveness, while retaining the call's effects and compatible storage contracts.
 - [ ] Give record entries typed fields. Record entries return fields boxed, so a

@@ -598,8 +598,8 @@ function fastBinary(
 	if (operator === "%") {
 		const expression =
 			nativeUnsignedRemainderExpression(
-				numeric(left),
-				numeric(right),
+				{ number: numeric(left) },
+				{ number: numeric(right) },
 				values.range(left),
 				values.range(right),
 			) ?? `fmod(${numeric(left)}, ${numeric(right)})`;

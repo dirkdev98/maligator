@@ -133,6 +133,7 @@ import {
 	nativePrimitiveNumberExpression,
 	nativeUnsignedRemainderExpression,
 } from "./native-scalar-operators.ts";
+import type { NativeNumberOperand } from "./native-scalar-operators.ts";
 import {
 	nativeInstructionSourceRanges,
 	shiftNativeSourceRanges,
@@ -1296,20 +1297,22 @@ function numberToInt32(value: string, isInt32 = false): string {
 
 function nativeNumberExpr(
 	operator: string,
-	left: string,
-	right: string,
+	leftOperand: NativeNumberOperand,
+	rightOperand: NativeNumberOperand,
 	inputIntegerRanges: ReadonlyArray<CompilerIntegerRange | undefined> | undefined,
 ): string | null {
+	const left = leftOperand.number;
+	const right = rightOperand.number;
 	const arith = NATIVE_ARITH[operator];
 	if (arith !== undefined) {
 		return `${left} ${arith} ${right}`;
 	}
 	const left32 = numberToInt32(
-		left,
+		leftOperand.unpromoted ?? left,
 		compilerIntegerRangeIsInt32(inputIntegerRanges?.[0]),
 	);
 	const right32 = numberToInt32(
-		right,
+		rightOperand.unpromoted ?? right,
 		compilerIntegerRangeIsInt32(inputIntegerRanges?.[1]),
 	);
 	const bitwise = nativeInt32Expr(operator, left32, right32);
@@ -1320,8 +1323,8 @@ function nativeNumberExpr(
 	if (operator === "%") {
 		return (
 			nativeUnsignedRemainderExpression(
-				left,
-				right,
+				leftOperand,
+				rightOperand,
 				inputIntegerRanges?.[0],
 				inputIntegerRanges?.[1],
 			) ?? `mal_number_remainder(${left}, ${right})`
@@ -1984,8 +1987,14 @@ function emitNumericLoopRegion(
 				if (floating) {
 					const expression = nativeNumberExpr(
 						op.operator,
-						num(op.left),
-						num(op.right),
+						{
+							number: num(op.left),
+							unpromoted: local(op.left),
+						},
+						{
+							number: num(op.right),
+							unpromoted: local(op.right),
+						},
 						facts?.[ip]?.inputIntegerRanges,
 					);
 					if (expression === null) throw new Error("Invalid numeric loop operator");
@@ -2367,8 +2376,8 @@ function emitNumberRecordRegion(
 					compare === undefined
 						? nativeNumberExpr(
 								op.operator,
-								local(op.left),
-								local(op.right),
+								{ number: local(op.left) },
+								{ number: local(op.right) },
 								facts?.[ip]?.inputIntegerRanges,
 							)
 						: `${local(op.left)} ${compare} ${local(op.right)}`;
@@ -2461,10 +2470,14 @@ function emitNumberRecordRegion(
 	return lines;
 }
 
-function nativeUnsignedExpr(operator: string, left: string, right: string): string {
+function nativeUnsignedExpr(
+	operator: string,
+	left: NativeNumberOperand,
+	right: NativeNumberOperand,
+): string {
 	if (!["+", "-", "*", "%"].includes(operator))
 		throw new Error("Invalid lowered native unsigned operation");
-	return `(u32)(${left}) ${operator} (u32)(${right})`;
+	return `(u32)(${left.unpromoted ?? left.number}) ${operator} (u32)(${right.unpromoted ?? right.number})`;
 }
 
 /**
@@ -3774,8 +3787,14 @@ function renderScalarExpression(
 			if (plan?.kind === "unsigned-arithmetic") {
 				const expression = nativeUnsignedExpr(
 					op.operator,
-					number(op.left),
-					number(op.right),
+					{
+						number: number(op.left),
+						unpromoted: isNumericRep(reps[op.left]!) ? `r${op.left}` : undefined,
+					},
+					{
+						number: number(op.right),
+						unpromoted: isNumericRep(reps[op.right]!) ? `r${op.right}` : undefined,
+					},
 				);
 				return reps[op.dst] === "int32"
 					? `mal_ops_u32_to_i32(${expression})`
@@ -3803,8 +3822,14 @@ function renderScalarExpression(
 				);
 			const expression = nativeNumberExpr(
 				op.operator,
-				number(op.left),
-				number(op.right),
+				{
+					number: number(op.left),
+					unpromoted: isNumericRep(reps[op.left]!) ? `r${op.left}` : undefined,
+				},
+				{
+					number: number(op.right),
+					unpromoted: isNumericRep(reps[op.right]!) ? `r${op.right}` : undefined,
+				},
 				facts?.inputIntegerRanges,
 			);
 			if (expression === null)
@@ -8025,6 +8050,10 @@ function emitInstruction(
 					: inputValue(r);
 	const num = (r: number): string =>
 		reps[r] === "int32" ? `(f64) ${inputValue(r)}` : inputValue(r);
+	const numberView = (register: number, number: string): NativeNumberOperand => ({
+		number,
+		unpromoted: isNumericRep(reps[register]!) ? inputValue(register) : undefined,
+	});
 	const truthy = (r: number): string =>
 		nativeTruthiness(
 			inputValue(r),
@@ -9625,10 +9654,14 @@ function emitInstruction(
 					other = `mal_ops_number_as_f64(r${register})`;
 				} else other = num(register);
 			}
+			const otherView =
+				operand.right.kind === "literal"
+					? { number: other }
+					: numberView(operand.right.register, other);
 			expression = nativeNumberExpr(
 				operand.operator,
-				operand.propertyIsLeft ? `${prefix}_old` : other,
-				operand.propertyIsLeft ? other : `${prefix}_old`,
+				operand.propertyIsLeft ? { number: `${prefix}_old` } : otherView,
+				operand.propertyIsLeft ? otherView : { number: `${prefix}_old` },
 				context.propertyNumericUpdateFacts?.inputIntegerRanges,
 			);
 		}
@@ -11175,16 +11208,19 @@ function emitInstruction(
 			}
 			if (staticPropertyNumericAction?.role === "step") {
 				const { plan, index } = staticPropertyNumericAction;
-				const operand = (value: NativePropertyProjectionOperand): string => {
+				const operand = (value: NativePropertyProjectionOperand): NativeNumberOperand => {
 					switch (value.kind) {
 						case "load":
-							return `__property_projection_${plan.id}_value_${value.index}`;
+							return { number: `__property_projection_${plan.id}_value_${value.index}` };
 						case "step":
-							return `__property_projection_${plan.id}_step_${value.index}`;
+							return { number: `__property_projection_${plan.id}_step_${value.index}` };
 						case "register":
-							return reps[value.register] === "boxed"
-								? `mal_ops_number_as_f64(r${value.register})`
-								: typedNumber(value.register);
+							return numberView(
+								value.register,
+								reps[value.register] === "boxed"
+									? `mal_ops_number_as_f64(r${value.register})`
+									: typedNumber(value.register),
+							);
 					}
 				};
 				const step = plan.steps[index]!;
@@ -11321,7 +11357,7 @@ function emitInstruction(
 				return [
 					storeNumber(
 						dst,
-						`(f64)(${nativeUnsignedExpr(operator, number(left), number(right))})`,
+						`(f64)(${nativeUnsignedExpr(operator, numberView(left, number(left)), numberView(right, number(right)))})`,
 					),
 				];
 			}
@@ -11345,7 +11381,12 @@ function emitInstruction(
 					const expression =
 						operator === "**"
 							? `mal_number_exponentiate(${a}, ${b})`
-							: nativeNumberExpr(operator, a, b, context.facts?.inputIntegerRanges);
+							: nativeNumberExpr(
+									operator,
+									numberView(left, a),
+									numberView(right, b),
+									context.facts?.inputIntegerRanges,
+								);
 					if (expression !== null) return [storeNumber(dst, expression)];
 				}
 			}
@@ -11366,7 +11407,12 @@ function emitInstruction(
 				const expression =
 					operator === "**"
 						? `mal_number_exponentiate(${a}, ${b})`
-						: nativeNumberExpr(operator, a, b, context.facts?.inputIntegerRanges);
+						: nativeNumberExpr(
+								operator,
+								numberView(left, a),
+								numberView(right, b),
+								context.facts?.inputIntegerRanges,
+							);
 				if (expression !== null) return [storeNumber(dst, expression)];
 			}
 			if (indexedLengthLoopAction?.role === "compare") {
@@ -11479,8 +11525,8 @@ function emitInstruction(
 				const externalExpr = numericOperand(external);
 				const nativeExpr = nativeNumberExpr(
 					operator,
-					firstOnLeft ? value : externalExpr,
-					firstOnLeft ? externalExpr : value,
+					firstOnLeft ? { number: value } : numberView(external, externalExpr),
+					firstOnLeft ? numberView(external, externalExpr) : { number: value },
 					context.facts?.inputIntegerRanges,
 				);
 				if (nativeExpr === null) throw new Error("Invalid numeric-fusion link");
@@ -11500,8 +11546,8 @@ function emitInstruction(
 				}
 				const nativeExpr = nativeNumberExpr(
 					operator,
-					numericOperand(left),
-					numericOperand(right),
+					numberView(left, numericOperand(left)),
+					numberView(right, numericOperand(right)),
 					context.facts?.inputIntegerRanges,
 				);
 				if (nativeExpr === null) throw new Error("Invalid numeric-fusion start");
@@ -11572,8 +11618,8 @@ function emitInstruction(
 				} else {
 					const nativeExpr = nativeNumberExpr(
 						operator,
-						firstOnLeft ? fusedValue : externalExpr,
-						firstOnLeft ? externalExpr : fusedValue,
+						firstOnLeft ? { number: fusedValue } : numberView(external, externalExpr),
+						firstOnLeft ? numberView(external, externalExpr) : { number: fusedValue },
 						context.facts?.inputIntegerRanges,
 					);
 					if (nativeExpr === null) throw new Error("Invalid numeric-fusion finish");
@@ -11635,8 +11681,8 @@ function emitInstruction(
 					int32Expression === null
 						? nativeNumberExpr(
 								operator,
-								numericOperand(left),
-								numericOperand(right),
+								numberView(left, numericOperand(left)),
+								numberView(right, numericOperand(right)),
 								context.facts?.inputIntegerRanges,
 							)
 						: `(f64) (${int32Expression})`;
@@ -11688,8 +11734,8 @@ function emitInstruction(
 				}
 				const expr = nativeNumberExpr(
 					operator,
-					typedNumber(left),
-					typedNumber(right),
+					numberView(left, typedNumber(left)),
+					numberView(right, typedNumber(right)),
 					context.facts?.inputIntegerRanges,
 				);
 				return expr === null ? null : [`r${dst} = ${expr};`];
@@ -11911,8 +11957,8 @@ function emitInstruction(
 			if (numericInputs !== undefined && producesNumberFromNumbers(operator)) {
 				const nativeExpr = nativeNumberExpr(
 					operator,
-					numericOperand(left),
-					numericOperand(right),
+					numberView(left, numericOperand(left)),
+					numberView(right, numericOperand(right)),
 					context.facts?.inputIntegerRanges,
 				);
 				const int32Expr = INT32_RESULT_OPERATORS.has(operator)

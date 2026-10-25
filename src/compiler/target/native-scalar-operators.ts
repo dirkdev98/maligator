@@ -12,9 +12,15 @@ import {
 import type { CompilerValueKindMask } from "../shared/compiler-value-kinds.ts";
 import type { CompilerIntegerRange } from "../shared/integer-range.ts";
 
+export interface NativeNumberOperand {
+	readonly number: string;
+	// Keep the scalar before Number promotion when the operation performs its own conversion.
+	readonly unpromoted?: string;
+}
+
 export function nativeUnsignedRemainderExpression(
-	left: string,
-	right: string,
+	left: NativeNumberOperand,
+	right: NativeNumberOperand,
 	dividend: CompilerIntegerRange | undefined,
 	divisor: CompilerIntegerRange | undefined,
 ): string | undefined {
@@ -27,7 +33,7 @@ export function nativeUnsignedRemainderExpression(
 		divisor.maximum > 0xffff_ffff
 	)
 		return undefined;
-	return `(f64) ((u32) (${left}) % (u32) (${right}))`;
+	return `(f64) ((u32) (${left.unpromoted ?? left.number}) % (u32) (${right.unpromoted ?? right.number}))`;
 }
 
 // Guards license primitive Number conversion; a fallback must retain the original operands.

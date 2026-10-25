@@ -271,6 +271,10 @@ negative dividends, zero-capable divisors and wider domains retain the Number he
 Scalar expressions, fusion links, property projections and numeric updates pass the
 operation's own ranges to the shared arithmetic renderer. Frameless entries share
 the unsigned remainder domain check with canonical and resumable emission.
+Numeric operands retain an unpromoted scalar view beside their Number expression.
+Range-proven integer conversions and selected unsigned operations use that view
+across scalar expressions, framed bodies, fusion paths and numeric loop regions.
+Ordinary Number arithmetic still promotes integer inputs to avoid signed C overflow.
 
 Core shares Boolean observation queries between local folding, program-flow demands
 and cross-call specialization. Exact `Object.is` calls fold for the same SSA value,

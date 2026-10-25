@@ -55,6 +55,7 @@ describe("boxed scalar expressions at phi boundaries", () => {
 		expect(out.native.instructions[ip]).toMatchObject({ kind: "unsigned-arithmetic" });
 		expect(out.native.storage!.expressionIps).toContain(ip);
 		expect(out.c.source).toContain(`#define r${op.dst} (mal_ops_number_value((f64)`);
+		expect(out.c.source).not.toMatch(/\(u32\)\s*\(\(f64\)\s*r\d+\)/);
 	});
 
 	it("keeps the mixed phi rooted when the other edge can carry a heap value", () => {
