@@ -1255,11 +1255,10 @@ const foldValueKindObservations: CoreFunctionPass = {
 		}> = [];
 		const kindMask = (value: CoreValueId) => kinds.kindMask(value);
 		const integerRange = (value: CoreValueId, consumer: CoreInstructionId) =>
-			kinds.exactScalar(value) === "int32"
-				? COMPILER_INT32_RANGE
-				: context
-						.analysis(CORE_LOOP_INDUCTION_ANALYSIS)
-						.range(value, fn.instructionBlock(consumer));
+			context
+				.analysis(CORE_LOOP_INDUCTION_ANALYSIS)
+				.range(value, fn.instructionBlock(consumer)) ??
+			(kinds.exactScalar(value) === "int32" ? COMPILER_INT32_RANGE : undefined);
 		for (const instruction of fn.instructionIds()) {
 			if (fn.instructionKind(instruction) !== "operation") continue;
 			const result = coreValueKindObservation(

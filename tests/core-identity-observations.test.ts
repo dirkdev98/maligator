@@ -28,6 +28,32 @@ function forwarded(
 }
 
 describe("Core identity observations", () => {
+	it("folds disjoint normal-return intervals without removing the effectful call", () => {
+		const out = forwarded(
+			"const result=leaf(input,gate);return Object.is(result,(other&255)+1024);",
+			{
+				leaf: "function leaf(value,hook){try{hook();return value&255;}catch(error){throw error;}}",
+			},
+		);
+		expect(sameValueCalls(out)).toEqual([]);
+		expect(out.core.some((op) => op.opcode === "call")).toBe(true);
+		expect(
+			out.core.some(
+				(op) => op.opcode === "createBoolean" && op.attributes.value === false,
+			),
+		).toBe(true);
+	});
+
+	it.each(["value?-0:0", "value?NaN:0"])(
+		"retains SameValue for an unbounded normal return %s",
+		(expression) => {
+			const out = forwarded("const result=leaf(input,gate);return Object.is(result,0);", {
+				leaf: `function leaf(value,hook){try{hook();return ${expression};}catch(error){throw error;}}`,
+			});
+			expect(sameValueCalls(out).length).toBeGreaterThan(0);
+		},
+	);
+
 	it.each([false, true])(
 		"preserves forwarding and invocation authority with locked primordials %s",
 		(locked) => {

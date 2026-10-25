@@ -96,6 +96,36 @@ const OWN_TRY = "mal_compiled_0_try";
 const LENGTH_STRING_INDEX = 7;
 
 it.each([false, true])(
+	"uses a partial range in frameless SameValue, exported=%s",
+	(exported) => {
+		const fn = body([
+			{
+				opcode: "CALL_KNOWN",
+				operation: "Object.is",
+				thisValue: 0,
+				argumentCount: 2,
+				arguments: [0, 1],
+				dst: 2,
+			},
+			{ opcode: "RETURN", value: 2 },
+		]);
+		const lines = fastEntry(fn, undefined, exported, undefined, [
+			{
+				registers: [2, 0, 1],
+				inputOffset: 1,
+				resultKindMasks: [COMPILER_VALUE_KIND_BOOLEAN],
+				inputKindMasks: [COMPILER_VALUE_KIND_NUMBER, COMPILER_VALUE_KIND_NUMBER],
+				inputIntegerRanges: [{ ...COMPILER_UINT32_RANGE, minimum: 1 }, undefined],
+			},
+		])!;
+		expect(lines).toBeDefined();
+		expect(unexpectedHelpers(lines)).toEqual([]);
+		expect(lines.join("\n")).not.toContain("isnan(");
+		expect(lines.join("\n")).not.toContain("signbit(");
+	},
+);
+
+it.each([false, true])(
 	"guards SameValue before a frameless hit, exported=%s",
 	(exported) => {
 		const fn = body([
@@ -130,24 +160,27 @@ it.each([false, true])(
 	},
 );
 
-it.each([false, true])(
-	"compares boxed SameValue without a frame, exported=%s",
-	(exported) => {
-		const fn = body([
-			{
-				opcode: "CALL_KNOWN",
-				operation: "Object.is",
-				thisValue: 0,
-				argumentCount: 2,
-				arguments: [0, 1],
-				dst: 2,
-			},
-			{ opcode: "RETURN", value: 2 },
-		]);
-		const lines = fastEntry(fn, undefined, exported)!;
-		expect(lines).toBeDefined();
-		expect(unexpectedHelpers(lines)).toEqual([]);
-		expect(lines.join("\n")).toContain("mal_ops_same_value(f0, f1)");
+it.each([undefined, "Object.is"] as const)(
+	"compares boxed SameValue without a frame with specialization %s",
+	(specialized) => {
+		for (const exported of [false, true]) {
+			const fn = body([
+				{
+					opcode: "CALL_KNOWN",
+					operation: "Object.is",
+					specialized,
+					thisValue: 0,
+					argumentCount: 2,
+					arguments: [0, 1],
+					dst: 2,
+				},
+				{ opcode: "RETURN", value: 2 },
+			]);
+			const lines = fastEntry(fn, undefined, exported)!;
+			expect(lines).toBeDefined();
+			expect(unexpectedHelpers(lines)).toEqual([]);
+			expect(lines.join("\n")).toContain("mal_ops_same_value(f0, f1)");
+		}
 	},
 );
 

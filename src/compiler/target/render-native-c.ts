@@ -13088,6 +13088,12 @@ function emitInstruction(
 								right !== undefined &&
 								operandRep(left) === "int32" &&
 								operandRep(right) === "int32",
+							left === undefined
+								? undefined
+								: instructionInputIntegerRange(context.facts, left),
+							right === undefined
+								? undefined
+								: instructionInputIntegerRange(context.facts, right),
 						),
 					),
 				];
@@ -13562,6 +13568,12 @@ function emitInstruction(
 						right !== undefined &&
 						operandRep(left) === "int32" &&
 						operandRep(right) === "int32",
+					left === undefined
+						? undefined
+						: instructionInputIntegerRange(context.facts, left),
+					right === undefined
+						? undefined
+						: instructionInputIntegerRange(context.facts, right),
 				);
 				return [
 					`if (mal_builtin_object_is_callee_matches(${boxedOperand(instruction.callee)})) {`,

@@ -12,6 +12,7 @@ import {
 } from "../shared/compiler-value-kinds.ts";
 import type { CompilerValueKindMask } from "../shared/compiler-value-kinds.ts";
 import type { CompilerIntegerRange } from "../shared/integer-range.ts";
+import { compilerIntegerRangeComparison } from "../shared/integer-range.ts";
 
 // Scalar views are noncoercing Number/Boolean reads; integer pairs exclude negative zero.
 export function nativeSameValueExpression(
@@ -22,6 +23,8 @@ export function nativeSameValueExpression(
 	leftScalar?: string,
 	rightScalar?: string,
 	integerPair = false,
+	leftRange?: CompilerIntegerRange,
+	rightRange?: CompilerIntegerRange,
 ): string {
 	if (left === right) return "true";
 	if ((leftKind & rightKind) === 0) return "false";
@@ -30,15 +33,27 @@ export function nativeSameValueExpression(
 		(leftKind === COMPILER_VALUE_KIND_UNDEFINED || leftKind === COMPILER_VALUE_KIND_NULL)
 	)
 		return "true";
+	const compared = compilerIntegerRangeComparison("===", leftRange, rightRange);
+	if (compared !== undefined) return String(compared);
 	if (
 		leftKind === COMPILER_VALUE_KIND_NUMBER &&
 		rightKind === leftKind &&
 		leftScalar !== undefined &&
 		rightScalar !== undefined
-	)
-		return integerPair
-			? `${leftScalar} == ${rightScalar}`
-			: `(${leftScalar} == ${rightScalar} ? (${leftScalar} != 0.0 || !!signbit(${leftScalar}) == !!signbit(${rightScalar})) : (isnan(${leftScalar}) && isnan(${rightScalar})))`;
+	) {
+		if (
+			integerPair ||
+			(leftRange !== undefined && rightRange !== undefined) ||
+			(leftRange !== undefined && (leftRange.minimum > 0 || leftRange.maximum < 0)) ||
+			(rightRange !== undefined && (rightRange.minimum > 0 || rightRange.maximum < 0))
+		)
+			return `${leftScalar} == ${rightScalar}`;
+		if (leftRange !== undefined)
+			return `(${leftScalar} == ${rightScalar} && (${leftScalar} != 0.0 || !signbit(${rightScalar})))`;
+		if (rightRange !== undefined)
+			return `(${leftScalar} == ${rightScalar} && (${rightScalar} != 0.0 || !signbit(${leftScalar})))`;
+		return `(${leftScalar} == ${rightScalar} ? (${leftScalar} != 0.0 || !!signbit(${leftScalar}) == !!signbit(${rightScalar})) : (isnan(${leftScalar}) && isnan(${rightScalar})))`;
+	}
 	if (leftKind === COMPILER_VALUE_KIND_BOOLEAN && rightKind === leftKind)
 		return `${leftScalar ?? `mal_value_to_boolean(${left})`} == ${rightScalar ?? `mal_value_to_boolean(${right})`}`;
 	return `mal_ops_same_value(${left}, ${right})`;

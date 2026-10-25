@@ -278,6 +278,11 @@ completion values. Frameless entries admit namespace reads only through the
 existing non-observing global data cache and restart before getters or invocation
 on a miss. Root publication remains on the ordinary fallback edge. The compiler
 artifact schema includes Object.is in both guarded-operation encodings.
+SameValue consumes precise integer intervals at the observation, including guarded
+calls. These intervals exclude NaN and negative zero: two bounded operands, or one
+nonzero bounded operand, permit ordinary numeric equality. A single zero-capable
+bound retains the unbounded operand's sign test. Disjoint intervals can fold the
+result while retaining effectful argument producers and normal-return calls.
 Call result bounds reach scalar selection, variant overlays and artifact transport.
 After checking completion, callers decode int32-bounded results with an ordinary C
 cast; argument transports retain their own conversion semantics. Unsigned C remainder

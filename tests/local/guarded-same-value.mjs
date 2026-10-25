@@ -19,6 +19,29 @@ function boolean(left, right) {
 function disjoint(left, right) {
 	return Object.is(+left, !!right);
 }
+function positiveLeft(left, right) {
+	return Object.is((left >>> 0) + 1, +right);
+}
+function positiveRight(left, right) {
+	return Object.is(+left, (right >>> 0) + 1);
+}
+function widePair(left, right) {
+	return Object.is((left >>> 0) + 1, (right >>> 0) + 1);
+}
+function unsignedLeft(left, right) {
+	return Object.is(left >>> 0, +right);
+}
+function unsignedRight(left, right) {
+	return Object.is(+left, right >>> 0);
+}
+function separate(left, right) {
+	return Object.is(left & 255, (right >>> 0) + 1024);
+}
+function* wideSuspended(left, right) {
+	const value = (left >>> 0) + 1;
+	yield 0;
+	return Object.is(value, +right);
+}
 function missing() {
 	return Object.is();
 }
@@ -48,6 +71,13 @@ Object.assign(globalThis, {
 	extra,
 	retained,
 	suspended,
+	positiveLeft,
+	positiveRight,
+	widePair,
+	unsignedLeft,
+	unsignedRight,
+	separate,
+	wideSuspended,
 });
 
 const originalObject = Object;
@@ -90,6 +120,34 @@ for (const left of values) {
 			check(numeric(left, right) === original(+left, +right), "numeric comparison");
 			check(integer(left, right) === original(left | 0, right | 0), "integer comparison");
 			check(disjoint(left, right) === false, "disjoint argument kinds");
+			check(
+				positiveLeft(left, right) === original((left >>> 0) + 1, +right),
+				"nonzero left range",
+			);
+			check(
+				positiveRight(left, right) === original(+left, (right >>> 0) + 1),
+				"nonzero right range",
+			);
+			check(
+				widePair(left, right) === original((left >>> 0) + 1, (right >>> 0) + 1),
+				"wide range pair",
+			);
+			check(
+				unsignedLeft(left, right) === original(left >>> 0, +right),
+				"positive zero left range",
+			);
+			check(
+				unsignedRight(left, right) === original(+left, right >>> 0),
+				"positive zero right range",
+			);
+			check(separate(left, right) === false, "disjoint ranges");
+			const iterator = wideSuspended(left, right);
+			check(iterator.next().value === 0, "wide range suspension");
+			if (typeof gc === "function") gc();
+			check(
+				iterator.next().value === original((left >>> 0) + 1, +right),
+				"wide range after suspension",
+			);
 		}
 	}
 }
@@ -126,6 +184,15 @@ try {
 			same(NaN, NaN) === result && reflexive(NaN) === result && missing() === result,
 			"replacement result remains arbitrary",
 		);
+		for (const invoke of [
+			positiveLeft,
+			positiveRight,
+			widePair,
+			unsignedLeft,
+			unsignedRight,
+			separate,
+		])
+			check(invoke(1, 1) === result, "range proof retains arbitrary replacement result");
 		check(
 			retained(marker, marker, () => {
 				if (typeof gc === "function") gc();

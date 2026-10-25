@@ -862,7 +862,7 @@ function fastInstruction(
 				op.operation !== "Object.is" ||
 				op.construct ||
 				op.argumentMode !== undefined ||
-				op.specialized !== undefined
+				(op.specialized !== undefined && op.specialized !== op.operation)
 			)
 				return undefined;
 			const expression = fastSameValue(op.arguments, values, value);
@@ -902,5 +902,7 @@ function fastSameValue(
 			right !== undefined &&
 			values.isInt32(left) &&
 			values.isInt32(right),
+		left === undefined ? undefined : values.range(left),
+		right === undefined ? undefined : values.range(right),
 	);
 }

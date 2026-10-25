@@ -36,6 +36,7 @@ import type { CompilerIntegerRange } from "../shared/integer-range.ts";
 import {
 	compilerIntegerRangeIsInt32,
 	compilerIntegerRangeIsValid,
+	compilerIntegerRangeComparison,
 } from "../shared/integer-range.ts";
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
 import { coreClosedGlobalSlotMembership } from "./core-compilation.ts";
@@ -1665,6 +1666,19 @@ export function coreValueKindObservation(
 				leftMask === COMPILER_VALUE_KIND_NULL)
 		)
 			return true;
+		if (
+			left !== undefined &&
+			right !== undefined &&
+			leftMask === COMPILER_VALUE_KIND_NUMBER &&
+			rightMask === leftMask
+		) {
+			const compared = compilerIntegerRangeComparison(
+				"===",
+				integerRange?.(left, instruction),
+				integerRange?.(right, instruction),
+			);
+			if (compared !== undefined) return compared;
+		}
 		return left !== undefined &&
 			right !== undefined &&
 			distinctFreshAllocations(fn, identity?.(left) ?? left, identity?.(right) ?? right)

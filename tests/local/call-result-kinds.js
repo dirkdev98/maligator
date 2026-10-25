@@ -164,6 +164,11 @@ function identitySame(value, callback) {
 	collectGarbage();
 	return Object.is(result, value);
 }
+function identityDisjoint(value, callback) {
+	const result = identity(value & 255, callback);
+	collectGarbage();
+	return Object.is(result, (value & 255) + 1024);
+}
 function identityStrict(value, callback) {
 	const result = identity(value, callback);
 	collectGarbage();
@@ -269,6 +274,7 @@ globalThis.identityText = identityText;
 globalThis.identityPrefix = identityPrefix;
 globalThis.identityTextPrefix = identityTextPrefix;
 globalThis.identitySame = identitySame;
+globalThis.identityDisjoint = identityDisjoint;
 globalThis.identityStrict = identityStrict;
 globalThis.identitySameChain = identitySameChain;
 globalThis.identitySamePrefix = identitySamePrefix;
@@ -351,6 +357,7 @@ for (const value of inputs) {
 	);
 	console.log(
 		capture(() => identitySame(value, hook)),
+		capture(() => identityDisjoint(value, hook)),
 		capture(() => identityStrict(value, hook)),
 		capture(() => identitySameChain(value, hook)),
 		capture(() => identitySamePrefix(value, [hook])),

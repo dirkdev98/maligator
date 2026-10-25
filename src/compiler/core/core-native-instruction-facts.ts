@@ -135,6 +135,7 @@ const integerBinaryConsumers: ReadonlySet<string> = new Set([
 	">>>",
 ]);
 const boundBuiltinConsumers: ReadonlySet<string> = new Set([
+	"Object.is",
 	"Math.abs",
 	"Math.sign",
 	"Math.min",
@@ -162,16 +163,21 @@ function instructionIntegerRanges(
 	const opcode = operation ? fn.instructionOpcodeName(instruction) : "";
 	const attributes = operation ? fn.instructionAttributes(instruction) : {};
 	const operator = attributes.operator;
+	const builtinOperation =
+		opcode === "call"
+			? (attributes.knownBuiltinCall as { operation?: string } | undefined)?.operation
+			: attributes.operation;
 	const bounds =
 		fn.instructionKind(instruction) === "branch" ||
 		fn.instructionKind(instruction) === "guard" ||
 		fn.instructionKind(instruction) === "switch" ||
 		(opcode === "unary" && operator === "!") ||
 		(opcode === "binary" && boundBinaryConsumers.has(operator as string)) ||
-		((opcode === "callKnown" ||
+		((opcode === "call" ||
+			opcode === "callKnown" ||
 			opcode === "mathUnaryNumber" ||
 			opcode === "mathBinaryNumber") &&
-			boundBuiltinConsumers.has(attributes.operation as string));
+			boundBuiltinConsumers.has(builtinOperation as string));
 	const integer =
 		bounds ||
 		opcode === "call" ||

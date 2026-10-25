@@ -18,6 +18,26 @@ import { boxedNativeFactContract } from "./helpers/boxed-native-facts.ts";
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 describe("SameValue hit and fallback contracts", () => {
+	it.each([
+		["(input>>>0)+1", "+other", false],
+		["+input", "(other>>>0)+1", false],
+		["(input>>>0)+1", "(other>>>0)+1", false],
+		["input>>>0", "+other", true],
+		["+input", "other>>>0", true],
+	] as const)("uses partial numeric ranges for %s and %s", (left, right, signedZero) => {
+		for (const locked of [false, true]) {
+			const out = inspectStaticValueFunction(
+				`function compute(input,other){const left=${left},right=${right};return Object.is(left,right);}globalThis.compute=compute;`,
+				"compute",
+				{ locked },
+			);
+			expect(out.c.source).not.toContain("isnan(");
+			expect(out.c.source.includes("signbit(")).toBe(signedZero);
+			expect(out.c.source).not.toContain("mal_ops_same_value(");
+			if (!locked) expect(out.c.source).toContain("mal_vm_call_cached");
+		}
+	});
+
 	it.each([false, true])("retains loaded-callee authority with locked=%s", (locked) => {
 		const out = inspectStaticValueFunction(
 			"function compute(input,other,gate){const result=Object.is(input,other);gate();return [result,input];}globalThis.compute=compute;",
