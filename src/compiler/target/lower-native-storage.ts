@@ -113,10 +113,14 @@ export interface NativeStoragePlan
 function selectNumericWorker(
 	native: NativeFunctionPlan,
 	entry: NativeDirectEntryPlan,
+	controlFlow: NativeControlFlowPlan | undefined,
 ): boolean {
 	const fn = native.body;
+	const unreachable = new Set(controlFlow?.unreachableIps);
+	const branches = new Set(controlFlow?.branches.map((branch) => branch.instructionIp));
+	const last = fn.instructions.findLast((_, ip) => !unreachable.has(ip));
 	if (
-		fn.instructions.length > 48 ||
+		fn.instructions.length - unreachable.size > 48 ||
 		fn.handlers.length > 0 ||
 		fn.capturedCount > 0 ||
 		fn.isGenerator ||
@@ -126,20 +130,21 @@ function selectNumericWorker(
 		entry.argumentRepresentations !== undefined ||
 		entry.resultRepresentation !== "number" ||
 		entry.fieldParameters?.representations.some((rep) => rep !== "number") ||
-		!["RETURN", "JUMP"].includes(fn.instructions.at(-1)?.opcode ?? "") ||
-		!fn.instructions.some((op) => op.opcode === "RETURN")
+		!["RETURN", "JUMP"].includes(last?.opcode ?? "") ||
+		!fn.instructions.some((op, ip) => op.opcode === "RETURN" && !unreachable.has(ip))
 	)
 		return false;
 	const reps = entry.registerRepresentations;
 	const numeric = (local: number) => reps[local] === "number" || reps[local] === "int32";
 	return fn.instructions.every((op, ip) => {
+		if (unreachable.has(ip)) return true;
 		switch (op.opcode) {
 			case "JUMP":
 			case "JUMP_IF":
 				return (
 					op.targetIp >= 0 &&
 					op.targetIp < fn.instructions.length &&
-					(op.opcode === "JUMP" || reps[op.cond] === "boolean")
+					(op.opcode === "JUMP" || branches.has(ip) || reps[op.cond] === "boolean")
 				);
 			case "CREATE_NUMBER":
 			case "CREATE_F64":
@@ -1370,7 +1375,7 @@ function lowerStorage(
 		};
 	};
 	let numericWorker: NativeNumericWorkerPlan | undefined;
-	if (entry !== undefined && selectNumericWorker(native, entry)) {
+	if (entry !== undefined && selectNumericWorker(native, entry, controlFlow)) {
 		const worker = nativeNumericWorkerContract(native);
 		const pollingIps = native.gc.safepoints.flatMap((point) =>
 			point.kind === "loop-backedge" ? [point.instructionIp] : [],

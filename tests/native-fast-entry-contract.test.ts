@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
+import type { NativeControlFlowPlan } from "../src/compiler/target/native-control-flow.ts";
 import { renderNativeFastEntry } from "../src/compiler/target/render-native-fast-entry.ts";
 import type {
 	BytecodeFunction,
@@ -72,8 +73,10 @@ function fastEntry(
 	fn: BytecodeFunction,
 	calleeTry: (ip: number) => string | undefined = () => undefined,
 	exported = true,
+	controlFlow?: NativeControlFlowPlan,
 ): ReadonlyArray<string> | undefined {
 	return renderNativeFastEntry({
+		controlFlow,
 		fn,
 		facts: [],
 		directEntry: undefined,
@@ -124,6 +127,147 @@ const loadCompareReturn: ReadonlyArray<BytecodeInstruction> = [
 ];
 
 describe("native fast entries", () => {
+	it("omits unreachable stores and cycles without renumbering surviving labels", () => {
+		const fn = body([
+			{ opcode: "CREATE_BOOLEAN", dst: 2, value: true },
+			{ opcode: "JUMP_IF", cond: 2, targetIp: 4 },
+			{
+				opcode: "STORE_PROPERTY_STATIC",
+				object: 0,
+				value: 1,
+				stringIndex: 0,
+				icIndex: 0,
+			},
+			{ opcode: "JUMP", targetIp: 1 },
+			{ opcode: "RETURN", value: 1 },
+		]);
+		expect(fastEntry(fn)).toBeUndefined();
+		const lines = fastEntry(fn, undefined, true, {
+			branches: [{ instructionIp: 1, targetIp: 4 }],
+			unreachableIps: [2, 3],
+		})!;
+		expect(lines).toBeDefined();
+		expect(lines.join("\n")).toContain("goto F4;");
+		expect(lines.join("\n")).toContain("F4:;");
+		expect(lines.join("\n")).not.toContain("mal_value_is_truthy");
+		expect(lines.join("\n")).not.toContain("f0");
+		expect(unexpectedHelpers(lines)).toEqual([]);
+	});
+
+	it("budgets only reachable instructions and still rejects a reachable cycle", () => {
+		const dead: Array<BytecodeInstruction> = Array.from({ length: 80 }, (_, i) => ({
+			opcode: "CREATE_NUMBER",
+			dst: i + 100,
+			value: i,
+		}));
+		const fn = body(
+			[
+				{ opcode: "CREATE_BOOLEAN", dst: 2, value: true },
+				{ opcode: "JUMP_IF", cond: 2, targetIp: 82 },
+				...dead,
+				{ opcode: "RETURN", value: 1 },
+			],
+			{ registerCount: 512 },
+		);
+		expect(fastEntry(fn)).toBeUndefined();
+		const reachable = fastEntry(fn, undefined, true, {
+			branches: [{ instructionIp: 1, targetIp: 82 }],
+			unreachableIps: Array.from({ length: 80 }, (_, i) => i + 2),
+		});
+		expect(reachable).toBeDefined();
+		expect(reachable!.join("\n")).not.toContain("f100");
+		expect(reachable!.join("\n")).not.toContain("f511");
+		expect(
+			fastEntry(
+				body([
+					{ opcode: "JUMP_IF", cond: 0, targetIp: 3 },
+					{ opcode: "JUMP_IF", cond: 1, targetIp: 0 },
+					{ opcode: "JUMP", targetIp: 3 },
+					{ opcode: "RETURN", value: 1 },
+				]),
+				undefined,
+				true,
+				{
+					branches: [{ instructionIp: 1, targetIp: 0 }],
+					unreachableIps: [2],
+				},
+			),
+		).toBeUndefined();
+	});
+
+	it("does not substitute a dead literal writer for a live parameter", () => {
+		const fn = body([
+			{ opcode: "CREATE_BOOLEAN", dst: 2, value: true },
+			{ opcode: "JUMP_IF", cond: 2, targetIp: 4 },
+			{ opcode: "CREATE_NUMBER", dst: 0, value: 99 },
+			{
+				opcode: "STORE_PROPERTY_STATIC",
+				object: 1,
+				value: 0,
+				stringIndex: 0,
+				icIndex: 0,
+			},
+			{ opcode: "BINARY", dst: 3, left: 0, right: 1, operator: "+" },
+			{ opcode: "RETURN", value: 3 },
+		]);
+		const text = fastEntry(fn, undefined, true, {
+			branches: [{ instructionIp: 1, targetIp: 4 }],
+			unreachableIps: [2, 3],
+		})!.join("\n");
+		expect(text).toContain("mal_ops_number_as_f64(f0)");
+		expect(text).not.toContain("99");
+	});
+
+	it("retains a literal fact when only unreachable writers disagree", () => {
+		const fn = body([
+			{ opcode: "CREATE_NUMBER", dst: 2, value: 8 },
+			{ opcode: "CREATE_BOOLEAN", dst: 3, value: true },
+			{ opcode: "JUMP_IF", cond: 3, targetIp: 5 },
+			{ opcode: "CREATE_STRING", dst: 2, stringIndex: 0 },
+			{ opcode: "JUMP", targetIp: 5 },
+			{ opcode: "BINARY", dst: 4, left: 0, right: 2, operator: "&" },
+			{ opcode: "RETURN", value: 4 },
+		]);
+		const text = fastEntry(fn, undefined, true, {
+			branches: [{ instructionIp: 2, targetIp: 5 }],
+			unreachableIps: [3, 4],
+		})!.join("\n");
+		expect(text).toContain("((i32) 8)");
+		expect(text).not.toContain("mal_ops_is_number(f2)");
+	});
+
+	it("requires literal and integer definitions on every path to their reads", () => {
+		const number = fastEntry(
+			body([
+				{ opcode: "JUMP_IF", cond: 0, targetIp: 2 },
+				{ opcode: "CREATE_NUMBER", dst: 2, value: 99 },
+				{ opcode: "BINARY", dst: 3, left: 2, right: 1, operator: "+" },
+				{ opcode: "RETURN", value: 3 },
+			]),
+		)!.join("\n");
+		expect(number).toContain("mal_ops_number_as_f64(f2)");
+		const string = fastEntry(
+			body([
+				{ opcode: "JUMP_IF", cond: 0, targetIp: 2 },
+				{ opcode: "CREATE_STRING", dst: 2, stringIndex: 3 },
+				{ opcode: "BINARY", dst: 3, left: 2, right: 1, operator: "===" },
+				{ opcode: "RETURN", value: 3 },
+			]),
+		)!.join("\n");
+		expect(string).toContain("mal_ops_strict_equal_boxed(f2, f1)");
+		expect(string).not.toContain("mal_ops_strict_equal_string_constant");
+		const integer = fastEntry(
+			body([
+				{ opcode: "JUMP_IF", cond: 2, targetIp: 3 },
+				{ opcode: "BINARY", dst: 2, left: 0, right: 1, operator: "&" },
+				{ opcode: "RETURN", value: 2 },
+				{ opcode: "RETURN", value: 1 },
+			]),
+		)!.join("\n");
+		expect(integer).toContain("mal_value_is_truthy(f2)");
+		expect(integer).not.toContain("mal_ops_number_value_to_i32(f2)");
+	});
+
 	it("opens a constructible entry with the floating-point pragma before its new.target guard", () => {
 		const lines = fastEntry(
 			body(loadCompareReturn, { hasPrototype: true }),

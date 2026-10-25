@@ -16,12 +16,17 @@ import {
 	compilerIntegerRangeTruthiness,
 } from "../shared/integer-range.ts";
 import { emitTypeofResult } from "./emit-program-image.ts";
+import type { NativeControlFlowPlan } from "./native-control-flow.ts";
 import type {
 	NativeDirectEntryPlan,
 	NativeFunctionPlan,
 	VmRegisterRepresentation,
 } from "./program-image.ts";
-import { decodeVmValueOperand } from "./runtime-image.ts";
+import {
+	decodeVmValueOperand,
+	vmInstructionReadRegisters,
+	vmInstructionWriteRegisters,
+} from "./runtime-image.ts";
 import type { BytecodeFunction, BytecodeInstruction } from "./runtime-image.ts";
 
 const MAXIMUM_FAST_ENTRY_INSTRUCTIONS = 64;
@@ -30,6 +35,7 @@ export interface NativeFastEntryInput {
 	readonly fn: BytecodeFunction;
 	readonly facts: NativeFunctionPlan["facts"];
 	readonly directEntry: NativeDirectEntryPlan | undefined;
+	readonly controlFlow: NativeControlFlowPlan | undefined;
 	/** The full entry already answers this body without a frame or with a better dispatch. */
 	readonly specialized: boolean;
 	/** The original entry signature, ending in `{`. */
@@ -68,9 +74,16 @@ export function renderNativeFastEntry(
 	input: NativeFastEntryInput,
 ): ReadonlyArray<string> | undefined {
 	const { fn, directEntry } = input;
+	const unreachable = new Set(input.controlFlow?.unreachableIps);
+	const branches = new Map(
+		input.controlFlow?.branches.map(({ instructionIp, targetIp }) => [
+			instructionIp,
+			targetIp,
+		]),
+	);
 	if (
 		input.specialized ||
-		alwaysRestarts(fn, directEntry) ||
+		alwaysRestarts(fn, directEntry, unreachable) ||
 		fn.isGenerator ||
 		fn.isAsync ||
 		fn.isClassConstructor ||
@@ -80,55 +93,84 @@ export function renderNativeFastEntry(
 		fn.needsArguments ||
 		fn.argumentSnapshotCount !== 0 ||
 		fn.handlers.length !== 0 ||
-		fn.instructions.length > MAXIMUM_FAST_ENTRY_INSTRUCTIONS ||
-		hasCycle(fn.instructions)
+		fn.instructions.length - unreachable.size > MAXIMUM_FAST_ENTRY_INSTRUCTIONS
 	)
 		return undefined;
+	const graph = fastEntryGraph(fn.instructions, branches, unreachable);
+	if (hasCycle(graph)) return undefined;
+	const accesses = new Map(
+		[...graph.keys()].map((ip) => [
+			ip,
+			{
+				reads: branches.has(ip) ? [] : vmInstructionReadRegisters(fn.instructions[ip]!),
+				writes: vmInstructionWriteRegisters(fn.instructions[ip]!),
+			},
+		]),
+	);
+	const registers = new Set<number>();
+	for (const { reads, writes } of accesses.values())
+		for (const register of [...reads, ...writes]) registers.add(register);
 	const exported = input.trySymbol !== undefined;
 	const result = exported ? undefined : directEntry;
 	const fieldLoads = new Map(
 		directEntry?.fieldParameters?.loads.map((load) => [load.instructionIp, load.field]),
 	);
 	const targets = new Set<number>();
-	const body: Array<string> = [];
+	const body: Array<readonly [number, string]> = [];
 	let loadsProperties = false;
 	let loadsCaptures = false;
-	const constants = numberConstantRegisters(fn.instructions);
-	const strings = stringConstantRegisters(fn.instructions);
-	const integers = int32ResultRegisters(fn.instructions, fn.parameterCount);
+	const instructions = [...graph.keys()].map((ip) => fn.instructions[ip]!);
+	const constants = numberConstantRegisters(instructions, registers);
+	const strings = stringConstantRegisters(instructions, registers);
+	const integers = int32ResultRegisters(instructions, fn.parameterCount, registers);
+	const initialized = initializedFastRegisters(
+		graph,
+		accesses,
+		new Set([...constants.keys(), ...strings.keys(), ...integers]),
+	);
+	for (const register of constants.keys())
+		if (!initialized.has(register)) constants.delete(register);
+	for (const register of strings.keys())
+		if (!initialized.has(register)) strings.delete(register);
+	for (const register of integers)
+		if (!initialized.has(register)) integers.delete(register);
 	for (const [ip, op] of fn.instructions.entries()) {
-		const line = fastInstruction(
-			op,
-			ip,
-			input,
-			fieldLoads,
-			targets,
-			exported,
-			constants,
-			strings,
-			integers,
-		);
+		if (unreachable.has(ip)) continue;
+		const target = branches.get(ip);
+		const line =
+			target === ip + 1
+				? ""
+				: fastInstruction(
+						target === undefined ? op : { opcode: "JUMP", targetIp: target },
+						ip,
+						input,
+						fieldLoads,
+						targets,
+						exported,
+						constants,
+						strings,
+						integers,
+					);
 		if (line === undefined) return undefined;
 		if (op.opcode === "LOAD_PROPERTY_STATIC" && !fieldLoads.has(ip))
 			loadsProperties = true;
 		if (op.opcode === "LOAD_CAPTURED") loadsCaptures = true;
-		body.push(line);
+		body.push([ip, line]);
 	}
 	const lines: Array<string> = [];
-	for (const [ip, line] of body.entries()) {
+	for (const [ip, line] of body) {
 		if (targets.has(ip)) lines.push(`F${ip}:;`);
 		lines.push(`    ${line}`);
 	}
 	if (targets.has(fn.instructions.length)) lines.push(`F${fn.instructions.length}:;`);
 	lines.push(`    ${fastReturn("MAL_VALUE_UNDEFINED", result, exported)}`);
 
-	const registers = Array.from(
-		{ length: fn.registerCount },
-		(_, register) => `f${register}`,
-	);
+	const locals = [...registers].sort((left, right) => left - right);
 	const fast = [
 		...input.prologue,
-		...(registers.length === 0 ? [] : [`    MalValue ${registers.join(", ")};`]),
+		...(locals.length === 0
+			? []
+			: [`    MalValue ${locals.map((r) => `f${r}`).join(", ")};`]),
 		"    if (!mal_vm_leaf_unobserved(vm) || !mal_vm_leaf_stack_available(vm)) goto __full;",
 		...(loadsProperties
 			? [
@@ -137,10 +179,10 @@ export function renderNativeFastEntry(
 				]
 			: []),
 		...(loadsCaptures ? input.capturePrologue.map((line) => `    ${line}`) : []),
-		...registers.map((register, index) =>
-			index < fn.parameterCount
-				? `    ${register} = ${fastParameter(index, directEntry)};`
-				: `    ${register} = MAL_VALUE_UNDEFINED;`,
+		...locals.map((register) =>
+			register < fn.parameterCount
+				? `    f${register} = ${fastParameter(register, directEntry)};`
+				: `    f${register} = MAL_VALUE_UNDEFINED;`,
 		),
 		...lines,
 	];
@@ -185,8 +227,10 @@ const EQUALITY_OPERATORS: ReadonlySet<string> = new Set(["===", "!==", "==", "!=
 function alwaysRestarts(
 	fn: BytecodeFunction,
 	directEntry: NativeDirectEntryPlan | undefined,
+	unreachable: ReadonlySet<number>,
 ): boolean {
 	return (directEntry?.instructionFacts ?? []).some(({ instructionIp, masks }) => {
+		if (unreachable.has(instructionIp)) return false;
 		const op = fn.instructions[instructionIp];
 		const numeric =
 			(op?.opcode === "BINARY" && !EQUALITY_OPERATORS.has(op.operator)) ||
@@ -195,31 +239,76 @@ function alwaysRestarts(
 	});
 }
 
+function fastEntryGraph(
+	instructions: ReadonlyArray<BytecodeInstruction>,
+	branches: ReadonlyMap<number, number>,
+	unreachable: ReadonlySet<number>,
+): ReadonlyMap<number, ReadonlyArray<number>> {
+	const graph = new Map<number, ReadonlyArray<number>>();
+	for (const [ip, op] of instructions.entries()) {
+		if (unreachable.has(ip)) continue;
+		const target = branches.get(ip);
+		graph.set(
+			ip,
+			target !== undefined
+				? [target]
+				: op.opcode === "RETURN"
+					? []
+					: op.opcode === "JUMP"
+						? [op.targetIp]
+						: op.opcode === "JUMP_IF"
+							? [op.targetIp, ip + 1]
+							: [ip + 1],
+		);
+	}
+	return graph;
+}
+
 // A loop needs a poll, and a poll needs a frame.
-function hasCycle(instructions: ReadonlyArray<BytecodeInstruction>): boolean {
-	const state = new Uint8Array(instructions.length);
-	const successors = (ip: number): ReadonlyArray<number> => {
-		const op = instructions[ip]!;
-		switch (op.opcode) {
-			case "RETURN":
-				return [];
-			case "JUMP":
-				return [op.targetIp];
-			case "JUMP_IF":
-				return [op.targetIp, ip + 1];
-			default:
-				return [ip + 1];
-		}
-	};
+function hasCycle(graph: ReadonlyMap<number, ReadonlyArray<number>>): boolean {
+	const state = new Map<number, number>();
 	const visit = (ip: number): boolean => {
-		if (ip < 0 || ip >= instructions.length || state[ip] === 2) return false;
-		if (state[ip] === 1) return true;
-		state[ip] = 1;
-		if (successors(ip).some(visit)) return true;
-		state[ip] = 2;
+		const next = graph.get(ip);
+		if (next === undefined || state.get(ip) === 2) return false;
+		if (state.get(ip) === 1) return true;
+		state.set(ip, 1);
+		if (next.some(visit)) return true;
+		state.set(ip, 2);
 		return false;
 	};
 	return visit(0);
+}
+
+function initializedFastRegisters(
+	graph: ReadonlyMap<number, ReadonlyArray<number>>,
+	accesses: ReadonlyMap<
+		number,
+		{
+			readonly reads: ReadonlyArray<number>;
+			readonly writes: ReadonlyArray<number>;
+		}
+	>,
+	registers: ReadonlySet<number>,
+): ReadonlySet<number> {
+	const initialized = new Set<number>();
+	for (const register of registers) {
+		const pending = [0];
+		const visited = new Set<number>();
+		let safe = true;
+		while (pending.length > 0) {
+			const ip = pending.pop()!;
+			if (visited.has(ip) || !graph.has(ip)) continue;
+			visited.add(ip);
+			const access = accesses.get(ip)!;
+			if (access.reads.includes(register)) {
+				safe = false;
+				break;
+			}
+			if (!access.writes.includes(register)) pending.push(...graph.get(ip)!);
+		}
+		if (safe) initialized.add(register);
+	}
+	return initialized;
 }
 
 function boxed(representation: VmRegisterRepresentation, value: string): string {
@@ -275,11 +364,12 @@ function fastReturn(
 /** Registers whose every definition stores the same Number, so uses can read the literal. */
 function numberConstantRegisters(
 	instructions: ReadonlyArray<BytecodeInstruction>,
-): ReadonlyMap<number, number> {
+	registers: ReadonlySet<number>,
+): Map<number, number> {
 	const constants = new Map<number, number>();
 	const varying = new Set<number>();
 	for (const op of instructions) {
-		if (!("dst" in op) || typeof op.dst !== "number") continue;
+		if (!("dst" in op) || !registers.has(op.dst)) continue;
 		if (
 			(op.opcode === "CREATE_NUMBER" || op.opcode === "CREATE_F64") &&
 			!varying.has(op.dst) &&
@@ -297,11 +387,12 @@ function numberConstantRegisters(
 /** Registers whose every definition loads the same string constant. */
 function stringConstantRegisters(
 	instructions: ReadonlyArray<BytecodeInstruction>,
-): ReadonlyMap<number, number> {
+	registers: ReadonlySet<number>,
+): Map<number, number> {
 	const strings = new Map<number, number>();
 	const varying = new Set<number>();
 	for (const op of instructions) {
-		if (!("dst" in op) || typeof op.dst !== "number") continue;
+		if (!("dst" in op) || !registers.has(op.dst)) continue;
 		if (
 			op.opcode === "CREATE_STRING" &&
 			!varying.has(op.dst) &&
@@ -320,11 +411,12 @@ function stringConstantRegisters(
 function int32ResultRegisters(
 	instructions: ReadonlyArray<BytecodeInstruction>,
 	parameterCount: number,
-): ReadonlySet<number> {
+	registers: ReadonlySet<number>,
+): Set<number> {
 	const integers = new Set<number>();
 	const varying = new Set<number>();
 	for (const op of instructions) {
-		if (!("dst" in op) || typeof op.dst !== "number") continue;
+		if (!("dst" in op) || !registers.has(op.dst)) continue;
 		const integer =
 			(op.opcode === "BINARY" &&
 				(INT32_OPERATORS.has(op.operator) ||

@@ -918,6 +918,32 @@ describe("native polling numeric worker plans", () => {
 	const source = `function loop(value,count){for(let index=0;index<count;index++)value=value*1.25-0.5;return value;}
 		globalThis.loop=loop;globalThis.result=loop(3,7);`;
 
+	it("admits a numeric leaf when its collecting fallback is unreachable for the typed entry", () => {
+		const out = inspectStaticValueFunction(
+			"function refined(value,flag){if(flag===flag)return value*1.25-0.5;return +globalThis.numericWorkerFallback(value);}globalThis.refined=refined;globalThis.result=refined(+globalThis.input,Boolean(globalThis.flag));",
+			"refined",
+		);
+		const entry = out.native.directEntries.find((entry) => entry.storage!.numericWorker);
+		expect(entry).toBeDefined();
+		expect(entry!.storage!.controlFlow?.unreachableIps.length).toBeGreaterThan(0);
+		const emitted = out.c.directEntries.find((candidate) => candidate.id === entry!.id)!;
+		expect(emitted.leaf).toBe(true);
+		expect(emitted.source).not.toContain("mal_vm_call");
+		expect(emitted.source).not.toMatch(/if \(r\d+\) goto/);
+		const conversion = out.native.body.instructions.find(
+			(op) => op.opcode === "UNARY" && op.operator === "+",
+		)!;
+		expect(conversion.opcode).toBe("UNARY");
+		if (conversion.opcode === "UNARY")
+			expect(emitted.source.slice(0, emitted.source.indexOf("\n}\n"))).not.toMatch(
+				new RegExp(`\\br${conversion.dst}\\b`),
+			);
+		expect(out.c.source).toContain("mal_vm_call_cached");
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
+			out.image,
+		);
+	});
+
 	it("uses the selected scalar schedule in one completion-aware typed loop body", () => {
 		const out = inspectStaticValueFunction(source, "loop");
 		const entry = out.native.directEntries.find(

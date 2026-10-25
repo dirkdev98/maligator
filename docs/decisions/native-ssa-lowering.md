@@ -154,7 +154,14 @@ Rendering omits unreachable instructions and emits fixed branch destinations. Ro
 planning, publication and rendering share the GC view that removes unreachable
 safepoints and untaken conditional polling edges; surviving root maps retain their
 hidden helper obligations. The original GC certificate still validates the complete
-source CFG. Surviving liveness, scalar uses and entry result ABIs remain conservative
+source CFG. Full entries, frameless fast entries and numeric leaves share branch
+destinations and preserved instruction indices. Fast-entry cycle, size and restart
+checks inspect reachable instructions; numeric-worker admission also ignores dead
+fallbacks. A live cycle still requires polling and a frame. Fast literal and integer
+facts require a definition on every entry-to-read path, including reads that bypass
+a writer or precede it. Worker declarations and fast fact candidates are limited to
+reachable register uses and writes, keeping dead register capacity out of the fast
+entry's code and proof budget. Surviving liveness, scalar uses and entry result ABIs remain conservative
 until their analyses consume the refined edges.
 
 Read/write occurrences, branch sources, handler and resume entries, and handler

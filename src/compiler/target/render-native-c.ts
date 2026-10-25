@@ -3483,6 +3483,7 @@ function emitCompiledVariant(
 					fn,
 					facts: nativeContract.facts,
 					directEntry,
+					controlFlow: storage.controlFlow,
 					// A specialized-only body is omitted after emission, taking its fast path with it.
 					trySymbol:
 						directEntry === undefined && native.specializedOnly !== true
@@ -3759,13 +3760,30 @@ function renderNumericLeaf(
 		throw new Error("Numeric worker rendering requires a storage plan");
 	const leaf = storage.numericWorker;
 	if (leaf === undefined || leaf.pollingIps.length > 0) return null;
+	const unreachable = new Set(storage.controlFlow?.unreachableIps);
+	const branches = new Map(
+		storage.controlFlow?.branches.map(({ instructionIp, targetIp }) => [
+			instructionIp,
+			targetIp,
+		]),
+	);
 	const reps = entry.registerRepresentations;
 	const scalar = (r: number) => ["number", "int32", "boolean"].includes(reps[r]!);
 	const number = (r: number) => `(f64) r${r}`;
-	const expressionIps = new Set([
-		...leaf.expressionIps,
-		...leaf.rematerializedConstantIps,
-	]);
+	const expressionIps = new Set(
+		[...leaf.expressionIps, ...leaf.rematerializedConstantIps].filter(
+			(ip) => !unreachable.has(ip),
+		),
+	);
+	const registers = new Set<number>();
+	for (const [ip, op] of fn.instructions.entries()) {
+		if (unreachable.has(ip)) continue;
+		for (const register of [
+			...(branches.has(ip) ? [] : vmInstructionReadRegisters(op)),
+			...vmInstructionWriteRegisters(op),
+		])
+			registers.add(register);
+	}
 	const expressions = new Map(
 		[...expressionIps].map((ip) => {
 			const op = fn.instructions[ip]!;
@@ -3793,8 +3811,14 @@ function renderNumericLeaf(
 	);
 	const body: Array<string> = [];
 	for (const [ip, op] of fn.instructions.entries()) {
+		if (unreachable.has(ip)) continue;
 		if (jumpTargets.has(ip)) body.push(`L${ip}:;`);
 		if (expressionIps.has(ip) || fallthroughJumps.has(ip)) continue;
+		const target = branches.get(ip);
+		if (target !== undefined) {
+			if (target !== ip + 1) body.push(`goto L${target};`);
+			continue;
+		}
 		let line: string;
 		switch (op.opcode) {
 			case "JUMP":
@@ -3837,7 +3861,7 @@ function renderNumericLeaf(
 	const declarations: Array<string> = [];
 	const definitionInitialized = new Set(leaf.definitionInitializedRegisters);
 	for (const [r, rep] of reps.entries()) {
-		if (!scalar(r) || r < fn.parameterCount) continue;
+		if (!scalar(r) || r < fn.parameterCount || !registers.has(r)) continue;
 		const expression = expressions.get(r);
 		if (expression !== undefined) {
 			declarations.push(`#define r${r} (${expression})`);

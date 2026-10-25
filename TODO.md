@@ -229,16 +229,16 @@ The independent target boundary and current storage contract are recorded in
       publication to a probe's collecting slow path stays renderer-local: eager
       publication is always legal, and the deferral follows fixed render-form
       rules over plan facts rather than a planning choice.
-- [ ] Use typed-entry reachable edges in all generated variants, surviving liveness,
-      scalar use and result ABI decisions. A validated per-variant plan now removes impossible C branches and
+- [ ] Use typed-entry reachable edges in surviving liveness, scalar use and result ABI
+      decisions. A validated per-variant plan now removes impossible C branches and
       unreachable safepoints, eliminating the dead coercive addition and root frame
       in String entries for Number predicates. Surviving GC maps retain their full
       hidden helper obligations. Propagate the refined edges into the remaining
       dataflow and specialization decisions while preserving handlers, resume points,
       region and record continuations, and canonical fallbacks.
-      Frameless fast entries and numeric leaf workers still walk the original body:
-      the String `Number.isNaN` entry's fast wrapper retains `value !== value` and
-      its dead numeric-ADD branch after the full entry removes them.
+      Full entries, frameless fast entries and numeric leaves now share that plan;
+      fast admission uses the reachable graph. Scalar-use analyses still retain
+      unused comparison producers, and result ABI joins still inspect dead returns.
 - [ ] Normalize primitive conversion calls from semantic kind unions. `String`
       and `Number` calls on `number | undefined` still use the builtin dispatcher.
       Retain extra argument effects and the distinct Symbol, BigInt, omitted-argument,
