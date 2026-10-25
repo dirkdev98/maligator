@@ -7,7 +7,7 @@ import {
 	serializeCompilerArtifact,
 	deserializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
-import { selectNativeFastPaths } from "../src/compiler/target/lower-native-fast-paths.ts";
+import { analyzeNativeFastPaths } from "../src/compiler/target/lower-native-fast-paths.ts";
 import type { NativeNumericLoopRegionPlan } from "../src/compiler/target/lower-native-fast-paths.ts";
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
 import type { BytecodeInstruction } from "../src/compiler/target/runtime-image.ts";
@@ -417,7 +417,7 @@ describe("fixed TypedArray loop storage", () => {
 				}),
 			},
 		};
-		expect(selectNativeFastPaths(changed).numericLoopRegions).toEqual([]);
+		expect(analyzeNativeFastPaths(changed).plans.numericLoopRegions).toEqual([]);
 	});
 	it("requires the induction update to consume this iteration's increment", () => {
 		const native = compile(
@@ -448,7 +448,7 @@ describe("fixed TypedArray loop storage", () => {
 				...(earlyUpdate ? [] : [update]),
 				{ opcode: "JUMP", targetIp: plan.id },
 			];
-			const selected = selectNativeFastPaths({
+			const selected = analyzeNativeFastPaths({
 				...native,
 				registerRepresentations: native.registerRepresentations.with(4, "number"),
 				body: { ...native.body, instructions },
@@ -458,7 +458,7 @@ describe("fixed TypedArray loop storage", () => {
 						{ ...native.gc.safepoints.at(-1)!, instructionIp: instructions.length - 1 },
 					],
 				},
-			}).numericLoopRegions;
+			}).plans.numericLoopRegions;
 			expect(selected.map((region) => region.kind)).toEqual(
 				earlyUpdate ? [] : ["fixed-numeric"],
 			);
@@ -485,11 +485,11 @@ describe("fixed TypedArray loop storage", () => {
 		const step = original[stepIp]!;
 		const instructions = original.with(stepIp, update).with(updateIp, step);
 		expect(
-			selectNativeFastPaths({
+			analyzeNativeFastPaths({
 				...native,
 				body: { ...native.body, instructions },
 				instructions: instructions.map(() => undefined),
-			}).numericLoopRegions,
+			}).plans.numericLoopRegions,
 		).toEqual([]);
 	});
 	it("retains one range and three ordered view accesses through the artifact", () => {

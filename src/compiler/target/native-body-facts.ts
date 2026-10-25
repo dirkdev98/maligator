@@ -1,5 +1,8 @@
 import { createNativeRootProfitabilityContext } from "./lower-native-root-profitability.ts";
 import type { NativeRootProfitabilityContext } from "./lower-native-root-profitability.ts";
+import { nativeControlFlowEntries } from "./native-control-flow.ts";
+import type { NativeControlFlowPlan } from "./native-control-flow.ts";
+import type { NativeFunctionPlan } from "./program-image.ts";
 import {
 	vmExceptionHandlerTargets,
 	vmInstructionReadRegisters,
@@ -8,6 +11,7 @@ import {
 import type { BytecodeFunction } from "./runtime-image.ts";
 
 export interface NativeBodyFacts {
+	readonly projection?: NativeBodyProjection;
 	readonly rootProfitability: NativeRootProfitabilityContext;
 	readonly reads: ReadonlyArray<ReadonlyArray<number>>;
 	readonly writes: ReadonlyArray<ReadonlyArray<number>>;
@@ -17,6 +21,62 @@ export interface NativeBodyFacts {
 	readonly externalEntries: ReadonlySet<number>;
 	readonly jumpTargets: ReadonlySet<number>;
 	readonly handlerTargets: ReturnType<typeof vmExceptionHandlerTargets>;
+}
+
+export interface NativeBodyProjection {
+	readonly branches: ReadonlyMap<number, number>;
+	readonly unreachable: ReadonlySet<number>;
+	readonly entries: ReadonlySet<number>;
+}
+
+export function projectNativeBodyFacts(
+	native: NativeFunctionPlan,
+	body: NativeBodyFacts,
+	controlFlow: NativeControlFlowPlan | undefined,
+	externalEntries: ReadonlyArray<number>,
+): NativeBodyFacts {
+	if (controlFlow === undefined) return body;
+	const count = native.body.instructions.length;
+	const unreachable = new Set(controlFlow.unreachableIps);
+	const branches = new Map(
+		controlFlow.branches.map(({ instructionIp, targetIp }) => [instructionIp, targetIp]),
+	);
+	const entries = new Set(
+		[...nativeControlFlowEntries(native, body, externalEntries).roots].filter(
+			(ip) => ip >= 0 && ip < count,
+		),
+	);
+	const external = new Set([...entries].filter((ip) => ip !== 0));
+	const jumpTargets = new Set(external);
+	const branchSources = new Map<number, Array<number>>();
+	for (const [ip, op] of native.body.instructions.entries()) {
+		if (unreachable.has(ip)) continue;
+		const fixed = branches.get(ip);
+		const target =
+			fixed === ip + 1
+				? undefined
+				: (fixed ??
+					(op.opcode === "JUMP" || op.opcode === "JUMP_IF" ? op.targetIp : undefined));
+		if (target === undefined) continue;
+		jumpTargets.add(target);
+		const sources = branchSources.get(target) ?? [];
+		sources.push(ip);
+		branchSources.set(target, sources);
+	}
+	return {
+		...body,
+		projection: { branches, unreachable, entries },
+		reads: body.reads.map((reads, ip) =>
+			unreachable.has(ip) || branches.has(ip) ? [] : reads,
+		),
+		writes: body.writes.map((writes, ip) => (unreachable.has(ip) ? [] : writes)),
+		staticPropertyLoadIps: body.staticPropertyLoadIps.filter(
+			(ip) => !unreachable.has(ip),
+		),
+		externalEntries: external,
+		jumpTargets,
+		branchSources,
+	};
 }
 
 // One immutable body analysis is shared within a planning or validation invocation.

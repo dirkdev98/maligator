@@ -3410,12 +3410,15 @@ function stringConstantIsArrayIndex(units: ReadonlyArray<number>): boolean {
 	return true;
 }
 
-export function selectNativeFastPaths(
+export function analyzeNativeFastPaths(
 	native: NativeFunctionPlan,
 	entry?: NativeDirectEntryPlan,
 	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
 	body = analyzeNativeBodyFacts(native.body),
-): NativeFastPathPlans {
+): {
+	readonly plans: NativeFastPathPlans;
+	readonly refineSpanContinuations: (body: NativeBodyFacts) => NativeFastPathPlans;
+} {
 	const fn = native.body;
 	const { handlerEntries, jumpTargets, branchSources } = body;
 	const literalPropertyDefinitions: Array<NativeLiteralPropertyDefinitionPlan> = [];
@@ -3624,6 +3627,7 @@ export function selectNativeFastPaths(
 		blocked.add(ip);
 		numericLoopBlocked.add(ip);
 	};
+	const spanBlocked = new Set([...blocked, ...pollingEdges, ...fusions.keys()]);
 	const spanContinuations = selectNativeSpanContinuations(
 		native,
 		body,
@@ -3802,7 +3806,7 @@ export function selectNativeFastPaths(
 		body,
 		numberInputsPossible,
 	);
-	return {
+	const plans: NativeFastPathPlans = {
 		literalPropertyDefinitions,
 		mathCalls,
 		numberPredicates,
@@ -3864,4 +3868,50 @@ export function selectNativeFastPaths(
 			? {}
 			: { privateFieldReserve: selected.privateFieldReserve }),
 	};
+	return {
+		plans,
+		refineSpanContinuations(projected) {
+			if (projected.projection === undefined) return plans;
+			// Overlay consumers own storage but never introduce helper entry points.
+			const unavailable = new Set(spanBlocked);
+			for (const window of nativeFastPathWindows(plans, false))
+				for (const ip of window.claimedIps) unavailable.add(ip);
+			return {
+				...plans,
+				spanContinuations: selectNativeSpanContinuations(
+					native,
+					projected,
+					stringConstants,
+					(ip) => unavailable.has(ip),
+				),
+			};
+		},
+	};
+}
+
+export function nativeFastPathWindows(
+	fastPaths: NativeFastPathPlans,
+	includeSpanContinuations = true,
+) {
+	return [
+		...fastPaths.propertyProjections,
+		...fastPaths.propertyNumericUpdates,
+		...fastPaths.propertyReadRegions,
+		...fastPaths.propertyReadPairs,
+		...fastPaths.numberRecordRegions,
+		...fastPaths.numericLoopRegions,
+		...fastPaths.arrayInitializations,
+		...fastPaths.mapEntries,
+		...fastPaths.objectEnumerationSnapshots,
+		...(includeSpanContinuations ? fastPaths.spanContinuations : []),
+		...fastPaths.pairedArrayLoops,
+		...fastPaths.arrayPresence,
+		...fastPaths.arrayPairDestructure,
+		...(fastPaths.constructorInitialization === undefined
+			? []
+			: [fastPaths.constructorInitialization]),
+		...(fastPaths.privateFieldReserve === undefined
+			? []
+			: [fastPaths.privateFieldReserve]),
+	];
 }

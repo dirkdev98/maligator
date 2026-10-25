@@ -253,6 +253,10 @@ The independent target boundary and current storage contract are recorded in
       by later return facts, prunes unrooted sibling components and compacts IDs
       without changing semantic proofs. Retired code capacity is released while
       spent proof work remains charged as discovery.
+      Span continuation discovery and virtual alias validation now consume the
+      entry's surviving edges. Overlay consumers retain storage ownership without
+      becoming helper entry roots; dead observers and overwrites no longer pin
+      materialization. Generic span fallbacks retain String comparison length facts.
 - [x] Normalize primitive conversion calls from semantic kind unions. Eligible
       `Number` and `String` calls use unary conversions, carrying kind and effect
       proofs into native storage, full entries and frameless numeric paths.

@@ -9,7 +9,7 @@ import type {
 	NativeArrayPresencePlan,
 	NativeArrayPairDestructurePlan,
 } from "../src/compiler/target/lower-native-fast-paths.ts";
-import { selectNativeFastPaths } from "../src/compiler/target/lower-native-fast-paths.ts";
+import { analyzeNativeFastPaths } from "../src/compiler/target/lower-native-fast-paths.ts";
 import {
 	lowerNativeFunctionStorage,
 	validateNativeStorage,
@@ -125,7 +125,7 @@ describe("persisted array ownership windows", () => {
 				},
 			};
 			for (const changed of [external, handler, polling]) {
-				const selected = selectNativeFastPaths(changed);
+				const selected = analyzeNativeFastPaths(changed).plans;
 				expect(
 					kind === "presence" ? selected.arrayPresence : selected.arrayPairDestructure,
 				).toEqual([]);

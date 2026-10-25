@@ -17,7 +17,10 @@ import {
 	nativeCaptureAccessPlansMatch,
 } from "./lower-native-captures.ts";
 import type { NativeCaptureAccessPlan } from "./lower-native-captures.ts";
-import { selectNativeFastPaths } from "./lower-native-fast-paths.ts";
+import {
+	analyzeNativeFastPaths,
+	nativeFastPathWindows,
+} from "./lower-native-fast-paths.ts";
 import type {
 	NativeFastPathPlans,
 	NativePropertyNumericUpdatePlan,
@@ -47,13 +50,12 @@ import {
 	lowerNativeSuspension,
 } from "./lower-native-suspension.ts";
 import type { NativeSuspensionPlan } from "./lower-native-suspension.ts";
-import { analyzeNativeBodyFacts } from "./native-body-facts.ts";
-import type { NativeBodyFacts } from "./native-body-facts.ts";
+import { analyzeNativeBodyFacts, projectNativeBodyFacts } from "./native-body-facts.ts";
+import type { NativeBodyFacts, NativeBodyProjection } from "./native-body-facts.ts";
 import {
 	selectNativeControlFlow,
 	nativeControlFlowPlansMatch,
 	nativeControlFlowContract,
-	nativeControlFlowEntries,
 } from "./native-control-flow.ts";
 import type { NativeControlFlowPlan } from "./native-control-flow.ts";
 import {
@@ -211,12 +213,6 @@ interface NativeStorageBodyFacts extends NativeBodyFacts {
 	readonly controlFlow: NativeStorageControlFlow | undefined;
 }
 
-interface NativeStorageControlProjection {
-	readonly branches: ReadonlyMap<number, number>;
-	readonly unreachable: ReadonlySet<number>;
-	readonly entries: ReadonlySet<number>;
-}
-
 interface NativeStorageControlFlow {
 	readonly isReachable: (instructionIp: number) => boolean;
 	readonly dominates: (definitionIp: number, useIp: number) => boolean;
@@ -311,7 +307,7 @@ function storageControlFlow(
 	jumpTargets: ReadonlySet<number>,
 	controlBoundaries: ReadonlyArray<boolean>,
 	handlerTargets: ReadonlyArray<number | undefined>,
-	projection?: NativeStorageControlProjection,
+	projection?: NativeBodyProjection,
 ): NativeStorageControlFlow | undefined {
 	if (fn.instructions.length === 0 || handlerTargets[0] !== undefined) return undefined;
 	const blocks = new Uint32Array(fn.instructions.length);
@@ -422,11 +418,10 @@ function storageControlFlow(
 function storageBodyFacts(
 	native: NativeFunctionPlan,
 	facts = analyzeNativeBodyFacts(native.body),
-	projection?: NativeStorageControlProjection,
 	captures = selectNativeCaptureAccess(native.body, native.functionIndex),
 ): NativeStorageBodyFacts {
 	const fn = native.body;
-	const { reads, writes, jumpTargets } = facts;
+	const { reads, writes, jumpTargets, projection } = facts;
 	const writeCounts = new Uint32Array(fn.registerCount);
 	const definitions = new Int32Array(fn.registerCount).fill(-1);
 	const uses: Array<Array<number>> = Array.from({ length: fn.registerCount }, () => []);
@@ -501,49 +496,9 @@ function projectStorageBodyFacts(
 	externalEntries: ReadonlyArray<number>,
 ): NativeStorageBodyFacts {
 	if (controlFlow === undefined) return body;
-	const fn = native.body;
-	const unreachable = new Set(controlFlow.unreachableIps);
-	const branches = new Map(
-		controlFlow.branches.map(({ instructionIp, targetIp }) => [instructionIp, targetIp]),
-	);
-	const entries = new Set(
-		[...nativeControlFlowEntries(native, body, externalEntries).roots].filter(
-			(ip) => ip >= 0 && ip < fn.instructions.length,
-		),
-	);
-	const external = new Set([...entries].filter((ip) => ip !== 0));
-	const jumpTargets = new Set(external);
-	const branchSources = new Map<number, Array<number>>();
-	for (const [ip, op] of fn.instructions.entries()) {
-		if (unreachable.has(ip)) continue;
-		const fixed = branches.get(ip);
-		const target =
-			fixed === ip + 1
-				? undefined
-				: (fixed ??
-					(op.opcode === "JUMP" || op.opcode === "JUMP_IF" ? op.targetIp : undefined));
-		if (target === undefined) continue;
-		jumpTargets.add(target);
-		const sources = branchSources.get(target) ?? [];
-		sources.push(ip);
-		branchSources.set(target, sources);
-	}
 	return storageBodyFacts(
 		native,
-		{
-			...body.accesses,
-			reads: body.reads.map((reads, ip) =>
-				unreachable.has(ip) || branches.has(ip) ? [] : reads,
-			),
-			writes: body.writes.map((writes, ip) => (unreachable.has(ip) ? [] : writes)),
-			staticPropertyLoadIps: body.staticPropertyLoadIps.filter(
-				(ip) => !unreachable.has(ip),
-			),
-			externalEntries: external,
-			jumpTargets,
-			branchSources,
-		},
-		{ branches, unreachable, entries },
+		projectNativeBodyFacts(native, body.accesses, controlFlow, externalEntries),
 		body.captures,
 	);
 }
@@ -1343,34 +1298,10 @@ function instructionLocalRoots(
 	return local;
 }
 
-function scalarStorageWindows(fastPaths: NativeFastPathPlans) {
-	return [
-		...fastPaths.propertyProjections,
-		...fastPaths.propertyNumericUpdates,
-		...fastPaths.propertyReadRegions,
-		...fastPaths.propertyReadPairs,
-		...fastPaths.numberRecordRegions,
-		...fastPaths.numericLoopRegions,
-		...fastPaths.arrayInitializations,
-		...fastPaths.mapEntries,
-		...fastPaths.objectEnumerationSnapshots,
-		...fastPaths.spanContinuations,
-		...fastPaths.pairedArrayLoops,
-		...fastPaths.arrayPresence,
-		...fastPaths.arrayPairDestructure,
-		...(fastPaths.constructorInitialization === undefined
-			? []
-			: [fastPaths.constructorInitialization]),
-		...(fastPaths.privateFieldReserve === undefined
-			? []
-			: [fastPaths.privateFieldReserve]),
-	];
-}
-
 function rootPublicationContinuations(
 	native: NativeFunctionPlan,
 	body: NativeStorageBodyFacts,
-	windows: ReturnType<typeof scalarStorageWindows>,
+	windows: ReturnType<typeof nativeFastPathWindows>,
 	exits: ReadonlyArray<number>,
 ): ReadonlyArray<number> {
 	const fn = native.body;
@@ -1447,10 +1378,11 @@ function lowerStorage(
 	stackRoots: NativeStackRoots = "precise",
 ): NativeStoragePlan {
 	const fn = native.body;
-	const fastPaths = selectNativeFastPaths(native, entry, stringConstants, body);
-	const expressionWindows = scalarStorageWindows(fastPaths);
+	const selection = analyzeNativeFastPaths(native, entry, stringConstants, body);
 	const externalEntries = [
-		...expressionWindows.flatMap((window) => window.claimedIps),
+		...nativeFastPathWindows(selection.plans, false).flatMap(
+			(window) => window.claimedIps,
+		),
 		...nativeRecordCallIps(native),
 		...(entry?.resultFields?.allocationIps ?? []),
 	];
@@ -1459,6 +1391,8 @@ function lowerStorage(
 		externalEntries,
 	});
 	body = projectStorageBodyFacts(native, body, controlFlow, externalEntries);
+	const fastPaths = selection.refineSpanContinuations(body.accesses);
+	const expressionWindows = nativeFastPathWindows(fastPaths);
 	const gcCertificate = native.gc;
 	native = nativeControlFlowContract(native, controlFlow);
 	const jumpTargets = body.jumpTargets;
@@ -2173,7 +2107,7 @@ export function validateNativeStorage(
 			stackRoots,
 		);
 		const projected = projectStorageBodyFacts(variant, body, selected.controlFlow, [
-			...scalarStorageWindows(selected).flatMap((window) => window.claimedIps),
+			...nativeFastPathWindows(selected, false).flatMap((window) => window.claimedIps),
 			...nativeRecordCallIps(variant),
 			...(entry?.resultFields?.allocationIps ?? []),
 		]);
@@ -2220,7 +2154,7 @@ export function validateNativeStorage(
 					scalarStorageOwnership(
 						variant,
 						projected,
-						scalarStorageWindows(selected),
+						nativeFastPathWindows(selected),
 						suspension,
 					),
 					new Set(variant.storage.expressionIps),
@@ -2251,7 +2185,7 @@ export function validateNativeStorage(
 								scalarStorageOwnership(
 									variant,
 									projected,
-									scalarStorageWindows(selected),
+									nativeFastPathWindows(selected),
 									suspension,
 								),
 							),

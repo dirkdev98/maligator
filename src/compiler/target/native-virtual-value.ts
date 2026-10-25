@@ -1,3 +1,4 @@
+import type { NativeBodyFacts } from "./native-body-facts.ts";
 import {
 	vmInstructionReadRegisters,
 	vmInstructionWriteRegisters,
@@ -11,6 +12,7 @@ export function nativeVirtualValueFlow(
 	result: number,
 	resetIps: ReadonlySet<number> = new Set(),
 	exceptionTargets: ReadonlyArray<number | undefined> = [],
+	body?: NativeBodyFacts,
 ) {
 	// Union and intersection distinguish a live virtual alias from a register reused on one incoming path.
 	const incoming = new Map<
@@ -24,7 +26,8 @@ export function nativeVirtualValueFlow(
 		must: ReadonlySet<number>,
 		expired: ReadonlySet<number>,
 	): void => {
-		if (ip < 0 || ip >= instructions.length) return;
+		if (ip < 0 || ip >= instructions.length || body?.projection?.unreachable.has(ip))
+			return;
 		const prior = incoming.get(ip);
 		if (prior === undefined) {
 			incoming.set(ip, {
@@ -61,7 +64,7 @@ export function nativeVirtualValueFlow(
 			expired = new Set(aliases.expired);
 		const moveMay = instruction.opcode === "MOVE" && may.has(instruction.src);
 		const moveMust = instruction.opcode === "MOVE" && must.has(instruction.src);
-		for (const value of vmInstructionWriteRegisters(instruction)) {
+		for (const value of body?.writes[ip] ?? vmInstructionWriteRegisters(instruction)) {
 			may.delete(value);
 			must.delete(value);
 			expired.delete(value);
@@ -79,6 +82,11 @@ export function nativeVirtualValueFlow(
 			must.clear();
 			may.add(result);
 			must.add(result);
+		}
+		const target = body?.projection?.branches.get(ip);
+		if (target !== undefined) {
+			add(target, may, must, expired);
+			continue;
 		}
 		if (instruction.opcode === "JUMP" || instruction.opcode === "JUMP_IF")
 			add(instruction.targetIp, may, must, expired);
@@ -103,6 +111,7 @@ export function validateNativeVirtualValue(
 	allowMixed = false,
 	resetIps: ReadonlySet<number> = new Set(),
 	exceptionTargets: ReadonlyArray<number | undefined> = [],
+	body?: NativeBodyFacts,
 ): ReturnType<typeof nativeVirtualValueFlow> {
 	const incoming = nativeVirtualValueFlow(
 		instructions,
@@ -110,13 +119,12 @@ export function validateNativeVirtualValue(
 		result,
 		resetIps,
 		exceptionTargets,
+		body,
 	);
 	for (const [ip, aliases] of incoming) {
 		const instruction = instructions[ip]!;
-		if (
-			vmInstructionReadRegisters(instruction).some((value) => aliases.expired.has(value))
-		)
-			fail();
+		const operands = body?.reads[ip] ?? vmInstructionReadRegisters(instruction);
+		if (operands.some((value) => aliases.expired.has(value))) fail();
 		if (ip === producerIp) continue;
 		const values = consumers.get(ip);
 		if (
@@ -124,9 +132,7 @@ export function validateNativeVirtualValue(
 			values.some((value) => !(allowMixed ? aliases.may : aliases.must).has(value))
 		)
 			fail();
-		const reads = vmInstructionReadRegisters(instruction).filter((value) =>
-			aliases.may.has(value),
-		);
+		const reads = operands.filter((value) => aliases.may.has(value));
 		if (
 			reads.length > 0 &&
 			instruction.opcode !== "MOVE" &&

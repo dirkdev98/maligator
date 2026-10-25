@@ -13,7 +13,6 @@ import {
 	validateNativeVirtualValue,
 } from "./native-virtual-value.ts";
 import type { NativeFunctionPlan, VmStringSpanRegion } from "./program-image.ts";
-import { vmInstructionReadRegisters } from "./runtime-image.ts";
 
 export type NativeSpanConsumer = Omit<VmStringSpanRegion["consumers"][number], "kind"> & {
 	readonly kind:
@@ -163,6 +162,7 @@ export function selectNativeSpanContinuations(
 		const producer = fn.instructions[producerIp];
 		if (
 			producer === undefined ||
+			body.projection?.unreachable.has(producerIp) ||
 			!("dst" in producer) ||
 			body.handlerTargets[sourceCallIp] !== undefined ||
 			body.handlerTargets[producerIp] !== undefined
@@ -175,6 +175,7 @@ export function selectNativeSpanContinuations(
 			producer.dst,
 			reset,
 			body.handlerTargets,
+			body,
 		);
 		const consumers: Array<NativeSpanConsumer> = [];
 		let safe = true,
@@ -191,9 +192,7 @@ export function selectNativeSpanContinuations(
 			if (ip === producerIp) continue;
 			const op = fn.instructions[ip]!;
 			const reads = [
-				...new Set(
-					vmInstructionReadRegisters(op).filter((value) => aliases.may.has(value)),
-				),
+				...new Set(body.reads[ip]!.filter((value) => aliases.may.has(value))),
 			];
 			if (!reads.length || op.opcode === "MOVE" || op.opcode === "THROW_IF_TDZ") continue;
 			const childCandidate = candidateCalls.get(ip) ?? candidateProperties.get(ip);
@@ -327,6 +326,7 @@ export function selectNativeSpanContinuations(
 				false,
 				reset,
 				body.handlerTargets,
+				body,
 			);
 		} catch (error) {
 			if (!(error instanceof RangeError)) throw error;

@@ -8065,6 +8065,7 @@ function emitInstruction(
 		scalarInputValues: context.scalarInputValues,
 		inactiveRootMaskStatements: context.inactiveRootMaskStatements,
 		stringConstants: context.stringConstants,
+		stringComparisons: context.stringComparisons,
 		staticDefineStringIndexByIp: context.staticDefineStringIndexByIp,
 		iterationEligibilityRegisters: context.iterationEligibilityRegisters,
 		directEntryCalls: context.directEntryCalls,
