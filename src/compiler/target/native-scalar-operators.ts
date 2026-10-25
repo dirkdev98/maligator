@@ -85,6 +85,11 @@ export function nativePrimitiveNumberExpression(
 	number = `mal_ops_number_as_f64(${value})`,
 	boolean = `mal_value_to_boolean(${value})`,
 ): string {
+	if (mask === COMPILER_VALUE_KIND_NUMBER) return number;
+	if (mask === COMPILER_VALUE_KIND_STRING) return `mal_ops_to_number(${value})`;
+	if (mask === COMPILER_VALUE_KIND_BOOLEAN) return `(${boolean} ? 1.0 : 0.0)`;
+	if (mask === COMPILER_VALUE_KIND_NULL) return "0.0";
+	if (mask === COMPILER_VALUE_KIND_UNDEFINED) return '__builtin_nan("")';
 	const choices = [
 		{
 			mask: COMPILER_VALUE_KIND_UNDEFINED,

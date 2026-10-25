@@ -11537,17 +11537,21 @@ function emitInstruction(
 					}
 				}
 			}
-			const numericInputs = nativeBinaryNumberInputs(
-				operator,
-				leftIsNum
-					? COMPILER_VALUE_KIND_NUMBER
-					: (operandKind(left) ?? COMPILER_VALUE_KIND_TOP),
-				rightIsNum
-					? COMPILER_VALUE_KIND_NUMBER
-					: (operandKind(right) ?? COMPILER_VALUE_KIND_TOP),
-				boxed(left),
-				boxed(right),
-			);
+			const numericInputs =
+				(!leftIsNum || !rightIsNum || reps[dst] === "boxed") &&
+				(producesNumberFromNumbers(operator) || RELATIONAL_COMPARE.has(operator))
+					? nativeBinaryNumberInputs(
+							operator,
+							leftIsNum
+								? COMPILER_VALUE_KIND_NUMBER
+								: (operandKind(left) ?? COMPILER_VALUE_KIND_TOP),
+							rightIsNum
+								? COMPILER_VALUE_KIND_NUMBER
+								: (operandKind(right) ?? COMPILER_VALUE_KIND_TOP),
+							boxed(left),
+							boxed(right),
+						)
+					: undefined;
 			const numericOperand = (register: number): string =>
 				exactPrimitiveNumber(register, numericInputs!.masks[register === left ? 0 : 1]);
 			if (
