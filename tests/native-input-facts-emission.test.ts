@@ -5,6 +5,7 @@ import {
 	COMPILER_VALUE_KIND_STRING,
 	COMPILER_VALUE_KIND_SYMBOL,
 	COMPILER_VALUE_KIND_TOP,
+	COMPILER_VALUE_KIND_NULLISH,
 } from "../src/compiler/shared/compiler-value-kinds.ts";
 import type { InstructionFacts } from "../src/compiler/shared/instruction-facts.ts";
 import { lowerNativeFunctionStorage } from "../src/compiler/target/lower-native-storage.ts";
@@ -75,6 +76,40 @@ function emitInputContract(
 }
 
 describe("local native input admission", () => {
+	it("uses non-nullish boxed facts for full and resumable coercibility guards", () => {
+		for (const generator of [false, true]) {
+			for (const kind of [
+				COMPILER_VALUE_KIND_STRING |
+					COMPILER_VALUE_KIND_SYMBOL |
+					COMPILER_VALUE_KIND_OBJECT,
+				COMPILER_VALUE_KIND_TOP,
+				COMPILER_VALUE_KIND_NULLISH | COMPILER_VALUE_KIND_STRING,
+			]) {
+				const instructions: Array<BytecodeInstruction> = [
+					...(generator ? [{ opcode: "GENERATOR_START" } as const] : []),
+					{ opcode: "CREATE_STRING", dst: 0, stringIndex: 0 },
+					{ opcode: "REQUIRE_COERCIBLE", src: 0 },
+					{ opcode: "RETURN", value: 0 },
+				];
+				const facts = new Array<InstructionFacts | undefined>(instructions.length);
+				facts[generator ? 2 : 1] = {
+					registers: [0],
+					inputOffset: 0,
+					inputKindMasks: [kind],
+					resultKindMasks: [],
+				};
+				const emitted = emitInputContract(
+					instructions,
+					["boxed"],
+					{ isGenerator: generator },
+					facts,
+				);
+				expect(emitted.includes("mal_vm_op_require_coercible(")).toBe(
+					(kind & COMPILER_VALUE_KIND_NULLISH) !== 0,
+				);
+			}
+		}
+	});
 	it("uses owned capture slots only while the activation environment is stable", () => {
 		const instructions: Array<BytecodeInstruction> = [
 			createsClosure,

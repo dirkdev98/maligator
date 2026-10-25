@@ -73,6 +73,26 @@ it.each(["mutable", "locked"] as const)(
 			expect(instructionResultKind(variant.facts?.[keyIp], conversion.dst)).toBe(
 				primordials === "locked" ? COMPILER_VALUE_KIND_SYMBOL : COMPILER_VALUE_KIND_TOP,
 			);
+			const required = pair.programImage.native.functions.find(
+				(fn) =>
+					String.fromCharCode(
+						...(pair.programImage.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+					) === "requireSymbol",
+			)!;
+			const requiredEntry = required.directEntries.find(
+				(entry) => entry.parameterRepresentations[0] === "string",
+			)!;
+			expect(requiredEntry).toBeDefined();
+			const requiredVariant = nativeVariantContract(required, requiredEntry);
+			const requiredIp = required.body.instructions.findIndex(
+				(op) => op.opcode === "REQUIRE_COERCIBLE",
+			);
+			const guard = required.body.instructions[requiredIp]!;
+			if (guard.opcode !== "REQUIRE_COERCIBLE")
+				throw new Error("Missing coercibility guard");
+			expect(requiredVariant.facts?.[requiredIp]?.inputKindMasks).toEqual([
+				primordials === "locked" ? COMPILER_VALUE_KIND_SYMBOL : COMPILER_VALUE_KIND_TOP,
+			]);
 			for (const binary of [pair.compiled, pair.interpreted])
 				for (const stress of [{}, STRESS_ENV])
 					expect(

@@ -673,6 +673,13 @@ function fastInstruction(
 			return `f${op.dst} = ${input.capturedLoad(op.ownerFunctionIndex, op.index)};`;
 		case "THROW_IF_TDZ":
 			return `if (mal_value_is_empty(f${op.src})) goto __full;`;
+		case "REQUIRE_COERCIBLE": {
+			const kind = values.kind(op.src);
+			if ((kind & COMPILER_VALUE_KIND_NULLISH) === 0) return "";
+			return compilerValueKindMaskIsSubset(kind, COMPILER_VALUE_KIND_NULLISH)
+				? "goto __full;"
+				: `if (mal_value_is_nil(f${op.src})) goto __full;`;
+		}
 		case "LOAD_THIS":
 			// A sloppy callee's receiver needs OrdinaryCallBindThis, which can allocate.
 			return input.fn.strict ? `f${op.dst} = this_value;` : undefined;

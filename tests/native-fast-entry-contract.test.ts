@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
+import {
+	COMPILER_VALUE_KIND_TOP,
+	COMPILER_VALUE_KIND_NULLISH,
+	COMPILER_VALUE_KIND_OBJECT,
+	COMPILER_VALUE_KIND_SYMBOL,
+} from "../src/compiler/shared/compiler-value-kinds.ts";
+import type { InstructionFacts } from "../src/compiler/shared/instruction-facts.ts";
 import { analyzeNativeBodyFacts } from "../src/compiler/target/native-body-facts.ts";
 import type { NativeControlFlowPlan } from "../src/compiler/target/native-control-flow.ts";
 import { selectNativeStringComparisons } from "../src/compiler/target/native-string-comparisons.ts";
@@ -64,6 +71,26 @@ function body(
 const OWN_TRY = "mal_compiled_0_try";
 const LENGTH_STRING_INDEX = 7;
 
+it.each([
+	COMPILER_VALUE_KIND_TOP,
+	COMPILER_VALUE_KIND_NULLISH,
+	COMPILER_VALUE_KIND_OBJECT | COMPILER_VALUE_KIND_SYMBOL,
+])("admits a noncollecting coercibility guard for boxed kinds %i", (kind) => {
+	const fn = body([
+		{ opcode: "REQUIRE_COERCIBLE", src: 0 },
+		{ opcode: "CREATE_NUMBER", dst: 2, value: 7 },
+		{ opcode: "RETURN", value: 2 },
+	]);
+	const lines = fastEntry(fn, () => undefined, true, undefined, [
+		{ registers: [0], inputOffset: 0, inputKindMasks: [kind], resultKindMasks: [] },
+	]);
+	expect(lines).toBeDefined();
+	expect(unexpectedHelpers(lines!)).toEqual([]);
+	expect(lines!.join("\n").includes("mal_value_is_nil(f0)")).toBe(
+		kind === COMPILER_VALUE_KIND_TOP,
+	);
+});
+
 /** Runtime helpers a fast body calls beyond the non-collecting ones and its own fast path. */
 function unexpectedHelpers(lines: ReadonlyArray<string>): ReadonlyArray<string> {
 	const helpers = new Set(
@@ -79,6 +106,7 @@ function fastEntry(
 	calleeTry: (ip: number) => string | undefined = () => undefined,
 	exported = true,
 	controlFlow?: NativeControlFlowPlan,
+	facts: ReadonlyArray<InstructionFacts | undefined> = [],
 ): ReadonlyArray<string> | undefined {
 	return renderNativeFastEntry({
 		controlFlow,
@@ -89,7 +117,7 @@ function fastEntry(
 			{ controlFlow, elided: new Set(), stringLength: () => 4 },
 		),
 		fn,
-		facts: [],
+		facts,
 		directEntry: undefined,
 		specialized: false,
 		trySymbol: exported ? OWN_TRY : undefined,

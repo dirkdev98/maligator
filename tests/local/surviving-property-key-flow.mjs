@@ -23,6 +23,18 @@ globalThis.computedKey = conditionalKey;
 globalThis.computedProtoKey = conditionalProtoKey;
 globalThis.computedLive = liveInitializer;
 globalThis.computedSymbolKey = conditionalSymbolKey;
+function requireSymbol(flag, value, observe) {
+	for (let i = 0; i < 2; i++) observe(i);
+	const base = flag !== flag ? value : Symbol.for("coercible");
+	const {} = base;
+	return base;
+}
+function checkCoercible(value) {
+	const {} = value;
+	return 7;
+}
+globalThis.requireSymbol = requireSymbol;
+globalThis.checkCoercible = checkCoercible;
 const rows = [];
 for (let round = 0; round < 8; round++) {
 	let order = "";
@@ -94,6 +106,41 @@ for (let round = 0; round < 8; round++) {
 		order !== "0101keystring"
 	)
 		throw new Error("boxed Symbol key or dynamic fallback");
+	order = "";
+	if (
+		requireSymbol("string", null, globalThis.keyObserver) !== Symbol.for("coercible") ||
+		order !== "01"
+	)
+		throw new Error("proven coercible Symbol");
+	try {
+		requireSymbol(NaN, null, globalThis.keyObserver);
+		throw new Error("missing canonical coercibility exception");
+	} catch (error) {
+		if (!(error instanceof TypeError)) throw error;
+	}
+}
+for (const value of [
+	0,
+	false,
+	"",
+	123n,
+	Symbol("coercible"),
+	{},
+	{
+		[Symbol.toPrimitive]() {
+			throw new Error("unexpected coercion");
+		},
+	},
+])
+	if (globalThis.checkCoercible(value) !== 7)
+		throw new Error("frameless coercible value");
+for (const value of [null, undefined]) {
+	try {
+		globalThis.checkCoercible(value);
+		throw new Error("missing frameless coercibility exception");
+	} catch (error) {
+		if (!(error instanceof TypeError)) throw error;
+	}
 }
 for (const value of [undefined, null, 123n, Symbol("value"), "𝌆", -0]) {
 	const result = globalThis.computedKey("string", value, () => collectGarbage?.());
@@ -155,6 +202,13 @@ if (mutable) {
 	try {
 		const result = conditionalSymbolKey("string", "value", () => collectGarbage?.());
 		if (result.replaced !== "value") throw new Error("replaced Symbol producer fallback");
+		Symbol.for = () => null;
+		try {
+			requireSymbol("string", null, () => collectGarbage?.());
+			throw new Error("missing replaced coercible producer exception");
+		} catch (error) {
+			if (!(error instanceof TypeError)) throw error;
+		}
 	} finally {
 		Symbol.for = original;
 	}

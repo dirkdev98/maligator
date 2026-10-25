@@ -14138,7 +14138,14 @@ function emitInstruction(
 				`vm->completion = (MalCompletion) { .kind = MAL_COMPLETION_NORMAL, .value = MAL_VALUE_UNDEFINED };`,
 			];
 		case "REQUIRE_COERCIBLE":
-			if (reps[instruction.src] !== "boxed") return [];
+			if (
+				((operandKind(instruction.src) ?? COMPILER_VALUE_KIND_TOP) &
+					COMPILER_VALUE_KIND_NULLISH) ===
+				0
+			) {
+				elideFramePosition();
+				return [];
+			}
 			return [
 				`if (mal_value_is_nil(${boxed(instruction.src)})) {`,
 				...slowPathFramePosition(),

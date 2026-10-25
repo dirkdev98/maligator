@@ -282,6 +282,9 @@ The independent target boundary and current storage contract are recorded in
       String and Symbol key conversions retain result kinds independently of
       throw effects. Boxed keys consume those kinds in conversion and definition
       branches while preserving nullish-base checks and Number decoding.
+      Coercibility guards consume non-nullish kind unions in full and resumable
+      bodies. Frameless entries perform only a rejecting nil probe and leave error
+      construction and frame metadata to the full fallback.
 - [x] Normalize primitive conversion calls from semantic kind unions. Eligible
       `Number` and `String` calls use unary conversions, carrying kind and effect
       proofs into native storage, full entries and frameless numeric paths.
