@@ -2,34 +2,44 @@ import type { NativeBodyFacts } from "./native-body-facts.ts";
 import type { NativeControlFlowPlan } from "./native-control-flow.ts";
 import { nativeInstructionEffects } from "./program-image.ts";
 import type { NativeFunctionPlan } from "./program-image.ts";
-import {
-	vmInstructionReadRegisters,
-	vmInstructionWriteRegisters,
-} from "./runtime-image.ts";
+import { vmInstructionWriteRegisters } from "./runtime-image.ts";
 
-export function nativeElidedResultRegisters(
+export function selectNativeUnusedRegisters(
 	native: NativeFunctionPlan,
-): ReadonlySet<number> {
-	const elided = new Set(native.storage?.elidedPureIps);
+	body: NativeBodyFacts,
+	options: {
+		readonly controlFlow: NativeControlFlowPlan | undefined;
+		readonly elidedPureIps: ReadonlyArray<number>;
+		readonly borrowed: ReadonlySet<number>;
+		readonly roots: ReadonlyArray<number>;
+	},
+): ReadonlyArray<number> {
+	const elided = new Set(options.elidedPureIps);
+	const unreachable = new Set(options.controlFlow?.unreachableIps);
 	const registers = new Set<number>();
-	for (const ip of elided) {
+	for (const ip of [...elided, ...unreachable]) {
 		const op = native.body.instructions[ip]!;
-		if ("dst" in op) registers.add(op.dst);
+		for (const register of vmInstructionWriteRegisters(op)) registers.add(register);
 	}
-	if (registers.size === 0) return registers;
-	const unreachable = new Set(native.storage?.controlFlow?.unreachableIps);
+	if (registers.size === 0) return [];
 	const branches = new Set(
-		native.storage?.controlFlow?.branches.map((branch) => branch.instructionIp),
+		options.controlFlow?.branches.map((branch) => branch.instructionIp),
 	);
-	for (const [ip, op] of native.body.instructions.entries()) {
+	for (const [ip, reads] of body.reads.entries()) {
 		if (elided.has(ip) || unreachable.has(ip)) continue;
-		for (const register of [
-			...(branches.has(ip) ? [] : vmInstructionReadRegisters(op)),
-			...vmInstructionWriteRegisters(op),
-		])
+		for (const register of [...(branches.has(ip) ? [] : reads), ...body.writes[ip]!])
 			registers.delete(register);
 	}
-	return registers;
+	for (const register of options.roots) registers.delete(register);
+	for (const register of options.borrowed) registers.delete(register);
+	// Hidden prologue helpers can read argument snapshots before any VM instruction.
+	for (
+		let register = 0;
+		register < native.body.parameterCount + native.body.argumentSnapshotCount;
+		register++
+	)
+		registers.delete(register);
+	return [...registers].sort((left, right) => left - right);
 }
 
 export function selectNativeUnusedValues(

@@ -147,6 +147,9 @@ function skipStorageWithoutFastPaths(reader: Reader): void {
 	expect(reader.u32()).toBe(0);
 	expect(reader.u32()).toBe(0);
 	for (let index = 0; index < 4; index++) expect(reader.u32()).toBe(0);
+	expect(reader.u8(), "No native control-flow specialization").toBe(0);
+	expect(reader.u32(), "No elided native producers").toBe(0);
+	expect(reader.u32(), "No unused native registers").toBe(0);
 }
 
 function firstOverrideOffset(bytes: Uint8Array): number {
@@ -157,6 +160,7 @@ function firstOverrideOffset(bytes: Uint8Array): number {
 	);
 	const bodyCount = reader.count(1);
 	for (let index = 0; index < bodyCount; index++) readRuntimeFunction(reader);
+	expect(reader.u8(), "Compiler profiling flags").toBe(0);
 	expect(reader.u32()).toBe(0); // Semantic protectors.
 	expect(reader.u32()).toBe(0); // Class layouts.
 	expect(reader.u32()).toBe(2); // Functions.

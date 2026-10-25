@@ -31,6 +31,46 @@ export interface NativeControlFlowPlan {
 	readonly unreachableIps: ReadonlyArray<number>;
 }
 
+// Ordinary dominance must account for unpublished helper continuations as entries.
+export function nativeControlFlowEntries(
+	native: NativeFunctionPlan,
+	body: NativeBodyFacts,
+	externalEntries: ReadonlyArray<number> = [],
+): { readonly roots: ReadonlySet<number>; readonly owned: Uint8Array } {
+	const count = native.body.instructions.length;
+	const roots = new Set([0, ...body.externalEntries, ...externalEntries]);
+	const owned = new Uint8Array(count);
+	for (const ip of externalEntries) owned[ip] = 1;
+	// Selected regions can continue at ordinary labels without following the bytecode edge.
+	for (const region of native.specializations) {
+		const ips = [
+			region.license.admission.anchorIp,
+			...region.anchors,
+			...region.claimedIps,
+			...region.controlFlow.ordinaryBlockIps,
+		];
+		let firstIp = count;
+		let lastIp = -1;
+		for (const ip of ips) {
+			roots.add(ip);
+			firstIp = Math.min(firstIp, ip);
+			lastIp = Math.max(lastIp, ip);
+		}
+		owned.fill(1, firstIp, lastIp + 1);
+	}
+	for (const site of native.literalSwitches ?? []) {
+		owned.fill(1, site.instructionIp, site.endIp + 1);
+		for (const entry of site.cases) roots.add(entry.targetIp);
+		roots.add(site.defaultIp);
+	}
+	for (const site of native.fieldCalls ?? [])
+		for (let ip = site.allocationIp; ip <= site.callIp; ip++) {
+			roots.add(ip);
+			owned[ip] = 1;
+		}
+	return { roots, owned };
+}
+
 export function nativeControlFlowContract(
 	native: NativeFunctionPlan,
 	controlFlow: NativeControlFlowPlan | undefined,
@@ -79,37 +119,12 @@ export function selectNativeControlFlow(
 		} else if (!["RETURN", "THROW", "LOAD_UNDECLARED"].includes(op.opcode))
 			first[ip] = ip + 1;
 	}
-	const roots = new Set([0, ...body.externalEntries, ...(options.externalEntries ?? [])]);
 	// Region-owned polling can run independently of the ordinary branch.
-	const owned = new Uint8Array(count);
-	for (const ip of options.externalEntries ?? []) owned[ip] = 1;
-	// Selected regions can continue at ordinary labels without following the bytecode edge.
-	for (const region of native.specializations) {
-		const ips = [
-			region.license.admission.anchorIp,
-			...region.anchors,
-			...region.claimedIps,
-			...region.controlFlow.ordinaryBlockIps,
-		];
-		let firstIp = count;
-		let lastIp = -1;
-		for (const ip of ips) {
-			roots.add(ip);
-			firstIp = Math.min(firstIp, ip);
-			lastIp = Math.max(lastIp, ip);
-		}
-		owned.fill(1, firstIp, lastIp + 1);
-	}
-	for (const site of native.literalSwitches ?? []) {
-		owned.fill(1, site.instructionIp, site.endIp + 1);
-		for (const entry of site.cases) roots.add(entry.targetIp);
-		roots.add(site.defaultIp);
-	}
-	for (const site of native.fieldCalls ?? [])
-		for (let ip = site.allocationIp; ip <= site.callIp; ip++) {
-			roots.add(ip);
-			owned[ip] = 1;
-		}
+	const { roots, owned } = nativeControlFlowEntries(
+		native,
+		body,
+		options.externalEntries,
+	);
 	const fixed = new Map(
 		options.constants?.map(({ instructionIp, value }) => [instructionIp, value]),
 	);

@@ -130,11 +130,7 @@ export function renderNativeFastEntry(
 	const constants = numberConstantRegisters(instructions, registers);
 	const strings = stringConstantRegisters(instructions, registers);
 	const integers = int32ResultRegisters(instructions, fn.parameterCount, registers);
-	const initialized = initializedFastRegisters(
-		graph,
-		accesses,
-		new Set([...constants.keys(), ...strings.keys(), ...integers]),
-	);
+	const initialized = initializedFastRegisters(graph, accesses, registers);
 	for (const register of constants.keys())
 		if (!initialized.has(register)) constants.delete(register);
 	for (const register of strings.keys())
@@ -190,10 +186,12 @@ export function renderNativeFastEntry(
 				]
 			: []),
 		...(loadsCaptures ? input.capturePrologue.map((line) => `    ${line}`) : []),
-		...locals.map((register) =>
+		...locals.flatMap((register) =>
 			register < fn.parameterCount
-				? `    f${register} = ${fastParameter(register, directEntry)};`
-				: `    f${register} = MAL_VALUE_UNDEFINED;`,
+				? [`    f${register} = ${fastParameter(register, directEntry)};`]
+				: initialized.has(register)
+					? []
+					: [`    f${register} = MAL_VALUE_UNDEFINED;`],
 		),
 		...lines,
 	];

@@ -142,10 +142,16 @@ describe("immutable boxed native storage", () => {
 		expect(c).not.toMatch(new RegExp(`r${out.op.dst} = `));
 	});
 
-	it.each(["null", "undefined", "17n"])("retains profiled %s producers", (value) => {
+	it.each([
+		["null", "MAL_VALUE_NULL"],
+		["undefined", "MAL_VALUE_UNDEFINED"],
+		["17n", "mal_value_from_bigint("],
+	])("retains profiled %s producers", (value, expression) => {
 		const out = literal(value, "function", "gate()", true);
 		expect(out.native.storage!.rematerializedConstantIps).toEqual([]);
-		expect(out.native.storage!.rootRegisters).toContain(out.op.dst);
+		expect(out.native.storage!.elidedPureIps).not.toContain(out.ip);
+		expect(out.native.storage!.unusedRegisters).not.toContain(out.op.dst);
+		expect(out.c.source).toContain(`r${out.op.dst} = ${expression}`);
 	});
 
 	it("keeps the TDZ hole sentinel in explicit storage", () => {
@@ -160,7 +166,10 @@ describe("immutable boxed native storage", () => {
 			},
 		});
 		expect(native.storage!.rematerializedConstantIps).not.toContain(out.ip);
-		expect(native.storage!.rootRegisters).toContain(out.op.dst);
+		expect(native.storage!.unusedRegisters).not.toContain(out.op.dst);
+		expect(
+			emitCompiledFunction(native, native.functionIndex, "", false)!.source,
+		).toContain(`r${out.op.dst} = MAL_VALUE_EMPTY;`);
 		expect(() =>
 			validateNativeStorage({
 				...native,

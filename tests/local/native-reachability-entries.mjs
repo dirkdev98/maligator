@@ -55,12 +55,19 @@ function phiBoolean(input, flag) {
 	const value = flag === flag ? false : input;
 	return value;
 }
+function survivingProduct(input, flag) {
+	const number = +input;
+	const product = number * 3;
+	if (flag !== flag) return product + 4;
+	return product + 2;
+}
 globalThis.phiNumber = phiNumber;
 globalThis.phiText = phiText;
 globalThis.phiCascade = phiCascade;
 globalThis.phiNumberFromString = phiNumberFromString;
 globalThis.phiTextFromNumber = phiTextFromNumber;
 globalThis.phiBoolean = phiBoolean;
+globalThis.survivingProduct = survivingProduct;
 globalThis.abiFallback = { marker: "fallback" };
 const abiEvents = [];
 const convertible = {
@@ -75,6 +82,26 @@ const convertible = {
 		return "converted";
 	},
 };
+for (const input of [-0, 0, NaN, Infinity, -Infinity, Number.MIN_VALUE, 7]) {
+	if (!Object.is(survivingProduct(+input, !!globalThis.flag), input * 3 + 2))
+		throw new Error("surviving scalar product");
+	if (!Object.is(globalThis.survivingProduct(input, NaN), input * 3 + 4))
+		throw new Error("canonical scalar product");
+}
+const beforeProduct = abiEvents.length;
+if (survivingProduct(convertible, !!globalThis.flag) !== 23)
+	throw new Error("coercive scalar product");
+if (abiEvents.length !== beforeProduct + 1)
+	throw new Error("product repeated conversion");
+for (const input of [Symbol("product"), 1n]) {
+	try {
+		globalThis.survivingProduct(input, false);
+		throw new Error("product lost conversion throw");
+	} catch (error) {
+		if (!(error instanceof TypeError)) throw error;
+		abiEvents.push(`product:${typeof input}:${error.name}`);
+	}
+}
 if (narrowNumber(convertible, !!globalThis.flag) !== 7) throw new Error("Number ABI");
 for (const value of [-0, NaN, Infinity, -Infinity])
 	if (!Object.is(narrowNumber(+value, !!globalThis.flag), value))

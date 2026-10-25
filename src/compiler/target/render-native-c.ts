@@ -126,7 +126,6 @@ import {
 	nativeNumberPredicateExpression,
 } from "./native-scalar-operators.ts";
 import type { NativeSpanConsumer } from "./native-span-continuation.ts";
-import { nativeElidedResultRegisters } from "./native-unused-values.ts";
 import { nativeValueConversion } from "./native-value-transport.ts";
 import type { NativeValueConversion } from "./native-value-transport.ts";
 import { profileOperationForInstruction } from "./profile-metadata.ts";
@@ -2657,7 +2656,7 @@ function emitCompiledVariant(
 				rematerializedConstantIps: worker.rematerializedConstantIps,
 			}
 		: variantStorage;
-	const elidedResults = nativeElidedResultRegisters(nativeContract);
+	const elidedResults = new Set(storage.unusedRegisters);
 	const elidedIps = new Set(storage.elidedPureIps);
 
 	// A function with its own captured slots needs a per-activation MalEnv node
@@ -4516,7 +4515,7 @@ function emitResumableFunction(
 ): CompiledFunction | null {
 	nativeFrameRootRegisters(fn, native);
 	native = nativeControlFlowContract(native, native.storage?.controlFlow);
-	const elidedResults = nativeElidedResultRegisters(native);
+	const elidedResults = new Set(native.storage!.unusedRegisters);
 	const elidedIps = new Set(native.storage!.elidedPureIps);
 	const isAsyncFunction = fn.isAsync && !fn.isGenerator;
 	const symbol = `mal_compiled_${relocatable === false ? index : relocatable.symbolStem}${suffix}`;

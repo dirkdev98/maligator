@@ -53,6 +53,7 @@ import {
 	selectNativeControlFlow,
 	nativeControlFlowPlansMatch,
 	nativeControlFlowContract,
+	nativeControlFlowEntries,
 } from "./native-control-flow.ts";
 import type { NativeControlFlowPlan } from "./native-control-flow.ts";
 import {
@@ -60,7 +61,10 @@ import {
 	NATIVE_BITWISE,
 	NATIVE_COMPARE,
 } from "./native-scalar-operators.ts";
-import { selectNativeUnusedValues } from "./native-unused-values.ts";
+import {
+	selectNativeUnusedValues,
+	selectNativeUnusedRegisters,
+} from "./native-unused-values.ts";
 import {
 	validateNativeInstructionFacts,
 	nativeFrameRootRegisters,
@@ -72,7 +76,11 @@ import type {
 	NativeFunctionPlan,
 	ProgramImage,
 } from "./program-image.ts";
-import { decodeVmValueOperand, vmInstructionReadRegisters } from "./runtime-image.ts";
+import {
+	decodeVmValueOperand,
+	vmInstructionReadRegisters,
+	vmInstructionWriteRegisters,
+} from "./runtime-image.ts";
 import type { BytecodeInstruction } from "./runtime-image.ts";
 
 export interface NativeScalarStoragePlan {
@@ -110,6 +118,7 @@ export interface NativeStoragePlan
 	readonly numericWorker: NativeNumericWorkerPlan | undefined;
 	readonly controlFlow?: NativeControlFlowPlan;
 	readonly elidedPureIps: ReadonlyArray<number>;
+	readonly unusedRegisters: ReadonlyArray<number>;
 }
 
 function selectNumericWorker(
@@ -186,6 +195,9 @@ interface NativeScalarOwnership {
 }
 
 interface NativeStorageBodyFacts extends NativeBodyFacts {
+	readonly accesses: NativeBodyFacts;
+	readonly branchTargets: ReadonlyMap<number, number> | undefined;
+	readonly isReachable: (instructionIp: number) => boolean;
 	readonly captures: NativeCaptureAccessPlan;
 	readonly writeCounts: Uint32Array;
 	readonly definitions: Int32Array;
@@ -194,6 +206,12 @@ interface NativeStorageBodyFacts extends NativeBodyFacts {
 	readonly controlBoundaries: ReadonlyArray<boolean>;
 	readonly predecessorCounts: Uint32Array;
 	readonly controlFlow: NativeStorageControlFlow | undefined;
+}
+
+interface NativeStorageControlProjection {
+	readonly branches: ReadonlyMap<number, number>;
+	readonly unreachable: ReadonlySet<number>;
+	readonly entries: ReadonlySet<number>;
 }
 
 interface NativeStorageControlFlow {
@@ -290,6 +308,7 @@ function storageControlFlow(
 	jumpTargets: ReadonlySet<number>,
 	controlBoundaries: ReadonlyArray<boolean>,
 	handlerTargets: ReadonlyArray<number | undefined>,
+	projection?: NativeStorageControlProjection,
 ): NativeStorageControlFlow | undefined {
 	if (fn.instructions.length === 0 || handlerTargets[0] !== undefined) return undefined;
 	const blocks = new Uint32Array(fn.instructions.length);
@@ -311,7 +330,10 @@ function storageControlFlow(
 	}
 	ends.push(fn.instructions.length - 1);
 	const successors = ends.map((ip, index) => {
+		if (projection?.unreachable.has(ip)) return [];
 		const op = fn.instructions[ip]!;
+		const target = projection?.branches.get(ip);
+		if (target !== undefined) return [blocks[target]!];
 		if (op.opcode === "JUMP") return [blocks[op.targetIp]!];
 		const next = index + 1 < ends.length ? [index + 1] : [];
 		if (op.opcode === "JUMP_IF") return [...next, blocks[op.targetIp]!];
@@ -330,9 +352,13 @@ function storageControlFlow(
 					successors[from]!.push(blocks[handler]!);
 		}
 	}
+	const entries =
+		projection === undefined
+			? [0]
+			: [...new Set([...projection.entries].map((ip) => blocks[ip]!))];
 	const reachable = (): Uint8Array => {
 		const visited = new Uint8Array(ends.length);
-		const pending = [0];
+		const pending = [...entries];
 		while (pending.length > 0) {
 			const current = pending.pop()!;
 			if (visited[current] !== 0) continue;
@@ -343,6 +369,7 @@ function storageControlFlow(
 	};
 	const live = reachable();
 	let dominatesBlock: ReturnType<typeof blockDominators> | undefined;
+	const multipleEntries = entries.length > 1;
 	return {
 		isReachable: (ip) => live[blocks[ip]!] === 1,
 		dominates(definitionIp, useIp) {
@@ -350,16 +377,24 @@ function storageControlFlow(
 			const useBlock = blocks[useIp]!;
 			if (live[definitionBlock] === 0 || live[useBlock] === 0) return false;
 			if (useBlock === definitionBlock) return useIp > definitionIp;
-			if (definitionBlock === 0) return true;
-			dominatesBlock ??= blockDominators(successors);
-			return dominatesBlock(definitionBlock, useBlock);
+			if (definitionBlock === 0 && !multipleEntries) return true;
+			dominatesBlock ??= blockDominators(
+				multipleEntries
+					? [
+							entries.map((entry) => entry + 1),
+							...successors.map((targets) => targets.map((target) => target + 1)),
+						]
+					: successors,
+			);
+			const offset = multipleEntries ? 1 : 0;
+			return dominatesBlock(definitionBlock + offset, useBlock + offset);
 		},
 		isDefinedBeforeReads(readIps, definitionIps) {
 			if (!readIps.every((ip) => live[blocks[ip]!] === 1)) return false;
 			const reads = new Set(readIps);
 			const definitions = new Set(definitionIps);
 			const visited = new Uint8Array(ends.length);
-			const pending = [0];
+			const pending = [...entries];
 			while (pending.length > 0) {
 				const current = pending.pop()!;
 				if (visited[current] !== 0) continue;
@@ -381,9 +416,13 @@ function storageControlFlow(
 	};
 }
 
-function storageBodyFacts(native: NativeFunctionPlan): NativeStorageBodyFacts {
+function storageBodyFacts(
+	native: NativeFunctionPlan,
+	facts = analyzeNativeBodyFacts(native.body),
+	projection?: NativeStorageControlProjection,
+	captures = selectNativeCaptureAccess(native.body, native.functionIndex),
+): NativeStorageBodyFacts {
 	const fn = native.body;
-	const facts = analyzeNativeBodyFacts(fn);
 	const { reads, writes, jumpTargets } = facts;
 	const writeCounts = new Uint32Array(fn.registerCount);
 	const definitions = new Int32Array(fn.registerCount).fill(-1);
@@ -391,6 +430,7 @@ function storageBodyFacts(native: NativeFunctionPlan): NativeStorageBodyFacts {
 	const iteratorDoneRegisters: Array<number> = [];
 	const predecessorCounts = new Uint32Array(fn.instructions.length);
 	for (const [ip, op] of fn.instructions.entries()) {
+		if (projection?.unreachable.has(ip)) continue;
 		if (op.opcode === "ITERATOR_STEP") iteratorDoneRegisters.push(op.doneDst);
 		// Conservative images have no SSA locals and receive operand validation downstream.
 		if (native.storageValues !== undefined) {
@@ -399,6 +439,11 @@ function storageBodyFacts(native: NativeFunctionPlan): NativeStorageBodyFacts {
 				definitions[local] = ip;
 			}
 			for (const local of reads[ip]!) uses[local]!.push(ip);
+		}
+		const target = projection?.branches.get(ip);
+		if (target !== undefined) {
+			predecessorCounts[target]!++;
+			continue;
 		}
 		if (op.opcode === "JUMP" || op.opcode === "JUMP_IF") {
 			predecessorCounts[op.targetIp]!++;
@@ -409,12 +454,20 @@ function storageBodyFacts(native: NativeFunctionPlan): NativeStorageBodyFacts {
 		)
 			predecessorCounts[ip + 1]!++;
 	}
-	const controlBoundaries = fn.instructions.map(scalarControlBoundary);
+	const controlBoundaries = fn.instructions.map(
+		(op, ip) =>
+			!projection?.unreachable.has(ip) &&
+			projection?.branches.get(ip) !== ip + 1 &&
+			scalarControlBoundary(op),
+	);
 	let controlFlow: NativeStorageControlFlow | undefined;
 	let controlFlowAnalyzed = false;
 	return {
 		...facts,
-		captures: selectNativeCaptureAccess(fn, native.functionIndex),
+		accesses: facts,
+		branchTargets: projection?.branches,
+		isReachable: (ip) => !projection?.unreachable.has(ip),
+		captures,
 		writeCounts,
 		definitions,
 		uses,
@@ -430,11 +483,66 @@ function storageBodyFacts(native: NativeFunctionPlan): NativeStorageBodyFacts {
 						jumpTargets,
 						controlBoundaries,
 						facts.handlerTargets,
+						projection,
 					);
 			}
 			return controlFlow;
 		},
 	};
+}
+
+function projectStorageBodyFacts(
+	native: NativeFunctionPlan,
+	body: NativeStorageBodyFacts,
+	controlFlow: NativeControlFlowPlan | undefined,
+	externalEntries: ReadonlyArray<number>,
+): NativeStorageBodyFacts {
+	if (controlFlow === undefined) return body;
+	const fn = native.body;
+	const unreachable = new Set(controlFlow.unreachableIps);
+	const branches = new Map(
+		controlFlow.branches.map(({ instructionIp, targetIp }) => [instructionIp, targetIp]),
+	);
+	const entries = new Set(
+		[...nativeControlFlowEntries(native, body, externalEntries).roots].filter(
+			(ip) => ip >= 0 && ip < fn.instructions.length,
+		),
+	);
+	const external = new Set([...entries].filter((ip) => ip !== 0));
+	const jumpTargets = new Set(external);
+	const branchSources = new Map<number, Array<number>>();
+	for (const [ip, op] of fn.instructions.entries()) {
+		if (unreachable.has(ip)) continue;
+		const fixed = branches.get(ip);
+		const target =
+			fixed === ip + 1
+				? undefined
+				: (fixed ??
+					(op.opcode === "JUMP" || op.opcode === "JUMP_IF" ? op.targetIp : undefined));
+		if (target === undefined) continue;
+		jumpTargets.add(target);
+		const sources = branchSources.get(target) ?? [];
+		sources.push(ip);
+		branchSources.set(target, sources);
+	}
+	return storageBodyFacts(
+		native,
+		{
+			...body.accesses,
+			reads: body.reads.map((reads, ip) =>
+				unreachable.has(ip) || branches.has(ip) ? [] : reads,
+			),
+			writes: body.writes.map((writes, ip) => (unreachable.has(ip) ? [] : writes)),
+			staticPropertyLoadIps: body.staticPropertyLoadIps.filter(
+				(ip) => !unreachable.has(ip),
+			),
+			externalEntries: external,
+			jumpTargets,
+			branchSources,
+		},
+		{ branches, unreachable, entries },
+		body.captures,
+	);
 }
 
 function scalarStorageOwnership(
@@ -481,7 +589,11 @@ function scalarStorageOwnership(
 	for (const point of suspension?.points ?? []) {
 		blocked.add(point.instructionIp);
 		for (const register of point.registers) borrowed.add(register);
-		for (const register of body.writes[point.instructionIp]!) borrowed.add(register);
+		// Resume dispatch writes these outputs independently of ordinary reachability.
+		for (const register of vmInstructionWriteRegisters(
+			fn.instructions[point.instructionIp]!,
+		))
+			borrowed.add(register);
 	}
 	return { blocked, borrowed };
 }
@@ -550,7 +662,12 @@ function definitionInitializedRegisters(
 		phiControlFlow !== undefined ? new Map<number, Array<number>>() : undefined;
 	if (phiDefinitions !== undefined)
 		for (const [ip, op] of fn.instructions.entries())
-			if (op.opcode === "MOVE" && writes[op.dst]! > 1 && !blocked.has(ip)) {
+			if (
+				body.isReachable(ip) &&
+				op.opcode === "MOVE" &&
+				writes[op.dst]! > 1 &&
+				!blocked.has(ip)
+			) {
 				const definitions = phiDefinitions.get(op.dst) ?? [];
 				definitions.push(ip);
 				phiDefinitions.set(op.dst, definitions);
@@ -795,8 +912,8 @@ function expressionIps(
 	const fallthroughJumps = new Set<number>();
 	for (const [ip, op] of fn.instructions.entries())
 		if (
-			op.opcode === "JUMP" &&
-			op.targetIp === ip + 1 &&
+			((op.opcode === "JUMP" && op.targetIp === ip + 1) ||
+				body.branchTargets?.get(ip) === ip + 1) &&
 			!blocked.has(ip) &&
 			!blocked.has(ip + 1) &&
 			!safepoints.has(ip) &&
@@ -809,6 +926,7 @@ function expressionIps(
 	const costs = new Map<number, number>();
 	for (const [ip, op] of fn.instructions.entries()) {
 		if (
+			!body.isReachable(ip) ||
 			(candidates !== undefined && !candidates.has(ip)) ||
 			blocked.has(ip) ||
 			!pure(ip) ||
@@ -849,6 +967,7 @@ function expressionIps(
 		if (cost > 16) continue;
 		let safe = true;
 		for (let next = ip + 1; next <= consumerIp; next++) {
+			if (!body.isReachable(next)) continue;
 			if (
 				blocked.has(next) ||
 				(jumpTargets.has(next) && !fallthroughJumps.has(next - 1)) ||
@@ -1007,7 +1126,7 @@ function untracedPrimitiveResultRegisters(
 	const registers = new Set<number>();
 	if (native.storageValues === undefined) return registers;
 	for (const [ip, op] of native.body.instructions.entries()) {
-		if (!("dst" in op)) continue;
+		if (!body.isReachable(ip) || !("dst" in op)) continue;
 		const resultKind = instructionResultKind(native.facts?.[ip], op.dst);
 		const immediate =
 			!body.reads[ip]!.includes(op.dst) &&
@@ -1327,14 +1446,16 @@ function lowerStorage(
 	const fn = native.body;
 	const fastPaths = selectNativeFastPaths(native, entry, stringConstants, body);
 	const expressionWindows = scalarStorageWindows(fastPaths);
+	const externalEntries = [
+		...expressionWindows.flatMap((window) => window.claimedIps),
+		...nativeRecordCallIps(native),
+		...(entry?.resultFields?.allocationIps ?? []),
+	];
 	const controlFlow = selectNativeControlFlow(native, body, stringConstants, {
 		constants: entry?.constantBooleans,
-		externalEntries: [
-			...expressionWindows.flatMap((window) => window.claimedIps),
-			...nativeRecordCallIps(native),
-			...(entry?.resultFields?.allocationIps ?? []),
-		],
+		externalEntries,
 	});
+	body = projectStorageBodyFacts(native, body, controlFlow, externalEntries);
 	const gcCertificate = native.gc;
 	native = nativeControlFlowContract(native, controlFlow);
 	const jumpTargets = body.jumpTargets;
@@ -1401,6 +1522,12 @@ function lowerStorage(
 			fastPaths.numberPredicates.map((plan) => plan.instructionIp),
 		),
 	});
+	const unusedRegisters = selectNativeUnusedRegisters(native, body, {
+		controlFlow,
+		elidedPureIps,
+		borrowed: ownership.borrowed,
+		roots: roots.rootRegisters,
+	});
 	let numericWorker: NativeNumericWorkerPlan | undefined;
 	if (
 		entry !== undefined &&
@@ -1453,6 +1580,7 @@ function lowerStorage(
 		...scalar,
 		numericWorker,
 		elidedPureIps,
+		unusedRegisters,
 		...(controlFlow === undefined ? {} : { controlFlow }),
 	};
 }
@@ -2035,8 +2163,15 @@ export function validateNativeStorage(
 			stringConstants,
 			stackRoots,
 		);
+		const projected = projectStorageBodyFacts(variant, body, selected.controlFlow, [
+			...scalarStorageWindows(selected).flatMap((window) => window.claimedIps),
+			...nativeRecordCallIps(variant),
+			...(entry?.resultFields?.allocationIps ?? []),
+		]);
 		if (!sameScalar(variant.storage, selected)) return false;
 		if (!sameNumbers(variant.storage.elidedPureIps, selected.elidedPureIps)) return false;
+		if (!sameNumbers(variant.storage.unusedRegisters, selected.unusedRegisters))
+			return false;
 		if (!nativeControlFlowPlansMatch(variant.storage.controlFlow, selected.controlFlow))
 			return false;
 		const reachable = nativeControlFlowContract(variant, selected.controlFlow);
@@ -2047,7 +2182,7 @@ export function validateNativeStorage(
 				variant.storage,
 				{
 					privateRegisters: new Set(variant.storage.privateRegisters),
-					facts: body,
+					facts: projected,
 				},
 			);
 		}
@@ -2057,12 +2192,12 @@ export function validateNativeStorage(
 				variant.storage.expressionIps,
 				expressionIps(
 					variant,
-					body,
-					body.jumpTargets,
+					projected,
+					projected.jumpTargets,
 					false,
 					scalarStorageOwnership(
 						variant,
-						body,
+						projected,
 						scalarStorageWindows(selected),
 						suspension,
 					),
@@ -2083,17 +2218,17 @@ export function validateNativeStorage(
 						...selected,
 						...rootStorage(
 							reachable,
-							body,
+							projected,
 							selected,
 							selected.callTransports,
 							variant.storage.rematerializedConstantIps,
 							variant.storage.expressionIps,
 							untracedPrimitiveResultRegisters(
 								reachable,
-								body,
+								projected,
 								scalarStorageOwnership(
 									variant,
-									body,
+									projected,
 									scalarStorageWindows(selected),
 									suspension,
 								),
@@ -2103,6 +2238,8 @@ export function validateNativeStorage(
 					};
 		// Retained scalar schedules can add roots; their slot writes remain mandatory.
 		const retainedRoots = new Set(retained.rootRegisters);
+		if (variant.storage.unusedRegisters.some((register) => retainedRoots.has(register)))
+			return false;
 		if (
 			variant.storage.elidedPureIps.some((ip) => {
 				const op = variant.body.instructions[ip]!;

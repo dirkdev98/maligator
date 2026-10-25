@@ -244,10 +244,10 @@ The independent target boundary and current storage contract are recorded in
       C bodies while retaining root writes, hidden ownership uses and profile sites.
       Return ABI proofs now join reachable returns using existing kind and range
       observations, preserving handler entry contracts; callers consume those
-      scalar results through existing typed transports. Scalar-use and definition
-      analyses still scan the original instructions. Carry edge projections into
-      remaining shape, lifetime and constant-String identity analyses, and retire
-      callee nominations when a later refinement makes their call unreachable.
+      scalar results through existing typed transports. Use the surviving graph
+      during fast-path discovery, and carry edge projections into remaining shape,
+      lifetime and constant-String identity analyses. Retire callee nominations
+      when a later refinement makes their call unreachable.
 - [ ] Normalize primitive conversion calls from semantic kind unions. `String`
       and `Number` calls on `number | undefined` still use the builtin dispatcher.
       Retain extra argument effects and the distinct Symbol, BigInt, omitted-argument,

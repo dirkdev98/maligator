@@ -247,6 +247,7 @@ describe("native fast entries", () => {
 			]),
 		)!.join("\n");
 		expect(number).toContain("mal_ops_number_as_f64(f2)");
+		expect(number).toContain("f2 = MAL_VALUE_UNDEFINED;");
 		const string = fastEntry(
 			body([
 				{ opcode: "JUMP_IF", cond: 0, targetIp: 2 },
@@ -267,6 +268,39 @@ describe("native fast entries", () => {
 		)!.join("\n");
 		expect(integer).toContain("mal_value_is_truthy(f2)");
 		expect(integer).not.toContain("mal_ops_number_value_to_i32(f2)");
+		expect(integer).toContain("f2 = MAL_VALUE_UNDEFINED;");
+	});
+
+	it("omits a boxed default when every successful helper path writes before reading", () => {
+		const source = fastEntry(
+			body([
+				{ opcode: "JUMP_IF", cond: 0, targetIp: 3 },
+				{ opcode: "LOAD_PROPERTY_STATIC", dst: 2, object: 1, stringIndex: 0, icIndex: 0 },
+				{ opcode: "JUMP", targetIp: 4 },
+				{ opcode: "LOAD_PROPERTY_STATIC", dst: 2, object: 1, stringIndex: 1, icIndex: 1 },
+				{ opcode: "RETURN", value: 2 },
+			]),
+		)!.join("\n");
+		expect(source).toContain("&f2");
+		expect(source).not.toContain("f2 = MAL_VALUE_UNDEFINED;");
+		expect(source).toContain("goto __full;");
+	});
+
+	it("uses a fixed branch proof to omit a default without borrowing the unreachable read", () => {
+		const fn = body([
+			{ opcode: "JUMP_IF", cond: 0, targetIp: 3 },
+			{ opcode: "RETURN", value: 2 },
+			{ opcode: "RETURN", value: 2 },
+			{ opcode: "LOAD_PROPERTY_STATIC", dst: 2, object: 1, stringIndex: 0, icIndex: 0 },
+			{ opcode: "RETURN", value: 2 },
+		]);
+		expect(fastEntry(fn)!.join("\n")).toContain("f2 = MAL_VALUE_UNDEFINED;");
+		const selected = fastEntry(fn, undefined, true, {
+			branches: [{ instructionIp: 0, targetIp: 3 }],
+			unreachableIps: [1, 2],
+		})!.join("\n");
+		expect(selected).toContain("&f2");
+		expect(selected).not.toContain("f2 = MAL_VALUE_UNDEFINED;");
 	});
 
 	it("opens a constructible entry with the floating-point pragma before its new.target guard", () => {
