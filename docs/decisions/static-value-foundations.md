@@ -256,7 +256,8 @@ cast; argument transports retain their own conversion semantics. Unsigned C rema
 requires nonnegative uint32 operands and a strictly positive divisor. Negative zero,
 negative dividends, zero-capable divisors and wider domains retain the Number helper.
 Scalar expressions, fusion links, property projections and numeric updates pass the
-operation's own ranges to the shared arithmetic renderer.
+operation's own ranges to the shared arithmetic renderer. Frameless entries share
+the unsigned remainder domain check with canonical and resumable emission.
 
 Core shares Boolean observation queries between local folding, program-flow demands
 and cross-call specialization. Exact `Object.is` calls fold for the same SSA value,

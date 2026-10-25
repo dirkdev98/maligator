@@ -29,6 +29,35 @@ function arithmetic(a, b) {
 	return [a - b, a * b, a / b, a % b, -a, +a];
 }
 
+function positiveRemainder(input, other) {
+	return (input >>> 0) % ((other & 255) + 1);
+}
+
+globalThis.positiveRemainder = positiveRemainder;
+for (const input of [
+	0,
+	-0,
+	-1,
+	255,
+	2147483648,
+	4294967295,
+	4294967296,
+	NaN,
+	Infinity,
+	"17",
+	7n,
+	Symbol("input"),
+]) {
+	for (const other of [0, -1, 1, 255, "7", 7n]) {
+		try {
+			const result = positiveRemainder(input, other);
+			log.push(`positive remainder ${Object.is(result, -0) ? "-0" : result}`);
+		} catch (error) {
+			log.push(`positive remainder ${error.name}`);
+		}
+	}
+}
+
 function kind(value) {
 	return typeof value === "string"
 		? "string"

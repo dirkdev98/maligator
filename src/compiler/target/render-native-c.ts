@@ -131,6 +131,7 @@ import {
 	nativeNumberPredicateExpression,
 	nativeBinaryNumberInputs,
 	nativePrimitiveNumberExpression,
+	nativeUnsignedRemainderExpression,
 } from "./native-scalar-operators.ts";
 import {
 	nativeInstructionSourceRanges,
@@ -1317,18 +1318,14 @@ function nativeNumberExpr(
 		return `(f64) ((u32) ${left32} >> (${right32} & 0x1F))`;
 	}
 	if (operator === "%") {
-		const dividend = inputIntegerRanges?.[0],
-			divisor = inputIntegerRanges?.[1];
-		if (
-			dividend !== undefined &&
-			divisor !== undefined &&
-			dividend.minimum >= 0 &&
-			dividend.maximum <= 0xffff_ffff &&
-			divisor.minimum > 0 &&
-			divisor.maximum <= 0xffff_ffff
-		)
-			return `(f64) ((u32) (${left}) % (u32) (${right}))`;
-		return `mal_number_remainder(${left}, ${right})`;
+		return (
+			nativeUnsignedRemainderExpression(
+				left,
+				right,
+				inputIntegerRanges?.[0],
+				inputIntegerRanges?.[1],
+			) ?? `mal_number_remainder(${left}, ${right})`
+		);
 	}
 	if (operator === "**") return `mal_number_exponentiate(${left}, ${right})`;
 	return null;

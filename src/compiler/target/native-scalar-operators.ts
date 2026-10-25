@@ -10,6 +10,25 @@ import {
 	compilerNumberFastPathInputKind,
 } from "../shared/compiler-value-kinds.ts";
 import type { CompilerValueKindMask } from "../shared/compiler-value-kinds.ts";
+import type { CompilerIntegerRange } from "../shared/integer-range.ts";
+
+export function nativeUnsignedRemainderExpression(
+	left: string,
+	right: string,
+	dividend: CompilerIntegerRange | undefined,
+	divisor: CompilerIntegerRange | undefined,
+): string | undefined {
+	if (
+		dividend === undefined ||
+		divisor === undefined ||
+		dividend.minimum < 0 ||
+		dividend.maximum > 0xffff_ffff ||
+		divisor.minimum <= 0 ||
+		divisor.maximum > 0xffff_ffff
+	)
+		return undefined;
+	return `(f64) ((u32) (${left}) % (u32) (${right}))`;
+}
 
 // Guards license primitive Number conversion; a fallback must retain the original operands.
 export function nativeBinaryNumberInputs(

@@ -22,6 +22,7 @@ import type { NativeControlFlowPlan } from "./native-control-flow.ts";
 import {
 	nativeBinaryNumberInputs,
 	nativePrimitiveNumberExpression,
+	nativeUnsignedRemainderExpression,
 } from "./native-scalar-operators.ts";
 import {
 	nativeInstructionSourceRanges,
@@ -594,8 +595,16 @@ function fastBinary(
 		return `${guard} f${dst} = mal_ops_number_value((f64) ((u32) ${integer(left)} >> ((u32) ${integer(right)} & 31u)));`;
 	if (NUMBER_OPERATORS.has(operator))
 		return `${guard} f${dst} = mal_ops_number_value(${numeric(left)} ${operator} ${numeric(right)});`;
-	if (operator === "%")
-		return `${guard} f${dst} = mal_ops_number_value(fmod(${numeric(left)}, ${numeric(right)}));`;
+	if (operator === "%") {
+		const expression =
+			nativeUnsignedRemainderExpression(
+				numeric(left),
+				numeric(right),
+				values.range(left),
+				values.range(right),
+			) ?? `fmod(${numeric(left)}, ${numeric(right)})`;
+		return `${guard} f${dst} = mal_ops_number_value(${expression});`;
+	}
 	if (operator === "**")
 		return `${guard} f${dst} = mal_ops_number_value(mal_number_exponentiate(${numeric(left)}, ${numeric(right)}));`;
 	return undefined;

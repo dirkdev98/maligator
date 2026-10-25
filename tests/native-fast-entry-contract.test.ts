@@ -15,7 +15,10 @@ import {
 	COMPILER_VALUE_KIND_NULL,
 } from "../src/compiler/shared/compiler-value-kinds.ts";
 import type { InstructionFacts } from "../src/compiler/shared/instruction-facts.ts";
-import { COMPILER_INT32_RANGE } from "../src/compiler/shared/integer-range.ts";
+import {
+	COMPILER_INT32_RANGE,
+	COMPILER_UINT32_RANGE,
+} from "../src/compiler/shared/integer-range.ts";
 import { analyzeNativeBodyFacts } from "../src/compiler/target/native-body-facts.ts";
 import type { NativeControlFlowPlan } from "../src/compiler/target/native-control-flow.ts";
 import { selectNativeStringComparisons } from "../src/compiler/target/native-string-comparisons.ts";
@@ -87,6 +90,48 @@ function body(
 
 const OWN_TRY = "mal_compiled_0_try";
 const LENGTH_STRING_INDEX = 7;
+
+it.each([
+	[
+		{ ...COMPILER_UINT32_RANGE, maximum: 255 },
+		{ ...COMPILER_UINT32_RANGE, minimum: 1, maximum: 256 },
+		true,
+	],
+	[COMPILER_UINT32_RANGE, { ...COMPILER_UINT32_RANGE, minimum: 1 }, true],
+	[COMPILER_INT32_RANGE, { ...COMPILER_UINT32_RANGE, minimum: 1 }, false],
+	[COMPILER_UINT32_RANGE, COMPILER_UINT32_RANGE, false],
+	[
+		{ ...COMPILER_UINT32_RANGE, maximum: 8589934591 },
+		{ ...COMPILER_UINT32_RANGE, minimum: 1 },
+		false,
+	],
+	[undefined, { ...COMPILER_UINT32_RANGE, minimum: 1 }, false],
+	[COMPILER_UINT32_RANGE, undefined, false],
+] as const)(
+	"uses the shared unsigned remainder domain in frameless entries: %j, %j",
+	(left, right, direct) => {
+		const fn = body([
+			{ opcode: "BINARY", dst: 2, left: 0, right: 1, operator: "%" },
+			{ opcode: "RETURN", value: 2 },
+		]);
+		for (const exported of [false, true]) {
+			const lines = fastEntry(fn, undefined, exported, undefined, [
+				{
+					registers: [2, 0, 1],
+					inputOffset: 1,
+					inputKindMasks: [COMPILER_VALUE_KIND_NUMBER, COMPILER_VALUE_KIND_NUMBER],
+					resultKindMasks: [COMPILER_VALUE_KIND_NUMBER],
+					inputIntegerRanges: [left, right],
+				},
+			]);
+			expect(lines).toBeDefined();
+			expect(unexpectedHelpers(lines!)).toEqual([]);
+			const c = lines!.join("\n");
+			expect(c.includes("% (u32)")).toBe(direct);
+			expect(c.includes("fmod(")).toBe(!direct);
+		}
+	},
+);
 
 it("uses Number and nonnegative integer proofs in frameless indexed reads", () => {
 	const fn = body([
