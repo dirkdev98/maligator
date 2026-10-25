@@ -92,7 +92,8 @@ describe("tagged VM call operands", () => {
 					(17).toString(dynamic),
 					Object.prototype.isPrototypeOf.call(true, dynamic),
 					Object.is(undefined, dynamic),
-					Object.is(null, false),
+					Object.is(null, dynamic),
+					Object.is(false, dynamic),
 				];
 			}
 			globalThis.keep = invoke;
@@ -101,7 +102,7 @@ describe("tagged VM call operands", () => {
 		const calls = instructions.filter(
 			(instruction) => instruction.opcode === "CALL_KNOWN",
 		);
-		expect(calls).toHaveLength(5);
+		expect(calls).toHaveLength(6);
 		if (calls.some((instruction) => instruction.opcode !== "CALL_KNOWN")) return;
 
 		expect(decodeVmValueOperand(calls[0]!.thisValue).kind).toBe("string");
@@ -120,7 +121,11 @@ describe("tagged VM call operands", () => {
 		]);
 		expect(calls[4]!.arguments.map(decodeVmValueOperand)).toEqual([
 			{ kind: "null" },
+			{ kind: "register", register: 0 },
+		]);
+		expect(calls[5]!.arguments.map(decodeVmValueOperand)).toEqual([
 			{ kind: "boolean", value: false },
+			{ kind: "register", register: 0 },
 		]);
 
 		expect(
