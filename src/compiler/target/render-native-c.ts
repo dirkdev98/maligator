@@ -126,6 +126,7 @@ import {
 	nativeNumberPredicateExpression,
 } from "./native-scalar-operators.ts";
 import type { NativeSpanConsumer } from "./native-span-continuation.ts";
+import { nativeElidedResultRegisters } from "./native-unused-values.ts";
 import { nativeValueConversion } from "./native-value-transport.ts";
 import type { NativeValueConversion } from "./native-value-transport.ts";
 import { profileOperationForInstruction } from "./profile-metadata.ts";
@@ -2656,6 +2657,8 @@ function emitCompiledVariant(
 				rematerializedConstantIps: worker.rematerializedConstantIps,
 			}
 		: variantStorage;
+	const elidedResults = nativeElidedResultRegisters(nativeContract);
+	const elidedIps = new Set(storage.elidedPureIps);
 
 	// A function with its own captured slots needs a per-activation MalEnv node
 	// (function_index == this function) for LOAD/STORE_CAPTURED(owner == self) and
@@ -3106,10 +3109,11 @@ function emitCompiledVariant(
 		argumentUnlink + (needsRootFrame ? "vm->root_frame_head = __gc_frame.prev; " : "");
 
 	const profileDecisions: Array<BackendProfileDecision> = [];
-	const expressionIps = new Set([
-		...storage.expressionIps,
-		...storage.rematerializedConstantIps,
-	]);
+	const expressionIps = new Set(
+		[...storage.expressionIps, ...storage.rematerializedConstantIps].filter(
+			(ip) => !elidedIps.has(ip),
+		),
+	);
 	const expressionRegisters = new Map<number, string>(
 		[...expressionIps].map((ip) => {
 			const op = fn.instructions[ip]!;
@@ -3186,6 +3190,7 @@ function emitCompiledVariant(
 		!conservativeRoots,
 		records,
 		storage.controlFlow,
+		storage.elidedPureIps,
 	);
 	if (body === null) {
 		return null;
@@ -3317,6 +3322,7 @@ function emitCompiledVariant(
 	const definedRegisters: Array<number> = [];
 	const privateLocals: Array<string> = [];
 	for (let i = 0; i < fn.registerCount; i++) {
+		if (elidedResults.has(i)) continue;
 		const slot = slotOf.get(i);
 		const expression = expressionRegisters.get(i);
 		if (expression !== undefined) {
@@ -3352,6 +3358,7 @@ function emitCompiledVariant(
 	}
 	const zeroedSlots = new Set<number>();
 	for (let i = fn.parameterCount; i < fn.registerCount; i++) {
+		if (elidedResults.has(i)) continue;
 		if (expressionRegisters.has(i)) continue;
 		// A fresh frame scans every root slot until its first mask, so slot-backed roots start zeroed.
 		if (definitionInitialized.has(i) && (privateRegisters.has(i) || !slotOf.has(i)))
@@ -3484,13 +3491,14 @@ function emitCompiledVariant(
 					facts: nativeContract.facts,
 					directEntry,
 					controlFlow: storage.controlFlow,
+					elidedPureIps: storage.elidedPureIps,
 					// A specialized-only body is omitted after emission, taking its fast path with it.
 					trySymbol:
 						directEntry === undefined && native.specializedOnly !== true
 							? `${symbol}_try`
 							: undefined,
 					calleeTry: (ip, callee) => {
-						const plan = native.instructions[ip];
+						const plan = nativeContract.instructions[ip];
 						const target = plan?.kind === "call" ? plan.directFunctionIndex : undefined;
 						return target !== undefined && fastTryTargets.has(target)
 							? {
@@ -3761,6 +3769,7 @@ function renderNumericLeaf(
 	const leaf = storage.numericWorker;
 	if (leaf === undefined || leaf.pollingIps.length > 0) return null;
 	const unreachable = new Set(storage.controlFlow?.unreachableIps);
+	const elided = new Set(storage.elidedPureIps);
 	const branches = new Map(
 		storage.controlFlow?.branches.map(({ instructionIp, targetIp }) => [
 			instructionIp,
@@ -3772,12 +3781,12 @@ function renderNumericLeaf(
 	const number = (r: number) => `(f64) r${r}`;
 	const expressionIps = new Set(
 		[...leaf.expressionIps, ...leaf.rematerializedConstantIps].filter(
-			(ip) => !unreachable.has(ip),
+			(ip) => !unreachable.has(ip) && !elided.has(ip),
 		),
 	);
 	const registers = new Set<number>();
 	for (const [ip, op] of fn.instructions.entries()) {
-		if (unreachable.has(ip)) continue;
+		if (unreachable.has(ip) || elided.has(ip)) continue;
 		for (const register of [
 			...(branches.has(ip) ? [] : vmInstructionReadRegisters(op)),
 			...vmInstructionWriteRegisters(op),
@@ -3813,6 +3822,7 @@ function renderNumericLeaf(
 	for (const [ip, op] of fn.instructions.entries()) {
 		if (unreachable.has(ip)) continue;
 		if (jumpTargets.has(ip)) body.push(`L${ip}:;`);
+		if (elided.has(ip)) continue;
 		if (expressionIps.has(ip) || fallthroughJumps.has(ip)) continue;
 		const target = branches.get(ip);
 		if (target !== undefined) {
@@ -4506,6 +4516,8 @@ function emitResumableFunction(
 ): CompiledFunction | null {
 	nativeFrameRootRegisters(fn, native);
 	native = nativeControlFlowContract(native, native.storage?.controlFlow);
+	const elidedResults = nativeElidedResultRegisters(native);
+	const elidedIps = new Set(native.storage!.elidedPureIps);
 	const isAsyncFunction = fn.isAsync && !fn.isGenerator;
 	const symbol = `mal_compiled_${relocatable === false ? index : relocatable.symbolStem}${suffix}`;
 	const relocation = nativeRelocationExpressions(
@@ -4558,21 +4570,23 @@ function emitResumableFunction(
 	};
 	const storage = native.storage!;
 	const expressions = new Map<number, string>(
-		[...storage.expressionIps, ...storage.rematerializedConstantIps].map((ip) => {
-			const op = fn.instructions[ip]!;
-			if (!("dst" in op)) throw new Error("Native expression lacks a destination");
-			return [
-				op.dst,
-				renderScalarExpression(
-					op,
-					reps,
-					native.instructions[ip],
-					relocation,
-					suffix,
-					native.facts?.[ip],
-				),
-			];
-		}),
+		[...storage.expressionIps, ...storage.rematerializedConstantIps]
+			.filter((ip) => !elidedIps.has(ip))
+			.map((ip) => {
+				const op = fn.instructions[ip]!;
+				if (!("dst" in op)) throw new Error("Native expression lacks a destination");
+				return [
+					op.dst,
+					renderScalarExpression(
+						op,
+						reps,
+						native.instructions[ip],
+						relocation,
+						suffix,
+						native.facts?.[ip],
+					),
+				];
+			}),
 	);
 	const body = emitBody(
 		fn,
@@ -4630,6 +4644,7 @@ function emitResumableFunction(
 		storage.stackRoots !== "conservative",
 		undefined,
 		storage.controlFlow,
+		storage.elidedPureIps,
 	);
 	if (body === null) {
 		return null;
@@ -4714,6 +4729,7 @@ function emitResumableFunction(
 	}
 	const definitionInitialized = new Set(storage.definitionInitializedRegisters);
 	for (let i = 0; i < fn.registerCount; i++) {
+		if (elidedResults.has(i)) continue;
 		const slot = registerSlots.get(i);
 		const expression = expressions.get(i);
 		if (expression !== undefined) lines.push(`#define r${i} (${expression})`);
@@ -5820,7 +5836,9 @@ function emitBody(
 	callReturnPolls = true,
 	records: NativeRecordStorage = NO_NATIVE_RECORD_STORAGE,
 	controlFlow?: NativeControlFlowPlan,
+	elidedPureIps: ReadonlyArray<number> = [],
 ): EmittedBody | null {
+	const elided = new Set(elidedPureIps);
 	const unreachable = new Set(controlFlow?.unreachableIps);
 	const branchTargets = new Map(
 		controlFlow?.branches.map(({ instructionIp, targetIp }) => [instructionIp, targetIp]),
@@ -6659,6 +6677,7 @@ function emitBody(
 				}
 			}
 		}
+		if (elided.has(ip)) continue;
 		const literalSwitch = switches.get(ip);
 		if (literalSwitch !== undefined) {
 			knownPublishedPrivateRoots.clear();

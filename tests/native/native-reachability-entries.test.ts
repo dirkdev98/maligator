@@ -52,6 +52,16 @@ it.each([false, true])(
 						...(restored.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
 					) === "refined",
 			)!;
+			const discard = restored.native.functions.find(
+				(fn) =>
+					String.fromCharCode(
+						...(restored.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+					) === "discard",
+			)!;
+			expect(discard.storage!.elidedPureIps).toEqual([]);
+			expect(
+				discard.directEntries.some((entry) => entry.storage!.elidedPureIps.length > 0),
+			).toBe(!profile);
 			expect(
 				native.directEntries.some(
 					(entry) =>

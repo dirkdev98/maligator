@@ -77,6 +77,7 @@ function fastEntry(
 ): ReadonlyArray<string> | undefined {
 	return renderNativeFastEntry({
 		controlFlow,
+		elidedPureIps: [],
 		fn,
 		facts: [],
 		directEntry: undefined,

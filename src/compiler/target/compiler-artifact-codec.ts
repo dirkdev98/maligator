@@ -110,7 +110,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 282;
+export const COMPILER_ARTIFACT_VERSION = 283;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -1194,6 +1194,7 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 		}
 		w.i32Array([...storage.controlFlow.unreachableIps]);
 	}
+	w.i32Array([...storage.elidedPureIps]);
 }
 
 function writeIntegerRanges(
@@ -1905,6 +1906,7 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 				};
 	return {
 		...storage,
+		elidedPureIps: r.i32Array(),
 		...(controlFlow === undefined ? {} : { controlFlow }),
 		literalPropertyDefinitions,
 		mathCalls,

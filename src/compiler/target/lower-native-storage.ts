@@ -60,6 +60,7 @@ import {
 	NATIVE_BITWISE,
 	NATIVE_COMPARE,
 } from "./native-scalar-operators.ts";
+import { selectNativeUnusedValues } from "./native-unused-values.ts";
 import {
 	validateNativeInstructionFacts,
 	nativeFrameRootRegisters,
@@ -108,12 +109,14 @@ export interface NativeStoragePlan
 	readonly rootPublicationContinuations: ReadonlyArray<number>;
 	readonly numericWorker: NativeNumericWorkerPlan | undefined;
 	readonly controlFlow?: NativeControlFlowPlan;
+	readonly elidedPureIps: ReadonlyArray<number>;
 }
 
 function selectNumericWorker(
 	native: NativeFunctionPlan,
 	entry: NativeDirectEntryPlan,
 	controlFlow: NativeControlFlowPlan | undefined,
+	elided: ReadonlySet<number>,
 ): boolean {
 	const fn = native.body;
 	const unreachable = new Set(controlFlow?.unreachableIps);
@@ -137,7 +140,7 @@ function selectNumericWorker(
 	const reps = entry.registerRepresentations;
 	const numeric = (local: number) => reps[local] === "number" || reps[local] === "int32";
 	return fn.instructions.every((op, ip) => {
-		if (unreachable.has(ip)) return true;
+		if (unreachable.has(ip) || elided.has(ip)) return true;
 		switch (op.opcode) {
 			case "JUMP":
 			case "JUMP_IF":
@@ -1374,8 +1377,35 @@ function lowerStorage(
 			rematerializedConstantIps: constants,
 		};
 	};
+	const callTransports = selectNativeCallTransports(native, entries);
+	const scalar = scalarStorage(native);
+	const directHeapObjectIps = selectNativeDirectHeapObjects(native);
+	const roots =
+		stackRoots === "conservative"
+			? CONSERVATIVE_ROOT_STORAGE
+			: rootStorage(
+					native,
+					body,
+					fastPaths,
+					callTransports,
+					scalar.rematerializedConstantIps,
+					scalar.expressionIps,
+					untracedPrimitiveResultRegisters(native, body, ownership),
+					gcCertificate,
+				);
+	const elidedPureIps = selectNativeUnusedValues(native, body, {
+		...ownership,
+		controlFlow,
+		roots: roots.rootRegisters,
+		numberPredicates: new Set(
+			fastPaths.numberPredicates.map((plan) => plan.instructionIp),
+		),
+	});
 	let numericWorker: NativeNumericWorkerPlan | undefined;
-	if (entry !== undefined && selectNumericWorker(native, entry, controlFlow)) {
+	if (
+		entry !== undefined &&
+		selectNumericWorker(native, entry, controlFlow, new Set(elidedPureIps))
+	) {
 		const worker = nativeNumericWorkerContract(native);
 		const pollingIps = native.gc.safepoints.flatMap((point) =>
 			point.kind === "loop-backedge" ? [point.instructionIp] : [],
@@ -1389,9 +1419,7 @@ function lowerStorage(
 			),
 		};
 	}
-	const callTransports = selectNativeCallTransports(native, entries);
-	const scalar = scalarStorage(native);
-	const directHeapObjectIps = selectNativeDirectHeapObjects(native);
+
 	return {
 		...fastPaths,
 		captures: body.captures,
@@ -1411,18 +1439,7 @@ function lowerStorage(
 		directHeapObjectIps,
 		stackObjects: selectNativeStackObjectStorage(native, new Set(directHeapObjectIps)),
 		stackRoots,
-		...(stackRoots === "conservative"
-			? CONSERVATIVE_ROOT_STORAGE
-			: rootStorage(
-					native,
-					body,
-					fastPaths,
-					callTransports,
-					scalar.rematerializedConstantIps,
-					scalar.expressionIps,
-					untracedPrimitiveResultRegisters(native, body, ownership),
-					gcCertificate,
-				)),
+		...roots,
 		rootPublicationContinuations:
 			stackRoots === "conservative"
 				? []
@@ -1435,6 +1452,7 @@ function lowerStorage(
 					]),
 		...scalar,
 		numericWorker,
+		elidedPureIps,
 		...(controlFlow === undefined ? {} : { controlFlow }),
 	};
 }
@@ -2018,6 +2036,7 @@ export function validateNativeStorage(
 			stackRoots,
 		);
 		if (!sameScalar(variant.storage, selected)) return false;
+		if (!sameNumbers(variant.storage.elidedPureIps, selected.elidedPureIps)) return false;
 		if (!nativeControlFlowPlansMatch(variant.storage.controlFlow, selected.controlFlow))
 			return false;
 		const reachable = nativeControlFlowContract(variant, selected.controlFlow);
@@ -2082,6 +2101,15 @@ export function validateNativeStorage(
 							variant.gc,
 						),
 					};
+		// Retained scalar schedules can add roots; their slot writes remain mandatory.
+		const retainedRoots = new Set(retained.rootRegisters);
+		if (
+			variant.storage.elidedPureIps.some((ip) => {
+				const op = variant.body.instructions[ip]!;
+				return "dst" in op && retainedRoots.has(op.dst);
+			})
+		)
+			return false;
 		return same(variant.storage, retained, suspension);
 	};
 	if (

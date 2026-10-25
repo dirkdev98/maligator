@@ -36,6 +36,7 @@ export interface NativeFastEntryInput {
 	readonly facts: NativeFunctionPlan["facts"];
 	readonly directEntry: NativeDirectEntryPlan | undefined;
 	readonly controlFlow: NativeControlFlowPlan | undefined;
+	readonly elidedPureIps: ReadonlyArray<number>;
 	/** The full entry already answers this body without a frame or with a better dispatch. */
 	readonly specialized: boolean;
 	/** The original entry signature, ending in `{`. */
@@ -75,6 +76,7 @@ export function renderNativeFastEntry(
 ): ReadonlyArray<string> | undefined {
 	const { fn, directEntry } = input;
 	const unreachable = new Set(input.controlFlow?.unreachableIps);
+	const elided = new Set(input.elidedPureIps);
 	const branches = new Map(
 		input.controlFlow?.branches.map(({ instructionIp, targetIp }) => [
 			instructionIp,
@@ -83,7 +85,7 @@ export function renderNativeFastEntry(
 	);
 	if (
 		input.specialized ||
-		alwaysRestarts(fn, directEntry, unreachable) ||
+		alwaysRestarts(fn, directEntry, new Set([...unreachable, ...elided])) ||
 		fn.isGenerator ||
 		fn.isAsync ||
 		fn.isClassConstructor ||
@@ -102,8 +104,11 @@ export function renderNativeFastEntry(
 		[...graph.keys()].map((ip) => [
 			ip,
 			{
-				reads: branches.has(ip) ? [] : vmInstructionReadRegisters(fn.instructions[ip]!),
-				writes: vmInstructionWriteRegisters(fn.instructions[ip]!),
+				reads:
+					branches.has(ip) || elided.has(ip)
+						? []
+						: vmInstructionReadRegisters(fn.instructions[ip]!),
+				writes: elided.has(ip) ? [] : vmInstructionWriteRegisters(fn.instructions[ip]!),
 			},
 		]),
 	);
@@ -119,7 +124,9 @@ export function renderNativeFastEntry(
 	const body: Array<readonly [number, string]> = [];
 	let loadsProperties = false;
 	let loadsCaptures = false;
-	const instructions = [...graph.keys()].map((ip) => fn.instructions[ip]!);
+	const instructions = [...graph.keys()]
+		.filter((ip) => !elided.has(ip))
+		.map((ip) => fn.instructions[ip]!);
 	const constants = numberConstantRegisters(instructions, registers);
 	const strings = stringConstantRegisters(instructions, registers);
 	const integers = int32ResultRegisters(instructions, fn.parameterCount, registers);
@@ -136,6 +143,10 @@ export function renderNativeFastEntry(
 		if (!initialized.has(register)) integers.delete(register);
 	for (const [ip, op] of fn.instructions.entries()) {
 		if (unreachable.has(ip)) continue;
+		if (elided.has(ip)) {
+			body.push([ip, ""]);
+			continue;
+		}
 		const target = branches.get(ip);
 		const line =
 			target === ip + 1
@@ -160,7 +171,7 @@ export function renderNativeFastEntry(
 	const lines: Array<string> = [];
 	for (const [ip, line] of body) {
 		if (targets.has(ip)) lines.push(`F${ip}:;`);
-		lines.push(`    ${line}`);
+		if (line.length > 0) lines.push(`    ${line}`);
 	}
 	if (targets.has(fn.instructions.length)) lines.push(`F${fn.instructions.length}:;`);
 	lines.push(`    ${fastReturn("MAL_VALUE_UNDEFINED", result, exported)}`);
@@ -677,7 +688,7 @@ function fastInstruction(
 			return `f${op.dst} = mal_value_new_boolean(${op.negated ? "!" : ""}mal_vm_typeof_compare(f${op.src}, ${emitTypeofResult(op.expected)}));`;
 		}
 		case "JUMP":
-			return jump(op.targetIp);
+			return op.targetIp === ip + 1 ? "" : jump(op.targetIp);
 		case "JUMP_IF": {
 			const target = jump(op.targetIp);
 			if (target === undefined) return undefined;

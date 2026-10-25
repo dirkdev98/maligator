@@ -7,6 +7,14 @@ function refined(value, flag) {
 	return +globalThis.refinedFallback(value);
 }
 globalThis.refined = refined;
+function discard(input, result) {
+	+input;
+	~input;
+	input + 1;
+	input < 0;
+	return result;
+}
+globalThis.discard = discard;
 globalThis.refinedFallback = function (value) {
 	events.push(`fallback:${String(value)}`);
 	collect();
@@ -25,6 +33,25 @@ for (const value of [-0, 0, NaN, Infinity, -Infinity, Number.MIN_VALUE, 3]) {
 	}
 }
 if (events.length !== 0) throw new Error("leaf entered its dead fallback");
+for (const value of [-0, NaN, Infinity, 3])
+	if (discard(+value, 7) !== 7) throw new Error("discarded numeric operation");
+const observed = {
+	valueOf() {
+		events.push("unused:convert");
+		collect();
+		return 2;
+	},
+};
+if (globalThis.discard(observed, 7) !== 7) throw new Error("discarded result");
+for (const value of [Symbol("unused"), 1n]) {
+	try {
+		globalThis.discard(value, 7);
+		throw new Error("discarded throwing operation");
+	} catch (error) {
+		if (!(error instanceof TypeError)) throw error;
+		events.push(`unused:${typeof value}:${error.name}`);
+	}
+}
 for (const value of [-0, NaN, Infinity, 3]) {
 	const result = globalThis.refined(value, NaN);
 	if (!Object.is(result, value + 10)) throw new Error("canonical fallback mismatch");
