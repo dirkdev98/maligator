@@ -146,10 +146,16 @@ origins and optimizer remarks remain diagnostic sidecars.
 Native storage retains a per-variant control-flow plan with constant branch
 destinations and unreachable instruction indices. Single-writer truth values flow
 through copies and negation only when their definitions cover every entry path;
-joins with multiple writers remain unknown. Handlers, resume points, switches and
-selected region continuations are separate roots. Proof walks share a bounded work
-budget and copy chains use an iterative traversal. Artifact validation rederives the
+joins with multiple writers remain unknown. Handlers, resume points, switches,
+selected regions, and record continuations are separate roots. Proof walks share a
+bounded work budget and copy chains use an iterative traversal. Artifact validation rederives the
 plan independently, preserving the ordinary instruction and profiling namespaces.
+Rendering omits unreachable instructions and emits fixed branch destinations. Root
+planning, publication and rendering share the GC view that removes unreachable
+safepoints and untaken conditional polling edges; surviving root maps retain their
+hidden helper obligations. The original GC certificate still validates the complete
+source CFG. Surviving liveness, scalar uses and entry result ABIs remain conservative
+until their analyses consume the refined edges.
 
 Read/write occurrences, branch sources, handler and resume entries, and handler
 targets are shared by storage and fast-path consumers. Property-window selection

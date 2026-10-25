@@ -58,6 +58,32 @@ it.each([
 				"precise",
 			);
 			const restored = deserializeCompilerArtifact(serializeCompilerArtifact(image));
+			if (compiled && primordials === "locked") {
+				const named = (name: string) =>
+					restored.native.functions.find(
+						(fn) =>
+							String.fromCharCode(
+								...(restored.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+							) === name,
+					)!;
+				for (const name of [
+					"entryFinite",
+					"entryInteger",
+					"entrySafeInteger",
+					"entryNaN",
+				]) {
+					const entry = named(name).directEntries.find(
+						(entry) => entry.storage?.controlFlow,
+					);
+					expect(entry, name).toBeDefined();
+					expect(entry!.storage!.rootSlotCount, name).toBe(0);
+				}
+				const retained = named("entryWithRoots").directEntries.find(
+					(entry) => entry.storage?.controlFlow,
+				);
+				expect(retained).toBeDefined();
+				expect(retained!.storage!.rootSlotCount).toBeGreaterThan(0);
+			}
 			const binary = buildNativeProgramImage(restored, {
 				name: "number-predicate-observations",
 				outDir: directory,

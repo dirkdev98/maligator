@@ -52,6 +52,7 @@ import type { NativeBodyFacts } from "./native-body-facts.ts";
 import {
 	selectNativeControlFlow,
 	nativeControlFlowPlansMatch,
+	nativeControlFlowContract,
 } from "./native-control-flow.ts";
 import type { NativeControlFlowPlan } from "./native-control-flow.ts";
 import {
@@ -1059,6 +1060,7 @@ function rootStorage(
 	rematerializedConstantIps: ReadonlyArray<number>,
 	expressionIps: ReadonlyArray<number>,
 	untracedResults: ReadonlySet<number>,
+	gcCertificate = native.gc,
 ) {
 	const fn = native.body;
 	// Admitted expressions produce untraced scalars; pooled literals have immortal addresses.
@@ -1068,8 +1070,17 @@ function rootStorage(
 		if (!("dst" in op)) throw new Error("Native expression lacks a destination");
 		rootFree.add(op.dst);
 	}
-	let roots = nativeFrameRootRegisters(fn, native).filter(
+	const reachableRoots =
+		native.gc === gcCertificate
+			? undefined
+			: new Set(native.gc.safepoints.flatMap((point) => point.rootRegisters));
+	// The complete source certificate still validates polling in the original CFG.
+	let roots = nativeFrameRootRegisters(fn, {
+		registerRepresentations: native.registerRepresentations,
+		gc: gcCertificate,
+	}).filter(
 		(local) =>
+			(reachableRoots === undefined || reachableRoots.has(local)) &&
 			["boxed", "string"].includes(native.registerRepresentations[local]!) &&
 			!rootFree.has(local),
 	);
@@ -1308,6 +1319,16 @@ function lowerStorage(
 	const fn = native.body;
 	const fastPaths = selectNativeFastPaths(native, entry, stringConstants, body);
 	const expressionWindows = scalarStorageWindows(fastPaths);
+	const controlFlow = selectNativeControlFlow(native, body, stringConstants, {
+		constants: entry?.constantBooleans,
+		externalEntries: [
+			...expressionWindows.flatMap((window) => window.claimedIps),
+			...nativeRecordCallIps(native),
+			...(entry?.resultFields?.allocationIps ?? []),
+		],
+	});
+	const gcCertificate = native.gc;
+	native = nativeControlFlowContract(native, controlFlow);
 	const jumpTargets = body.jumpTargets;
 	const uses = scalarStorageUses(body, suspension);
 	const immutableOwnership = scalarStorageOwnership(native, body, expressionWindows);
@@ -1366,10 +1387,6 @@ function lowerStorage(
 	const callTransports = selectNativeCallTransports(native, entries);
 	const scalar = scalarStorage(native);
 	const directHeapObjectIps = selectNativeDirectHeapObjects(native);
-	const controlFlow = selectNativeControlFlow(native, body, stringConstants, {
-		constants: entry?.constantBooleans,
-		externalEntries: expressionWindows.flatMap((window) => window.claimedIps),
-	});
 	return {
 		...fastPaths,
 		captures: body.captures,
@@ -1399,6 +1416,7 @@ function lowerStorage(
 					scalar.rematerializedConstantIps,
 					scalar.expressionIps,
 					untracedPrimitiveResultRegisters(native, body, ownership),
+					gcCertificate,
 				)),
 		rootPublicationContinuations:
 			stackRoots === "conservative"
@@ -1983,12 +2001,6 @@ export function validateNativeStorage(
 	const matches = (variant: NativeFunctionPlan, entry?: NativeDirectEntryPlan) => {
 		if (variant.storage === undefined) return false;
 		const stackRoots = variant.storage.stackRoots;
-		if (stackRoots === "precise") {
-			validateNativeRootStorage(variant, variant.storage.rootRegisters, variant.storage, {
-				privateRegisters: new Set(variant.storage.privateRegisters),
-				facts: body,
-			});
-		}
 		const suspension = lowerNativeSuspension(variant, body);
 		const selected = lowerStorage(
 			variant,
@@ -2003,6 +2015,18 @@ export function validateNativeStorage(
 		if (!sameScalar(variant.storage, selected)) return false;
 		if (!nativeControlFlowPlansMatch(variant.storage.controlFlow, selected.controlFlow))
 			return false;
+		const reachable = nativeControlFlowContract(variant, selected.controlFlow);
+		if (stackRoots === "precise") {
+			validateNativeRootStorage(
+				reachable,
+				variant.storage.rootRegisters,
+				variant.storage,
+				{
+					privateRegisters: new Set(variant.storage.privateRegisters),
+					facts: body,
+				},
+			);
+		}
 		if (
 			!sameNumbers(variant.storage.expressionIps, selected.expressionIps) &&
 			!sameNumbers(
@@ -2034,14 +2058,14 @@ export function validateNativeStorage(
 				: {
 						...selected,
 						...rootStorage(
-							variant,
+							reachable,
 							body,
 							selected,
 							selected.callTransports,
 							variant.storage.rematerializedConstantIps,
 							variant.storage.expressionIps,
 							untracedPrimitiveResultRegisters(
-								variant,
+								reachable,
 								body,
 								scalarStorageOwnership(
 									variant,
@@ -2050,6 +2074,7 @@ export function validateNativeStorage(
 									suspension,
 								),
 							),
+							variant.gc,
 						),
 					};
 		return same(variant.storage, retained, suspension);

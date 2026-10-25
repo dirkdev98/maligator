@@ -1,12 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { COMPILER_VALUE_KIND_NULLISH } from "../src/compiler/shared/compiler-value-kinds.ts";
+import {
+	COMPILER_VALUE_KIND_BOOLEAN,
+	COMPILER_VALUE_KIND_NULLISH,
+	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_TOP,
+} from "../src/compiler/shared/compiler-value-kinds.ts";
 import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
 import { validateNativeProgramStorage } from "../src/compiler/target/lower-native-storage.ts";
 import { analyzeNativeBodyFacts } from "../src/compiler/target/native-body-facts.ts";
-import { selectNativeControlFlow } from "../src/compiler/target/native-control-flow.ts";
+import {
+	nativeControlFlowContract,
+	selectNativeControlFlow,
+} from "../src/compiler/target/native-control-flow.ts";
 import { createConservativeNativePlan } from "../src/compiler/target/program-image.ts";
 import type { NativeFunctionPlan } from "../src/compiler/target/program-image.ts";
 import type {
@@ -52,6 +60,37 @@ const select = (
 	);
 
 describe("native branch and reachability contracts", () => {
+	it.each(["===", "!=="] as const)(
+		"proves a self %s observation only for kinds excluding Number",
+		(operator) => {
+			for (let mask = 0; mask <= COMPILER_VALUE_KIND_TOP; mask++) {
+				const native = {
+					...fixture([
+						{ opcode: "BINARY", dst: 0, left: 1, right: 1, operator },
+						{ opcode: "JUMP_IF", cond: 0, targetIp: 3 },
+						{ opcode: "RETURN", value: 0 },
+						{ opcode: "RETURN", value: 0 },
+					]),
+					facts: [
+						{
+							inputKindMasks: [mask, mask],
+							resultKindMasks: [COMPILER_VALUE_KIND_BOOLEAN],
+							registers: [0, 1, 1],
+							inputOffset: 1,
+						},
+					],
+				};
+				const flow = select(native);
+				if (mask === 0 || (mask & COMPILER_VALUE_KIND_NUMBER) !== 0)
+					expect(flow, String(mask)).toBeUndefined();
+				else
+					expect(flow?.branches, String(mask)).toEqual([
+						{ instructionIp: 1, targetIp: operator === "===" ? 3 : 2 },
+					]);
+			}
+		},
+	);
+
 	it.each([
 		[{ opcode: "CREATE_BOOLEAN", dst: 0, value: false }, false],
 		[{ opcode: "CREATE_BOOLEAN", dst: 0, value: true }, true],
@@ -195,26 +234,68 @@ describe("native branch and reachability contracts", () => {
 		]);
 	});
 
+	it("removes polls only from untaken edges and retains surviving root maps intact", () => {
+		for (const value of [false, true]) {
+			const point = {
+				instructionIp: 1,
+				kind: "loop-backedge" as const,
+				rootRegisters: [0],
+				incomingRootRegisters: [0],
+				outgoingRootRegisters: [0],
+			};
+			const native = {
+				...fixture([
+					{ opcode: "CREATE_BOOLEAN", dst: 0, value },
+					{ opcode: "JUMP_IF", cond: 0, targetIp: 0 },
+					{ opcode: "RETURN", value: 0 },
+				]),
+				gc: { safepoints: [point] },
+			};
+			const contract = nativeControlFlowContract(native, select(native));
+			expect(contract.gc.safepoints).toEqual(value ? [point] : []);
+			if (value) expect(contract.gc.safepoints[0]).toBe(point);
+			expect(native.gc.safepoints).toEqual([point]);
+			const adjacent = {
+				...native,
+				body: {
+					...native.body,
+					instructions: native.body.instructions.with(1, {
+						opcode: "JUMP_IF",
+						cond: 0,
+						targetIp: 2,
+					}),
+				},
+			};
+			expect(select(adjacent)).toBeUndefined();
+			expect(nativeControlFlowContract(adjacent, select(adjacent)).gc.safepoints).toEqual(
+				[point],
+			);
+		}
+	});
+
 	it("consumes input facts at the branch without assuming a prior definition", () => {
-		const native = fixture([
+		const base = fixture([
 			{ opcode: "JUMP_IF", cond: 0, targetIp: 2 },
 			{ opcode: "RETURN", value: 0 },
 			{ opcode: "RETURN", value: 0 },
 		]);
-		expect(
-			select({
-				...native,
-				facts: [
-					{
-						inputKindMasks: [COMPILER_VALUE_KIND_NULLISH],
-						registers: [0],
-						inputOffset: 0,
-					},
-					undefined,
-					undefined,
-				],
-			}),
-		).toEqual({ branches: [{ instructionIp: 0, targetIp: 1 }], unreachableIps: [2] });
+		const native = {
+			...base,
+			facts: [
+				{
+					inputKindMasks: [COMPILER_VALUE_KIND_NULLISH],
+					registers: [0],
+					inputOffset: 0,
+				},
+				undefined,
+				undefined,
+			],
+		};
+		expect(select(native)).toEqual({
+			branches: [{ instructionIp: 0, targetIp: 1 }],
+			unreachableIps: [2],
+		});
+		expect(select(native, { externalEntries: [0] })).toBeUndefined();
 	});
 
 	it.each([false, true])(
@@ -234,6 +315,13 @@ describe("native branch and reachability contracts", () => {
 					(ip) => out.native.body.instructions[ip]?.opcode === "BINARY",
 				),
 			).toBe(true);
+			expect(out.native.storage!.rootSlotCount).toBeGreaterThan(0);
+			expect(entry.storage!.rootSlotCount).toBe(0);
+			expect(out.c.source).toContain("MAL_BIN_ADD");
+			const typedC = out.c.directEntries[0]!.source;
+			expect(typedC).not.toContain("MAL_BIN_ADD");
+			expect(typedC).not.toContain("MalRootFrame");
+			expect(typedC).not.toMatch(/if \(r\d+\) goto/);
 			const restored = deserializeCompilerArtifact(serializeCompilerArtifact(out.image));
 			expect(
 				restored.native.functions[out.native.functionIndex]!.directEntries[0]!.storage

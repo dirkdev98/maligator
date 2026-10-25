@@ -107,6 +107,8 @@ import {
 } from "./lower-native-storage.ts";
 import type { NativeStringTransformPlan } from "./lower-native-string-transforms.ts";
 import type { NativeSuspensionPlan } from "./lower-native-suspension.ts";
+import { nativeControlFlowContract } from "./native-control-flow.ts";
+import type { NativeControlFlowPlan } from "./native-control-flow.ts";
 import { NATIVE_ENUMERATION_SNAPSHOT_CAPACITY } from "./native-object-enumeration-snapshot.ts";
 import type { NativeObjectEnumerationSnapshotPlan } from "./native-object-enumeration-snapshot.ts";
 import { nativeInactiveRootMasks, nativeRootMaskWordHex } from "./native-root-masks.ts";
@@ -2632,8 +2634,12 @@ function emitCompiledVariant(
 	}
 	if (directEntry !== undefined) validateNativeDirectEntry(fn, directEntry);
 	validateNativeLiteralSwitches(fn, native);
-	const variantContract =
+	const variant =
 		directEntry === undefined ? native : nativeVariantContract(native, directEntry);
+	const variantContract = nativeControlFlowContract(
+		variant,
+		variant.storage?.controlFlow,
+	);
 	const variantStorage = variantContract.storage;
 	if (variantStorage === undefined)
 		throw new Error("Native rendering requires a lowered storage plan");
@@ -3179,6 +3185,7 @@ function emitCompiledVariant(
 		directClosures,
 		!conservativeRoots,
 		records,
+		storage.controlFlow,
 	);
 	if (body === null) {
 		return null;
@@ -4474,6 +4481,7 @@ function emitResumableFunction(
 	relocatable: NativeRelocatableEmission | false = false,
 ): CompiledFunction | null {
 	nativeFrameRootRegisters(fn, native);
+	native = nativeControlFlowContract(native, native.storage?.controlFlow);
 	const isAsyncFunction = fn.isAsync && !fn.isGenerator;
 	const symbol = `mal_compiled_${relocatable === false ? index : relocatable.symbolStem}${suffix}`;
 	const relocation = nativeRelocationExpressions(
@@ -4596,6 +4604,8 @@ function emitResumableFunction(
 		undefined,
 		undefined,
 		storage.stackRoots !== "conservative",
+		undefined,
+		storage.controlFlow,
 	);
 	if (body === null) {
 		return null;
@@ -5785,7 +5795,12 @@ function emitBody(
 	// A conservative-root callee services pending polls at its entry instead.
 	callReturnPolls = true,
 	records: NativeRecordStorage = NO_NATIVE_RECORD_STORAGE,
+	controlFlow?: NativeControlFlowPlan,
 ): EmittedBody | null {
+	const unreachable = new Set(controlFlow?.unreachableIps);
+	const branchTargets = new Map(
+		controlFlow?.branches.map(({ instructionIp, targetIp }) => [instructionIp, targetIp]),
+	);
 	const callTransportByIp = new Map(
 		callTransports.map((plan) => [plan.instructionIp, plan]),
 	);
@@ -6603,6 +6618,7 @@ function emitBody(
 			if (slot !== undefined) activeFieldSlots.delete(slot);
 		for (const slot of fieldAllocations.get(ip - 1)?.boxedSlots ?? [])
 			if (slot !== undefined) activeFieldSlots.add(slot);
+		if (unreachable.has(ip)) continue;
 		if (jumpTargets.has(ip)) {
 			lines.push(`L${ip}:;`);
 			// Control can arrive with different published frame metadata.
@@ -7041,6 +7057,7 @@ function emitBody(
 		instructionContext.profile = instructionProfile;
 		instructionContext.gcSafepoint = safepointKind !== undefined;
 		instructionContext.loopPoll = safepointKind === "loop-backedge";
+		instructionContext.branchTarget = branchTargets.get(ip);
 		instructionContext.incomingRootPublication =
 			deferredPropertyRoots ||
 			deferredPrivateAccessRoots ||
@@ -7574,6 +7591,7 @@ interface NativeInstructionContext {
 	readonly facts?: InstructionFacts;
 	readonly gcSafepoint: boolean;
 	readonly loopPoll: boolean;
+	readonly branchTarget?: number;
 	readonly callReturnPolls: boolean;
 	readonly incomingRootPublication?: ReadonlyArray<string>;
 	readonly eagerIncomingRootPublication?: boolean;
@@ -7916,6 +7934,7 @@ function emitInstruction(
 		resources,
 		gcSafepoint: context.gcSafepoint,
 		loopPoll: context.loopPoll,
+		branchTarget: context.branchTarget,
 		callReturnPolls: context.callReturnPolls,
 		incomingRootPublication: context.incomingRootPublication,
 		eagerIncomingRootPublication: context.eagerIncomingRootPublication,
@@ -14285,6 +14304,11 @@ function emitInstruction(
 				...(instruction.targetIp === ip + 1 ? [] : [`goto L${instruction.targetIp};`]),
 			];
 		case "JUMP_IF": {
+			if (context.branchTarget !== undefined)
+				return [
+					...(context.loopPoll ? [poll()] : []),
+					...(context.branchTarget === ip + 1 ? [] : [`goto L${context.branchTarget};`]),
+				];
 			const condition = truthy(instruction.cond);
 			if (condition === "false") return [];
 			if (condition === "true")

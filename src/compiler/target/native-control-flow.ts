@@ -31,6 +31,27 @@ export interface NativeControlFlowPlan {
 	readonly unreachableIps: ReadonlyArray<number>;
 }
 
+export function nativeControlFlowContract(
+	native: NativeFunctionPlan,
+	controlFlow: NativeControlFlowPlan | undefined,
+): NativeFunctionPlan {
+	if (controlFlow === undefined) return native;
+	const unreachable = new Set(controlFlow.unreachableIps);
+	const branches = new Map(
+		controlFlow.branches.map(({ instructionIp, targetIp }) => [instructionIp, targetIp]),
+	);
+	const safepoints = native.gc.safepoints.filter((point) => {
+		if (unreachable.has(point.instructionIp)) return false;
+		if (point.kind !== "loop-backedge") return true;
+		const target = branches.get(point.instructionIp);
+		return target === undefined || target !== point.instructionIp + 1;
+	});
+	// Surviving maps include hidden roots borrowed by specialized helpers.
+	return safepoints.length === native.gc.safepoints.length
+		? native
+		: { ...native, gc: { safepoints } };
+}
+
 export function selectNativeControlFlow(
 	native: NativeFunctionPlan,
 	body: NativeBodyFacts,
@@ -59,20 +80,36 @@ export function selectNativeControlFlow(
 			first[ip] = ip + 1;
 	}
 	const roots = new Set([0, ...body.externalEntries, ...(options.externalEntries ?? [])]);
+	// Region-owned polling can run independently of the ordinary branch.
+	const owned = new Uint8Array(count);
+	for (const ip of options.externalEntries ?? []) owned[ip] = 1;
 	// Selected regions can continue at ordinary labels without following the bytecode edge.
-	for (const region of native.specializations)
-		for (const ip of [
+	for (const region of native.specializations) {
+		const ips = [
+			region.license.admission.anchorIp,
 			...region.anchors,
 			...region.claimedIps,
 			...region.controlFlow.ordinaryBlockIps,
-		])
+		];
+		let firstIp = count;
+		let lastIp = -1;
+		for (const ip of ips) {
 			roots.add(ip);
+			firstIp = Math.min(firstIp, ip);
+			lastIp = Math.max(lastIp, ip);
+		}
+		owned.fill(1, firstIp, lastIp + 1);
+	}
 	for (const site of native.literalSwitches ?? []) {
+		owned.fill(1, site.instructionIp, site.endIp + 1);
 		for (const entry of site.cases) roots.add(entry.targetIp);
 		roots.add(site.defaultIp);
 	}
 	for (const site of native.fieldCalls ?? [])
-		for (let ip = site.allocationIp; ip <= site.callIp; ip++) roots.add(ip);
+		for (let ip = site.allocationIp; ip <= site.callIp; ip++) {
+			roots.add(ip);
+			owned[ip] = 1;
+		}
 	const fixed = new Map(
 		options.constants?.map(({ instructionIp, value }) => [instructionIp, value]),
 	);
@@ -233,6 +270,15 @@ export function selectNativeControlFlow(
 				return value === undefined ? undefined : value !== op.negated;
 			}
 			case "BINARY":
+				if (
+					op.left === op.right &&
+					(op.operator === "===" || op.operator === "!==") &&
+					compilerValueKindMaskIsSubset(
+						mask(op.left, ip),
+						COMPILER_VALUE_KIND_TOP & ~COMPILER_VALUE_KIND_NUMBER,
+					)
+				)
+					return op.operator === "===";
 				return compilerIntegerRangeComparison(
 					op.operator,
 					instructionInputIntegerRange(facts, op.left),
@@ -292,7 +338,8 @@ export function selectNativeControlFlow(
 	};
 	const decisions = new Map<number, number>();
 	for (const [ip, op] of fn.instructions.entries()) {
-		if (op.opcode !== "JUMP_IF") continue;
+		// Equal destinations do not distinguish the taken conditional polling edge.
+		if (op.opcode !== "JUMP_IF" || op.targetIp === ip + 1 || owned[ip]) continue;
 		const value = truth(op.cond, ip);
 		if (value !== undefined) decisions.set(ip, value ? op.targetIp : ip + 1);
 	}

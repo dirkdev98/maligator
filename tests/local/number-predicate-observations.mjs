@@ -73,6 +73,38 @@ function directNonNumber(value) {
 		Number.isNaN(value),
 	].join(",");
 }
+function entryFinite(left, value) {
+	if (Number.isFinite(value)) return left + 1;
+	return "finite:no";
+}
+function entryInteger(left, value) {
+	if (Number.isInteger(value)) return left + 1;
+	return "integer:no";
+}
+function entrySafeInteger(left, value) {
+	if (Number.isSafeInteger(value)) return left + 1;
+	return "safe:no";
+}
+function entryNaN(left, value) {
+	if (Number.isNaN(value)) return left + 1;
+	return "nan:no";
+}
+function entryWithRoots(left, value) {
+	const record = [String(globalThis.entryInput)];
+	if (Number.isFinite(value)) return left + 1;
+	globalThis.collectEntryRecord(record);
+	return record[0];
+}
+globalThis.collectEntryRecord = function (record) {
+	collect();
+	record[0] += ":retained";
+	collect();
+};
+globalThis.entryFinite = entryFinite;
+globalThis.entryInteger = entryInteger;
+globalThis.entrySafeInteger = entrySafeInteger;
+globalThis.entryNaN = entryNaN;
+globalThis.entryWithRoots = entryWithRoots;
 globalThis.observeUnknownNumber = unknownNumber;
 globalThis.observeNonNumber = directNonNumber;
 function run(label, fn) {
@@ -96,6 +128,21 @@ const throwing = {
 		throw new RangeError("conversion");
 	},
 };
+run("entry-finite:string", () => entryFinite(throwing, String(globalThis.entryInput)));
+run("entry-integer:string", () => entryInteger(throwing, String(globalThis.entryInput)));
+run("entry-safe:string", () => entrySafeInteger(throwing, String(globalThis.entryInput)));
+run("entry-nan:string", () => entryNaN(throwing, String(globalThis.entryInput)));
+run("entry-roots:string", () => entryWithRoots(throwing, String(globalThis.entryInput)));
+for (const [name, fn, value] of [
+	["finite", globalThis.entryFinite, 1],
+	["integer", globalThis.entryInteger, 1],
+	["safe", globalThis.entrySafeInteger, 1],
+	["nan", globalThis.entryNaN, NaN],
+	["roots", globalThis.entryWithRoots, 1],
+]) {
+	run(`entry-${name}:fallback`, () => fn(input, value));
+	run(`entry-${name}:fallback-throw`, () => fn(throwing, value));
+}
 const cases = [
 	["isFinite", finiteText],
 	["isInteger", integerSymbol],
