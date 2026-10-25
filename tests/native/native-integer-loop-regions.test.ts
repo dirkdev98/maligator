@@ -18,6 +18,7 @@ const kernels = [
 	"remainderByZero",
 	"parityRun",
 	"bitsUpTo",
+	"fusedSteps",
 	"scaledSum",
 	"capturedSum",
 ];

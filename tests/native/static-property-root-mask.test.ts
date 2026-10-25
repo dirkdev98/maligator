@@ -1,6 +1,8 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { nativePrivateCallResultIps } from "../../src/compiler/target/lower-native-root-publication.ts";
 import { emitCompiledFunction } from "../../src/compiler/target/render-native-c.ts";
+import { vmInstructionWriteRegisters } from "../../src/compiler/target/runtime-image.ts";
+import type { BytecodeFunction } from "../../src/compiler/target/runtime-image.ts";
 import {
 	assertExactLines,
 	buildBackendPairFromOneProgramImage,
@@ -193,6 +195,7 @@ describe("native static-property root-mask publication", () => {
 		string,
 		{
 			source: string;
+			instructions: BytecodeFunction["instructions"];
 			retainedRegisters: Array<number>;
 			privateRegisters: ReadonlySet<number>;
 			rootSlots: ReadonlyMap<number, number>;
@@ -353,6 +356,7 @@ describe("native static-property root-mask publication", () => {
 			}
 			publicationContracts.set(name, {
 				source: emitCompiledFunction(native, index, "", false)?.source ?? "",
+				instructions: fn.instructions,
 				retainedRegisters,
 				privateRegisters,
 				rootSlots,
@@ -428,8 +432,15 @@ describe("native static-property root-mask publication", () => {
 			const inactive = BigInt(publication![1]!);
 			for (const register of contract.boundaryIncomingRoots[0]!) {
 				const slot = contract.rootSlots.get(register);
-				expect(slot).toBeDefined();
-				expect(inactive & (1n << BigInt(slot!))).toBe(0n);
+				if (slot === undefined) {
+					expect(
+						contract.instructions.filter((op) =>
+							vmInstructionWriteRegisters(op).includes(register),
+						),
+					).toEqual([{ opcode: "CREATE_NULL", dst: register }]);
+					continue;
+				}
+				expect(inactive & (1n << BigInt(slot))).toBe(0n);
 				if (contract.privateRegisters.has(register))
 					expect(contract.source.slice(probeOffset, fallback)).toContain(
 						`__gc_slots[${slot}] = r${register};`,

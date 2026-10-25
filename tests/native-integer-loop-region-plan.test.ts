@@ -11,12 +11,13 @@ import { analyzeNativeBodyFacts } from "../src/compiler/target/native-body-facts
 import type { ProgramImage } from "../src/compiler/target/program-image.ts";
 import type { BytecodeInstruction } from "../src/compiler/target/runtime-image.ts";
 
-function compile(body: string) {
+function compile(body: string, profile = false) {
 	return compileSemanticProgramToProgramImage(
 		analyzeSourceAndRunSemanticAnalysis(
 			`globalThis.step = function step(start, limit) { ${body} };`,
 			"/integer-loop-plan.js",
 		),
+		{ profile },
 	);
 }
 
@@ -35,6 +36,31 @@ function regions(image: ProgramImage): ReadonlyArray<NativeNumericLoopRegionPlan
 }
 
 describe("native safe-integer loop regions", () => {
+	it.each([false, true])(
+		"preserves contained fusion admission and profile boundaries with profiling %s",
+		(profile) => {
+			const original = compile(
+				`let value=start;for(let i=0;i<limit;i++)value=(value+1)|0;return value;`,
+				profile,
+			);
+			for (const image of [
+				original,
+				deserializeCompilerArtifact(serializeCompilerArtifact(original)),
+			]) {
+				const native = image.native.functions[1]!;
+				const fusion = native.specializations.find((r) => r.kind === "numeric-fusion");
+				expect(fusion).toBeDefined();
+				const selected = native.storage!.numericLoopRegions;
+				expect(selected).toHaveLength(profile ? 0 : 1);
+				if (profile || fusion?.kind !== "numeric-fusion") continue;
+				for (const pair of fusion.pairs) {
+					expect(selected[0]!.claimedIps).toContain(pair.firstIp);
+					expect(selected[0]!.claimedIps).toContain(pair.finishIp);
+				}
+			}
+		},
+	);
+
 	it("preserves terminating and cyclic outside paths when proving the loop entry", () => {
 		const body = compile(COLLATZ).native.functions[1]!.body;
 		for (const terminal of [

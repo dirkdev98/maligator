@@ -258,18 +258,18 @@ describe("native numeric indexed-property root publication", () => {
 	);
 
 	it.each([
-		["boxed", undefined],
-		["number", { kind: "exact-contained-array-element" }],
+		["boxed", undefined, []],
+		["number", { kind: "exact-contained-array-element" }, [0, 3]],
 	] as const)(
-		"does not seed results of unaudited %s index plans",
-		(representation, plan) => {
+		"seeds only audited final-value storage for %s index plans",
+		(representation, plan, expected) => {
 			const source = emit(
 				fn([key, indexedLoad, call, { opcode: "RETURN", value: 6 }]),
 				[point(1, [0, 5], [0, 3, 5]), point(2, [0, 3, 5], [6])],
 				representation,
 				plan,
 			);
-			expect(privateRootRegisters(source).size).toBe(0);
+			expect(privateRootRegisters(source)).toEqual(new Set(expected));
 		},
 	);
 

@@ -608,12 +608,11 @@ iterator cursor is not, by itself, permission to delete its language object.
       fields 75); a per-site shape row would make the private probe a single
       compare.
 
-- [ ] Let integer loop regions hold a numeric fusion whose ends are both inside. They
-      decline every fusion, so `count = (count + 1) | 0` over a boxed count stepping
-      by a captured value takes 486 ms for 40M iterations against Node's 12; allowing
-      contained fusions made it 23 ms. Admit contained fusions with storage and
-      profile plans validated together; compiler artifacts now preserve profile
-      sites and instruction-site maps across restoration.
+- [x] Let integer loop regions hold a numeric fusion whose ends are both inside.
+      Guard failure and polling restore the saved iteration and resume at its
+      header, where the original fusion starts again. Compiler artifacts preserve
+      profile sites and instruction-site maps, so restoration keeps the same
+      admission boundary for profiled and unprofiled bodies.
 - [ ] Widen numeric loop regions beyond plain Array element and record sums.
       Index and for-of loops over Arrays now keep their sums in f64 locals,
       including fields of record elements (`sx += p.x` 5.7 to 1.7 ns per element,

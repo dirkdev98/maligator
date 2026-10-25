@@ -160,6 +160,26 @@ check(
 	]) === "[-371446384,1073741825,2045412584,29524,0]",
 	"fused steps",
 );
+let coercions = 0;
+check(
+	fusedSteps(
+		5,
+		{
+			valueOf() {
+				coercions++;
+				return 2;
+			},
+		},
+		2,
+	) === 7 && coercions === 3,
+	"fused step coercion on every fallback iteration",
+);
+try {
+	fusedSteps(5, 1n, 2);
+	check(false, "mixed BigInt step must throw");
+} catch (error) {
+	check(error instanceof TypeError, "mixed BigInt step type error");
+}
 check(
 	JSON.stringify(beforeScale) === '[0,"ReferenceError"]',
 	"scale before initialization",
