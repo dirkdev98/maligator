@@ -541,7 +541,7 @@ export const builtinOperations: ReadonlyArray<BuiltinOperationDescriptor> = [
 		effects: [],
 		result: "boolean",
 		realm: "semantic-identity",
-		lowerings: ["generic", "exact-builtin-call"],
+		lowerings: ["generic", "exact-builtin-call", "guarded-same-value"],
 	},
 	{
 		id: "Object.hasOwn",

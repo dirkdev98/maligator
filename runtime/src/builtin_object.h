@@ -2,6 +2,7 @@
 
 #include "./defaults.h"
 #include "intrinsics.h"
+#include "value_ops.h"
 
 /**
  * Create the Object constructor and install the Object builtins on the
@@ -18,6 +19,14 @@ MalValue mal_builtin_object_has_own_known(
 
 /** Pure SameValue comparison after the locked Object.is property seam. */
 MalValue mal_builtin_object_is_known(const MalValue *args, i32 arg_count);
+
+extern const MalNativeFunctionCallback mal_builtin_object_is_callback;
+
+// SameValue cannot expose the builtin's realm or invoke argument coercion.
+static inline bool mal_builtin_object_is_callee_matches(MalValue callee) {
+    return mal_value_is_native_function_object(callee) &&
+        mal_value_to_native_function_object(callee)->callback == mal_builtin_object_is_callback;
+}
 
 /** Exact Object.keys invocation after the locked namespace/property seam. */
 MalValue mal_builtin_object_keys_known(

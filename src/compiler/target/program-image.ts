@@ -190,6 +190,7 @@ export const VM_GUARDED_BUILTIN_OPERATIONS = [
 	"DataView.prototype.setUint32",
 	"DataView.prototype.setFloat32",
 	"DataView.prototype.setFloat64",
+	"Object.is",
 ] as const;
 
 export type VmGuardedBuiltinOperation = (typeof VM_GUARDED_BUILTIN_OPERATIONS)[number];
@@ -1207,7 +1208,7 @@ const NATIVE_BUFFER_WRITE_EFFECTS: NativeEdgeEffects = Object.freeze({
 export function nativeGuardedBuiltinEffects(
 	operation: VmGuardedBuiltinOperation,
 ): NativeEdgeEffects | undefined {
-	if (operation === "String.prototype.charCodeAt")
+	if (operation === "String.prototype.charCodeAt" || operation === "Object.is")
 		return nativeStaticPropertyEffects.probe;
 	const descriptor = builtinOperationDescriptor(operation);
 	if (

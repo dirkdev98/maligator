@@ -2,6 +2,10 @@ import {
 	compilerTypeofComparison,
 	compilerValueKindTruthiness,
 	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_UNDEFINED,
+	COMPILER_VALUE_KIND_NULL,
+	COMPILER_VALUE_KIND_BOOLEAN,
+	COMPILER_VALUE_KIND_STRING,
 	COMPILER_VALUE_KIND_TOP,
 	COMPILER_VALUE_KIND_NULLISH,
 	COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE,
@@ -17,13 +21,14 @@ import {
 	compilerIntegerRangeComparison,
 	compilerIntegerRangeTruthiness,
 } from "../shared/integer-range.ts";
-import { emitTypeofResult } from "./emit-program-image.ts";
+import { emitIntrinsic, emitTypeofResult } from "./emit-program-image.ts";
 import type { NativeControlFlowPlan } from "./native-control-flow.ts";
 import {
 	nativeBinaryNumberInputs,
 	nativePrimitiveNumberExpression,
 	nativeUnsignedRemainderExpression,
 	nativeReflexiveEqualityExpression,
+	nativeSameValueExpression,
 } from "./native-scalar-operators.ts";
 import {
 	nativeInstructionSourceRanges,
@@ -49,6 +54,7 @@ export interface NativeFastEntryInput {
 	readonly onSourceMap?: (ranges: ReadonlyArray<NativeSourceRange>) => void;
 	readonly fn: BytecodeFunction;
 	readonly facts: NativeFunctionPlan["facts"];
+	readonly instructions: NativeFunctionPlan["instructions"];
 	readonly directEntry: NativeDirectEntryPlan | undefined;
 	readonly controlFlow: NativeControlFlowPlan | undefined;
 	readonly elidedPureIps: ReadonlyArray<number>;
@@ -65,6 +71,7 @@ export interface NativeFastEntryInput {
 	/** C expression for this function's property-cache row. */
 	readonly functionIndex: string;
 	readonly globalIndex: (index: number) => string;
+	readonly stringIndex: (index: number) => string;
 	readonly stringValue: (index: number) => string;
 	readonly lengthProperty: (stringIndex: number) => boolean;
 	/** Non-allocating statements that bind what `capturedLoad` reads. */
@@ -681,6 +688,21 @@ function fastInstruction(
 		range: (register) => instructionInputIntegerRange(input.facts?.[ip], register),
 		isInt32: (register) => instructionInputIsInt32(input.facts?.[ip], register),
 		kind(register) {
+			if (register < 0) {
+				const decoded = decodeVmValueOperand(register);
+				switch (decoded.kind) {
+					case "undefined":
+						return COMPILER_VALUE_KIND_UNDEFINED;
+					case "null":
+						return COMPILER_VALUE_KIND_NULL;
+					case "boolean":
+						return COMPILER_VALUE_KIND_BOOLEAN;
+					case "number":
+						return COMPILER_VALUE_KIND_NUMBER;
+					case "string":
+						return COMPILER_VALUE_KIND_STRING;
+				}
+			}
 			const kind = instructionInputKind(input.facts?.[ip], register);
 			if (kind !== undefined) return kind;
 			if (masks !== undefined) {
@@ -736,6 +758,10 @@ function fastInstruction(
 			return `f${op.dst} = MAL_VALUE_NULL;`;
 		case "LOAD_GLOBAL":
 			return `f${op.dst} = vm->globals[${input.globalIndex(op.index)}];`;
+		case "LOAD_GLOBAL_PROPERTY":
+			return `if (!mal_vm_global_data_property_cached(vm, ${input.stringIndex(op.nameStringIndex)}, &f${op.dst})) goto __full;`;
+		case "LOAD_INTRINSIC":
+			return `f${op.dst} = vm->intrinsics[${emitIntrinsic(op.intrinsic)}];`;
 		case "LOAD_CAPTURED":
 			return `f${op.dst} = ${input.capturedLoad(op.ownerFunctionIndex, op.index)};`;
 		case "THROW_IF_TDZ":
@@ -805,6 +831,18 @@ function fastInstruction(
 				: fastReturn(returned, exported ? undefined : input.directEntry, exported);
 		}
 		case "CALL": {
+			const plan = input.instructions[ip];
+			if (plan?.kind === "call" && plan.guardedBuiltinCall?.operation === "Object.is") {
+				const callee = value(op.callee);
+				const expression = fastSameValue(
+					op.arguments.slice(0, op.argumentCount),
+					values,
+					value,
+				);
+				return callee === undefined || expression === undefined
+					? undefined
+					: `if (!mal_builtin_object_is_callee_matches(${callee})) goto __full; f${op.dst} = mal_value_new_boolean(${expression});`;
+			}
 			const callee = op.callee < 0 ? undefined : input.calleeTry(ip, `f${op.callee}`);
 			const receiver = value(op.thisValue);
 			const args = op.arguments.slice(0, op.argumentCount).map(value);
@@ -819,7 +857,50 @@ function fastInstruction(
 				args.length === 0 ? "nullptr" : `(const MalValue[]){ ${args.join(", ")} }`;
 			return `if (!${callee.symbol}(vm, ${receiver}, ${list}, ${args.length}, ${callee.environment}, &f${op.dst})) goto __full;`;
 		}
+		case "CALL_KNOWN": {
+			if (
+				op.operation !== "Object.is" ||
+				op.construct ||
+				op.argumentMode !== undefined ||
+				op.specialized !== undefined
+			)
+				return undefined;
+			const expression = fastSameValue(op.arguments, values, value);
+			return expression === undefined
+				? undefined
+				: `f${op.dst} = mal_value_new_boolean(${expression});`;
+		}
 		default:
 			return undefined;
 	}
+}
+
+function fastSameValue(
+	args: ReadonlyArray<number>,
+	values: FastNumbers,
+	value: (operand: number) => string | undefined,
+): string | undefined {
+	const [left, right] = args;
+	const a = left === undefined ? "MAL_VALUE_UNDEFINED" : value(left);
+	const b = right === undefined ? "MAL_VALUE_UNDEFINED" : value(right);
+	if (a === undefined || b === undefined) return undefined;
+	const numeric = (operand: number | undefined): string | undefined => {
+		if (operand === undefined || values.kind(operand) !== COMPILER_VALUE_KIND_NUMBER)
+			return undefined;
+		if (operand >= 0) return number(values, operand);
+		const decoded = decodeVmValueOperand(operand);
+		return decoded.kind === "number" ? values.literal(decoded.value) : undefined;
+	};
+	return nativeSameValueExpression(
+		a,
+		b,
+		left === undefined ? COMPILER_VALUE_KIND_UNDEFINED : values.kind(left),
+		right === undefined ? COMPILER_VALUE_KIND_UNDEFINED : values.kind(right),
+		numeric(left),
+		numeric(right),
+		left !== undefined &&
+			right !== undefined &&
+			values.isInt32(left) &&
+			values.isInt32(right),
+	);
 }

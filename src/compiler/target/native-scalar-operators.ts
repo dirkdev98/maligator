@@ -13,6 +13,37 @@ import {
 import type { CompilerValueKindMask } from "../shared/compiler-value-kinds.ts";
 import type { CompilerIntegerRange } from "../shared/integer-range.ts";
 
+// Scalar views are noncoercing Number/Boolean reads; integer pairs exclude negative zero.
+export function nativeSameValueExpression(
+	left: string,
+	right: string,
+	leftKind: CompilerValueKindMask = COMPILER_VALUE_KIND_TOP,
+	rightKind: CompilerValueKindMask = COMPILER_VALUE_KIND_TOP,
+	leftScalar?: string,
+	rightScalar?: string,
+	integerPair = false,
+): string {
+	if (left === right) return "true";
+	if ((leftKind & rightKind) === 0) return "false";
+	if (
+		leftKind === rightKind &&
+		(leftKind === COMPILER_VALUE_KIND_UNDEFINED || leftKind === COMPILER_VALUE_KIND_NULL)
+	)
+		return "true";
+	if (
+		leftKind === COMPILER_VALUE_KIND_NUMBER &&
+		rightKind === leftKind &&
+		leftScalar !== undefined &&
+		rightScalar !== undefined
+	)
+		return integerPair
+			? `${leftScalar} == ${rightScalar}`
+			: `(${leftScalar} == ${rightScalar} ? (${leftScalar} != 0.0 || !!signbit(${leftScalar}) == !!signbit(${rightScalar})) : (isnan(${leftScalar}) && isnan(${rightScalar})))`;
+	if (leftKind === COMPILER_VALUE_KIND_BOOLEAN && rightKind === leftKind)
+		return `${leftScalar ?? `mal_value_to_boolean(${left})`} == ${rightScalar ?? `mal_value_to_boolean(${right})`}`;
+	return `mal_ops_same_value(${left}, ${right})`;
+}
+
 export function nativeReflexiveEqualityExpression(
 	operator: string,
 	boxed: string,

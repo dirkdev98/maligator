@@ -719,6 +719,27 @@ console.log(used(long,long),discarded(long,long));
 		600_000,
 	);
 	it.each([false, true])(
+		"preserves SameValue guards, argument effects and fallback roots with realms=%s",
+		(realms) => {
+			const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-same-value-guards-"));
+			try {
+				const pair = buildBackendPairFromOneProgramImage({
+					fixture: "tests/local/guarded-same-value.mjs",
+					name: "guards",
+					config: resolveBuildConfig({ engine: { primordials: "mutable", realms } }),
+					outDir,
+					nativeStackRoots: "precise",
+				});
+				for (const binary of [pair.compiled, pair.interpreted])
+					for (const env of [{}, { ...STRESS_ENV, MAL_HOST_GC: "1" }])
+						expect(runToStdout(binary, { env })).toBe("same value guards passed\n");
+			} finally {
+				rmSync(outDir, { recursive: true, force: true });
+			}
+		},
+		600_000,
+	);
+	it.each([false, true])(
 		"preserves guarded Number predicates and noncoercing arguments with realms=%s",
 		(realms) => {
 			const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-predicate-guards-"));

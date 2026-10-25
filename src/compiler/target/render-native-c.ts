@@ -133,6 +133,7 @@ import {
 	nativePrimitiveNumberExpression,
 	nativeUnsignedRemainderExpression,
 	nativeReflexiveEqualityExpression,
+	nativeSameValueExpression,
 } from "./native-scalar-operators.ts";
 import {
 	nativeInstructionSourceRanges,
@@ -3535,6 +3536,7 @@ function emitCompiledVariant(
 								}
 							: undefined,
 					facts: nativeContract.facts,
+					instructions: nativeContract.instructions,
 					directEntry,
 					controlFlow: storage.controlFlow,
 					elidedPureIps: storage.elidedPureIps,
@@ -3607,6 +3609,7 @@ function emitCompiledVariant(
 							: [],
 					functionIndex: relocation.functionIndex(index),
 					globalIndex: (global) => relocation.globalIndex(global),
+					stringIndex: (string) => relocation.stringIndex(string),
 					stringValue: (string) => relocation.stringValue(string),
 					lengthProperty: (string) => isLengthPropertyName(stringConstants[string]),
 					capturePrologue: [
@@ -13065,23 +13068,28 @@ function emitInstruction(
 			}
 			if (instruction.operation === "Object.is") {
 				const [left, right] = instruction.arguments;
-				if (left !== undefined && right !== undefined) {
-					const a = nativeNumberOperand(left),
-						b = nativeNumberOperand(right);
-					if (a !== null && b !== null) {
-						const expression =
-							operandRep(left) === "int32" && operandRep(right) === "int32"
-								? `${a} == ${b}`
-								: `(${a} == ${b} ? (${a} != 0.0 || !!signbit(${a}) == !!signbit(${b})) : (isnan(${a}) && isnan(${b})))`;
-						return [storeBoolean(instruction.dst, expression)];
-					}
-					const aBool = nativeBooleanOperand(left),
-						bBool = nativeBooleanOperand(right);
-					if (aBool !== null && bBool !== null)
-						return [storeBoolean(instruction.dst, `${aBool} == ${bBool}`)];
-				}
 				return [
-					`r${instruction.dst} = ${callValue(instruction.dst, `mal_builtin_object_is_known(${argsExpr}, ${instruction.arguments.length})`)};`,
+					storeBoolean(
+						instruction.dst,
+						nativeSameValueExpression(
+							left === undefined ? "MAL_VALUE_UNDEFINED" : boxedOperand(left),
+							right === undefined ? "MAL_VALUE_UNDEFINED" : boxedOperand(right),
+							left === undefined ? COMPILER_VALUE_KIND_UNDEFINED : operandKind(left),
+							right === undefined ? COMPILER_VALUE_KIND_UNDEFINED : operandKind(right),
+							left === undefined
+								? undefined
+								: (nativeNumberOperand(left) ?? nativeBooleanOperand(left) ?? undefined),
+							right === undefined
+								? undefined
+								: (nativeNumberOperand(right) ??
+										nativeBooleanOperand(right) ??
+										undefined),
+							left !== undefined &&
+								right !== undefined &&
+								operandRep(left) === "int32" &&
+								operandRep(right) === "int32",
+						),
+					),
 				];
 			}
 			if (instruction.operation === "Object.keys") {
@@ -13537,6 +13545,36 @@ function emitInstruction(
 				}
 			}
 			const guardedBuiltinOperation = callPlan?.guardedBuiltinCall?.operation;
+			if (guardedBuiltinOperation === "Object.is") {
+				const [left, right] = args;
+				const test = nativeSameValueExpression(
+					left === undefined ? "MAL_VALUE_UNDEFINED" : boxedOperand(left),
+					right === undefined ? "MAL_VALUE_UNDEFINED" : boxedOperand(right),
+					left === undefined ? COMPILER_VALUE_KIND_UNDEFINED : operandKind(left),
+					right === undefined ? COMPILER_VALUE_KIND_UNDEFINED : operandKind(right),
+					left === undefined
+						? undefined
+						: (nativeNumberOperand(left) ?? nativeBooleanOperand(left) ?? undefined),
+					right === undefined
+						? undefined
+						: (nativeNumberOperand(right) ?? nativeBooleanOperand(right) ?? undefined),
+					left !== undefined &&
+						right !== undefined &&
+						operandRep(left) === "int32" &&
+						operandRep(right) === "int32",
+				);
+				return [
+					`if (mal_builtin_object_is_callee_matches(${boxedOperand(instruction.callee)})) {`,
+					storeBoolean(instruction.dst, test),
+					`} else {`,
+					...guardedCallFallbackRootPublication(),
+					`MalCompletion ${tmp} = mal_vm_call_cached(vm, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
+					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
+					`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
+					`}`,
+					callPoll(),
+				];
+			}
 			const dataViewAccess =
 				guardedBuiltinOperation === undefined
 					? undefined

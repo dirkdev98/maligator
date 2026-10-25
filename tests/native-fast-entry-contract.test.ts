@@ -41,6 +41,7 @@ const NONCOLLECTING_HELPERS = new Set([
 	"mal_value_is_string",
 	"mal_vm_property_try_load_static",
 	"mal_vm_property_try_load_length_static",
+	"mal_vm_global_data_property_cached",
 	"mal_ops_is_number",
 	"mal_ops_number_as_f64",
 	"mal_ops_to_number",
@@ -49,6 +50,8 @@ const NONCOLLECTING_HELPERS = new Set([
 	"mal_ops_number_value_to_i32",
 	"mal_ops_number_value",
 	"mal_ops_strict_equal_boxed",
+	"mal_ops_same_value",
+	"mal_builtin_object_is_callee_matches",
 	"mal_ops_strict_equal_string_constant",
 	"mal_string_equals_constant_length",
 	"mal_value_to_string",
@@ -91,6 +94,62 @@ function body(
 
 const OWN_TRY = "mal_compiled_0_try";
 const LENGTH_STRING_INDEX = 7;
+
+it.each([false, true])(
+	"guards SameValue before a frameless hit, exported=%s",
+	(exported) => {
+		const fn = body([
+			{
+				opcode: "CALL",
+				callee: 1,
+				thisValue: 0,
+				argumentCount: 2,
+				arguments: [0, 0],
+				dst: 2,
+			},
+			{ opcode: "RETURN", value: 2 },
+		]);
+		const lines = fastEntry(fn, undefined, exported, undefined, [], undefined, [
+			{
+				kind: "call",
+				guardedBuiltinCall: {
+					operation: "Object.is",
+					guard: {
+						dependencies: [{ kind: "epoch", family: "watched-methods" }],
+						obligations: ["fallback"],
+					},
+				},
+			},
+		]);
+		expect(lines).toBeDefined();
+		expect(unexpectedHelpers(lines!)).toEqual([]);
+		expect(lines!.join("\n")).toContain(
+			"if (!mal_builtin_object_is_callee_matches(f1)) goto __full;",
+		);
+		expect(lines!.join("\n")).toContain("f2 = mal_value_new_boolean(true);");
+	},
+);
+
+it.each([false, true])(
+	"compares boxed SameValue without a frame, exported=%s",
+	(exported) => {
+		const fn = body([
+			{
+				opcode: "CALL_KNOWN",
+				operation: "Object.is",
+				thisValue: 0,
+				argumentCount: 2,
+				arguments: [0, 1],
+				dst: 2,
+			},
+			{ opcode: "RETURN", value: 2 },
+		]);
+		const lines = fastEntry(fn, undefined, exported)!;
+		expect(lines).toBeDefined();
+		expect(unexpectedHelpers(lines)).toEqual([]);
+		expect(lines.join("\n")).toContain("mal_ops_same_value(f0, f1)");
+	},
+);
 
 it.each(["===", "!==", "==", "!="] as const)(
 	"tests NaN without coercion for frameless reflexive %s",
@@ -220,6 +279,7 @@ function fastEntry(
 	controlFlow?: NativeControlFlowPlan,
 	facts: ReadonlyArray<InstructionFacts | undefined> = [],
 	directEntry?: NativeDirectEntryPlan,
+	instructions: Parameters<typeof renderNativeFastEntry>[0]["instructions"] = [],
 ): ReadonlyArray<string> | undefined {
 	return renderNativeFastEntry({
 		controlFlow,
@@ -231,6 +291,7 @@ function fastEntry(
 		),
 		fn,
 		facts,
+		instructions,
 		directEntry,
 		specialized: false,
 		trySymbol: exported ? OWN_TRY : undefined,
@@ -262,6 +323,7 @@ function fastEntry(
 		prologue: [],
 		functionIndex: "0",
 		globalIndex: (index) => String(index),
+		stringIndex: (index) => String(index),
 		stringValue: (index) => `string_${index}`,
 		lengthProperty: (index) => index === LENGTH_STRING_INDEX,
 		capturePrologue: [],

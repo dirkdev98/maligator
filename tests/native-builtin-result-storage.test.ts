@@ -17,6 +17,51 @@ import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts"
 import { boxedNativeFactContract } from "./helpers/boxed-native-facts.ts";
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
+describe("SameValue hit and fallback contracts", () => {
+	it.each([false, true])("retains loaded-callee authority with locked=%s", (locked) => {
+		const out = inspectStaticValueFunction(
+			"function compute(input,other,gate){const result=Object.is(input,other);gate();return [result,input];}globalThis.compute=compute;",
+			"compute",
+			{ locked, stackRoots: "precise" },
+		);
+		const ip = out.native.body.instructions.findIndex((op, index) =>
+			locked
+				? op.opcode === "CALL_KNOWN" && op.operation === "Object.is"
+				: op.opcode === "CALL" && out.native.instructions[index]?.kind === "call",
+		);
+		const op = out.native.body.instructions[ip]!;
+		if (op.opcode !== "CALL" && op.opcode !== "CALL_KNOWN")
+			throw new Error("Missing SameValue call");
+		if (!locked) {
+			const plan = out.native.instructions[ip];
+			expect(plan?.kind === "call" ? plan.guardedBuiltinCall?.operation : undefined).toBe(
+				"Object.is",
+			);
+			expect(out.native.storage!.rootRegisters).toContain(op.dst);
+			expect(out.c.source).toContain("mal_builtin_object_is_callee_matches");
+			expect(out.c.source).toContain("mal_vm_call_cached");
+		}
+		expect(out.c.source).toContain("mal_ops_same_value");
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
+			out.image,
+		);
+	});
+
+	it.each(["Object.is(input,input)", "Object.is(+input,!!other)", "Object.is()"])(
+		"uses operand facts inside the mutable hit for %s",
+		(expression) => {
+			const out = inspectStaticValueFunction(
+				`function compute(input,other){return ${expression};}globalThis.compute=compute;`,
+				"compute",
+				{ locked: false },
+			);
+			expect(out.c.source).toContain("mal_builtin_object_is_callee_matches");
+			expect(out.c.source).not.toContain("mal_ops_same_value");
+			expect(out.c.source).toContain("mal_vm_call_cached");
+		},
+	);
+});
+
 describe("catalogued primitive builtin result storage", () => {
 	it("selects predicates independently for boxed canonical and typed Number entries", () => {
 		const out = inspectStaticValueFunction(

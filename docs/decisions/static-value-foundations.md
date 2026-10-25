@@ -271,6 +271,13 @@ comparisons fold, while reflexive strict and loose equality keep a NaN test unle
 the operand domain excludes NaN. Equivalent observation inputs can share one
 existing operand, including arguments to a mutable Object.is invocation whose
 loaded-callee behavior remains observable.
+Mutable Object.is has an explicit guarded native contract. Its hit consumes the
+same identity, kind and scalar facts as an exact invocation without allocating or
+reentering; its miss retains the original receiver, all arguments and arbitrary
+completion values. Frameless entries admit namespace reads only through the
+existing non-observing global data cache and restart before getters or invocation
+on a miss. Root publication remains on the ordinary fallback edge. The compiler
+artifact schema includes Object.is in both guarded-operation encodings.
 Call result bounds reach scalar selection, variant overlays and artifact transport.
 After checking completion, callers decode int32-bounded results with an ordinary C
 cast; argument transports retain their own conversion semantics. Unsigned C remainder

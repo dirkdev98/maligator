@@ -1875,6 +1875,8 @@ static MalValue mal_builtin_object_is(MalVm *vm, MalValue this_value, const MalV
     return mal_value_new_boolean(mal_ops_same_value(left, right));
 }
 
+const MalNativeFunctionCallback mal_builtin_object_is_callback = mal_builtin_object_is;
+
 MalValue mal_builtin_object_is_known(const MalValue *args, i32 arg_count) {
     MalValue left = arg_count >= 1 ? args[0] : mal_value_new_undefined();
     MalValue right = arg_count >= 2 ? args[1] : mal_value_new_undefined();
