@@ -296,6 +296,11 @@ The independent target boundary and current storage contract are recorded in
       Definition initialization also accounts for incoming private-root publication
       reads after physical root selection, so conservative maps cannot expose
       future locals while rematerialized values retain their existing proofs.
+      Frameless arithmetic converts eligible primitive operands independently,
+      retaining Number guards only for uncertain operands. String parsing, mixed
+      relational primitives, shifts and Number exponentiation use noncollecting
+      helpers. String alternatives in addition and lexical String pairs retain
+      fallback while mixed numeric paths survive those same operand unions.
 - [x] Normalize primitive conversion calls from semantic kind unions. Eligible
       `Number` and `String` calls use unary conversions, carrying kind and effect
       proofs into native storage, full entries and frameless numeric paths.

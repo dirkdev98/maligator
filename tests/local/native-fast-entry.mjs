@@ -313,4 +313,243 @@ for (const value of [true, false, null, undefined, 0, -0, 1n, "4", valued, Symbo
 	}
 }
 
+const primitiveBinary = {
+	add(value, right, flag) {
+		const left = flag ? (value ? true : null) : "2";
+		return left + right;
+	},
+	subtract(value, right, flag) {
+		const left = flag ? (value ? true : null) : "2";
+		return left - right;
+	},
+	multiply(value, right, flag) {
+		const left = flag ? (value ? true : null) : "2";
+		return left * right;
+	},
+	divide(value, right, flag) {
+		const left = flag ? (value ? true : null) : "2";
+		return left / right;
+	},
+	remainder(value, right, flag) {
+		const left = flag ? (value ? true : null) : "2";
+		return left % right;
+	},
+	power(value, right, flag) {
+		const left = flag ? (value ? true : null) : "2";
+		return left ** right;
+	},
+	and(value, right, flag) {
+		const left = flag ? (value ? true : null) : "2";
+		return left & right;
+	},
+	or(value, right, flag) {
+		const left = flag ? (value ? true : null) : "2";
+		return left | right;
+	},
+	xor(value, right, flag) {
+		const left = flag ? (value ? true : null) : "2";
+		return left ^ right;
+	},
+	shiftLeft(value, right, flag) {
+		const left = flag ? (value ? true : null) : "2";
+		return left << right;
+	},
+	shiftRight(value, right, flag) {
+		const left = flag ? (value ? true : null) : "2";
+		return left >> right;
+	},
+	shiftUnsigned(value, right, flag) {
+		const left = flag ? (value ? true : null) : "2";
+		return left >>> right;
+	},
+	less(value, right, flag) {
+		const left = flag ? (value ? true : null) : "2";
+		return left < right;
+	},
+	lessEqual(value, right, flag) {
+		const left = flag ? (value ? true : null) : "2";
+		return left <= right;
+	},
+	greater(value, right, flag) {
+		const left = flag ? (value ? true : null) : "2";
+		return left > right;
+	},
+	greaterEqual(value, right, flag) {
+		const left = flag ? (value ? true : null) : "2";
+		return left >= right;
+	},
+};
+globalThis.primitiveBinary = primitiveBinary;
+const primitiveOperands = [
+	0,
+	-0,
+	1,
+	-1,
+	2 ** 32 + 1,
+	33.5,
+	NaN,
+	Infinity,
+	-Infinity,
+	true,
+	false,
+	null,
+	undefined,
+	"2",
+	2n,
+	valued,
+	Symbol("binary"),
+];
+for (const operation of Object.keys(primitiveBinary)) {
+	for (const flag of [true, false]) {
+		for (const value of [true, false]) {
+			for (const right of primitiveOperands) {
+				try {
+					const result = globalThis.primitiveBinary[operation](value, right, flag);
+					log.push(
+						`binary ${operation} ${flag} ${value} ${String(result)} ${Object.is(result, -0)}`,
+					);
+				} catch (error) {
+					log.push(`binary ${operation} ${flag} ${value} ${error.name}`);
+				}
+			}
+		}
+	}
+}
+
+function textDifference(value, right) {
+	if (typeof value !== "string") return undefined;
+	return value - right;
+}
+
+function scalarPower(base, exponent) {
+	return base ** exponent;
+}
+
+globalThis.textDifference = textDifference;
+globalThis.scalarPower = scalarPower;
+for (const text of [
+	"",
+	" ",
+	"0x10",
+	"-0",
+	"\u2028 2 \u2029",
+	"2e3",
+	"bad",
+	"Infinity",
+	"0b10",
+	"1_0",
+	"0\0",
+]) {
+	for (const right of [-0, 2, "3", valued, Symbol("text")]) {
+		try {
+			const result = globalThis.textDifference(text, right);
+			log.push(`text difference ${String(result)} ${Object.is(result, -0)}`);
+		} catch (error) {
+			log.push(`text difference ${error.name}`);
+		}
+	}
+}
+for (const [base, exponent] of [
+	[-0, -3],
+	[-0, 3],
+	[1, Infinity],
+	[-1, -Infinity],
+	[NaN, 0],
+	[NaN, 1],
+	[2, undefined],
+	[2, null],
+	[2, "3"],
+	["-0", -3],
+	[valued, 2],
+	[2, valued],
+	[2n, 3n],
+	[2n, 1],
+	[Symbol("power"), 2],
+]) {
+	try {
+		const result = globalThis.scalarPower(base, exponent);
+		log.push(`scalar power ${String(result)} ${Object.is(result, -0)}`);
+	} catch (error) {
+		log.push(`scalar power ${error.name}`);
+	}
+}
+
+function additionChoice(flag, right) {
+	const left = flag ? true : "2";
+	return left + right;
+}
+
+function comparisonChoice(flag, right) {
+	const left = flag ? true : "2";
+	return left < right;
+}
+
+function primitiveComparison(left, right) {
+	if (typeof left !== "string" && typeof left !== "boolean") return null;
+	if (typeof right !== "string" && typeof right !== "number") return undefined;
+	return left <= right;
+}
+
+function additionChoices(first, second, value) {
+	const left = first ? true : "2";
+	const right = second ? !!value : "11";
+	return left + right;
+}
+
+function comparisonChoices(first, second, value) {
+	const left = first ? (value ? true : null) : "2";
+	const right = second ? +value : "11";
+	return left <= right;
+}
+
+globalThis.additionChoice = additionChoice;
+globalThis.comparisonChoice = comparisonChoice;
+globalThis.primitiveComparison = primitiveComparison;
+globalThis.additionChoices = additionChoices;
+globalThis.comparisonChoices = comparisonChoices;
+for (const right of [
+	3,
+	"11",
+	"3",
+	NaN,
+	false,
+	null,
+	undefined,
+	valued,
+	Symbol("choice"),
+]) {
+	for (const flag of [true, false]) {
+		for (const operation of ["additionChoice", "comparisonChoice"]) {
+			try {
+				log.push(
+					`choice ${operation} ${flag} ${String(globalThis[operation](flag, right))}`,
+				);
+			} catch (error) {
+				log.push(`choice ${operation} ${flag} ${error.name}`);
+			}
+		}
+	}
+}
+for (const left of [true, false, "2", "bad", null, valued]) {
+	for (const right of [0, 2, NaN, "11", "2", "bad", undefined]) {
+		log.push(`primitive compare ${String(globalThis.primitiveComparison(left, right))}`);
+	}
+}
+
+for (const first of [true, false]) {
+	for (const second of [true, false]) {
+		for (const value of [0, 2, 12, NaN, "3", valued, Symbol("choices")]) {
+			for (const operation of ["additionChoices", "comparisonChoices"]) {
+				try {
+					log.push(
+						`choices ${operation} ${first} ${second} ${String(globalThis[operation](first, second, value))}`,
+					);
+				} catch (error) {
+					log.push(`choices ${operation} ${first} ${second} ${error.name}`);
+				}
+			}
+		}
+	}
+}
+
 console.log(log.join("\n"));

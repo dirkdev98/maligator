@@ -4,6 +4,7 @@ import {
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_TOP,
 	COMPILER_VALUE_KIND_NULLISH,
+	COMPILER_VALUE_KIND_STRING,
 	COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE,
 	compilerValueKindMaskIsSubset,
 } from "../shared/compiler-value-kinds.ts";
@@ -535,8 +536,6 @@ function fastBinary(
 	);
 	if (compared !== undefined)
 		return `f${dst} = ${compared ? "MAL_VALUE_TRUE" : "MAL_VALUE_FALSE"};`;
-	const numberFailure = numbers(values, left, right);
-	const guard = numberFailure === "false" ? "" : `if (${numberFailure}) goto __full;`;
 	if (operator === "===" || operator === "!==") {
 		const constant = values.stringComparison;
 		const equal =
@@ -548,6 +547,7 @@ function fastBinary(
 		return `f${dst} = mal_value_new_boolean(${operator === "!==" ? "!" : ""}${equal});`;
 	}
 	if (operator === "==" || operator === "!=") {
+		const numberFailure = numbers(values, left, right);
 		const not = operator === "!=" ? "!" : "";
 		const numeric = `f${dst} = mal_value_new_boolean(${not}(${number(values, left)} == ${number(values, right)}));`;
 		if (numberFailure === "false") return numeric;
@@ -562,21 +562,67 @@ function fastBinary(
 			? fallback
 			: `if (!(${numberFailure})) ${numeric} else ${fallback}`;
 	}
+	const converts = new Map<number, number>();
+	const guards: Array<string> = [];
+	for (const register of [left, right]) {
+		if (converts.has(register) || values.constants.has(register)) continue;
+		let kind = values.kind(register);
+		if (
+			kind === COMPILER_VALUE_KIND_NUMBER ||
+			!compilerValueKindMaskIsSubset(kind, COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE)
+		)
+			continue;
+		if (operator === "+" && (kind & COMPILER_VALUE_KIND_STRING) !== 0) {
+			if (kind === COMPILER_VALUE_KIND_STRING) return undefined;
+			guards.push(`mal_value_is_string(f${register})`);
+			kind &= ~COMPILER_VALUE_KIND_STRING;
+		}
+		converts.set(register, kind);
+	}
+	const numberFailure = numbers(
+		values,
+		...[left, right].filter((register) => !converts.has(register)),
+	);
 	if (numberFailure === "true") return undefined;
+	if (numberFailure !== "false") guards.unshift(numberFailure);
+	// A guarded Number rules out a String pair; two converted operands may still compare lexically.
+	if (
+		NUMBER_COMPARISONS.has(operator) &&
+		[left, right].every(
+			(register) => ((converts.get(register) ?? 0) & COMPILER_VALUE_KIND_STRING) !== 0,
+		)
+	) {
+		const strings = [...new Set([left, right])]
+			.filter((register) => converts.get(register) !== COMPILER_VALUE_KIND_STRING)
+			.map((register) => `mal_value_is_string(f${register})`);
+		if (strings.length === 0) return undefined;
+		guards.push(`(${strings.join(" && ")})`);
+	}
+	const guard = guards.length === 0 ? "" : `if (${guards.join(" || ")}) goto __full;`;
+	const numeric = (register: number) =>
+		converts.has(register)
+			? nativePrimitiveNumberExpression(`f${register}`, converts.get(register)!)
+			: number(values, register);
+	const integer = (register: number) =>
+		converts.has(register)
+			? `mal_ops_number_to_i32(${numeric(register)})`
+			: int32(values, register);
 	if (NUMBER_COMPARISONS.has(operator))
-		return `${guard} f${dst} = mal_value_new_boolean(${number(values, left)} ${operator} ${number(values, right)});`;
+		return `${guard} f${dst} = mal_value_new_boolean(${numeric(left)} ${operator} ${numeric(right)});`;
 	if (INT32_OPERATORS.has(operator))
-		return `${guard} f${dst} = mal_value_from_i32(${int32(values, left)} ${operator} ${int32(values, right)});`;
+		return `${guard} f${dst} = mal_value_from_i32(${integer(left)} ${operator} ${integer(right)});`;
 	if (operator === "<<")
-		return `${guard} f${dst} = mal_value_from_i32((i32) ((u32) ${int32(values, left)} << ((u32) ${int32(values, right)} & 31u)));`;
+		return `${guard} f${dst} = mal_value_from_i32((i32) ((u32) ${integer(left)} << ((u32) ${integer(right)} & 31u)));`;
 	if (operator === ">>")
-		return `${guard} f${dst} = mal_value_from_i32(${int32(values, left)} >> ((u32) ${int32(values, right)} & 31u));`;
+		return `${guard} f${dst} = mal_value_from_i32(${integer(left)} >> ((u32) ${integer(right)} & 31u));`;
 	if (operator === ">>>")
-		return `${guard} f${dst} = mal_ops_number_value((f64) ((u32) ${int32(values, left)} >> ((u32) ${int32(values, right)} & 31u)));`;
+		return `${guard} f${dst} = mal_ops_number_value((f64) ((u32) ${integer(left)} >> ((u32) ${integer(right)} & 31u)));`;
 	if (NUMBER_OPERATORS.has(operator))
-		return `${guard} f${dst} = mal_ops_number_value(${number(values, left)} ${operator} ${number(values, right)});`;
+		return `${guard} f${dst} = mal_ops_number_value(${numeric(left)} ${operator} ${numeric(right)});`;
 	if (operator === "%")
-		return `${guard} f${dst} = mal_ops_number_value(fmod(${number(values, left)}, ${number(values, right)}));`;
+		return `${guard} f${dst} = mal_ops_number_value(fmod(${numeric(left)}, ${numeric(right)}));`;
+	if (operator === "**")
+		return `${guard} f${dst} = mal_ops_number_value(mal_number_exponentiate(${numeric(left)}, ${numeric(right)}));`;
 	return undefined;
 }
 

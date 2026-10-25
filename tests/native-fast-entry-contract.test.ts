@@ -8,6 +8,11 @@ import {
 	COMPILER_VALUE_KIND_SYMBOL,
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_BOOLEAN,
+	COMPILER_VALUE_KIND_STRING,
+	COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE,
+	COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE,
+	COMPILER_VALUE_KIND_BIGINT,
+	COMPILER_VALUE_KIND_NULL,
 } from "../src/compiler/shared/compiler-value-kinds.ts";
 import type { InstructionFacts } from "../src/compiler/shared/instruction-facts.ts";
 import { COMPILER_INT32_RANGE } from "../src/compiler/shared/integer-range.ts";
@@ -21,16 +26,22 @@ import type {
 	BytecodeFunction,
 	BytecodeInstruction,
 } from "../src/compiler/target/runtime-image.ts";
+import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 // Helpers that read without collecting, calling JavaScript, or throwing.
 const NONCOLLECTING_HELPERS = new Set([
 	"mal_vm_leaf_unobserved",
 	"mal_vm_leaf_stack_available",
 	"mal_value_is_undefined",
+	"mal_value_is_null",
+	"mal_value_is_boolean",
+	"mal_value_is_string",
 	"mal_vm_property_try_load_static",
 	"mal_vm_property_try_load_length_static",
 	"mal_ops_is_number",
 	"mal_ops_number_as_f64",
+	"mal_ops_to_number",
+	"mal_number_exponentiate",
 	"mal_ops_number_to_i32",
 	"mal_ops_number_value_to_i32",
 	"mal_ops_number_value",
@@ -196,6 +207,21 @@ function fastEntry(
 	});
 }
 
+type BinaryOperator = Extract<BytecodeInstruction, { opcode: "BINARY" }>["operator"];
+
+function binaryEntry(operator: BinaryOperator, masks: ReadonlyArray<number>) {
+	return fastEntry(
+		body([
+			{ opcode: "BINARY", dst: 2, left: 0, right: 1, operator },
+			{ opcode: "RETURN", value: 2 },
+		]),
+		undefined,
+		true,
+		undefined,
+		[{ inputKindMasks: masks, resultKindMasks: [COMPILER_VALUE_KIND_TOP] }],
+	);
+}
+
 const loadCompareReturn: ReadonlyArray<BytecodeInstruction> = [
 	{ opcode: "LOAD_PROPERTY_STATIC", dst: 2, object: 0, stringIndex: 0, icIndex: 0 },
 	{ opcode: "BINARY", dst: 3, left: 2, right: 1, operator: "===" },
@@ -207,6 +233,31 @@ const loadCompareReturn: ReadonlyArray<BytecodeInstruction> = [
 ];
 
 describe("native fast entries", () => {
+	it("uses source operand unions for addition and relational fast paths independently of their fallback effects", () => {
+		for (const operator of ["+", "<="] as const) {
+			const out = inspectStaticValueFunction(
+				`function choose(first,second,value){const left=first?(value?true:null):'2';const right=second?+value:'11';return left ${operator} right;}globalThis.choose=choose;`,
+				"choose",
+			);
+			const ip = out.native.body.instructions.findIndex(
+				(op) => op.opcode === "BINARY" && op.operator === operator,
+			);
+			expect(out.native.facts![ip]!.inputKindMasks).toEqual([
+				COMPILER_VALUE_KIND_BOOLEAN |
+					COMPILER_VALUE_KIND_NULL |
+					COMPILER_VALUE_KIND_STRING,
+				COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_STRING,
+			]);
+			expect(out.c.trySymbol).toBeDefined();
+			if (operator === "+")
+				expect(out.native.gc.safepoints.some((point) => point.instructionIp === ip)).toBe(
+					true,
+				);
+			expect(out.c.source).toContain("mal_value_is_string(f");
+			if (operator === "<=") expect(out.c.source).toContain("mal_ops_to_number(");
+		}
+	});
+
 	it("restarts before an unsupported branch and prunes its reads, writes and cycles", () => {
 		const fn = body(
 			[
@@ -335,6 +386,145 @@ describe("native fast entries", () => {
 			expect(c).toContain("return read_full(vm, this_value, p0, env, callee);");
 		},
 	);
+
+	it.each([
+		"+",
+		"-",
+		"*",
+		"/",
+		"%",
+		"**",
+		"&",
+		"|",
+		"^",
+		"<<",
+		">>",
+		">>>",
+		"<",
+		"<=",
+		">",
+		">=",
+	] as const)(
+		"uses primitive facts independently for frameless binary %s",
+		(operator) => {
+			for (const known of [
+				COMPILER_VALUE_KIND_BOOLEAN,
+				COMPILER_VALUE_KIND_NULLISH,
+				COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE,
+			]) {
+				const proven = binaryEntry(operator, [known, known])!;
+				expect(proven).toBeDefined();
+				expect(unexpectedHelpers(proven)).toEqual([]);
+				expect(proven.join("\n")).not.toContain("mal_ops_is_number(");
+				for (const position of [0, 1]) {
+					const masks = [COMPILER_VALUE_KIND_TOP, COMPILER_VALUE_KIND_TOP];
+					masks[position] = known;
+					const partial = binaryEntry(operator, masks)!;
+					expect(partial).toBeDefined();
+					expect(unexpectedHelpers(partial)).toEqual([]);
+					expect(partial.join("\n")).not.toContain(`mal_ops_is_number(f${position})`);
+					expect(partial.join("\n")).toContain(`mal_ops_is_number(f${1 - position})`);
+				}
+			}
+		},
+	);
+
+	it.each(["-", "*", "/", "%", "**", "&", "|", "^", "<<", ">>", ">>>"] as const)(
+		"converts proven primitive Strings for %s without collecting",
+		(operator) => {
+			const lines = binaryEntry(operator, [
+				COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE,
+				COMPILER_VALUE_KIND_STRING,
+			])!;
+			expect(lines).toBeDefined();
+			expect(unexpectedHelpers(lines)).toEqual([]);
+			expect(lines.join("\n")).toContain("mal_ops_to_number(");
+			expect(lines.join("\n")).not.toContain("mal_ops_is_number(");
+		},
+	);
+
+	it.each(["<", "<=", ">", ">="] as const)(
+		"retains lexical String semantics for %s and converts mixed primitive pairs",
+		(operator) => {
+			expect(
+				binaryEntry(operator, [COMPILER_VALUE_KIND_STRING, COMPILER_VALUE_KIND_STRING]),
+			).toBeUndefined();
+			const mixed = binaryEntry(operator, [
+				COMPILER_VALUE_KIND_STRING,
+				COMPILER_VALUE_KIND_BOOLEAN,
+			])!;
+			expect(mixed).toBeDefined();
+			expect(unexpectedHelpers(mixed)).toEqual([]);
+			expect(mixed.join("\n")).toContain("mal_ops_to_number(f0)");
+		},
+	);
+
+	it("guards String alternatives in addition instead of numerically converting them", () => {
+		expect(
+			binaryEntry("+", [COMPILER_VALUE_KIND_STRING, COMPILER_VALUE_KIND_BOOLEAN]),
+		).toBeUndefined();
+		const c = binaryEntry("+", [
+			COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_STRING,
+			COMPILER_VALUE_KIND_BOOLEAN,
+		])!.join("\n");
+		expect(c).toContain("mal_value_is_string(f0)");
+		expect(c).not.toContain("mal_ops_is_number(f0)");
+		expect(c).not.toContain("mal_ops_to_number(");
+		const booleanOrString = binaryEntry("+", [
+			COMPILER_VALUE_KIND_BOOLEAN | COMPILER_VALUE_KIND_STRING,
+			COMPILER_VALUE_KIND_NUMBER,
+		])!;
+		expect(booleanOrString).toBeDefined();
+		expect(unexpectedHelpers(booleanOrString)).toEqual([]);
+		expect(booleanOrString.join("\n")).toContain("mal_value_is_string(f0)");
+		expect(booleanOrString.join("\n")).not.toContain("mal_ops_is_number(");
+	});
+
+	it.each(["<", "<=", ">", ">="] as const)(
+		"retains mixed numeric paths across partial String facts for %s",
+		(operator) => {
+			const partial = binaryEntry(operator, [
+				COMPILER_VALUE_KIND_STRING,
+				COMPILER_VALUE_KIND_TOP,
+			])!;
+			expect(partial).toBeDefined();
+			expect(unexpectedHelpers(partial)).toEqual([]);
+			expect(partial.join("\n")).toContain("mal_ops_is_number(f1)");
+			expect(partial.join("\n")).toContain("mal_ops_to_number(f0)");
+			const pair = binaryEntry(operator, [
+				COMPILER_VALUE_KIND_STRING | COMPILER_VALUE_KIND_BOOLEAN,
+				COMPILER_VALUE_KIND_STRING | COMPILER_VALUE_KIND_NUMBER,
+			])!;
+			expect(pair).toBeDefined();
+			expect(unexpectedHelpers(pair)).toEqual([]);
+			expect(pair.join("\n")).toContain(
+				"mal_value_is_string(f0) && mal_value_is_string(f1)",
+			);
+			expect(pair.join("\n")).not.toContain("mal_ops_is_number(");
+		},
+	);
+
+	it.each(["==", "!=", "===", "!=="] as const)(
+		"keeps nullish equality separate from numeric conversion for %s",
+		(operator) => {
+			const c = binaryEntry(operator, [
+				COMPILER_VALUE_KIND_NULLISH,
+				COMPILER_VALUE_KIND_NUMBER,
+			])!.join("\n");
+			expect(c).not.toContain("mal_ops_to_number(");
+			expect(c).not.toContain("__builtin_nan");
+		},
+	);
+
+	it.each([
+		COMPILER_VALUE_KIND_OBJECT,
+		COMPILER_VALUE_KIND_SYMBOL,
+		COMPILER_VALUE_KIND_BIGINT,
+	])("restarts before a numeric operation on effectful or throwing kind %i", (kind) => {
+		for (const operator of ["+", "-", "**", "&", "<"] as const) {
+			expect(binaryEntry(operator, [kind, COMPILER_VALUE_KIND_BOOLEAN])).toBeUndefined();
+		}
+	});
 
 	it("omits unreachable stores and cycles without renumbering surviving labels", () => {
 		const fn = body([
