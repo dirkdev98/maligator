@@ -267,6 +267,8 @@ The independent target boundary and current storage contract are recorded in
       Fixed fast paths, literal-switch targets and field-call windows share the
       same conditional continuation closure; handler, resume and record ABI roots
       retain their explicit entry contracts.
+      Entirely dead fixed windows and instruction-local plans are retired after
+      projection, so their helper state and optimization metadata do not reach C.
 - [x] Normalize primitive conversion calls from semantic kind unions. Eligible
       `Number` and `String` calls use unary conversions, carrying kind and effect
       proofs into native storage, full entries and frameless numeric paths.

@@ -123,6 +123,7 @@ it.each(["mutable", "locked"] as const)(
 				const unreachable = new Set(entry.storage!.controlFlow!.unreachableIps);
 				if (name === "preparedWindow") {
 					expect(fn.storage!.arrayInitializations).toHaveLength(1);
+					expect(entry.storage!.arrayInitializations).toEqual([]);
 					for (const plan of fn.storage!.arrayInitializations)
 						for (const ip of plan.claimedIps) expect(unreachable.has(ip)).toBe(true);
 				} else {

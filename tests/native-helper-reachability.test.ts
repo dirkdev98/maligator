@@ -183,8 +183,32 @@ describe("conditional helper reachability", () => {
 					const unreachable = new Set(entry.storage!.controlFlow!.unreachableIps);
 					if (kind === "array") {
 						expect(fn.storage!.arrayInitializations).toHaveLength(1);
+						expect(entry.storage!.arrayInitializations).toEqual([]);
 						for (const plan of fn.storage!.arrayInitializations)
 							for (const ip of plan.claimedIps) expect(unreachable.has(ip)).toBe(true);
+						const stale = {
+							...fn,
+							directEntries: fn.directEntries.map((e) =>
+								e !== entry
+									? e
+									: {
+											...e,
+											storage: {
+												...e.storage!,
+												arrayInitializations: fn.storage!.arrayInitializations,
+											},
+										},
+							),
+						};
+						expect(() =>
+							serializeCompilerArtifact({
+								...image,
+								native: {
+									...image.native,
+									functions: image.native.functions.with(1, stale),
+								},
+							}),
+						).toThrow(/storage/);
 					} else {
 						expect(fn.literalSwitches).toHaveLength(1);
 						const site = fn.literalSwitches![0]!;
@@ -202,4 +226,25 @@ describe("conditional helper reachability", () => {
 			}
 		},
 	);
+
+	it("retires dead proven predicate and String-transform sites", () => {
+		const original = compile(
+			"locked",
+			false,
+			"if(flag!==flag)return [Number.isFinite(source),String(source).trim()];return 0;",
+		);
+		for (const image of [
+			original,
+			deserializeCompilerArtifact(serializeCompilerArtifact(original)),
+		]) {
+			const fn = image.native.functions[1]!;
+			const entry = fn.directEntries.find(
+				(e) => e.parameterRepresentations[1] === "string",
+			)!;
+			expect(fn.storage!.numberPredicates.length).toBeGreaterThan(0);
+			expect(fn.storage!.stringTransforms.length).toBeGreaterThan(0);
+			expect(entry.storage!.numberPredicates).toEqual([]);
+			expect(entry.storage!.stringTransforms).toEqual([]);
+		}
+	});
 });

@@ -3417,7 +3417,7 @@ export function analyzeNativeFastPaths(
 	body = analyzeNativeBodyFacts(native.body),
 ): {
 	readonly plans: NativeFastPathPlans;
-	readonly refineOverlays: (body: NativeBodyFacts) => NativeFastPathPlans;
+	readonly refineForControlFlow: (body: NativeBodyFacts) => NativeFastPathPlans;
 } {
 	const fn = native.body;
 	const { handlerEntries, jumpTargets, branchSources } = body;
@@ -3875,7 +3875,7 @@ export function analyzeNativeFastPaths(
 	};
 	return {
 		plans,
-		refineOverlays(projected) {
+		refineForControlFlow(projected) {
 			if (projected.projection === undefined) return plans;
 			// Overlay consumers own storage but never introduce helper entry points.
 			const reserved = new Set<number>();
@@ -3906,8 +3906,34 @@ export function analyzeNativeFastPaths(
 			const mapUnavailable = new Set([...mapEntryBlocked, ...pollingEdges, ...reserved]);
 			for (const plan of [...spanContinuations, ...objectEnumerationSnapshots])
 				for (const ip of plan.claimedIps) mapUnavailable.add(ip);
+			const unreachable = projected.projection.unreachable;
+			const survives = (plan: { readonly claimedIps: ReadonlyArray<number> }) =>
+				plan.claimedIps.some((ip) => !unreachable.has(ip));
+			const liveSite = (plan: { readonly instructionIp: number }) =>
+				!unreachable.has(plan.instructionIp);
+			const { constructorInitialization, privateFieldReserve, ...remaining } = plans;
 			return {
-				...plans,
+				...remaining,
+				literalPropertyDefinitions: plans.literalPropertyDefinitions.filter(liveSite),
+				mathCalls: plans.mathCalls.filter(liveSite),
+				numberPredicates: plans.numberPredicates.filter(liveSite),
+				stringTransforms: plans.stringTransforms.filter(liveSite),
+				arrayInitializations: plans.arrayInitializations.filter(survives),
+				propertyNumericUpdates: plans.propertyNumericUpdates.filter(survives),
+				propertyProjections: plans.propertyProjections.filter(survives),
+				propertyReadRegions: plans.propertyReadRegions.filter(survives),
+				propertyReadPairs: plans.propertyReadPairs.filter(survives),
+				numberRecordRegions: plans.numberRecordRegions.filter(survives),
+				numericLoopRegions: plans.numericLoopRegions.filter(survives),
+				pairedArrayLoops: plans.pairedArrayLoops.filter(survives),
+				arrayPresence: plans.arrayPresence.filter(survives),
+				arrayPairDestructure: plans.arrayPairDestructure.filter(survives),
+				...(constructorInitialization !== undefined && survives(constructorInitialization)
+					? { constructorInitialization }
+					: {}),
+				...(privateFieldReserve !== undefined && survives(privateFieldReserve)
+					? { privateFieldReserve }
+					: {}),
 				spanContinuations,
 				objectEnumerationSnapshots,
 				mapEntries: selectNativeMapEntries(native, projected, (ip) =>
