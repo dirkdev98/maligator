@@ -74,20 +74,27 @@ zero and signed or unsigned bitwise results. Selected expression destinations ha
 no physical root slot; validation rebuilds roots from the stored expression subset
 when an artifact retains a producer. Phi-copy consumers retain the same physical
 scalar leaf restriction as other value boundaries.
-Single-write boxed SSA operator results also omit roots when existing operand or
-normal-result proofs guarantee an immediate Number or Boolean. Coercive unary
-plus and comparisons retain operand roots, safepoints and completion checks;
+Boxed SSA values omit roots when every reachable definition produces an immediate
+Number, Boolean, null or undefined, or copies an untraced value. Copy propagation
+includes phi joins and cycles: any potentially collectible or opaque definition
+keeps its connected destinations rooted. Rematerialized String and BigInt literals
+can seed untraced copies because their runtime-image cells have stable, immortal
+addresses. Ordinary String, BigInt and Symbol result kinds do not prove that lifetime.
+Multi-result helpers retain their separate final-output ownership certificates.
+Coercive unary plus and comparisons retain operand roots, safepoints and completion checks;
 an immediate result does not make evaluation pure. The shared numeric result
 transfer also certifies Number results when
 either operand of a non-additive numeric binary operation is numeric-primitive;
 addition requires both operands to exclude String results. These storage proofs
 leave coercion and throw checks in place. Repeated uses and intervening calls retain
-ordinary boxed locals initialized to undefined. Logical GC liveness stays intact,
-and validation rederives the physical exclusion per variant. Parameters, raw
+ordinary boxed locals; definition-before-read proofs govern their initialization.
+Logical GC liveness stays intact, and validation rederives the physical exclusion
+per variant. Parameters, raw
 storage, opaque or borrowed locals and suspension snapshots retain their roots.
 The same ownership check omits boxed roots for exact builtin calls whose catalogued
-normal result is Number or Boolean. Construction, spread arguments, destination/input
-aliases and heap-capable results retain roots; builtin identity and result kind do
+normal result is Number or Boolean. Construction, spread arguments and heap-capable
+results retain roots. Destination/input aliases retain each helper's ownership
+restrictions; builtin identity and result kind do
 not authorize removing evaluation, coercion, completion checks or callback effects.
 An existing exact Number or int32 result proof also admits coercive binary producers
 into scalar storage without requiring their inputs to be scalar. Evaluation stays

@@ -14,6 +14,7 @@ import {
 	validateNativeStorage,
 } from "../src/compiler/target/lower-native-storage.ts";
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
+import { boxedNativeFactContract } from "./helpers/boxed-native-facts.ts";
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 describe("catalogued primitive builtin result storage", () => {
@@ -185,7 +186,6 @@ describe("catalogued primitive builtin result storage", () => {
 	it.each([
 		"synthetic",
 		"raw storage",
-		"second writer",
 		"input alias",
 		"construct",
 		"spread",
@@ -203,9 +203,7 @@ describe("catalogued primitive builtin result storage", () => {
 		if (op?.opcode !== "CALL_KNOWN") throw new Error("Missing Number call");
 		const storageValues = [...out.native.storageValues!];
 		if (kind === "synthetic") storageValues[op.dst] = -1;
-		else if (kind === "second writer") {
-			instructions.push({ opcode: "MOVE", dst: op.dst, src: op.dst });
-		} else if (kind === "input alias") instructions[ip] = { ...op, arguments: [op.dst] };
+		else if (kind === "input alias") instructions[ip] = { ...op, arguments: [op.dst] };
 		else if (kind === "construct") instructions[ip] = { ...op, construct: true };
 		else if (kind === "spread") instructions[ip] = { ...op, argumentMode: "array" };
 		else if (kind === "heap result") instructions[ip] = { ...op, operation: "String" };
@@ -225,6 +223,25 @@ describe("catalogued primitive builtin result storage", () => {
 		};
 		expect(lowerNativeFunctionStorage(native).storage!.rootRegisters).toContain(op.dst);
 		expect(() => validateNativeStorage(native)).toThrow(/invalid or stale storage plan/);
+	});
+
+	it.each([
+		["Number(input)", false],
+		["input", true],
+	] as const)("tracks every boxed phi writer alongside %s", (alternative, rooted) => {
+		const out = inspectStaticValueFunction(
+			`function compute(input,gate,condition){let value;if(condition)value=Number(input);else value=${alternative};gate();return value;}globalThis.compute=compute;`,
+			"compute",
+		);
+		const image = boxedNativeFactContract(out.image);
+		const native = image.native.functions[out.native.functionIndex]!;
+		const returned = native.body.instructions.find(
+			(op) => op.opcode === "RETURN" && op.value >= 0,
+		);
+		if (returned?.opcode !== "RETURN") throw new Error("Missing joined builtin value");
+		expect(native.registerRepresentations[returned.value]).toBe("boxed");
+		expect(native.storage!.rootRegisters.includes(returned.value)).toBe(rooted);
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(image);
 	});
 
 	it.each([

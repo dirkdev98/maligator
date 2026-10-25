@@ -1138,7 +1138,13 @@ function untracedValueRegisters(
 		if (!body.isReachable(ip)) continue;
 		for (const destination of body.writes[ip]!) {
 			if (scalar(destination)) continue;
-			if (blocked.has(ip)) {
+			// Multi-result helpers retain their separate output-ownership certificates.
+			if (
+				!("dst" in op) ||
+				op.dst !== destination ||
+				blocked.has(ip) ||
+				(op.opcode !== "MOVE" && body.reads[ip]!.includes(destination))
+			) {
 				retain(destination);
 				continue;
 			}

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import {
 	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_BOOLEAN,
 	COMPILER_VALUE_KIND_TOP,
 } from "../src/compiler/shared/compiler-value-kinds.ts";
 import {
@@ -498,6 +499,53 @@ describe("untraced SSA copies", () => {
 			],
 		});
 		expect(native.storage!.rootRegisters).toContain(2);
+		expect(emitCompiledFunction(native, 0, "", false)).not.toBeNull();
+	});
+
+	it("retains multi-result outputs outside their final-value ownership certificate", () => {
+		const template = compile().native.functions[1]!.body;
+		const body = {
+			...template,
+			parameterCount: 2,
+			argumentSnapshotCount: 0,
+			registerCount: 8,
+			handlers: [],
+			positions: [],
+			instructions: [
+				{ opcode: "GET_ITERATOR", iteratorDst: 2, nextDst: 3, source: 0 },
+				{ opcode: "ITERATOR_STEP", valueDst: 5, doneDst: 4, iterator: 2, next: 3 },
+				{
+					opcode: "CALL",
+					dst: 7,
+					callee: 1,
+					thisValue: -1,
+					argumentCount: 0,
+					arguments: [],
+				},
+				{ opcode: "CREATE_BOOLEAN", dst: 6, value: false },
+				{ opcode: "MOVE", dst: 4, src: 6 },
+				{ opcode: "RETURN", value: 4 },
+			] satisfies Array<BytecodeInstruction>,
+		};
+		const base = createConservativeNativePlan([body]).functions[0]!;
+		const native = lowerNativeFunctionStorage({
+			...base,
+			storageValues: Array.from({ length: 8 }, (_, index) => index),
+			facts: [
+				undefined,
+				{
+					registers: [5, 4, 2, 3],
+					inputOffset: 2,
+					inputKindMasks: [COMPILER_VALUE_KIND_TOP, COMPILER_VALUE_KIND_TOP],
+					resultKindMasks: [COMPILER_VALUE_KIND_TOP, COMPILER_VALUE_KIND_BOOLEAN],
+				},
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+			],
+		});
+		expect(native.storage!.rootRegisters).toContain(4);
 		expect(emitCompiledFunction(native, 0, "", false)).not.toBeNull();
 	});
 });
