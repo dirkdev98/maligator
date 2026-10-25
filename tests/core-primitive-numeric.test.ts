@@ -365,7 +365,7 @@ describe("certified primitive numeric lowering", () => {
 		expect(
 			compilerOperatorInputKindsHaveExactNativeSemantics("binary", "==", [15, 15]),
 		).toBe(false);
-		for (const mask of [0, 16, 32, 64, 128, 255, NaN, 1.5]) {
+		for (const mask of [0, 32, 64, 128, 255, NaN, 1.5]) {
 			expect(
 				compilerOperatorInputKindsHaveExactNativeSemantics("unary", "-", [mask]),
 			).toBe(false);
@@ -373,6 +373,12 @@ describe("certified primitive numeric lowering", () => {
 				compilerOperatorInputKindsHaveExactNativeSemantics("binary", "-", [mask, 8]),
 			).toBe(false);
 		}
+		expect(compilerOperatorInputKindsHaveExactNativeSemantics("unary", "-", [16])).toBe(
+			true,
+		);
+		expect(
+			compilerOperatorInputKindsHaveExactNativeSemantics("binary", "-", [16, 8]),
+		).toBe(false);
 		for (const mask of [0, 32, 64, 128, 255, 16 | 32, 16 | 128, NaN, 1.5]) {
 			expect(
 				compilerOperatorInputKindsHaveExactNativeSemantics("binary", "+", [mask, 8]),

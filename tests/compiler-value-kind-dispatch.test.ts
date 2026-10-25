@@ -8,6 +8,7 @@ import {
 	COMPILER_VALUE_KIND_SYMBOL as SYMBOL,
 	COMPILER_VALUE_KIND_TOP as TOP,
 	compilerBuiltinInputKindsAreValid,
+	compilerPrimitiveConversionOperator,
 	compilerNumericResultKind,
 	compilerOperatorInputKindsHaveExactNativeSemantics as exactNativeKinds,
 	compilerTypeofComparison,
@@ -74,11 +75,15 @@ describe("Compiler value-kind operator dispatch", () => {
 		const equality = ["==", "!=", "===", "!=="];
 		for (let mask = 0; mask <= 256; mask++) {
 			const numeric = mask > 0 && (mask & ~15) === 0;
+			const toNumber = mask > 0 && (mask & ~31) === 0;
 			const comparable = mask > 0 && ((mask & ~9) === 0 || (mask & ~3) === 0);
 			for (const operator of unary) {
-				equal(exactNativeKinds("unary", operator, [mask]), numeric);
+				equal(exactNativeKinds("unary", operator, [mask]), toNumber);
 			}
-			equal(exactNativeKinds("unary", "tostring", [mask]), mask === 4);
+			equal(
+				exactNativeKinds("unary", "tostring", [mask]),
+				mask > 0 && (mask & ~63) === 0,
+			);
 			for (const operator of arithmetic) {
 				// Number + String concatenates without coercing either operand.
 				const concatenation = operator === "+" && mask === 16;
@@ -91,6 +96,24 @@ describe("Compiler value-kind operator dispatch", () => {
 			for (const operator of equality) {
 				equal(exactNativeKinds("binary", operator, [9, mask]), comparable);
 			}
+		}
+	});
+
+	it("normalizes only builtin conversions with the same primitive and object semantics", () => {
+		for (let mask = 1; mask <= TOP; mask++) {
+			const kinds = singleKinds(mask);
+			equal(
+				compilerPrimitiveConversionOperator("Number", mask),
+				kinds.every((kind) => kind !== BIGINT && kind !== OBJECT) ? "+" : undefined,
+			);
+			equal(
+				compilerPrimitiveConversionOperator("String", mask),
+				kinds.every((kind) => kind !== SYMBOL) ? "tostring" : undefined,
+			);
+		}
+		for (const invalid of [0, 256, -1, NaN, 1.5]) {
+			equal(compilerPrimitiveConversionOperator("Number", invalid), undefined);
+			equal(compilerPrimitiveConversionOperator("String", invalid), undefined);
 		}
 	});
 

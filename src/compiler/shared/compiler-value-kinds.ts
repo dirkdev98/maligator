@@ -37,9 +37,30 @@ export const COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE =
 	COMPILER_VALUE_KIND_NULL |
 	COMPILER_VALUE_KIND_BOOLEAN;
 
+export const COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE =
+	COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE | COMPILER_VALUE_KIND_STRING;
+
+export const COMPILER_VALUE_KIND_TO_STRING_PRIMITIVE =
+	COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE | COMPILER_VALUE_KIND_BIGINT;
+
 export type CompilerOperatorInputKindMasks =
 	| readonly [CompilerValueKindMask]
 	| readonly [CompilerValueKindMask, CompilerValueKindMask];
+
+// Number permits BigInt after object coercion; String special-cases only an input Symbol.
+export function compilerPrimitiveConversionOperator(
+	operation: string,
+	mask: CompilerValueKindMask,
+): "+" | "tostring" | undefined {
+	if (!compilerValueKindMaskIsValid(mask, { allowTop: true })) return undefined;
+	if (operation === "Number")
+		return (mask & (COMPILER_VALUE_KIND_OBJECT | COMPILER_VALUE_KIND_BIGINT)) === 0
+			? "+"
+			: undefined;
+	if (operation === "String")
+		return (mask & COMPILER_VALUE_KIND_SYMBOL) === 0 ? "tostring" : undefined;
+	return undefined;
+}
 
 export const COMPILER_NUMERIC_UNARY_OPERATORS: ReadonlySet<string> = new Set([
 	"-",
@@ -208,7 +229,10 @@ export function compilerOperatorInputKindsHaveExactNativeSemantics(
 		if (masks.length !== 1) return false;
 		switch (operator) {
 			case "tostring":
-				return masks[0] === COMPILER_VALUE_KIND_BOOLEAN;
+				return compilerValueKindMaskIsSubset(
+					masks[0]!,
+					COMPILER_VALUE_KIND_TO_STRING_PRIMITIVE,
+				);
 			case "-":
 			case "+":
 			case "~":
@@ -217,7 +241,7 @@ export function compilerOperatorInputKindsHaveExactNativeSemantics(
 			case "tonumeric":
 				return compilerValueKindMaskIsSubset(
 					masks[0]!,
-					COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE,
+					COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE,
 				);
 			default:
 				return false;

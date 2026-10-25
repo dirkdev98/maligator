@@ -22,6 +22,8 @@ import {
 	COMPILER_VALUE_KIND_BOOLEAN,
 	COMPILER_VALUE_KIND_BIGINT,
 	COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE,
+	COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE,
+	COMPILER_VALUE_KIND_TO_STRING_PRIMITIVE,
 	compilerValueKindMaskIsSubset,
 	COMPILER_VALUE_KIND_NUMBER_OR_UNDEFINED,
 	COMPILER_VALUE_KIND_NULLISH,
@@ -124,6 +126,7 @@ import {
 	NUMBER_PREDICATES,
 	boxedNumberPredicateExpression,
 	nativeNumberPredicateExpression,
+	nativePrimitiveNumberExpression,
 } from "./native-scalar-operators.ts";
 import type { NativeSpanConsumer } from "./native-span-continuation.ts";
 import { nativeValueConversion } from "./native-value-transport.ts";
@@ -8318,28 +8321,7 @@ function emitInstruction(
 	const exactPrimitiveNumber = (r: number, mask: CompilerValueKindMask): string => {
 		const number = isNumericRep(reps[r]!) ? num(r) : `mal_ops_number_as_f64(${boxed(r)})`;
 		const boolean = reps[r] === "boolean" ? `r${r}` : `mal_value_to_boolean(${boxed(r)})`;
-		const choices: Array<{ mask: number; test: string; value: string }> = [
-			{
-				mask: COMPILER_VALUE_KIND_UNDEFINED,
-				test: `mal_value_is_undefined(${boxed(r)})`,
-				value: '__builtin_nan("")',
-			},
-			{
-				mask: COMPILER_VALUE_KIND_NULL,
-				test: `mal_value_is_null(${boxed(r)})`,
-				value: "0.0",
-			},
-			{
-				mask: COMPILER_VALUE_KIND_BOOLEAN,
-				test: `mal_value_is_boolean(${boxed(r)})`,
-				value: `(${boolean} ? 1.0 : 0.0)`,
-			},
-			{ mask: COMPILER_VALUE_KIND_NUMBER, test: "true", value: number },
-		].filter((choice) => (mask & choice.mask) !== 0);
-		let expression = choices.pop()!.value;
-		for (const choice of choices.reverse())
-			expression = `(${choice.test} ? ${choice.value} : ${expression})`;
-		return expression;
+		return nativePrimitiveNumberExpression(boxed(r), mask, number, boolean);
 	};
 	// Where control goes on a pending throw: into the innermost enclosing
 	// try/catch handler when this instruction is inside one (CATCH there reads
@@ -11771,6 +11753,9 @@ function emitInstruction(
 			const { dst, src, operator } = instruction;
 			if (operator === "tostring" && operandIsString(src))
 				return [`r${dst} = ${boxed(src)};`];
+			const effects = nativeInstructionEffects(instruction, context.facts);
+			const canThrow = effects.throwing || effects.reentry;
+			if (!canThrow) elideFramePosition();
 			if (
 				indexedLengthLoopAction?.role === "coerce" ||
 				indexedLengthLoopAction?.role === "update"
@@ -11800,15 +11785,23 @@ function emitInstruction(
 				const text = `mal_value_from_string(mal_intrinsic_hot_ascii(vm, ${value} ? MAL_HOT_KEY_TRUE : MAL_HOT_KEY_FALSE))`;
 				return [`r${dst} = ${callValue(dst, text)};`, poll()];
 			}
-			const effects = nativeInstructionEffects(instruction, context.facts);
-			const canThrow = effects.throwing || effects.reentry;
-			if (!canThrow) elideFramePosition();
+			if (
+				operator === "tostring" &&
+				context.facts?.inputKindMasks?.length === 1 &&
+				compilerValueKindMaskIsSubset(
+					context.facts.inputKindMasks[0]!,
+					COMPILER_VALUE_KIND_TO_STRING_PRIMITIVE,
+				)
+			) {
+				const text = `mal_value_from_string(mal_ops_to_string(&vm->heap, ${boxed(src)}))`;
+				return [`r${dst} = ${callValue(dst, text)};`, poll()];
+			}
 			if (
 				context.facts?.inputKindMasks !== undefined &&
 				context.facts.inputKindMasks.length === 1 &&
 				compilerValueKindMaskIsSubset(
 					context.facts.inputKindMasks[0]!,
-					COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE,
+					COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE,
 				) &&
 				!isNumericRep(reps[src]!)
 			) {

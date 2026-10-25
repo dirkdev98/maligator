@@ -10,6 +10,8 @@ import {
 	COMPILER_VALUE_KIND_NULLISH,
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE,
+	COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE,
+	COMPILER_VALUE_KIND_TO_STRING_PRIMITIVE,
 	compilerOperatorInputKindsHaveExactNativeSemantics,
 	compilerComparisonInputKindsAvoidObjectCoercion,
 	compilerOperatorIsNullishEquality,
@@ -1740,12 +1742,24 @@ export function corePrimitiveOperatorEffectRefinement(
 	if (opcode === "unary" && masks.length === 1 && typeof operator === "string") {
 		const numericPrimitive = compilerValueKindMaskIsSubset(
 			masks[0]!,
-			COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE,
+			COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE,
 		);
-		primitive =
+		const stringPrimitive =
+			operator === "tostring" &&
+			compilerValueKindMaskIsSubset(masks[0]!, COMPILER_VALUE_KIND_TO_STRING_PRIMITIVE);
+		const coercion =
+			(NUMERIC_UNARY_OPERATORS.has(operator) || operator === "tostring") &&
+			compilerValueKindMaskIsSubset(
+				masks[0]!,
+				COMPILER_VALUE_KIND_TOP & ~COMPILER_VALUE_KIND_OBJECT,
+			);
+		primitive = NON_COERCING_UNARY_OPERATORS.has(operator) || coercion;
+		gcFree =
 			NON_COERCING_UNARY_OPERATORS.has(operator) ||
-			(NUMERIC_UNARY_OPERATORS.has(operator) && numericPrimitive);
-		gcFree = NON_COERCING_UNARY_OPERATORS.has(operator) || numericPrimitive;
+			(NUMERIC_UNARY_OPERATORS.has(operator) && numericPrimitive) ||
+			(stringPrimitive && masks[0] === COMPILER_VALUE_KIND_STRING);
+		mayThrow =
+			coercion && !(operator === "tostring" ? stringPrimitive : numericPrimitive);
 	} else if (opcode === "binary" && masks.length === 2 && typeof operator === "string") {
 		const left = masks[0]!,
 			right = masks[1]!;

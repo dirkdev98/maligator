@@ -1,6 +1,9 @@
 import { builtinWorldAssumptions } from "../shared/builtin-assumptions.ts";
 import { mathUnaryOperationKeys } from "../shared/builtin-registry.ts";
-import { COMPILER_VALUE_KIND_NUMBER } from "../shared/compiler-value-kinds.ts";
+import {
+	COMPILER_VALUE_KIND_NUMBER,
+	compilerPrimitiveConversionOperator,
+} from "../shared/compiler-value-kinds.ts";
 import {
 	evaluateConstantBuiltin,
 	evaluateConstantStringSplit,
@@ -366,14 +369,15 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 		"unary",
 		"loadPropertyStatic",
 	],
-	requiredAnalyses: [CORE_STATIC_VALUE_ANALYSIS],
-	wakesOn: ["body", "memoryEffects", "facts"],
+	requiredAnalyses: [CORE_STATIC_VALUE_ANALYSIS, CORE_LOCAL_VALUE_KIND_ANALYSIS],
+	wakesOn: ["body", "cfg", "memoryEffects", "facts", "representations"],
 	changes: { cfg: true, calls: true, facts: true, representations: false },
 	budget: CORE_O2_PASS_BUDGETS["provenance-escape-scalar-replacement"],
 	run(context) {
 		const { program, item } = context,
 			fn = program.function(item.function);
 		const analysis = context.analysis(CORE_STATIC_VALUE_ANALYSIS);
+		let kinds: CoreValueKindAnalysis | undefined;
 		const constantTarget = {
 			...PORTABLE_CONSTANT_TARGET,
 			intl: context.compilationContext.facts.world.ecmaFeatures.intl,
@@ -1302,6 +1306,22 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 						instruction,
 						operation: { opcode: "move", inputs: [inputs[1]] },
 					});
+				else {
+					kinds ??= context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
+					const operator = compilerPrimitiveConversionOperator(
+						operation,
+						kinds.kindMask(inputs[1]),
+					);
+					if (operator !== undefined)
+						plans.push({
+							instruction,
+							operation: {
+								opcode: "unary",
+								inputs: [inputs[1]],
+								attributes: { operator },
+							},
+						});
+				}
 			}
 		}
 		if (plans.length === 0 && parameterPlans.length === 0 && payloadPlans.length === 0)

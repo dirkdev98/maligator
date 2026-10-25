@@ -248,10 +248,12 @@ The independent target boundary and current storage contract are recorded in
       during fast-path discovery, and carry edge projections into remaining shape,
       lifetime and constant-String identity analyses. Retire callee nominations
       when a later refinement makes their call unreachable.
-- [ ] Normalize primitive conversion calls from semantic kind unions. `String`
-      and `Number` calls on `number | undefined` still use the builtin dispatcher.
-      Retain extra argument effects and the distinct Symbol, BigInt, omitted-argument,
-      construction, and spread semantics when selecting coercion operations.
+- [x] Normalize primitive conversion calls from semantic kind unions. Eligible
+      `Number` and `String` calls use unary conversions, carrying kind and effect
+      proofs into native storage, full entries and frameless numeric paths.
+      Primitive conversions avoid builtin and unary dispatch while retaining String
+      allocation polls, extra argument effects and distinct Symbol, BigInt,
+      omitted-argument, construction and spread semantics.
 - [ ] Shrink the largest inline expansions in generated code. Uniform tagged
       field slots and the one-compare Number decode cut the self-compiler's text
       from 55.0 to 49.9 MB; the inline static load probe is now about 19

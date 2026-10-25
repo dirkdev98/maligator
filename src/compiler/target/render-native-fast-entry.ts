@@ -4,6 +4,8 @@ import {
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_TOP,
 	COMPILER_VALUE_KIND_NULLISH,
+	COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE,
+	compilerValueKindMaskIsSubset,
 } from "../shared/compiler-value-kinds.ts";
 import {
 	instructionInputIsInt32,
@@ -17,6 +19,7 @@ import {
 } from "../shared/integer-range.ts";
 import { emitTypeofResult } from "./emit-program-image.ts";
 import type { NativeControlFlowPlan } from "./native-control-flow.ts";
+import { nativePrimitiveNumberExpression } from "./native-scalar-operators.ts";
 import type {
 	NativeDirectEntryPlan,
 	NativeFunctionPlan,
@@ -554,9 +557,17 @@ function fastUnary(
 	values: FastNumbers,
 ): string | undefined {
 	const { dst, src, operator } = op;
-	const numberFailure = numbers(values, src);
+	const primitive = compilerValueKindMaskIsSubset(
+		values.kind(src),
+		COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE,
+	);
+	const numberFailure = primitive ? "false" : numbers(values, src);
 	if (operator !== "!" && numberFailure === "true") return undefined;
 	const guard = numberFailure === "false" ? "" : `if (${numberFailure}) goto __full;`;
+	const converts = primitive && values.kind(src) !== COMPILER_VALUE_KIND_NUMBER;
+	const numeric = converts
+		? nativePrimitiveNumberExpression(`f${src}`, values.kind(src))
+		: number(values, src);
 	switch (operator) {
 		case "!": {
 			const constant =
@@ -567,16 +578,18 @@ function fastUnary(
 				: `f${dst} = ${constant ? "MAL_VALUE_FALSE" : "MAL_VALUE_TRUE"};`;
 		}
 		case "-":
-			return `${guard} f${dst} = mal_ops_number_value(-${number(values, src)});`;
+			return `${guard} f${dst} = mal_ops_number_value(-${numeric});`;
 		case "+":
 		case "tonumeric":
-			return `${guard} f${dst} = f${src};`;
+			return converts
+				? `f${dst} = mal_ops_number_value(${numeric});`
+				: `${guard} f${dst} = f${src};`;
 		case "~":
-			return `${guard} f${dst} = mal_value_from_i32(~${int32(values, src)});`;
+			return `${guard} f${dst} = mal_value_from_i32(~${converts ? `mal_ops_number_to_i32(${numeric})` : int32(values, src)});`;
 		case "increment":
-			return `${guard} f${dst} = mal_ops_number_value(${number(values, src)} + 1.0);`;
+			return `${guard} f${dst} = mal_ops_number_value(${numeric} + 1.0);`;
 		case "decrement":
-			return `${guard} f${dst} = mal_ops_number_value(${number(values, src)} - 1.0);`;
+			return `${guard} f${dst} = mal_ops_number_value(${numeric} - 1.0);`;
 		default:
 			return undefined;
 	}
