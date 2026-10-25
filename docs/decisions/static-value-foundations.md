@@ -230,7 +230,7 @@ views distinguish inputs from results even when constrained storage reuses a reg
 Negative immediate placeholders never establish register identity. Compiler artifacts
 serialize the independent dimensions and invalidate older schemas together.
 
-Integer input ranges prove primitive safe-integer Numbers and exclude negative zero.
+Integer input and result ranges prove primitive safe-integer Numbers and exclude negative zero.
 Int32 and uint32 domains share compact interval encodings; other bounds use the same
 range contract. Floating storage and copies do not erase an integer proof; joins
 require every incoming value to satisfy it, and unseeded cycles remain unknown.
@@ -244,6 +244,19 @@ numeric Math operations. The proof survives boxing and suspension, while coerciv
 operands and argument evaluation retain their own effects and fallback paths.
 Scalar expressions, fast entries, numeric regions and canonical bodies consume the
 same instruction facts.
+
+Complete script callee sets publish bounds on normal return values independently of
+throwing, collection and user-code effects. Every reachable return and possible
+callee must satisfy the bound; an opaque fallback or guarded entry ABI alone cannot
+establish it. Existing return provenance projects a forwarded parameter or strict
+receiver from that caller's operand. Async and generator calls still return objects.
+Call result bounds reach scalar selection, variant overlays and artifact transport.
+After checking completion, callers decode int32-bounded results with an ordinary C
+cast; argument transports retain their own conversion semantics. Unsigned C remainder
+requires nonnegative uint32 operands and a strictly positive divisor. Negative zero,
+negative dividends, zero-capable divisors and wider domains retain the Number helper.
+Scalar expressions, fusion links, property projections and numeric updates pass the
+operation's own ranges to the shared arithmetic renderer.
 
 Core shares Boolean observation queries between local folding, program-flow demands
 and cross-call specialization. Exact `Object.is` calls fold for the same SSA value,

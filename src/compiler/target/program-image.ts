@@ -1633,6 +1633,7 @@ export interface NativeDirectEntryPlan {
 		readonly masks: ReadonlyArray<number>;
 		readonly results: ReadonlyArray<number>;
 		readonly inputIntegerRanges?: ReadonlyArray<CompilerIntegerRange | undefined>;
+		readonly resultIntegerRanges?: ReadonlyArray<CompilerIntegerRange | undefined>;
 		readonly effectMask: number;
 	}>;
 	readonly constantBooleans?: ReadonlyArray<{
@@ -1686,6 +1687,7 @@ export function validateNativeDirectEntry(
 		masks,
 		results,
 		inputIntegerRanges,
+		resultIntegerRanges,
 		effectMask,
 	} of entry.instructionFacts ?? []) {
 		if (
@@ -1693,6 +1695,7 @@ export function validateNativeDirectEntry(
 				inputKindMasks: masks,
 				resultKindMasks: results,
 				inputIntegerRanges,
+				resultIntegerRanges,
 				effectMask,
 			}) ||
 			seenInputs.has(instructionIp) ||
@@ -5543,7 +5546,14 @@ function lowerExecutionFunctionToNativePlan(
 			? {}
 			: {
 					instructionFacts: entry.instructionFacts.flatMap(
-						({ instruction, masks, results, inputIntegerRanges, effectMask }) => {
+						({
+							instruction,
+							masks,
+							results,
+							inputIntegerRanges,
+							resultIntegerRanges,
+							effectMask,
+						}) => {
 							// Compile-only liveness markers have no executable fact site.
 							if (instruction.type === "rootUse") return [];
 							const instructionIp = instructionIndexByTargetInstruction.get(instruction);
@@ -5555,6 +5565,7 @@ function lowerExecutionFunctionToNativePlan(
 									masks,
 									results,
 									...(inputIntegerRanges === undefined ? {} : { inputIntegerRanges }),
+									...(resultIntegerRanges === undefined ? {} : { resultIntegerRanges }),
 									effectMask,
 								},
 							];

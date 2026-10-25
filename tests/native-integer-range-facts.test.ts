@@ -3,6 +3,7 @@ import {
 	instructionFactsAreValid,
 	instructionInputIntegerRange,
 	instructionInputIsInt32,
+	instructionResultIntegerRange,
 } from "../src/compiler/shared/instruction-facts.ts";
 import {
 	compilerIntegerRangeComparison,
@@ -18,6 +19,73 @@ import { nativeVariantContract } from "../src/compiler/target/lower-native-stora
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 describe("native integer ranges", () => {
+	it("uses the external operand's bounds in a numeric fusion's integer finish", () => {
+		const out = inspectStaticValueFunction(
+			"function compute(left,right,gate){const n=(right&255)+1;gate(n);return (left+2)^n;}globalThis.compute=compute;",
+			"compute",
+		);
+		expect(
+			out.native.specializations.some((region) => region.kind === "numeric-fusion"),
+		).toBe(true);
+		const ip = out.native.body.instructions.findIndex(
+			(op) => op.opcode === "BINARY" && op.operator === "^",
+		);
+		const op = out.native.body.instructions[ip]!;
+		if (op.opcode !== "BINARY") throw new Error("Missing integer finish");
+		expect(out.native.registerRepresentations[op.right]).toBe("number");
+		expect(instructionInputIntegerRange(out.native.facts?.[ip], op.right)).toMatchObject({
+			minimum: 1,
+			maximum: 256,
+		});
+		expect(out.c.source).toContain(`^ ((i32) r${op.right})`);
+		expect(out.c.source).not.toContain(`mal_ops_number_to_i32(r${op.right})`);
+	});
+
+	it("distinguishes input and result bounds when storage aliases their registers", () => {
+		const result = { ...COMPILER_INT32_RANGE, minimum: 0, maximum: 7 };
+		const facts = {
+			registers: [5, 5, 6, 8],
+			inputOffset: 1,
+			resultKindMasks: [8],
+			inputKindMasks: [8, 8, 8],
+			resultIntegerRanges: [result],
+			inputIntegerRanges: [COMPILER_UINT32_RANGE, undefined, COMPILER_INT32_RANGE],
+		};
+		expect(instructionFactsAreValid(facts)).toBe(true);
+		expect(instructionResultIntegerRange(facts, 5)).toEqual(result);
+		expect(instructionInputIntegerRange(facts, 5)).toEqual(COMPILER_UINT32_RANGE);
+		for (const register of [-1, 6, 8, 99])
+			expect(instructionResultIntegerRange(facts, register)).toBeUndefined();
+		for (const malformed of [
+			{ resultKindMasks: [8], resultIntegerRanges: [] },
+			{ resultKindMasks: [8], resultIntegerRanges: [COMPILER_INT32_RANGE, undefined] },
+			{ resultKindMasks: [16], resultIntegerRanges: [result] },
+			{ resultKindMasks: [8], resultIntegerRanges: [{ ...result, minimum: -0 }] },
+			{ resultIntegerRanges: [result] },
+		])
+			expect(instructionFactsAreValid(malformed)).toBe(false);
+	});
+
+	it.each([
+		["input&255", "10", true],
+		["input>>>0", "(other>>>0)+1", false],
+		["input>>>0", "(other&255)+1", true],
+		["input|0", "10", false],
+		["input>>>0", "other&255", false],
+		["(input>>>0)*2", "10", false],
+		["input?-0:3", "10", false],
+	] as const)(
+		"uses unsigned C remainder only for its exact domain: %s %% %s",
+		(left, right, direct) => {
+			const out = inspectStaticValueFunction(
+				`function compute(input,other,gate){const n=${left}, d=${right};gate(n,d);return n%d;}globalThis.compute=compute;`,
+				"compute",
+			);
+			expect(out.c.source.includes("% (u32)")).toBe(direct);
+			expect(out.c.source.includes("mal_number_remainder(")).toBe(!direct);
+		},
+	);
+
 	it.each(["isFinite", "isInteger", "isSafeInteger"])(
 		"folds Number.%s for unsigned and wider safe integers across suspension",
 		(method) => {

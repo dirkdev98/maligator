@@ -33,11 +33,16 @@ import type {
 	CompilerValueKindMask,
 } from "../shared/compiler-value-kinds.ts";
 import type { CompilerIntegerRange } from "../shared/integer-range.ts";
+import {
+	compilerIntegerRangeIsInt32,
+	compilerIntegerRangeIsValid,
+} from "../shared/integer-range.ts";
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
 import { coreClosedGlobalSlotMembership } from "./core-compilation.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import {
 	CORE_CALL_RESULT_KIND_ATTRIBUTE,
+	CORE_CALL_RESULT_INTEGER_RANGE_ATTRIBUTE,
 	CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE,
 } from "./core-internal-attributes.ts";
 import type { CoreCallGraphIndex } from "./core-ir-call-targets.ts";
@@ -182,6 +187,18 @@ function callResultKind(
 	const mask = fn.instructionAttributes(instruction)[CORE_CALL_RESULT_KIND_ATTRIBUTE];
 	return typeof mask === "number" && compilerValueKindMaskIsValid(mask)
 		? mask
+		: undefined;
+}
+
+export function coreCallResultIntegerRange(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+): CompilerIntegerRange | undefined {
+	const range =
+		fn.instructionAttributes(instruction)[CORE_CALL_RESULT_INTEGER_RANGE_ATTRIBUTE];
+	return compilerIntegerRangeIsValid(range) &&
+		callResultKind(fn, instruction) === COMPILER_VALUE_KIND_NUMBER
+		? range
 		: undefined;
 }
 
@@ -980,6 +997,7 @@ function solveCoreValueKinds(
 		const operator = attributes.operator;
 		if (
 			fn.valueRepresentation(output) === "i32" ||
+			compilerIntegerRangeIsInt32(coreCallResultIntegerRange(fn, instruction)) ||
 			((opcode === "createNumber" || opcode === "createF64") &&
 				numberIsExactInt32(attributes.value)) ||
 			(opcode === "callKnown" &&

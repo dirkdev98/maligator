@@ -3,7 +3,10 @@ import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import { formatCoreFunction } from "../src/compiler/core/core-format.ts";
-import { CORE_CALL_RESULT_KIND_ATTRIBUTE } from "../src/compiler/core/core-internal-attributes.ts";
+import {
+	CORE_CALL_RESULT_KIND_ATTRIBUTE,
+	CORE_CALL_RESULT_INTEGER_RANGE_ATTRIBUTE,
+} from "../src/compiler/core/core-internal-attributes.ts";
 import {
 	CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
 	buildCoreControlFlow,
@@ -52,6 +55,36 @@ function validBranchProgram() {
 }
 
 describe("Core verification", () => {
+	it.each([
+		{ mask: 8, minimum: -0, maximum: 7 },
+		{ mask: 8, minimum: 0, maximum: Infinity },
+		{ mask: 8, minimum: 0, maximum: 0.5 },
+		{ mask: 8, minimum: 2, maximum: 1 },
+		{ mask: 16, minimum: 0, maximum: 7 },
+		{ mask: undefined, minimum: 0, maximum: 7 },
+	])("rejects a malformed normal call range %j", ({ mask, minimum, maximum }) => {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const [callee] = builder.appendInstruction(entry, "createUndefined", []);
+		const [result] = builder.appendInstruction(entry, "call", [callee!, callee!], {
+			attributes: {
+				...(mask === undefined ? {} : { [CORE_CALL_RESULT_KIND_ATTRIBUTE]: mask }),
+				[CORE_CALL_RESULT_INTEGER_RANGE_ATTRIBUTE]: {
+					minimum,
+					maximum,
+					exactSafeIntegers: true,
+					excludesNegativeZero: true,
+				},
+			},
+		});
+		builder.setTerminator(entry, { kind: "return", value: result! });
+		builder.finish(entry);
+		expect(() => verifyCoreProgram(program)).toThrow(
+			/Invalid call result integer range proof/,
+		);
+	});
+
 	it.each([0, 255, 256, NaN])(
 		"rejects an invalid normal call result bound %s",
 		(mask) => {

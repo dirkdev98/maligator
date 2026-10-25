@@ -15,7 +15,7 @@ const fixture = "tests/local/call-result-kinds.js";
 const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-call-result-kinds-"));
 afterAll(() => rmSync(outDir, { recursive: true, force: true }));
 
-describe("normal call result kinds", () => {
+describe("normal call result kinds and ranges", () => {
 	it.each(["mutable", "locked"] as const)(
 		"preserves effects, fallbacks and collection with %s primordials",
 		(primordials) => {

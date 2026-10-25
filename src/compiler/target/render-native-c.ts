@@ -37,6 +37,7 @@ import type { CompilerValueKindMask } from "../shared/compiler-value-kinds.ts";
 import {
 	instructionInputIsInt32,
 	instructionInputIntegerRange,
+	instructionResultIntegerRange,
 	instructionInputKind,
 } from "../shared/instruction-facts.ts";
 import type { InstructionFacts } from "../shared/instruction-facts.ts";
@@ -1296,7 +1297,7 @@ function nativeNumberExpr(
 	operator: string,
 	left: string,
 	right: string,
-	inputIntegerRanges?: ReadonlyArray<CompilerIntegerRange | undefined>,
+	inputIntegerRanges: ReadonlyArray<CompilerIntegerRange | undefined> | undefined,
 ): string | null {
 	const arith = NATIVE_ARITH[operator];
 	if (arith !== undefined) {
@@ -1316,6 +1317,17 @@ function nativeNumberExpr(
 		return `(f64) ((u32) ${left32} >> (${right32} & 0x1F))`;
 	}
 	if (operator === "%") {
+		const dividend = inputIntegerRanges?.[0],
+			divisor = inputIntegerRanges?.[1];
+		if (
+			dividend !== undefined &&
+			divisor !== undefined &&
+			dividend.minimum >= 0 &&
+			dividend.maximum <= 0xffff_ffff &&
+			divisor.minimum > 0 &&
+			divisor.maximum <= 0xffff_ffff
+		)
+			return `(f64) ((u32) (${left}) % (u32) (${right}))`;
 		return `mal_number_remainder(${left}, ${right})`;
 	}
 	if (operator === "**") return `mal_number_exponentiate(${left}, ${right})`;
@@ -3792,7 +3804,12 @@ function renderScalarExpression(
 					op.dst,
 					`${operand(op.left)} ${NATIVE_COMPARE[op.operator]} ${operand(op.right)}`,
 				);
-			const expression = nativeNumberExpr(op.operator, number(op.left), number(op.right));
+			const expression = nativeNumberExpr(
+				op.operator,
+				number(op.left),
+				number(op.right),
+				facts?.inputIntegerRanges,
+			);
 			if (expression === null)
 				throw new Error("Invalid lowered native scalar expression");
 			return numberResult(op.dst, expression);
@@ -6709,6 +6726,7 @@ function emitBody(
 		staticPropertyProjectionAction: undefined,
 		staticPropertyNumericAction: undefined,
 		propertyNumericUpdateAction: undefined,
+		propertyNumericUpdateFacts: undefined,
 		propertyReadRegionAction: undefined,
 		constructorInitializationAction: undefined,
 		privateFieldReserveCount: undefined,
@@ -7316,6 +7334,10 @@ function emitBody(
 			staticPropertyNumericActionByIp.get(ip);
 		instructionContext.propertyNumericUpdateAction =
 			propertyNumericUpdateActionByIp.get(ip);
+		instructionContext.propertyNumericUpdateFacts =
+			instructionContext.propertyNumericUpdateAction === undefined
+				? undefined
+				: nativeFacts?.[instructionContext.propertyNumericUpdateAction.plan.operationIp];
 		instructionContext.propertyReadRegionAction = propertyReadRegionActionByIp.get(ip);
 		instructionContext.constructorInitializationAction =
 			constructorInitializationActionByIp.get(ip);
@@ -7856,6 +7878,7 @@ interface NativeInstructionContext {
 	readonly staticPropertyProjectionAction?: NativePropertyReadPairAction;
 	readonly staticPropertyNumericAction?: NativePropertyProjectionAction;
 	readonly propertyNumericUpdateAction?: NativePropertyNumericUpdateAction;
+	readonly propertyNumericUpdateFacts?: InstructionFacts;
 	readonly propertyReadRegionAction?: NativePropertyReadRegionAction;
 	readonly constructorInitializationAction?: NativeConstructorInitializationAction;
 	readonly privateFieldReserveCount?: number;
@@ -8232,8 +8255,23 @@ function emitInstruction(
 					? decoded.kind
 					: "boxed";
 	};
-	const callValue = (dst: number, value: string): string =>
-		convertedValue("boxed", reps[dst]!, value);
+	const callValue = (
+		dst: number,
+		value: string,
+		conversion?: NativeValueConversion,
+	): string => {
+		const mode = conversion ?? nativeValueConversion("boxed", reps[dst]!);
+		if (mode === undefined)
+			throw new Error(`Unsupported native call result conversion to ${reps[dst]}`);
+		if (
+			reps[dst] === "int32" &&
+			compilerIntegerRangeIsInt32(instructionResultIntegerRange(context.facts, dst))
+		) {
+			if (mode === "unbox-int32") return `((i32) mal_ops_number_as_f64(${value}))`;
+			if (mode === "number-to-int32") return `((i32) ${value})`;
+		}
+		return convert(mode, value);
+	};
 	const slowPathFramePosition = (): Array<string> => {
 		const position = context.slowPathFramePosition;
 		if (position === undefined) return [];
@@ -9594,6 +9632,7 @@ function emitInstruction(
 				operand.operator,
 				operand.propertyIsLeft ? `${prefix}_old` : other,
 				operand.propertyIsLeft ? other : `${prefix}_old`,
+				context.propertyNumericUpdateFacts?.inputIntegerRanges,
 			);
 		}
 		if (expression === null) return null;
@@ -11156,6 +11195,7 @@ function emitInstruction(
 					instruction.operator,
 					operand(step.left),
 					operand(step.right),
+					context.facts?.inputIntegerRanges,
 				);
 				if (expression === null) return null;
 				const last = index === plan.steps.length - 1;
@@ -11444,6 +11484,7 @@ function emitInstruction(
 					operator,
 					firstOnLeft ? value : externalExpr,
 					firstOnLeft ? externalExpr : value,
+					context.facts?.inputIntegerRanges,
 				);
 				if (nativeExpr === null) throw new Error("Invalid numeric-fusion link");
 				return [
@@ -11464,6 +11505,7 @@ function emitInstruction(
 					operator,
 					numericOperand(left),
 					numericOperand(right),
+					context.facts?.inputIntegerRanges,
 				);
 				if (nativeExpr === null) throw new Error("Invalid numeric-fusion start");
 				if (numericInputs.guard === "")
@@ -11535,13 +11577,20 @@ function emitInstruction(
 						operator,
 						firstOnLeft ? fusedValue : externalExpr,
 						firstOnLeft ? externalExpr : fusedValue,
+						context.facts?.inputIntegerRanges,
 					);
 					if (nativeExpr === null) throw new Error("Invalid numeric-fusion finish");
-					const fusedInt32 = `mal_ops_number_to_i32(${fusedValue})`;
+					const fusedInt32 = numberToInt32(
+						fusedValue,
+						instructionInputIsInt32(context.facts, first.dst),
+					);
 					const externalInt32 =
 						reps[external] === "int32"
 							? inputValue(external)
-							: `mal_ops_number_to_i32(${externalExpr})`;
+							: numberToInt32(
+									externalExpr,
+									instructionInputIsInt32(context.facts, external),
+								);
 					const int32Result =
 						reps[dst] === "int32" && INT32_RESULT_OPERATORS.has(operator)
 							? nativeInt32Expr(
@@ -13947,7 +13996,7 @@ function emitInstruction(
 							`  ${cTypeOf(transport.resultRepresentation)} ${value} = mal_direct_${relocation.stem(target)}_${entry.id}${suffix}(vm, ${receiver}${parameters.length === 0 ? "" : `, ${parameters.join(", ")}`}, mal_value_to_function_object(${guardedCallee})->creation_env, ${guardedCallee});`,
 							"  MAL_CALLEE_REALM_LEAVE();",
 							`  ${throwCheck()}`,
-							`  r${instruction.dst} = ${convert(transport.result, value)};`,
+							`  r${instruction.dst} = ${callValue(instruction.dst, value, transport.result)};`,
 							"}",
 						];
 					}
@@ -14055,7 +14104,7 @@ function emitInstruction(
 					if (forward) context.recordForwarded.add(ip);
 					context.directEntryCalls.set(ip, new Set([target]));
 					nativeCallDecision(context.profile, ip, "call.direct-native", "applied");
-					const directResult = convert(transport.result, directValue);
+					const directResult = callValue(instruction.dst, directValue, transport.result);
 					return [
 						`MalValue ${directCallee} = ${boxedOperand(instruction.callee)};`,
 						`MAL_PERF_COUNT(direct_entry_hits);`,

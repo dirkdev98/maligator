@@ -8,7 +8,9 @@ import {
 } from "../shared/compiler-instruction.ts";
 import type { ProbeReadKind } from "../shared/compiler-instruction.ts";
 import { compilerValueKindMaskIsValid } from "../shared/compiler-value-kinds.ts";
+import { COMPILER_VALUE_KIND_NUMBER } from "../shared/compiler-value-kinds.ts";
 import { effectSummaryCovers } from "../shared/effect-summary.ts";
+import { compilerIntegerRangeIsValid } from "../shared/integer-range.ts";
 import { isKnownBuiltinError } from "../shared/known-builtin-errors.ts";
 import { knownArgumentModes } from "../shared/known-operations.ts";
 import { knownOperationIndex } from "../shared/known-operations.ts";
@@ -17,6 +19,7 @@ import { isStringCollationPlan } from "../shared/string-collation-plan.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import {
 	CORE_CALL_RESULT_KIND_ATTRIBUTE,
+	CORE_CALL_RESULT_INTEGER_RANGE_ATTRIBUTE,
 	CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE,
 } from "./core-internal-attributes.ts";
 import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
@@ -409,6 +412,13 @@ function verifyInstructionRows(
 					!compilerValueKindMaskIsValid(callKind))
 			)
 				fail("Invalid call result kind proof");
+			const callRange = attributes[CORE_CALL_RESULT_INTEGER_RANGE_ATTRIBUTE];
+			if (
+				callRange !== undefined &&
+				(callKind !== COMPILER_VALUE_KIND_NUMBER ||
+					!compilerIntegerRangeIsValid(callRange))
+			)
+				fail("Invalid call result integer range proof");
 			if (
 				attributes.exactArrayLength !== undefined &&
 				(descriptor.opcode !== "loadPropertyStatic" ||

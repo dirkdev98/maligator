@@ -42,6 +42,42 @@ const identity = function identity(value, callback) {
 		throw error;
 	}
 };
+const byte = function byte(value, callback) {
+	try {
+		callback();
+		return value & 255;
+	} catch (error) {
+		callback(error);
+		throw error;
+	}
+};
+const unsigned = function unsigned(value, callback) {
+	try {
+		callback();
+		return value >>> 0;
+	} catch (error) {
+		callback(error);
+		throw error;
+	}
+};
+const boundedFloating = function boundedFloating(value, callback) {
+	try {
+		callback();
+		return (value & 255) + 1;
+	} catch (error) {
+		callback(error);
+		throw error;
+	}
+};
+const signedZero = function signedZero(value, callback) {
+	try {
+		callback();
+		return value ? -0 : value & 255;
+	} catch (error) {
+		callback(error);
+		throw error;
+	}
+};
 function compute(value, callback) {
 	const result = integer(value, callback);
 	collectGarbage();
@@ -84,6 +120,40 @@ function guarded(value, callback) {
 	collectGarbage();
 	return result + 1;
 }
+function byteRemainder(value, callback) {
+	const result = byte(value, callback);
+	collectGarbage();
+	return result % 10;
+}
+function positiveRemainder(value, divisor, callback) {
+	const result = unsigned(value, callback);
+	const bound = (divisor & 65535) + 1;
+	collectGarbage();
+	return result % bound;
+}
+function unsignedRemainder(value, divisor, callback) {
+	const result = unsigned(value, callback);
+	const bound = unsigned(divisor, callback);
+	collectGarbage();
+	return result % bound;
+}
+function floatingResult(value, callback) {
+	const result = boundedFloating(value, callback);
+	collectGarbage();
+	return result ^ 7;
+}
+function zeroResult(value, callback) {
+	const result = signedZero(value, callback);
+	collectGarbage();
+	return result % 10;
+}
+function* resumeRange(value, callback) {
+	yield 0;
+	const result = byte(value, callback);
+	yield result;
+	collectGarbage();
+	return result % 10;
+}
 globalThis.integer = integer;
 globalThis.numeric = numeric;
 globalThis.optional = optional;
@@ -96,6 +166,16 @@ globalThis.rest = rest;
 globalThis.resume = resume;
 globalThis.guarded = guarded;
 globalThis.replaced = integer;
+globalThis.byte = byte;
+globalThis.unsigned = unsigned;
+globalThis.boundedFloating = boundedFloating;
+globalThis.signedZero = signedZero;
+globalThis.byteRemainder = byteRemainder;
+globalThis.positiveRemainder = positiveRemainder;
+globalThis.unsignedRemainder = unsignedRemainder;
+globalThis.floatingResult = floatingResult;
+globalThis.zeroResult = zeroResult;
+globalThis.resumeRange = resumeRange;
 
 function capture(run) {
 	try {
@@ -154,6 +234,29 @@ for (const value of inputs) {
 		}),
 	);
 	console.log(capture(() => guarded(value, hook)));
+	console.log(
+		capture(() => byteRemainder(value, hook)),
+		capture(() => floatingResult(value, hook)),
+		capture(() => zeroResult(value, hook)),
+	);
+	console.log(
+		capture(() => {
+			const iterator = resumeRange(value, hook);
+			iterator.next();
+			const second = iterator.next();
+			collectGarbage();
+			return String(second.value) + "," + iterator.next().value;
+		}),
+	);
+}
+for (const value of [
+	0, -0, -1, 255, 65536, 2147483647, 2147483648, 4294967295, 4294967296, 9007199254740991,
+]) {
+	for (const divisor of [0, -1, 1, 2, 65535, 2147483648, 4294967295])
+		console.log(
+			capture(() => positiveRemainder(value, divisor, hook)),
+			capture(() => unsignedRemainder(value, divisor, hook)),
+		);
 }
 for (const replacement of [
 	() => "text",

@@ -57,17 +57,27 @@ describe("normal script call result facts", () => {
 				kind,
 			);
 			expect(out.facts.resultKindMasks).toEqual([COMPILER_VALUE_KIND_OBJECT]);
+			expect(out.facts.resultIntegerRanges).toBeUndefined();
 			expect(out.native.registerRepresentations[out.op.dst]).toBe("boxed");
 			expect(out.native.storage!.rootRegisters).toContain(out.op.dst);
 		},
 	);
 
-	it.each([false, true])(
-		"uses whole-program call inputs only with a closure certificate: %s",
-		(closed) => {
+	it.each([
+		[false, "+value", undefined],
+		[true, "+value", undefined],
+		[false, "(value&255)+1", undefined],
+		[
+			true,
+			"(value&255)+1",
+			{ minimum: 1, maximum: 256, exactSafeIntegers: true, excludesNegativeZero: true },
+		],
+	] as const)(
+		"uses whole-program call inputs only with a closure certificate: %s, %s",
+		(closed, expression, range) => {
 			const sourcePath = "/call-result-closed.mjs";
 			const source = `const identity=function identity(value,hook){try{hook();return value;}catch(error){throw error;}};
-			function compute(value,hook,gate){const result=identity(+value,hook);gate();return result+1;}
+			function compute(value,hook,gate){const result=identity(${expression},hook);gate();return result+1;}
 			globalThis.compute=compute;`;
 			const facts = compilerProgramFactsFromConfig(
 				resolveBuildConfig({ engine: { eval: false, primordials: "mutable" } }),
@@ -101,7 +111,10 @@ describe("normal script call result facts", () => {
 			expect(native.facts![ip]!.resultKindMasks).toEqual([
 				closed ? COMPILER_VALUE_KIND_NUMBER : COMPILER_VALUE_KIND_TOP,
 			]);
-			expect(native.registerRepresentations[op.dst]).toBe(closed ? "number" : "boxed");
+			expect(native.facts![ip]!.resultIntegerRanges?.[0]).toEqual(range);
+			expect(native.registerRepresentations[op.dst]).toBe(
+				closed ? (range === undefined ? "number" : "int32") : "boxed",
+			);
 			if (closed) {
 				expect(
 					native.storage!.callTransports.some((call) => call.instructionIp === ip),
@@ -113,7 +126,8 @@ describe("normal script call result facts", () => {
 	);
 
 	it.each([
-		["return value|0;", COMPILER_VALUE_KIND_NUMBER, "number"],
+		["return value|0;", COMPILER_VALUE_KIND_NUMBER, "int32"],
+		["return +value;", COMPILER_VALUE_KIND_NUMBER, "number"],
 		["return !!value;", COMPILER_VALUE_KIND_BOOLEAN, "boolean"],
 		["return value+':';", COMPILER_VALUE_KIND_STRING, "string"],
 	] as const)("keeps %s independent of call effects", (body, mask, representation) => {
@@ -191,6 +205,7 @@ describe("normal script call result facts", () => {
 			(op) => op.opcode === "CALL" && op.arguments.length === 2,
 		);
 		expect(out.native.facts![ip]!.resultKindMasks).toEqual([COMPILER_VALUE_KIND_TOP]);
+		expect(out.native.facts![ip]!.resultIntegerRanges).toBeUndefined();
 		expect(out.c.source).toContain("mal_ops_is_number(");
 	});
 

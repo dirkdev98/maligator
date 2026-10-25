@@ -1,4 +1,7 @@
-import { COMPILER_VALUE_KIND_TOP } from "../shared/compiler-value-kinds.ts";
+import {
+	COMPILER_VALUE_KIND_TOP,
+	COMPILER_VALUE_KIND_NUMBER,
+} from "../shared/compiler-value-kinds.ts";
 import {
 	encodeInstructionEffects,
 	INSTRUCTION_MAY_THROW,
@@ -13,7 +16,10 @@ import type { CoreAnalysisManager } from "./core-analysis-manager.ts";
 import { CORE_LOOP_INDUCTION_ANALYSIS } from "./core-ir-loops.ts";
 import type { CoreLoopInductionAnalysis } from "./core-ir-loops.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
-import { corePrimitiveOperatorEffectRefinement } from "./core-ir-value-kinds.ts";
+import {
+	corePrimitiveOperatorEffectRefinement,
+	coreCallResultIntegerRange,
+} from "./core-ir-value-kinds.ts";
 import { CORE_LOCAL_VALUE_KIND_ANALYSIS } from "./core-ir-value-kinds.ts";
 import type { CoreValueKindAnalysis } from "./core-ir-value-kinds.ts";
 import type {
@@ -33,6 +39,7 @@ export interface CoreInstructionFacts {
 	readonly masks: ReadonlyArray<number>;
 	readonly results: ReadonlyArray<number>;
 	readonly inputIntegerRanges?: ReadonlyArray<CompilerIntegerRange | undefined>;
+	readonly resultIntegerRanges?: ReadonlyArray<CompilerIntegerRange | undefined>;
 	readonly effectMask: number;
 }
 
@@ -109,6 +116,7 @@ const pairInt32Inputs = Object.freeze([
 	Object.freeze([COMPILER_INT32_RANGE, COMPILER_INT32_RANGE]),
 ]);
 const boundBinaryConsumers: ReadonlySet<string> = new Set([
+	"%",
 	"<",
 	"<=",
 	">",
@@ -279,9 +287,27 @@ export function coreInstructionFacts(
 		kernel.instructionOperandCount(instruction),
 		range,
 	);
+	const results = instructionMasks(
+		fn,
+		kinds,
+		output,
+		kernel.instructionResultCount(instruction),
+		true,
+	);
+	const resultRange =
+		results.length === 1 && results[0] === COMPILER_VALUE_KIND_NUMBER
+			? coreCallResultIntegerRange(fn, instruction)
+			: undefined;
+	const resultIntegerRanges =
+		resultRange === undefined
+			? undefined
+			: resultRange === COMPILER_INT32_RANGE
+				? singleInt32Input
+				: Object.freeze([resultRange]);
 	return {
 		masks,
 		...(inputIntegerRanges === undefined ? {} : { inputIntegerRanges }),
+		...(resultIntegerRanges === undefined ? {} : { resultIntegerRanges }),
 		effectMask:
 			fn.instructionKind(instruction) === "operation"
 				? encodeInstructionEffects(
@@ -292,12 +318,6 @@ export function coreInstructionFacts(
 				: fn.instructionKind(instruction) === "throw"
 					? INSTRUCTION_MAY_THROW
 					: 0,
-		results: instructionMasks(
-			fn,
-			kinds,
-			output,
-			kernel.instructionResultCount(instruction),
-			true,
-		),
+		results,
 	};
 }

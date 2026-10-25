@@ -21,6 +21,7 @@ export interface InstructionFacts {
 	readonly inputKindMasks?: ReadonlyArray<CompilerValueKindMask>;
 	readonly resultKindMasks?: ReadonlyArray<CompilerValueKindMask>;
 	readonly inputIntegerRanges?: ReadonlyArray<CompilerIntegerRange | undefined>;
+	readonly resultIntegerRanges?: ReadonlyArray<CompilerIntegerRange | undefined>;
 	readonly registers?: ReadonlyArray<number>;
 	readonly inputOffset?: number;
 	readonly effectMask?: number;
@@ -97,6 +98,14 @@ export function instructionFactsAreValid(facts: InstructionFacts): boolean {
 						(compilerIntegerRangeIsValid(range) &&
 							facts.inputKindMasks?.[index] === COMPILER_VALUE_KIND_NUMBER),
 				))) &&
+		(facts.resultIntegerRanges === undefined ||
+			(facts.resultIntegerRanges.length === facts.resultKindMasks?.length &&
+				facts.resultIntegerRanges.every(
+					(range, index) =>
+						range === undefined ||
+						(compilerIntegerRangeIsValid(range) &&
+							facts.resultKindMasks?.[index] === COMPILER_VALUE_KIND_NUMBER),
+				))) &&
 		(facts.registers === undefined
 			? facts.inputOffset === undefined
 			: Number.isInteger(facts.inputOffset) &&
@@ -126,6 +135,15 @@ export function instructionResultKind(
 ): CompilerValueKindMask | undefined {
 	const index = facts?.registers?.indexOf(register) ?? -1;
 	return index < 0 ? undefined : facts?.resultKindMasks?.[index];
+}
+
+export function instructionResultIntegerRange(
+	facts: InstructionFacts | undefined,
+	register: number,
+): CompilerIntegerRange | undefined {
+	if (register < 0) return undefined;
+	const index = facts?.registers?.indexOf(register) ?? -1;
+	return index < 0 ? undefined : facts?.resultIntegerRanges?.[index];
 }
 
 export function instructionInputIsInt32(

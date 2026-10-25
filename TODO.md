@@ -107,8 +107,12 @@ The independent target boundary and current storage contract are recorded in
       bounds from complete script callee sets now reach Core and native storage.
       Calls whose Number result depends on a guarded typed entry still need scalar
       transport along that admitted branch when the canonical result remains boxed.
-      Carry integer result ranges through call transport so modulo chains can retain
-      int32 storage.
+      Normal return integer ranges now reach scalar call storage and decoding,
+      including spread, rest and resumable calls. Propagate newly published bounds
+      through chains and recursive callee components; the current discovery reads
+      each callee's existing local proofs once. Complete int-aware arithmetic
+      rendering with storage-web selection so modulo chains retain integer storage
+      without f64 round trips.
 - [ ] Give record entries typed fields. Record entries return fields boxed, so a
       caller's `token.end` stays boxed, `index = token.end + 1` gives the producer a
       boxed parameter, and the scanning loop in `returned-records` runs generic

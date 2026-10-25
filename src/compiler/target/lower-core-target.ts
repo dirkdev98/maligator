@@ -2284,6 +2284,9 @@ function lowerFunctionToTarget(
 								...(kinds.inputIntegerRanges === undefined
 									? {}
 									: { inputIntegerRanges: kinds.inputIntegerRanges }),
+								...(kinds.resultIntegerRanges === undefined
+									? {}
+									: { resultIntegerRanges: kinds.resultIntegerRanges }),
 								registers: loweredRegisters,
 								inputOffset,
 							}),
@@ -2388,6 +2391,9 @@ function lowerFunctionToTarget(
 						...(terminatorKinds.inputIntegerRanges === undefined
 							? {}
 							: { inputIntegerRanges: terminatorKinds.inputIntegerRanges }),
+						...(terminatorKinds.resultIntegerRanges === undefined
+							? {}
+							: { resultIntegerRanges: terminatorKinds.resultIntegerRanges }),
 						registers: Array.from(
 							{ length: kernel.instructionOperandCount(terminatorId) },
 							(_, index) =>
@@ -2816,8 +2822,24 @@ function lowerFunctionToTarget(
 			left === right ||
 			(left.length === right.length &&
 				left.every((mask, index) => mask === right[index]));
+		const sameRanges = (
+			left: ReadonlyArray<CompilerIntegerRange | undefined> | undefined,
+			right: ReadonlyArray<CompilerIntegerRange | undefined> | undefined,
+		) =>
+			left === right ||
+			(left !== undefined &&
+				right !== undefined &&
+				left.length === right.length &&
+				left.every((range, index) => compilerIntegerRangesEqual(range, right[index])));
 		const entryFacts = entry.instructionFacts?.filter(
-			({ instruction, masks, results, inputIntegerRanges, effectMask }) => {
+			({
+				instruction,
+				masks,
+				results,
+				inputIntegerRanges,
+				resultIntegerRanges,
+				effectMask,
+			}) => {
 				if (
 					!loweredInstructions.has(instruction) &&
 					!loweredSwitchComparisons.has(instruction)
@@ -2828,13 +2850,8 @@ function lowerFunctionToTarget(
 					canonical === undefined ||
 					!sameMasks(canonical.masks, masks) ||
 					!sameMasks(canonical.results, results) ||
-					(canonical.inputIntegerRanges !== inputIntegerRanges &&
-						(canonical.inputIntegerRanges === undefined ||
-							inputIntegerRanges === undefined ||
-							canonical.inputIntegerRanges.some(
-								(range, index) =>
-									!compilerIntegerRangesEqual(range, inputIntegerRanges[index]),
-							))) ||
+					!sameRanges(canonical.inputIntegerRanges, inputIntegerRanges) ||
+					!sameRanges(canonical.resultIntegerRanges, resultIntegerRanges) ||
 					canonical.effectMask !== effectMask
 				);
 			},
@@ -2864,6 +2881,7 @@ function lowerFunctionToTarget(
 								masks,
 								results,
 								inputIntegerRanges,
+								resultIntegerRanges,
 								effectMask,
 							}): Array<
 								NonNullable<CoreTargetDirectEntry["instructionFacts"]>[number]
@@ -2881,6 +2899,7 @@ function lowerFunctionToTarget(
 										masks,
 										results,
 										...(inputIntegerRanges === undefined ? {} : { inputIntegerRanges }),
+										...(resultIntegerRanges === undefined ? {} : { resultIntegerRanges }),
 										effectMask,
 									},
 								];

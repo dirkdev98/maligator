@@ -6,7 +6,10 @@ import {
 	CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
 } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow, CoreNaturalLoop } from "./core-ir-control-flow.ts";
-import { CORE_LOCAL_VALUE_KIND_ANALYSIS } from "./core-ir-value-kinds.ts";
+import {
+	CORE_LOCAL_VALUE_KIND_ANALYSIS,
+	coreCallResultIntegerRange,
+} from "./core-ir-value-kinds.ts";
 import type { CoreExactScalarKind } from "./core-ir-value-kinds.ts";
 import { coreBlockId, coreInstructionId } from "./core-ir.ts";
 import type { CoreBlockId, CoreInstructionId, CoreValueId } from "./core-ir.ts";
@@ -533,7 +536,12 @@ export function analyzeCoreLoopInductions(
 		} else if (exact !== undefined) range = numericRange(exact);
 		else {
 			const definition = definitionInstruction(fn, resolved);
-			if (definition !== undefined && fn.instructionOpcodeName(definition) === "binary") {
+			if (definition !== undefined) range = coreCallResultIntegerRange(fn, definition);
+			if (
+				range === undefined &&
+				definition !== undefined &&
+				fn.instructionOpcodeName(definition) === "binary"
+			) {
 				const left = operand(fn, definition, 0)!;
 				const right = operand(fn, definition, 1)!;
 				const constant = exactNumber(fn, right, root);
@@ -576,6 +584,32 @@ export function analyzeCoreLoopInductions(
 					}
 				}
 			}
+			if (range === undefined && fn.kernel.valueDefinitionKind(resolved) === 0) {
+				const owner = fn.kernel.valueDefinitionOwner(resolved) as CoreBlockId;
+				const index = fn.kernel.valueDefinitionIndex(resolved);
+				const row = fn.kernel.blockParameterStart(owner) + index;
+				const incoming = cfg.predecessors[owner] ?? [];
+				if (fn.kernel.blockParameterRole(row) !== 1 && incoming.length > 0) {
+					let joined: CompilerIntegerRange | undefined;
+					for (const edge of incoming) {
+						const input = edge.arguments[edge.kind === "exceptional" ? index - 1 : index];
+						const bound =
+							input === undefined ? undefined : query(input, edge.from, budget);
+						if (bound === undefined) {
+							joined = undefined;
+							break;
+						}
+						joined =
+							joined === undefined
+								? bound
+								: numericRange(
+										Math.min(joined.minimum, bound.minimum),
+										Math.max(joined.maximum, bound.maximum),
+									);
+					}
+					range = joined;
+				}
+			}
 			if (range === undefined && numericRepresentation(resolved) === "i32")
 				range = COMPILER_INT32_RANGE;
 		}
@@ -594,16 +628,19 @@ export function analyzeCoreLoopInductions(
 		cache.set(resolved, range);
 		return range;
 	};
-	const hasBoundedBinary = [...fn.instructionIds()].some(
+	const hasBoundedProducer = [...fn.instructionIds()].some(
 		(instruction) =>
 			fn.instructionKind(instruction) === "operation" &&
-			fn.instructionOpcodeName(instruction) === "binary" &&
-			["&", ">>>"].includes(fn.instructionAttributes(instruction).operator as string),
+			((fn.instructionOpcodeName(instruction) === "binary" &&
+				["&", ">>>"].includes(
+					fn.instructionAttributes(instruction).operator as string,
+				)) ||
+				coreCallResultIntegerRange(fn, instruction) !== undefined),
 	);
 	const result: CoreLoopInductionAnalysis = {
 		inductions: Object.freeze(inductions),
 		hasNumericRanges:
-			inductions.length > 0 || refinements.length > 0 || hasI32 || hasBoundedBinary,
+			inductions.length > 0 || refinements.length > 0 || hasI32 || hasBoundedProducer,
 		induction(value) {
 			return byRoot.get(root(value));
 		},

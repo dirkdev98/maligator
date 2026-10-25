@@ -214,6 +214,7 @@ export interface CoreTargetDirectEntry {
 		readonly masks: ReadonlyArray<number>;
 		readonly results: ReadonlyArray<number>;
 		readonly inputIntegerRanges?: ReadonlyArray<CompilerIntegerRange | undefined>;
+		readonly resultIntegerRanges?: ReadonlyArray<CompilerIntegerRange | undefined>;
 		readonly effectMask: number;
 	}>;
 	readonly constantBooleans?: ReadonlyArray<{

@@ -19,10 +19,18 @@ export const COMPILER_UINT32_RANGE: CompilerIntegerRange = Object.freeze({
 	excludesNegativeZero: true,
 });
 
-export function compilerIntegerRangeIsValid(range: CompilerIntegerRange): boolean {
+export function compilerIntegerRangeIsValid(
+	range: unknown,
+): range is CompilerIntegerRange {
 	return (
 		range !== null &&
 		typeof range === "object" &&
+		"minimum" in range &&
+		"maximum" in range &&
+		"exactSafeIntegers" in range &&
+		"excludesNegativeZero" in range &&
+		typeof range.minimum === "number" &&
+		typeof range.maximum === "number" &&
 		Number.isSafeInteger(range.minimum) &&
 		Number.isSafeInteger(range.maximum) &&
 		range.minimum <= range.maximum &&

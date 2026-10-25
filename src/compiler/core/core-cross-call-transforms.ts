@@ -1,8 +1,14 @@
 import {
 	COMPILER_VALUE_KIND_TOP,
 	COMPILER_VALUE_KIND_OBJECT,
+	COMPILER_VALUE_KIND_NUMBER,
 	compilerValueKindMaskIsValid,
 } from "../shared/compiler-value-kinds.ts";
+import {
+	compilerIntegerRangesEqual,
+	compilerIntegerRangeIsValid,
+} from "../shared/integer-range.ts";
+import type { CompilerIntegerRange } from "../shared/integer-range.ts";
 import type { CoreAnalysisManager } from "./core-analysis-manager.ts";
 import {
 	coreArrayIterationCall,
@@ -34,6 +40,7 @@ import {
 import type { CoreInstanceMethodHints } from "./core-instance-method-hints.ts";
 import {
 	CORE_CALL_RESULT_KIND_ATTRIBUTE,
+	CORE_CALL_RESULT_INTEGER_RANGE_ATTRIBUTE,
 	CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE,
 } from "./core-internal-attributes.ts";
 import {
@@ -51,6 +58,7 @@ import {
 	CORE_GENERATED_CODE_COST_WEIGHTS,
 	coreBlockLoopFrequency,
 } from "./core-ir-generated-cost.ts";
+import { CORE_LOOP_INDUCTION_ANALYSIS } from "./core-ir-loops.ts";
 import { CORE_LOCAL_FACT_BUNDLE_ANALYSIS } from "./core-ir-provenance.ts";
 import type { CoreLocalOptimizationPlanInput } from "./core-ir-region-selection.ts";
 import type { CoreProgramSummaries } from "./core-ir-summaries.ts";
@@ -70,6 +78,7 @@ import type {
 	CoreInstructionId,
 	CoreRepresentation,
 	CoreValueId,
+	CoreAttributeValue,
 } from "./core-ir.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import { coreArgumentObservation } from "./core-native-entry-analysis.ts";
@@ -3984,6 +3993,12 @@ interface CoreValueKindFold {
 	readonly result: boolean;
 }
 
+interface CoreCallResultFact {
+	readonly instruction: CoreInstructionId;
+	readonly mask: number;
+	readonly integerRange?: CompilerIntegerRange;
+}
+
 export type CoreCrossCallCallerPreparation = (
 	session: CoreCrossCallSession,
 	functionId: CoreFunctionId,
@@ -4093,15 +4108,22 @@ function discoverProgramCallResultKinds(
 	analyses: CoreAnalysisManager,
 	flow: CoreProgramFlowState,
 	readValueKinds: () => CoreProgramValueKindState,
-): ReadonlyMap<
-	CoreFunctionId,
-	ReadonlyArray<{ instruction: CoreInstructionId; mask: number }>
-> {
-	const results = new Map<
-		CoreFunctionId,
-		Array<{ instruction: CoreInstructionId; mask: number }>
-	>();
+): ReadonlyMap<CoreFunctionId, ReadonlyArray<CoreCallResultFact>> {
+	const results = new Map<CoreFunctionId, Array<CoreCallResultFact>>();
 	const localReturns = new Map<CoreFunctionId, number | undefined>();
+	const returnRanges = new Map<CoreFunctionId, CompilerIntegerRange | undefined>();
+	const joinRange = (
+		left: CompilerIntegerRange | undefined,
+		right: CompilerIntegerRange,
+	): CompilerIntegerRange =>
+		left === undefined
+			? right
+			: {
+					minimum: Math.min(left.minimum, right.minimum),
+					maximum: Math.max(left.maximum, right.maximum),
+					exactSafeIntegers: true,
+					excludesNegativeZero: true,
+				};
 	const returnMask = (target: CoreFunctionId): number => {
 		if (!localReturns.has(target)) {
 			const fn = program.function(target);
@@ -4137,6 +4159,28 @@ function discoverProgramCallResultKinds(
 			? local
 			: readValueKinds().summary(target).returnKind;
 	};
+	const returnRange = (target: CoreFunctionId): CompilerIntegerRange | undefined => {
+		if (returnRanges.has(target)) return returnRanges.get(target);
+		const fn = program.function(target);
+		const request = { scope: "function" as const, function: target };
+		const cfg = analyses.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request).exceptional();
+		let joined: CompilerIntegerRange | undefined;
+		for (const block of cfg.reachable) {
+			const terminator = fn.blockTerminator(block);
+			if (fn.instructionKind(terminator) !== "return") continue;
+			const value = fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator));
+			const range = analyses
+				.get(CORE_LOOP_INDUCTION_ANALYSIS, request)
+				.range(value, block);
+			if (range === undefined) {
+				joined = undefined;
+				break;
+			}
+			joined = joinRange(joined, range);
+		}
+		returnRanges.set(target, joined);
+		return joined;
+	};
 	for (const functionId of flow.reachability.liveFunctions) {
 		const fn = program.function(functionId);
 		for (const site of flow.targets.outgoing(functionId)) {
@@ -4155,14 +4199,58 @@ function discoverProgramCallResultKinds(
 			const mask = targets.anyScript
 				? (readValueKinds().anyScriptAggregate?.returnKind ?? 0)
 				: targets.functions.reduce((mask, target) => mask | returnMask(target), 0);
+			let integerRange: CompilerIntegerRange | undefined;
+			if (mask === COMPILER_VALUE_KIND_NUMBER) {
+				for (const target of targets.anyScript
+					? program.functionIds()
+					: targets.functions) {
+					if (returnMask(target) === 0) continue;
+					const provenance = flow.summaries.summary(target)?.returnProvenance;
+					const forwarded =
+						provenance?.kind === "parameter"
+							? site.arguments?.[provenance.index]
+							: provenance?.kind === "receiver" &&
+								  program.function(target).metadata.strict
+								? site.receiver
+								: undefined;
+					const projected =
+						forwarded === undefined
+							? undefined
+							: analyses
+									.get(CORE_LOOP_INDUCTION_ANALYSIS, {
+										scope: "function",
+										function: functionId,
+									})
+									.range(forwarded, fn.instructionBlock(instruction));
+					const range = projected ?? returnRange(target);
+					if (range === undefined) {
+						integerRange = undefined;
+						break;
+					}
+					integerRange = joinRange(integerRange, range);
+				}
+			}
+			const currentRange =
+				fn.instructionAttributes(instruction)[CORE_CALL_RESULT_INTEGER_RANGE_ATTRIBUTE];
 			if (
 				!compilerValueKindMaskIsValid(mask) ||
-				fn.instructionAttributes(instruction)[CORE_CALL_RESULT_KIND_ATTRIBUTE] === mask
+				(fn.instructionAttributes(instruction)[CORE_CALL_RESULT_KIND_ATTRIBUTE] ===
+					mask &&
+					compilerIntegerRangesEqual(
+						compilerIntegerRangeIsValid(currentRange) ? currentRange : undefined,
+						integerRange,
+					))
 			)
 				continue;
 			let calls = results.get(functionId);
 			if (calls === undefined) results.set(functionId, (calls = []));
-			calls.push({ instruction, mask });
+			calls.push({
+				instruction,
+				mask,
+				...(integerRange === undefined
+					? {}
+					: { integerRange: Object.freeze(integerRange) }),
+			});
 		}
 	}
 	return results;
@@ -4492,7 +4580,7 @@ export function runCoreCrossCallTransforms(
 		for (const [functionId, calls] of callKindsByCaller) {
 			const fn = program.function(functionId);
 			const editor = CoreEditor.open(program, functionId);
-			for (const { instruction, mask } of calls) {
+			for (const { instruction, mask, integerRange } of calls) {
 				if (!fn.isInstructionLive(instruction)) continue;
 				const opcode = fn.instructionOpcodeName(instruction);
 				if (
@@ -4501,6 +4589,13 @@ export function runCoreCrossCallTransforms(
 				)
 					continue;
 				const start = fn.kernel.instructionOperandStart(instruction);
+				const attributes: Record<string, CoreAttributeValue> = {
+					...fn.instructionAttributes(instruction),
+					[CORE_CALL_RESULT_KIND_ATTRIBUTE]: mask,
+				};
+				if (integerRange === undefined)
+					delete attributes[CORE_CALL_RESULT_INTEGER_RANGE_ATTRIBUTE];
+				else attributes[CORE_CALL_RESULT_INTEGER_RANGE_ATTRIBUTE] = { ...integerRange };
 				editor.replaceInstruction(
 					instruction,
 					opcode,
@@ -4509,10 +4604,7 @@ export function runCoreCrossCallTransforms(
 						(_, index) => fn.kernel.operandAt(start + index),
 					),
 					{
-						attributes: {
-							...fn.instructionAttributes(instruction),
-							[CORE_CALL_RESULT_KIND_ATTRIBUTE]: mask,
-						},
+						attributes,
 						sourcePosition: fn.instructionSourcePosition(instruction),
 						effectRefinement: fn.instructionEffectRefinement(instruction),
 					},

@@ -110,7 +110,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 306;
+export const COMPILER_ARTIFACT_VERSION = 307;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -2305,6 +2305,7 @@ function writeCompilerArtifact(
 				masks,
 				results,
 				inputIntegerRanges,
+				resultIntegerRanges,
 				effectMask,
 			} of entry.instructionFacts ?? []) {
 				w.u32(instructionIp);
@@ -2313,6 +2314,7 @@ function writeCompilerArtifact(
 				w.u32(results.length);
 				for (const mask of results) w.u8(mask);
 				writeIntegerRanges(w, inputIntegerRanges);
+				writeIntegerRanges(w, resultIntegerRanges);
 				w.u32(effectMask);
 			}
 			w.u32(entry.callOverrides?.length ?? 0);
@@ -2368,6 +2370,7 @@ function writeCompilerArtifact(
 					}
 				}
 				writeIntegerRanges(w, facts.inputIntegerRanges);
+				writeIntegerRanges(w, facts.resultIntegerRanges);
 				w.u8(facts.registers === undefined ? 0 : 1);
 				if (facts.registers !== undefined) {
 					w.i32Array([...facts.registers]);
@@ -4890,16 +4893,18 @@ function readCompilerArtifact(
 					throw new Error("program-image-codec: invalid direct-entry comparison");
 				return { instructionIp, value: value === 1 };
 			});
-			const instructionFacts = Array.from({ length: r.count(20) }, () => {
+			const instructionFacts = Array.from({ length: r.count(24) }, () => {
 				const instructionIp = r.u32();
 				const masks = Array.from({ length: r.count(1) }, () => r.u8());
 				const results = Array.from({ length: r.count(1) }, () => r.u8());
 				const inputIntegerRanges = readIntegerRanges(r);
+				const resultIntegerRanges = readIntegerRanges(r);
 				return {
 					instructionIp,
 					masks,
 					results,
 					...(inputIntegerRanges === undefined ? {} : { inputIntegerRanges }),
+					...(resultIntegerRanges === undefined ? {} : { resultIntegerRanges }),
 					effectMask: r.u32(),
 				};
 			});
@@ -5011,6 +5016,7 @@ function readCompilerArtifact(
 					Array.from({ length: r.count(1) }, () => r.u8()),
 				);
 				const inputIntegerRanges = readIntegerRanges(r);
+				const resultIntegerRanges = readIntegerRanges(r);
 				const registers = readOptional(() => r.i32Array());
 				const inputOffset = registers === undefined ? undefined : r.u32();
 				facts[ip] = {
@@ -5018,6 +5024,7 @@ function readCompilerArtifact(
 					...(inputKindMasks === undefined ? {} : { inputKindMasks }),
 					...(resultKindMasks === undefined ? {} : { resultKindMasks }),
 					...(inputIntegerRanges === undefined ? {} : { inputIntegerRanges }),
+					...(resultIntegerRanges === undefined ? {} : { resultIntegerRanges }),
 					...(registers === undefined ? {} : { registers, inputOffset }),
 				};
 			}
