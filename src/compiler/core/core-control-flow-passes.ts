@@ -6,7 +6,10 @@ import {
 	CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
 } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
-import { coreInstructionInputsEqual } from "./core-ir-equality.ts";
+import {
+	coreInstructionInputsEqual,
+	coreInstructionInputsHash,
+} from "./core-ir-equality.ts";
 import { CORE_LOOP_INDUCTION_ANALYSIS } from "./core-ir-loops.ts";
 import type { CoreLoopComparison, CoreLoopInductionAnalysis } from "./core-ir-loops.ts";
 import {
@@ -762,6 +765,8 @@ const eliminateDominatedRedundancy: CoreFunctionPass = {
 				cursor = fn.kernel.instructionNext(coreInstructionId(cursor))
 			) {
 				const instruction = coreInstructionId(cursor);
+				const opcode = pureExpressionOpcode(fn, instruction);
+				if (opcode === undefined) continue;
 				const inputStart = fn.kernel.instructionOperandStart(instruction);
 				const inputCount = fn.kernel.instructionOperandCount(instruction);
 				const rooted = new Array<CoreValueId>(inputCount);
@@ -769,8 +774,6 @@ const eliminateDominatedRedundancy: CoreFunctionPass = {
 					const value = fn.kernel.operandAt(inputStart + index);
 					rooted[index] = roots.get(value) ?? value;
 				}
-				const opcode = pureExpressionOpcode(fn, instruction);
-				if (opcode === undefined) continue;
 				const bucket = current.get(opcode) ?? [];
 				const existingIndex = bucket.findIndex((candidate) =>
 					expressionsEqual(
@@ -866,11 +869,27 @@ const eliminatePartialRedundancy: CoreFunctionPass = {
 		const { program, item } = context;
 		const fn = program.function(item.function);
 		const cfg = context.analysis(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS).exceptional();
+		const loopHeaders = new Set(cfg.loops.map((loop) => loop.header));
+		const expressionsByBlock = new Map<
+			CoreBlockId,
+			Map<number, Array<CoreInstructionId>>
+		>();
+		const predecessorExpressions = (block: CoreBlockId) => {
+			let expressions = expressionsByBlock.get(block);
+			if (expressions !== undefined) return expressions;
+			expressions = new Map();
+			for (const instruction of fn.bodyInstructionIds(block)) {
+				if (pureExpressionOpcode(fn, instruction) === undefined) continue;
+				const hash = coreInstructionInputsHash(fn, instruction);
+				const bucket = expressions.get(hash) ?? [];
+				bucket.push(instruction);
+				expressions.set(hash, bucket);
+			}
+			expressionsByBlock.set(block, expressions);
+			return expressions;
+		};
 		for (const block of cfg.reversePostorder) {
-			if (
-				fn.kernel.blockHandlerBlock(block) !== undefined ||
-				cfg.loops.some((loop) => loop.header === block)
-			)
+			if (fn.kernel.blockHandlerBlock(block) !== undefined || loopHeaders.has(block))
 				continue;
 			const incoming = (cfg.predecessors[block] ?? []).filter(
 				({ kind }) => kind === "ordinary",
@@ -904,22 +923,15 @@ const eliminatePartialRedundancy: CoreFunctionPass = {
 				);
 				if (translated.some((inputs) => inputs === undefined)) continue;
 				const available = incoming.map((edge, index) => {
-					const candidateTerminator = fn.blockTerminator(edge.from);
-					for (
-						let candidateCursor = fn.kernel.blockFirstInstruction(edge.from);
-						candidateCursor >= 0 && candidateCursor !== candidateTerminator;
-						candidateCursor = fn.kernel.instructionNext(
-							coreInstructionId(candidateCursor),
-						)
-					) {
-						const candidate = coreInstructionId(candidateCursor);
-						if (
-							fn.instructionOpcode(candidate) === opcode &&
-							expressionsEqual(fn, instruction, candidate, translated[index])
-						)
-							return instructionResult(fn, candidate, 0);
-					}
-					return undefined;
+					const hash = coreInstructionInputsHash(fn, instruction, translated[index]);
+					const candidate = predecessorExpressions(edge.from)
+						.get(hash)
+						?.find((candidate) =>
+							expressionsEqual(fn, instruction, candidate, translated[index]),
+						);
+					return candidate === undefined
+						? undefined
+						: instructionResult(fn, candidate, 0);
 				});
 				const existing = available.filter((value) => value !== undefined).length;
 				if (existing === 0) continue;
