@@ -57,7 +57,10 @@ import {
 	nativeControlFlowPlansMatch,
 	nativeControlFlowContract,
 } from "./native-control-flow.ts";
-import type { NativeControlFlowPlan } from "./native-control-flow.ts";
+import type {
+	NativeControlFlowEntryOptions,
+	NativeControlFlowPlan,
+} from "./native-control-flow.ts";
 import {
 	NATIVE_ARITH,
 	NATIVE_BITWISE,
@@ -493,12 +496,12 @@ function projectStorageBodyFacts(
 	native: NativeFunctionPlan,
 	body: NativeStorageBodyFacts,
 	controlFlow: NativeControlFlowPlan | undefined,
-	externalEntries: ReadonlyArray<number>,
+	entries: NativeControlFlowEntryOptions,
 ): NativeStorageBodyFacts {
 	if (controlFlow === undefined) return body;
 	return storageBodyFacts(
 		native,
-		projectNativeBodyFacts(native, body.accesses, controlFlow, externalEntries),
+		projectNativeBodyFacts(native, body.accesses, controlFlow, entries),
 		body.captures,
 	);
 }
@@ -1379,18 +1382,20 @@ function lowerStorage(
 ): NativeStoragePlan {
 	const fn = native.body;
 	const selection = analyzeNativeFastPaths(native, entry, stringConstants, body);
-	const externalEntries = [
-		...nativeFastPathWindows(selection.plans, false).flatMap(
+	const controlEntries = {
+		externalGroups: nativeFastPathWindows(selection.plans, false).map(
 			(window) => window.claimedIps,
 		),
-		...nativeRecordCallIps(native),
-		...(entry?.resultFields?.allocationIps ?? []),
-	];
+		externalEntries: [
+			...nativeRecordCallIps(native),
+			...(entry?.resultFields?.allocationIps ?? []),
+		],
+	};
 	const controlFlow = selectNativeControlFlow(native, body, stringConstants, {
 		constants: entry?.constantBooleans,
-		externalEntries,
+		...controlEntries,
 	});
-	body = projectStorageBodyFacts(native, body, controlFlow, externalEntries);
+	body = projectStorageBodyFacts(native, body, controlFlow, controlEntries);
 	const fastPaths = selection.refineOverlays(body.accesses);
 	const expressionWindows = nativeFastPathWindows(fastPaths);
 	const gcCertificate = native.gc;
@@ -1520,7 +1525,7 @@ function lowerStorage(
 		unusedRegisters,
 		stringComparisons: selectNativeStringComparisons(native, body, {
 			controlFlow,
-			externalEntries,
+			...controlEntries,
 			elided: new Set(elidedPureIps),
 			stringLength: (index) => stringConstants[index]?.length,
 		}),
@@ -2106,11 +2111,15 @@ export function validateNativeStorage(
 			stringConstants,
 			stackRoots,
 		);
-		const projected = projectStorageBodyFacts(variant, body, selected.controlFlow, [
-			...nativeFastPathWindows(selected, false).flatMap((window) => window.claimedIps),
-			...nativeRecordCallIps(variant),
-			...(entry?.resultFields?.allocationIps ?? []),
-		]);
+		const projected = projectStorageBodyFacts(variant, body, selected.controlFlow, {
+			externalGroups: nativeFastPathWindows(selected, false).map(
+				(window) => window.claimedIps,
+			),
+			externalEntries: [
+				...nativeRecordCallIps(variant),
+				...(entry?.resultFields?.allocationIps ?? []),
+			],
+		});
 		if (!sameScalar(variant.storage, selected)) return false;
 		if (!sameNumbers(variant.storage.elidedPureIps, selected.elidedPureIps)) return false;
 		if (!sameNumbers(variant.storage.unusedRegisters, selected.unusedRegisters))

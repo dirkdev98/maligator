@@ -1,7 +1,10 @@
 import { createNativeRootProfitabilityContext } from "./lower-native-root-profitability.ts";
 import type { NativeRootProfitabilityContext } from "./lower-native-root-profitability.ts";
 import { nativeControlFlowEntries } from "./native-control-flow.ts";
-import type { NativeControlFlowPlan } from "./native-control-flow.ts";
+import type {
+	NativeControlFlowEntryOptions,
+	NativeControlFlowPlan,
+} from "./native-control-flow.ts";
 import type { NativeFunctionPlan } from "./program-image.ts";
 import {
 	vmExceptionHandlerTargets,
@@ -33,7 +36,7 @@ export function projectNativeBodyFacts(
 	native: NativeFunctionPlan,
 	body: NativeBodyFacts,
 	controlFlow: NativeControlFlowPlan | undefined,
-	externalEntries: ReadonlyArray<number>,
+	options: NativeControlFlowEntryOptions,
 ): NativeBodyFacts {
 	if (controlFlow === undefined) return body;
 	const count = native.body.instructions.length;
@@ -42,7 +45,7 @@ export function projectNativeBodyFacts(
 		controlFlow.branches.map(({ instructionIp, targetIp }) => [instructionIp, targetIp]),
 	);
 	const entries = new Set(
-		[...nativeControlFlowEntries(native, body, externalEntries).roots].filter(
+		[...nativeControlFlowEntries(native, body, options).roots].filter(
 			(ip) => ip >= 0 && ip < count && !unreachable.has(ip),
 		),
 	);

@@ -109,6 +109,33 @@ it.each(["mutable", "locked"] as const)(
 			)!;
 			expect(reuseEntry).toBeDefined();
 			expect(reuseEntry.storage!.mapEntries).toEqual([]);
+			for (const name of ["preparedWindow", "switchWindow"]) {
+				const fn = restored.native.functions.find(
+					(fn) =>
+						String.fromCharCode(
+							...(restored.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+						) === name,
+				)!;
+				const entry = fn.directEntries.find(
+					(e) => e.parameterRepresentations[1] === "string",
+				)!;
+				expect(entry, name).toBeDefined();
+				const unreachable = new Set(entry.storage!.controlFlow!.unreachableIps);
+				if (name === "preparedWindow") {
+					expect(fn.storage!.arrayInitializations).toHaveLength(1);
+					for (const plan of fn.storage!.arrayInitializations)
+						for (const ip of plan.claimedIps) expect(unreachable.has(ip)).toBe(true);
+				} else {
+					expect(fn.literalSwitches).toHaveLength(1);
+					const site = fn.literalSwitches![0]!;
+					for (const ip of [
+						site.instructionIp,
+						site.defaultIp,
+						...site.cases.map((c) => c.targetIp),
+					])
+						expect(unreachable.has(ip)).toBe(true);
+				}
+			}
 			for (const compiled of [true, false]) {
 				const binary = buildNativeProgramImage(restored, {
 					name: `surviving-span-${primordials}-${compiled}`,

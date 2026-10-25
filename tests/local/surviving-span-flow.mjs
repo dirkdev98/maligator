@@ -23,6 +23,35 @@ function invalidateEntries(record) {
 	collect();
 	if (record instanceof Map) record.clear();
 }
+function preparedWindow(observe, flag) {
+	if (flag !== flag) {
+		const values = [1, 2, 3, 4];
+		observe(values);
+		return values.length;
+	}
+	return 0;
+}
+function switchWindow(value, flag) {
+	if (flag !== flag) {
+		switch (value) {
+			case "aa":
+				return 1;
+			case "bb":
+				return 2;
+			case "cc":
+				return 3;
+			case "dd":
+				return 4;
+			case "ee":
+				return 5;
+			case "ff":
+				return 6;
+			default:
+				return value.outcome;
+		}
+	}
+	return 0;
+}
 function observe(value) {
 	observed++;
 	collect();
@@ -171,6 +200,44 @@ for (const record of [
 		} catch (error) {
 			rows.push(error.name, error.message === "live-set");
 		}
+	}
+}
+globalThis.preparedWindow = preparedWindow;
+globalThis.switchWindow = switchWindow;
+function touchArray(values) {
+	collect();
+	rows.push(values.join(":"));
+	values.pop();
+}
+rows.push(preparedWindow(touchArray, "string"), preparedWindow(touchArray, NaN));
+rows.push(switchWindow("aa", "string"), switchWindow("aa", NaN));
+for (const value of [
+	"ff",
+	"missing",
+	2,
+	Symbol("switch"),
+	{
+		get outcome() {
+			collect();
+			return { label: "switch-fallback" };
+		},
+	},
+	null,
+	undefined,
+]) {
+	for (const flag of ["string", NaN]) {
+		try {
+			rows.push(switchWindow(value, flag));
+		} catch (error) {
+			rows.push(error.name);
+		}
+	}
+}
+for (const flag of ["string", NaN]) {
+	try {
+		rows.push(preparedWindow(undefined, flag));
+	} catch (error) {
+		rows.push(error.name);
 	}
 }
 console.log(JSON.stringify([rows, observed]));

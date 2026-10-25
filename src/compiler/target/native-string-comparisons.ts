@@ -2,7 +2,10 @@ import { COMPILER_VALUE_KIND_STRING } from "../shared/compiler-value-kinds.ts";
 import { instructionInputKind } from "../shared/instruction-facts.ts";
 import type { NativeBodyFacts } from "./native-body-facts.ts";
 import { nativeControlFlowEntries } from "./native-control-flow.ts";
-import type { NativeControlFlowPlan } from "./native-control-flow.ts";
+import type {
+	NativeControlFlowEntryOptions,
+	NativeControlFlowPlan,
+} from "./native-control-flow.ts";
 import type { NativeFunctionPlan } from "./program-image.ts";
 
 export interface NativeStringComparisonPlan {
@@ -15,9 +18,8 @@ export interface NativeStringComparisonPlan {
 export function selectNativeStringComparisons(
 	native: NativeFunctionPlan,
 	body: NativeBodyFacts,
-	options: {
+	options: NativeControlFlowEntryOptions & {
 		readonly controlFlow?: NativeControlFlowPlan;
-		readonly externalEntries?: ReadonlyArray<number>;
 		readonly elided: ReadonlySet<number>;
 		readonly stringLength: (index: number) => number | undefined;
 		readonly workLimit?: number;
@@ -44,8 +46,7 @@ export function selectNativeStringComparisons(
 		]),
 	);
 	const roots =
-		body.projection?.entries ??
-		nativeControlFlowEntries(native, body, options.externalEntries).roots;
+		body.projection?.entries ?? nativeControlFlowEntries(native, body, options).roots;
 	const predecessors = new Array<Array<number> | undefined>(fn.instructions.length);
 	const add = (from: number, to: number): void => {
 		if (to < 0 || to >= fn.instructions.length) return;

@@ -264,6 +264,9 @@ The independent target boundary and current storage contract are recorded in
       retaining every continuation of a live helper. Map reuse hints also consume
       projected edges and aliases; dead endpoints no longer retain hint locals or
       their Core call chains, while live updates retain receiver and key checks.
+      Fixed fast paths, literal-switch targets and field-call windows share the
+      same conditional continuation closure; handler, resume and record ABI roots
+      retain their explicit entry contracts.
 - [x] Normalize primitive conversion calls from semantic kind unions. Eligible
       `Number` and `String` calls use unary conversions, carrying kind and effect
       proofs into native storage, full entries and frameless numeric paths.

@@ -31,11 +31,16 @@ export interface NativeControlFlowPlan {
 	readonly unreachableIps: ReadonlyArray<number>;
 }
 
+export interface NativeControlFlowEntryOptions {
+	readonly externalEntries?: ReadonlyArray<number>;
+	readonly externalGroups?: ReadonlyArray<ReadonlyArray<number>>;
+}
+
 // Ordinary dominance must account for unpublished helper continuations as entries.
 export function nativeControlFlowEntries(
 	native: NativeFunctionPlan,
 	body: NativeBodyFacts,
-	externalEntries: ReadonlyArray<number> = [],
+	options: NativeControlFlowEntryOptions = {},
 ): {
 	readonly roots: ReadonlySet<number>;
 	readonly unconditionalRoots: ReadonlySet<number>;
@@ -43,11 +48,16 @@ export function nativeControlFlowEntries(
 	readonly owned: Uint8Array;
 } {
 	const count = native.body.instructions.length;
-	const roots = new Set([0, ...body.externalEntries, ...externalEntries]);
+	const roots = new Set([0, ...body.externalEntries, ...(options.externalEntries ?? [])]);
 	const unconditionalRoots = new Set(roots);
-	const continuationGroups: Array<ReadonlyArray<number>> = [];
+	const continuationGroups = [...(options.externalGroups ?? [])];
 	const owned = new Uint8Array(count);
-	for (const ip of externalEntries) owned[ip] = 1;
+	for (const ip of options.externalEntries ?? []) owned[ip] = 1;
+	for (const group of options.externalGroups ?? [])
+		for (const ip of group) {
+			roots.add(ip);
+			owned[ip] = 1;
+		}
 	// Selected regions can continue at ordinary labels without following the bytecode edge.
 	for (const region of native.specializations) {
 		const ips = [
@@ -68,19 +78,23 @@ export function nativeControlFlowEntries(
 	}
 	for (const site of native.literalSwitches ?? []) {
 		owned.fill(1, site.instructionIp, site.endIp + 1);
-		for (const entry of site.cases) {
-			roots.add(entry.targetIp);
-			unconditionalRoots.add(entry.targetIp);
-		}
-		roots.add(site.defaultIp);
-		unconditionalRoots.add(site.defaultIp);
+		const ips = [
+			site.instructionIp,
+			...site.cases.map((entry) => entry.targetIp),
+			site.defaultIp,
+		];
+		continuationGroups.push(ips);
+		for (const ip of ips) roots.add(ip);
 	}
-	for (const site of native.fieldCalls ?? [])
+	for (const site of native.fieldCalls ?? []) {
+		const ips: Array<number> = [];
 		for (let ip = site.allocationIp; ip <= site.callIp; ip++) {
 			roots.add(ip);
-			unconditionalRoots.add(ip);
+			ips.push(ip);
 			owned[ip] = 1;
 		}
+		continuationGroups.push(ips);
+	}
 	return { roots, unconditionalRoots, continuationGroups, owned };
 }
 
@@ -109,9 +123,8 @@ export function selectNativeControlFlow(
 	native: NativeFunctionPlan,
 	body: NativeBodyFacts,
 	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
-	options: {
+	options: NativeControlFlowEntryOptions & {
 		readonly constants?: NativeDirectEntryPlan["constantBooleans"];
-		readonly externalEntries?: ReadonlyArray<number>;
 		readonly workLimit?: number;
 	} = {},
 ): NativeControlFlowPlan | undefined {
@@ -134,7 +147,7 @@ export function selectNativeControlFlow(
 	}
 	// Region-owned polling can run independently of the ordinary branch.
 	const { roots, unconditionalRoots, continuationGroups, owned } =
-		nativeControlFlowEntries(native, body, options.externalEntries);
+		nativeControlFlowEntries(native, body, options);
 	const fixed = new Map(
 		options.constants?.map(({ instructionIp, value }) => [instructionIp, value]),
 	);

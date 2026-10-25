@@ -20,7 +20,11 @@ import { analyzeNativeBodyFacts } from "../src/compiler/target/native-body-facts
 import { selectNativeControlFlow } from "../src/compiler/target/native-control-flow.ts";
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
 
-function compile(primordials: "mutable" | "locked", profile = false) {
+function compile(
+	primordials: "mutable" | "locked",
+	profile = false,
+	body = "if(flag!==flag)source.set(1,'dead');return source.get(2);",
+) {
 	const path = "/helper-flow.mjs";
 	const facts = withProgramClosure(
 		compilerProgramFactsFromConfig(
@@ -31,7 +35,7 @@ function compile(primordials: "mutable" | "locked", profile = false) {
 	return lowerNativeStorage(
 		compileSemanticProgramToProgramImage(
 			analyzeSourceAndRunSemanticAnalysis(
-				`function inspect(source,flag){if(flag!==flag)source.set(1,'dead');return source.get(2);}
+				`function inspect(source,flag){${body}}
 				globalThis.inspect=inspect;
 				console.log(inspect(globalThis.input,'string'),inspect(globalThis.input,NaN));`,
 				path,
@@ -113,15 +117,27 @@ describe("conditional helper reachability", () => {
 		)!;
 		const retained = fn.specializations.find((region) => region !== retired)!;
 		const variant = nativeVariantContract(fn, entry);
-		const select = (native = variant, externalEntries: ReadonlyArray<number> = []) =>
+		const select = (
+			native = variant,
+			externalEntries: ReadonlyArray<number> = [],
+			externalGroups: ReadonlyArray<ReadonlyArray<number>> = [],
+		) =>
 			selectNativeControlFlow(
 				native,
 				analyzeNativeBodyFacts(fn.body),
 				image.runtime.stringConstants,
-				{ constants: entry.constantBooleans, externalEntries },
+				{ constants: entry.constantBooleans, externalEntries, externalGroups },
 			)!;
 		for (const ip of retired.claimedIps)
 			expect(select(variant, [ip]).unreachableIps).toEqual([]);
+		expect(select(variant, [], [retired.claimedIps])).toEqual(flow);
+		expect(
+			select(
+				variant,
+				[],
+				[[retained.license.admission.anchorIp, retired.license.admission.anchorIp]],
+			).unreachableIps,
+		).toEqual([]);
 		const linked = {
 			...variant,
 			specializations: fn.specializations.map((region) =>
@@ -141,4 +157,49 @@ describe("conditional helper reachability", () => {
 		};
 		expect(select(linked).unreachableIps).toEqual([]);
 	});
+
+	it.each(["mutable", "locked"] as const)(
+		"retires complete switch and Array preparation windows under %s primordials",
+		(primordials) => {
+			for (const [body, kind] of [
+				[
+					"if(flag!==flag){const values=[1,2,3,4];source(values);return values.length;}return 0;",
+					"array",
+				],
+				[
+					`if(flag!==flag){switch(source){${["aa", "bb", "cc", "dd", "ee", "ff"].map((s, i) => `case '${s}':return ${i};`).join("")}default:return -1;}}return 0;`,
+					"switch",
+				],
+			] as const) {
+				const original = compile(primordials, false, body);
+				for (const image of [
+					original,
+					deserializeCompilerArtifact(serializeCompilerArtifact(original)),
+				]) {
+					const fn = image.native.functions[1]!;
+					const entry = fn.directEntries.find(
+						(e) => e.parameterRepresentations[1] === "string",
+					)!;
+					const unreachable = new Set(entry.storage!.controlFlow!.unreachableIps);
+					if (kind === "array") {
+						expect(fn.storage!.arrayInitializations).toHaveLength(1);
+						for (const plan of fn.storage!.arrayInitializations)
+							for (const ip of plan.claimedIps) expect(unreachable.has(ip)).toBe(true);
+					} else {
+						expect(fn.literalSwitches).toHaveLength(1);
+						const site = fn.literalSwitches![0]!;
+						for (const ip of [
+							site.instructionIp,
+							site.defaultIp,
+							...site.cases.map((c) => c.targetIp),
+						])
+							expect(unreachable.has(ip)).toBe(true);
+					}
+					expect(() =>
+						validateNativeProgramStorage(image.native, image.runtime.stringConstants),
+					).not.toThrow();
+				}
+			}
+		},
+	);
 });
