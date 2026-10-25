@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import {
+	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_TOP,
+} from "../src/compiler/shared/compiler-value-kinds.ts";
+import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
@@ -22,6 +26,7 @@ import type {
 	BytecodeInstruction,
 } from "../src/compiler/target/runtime-image.ts";
 import { compilePreciseProgramImage } from "./helpers/precise-roots.ts";
+import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 function compile() {
 	return compilePreciseProgramImage(
@@ -376,6 +381,124 @@ describe("native physical root storage", () => {
 			expect(() => validateNativeStorage({ ...fn, storage })).toThrow(
 				/invalid or stale storage plan/,
 			);
+	});
+});
+
+describe("untraced SSA copies", () => {
+	const bodies = [
+		["Boolean/null phi", "const value=flag?!!input:null;gate();return value;", false],
+		[
+			"coercive primitive phi",
+			"const value=flag?(input|0):null;gate();return value;",
+			false,
+		],
+		["pooled String phi", "const value=flag?'left':'right';gate();return value;", false],
+		[
+			"pooled BigInt phi",
+			"const value=flag?12345678901234567890n:9876543210987654321n;gate();return value;",
+			false,
+		],
+		[
+			"fresh String phi",
+			"const value=flag?String(input):null;gate();return value;",
+			true,
+		],
+		[
+			"fresh BigInt phi",
+			"const value=flag?BigInt(input):null;gate();return value;",
+			true,
+		],
+		[
+			"fresh Symbol phi",
+			"const value=flag?Symbol(input):null;gate();return value;",
+			true,
+		],
+		[
+			"primitive cycle",
+			"let left=true;let right=null;for(let i=0;i<(count|0);i++){gate();const old=left;left=right;right=old;}gate();return left;",
+			false,
+		],
+		[
+			"managed cycle",
+			"let left=true;let right=input;for(let i=0;i<(count|0);i++){gate();const old=left;left=right;right=old;}gate();return left;",
+			true,
+		],
+	] as const;
+	it.each(bodies)("tracks every definition of a %s", (_name, body, rooted) => {
+		for (const locked of [false, true]) {
+			const out = inspectStaticValueFunction(
+				`function compute(input,flag,count,gate){${body}}globalThis.compute=compute;`,
+				"compute",
+				{ locked },
+			);
+			const returned = out.native.body.instructions.find((op) => op.opcode === "RETURN");
+			if (returned?.opcode !== "RETURN" || returned.value < 0)
+				throw new Error("Missing phi return");
+			expect(
+				out.native.body.instructions.filter(
+					(op) => op.opcode === "MOVE" && op.dst === returned.value,
+				).length,
+			).toBeGreaterThan(1);
+			expect(out.native.storage!.rootRegisters.includes(returned.value)).toBe(rooted);
+			expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
+				out.image,
+			);
+		}
+	});
+
+	it("retains a value borrowed by coroutine suspension", () => {
+		const out = inspectStaticValueFunction(
+			"function* compute(flag){const value=flag?true:null;yield value;return value;}globalThis.compute=compute;",
+			"compute",
+		);
+		const returned = out.native.body.instructions.find(
+			(op) => op.opcode === "RETURN" && op.value >= 0,
+		);
+		if (returned?.opcode !== "RETURN") throw new Error("Missing suspended phi return");
+		expect(out.native.storage!.rootRegisters).toContain(returned.value);
+	});
+
+	it("retains a managed input copied into an in-place primitive conversion", () => {
+		const template = compile().native.functions[1]!.body;
+		const body = {
+			...template,
+			parameterCount: 2,
+			argumentSnapshotCount: 0,
+			registerCount: 4,
+			handlers: [],
+			positions: [],
+			instructions: [
+				{ opcode: "MOVE", dst: 2, src: 0 },
+				{ opcode: "UNARY", dst: 2, src: 2, operator: "+" },
+				{
+					opcode: "CALL",
+					dst: 3,
+					callee: 1,
+					thisValue: -1,
+					argumentCount: 0,
+					arguments: [],
+				},
+				{ opcode: "RETURN", value: 2 },
+			] satisfies Array<BytecodeInstruction>,
+		};
+		const base = createConservativeNativePlan([body]).functions[0]!;
+		const native = lowerNativeFunctionStorage({
+			...base,
+			storageValues: [0, 1, 2, 3],
+			facts: [
+				undefined,
+				{
+					registers: [2, 2],
+					inputOffset: 1,
+					inputKindMasks: [COMPILER_VALUE_KIND_TOP],
+					resultKindMasks: [COMPILER_VALUE_KIND_NUMBER],
+				},
+				undefined,
+				undefined,
+			],
+		});
+		expect(native.storage!.rootRegisters).toContain(2);
+		expect(emitCompiledFunction(native, 0, "", false)).not.toBeNull();
 	});
 });
 

@@ -168,6 +168,112 @@ for (const factory of [own, accessor]) {
 	}
 }
 
+function primitivePhiRoots(flag, collect) {
+	const value = flag ? true : null;
+	collect();
+	return value;
+}
+
+function literalPhiRoots(flag, collect) {
+	const value = flag ? "left" : "right";
+	collect();
+	return value;
+}
+
+function bigIntPhiRoots(flag, collect) {
+	const value = flag ? 12345678901234567890n : 9876543210987654321n;
+	collect();
+	return value;
+}
+
+function cyclePhiRoots(count, collect) {
+	let left = true;
+	let right = null;
+	for (let index = 0; index < (count | 0); index++) {
+		collect();
+		const old = left;
+		left = right;
+		right = old;
+	}
+	collect();
+	return left;
+}
+
+function mixedPhiRoots(factory, count, collect) {
+	let left = true;
+	let right = factory();
+	for (let index = 0; index < (count | 0); index++) {
+		collect();
+		const old = left;
+		left = right;
+		right = old;
+	}
+	collect();
+	return left;
+}
+
+function freshPhiRoots(flag, factory, collect) {
+	const value = flag ? factory() : null;
+	collect();
+	return value;
+}
+
+function* suspendedPhiRoots(factory, collect) {
+	const value = factory();
+	yield true;
+	collect();
+	return value;
+}
+
+globalThis.primitivePhiRoots = primitivePhiRoots;
+globalThis.literalPhiRoots = literalPhiRoots;
+globalThis.bigIntPhiRoots = bigIntPhiRoots;
+globalThis.cyclePhiRoots = cyclePhiRoots;
+globalThis.mixedPhiRoots = mixedPhiRoots;
+globalThis.freshPhiRoots = freshPhiRoots;
+globalThis.suspendedPhiRoots = suspendedPhiRoots;
+let textSequence = 0;
+function freshText() {
+	return "fresh:" + textSequence++;
+}
+for (const flag of [true, false]) {
+	if (globalThis.primitivePhiRoots(flag, gc) !== (flag ? true : null))
+		throw new Error("primitive phi changed");
+	if (globalThis.literalPhiRoots(flag, gc) !== (flag ? "left" : "right"))
+		throw new Error("literal phi changed");
+	if (
+		globalThis.bigIntPhiRoots(flag, gc) !==
+		(flag ? 12345678901234567890n : 9876543210987654321n)
+	)
+		throw new Error("BigInt literal phi changed");
+	const expectedText = flag ? "fresh:" + textSequence : null;
+	if (globalThis.freshPhiRoots(flag, freshText, gc) !== expectedText)
+		throw new Error("fresh phi root lost");
+}
+let bigIntSequence = 0;
+const freshBigInt = () => BigInt("1234567890123456789" + bigIntSequence++);
+for (let index = 0; index < 4; index++) {
+	const expected = BigInt("1234567890123456789" + bigIntSequence);
+	if (globalThis.freshPhiRoots(true, freshBigInt, gc) !== expected)
+		throw new Error("fresh BigInt phi root lost");
+	const symbol = globalThis.freshPhiRoots(true, () => Symbol("phi:" + index), gc);
+	if (String(symbol) !== "Symbol(phi:" + index + ")")
+		throw new Error("fresh Symbol phi root lost");
+}
+for (const count of [0, 1, 2, 3, 8, 9]) {
+	if (globalThis.cyclePhiRoots(count, gc) !== (count % 2 === 0 ? true : null))
+		throw new Error("primitive copy cycle changed");
+	const mixed = globalThis.mixedPhiRoots(() => own(67), count, gc);
+	if (count % 2 === 0 ? mixed !== true : mixed.marker !== 67)
+		throw new Error("managed copy cycle root lost");
+	const suspended = globalThis.suspendedPhiRoots(() => own(71), gc);
+	if (suspended.next().value !== true) throw new Error("suspended phi yield changed");
+	gc();
+	const resumed = suspended.next();
+	if (!resumed.done || resumed.value.marker !== 71)
+		throw new Error("suspended phi root lost");
+}
+
 let displacedTarget = own(11);
 const displaced = new WeakRef(displacedTarget);
 let transportedTarget = own(11);

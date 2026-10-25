@@ -1,5 +1,8 @@
 import { builtinPrimitiveResult } from "../shared/builtin-registry.ts";
-import { instructionResultKind } from "../shared/instruction-facts.ts";
+import {
+	instructionInputKind,
+	instructionResultKind,
+} from "../shared/instruction-facts.ts";
 import type { InstructionFacts } from "../shared/instruction-facts.ts";
 import {
 	nativeCallbackTransportsMatch,
@@ -1092,47 +1095,99 @@ function immediateOperatorResult(
 	);
 }
 
-function untracedPrimitiveResultRegisters(
+function untracedValueRegisters(
 	native: NativeFunctionPlan,
 	body: NativeStorageBodyFacts,
 	{ blocked, borrowed }: NativeScalarOwnership,
+	rematerializedConstantIps: ReadonlyArray<number>,
 ): ReadonlySet<number> {
 	const registers = new Set<number>();
-	if (native.storageValues === undefined) return registers;
-	for (const [ip, op] of native.body.instructions.entries()) {
-		if (!body.isReachable(ip) || !("dst" in op)) continue;
-		const resultKind = instructionResultKind(native.facts?.[ip], op.dst);
-		const immediate =
-			!body.reads[ip]!.includes(op.dst) &&
-			(resultKind !== undefined
-				? compilerValueKindMaskIsSubset(
-						resultKind,
-						COMPILER_VALUE_KIND_NUMBER |
-							COMPILER_VALUE_KIND_BOOLEAN |
-							COMPILER_VALUE_KIND_NULLISH,
-					)
-				: op.opcode === "CALL_KNOWN"
-					? !op.construct &&
-						op.argumentMode === undefined &&
-						["number", "boolean"].includes(builtinPrimitiveResult(op.operation) ?? "")
-					: (op.opcode === "UNARY" || op.opcode === "BINARY") &&
-						immediateOperatorResult(
-							op,
-							native.registerRepresentations,
-							native.instructions[ip],
-							native.facts?.[ip],
-						));
+	if (native.storageValues === undefined || native.gc.safepoints.length === 0)
+		return registers;
+	const fn = native.body;
+	const entryCount = fn.parameterCount + fn.argumentSnapshotCount;
+	const traceable = new Uint8Array(fn.registerCount);
+	const pending: Array<number> = [];
+	const copies = new Array<Array<number> | undefined>(fn.registerCount);
+	const constants = new Set(rematerializedConstantIps);
+	const scalar = (register: number): boolean => {
+		const rep = native.registerRepresentations[register];
+		return rep === "number" || rep === "int32" || rep === "boolean";
+	};
+	const retain = (register: number): void => {
+		if (traceable[register] !== 0 || scalar(register)) return;
+		traceable[register] = 1;
+		pending.push(register);
+	};
+	const immediate = (kind: number | undefined): boolean =>
+		kind !== undefined &&
+		compilerValueKindMaskIsSubset(
+			kind,
+			COMPILER_VALUE_KIND_NUMBER |
+				COMPILER_VALUE_KIND_BOOLEAN |
+				COMPILER_VALUE_KIND_NULLISH,
+		);
+	for (let register = 0; register < fn.registerCount; register++)
 		if (
-			!blocked.has(ip) &&
-			!borrowed.has(op.dst) &&
-			op.dst >= native.body.parameterCount + native.body.argumentSnapshotCount &&
-			native.storageValues[op.dst]! >= 0 &&
-			body.writeCounts[op.dst] === 1 &&
-			native.registerRepresentations[op.dst] === "boxed" &&
-			immediate
+			register < entryCount ||
+			borrowed.has(register) ||
+			body.writeCounts[register] === 0
 		)
-			registers.add(op.dst);
+			retain(register);
+	for (const [ip, op] of native.body.instructions.entries()) {
+		if (!body.isReachable(ip)) continue;
+		for (const destination of body.writes[ip]!) {
+			if (scalar(destination)) continue;
+			if (blocked.has(ip)) {
+				retain(destination);
+				continue;
+			}
+			const facts = native.facts?.[ip];
+			// Pooled literals have immovable runtime-image addresses, including through copies.
+			if (constants.has(ip) || immediate(instructionResultKind(facts, destination)))
+				continue;
+			if (op.opcode === "MOVE") {
+				if (op.src < 0 || immediate(instructionInputKind(facts, op.src))) continue;
+				const destinations = (copies[op.src] ??= []);
+				destinations.push(destination);
+				continue;
+			}
+			if (
+				op.opcode === "CREATE_NUMBER" ||
+				op.opcode === "CREATE_F64" ||
+				op.opcode === "CREATE_BOOLEAN" ||
+				op.opcode === "CREATE_NULL" ||
+				op.opcode === "CREATE_UNDEFINED" ||
+				op.opcode === "CREATE_EMPTY"
+			)
+				continue;
+			if (
+				(op.opcode === "CALL_KNOWN" &&
+					!op.construct &&
+					op.argumentMode === undefined &&
+					["number", "boolean"].includes(builtinPrimitiveResult(op.operation) ?? "")) ||
+				((op.opcode === "UNARY" || op.opcode === "BINARY") &&
+					immediateOperatorResult(
+						op,
+						native.registerRepresentations,
+						native.instructions[ip],
+						facts,
+					))
+			)
+				continue;
+			retain(destination);
+		}
 	}
+	// A phi or copy cycle needs tracing if any incoming definition can hold a managed value.
+	for (let cursor = 0; cursor < pending.length; cursor++)
+		for (const destination of copies[pending[cursor]!] ?? []) retain(destination);
+	for (let register = entryCount; register < fn.registerCount; register++)
+		if (
+			traceable[register] === 0 &&
+			native.storageValues[register]! >= 0 &&
+			!scalar(register)
+		)
+			registers.add(register);
 	return registers;
 }
 
@@ -1456,7 +1511,12 @@ function lowerStorage(
 					callTransports,
 					scalar.rematerializedConstantIps,
 					scalar.expressionIps,
-					untracedPrimitiveResultRegisters(native, body, ownership),
+					untracedValueRegisters(
+						native,
+						body,
+						ownership,
+						scalar.rematerializedConstantIps,
+					),
 					gcCertificate,
 				);
 	const elidedPureIps = selectNativeUnusedValues(native, body, {
@@ -2208,7 +2268,7 @@ export function validateNativeStorage(
 							selected.callTransports,
 							variant.storage.rematerializedConstantIps,
 							variant.storage.expressionIps,
-							untracedPrimitiveResultRegisters(
+							untracedValueRegisters(
 								reachable,
 								projected,
 								scalarStorageOwnership(
@@ -2217,6 +2277,7 @@ export function validateNativeStorage(
 									nativeFastPathWindows(selected),
 									suspension,
 								),
+								variant.storage.rematerializedConstantIps,
 							),
 							variant.gc,
 						),

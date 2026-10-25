@@ -26,6 +26,27 @@ describe("compact native shadow roots", () => {
 			outDir,
 		});
 		({ compiled, interpreted } = pair);
+		for (const [name, rooted] of [
+			["primitivePhiRoots", false],
+			["literalPhiRoots", false],
+			["bigIntPhiRoots", false],
+			["cyclePhiRoots", false],
+			["mixedPhiRoots", true],
+			["freshPhiRoots", true],
+		] as const) {
+			const fn = pair.programImage.native.functions.find(
+				(fn) =>
+					String.fromCharCode(
+						...(pair.programImage.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+					) === name,
+			);
+			expect(fn, name).toBeDefined();
+			const returned = fn!.body.instructions.find(
+				(op) => op.opcode === "RETURN" && op.value >= 0,
+			);
+			if (returned?.opcode !== "RETURN") throw new Error(`Missing phi return in ${name}`);
+			expect(fn!.storage!.rootRegisters.includes(returned.value), name).toBe(rooted);
+		}
 		const kernel = pair.programImage.native.functions.find(
 			(fn) =>
 				String.fromCharCode(
