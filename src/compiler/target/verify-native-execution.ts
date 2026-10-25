@@ -1,5 +1,16 @@
+import type { CorePlanRepresentation } from "../core/core-ir-regions.ts";
+import {
+	coreNativeEntryControlFlow,
+	coreNativeEntryProofIsCurrent,
+} from "../core/core-native-entry-analysis.ts";
+import type { CoreFunctionStore } from "../core/core-store.ts";
 import type { CompilerInstruction } from "../shared/compiler-instruction.ts";
-import type { ExecutionProgram } from "./execution-ir.ts";
+import type {
+	ExecutionDirectEntry,
+	ExecutionFunction,
+	ExecutionProgram,
+	ExecutionRegisterRepresentation,
+} from "./execution-ir.ts";
 import {
 	executionLoopBackedgeInstructions,
 	nativeLoopBackedgeInstructions,
@@ -11,6 +22,102 @@ import {
 } from "./verify-execution.ts";
 
 const verifiedNativeExecutionPrograms = new WeakSet<ExecutionProgram>();
+
+function verifyUnreachableCopies(
+	fn: ExecutionFunction,
+	core: CoreFunctionStore,
+	entry: ExecutionDirectEntry,
+): ReadonlySet<CompilerInstruction> | undefined {
+	const proof = entry.unreachableCopies;
+	if (proof === undefined) return undefined;
+	const reject = (): never => {
+		throw new ExecutionVerificationError(
+			"native direct entry has an invalid unreachable-copy proof",
+			{ functionIndex: fn.functionIndex },
+		);
+	};
+	const sameRepresentations = (
+		source: ReadonlyArray<CorePlanRepresentation> | undefined,
+		target: ReadonlyArray<ExecutionRegisterRepresentation> | undefined,
+	): boolean =>
+		source === undefined
+			? target === undefined
+			: target !== undefined &&
+				source.length === target.length &&
+				source.every(
+					(representation, index) =>
+						(representation === "f64"
+							? "number"
+							: representation === "i32"
+								? "int32"
+								: representation) === target[index],
+				);
+	const control = coreNativeEntryControlFlow(core, proof.source);
+	if (
+		control === undefined ||
+		!coreNativeEntryProofIsCurrent(core, proof.source) ||
+		proof.source.function !== core.id ||
+		proof.source.id !== entry.id ||
+		fn.storageValues === undefined ||
+		!sameRepresentations(
+			proof.source.parameterRepresentations,
+			entry.parameterRepresentations,
+		) ||
+		!sameRepresentations(
+			proof.source.argumentRepresentations,
+			entry.argumentRepresentations,
+		) ||
+		!sameRepresentations(
+			proof.source.fieldParameters?.representations,
+			entry.fieldParameters?.representations,
+		) ||
+		!sameRepresentations(
+			[proof.source.resultRepresentation],
+			[entry.resultRepresentation],
+		)
+	)
+		reject();
+	const edges = new Set<number>();
+	for (const block of fn.coreBlocks) {
+		const terminator = core.blockTerminator(block);
+		const start = core.kernel.terminatorEdgeStart(terminator);
+		for (let index = 0; index < core.kernel.terminatorEdgeCount(terminator); index++)
+			edges.add(start + index);
+	}
+	const copies = new Set(fn.parallelCopies);
+	const moves = new Set<CompilerInstruction>();
+	const claimed = new Set<number>();
+	for (const { edge, copy } of proof.copies) {
+		if (
+			!edges.has(edge) ||
+			control!.ordinaryEdges.has(edge) ||
+			claimed.has(edge) ||
+			!copies.has(copy) ||
+			copy.kind !== "edge"
+		)
+			reject();
+		claimed.add(edge);
+		const target = core.kernel.terminatorEdgeBlock(edge);
+		const parameters = core.kernel.blockParameterStart(target);
+		const arguments_ = core.kernel.terminatorEdgeArgumentStart(edge);
+		if (
+			copy.assignments.length !== core.kernel.blockParameterCount(target) ||
+			copy.assignments.length !== core.kernel.terminatorEdgeArgumentCount(edge) ||
+			!copy.assignments.every(
+				({ source, destination }, index) =>
+					fn.storageValues![source] === core.kernel.operandAt(arguments_ + index) &&
+					fn.storageValues![destination] ===
+						core.kernel.blockParameterValue(parameters + index),
+			)
+		)
+			reject();
+		for (const move of copy.moves) {
+			if (moves.has(move)) reject();
+			moves.add(move);
+		}
+	}
+	return moves;
+}
 
 /** Verify the generic target before native image planning consumes it. */
 export function verifyNativeExecutionProgram(program: ExecutionProgram): void {
@@ -86,6 +193,11 @@ export function verifyNativeExecutionProgram(program: ExecutionProgram): void {
 					suppliedArguments: entry.argumentRepresentations?.length,
 					discharged: entry.gc.discharged ?? [],
 				},
+				verifyUnreachableCopies(
+					fn,
+					program.core.function(program.functionMap.executionToCore[functionIndex]!),
+					entry,
+				),
 			);
 		}
 	}

@@ -3,26 +3,41 @@ import {
 	COMPILER_VALUE_KIND_BOOLEAN,
 	COMPILER_VALUE_KIND_STRING,
 	COMPILER_VALUE_KIND_TOP,
-	compilerOperatorInputKindsHaveExactNativeSemantics,
 } from "../shared/compiler-value-kinds.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
+import { coreCanonicalValueRoots } from "./core-ir-control-flow.ts";
+import { analyzeCoreLoopInductions } from "./core-ir-loops.ts";
+import type { CoreLoopInductionAnalysis } from "./core-ir-loops.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
 import type { CoreDirectEntryPlan, CorePlanRepresentation } from "./core-ir-regions.ts";
-import type { CoreValueKindAnalysis } from "./core-ir-value-kinds.ts";
+import type {
+	CoreValueKindAnalysis,
+	CoreValueKindInputs,
+} from "./core-ir-value-kinds.ts";
 import { analyzeCoreValueKinds } from "./core-ir-value-kinds.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import type { CoreInstructionId, CoreValueId } from "./core-ir.ts";
+import { analyzeCoreNativeEntryControlFlow } from "./core-native-entry-reachability.ts";
+import type { CoreNativeEntryControlFlow } from "./core-native-entry-reachability.ts";
+import { coreInstructionFacts } from "./core-native-instruction-facts.ts";
+import type { CoreInstructionRangeQuery } from "./core-native-instruction-facts.ts";
 import { coreFunctionVersionsAreCurrent } from "./core-store.ts";
-import type { CoreFunctionStore, CoreFunctionVersions } from "./core-store.ts";
+import type {
+	CoreFunctionStore,
+	CoreFunctionVersions,
+	CoreProgram,
+} from "./core-store.ts";
 
 const representationProofs = new WeakMap<
 	ReadonlyArray<CorePlanRepresentation>,
 	{
 		readonly fn: CoreFunctionStore;
 		readonly versions: CoreFunctionVersions;
+		readonly resultRepresentation: CorePlanRepresentation;
+		readonly controlFlow: CoreNativeEntryControlFlow | undefined;
 		readonly parameters: ReadonlyArray<CorePlanRepresentation>;
 		readonly arguments: ReadonlyArray<CorePlanRepresentation> | undefined;
-		readonly operatorInputs: CoreDirectEntryPlan["operatorInputs"];
+		readonly instructionFacts: CoreDirectEntryPlan["instructionFacts"];
 		readonly constants: CoreDirectEntryPlan["constantBooleans"];
 		readonly calls: CoreDirectEntryPlan["callSites"];
 		readonly callOverrides: CoreDirectEntryPlan["callOverrides"];
@@ -33,7 +48,7 @@ const representationProofs = new WeakMap<
 >();
 
 export function analyzeCoreNativeEntry(
-	fn: CoreFunctionStore,
+	program: CoreProgram,
 	cfg: CoreControlFlow,
 	parameters: ReadonlyArray<CorePlanRepresentation>,
 	arguments_: ReadonlyArray<CorePlanRepresentation> | undefined,
@@ -47,8 +62,9 @@ export function analyzeCoreNativeEntry(
 	readonly valueRepresentations: ReadonlyArray<CorePlanRepresentation>;
 	readonly resultRepresentation: CorePlanRepresentation;
 	readonly constantBooleans?: CoreDirectEntryPlan["constantBooleans"];
-	readonly operatorInputs?: CoreDirectEntryPlan["operatorInputs"];
+	readonly instructionFacts?: CoreDirectEntryPlan["instructionFacts"];
 } {
+	const fn = program.function(cfg.function);
 	const mask = (representation: CorePlanRepresentation | undefined) =>
 		representation === "f64"
 			? COMPILER_VALUE_KIND_NUMBER
@@ -57,7 +73,7 @@ export function analyzeCoreNativeEntry(
 				: representation === "string"
 					? COMPILER_VALUE_KIND_STRING
 					: COMPILER_VALUE_KIND_TOP;
-	const kinds = analyzeCoreValueKinds(fn, cfg, {
+	const kindInputs: CoreValueKindInputs = {
 		parameterMasks: parameters.map(mask),
 		operationResultMask(instruction, result) {
 			const exact = exactOperationResultMasks.get(instruction);
@@ -77,33 +93,97 @@ export function analyzeCoreNativeEntry(
 				return mask(arguments_[fn.instructionAttributes(instruction).index as number]);
 			return undefined;
 		},
-	});
+	};
+	let kinds = analyzeCoreValueKinds(fn, cfg, kindInputs);
 	const instructions = cfg.reversePostorder.flatMap((block) => [
 		...fn.bodyInstructionIds(block),
+		fn.blockTerminator(block),
 	]);
-	const inputs = Object.freeze(
-		instructions.flatMap((instruction) => {
-			const opcode = fn.instructionOpcodeName(instruction);
-			if (opcode !== "unary" && opcode !== "binary") return [];
-			const start = fn.kernel.instructionOperandStart(instruction);
-			const masks = Array.from(
-				{ length: fn.kernel.instructionOperandCount(instruction) },
-				(_, i) => kinds.kindMask(fn.kernel.operandAt(start + i)),
-			);
-			return compilerOperatorInputKindsHaveExactNativeSemantics(
-				opcode,
-				fn.instructionAttributes(instruction).operator,
-				masks,
-			)
-				? [Object.freeze({ instruction, masks: Object.freeze(masks) })]
-				: [];
-		}),
-	);
-	const operatorInputs = inputs.length === 0 ? undefined : inputs;
-	const constants =
+	let ranges: CoreLoopInductionAnalysis | undefined;
+	let controlFlow: CoreNativeEntryControlFlow | undefined;
+	const range: CoreInstructionRangeQuery = (value, block) =>
+		(ranges ??= analyzeCoreLoopInductions(
+			fn,
+			cfg,
+			coreCanonicalValueRoots(fn, cfg, controlFlow?.edges),
+			(value) => kinds.exactScalar(value),
+		)).range(value, block);
+	let constants =
 		arguments_ === undefined
 			? []
 			: coreFixedArityComparisons(fn, instructions, kinds, arguments_.length);
+	const hasMerge = [...fn.blockIds()].some(
+		(block) =>
+			block !== fn.entry &&
+			fn.kernel.blockParameterCount(block) > 0 &&
+			(cfg.predecessors[block]?.length ?? 0) > 1,
+	);
+	const returnValues = [...fn.blockIds()].flatMap((block) => {
+		const terminator = fn.blockTerminator(block);
+		return fn.instructionKind(terminator) === "return"
+			? [
+					{
+						block,
+						value: fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator)),
+					},
+				]
+			: [];
+	});
+	const distinct = new Set(
+		returnValues.map(({ value }) => kinds.scalarKind(value) ?? "boxed"),
+	);
+	controlFlow =
+		hasMerge ||
+		distinct.size > 1 ||
+		instructions.some(
+			(instruction) =>
+				fn.instructionKind(instruction) === "operation" &&
+				fn.instructionOpcodeName(instruction) === "call",
+		)
+			? analyzeCoreNativeEntryControlFlow(program, fn, cfg, kinds, constants, range)
+			: undefined;
+	if (hasMerge && controlFlow !== undefined) {
+		// Exhausting the monotone refinement budget leaves conservative facts.
+		let previousSize = cfg.successors.reduce(
+			(count, edges) => count + (edges?.length ?? 0),
+			0,
+		);
+		const cost = Math.max(1, instructions.length + fn.valueCapacity);
+		let remaining = Math.max(4096, instructions.length * 8);
+		while (controlFlow.edges.size < previousSize && remaining >= cost) {
+			remaining -= cost;
+			previousSize = controlFlow.edges.size;
+			kinds = analyzeCoreValueKinds(fn, cfg, {
+				...kindInputs,
+				controlEdges: controlFlow.edges,
+			});
+			ranges = undefined;
+			constants =
+				arguments_ === undefined
+					? []
+					: coreFixedArityComparisons(fn, instructions, kinds, arguments_.length);
+			controlFlow = analyzeCoreNativeEntryControlFlow(
+				program,
+				fn,
+				cfg,
+				kinds,
+				constants,
+				range,
+				controlFlow.edges,
+			);
+		}
+	}
+	const inputs = Object.freeze(
+		instructions.flatMap((instruction) => {
+			return [
+				Object.freeze({
+					instruction,
+					...coreInstructionFacts(fn, instruction, kinds, true, range),
+				}),
+			];
+		}),
+	);
+	const instructionFacts = inputs.length === 0 ? undefined : inputs;
 	const constantBooleans =
 		constants.length === 0
 			? undefined
@@ -116,27 +196,26 @@ export function analyzeCoreNativeEntry(
 			return scalar === "number" ? "f64" : (scalar ?? "boxed");
 		}),
 	);
-	const returns = [...fn.blockIds()].flatMap((block) => {
-		const terminator = fn.blockTerminator(block);
-		return fn.instructionKind(terminator) === "return"
-			? [
-					valueRepresentations[
-						fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator))
-					]!,
-				]
-			: [];
-	});
+	const liveReturns = returnValues.filter(
+		({ block }) => controlFlow === undefined || controlFlow.blocks.has(block),
+	);
 	const resultRepresentation =
-		returns.length > 0 && returns.every((representation) => representation === returns[0])
-			? returns[0]!
+		liveReturns.length > 0 &&
+		liveReturns.every(
+			({ value }) =>
+				valueRepresentations[value] === valueRepresentations[liveReturns[0]!.value],
+		)
+			? valueRepresentations[liveReturns[0]!.value]!
 			: "boxed";
 	representationProofs.set(valueRepresentations, {
 		fn,
 		versions: fn.versions,
+		resultRepresentation,
+		controlFlow,
 		parameters: [...parameters],
 		arguments: arguments_ === undefined ? undefined : [...arguments_],
 		constants: constantBooleans,
-		operatorInputs,
+		instructionFacts,
 		fields:
 			fields === undefined
 				? undefined
@@ -154,9 +233,72 @@ export function analyzeCoreNativeEntry(
 	return {
 		valueRepresentations,
 		resultRepresentation,
-		operatorInputs,
+		instructionFacts,
 		...(constantBooleans === undefined ? {} : { constantBooleans }),
 	};
+}
+
+export function coreNativeEntryControlFlow(
+	fn: CoreFunctionStore,
+	entry: CoreDirectEntryPlan,
+): CoreNativeEntryControlFlow | undefined {
+	const proof =
+		entry.valueRepresentations === undefined
+			? undefined
+			: representationProofs.get(entry.valueRepresentations);
+	return proof?.fn === fn && coreFunctionVersionsAreCurrent(fn, proof.versions)
+		? proof.controlFlow
+		: undefined;
+}
+
+// Compact only references to these same proven contracts; dead calls retain their semantic facts.
+export function compactCoreNativeEntries(
+	program: CoreProgram,
+	entries: ReadonlyArray<CoreDirectEntryPlan>,
+): ReadonlyArray<CoreDirectEntryPlan> {
+	const ids = new Map<CoreDirectEntryPlan["function"], Map<number, number>>();
+	for (const entry of entries) {
+		if (!coreNativeEntryProofIsCurrent(program.function(entry.function), entry))
+			throw new RangeError("Cannot reindex an unproven native entry");
+		const siblings = ids.get(entry.function) ?? new Map<number, number>();
+		if (siblings.has(entry.id)) throw new RangeError("Duplicate native entry ID");
+		siblings.set(entry.id, siblings.size);
+		ids.set(entry.function, siblings);
+	}
+	return entries.map((entry) => {
+		const fn = program.function(entry.function);
+		const reachable = coreNativeEntryControlFlow(fn, entry)?.blocks;
+		const calls = entry.callOverrides
+			?.filter(
+				(call) =>
+					reachable === undefined || reachable.has(fn.instructionBlock(call.instruction)),
+			)
+			.map((call) => {
+				const entryId = ids.get(call.target)?.get(call.entryId);
+				if (entryId === undefined) throw new RangeError("Dangling native entry override");
+				return entryId === call.entryId ? call : Object.freeze({ ...call, entryId });
+			});
+		const id = ids.get(entry.function)!.get(entry.id)!;
+		const changed =
+			calls !== undefined &&
+			(calls.length !== entry.callOverrides!.length ||
+				calls.some((call, index) => call !== entry.callOverrides![index]));
+		if (!changed) return id === entry.id ? entry : Object.freeze({ ...entry, id });
+		const overrides = Object.freeze(calls);
+		const previous = entry.valueRepresentations!;
+		// A new array owns the rebound proof; other consumers may retain the old numbering.
+		const values = Object.freeze([...previous]);
+		representationProofs.set(values, {
+			...representationProofs.get(previous)!,
+			callOverrides: overrides.map((call) => ({ ...call })),
+		});
+		return Object.freeze({
+			...entry,
+			id,
+			callOverrides: overrides,
+			valueRepresentations: values,
+		});
+	});
 }
 
 export function coreNativeEntryProofIsCurrent(
@@ -170,7 +312,7 @@ export function coreNativeEntryProofIsCurrent(
 			entry.fieldParameters === undefined &&
 			entry.resultFields === undefined &&
 			entry.recordParameters === undefined &&
-			entry.operatorInputs === undefined &&
+			entry.instructionFacts === undefined &&
 			entry.callOverrides === undefined
 		);
 	const proof = representationProofs.get(entry.valueRepresentations);
@@ -186,12 +328,13 @@ export function coreNativeEntryProofIsCurrent(
 	return (
 		proof?.fn === fn &&
 		coreFunctionVersionsAreCurrent(fn, proof.versions) &&
+		proof.resultRepresentation === entry.resultRepresentation &&
 		same(proof.parameters, entry.parameterRepresentations) &&
 		same(proof.arguments, entry.argumentRepresentations) &&
 		proof.constants === entry.constantBooleans &&
 		proof.resultFields === entry.resultFields &&
 		proof.recordParameters === entry.recordParameters &&
-		proof.operatorInputs === entry.operatorInputs &&
+		proof.instructionFacts === entry.instructionFacts &&
 		(proof.callOverrides === undefined
 			? entry.callOverrides === undefined
 			: entry.callOverrides !== undefined &&
@@ -269,6 +412,7 @@ function coreFixedArityComparisons(
 	};
 	const constants: Array<{ instruction: CoreInstructionId; value: boolean }> = [];
 	for (const instruction of instructions) {
+		if (fn.instructionKind(instruction) !== "operation") continue;
 		if (fn.instructionOpcodeName(instruction) !== "binary") continue;
 		const start = fn.kernel.instructionOperandStart(instruction);
 		const left = fn.kernel.operandAt(start);

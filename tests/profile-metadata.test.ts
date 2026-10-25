@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { expect, test } from "vitest";
@@ -23,7 +23,8 @@ import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-na
 import { matchProfileSites } from "../src/compiler/target/profile-metadata.ts";
 import type { ProgramImage } from "../src/compiler/target/program-image.ts";
 import { validateRuntimeImageMetadata } from "../src/compiler/target/runtime-image.ts";
-import { prepareProfile } from "../src/profile-artifact.ts";
+import { prepareProfile, profileCaptureIdentity } from "../src/profile-artifact.ts";
+import { canonicalProfileJson } from "../src/source-profile-identity.ts";
 import { programAnalysisContext } from "./helpers/core-program-analysis.ts";
 import { lowerExecutionFixtureToProgramImage as lowerExecutionToProgramImage } from "./helpers/native-program-image.ts";
 
@@ -74,7 +75,7 @@ test("ordinary compilation skips profile-only metadata", () => {
 	);
 	const definition = compileSemanticProgramToProgramImage(semantic);
 
-	expect(definition.diagnostics.profileSites).toBeUndefined();
+	expect(definition.profiling?.sites).toBeUndefined();
 	expect(definition.diagnostics.profileRemarks).toBeUndefined();
 	expect(definition.diagnostics).not.toHaveProperty("coreOptimizationReport");
 	expect(definition.diagnostics).not.toHaveProperty("coreOptimizationPlan");
@@ -84,19 +85,16 @@ test("profile sites keep logical identity across unrelated line insertions", () 
 	const source = `function hot(object, key) { return object[key]; }\nhot(globalThis, "x");`;
 	const shifted = compile(`\n\n${source}`);
 	const original = compile(source);
-	const originalSite = original.diagnostics.profileSites!.find(
+	const originalSite = original.profiling!.sites.find(
 		(site) => site.operation === "property",
 	)!;
-	const shiftedSite = shifted.diagnostics.profileSites!.find(
+	const shiftedSite = shifted.profiling!.sites.find(
 		(site) => site.operation === "property",
 	)!;
 
 	expect(shiftedSite.line).toBe(originalSite.line + 2);
 	expect(shiftedSite.logicalId).toBe(originalSite.logicalId);
-	const matches = matchProfileSites(
-		original.diagnostics.profileSites!,
-		shifted.diagnostics.profileSites!,
-	);
+	const matches = matchProfileSites(original.profiling!.sites, shifted.profiling!.sites);
 	expect(matches.logical).toBeGreaterThan(0);
 	expect(matches.coverage).toBeGreaterThan(0.9);
 });
@@ -106,7 +104,7 @@ test("profile metadata gives instructions dense sites and structured remarks", (
 		`function hot(object, key) { object.fixed = {}; return object[key]; } hot(globalThis, "x");`,
 	);
 	emitProgramImage(definition);
-	const sites = definition.diagnostics.profileSites!;
+	const sites = definition.profiling!.sites;
 	const remarks = definition.diagnostics.profileRemarks!;
 
 	expect(sites.length).toBeGreaterThan(0);
@@ -158,9 +156,26 @@ test("profile optimizer data enters only the explicit prepared-profile sidecar",
 		expect(definition.diagnostics).not.toHaveProperty("coreOptimizationPlan");
 		expect(prepared.coreOptimizationReport?.phases.length).toBeGreaterThan(0);
 		expect(prepared.coreOptimizationPlan?.version.key).toMatch(/^p:/);
+		expect(
+			profileCaptureIdentity(
+				JSON.parse(readFileSync(`${binary}.profile.json`, "utf8")) as typeof prepared,
+			),
+		).toBe(prepared.captureIdentity);
 	} finally {
 		rmSync(directory, { recursive: true, force: true });
 	}
+});
+
+test("canonical profile arrays preserve sparse optional facts through JSON", () => {
+	const range = new Array<number>(3);
+	range[0] = 1;
+	range[2] = 3;
+	const facts = [undefined, { range, absent: undefined }];
+	expect(canonicalProfileJson(facts)).toBe('[null,{"range":[1,null,3]}]');
+	expect(canonicalProfileJson(JSON.parse(JSON.stringify(facts)))).toBe(
+		canonicalProfileJson(facts),
+	);
+	expect(() => canonicalProfileJson([1n])).toThrow("not serializable");
 });
 
 test("remaps stable Core function identities in inline chains and fact-flow targets", () => {
@@ -230,8 +245,7 @@ test("remaps stable Core function identities in inline chains and fact-flow targ
 	expect(program.sourcePositions[1]?.inlinedFunctionIndex).toBe(2);
 	expect(definition.runtime.sourcePositions[1]?.inlinedFunctionIndex).toBe(1);
 	expect(
-		definition.diagnostics.profileSites?.find(({ positionId }) => positionId === 1)
-			?.inlineChain,
+		definition.profiling?.sites.find(({ positionId }) => positionId === 1)?.inlineChain,
 	).toContainEqual({ functionIndex: 1, positionId: 1 });
 	const direct = definition.diagnostics.factFlow?.entries.find(
 		({ functions }) => functions.length === 1,
@@ -336,7 +350,7 @@ test("same-position operations retain distinct optimized instance identities", (
 	const definition = compile(
 		`function hot(object) { object.left = {}; object.right = {}; return object; } hot(globalThis);`,
 	);
-	const sites = definition.diagnostics.profileSites!.filter(
+	const sites = definition.profiling!.sites.filter(
 		(site) => site.operation === "property" || site.operation === "allocation",
 	);
 	expect(new Set(sites.map((site) => site.id)).size).toBe(sites.length);
@@ -355,7 +369,7 @@ test("every residual allocation, call, property, and boxing site has a remark", 
 		globalThis.keep = hot;
 		globalThis.math = Math;
 	`);
-	const relevant = definition.diagnostics.profileSites!.filter((site) =>
+	const relevant = definition.profiling!.sites.filter((site) =>
 		["allocation", "call", "property", "boxing"].includes(site.operation),
 	);
 	const remarked = new Set(
@@ -382,9 +396,7 @@ test("profile reports retain applied transformations after an instruction disapp
 		)?.changedItems,
 	).toBeGreaterThan(0);
 	expect(
-		definition.diagnostics.profileSites!.every(
-			({ instructionIndex }) => instructionIndex >= 0,
-		),
+		definition.profiling!.sites.every(({ instructionIndex }) => instructionIndex >= 0),
 	).toBe(true);
 });
 
@@ -433,16 +445,14 @@ test("profile reports bounded transformation declines without synthetic sites", 
 	expect(transforms.considered).toBeGreaterThan(0);
 	expect(transforms.declined).toBeGreaterThan(0);
 	expect(
-		definition.diagnostics.profileSites!.every(
-			({ instructionIndex }) => instructionIndex >= 0,
-		),
+		definition.profiling!.sites.every(({ instructionIndex }) => instructionIndex >= 0),
 	).toBe(true);
 });
 
 test("cross-build profile matching reports duplicate structural sites as ambiguous", () => {
 	const site = compile(
 		`function hot(object, key) { return object[key]; }`,
-	).diagnostics.profileSites!.find((candidate) => candidate.operation === "property")!;
+	).profiling!.sites.find((candidate) => candidate.operation === "property")!;
 	const duplicate = { ...site, id: site.id + 1 };
 	const matches = matchProfileSites([site, duplicate], [site, duplicate]);
 	expect(matches).toMatchObject({ exact: 0, logical: 0, ambiguous: 2, unmatched: 0 });

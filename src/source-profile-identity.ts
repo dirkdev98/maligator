@@ -107,7 +107,8 @@ export function canonicalProfileJson(value: unknown): string {
 		if (encoded === undefined) throw new Error("profile metadata is not serializable");
 		return encoded;
 	}
-	if (Array.isArray(value)) return `[${value.map(canonicalProfileJson).join(",")}]`;
+	if (Array.isArray(value))
+		return `[${Array.from(value, (entry) => (entry === undefined ? "null" : canonicalProfileJson(entry))).join(",")}]`;
 	if (typeof value !== "object") throw new Error("profile metadata is not serializable");
 	return `{${Object.entries(value)
 		.filter(([, entry]) => entry !== undefined)

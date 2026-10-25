@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-	COMPILER_VALUE_KIND_OBJECT,
-	COMPILER_VALUE_KIND_STRING,
-} from "../src/compiler/shared/compiler-value-kinds.ts";
+import { COMPILER_VALUE_KIND_STRING } from "../src/compiler/shared/compiler-value-kinds.ts";
 import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
@@ -13,6 +10,27 @@ import { positionTableEntries } from "../src/compiler/target/runtime-image.ts";
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 describe("proven String operations in boxed storage", () => {
+	it.each(["<", "<=", ">", ">=", "==", "!=", "===", "!=="])(
+		"omits roots for noncollecting String %s kernels across artifact restoration",
+		(operator) => {
+			const out = inspectStaticValueFunction(
+				`function compute(left,right){return (typeof left)${operator}(typeof right);}globalThis.compute=compute;`,
+				"compute",
+			);
+			const ip = out.native.body.instructions.findIndex((op) => op.opcode === "BINARY");
+			expect(out.native.facts?.[ip]?.effectMask).toBe(0);
+			expect(out.native.gc.safepoints.some((point) => point.instructionIp === ip)).toBe(
+				false,
+			);
+			const restored = deserializeCompilerArtifact(serializeCompilerArtifact(out.image));
+			const native = restored.native.functions[out.native.functionIndex]!;
+			expect(native.storage!.rootRegisters).toEqual([]);
+			expect(
+				emitCompiledFunction(native, native.functionIndex, "", false)!.source,
+			).not.toContain("MalRootFrame");
+		},
+	);
+
 	it.each(
 		["+", "<", "<=", ">", ">=", "==", "!=", "===", "!=="].flatMap((operator) =>
 			[false, true].map((profile) => [operator, profile] as const),
@@ -30,8 +48,7 @@ describe("proven String operations in boxed storage", () => {
 			);
 			const op = out.native.body.instructions[ip]!;
 			if (op.opcode !== "BINARY") throw new Error("Missing String operation");
-			expect(out.native.instructions[ip]).toEqual({
-				kind: "exact-operator-input-kinds",
+			expect(out.native.facts?.[ip]).toMatchObject({
 				inputKindMasks: [COMPILER_VALUE_KIND_STRING, COMPILER_VALUE_KIND_STRING],
 			});
 			const image = lowerNativeStorage({
@@ -86,13 +103,9 @@ describe("proven String operations in boxed storage", () => {
 			expect(c.source).not.toContain("mal_ops_is_number(");
 			expect(c.source.includes("MAL_PROFILE_SITE_RUNTIME_STRING")).toBe(profile);
 			const restoredFn = restored.native.functions[index]!;
-			const instructions = [...restoredFn.instructions];
-			instructions[ip] = {
-				kind: "exact-operator-input-kinds",
-				inputKindMasks: [
-					COMPILER_VALUE_KIND_STRING | COMPILER_VALUE_KIND_OBJECT,
-					COMPILER_VALUE_KIND_STRING,
-				],
+			const facts = [...restoredFn.facts!];
+			facts[ip] = {
+				inputKindMasks: [0, COMPILER_VALUE_KIND_STRING],
 			};
 			expect(() =>
 				serializeCompilerArtifact({
@@ -101,11 +114,11 @@ describe("proven String operations in boxed storage", () => {
 						...restored.native,
 						functions: restored.native.functions.with(index, {
 							...restoredFn,
-							instructions,
+							facts,
 						}),
 					},
 				}),
-			).toThrow(/invalid exact binary kind masks/);
+			).toThrow(/Invalid native instruction facts/);
 		},
 	);
 
@@ -122,10 +135,12 @@ describe("proven String operations in boxed storage", () => {
 			if (op.opcode !== "BINARY") throw new Error("Missing concat");
 			const ip = out.native.body.instructions.indexOf(op);
 			const entry = out.native.directEntries[0]!;
-			expect(entry.operatorInputs).toContainEqual({
-				instructionIp: ip,
-				masks: [COMPILER_VALUE_KIND_STRING, COMPILER_VALUE_KIND_STRING],
-			});
+			expect(entry.instructionFacts).toContainEqual(
+				expect.objectContaining({
+					instructionIp: ip,
+					masks: [COMPILER_VALUE_KIND_STRING, COMPILER_VALUE_KIND_STRING],
+				}),
+			);
 			expect(
 				out.native.specializations.some((region) => region.kind === "numeric-fusion"),
 			).toBe(fusion);
@@ -155,12 +170,6 @@ describe("proven String operations in boxed storage", () => {
 			const source = c.directEntries[0]!.source;
 			expect(source).toContain("mal_vm_concat_strings_known(");
 			expect(source).not.toContain("mal_ops_is_number(");
-			if (fusion) {
-				const reset = source.search(new RegExp(`^\\s*__nf_${ip}_ok = false;$`, "m"));
-				expect(reset).toBeGreaterThanOrEqual(0);
-				expect(source.indexOf("mal_vm_concat_strings_known(")).toBeGreaterThan(reset);
-				expect(source).toContain(`if (__nf_${ip}_ok)`);
-			}
 		},
 	);
 

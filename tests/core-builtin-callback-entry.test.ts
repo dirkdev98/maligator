@@ -376,7 +376,6 @@ describe("native entries from builtin callback invocation facts", () => {
 		const entry = compilation.plan.directEntries.find(
 			(entry) => entry.argumentRepresentations !== undefined,
 		)!;
-		const fn = compilation.program.function(entry.function);
 		for (const argumentRepresentations of [
 			entry.argumentRepresentations!.slice(0, 3),
 			[...entry.argumentRepresentations!, "boxed" as const],
@@ -385,7 +384,7 @@ describe("native entries from builtin callback invocation facts", () => {
 				...entry,
 				argumentRepresentations,
 				...analyzeCoreNativeEntry(
-					fn,
+					compilation.program,
 					buildCoreControlFlow(compilation.program, entry.function),
 					entry.parameterRepresentations,
 					argumentRepresentations,
@@ -424,7 +423,7 @@ describe("native entries from builtin callback invocation facts", () => {
 				operation !== "reduce" ? ["f64", "f64", "boxed"] : ["f64", "f64", "f64", "boxed"],
 			);
 			expect(
-				entry.operatorInputs!.some((site) =>
+				entry.instructionFacts!.some((site) =>
 					site.masks.every((mask) => mask === COMPILER_VALUE_KIND_NUMBER),
 				),
 			).toBe(true);
@@ -494,7 +493,6 @@ describe("native entries from builtin callback invocation facts", () => {
 			const entry = compilation.plan.directEntries.find((entry) =>
 				entry.callSites.some((site) => site.builtinCallbackNumbers),
 			)!;
-			const fn = compilation.program.function(entry.function);
 			for (const [parameterRepresentations, callSites] of [
 				[
 					entry.parameterRepresentations,
@@ -507,7 +505,7 @@ describe("native entries from builtin callback invocation facts", () => {
 					parameterRepresentations,
 					callSites,
 					...analyzeCoreNativeEntry(
-						fn,
+						compilation.program,
 						buildCoreControlFlow(compilation.program, entry.function),
 						parameterRepresentations,
 						undefined,
@@ -590,7 +588,6 @@ describe("native entries from builtin callback invocation facts", () => {
 		const entry = compilation.plan.directEntries.find((entry) =>
 			entry.callSites.some((site) => site.builtinCallbackOperation !== undefined),
 		)!;
-		const fn = compilation.program.function(entry.function);
 		for (const callSites of [
 			entry.callSites.map((site) => ({
 				...site,
@@ -602,7 +599,7 @@ describe("native entries from builtin callback invocation facts", () => {
 				...entry,
 				callSites,
 				...analyzeCoreNativeEntry(
-					fn,
+					compilation.program,
 					buildCoreControlFlow(compilation.program, entry.function),
 					entry.parameterRepresentations,
 					undefined,

@@ -2076,14 +2076,6 @@ MalValue mal_vm_load_captured_slow(MalEnv *env, i32 owner_function_index, i32 in
         ? value : mal_value_new_undefined();
 }
 
-void mal_vm_store_captured_slow(MalEnv *env, i32 owner_function_index, i32 index, MalValue value) {
-    MalEnv *owner = mal_vm_capture_owner(env, owner_function_index);
-    if (owner == nullptr) return;
-    mal_gc_write_barrier(owner->slots[index]);
-    owner->slots[index] = value;
-    mal_gc_card(&owner->header, value);
-}
-
 void mal_op_load_captured(MalCallable *callable, const MalInstruction *instruction) {
     callable->registers[instruction->as.load_captured.dst] = mal_vm_load_captured(
         callable->env,

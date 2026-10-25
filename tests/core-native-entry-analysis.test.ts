@@ -6,12 +6,88 @@ import type { CoreBlockId } from "../src/compiler/core/core-ir.ts";
 import {
 	analyzeCoreNativeEntry,
 	coreArgumentObservation,
+	coreNativeEntryProofIsCurrent,
 } from "../src/compiler/core/core-native-entry-analysis.ts";
 import { coreReadOnlyParameterFields } from "../src/compiler/core/core-native-field-analysis.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
 import { COMPILER_VALUE_KIND_NUMBER } from "../src/compiler/shared/compiler-value-kinds.ts";
 
 describe("reachable native-entry annotations", () => {
+	it.each(
+		(["f64", "boolean", "string", "boxed"] as const).flatMap((representation) =>
+			[false, true].map((handler) => ({ representation, handler })),
+		),
+	)(
+		"joins $representation self-comparison returns with handler=$handler",
+		({ representation, handler: protectedEntry }) => {
+			const program = new CoreProgram(coreOpcodeRegistry, { stringConstants: [[]] });
+			const builder = new CoreFunctionBuilder(program, { parameterCount: 2 });
+			const entry = builder.createBlock([{}, {}]);
+			const yes = builder.createBlock();
+			const no = builder.createBlock();
+			const handler = builder.createBlock([
+				{ role: "exception", representation: "boxed" },
+			]);
+			const parameter = builder.blockParameterValue(entry, 0);
+			if (protectedEntry) {
+				builder.appendInstruction(entry, "loadGlobalProperty", [], {
+					attributes: { stringIndex: 0 },
+				});
+				builder.setHandler(entry, handler);
+			}
+			const [condition] = builder.appendInstruction(
+				entry,
+				"binary",
+				[parameter, parameter],
+				{ attributes: { operator: "===" } },
+			);
+			builder.setTerminator(entry, {
+				kind: "branch",
+				condition: condition!,
+				consequent: { block: yes, arguments: [] },
+				alternate: { block: no, arguments: [] },
+			});
+			const [number] = builder.appendInstruction(yes, "createNumber", [], {
+				attributes: { value: 7 },
+			});
+			builder.setTerminator(yes, { kind: "return", value: number! });
+			builder.setTerminator(no, {
+				kind: "return",
+				value: builder.blockParameterValue(entry, 1),
+			});
+			builder.setTerminator(handler, {
+				kind: "return",
+				value: builder.blockParameterValue(handler, 0),
+			});
+			const id = builder.finish(entry).function;
+			const cfg = buildCoreControlFlow(program, id, { exceptions: true });
+			const parameters = [representation, "boxed" as const];
+			const facts = analyzeCoreNativeEntry(program, cfg, parameters, undefined, []);
+			expect(facts.resultRepresentation).toBe(
+				!protectedEntry && (representation === "boolean" || representation === "string")
+					? "f64"
+					: "boxed",
+			);
+			const plan = {
+				id: 0,
+				function: id,
+				parameterRepresentations: parameters,
+				callSites: [],
+				...facts,
+				target: "native" as const,
+				fallback: "canonical-core" as const,
+				cost: { generatedCode: 1, compilerWork: 1, runtimeBenefit: 1 },
+			};
+			expect(coreNativeEntryProofIsCurrent(program.function(id), plan)).toBe(true);
+			expect(
+				coreNativeEntryProofIsCurrent(program.function(id), {
+					...plan,
+					resultRepresentation: facts.resultRepresentation === "boxed" ? "f64" : "boxed",
+				}),
+			).toBe(false);
+		},
+	);
+
 	it.each(["none", "allocation", "coercion", "throw", "write"] as const)(
 		"accepts argument snapshots only before effect barriers: %s",
 		(barrier) => {
@@ -84,18 +160,26 @@ describe("reachable native-entry annotations", () => {
 		const cfg = buildCoreControlFlow(program, id, { exceptions: true });
 		expect(cfg.reachable.has(handler)).toBe(true);
 		expect(cfg.reachable.has(dead)).toBe(false);
-		const result = analyzeCoreNativeEntry(program.function(id), cfg, [], ["f64"], []);
+		const result = analyzeCoreNativeEntry(program, cfg, [], ["f64"], []);
 		const expected = new Set([liveComparison, handlerComparison]);
-		expect(new Set(result.operatorInputs?.map(({ instruction }) => instruction))).toEqual(
-			expected,
-		);
+		expect(
+			new Set(
+				result.instructionFacts
+					?.filter(
+						({ instruction }) =>
+							program.function(id).instructionKind(instruction) === "operation" &&
+							program.function(id).instructionOpcodeName(instruction) === "binary",
+					)
+					.map(({ instruction }) => instruction),
+			),
+		).toEqual(expected);
 		expect(
 			new Set(result.constantBooleans?.map(({ instruction }) => instruction)),
 		).toEqual(expected);
 		expect(
-			result.operatorInputs?.every(({ masks }) =>
-				masks.every((mask) => mask === COMPILER_VALUE_KIND_NUMBER),
-			),
+			result.instructionFacts
+				?.filter(({ instruction }) => expected.has(instruction))
+				.every(({ masks }) => masks.every((mask) => mask === COMPILER_VALUE_KIND_NUMBER)),
 		).toBe(true);
 		expect(result.constantBooleans?.every(({ value }) => value)).toBe(true);
 	});

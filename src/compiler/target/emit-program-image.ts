@@ -1714,7 +1714,7 @@ function emitProgramImageParts(
 		nativeStackRootsAreConservative(image, useCompiled),
 		undefined,
 		options,
-		image.diagnostics.profileSites?.length,
+		image.profiling?.sites.length,
 		useCompiled ? image.native.classLayouts : undefined,
 	)) {
 		lines.push(line);

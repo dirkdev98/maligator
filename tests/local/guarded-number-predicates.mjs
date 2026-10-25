@@ -312,4 +312,95 @@ try {
 } finally {
 	define(savedGlobal, "globalThis", globalThisDescriptor);
 }
+
+function textFinite(value, extra = () => {}) {
+	const input = "" + value;
+	return Number.isFinite(input, extra());
+}
+function objectInteger(value, extra = () => {}) {
+	const input = { value };
+	return Number.isInteger(input, extra());
+}
+function unionSafeInteger(value, extra = () => {}) {
+	const input = value ? 1n : undefined;
+	return Number.isSafeInteger(input, extra());
+}
+for (const [key, invoke, input] of [
+	["isFinite", textFinite, "123"],
+	["isInteger", objectInteger, poison],
+	["isSafeInteger", unionSafeInteger, false],
+	["isSafeInteger", unionSafeInteger, true],
+]) {
+	const descriptor = Object.getOwnPropertyDescriptor(originalNumber, key);
+	const marker = {};
+	try {
+		check(
+			invoke(input, () => {
+				originalNumber[key] = () => marker;
+				if (typeof gc === "function") gc();
+			}) === false,
+			"non-Number proof keeps captured builtin",
+		);
+		originalNumber[key] = function (value) {
+			check(this === originalNumber && arguments.length === 2, "non-Number fallback ABI");
+			check(
+				key === "isFinite"
+					? value === "123"
+					: key === "isInteger"
+						? value.value === poison
+						: value === (input ? 1n : undefined),
+				"non-Number fallback receives original argument",
+			);
+			return marker;
+		};
+		check(
+			invoke(input) === marker,
+			"non-Number proof keeps arbitrary replacement result",
+		);
+	} finally {
+		Object.defineProperty(originalNumber, key, descriptor);
+	}
+}
+
+const textEvents = [];
+const finiteDescriptor = Object.getOwnPropertyDescriptor(originalNumber, "isFinite");
+try {
+	Object.defineProperty(originalNumber, "isFinite", {
+		configurable: true,
+		get() {
+			textEvents.push("get");
+			return finiteDescriptor.value;
+		},
+	});
+	check(
+		textFinite(
+			{
+				toString() {
+					textEvents.push("coerce");
+					return "12";
+				},
+			},
+			() => textEvents.push("argument"),
+		) === false,
+		"non-Number predicate keeps String producer",
+	);
+	check(
+		textEvents.join() === "coerce,get,argument",
+		"String producer remains before callee lookup",
+	);
+	const failure = {};
+	let caught;
+	try {
+		textFinite({
+			[Symbol.toPrimitive]() {
+				throw failure;
+			},
+		});
+	} catch (error) {
+		caught = error;
+	}
+	check(caught === failure, "non-Number predicate keeps producer throw");
+} finally {
+	Object.defineProperty(originalNumber, "isFinite", finiteDescriptor);
+}
 console.log("number predicate guards passed");

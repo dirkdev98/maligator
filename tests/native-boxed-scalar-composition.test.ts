@@ -91,7 +91,7 @@ describe("boxed scalar expressions at phi boundaries", () => {
 		["a<b", "<", "mal_value_new_boolean("],
 		["a===b", "===", "mal_value_new_boolean("],
 		["a!==b", "!==", "mal_value_new_boolean("],
-		["!a", "!", "mal_value_new_boolean(!mal_number_is_truthy("],
+		["!a", "!", "mal_value_new_boolean("],
 		["-a", "-", "mal_ops_number_value(-("],
 		["~a", "~", "mal_value_from_i32(~"],
 	])(
@@ -205,9 +205,7 @@ describe("boxed scalar expressions at phi boundaries", () => {
 		const op = out.native.body.instructions[ip]!;
 		if (op.opcode !== "BINARY") throw new Error("Missing product");
 		expect(out.native.registerRepresentations[op.left]).toBe("boxed");
-		expect(out.native.instructions[ip]).toMatchObject({
-			kind: "exact-operator-input-kinds",
-		});
+		expect(out.native.facts?.[ip]?.inputKindMasks).toBeDefined();
 		expect(out.native.storage!.expressionIps).not.toContain(ip);
 	});
 

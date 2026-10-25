@@ -1,5 +1,6 @@
 import {
 	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_TOP,
 	compilerBuiltinInputKindsAreValid,
 } from "../shared/compiler-value-kinds.ts";
 import { bytecodeLoopInstructions } from "./bytecode-loops.ts";
@@ -14,8 +15,7 @@ import type { NativeMapEntryPlan } from "./native-map-entry-plan.ts";
 import { selectNativeObjectEnumerationSnapshots } from "./native-object-enumeration-snapshot.ts";
 import type { NativeObjectEnumerationSnapshotPlan } from "./native-object-enumeration-snapshot.ts";
 import {
-	MATH_UNARY_NATIVE_CALL,
-	MATH_BINARY_OPERATIONS,
+	nativeGuardedMathArity,
 	NUMBER_PREDICATES,
 	nativeMathNumberArity,
 } from "./native-scalar-operators.ts";
@@ -277,7 +277,7 @@ export interface NativeMathCallPlan {
 export const NATIVE_NUMBER_PREDICATE_MODES = [
 	"boxed",
 	"non-number",
-	"int32",
+	"integer",
 	"number",
 ] as const;
 
@@ -2941,6 +2941,7 @@ export function lowerNativeFastPaths(
 	materializeUpdateOutputs = true,
 	selectUpdates = true,
 	body?: NativeBodyFacts,
+	numberInputsPossible: (ip: number) => boolean = () => true,
 ): NativeFastPathLowering {
 	let propertyLoadIps: ReadonlyArray<number> = [];
 	if (selection.kind === "select") {
@@ -3000,6 +3001,7 @@ export function lowerNativeFastPaths(
 				jumpTargets,
 				(candidate) =>
 					conflicts(candidate) ||
+					!numberInputsPossible(candidate) ||
 					pairedArrayLoopActions.has(candidate) ||
 					propertyNumericUpdateActions.has(candidate),
 				transparentJumpTargets,
@@ -3034,6 +3036,7 @@ export function lowerNativeFastPaths(
 			jumpTargets,
 			(candidate) =>
 				conflicts(candidate) ||
+				!numberInputsPossible(candidate) ||
 				pairedArrayLoopActions.has(candidate) ||
 				propertyNumericUpdateActions.has(candidate) ||
 				propertyProjectionActions.has(candidate),
@@ -3436,22 +3439,21 @@ export function selectNativeFastPaths(
 				input?.kind === "register"
 					? native.registerRepresentations[input.register]
 					: undefined;
-			const proof = native.instructions[ip];
+			const masks = native.facts?.[ip]?.inputKindMasks;
 			const exactNumber =
-				proof?.kind === "exact-builtin-input-kinds" &&
-				compilerBuiltinInputKindsAreValid(
-					proof.inputKindMasks,
-					op.arguments.length + 1,
-				) &&
-				proof.inputKindMasks[1] === COMPILER_VALUE_KIND_NUMBER;
+				masks !== undefined &&
+				compilerBuiltinInputKindsAreValid(masks, op.arguments.length + 1) &&
+				masks[1] === COMPILER_VALUE_KIND_NUMBER;
 			const mode =
 				input === undefined ||
 				(input.kind !== "register" && input.kind !== "number") ||
 				rep === "string" ||
-				rep === "boolean"
+				rep === "boolean" ||
+				(masks !== undefined &&
+					((masks[1] ?? COMPILER_VALUE_KIND_TOP) & COMPILER_VALUE_KIND_NUMBER) === 0)
 					? "non-number"
-					: rep === "int32"
-						? "int32"
+					: rep === "int32" || native.facts?.[ip]?.inputIntegerRanges?.[1] !== undefined
+						? "integer"
 						: input.kind === "number" || rep === "number" || exactNumber
 							? "number"
 							: "boxed";
@@ -3475,12 +3477,7 @@ export function selectNativeFastPaths(
 		const plan = native.instructions[ip];
 		const builtin = plan?.kind === "call" ? plan.guardedBuiltinCall : undefined;
 		if (op.opcode !== "CALL" || builtin === undefined) continue;
-		const arity =
-			op.arguments.length === 1 && MATH_UNARY_NATIVE_CALL.has(builtin.operation)
-				? 1
-				: op.arguments.length === 2 && MATH_BINARY_OPERATIONS.has(builtin.operation)
-					? 2
-					: undefined;
+		const arity = nativeGuardedMathArity(builtin.operation, op.arguments.length);
 		if (arity === undefined) continue;
 		mathCalls.push({
 			instructionIp: ip,
@@ -3511,6 +3508,17 @@ export function selectNativeFastPaths(
 		),
 	);
 	const unavailable = (ip: number) => blocked.has(ip) || pollingEdges.has(ip);
+	const numberInputsPossible = (ip: number): boolean => {
+		const op = fn.instructions[ip];
+		if (op?.opcode !== "BINARY" && op?.opcode !== "UNARY") return true;
+		if (op?.opcode === "UNARY" && (op.operator === "!" || op.operator === "typeof"))
+			return true;
+		const masks = native.facts?.[ip]?.inputKindMasks;
+		return (
+			masks === undefined ||
+			masks.every((mask) => (mask & COMPILER_VALUE_KIND_NUMBER) !== 0)
+		);
+	};
 	for (const site of native.fieldCalls ?? [])
 		for (let ip = site.allocationIp; ip <= site.callIp; ip++) blocked.add(ip);
 	for (const site of native.literalSwitches ?? [])
@@ -3665,14 +3673,10 @@ export function selectNativeFastPaths(
 				native.registerRepresentations,
 				body,
 				(candidate) => {
-					const kind = native.instructions[candidate]?.kind;
 					return (
 						unavailable(candidate) ||
-						(!nativePlanKeepsOrdinaryLowering(native.instructions[candidate]) &&
-							!(
-								kind === "exact-builtin-input-kinds" &&
-								nativeNumericBuiltinInstruction(fn.instructions[candidate]!) !== undefined
-							))
+						!numberInputsPossible(candidate) ||
+						!nativePlanKeepsOrdinaryLowering(native.instructions[candidate])
 					);
 				},
 				loops[ip] === 1,
@@ -3742,17 +3746,13 @@ export function selectNativeFastPaths(
 					const kind = native.instructions[candidate]?.kind;
 					return (
 						numericLoopBlocked.has(candidate) ||
+						!numberInputsPossible(candidate) ||
 						// Operand kind proofs refine the double lowering; the region replaces it.
 						(!nativePlanKeepsOrdinaryLowering(native.instructions[candidate]) &&
-							kind !== "exact-operator-input-kinds" &&
 							kind !== "unsigned-arithmetic" &&
 							kind !== "exact-typed-array-element" &&
 							!(kind === "call" && codeUnitReads.has(candidate)) &&
-							kind !== "primitive-string-length" &&
-							!(
-								kind === "exact-builtin-input-kinds" &&
-								nativeNumericBuiltinInstruction(fn.instructions[candidate]!) !== undefined
-							))
+							kind !== "primitive-string-length")
 					);
 				},
 				lengthLoads,
@@ -3802,6 +3802,7 @@ export function selectNativeFastPaths(
 		// Fusion can keep a preceding RHS in its private temporary rather than the semantic local.
 		!native.specializations.some((region) => region.kind === "numeric-fusion"),
 		body,
+		numberInputsPossible,
 	);
 	return {
 		literalPropertyDefinitions,

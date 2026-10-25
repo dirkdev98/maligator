@@ -215,6 +215,85 @@ the value is a proved primitive BigInt or Boolean and the shared evaluator certi
 the width conversion. Value producers remain; other value kinds keep their
 conversion and errors even when the width is zero.
 
+## Instruction facts through native lowering
+
+Semantic input and result facts travel independently of an instruction's selected
+lowering strategy and effect summary. A known String operand rules out the numeric
+addition branch even when converting the other operand can call user code or throw.
+That partial fact cannot suppress the conversion, its producer effects, or the
+exception path. Complete kind masks retain unions and unknown values explicitly.
+
+Core records these facts in an immutable instruction table with one function-version
+proof. Target and native lowering preserve the table alongside strategy metadata;
+specialized entries overlay only their differences from the canonical facts. Register
+views distinguish inputs from results even when constrained storage reuses a register.
+Negative immediate placeholders never establish register identity. Compiler artifacts
+serialize the independent dimensions and invalidate older schemas together.
+
+Integer input ranges prove primitive safe-integer Numbers and exclude negative zero.
+Int32 and uint32 domains share compact interval encodings; other bounds use the same
+range contract. Floating storage and copies do not erase an integer proof; joins
+require every incoming value to satisfy it, and unseeded cycles remain unknown.
+The existing bounded range analysis answers queries at each consumer's block, so
+dominated branch refinements cannot leak into other paths. Range analysis is lazy
+and demanded by consumers rather than repeated for every value.
+
+Emission uses ordinary C casts only within int32 bounds, folds Number predicates
+for all safe-integer ranges, and consumes bounds in comparisons, truthiness and
+numeric Math operations. The proof survives boxing and suspension, while coercive
+operands and argument evaluation retain their own effects and fallback paths.
+Scalar expressions, fast entries, numeric regions and canonical bodies consume the
+same instruction facts.
+
+Core shares Boolean observation queries between local folding, program-flow demands
+and cross-call specialization. Exact `Object.is` calls fold for the same SSA value,
+disjoint value kinds and distinct fresh allocation identities. Strict and loose
+reflexive comparisons also consume integer bounds to exclude NaN. Constant SameValue
+evaluation preserves NaN equivalence and the distinction between signed zeros.
+These folds replace the observation after receiver and argument producers have
+executed; construction and argument-list expansion remain separate operations.
+Removing an identity observation can expose an allocation for scalar replacement.
+
+Native ToBoolean lowering shares representation, kind-union and integer-range
+consumers across scalar expressions, numeric regions and ordinary bodies. Guarded
+Boolean calls and DataView endianness use the same conversion inside their admitted
+branch. Number predicates also fold non-Number kind unions inside the callee guard.
+The ordinary-call fallback retains the original operands, completion handling, root
+publication and polling. Producer effects run before either branch; narrowing does
+not authorize skipping their coercions or moving them across a callee lookup.
+
+Guarded native calls also distinguish the admitted kernel's effects from the
+ordinary CALL fallback. Boolean, Number predicates, scalar Math, DataView access
+and charCodeAt publish private roots and inactive masks on the collecting fallback
+and requested outgoing poll. They leave private values unpublished on a
+noncollecting hit. Reused rooted input/output registers, resumable bodies and
+specialized region obligations retain eager incoming publication. A conditional
+publication never establishes that the following instruction has published roots.
+
+Native storage separately records which plans consume operands by value and assign
+only final outputs. Guarded scalar calls, direct own-slot and length accesses, and
+array/typed-array element lowerings can keep those operands private without
+weakening the fallback's effects. Region-borrowed values and materialization
+contracts retain continuous roots. Guarded own-slot reads/writes and array-length
+reads publish incoming private values on the generic fallback; later collecting
+instructions cannot assume that conditional publication executed.
+
+Effect metadata preserves independent reads and writes for every effect domain,
+plus throwing, suspension, collection and user-code flags. Semantic purity alone
+does not discharge a native helper's allocation failure, polling or root obligations.
+Operator helpers implement the refined semantic effects directly; calls and allocation
+helpers retain their separate runtime contracts. Identity, shape and mutable-content
+proofs also retain their observation and invalidation requirements rather than
+becoming timeless register properties.
+
+Exact scalar builtin kernels consume the registry's invocation effects in Core and
+native lowering. Number predicates and `Object.is` are pure even for unknown boxed
+inputs; `Date.now` retains its host read. Their ordinary calls need neither an
+operation GC point nor incoming root publication. Unused pure calls disappear after
+their argument producers have executed. Construction, argument-list expansion and
+receiver brand checks retain their own effects. Removing a scalar invocation's
+poll does not remove loop-backedge polling or the roots required by later calls.
+
 ## Known operations
 
 An exact callable identity becomes `callKnown` independently of receiver storage.
@@ -596,10 +675,35 @@ reads. The result remains a primitive string, including when it escapes or is
 retained across suspension.
 
 Exact Boolean text observations normalize to Core ToString and select the VM's hot
-true/false strings. Native operator input certificates retain semantic Boolean kinds
-when a physical register also serves unrelated boxed values. Selection queries the
-current local kind analysis for conversions introduced after effect refinement;
-function versions protect the resulting proof. Method and String calls still require
+true/false strings. Every instruction retains independent input and normal-result
+kind masks, including unions, across canonical and specialized entry lowering.
+Semantic kinds describe an SSA value at its use; physical register representations
+join every value assigned that storage. Register allocation relocates input and
+result facts separately, including constrained operands and immediate arguments.
+
+Function-scoped fact tables carry one versioned proof and use dense instruction
+indices. Register facts reference the existing operand list, with an explicit
+input offset so constrained input/output aliases remain distinct.
+
+Repeated one- and two-operand kind sequences share immutable tables bounded by the
+eight-bit kind domain. Specialized entries inherit canonical facts and transport
+only changed dimensions. Effect encodings are reused only for deeply frozen summaries.
+
+Native semantic facts occupy a separate table from lowering strategies. Range,
+shape, identity, and representation strategies can coexist with operand kinds and
+the complete effect summary: reads and writes in every domain, throwing,
+suspension, collection, and unaccounted user code. A mask is an upper bound and
+licenses only decisions whose own requirements hold. A String operand excludes
+numeric addition while an unknown opposite operand retains ToPrimitive, exceptions,
+collection, and user code. Primitive kernels, expression motion, and untraced
+storage retain separate legality checks; normal-result masks can exclude pointer
+roots without claiming the producing operation is pure.
+
+Function versions and entry-specific analyses protect these facts through lowering;
+compiler artifacts validate masks, effect bits, register references, and arity.
+Generic branches retain the same semantic facts. Native helper effects remain a
+separate contract: call boundaries and fallible allocation helpers can impose
+obligations beyond the semantic summary. Method and String calls still require
 proven callee identity, while implicit conversion does not consult those properties.
 Unknown and mixed kinds retain generic conversion, including wrapper coercion.
 

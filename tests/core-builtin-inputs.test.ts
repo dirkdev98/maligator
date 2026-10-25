@@ -33,8 +33,7 @@ describe("suspended builtin input certificates", () => {
 				(op) =>
 					op.opcode === "CALL_KNOWN" && op.operation === "String.prototype.includes",
 			);
-			expect(native.instructions[ip]).toEqual({
-				kind: "exact-builtin-input-kinds",
+			expect(native.facts?.[ip]).toMatchObject({
 				inputKindMasks: [
 					COMPILER_VALUE_KIND_STRING,
 					COMPILER_VALUE_KIND_STRING,
@@ -61,8 +60,7 @@ describe("suspended builtin input certificates", () => {
 		const ip = out.native.body.instructions.findIndex(
 			(op) => op.opcode === "CALL_KNOWN" && op.operation === "String.prototype.includes",
 		);
-		expect(out.native.instructions[ip]).toEqual({
-			kind: "exact-builtin-input-kinds",
+		expect(out.native.facts?.[ip]).toMatchObject({
 			inputKindMasks: [
 				COMPILER_VALUE_KIND_STRING,
 				COMPILER_VALUE_KIND_TOP,
@@ -89,8 +87,8 @@ describe("suspended builtin input certificates", () => {
 						? fn
 						: {
 								...fn,
-								instructions: fn.instructions.map((plan) =>
-									plan?.kind === "exact-builtin-input-kinds"
+								facts: fn.facts?.map((plan) =>
+									plan?.inputKindMasks !== undefined
 										? { ...plan, inputKindMasks: masks }
 										: plan,
 								),
@@ -99,7 +97,7 @@ describe("suspended builtin input certificates", () => {
 			},
 		};
 		expect(() => serializeCompilerArtifact(image)).toThrow(
-			/invalid builtin input kind masks/,
+			/Invalid native (instruction facts|input kind count)/,
 		);
 	});
 });

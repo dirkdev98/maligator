@@ -118,17 +118,17 @@ describe("certified primitive numeric lowering", () => {
 			(instruction, index) =>
 				instruction.opcode === "BINARY" &&
 				instruction.operator === "+" &&
-				native.instructions[index]?.kind === "exact-operator-input-kinds" &&
-				native.instructions[index].inputKindMasks[0] === COMPILER_VALUE_KIND_NUMBER &&
-				native.instructions[index].inputKindMasks[1] === COMPILER_VALUE_KIND_NUMBER,
+				native.facts?.[index]?.inputKindMasks !== undefined &&
+				native.facts?.[index].inputKindMasks[0] === COMPILER_VALUE_KIND_NUMBER &&
+				native.facts?.[index].inputKindMasks[1] === COMPILER_VALUE_KIND_NUMBER,
 		);
 		expect(addition).toBeGreaterThanOrEqual(0);
 		const normalized = body.instructions.findIndex(
 			(instruction, index) =>
 				instruction.opcode === "UNARY" &&
 				instruction.operator === "+" &&
-				native.instructions[index]?.kind === "exact-operator-input-kinds" &&
-				native.instructions[index].inputKindMasks[0] ===
+				native.facts?.[index]?.inputKindMasks !== undefined &&
+				native.facts?.[index].inputKindMasks[0] ===
 					(COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_UNDEFINED),
 		);
 		expect(normalized).toBeGreaterThanOrEqual(0);
@@ -191,11 +191,11 @@ describe("certified primitive numeric lowering", () => {
 		expect(
 			image.native.functions.some((fn) =>
 				fn.body.instructions.some((instruction, instructionIndex) => {
-					const plan = fn.instructions[instructionIndex];
+					const plan = fn.facts?.[instructionIndex];
 					return (
 						instruction.opcode === "UNARY" &&
 						instruction.operator === "+" &&
-						plan?.kind === "exact-operator-input-kinds" &&
+						plan?.inputKindMasks !== undefined &&
 						plan.inputKindMasks[0] ===
 							(COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_UNDEFINED)
 					);
@@ -236,26 +236,27 @@ describe("certified primitive numeric lowering", () => {
 				),
 			);
 			const index = image.native.functions.findIndex((fn) =>
-				fn.instructions.some(
+				fn.facts?.some(
 					(plan) =>
-						plan?.kind === "exact-operator-input-kinds" &&
+						plan?.inputKindMasks !== undefined &&
 						plan.inputKindMasks[0] === COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE,
 				),
 			);
 			expect(index).toBeGreaterThanOrEqual(0);
 			const native = image.native.functions[index]!;
-			expect(native.instructions).toContainEqual({
-				kind: "exact-operator-input-kinds",
-				inputKindMasks: [
-					COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE,
-					COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE,
-				],
-			});
+			expect(native.facts).toContainEqual(
+				expect.objectContaining({
+					inputKindMasks: [
+						COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE,
+						COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE,
+					],
+				}),
+			);
 			const emitted = emitCompiledFunction(native, index, "", false)!;
 			expect(emitted).not.toBeNull();
-			const operatorIp = native.instructions.findIndex(
+			const operatorIp = native.facts!.findIndex(
 				(plan) =>
-					plan?.kind === "exact-operator-input-kinds" &&
+					plan?.inputKindMasks !== undefined &&
 					plan.inputKindMasks[0] === COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE,
 			);
 			expect(
@@ -279,10 +280,7 @@ describe("certified primitive numeric lowering", () => {
 				),
 			);
 			const index = image.native.functions.findIndex((fn) =>
-				fn.instructions.some(
-					(op) =>
-						op?.kind === "exact-operator-input-kinds" && op.inputKindMasks.length === 1,
-				),
+				fn.facts?.some((op) => op?.inputKindMasks?.length === 1),
 			);
 			expect(index).toBeGreaterThanOrEqual(0);
 			const emitted = emitCompiledFunction(
@@ -317,11 +315,9 @@ describe("certified primitive numeric lowering", () => {
 		const native = image.native.functions[index]!;
 		expect(native.directEntries.length).toBeGreaterThan(0);
 		for (const entry of native.directEntries) {
-			expect(entry.operatorInputs?.length).toBeGreaterThan(0);
-			for (const { instructionIp } of entry.operatorInputs!) {
-				expect(["UNARY", "BINARY"]).toContain(
-					native.body.instructions[instructionIp]?.opcode,
-				);
+			expect(entry.instructionFacts?.length).toBeGreaterThan(0);
+			for (const { instructionIp } of entry.instructionFacts!) {
+				expect(native.body.instructions[instructionIp]).toBeDefined();
 			}
 		}
 		const emitted = emitCompiledFunction(native, index, "", false)!;
@@ -342,7 +338,7 @@ describe("certified primitive numeric lowering", () => {
 		const native = image.native.functions[index]!;
 		const entry = native.directEntries[0]!;
 		expect(
-			entry.operatorInputs?.some(
+			entry.instructionFacts?.some(
 				({ masks }) =>
 					masks[0] === (COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_UNDEFINED),
 			),
@@ -352,14 +348,14 @@ describe("certified primitive numeric lowering", () => {
 		expect(emitted.directEntries[0]!.source).not.toMatch(/mal_vm_(unary|binary)_op/);
 		const badEntry = {
 			...entry,
-			operatorInputs: entry.operatorInputs!.map((input) => ({
+			instructionFacts: entry.instructionFacts!.map((input) => ({
 				...input,
 				masks: [255] as const,
 			})),
 		};
 		expect(() =>
 			emitCompiledFunction({ ...native, directEntries: [badEntry] }, index, "", false),
-		).toThrow(/operator input/);
+		).toThrow(/instruction kinds/);
 	});
 
 	it("does not certify equality by numeric conversion or admit user coercion", () => {
@@ -369,7 +365,7 @@ describe("certified primitive numeric lowering", () => {
 		expect(
 			compilerOperatorInputKindsHaveExactNativeSemantics("binary", "==", [15, 15]),
 		).toBe(false);
-		for (const mask of [0, 16, 32, 64, 128, 255, NaN, 1.5]) {
+		for (const mask of [0, 32, 64, 128, 255, NaN, 1.5]) {
 			expect(
 				compilerOperatorInputKindsHaveExactNativeSemantics("unary", "-", [mask]),
 			).toBe(false);
@@ -377,6 +373,12 @@ describe("certified primitive numeric lowering", () => {
 				compilerOperatorInputKindsHaveExactNativeSemantics("binary", "-", [mask, 8]),
 			).toBe(false);
 		}
+		expect(compilerOperatorInputKindsHaveExactNativeSemantics("unary", "-", [16])).toBe(
+			true,
+		);
+		expect(
+			compilerOperatorInputKindsHaveExactNativeSemantics("binary", "-", [16, 8]),
+		).toBe(false);
 		for (const mask of [0, 32, 64, 128, 255, 16 | 32, 16 | 128, NaN, 1.5]) {
 			expect(
 				compilerOperatorInputKindsHaveExactNativeSemantics("binary", "+", [mask, 8]),

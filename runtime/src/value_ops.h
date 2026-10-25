@@ -304,23 +304,14 @@ static inline bool mal_ops_strict_equal_boxed(MalValue left, MalValue right) {
     return mal_ops_strict_equal_distinct(left, right);
 }
 
-/** `value === constant` against a string constant of `length` units, which only a string
- * of that length can equal; most misses then answer without a call. */
+// The caller proves constant is a String of length units; value can have any kind.
 static inline __attribute__((always_inline)) bool mal_ops_strict_equal_string_constant(
     MalValue value, MalValue constant, u32 length
 ) {
     if (value == constant) return true;
     if (!mal_value_is_string(value)) return false;
-    const MalString *string = mal_value_to_string(value);
-    MAL_PERF_COUNT(string_equals_calls);
-    if (string->length != length) {
-        MAL_PERF_COUNT(string_length_misses);
-        return false;
-    }
-    const MalString *constant_string = mal_value_to_string(constant);
-    // Interning keeps one atom per content, so two different atoms differ.
-    if (string->property_atom && constant_string->property_atom) return false;
-    return mal_string_equals_same_length(string, constant_string);
+    return mal_string_equals_constant_length(
+        mal_value_to_string(value), mal_value_to_string(constant), length);
 }
 
 /** Returns false without allocating when string concatenation exceeds the engine limit. */

@@ -8,8 +8,11 @@ import {
 	COMPILER_VALUE_KIND_SYMBOL as SYMBOL,
 	COMPILER_VALUE_KIND_TOP as TOP,
 	compilerBuiltinInputKindsAreValid,
+	compilerPrimitiveConversionOperator,
 	compilerNumericResultKind,
 	compilerOperatorInputKindsHaveExactNativeSemantics as exactNativeKinds,
+	compilerTypeofComparison,
+	compilerValueKindTruthiness,
 } from "../src/compiler/shared/compiler-value-kinds.ts";
 
 const singleKinds = (mask: number): ReadonlyArray<number> =>
@@ -72,11 +75,15 @@ describe("Compiler value-kind operator dispatch", () => {
 		const equality = ["==", "!=", "===", "!=="];
 		for (let mask = 0; mask <= 256; mask++) {
 			const numeric = mask > 0 && (mask & ~15) === 0;
+			const toNumber = mask > 0 && (mask & ~31) === 0;
 			const comparable = mask > 0 && ((mask & ~9) === 0 || (mask & ~3) === 0);
 			for (const operator of unary) {
-				equal(exactNativeKinds("unary", operator, [mask]), numeric);
+				equal(exactNativeKinds("unary", operator, [mask]), toNumber);
 			}
-			equal(exactNativeKinds("unary", "tostring", [mask]), mask === 4);
+			equal(
+				exactNativeKinds("unary", "tostring", [mask]),
+				mask > 0 && (mask & ~63) === 0,
+			);
 			for (const operator of arithmetic) {
 				// Number + String concatenates without coercing either operand.
 				const concatenation = operator === "+" && mask === 16;
@@ -89,6 +96,24 @@ describe("Compiler value-kind operator dispatch", () => {
 			for (const operator of equality) {
 				equal(exactNativeKinds("binary", operator, [9, mask]), comparable);
 			}
+		}
+	});
+
+	it("normalizes only builtin conversions with the same primitive and object semantics", () => {
+		for (let mask = 1; mask <= TOP; mask++) {
+			const kinds = singleKinds(mask);
+			equal(
+				compilerPrimitiveConversionOperator("Number", mask),
+				kinds.every((kind) => kind !== BIGINT && kind !== OBJECT) ? "+" : undefined,
+			);
+			equal(
+				compilerPrimitiveConversionOperator("String", mask),
+				kinds.every((kind) => kind !== SYMBOL) ? "tostring" : undefined,
+			);
+		}
+		for (const invalid of [0, 256, -1, NaN, 1.5]) {
+			equal(compilerPrimitiveConversionOperator("Number", invalid), undefined);
+			equal(compilerPrimitiveConversionOperator("String", invalid), undefined);
 		}
 	});
 
@@ -145,14 +170,72 @@ describe("Compiler value-kind operator dispatch", () => {
 		equal(exactNativeKinds("unary", undefined, [8]), false);
 	});
 
-	it("preserves builtin mask membership and argument-count limits", () => {
+	it("preserves every builtin kind union independently of kernel arity limits", () => {
 		for (let mask = 0; mask <= 256; mask++) {
-			equal(compilerBuiltinInputKindsAreValid([mask], 1), [4, 8, 16, 255].includes(mask));
+			equal(compilerBuiltinInputKindsAreValid([mask], 1), mask > 0 && mask < 256);
 		}
 		equal(compilerBuiltinInputKindsAreValid([4, 8, 16, 255], 4), true);
 		equal(compilerBuiltinInputKindsAreValid(new Array<number>(17).fill(8), 17), true);
-		equal(compilerBuiltinInputKindsAreValid(new Array<number>(18).fill(8), 18), false);
+		equal(compilerBuiltinInputKindsAreValid(new Array<number>(18).fill(8), 18), true);
 		equal(compilerBuiltinInputKindsAreValid([], 0), false);
 		equal(compilerBuiltinInputKindsAreValid([8], 2), false);
 	});
+
+	it("matches JavaScript typeof observations for every kind union", () => {
+		const values: ReadonlyArray<ReadonlyArray<unknown>> = [
+			[undefined],
+			[null],
+			[false, true],
+			[0, -0, NaN, Infinity],
+			["", "x"],
+			[1n],
+			[Symbol("x")],
+			[{}, [], () => {}],
+		];
+		const results = [
+			"undefined",
+			"object",
+			"boolean",
+			"number",
+			"string",
+			"bigint",
+			"symbol",
+			"function",
+		] as const;
+		for (let mask = 1; mask <= TOP; mask++) {
+			for (const result of results) {
+				const outcomes = new Set<boolean>();
+				for (const [bit, representatives] of values.entries())
+					if ((mask & (1 << bit)) !== 0)
+						for (const value of representatives) outcomes.add(typeof value === result);
+				equal(
+					compilerTypeofComparison(mask, result),
+					outcomes.size === 1 ? [...outcomes][0] : undefined,
+				);
+			}
+		}
+	});
+});
+
+it("matches JavaScript Boolean observations for every kind union", () => {
+	const values: ReadonlyArray<ReadonlyArray<unknown>> = [
+		[undefined],
+		[null],
+		[false, true],
+		[0, -0, NaN, Infinity],
+		["", "x"],
+		[0n, 1n],
+		[Symbol("x")],
+		[{}, [], () => {}],
+	];
+	for (let mask = 1; mask <= TOP; mask++) {
+		const outcomes = new Set<boolean>();
+		for (const [bit, representatives] of values.entries())
+			if ((mask & (1 << bit)) !== 0)
+				for (const value of representatives) outcomes.add(Boolean(value));
+		equal(
+			compilerValueKindTruthiness(mask),
+			outcomes.size === 1 ? [...outcomes][0] : undefined,
+		);
+	}
 });

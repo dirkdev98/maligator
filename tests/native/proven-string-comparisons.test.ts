@@ -48,9 +48,8 @@ describe("proven boxed String operations", () => {
 					const op = fn.body.instructions.find((op) => op.opcode === "BINARY");
 					if (op?.opcode !== "BINARY") throw new Error("Missing String comparison");
 					const ip = fn.body.instructions.indexOf(op);
-					expect(fn.instructions[ip]).toMatchObject({
-						kind: "exact-operator-input-kinds",
-						inputKindMasks: [16, 16],
+					expect(fn.facts?.[ip]).toMatchObject({
+						inputKindMasks: name === "boxedMixedLt" ? [16, 8] : [16, 16],
 					});
 					comparisons++;
 					return {
@@ -70,7 +69,7 @@ describe("proven boxed String operations", () => {
 				}),
 			},
 		});
-		expect(comparisons).toBe(9);
+		expect(comparisons).toBe(10);
 		compiled = buildNativeProgramImage(
 			deserializeCompilerArtifact(serializeCompilerArtifact(image)),
 			{

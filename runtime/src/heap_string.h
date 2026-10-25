@@ -355,22 +355,26 @@ static inline MalStringStorage mal_string_storage(const MalString *string) {
 
 bool mal_string_equals_same_length(const MalString *left, const MalString *right);
 
-/**
- * Compare two strings by UTF-16 code units.
- */
-static inline bool mal_string_equals(const MalString *left, const MalString *right) {
+// The caller proves right_length, including when different strings reach the same operand.
+static inline __attribute__((always_inline)) bool mal_string_equals_constant_length(
+    const MalString *left, const MalString *right, u32 right_length
+) {
     MAL_PERF_COUNT(string_equals_calls);
     if (left == right) {
         MAL_PERF_COUNT(string_pointer_hits);
         return true;
     }
-    if (left->length != right->length) {
+    if (left->length != right_length) {
         MAL_PERF_COUNT(string_length_misses);
         return false;
     }
     // Interning keeps one atom per content, so two different atoms differ.
     if (left->property_atom && right->property_atom) return false;
     return mal_string_equals_same_length(left, right);
+}
+
+static inline bool mal_string_equals(const MalString *left, const MalString *right) {
+    return mal_string_equals_constant_length(left, right, right->length);
 }
 
 /**

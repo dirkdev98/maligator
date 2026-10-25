@@ -40,7 +40,7 @@ describe("independent native SSA storage", () => {
 	it("preserves scalar arithmetic, loop transport, and suspended heap locals", () => {
 		for (const [name, mode, count] of [
 			["predicateNumber", "number", 3],
-			["predicateInt32", "int32", 3],
+			["predicateInt32", "integer", 3],
 			["predicateBoxed", "boxed", 1],
 			["predicateText", "non-number", 1],
 		] as const) {

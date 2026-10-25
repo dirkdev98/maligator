@@ -6,6 +6,7 @@ import {
 	COMPILER_VALUE_KIND_BOOLEAN,
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_STRING,
+	compilerOperatorInputKindsHaveExactNativeSemantics,
 } from "../shared/compiler-value-kinds.ts";
 import type { CoreAnalysisManager } from "./core-analysis-manager.ts";
 import { CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE } from "./core-internal-attributes.ts";
@@ -20,7 +21,9 @@ import type { CoreProgramSummaries } from "./core-ir-summaries.ts";
 import type { CoreFunctionId, CoreInstructionId } from "./core-ir.ts";
 import {
 	analyzeCoreNativeEntry,
+	coreNativeEntryControlFlow,
 	coreArgumentObservation,
+	compactCoreNativeEntries,
 } from "./core-native-entry-analysis.ts";
 import type { CoreProgram } from "./core-store.ts";
 
@@ -34,6 +37,12 @@ interface EntryNode {
 interface EntryCall {
 	readonly callee: EntryNode;
 	readonly guarded: boolean;
+}
+
+export interface CoreNativeEntryGraph {
+	readonly entries: ReadonlyArray<CoreDirectEntryPlan>;
+	/** Original IDs identify the provisional budgets, before surviving siblings are compacted. */
+	readonly retiredEntries: ReadonlyArray<CoreDirectEntryPlan>;
 }
 
 function resultMask(representation: CorePlanRepresentation): number | undefined {
@@ -65,10 +74,12 @@ export function connectCoreNativeEntries(
 		instruction: CoreInstructionId,
 		generatedCode: number,
 		compilerWork: number,
+		entryId: number,
 	) => boolean,
 	admitAnalysis: (functionId: CoreFunctionId, compilerWork: number) => boolean,
-): ReadonlyArray<CoreDirectEntryPlan> {
+): CoreNativeEntryGraph {
 	const nodes = new Map<CoreFunctionId, Array<EntryNode>>();
+	const roots = new Set<EntryNode>();
 	const pending: Array<EntryNode> = [];
 	const queued = new Set<EntryNode>();
 	const enqueue = (node: EntryNode) => {
@@ -89,7 +100,7 @@ export function connectCoreNativeEntries(
 		enqueue(node);
 		return node;
 	};
-	for (const entry of initial) add(entry);
+	for (const entry of initial) roots.add(add(entry));
 	// Every variant of a record call's caller exchanges records through caller storage.
 	const recordCalls = new Set(
 		initial.flatMap((entry) =>
@@ -184,7 +195,6 @@ export function connectCoreNativeEntries(
 		const key = `${target}:${signature}`;
 		if (declined.has(key) || entries.length >= 4) return undefined;
 		declined.add(key);
-		const fn = program.function(target);
 		const cost = candidateCost(target, arguments_?.length);
 		if (cost === undefined) return undefined;
 		const generatedCode = cost.generatedCode;
@@ -197,16 +207,16 @@ export function connectCoreNativeEntries(
 		if (
 			resultOnly
 				? !admitAnalysis(target, compilerWork)
-				: !admit(target, instruction, generatedCode, compilerWork)
+				: !admit(target, instruction, generatedCode, compilerWork, entries.length)
 		)
 			return undefined;
 		const variant =
 			prepared ??
-			analyzeCoreNativeEntry(fn, cfg(target), parameters, arguments_, callSites);
+			analyzeCoreNativeEntry(program, cfg(target), parameters, arguments_, callSites);
 		if (
 			resultOnly &&
 			(variant.resultRepresentation === "boxed" ||
-				!admit(target, instruction, generatedCode, 0))
+				!admit(target, instruction, generatedCode, 0, entries.length))
 		)
 			return undefined;
 		return add(
@@ -343,7 +353,7 @@ export function connectCoreNativeEntries(
 				(_, index) => representations[index] ?? "boxed",
 			);
 		const baseline = analyzeCoreNativeEntry(
-			fn,
+			program,
 			control,
 			parametersFor(seed.representations),
 			seed.exactArity ? seed.representations : undefined,
@@ -359,23 +369,29 @@ export function connectCoreNativeEntries(
 				),
 			);
 			const candidate = analyzeCoreNativeEntry(
-				fn,
+				program,
 				control,
 				parametersFor(nominated),
 				seed.exactArity ? nominated : undefined,
 				guardedCalls,
 			);
 			const baselineNumbers = new Set(
-				(baseline.operatorInputs ?? [])
+				(baseline.instructionFacts ?? [])
 					.filter((site) =>
 						site.masks.every((mask) => mask === COMPILER_VALUE_KIND_NUMBER),
 					)
 					.map((site) => site.instruction),
 			);
-			const gain = (candidate.operatorInputs ?? []).some(
+			const gain = (candidate.instructionFacts ?? []).some(
 				(site) =>
+					fn.instructionKind(site.instruction) === "operation" &&
 					!baselineNumbers.has(site.instruction) &&
-					site.masks.every((mask) => mask === COMPILER_VALUE_KIND_NUMBER),
+					site.masks.every((mask) => mask === COMPILER_VALUE_KIND_NUMBER) &&
+					compilerOperatorInputKindsHaveExactNativeSemantics(
+						fn.instructionOpcodeName(site.instruction),
+						fn.instructionAttributes(site.instruction).operator,
+						site.masks,
+					),
 			);
 			if (gain) {
 				representations = nominated;
@@ -384,7 +400,7 @@ export function connectCoreNativeEntries(
 			}
 		}
 		if (representations.every((rep) => rep === "boxed")) continue;
-		request(
+		const seeded = request(
 			seed.target,
 			calls[0]!.instruction,
 			parametersFor(representations),
@@ -392,6 +408,7 @@ export function connectCoreNativeEntries(
 			variant,
 			seed.exactArity ? representations : undefined,
 		);
+		if (seeded !== undefined) roots.add(seeded);
 	}
 	for (let cursor = 0; cursor < pending.length; cursor++) {
 		const node = pending[cursor]!;
@@ -405,7 +422,8 @@ export function connectCoreNativeEntries(
 			!admitAnalysis(entry.function, fn.valueCapacity + [...fn.instructionIds()].length)
 		)
 			continue;
-		const reachable = cfg(entry.function).reachable;
+		const reachable =
+			coreNativeEntryControlFlow(fn, entry)?.blocks ?? cfg(entry.function).reachable;
 		const newCalls: Array<[CoreInstructionId, EntryCall]> = [];
 		for (const site of outgoing) {
 			if (
@@ -482,7 +500,7 @@ export function connectCoreNativeEntries(
 				),
 		);
 		const variant = analyzeCoreNativeEntry(
-			fn,
+			program,
 			cfg(entry.function),
 			entry.parameterRepresentations,
 			undefined,
@@ -502,7 +520,39 @@ export function connectCoreNativeEntries(
 		if (variant.resultRepresentation !== entry.resultRepresentation)
 			for (const dependent of node.dependents) enqueue(dependent);
 	}
-	return [...nodes]
+	const retained = new Set(roots);
+	const required = [...roots];
+	for (let cursor = 0; cursor < required.length; cursor++) {
+		const node = required[cursor]!;
+		const fn = program.function(node.entry.function);
+		const reachable = coreNativeEntryControlFlow(fn, node.entry)?.blocks;
+		for (const call of node.entry.callOverrides ?? []) {
+			if (
+				reachable !== undefined &&
+				!reachable.has(fn.instructionBlock(call.instruction))
+			)
+				continue;
+			const callee = nodes
+				.get(call.target)
+				?.find(({ entry }) => entry.id === call.entryId);
+			if (callee === undefined) throw new RangeError("Dangling native entry nomination");
+			if (!retained.has(callee)) {
+				retained.add(callee);
+				required.push(callee);
+			}
+		}
+	}
+	// Semantic return facts survive retirement of the emitted ABI, keeping loop proofs monotone.
+	const ordered = [...nodes]
 		.sort(([left], [right]) => left - right)
-		.flatMap(([, entries]) => entries.map(({ entry }) => entry));
+		.flatMap(([, entries]) => entries);
+	return {
+		entries: compactCoreNativeEntries(
+			program,
+			ordered.filter((node) => retained.has(node)).map((node) => node.entry),
+		),
+		retiredEntries: ordered
+			.filter((node) => !retained.has(node))
+			.map((node) => node.entry),
+	};
 }

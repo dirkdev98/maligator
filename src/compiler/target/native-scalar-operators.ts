@@ -1,3 +1,44 @@
+import {
+	COMPILER_VALUE_KIND_UNDEFINED,
+	COMPILER_VALUE_KIND_NULL,
+	COMPILER_VALUE_KIND_BOOLEAN,
+	COMPILER_VALUE_KIND_STRING,
+	COMPILER_VALUE_KIND_NUMBER,
+} from "../shared/compiler-value-kinds.ts";
+import type { CompilerValueKindMask } from "../shared/compiler-value-kinds.ts";
+
+// Callers exclude Object, Symbol and BigInt; the final arm deliberately has no tag test.
+export function nativePrimitiveNumberExpression(
+	value: string,
+	mask: CompilerValueKindMask,
+	number = `mal_ops_number_as_f64(${value})`,
+	boolean = `mal_value_to_boolean(${value})`,
+): string {
+	const choices = [
+		{
+			mask: COMPILER_VALUE_KIND_UNDEFINED,
+			test: `mal_value_is_undefined(${value})`,
+			value: '__builtin_nan("")',
+		},
+		{ mask: COMPILER_VALUE_KIND_NULL, test: `mal_value_is_null(${value})`, value: "0.0" },
+		{
+			mask: COMPILER_VALUE_KIND_BOOLEAN,
+			test: `mal_value_is_boolean(${value})`,
+			value: `(${boolean} ? 1.0 : 0.0)`,
+		},
+		{
+			mask: COMPILER_VALUE_KIND_STRING,
+			test: `mal_value_is_string(${value})`,
+			value: `mal_ops_to_number(${value})`,
+		},
+		{ mask: COMPILER_VALUE_KIND_NUMBER, test: "true", value: number },
+	].filter((choice) => (mask & choice.mask) !== 0);
+	let expression = choices.pop()!.value;
+	for (const choice of choices.reverse())
+		expression = `(${choice.test} ? ${choice.value} : ${expression})`;
+	return expression;
+}
+
 export const NATIVE_ARITH: Readonly<Record<string, string>> = {
 	"+": "+",
 	"-": "-",
@@ -55,6 +96,17 @@ export const MATH_UNARY_NATIVE_CALL: ReadonlyMap<string, string | null> = new Ma
 ] as const);
 
 export const MATH_BINARY_OPERATIONS = new Set(["Math.min", "Math.max"]);
+
+export function nativeGuardedMathArity(
+	operation: string,
+	argumentCount: number,
+): 1 | 2 | undefined {
+	return argumentCount === 1 && MATH_UNARY_NATIVE_CALL.has(operation)
+		? 1
+		: argumentCount === 2 && MATH_BINARY_OPERATIONS.has(operation)
+			? 2
+			: undefined;
+}
 
 export const MATH_NUMBER_KERNELS: Readonly<Record<string, readonly [string, number]>> = {
 	"Math.clz32": ["mal_builtin_math_clz32_number", 1],

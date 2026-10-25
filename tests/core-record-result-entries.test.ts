@@ -209,7 +209,7 @@ console.log(widths("ab  cde f"), direct("ab"));`,
 				{ instruction: site, target: named("scan"), entryId: producer.id },
 			];
 			const variant = analyzeCoreNativeEntry(
-				core.program.function(stray.function),
+				core.program,
 				buildCoreControlFlow(core.program, stray.function, { exceptions: true }),
 				stray.parameterRepresentations,
 				undefined,
@@ -293,7 +293,7 @@ console.log(last("ab cd"));`,
 		];
 		// A current representation proof isolates the record proof as the one that fails.
 		const variant = analyzeCoreNativeEntry(
-			core.program.function(entry.function),
+			core.program,
 			buildCoreControlFlow(core.program, entry.function, { exceptions: true }),
 			entry.parameterRepresentations,
 			undefined,
@@ -337,7 +337,7 @@ console.log(last("ab cd"));`,
 		const entry = recordEntry("scan")!;
 		const { escapes: _escapes, ...resultFields } = entry.resultFields!;
 		const variant = analyzeCoreNativeEntry(
-			core.program.function(entry.function),
+			core.program,
 			buildCoreControlFlow(core.program, entry.function, { exceptions: true }),
 			entry.parameterRepresentations,
 			undefined,
@@ -486,7 +486,7 @@ console.log(widths("ab cd ef"), spans("ab cd ef"));`,
 		]);
 		// A current representation proof isolates the record proof as the one that fails.
 		const variant = analyzeCoreNativeEntry(
-			core.program.function(callee.function),
+			core.program,
 			buildCoreControlFlow(core.program, callee.function, { exceptions: true }),
 			callee.parameterRepresentations,
 			undefined,
@@ -520,7 +520,7 @@ console.log(widths("ab cd ef"), spans("ab cd ef"));`,
 					},
 		);
 		const producerVariant = analyzeCoreNativeEntry(
-			core.program.function(producer.function),
+			core.program,
 			buildCoreControlFlow(core.program, producer.function, { exceptions: true }),
 			producer.parameterRepresentations,
 			undefined,
@@ -544,7 +544,7 @@ console.log(widths("ab cd ef"), spans("ab cd ef"));`,
 			(site) => site.recordUses?.passes === undefined,
 		);
 		const unsuppliedVariant = analyzeCoreNativeEntry(
-			core.program.function(producer.function),
+			core.program,
 			buildCoreControlFlow(core.program, producer.function, { exceptions: true }),
 			producer.parameterRepresentations,
 			undefined,
@@ -618,7 +618,7 @@ console.log(shapes(["move", "add"]));`,
 			},
 		];
 		const variant = analyzeCoreNativeEntry(
-			core.program.function(entry.function),
+			core.program,
 			buildCoreControlFlow(core.program, entry.function, { exceptions: true }),
 			entry.parameterRepresentations,
 			undefined,

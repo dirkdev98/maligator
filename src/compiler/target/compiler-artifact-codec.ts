@@ -6,12 +6,19 @@ import type {
 	CompilerExactCollectionBrand,
 	CompilerNumericTypedArrayKind,
 } from "../shared/compiler-instruction.ts";
+import type { InstructionFacts } from "../shared/instruction-facts.ts";
+import type { CompilerIntegerRange } from "../shared/integer-range.ts";
 import {
-	compilerOperatorInputKindsHaveExactNativeSemantics,
-	compilerBuiltinInputKindsAreValid,
-} from "../shared/compiler-value-kinds.ts";
-import type { CompilerOperatorInputKindMasks } from "../shared/compiler-value-kinds.ts";
+	COMPILER_INT32_RANGE,
+	COMPILER_UINT32_RANGE,
+	compilerIntegerRangesEqual,
+	compilerIntegerRangeIsValid,
+} from "../shared/integer-range.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
+import {
+	readCompilerProfiling,
+	writeCompilerProfiling,
+} from "./compiler-profile-codec.ts";
 import type { CoreTargetClassLayout } from "./core-target-ir.ts";
 import type { NativeCallbackTransportPlan } from "./lower-native-callbacks.ts";
 import type { NativeCallTransportPlan } from "./lower-native-calls.ts";
@@ -62,6 +69,7 @@ import {
 	writeRuntimeImage,
 } from "./program-image-codec.ts";
 import {
+	validateNativeInstructionFacts,
 	nativeFrameRootRegisters,
 	nativeLoopUpdateTransportsValue,
 	targetCopyEdgeReaches,
@@ -102,7 +110,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 263;
+export const COMPILER_ARTIFACT_VERSION = 286;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -1177,6 +1185,64 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 				break;
 		}
 	}
+	w.u8(storage.controlFlow === undefined ? 0 : 1);
+	if (storage.controlFlow !== undefined) {
+		w.u32(storage.controlFlow.branches.length);
+		for (const branch of storage.controlFlow.branches) {
+			w.i32(branch.instructionIp);
+			w.i32(branch.targetIp);
+		}
+		w.i32Array([...storage.controlFlow.unreachableIps]);
+	}
+	w.i32Array([...storage.elidedPureIps]);
+	w.i32Array([...storage.unusedRegisters]);
+	w.u32(storage.stringComparisons.length);
+	for (const comparison of storage.stringComparisons) {
+		w.i32(comparison.instructionIp);
+		w.i32(comparison.register);
+		w.i32(comparison.length);
+		w.u8(comparison.kind === "boxed" ? 0 : 1);
+	}
+}
+
+function writeIntegerRanges(
+	w: Writer,
+	ranges: ReadonlyArray<CompilerIntegerRange | undefined> | undefined,
+): void {
+	w.u32(ranges?.length ?? 0);
+	for (const range of ranges ?? []) {
+		if (range === undefined) w.u8(0);
+		else if (compilerIntegerRangesEqual(range, COMPILER_INT32_RANGE)) w.u8(1);
+		else if (compilerIntegerRangesEqual(range, COMPILER_UINT32_RANGE)) w.u8(2);
+		else {
+			w.u8(3);
+			w.f64(range.minimum);
+			w.f64(range.maximum);
+		}
+	}
+}
+
+function readIntegerRanges(
+	r: Reader,
+): ReadonlyArray<CompilerIntegerRange | undefined> | undefined {
+	const count = r.count(1);
+	if (count === 0) return undefined;
+	return Array.from({ length: count }, () => {
+		const tag = r.u8();
+		if (tag === 0) return undefined;
+		if (tag === 1) return COMPILER_INT32_RANGE;
+		if (tag === 2) return COMPILER_UINT32_RANGE;
+		if (tag !== 3) throw new RangeError("program-image-codec: invalid integer range tag");
+		const range: CompilerIntegerRange = {
+			minimum: r.f64(),
+			maximum: r.f64(),
+			exactSafeIntegers: true,
+			excludesNegativeZero: true,
+		};
+		if (!compilerIntegerRangeIsValid(range))
+			throw new RangeError("program-image-codec: invalid integer range");
+		return range;
+	});
 }
 
 function readNativeStorage(r: Reader): NativeStoragePlan {
@@ -1834,8 +1900,31 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 			}
 		},
 	);
+	const hasControlFlow = r.u8();
+	if (hasControlFlow > 1) throw new RangeError("Invalid native control-flow selection");
+	const controlFlow =
+		hasControlFlow === 0
+			? undefined
+			: {
+					branches: Array.from({ length: r.count(2) }, () => ({
+						instructionIp: r.i32(),
+						targetIp: r.i32(),
+					})),
+					unreachableIps: r.i32Array(),
+				};
 	return {
 		...storage,
+		elidedPureIps: r.i32Array(),
+		unusedRegisters: r.i32Array(),
+		stringComparisons: Array.from({ length: r.count(4) }, () => {
+			const instructionIp = r.i32(),
+				register = r.i32(),
+				length = r.i32(),
+				kind = r.u8();
+			if (kind > 1) throw new RangeError("Invalid native String comparison kind");
+			return { instructionIp, register, length, kind: kind === 0 ? "boxed" : "strings" };
+		}),
+		...(controlFlow === undefined ? {} : { controlFlow }),
 		literalPropertyDefinitions,
 		mathCalls,
 		numberPredicates,
@@ -1986,6 +2075,7 @@ function writeCompilerArtifact(
 	def: RuntimeImage,
 	compiler: ProgramImage,
 ): void {
+	writeCompilerProfiling(w, compiler);
 	const semanticProtectors = [...compiler.native.semanticProtectors];
 	if (
 		semanticProtectors.length > 3 ||
@@ -2209,11 +2299,21 @@ function writeCompilerArtifact(
 				w.i32(instructionIp);
 				w.u8(value ? 1 : 0);
 			}
-			w.u32(entry.operatorInputs?.length ?? 0);
-			for (const { instructionIp, masks } of entry.operatorInputs ?? []) {
+			w.u32(entry.instructionFacts?.length ?? 0);
+			for (const {
+				instructionIp,
+				masks,
+				results,
+				inputIntegerRanges,
+				effectMask,
+			} of entry.instructionFacts ?? []) {
 				w.u32(instructionIp);
-				w.u8(masks.length);
+				w.u32(masks.length);
 				for (const mask of masks) w.u8(mask);
+				w.u32(results.length);
+				for (const mask of results) w.u8(mask);
+				writeIntegerRanges(w, inputIntegerRanges);
+				w.u32(effectMask);
 			}
 			w.u32(entry.callOverrides?.length ?? 0);
 			for (const call of entry.callOverrides ?? []) {
@@ -2246,6 +2346,33 @@ function writeCompilerArtifact(
 					safepoint.rootRegisters,
 					safepoint.outgoingRootRegisters,
 				);
+			}
+		}
+
+		validateNativeInstructionFacts(fn, native.facts);
+		w.u8(native.facts === undefined ? 0 : 1);
+		if (native.facts !== undefined) {
+			const rows = native.facts.flatMap((facts, ip) =>
+				facts === undefined ? [] : [{ facts, ip }],
+			);
+			w.u32(rows.length);
+			for (const { facts, ip } of rows) {
+				w.u32(ip);
+				w.u8(facts.effectMask === undefined ? 0 : 1);
+				if (facts.effectMask !== undefined) w.u32(facts.effectMask);
+				for (const masks of [facts.inputKindMasks, facts.resultKindMasks]) {
+					w.u8(masks === undefined ? 0 : 1);
+					if (masks !== undefined) {
+						w.u32(masks.length);
+						for (const mask of masks) w.u8(mask);
+					}
+				}
+				writeIntegerRanges(w, facts.inputIntegerRanges);
+				w.u8(facts.registers === undefined ? 0 : 1);
+				if (facts.registers !== undefined) {
+					w.i32Array([...facts.registers]);
+					w.u32(facts.inputOffset!);
+				}
 			}
 		}
 
@@ -2545,37 +2672,6 @@ function writeCompilerArtifact(
 					w.u32(candidate.layout);
 					w.u32(candidate.index);
 				}
-			} else if (
-				plan.kind === "exact-builtin-input-kinds" &&
-				instruction.opcode === "CALL_KNOWN" &&
-				!instruction.construct &&
-				instruction.argumentMode === undefined
-			) {
-				if (
-					!compilerBuiltinInputKindsAreValid(
-						plan.inputKindMasks,
-						instruction.arguments.length + 1,
-					)
-				)
-					throw new RangeError("program-image-codec: invalid builtin input kind masks");
-				w.u8(19);
-				for (const mask of plan.inputKindMasks) w.u8(mask);
-			} else if (
-				plan.kind === "exact-operator-input-kinds" &&
-				(instruction.opcode === "BINARY" || instruction.opcode === "UNARY")
-			) {
-				if (
-					!compilerOperatorInputKindsHaveExactNativeSemantics(
-						instruction.opcode.toLowerCase(),
-						instruction.operator,
-						plan.inputKindMasks,
-					)
-				) {
-					throw new RangeError("program-image-codec: invalid exact binary kind masks");
-				}
-				w.u8(17);
-				w.u8(plan.inputKindMasks[0]);
-				if (plan.inputKindMasks.length === 2) w.u8(plan.inputKindMasks[1]);
 			} else {
 				throw new RangeError(
 					"program-image-codec: native instruction plan opcode mismatch",
@@ -4517,6 +4613,7 @@ function readCompilerArtifact(
 	nativeImage: RuntimeImage,
 ): ProgramImage {
 	const { functions, stringConstants } = nativeImage;
+	const profiling = readCompilerProfiling(r, runtimeImage.functions, functions);
 	const semanticProtectorCount = r.count(3);
 	if (semanticProtectorCount > 3) {
 		throw new RangeError("program-image-codec: too many semantic protector facts");
@@ -4793,15 +4890,18 @@ function readCompilerArtifact(
 					throw new Error("program-image-codec: invalid direct-entry comparison");
 				return { instructionIp, value: value === 1 };
 			});
-			const operatorInputs = Array.from({ length: r.count(6) }, () => {
+			const instructionFacts = Array.from({ length: r.count(20) }, () => {
 				const instructionIp = r.u32();
-				const count = r.u8();
-				if (count !== 1 && count !== 2)
-					throw new RangeError("Invalid native operator arity");
-				const masks = Array.from({ length: count }, () =>
-					r.u8(),
-				) as unknown as CompilerOperatorInputKindMasks;
-				return { instructionIp, masks };
+				const masks = Array.from({ length: r.count(1) }, () => r.u8());
+				const results = Array.from({ length: r.count(1) }, () => r.u8());
+				const inputIntegerRanges = readIntegerRanges(r);
+				return {
+					instructionIp,
+					masks,
+					results,
+					...(inputIntegerRanges === undefined ? {} : { inputIntegerRanges }),
+					effectMask: r.u32(),
+				};
 			});
 			const callOverrides = Array.from({ length: r.count(4) }, () => {
 				const instructionIp = r.u32();
@@ -4868,7 +4968,7 @@ function readCompilerArtifact(
 				resultRepresentation,
 				...(argumentRepresentations === undefined ? {} : { argumentRepresentations }),
 				...(constantCount === 0 ? {} : { constantBooleans }),
-				...(operatorInputs.length === 0 ? {} : { operatorInputs }),
+				...(instructionFacts.length === 0 ? {} : { instructionFacts }),
 				...(callOverrides.length === 0 ? {} : { callOverrides }),
 				...(fieldParameters === undefined ? {} : { fieldParameters }),
 				...(resultFields === undefined ? {} : { resultFields }),
@@ -4879,6 +4979,49 @@ function readCompilerArtifact(
 			validateNativeDirectEntry(fn, entry);
 			nativeFrameRootRegisters(fn, entry);
 			directEntries.push(entry);
+		}
+
+		const hasFacts = r.u8();
+		if (hasFacts > 1) throw new RangeError("program-image-codec: invalid facts tag");
+		const facts =
+			hasFacts === 0
+				? undefined
+				: new Array<InstructionFacts | undefined>(fn.instructions.length).fill(undefined);
+		if (facts !== undefined) {
+			let previousIp = -1;
+			for (let count = r.count(10); count > 0; count--) {
+				const ip = r.u32();
+				if (ip <= previousIp || ip >= facts.length)
+					throw new RangeError("program-image-codec: invalid facts index");
+				previousIp = ip;
+				const hasEffects = r.u8();
+				if (hasEffects > 1)
+					throw new RangeError("program-image-codec: invalid effects tag");
+				const effectMask = hasEffects === 0 ? undefined : r.u32();
+				const readOptional = <T>(read: () => T): T | undefined => {
+					const tag = r.u8();
+					if (tag > 1)
+						throw new RangeError("program-image-codec: invalid fact dimension tag");
+					return tag === 0 ? undefined : read();
+				};
+				const inputKindMasks = readOptional(() =>
+					Array.from({ length: r.count(1) }, () => r.u8()),
+				);
+				const resultKindMasks = readOptional(() =>
+					Array.from({ length: r.count(1) }, () => r.u8()),
+				);
+				const inputIntegerRanges = readIntegerRanges(r);
+				const registers = readOptional(() => r.i32Array());
+				const inputOffset = registers === undefined ? undefined : r.u32();
+				facts[ip] = {
+					...(effectMask === undefined ? {} : { effectMask }),
+					...(inputKindMasks === undefined ? {} : { inputKindMasks }),
+					...(resultKindMasks === undefined ? {} : { resultKindMasks }),
+					...(inputIntegerRanges === undefined ? {} : { inputIntegerRanges }),
+					...(registers === undefined ? {} : { registers, inputOffset }),
+				};
+			}
+			validateNativeInstructionFacts(fn, facts);
 		}
 
 		const nativeInstructions: Array<NativeInstructionPlan | undefined> = Array.from({
@@ -5187,41 +5330,6 @@ function readCompilerArtifact(
 				["+", "-", "*", "%"].includes(instruction.operator)
 			) {
 				nativeInstructions[instructionIndex] = { kind: "unsigned-arithmetic" };
-			} else if (
-				tag === 19 &&
-				instruction.opcode === "CALL_KNOWN" &&
-				!instruction.construct &&
-				instruction.argumentMode === undefined
-			) {
-				if (instruction.arguments.length > 16)
-					throw new RangeError("program-image-codec: invalid builtin input count");
-				const masks = Array.from({ length: instruction.arguments.length + 1 }, () =>
-					r.u8(),
-				);
-				if (!compilerBuiltinInputKindsAreValid(masks, instruction.arguments.length + 1))
-					throw new RangeError("program-image-codec: invalid builtin input kind masks");
-				nativeInstructions[instructionIndex] = {
-					kind: "exact-builtin-input-kinds",
-					inputKindMasks: masks,
-				};
-			} else if (
-				tag === 17 &&
-				(instruction.opcode === "BINARY" || instruction.opcode === "UNARY")
-			) {
-				const masks: CompilerOperatorInputKindMasks =
-					instruction.opcode === "BINARY" ? [r.u8(), r.u8()] : [r.u8()];
-				if (
-					!compilerOperatorInputKindsHaveExactNativeSemantics(
-						instruction.opcode.toLowerCase(),
-						instruction.operator,
-						masks,
-					)
-				)
-					throw new RangeError("program-image-codec: invalid exact operator kind masks");
-				nativeInstructions[instructionIndex] = {
-					kind: "exact-operator-input-kinds",
-					inputKindMasks: masks,
-				};
 			} else {
 				throw new RangeError(
 					"program-image-codec: compiler instruction metadata opcode mismatch",
@@ -6310,6 +6418,9 @@ function readCompilerArtifact(
 		const nativeFunction: NativeFunctionPlan = {
 			storage,
 			body: fn,
+			...(profiling.compilerSiteIds?.[functionIndex] === undefined
+				? {}
+				: { compilerSiteIds: profiling.compilerSiteIds[functionIndex] }),
 			...(storageValues.length === 0 ? {} : { storageValues }),
 			...(specializedOnly ? { specializedOnly: true as const } : {}),
 			functionIndex,
@@ -6322,6 +6433,7 @@ function readCompilerArtifact(
 			...(literalSwitchCount === 0 ? {} : { literalSwitches }),
 			gc: { safepoints },
 			instructions: nativeInstructions,
+			...(facts === undefined ? {} : { facts }),
 			specializations: regions,
 			regionActions: vmRegionActions(regions),
 		};
@@ -6362,6 +6474,7 @@ function readCompilerArtifact(
 
 	const definition: ProgramImage = {
 		runtime: runtimeImage,
+		...(profiling.profiling === undefined ? {} : { profiling: profiling.profiling }),
 		native: {
 			semanticProtectors,
 			functions: nativeFunctions,

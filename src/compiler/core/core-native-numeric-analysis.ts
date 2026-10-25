@@ -1,20 +1,13 @@
-import {
-	COMPILER_VALUE_KIND_BOOLEAN,
-	COMPILER_VALUE_KIND_NUMBER,
-	COMPILER_VALUE_KIND_STRING,
-	COMPILER_VALUE_KIND_TOP,
-} from "../shared/compiler-value-kinds.ts";
-import type { CompilerOperatorInputKindMasks } from "../shared/compiler-value-kinds.ts";
+import { COMPILER_VALUE_KIND_NUMBER } from "../shared/compiler-value-kinds.ts";
+import type { CompilerIntegerRange } from "../shared/integer-range.ts";
 import type { CoreAnalysisManager } from "./core-analysis-manager.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import { CORE_CONTROL_FLOW_BUNDLE_ANALYSIS } from "./core-ir-control-flow.ts";
 import { CORE_LOOP_INDUCTION_ANALYSIS } from "./core-ir-loops.ts";
-import type { CoreNumericRange } from "./core-ir-loops.ts";
 import {
 	CORE_LOCAL_VALUE_KIND_ANALYSIS,
 	corePrivatePackedRestArrays,
 	corePrivateNumericArrayLoads,
-	coreExactOperatorInputKindMasks,
 } from "./core-ir-value-kinds.ts";
 import type { CoreValueKindAnalysis } from "./core-ir-value-kinds.ts";
 import { coreBlockId, coreInstructionId } from "./core-ir.ts";
@@ -221,7 +214,9 @@ export function coreUnsignedArithmeticPlans(
 			function: functionId,
 		});
 		const admitted = new Set<CoreInstructionId>();
-		const unsigned = (range: CoreNumericRange | undefined): range is CoreNumericRange =>
+		const unsigned = (
+			range: CompilerIntegerRange | undefined,
+		): range is CompilerIntegerRange =>
 			range !== undefined && range.minimum >= 0 && range.maximum <= 0xffff_ffff;
 		for (const consumer of consumers) {
 			let remaining = 32;
@@ -260,142 +255,6 @@ export function coreUnsignedArithmeticPlans(
 		for (const instruction of admitted) {
 			const plan = Object.freeze({ function: functionId, instruction });
 			proofs.set(plan, { fn, versions: fn.versions });
-			plans.push(plan);
-		}
-	}
-	return Object.freeze(plans);
-}
-
-export interface CoreOperatorInputPlan {
-	readonly function: CoreFunctionId;
-	readonly instruction: CoreInstructionId;
-	readonly masks: CompilerOperatorInputKindMasks;
-}
-
-const operatorProofs = new WeakMap<
-	CoreOperatorInputPlan,
-	{ fn: CoreFunctionStore; versions: CoreFunctionVersions }
->();
-
-export function coreOperatorInputProofIsCurrent(
-	program: CoreProgram,
-	plan: CoreOperatorInputPlan,
-): boolean {
-	const proof = operatorProofs.get(plan);
-	return (
-		proof?.fn === program.function(plan.function) &&
-		coreFunctionVersionsAreCurrent(proof.fn, proof.versions)
-	);
-}
-
-export function coreOperatorInputPlans(
-	program: CoreProgram,
-	analyses: CoreAnalysisManager,
-	functions: ReadonlyArray<CoreFunctionId>,
-): ReadonlyArray<CoreOperatorInputPlan> {
-	const plans: Array<CoreOperatorInputPlan> = [];
-	for (const functionId of functions) {
-		const fn = program.function(functionId);
-		for (const instruction of fn.instructionIds()) {
-			if (fn.instructionKind(instruction) !== "operation") continue;
-			const opcode = fn.instructionOpcodeName(instruction);
-			if (opcode !== "unary" && opcode !== "binary") continue;
-			let masks = coreExactOperatorInputKindMasks(fn, instruction);
-			if (
-				masks === undefined &&
-				opcode === "unary" &&
-				fn.instructionAttributes(instruction).operator === "tostring"
-			) {
-				// Memory transforms can introduce conversions after primitive effect refinement.
-				const kinds = analyses.get(CORE_LOCAL_VALUE_KIND_ANALYSIS, {
-					scope: "function",
-					function: functionId,
-				});
-				const input = fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction));
-				if (kinds.kindMask(input) === COMPILER_VALUE_KIND_BOOLEAN)
-					masks = [COMPILER_VALUE_KIND_BOOLEAN];
-			}
-			if (masks === undefined) continue;
-			const plan = Object.freeze({
-				function: functionId,
-				instruction,
-				masks: Object.freeze(masks),
-			});
-			operatorProofs.set(plan, { fn, versions: fn.versions });
-			plans.push(plan);
-		}
-	}
-	return Object.freeze(plans);
-}
-
-export interface CoreBuiltinInputPlan {
-	readonly function: CoreFunctionId;
-	readonly instruction: CoreInstructionId;
-	readonly masks: ReadonlyArray<number>;
-}
-
-const builtinProofs = new WeakMap<
-	CoreBuiltinInputPlan,
-	{ fn: CoreFunctionStore; versions: CoreFunctionVersions }
->();
-
-export function coreBuiltinInputProofIsCurrent(
-	program: CoreProgram,
-	plan: CoreBuiltinInputPlan,
-): boolean {
-	const proof = builtinProofs.get(plan);
-	return (
-		proof?.fn === program.function(plan.function) &&
-		coreFunctionVersionsAreCurrent(proof.fn, proof.versions)
-	);
-}
-
-export function coreBuiltinInputPlans(
-	program: CoreProgram,
-	analyses: CoreAnalysisManager,
-	functions: ReadonlyArray<CoreFunctionId>,
-): ReadonlyArray<CoreBuiltinInputPlan> {
-	const plans: Array<CoreBuiltinInputPlan> = [];
-	for (const functionId of functions) {
-		const fn = program.function(functionId);
-		if (!fn.isGenerator && !fn.isAsync) continue;
-		for (const instruction of fn.instructionIds()) {
-			if (
-				fn.instructionKind(instruction) !== "operation" ||
-				fn.instructionOpcodeName(instruction) !== "callKnown"
-			)
-				continue;
-			const attributes = fn.instructionAttributes(instruction);
-			const count = fn.kernel.instructionOperandCount(instruction);
-			if (
-				attributes.construct ||
-				attributes.argumentMode !== undefined ||
-				count < 1 ||
-				count > 17
-			)
-				continue;
-			const kinds = analyses.get(CORE_LOCAL_VALUE_KIND_ANALYSIS, {
-				scope: "function",
-				function: functionId,
-			});
-			const start = fn.kernel.instructionOperandStart(instruction);
-			const masks = Array.from({ length: count }, (_, index) => {
-				const mask = kinds.kindMask(fn.kernel.operandAt(start + index));
-				return [
-					COMPILER_VALUE_KIND_BOOLEAN,
-					COMPILER_VALUE_KIND_NUMBER,
-					COMPILER_VALUE_KIND_STRING,
-				].includes(mask)
-					? mask
-					: COMPILER_VALUE_KIND_TOP;
-			});
-			if (masks.every((mask) => mask === COMPILER_VALUE_KIND_TOP)) continue;
-			const plan = Object.freeze({
-				function: functionId,
-				instruction,
-				masks: Object.freeze(masks),
-			});
-			builtinProofs.set(plan, { fn, versions: fn.versions });
 			plans.push(plan);
 		}
 	}

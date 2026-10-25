@@ -31,9 +31,13 @@ tests/native/literal-materialization.test.ts
 tests/native/native-ssa-storage.test.ts
 tests/native/native-boxed-literal-storage.test.ts
 tests/native/proven-string-comparisons.test.ts
+tests/native/string-comparison-facts.test.ts
 tests/native/native-numeric-workers.test.ts
+tests/native/native-reachability-entries.test.ts
+tests/native/native-entry-retention.test.ts
 tests/native/static-data-query.test.ts
 tests/native/static-primitive-operations.test.ts
+tests/native/primitive-conversion-unions.test.ts
 tests/native/numeric-call-profiles.test.ts
 tests/native/static-property-root-mask.test.ts
 tests/native/native-root-storage.test.ts
@@ -126,6 +130,10 @@ tests/native/process-memory-usage-fast.test.ts
 tests/native/worker-math-cache.test.ts
 tests/native/guarded-math-number.test.ts
 tests/native/exact-numeric-kinds.test.ts
+tests/native/operand-truthiness-facts.test.ts
+tests/native/guarded-call-roots.test.ts
+tests/native/operator-completion-effects.test.ts
+tests/native/guarded-layout-roots.test.ts
 tests/native/number-to-uint32-boundaries.test.ts
 tests/native/image-domains.test.ts
 tests/native/application-images.test.ts

@@ -6,6 +6,18 @@ import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts"
 import { vmExceptionHandlerTargets } from "../src/compiler/target/runtime-image.ts";
 
 describe("native fallible shaped allocation", () => {
+	it.each([
+		{ opcode: "MATH_UNARY_NUMBER", operation: "Math.abs", dst: 0, src: 1 },
+		{ opcode: "MATH_BINARY_NUMBER", operation: "Math.min", dst: 0, left: 1, right: 2 },
+	] as const)("keeps $opcode noncollecting", (instruction) => {
+		expect(nativeInstructionEffects(instruction)).toEqual({
+			allocation: false,
+			collection: false,
+			reentry: false,
+			throwing: false,
+			invalidation: false,
+		});
+	});
 	it.each(["LOAD_CALLEE", "LOAD_ARGUMENT", "LOAD_ARGUMENT_COUNT"] as const)(
 		"treats %s as noncollecting argument transport",
 		(opcode) => {

@@ -97,17 +97,28 @@ Exact builtin calls consume the catalog's primitive result kinds as well as thei
 existing identity proof. Scalar Date and Object helpers capture and check throwing
 results before conversion. Clock reads and mutable collection queries retain
 their effects; primitive result kinds do not admit deterministic call reuse.
-Number predicates persist a boxed, non-number, int32 or Number kernel mode per
+Remaining Number predicates persist a boxed, non-number, int32 or Number kernel mode per
 native entry, consuming decoded constants, physical representations and exact
 builtin argument masks. Int32 predicates produce constant Booleans; Number kernels
 preserve NaN, infinity and signed-zero semantics. Ignored argument producers still
 execute, and rendering preserves each selected mode's original polling behavior.
 Artifact validation independently rederives ordinary and typed-entry choices.
+Core folds all four Number predicates from non-Number kind unions and safe integer
+range proofs before control-flow cleanup, removing impossible branches from both
+backend images. Argument effects remain observable, and a Number kind alone does
+not prove finiteness, integrality, safety, or the absence of NaN.
+Core folds `Array.isArray` observations when local or interprocedural kind facts
+exclude Object, so both backends receive a constant Boolean without call, throw,
+or root obligations for the predicate. Argument producers retain their effects.
+Unknown and Object-containing unions retain proxy handling, and mutable builtin
+lookups retain their identity guards and fallbacks.
 Captured and module cell stores consume existing scalar result proofs at operand
 zero without joining the cell's other writers into the producer's scalar component.
 Their values stay scalar until the store boxes them. Captured writes retain the
-old-slot barrier; only immediate Number and Boolean values skip new-value carding.
-Dynamic strings and generic arithmetic results keep traced storage and carding.
+old-slot SATB barrier. Semantic Number, Boolean, null and undefined input facts
+omit new-value cards independently of boxed storage, including unions of those
+kinds. Dynamic owner lookup selects an ordinary or non-heap entry into a shared
+store kernel; heap-valued and unknown inputs retain carding.
 Single-write boxed iterator done outputs also omit roots when the existing private
 output contract certifies final-value ownership. Every ordinary, cursor and projected
 step writes a Boolean; default initialization is undefined. Iterator values stay
@@ -124,6 +135,35 @@ defaults. These choices are persisted and validated independently of expression
 selection, including profiled artifacts. Decoded body facts are shared within a
 planning invocation; representations, ownership and suspension reads remain per
 variant, and validation rebuilds facts at the image trust boundary.
+
+`ProgramImage.profiling` owns the dense site catalog because it controls emitted
+counter storage. Compiler artifacts preserve that catalog, separate runtime and
+native instruction-site maps, and native compiler-site identities before validating
+storage. An empty or all-unknown instruction-site map still preserves profiling
+restrictions on producer selection. Runtime wires omit these host tables; source
+origins and optimizer remarks remain diagnostic sidecars.
+
+Native storage retains a per-variant control-flow plan with constant branch
+destinations and unreachable instruction indices. Single-writer truth values flow
+through copies and negation only when their definitions cover every entry path;
+joins with multiple writers remain unknown. Handlers, resume points, switches,
+selected regions, and record continuations are separate roots. Proof walks share a
+bounded work budget and copy chains use an iterative traversal. Artifact validation rederives the
+plan independently, preserving the ordinary instruction and profiling namespaces.
+Rendering omits unreachable instructions and emits fixed branch destinations. Root
+planning, publication and rendering share the GC view that removes unreachable
+safepoints and untaken conditional polling edges; surviving root maps retain their
+hidden helper obligations. The original GC certificate still validates the complete
+source CFG. Full entries, frameless fast entries and numeric leaves share branch
+destinations and preserved instruction indices. Fast-entry cycle, size and restart
+checks inspect reachable instructions; numeric-worker admission also ignores dead
+fallbacks. A live cycle still requires polling and a frame. Fast literal and integer
+facts require a definition on every entry-to-read path, including reads that bypass
+a writer or precede it. Worker declarations and fast fact candidates are limited to
+reachable register uses and writes, keeping dead register capacity out of the fast
+entry's code and proof budget. Surviving liveness, scalar uses and entry result ABIs remain conservative
+until their analyses consume the refined edges.
+
 Read/write occurrences, branch sources, handler and resume entries, and handler
 targets are shared by storage and fast-path consumers. Property-window selection
 visits the shared ordered static-load index; dense window scans still check every

@@ -87,58 +87,62 @@ describe("integer proof demand", () => {
 		},
 	);
 
-	it.each(["integer", "negative-zero", "cycle", "bottom-bitwise"])(
-		"preserves the least fixed point for a %s phi",
-		(shape) => {
-			const program = new CoreProgram(coreOpcodeRegistry);
-			const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
-			const entry = builder.createBlock([{ representation: "boxed" }]);
-			const condition = inspectCoreBlockParameters(builder, entry)[0]!.value;
-			const left = builder.createBlock(),
-				right = builder.createBlock();
-			const merge = builder.createBlock([{ representation: "boxed" }]);
-			const joined = inspectCoreBlockParameters(builder, merge)[0]!.value;
-			const [one] = builder.appendInstruction(entry, "createNumber", [], {
-				attributes: { value: 1 },
-			});
-			builder.setTerminator(entry, {
-				kind: "branch",
-				condition,
-				consequent: { block: left, arguments: [] },
-				alternate: { block: right, arguments: [] },
-			});
-			const [other] = builder.appendInstruction(right, "createNumber", [], {
-				attributes: { value: shape === "negative-zero" ? -0 : 2 },
-			});
-			const [bitwise] = builder.appendInstruction(right, "binary", [one!, other!], {
-				attributes: { operator: "&" },
-			});
-			builder.setTerminator(left, {
-				kind: "jump",
-				edge: { block: merge, arguments: [one!] },
-			});
-			builder.setTerminator(right, {
-				kind: "jump",
-				edge: {
-					block: merge,
-					arguments: [shape === "bottom-bitwise" ? bitwise! : other!],
-				},
-			});
-			const [alias] = builder.appendInstruction(merge, "move", [joined]);
-			builder.setTerminator(
-				merge,
-				shape === "cycle"
-					? { kind: "jump", edge: { block: merge, arguments: [alias!] } }
-					: { kind: "return", value: alias! },
-			);
-			const fn = program.function(builder.finish(entry).function);
-			for (const reverse of [false, true]) {
-				const kinds = analyzeCoreValueKinds(fn, buildCoreControlFlow(program, fn.id), {
-					operationResultMask: (_instruction, output) =>
-						shape === "bottom-bitwise" && output === bitwise ? 0 : undefined,
+	it.each(["boxed", "f64"] as const)(
+		"preserves the least fixed point with %s phi storage",
+		(representation) => {
+			for (const shape of ["integer", "negative-zero", "cycle", "bottom-bitwise"]) {
+				const program = new CoreProgram(coreOpcodeRegistry);
+				const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
+				const entry = builder.createBlock([{ representation: "boxed" }]);
+				const condition = inspectCoreBlockParameters(builder, entry)[0]!.value;
+				const left = builder.createBlock(),
+					right = builder.createBlock();
+				const merge = builder.createBlock([{ representation }]);
+				const joined = inspectCoreBlockParameters(builder, merge)[0]!.value;
+				const [one] = builder.appendInstruction(entry, "createNumber", [], {
+					attributes: { value: 1 },
 				});
-				for (const value of reverse ? [alias!, joined] : [joined, alias!])
-					expect(kinds.exactScalar(value)).toBe(shape === "integer" ? "int32" : "number");
+				builder.setTerminator(entry, {
+					kind: "branch",
+					condition,
+					consequent: { block: left, arguments: [] },
+					alternate: { block: right, arguments: [] },
+				});
+				const [other] = builder.appendInstruction(right, "createNumber", [], {
+					attributes: { value: shape === "negative-zero" ? -0 : 2 },
+				});
+				const [bitwise] = builder.appendInstruction(right, "binary", [one!, other!], {
+					attributes: { operator: "&" },
+				});
+				builder.setTerminator(left, {
+					kind: "jump",
+					edge: { block: merge, arguments: [one!] },
+				});
+				builder.setTerminator(right, {
+					kind: "jump",
+					edge: {
+						block: merge,
+						arguments: [shape === "bottom-bitwise" ? bitwise! : other!],
+					},
+				});
+				const [alias] = builder.appendInstruction(merge, "move", [joined]);
+				builder.setTerminator(
+					merge,
+					shape === "cycle"
+						? { kind: "jump", edge: { block: merge, arguments: [alias!] } }
+						: { kind: "return", value: alias! },
+				);
+				const fn = program.function(builder.finish(entry).function);
+				for (const reverse of [false, true]) {
+					const kinds = analyzeCoreValueKinds(fn, buildCoreControlFlow(program, fn.id), {
+						operationResultMask: (_instruction, output) =>
+							shape === "bottom-bitwise" && output === bitwise ? 0 : undefined,
+					});
+					for (const value of reverse ? [alias!, joined] : [joined, alias!])
+						expect(kinds.exactScalar(value)).toBe(
+							shape === "integer" ? "int32" : "number",
+						);
+				}
 			}
 		},
 	);
@@ -170,7 +174,8 @@ describe("integer proof demand", () => {
 				output === masked ? COMPILER_VALUE_KIND_NUMBER : undefined,
 		});
 		expect(kinds.exactScalar(overridden!)).toBe("int32");
-		for (const value of [masked!, represented!, global!])
+		expect(kinds.exactScalar(represented!)).toBe("int32");
+		for (const value of [masked!, global!])
 			expect(kinds.exactScalar(value)).toBe("number");
 	});
 });

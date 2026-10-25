@@ -11,6 +11,7 @@ import {
 	CORE_FRESH_ARRAY_LENGTH_ATTRIBUTE,
 	CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE,
 } from "../core/core-internal-attributes.ts";
+import { coreInstructionEffects } from "../core/core-ir-opcodes.ts";
 import type {
 	CoreAllocatedRegion,
 	CoreDirectEntryPlan,
@@ -28,6 +29,8 @@ import type {
 	CoreRepresentation,
 	CoreValueId,
 } from "../core/core-ir.ts";
+import { coreNativeEntryControlFlow } from "../core/core-native-entry-analysis.ts";
+import type { CoreInstructionFacts } from "../core/core-native-instruction-facts.ts";
 import type { CorePrivatePackedRestArrayElementPlan } from "../core/core-native-numeric-analysis.ts";
 import { assertCoreOptimizationPlanCertificate } from "../core/core-optimization-plan-certificate.ts";
 import {
@@ -55,7 +58,18 @@ import type {
 	CompilerInstruction,
 	CompilerNumericSortCallback,
 } from "../shared/compiler-instruction.ts";
-import type { CompilerOperatorInputKindMasks } from "../shared/compiler-value-kinds.ts";
+import {
+	COMPILER_VALUE_KIND_BOOLEAN,
+	COMPILER_VALUE_KIND_NULL,
+	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_STRING,
+	COMPILER_VALUE_KIND_TOP,
+	COMPILER_VALUE_KIND_UNDEFINED,
+} from "../shared/compiler-value-kinds.ts";
+import { INSTRUCTION_MAY_THROW } from "../shared/instruction-facts.ts";
+import { encodeInstructionEffects } from "../shared/instruction-facts.ts";
+import { compilerIntegerRangesEqual } from "../shared/integer-range.ts";
+import type { CompilerIntegerRange } from "../shared/integer-range.ts";
 import { knownOperationIndex, knownOperations } from "../shared/known-operations.ts";
 import { NATIVE_STRING_SWITCH_CASE_LIMIT } from "../shared/native-string-switch.ts";
 import {
@@ -65,6 +79,7 @@ import {
 } from "./core-operation-contract.ts";
 import type {
 	CoreTargetBlockOrderSpan,
+	CoreTargetDirectEntry,
 	CoreTargetFunction,
 	CoreTargetFunctionMap,
 	CoreTargetMove,
@@ -307,34 +322,74 @@ function sourcePositionMarker(position: number | undefined): Array<CompilerInstr
 	return position === undefined ? [] : [{ type: "sourcePos", pos: position }];
 }
 
+const IMMEDIATE_KIND_MASKS = {
+	undefined: COMPILER_VALUE_KIND_UNDEFINED,
+	null: COMPILER_VALUE_KIND_NULL,
+	boolean: COMPILER_VALUE_KIND_BOOLEAN,
+	number: COMPILER_VALUE_KIND_NUMBER,
+	string: COMPILER_VALUE_KIND_STRING,
+};
+
 function lowerCoreImmediate(
 	value: CoreImmediate,
 	destination: number,
 ): CompilerInstruction {
+	const facts = {
+		inputKindMasks: [],
+		resultKindMasks: [IMMEDIATE_KIND_MASKS[value.kind]],
+		registers: [destination],
+		inputOffset: 1,
+		effectMask: 0,
+	};
 	switch (value.kind) {
 		case "undefined":
-			return { type: "createUndefined", registers: [destination] };
+			return { type: "createUndefined", registers: [destination], facts };
 		case "null":
-			return { type: "createNull", registers: [destination] };
+			return { type: "createNull", registers: [destination], facts };
 		case "boolean":
 			return {
 				type: "createBoolean",
 				registers: [destination],
 				value: value.value,
+				facts,
 			};
 		case "number":
 			return {
 				type: "createNumber",
 				registers: [destination],
 				value: value.value,
+				facts,
 			};
 		case "string":
 			return {
 				type: "createString",
 				registers: [destination],
 				stringIndex: value.index,
+				facts,
 			};
 	}
+}
+
+function lowerSwitchEntryFacts(
+	comparisons: ReadonlyArray<CompilerInstruction>,
+	selectorKind: number,
+	selectorRange: CompilerIntegerRange | undefined,
+): Array<NonNullable<CoreTargetDirectEntry["instructionFacts"]>[number]> {
+	return comparisons.map((comparison) => {
+		const literalKind = comparison.facts?.inputKindMasks?.[1];
+		if (literalKind === undefined)
+			throw new Error("Switch comparison lost its literal kind");
+		const ranges = [selectorRange, comparison.facts?.inputIntegerRanges?.[1]];
+		return {
+			instruction: comparison,
+			masks: [selectorKind, literalKind],
+			results: [COMPILER_VALUE_KIND_BOOLEAN],
+			...(ranges.some((range) => range !== undefined)
+				? { inputIntegerRanges: ranges }
+				: {}),
+			effectMask: 0,
+		};
+	});
 }
 
 function coreImmediateValue(
@@ -1571,8 +1626,7 @@ function lowerFunctionToTarget(
 	unsignedArithmetic: ReadonlySet<CoreInstructionId>,
 	privateNumericArrayElements: ReadonlySet<CoreInstructionId>,
 	privatePackedRestArrayElements: ReadonlyArray<CorePrivatePackedRestArrayElementPlan>,
-	operatorInputs: ReadonlyMap<CoreInstructionId, CompilerOperatorInputKindMasks>,
-	builtinInputs: ReadonlyMap<CoreInstructionId, ReadonlyArray<number>>,
+	instructionFacts: ReadonlyArray<CoreInstructionFacts | undefined>,
 	recipeTable: CoreSpecializationRecipeTable,
 	recipeRows: ReadonlyArray<number>,
 	blockOrder: ReadonlyArray<CoreBlockId>,
@@ -1616,6 +1670,10 @@ function lowerFunctionToTarget(
 		NonNullable<CoreTargetFunction["literalSwitches"]>[number]
 	> = [];
 	const loweredInstructions = new Map<CoreInstructionId, CompilerInstruction>();
+	const loweredSwitchComparisons = new Map<
+		CoreInstructionId,
+		Array<CompilerInstruction>
+	>();
 	const guardedTargets = new Map<CoreInstructionId, ReadonlyArray<CoreFunctionId>>();
 	const exactCallTargets = new Set<CoreInstructionId>();
 	for (const row of recipeRows) {
@@ -1897,9 +1955,11 @@ function lowerFunctionToTarget(
 	);
 
 	const parallelCopies: Array<CoreTargetParallelCopy> = [];
+	const edgeCopies: Array<{ edge: number; copy: CoreTargetParallelCopy }> = [];
 	const temporaryRegisters: Array<number> = [];
 	const kernel = coreFunction.kernel;
 	const edgeBlock = (
+		edge: number,
 		target: CoreBlockId,
 		argumentStart: number,
 		argumentCount: number,
@@ -1928,11 +1988,13 @@ function lowerFunctionToTarget(
 				source: registerForValue(kernel.operandAt(argumentStart + index)),
 			};
 		}
-		const copy =
+		const realization =
 			copyLowerer?.lower(assignments) ??
 			parallelMoves(assignments, nextRegister, registerRepresentations);
-		if (copy.moves.length === 0) return targetBlock;
-		parallelCopies.push({ kind: "edge", assignments, ...copy });
+		if (realization.moves.length === 0) return targetBlock;
+		const copy: CoreTargetParallelCopy = { kind: "edge", assignments, ...realization };
+		parallelCopies.push(copy);
+		edgeCopies.push({ edge, copy });
 		temporaryRegisters.push(...copy.temporaries);
 		const block = blocks.length;
 		blocks.push({
@@ -1948,6 +2010,7 @@ function lowerFunctionToTarget(
 		sourcePosition: number | undefined,
 	): number =>
 		edgeBlock(
+			edge,
 			kernel.terminatorEdgeBlock(edge),
 			kernel.terminatorEdgeArgumentStart(edge),
 			kernel.terminatorEdgeArgumentCount(edge),
@@ -2206,20 +2269,29 @@ function lowerFunctionToTarget(
 					throw new Error("Private packed rest array proof lost its allocation");
 				lowered = { ...lowered, virtualPackedRest: true };
 			}
-			const builtinMasks = builtinInputs.get(instruction);
-			if (builtinMasks !== undefined) {
-				if (
-					lowered.type !== "callKnown" ||
-					lowered.registers.length !== builtinMasks.length + 1
-				)
-					throw new Error("Builtin input proof lost its operands");
-				lowered = { ...lowered, exactInputKindMasks: builtinMasks };
-			}
-			const inputMasks = operatorInputs.get(instruction);
-			if (lowered.type === "binary" && inputMasks?.length === 2)
-				lowered = { ...lowered, exactInputKindMasks: inputMasks };
-			if (lowered.type === "unary" && inputMasks?.length === 1)
-				lowered = { ...lowered, exactInputKindMasks: inputMasks };
+			const kinds = instructionFacts[instruction];
+			const loweredRegisters = "registers" in lowered ? lowered.registers : [];
+			const inputCount = kernel.instructionOperandCount(instruction);
+			const resultCount = kernel.instructionResultCount(instruction);
+			const inputOffset = loweredRegisters.length - inputCount;
+			Object.assign(lowered, {
+				facts: {
+					...(kinds === undefined
+						? {}
+						: {
+								inputKindMasks: kinds.masks,
+								resultKindMasks: kinds.results,
+								...(kinds.inputIntegerRanges === undefined
+									? {}
+									: { inputIntegerRanges: kinds.inputIntegerRanges }),
+								registers: loweredRegisters,
+								inputOffset,
+							}),
+					effectMask:
+						kinds?.effectMask ??
+						encodeInstructionEffects(coreInstructionEffects(coreFunction, instruction)),
+				},
+			});
 			loweredInstructions.set(instruction, lowered);
 			if (siteFacts.size > 0) {
 				const site = siteFacts.get(
@@ -2267,7 +2339,6 @@ function lowerFunctionToTarget(
 			).immediateValues;
 			const operandStart = kernel.instructionOperandStart(instruction);
 			const operandCount = kernel.instructionOperandCount(instruction);
-			const resultCount = kernel.instructionResultCount(instruction);
 			const callbackCalleeOffset =
 				coreFunction.instructionOpcodeName(instruction) === "callKnown" &&
 				lowered.type === "call"
@@ -2307,10 +2378,32 @@ function lowerFunctionToTarget(
 			instructions.findLast((instruction) => instruction.type === "sourcePos")?.pos ??
 			edgeSourcePosition;
 		instructions.push(...sourcePositionMarker(terminatorPosition));
+		const terminatorKinds = instructionFacts[terminatorId];
+		const terminatorFacts = {
+			...(terminatorKinds === undefined
+				? {}
+				: {
+						inputKindMasks: terminatorKinds.masks,
+						resultKindMasks: terminatorKinds.results,
+						...(terminatorKinds.inputIntegerRanges === undefined
+							? {}
+							: { inputIntegerRanges: terminatorKinds.inputIntegerRanges }),
+						registers: Array.from(
+							{ length: kernel.instructionOperandCount(terminatorId) },
+							(_, index) =>
+								registerForValue(kernel.operandAt(terminatorOperandStart + index)),
+						),
+						inputOffset: 0,
+					}),
+			effectMask:
+				terminatorKinds?.effectMask ??
+				(terminatorKind === "throw" ? INSTRUCTION_MAY_THROW : 0),
+		};
 		switch (terminatorKind) {
 			case "jump": {
 				const lowered: Extract<CompilerInstruction, { type: "jump" }> = {
 					type: "jump",
+					facts: terminatorFacts,
 					blocks: [lowerTerminatorEdge(terminatorEdgeStart, edgeSourcePosition)],
 				};
 				instructions.push(lowered);
@@ -2320,33 +2413,38 @@ function lowerFunctionToTarget(
 			case "branch": {
 				const lowered: Extract<CompilerInstruction, { type: "jumpIf" }> = {
 					type: "jumpIf",
+					facts: terminatorFacts,
 					registers: [registerForValue(kernel.operandAt(terminatorOperandStart))],
 					blocks: [lowerTerminatorEdge(terminatorEdgeStart, edgeSourcePosition)],
 				};
 				instructions.push(lowered, {
 					type: "jump",
+					facts: { effectMask: 0 },
 					blocks: [lowerTerminatorEdge(terminatorEdgeStart + 1, edgeSourcePosition)],
 				});
 				loweredInstructions.set(terminatorId, lowered);
 				break;
 			}
-			case "guard":
-				instructions.push(
-					{
-						type: "jumpIf",
-						registers: [registerForValue(kernel.operandAt(terminatorOperandStart))],
-						blocks: [lowerTerminatorEdge(terminatorEdgeStart, edgeSourcePosition)],
-					},
-					{
-						type: "jump",
-						blocks: [lowerTerminatorEdge(terminatorEdgeStart + 1, edgeSourcePosition)],
-					},
-				);
+			case "guard": {
+				const lowered: Extract<CompilerInstruction, { type: "jumpIf" }> = {
+					type: "jumpIf",
+					facts: terminatorFacts,
+					registers: [registerForValue(kernel.operandAt(terminatorOperandStart))],
+					blocks: [lowerTerminatorEdge(terminatorEdgeStart, edgeSourcePosition)],
+				};
+				instructions.push(lowered, {
+					type: "jump",
+					facts: { effectMask: 0 },
+					blocks: [lowerTerminatorEdge(terminatorEdgeStart + 1, edgeSourcePosition)],
+				});
+				loweredInstructions.set(terminatorId, lowered);
 				break;
+			}
 			case "return":
 			case "throw": {
 				const lowered: Extract<CompilerInstruction, { type: "return" | "throw" }> = {
 					type: terminatorKind,
+					facts: terminatorFacts,
 					registers: [registerForValue(kernel.operandAt(terminatorOperandStart))],
 				};
 				instructions.push(lowered);
@@ -2355,6 +2453,10 @@ function lowerFunctionToTarget(
 			}
 			case "switch": {
 				const start = instructions.length;
+				const selector = registerForValue(kernel.operandAt(terminatorOperandStart));
+				const selectorKind = terminatorKinds?.masks[0] ?? COMPILER_VALUE_KIND_TOP;
+				const comparisons: Array<CompilerInstruction> = [];
+				loweredSwitchComparisons.set(terminatorId, comparisons);
 				const immediates = new Map<CoreRepresentation, number>();
 				let matches: number | undefined;
 				const cases: Array<{ value: number; block: number }> = [];
@@ -2404,23 +2506,49 @@ function lowerFunctionToTarget(
 						temporaryRegisters.push(matches);
 						registerRepresentations.set(matches, "boolean");
 					}
-					instructions.push(
-						lowerCoreImmediate(caseValue, immediate),
-						{
-							type: "binary",
-							registers: [
-								matches,
-								registerForValue(kernel.operandAt(terminatorOperandStart)),
-								immediate,
-							],
-							operator: "===",
+					const caseRange =
+						caseValue.kind === "number" &&
+						Number.isSafeInteger(caseValue.value) &&
+						!Object.is(caseValue.value, -0)
+							? {
+									minimum: caseValue.value,
+									maximum: caseValue.value,
+									exactSafeIntegers: true as const,
+									excludesNegativeZero: true as const,
+								}
+							: undefined;
+					const inputIntegerRanges = [
+						terminatorKinds?.inputIntegerRanges?.[0],
+						caseRange,
+					];
+					const comparison: CompilerInstruction = {
+						type: "binary",
+						registers: [matches, selector, immediate],
+						operator: "===",
+						facts: {
+							inputKindMasks: [selectorKind, IMMEDIATE_KIND_MASKS[caseValue.kind]],
+							resultKindMasks: [COMPILER_VALUE_KIND_BOOLEAN],
+							...(inputIntegerRanges.some((range) => range !== undefined)
+								? { inputIntegerRanges }
+								: {}),
+							registers: [matches, selector, immediate],
+							inputOffset: 1,
+							effectMask: 0,
 						},
-						{
-							type: "jumpIf",
+					};
+					comparisons.push(comparison);
+					instructions.push(lowerCoreImmediate(caseValue, immediate), comparison, {
+						type: "jumpIf",
+						registers: [matches],
+						blocks: [targetBlock],
+						facts: {
+							inputKindMasks: [COMPILER_VALUE_KIND_BOOLEAN],
+							resultKindMasks: [],
 							registers: [matches],
-							blocks: [targetBlock],
+							inputOffset: 0,
+							effectMask: 0,
 						},
-					);
+					});
 				}
 				const defaultBlock = lowerTerminatorEdge(
 					terminatorEdgeStart + terminatorEdgeCount - 1,
@@ -2428,6 +2556,7 @@ function lowerFunctionToTarget(
 				);
 				instructions.push({
 					type: "jump",
+					facts: { effectMask: 0 },
 					blocks: [defaultBlock],
 				});
 				if (numeric || strings) {
@@ -2618,6 +2747,15 @@ function lowerFunctionToTarget(
 				instructionOrder.get(right.instruction)!,
 		);
 	const directEntries = directEntryPlans.map((entry, entryIndex) => {
+		const control =
+			allocation.storageValues === undefined
+				? undefined
+				: coreNativeEntryControlFlow(coreFunction, entry);
+		const unreachableCopies =
+			control === undefined
+				? []
+				: edgeCopies.filter(({ edge }) => !control.ordinaryEdges.has(edge));
+		const unreachableMoves = new Set(unreachableCopies.flatMap(({ copy }) => copy.moves));
 		const suppliedArguments = entry.argumentRepresentations?.length;
 		const dischargedArgumentRead = (safepoint: CoreTargetSafepoint): boolean =>
 			suppliedArguments !== undefined &&
@@ -2642,12 +2780,13 @@ function lowerFunctionToTarget(
 		for (const [temporary, profile] of copyLowerer?.temporaryRepresentations ?? [])
 			representations[temporary] = profile[entryIndex]!;
 		if (entry.valueRepresentations !== undefined) {
-			// A reused boxed source cannot be unboxed by an ordinary edge copy.
+			// Only reachable copies can constrain the entry's physical phi storage.
 			const outgoing = new Map<number, Array<number>>();
 			for (const block of blocks)
 				for (const instruction of block.instructions) {
 					if (
 						instruction.type !== "move" ||
+						unreachableMoves.has(instruction) ||
 						instruction.exactScalarAfterTdz !== undefined
 					)
 						continue;
@@ -2673,8 +2812,38 @@ function lowerFunctionToTarget(
 				}
 			}
 		}
+		const sameMasks = (left: ReadonlyArray<number>, right: ReadonlyArray<number>) =>
+			left === right ||
+			(left.length === right.length &&
+				left.every((mask, index) => mask === right[index]));
+		const entryFacts = entry.instructionFacts?.filter(
+			({ instruction, masks, results, inputIntegerRanges, effectMask }) => {
+				if (
+					!loweredInstructions.has(instruction) &&
+					!loweredSwitchComparisons.has(instruction)
+				)
+					return false;
+				const canonical = instructionFacts[instruction];
+				return (
+					canonical === undefined ||
+					!sameMasks(canonical.masks, masks) ||
+					!sameMasks(canonical.results, results) ||
+					(canonical.inputIntegerRanges !== inputIntegerRanges &&
+						(canonical.inputIntegerRanges === undefined ||
+							inputIntegerRanges === undefined ||
+							canonical.inputIntegerRanges.some(
+								(range, index) =>
+									!compilerIntegerRangesEqual(range, inputIntegerRanges[index]),
+							))) ||
+					canonical.effectMask !== effectMask
+				);
+			},
+		);
 		return {
 			id: entry.id,
+			...(unreachableCopies.length === 0
+				? {}
+				: { unreachableCopies: { source: entry, copies: unreachableCopies } }),
 			...(entry.callOverrides === undefined
 				? {}
 				: {
@@ -2686,13 +2855,37 @@ function lowerFunctionToTarget(
 							}),
 						),
 					}),
-			...(entry.operatorInputs === undefined
+			...(entryFacts === undefined || entryFacts.length === 0
 				? {}
 				: {
-						operatorInputs: entry.operatorInputs.map(({ instruction, masks }) => ({
-							instruction: loweredInstructions.get(instruction)!,
-							masks,
-						})),
+						instructionFacts: entryFacts.flatMap(
+							({
+								instruction,
+								masks,
+								results,
+								inputIntegerRanges,
+								effectMask,
+							}): Array<
+								NonNullable<CoreTargetDirectEntry["instructionFacts"]>[number]
+							> => {
+								const comparisons = loweredSwitchComparisons.get(instruction);
+								if (comparisons !== undefined)
+									return lowerSwitchEntryFacts(
+										comparisons,
+										masks[0] ?? COMPILER_VALUE_KIND_TOP,
+										inputIntegerRanges?.[0],
+									);
+								return [
+									{
+										instruction: loweredInstructions.get(instruction)!,
+										masks,
+										results,
+										...(inputIntegerRanges === undefined ? {} : { inputIntegerRanges }),
+										effectMask,
+									},
+								];
+							},
+						),
 					}),
 			...(entry.fieldParameters === undefined
 				? {}
@@ -3016,30 +3209,12 @@ export function lowerCoreCompilationToTargetProgram(
 		}
 		instructions.push(operation);
 	}
-	const operatorInputs = new Map<
-		CoreFunctionId,
-		Map<CoreInstructionId, CompilerOperatorInputKindMasks>
-	>();
-	for (const operation of compilation.plan.operatorInputs ?? []) {
-		let instructions = operatorInputs.get(operation.function);
-		if (instructions === undefined) {
-			instructions = new Map();
-			operatorInputs.set(operation.function, instructions);
-		}
-		instructions.set(operation.instruction, operation.masks);
-	}
-	const builtinInputs = new Map<
-		CoreFunctionId,
-		Map<CoreInstructionId, ReadonlyArray<number>>
-	>();
-	for (const operation of compilation.plan.builtinInputs ?? []) {
-		let instructions = builtinInputs.get(operation.function);
-		if (instructions === undefined) {
-			instructions = new Map();
-			builtinInputs.set(operation.function, instructions);
-		}
-		instructions.set(operation.instruction, operation.masks);
-	}
+	const instructionFacts = new Map(
+		(compilation.plan.instructionFacts ?? []).map((plan) => [
+			plan.function,
+			plan.instructions,
+		]),
+	);
 	const specializedOnly = new Set(compilation.plan.specializedOnlyFunctions ?? []);
 	const directClosures =
 		options.planDirectClosures === true
@@ -3067,8 +3242,7 @@ export function lowerCoreCompilationToTargetProgram(
 			unsignedArithmetic.get(core) ?? new Set(),
 			privateNumericArrayElements.get(core) ?? new Set(),
 			privatePackedRestArrayElements.get(core) ?? [],
-			operatorInputs.get(core) ?? new Map(),
-			builtinInputs.get(core) ?? new Map(),
+			instructionFacts.get(core) ?? [],
 			compilation.plan.recipes,
 			specializationRows.get(core) ?? [],
 			blockOrders.get(core)!,

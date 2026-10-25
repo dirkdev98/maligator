@@ -1,12 +1,41 @@
-import { COMPILER_VALUE_KIND_NUMBER } from "../shared/compiler-value-kinds.ts";
+import {
+	compilerTypeofComparison,
+	compilerValueKindTruthiness,
+	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_TOP,
+	COMPILER_VALUE_KIND_NULLISH,
+	COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE,
+	compilerValueKindMaskIsSubset,
+} from "../shared/compiler-value-kinds.ts";
+import {
+	instructionInputIsInt32,
+	instructionInputIntegerRange,
+	instructionInputKind,
+} from "../shared/instruction-facts.ts";
+import type { CompilerIntegerRange } from "../shared/integer-range.ts";
+import {
+	compilerIntegerRangeComparison,
+	compilerIntegerRangeTruthiness,
+} from "../shared/integer-range.ts";
 import { emitTypeofResult } from "./emit-program-image.ts";
+import type { NativeControlFlowPlan } from "./native-control-flow.ts";
+import { nativePrimitiveNumberExpression } from "./native-scalar-operators.ts";
 import {
 	nativeInstructionSourceRanges,
 	shiftNativeSourceRanges,
 } from "./native-source-map.ts";
 import type { NativeSourceRange } from "./native-source-map.ts";
-import type { NativeDirectEntryPlan, VmRegisterRepresentation } from "./program-image.ts";
-import { decodeVmValueOperand } from "./runtime-image.ts";
+import type { NativeStringComparisonPlan } from "./native-string-comparisons.ts";
+import type {
+	NativeDirectEntryPlan,
+	NativeFunctionPlan,
+	VmRegisterRepresentation,
+} from "./program-image.ts";
+import {
+	decodeVmValueOperand,
+	vmInstructionReadRegisters,
+	vmInstructionWriteRegisters,
+} from "./runtime-image.ts";
 import type { BytecodeFunction, BytecodeInstruction } from "./runtime-image.ts";
 
 const MAXIMUM_FAST_ENTRY_INSTRUCTIONS = 64;
@@ -14,7 +43,11 @@ const MAXIMUM_FAST_ENTRY_INSTRUCTIONS = 64;
 export interface NativeFastEntryInput {
 	readonly onSourceMap?: (ranges: ReadonlyArray<NativeSourceRange>) => void;
 	readonly fn: BytecodeFunction;
+	readonly facts: NativeFunctionPlan["facts"];
 	readonly directEntry: NativeDirectEntryPlan | undefined;
+	readonly controlFlow: NativeControlFlowPlan | undefined;
+	readonly elidedPureIps: ReadonlyArray<number>;
+	readonly stringComparisons: ReadonlyArray<NativeStringComparisonPlan>;
 	/** The full entry already answers this body without a frame or with a better dispatch. */
 	readonly specialized: boolean;
 	/** The original entry signature, ending in `{`. */
@@ -28,7 +61,6 @@ export interface NativeFastEntryInput {
 	readonly functionIndex: string;
 	readonly globalIndex: (index: number) => string;
 	readonly stringValue: (index: number) => string;
-	readonly stringLength: (index: number) => number | undefined;
 	readonly lengthProperty: (stringIndex: number) => boolean;
 	/** Non-allocating statements that bind what `capturedLoad` reads. */
 	readonly capturePrologue: ReadonlyArray<string>;
@@ -53,9 +85,17 @@ export function renderNativeFastEntry(
 	input: NativeFastEntryInput,
 ): ReadonlyArray<string> | undefined {
 	const { fn, directEntry } = input;
+	const unreachable = new Set(input.controlFlow?.unreachableIps);
+	const elided = new Set(input.elidedPureIps);
+	const branches = new Map(
+		input.controlFlow?.branches.map(({ instructionIp, targetIp }) => [
+			instructionIp,
+			targetIp,
+		]),
+	);
 	if (
 		input.specialized ||
-		alwaysRestarts(fn, directEntry) ||
+		alwaysRestarts(fn, directEntry, new Set([...unreachable, ...elided])) ||
 		fn.isGenerator ||
 		fn.isAsync ||
 		fn.isClassConstructor ||
@@ -65,58 +105,94 @@ export function renderNativeFastEntry(
 		fn.needsArguments ||
 		fn.argumentSnapshotCount !== 0 ||
 		fn.handlers.length !== 0 ||
-		fn.instructions.length > MAXIMUM_FAST_ENTRY_INSTRUCTIONS ||
-		hasCycle(fn.instructions)
+		fn.instructions.length - unreachable.size > MAXIMUM_FAST_ENTRY_INSTRUCTIONS
 	)
 		return undefined;
+	const graph = fastEntryGraph(fn.instructions, branches, unreachable);
+	if (hasCycle(graph)) return undefined;
+	const accesses = new Map(
+		[...graph.keys()].map((ip) => [
+			ip,
+			{
+				reads:
+					branches.has(ip) || elided.has(ip)
+						? []
+						: vmInstructionReadRegisters(fn.instructions[ip]!),
+				writes: elided.has(ip) ? [] : vmInstructionWriteRegisters(fn.instructions[ip]!),
+			},
+		]),
+	);
+	const registers = new Set<number>();
+	for (const { reads, writes } of accesses.values())
+		for (const register of [...reads, ...writes]) registers.add(register);
 	const exported = input.trySymbol !== undefined;
 	const result = exported ? undefined : directEntry;
 	const fieldLoads = new Map(
 		directEntry?.fieldParameters?.loads.map((load) => [load.instructionIp, load.field]),
 	);
 	const targets = new Set<number>();
-	const body: Array<string> = [];
+	const body: Array<readonly [number, string]> = [];
 	let loadsProperties = false;
 	let loadsCaptures = false;
-	const constants = numberConstantRegisters(fn.instructions);
-	const strings = stringConstantRegisters(fn.instructions);
-	const integers = int32ResultRegisters(fn.instructions, fn.parameterCount);
+	const instructions = [...graph.keys()]
+		.filter((ip) => !elided.has(ip))
+		.map((ip) => fn.instructions[ip]!);
+	const constants = numberConstantRegisters(instructions, registers);
+	const stringComparisons = new Map(
+		input.stringComparisons.map((plan) => [plan.instructionIp, plan]),
+	);
+	const integers = int32ResultRegisters(instructions, fn.parameterCount, registers);
+	const initialized = initializedFastRegisters(graph, accesses, registers);
+	for (const register of constants.keys())
+		if (!initialized.has(register)) constants.delete(register);
+	for (const register of integers)
+		if (!initialized.has(register)) integers.delete(register);
 	for (const [ip, op] of fn.instructions.entries()) {
-		const line = fastInstruction(
-			op,
-			ip,
-			input,
-			fieldLoads,
-			targets,
-			exported,
-			constants,
-			strings,
-			integers,
-		);
+		if (unreachable.has(ip)) continue;
+		if (elided.has(ip)) {
+			body.push([ip, ""]);
+			continue;
+		}
+		const target = branches.get(ip);
+		const line =
+			target === ip + 1
+				? ""
+				: fastInstruction(
+						target === undefined ? op : { opcode: "JUMP", targetIp: target },
+						ip,
+						input,
+						fieldLoads,
+						targets,
+						exported,
+						constants,
+						stringComparisons.get(ip),
+						integers,
+					);
 		if (line === undefined) return undefined;
 		if (op.opcode === "LOAD_PROPERTY_STATIC" && !fieldLoads.has(ip))
 			loadsProperties = true;
 		if (op.opcode === "LOAD_CAPTURED") loadsCaptures = true;
-		body.push(line);
+		body.push([ip, line]);
 	}
 	const lines: Array<string> = [];
 	const starts: Array<number> = [];
-	for (const [ip, line] of body.entries()) {
+	const ips: Array<number> = [];
+	for (const [ip, line] of body) {
 		if (targets.has(ip)) lines.push(`F${ip}:;`);
 		starts.push(lines.length);
-		lines.push(`    ${line}`);
+		ips.push(ip);
+		if (line.length > 0) lines.push(`    ${line}`);
 	}
 	const mappedLineCount = lines.length;
 	if (targets.has(fn.instructions.length)) lines.push(`F${fn.instructions.length}:;`);
 	lines.push(`    ${fastReturn("MAL_VALUE_UNDEFINED", result, exported)}`);
 
-	const registers = Array.from(
-		{ length: fn.registerCount },
-		(_, register) => `f${register}`,
-	);
+	const locals = [...registers].sort((left, right) => left - right);
 	const fast = [
 		...input.prologue,
-		...(registers.length === 0 ? [] : [`    MalValue ${registers.join(", ")};`]),
+		...(locals.length === 0
+			? []
+			: [`    MalValue ${locals.map((r) => `f${r}`).join(", ")};`]),
 		"    if (!mal_vm_leaf_unobserved(vm) || !mal_vm_leaf_stack_available(vm)) goto __full;",
 		...(loadsProperties
 			? [
@@ -125,10 +201,12 @@ export function renderNativeFastEntry(
 				]
 			: []),
 		...(loadsCaptures ? input.capturePrologue.map((line) => `    ${line}`) : []),
-		...registers.map((register, index) =>
-			index < fn.parameterCount
-				? `    ${register} = ${fastParameter(index, directEntry)};`
-				: `    ${register} = MAL_VALUE_UNDEFINED;`,
+		...locals.flatMap((register) =>
+			register < fn.parameterCount
+				? [`    f${register} = ${fastParameter(register, directEntry)};`]
+				: initialized.has(register)
+					? []
+					: [`    f${register} = MAL_VALUE_UNDEFINED;`],
 		),
 		...lines,
 	];
@@ -147,12 +225,7 @@ export function renderNativeFastEntry(
 			(prologue.length === 0 ? 0 : prologue.length + 1);
 		input.onSourceMap?.(
 			shiftNativeSourceRanges(
-				nativeInstructionSourceRanges(
-					fn,
-					lines.slice(0, mappedLineCount),
-					starts,
-					starts.map((_, ip) => ip),
-				),
+				nativeInstructionSourceRanges(fn, lines.slice(0, mappedLineCount), starts, ips),
 				offset,
 			),
 		);
@@ -196,8 +269,10 @@ const EQUALITY_OPERATORS: ReadonlySet<string> = new Set(["===", "!==", "==", "!=
 function alwaysRestarts(
 	fn: BytecodeFunction,
 	directEntry: NativeDirectEntryPlan | undefined,
+	unreachable: ReadonlySet<number>,
 ): boolean {
-	return (directEntry?.operatorInputs ?? []).some(({ instructionIp, masks }) => {
+	return (directEntry?.instructionFacts ?? []).some(({ instructionIp, masks }) => {
+		if (unreachable.has(instructionIp)) return false;
 		const op = fn.instructions[instructionIp];
 		const numeric =
 			(op?.opcode === "BINARY" && !EQUALITY_OPERATORS.has(op.operator)) ||
@@ -206,31 +281,76 @@ function alwaysRestarts(
 	});
 }
 
+function fastEntryGraph(
+	instructions: ReadonlyArray<BytecodeInstruction>,
+	branches: ReadonlyMap<number, number>,
+	unreachable: ReadonlySet<number>,
+): ReadonlyMap<number, ReadonlyArray<number>> {
+	const graph = new Map<number, ReadonlyArray<number>>();
+	for (const [ip, op] of instructions.entries()) {
+		if (unreachable.has(ip)) continue;
+		const target = branches.get(ip);
+		graph.set(
+			ip,
+			target !== undefined
+				? [target]
+				: op.opcode === "RETURN"
+					? []
+					: op.opcode === "JUMP"
+						? [op.targetIp]
+						: op.opcode === "JUMP_IF"
+							? [op.targetIp, ip + 1]
+							: [ip + 1],
+		);
+	}
+	return graph;
+}
+
 // A loop needs a poll, and a poll needs a frame.
-function hasCycle(instructions: ReadonlyArray<BytecodeInstruction>): boolean {
-	const state = new Uint8Array(instructions.length);
-	const successors = (ip: number): ReadonlyArray<number> => {
-		const op = instructions[ip]!;
-		switch (op.opcode) {
-			case "RETURN":
-				return [];
-			case "JUMP":
-				return [op.targetIp];
-			case "JUMP_IF":
-				return [op.targetIp, ip + 1];
-			default:
-				return [ip + 1];
-		}
-	};
+function hasCycle(graph: ReadonlyMap<number, ReadonlyArray<number>>): boolean {
+	const state = new Map<number, number>();
 	const visit = (ip: number): boolean => {
-		if (ip < 0 || ip >= instructions.length || state[ip] === 2) return false;
-		if (state[ip] === 1) return true;
-		state[ip] = 1;
-		if (successors(ip).some(visit)) return true;
-		state[ip] = 2;
+		const next = graph.get(ip);
+		if (next === undefined || state.get(ip) === 2) return false;
+		if (state.get(ip) === 1) return true;
+		state.set(ip, 1);
+		if (next.some(visit)) return true;
+		state.set(ip, 2);
 		return false;
 	};
 	return visit(0);
+}
+
+function initializedFastRegisters(
+	graph: ReadonlyMap<number, ReadonlyArray<number>>,
+	accesses: ReadonlyMap<
+		number,
+		{
+			readonly reads: ReadonlyArray<number>;
+			readonly writes: ReadonlyArray<number>;
+		}
+	>,
+	registers: ReadonlySet<number>,
+): ReadonlySet<number> {
+	const initialized = new Set<number>();
+	for (const register of registers) {
+		const pending = [0];
+		const visited = new Set<number>();
+		let safe = true;
+		while (pending.length > 0) {
+			const ip = pending.pop()!;
+			if (visited.has(ip) || !graph.has(ip)) continue;
+			visited.add(ip);
+			const access = accesses.get(ip)!;
+			if (access.reads.includes(register)) {
+				safe = false;
+				break;
+			}
+			if (!access.writes.includes(register)) pending.push(...graph.get(ip)!);
+		}
+		if (safe) initialized.add(register);
+	}
+	return initialized;
 }
 
 function boxed(representation: VmRegisterRepresentation, value: string): string {
@@ -286,11 +406,12 @@ function fastReturn(
 /** Registers whose every definition stores the same Number, so uses can read the literal. */
 function numberConstantRegisters(
 	instructions: ReadonlyArray<BytecodeInstruction>,
-): ReadonlyMap<number, number> {
+	registers: ReadonlySet<number>,
+): Map<number, number> {
 	const constants = new Map<number, number>();
 	const varying = new Set<number>();
 	for (const op of instructions) {
-		if (!("dst" in op) || typeof op.dst !== "number") continue;
+		if (!("dst" in op) || !registers.has(op.dst)) continue;
 		if (
 			(op.opcode === "CREATE_NUMBER" || op.opcode === "CREATE_F64") &&
 			!varying.has(op.dst) &&
@@ -305,37 +426,16 @@ function numberConstantRegisters(
 	return constants;
 }
 
-/** Registers whose every definition loads the same string constant. */
-function stringConstantRegisters(
-	instructions: ReadonlyArray<BytecodeInstruction>,
-): ReadonlyMap<number, number> {
-	const strings = new Map<number, number>();
-	const varying = new Set<number>();
-	for (const op of instructions) {
-		if (!("dst" in op) || typeof op.dst !== "number") continue;
-		if (
-			op.opcode === "CREATE_STRING" &&
-			!varying.has(op.dst) &&
-			(strings.get(op.dst) ?? op.stringIndex) === op.stringIndex
-		) {
-			strings.set(op.dst, op.stringIndex);
-			continue;
-		}
-		strings.delete(op.dst);
-		varying.add(op.dst);
-	}
-	return strings;
-}
-
 /** Registers only int32 operators define, so a branch can test the integer itself. */
 function int32ResultRegisters(
 	instructions: ReadonlyArray<BytecodeInstruction>,
 	parameterCount: number,
-): ReadonlySet<number> {
+	registers: ReadonlySet<number>,
+): Set<number> {
 	const integers = new Set<number>();
 	const varying = new Set<number>();
 	for (const op of instructions) {
-		if (!("dst" in op) || typeof op.dst !== "number") continue;
+		if (!("dst" in op) || !registers.has(op.dst)) continue;
 		const integer =
 			(op.opcode === "BINARY" &&
 				(INT32_OPERATORS.has(op.operator) ||
@@ -353,16 +453,27 @@ function int32ResultRegisters(
 }
 
 interface FastNumbers {
+	readonly kind: (register: number) => number;
+	readonly isInt32: (register: number) => boolean;
+	readonly range: (register: number) => CompilerIntegerRange | undefined;
 	readonly constants: ReadonlyMap<number, number>;
 	readonly literal: (value: number) => string;
-	/** String constant registers and the unit length of each constant. */
-	readonly strings: ReadonlyMap<number, number>;
-	readonly stringLength: (index: number) => number | undefined;
+	readonly stringComparison: NativeStringComparisonPlan | undefined;
 }
 
 function numbers(values: FastNumbers, ...registers: ReadonlyArray<number>): string {
+	if (
+		registers.some(
+			(register) => (values.kind(register) & COMPILER_VALUE_KIND_NUMBER) === 0,
+		)
+	)
+		return "true";
 	const checks = registers
-		.filter((register) => !values.constants.has(register))
+		.filter(
+			(register) =>
+				!values.constants.has(register) &&
+				values.kind(register) !== COMPILER_VALUE_KIND_NUMBER,
+		)
 		.map((register) => `!mal_ops_is_number(f${register})`);
 	return checks.length === 0 ? "false" : checks.join(" || ");
 }
@@ -377,7 +488,9 @@ function number(values: FastNumbers, register: number): string {
 function int32(values: FastNumbers, register: number): string {
 	const constant = values.constants.get(register);
 	return constant === undefined
-		? `mal_ops_number_value_to_i32(f${register})`
+		? values.isInt32(register)
+			? `((i32) ${number(values, register)})`
+			: `mal_ops_number_value_to_i32(f${register})`
 		: `((i32) ${constant | 0})`;
 }
 
@@ -390,24 +503,41 @@ function fastBinary(
 	values: FastNumbers,
 ): string | undefined {
 	const { dst, left, right, operator } = op;
-	const guard = `if (${numbers(values, left, right)}) goto __full;`;
+	const compared = compilerIntegerRangeComparison(
+		operator,
+		values.range(left),
+		values.range(right),
+	);
+	if (compared !== undefined)
+		return `f${dst} = ${compared ? "MAL_VALUE_TRUE" : "MAL_VALUE_FALSE"};`;
+	const numberFailure = numbers(values, left, right);
+	const guard = numberFailure === "false" ? "" : `if (${numberFailure}) goto __full;`;
 	if (operator === "===" || operator === "!==") {
-		const constant = [right, left].find(
-			(register) =>
-				values.strings.has(register) &&
-				values.stringLength(values.strings.get(register)!) !== undefined,
-		);
+		const constant = values.stringComparison;
 		const equal =
 			constant === undefined
 				? `mal_ops_strict_equal_boxed(f${left}, f${right})`
-				: `mal_ops_strict_equal_string_constant(f${constant === right ? left : right}, f${constant}, ${values.stringLength(values.strings.get(constant)!)!})`;
+				: constant.kind === "strings"
+					? `mal_string_equals_constant_length(mal_value_to_string(f${constant.register === right ? left : right}), mal_value_to_string(f${constant.register}), ${constant.length})`
+					: `mal_ops_strict_equal_string_constant(f${constant.register === right ? left : right}, f${constant.register}, ${constant.length})`;
 		return `f${dst} = mal_value_new_boolean(${operator === "!==" ? "!" : ""}${equal});`;
 	}
 	if (operator === "==" || operator === "!=") {
-		// Only Number pairs and nullish operands avoid ToPrimitive and string comparison.
 		const not = operator === "!=" ? "!" : "";
-		return `if (mal_ops_is_number(f${left}) && mal_ops_is_number(f${right})) f${dst} = mal_value_new_boolean(${not}(${number(values, left)} == ${number(values, right)})); else if (mal_value_is_nil(f${left}) || mal_value_is_nil(f${right})) f${dst} = mal_value_new_boolean(${not}(mal_value_is_nil(f${left}) && mal_value_is_nil(f${right}))); else goto __full;`;
+		const numeric = `f${dst} = mal_value_new_boolean(${not}(${number(values, left)} == ${number(values, right)}));`;
+		if (numberFailure === "false") return numeric;
+		const nullish =
+			(values.kind(left) | values.kind(right)) & COMPILER_VALUE_KIND_NULLISH;
+		if (numberFailure === "true" && nullish === 0) return undefined;
+		const fallback =
+			nullish === 0
+				? "goto __full;"
+				: `if (mal_value_is_nil(f${left}) || mal_value_is_nil(f${right})) f${dst} = mal_value_new_boolean(${not}(mal_value_is_nil(f${left}) && mal_value_is_nil(f${right}))); else goto __full;`;
+		return numberFailure === "true"
+			? fallback
+			: `if (!(${numberFailure})) ${numeric} else ${fallback}`;
 	}
+	if (numberFailure === "true") return undefined;
 	if (NUMBER_COMPARISONS.has(operator))
 		return `${guard} f${dst} = mal_value_new_boolean(${number(values, left)} ${operator} ${number(values, right)});`;
 	if (INT32_OPERATORS.has(operator))
@@ -430,21 +560,39 @@ function fastUnary(
 	values: FastNumbers,
 ): string | undefined {
 	const { dst, src, operator } = op;
-	const guard = `if (${numbers(values, src)}) goto __full;`;
+	const primitive = compilerValueKindMaskIsSubset(
+		values.kind(src),
+		COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE,
+	);
+	const numberFailure = primitive ? "false" : numbers(values, src);
+	if (operator !== "!" && numberFailure === "true") return undefined;
+	const guard = numberFailure === "false" ? "" : `if (${numberFailure}) goto __full;`;
+	const converts = primitive && values.kind(src) !== COMPILER_VALUE_KIND_NUMBER;
+	const numeric = converts
+		? nativePrimitiveNumberExpression(`f${src}`, values.kind(src))
+		: number(values, src);
 	switch (operator) {
-		case "!":
-			return `f${dst} = mal_value_new_boolean(!mal_value_is_truthy(f${src}));`;
+		case "!": {
+			const constant =
+				compilerIntegerRangeTruthiness(values.range(src)) ??
+				compilerValueKindTruthiness(values.kind(src));
+			return constant === undefined
+				? `f${dst} = mal_value_new_boolean(!mal_value_is_truthy(f${src}));`
+				: `f${dst} = ${constant ? "MAL_VALUE_FALSE" : "MAL_VALUE_TRUE"};`;
+		}
 		case "-":
-			return `${guard} f${dst} = mal_ops_number_value(-${number(values, src)});`;
+			return `${guard} f${dst} = mal_ops_number_value(-${numeric});`;
 		case "+":
 		case "tonumeric":
-			return `${guard} f${dst} = f${src};`;
+			return converts
+				? `f${dst} = mal_ops_number_value(${numeric});`
+				: `${guard} f${dst} = f${src};`;
 		case "~":
-			return `${guard} f${dst} = mal_value_from_i32(~${int32(values, src)});`;
+			return `${guard} f${dst} = mal_value_from_i32(~${converts ? `mal_ops_number_to_i32(${numeric})` : int32(values, src)});`;
 		case "increment":
-			return `${guard} f${dst} = mal_ops_number_value(${number(values, src)} + 1.0);`;
+			return `${guard} f${dst} = mal_ops_number_value(${numeric} + 1.0);`;
 		case "decrement":
-			return `${guard} f${dst} = mal_ops_number_value(${number(values, src)} - 1.0);`;
+			return `${guard} f${dst} = mal_ops_number_value(${numeric} - 1.0);`;
 		default:
 			return undefined;
 	}
@@ -458,14 +606,28 @@ function fastInstruction(
 	targets: Set<number>,
 	exported: boolean,
 	constants: ReadonlyMap<number, number>,
-	strings: ReadonlyMap<number, number>,
+	stringComparison: NativeStringComparisonPlan | undefined,
 	integers: ReadonlySet<number>,
 ): string | undefined {
+	const masks = input.facts?.[ip]?.inputKindMasks;
 	const values: FastNumbers = {
+		range: (register) => instructionInputIntegerRange(input.facts?.[ip], register),
+		isInt32: (register) => instructionInputIsInt32(input.facts?.[ip], register),
+		kind(register) {
+			const kind = instructionInputKind(input.facts?.[ip], register);
+			if (kind !== undefined) return kind;
+			if (masks !== undefined) {
+				if (op.opcode === "UNARY" && op.src === register) return masks[0]!;
+				if (op.opcode === "BINARY") {
+					if (op.left === register) return masks[0]!;
+					if (op.right === register) return masks[1]!;
+				}
+			}
+			return COMPILER_VALUE_KIND_TOP;
+		},
 		constants,
 		literal: input.f64Literal,
-		strings,
-		stringLength: input.stringLength,
+		stringComparison,
 	};
 	const value = (operand: number): string | undefined => {
 		if (operand >= 0) return `f${operand}`;
@@ -532,13 +694,21 @@ function fastInstruction(
 			return fastBinary(op, values);
 		case "UNARY":
 			return fastUnary(op, values);
-		case "TYPEOF_COMPARE":
+		case "TYPEOF_COMPARE": {
+			const result = compilerTypeofComparison(values.kind(op.src), op.expected);
+			if (result !== undefined)
+				return `f${op.dst} = ${result !== op.negated ? "MAL_VALUE_TRUE" : "MAL_VALUE_FALSE"};`;
 			return `f${op.dst} = mal_value_new_boolean(${op.negated ? "!" : ""}mal_vm_typeof_compare(f${op.src}, ${emitTypeofResult(op.expected)}));`;
+		}
 		case "JUMP":
-			return jump(op.targetIp);
+			return op.targetIp === ip + 1 ? "" : jump(op.targetIp);
 		case "JUMP_IF": {
 			const target = jump(op.targetIp);
 			if (target === undefined) return undefined;
+			const constant =
+				compilerIntegerRangeTruthiness(values.range(op.cond)) ??
+				compilerValueKindTruthiness(values.kind(op.cond));
+			if (constant !== undefined) return constant ? target : "";
 			return integers.has(op.cond)
 				? `if (mal_ops_number_value_to_i32(f${op.cond}) != 0) ${target}`
 				: `if (mal_value_is_truthy(f${op.cond})) ${target}`;

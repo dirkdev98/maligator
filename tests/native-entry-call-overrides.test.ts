@@ -62,6 +62,10 @@ function emit(
 	guarded = false,
 	result: VmRegisterRepresentation = guarded ? "boxed" : "number",
 	targetResult: VmRegisterRepresentation = "number",
+	fast: {
+		canonicalTarget?: boolean;
+		availableTargets?: ReadonlySet<number>;
+	} = {},
 ) {
 	const selectedTarget = { ...targetEntry, resultRepresentation: targetResult };
 	const base = createConservativeNativePlan([fn]).functions[0]!;
@@ -96,7 +100,12 @@ function emit(
 	const native: NativeFunctionPlan = {
 		...base,
 		storageValues: [0, 1, 2],
-		instructions: [{ kind: "call", directFunctionIndex: 1 }, undefined],
+		instructions: [
+			fast.canonicalTarget === false
+				? undefined
+				: { kind: "call", directFunctionIndex: 1 },
+			undefined,
+		],
 		directEntries: [
 			numeric,
 			{
@@ -122,16 +131,49 @@ function emit(
 		new Map(available ? [[directCompiledEntryKey(1, 0), selectedTarget]] : []),
 		false,
 		new Set([1]),
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		fast.availableTargets,
 	)!;
 	expect(emitted).not.toBeNull();
-	expect(native.instructions[0]).toEqual({
-		kind: "call",
-		directFunctionIndex: 1,
-	});
+	expect(native.instructions[0]).toEqual(
+		fast.canonicalTarget === false ? undefined : { kind: "call", directFunctionIndex: 1 },
+	);
 	return emitted;
 }
 
 describe("native entry call overrides", () => {
+	it("selects a frameless callee from an exact typed override absent from the canonical plan", () => {
+		const emitted = emit(true, false, "number", "number", {
+			canonicalTarget: false,
+			availableTargets: new Set([1]),
+		});
+		expect(emitted.directEntries[0]!.source).toContain("mal_compiled_1_try(vm,");
+		expect(emitted.source).not.toContain("mal_compiled_1_try(vm,");
+	});
+
+	it("does not borrow the canonical exact target for a guarded typed override", () => {
+		const source = emit(true, true, "number", "number", {
+			availableTargets: new Set([1]),
+		}).directEntries[0]!.source;
+		expect(source).not.toContain("mal_compiled_1_try(vm,");
+		expect(source).toContain("if (__guarded_index_0 == 1)");
+		expect(source).toContain("mal_vm_call_cached(vm,");
+	});
+
+	it("keeps the typed full body when its frameless callee is unavailable", () => {
+		const source = emit(true, false, "number", "number", {
+			canonicalTarget: false,
+			availableTargets: new Set(),
+		}).directEntries[0]!.source;
+		expect(source).not.toContain("mal_compiled_1_try(vm,");
+		expect(source).toContain("mal_direct_1_0(vm,");
+	});
+
 	it("keeps scalar downstream calls local to the proven entry", () => {
 		const emitted = emit();
 		const numeric = emitted.directEntries[0]!.source;

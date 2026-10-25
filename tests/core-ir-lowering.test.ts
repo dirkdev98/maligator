@@ -565,7 +565,7 @@ describe("Core IR lowering", () => {
 		const image = lowerExecutionToProgramImage(execution, true);
 		const generator = image.runtime.functions.find((fn) => fn.isGenerator)!;
 		expect(generator.profileSiteIds).toHaveLength(generator.instructions.length);
-		expect(image.diagnostics.profileSites?.length).toBeGreaterThan(0);
+		expect(image.profiling?.sites.length).toBeGreaterThan(0);
 		expect(vmSafepointRootMapsAreTrusted(generator)).toBe(true);
 	});
 

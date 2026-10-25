@@ -452,7 +452,7 @@ export function finalizeCompilerRemarks(
 	image: ProgramImage,
 	compiled: ReadonlyArray<FinalCompiledFunction | null>,
 ): void {
-	const sites = image.diagnostics.profileSites;
+	const sites = image.profiling?.sites;
 	if (sites === undefined) return;
 	const remarks: Array<CompilerRemark> = [...(image.diagnostics.profileRemarks ?? [])];
 	for (const [functionIndex, native] of image.native.functions.entries()) {
@@ -501,7 +501,7 @@ export function buildProfileMetadata(
 	program: CoreProgram,
 	context: CoreCompilationContext,
 	image: ProgramImage,
-): void {
+): ProgramImage {
 	const runtime = image.runtime;
 	const sourcePaths = context.data.sourceFiles.map((file) => normalizedPath(file.path));
 	const root = commonDirectory(sourcePaths);
@@ -649,6 +649,6 @@ export function buildProfileMetadata(
 		}
 	}
 
-	image.diagnostics.profileSites = sites;
 	image.diagnostics.profileRemarks = remarks;
+	return { ...image, profiling: { sites } };
 }

@@ -229,6 +229,36 @@ The independent target boundary and current storage contract are recorded in
       publication to a probe's collecting slow path stays renderer-local: eager
       publication is always legal, and the deferral follows fixed render-form
       rules over plan facts rather than a planning choice.
+      Fast-entry `calleeTry` selection now consumes typed call overrides and
+      declines guarded or unavailable targets without borrowing canonical proofs.
+- [ ] Use typed-entry reachable edges in surviving liveness, scalar use and result ABI
+      decisions. A validated per-variant plan now removes impossible C branches and
+      unreachable safepoints, eliminating the dead coercive addition and root frame
+      in String entries for Number predicates. Surviving GC maps retain their full
+      hidden helper obligations. Propagate the refined edges into the remaining
+      dataflow and specialization decisions while preserving handlers, resume points,
+      region and record continuations, and canonical fallbacks.
+      Full entries, frameless fast entries and numeric leaves now share that plan;
+      fast admission uses the reachable graph. A shared unused-value plan removes
+      effect-free producers and copy chains across full, fast, numeric and resumable
+      C bodies while retaining root writes, hidden ownership uses and profile sites.
+      Return ABI proofs now join reachable returns using existing kind and range
+      observations, preserving handler entry contracts; callers consume those
+      scalar results through existing typed transports. Use the surviving graph
+      during fast-path discovery, and carry edge projections into remaining shape
+      and lifetime analyses. String comparison length proofs now join surviving
+      literal definitions and copies, retaining unknown handler, resume and helper
+      entries; full, frameless and resumable branches consume the validated plan.
+      Connected entry finalization now retires callee nominations made unreachable
+      by later return facts, prunes unrooted sibling components and compacts IDs
+      without changing semantic proofs. Retired code capacity is released while
+      spent proof work remains charged as discovery.
+- [x] Normalize primitive conversion calls from semantic kind unions. Eligible
+      `Number` and `String` calls use unary conversions, carrying kind and effect
+      proofs into native storage, full entries and frameless numeric paths.
+      Primitive conversions avoid builtin and unary dispatch while retaining String
+      allocation polls, extra argument effects and distinct Symbol, BigInt,
+      omitted-argument, construction and spread semantics.
 - [ ] Shrink the largest inline expansions in generated code. Uniform tagged
       field slots and the one-compare Number decode cut the self-compiler's text
       from 55.0 to 49.9 MB; the inline static load probe is now about 19
@@ -581,15 +611,9 @@ iterator cursor is not, by itself, permission to delete its language object.
 - [ ] Let integer loop regions hold a numeric fusion whose ends are both inside. They
       decline every fusion, so `count = (count + 1) | 0` over a boxed count stepping
       by a captured value takes 486 ms for 40M iterations against Node's 12; allowing
-      contained fusions made it 23 ms. That change made a profiled helper in
-      `tests/core-local-capture-arguments.test.ts` (loop-carried values) fail
-      deserialization. Fast-path selection admits loop and record regions only in
-      functions without `profileSiteIds`, and the compiler artifact codec drops
-      profile sites, so validating a round-tripped profiled image selects regions
-      its stored plans never had. Any region that becomes admissible in such a
-      function hits the same mismatch. Persist profile sites (or a profiled flag)
-      in the artifact, or make selection independent of them, before allowing
-      fusions again.
+      contained fusions made it 23 ms. Admit contained fusions with storage and
+      profile plans validated together; compiler artifacts now preserve profile
+      sites and instruction-site maps across restoration.
 - [ ] Widen numeric loop regions beyond plain Array element and record sums.
       Index and for-of loops over Arrays now keep their sums in f64 locals,
       including fields of record elements (`sx += p.x` 5.7 to 1.7 ns per element,

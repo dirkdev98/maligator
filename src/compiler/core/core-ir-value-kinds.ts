@@ -10,7 +10,10 @@ import {
 	COMPILER_VALUE_KIND_NULLISH,
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE,
+	COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE,
+	COMPILER_VALUE_KIND_TO_STRING_PRIMITIVE,
 	compilerOperatorInputKindsHaveExactNativeSemantics,
+	compilerComparisonInputKindsAvoidObjectCoercion,
 	compilerOperatorIsNullishEquality,
 	compilerOperatorIsPrimitiveStringConcatenation,
 	compilerOperatorFixedResultKind,
@@ -29,6 +32,7 @@ import type {
 	CompilerOperatorInputKindMasks,
 	CompilerValueKindMask,
 } from "../shared/compiler-value-kinds.ts";
+import type { CompilerIntegerRange } from "../shared/integer-range.ts";
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
 import { coreClosedGlobalSlotMembership } from "./core-compilation.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
@@ -39,7 +43,7 @@ import {
 	coreCanonicalValueRoots,
 	coreTerminatorInput,
 } from "./core-ir-control-flow.ts";
-import type { CoreControlFlow } from "./core-ir-control-flow.ts";
+import type { CoreControlFlow, CoreControlEdge } from "./core-ir-control-flow.ts";
 import { coreNumericTypedArrayKind } from "./core-ir-value-classes.ts";
 import type {
 	CoreFunctionId,
@@ -96,6 +100,7 @@ export interface CoreValueKindInputs {
 	readonly onIntegerWork?: (values: number) => void;
 	readonly parameterMasks?: ReadonlyArray<CompilerValueKindMask>;
 	readonly receiverMask?: CompilerValueKindMask;
+	readonly controlEdges?: ReadonlySet<CoreControlEdge>;
 	readonly operationResultValue?: (
 		instruction: CoreInstructionId,
 		result: CoreValueId,
@@ -854,6 +859,15 @@ function solveCoreValueKinds(
 		demandedValues === undefined ? fn.valueCapacity : 0,
 	);
 	const numericIntegerSeeds: Array<CoreValueId> = [];
+	const joinInputs: Array<number> = [];
+	const integerJoin = (values: ReadonlyArray<CoreValueId>): number => {
+		if (values.length === 0) return 0;
+		if (values.length === 1) return values[0]! + 1;
+		const recipe = -joinInputs.length - 3;
+		joinInputs.push(values.length);
+		for (const value of values) joinInputs.push(value);
+		return recipe;
+	};
 	const transfers: KindTransferBuffer = {
 		kinds: [],
 		outputs: [],
@@ -867,8 +881,20 @@ function solveCoreValueKinds(
 	for (let index = 0; index < fn.parameterCount; index++) {
 		formalParameters[fn.kernel.functionParameter(index)] = index;
 	}
+	const filteredIncoming =
+		inputs?.controlEdges === undefined
+			? undefined
+			: new Map<CoreBlockId, ReadonlyArray<CoreControlEdge>>();
 	const addParameter = (block: CoreBlockId, index: number): void => {
-		const incoming = cfg.predecessors[block] ?? [];
+		let incoming = cfg.predecessors[block] ?? [];
+		if (filteredIncoming !== undefined) {
+			const known = filteredIncoming.get(block);
+			if (known !== undefined) incoming = known;
+			else {
+				incoming = incoming.filter((edge) => inputs!.controlEdges!.has(edge));
+				filteredIncoming.set(block, incoming);
+			}
+		}
 		const parameterStart = fn.kernel.blockParameterStart(block);
 		const row = parameterStart + index;
 		const parameter = fn.kernel.blockParameterValue(row);
@@ -876,12 +902,29 @@ function solveCoreValueKinds(
 		if (demandedValues === undefined && fn.valueRepresentation(parameter) === "i32")
 			integerRecipes[parameter] = INTEGER_PROOF_EXACT;
 		const formalIndex = formalParameters[parameter]!;
-		if (
-			representation !== undefined ||
+		const boundary =
 			formalIndex >= 0 ||
 			fn.kernel.blockParameterRole(row) === 1 ||
-			incoming.length === 0
+			incoming.length === 0;
+		let incomingValues: Array<CoreValueId> | undefined;
+		if (
+			!boundary &&
+			(representation === undefined ||
+				(demandedValues === undefined && representation === COMPILER_VALUE_KIND_NUMBER))
 		) {
+			incomingValues = [];
+			for (const edge of incoming) {
+				const value = edge.arguments[edge.kind === "exceptional" ? index - 1 : index];
+				if (value !== undefined) incomingValues.push(value);
+			}
+			if (
+				demandedValues === undefined &&
+				representation === COMPILER_VALUE_KIND_NUMBER &&
+				fn.valueRepresentation(parameter) !== "i32"
+			)
+				integerRecipes[parameter] = integerJoin(incomingValues);
+		}
+		if (representation !== undefined || boundary) {
 			const kind =
 				representation ??
 				(formalIndex < 0
@@ -889,11 +932,6 @@ function solveCoreValueKinds(
 					: (inputs?.parameterMasks?.[formalIndex] ?? COMPILER_VALUE_KIND_TOP));
 			masks[parameter] = masks[parameter]! | kind;
 			return;
-		}
-		const incomingValues: Array<CoreValueId> = [];
-		for (const edge of incoming) {
-			const value = edge.arguments[edge.kind === "exceptional" ? index - 1 : index];
-			if (value !== undefined) incomingValues.push(value);
 		}
 		addKindTransfer(transfers, KIND_TRANSFER_JOIN, parameter, 0, incomingValues);
 	};
@@ -913,6 +951,9 @@ function solveCoreValueKinds(
 				builtinResultIsInt32(attributes.operation))
 		) {
 			integerRecipes[output] = INTEGER_PROOF_EXACT;
+		} else if (opcode === "move" && fn.valueRepresentation(output) === "f64") {
+			integerRecipes[output] =
+				fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction)) + 1;
 		} else if (
 			(opcode === "unary" && operator === "~") ||
 			(opcode === "binary" &&
@@ -1019,7 +1060,6 @@ function solveCoreValueKinds(
 		masks[output] = next;
 		wakeDependents(output, queued, queue);
 	}
-	const joinInputs: Array<number> = [];
 	for (const value of numericIntegerSeeds)
 		if (masks[value] === COMPILER_VALUE_KIND_NUMBER)
 			integerRecipes[value] = INTEGER_PROOF_EXACT;
@@ -1032,7 +1072,7 @@ function solveCoreValueKinds(
 		const kind = transferKinds[index]!;
 		if (
 			masks[output] !== COMPILER_VALUE_KIND_NUMBER ||
-			integerRecipes[output] === INTEGER_PROOF_EXACT ||
+			integerRecipes[output] !== 0 ||
 			(kind !== KIND_TRANSFER_JOIN && kind !== KIND_TRANSFER_COPY)
 		)
 			continue;
@@ -1472,6 +1512,10 @@ export function coreValueKindObservation(
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
 	kindMask: (value: CoreValueId) => CompilerValueKindMask,
+	integerRange?: (
+		value: CoreValueId,
+		consumer: CoreInstructionId,
+	) => CompilerIntegerRange | undefined,
 ): boolean | undefined {
 	if (
 		fn.instructionKind(instruction) !== "operation" ||
@@ -1494,16 +1538,96 @@ export function coreValueKindObservation(
 	}
 	if (opcode === "unary" && fn.instructionAttributes(instruction).operator === "!") {
 		const input = operand(0);
-		return input !== undefined &&
-			compilerValueKindMaskIsSubset(
-				kindMask(input),
-				COMPILER_VALUE_KIND_UNDEFINED | COMPILER_VALUE_KIND_NULL,
-			)
+		if (input === undefined) return undefined;
+		const mask = kindMask(input);
+		return compilerValueKindMaskIsSubset(mask, COMPILER_VALUE_KIND_NULLISH)
 			? true
+			: compilerValueKindMaskIsSubset(
+						mask,
+						COMPILER_VALUE_KIND_OBJECT | COMPILER_VALUE_KIND_SYMBOL,
+				  )
+				? false
+				: undefined;
+	}
+	if (opcode === "callKnown") {
+		const attributes = fn.instructionAttributes(instruction);
+		if (attributes.construct || attributes.argumentMode !== undefined) return undefined;
+		switch (attributes.operation) {
+			case "Number.isNaN":
+			case "Number.isFinite":
+			case "Number.isInteger":
+			case "Number.isSafeInteger": {
+				const input = operand(1);
+				const mask =
+					input === undefined ? COMPILER_VALUE_KIND_UNDEFINED : kindMask(input);
+				if (
+					compilerValueKindMaskIsSubset(
+						mask,
+						COMPILER_VALUE_KIND_TOP & ~COMPILER_VALUE_KIND_NUMBER,
+					)
+				)
+					return false;
+				return input !== undefined && integerRange?.(input, instruction) !== undefined
+					? attributes.operation !== "Number.isNaN"
+					: undefined;
+			}
+		}
+		if (attributes.operation === "Array.isArray") {
+			const input = operand(1);
+			const mask = input === undefined ? COMPILER_VALUE_KIND_UNDEFINED : kindMask(input);
+			return compilerValueKindMaskIsSubset(
+				mask,
+				COMPILER_VALUE_KIND_TOP & ~COMPILER_VALUE_KIND_OBJECT,
+			)
+				? false
+				: undefined;
+		}
+		if (attributes.operation !== "Object.is") return undefined;
+		const left = operand(1);
+		const right = operand(2);
+		if (left === right) return true;
+		const leftMask = left === undefined ? COMPILER_VALUE_KIND_UNDEFINED : kindMask(left);
+		const rightMask =
+			right === undefined ? COMPILER_VALUE_KIND_UNDEFINED : kindMask(right);
+		if (
+			((leftMask || COMPILER_VALUE_KIND_TOP) & (rightMask || COMPILER_VALUE_KIND_TOP)) ===
+			0
+		)
+			return false;
+		if (
+			leftMask === rightMask &&
+			(leftMask === COMPILER_VALUE_KIND_UNDEFINED ||
+				leftMask === COMPILER_VALUE_KIND_NULL)
+		)
+			return true;
+		return left !== undefined &&
+			right !== undefined &&
+			distinctFreshAllocations(fn, left, right)
+			? false
 			: undefined;
 	}
 	if (opcode !== "binary" || operandCount !== 2) return undefined;
 	const operator = fn.instructionAttributes(instruction).operator;
+	const left = operand(0)!;
+	const right = operand(1)!;
+	if (
+		operator === "==" ||
+		operator === "!=" ||
+		operator === "===" ||
+		operator === "!=="
+	) {
+		if (
+			left === right &&
+			(compilerValueKindMaskIsSubset(
+				kindMask(left),
+				COMPILER_VALUE_KIND_TOP & ~COMPILER_VALUE_KIND_NUMBER,
+			) ||
+				integerRange?.(left, instruction) !== undefined)
+		)
+			return operator === "==" || operator === "===";
+		if (distinctFreshAllocations(fn, left, right))
+			return operator === "!=" || operator === "!==";
+	}
 	if (operator === "==" || operator === "!=") {
 		const left = kindMask(operand(0)!);
 		const right = kindMask(operand(1)!);
@@ -1538,8 +1662,6 @@ export function coreValueKindObservation(
 		const actual = exactPrimitiveTypeof(kindMask(input));
 		return actual === undefined ? undefined : actual === expected;
 	};
-	const left = operand(0)!;
-	const right = operand(1)!;
 	const leftKind = kindMask(left);
 	const singleton = (mask: number) =>
 		mask === COMPILER_VALUE_KIND_UNDEFINED || mask === COMPILER_VALUE_KIND_NULL;
@@ -1552,6 +1674,39 @@ export function coreValueKindObservation(
 				? true
 				: undefined);
 	return equal === undefined ? undefined : operator === "===" ? equal : !equal;
+}
+
+function distinctFreshAllocations(
+	fn: CoreFunctionStore,
+	left: CoreValueId,
+	right: CoreValueId,
+): boolean {
+	if (left === right) return false;
+	return valueIsFreshAllocation(fn, left) && valueIsFreshAllocation(fn, right);
+}
+
+function valueIsFreshAllocation(fn: CoreFunctionStore, value: CoreValueId): boolean {
+	if (fn.kernel.valueDefinitionKind(value) !== 1) return false;
+	const instruction = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
+	return fn.registry.byId(fn.instructionOpcode(instruction)).allocation !== undefined;
+}
+
+export function coreOperatorInputKindMasks(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+	kinds: CoreValueKindAnalysis,
+): CompilerOperatorInputKindMasks | undefined {
+	const opcode = fn.instructionOpcodeName(instruction);
+	const start = fn.kernel.instructionOperandStart(instruction);
+	const left = kinds.kindMask(fn.kernel.operandAt(start));
+	if (left === 0) return undefined;
+	if (opcode === "unary") return left === COMPILER_VALUE_KIND_TOP ? undefined : [left];
+	if (opcode !== "binary") return undefined;
+	const right = kinds.kindMask(fn.kernel.operandAt(start + 1));
+	if (right === 0) return undefined;
+	return left === COMPILER_VALUE_KIND_TOP && right === COMPILER_VALUE_KIND_TOP
+		? undefined
+		: [left, right];
 }
 
 export function coreExactOperatorInputKindMasks(
@@ -1583,45 +1738,77 @@ export function corePrimitiveOperatorEffectRefinement(
 	const operator = fn.instructionAttributes(instruction).operator;
 	let primitive = false;
 	let gcFree = false;
-	let stringConcatenation = false;
+	let mayThrow = false;
 	if (opcode === "unary" && masks.length === 1 && typeof operator === "string") {
 		const numericPrimitive = compilerValueKindMaskIsSubset(
 			masks[0]!,
-			COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE,
+			COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE,
 		);
-		primitive =
+		const stringPrimitive =
+			operator === "tostring" &&
+			compilerValueKindMaskIsSubset(masks[0]!, COMPILER_VALUE_KIND_TO_STRING_PRIMITIVE);
+		const coercion =
+			(NUMERIC_UNARY_OPERATORS.has(operator) || operator === "tostring") &&
+			compilerValueKindMaskIsSubset(
+				masks[0]!,
+				COMPILER_VALUE_KIND_TOP & ~COMPILER_VALUE_KIND_OBJECT,
+			);
+		primitive = NON_COERCING_UNARY_OPERATORS.has(operator) || coercion;
+		gcFree =
 			NON_COERCING_UNARY_OPERATORS.has(operator) ||
-			(NUMERIC_UNARY_OPERATORS.has(operator) && numericPrimitive);
-		gcFree = NON_COERCING_UNARY_OPERATORS.has(operator) || numericPrimitive;
+			(NUMERIC_UNARY_OPERATORS.has(operator) && numericPrimitive) ||
+			(stringPrimitive && masks[0] === COMPILER_VALUE_KIND_STRING);
+		mayThrow =
+			coercion && !(operator === "tostring" ? stringPrimitive : numericPrimitive);
 	} else if (opcode === "binary" && masks.length === 2 && typeof operator === "string") {
+		const left = masks[0]!,
+			right = masks[1]!;
+		const strict = operator === "===" || operator === "!==";
+		const equality = strict || operator === "==" || operator === "!=";
+		const nonReentrantComparison = compilerComparisonInputKindsAvoidObjectCoercion(
+			operator,
+			masks,
+		);
+		const comparisonThrows =
+			nonReentrantComparison &&
+			!equality &&
+			((left | right) & COMPILER_VALUE_KIND_SYMBOL) !== 0;
+		// BigInt comparison with String may materialize UTF-16 parsing storage.
+		const comparisonMaterializes =
+			((left & COMPILER_VALUE_KIND_STRING) !== 0 &&
+				(right & COMPILER_VALUE_KIND_BIGINT) !== 0) ||
+			((right & COMPILER_VALUE_KIND_STRING) !== 0 &&
+				(left & COMPILER_VALUE_KIND_BIGINT) !== 0);
 		const numericPrimitives = masks.every((mask) =>
 			compilerValueKindMaskIsSubset(mask, COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE),
 		);
-		stringConcatenation =
+		const stringConcatenation =
 			(operator === "+" &&
 				masks.every((mask) =>
 					compilerValueKindMaskIsSubset(mask, COMPILER_VALUE_KIND_STRING),
 				)) ||
 			compilerOperatorIsPrimitiveStringConcatenation(opcode, operator, masks);
 		primitive =
-			["===", "!=="].includes(operator) ||
+			nonReentrantComparison ||
 			(NUMERIC_BINARY_OPERATORS.has(operator) && numericPrimitives) ||
 			stringConcatenation ||
 			compilerOperatorInputKindsHaveExactNativeSemantics(opcode, operator, masks);
 		gcFree =
-			["===", "!=="].includes(operator) ||
+			strict ||
+			(nonReentrantComparison && !comparisonThrows && !comparisonMaterializes) ||
 			compilerOperatorIsNullishEquality(opcode, operator, masks) ||
 			(numericPrimitives &&
 				(NUMERIC_BINARY_OPERATORS.has(operator) ||
 					compilerOperatorFixedResultKind(opcode, operator) ===
 						COMPILER_VALUE_KIND_BOOLEAN));
+		mayThrow = stringConcatenation || comparisonThrows;
 	}
 	if (!primitive) return undefined;
 	const baseline = fn.registry.byId(fn.instructionOpcode(instruction)).effects;
 	return {
 		reads: baseline.reads.filter((domain) => domain !== "host"),
 		writes: baseline.writes.filter((domain) => domain !== "host"),
-		mayThrow: stringConcatenation && baseline.mayThrow,
+		mayThrow: mayThrow && baseline.mayThrow,
 		maySuspend: baseline.maySuspend,
 		mayGc: gcFree ? false : baseline.mayGc,
 		callsUserCode: false,

@@ -723,6 +723,7 @@ function firstNativeSafepointReader(bytes: Uint8Array) {
 	);
 	const bodyCount = reader.count(1);
 	for (let index = 0; index < bodyCount; index++) readRuntimeFunction(reader);
+	expect(reader.u8(), "compiler profiling flags").toBe(0);
 	expect(reader.u32()).toBe(0); // Semantic protectors.
 	expect(reader.u32()).toBe(0); // Class layouts.
 	expect(reader.u32()).toBe(1); // Native functions.
@@ -762,7 +763,11 @@ function firstNativeSafepointReader(bytes: Uint8Array) {
 	expect(reader.u32()).toBe(0);
 	expect(reader.u32()).toBe(0);
 	expect(reader.u32()).toBe(0);
-	expect(reader.u32()).toBe(2); // Ordinary-entry safepoints.
+	expect(reader.u8(), "No native control-flow specialization").toBe(0);
+	expect(reader.u32(), "No elided native producers").toBe(0);
+	expect(reader.u32(), "No unused native registers").toBe(0);
+	expect(reader.u32(), "No native String comparisons").toBe(0);
+	expect(reader.u32(), "Ordinary-entry safepoints").toBe(2);
 	return reader;
 }
 

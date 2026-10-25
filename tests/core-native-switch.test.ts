@@ -4,6 +4,11 @@ import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/se
 import { optimizeSemanticProgramToCore } from "../src/compiler/pipeline/compile-core-common.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
 import {
+	COMPILER_VALUE_KIND_BOOLEAN,
+	COMPILER_VALUE_KIND_NUMBER,
+} from "../src/compiler/shared/compiler-value-kinds.ts";
+import { COMPILER_INT32_RANGE } from "../src/compiler/shared/integer-range.ts";
+import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
@@ -11,8 +16,37 @@ import { lowerCoreCompilationToExecutionProgram } from "../src/compiler/target/l
 import { lowerExecutionToProgramImage } from "../src/compiler/target/lower-native-program-image.ts";
 import { lowerCoreCompilationToNativeProgram } from "../src/compiler/target/lower-native.ts";
 import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
+import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 describe("native numeric switch certificate", () => {
+	it("carries selector ranges and comparison effects through generated dispatch", () => {
+		const out = inspectStaticValueFunction(
+			"function dispatch(input){switch(input|0){case 0:return 'zero';case 1:return 'one';case 2:return 'two';case 3:return 'three';default:return 'other';}}globalThis.dispatch=dispatch;",
+			"dispatch",
+		);
+		const restored = deserializeCompilerArtifact(serializeCompilerArtifact(out.image));
+		const native = restored.native.functions[out.native.functionIndex]!;
+		const comparisons = native.body.instructions.flatMap((op, ip) =>
+			op.opcode === "BINARY" && op.operator === "===" ? [{ op, ip }] : [],
+		);
+		expect(comparisons.length).toBeGreaterThan(0);
+		expect(native.literalSwitches?.some((site) => site.kind === "number")).toBe(true);
+		for (const { ip } of comparisons) {
+			const facts = native.facts![ip]!;
+			expect(facts).toMatchObject({
+				inputKindMasks: [COMPILER_VALUE_KIND_NUMBER, expect.any(Number)],
+				resultKindMasks: [COMPILER_VALUE_KIND_BOOLEAN],
+				effectMask: 0,
+			});
+			expect(facts.inputIntegerRanges?.[0]).toEqual(COMPILER_INT32_RANGE);
+			expect(facts.inputIntegerRanges?.[1]?.minimum).toBe(
+				facts.inputIntegerRanges?.[1]?.maximum,
+			);
+			expect(facts.inputIntegerRanges?.[1]?.minimum).toBeGreaterThanOrEqual(0);
+			expect(facts.inputIntegerRanges?.[1]?.maximum).toBeLessThanOrEqual(3);
+		}
+	});
+
 	it("canonicalizes dispatch certificates independently of scheduled block order", () => {
 		const core = optimizeSemanticProgramToCore(
 			analyzeSourceAndRunSemanticAnalysis(

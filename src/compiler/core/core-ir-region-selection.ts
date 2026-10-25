@@ -85,16 +85,14 @@ import {
 	coreReturnsObjectLiterals,
 } from "./core-native-field-analysis.ts";
 import type { CoreRecordPassTarget } from "./core-native-field-analysis.ts";
+import type { CoreInstructionFactPlan } from "./core-native-instruction-facts.ts";
+import { coreInstructionFactPlans } from "./core-native-instruction-facts.ts";
 import {
-	coreOperatorInputPlans,
-	coreBuiltinInputPlans,
 	corePrivateNumericArrayElementPlans,
 	corePrivatePackedRestArrayElementPlans,
 	coreUnsignedArithmeticPlans,
 } from "./core-native-numeric-analysis.ts";
 import type {
-	CoreBuiltinInputPlan,
-	CoreOperatorInputPlan,
 	CorePrivateNumericArrayElementPlan,
 	CorePrivatePackedRestArrayElementPlan,
 	CoreUnsignedArithmeticPlan,
@@ -135,7 +133,7 @@ interface PendingDirectEntry {
 	readonly valueRepresentations?: ReadonlyArray<CorePlanRepresentation>;
 	readonly argumentRepresentations?: ReadonlyArray<CorePlanRepresentation>;
 	readonly constantBooleans?: CoreDirectEntryPlan["constantBooleans"];
-	readonly operatorInputs?: CoreDirectEntryPlan["operatorInputs"];
+	readonly instructionFacts?: CoreDirectEntryPlan["instructionFacts"];
 	readonly fieldParameters?: CoreDirectEntryPlan["fieldParameters"];
 	readonly resultFields?: CoreDirectEntryPlan["resultFields"];
 	readonly recordParameters?: CoreDirectEntryPlan["recordParameters"];
@@ -161,8 +159,7 @@ export interface CoreLocalOptimizationPlanInput {
 	readonly discovery:
 		| { readonly priorityScore: number; readonly compilerWorkCost: number }
 		| undefined;
-	readonly operatorInputs: ReadonlyArray<CoreOperatorInputPlan>;
-	readonly builtinInputs: ReadonlyArray<CoreBuiltinInputPlan>;
+	readonly instructionFacts: ReadonlyArray<CoreInstructionFactPlan>;
 	readonly privateNumericArrayElements: ReadonlyArray<CorePrivateNumericArrayElementPlan>;
 	readonly privatePackedRestArrayElements: ReadonlyArray<CorePrivatePackedRestArrayElementPlan>;
 	readonly unsignedArithmetic: ReadonlyArray<CoreUnsignedArithmeticPlan>;
@@ -1136,8 +1133,7 @@ export function buildCoreLocalOptimizationPlanInput(
 			scanned && priorityScore < 0
 				? Object.freeze({ priorityScore, compilerWorkCost: operationCount })
 				: undefined,
-		operatorInputs: coreOperatorInputPlans(program, analyses, [functionId]),
-		builtinInputs: coreBuiltinInputPlans(program, analyses, [functionId]),
+		instructionFacts: coreInstructionFactPlans(program, analyses, [functionId]),
 		privateNumericArrayElements: corePrivateNumericArrayElementPlans(
 			program,
 			analyses,
@@ -1541,7 +1537,7 @@ function directEntryOpportunities(
 				let valueRepresentations: ReadonlyArray<CorePlanRepresentation> | undefined;
 				let argumentRepresentations: ReadonlyArray<CorePlanRepresentation> | undefined;
 				let constantBooleans: CoreDirectEntryPlan["constantBooleans"];
-				let operatorInputs: CoreDirectEntryPlan["operatorInputs"];
+				let instructionFacts: CoreDirectEntryPlan["instructionFacts"];
 				const recordEntries = needsArity
 					? []
 					: records.entries(target, callSites, callWeight);
@@ -1615,7 +1611,7 @@ function directEntryOpportunities(
 							});
 							const calls = fieldCalls.map((call) => call.site);
 							const variant = analyzeCoreNativeEntry(
-								fn,
+								program,
 								cfg,
 								parameterRepresentations,
 								undefined,
@@ -1625,7 +1621,7 @@ function directEntryOpportunities(
 							fieldParameters = joinedFields;
 							selectedCalls = calls;
 							valueRepresentations = variant.valueRepresentations;
-							operatorInputs = variant.operatorInputs;
+							instructionFacts = variant.instructionFacts;
 							resultRepresentation = variant.resultRepresentation;
 						}
 					}
@@ -1727,7 +1723,7 @@ function directEntryOpportunities(
 								exactOperationResultMasks.set(instruction, COMPILER_VALUE_KIND_NUMBER);
 						}
 						const variant = analyzeCoreNativeEntry(
-							fn,
+							program,
 							cfg,
 							parameterRepresentations,
 							argumentRepresentations,
@@ -1736,7 +1732,7 @@ function directEntryOpportunities(
 							exactOperationResultMasks,
 						);
 						valueRepresentations = variant.valueRepresentations;
-						operatorInputs = variant.operatorInputs;
+						instructionFacts = variant.instructionFacts;
 						constantBooleans = variant.constantBooleans;
 						resultRepresentation = variant.resultRepresentation;
 					}
@@ -1770,7 +1766,7 @@ function directEntryOpportunities(
 						...(valueRepresentations === undefined ? {} : { valueRepresentations }),
 						...(argumentRepresentations === undefined ? {} : { argumentRepresentations }),
 						...(constantBooleans === undefined ? {} : { constantBooleans }),
-						...(operatorInputs === undefined ? {} : { operatorInputs }),
+						...(instructionFacts === undefined ? {} : { instructionFacts }),
 						...(fieldParameters === undefined ? {} : { fieldParameters }),
 						budget: {
 							kind: "direct-entry",
@@ -2121,7 +2117,7 @@ class RecordPlanning {
 		const frozenParameters =
 			recordParameters.length === 0 ? undefined : Object.freeze(recordParameters);
 		const variant = analyzeCoreNativeEntry(
-			fn,
+			this.#program,
 			this.#control(target).exceptional(),
 			parameterRepresentations,
 			undefined,
@@ -2143,9 +2139,9 @@ class RecordPlanning {
 				parameterRepresentations,
 				resultRepresentation: variant.resultRepresentation,
 				valueRepresentations: variant.valueRepresentations,
-				...(variant.operatorInputs === undefined
+				...(variant.instructionFacts === undefined
 					? {}
-					: { operatorInputs: variant.operatorInputs }),
+					: { instructionFacts: variant.instructionFacts }),
 				...(resultFields === undefined ? {} : { resultFields }),
 				...(frozenParameters === undefined ? {} : { recordParameters: frozenParameters }),
 				budget: {
@@ -2201,7 +2197,7 @@ function keepSuppliedRecordParameters(
 						}),
 			);
 			const variant = analyzeCoreNativeEntry(
-				program.function(entry.function),
+				program,
 				analyses
 					.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
 						scope: "function",
@@ -2261,7 +2257,7 @@ function linkRecordForwards(
 		);
 		if (callOverrides.length === 0) return entry;
 		const variant = analyzeCoreNativeEntry(
-			program.function(entry.function),
+			program,
 			analyses
 				.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
 					scope: "function",
@@ -2685,9 +2681,9 @@ export function buildCoreOptimizationPlan(
 						...(candidate.constantBooleans === undefined
 							? {}
 							: { constantBooleans: candidate.constantBooleans }),
-						...(candidate.operatorInputs === undefined
+						...(candidate.instructionFacts === undefined
 							? {}
-							: { operatorInputs: candidate.operatorInputs }),
+							: { instructionFacts: candidate.instructionFacts }),
 						target: "native",
 						fallback: "canonical-core",
 						cost: Object.freeze({
@@ -2731,9 +2727,13 @@ export function buildCoreOptimizationPlan(
 			.sort(([left], [right]) => left - right)
 			.flatMap(([, entries]) => entries),
 	);
-	const connectedEntries =
+	const connectedAdmissions = new Map<
+		CoreFunctionId,
+		Map<number, CoreTransformCandidate>
+	>();
+	const connected =
 		options.context?.facts.closure.sourceClosure.kind !== "known"
-			? initialDirectEntries
+			? { entries: initialDirectEntries, retiredEntries: [] }
 			: connectCoreNativeEntries(
 					program,
 					summaries,
@@ -2741,7 +2741,7 @@ export function buildCoreOptimizationPlan(
 					live,
 					initialDirectEntries,
 					directBuiltinCallbacks,
-					(target, instruction, generatedCode, compilerWork) => {
+					(target, instruction, generatedCode, compilerWork, entryId) => {
 						const budget: CoreTransformCandidate = {
 							kind: "direct-entry",
 							caller: target,
@@ -2766,6 +2766,11 @@ export function buildCoreOptimizationPlan(
 							return false;
 						}
 						service.recordApplied(budget);
+						const siblings =
+							connectedAdmissions.get(target) ??
+							new Map<number, CoreTransformCandidate>();
+						siblings.set(entryId, budget);
+						connectedAdmissions.set(target, siblings);
 						selectedExpansionsByFunction.set(
 							target,
 							(selectedExpansionsByFunction.get(target) ?? 0) + 1,
@@ -2786,7 +2791,14 @@ export function buildCoreOptimizationPlan(
 						return true;
 					},
 				);
-	const directEntries = linkRecordForwards(program, analyses, connectedEntries);
+	for (const entry of connected.retiredEntries) {
+		const budget = connectedAdmissions.get(entry.function)?.get(entry.id);
+		if (budget === undefined) throw new Error("Unadmitted native entry retired");
+		discovery.compilerWork += service.recordRetiredEntry(budget);
+		selectedByKind["direct-entry"]!--;
+		increment(declinedByPlanReason, "unreferenced-entry");
+	}
+	const directEntries = linkRecordForwards(program, analyses, connected.entries);
 	const budgetStatistics = service.statisticsSince(budgetBaseline);
 	const statistics: CoreOptimizationPlanStatistics = Object.freeze({
 		...budgetStatistics,
@@ -2832,11 +2844,8 @@ export function buildCoreOptimizationPlan(
 				directEntries,
 			),
 		),
-		operatorInputs: Object.freeze(
-			resolvedLocalInputs.flatMap((input) => input.operatorInputs),
-		),
-		builtinInputs: Object.freeze(
-			resolvedLocalInputs.flatMap((input) => input.builtinInputs),
+		instructionFacts: Object.freeze(
+			resolvedLocalInputs.flatMap((input) => input.instructionFacts),
 		),
 		privateNumericArrayElements: Object.freeze(
 			resolvedLocalInputs.flatMap((input) => input.privateNumericArrayElements),

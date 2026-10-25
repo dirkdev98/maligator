@@ -1,3 +1,4 @@
+import type { CompilerTypeofResult } from "./compiler-instruction.ts";
 /**
  * Closed ECMAScript value-kind lattice shared by Core proof production and
  * target-plan consumers. These are semantic kinds, not physical register
@@ -36,9 +37,30 @@ export const COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE =
 	COMPILER_VALUE_KIND_NULL |
 	COMPILER_VALUE_KIND_BOOLEAN;
 
+export const COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE =
+	COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE | COMPILER_VALUE_KIND_STRING;
+
+export const COMPILER_VALUE_KIND_TO_STRING_PRIMITIVE =
+	COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE | COMPILER_VALUE_KIND_BIGINT;
+
 export type CompilerOperatorInputKindMasks =
 	| readonly [CompilerValueKindMask]
 	| readonly [CompilerValueKindMask, CompilerValueKindMask];
+
+// Number permits BigInt after object coercion; String special-cases only an input Symbol.
+export function compilerPrimitiveConversionOperator(
+	operation: string,
+	mask: CompilerValueKindMask,
+): "+" | "tostring" | undefined {
+	if (!compilerValueKindMaskIsValid(mask, { allowTop: true })) return undefined;
+	if (operation === "Number")
+		return (mask & (COMPILER_VALUE_KIND_OBJECT | COMPILER_VALUE_KIND_BIGINT)) === 0
+			? "+"
+			: undefined;
+	if (operation === "String")
+		return (mask & COMPILER_VALUE_KIND_SYMBOL) === 0 ? "tostring" : undefined;
+	return undefined;
+}
 
 export const COMPILER_NUMERIC_UNARY_OPERATORS: ReadonlySet<string> = new Set([
 	"-",
@@ -179,6 +201,17 @@ export function compilerOperatorIsPrimitiveStringConcatenation(
 	);
 }
 
+export function compilerOperatorInputKindMasksAreValid(
+	opcode: string,
+	masks: ReadonlyArray<CompilerValueKindMask>,
+): masks is CompilerOperatorInputKindMasks {
+	return (
+		((opcode === "unary" && masks.length === 1) ||
+			(opcode === "binary" && masks.length === 2)) &&
+		masks.every((mask) => compilerValueKindMaskIsValid(mask, { allowTop: true }))
+	);
+}
+
 export function compilerOperatorInputKindsHaveExactNativeSemantics(
 	opcode: string,
 	operator: unknown,
@@ -196,7 +229,10 @@ export function compilerOperatorInputKindsHaveExactNativeSemantics(
 		if (masks.length !== 1) return false;
 		switch (operator) {
 			case "tostring":
-				return masks[0] === COMPILER_VALUE_KIND_BOOLEAN;
+				return compilerValueKindMaskIsSubset(
+					masks[0]!,
+					COMPILER_VALUE_KIND_TO_STRING_PRIMITIVE,
+				);
 			case "-":
 			case "+":
 			case "~":
@@ -205,7 +241,7 @@ export function compilerOperatorInputKindsHaveExactNativeSemantics(
 			case "tonumeric":
 				return compilerValueKindMaskIsSubset(
 					masks[0]!,
-					COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE,
+					COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE,
 				);
 			default:
 				return false;
@@ -246,6 +282,29 @@ export function compilerOperatorInputKindsHaveExactNativeSemantics(
 	return masks.every((mask) => compilerValueKindMaskIsSubset(mask, allowed));
 }
 
+export function compilerComparisonInputKindsAvoidObjectCoercion(
+	operator: string,
+	masks: ReadonlyArray<CompilerValueKindMask>,
+): boolean {
+	if (
+		compilerOperatorFixedResultKind("binary", operator) !== COMPILER_VALUE_KIND_BOOLEAN ||
+		masks.length !== 2 ||
+		!masks.every((mask) => compilerValueKindMaskIsValid(mask, { allowTop: true }))
+	)
+		return false;
+	if (operator === "===" || operator === "!==") return true;
+	const left = masks[0]!,
+		right = masks[1]!;
+	if (operator !== "==" && operator !== "!=")
+		return ((left | right) & COMPILER_VALUE_KIND_OBJECT) === 0;
+	const coerciblePrimitive =
+		COMPILER_VALUE_KIND_TOP & ~(COMPILER_VALUE_KIND_OBJECT | COMPILER_VALUE_KIND_NULLISH);
+	return !(
+		((left & COMPILER_VALUE_KIND_OBJECT) !== 0 && (right & coerciblePrimitive) !== 0) ||
+		((right & COMPILER_VALUE_KIND_OBJECT) !== 0 && (left & coerciblePrimitive) !== 0)
+	);
+}
+
 export function compilerValueKindMaskIsValid(
 	value: unknown,
 	options: { readonly allowEmpty?: boolean; readonly allowTop?: boolean } = {},
@@ -274,13 +333,46 @@ export function compilerBuiltinInputKindsAreValid(
 	return (
 		masks.length === operandCount &&
 		masks.length >= 1 &&
-		masks.length <= 17 &&
-		masks.every(
-			(mask) =>
-				mask === COMPILER_VALUE_KIND_BOOLEAN ||
-				mask === COMPILER_VALUE_KIND_NUMBER ||
-				mask === COMPILER_VALUE_KIND_STRING ||
-				mask === COMPILER_VALUE_KIND_TOP,
-		)
+		masks.every((mask) => compilerValueKindMaskIsValid(mask, { allowTop: true }))
 	);
+}
+
+export function compilerTypeofComparison(
+	mask: CompilerValueKindMask,
+	expected: CompilerTypeofResult,
+): boolean | undefined {
+	const kind =
+		expected === "undefined"
+			? COMPILER_VALUE_KIND_UNDEFINED
+			: expected === "boolean"
+				? COMPILER_VALUE_KIND_BOOLEAN
+				: expected === "number"
+					? COMPILER_VALUE_KIND_NUMBER
+					: expected === "string"
+						? COMPILER_VALUE_KIND_STRING
+						: expected === "bigint"
+							? COMPILER_VALUE_KIND_BIGINT
+							: expected === "symbol"
+								? COMPILER_VALUE_KIND_SYMBOL
+								: expected === "object"
+									? COMPILER_VALUE_KIND_OBJECT | COMPILER_VALUE_KIND_NULL
+									: COMPILER_VALUE_KIND_OBJECT;
+	if ((mask & kind) === 0) return false;
+	if (expected === "function") return undefined;
+	if (expected === "object") return mask === COMPILER_VALUE_KIND_NULL ? true : undefined;
+	return compilerValueKindMaskIsSubset(mask, kind) ? true : undefined;
+}
+
+export function compilerValueKindTruthiness(
+	mask: CompilerValueKindMask,
+): boolean | undefined {
+	if (compilerValueKindMaskIsSubset(mask, COMPILER_VALUE_KIND_NULLISH)) return false;
+	if (
+		compilerValueKindMaskIsSubset(
+			mask,
+			COMPILER_VALUE_KIND_OBJECT | COMPILER_VALUE_KIND_SYMBOL,
+		)
+	)
+		return true;
+	return undefined;
 }

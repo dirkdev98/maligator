@@ -20,10 +20,20 @@ import type {
 	CompilerNumericTypedArrayKind,
 	CompilerNumericSortCallback,
 } from "../shared/compiler-instruction.ts";
-import { compilerOperatorInputKindsHaveExactNativeSemantics } from "../shared/compiler-value-kinds.ts";
-import type { CompilerOperatorInputKindMasks } from "../shared/compiler-value-kinds.ts";
+import { compilerValueKindMaskIsValid } from "../shared/compiler-value-kinds.ts";
+import { EFFECT_DOMAINS } from "../shared/effect-summary.ts";
+import {
+	INSTRUCTION_MAY_THROW,
+	INSTRUCTION_MAY_GC,
+	INSTRUCTION_CALLS_USER_CODE,
+	INSTRUCTION_MAY_SUSPEND,
+} from "../shared/instruction-facts.ts";
+import { instructionFactsAreValid } from "../shared/instruction-facts.ts";
+import type { InstructionFacts } from "../shared/instruction-facts.ts";
+import type { CompilerIntegerRange } from "../shared/integer-range.ts";
 import { NATIVE_STRING_SWITCH_CASE_LIMIT } from "../shared/native-string-switch.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
+import { scalarBuiltinInvocationEffects } from "../shared/scalar-builtin-effects.ts";
 import type { CoreTargetClassLayout, CoreTargetRecordUses } from "./core-target-ir.ts";
 import type {
 	ExecutionFunction,
@@ -33,6 +43,7 @@ import type {
 import { collectCompilerFactFlowReport } from "./fact-flow-report.ts";
 import { lowerNativeFunctionStorage } from "./lower-native-storage.ts";
 import type { NativeStoragePlan } from "./lower-native-storage.ts";
+import { nativeGuardedMathArity } from "./native-scalar-operators.ts";
 import { validateNativeStackObject } from "./native-stack-object.ts";
 import { validateNativeStringSpan } from "./native-string-span.ts";
 import {
@@ -819,12 +830,12 @@ export function vmCallProvesBuiltin(
 export interface ProgramImage {
 	readonly runtime: RuntimeImage;
 	readonly native: NativePlan;
+	readonly profiling?: { readonly sites: ReadonlyArray<ProfileSite> };
 	/** What later images of a relocatable program compile against; never serialized. */
 	readonly moduleInterfaces?: ReadonlyArray<CoreModuleInterface>;
 	readonly diagnostics: {
 		sourceCallSites?: ReadonlyArray<SourceCallSite>;
 		profileFunctions?: ReadonlyArray<SourceFunctionOrigin | undefined>;
-		profileSites?: Array<ProfileSite>;
 		profileRemarks?: Array<CompilerRemark>;
 		factFlow?: CompilerFactFlowReport;
 	};
@@ -1187,11 +1198,63 @@ const NATIVE_FALLIBLE_ALLOCATION_EFFECTS: NativeEdgeEffects = Object.freeze({
 	throwing: true,
 });
 
+const NATIVE_BUFFER_WRITE_EFFECTS: NativeEdgeEffects = Object.freeze({
+	...nativeStaticPropertyEffects.probe,
+	invalidation: true,
+});
+
+/** Includes admission and the inline hit; the ordinary CALL miss keeps its own effects. */
+export function nativeGuardedBuiltinEffects(
+	operation: VmGuardedBuiltinOperation,
+): NativeEdgeEffects | undefined {
+	if (operation === "String.prototype.charCodeAt")
+		return nativeStaticPropertyEffects.probe;
+	const descriptor = builtinOperationDescriptor(operation);
+	if (
+		descriptor?.lowerings.includes("guarded-number-predicate") ||
+		descriptor?.lowerings.includes("guarded-boolean")
+	)
+		return operation === "Boolean.prototype.toString"
+			? NATIVE_ALLOCATION_EFFECTS
+			: nativeStaticPropertyEffects.probe;
+	if (descriptor?.lowerings.includes("guarded-data-view-access"))
+		return descriptor.key.startsWith("set")
+			? NATIVE_BUFFER_WRITE_EFFECTS
+			: nativeStaticPropertyEffects.probe;
+	return undefined;
+}
+
 /** Allocation requests a later poll; these creation helpers never collect or reenter. */
 export function nativeInstructionEffects(
 	instruction: BytecodeInstruction,
+	facts?: InstructionFacts,
 ): NativeEdgeEffects {
+	const mask = facts?.effectMask;
+	// Operator helpers implement these semantic effects directly; call and allocation helpers have additional runtime obligations.
+	if (
+		mask !== undefined &&
+		(instruction.opcode === "UNARY" || instruction.opcode === "BINARY")
+	) {
+		return {
+			allocation: (mask & INSTRUCTION_MAY_GC) !== 0,
+			collection: (mask & INSTRUCTION_MAY_GC) !== 0,
+			reentry: (mask & (INSTRUCTION_CALLS_USER_CODE | INSTRUCTION_MAY_SUSPEND)) !== 0,
+			throwing: (mask & INSTRUCTION_MAY_THROW) !== 0,
+			invalidation:
+				(mask & INSTRUCTION_CALLS_USER_CODE) !== 0 ||
+				((mask >>> EFFECT_DOMAINS.length) & ((1 << EFFECT_DOMAINS.length) - 1)) !== 0,
+		};
+	}
 	switch (instruction.opcode) {
+		case "CALL_KNOWN":
+			return !instruction.construct &&
+				instruction.argumentMode === undefined &&
+				scalarBuiltinInvocationEffects(instruction.operation) !== undefined
+				? nativeStaticPropertyEffects.probe
+				: nativeStaticPropertyEffects.miss;
+		case "MATH_UNARY_NUMBER":
+		case "MATH_BINARY_NUMBER":
+			return nativeStaticPropertyEffects.probe;
 		case "MOVE":
 		case "LOAD_CALLEE":
 		case "LOAD_ARGUMENT":
@@ -1391,6 +1454,40 @@ export function targetCopyEdgeReaches(
 	return true;
 }
 
+export function validateNativeInstructionFacts(
+	fn: BytecodeFunction,
+	facts: NativeFunctionPlan["facts"],
+): void {
+	if (facts === undefined) return;
+	if (facts.length !== fn.instructions.length)
+		throw new RangeError("Invalid native instruction facts count");
+	for (const [ip, fact] of facts.entries()) {
+		if (fact === undefined) continue;
+		if (!instructionFactsAreValid(fact))
+			throw new RangeError("Invalid native instruction facts");
+		if (
+			fact.registers?.some(
+				(register) =>
+					!Number.isInteger(register) || register < -1 || register >= fn.registerCount,
+			)
+		)
+			throw new RangeError("Invalid native fact register");
+		if (fact.registers === undefined && fact.inputKindMasks !== undefined) {
+			const op = fn.instructions[ip]!;
+			const count =
+				op.opcode === "UNARY"
+					? 1
+					: op.opcode === "BINARY"
+						? 2
+						: op.opcode === "CALL_KNOWN"
+							? op.arguments.length + 1
+							: -1;
+			if (fact.inputKindMasks.length !== count)
+				throw new RangeError("Invalid native input kind count");
+		}
+	}
+}
+
 export interface NativeFunctionPlan {
 	readonly storage?: NativeStoragePlan;
 	readonly body: BytecodeFunction;
@@ -1451,6 +1548,7 @@ export interface NativeFunctionPlan {
 	};
 	/** One native-only decision per bytecode IP; absent entries mean generic lowering. */
 	readonly instructions: ReadonlyArray<NativeInstructionPlan | undefined>;
+	readonly facts?: ReadonlyArray<InstructionFacts | undefined>;
 	readonly specializations: ReadonlyArray<VmRegion>;
 	readonly regionActions: ReadonlyArray<VmRegionAction>;
 	readonly compilerSiteIds?: ReadonlyArray<string | undefined>;
@@ -1530,9 +1628,12 @@ export interface NativeDirectEntryPlan {
 	};
 	readonly recordParameters?: ReadonlyArray<NativeRecordParameter>;
 	readonly argumentRepresentations?: ReadonlyArray<VmRegisterRepresentation>;
-	readonly operatorInputs?: ReadonlyArray<{
+	readonly instructionFacts?: ReadonlyArray<{
 		readonly instructionIp: number;
-		readonly masks: CompilerOperatorInputKindMasks;
+		readonly masks: ReadonlyArray<number>;
+		readonly results: ReadonlyArray<number>;
+		readonly inputIntegerRanges?: ReadonlyArray<CompilerIntegerRange | undefined>;
+		readonly effectMask: number;
 	}>;
 	readonly constantBooleans?: ReadonlyArray<{
 		readonly instructionIp: number;
@@ -1580,21 +1681,42 @@ export function validateNativeDirectEntry(
 			throw new RangeError("Native direct-entry call override names an incompatible ABI");
 	}
 	const seenInputs = new Set<number>();
-	for (const { instructionIp, masks } of entry.operatorInputs ?? []) {
-		const instruction = fn.instructions[instructionIp];
+	for (const {
+		instructionIp,
+		masks,
+		results,
+		inputIntegerRanges,
+		effectMask,
+	} of entry.instructionFacts ?? []) {
 		if (
+			!instructionFactsAreValid({
+				inputKindMasks: masks,
+				resultKindMasks: results,
+				inputIntegerRanges,
+				effectMask,
+			}) ||
 			seenInputs.has(instructionIp) ||
-			instruction === undefined ||
-			(instruction.opcode !== "BINARY" && instruction.opcode !== "UNARY") ||
-			!compilerOperatorInputKindsHaveExactNativeSemantics(
-				instruction.opcode.toLowerCase(),
-				instruction.operator,
-				masks,
+			!Number.isInteger(instructionIp) ||
+			fn.instructions[instructionIp] === undefined ||
+			![...masks, ...results].every((mask) =>
+				compilerValueKindMaskIsValid(mask, { allowTop: true }),
 			)
 		)
-			throw new RangeError("Invalid native operator input kinds");
+			throw new RangeError("Invalid native instruction kinds");
+		const op = fn.instructions[instructionIp];
+		const count =
+			op.opcode === "BINARY"
+				? 2
+				: op.opcode === "UNARY"
+					? 1
+					: op.opcode === "CALL_KNOWN"
+						? op.arguments.length + 1
+						: undefined;
+		if (count !== undefined && masks.length !== count)
+			throw new RangeError("Invalid native instruction kinds arity");
 		seenInputs.add(instructionIp);
 	}
+
 	const fields = entry.fieldParameters;
 	if (fields !== undefined) {
 		if (
@@ -2397,14 +2519,6 @@ export type NativeInstructionPlan =
 			readonly kind: "exact-typed-array-element";
 			readonly elementKind: CompilerNumericTypedArrayKind;
 	  }
-	| {
-			readonly kind: "exact-operator-input-kinds";
-			readonly inputKindMasks: CompilerOperatorInputKindMasks;
-	  }
-	| {
-			readonly kind: "exact-builtin-input-kinds";
-			readonly inputKindMasks: ReadonlyArray<number>;
-	  }
 	| { readonly kind: "unsigned-arithmetic" }
 	| { readonly kind: "primitive-string-length" }
 	| { readonly kind: "class-layout"; readonly site: CompilerClassLayoutSite };
@@ -2414,6 +2528,59 @@ export function nativePlanKeepsOrdinaryLowering(
 	plan: NativeInstructionPlan | undefined,
 ): boolean {
 	return plan === undefined || plan.kind === "exact-array-element";
+}
+
+/** These lowerings read operands by value and assign final outputs; their fallbacks may still collect. */
+export function nativePlanHasFinalValueStorage(
+	instruction: BytecodeInstruction,
+	plan: NativeInstructionPlan | undefined,
+): boolean {
+	if (plan === undefined || nativePlanKeepsOrdinaryLowering(plan)) return true;
+	switch (plan.kind) {
+		case "call": {
+			const operation = plan.guardedBuiltinCall?.operation;
+			return (
+				instruction.opcode === "CALL" &&
+				operation !== undefined &&
+				plan.numericSortCallback === undefined &&
+				plan.directFunctionIndex === undefined &&
+				plan.directEntryId === undefined &&
+				plan.guardedFunctionIndices === undefined &&
+				plan.directFunctionCall === undefined &&
+				plan.directCallbackFunctionIndex === undefined &&
+				(nativeGuardedBuiltinEffects(operation) !== undefined ||
+					nativeGuardedMathArity(operation, instruction.arguments.length) !== undefined)
+			);
+		}
+		case "exact-own-slot":
+			return (
+				instruction.opcode === "LOAD_PROPERTY_STATIC" ||
+				instruction.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT" ||
+				instruction.opcode === "STORE_PROPERTY_STATIC" ||
+				instruction.opcode === "STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT"
+			);
+		case "exact-array-length":
+		case "contained-fixed-typed-array-length":
+			return (
+				instruction.opcode === "LOAD_PROPERTY_STATIC" ||
+				instruction.opcode === "LOAD_PROPERTY_STATIC_ARRAY_LENGTH"
+			);
+		case "exact-packed-rest-array-length":
+		case "primitive-string-length":
+			return instruction.opcode === "LOAD_PROPERTY_STATIC";
+		case "exact-packed-rest-array-element":
+		case "exact-contained-array-element":
+			return instruction.opcode === "LOAD_PROPERTY";
+		case "exact-typed-array-element":
+		case "contained-fixed-typed-array-element":
+			return (
+				instruction.opcode === "LOAD_PROPERTY" || instruction.opcode === "STORE_PROPERTY"
+			);
+		case "unsigned-arithmetic":
+			return instruction.opcode === "BINARY";
+		default:
+			return false;
+	}
 }
 
 /**
@@ -2889,7 +3056,7 @@ export function lowerVerifiedExecutionToProgramImage(
 		}
 		return { family, guard };
 	});
-	const definition: ProgramImage = {
+	let definition: ProgramImage = {
 		runtime,
 		native: remapNativeConstants(
 			{
@@ -2913,7 +3080,7 @@ export function lowerVerifiedExecutionToProgramImage(
 		definition.diagnostics.profileFunctions = program.functionMap.executionToCore.map(
 			(id) => program.core.function(id).metadata.sourceOrigin,
 		);
-		if (profile) buildProfileMetadata(program.core, context, definition);
+		definition = buildProfileMetadata(program.core, context, definition);
 	}
 	if (profile) {
 		definition.diagnostics.factFlow = collectCompilerFactFlowReport(
@@ -3065,23 +3232,8 @@ function nativeInstructionPlanFromExecution(
 			return instruction.classLayout === undefined
 				? undefined
 				: { kind: "class-layout", site: instruction.classLayout };
-		case "callKnown":
-			return instruction.exactInputKindMasks === undefined
-				? undefined
-				: {
-						kind: "exact-builtin-input-kinds",
-						inputKindMasks: instruction.exactInputKindMasks,
-					};
-		case "unary":
 		case "binary":
-			if (instruction.type === "binary" && instruction.unsignedArithmetic)
-				return { kind: "unsigned-arithmetic" };
-			return instruction.exactInputKindMasks === undefined
-				? undefined
-				: {
-						kind: "exact-operator-input-kinds",
-						inputKindMasks: instruction.exactInputKindMasks,
-					};
+			return instruction.unsignedArithmetic ? { kind: "unsigned-arithmetic" } : undefined;
 		case "createRestArguments":
 			return instruction.virtualPackedRest === true
 				? {
@@ -3111,6 +3263,7 @@ function lowerExecutionFunctionToNativePlan(
 	const nativeInstructions = new Array<NativeInstructionPlan | undefined>(
 		instructions.length,
 	);
+	const facts = new Array<InstructionFacts | undefined>(instructions.length);
 	const nativePlanByRuntimeInstruction = new WeakMap<object, NativeInstructionPlan>();
 	const setNativeInstructionPlan = (ip: number, plan: NativeInstructionPlan): void => {
 		nativeInstructions[ip] = plan;
@@ -3121,6 +3274,7 @@ function lowerExecutionFunctionToNativePlan(
 		for (const instruction of block.instructions) {
 			const ip = instructionIndexByTargetInstruction.get(instruction);
 			if (ip === undefined) continue;
+			facts[ip] = instruction.facts;
 			const nativePlan = nativeInstructionPlanFromExecution(instruction);
 			if (nativePlan !== undefined) setNativeInstructionPlan(ip, nativePlan);
 			compilerSiteIds[ip] = instructionSites?.get(instruction)?.id;
@@ -5385,13 +5539,18 @@ function lowerExecutionFunctionToNativePlan(
 						instructionIp: instructionIndexByTargetInstruction.get(instruction)!,
 					})),
 				}),
-		...(entry.operatorInputs === undefined
+		...(entry.instructionFacts === undefined
 			? {}
 			: {
-					operatorInputs: entry.operatorInputs.map(({ instruction, masks }) => ({
-						instructionIp: instructionIndexByTargetInstruction.get(instruction)!,
-						masks,
-					})),
+					instructionFacts: entry.instructionFacts.map(
+						({ instruction, masks, results, inputIntegerRanges, effectMask }) => ({
+							instructionIp: instructionIndexByTargetInstruction.get(instruction)!,
+							masks,
+							results,
+							...(inputIntegerRanges === undefined ? {} : { inputIntegerRanges }),
+							effectMask,
+						}),
+					),
 				}),
 		parameterRepresentations: [...entry.parameterRepresentations],
 		...(entry.fieldParameters === undefined
@@ -5547,6 +5706,7 @@ function lowerExecutionFunctionToNativePlan(
 				}),
 		gc: { safepoints },
 		instructions: nativeInstructions,
+		facts,
 		specializations: regions,
 		regionActions: vmRegionActions(regions),
 		...(compilerSiteIds.some((site) => site !== undefined) ? { compilerSiteIds } : {}),

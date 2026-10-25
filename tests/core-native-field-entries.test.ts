@@ -50,9 +50,8 @@ describe("own-field native entry contracts", () => {
 				rep === "boxed" ? ("f64" as const) : rep,
 			),
 		};
-		const fn = core.program.function(entry.function);
 		const variant = analyzeCoreNativeEntry(
-			fn,
+			core.program,
 			buildCoreControlFlow(core.program, entry.function, { exceptions: true }),
 			entry.parameterRepresentations,
 			undefined,

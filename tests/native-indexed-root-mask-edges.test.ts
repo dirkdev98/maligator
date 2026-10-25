@@ -106,7 +106,7 @@ function emit(
 	safepoints: Array<Safepoint>,
 	keyRepresentation: VmRegisterRepresentation = "number",
 	plan?: NativeFunctionPlan["instructions"][number],
-	operatorPlan?: NativeFunctionPlan["instructions"][number],
+	operatorPlan?: NonNullable<NativeFunctionPlan["facts"]>[number],
 ): string {
 	const native = createConservativeNativePlan([body]).functions[0]!;
 	return emitCompiledFunction(
@@ -119,9 +119,12 @@ function emit(
 			instructions: body.instructions.map((instruction) =>
 				instruction.opcode === "LOAD_PROPERTY" || instruction.opcode === "STORE_PROPERTY"
 					? plan
-					: instruction.opcode === "BINARY" || instruction.opcode === "UNARY"
-						? operatorPlan
-						: undefined,
+					: undefined,
+			),
+			facts: body.instructions.map((instruction) =>
+				instruction.opcode === "BINARY" || instruction.opcode === "UNARY"
+					? operatorPlan
+					: undefined,
 			),
 			gc: { safepoints },
 		}),
@@ -323,7 +326,7 @@ describe("native numeric indexed-property root publication", () => {
 			[point(0, [0, 5], [0, 3, 5]), point(1, [0, 3, 5], [0, 5]), point(3, [0], [0, 3])],
 			"number",
 			undefined,
-			{ kind: "exact-operator-input-kinds", inputKindMasks: [8, 8] },
+			{ inputKindMasks: [8, 8] },
 		);
 		const slot = privateSlot(source, 3);
 		const create = source.indexOf("r3 = mal_vm_op_create_function(");

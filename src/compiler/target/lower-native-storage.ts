@@ -1,4 +1,6 @@
 import { builtinPrimitiveResult } from "../shared/builtin-registry.ts";
+import { instructionResultKind } from "../shared/instruction-facts.ts";
+import type { InstructionFacts } from "../shared/instruction-facts.ts";
 import {
 	nativeCallbackTransportsMatch,
 	selectNativeCallbackTransports,
@@ -48,11 +50,25 @@ import type { NativeSuspensionPlan } from "./lower-native-suspension.ts";
 import { analyzeNativeBodyFacts } from "./native-body-facts.ts";
 import type { NativeBodyFacts } from "./native-body-facts.ts";
 import {
+	selectNativeControlFlow,
+	nativeControlFlowPlansMatch,
+	nativeControlFlowContract,
+	nativeControlFlowEntries,
+} from "./native-control-flow.ts";
+import type { NativeControlFlowPlan } from "./native-control-flow.ts";
+import {
 	NATIVE_ARITH,
 	NATIVE_BITWISE,
 	NATIVE_COMPARE,
 } from "./native-scalar-operators.ts";
+import { selectNativeStringComparisons } from "./native-string-comparisons.ts";
+import type { NativeStringComparisonPlan } from "./native-string-comparisons.ts";
 import {
+	selectNativeUnusedValues,
+	selectNativeUnusedRegisters,
+} from "./native-unused-values.ts";
+import {
+	validateNativeInstructionFacts,
 	nativeFrameRootRegisters,
 	nativeRecordCallIps,
 	nativeRecordParameterIps,
@@ -62,7 +78,11 @@ import type {
 	NativeFunctionPlan,
 	ProgramImage,
 } from "./program-image.ts";
-import { decodeVmValueOperand, vmInstructionReadRegisters } from "./runtime-image.ts";
+import {
+	decodeVmValueOperand,
+	vmInstructionReadRegisters,
+	vmInstructionWriteRegisters,
+} from "./runtime-image.ts";
 import type { BytecodeInstruction } from "./runtime-image.ts";
 
 export interface NativeScalarStoragePlan {
@@ -98,15 +118,24 @@ export interface NativeStoragePlan
 	readonly entryStableRootRegisters: ReadonlyArray<number>;
 	readonly rootPublicationContinuations: ReadonlyArray<number>;
 	readonly numericWorker: NativeNumericWorkerPlan | undefined;
+	readonly controlFlow?: NativeControlFlowPlan;
+	readonly elidedPureIps: ReadonlyArray<number>;
+	readonly unusedRegisters: ReadonlyArray<number>;
+	readonly stringComparisons: ReadonlyArray<NativeStringComparisonPlan>;
 }
 
 function selectNumericWorker(
 	native: NativeFunctionPlan,
 	entry: NativeDirectEntryPlan,
+	controlFlow: NativeControlFlowPlan | undefined,
+	elided: ReadonlySet<number>,
 ): boolean {
 	const fn = native.body;
+	const unreachable = new Set(controlFlow?.unreachableIps);
+	const branches = new Set(controlFlow?.branches.map((branch) => branch.instructionIp));
+	const last = fn.instructions.findLast((_, ip) => !unreachable.has(ip));
 	if (
-		fn.instructions.length > 48 ||
+		fn.instructions.length - unreachable.size > 48 ||
 		fn.handlers.length > 0 ||
 		fn.capturedCount > 0 ||
 		fn.isGenerator ||
@@ -116,20 +145,21 @@ function selectNumericWorker(
 		entry.argumentRepresentations !== undefined ||
 		entry.resultRepresentation !== "number" ||
 		entry.fieldParameters?.representations.some((rep) => rep !== "number") ||
-		!["RETURN", "JUMP"].includes(fn.instructions.at(-1)?.opcode ?? "") ||
-		!fn.instructions.some((op) => op.opcode === "RETURN")
+		!["RETURN", "JUMP"].includes(last?.opcode ?? "") ||
+		!fn.instructions.some((op, ip) => op.opcode === "RETURN" && !unreachable.has(ip))
 	)
 		return false;
 	const reps = entry.registerRepresentations;
 	const numeric = (local: number) => reps[local] === "number" || reps[local] === "int32";
 	return fn.instructions.every((op, ip) => {
+		if (unreachable.has(ip) || elided.has(ip)) return true;
 		switch (op.opcode) {
 			case "JUMP":
 			case "JUMP_IF":
 				return (
 					op.targetIp >= 0 &&
 					op.targetIp < fn.instructions.length &&
-					(op.opcode === "JUMP" || reps[op.cond] === "boolean")
+					(op.opcode === "JUMP" || branches.has(ip) || reps[op.cond] === "boolean")
 				);
 			case "CREATE_NUMBER":
 			case "CREATE_F64":
@@ -152,7 +182,7 @@ function selectNumericWorker(
 				return (
 					vmInstructionReadRegisters(op).every(
 						(local) => numeric(local) || reps[local] === "boolean",
-					) && pureScalarOperation(op, reps, native.instructions[ip])
+					) && pureScalarOperation(op, reps, native.instructions[ip], native.facts?.[ip])
 				);
 			case "RETURN":
 				return numeric(op.value);
@@ -168,6 +198,9 @@ interface NativeScalarOwnership {
 }
 
 interface NativeStorageBodyFacts extends NativeBodyFacts {
+	readonly accesses: NativeBodyFacts;
+	readonly branchTargets: ReadonlyMap<number, number> | undefined;
+	readonly isReachable: (instructionIp: number) => boolean;
 	readonly captures: NativeCaptureAccessPlan;
 	readonly writeCounts: Uint32Array;
 	readonly definitions: Int32Array;
@@ -176,6 +209,12 @@ interface NativeStorageBodyFacts extends NativeBodyFacts {
 	readonly controlBoundaries: ReadonlyArray<boolean>;
 	readonly predecessorCounts: Uint32Array;
 	readonly controlFlow: NativeStorageControlFlow | undefined;
+}
+
+interface NativeStorageControlProjection {
+	readonly branches: ReadonlyMap<number, number>;
+	readonly unreachable: ReadonlySet<number>;
+	readonly entries: ReadonlySet<number>;
 }
 
 interface NativeStorageControlFlow {
@@ -272,6 +311,7 @@ function storageControlFlow(
 	jumpTargets: ReadonlySet<number>,
 	controlBoundaries: ReadonlyArray<boolean>,
 	handlerTargets: ReadonlyArray<number | undefined>,
+	projection?: NativeStorageControlProjection,
 ): NativeStorageControlFlow | undefined {
 	if (fn.instructions.length === 0 || handlerTargets[0] !== undefined) return undefined;
 	const blocks = new Uint32Array(fn.instructions.length);
@@ -293,7 +333,10 @@ function storageControlFlow(
 	}
 	ends.push(fn.instructions.length - 1);
 	const successors = ends.map((ip, index) => {
+		if (projection?.unreachable.has(ip)) return [];
 		const op = fn.instructions[ip]!;
+		const target = projection?.branches.get(ip);
+		if (target !== undefined) return [blocks[target]!];
 		if (op.opcode === "JUMP") return [blocks[op.targetIp]!];
 		const next = index + 1 < ends.length ? [index + 1] : [];
 		if (op.opcode === "JUMP_IF") return [...next, blocks[op.targetIp]!];
@@ -312,9 +355,13 @@ function storageControlFlow(
 					successors[from]!.push(blocks[handler]!);
 		}
 	}
+	const entries =
+		projection === undefined
+			? [0]
+			: [...new Set([...projection.entries].map((ip) => blocks[ip]!))];
 	const reachable = (): Uint8Array => {
 		const visited = new Uint8Array(ends.length);
-		const pending = [0];
+		const pending = [...entries];
 		while (pending.length > 0) {
 			const current = pending.pop()!;
 			if (visited[current] !== 0) continue;
@@ -325,6 +372,7 @@ function storageControlFlow(
 	};
 	const live = reachable();
 	let dominatesBlock: ReturnType<typeof blockDominators> | undefined;
+	const multipleEntries = entries.length > 1;
 	return {
 		isReachable: (ip) => live[blocks[ip]!] === 1,
 		dominates(definitionIp, useIp) {
@@ -332,16 +380,24 @@ function storageControlFlow(
 			const useBlock = blocks[useIp]!;
 			if (live[definitionBlock] === 0 || live[useBlock] === 0) return false;
 			if (useBlock === definitionBlock) return useIp > definitionIp;
-			if (definitionBlock === 0) return true;
-			dominatesBlock ??= blockDominators(successors);
-			return dominatesBlock(definitionBlock, useBlock);
+			if (definitionBlock === 0 && !multipleEntries) return true;
+			dominatesBlock ??= blockDominators(
+				multipleEntries
+					? [
+							entries.map((entry) => entry + 1),
+							...successors.map((targets) => targets.map((target) => target + 1)),
+						]
+					: successors,
+			);
+			const offset = multipleEntries ? 1 : 0;
+			return dominatesBlock(definitionBlock + offset, useBlock + offset);
 		},
 		isDefinedBeforeReads(readIps, definitionIps) {
 			if (!readIps.every((ip) => live[blocks[ip]!] === 1)) return false;
 			const reads = new Set(readIps);
 			const definitions = new Set(definitionIps);
 			const visited = new Uint8Array(ends.length);
-			const pending = [0];
+			const pending = [...entries];
 			while (pending.length > 0) {
 				const current = pending.pop()!;
 				if (visited[current] !== 0) continue;
@@ -363,9 +419,13 @@ function storageControlFlow(
 	};
 }
 
-function storageBodyFacts(native: NativeFunctionPlan): NativeStorageBodyFacts {
+function storageBodyFacts(
+	native: NativeFunctionPlan,
+	facts = analyzeNativeBodyFacts(native.body),
+	projection?: NativeStorageControlProjection,
+	captures = selectNativeCaptureAccess(native.body, native.functionIndex),
+): NativeStorageBodyFacts {
 	const fn = native.body;
-	const facts = analyzeNativeBodyFacts(fn);
 	const { reads, writes, jumpTargets } = facts;
 	const writeCounts = new Uint32Array(fn.registerCount);
 	const definitions = new Int32Array(fn.registerCount).fill(-1);
@@ -373,6 +433,7 @@ function storageBodyFacts(native: NativeFunctionPlan): NativeStorageBodyFacts {
 	const iteratorDoneRegisters: Array<number> = [];
 	const predecessorCounts = new Uint32Array(fn.instructions.length);
 	for (const [ip, op] of fn.instructions.entries()) {
+		if (projection?.unreachable.has(ip)) continue;
 		if (op.opcode === "ITERATOR_STEP") iteratorDoneRegisters.push(op.doneDst);
 		// Conservative images have no SSA locals and receive operand validation downstream.
 		if (native.storageValues !== undefined) {
@@ -381,6 +442,11 @@ function storageBodyFacts(native: NativeFunctionPlan): NativeStorageBodyFacts {
 				definitions[local] = ip;
 			}
 			for (const local of reads[ip]!) uses[local]!.push(ip);
+		}
+		const target = projection?.branches.get(ip);
+		if (target !== undefined) {
+			predecessorCounts[target]!++;
+			continue;
 		}
 		if (op.opcode === "JUMP" || op.opcode === "JUMP_IF") {
 			predecessorCounts[op.targetIp]!++;
@@ -391,12 +457,20 @@ function storageBodyFacts(native: NativeFunctionPlan): NativeStorageBodyFacts {
 		)
 			predecessorCounts[ip + 1]!++;
 	}
-	const controlBoundaries = fn.instructions.map(scalarControlBoundary);
+	const controlBoundaries = fn.instructions.map(
+		(op, ip) =>
+			!projection?.unreachable.has(ip) &&
+			projection?.branches.get(ip) !== ip + 1 &&
+			scalarControlBoundary(op),
+	);
 	let controlFlow: NativeStorageControlFlow | undefined;
 	let controlFlowAnalyzed = false;
 	return {
 		...facts,
-		captures: selectNativeCaptureAccess(fn, native.functionIndex),
+		accesses: facts,
+		branchTargets: projection?.branches,
+		isReachable: (ip) => !projection?.unreachable.has(ip),
+		captures,
 		writeCounts,
 		definitions,
 		uses,
@@ -412,11 +486,66 @@ function storageBodyFacts(native: NativeFunctionPlan): NativeStorageBodyFacts {
 						jumpTargets,
 						controlBoundaries,
 						facts.handlerTargets,
+						projection,
 					);
 			}
 			return controlFlow;
 		},
 	};
+}
+
+function projectStorageBodyFacts(
+	native: NativeFunctionPlan,
+	body: NativeStorageBodyFacts,
+	controlFlow: NativeControlFlowPlan | undefined,
+	externalEntries: ReadonlyArray<number>,
+): NativeStorageBodyFacts {
+	if (controlFlow === undefined) return body;
+	const fn = native.body;
+	const unreachable = new Set(controlFlow.unreachableIps);
+	const branches = new Map(
+		controlFlow.branches.map(({ instructionIp, targetIp }) => [instructionIp, targetIp]),
+	);
+	const entries = new Set(
+		[...nativeControlFlowEntries(native, body, externalEntries).roots].filter(
+			(ip) => ip >= 0 && ip < fn.instructions.length,
+		),
+	);
+	const external = new Set([...entries].filter((ip) => ip !== 0));
+	const jumpTargets = new Set(external);
+	const branchSources = new Map<number, Array<number>>();
+	for (const [ip, op] of fn.instructions.entries()) {
+		if (unreachable.has(ip)) continue;
+		const fixed = branches.get(ip);
+		const target =
+			fixed === ip + 1
+				? undefined
+				: (fixed ??
+					(op.opcode === "JUMP" || op.opcode === "JUMP_IF" ? op.targetIp : undefined));
+		if (target === undefined) continue;
+		jumpTargets.add(target);
+		const sources = branchSources.get(target) ?? [];
+		sources.push(ip);
+		branchSources.set(target, sources);
+	}
+	return storageBodyFacts(
+		native,
+		{
+			...body.accesses,
+			reads: body.reads.map((reads, ip) =>
+				unreachable.has(ip) || branches.has(ip) ? [] : reads,
+			),
+			writes: body.writes.map((writes, ip) => (unreachable.has(ip) ? [] : writes)),
+			staticPropertyLoadIps: body.staticPropertyLoadIps.filter(
+				(ip) => !unreachable.has(ip),
+			),
+			externalEntries: external,
+			jumpTargets,
+			branchSources,
+		},
+		{ branches, unreachable, entries },
+		body.captures,
+	);
 }
 
 function scalarStorageOwnership(
@@ -447,12 +576,7 @@ function scalarStorageOwnership(
 			handlers[ip] !== undefined ||
 			["CATCH", "TRY_BEGIN", "TRY_END"].includes(op.opcode) ||
 			(plan !== undefined &&
-				![
-					"exact-operator-input-kinds",
-					"unsigned-arithmetic",
-					"call",
-					"construct",
-				].includes(plan.kind))
+				!["unsigned-arithmetic", "call", "construct"].includes(plan.kind))
 		)
 			blocked.add(ip);
 	}
@@ -468,7 +592,11 @@ function scalarStorageOwnership(
 	for (const point of suspension?.points ?? []) {
 		blocked.add(point.instructionIp);
 		for (const register of point.registers) borrowed.add(register);
-		for (const register of body.writes[point.instructionIp]!) borrowed.add(register);
+		// Resume dispatch writes these outputs independently of ordinary reachability.
+		for (const register of vmInstructionWriteRegisters(
+			fn.instructions[point.instructionIp]!,
+		))
+			borrowed.add(register);
 	}
 	return { blocked, borrowed };
 }
@@ -537,7 +665,12 @@ function definitionInitializedRegisters(
 		phiControlFlow !== undefined ? new Map<number, Array<number>>() : undefined;
 	if (phiDefinitions !== undefined)
 		for (const [ip, op] of fn.instructions.entries())
-			if (op.opcode === "MOVE" && writes[op.dst]! > 1 && !blocked.has(ip)) {
+			if (
+				body.isReachable(ip) &&
+				op.opcode === "MOVE" &&
+				writes[op.dst]! > 1 &&
+				!blocked.has(ip)
+			) {
 				const definitions = phiDefinitions.get(op.dst) ?? [];
 				definitions.push(ip);
 				phiDefinitions.set(op.dst, definitions);
@@ -633,6 +766,7 @@ function pureScalarOperation(
 	op: BytecodeInstruction,
 	reps: NativeFunctionPlan["registerRepresentations"],
 	plan?: NativeFunctionPlan["instructions"][number],
+	facts?: InstructionFacts,
 ): boolean {
 	const numeric = (local: number) => reps[local] === "number" || reps[local] === "int32";
 	const numberResult = (local: number) =>
@@ -642,8 +776,7 @@ function pureScalarOperation(
 	const numericInput = (local: number, index: number) =>
 		numeric(local) ||
 		plan?.kind === "unsigned-arithmetic" ||
-		(plan?.kind === "exact-operator-input-kinds" &&
-			plan.inputKindMasks[index] === COMPILER_VALUE_KIND_NUMBER);
+		facts?.inputKindMasks?.[index] === COMPILER_VALUE_KIND_NUMBER;
 	switch (op.opcode) {
 		case "CREATE_NUMBER":
 		case "CREATE_F64":
@@ -772,6 +905,7 @@ function expressionIps(
 				fn.instructions[ip]!,
 				native.registerRepresentations,
 				native.instructions[ip],
+				native.facts?.[ip],
 			)
 				? 2
 				: 1;
@@ -781,8 +915,8 @@ function expressionIps(
 	const fallthroughJumps = new Set<number>();
 	for (const [ip, op] of fn.instructions.entries())
 		if (
-			op.opcode === "JUMP" &&
-			op.targetIp === ip + 1 &&
+			((op.opcode === "JUMP" && op.targetIp === ip + 1) ||
+				body.branchTargets?.get(ip) === ip + 1) &&
 			!blocked.has(ip) &&
 			!blocked.has(ip + 1) &&
 			!safepoints.has(ip) &&
@@ -795,6 +929,7 @@ function expressionIps(
 	const costs = new Map<number, number>();
 	for (const [ip, op] of fn.instructions.entries()) {
 		if (
+			!body.isReachable(ip) ||
 			(candidates !== undefined && !candidates.has(ip)) ||
 			blocked.has(ip) ||
 			!pure(ip) ||
@@ -835,6 +970,7 @@ function expressionIps(
 		if (cost > 16) continue;
 		let safe = true;
 		for (let next = ip + 1; next <= consumerIp; next++) {
+			if (!body.isReachable(next)) continue;
 			if (
 				blocked.has(next) ||
 				(jumpTargets.has(next) && !fallthroughJumps.has(next - 1)) ||
@@ -874,17 +1010,43 @@ export function nativeVariantContract(
 	native: NativeFunctionPlan,
 	entry: NativeDirectEntryPlan,
 ): NativeFunctionPlan {
-	const instructions = [...native.instructions];
-	for (const { instructionIp, masks } of entry.operatorInputs ?? []) {
-		if (instructions[instructionIp]?.kind !== "unsigned-arithmetic")
-			instructions[instructionIp] = {
-				kind: "exact-operator-input-kinds",
-				inputKindMasks: masks,
-			};
+	const instructionOverrides = entry.callOverrides?.length
+		? [...native.instructions]
+		: undefined;
+	const instructions = instructionOverrides ?? native.instructions;
+	const factOverrides = entry.instructionFacts?.length
+		? [
+				...(native.facts ??
+					new Array<InstructionFacts | undefined>(native.instructions.length)),
+			]
+		: undefined;
+	const facts = factOverrides ?? native.facts;
+	for (const {
+		instructionIp,
+		masks,
+		results,
+		inputIntegerRanges,
+		effectMask,
+	} of entry.instructionFacts ?? []) {
+		const canonical = facts?.[instructionIp];
+		if (
+			(canonical?.inputKindMasks !== undefined &&
+				canonical.inputKindMasks.length !== masks.length) ||
+			(canonical?.resultKindMasks !== undefined &&
+				canonical.resultKindMasks.length !== results.length)
+		)
+			throw new RangeError("Invalid native instruction kinds arity");
+		factOverrides![instructionIp] = {
+			...canonical,
+			inputKindMasks: masks,
+			resultKindMasks: results,
+			inputIntegerRanges,
+			effectMask,
+		};
 	}
 	for (const call of entry.callOverrides ?? []) {
 		const canonical = instructions[call.instructionIp];
-		instructions[call.instructionIp] = {
+		instructionOverrides![call.instructionIp] = {
 			kind: "call",
 			...(call.guarded
 				? { guardedFunctionIndices: [call.functionIndex] }
@@ -903,6 +1065,7 @@ export function nativeVariantContract(
 		registerRepresentations: entry.registerRepresentations,
 		gc: entry.gc,
 		instructions,
+		facts,
 		storage: entry.storage,
 		...(entry.resultFields?.forwards === undefined
 			? {}
@@ -919,8 +1082,9 @@ function immediateOperatorResult(
 	op: Extract<BytecodeInstruction, { opcode: "UNARY" | "BINARY" }>,
 	reps: NativeFunctionPlan["registerRepresentations"],
 	plan: NativeFunctionPlan["instructions"][number],
+	facts?: InstructionFacts,
 ): boolean {
-	if (pureScalarOperation(op, reps, plan)) return true;
+	if (pureScalarOperation(op, reps, plan, facts)) return true;
 	const opcode = op.opcode === "UNARY" ? "unary" : "binary";
 	const fixed = compilerOperatorFixedResultKind(opcode, op.operator);
 	if (fixed !== undefined)
@@ -928,15 +1092,7 @@ function immediateOperatorResult(
 			fixed,
 			COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_BOOLEAN,
 		);
-	const masks =
-		plan?.kind === "exact-operator-input-kinds" &&
-		compilerOperatorInputKindsHaveExactNativeSemantics(
-			opcode,
-			op.operator,
-			plan.inputKindMasks,
-		)
-			? plan.inputKindMasks
-			: undefined;
+	const masks = facts?.inputKindMasks;
 	const kind = (local: number, index: number): number => {
 		switch (reps[local]) {
 			case "number":
@@ -973,19 +1129,28 @@ function untracedPrimitiveResultRegisters(
 	const registers = new Set<number>();
 	if (native.storageValues === undefined) return registers;
 	for (const [ip, op] of native.body.instructions.entries()) {
-		if (op.opcode !== "UNARY" && op.opcode !== "BINARY" && op.opcode !== "CALL_KNOWN")
-			continue;
+		if (!body.isReachable(ip) || !("dst" in op)) continue;
+		const resultKind = instructionResultKind(native.facts?.[ip], op.dst);
 		const immediate =
-			op.opcode === "CALL_KNOWN"
-				? !op.construct &&
-					op.argumentMode === undefined &&
-					!body.reads[ip]!.includes(op.dst) &&
-					["number", "boolean"].includes(builtinPrimitiveResult(op.operation) ?? "")
-				: immediateOperatorResult(
-						op,
-						native.registerRepresentations,
-						native.instructions[ip],
-					);
+			!body.reads[ip]!.includes(op.dst) &&
+			(resultKind !== undefined
+				? compilerValueKindMaskIsSubset(
+						resultKind,
+						COMPILER_VALUE_KIND_NUMBER |
+							COMPILER_VALUE_KIND_BOOLEAN |
+							COMPILER_VALUE_KIND_NULLISH,
+					)
+				: op.opcode === "CALL_KNOWN"
+					? !op.construct &&
+						op.argumentMode === undefined &&
+						["number", "boolean"].includes(builtinPrimitiveResult(op.operation) ?? "")
+					: (op.opcode === "UNARY" || op.opcode === "BINARY") &&
+						immediateOperatorResult(
+							op,
+							native.registerRepresentations,
+							native.instructions[ip],
+							native.facts?.[ip],
+						));
 		if (
 			!blocked.has(ip) &&
 			!borrowed.has(op.dst) &&
@@ -1025,6 +1190,7 @@ function rootStorage(
 	rematerializedConstantIps: ReadonlyArray<number>,
 	expressionIps: ReadonlyArray<number>,
 	untracedResults: ReadonlySet<number>,
+	gcCertificate = native.gc,
 ) {
 	const fn = native.body;
 	// Admitted expressions produce untraced scalars; pooled literals have immortal addresses.
@@ -1034,8 +1200,17 @@ function rootStorage(
 		if (!("dst" in op)) throw new Error("Native expression lacks a destination");
 		rootFree.add(op.dst);
 	}
-	let roots = nativeFrameRootRegisters(fn, native).filter(
+	const reachableRoots =
+		native.gc === gcCertificate
+			? undefined
+			: new Set(native.gc.safepoints.flatMap((point) => point.rootRegisters));
+	// The complete source certificate still validates polling in the original CFG.
+	let roots = nativeFrameRootRegisters(fn, {
+		registerRepresentations: native.registerRepresentations,
+		gc: gcCertificate,
+	}).filter(
 		(local) =>
+			(reachableRoots === undefined || reachableRoots.has(local)) &&
 			["boxed", "string"].includes(native.registerRepresentations[local]!) &&
 			!rootFree.has(local),
 	);
@@ -1132,11 +1307,8 @@ function rootStorage(
 	};
 }
 
-// Ordinary call and exact-operator rendering touch operands only within their own instruction.
-const INSTRUCTION_LOCAL_PLAN_KINDS: ReadonlySet<string> = new Set([
-	"call",
-	"exact-operator-input-kinds",
-]);
+// Calls and operators touch operands only within their own instruction.
+const INSTRUCTION_LOCAL_PLAN_KINDS: ReadonlySet<string> = new Set(["call"]);
 
 /** Continuously rooted registers whose emitted storage accesses are their VM reads and writes. */
 function instructionLocalRoots(
@@ -1277,6 +1449,18 @@ function lowerStorage(
 	const fn = native.body;
 	const fastPaths = selectNativeFastPaths(native, entry, stringConstants, body);
 	const expressionWindows = scalarStorageWindows(fastPaths);
+	const externalEntries = [
+		...expressionWindows.flatMap((window) => window.claimedIps),
+		...nativeRecordCallIps(native),
+		...(entry?.resultFields?.allocationIps ?? []),
+	];
+	const controlFlow = selectNativeControlFlow(native, body, stringConstants, {
+		constants: entry?.constantBooleans,
+		externalEntries,
+	});
+	body = projectStorageBodyFacts(native, body, controlFlow, externalEntries);
+	const gcCertificate = native.gc;
+	native = nativeControlFlowContract(native, controlFlow);
 	const jumpTargets = body.jumpTargets;
 	const uses = scalarStorageUses(body, suspension);
 	const immutableOwnership = scalarStorageOwnership(native, body, expressionWindows);
@@ -1317,8 +1501,41 @@ function lowerStorage(
 			rematerializedConstantIps: constants,
 		};
 	};
+	const callTransports = selectNativeCallTransports(native, entries);
+	const scalar = scalarStorage(native);
+	const directHeapObjectIps = selectNativeDirectHeapObjects(native);
+	const roots =
+		stackRoots === "conservative"
+			? CONSERVATIVE_ROOT_STORAGE
+			: rootStorage(
+					native,
+					body,
+					fastPaths,
+					callTransports,
+					scalar.rematerializedConstantIps,
+					scalar.expressionIps,
+					untracedPrimitiveResultRegisters(native, body, ownership),
+					gcCertificate,
+				);
+	const elidedPureIps = selectNativeUnusedValues(native, body, {
+		...ownership,
+		controlFlow,
+		roots: roots.rootRegisters,
+		numberPredicates: new Set(
+			fastPaths.numberPredicates.map((plan) => plan.instructionIp),
+		),
+	});
+	const unusedRegisters = selectNativeUnusedRegisters(native, body, {
+		controlFlow,
+		elidedPureIps,
+		borrowed: ownership.borrowed,
+		roots: roots.rootRegisters,
+	});
 	let numericWorker: NativeNumericWorkerPlan | undefined;
-	if (entry !== undefined && selectNumericWorker(native, entry)) {
+	if (
+		entry !== undefined &&
+		selectNumericWorker(native, entry, controlFlow, new Set(elidedPureIps))
+	) {
 		const worker = nativeNumericWorkerContract(native);
 		const pollingIps = native.gc.safepoints.flatMap((point) =>
 			point.kind === "loop-backedge" ? [point.instructionIp] : [],
@@ -1332,9 +1549,7 @@ function lowerStorage(
 			),
 		};
 	}
-	const callTransports = selectNativeCallTransports(native, entries);
-	const scalar = scalarStorage(native);
-	const directHeapObjectIps = selectNativeDirectHeapObjects(native);
+
 	return {
 		...fastPaths,
 		captures: body.captures,
@@ -1354,17 +1569,7 @@ function lowerStorage(
 		directHeapObjectIps,
 		stackObjects: selectNativeStackObjectStorage(native, new Set(directHeapObjectIps)),
 		stackRoots,
-		...(stackRoots === "conservative"
-			? CONSERVATIVE_ROOT_STORAGE
-			: rootStorage(
-					native,
-					body,
-					fastPaths,
-					callTransports,
-					scalar.rematerializedConstantIps,
-					scalar.expressionIps,
-					untracedPrimitiveResultRegisters(native, body, ownership),
-				)),
+		...roots,
 		rootPublicationContinuations:
 			stackRoots === "conservative"
 				? []
@@ -1377,6 +1582,15 @@ function lowerStorage(
 					]),
 		...scalar,
 		numericWorker,
+		elidedPureIps,
+		unusedRegisters,
+		stringComparisons: selectNativeStringComparisons(native, body, {
+			controlFlow,
+			externalEntries,
+			elided: new Set(elidedPureIps),
+			stringLength: (index) => stringConstants[index]?.length,
+		}),
+		...(controlFlow === undefined ? {} : { controlFlow }),
 	};
 }
 
@@ -1467,6 +1681,7 @@ export function validateNativeStorage(
 	entries: NativeEntryLookup = new Map(),
 	stringConstants: ReadonlyArray<ReadonlyArray<number>> = [],
 ): void {
+	validateNativeInstructionFacts(native.body, native.facts);
 	// Recompute body facts at this trust boundary; callers can replace or mutate an image.
 	const body = storageBodyFacts(native);
 	const sameNumbers = (left: ReadonlyArray<number>, right: ReadonlyArray<number>) =>
@@ -1946,12 +2161,6 @@ export function validateNativeStorage(
 	const matches = (variant: NativeFunctionPlan, entry?: NativeDirectEntryPlan) => {
 		if (variant.storage === undefined) return false;
 		const stackRoots = variant.storage.stackRoots;
-		if (stackRoots === "precise") {
-			validateNativeRootStorage(variant, variant.storage.rootRegisters, variant.storage, {
-				privateRegisters: new Set(variant.storage.privateRegisters),
-				facts: body,
-			});
-		}
 		const suspension = lowerNativeSuspension(variant, body);
 		const selected = lowerStorage(
 			variant,
@@ -1963,19 +2172,54 @@ export function validateNativeStorage(
 			stringConstants,
 			stackRoots,
 		);
+		const projected = projectStorageBodyFacts(variant, body, selected.controlFlow, [
+			...scalarStorageWindows(selected).flatMap((window) => window.claimedIps),
+			...nativeRecordCallIps(variant),
+			...(entry?.resultFields?.allocationIps ?? []),
+		]);
 		if (!sameScalar(variant.storage, selected)) return false;
+		if (!sameNumbers(variant.storage.elidedPureIps, selected.elidedPureIps)) return false;
+		if (!sameNumbers(variant.storage.unusedRegisters, selected.unusedRegisters))
+			return false;
+		if (
+			variant.storage.stringComparisons.length !== selected.stringComparisons.length ||
+			variant.storage.stringComparisons.some((plan, index) => {
+				const expected = selected.stringComparisons[index]!;
+				return (
+					plan.instructionIp !== expected.instructionIp ||
+					plan.register !== expected.register ||
+					plan.length !== expected.length ||
+					plan.kind !== expected.kind
+				);
+			})
+		)
+			return false;
+		if (!nativeControlFlowPlansMatch(variant.storage.controlFlow, selected.controlFlow))
+			return false;
+		const reachable = nativeControlFlowContract(variant, selected.controlFlow);
+		if (stackRoots === "precise") {
+			validateNativeRootStorage(
+				reachable,
+				variant.storage.rootRegisters,
+				variant.storage,
+				{
+					privateRegisters: new Set(variant.storage.privateRegisters),
+					facts: projected,
+				},
+			);
+		}
 		if (
 			!sameNumbers(variant.storage.expressionIps, selected.expressionIps) &&
 			!sameNumbers(
 				variant.storage.expressionIps,
 				expressionIps(
 					variant,
-					body,
-					body.jumpTargets,
+					projected,
+					projected.jumpTargets,
 					false,
 					scalarStorageOwnership(
 						variant,
-						body,
+						projected,
 						scalarStorageWindows(selected),
 						suspension,
 					),
@@ -1995,24 +2239,36 @@ export function validateNativeStorage(
 				: {
 						...selected,
 						...rootStorage(
-							variant,
-							body,
+							reachable,
+							projected,
 							selected,
 							selected.callTransports,
 							variant.storage.rematerializedConstantIps,
 							variant.storage.expressionIps,
 							untracedPrimitiveResultRegisters(
-								variant,
-								body,
+								reachable,
+								projected,
 								scalarStorageOwnership(
 									variant,
-									body,
+									projected,
 									scalarStorageWindows(selected),
 									suspension,
 								),
 							),
+							variant.gc,
 						),
 					};
+		// Retained scalar schedules can add roots; their slot writes remain mandatory.
+		const retainedRoots = new Set(retained.rootRegisters);
+		if (variant.storage.unusedRegisters.some((register) => retainedRoots.has(register)))
+			return false;
+		if (
+			variant.storage.elidedPureIps.some((ip) => {
+				const op = variant.body.instructions[ip]!;
+				return "dst" in op && retainedRoots.has(op.dst);
+			})
+		)
+			return false;
 		return same(variant.storage, retained, suspension);
 	};
 	if (
@@ -2028,10 +2284,10 @@ import {
 	COMPILER_VALUE_KIND_BOOLEAN,
 	compilerOperatorFixedResultKind,
 	compilerValueKindMaskIsSubset,
-	compilerOperatorInputKindsHaveExactNativeSemantics,
 	compilerNumericResultKind,
 	COMPILER_NUMERIC_UNARY_OPERATORS,
 	COMPILER_NUMERIC_BINARY_OPERATORS,
 	COMPILER_VALUE_KIND_STRING,
 	COMPILER_VALUE_KIND_TOP,
+	COMPILER_VALUE_KIND_NULLISH,
 } from "../shared/compiler-value-kinds.ts";

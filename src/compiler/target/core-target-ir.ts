@@ -1,5 +1,8 @@
 import type { CoreCompilationContext } from "../core/core-compilation.ts";
-import type { CoreAllocatedRegion } from "../core/core-ir-regions.ts";
+import type {
+	CoreAllocatedRegion,
+	CoreDirectEntryPlan,
+} from "../core/core-ir-regions.ts";
 import type {
 	CoreBlockId,
 	CoreFunctionId,
@@ -8,7 +11,7 @@ import type {
 } from "../core/core-ir.ts";
 import type { CompilerInstruction } from "../shared/compiler-instruction.ts";
 import { probeReadKindIsNamed } from "../shared/compiler-instruction.ts";
-import type { CompilerOperatorInputKindMasks } from "../shared/compiler-value-kinds.ts";
+import type { CompilerIntegerRange } from "../shared/integer-range.ts";
 
 export function targetInstructionUsesPropertyCache(
 	instruction: CompilerInstruction,
@@ -163,6 +166,13 @@ export interface CoreTargetRecordUses {
 
 export interface CoreTargetDirectEntry {
 	readonly id: number;
+	readonly unreachableCopies?: {
+		readonly source: CoreDirectEntryPlan;
+		readonly copies: ReadonlyArray<{
+			readonly edge: number;
+			readonly copy: CoreTargetParallelCopy;
+		}>;
+	};
 	readonly callOverrides?: ReadonlyArray<{
 		readonly instruction: CompilerInstruction;
 		readonly functionIndex: number;
@@ -199,9 +209,12 @@ export interface CoreTargetDirectEntry {
 		}
 	>;
 	readonly argumentRepresentations?: ReadonlyArray<CoreTargetRegisterRepresentation>;
-	readonly operatorInputs?: ReadonlyArray<{
+	readonly instructionFacts?: ReadonlyArray<{
 		readonly instruction: CompilerInstruction;
-		readonly masks: CompilerOperatorInputKindMasks;
+		readonly masks: ReadonlyArray<number>;
+		readonly results: ReadonlyArray<number>;
+		readonly inputIntegerRanges?: ReadonlyArray<CompilerIntegerRange | undefined>;
+		readonly effectMask: number;
 	}>;
 	readonly constantBooleans?: ReadonlyArray<{
 		readonly instruction: CompilerInstruction;

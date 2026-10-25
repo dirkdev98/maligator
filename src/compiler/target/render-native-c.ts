@@ -12,11 +12,18 @@ import {
 	DATA_VIEW_ACCESSOR_TYPES,
 } from "../shared/builtin-registry.ts";
 import {
+	compilerTypeofComparison,
+	compilerComparisonInputKindsAvoidObjectCoercion,
+	compilerValueKindTruthiness,
 	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_TOP,
 	COMPILER_VALUE_KIND_NULL,
 	COMPILER_VALUE_KIND_STRING,
 	COMPILER_VALUE_KIND_BOOLEAN,
+	COMPILER_VALUE_KIND_BIGINT,
 	COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE,
+	COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE,
+	COMPILER_VALUE_KIND_TO_STRING_PRIMITIVE,
 	compilerValueKindMaskIsSubset,
 	COMPILER_VALUE_KIND_NUMBER_OR_UNDEFINED,
 	COMPILER_VALUE_KIND_NULLISH,
@@ -25,6 +32,18 @@ import {
 	compilerOperatorIsPrimitiveStringConcatenation,
 } from "../shared/compiler-value-kinds.ts";
 import type { CompilerValueKindMask } from "../shared/compiler-value-kinds.ts";
+import {
+	instructionInputIsInt32,
+	instructionInputIntegerRange,
+	instructionInputKind,
+} from "../shared/instruction-facts.ts";
+import type { InstructionFacts } from "../shared/instruction-facts.ts";
+import type { CompilerIntegerRange } from "../shared/integer-range.ts";
+import {
+	compilerIntegerRangeIsInt32,
+	compilerIntegerRangeTruthiness,
+	compilerIntegerRangeComparison,
+} from "../shared/integer-range.ts";
 import {
 	knownBuiltinErrors,
 	knownBuiltinErrorPrototype,
@@ -90,6 +109,8 @@ import {
 } from "./lower-native-storage.ts";
 import type { NativeStringTransformPlan } from "./lower-native-string-transforms.ts";
 import type { NativeSuspensionPlan } from "./lower-native-suspension.ts";
+import { nativeControlFlowContract } from "./native-control-flow.ts";
+import type { NativeControlFlowPlan } from "./native-control-flow.ts";
 import { NATIVE_ENUMERATION_SNAPSHOT_CAPACITY } from "./native-object-enumeration-snapshot.ts";
 import type { NativeObjectEnumerationSnapshotPlan } from "./native-object-enumeration-snapshot.ts";
 import { nativeInactiveRootMasks, nativeRootMaskWordHex } from "./native-root-masks.ts";
@@ -105,6 +126,7 @@ import {
 	NUMBER_PREDICATES,
 	boxedNumberPredicateExpression,
 	nativeNumberPredicateExpression,
+	nativePrimitiveNumberExpression,
 } from "./native-scalar-operators.ts";
 import {
 	nativeInstructionSourceRanges,
@@ -112,6 +134,7 @@ import {
 } from "./native-source-map.ts";
 import type { NativeSourceRange } from "./native-source-map.ts";
 import type { NativeSpanConsumer } from "./native-span-continuation.ts";
+import type { NativeStringComparisonPlan } from "./native-string-comparisons.ts";
 import { nativeValueConversion } from "./native-value-transport.ts";
 import type { NativeValueConversion } from "./native-value-transport.ts";
 import { profileOperationForInstruction } from "./profile-metadata.ts";
@@ -119,6 +142,7 @@ import {
 	nativeFrameRootRegisters,
 	nativeLoopUpdateTransportsValue,
 	nativeInstructionEffects,
+	nativeGuardedBuiltinEffects,
 	nativeRecordAliases,
 	sameNativeRecordLayout,
 	vmCallProvesBuiltin,
@@ -306,7 +330,7 @@ function deferredRestArgumentRootIp(native: NativeFunctionPlan): number | undefi
 		if (ip === materialization || ip < 0 || ip >= seen.length || seen[ip] !== 0) continue;
 		seen[ip] = 1;
 		const instruction = fn.instructions[ip]!;
-		const effects = nativeInstructionEffects(instruction);
+		const effects = nativeInstructionEffects(instruction, native.facts?.[ip]);
 		if (
 			safepoints.get(ip) === "loop-backedge" ||
 			(safepoints.has(ip) && (effects.collection || effects.reentry))
@@ -663,6 +687,102 @@ function isNumericRep(rep: RegisterRep): boolean {
 	return rep === "number" || rep === "int32";
 }
 
+function nativeNumberTruthiness(
+	value: string,
+	range: CompilerIntegerRange | undefined,
+	integer = false,
+): string {
+	const constant = compilerIntegerRangeTruthiness(range);
+	return constant !== undefined
+		? String(constant)
+		: integer || range !== undefined
+			? `(${value} != 0)`
+			: `mal_number_is_truthy(${value})`;
+}
+
+// Operand expressions are pure reads; JavaScript producers have already executed.
+function nativeTruthiness(
+	value: string,
+	representation: RegisterRep,
+	kind: CompilerValueKindMask,
+	range?: CompilerIntegerRange,
+): string {
+	const ranged = compilerIntegerRangeTruthiness(range);
+	if (ranged !== undefined) return String(ranged);
+	if (representation === "boolean") return value;
+	if (isNumericRep(representation))
+		return nativeNumberTruthiness(value, range, representation === "int32");
+	const mask =
+		representation === "string"
+			? COMPILER_VALUE_KIND_STRING
+			: range !== undefined
+				? COMPILER_VALUE_KIND_NUMBER
+				: kind || COMPILER_VALUE_KIND_TOP;
+	const constant = compilerValueKindTruthiness(mask);
+	if (constant !== undefined) return String(constant);
+	if (mask === COMPILER_VALUE_KIND_TOP) return `mal_value_is_truthy(${value})`;
+	const nil = (kinds: number): string =>
+		kinds === COMPILER_VALUE_KIND_UNDEFINED
+			? `mal_value_is_undefined(${value})`
+			: kinds === COMPILER_VALUE_KIND_NULL
+				? `mal_value_is_null(${value})`
+				: `mal_value_is_nil(${value})`;
+	let remaining =
+		mask &
+		~(
+			COMPILER_VALUE_KIND_NUMBER |
+			COMPILER_VALUE_KIND_BOOLEAN |
+			COMPILER_VALUE_KIND_STRING |
+			COMPILER_VALUE_KIND_BIGINT
+		);
+	const terminal = compilerValueKindTruthiness(remaining);
+	let expression =
+		remaining === 0
+			? undefined
+			: terminal === undefined
+				? `!${nil(remaining & COMPILER_VALUE_KIND_NULLISH)}`
+				: String(terminal);
+	for (const scalar of [
+		COMPILER_VALUE_KIND_BIGINT,
+		COMPILER_VALUE_KIND_STRING,
+		COMPILER_VALUE_KIND_BOOLEAN,
+		COMPILER_VALUE_KIND_NUMBER,
+	]) {
+		if ((mask & scalar) === 0) continue;
+		const test =
+			scalar === COMPILER_VALUE_KIND_BIGINT
+				? `mal_value_is_bigint(${value})`
+				: scalar === COMPILER_VALUE_KIND_STRING
+					? `mal_value_is_string(${value})`
+					: scalar === COMPILER_VALUE_KIND_BOOLEAN
+						? `mal_value_is_boolean(${value})`
+						: `mal_ops_is_number(${value})`;
+		const truth =
+			scalar === COMPILER_VALUE_KIND_BIGINT
+				? `(mal_bigint_value(mal_value_to_bigint(${value})) != 0)`
+				: scalar === COMPILER_VALUE_KIND_STRING
+					? `(mal_string_length(mal_value_to_string(${value})) != 0)`
+					: scalar === COMPILER_VALUE_KIND_BOOLEAN
+						? `mal_value_to_boolean(${value})`
+						: nativeNumberTruthiness(`mal_ops_number_as_f64(${value})`, range);
+		if (expression === undefined) expression = truth;
+		else if (expression === "false")
+			expression =
+				scalar === COMPILER_VALUE_KIND_BOOLEAN
+					? `(${value} == MAL_VALUE_TRUE)`
+					: `(!${nil(remaining)} && ${truth})`;
+		else if (expression === "true")
+			expression =
+				scalar === COMPILER_VALUE_KIND_BOOLEAN
+					? `(${value} != MAL_VALUE_FALSE)`
+					: `(!${test} || ${truth})`;
+		else expression = `(${test} ? ${truth} : ${expression})`;
+
+		remaining |= scalar;
+	}
+	return expression ?? `mal_value_is_truthy(${value})`;
+}
+
 export interface BackendProfileDecision {
 	instructionIndex: number;
 	operation: string;
@@ -672,7 +792,22 @@ export interface BackendProfileDecision {
 	details?: Record<string, string | number | boolean>;
 }
 
-function nativeMathUnaryExpr(operation: string, argument: string): string | null {
+function nativeMathUnaryExpr(
+	operation: string,
+	argument: string,
+	range?: CompilerIntegerRange,
+): string | null {
+	if (range !== undefined) {
+		if (operation === "Math.abs") {
+			if (range.minimum >= 0) return argument;
+			if (range.maximum < 0) return `-(${argument})`;
+		}
+		if (operation === "Math.sign") {
+			if (range.minimum > 0) return "1.0";
+			if (range.maximum < 0) return "-1.0";
+			if (range.minimum === 0 && range.maximum === 0) return "0.0";
+		}
+	}
 	const nativeCall = MATH_UNARY_NATIVE_CALL.get(operation);
 	if (nativeCall === undefined) return null;
 	if (nativeCall !== null) return `${nativeCall}(${argument})`;
@@ -744,25 +879,37 @@ function nativeMathBinaryExpr(
 	operation: string,
 	left: string,
 	right: string,
+	ranges?: ReadonlyArray<CompilerIntegerRange | undefined>,
 ): string | null {
 	if (!MATH_BINARY_OPERATIONS.has(operation)) return null;
+	const a = ranges?.[0],
+		b = ranges?.[1];
+	if (a !== undefined && b !== undefined) {
+		if (a.maximum <= b.minimum) return operation === "Math.min" ? left : right;
+		if (b.maximum <= a.minimum) return operation === "Math.min" ? right : left;
+	}
 	return `mal_number_min_max(${left}, ${right}, ${operation === "Math.max"})`;
 }
 
 function nativeNumericBuiltinExpr(
 	operation: string,
 	arguments_: ReadonlyArray<string>,
+	ranges?: ReadonlyArray<CompilerIntegerRange | undefined>,
 ): string | null {
 	if (NUMBER_PREDICATES.has(operation))
 		return arguments_.length === 0
 			? "false"
 			: arguments_.length === 1
-				? nativeNumberPredicateExpression(operation, arguments_[0]!)
+				? ranges?.[0] !== undefined
+					? operation === "Number.isNaN"
+						? "false"
+						: "true"
+					: nativeNumberPredicateExpression(operation, arguments_[0]!)
 				: null;
 	if (arguments_.length === 1 && MATH_UNARY_NATIVE_CALL.has(operation))
-		return nativeMathUnaryExpr(operation, arguments_[0]!);
+		return nativeMathUnaryExpr(operation, arguments_[0]!, ranges?.[0]);
 	if (arguments_.length === 2 && MATH_BINARY_OPERATIONS.has(operation))
-		return nativeMathBinaryExpr(operation, arguments_[0]!, arguments_[1]!);
+		return nativeMathBinaryExpr(operation, arguments_[0]!, arguments_[1]!, ranges);
 	const kernel = MATH_NUMBER_KERNELS[operation];
 	if (kernel !== undefined && arguments_.length === kernel[1])
 		return `${kernel[0]}(${arguments_.join(", ")})`;
@@ -1084,8 +1231,6 @@ export function cF64Literal(value: number): string {
 	return value.toExponential();
 }
 
-const THROWING_UNARY_OPERATORS = new Set(["+", "tonumeric", "tostring"]);
-
 /**
  * The relational comparisons. When BOTH operands are boxed (no static proof
  * either is a number) the backend still speculates a numeric compare for these —
@@ -1096,6 +1241,16 @@ const THROWING_UNARY_OPERATORS = new Set(["+", "tonumeric", "tostring"]);
  * speculates every comparison, equality included: there the numeric prior is real.
  */
 const RELATIONAL_COMPARE = new Set<string>(["<", "<=", ">", ">="]);
+const BOXED_COMPARE: Readonly<Record<string, string>> = {
+	"<": "mal_ops_less_than",
+	"<=": "mal_ops_less_equal",
+	">": "mal_ops_greater_than",
+	">=": "mal_ops_greater_equal",
+	"==": "mal_ops_equal",
+	"!=": "mal_ops_not_equal",
+	"===": "mal_ops_strict_equal",
+	"!==": "mal_ops_strict_not_equal",
+};
 
 // Exponentiation has a separate proven-input path because its target representation stays boxed.
 function producesNumberFromNumbers(operator: string): boolean {
@@ -1130,19 +1285,32 @@ function isLengthPropertyName(units: ReadonlyArray<number> | undefined): boolean
 	);
 }
 
-function nativeNumberExpr(operator: string, left: string, right: string): string | null {
+function numberToInt32(value: string, isInt32 = false): string {
+	return isInt32 ? `((i32) ${value})` : `mal_ops_number_to_i32(${value})`;
+}
+
+function nativeNumberExpr(
+	operator: string,
+	left: string,
+	right: string,
+	inputIntegerRanges?: ReadonlyArray<CompilerIntegerRange | undefined>,
+): string | null {
 	const arith = NATIVE_ARITH[operator];
 	if (arith !== undefined) {
 		return `${left} ${arith} ${right}`;
 	}
-	const bitwise = nativeInt32Expr(
-		operator,
-		`mal_ops_number_to_i32(${left})`,
-		`mal_ops_number_to_i32(${right})`,
+	const left32 = numberToInt32(
+		left,
+		compilerIntegerRangeIsInt32(inputIntegerRanges?.[0]),
 	);
+	const right32 = numberToInt32(
+		right,
+		compilerIntegerRangeIsInt32(inputIntegerRanges?.[1]),
+	);
+	const bitwise = nativeInt32Expr(operator, left32, right32);
 	if (bitwise !== null) return `(f64) (${bitwise})`;
 	if (operator === ">>>") {
-		return `(f64) ((u32) mal_ops_number_to_i32(${left}) >> (mal_ops_number_to_i32(${right}) & 0x1F))`;
+		return `(f64) ((u32) ${left32} >> (${right32} & 0x1F))`;
 	}
 	if (operator === "%") {
 		return `mal_number_remainder(${left}, ${right})`;
@@ -1322,6 +1490,7 @@ function emitNumericLoopRegion(
 	propertyCache: string,
 	// The C statement that performs the binding load at an instruction.
 	bindingLoad: (ip: number) => string,
+	facts: NativeFunctionPlan["facts"],
 ): ReadonlyArray<string> {
 	const members = new Set(plan.claimedIps.filter((ip) => ip !== plan.entryIp));
 	const order = numericLoopOrder(fn, plan.id, members, true);
@@ -1415,10 +1584,10 @@ function emitNumericLoopRegion(
 				: "f64";
 	const num = (register: number) =>
 		integral.has(register) ? `(f64) ${local(register)}` : local(register);
-	const intOf = (register: number) =>
+	const intOf = (register: number, ip: number) =>
 		integral.has(register)
 			? `mal_safe_integer_to_i32(${local(register)})`
-			: `mal_ops_number_to_i32(${local(register)})`;
+			: numberToInt32(local(register), instructionInputIsInt32(facts?.[ip], register));
 	const guards: Array<string> = [];
 	const typedViewGuards: Array<string> = [];
 	const arrayViewGuards: Array<string> = [];
@@ -1645,12 +1814,15 @@ function emitNumericLoopRegion(
 		if (exit !== undefined) return `{ ${id}_exit = ${exit}; break; }`;
 		return innerHeaders.size > 0 ? `goto ${label(mode, ip)};` : `${id}_b${ip} = true;`;
 	};
-	const truthy = (register: number) =>
+	const truthy = (register: number, ip: number): string =>
 		kindOf(register) === "boolean"
 			? local(register)
-			: floating && !integral.has(register)
-				? `mal_number_is_truthy(${local(register)})`
-				: `${local(register)} != 0`;
+			: nativeNumberTruthiness(
+					local(register),
+					instructionInputIntegerRange(facts?.[ip], register),
+					!floating || integral.has(register),
+				);
+
 	const int32 = (register: number) => `mal_safe_integer_to_i32(${local(register)})`;
 	const checked = (call: string, dst: number) =>
 		`if (__builtin_expect(!${call.replace("%DST%", `&${local(dst)}`)}, 0)) ${restart}`;
@@ -1669,7 +1841,7 @@ function emitNumericLoopRegion(
 					const [first, second] = builtin.arguments.map((argument) =>
 						argument.kind === "number"
 							? `(i32) ${argument.value | 0}`
-							: intOf(argument.register),
+							: intOf(argument.register, ip),
 					);
 					return builtin.operation === "Math.imul"
 						? `${local(op.dst)} = (i64) (i32) ((u32) ${first} * (u32) ${second});`
@@ -1680,7 +1852,11 @@ function emitNumericLoopRegion(
 						? cF64Literal(argument.value)
 						: num(argument.register),
 				);
-				const expression = nativeNumericBuiltinExpr(builtin.operation, arguments_);
+				const expression = nativeNumericBuiltinExpr(
+					builtin.operation,
+					arguments_,
+					facts?.[ip]?.inputIntegerRanges?.slice(op.opcode === "CALL_KNOWN" ? 1 : 0),
+				);
 				if (expression === null)
 					throw new Error("Invalid numeric loop builtin expression");
 				return `${local(op.dst)} = ${expression};`;
@@ -1759,6 +1935,12 @@ function emitNumericLoopRegion(
 			case "MOVE":
 				return `${local(op.dst)} = ${integral.has(op.dst) ? local(op.src) : num(op.src)};`;
 			case "BINARY": {
+				const compared = compilerIntegerRangeComparison(
+					op.operator,
+					instructionInputIntegerRange(facts?.[ip], op.left),
+					instructionInputIntegerRange(facts?.[ip], op.right),
+				);
+				if (compared !== undefined) return `${local(op.dst)} = ${compared};`;
 				const compare = NATIVE_COMPARE[op.operator];
 				if (compare !== undefined) {
 					const exact = integral.has(op.left) && integral.has(op.right);
@@ -1767,7 +1949,7 @@ function emitNumericLoopRegion(
 				const left = local(op.left);
 				const right = local(op.right);
 				if (floating && integral.has(op.dst)) {
-					const shift = `((u32) ${intOf(op.right)} & 31u)`;
+					const shift = `((u32) ${intOf(op.right, ip)} & 31u)`;
 					switch (op.operator) {
 						case "+":
 						case "-":
@@ -1775,19 +1957,24 @@ function emitNumericLoopRegion(
 						case "&":
 						case "|":
 						case "^":
-							return `${local(op.dst)} = (i64) (${intOf(op.left)} ${op.operator} ${intOf(op.right)});`;
+							return `${local(op.dst)} = (i64) (${intOf(op.left, ip)} ${op.operator} ${intOf(op.right, ip)});`;
 						case "<<":
-							return `${local(op.dst)} = (i64) (i32) ((u32) ${intOf(op.left)} << ${shift});`;
+							return `${local(op.dst)} = (i64) (i32) ((u32) ${intOf(op.left, ip)} << ${shift});`;
 						case ">>":
-							return `${local(op.dst)} = (i64) (${intOf(op.left)} >> ${shift});`;
+							return `${local(op.dst)} = (i64) (${intOf(op.left, ip)} >> ${shift});`;
 						case ">>>":
-							return `${local(op.dst)} = (i64) ((u32) ${intOf(op.left)} >> ${shift});`;
+							return `${local(op.dst)} = (i64) ((u32) ${intOf(op.left, ip)} >> ${shift});`;
 						default:
 							throw new Error(`Invalid integral loop operator ${op.operator}`);
 					}
 				}
 				if (floating) {
-					const expression = nativeNumberExpr(op.operator, num(op.left), num(op.right));
+					const expression = nativeNumberExpr(
+						op.operator,
+						num(op.left),
+						num(op.right),
+						facts?.[ip]?.inputIntegerRanges,
+					);
 					if (expression === null) throw new Error("Invalid numeric loop operator");
 					return `${local(op.dst)} = ${expression};`;
 				}
@@ -1821,7 +2008,7 @@ function emitNumericLoopRegion(
 			case "UNARY": {
 				const source = floating ? num(op.src) : local(op.src);
 				if (floating && op.operator === "~")
-					return `${local(op.dst)} = ${integral.has(op.dst) ? "(i64)" : "(f64)"} ~${intOf(op.src)};`;
+					return `${local(op.dst)} = ${integral.has(op.dst) ? "(i64)" : "(f64)"} ~${intOf(op.src, ip)};`;
 				if (floating && integral.has(op.dst)) {
 					if (op.operator !== "increment" && op.operator !== "decrement")
 						throw new Error(`Invalid integral loop operator ${op.operator}`);
@@ -1836,9 +2023,9 @@ function emitNumericLoopRegion(
 								: op.operator === "decrement"
 									? `${source} - 1.0`
 									: op.operator === "~"
-										? `(f64) ~mal_ops_number_to_i32(${source})`
+										? `(f64) ~${numberToInt32(source, instructionInputIsInt32(facts?.[ip], op.src))}`
 										: op.operator === "!"
-											? `!(${truthy(op.src)})`
+											? `!(${truthy(op.src, ip)})`
 											: source;
 					return `${local(op.dst)} = ${expression};`;
 				}
@@ -1852,15 +2039,21 @@ function emitNumericLoopRegion(
 					case "~":
 						return `${local(op.dst)} = (i64) ~${int32(op.src)};`;
 					case "!":
-						return `${local(op.dst)} = !(${truthy(op.src)});`;
+						return `${local(op.dst)} = !(${truthy(op.src, ip)});`;
 					default:
 						return `${local(op.dst)} = ${source};`;
 				}
 			}
 			case "JUMP":
 				return reach(op.targetIp, ip, mode);
-			case "JUMP_IF":
-				return `if (${truthy(op.cond)}) { ${reach(op.targetIp, ip, mode)} } else { ${reach(ip + 1, ip, mode)} }`;
+			case "JUMP_IF": {
+				const ranged = compilerIntegerRangeTruthiness(
+					instructionInputIntegerRange(facts?.[ip], op.cond),
+				);
+				return ranged === undefined
+					? `if (${truthy(op.cond, ip)}) { ${reach(op.targetIp, ip, mode)} } else { ${reach(ip + 1, ip, mode)} }`
+					: reach(ranged ? op.targetIp : ip + 1, ip, mode);
+			}
 			default:
 				throw new Error(`Invalid native integer loop instruction ${op.opcode}`);
 		}
@@ -2033,6 +2226,7 @@ function emitNumberRecordRegion(
 	reps: ReadonlyArray<VmRegisterRepresentation>,
 	propertyCache: string,
 	shapeSnapshots: Set<number> | undefined,
+	facts: NativeFunctionPlan["facts"],
 ): ReadonlyArray<string> {
 	const members = new Set(plan.claimedIps);
 	const order = numberRecordOrder(fn, plan.id, plan.exitIp, (ip) => members.has(ip));
@@ -2105,10 +2299,14 @@ function emitNumberRecordRegion(
 	);
 	const headSet = new Set(heads);
 	const reach = (ip: number) => (ip === plan.exitIp ? "" : `${id}_b${ip} = true;`);
-	const truthy = (register: number) =>
+	const truthy = (register: number, ip: number): string =>
 		kindOf(register) === "boolean"
 			? local(register)
-			: `mal_number_is_truthy(${local(register)})`;
+			: nativeNumberTruthiness(
+					local(register),
+					instructionInputIntegerRange(facts?.[ip], register),
+				);
+
 	const statement = (ip: number): string => {
 		const op = fn.instructions[ip]!;
 		switch (op.opcode) {
@@ -2122,7 +2320,11 @@ function emitNumberRecordRegion(
 						? cF64Literal(argument.value)
 						: local(argument.register),
 				);
-				const expression = nativeNumericBuiltinExpr(builtin.operation, arguments_);
+				const expression = nativeNumericBuiltinExpr(
+					builtin.operation,
+					arguments_,
+					facts?.[ip]?.inputIntegerRanges?.slice(op.opcode === "CALL_KNOWN" ? 1 : 0),
+				);
 				if (expression === null)
 					throw new Error("Invalid numeric record builtin expression");
 				return `${local(op.dst)} = ${expression};`;
@@ -2141,10 +2343,21 @@ function emitNumberRecordRegion(
 			case "MOVE":
 				return `${local(op.dst)} = ${local(op.src)};`;
 			case "BINARY": {
+				const compared = compilerIntegerRangeComparison(
+					op.operator,
+					instructionInputIntegerRange(facts?.[ip], op.left),
+					instructionInputIntegerRange(facts?.[ip], op.right),
+				);
+				if (compared !== undefined) return `${local(op.dst)} = ${compared};`;
 				const compare = NATIVE_COMPARE[op.operator];
 				const expression =
 					compare === undefined
-						? nativeNumberExpr(op.operator, local(op.left), local(op.right))
+						? nativeNumberExpr(
+								op.operator,
+								local(op.left),
+								local(op.right),
+								facts?.[ip]?.inputIntegerRanges,
+							)
 						: `${local(op.left)} ${compare} ${local(op.right)}`;
 				if (expression === null) throw new Error("Invalid native number record operator");
 				return `${local(op.dst)} = ${expression};`;
@@ -2159,16 +2372,22 @@ function emitNumberRecordRegion(
 							: op.operator === "decrement"
 								? `${source} - 1.0`
 								: op.operator === "~"
-									? `(f64) ~mal_ops_number_to_i32(${source})`
+									? `(f64) ~${numberToInt32(source, instructionInputIsInt32(facts?.[ip], op.src))}`
 									: op.operator === "!"
-										? `!${truthy(op.src)}`
+										? `!${truthy(op.src, ip)}`
 										: source;
 				return `${local(op.dst)} = ${expression};`;
 			}
 			case "JUMP":
 				return reach(op.targetIp);
-			case "JUMP_IF":
-				return `if (${truthy(op.cond)}) { ${reach(op.targetIp)} } else { ${reach(ip + 1)} }`;
+			case "JUMP_IF": {
+				const ranged = compilerIntegerRangeTruthiness(
+					instructionInputIntegerRange(facts?.[ip], op.cond),
+				);
+				return ranged === undefined
+					? `if (${truthy(op.cond, ip)}) { ${reach(op.targetIp)} } else { ${reach(ip + 1)} }`
+					: reach(ranged ? op.targetIp : ip + 1);
+			}
 			default:
 				throw new Error(`Invalid native number record instruction ${op.opcode}`);
 		}
@@ -2428,8 +2647,12 @@ function emitCompiledVariant(
 	}
 	if (directEntry !== undefined) validateNativeDirectEntry(fn, directEntry);
 	validateNativeLiteralSwitches(fn, native);
-	const variantContract =
+	const variant =
 		directEntry === undefined ? native : nativeVariantContract(native, directEntry);
+	const variantContract = nativeControlFlowContract(
+		variant,
+		variant.storage?.controlFlow,
+	);
 	const variantStorage = variantContract.storage;
 	if (variantStorage === undefined)
 		throw new Error("Native rendering requires a lowered storage plan");
@@ -2446,6 +2669,8 @@ function emitCompiledVariant(
 				rematerializedConstantIps: worker.rematerializedConstantIps,
 			}
 		: variantStorage;
+	const elidedResults = new Set(storage.unusedRegisters);
+	const elidedIps = new Set(storage.elidedPureIps);
 
 	// A function with its own captured slots needs a per-activation MalEnv node
 	// (function_index == this function) for LOAD/STORE_CAPTURED(owner == self) and
@@ -2896,10 +3121,11 @@ function emitCompiledVariant(
 		argumentUnlink + (needsRootFrame ? "vm->root_frame_head = __gc_frame.prev; " : "");
 
 	const profileDecisions: Array<BackendProfileDecision> = [];
-	const expressionIps = new Set([
-		...storage.expressionIps,
-		...storage.rematerializedConstantIps,
-	]);
+	const expressionIps = new Set(
+		[...storage.expressionIps, ...storage.rematerializedConstantIps].filter(
+			(ip) => !elidedIps.has(ip),
+		),
+	);
 	const expressionRegisters = new Map<number, string>(
 		[...expressionIps].map((ip) => {
 			const op = fn.instructions[ip]!;
@@ -2912,6 +3138,7 @@ function emitCompiledVariant(
 					nativeContract.instructions[ip],
 					relocation,
 					suffix,
+					nativeContract.facts?.[ip],
 				),
 			];
 		}),
@@ -2923,6 +3150,7 @@ function emitCompiledVariant(
 		nativeContract.specializations,
 		nativeContract.regionActions,
 		nativeContract.instructions,
+		nativeContract.facts,
 		inactiveRootMasks,
 		rootMaskStatements.statements,
 		gcSafepointKinds,
@@ -2973,6 +3201,9 @@ function emitCompiledVariant(
 		directClosures,
 		!conservativeRoots,
 		records,
+		storage.controlFlow,
+		storage.elidedPureIps,
+		storage.stringComparisons,
 	);
 	if (body === null) {
 		return null;
@@ -3104,6 +3335,7 @@ function emitCompiledVariant(
 	const definedRegisters: Array<number> = [];
 	const privateLocals: Array<string> = [];
 	for (let i = 0; i < fn.registerCount; i++) {
+		if (elidedResults.has(i)) continue;
 		const slot = slotOf.get(i);
 		const expression = expressionRegisters.get(i);
 		if (expression !== undefined) {
@@ -3139,6 +3371,7 @@ function emitCompiledVariant(
 	}
 	const zeroedSlots = new Set<number>();
 	for (let i = fn.parameterCount; i < fn.registerCount; i++) {
+		if (elidedResults.has(i)) continue;
 		if (expressionRegisters.has(i)) continue;
 		// A fresh frame scans every root slot until its first mask, so slot-backed roots start zeroed.
 		if (definitionInitialized.has(i) && (privateRegisters.has(i) || !slotOf.has(i)))
@@ -3275,14 +3508,18 @@ function emitCompiledVariant(
 									fastSourceMap = ranges;
 								}
 							: undefined,
+					facts: nativeContract.facts,
 					directEntry,
+					controlFlow: storage.controlFlow,
+					elidedPureIps: storage.elidedPureIps,
+					stringComparisons: storage.stringComparisons,
 					// A specialized-only body is omitted after emission, taking its fast path with it.
 					trySymbol:
 						directEntry === undefined && native.specializedOnly !== true
 							? `${symbol}_try`
 							: undefined,
 					calleeTry: (ip, callee) => {
-						const plan = native.instructions[ip];
+						const plan = nativeContract.instructions[ip];
 						const target = plan?.kind === "call" ? plan.directFunctionIndex : undefined;
 						return target !== undefined && fastTryTargets.has(target)
 							? {
@@ -3339,7 +3576,6 @@ function emitCompiledVariant(
 					functionIndex: relocation.functionIndex(index),
 					globalIndex: (global) => relocation.globalIndex(global),
 					stringValue: (string) => relocation.stringValue(string),
-					stringLength: (string) => stringConstants[string]?.length,
 					lengthProperty: (string) => isLengthPropertyName(stringConstants[string]),
 					capturePrologue: [
 						...initializeFixedCaptureOwners(analysis.captures, relocation, true, "env"),
@@ -3446,11 +3682,16 @@ function renderScalarExpression(
 	plan?: NativeInstructionPlan,
 	relocation: NativeRelocationExpressions = UNRELOCATED_NATIVE_EXPRESSIONS,
 	suffix = "",
+	facts?: InstructionFacts,
 ): string {
 	const number = (local: number) =>
 		reps[local] === "boxed" ? `mal_ops_number_as_f64(r${local})` : `(f64) r${local}`;
 	const int32 = (local: number) =>
-		reps[local] === "int32" ? `r${local}` : `mal_ops_number_to_i32(${number(local)})`;
+		reps[local] === "int32"
+			? `r${local}`
+			: instructionInputIsInt32(facts, local)
+				? `((i32) ${number(local)})`
+				: `mal_ops_number_to_i32(${number(local)})`;
 	const numberResult = (dst: number, expression: string) =>
 		reps[dst] === "boxed" ? `mal_ops_number_value(${expression})` : expression;
 	const booleanResult = (dst: number, expression: string) =>
@@ -3479,14 +3720,18 @@ function renderScalarExpression(
 				: String(op.value);
 		case "MOVE":
 			return `r${op.src}`;
-		case "UNARY":
+		case "UNARY": {
 			if (op.operator === "!")
 				return booleanResult(
 					op.dst,
-					reps[op.src] === "boolean"
-						? `!r${op.src}`
-						: `!mal_number_is_truthy(${number(op.src)})`,
+					`!(${nativeTruthiness(
+						`r${op.src}`,
+						reps[op.src]!,
+						instructionInputKind(facts, op.src) ?? COMPILER_VALUE_KIND_TOP,
+						instructionInputIntegerRange(facts, op.src),
+					)})`,
 				);
+
 			if (op.operator === "~")
 				return reps[op.dst] === "int32"
 					? `~${int32(op.src)}`
@@ -3499,7 +3744,14 @@ function renderScalarExpression(
 					`${number(op.src)} ${op.operator === "increment" ? "+" : "-"} 1.0`,
 				);
 			return numberResult(op.dst, `${op.operator === "-" ? "-" : ""}(${number(op.src)})`);
+		}
 		case "BINARY": {
+			const compared = compilerIntegerRangeComparison(
+				op.operator,
+				instructionInputIntegerRange(facts, op.left),
+				instructionInputIntegerRange(facts, op.right),
+			);
+			if (compared !== undefined) return booleanResult(op.dst, String(compared));
 			if (plan?.kind === "unsigned-arithmetic") {
 				const expression = nativeUnsignedExpr(
 					op.operator,
@@ -3536,7 +3788,11 @@ function renderScalarExpression(
 			return numberResult(op.dst, expression);
 		}
 		case "MATH_UNARY_NUMBER": {
-			const expression = nativeMathUnaryExpr(op.operation, number(op.src));
+			const expression = nativeMathUnaryExpr(
+				op.operation,
+				number(op.src),
+				instructionInputIntegerRange(facts, op.src),
+			);
 			if (expression === null)
 				throw new Error("Invalid lowered native unary Math expression");
 			return expression;
@@ -3546,6 +3802,7 @@ function renderScalarExpression(
 				op.operation,
 				number(op.left),
 				number(op.right),
+				facts?.inputIntegerRanges,
 			);
 			if (expression === null)
 				throw new Error("Invalid lowered native binary Math expression");
@@ -3567,18 +3824,46 @@ function renderNumericLeaf(
 		throw new Error("Numeric worker rendering requires a storage plan");
 	const leaf = storage.numericWorker;
 	if (leaf === undefined || leaf.pollingIps.length > 0) return null;
+	const unreachable = new Set(storage.controlFlow?.unreachableIps);
+	const elided = new Set(storage.elidedPureIps);
+	const branches = new Map(
+		storage.controlFlow?.branches.map(({ instructionIp, targetIp }) => [
+			instructionIp,
+			targetIp,
+		]),
+	);
 	const reps = entry.registerRepresentations;
 	const scalar = (r: number) => ["number", "int32", "boolean"].includes(reps[r]!);
 	const number = (r: number) => `(f64) r${r}`;
-	const expressionIps = new Set([
-		...leaf.expressionIps,
-		...leaf.rematerializedConstantIps,
-	]);
+	const expressionIps = new Set(
+		[...leaf.expressionIps, ...leaf.rematerializedConstantIps].filter(
+			(ip) => !unreachable.has(ip) && !elided.has(ip),
+		),
+	);
+	const registers = new Set<number>();
+	for (const [ip, op] of fn.instructions.entries()) {
+		if (unreachable.has(ip) || elided.has(ip)) continue;
+		for (const register of [
+			...(branches.has(ip) ? [] : vmInstructionReadRegisters(op)),
+			...vmInstructionWriteRegisters(op),
+		])
+			registers.add(register);
+	}
 	const expressions = new Map(
 		[...expressionIps].map((ip) => {
 			const op = fn.instructions[ip]!;
 			if (!("dst" in op)) throw new Error("Native expression lacks a destination");
-			return [op.dst, renderScalarExpression(op, reps, native.instructions[ip])];
+			return [
+				op.dst,
+				renderScalarExpression(
+					op,
+					reps,
+					native.instructions[ip],
+					undefined,
+					"",
+					native.facts?.[ip],
+				),
+			];
 		}),
 	);
 	const fallthroughJumps = new Set(leaf.fallthroughJumpIps);
@@ -3593,8 +3878,19 @@ function renderNumericLeaf(
 	const starts: Array<number> = [];
 	const ips: Array<number> = [];
 	for (const [ip, op] of fn.instructions.entries()) {
+		if (unreachable.has(ip)) continue;
 		if (jumpTargets.has(ip)) body.push(`L${ip}:;`);
+		if (elided.has(ip)) continue;
 		if (expressionIps.has(ip) || fallthroughJumps.has(ip)) continue;
+		const target = branches.get(ip);
+		if (target !== undefined) {
+			if (target !== ip + 1) {
+				starts.push(body.length);
+				ips.push(ip);
+				body.push(`goto L${target};`);
+			}
+			continue;
+		}
 		let line: string;
 		switch (op.opcode) {
 			case "JUMP":
@@ -3624,7 +3920,7 @@ function renderNumericLeaf(
 			case "UNARY":
 			case "MATH_UNARY_NUMBER":
 			case "MATH_BINARY_NUMBER":
-				line = `r${op.dst} = ${renderScalarExpression(op, reps, native.instructions[ip])};`;
+				line = `r${op.dst} = ${renderScalarExpression(op, reps, native.instructions[ip], undefined, "", native.facts?.[ip])};`;
 				break;
 			case "RETURN":
 				line = `return ${number(op.value)};`;
@@ -3639,7 +3935,7 @@ function renderNumericLeaf(
 	const declarations: Array<string> = [];
 	const definitionInitialized = new Set(leaf.definitionInitializedRegisters);
 	for (const [r, rep] of reps.entries()) {
-		if (!scalar(r) || r < fn.parameterCount) continue;
+		if (!scalar(r) || r < fn.parameterCount || !registers.has(r)) continue;
 		const expression = expressions.get(r);
 		if (expression !== undefined) {
 			declarations.push(`#define r${r} (${expression})`);
@@ -4322,6 +4618,9 @@ function emitResumableFunction(
 	relocatable: NativeRelocatableEmission | false = false,
 ): CompiledFunction | null {
 	nativeFrameRootRegisters(fn, native);
+	native = nativeControlFlowContract(native, native.storage?.controlFlow);
+	const elidedResults = new Set(native.storage!.unusedRegisters);
+	const elidedIps = new Set(native.storage!.elidedPureIps);
 	const isAsyncFunction = fn.isAsync && !fn.isGenerator;
 	const symbol = `mal_compiled_${relocatable === false ? index : relocatable.symbolStem}${suffix}`;
 	const relocation = nativeRelocationExpressions(
@@ -4374,14 +4673,23 @@ function emitResumableFunction(
 	};
 	const storage = native.storage!;
 	const expressions = new Map<number, string>(
-		[...storage.expressionIps, ...storage.rematerializedConstantIps].map((ip) => {
-			const op = fn.instructions[ip]!;
-			if (!("dst" in op)) throw new Error("Native expression lacks a destination");
-			return [
-				op.dst,
-				renderScalarExpression(op, reps, native.instructions[ip], relocation, suffix),
-			];
-		}),
+		[...storage.expressionIps, ...storage.rematerializedConstantIps]
+			.filter((ip) => !elidedIps.has(ip))
+			.map((ip) => {
+				const op = fn.instructions[ip]!;
+				if (!("dst" in op)) throw new Error("Native expression lacks a destination");
+				return [
+					op.dst,
+					renderScalarExpression(
+						op,
+						reps,
+						native.instructions[ip],
+						relocation,
+						suffix,
+						native.facts?.[ip],
+					),
+				];
+			}),
 	);
 	const body = emitBody(
 		fn,
@@ -4390,6 +4698,7 @@ function emitResumableFunction(
 		native.specializations,
 		native.regionActions,
 		native.instructions,
+		native.facts,
 		inactiveRootMasks,
 		rootMaskStatements.statements,
 		new Map(
@@ -4436,6 +4745,10 @@ function emitResumableFunction(
 		undefined,
 		undefined,
 		storage.stackRoots !== "conservative",
+		undefined,
+		storage.controlFlow,
+		storage.elidedPureIps,
+		storage.stringComparisons,
 	);
 	if (body === null) {
 		return null;
@@ -4520,6 +4833,7 @@ function emitResumableFunction(
 	}
 	const definitionInitialized = new Set(storage.definitionInitializedRegisters);
 	for (let i = 0; i < fn.registerCount; i++) {
+		if (elidedResults.has(i)) continue;
 		const slot = registerSlots.get(i);
 		const expression = expressions.get(i);
 		if (expression !== undefined) lines.push(`#define r${i} (${expression})`);
@@ -5111,7 +5425,7 @@ function emitStringSwitch(
 	>,
 	stringConstants: ReadonlyArray<ReadonlyArray<number>>,
 	suffix: string,
-	representation: RegisterRep,
+	selectorKind: CompilerValueKindMask,
 	relocation: NativeRelocationExpressions,
 	branch: (target: number, branchIp: number) => string,
 ):
@@ -5121,7 +5435,7 @@ function emitStringSwitch(
 	  }
 	| undefined {
 	const fallback = branch(site.defaultIp, site.endIp);
-	if (representation !== "boxed" && representation !== "string")
+	if ((selectorKind & COMPILER_VALUE_KIND_STRING) === 0)
 		return { lines: [fallback], strategy: "non-string" };
 	const labels: Array<{
 		stringIndex: number;
@@ -5167,7 +5481,7 @@ function emitStringSwitch(
 					: "direct";
 	const value = `__switch_${site.instructionIp}`;
 	const lines: Array<string> = [];
-	if (representation === "boxed")
+	if (selectorKind !== COMPILER_VALUE_KIND_STRING)
 		lines.push(`if (!mal_value_is_string(r${site.selector})) { ${fallback} }`);
 	lines.push(`MalString *${value} = mal_value_to_string(r${site.selector});`);
 	const compare = (label: (typeof labels)[number]) =>
@@ -5564,6 +5878,7 @@ function emitBody(
 	specializations: ReadonlyArray<VmRegion>,
 	regionActions: ReadonlyArray<VmRegionAction>,
 	nativeInstructions: ReadonlyArray<NativeInstructionPlan | undefined>,
+	nativeFacts: NativeFunctionPlan["facts"],
 	inactiveRootMasks: ReadonlyMap<number, NativeInactiveRootMask>,
 	inactiveRootMaskStatements: ReadonlyMap<NativeInactiveRootMask, string>,
 	gcSafepointKinds: ReadonlyMap<
@@ -5634,7 +5949,15 @@ function emitBody(
 	// A conservative-root callee services pending polls at its entry instead.
 	callReturnPolls = true,
 	records: NativeRecordStorage = NO_NATIVE_RECORD_STORAGE,
+	controlFlow?: NativeControlFlowPlan,
+	elidedPureIps: ReadonlyArray<number> = [],
+	stringComparisons: ReadonlyArray<NativeStringComparisonPlan> = [],
 ): EmittedBody | null {
+	const elided = new Set(elidedPureIps);
+	const unreachable = new Set(controlFlow?.unreachableIps);
+	const branchTargets = new Map(
+		controlFlow?.branches.map(({ instructionIp, targetIp }) => [instructionIp, targetIp]),
+	);
 	const callTransportByIp = new Map(
 		callTransports.map((plan) => [plan.instructionIp, plan]),
 	);
@@ -5671,7 +5994,14 @@ function emitBody(
 	for (const candidate of topology.numericFusionCandidates) {
 		if (
 			nativeInstructions[candidate.action.id]?.kind === "unsigned-arithmetic" ||
-			nativeInstructions[candidate.finishIp]?.kind === "unsigned-arithmetic"
+			nativeInstructions[candidate.finishIp]?.kind === "unsigned-arithmetic" ||
+			[candidate.action.id, candidate.finishIp].some((ip) => {
+				const masks = nativeFacts?.[ip]?.inputKindMasks;
+				return (
+					masks !== undefined &&
+					masks.some((mask) => (mask & COMPILER_VALUE_KIND_NUMBER) === 0)
+				);
+			})
 		)
 			continue;
 		const actions = fusionCandidatesByIp.get(candidate.instructionIp) ?? [];
@@ -6242,40 +6572,9 @@ function emitBody(
 			? literalSwitches?.map((site) => [site.instructionIp, site])
 			: [],
 	);
-	// A rematerialized string constant reads as that constant everywhere, so a strict
-	// comparison against it can reject other lengths inline.
-	const stringConstantRegisters = new Map<number, number>();
-	for (const ip of [...expressionIps, ...rematerializedConstantIps]) {
-		const instruction = fn.instructions[ip]!;
-		if (instruction.opcode === "CREATE_STRING")
-			stringConstantRegisters.set(instruction.dst, instruction.stringIndex);
-	}
-	// Reused registers hold many values, but a straight-line definition still reaches.
-	const stringConstantOperands = new Map<number, Map<number, number>>();
-	for (const [ip, instruction] of fn.instructions.entries()) {
-		if (
-			instruction.opcode !== "BINARY" ||
-			(instruction.operator !== "===" && instruction.operator !== "!==")
-		)
-			continue;
-		for (const register of [instruction.left, instruction.right]) {
-			if (stringConstantRegisters.has(register)) continue;
-			for (
-				let previous = ip - 1;
-				previous >= 0 && !jumpTargets.has(previous + 1);
-				previous--
-			) {
-				const definition = fn.instructions[previous]!;
-				if (!vmInstructionWriteRegisters(definition).includes(register)) continue;
-				if (definition.opcode === "CREATE_STRING") {
-					const operands = stringConstantOperands.get(ip) ?? new Map<number, number>();
-					operands.set(register, definition.stringIndex);
-					stringConstantOperands.set(ip, operands);
-				}
-				break;
-			}
-		}
-	}
+	const stringComparisonsByIp = new Map(
+		stringComparisons.map((plan) => [plan.instructionIp, plan]),
+	);
 	// Finite dispatch compares one loaded callee against each candidate class's method,
 	// through separate guards or a call plan's guarded targets.
 	const polymorphicMethodLoads = new Set<number>();
@@ -6320,15 +6619,14 @@ function emitBody(
 		outgoingRootPublication: undefined,
 		rootedOutputReloads: undefined,
 		loopBackedgeInactiveRootMask: undefined,
-		mathCallInactiveRootMask: undefined,
 		valueGuardInactiveRootMask: undefined,
-		knownOwnSlotLoadInactiveRootMask: undefined,
+		guardedPropertyLoadInactiveRootMask: undefined,
 		staticPropertyLoadInactiveRootMask: undefined,
 		privateAccessInactiveRootMask: undefined,
 		indexedPropertyInactiveRootMask: undefined,
 		staticPropertyWriteInactiveRootMask: undefined,
-		charCodeAtCallRootPublication: undefined,
-		charCodeAtCallInactiveRootMask: undefined,
+		guardedCallRootPublication: undefined,
+		guardedCallInactiveRootMask: undefined,
 		iteratorStepRootPublication: undefined,
 		iteratorStepInactiveRootMask: undefined,
 		stackObjectSite: undefined,
@@ -6394,8 +6692,7 @@ function emitBody(
 		privateFieldReserveCount: undefined,
 		slowPathFramePosition: undefined,
 		polymorphicMethodLoad: false,
-		stringConstantRegisters,
-		stringConstantOperands,
+		stringComparisons: stringComparisonsByIp,
 		relocation,
 		closureChainTests: nativeClosureChainTests(
 			fn,
@@ -6449,6 +6746,7 @@ function emitBody(
 			if (slot !== undefined) activeFieldSlots.delete(slot);
 		for (const slot of fieldAllocations.get(ip - 1)?.boxedSlots ?? [])
 			if (slot !== undefined) activeFieldSlots.add(slot);
+		if (unreachable.has(ip)) continue;
 		if (jumpTargets.has(ip)) {
 			lines.push(`L${ip}:;`);
 			// Control can arrive with different published frame metadata.
@@ -6465,9 +6763,21 @@ function emitBody(
 				}
 			}
 		}
+		if (elided.has(ip)) continue;
 		const literalSwitch = switches.get(ip);
 		if (literalSwitch !== undefined) {
 			knownPublishedPrivateRoots.clear();
+			const selector = literalSwitch.selector;
+			const representation = reps[selector]!;
+			const selectorFacts = nativeFacts?.[literalSwitch.instructionIp + 1];
+			const selectorKind =
+				representation === "boxed"
+					? (instructionInputKind(selectorFacts, selector) ?? COMPILER_VALUE_KIND_TOP)
+					: representation === "string"
+						? COMPILER_VALUE_KIND_STRING
+						: representation === "boolean"
+							? COMPILER_VALUE_KIND_BOOLEAN
+							: COMPILER_VALUE_KIND_NUMBER;
 			const branch = (target: number, branchIp: number) => {
 				const mask = inactiveRootMasks.get(branchIp);
 				if (gcSafepointKinds.get(branchIp) !== "loop-backedge") return `goto L${target};`;
@@ -6491,7 +6801,7 @@ function emitBody(
 					literalSwitch,
 					stringConstants,
 					suffix,
-					reps[literalSwitch.selector]!,
+					selectorKind,
 					relocation,
 					branch,
 				);
@@ -6512,24 +6822,39 @@ function emitBody(
 				}
 			} else {
 				const fallback = branch(literalSwitch.defaultIp, literalSwitch.endIp);
-				const selector = literalSwitch.selector;
-				const representation = reps[selector];
-				if (representation === "boolean" || representation === "string")
+				const range = instructionInputIntegerRange(selectorFacts, selector);
+				const matchPossible =
+					range === undefined ||
+					literalSwitch.cases.some(
+						(label) => label.value >= range.minimum && label.value <= range.maximum,
+					);
+				if ((selectorKind & COMPILER_VALUE_KIND_NUMBER) === 0 || !matchPossible)
 					lines.push(fallback);
 				else {
-					if (representation === "boxed")
+					if (selectorKind !== COMPILER_VALUE_KIND_NUMBER)
 						lines.push(`if (!mal_ops_is_number(r${selector})) { ${fallback} }`);
 					const value = `__switch_${ip}`;
-					lines.push(
-						`f64 ${value} = ${representation === "boxed" ? `mal_ops_number_as_f64(r${selector})` : `r${selector}`};`,
-					);
-					if (representation !== "int32")
+					const number =
+						representation === "boxed"
+							? `mal_ops_number_as_f64(r${selector})`
+							: `r${selector}`;
+					const int32 = representation === "int32" || compilerIntegerRangeIsInt32(range);
+					if (!int32) {
+						lines.push(`f64 ${value} = ${number};`);
 						lines.push(
 							`if (!(${value} >= -2147483648.0 && ${value} <= 2147483647.0 && ${value} == trunc(${value}))) { ${fallback} }`,
 						);
-					lines.push(`switch ((i32) ${value}) {`);
+					}
+					lines.push(
+						`switch (${representation === "int32" ? number : `(i32) (${int32 ? number : value})`}) {`,
+					);
 					const seen = new Set<number>();
 					for (const [index, label] of literalSwitch.cases.entries()) {
+						if (
+							range !== undefined &&
+							(label.value < range.minimum || label.value > range.maximum)
+						)
+							continue;
 						if (seen.has(label.value)) continue;
 						seen.add(label.value);
 						lines.push(
@@ -6571,6 +6896,7 @@ function emitBody(
 						).join(" ");
 					throw new Error("Invalid numeric loop binding load");
 				},
+				nativeFacts,
 			))
 				lines.push(`    ${line}`);
 		const numberRecord = numberRecordRegionById.get(ip);
@@ -6581,6 +6907,7 @@ function emitBody(
 				reps,
 				nativeBodyReference(resources, "propertyCache"),
 				loopInstructions[ip] === 1 ? shapeSnapshots : undefined,
+				nativeFacts,
 			))
 				lines.push(`    ${line}`);
 		const safepointKind = gcSafepointKinds.get(ip);
@@ -6608,7 +6935,9 @@ function emitBody(
 			incomingRootPublication.length <= MAX_DEFERRED_ROOT_PUBLICATION_STORES;
 		const deferredPropertyRoots =
 			deferrableRoots &&
-			fn.instructions[ip]!.opcode === "LOAD_PROPERTY_STATIC" &&
+			(fn.instructions[ip]!.opcode === "LOAD_PROPERTY_STATIC" ||
+				fn.instructions[ip]!.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT" ||
+				fn.instructions[ip]!.opcode === "LOAD_PROPERTY_STATIC_ARRAY_LENGTH") &&
 			!staticPropertyProjectionConflicts(ip);
 		const indexedPropertyInstruction = fn.instructions[ip]!;
 		// Dense growth can allocate, but its allocator never collects inside the probe.
@@ -6633,6 +6962,8 @@ function emitBody(
 		const deferredStaticPropertyWriteRoots =
 			deferrableRoots &&
 			(staticPropertyWriteInstruction.opcode === "STORE_PROPERTY_STATIC" ||
+				staticPropertyWriteInstruction.opcode ===
+					"STORE_PROPERTY_STATIC_KNOWN_OWN_SLOT" ||
 				(hasPrivateRoots &&
 					staticPropertyWriteInstruction.opcode === "DEFINE_PROPERTY" &&
 					staticPropertyWriteInstruction.enumerable &&
@@ -6669,21 +7000,32 @@ function emitBody(
 			!nativeArrayPairDestructureActionByIp.has(ip) &&
 			!nativeIteratorEntryPairVirtualizationActionByIp.has(ip) &&
 			!nativeRegExpIteratorProjectionActionByIp.has(ip);
-		const charCodeAtInstruction = fn.instructions[ip]!;
-		const charCodeAtPlan = nativeInstructions[ip];
-		const deferredCharCodeAtRoots =
+		const guardedCallInstruction = fn.instructions[ip]!;
+		const guardedCallPlan = nativeInstructions[ip];
+		const guardedCallEffects =
+			guardedCallPlan?.kind === "call" && guardedCallPlan.guardedBuiltinCall !== undefined
+				? nativeGuardedBuiltinEffects(guardedCallPlan.guardedBuiltinCall.operation)
+				: undefined;
+		const deferredGuardedCallRoots =
 			deferrableRoots &&
 			coro === null &&
-			charCodeAtInstruction.opcode === "CALL" &&
-			charCodeAtPlan?.kind === "call" &&
-			vmCallProvesBuiltin(charCodeAtPlan, "String.prototype.charCodeAt") &&
+			guardedCallInstruction.opcode === "CALL" &&
+			guardedCallPlan?.kind === "call" &&
+			(mathCalls.has(ip) ||
+				(guardedCallEffects !== undefined &&
+					!guardedCallEffects.collection &&
+					!guardedCallEffects.reentry)) &&
 			// Rooted outputs alias shadow storage before dispatch, including reused inputs.
 			!rootedOutputs.some((register) =>
-				vmInstructionUsesRegister(charCodeAtInstruction, register),
+				vmInstructionUsesRegister(guardedCallInstruction, register),
 			) &&
-			charCodeAtPlan.numericSortCallback === undefined &&
+			guardedCallPlan.numericSortCallback === undefined &&
+			guardedCallPlan.directFunctionIndex === undefined &&
+			guardedCallPlan.directEntryId === undefined &&
+			guardedCallPlan.guardedFunctionIndices === undefined &&
+			guardedCallPlan.directFunctionCall === undefined &&
+			guardedCallPlan.directCallbackFunctionIndex === undefined &&
 			!fieldCallSites.has(ip) &&
-			!mathCalls.has(ip) &&
 			!nativeStringCharCodeAtChainActionByIp.has(ip) &&
 			!nativeStringSplitCursorActionByIp.has(ip) &&
 			!nativeStringSplitProjectionActionByIp.has(ip) &&
@@ -6691,7 +7033,7 @@ function emitBody(
 			!nativeRegExpIteratorProjectionActionByIp.has(ip) &&
 			!nativeStringSpanActionByIp.has(ip) &&
 			!nativeBuiltinCollectionCallChainActionByIp.has(ip);
-		const effects = nativeInstructionEffects(fn.instructions[ip]!);
+		const effects = nativeInstructionEffects(fn.instructions[ip]!, nativeFacts?.[ip]);
 		const publishesIncomingRoots =
 			safepointKind !== "loop-backedge" &&
 			!deferredPropertyRoots &&
@@ -6702,7 +7044,7 @@ function emitBody(
 			!deferredValueGuardRoots &&
 			!deferredForInRoots &&
 			!deferredIteratorRoots &&
-			!deferredCharCodeAtRoots &&
+			!deferredGuardedCallRoots &&
 			(effects.collection || effects.reentry);
 		// Only rendered strings escape this map, so the body can update it in place.
 		if (rootPublication !== undefined && hasPrivateRoots) {
@@ -6752,18 +7094,14 @@ function emitBody(
 			deferredIteratorRoots && inactiveRootMask !== lastPublishedInactiveRootMask
 				? inactiveRootMask
 				: undefined;
-		const charCodeAtCallInactiveRootMask =
-			deferredCharCodeAtRoots && inactiveRootMask !== lastPublishedInactiveRootMask
+		const guardedCallInactiveRootMask =
+			(deferredGuardedCallRoots ||
+				(safepointKind === "operation" && mathCalls.has(ip))) &&
+			inactiveRootMask !== lastPublishedInactiveRootMask
 				? inactiveRootMask
 				: undefined;
 		const loopBackedgeInactiveRootMask =
 			safepointKind === "loop-backedge" &&
-			inactiveRootMask !== lastPublishedInactiveRootMask
-				? inactiveRootMask
-				: undefined;
-		const mathCallInactiveRootMask =
-			safepointKind === "operation" &&
-			mathCalls.has(ip) &&
 			inactiveRootMask !== lastPublishedInactiveRootMask
 				? inactiveRootMask
 				: undefined;
@@ -6773,9 +7111,10 @@ function emitBody(
 			inactiveRootMask !== lastPublishedInactiveRootMask
 				? inactiveRootMask
 				: undefined;
-		const knownOwnSlotLoadInactiveRootMask =
+		const guardedPropertyLoadInactiveRootMask =
 			safepointKind === "operation" &&
-			fn.instructions[ip]!.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT" &&
+			(fn.instructions[ip]!.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT" ||
+				fn.instructions[ip]!.opcode === "LOAD_PROPERTY_STATIC_ARRAY_LENGTH") &&
 			inactiveRootMask !== lastPublishedInactiveRootMask
 				? inactiveRootMask
 				: undefined;
@@ -6807,15 +7146,14 @@ function emitBody(
 			inactiveRootMask !== undefined &&
 			loopBackedgeInactiveRootMask === undefined &&
 			operatorInactiveRootMask === undefined &&
-			mathCallInactiveRootMask === undefined &&
 			valueGuardInactiveRootMask === undefined &&
-			knownOwnSlotLoadInactiveRootMask === undefined &&
+			guardedPropertyLoadInactiveRootMask === undefined &&
 			staticPropertyLoadInactiveRootMask === undefined &&
 			privateAccessInactiveRootMask === undefined &&
 			indexedPropertyInactiveRootMask === undefined &&
 			staticPropertyWriteInactiveRootMask === undefined &&
 			iteratorStepInactiveRootMask === undefined &&
-			charCodeAtCallInactiveRootMask === undefined &&
+			guardedCallInactiveRootMask === undefined &&
 			inactiveRootMask !== lastPublishedInactiveRootMask
 		) {
 			lines.push(
@@ -6826,15 +7164,14 @@ function emitBody(
 			inactiveRootMask !== undefined &&
 			loopBackedgeInactiveRootMask === undefined &&
 			operatorInactiveRootMask === undefined &&
-			mathCallInactiveRootMask === undefined &&
 			valueGuardInactiveRootMask === undefined &&
-			knownOwnSlotLoadInactiveRootMask === undefined &&
+			guardedPropertyLoadInactiveRootMask === undefined &&
 			staticPropertyLoadInactiveRootMask === undefined &&
 			privateAccessInactiveRootMask === undefined &&
 			indexedPropertyInactiveRootMask === undefined &&
 			staticPropertyWriteInactiveRootMask === undefined &&
 			iteratorStepInactiveRootMask === undefined &&
-			charCodeAtCallInactiveRootMask === undefined
+			guardedCallInactiveRootMask === undefined
 		) {
 			lastPublishedInactiveRootMask = inactiveRootMask;
 		}
@@ -6844,10 +7181,12 @@ function emitBody(
 		emittedInstructions.add(ip);
 		let operatorMaskEmitted = false;
 		instructionContext.nativePlan = nativeInstructions[ip];
+		instructionContext.facts = nativeFacts?.[ip];
 		instructionContext.profileSiteId = fn.profileSiteIds?.[ip];
 		instructionContext.profile = instructionProfile;
 		instructionContext.gcSafepoint = safepointKind !== undefined;
 		instructionContext.loopPoll = safepointKind === "loop-backedge";
+		instructionContext.branchTarget = branchTargets.get(ip);
 		instructionContext.incomingRootPublication =
 			deferredPropertyRoots ||
 			deferredPrivateAccessRoots ||
@@ -6857,7 +7196,7 @@ function emitBody(
 			deferredValueGuardRoots ||
 			deferredForInRoots ||
 			deferredIteratorRoots ||
-			deferredCharCodeAtRoots
+			deferredGuardedCallRoots
 				? operatorInactiveRootMask === undefined
 					? incomingRootPublication
 					: [
@@ -6875,18 +7214,17 @@ function emitBody(
 		instructionContext.outgoingRootPublication = outgoingRootPublication;
 		instructionContext.rootedOutputReloads = rootedOutputReloads;
 		instructionContext.loopBackedgeInactiveRootMask = loopBackedgeInactiveRootMask;
-		instructionContext.mathCallInactiveRootMask = mathCallInactiveRootMask;
 		instructionContext.valueGuardInactiveRootMask = valueGuardInactiveRootMask;
-		instructionContext.knownOwnSlotLoadInactiveRootMask =
-			knownOwnSlotLoadInactiveRootMask;
+		instructionContext.guardedPropertyLoadInactiveRootMask =
+			guardedPropertyLoadInactiveRootMask;
 		instructionContext.staticPropertyLoadInactiveRootMask =
 			staticPropertyLoadInactiveRootMask;
 		instructionContext.privateAccessInactiveRootMask = privateAccessInactiveRootMask;
 		instructionContext.indexedPropertyInactiveRootMask = indexedPropertyInactiveRootMask;
 		instructionContext.staticPropertyWriteInactiveRootMask =
 			staticPropertyWriteInactiveRootMask;
-		instructionContext.charCodeAtCallRootPublication = deferredCharCodeAtRoots;
-		instructionContext.charCodeAtCallInactiveRootMask = charCodeAtCallInactiveRootMask;
+		instructionContext.guardedCallRootPublication = deferredGuardedCallRoots;
+		instructionContext.guardedCallInactiveRootMask = guardedCallInactiveRootMask;
 		instructionContext.iteratorStepRootPublication = deferredIteratorRoots;
 		instructionContext.iteratorStepInactiveRootMask = iteratorStepInactiveRootMask;
 		instructionContext.stackObjectSite = stackObjectSites.get(ip);
@@ -7029,15 +7367,14 @@ function emitBody(
 			lastPublishedInactiveRootMask = operatorInactiveRootMask;
 		} else if (
 			operatorMaskEmitted ||
-			mathCallInactiveRootMask !== undefined ||
 			valueGuardInactiveRootMask !== undefined ||
-			knownOwnSlotLoadInactiveRootMask !== undefined ||
+			guardedPropertyLoadInactiveRootMask !== undefined ||
 			staticPropertyLoadInactiveRootMask !== undefined ||
 			privateAccessInactiveRootMask !== undefined ||
 			indexedPropertyInactiveRootMask !== undefined ||
 			staticPropertyWriteInactiveRootMask !== undefined ||
 			iteratorStepInactiveRootMask !== undefined ||
-			charCodeAtCallInactiveRootMask !== undefined
+			guardedCallInactiveRootMask !== undefined
 		) {
 			// Conditional paths can preserve the old mask or publish the instruction's mask.
 			lastPublishedInactiveRootMask = undefined;
@@ -7396,8 +7733,10 @@ interface NativeInstructionContext {
 	readonly profileSiteId?: number;
 	readonly profile?: NativeInstructionProfile;
 	readonly nativePlan?: NativeInstructionPlan;
+	readonly facts?: InstructionFacts;
 	readonly gcSafepoint: boolean;
 	readonly loopPoll: boolean;
+	readonly branchTarget?: number;
 	readonly callReturnPolls: boolean;
 	readonly incomingRootPublication?: ReadonlyArray<string>;
 	readonly eagerIncomingRootPublication?: boolean;
@@ -7405,15 +7744,14 @@ interface NativeInstructionContext {
 	readonly outgoingRootPublication?: ReadonlyArray<string>;
 	readonly rootedOutputReloads?: ReadonlyArray<string>;
 	readonly loopBackedgeInactiveRootMask?: NativeInactiveRootMask;
-	readonly mathCallInactiveRootMask?: NativeInactiveRootMask;
 	readonly valueGuardInactiveRootMask?: NativeInactiveRootMask;
-	readonly knownOwnSlotLoadInactiveRootMask?: NativeInactiveRootMask;
+	readonly guardedPropertyLoadInactiveRootMask?: NativeInactiveRootMask;
 	readonly staticPropertyLoadInactiveRootMask?: NativeInactiveRootMask;
 	readonly privateAccessInactiveRootMask?: NativeInactiveRootMask;
 	readonly indexedPropertyInactiveRootMask?: NativeInactiveRootMask;
 	readonly staticPropertyWriteInactiveRootMask?: NativeInactiveRootMask;
-	readonly charCodeAtCallRootPublication?: boolean;
-	readonly charCodeAtCallInactiveRootMask?: NativeInactiveRootMask;
+	readonly guardedCallRootPublication?: boolean;
+	readonly guardedCallInactiveRootMask?: NativeInactiveRootMask;
 	readonly iteratorStepRootPublication?: boolean;
 	readonly iteratorStepInactiveRootMask?: NativeInactiveRootMask;
 	readonly stackObjectSite?: StackObjectSite;
@@ -7461,10 +7799,7 @@ interface NativeInstructionContext {
 	readonly watchedMathCallee?: boolean;
 	/** The loaded value is a callee guarded against several function identities. */
 	readonly polymorphicMethodLoad?: boolean;
-	/** Registers that read as one string constant, by string index. */
-	readonly stringConstantRegisters?: ReadonlyMap<number, number>;
-	/** String constants that reach a strict comparison's operands, by comparison ip. */
-	readonly stringConstantOperands?: ReadonlyMap<number, ReadonlyMap<number, number>>;
+	readonly stringComparisons?: ReadonlyMap<number, NativeStringComparisonPlan>;
 	readonly numberPredicate?: NativeNumberPredicatePlan;
 	readonly stringTransform?: NativeStringTransformPlan;
 	readonly arrayInitialization?: {
@@ -7584,7 +7919,7 @@ function emitInstruction(
 		((context.outgoingRootPublication?.length ?? 0) > 0 ||
 			context.loopBackedgeInactiveRootMask !== undefined ||
 			context.gcSafepoint ||
-			context.mathCallInactiveRootMask !== undefined)
+			context.guardedCallInactiveRootMask !== undefined)
 	)
 		nativeBodyReference(context.resources, "throwExit");
 	if (context.propertyNumericUpdateAction === undefined) {
@@ -7647,15 +7982,13 @@ function emitInstruction(
 	const num = (r: number): string =>
 		reps[r] === "int32" ? `(f64) ${inputValue(r)}` : inputValue(r);
 	const truthy = (r: number): string =>
-		reps[r] === "boolean"
-			? `r${r}`
-			: reps[r] === "int32"
-				? `(r${r} != 0)`
-				: reps[r] === "number"
-					? `mal_number_is_truthy(r${r})`
-					: reps[r] === "string"
-						? `(mal_string_length(mal_value_to_string(r${r})) != 0)`
-						: `mal_value_is_truthy(r${r})`;
+		nativeTruthiness(
+			inputValue(r),
+			reps[r]!,
+			instructionInputKind(context.facts, r) ?? COMPILER_VALUE_KIND_TOP,
+			instructionInputIntegerRange(context.facts, r),
+		);
+
 	if (
 		instruction.opcode === "MOVE" &&
 		context.propertyNumericUpdateAction === undefined &&
@@ -7739,9 +8072,11 @@ function emitInstruction(
 		profileSiteId: context.profileSiteId,
 		profile: context.profile,
 		nativePlan,
+		facts: context.facts,
 		resources,
 		gcSafepoint: context.gcSafepoint,
 		loopPoll: context.loopPoll,
+		branchTarget: context.branchTarget,
 		callReturnPolls: context.callReturnPolls,
 		incomingRootPublication: context.incomingRootPublication,
 		eagerIncomingRootPublication: context.eagerIncomingRootPublication,
@@ -7749,15 +8084,14 @@ function emitInstruction(
 		outgoingRootPublication: context.outgoingRootPublication,
 		rootedOutputReloads: context.rootedOutputReloads,
 		loopBackedgeInactiveRootMask: context.loopBackedgeInactiveRootMask,
-		mathCallInactiveRootMask: context.mathCallInactiveRootMask,
 		valueGuardInactiveRootMask: context.valueGuardInactiveRootMask,
-		knownOwnSlotLoadInactiveRootMask: context.knownOwnSlotLoadInactiveRootMask,
+		guardedPropertyLoadInactiveRootMask: context.guardedPropertyLoadInactiveRootMask,
 		staticPropertyLoadInactiveRootMask: context.staticPropertyLoadInactiveRootMask,
 		privateAccessInactiveRootMask: context.privateAccessInactiveRootMask,
 		indexedPropertyInactiveRootMask: context.indexedPropertyInactiveRootMask,
 		staticPropertyWriteInactiveRootMask: context.staticPropertyWriteInactiveRootMask,
-		charCodeAtCallRootPublication: context.charCodeAtCallRootPublication,
-		charCodeAtCallInactiveRootMask: context.charCodeAtCallInactiveRootMask,
+		guardedCallRootPublication: context.guardedCallRootPublication,
+		guardedCallInactiveRootMask: context.guardedCallInactiveRootMask,
 		iteratorStepRootPublication: context.iteratorStepRootPublication,
 		stringSplitTrimLengthSite: context.stringSplitTrimLengthSite,
 		iteratorStepInactiveRootMask: context.iteratorStepInactiveRootMask,
@@ -7982,26 +8316,40 @@ function emitInstruction(
 		if (body === undefined) return null;
 		return body.boolean ? storeBoolean(dst, body.call) : `r${dst} = ${body.call};`;
 	};
-	const builtinOperandKind = (operand: number): CompilerValueKindMask | undefined => {
+	const operandKind = (operand: number): CompilerValueKindMask | undefined => {
+		const representation = operandRep(operand);
+		if (isNumericRep(representation)) return COMPILER_VALUE_KIND_NUMBER;
+		if (representation === "boolean") return COMPILER_VALUE_KIND_BOOLEAN;
+		if (representation === "string") return COMPILER_VALUE_KIND_STRING;
+		const semantic = instructionInputKind(context.facts, operand);
+		if (semantic !== undefined) return semantic;
+		if (context.facts?.inputKindMasks !== undefined) {
+			if (instruction.opcode === "UNARY" && instruction.src === operand)
+				return context.facts.inputKindMasks[0]!;
+			if (instruction.opcode === "BINARY") {
+				if (instruction.left === operand) return context.facts.inputKindMasks[0]!;
+				if (instruction.right === operand) return context.facts.inputKindMasks[1]!;
+			}
+		}
 		if (
-			nativePlan?.kind !== "exact-builtin-input-kinds" ||
+			context.facts?.inputKindMasks === undefined ||
 			instruction.opcode !== "CALL_KNOWN"
 		)
 			return undefined;
-		if (operand === instruction.thisValue) return nativePlan.inputKindMasks[0];
+		if (operand === instruction.thisValue) return context.facts.inputKindMasks[0]!;
 		const index = instruction.arguments.indexOf(operand);
-		return index < 0 ? undefined : nativePlan.inputKindMasks[index + 1];
+		return index < 0 ? undefined : context.facts.inputKindMasks[index + 1];
 	};
 	const operandIsString = (operand: number): boolean =>
 		operandRep(operand) === "string" ||
-		builtinOperandKind(operand) === COMPILER_VALUE_KIND_STRING;
+		operandKind(operand) === COMPILER_VALUE_KIND_STRING;
 
 	const nativeNumberOperand = (operand: number): string | null => {
 		const decoded = decodeVmValueOperand(operand);
 		if (decoded.kind === "register") {
 			return isNumericRep(reps[decoded.register]!)
 				? num(decoded.register)
-				: builtinOperandKind(operand) === COMPILER_VALUE_KIND_NUMBER
+				: operandKind(operand) === COMPILER_VALUE_KIND_NUMBER
 					? `mal_ops_number_as_f64(${boxedOperand(operand)})`
 					: null;
 		}
@@ -8012,9 +8360,13 @@ function emitInstruction(
 		if (decoded.kind === "register") {
 			return reps[decoded.register] === "int32"
 				? inputValue(decoded.register)
-				: reps[decoded.register] === "number"
-					? `mal_ops_number_to_i32(${inputValue(decoded.register)})`
-					: null;
+				: instructionInputIsInt32(context.facts, decoded.register)
+					? `((i32) ${nativeNumberOperand(operand)!})`
+					: reps[decoded.register] === "number"
+						? `mal_ops_number_to_i32(${inputValue(decoded.register)})`
+						: operandKind(operand) === COMPILER_VALUE_KIND_NUMBER
+							? `mal_ops_number_value_to_i32(${boxedOperand(operand)})`
+							: null;
 		}
 		return decoded.kind === "number" ? String(decoded.value) : null;
 	};
@@ -8023,11 +8375,36 @@ function emitInstruction(
 		if (decoded.kind === "register") {
 			return reps[decoded.register] === "boolean"
 				? inputValue(decoded.register)
-				: builtinOperandKind(operand) === COMPILER_VALUE_KIND_BOOLEAN
+				: operandKind(operand) === COMPILER_VALUE_KIND_BOOLEAN
 					? `mal_value_to_boolean(${boxedOperand(operand)})`
 					: null;
 		}
 		return decoded.kind === "boolean" ? (decoded.value ? "true" : "false") : null;
+	};
+	const operandTruthy = (operand: number): string => {
+		const decoded = decodeVmValueOperand(operand);
+		switch (decoded.kind) {
+			case "undefined":
+			case "null":
+				return "false";
+			case "boolean":
+				return String(decoded.value);
+			case "number":
+				return String(decoded.value !== 0);
+			case "string": {
+				const text = context.stringConstants[decoded.index];
+				return text === undefined
+					? nativeTruthiness(boxedOperand(operand), "string", COMPILER_VALUE_KIND_STRING)
+					: String(text.length !== 0);
+			}
+			case "register":
+				return nativeTruthiness(
+					inputValue(decoded.register),
+					reps[decoded.register]!,
+					operandKind(operand) ?? COMPILER_VALUE_KIND_TOP,
+					instructionInputIntegerRange(context.facts, decoded.register),
+				);
+		}
 	};
 	const coerciveNumberOperand = (operand: number): string | null => {
 		const boolean = nativeBooleanOperand(operand);
@@ -8041,28 +8418,7 @@ function emitInstruction(
 	const exactPrimitiveNumber = (r: number, mask: CompilerValueKindMask): string => {
 		const number = isNumericRep(reps[r]!) ? num(r) : `mal_ops_number_as_f64(${boxed(r)})`;
 		const boolean = reps[r] === "boolean" ? `r${r}` : `mal_value_to_boolean(${boxed(r)})`;
-		const choices: Array<{ mask: number; test: string; value: string }> = [
-			{
-				mask: COMPILER_VALUE_KIND_UNDEFINED,
-				test: `mal_value_is_undefined(${boxed(r)})`,
-				value: '__builtin_nan("")',
-			},
-			{
-				mask: COMPILER_VALUE_KIND_NULL,
-				test: `mal_value_is_null(${boxed(r)})`,
-				value: "0.0",
-			},
-			{
-				mask: COMPILER_VALUE_KIND_BOOLEAN,
-				test: `mal_value_is_boolean(${boxed(r)})`,
-				value: `(${boolean} ? 1.0 : 0.0)`,
-			},
-			{ mask: COMPILER_VALUE_KIND_NUMBER, test: "true", value: number },
-		].filter((choice) => (mask & choice.mask) !== 0);
-		let expression = choices.pop()!.value;
-		for (const choice of choices.reverse())
-			expression = `(${choice.test} ? ${choice.value} : ${expression})`;
-		return expression;
+		return nativePrimitiveNumberExpression(boxed(r), mask, number, boolean);
 	};
 	// Where control goes on a pending throw: into the innermost enclosing
 	// try/catch handler when this instruction is inside one (CATCH there reads
@@ -8122,21 +8478,25 @@ function emitInstruction(
 						? `if (mal_gc_poll_requested()) { ${safepoint()} }`
 						: ""
 					: `if (mal_gc_poll_requested()) { ${cInactiveRootMaskPublication(context.loopBackedgeInactiveRootMask, context.inactiveRootMaskStatements)}; ${safepoint()} }`);
-	const callPoll = (): string => (context.callReturnPolls ? poll() : "");
-	let mathPollText: string | undefined;
-	const mathPoll = (): string =>
-		(mathPollText ??=
-			context.mathCallInactiveRootMask === undefined
+	let guardedCallPollText: string | undefined;
+	const guardedCallPoll = (): string =>
+		(guardedCallPollText ??=
+			context.guardedCallInactiveRootMask === undefined
 				? poll()
-				: `if (mal_gc_poll_requested()) { ${(context.outgoingRootPublication ?? []).map((line) => `${line} `).join("")}${cInactiveRootMaskPublication(context.mathCallInactiveRootMask, context.inactiveRootMaskStatements)}; ${safepoint()} }`);
-	let mathFallbackText: ReadonlyArray<string> | undefined;
-	const mathFallbackRootPublication = (): ReadonlyArray<string> =>
-		(mathFallbackText ??=
-			context.mathCallInactiveRootMask === undefined
-				? EMPTY_ROOT_PUBLICATION
+				: `if (mal_gc_poll_requested()) { ${(context.outgoingRootPublication ?? []).map((line) => `${line} `).join("")}${cInactiveRootMaskPublication(context.guardedCallInactiveRootMask, context.inactiveRootMaskStatements)}; ${safepoint()} }`);
+	const callPoll = (): string => (context.callReturnPolls ? guardedCallPoll() : "");
+	let guardedCallFallbackText: ReadonlyArray<string> | undefined;
+	const guardedCallFallbackRootPublication = (): ReadonlyArray<string> =>
+		(guardedCallFallbackText ??= [
+			...(context.guardedCallRootPublication
+				? (context.incomingRootPublication ?? []).map((line) => `  ${line}`)
+				: []),
+			...(context.guardedCallInactiveRootMask === undefined
+				? []
 				: [
-						`  ${cInactiveRootMaskPublication(context.mathCallInactiveRootMask, context.inactiveRootMaskStatements)};`,
-					]);
+						`  ${cInactiveRootMaskPublication(context.guardedCallInactiveRootMask, context.inactiveRootMaskStatements)};`,
+					]),
+		]);
 	// An observer needs the record's object in its registers, however the instruction renders.
 	if (context.recordObservers !== undefined) {
 		const ordinary = emitInstruction(
@@ -9535,50 +9895,43 @@ function emitInstruction(
 			];
 		}
 		case "STORE_CAPTURED": {
-			if (context.fixedCaptureOwners?.has(instruction.ownerFunctionIndex)) {
-				const owner = captureOwnerName(relocation, instruction.ownerFunctionIndex);
-				const primitive =
-					reps[instruction.src] === "number" ||
-					reps[instruction.src] === "int32" ||
-					reps[instruction.src] === "boolean";
-				const store = [
-					`mal_gc_write_barrier(${owner}->slots[${instruction.index}]);`,
-					`${owner}->slots[${instruction.index}] = ${boxed(instruction.src)};`,
-					...(!primitive
-						? [`mal_gc_card(&${owner}->header, ${boxed(instruction.src)});`]
-						: []),
+			const needsCard = !compilerValueKindMaskIsSubset(
+				operandKind(instruction.src) ?? COMPILER_VALUE_KIND_TOP,
+				COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE,
+			);
+			const fixedOwner = context.fixedCaptureOwners?.has(instruction.ownerFunctionIndex);
+			const owner = fixedOwner
+				? captureOwnerName(relocation, instruction.ownerFunctionIndex)
+				: instruction.ownerFunctionIndex === context.ownedCaptureFunctionIndex
+					? "env"
+					: undefined;
+			if (owner === undefined)
+				return [
+					`${needsCard ? "mal_vm_store_captured" : "mal_vm_store_captured_non_heap"}(env, ${relocation.ownerFunctionIndex(instruction.ownerFunctionIndex)}, ${instruction.index}, ${boxed(instruction.src)});`,
 				];
+			const store = [
+				`mal_gc_write_barrier(${owner}->slots[${instruction.index}]);`,
+				`${owner}->slots[${instruction.index}] = ${boxed(instruction.src)};`,
+				...(needsCard
+					? [`mal_gc_card(&${owner}->header, ${boxed(instruction.src)});`]
+					: []),
+			];
+			if (fixedOwner) {
 				if (context.requiredCaptureOwners?.has(instruction.ownerFunctionIndex))
 					return store;
 				return [`if (${owner} != nullptr) {`, ...store.map((line) => `  ${line}`), `}`];
 			}
-			if (instruction.ownerFunctionIndex === context.ownedCaptureFunctionIndex) {
-				const primitive =
-					reps[instruction.src] === "number" ||
-					reps[instruction.src] === "int32" ||
-					reps[instruction.src] === "boolean";
-				const store = [
-					`mal_gc_write_barrier(env->slots[${instruction.index}]);`,
-					`env->slots[${instruction.index}] = ${boxed(instruction.src)};`,
-					...(!primitive
-						? [`mal_gc_card(&env->header, ${boxed(instruction.src)});`]
-						: []),
-				];
-				const shadow = context.captureShadow;
-				const state = shadow?.plan.states[ip] ?? ENVIRONMENT_PRESENT;
-				if (shadow === undefined || (state & ENVIRONMENT_ABSENT) === 0) return store;
-				const frame = `__gc_slots[${shadow.base + instruction.index}] = ${boxed(instruction.src)};`;
-				if (state === ENVIRONMENT_ABSENT) return [frame];
-				return [
-					"if (__capture_env_ready) {",
-					...store.map((line) => `  ${line}`),
-					"} else {",
-					`  ${frame}`,
-					"}",
-				];
-			}
+			const shadow = context.captureShadow;
+			const state = shadow?.plan.states[ip] ?? ENVIRONMENT_PRESENT;
+			if (shadow === undefined || (state & ENVIRONMENT_ABSENT) === 0) return store;
+			const frame = `__gc_slots[${shadow.base + instruction.index}] = ${boxed(instruction.src)};`;
+			if (state === ENVIRONMENT_ABSENT) return [frame];
 			return [
-				`mal_vm_store_captured(env, ${relocation.ownerFunctionIndex(instruction.ownerFunctionIndex)}, ${instruction.index}, ${boxed(instruction.src)});`,
+				"if (__capture_env_ready) {",
+				...store.map((line) => `  ${line}`),
+				"} else {",
+				`  ${frame}`,
+				"}",
 			];
 		}
 		case "ENV_PUSH":
@@ -9619,10 +9972,11 @@ function emitInstruction(
 				`if (mal_vm_try_load_known_own_slots(vm, ${boxed(instruction.object)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}], ${instruction.candidates.length}, __known_own_slot_candidates_${ip}, &__known_own_slot_${ip})) {`,
 				`  r${instruction.dst} = ${callValue(instruction.dst, `__known_own_slot_${ip}`)};`,
 				`} else {`,
-				...(context.knownOwnSlotLoadInactiveRootMask === undefined
+				...(context.incomingRootPublication ?? []).map((line) => `  ${line}`),
+				...(context.guardedPropertyLoadInactiveRootMask === undefined
 					? []
 					: [
-							`  ${cInactiveRootMaskPublication(context.knownOwnSlotLoadInactiveRootMask, context.inactiveRootMaskStatements)};`,
+							`  ${cInactiveRootMaskPublication(context.guardedPropertyLoadInactiveRootMask, context.inactiveRootMaskStatements)};`,
 						]),
 				...boxedLoad(
 					instruction.dst,
@@ -9681,6 +10035,12 @@ function emitInstruction(
 			return [
 				`${relocation.enabled ? "" : "static "}const i32 __known_own_slot_store_candidates_${ip}[] = { ${candidates.join(", ")} };`,
 				`if (!mal_vm_try_store_known_own_slots(vm, ${boxed(instruction.object)}, ${boxed(instruction.value)}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}], ${instruction.candidates.length}, __known_own_slot_store_candidates_${ip})) {`,
+				...(context.incomingRootPublication ?? []).map((line) => `  ${line}`),
+				...(context.staticPropertyWriteInactiveRootMask === undefined
+					? []
+					: [
+							`  ${cInactiveRootMaskPublication(context.staticPropertyWriteInactiveRootMask, context.inactiveRootMaskStatements)};`,
+						]),
 				`  ${profileCall("property", `mal_vm_op_store_property_ic(vm, ${boxed(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(instruction.stringIndex)}]), ${boxed(instruction.value)}, ${strict}, &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}])`)};`,
 				`  ${throwCheck()}`,
 				`}`,
@@ -9695,6 +10055,12 @@ function emitInstruction(
 				`if (mal_value_is_heap_type(${boxed(instruction.object)}, MAL_HEAP_ARRAY_OBJECT)) {`,
 				`  ${direct}`,
 				`} else {`,
+				...(context.incomingRootPublication ?? []).map((line) => `  ${line}`),
+				...(context.guardedPropertyLoadInactiveRootMask === undefined
+					? []
+					: [
+							`  ${cInactiveRootMaskPublication(context.guardedPropertyLoadInactiveRootMask, context.inactiveRootMaskStatements)};`,
+						]),
 				...boxedLoad(
 					instruction.dst,
 					profileCall(
@@ -10671,7 +11037,7 @@ function emitInstruction(
 				const membershipIp = nativeArrayPresenceProjectionAction.membershipIp;
 				const loadIp = nativeArrayPresenceProjectionAction.indexed.loadIp;
 				const state = `__array_presence_${membershipIp}_state`;
-				const probe = `${state} = __indexed_length_${loadIp}_kind == 1 ? mal_vm_array_try_get_present_proven_index(__indexed_length_${loadIp}_array, (u32) ${num(instruction.left)}, &__array_presence_${membershipIp}_value) : -1;`;
+				const probe = `${state} = __indexed_length_${loadIp}_kind == 1 ? mal_vm_array_try_get_present_proven_index(__indexed_length_${loadIp}_array, (u32) ${typedNumber(instruction.left)}, &__array_presence_${membershipIp}_value) : -1;`;
 				return [
 					probe,
 					`if (${state} >= 0) {`,
@@ -10694,7 +11060,7 @@ function emitInstruction(
 						case "register":
 							return reps[value.register] === "boxed"
 								? `mal_ops_number_as_f64(r${value.register})`
-								: num(value.register);
+								: typedNumber(value.register);
 					}
 				};
 				const step = plan.steps[index]!;
@@ -10746,16 +11112,45 @@ function emitInstruction(
 					storeBoolean(instruction.dst, context.constantBoolean ? "true" : "false"),
 				];
 			const { dst, left, right, operator } = instruction;
+			const effects = nativeInstructionEffects(instruction, context.facts);
+			const inputKinds =
+				context.facts?.inputKindMasks !== undefined &&
+				context.facts.inputKindMasks.length === 2
+					? context.facts.inputKindMasks
+					: undefined;
+			const binaryValue = (): string => {
+				const comparison = BOXED_COMPARE[operator];
+				// Value helpers neither invoke object hooks nor report Symbol comparison errors.
+				return comparison !== undefined &&
+					!effects.throwing &&
+					!effects.reentry &&
+					inputKinds !== undefined &&
+					compilerComparisonInputKindsAvoidObjectCoercion(operator, inputKinds)
+					? `${comparison}(${boxed(left)}, ${boxed(right)})`
+					: `mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`;
+			};
+			const canThrow =
+				binaryOpCanThrow(operator) && (effects.throwing || effects.reentry);
+			if (!canThrow) elideFramePosition();
+			const rangedComparison = compilerIntegerRangeComparison(
+				operator,
+				instructionInputIntegerRange(context.facts, left),
+				instructionInputIntegerRange(context.facts, right),
+			);
+			if (rangedComparison !== undefined)
+				return [storeBoolean(dst, String(rangedComparison))];
 			if (numericFusionAction?.truncating) {
 				const fusion = numericFusionAction;
 				const integer = (register: number): string =>
 					reps[register] === "int32"
 						? `r${register}`
-						: reps[register] === "number"
-							? `(i32)(${num(register)})`
-							: `mal_value_to_i32(${boxed(register)})`;
+						: instructionInputIsInt32(context.facts, register)
+							? nativeInt32Operand(register)!
+							: reps[register] === "number"
+								? `(i32)(${typedNumber(register)})`
+								: `mal_value_to_i32(${boxed(register)})`;
 				const integerGuard = (register: number): string =>
-					reps[register] === "int32"
+					reps[register] === "int32" || instructionInputIsInt32(context.facts, register)
 						? "true"
 						: reps[register] === "number"
 							? `(r${register} >= -2147483648.0 && r${register} <= 2147483647.0 && r${register} == trunc(r${register}))`
@@ -10796,7 +11191,7 @@ function emitInstruction(
 			if (nativePlan?.kind === "unsigned-arithmetic") {
 				const number = (register: number) =>
 					isNumericRep(reps[register]!)
-						? num(register)
+						? typedNumber(register)
 						: `mal_ops_number_as_f64(${boxed(register)})`;
 				return [
 					storeNumber(
@@ -10805,8 +11200,15 @@ function emitInstruction(
 					),
 				];
 			}
-			const leftIsNum = isNumericRep(reps[left]!);
-			const rightIsNum = isNumericRep(reps[right]!);
+			const leftIsNum =
+				isNumericRep(reps[left]!) || operandKind(left) === COMPILER_VALUE_KIND_NUMBER;
+			const rightIsNum =
+				isNumericRep(reps[right]!) || operandKind(right) === COMPILER_VALUE_KIND_NUMBER;
+			const numbersPossible =
+				((operandKind(left) ?? COMPILER_VALUE_KIND_TOP) & COMPILER_VALUE_KIND_NUMBER) !==
+					0 &&
+				((operandKind(right) ?? COMPILER_VALUE_KIND_TOP) & COMPILER_VALUE_KIND_NUMBER) !==
+					0;
 			const dstIsBool = reps[dst] === "boolean";
 			const compare = NATIVE_COMPARE[operator];
 			if (reps[left] === "boolean" || reps[right] === "boolean") {
@@ -10818,33 +11220,28 @@ function emitInstruction(
 					const expression =
 						operator === "**"
 							? `mal_number_exponentiate(${a}, ${b})`
-							: nativeNumberExpr(operator, a, b);
+							: nativeNumberExpr(operator, a, b, context.facts?.inputIntegerRanges);
 					if (expression !== null) return [storeNumber(dst, expression)];
 				}
 			}
 			const fusion = numericFusionAction;
-			const exactInputKinds =
-				nativePlan?.kind === "exact-operator-input-kinds" &&
-				nativePlan.inputKindMasks.length === 2
-					? nativePlan.inputKindMasks
-					: undefined;
 			if (
-				exactInputKinds !== undefined &&
+				inputKinds !== undefined &&
 				(!leftIsNum || !rightIsNum || operator === "**") &&
 				(fusion === undefined ||
 					reps[fusion.role === "start" ? dst : fusion.first.dst] === "number") &&
-				exactInputKinds.every((mask) =>
+				inputKinds.every((mask) =>
 					compilerValueKindMaskIsSubset(mask, COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE),
 				)
 			) {
-				const a = exactPrimitiveNumber(left, exactInputKinds[0]);
-				const b = exactPrimitiveNumber(right, exactInputKinds[1]);
+				const a = exactPrimitiveNumber(left, inputKinds[0]!);
+				const b = exactPrimitiveNumber(right, inputKinds[1]!);
 				if (RELATIONAL_COMPARE.has(operator))
 					return [storeBoolean(dst, `${a} ${compare} ${b}`)];
 				const expression =
 					operator === "**"
 						? `mal_number_exponentiate(${a}, ${b})`
-						: nativeNumberExpr(operator, a, b);
+						: nativeNumberExpr(operator, a, b, context.facts?.inputIntegerRanges);
 				if (expression !== null) return [storeNumber(dst, expression)];
 			}
 			if (indexedLengthLoopAction?.role === "compare") {
@@ -10859,7 +11256,7 @@ function emitInstruction(
 				const other = indexedLengthLoopAction.site.lengthPosition === 1 ? right : left;
 				const otherNumber = reverse
 					? `mal_ops_number_as_f64(${boxed(other)})`
-					: num(other);
+					: typedNumber(other);
 				const fast =
 					indexedLengthLoopAction.site.lengthPosition === 1
 						? `${length} ${compareOperator} ${otherNumber}`
@@ -10876,57 +11273,54 @@ function emitInstruction(
 			}
 			if (operator === "in") {
 				const membership = `__array_has_${ip}`;
-				const fastMembership = `mal_vm_array_try_has(mal_vm_as_array(${boxed(right)}), ${leftIsNum ? num(left) : `mal_ops_number_as_f64(${boxed(left)})`})`;
+				const fastMembership = `mal_vm_array_try_has(mal_vm_as_array(${boxed(right)}), ${leftIsNum ? typedNumber(left) : `mal_ops_number_as_f64(${boxed(left)})`})`;
 				const ownKey = `mal_vm_shape_has_own_key(vm, ${boxed(right)}, ${boxed(left)}) ? 1 : -1`;
 				return [
-					`i32 ${membership} = ${leftIsNum ? fastMembership : `mal_ops_is_number(${boxed(left)}) ? ${fastMembership} : ${ownKey}`};`,
+					`i32 ${membership} = ${leftIsNum ? fastMembership : ((operandKind(left) ?? COMPILER_VALUE_KIND_TOP) & COMPILER_VALUE_KIND_NUMBER) !== 0 ? `mal_ops_is_number(${boxed(left)}) ? ${fastMembership} : ${ownKey}` : ownKey};`,
 					`if (${membership} >= 0) {`,
 					dstIsBool
 						? `  r${dst} = ${membership} != 0;`
 						: `  r${dst} = mal_value_new_boolean(${membership} != 0);`,
 					`} else {`,
 					dstIsBool
-						? `  r${dst} = mal_value_to_boolean(${profileCall("binary", reentrantValue(`mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`))});`
-						: `  r${dst} = ${profileCall("binary", reentrantValue(`mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`))};`,
-					`  ${throwCheck()}`,
+						? `  r${dst} = mal_value_to_boolean(${profileCall("binary", reentrantValue(binaryValue()))});`
+						: `  r${dst} = ${profileCall("binary", reentrantValue(binaryValue()))};`,
+					...(canThrow ? [`  ${throwCheck()}`] : []),
 					`}`,
 				];
 			}
 			if (
 				operator === "+" &&
 				(fusion === undefined || fusion.role === "start") &&
-				(reps[left] === "string" ||
-					exactInputKinds?.[0] === COMPILER_VALUE_KIND_STRING) &&
-				(reps[right] === "string" || exactInputKinds?.[1] === COMPILER_VALUE_KIND_STRING)
+				(reps[left] === "string" || inputKinds?.[0] === COMPILER_VALUE_KIND_STRING) &&
+				(reps[right] === "string" || inputKinds?.[1] === COMPILER_VALUE_KIND_STRING)
 			) {
 				// A String start selects the fusion's boxed fallback for its matching finish.
 				return [
 					...(fusion === undefined ? [] : [`__nf_${fusion.id}_ok = false;`]),
 					`r${dst} = ${profileCall("string", reentrantValue(`mal_vm_concat_strings_known(vm, mal_value_to_string(${boxed(left)}), mal_value_to_string(${boxed(right)}))`))};`,
-					throwCheck(),
+					...(canThrow ? [throwCheck()] : []),
 				];
 			}
 			if (
 				(fusion === undefined || fusion.role === "start") &&
-				exactInputKinds !== undefined &&
-				compilerOperatorIsPrimitiveStringConcatenation(
-					"binary",
-					operator,
-					exactInputKinds,
-				)
+				inputKinds !== undefined &&
+				compilerOperatorIsPrimitiveStringConcatenation("binary", operator, inputKinds)
 			) {
 				return [
 					...(fusion === undefined ? [] : [`__nf_${fusion.id}_ok = false;`]),
 					`r${dst} = ${profileCall("string", reentrantValue(`mal_vm_concat_primitive_strings(vm, ${boxed(left)}, ${boxed(right)})`))};`,
-					throwCheck(),
+					...(canThrow ? [throwCheck()] : []),
 				];
 			}
 			if (fusion?.role === "link") {
 				const firstOnLeft = left === fusion.first.dst;
 				const external = firstOnLeft ? right : left;
-				const externalIsNum = isNumericRep(reps[external]!);
+				const externalIsNum =
+					isNumericRep(reps[external]!) ||
+					operandKind(external) === COMPILER_VALUE_KIND_NUMBER;
 				const externalExpr = externalIsNum
-					? num(external)
+					? typedNumber(external)
 					: `mal_ops_number_as_f64(${boxed(external)})`;
 				const value = `__nf_${fusion.id}_value`;
 				const nativeExpr = nativeNumberExpr(
@@ -10935,12 +11329,7 @@ function emitInstruction(
 					firstOnLeft ? externalExpr : value,
 				);
 				if (nativeExpr === null) throw new Error("Invalid numeric-fusion link");
-				const slow = profileCall(
-					"binary",
-					reentrantValue(
-						`mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`,
-					),
-				);
+				const slow = profileCall("binary", reentrantValue(binaryValue()));
 				return [
 					`if (__nf_${fusion.id}_ok${externalIsNum ? "" : ` && mal_ops_is_number(${boxed(external)})`}) {`,
 					`  ${value} = ${nativeExpr};`,
@@ -10948,33 +11337,28 @@ function emitInstruction(
 					`  if (__nf_${fusion.id}_ok) r${fusion.first.dst} = ${profileCall("boxing", `mal_ops_number_value(${value})`)};`,
 					`  __nf_${fusion.id}_ok = false;`,
 					`  r${dst} = ${slow};`,
-					`  ${throwCheck()}`,
+					...(canThrow ? [`  ${throwCheck()}`] : []),
 					`}`,
 				];
 			}
 			if (fusion?.role === "start" && reps[dst] !== "number") {
 				const nativeExpr = nativeNumberExpr(
 					operator,
-					leftIsNum ? num(left) : `mal_ops_number_as_f64(${boxed(left)})`,
-					rightIsNum ? num(right) : `mal_ops_number_as_f64(${boxed(right)})`,
+					leftIsNum ? typedNumber(left) : `mal_ops_number_as_f64(${boxed(left)})`,
+					rightIsNum ? typedNumber(right) : `mal_ops_number_as_f64(${boxed(right)})`,
 				);
 				if (nativeExpr !== null) {
 					const guards: Array<string> = [];
 					if (!leftIsNum) guards.push(`mal_ops_is_number(${boxed(left)})`);
 					if (!rightIsNum) guards.push(`mal_ops_is_number(${boxed(right)})`);
-					const slow = profileCall(
-						"binary",
-						reentrantValue(
-							`mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`,
-						),
-					);
+					const slow = profileCall("binary", reentrantValue(binaryValue()));
 					return [
 						`__nf_${fusion.id}_ok = ${guards.length === 0 ? "true" : guards.join(" && ")};`,
 						`if (__nf_${fusion.id}_ok) {`,
 						`  __nf_${fusion.id}_value = ${nativeExpr};`,
 						`} else {`,
 						`  r${dst} = ${slow};`,
-						`  ${throwCheck()}`,
+						...(canThrow ? [`  ${throwCheck()}`] : []),
 						`}`,
 					];
 				}
@@ -10988,17 +11372,19 @@ function emitInstruction(
 				const firstExpr = nativeNumberExpr(
 					first.operator,
 					firstLeftIsNum
-						? num(first.left)
+						? typedNumber(first.left)
 						: `mal_ops_number_as_f64(${boxed(first.left)})`,
 					firstRightIsNum
-						? num(first.right)
+						? typedNumber(first.right)
 						: `mal_ops_number_as_f64(${boxed(first.right)})`,
 				);
 				if ((firstOnLeft || firstOnRight) && firstExpr !== null) {
 					const external = firstOnLeft ? right : left;
-					const externalIsNum = isNumericRep(reps[external]!);
+					const externalIsNum =
+						isNumericRep(reps[external]!) ||
+						operandKind(external) === COMPILER_VALUE_KIND_NUMBER;
 					const externalExpr = externalIsNum
-						? num(external)
+						? typedNumber(external)
 						: `mal_ops_number_as_f64(${boxed(external)})`;
 					const compare = NATIVE_COMPARE[operator];
 					if (compare !== undefined) {
@@ -11008,12 +11394,7 @@ function emitInstruction(
 						const fast = firstOnLeft
 							? `__nf_${fusion.id}_value ${compare} ${externalExpr}`
 							: `${externalExpr} ${compare} __nf_${fusion.id}_value`;
-						const slow = profileCall(
-							"binary",
-							reentrantValue(
-								`mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`,
-							),
-						);
+						const slow = profileCall("binary", reentrantValue(binaryValue()));
 						return [
 							`if (${guard}) {`,
 							reps[dst] === "boolean"
@@ -11028,7 +11409,7 @@ function emitInstruction(
 							reps[dst] === "boolean"
 								? `  r${dst} = mal_value_to_boolean(${slow});`
 								: `  r${dst} = ${slow};`,
-							...(binaryOpCanThrow(operator) ? [`  ${throwCheck()}`] : []),
+							...(canThrow ? [`  ${throwCheck()}`] : []),
 							`}`,
 						];
 					}
@@ -11060,12 +11441,7 @@ function emitInstruction(
 						const guard = externalIsNum
 							? `__nf_${fusion.id}_ok`
 							: `__nf_${fusion.id}_ok && mal_ops_is_number(${boxed(external)})`;
-						const slow = profileCall(
-							"binary",
-							reentrantValue(
-								`mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`,
-							),
-						);
+						const slow = profileCall("binary", reentrantValue(binaryValue()));
 						return [
 							`if (${guard}) {`,
 							`  r${dst} = ${result};`,
@@ -11077,7 +11453,7 @@ function emitInstruction(
 										`  if (__nf_${fusion.id}_ok) r${first.dst} = ${profileCall("boxing", `mal_ops_number_value(__nf_${fusion.id}_value)`)};`,
 									]),
 							`  MalValue __binary_result_${ip} = ${slow};`,
-							`  ${throwCheck()}`,
+							...(canThrow ? [`  ${throwCheck()}`] : []),
 							`  r${dst} = ${callValue(dst, `__binary_result_${ip}`)};`,
 							`}`,
 						];
@@ -11090,17 +11466,20 @@ function emitInstruction(
 			) {
 				const result = `__binary_result_${ip}`;
 				const fallback = [
-					`MalValue ${result} = ${profileCall("binary", reentrantValue(`mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`))};`,
-					throwCheck(),
+					`MalValue ${result} = ${profileCall("binary", reentrantValue(binaryValue()))};`,
+					...(canThrow ? [throwCheck()] : []),
 					`r${dst} = ${reps[dst] === "int32" ? `mal_ops_number_value_to_i32(${result})` : `mal_ops_number_as_f64(${result})`};`,
 				];
+				if (!numbersPossible) return fallback;
 				// ToInt32 of an int32 operand or result is the identity, but clang cannot fold FJCVTZS.
 				const int32Input = (register: number): string =>
 					reps[register] === "int32"
 						? inputValue(register)
-						: reps[register] === "number"
-							? `mal_ops_number_to_i32(${inputValue(register)})`
-							: `mal_ops_number_value_to_i32(${boxed(register)})`;
+						: instructionInputIsInt32(context.facts, register)
+							? nativeInt32Operand(register)!
+							: reps[register] === "number"
+								? `mal_ops_number_to_i32(${inputValue(register)})`
+								: `mal_ops_number_value_to_i32(${boxed(register)})`;
 				const int32Expression = INT32_RESULT_OPERATORS.has(operator)
 					? nativeInt32Expr(operator, int32Input(left), int32Input(right))
 					: null;
@@ -11108,8 +11487,11 @@ function emitInstruction(
 					int32Expression === null
 						? nativeNumberExpr(
 								operator,
-								leftIsNum ? num(left) : `mal_ops_number_as_f64(${boxed(left)})`,
-								rightIsNum ? num(right) : `mal_ops_number_as_f64(${boxed(right)})`,
+								leftIsNum ? typedNumber(left) : `mal_ops_number_as_f64(${boxed(left)})`,
+								rightIsNum
+									? typedNumber(right)
+									: `mal_ops_number_as_f64(${boxed(right)})`,
+								context.facts?.inputIntegerRanges,
 							)
 						: `(f64) (${int32Expression})`;
 				if (expression === null) return fallback;
@@ -11151,20 +11533,28 @@ function emitInstruction(
 				}
 				elideFramePosition();
 				if (dst === left && ["+", "-", "*", "/"].includes(operator)) {
-					return [`r${dst} ${operator}= ${num(right)};`];
+					return [`r${dst} ${operator}= ${typedNumber(right)};`];
 				}
 				if (dst === right && (operator === "+" || operator === "*")) {
-					return [`r${dst} ${operator}= ${num(left)};`];
+					return [`r${dst} ${operator}= ${typedNumber(left)};`];
 				}
-				const expr = nativeNumberExpr(operator, num(left), num(right));
+				const expr = nativeNumberExpr(
+					operator,
+					typedNumber(left),
+					typedNumber(right),
+					context.facts?.inputIntegerRanges,
+				);
 				return expr === null ? null : [`r${dst} = ${expr};`];
 			}
 			if (operator === "**" && leftIsNum && rightIsNum) {
 				elideFramePosition();
-				return [storeNumber(dst, `mal_number_exponentiate(${num(left)}, ${num(right)})`)];
+				return [
+					storeNumber(
+						dst,
+						`mal_number_exponentiate(${typedNumber(left)}, ${typedNumber(right)})`,
+					),
+				];
 			}
-			// Retain the existing epilogue resource even when an exact comparison emits no throw check.
-			if (handlerIp === undefined) nativeBodyReference(resources, "throwExit");
 			const numericOf = (r: number): string =>
 				reps[r] === "int32"
 					? `(f64) r${r}`
@@ -11172,11 +11562,11 @@ function emitInstruction(
 						? `r${r}`
 						: `mal_ops_number_as_f64(${boxed(r)})`;
 			if (
-				exactInputKinds !== undefined &&
-				compilerOperatorIsNullishEquality("binary", operator, exactInputKinds)
+				inputKinds !== undefined &&
+				compilerOperatorIsNullishEquality("binary", operator, inputKinds)
 			) {
 				const other = compilerValueKindMaskIsSubset(
-					exactInputKinds[1],
+					inputKinds[1]!,
 					COMPILER_VALUE_KIND_NULLISH,
 				)
 					? left
@@ -11197,8 +11587,8 @@ function emitInstruction(
 			}
 			// Exact Number/undefined domains require neither coercion nor a speculative fallback.
 			if (
-				exactInputKinds !== undefined &&
-				exactInputKinds.every(
+				inputKinds !== undefined &&
+				inputKinds.every(
 					(mask) => (mask & ~COMPILER_VALUE_KIND_NUMBER_OR_UNDEFINED) === 0,
 				) &&
 				compare !== undefined
@@ -11246,23 +11636,33 @@ function emitInstruction(
 				};
 				const equality = ["==", "!=", "===", "!=="].includes(operator);
 				const positive = equality
-					? exactNumberOrUndefinedEquality(exactInputKinds[0], exactInputKinds[1])
-					: `${exactNumberOrUndefined(left, exactInputKinds[0])} ${compare} ${exactNumberOrUndefined(right, exactInputKinds[1])}`;
+					? exactNumberOrUndefinedEquality(inputKinds[0]!, inputKinds[1]!)
+					: `${exactNumberOrUndefined(left, inputKinds[0]!)} ${compare} ${exactNumberOrUndefined(right, inputKinds[1]!)}`;
 				const result =
 					operator === "!=" || operator === "!==" ? `!(${positive})` : positive;
 				elideFramePosition();
 				return [storeBoolean(dst, result)];
 			}
+			const stringComparison = context.stringComparisons?.get(ip);
+			if (stringComparison?.kind === "strings") {
+				const other = stringComparison.register === right ? left : right;
+				const equal = profileCall(
+					"string",
+					`mal_string_equals_constant_length(mal_value_to_string(${boxed(other)}), mal_value_to_string(${boxed(stringComparison.register)}), ${stringComparison.length})`,
+				);
+				elideFramePosition();
+				return [storeBoolean(dst, operator === "!==" ? `!${equal}` : equal)];
+			}
 			if (compare !== undefined) {
 				if (leftIsNum && rightIsNum) {
 					elideFramePosition();
-					return [storeBoolean(dst, `${num(left)} ${compare} ${num(right)}`)];
+					return [
+						storeBoolean(dst, `${typedNumber(left)} ${compare} ${typedNumber(right)}`),
+					];
 				}
 				if (
-					(reps[left] === "string" ||
-						exactInputKinds?.[0] === COMPILER_VALUE_KIND_STRING) &&
-					(reps[right] === "string" ||
-						exactInputKinds?.[1] === COMPILER_VALUE_KIND_STRING)
+					(reps[left] === "string" || inputKinds?.[0] === COMPILER_VALUE_KIND_STRING) &&
+					(reps[right] === "string" || inputKinds?.[1] === COMPILER_VALUE_KIND_STRING)
 				) {
 					const a = `mal_value_to_string(${boxed(left)})`,
 						b = `mal_value_to_string(${boxed(right)})`;
@@ -11284,13 +11684,7 @@ function emitInstruction(
 					];
 				}
 			}
-			const slow = (): string =>
-				profileCall(
-					"binary",
-					reentrantValue(
-						`mal_vm_binary_op(vm, ${emitBinaryOperator(operator)}, ${boxed(left)}, ${boxed(right)})`,
-					),
-				);
+			const slow = (): string => profileCall("binary", reentrantValue(binaryValue()));
 			const bothBoxed = !leftIsNum && !rightIsNum;
 			const numberGuard = leftIsNum
 				? rightIsNum
@@ -11301,29 +11695,19 @@ function emitInstruction(
 					: `mal_ops_is_number(${boxed(left)}) && mal_ops_is_number(${boxed(right)})`;
 			if (compare !== undefined) {
 				if (bothBoxed && (operator === "===" || operator === "!==")) {
-					const constantIndex = (register: number): number | undefined =>
-						context.stringConstantRegisters?.get(register) ??
-						context.stringConstantOperands?.get(ip)?.get(register);
-					const constantRegister = [right, left].find((register) => {
-						const index = constantIndex(register);
-						return index !== undefined && context.stringConstants[index] !== undefined;
-					});
-					const constantLength =
-						constantRegister === undefined
-							? undefined
-							: context.stringConstants[constantIndex(constantRegister)!]!.length;
+					const constant = context.stringComparisons?.get(ip);
 					const equal =
-						constantRegister === undefined
+						constant === undefined
 							? `mal_ops_strict_equal_boxed(${boxed(left)}, ${boxed(right)})`
-							: `mal_ops_strict_equal_string_constant(${boxed(constantRegister === right ? left : right)}, ${boxed(constantRegister)}, ${constantLength})`;
+							: `mal_ops_strict_equal_string_constant(${boxed(constant.register === right ? left : right)}, ${boxed(constant.register)}, ${constant.length})`;
 					return [storeBoolean(dst, operator === "!==" ? `!${equal}` : equal)];
 				}
-				const completionCheck = binaryOpCanThrow(operator) ? throwCheck() : undefined;
+				const completionCheck = canThrow ? throwCheck() : undefined;
 				const compareCheck = completionCheck === undefined ? [] : [completionCheck];
 				// Speculate a numeric compare when there is a numeric prior: always in
 				// the mixed case (one operand proven number), and in the both-boxed
 				// case only for the relational operators (see RELATIONAL_COMPARE).
-				if (!bothBoxed || RELATIONAL_COMPARE.has(operator)) {
+				if (numbersPossible && (!bothBoxed || RELATIONAL_COMPARE.has(operator))) {
 					const fastBool = `${numericOf(left)} ${compare} ${numericOf(right)}`;
 					// With one side a number, a strict comparison against a non-number is unequal.
 					if (!bothBoxed && (operator === "===" || operator === "!==")) {
@@ -11334,7 +11718,7 @@ function emitInstruction(
 						elideFramePosition();
 						return [storeBoolean(dst, strict)];
 					}
-					if (binaryOpCanThrow(operator)) {
+					if (canThrow) {
 						return [
 							`if (${numberGuard}) {`,
 							dstIsBool
@@ -11380,17 +11764,28 @@ function emitInstruction(
 			// branch is not taken. This covers both the mixed and both-boxed cases;
 			// for both-boxed there is no static proof, but the guard is a cheap,
 			// well-predicted bit test and hot arithmetic is overwhelmingly numeric.
-			if (producesNumberFromNumbers(operator)) {
-				const nativeExpr = nativeNumberExpr(operator, numericOf(left), numericOf(right));
+			if (numbersPossible && producesNumberFromNumbers(operator)) {
+				const nativeExpr = nativeNumberExpr(
+					operator,
+					numericOf(left),
+					numericOf(right),
+					context.facts?.inputIntegerRanges,
+				);
 				const int32Expr = INT32_RESULT_OPERATORS.has(operator)
 					? nativeInt32Expr(
 							operator,
 							reps[left] === "int32"
 								? inputValue(left)
-								: `mal_ops_number_to_i32(${numericOf(left)})`,
+								: numberToInt32(
+										numericOf(left),
+										instructionInputIsInt32(context.facts, left),
+									),
 							reps[right] === "int32"
 								? inputValue(right)
-								: `mal_ops_number_to_i32(${numericOf(right)})`,
+								: numberToInt32(
+										numericOf(right),
+										instructionInputIsInt32(context.facts, right),
+									),
 						)
 					: null;
 				if (nativeExpr !== null) {
@@ -11409,7 +11804,7 @@ function emitInstruction(
 						elideFramePosition();
 						return [`r${dst} = ${fast};`];
 					}
-					if (binaryOpCanThrow(operator)) {
+					if (canThrow) {
 						return [
 							`if (${numberGuard}) {`,
 							`  r${dst} = ${fast};`,
@@ -11423,33 +11818,20 @@ function emitInstruction(
 					return [`r${dst} = ${numberGuard} ? ${fast} : ${slow()};`];
 				}
 			}
-			// Fully general fallback: `**`, `in`, `instanceof`, or a string/bigint
-			// operand. Any non-comparison op can throw (BigInt domain errors), so
-			// propagate the completion — previously only `in`/`instanceof` did, which
-			// silently swallowed BigInt TypeErrors/RangeErrors here.
 			const lowered = [`r${dst} = ${slow()};`];
-			if (binaryOpCanThrow(operator)) {
+			if (canThrow) {
 				lowered.push(throwCheck());
 			}
 			return lowered;
 		}
 		case "TYPEOF_COMPARE": {
 			const { dst, src, expected, negated } = instruction;
-			// Native register representations are stronger than a runtime typeof
-			// query: a number-rep register can only hold a JS Number and a
-			// boolean-rep register can only hold a JS Boolean. Consume that static
-			// proof directly instead of boxing the scalar only to classify it again.
-			// Boxed values retain the generic classifier because their precise
-			// primitive/object/callable kind is not represented by this lattice yet.
-			const proven = isNumericRep(reps[src]!)
-				? "number"
-				: reps[src] === "boolean"
-					? "boolean"
-					: reps[src] === "string"
-						? "string"
-						: undefined;
+			const proven = compilerTypeofComparison(
+				operandKind(src) ?? COMPILER_VALUE_KIND_TOP,
+				expected,
+			);
 			if (proven !== undefined) {
-				const value = (proven === expected) !== negated;
+				const value = proven !== negated;
 				return [
 					reps[dst] === "boolean"
 						? `r${dst} = ${value ? "true" : "false"};`
@@ -11466,6 +11848,11 @@ function emitInstruction(
 		}
 		case "UNARY": {
 			const { dst, src, operator } = instruction;
+			if (operator === "tostring" && operandIsString(src))
+				return [`r${dst} = ${boxed(src)};`];
+			const effects = nativeInstructionEffects(instruction, context.facts);
+			const canThrow = effects.throwing || effects.reentry;
+			if (!canThrow) elideFramePosition();
 			if (
 				indexedLengthLoopAction?.role === "coerce" ||
 				indexedLengthLoopAction?.role === "update"
@@ -11486,9 +11873,9 @@ function emitInstruction(
 			if (
 				operator === "tostring" &&
 				(reps[src] === "boolean" ||
-					(nativePlan?.kind === "exact-operator-input-kinds" &&
-						nativePlan.inputKindMasks.length === 1 &&
-						nativePlan.inputKindMasks[0] === COMPILER_VALUE_KIND_BOOLEAN))
+					(context.facts?.inputKindMasks !== undefined &&
+						context.facts.inputKindMasks.length === 1 &&
+						context.facts.inputKindMasks[0]! === COMPILER_VALUE_KIND_BOOLEAN))
 			) {
 				const value =
 					reps[src] === "boolean" ? `r${src}` : `mal_value_to_boolean(${boxed(src)})`;
@@ -11496,18 +11883,33 @@ function emitInstruction(
 				return [`r${dst} = ${callValue(dst, text)};`, poll()];
 			}
 			if (
-				nativePlan?.kind === "exact-operator-input-kinds" &&
-				nativePlan.inputKindMasks.length === 1 &&
+				operator === "tostring" &&
+				context.facts?.inputKindMasks?.length === 1 &&
+				compilerValueKindMaskIsSubset(
+					context.facts.inputKindMasks[0]!,
+					COMPILER_VALUE_KIND_TO_STRING_PRIMITIVE,
+				)
+			) {
+				const text = `mal_value_from_string(mal_ops_to_string(&vm->heap, ${boxed(src)}))`;
+				return [`r${dst} = ${callValue(dst, text)};`, poll()];
+			}
+			if (
+				context.facts?.inputKindMasks !== undefined &&
+				context.facts.inputKindMasks.length === 1 &&
+				compilerValueKindMaskIsSubset(
+					context.facts.inputKindMasks[0]!,
+					COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE,
+				) &&
 				!isNumericRep(reps[src]!)
 			) {
-				const value = exactPrimitiveNumber(src, nativePlan.inputKindMasks[0]);
+				const value = exactPrimitiveNumber(src, context.facts.inputKindMasks[0]!);
 				const expression =
 					operator === "-"
 						? `-(${value})`
 						: operator === "+" || operator === "tonumeric"
 							? value
 							: operator === "~"
-								? `(f64)(~mal_ops_number_to_i32(${value}))`
+								? `(f64)(~${numberToInt32(value, instructionInputIsInt32(context.facts, src))})`
 								: operator === "increment" || operator === "decrement"
 									? `${value} ${operator === "increment" ? "+" : "-"} 1.0`
 									: null;
@@ -11553,16 +11955,14 @@ function emitInstruction(
 				if (expression !== null && reps[dst] !== "boolean" && reps[dst] !== "int32")
 					return [storeNumber(dst, expression)];
 			}
-			// A number-represented ToNumeric result is proven not to be a BigInt.
-			if ((operator === "+" || operator === "tonumeric") && reps[dst] === "number") {
+			if (isNumericRep(reps[dst]!)) {
 				const value = `unary_number_${ip}`;
 				return [
 					`MalValue ${value} = ${profileCall("unary", `mal_vm_unary_op_fast(vm, ${emitUnaryOperator(operator)}, ${boxed(src)})`)};`,
-					throwCheck(),
+					...(canThrow ? [throwCheck()] : []),
 					`r${dst} = ${callValue(dst, value)};`,
 				];
 			}
-			if (isNumericRep(reps[dst]!)) return null;
 			if (operator === "!") {
 				const negated = `!(${truthy(src)})`;
 				return [
@@ -11578,7 +11978,7 @@ function emitInstruction(
 			const lowered = [
 				`r${dst} = ${profileCall("unary", `mal_vm_unary_op_fast(vm, ${emitUnaryOperator(operator)}, ${boxed(src)})`)};`,
 			];
-			if (THROWING_UNARY_OPERATORS.has(operator)) {
+			if (canThrow) {
 				lowered.push(throwCheck());
 			}
 			return lowered;
@@ -11587,6 +11987,7 @@ function emitInstruction(
 			const expression = nativeMathUnaryExpr(
 				instruction.operation,
 				typedNumber(instruction.src),
+				instructionInputIntegerRange(context.facts, instruction.src),
 			);
 			return expression === null ? null : [storeNumber(instruction.dst, expression)];
 		}
@@ -11595,6 +11996,7 @@ function emitInstruction(
 				instruction.operation,
 				typedNumber(instruction.left),
 				typedNumber(instruction.right),
+				context.facts?.inputIntegerRanges,
 			);
 			return expression === null ? null : [storeNumber(instruction.dst, expression)];
 		}
@@ -11651,13 +12053,12 @@ function emitInstruction(
 				const input = instruction.arguments[0];
 				if (predicatePlan.mode === "non-number")
 					return [storeBoolean(instruction.dst, "false")];
-				if (predicatePlan.mode === "int32")
+				if (predicatePlan.mode === "integer")
 					return [
 						storeBoolean(
 							instruction.dst,
 							instruction.operation === "Number.isNaN" ? "false" : "true",
 						),
-						callPoll(),
 					];
 				if (predicatePlan.mode === "number") {
 					if (input === undefined)
@@ -11668,7 +12069,7 @@ function emitInstruction(
 						instruction.operation,
 						number,
 					);
-					return [storeBoolean(instruction.dst, predicate), callPoll()];
+					return [storeBoolean(instruction.dst, predicate)];
 				}
 				return [
 					storeBoolean(
@@ -11845,9 +12246,16 @@ function emitInstruction(
 								? "nullptr"
 								: `((f64[]){ ${arguments_.join(", ")} })`;
 						const expression =
-							instruction.operation === "Math.hypot"
-								? `mal_builtin_math_hypot_numbers(${values}, ${arguments_.length})`
-								: `mal_builtin_math_min_max_numbers(${values}, ${arguments_.length}, ${instruction.operation === "Math.max" ? "true" : "false"})`;
+							arguments_.length === 2 && instruction.operation !== "Math.hypot"
+								? nativeMathBinaryExpr(
+										instruction.operation,
+										arguments_[0]!,
+										arguments_[1]!,
+										context.facts?.inputIntegerRanges?.slice(1),
+									)!
+								: instruction.operation === "Math.hypot"
+									? `mal_builtin_math_hypot_numbers(${values}, ${arguments_.length})`
+									: `mal_builtin_math_min_max_numbers(${values}, ${arguments_.length}, ${instruction.operation === "Math.max" ? "true" : "false"})`;
 						return [storeNumber(instruction.dst, expression), callPoll()];
 					}
 				}
@@ -11858,7 +12266,11 @@ function emitInstruction(
 					const arguments_ = instruction.arguments.map(nativeNumberOperand);
 					const expression =
 						arguments_.length >= 1 && arguments_[0] !== null
-							? nativeMathUnaryExpr(instruction.operation, arguments_[0]!)
+							? nativeMathUnaryExpr(
+									instruction.operation,
+									arguments_[0]!,
+									context.facts?.inputIntegerRanges?.[1],
+								)
 							: arguments_.length === 2 &&
 								  arguments_.every((value) => value !== null) &&
 								  MATH_BINARY_OPERATIONS.has(instruction.operation)
@@ -11955,8 +12367,13 @@ function emitInstruction(
 									instruction.operation,
 									number(first!),
 									number(second!),
+									context.facts?.inputIntegerRanges?.slice(1),
 								)
-							: nativeMathUnaryExpr(instruction.operation, number(first!));
+							: nativeMathUnaryExpr(
+									instruction.operation,
+									number(first!),
+									instructionInputIntegerRange(context.facts, first!),
+								);
 						if (expression !== null) {
 							guard = guards.length === 0 ? "true" : guards.join(" && ");
 							direct = [
@@ -12895,11 +13312,7 @@ function emitInstruction(
 						: (nativeNumberOperand(offset) ??
 							`(mal_ops_is_number(${boxedOperand(offset)}) ? mal_ops_number_as_f64(${boxedOperand(offset)}) : -1.0)`);
 				const endian = operand(dataViewAccess.set ? 2 : 1);
-				const littleEndian =
-					endian === undefined
-						? "false"
-						: (nativeBooleanOperand(endian) ??
-							`mal_value_is_truthy(${boxedOperand(endian)})`);
+				const littleEndian = endian === undefined ? "false" : operandTruthy(endian);
 				const value = dataViewAccess.set ? operand(1) : undefined;
 				const number =
 					value === undefined
@@ -12928,6 +13341,7 @@ function emitInstruction(
 						? [`  r${instruction.dst} = ${callResult("MAL_VALUE_UNDEFINED")};`]
 						: []),
 					`} else {`,
+					...guardedCallFallbackRootPublication(),
 					`  MalCompletion ${tmp} = ${profileCall("call", `mal_vm_call_cached(vm, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length})`)};`,
 					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`  r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
@@ -12946,8 +13360,7 @@ function emitInstruction(
 					"Boolean.prototype.toString": "MAL_BOOLEAN_TO_STRING",
 				}[guardedBuiltinOperation];
 				const receiver = boxedOperand(instruction.thisValue);
-				const argument =
-					args.length === 0 ? "MAL_VALUE_UNDEFINED" : boxedOperand(args[0]!);
+				const argument = args[0];
 				const primitiveReceiver = nativeBooleanOperand(instruction.thisValue);
 				const receiverGuard =
 					operation === "MAL_BOOLEAN_CALL" || primitiveReceiver !== null
@@ -12956,7 +13369,10 @@ function emitInstruction(
 				const boolean = primitiveReceiver ?? `mal_value_to_boolean(${receiver})`;
 				const result =
 					operation === "MAL_BOOLEAN_CALL"
-						? storeBoolean(instruction.dst, `mal_value_is_truthy(${argument})`)
+						? storeBoolean(
+								instruction.dst,
+								argument === undefined ? "false" : operandTruthy(argument),
+							)
 						: operation === "MAL_BOOLEAN_VALUE_OF"
 							? storeBoolean(instruction.dst, boolean)
 							: `r${instruction.dst} = ${callResult(`mal_value_from_string(mal_intrinsic_hot_ascii(vm, ${boolean} ? MAL_HOT_KEY_TRUE : MAL_HOT_KEY_FALSE))`)};`;
@@ -12964,6 +13380,7 @@ function emitInstruction(
 					`if (mal_builtin_boolean_callee_matches(${operation}, ${boxedOperand(instruction.callee)})${receiverGuard}) {`,
 					result,
 					`} else {`,
+					...guardedCallFallbackRootPublication(),
 					`MalCompletion ${tmp} = mal_vm_call_cached(vm, ${boxedOperand(instruction.callee)}, ${receiver}, ${argsExpr}, ${args.length});`,
 					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
@@ -12976,18 +13393,27 @@ function emitInstruction(
 				const argument = args[0];
 				const number = argument === undefined ? null : nativeNumberOperand(argument);
 				const test =
-					argument === undefined
-						? "false"
-						: number === null
-							? boxedNumberPredicateExpression(
-									guardedBuiltinOperation!,
-									boxedOperand(argument),
-								)
-							: nativeNumberPredicateExpression(guardedBuiltinOperation!, number);
+					argument !== undefined &&
+					instructionInputIntegerRange(context.facts, argument) !== undefined
+						? guardedBuiltinOperation === "Number.isNaN"
+							? "false"
+							: "true"
+						: argument === undefined ||
+							  ((operandKind(argument) ?? COMPILER_VALUE_KIND_TOP) &
+									COMPILER_VALUE_KIND_NUMBER) ===
+									0
+							? "false"
+							: number === null
+								? boxedNumberPredicateExpression(
+										guardedBuiltinOperation!,
+										boxedOperand(argument),
+									)
+								: nativeNumberPredicateExpression(guardedBuiltinOperation!, number);
 				return [
 					`if (mal_builtin_number_predicate_callee_matches(${numberPredicate}, ${boxedOperand(instruction.callee)})) {`,
 					storeBoolean(instruction.dst, test),
 					`} else {`,
+					...guardedCallFallbackRootPublication(),
 					`MalCompletion ${tmp} = mal_vm_call_cached(vm, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length});`,
 					`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
@@ -13301,24 +13727,16 @@ function emitInstruction(
 				];
 			}
 			if (vmCallProvesBuiltin(callPlan, "String.prototype.charCodeAt")) {
-				if (context.charCodeAtCallRootPublication) {
+				if (context.guardedCallRootPublication) {
 					context.stringLeafCaches.add(ip);
-					const mask = context.charCodeAtCallInactiveRootMask;
-					const charPoll =
-						mask === undefined
-							? callPoll()
-							: `if (mal_gc_poll_requested()) { ${(context.outgoingRootPublication ?? []).join(" ")} ${cInactiveRootMaskPublication(mask, context.inactiveRootMaskStatements)}; ${safepoint()} }`;
+					const mask = context.guardedCallInactiveRootMask;
+					const charPoll = mask === undefined ? callPoll() : guardedCallPoll();
 					return [
 						`MalValue __char_value_${ip};`,
 						`if (mal_builtin_string_char_code_at_try(vm, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length}, &__string_leaf_cache_${ip}, &__char_value_${ip})) {`,
 						`  r${instruction.dst} = ${callResult(`__char_value_${ip}`)};`,
 						`} else {`,
-						...(context.incomingRootPublication ?? []).map((line) => `  ${line}`),
-						...(mask === undefined
-							? []
-							: [
-									`  ${cInactiveRootMaskPublication(mask, context.inactiveRootMaskStatements)};`,
-								]),
+						...guardedCallFallbackRootPublication(),
 						`  MalCompletion ${tmp} = mal_builtin_string_char_code_at_direct(vm, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length}, &__string_leaf_cache_${ip});`,
 						`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 						`  r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
@@ -13585,8 +14003,19 @@ function emitInstruction(
 				const { operation } = mathCall;
 				const kernel = (values: ReadonlyArray<string>): string | null =>
 					mathCall.arity === 1
-						? nativeMathUnaryExpr(operation, values[0]!)
-						: nativeMathBinaryExpr(operation, values[0]!, values[1]!);
+						? nativeMathUnaryExpr(
+								operation,
+								values[0]!,
+								args[0] === undefined
+									? undefined
+									: instructionInputIntegerRange(context.facts, args[0]),
+							)
+						: nativeMathBinaryExpr(
+								operation,
+								values[0]!,
+								values[1]!,
+								context.facts?.inputIntegerRanges?.slice(2),
+							);
 				const nativeOperands = instruction.arguments.map(nativeNumberOperand);
 				const expression = kernel(
 					instruction.arguments.map(
@@ -13610,12 +14039,12 @@ function emitInstruction(
 					`if (${guards.join(" && ")}) {`,
 					`  ${storeMathNumber(instruction.dst, operation, expression)}`,
 					`} else {`,
-					...mathFallbackRootPublication(),
+					...guardedCallFallbackRootPublication(),
 					`  MalCompletion ${tmp} = ${profileCall("call", `mal_vm_call_cached(vm, ${boxedOperand(instruction.callee)}, ${boxedOperand(instruction.thisValue)}, ${argsExpr}, ${args.length})`)};`,
 					`  if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
 					`  r${instruction.dst} = ${callResult(`${tmp}.value`)};`,
 					`}`,
-					mathPoll(),
+					guardedCallPoll(),
 				];
 			}
 			// A per-site polymorphic call cache: exact native callees and ordinary compiled
@@ -14006,12 +14435,24 @@ function emitInstruction(
 				...(context.loopPoll ? [poll()] : []),
 				...(instruction.targetIp === ip + 1 ? [] : [`goto L${instruction.targetIp};`]),
 			];
-		case "JUMP_IF":
+		case "JUMP_IF": {
+			if (context.branchTarget !== undefined)
+				return [
+					...(context.loopPoll ? [poll()] : []),
+					...(context.branchTarget === ip + 1 ? [] : [`goto L${context.branchTarget};`]),
+				];
+			const condition = truthy(instruction.cond);
+			if (condition === "false") return [];
+			if (condition === "true")
+				return [
+					...(context.loopPoll ? [poll()] : []),
+					...(instruction.targetIp === ip + 1 ? [] : [`goto L${instruction.targetIp};`]),
+				];
 			return context.loopPoll
-				? [
-						`if (${truthy(instruction.cond)}) { ${poll()} goto L${instruction.targetIp}; }`,
-					]
-				: [`if (${truthy(instruction.cond)}) goto L${instruction.targetIp};`];
+				? [`if (${condition}) { ${poll()} goto L${instruction.targetIp}; }`]
+				: [`if (${condition}) goto L${instruction.targetIp};`];
+		}
+
 		case "RETURN": {
 			// Register -1 is the "no value" sentinel (a synthesized empty return).
 			let value =
@@ -14033,8 +14474,8 @@ function emitInstruction(
 							? `r${instruction.value}`
 							: `mal_ops_number_to_i32(${num(instruction.value)})`
 						: directResultRepresentation === "number"
-							? reps[instruction.value] === "number"
-								? `r${instruction.value}`
+							? isNumericRep(reps[instruction.value]!)
+								? num(instruction.value)
 								: `mal_ops_number_as_f64(${boxed(instruction.value)})`
 							: directResultRepresentation === "boolean"
 								? reps[instruction.value] === "boolean"

@@ -4,6 +4,7 @@ import {
 	COMPILER_VALUE_KIND_UNDEFINED,
 } from "../shared/compiler-value-kinds.ts";
 import { effectSummariesEqual } from "../shared/effect-summary.ts";
+import { scalarBuiltinInvocationEffects } from "../shared/scalar-builtin-effects.ts";
 import { CoreEditor } from "./core-editor.ts";
 import {
 	CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
@@ -46,6 +47,7 @@ import type { CoreFunctionPass } from "./core-pass.ts";
 import type { CoreFunctionStore } from "./core-store.ts";
 
 const PROOF_BUDGET = CORE_O2_PASS_BUDGETS["proof-value-kind-representation"];
+const SCALAR_BUILTIN_EFFECT_FACT = "scalar-builtin-effects";
 
 const CORE_REPROVED_FACT_KINDS: ReadonlySet<string> = new Set([
 	CORE_CONTAINED_AGGREGATE_OWN_SLOT_FACT,
@@ -54,6 +56,7 @@ const CORE_REPROVED_FACT_KINDS: ReadonlySet<string> = new Set([
 	CORE_PRIMITIVE_OPERATOR_EFFECT_FACT,
 	CORE_EXACT_SHAPE_OWN_SLOT_EFFECT_FACT,
 	CORE_EXACT_COLLECTION_BUILTIN_EFFECT_FACT,
+	SCALAR_BUILTIN_EFFECT_FACT,
 ]);
 
 function materializeInstructionOperands(
@@ -585,6 +588,66 @@ const normalizeNumericNullishJoins: CoreFunctionPass = {
 			editor.setValueRepresentation(candidate.joinParameter, "f64");
 		}
 		return editor.commit();
+	},
+};
+
+const refineScalarBuiltinEffects: CoreFunctionPass = {
+	name: "scalar-builtin-effect-refinement",
+	stage: "proofs",
+	requiredFunctionOpcodesAny: ["callKnown"],
+	requiredAnalyses: [],
+	wakesOn: ["body", "facts"],
+	changes: { cfg: false, calls: true, facts: true, representations: false },
+	budget: PROOF_BUDGET,
+	run({ program, item }) {
+		const fn = program.function(item.function);
+		let editor: CoreEditor | undefined;
+		for (const instruction of fn.instructionIds()) {
+			if (
+				fn.instructionKind(instruction) !== "operation" ||
+				fn.instructionOpcodeName(instruction) !== "callKnown"
+			)
+				continue;
+			const attributes = fn.instructionAttributes(instruction);
+			const operation = attributes.operation;
+			if (typeof operation !== "string") continue;
+			const existing = fn.instructionEffectRefinement(instruction);
+			const effects =
+				!attributes.construct && attributes.argumentMode === undefined
+					? scalarBuiltinInvocationEffects(operation)
+					: undefined;
+			if (effects === undefined) {
+				if (
+					existing !== undefined &&
+					fn.fact(existing.proof).kind === SCALAR_BUILTIN_EFFECT_FACT
+				) {
+					editor ??= CoreEditor.open(program, item.function);
+					editor.clearInstructionEffectRefinement(instruction);
+					editor.removeFact(existing.proof);
+				}
+				continue;
+			}
+			if (existing !== undefined) {
+				const fact = fn.fact(existing.proof);
+				if (fact.kind !== SCALAR_BUILTIN_EFFECT_FACT) continue;
+				if (fact.value === operation && effectSummariesEqual(existing.effects, effects))
+					continue;
+				editor ??= CoreEditor.open(program, item.function);
+				editor.clearInstructionEffectRefinement(instruction);
+				editor.removeFact(existing.proof);
+			}
+			editor ??= CoreEditor.open(program, item.function);
+			const proof = editor.addFact({
+				kind: SCALAR_BUILTIN_EFFECT_FACT,
+				value: operation,
+				claims: [{ kind: "effect", instruction, effects }],
+				validity: { kind: "summary", digest: `scalar-builtin:${operation}` },
+				obligations: [],
+				origin: "verified-known-builtin-identity",
+			});
+			editor.setInstructionEffectRefinement(instruction, { effects, proof });
+		}
+		return editor?.commit();
 	},
 };
 
@@ -1187,6 +1250,7 @@ const materializeFlowScalars: CoreFunctionPass = {
 
 export const CORE_LATE_PROOF_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	normalizeNumericNullishJoins,
+	refineScalarBuiltinEffects,
 	refinePrimitiveEffects,
 	materializeLocalScalars,
 	materializeFlowScalars,
@@ -1196,6 +1260,7 @@ export const CORE_PROOF_PASSES: ReadonlyArray<CoreFunctionPass> = [
 	canonicalizeFacts,
 	removeEmptyUnreferencedFacts,
 	normalizeNumericNullishJoins,
+	refineScalarBuiltinEffects,
 	refinePrimitiveEffects,
 	rewireSubsumedEffectProofs,
 	foldSubsumedGuards,

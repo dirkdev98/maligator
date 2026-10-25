@@ -852,7 +852,7 @@ export function mergeProgramImages(images: Array<ProgramImage>): MergedProgramIm
 								})),
 							}),
 					argumentRepresentations: entry.argumentRepresentations?.slice(),
-					operatorInputs: entry.operatorInputs?.map((input) => ({
+					instructionFacts: entry.instructionFacts?.map((input) => ({
 						...input,
 						masks: [...input.masks] as typeof input.masks,
 					})),
