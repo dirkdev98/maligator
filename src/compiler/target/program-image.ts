@@ -5542,14 +5542,23 @@ function lowerExecutionFunctionToNativePlan(
 		...(entry.instructionFacts === undefined
 			? {}
 			: {
-					instructionFacts: entry.instructionFacts.map(
-						({ instruction, masks, results, inputIntegerRanges, effectMask }) => ({
-							instructionIp: instructionIndexByTargetInstruction.get(instruction)!,
-							masks,
-							results,
-							...(inputIntegerRanges === undefined ? {} : { inputIntegerRanges }),
-							effectMask,
-						}),
+					instructionFacts: entry.instructionFacts.flatMap(
+						({ instruction, masks, results, inputIntegerRanges, effectMask }) => {
+							// Compile-only liveness markers have no executable fact site.
+							if (instruction.type === "rootUse") return [];
+							const instructionIp = instructionIndexByTargetInstruction.get(instruction);
+							if (instructionIp === undefined)
+								throw new Error("Native entry fact lost its executable instruction");
+							return [
+								{
+									instructionIp,
+									masks,
+									results,
+									...(inputIntegerRanges === undefined ? {} : { inputIntegerRanges }),
+									effectMask,
+								},
+							];
+						},
 					),
 				}),
 		parameterRepresentations: [...entry.parameterRepresentations],

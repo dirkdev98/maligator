@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { resolveBuildConfig } from "../src/build-config.ts";
+import { compileEntrypoint } from "../src/compiler/pipeline/compile-program.ts";
 import {
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_STRING,
@@ -34,6 +36,29 @@ import { positionTableEntries } from "../src/compiler/target/runtime-image.ts";
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 describe("independent native instruction facts", () => {
+	it.each(["direct-known-call", "core-object-slots"])(
+		"flattens %s entry facts without assigning executable sites to liveness markers",
+		(fixture) => {
+			for (const primordials of ["mutable", "locked"] as const) {
+				const image = compileEntrypoint(`tests/local/${fixture}.js`, {
+					buildConfig: resolveBuildConfig({ engine: { primordials } }),
+					enforcePolicies: false,
+				});
+				const entries = image.native.functions.flatMap((fn) => fn.directEntries);
+				expect(entries.length).toBeGreaterThan(0);
+				for (const fn of image.native.functions)
+					for (const entry of fn.directEntries)
+						for (const fact of entry.instructionFacts ?? []) {
+							expect(Number.isInteger(fact.instructionIp)).toBe(true);
+							expect(fn.body.instructions[fact.instructionIp]).toBeDefined();
+						}
+				expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+					image,
+				);
+			}
+		},
+	);
+
 	it.each([
 		["binary", "(flag?!!input:null)<undefined", "BINARY"],
 		["unary", "+(flag?!!input:null)", "UNARY"],
