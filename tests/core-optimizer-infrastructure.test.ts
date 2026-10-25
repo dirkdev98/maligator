@@ -11,6 +11,7 @@ import {
 	CoreFunctionOptimizationResources,
 	CoreFunctionOptimizationSession,
 } from "../src/compiler/core/core-function-optimization-session.ts";
+import type { CoreCrossCallSession } from "../src/compiler/core/core-function-optimization-session.ts";
 import { CORE_CONTROL_FLOW_BUNDLE_ANALYSIS } from "../src/compiler/core/core-ir-control-flow.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
 import {
@@ -468,23 +469,29 @@ describe("Core optimizer infrastructure", () => {
 		).toThrow("already has a primary session");
 	});
 
-	it("opens a changed caller at most once per cross-call wave", () => {
+	it("owns changed callers separately per structural round, result proof and capture pruning", () => {
 		const { program, functions } = programWithTwoFunctions();
 		const report = new CoreOptimizationReportBuilder(program);
 		const resources = new CoreFunctionOptimizationResources(program);
-		const open = (wave: number) =>
+		const open = (session: CoreCrossCallSession) =>
 			new CoreFunctionOptimizationSession(
 				program,
 				context(),
 				report,
 				resources,
 				functions[0]!.id,
-				{ crossCallWave: wave },
+				{ crossCallSession: session },
 			);
 		open(0);
 
 		expect(() => open(0)).toThrow("already has a cross-call session in wave 0");
 		expect(() => open(1)).not.toThrow();
+		for (const session of ["call-result-kinds", "capture-liveness"] as const) {
+			expect(() => open(session)).not.toThrow();
+			expect(() => open(session)).toThrow(
+				`already has a cross-call session in ${session}`,
+			);
+		}
 	});
 
 	it("does not reseed fused local work for an already-consumed change batch", () => {

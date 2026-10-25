@@ -16,7 +16,10 @@ import {
 	coreSingleActivationFunctions,
 } from "./core-function-activations.ts";
 import { cloneCoreFunction, coreFunctionIsCloneable } from "./core-function-clone.ts";
-import type { CoreCrossCallFunctionOptimizationResult } from "./core-function-optimization-session.ts";
+import type {
+	CoreCrossCallFunctionOptimizationResult,
+	CoreCrossCallSession,
+} from "./core-function-optimization-session.ts";
 import {
 	coreFunctionPrototypeCall,
 	coreGuardableCall,
@@ -3982,7 +3985,7 @@ interface CoreValueKindFold {
 }
 
 export type CoreCrossCallCallerPreparation = (
-	wave: number,
+	session: CoreCrossCallSession,
 	functionId: CoreFunctionId,
 	editor: CoreEditor,
 ) => () => CoreCrossCallFunctionOptimizationResult;
@@ -4518,7 +4521,7 @@ export function runCoreCrossCallTransforms(
 			}
 			callerEditSessions++;
 			callerLocalOptimizations++;
-			finishCallers.push(prepareCaller(2, functionId, editor));
+			finishCallers.push(prepareCaller("call-result-kinds", functionId, editor));
 		}
 		for (const finish of finishCallers) {
 			const optimized = finish();

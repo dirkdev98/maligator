@@ -11,6 +11,7 @@ import {
 	CoreFunctionOptimizationResources,
 	CoreFunctionOptimizationSession,
 } from "../src/compiler/core/core-function-optimization-session.ts";
+import type { CoreCrossCallSession } from "../src/compiler/core/core-function-optimization-session.ts";
 import { CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE } from "../src/compiler/core/core-internal-attributes.ts";
 import { buildCoreOptimizationPlan } from "../src/compiler/core/core-ir-region-selection.ts";
 import type { CoreOptimizationPlan } from "../src/compiler/core/core-ir-regions.ts";
@@ -56,11 +57,14 @@ function runTransforms(
 	program: CoreProgram,
 	limits?: CoreTransformBudgetLimits,
 	beforeOptimizeCaller?: (
-		wave: number,
+		session: CoreCrossCallSession,
 		functionId: CoreFunctionId,
 		editor: CoreEditor,
 	) => void,
-	beforeFinishCaller?: (wave: number, functionId: CoreFunctionId) => void,
+	beforeFinishCaller?: (
+		session: CoreCrossCallSession,
+		functionId: CoreFunctionId,
+	) => void,
 ) {
 	const context = programAnalysisContext();
 	const report = new CoreOptimizationReportBuilder(program);
@@ -70,18 +74,18 @@ function runTransforms(
 	const result = runCoreCrossCallTransforms(
 		program,
 		analyses,
-		(wave, functionId, editor) => {
-			beforeOptimizeCaller?.(wave, functionId, editor);
+		(session, functionId, editor) => {
+			beforeOptimizeCaller?.(session, functionId, editor);
 			const finish = new CoreFunctionOptimizationSession(
 				program,
 				context,
 				report,
 				resources,
 				functionId,
-				{ crossCallWave: wave },
+				{ crossCallSession: session },
 			).prepareCrossCall(editor);
 			return () => {
-				beforeFinishCaller?.(wave, functionId);
+				beforeFinishCaller?.(session, functionId);
 				return finish();
 			};
 		},

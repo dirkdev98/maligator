@@ -348,7 +348,7 @@ export function optimizeCore(
 				: runCoreCrossCallTransforms(
 						compilation.program,
 						analyses,
-						(wave, functionId, editor) =>
+						(session, functionId, editor) =>
 							new CoreFunctionOptimizationSession(
 								compilation.program,
 								compilation.context,
@@ -358,7 +358,7 @@ export function optimizeCore(
 								{
 									verification: options.verification,
 									optionalMaxRunsPerWorkItem: profile.optionalMaxRunsPerWorkItem,
-									crossCallWave: wave,
+									crossCallSession: session,
 									benchmarkAblation: ablatedPassFamily,
 								},
 							).prepareCrossCall(editor),
@@ -396,7 +396,7 @@ export function optimizeCore(
 					verification: options.verification,
 					optionalMaxRunsPerWorkItem: profile.optionalMaxRunsPerWorkItem,
 					benchmarkAblation: ablatedPassFamily,
-					crossCallWave: crossCall.statistics.waves + 1,
+					crossCallSession: "capture-liveness",
 				},
 			).prepareCrossCall(CoreEditor.open(compilation.program, change.function), [
 				change,

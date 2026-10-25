@@ -41,10 +41,12 @@ export type CoreFunctionOptimizationPhaseRunner = <Result>(
 	run: () => Result,
 ) => Result;
 
+export type CoreCrossCallSession = number | "call-result-kinds" | "capture-liveness";
+
 export interface CoreFunctionOptimizationSessionOptions {
 	readonly verification?: CoreVerificationProfile;
 	readonly optionalMaxRunsPerWorkItem?: number;
-	readonly crossCallWave?: number;
+	readonly crossCallSession?: CoreCrossCallSession;
 	readonly benchmarkAblation?: CoreOptimizationFamily;
 }
 
@@ -61,7 +63,7 @@ export class CoreFunctionOptimizationResources {
 	readonly specializationFeatureIndex: CoreFunctionFeatureIndex;
 	readonly scratch: CoreAnalysisScratchPool;
 	readonly #primaryFunctions = new Set<CoreFunctionId>();
-	readonly #crossCallFunctions = new Map<number, Set<CoreFunctionId>>();
+	readonly #crossCallFunctions = new Map<CoreCrossCallSession, Set<CoreFunctionId>>();
 
 	constructor(program: CoreProgram) {
 		this.localRules = new CoreLocalRuleRegistry(program);
@@ -86,15 +88,16 @@ export class CoreFunctionOptimizationResources {
 		this.#primaryFunctions.add(functionId);
 	}
 
-	claimCrossCall(wave: number, functionId: CoreFunctionId): void {
-		const functions = this.#crossCallFunctions.get(wave) ?? new Set();
+	claimCrossCall(session: CoreCrossCallSession, functionId: CoreFunctionId): void {
+		const functions = this.#crossCallFunctions.get(session) ?? new Set();
 		if (functions.has(functionId)) {
+			const phase = typeof session === "number" ? `wave ${session}` : session;
 			throw new Error(
-				`Core function ${functionId} already has a cross-call session in wave ${wave}`,
+				`Core function ${functionId} already has a cross-call session in ${phase}`,
 			);
 		}
 		functions.add(functionId);
-		this.#crossCallFunctions.set(wave, functions);
+		this.#crossCallFunctions.set(session, functions);
 	}
 }
 
@@ -121,8 +124,8 @@ export class CoreFunctionOptimizationSession {
 		options: CoreFunctionOptimizationSessionOptions = {},
 	) {
 		program.function(functionId);
-		if (options.crossCallWave === undefined) resources.claimPrimary(functionId);
-		else resources.claimCrossCall(options.crossCallWave, functionId);
+		if (options.crossCallSession === undefined) resources.claimPrimary(functionId);
+		else resources.claimCrossCall(options.crossCallSession, functionId);
 		this.functionId = functionId;
 		this.#program = program;
 		this.#context = context;
@@ -135,7 +138,7 @@ export class CoreFunctionOptimizationSession {
 			: resources.localRules;
 		this.#report = report;
 		this.#verification = options.verification ?? "boundary";
-		this.#crossCall = options.crossCallWave !== undefined;
+		this.#crossCall = options.crossCallSession !== undefined;
 		this.#passes = new CoreFunctionPassScheduler(
 			program,
 			context,
