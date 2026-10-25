@@ -98,6 +98,26 @@ function closed(value, callback) {
 	collectGarbage();
 	return result + 1;
 }
+function identityBounded(value, callback) {
+	const result = identity((value & 255) + 1, callback);
+	collectGarbage();
+	return result ^ 7;
+}
+function identityText(value, callback) {
+	const result = identity(":" + value, callback);
+	collectGarbage();
+	return result.length;
+}
+function identityPrefix(value, iterable) {
+	const result = identity((value & 255) + 1, ...iterable);
+	collectGarbage();
+	return result ^ 7;
+}
+function identityTextPrefix(value, iterable) {
+	const result = identity(":" + value, ...iterable);
+	collectGarbage();
+	return result.length;
+}
 function spread(values) {
 	const result = integer(...values);
 	collectGarbage();
@@ -161,6 +181,10 @@ globalThis.compute = compute;
 globalThis.concat = concat;
 globalThis.maybe = maybe;
 globalThis.closed = closed;
+globalThis.identityBounded = identityBounded;
+globalThis.identityText = identityText;
+globalThis.identityPrefix = identityPrefix;
+globalThis.identityTextPrefix = identityTextPrefix;
 globalThis.spread = spread;
 globalThis.rest = rest;
 globalThis.resume = resume;
@@ -192,6 +216,8 @@ const inputs = [
 	NaN,
 	Infinity,
 	"7",
+	"😀é\0",
+	"\ud800",
 	null,
 	undefined,
 	true,
@@ -220,6 +246,12 @@ for (const value of inputs) {
 	console.log(
 		capture(() => maybe(value, hook)),
 		capture(() => closed(value, hook)),
+	);
+	console.log(
+		capture(() => identityBounded(value, hook)),
+		capture(() => identityText(value, hook)),
+		capture(() => identityPrefix(value, [hook])),
+		capture(() => identityTextPrefix(value, [hook])),
 	);
 	console.log(
 		capture(() => spread([value, hook])),

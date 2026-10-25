@@ -829,6 +829,8 @@ function scalarConsumer(fn: CoreFunctionStore, instruction: CoreInstructionId): 
 	const opcode = fn.instructionOpcodeName(instruction);
 	return (
 		SCALAR_CONSUMERS.has(opcode) ||
+		(opcode === "loadPropertyStatic" &&
+			fn.instructionAttributes(instruction).primitiveStringLength === true) ||
 		((opcode === "loadProperty" || opcode === "storeProperty") &&
 			fn.instructionAttributes(instruction).containedFixedTypedArrayInBounds === true)
 	);

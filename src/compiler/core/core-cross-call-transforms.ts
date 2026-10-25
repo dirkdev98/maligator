@@ -2,6 +2,7 @@ import {
 	COMPILER_VALUE_KIND_TOP,
 	COMPILER_VALUE_KIND_OBJECT,
 	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_UNDEFINED,
 	compilerValueKindMaskIsValid,
 } from "../shared/compiler-value-kinds.ts";
 import {
@@ -49,6 +50,7 @@ import {
 	coreCalleeTargetsSingleFunction,
 	coreValueIsLoadedGlobalProperty,
 } from "./core-ir-call-targets.ts";
+import type { CoreIndexedCallSite } from "./core-ir-call-targets.ts";
 import {
 	CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
 	buildCoreControlFlow,
@@ -4112,6 +4114,18 @@ function discoverProgramCallResultKinds(
 	const results = new Map<CoreFunctionId, Array<CoreCallResultFact>>();
 	const localReturns = new Map<CoreFunctionId, number | undefined>();
 	const returnRanges = new Map<CoreFunctionId, CompilerIntegerRange | undefined>();
+	const forwardedValue = (
+		target: CoreFunctionId,
+		site: CoreIndexedCallSite,
+	): CoreValueId | undefined => {
+		const fn = program.function(target);
+		if (fn.isAsync || fn.isGenerator) return undefined;
+		const provenance = flow.summaries.summary(target)?.returnProvenance;
+		if (provenance?.kind === "parameter")
+			return (site.arguments ?? site.argumentPrefix)?.[provenance.index];
+		if (provenance?.kind === "receiver" && fn.metadata.strict) return site.receiver;
+		return undefined;
+	};
 	const joinRange = (
 		left: CompilerIntegerRange | undefined,
 		right: CompilerIntegerRange,
@@ -4183,6 +4197,37 @@ function discoverProgramCallResultKinds(
 	};
 	for (const functionId of flow.reachability.liveFunctions) {
 		const fn = program.function(functionId);
+		let localKinds: ReturnType<typeof coreValueKindDemand> | undefined;
+		const projectedMask = (target: CoreFunctionId, site: CoreIndexedCallSite) => {
+			const value = forwardedValue(target, site);
+			if (value !== undefined) {
+				localKinds ??= coreValueKindDemand(
+					fn,
+					() =>
+						analyses
+							.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
+								scope: "function",
+								function: functionId,
+							})
+							.exceptional(),
+					flow.targets,
+					true,
+				);
+				const mask = localKinds(value);
+				if (mask !== undefined && mask !== COMPILER_VALUE_KIND_TOP) return mask;
+			}
+			const callee = program.function(target);
+			const provenance = flow.summaries.summary(target)?.returnProvenance;
+			if (
+				!callee.isAsync &&
+				!callee.isGenerator &&
+				provenance?.kind === "parameter" &&
+				site.arguments !== undefined &&
+				provenance.index >= site.arguments.length
+			)
+				return COMPILER_VALUE_KIND_UNDEFINED;
+			return returnMask(target);
+		};
 		for (const site of flow.targets.outgoing(functionId)) {
 			const { instruction, targets } = site;
 			if (
@@ -4190,29 +4235,21 @@ function discoverProgramCallResultKinds(
 					"call-completion" ||
 				targets.opaque ||
 				(targets.anyScript && !flow.targets.sourceClosed) ||
-				fn.kernel.instructionResultCount(instruction) !== 1 ||
-				fn.valueRepresentation(
-					fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)),
-				) !== "boxed"
+				fn.kernel.instructionResultCount(instruction) !== 1
 			)
 				continue;
 			const mask = targets.anyScript
 				? (readValueKinds().anyScriptAggregate?.returnKind ?? 0)
-				: targets.functions.reduce((mask, target) => mask | returnMask(target), 0);
+				: targets.functions.reduce(
+						(mask, target) => mask | projectedMask(target, site),
+						0,
+					);
 			let integerRange: CompilerIntegerRange | undefined;
 			if (mask === COMPILER_VALUE_KIND_NUMBER) {
 				for (const target of targets.anyScript
 					? program.functionIds()
 					: targets.functions) {
-					if (returnMask(target) === 0) continue;
-					const provenance = flow.summaries.summary(target)?.returnProvenance;
-					const forwarded =
-						provenance?.kind === "parameter"
-							? site.arguments?.[provenance.index]
-							: provenance?.kind === "receiver" &&
-								  program.function(target).metadata.strict
-								? site.receiver
-								: undefined;
+					const forwarded = forwardedValue(target, site);
 					const projected =
 						forwarded === undefined
 							? undefined
@@ -4222,6 +4259,7 @@ function discoverProgramCallResultKinds(
 										function: functionId,
 									})
 									.range(forwarded, fn.instructionBlock(instruction));
+					if (projected === undefined && returnMask(target) === 0) continue;
 					const range = projected ?? returnRange(target);
 					if (range === undefined) {
 						integerRange = undefined;

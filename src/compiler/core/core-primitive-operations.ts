@@ -2,6 +2,7 @@ import { builtinWorldAssumptions } from "../shared/builtin-assumptions.ts";
 import { mathUnaryOperationKeys } from "../shared/builtin-registry.ts";
 import {
 	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_STRING,
 	compilerPrimitiveConversionOperator,
 } from "../shared/compiler-value-kinds.ts";
 import {
@@ -444,7 +445,11 @@ export const lowerPrimitiveOperations: CoreFunctionPass = {
 					continue;
 				const input = fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction)),
 					fact = analysis.queryAt(input, instruction);
-				if (fact.kind === "known" && fact.brand === "string") {
+				if (
+					(fact.kind === "known" && fact.brand === "string") ||
+					(kinds ??= context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS)).kindMask(input) ===
+						COMPILER_VALUE_KIND_STRING
+				) {
 					const value = analysis.constant(input, instruction);
 					if (value?.kind === "string")
 						plans.push({

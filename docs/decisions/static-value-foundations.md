@@ -250,6 +250,12 @@ throwing, collection and user-code effects. Every reachable return and possible
 callee must satisfy the bound; an opaque fallback or guarded entry ABI alone cannot
 establish it. Existing return provenance projects a forwarded parameter or strict
 receiver from that caller's operand. Async and generator calls still return objects.
+Forwarded kinds use those same caller-local operands, including known prefixes before
+an unknown iterable and omitted positional arguments. This does not require incoming
+calls to the callee to have a uniform kind. Default initialization and mapped-argument
+writes need their own provenance proof; sloppy receivers retain their binding rules.
+Primitive String length lowering consumes the independent kind proof as well as
+static-value brands, and its selected operation admits scalar String storage.
 Call result bounds reach scalar selection, variant overlays and artifact transport.
 After checking completion, callers decode int32-bounded results with an ordinary C
 cast; argument transports retain their own conversion semantics. Unsigned C remainder

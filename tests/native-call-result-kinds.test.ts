@@ -63,21 +63,12 @@ describe("normal script call result facts", () => {
 		},
 	);
 
-	it.each([
-		[false, "+value", undefined],
-		[true, "+value", undefined],
-		[false, "(value&255)+1", undefined],
-		[
-			true,
-			"(value&255)+1",
-			{ minimum: 1, maximum: 256, exactSafeIntegers: true, excludesNegativeZero: true },
-		],
-	] as const)(
-		"uses whole-program call inputs only with a closure certificate: %s, %s",
-		(closed, expression, range) => {
+	it.each([false, true])(
+		"uses whole-program optional inputs only with a closure certificate: %s",
+		(closed) => {
 			const sourcePath = "/call-result-closed.mjs";
-			const source = `const identity=function identity(value,hook){try{hook();return value;}catch(error){throw error;}};
-			function compute(value,hook,gate){const result=identity(${expression},hook);gate();return result+1;}
+			const source = `const identity=function identity(value,hook){try{hook();if(value)return value;}catch(error){throw error;}};
+			function compute(value,hook,gate){const result=identity(+value,hook);gate();return result+1;}
 			globalThis.compute=compute;`;
 			const facts = compilerProgramFactsFromConfig(
 				resolveBuildConfig({ engine: { eval: false, primordials: "mutable" } }),
@@ -109,21 +100,225 @@ describe("normal script call result facts", () => {
 			const op = native.body.instructions[ip]!;
 			if (op.opcode !== "CALL") throw new Error("Missing closed call");
 			expect(native.facts![ip]!.resultKindMasks).toEqual([
-				closed ? COMPILER_VALUE_KIND_NUMBER : COMPILER_VALUE_KIND_TOP,
+				closed
+					? COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_UNDEFINED
+					: COMPILER_VALUE_KIND_TOP,
 			]);
-			expect(native.facts![ip]!.resultIntegerRanges?.[0]).toEqual(range);
-			expect(native.registerRepresentations[op.dst]).toBe(
-				closed ? (range === undefined ? "number" : "int32") : "boxed",
-			);
-			if (closed) {
-				expect(
-					native.storage!.callTransports.some((call) => call.instructionIp === ip),
-				).toBe(true);
-				const c = emitCompiledFunction(native, native.functionIndex, "", false)!;
-				expect(c.source).not.toContain(`mal_ops_is_number(r${op.dst})`);
-			}
+			expect(native.facts![ip]!.resultIntegerRanges).toBeUndefined();
+			expect(native.registerRepresentations[op.dst]).toBe("boxed");
 		},
 	);
+
+	it.each([
+		["+value", COMPILER_VALUE_KIND_NUMBER, "number", undefined],
+		[
+			"(value&255)+1",
+			COMPILER_VALUE_KIND_NUMBER,
+			"int32",
+			{ minimum: 1, maximum: 256, exactSafeIntegers: true, excludesNegativeZero: true },
+		],
+		["!!value", COMPILER_VALUE_KIND_BOOLEAN, "boolean", undefined],
+		["value+':'", COMPILER_VALUE_KIND_STRING, "string", undefined],
+		[
+			"-value",
+			COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_BIGINT,
+			"boxed",
+			undefined,
+		],
+	] as const)(
+		"projects a forwarded %s from this call's actual operand",
+		(expression, mask, representation, range) => {
+			const out = inspectCall(
+				"return value;",
+				`function compute(value,hook,gate){const result=leaf(${expression},hook);gate();return result;}`,
+			);
+			expect(out.facts.resultKindMasks).toEqual([mask]);
+			expect(out.facts.resultIntegerRanges?.[0]).toEqual(range);
+			expect(out.native.registerRepresentations[out.op.dst]).toBe(representation);
+			for (const effect of [
+				INSTRUCTION_MAY_THROW,
+				INSTRUCTION_MAY_GC,
+				INSTRUCTION_CALLS_USER_CODE,
+			])
+				expect(out.facts.effectMask! & effect).not.toBe(0);
+			expect(out.native.storage!.rootRegisters.includes(out.op.dst)).toBe(
+				representation === "string" ||
+					mask === (COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_BIGINT),
+			);
+			expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
+				out.image,
+			);
+		},
+	);
+
+	it("projects an omitted positional argument as undefined", () => {
+		const out = inspectStaticValueFunctions(
+			`const leaf=function leaf(hook,value){try{hook();return value;}catch(error){throw error;}};
+		function compute(hook,gate){const result=leaf(hook);gate();return result;}globalThis.leaf=leaf;globalThis.compute=compute;`,
+			["compute"],
+			{ locked: false },
+		).get("compute")!;
+		const ip = out.native.body.instructions.findIndex(
+			(op) => op.opcode === "CALL" && op.arguments.length === 1,
+		);
+		expect(out.native.facts![ip]!.resultKindMasks).toEqual([
+			COMPILER_VALUE_KIND_UNDEFINED,
+		]);
+	});
+
+	it("projects a positional prefix without assuming anything about its iterable tail", () => {
+		const out = inspectCall(
+			"return value;",
+			"function compute(value,args,gate){const result=leaf((value&255)+1,...args);gate();return result%10;}",
+		);
+		expect(out.op.opcode).toBe("CALL_SPREAD_ITERABLE");
+		expect(out.facts.resultKindMasks).toEqual([COMPILER_VALUE_KIND_NUMBER]);
+		expect(out.facts.resultIntegerRanges?.[0]).toMatchObject({
+			minimum: 1,
+			maximum: 256,
+		});
+		expect(out.native.registerRepresentations[out.op.dst]).toBe("int32");
+		expect(out.facts.effectMask! & INSTRUCTION_CALLS_USER_CODE).not.toBe(0);
+		expect(out.c.source).toContain("mal_vm_op_call_spread_iterable(");
+	});
+
+	it("keeps a forwarded String prefix managed across the iterable call and later collection", () => {
+		const out = inspectCall(
+			"return value;",
+			"function compute(value,args,gate){const result=leaf(':'+value,...args);gate();return result.length;}",
+		);
+		expect(out.op.opcode).toBe("CALL_SPREAD_ITERABLE");
+		expect(out.facts.resultKindMasks).toEqual([COMPILER_VALUE_KIND_STRING]);
+		expect(out.native.registerRepresentations[out.op.dst]).toBe("string");
+		expect(out.native.storage!.rootRegisters).toContain(out.op.dst);
+		expect(out.facts.effectMask! & INSTRUCTION_MAY_GC).not.toBe(0);
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
+			out.image,
+		);
+	});
+
+	it("joins projected and non-forwarded results across the complete callee set", () => {
+		const out = inspectStaticValueFunctions(
+			`const identity=function identity(value,hook){try{hook();return value;}catch(error){throw error;}};
+		const stringer=function stringer(value,hook){try{hook();return value+':';}catch(error){throw error;}};
+		function compute(value,hook,gate,flag){const callee=flag?identity:stringer;const result=callee(+value,hook);gate();return result;}globalThis.identity=identity;globalThis.stringer=stringer;globalThis.compute=compute;`,
+			["compute"],
+			{ locked: false },
+		).get("compute")!;
+		const ip = out.native.body.instructions.findIndex(
+			(op) => op.opcode === "CALL" && op.arguments.length === 2,
+		);
+		expect(out.native.facts![ip]!.resultKindMasks).toEqual([
+			COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_STRING,
+		]);
+		expect(out.native.facts![ip]!.resultIntegerRanges).toBeUndefined();
+	});
+
+	it("does not project entry arguments through a sloppy mapped-argument write", () => {
+		const out = inspectStaticValueFunctions(
+			`const leaf=function leaf(value,hook){try{hook(arguments);return value;}catch(error){throw error;}};
+		function compute(value,hook,gate){const result=leaf(+value,hook);gate();return result;}globalThis.leaf=leaf;globalThis.compute=compute;`,
+			["compute"],
+			{ locked: false, script: true },
+		).get("compute")!;
+		const ip = out.native.body.instructions.findIndex(
+			(op) => op.opcode === "CALL" && op.arguments.length === 2,
+		);
+		expect(out.native.facts![ip]!.resultKindMasks).toEqual([COMPILER_VALUE_KIND_TOP]);
+		expect(out.native.facts![ip]!.resultIntegerRanges).toBeUndefined();
+	});
+
+	it("retains a default parameter's initializer instead of projecting an omitted argument", () => {
+		const out = inspectStaticValueFunctions(
+			`const leaf=function leaf(hook,value=7){try{hook();return value;}catch(error){throw error;}};
+		function compute(hook,gate){const result=leaf(hook);gate();return result;}globalThis.leaf=leaf;globalThis.compute=compute;`,
+			["compute"],
+			{ locked: false },
+		).get("compute")!;
+		const ip = out.native.body.instructions.findIndex(
+			(op) => op.opcode === "CALL" && op.arguments.length === 1,
+		);
+		expect(
+			out.native.facts![ip]!.resultKindMasks![0]! & COMPILER_VALUE_KIND_NUMBER,
+		).not.toBe(0);
+	});
+
+	it.each([false, true])(
+		"projects a receiver only on the exact branch of a strict call: %s",
+		(strict) => {
+			const out = inspectStaticValueFunctions(
+				`const leaf=function leaf(hook){try{hook();return this;}catch(error){throw error;}};
+		function compute(value,hook,gate){const result=leaf.call((value&255)+1,hook);gate();return result%10;}globalThis.leaf=leaf;globalThis.compute=compute;`,
+				["compute"],
+				{ locked: true, script: !strict },
+			).get("compute")!;
+			const ip = out.native.body.instructions.findIndex(
+				(op) =>
+					op.opcode === "CALL" &&
+					op.exactFunctionIndex !== undefined &&
+					op.arguments.length === 1,
+			);
+			expect(ip).toBeGreaterThanOrEqual(0);
+			if (strict) {
+				expect(out.native.facts![ip]!.resultKindMasks).toEqual([
+					COMPILER_VALUE_KIND_NUMBER,
+				]);
+				expect(out.native.facts![ip]!.resultIntegerRanges?.[0]).toMatchObject({
+					minimum: 1,
+					maximum: 256,
+				});
+			} else {
+				expect(out.native.facts![ip]!.resultKindMasks).not.toEqual([
+					COMPILER_VALUE_KIND_NUMBER,
+				]);
+				expect(out.native.facts![ip]!.resultIntegerRanges).toBeUndefined();
+			}
+			const fallback = out.native.body.instructions.findIndex(
+				(op) =>
+					op.opcode === "CALL" &&
+					op.arguments.length === 2 &&
+					op.exactFunctionIndex === undefined,
+			);
+			expect(fallback).toBeGreaterThanOrEqual(0);
+			expect(out.native.facts![fallback]!.resultKindMasks).toEqual([
+				COMPILER_VALUE_KIND_TOP,
+			]);
+			expect(out.c.source).toContain("mal_number_remainder(");
+		},
+	);
+
+	it.each(["async function", "function*", "async function*"])(
+		"does not project a forwarded parameter through %s completion",
+		(kind) => {
+			const out = inspectCall(
+				"return value;",
+				"function compute(value,hook,gate){const result=leaf((value&255)+1,hook);gate();return result;}",
+				kind,
+			);
+			expect(out.facts.resultKindMasks).toEqual([COMPILER_VALUE_KIND_OBJECT]);
+			expect(out.facts.resultIntegerRanges).toBeUndefined();
+		},
+	);
+
+	it("does not project the call receiver onto an arrow's lexical this", () => {
+		const out = inspectStaticValueFunctions(
+			`const leaf=(hook)=>{try{hook();return this;}catch(error){throw error;}};
+		function compute(value,hook,gate){const result=leaf.call((value&255)+1,hook);gate();return result;}globalThis.leaf=leaf;globalThis.compute=compute;`,
+			["compute"],
+			{ locked: true },
+		).get("compute")!;
+		const ip = out.native.body.instructions.findIndex(
+			(op) =>
+				op.opcode === "CALL" &&
+				op.exactFunctionIndex !== undefined &&
+				op.arguments.length === 1,
+		);
+		expect(ip).toBeGreaterThanOrEqual(0);
+		expect(
+			out.native.facts![ip]!.resultKindMasks![0]! & COMPILER_VALUE_KIND_UNDEFINED,
+		).not.toBe(0);
+		expect(out.native.facts![ip]!.resultIntegerRanges).toBeUndefined();
+	});
 
 	it.each([
 		["return value|0;", COMPILER_VALUE_KIND_NUMBER, "int32"],
