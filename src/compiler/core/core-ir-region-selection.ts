@@ -1611,7 +1611,7 @@ function directEntryOpportunities(
 							});
 							const calls = fieldCalls.map((call) => call.site);
 							const variant = analyzeCoreNativeEntry(
-								fn,
+								program,
 								cfg,
 								parameterRepresentations,
 								undefined,
@@ -1723,7 +1723,7 @@ function directEntryOpportunities(
 								exactOperationResultMasks.set(instruction, COMPILER_VALUE_KIND_NUMBER);
 						}
 						const variant = analyzeCoreNativeEntry(
-							fn,
+							program,
 							cfg,
 							parameterRepresentations,
 							argumentRepresentations,
@@ -2117,7 +2117,7 @@ class RecordPlanning {
 		const frozenParameters =
 			recordParameters.length === 0 ? undefined : Object.freeze(recordParameters);
 		const variant = analyzeCoreNativeEntry(
-			fn,
+			this.#program,
 			this.#control(target).exceptional(),
 			parameterRepresentations,
 			undefined,
@@ -2197,7 +2197,7 @@ function keepSuppliedRecordParameters(
 						}),
 			);
 			const variant = analyzeCoreNativeEntry(
-				program.function(entry.function),
+				program,
 				analyses
 					.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
 						scope: "function",
@@ -2257,7 +2257,7 @@ function linkRecordForwards(
 		);
 		if (callOverrides.length === 0) return entry;
 		const variant = analyzeCoreNativeEntry(
-			program.function(entry.function),
+			program,
 			analyses
 				.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
 					scope: "function",

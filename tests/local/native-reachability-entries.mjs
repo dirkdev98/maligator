@@ -15,6 +15,56 @@ function discard(input, result) {
 	return result;
 }
 globalThis.discard = discard;
+function narrowNumber(input, flag) {
+	if (flag !== flag) return globalThis.abiFallback;
+	return +input;
+}
+function narrowBoolean(input, flag) {
+	if (flag !== flag) return globalThis.abiFallback;
+	return !!input;
+}
+function narrowString(input, flag) {
+	if (flag !== flag) return globalThis.abiFallback;
+	return String(input);
+}
+globalThis.narrowNumber = narrowNumber;
+globalThis.narrowBoolean = narrowBoolean;
+globalThis.narrowString = narrowString;
+globalThis.abiFallback = { marker: "fallback" };
+const abiEvents = [];
+const convertible = {
+	valueOf() {
+		abiEvents.push("abi:number");
+		collect();
+		return 7;
+	},
+	toString() {
+		abiEvents.push("abi:string");
+		collect();
+		return "converted";
+	},
+};
+if (narrowNumber(convertible, !!globalThis.flag) !== 7) throw new Error("Number ABI");
+for (const value of [-0, NaN, Infinity, -Infinity])
+	if (!Object.is(narrowNumber(+value, !!globalThis.flag), value))
+		throw new Error("Number ABI IEEE value");
+if (narrowBoolean(convertible, !!globalThis.flag) !== true)
+	throw new Error("Boolean ABI");
+if (narrowString(convertible, !!globalThis.flag) !== "converted")
+	throw new Error("String ABI");
+for (const fn of [
+	globalThis.narrowNumber,
+	globalThis.narrowBoolean,
+	globalThis.narrowString,
+])
+	if (fn(convertible, NaN) !== globalThis.abiFallback) throw new Error("canonical ABI");
+try {
+	narrowNumber(Symbol("abi"), !!globalThis.flag);
+	throw new Error("Number ABI swallowed conversion throw");
+} catch (error) {
+	if (!(error instanceof TypeError)) throw error;
+	abiEvents.push(`abi:${error.name}`);
+}
 globalThis.refinedFallback = function (value) {
 	events.push(`fallback:${String(value)}`);
 	collect();
@@ -71,4 +121,4 @@ try {
 	if (!(error instanceof RangeError)) throw error;
 	events.push(error.name);
 }
-console.log(events.join("\n"));
+console.log([...abiEvents, ...events].join("\n"));

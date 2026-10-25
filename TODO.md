@@ -242,8 +242,11 @@ The independent target boundary and current storage contract are recorded in
       fast admission uses the reachable graph. A shared unused-value plan removes
       effect-free producers and copy chains across full, fast, numeric and resumable
       C bodies while retaining root writes, hidden ownership uses and profile sites.
-      Scalar-use and definition analyses still scan the original instructions;
-      result ABI joins still inspect dead returns.
+      Return ABI proofs now join reachable returns using existing kind and range
+      observations, preserving handler entry contracts; callers consume those
+      scalar results through existing typed transports. Scalar-use and definition
+      analyses still scan the original instructions. Phi representations still
+      join values from both ordinary edges before per-entry reachability.
 - [ ] Normalize primitive conversion calls from semantic kind unions. `String`
       and `Number` calls on `number | undefined` still use the builtin dispatcher.
       Retain extra argument effects and the distinct Symbol, BigInt, omitted-argument,

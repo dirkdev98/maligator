@@ -14,16 +14,22 @@ import type { CoreValueKindAnalysis } from "./core-ir-value-kinds.ts";
 import { analyzeCoreValueKinds } from "./core-ir-value-kinds.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import type { CoreInstructionId, CoreValueId } from "./core-ir.ts";
+import { coreNativeEntryReachableBlocks } from "./core-native-entry-reachability.ts";
 import { coreInstructionFacts } from "./core-native-instruction-facts.ts";
 import type { CoreInstructionRangeQuery } from "./core-native-instruction-facts.ts";
 import { coreFunctionVersionsAreCurrent } from "./core-store.ts";
-import type { CoreFunctionStore, CoreFunctionVersions } from "./core-store.ts";
+import type {
+	CoreFunctionStore,
+	CoreFunctionVersions,
+	CoreProgram,
+} from "./core-store.ts";
 
 const representationProofs = new WeakMap<
 	ReadonlyArray<CorePlanRepresentation>,
 	{
 		readonly fn: CoreFunctionStore;
 		readonly versions: CoreFunctionVersions;
+		readonly resultRepresentation: CorePlanRepresentation;
 		readonly parameters: ReadonlyArray<CorePlanRepresentation>;
 		readonly arguments: ReadonlyArray<CorePlanRepresentation> | undefined;
 		readonly instructionFacts: CoreDirectEntryPlan["instructionFacts"];
@@ -37,7 +43,7 @@ const representationProofs = new WeakMap<
 >();
 
 export function analyzeCoreNativeEntry(
-	fn: CoreFunctionStore,
+	program: CoreProgram,
 	cfg: CoreControlFlow,
 	parameters: ReadonlyArray<CorePlanRepresentation>,
 	arguments_: ReadonlyArray<CorePlanRepresentation> | undefined,
@@ -53,6 +59,7 @@ export function analyzeCoreNativeEntry(
 	readonly constantBooleans?: CoreDirectEntryPlan["constantBooleans"];
 	readonly instructionFacts?: CoreDirectEntryPlan["instructionFacts"];
 } {
+	const fn = program.function(cfg.function);
 	const mask = (representation: CorePlanRepresentation | undefined) =>
 		representation === "f64"
 			? COMPILER_VALUE_KIND_NUMBER
@@ -125,19 +132,36 @@ export function analyzeCoreNativeEntry(
 		const terminator = fn.blockTerminator(block);
 		return fn.instructionKind(terminator) === "return"
 			? [
-					valueRepresentations[
-						fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator))
-					]!,
+					{
+						block,
+						representation:
+							valueRepresentations[
+								fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator))
+							]!,
+					},
 				]
 			: [];
 	});
+	const distinct = new Set(returns.map(({ representation }) => representation));
+	const reachable =
+		distinct.size > 1
+			? coreNativeEntryReachableBlocks(program, fn, cfg, kinds, constants, range)
+			: undefined;
+	const liveReturns =
+		reachable === undefined
+			? returns
+			: returns.filter(({ block }) => reachable.has(block));
 	const resultRepresentation =
-		returns.length > 0 && returns.every((representation) => representation === returns[0])
-			? returns[0]!
+		liveReturns.length > 0 &&
+		liveReturns.every(
+			({ representation }) => representation === liveReturns[0]!.representation,
+		)
+			? liveReturns[0]!.representation
 			: "boxed";
 	representationProofs.set(valueRepresentations, {
 		fn,
 		versions: fn.versions,
+		resultRepresentation,
 		parameters: [...parameters],
 		arguments: arguments_ === undefined ? undefined : [...arguments_],
 		constants: constantBooleans,
@@ -191,6 +215,7 @@ export function coreNativeEntryProofIsCurrent(
 	return (
 		proof?.fn === fn &&
 		coreFunctionVersionsAreCurrent(fn, proof.versions) &&
+		proof.resultRepresentation === entry.resultRepresentation &&
 		same(proof.parameters, entry.parameterRepresentations) &&
 		same(proof.arguments, entry.argumentRepresentations) &&
 		proof.constants === entry.constantBooleans &&

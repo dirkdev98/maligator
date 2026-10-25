@@ -14385,8 +14385,8 @@ function emitInstruction(
 							? `r${instruction.value}`
 							: `mal_ops_number_to_i32(${num(instruction.value)})`
 						: directResultRepresentation === "number"
-							? reps[instruction.value] === "number"
-								? `r${instruction.value}`
+							? isNumericRep(reps[instruction.value]!)
+								? num(instruction.value)
 								: `mal_ops_number_as_f64(${boxed(instruction.value)})`
 							: directResultRepresentation === "boolean"
 								? reps[instruction.value] === "boolean"

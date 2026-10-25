@@ -110,14 +110,13 @@ function graph(
 	});
 	const initial: Array<CoreDirectEntryPlan> = seeds.map((seed) => {
 		const functionId = builders[seed.function]!.functionId;
-		const fn = program.function(functionId);
 		return {
 			id: 0,
 			function: functionId,
 			parameterRepresentations: seed.parameters,
 			callSites: [],
 			...analyzeCoreNativeEntry(
-				fn,
+				program,
 				buildCoreControlFlow(program, functionId),
 				seed.parameters,
 				undefined,

@@ -185,7 +185,6 @@ export function connectCoreNativeEntries(
 		const key = `${target}:${signature}`;
 		if (declined.has(key) || entries.length >= 4) return undefined;
 		declined.add(key);
-		const fn = program.function(target);
 		const cost = candidateCost(target, arguments_?.length);
 		if (cost === undefined) return undefined;
 		const generatedCode = cost.generatedCode;
@@ -203,7 +202,7 @@ export function connectCoreNativeEntries(
 			return undefined;
 		const variant =
 			prepared ??
-			analyzeCoreNativeEntry(fn, cfg(target), parameters, arguments_, callSites);
+			analyzeCoreNativeEntry(program, cfg(target), parameters, arguments_, callSites);
 		if (
 			resultOnly &&
 			(variant.resultRepresentation === "boxed" ||
@@ -344,7 +343,7 @@ export function connectCoreNativeEntries(
 				(_, index) => representations[index] ?? "boxed",
 			);
 		const baseline = analyzeCoreNativeEntry(
-			fn,
+			program,
 			control,
 			parametersFor(seed.representations),
 			seed.exactArity ? seed.representations : undefined,
@@ -360,7 +359,7 @@ export function connectCoreNativeEntries(
 				),
 			);
 			const candidate = analyzeCoreNativeEntry(
-				fn,
+				program,
 				control,
 				parametersFor(nominated),
 				seed.exactArity ? nominated : undefined,
@@ -489,7 +488,7 @@ export function connectCoreNativeEntries(
 				),
 		);
 		const variant = analyzeCoreNativeEntry(
-			fn,
+			program,
 			cfg(entry.function),
 			entry.parameterRepresentations,
 			undefined,

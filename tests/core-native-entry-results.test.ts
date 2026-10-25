@@ -82,7 +82,7 @@ function resultGraph(
 		parameterRepresentations: parameters,
 		callSites: [],
 		...analyzeCoreNativeEntry(
-			program.function(caller.functionId),
+			program,
 			buildCoreControlFlow(program, caller.functionId),
 			parameters,
 			undefined,

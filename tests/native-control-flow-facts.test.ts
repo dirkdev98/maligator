@@ -344,13 +344,15 @@ describe("native branch and reachability contracts", () => {
 		},
 	);
 
-	it("removes the dead addition from both Number.isNaN String entry variants", () => {
+	it("selects a scalar return ABI and numeric worker for the Number.isNaN String entry", () => {
 		const out = inspectStaticValueFunction(
 			"function probe(left,value){if(Number.isNaN(value))return left+1;return 0;}globalThis.probe=probe;globalThis.result=probe(globalThis.input,String(globalThis.text));",
 			"probe",
 		);
 		const typed = out.c.directEntries[0]!.source;
-		expect(typed).toContain("__full:");
+		expect(out.native.directEntries[0]!.resultRepresentation).toBe("number");
+		expect(out.native.directEntries[0]!.storage!.numericWorker).toBeDefined();
+		expect(typed).not.toContain("mal_ops_number_as_f64(mal_value_from_i32(");
 		expect(typed).not.toContain("mal_value_is_truthy(");
 		expect(typed).not.toContain("mal_ops_is_number(");
 		expect(out.c.source).toContain("MAL_BIN_ADD");

@@ -46,6 +46,22 @@ it.each([false, true])(
 				"precise",
 			);
 			const restored = deserializeCompilerArtifact(serializeCompilerArtifact(image));
+			for (const [name, representation] of [
+				["narrowNumber", "number"],
+				["narrowBoolean", "boolean"],
+				["narrowString", "string"],
+			] as const) {
+				const fn = restored.native.functions.find(
+					(fn) =>
+						String.fromCharCode(
+							...(restored.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+						) === name,
+				)!;
+				expect(
+					fn.directEntries.some((entry) => entry.resultRepresentation === representation),
+					name,
+				).toBe(true);
+			}
 			const native = restored.native.functions.find(
 				(fn) =>
 					String.fromCharCode(

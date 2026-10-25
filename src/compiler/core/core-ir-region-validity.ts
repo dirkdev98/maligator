@@ -2261,7 +2261,12 @@ export function verifyCoreOptimizationPlan(
 			}
 		}
 		let resultRepresentationMismatch = false;
-		for (let blockIndex = 0; blockIndex < fn.blockCapacity; blockIndex++) {
+		// Typed proofs join only reachable returns; canonical annotations cover every block.
+		for (
+			let blockIndex = 0;
+			entry.valueRepresentations === undefined && blockIndex < fn.blockCapacity;
+			blockIndex++
+		) {
 			const block = coreBlockId(blockIndex);
 			if (fn.kernel.blockLive(block) === 0) continue;
 			const terminator = fn.blockTerminator(block);
