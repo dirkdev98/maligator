@@ -589,6 +589,7 @@ function definitionInitializedRegisters(
 	jumpTargets: ReadonlySet<number>,
 	uses: ReadonlyArray<ReadonlyArray<number>>,
 	{ blocked, borrowed }: NativeScalarOwnership,
+	publicationRegisters: ReadonlyArray<number> = [],
 ): ReadonlyArray<number> {
 	if (native.storageValues === undefined) return [];
 	const fn = native.body;
@@ -605,6 +606,17 @@ function definitionInitializedRegisters(
 			: [],
 	);
 	if (eligible.length === 0) return [];
+	const eligibleRoots = new Set(publicationRegisters);
+	const publicationRoots = new Set(eligible.filter((local) => eligibleRoots.has(local)));
+	const publicationUses = new Map<number, Array<number>>();
+	// Root publication reads boxed locals even when no bytecode operand does.
+	for (const point of publicationRoots.size === 0 ? [] : native.gc.safepoints)
+		for (const local of point.incomingRootRegisters) {
+			if (!publicationRoots.has(local)) continue;
+			const reads = publicationUses.get(local) ?? [...uses[local]!];
+			reads.push(point.instructionIp);
+			publicationUses.set(local, reads);
+		}
 	// Resume entries need a broader CFG; handler entries are its exceptional edges.
 	const selectControlFlow = (): NativeStorageControlFlow | undefined =>
 		native.mode === "direct" &&
@@ -647,21 +659,22 @@ function definitionInitializedRegisters(
 		return blocks[definition] === blocks[use];
 	};
 	return eligible.flatMap((local) => {
+		const reads = publicationUses.get(local) ?? uses[local]!;
 		const definition = definitions[local]!;
 		if (writes[local] === 1) {
 			if (blocked.has(definition)) return [];
-			if (uses[local]!.every((ip) => ip > definition && sameBlock(definition, ip)))
+			if (reads.every((ip) => ip > definition && sameBlock(definition, ip)))
 				return [local];
 			const controlFlow = selectControlFlow();
 			return controlFlow !== undefined &&
-				uses[local]!.every((ip) => controlFlow.dominates(definition, ip))
+				reads.every((ip) => controlFlow.dominates(definition, ip))
 				? [local]
 				: [];
 		}
 		const copies = phiDefinitions?.get(local);
 		return copies !== undefined &&
 			copies.length === writes[local] &&
-			phiControlFlow!.isDefinedBeforeReads(uses[local]!, copies)
+			phiControlFlow!.isDefinedBeforeReads(reads, copies)
 			? [local]
 			: [];
 	});
@@ -1403,7 +1416,12 @@ function lowerStorage(
 		suspension === undefined
 			? immutableOwnership
 			: scalarStorageOwnership(native, body, expressionWindows, suspension);
-	const scalarStorage = (variant: NativeFunctionPlan): NativeScalarStoragePlan => {
+	const scalarStorage = (
+		variant: NativeFunctionPlan,
+		variantOwnership = variant === native
+			? ownership
+			: scalarStorageOwnership(variant, body, expressionWindows, suspension),
+	) => {
 		const constants = rematerializedConstantIps(
 			variant,
 			body,
@@ -1414,10 +1432,6 @@ function lowerStorage(
 				: scalarStorageOwnership(variant, body, expressionWindows),
 		);
 		const constantIps = new Set(constants);
-		const variantOwnership =
-			variant === native
-				? ownership
-				: scalarStorageOwnership(variant, body, expressionWindows, suspension);
 		return {
 			expressionIps: expressionIps(
 				variant,
@@ -1426,13 +1440,6 @@ function lowerStorage(
 				preserveProfileSites,
 				variantOwnership,
 			).filter((ip) => !constantIps.has(ip)),
-			definitionInitializedRegisters: definitionInitializedRegisters(
-				variant,
-				body,
-				jumpTargets,
-				uses,
-				variantOwnership,
-			),
 			rematerializedConstantIps: constants,
 		};
 	};
@@ -1476,8 +1483,21 @@ function lowerStorage(
 			point.kind === "loop-backedge" ? [point.instructionIp] : [],
 		);
 		const polls = new Set(pollingIps);
+		const workerOwnership = scalarStorageOwnership(
+			worker,
+			body,
+			expressionWindows,
+			suspension,
+		);
 		numericWorker = {
-			...scalarStorage(worker),
+			...scalarStorage(worker, workerOwnership),
+			definitionInitializedRegisters: definitionInitializedRegisters(
+				worker,
+				body,
+				jumpTargets,
+				uses,
+				workerOwnership,
+			),
 			pollingIps,
 			fallthroughJumpIps: fn.instructions.flatMap((op, ip) =>
 				op.opcode === "JUMP" && op.targetIp === ip + 1 && !polls.has(ip) ? [ip] : [],
@@ -1516,6 +1536,14 @@ function lowerStorage(
 						]),
 					]),
 		...scalar,
+		definitionInitializedRegisters: definitionInitializedRegisters(
+			native,
+			body,
+			jumpTargets,
+			uses,
+			ownership,
+			roots.privateRegisters,
+		),
 		numericWorker,
 		elidedPureIps,
 		unusedRegisters,

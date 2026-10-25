@@ -293,6 +293,9 @@ The independent target boundary and current storage contract are recorded in
       retaining successful sibling returns and pruning state beyond each restart.
       Primitive unary facts also govern typed-entry admission; fallback retains
       original arguments and reachable fast loops still require a full frame.
+      Definition initialization also accounts for incoming private-root publication
+      reads after physical root selection, so conservative maps cannot expose
+      future locals while rematerialized values retain their existing proofs.
 - [x] Normalize primitive conversion calls from semantic kind unions. Eligible
       `Number` and `String` calls use unary conversions, carrying kind and effect
       proofs into native storage, full entries and frameless numeric paths.

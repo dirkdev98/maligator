@@ -267,6 +267,40 @@ describe("native physical root storage", () => {
 		);
 	});
 
+	it.each([2, 4])(
+		"initializes private root %i before an incoming publication can read it",
+		(register) => {
+			const original = contract();
+			const first = original.gc.safepoints[0]!;
+			const native = lowerNativeFunctionStorage({
+				...original,
+				gc: {
+					safepoints: [
+						{
+							...first,
+							incomingRootRegisters: [
+								...new Set([...first.incomingRootRegisters, register]),
+							].sort((a, b) => a - b),
+							rootRegisters: [...new Set([...first.rootRegisters, register])].sort(
+								(a, b) => a - b,
+							),
+						},
+						...original.gc.safepoints.slice(1),
+					],
+				},
+			});
+			expect(native.storage!.privateRegisters).toContain(register);
+			expect(native.storage!.definitionInitializedRegisters).not.toContain(register);
+			const source = emitCompiledFunction(native, 0, "", false)!.source;
+			const initialized = source.indexOf(`r${register} = MAL_VALUE_UNDEFINED;`);
+			const publication = source.indexOf(` = r${register};`, initialized);
+			const called = source.indexOf("MalCompletion call_result_0 =");
+			expect(initialized).toBeGreaterThan(0);
+			expect(publication).toBeGreaterThan(initialized);
+			expect(publication).toBeLessThan(called);
+		},
+	);
+
 	it("refuses to render a stale GC map that makes shared private occupants interfere", () => {
 		const fn = contract();
 		const [first, ...rest] = fn.gc.safepoints;
