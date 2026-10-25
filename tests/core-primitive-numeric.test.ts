@@ -383,9 +383,19 @@ describe("certified primitive numeric lowering", () => {
 			expect(
 				compilerOperatorInputKindsHaveExactNativeSemantics("binary", "+", [mask, 8]),
 			).toBe(false);
+		}
+		for (const mask of [0, 64, 128, 255, 16 | 128, NaN, 1.5]) {
 			expect(
 				compilerOperatorInputKindsHaveExactNativeSemantics("binary", "+", [16, mask]),
 			).toBe(false);
+		}
+		for (const mask of [32, 16 | 32]) {
+			expect(
+				compilerOperatorInputKindsHaveExactNativeSemantics("binary", "+", [16, mask]),
+			).toBe(true);
+			expect(
+				compilerOperatorInputKindsHaveExactNativeSemantics("binary", "+", [mask, 16]),
+			).toBe(true);
 		}
 	});
 });
