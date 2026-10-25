@@ -831,6 +831,7 @@ describe("Core control-flow analyses and passes", () => {
 			build("*", 1),
 			build("&", 0),
 			build("<", undefined, { self: true }),
+			build("<", 0, { constantLeft: true }),
 			build("<", 5, { constantLeft: true }),
 		];
 		const optimized = optimizeCore({ program, context }, { verification: "per-pass" })
@@ -852,6 +853,10 @@ describe("Core control-flow analyses and passes", () => {
 		expect(
 			optimized.function(functions[5]!).instructionAttributes(binaries(5)[0]!).operator,
 		).toBe(">");
+		expect(binaries(6)).toHaveLength(0);
+		expect(coreOperations(optimized.function(functions[6]!))).toContainEqual(
+			expect.objectContaining({ opcode: "createBoolean", attributes: { value: false } }),
+		);
 	});
 
 	it("reselects an exact numeric join after algebraic simplification", () => {
