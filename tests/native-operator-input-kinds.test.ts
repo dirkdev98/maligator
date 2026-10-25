@@ -1,10 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
+	COMPILER_VALUE_KIND_BIGINT,
+	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_STRING,
 	COMPILER_VALUE_KIND_TOP,
 	compilerOperatorInputKindMasksAreValid,
 	compilerOperatorInputKindsHaveExactNativeSemantics,
 } from "../src/compiler/shared/compiler-value-kinds.ts";
+import {
+	INSTRUCTION_CALLS_USER_CODE,
+	INSTRUCTION_MAY_GC,
+	INSTRUCTION_MAY_THROW,
+} from "../src/compiler/shared/instruction-facts.ts";
 import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
@@ -13,6 +20,48 @@ import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts"
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 describe("partial operator input kinds", () => {
+	it.each([
+		["function", "value+':'"],
+		["function", "':'+value"],
+		["function*", "value+':'"],
+		["function*", "':'+value"],
+	] as const)(
+		"concatenates a Number or BigInt in %s without generic addition: %s",
+		(kind, expression) => {
+			const out = inspectStaticValueFunction(
+				`${kind} compute(input,gate){const value=-input;${kind === "function*" ? "yield value;" : ""}gate();const result=${expression};gate(result);return result;}globalThis.compute=compute;`,
+				"compute",
+				{ locked: false },
+			);
+			const restored = deserializeCompilerArtifact(serializeCompilerArtifact(out.image));
+			const native = restored.native.functions[out.native.functionIndex]!;
+			const ip = native.body.instructions.findIndex(
+				(op) => op.opcode === "BINARY" && op.operator === "+",
+			);
+			const op = native.body.instructions[ip]!;
+			if (op.opcode !== "BINARY") throw new Error("Missing concatenation");
+			const facts = native.facts![ip]!;
+			if (facts.effectMask === undefined)
+				throw new Error("Missing concatenation effects");
+			const numeric = COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_BIGINT;
+			expect(facts.inputKindMasks).toEqual(
+				expression.startsWith("value")
+					? [numeric, COMPILER_VALUE_KIND_STRING]
+					: [COMPILER_VALUE_KIND_STRING, numeric],
+			);
+			expect(facts.effectMask & INSTRUCTION_CALLS_USER_CODE).toBe(0);
+			expect(facts.effectMask & INSTRUCTION_MAY_GC).not.toBe(0);
+			expect(facts.effectMask & INSTRUCTION_MAY_THROW).not.toBe(0);
+			const value = expression.startsWith("value") ? op.left : op.right;
+			expect(native.storage!.rootRegisters).toContain(value);
+			expect(native.storage!.rootRegisters).toContain(op.dst);
+			expect(native.gc.safepoints.some((point) => point.instructionIp === ip)).toBe(true);
+			const c = emitCompiledFunction(native, native.functionIndex, "", false)!.source;
+			expect(c).toContain("mal_vm_concat_primitive_strings(");
+			expect(c).not.toContain("MAL_BIN_ADD");
+		},
+	);
+
 	it("uses comparison facts in a numeric fusion's boxed fallback", () => {
 		const out = inspectStaticValueFunction(
 			"function compute(left,right,flag){const a=flag?String(left):+left;return (a+3)<+right;}globalThis.compute=compute;",

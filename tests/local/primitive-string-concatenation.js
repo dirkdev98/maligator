@@ -156,3 +156,87 @@ function nilKinds(flag) {
 	return value ? false : !value;
 }
 console.log(truthyKinds(7, true), truthyKinds(7, false), nilKinds(true), nilKinds(false));
+
+function collectGarbage() {
+	if (typeof globalThis.gc === "function") globalThis.gc();
+}
+
+function numericSuffix(input) {
+	const value = -input;
+	collectGarbage();
+	return value + ":";
+}
+
+function numericPrefix(input) {
+	const value = ~input;
+	collectGarbage();
+	return ":" + value;
+}
+
+function* numericResume(input) {
+	const value = -input;
+	yield value;
+	collectGarbage();
+	return ":" + value;
+}
+
+globalThis.numericSuffix = numericSuffix;
+globalThis.numericPrefix = numericPrefix;
+globalThis.numericResume = numericResume;
+
+const numericEffects = [];
+const coercionFailure = { marker: "numeric coercion" };
+const numericInputs = [
+	0,
+	-0,
+	1.5,
+	NaN,
+	Infinity,
+	-Infinity,
+	"7",
+	null,
+	undefined,
+	true,
+	0n,
+	1n,
+	-1n,
+	170141183460469231731687303715884105727n,
+	-170141183460469231731687303715884105727n,
+	Object(7n),
+	Symbol("numeric"),
+	{
+		[Symbol.toPrimitive](hint) {
+			numericEffects.push(hint);
+			collectGarbage();
+			return 17n;
+		},
+	},
+	{
+		valueOf() {
+			numericEffects.push("throw");
+			collectGarbage();
+			throw coercionFailure;
+		},
+	},
+];
+function numericOutcome(run) {
+	try {
+		return run();
+	} catch (error) {
+		return error === coercionFailure ? "same failure" : error.name;
+	}
+}
+for (const input of numericInputs) {
+	console.log(numericOutcome(() => numericSuffix(input)));
+	console.log(numericOutcome(() => numericPrefix(input)));
+	console.log(
+		numericOutcome(() => {
+			const iterator = numericResume(input);
+			const first = iterator.next();
+			collectGarbage();
+			const last = iterator.next();
+			return String(first.value) + "," + last.value + "," + last.done;
+		}),
+	);
+}
+console.log(numericEffects.join(","));

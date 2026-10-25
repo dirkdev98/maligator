@@ -90,8 +90,9 @@ describe("Compiler value-kind operator dispatch", () => {
 				equal(exactNativeKinds("binary", operator, [8, mask]), numeric || concatenation);
 				equal(exactNativeKinds("binary", operator, [mask, 8]), numeric || concatenation);
 			}
-			const stringConvertible = mask > 0 && (mask & ~31) === 0;
+			const stringConvertible = mask > 0 && (mask & ~63) === 0;
 			equal(exactNativeKinds("binary", "+", [16, mask]), stringConvertible);
+			equal(exactNativeKinds("binary", "+", [mask, 16]), stringConvertible);
 			equal(exactNativeKinds("binary", "-", [16, mask]), false);
 			for (const operator of equality) {
 				equal(exactNativeKinds("binary", operator, [9, mask]), comparable);

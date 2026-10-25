@@ -201,6 +201,7 @@ describe("primitive numeric fusion facts", () => {
 		).toBe(true);
 		const source = out.c.directEntries[0]!.source;
 		expect(source).toContain("__nf_");
+		expect(source).toContain("mal_vm_concat_primitive_strings(");
 		expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
 			out.image,
 		);

@@ -100,6 +100,11 @@ An existing exact Number or int32 result proof also admits coercive binary produ
 into scalar storage without requiring their inputs to be scalar. Evaluation stays
 materialized; helper results are captured and checked for abrupt completion before
 conversion. Unknown addition and potential BigInt results remain boxed.
+An exact String operand and a union of non-Symbol primitives select checked primitive
+concatenation, including Number-or-BigInt results from earlier coercive arithmetic.
+BigInt conversion uses the runtime's intrinsic decimal formatter. Managed operands
+and String results retain roots, collection points and string-length throw checks;
+only user-code coercion and generic operator dispatch are excluded by this proof.
 Exact builtin calls consume the catalog's primitive result kinds as well as their
 existing identity proof. Scalar Date and Object helpers capture and check throwing
 results before conversion. Clock reads and mutable collection queries retain

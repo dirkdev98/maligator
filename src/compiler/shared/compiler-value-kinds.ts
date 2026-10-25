@@ -190,9 +190,6 @@ export function compilerOperatorIsNullishEquality(
 	);
 }
 
-const COMPILER_VALUE_KIND_PURE_STRING_CONVERSION =
-	COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE | COMPILER_VALUE_KIND_STRING;
-
 /**
  * `+` with a String operand concatenates; when the other operand is a
  * primitive whose ToString runs no user code and cannot throw, the whole
@@ -211,7 +208,7 @@ export function compilerOperatorIsPrimitiveStringConcatenation(
 		masks.every(
 			(mask) =>
 				compilerValueKindMaskIsValid(mask) &&
-				compilerValueKindMaskIsSubset(mask, COMPILER_VALUE_KIND_PURE_STRING_CONVERSION),
+				compilerValueKindMaskIsSubset(mask, COMPILER_VALUE_KIND_TO_STRING_PRIMITIVE),
 		)
 	);
 }

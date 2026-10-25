@@ -160,7 +160,7 @@ MalValue mal_vm_concat_strings_known(MalVm *vm, MalString *left, MalString *righ
 MalValue mal_vm_concat_primitive_strings(MalVm *vm, MalValue left, MalValue right) {
     if (vm->completion.kind == MAL_COMPLETION_THROW) return MAL_VALUE_UNDEFINED;
     if (mal_value_is_object(left) || mal_value_is_object(right) || mal_value_is_symbol(left) ||
-        mal_value_is_symbol(right) || mal_value_is_bigint(left) || mal_value_is_bigint(right) ||
+        mal_value_is_symbol(right) ||
         (!mal_value_is_string(left) && !mal_value_is_string(right))) {
         abort();
     }
