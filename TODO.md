@@ -279,6 +279,9 @@ The independent target boundary and current storage contract are recorded in
       Static property definitions now join reaching String identities through
       copies and key conversions on the same graph. Conversion effects stay at
       their source sites; unknown and indexed keys keep their existing paths.
+      String and Symbol key conversions retain result kinds independently of
+      throw effects. Boxed keys consume those kinds in conversion and definition
+      branches while preserving nullish-base checks and Number decoding.
 - [x] Normalize primitive conversion calls from semantic kind unions. Eligible
       `Number` and `String` calls use unary conversions, carrying kind and effect
       proofs into native storage, full entries and frameless numeric paths.

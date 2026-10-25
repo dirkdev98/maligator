@@ -8,18 +8,32 @@ import {
 	programClosureCertificate,
 	withProgramClosure,
 } from "../src/compiler/shared/compiler-facts.ts";
+import { COMPILER_VALUE_KIND_SYMBOL } from "../src/compiler/shared/compiler-value-kinds.ts";
+import {
+	INSTRUCTION_MAY_THROW,
+	instructionInputKind,
+	instructionResultKind,
+} from "../src/compiler/shared/instruction-facts.ts";
 import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
 import { emitProgramImage } from "../src/compiler/target/emit-program-image.ts";
-import { validateNativeProgramStorage } from "../src/compiler/target/lower-native-storage.ts";
+import {
+	nativeVariantContract,
+	validateNativeProgramStorage,
+} from "../src/compiler/target/lower-native-storage.ts";
 
-function compile(key: string, primordials: "mutable" | "locked", profile = false) {
+function compile(
+	key: string,
+	primordials: "mutable" | "locked",
+	profile = false,
+	expression = JSON.stringify(key),
+) {
 	const path = "/property-key-flow.mjs";
 	const source = `function inspect(flag,value,observe){
 	for(let i=0;i<2;i++)observe(i);
-	const key=flag!==flag?observe():${JSON.stringify(key)};
+	const key=flag!==flag?observe():${expression};
 	return {[key]:value};}
 	globalThis.inspect=inspect;
 	const rows=[];
@@ -51,6 +65,30 @@ function inspect(image: ReturnType<typeof compile>) {
 }
 
 describe("literal property keys on surviving entry flow", () => {
+	it("preserves a boxed Symbol result independently of a conservative throw effect", () => {
+		const original = compile("field", "locked", false, "Symbol.for('field')");
+		for (const image of [
+			original,
+			deserializeCompilerArtifact(serializeCompilerArtifact(original)),
+		]) {
+			const fn = inspect(image),
+				entry = fn.directEntries.find((e) => e.parameterRepresentations[0] === "string")!;
+			const variant = nativeVariantContract(fn, entry);
+			const ip = fn.body.instructions.findIndex((op) => op.opcode === "TO_PROPERTY_KEY");
+			const instruction = fn.body.instructions[ip]!;
+			if (instruction.opcode !== "TO_PROPERTY_KEY")
+				throw new Error("Missing key conversion");
+			expect(variant.registerRepresentations[instruction.key]).toBe("boxed");
+			expect(instructionInputKind(variant.facts?.[ip], instruction.key)).toBe(
+				COMPILER_VALUE_KIND_SYMBOL,
+			);
+			expect(instructionResultKind(variant.facts?.[ip], instruction.dst)).toBe(
+				COMPILER_VALUE_KIND_SYMBOL,
+			);
+			expect(variant.facts![ip]!.effectMask! & INSTRUCTION_MAY_THROW).not.toBe(0);
+			expect(() => emitProgramImage(image)).not.toThrow();
+		}
+	});
 	it.each(["mutable", "locked"] as const)(
 		"uses constant String keys through copies and coercion under %s primordials",
 		(primordials) => {

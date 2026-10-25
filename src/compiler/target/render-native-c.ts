@@ -19,6 +19,7 @@ import {
 	COMPILER_VALUE_KIND_TOP,
 	COMPILER_VALUE_KIND_NULL,
 	COMPILER_VALUE_KIND_STRING,
+	COMPILER_VALUE_KIND_SYMBOL,
 	COMPILER_VALUE_KIND_BOOLEAN,
 	COMPILER_VALUE_KIND_BIGINT,
 	COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE,
@@ -9793,18 +9794,21 @@ function emitInstruction(
 			}
 			const define = `mal_vm_op_define_property(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)}, ${boxed(instruction.value)}, ${instruction.enumerable}, ${instruction.writable}, ${instruction.configurable});`;
 			const keyRepresentation = reps[instruction.key];
-			const numericKey = keyRepresentation === "number" || keyRepresentation === "int32";
-			// Array literals define their elements with boxed index constants.
+			const keyKind = operandKind(instruction.key) ?? COMPILER_VALUE_KIND_TOP;
+			const numericKey = keyKind === COMPILER_VALUE_KIND_NUMBER;
 			if (
-				(numericKey || keyRepresentation === "boxed") &&
+				(numericKey ||
+					(keyRepresentation === "boxed" &&
+						(keyKind & COMPILER_VALUE_KIND_NUMBER) !== 0)) &&
 				instruction.enumerable &&
 				instruction.writable &&
 				instruction.configurable
 			) {
 				const array = `__define_array_${ip}`;
-				const index = numericKey
-					? num(instruction.key)
-					: `mal_ops_number_as_f64(${boxed(instruction.key)})`;
+				const index =
+					keyRepresentation === "number" || keyRepresentation === "int32"
+						? num(instruction.key)
+						: `mal_ops_number_as_f64(${boxed(instruction.key)})`;
 				return [
 					`MalArrayObject *${array} = mal_vm_as_array(${boxed(instruction.object)});`,
 					`if (!(${array} && ${numericKey ? "" : `mal_ops_is_number(${boxed(instruction.key)}) && `}mal_vm_array_try_define_index(${array}, ${index}, ${boxed(instruction.value)}))) {`,
@@ -10871,9 +10875,19 @@ function emitInstruction(
 			];
 		}
 		case "TO_PROPERTY_KEY":
-			if (reps[instruction.key] === "string") {
+			if (
+				compilerValueKindMaskIsSubset(
+					operandKind(instruction.key) ?? COMPILER_VALUE_KIND_TOP,
+					COMPILER_VALUE_KIND_STRING | COMPILER_VALUE_KIND_SYMBOL,
+				)
+			) {
 				const copy = `r${instruction.dst} = ${boxed(instruction.key)};`;
-				if (reps[instruction.object] !== "boxed") return [copy];
+				if (
+					((operandKind(instruction.object) ?? COMPILER_VALUE_KIND_TOP) &
+						COMPILER_VALUE_KIND_NULLISH) ===
+					0
+				)
+					return [copy];
 				return [
 					`if (mal_value_is_nil(${boxed(instruction.object)})) {`,
 					`  r${instruction.dst} = mal_vm_op_to_property_key(vm, ${boxed(instruction.object)}, ${boxed(instruction.key)});`,

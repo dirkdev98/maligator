@@ -1,4 +1,12 @@
 import { describe, expect, it } from "vitest";
+import {
+	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_OBJECT,
+	COMPILER_VALUE_KIND_STRING,
+	COMPILER_VALUE_KIND_SYMBOL,
+	COMPILER_VALUE_KIND_TOP,
+} from "../src/compiler/shared/compiler-value-kinds.ts";
+import type { InstructionFacts } from "../src/compiler/shared/instruction-facts.ts";
 import { lowerNativeFunctionStorage } from "../src/compiler/target/lower-native-storage.ts";
 import { createConservativeNativePlan } from "../src/compiler/target/program-image.ts";
 import type { VmRegisterRepresentation } from "../src/compiler/target/program-image.ts";
@@ -23,6 +31,7 @@ function emitInputContract(
 	instructions: Array<BytecodeInstruction>,
 	representations: Array<VmRegisterRepresentation>,
 	options: Partial<BytecodeFunction> = {},
+	facts?: ReadonlyArray<InstructionFacts | undefined>,
 ): string {
 	const fn: BytecodeFunction = {
 		...(baseFunction ??= inputFactsFixture().image.runtime.functions[0]!),
@@ -34,6 +43,7 @@ function emitInputContract(
 	const emitted = emitCompiledFunction(
 		{
 			...plan,
+			facts,
 			registerRepresentations: representations,
 			gc: {
 				safepoints: plan.gc.safepoints.map((point) => ({
@@ -163,6 +173,75 @@ describe("local native input admission", () => {
 		expect(coercive).not.toContain("mal_value_is_nil(");
 	});
 
+	it("uses boxed key facts while retaining a possible nullish-base failure", () => {
+		const instructions: Array<BytecodeInstruction> = [
+			{ opcode: "CREATE_F64", dst: 0, value: 0 },
+			{ opcode: "CREATE_STRING", dst: 1, stringIndex: 0 },
+			{ opcode: "TO_PROPERTY_KEY", dst: 2, object: 0, key: 1 },
+			{ opcode: "RETURN", value: 2 },
+		];
+		for (const key of [
+			COMPILER_VALUE_KIND_STRING,
+			COMPILER_VALUE_KIND_STRING | COMPILER_VALUE_KIND_SYMBOL,
+		]) {
+			for (const base of [COMPILER_VALUE_KIND_NUMBER, COMPILER_VALUE_KIND_TOP]) {
+				const emitted = emitInputContract(instructions, ["boxed", "boxed", "boxed"], {}, [
+					undefined,
+					undefined,
+					{
+						registers: [2, 0, 1],
+						inputOffset: 1,
+						inputKindMasks: [base, key],
+						resultKindMasks: [key],
+					},
+				]);
+				expect(emitted.includes("mal_vm_op_to_property_key(")).toBe(
+					base === COMPILER_VALUE_KIND_TOP,
+				);
+				expect(emitted.includes("if (mal_value_is_nil(")).toBe(
+					base === COMPILER_VALUE_KIND_TOP,
+				);
+			}
+		}
+	});
+	it("decodes a proven boxed Number before the indexed definition helper", () => {
+		const emitted = emitInputContract(
+			[
+				{ opcode: "CREATE_ARRAY", dst: 0, length: 1 },
+				{ opcode: "CREATE_NUMBER", dst: 1, value: 0 },
+				{ opcode: "CREATE_NUMBER", dst: 2, value: 7 },
+				{
+					opcode: "DEFINE_PROPERTY",
+					object: 0,
+					key: 1,
+					value: 2,
+					enumerable: true,
+					writable: true,
+					configurable: true,
+				},
+				{ opcode: "RETURN", value: 0 },
+			],
+			["boxed", "boxed", "boxed"],
+			{},
+			[
+				undefined,
+				undefined,
+				undefined,
+				{
+					registers: [0, 1, 2],
+					inputOffset: 0,
+					inputKindMasks: [
+						COMPILER_VALUE_KIND_OBJECT,
+						COMPILER_VALUE_KIND_NUMBER,
+						COMPILER_VALUE_KIND_NUMBER,
+					],
+					resultKindMasks: [],
+				},
+			],
+		);
+		expect(emitted).toContain("mal_ops_number_as_f64(r1)");
+		expect(emitted).not.toContain("mal_ops_is_number(r1)");
+	});
 	it("folds primitive guards and reads string length without borrowing boxed facts", () => {
 		const instructions: Array<BytecodeInstruction> = [
 			{ opcode: "CREATE_STRING", dst: 0, stringIndex: 0 },

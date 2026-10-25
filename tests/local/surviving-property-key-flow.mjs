@@ -14,9 +14,15 @@ function liveInitializer(flag, value, observe) {
 	const key = flag !== flag ? observe("key") : "field";
 	return { [key]: observe(value) };
 }
+function conditionalSymbolKey(flag, value, observe) {
+	for (let i = 0; i < 2; i++) observe(i);
+	const key = flag !== flag ? observe("key") : Symbol.for("stable-key");
+	return { [key]: value };
+}
 globalThis.computedKey = conditionalKey;
 globalThis.computedProtoKey = conditionalProtoKey;
 globalThis.computedLive = liveInitializer;
+globalThis.computedSymbolKey = conditionalSymbolKey;
 const rows = [];
 for (let round = 0; round < 8; round++) {
 	let order = "";
@@ -78,6 +84,16 @@ for (let round = 0; round < 8; round++) {
 		order !== "01keystring01keystringv"
 	)
 		throw new Error("dynamic prototype key or initializer order");
+	order = "";
+	const symbolResult = conditionalSymbolKey("string", value, globalThis.keyObserver);
+	const dynamicSymbol = conditionalSymbolKey(NaN, value, globalThis.keyObserver);
+	collectGarbage?.();
+	if (
+		symbolResult[Symbol.for("stable-key")] !== value ||
+		dynamicSymbol[property] !== value ||
+		order !== "0101keystring"
+	)
+		throw new Error("boxed Symbol key or dynamic fallback");
 }
 for (const value of [undefined, null, 123n, Symbol("value"), "𝌆", -0]) {
 	const result = globalThis.computedKey("string", value, () => collectGarbage?.());
@@ -133,5 +149,15 @@ try {
 	if (mutable) delete Object.prototype.field;
 }
 if (inheritedWrites !== 0) throw new Error("inherited property setter ran");
+if (mutable) {
+	const original = Symbol.for;
+	Symbol.for = () => "replaced";
+	try {
+		const result = conditionalSymbolKey("string", "value", () => collectGarbage?.());
+		if (result.replaced !== "value") throw new Error("replaced Symbol producer fallback");
+	} finally {
+		Symbol.for = original;
+	}
+}
 rows.push(order, inheritedWrites);
 console.log(JSON.stringify(rows));

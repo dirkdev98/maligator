@@ -220,6 +220,7 @@ const KIND_TRANSFER_BINARY = 4;
 const KIND_TRANSFER_ADD = 5;
 const KIND_TRANSFER_ELEMENT = 6;
 const KIND_TRANSFER_TYPED_ELEMENT = 7;
+const KIND_TRANSFER_PROPERTY_KEY = 8;
 
 // A non-number key on an Array whose holders are all known reads its length, a
 // prototype member or nothing, since no one gave it other named properties.
@@ -241,6 +242,11 @@ function transferredKind(
 	}
 	const left = mask(inputs[start]! as CoreValueId);
 	if (kind === KIND_TRANSFER_COPY) return left;
+	// Compact index keys retain Number storage; only existing Strings and Symbols preserve their kind.
+	if (kind === KIND_TRANSFER_PROPERTY_KEY)
+		return (left & ~(COMPILER_VALUE_KIND_STRING | COMPILER_VALUE_KIND_SYMBOL)) === 0
+			? left
+			: COMPILER_VALUE_KIND_TOP;
 	if (kind === KIND_TRANSFER_ELEMENT)
 		return (left & ~COMPILER_VALUE_KIND_NUMBER) === 0
 			? constant
@@ -707,6 +713,12 @@ function addOperationTransfer(
 		return;
 	}
 	const operandCount = fn.kernel.instructionOperandCount(instruction);
+	if (opcode === "toPropertyKey" && operandCount === 2) {
+		addKindTransfer(buffer, KIND_TRANSFER_PROPERTY_KEY, output, 0, [
+			fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction) + 1),
+		]);
+		return;
+	}
 	if (opcode === "move" && operandCount === 1) {
 		addOperationKindTransfer(buffer, KIND_TRANSFER_COPY, output, fn, instruction);
 		return;
