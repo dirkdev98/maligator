@@ -4,6 +4,7 @@ import {
 	COMPILER_VALUE_KIND_BOOLEAN,
 	COMPILER_VALUE_KIND_STRING,
 	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_TOP,
 	COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE,
 	COMPILER_NUMERIC_BINARY_OPERATORS,
 	compilerValueKindMaskIsSubset,
@@ -11,6 +12,24 @@ import {
 } from "../shared/compiler-value-kinds.ts";
 import type { CompilerValueKindMask } from "../shared/compiler-value-kinds.ts";
 import type { CompilerIntegerRange } from "../shared/integer-range.ts";
+
+export function nativeReflexiveEqualityExpression(
+	operator: string,
+	boxed: string,
+	number: string | undefined,
+	kind: CompilerValueKindMask = COMPILER_VALUE_KIND_TOP,
+	excludesNaN = false,
+): string | undefined {
+	const equal = operator === "===" || operator === "==";
+	if (!equal && operator !== "!==" && operator !== "!=") return undefined;
+	const nan =
+		excludesNaN || (kind & COMPILER_VALUE_KIND_NUMBER) === 0
+			? "false"
+			: number === undefined
+				? `mal_value_is_nan(${boxed})`
+				: `isnan(${number})`;
+	return equal ? (nan === "false" ? "true" : `!(${nan})`) : nan;
+}
 
 // Scalar views preserve the Number operands; only these interval proofs permit unsigned conversion.
 export function nativeUnsignedRemainderExpression(

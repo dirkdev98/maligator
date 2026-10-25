@@ -118,8 +118,11 @@ The independent target boundary and current storage contract are recorded in
       without f64 round trips. Operand rendering now avoids promoting scalar storage
       immediately before integer conversions, including unsigned expression chains;
       intermediate Number result storage still forces some round trips.
-      Preserve normal return operand identity itself for identity comparisons and
-      liveness, while retaining the call's effects and compatible storage contracts.
+      Identity observations now use forwarded normal returns through chains and
+      phi components, including observation-argument sharing and NaN-aware equality
+      emission. Carry identity into other static-value consumers and compatible
+      liveness/storage contracts. Consume it inside guarded mutable builtin branches
+      while retaining loaded-callee fallbacks.
 - [ ] Give record entries typed fields. Record entries return fields boxed, so a
       caller's `token.end` stays boxed, `index = token.end + 1` gives the producer a
       boxed parameter, and the scanning loop in `returned-records` runs generic

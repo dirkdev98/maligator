@@ -263,6 +263,14 @@ sets differ from unknown ranges, so bounded base cases can seed recursive joins.
 Growing intervals widen to unknown after bounded expansion rather than exporting
 an unproved integer contract. Calls retain their throwing, collection and user-code
 effects throughout this propagation.
+Normal return provenance also seeds a separate identity query over call results,
+moves and phi components. Every possible callee must forward a caller operand;
+async, generator, constructor and opaque completions do not qualify. Identity
+observations retain the operands' own kind and range bounds. Proven SameValue
+comparisons fold, while reflexive strict and loose equality keep a NaN test unless
+the operand domain excludes NaN. Equivalent observation inputs can share one
+existing operand, including arguments to a mutable Object.is invocation whose
+loaded-callee behavior remains observable.
 Call result bounds reach scalar selection, variant overlays and artifact transport.
 After checking completion, callers decode int32-bounded results with an ordinary C
 cast; argument transports retain their own conversion semantics. Unsigned C remainder

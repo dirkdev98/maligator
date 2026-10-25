@@ -57,6 +57,7 @@ const NONCOLLECTING_HELPERS = new Set([
 	"mal_value_to_boolean",
 	"mal_value_is_truthy",
 	"mal_value_is_nil",
+	"mal_value_is_nan",
 	"mal_value_is_empty",
 	"mal_vm_typeof_compare",
 	"mal_vm_load_captured",
@@ -90,6 +91,23 @@ function body(
 
 const OWN_TRY = "mal_compiled_0_try";
 const LENGTH_STRING_INDEX = 7;
+
+it.each(["===", "!==", "==", "!="] as const)(
+	"tests NaN without coercion for frameless reflexive %s",
+	(operator) => {
+		const fn = body([
+			{ opcode: "BINARY", operator, left: 0, right: 0, dst: 2 },
+			{ opcode: "RETURN", value: 2 },
+		]);
+		for (const exported of [false, true]) {
+			const lines = fastEntry(fn, undefined, exported)!;
+			expect(lines).toBeDefined();
+			expect(unexpectedHelpers(lines)).toEqual([]);
+			expect(lines.join("\n")).toContain("mal_value_is_nan(f0)");
+			expect(lines.join("\n")).not.toContain("mal_ops_is_number(f0)");
+		}
+	},
+);
 
 it.each([
 	[

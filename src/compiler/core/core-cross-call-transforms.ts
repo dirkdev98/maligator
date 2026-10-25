@@ -4,6 +4,7 @@ import {
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_UNDEFINED,
 	compilerValueKindMaskIsValid,
+	compilerValueKindMaskIsSubset,
 } from "../shared/compiler-value-kinds.ts";
 import {
 	compilerIntegerRangesEqual,
@@ -54,6 +55,7 @@ import type { CoreIndexedCallSite } from "./core-ir-call-targets.ts";
 import {
 	CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
 	buildCoreControlFlow,
+	coreCanonicalValueRoots,
 	coreTerminatorInput,
 } from "./core-ir-control-flow.ts";
 import {
@@ -3993,10 +3995,14 @@ function applyCandidate(
 	}
 }
 
-interface CoreValueKindFold {
-	readonly instruction: CoreInstructionId;
-	readonly result: boolean;
-}
+type CoreValueKindFold =
+	| { readonly instruction: CoreInstructionId; readonly result: boolean }
+	| {
+			readonly instruction: CoreInstructionId;
+			readonly opcode: string;
+			readonly firstOperand: number;
+			readonly preferred: number;
+	  };
 
 interface CoreCallResultFact {
 	readonly instruction: CoreInstructionId;
@@ -4048,6 +4054,21 @@ export function emptyCoreCrossCallTransformResult(
 	});
 }
 
+function forwardedCallResultValue(
+	program: CoreProgram,
+	flow: CoreProgramFlowState,
+	target: CoreFunctionId,
+	site: CoreIndexedCallSite,
+): CoreValueId | undefined {
+	const fn = program.function(target);
+	if (fn.isAsync || fn.isGenerator) return undefined;
+	const provenance = flow.summaries.summary(target)?.returnProvenance;
+	if (provenance?.kind === "parameter")
+		return (site.arguments ?? site.argumentPrefix)?.[provenance.index];
+	if (provenance?.kind === "receiver" && fn.metadata.strict) return site.receiver;
+	return undefined;
+}
+
 function discoverProgramValueKindObservations(
 	program: CoreProgram,
 	analyses: CoreAnalysisManager,
@@ -4056,33 +4077,143 @@ function discoverProgramValueKindObservations(
 ): ReadonlyMap<CoreFunctionId, ReadonlyArray<CoreValueKindFold>> {
 	const foldsByCaller = new Map<CoreFunctionId, ReadonlyArray<CoreValueKindFold>>();
 	const pending = new Map<CoreFunctionId, Array<CoreInstructionId>>();
+	const identities = new Map<CoreFunctionId, ReadonlyMap<CoreValueId, CoreValueId>>();
+	const noIdentities = new Map<CoreValueId, CoreValueId>();
+	const identity = (functionId: CoreFunctionId, value: CoreValueId): CoreValueId => {
+		const fn = program.function(functionId);
+		if (fn.kernel.valueDefinitionKind(value) === 1) {
+			const definition = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
+			if (
+				fn.instructionOpcodeName(definition) !== "move" &&
+				fn.registry.byId(fn.instructionOpcode(definition)).callTransfer?.result !==
+					"call-completion"
+			)
+				return value;
+		}
+		let roots = identities.get(functionId);
+		if (roots === undefined) {
+			const inputs = new Map<CoreInstructionId, ReadonlyArray<CoreValueId>>();
+			for (const site of flow.targets.outgoing(functionId)) {
+				if (
+					site.transfer.result !== "call-completion" ||
+					site.targets.opaque ||
+					site.targets.anyScript ||
+					site.targets.functions.length === 0
+				)
+					continue;
+				const values: Array<CoreValueId> = [];
+				for (const target of site.targets.functions) {
+					const value = forwardedCallResultValue(program, flow, target, site);
+					if (value === undefined) {
+						values.length = 0;
+						break;
+					}
+					values.push(value);
+				}
+				if (values.length > 0) inputs.set(site.instruction, values);
+			}
+			roots =
+				inputs.size === 0
+					? noIdentities
+					: coreCanonicalValueRoots(
+							fn,
+							analyses
+								.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
+									scope: "function",
+									function: functionId,
+								})
+								.exceptional(),
+							undefined,
+							(instruction) => inputs.get(instruction),
+						);
+			identities.set(functionId, roots);
+		}
+		return roots.get(value) ?? value;
+	};
+	const integerRange = (
+		functionId: CoreFunctionId,
+		value: CoreValueId,
+		consumer: CoreInstructionId,
+	) =>
+		analyses
+			.get(CORE_LOOP_INDUCTION_ANALYSIS, { scope: "function", function: functionId })
+			.range(value, program.function(functionId).instructionBlock(consumer));
 	for (const functionId of program.functionIds()) {
 		const fn = program.function(functionId);
 		let fixedKind: ReturnType<typeof coreValueKindDemand> | undefined;
 		const folds: Array<CoreValueKindFold> = [];
+		let demand = false;
+		const kindMask = (value: CoreValueId) => {
+			fixedKind ??= coreValueKindDemand(
+				fn,
+				() =>
+					analyses
+						.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
+							scope: "function",
+							function: functionId,
+						})
+						.exceptional(),
+				flow.targets,
+				flow.summaries.summary(functionId)?.externallyReachable === true,
+			);
+			const kind = fixedKind(value);
+			if (kind === undefined) demand = true;
+			return kind ?? COMPILER_VALUE_KIND_TOP;
+		};
+		const range = (value: CoreValueId, consumer: CoreInstructionId) =>
+			integerRange(functionId, value, consumer);
+		const root = (value: CoreValueId) => identity(functionId, value);
 		for (let index = 0; index < fn.instructionCapacity; index++) {
 			const instruction = index as CoreInstructionId;
 			if (fn.kernel.instructionLive(instruction) === 0) continue;
-			let demand = false;
-			const result = coreValueKindObservation(program, fn, instruction, (value) => {
-				fixedKind ??= coreValueKindDemand(
-					fn,
-					() =>
-						analyses
-							.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
-								scope: "function",
-								function: functionId,
-							})
-							.exceptional(),
-					flow.targets,
-					flow.summaries.summary(functionId)?.externallyReachable === true,
-				);
-				const kind = fixedKind(value);
-				if (kind === undefined) demand = true;
-				return kind ?? COMPILER_VALUE_KIND_TOP;
-			});
-			if (result !== undefined) folds.push({ instruction, result });
-			else if (demand) {
+			if (fn.instructionKind(instruction) !== "operation") continue;
+			demand = false;
+			const result = coreValueKindObservation(
+				program,
+				fn,
+				instruction,
+				kindMask,
+				range,
+				root,
+			);
+			if (result !== undefined) {
+				folds.push({ instruction, result });
+				continue;
+			}
+			const opcode = fn.instructionOpcodeName(instruction);
+			let firstOperand: number | undefined;
+			if (opcode === "binary") {
+				const operator = fn.instructionAttributes(instruction).operator;
+				if (
+					operator === "==" ||
+					operator === "!=" ||
+					operator === "===" ||
+					operator === "!=="
+				)
+					firstOperand = 0;
+			} else if (opcode === "call") {
+				const builtin = fn.instructionAttributes(instruction).knownBuiltinCall as
+					| { operation?: string }
+					| undefined;
+				if (builtin?.operation === "Object.is") firstOperand = 2;
+			}
+			const start = fn.kernel.instructionOperandStart(instruction);
+			const count = fn.kernel.instructionOperandCount(instruction);
+			if (firstOperand !== undefined && count > firstOperand + 1) {
+				const left = fn.kernel.operandAt(start + firstOperand);
+				const right = fn.kernel.operandAt(start + firstOperand + 1);
+				if (
+					left !== right &&
+					identity(functionId, left) === identity(functionId, right)
+				) {
+					const preferred = compilerValueKindMaskIsSubset(kindMask(right), kindMask(left))
+						? firstOperand + 1
+						: firstOperand;
+					folds.push({ instruction, opcode, firstOperand, preferred });
+					continue;
+				}
+			}
+			if (demand) {
 				let instructions = pending.get(functionId);
 				if (instructions === undefined) pending.set(functionId, (instructions = []));
 				instructions.push(instruction);
@@ -4095,10 +4226,19 @@ function discoverProgramValueKindObservations(
 		for (const [functionId, instructions] of pending) {
 			const fn = program.function(functionId);
 			const values = kinds.values(functionId);
+			const kindMask = (value: CoreValueId) => values.kindMask(value);
+			const range = (value: CoreValueId, consumer: CoreInstructionId) =>
+				integerRange(functionId, value, consumer);
+			const root = (value: CoreValueId) => identity(functionId, value);
 			const folds = [...(foldsByCaller.get(functionId) ?? [])];
 			for (const instruction of instructions) {
-				const result = coreValueKindObservation(program, fn, instruction, (value) =>
-					values.kindMask(value),
+				const result = coreValueKindObservation(
+					program,
+					fn,
+					instruction,
+					kindMask,
+					range,
+					root,
 				);
 				if (result !== undefined) folds.push({ instruction, result });
 			}
@@ -4120,18 +4260,7 @@ function discoverProgramCallResultKinds(
 		CoreFunctionId,
 		Array<{ site: CoreIndexedCallSite; mask: number }>
 	>();
-	const forwardedValue = (
-		target: CoreFunctionId,
-		site: CoreIndexedCallSite,
-	): CoreValueId | undefined => {
-		const fn = program.function(target);
-		if (fn.isAsync || fn.isGenerator) return undefined;
-		const provenance = flow.summaries.summary(target)?.returnProvenance;
-		if (provenance?.kind === "parameter")
-			return (site.arguments ?? site.argumentPrefix)?.[provenance.index];
-		if (provenance?.kind === "receiver" && fn.metadata.strict) return site.receiver;
-		return undefined;
-	};
+
 	const joinRange = (
 		left: CompilerIntegerRange | undefined,
 		right: CompilerIntegerRange,
@@ -4183,7 +4312,7 @@ function discoverProgramCallResultKinds(
 		const fn = program.function(functionId);
 		let localKinds: ReturnType<typeof coreValueKindDemand> | undefined;
 		const projectedMask = (target: CoreFunctionId, site: CoreIndexedCallSite) => {
-			const value = forwardedValue(target, site);
+			const value = forwardedCallResultValue(program, flow, target, site);
 			if (value !== undefined) {
 				localKinds ??= coreValueKindDemand(
 					fn,
@@ -4278,7 +4407,7 @@ function discoverProgramCallResultKinds(
 		for (const target of site.targets.anyScript
 			? program.functionIds()
 			: site.targets.functions) {
-			const forwarded = forwardedValue(target, site);
+			const forwarded = forwardedCallResultValue(program, flow, target, site);
 			const projected =
 				forwarded === undefined
 					? undefined
@@ -4635,13 +4764,40 @@ export function runCoreCrossCallTransforms(
 			const fn = program.function(functionId);
 			const editor = editors.get(functionId) ?? CoreEditor.open(program, functionId);
 			editors.set(functionId, editor);
-			for (const { instruction, result } of folds) {
+			for (const fold of folds) {
+				const { instruction } = fold;
 				if (!fn.isInstructionLive(instruction)) continue;
-				editor.replaceInstruction(instruction, "createBoolean", [], {
-					attributes: { value: result },
-					sourcePosition: fn.instructionSourcePosition(instruction),
-				});
-				valueKindFolds++;
+				if ("result" in fold) {
+					editor.replaceInstruction(instruction, "createBoolean", [], {
+						attributes: { value: fold.result },
+						sourcePosition: fn.instructionSourcePosition(instruction),
+					});
+					valueKindFolds++;
+				} else {
+					if (
+						fn.instructionOpcodeName(instruction) !== fold.opcode ||
+						fn.kernel.instructionOperandCount(instruction) <= fold.firstOperand + 1
+					)
+						continue;
+					const start = fn.kernel.instructionOperandStart(instruction);
+					const preferred = fn.kernel.operandAt(start + fold.preferred);
+					const operands = Array.from(
+						{ length: fn.kernel.instructionOperandCount(instruction) },
+						(_, index) =>
+							index === fold.firstOperand || index === fold.firstOperand + 1
+								? preferred
+								: fn.kernel.operandAt(start + index),
+					);
+					editor.replaceInstruction(
+						instruction,
+						fn.instructionOpcodeName(instruction),
+						operands,
+						{
+							attributes: fn.instructionAttributes(instruction),
+							sourcePosition: fn.instructionSourcePosition(instruction),
+						},
+					);
+				}
 				published = true;
 				appliedCallers.add(functionId);
 			}

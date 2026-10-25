@@ -23,6 +23,7 @@ import {
 	nativeBinaryNumberInputs,
 	nativePrimitiveNumberExpression,
 	nativeUnsignedRemainderExpression,
+	nativeReflexiveEqualityExpression,
 } from "./native-scalar-operators.ts";
 import {
 	nativeInstructionSourceRanges,
@@ -539,6 +540,17 @@ function fastBinary(
 	);
 	if (compared !== undefined)
 		return `f${dst} = ${compared ? "MAL_VALUE_TRUE" : "MAL_VALUE_FALSE"};`;
+	if (left === right) {
+		const expression = nativeReflexiveEqualityExpression(
+			operator,
+			`f${left}`,
+			values.kind(left) === COMPILER_VALUE_KIND_NUMBER ? number(values, left) : undefined,
+			values.kind(left),
+			values.isInt32(left) || values.range(left) !== undefined,
+		);
+		if (expression !== undefined)
+			return `f${dst} = mal_value_new_boolean(${expression});`;
+	}
 	if (operator === "===" || operator === "!==") {
 		const constant = values.stringComparison;
 		const equal =

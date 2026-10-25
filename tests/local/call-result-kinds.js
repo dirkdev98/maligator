@@ -159,6 +159,48 @@ function identityTextPrefix(value, iterable) {
 	collectGarbage();
 	return result.length;
 }
+function identitySame(value, callback) {
+	const result = identity(value, callback);
+	collectGarbage();
+	return Object.is(result, value);
+}
+function identityStrict(value, callback) {
+	const result = identity(value, callback);
+	collectGarbage();
+	return result === value;
+}
+function identitySameChain(value, callback) {
+	const first = identity(value, callback);
+	const result = identity(first, callback);
+	collectGarbage();
+	return Object.is(result, value);
+}
+function identitySamePrefix(value, iterable) {
+	const result = identity(value, ...iterable);
+	collectGarbage();
+	return Object.is(result, value);
+}
+function* identitySameResume(value, callback) {
+	const result = identity(value, callback);
+	yield 0;
+	collectGarbage();
+	return Object.is(result, value);
+}
+const receiverIdentity = function receiverIdentity(callback) {
+	"use strict";
+	try {
+		callback();
+		return this;
+	} catch (error) {
+		throw error;
+	}
+};
+function identitySameReceiver(callback) {
+	const holder = { pass: receiverIdentity };
+	const result = holder.pass(callback);
+	collectGarbage();
+	return Object.is(result, holder);
+}
 function spread(values) {
 	const result = integer(...values);
 	collectGarbage();
@@ -226,6 +268,13 @@ globalThis.identityBounded = identityBounded;
 globalThis.identityText = identityText;
 globalThis.identityPrefix = identityPrefix;
 globalThis.identityTextPrefix = identityTextPrefix;
+globalThis.identitySame = identitySame;
+globalThis.identityStrict = identityStrict;
+globalThis.identitySameChain = identitySameChain;
+globalThis.identitySamePrefix = identitySamePrefix;
+globalThis.identitySameResume = identitySameResume;
+globalThis.receiverIdentity = receiverIdentity;
+globalThis.identitySameReceiver = identitySameReceiver;
 globalThis.spread = spread;
 globalThis.rest = rest;
 globalThis.resume = resume;
@@ -299,6 +348,21 @@ for (const value of inputs) {
 		capture(() => identityText(value, hook)),
 		capture(() => identityPrefix(value, [hook])),
 		capture(() => identityTextPrefix(value, [hook])),
+	);
+	console.log(
+		capture(() => identitySame(value, hook)),
+		capture(() => identityStrict(value, hook)),
+		capture(() => identitySameChain(value, hook)),
+		capture(() => identitySamePrefix(value, [hook])),
+	);
+	console.log(
+		capture(() => identitySameReceiver(hook)),
+		capture(() => {
+			const iterator = identitySameResume(value, hook);
+			iterator.next();
+			collectGarbage();
+			return iterator.next().value;
+		}),
 	);
 	console.log(
 		capture(() => spread([value, hook])),

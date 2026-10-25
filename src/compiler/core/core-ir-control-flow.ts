@@ -943,6 +943,10 @@ export function coreCanonicalValueRoots(
 	fn: CoreFunctionStore,
 	cfg: CoreControlFlow,
 	controlEdges?: ReadonlySet<CoreControlEdge>,
+	// Every normal result must equal one of these alternatives before their roots can join.
+	identityInputs?: (
+		instruction: CoreInstructionId,
+	) => ReadonlyArray<CoreValueId> | undefined,
 ): ReadonlyMap<CoreValueId, CoreValueId> {
 	const dependencies = new Array<ReadonlyArray<CoreValueId> | undefined>(
 		fn.valueCapacity,
@@ -971,15 +975,19 @@ export function coreCanonicalValueRoots(
 		}
 	}
 	for (const instruction of fn.instructionIds()) {
-		if (fn.kernel.instructionOpcode(instruction) !== moveOpcode) continue;
+		const move = fn.kernel.instructionOpcode(instruction) === moveOpcode;
 		if (
-			fn.kernel.instructionOperandCount(instruction) !== 1 ||
+			(!move && identityInputs === undefined) ||
 			fn.kernel.instructionResultCount(instruction) !== 1
 		)
 			continue;
-		const input = fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction));
+		const inputs =
+			move && fn.kernel.instructionOperandCount(instruction) === 1
+				? [fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction))]
+				: identityInputs?.(instruction);
+		if (inputs === undefined || inputs.length === 0) continue;
 		const output = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
-		dependencies[output] = [input];
+		dependencies[output] = inputs;
 		nodes.push(output);
 	}
 	if (nodes.length === 0) return new SparseCanonicalValueRoots();

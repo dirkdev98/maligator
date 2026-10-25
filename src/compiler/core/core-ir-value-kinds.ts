@@ -1573,6 +1573,7 @@ export function coreValueKindObservation(
 		value: CoreValueId,
 		consumer: CoreInstructionId,
 	) => CompilerIntegerRange | undefined,
+	identity?: (value: CoreValueId) => CoreValueId,
 ): boolean | undefined {
 	if (
 		fn.instructionKind(instruction) !== "operation" ||
@@ -1643,6 +1644,13 @@ export function coreValueKindObservation(
 		const left = operand(1);
 		const right = operand(2);
 		if (left === right) return true;
+		if (
+			left !== undefined &&
+			right !== undefined &&
+			identity !== undefined &&
+			identity(left) === identity(right)
+		)
+			return true;
 		const leftMask = left === undefined ? COMPILER_VALUE_KIND_UNDEFINED : kindMask(left);
 		const rightMask =
 			right === undefined ? COMPILER_VALUE_KIND_UNDEFINED : kindMask(right);
@@ -1659,7 +1667,7 @@ export function coreValueKindObservation(
 			return true;
 		return left !== undefined &&
 			right !== undefined &&
-			distinctFreshAllocations(fn, left, right)
+			distinctFreshAllocations(fn, identity?.(left) ?? left, identity?.(right) ?? right)
 			? false
 			: undefined;
 	}
@@ -1674,15 +1682,19 @@ export function coreValueKindObservation(
 		operator === "!=="
 	) {
 		if (
-			left === right &&
+			(left === right ||
+				(identity !== undefined && identity(left) === identity(right))) &&
 			(compilerValueKindMaskIsSubset(
-				kindMask(left),
+				kindMask(left) & kindMask(right),
 				COMPILER_VALUE_KIND_TOP & ~COMPILER_VALUE_KIND_NUMBER,
 			) ||
-				integerRange?.(left, instruction) !== undefined)
+				integerRange?.(left, instruction) !== undefined ||
+				integerRange?.(right, instruction) !== undefined)
 		)
 			return operator === "==" || operator === "===";
-		if (distinctFreshAllocations(fn, left, right))
+		if (
+			distinctFreshAllocations(fn, identity?.(left) ?? left, identity?.(right) ?? right)
+		)
 			return operator === "!=" || operator === "!==";
 	}
 	if (operator === "==" || operator === "!=") {

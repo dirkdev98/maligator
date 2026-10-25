@@ -132,6 +132,7 @@ import {
 	nativeBinaryNumberInputs,
 	nativePrimitiveNumberExpression,
 	nativeUnsignedRemainderExpression,
+	nativeReflexiveEqualityExpression,
 } from "./native-scalar-operators.ts";
 import {
 	nativeInstructionSourceRanges,
@@ -3783,6 +3784,28 @@ function renderScalarExpression(
 				instructionInputIntegerRange(facts, op.right),
 			);
 			if (compared !== undefined) return booleanResult(op.dst, String(compared));
+			if (op.left === op.right) {
+				const kind =
+					instructionInputKind(facts, op.left) ??
+					(isNumericRep(reps[op.left]!)
+						? COMPILER_VALUE_KIND_NUMBER
+						: reps[op.left] === "boolean"
+							? COMPILER_VALUE_KIND_BOOLEAN
+							: reps[op.left] === "string"
+								? COMPILER_VALUE_KIND_STRING
+								: COMPILER_VALUE_KIND_TOP);
+				const expression = nativeReflexiveEqualityExpression(
+					op.operator,
+					`r${op.left}`,
+					isNumericRep(reps[op.left]!) || kind === COMPILER_VALUE_KIND_NUMBER
+						? number(op.left)
+						: undefined,
+					kind,
+					reps[op.left] === "int32" ||
+						instructionInputIntegerRange(facts, op.left) !== undefined,
+				);
+				if (expression !== undefined) return booleanResult(op.dst, expression);
+			}
 			if (plan?.kind === "unsigned-arithmetic") {
 				const expression = nativeUnsignedExpr(
 					op.operator,
@@ -11657,6 +11680,20 @@ function emitInstruction(
 					...fallback.map((line) => `  ${line}`),
 					`}`,
 				];
+			}
+			if (left === right) {
+				const expression = nativeReflexiveEqualityExpression(
+					operator,
+					boxed(left),
+					nativeNumberOperand(left) ?? undefined,
+					operandKind(left),
+					reps[left] === "int32" ||
+						instructionInputIntegerRange(context.facts, left) !== undefined,
+				);
+				if (expression !== undefined) {
+					elideFramePosition();
+					return [storeBoolean(dst, expression)];
+				}
 			}
 			if (
 				(reps[dst] === "number" || reps[dst] === "int32") &&
