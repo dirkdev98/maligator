@@ -273,6 +273,9 @@ The independent target boundary and current storage contract are recorded in
       retain storage ownership without creating control-flow entries. Their
       surviving view drops dead producers, uses and materialization observers;
       source certificates and entry ABI layouts remain intact.
+      Array initializer discovery follows unique surviving edges across proven
+      branches, retaining source store sites and live initializer effects. Holes,
+      protected incremental ranges and independent helper entries retain fallback.
 - [x] Normalize primitive conversion calls from semantic kind unions. Eligible
       `Number` and `String` calls use unary conversions, carrying kind and effect
       proofs into native storage, full entries and frameless numeric paths.

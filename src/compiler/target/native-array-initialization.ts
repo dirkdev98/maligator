@@ -1,4 +1,5 @@
 import { ARRAY_INITIALIZATION_LIMITS } from "../shared/array-initialization.ts";
+import { nativeBodyLinearFlow } from "./native-body-facts.ts";
 import type { NativeBodyFacts } from "./native-body-facts.ts";
 import type { NativeFunctionPlan } from "./program-image.ts";
 import { decodeVmValueOperand } from "./runtime-image.ts";
@@ -40,6 +41,23 @@ export function selectNativeArrayInitializations(
 		fn.instructions.length > ARRAY_INITIALIZATION_LIMITS.maximumFunctionInstructions
 	)
 		return plans;
+	let flow: ReturnType<typeof nativeBodyLinearFlow> | undefined;
+	const projected = body.projection !== undefined;
+	const next = (ip: number) =>
+		projected
+			? (flow ??= nativeBodyLinearFlow(fn, body)).next(ip)
+			: ip + 1 < fn.instructions.length
+				? ip + 1
+				: undefined;
+	const previous = (ip: number) =>
+		projected
+			? (flow ??= nativeBodyLinearFlow(fn, body)).previous(ip)
+			: ip > 0
+				? ip - 1
+				: undefined;
+	const transparentControl = (ip: number) =>
+		projected &&
+		(fn.instructions[ip]!.opcode === "JUMP" || body.projection.branches.has(ip));
 	let entryChain: Map<number, number> | undefined;
 	let entryKeys: Map<number, { readonly step: number; readonly key: string }> | undefined;
 	// LICM hoists constant keys out of loops. The entry chain runs before every instruction
@@ -57,12 +75,13 @@ export function selectNativeArrayInitializations(
 					? 1
 					: 0);
 			for (
-				let ip = 0, step = 0;
+				let ip: number | undefined = 0, step = 0;
+				ip !== undefined &&
 				ip < fn.instructions.length &&
 				!entryChain.has(ip) &&
 				!body.externalEntries.has(ip) &&
 				body.handlerTargets[ip] === undefined &&
-				predecessors(ip) === (step === 0 ? 0 : 1);
+				(projected || predecessors(ip) === (step === 0 ? 0 : 1));
 				step++
 			) {
 				const op = fn.instructions[ip]!;
@@ -72,7 +91,8 @@ export function selectNativeArrayInitializations(
 					if (key !== undefined) entryKeys.set(op.dst, { step, key });
 				} else if (op.opcode === "CREATE_NUMBER" || op.opcode === "CREATE_F64")
 					entryKeys.set(op.dst, { step, key: String(op.value) });
-				if (op.opcode === "JUMP") ip = op.targetIp;
+				if (projected) ip = next(ip);
+				else if (op.opcode === "JUMP") ip = op.targetIp;
 				else if (
 					["JUMP_IF", "RETURN", "THROW", "TERMINAL_YIELD", "YIELD", "AWAIT"].includes(
 						op.opcode,
@@ -99,6 +119,7 @@ export function selectNativeArrayInitializations(
 	for (const [allocationIp, allocation] of fn.instructions.entries()) {
 		if (
 			allocation.opcode !== "CREATE_ARRAY" ||
+			body.projection?.unreachable.has(allocationIp) ||
 			allocation.length < 2 ||
 			allocation.length > ARRAY_INITIALIZATION_LIMITS.maximumIncrementalLength ||
 			unavailable(allocationIp)
@@ -110,22 +131,27 @@ export function selectNativeArrayInitializations(
 			writes = new Set([allocation.dst]);
 		let preparedKeys: Map<number, string> | undefined;
 		const preparedKey = (register: number): string | undefined => {
-			if (writes.has(register) || body.jumpTargets.has(allocationIp)) return undefined;
+			if (writes.has(register) || (!projected && body.jumpTargets.has(allocationIp)))
+				return undefined;
 			if (preparedKeys === undefined) {
 				preparedKeys = new Map();
 				const seen = new Set<number>();
+				const visited = new Set<number>();
 				for (
-					let ip = allocationIp - 1;
-					ip >=
-					Math.max(
-						0,
-						allocationIp - ARRAY_INITIALIZATION_LIMITS.maximumPreparedKeyInstructions,
-					);
-					ip--
+					let ip = previous(allocationIp), steps = 0;
+					ip !== undefined &&
+					steps < ARRAY_INITIALIZATION_LIMITS.maximumPreparedKeyInstructions &&
+					!visited.has(ip);
+					ip = previous(ip), steps++
 				) {
+					visited.add(ip);
 					const op = fn.instructions[ip]!;
+					if (body.handlerTargets[ip] !== handlerTarget) break;
+					if (transparentControl(ip)) {
+						if (unavailable(ip)) break;
+						continue;
+					}
 					if (
-						body.handlerTargets[ip] !== handlerTarget ||
 						op.opcode === "JUMP" ||
 						op.opcode === "JUMP_IF" ||
 						op.opcode === "RETURN" ||
@@ -143,30 +169,31 @@ export function selectNativeArrayInitializations(
 						} else if (op.opcode === "CREATE_NUMBER" || op.opcode === "CREATE_F64")
 							preparedKeys.set(written, String(op.value));
 					}
-					if (body.jumpTargets.has(ip)) break;
+					if (!projected && body.jumpTargets.has(ip)) break;
 				}
 			}
 			return preparedKeys.get(register);
 		};
 		const values: Array<number> = [],
 			stores: Array<number> = [];
+		const visited = new Set<number>([allocationIp]);
 		for (
-			let ip = allocationIp + 1;
+			let ip = next(allocationIp), steps = 0;
 			allocation.length <= ARRAY_INITIALIZATION_LIMITS.maximumLength &&
-			ip <
-				Math.min(
-					fn.instructions.length,
-					allocationIp + 1 + ARRAY_INITIALIZATION_LIMITS.maximumInitializerInstructions,
-				);
-			ip++
+			ip !== undefined &&
+			steps < ARRAY_INITIALIZATION_LIMITS.maximumInitializerInstructions &&
+			!visited.has(ip);
+			ip = next(ip), steps++
 		) {
+			visited.add(ip);
 			if (
 				body.handlerTargets[ip] !== handlerTarget ||
-				body.jumpTargets.has(ip) ||
+				(!projected && body.jumpTargets.has(ip)) ||
 				unavailable(ip)
 			)
 				break;
 			const op = fn.instructions[ip]!;
+			if (transparentControl(ip)) continue;
 			if (
 				op.opcode === "CREATE_STRING" ||
 				op.opcode === "CREATE_NUMBER" ||
@@ -225,23 +252,30 @@ export function selectNativeArrayInitializations(
 		writes.add(allocation.dst);
 		values.length = 0;
 		stores.length = 0;
+		visited.clear();
+		visited.add(allocationIp);
 		for (
-			let ip = allocationIp + 1;
-			ip <
-			Math.min(
-				fn.instructions.length,
-				allocationIp + 1 + ARRAY_INITIALIZATION_LIMITS.maximumIncrementalInstructions,
-			);
-			ip++
+			let ip = next(allocationIp), steps = 0;
+			ip !== undefined &&
+			steps < ARRAY_INITIALIZATION_LIMITS.maximumIncrementalInstructions &&
+			!visited.has(ip);
+			ip = next(ip), steps++
 		) {
+			visited.add(ip);
 			const op = fn.instructions[ip]!;
+			const control = transparentControl(ip);
 			if (
 				body.handlerTargets[ip] !== handlerTarget ||
-				body.jumpTargets.has(ip) ||
+				(!projected && body.jumpTargets.has(ip)) ||
 				body.writes[ip]!.includes(allocation.dst) ||
-				["JUMP", "JUMP_IF", "RETURN", "THROW", "YIELD", "AWAIT"].includes(op.opcode)
+				(!control &&
+					["JUMP", "JUMP_IF", "RETURN", "THROW", "YIELD", "AWAIT"].includes(op.opcode))
 			)
 				break;
+			if (control) {
+				if (unavailable(ip)) break;
+				continue;
+			}
 			if (op.opcode === "DEFINE_PROPERTY" && op.object === allocation.dst) {
 				if (
 					!op.enumerable ||

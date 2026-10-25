@@ -82,6 +82,57 @@ export function projectNativeBodyFacts(
 	};
 }
 
+// Helper and handler labels can supply independent state despite a single ordinary predecessor.
+export function nativeBodyLinearFlow(fn: BytecodeFunction, body: NativeBodyFacts) {
+	const count = fn.instructions.length;
+	const successors = new Int32Array(count).fill(-1);
+	const predecessors = new Int32Array(count).fill(-1);
+	const unreachable = body.projection?.unreachable;
+	const add = (from: number, to: number) => {
+		if (to < 0 || to >= count || unreachable?.has(to)) return;
+		const prior = successors[from]!;
+		successors[from] = prior === -1 || prior === to ? to : -2;
+		const incoming = predecessors[to]!;
+		predecessors[to] = incoming === -1 || incoming === from ? from : -2;
+	};
+	for (const [ip, op] of fn.instructions.entries()) {
+		if (unreachable?.has(ip)) continue;
+		const fixed = body.projection?.branches.get(ip);
+		if (fixed !== undefined) add(ip, fixed);
+		else {
+			if (op.opcode === "JUMP" || op.opcode === "JUMP_IF") add(ip, op.targetIp);
+			if (
+				![
+					"JUMP",
+					"RETURN",
+					"THROW",
+					"LOAD_UNDECLARED",
+					"YIELD",
+					"AWAIT",
+					"TERMINAL_YIELD",
+				].includes(op.opcode)
+			)
+				add(ip, ip + 1);
+		}
+	}
+	return {
+		next(ip: number): number | undefined {
+			const target = successors[ip]!;
+			return target >= 0 &&
+				!body.externalEntries.has(target) &&
+				predecessors[target] === ip
+				? target
+				: undefined;
+		},
+		previous(ip: number): number | undefined {
+			const source = predecessors[ip]!;
+			return source >= 0 && !body.externalEntries.has(ip) && successors[source] === ip
+				? source
+				: undefined;
+		},
+	};
+}
+
 // One immutable body analysis is shared within a planning or validation invocation.
 export function analyzeNativeBodyFacts(fn: BytecodeFunction): NativeBodyFacts {
 	const reads = fn.instructions.map(vmInstructionReadRegisters);

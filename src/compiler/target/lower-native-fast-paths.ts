@@ -1,3 +1,4 @@
+import { ARRAY_INITIALIZATION_LIMITS } from "../shared/array-initialization.ts";
 import {
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_TOP,
@@ -3646,6 +3647,7 @@ export function analyzeNativeFastPaths(
 		(ip) => mapEntryBlocked.has(ip) || pollingEdges.has(ip),
 	);
 	for (const plan of mapEntries) for (const ip of plan.claimedIps) claim(ip);
+	const arrayBlocked = new Set([...blocked, ...pollingEdges]);
 	const arrayInitializations = selectNativeArrayInitializations(
 		native,
 		body,
@@ -3886,6 +3888,8 @@ export function analyzeNativeFastPaths(
 				for (const ip of plan.claimedIps) unavailable.add(ip);
 			for (const plan of plans.mapEntries)
 				for (const ip of plan.claimedIps) unavailable.add(ip);
+			for (const plan of plans.arrayInitializations)
+				for (const ip of plan.claimedIps) unavailable.add(ip);
 			const spanContinuations = selectNativeSpanContinuations(
 				native,
 				projected,
@@ -3897,6 +3901,8 @@ export function analyzeNativeFastPaths(
 				for (const ip of plan.claimedIps) enumerationUnavailable.add(ip);
 			for (const plan of plans.mapEntries)
 				for (const ip of plan.claimedIps) enumerationUnavailable.add(ip);
+			for (const plan of plans.arrayInitializations)
+				for (const ip of plan.claimedIps) enumerationUnavailable.add(ip);
 			const objectEnumerationSnapshots = selectNativeObjectEnumerationSnapshots(
 				native,
 				projected,
@@ -3906,11 +3912,38 @@ export function analyzeNativeFastPaths(
 			const mapUnavailable = new Set([...mapEntryBlocked, ...pollingEdges, ...reserved]);
 			for (const plan of [...spanContinuations, ...objectEnumerationSnapshots])
 				for (const ip of plan.claimedIps) mapUnavailable.add(ip);
+			for (const plan of plans.arrayInitializations)
+				for (const ip of plan.claimedIps) mapUnavailable.add(ip);
 			const unreachable = projected.projection.unreachable;
 			const survives = (plan: { readonly claimedIps: ReadonlyArray<number> }) =>
 				plan.claimedIps.some((ip) => !unreachable.has(ip));
 			const liveSite = (plan: { readonly instructionIp: number }) =>
 				!unreachable.has(plan.instructionIp);
+			const mapEntries = selectNativeMapEntries(native, projected, (ip) =>
+				mapUnavailable.has(ip),
+			);
+			const arrayInitializations = plans.arrayInitializations.filter(survives);
+			if (arrayInitializations.length < ARRAY_INITIALIZATION_LIMITS.maximumCandidates) {
+				const unavailable = new Set([...arrayBlocked, ...reserved]);
+				for (const plan of [
+					...spanContinuations,
+					...objectEnumerationSnapshots,
+					...mapEntries,
+					...arrayInitializations,
+				])
+					for (const ip of plan.claimedIps) unavailable.add(ip);
+				arrayInitializations.push(
+					...selectNativeArrayInitializations(native, projected, stringConstants, (ip) =>
+						unavailable.has(ip),
+					).slice(
+						0,
+						ARRAY_INITIALIZATION_LIMITS.maximumCandidates - arrayInitializations.length,
+					),
+				);
+				arrayInitializations.sort(
+					(left, right) => left.allocationIp - right.allocationIp,
+				);
+			}
 			const { constructorInitialization, privateFieldReserve, ...remaining } = plans;
 			return {
 				...remaining,
@@ -3918,7 +3951,7 @@ export function analyzeNativeFastPaths(
 				mathCalls: plans.mathCalls.filter(liveSite),
 				numberPredicates: plans.numberPredicates.filter(liveSite),
 				stringTransforms: plans.stringTransforms.filter(liveSite),
-				arrayInitializations: plans.arrayInitializations.filter(survives),
+				arrayInitializations,
 				propertyNumericUpdates: plans.propertyNumericUpdates.filter(survives),
 				propertyProjections: plans.propertyProjections.filter(survives),
 				propertyReadRegions: plans.propertyReadRegions.filter(survives),
@@ -3936,9 +3969,7 @@ export function analyzeNativeFastPaths(
 					: {}),
 				spanContinuations,
 				objectEnumerationSnapshots,
-				mapEntries: selectNativeMapEntries(native, projected, (ip) =>
-					mapUnavailable.has(ip),
-				),
+				mapEntries,
 			};
 		},
 	};
@@ -3955,9 +3986,9 @@ export function nativeFastPathWindows(
 		...fastPaths.propertyReadPairs,
 		...fastPaths.numberRecordRegions,
 		...fastPaths.numericLoopRegions,
-		...fastPaths.arrayInitializations,
 		...(includeOverlays
 			? [
+					...fastPaths.arrayInitializations,
 					...fastPaths.mapEntries,
 					...fastPaths.objectEnumerationSnapshots,
 					...fastPaths.spanContinuations,

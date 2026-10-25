@@ -192,6 +192,7 @@ tests/native/object-own-keys-snapshot.test.ts
 tests/native/split-span-continuation.test.ts
 tests/native/surviving-span-flow.test.ts
 tests/native/surviving-record-flow.test.ts
+tests/native/surviving-array-flow.test.ts
 tests/native/regexp-span-continuation.test.ts
 tests/native/map-region-entries.test.ts
 tests/native/array-initialization-region.test.ts
