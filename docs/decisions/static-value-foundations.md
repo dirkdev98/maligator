@@ -256,6 +256,13 @@ calls to the callee to have a uniform kind. Default initialization and mapped-ar
 writes need their own provenance proof; sloppy receivers retain their binding rules.
 Primitive String length lowering consumes the independent kind proof as well as
 static-value brands, and its selected operation admits scalar String storage.
+Return intervals converge through the call graph before publication, including
+recursive components. Scoped queries reuse local loop and path rules with current
+callee bounds; their memos do not outlive a worklist visit. Empty normal-result
+sets differ from unknown ranges, so bounded base cases can seed recursive joins.
+Growing intervals widen to unknown after bounded expansion rather than exporting
+an unproved integer contract. Calls retain their throwing, collection and user-code
+effects throughout this propagation.
 Call result bounds reach scalar selection, variant overlays and artifact transport.
 After checking completion, callers decode int32-bounded results with an ordinary C
 cast; argument transports retain their own conversion semantics. Unsigned C remainder

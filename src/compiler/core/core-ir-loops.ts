@@ -49,7 +49,17 @@ export interface CoreLoopInductionAnalysis {
 	readonly hasNumericRanges: boolean;
 	induction(value: CoreValueId): CoreInductionVariable | undefined;
 	range(value: CoreValueId, block?: CoreBlockId): CompilerIntegerRange | undefined;
+	rangeQuery(
+		callResultRange: (instruction: CoreInstructionId) => CoreIntegerRangeState,
+	): CoreIntegerRangeQuery;
 }
+
+// Null is the empty normal-result set; undefined includes non-integers and -0.
+export type CoreIntegerRangeState = CompilerIntegerRange | null | undefined;
+export type CoreIntegerRangeQuery = (
+	value: CoreValueId,
+	block?: CoreBlockId,
+) => CoreIntegerRangeState;
 
 const SAFE_MINIMUM = -Number.MAX_SAFE_INTEGER;
 const SAFE_MAXIMUM = Number.MAX_SAFE_INTEGER;
@@ -494,140 +504,156 @@ export function analyzeCoreLoopInductions(
 			break;
 		}
 	}
-	const memo = new Map<
-		CoreBlockId | undefined,
-		Map<CoreValueId, CompilerIntegerRange | undefined>
-	>();
-	const query = (
-		value: CoreValueId,
-		block: CoreBlockId | undefined,
-		budget: { remaining: number },
-	): CompilerIntegerRange | undefined => {
-		const resolved = root(value);
-		let cache = memo.get(block);
-		if (cache === undefined) {
-			cache = new Map();
-			memo.set(block, cache);
-		}
-		if (cache.has(resolved)) return cache.get(resolved);
-		if (budget.remaining-- <= 0) return undefined;
-		cache.set(resolved, undefined);
-		const induction = byRoot.get(resolved);
-		const update = byUpdate.get(resolved);
-		const exact = exactNumber(fn, resolved, root);
-		let range: CompilerIntegerRange | undefined;
-		if (induction?.range !== undefined) {
-			const body =
-				block !== undefined &&
-				induction.comparison !== undefined &&
-				induction.loop.blocks.has(block) &&
-				cfg.dominates(induction.comparison.body, block);
-			range = body
-				? numericRange(induction.range.minimum, induction.range.maximum)
-				: numericRange(
-						Math.min(induction.range.minimum, induction.range.finalUpdate),
-						Math.max(induction.range.maximum, induction.range.finalUpdate),
-					);
-		} else if (update?.range !== undefined) {
-			range = numericRange(
-				update.range.minimum + update.step,
-				update.range.maximum + update.step,
-			);
-		} else if (exact !== undefined) range = numericRange(exact);
-		else {
-			const definition = definitionInstruction(fn, resolved);
-			if (definition !== undefined) range = coreCallResultIntegerRange(fn, definition);
-			if (
-				range === undefined &&
-				definition !== undefined &&
-				fn.instructionOpcodeName(definition) === "binary"
-			) {
-				const left = operand(fn, definition, 0)!;
-				const right = operand(fn, definition, 1)!;
-				const constant = exactNumber(fn, right, root);
-				const operator = fn.instructionAttributes(definition).operator;
-				if (operator === ">>>") {
-					range = numericRange(
-						0,
-						constant === undefined ? 0xffff_ffff : 0xffff_ffff >>> (constant & 31),
-					);
-				} else if (
-					operator === "&" &&
-					constant !== undefined &&
-					Number.isInteger(constant) &&
-					constant >= 0 &&
-					constant <= 0x7fff_ffff
-				) {
-					range = numericRange(0, constant);
-				} else if (
-					constant !== undefined &&
-					Number.isSafeInteger(constant) &&
-					!Object.is(constant, -0)
-				) {
-					const input = query(left, block, budget);
-					if (input !== undefined) {
-						if (operator === "+")
-							range = numericRange(input.minimum + constant, input.maximum + constant);
-						else if (operator === "-")
-							range = numericRange(input.minimum - constant, input.maximum - constant);
-						else if (
-							operator === "*" &&
-							!(constant < 0 && input.minimum <= 0 && input.maximum >= 0) &&
-							!(constant === 0 && input.minimum < 0)
-						) {
-							range = numericRange(
-								Math.min(input.minimum * constant, input.maximum * constant),
-								Math.max(input.minimum * constant, input.maximum * constant),
-							);
-						} else if (operator === "%" && constant > 0 && input.minimum >= 0)
-							range = numericRange(0, Math.min(input.maximum, constant - 1));
-					}
-				}
+	const rangeQuery = (
+		callResultRange?: (instruction: CoreInstructionId) => CoreIntegerRangeState,
+	): CoreIntegerRangeQuery => {
+		const memo = new Map<
+			CoreBlockId | undefined,
+			Map<CoreValueId, CoreIntegerRangeState>
+		>();
+		const query = (
+			value: CoreValueId,
+			block: CoreBlockId | undefined,
+			budget: { remaining: number },
+		): CoreIntegerRangeState => {
+			const resolved = root(value);
+			let cache = memo.get(block);
+			if (cache === undefined) {
+				cache = new Map();
+				memo.set(block, cache);
 			}
-			if (range === undefined && fn.kernel.valueDefinitionKind(resolved) === 0) {
-				const owner = fn.kernel.valueDefinitionOwner(resolved) as CoreBlockId;
-				const index = fn.kernel.valueDefinitionIndex(resolved);
-				const row = fn.kernel.blockParameterStart(owner) + index;
-				const incoming = cfg.predecessors[owner] ?? [];
-				if (fn.kernel.blockParameterRole(row) !== 1 && incoming.length > 0) {
-					let joined: CompilerIntegerRange | undefined;
-					for (const edge of incoming) {
-						const input = edge.arguments[edge.kind === "exceptional" ? index - 1 : index];
-						const bound =
-							input === undefined ? undefined : query(input, edge.from, budget);
-						if (bound === undefined) {
-							joined = undefined;
-							break;
+			if (cache.has(resolved)) return cache.get(resolved);
+			if (budget.remaining-- <= 0) return undefined;
+			cache.set(resolved, undefined);
+			const induction = byRoot.get(resolved);
+			const update = byUpdate.get(resolved);
+			const exact = exactNumber(fn, resolved, root);
+			let range: CoreIntegerRangeState;
+			if (induction?.range !== undefined) {
+				const body =
+					block !== undefined &&
+					induction.comparison !== undefined &&
+					induction.loop.blocks.has(block) &&
+					cfg.dominates(induction.comparison.body, block);
+				range = body
+					? numericRange(induction.range.minimum, induction.range.maximum)
+					: numericRange(
+							Math.min(induction.range.minimum, induction.range.finalUpdate),
+							Math.max(induction.range.maximum, induction.range.finalUpdate),
+						);
+			} else if (update?.range !== undefined) {
+				range = numericRange(
+					update.range.minimum + update.step,
+					update.range.maximum + update.step,
+				);
+			} else if (exact !== undefined) range = numericRange(exact);
+			else {
+				const definition = definitionInstruction(fn, resolved);
+				if (definition !== undefined)
+					range =
+						callResultRange === undefined
+							? coreCallResultIntegerRange(fn, definition)
+							: callResultRange(definition);
+				if (
+					range === undefined &&
+					definition !== undefined &&
+					fn.instructionOpcodeName(definition) === "binary"
+				) {
+					const left = operand(fn, definition, 0)!;
+					const right = operand(fn, definition, 1)!;
+					const constant = exactNumber(fn, right, root);
+					const operator = fn.instructionAttributes(definition).operator;
+					if (callResultRange !== undefined && query(left, block, budget) === null) {
+						range = null;
+					} else if (operator === ">>>") {
+						range = numericRange(
+							0,
+							constant === undefined ? 0xffff_ffff : 0xffff_ffff >>> (constant & 31),
+						);
+					} else if (
+						operator === "&" &&
+						constant !== undefined &&
+						Number.isInteger(constant) &&
+						constant >= 0 &&
+						constant <= 0x7fff_ffff
+					) {
+						range = numericRange(0, constant);
+					} else if (
+						constant !== undefined &&
+						Number.isSafeInteger(constant) &&
+						!Object.is(constant, -0)
+					) {
+						const input = query(left, block, budget);
+						if (input !== undefined && input !== null) {
+							if (operator === "+")
+								range = numericRange(input.minimum + constant, input.maximum + constant);
+							else if (operator === "-")
+								range = numericRange(input.minimum - constant, input.maximum - constant);
+							else if (
+								operator === "*" &&
+								!(constant < 0 && input.minimum <= 0 && input.maximum >= 0) &&
+								!(constant === 0 && input.minimum < 0)
+							) {
+								range = numericRange(
+									Math.min(input.minimum * constant, input.maximum * constant),
+									Math.max(input.minimum * constant, input.maximum * constant),
+								);
+							} else if (operator === "%" && constant > 0 && input.minimum >= 0)
+								range = numericRange(0, Math.min(input.maximum, constant - 1));
 						}
-						joined =
-							joined === undefined
-								? bound
-								: numericRange(
-										Math.min(joined.minimum, bound.minimum),
-										Math.max(joined.maximum, bound.maximum),
-									);
 					}
-					range = joined;
 				}
+				if (range === undefined && fn.kernel.valueDefinitionKind(resolved) === 0) {
+					const owner = fn.kernel.valueDefinitionOwner(resolved) as CoreBlockId;
+					const index = fn.kernel.valueDefinitionIndex(resolved);
+					const row = fn.kernel.blockParameterStart(owner) + index;
+					const incoming = cfg.predecessors[owner] ?? [];
+					if (fn.kernel.blockParameterRole(row) !== 1 && incoming.length > 0) {
+						let joined: CoreIntegerRangeState = null;
+						for (const edge of incoming) {
+							const input =
+								edge.arguments[edge.kind === "exceptional" ? index - 1 : index];
+							const bound =
+								input === undefined ? undefined : query(input, edge.from, budget);
+							if (bound === undefined) {
+								joined = undefined;
+								break;
+							}
+							if (bound === null) continue;
+							joined =
+								joined === null
+									? bound
+									: {
+											minimum: Math.min(joined.minimum, bound.minimum),
+											maximum: Math.max(joined.maximum, bound.maximum),
+											exactSafeIntegers: true,
+											excludesNegativeZero: true,
+										};
+						}
+						range = joined;
+					}
+				}
+				if (range === undefined && numericRepresentation(resolved) === "i32")
+					range = COMPILER_INT32_RANGE;
 			}
-			if (range === undefined && numericRepresentation(resolved) === "i32")
-				range = COMPILER_INT32_RANGE;
-		}
-		if (range !== undefined && block !== undefined) {
-			let current: CoreBlockId | null = block;
-			while (current !== null) {
-				for (const refinement of refinements) {
-					if (refinement.block !== current || refinement.subject !== resolved) continue;
-					range = intersect(range, refinement.range);
+			if (range !== undefined && range !== null && block !== undefined) {
+				let current: CoreBlockId | null = block;
+				while (current !== null) {
+					for (const refinement of refinements) {
+						if (refinement.block !== current || refinement.subject !== resolved) continue;
+						range = intersect(range, refinement.range);
+						if (range === undefined) break;
+					}
 					if (range === undefined) break;
+					current = cfg.immediateDominators[current] ?? null;
 				}
-				if (range === undefined) break;
-				current = cfg.immediateDominators[current] ?? null;
 			}
-		}
-		cache.set(resolved, range);
-		return range;
+			cache.set(resolved, range);
+			return range;
+		};
+		return (value, block) => query(value, block, { remaining: 32 });
 	};
+	const query = rangeQuery();
 	const hasBoundedProducer = [...fn.instructionIds()].some(
 		(instruction) =>
 			fn.instructionKind(instruction) === "operation" &&
@@ -645,8 +671,9 @@ export function analyzeCoreLoopInductions(
 			return byRoot.get(root(value));
 		},
 		range(value, block) {
-			return query(value, block, { remaining: 32 });
+			return query(value, block) ?? undefined;
 		},
+		rangeQuery,
 	};
 	return Object.freeze(result);
 }

@@ -78,6 +78,47 @@ const signedZero = function signedZero(value, callback) {
 		throw error;
 	}
 };
+const byteRelay = function byteRelay(value, callback) {
+	try {
+		callback();
+		return byte(value, callback) + 1;
+	} catch (error) {
+		throw error;
+	}
+};
+const recursiveByte = function recursiveByte(depth, value, callback) {
+	try {
+		callback();
+		if (depth <= 0) return value & 255;
+		return recursiveByte(depth - 1, value, callback);
+	} catch (error) {
+		throw error;
+	}
+};
+const recursiveCount = function recursiveCount(depth, value, callback) {
+	try {
+		callback();
+		if (depth <= 0) return value & 255;
+		return recursiveCount(depth - 1, value, callback) + 1;
+	} catch (error) {
+		throw error;
+	}
+};
+function chainedRemainder(value, callback) {
+	const result = byteRelay(value, callback);
+	collectGarbage();
+	return result % 10;
+}
+function recursiveRemainder(depth, value, callback) {
+	const result = recursiveByte(depth, value, callback);
+	collectGarbage();
+	return result % 10;
+}
+function recursiveGrowingRemainder(depth, value, callback) {
+	const result = recursiveCount(depth, value, callback);
+	collectGarbage();
+	return result % 10;
+}
 function compute(value, callback) {
 	const result = integer(value, callback);
 	collectGarbage();
@@ -200,6 +241,12 @@ globalThis.unsignedRemainder = unsignedRemainder;
 globalThis.floatingResult = floatingResult;
 globalThis.zeroResult = zeroResult;
 globalThis.resumeRange = resumeRange;
+globalThis.byteRelay = byteRelay;
+globalThis.recursiveByte = recursiveByte;
+globalThis.recursiveCount = recursiveCount;
+globalThis.chainedRemainder = chainedRemainder;
+globalThis.recursiveRemainder = recursiveRemainder;
+globalThis.recursiveGrowingRemainder = recursiveGrowingRemainder;
 
 function capture(run) {
 	try {
@@ -270,6 +317,11 @@ for (const value of inputs) {
 		capture(() => byteRemainder(value, hook)),
 		capture(() => floatingResult(value, hook)),
 		capture(() => zeroResult(value, hook)),
+	);
+	console.log(
+		capture(() => chainedRemainder(value, hook)),
+		capture(() => recursiveRemainder(3, value, hook)),
+		capture(() => recursiveGrowingRemainder(3, value, hook)),
 	);
 	console.log(
 		capture(() => {

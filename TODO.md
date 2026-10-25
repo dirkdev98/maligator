@@ -111,9 +111,9 @@ The independent target boundary and current storage contract are recorded in
       including spread, rest and resumable calls. Forwarded parameters and strict
       receivers now project kinds and ranges from that caller's actual operands,
       including known iterable prefixes and omitted positional arguments.
-      Propagate newly published bounds
-      through chains and recursive callee components; the current discovery reads
-      each callee's existing local proofs once. Complete int-aware arithmetic
+      Normal return bounds now converge through chains and recursive callee
+      components before publication, with conservative widening for growing ranges.
+      Complete int-aware arithmetic
       rendering with storage-web selection so modulo chains retain integer storage
       without f64 round trips.
       Preserve normal return operand identity itself for identity comparisons and

@@ -61,12 +61,14 @@ import {
 	coreBlockLoopFrequency,
 } from "./core-ir-generated-cost.ts";
 import { CORE_LOOP_INDUCTION_ANALYSIS } from "./core-ir-loops.ts";
+import type { CoreIntegerRangeQuery, CoreIntegerRangeState } from "./core-ir-loops.ts";
 import { CORE_LOCAL_FACT_BUNDLE_ANALYSIS } from "./core-ir-provenance.ts";
 import type { CoreLocalOptimizationPlanInput } from "./core-ir-region-selection.ts";
 import type { CoreProgramSummaries } from "./core-ir-summaries.ts";
 import {
 	CORE_PRIMITIVE_OPERATOR_EFFECT_FACT,
 	coreValueKindDemand,
+	coreCallResultIntegerRange,
 	coreValueKindObservation,
 } from "./core-ir-value-kinds.ts";
 import type {
@@ -95,6 +97,7 @@ import {
 	CORE_PROGRAM_VALUE_KIND_ANALYSIS,
 } from "./core-program-flow-analysis.ts";
 import type { CoreProgramFlowState } from "./core-program-flow-analysis.ts";
+import { CoreProgramFlowEngine } from "./core-program-flow.ts";
 import {
 	expandCoreReadAccessorRegion,
 	coreReadAccessorRegionCost,
@@ -4113,7 +4116,10 @@ function discoverProgramCallResultKinds(
 ): ReadonlyMap<CoreFunctionId, ReadonlyArray<CoreCallResultFact>> {
 	const results = new Map<CoreFunctionId, Array<CoreCallResultFact>>();
 	const localReturns = new Map<CoreFunctionId, number | undefined>();
-	const returnRanges = new Map<CoreFunctionId, CompilerIntegerRange | undefined>();
+	const pending = new Map<
+		CoreFunctionId,
+		Array<{ site: CoreIndexedCallSite; mask: number }>
+	>();
 	const forwardedValue = (
 		target: CoreFunctionId,
 		site: CoreIndexedCallSite,
@@ -4173,28 +4179,6 @@ function discoverProgramCallResultKinds(
 			? local
 			: readValueKinds().summary(target).returnKind;
 	};
-	const returnRange = (target: CoreFunctionId): CompilerIntegerRange | undefined => {
-		if (returnRanges.has(target)) return returnRanges.get(target);
-		const fn = program.function(target);
-		const request = { scope: "function" as const, function: target };
-		const cfg = analyses.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request).exceptional();
-		let joined: CompilerIntegerRange | undefined;
-		for (const block of cfg.reachable) {
-			const terminator = fn.blockTerminator(block);
-			if (fn.instructionKind(terminator) !== "return") continue;
-			const value = fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator));
-			const range = analyses
-				.get(CORE_LOOP_INDUCTION_ANALYSIS, request)
-				.range(value, block);
-			if (range === undefined) {
-				joined = undefined;
-				break;
-			}
-			joined = joinRange(joined, range);
-		}
-		returnRanges.set(target, joined);
-		return joined;
-	};
 	for (const functionId of flow.reachability.liveFunctions) {
 		const fn = program.function(functionId);
 		let localKinds: ReturnType<typeof coreValueKindDemand> | undefined;
@@ -4244,40 +4228,148 @@ function discoverProgramCallResultKinds(
 						(mask, target) => mask | projectedMask(target, site),
 						0,
 					);
-			let integerRange: CompilerIntegerRange | undefined;
-			if (mask === COMPILER_VALUE_KIND_NUMBER) {
-				for (const target of targets.anyScript
-					? program.functionIds()
-					: targets.functions) {
-					const forwarded = forwardedValue(target, site);
-					const projected =
-						forwarded === undefined
-							? undefined
-							: analyses
-									.get(CORE_LOOP_INDUCTION_ANALYSIS, {
-										scope: "function",
-										function: functionId,
-									})
-									.range(forwarded, fn.instructionBlock(instruction));
-					if (projected === undefined && returnMask(target) === 0) continue;
-					const range = projected ?? returnRange(target);
-					if (range === undefined) {
-						integerRange = undefined;
-						break;
-					}
-					integerRange = joinRange(integerRange, range);
-				}
+			if (!compilerValueKindMaskIsValid(mask)) continue;
+			let sites = pending.get(functionId);
+			if (sites === undefined) pending.set(functionId, (sites = []));
+			sites.push({ site, mask });
+		}
+	}
+	const returnRanges = new Map<CoreFunctionId, CoreIntegerRangeState>();
+	const rangedSites = new Map<
+		CoreFunctionId,
+		Map<CoreInstructionId, CoreIndexedCallSite>
+	>();
+	for (const [functionId, calls] of pending) {
+		for (const { site, mask } of calls) {
+			if (mask !== COMPILER_VALUE_KIND_NUMBER) continue;
+			let sites = rangedSites.get(functionId);
+			if (sites === undefined) {
+				sites = new Map<CoreInstructionId, CoreIndexedCallSite>();
+				rangedSites.set(functionId, sites);
 			}
+			sites.set(site.instruction, site);
+			for (const target of site.targets.anyScript
+				? program.functionIds()
+				: site.targets.functions) {
+				if (returnRanges.has(target)) continue;
+				const kind = returnMask(target);
+				if (kind === COMPILER_VALUE_KIND_NUMBER || kind === 0)
+					returnRanges.set(target, null);
+			}
+		}
+	}
+	const joinState = (
+		left: CoreIntegerRangeState,
+		right: CoreIntegerRangeState,
+	): CoreIntegerRangeState =>
+		left === undefined || right === undefined
+			? undefined
+			: left === null
+				? right
+				: right === null
+					? left
+					: joinRange(left, right);
+	const callRange = (
+		site: CoreIndexedCallSite,
+		query: CoreIntegerRangeQuery,
+	): CoreIntegerRangeState => {
+		let joined: CoreIntegerRangeState = null;
+		const fn = program.function(site.caller);
+		for (const target of site.targets.anyScript
+			? program.functionIds()
+			: site.targets.functions) {
+			const forwarded = forwardedValue(target, site);
+			const projected =
+				forwarded === undefined
+					? undefined
+					: query(forwarded, fn.instructionBlock(site.instruction));
+			joined = joinState(
+				joined,
+				projected === undefined ? returnRanges.get(target) : projected,
+			);
+			if (joined === undefined) break;
+		}
+		return joined;
+	};
+	const queryFunction = (functionId: CoreFunctionId): CoreIntegerRangeQuery => {
+		const ranges = analyses.get(CORE_LOOP_INDUCTION_ANALYSIS, {
+			scope: "function",
+			function: functionId,
+		});
+		const sites = rangedSites.get(functionId);
+		if (sites === undefined) return (value, block) => ranges.range(value, block);
+		const fn = program.function(functionId);
+		const query = ranges.rangeQuery((instruction) => {
+			const site = sites.get(instruction);
+			return site === undefined
+				? coreCallResultIntegerRange(fn, instruction)
+				: callRange(site, query);
+		});
+		return query;
+	};
+	const expansions = new Map<CoreFunctionId, number>();
+	new CoreProgramFlowEngine(program).solveFunctions(
+		returnRanges.keys(),
+		(functionId, enqueue) => {
+			if (returnRanges.get(functionId) === undefined) return;
+			const fn = program.function(functionId);
+			const cfg = analyses
+				.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
+					scope: "function",
+					function: functionId,
+				})
+				.exceptional();
+			const query = queryFunction(functionId);
+			let joined: CoreIntegerRangeState = null;
+			for (const block of cfg.reachable) {
+				const terminator = fn.blockTerminator(block);
+				if (fn.instructionKind(terminator) !== "return") continue;
+				joined = joinState(
+					joined,
+					query(
+						fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator)),
+						block,
+					),
+				);
+				if (joined === undefined) break;
+			}
+			const prior = returnRanges.get(functionId);
+			let next = joinState(prior, joined);
+			if (
+				next === prior ||
+				(next !== null && prior !== null && compilerIntegerRangesEqual(next, prior))
+			)
+				return;
+			if (prior !== null && next !== undefined) {
+				const count = (expansions.get(functionId) ?? 0) + 1;
+				expansions.set(functionId, count);
+				// Growing recursive intervals must converge without assuming an integer-only result.
+				if (count >= 8) next = undefined;
+			}
+			returnRanges.set(functionId, next);
+			for (const caller of flow.targets.graph.exactCallers(functionId))
+				if (returnRanges.has(caller)) enqueue(caller);
+			for (const caller of flow.targets.graph.wildcardCallers)
+				if (returnRanges.has(caller)) enqueue(caller);
+		},
+	);
+	for (const [functionId, calls] of pending) {
+		const fn = program.function(functionId);
+		let query: CoreIntegerRangeQuery | undefined;
+		for (const { site, mask } of calls) {
+			const instruction = site.instruction;
+			const integerRange =
+				mask === COMPILER_VALUE_KIND_NUMBER
+					? (callRange(site, (query ??= queryFunction(functionId))) ?? undefined)
+					: undefined;
 			const currentRange =
 				fn.instructionAttributes(instruction)[CORE_CALL_RESULT_INTEGER_RANGE_ATTRIBUTE];
 			if (
-				!compilerValueKindMaskIsValid(mask) ||
-				(fn.instructionAttributes(instruction)[CORE_CALL_RESULT_KIND_ATTRIBUTE] ===
-					mask &&
-					compilerIntegerRangesEqual(
-						compilerIntegerRangeIsValid(currentRange) ? currentRange : undefined,
-						integerRange,
-					))
+				fn.instructionAttributes(instruction)[CORE_CALL_RESULT_KIND_ATTRIBUTE] === mask &&
+				compilerIntegerRangesEqual(
+					compilerIntegerRangeIsValid(currentRange) ? currentRange : undefined,
+					integerRange,
+				)
 			)
 				continue;
 			let calls = results.get(functionId);

@@ -41,6 +41,74 @@ function boundedCall(out: ReturnType<typeof inspectRange>) {
 }
 
 describe("normal call result integer ranges", () => {
+	it.each([false, true])(
+		"propagates bounds through effectful forwarding chains (locked=%s)",
+		(locked) => {
+			const out = inspectStaticValueFunction(
+				`const leaf=function leaf(value,hook){try{hook();return value&255;}catch(error){throw error;}};
+			const relay=function relay(value,hook){try{hook();return leaf(value,hook)+1;}catch(error){throw error;}};
+			const outer=function outer(value,hook){try{hook();return relay(value,hook)*2;}catch(error){throw error;}};
+			function compute(value,hook,gate){const result=outer(value,hook);gate();return result%10;}
+			globalThis.leaf=leaf;globalThis.relay=relay;globalThis.outer=outer;globalThis.compute=compute;`,
+				"compute",
+				{ locked },
+			);
+			const { op, facts } = boundedCall(out);
+			expect(instructionResultIntegerRange(facts, op.dst)).toEqual({
+				...COMPILER_INT32_RANGE,
+				minimum: 2,
+				maximum: 512,
+			});
+			expect(out.native.registerRepresentations[op.dst]).toBe("int32");
+			expect(out.c.source).not.toContain("mal_number_remainder(");
+			expect(facts.effectMask! & INSTRUCTION_CALLS_USER_CODE).not.toBe(0);
+			expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
+				out.image,
+			);
+		},
+	);
+
+	it.each([
+		[
+			"value&255",
+			"second(depth-1,value,hook)",
+			"first(depth-1,value,hook)",
+			{ ...COMPILER_INT32_RANGE, minimum: 0, maximum: 255 },
+		],
+		[
+			"value&255",
+			"second(depth-1,value,hook)+1",
+			"first(depth-1,value,hook)+1",
+			undefined,
+		],
+		[
+			"value?NaN:17",
+			"second(depth-1,value,hook)",
+			"first(depth-1,value,hook)",
+			undefined,
+		],
+		["value?-0:17", "second(depth-1,value,hook)", "first(depth-1,value,hook)", undefined],
+	] as const)(
+		"solves recursive normal returns with base %s and transfer %s",
+		(base, first, second, range) => {
+			const out = inspectStaticValueFunction(
+				`const first=function first(depth,value,hook){try{hook();if(depth<=0)return ${base};return ${first};}catch(error){throw error;}};
+			const second=function second(depth,value,hook){try{hook();if(depth<=0)return ${base};return ${second};}catch(error){throw error;}};
+			function compute(depth,value,hook,gate){const result=first(depth,value,hook);gate();return result%10;}
+			globalThis.first=first;globalThis.second=second;globalThis.compute=compute;`,
+				"compute",
+			);
+			const ip = out.native.body.instructions.findIndex(
+				(op) => op.opcode === "CALL" && op.arguments.length === 3,
+			);
+			expect(ip).toBeGreaterThanOrEqual(0);
+			expect(out.native.facts![ip]!.resultIntegerRanges?.[0]).toEqual(range);
+			if (range !== undefined)
+				expect(out.c.source).not.toContain("mal_number_remainder(");
+			else expect(out.c.source).toMatch(/mal_number_remainder\(|MAL_BIN_MOD/);
+		},
+	);
+
 	it.each([
 		["value|0", COMPILER_INT32_RANGE],
 		["value&255", { ...COMPILER_INT32_RANGE, minimum: 0, maximum: 255 }],
