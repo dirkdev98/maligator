@@ -1,4 +1,8 @@
-import { COMPILER_VALUE_KIND_TOP } from "../shared/compiler-value-kinds.ts";
+import {
+	COMPILER_VALUE_KIND_TOP,
+	COMPILER_VALUE_KIND_OBJECT,
+	compilerValueKindMaskIsValid,
+} from "../shared/compiler-value-kinds.ts";
 import type { CoreAnalysisManager } from "./core-analysis-manager.ts";
 import {
 	coreArrayIterationCall,
@@ -25,7 +29,10 @@ import {
 	coreInstanceMethodTargets,
 } from "./core-instance-method-hints.ts";
 import type { CoreInstanceMethodHints } from "./core-instance-method-hints.ts";
-import { CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE } from "./core-internal-attributes.ts";
+import {
+	CORE_CALL_RESULT_KIND_ATTRIBUTE,
+	CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE,
+} from "./core-internal-attributes.ts";
 import {
 	coreDirectCreatedFunction,
 	coreCalleeTargetsAreOpen,
@@ -111,6 +118,7 @@ export interface CoreCrossCallTransformStatistics
 	readonly callerWakeups: number;
 	readonly valueKindFunctionEvaluations: number;
 	readonly valueKindFolds: number;
+	readonly callResultKindFacts: number;
 	readonly wildcardAggregateRecomputations: number;
 	readonly exactReverseCallerVisits: number;
 	readonly wildcardReverseCallerVisits: number;
@@ -4009,6 +4017,7 @@ export function emptyCoreCrossCallTransformResult(
 			callerWakeups: 0,
 			valueKindFunctionEvaluations: 0,
 			valueKindFolds: 0,
+			callResultKindFacts: 0,
 			wildcardAggregateRecomputations: 0,
 			exactReverseCallerVisits: 0,
 			wildcardReverseCallerVisits: 0,
@@ -4076,6 +4085,86 @@ function discoverProgramValueKindObservations(
 	return foldsByCaller;
 }
 
+function discoverProgramCallResultKinds(
+	program: CoreProgram,
+	analyses: CoreAnalysisManager,
+	flow: CoreProgramFlowState,
+	readValueKinds: () => CoreProgramValueKindState,
+): ReadonlyMap<
+	CoreFunctionId,
+	ReadonlyArray<{ instruction: CoreInstructionId; mask: number }>
+> {
+	const results = new Map<
+		CoreFunctionId,
+		Array<{ instruction: CoreInstructionId; mask: number }>
+	>();
+	const localReturns = new Map<CoreFunctionId, number | undefined>();
+	const returnMask = (target: CoreFunctionId): number => {
+		if (!localReturns.has(target)) {
+			const fn = program.function(target);
+			const control = () =>
+				analyses
+					.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
+						scope: "function",
+						function: target,
+					})
+					.exceptional();
+			const fixed = coreValueKindDemand(fn, control, flow.targets, true);
+			let mask: number | undefined = 0;
+			if (fn.isAsync || fn.isGenerator) mask = COMPILER_VALUE_KIND_OBJECT;
+			else
+				for (const block of control().reachable) {
+					const terminator = fn.blockTerminator(block);
+					if (fn.instructionKind(terminator) !== "return") continue;
+					const kind = fixed(
+						fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator)),
+					);
+					if (kind === undefined) {
+						mask = undefined;
+						break;
+					}
+					mask |= kind;
+				}
+			localReturns.set(target, mask);
+		}
+		const local = localReturns.get(target);
+		return local !== undefined &&
+			(local !== COMPILER_VALUE_KIND_TOP ||
+				flow.summaries.summary(target)?.externallyReachable === true)
+			? local
+			: readValueKinds().summary(target).returnKind;
+	};
+	for (const functionId of flow.reachability.liveFunctions) {
+		const fn = program.function(functionId);
+		for (const site of flow.targets.outgoing(functionId)) {
+			const { instruction, targets } = site;
+			if (
+				fn.registry.byId(fn.instructionOpcode(instruction)).callTransfer?.result !==
+					"call-completion" ||
+				targets.opaque ||
+				(targets.anyScript && !flow.targets.sourceClosed) ||
+				fn.kernel.instructionResultCount(instruction) !== 1 ||
+				fn.valueRepresentation(
+					fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)),
+				) !== "boxed"
+			)
+				continue;
+			const mask = targets.anyScript
+				? (readValueKinds().anyScriptAggregate?.returnKind ?? 0)
+				: targets.functions.reduce((mask, target) => mask | returnMask(target), 0);
+			if (
+				!compilerValueKindMaskIsValid(mask) ||
+				fn.instructionAttributes(instruction)[CORE_CALL_RESULT_KIND_ATTRIBUTE] === mask
+			)
+				continue;
+			let calls = results.get(functionId);
+			if (calls === undefined) results.set(functionId, (calls = []));
+			calls.push({ instruction, mask });
+		}
+	}
+	return results;
+}
+
 export function runCoreCrossCallTransforms(
 	program: CoreProgram,
 	analyses: CoreAnalysisManager,
@@ -4130,6 +4219,7 @@ export function runCoreCrossCallTransforms(
 	let callerLocalOptimizations = 0;
 	let programFlowResolves = 1;
 	let valueKindFolds = 0;
+	let callResultKindFacts = 0;
 	const localPlanInputs = new Map<CoreFunctionId, CoreLocalOptimizationPlanInput>();
 	// Clones are new functions rather than growth of their callers, so they draw on a budget of their own.
 	// Each clone is charged to the function it copies; the variant cap bounds that per function.
@@ -4160,6 +4250,25 @@ export function runCoreCrossCallTransforms(
 		programFlowResolves++;
 	}
 
+	const refreshFlow = () => {
+		const priorFlow = flow;
+		flow = analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, { scope: "program" });
+		programFlowResolves++;
+		summaries = flow.summaries;
+		if (flow.targets !== priorFlow.targets) {
+			callGraphFunctionsAnalyzed += summaries.targets.statistics.functionsAnalyzed;
+		}
+		if (summaries !== priorFlow.summaries) {
+			summaryFunctionsAnalyzed += summaries.statistics.functionsAnalyzed;
+			sccNodesAnalyzed += summaries.statistics.sccNodesAnalyzed;
+			sccEdgeVisits += summaries.statistics.sccEdgeVisits;
+			sccTransfers += summaries.statistics.sccTransfers;
+			callerWakeups += summaries.statistics.callerWakeups;
+			wildcardAggregateRecomputations += summaries.statistics.aggregateRecomputations;
+			exactReverseCallerVisits += summaries.statistics.exactReverseCallerVisits;
+			wildcardReverseCallerVisits += summaries.statistics.wildcardReverseCallerVisits;
+		}
+	};
 	for (let wave = 0; wave < 2; wave++) {
 		// Inlines into clones may expose the callees of inlined forwarders to the next wave.
 		const exhausted = service.programBudgetExhaustionReason(phaseLimits);
@@ -4358,23 +4467,7 @@ export function runCoreCrossCallTransforms(
 		}
 		if (waveChanges.length === 0 || !published) break;
 		waves++;
-		const priorFlow = flow;
-		flow = analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, { scope: "program" });
-		programFlowResolves++;
-		summaries = flow.summaries;
-		if (flow.targets !== priorFlow.targets) {
-			callGraphFunctionsAnalyzed += summaries.targets.statistics.functionsAnalyzed;
-		}
-		if (summaries !== priorFlow.summaries) {
-			summaryFunctionsAnalyzed += summaries.statistics.functionsAnalyzed;
-			sccNodesAnalyzed += summaries.statistics.sccNodesAnalyzed;
-			sccEdgeVisits += summaries.statistics.sccEdgeVisits;
-			sccTransfers += summaries.statistics.sccTransfers;
-			callerWakeups += summaries.statistics.callerWakeups;
-			wildcardAggregateRecomputations += summaries.statistics.aggregateRecomputations;
-			exactReverseCallerVisits += summaries.statistics.exactReverseCallerVisits;
-			wildcardReverseCallerVisits += summaries.statistics.wildcardReverseCallerVisits;
-		}
+		refreshFlow();
 		const spent = service.programBudgetExhaustionReason(phaseLimits);
 		if (
 			wave + 1 === 2 ||
@@ -4382,6 +4475,57 @@ export function runCoreCrossCallTransforms(
 		)
 			break;
 		// Committed edits can introduce consumers without changing published summaries.
+	}
+	if (analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, { scope: "program" }) !== flow)
+		refreshFlow();
+	const callKindsByCaller = discoverProgramCallResultKinds(
+		program,
+		analyses,
+		flow,
+		readValueKinds,
+	);
+	if (callKindsByCaller.size > 0) {
+		const finishCallers: Array<() => CoreCrossCallFunctionOptimizationResult> = [];
+		for (const [functionId, calls] of callKindsByCaller) {
+			const fn = program.function(functionId);
+			const editor = CoreEditor.open(program, functionId);
+			for (const { instruction, mask } of calls) {
+				if (!fn.isInstructionLive(instruction)) continue;
+				const opcode = fn.instructionOpcodeName(instruction);
+				if (
+					fn.registry.byId(fn.instructionOpcode(instruction)).callTransfer?.result !==
+					"call-completion"
+				)
+					continue;
+				const start = fn.kernel.instructionOperandStart(instruction);
+				editor.replaceInstruction(
+					instruction,
+					opcode,
+					Array.from(
+						{ length: fn.kernel.instructionOperandCount(instruction) },
+						(_, index) => fn.kernel.operandAt(start + index),
+					),
+					{
+						attributes: {
+							...fn.instructionAttributes(instruction),
+							[CORE_CALL_RESULT_KIND_ATTRIBUTE]: mask,
+						},
+						sourcePosition: fn.instructionSourcePosition(instruction),
+						effectRefinement: fn.instructionEffectRefinement(instruction),
+					},
+				);
+				callResultKindFacts++;
+			}
+			callerEditSessions++;
+			callerLocalOptimizations++;
+			finishCallers.push(prepareCaller(2, functionId, editor));
+		}
+		for (const finish of finishCallers) {
+			const optimized = finish();
+			localPlanInputs.set(optimized.localPlanInput.function, optimized.localPlanInput);
+		}
+		waves++;
+		refreshFlow();
 	}
 	const budget = service.statisticsSince(budgetBaseline);
 	return Object.freeze({
@@ -4404,6 +4548,7 @@ export function runCoreCrossCallTransforms(
 			callerWakeups,
 			valueKindFunctionEvaluations,
 			valueKindFolds,
+			callResultKindFacts,
 			wildcardAggregateRecomputations,
 			exactReverseCallerVisits,
 			wildcardReverseCallerVisits,

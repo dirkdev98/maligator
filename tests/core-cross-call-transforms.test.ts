@@ -2465,9 +2465,8 @@ describe("bounded Core cross-call transforms", () => {
 		const left = builder.createBlock();
 		const right = builder.createBlock();
 		const join = builder.createBlock([{ representation: "boxed" }]);
-		const [condition] = builder.appendInstruction(entry, "createBoolean", [], {
-			outputRepresentations: ["boolean"],
-			attributes: { value: true },
+		const [condition] = builder.appendInstruction(entry, "loadGlobal", [], {
+			attributes: { index: 0 },
 		});
 		builder.setTerminator(entry, {
 			kind: "branch",

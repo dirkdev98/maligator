@@ -36,7 +36,10 @@ import type { CompilerIntegerRange } from "../shared/integer-range.ts";
 import type { CoreAnalysisDefinition } from "./core-analysis-manager.ts";
 import { coreClosedGlobalSlotMembership } from "./core-compilation.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
-import { CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE } from "./core-internal-attributes.ts";
+import {
+	CORE_CALL_RESULT_KIND_ATTRIBUTE,
+	CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE,
+} from "./core-internal-attributes.ts";
 import type { CoreCallGraphIndex } from "./core-ir-call-targets.ts";
 import {
 	CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
@@ -165,6 +168,21 @@ function representationKind(
 		case "boxed":
 			return undefined;
 	}
+}
+
+function callResultKind(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+): CompilerValueKindMask | undefined {
+	if (
+		fn.registry.byId(fn.instructionOpcode(instruction)).callTransfer?.result !==
+		"call-completion"
+	)
+		return undefined;
+	const mask = fn.instructionAttributes(instruction)[CORE_CALL_RESULT_KIND_ATTRIBUTE];
+	return typeof mask === "number" && compilerValueKindMaskIsValid(mask)
+		? mask
+		: undefined;
 }
 
 function staticOpcodeKind(opcode: string): CompilerValueKindMask | undefined {
@@ -676,7 +694,14 @@ function addOperationTransfer(
 		masks[output] = masks[output]! | inputs.receiverMask;
 		return;
 	}
-	const supplied = inputs?.operationResultMask?.(instruction, output);
+	const callMask = callResultKind(fn, instruction);
+	const contextual = inputs?.operationResultMask?.(instruction, output);
+	const supplied =
+		callMask === undefined
+			? contextual
+			: contextual === undefined
+				? callMask
+				: callMask & contextual;
 	if (supplied !== undefined) {
 		masks[output] = masks[output]! | supplied;
 		return;
@@ -1428,6 +1453,8 @@ export function coreValueKindDemand(
 			let demand = false;
 			addOperationTransfer(transfers, masks, fn, instruction, value, {
 				operationResultMask(instruction) {
+					const callKind = callResultKind(fn, instruction);
+					if (callKind !== undefined) return callKind;
 					if (fn.instructionOpcodeName(instruction) === "loadThis") {
 						demand = !externallyReachable;
 						return COMPILER_VALUE_KIND_TOP;

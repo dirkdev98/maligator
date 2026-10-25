@@ -7,6 +7,7 @@ import {
 	probeReadKindIsNamed,
 } from "../shared/compiler-instruction.ts";
 import type { ProbeReadKind } from "../shared/compiler-instruction.ts";
+import { compilerValueKindMaskIsValid } from "../shared/compiler-value-kinds.ts";
 import { effectSummaryCovers } from "../shared/effect-summary.ts";
 import { isKnownBuiltinError } from "../shared/known-builtin-errors.ts";
 import { knownArgumentModes } from "../shared/known-operations.ts";
@@ -14,7 +15,10 @@ import { knownOperationIndex } from "../shared/known-operations.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
 import { isStringCollationPlan } from "../shared/string-collation-plan.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
-import { CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE } from "./core-internal-attributes.ts";
+import {
+	CORE_CALL_RESULT_KIND_ATTRIBUTE,
+	CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE,
+} from "./core-internal-attributes.ts";
 import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import {
@@ -396,6 +400,15 @@ function verifyInstructionRows(
 				fail(`instruction @${instruction} ${descriptor.opcode} has invalid output arity`);
 			}
 			const attributes = fn.instructionAttributes(instruction);
+			const callKind = attributes[CORE_CALL_RESULT_KIND_ATTRIBUTE];
+			if (
+				callKind !== undefined &&
+				(descriptor.callTransfer?.result !== "call-completion" ||
+					resultCount !== 1 ||
+					typeof callKind !== "number" ||
+					!compilerValueKindMaskIsValid(callKind))
+			)
+				fail("Invalid call result kind proof");
 			if (
 				attributes.exactArrayLength !== undefined &&
 				(descriptor.opcode !== "loadPropertyStatic" ||

@@ -814,6 +814,8 @@ function scalarProducer(fn: CoreFunctionStore, instruction: CoreInstructionId): 
 		);
 	}
 	return (
+		fn.registry.byId(fn.instructionOpcode(instruction)).callTransfer?.result ===
+			"call-completion" ||
 		SCALAR_PRODUCERS.has(opcode) ||
 		(opcode === "loadProperty" &&
 			fn.instructionAttributes(instruction).containedFixedTypedArrayInBounds === true) ||

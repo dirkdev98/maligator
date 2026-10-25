@@ -103,11 +103,12 @@ The independent target boundary and current storage contract are recorded in
 - [ ] Extend selected typed call/aggregate transport and expression regions using
       Core proofs, with bounded code-size decisions and matched runtime evidence.
       Move remaining emission-local selection into explicit native plans before
-      claiming the C emitter only renders selected decisions. An exact call whose
-      typed entry returns a Number still lands in a boxed register, because local
-      value kinds give call results no kind: the objects phase's pricing loop
-      (59 ms against Node's 25) boxes and unboxes the results of `argumentEdges`
-      and the accumulator on every iteration, and its `%` chains run on doubles.
+      claiming the C emitter only renders selected decisions. Normal result-kind
+      bounds from complete script callee sets now reach Core and native storage.
+      Calls whose Number result depends on a guarded typed entry still need scalar
+      transport along that admitted branch when the canonical result remains boxed.
+      Carry integer result ranges through call transport so modulo chains can retain
+      int32 storage.
 - [ ] Give record entries typed fields. Record entries return fields boxed, so a
       caller's `token.end` stays boxed, `index = token.end + 1` gives the producer a
       boxed parameter, and the scanning loop in `returned-records` runs generic

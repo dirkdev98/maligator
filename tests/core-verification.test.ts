@@ -3,6 +3,7 @@ import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import { formatCoreFunction } from "../src/compiler/core/core-format.ts";
+import { CORE_CALL_RESULT_KIND_ATTRIBUTE } from "../src/compiler/core/core-internal-attributes.ts";
 import {
 	CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
 	buildCoreControlFlow,
@@ -51,6 +52,22 @@ function validBranchProgram() {
 }
 
 describe("Core verification", () => {
+	it.each([0, 255, 256, NaN])(
+		"rejects an invalid normal call result bound %s",
+		(mask) => {
+			const program = new CoreProgram(coreOpcodeRegistry);
+			const builder = new CoreFunctionBuilder(program);
+			const entry = builder.createBlock();
+			const [callee] = builder.appendInstruction(entry, "createUndefined", []);
+			const [result] = builder.appendInstruction(entry, "call", [callee!, callee!], {
+				attributes: { [CORE_CALL_RESULT_KIND_ATTRIBUTE]: mask },
+			});
+			builder.setTerminator(entry, { kind: "return", value: result! });
+			builder.finish(entry);
+			expect(() => verifyCoreProgram(program)).toThrow(/Invalid call result kind proof/);
+		},
+	);
+
 	it("rejects rest forwarding state used as a JavaScript value", () => {
 		const program = new CoreProgram(coreOpcodeRegistry);
 		const builder = new CoreFunctionBuilder(program);

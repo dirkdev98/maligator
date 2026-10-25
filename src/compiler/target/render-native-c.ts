@@ -14868,7 +14868,7 @@ function emitInstruction(
 			return [
 				`MalCompletion ${tmp} = mal_vm_op_call_spread(vm, ${boxed(instruction.callee)}, ${boxed(instruction.thisValue)}, ${boxed(instruction.argumentsArray)});`,
 				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
-				`r${instruction.dst} = ${tmp}.value;`,
+				`r${instruction.dst} = ${callValue(instruction.dst, `${tmp}.value`)};`,
 				callPoll(),
 			];
 		}
@@ -14884,7 +14884,7 @@ function emitInstruction(
 						]),
 				`MalCompletion ${tmp} = mal_vm_op_call_rest_arguments(vm, ${boxed(instruction.callee)}, ${boxed(instruction.thisValue)}, ${boxed(instruction.receiver)}, args, arg_count, ${instruction.startIndex}, ${restForwardFlags(instruction)}, &r${instruction.state}, ${prefixName}, ${prefix.length});`,
 				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
-				`r${instruction.dst} = ${tmp}.value;`,
+				`r${instruction.dst} = ${callValue(instruction.dst, `${tmp}.value`)};`,
 				callPoll(),
 			];
 		}
@@ -14900,7 +14900,7 @@ function emitInstruction(
 						]),
 				`MalCompletion ${tmp} = mal_vm_op_call_spread_iterable(vm, ${boxed(instruction.callee)}, ${boxed(instruction.thisValue)}, ${boxed(instruction.iterable)}, ${prefixName}, ${prefix.length});`,
 				`if (${tmp}.kind == MAL_COMPLETION_THROW) ${onThrow()}`,
-				`r${instruction.dst} = ${tmp}.value;`,
+				`r${instruction.dst} = ${callValue(instruction.dst, `${tmp}.value`)};`,
 				callPoll(),
 			];
 		}

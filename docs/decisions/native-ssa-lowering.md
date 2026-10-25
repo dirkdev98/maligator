@@ -109,6 +109,15 @@ Exact builtin calls consume the catalog's primitive result kinds as well as thei
 existing identity proof. Scalar Date and Object helpers capture and check throwing
 results before conversion. Clock reads and mutable collection queries retain
 their effects; primitive result kinds do not admit deterministic call reuse.
+After cross-call rewrites, Core records normal result-kind bounds for the complete
+set of possible script callees. Local return proofs avoid program propagation when
+they suffice; parameter-dependent bounds require the program's closure certificate.
+An optional typed entry's result ABI does not establish this unconditional bound.
+The bound survives scalar selection and native entry analysis independently of call
+effects, and intersects any stronger entry-specific result proof. Number, Boolean
+and String results can occupy scalar storage; partial unions retain their tags and
+physical root requirements. Ordinary, spread, iterable-spread and deferred-rest
+calls check completion before decoding their result, including resumable callers.
 Remaining Number predicates persist a boxed, non-number, int32 or Number kernel mode per
 native entry, consuming decoded constants, physical representations and exact
 builtin argument masks. Int32 predicates produce constant Booleans; Number kernels
