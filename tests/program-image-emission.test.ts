@@ -2215,7 +2215,7 @@ describe("emit-program-image instruction packing", () => {
 		);
 	});
 
-	it("publishes exact known-own-slot roots only inside the generic fallback", () => {
+	it("publishes private known-own-slot roots only inside the generic fallback", () => {
 		const call: BytecodeInstruction = {
 			opcode: "CALL",
 			dst: 0,
@@ -2286,8 +2286,9 @@ describe("emit-program-image instruction packing", () => {
 
 		expect(output.match(/MAL_ROOT_MASK\(0x1\);/g)).toHaveLength(2);
 		expect(output.match(/MAL_ROOT_MASK\(0x2\);/g)).toHaveLength(1);
+		expect(privateRootRegisters(output)).toEqual(new Set([0]));
 		expect(output).toMatch(
-			/if \(mal_vm_try_load_known_own_slots[^\n]+\) \{[\s\S]*?\} else \{\n\s+MAL_ROOT_MASK\(0x2\);\n\s+r0 = mal_vm_op_load_property_ic/,
+			/if \(mal_vm_try_load_known_own_slots[^\n]+\) \{[\s\S]*?\} else \{\n\s+__gc_slots\[0\] = r0;\n\s+MAL_ROOT_MASK\(0x2\);\n\s+r0 = mal_vm_op_load_property_ic/,
 		);
 		expect(output).toMatch(
 			/mal_vm_op_load_property_ic[\s\S]*?\n\s+\}\n\s+MAL_ROOT_MASK\(0x1\);/,
@@ -3873,10 +3874,10 @@ describe("native update-expression representation", () => {
 		expect(output).not.toContain("mal_builtin_math_binary_number_known");
 		expect(output).not.toMatch(/MAL_ROOT_MASK\([^)]+\);\n\s+if \(mal_builtin_math_/);
 		expect(output).toMatch(
-			/if \(mal_builtin_math_unary_callee_matches[^\n]+\) \{[\s\S]*?\} else \{\n\s+(MAL_ROOT_MASK\(0x[\da-f]+\));\n\s+[^\n]*mal_vm_call_cached\([\s\S]*?\n\s+\}\n\s+if \(mal_gc_poll_requested\(\)\) \{ \1; mal_gc_safepoint\(vm\); if \(mal_gc_poll_termination\(vm\)\) (?:\{ (?:__private_r\d+ = __gc_slots\[\d+\]; )+)?goto __throw_exit; (?:\} )?\}/,
+			/if \(mal_builtin_math_unary_callee_matches[^\n]+\) \{[\s\S]*?\} else \{\n(?:\s+__gc_slots\[\d+\] = (?:r\d+|MAL_VALUE_UNDEFINED);\n)*\s+(MAL_ROOT_MASK\(0x[\da-f]+\));\n\s+[^\n]*mal_vm_call_cached\([\s\S]*?\n\s+\}\n\s+if \(mal_gc_poll_requested\(\)\) \{ (?:__gc_slots\[\d+\] = (?:r\d+|MAL_VALUE_UNDEFINED); )*\1; mal_gc_safepoint\(vm\); if \(mal_gc_poll_termination\(vm\)\) (?:\{ (?:__private_r\d+ = __gc_slots\[\d+\]; )+)?goto __throw_exit; (?:\} )?\}/,
 		);
 		expect(output).toMatch(
-			/if \(mal_builtin_math_binary_callee_matches[^\n]+\) \{[\s\S]*?\} else \{\n\s+(MAL_ROOT_MASK\(0x[\da-f]+\));\n\s+[^\n]*mal_vm_call_cached\([\s\S]*?\n\s+\}\n\s+if \(mal_gc_poll_requested\(\)\) \{ \1; mal_gc_safepoint\(vm\); if \(mal_gc_poll_termination\(vm\)\) (?:\{ (?:__private_r\d+ = __gc_slots\[\d+\]; )+)?goto __throw_exit; (?:\} )?\}/,
+			/if \(mal_builtin_math_binary_callee_matches[^\n]+\) \{[\s\S]*?\} else \{\n(?:\s+__gc_slots\[\d+\] = (?:r\d+|MAL_VALUE_UNDEFINED);\n)*\s+(MAL_ROOT_MASK\(0x[\da-f]+\));\n\s+[^\n]*mal_vm_call_cached\([\s\S]*?\n\s+\}\n\s+if \(mal_gc_poll_requested\(\)\) \{ (?:__gc_slots\[\d+\] = (?:r\d+|MAL_VALUE_UNDEFINED); )*\1; mal_gc_safepoint\(vm\); if \(mal_gc_poll_termination\(vm\)\) (?:\{ (?:__private_r\d+ = __gc_slots\[\d+\]; )+)?goto __throw_exit; (?:\} )?\}/,
 		);
 
 		const lockedOutput = emitLocked(source);
