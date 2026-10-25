@@ -12,17 +12,14 @@ import {
 import type { CompilerValueKindMask } from "../shared/compiler-value-kinds.ts";
 import type { CompilerIntegerRange } from "../shared/integer-range.ts";
 
-export interface NativeNumberOperand {
-	readonly number: string;
-	// Keep the scalar before Number promotion when the operation performs its own conversion.
-	readonly unpromoted?: string;
-}
-
+// Scalar views preserve the Number operands; only these interval proofs permit unsigned conversion.
 export function nativeUnsignedRemainderExpression(
-	left: NativeNumberOperand,
-	right: NativeNumberOperand,
+	left: string,
+	right: string,
 	dividend: CompilerIntegerRange | undefined,
 	divisor: CompilerIntegerRange | undefined,
+	leftScalar = left,
+	rightScalar = right,
 ): string | undefined {
 	if (
 		dividend === undefined ||
@@ -33,7 +30,7 @@ export function nativeUnsignedRemainderExpression(
 		divisor.maximum > 0xffff_ffff
 	)
 		return undefined;
-	return `(f64) ((u32) (${left.unpromoted ?? left.number}) % (u32) (${right.unpromoted ?? right.number}))`;
+	return `(f64) ((u32) (${leftScalar}) % (u32) (${rightScalar}))`;
 }
 
 // Guards license primitive Number conversion; a fallback must retain the original operands.
