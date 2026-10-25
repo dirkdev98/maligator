@@ -14,7 +14,7 @@
  * can produce different output for source that already stripped successfully;
  * frontend, fragment, and test image caches key their stripped input on it.
  */
-export const TYPE_STRIPPER_IDENTITY = "compact-type-strip-v5";
+export const TYPE_STRIPPER_IDENTITY = "compact-type-strip-v6";
 
 /**
  * Erase types in place: every type span becomes spaces, so the result has the
@@ -1904,10 +1904,11 @@ function blankParameterAnnotations(
 	filePath: string,
 ): void {
 	let nested = 0;
+	let initialized = false;
 	for (let i = open + 1; i < close; i++) {
 		if (!code[i]) continue;
 		const char = source[i]!;
-		if (nested === 0 && isIdentifierStart(char)) {
+		if (nested === 0 && !initialized && isIdentifierStart(char)) {
 			const word = wordAt(source, code, i)!;
 			if (word.text === "this") {
 				const colon = nextCodeIndex(source, code, word.end);
@@ -1923,11 +1924,13 @@ function blankParameterAnnotations(
 		}
 		if (char === "(" || char === "[" || char === "{") nested++;
 		if (char === ")" || char === "]" || char === "}") nested--;
-		if (nested === 0 && char === "?") {
+		if (nested === 0 && char === "=" && source[i + 1] !== ">") initialized = true;
+		if (nested === 0 && char === ",") initialized = false;
+		if (nested === 0 && !initialized && char === "?") {
 			const after = nextCodeIndex(source, code, i + 1);
 			if (source[after] === ":") blank(output, source, i, i + 1);
 		}
-		if (nested === 0 && char === ":") {
+		if (nested === 0 && !initialized && char === ":") {
 			const end = findTypeEnd(source, code, i + 1, [",", ")", "="], filePath);
 			blank(output, source, i, end);
 			i = end - 1;

@@ -42,6 +42,50 @@ function strip(source: string, filePath = "fixture.ts"): string {
 }
 
 describe("stripCompactTypes", () => {
+	test.each([
+		["function", "function choose", "{ return value + offset; }", "choose"],
+		[
+			"function expression",
+			"const choose = function",
+			"{ return value + offset; };",
+			"choose",
+		],
+		["arrow", "const choose =", "=> value + offset;", "choose"],
+		[
+			"object method",
+			"const object = { choose",
+			"{ return value + offset; } };",
+			"object.choose",
+		],
+		[
+			"class method",
+			"class Container { choose",
+			"{ return value + offset; } }; const object = new Container();",
+			"object.choose",
+		],
+	])(
+		"preserves a conditional default and following annotation in a %s",
+		(_name, before, after, call) => {
+			const source = `${before}(
+ flag: boolean,
+ value = flag ? 3 : 5,
+ offset: number = 7,
+) ${after}
+globalThis.stripResult = [${call}(true), ${call}(false), ${call}(true, 11, 2)];`;
+			const stripped = strip(source);
+			expect(() => parseModule(stripped)).not.toThrow();
+			expect(runInNewContext(stripped)).toEqual([10, 12, 13]);
+		},
+	);
+
+	test("preserves this and nested conditionals inside a typed default parameter", () => {
+		const source = `function choose(flag: boolean, value: { value: number } = flag ? this : flag === false ? { value: 7 } : { value: 9 }, offset: number = 1) { return value.value + offset; }
+globalThis.stripResult = [choose.call({ value: 2 }, true), choose.call({}, false), choose.call({}, null)];`;
+		const stripped = strip(source);
+		expect(() => parseModule(stripped)).not.toThrow();
+		expect(runInNewContext(stripped)).toEqual([3, 8, 10]);
+	});
+
 	test("preserves contextual calls, nested method types and ternaries in for-of headers", () => {
 		const source = `type Builtin = object;
 type satisfies = boolean;
