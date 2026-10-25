@@ -129,6 +129,7 @@ import {
 	nativePrimitiveNumberExpression,
 } from "./native-scalar-operators.ts";
 import type { NativeSpanConsumer } from "./native-span-continuation.ts";
+import type { NativeStringComparisonPlan } from "./native-string-comparisons.ts";
 import { nativeValueConversion } from "./native-value-transport.ts";
 import type { NativeValueConversion } from "./native-value-transport.ts";
 import { profileOperationForInstruction } from "./profile-metadata.ts";
@@ -3193,6 +3194,7 @@ function emitCompiledVariant(
 		records,
 		storage.controlFlow,
 		storage.elidedPureIps,
+		storage.stringComparisons,
 	);
 	if (body === null) {
 		return null;
@@ -3494,6 +3496,7 @@ function emitCompiledVariant(
 					directEntry,
 					controlFlow: storage.controlFlow,
 					elidedPureIps: storage.elidedPureIps,
+					stringComparisons: storage.stringComparisons,
 					// A specialized-only body is omitted after emission, taking its fast path with it.
 					trySymbol:
 						directEntry === undefined && native.specializedOnly !== true
@@ -3557,7 +3560,6 @@ function emitCompiledVariant(
 					functionIndex: relocation.functionIndex(index),
 					globalIndex: (global) => relocation.globalIndex(global),
 					stringValue: (string) => relocation.stringValue(string),
-					stringLength: (string) => stringConstants[string]?.length,
 					lengthProperty: (string) => isLengthPropertyName(stringConstants[string]),
 					capturePrologue: [
 						...initializeFixedCaptureOwners(analysis.captures, relocation, true, "env"),
@@ -4647,6 +4649,7 @@ function emitResumableFunction(
 		undefined,
 		storage.controlFlow,
 		storage.elidedPureIps,
+		storage.stringComparisons,
 	);
 	if (body === null) {
 		return null;
@@ -5839,6 +5842,7 @@ function emitBody(
 	records: NativeRecordStorage = NO_NATIVE_RECORD_STORAGE,
 	controlFlow?: NativeControlFlowPlan,
 	elidedPureIps: ReadonlyArray<number> = [],
+	stringComparisons: ReadonlyArray<NativeStringComparisonPlan> = [],
 ): EmittedBody | null {
 	const elided = new Set(elidedPureIps);
 	const unreachable = new Set(controlFlow?.unreachableIps);
@@ -6459,40 +6463,9 @@ function emitBody(
 			? literalSwitches?.map((site) => [site.instructionIp, site])
 			: [],
 	);
-	// A rematerialized string constant reads as that constant everywhere, so a strict
-	// comparison against it can reject other lengths inline.
-	const stringConstantRegisters = new Map<number, number>();
-	for (const ip of [...expressionIps, ...rematerializedConstantIps]) {
-		const instruction = fn.instructions[ip]!;
-		if (instruction.opcode === "CREATE_STRING")
-			stringConstantRegisters.set(instruction.dst, instruction.stringIndex);
-	}
-	// Reused registers hold many values, but a straight-line definition still reaches.
-	const stringConstantOperands = new Map<number, Map<number, number>>();
-	for (const [ip, instruction] of fn.instructions.entries()) {
-		if (
-			instruction.opcode !== "BINARY" ||
-			(instruction.operator !== "===" && instruction.operator !== "!==")
-		)
-			continue;
-		for (const register of [instruction.left, instruction.right]) {
-			if (stringConstantRegisters.has(register)) continue;
-			for (
-				let previous = ip - 1;
-				previous >= 0 && !jumpTargets.has(previous + 1);
-				previous--
-			) {
-				const definition = fn.instructions[previous]!;
-				if (!vmInstructionWriteRegisters(definition).includes(register)) continue;
-				if (definition.opcode === "CREATE_STRING") {
-					const operands = stringConstantOperands.get(ip) ?? new Map<number, number>();
-					operands.set(register, definition.stringIndex);
-					stringConstantOperands.set(ip, operands);
-				}
-				break;
-			}
-		}
-	}
+	const stringComparisonsByIp = new Map(
+		stringComparisons.map((plan) => [plan.instructionIp, plan]),
+	);
 	// Finite dispatch compares one loaded callee against each candidate class's method,
 	// through separate guards or a call plan's guarded targets.
 	const polymorphicMethodLoads = new Set<number>();
@@ -6610,8 +6583,7 @@ function emitBody(
 		privateFieldReserveCount: undefined,
 		slowPathFramePosition: undefined,
 		polymorphicMethodLoad: false,
-		stringConstantRegisters,
-		stringConstantOperands,
+		stringComparisons: stringComparisonsByIp,
 		relocation,
 		closureChainTests: nativeClosureChainTests(
 			fn,
@@ -7699,10 +7671,7 @@ interface NativeInstructionContext {
 	readonly watchedMathCallee?: boolean;
 	/** The loaded value is a callee guarded against several function identities. */
 	readonly polymorphicMethodLoad?: boolean;
-	/** Registers that read as one string constant, by string index. */
-	readonly stringConstantRegisters?: ReadonlyMap<number, number>;
-	/** String constants that reach a strict comparison's operands, by comparison ip. */
-	readonly stringConstantOperands?: ReadonlyMap<number, ReadonlyMap<number, number>>;
+	readonly stringComparisons?: ReadonlyMap<number, NativeStringComparisonPlan>;
 	readonly numberPredicate?: NativeNumberPredicatePlan;
 	readonly stringTransform?: NativeStringTransformPlan;
 	readonly arrayInitialization?: {
@@ -11546,6 +11515,16 @@ function emitInstruction(
 				elideFramePosition();
 				return [storeBoolean(dst, result)];
 			}
+			const stringComparison = context.stringComparisons?.get(ip);
+			if (stringComparison?.kind === "strings") {
+				const other = stringComparison.register === right ? left : right;
+				const equal = profileCall(
+					"string",
+					`mal_string_equals_constant_length(mal_value_to_string(${boxed(other)}), mal_value_to_string(${boxed(stringComparison.register)}), ${stringComparison.length})`,
+				);
+				elideFramePosition();
+				return [storeBoolean(dst, operator === "!==" ? `!${equal}` : equal)];
+			}
 			if (compare !== undefined) {
 				if (leftIsNum && rightIsNum) {
 					elideFramePosition();
@@ -11588,21 +11567,11 @@ function emitInstruction(
 					: `mal_ops_is_number(${boxed(left)}) && mal_ops_is_number(${boxed(right)})`;
 			if (compare !== undefined) {
 				if (bothBoxed && (operator === "===" || operator === "!==")) {
-					const constantIndex = (register: number): number | undefined =>
-						context.stringConstantRegisters?.get(register) ??
-						context.stringConstantOperands?.get(ip)?.get(register);
-					const constantRegister = [right, left].find((register) => {
-						const index = constantIndex(register);
-						return index !== undefined && context.stringConstants[index] !== undefined;
-					});
-					const constantLength =
-						constantRegister === undefined
-							? undefined
-							: context.stringConstants[constantIndex(constantRegister)!]!.length;
+					const constant = context.stringComparisons?.get(ip);
 					const equal =
-						constantRegister === undefined
+						constant === undefined
 							? `mal_ops_strict_equal_boxed(${boxed(left)}, ${boxed(right)})`
-							: `mal_ops_strict_equal_string_constant(${boxed(constantRegister === right ? left : right)}, ${boxed(constantRegister)}, ${constantLength})`;
+							: `mal_ops_strict_equal_string_constant(${boxed(constant.register === right ? left : right)}, ${boxed(constant.register)}, ${constant.length})`;
 					return [storeBoolean(dst, operator === "!==" ? `!${equal}` : equal)];
 				}
 				const completionCheck = canThrow ? throwCheck() : undefined;

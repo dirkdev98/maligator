@@ -20,6 +20,7 @@ import {
 import { emitTypeofResult } from "./emit-program-image.ts";
 import type { NativeControlFlowPlan } from "./native-control-flow.ts";
 import { nativePrimitiveNumberExpression } from "./native-scalar-operators.ts";
+import type { NativeStringComparisonPlan } from "./native-string-comparisons.ts";
 import type {
 	NativeDirectEntryPlan,
 	NativeFunctionPlan,
@@ -40,6 +41,7 @@ export interface NativeFastEntryInput {
 	readonly directEntry: NativeDirectEntryPlan | undefined;
 	readonly controlFlow: NativeControlFlowPlan | undefined;
 	readonly elidedPureIps: ReadonlyArray<number>;
+	readonly stringComparisons: ReadonlyArray<NativeStringComparisonPlan>;
 	/** The full entry already answers this body without a frame or with a better dispatch. */
 	readonly specialized: boolean;
 	/** The original entry signature, ending in `{`. */
@@ -53,7 +55,6 @@ export interface NativeFastEntryInput {
 	readonly functionIndex: string;
 	readonly globalIndex: (index: number) => string;
 	readonly stringValue: (index: number) => string;
-	readonly stringLength: (index: number) => number | undefined;
 	readonly lengthProperty: (stringIndex: number) => boolean;
 	/** Non-allocating statements that bind what `capturedLoad` reads. */
 	readonly capturePrologue: ReadonlyArray<string>;
@@ -131,13 +132,13 @@ export function renderNativeFastEntry(
 		.filter((ip) => !elided.has(ip))
 		.map((ip) => fn.instructions[ip]!);
 	const constants = numberConstantRegisters(instructions, registers);
-	const strings = stringConstantRegisters(instructions, registers);
+	const stringComparisons = new Map(
+		input.stringComparisons.map((plan) => [plan.instructionIp, plan]),
+	);
 	const integers = int32ResultRegisters(instructions, fn.parameterCount, registers);
 	const initialized = initializedFastRegisters(graph, accesses, registers);
 	for (const register of constants.keys())
 		if (!initialized.has(register)) constants.delete(register);
-	for (const register of strings.keys())
-		if (!initialized.has(register)) strings.delete(register);
 	for (const register of integers)
 		if (!initialized.has(register)) integers.delete(register);
 	for (const [ip, op] of fn.instructions.entries()) {
@@ -158,7 +159,7 @@ export function renderNativeFastEntry(
 						targets,
 						exported,
 						constants,
-						strings,
+						stringComparisons.get(ip),
 						integers,
 					);
 		if (line === undefined) return undefined;
@@ -396,29 +397,6 @@ function numberConstantRegisters(
 	return constants;
 }
 
-/** Registers whose every definition loads the same string constant. */
-function stringConstantRegisters(
-	instructions: ReadonlyArray<BytecodeInstruction>,
-	registers: ReadonlySet<number>,
-): Map<number, number> {
-	const strings = new Map<number, number>();
-	const varying = new Set<number>();
-	for (const op of instructions) {
-		if (!("dst" in op) || !registers.has(op.dst)) continue;
-		if (
-			op.opcode === "CREATE_STRING" &&
-			!varying.has(op.dst) &&
-			(strings.get(op.dst) ?? op.stringIndex) === op.stringIndex
-		) {
-			strings.set(op.dst, op.stringIndex);
-			continue;
-		}
-		strings.delete(op.dst);
-		varying.add(op.dst);
-	}
-	return strings;
-}
-
 /** Registers only int32 operators define, so a branch can test the integer itself. */
 function int32ResultRegisters(
 	instructions: ReadonlyArray<BytecodeInstruction>,
@@ -451,9 +429,7 @@ interface FastNumbers {
 	readonly range: (register: number) => CompilerIntegerRange | undefined;
 	readonly constants: ReadonlyMap<number, number>;
 	readonly literal: (value: number) => string;
-	/** String constant registers and the unit length of each constant. */
-	readonly strings: ReadonlyMap<number, number>;
-	readonly stringLength: (index: number) => number | undefined;
+	readonly stringComparison: NativeStringComparisonPlan | undefined;
 }
 
 function numbers(values: FastNumbers, ...registers: ReadonlyArray<number>): string {
@@ -508,15 +484,13 @@ function fastBinary(
 	const numberFailure = numbers(values, left, right);
 	const guard = numberFailure === "false" ? "" : `if (${numberFailure}) goto __full;`;
 	if (operator === "===" || operator === "!==") {
-		const constant = [right, left].find(
-			(register) =>
-				values.strings.has(register) &&
-				values.stringLength(values.strings.get(register)!) !== undefined,
-		);
+		const constant = values.stringComparison;
 		const equal =
 			constant === undefined
 				? `mal_ops_strict_equal_boxed(f${left}, f${right})`
-				: `mal_ops_strict_equal_string_constant(f${constant === right ? left : right}, f${constant}, ${values.stringLength(values.strings.get(constant)!)!})`;
+				: constant.kind === "strings"
+					? `mal_string_equals_constant_length(mal_value_to_string(f${constant.register === right ? left : right}), mal_value_to_string(f${constant.register}), ${constant.length})`
+					: `mal_ops_strict_equal_string_constant(f${constant.register === right ? left : right}, f${constant.register}, ${constant.length})`;
 		return `f${dst} = mal_value_new_boolean(${operator === "!==" ? "!" : ""}${equal});`;
 	}
 	if (operator === "==" || operator === "!=") {
@@ -603,7 +577,7 @@ function fastInstruction(
 	targets: Set<number>,
 	exported: boolean,
 	constants: ReadonlyMap<number, number>,
-	strings: ReadonlyMap<number, number>,
+	stringComparison: NativeStringComparisonPlan | undefined,
 	integers: ReadonlySet<number>,
 ): string | undefined {
 	const masks = input.facts?.[ip]?.inputKindMasks;
@@ -624,8 +598,7 @@ function fastInstruction(
 		},
 		constants,
 		literal: input.f64Literal,
-		strings,
-		stringLength: input.stringLength,
+		stringComparison,
 	};
 	const value = (operand: number): string | undefined => {
 		if (operand >= 0) return `f${operand}`;

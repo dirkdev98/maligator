@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
+import { analyzeNativeBodyFacts } from "../src/compiler/target/native-body-facts.ts";
 import type { NativeControlFlowPlan } from "../src/compiler/target/native-control-flow.ts";
+import { selectNativeStringComparisons } from "../src/compiler/target/native-string-comparisons.ts";
+import { createConservativeNativePlan } from "../src/compiler/target/program-image.ts";
 import { renderNativeFastEntry } from "../src/compiler/target/render-native-fast-entry.ts";
 import type {
 	BytecodeFunction,
@@ -22,6 +25,8 @@ const NONCOLLECTING_HELPERS = new Set([
 	"mal_ops_number_value",
 	"mal_ops_strict_equal_boxed",
 	"mal_ops_strict_equal_string_constant",
+	"mal_string_equals_constant_length",
+	"mal_value_to_string",
 	"mal_value_from_i32",
 	"mal_value_new_boolean",
 	"mal_value_is_truthy",
@@ -78,6 +83,11 @@ function fastEntry(
 	return renderNativeFastEntry({
 		controlFlow,
 		elidedPureIps: [],
+		stringComparisons: selectNativeStringComparisons(
+			createConservativeNativePlan([fn], []).functions[0]!,
+			analyzeNativeBodyFacts(fn),
+			{ controlFlow, elided: new Set(), stringLength: () => 4 },
+		),
 		fn,
 		facts: [],
 		directEntry: undefined,
@@ -109,7 +119,6 @@ function fastEntry(
 		functionIndex: "0",
 		globalIndex: (index) => String(index),
 		stringValue: (index) => `string_${index}`,
-		stringLength: () => 4,
 		lengthProperty: (index) => index === LENGTH_STRING_INDEX,
 		capturePrologue: [],
 		capturedLoad: (owner, index) => `mal_vm_load_captured(env, ${owner}, ${index})`,

@@ -150,6 +150,7 @@ function skipStorageWithoutFastPaths(reader: Reader): void {
 	expect(reader.u8(), "No native control-flow specialization").toBe(0);
 	expect(reader.u32(), "No elided native producers").toBe(0);
 	expect(reader.u32(), "No unused native registers").toBe(0);
+	expect(reader.u32(), "No native String comparisons").toBe(0);
 }
 
 function firstOverrideOffset(bytes: Uint8Array): number {

@@ -245,8 +245,11 @@ The independent target boundary and current storage contract are recorded in
       Return ABI proofs now join reachable returns using existing kind and range
       observations, preserving handler entry contracts; callers consume those
       scalar results through existing typed transports. Use the surviving graph
-      during fast-path discovery, and carry edge projections into remaining shape,
-      lifetime and constant-String identity analyses. Retire callee nominations
+      during fast-path discovery, and carry edge projections into remaining shape
+      and lifetime analyses. String comparison length proofs now join surviving
+      literal definitions and copies, retaining unknown handler, resume and helper
+      entries; full, frameless and resumable branches consume the validated plan.
+      Retire callee nominations
       when a later refinement makes their call unreachable.
 - [x] Normalize primitive conversion calls from semantic kind unions. Eligible
       `Number` and `String` calls use unary conversions, carrying kind and effect

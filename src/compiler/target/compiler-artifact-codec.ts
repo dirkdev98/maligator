@@ -110,7 +110,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 285;
+export const COMPILER_ARTIFACT_VERSION = 286;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -1196,6 +1196,13 @@ function writeNativeStorage(w: Writer, storage: NativeStoragePlan | undefined): 
 	}
 	w.i32Array([...storage.elidedPureIps]);
 	w.i32Array([...storage.unusedRegisters]);
+	w.u32(storage.stringComparisons.length);
+	for (const comparison of storage.stringComparisons) {
+		w.i32(comparison.instructionIp);
+		w.i32(comparison.register);
+		w.i32(comparison.length);
+		w.u8(comparison.kind === "boxed" ? 0 : 1);
+	}
 }
 
 function writeIntegerRanges(
@@ -1909,6 +1916,14 @@ function readNativeStorage(r: Reader): NativeStoragePlan {
 		...storage,
 		elidedPureIps: r.i32Array(),
 		unusedRegisters: r.i32Array(),
+		stringComparisons: Array.from({ length: r.count(4) }, () => {
+			const instructionIp = r.i32(),
+				register = r.i32(),
+				length = r.i32(),
+				kind = r.u8();
+			if (kind > 1) throw new RangeError("Invalid native String comparison kind");
+			return { instructionIp, register, length, kind: kind === 0 ? "boxed" : "strings" };
+		}),
 		...(controlFlow === undefined ? {} : { controlFlow }),
 		literalPropertyDefinitions,
 		mathCalls,

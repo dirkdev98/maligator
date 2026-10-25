@@ -61,6 +61,8 @@ import {
 	NATIVE_BITWISE,
 	NATIVE_COMPARE,
 } from "./native-scalar-operators.ts";
+import { selectNativeStringComparisons } from "./native-string-comparisons.ts";
+import type { NativeStringComparisonPlan } from "./native-string-comparisons.ts";
 import {
 	selectNativeUnusedValues,
 	selectNativeUnusedRegisters,
@@ -119,6 +121,7 @@ export interface NativeStoragePlan
 	readonly controlFlow?: NativeControlFlowPlan;
 	readonly elidedPureIps: ReadonlyArray<number>;
 	readonly unusedRegisters: ReadonlyArray<number>;
+	readonly stringComparisons: ReadonlyArray<NativeStringComparisonPlan>;
 }
 
 function selectNumericWorker(
@@ -1581,6 +1584,12 @@ function lowerStorage(
 		numericWorker,
 		elidedPureIps,
 		unusedRegisters,
+		stringComparisons: selectNativeStringComparisons(native, body, {
+			controlFlow,
+			externalEntries,
+			elided: new Set(elidedPureIps),
+			stringLength: (index) => stringConstants[index]?.length,
+		}),
 		...(controlFlow === undefined ? {} : { controlFlow }),
 	};
 }
@@ -2171,6 +2180,19 @@ export function validateNativeStorage(
 		if (!sameScalar(variant.storage, selected)) return false;
 		if (!sameNumbers(variant.storage.elidedPureIps, selected.elidedPureIps)) return false;
 		if (!sameNumbers(variant.storage.unusedRegisters, selected.unusedRegisters))
+			return false;
+		if (
+			variant.storage.stringComparisons.length !== selected.stringComparisons.length ||
+			variant.storage.stringComparisons.some((plan, index) => {
+				const expected = selected.stringComparisons[index]!;
+				return (
+					plan.instructionIp !== expected.instructionIp ||
+					plan.register !== expected.register ||
+					plan.length !== expected.length ||
+					plan.kind !== expected.kind
+				);
+			})
+		)
 			return false;
 		if (!nativeControlFlowPlansMatch(variant.storage.controlFlow, selected.controlFlow))
 			return false;
