@@ -1386,10 +1386,6 @@ function lowerStorage(
 		externalGroups: nativeFastPathWindows(selection.plans, false).map(
 			(window) => window.claimedIps,
 		),
-		externalEntries: [
-			...nativeRecordCallIps(native),
-			...(entry?.resultFields?.allocationIps ?? []),
-		],
 	};
 	const controlFlow = selectNativeControlFlow(native, body, stringConstants, {
 		constants: entry?.constantBooleans,
@@ -2115,10 +2111,6 @@ export function validateNativeStorage(
 			externalGroups: nativeFastPathWindows(selected, false).map(
 				(window) => window.claimedIps,
 			),
-			externalEntries: [
-				...nativeRecordCallIps(variant),
-				...(entry?.resultFields?.allocationIps ?? []),
-			],
 		});
 		if (!sameScalar(variant.storage, selected)) return false;
 		if (!sameNumbers(variant.storage.elidedPureIps, selected.elidedPureIps)) return false;

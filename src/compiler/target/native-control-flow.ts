@@ -20,7 +20,11 @@ import {
 	compilerIntegerRangeTruthiness,
 } from "../shared/integer-range.ts";
 import type { NativeBodyFacts } from "./native-body-facts.ts";
-import type { NativeDirectEntryPlan, NativeFunctionPlan } from "./program-image.ts";
+import type {
+	NativeDirectEntryPlan,
+	NativeFunctionPlan,
+	NativeRecordUses,
+} from "./program-image.ts";
 import { decodeVmValueOperand } from "./runtime-image.ts";
 
 export interface NativeControlFlowPlan {
@@ -107,16 +111,64 @@ export function nativeControlFlowContract(
 	const branches = new Map(
 		controlFlow.branches.map(({ instructionIp, targetIp }) => [instructionIp, targetIp]),
 	);
+	const live = (ip: number) => !unreachable.has(ip);
+	// Source certificates retain every record use; this view owns only surviving storage.
+	const projectUses = <T extends NativeRecordUses>(site: T): T => {
+		if (
+			site.loads.every((load) => live(load.instructionIp)) &&
+			site.stores.every((store) => live(store.instructionIp)) &&
+			site.observerIps.every((ip) => live(ip) && !branches.has(ip)) &&
+			(site.passes ?? []).every((pass) => live(pass.callIp))
+		)
+			return site;
+		return {
+			...site,
+			loads: site.loads.filter((load) => live(load.instructionIp)),
+			stores: site.stores.filter((store) => live(store.instructionIp)),
+			observerIps: site.observerIps.filter((ip) => live(ip) && !branches.has(ip)),
+			...(site.passes === undefined
+				? {}
+				: { passes: site.passes.filter((pass) => live(pass.callIp)) }),
+		};
+	};
+	const recordCalls = native.recordCalls
+		?.filter((site) => live(site.callIp))
+		.map(projectUses);
+	const recordObjects = native.recordObjects
+		?.filter((site) => live(site.allocationIp))
+		.map(projectUses);
+	const recordParameterIps = native.recordParameterIps?.filter(live);
+	const recordForwardIps = native.recordForwardIps?.filter(live);
+	// Surviving maps include hidden roots borrowed by specialized helpers.
 	const safepoints = native.gc.safepoints.filter((point) => {
 		if (unreachable.has(point.instructionIp)) return false;
 		if (point.kind !== "loop-backedge") return true;
 		const target = branches.get(point.instructionIp);
 		return target === undefined || target !== point.instructionIp + 1;
 	});
-	// Surviving maps include hidden roots borrowed by specialized helpers.
-	return safepoints.length === native.gc.safepoints.length
+	const same = <T>(
+		left: ReadonlyArray<T> | undefined,
+		right: ReadonlyArray<T> | undefined,
+	) =>
+		left === right ||
+		(left !== undefined &&
+			right !== undefined &&
+			left.length === right.length &&
+			left.every((item, index) => item === right[index]));
+	return safepoints.length === native.gc.safepoints.length &&
+		same(recordCalls, native.recordCalls) &&
+		same(recordObjects, native.recordObjects) &&
+		same(recordParameterIps, native.recordParameterIps) &&
+		same(recordForwardIps, native.recordForwardIps)
 		? native
-		: { ...native, gc: { safepoints } };
+		: {
+				...native,
+				gc: { safepoints },
+				...(recordCalls === undefined ? {} : { recordCalls }),
+				...(recordObjects === undefined ? {} : { recordObjects }),
+				...(recordParameterIps === undefined ? {} : { recordParameterIps }),
+				...(recordForwardIps === undefined ? {} : { recordForwardIps }),
+			};
 }
 
 export function selectNativeControlFlow(

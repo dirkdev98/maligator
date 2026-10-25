@@ -4472,6 +4472,12 @@ function renderRecordCallSlots(
 	allocateSlot: () => number,
 	directEntry: NativeDirectEntryPlan | undefined,
 ): Omit<NativeRecordStorage, "allocations" | "forwards"> {
+	const unobserved = new Set([
+		...(native.storage?.controlFlow?.unreachableIps ?? []),
+		...(native.storage?.controlFlow?.branches.map((branch) => branch.instructionIp) ??
+			[]),
+		...(native.storage?.elidedPureIps ?? []),
+	]);
 	const calls = new Map<number, NativeRecordSite>();
 	const objects = new Map<number, NativeRecordSite>();
 	const accesses = new Map<number, NativeRecordAccess>();
@@ -4492,19 +4498,21 @@ function renderRecordCallSlots(
 		passed: ReadonlyArray<NativeRecordPass>,
 	) => {
 		for (const access of [...uses.loads, ...uses.stores])
-			accesses.set(access.instructionIp, { site, field: access.field });
+			if (!unobserved.has(access.instructionIp))
+				accesses.set(access.instructionIp, { site, field: access.field });
 		for (const pass of passed)
-			passes.set(pass.callIp, [
-				...(passes.get(pass.callIp) ?? []),
-				{ site, argument: pass.argument },
-			]);
+			if (!unobserved.has(pass.callIp))
+				passes.set(pass.callIp, [
+					...(passes.get(pass.callIp) ?? []),
+					{ site, argument: pass.argument },
+				]);
 		// A call whose entry takes no record parameter for it observes the record instead.
 		const observerIps = [
 			...uses.observerIps,
 			...(uses.passes ?? [])
 				.filter((pass) => !passed.includes(pass))
 				.map((pass) => pass.callIp),
-		];
+		].filter((ip) => !unobserved.has(ip));
 		if (observerIps.length === 0) return;
 		const aliases = nativeRecordAliases(fn, uses);
 		for (const ip of observerIps)

@@ -265,10 +265,14 @@ The independent target boundary and current storage contract are recorded in
       projected edges and aliases; dead endpoints no longer retain hint locals or
       their Core call chains, while live updates retain receiver and key checks.
       Fixed fast paths, literal-switch targets and field-call windows share the
-      same conditional continuation closure; handler, resume and record ABI roots
-      retain their explicit entry contracts.
+      same conditional continuation closure; handler and resume roots retain their
+      explicit entry contracts.
       Entirely dead fixed windows and instruction-local plans are retired after
       projection, so their helper state and optimization metadata do not reach C.
+      Record producers, caller-owned literals, parameter uses and forwarding sites
+      retain storage ownership without creating control-flow entries. Their
+      surviving view drops dead producers, uses and materialization observers;
+      source certificates and entry ABI layouts remain intact.
 - [x] Normalize primitive conversion calls from semantic kind unions. Eligible
       `Number` and `String` calls use unary conversions, carrying kind and effect
       proofs into native storage, full entries and frameless numeric paths.
