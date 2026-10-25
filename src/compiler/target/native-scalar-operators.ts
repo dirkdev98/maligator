@@ -26,37 +26,56 @@ export function nativeBinaryNumberInputs(
 	const relational =
 		operator === "<" || operator === "<=" || operator === ">" || operator === ">=";
 	if (!relational && !COMPILER_NUMERIC_BINARY_OPERATORS.has(operator)) return undefined;
-	const guards: Array<string> = [];
-	const input = (kind: CompilerValueKindMask, value: string): CompilerValueKindMask => {
-		if (!compilerValueKindMaskIsSubset(kind, COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE)) {
-			if ((kind & COMPILER_VALUE_KIND_NUMBER) === 0) return 0;
-			guards.push(`mal_ops_is_number(${value})`);
-			return COMPILER_VALUE_KIND_NUMBER;
-		}
-		if (operator !== "+" || (kind & COMPILER_VALUE_KIND_STRING) === 0) return kind;
-		guards.push(`!mal_value_is_string(${value})`);
-		return kind & ~COMPILER_VALUE_KIND_STRING;
-	};
-	const leftMask = input(leftKind, left);
-	const rightMask = input(rightKind, right);
+	const leftMask = nativeNumberInputKind(operator, leftKind);
+	const rightMask = nativeNumberInputKind(operator, rightKind);
 	if (leftMask === 0 || rightMask === 0) return undefined;
+	const leftGuard = nativeNumberInputGuard(leftKind, leftMask, left);
+	const rightGuard = nativeNumberInputGuard(rightKind, rightMask, right);
+	let guard =
+		leftGuard === "" || leftGuard === rightGuard
+			? rightGuard
+			: rightGuard === ""
+				? leftGuard
+				: `${leftGuard} && ${rightGuard}`;
 	if (relational && (leftMask & rightMask & COMPILER_VALUE_KIND_STRING) !== 0) {
 		// Two Strings compare lexically; converting either of them changes the result.
-		const strings = [
-			[leftMask, left],
-			[rightMask, right],
-		] as const;
-		const tests = [
-			...new Set(
-				strings
-					.filter(([mask]) => mask !== COMPILER_VALUE_KIND_STRING)
-					.map(([, value]) => `mal_value_is_string(${value})`),
-			),
-		];
-		if (tests.length === 0) return undefined;
-		guards.push(`!(${tests.join(" && ")})`);
+		if (
+			leftMask === COMPILER_VALUE_KIND_STRING &&
+			rightMask === COMPILER_VALUE_KIND_STRING
+		)
+			return undefined;
+		const strings =
+			leftMask === COMPILER_VALUE_KIND_STRING || left === right
+				? `mal_value_is_string(${right})`
+				: rightMask === COMPILER_VALUE_KIND_STRING
+					? `mal_value_is_string(${left})`
+					: `mal_value_is_string(${left}) && mal_value_is_string(${right})`;
+		guard = guard === "" ? `!(${strings})` : `${guard} && !(${strings})`;
 	}
-	return { masks: [leftMask, rightMask], guard: [...new Set(guards)].join(" && ") };
+	return { masks: [leftMask, rightMask], guard };
+}
+
+function nativeNumberInputKind(
+	operator: string,
+	kind: CompilerValueKindMask,
+): CompilerValueKindMask {
+	return compilerValueKindMaskIsSubset(kind, COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE)
+		? operator === "+"
+			? kind & ~COMPILER_VALUE_KIND_STRING
+			: kind
+		: kind & COMPILER_VALUE_KIND_NUMBER;
+}
+
+function nativeNumberInputGuard(
+	kind: CompilerValueKindMask,
+	mask: CompilerValueKindMask,
+	value: string,
+): string {
+	return kind === mask
+		? ""
+		: compilerValueKindMaskIsSubset(kind, COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE)
+			? `!mal_value_is_string(${value})`
+			: `mal_ops_is_number(${value})`;
 }
 
 // Callers exclude Object, Symbol and BigInt; the final arm deliberately has no tag test.
