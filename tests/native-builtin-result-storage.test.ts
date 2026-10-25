@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
 	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_STRING,
 	COMPILER_VALUE_KIND_TOP,
 } from "../src/compiler/shared/compiler-value-kinds.ts";
+import { COMPILER_INT32_RANGE } from "../src/compiler/shared/integer-range.ts";
 import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
@@ -11,6 +13,7 @@ import {
 	lowerNativeFunctionStorage,
 	validateNativeStorage,
 } from "../src/compiler/target/lower-native-storage.ts";
+import { emitCompiledFunction } from "../src/compiler/target/render-native-c.ts";
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 describe("catalogued primitive builtin result storage", () => {
@@ -93,26 +96,43 @@ describe("catalogued primitive builtin result storage", () => {
 	it.each(["isFinite", "isInteger", "isSafeInteger"])(
 		"persists Number.%s kernel modes and rejects stale choices",
 		(predicate) => {
-			for (const [expression, mode] of [
-				["input", "boxed"],
-				["+input", "number"],
-				["input|0", "integer"],
-				["String(input)", "non-number"],
+			for (const [mask, mode] of [
+				[COMPILER_VALUE_KIND_TOP, "boxed"],
+				[COMPILER_VALUE_KIND_NUMBER, "number"],
+				[COMPILER_VALUE_KIND_NUMBER, "integer"],
+				[COMPILER_VALUE_KIND_STRING, "non-number"],
 			] as const) {
 				const out = inspectStaticValueFunction(
-					`function compute(input){return Number.${predicate}(${expression});}globalThis.compute=compute;`,
+					`function compute(input){return Number.${predicate}(input);}globalThis.compute=compute;`,
 					"compute",
 				);
-				const plan = out.native.storage!.numberPredicates[0]!;
+				const ip = out.native.storage!.numberPredicates[0]!.instructionIp;
+				const native = lowerNativeFunctionStorage({
+					...out.native,
+					facts: out.native.facts!.with(ip, {
+						...out.native.facts![ip],
+						inputKindMasks: [COMPILER_VALUE_KIND_TOP, mask],
+						inputIntegerRanges:
+							mode === "integer" ? [undefined, COMPILER_INT32_RANGE] : undefined,
+					}),
+				});
+				const plan = native.storage!.numberPredicates[0]!;
 				expect(plan?.mode).toBe(mode);
-				expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
-					out.image,
+				const image = {
+					...out.image,
+					native: {
+						...out.image.native,
+						functions: out.image.native.functions.with(native.functionIndex, native),
+					},
+				};
+				expect(deserializeCompilerArtifact(serializeCompilerArtifact(image))).toEqual(
+					image,
 				);
 				expect(() =>
 					validateNativeStorage({
-						...out.native,
+						...native,
 						storage: {
-							...out.native.storage!,
+							...native.storage!,
 							numberPredicates: [
 								{ ...plan, mode: mode === "boxed" ? "integer" : "boxed" },
 							],
@@ -120,11 +140,11 @@ describe("catalogued primitive builtin result storage", () => {
 					}),
 				).toThrow(/invalid or stale storage plan/);
 				if (mode === "integer") {
-					const op = out.native.body.instructions[plan.instructionIp]!;
+					const op = native.body.instructions[plan.instructionIp]!;
 					if (op.opcode !== "CALL_KNOWN") throw new Error("Missing planned predicate");
-					expect(out.c.source).toContain(
-						`r${op.dst} = ${predicate === "isNaN" ? "false" : "true"};`,
-					);
+					expect(
+						emitCompiledFunction(native, native.functionIndex, "", false)!.source,
+					).toContain(`r${op.dst} = ${predicate === "isNaN" ? "false" : "true"};`);
 				}
 			}
 		},

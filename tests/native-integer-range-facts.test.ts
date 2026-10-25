@@ -23,17 +23,24 @@ describe("native integer ranges", () => {
 		(method) => {
 			for (const generator of [false, true]) {
 				const out = inspectStaticValueFunction(
-					`function${generator ? "*" : ""} compute(input,gate){const n=(input>>>0)*2+1;${generator ? "yield n;" : "gate(n);"}return Number.${method}(n);}globalThis.compute=compute;`,
+					`function${generator ? "*" : ""} compute(input,gate){const n=(input>>>0)*2+1;${generator ? "yield n;" : ""}gate(n);return Number.${method}(n);}globalThis.compute=compute;`,
 					"compute",
 				);
-				const plan = out.native.storage!.numberPredicates[0]!;
-				expect(plan.mode).toBe("integer");
-				expect(out.native.facts![plan.instructionIp]!.inputIntegerRanges?.[1]).toEqual({
+				expect(out.native.storage!.numberPredicates).toEqual([]);
+				const ip = out.native.body.instructions.findIndex((op) => op.opcode === "CALL");
+				const observer = out.native.body.instructions[ip]!;
+				if (observer.opcode !== "CALL") throw new Error("Missing range observation");
+				expect(
+					instructionInputIntegerRange(out.native.facts![ip], observer.arguments[0]!),
+				).toEqual({
 					minimum: 1,
 					maximum: 8589934591,
 					exactSafeIntegers: true,
 					excludesNegativeZero: true,
 				});
+				expect(out.native.body.instructions).toContainEqual(
+					expect.objectContaining({ opcode: "CREATE_BOOLEAN", value: true }),
+				);
 				expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
 					out.image,
 				);
@@ -43,14 +50,19 @@ describe("native integer ranges", () => {
 
 	it("keeps range facts in admitted entries when their canonical table is shared", () => {
 		const out = inspectStaticValueFunction(
-			"function compute(input){return Number.isSafeInteger(input>>>0);}globalThis.compute=compute;globalThis.result=compute(+globalThis.input);",
+			"function compute(input,gate){const n=input>>>0;gate(n);return Number.isSafeInteger(n);}globalThis.compute=compute;globalThis.result=compute(+globalThis.input,globalThis.observe);",
 			"compute",
 		);
 		expect(out.native.directEntries.length).toBeGreaterThan(0);
-		const ip = out.native.storage!.numberPredicates[0]!.instructionIp;
+		const ip = out.native.body.instructions.findIndex((op) => op.opcode === "CALL");
+		const observer = out.native.body.instructions[ip]!;
+		if (observer.opcode !== "CALL") throw new Error("Missing range observation");
 		for (const entry of out.native.directEntries)
 			expect(
-				nativeVariantContract(out.native, entry).facts?.[ip]?.inputIntegerRanges?.[1],
+				instructionInputIntegerRange(
+					nativeVariantContract(out.native, entry).facts?.[ip],
+					observer.arguments[0]!,
+				),
 			).toEqual(COMPILER_UINT32_RANGE);
 		expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
 			out.image,

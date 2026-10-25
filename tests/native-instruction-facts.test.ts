@@ -124,7 +124,21 @@ describe("independent native instruction facts", () => {
 					`function${generator ? "*" : ""} compute(input,other,flag,gate){const n=flag?(input|0):(other>>1);${generator ? "yield n;" : "gate(n);"}return Number.${method}(n);}globalThis.compute=compute;`,
 					"compute",
 				);
-				expect(out.native.storage!.numberPredicates[0]!.mode).toBe("integer");
+				expect(out.native.storage!.numberPredicates).toEqual([]);
+				const result = out.native.body.instructions.find(
+					(op) => op.opcode === "CREATE_BOOLEAN" && op.value,
+				);
+				if (result?.opcode !== "CREATE_BOOLEAN") throw new Error("Missing folded true");
+				expect(
+					out.native.body.instructions.some(
+						(op) => op.opcode === "RETURN" && op.value === result.dst,
+					),
+				).toBe(true);
+				expect(
+					out.native.body.instructions.some(
+						(op) => op.opcode === (generator ? "YIELD" : "CALL"),
+					),
+				).toBe(true);
 				expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
 					out.image,
 				);
@@ -187,7 +201,12 @@ describe("independent native instruction facts", () => {
 			"function compute(input,flag){const value=flag?String(input):Symbol('x');return Number.isFinite(value)||(typeof value==='number')||(typeof value==='string');}globalThis.compute=compute;",
 			"compute",
 		);
-		expect(out.native.storage!.numberPredicates[0]!.mode).toBe("non-number");
+		expect(out.native.storage!.numberPredicates).toEqual([]);
+		expect(
+			out.native.body.instructions
+				.filter((op) => op.opcode === "CALL_KNOWN")
+				.map((op) => op.operation),
+		).toEqual(expect.arrayContaining(["String", "Symbol"]));
 		expect(out.c.source).not.toContain("mal_ops_is_number(");
 		expect(out.c.source).toContain("mal_vm_typeof_compare(");
 	});

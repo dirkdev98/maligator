@@ -40,9 +40,9 @@ describe("independent native SSA storage", () => {
 	it("preserves scalar arithmetic, loop transport, and suspended heap locals", () => {
 		for (const [name, mode, count] of [
 			["predicateNumber", "number", 3],
-			["predicateInt32", "integer", 3],
+			["predicateInt32", "integer", 0],
 			["predicateBoxed", "boxed", 1],
-			["predicateText", "non-number", 1],
+			["predicateText", "non-number", 0],
 		] as const) {
 			const native = image.native.functions.find(
 				(fn) =>
@@ -52,9 +52,20 @@ describe("independent native SSA storage", () => {
 			)!;
 			expect(native).toBeDefined();
 			expect(native.storage!.numberPredicates).toHaveLength(count);
-			expect(native.storage!.numberPredicates.every((plan) => plan.mode === mode)).toBe(
-				true,
-			);
+			if (count === 0) {
+				expect(
+					native.body.instructions.some(
+						(op) => op.opcode === "CALL_KNOWN" && op.operation.startsWith("Number.is"),
+					),
+				).toBe(false);
+				expect(
+					native.body.instructions.some((op) => op.opcode === "CREATE_BOOLEAN"),
+				).toBe(true);
+			} else {
+				expect(native.storage!.numberPredicates.every((plan) => plan.mode === mode)).toBe(
+					true,
+				);
+			}
 			expect(
 				emitCompiledFunction(native, native.functionIndex, "", false),
 			).not.toBeNull();
