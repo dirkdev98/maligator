@@ -36,6 +36,8 @@ import {
 	nativeMathNumberArity,
 	nativeGuardedMathArity,
 	nativeNumericBuiltinExpr,
+	NUMBER_PREDICATES,
+	nativeNumberPredicateInputExpression,
 } from "./native-scalar-operators.ts";
 import {
 	nativeInstructionSourceRanges,
@@ -930,6 +932,20 @@ function fastInstruction(
 			const plan = input.instructions[ip];
 			const operation =
 				plan?.kind === "call" ? plan.guardedBuiltinCall?.operation : undefined;
+			const predicate = NUMBER_PREDICATES.get(operation ?? "");
+			if (operation !== undefined && predicate !== undefined) {
+				const callee = value(op.callee);
+				const expression = fastNumberPredicate(
+					operation,
+					op.arguments.slice(0, op.argumentCount),
+					op.dst,
+					values,
+					value,
+				);
+				return callee === undefined || expression === undefined
+					? undefined
+					: `if (!mal_builtin_number_predicate_callee_matches(${predicate}, ${callee})) goto __full; ${expression}`;
+			}
 			const arity =
 				operation === undefined
 					? undefined
@@ -980,6 +996,14 @@ function fastInstruction(
 				(op.specialized !== undefined && op.specialized !== op.operation)
 			)
 				return undefined;
+			if (NUMBER_PREDICATES.has(op.operation))
+				return fastNumberPredicate(
+					op.operation,
+					op.arguments.slice(0, op.argumentCount),
+					op.dst,
+					values,
+					value,
+				);
 			if (op.operation !== "Object.is")
 				return fastMath(
 					op.operation,
@@ -996,6 +1020,29 @@ function fastInstruction(
 		default:
 			return undefined;
 	}
+}
+
+function fastNumberPredicate(
+	operation: string,
+	args: ReadonlyArray<number>,
+	dst: number,
+	values: FastNumbers,
+	value: (operand: number) => string | undefined,
+): string | undefined {
+	const input = args[0];
+	const boxed = input === undefined ? undefined : value(input);
+	if (input !== undefined && boxed === undefined) return undefined;
+	const kind = input === undefined ? COMPILER_VALUE_KIND_UNDEFINED : values.kind(input);
+	const expression = nativeNumberPredicateInputExpression(
+		operation,
+		boxed,
+		kind,
+		input !== undefined && kind === COMPILER_VALUE_KIND_NUMBER
+			? equalityScalar(values, input, boxed!)
+			: undefined,
+		input === undefined ? undefined : values.range(input),
+	);
+	return `f${dst} = mal_value_new_boolean(${expression});`;
 }
 
 function fastMath(

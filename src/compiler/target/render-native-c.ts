@@ -126,6 +126,7 @@ import {
 	NUMBER_PREDICATES,
 	boxedNumberPredicateExpression,
 	nativeNumberPredicateExpression,
+	nativeNumberPredicateInputExpression,
 	nativeMathUnaryExpr,
 	nativeMathBinaryExpr,
 	nativeNumericBuiltinExpr,
@@ -13990,23 +13991,17 @@ function emitInstruction(
 			if (numberPredicate !== undefined) {
 				const argument = args[0];
 				const number = argument === undefined ? null : nativeNumberOperand(argument);
-				const test =
-					argument !== undefined &&
-					instructionInputIntegerRange(context.facts, argument) !== undefined
-						? guardedBuiltinOperation === "Number.isNaN"
-							? "false"
-							: "true"
-						: argument === undefined ||
-							  ((operandKind(argument) ?? COMPILER_VALUE_KIND_TOP) &
-									COMPILER_VALUE_KIND_NUMBER) ===
-									0
-							? "false"
-							: number === null
-								? boxedNumberPredicateExpression(
-										guardedBuiltinOperation!,
-										boxedOperand(argument),
-									)
-								: nativeNumberPredicateExpression(guardedBuiltinOperation!, number);
+				const test = nativeNumberPredicateInputExpression(
+					guardedBuiltinOperation!,
+					argument === undefined ? undefined : boxedOperand(argument),
+					argument === undefined
+						? COMPILER_VALUE_KIND_UNDEFINED
+						: (operandKind(argument) ?? COMPILER_VALUE_KIND_TOP),
+					number ?? undefined,
+					argument === undefined
+						? undefined
+						: instructionInputIntegerRange(context.facts, argument),
+				);
 				return [
 					`if (mal_builtin_number_predicate_callee_matches(${numberPredicate}, ${boxedOperand(instruction.callee)})) {`,
 					storeBoolean(instruction.dst, test),

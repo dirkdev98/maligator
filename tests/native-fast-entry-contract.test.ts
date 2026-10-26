@@ -57,6 +57,11 @@ const NONCOLLECTING_HELPERS = new Set([
 	"mal_ops_strict_equal_boxed",
 	"mal_ops_same_value",
 	"mal_builtin_object_is_callee_matches",
+	"mal_builtin_number_predicate_callee_matches",
+	"mal_builtin_number_value_is_nan",
+	"mal_builtin_number_value_is_finite",
+	"mal_builtin_number_value_is_integer",
+	"mal_builtin_number_value_is_safe_integer",
 	"mal_builtin_math_unary_callee_matches",
 	"mal_builtin_math_binary_callee_matches",
 	"mal_number_min_max",
@@ -110,6 +115,114 @@ function body(
 
 const OWN_TRY = "mal_compiled_0_try";
 const LENGTH_STRING_INDEX = 7;
+
+describe("frameless noncoercing Number predicates", () => {
+	it.each([
+		"Number.isNaN",
+		"Number.isFinite",
+		"Number.isInteger",
+		"Number.isSafeInteger",
+	])("uses the input kind and interval independently in %s", (operation) => {
+		for (const kind of [
+			COMPILER_VALUE_KIND_TOP,
+			COMPILER_VALUE_KIND_NUMBER,
+			COMPILER_VALUE_KIND_OBJECT,
+			COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_STRING,
+		]) {
+			for (const range of kind === COMPILER_VALUE_KIND_NUMBER
+				? [undefined, COMPILER_UINT32_RANGE]
+				: [undefined]) {
+				const lines = fastEntry(
+					body([
+						{
+							opcode: "CALL_KNOWN",
+							operation,
+							thisValue: 1,
+							arguments: [0],
+							argumentCount: 1,
+							dst: 2,
+						},
+						{ opcode: "RETURN", value: 2 },
+					]),
+					undefined,
+					true,
+					undefined,
+					[
+						{
+							registers: [2, 1, 0],
+							inputOffset: 1,
+							inputKindMasks: [COMPILER_VALUE_KIND_TOP, kind],
+							inputIntegerRanges: [undefined, range],
+							resultKindMasks: [COMPILER_VALUE_KIND_BOOLEAN],
+						},
+					],
+				);
+				expect(lines).toBeDefined();
+				const code = lines!.join("\n");
+				expect(unexpectedHelpers(lines!)).toEqual([]);
+				expect(code).not.toContain("mal_ops_to_number(");
+				expect(code).not.toContain("!mal_ops_is_number(");
+				if (range !== undefined || kind === COMPILER_VALUE_KIND_OBJECT) {
+					expect(code).not.toMatch(
+						/\b(?:isnan|isfinite|trunc|fabs|mal_builtin_number_value_\w+)\(/,
+					);
+					expect(code).toContain(
+						`mal_value_new_boolean(${range !== undefined && operation !== "Number.isNaN"})`,
+					);
+				}
+			}
+		}
+	});
+	it("retains the mutable predicate's callee check even when its hit folds", () => {
+		const lines = fastEntry(
+			body([
+				{
+					opcode: "CALL",
+					callee: 4,
+					thisValue: 3,
+					arguments: [0],
+					argumentCount: 1,
+					dst: 2,
+				},
+				{ opcode: "RETURN", value: 2 },
+			]),
+			undefined,
+			true,
+			undefined,
+			[
+				{
+					registers: [2, 4, 3, 0],
+					inputOffset: 1,
+					inputKindMasks: [
+						COMPILER_VALUE_KIND_TOP,
+						COMPILER_VALUE_KIND_TOP,
+						COMPILER_VALUE_KIND_OBJECT,
+					],
+					resultKindMasks: [COMPILER_VALUE_KIND_TOP],
+				},
+			],
+			undefined,
+			[
+				{
+					kind: "call",
+					guardedBuiltinCall: {
+						operation: "Number.isInteger",
+						guard: {
+							dependencies: [{ kind: "epoch", family: "watched-methods" }],
+							obligations: ["fallback"],
+						},
+					},
+				},
+			],
+		);
+		expect(lines).toBeDefined();
+		expect(lines!.join("\n")).toContain(
+			"if (!mal_builtin_number_predicate_callee_matches(MAL_NUMBER_PREDICATE_IS_INTEGER, f4)) goto __full;",
+		);
+		expect(lines!.join("\n")).toContain("f2 = mal_value_new_boolean(false);");
+		expect(unexpectedHelpers(lines!)).toEqual([]);
+	});
+});
 
 describe("frameless numeric builtin kernels", () => {
 	it.each([false, true])(

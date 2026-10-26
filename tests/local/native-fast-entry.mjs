@@ -725,6 +725,18 @@ function mathExtraArgument(value, extra) {
 function mathMissing() {
 	return Math.pow();
 }
+function numberFinite(value) {
+	return Number.isFinite(value);
+}
+function numberInteger(value) {
+	return Number.isInteger(value);
+}
+function numberSafeInteger(value) {
+	return Number.isSafeInteger(value);
+}
+function numberNaN(value) {
+	return Number.isNaN(value);
+}
 Object.assign(globalThis, {
 	mathRound,
 	mathInterval,
@@ -735,6 +747,10 @@ Object.assign(globalThis, {
 	mathThenCoerce,
 	mathExtraArgument,
 	mathMissing,
+	numberFinite,
+	numberInteger,
+	numberSafeInteger,
+	numberNaN,
 });
 for (const value of [
 	-0,
@@ -764,6 +780,10 @@ for (const value of [
 		"mathHypot",
 		"mathPower",
 		"mathThenCoerce",
+		"numberFinite",
+		"numberInteger",
+		"numberSafeInteger",
+		"numberNaN",
 	]) {
 		try {
 			const result = globalThis[name](value, -2);
@@ -783,5 +803,18 @@ log.push(
 	})}`,
 );
 log.push(`math missing ${globalThis.mathMissing()}`);
+const revokedNumberInput = Proxy.revocable({}, {});
+revokedNumberInput.revoke();
+log.push(`number proxy ${globalThis.numberInteger(revokedNumberInput.proxy)}`);
+if (Object.getOwnPropertyDescriptor(Number, "isInteger").writable) {
+	const original = Number.isInteger;
+	try {
+		Number.isInteger = () => ({ label: "patched predicate" });
+		log.push(globalThis.numberInteger(1).label);
+	} finally {
+		Number.isInteger = original;
+	}
+	log.push(`number restored ${globalThis.numberInteger(1)}`);
+}
 
 console.log(log.join("\n"));

@@ -454,6 +454,21 @@ export function boxedNumberPredicateExpression(operation: string, value: string)
 	return `mal_builtin_number_value_${predicate.slice("MAL_NUMBER_PREDICATE_".length).toLowerCase()}(${value})`;
 }
 
+// A scalar view reads an existing Number; predicates never convert their input.
+export function nativeNumberPredicateInputExpression(
+	operation: string,
+	boxed: string | undefined,
+	kind: CompilerValueKindMask = COMPILER_VALUE_KIND_TOP,
+	scalar?: string,
+	range?: CompilerIntegerRange,
+): string {
+	if (boxed === undefined || (kind & COMPILER_VALUE_KIND_NUMBER) === 0) return "false";
+	if (range !== undefined) return operation === "Number.isNaN" ? "false" : "true";
+	return scalar === undefined
+		? boxedNumberPredicateExpression(operation, boxed)
+		: nativeNumberPredicateExpression(operation, scalar);
+}
+
 export function nativeMathUnaryExpr(
 	operation: string,
 	argument: string,
@@ -509,15 +524,15 @@ export function nativeNumericBuiltinExpr(
 	ranges?: ReadonlyArray<CompilerIntegerRange | undefined>,
 ): string | null {
 	if (NUMBER_PREDICATES.has(operation))
-		return arguments_.length === 0
-			? "false"
-			: arguments_.length === 1
-				? ranges?.[0] !== undefined
-					? operation === "Number.isNaN"
-						? "false"
-						: "true"
-					: nativeNumberPredicateExpression(operation, arguments_[0]!)
-				: null;
+		return arguments_.length <= 1
+			? nativeNumberPredicateInputExpression(
+					operation,
+					arguments_[0],
+					COMPILER_VALUE_KIND_NUMBER,
+					arguments_[0],
+					ranges?.[0],
+				)
+			: null;
 	if (arguments_.length === 1 && MATH_UNARY_NATIVE_CALL.has(operation))
 		return nativeMathUnaryExpr(operation, arguments_[0]!, ranges?.[0]);
 	if (arguments_.length === 2 && MATH_BINARY_OPERATIONS.has(operation))

@@ -258,6 +258,10 @@ uncertain operands retain Number guards, and a mutable callee retains its callba
 check. Object coercion and throwing inputs restart before observable effects.
 Variadic kernels retain the existing argument bound; effectful Math operations remain
 outside this admission.
+Noncoercing Number predicates admit arbitrary boxed inputs in frameless bodies.
+Kinds and integer intervals can fold their hit, while mutable callee checks remain
+even for a constant Boolean result. Full guarded bodies and numeric expressions
+share the same predicate consumer.
 
 Complete script callee sets publish bounds on normal return values independently of
 throwing, collection and user-code effects. Every reachable return and possible
