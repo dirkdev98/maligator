@@ -19,6 +19,49 @@ for (const payload of [11, "payload", { alive: true }]) {
 	check(result[1], payload);
 	check(result[2], 8);
 }
+function primitiveUntouched(payload) {
+	const write = (o) => {
+		for (let value = 0; value < 3; value++) {
+			o.y = (value & 255) + 1;
+			o.z = -value;
+			o.flag = value < 9;
+		}
+	};
+	const o = { x: payload, y: 0, z: 0, flag: false };
+	write(o);
+	if (typeof collect === "function") collect();
+	return [o.x, o.y, o.z, o.flag];
+}
+for (const payload of [11, "payload", { alive: true }]) {
+	const result = primitiveUntouched(payload);
+	check(result[0], payload);
+	check(result[1], 3);
+	check(result[2], -2);
+	check(result[3], true);
+}
+function numericWidthJoin(steps) {
+	const o = { narrow: 0, wide: 0x80000000 };
+	for (let index = 0; index < steps; index++) {
+		o.narrow = -index;
+		o.wide = index;
+	}
+	if (typeof collect === "function") collect();
+	return [o.narrow, o.wide];
+}
+for (const steps of [0, 1, 3]) {
+	const result = numericWidthJoin(steps);
+	check(result[0], steps === 0 ? 0 : -(steps - 1));
+	check(result[1], steps === 0 ? 0x80000000 : steps - 1);
+}
+function mixedKindJoin(steps) {
+	const o = { field: "initial" };
+	for (let index = 0; index < steps; index++) o.field = index & 1 ? null : -index;
+	if (typeof collect === "function") collect();
+	return o.field;
+}
+check(mixedKindJoin(0), "initial");
+check(mixedKindJoin(1), -0);
+check(mixedKindJoin(2), null);
 
 function aliased(payload) {
 	const write = (a, b) => {
@@ -39,6 +82,14 @@ function missing() {
 	write(o);
 	return o.x;
 }
+function primitiveMissing() {
+	const write = (o) => {
+		for (let value = 0; value < 3; value++) o.y = value & 255;
+	};
+	const o = { x: 11 };
+	write(o);
+	return o.x;
+}
 Object.defineProperty(Object.prototype, "y", {
 	set() {
 		this.x = 99;
@@ -47,6 +98,7 @@ Object.defineProperty(Object.prototype, "y", {
 });
 try {
 	check(missing(), 99);
+	check(primitiveMissing(), 99);
 } finally {
 	delete Object.prototype.y;
 }
@@ -101,6 +153,24 @@ function coercive() {
 	return o.x;
 }
 check(coercive(), 42);
+function binaryCoercive() {
+	const update = (o) => {
+		o.y = o.y + 1;
+	};
+	const o = {
+		x: 11,
+		y: {
+			valueOf() {
+				o.x = 42;
+				if (typeof collect === "function") collect();
+				return 1;
+			},
+		},
+	};
+	update(o);
+	return o.x;
+}
+check(binaryCoercive(), 42);
 
 function exceptional(fail) {
 	const update = (o, value) => {

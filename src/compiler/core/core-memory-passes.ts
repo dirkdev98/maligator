@@ -1770,7 +1770,12 @@ function scalarizeRootedLayout(
 			key,
 			values.every((value) => fn.valueRepresentation(value) === representation)
 				? representation
-				: "boxed",
+				: values.every((value) => {
+							const representation = fn.valueRepresentation(value);
+							return representation === "i32" || representation === "f64";
+					  })
+					? "f64"
+					: "boxed",
 		);
 	}
 	const hasWeaklyHoldableOccupant = [
@@ -1920,7 +1925,10 @@ function scalarizeRootedLayout(
 			representation: CoreRepresentation,
 		): CoreValueId => {
 			if (fn.valueRepresentation(value) === representation) return value;
-			if (representation !== "boxed") {
+			if (
+				representation !== "boxed" &&
+				!(representation === "f64" && fn.valueRepresentation(value) === "i32")
+			) {
 				throw new Error("Virtual object field edge requires an unsupported conversion");
 			}
 			const representations = edgeValues.get(value);

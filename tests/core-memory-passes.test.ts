@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { resolveBuildConfig } from "../src/build-config.ts";
 import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import type { CoreCompilationContext } from "../src/compiler/core/core-compilation.ts";
@@ -45,6 +46,7 @@ import { optimizeCore } from "../src/compiler/core/optimize.ts";
 import { parseScript } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { optimizeSemanticProgramToCore } from "../src/compiler/pipeline/compile-core-common.ts";
+import { compileEntrypoint } from "../src/compiler/pipeline/compile-program.ts";
 import { builtinWorldAssumptions } from "../src/compiler/shared/builtin-assumptions.ts";
 import { conservativeCompilerProgramFacts } from "../src/compiler/shared/compiler-facts.ts";
 import { knownOperationCall } from "../src/compiler/shared/known-operations.ts";
@@ -1208,6 +1210,40 @@ describe("Core local memory, provenance, and escape optimization", () => {
 		);
 		expect(opcodes).not.toContain("createObjectShaped");
 		expect(opcodes).not.toContain("storePropertyStatic");
+	});
+	it.each(["0", "-0", "0x80000000", "Infinity", "NaN"])(
+		"joins integer and floating virtual field writers with initial %s",
+		(initial) => {
+			const out = inspectStaticValueFunction(
+				`function compute(steps,hook){const point={n:${initial}};for(let i=0;i<steps;i++){point.n=-i;}hook();return point.n;}globalThis.compute=compute;`,
+				"compute",
+			);
+			expect(out.core.some(({ opcode }) => opcode === "storePropertyStatic")).toBe(false);
+			expect(out.core.some(({ opcode }) => opcode === "loadPropertyStatic")).toBe(false);
+		},
+	);
+	it("scalarizes mixed numeric field writers after a loop helper is inlined", () => {
+		const image = compileEntrypoint(
+			new URL("./local/own-slot-call-effects.js", import.meta.url).pathname,
+			{
+				buildConfig: resolveBuildConfig({
+					engine: { primordials: "mutable", eval: false, realms: false },
+				}),
+				coreVerification: "per-pass",
+			},
+		);
+		const fn = image.native.functions.find(
+			(candidate) =>
+				String.fromCharCode(
+					...(image.runtime.stringConstants[candidate.body.nameStringIndex] ?? []),
+				) === "primitiveUntouched",
+		)!;
+		expect(fn).toBeDefined();
+		expect(
+			fn.body.instructions.some((instruction) =>
+				instruction.opcode.startsWith("LOAD_PROPERTY"),
+			),
+		).toBe(false);
 	});
 
 	it("preserves representation joins for destructuring defaults", () => {
