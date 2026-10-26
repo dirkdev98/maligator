@@ -70,6 +70,14 @@ describe("fresh record field kind observations", () => {
 					["readBeforeFieldWrite", { ...COMPILER_INT32_RANGE, minimum: 0, maximum: 255 }],
 					["readSiblingWritten", { ...COMPILER_INT32_RANGE, minimum: 0, maximum: 255 }],
 					[
+						"readCompatibleWritten",
+						{ ...COMPILER_INT32_RANGE, minimum: 0, maximum: 255 },
+					],
+					["readWrittenLoop", { ...COMPILER_INT32_RANGE, minimum: 0, maximum: 255 }],
+					["writtenSuspended", { ...COMPILER_INT32_RANGE, minimum: 0, maximum: 255 }],
+					["writtenAwaited", { ...COMPILER_INT32_RANGE, minimum: 0, maximum: 255 }],
+					["readWidenedWritten", COMPILER_UINT32_RANGE],
+					[
 						"readBeforeRecordGetter",
 						{ ...COMPILER_INT32_RANGE, minimum: 0, maximum: 255 },
 					],

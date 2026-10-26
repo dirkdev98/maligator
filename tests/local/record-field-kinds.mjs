@@ -249,6 +249,43 @@ function readSiblingWritten(value, callback) {
 	callback();
 	return record.small % 10;
 }
+function readCompatibleWritten(value, flag, callback) {
+	const record = makeBoundedRecord(value, observe);
+	if (flag) record.small = value & 15;
+	callback();
+	return record.small % 10;
+}
+function readWidenedWritten(value, callback) {
+	const record = new makeBoundedRecord(...[value, observe]);
+	record.small = value >>> 0;
+	callback();
+	return record.small;
+}
+function readNegativeZeroWritten(value, flag, callback) {
+	const record = makeBoundedRecord(value, observe);
+	if (flag) record.small = -0;
+	callback();
+	return record.small;
+}
+function readWrittenLoop(value, steps, callback) {
+	const record = makeBoundedRecord(value, observe);
+	for (let step = 0; step < steps; step++) record.small = (record.small + 1) & 255;
+	callback();
+	return record.small % 10;
+}
+function readCoerciveWritten(value, callback) {
+	const record = makeBoundedRecord(0, observe);
+	record.small = +value;
+	callback();
+	return record.small + 1;
+}
+function readWrittenString(value, callback) {
+	const record = makeBoundedRecord(0, observe);
+	record.small = value + ":";
+	const saved = record.small;
+	callback();
+	return saved + ":";
+}
 function readBeforeRecordGetter(value) {
 	const record = makeBoundedRecord(value, observe);
 	const small = record.small;
@@ -285,6 +322,20 @@ function* boundedSuspended(value, callback) {
 	callback("bounded resume");
 	return record.signed % 10;
 }
+function* writtenSuspended(value, flag, callback) {
+	const record = makeBoundedRecord(value, observe);
+	if (flag) record.small = value & 15;
+	yield record.label;
+	callback();
+	return record.small % 10;
+}
+async function writtenAwaited(value, flag, callback) {
+	const record = makeBoundedRecord(value, observe);
+	if (flag) record.small = value & 15;
+	await 0;
+	callback();
+	return record.small % 10;
+}
 function* pointSuspended(value, callback) {
 	const record = makeBoundedRecord(value, observe);
 	const small = record.small;
@@ -315,11 +366,19 @@ Object.assign(globalThis, {
 	readBeforeFieldWrite,
 	readStringBeforeEscape,
 	readSiblingWritten,
+	readCompatibleWritten,
+	readWidenedWritten,
+	readNegativeZeroWritten,
+	readWrittenLoop,
+	readCoerciveWritten,
+	readWrittenString,
 	readBeforeRecordGetter,
 	readAfterInheritedWrite,
 	readEscapedLoop,
 	readFreshLoop,
 	boundedSuspended,
+	writtenSuspended,
+	writtenAwaited,
 	pointSuspended,
 	boundedAwaited,
 	boundedAsyncSuspended,
@@ -343,6 +402,24 @@ for (const value of [
 	check(readBoundedUnsigned(value, observe), value >>> 0, "unsigned field value");
 	for (const flag of [false, true]) {
 		check(
+			readCompatibleWritten(value, flag, observe),
+			(value & (flag ? 15 : 255)) % 10,
+			"compatible field write bounds",
+		);
+		check(
+			readNegativeZeroWritten(value, flag, observe),
+			flag ? -0 : value & 255,
+			"negative zero widens stored field",
+		);
+		const written = writtenSuspended(value, flag, observe);
+		check(written.next().value, "bounded", "written field suspension");
+		observe("written between");
+		check(
+			written.next().value,
+			(value & (flag ? 15 : 255)) % 10,
+			"written field after suspension",
+		);
+		check(
 			readConditionalRecord(value, flag, (record) => {
 				record.small = "changed";
 				record.label = null;
@@ -361,6 +438,12 @@ for (const value of [
 			"loop object return joins entry and backedge fields",
 		);
 	}
+	check(readWidenedWritten(value, observe), value >>> 0, "widened field bounds");
+	check(
+		readWrittenLoop(value, 2, observe),
+		(((value & 255) + 2) & 255) % 10,
+		"loop field writes",
+	);
 	check(
 		readBeforeFieldWrite(value, (record) => {
 			observe("field write");
@@ -398,6 +481,41 @@ for (const value of [
 		"initial field interval survives suspension and mutation",
 	);
 }
+let writtenCoercions = 0;
+check(
+	readCoerciveWritten(
+		{
+			valueOf() {
+				writtenCoercions++;
+				observe("written coercion");
+				return 7;
+			},
+		},
+		observe,
+	),
+	8,
+	"coercive field write value",
+);
+check(writtenCoercions, 1, "single coercive field write");
+const writtenFailure = {};
+let writtenCallback = false;
+try {
+	readCoerciveWritten(
+		{
+			valueOf() {
+				throw writtenFailure;
+			},
+		},
+		() => {
+			writtenCallback = true;
+		},
+	);
+	throw new Error("missing field conversion failure");
+} catch (error) {
+	check(error, writtenFailure, "field conversion throw identity");
+}
+check(writtenCallback, false, "throwing field conversion precedes callback");
+check(readWrittenString("retained", observe), "retained::", "stored String survives GC");
 const keptPointRecords = [];
 check(
 	readEscapedLoop(3, (record) => {
@@ -512,6 +630,9 @@ const asyncSteps = asyncIterator
 		check(result.value, true, "async generator field observation");
 	});
 Promise.all([
+	writtenAwaited(255, true, observe).then((value) =>
+		check(value, 5, "written awaited field"),
+	),
 	boundedAwaited(-1, observe).then((value) => check(value, 5, "bounded awaited field")),
 	boundedAsyncSteps,
 	readAwaited(3, observe).then((result) => {

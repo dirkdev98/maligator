@@ -16,6 +16,21 @@ export interface CoreRecordFieldKind {
 // Null is the empty normal-result set; undefined includes non-records and escaped objects.
 export type CoreRecordValueKind = ReadonlyArray<CoreRecordFieldKind> | null | undefined;
 
+function joinFieldIntegerRanges(
+	left: CompilerIntegerRange | null | undefined,
+	right: CompilerIntegerRange | null | undefined,
+): CompilerIntegerRange | null | undefined {
+	if (left === undefined || right === undefined) return undefined;
+	if (left === null) return right;
+	if (right === null) return left;
+	return Object.freeze({
+		minimum: Math.min(left.minimum, right.minimum),
+		maximum: Math.max(left.maximum, right.maximum),
+		exactSafeIntegers: true,
+		excludesNegativeZero: true,
+	});
+}
+
 export function sameCoreRecordValueKind(
 	left: CoreRecordValueKind,
 	right: CoreRecordValueKind,
@@ -62,21 +77,10 @@ export function joinCoreRecordValueKinds(
 			continue;
 		}
 		const mask = field.mask | other.mask;
-		const a = field.integerRange,
-			b = other.integerRange;
 		const integerRange =
-			mask !== COMPILER_VALUE_KIND_NUMBER || a === undefined || b === undefined
+			mask !== COMPILER_VALUE_KIND_NUMBER
 				? undefined
-				: a === null
-					? b
-					: b === null
-						? a
-						: Object.freeze({
-								minimum: Math.min(a.minimum, b.minimum),
-								maximum: Math.max(a.maximum, b.maximum),
-								exactSafeIntegers: true as const,
-								excludesNegativeZero: true as const,
-							});
+				: joinFieldIntegerRanges(field.integerRange, other.integerRange);
 		fields.push(
 			Object.freeze({
 				key: field.key,
@@ -305,11 +309,15 @@ export function coreReturnedRecordKinds(
 export interface CoreRecordFieldRead {
 	readonly producer: CoreInstructionId;
 	readonly key: number;
-	/** Earlier reads and sibling writes must be own, so getters and setters cannot escape the record. */
+	/** Preceding accesses must be own, so getters and setters cannot expose the record. */
 	readonly requiredKeys: ReadonlyArray<number>;
+	readonly writes?: ReadonlyArray<{
+		readonly instruction: CoreInstructionId;
+		readonly value: CoreValueId;
+	}>;
 }
 
-export function coreRecordFieldReadKind(
+export function coreRecordFieldInitialKind(
 	read: CoreRecordFieldRead,
 	record: CoreRecordValueKind,
 	top: number,
@@ -326,11 +334,20 @@ export function coreRecordFieldReadKind(
 export function coreRecordFieldReadIntegerRange(
 	read: CoreRecordFieldRead,
 	record: CoreRecordValueKind,
+	range: (
+		value: CoreValueId,
+		consumer: CoreInstructionId,
+	) => CompilerIntegerRange | null | undefined,
 ): CompilerIntegerRange | null | undefined {
 	if (record === null) return null;
-	if (coreRecordFieldReadKind(read, record, -1) !== COMPILER_VALUE_KIND_NUMBER)
+	if (coreRecordFieldInitialKind(read, record, -1) !== COMPILER_VALUE_KIND_NUMBER)
 		return undefined;
-	return record!.find((field) => field.key === read.key)!.integerRange;
+	let result = record!.find((field) => field.key === read.key)!.integerRange;
+	for (const write of read.writes ?? []) {
+		result = joinFieldIntegerRanges(result, range(write.value, write.instruction));
+		if (result === undefined) break;
+	}
+	return result;
 }
 
 interface CoreRecordFieldReadIndex {
@@ -342,7 +359,7 @@ interface CoreRecordFieldReadIndex {
 const recordFieldReadIndices = new WeakMap<CoreFunctionStore, CoreRecordFieldReadIndex>();
 const MAXIMUM_RECORD_READ_PREFIX_WORK = 256;
 
-export function coreInitialRecordFieldReads(
+export function coreRecordFieldReads(
 	fn: CoreFunctionStore,
 	control: () => CoreControlFlow,
 ): ReadonlyMap<CoreInstructionId, CoreRecordFieldRead> {
@@ -472,6 +489,7 @@ export function coreInitialRecordFieldReads(
 			const block = fn.instructionBlock(instruction);
 			if (!cfg.reachable.has(block) || !cfg.dominates(producerBlock, block)) continue;
 			const requiredKeys = new Set([key]);
+			const reachingWrites = new Set<CoreInstructionId>();
 			const pending = [{ block, limit: position(instruction) }];
 			const fullBlocks = new Set<CoreBlockId>();
 			let remaining = MAXIMUM_RECORD_READ_PREFIX_WORK;
@@ -487,12 +505,13 @@ export function coreInitialRecordFieldReads(
 					const at = position(event);
 					if (at >= limit) continue;
 					if (block === producerBlock && at <= producerPosition) break;
-					if (--remaining < 0 || barriers.has(event) || writes.get(event) === key) {
+					if (--remaining < 0 || barriers.has(event)) {
 						valid = false;
 						break;
 					}
 					const priorKey = reads.get(event) ?? writes.get(event);
 					if (priorKey !== undefined) requiredKeys.add(priorKey);
+					if (writes.get(event) === key) reachingWrites.add(event);
 				}
 				if (!valid || block === producerBlock) continue;
 				for (const edge of cfg.predecessors[block] ?? []) {
@@ -501,15 +520,31 @@ export function coreInitialRecordFieldReads(
 					pending.push({ block: edge.from, limit: Infinity });
 				}
 			}
-			if (valid)
-				result.set(
-					instruction,
-					Object.freeze({
-						producer,
-						key,
-						requiredKeys: Object.freeze([...requiredKeys]),
-					}),
-				);
+			if (!valid) continue;
+			const fieldWrites =
+				reachingWrites.size === 0
+					? undefined
+					: Object.freeze(
+							[...reachingWrites].map((instruction) => {
+								const valueIndex =
+									fn.instructionOpcodeName(instruction) === "storePropertyStatic" ? 1 : 2;
+								return Object.freeze({
+									instruction,
+									value: fn.kernel.operandAt(
+										fn.kernel.instructionOperandStart(instruction) + valueIndex,
+									),
+								});
+							}),
+						);
+			result.set(
+				instruction,
+				Object.freeze({
+					producer,
+					key,
+					requiredKeys: Object.freeze([...requiredKeys]),
+					...(fieldWrites === undefined ? {} : { writes: fieldWrites }),
+				}),
+			);
 		}
 	}
 	if (featureVersion !== undefined)

@@ -170,8 +170,12 @@ The independent target boundary and current storage contract are recorded in
       omit the producer root when neither a caller/callee observer nor backend
       fallback needs materialization. The scanner workload's whole C is now 111,548
       bytes, down from 115,075 before returned-field
-      feedback and 111,795 before typed fields. Facts after compatible writes,
-      parameter-relative call effects and coroutine record transport remain. Own-field observations
+      feedback and 111,795 before typed fields. Reads after own writes now join
+      the initial fields with every preceding writer in the kind and range worklists,
+      including loops and suspension. Incompatible kinds and negative zero widen
+      independently; escapes and possible accessors retain the fallback.
+      Producer-side writes before returning a record, parameter-relative call effects,
+      and coroutine record transport remain. Own-field observations
       also carry initial integer bounds through the normal-result worklist, including
       finite targets, recursive forwarding and suspension. Growing fields widen
       independently of bounded siblings. The scanner still calls

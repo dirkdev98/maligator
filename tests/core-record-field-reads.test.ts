@@ -7,7 +7,7 @@ import { CORE_RECORD_FIELD_KIND_ATTRIBUTE } from "../src/compiler/core/core-inte
 import { buildCoreControlFlow } from "../src/compiler/core/core-ir-control-flow.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import { CORE_PROGRAM_VALUE_KIND_ANALYSIS } from "../src/compiler/core/core-program-flow-analysis.ts";
-import { coreInitialRecordFieldReads } from "../src/compiler/core/core-record-value-kinds.ts";
+import { coreRecordFieldReads } from "../src/compiler/core/core-record-value-kinds.ts";
 import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
 import { parseModule } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
@@ -59,7 +59,7 @@ describe("fresh record field observations", () => {
 			"function make(){return {n:1};}function read(){const r=make();return r.n+r.n;}globalThis.result=read();",
 		);
 		let requested = false;
-		const reads = coreInitialRecordFieldReads(out.named("read"), () => {
+		const reads = coreRecordFieldReads(out.named("read"), () => {
 			requested = true;
 			throw new Error("Unexpected CFG demand");
 		});
@@ -94,7 +94,6 @@ describe("fresh record field observations", () => {
 	});
 	it.each([
 		"value.missing=1;return value.n;",
-		"if(input)value.n='changed';return value.n;",
 		"for(let i=0;i<2;i++){const n=value.n;observe(value);if(i)return n;}return 0;",
 	])(
 		"keeps possible setters and backedge mutations outside initial facts (%s)",
@@ -102,6 +101,15 @@ describe("fresh record field observations", () => {
 			expect(readKind("return {n:1,tag:0};", reader)).toBe(COMPILER_VALUE_KIND_TOP);
 		},
 	);
+	it.each([
+		"if(input)value.n='changed';return value.n;",
+		'value.n="changed";return value.n;',
+		'const alias=value;alias.n="changed";return value.n;',
+	])("joins compatible own writes without inventing other kinds (%s)", (reader) => {
+		expect(readKind("return {n:1};", reader)).toBe(
+			COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_STRING,
+		);
+	});
 
 	it.each([
 		"make(...[input])",
@@ -115,8 +123,6 @@ describe("fresh record field observations", () => {
 	});
 
 	it.each([
-		'value.n="changed";return value.n;',
-		'const alias=value;alias.n="changed";return value.n;',
 		"observe(value);return value.n;",
 		"globalThis.escaped=value;return value.n;",
 		"value.missing;return value.n;",
@@ -233,10 +239,23 @@ describe("fresh record field observations", () => {
 		);
 		const fn = out.named("read");
 		const [read] = [
-			...coreInitialRecordFieldReads(fn, () =>
-				buildCoreControlFlow(out.program, fn.id),
-			).keys(),
+			...coreRecordFieldReads(fn, () => buildCoreControlFlow(out.program, fn.id)).keys(),
 		];
+		expect(read).toBeDefined();
+		const value = fn.kernel.resultAt(fn.kernel.instructionResultStart(read!));
+		expect(() => out.read().values(fn.id).latticeMask(value)).toThrow(
+			"Unrequested program value kind",
+		);
+	});
+
+	it("keeps unused written fields of opaque call results out of propagation demands", () => {
+		const out = flow(
+			`function read(){const value=globalThis.make();value.n=2;value.n;return 1;}globalThis.result=read();`,
+		);
+		const fn = out.named("read");
+		const [read] = coreRecordFieldReads(fn, () =>
+			buildCoreControlFlow(out.program, fn.id),
+		).keys();
 		expect(read).toBeDefined();
 		const value = fn.kernel.resultAt(fn.kernel.instructionResultStart(read!));
 		expect(() => out.read().values(fn.id).latticeMask(value)).toThrow(
@@ -249,7 +268,7 @@ describe("fresh record field observations", () => {
 			`function make(){return {n:1};}function read(){const value=make();return value.n;}globalThis.result=read();`,
 		);
 		const fn = out.named("read");
-		const before = coreInitialRecordFieldReads(fn, () =>
+		const before = coreRecordFieldReads(fn, () =>
 			buildCoreControlFlow(out.program, fn.id),
 		);
 		expect(before.size).toBe(1);
@@ -264,25 +283,21 @@ describe("fresh record field observations", () => {
 			{ attributes: { operator: "+" } },
 		);
 		expect(
-			coreInitialRecordFieldReads(fn, () => buildCoreControlFlow(out.program, fn.id))
-				.size,
+			coreRecordFieldReads(fn, () => buildCoreControlFlow(out.program, fn.id)).size,
 		).toBe(0);
 		editor.commit();
 		expect(
-			coreInitialRecordFieldReads(fn, () => buildCoreControlFlow(out.program, fn.id))
-				.size,
+			coreRecordFieldReads(fn, () => buildCoreControlFlow(out.program, fn.id)).size,
 		).toBe(0);
 		expect(before.size).toBe(1);
 		const restore = CoreEditor.open(out.program, fn.id);
 		restore.removeInstruction(coercion.instruction);
 		expect(
-			coreInitialRecordFieldReads(fn, () => buildCoreControlFlow(out.program, fn.id))
-				.size,
+			coreRecordFieldReads(fn, () => buildCoreControlFlow(out.program, fn.id)).size,
 		).toBe(1);
 		restore.commit();
 		expect(
-			coreInitialRecordFieldReads(fn, () => buildCoreControlFlow(out.program, fn.id))
-				.size,
+			coreRecordFieldReads(fn, () => buildCoreControlFlow(out.program, fn.id)).size,
 		).toBe(1);
 	});
 

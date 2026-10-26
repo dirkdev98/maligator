@@ -80,7 +80,7 @@ import type {
 import type { CoreRecordValueKind } from "./core-record-value-kinds.ts";
 import {
 	coreRecordReturnKindInputs,
-	coreInitialRecordFieldReads,
+	coreRecordFieldReads,
 	coreReturnedRecordKinds,
 } from "./core-record-value-kinds.ts";
 import { coreExactArrayFromCallResult } from "./core-static-values.ts";
@@ -127,6 +127,10 @@ export interface CoreValueKindInputs {
 		instruction: CoreInstructionId,
 		result: CoreValueId,
 	) => CompilerValueKindMask | undefined;
+	readonly operationResultAlternatives?: (
+		instruction: CoreInstructionId,
+		result: CoreValueId,
+	) => ReadonlyArray<CoreValueId> | undefined;
 	/** What a keyed read returns when its key is a number, if the receiver's elements are known. */
 	readonly elementLoadMask?: (
 		instruction: CoreInstructionId,
@@ -301,6 +305,7 @@ const KIND_TRANSFER_ADD = 5;
 const KIND_TRANSFER_ELEMENT = 6;
 const KIND_TRANSFER_TYPED_ELEMENT = 7;
 const KIND_TRANSFER_PROPERTY_KEY = 8;
+const KIND_TRANSFER_NORMAL_RESULT_JOIN = 9;
 
 // A non-number key on an Array whose holders are all known reads its length, a
 // prototype member or nothing, since no one gave it other named properties.
@@ -315,7 +320,9 @@ function transferredKind(
 	count: number,
 	mask: (value: CoreValueId) => number,
 ): number {
-	if (kind === KIND_TRANSFER_JOIN) {
+	// Stored alternatives cannot execute before the record producer completes.
+	if (kind === KIND_TRANSFER_NORMAL_RESULT_JOIN && constant === 0) return 0;
+	if (kind === KIND_TRANSFER_JOIN || kind === KIND_TRANSFER_NORMAL_RESULT_JOIN) {
 		for (let index = 0; index < count; index++)
 			constant |= mask(inputs[start + index]! as CoreValueId);
 		return constant;
@@ -758,6 +765,18 @@ function addOperationTransfer(
 	}
 	const callMask = callResultKind(fn, instruction) ?? recordFieldKind(fn, instruction);
 	const contextual = inputs?.operationResultMask?.(instruction, output);
+	const alternatives = inputs?.operationResultAlternatives?.(instruction, output);
+	if (contextual !== undefined && alternatives !== undefined) {
+		// Recompute the complete flow before publishing a new normal-result bound.
+		addKindTransfer(
+			buffer,
+			KIND_TRANSFER_NORMAL_RESULT_JOIN,
+			output,
+			contextual,
+			alternatives,
+		);
+		return;
+	}
 	const supplied =
 		callMask === undefined
 			? contextual
@@ -1445,7 +1464,7 @@ export const CORE_PROGRAM_FLOW_VALUE_KIND_SEMANTICS: CoreProgramFlowValueKindSem
 			return analysis.latticeMask(value);
 		},
 		recordReads(fn: CoreFunctionStore, control: () => CoreControlFlow) {
-			return coreInitialRecordFieldReads(fn, control);
+			return coreRecordFieldReads(fn, control);
 		},
 		returnRecord(
 			_program: CoreProgram,
@@ -1504,7 +1523,7 @@ export function coreValueKindDemand(
 		inputCounts: [],
 		inputs: [],
 	};
-	let recordReads: ReturnType<typeof coreInitialRecordFieldReads> | undefined;
+	let recordReads: ReturnType<typeof coreRecordFieldReads> | undefined;
 	const parameters = new Set<CoreValueId>();
 	for (let index = 0; index < fn.parameterCount; index++)
 		parameters.add(fn.kernel.functionParameter(index));
@@ -1558,9 +1577,8 @@ export function coreValueKindDemand(
 					const producer =
 						fn.instructionOpcodeName(instruction) === "loadPropertyStatic" ||
 						fn.instructionOpcodeName(instruction) === "loadProperty"
-							? (recordReads ??= coreInitialRecordFieldReads(fn, control)).get(
-									instruction,
-								)?.producer
+							? (recordReads ??= coreRecordFieldReads(fn, control)).get(instruction)
+									?.producer
 							: undefined;
 					const site = targets.site(fn.id, producer ?? instruction);
 					if (site === undefined) return undefined;

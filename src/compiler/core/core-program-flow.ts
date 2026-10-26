@@ -14,7 +14,7 @@ import type { CoreOptimizationReportBuilder } from "./core-optimization-report.t
 import {
 	sameCoreRecordValueKind,
 	joinCoreRecordValueKinds,
-	coreRecordFieldReadKind,
+	coreRecordFieldInitialKind,
 } from "./core-record-value-kinds.ts";
 import type {
 	CoreRecordValueKind,
@@ -151,6 +151,10 @@ export interface CoreProgramFlowValueKindInputs {
 		instruction: CoreInstructionId,
 		result: CoreValueId,
 	) => number | undefined;
+	readonly operationResultAlternatives?: (
+		instruction: CoreInstructionId,
+		result: CoreValueId,
+	) => ReadonlyArray<CoreValueId> | undefined;
 	readonly elementLoadMask?: (instruction: CoreInstructionId) => number | undefined;
 }
 
@@ -2221,6 +2225,10 @@ export class CoreProgramFlowEngine {
 			CoreFunctionId,
 			ReadonlyMap<CoreInstructionId, CoreRecordFieldRead>
 		>();
+		const recordAlternativeIndices = new Map<
+			CoreFunctionId,
+			ReadonlyMap<CoreInstructionId, ReadonlyArray<CoreValueId>>
+		>();
 		let aggregateRecomputations = 0;
 		let exactReverseCallerVisits = 0;
 		let wildcardReverseCallerVisits = 0;
@@ -2375,7 +2383,29 @@ export class CoreProgramFlowEngine {
 					if (recordReads === undefined) {
 						recordReads = semantics.recordReads(fn, () => controlFlow(functionId));
 						recordReadIndices.set(functionId, recordReads);
+						let alternatives:
+							| Map<CoreInstructionId, ReadonlyArray<CoreValueId>>
+							| undefined;
+						for (const [instruction, read] of recordReads) {
+							if (read.writes === undefined) continue;
+							const producer = byInstruction.get(read.producer);
+							if (
+								producer === undefined ||
+								producer.targets.opaque ||
+								producer.targets.anyScript ||
+								producer.targets.functions.length === 0
+							)
+								continue;
+							alternatives ??= new Map();
+							alternatives.set(
+								instruction,
+								read.writes.map(({ value }) => value),
+							);
+						}
+						if (alternatives !== undefined)
+							recordAlternativeIndices.set(functionId, alternatives);
 					}
+					const alternatives = recordAlternativeIndices.get(functionId);
 					const returnedRecords = new Map<CoreInstructionId, CoreRecordValueKind>();
 					const recordResult = (instruction: CoreInstructionId): CoreRecordValueKind => {
 						if (returnedRecords.has(instruction)) return returnedRecords.get(instruction);
@@ -2403,6 +2433,10 @@ export class CoreProgramFlowEngine {
 					let demandedValues = demands.get(functionId);
 					if (demandedValues === undefined) {
 						const roots = new Set(semantics.observationValues(this.#program, fn));
+						for (const instruction of alternatives?.keys() ?? [])
+							roots.add(
+								fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)),
+							);
 						for (const block of cfg.reachable) {
 							const terminator = fn.blockTerminator(block);
 							if (fn.instructionKind(terminator) === "return")
@@ -2431,12 +2465,16 @@ export class CoreProgramFlowEngine {
 						demandedValues,
 						parameterMasks: summary.parameterKinds,
 						receiverMask: summary.receiverKind,
+						operationResultAlternatives:
+							alternatives === undefined
+								? undefined
+								: (instruction) => alternatives.get(instruction),
 						operationResultMask(instruction) {
 							const site = byInstruction.get(instruction);
 							if (site === undefined) {
 								const read = recordReads.get(instruction);
 								if (read === undefined) return undefined;
-								return coreRecordFieldReadKind(
+								return coreRecordFieldInitialKind(
 									read,
 									recordResult(read.producer),
 									semantics.top,

@@ -11,6 +11,7 @@ import {
 	COMPILER_VALUE_KIND_STRING,
 	COMPILER_VALUE_KIND_BOOLEAN,
 	COMPILER_VALUE_KIND_NULLISH,
+	COMPILER_VALUE_KIND_TOP,
 } from "../src/compiler/shared/compiler-value-kinds.ts";
 import { coreFunctionNamed, coreOperations } from "./helpers/core-inspection.ts";
 import { programAnalysisContext } from "./helpers/core-program-analysis.ts";
@@ -40,6 +41,73 @@ function records(source: string) {
 }
 
 describe("normal-return record field kinds", () => {
+	it.each([
+		["record.value=2;", COMPILER_VALUE_KIND_NUMBER],
+		["record.value=+replacement;", COMPILER_VALUE_KIND_NUMBER],
+		[
+			"if(flag)record.value=2;else record.value='text';",
+			COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_STRING,
+		],
+		[
+			"record['value']=!!replacement;",
+			COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_BOOLEAN,
+		],
+		["while(flag-- > 0)record.value=record.value+1;", COMPILER_VALUE_KIND_NUMBER],
+		["record.value=globalThis.input;", COMPILER_VALUE_KIND_TOP],
+		["record.missing=2;record.value=3;", COMPILER_VALUE_KIND_TOP],
+		["globalThis.observe(record);record.value=2;", COMPILER_VALUE_KIND_TOP],
+		["record.value=globalThis.replace(record);", COMPILER_VALUE_KIND_TOP],
+	] as const)(
+		"joins reaching field writes and retains barriers for %s",
+		(body, expected) => {
+			const out = records(
+				`function make(){return {value:1};}function read(flag,replacement){const record=make();${body}return record.value;}globalThis.result=read(globalThis.flag,globalThis.input);`,
+			);
+			expect(out.read().summary(out.named("read").id).returnKind).toBe(expected);
+		},
+	);
+
+	it("does not revive a record whose initial field has no normal completion", () => {
+		const out = records(
+			`function never(){return never();}function make(){return {value:never()};}function read(){const record=make();record.value=2;return record.value;}globalThis.result=read();`,
+		);
+		expect(out.read().summary(out.named("read").id).returnKind).toBe(0);
+	});
+
+	it("propagates changed field writers through cached callers and retains prior snapshots", () => {
+		const out = records(
+			`function make(){return {value:1};}function read(flag){const record=make();if(flag)record.value=2;return record.value;}function forward(flag){return read(flag);}globalThis.result=forward(globalThis.flag);globalThis.marker="changed";`,
+		);
+		const before = out.read();
+		const reader = out.named("read");
+		const writer = coreOperations(reader).find(
+			({ opcode, attributes }) => opcode === "createNumber" && attributes.value === 2,
+		)!;
+		const stringIndex = out.program.stringConstants.findIndex(
+			(_, index) => out.program.stringConstantText(index) === "changed",
+		);
+		for (const widened of [true, false]) {
+			const editor = CoreEditor.open(out.program, reader.id);
+			editor.replaceInstruction(
+				writer.id,
+				widened ? "createString" : "createNumber",
+				[],
+				{
+					attributes: widened ? { stringIndex } : { value: 2 },
+				},
+			);
+			editor.commit();
+			const after = out.read();
+			for (const name of ["read", "forward"])
+				expect(after.summary(out.named(name).id).returnKind).toBe(
+					widened
+						? COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_STRING
+						: COMPILER_VALUE_KIND_NUMBER,
+				);
+		}
+		expect(before.summary(reader.id).returnKind).toBe(COMPILER_VALUE_KIND_NUMBER);
+	});
+
 	it("keeps each initial own field independently of coercion effects", () => {
 		const out = records(
 			`function make(value, flag){return {n:+value, s:"text", b:true, u:flag?null:undefined};}globalThis.result=make(globalThis.input,globalThis.flag);`,

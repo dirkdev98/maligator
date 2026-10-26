@@ -108,8 +108,8 @@ import {
 } from "./core-read-accessor-expansion.ts";
 import type { CoreReadAccessorWork } from "./core-read-accessor-expansion.ts";
 import {
-	coreInitialRecordFieldReads,
-	coreRecordFieldReadKind,
+	coreRecordFieldReads,
+	coreRecordFieldInitialKind,
 	coreRecordFieldReadIntegerRange,
 	coreReturnedRecordKinds,
 	sameCoreRecordValueKind,
@@ -4394,7 +4394,7 @@ function discoverProgramNormalResultFacts(
 	const readsFor = (functionId: CoreFunctionId) => {
 		let reads = recordReads.get(functionId);
 		if (reads === undefined) {
-			reads = coreInitialRecordFieldReads(program.function(functionId), () =>
+			reads = coreRecordFieldReads(program.function(functionId), () =>
 				analyses
 					.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
 						scope: "function",
@@ -4550,6 +4550,7 @@ function discoverProgramNormalResultFacts(
 				: coreRecordFieldReadIntegerRange(
 						read,
 						recordResult(flow.targets.site(functionId, read.producer)),
+						(value, consumer) => query(value, fn.instructionBlock(consumer)),
 					);
 		});
 		return query;
@@ -4694,6 +4695,7 @@ function discoverProgramNormalResultFacts(
 	for (const functionId of flow.reachability.liveFunctions) {
 		const fn = program.function(functionId);
 		const records = new Map<CoreInstructionId, CoreRecordValueKind>();
+		let query: CoreIntegerRangeQuery | undefined;
 		for (const [instruction, read] of readsFor(functionId)) {
 			const producer = flow.targets.site(functionId, read.producer);
 			if (
@@ -4705,9 +4707,21 @@ function discoverProgramNormalResultFacts(
 				continue;
 			if (!records.has(read.producer)) records.set(read.producer, recordResult(producer));
 			const record = records.get(read.producer);
-			const mask = coreRecordFieldReadKind(read, record, COMPILER_VALUE_KIND_TOP);
+			const mask =
+				read.writes === undefined
+					? coreRecordFieldInitialKind(read, record, COMPILER_VALUE_KIND_TOP)
+					: (kinds ??= readValueKinds())
+							.values(functionId)
+							.latticeMask(
+								fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)),
+							);
 			if (!compilerValueKindMaskIsValid(mask)) continue;
-			const integerRange = coreRecordFieldReadIntegerRange(read, record) ?? undefined;
+			const integerRange =
+				mask !== COMPILER_VALUE_KIND_NUMBER
+					? undefined
+					: (coreRecordFieldReadIntegerRange(read, record, (value, consumer) =>
+							(query ??= queryFunction(functionId))(value, fn.instructionBlock(consumer)),
+						) ?? undefined);
 			const attributes = fn.instructionAttributes(instruction);
 			const currentRange = attributes[CORE_NORMAL_RESULT_INTEGER_RANGE_ATTRIBUTE];
 			if (
