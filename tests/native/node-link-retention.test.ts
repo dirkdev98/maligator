@@ -1,43 +1,10 @@
-import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { createInterface } from "node:readline";
 import { beforeAll, describe, expect, it } from "vitest";
 import { HOST_MODULES } from "../../src/compiler/frontend/host-modules.ts";
 import { buildNativeBinary, HOST_MAIN } from "../../src/test-harness.ts";
-
-async function retainedHostInstallers(binary: string): Promise<Array<string>> {
-	const child = spawn("nm", ["-g", binary], { stdio: ["ignore", "pipe", "pipe"] });
-	const symbols: Array<string> = [];
-	let stderr = "";
-	child.stderr.setEncoding("utf-8");
-	child.stderr.on("data", (chunk: string) => {
-		stderr = (stderr + chunk).slice(-8192);
-	});
-	const completion = new Promise<void>((resolve, reject) => {
-		child.on("error", reject);
-		child.on("close", (code, signal) => {
-			if (code === 0) resolve();
-			else reject(new Error(`nm failed (${signal ?? code}): ${stderr}`));
-		});
-	});
-	await Promise.all([
-		completion,
-		(async () => {
-			for await (const line of createInterface({
-				input: child.stdout,
-				crlfDelay: Infinity,
-			})) {
-				if (!/\sT\s/.test(line)) continue;
-				const raw = line.trim().split(/\s+/).at(-1) ?? "";
-				const symbol = raw.startsWith("_") ? raw.slice(1) : raw;
-				if (symbol.startsWith("mal_host_install_")) symbols.push(symbol);
-			}
-		})(),
-	]);
-	return symbols.sort();
-}
+import { matchingNativeSymbols } from "../helpers/native-symbols.ts";
 
 // The host main always links the application API and the worker runtime it shuts down,
 // so their installers' objects are present whatever the program imports.
@@ -56,7 +23,7 @@ describe("node host installer link retention", () => {
 	async function installers(fixture: string, name: string): Promise<Array<string>> {
 		const outDir = mkdtempSync(path.join(os.tmpdir(), "mal-node-link-retention-"));
 		try {
-			return await retainedHostInstallers(
+			return await matchingNativeSymbols(
 				buildNativeBinary({
 					fixture,
 					name,
@@ -64,6 +31,7 @@ describe("node host installer link retention", () => {
 					outDir,
 					nodeEnabled: true,
 				}),
+				(symbol, type) => type === "T" && symbol.startsWith("mal_host_install_"),
 			);
 		} finally {
 			rmSync(outDir, { recursive: true, force: true });
