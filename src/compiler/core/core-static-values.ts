@@ -49,7 +49,6 @@ const CORE_STATIC_VALUE_FUNCTION_DEPENDENCIES = [
 	"cfg",
 	"exceptionFlow",
 	"memoryEffects",
-	"facts",
 ] as const satisfies ReadonlyArray<CoreChangeDomain>;
 
 function coreStringConstantIs(

@@ -1,20 +1,103 @@
 import { describe, expect, it } from "vitest";
+import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import { buildCoreControlFlow } from "../src/compiler/core/core-ir-control-flow.ts";
 import { analyzeCoreMemoryVersions } from "../src/compiler/core/core-ir-memory.ts";
 import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
-import { coreInstructionId } from "../src/compiler/core/core-ir.ts";
+import { CORE_NO_EFFECTS, coreInstructionId } from "../src/compiler/core/core-ir.ts";
+import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import { coreStaticConstantOperation } from "../src/compiler/core/core-static-value-selection.ts";
-import { CoreStaticValueAnalysis } from "../src/compiler/core/core-static-values.ts";
+import {
+	CORE_STATIC_VALUE_ANALYSIS,
+	CoreStaticValueAnalysis,
+} from "../src/compiler/core/core-static-values.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
+import { COMPILER_VALUE_KIND_NUMBER } from "../src/compiler/shared/compiler-value-kinds.ts";
 import {
 	StaticDescriptionInterner,
 	staticNumberDescription,
 } from "../src/compiler/shared/static-values.ts";
 import { inspectCoreBlockParameters } from "./helpers/core-inspection.ts";
+import { programAnalysisContext } from "./helpers/core-program-analysis.ts";
 
 describe("static descriptions and allocation identities", () => {
+	it("retains object descriptions across metadata facts and invalidates them for effects and body edits", () => {
+		const program = new CoreProgram(coreOpcodeRegistry, { stringConstants: [[120]] });
+		const builder = new CoreFunctionBuilder(program, { parameterCount: 1 });
+		const entry = builder.createBlock([{}]);
+		const nil = builder.appendInstruction(entry, "createUndefined", [])[0]!;
+		builder.appendInstruction(entry, "call", [
+			builder.blockParameterValue(entry, 0),
+			nil,
+		]);
+		const call = builder.bodyInstructionIds(entry).at(-1)!;
+		const number = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 7 },
+		})[0]!;
+		const constant = builder.bodyInstructionIds(entry).at(-1)!;
+		const object = builder.appendInstruction(entry, "createObjectShaped", [number], {
+			attributes: { keyStringIndices: [0] },
+		})[0]!;
+		const value = builder.appendInstruction(entry, "loadPropertyStatic", [object], {
+			attributes: { stringIndex: 0 },
+		})[0]!;
+		const read = builder.bodyInstructionIds(entry).at(-1)!;
+		builder.setTerminator(entry, { kind: "return", value });
+		const fn = program.function(builder.finish(entry).function);
+		const manager = new CoreAnalysisManager(
+			program,
+			programAnalysisContext(false),
+			new CoreOptimizationReportBuilder(program),
+		);
+		const analysis = () =>
+			manager.get(CORE_STATIC_VALUE_ANALYSIS, { scope: "function", function: fn.id });
+		const before = analysis();
+		const property = before.queryPropertyAt(object, "x", read)!;
+		before.verifyProperty(property, read);
+		const metadata = CoreEditor.open(program, fn.id);
+		metadata.addFact({
+			kind: "unrelated-identity",
+			value: true,
+			claims: [{ kind: "identity", subject: number, identities: [7] }],
+			validity: { kind: "summary", digest: "seven" },
+			obligations: [],
+			origin: "test",
+		});
+		metadata.setNormalResultFacts(call, { mask: COMPILER_VALUE_KIND_NUMBER });
+		metadata.setNormalResultFacts(read, { mask: COMPILER_VALUE_KIND_NUMBER });
+		metadata.commit();
+		expect(analysis() === before).toBe(true);
+		before.verifyProperty(property, read);
+		const effects = CoreEditor.open(program, fn.id);
+		const proof = effects.addFact({
+			kind: "call-effects",
+			value: true,
+			claims: [{ kind: "effect", instruction: call, effects: CORE_NO_EFFECTS }],
+			validity: { kind: "summary", digest: "pure-call" },
+			obligations: [],
+			origin: "test",
+		});
+		effects.setInstructionEffectRefinement(call, { proof, effects: CORE_NO_EFFECTS });
+		effects.commit();
+		expect(() => before.verifyProperty(property, read)).toThrow("Stale static-value");
+		const afterEffects = analysis();
+		const updated = CoreEditor.open(program, fn.id);
+		updated.replaceInstruction(constant, "createNumber", [], {
+			attributes: { value: 9 },
+		});
+		updated.commit();
+		expect(() => afterEffects.query(object)).toThrow("Stale static-value");
+		const fresh = analysis();
+		const next = fresh.queryPropertyAt(object, "x", read)!;
+		fresh.verifyProperty(next, read);
+		if (next.member.kind !== "constant") throw new Error("Expected a constant field");
+		expect(fresh.descriptionConstant(next.member.description)).toEqual({
+			kind: "number",
+			value: 9,
+		});
+	});
+
 	it.each(
 		[[], [0], [0xd800], [0xdc00], [0xd83d, 0xde00]].map((codeUnits) => ({ codeUnits })),
 	)(
