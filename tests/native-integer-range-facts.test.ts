@@ -187,6 +187,39 @@ describe("native integer ranges", () => {
 		},
 	);
 
+	it.each(["Math.floor", "Math.ceil", "Math.trunc", "Math.round"])(
+		"reuses integral inputs for %s across entry and suspension paths",
+		(operation) => {
+			for (const locked of [false, true])
+				for (const declaration of [
+					"function",
+					"function*",
+					"async function",
+					"async function*",
+				]) {
+					const suspension =
+						(declaration.includes("*") ? "yield 0;" : "") +
+						(declaration.startsWith("async") ? "await 0;" : "");
+					const out = inspectStaticValueFunction(
+						`${declaration} compute(input,gate){const n=input|0;${suspension}gate(n);return ${operation}(n);}globalThis.compute=compute;`,
+						"compute",
+						{ locked },
+					);
+					expect(out.c.source).not.toMatch(/floor\(|ceil\(|trunc\(|mal_number_round\(/);
+				}
+		},
+	);
+	it.each(["Math.floor", "Math.ceil", "Math.trunc", "Math.round"])(
+		"keeps an unbounded input's %s kernel",
+		(operation) => {
+			const out = inspectStaticValueFunction(
+				`function compute(input,gate){const n=+input;gate(n);return ${operation}(n);}globalThis.compute=compute;`,
+				"compute",
+			);
+			expect(out.c.source).toMatch(/floor\(|ceil\(|trunc\(|mal_number_round\(/);
+		},
+	);
+
 	it("keeps negative-zero arithmetic outside the integer contract", () => {
 		const out = inspectStaticValueFunction(
 			"function compute(input,gate){const n=(input>>>0)*-1;gate(n);return Math.abs(n);}globalThis.compute=compute;",

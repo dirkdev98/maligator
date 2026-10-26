@@ -1,3 +1,6 @@
+function roundBounded(value) {
+	return Math.round(value | 0);
+}
 function round(x) {
 	return Math.round(x);
 }
@@ -69,16 +72,17 @@ for (const operation of [round, abs]) {
 		console.log(error.constructor.name);
 	}
 }
+console.log(show(roundBounded(-10.7)), show(roundBounded(4294967295)));
 const originalRound = Math.round;
 const originalMax = Math.max;
 Math.round = (x) => x * 10;
 Math.max = Math.min;
-console.log(show(round(1.25)), show(max(1, 2)));
+console.log(show(round(1.25)), show(max(1, 2)), show(roundBounded(7.5)));
 Math.round = Math.floor;
 console.log(show(round(-1.5)), show(round("7.5")));
 Math.round = originalRound;
 Math.max = originalMax;
-console.log(show(round(-1.5)), show(max(1, 2)));
+console.log(show(round(-1.5)), show(max(1, 2)), show(roundBounded(-7.5)));
 let total = 0;
 for (let index = 0; index < 1000; index++) total += round(index / 3) + max(index, 500.5);
 console.log(total);

@@ -240,7 +240,9 @@ and demanded by consumers rather than repeated for every value.
 
 Emission uses ordinary C casts only within int32 bounds, folds Number predicates
 for all safe-integer ranges, and consumes bounds in comparisons, truthiness and
-numeric Math operations. The proof survives boxing and suspension, while coercive
+numeric Math operations. Floor, ceil, trunc and round reuse a proved integer input
+inside the numeric kernel; a mutable callee retains its guard and ordinary miss.
+The proof survives boxing and suspension, while coercive
 operands and argument evaluation retain their own effects and fallback paths.
 Scalar expressions, fast entries, numeric regions and canonical bodies consume the
 same instruction facts.

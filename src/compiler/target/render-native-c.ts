@@ -807,6 +807,13 @@ function nativeMathUnaryExpr(
 	range?: CompilerIntegerRange,
 ): string | null {
 	if (range !== undefined) {
+		if (
+			operation === "Math.floor" ||
+			operation === "Math.ceil" ||
+			operation === "Math.trunc" ||
+			operation === "Math.round"
+		)
+			return argument;
 		if (operation === "Math.abs") {
 			if (range.minimum >= 0) return argument;
 			if (range.maximum < 0) return `-(${argument})`;

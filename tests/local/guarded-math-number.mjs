@@ -157,4 +157,45 @@ for (const seed of [throwing, Symbol(), 1n]) {
 		record(error === marker || error instanceof TypeError);
 	}
 }
+
+function integralRounding(input) {
+	const value = input | 0;
+	return [Math.floor(value), Math.ceil(value), Math.trunc(value), Math.round(value)].join(
+		":",
+	);
+}
+Object.assign(globalThis, { integralRounding });
+for (const value of [
+	-0,
+	0,
+	-1,
+	-1.5,
+	-10,
+	2147483647,
+	2147483648,
+	4294967295,
+	4294967296,
+	NaN,
+	Infinity,
+	-Infinity,
+])
+	record(globalThis.integralRounding(value));
+let roundingCoercions = 0;
+record(
+	globalThis.integralRounding({
+		valueOf() {
+			roundingCoercions++;
+			return -17.8;
+		},
+	}),
+);
+record(roundingCoercions);
+for (const value of [1n, Symbol("rounding")]) {
+	try {
+		globalThis.integralRounding(value);
+		record("missing rounding error");
+	} catch (error) {
+		record(error instanceof TypeError);
+	}
+}
 console.log(JSON.stringify(results));
