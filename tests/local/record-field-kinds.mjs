@@ -286,6 +286,77 @@ function readWrittenString(value, callback) {
 	callback();
 	return saved + ":";
 }
+const makeProducerWritten = function makeProducerWritten(value, flag, callback) {
+	const record = flag
+		? { small: 0, label: "producer-left" }
+		: { small: 1, label: "producer-right" };
+	for (let step = 0; step < 3; step++) callback(step);
+	record.small = value & 255;
+	callback("producer written");
+	return record;
+};
+const makeProducerCoerced = function makeProducerCoerced(value, flag, callback) {
+	const record = flag ? { small: 0 } : { small: 1 };
+	for (let step = 0; step < 3; step++) callback(step);
+	record.small = +value;
+	callback("producer coerced");
+	return record;
+};
+const makeProducerString = function makeProducerString(value, flag, callback) {
+	const record = flag ? { text: "left" } : { text: "right" };
+	for (let step = 0; step < 3; step++) callback(step);
+	record.text = value + ":";
+	callback("producer String");
+	return record;
+};
+function readProducerWritten(value, flag, callback) {
+	const record = makeProducerWritten(value, flag, callback);
+	callback("consumer written");
+	return record.small % 10;
+}
+function readProducerConstructed(value, flag, callback) {
+	const record = new makeProducerWritten(...[value, flag, callback]);
+	callback("constructed producer");
+	return record.small % 10;
+}
+function readProducerCoerced(value, flag, callback) {
+	const record = makeProducerCoerced(value, flag, callback);
+	callback("consumer coerced");
+	return record.small;
+}
+function readProducerString(value, flag, callback) {
+	const record = makeProducerString(value, flag, callback);
+	callback("consumer String");
+	return record.text + ":";
+}
+const makeProducerMissing = function makeProducerMissing(callback) {
+	const record = { small: 1 };
+	for (let step = 0; step < 3; step++) callback(step);
+	record.recordProducerSetterProbe = 2;
+	return record;
+};
+function readProducerMissing(callback) {
+	return typeof makeProducerMissing(callback).small;
+}
+function* producerSuspended(value, flag, callback) {
+	const record = makeProducerWritten(value, flag, callback);
+	yield record.label;
+	callback("producer resume");
+	return record.small % 10;
+}
+async function producerAwaited(value, flag, callback) {
+	const record = makeProducerWritten(value, flag, callback);
+	await 0;
+	callback("producer await");
+	return record.small % 10;
+}
+async function* producerAsyncSuspended(value, flag, callback) {
+	const record = makeProducerWritten(value, flag, callback);
+	yield record.label;
+	await 0;
+	callback("producer async resume");
+	return record.small % 10;
+}
 function readBeforeRecordGetter(value) {
 	const record = makeBoundedRecord(value, observe);
 	const small = record.small;
@@ -372,6 +443,14 @@ Object.assign(globalThis, {
 	readWrittenLoop,
 	readCoerciveWritten,
 	readWrittenString,
+	readProducerWritten,
+	readProducerConstructed,
+	readProducerCoerced,
+	readProducerString,
+	readProducerMissing,
+	producerSuspended,
+	producerAwaited,
+	producerAsyncSuspended,
 	readBeforeRecordGetter,
 	readAfterInheritedWrite,
 	readEscapedLoop,
@@ -398,6 +477,19 @@ for (const value of [
 	4294967296,
 	9007199254740991,
 ]) {
+	for (const flag of [false, true]) {
+		check(
+			readProducerConstructed(value, flag, observe),
+			(value & 255) % 10,
+			"constructed producer bounds",
+		);
+		check(
+			readProducerWritten(value, flag, observe),
+			(value & 255) % 10,
+			"producer written bounds",
+		);
+		check(readProducerCoerced(value, flag, observe), value, "producer coerced Number");
+	}
 	check(readBounded(value, observe), (value & 255) % 10, "bounded field remainder");
 	check(readBoundedUnsigned(value, observe), value >>> 0, "unsigned field value");
 	for (const flag of [false, true]) {
@@ -516,6 +608,62 @@ try {
 }
 check(writtenCallback, false, "throwing field conversion precedes callback");
 check(readWrittenString("retained", observe), "retained::", "stored String survives GC");
+for (const flag of [false, true]) {
+	check(
+		readProducerString("retained", flag, observe),
+		"retained::",
+		"producer String survives GC",
+	);
+	const iterator = producerSuspended(255, flag, observe);
+	check(
+		iterator.next().value,
+		flag ? "producer-left" : "producer-right",
+		"producer suspended String",
+	);
+	observe("producer between");
+	check(iterator.next().value, 5, "producer suspended field");
+}
+events.length = 0;
+let producerCoercions = 0;
+check(
+	readProducerCoerced(
+		{
+			valueOf() {
+				producerCoercions++;
+				observe("producer convert");
+				return -0;
+			},
+		},
+		false,
+		observe,
+	),
+	-0,
+	"producer conversion preserves negative zero",
+);
+check(producerCoercions, 1, "single producer conversion");
+check(
+	JSON.stringify(events),
+	'[0,1,2,"producer convert","producer coerced","consumer coerced"]',
+	"producer conversion order",
+);
+events.length = 0;
+const producerFailure = { marker: "producer conversion" };
+try {
+	readProducerCoerced(
+		{
+			valueOf() {
+				observe("producer throw");
+				throw producerFailure;
+			},
+		},
+		true,
+		observe,
+	);
+	throw new Error("missing producer conversion exception");
+} catch (error) {
+	check(error, producerFailure, "producer exception identity");
+}
+check(JSON.stringify(events), '[0,1,2,"producer throw"]', "producer exception order");
 const keptPointRecords = [];
 check(
 	readEscapedLoop(3, (record) => {
@@ -539,6 +687,22 @@ check(keptPointRecords[0] === keptPointRecords[1], false, "fresh loop object ide
 check(keptPointRecords[0].small, "step0", "first retained loop object");
 check(keptPointRecords[1].small, "step1", "second retained loop object");
 if (Object.isExtensible(Object.prototype)) {
+	Object.defineProperty(Object.prototype, "recordProducerSetterProbe", {
+		configurable: true,
+		set(value) {
+			observe(value);
+			this.small = "producer setter";
+		},
+	});
+	try {
+		check(
+			readProducerMissing(observe),
+			"string",
+			"producer missing field can invoke setter",
+		);
+	} finally {
+		delete Object.prototype.recordProducerSetterProbe;
+	}
 	Object.defineProperty(Object.prototype, "recordFieldPointProbe", {
 		configurable: true,
 		get() {
@@ -618,6 +782,18 @@ const completed = iterator.next();
 check(completed.done, true, "generator completion");
 check(completed.value, true, "generator field observation");
 const asyncIterator = readAsyncSuspended(3, observe);
+const producerAsync = producerAsyncSuspended(255, true, observe);
+const producerAsyncSteps = producerAsync
+	.next()
+	.then((result) => {
+		check(result.value, "producer-left", "producer async suspended String");
+		observe("producer async between");
+		return producerAsync.next();
+	})
+	.then((result) => {
+		check(result.done, true, "producer async completion");
+		check(result.value, 5, "producer async field");
+	});
 const asyncSteps = asyncIterator
 	.next()
 	.then((result) => {
@@ -630,6 +806,10 @@ const asyncSteps = asyncIterator
 		check(result.value, true, "async generator field observation");
 	});
 Promise.all([
+	producerAwaited(255, false, observe).then((value) =>
+		check(value, 5, "producer awaited field"),
+	),
+	producerAsyncSteps,
 	writtenAwaited(255, true, observe).then((value) =>
 		check(value, 5, "written awaited field"),
 	),

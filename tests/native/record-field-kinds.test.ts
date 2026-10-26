@@ -52,6 +52,7 @@ describe("fresh record field kind observations", () => {
 					"readGetterMutated",
 					"readPublic",
 					"readAfterInheritedWrite",
+					"readProducerMissing",
 				]) {
 					expect(named(name)).toBeDefined();
 					expect(
@@ -74,6 +75,17 @@ describe("fresh record field kind observations", () => {
 						{ ...COMPILER_INT32_RANGE, minimum: 0, maximum: 255 },
 					],
 					["readWrittenLoop", { ...COMPILER_INT32_RANGE, minimum: 0, maximum: 255 }],
+					["readProducerWritten", { ...COMPILER_INT32_RANGE, minimum: 0, maximum: 255 }],
+					[
+						"readProducerConstructed",
+						{ ...COMPILER_INT32_RANGE, minimum: 0, maximum: 255 },
+					],
+					["producerSuspended", { ...COMPILER_INT32_RANGE, minimum: 0, maximum: 255 }],
+					["producerAwaited", { ...COMPILER_INT32_RANGE, minimum: 0, maximum: 255 }],
+					[
+						"producerAsyncSuspended",
+						{ ...COMPILER_INT32_RANGE, minimum: 0, maximum: 255 },
+					],
 					["writtenSuspended", { ...COMPILER_INT32_RANGE, minimum: 0, maximum: 255 }],
 					["writtenAwaited", { ...COMPILER_INT32_RANGE, minimum: 0, maximum: 255 }],
 					["readWidenedWritten", COMPILER_UINT32_RANGE],

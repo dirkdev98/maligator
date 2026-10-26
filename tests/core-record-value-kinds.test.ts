@@ -4,6 +4,7 @@ import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import { CORE_PROGRAM_VALUE_KIND_ANALYSIS } from "../src/compiler/core/core-program-flow-analysis.ts";
+import { coreRecordReturnKindInputs } from "../src/compiler/core/core-record-value-kinds.ts";
 import { parseModule } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import {
@@ -41,6 +42,143 @@ function records(source: string) {
 }
 
 describe("normal-return record field kinds", () => {
+	it.each([
+		["record.value=2;", COMPILER_VALUE_KIND_NUMBER],
+		["record.value=+input;", COMPILER_VALUE_KIND_NUMBER],
+		[
+			"if(flag)record.value='changed';",
+			COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_STRING,
+		],
+		[
+			"record['value']=!!input;",
+			COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_BOOLEAN,
+		],
+		["for(let n=0;n<3;n++)record.value=n&255;", COMPILER_VALUE_KIND_NUMBER],
+		["const alias=record;alias.value=2;", COMPILER_VALUE_KIND_NUMBER],
+		["record.value=globalThis.input;", COMPILER_VALUE_KIND_TOP],
+	] as const)(
+		"joins producer writes without losing untouched fields (%s)",
+		(body, kind) => {
+			const out = records(
+				`function make(input,flag){const record={value:1,stable:'ok'};${body}return record;}function forward(input,flag){return make(input,flag);}function read(input,flag){return forward(input,flag).value;}globalThis.result=read(globalThis.input,globalThis.flag);`,
+			);
+			for (const name of ["make", "forward"])
+				expect(out.fields(name)).toEqual({
+					value: kind,
+					stable: COMPILER_VALUE_KIND_STRING,
+				});
+			expect(out.read().summary(out.named("read").id).returnKind).toBe(kind);
+		},
+	);
+
+	it.each([
+		"record.missing=2;",
+		"record[globalThis.key]=2;",
+		"globalThis.observe(record);record.value=2;",
+		"record.value=globalThis.replace(record);",
+		"record.value=record;",
+		"Object.defineProperty(record,'value',{get(){return 2;}});",
+	])("rejects producer writes that can expose or redefine the record (%s)", (body) => {
+		const out = records(
+			`function make(){const record={value:1};${body}return record;}globalThis.result=make();`,
+		);
+		expect(out.fields("make")).toBeUndefined();
+	});
+
+	it("does not seed producer writes before the initial value can complete", () => {
+		const out = records(
+			`function never(){return never();}function make(){const record={value:never()};record.value=2;return record;}function read(){return make().value;}globalThis.result=read();`,
+		);
+		expect(out.fields("make")).toEqual({ value: 0 });
+		expect(out.read().summary(out.named("read").id).returnKind).toBe(0);
+	});
+
+	it("reuses structural producer inputs while refreshing normal writer facts", () => {
+		const out = records(
+			`function make(input){const record={value:1};record.value=input.n;return record;}function read(input){return make(input).value;}globalThis.result=read(globalThis.input);`,
+		);
+		const fn = out.named("make");
+		const inputs = coreRecordReturnKindInputs(fn);
+		const before = out.read();
+		expect(out.fields("make", before)).toEqual({ value: COMPILER_VALUE_KIND_TOP });
+		const load = coreOperations(fn).find(
+			({ opcode }) => opcode === "loadPropertyStatic" || opcode === "loadProperty",
+		)!;
+		for (const mask of [COMPILER_VALUE_KIND_NUMBER, undefined]) {
+			const edit = CoreEditor.open(out.program, fn.id);
+			edit.setNormalResultFacts(load.id, mask === undefined ? undefined : { mask });
+			edit.commit();
+			expect(coreRecordReturnKindInputs(fn)).toBe(inputs);
+			expect(out.read().summary(out.named("read").id).returnKind).toBe(
+				mask ?? COMPILER_VALUE_KIND_TOP,
+			);
+		}
+		expect(out.fields("make", before)).toEqual({ value: COMPILER_VALUE_KIND_TOP });
+	});
+
+	it("keeps unreturned objects with own accesses out of returned-field demands", () => {
+		const out = records(
+			`function make(input){const local={n:input*input};local.n=input+input;globalThis.observe(local.n);return {value:1};}globalThis.result=make(globalThis.input);`,
+		);
+		expect(out.fields("make")).toEqual({ value: COMPILER_VALUE_KIND_NUMBER });
+		const fn = out.named("make");
+		for (const operation of coreOperations(fn).filter(
+			({ opcode }) => opcode === "binary",
+		))
+			expect(() => out.read().values(fn.id).latticeMask(operation.outputs[0]!)).toThrow(
+				"Unrequested program value kind",
+			);
+	});
+
+	it("withdraws and restores producer input plans across active structural edits", () => {
+		const out = records(
+			`function make(){const record={value:1};record.value=2;return record;}globalThis.result=make();`,
+		);
+		const fn = out.named("make");
+		const before = coreRecordReturnKindInputs(fn);
+		const allocation = coreOperations(fn).find(
+			({ opcode }) => opcode === "createObjectShaped",
+		)!;
+		const edit = CoreEditor.open(out.program, fn.id);
+		const key = edit.appendStringConstants([[109, 105, 115, 115, 105, 110, 103]]);
+		const write = edit.insertInstruction(
+			fn.instructionBlock(allocation.id),
+			fn.blockTerminator(fn.instructionBlock(allocation.id)),
+			"storePropertyStatic",
+			[allocation.outputs[0]!, allocation.inputs[0]!],
+			{ attributes: { stringIndex: key } },
+		);
+		expect(coreRecordReturnKindInputs(fn)).toEqual([]);
+		edit.commit();
+		expect(out.fields("make")).toBeUndefined();
+		const restore = CoreEditor.open(out.program, fn.id);
+		restore.removeInstruction(write.instruction);
+		expect(coreRecordReturnKindInputs(fn)).toEqual(before);
+		restore.commit();
+		expect(out.fields("make")).toEqual({ value: COMPILER_VALUE_KIND_NUMBER });
+		expect(before.length).toBeGreaterThan(0);
+	});
+
+	it("joins producer writes through a conditional record alias", () => {
+		const out = records(
+			`function make(flag){const value=flag?{n:1}:{n:2};value.n='changed';return value;}globalThis.result=make(globalThis.flag);`,
+		);
+		expect(out.fields("make")).toEqual({
+			n: COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_STRING,
+		});
+	});
+
+	it.each(["make(input)", "new make(input)", "new make(...[input])"])(
+		"projects producer writes across %s completions",
+		(call) => {
+			const out = records(
+				`function make(input){const record={n:0};record.n=+input;return record;}function read(input){return ${call}.n;}globalThis.result=read(globalThis.input);`,
+			);
+			expect(out.read().summary(out.named("read").id).returnKind).toBe(
+				COMPILER_VALUE_KIND_NUMBER,
+			);
+		},
+	);
 	it.each([
 		["record.value=2;", COMPILER_VALUE_KIND_NUMBER],
 		["record.value=+replacement;", COMPILER_VALUE_KIND_NUMBER],
@@ -171,7 +309,6 @@ describe("normal-return record field kinds", () => {
 		});
 	});
 	it.each([
-		"const value=flag?{n:1}:{n:2};value.n='changed';return value;",
 		"const value=flag?{n:1}:{n:2};globalThis.observe(value);return value;",
 		"return flag?{n:1}:globalThis.value;",
 		"return flag?{n:1}:null;",
@@ -210,7 +347,6 @@ describe("normal-return record field kinds", () => {
 	});
 
 	it.each([
-		`const value={n:1};value.n="changed";return value;`,
 		`const value={n:1};globalThis.observe(value);return value;`,
 		`return {get n(){return 1;}};`,
 		`return {[globalThis.key]:1};`,

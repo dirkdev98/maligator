@@ -177,8 +177,12 @@ The independent target boundary and current storage contract are recorded in
       Write-backed observations enter propagation demands only once a finite
       initial field contract emerges; later contracts expand the demand set and
       withdrawn contracts override previously published bounds.
-      Producer-side writes before returning a record, parameter-relative call effects,
-      and coroutine record transport remain. Own-field observations
+      Fresh producer allocations now retain own-field summaries across private
+      writes, joining every writer with the initial kind and integer bounds before
+      forwarding the result. Structural input plans survive metadata changes;
+      values and ranges are solved afresh. Non-returned locals add no field demands.
+      Writes to forwarded call results, typed producer storage for remaining writes,
+      parameter-relative call effects and coroutine record transport remain. Own-field observations
       also carry initial integer bounds through the normal-result worklist, including
       finite targets, recursive forwarding and suspension. Growing fields widen
       independently of bounded siblings. The scanner still calls

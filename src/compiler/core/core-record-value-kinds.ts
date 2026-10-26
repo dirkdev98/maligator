@@ -94,61 +94,82 @@ export function joinCoreRecordValueKinds(
 
 const MAXIMUM_RECORD_RETURN_ALIAS_WORK = 256;
 
-/** Control-flow aliases suffice for field facts; caller-owned record storage needs direct return uses. */
-export function coreValueOnlyReturned(
+interface CoreRecordFieldWrite {
+	readonly instruction: CoreInstructionId;
+	readonly value: CoreValueId;
+}
+
+function returnedValueUseCount(
 	fn: CoreFunctionStore,
 	value: CoreValueId,
-	allowBlockArguments = false,
-): boolean {
+	allowBlockArguments: boolean,
+	ownAccess?: (instruction: CoreInstructionId, operand: number) => boolean,
+): number | undefined {
 	const pending = [value];
 	const seen = new Set<CoreValueId>();
 	let remaining = MAXIMUM_RECORD_RETURN_ALIAS_WORK;
+	let returns = 0;
 	while (pending.length > 0) {
 		const current = pending.pop()!;
 		if (seen.has(current)) continue;
 		seen.add(current);
-		if (allowBlockArguments && --remaining < 0) return false;
-		if (fn.kernel.valueHandlerUseCount(current) > 0) return false;
+		if (allowBlockArguments && --remaining < 0) return undefined;
+		if (fn.kernel.valueHandlerUseCount(current) > 0) return undefined;
 		for (
 			let use = fn.kernel.valueFirstUse(current);
 			use >= 0;
 			use = fn.kernel.useNext(use)
 		) {
 			if (fn.kernel.useLive(use) === 0) continue;
-			if (allowBlockArguments && --remaining < 0) return false;
+			if (allowBlockArguments && --remaining < 0) return undefined;
 			const instruction = fn.kernel.useInstruction(use);
 			const kind = fn.instructionKind(instruction);
-			if (kind === "return") continue;
+			if (kind === "return") {
+				returns++;
+				continue;
+			}
 			if (kind !== "operation") {
-				if (!allowBlockArguments) return false;
+				if (!allowBlockArguments) return undefined;
 				const operand =
 					fn.kernel.instructionOperandStart(instruction) + fn.kernel.useOperand(use);
 				const start = fn.kernel.terminatorEdgeStart(instruction);
 				const count = fn.kernel.terminatorEdgeCount(instruction);
 				let forwarded = false;
 				for (let edge = start; edge < start + count; edge++) {
-					if (--remaining < 0) return false;
+					if (--remaining < 0) return undefined;
 					const first = fn.kernel.terminatorEdgeArgumentStart(edge);
 					const index = operand - first;
 					if (index < 0 || index >= fn.kernel.terminatorEdgeArgumentCount(edge)) continue;
 					const block = fn.kernel.terminatorEdgeBlock(edge);
 					const parameter = fn.kernel.blockParameterStart(block) + index;
-					if (fn.kernel.blockParameterRole(parameter) !== 0) return false;
+					if (fn.kernel.blockParameterRole(parameter) !== 0) return undefined;
 					pending.push(fn.kernel.blockParameterValue(parameter));
 					forwarded = true;
 					break;
 				}
-				if (!forwarded) return false;
+				if (!forwarded) return undefined;
 				continue;
 			}
 			const opcode = fn.instructionOpcodeName(instruction);
 			if (opcode === "rootUse") continue;
 			if (allowBlockArguments && opcode === "throwIfTdz") continue;
-			if (opcode !== "move") return false;
+			if (opcode !== "move") {
+				if (ownAccess?.(instruction, fn.kernel.useOperand(use)) === true) continue;
+				return undefined;
+			}
 			pending.push(fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)));
 		}
 	}
-	return true;
+	return returns;
+}
+
+/** Control-flow aliases suffice for field facts; caller-owned record storage needs direct return uses. */
+export function coreValueOnlyReturned(
+	fn: CoreFunctionStore,
+	value: CoreValueId,
+	allowBlockArguments = false,
+): boolean {
+	return returnedValueUseCount(fn, value, allowBlockArguments) !== undefined;
 }
 
 export function coreReturnedValueDefinition(
@@ -164,6 +185,26 @@ export function coreReturnedValueDefinition(
 	return undefined;
 }
 
+function recordPropertyKey(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+): number | undefined {
+	const opcode = fn.instructionOpcodeName(instruction);
+	let key =
+		opcode === "loadPropertyStatic" || opcode === "storePropertyStatic"
+			? fn.instructionAttributes(instruction).stringIndex
+			: undefined;
+	if (opcode === "loadProperty" || opcode === "storeProperty") {
+		const literal = coreReturnedValueDefinition(
+			fn,
+			fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction) + 1),
+		);
+		if (literal !== undefined && fn.instructionOpcodeName(literal) === "createString")
+			key = fn.instructionAttributes(literal).stringIndex;
+	}
+	return typeof key === "number" ? key : undefined;
+}
+
 const EMPTY_RECORD_KEYS: ReadonlyArray<number> = Object.freeze([]);
 
 function recordKeys(
@@ -173,13 +214,7 @@ function recordKeys(
 	if (fn.instructionKind(instruction) !== "operation") return undefined;
 	const opcode = fn.instructionOpcodeName(instruction);
 	if (opcode === "createObject" && fn.kernel.instructionOperandCount(instruction) === 0)
-		return coreValueOnlyReturned(
-			fn,
-			fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)),
-			true,
-		)
-			? EMPTY_RECORD_KEYS
-			: undefined;
+		return EMPTY_RECORD_KEYS;
 	if (opcode !== "createObjectShaped") return undefined;
 	const keys = fn.instructionAttributes(instruction).keyStringIndices;
 	if (
@@ -189,33 +224,90 @@ function recordKeys(
 		!keys.every(
 			(key) => typeof key === "number" && Number.isSafeInteger(key) && key >= 0,
 		) ||
-		new Set(keys).size !== keys.length ||
-		!coreValueOnlyReturned(
-			fn,
-			fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)),
-			true,
-		)
+		new Set(keys).size !== keys.length
 	)
 		return undefined;
 	return keys as ReadonlyArray<number>;
 }
 
+interface CoreRecordReturnFields {
+	readonly keys: ReadonlyArray<number>;
+	readonly writes?: ReadonlyMap<number, ReadonlyArray<CoreRecordFieldWrite>>;
+}
+
+interface CoreRecordReturnIndex {
+	readonly featureVersion: number;
+	readonly fields: ReadonlyMap<CoreInstructionId, CoreRecordReturnFields>;
+	readonly inputs: ReadonlyArray<CoreValueId>;
+}
+
+const recordReturnIndices = new WeakMap<CoreFunctionStore, CoreRecordReturnIndex>();
+
+function recordReturnIndex(
+	fn: CoreFunctionStore,
+): Omit<CoreRecordReturnIndex, "featureVersion"> {
+	const featureVersion = fn.hasActiveEditor ? undefined : fn.featureVersion;
+	const cached = recordReturnIndices.get(fn);
+	if (featureVersion !== undefined && cached?.featureVersion === featureVersion)
+		return cached;
+	const fields = new Map<CoreInstructionId, CoreRecordReturnFields>();
+	const inputs: Array<CoreValueId> = [];
+	if (!fn.isAsync && !fn.isGenerator)
+		for (const instruction of fn.instructionIds()) {
+			const keys = recordKeys(fn, instruction);
+			if (keys === undefined) continue;
+			let writes: Map<number, Array<CoreRecordFieldWrite>> | undefined;
+			const value = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
+			const returns = returnedValueUseCount(fn, value, true, (access, operand) => {
+				if (operand !== 0) return false;
+				const key = recordPropertyKey(fn, access);
+				if (key === undefined || !keys.includes(key)) return false;
+				const opcode = fn.instructionOpcodeName(access);
+				if (opcode === "loadPropertyStatic" || opcode === "loadProperty") return true;
+				if (opcode !== "storePropertyStatic" && opcode !== "storeProperty") return false;
+				writes ??= new Map();
+				let row = writes.get(key);
+				if (row === undefined) writes.set(key, (row = []));
+				row.push(
+					Object.freeze({
+						instruction: access,
+						value: fn.kernel.operandAt(
+							fn.kernel.instructionOperandStart(access) +
+								(opcode === "storePropertyStatic" ? 1 : 2),
+						),
+					}),
+				);
+				return true;
+			});
+			if (returns === undefined || returns === 0) continue;
+			const start = fn.kernel.instructionOperandStart(instruction);
+			for (let index = 0; index < keys.length; index++)
+				inputs.push(fn.kernel.operandAt(start + index));
+			for (const row of writes?.values() ?? []) {
+				Object.freeze(row);
+				for (const write of row) inputs.push(write.value);
+			}
+			fields.set(
+				instruction,
+				Object.freeze({
+					keys: Object.freeze([...keys]),
+					...(writes === undefined ? {} : { writes }),
+				}),
+			);
+		}
+	const index = { fields, inputs: Object.freeze(inputs) };
+	if (featureVersion !== undefined)
+		recordReturnIndices.set(fn, { ...index, featureVersion });
+	return index;
+}
+
 export function coreRecordReturnKindInputs(
 	fn: CoreFunctionStore,
 ): ReadonlyArray<CoreValueId> {
-	const inputs: Array<CoreValueId> = [];
-	if (fn.isAsync || fn.isGenerator) return inputs;
-	for (const instruction of fn.instructionIds()) {
-		const keys = recordKeys(fn, instruction);
-		if (keys === undefined) continue;
-		const start = fn.kernel.instructionOperandStart(instruction);
-		for (let index = 0; index < keys.length; index++)
-			inputs.push(fn.kernel.operandAt(start + index));
-	}
-	return inputs;
+	return recordReturnIndex(fn).inputs;
 }
 
-/** These are initial own data fields; reading them after a call needs a separate mutation/escape proof. */
+/** Own data fields on normal return; callers still need a separate mutation/escape proof. */
 export function coreReturnedRecordKinds(
 	fn: CoreFunctionStore,
 	cfg: CoreControlFlow,
@@ -227,6 +319,7 @@ export function coreReturnedRecordKinds(
 	) => CompilerIntegerRange | null | undefined,
 ): CoreRecordValueKind {
 	if (fn.isAsync || fn.isGenerator) return undefined;
+	const returnedFields = recordReturnIndex(fn).fields;
 	let result: CoreRecordValueKind = null;
 	const pending: Array<CoreValueId> = [];
 	for (const block of cfg.reachable) {
@@ -267,21 +360,36 @@ export function coreReturnedRecordKinds(
 			pending.push(fn.kernel.operandAt(fn.kernel.instructionOperandStart(definition)));
 			continue;
 		}
-		const keys = recordKeys(fn, definition);
+		const initial = returnedFields.get(definition);
 		const completion = fn.registry.byId(fn.instructionOpcode(definition)).callTransfer
 			?.result;
 		let fields: CoreRecordValueKind;
-		if (keys !== undefined) {
+		if (initial !== undefined) {
 			const start = fn.kernel.instructionOperandStart(definition);
 			fields = Object.freeze(
-				keys
+				initial.keys
 					.map((key, index) => {
 						const value = fn.kernel.operandAt(start + index);
-						const kind = mask(value);
-						const integerRange =
+						let kind = mask(value);
+						let integerRange =
 							kind === COMPILER_VALUE_KIND_NUMBER
 								? range?.(value, definition)
 								: undefined;
+						// A write cannot execute before its initial field value completes normally.
+						if (kind !== 0)
+							for (const write of initial.writes?.get(key) ?? []) {
+								if (!cfg.reachable.has(fn.instructionBlock(write.instruction))) continue;
+								const written = mask(write.value);
+								kind |= written;
+								if (written !== 0)
+									integerRange =
+										kind === COMPILER_VALUE_KIND_NUMBER
+											? joinFieldIntegerRanges(
+													integerRange,
+													range?.(write.value, write.instruction),
+												)
+											: undefined;
+							}
 						return Object.freeze({
 							key,
 							mask: kind,
@@ -311,10 +419,7 @@ export interface CoreRecordFieldRead {
 	readonly key: number;
 	/** Preceding accesses must be own, so getters and setters cannot expose the record. */
 	readonly requiredKeys: ReadonlyArray<number>;
-	readonly writes?: ReadonlyArray<{
-		readonly instruction: CoreInstructionId;
-		readonly value: CoreValueId;
-	}>;
+	readonly writes?: ReadonlyArray<CoreRecordFieldWrite>;
 }
 
 export function coreRecordFieldInitialKind(
@@ -387,22 +492,6 @@ export function coreRecordFieldReads(
 		}
 		return positions.get(instruction)!;
 	};
-	const propertyKey = (instruction: CoreInstructionId): number | undefined => {
-		const opcode = fn.instructionOpcodeName(instruction);
-		let key =
-			opcode === "loadPropertyStatic" || opcode === "storePropertyStatic"
-				? fn.instructionAttributes(instruction).stringIndex
-				: undefined;
-		if (opcode === "loadProperty" || opcode === "storeProperty") {
-			const literal = coreReturnedValueDefinition(
-				fn,
-				fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction) + 1),
-			);
-			if (literal !== undefined && fn.instructionOpcodeName(literal) === "createString")
-				key = fn.instructionAttributes(literal).stringIndex;
-		}
-		return typeof key === "number" ? key : undefined;
-	};
 	for (const producer of fn.instructionIds()) {
 		if (
 			fn.instructionKind(producer) !== "operation" ||
@@ -456,7 +545,7 @@ export function coreRecordFieldReads(
 					pending.push(fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)));
 					continue;
 				}
-				const key = propertyKey(instruction);
+				const key = recordPropertyKey(fn, instruction);
 				if (fn.kernel.useOperand(use) !== 0 || key === undefined) {
 					barriers.add(instruction);
 					continue;
