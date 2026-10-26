@@ -4,6 +4,10 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../../src/build-config.ts";
 import {
+	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_STRING,
+} from "../../src/compiler/shared/compiler-value-kinds.ts";
+import {
 	COMPILER_INT32_RANGE,
 	COMPILER_UINT32_RANGE,
 } from "../../src/compiler/shared/integer-range.ts";
@@ -65,8 +69,19 @@ describe("fresh record field kind observations", () => {
 							(op) => op.opcode === "UNARY" && op.operator === "typeof",
 						),
 					).toBe(true);
+					expect(
+						named("readForwardedMixed").facts?.some((fact) =>
+							fact?.resultKindMasks?.includes(
+								COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_STRING,
+							),
+						),
+					).toBe(true);
 				}
 				for (const [name, range] of [
+					[
+						"readForwardedWritten",
+						{ ...COMPILER_INT32_RANGE, minimum: 0, maximum: 1023 },
+					],
 					["readBounded", { ...COMPILER_INT32_RANGE, minimum: 0, maximum: 255 }],
 					[
 						"readConditionalRecord",

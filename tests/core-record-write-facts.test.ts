@@ -27,6 +27,92 @@ function fieldRead(out: ReturnType<typeof inspectStaticValueFunction>) {
 }
 
 describe("normal field facts after own writes", () => {
+	it.each([
+		[
+			"value>>>0",
+			COMPILER_VALUE_KIND_NUMBER,
+			"number",
+			{ minimum: 0, maximum: 4294967295 },
+		],
+		["-0", COMPILER_VALUE_KIND_NUMBER, "number", undefined],
+		[
+			"value+':'",
+			COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_STRING,
+			"boxed",
+			undefined,
+		],
+	] as const)(
+		"preserves wide or boxed forwarding storage for %s",
+		(expression, mask, representation, range) => {
+			const out = inspectStaticValueFunction(
+				`const leaf=function leaf(value,hook){hook(new.target);return {value:value&15};};const forward=function forward(value,flag,hook){const record=leaf(value,hook);hook(new.target);if(flag)record.value=${expression};return record;};function compute(value,flag,hook){const record=forward(value,flag,hook);const saved=record.value;hook();return saved;}globalThis.leaf=leaf;globalThis.forward=forward;globalThis.compute=compute;`,
+				"compute",
+				{ locked: false },
+			);
+			const { ip, op } = fieldRead(out);
+			expect(out.native.facts![ip]!.resultKindMasks).toEqual([mask]);
+			if (range === undefined)
+				expect(out.native.facts![ip]!.resultIntegerRanges).toBeUndefined();
+			else expect(out.native.facts![ip]!.resultIntegerRanges?.[0]).toMatchObject(range);
+			expect(out.native.registerRepresentations[op.dst]).toBe(representation);
+		},
+	);
+
+	it.each([
+		["function*", "yield 0;"],
+		["async function", "await 0;"],
+		["async function*", "yield 0;await 0;"],
+	])("carries forwarding writes across %s suspension", (declaration, suspend) => {
+		const out = inspectStaticValueFunction(
+			`const leaf=function leaf(value,hook){hook(new.target);return {value:value&15};};const forward=function forward(value,flag,hook){const record=leaf(value,hook);hook(new.target);if(flag)record.value=value&255;return record;};${declaration} compute(value,flag,hook){const record=forward(value,flag,hook);${suspend}hook();return record.value%10;}globalThis.leaf=leaf;globalThis.forward=forward;globalThis.compute=compute;`,
+			"compute",
+			{ locked: false },
+		);
+		const { ip } = fieldRead(out);
+		expect(out.native.facts![ip]!.resultKindMasks).toEqual([COMPILER_VALUE_KIND_NUMBER]);
+		expect(out.native.facts![ip]!.resultIntegerRanges?.[0]).toMatchObject({
+			minimum: 0,
+			maximum: 255,
+		});
+		expect(out.native.instructions[ip]).toEqual({ kind: "known-own-data" });
+	});
+
+	it("widens unbounded recursive forwarding writes beyond integer kernels", () => {
+		const out = inspectStaticValueFunction(
+			`const first=function first(n,hook){const record=n>0?second(n-1,hook):{value:0};hook(new.target);record.value=+record.value+1;return record;};const second=function second(n,hook){hook(new.target);return first(n,hook);};function compute(n,hook){return first(n,hook).value%10;}globalThis.first=first;globalThis.second=second;globalThis.compute=compute;`,
+			"compute",
+			{ locked: false },
+		);
+		const { ip } = fieldRead(out);
+		expect(out.native.facts![ip]!.resultKindMasks).toEqual([COMPILER_VALUE_KIND_NUMBER]);
+		expect(out.native.facts![ip]!.resultIntegerRanges).toBeUndefined();
+		expect(out.c.source).toContain("mal_number_remainder(");
+	});
+
+	it.each([
+		"forward(value,flag,hook)",
+		"new forward(value,flag,hook)",
+		"new forward(...[value,flag,hook])",
+	])("projects private forwarding writes across %s", (call) => {
+		const out = inspectStaticValueFunction(
+			`const leaf=function leaf(value,hook){hook(new.target);return {value:value&15};};const forward=function forward(value,flag,hook){const record=leaf(value,hook);hook(new.target);if(flag)record.value=value&255;return record;};function compute(value,flag,hook){const record=${call};hook();return record.value%10;}globalThis.leaf=leaf;globalThis.forward=forward;globalThis.compute=compute;`,
+			"compute",
+			{ locked: false },
+		);
+		const { ip, op } = fieldRead(out);
+		expect(out.native.facts![ip]!.resultKindMasks).toEqual([COMPILER_VALUE_KIND_NUMBER]);
+		expect(out.native.facts![ip]!.resultIntegerRanges?.[0]).toMatchObject({
+			minimum: 0,
+			maximum: 255,
+		});
+		expect(out.native.registerRepresentations[op.dst]).toBe("int32");
+		expect(out.native.instructions[ip]).toEqual({ kind: "known-own-data" });
+		expect(out.c.source).not.toContain("mal_number_remainder(");
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
+			out.image,
+		);
+	});
+
 	it("projects producer bounds through constructing spread calls", () => {
 		const out = inspectStaticValueFunction(
 			`const make=function make(value,flag,hook){const record=flag?{value:value&15}:{value:value&7};for(let step=0;step<3;step++)hook(step);record.value=value&255;return record;};function compute(value,flag,hook){const record=new make(...[value,flag,hook]);hook();return record.value;}globalThis.make=make;globalThis.compute=compute;`,

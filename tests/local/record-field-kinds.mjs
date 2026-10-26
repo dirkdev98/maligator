@@ -319,6 +319,29 @@ const makeProducerCoerced = function makeProducerCoerced(value, flag, callback) 
 	callback("producer coerced");
 	return record;
 };
+const makeForwardedWritten = function makeForwardedWritten(value, flag, callback) {
+	const record = makeProducerWritten(value, flag, callback);
+	callback(new.target);
+	if (flag) record.small = value & 1023;
+	return record;
+};
+function readForwardedWritten(value, flag, callback) {
+	const record = makeForwardedWritten(value, flag, callback);
+	callback("forwarded consumer");
+	return record.small % 10;
+}
+const makeForwardedMixed = function makeForwardedMixed(value, flag, callback) {
+	const record = makeProducerWritten(value, flag, callback);
+	callback(new.target);
+	if (flag) record.small = value + ":";
+	return record;
+};
+function readForwardedMixed(value, flag, callback) {
+	const record = makeForwardedMixed(value, flag, callback);
+	const saved = record.small;
+	callback("forwarded saved heap value");
+	return saved;
+}
 const makeProducerString = function makeProducerString(value, flag, callback) {
 	const record = flag ? { text: "left" } : { text: "right" };
 	for (let step = 0; step < 3; step++) callback(step);
@@ -465,6 +488,10 @@ Object.assign(globalThis, {
 	readProducerWritten,
 	readProducerConstructed,
 	readProducerCoerced,
+	makeForwardedWritten,
+	readForwardedWritten,
+	makeForwardedMixed,
+	readForwardedMixed,
 	readProducerString,
 	readProducerMissing,
 	producerSuspended,
@@ -510,6 +537,16 @@ for (const value of [
 	9007199254740991,
 ]) {
 	for (const flag of [false, true]) {
+		check(
+			readForwardedMixed(value, flag, observe),
+			flag ? value + ":" : value & 255,
+			"forwarded mixed heap field",
+		);
+		check(
+			readForwardedWritten(value, flag, observe),
+			(value & (flag ? 1023 : 255)) % 10,
+			"forwarded written bounds",
+		);
 		check(
 			readProducerConstructed(value, flag, observe),
 			(value & 255) % 10,

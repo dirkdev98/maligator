@@ -42,6 +42,113 @@ function records(source: string) {
 }
 
 describe("normal-return record field kinds", () => {
+	it("revalidates forwarded own-key requirements when the callee changes", () => {
+		const out = records(
+			`function leaf(){return {value:1};}function forward(){const record=leaf();record.value=2;return record;}function read(){return forward().value;}globalThis.result=read();`,
+		);
+		expect(out.fields("forward")).toEqual({ value: COMPILER_VALUE_KIND_NUMBER });
+		const fn = out.named("leaf");
+		const allocation = coreOperations(fn).find(
+			({ opcode }) => opcode === "createObjectShaped",
+		)!;
+		for (const missing of [true, false]) {
+			const edit = CoreEditor.open(out.program, fn.id);
+			const key = edit.appendStringConstants([[109, 105, 115, 115, 105, 110, 103]]);
+			edit.replaceInstruction(allocation.id, allocation.opcode, allocation.inputs, {
+				attributes: {
+					...allocation.attributes,
+					keyStringIndices: missing ? [key] : allocation.attributes.keyStringIndices,
+				},
+			});
+			edit.commit();
+			if (missing) expect(out.fields("forward")).toBeUndefined();
+			else expect(out.fields("forward")).toEqual({ value: COMPILER_VALUE_KIND_NUMBER });
+			expect(out.read().summary(out.named("read").id).returnKind).toBe(
+				missing ? COMPILER_VALUE_KIND_TOP : COMPILER_VALUE_KIND_NUMBER,
+			);
+		}
+	});
+
+	it("does not demand fields from non-returned forwarding temporaries", () => {
+		const out = records(
+			`function leaf(){return {value:0};}function forward(input){const record=leaf();record.value=input;return 0;}globalThis.result=forward(globalThis.input);`,
+		);
+		expect(coreRecordReturnKindInputs(out.named("forward"))).toEqual([]);
+	});
+
+	it.each([
+		["record.value=2;", COMPILER_VALUE_KIND_NUMBER],
+		["record.value=+input;", COMPILER_VALUE_KIND_NUMBER],
+		[
+			"if(flag)record.value='changed';",
+			COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_STRING,
+		],
+		[
+			"record['value']=!!input;",
+			COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_BOOLEAN,
+		],
+		["for(let step=0;step<3;step++)record.value=step&255;", COMPILER_VALUE_KIND_NUMBER],
+		["const alias=record;alias.value=2;", COMPILER_VALUE_KIND_NUMBER],
+		["record.value=globalThis.input;", COMPILER_VALUE_KIND_TOP],
+	] as const)(
+		"retains forwarded own-field writes through exact call chains (%s)",
+		(body, mask) => {
+			const out = records(
+				`function leaf(){return {value:1,stable:'ok'};}function forward(input,flag){const record=leaf();${body}return record;}function again(input,flag){return forward(input,flag);}function read(input,flag){return again(input,flag).value;}globalThis.result=read(globalThis.input,globalThis.flag);`,
+			);
+			for (const name of ["forward", "again"])
+				expect(out.fields(name)).toEqual({
+					value: mask,
+					stable: COMPILER_VALUE_KIND_STRING,
+				});
+			expect(out.read().summary(out.named("read").id).returnKind).toBe(mask);
+		},
+	);
+
+	it.each(["leaf(input)", "new leaf(input)", "new leaf(...[input])"])(
+		"retains own writes to forwarded %s results",
+		(call) => {
+			const out = records(
+				`function leaf(input){return {value:input&15};}function forward(input){const record=${call};record.value=input&255;return record;}globalThis.result=forward(globalThis.input);`,
+			);
+			expect(out.fields("forward")).toEqual({ value: COMPILER_VALUE_KIND_NUMBER });
+		},
+	);
+
+	it.each([
+		"record.missing=2;",
+		"record[globalThis.key]=2;",
+		"globalThis.observe(record);record.value=2;",
+		"record.value=record;",
+		"record.missing;record.value=2;",
+		"Object.defineProperty(record,'value',{get(){return 2;}});",
+	])("rejects forwarded record writes after an unproven access (%s)", (body) => {
+		const out = records(
+			`function leaf(){return {value:1};}function forward(){const record=leaf();${body}return record;}globalThis.result=forward();`,
+		);
+		expect(out.fields("forward")).toBeUndefined();
+	});
+
+	it("does not seed a forwarding cycle from its writes", () => {
+		const out = records(
+			`function first(){const record=second();record.value=1;return record;}function second(){return first();}globalThis.result=first();`,
+		);
+		for (const name of ["first", "second"]) {
+			expect(out.read().summary(out.named(name).id).returnKind).toBe(0);
+			expect(out.fields(name) ?? null).toBeNull();
+		}
+	});
+
+	it("joins forwarded writes with a recursive literal base", () => {
+		const out = records(
+			`function first(n){const record=n>0?second(n-1):{value:1,stable:'ok'};record.value='changed';return record;}function second(n){return first(n);}globalThis.result=first(globalThis.input);`,
+		);
+		for (const name of ["first", "second"])
+			expect(out.fields(name)).toEqual({
+				value: COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_STRING,
+				stable: COMPILER_VALUE_KIND_STRING,
+			});
+	});
 	it.each([
 		["record.value=2;", COMPILER_VALUE_KIND_NUMBER],
 		["record.value=+input;", COMPILER_VALUE_KIND_NUMBER],
@@ -352,7 +459,6 @@ describe("normal-return record field kinds", () => {
 		`return {[globalThis.key]:1};`,
 		`return {...globalThis.input};`,
 		`return globalThis.value;`,
-		`const value=leaf();value.n="changed";return value;`,
 		`const value=leaf();globalThis.observe(value);return value;`,
 		`return globalThis.unknown();`,
 	])("withdraws the fresh-record contract for %s", (body) => {

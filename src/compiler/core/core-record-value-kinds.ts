@@ -2,7 +2,7 @@ import { COMPILER_VALUE_KIND_NUMBER } from "../shared/compiler-value-kinds.ts";
 import { compilerIntegerRangesEqual } from "../shared/integer-range.ts";
 import type { CompilerIntegerRange } from "../shared/integer-range.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
-import { coreInstructionId } from "./core-ir.ts";
+import { coreBlockId, coreInstructionId } from "./core-ir.ts";
 import type { CoreBlockId, CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import type { CoreFunctionStore } from "./core-store.ts";
 
@@ -231,7 +231,8 @@ function recordKeys(
 }
 
 interface CoreRecordReturnFields {
-	readonly keys: ReadonlyArray<number>;
+	readonly literalKeys: ReadonlyArray<number> | undefined;
+	readonly requiredKeys: ReadonlyArray<number>;
 	readonly writes?: ReadonlyMap<number, ReadonlyArray<CoreRecordFieldWrite>>;
 }
 
@@ -243,6 +244,58 @@ interface CoreRecordReturnIndex {
 
 const recordReturnIndices = new WeakMap<CoreFunctionStore, CoreRecordReturnIndex>();
 
+function returnedDefinitions(
+	fn: CoreFunctionStore,
+): ReadonlySet<CoreInstructionId> | undefined {
+	const definitions = new Set<CoreInstructionId>();
+	const pending: Array<CoreValueId> = [];
+	for (const block of fn.blockIds()) {
+		const terminator = fn.blockTerminator(block);
+		if (fn.instructionKind(terminator) === "return")
+			pending.push(fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator)));
+	}
+	const seen = new Set<CoreValueId>();
+	let incoming: Map<CoreBlockId, Array<number>> | undefined;
+	let remaining = MAXIMUM_RECORD_RETURN_ALIAS_WORK;
+	while (pending.length > 0) {
+		const value = pending.pop()!;
+		if (seen.has(value)) continue;
+		seen.add(value);
+		if (--remaining < 0) return undefined;
+		if (fn.kernel.valueDefinitionKind(value) === 1) {
+			const instruction = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
+			if (fn.instructionOpcodeName(instruction) === "move")
+				pending.push(fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction)));
+			else definitions.add(instruction);
+		} else if (fn.kernel.valueDefinitionKind(value) === 0) {
+			if (incoming === undefined) {
+				incoming = new Map();
+				for (const block of fn.blockIds()) {
+					const terminator = fn.blockTerminator(block);
+					const start = fn.kernel.terminatorEdgeStart(terminator);
+					const count = fn.kernel.terminatorEdgeCount(terminator);
+					for (let edge = start; edge < start + count; edge++) {
+						if (--remaining < 0) return undefined;
+						const target = fn.kernel.terminatorEdgeBlock(edge);
+						let row = incoming.get(target);
+						if (row === undefined) incoming.set(target, (row = []));
+						row.push(edge);
+					}
+				}
+			}
+			const block = coreBlockId(fn.kernel.valueDefinitionOwner(value));
+			const index = fn.kernel.valueDefinitionIndex(value);
+			for (const edge of incoming.get(block) ?? []) {
+				if (index < fn.kernel.terminatorEdgeArgumentCount(edge))
+					pending.push(
+						fn.kernel.operandAt(fn.kernel.terminatorEdgeArgumentStart(edge) + index),
+					);
+			}
+		}
+	}
+	return definitions;
+}
+
 function recordReturnIndex(
 	fn: CoreFunctionStore,
 ): Omit<CoreRecordReturnIndex, "featureVersion"> {
@@ -252,16 +305,31 @@ function recordReturnIndex(
 		return cached;
 	const fields = new Map<CoreInstructionId, CoreRecordReturnFields>();
 	const inputs: Array<CoreValueId> = [];
-	if (!fn.isAsync && !fn.isGenerator)
+	if (!fn.isAsync && !fn.isGenerator) {
+		const returned = returnedDefinitions(fn);
 		for (const instruction of fn.instructionIds()) {
+			if (returned !== undefined && !returned.has(instruction)) continue;
 			const keys = recordKeys(fn, instruction);
-			if (keys === undefined) continue;
+			if (keys === undefined) {
+				if (
+					fn.instructionKind(instruction) !== "operation" ||
+					fn.kernel.instructionResultCount(instruction) !== 1
+				)
+					continue;
+				const completion = fn.registry.byId(fn.instructionOpcode(instruction))
+					.callTransfer?.result;
+				if (completion !== "call-completion" && completion !== "construct-completion")
+					continue;
+			}
+			const requiredKeys = new Set<number>();
 			let writes: Map<number, Array<CoreRecordFieldWrite>> | undefined;
 			const value = fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction));
 			const returns = returnedValueUseCount(fn, value, true, (access, operand) => {
 				if (operand !== 0) return false;
 				const key = recordPropertyKey(fn, access);
-				if (key === undefined || !keys.includes(key)) return false;
+				if (key === undefined || (keys !== undefined && !keys.includes(key)))
+					return false;
+				requiredKeys.add(key);
 				const opcode = fn.instructionOpcodeName(access);
 				if (opcode === "loadPropertyStatic" || opcode === "loadProperty") return true;
 				if (opcode !== "storePropertyStatic" && opcode !== "storeProperty") return false;
@@ -281,7 +349,7 @@ function recordReturnIndex(
 			});
 			if (returns === undefined || returns === 0) continue;
 			const start = fn.kernel.instructionOperandStart(instruction);
-			for (let index = 0; index < keys.length; index++)
+			for (let index = 0; index < (keys?.length ?? 0); index++)
 				inputs.push(fn.kernel.operandAt(start + index));
 			for (const row of writes?.values() ?? []) {
 				Object.freeze(row);
@@ -290,11 +358,13 @@ function recordReturnIndex(
 			fields.set(
 				instruction,
 				Object.freeze({
-					keys: Object.freeze([...keys]),
+					literalKeys: keys === undefined ? undefined : Object.freeze([...keys]),
+					requiredKeys: Object.freeze([...requiredKeys]),
 					...(writes === undefined ? {} : { writes }),
 				}),
 			);
 		}
+	}
 	const index = { fields, inputs: Object.freeze(inputs) };
 	if (featureVersion !== undefined)
 		recordReturnIndices.set(fn, { ...index, featureVersion });
@@ -361,35 +431,19 @@ export function coreReturnedRecordKinds(
 			continue;
 		}
 		const initial = returnedFields.get(definition);
-		const completion = fn.registry.byId(fn.instructionOpcode(definition)).callTransfer
-			?.result;
+		if (initial === undefined) return undefined;
 		let fields: CoreRecordValueKind;
-		if (initial !== undefined) {
+		if (initial.literalKeys !== undefined) {
 			const start = fn.kernel.instructionOperandStart(definition);
 			fields = Object.freeze(
-				initial.keys
+				initial.literalKeys
 					.map((key, index) => {
 						const value = fn.kernel.operandAt(start + index);
-						let kind = mask(value);
-						let integerRange =
+						const kind = mask(value);
+						const integerRange =
 							kind === COMPILER_VALUE_KIND_NUMBER
 								? range?.(value, definition)
 								: undefined;
-						// A write cannot execute before its initial field value completes normally.
-						if (kind !== 0)
-							for (const write of initial.writes?.get(key) ?? []) {
-								if (!cfg.reachable.has(fn.instructionBlock(write.instruction))) continue;
-								const written = mask(write.value);
-								kind |= written;
-								if (written !== 0)
-									integerRange =
-										kind === COMPILER_VALUE_KIND_NUMBER
-											? joinFieldIntegerRanges(
-													integerRange,
-													range?.(write.value, write.instruction),
-												)
-											: undefined;
-							}
 						return Object.freeze({
 							key,
 							mask: kind,
@@ -398,16 +452,45 @@ export function coreReturnedRecordKinds(
 					})
 					.sort((left, right) => left.key - right.key),
 			);
-		} else if (
-			(completion === "call-completion" || completion === "construct-completion") &&
-			coreValueOnlyReturned(
-				fn,
-				fn.kernel.resultAt(fn.kernel.instructionResultStart(definition)),
-				true,
+		} else {
+			const forwarded = call(definition);
+			if (
+				forwarded !== undefined &&
+				forwarded !== null &&
+				initial.requiredKeys.some((key) => !forwarded.some((field) => field.key === key))
 			)
-		)
-			fields = call(definition);
-		else return undefined;
+				return undefined;
+			fields = forwarded;
+		}
+		const writesByKey = initial.writes;
+		if (fields !== undefined && fields !== null && writesByKey !== undefined)
+			fields = Object.freeze(
+				fields.map((field) => {
+					const writes = writesByKey.get(field.key);
+					// An own write cannot create a normal return before its initial value completes.
+					if (writes === undefined || field.mask === 0) return field;
+					let kind = field.mask;
+					let integerRange = field.integerRange;
+					for (const write of writes) {
+						if (!cfg.reachable.has(fn.instructionBlock(write.instruction))) continue;
+						const written = mask(write.value);
+						kind |= written;
+						if (written !== 0)
+							integerRange =
+								kind === COMPILER_VALUE_KIND_NUMBER
+									? joinFieldIntegerRanges(
+											integerRange,
+											range?.(write.value, write.instruction),
+										)
+									: undefined;
+					}
+					return Object.freeze({
+						key: field.key,
+						mask: kind,
+						...(integerRange === undefined ? {} : { integerRange }),
+					});
+				}),
+			);
 		result = joinCoreRecordValueKinds(result, fields);
 		if (result === undefined) return undefined;
 	}

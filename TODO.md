@@ -187,7 +187,13 @@ The independent target boundary and current storage contract are recorded in
       own slot without invoking getters or prototypes. Inlining discards the scoped
       proof and republishes it from the cloned flow. Withdrawn presence removes its
       hint and effect refinement independently of normal-result kinds and bounds.
-      Writes to forwarded call results, typed producer storage for remaining writes,
+      Forwarded call and constructor results now retain those summaries across
+      private writes to proven existing own fields. Cached structural plans
+      revalidate required keys against current callee summaries; unknown sources
+      and empty recursive cycles cannot acquire a field contract from a write.
+      Wide numeric and heap-bearing unions retain their storage and root needs.
+      Reads through merged record aliases still lose field precision in recursive
+      producer updates. Typed producer storage for remaining writes,
       parameter-relative call effects and coroutine record transport remain. Own-field observations
       also carry initial integer bounds through the normal-result worklist, including
       finite targets, recursive forwarding and suspension. Growing fields widen
