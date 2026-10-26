@@ -49,12 +49,9 @@ function observedResult(kind: "call" | "field") {
 	const instruction = builder.bodyInstructionIds(entry).at(-1)!;
 	builder.setTerminator(entry, { kind: "return", value: value! });
 	const fn = program.function(builder.finish(entry).function);
-	const manager = new CoreAnalysisManager(
-		program,
-		programAnalysisContext(false),
-		new CoreOptimizationReportBuilder(program),
-	);
-	return { program, fn, manager, value: value!, instruction };
+	const report = new CoreOptimizationReportBuilder(program);
+	const manager = new CoreAnalysisManager(program, programAnalysisContext(false), report);
+	return { program, fn, manager, report, value: value!, instruction };
 }
 
 const bounded = { ...COMPILER_INT32_RANGE, minimum: 0, maximum: 255 };
@@ -193,7 +190,7 @@ describe("normal-result fact publication", () => {
 	it.each(["call", "field"] as const)(
 		"refreshes value consumers while retaining %s structure and memory",
 		(kind) => {
-			const { program, fn, manager, value, instruction } = observedResult(kind);
+			const { program, fn, manager, report, value, instruction } = observedResult(kind);
 			const request = { scope: "function", function: fn.id } as const;
 			const control = manager.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request);
 			const cfg = control.exceptional();
@@ -202,6 +199,8 @@ describe("normal-result fact publication", () => {
 			const kinds = manager.get(CORE_LOCAL_VALUE_KIND_ANALYSIS, request);
 			const ranges = manager.get(CORE_LOOP_INDUCTION_ANALYSIS, request);
 			const bundle = manager.get(CORE_LOCAL_FACT_BUNDLE_ANALYSIS, request);
+			const index = bundle.index;
+			const provenance = bundle.provenance;
 			const memory = manager.get(CORE_LOCAL_MEMORY_VERSIONS_ANALYSIS, request);
 			memory.readHash(instruction);
 			expect(kinds.kindMask(value)).toBe(COMPILER_VALUE_KIND_TOP);
@@ -227,7 +226,17 @@ describe("normal-result fact publication", () => {
 				manager.get(CORE_LOCAL_FACT_BUNDLE_ANALYSIS, request).valueKinds.kindMask(value),
 			).toBe(COMPILER_VALUE_KIND_NUMBER);
 			expect(manager.get(CORE_LOCAL_MEMORY_VERSIONS_ANALYSIS, request)).toBe(memory);
+			expect(manager.get(CORE_LOCAL_FACT_BUNDLE_ANALYSIS, request).index).toBe(index);
+			expect(manager.get(CORE_LOCAL_FACT_BUNDLE_ANALYSIS, request).provenance).toBe(
+				provenance,
+			);
 			expect(() => memory.readHash(instruction)).not.toThrow();
+			const counters = report.finish(program, {
+				directEntries: [],
+				specializations: [],
+			}).counters;
+			expect(counters.localFactRebuilds).toBe(2);
+			expect(counters.provenanceRebuilds).toBe(1);
 		},
 	);
 

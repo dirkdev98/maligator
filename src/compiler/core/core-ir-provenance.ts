@@ -757,6 +757,55 @@ export interface CoreLocalFactBundle {
 	readonly valueClasses: CoreValueClassAnalysis;
 }
 
+export const CORE_LOCAL_FACT_INDEX_ANALYSIS: CoreAnalysisDefinition<CoreLocalFactIndex> =
+	{
+		key: "local-fact-index",
+		scope: "function",
+		owner: CORE_OPTIMIZATION_OWNER.localFactAndProvenanceConstruction,
+		functionDependencies: ["body", "cfg", "exceptionFlow", "memoryEffects"],
+		compute({ program, request, get }) {
+			if (request.scope !== "function")
+				throw new Error("Expected function analysis request");
+			return buildCoreLocalFactIndex(
+				program.function(request.function),
+				get(CORE_CANONICAL_VALUE_ROOTS_ANALYSIS, request),
+			);
+		},
+	};
+
+export const CORE_LOCAL_ALLOCATION_PROVENANCE_ANALYSIS: CoreAnalysisDefinition<CoreProvenance> =
+	{
+		key: "local-allocation-provenance",
+		scope: "function",
+		owner: CORE_OPTIMIZATION_OWNER.localFactAndProvenanceConstruction,
+		functionDependencies: [
+			"body",
+			"cfg",
+			"exceptionFlow",
+			"memoryEffects",
+			"representations",
+		],
+		programDependencies: ["data"],
+		compute({ program, request, get, runOwner, recordResult }) {
+			if (request.scope !== "function")
+				throw new Error("Expected function analysis request");
+			return buildCoreProvenance(
+				program,
+				program.function(request.function),
+				get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request).exceptional(),
+				{
+					canonicalRoots: get(CORE_CANONICAL_VALUE_ROOTS_ANALYSIS, request),
+					index: () => get(CORE_LOCAL_FACT_INDEX_ANALYSIS, request),
+					runOwner,
+					onWork:
+						recordResult === undefined
+							? undefined
+							: (kind) => recordResult({ provenanceWork: kind }),
+				},
+			);
+		},
+	};
+
 export const CORE_LOCAL_FACT_BUNDLE_ANALYSIS: CoreAnalysisDefinition<CoreLocalFactBundle> =
 	{
 		key: "local-fact-bundle",
@@ -776,7 +825,6 @@ export const CORE_LOCAL_FACT_BUNDLE_ANALYSIS: CoreAnalysisDefinition<CoreLocalFa
 			if (request.scope !== "function")
 				throw new Error("Expected function analysis request");
 			const functionId = request.function;
-			const fn = program.function(functionId);
 			const control = get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request).exceptional();
 			const roots = get(CORE_CANONICAL_VALUE_ROOTS_ANALYSIS, request);
 			let localIndex: CoreLocalFactIndex | undefined;
@@ -784,10 +832,7 @@ export const CORE_LOCAL_FACT_BUNDLE_ANALYSIS: CoreAnalysisDefinition<CoreLocalFa
 			let provenanceAnalysis: CoreProvenance | undefined;
 			let valueClassAnalysis: CoreValueClassAnalysis | undefined;
 			const index = (): CoreLocalFactIndex =>
-				(localIndex ??= runOwner(
-					CORE_OPTIMIZATION_OWNER.localFactAndProvenanceConstruction,
-					() => buildCoreLocalFactIndex(fn, roots),
-				));
+				(localIndex ??= get(CORE_LOCAL_FACT_INDEX_ANALYSIS, request));
 			return Object.freeze({
 				function: functionId,
 				control,
@@ -799,18 +844,9 @@ export const CORE_LOCAL_FACT_BUNDLE_ANALYSIS: CoreAnalysisDefinition<CoreLocalFa
 					return (valueKindAnalysis ??= get(CORE_LOCAL_VALUE_KIND_ANALYSIS, request));
 				},
 				get provenance() {
-					return (provenanceAnalysis ??= runOwner(
-						CORE_OPTIMIZATION_OWNER.localFactAndProvenanceConstruction,
-						() =>
-							buildCoreProvenance(program, fn, control, {
-								canonicalRoots: roots,
-								index,
-								runOwner,
-								onWork:
-									recordResult === undefined
-										? undefined
-										: (kind) => recordResult({ provenanceWork: kind }),
-							}),
+					return (provenanceAnalysis ??= get(
+						CORE_LOCAL_ALLOCATION_PROVENANCE_ANALYSIS,
+						request,
 					));
 				},
 				get valueClasses() {

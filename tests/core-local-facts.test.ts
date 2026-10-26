@@ -9,6 +9,54 @@ import { CoreProgram } from "../src/compiler/core/core-store.ts";
 import { programAnalysisContext } from "./helpers/core-program-analysis.ts";
 
 describe("Core local fact bundle", () => {
+	it("invalidates structural projections only for their actual inputs", () => {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const allocation = builder.appendInstruction(entry, "createArray", [], {
+			attributes: { length: 0 },
+		})[0]!;
+		const instruction = builder.bodyInstructionIds(entry)[0]!;
+		builder.setTerminator(entry, { kind: "return", value: allocation });
+		const fn = program.function(builder.finish(entry).function);
+		const report = new CoreOptimizationReportBuilder(program);
+		const analyses = new CoreAnalysisManager(program, programAnalysisContext(), report);
+		const request = { scope: "function", function: fn.id } as const;
+		let bundle = analyses.get(CORE_LOCAL_FACT_BUNDLE_ANALYSIS, request);
+		for (const kind of ["representations", "effects", "data", "body"] as const) {
+			const index = bundle.index;
+			const provenance = bundle.provenance;
+			const editor = CoreEditor.open(program, fn.id);
+			if (kind === "representations")
+				editor.setValueRepresentation(allocation, "scalarized-object");
+			else if (kind === "data") editor.appendStringConstants([[97]]);
+			else if (kind === "body")
+				editor.appendInstruction(entry, "createNumber", [], { attributes: { value: 1 } });
+			else {
+				const effects = fn.registry.byId(fn.instructionOpcode(instruction)).effects;
+				const proof = editor.addFact({
+					kind: "projection-effect-test",
+					value: true,
+					claims: [{ kind: "effect", instruction, effects }],
+					validity: { kind: "summary", digest: "projection-effect-test" },
+					obligations: [],
+					origin: "test",
+				});
+				editor.setInstructionEffectRefinement(instruction, { effects, proof });
+			}
+			editor.commit();
+			const next = analyses.get(CORE_LOCAL_FACT_BUNDLE_ANALYSIS, request);
+			expect(next === bundle, kind).toBe(false);
+			expect(next.index === index).toBe(kind === "representations" || kind === "data");
+			expect(next.provenance === provenance, kind).toBe(false);
+			expect(() => provenance.cannotBeHeldWeakly(allocation)).toThrow(
+				"Stale allocation provenance analysis",
+			);
+			bundle = next;
+		}
+		expect(bundle.index.operations).toHaveLength(2);
+	});
+
 	it("shares one bundle across local consumers and invalidates only its function", () => {
 		const program = new CoreProgram(coreOpcodeRegistry);
 		const allocationBuilder = new CoreFunctionBuilder(program);

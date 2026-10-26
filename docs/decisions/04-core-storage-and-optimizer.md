@@ -120,6 +120,13 @@ storage, effect proofs and structural analyses while invalidating specialization
 admission and its lazy details. A hint can select guarded lowering; it cannot refine
 the access's effects or change its normal-result contract.
 
+The local fact bundle projects separately versioned structural indexes and allocation
+provenance. Result-fact or specialization-input changes refresh value consumers
+without rebuilding those projections. Representation changes invalidate provenance
+but retain the index; body, CFG and effect changes invalidate both, and program data
+changes invalidate provenance. Counters record actual provenance construction rather
+than using bundle refreshes as a proxy.
+
 ### Sealed boundary
 
 Sealing ends Core construction and optimization and returns a read-only

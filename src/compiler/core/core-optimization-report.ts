@@ -862,9 +862,10 @@ export class CoreOptimizationReportBuilder {
 			}
 		}
 		if (outcome === "recompute" && analysis === "local-fact-bundle") {
-			this.increment("provenanceRebuilds");
 			this.increment("localFactRebuilds");
 		}
+		if (outcome === "recompute" && analysis === "local-allocation-provenance")
+			this.increment("provenanceRebuilds");
 		if (this.#analyses === undefined) return;
 		const report = this.#analyses.get(analysis) ?? {
 			queries: 0,
@@ -907,10 +908,13 @@ export class CoreOptimizationReportBuilder {
 			);
 			return;
 		}
-		if (analysis === "local-fact-bundle") {
+		if (analysis === "local-allocation-provenance") {
 			const kind = (value as { readonly provenanceWork?: string }).provenanceWork;
 			if (kind === "layout") this.increment("provenanceLayoutsMaterialized");
 			else if (kind === "escape") this.increment("provenanceEscapeChecks");
+			return;
+		}
+		if (analysis === "local-fact-bundle") {
 			if ((value as { readonly valueClassContainment?: boolean }).valueClassContainment)
 				this.increment("valueClassContainmentChecks");
 			return;
