@@ -297,6 +297,10 @@ preserves the result's kind, range and representation contract. Scalar boxing an
 integer widening use explicit moves after normal completion; stronger result
 facts and unsupported unboxing boundaries retain their original values. Calls,
 argument effects and exceptional completions remain at their original sites.
+Unobserved final call outputs need no native root or post-call publication. Every
+definition must return its final value before assigning that destination; source
+GC maps remain complete, and borrowed helper storage, rest-call state and reused
+inputs keep their roots. Scheduling barriers alone do not extend result lifetimes.
 Noncoercing comparisons can be delayed into expressions while their inputs remain
 available; boxed leaves stay materialized before call and field-store preludes.
 Loose equality keeps its coercion semantics and ordinary fallback.

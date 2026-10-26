@@ -154,13 +154,13 @@ describe("native physical root storage", () => {
 		const native = contract();
 		const storage = native.storage!;
 		const slots = [...storage.rootSlots];
-		slots[storage.rootRegisters.indexOf(3)] = slots[storage.rootRegisters.indexOf(2)]!;
+		slots[storage.rootRegisters.indexOf(2)] = slots[storage.rootRegisters.indexOf(0)]!;
 		expect(() =>
 			validateNativeRootStorage(native, storage.rootRegisters, {
 				...storage,
 				rootSlots: slots,
 			}),
-		).toThrow(/interfering GC roots at 1/);
+		).toThrow(/interfering GC roots at 0/);
 	});
 
 	it("delegates root-omission legality to the full storage contract", () => {
@@ -200,11 +200,14 @@ describe("native physical root storage", () => {
 		);
 		expect(storage.rootSlotCount).toBeLessThan(storage.rootRegisters.length);
 		expect(slots.get(2)).toBe(slots.get(4));
-		expect(slots.get(3)).toBe(slots.get(5));
-		for (const point of fn.gc.safepoints)
-			expect(
-				new Set(point.rootRegisters.map((register) => slots.get(register))).size,
-			).toBe(point.rootRegisters.length);
+		expect(slots.has(3)).toBe(false);
+		expect(slots.has(5)).toBe(true);
+		for (const point of fn.gc.safepoints) {
+			const retained = point.rootRegisters.filter((register) => slots.has(register));
+			expect(new Set(retained.map((register) => slots.get(register))).size).toBe(
+				retained.length,
+			);
+		}
 		for (const parameter of [0, 1])
 			expect(
 				storage.rootSlots.filter((slot) => slot === slots.get(parameter)),

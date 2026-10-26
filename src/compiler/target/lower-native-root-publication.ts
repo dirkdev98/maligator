@@ -63,6 +63,52 @@ export function nativePrivateCallResultIps(
 	return privateResults;
 }
 
+/** Calls assign final values after helper return; helper state and borrowed outputs stay rooted. */
+export function nativeUnobservedCallResultRegisters(
+	native: NativeFunctionPlan,
+	body: Pick<NativeBodyFacts, "reads" | "writes">,
+	blocked: ReadonlySet<number>,
+	borrowed: ReadonlySet<number>,
+): ReadonlySet<number> {
+	const fn = native.body;
+	if (native.storageValues === undefined) return new Set();
+	const candidates = new Set<number>();
+	const rejected = new Set(borrowed);
+	const entries = fn.parameterCount + fn.argumentSnapshotCount;
+	for (const [ip, op] of fn.instructions.entries()) {
+		let final = false;
+		if (!blocked.has(ip)) {
+			switch (op.opcode) {
+				case "CALL":
+				case "CALL_KNOWN":
+				case "CONSTRUCT":
+				case "CALL_SPREAD":
+				case "CALL_SPREAD_ITERABLE":
+				case "CALL_REST_ARGUMENTS":
+				case "CONSTRUCT_SPREAD":
+				case "CONSTRUCT_SUPER":
+				case "CONSTRUCT_SUPER_EXPLICIT":
+					final = true;
+					break;
+			}
+		}
+		for (const register of body.writes[ip]!) {
+			if (
+				final &&
+				"dst" in op &&
+				register === op.dst &&
+				register >= entries &&
+				native.storageValues[register]! >= 0
+			)
+				candidates.add(register);
+			else rejected.add(register);
+		}
+		for (const register of body.reads[ip]!) rejected.add(register);
+	}
+	for (const register of rejected) candidates.delete(register);
+	return candidates;
+}
+
 /** Outputs whose intermediate values stay in shadow storage for the whole op. */
 export function nativeRootedOutputRegisters(
 	instruction: BytecodeInstruction,

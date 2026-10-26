@@ -175,6 +175,47 @@ function* forwardedSuspension(value, callback) {
 	collectGarbage();
 	return result.value;
 }
+function discardedCall(value, callee, gate) {
+	callee(value);
+	gate();
+	return value.value;
+}
+function discardedSpread(value, callee, gate, args) {
+	callee(value, ...args);
+	gate();
+	return value.value;
+}
+function discardedRest(value, callee, gate, ...rest) {
+	callee(...rest);
+	gate();
+	return value.value;
+}
+function discardedApply(value, callee, gate, args) {
+	callee.apply(null, args);
+	gate();
+	return value.value;
+}
+function discardedConstruct(value, Constructor, gate) {
+	new Constructor(value);
+	gate();
+	return value.value;
+}
+function discardedKnown(value, gate) {
+	Object.values(value);
+	gate();
+	return value.value;
+}
+function* discardedSuspension(value, callee, gate) {
+	callee(value);
+	yield 0;
+	gate();
+	return value.value;
+}
+async function discardedAsync(value, callee, gate) {
+	callee(value);
+	await gate();
+	return value.value;
+}
 function identityPrefix(value, iterable) {
 	const result = identity((value & 255) + 1, ...iterable);
 	collectGarbage();
@@ -352,6 +393,16 @@ globalThis.forwardedIndex = forwardedIndex;
 globalThis.forwardedInvocation = forwardedInvocation;
 globalThis.forwardedArgument = forwardedArgument;
 globalThis.forwardedSuspension = forwardedSuspension;
+Object.assign(globalThis, {
+	discardedCall,
+	discardedSpread,
+	discardedRest,
+	discardedApply,
+	discardedConstruct,
+	discardedKnown,
+	discardedSuspension,
+	discardedAsync,
+});
 globalThis.looseEquality = looseEquality;
 globalThis.identityEquality = identityEquality;
 globalThis.identityStrict = identityStrict;
@@ -567,6 +618,92 @@ console.log(
 	),
 );
 console.log(capture(() => forwardedProperty(null, collectGarbage)));
+const discardedInput = {
+	value: "retained",
+	get extra() {
+		collectGarbage();
+		return { marker: "getter" };
+	},
+};
+function discardedFactory(value) {
+	collectGarbage();
+	if (value !== discardedInput) throw failure;
+	return { allocated: [value, "fresh"] };
+}
+class DiscardedConstructor {
+	constructor(value) {
+		collectGarbage();
+		this.value = value;
+		collectGarbage();
+	}
+}
+class DiscardedDerived extends DiscardedConstructor {
+	constructor(value) {
+		super(value);
+		collectGarbage();
+	}
+}
+console.log(
+	capture(() => discardedCall(discardedInput, discardedFactory, collectGarbage)),
+);
+console.log(
+	capture(() =>
+		discardedSpread(discardedInput, discardedFactory, collectGarbage, ["extra"]),
+	),
+);
+console.log(
+	capture(() =>
+		discardedRest(discardedInput, discardedFactory, collectGarbage, discardedInput),
+	),
+);
+console.log(
+	capture(() =>
+		discardedApply(discardedInput, discardedFactory, collectGarbage, [discardedInput]),
+	),
+);
+for (const Constructor of [DiscardedConstructor, DiscardedDerived])
+	console.log(
+		capture(() => discardedConstruct(discardedInput, Constructor, collectGarbage)),
+	);
+console.log(capture(() => discardedKnown(discardedInput, collectGarbage)));
+console.log(
+	capture(() => {
+		const iterator = discardedSuspension(
+			discardedInput,
+			discardedFactory,
+			collectGarbage,
+		);
+		iterator.next();
+		collectGarbage();
+		return iterator.next().value;
+	}),
+);
+console.log(
+	capture(() =>
+		discardedSpread(discardedInput, discardedFactory, collectGarbage, {
+			*[Symbol.iterator]() {
+				collectGarbage();
+				throw failure;
+			},
+		}),
+	),
+);
+console.log(
+	capture(() =>
+		discardedCall(
+			discardedInput,
+			() => {
+				collectGarbage();
+				throw failure;
+			},
+			collectGarbage,
+		),
+	),
+);
+discardedAsync(discardedInput, discardedFactory, collectGarbage).then((value) => {
+	collectGarbage();
+	console.log("discarded async:" + value);
+});
 for (const value of [
 	"ready",
 	"other",

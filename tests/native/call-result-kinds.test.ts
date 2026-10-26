@@ -31,7 +31,7 @@ describe("normal call result kinds and ranges", () => {
 			});
 			const expected = execFileSync(process.execPath, [fixture], { encoding: "utf8" });
 			for (const binary of [pair.compiled, pair.interpreted])
-				for (const env of [{}, STRESS_ENV])
+				for (const env of [{}, { ...STRESS_ENV, MAL_HOST_GC: "1" }])
 					expect(runToStdout(binary, { env })).toBe(expected);
 		},
 	);

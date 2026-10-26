@@ -41,6 +41,7 @@ import {
 	nativeEntryStableRootRegisters,
 	nativePrivateCallResultIps,
 	nativePrivateRootRegisters,
+	nativeUnobservedCallResultRegisters,
 } from "./lower-native-root-publication.ts";
 import {
 	selectNativeRootStorage,
@@ -516,7 +517,7 @@ function scalarStorageOwnership(
 		Pick<NativePropertyProjectionPlan, "claimedIps" | "borrowedRegisters">
 	>,
 	suspension?: NativeSuspensionPlan,
-	purpose: "scheduling" | "value-lifetime" = "scheduling",
+	purpose: "scheduling" | "value-lifetime" | "result-lifetime" = "scheduling",
 ): NativeScalarOwnership {
 	const fn = native.body;
 	const blocked = new Set(
@@ -539,15 +540,17 @@ function scalarStorageOwnership(
 	for (const site of native.literalSwitches ?? [])
 		for (let ip = site.instructionIp; ip <= site.endIp; ip++) blocked.add(ip);
 	const handlers = body.handlerTargets;
-	for (const handler of fn.handlers) {
-		blocked.add(handler.handlerIp);
-		blocked.add(handler.endIp);
-	}
+	if (purpose !== "result-lifetime")
+		for (const handler of fn.handlers) {
+			blocked.add(handler.handlerIp);
+			blocked.add(handler.endIp);
+		}
 	for (const [ip, op] of fn.instructions.entries()) {
 		const plan = native.instructions[ip];
 		if (
-			handlers[ip] !== undefined ||
-			["CATCH", "TRY_BEGIN", "TRY_END"].includes(op.opcode) ||
+			(purpose !== "result-lifetime" &&
+				(handlers[ip] !== undefined ||
+					["CATCH", "TRY_BEGIN", "TRY_END"].includes(op.opcode))) ||
 			(plan !== undefined &&
 				!["unsigned-arithmetic", "call", "construct"].includes(plan.kind))
 		)
@@ -1245,6 +1248,20 @@ function rootStorage(
 	const fn = native.body;
 	// Admitted expressions produce untraced scalars; pooled literals have immortal addresses.
 	const rootFree = new Set(untracedResults);
+	const resultOwnership = scalarStorageOwnership(
+		native,
+		body,
+		nativeFastPathWindows(fastPaths),
+		undefined,
+		"result-lifetime",
+	);
+	for (const register of nativeUnobservedCallResultRegisters(
+		native,
+		body,
+		resultOwnership.blocked,
+		resultOwnership.borrowed,
+	))
+		rootFree.add(register);
 	for (const ip of [...rematerializedConstantIps, ...expressionIps]) {
 		const op = fn.instructions[ip]!;
 		if (!("dst" in op)) throw new Error("Native expression lacks a destination");

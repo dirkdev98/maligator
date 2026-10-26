@@ -141,7 +141,11 @@ describe("normal script call result facts", () => {
 				INSTRUCTION_CALLS_USER_CODE,
 			])
 				expect(out.facts.effectMask! & effect).not.toBe(0);
-			expect(out.native.storage!.rootRegisters.includes(out.op.dst)).toBe(
+			const returned = out.native.body.instructions.find(
+				(op) => op.opcode === "RETURN" && op.value >= 0,
+			);
+			if (returned?.opcode !== "RETURN") throw new Error("Missing forwarded return");
+			expect(out.native.storage!.rootRegisters.includes(returned.value)).toBe(
 				representation === "string" ||
 					mask === (COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_BIGINT),
 			);
@@ -190,7 +194,10 @@ describe("normal script call result facts", () => {
 		expect(out.op.opcode).toBe("CALL_SPREAD_ITERABLE");
 		expect(out.facts.resultKindMasks).toEqual([COMPILER_VALUE_KIND_STRING]);
 		expect(out.native.registerRepresentations[out.op.dst]).toBe("string");
-		expect(out.native.storage!.rootRegisters).toContain(out.op.dst);
+		if (out.op.opcode !== "CALL_SPREAD_ITERABLE")
+			throw new Error("Missing iterable call");
+		expect(out.native.storage!.rootRegisters).toContain(out.op.prefixArguments[0]);
+		expect(out.native.storage!.rootRegisters).not.toContain(out.op.dst);
 		expect(out.facts.effectMask! & INSTRUCTION_MAY_GC).not.toBe(0);
 		expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
 			out.image,

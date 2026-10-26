@@ -122,9 +122,10 @@ The independent target boundary and current storage contract are recorded in
       phi components, including observation-argument sharing and NaN-aware equality
       emission. Compatible normal-return identities now reach general consumers,
       retaining stronger result facts and explicit scalar boxing/widening boundaries.
-      Carry those identities into remaining storage and liveness contracts: dead
-      call outputs still retain poll publication, and forwarding chains can extend
-      input lifetimes enough to grow native root staging.
+      Native storage now omits roots and poll publication for unobserved final call
+      results, including ordinary, known, spread, rest, construction and resumable
+      paths. Helper state, borrowed outputs and reused input storage remain rooted.
+      Carry identities into remaining storage and liveness contracts.
       Mutable Object.is now consumes operand identity,
       kinds and scalar views behind a loaded-callee guard, including frameless hits;
       its miss retains arbitrary results, throwing and root publication.
