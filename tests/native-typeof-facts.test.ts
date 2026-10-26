@@ -83,7 +83,7 @@ describe("partial typeof operand facts", () => {
 					(mask & COMPILER_VALUE_KIND_OBJECT) === 0
 						? "mal_value_is_null"
 						: "mal_value_is_callable";
-				expect(c).toContain(`${kernel}(f0)`);
+				expect(c).toContain(`${kernel}(__fast_r0)`);
 				expect(c).toContain(`${kernel}(r0)`);
 				expect(c).not.toContain("mal_vm_typeof_compare(");
 			}
@@ -123,7 +123,7 @@ describe("partial typeof operand facts", () => {
 					`function compute(value){return typeof value ${negated ? "!==" : "==="} '${expected}';}globalThis.compute=compute;`,
 					"compute",
 				);
-				expect(out.c.source).toContain(`${predicate}(f0)`);
+				expect(out.c.source).toContain(`${predicate}(__fast_r0)`);
 				expect(out.c.source).toContain(`${predicate}(r0)`);
 				expect(out.c.source).not.toContain("mal_vm_typeof_compare(");
 			}
