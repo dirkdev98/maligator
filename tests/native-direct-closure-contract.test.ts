@@ -8,8 +8,12 @@ import {
 	deserializeCompilerArtifact,
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
-import { emitProgramImage } from "../src/compiler/target/emit-program-image.ts";
+import {
+	emitProgramImage,
+	emitProgramTranslationUnits,
+} from "../src/compiler/target/emit-program-image.ts";
 import type { ProgramImage } from "../src/compiler/target/program-image.ts";
+import { resolveSplitUnitLinks } from "./helpers/native-relocation.ts";
 
 function compile(source: string): ProgramImage {
 	const dir = mkdtempSync(path.join(os.tmpdir(), "mal-direct-closure-"));
@@ -128,6 +132,34 @@ console.log(run(1000));
 `;
 
 describe("native direct closures", () => {
+	it("restores the closure object when its planned native callee exceeds the C budget", () => {
+		const image = compile(
+			`function owner(value){function target(input){${"input+=globalThis.salt;".repeat(100)}return input;}return target(value);}globalThis.owner=owner;`,
+		);
+		const owner = functionNamed(image, "owner");
+		const target = functionNamed(image, "target");
+		expect(
+			image.native.functions[owner]!.instructions.some(
+				(plan) => plan?.kind === "direct-closure",
+			),
+		).toBe(true);
+		expect(emitProgramImage(image)).not.toContain(
+			`mal_vm_op_create_function(vm, ${target},`,
+		);
+		const output = resolveSplitUnitLinks(
+			image,
+			emitProgramTranslationUnits(
+				image,
+				{},
+				{ targetCodeUnits: 20_000, hardMaximumCodeUnits: 20_000 },
+			).map((unit) => unit.source),
+		).join("\n");
+		expect(output).not.toMatch(
+			new RegExp(`\\bMalValue mal_compiled_${target}(?:_full)?\\(`),
+		);
+		expect(output).toContain(`mal_vm_op_create_function(vm, ${target},`);
+	});
+
 	it("share one chain test among the closures an activation creates with one layout", () => {
 		const image = compile(sharedLayoutSource);
 		const down = functionNamed(image, "down");

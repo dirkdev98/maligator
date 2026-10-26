@@ -88,6 +88,17 @@ function malFunctionRows(source: string): Array<Record<string, string>> {
 	});
 }
 
+function namedFunctionIndex(image: ProgramImage, name: string): number {
+	const index = image.runtime.functions.findIndex(
+		(fn) =>
+			String.fromCharCode(
+				...(image.runtime.stringConstants[fn.nameStringIndex] ?? []),
+			) === name,
+	);
+	expect(index).toBeGreaterThanOrEqual(0);
+	return index;
+}
+
 function boxedNativeDefinition(
 	index: number,
 	linkage: "static" | "external" | "either" = "either",
@@ -301,6 +312,25 @@ function withSpecializations(
 }
 
 describe("emit-program-image instruction packing", () => {
+	it("does not bootstrap mutually recursive frameless entries from planned callees", () => {
+		const source = `const first=function first(value){return second(value);};const second=function second(value){return first(value);};globalThis.first=first;globalThis.second=second;`;
+		const image = compilePreciseProgramImage(
+			analyzeSourceAndRunSemanticAnalysis(source, "/recursive-fast-entries.mjs"),
+			{ coreOptimizationBenchmarkAblation: { family: "inlining-cross-call" } },
+		);
+		const indices = ["first", "second"].map((name) => namedFunctionIndex(image, name));
+		const output = emitProgramImage(image);
+		for (const [position, index] of indices.entries()) {
+			expect(
+				image.native.functions[index]!.instructions.some(
+					(plan) =>
+						plan?.kind === "call" && plan.directFunctionIndex === indices[1 - position],
+				),
+			).toBe(true);
+			expect(output).not.toMatch(new RegExp(`\\bbool mal_compiled_${index}_try\\(`));
+		}
+	});
+
 	it("declares later frameless callees before their first use in standalone and batch C", () => {
 		const image = lowerNativeStorage(
 			compileEntrypoint(

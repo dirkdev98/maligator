@@ -99,7 +99,11 @@ The independent target boundary and current storage contract are recorded in
 - [ ] Extend selected typed call/aggregate transport and expression regions using
       Core proofs, with bounded code-size decisions and matched runtime evidence.
       Move remaining emission-local selection into explicit native plans before
-      claiming the C emitter only renders selected decisions. Normal result-kind
+      claiming the C emitter only renders selected decisions. Native emission now
+      starts from planned canonical entries, typed entries and private closure
+      environments, withdrawing unavailable or oversized bodies before publishing
+      C. Frameless paths still require a base proof, and cache identities include
+      the numeric-sort leaf contract independently of entry presence. Normal result-kind
       bounds from complete script callee sets now reach Core and native storage.
       Calls whose Number result depends on a guarded typed entry still need scalar
       transport along that admitted branch when the canonical result remains boxed.

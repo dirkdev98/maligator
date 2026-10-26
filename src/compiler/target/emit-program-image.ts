@@ -969,7 +969,11 @@ function compiledAvailabilityMatches(
 		)
 			return false;
 		for (let entry = 0; entry < a.directEntries.length; entry++)
-			if (a.directEntries[entry]!.id !== b.directEntries[entry]!.id) return false;
+			if (
+				a.directEntries[entry]!.id !== b.directEntries[entry]!.id ||
+				a.directEntries[entry]!.leaf !== b.directEntries[entry]!.leaf
+			)
+				return false;
 	}
 	return true;
 }
@@ -1176,7 +1180,11 @@ function emitNativeFunctions(
 					? "1"
 					: "0";
 		for (const entry of referenced.entries)
-			key += availability.directCompiledEntries.has(entry) ? "1" : "0";
+			key += availability.directCompiledEntries.get(entry)?.leaf
+				? "2"
+				: availability.directCompiledEntries.has(entry)
+					? "1"
+					: "0";
 		for (const closure of closureParticipation[functionIndex] ?? [])
 			key += availability.directClosures.has(closure) ? "1" : "0";
 		const previous = cached[functionIndex];
@@ -1186,13 +1194,29 @@ function emitNativeFunctions(
 		return emitted;
 	};
 
-	const unavailable: NativeCompilationAvailability = {
-		directCompiledTargets: new Set(),
+	const candidates: NativeCompilationAvailability = {
+		directCompiledTargets: new Set(
+			references.flatMap(({ targets }) =>
+				targets.filter((target) => !image.runtime.functions[target]!.isClassConstructor),
+			),
+		),
+		// Frameless entries need a base proof; recursive calls cannot certify one another.
 		fastTryTargets: new Set(),
-		directCompiledEntries: new Map(),
-		directClosures: new Map(),
+		directCompiledEntries: new Map(
+			image.native.functions.flatMap((native, index) =>
+				native.directEntries.map((entry) => [
+					directCompiledEntryKey(index, entry.id),
+					entry,
+				]),
+			),
+		),
+		directClosures: new Map(
+			[...closureSites].flatMap(([key, site]) =>
+				site.environment === undefined ? [] : [[key, site.environment]],
+			),
+		),
 	};
-	let compiled = image.runtime.functions.map((_fn, index) => emit(index, unavailable));
+	let compiled = image.runtime.functions.map((_fn, index) => emit(index, candidates));
 	for (let iteration = 0; iteration <= image.runtime.functions.length + 1; iteration++) {
 		const availability = nativeCompilationAvailability(image, compiled, closureSites);
 		const next = image.runtime.functions.map((_fn, index) =>
