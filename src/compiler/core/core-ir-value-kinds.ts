@@ -74,6 +74,11 @@ import type {
 	CoreProgramFlowValueKindStatistics,
 	CoreProgramFlowValueKindSummary,
 } from "./core-program-flow.ts";
+import type { CoreRecordValueKind } from "./core-record-value-kinds.ts";
+import {
+	coreRecordReturnKindInputs,
+	coreReturnedRecordKinds,
+} from "./core-record-value-kinds.ts";
 import { coreExactArrayFromCallResult } from "./core-static-values.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 
@@ -1345,7 +1350,7 @@ export type CoreProgramValueKindState = CoreProgramFlowValueKindState<
 export const CORE_PROGRAM_FLOW_VALUE_KIND_SEMANTICS: CoreProgramFlowValueKindSemantics<CoreProgramFunctionValueKinds> =
 	Object.freeze({
 		observationValues(program: CoreProgram, fn: CoreFunctionStore) {
-			const values = new Set<CoreValueId>();
+			const values = new Set<CoreValueId>(coreRecordReturnKindInputs(fn));
 			for (const instruction of fn.instructionIds())
 				coreValueKindObservation(program, fn, instruction, (value) => {
 					values.add(value);
@@ -1388,6 +1393,20 @@ export const CORE_PROGRAM_FLOW_VALUE_KIND_SEMANTICS: CoreProgramFlowValueKindSem
 		},
 		latticeMask(analysis: CoreProgramFunctionValueKinds, value: CoreValueId) {
 			return analysis.latticeMask(value);
+		},
+		returnRecord(
+			_program: CoreProgram,
+			fn: CoreFunctionStore,
+			control: CoreControlFlow,
+			analysis: CoreProgramFunctionValueKinds,
+			call: (instruction: CoreInstructionId) => CoreRecordValueKind,
+		) {
+			return coreReturnedRecordKinds(
+				fn,
+				control,
+				(value) => analysis.latticeMask(value),
+				call,
+			);
 		},
 		top: COMPILER_VALUE_KIND_TOP,
 		object: COMPILER_VALUE_KIND_OBJECT,

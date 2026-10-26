@@ -134,7 +134,13 @@ The independent target boundary and current storage contract are recorded in
       consumers in full and frameless bodies: nullable primitive unions need only
       a null test, nullable Object unions need only a callability test, and other
       unions without null skip its branch, including after suspension.
-- [ ] Give record entries typed fields. Record entries return fields boxed, so a
+- [ ] Give record entries typed fields. Program value-kind flow now carries initial
+      own-field kind summaries through exact call chains, finite callee sets,
+      recursive forwarding, spread/rest and constructor completions. Field-only
+      changes wake callers without rebuilding the any-script scalar aggregate.
+      These are producer facts, not a mutation/escape proof for later reads; typed
+      layouts and caller property facts still need to consume them.
+      Record entries return fields boxed, so a
       caller's `token.end` stays boxed, `index = token.end + 1` gives the producer a
       boxed parameter, and the scanning loop in `returned-records` runs generic
       arithmetic: 90.8 ns/op against Node's 9.6 (118.4 before record entries, on the

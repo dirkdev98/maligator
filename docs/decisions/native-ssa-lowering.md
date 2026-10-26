@@ -29,6 +29,15 @@ those proofs for integer arithmetic and updates. Floating operands retain Number
 arithmetic, and signed division/remainder retain their JavaScript edge semantics.
 Yield and await box numeric observations and preserve scalar suspension storage.
 
+Program value-kind summaries carry the initial own data-field kinds of fresh
+returned literals. The existing call worklist joins common own keys, propagates
+field-only changes through finite targets and recursive forwarding, and keeps an
+empty normal-return set distinct from unknown fields. Mutated or escaped producers
+withdraw that contract. Missing keys do not prove undefined, since prototypes may
+supply them. These summaries do not yet change record layouts or property-load
+representations: a consumer must establish mutation and escape validity at the
+read before using an initial field kind.
+
 Constants and source resources are finalized jointly over both targets; a
 constant used only by the native body must survive compaction. Captures, profiling
 sites, test batch relocation, and compiler artifacts preserve both bodies.

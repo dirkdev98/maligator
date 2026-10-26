@@ -24,6 +24,10 @@ import type {
 	CoreValueId,
 } from "./core-ir.ts";
 import { coreArgumentObservation } from "./core-native-entry-analysis.ts";
+import {
+	coreValueOnlyReturned,
+	coreReturnedValueDefinition,
+} from "./core-record-value-kinds.ts";
 import type { CoreFunctionStore, CoreProgram } from "./core-store.ts";
 import { coreFunctionVersionsAreCurrent } from "./core-store.ts";
 import type { CoreFunctionVersions } from "./core-store.ts";
@@ -225,43 +229,6 @@ export function coreFieldArgument(
 
 const MAX_RESULT_FIELDS = 16;
 
-function onlyReturned(fn: CoreFunctionStore, value: CoreValueId): boolean {
-	const pending = [value];
-	while (pending.length > 0) {
-		const current = pending.pop()!;
-		if (fn.kernel.valueHandlerUseCount(current) > 0) return false;
-		for (
-			let use = fn.kernel.valueFirstUse(current);
-			use >= 0;
-			use = fn.kernel.useNext(use)
-		) {
-			if (fn.kernel.useLive(use) === 0) continue;
-			const instruction = fn.kernel.useInstruction(use);
-			const kind = fn.instructionKind(instruction);
-			if (kind === "return") continue;
-			if (kind !== "operation") return false;
-			const opcode = fn.instructionOpcodeName(instruction);
-			if (opcode === "rootUse") continue;
-			if (opcode !== "move") return false;
-			pending.push(fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)));
-		}
-	}
-	return true;
-}
-
-function returnedAllocation(
-	fn: CoreFunctionStore,
-	value: CoreValueId,
-): CoreInstructionId | undefined {
-	for (let depth = 0; depth < 16; depth++) {
-		if (fn.kernel.valueDefinitionKind(value) !== 1) return undefined;
-		const instruction = coreInstructionId(fn.kernel.valueDefinitionOwner(value));
-		if (fn.instructionOpcodeName(instruction) !== "move") return instruction;
-		value = fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction));
-	}
-	return undefined;
-}
-
 /** A key no locked `Object.prototype` has, so reading it from a plain literal finds undefined. */
 export function coreRecordKeyAbsent(
 	world: WorldFacts,
@@ -291,7 +258,7 @@ export function coreReturnsObjectLiterals(fn: CoreFunctionStore): boolean {
 		const terminator = fn.blockTerminator(block);
 		if (fn.instructionKind(terminator) !== "return") continue;
 		if (fn.kernel.instructionOperandCount(terminator) !== 1) return false;
-		const allocation = returnedAllocation(
+		const allocation = coreReturnedValueDefinition(
 			fn,
 			fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator)),
 		);
@@ -343,7 +310,7 @@ export function coreRecordResultFields(
 		const terminator = fn.blockTerminator(block);
 		if (fn.instructionKind(terminator) !== "return") continue;
 		if (fn.kernel.instructionOperandCount(terminator) !== 1) return undefined;
-		const allocation = returnedAllocation(
+		const allocation = coreReturnedValueDefinition(
 			fn,
 			fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator)),
 		);
@@ -363,7 +330,7 @@ export function coreRecordResultFields(
 		if (forward !== undefined) {
 			if (
 				!sameKeys(forward.keys) ||
-				!onlyReturned(
+				!coreValueOnlyReturned(
 					fn,
 					fn.kernel.resultAt(fn.kernel.instructionResultStart(allocation)),
 				)
@@ -378,7 +345,10 @@ export function coreRecordResultFields(
 			!Array.isArray(allocationKeys) ||
 			allocationKeys.length === 0 ||
 			allocationKeys.length > MAX_RESULT_FIELDS ||
-			!onlyReturned(fn, fn.kernel.resultAt(fn.kernel.instructionResultStart(allocation)))
+			!coreValueOnlyReturned(
+				fn,
+				fn.kernel.resultAt(fn.kernel.instructionResultStart(allocation)),
+			)
 		)
 			return undefined;
 		const own = Object.freeze(allocationKeys.map(Number));

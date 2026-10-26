@@ -12,6 +12,11 @@ import type { CoreFunctionId, CoreInstructionId, CoreValueId } from "./core-ir.t
 import { CORE_OPTIMIZATION_OWNER } from "./core-optimization-owners.ts";
 import type { CoreOptimizationReportBuilder } from "./core-optimization-report.ts";
 import {
+	sameCoreRecordValueKind,
+	joinCoreRecordValueKinds,
+} from "./core-record-value-kinds.ts";
+import type { CoreRecordValueKind } from "./core-record-value-kinds.ts";
+import {
 	CORE_PROGRAM_FLOW_BODY,
 	CORE_PROGRAM_FLOW_CALLS,
 	CORE_PROGRAM_FLOW_CFG,
@@ -89,6 +94,7 @@ export interface CoreProgramFlowValueKindSummary {
 	readonly parameterKinds: ReadonlyArray<number>;
 	readonly receiverKind: number;
 	readonly returnKind: number;
+	readonly returnRecord?: CoreRecordValueKind;
 }
 
 export interface CoreProgramFlowValueKindStatistics {
@@ -155,6 +161,13 @@ export interface CoreProgramFlowValueKindSemantics<Analysis> {
 		inputs: CoreProgramFlowValueKindInputs,
 	): Analysis;
 	latticeMask(analysis: Analysis, value: CoreValueId): number;
+	returnRecord(
+		program: CoreProgram,
+		fn: CoreFunctionStore,
+		controlFlow: CoreControlFlow,
+		analysis: Analysis,
+		call: (instruction: CoreInstructionId) => CoreRecordValueKind,
+	): CoreRecordValueKind;
 	readonly top: number;
 	readonly object: number;
 	readonly undefined: number;
@@ -2119,6 +2132,9 @@ export class CoreProgramFlowEngine {
 				parameterKinds: Object.freeze([...summary.parameterKinds]),
 				receiverKind: summary.receiverKind,
 				returnKind: summary.returnKind,
+				...(summary.returnRecord === undefined
+					? {}
+					: { returnRecord: summary.returnRecord }),
 			});
 		const topology = this.topology(targets.graph);
 		const functionIds = [...this.#program.functionIds()];
@@ -2408,13 +2424,39 @@ export class CoreProgramFlowEngine {
 								);
 							}
 						}
-					if (returnKind !== summary.returnKind) {
-						summaries.set(functionId, { ...summary, returnKind });
+					const returnRecord =
+						returnKind === 0
+							? undefined
+							: semantics.returnRecord(this.#program, fn, cfg, values, (instruction) => {
+									const site = byInstruction.get(instruction);
+									if (
+										site === undefined ||
+										site.targets.opaque ||
+										site.targets.anyScript ||
+										site.targets.functions.length === 0
+									)
+										return undefined;
+									let record: CoreRecordValueKind = null;
+									for (const callee of site.targets.functions) {
+										const returned = summaries.get(callee)!;
+										record = joinCoreRecordValueKinds(
+											record,
+											returned.returnKind === 0 ? null : returned.returnRecord,
+										);
+										if (record === undefined) break;
+									}
+									return record;
+								});
+					if (
+						returnKind !== summary.returnKind ||
+						!sameCoreRecordValueKind(returnRecord, summary.returnRecord)
+					) {
+						summaries.set(functionId, { ...summary, returnKind, returnRecord });
 						for (const caller of targets.graph.exactCallers(functionId)) {
 							exactReverseCallerVisits++;
 							enqueueNode(caller, true);
 						}
-						if (targets.graph.hasAggregate()) {
+						if (returnKind !== summary.returnKind && targets.graph.hasAggregate()) {
 							enqueueNode(CORE_ANY_SCRIPT_AGGREGATE, true);
 						}
 					}
