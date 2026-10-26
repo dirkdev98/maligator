@@ -2331,13 +2331,20 @@ describe("primitive operation results", () => {
 			const output = inspect(`Math.${method}(${arguments_})`);
 			expect(output.c.source).toContain(`${kernel}(`);
 			expect(output.c.source).not.toContain("mal_vm_call_known_native(");
-			const unknown = inspect(`Math.${method}(x, x, x)`).c.source;
-			expect(unknown).toContain("mal_vm_call_known_native(");
+			const unknown = inspect(`Math.${method}(x, x, x)`).c;
+			expect(unknown.source).toContain("mal_vm_call_known_native(");
 			if (["hypot", "min", "max"].includes(method)) {
-				expect(unknown).not.toContain(`${kernel}(`);
+				const full =
+					unknown.trySymbol === undefined
+						? unknown.source
+						: unknown.source.split(`bool ${unknown.trySymbol}(`)[0]!;
+				expect(full).not.toContain(`${kernel}(`);
+				expect(unknown.trySymbol).toBeDefined();
+				expect(unknown.source).toContain("!mal_ops_is_number(");
+				expect(unknown.source).toContain(`${kernel}(`);
 			} else {
-				expect(unknown).toContain("mal_ops_is_number(");
-				expect(unknown).toContain(`${kernel}(`);
+				expect(unknown.source).toContain("mal_ops_is_number(");
+				expect(unknown.source).toContain(`${kernel}(`);
 			}
 			expect(inspect(`Math.${method}(${arguments_})`, false).c.source).not.toContain(
 				`${kernel}(`,
