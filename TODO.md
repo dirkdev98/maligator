@@ -174,6 +174,9 @@ The independent target boundary and current storage contract are recorded in
       the initial fields with every preceding writer in the kind and range worklists,
       including loops and suspension. Incompatible kinds and negative zero widen
       independently; escapes and possible accessors retain the fallback.
+      Write-backed observations enter propagation demands only once a finite
+      initial field contract emerges; later contracts expand the demand set and
+      withdrawn contracts override previously published bounds.
       Producer-side writes before returning a record, parameter-relative call effects,
       and coroutine record transport remain. Own-field observations
       also carry initial integer bounds through the normal-result worklist, including

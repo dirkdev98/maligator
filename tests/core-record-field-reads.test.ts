@@ -263,6 +263,70 @@ describe("fresh record field observations", () => {
 		);
 	});
 
+	it.each([
+		"return globalThis.input;",
+		"return {other:1};",
+		"return {n:globalThis.input};",
+		"return {get n(){return 1;}};",
+		"return {n:never()};",
+	])("does not demand unused written fields without a finite contract (%s)", (body) => {
+		const out = flow(
+			`function never(){return never();}function make(){${body}}function read(){const value=make();value.n=2;value.n;return 1;}globalThis.result=read();`,
+		);
+		const fn = out.named("read");
+		const [read] = coreRecordFieldReads(fn, () =>
+			buildCoreControlFlow(out.program, fn.id),
+		).keys();
+		expect(read).toBeDefined();
+		const value = fn.kernel.resultAt(fn.kernel.instructionResultStart(read!));
+		expect(() => out.read().values(fn.id).latticeMask(value)).toThrow(
+			"Unrequested program value kind",
+		);
+	});
+
+	it("admits unused written fields when parameter flow establishes their contract", () => {
+		const out = flow(
+			`function make(n){return {n};}function read(n){const value=make(n);value.n="changed";value.n;return 1;}globalThis.result=read(1);`,
+		);
+		const fn = out.named("read");
+		const [read] = coreRecordFieldReads(fn, () =>
+			buildCoreControlFlow(out.program, fn.id),
+		).keys();
+		expect(read).toBeDefined();
+		const value = fn.kernel.resultAt(fn.kernel.instructionResultStart(read!));
+		expect(out.read().values(fn.id).latticeMask(value)).toBe(
+			COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_STRING,
+		);
+	});
+
+	it("withdraws a published write-backed field bound when its own key disappears", () => {
+		const out = flow(
+			`function make(){return {n:1};}function read(){const value=make();value.n=2;return value.n;}globalThis.result=read();`,
+		);
+		const reader = out.named("read");
+		const [instruction] = coreRecordFieldReads(reader, () =>
+			buildCoreControlFlow(out.program, reader.id),
+		).keys();
+		expect(instruction).toBeDefined();
+		const publish = CoreEditor.open(out.program, reader.id);
+		publish.setNormalResultFacts(instruction!, { mask: COMPILER_VALUE_KIND_NUMBER });
+		publish.commit();
+		const before = out.read();
+		expect(before.summary(reader.id).returnKind).toBe(COMPILER_VALUE_KIND_NUMBER);
+		const producer = out.named("make");
+		const allocation = coreOperations(producer).find(
+			({ opcode }) => opcode === "createObjectShaped",
+		)!;
+		const edit = CoreEditor.open(out.program, producer.id);
+		const key = edit.appendStringConstants([[111, 116, 104, 101, 114]]);
+		edit.replaceInstruction(allocation.id, allocation.opcode, allocation.inputs, {
+			attributes: { ...allocation.attributes, keyStringIndices: [key] },
+		});
+		edit.commit();
+		expect(out.read().summary(reader.id).returnKind).toBe(COMPILER_VALUE_KIND_TOP);
+		expect(before.summary(reader.id).returnKind).toBe(COMPILER_VALUE_KIND_NUMBER);
+	});
+
 	it("withdraws and restores the read proof during open and committed edits", () => {
 		const out = flow(
 			`function make(){return {n:1};}function read(){const value=make();return value.n;}globalThis.result=read();`,

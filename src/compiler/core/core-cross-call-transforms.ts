@@ -4707,9 +4707,15 @@ function discoverProgramNormalResultFacts(
 				continue;
 			if (!records.has(read.producer)) records.set(read.producer, recordResult(producer));
 			const record = records.get(read.producer);
+			const initialKind = coreRecordFieldInitialKind(
+				read,
+				record,
+				COMPILER_VALUE_KIND_TOP,
+			);
+			if (!compilerValueKindMaskIsValid(initialKind)) continue;
 			const mask =
 				read.writes === undefined
-					? coreRecordFieldInitialKind(read, record, COMPILER_VALUE_KIND_TOP)
+					? initialKind
 					: (kinds ??= readValueKinds())
 							.values(functionId)
 							.latticeMask(

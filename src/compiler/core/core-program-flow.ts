@@ -2227,8 +2227,9 @@ export class CoreProgramFlowEngine {
 		>();
 		const recordAlternativeIndices = new Map<
 			CoreFunctionId,
-			ReadonlyMap<CoreInstructionId, ReadonlyArray<CoreValueId>>
+			Map<CoreInstructionId, ReadonlyArray<CoreValueId>>
 		>();
+		const noRecordAlternatives: ReadonlyArray<CoreValueId> = [];
 		let aggregateRecomputations = 0;
 		let exactReverseCallerVisits = 0;
 		let wildcardReverseCallerVisits = 0;
@@ -2388,24 +2389,13 @@ export class CoreProgramFlowEngine {
 							| undefined;
 						for (const [instruction, read] of recordReads) {
 							if (read.writes === undefined) continue;
-							const producer = byInstruction.get(read.producer);
-							if (
-								producer === undefined ||
-								producer.targets.opaque ||
-								producer.targets.anyScript ||
-								producer.targets.functions.length === 0
-							)
-								continue;
 							alternatives ??= new Map();
-							alternatives.set(
-								instruction,
-								read.writes.map(({ value }) => value),
-							);
+							// An unknown contract must override a previously published field bound.
+							alternatives.set(instruction, noRecordAlternatives);
 						}
 						if (alternatives !== undefined)
 							recordAlternativeIndices.set(functionId, alternatives);
 					}
-					const alternatives = recordAlternativeIndices.get(functionId);
 					const returnedRecords = new Map<CoreInstructionId, CoreRecordValueKind>();
 					const recordResult = (instruction: CoreInstructionId): CoreRecordValueKind => {
 						if (returnedRecords.has(instruction)) return returnedRecords.get(instruction);
@@ -2429,14 +2419,32 @@ export class CoreProgramFlowEngine {
 						returnedRecords.set(instruction, record);
 						return record;
 					};
+					const alternatives = recordAlternativeIndices.get(functionId);
+					for (const [instruction, values] of alternatives ?? []) {
+						if (values.length !== 0) continue;
+						const read = recordReads.get(instruction)!;
+						const initialKind = coreRecordFieldInitialKind(
+							read,
+							recordResult(read.producer),
+							semantics.top,
+						);
+						if (initialKind === 0 || initialKind === semantics.top) continue;
+						alternatives!.set(
+							instruction,
+							read.writes!.map(({ value }) => value),
+						);
+						// Producer contracts can emerge after the caller's first demand set was solved.
+						demands.delete(functionId);
+					}
 					const cfg = controlFlow(functionId);
 					let demandedValues = demands.get(functionId);
 					if (demandedValues === undefined) {
 						const roots = new Set(semantics.observationValues(this.#program, fn));
-						for (const instruction of alternatives?.keys() ?? [])
-							roots.add(
-								fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)),
-							);
+						for (const [instruction, values] of alternatives ?? [])
+							if (values.length !== 0)
+								roots.add(
+									fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)),
+								);
 						for (const block of cfg.reachable) {
 							const terminator = fn.blockTerminator(block);
 							if (fn.instructionKind(terminator) === "return")
