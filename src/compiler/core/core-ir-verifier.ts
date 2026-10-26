@@ -20,7 +20,7 @@ import type { CoreCompilationContext } from "./core-compilation.ts";
 import {
 	CORE_CALL_RESULT_KIND_ATTRIBUTE,
 	CORE_RECORD_FIELD_KIND_ATTRIBUTE,
-	CORE_CALL_RESULT_INTEGER_RANGE_ATTRIBUTE,
+	CORE_NORMAL_RESULT_INTEGER_RANGE_ATTRIBUTE,
 	CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE,
 } from "./core-internal-attributes.ts";
 import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
@@ -423,13 +423,13 @@ function verifyInstructionRows(
 					!compilerValueKindMaskIsValid(fieldKind))
 			)
 				fail("Invalid record field kind proof");
-			const callRange = attributes[CORE_CALL_RESULT_INTEGER_RANGE_ATTRIBUTE];
+			const resultRange = attributes[CORE_NORMAL_RESULT_INTEGER_RANGE_ATTRIBUTE];
 			if (
-				callRange !== undefined &&
-				(callKind !== COMPILER_VALUE_KIND_NUMBER ||
-					!compilerIntegerRangeIsValid(callRange))
+				resultRange !== undefined &&
+				((callKind ?? fieldKind) !== COMPILER_VALUE_KIND_NUMBER ||
+					!compilerIntegerRangeIsValid(resultRange))
 			)
-				fail("Invalid call result integer range proof");
+				fail("Invalid normal result integer range proof");
 			if (
 				attributes.exactArrayLength !== undefined &&
 				(descriptor.opcode !== "loadPropertyStatic" ||

@@ -767,6 +767,14 @@ split declarations and materialization carry the same field contract. After an
 observation, accesses use the materialized object and may no longer assume those
 storage bounds. Closed shape ordinals have their own int32 ABI.
 
+Read-only own-field observations publish initial integer bounds through the same
+normal-result contract as calls. One function worklist converges scalar returns
+and fresh-record fields together, keeping an unsolved field distinct from an
+unknown field. A growing recursive field widens independently of bounded siblings.
+Writes, escapes, handler transport and possible prototype getter reads withdraw
+the observation proof. Producer effects remain independent; generators and async
+functions retain their suspension, exception and root obligations.
+
 Function-scoped fact tables carry one versioned proof and use dense instruction
 indices. Register facts reference the existing operand list, with an explicit
 input offset so constrained input/output aliases remain distinct.

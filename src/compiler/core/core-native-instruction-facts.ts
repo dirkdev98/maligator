@@ -18,7 +18,7 @@ import type { CoreLoopInductionAnalysis } from "./core-ir-loops.ts";
 import { coreInstructionEffects } from "./core-ir-opcodes.ts";
 import {
 	corePrimitiveOperatorEffectRefinement,
-	coreCallResultIntegerRange,
+	coreInstructionResultIntegerRange,
 } from "./core-ir-value-kinds.ts";
 import { CORE_LOCAL_VALUE_KIND_ANALYSIS } from "./core-ir-value-kinds.ts";
 import type { CoreValueKindAnalysis } from "./core-ir-value-kinds.ts";
@@ -308,7 +308,7 @@ export function coreInstructionFacts(
 	);
 	const resultRange =
 		results.length === 1 && results[0] === COMPILER_VALUE_KIND_NUMBER
-			? (coreCallResultIntegerRange(fn, instruction) ??
+			? (coreInstructionResultIntegerRange(fn, instruction) ??
 				(fn.valueRepresentation(kernel.resultAt(output)) === "i32"
 					? COMPILER_INT32_RANGE
 					: undefined))

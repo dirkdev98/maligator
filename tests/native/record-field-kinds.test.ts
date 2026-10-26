@@ -4,6 +4,10 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveBuildConfig } from "../../src/build-config.ts";
 import {
+	COMPILER_INT32_RANGE,
+	COMPILER_UINT32_RANGE,
+} from "../../src/compiler/shared/integer-range.ts";
+import {
 	assertExactLines,
 	buildBackendPairFromOneProgramImage,
 	HOST_MAIN,
@@ -49,6 +53,25 @@ describe("fresh record field kind observations", () => {
 						named(name).body.instructions.some(
 							(op) => op.opcode === "UNARY" && op.operator === "typeof",
 						),
+					).toBe(true);
+				}
+				for (const [name, range] of [
+					["readBounded", { ...COMPILER_INT32_RANGE, minimum: 0, maximum: 255 }],
+					["readBoundedUnsigned", COMPILER_UINT32_RANGE],
+					["boundedSuspended", COMPILER_INT32_RANGE],
+					["boundedAwaited", { ...COMPILER_INT32_RANGE, minimum: 0, maximum: 255 }],
+					["boundedAsyncSuspended", COMPILER_UINT32_RANGE],
+				] as const) {
+					const fn = named(name);
+					expect(
+						fn.facts?.some((fact) =>
+							fact?.resultIntegerRanges?.some(
+								(candidate) =>
+									candidate?.minimum === range.minimum &&
+									candidate.maximum === range.maximum,
+							),
+						),
+						name,
 					).toBe(true);
 				}
 				for (const binary of [pair.compiled, pair.interpreted])

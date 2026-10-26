@@ -45,7 +45,7 @@ import type { CoreCompilationContext } from "./core-compilation.ts";
 import {
 	CORE_CALL_RESULT_KIND_ATTRIBUTE,
 	CORE_RECORD_FIELD_KIND_ATTRIBUTE,
-	CORE_CALL_RESULT_INTEGER_RANGE_ATTRIBUTE,
+	CORE_NORMAL_RESULT_INTEGER_RANGE_ATTRIBUTE,
 	CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE,
 } from "./core-internal-attributes.ts";
 import type { CoreCallGraphIndex } from "./core-ir-call-targets.ts";
@@ -211,14 +211,15 @@ function recordFieldKind(
 		: undefined;
 }
 
-export function coreCallResultIntegerRange(
+export function coreInstructionResultIntegerRange(
 	fn: CoreFunctionStore,
 	instruction: CoreInstructionId,
 ): CompilerIntegerRange | undefined {
 	const range =
-		fn.instructionAttributes(instruction)[CORE_CALL_RESULT_INTEGER_RANGE_ATTRIBUTE];
+		fn.instructionAttributes(instruction)[CORE_NORMAL_RESULT_INTEGER_RANGE_ATTRIBUTE];
 	return compilerIntegerRangeIsValid(range) &&
-		callResultKind(fn, instruction) === COMPILER_VALUE_KIND_NUMBER
+		(callResultKind(fn, instruction) ?? recordFieldKind(fn, instruction)) ===
+			COMPILER_VALUE_KIND_NUMBER
 		? range
 		: undefined;
 }
@@ -1018,7 +1019,7 @@ function solveCoreValueKinds(
 		const operator = attributes.operator;
 		if (
 			fn.valueRepresentation(output) === "i32" ||
-			compilerIntegerRangeIsInt32(coreCallResultIntegerRange(fn, instruction)) ||
+			compilerIntegerRangeIsInt32(coreInstructionResultIntegerRange(fn, instruction)) ||
 			((opcode === "createNumber" || opcode === "createF64") &&
 				numberIsExactInt32(attributes.value)) ||
 			(opcode === "callKnown" &&

@@ -8,7 +8,7 @@ import {
 import type { CoreControlFlow, CoreNaturalLoop } from "./core-ir-control-flow.ts";
 import {
 	CORE_LOCAL_VALUE_KIND_ANALYSIS,
-	coreCallResultIntegerRange,
+	coreInstructionResultIntegerRange,
 } from "./core-ir-value-kinds.ts";
 import type { CoreExactScalarKind } from "./core-ir-value-kinds.ts";
 import { coreBlockId, coreInstructionId } from "./core-ir.ts";
@@ -50,7 +50,7 @@ export interface CoreLoopInductionAnalysis {
 	induction(value: CoreValueId): CoreInductionVariable | undefined;
 	range(value: CoreValueId, block?: CoreBlockId): CompilerIntegerRange | undefined;
 	rangeQuery(
-		callResultRange: (instruction: CoreInstructionId) => CoreIntegerRangeState,
+		resultRange: (instruction: CoreInstructionId) => CoreIntegerRangeState,
 	): CoreIntegerRangeQuery;
 }
 
@@ -505,7 +505,7 @@ export function analyzeCoreLoopInductions(
 		}
 	}
 	const rangeQuery = (
-		callResultRange?: (instruction: CoreInstructionId) => CoreIntegerRangeState,
+		resultRange?: (instruction: CoreInstructionId) => CoreIntegerRangeState,
 	): CoreIntegerRangeQuery => {
 		const memo = new Map<
 			CoreBlockId | undefined,
@@ -551,9 +551,9 @@ export function analyzeCoreLoopInductions(
 				const definition = definitionInstruction(fn, resolved);
 				if (definition !== undefined)
 					range =
-						callResultRange === undefined
-							? coreCallResultIntegerRange(fn, definition)
-							: callResultRange(definition);
+						resultRange === undefined
+							? coreInstructionResultIntegerRange(fn, definition)
+							: resultRange(definition);
 				if (
 					range === undefined &&
 					definition !== undefined &&
@@ -576,7 +576,7 @@ export function analyzeCoreLoopInductions(
 					const right = operand(fn, definition, 1)!;
 					const constant = exactNumber(fn, right, root);
 					const operator = fn.instructionAttributes(definition).operator;
-					if (callResultRange !== undefined && query(left, block, budget) === null) {
+					if (resultRange !== undefined && query(left, block, budget) === null) {
 						range = null;
 					} else if (operator === ">>>") {
 						range = numericRange(
@@ -674,7 +674,7 @@ export function analyzeCoreLoopInductions(
 				["&", ">>>"].includes(
 					fn.instructionAttributes(instruction).operator as string,
 				)) ||
-				coreCallResultIntegerRange(fn, instruction) !== undefined),
+				coreInstructionResultIntegerRange(fn, instruction) !== undefined),
 	);
 	const result: CoreLoopInductionAnalysis = {
 		inductions: Object.freeze(inductions),

@@ -148,14 +148,19 @@ The independent target boundary and current storage contract are recorded in
       units, forwards and materialization. Numeric and Boolean fields use scalar
       locals; integer field bounds join every virtual writer and select i32 only
       when the full storage lifetime excludes negative zero and fits signed int32.
-      Boxed unions without heap kinds also omit GC roots. Heap fields stay rooted, and materialized records retain ordinary object access. Parameters
+      Boxed unions without heap kinds also omit GC roots. Heap fields stay rooted,
+      and materialized records retain ordinary object access. Parameters
       without observers omit the producer realm and union-shape pointers. Shape
       ordinals use i32 storage throughout the C ABI and materialization. Callers
       omit the producer root when neither a caller/callee observer nor backend
       fallback needs materialization. The scanner workload's whole C is now 111,548
       bytes, down from 115,075 before returned-field
       feedback and 111,795 before typed fields. Point-sensitive mutation/escape
-      proofs and coroutine record transport remain. The scanner still calls `mal_builtin_string_char_code_at_known` twice per character
+      proofs and coroutine record transport remain. Read-only own-field observations
+      also carry initial integer bounds through the normal-result worklist, including
+      finite targets, recursive forwarding and suspension. Growing fields widen
+      independently of bounded siblings. The scanner still calls
+      `mal_builtin_string_char_code_at_known` twice per character
       on a boxed string parameter.
 - [ ] Admit more record calls. Not admitted yet: calls through instance-method hints,
       which need a guarded fallback that keeps the returned object as the record;

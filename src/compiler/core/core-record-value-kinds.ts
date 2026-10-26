@@ -1,9 +1,14 @@
+import { COMPILER_VALUE_KIND_NUMBER } from "../shared/compiler-value-kinds.ts";
+import { compilerIntegerRangesEqual } from "../shared/integer-range.ts";
+import type { CompilerIntegerRange } from "../shared/integer-range.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import type { CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import type { CoreFunctionStore } from "./core-store.ts";
 
 export interface CoreRecordFieldKind {
+	// Null keeps an unsolved field separate from an unknown field during range convergence.
+	readonly integerRange?: CompilerIntegerRange | null;
 	readonly key: number;
 	readonly mask: number;
 }
@@ -24,7 +29,15 @@ export function sameCoreRecordValueKind(
 			left.length === right.length &&
 			left.every(
 				(field, index) =>
-					field.key === right[index]!.key && field.mask === right[index]!.mask,
+					field.key === right[index]!.key &&
+					field.mask === right[index]!.mask &&
+					(field.integerRange === right[index]!.integerRange ||
+						(field.integerRange !== null &&
+							right[index]!.integerRange !== null &&
+							compilerIntegerRangesEqual(
+								field.integerRange,
+								right[index]!.integerRange,
+							))),
 			))
 	);
 }
@@ -39,8 +52,38 @@ export function joinCoreRecordValueKinds(
 	const fields: Array<CoreRecordFieldKind> = [];
 	for (const field of left) {
 		const other = right.find((candidate) => candidate.key === field.key);
-		if (other !== undefined)
-			fields.push(Object.freeze({ key: field.key, mask: field.mask | other.mask }));
+		if (other === undefined) continue;
+		if (field.mask === 0) {
+			fields.push(other);
+			continue;
+		}
+		if (other.mask === 0) {
+			fields.push(field);
+			continue;
+		}
+		const mask = field.mask | other.mask;
+		const a = field.integerRange,
+			b = other.integerRange;
+		const integerRange =
+			mask !== COMPILER_VALUE_KIND_NUMBER || a === undefined || b === undefined
+				? undefined
+				: a === null
+					? b
+					: b === null
+						? a
+						: Object.freeze({
+								minimum: Math.min(a.minimum, b.minimum),
+								maximum: Math.max(a.maximum, b.maximum),
+								exactSafeIntegers: true as const,
+								excludesNegativeZero: true as const,
+							});
+		fields.push(
+			Object.freeze({
+				key: field.key,
+				mask,
+				...(integerRange === undefined ? {} : { integerRange }),
+			}),
+		);
 	}
 	return Object.freeze(fields);
 }
@@ -143,6 +186,10 @@ export function coreReturnedRecordKinds(
 	cfg: CoreControlFlow,
 	mask: (value: CoreValueId) => number,
 	call: (instruction: CoreInstructionId) => CoreRecordValueKind,
+	range?: (
+		value: CoreValueId,
+		consumer: CoreInstructionId,
+	) => CompilerIntegerRange | null | undefined,
 ): CoreRecordValueKind {
 	if (fn.isAsync || fn.isGenerator) return undefined;
 	let result: CoreRecordValueKind = null;
@@ -161,9 +208,19 @@ export function coreReturnedRecordKinds(
 			const start = fn.kernel.instructionOperandStart(definition);
 			fields = Object.freeze(
 				keys
-					.map((key, index) =>
-						Object.freeze({ key, mask: mask(fn.kernel.operandAt(start + index)) }),
-					)
+					.map((key, index) => {
+						const value = fn.kernel.operandAt(start + index);
+						const kind = mask(value);
+						const integerRange =
+							kind === COMPILER_VALUE_KIND_NUMBER
+								? range?.(value, definition)
+								: undefined;
+						return Object.freeze({
+							key,
+							mask: kind,
+							...(integerRange === undefined ? {} : { integerRange }),
+						});
+					})
 					.sort((left, right) => left.key - right.key),
 			);
 		} else if (
@@ -200,6 +257,16 @@ export function coreRecordFieldReadKind(
 	)
 		return top;
 	return record.find((field) => field.key === read.key)!.mask;
+}
+
+export function coreRecordFieldReadIntegerRange(
+	read: CoreRecordFieldRead,
+	record: CoreRecordValueKind,
+): CompilerIntegerRange | null | undefined {
+	if (record === null) return null;
+	if (coreRecordFieldReadKind(read, record, -1) !== COMPILER_VALUE_KIND_NUMBER)
+		return undefined;
+	return record!.find((field) => field.key === read.key)!.integerRange;
 }
 
 interface CoreRecordFieldReadIndex {

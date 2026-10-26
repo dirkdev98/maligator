@@ -176,6 +176,124 @@ check(
 	"string",
 	"replaceable public factory",
 );
+const makeBoundedRecord = function makeBoundedRecord(value, callback) {
+	for (let step = 0; step < 3; step++) callback(step);
+	return {
+		signed: value | 0,
+		unsigned: value >>> 0,
+		small: value & 255,
+		label: "bounded",
+	};
+};
+function readBounded(value, callback) {
+	const record = makeBoundedRecord(value, callback);
+	callback("bounded read");
+	return record.small % 10;
+}
+function readBoundedUnsigned(value, callback) {
+	const record = new makeBoundedRecord(...[value, callback]);
+	callback("unsigned read");
+	return record.unsigned;
+}
+function readBoundedEscaped(value, callback) {
+	const record = makeBoundedRecord(value, observe);
+	callback(record);
+	return record.small;
+}
+function* boundedSuspended(value, callback) {
+	const record = makeBoundedRecord(value, callback);
+	yield record.label;
+	callback("bounded resume");
+	return record.signed % 10;
+}
+async function boundedAwaited(value, callback) {
+	const record = makeBoundedRecord(value, callback);
+	await 0;
+	callback("bounded await");
+	return record.small % 10;
+}
+async function* boundedAsyncSuspended(value, callback) {
+	const record = makeBoundedRecord(value, callback);
+	yield record.label;
+	await 0;
+	callback("bounded async resume");
+	return record.unsigned % 10;
+}
+Object.assign(globalThis, {
+	readBounded,
+	readBoundedUnsigned,
+	readBoundedEscaped,
+	boundedSuspended,
+	boundedAwaited,
+	boundedAsyncSuspended,
+});
+for (const value of [
+	-0,
+	0,
+	-1,
+	-10,
+	-2147483648,
+	NaN,
+	Infinity,
+	-Infinity,
+	2147483647,
+	2147483648,
+	4294967295,
+	4294967296,
+	9007199254740991,
+]) {
+	check(readBounded(value, observe), (value & 255) % 10, "bounded field remainder");
+	check(readBoundedUnsigned(value, observe), value >>> 0, "unsigned field value");
+	const iterator = boundedSuspended(value, observe);
+	check(iterator.next().value, "bounded", "bounded suspended heap field");
+	observe("bounded between");
+	check(iterator.next().value, (value | 0) % 10, "signed suspended field remainder");
+}
+check(
+	readBoundedEscaped(-1, (record) => {
+		observe("bounded escape");
+		record.small = "changed";
+	}),
+	"changed",
+	"escaped bounded field mutation",
+);
+let boundedCoercions = 0;
+check(
+	readBounded(
+		{
+			valueOf() {
+				boundedCoercions++;
+				observe("bounded coerce");
+				return 4294967295;
+			},
+		},
+		observe,
+	),
+	5,
+	"coerced bounded field",
+);
+check(boundedCoercions, 3, "bounded field coercion order");
+for (const value of [1n, Symbol("bounded")]) {
+	let error;
+	try {
+		readBounded(value, observe);
+	} catch (caught) {
+		error = caught;
+	}
+	check(error instanceof TypeError, true, "bounded field abrupt coercion");
+}
+const boundedAsync = boundedAsyncSuspended(4294967295, observe);
+const boundedAsyncSteps = boundedAsync
+	.next()
+	.then((result) => {
+		check(result.value, "bounded", "bounded async heap field");
+		observe("bounded async between");
+		return boundedAsync.next();
+	})
+	.then((result) => {
+		check(result.done, true, "bounded async completion");
+		check(result.value, 5, "bounded async unsigned remainder");
+	});
 const iterator = readSuspended(3, observe);
 check(iterator.next().value, "xx", "suspended heap field");
 observe("between");
@@ -195,6 +313,8 @@ const asyncSteps = asyncIterator
 		check(result.value, true, "async generator field observation");
 	});
 Promise.all([
+	boundedAwaited(-1, observe).then((value) => check(value, 5, "bounded awaited field")),
+	boundedAsyncSteps,
 	readAwaited(3, observe).then((result) => {
 		check(result, true, "awaited field observation");
 	}),

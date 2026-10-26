@@ -43,7 +43,7 @@ import type { CoreInstanceMethodHints } from "./core-instance-method-hints.ts";
 import {
 	CORE_CALL_RESULT_KIND_ATTRIBUTE,
 	CORE_RECORD_FIELD_KIND_ATTRIBUTE,
-	CORE_CALL_RESULT_INTEGER_RANGE_ATTRIBUTE,
+	CORE_NORMAL_RESULT_INTEGER_RANGE_ATTRIBUTE,
 	CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE,
 } from "./core-internal-attributes.ts";
 import {
@@ -71,7 +71,7 @@ import type { CoreProgramSummaries } from "./core-ir-summaries.ts";
 import {
 	CORE_PRIMITIVE_OPERATOR_EFFECT_FACT,
 	coreValueKindDemand,
-	coreCallResultIntegerRange,
+	coreInstructionResultIntegerRange,
 	coreValueKindObservation,
 } from "./core-ir-value-kinds.ts";
 import type {
@@ -110,9 +110,15 @@ import type { CoreReadAccessorWork } from "./core-read-accessor-expansion.ts";
 import {
 	coreReadOnlyRecordFields,
 	coreRecordFieldReadKind,
+	coreRecordFieldReadIntegerRange,
+	coreReturnedRecordKinds,
+	sameCoreRecordValueKind,
 	joinCoreRecordValueKinds,
 } from "./core-record-value-kinds.ts";
-import type { CoreRecordValueKind } from "./core-record-value-kinds.ts";
+import type {
+	CoreRecordValueKind,
+	CoreRecordFieldRead,
+} from "./core-record-value-kinds.ts";
 import { specializeCoreStaticArguments } from "./core-static-value-calls.ts";
 import type { CoreChangeSet, CoreFunctionStore, CoreProgram } from "./core-store.ts";
 import { coreSynchronousCallbackConsumer } from "./core-synchronous-callbacks.ts";
@@ -4012,7 +4018,7 @@ type CoreValueKindFold =
 			readonly preferred: number;
 	  };
 
-interface CoreCallResultFact {
+interface CoreNormalResultFact {
 	readonly instruction: CoreInstructionId;
 	readonly mask: number;
 	readonly integerRange?: CompilerIntegerRange;
@@ -4265,13 +4271,16 @@ function discoverProgramValueKindObservations(
 	return foldsByCaller;
 }
 
-function discoverProgramCallResultKinds(
+function discoverProgramNormalResultFacts(
 	program: CoreProgram,
 	analyses: CoreAnalysisManager,
 	flow: CoreProgramFlowState,
 	readValueKinds: () => CoreProgramValueKindState,
-): ReadonlyMap<CoreFunctionId, ReadonlyArray<CoreCallResultFact>> {
-	const results = new Map<CoreFunctionId, Array<CoreCallResultFact>>();
+): {
+	readonly calls: ReadonlyMap<CoreFunctionId, ReadonlyArray<CoreNormalResultFact>>;
+	readonly fields: ReadonlyMap<CoreFunctionId, ReadonlyArray<CoreNormalResultFact>>;
+} {
+	const results = new Map<CoreFunctionId, Array<CoreNormalResultFact>>();
 	const localReturns = new Map<CoreFunctionId, number | undefined>();
 	const pending = new Map<
 		CoreFunctionId,
@@ -4380,6 +4389,86 @@ function discoverProgramCallResultKinds(
 			sites.push({ site, mask });
 		}
 	}
+	const recordReads = new Map<
+		CoreFunctionId,
+		ReadonlyMap<CoreInstructionId, CoreRecordFieldRead>
+	>();
+	const readsFor = (functionId: CoreFunctionId) => {
+		let reads = recordReads.get(functionId);
+		if (reads === undefined) {
+			reads = coreReadOnlyRecordFields(program.function(functionId));
+			recordReads.set(functionId, reads);
+		}
+		return reads;
+	};
+	let kinds: CoreProgramValueKindState | undefined;
+	const recordRanges = new Map<CoreFunctionId, CoreRecordValueKind>();
+	const demandedRecords: Array<CoreFunctionId> = [];
+	const demandRecord = (target: CoreFunctionId) => {
+		if (recordRanges.has(target)) return;
+		kinds ??= readValueKinds();
+		const record = kinds.summary(target).returnRecord;
+		if (
+			record === undefined ||
+			record === null ||
+			!record.some((field) => field.mask === COMPILER_VALUE_KIND_NUMBER)
+		)
+			return;
+		recordRanges.set(target, null);
+		demandedRecords.push(target);
+	};
+	const recordResult = (site: CoreIndexedCallSite | undefined): CoreRecordValueKind => {
+		if (
+			site === undefined ||
+			site.targets.opaque ||
+			site.targets.anyScript ||
+			site.targets.functions.length === 0
+		)
+			return undefined;
+		kinds ??= readValueKinds();
+		let record: CoreRecordValueKind = null;
+		for (const target of site.targets.functions) {
+			const summary = kinds.summary(target);
+			record = joinCoreRecordValueKinds(
+				record,
+				summary.returnKind === 0
+					? null
+					: recordRanges.has(target)
+						? recordRanges.get(target)
+						: summary.returnRecord,
+			);
+			if (record === undefined) break;
+		}
+		return record;
+	};
+	const demandRead = (functionId: CoreFunctionId, read: CoreRecordFieldRead) => {
+		const site = flow.targets.site(functionId, read.producer);
+		if (site === undefined || site.targets.opaque || site.targets.anyScript) return;
+		for (const target of site.targets.functions) demandRecord(target);
+	};
+	for (const functionId of flow.reachability.liveFunctions)
+		for (const read of readsFor(functionId).values()) demandRead(functionId, read);
+	for (let index = 0; index < demandedRecords.length; index++) {
+		const functionId = demandedRecords[index]!;
+		const fn = program.function(functionId);
+		for (const read of readsFor(functionId).values()) demandRead(functionId, read);
+		coreReturnedRecordKinds(
+			fn,
+			analyses
+				.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
+					scope: "function",
+					function: functionId,
+				})
+				.exceptional(),
+			(value) => kinds!.values(functionId).latticeMask(value),
+			(instruction) => {
+				const site = flow.targets.site(functionId, instruction);
+				if (site !== undefined && !site.targets.opaque && !site.targets.anyScript)
+					for (const target of site.targets.functions) demandRecord(target);
+				return recordResult(site);
+			},
+		);
+	}
 	const returnRanges = new Map<CoreFunctionId, CoreIntegerRangeState>();
 	const rangedSites = new Map<
 		CoreFunctionId,
@@ -4443,21 +4532,60 @@ function discoverProgramCallResultKinds(
 			function: functionId,
 		});
 		const sites = rangedSites.get(functionId);
-		if (sites === undefined) return (value, block) => ranges.range(value, block);
+		const reads = readsFor(functionId);
+		if (sites === undefined && reads.size === 0)
+			return (value, block) => ranges.range(value, block);
 		const fn = program.function(functionId);
 		const query = ranges.rangeQuery((instruction) => {
-			const site = sites.get(instruction);
-			return site === undefined
-				? coreCallResultIntegerRange(fn, instruction)
-				: callRange(site, query);
+			const site = sites?.get(instruction);
+			if (site !== undefined) return callRange(site, query);
+			const read = reads.get(instruction);
+			return read === undefined
+				? coreInstructionResultIntegerRange(fn, instruction)
+				: coreRecordFieldReadIntegerRange(
+						read,
+						recordResult(flow.targets.site(functionId, read.producer)),
+					);
 		});
 		return query;
 	};
 	const expansions = new Map<CoreFunctionId, number>();
+	const fieldExpansions = new Map<CoreFunctionId, Map<number, number>>();
+	const widenRecordRanges = (
+		functionId: CoreFunctionId,
+		prior: CoreRecordValueKind,
+		next: CoreRecordValueKind,
+	): CoreRecordValueKind => {
+		if (prior === undefined || prior === null || next === undefined || next === null)
+			return next;
+		return Object.freeze(
+			next.map((field) => {
+				const before = prior.find(
+					(candidate) => candidate.key === field.key,
+				)?.integerRange;
+				const after = field.integerRange;
+				if (
+					before === undefined ||
+					before === null ||
+					after === undefined ||
+					after === null ||
+					compilerIntegerRangesEqual(before, after)
+				)
+					return field;
+				let counts = fieldExpansions.get(functionId);
+				if (counts === undefined)
+					fieldExpansions.set(functionId, (counts = new Map<number, number>()));
+				const count = (counts.get(field.key) ?? 0) + 1;
+				counts.set(field.key, count);
+				return count < 8 ? field : Object.freeze({ key: field.key, mask: field.mask });
+			}),
+		);
+	};
+	const tracked = (functionId: CoreFunctionId) =>
+		returnRanges.has(functionId) || recordRanges.has(functionId);
 	new CoreProgramFlowEngine(program).solveFunctions(
-		returnRanges.keys(),
+		new Set([...returnRanges.keys(), ...recordRanges.keys()]),
 		(functionId, enqueue) => {
-			if (returnRanges.get(functionId) === undefined) return;
 			const fn = program.function(functionId);
 			const cfg = analyses
 				.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
@@ -4465,40 +4593,68 @@ function discoverProgramCallResultKinds(
 					function: functionId,
 				})
 				.exceptional();
-			const query = queryFunction(functionId);
-			let joined: CoreIntegerRangeState = null;
-			for (const block of cfg.reachable) {
-				const terminator = fn.blockTerminator(block);
-				if (fn.instructionKind(terminator) !== "return") continue;
-				joined = joinState(
-					joined,
-					query(
-						fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator)),
-						block,
+			let query: CoreIntegerRangeQuery | undefined;
+			let changed = false;
+			if (returnRanges.has(functionId) && returnRanges.get(functionId) !== undefined) {
+				query = queryFunction(functionId);
+				let joined: CoreIntegerRangeState = null;
+				for (const block of cfg.reachable) {
+					const terminator = fn.blockTerminator(block);
+					if (fn.instructionKind(terminator) !== "return") continue;
+					joined = joinState(
+						joined,
+						query(
+							fn.kernel.operandAt(fn.kernel.instructionOperandStart(terminator)),
+							block,
+						),
+					);
+					if (joined === undefined) break;
+				}
+				const prior = returnRanges.get(functionId);
+				let next = joinState(prior, joined);
+				if (
+					!(
+						next === prior ||
+						(next !== null && prior !== null && compilerIntegerRangesEqual(next, prior))
+					)
+				) {
+					if (prior !== null && next !== undefined) {
+						const count = (expansions.get(functionId) ?? 0) + 1;
+						expansions.set(functionId, count);
+						// Growing recursive intervals must converge without assuming an integer-only result.
+						if (count >= 8) next = undefined;
+					}
+					returnRanges.set(functionId, next);
+					changed = true;
+				}
+			}
+			if (recordRanges.has(functionId)) {
+				query ??= queryFunction(functionId);
+				const prior = recordRanges.get(functionId);
+				let next = joinCoreRecordValueKinds(
+					prior,
+					coreReturnedRecordKinds(
+						fn,
+						cfg,
+						(value) => kinds!.values(functionId).latticeMask(value),
+						(instruction) => recordResult(flow.targets.site(functionId, instruction)),
+						(value, consumer) => query!(value, fn.instructionBlock(consumer)),
 					),
 				);
-				if (joined === undefined) break;
+				if (!sameCoreRecordValueKind(prior, next)) {
+					next = widenRecordRanges(functionId, prior, next);
+					recordRanges.set(functionId, next);
+					changed = true;
+				}
 			}
-			const prior = returnRanges.get(functionId);
-			let next = joinState(prior, joined);
-			if (
-				next === prior ||
-				(next !== null && prior !== null && compilerIntegerRangesEqual(next, prior))
-			)
-				return;
-			if (prior !== null && next !== undefined) {
-				const count = (expansions.get(functionId) ?? 0) + 1;
-				expansions.set(functionId, count);
-				// Growing recursive intervals must converge without assuming an integer-only result.
-				if (count >= 8) next = undefined;
-			}
-			returnRanges.set(functionId, next);
+			if (!changed) return;
 			for (const caller of flow.targets.graph.exactCallers(functionId))
-				if (returnRanges.has(caller)) enqueue(caller);
+				if (tracked(caller)) enqueue(caller);
 			for (const caller of flow.targets.graph.wildcardCallers)
-				if (returnRanges.has(caller)) enqueue(caller);
+				if (tracked(caller)) enqueue(caller);
 		},
 	);
+
 	for (const [functionId, calls] of pending) {
 		const fn = program.function(functionId);
 		let query: CoreIntegerRangeQuery | undefined;
@@ -4509,7 +4665,7 @@ function discoverProgramCallResultKinds(
 					? (callRange(site, (query ??= queryFunction(functionId))) ?? undefined)
 					: undefined;
 			const currentRange =
-				fn.instructionAttributes(instruction)[CORE_CALL_RESULT_INTEGER_RANGE_ATTRIBUTE];
+				fn.instructionAttributes(instruction)[CORE_NORMAL_RESULT_INTEGER_RANGE_ATTRIBUTE];
 			if (
 				fn.instructionAttributes(instruction)[CORE_CALL_RESULT_KIND_ATTRIBUTE] === mask &&
 				compilerIntegerRangesEqual(
@@ -4529,26 +4685,11 @@ function discoverProgramCallResultKinds(
 			});
 		}
 	}
-	return results;
-}
-
-function discoverProgramRecordFieldKinds(
-	program: CoreProgram,
-	flow: CoreProgramFlowState,
-	readValueKinds: () => CoreProgramValueKindState,
-): ReadonlyMap<
-	CoreFunctionId,
-	ReadonlyArray<Pick<CoreCallResultFact, "instruction" | "mask">>
-> {
-	const result = new Map<
-		CoreFunctionId,
-		Array<Pick<CoreCallResultFact, "instruction" | "mask">>
-	>();
-	let kinds: CoreProgramValueKindState | undefined;
+	const fieldResults = new Map<CoreFunctionId, Array<CoreNormalResultFact>>();
 	for (const functionId of flow.reachability.liveFunctions) {
 		const fn = program.function(functionId);
-		const returnedRecords = new Map<CoreInstructionId, CoreRecordValueKind>();
-		for (const [instruction, read] of coreReadOnlyRecordFields(fn)) {
+		const records = new Map<CoreInstructionId, CoreRecordValueKind>();
+		for (const [instruction, read] of readsFor(functionId)) {
 			const producer = flow.targets.site(functionId, read.producer);
 			if (
 				producer === undefined ||
@@ -4557,40 +4698,40 @@ function discoverProgramRecordFieldKinds(
 				producer.targets.functions.length === 0
 			)
 				continue;
-			kinds ??= readValueKinds();
-			let record = returnedRecords.get(read.producer);
-			if (!returnedRecords.has(read.producer)) {
-				record = null;
-				for (const callee of producer.targets.functions) {
-					const returned = kinds.summary(callee);
-					record = joinCoreRecordValueKinds(
-						record,
-						returned.returnKind === 0 ? null : returned.returnRecord,
-					);
-					if (record === undefined) break;
-				}
-				returnedRecords.set(read.producer, record);
-			}
+			if (!records.has(read.producer)) records.set(read.producer, recordResult(producer));
+			const record = records.get(read.producer);
 			const mask = coreRecordFieldReadKind(read, record, COMPILER_VALUE_KIND_TOP);
+			if (!compilerValueKindMaskIsValid(mask)) continue;
+			const integerRange = coreRecordFieldReadIntegerRange(read, record) ?? undefined;
+			const attributes = fn.instructionAttributes(instruction);
+			const currentRange = attributes[CORE_NORMAL_RESULT_INTEGER_RANGE_ATTRIBUTE];
 			if (
-				!compilerValueKindMaskIsValid(mask) ||
-				fn.instructionAttributes(instruction)[CORE_RECORD_FIELD_KIND_ATTRIBUTE] === mask
+				attributes[CORE_RECORD_FIELD_KIND_ATTRIBUTE] === mask &&
+				compilerIntegerRangesEqual(
+					compilerIntegerRangeIsValid(currentRange) ? currentRange : undefined,
+					integerRange,
+				)
 			)
 				continue;
-			let facts = result.get(functionId);
-			if (facts === undefined) result.set(functionId, (facts = []));
-			facts.push({ instruction, mask });
+			let facts = fieldResults.get(functionId);
+			if (facts === undefined) fieldResults.set(functionId, (facts = []));
+			facts.push({
+				instruction,
+				mask,
+				...(integerRange === undefined
+					? {}
+					: { integerRange: Object.freeze(integerRange) }),
+			});
 		}
 	}
-
-	return result;
+	return { calls: results, fields: fieldResults };
 }
 
 function discoverProgramCallResultIdentities(
 	program: CoreProgram,
 	analyses: CoreAnalysisManager,
 	flow: CoreProgramFlowState,
-	callFacts: ReadonlyMap<CoreFunctionId, ReadonlyArray<CoreCallResultFact>>,
+	callFacts: ReadonlyMap<CoreFunctionId, ReadonlyArray<CoreNormalResultFact>>,
 ): ReadonlyMap<CoreFunctionId, ReadonlyMap<CoreValueId, CoreValueId>> {
 	const results = new Map<CoreFunctionId, ReadonlyMap<CoreValueId, CoreValueId>>();
 	const identity = createProgramValueIdentityQuery(program, analyses, flow);
@@ -4646,7 +4787,7 @@ function discoverProgramCallResultIdentities(
 			}
 			const bound =
 				fact === undefined
-					? attributes[CORE_CALL_RESULT_INTEGER_RANGE_ATTRIBUTE]
+					? attributes[CORE_NORMAL_RESULT_INTEGER_RANGE_ATTRIBUTE]
 					: fact.integerRange;
 			if (compilerIntegerRangeIsValid(bound)) {
 				const range = analyses
@@ -5007,22 +5148,13 @@ export function runCoreCrossCallTransforms(
 	}
 	if (analyses.get(CORE_PROGRAM_FLOW_ANALYSIS, { scope: "program" }) !== flow)
 		refreshFlow();
-	const callKindsByCaller = discoverProgramCallResultKinds(
-		program,
-		analyses,
-		flow,
-		readValueKinds,
-	);
+	const { calls: callKindsByCaller, fields: recordKindsByCaller } =
+		discoverProgramNormalResultFacts(program, analyses, flow, readValueKinds);
 	const callIdentitiesByCaller = discoverProgramCallResultIdentities(
 		program,
 		analyses,
 		flow,
 		callKindsByCaller,
-	);
-	const recordKindsByCaller = discoverProgramRecordFieldKinds(
-		program,
-		flow,
-		readValueKinds,
 	);
 	if (
 		callKindsByCaller.size > 0 ||
@@ -5053,8 +5185,8 @@ export function runCoreCrossCallTransforms(
 					[CORE_CALL_RESULT_KIND_ATTRIBUTE]: mask,
 				};
 				if (integerRange === undefined)
-					delete attributes[CORE_CALL_RESULT_INTEGER_RANGE_ATTRIBUTE];
-				else attributes[CORE_CALL_RESULT_INTEGER_RANGE_ATTRIBUTE] = { ...integerRange };
+					delete attributes[CORE_NORMAL_RESULT_INTEGER_RANGE_ATTRIBUTE];
+				else attributes[CORE_NORMAL_RESULT_INTEGER_RANGE_ATTRIBUTE] = { ...integerRange };
 				editor.replaceInstruction(
 					instruction,
 					opcode,
@@ -5070,9 +5202,18 @@ export function runCoreCrossCallTransforms(
 				);
 				callResultKindFacts++;
 			}
-			for (const { instruction, mask } of recordKindsByCaller.get(functionId) ?? []) {
+			for (const { instruction, mask, integerRange } of recordKindsByCaller.get(
+				functionId,
+			) ?? []) {
 				if (!fn.isInstructionLive(instruction)) continue;
 				const start = fn.kernel.instructionOperandStart(instruction);
+				const attributes: Record<string, CoreAttributeValue> = {
+					...fn.instructionAttributes(instruction),
+					[CORE_RECORD_FIELD_KIND_ATTRIBUTE]: mask,
+				};
+				if (integerRange === undefined)
+					delete attributes[CORE_NORMAL_RESULT_INTEGER_RANGE_ATTRIBUTE];
+				else attributes[CORE_NORMAL_RESULT_INTEGER_RANGE_ATTRIBUTE] = { ...integerRange };
 				editor.replaceInstruction(
 					instruction,
 					fn.instructionOpcodeName(instruction),
@@ -5081,10 +5222,7 @@ export function runCoreCrossCallTransforms(
 						(_, index) => fn.kernel.operandAt(start + index),
 					),
 					{
-						attributes: {
-							...fn.instructionAttributes(instruction),
-							[CORE_RECORD_FIELD_KIND_ATTRIBUTE]: mask,
-						},
+						attributes,
 						sourcePosition: fn.instructionSourcePosition(instruction),
 						effectRefinement: fn.instructionEffectRefinement(instruction),
 					},
