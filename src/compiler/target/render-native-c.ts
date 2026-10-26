@@ -1003,9 +1003,12 @@ export interface CompiledFunction extends NativeCallCoverage {
 		source: string;
 		parameterRepresentations: ReadonlyArray<VmRegisterRepresentation>;
 		/** Caller storage pointers that follow the parameters of a record entry. */
-		resultFieldCount?: number;
+		resultFieldRepresentations?: ReadonlyArray<VmRegisterRepresentation>;
 		/** Record parameters whose caller storage pointers follow the result's. */
-		recordParameterIndices?: ReadonlyArray<number>;
+		recordParameters?: ReadonlyArray<{
+			readonly index: number;
+			readonly representations: ReadonlyArray<VmRegisterRepresentation>;
+		}>;
 		resultRepresentation: VmRegisterRepresentation;
 		leaf?: true;
 		callbackSymbol?: string;
@@ -2816,7 +2819,7 @@ function emitCompiledVariant(
 				{
 					fields: shape ?? directEntry.resultFields!.keys.map((_, field) => field),
 					...(shape === undefined ? {} : { shape: index }),
-					count: directEntry.resultFields!.keys.length,
+					storage: directEntry.resultFields!.storage,
 				},
 			] as const;
 		}) ?? [],
@@ -3092,7 +3095,7 @@ function emitCompiledVariant(
 		forwards: new Map(
 			directEntry?.resultFields?.forwards?.map((forward) => [
 				forward.callIp,
-				directEntry.resultFields!.keys.length,
+				directEntry.resultFields!.storage,
 			]) ?? [],
 		),
 		...renderRecordCallSlots(
@@ -3269,14 +3272,22 @@ function emitCompiledVariant(
 						type: cTypeOf(rep),
 						name: `fp${field}`,
 					})) ?? []),
-					...Array.from(
-						{ length: nativeRecordSlotCount(directEntry.resultFields) },
-						(_, field) => ({ type: "MalValue *", name: `rf${field}` }),
+					...(directEntry.resultFields === undefined
+						? []
+						: recordRepresentations(directEntry.resultFields).map(
+								(representation, field) => ({
+									type: `${cTypeOf(representation)} *`,
+									name: `rf${field}`,
+								}),
+							)),
+					...(directEntry.recordParameters ?? []).flatMap((parameter) =>
+						[...recordRepresentations(parameter), "boxed" as const, "boxed" as const].map(
+							(representation, field) => ({
+								type: `${cTypeOf(representation)} *`,
+								name: `rp${parameter.index}_${field}`,
+							}),
+						),
 					),
-					...(directEntry.recordParameters ?? []).map((parameter) => ({
-						type: "MalValue *",
-						name: `rp${parameter.index}`,
-					})),
 				];
 	const parameterList =
 		directParameters === undefined
@@ -3390,6 +3401,11 @@ function emitCompiledVariant(
 	for (let start = 0; start < privateLocals.length; start += 32)
 		lines.push(
 			`    MalPrivateRoot ${privateLocals.slice(start, start + 32).join(", ")};`,
+		);
+
+	for (const local of records.locals)
+		lines.push(
+			`    ${cTypeOf(local.representation)} ${local.name} = ${zeroOf(local.representation)};`,
 		);
 
 	for (let i = 0; i < fn.parameterCount; i++) {
@@ -4485,13 +4501,14 @@ function renderCompiledFunction(
 			],
 			...(entry.resultFields === undefined
 				? {}
-				: { resultFieldCount: nativeRecordSlotCount(entry.resultFields) }),
+				: { resultFieldRepresentations: recordRepresentations(entry.resultFields) }),
 			...(entry.recordParameters === undefined
 				? {}
 				: {
-						recordParameterIndices: entry.recordParameters.map(
-							(parameter) => parameter.index,
-						),
+						recordParameters: entry.recordParameters.map((parameter) => ({
+							index: parameter.index,
+							representations: [...recordRepresentations(parameter), "boxed", "boxed"],
+						})),
 					}),
 			resultRepresentation: entry.resultRepresentation,
 		})),
@@ -4626,28 +4643,39 @@ function nativeRecordSlotCount(fields: NativeRecordLayout | undefined): number {
 		: fields.keys.length + (fields.shapes === undefined ? 0 : 1);
 }
 
-/**
- * One record's rooted caller storage: its fields in key order, a union's shape index,
- * then the object and its producer when present. A record parameter reaches the same
- * storage in its caller's frame.
- */
+type NativeRecordField = NativeRecordLayout["storage"][number];
+
+function recordRepresentations(
+	layout: NativeRecordLayout,
+): Array<VmRegisterRepresentation> {
+	return [
+		...layout.storage.map((field) => field.representation),
+		...(layout.shapes === undefined ? [] : ["boxed" as const]),
+	];
+}
+
 interface NativeRecordSite {
-	readonly fieldSlot?: number;
-	readonly parameter?: number;
+	readonly slots: ReadonlyArray<string>;
+	readonly storage: ReadonlyArray<NativeRecordField>;
 	readonly keys: ReadonlyArray<number>;
 	readonly shapes?: ReadonlyArray<ReadonlyArray<number>>;
-	/** The object follows the fields, empty until an observer or the callee supplies it. */
 	readonly object?: true;
-	/** The producer follows the object; an object created from the fields takes its realm. */
 	readonly producer?: true;
-	/** The callee may return another value, which is then the record itself. */
 	readonly escapes?: true;
 }
 
 function recordSlot(site: NativeRecordSite, offset: number): string {
-	return site.parameter === undefined
-		? `__gc_slots[${site.fieldSlot! + offset}]`
-		: `rp${site.parameter}[${offset}]`;
+	return site.slots[offset]!;
+}
+
+function recordBoxed(site: NativeRecordSite, field: number): string {
+	const value = recordSlot(site, field);
+	const representation = site.storage[field]!.representation;
+	return representation === "number"
+		? `mal_ops_number_value(${value})`
+		: representation === "boolean"
+			? `mal_value_new_boolean(${value})`
+			: value;
 }
 
 function recordObject(site: NativeRecordSite): string {
@@ -4658,24 +4686,26 @@ function recordProducer(site: NativeRecordSite): string {
 	return recordSlot(site, nativeRecordSlotCount(site) + 1);
 }
 
-function recordStorage(site: NativeRecordSite): string {
-	return site.parameter === undefined
-		? `&__gc_slots[${site.fieldSlot!}]`
-		: `rp${site.parameter}`;
+function recordStorage(site: NativeRecordSite): Array<string> {
+	return site.slots.map((slot) => `&${slot}`);
 }
 
 interface NativeRecordStorage {
+	readonly locals: ReadonlyArray<{
+		readonly name: string;
+		readonly representation: VmRegisterRepresentation;
+	}>;
 	/** A record entry's allocations, with their field indices and shape index. */
 	readonly allocations: ReadonlyMap<
 		number,
 		{
 			readonly fields: ReadonlyArray<number>;
 			readonly shape?: number;
-			readonly count: number;
+			readonly storage: ReadonlyArray<NativeRecordField>;
 		}
 	>;
 	/** Forwarded calls of a record entry, with its field count. */
-	readonly forwards: ReadonlyMap<number, number>;
+	readonly forwards: ReadonlyMap<number, ReadonlyArray<NativeRecordField>>;
 	readonly calls: ReadonlyMap<number, NativeRecordSite>;
 	/** Object literals created in caller storage. */
 	readonly objects: ReadonlyMap<number, NativeRecordSite>;
@@ -4701,6 +4731,7 @@ interface NativeRecordObserver {
 }
 
 const NO_NATIVE_RECORD_STORAGE: NativeRecordStorage = {
+	locals: [],
 	allocations: new Map(),
 	forwards: new Map(),
 	calls: new Map(),
@@ -4728,6 +4759,33 @@ function renderRecordCallSlots(
 			[]),
 		...(native.storage?.elidedPureIps ?? []),
 	]);
+	const locals: Array<{ name: string; representation: VmRegisterRepresentation }> = [];
+	const allocateRecord = (
+		layout: NativeRecordLayout,
+		prefix: string,
+		object: boolean,
+		producer: boolean,
+	): NativeRecordSite => {
+		const slots = recordRepresentations(layout).map((representation, field) => {
+			const heap =
+				field < layout.storage.length &&
+				(layout.storage[field]!.kindMask & ~COMPILER_VALUE_KIND_NUMERIC_PRIMITIVE) !== 0;
+			if (heap) return `__gc_slots[${allocateSlot()}]`;
+			const name = `${prefix}_${field}`;
+			locals.push({ name, representation });
+			return name;
+		});
+		if (object) slots.push(`__gc_slots[${allocateSlot()}]`);
+		if (producer) slots.push(`__gc_slots[${allocateSlot()}]`);
+		return {
+			slots,
+			keys: layout.keys,
+			storage: layout.storage,
+			...(layout.shapes === undefined ? {} : { shapes: layout.shapes }),
+			...(object ? { object: true } : {}),
+			...(producer ? { producer: true } : {}),
+		};
+	};
 	const calls = new Map<number, NativeRecordSite>();
 	const objects = new Map<number, NativeRecordSite>();
 	const accesses = new Map<number, NativeRecordAccess>();
@@ -4773,7 +4831,11 @@ function renderRecordCallSlots(
 	};
 	for (const parameter of directEntry?.recordParameters ?? []) {
 		const site: NativeRecordSite = {
-			parameter: parameter.index,
+			slots: Array.from(
+				{ length: nativeRecordSlotCount(parameter) + 2 },
+				(_, field) => `(*rp${parameter.index}_${field})`,
+			),
+			storage: parameter.storage,
 			keys: parameter.keys,
 			...(parameter.shapes === undefined ? {} : { shapes: parameter.shapes }),
 			object: true,
@@ -4796,19 +4858,8 @@ function renderRecordCallSlots(
 		const escapes = layout.escapes === true;
 		const object = observed || escapes || passed.length > 0;
 		const producer = observed || passed.length > 0;
-		const fieldSlot = allocateSlot();
-		for (
-			let slot = 1;
-			slot < nativeRecordSlotCount(layout) + (object ? 1 : 0) + (producer ? 1 : 0);
-			slot++
-		)
-			allocateSlot();
 		const site: NativeRecordSite = {
-			fieldSlot,
-			keys: layout.keys,
-			...(layout.shapes === undefined ? {} : { shapes: layout.shapes }),
-			...(object ? { object: true as const } : {}),
-			...(producer ? { producer: true as const } : {}),
+			...allocateRecord(layout, `__record_call_${plan.callIp}`, object, producer),
 			...(escapes ? { escapes: true as const } : {}),
 		};
 		calls.set(plan.callIp, site);
@@ -4820,26 +4871,23 @@ function renderRecordCallSlots(
 			throw new Error(
 				`Native record object ${plan.allocationIp} is not an object literal`,
 			);
-		const layout = { keys: allocation.keyStringIndices };
+		const layout = { keys: allocation.keyStringIndices, storage: plan.storage };
 		const passed = (plan.passes ?? []).filter((pass) => {
 			const parameter = entryOf(pass.callIp)?.recordParameters?.find(
 				(candidate) => candidate.index === pass.argument,
 			);
 			return parameter !== undefined && sameNativeRecordLayout(layout, parameter);
 		});
-		const fieldSlot = allocateSlot();
-		// Fields, then the object and the producer whose realm an object created from them takes.
-		for (let slot = 1; slot < layout.keys.length + 2; slot++) allocateSlot();
-		const site: NativeRecordSite = {
-			fieldSlot,
-			keys: layout.keys,
-			object: true,
-			producer: true,
-		};
+		const site = allocateRecord(
+			layout,
+			`__record_object_${plan.allocationIp}`,
+			true,
+			true,
+		);
 		objects.set(plan.allocationIp, site);
 		addUses(site, plan, passed);
 	}
-	return { calls, objects, accesses, observers, passes };
+	return { locals, calls, objects, accesses, observers, passes };
 }
 
 function renderFieldCallSlots(
@@ -8051,10 +8099,10 @@ interface NativeInstructionContext {
 	readonly recordAllocation?: {
 		readonly fields: ReadonlyArray<number>;
 		readonly shape?: number;
-		readonly count: number;
+		readonly storage: ReadonlyArray<NativeRecordField>;
 	};
 	/** A record entry returns this call's record; its fields go to the entry's own caller storage. */
-	readonly recordForward?: number;
+	readonly recordForward?: ReadonlyArray<NativeRecordField>;
 	/** Forwarded calls that reached the callee's record entry with that storage. */
 	readonly recordForwarded?: Set<number>;
 	/** A record field read or written in caller storage. */
@@ -8831,7 +8879,7 @@ function emitInstruction(
 				const atom = (field: number) =>
 					`vm->string_constant_atoms[${relocation.stringIndex(site.keys[field]!)}]`;
 				const materialize = (fields: ReadonlyArray<number>) =>
-					`${object} = mal_vm_materialize_record(vm, ${recordProducer(site)}, (MalString *[]){${fields.map(atom).join(", ")}}, (MalValue[]){${fields.map((field) => recordSlot(site, field)).join(", ")}}, ${fields.length});`;
+					`${object} = mal_vm_materialize_record(vm, ${recordProducer(site)}, (MalString *[]){${fields.map(atom).join(", ")}}, (MalValue[]){${fields.map((field) => recordBoxed(site, field)).join(", ")}}, ${fields.length});`;
 				const shapeIndex = `mal_value_to_i32(${recordSlot(site, site.keys.length)})`;
 				return [
 					`if (${object} == MAL_VALUE_EMPTY) {`,
@@ -9686,10 +9734,9 @@ function emitInstruction(
 		// The callee's literal is fresh and unchanged, so its slots are its fields in key order.
 		return [
 			...lines,
-			...Array.from(
-				{ length: context.recordForward },
-				(_, field) =>
-					`*rf${field} = mal_object_field_load_shaped(mal_value_to_object(${boxed(instruction.dst)}), ${field});`,
+			...context.recordForward.map(
+				(storage, field) =>
+					`*rf${field} = ${convertedValue("boxed", storage.representation, `mal_object_field_load_shaped(mal_value_to_object(${boxed(instruction.dst)}), ${field})`)};`,
 			),
 			`r${instruction.dst} = MAL_VALUE_EMPTY;`,
 		];
@@ -9701,7 +9748,8 @@ function emitInstruction(
 		const site = context.recordObject;
 		return [
 			...instruction.valueRegisters.map(
-				(register, field) => `${recordSlot(site, field)} = ${boxed(register)};`,
+				(register, field) =>
+					`${recordSlot(site, field)} = ${convertedValue(reps[register]!, site.storage[field]!.representation, `r${register}`)};`,
 			),
 			`${recordObject(site)} = MAL_VALUE_EMPTY;`,
 			// The prototype the literal would have had, wherever its object is created.
@@ -9713,10 +9761,12 @@ function emitInstruction(
 		context.recordAllocation !== undefined &&
 		instruction.opcode === "CREATE_OBJECT_SHAPED"
 	) {
-		const { fields, shape, count } = context.recordAllocation;
+		const { fields, shape, storage } = context.recordAllocation;
+		const count = storage.length;
 		return [
 			...instruction.valueRegisters.map(
-				(register, index) => `*rf${fields[index]!} = ${boxed(register)};`,
+				(register, index) =>
+					`*rf${fields[index]!} = ${convertedValue(reps[register]!, storage[fields[index]!]!.representation, `r${register}`)};`,
 			),
 			// A field this literal lacks reads as undefined, since no prototype has its key.
 			...Array.from({ length: count }, (_, field) => field)
@@ -9739,8 +9789,8 @@ function emitInstruction(
 		const virtual =
 			instruction.opcode === "LOAD_PROPERTY_STATIC" ||
 			instruction.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT"
-				? `r${instruction.dst} = ${callValue(instruction.dst, slot)};`
-				: `${slot} = ${boxed(instruction.value)};`;
+				? `r${instruction.dst} = ${convertedValue(site.storage[field]!.representation, reps[instruction.dst]!, slot)};`
+				: `${slot} = ${convertedValue(reps[instruction.value]!, site.storage[field]!.representation, `r${instruction.value}`)};`;
 		if (site.object === undefined) return [virtual];
 		// Once an observer created the object, it is the record: accesses go through it.
 		const ordinary = emitGenericInstruction();
@@ -14514,8 +14564,8 @@ function emitInstruction(
 						...(forward
 							? directEntry.resultFields.keys.map((_, field) => `rf${field}`)
 							: []),
-						...recordArguments.map((site) =>
-							site === undefined ? "" : recordStorage(site),
+						...recordArguments.flatMap((site) =>
+							site === undefined ? [] : recordStorage(site),
 						),
 					];
 					if (

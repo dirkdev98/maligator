@@ -827,6 +827,7 @@ export function mergeProgramImages(images: Array<ProgramImage>): MergedProgramIm
 							? undefined
 							: {
 									keys: entry.resultFields.keys.map((key) => key + base.string),
+									storage: entry.resultFields.storage.map((field) => ({ ...field })),
 									allocationIps: [...entry.resultFields.allocationIps],
 									...(entry.resultFields.shapes === undefined
 										? {}
@@ -848,6 +849,7 @@ export function mergeProgramImages(images: Array<ProgramImage>): MergedProgramIm
 						: {
 								recordParameters: entry.recordParameters.map((parameter) => ({
 									index: parameter.index,
+									storage: parameter.storage.map((field) => ({ ...field })),
 									keys: parameter.keys.map((key) => key + base.string),
 									...(parameter.shapes === undefined
 										? {}
@@ -896,6 +898,7 @@ export function mergeProgramImages(images: Array<ProgramImage>): MergedProgramIm
 				})),
 				recordObjects: native.recordObjects?.map((site) => ({
 					allocationIp: site.allocationIp,
+					storage: site.storage.map((field) => ({ ...field })),
 					...copyRecordUses(site),
 				})),
 				gc: {

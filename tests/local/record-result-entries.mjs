@@ -611,4 +611,34 @@ check(
 	"try-b@10,try-dd@24,try-g@10",
 	"handed-on records",
 );
+function recordStoragePulse() {
+	if (typeof globalThis.gc === "function") globalThis.gc();
+}
+function numberBundle(value) {
+	let label = "";
+	for (let step = 0; step < 3; step++) {
+		recordStoragePulse();
+		label += "x";
+	}
+	return { number: +value, flag: !!value, label };
+}
+function updateBundle(record, negate) {
+	for (let step = 0; step < 1; step++) {
+		if (negate) record.number = -+record.number;
+		record.flag = !record.flag;
+		record.label += "!";
+		recordStoragePulse();
+	}
+	return record.number;
+}
+function verifyBundle(value, negate) {
+	const record = numberBundle(value);
+	check(updateBundle(record, negate), negate ? -value : value, "typed borrowed Number");
+	recordStoragePulse();
+	check(record.number, negate ? -value : value, "typed Number after collection");
+	check(record.flag, !value, "typed Boolean after collection");
+	check(record.label, "xxx!", "rooted String after collection");
+}
+for (const value of [-0, 0, NaN, Infinity, -Infinity, 4294967296])
+	for (const negate of [false, true]) verifyBundle(value, negate);
 console.log("record-result-entries PASS");

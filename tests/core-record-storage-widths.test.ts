@@ -1,0 +1,435 @@
+import { describe, expect, it } from "vitest";
+import { resolveBuildConfig } from "../src/build-config.ts";
+import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
+import { verifyCoreOptimizationPlan } from "../src/compiler/core/core-ir-region-validity.ts";
+import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
+import { CORE_PROGRAM_VALUE_KIND_ANALYSIS } from "../src/compiler/core/core-program-flow-analysis.ts";
+import {
+	coreRecordStorageWidthProofIsCurrent,
+	analyzeCoreRecordStorageWidths,
+} from "../src/compiler/core/core-record-storage-widths.ts";
+import { parseModule, parseScript } from "../src/compiler/frontend/parser.ts";
+import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
+import { optimizeSemanticProgramToCore } from "../src/compiler/pipeline/compile-core-common.ts";
+import {
+	compilerProgramFactsFromConfig,
+	programClosureCertificate,
+	withProgramClosure,
+} from "../src/compiler/shared/compiler-facts.ts";
+import {
+	COMPILER_VALUE_KIND_BOOLEAN,
+	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_OBJECT,
+	COMPILER_VALUE_KIND_STRING,
+	COMPILER_VALUE_KIND_UNDEFINED,
+} from "../src/compiler/shared/compiler-value-kinds.ts";
+import {
+	serializeCompilerArtifact,
+	deserializeCompilerArtifact,
+} from "../src/compiler/target/compiler-artifact-codec.ts";
+import {
+	emitProgramImage,
+	emitProgramTranslationUnits,
+} from "../src/compiler/target/emit-program-image.ts";
+import { lowerCoreCompilationToExecution } from "../src/compiler/target/lower-native-execution.ts";
+import { lowerExecutionToProgramImage } from "../src/compiler/target/lower-native-program-image.ts";
+import { lowerNativeStorage } from "../src/compiler/target/lower-native-storage.ts";
+import { lowerCoreCompilationToNativeProgram } from "../src/compiler/target/lower-native.ts";
+import {
+	validateNativeDirectEntry,
+	validateNativeRecordCalls,
+} from "../src/compiler/target/program-image.ts";
+import { verifyNativeExecutionProgram } from "../src/compiler/target/verify-native-execution.ts";
+import { mergeProgramImages } from "../src/test262/program-image-merge.ts";
+import { coreFunctionNamed } from "./helpers/core-inspection.ts";
+
+function compile(source: string, script = false) {
+	const path = script ? "/record-storage.js" : "/record-storage.mjs";
+	const core = optimizeSemanticProgramToCore(
+		analyzeSourceAndRunSemanticAnalysis(
+			source,
+			path,
+			script ? parseScript(source, { strict: false }) : parseModule(source),
+		),
+		{
+			facts: withProgramClosure(
+				compilerProgramFactsFromConfig(
+					resolveBuildConfig({ engine: { eval: false, realms: false } }),
+				),
+				programClosureCertificate({ kind: "whole-program", entry: path }, [], []),
+			),
+		},
+		(_phase, run) => run(),
+	);
+	const manager = new CoreAnalysisManager(
+		core.program,
+		core.context,
+		new CoreOptimizationReportBuilder(core.program),
+	);
+	const readValueKinds = () =>
+		manager.get(CORE_PROGRAM_VALUE_KIND_ANALYSIS, { scope: "program" }).kinds;
+	const widths = analyzeCoreRecordStorageWidths(
+		core.program,
+		manager,
+		core.plan.directEntries,
+	);
+	const named = (name: string) => coreFunctionNamed(core.program, name)!;
+	const result = (name: string) =>
+		core.plan.directEntries.find(
+			(entry) => entry.function === named(name).id && entry.resultFields !== undefined,
+		)!;
+	const parameter = (name: string) =>
+		core.plan.directEntries.find(
+			(entry) =>
+				entry.function === named(name).id && entry.recordParameters !== undefined,
+		)!;
+	const resultWidths = (name: string) => {
+		const entry = result(name);
+		expect(entry).toBeDefined();
+		return Object.fromEntries(
+			entry.resultFields!.keys.map((key, field) => [
+				core.program.stringConstantText(key),
+				widths.result(entry)![field]!.representation,
+			]),
+		);
+	};
+	return { core, widths, named, result, parameter, resultWidths, readValueKinds };
+}
+
+const producer = `function make(value,flag){for(let i=0;i<3;i++)globalThis.gate(i);return {n:+value,s:"text",b:!!value};}`;
+const run = (body: string) =>
+	`${producer}function run(flag){let total=0;for(let i=0;i<4;i++){const record=make(i,flag);${body}}return total;}console.log(run(globalThis.flag));`;
+
+describe("record storage widths", () => {
+	it("keeps numeric, Boolean and String fields independent of producer effects", () => {
+		const out = compile(run("total+=record.n+record.s.length+(record.b?1:0);"));
+		expect(out.resultWidths("make")).toEqual({ n: "f64", s: "string", b: "boolean" });
+	});
+
+	it.each([
+		['if(flag)record.n="changed";', "boxed"],
+		["if(flag)record.n=globalThis.input;", "boxed"],
+		["if(flag)record.n=+globalThis.input;", "f64"],
+	])("joins every caller write in %s", (write, expected) => {
+		const out = compile(run(`${write}total+=record.n+record.s.length+(record.b?1:0);`));
+		expect(out.resultWidths("make")).toEqual({ n: expected, s: "string", b: "boolean" });
+		const record = out.readValueKinds().summary(out.named("make").id).returnRecord!;
+		expect(
+			record.find((field) => out.core.program.stringConstantText(field.key) === "n")!
+				.mask,
+		).toBe(COMPILER_VALUE_KIND_NUMBER);
+	});
+
+	it("preserves its proof across certified plan copies and rejects missing or forged widths", () => {
+		const out = compile(run("total+=record.n;"));
+		const selected = out.core.plan.recordStorageWidths!;
+		expect(
+			coreRecordStorageWidthProofIsCurrent(
+				out.core.program,
+				out.core.plan.directEntries,
+				selected,
+			),
+		).toBe(true);
+		expect(selected.result(out.result("make"))).toEqual(
+			out.widths.result(out.result("make")),
+		);
+		expect(() =>
+			verifyCoreOptimizationPlan(
+				out.core.program,
+				{ ...out.core.plan, recordStorageWidths: undefined },
+				out.core.context,
+			),
+		).toThrow(/record storage widths have no current proof/);
+		expect(() =>
+			verifyCoreOptimizationPlan(
+				out.core.program,
+				{
+					...out.core.plan,
+					recordStorageWidths: {
+						...selected,
+						result: () => [
+							{ kindMask: COMPILER_VALUE_KIND_NUMBER, representation: "f64" as const },
+						],
+					},
+				},
+				out.core.context,
+			),
+		).toThrow(/record storage widths have no current proof/);
+	});
+
+	it("retains a boxed field's complete kind union", () => {
+		const out = compile(run("if(flag)record.n=true;total+=record.n;"));
+		const entry = out.result("make");
+		const index = entry.resultFields!.keys.findIndex(
+			(key) => out.core.program.stringConstantText(key) === "n",
+		);
+		expect(out.widths.result(entry)![index]).toEqual({
+			kindMask: COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_BOOLEAN,
+			representation: "boxed",
+		});
+	});
+
+	it("does not join unrelated producers that happen to have the same keys", () => {
+		const out = compile(
+			`${producer}function text(value){for(let i=0;i<3;i++)globalThis.gate(i);return {n:"text",s:"other",b:!!value};}function run(flag){let total=0;for(let i=0;i<4;i++){const left=make(i,flag);const right=text(i);total+=left.n+right.n.length;}return total;}console.log(run(globalThis.flag));`,
+		);
+		expect(out.resultWidths("make").n).toBe("f64");
+		expect(out.resultWidths("text").n).toBe("string");
+	});
+
+	it("joins a borrowed parameter's writes into its producer's storage", () => {
+		const out = compile(
+			`${producer}function edit(record,flag){for(let i=0;i<3;i++)if(flag)record.n="changed";return record.n;}function run(flag){let total=0;for(let i=0;i<4;i++){const record=make(i,flag);total+=edit(record,flag);total+=record.n;}return total;}console.log(run(globalThis.flag));`,
+		);
+		const entry = out.parameter("edit");
+		expect(entry).toBeDefined();
+		const parameter = entry.recordParameters![0]!;
+		expect(out.resultWidths("make")).toEqual({ n: "boxed", s: "string", b: "boolean" });
+		expect(out.widths.parameter(entry, parameter.index)).toEqual(
+			out.widths.result(out.result("make")),
+		);
+	});
+
+	it("joins one caller-owned literal shared by multiple parameter entries", () => {
+		const out = compile(
+			`function edit(record,flag){for(let i=0;i<3;i++)if(flag)record.n="changed";return record.n;}function read(record){let total=0;for(let i=0;i<3;i++)total+=record.n;return total;}function run(flag){let total=0;for(let i=0;i<4;i++){const record={n:i,b:!!flag};total+=read(record);total+=edit(record,flag);}return total;}console.log(run(globalThis.flag));`,
+		);
+		const edited = out.parameter("edit");
+		const reader = out.parameter("read");
+		expect(edited).toBeDefined();
+		expect(reader).toBeDefined();
+		const object = edited.callSites[0]!.recordObjects![0]!;
+		expect(out.widths.parameter(edited, 0)?.map((field) => field.representation)).toEqual(
+			["boxed", "boolean"],
+		);
+		expect(out.widths.parameter(reader, 0)?.map((field) => field.representation)).toEqual(
+			["boxed", "boolean"],
+		);
+		expect(
+			out.widths
+				.object(edited.callSites[0]!.caller, object.allocation)
+				?.map((field) => field.representation),
+		).toEqual(["boxed", "boolean"]);
+	});
+
+	it("propagates storage widening through selected record forwards", () => {
+		const out = compile(
+			`function leaf(value){let n=+value;while(n<3)n++;return {n};}function forward(value){let n=+value;while(n<2)n++;return leaf(n);}function direct(value){return leaf(value).n;}function run(flag){let total=0;for(let i=0;i<4;i++){const record=forward(i);if(flag)record.n="changed";total+=record.n;}return total;}console.log(run(globalThis.flag),direct(globalThis.value));`,
+		);
+		expect(out.result("forward").callOverrides?.length).toBeGreaterThan(0);
+		expect(out.resultWidths("forward")).toEqual({ n: "boxed" });
+		expect(out.resultWidths("leaf")).toEqual({ n: "boxed" });
+	});
+
+	it("reuses the return summary when a forwarded leaf has no selected record entry", () => {
+		const out = compile(
+			`function leaf(value){for(let i=0;i<3;i++)globalThis.gate(i);return {n:value};}function forward(value){let n=+value;while(n<3)n++;return leaf(n);}function run(value){let total=0;for(let i=0;i<4;i++){const record=forward(value);total+=record.n;}return total;}console.log(run(globalThis.input),leaf("text"));`,
+		);
+		const entry = out.result("forward");
+		expect(entry.resultFields!.forwards).toBeDefined();
+		expect(entry.callOverrides).toBeUndefined();
+		expect(out.widths.result(entry)).toEqual([
+			{
+				kindMask: COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_STRING,
+				representation: "boxed",
+			},
+		]);
+		expect(
+			out
+				.readValueKinds()
+				.summary(out.named("leaf").id)
+				.returnRecord!.find(
+					(field) => out.core.program.stringConstantText(field.key) === "n",
+				)!.mask,
+		).toBe(COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_STRING);
+	});
+
+	it.each([false, true])(
+		"preserves receiver normalization for a forwarded literal in script mode %s",
+		(script) => {
+			const out = compile(
+				`const leaf=function leaf(value){for(let i=0;i<3;i++)globalThis.gate(i);return {n:this};};const forward=function forward(value){let n=+value;while(n<3)n++;return leaf(n);};function run(value){let total=0;for(let i=0;i<4;i++){const record=forward(value);total+=record.n;}return total;}console.log(run(globalThis.input));`,
+				script,
+			);
+			const entry = out.result("forward");
+			expect(entry.resultFields!.forwards).toBeDefined();
+			expect(out.widths.result(entry)).toEqual([
+				{
+					kindMask: script ? COMPILER_VALUE_KIND_OBJECT : COMPILER_VALUE_KIND_UNDEFINED,
+					representation: "boxed",
+				},
+			]);
+		},
+	);
+
+	it("keeps absent union fields boxed while selecting a common numeric tag", () => {
+		const out = compile(
+			`function decode(value,flag){let n=+value;while(n<3)n++;if(flag)return {tag:0,a:n};return {tag:1,b:!!value};}function run(flag){let total=0;for(let i=0;i<4;i++){const record=decode(i,flag);total+=record.tag+(record.a===undefined?1:record.a);}return total;}console.log(run(globalThis.flag));`,
+		);
+		expect(out.result("decode").resultFields!.shapes).toBeDefined();
+		expect(out.resultWidths("decode")).toEqual({ tag: "f64", a: "boxed", b: "boxed" });
+	});
+
+	it("keeps a non-record fallback separate from the fresh record's storage", () => {
+		const out = compile(
+			`function optional(value,flag){let n=+value;while(n<3)n++;if(flag)return globalThis.other;return {n};}function run(flag){let total=0;for(let i=0;i<4;i++){const record=optional(i,flag);total+=record.n;}return total;}console.log(run(globalThis.flag));`,
+		);
+		expect(out.result("optional").resultFields!.escapes).toBe(true);
+		expect(out.resultWidths("optional")).toEqual({ n: "f64" });
+	});
+});
+
+function nativeImage(source: string) {
+	const { core } = compile(source);
+	const image = lowerNativeStorage(
+		lowerExecutionToProgramImage(
+			lowerCoreCompilationToExecution(core, { reuseRegisters: true }),
+			lowerCoreCompilationToNativeProgram(core),
+			false,
+		),
+		"precise",
+	);
+	const named = (name: string) =>
+		image.native.functions.find(
+			(fn) =>
+				String.fromCharCode(
+					...(image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+				) === name,
+		)!;
+	return { image, named };
+}
+
+describe("record storage C ABI", () => {
+	const borrowed = `${producer}function edit(record,flag){for(let i=0;i<3;i++)if(flag)record.n=+globalThis.input;return record.n+record.s.length+(record.b?1:0);}function run(flag){let total=0;for(let i=0;i<4;i++){const record=make(i,flag);total+=edit(record,flag);total+=record.n;}return total;}console.log(run(globalThis.flag));`;
+
+	it("uses matching typed pointers for results, borrows and scalar field reads", () => {
+		const { image, named } = nativeImage(borrowed);
+		const result = named("make").directEntries.find(
+			(entry) => entry.resultFields,
+		)!.resultFields!;
+		const parameter = named("edit").directEntries.find((entry) => entry.recordParameters)!
+			.recordParameters![0]!;
+		expect(result.storage.map((field) => field.representation)).toEqual([
+			"number",
+			"string",
+			"boolean",
+		]);
+		expect(parameter.storage).toEqual(result.storage);
+		const source = emitProgramImage(image, { compiled: true });
+		for (const declaration of [
+			"double *rf0",
+			"MalValue *rf1",
+			"bool *rf2",
+			"double *rp0_0",
+			"MalValue *rp0_1",
+			"bool *rp0_2",
+		])
+			expect(source).toContain(declaration);
+		expect(source).toMatch(/double __record_call_\d+_0 = 0.0;/);
+		expect(source).toMatch(/bool __record_call_\d+_2 = false;/);
+		expect(source).not.toMatch(/mal_ops_number_as_f64\(__record_call_/);
+		expect(source).not.toMatch(/mal_value_to_boolean\(__record_call_/);
+		const split = emitProgramTranslationUnits(image, { compiled: true });
+		expect(split.map((unit) => unit.source).join("\n")).toContain("double *rp0_0");
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image)).native).toEqual(
+			image.native,
+		);
+	});
+
+	it("retains boxed scalar unions outside GC roots while heap fields remain rooted", () => {
+		const { image, named } = nativeImage(
+			run("if(flag)record.n=true;total+=record.n+record.s.length;"),
+		);
+		const result = named("make").directEntries.find(
+			(entry) => entry.resultFields,
+		)!.resultFields!;
+		expect(result.storage[0]).toEqual({
+			kindMask: COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_BOOLEAN,
+			representation: "boxed",
+		});
+		const source = emitProgramImage(image, { compiled: true });
+		expect(source).toMatch(/MalValue __record_call_\d+_0 = MAL_VALUE_UNDEFINED;/);
+		expect(source).not.toMatch(/__record_call_\d+_1/);
+	});
+
+	it("rejects invalid field widths and a borrow with incompatible storage", () => {
+		const { image, named } = nativeImage(borrowed);
+		const make = named("make");
+		const entry = make.directEntries.find((entry) => entry.resultFields)!;
+		for (const storage of [
+			[],
+			[
+				{ kindMask: COMPILER_VALUE_KIND_STRING, representation: "number" as const },
+				...entry.resultFields!.storage.slice(1),
+			],
+		])
+			expect(() =>
+				validateNativeDirectEntry(make.body, {
+					...entry,
+					resultFields: { ...entry.resultFields!, storage },
+				}),
+			).toThrow(/Invalid native record storage/);
+		const edit = named("edit");
+		const editEntry = edit.directEntries.find((entry) => entry.recordParameters)!;
+		const changed = {
+			...edit,
+			directEntries: edit.directEntries.map((candidate) =>
+				candidate !== editEntry
+					? candidate
+					: {
+							...candidate,
+							recordParameters: candidate.recordParameters!.map((parameter) => ({
+								...parameter,
+								storage: parameter.storage.map((field, index) =>
+									index === 0
+										? {
+												kindMask: COMPILER_VALUE_KIND_BOOLEAN,
+												representation: "boolean" as const,
+											}
+										: field,
+								),
+							})),
+						},
+			),
+		};
+		const functions = image.native.functions.map((fn) => (fn === edit ? changed : fn));
+		expect(() =>
+			validateNativeRecordCalls(named("run").body, named("run"), functions),
+		).toThrow(/Invalid native record call/);
+	});
+
+	it("rejects malformed field widths before native image construction", () => {
+		const { core } = compile(borrowed);
+		const program = lowerCoreCompilationToNativeProgram(core);
+		const functions = program.functions.map((fn) => ({
+			...fn,
+			directEntries: fn.directEntries.map((entry) =>
+				entry.resultFields === undefined
+					? entry
+					: { ...entry, resultFields: { ...entry.resultFields, storage: [] } },
+			),
+		}));
+		expect(() => verifyNativeExecutionProgram({ ...program, functions })).toThrow(
+			/native record entry has invalid storage/,
+		);
+	});
+
+	it("clones field storage when rebasing merged artifacts", () => {
+		const { image } = nativeImage(borrowed);
+		const merged = mergeProgramImages([image, image]).image;
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(merged)).native).toEqual(
+			merged.native,
+		);
+		const original = image.native.functions.flatMap((fn) =>
+			fn.directEntries.flatMap((entry) => entry.resultFields?.storage ?? []),
+		);
+		const copied = merged.native.functions
+			.slice(image.native.functions.length)
+			.flatMap((fn) =>
+				fn.directEntries.flatMap((entry) => entry.resultFields?.storage ?? []),
+			);
+		expect(copied).toEqual(original);
+		for (const [index, field] of copied.entries())
+			expect(field).not.toBe(original[index]);
+	});
+});

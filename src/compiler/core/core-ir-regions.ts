@@ -15,6 +15,7 @@ import type {
 	CorePrivatePackedRestArrayElementPlan,
 	CoreUnsignedArithmeticPlan,
 } from "./core-native-numeric-analysis.ts";
+import type { CoreRecordStorageWidths } from "./core-record-storage-widths.ts";
 import type { CoreSpecializationRecipeTable } from "./core-specialization-recipes.ts";
 import type { CoreFunctionVersions, CoreProgramVersions } from "./core-store.ts";
 import type {
@@ -701,6 +702,7 @@ export interface CoreOptimizationPlan {
 		readonly omittedBlocks: ReadonlyArray<CoreBlockId>;
 	}>;
 	readonly directEntries: ReadonlyArray<CoreDirectEntryPlan>;
+	readonly recordStorageWidths?: CoreRecordStorageWidths;
 	readonly directBuiltinCallbacks?: ReadonlyArray<CoreDirectBuiltinCallbackPlan>;
 	readonly instructionFacts?: ReadonlyArray<CoreInstructionFactPlan>;
 	readonly privateNumericArrayElements?: ReadonlyArray<CorePrivateNumericArrayElementPlan>;

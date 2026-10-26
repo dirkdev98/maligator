@@ -199,6 +199,7 @@
 				"src/compiler/core/core-program-flow.ts",
 				"src/compiler/core/core-proof-passes.ts",
 				"src/compiler/core/core-record-value-kinds.ts",
+				"src/compiler/core/core-record-storage-widths.ts",
 				"src/compiler/core/core-read-accessor-expansion.ts",
 				"src/compiler/core/core-read-accessor-loops.ts",
 				"src/compiler/core/core-read-accessors.ts",

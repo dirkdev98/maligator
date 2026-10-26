@@ -97,6 +97,7 @@ import type {
 	CorePrivatePackedRestArrayElementPlan,
 	CoreUnsignedArithmeticPlan,
 } from "./core-native-numeric-analysis.ts";
+import { analyzeCoreRecordStorageWidths } from "./core-record-storage-widths.ts";
 import { buildCoreSpecializationRecipeTable } from "./core-specialization-recipes.ts";
 import { coreFunctionVersionsAreCurrent } from "./core-store.ts";
 import type { CoreFunctionVersions, CoreProgram } from "./core-store.ts";
@@ -2799,6 +2800,11 @@ export function buildCoreOptimizationPlan(
 		increment(declinedByPlanReason, "unreferenced-entry");
 	}
 	const directEntries = linkRecordForwards(program, analyses, connected.entries);
+	const recordStorageWidths = directEntries.some(
+		(entry) => entry.resultFields !== undefined || entry.recordParameters !== undefined,
+	)
+		? analyzeCoreRecordStorageWidths(program, analyses, directEntries)
+		: undefined;
 	const budgetStatistics = service.statisticsSince(budgetBaseline);
 	const statistics: CoreOptimizationPlanStatistics = Object.freeze({
 		...budgetStatistics,
@@ -2834,6 +2840,7 @@ export function buildCoreOptimizationPlan(
 			),
 		),
 		directEntries: Object.freeze(directEntries),
+		...(recordStorageWidths === undefined ? {} : { recordStorageWidths }),
 		directBuiltinCallbacks,
 		specializedOnlyFunctions: Object.freeze(
 			coreSpecializedOnlyFunctions(

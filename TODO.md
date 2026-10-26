@@ -142,16 +142,17 @@ The independent target boundary and current storage contract are recorded in
       parameter/field cycles. Every accessed key must be own, and writes, escapes,
       dynamic keys or handler transport reject the proof. Normal-result publication
       feeds local representations and native predicates without requiring pure
-      effects. Typed layouts and point-sensitive mutation/escape proofs remain.
-      The certified `returned-records` workload now selects a numeric scanner
-      index and caller result, shrinking whole C from 115,075 to 111,795 bytes.
-      Its record entry still returns `MalValue *` fields, which the caller unboxes
-      into scalar locals. Storage kinds must account for virtual writes and borrowed
-      record parameters, while initial field facts remain independent of later
-      mutations. Migrate forwards, parameter passing, materialization, fallbacks and
-      GC storage together. The scanner still calls
-      `mal_builtin_string_char_code_at_known` twice per character on a boxed string
-      parameter.
+      effects. Certified storage widths now join every virtual writer across
+      producers, callers, borrowed parameters, caller-owned literals and forwards.
+      The native ABI carries typed pointers through artifacts, relocation, split
+      units, forwards and materialization. Numeric and Boolean fields use scalar
+      locals; boxed unions without heap kinds also omit GC roots. Heap fields stay
+      rooted, and materialized records retain ordinary object access. The scanner
+      workload's whole C is now 111,548 bytes, down from 115,075 before returned-field
+      feedback and 111,795 before typed fields. Point-sensitive mutation/escape
+      proofs, coroutine record transport and integer field widths remain. The
+      scanner still calls `mal_builtin_string_char_code_at_known` twice per character
+      on a boxed string parameter.
 - [ ] Admit more record calls. Not admitted yet: calls through instance-method hints,
       which need a guarded fallback that keeps the returned object as the record;
       record parameters that a callee passes on instead of observing; and forwarding

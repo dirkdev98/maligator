@@ -66,6 +66,7 @@ export function selectNativeCallTransports(
 			for (const pass of site.passes ?? [])
 				passes.set(`${pass.callIp}:${pass.argument}`, {
 					keys: allocation.keyStringIndices,
+					storage: site.storage,
 				});
 		}
 		const plans = selectTransports(native, entries, passes);

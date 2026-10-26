@@ -34,7 +34,15 @@ import type { CompilerIntegerRange } from "../shared/integer-range.ts";
 import { NATIVE_STRING_SWITCH_CASE_LIMIT } from "../shared/native-string-switch.ts";
 import { getPrimordialCatalog } from "../shared/primordial-catalog-data.ts";
 import { scalarBuiltinInvocationEffects } from "../shared/scalar-builtin-effects.ts";
-import type { CoreTargetClassLayout, CoreTargetRecordUses } from "./core-target-ir.ts";
+import {
+	targetRecordStorageFieldsAreValid,
+	targetRecordStorageFieldsEqual,
+} from "./core-target-ir.ts";
+import type {
+	CoreTargetClassLayout,
+	CoreTargetRecordUses,
+	CoreTargetRecordStorageField,
+} from "./core-target-ir.ts";
 import type {
 	ExecutionFunction,
 	ExecutionProgram,
@@ -1581,11 +1589,13 @@ export interface NativeRecordCall extends NativeRecordUses {
 
 /** An object literal kept in caller storage; its keys are the record's fields. */
 export interface NativeRecordObject extends NativeRecordUses {
+	readonly storage: ReadonlyArray<CoreTargetRecordStorageField>;
 	readonly allocationIp: number;
 }
 
 /** A parameter received as caller storage holding a record of these fields. */
 export interface NativeRecordParameter extends NativeRecordUses {
+	readonly storage: ReadonlyArray<CoreTargetRecordStorageField>;
 	readonly index: number;
 	readonly keys: ReadonlyArray<number>;
 	readonly shapes?: ReadonlyArray<ReadonlyArray<number>>;
@@ -1612,6 +1622,7 @@ export interface NativeDirectEntryPlan {
 	};
 	/** Every return hands these fields of a fresh record to the caller's storage. */
 	readonly resultFields?: {
+		readonly storage: ReadonlyArray<CoreTargetRecordStorageField>;
 		readonly keys: ReadonlyArray<number>;
 		readonly allocationIps: ReadonlyArray<number>;
 		/**
@@ -1681,6 +1692,12 @@ export function validateNativeDirectEntry(
 					target.argumentRepresentations.length !== instruction.argumentCount))
 		)
 			throw new RangeError("Native direct-entry call override names an incompatible ABI");
+		if (
+			target?.resultFields !== undefined &&
+			(entry.resultFields === undefined ||
+				!sameNativeRecordLayout(entry.resultFields, target.resultFields))
+		)
+			throw new RangeError("Native record forward has incompatible storage");
 	}
 	const seenInputs = new Set<number>();
 	for (const {
@@ -1980,6 +1997,7 @@ function validateNativeRecordReturns(
 	function fail(): never {
 		throw new RangeError("Invalid native record result");
 	}
+	validateNativeRecordStorage(results.storage, results.keys.length);
 	const forwardIps = (results.forwards ?? []).map((forward) => forward.callIp);
 	const producers = [...results.allocationIps, ...forwardIps];
 	if (
@@ -2105,6 +2123,7 @@ export function validateNativeRecordCalls(
 		)
 			fail();
 		allocations.add(site.allocationIp);
+		validateNativeRecordStorage(site.storage, allocation.keyStringIndices.length);
 		validateNativeRecordUses(
 			fn,
 			site,
@@ -2112,7 +2131,10 @@ export function validateNativeRecordCalls(
 			fail,
 			exceptionTargets,
 		);
-		sources.push({ layout: { keys: allocation.keyStringIndices }, uses: site });
+		sources.push({
+			layout: { keys: allocation.keyStringIndices, storage: site.storage },
+			uses: site,
+		});
 	}
 	validateNativeRecordPasses(native, functions, sources, fail);
 	// A region renders the instructions it claims; only an observer's object composes with that.
@@ -2302,8 +2324,17 @@ function validateNativeRecordPasses(
 }
 
 export interface NativeRecordLayout {
+	readonly storage: ReadonlyArray<CoreTargetRecordStorageField>;
 	readonly keys: ReadonlyArray<number>;
 	readonly shapes?: ReadonlyArray<ReadonlyArray<number>>;
+}
+
+function validateNativeRecordStorage(
+	fields: ReadonlyArray<CoreTargetRecordStorageField>,
+	count: number,
+): void {
+	if (!targetRecordStorageFieldsAreValid(fields, count))
+		throw new RangeError("Invalid native record storage fields");
 }
 
 export function sameNativeRecordLayout(
@@ -2314,6 +2345,7 @@ export function sameNativeRecordLayout(
 		a.length === b.length && a.every((value, index) => value === b[index]);
 	return (
 		same(left.keys, right.keys) &&
+		targetRecordStorageFieldsEqual(left.storage, right.storage) &&
 		(left.shapes?.length ?? 0) === (right.shapes?.length ?? 0) &&
 		(left.shapes ?? []).every((shape, index) => same(shape, right.shapes![index]!))
 	);
@@ -2328,6 +2360,7 @@ function validateNativeRecordParameters(
 	}
 	const exceptionTargets = vmExceptionHandlerTargets(fn.instructions.length, fn.handlers);
 	for (const [position, parameter] of (entry.recordParameters ?? []).entries()) {
+		validateNativeRecordStorage(parameter.storage, parameter.keys.length);
 		if (
 			fn.mappedArguments ||
 			!(parameter.index >= 0 && parameter.index < fn.parameterCount) ||
@@ -5591,6 +5624,7 @@ function lowerExecutionFunctionToNativePlan(
 			? {}
 			: {
 					recordParameters: entry.recordParameters.map((parameter) => ({
+						storage: parameter.storage,
 						index: parameter.index,
 						keys: parameter.keys,
 						...(parameter.shapes === undefined ? {} : { shapes: parameter.shapes }),
@@ -5601,6 +5635,7 @@ function lowerExecutionFunctionToNativePlan(
 			? {}
 			: {
 					resultFields: {
+						storage: entry.resultFields.storage,
 						keys: entry.resultFields.keys,
 						allocationIps: entry.resultFields.allocations.map((allocation) =>
 							instructionIndexByTargetInstruction.get(allocation)!,
@@ -5721,6 +5756,7 @@ function lowerExecutionFunctionToNativePlan(
 					recordObjects: fn.recordObjects
 						.map((site) => ({
 							allocationIp: instructionIndexByTargetInstruction.get(site.allocation)!,
+							storage: site.storage,
 							...nativeRecordUsesOf(site, instructionIndexByTargetInstruction),
 						}))
 						.sort((left, right) => left.allocationIp - right.allocationIp),

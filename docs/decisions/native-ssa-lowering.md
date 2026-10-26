@@ -40,9 +40,23 @@ escapes, dynamic keys and handler transport. Every read key must be own: an inhe
 getter could publish or mutate the receiver before a later read. Proven masks are
 published independently of effects at the normal-result boundary, so local scalar
 selection and native variants consume them without dropping coercion, completion
-or GC behavior. Partial field unions stay boxed and reach C predicates. Typed
-record layouts and point-sensitive proofs for mutating or escaping records remain
-unfinished.
+or GC behavior. Partial field unions stay boxed and reach C predicates. Point-sensitive proofs for mutating or escaping records remain unfinished.
+
+Record storage has a separate certified width analysis over the selected entry
+and storage-sharing graph. Initial allocation masks and every virtual write join
+within each connected component, including borrowed parameters, caller-owned
+literals and direct forwards. Records with the same keys remain independent when
+they do not share storage. Shape-union fields include undefined when absent;
+escaped return values remain separate from the fresh-record storage path. Each
+field keeps its full kind mask alongside its representation, including boxed
+partial unions. The proof binds both the program revision and the exact selected
+storage-sharing uses, and survives certified plan copies. Native lowering carries these fields through artifacts and image relocation. C
+entries take a typed pointer per field, including borrowed parameters and selected
+forwards. Numeric and Boolean fields use scalar locals; boxed unions without heap
+kinds also stay outside GC roots. Heap-capable fields remain rooted, and observers
+box scalar fields when materializing the object. Accesses after materialization
+continue through the real object. Coroutine callers retain their ordinary object
+transport and existing suspension snapshots.
 
 Constants and source resources are finalized jointly over both targets; a
 constant used only by the native body must survive compaction. Captures, profiling

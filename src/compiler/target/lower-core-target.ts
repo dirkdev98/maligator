@@ -33,6 +33,7 @@ import { coreNativeEntryControlFlow } from "../core/core-native-entry-analysis.t
 import type { CoreInstructionFacts } from "../core/core-native-instruction-facts.ts";
 import type { CorePrivatePackedRestArrayElementPlan } from "../core/core-native-numeric-analysis.ts";
 import { assertCoreOptimizationPlanCertificate } from "../core/core-optimization-plan-certificate.ts";
+import type { CoreRecordStorageWidths } from "../core/core-record-storage-widths.ts";
 import {
 	coreSpecializationRecipeAdmissionAt,
 	coreSpecializationRecipeAnchorsAt,
@@ -1623,6 +1624,7 @@ function lowerFunctionToTarget(
 	directBuiltinCallbacks: ReadonlyMap<CoreInstructionId, CoreFunctionId>,
 	fieldCallPlans: ReadonlyArray<CoreFieldCall>,
 	recordCalls: CoreRecordCalls,
+	recordStorageWidths: CoreRecordStorageWidths | undefined,
 	unsignedArithmetic: ReadonlySet<CoreInstructionId>,
 	privateNumericArrayElements: ReadonlySet<CoreInstructionId>,
 	privatePackedRestArrayElements: ReadonlyArray<CorePrivatePackedRestArrayElementPlan>,
@@ -2924,6 +2926,7 @@ function lowerFunctionToTarget(
 				? {}
 				: {
 						resultFields: {
+							storage: recordStorageWidths!.result(entry)!.map(lowerRecordStorageField),
 							keys: entry.resultFields.keys,
 							allocations: entry.resultFields.allocations.map((allocation) =>
 								loweredInstructions.get(allocation)!,
@@ -2950,6 +2953,9 @@ function lowerFunctionToTarget(
 				? {}
 				: {
 						recordParameters: entry.recordParameters.map((parameter) => ({
+							storage: recordStorageWidths!
+								.parameter(entry, parameter.index)!
+								.map(lowerRecordStorageField),
 							index: parameter.index,
 							keys: parameter.keys,
 							...(parameter.shapes === undefined ? {} : { shapes: parameter.shapes }),
@@ -3030,6 +3036,9 @@ function lowerFunctionToTarget(
 			: {
 					recordObjects: [...recordCalls.objects].map(([allocation, uses]) => ({
 						allocation: loweredInstructions.get(allocation)!,
+						storage: recordStorageWidths!
+							.object(coreFunction.id, allocation)!
+							.map(lowerRecordStorageField),
 						...lowerRecordUses(uses, loweredInstructions),
 					})),
 				}),
@@ -3258,6 +3267,7 @@ export function lowerCoreCompilationToTargetProgram(
 			directBuiltinCallbacks.get(core) ?? new Map(),
 			[...(fieldCallPlans.get(core)?.values() ?? [])],
 			recordCalls.get(core) ?? NO_CORE_RECORD_CALLS,
+			compilation.plan.recordStorageWidths,
 			unsignedArithmetic.get(core) ?? new Set(),
 			privateNumericArrayElements.get(core) ?? new Set(),
 			privatePackedRestArrayElements.get(core) ?? [],
@@ -3284,4 +3294,14 @@ export function lowerCoreCompilationToTargetProgram(
 		functions: Object.freeze(functions),
 		classLayouts: Object.freeze(classLayouts.layouts),
 	});
+}
+
+function lowerRecordStorageField(field: {
+	readonly kindMask: number;
+	readonly representation: CorePlanRepresentation;
+}) {
+	return {
+		kindMask: field.kindMask,
+		representation: planCoreTargetRepresentation(field.representation),
+	};
 }

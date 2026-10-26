@@ -59,6 +59,7 @@ import {
 	coreUnsignedArithmeticProofIsCurrent,
 } from "./core-native-numeric-analysis.ts";
 import { certifyCoreOptimizationPlan } from "./core-optimization-plan-certificate.ts";
+import { coreRecordStorageWidthProofIsCurrent } from "./core-record-storage-widths.ts";
 import { projectCoreSpecializationRecipes } from "./core-specialization-recipes.ts";
 import type { CoreFunctionStore, CoreProgram, SealedCoreProgram } from "./core-store.ts";
 
@@ -1812,6 +1813,7 @@ function immutablePlanCopy(plan: CoreOptimizationPlan): CoreOptimizationPlan {
 		...(plan.privatePackedRestArrayElements ?? []),
 		...(plan.unsignedArithmetic ?? []),
 	]);
+	if (plan.recordStorageWidths !== undefined) proofPayloads.add(plan.recordStorageWidths);
 	if ((plan.specializedOnlyFunctions?.length ?? 0) > 0)
 		proofPayloads.add(plan.specializedOnlyFunctions!);
 	for (const entry of plan.directEntries) {
@@ -2501,6 +2503,18 @@ export function verifyCoreOptimizationPlan(
 		}
 		verifyCost(entry.cost, `direct entry ${entry.function}:${entry.id}`);
 	}
+	if (
+		plan.directEntries.some(
+			(entry) => entry.resultFields !== undefined || entry.recordParameters !== undefined,
+		) &&
+		(plan.recordStorageWidths === undefined ||
+			!coreRecordStorageWidthProofIsCurrent(
+				program,
+				plan.directEntries,
+				plan.recordStorageWidths,
+			))
+	)
+		fail("record storage widths have no current proof");
 	if ((plan.specializedOnlyFunctions?.length ?? 0) > 0) {
 		if (context?.facts.closure.sourceClosure.kind !== "known")
 			fail("native body omission requires source closure");

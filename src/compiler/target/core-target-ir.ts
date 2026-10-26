@@ -11,6 +11,12 @@ import type {
 } from "../core/core-ir.ts";
 import type { CompilerInstruction } from "../shared/compiler-instruction.ts";
 import { probeReadKindIsNamed } from "../shared/compiler-instruction.ts";
+import {
+	compilerValueKindMaskIsValid,
+	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_BOOLEAN,
+	COMPILER_VALUE_KIND_STRING,
+} from "../shared/compiler-value-kinds.ts";
 import type { CompilerIntegerRange } from "../shared/integer-range.ts";
 
 export function targetInstructionUsesPropertyCache(
@@ -81,6 +87,46 @@ export type CoreTargetRegisterRepresentation =
 	| "number"
 	| "boolean"
 	| "string";
+
+export interface CoreTargetRecordStorageField {
+	readonly kindMask: number;
+	readonly representation: CoreTargetRegisterRepresentation;
+}
+
+export function targetRecordStorageFieldsAreValid(
+	fields: ReadonlyArray<CoreTargetRecordStorageField>,
+	count: number,
+): boolean {
+	return (
+		Array.isArray(fields) &&
+		fields.length === count &&
+		fields.every(
+			(field: CoreTargetRecordStorageField) =>
+				compilerValueKindMaskIsValid(field.kindMask, { allowTop: true }) &&
+				(field.representation === "boxed" ||
+					(field.representation === "number" &&
+						field.kindMask === COMPILER_VALUE_KIND_NUMBER) ||
+					(field.representation === "boolean" &&
+						field.kindMask === COMPILER_VALUE_KIND_BOOLEAN) ||
+					(field.representation === "string" &&
+						field.kindMask === COMPILER_VALUE_KIND_STRING)),
+		)
+	);
+}
+
+export function targetRecordStorageFieldsEqual(
+	left: ReadonlyArray<CoreTargetRecordStorageField>,
+	right: ReadonlyArray<CoreTargetRecordStorageField>,
+): boolean {
+	return (
+		left.length === right.length &&
+		left.every(
+			(field, index) =>
+				field.kindMask === right[index]!.kindMask &&
+				field.representation === right[index]!.representation,
+		)
+	);
+}
 
 export interface CoreTargetBlockOrderSpan {
 	readonly first: number;
@@ -191,6 +237,7 @@ export interface CoreTargetDirectEntry {
 	};
 	/** Returns write these record fields to caller storage instead of the object. */
 	readonly resultFields?: {
+		readonly storage: ReadonlyArray<CoreTargetRecordStorageField>;
 		readonly keys: ReadonlyArray<number>;
 		readonly allocations: ReadonlyArray<CompilerInstruction>;
 		readonly shapes?: ReadonlyArray<ReadonlyArray<number>>;
@@ -203,6 +250,7 @@ export interface CoreTargetDirectEntry {
 	/** Parameters received as caller storage holding a record, with their uses here. */
 	readonly recordParameters?: ReadonlyArray<
 		CoreTargetRecordUses & {
+			readonly storage: ReadonlyArray<CoreTargetRecordStorageField>;
 			readonly index: number;
 			readonly keys: ReadonlyArray<number>;
 			readonly shapes?: ReadonlyArray<ReadonlyArray<number>>;
@@ -296,7 +344,10 @@ export interface CoreTargetFunction {
 	>;
 	/** Object literals kept in caller storage for record parameters, with every use. */
 	readonly recordObjects?: ReadonlyArray<
-		CoreTargetRecordUses & { readonly allocation: CompilerInstruction }
+		CoreTargetRecordUses & {
+			readonly allocation: CompilerInstruction;
+			readonly storage: ReadonlyArray<CoreTargetRecordStorageField>;
+		}
 	>;
 	readonly capturedCount: number;
 	readonly strict: boolean;

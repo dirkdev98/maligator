@@ -63,6 +63,18 @@ describe("record result entries", () => {
 				functionNamed(producer).directEntries.some((entry) => entry.resultFields),
 				producer,
 			).toBe(true);
+		const bundle = functionNamed("numberBundle").directEntries.find(
+			(entry) => entry.resultFields,
+		)!.resultFields!;
+		expect(bundle.storage.map((field) => field.representation)).toEqual([
+			"number",
+			"boolean",
+			"string",
+		]);
+		expect(
+			functionNamed("updateBundle").directEntries.find((entry) => entry.recordParameters)!
+				.recordParameters![0]!.storage,
+		).toEqual(bundle.storage);
 		expect(
 			functionNamed("classify").directEntries.find((entry) => entry.resultFields)!
 				.resultFields!.allocationIps,

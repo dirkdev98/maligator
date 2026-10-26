@@ -239,3 +239,5 @@ tests/native/own-slot-collections.test.ts
 tests/native/string-span-replace.test.ts
 tests/native/string-span-search-primitives.test.ts
 tests/native/record-field-kinds.test.ts
+
+tests/native/record-result-entries.test.ts

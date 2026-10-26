@@ -283,11 +283,14 @@ function directEntryDeclaration(
 		...entry.parameterRepresentations.map(
 			(representation, index) => `${cType(representation)} p${index}`,
 		),
-		...Array.from(
-			{ length: entry.resultFieldCount ?? 0 },
-			(_, field) => `MalValue *rf${field}`,
+		...(entry.resultFieldRepresentations ?? []).map(
+			(rep, field) => `${cType(rep)} *rf${field}`,
 		),
-		...(entry.recordParameterIndices ?? []).map((index) => `MalValue *rp${index}`),
+		...(entry.recordParameters ?? []).flatMap((parameter) =>
+			parameter.representations.map(
+				(rep, field) => `${cType(rep)} *rp${parameter.index}_${field}`,
+			),
+		),
 	];
 	return `${cType(entry.resultRepresentation)} ${entry.symbol}(MalVm *vm, MalValue this_value${parameters.length === 0 ? "" : `, ${parameters.join(", ")}`}, MalEnv *env, MalValue callee)`;
 }

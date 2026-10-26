@@ -5,6 +5,10 @@ import {
 } from "../core/core-native-entry-analysis.ts";
 import type { CoreFunctionStore } from "../core/core-store.ts";
 import type { CompilerInstruction } from "../shared/compiler-instruction.ts";
+import {
+	targetRecordStorageFieldsAreValid,
+	targetRecordStorageFieldsEqual,
+} from "./core-target-ir.ts";
 import type {
 	ExecutionDirectEntry,
 	ExecutionFunction,
@@ -136,6 +140,19 @@ export function verifyNativeExecutionProgram(program: ExecutionProgram): void {
 				},
 			);
 		}
+		if (
+			fn.recordObjects?.some(
+				(record) =>
+					record.allocation.type !== "createObjectShaped" ||
+					!targetRecordStorageFieldsAreValid(
+						record.storage,
+						record.allocation.keyStringIndices.length,
+					),
+			)
+		)
+			throw new ExecutionVerificationError("native record object has invalid storage", {
+				functionIndex,
+			});
 		if (fn.directEntries.length === 0) continue;
 		const instructions = new Set(fn.blocks.flatMap((block) => block.instructions));
 		for (const [entryIndex, entry] of fn.directEntries.entries()) {
@@ -152,6 +169,20 @@ export function verifyNativeExecutionProgram(program: ExecutionProgram): void {
 					functionIndex,
 				});
 			}
+			if (
+				(entry.resultFields !== undefined &&
+					!targetRecordStorageFieldsAreValid(
+						entry.resultFields.storage,
+						entry.resultFields.keys.length,
+					)) ||
+				entry.recordParameters?.some(
+					(parameter) =>
+						!targetRecordStorageFieldsAreValid(parameter.storage, parameter.keys.length),
+				)
+			)
+				throw new ExecutionVerificationError("native record entry has invalid storage", {
+					functionIndex,
+				});
 			const overriddenInstructions = new Set<CompilerInstruction>();
 			for (const call of entry.callOverrides ?? []) {
 				const target = program.functions[call.functionIndex]?.directEntries[call.entryId];
@@ -176,6 +207,18 @@ export function verifyNativeExecutionProgram(program: ExecutionProgram): void {
 				)
 					throw new ExecutionVerificationError(
 						"native direct entry has an invalid call override",
+						{ functionIndex },
+					);
+				if (
+					target.resultFields !== undefined &&
+					(entry.resultFields === undefined ||
+						!targetRecordStorageFieldsEqual(
+							entry.resultFields.storage,
+							target.resultFields.storage,
+						))
+				)
+					throw new ExecutionVerificationError(
+						"native record forward has incompatible storage",
 						{ functionIndex },
 					);
 				overriddenInstructions.add(call.instruction);

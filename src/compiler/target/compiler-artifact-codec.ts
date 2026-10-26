@@ -110,7 +110,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 314;
+export const COMPILER_ARTIFACT_VERSION = 315;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -2130,18 +2130,6 @@ function writeCompilerArtifact(
 		validateNativeFieldCalls(fn, native, compiler.native.functions);
 		validateNativeRecordCalls(fn, native, compiler.native.functions);
 		validateNativeLiteralSwitches(fn, native);
-		const representationTag = (representation: string): number =>
-			representation === "boxed"
-				? 0
-				: representation === "int32"
-					? 3
-					: representation === "number"
-						? 1
-						: representation === "boolean"
-							? 2
-							: representation === "string"
-								? 4
-								: -1;
 		if (
 			native.registerRepresentations.length !== fn.registerCount ||
 			native.registerRepresentations.some(
@@ -2221,6 +2209,7 @@ function writeCompilerArtifact(
 		w.u32(native.recordObjects?.length ?? 0);
 		for (const site of native.recordObjects ?? []) {
 			w.u32(site.allocationIp);
+			writeNativeRecordStorage(w, site.storage);
 			writeNativeRecordUses(w, site);
 		}
 		w.u8(native.specializedOnly ? 1 : 0);
@@ -2265,6 +2254,7 @@ function writeCompilerArtifact(
 			}
 			w.u32(entry.resultFields?.keys.length ?? 0);
 			for (const key of entry.resultFields?.keys ?? []) w.u32(key);
+			writeNativeRecordStorage(w, entry.resultFields?.storage ?? []);
 			w.u32(entry.resultFields?.allocationIps.length ?? 0);
 			for (const ip of entry.resultFields?.allocationIps ?? []) w.u32(ip);
 			w.u8(entry.resultFields?.escapes ? 1 : 0);
@@ -2281,6 +2271,7 @@ function writeCompilerArtifact(
 			w.u32(entry.recordParameters?.length ?? 0);
 			for (const parameter of entry.recordParameters ?? []) {
 				w.u32(parameter.index);
+				writeNativeRecordStorage(w, parameter.storage);
 				w.u32(parameter.keys.length);
 				for (const key of parameter.keys) w.u32(key);
 				w.u32(parameter.shapes?.length ?? 0);
@@ -4806,6 +4797,7 @@ function readCompilerArtifact(
 		}));
 		const recordObjects = Array.from({ length: r.count(8) }, () => ({
 			allocationIp: r.u32(),
+			storage: readNativeRecordStorage(r),
 			...readNativeRecordUses(r),
 		}));
 		const specializedOnly = r.u8();
@@ -4853,6 +4845,9 @@ function readCompilerArtifact(
 					? undefined
 					: { keys: fieldKeys, representations: fieldRepresentations, loads: fieldLoads };
 			const resultKeys = Array.from({ length: r.count(4) }, () => r.u32());
+			const resultStorage = readNativeRecordStorage(r);
+			if (resultKeys.length === 0 && resultStorage.length !== 0)
+				throw new RangeError("Native record storage lacks result fields");
 			const resultAllocationIps = Array.from({ length: r.count(4) }, () => r.u32());
 			const resultEscapes = r.u8();
 			if (resultEscapes > 1)
@@ -4866,6 +4861,7 @@ function readCompilerArtifact(
 			}));
 			const recordParameters = Array.from({ length: r.count(12) }, () => ({
 				index: r.u32(),
+				storage: readNativeRecordStorage(r),
 				keys: Array.from({ length: r.count(4) }, () => r.u32()),
 				...((shapes: Array<Array<number>>) => (shapes.length === 0 ? {} : { shapes }))(
 					Array.from({ length: r.count(4) }, () =>
@@ -4881,6 +4877,7 @@ function readCompilerArtifact(
 					? undefined
 					: {
 							keys: resultKeys,
+							storage: resultStorage,
 							allocationIps: resultAllocationIps,
 							...(resultShapes.length === 0 ? {} : { shapes: resultShapes }),
 							...(resultEscapes === 1 ? { escapes: true as const } : {}),
@@ -6504,4 +6501,46 @@ function readCompilerArtifact(
 	validateVmShapeCases(runtimeImage);
 	validateNativeProgramStorage(definition.native, runtimeImage.stringConstants);
 	return definition;
+}
+
+function writeNativeRecordStorage(
+	w: Writer,
+	fields: ReadonlyArray<{
+		readonly kindMask: number;
+		readonly representation: VmRegisterRepresentation;
+	}>,
+): void {
+	w.u32(fields.length);
+	for (const field of fields) {
+		w.u32(field.kindMask);
+		w.u8(representationTag(field.representation));
+	}
+}
+function readNativeRecordStorage(r: Reader) {
+	return Array.from({ length: r.count(5) }, () => ({
+		kindMask: r.u32(),
+		representation: readRecordStorageRepresentation(r.u8()),
+	}));
+}
+
+function readRecordStorageRepresentation(tag: number): VmRegisterRepresentation {
+	if (tag === 0) return "boxed";
+	if (tag === 1) return "number";
+	if (tag === 2) return "boolean";
+	if (tag === 4) return "string";
+	throw new RangeError("Invalid native record storage representation");
+}
+
+function representationTag(representation: string): number {
+	return representation === "boxed"
+		? 0
+		: representation === "int32"
+			? 3
+			: representation === "number"
+				? 1
+				: representation === "boolean"
+					? 2
+					: representation === "string"
+						? 4
+						: -1;
 }
