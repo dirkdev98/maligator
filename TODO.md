@@ -109,11 +109,10 @@ The independent target boundary and current storage contract are recorded in
       including known iterable prefixes and omitted positional arguments.
       Normal return bounds now converge through chains and recursive callee
       components before publication, with conservative widening for growing ranges.
-      Complete int-aware arithmetic
-      rendering with storage-web selection so modulo chains retain integer storage
-      without f64 round trips. Operand rendering now avoids promoting scalar storage
-      immediately before integer conversions, including unsigned expression chains;
-      intermediate Number result storage still forces some round trips.
+      Loop storage webs now use independent widths and whole-value induction
+      bounds. Exact integer result facts reach full, scalar and eligible fast-entry
+      kernels; ordinary, generator and async observations preserve scalar storage.
+      Carry those integer views into the remaining guarded call/aggregate transport.
       Identity observations now use forwarded normal returns through chains and
       phi components, including observation-argument sharing and NaN-aware equality
       emission. Compatible normal-return identities now reach general consumers,

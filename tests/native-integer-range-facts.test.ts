@@ -272,11 +272,15 @@ describe("integer loop emission", () => {
 			expect(nativeInt32ArithmeticExpression(operator, "left", "right")).toBeUndefined();
 	});
 
-	it.each([false, true])(
-		"carries integer update proofs through canonical and suspended bodies, suspended=%s",
-		(suspended) => {
+	it.each([
+		["ordinary", "function", ""],
+		["generator", "function*", "yield i;"],
+		["async", "async function", "await i;"],
+	])(
+		"carries integer update proofs through the %s body",
+		(_mode, declaration, observation) => {
 			const out = inspectStaticValueFunction(
-				`function${suspended ? "*" : ""} compute(gate){let sum=0.5;for(let i=0;i<16;i++){${suspended ? "yield i;" : ""}gate(i);sum+=i;}return sum;}globalThis.compute=compute;`,
+				`${declaration} compute(gate){let sum=0.5;for(let i=0;i<16;i++){${observation}gate(i);sum+=i;}return sum;}globalThis.compute=compute;`,
 				"compute",
 			);
 			const ip = out.native.body.instructions.findIndex(

@@ -71,6 +71,17 @@ function* suspendedStorage(callback) {
 	return sum;
 }
 
+async function awaitedStorage(callback) {
+	let sum = 0.5;
+	for (let index = 0; index < 4; index++) {
+		const observed = await index;
+		check(observed === index, "awaited integer value");
+		callback(index);
+		sum += index;
+	}
+	return sum;
+}
+
 function collatzSteps(start) {
 	let steps = 0;
 	let value = start;
@@ -323,4 +334,8 @@ const storageFinal = storageGenerator.next();
 check(storageFinal.done && storageFinal.value === 6.5, "suspended floating accumulator");
 check(storageEvents.length === 97, "callback observations");
 
-console.log("native-integer-loop-regions PASS");
+awaitedStorage(observeStorage).then((sum) => {
+	check(sum === 6.5, "awaited floating accumulator");
+	check(storageEvents.length === 101, "awaited callback observations");
+	console.log("native-integer-loop-regions PASS");
+});
