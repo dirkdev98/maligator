@@ -738,7 +738,7 @@ const eliminateDominatedRedundancy: CoreFunctionPass = {
 		CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
 		CORE_CANONICAL_VALUE_ROOTS_ANALYSIS,
 	],
-	wakesOn: ["body", "cfg", "exceptionFlow"],
+	wakesOn: ["body", "cfg", "exceptionFlow", "memoryEffects"],
 	changes: { ...CONTROL_FLOW_CHANGES, cfg: false, facts: true },
 	budget: CONTROL_FLOW_BUDGET,
 	run(context) {
@@ -750,16 +750,42 @@ const eliminateDominatedRedundancy: CoreFunctionPass = {
 			readonly instruction: CoreInstructionId;
 			readonly inputs: ReadonlyArray<CoreValueId>;
 			readonly value: CoreValueId;
+			readonly previous: AvailableExpression | undefined;
 		};
-		const available = new Array<Map<number, Array<AvailableExpression>>>(
-			fn.blockCapacity,
-		);
-		const replacements = new Map<CoreInstructionId, CoreValueId>();
+		const available = new Map<number, AvailableExpression>();
+		const children = new Array<Array<CoreBlockId> | undefined>(fn.blockCapacity);
+		const dominatorRoots: Array<CoreBlockId> = [];
 		for (const block of cfg.reversePostorder) {
 			const parent = cfg.immediateDominators[block];
-			const current = new Map(
-				parent === null || parent === undefined ? [] : available[parent],
-			);
+			if (parent === null || parent === undefined) dominatorRoots.push(block);
+			else (children[parent] ??= []).push(block);
+		}
+		const replacements = new Array<
+			| Array<{
+					readonly instruction: CoreInstructionId;
+					readonly value: CoreValueId;
+			  }>
+			| undefined
+		>(fn.blockCapacity);
+		let replacementCount = 0;
+		const work: Array<{
+			readonly block: CoreBlockId;
+			readonly introduced?: ReadonlyArray<number>;
+		}> = dominatorRoots.map((block) => ({ block })).reverse();
+		while (work.length > 0) {
+			const visit = work.pop()!;
+			if (visit.introduced !== undefined) {
+				// Sibling dominator subtrees must not observe each other's available expressions.
+				for (let index = visit.introduced.length - 1; index >= 0; index--) {
+					const hash = visit.introduced[index]!;
+					const previous = available.get(hash)!.previous;
+					if (previous === undefined) available.delete(hash);
+					else available.set(hash, previous);
+				}
+				continue;
+			}
+			const block = visit.block;
+			const introduced: Array<number> = [];
 			const terminator = fn.blockTerminator(block);
 			for (
 				let cursor = fn.kernel.blockFirstInstruction(block);
@@ -767,8 +793,7 @@ const eliminateDominatedRedundancy: CoreFunctionPass = {
 				cursor = fn.kernel.instructionNext(coreInstructionId(cursor))
 			) {
 				const instruction = coreInstructionId(cursor);
-				const opcode = pureExpressionOpcode(fn, instruction);
-				if (opcode === undefined) continue;
+				if (pureExpressionOpcode(fn, instruction) === undefined) continue;
 				const inputStart = fn.kernel.instructionOperandStart(instruction);
 				const inputCount = fn.kernel.instructionOperandCount(instruction);
 				const rooted = new Array<CoreValueId>(inputCount);
@@ -776,17 +801,20 @@ const eliminateDominatedRedundancy: CoreFunctionPass = {
 					const value = fn.kernel.operandAt(inputStart + index);
 					rooted[index] = roots.get(value) ?? value;
 				}
-				const bucket = current.get(opcode) ?? [];
-				const existingIndex = bucket.findIndex((candidate) =>
-					expressionsEqual(
+				const hash = coreInstructionInputsHash(fn, instruction, rooted);
+				const head = available.get(hash);
+				let existing = head;
+				while (
+					existing !== undefined &&
+					!expressionsEqual(
 						fn,
 						instruction,
-						candidate.instruction,
+						existing.instruction,
 						rooted,
-						candidate.inputs,
-					),
-				);
-				const existing = bucket[existingIndex];
+						existing.inputs,
+					)
+				)
+					existing = existing.previous;
 				const existingBlock =
 					existing === undefined ? undefined : definitionBlock(fn, existing.value);
 				if (
@@ -795,27 +823,34 @@ const eliminateDominatedRedundancy: CoreFunctionPass = {
 					(existingBlock !== block &&
 						!cfg.instructionDominatesBlock(existingBlock, block))
 				) {
-					const next = [...bucket];
-					const entry = {
+					available.set(hash, {
 						instruction,
 						inputs: rooted,
 						value: instructionResult(fn, instruction, 0)!,
-					};
-					if (existingIndex < 0) next.push(entry);
-					else next[existingIndex] = entry;
-					current.set(opcode, next);
-				} else replacements.set(instruction, existing.value);
+						previous: head,
+					});
+					introduced.push(hash);
+				} else {
+					(replacements[block] ??= []).push({ instruction, value: existing.value });
+					replacementCount++;
+				}
 			}
-			available[block] = current;
+			work.push({ block, introduced });
+			const descendants = children[block] ?? [];
+			for (let index = descendants.length - 1; index >= 0; index--)
+				work.push({ block: descendants[index]! });
 		}
-		if (replacements.size === 0) return undefined;
+		if (replacementCount === 0) return undefined;
 		const editor = CoreEditor.open(program, item.function);
-		for (const [instruction, replacement] of replacements) {
-			if (!fn.isInstructionLive(instruction)) continue;
-			const result = instructionResult(fn, instruction, 0);
-			if (result === undefined) continue;
-			editor.replaceValueUses(result, replacement);
-			editor.removeInstruction(instruction);
+		// Keep use-list updates in RPO; their order can affect later candidate selection.
+		for (const block of cfg.reversePostorder) {
+			for (const { instruction, value } of replacements[block] ?? []) {
+				if (!fn.isInstructionLive(instruction)) continue;
+				const result = instructionResult(fn, instruction, 0);
+				if (result === undefined) continue;
+				editor.replaceValueUses(result, value);
+				editor.removeInstruction(instruction);
+			}
 		}
 		return editor.commit();
 	},
@@ -864,7 +899,7 @@ const eliminatePartialRedundancy: CoreFunctionPass = {
 		},
 	},
 	requiredAnalyses: [CORE_CONTROL_FLOW_BUNDLE_ANALYSIS],
-	wakesOn: ["body", "cfg", "exceptionFlow"],
+	wakesOn: ["body", "cfg", "exceptionFlow", "memoryEffects"],
 	changes: { ...CONTROL_FLOW_CHANGES, facts: true },
 	budget: CONTROL_FLOW_BUDGET,
 	run(context) {
