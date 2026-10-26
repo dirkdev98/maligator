@@ -286,6 +286,23 @@ function readWrittenString(value, callback) {
 	callback();
 	return saved + ":";
 }
+const makeUnknownRecord = function makeUnknownRecord(value, flag, callback) {
+	for (let step = 0; step < 3; step++) callback(step);
+	return flag
+		? { value, "": value, "\ud800": value }
+		: { "\ud800": value, "": value, value };
+};
+function readUnknownRecord(value, flag, callback) {
+	const record = makeUnknownRecord(value, flag, callback);
+	callback();
+	const named = record.value;
+	const empty = record[""];
+	const surrogate = record["\ud800"];
+	callback();
+	return (
+		Object.is(named, value) && Object.is(empty, value) && Object.is(surrogate, value)
+	);
+}
 const makeProducerWritten = function makeProducerWritten(value, flag, callback) {
 	const record = flag
 		? { small: 0, label: "producer-left" }
@@ -430,6 +447,8 @@ async function* boundedAsyncSuspended(value, callback) {
 }
 Object.assign(globalThis, {
 	readBounded,
+	makeUnknownRecord,
+	readUnknownRecord,
 	readConditionalRecord,
 	readLoopRecord,
 	readBoundedUnsigned,
@@ -462,6 +481,19 @@ Object.assign(globalThis, {
 	boundedAwaited,
 	boundedAsyncSuspended,
 });
+for (const value of [
+	undefined,
+	null,
+	-0,
+	NaN,
+	3n,
+	Symbol("own"),
+	"retained",
+	{ own: 1 },
+]) {
+	for (const flag of [false, true])
+		check(readUnknownRecord(value, flag, observe), true, "unknown own data field");
+}
 for (const value of [
 	-0,
 	0,

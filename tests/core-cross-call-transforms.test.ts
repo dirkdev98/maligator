@@ -5,14 +5,18 @@ import { resolveBuildConfig } from "../src/build-config.ts";
 import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import { runCoreCrossCallTransforms } from "../src/compiler/core/core-cross-call-transforms.ts";
-import type { CoreEditor } from "../src/compiler/core/core-editor.ts";
+import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.ts";
 import {
 	CoreFunctionOptimizationResources,
 	CoreFunctionOptimizationSession,
 } from "../src/compiler/core/core-function-optimization-session.ts";
 import type { CoreCrossCallSession } from "../src/compiler/core/core-function-optimization-session.ts";
-import { CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE } from "../src/compiler/core/core-internal-attributes.ts";
+import {
+	CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE,
+	CORE_KNOWN_OWN_DATA_ATTRIBUTE,
+	CORE_RECORD_FIELD_KIND_ATTRIBUTE,
+} from "../src/compiler/core/core-internal-attributes.ts";
 import { buildCoreOptimizationPlan } from "../src/compiler/core/core-ir-region-selection.ts";
 import type { CoreOptimizationPlan } from "../src/compiler/core/core-ir-regions.ts";
 import { verifyCoreProgram } from "../src/compiler/core/core-ir-verifier.ts";
@@ -227,6 +231,166 @@ function optimizedProgram(source: string, file: string): CoreProgram {
 }
 
 describe("bounded Core cross-call transforms", () => {
+	it.each([false, true])(
+		"reproves own-data reads after inlining a reader (conditional=%s)",
+		(conditional) => {
+			const program = analysisProgram();
+			const root = new CoreFunctionBuilder(program);
+			const entry = root.createBlock();
+			const key = root.editor.appendStringConstants([[118, 97, 108, 117, 101]]);
+			const [flag] = root.appendInstruction(entry, "loadGlobal", [], {
+				attributes: { index: 0 },
+			});
+			const [callee] = root.appendInstruction(entry, "createFunction", [], {
+				attributes: { functionIndex: 1 },
+			});
+			const [receiver] = root.appendInstruction(entry, "createUndefined", []);
+			const [result] = root.appendInstruction(entry, "call", [callee!, receiver!, flag!]);
+			root.setTerminator(entry, { kind: "return", value: result! });
+			const caller = program.function(root.finish(entry).function);
+			const reader = new CoreFunctionBuilder(program, { parameterCount: 1 });
+			const body = reader.createBlock([{}]);
+			const [factory] = reader.appendInstruction(body, "createFunction", [], {
+				attributes: { functionIndex: 2 },
+			});
+			const [nil] = reader.appendInstruction(body, "createUndefined", []);
+			const [record] = reader.appendInstruction(body, "call", [factory!, nil!]);
+			const readBlock = conditional ? reader.createBlock() : body;
+			const [value] = reader.appendInstruction(
+				readBlock,
+				"loadPropertyStatic",
+				[record!],
+				{ attributes: { stringIndex: key } },
+			);
+			reader.setTerminator(readBlock, { kind: "return", value: value! });
+			if (conditional) {
+				const other = reader.createBlock();
+				const [zero] = reader.appendInstruction(other, "createNumber", [], {
+					attributes: { value: 0 },
+				});
+				reader.setTerminator(other, { kind: "return", value: zero! });
+				reader.setTerminator(body, {
+					kind: "branch",
+					condition: reader.blockParameterValue(body, 0),
+					consequent: { block: readBlock, arguments: [] },
+					alternate: { block: other, arguments: [] },
+				});
+			}
+			const readerFn = program.function(reader.finish(body).function);
+			const make = new CoreFunctionBuilder(program);
+			const factoryBody = make.createBlock();
+			const [self] = make.appendInstruction(factoryBody, "loadCallee", []);
+			const [object] = make.appendInstruction(
+				factoryBody,
+				"createObjectShaped",
+				[self!],
+				{ attributes: { keyStringIndices: [key], shapeCacheIndex: 0 } },
+			);
+			make.setTerminator(factoryBody, { kind: "return", value: object! });
+			make.finish(factoryBody);
+			runTransforms(program, TINY_CODE_BUDGET);
+			expect(
+				coreOperations(readerFn).some(
+					({ attributes }) => attributes[CORE_KNOWN_OWN_DATA_ATTRIBUTE] === true,
+				),
+			).toBe(true);
+			runTransforms(program);
+			expect(
+				coreOperations(caller).some(
+					({ attributes }) => attributes[CORE_KNOWN_OWN_DATA_ATTRIBUTE] === true,
+				),
+			).toBe(true);
+			expect(
+				coreOperations(caller).some(
+					({ opcode, attributes }) =>
+						opcode === "createFunction" && attributes.functionIndex === 1,
+				),
+			).toBe(false);
+			verifyCoreProgram(program, { stage: "pre-target" });
+		},
+	);
+
+	it.each(["unknown value", "missing key"])(
+		"refreshes own presence and value facts independently after a producer changes to %s",
+		(change) => {
+			const program = analysisProgram();
+			const root = new CoreFunctionBuilder(program);
+			const entry = root.createBlock();
+			const key = root.editor.appendStringConstants([[118, 97, 108, 117, 101]]);
+			const [input] = root.appendInstruction(entry, "loadGlobal", [], {
+				attributes: { index: 0 },
+			});
+			const [callee] = root.appendInstruction(entry, "createFunction", [], {
+				attributes: { functionIndex: 1 },
+			});
+			const [receiver] = root.appendInstruction(entry, "createUndefined", []);
+			const [record] = root.appendInstruction(entry, "call", [
+				callee!,
+				receiver!,
+				input!,
+			]);
+			const [result] = root.appendInstruction(entry, "loadPropertyStatic", [record!], {
+				attributes: { stringIndex: key },
+			});
+			const read = root.bodyInstructionIds(entry).at(-1)!;
+			root.setTerminator(entry, { kind: "return", value: result! });
+			const caller = program.function(root.finish(entry).function);
+			const make = new CoreFunctionBuilder(program, { parameterCount: 1 });
+			const body = make.createBlock([{}]);
+			const unknown = make.blockParameterValue(body, 0);
+			const [one] = make.appendInstruction(body, "createNumber", [], {
+				attributes: { value: 1 },
+			});
+			const [allocation] = make.appendInstruction(body, "createObjectShaped", [one!], {
+				attributes: { keyStringIndices: [key], shapeCacheIndex: 0 },
+			});
+			const allocationId = make.bodyInstructionIds(body).at(-1)!;
+			make.setTerminator(body, { kind: "return", value: allocation! });
+			const producer = program.function(make.finish(body).function);
+			const limits = {
+				perSiteExpansions: 0,
+				perCallerExpansions: 0,
+				perCallerGeneratedCode: 0,
+				perCallerCompilerWork: 1_000,
+				programGeneratedCode: 0,
+				programCompilerWork: 10_000,
+			};
+			runTransforms(program, limits);
+			expect(caller.instructionAttributes(read)[CORE_KNOWN_OWN_DATA_ATTRIBUTE]).toBe(
+				true,
+			);
+			expect(
+				caller.instructionAttributes(read)[CORE_RECORD_FIELD_KIND_ATTRIBUTE],
+			).toBeDefined();
+			const edit = CoreEditor.open(program, producer.id);
+			if (change === "unknown value") {
+				edit.replaceOperands(allocationId, [unknown]);
+			} else {
+				const other = edit.appendStringConstants([[111, 116, 104, 101, 114]]);
+				edit.replaceInstruction(allocationId, "createObjectShaped", [one!], {
+					attributes: { keyStringIndices: [other], shapeCacheIndex: 0 },
+				});
+			}
+			edit.commit();
+			runTransforms(program, limits);
+			expect(
+				caller.instructionAttributes(read)[CORE_RECORD_FIELD_KIND_ATTRIBUTE],
+			).toBeUndefined();
+			if (change === "unknown value") {
+				expect(caller.instructionAttributes(read)[CORE_KNOWN_OWN_DATA_ATTRIBUTE]).toBe(
+					true,
+				);
+				expect(caller.instructionEffectRefinement(read)?.effects.mayGc).toBe(false);
+			} else {
+				expect(
+					caller.instructionAttributes(read)[CORE_KNOWN_OWN_DATA_ATTRIBUTE],
+				).toBeUndefined();
+				expect(caller.instructionEffectRefinement(read)).toBeUndefined();
+			}
+			verifyCoreProgram(program, { stage: "pre-target" });
+		},
+	);
+
 	it.each([
 		{ code: 10, work: 0, reason: "generated-code-cost" },
 		{ code: 0, work: 10, reason: "compiler-work-cost" },

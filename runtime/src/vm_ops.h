@@ -1467,6 +1467,16 @@ static inline bool mal_vm_object_try_load_static(const MalObject *object,
     return mal_vm_object_try_load(object, ic->key, ic, out);
 }
 
+MalValue mal_vm_load_known_own_data_miss(MalObject *object, MalValue key, MalInlineCache *ic);
+
+// Core proves own data presence; neither a cache miss nor an unknown value kind licenses user code.
+static inline MalValue mal_vm_load_known_own_data(MalValue receiver, MalValue key, MalInlineCache *ic) {
+    MalObject *object = mal_value_to_object(receiver);
+    MalValue value;
+    if (ic != nullptr && mal_vm_object_try_load_static(object, ic, &value)) return value;
+    return mal_vm_load_known_own_data_miss(object, key, ic);
+}
+
 // Every inherited-method hit outside the inline probe runs this check.
 static inline __attribute__((always_inline)) bool mal_vm_local_inherited_value_try_load_static(
     const MalObject *object, const MalInlineCache *ic, MalValue *out

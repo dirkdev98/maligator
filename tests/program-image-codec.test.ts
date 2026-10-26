@@ -1082,6 +1082,17 @@ describe("program-image-codec", () => {
 	});
 	it("round-trips and rejects tampered known-own-slot access metadata", () => {
 		const valid = knownOwnSlotDefinition();
+		const ownData = withNativeFunctionPlan(valid, 0, (plan) => ({
+			...plan,
+			instructions: plan.body.instructions.map((instruction) =>
+				instruction.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT"
+					? { kind: "known-own-data" as const }
+					: undefined,
+			),
+		}));
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(ownData))).toEqual(
+			ownData,
+		);
 		const wire = serializeCompilerArtifact(valid, { debugInfo: false });
 		const restored = deserializeCompilerArtifact(wire);
 		expect(restored.runtime.precompiledLiteralShapes).toEqual(
@@ -2001,6 +2012,27 @@ describe("program-image-codec", () => {
 			},
 			{ kind: "exact-typed-array-element", elementKind: "Uint16Array" },
 		);
+		const ownData = withInstruction(
+			{
+				opcode: "LOAD_PROPERTY_STATIC",
+				dst: 0,
+				object: 1,
+				stringIndex: 1,
+				icIndex: 0,
+			},
+			{ kind: "known-own-data" },
+		);
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(ownData))).toEqual(
+			ownData,
+		);
+		expect(() =>
+			serializeCompilerArtifact(
+				withInstruction(
+					{ opcode: "CREATE_NUMBER", dst: 0, value: 1 },
+					{ kind: "known-own-data" },
+				),
+			),
+		).toThrow(/opcode mismatch/);
 		expect(
 			deserializeCompilerArtifact(serializeCompilerArtifact(exactTypedArrayStore)),
 		).toEqual(exactTypedArrayStore);

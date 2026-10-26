@@ -12,6 +12,7 @@ import {
 	CORE_NORMAL_RESULT_INTEGER_RANGE_ATTRIBUTE,
 	CORE_RECORD_FIELD_KIND_ATTRIBUTE,
 	CORE_KNOWN_OWN_SLOT_ATTRIBUTE,
+	CORE_KNOWN_OWN_DATA_ATTRIBUTE,
 } from "./core-internal-attributes.ts";
 import { coreAttributeValuesEqual } from "./core-ir-equality.ts";
 import type { CoreKnownOwnSlotCandidate } from "./core-ir-shape-provenance.ts";
@@ -613,6 +614,23 @@ export class CoreEditor {
 		const attributes = { ...current };
 		if (hint === undefined) delete attributes[CORE_KNOWN_OWN_SLOT_ATTRIBUTE];
 		else attributes[CORE_KNOWN_OWN_SLOT_ATTRIBUTE] = hint;
+		fn._setInstructionAttributes(this.#mutation, instruction, attributes);
+		this.#instructions.add(instruction);
+		this.#touchBlock(fn.instructionBlock(instruction));
+		this.#domains.add("specializationInputs");
+		this.#edits++;
+	}
+
+	setKnownOwnDataHint(instruction: CoreInstructionId, present: boolean): void {
+		this.#assertActive();
+		const fn = this.function;
+		if (fn.instructionOpcodeName(instruction) !== "loadPropertyStatic")
+			throw new Error("Own-data hints require a static property read");
+		const current = fn.instructionAttributes(instruction);
+		if (current[CORE_KNOWN_OWN_DATA_ATTRIBUTE] === (present ? true : undefined)) return;
+		const attributes = { ...current };
+		if (present) attributes[CORE_KNOWN_OWN_DATA_ATTRIBUTE] = true;
+		else delete attributes[CORE_KNOWN_OWN_DATA_ATTRIBUTE];
 		fn._setInstructionAttributes(this.#mutation, instruction, attributes);
 		this.#instructions.add(instruction);
 		this.#touchBlock(fn.instructionBlock(instruction));

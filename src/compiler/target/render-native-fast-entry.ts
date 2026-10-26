@@ -219,7 +219,11 @@ export function renderNativeFastEntry(
 						integers,
 					);
 		if (line === undefined) return undefined;
-		if (op.opcode === "LOAD_PROPERTY_STATIC" && !fieldLoads.has(ip))
+		if (
+			op.opcode === "LOAD_PROPERTY_STATIC" &&
+			!fieldLoads.has(ip) &&
+			input.instructions[ip]?.kind !== "known-own-data"
+		)
 			loadsProperties = true;
 		if (op.opcode === "LOAD_CAPTURED") loadsCaptures = true;
 		body.push([ip, line]);
@@ -867,13 +871,17 @@ function fastInstruction(
 		case "LOAD_THIS":
 			// A sloppy callee's receiver needs OrdinaryCallBindThis, which can allocate.
 			return input.fn.strict ? `__fast_r${op.dst} = this_value;` : undefined;
-		case "LOAD_PROPERTY_STATIC": {
+		case "LOAD_PROPERTY_STATIC":
+		case "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT": {
 			const field = fieldLoads.get(ip);
 			if (field !== undefined) {
 				const representation =
 					input.directEntry!.fieldParameters!.representations[field]!;
 				return `__fast_r${op.dst} = ${boxed(representation, `fp${field}`)};`;
 			}
+			if (input.instructions[ip]?.kind === "known-own-data")
+				return `__fast_r${op.dst} = mal_vm_load_known_own_data(__fast_r${op.object}, mal_value_from_string(vm->string_constant_atoms[${input.stringIndex(op.stringIndex)}]), nullptr);`;
+			if (op.opcode !== "LOAD_PROPERTY_STATIC") return undefined;
 			const probe = input.lengthProperty(op.stringIndex)
 				? "mal_vm_property_try_load_length_static"
 				: "mal_vm_property_try_load_static";

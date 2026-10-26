@@ -428,12 +428,20 @@ export function coreRecordFieldInitialKind(
 	top: number,
 ): number {
 	if (record === null) return 0;
-	if (
-		record === undefined ||
-		read.requiredKeys.some((key) => !record.some((field) => field.key === key))
-	)
-		return top;
-	return record.find((field) => field.key === read.key)!.mask;
+	return coreRecordFieldIsOwnData(read, record)
+		? record!.find((field) => field.key === read.key)!.mask
+		: top;
+}
+
+export function coreRecordFieldIsOwnData(
+	read: CoreRecordFieldRead,
+	record: CoreRecordValueKind,
+): boolean {
+	return (
+		record !== undefined &&
+		record !== null &&
+		read.requiredKeys.every((key) => record.some((field) => field.key === key))
+	);
 }
 
 export function coreRecordFieldReadIntegerRange(

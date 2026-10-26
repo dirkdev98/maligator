@@ -45,6 +45,7 @@ const NONCOLLECTING_HELPERS = new Set([
 	"mal_bigint_value",
 	"mal_string_equals",
 	"mal_vm_property_try_load_static",
+	"mal_vm_load_known_own_data",
 	"mal_vm_property_try_load_length_static",
 	"mal_vm_global_data_property_cached",
 	"mal_ops_is_number",
@@ -77,6 +78,7 @@ const NONCOLLECTING_HELPERS = new Set([
 	"mal_string_equals_constant_length",
 	"mal_value_to_string",
 	"mal_value_from_i32",
+	"mal_value_from_string",
 	"mal_value_new_boolean",
 	"mal_value_to_boolean",
 	"mal_value_is_truthy",
@@ -115,6 +117,37 @@ function body(
 
 const OWN_TRY = "mal_compiled_0_try";
 const LENGTH_STRING_INDEX = 7;
+
+describe("frameless own-data reads", () => {
+	it.each(["LOAD_PROPERTY_STATIC", "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT"] as const)(
+		"uses the presence proof without a collecting fallback for %s",
+		(opcode) => {
+			const read = {
+				opcode,
+				dst: 2,
+				object: 0,
+				stringIndex: 1,
+				icIndex: 0,
+				...(opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT" ? { candidates: [] } : {}),
+			} as BytecodeInstruction;
+			const lines = fastEntry(
+				body([read, { opcode: "RETURN", value: 2 }]),
+				undefined,
+				true,
+				undefined,
+				[],
+				undefined,
+				[{ kind: "known-own-data" }],
+			);
+			expect(lines).toBeDefined();
+			const source = lines!.join("\n");
+			expect(source).toContain("mal_vm_load_known_own_data(");
+			expect(source).not.toContain("__fast_ic");
+			expect(source).not.toContain("mal_vm_op_load_property");
+			expect(unexpectedHelpers(lines!)).toEqual([]);
+		},
+	);
+});
 
 describe("frameless C identifier hygiene", () => {
 	it.each([32, 64])("keeps scalar typedefs visible with register %s", (register) => {

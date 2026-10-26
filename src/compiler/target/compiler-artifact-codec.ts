@@ -110,7 +110,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 318;
+export const COMPILER_ARTIFACT_VERSION = 319;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -2626,6 +2626,12 @@ function writeCompilerArtifact(
 					);
 				}
 				w.u8(11);
+			} else if (
+				plan.kind === "known-own-data" &&
+				(instruction.opcode === "LOAD_PROPERTY_STATIC" ||
+					instruction.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT")
+			) {
+				w.u8(26);
 			} else if (
 				plan.kind === "exact-own-slot" &&
 				(instruction.opcode === "LOAD_PROPERTY_STATIC" ||
@@ -5302,6 +5308,12 @@ function readCompilerArtifact(
 				nativeInstructions[instructionIndex] = {
 					kind: "primitive-string-length",
 				};
+			} else if (
+				tag === 26 &&
+				(instruction.opcode === "LOAD_PROPERTY_STATIC" ||
+					instruction.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT")
+			) {
+				nativeInstructions[instructionIndex] = { kind: "known-own-data" };
 			} else if (
 				tag === 13 &&
 				(instruction.opcode === "LOAD_PROPERTY_STATIC" ||

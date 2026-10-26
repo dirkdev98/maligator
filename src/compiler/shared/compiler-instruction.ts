@@ -652,6 +652,9 @@ type CompilerOperation =
 			 * shaped allocation and this key is its writable data slot. Native code
 			 * may address the slot exactly, without a shape guard, IC, or fallback. */
 			exactOwnSlot?: number;
+			/** COMPILE-ONLY: this unexposed ordinary receiver still owns a data field;
+			 * its physical slot and value kind may vary between producers. */
+			knownOwnData?: true;
 			/** COMPILE-ONLY: Core proved this is the non-configurable Number length
 			 * cell of a fresh ordinary Array. Native code may read it unboxed. */
 			exactArrayLength?: true;

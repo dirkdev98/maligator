@@ -181,6 +181,12 @@ The independent target boundary and current storage contract are recorded in
       writes, joining every writer with the initial kind and integer bounds before
       forwarding the result. Structural input plans survive metadata changes;
       values and ranges are solved afresh. Non-returned locals add no field demands.
+      Independent own-data presence now licenses noncollecting named reads even
+      when the field kind is unknown. Native full, resumable and frameless bodies
+      consume that proof after virtual-field handling; misses resolve the physical
+      own slot without invoking getters or prototypes. Inlining discards the scoped
+      proof and republishes it from the cloned flow. Withdrawn presence removes its
+      hint and effect refinement independently of normal-result kinds and bounds.
       Writes to forwarded call results, typed producer storage for remaining writes,
       parameter-relative call effects and coroutine record transport remain. Own-field observations
       also carry initial integer bounds through the normal-result worklist, including

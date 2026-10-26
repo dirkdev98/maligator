@@ -22,6 +22,7 @@ import {
 	CORE_RECORD_FIELD_KIND_ATTRIBUTE,
 	CORE_NORMAL_RESULT_INTEGER_RANGE_ATTRIBUTE,
 	CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE,
+	CORE_KNOWN_OWN_DATA_ATTRIBUTE,
 } from "./core-internal-attributes.ts";
 import { buildCoreControlFlow } from "./core-ir-control-flow.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
@@ -594,6 +595,19 @@ function verifyInstructionRows(
 					);
 				}
 				verifyEffectRefinement(instruction, refinement.effects, descriptor.effects);
+			}
+			if (attributes[CORE_KNOWN_OWN_DATA_ATTRIBUTE] !== undefined) {
+				const effects = refinement?.effects;
+				if (
+					attributes[CORE_KNOWN_OWN_DATA_ATTRIBUTE] !== true ||
+					descriptor.opcode !== "loadPropertyStatic" ||
+					effects === undefined ||
+					effects.mayThrow ||
+					effects.maySuspend ||
+					effects.mayGc ||
+					effects.callsUserCode
+				)
+					fail("Invalid known own-data read proof");
 			}
 		} else fn.instructionKind(instruction);
 		for (let operand = 0; operand < operandCount; operand++) {

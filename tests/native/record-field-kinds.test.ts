@@ -47,6 +47,11 @@ describe("fresh record field kind observations", () => {
 						),
 					).toBe(false);
 				}
+				const unknown = named("readUnknownRecord");
+				expect(unknown).toBeDefined();
+				expect(unknown.instructions.some((plan) => plan?.kind === "known-own-data")).toBe(
+					true,
+				);
 				for (const name of [
 					"readEscaped",
 					"readGetterMutated",

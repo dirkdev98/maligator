@@ -2534,6 +2534,7 @@ export type NativeInstructionPlan =
 	| { readonly kind: "closure-materialization"; readonly functionIndex: number }
 	| { readonly kind: "fresh-dense-reserve"; readonly length: number }
 	| { readonly kind: "exact-own-slot"; readonly slot: number }
+	| { readonly kind: "known-own-data" }
 	| { readonly kind: "exact-array-length" }
 	| { readonly kind: "contained-fixed-typed-array-length" }
 	| { readonly kind: "exact-contained-array-element" }
@@ -2592,6 +2593,11 @@ export function nativePlanHasFinalValueStorage(
 					nativeGuardedMathArity(operation, instruction.arguments.length) !== undefined)
 			);
 		}
+		case "known-own-data":
+			return (
+				instruction.opcode === "LOAD_PROPERTY_STATIC" ||
+				instruction.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT"
+			);
 		case "exact-own-slot":
 			return (
 				instruction.opcode === "LOAD_PROPERTY_STATIC" ||
@@ -3205,6 +3211,8 @@ function nativeInstructionPlanFromExecution(
 						length: instruction.freshDenseReserveLength,
 					};
 		case "loadPropertyStatic":
+			if (instruction.knownOwnData === true && instruction.exactOwnSlot === undefined)
+				return { kind: "known-own-data" };
 			return instruction.packedRestStartIndex !== undefined
 				? {
 						kind: "exact-packed-rest-array-length",

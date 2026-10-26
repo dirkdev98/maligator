@@ -7849,6 +7849,8 @@ function profileDecisionsForInstruction(
 			source.includes("mal_object_field_load_shaped(mal_value_to_object(")
 		) {
 			decisions.push(decision("property.exact-own-slot", "applied"));
+		} else if (source.includes("mal_vm_load_known_own_data(")) {
+			decisions.push(decision("property.known-own-data", "applied"));
 		} else if (source.includes("mal_vm_try_load_known_own_slots(")) {
 			decisions.push(
 				decision("property.known-own-slot", "guarded", "exact-shape-fallback"),
@@ -9425,7 +9427,9 @@ function emitInstruction(
 	) {
 		const { site, slot } = stackObjectAccess;
 		const materialized = `__gc_slots[${site.materializedSlot}]`;
-		const ordinary = emitGenericInstruction({ nativePlan: undefined });
+		const ordinary = emitGenericInstruction({
+			nativePlan: nativePlan?.kind === "known-own-data" ? nativePlan : undefined,
+		});
 		if (ordinary === null) return null;
 		const virtual =
 			instruction.opcode === "LOAD_PROPERTY_STATIC" ||
@@ -9789,6 +9793,15 @@ function emitInstruction(
 				: context.fieldLoad.representation === "boolean"
 					? storeBoolean(instruction.dst, `fp${context.fieldLoad.field}`)
 					: `r${instruction.dst} = fp${context.fieldLoad.field};`,
+		];
+	if (
+		nativePlan?.kind === "known-own-data" &&
+		stackObjectAccess === undefined &&
+		(instruction.opcode === "LOAD_PROPERTY_STATIC" ||
+			instruction.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT")
+	)
+		return [
+			`r${instruction.dst} = ${callValue(instruction.dst, `mal_vm_load_known_own_data(${boxed(instruction.object)}, mal_value_from_string(vm->string_constant_atoms[${relocation.stringIndex(instruction.stringIndex)}]), &${nativeBodyReference(resources, "propertyCache")}[${instruction.icIndex}])`)};`,
 		];
 	if (
 		context.fieldAllocation !== undefined &&

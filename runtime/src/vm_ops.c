@@ -5783,6 +5783,28 @@ void mal_vm_record_own_slot(MalInlineCache *ic, const MalShape *shape, MalValue 
     }
 }
 
+MalValue mal_vm_load_known_own_data_miss(MalObject *object, MalValue key_value, MalInlineCache *ic) {
+    assert(object->header.type == MAL_HEAP_OBJECT);
+    assert(mal_value_is_string(key_value));
+    MalKey key = mal_key_from_value(key_value);
+    u32 index;
+    if (mal_vm_string_to_array_index(mal_value_to_string(key_value), &index)) {
+        key = mal_key_index(index);
+    }
+    if (key.kind == MAL_KEY_STRING) {
+        i32 found = mal_shape_find(object->shape, key, MAL_SHAPE_FIND_GET_OWN);
+        if (found >= 0) {
+            const MalShapeProp *prop = &object->shape->props[found];
+            assert(!(prop->attrs & MAL_PROPERTY_ACCESSOR));
+            if (ic != nullptr) mal_vm_record_own_slot(ic, object->shape, key_value, prop->slot);
+            return mal_object_field_load(object, prop->slot);
+        }
+    }
+    MalPropertyLookup own = mal_object_get_own(object, key);
+    assert(own.present && !(own.desc.flags & MAL_PROPERTY_ACCESSOR));
+    return own.desc.value;
+}
+
 bool mal_vm_load_known_own_slot_miss(
     MalVm *vm, MalObject *object, MalInlineCache *ic,
     i32 candidate_count, const i32 *candidates, MalValue *out
