@@ -300,38 +300,45 @@ function withSpecializations(
 }
 
 describe("emit-program-image instruction packing", () => {
-	it("reports a function the C renderer declines", () => {
-		const declined: Array<string> = [];
-		let image = testProgramImage({
-			...definition.runtime,
-			files: ["/fixture/entry.mjs"],
-			functions: [
+	it.each([false, true])(
+		"reports a renderer bailout only when the function exceeds its C budget, limited=%s",
+		(limited) => {
+			const declined: Array<string> = [];
+			let image = testProgramImage({
+				...definition.runtime,
+				files: ["/fixture/entry.mjs"],
+				functions: [
+					{
+						...fn,
+						capturedCount: 0,
+						registerCount: 3,
+						literalShapeCount: 0,
+						propertyIcCount: 0,
+						instructions: [
+							{ opcode: "CREATE_F64", dst: 0, value: 1 },
+							{ opcode: "CREATE_F64", dst: 1, value: 2 },
+							{ opcode: "BINARY", operator: "+", dst: 2, left: 0, right: 1 },
+							{ opcode: "RETURN", value: 2 },
+						],
+					},
+				],
+			});
+			image = withNativeFunctionPlan(image, 0, (plan) => ({
+				...plan,
+				registerRepresentations: ["number", "number", "int32"],
+				gc: { safepoints: [] },
+			}));
+			const maximum = NATIVE_C_HEADER_LINES.join("\n").length + 512;
+			emitProgramTranslationUnits(
+				image,
 				{
-					...fn,
-					capturedCount: 0,
-					registerCount: 3,
-					literalShapeCount: 0,
-					propertyIcCount: 0,
-					instructions: [
-						{ opcode: "CREATE_F64", dst: 0, value: 1 },
-						{ opcode: "CREATE_F64", dst: 1, value: 2 },
-						{ opcode: "BINARY", operator: "+", dst: 2, left: 0, right: 1 },
-						{ opcode: "RETURN", value: 2 },
-					],
+					onRendererBailout: ({ file, name }) => declined.push(`${file}:${name}`),
 				},
-			],
-		});
-		// An int32 sum of two Numbers is not a form the renderer accepts.
-		image = withNativeFunctionPlan(image, 0, (plan) => ({
-			...plan,
-			registerRepresentations: ["number", "number", "int32"],
-			gc: { safepoints: [] },
-		}));
-		emitProgramTranslationUnits(image, {
-			onRendererBailout: ({ file, name }) => declined.push(`${file}:${name}`),
-		});
-		expect(declined).toEqual(["/fixture/entry.mjs:"]);
-	});
+				limited ? { targetCodeUnits: maximum, hardMaximumCodeUnits: maximum } : undefined,
+			);
+			expect(declined).toEqual(limited ? ["/fixture/entry.mjs:"] : []);
+		},
+	);
 	it("uses one polling typed body across observation modes and preserves bounded sort helpers", () => {
 		const out = inspectStaticValueFunction(
 			`function loop(value,count){for(let index=0;index<count;index++)value=value*1.25-0.5;return value;}
@@ -2973,7 +2980,7 @@ describe("native update-expression representation", () => {
 				emitProgramImage(image, { compiled: true }),
 			);
 			if (representation === "int32") {
-				expect(output).toMatch(/r\d+ = r\d+ & r\d+;/);
+				expect(output).toMatch(/\br\d+ & r\d+\b/);
 				expect(output).not.toContain("mal_ops_number_to_i32(");
 			} else {
 				expect(output).toContain("mal_ops_number_to_i32(");
@@ -3259,13 +3266,14 @@ describe("native update-expression representation", () => {
 		expect(() => serializeCompilerArtifact(malformed)).toThrow(/invalid region envelope/);
 	});
 
-	it("pre-reserves a pristine indexed fill and retains guarded array stores", () => {
+	it("pre-reserves a pristine integer-indexed fill and retains guarded stores", () => {
 		const output = emit(
 			`"use strict"; function fill() { const array = []; for (let i = 0; i < 1000; i++) array[i] = i; return array; } globalThis.fill = fill;`,
 		);
 		expect(output).toContain("mal_vm_try_fresh_dense_indexed_fill_reserve(vm");
 		expect(output).toContain(", 1000);");
-		expect(output).toContain("mal_vm_array_try_store(");
+		expect(output).toContain("mal_vm_array_try_store_proven_index(");
+		expect(output).toContain("mal_vm_op_store_property_ic(");
 		expect(output).toContain(
 			"if (mal_gc_poll_requested()) { mal_gc_safepoint(vm); if (mal_gc_poll_termination(vm)) goto __throw_exit; }",
 		);
