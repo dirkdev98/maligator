@@ -20,8 +20,17 @@ import { coreTerminatorInput } from "./core-ir-control-flow.ts";
 import type { CoreAttributeValue, CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import { CORE_O2_PASS_BUDGETS } from "./core-optimization-families.ts";
 import type { CoreFunctionPass } from "./core-pass.ts";
-import { CORE_STATIC_VALUE_ANALYSIS } from "./core-static-values.ts";
+import {
+	CORE_STATIC_VALUE_ANALYSIS,
+	CORE_STATIC_VALUE_FUNCTION_DEPENDENCIES,
+	CORE_STATIC_VALUE_PROGRAM_DEPENDENCIES,
+} from "./core-static-values.ts";
 import type { CoreProgram } from "./core-store.ts";
+
+const STATIC_VALUE_WAKES = [
+	...CORE_STATIC_VALUE_FUNCTION_DEPENDENCIES,
+	...CORE_STATIC_VALUE_PROGRAM_DEPENDENCIES,
+];
 
 export interface CoreStaticMemberOperation {
 	readonly opcode: string;
@@ -125,7 +134,7 @@ export const selectStaticPropertyReads: CoreFunctionPass = {
 	stage: "memory",
 	requiredFunctionOpcodesAny: ["loadProperty"],
 	requiredAnalyses: [CORE_STATIC_VALUE_ANALYSIS],
-	wakesOn: ["body", "memoryEffects", "facts"],
+	wakesOn: STATIC_VALUE_WAKES,
 	changes: { cfg: true, calls: true, facts: true, representations: false },
 	budget: CORE_O2_PASS_BUDGETS["provenance-escape-scalar-replacement"],
 	run(context) {
@@ -260,7 +269,7 @@ export const foldStaticPropertyReads: CoreFunctionPass = {
 	stage: "memory",
 	requiredFunctionOpcodesAny: ["loadProperty", "loadPropertyStatic"],
 	requiredAnalyses: [CORE_STATIC_VALUE_ANALYSIS],
-	wakesOn: ["body", "memoryEffects", "facts"],
+	wakesOn: STATIC_VALUE_WAKES,
 	changes: { cfg: false, calls: false, facts: true, representations: false },
 	budget: CORE_O2_PASS_BUDGETS["provenance-escape-scalar-replacement"],
 	run(context) {
@@ -325,7 +334,7 @@ export const foldStaticBindingConstants: CoreFunctionPass = {
 	stage: "memory",
 	requiredFunctionOpcodesAny: ["loadGlobal", "loadCaptured"],
 	requiredAnalyses: [CORE_STATIC_VALUE_ANALYSIS],
-	wakesOn: ["body", "memoryEffects", "facts"],
+	wakesOn: STATIC_VALUE_WAKES,
 	changes: { cfg: false, calls: true, facts: true, representations: false },
 	budget: CORE_O2_PASS_BUDGETS["provenance-escape-scalar-replacement"],
 	run(context) {
@@ -426,7 +435,7 @@ export const foldStaticReflections: CoreFunctionPass = {
 	stage: "memory",
 	requiredFunctionOpcodesAny: ["call", "callKnown", "unary", "typeofCompare"],
 	requiredAnalyses: [CORE_STATIC_VALUE_ANALYSIS],
-	wakesOn: ["body", "memoryEffects", "facts"],
+	wakesOn: STATIC_VALUE_WAKES,
 	changes: { cfg: false, calls: true, facts: true, representations: false },
 	budget: CORE_O2_PASS_BUDGETS["provenance-escape-scalar-replacement"],
 	run(context) {

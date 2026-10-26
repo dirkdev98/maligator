@@ -42,14 +42,19 @@ import type {
 	CoreFunctionStore,
 	CoreFunctionVersions,
 	CoreProgram,
+	CoreProgramChangeDomain,
 } from "./core-store.ts";
 
-const CORE_STATIC_VALUE_FUNCTION_DEPENDENCIES = [
+export const CORE_STATIC_VALUE_FUNCTION_DEPENDENCIES = [
 	"body",
 	"cfg",
 	"exceptionFlow",
 	"memoryEffects",
 ] as const satisfies ReadonlyArray<CoreChangeDomain>;
+
+export const CORE_STATIC_VALUE_PROGRAM_DEPENDENCIES = [
+	"data",
+] as const satisfies ReadonlyArray<CoreProgramChangeDomain>;
 
 function coreStringConstantIs(
 	program: CoreProgram,
@@ -2544,7 +2549,7 @@ export const CORE_STATIC_VALUE_ANALYSIS: CoreAnalysisDefinition<CoreStaticValueA
 		key: "static-value-descriptions",
 		scope: "function",
 		functionDependencies: CORE_STATIC_VALUE_FUNCTION_DEPENDENCIES,
-		programDependencies: ["data"],
+		programDependencies: CORE_STATIC_VALUE_PROGRAM_DEPENDENCIES,
 		compute({ program, context, request, get }) {
 			if (request.scope !== "function")
 				throw new Error("Expected function static-value analysis");
