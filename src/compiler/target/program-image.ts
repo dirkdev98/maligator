@@ -793,7 +793,7 @@ export type VmRegion =
 	| VmSetIteratorCursorRegion
 	| VmTypedArrayIteratorCursorRegion;
 
-/** Physical storage selected by Core target lowering for native emission. */
+/** Native storage selected by Core; string retains a boxed word with a known String kind. */
 export type VmRegisterRepresentation =
 	| "boxed"
 	| "int32"

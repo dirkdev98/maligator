@@ -6,6 +6,20 @@ import {
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 describe("partial noncoercing equality facts", () => {
+	it.each(["value===other", "other!==value", "Object.is(value,other)"])(
+		"decodes boxed String storage before pointer comparison in %s",
+		(expression) => {
+			const out = inspectStaticValueFunction(
+				`function compute(input,other){const value=":"+input;return ${expression};}globalThis.compute=compute;`,
+				"compute",
+			);
+			expect(out.native.registerRepresentations).toContain("string");
+			expect(out.c.source).not.toMatch(/mal_string_equals\(r\d+[,)]/);
+			expect(out.c.source).not.toMatch(/mal_string_equals\([^\n;]*,\s*r\d+\)/);
+			expect(out.c.source).toContain("mal_value_to_string(");
+		},
+	);
+
 	it.each(["a===b", "a!==b", "a==b", "Object.is(a,b)"])(
 		"retains String pointer views at an observable boundary for %s",
 		(expression) => {

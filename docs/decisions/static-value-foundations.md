@@ -288,6 +288,8 @@ domain limited to canonical identity words permits word equality; known Number,
 String or BigInt operands leave a type test only on an unknown counterpart.
 String and BigInt comparisons retain content equality. Scalar comparison views
 also preserve String pointers, and frameless entries consume their constant kinds.
+String-represented registers retain boxed words; a pointer view decodes the word
+at consumption. Planned String lengths also reach delayed expression rendering.
 Noncoercing comparisons can be delayed into expressions while their inputs remain
 available; boxed leaves stay materialized before call and field-store preludes.
 Loose equality keeps its coercion semantics and ordinary fallback.

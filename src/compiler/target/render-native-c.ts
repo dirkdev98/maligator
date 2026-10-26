@@ -3153,6 +3153,9 @@ function emitCompiledVariant(
 			(ip) => !elidedIps.has(ip),
 		),
 	);
+	const expressionStringComparisons = new Map(
+		storage.stringComparisons.map((plan) => [plan.instructionIp, plan]),
+	);
 	const expressionRegisters = new Map<number, string>(
 		[...expressionIps].map((ip) => {
 			const op = fn.instructions[ip]!;
@@ -3166,6 +3169,7 @@ function emitCompiledVariant(
 					relocation,
 					suffix,
 					nativeContract.facts?.[ip],
+					expressionStringComparisons.get(ip),
 				),
 			];
 		}),
@@ -3718,6 +3722,7 @@ function renderScalarExpression(
 	relocation: NativeRelocationExpressions = UNRELOCATED_NATIVE_EXPRESSIONS,
 	suffix = "",
 	facts?: InstructionFacts,
+	stringComparison?: NativeStringComparisonPlan,
 ): string {
 	const number = (local: number) =>
 		reps[local] === "boxed" ? `mal_ops_number_as_f64(r${local})` : `(f64) r${local}`;
@@ -3746,9 +3751,7 @@ function renderScalarExpression(
 				? `mal_ops_number_value(r${local})`
 				: reps[local] === "boolean"
 					? `mal_value_new_boolean(r${local})`
-					: reps[local] === "string"
-						? `mal_value_from_string(r${local})`
-						: `r${local}`;
+					: `r${local}`;
 	const scalar = (local: number) =>
 		kind(local) === COMPILER_VALUE_KIND_NUMBER
 			? number(local)
@@ -3757,9 +3760,7 @@ function renderScalarExpression(
 					? `r${local}`
 					: `mal_value_to_boolean(r${local})`
 				: kind(local) === COMPILER_VALUE_KIND_STRING
-					? reps[local] === "string"
-						? `r${local}`
-						: `mal_value_to_string(r${local})`
+					? `mal_value_to_string(r${local})`
 					: undefined;
 	switch (op.opcode) {
 		case "CREATE_UNDEFINED":
@@ -3900,18 +3901,24 @@ function renderScalarExpression(
 			);
 			if (compared !== undefined) return booleanResult(op.dst, String(compared));
 			if (op.operator === "===" || op.operator === "!==") {
-				const equal = nativeEqualityExpression(
-					"strict",
-					boxed(op.left),
-					boxed(op.right),
-					kind(op.left),
-					kind(op.right),
-					scalar(op.left),
-					scalar(op.right),
-					reps[op.left] === "int32" && reps[op.right] === "int32",
-					instructionInputIntegerRange(facts, op.left),
-					instructionInputIntegerRange(facts, op.right),
-				);
+				const constant = stringComparison;
+				const equal =
+					constant === undefined
+						? nativeEqualityExpression(
+								"strict",
+								boxed(op.left),
+								boxed(op.right),
+								kind(op.left),
+								kind(op.right),
+								scalar(op.left),
+								scalar(op.right),
+								reps[op.left] === "int32" && reps[op.right] === "int32",
+								instructionInputIntegerRange(facts, op.left),
+								instructionInputIntegerRange(facts, op.right),
+							)
+						: constant.kind === "strings"
+							? `mal_string_equals_constant_length(mal_value_to_string(${boxed(constant.register === op.right ? op.left : op.right)}), mal_value_to_string(${boxed(constant.register)}), ${constant.length})`
+							: `mal_ops_strict_equal_string_constant(${boxed(constant.register === op.right ? op.left : op.right)}, ${boxed(constant.register)}, ${constant.length})`;
 				return booleanResult(op.dst, op.operator === "!==" ? `!(${equal})` : equal);
 			}
 			if (op.left === op.right) {
@@ -4028,6 +4035,9 @@ function renderNumericLeaf(
 	const reps = entry.registerRepresentations;
 	const scalar = (r: number) => ["number", "int32", "boolean"].includes(reps[r]!);
 	const number = (r: number) => `(f64) r${r}`;
+	const expressionStringComparisons = new Map(
+		storage.stringComparisons.map((plan) => [plan.instructionIp, plan]),
+	);
 	const expressionIps = new Set(
 		[...leaf.expressionIps, ...leaf.rematerializedConstantIps].filter(
 			(ip) => !unreachable.has(ip) && !elided.has(ip),
@@ -4055,6 +4065,7 @@ function renderNumericLeaf(
 					undefined,
 					"",
 					native.facts?.[ip],
+					expressionStringComparisons.get(ip),
 				),
 			];
 		}),
@@ -4113,7 +4124,7 @@ function renderNumericLeaf(
 			case "UNARY":
 			case "MATH_UNARY_NUMBER":
 			case "MATH_BINARY_NUMBER":
-				line = `r${op.dst} = ${renderScalarExpression(op, reps, native.instructions[ip], undefined, "", native.facts?.[ip])};`;
+				line = `r${op.dst} = ${renderScalarExpression(op, reps, native.instructions[ip], undefined, "", native.facts?.[ip], expressionStringComparisons.get(ip))};`;
 				break;
 			case "RETURN":
 				line = `return ${number(op.value)};`;
@@ -4873,6 +4884,9 @@ function emitResumableFunction(
 		isAsyncGenerator,
 	};
 	const storage = native.storage!;
+	const expressionStringComparisons = new Map(
+		storage.stringComparisons.map((plan) => [plan.instructionIp, plan]),
+	);
 	const expressions = new Map<number, string>(
 		[...storage.expressionIps, ...storage.rematerializedConstantIps]
 			.filter((ip) => !elidedIps.has(ip))
@@ -4888,6 +4902,7 @@ function emitResumableFunction(
 						relocation,
 						suffix,
 						native.facts?.[ip],
+						expressionStringComparisons.get(ip),
 					),
 				];
 			}),
@@ -8614,8 +8629,6 @@ function emitInstruction(
 	};
 	const nativeStringOperand = (operand: number, provenString = false): string | null => {
 		const decoded = decodeVmValueOperand(operand);
-		if (decoded.kind === "register" && reps[decoded.register] === "string")
-			return inputValue(decoded.register);
 		return provenString || decoded.kind === "string" || operandIsString(operand)
 			? `mal_value_to_string(${boxedOperand(operand)})`
 			: null;
