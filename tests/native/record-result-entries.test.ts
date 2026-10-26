@@ -63,6 +63,19 @@ describe("record result entries", () => {
 				functionNamed(producer).directEntries.some((entry) => entry.resultFields),
 				producer,
 			).toBe(true);
+		const words = functionNamed("wordRecord").directEntries.find(
+			(entry) => entry.resultFields,
+		)!.resultFields!;
+		expect(words.storage.map((field) => field.representation)).toEqual([
+			"int32",
+			"number",
+			"int32",
+			"string",
+		]);
+		expect(
+			functionNamed("updateWords").directEntries.find((entry) => entry.recordParameters)!
+				.recordParameters![0]!.storage,
+		).toEqual(words.storage);
 		const bundle = functionNamed("numberBundle").directEntries.find(
 			(entry) => entry.resultFields,
 		)!.resultFields!;

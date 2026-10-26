@@ -3299,9 +3299,11 @@ export function lowerCoreCompilationToTargetProgram(
 function lowerRecordStorageField(field: {
 	readonly kindMask: number;
 	readonly representation: CorePlanRepresentation;
+	readonly integerRange?: CompilerIntegerRange;
 }) {
 	return {
 		kindMask: field.kindMask,
+		...(field.integerRange === undefined ? {} : { integerRange: field.integerRange }),
 		representation: planCoreTargetRepresentation(field.representation),
 	};
 }

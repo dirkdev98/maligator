@@ -26,6 +26,10 @@ import {
 	COMPILER_VALUE_KIND_UNDEFINED,
 } from "../src/compiler/shared/compiler-value-kinds.ts";
 import {
+	COMPILER_INT32_RANGE,
+	COMPILER_UINT32_RANGE,
+} from "../src/compiler/shared/integer-range.ts";
+import {
 	serializeCompilerArtifact,
 	deserializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
@@ -105,6 +109,10 @@ function compile(source: string, script = false) {
 const producer = `function make(value,flag){for(let i=0;i<3;i++)globalThis.gate(i);return {n:+value,s:"text",b:!!value};}`;
 const run = (body: string) =>
 	`${producer}function run(flag){let total=0;for(let i=0;i<4;i++){const record=make(i,flag);${body}}return total;}console.log(run(globalThis.flag));`;
+
+const integerProducer = `function word(value){for(let i=0;i<3;i++)globalThis.gate(i);return {n:value|0,wide:value>>>0,small:value&255};}`;
+const integerRun = (body: string) =>
+	`${integerProducer}function run(value,flag){let total=0;for(let i=0;i<4;i++){const record=word(value+i);${body}}return total;}console.log(run(globalThis.input,globalThis.flag));`;
 
 describe("record storage widths", () => {
 	it("keeps numeric, Boolean and String fields independent of producer effects", () => {
@@ -273,7 +281,79 @@ describe("record storage widths", () => {
 			`function decode(value,flag){let n=+value;while(n<3)n++;if(flag)return {tag:0,a:n};return {tag:1,b:!!value};}function run(flag){let total=0;for(let i=0;i<4;i++){const record=decode(i,flag);total+=record.tag+(record.a===undefined?1:record.a);}return total;}console.log(run(globalThis.flag));`,
 		);
 		expect(out.result("decode").resultFields!.shapes).toBeDefined();
-		expect(out.resultWidths("decode")).toEqual({ tag: "f64", a: "boxed", b: "boxed" });
+		expect(out.resultWidths("decode")).toEqual({ tag: "i32", a: "boxed", b: "boxed" });
+	});
+
+	it("retains signed, unsigned and masked bounds independently of producer effects", () => {
+		const out = compile(integerRun("total+=record.n+record.wide+record.small;"));
+		const entry = out.result("word");
+		expect(out.widths.result(entry)).toEqual([
+			{
+				kindMask: COMPILER_VALUE_KIND_NUMBER,
+				representation: "i32",
+				integerRange: COMPILER_INT32_RANGE,
+			},
+			{
+				kindMask: COMPILER_VALUE_KIND_NUMBER,
+				representation: "f64",
+				integerRange: COMPILER_UINT32_RANGE,
+			},
+			{
+				kindMask: COMPILER_VALUE_KIND_NUMBER,
+				representation: "i32",
+				integerRange: {
+					minimum: 0,
+					maximum: 255,
+					exactSafeIntegers: true,
+					excludesNegativeZero: true,
+				},
+			},
+		]);
+	});
+
+	it.each(["-0", "0/0", "1/0", "1.5", "+globalThis.replacement"])(
+		"keeps Number storage wide after a %s write",
+		(value) => {
+			const out = compile(
+				integerRun(`if(flag)record.n=${value};total+=record.n+record.small;`),
+			);
+			expect(out.widths.result(out.result("word"))![0]).toEqual({
+				kindMask: COMPILER_VALUE_KIND_NUMBER,
+				representation: "f64",
+			});
+		},
+	);
+
+	it("retains a wide integer union while widening its physical storage", () => {
+		const out = compile(integerRun("if(flag)record.n=2147483648;total+=record.n;"));
+		expect(out.widths.result(out.result("word"))![0]).toEqual({
+			kindMask: COMPILER_VALUE_KIND_NUMBER,
+			representation: "f64",
+			integerRange: { ...COMPILER_INT32_RANGE, maximum: 2147483648 },
+		});
+	});
+
+	it("shares every borrowed writer's integer range with its producer", () => {
+		const out = compile(
+			`${integerProducer}function edit(record,value){for(let i=0;i<3;i++)record.n=value|0;return record.n+record.small;}function run(value){let total=0;for(let i=0;i<4;i++){const record=word(i);total+=edit(record,value);total+=record.n;}return total;}console.log(run(globalThis.input));`,
+		);
+		const producer = out.widths.result(out.result("word"))!;
+		const entry = out.parameter("edit");
+		expect(entry).toBeDefined();
+		expect(out.widths.parameter(entry, 0)).toEqual(producer);
+		expect(producer[0]!.representation).toBe("i32");
+	});
+
+	it("propagates integer ranges through an ordinary literal forward", () => {
+		const out = compile(
+			`function leaf(value){for(let i=0;i<3;i++)globalThis.gate(i);return {n:value&255};}function forward(value){let n=+value;while(n<3)n++;return leaf(n);}function run(value){let total=0;for(let i=0;i<4;i++){const record=forward(value);total+=record.n;}return total;}console.log(run(globalThis.input),leaf("text"));`,
+		);
+		const entry = out.result("forward");
+		expect(entry.resultFields!.forwards).toBeDefined();
+		expect(out.widths.result(entry)![0]).toMatchObject({
+			representation: "i32",
+			integerRange: { minimum: 0, maximum: 255 },
+		});
 	});
 
 	it("keeps a non-record fallback separate from the fresh record's storage", () => {
@@ -482,6 +562,39 @@ describe("record storage C ABI", () => {
 		expect(emit().source).toContain("mal_vm_materialize_record(");
 	});
 
+	it("uses proven int32 pointers and raw stores while retaining unsigned Number fields", () => {
+		const { image, named } = nativeImage(
+			integerRun("total+=record.n+record.wide+record.small;"),
+		);
+		const fields = named("word").directEntries.find((entry) => entry.resultFields)!
+			.resultFields!.storage;
+		expect(fields.map((field) => field.representation)).toEqual([
+			"int32",
+			"number",
+			"int32",
+		]);
+		const source = emitProgramImage(image, { compiled: true });
+		expect(source).toContain("i32 *rf0");
+		expect(source).toContain("double *rf1");
+		expect(source).toContain("i32 *rf2");
+		expect(source).toMatch(/i32 __record_call_\d+_0 = 0;/);
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image)).native).toEqual(
+			image.native,
+		);
+		const entry = named("word").directEntries.find((entry) => entry.resultFields)!;
+		for (const field of [
+			{ ...fields[0]!, integerRange: undefined },
+			{ ...fields[0]!, integerRange: COMPILER_UINT32_RANGE },
+			{ ...fields[0]!, integerRange: { ...COMPILER_INT32_RANGE, minimum: -0 } },
+		])
+			expect(() =>
+				validateNativeDirectEntry(named("word").body, {
+					...entry,
+					resultFields: { ...entry.resultFields!, storage: [field, ...fields.slice(1)] },
+				}),
+			).toThrow(/Invalid native record storage/);
+	});
+
 	it("retains boxed scalar unions outside GC roots while heap fields remain rooted", () => {
 		const { image, named } = nativeImage(
 			run("if(flag)record.n=true;total+=record.n+record.s.length;"),
@@ -561,7 +674,7 @@ describe("record storage C ABI", () => {
 	});
 
 	it("clones field storage when rebasing merged artifacts", () => {
-		const { image } = nativeImage(borrowed);
+		const { image } = nativeImage(integerRun("total+=record.n+record.small;"));
 		const merged = mergeProgramImages([image, image]).image;
 		expect(deserializeCompilerArtifact(serializeCompilerArtifact(merged)).native).toEqual(
 			merged.native,

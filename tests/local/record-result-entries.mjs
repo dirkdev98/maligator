@@ -686,4 +686,73 @@ function verifyBundle(value, negate) {
 }
 for (const value of [-0, 0, NaN, Infinity, -Infinity, 4294967296])
 	for (const negate of [false, true]) verifyBundle(value, negate);
+function wordRecord(value) {
+	let label = "";
+	for (let step = 0; step < 3; step++) {
+		recordStoragePulse();
+		label += "w";
+	}
+	return { signed: value | 0, unsigned: value >>> 0, small: value & 255, label };
+}
+function updateWords(record) {
+	for (let step = 0; step < 3; step++) {
+		record.signed = ~+record.signed;
+		record.small = (record.small + 257) & 255;
+		recordStoragePulse();
+	}
+	return record.signed + record.small;
+}
+const keptWords = [];
+function verifyWords(value, retain) {
+	const record = wordRecord(value);
+	recordStoragePulse();
+	check(record.signed, value | 0, "signed integer field");
+	check(record.unsigned, value >>> 0, "unsigned Number field");
+	check(record.small, value & 255, "bounded integer field");
+	check(
+		updateWords(record),
+		~(value | 0) + (((value & 255) + 3) & 255),
+		"borrowed integer writes",
+	);
+	if (retain) keptWords.push(record);
+	recordStoragePulse();
+	check(record.signed, ~(value | 0), "materialized signed field");
+	check(record.unsigned, value >>> 0, "materialized unsigned field");
+	check(record.small, ((value & 255) + 3) & 255, "materialized bounded field");
+	check(record.label, "www", "integer and heap field lifetime");
+}
+for (const value of [
+	-0,
+	0,
+	-1,
+	NaN,
+	Infinity,
+	-Infinity,
+	2147483647,
+	2147483648,
+	4294967295,
+	4294967296,
+	9007199254740991,
+])
+	verifyWords(value, value === -1);
+let wordCoercions = 0;
+const coercedWords = wordRecord({
+	valueOf() {
+		wordCoercions++;
+		recordStoragePulse();
+		return 4294967295;
+	},
+});
+check(wordCoercions, 3, "integer field coercion order");
+check(coercedWords.signed, -1, "coerced signed field");
+check(coercedWords.unsigned, 4294967295, "coerced unsigned field");
+for (const value of [1n, Symbol("word")]) {
+	let error;
+	try {
+		wordRecord(value);
+	} catch (caught) {
+		error = caught;
+	}
+	check(error instanceof TypeError, true, "integer field abrupt coercion");
+}
 console.log("record-result-entries PASS");

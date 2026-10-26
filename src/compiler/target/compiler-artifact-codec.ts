@@ -110,7 +110,7 @@ import type {
 /** Host-compiler cache format. This metadata never reaches the VM loader. */
 export const COMPILER_ARTIFACT_MAGIC = 0x434c414d; // "MALC" little-endian
 // Internal artifacts are hard cut-overs: stale cache entries rebuild.
-export const COMPILER_ARTIFACT_VERSION = 317;
+export const COMPILER_ARTIFACT_VERSION = 318;
 
 function validateClosureCaptureOwners(
 	owners: ReadonlyArray<number>,
@@ -6508,6 +6508,7 @@ function writeNativeRecordStorage(
 	fields: ReadonlyArray<{
 		readonly kindMask: number;
 		readonly representation: VmRegisterRepresentation;
+		readonly integerRange?: CompilerIntegerRange;
 	}>,
 ): void {
 	w.u32(fields.length);
@@ -6515,15 +6516,31 @@ function writeNativeRecordStorage(
 		w.u32(field.kindMask);
 		w.u8(representationTag(field.representation));
 	}
+	if (fields.length > 0)
+		writeIntegerRanges(
+			w,
+			fields.some((field) => field.integerRange !== undefined)
+				? fields.map((field) => field.integerRange)
+				: undefined,
+		);
 }
 function readNativeRecordStorage(r: Reader) {
-	return Array.from({ length: r.count(5) }, () => ({
+	const fields = Array.from({ length: r.count(5) }, () => ({
 		kindMask: r.u32(),
 		representation: readRecordStorageRepresentation(r.u8()),
+	}));
+	if (fields.length === 0) return fields;
+	const ranges = readIntegerRanges(r);
+	if (ranges !== undefined && ranges.length !== fields.length)
+		throw new RangeError("Native record storage range arity mismatch");
+	return fields.map((field, index) => ({
+		...field,
+		...(ranges?.[index] === undefined ? {} : { integerRange: ranges[index] }),
 	}));
 }
 
 function readRecordStorageRepresentation(tag: number): VmRegisterRepresentation {
+	if (tag === 3) return "int32";
 	if (tag === 0) return "boxed";
 	if (tag === 1) return "number";
 	if (tag === 2) return "boolean";

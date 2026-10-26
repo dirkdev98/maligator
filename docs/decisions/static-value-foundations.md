@@ -758,6 +758,15 @@ Semantic kinds describe an SSA value at its use; physical register representatio
 join every value assigned that storage. Register allocation relocates input and
 result facts separately, including constrained operands and immediate arguments.
 
+Virtual record storage joins field kinds and integer bounds across producers,
+caller writes, borrowed parameters, literals and selected forwards. These lifetime
+bounds remain separate from initial return-field facts. Signed int32 fields use
+i32 pointers and locals only when every virtual write fits and excludes negative
+zero; unsigned or wider integer bounds retain double storage. Artifacts, relocation,
+split declarations and materialization carry the same field contract. After an
+observation, accesses use the materialized object and may no longer assume those
+storage bounds. Closed shape ordinals have their own int32 ABI.
+
 Function-scoped fact tables carry one versioned proof and use dense instruction
 indices. Register facts reference the existing operand list, with an explicit
 input offset so constrained input/output aliases remain distinct.

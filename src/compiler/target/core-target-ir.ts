@@ -17,7 +17,12 @@ import {
 	COMPILER_VALUE_KIND_BOOLEAN,
 	COMPILER_VALUE_KIND_STRING,
 } from "../shared/compiler-value-kinds.ts";
-import { COMPILER_INT32_RANGE } from "../shared/integer-range.ts";
+import {
+	COMPILER_INT32_RANGE,
+	compilerIntegerRangeIsValid,
+	compilerIntegerRangeIsInt32,
+	compilerIntegerRangesEqual,
+} from "../shared/integer-range.ts";
 import type { CompilerIntegerRange } from "../shared/integer-range.ts";
 
 export function targetInstructionUsesPropertyCache(
@@ -90,6 +95,7 @@ export type CoreTargetRegisterRepresentation =
 	| "string";
 
 export interface CoreTargetRecordStorageField {
+	readonly integerRange?: CompilerIntegerRange;
 	readonly kindMask: number;
 	readonly representation: CoreTargetRegisterRepresentation;
 }
@@ -110,9 +116,15 @@ export function targetRecordStorageFieldsAreValid(
 		fields.every(
 			(field: CoreTargetRecordStorageField) =>
 				compilerValueKindMaskIsValid(field.kindMask, { allowTop: true }) &&
+				(field.integerRange === undefined ||
+					(field.kindMask === COMPILER_VALUE_KIND_NUMBER &&
+						compilerIntegerRangeIsValid(field.integerRange))) &&
 				(field.representation === "boxed" ||
 					(field.representation === "number" &&
 						field.kindMask === COMPILER_VALUE_KIND_NUMBER) ||
+					(field.representation === "int32" &&
+						field.kindMask === COMPILER_VALUE_KIND_NUMBER &&
+						compilerIntegerRangeIsInt32(field.integerRange)) ||
 					(field.representation === "boolean" &&
 						field.kindMask === COMPILER_VALUE_KIND_BOOLEAN) ||
 					(field.representation === "string" &&
@@ -130,7 +142,8 @@ export function targetRecordStorageFieldsEqual(
 		left.every(
 			(field, index) =>
 				field.kindMask === right[index]!.kindMask &&
-				field.representation === right[index]!.representation,
+				field.representation === right[index]!.representation &&
+				compilerIntegerRangesEqual(field.integerRange, right[index]!.integerRange),
 		)
 	);
 }

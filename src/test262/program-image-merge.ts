@@ -6,6 +6,7 @@ import type {
 	ProgramImage,
 	NativeInstructionPlan,
 	NativeRecordUses,
+	NativeRecordLayout,
 	VmRegion,
 } from "../compiler/target/program-image.ts";
 import { rebaseVmValueOperand } from "../compiler/target/runtime-image.ts";
@@ -641,7 +642,15 @@ function cloneLiteralTemplates(
 	return cloned;
 }
 
-/** Merge immutable images while cloning and rebasing every indexed table. */
+function copyRecordStorage(fields: NativeRecordLayout["storage"]) {
+	return fields.map((field) => ({
+		...field,
+		...(field.integerRange === undefined
+			? {}
+			: { integerRange: { ...field.integerRange } }),
+	}));
+}
+
 function copyRecordUses(uses: NativeRecordUses): NativeRecordUses {
 	return {
 		loads: uses.loads.map((load) => ({ ...load })),
@@ -827,7 +836,7 @@ export function mergeProgramImages(images: Array<ProgramImage>): MergedProgramIm
 							? undefined
 							: {
 									keys: entry.resultFields.keys.map((key) => key + base.string),
-									storage: entry.resultFields.storage.map((field) => ({ ...field })),
+									storage: copyRecordStorage(entry.resultFields.storage),
 									allocationIps: [...entry.resultFields.allocationIps],
 									...(entry.resultFields.shapes === undefined
 										? {}
@@ -849,7 +858,7 @@ export function mergeProgramImages(images: Array<ProgramImage>): MergedProgramIm
 						: {
 								recordParameters: entry.recordParameters.map((parameter) => ({
 									index: parameter.index,
-									storage: parameter.storage.map((field) => ({ ...field })),
+									storage: copyRecordStorage(parameter.storage),
 									keys: parameter.keys.map((key) => key + base.string),
 									...(parameter.shapes === undefined
 										? {}
@@ -898,7 +907,7 @@ export function mergeProgramImages(images: Array<ProgramImage>): MergedProgramIm
 				})),
 				recordObjects: native.recordObjects?.map((site) => ({
 					allocationIp: site.allocationIp,
-					storage: site.storage.map((field) => ({ ...field })),
+					storage: copyRecordStorage(site.storage),
 					...copyRecordUses(site),
 				})),
 				gc: {

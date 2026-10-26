@@ -5,7 +5,11 @@ import {
 	COMPILER_VALUE_KIND_TOP,
 	COMPILER_VALUE_KIND_UNDEFINED,
 } from "../shared/compiler-value-kinds.ts";
+import { compilerIntegerRangeIsInt32 } from "../shared/integer-range.ts";
+import type { CompilerIntegerRange } from "../shared/integer-range.ts";
 import type { CoreAnalysisManager } from "./core-analysis-manager.ts";
+import { CORE_CONTROL_FLOW_BUNDLE_ANALYSIS } from "./core-ir-control-flow.ts";
+import { CORE_LOOP_INDUCTION_ANALYSIS } from "./core-ir-loops.ts";
 import type {
 	CoreDirectEntryPlan,
 	CorePlanRepresentation,
@@ -14,6 +18,7 @@ import type {
 } from "./core-ir-regions.ts";
 import { CORE_LOCAL_VALUE_KIND_ANALYSIS } from "./core-ir-value-kinds.ts";
 import type { CoreFunctionId, CoreInstructionId } from "./core-ir.ts";
+import { coreRecordResultFields } from "./core-native-field-analysis.ts";
 import { CORE_PROGRAM_VALUE_KIND_ANALYSIS } from "./core-program-flow-analysis.ts";
 import type { CoreProgram } from "./core-store.ts";
 
@@ -22,9 +27,11 @@ interface StorageNode {
 	rank: number;
 	readonly layout: CoreRecordLayout;
 	readonly masks: Array<number>;
+	readonly ranges: Array<CompilerIntegerRange | null | undefined>;
 }
 
 export interface CoreRecordStorageField {
+	readonly integerRange?: CompilerIntegerRange;
 	readonly kindMask: number;
 	readonly representation: CorePlanRepresentation;
 }
@@ -162,6 +169,7 @@ export function analyzeCoreRecordStorageWidths(
 			rank: 0,
 			layout,
 			masks: Array<number>(layout.keys.length).fill(0),
+			ranges: new Array<CompilerIntegerRange | null | undefined>(layout.keys.length),
 		});
 		return index;
 	};
@@ -175,9 +183,32 @@ export function analyzeCoreRecordStorageWidths(
 		}
 		return current;
 	};
-	const include = (node: number, field: number, mask: number): void => {
-		const masks = nodes[root(node)]!.masks;
-		masks[field] = masks[field]! | mask;
+	const joinRange = (
+		left: CompilerIntegerRange | null | undefined,
+		right: CompilerIntegerRange | null | undefined,
+	): CompilerIntegerRange | null | undefined => {
+		if (left === undefined) return right;
+		if (right === undefined) return left;
+		if (left === null || right === null) return null;
+		return {
+			minimum: Math.min(left.minimum, right.minimum),
+			maximum: Math.max(left.maximum, right.maximum),
+			exactSafeIntegers: true,
+			excludesNegativeZero: true,
+		};
+	};
+	const include = (
+		node: number,
+		field: number,
+		mask: number,
+		range?: CompilerIntegerRange,
+	): void => {
+		const storage = nodes[root(node)]!;
+		storage.masks[field] = storage.masks[field]! | mask;
+		storage.ranges[field] = joinRange(
+			storage.ranges[field],
+			mask === COMPILER_VALUE_KIND_NUMBER && range !== undefined ? range : null,
+		);
 	};
 	const join = (left: number, right: number): void => {
 		left = root(left);
@@ -202,12 +233,17 @@ export function analyzeCoreRecordStorageWidths(
 		}
 		b.parent = left;
 		if (a.rank === b.rank) a.rank++;
-		for (let field = 0; field < a.masks.length; field++)
+		for (let field = 0; field < a.masks.length; field++) {
 			a.masks[field] = a.masks[field]! | b.masks[field]!;
+			a.ranges[field] = joinRange(a.ranges[field], b.ranges[field]);
+		}
 	};
 	const instructionMasks = new WeakMap<
 		CoreDirectEntryPlan,
-		ReadonlyMap<CoreInstructionId, ReadonlyArray<number>>
+		ReadonlyMap<
+			CoreInstructionId,
+			NonNullable<CoreDirectEntryPlan["instructionFacts"]>[number]
+		>
 	>();
 	const inputMask = (
 		functionId: CoreFunctionId,
@@ -218,11 +254,11 @@ export function analyzeCoreRecordStorageWidths(
 		let byInstruction = entry === undefined ? undefined : instructionMasks.get(entry);
 		if (entry !== undefined && byInstruction === undefined) {
 			byInstruction = new Map(
-				entry.instructionFacts?.map((fact) => [fact.instruction, fact.masks]),
+				entry.instructionFacts?.map((fact) => [fact.instruction, fact]),
 			);
 			instructionMasks.set(entry, byInstruction);
 		}
-		const exact = byInstruction?.get(instruction)?.[operand];
+		const exact = byInstruction?.get(instruction)?.masks[operand];
 		if (exact !== undefined) return exact;
 		const fn = program.function(functionId);
 		const value = fn.kernel.operandAt(
@@ -232,6 +268,66 @@ export function analyzeCoreRecordStorageWidths(
 			.get(CORE_LOCAL_VALUE_KIND_ANALYSIS, { scope: "function", function: functionId })
 			.kindMask(value);
 	};
+	const inputRange = (
+		functionId: CoreFunctionId,
+		instruction: CoreInstructionId,
+		operand: number,
+		entry?: CoreDirectEntryPlan,
+	): CompilerIntegerRange | undefined => {
+		if (inputMask(functionId, instruction, operand, entry) !== COMPILER_VALUE_KIND_NUMBER)
+			return undefined;
+		const fn = program.function(functionId);
+		const value = fn.kernel.operandAt(
+			fn.kernel.instructionOperandStart(instruction) + operand,
+		);
+		const local = analyses
+			.get(CORE_LOOP_INDUCTION_ANALYSIS, { scope: "function", function: functionId })
+			.range(value, fn.instructionBlock(instruction));
+		const exact =
+			entry === undefined
+				? undefined
+				: instructionMasks.get(entry)?.get(instruction)?.inputIntegerRanges?.[operand];
+		if (local === undefined) return exact;
+		if (exact === undefined) return local;
+		const minimum = Math.max(local.minimum, exact.minimum),
+			maximum = Math.min(local.maximum, exact.maximum);
+		return minimum <= maximum
+			? { minimum, maximum, exactSafeIntegers: true, excludesNegativeZero: true }
+			: undefined;
+	};
+	const fallbackRanges = new Map<
+		CoreFunctionId,
+		ReadonlyMap<number, CompilerIntegerRange | null | undefined>
+	>();
+	const fallbackRange = (
+		target: CoreFunctionId,
+		key: number,
+	): CompilerIntegerRange | undefined => {
+		let ranges = fallbackRanges.get(target);
+		if (ranges === undefined) {
+			const fn = program.function(target);
+			const fields = coreRecordResultFields(
+				fn,
+				analyses
+					.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, { scope: "function", function: target })
+					.exceptional(),
+			);
+			if (fields === undefined) throw new Error("Invalid literal record forward target");
+			const joined = new Map<number, CompilerIntegerRange | null | undefined>();
+			for (const allocation of fields.allocations)
+				for (const [operand, fieldKey] of fields.keys.entries())
+					joined.set(
+						fieldKey,
+						joinRange(
+							joined.get(fieldKey),
+							inputRange(target, allocation, operand) ?? null,
+						),
+					);
+			ranges = joined;
+			fallbackRanges.set(target, ranges);
+		}
+		return ranges.get(key) ?? undefined;
+	};
 	const stores = (
 		node: number,
 		functionId: CoreFunctionId,
@@ -239,7 +335,12 @@ export function analyzeCoreRecordStorageWidths(
 		entry?: CoreDirectEntryPlan,
 	): void => {
 		for (const { instruction, field } of uses.stores)
-			include(node, field, inputMask(functionId, instruction, 1, entry));
+			include(
+				node,
+				field,
+				inputMask(functionId, instruction, 1, entry),
+				inputRange(functionId, instruction, 1, entry),
+			);
 	};
 	for (const entry of entries) {
 		if (entry.resultFields !== undefined)
@@ -269,7 +370,12 @@ export function analyzeCoreRecordStorageWidths(
 			for (const [index, allocation] of fields.allocations.entries()) {
 				const shape = fields.shapes?.[index] ?? fields.keys.map((_, field) => field);
 				for (const [operand, field] of shape.entries())
-					include(node, field, inputMask(entry.function, allocation, operand, entry));
+					include(
+						node,
+						field,
+						inputMask(entry.function, allocation, operand, entry),
+						inputRange(entry.function, allocation, operand, entry),
+					);
 				for (let field = 0; field < fields.keys.length; field++)
 					if (!shape.includes(field)) include(node, field, COMPILER_VALUE_KIND_UNDEFINED);
 			}
@@ -297,6 +403,7 @@ export function analyzeCoreRecordStorageWidths(
 						field,
 						record?.find((candidate) => candidate.key === key)?.mask ??
 							COMPILER_VALUE_KIND_TOP,
+						fallbackRange(forward.target, key),
 					);
 			}
 			for (const site of entry.callSites) {
@@ -327,29 +434,48 @@ export function analyzeCoreRecordStorageWidths(
 					node = create(nodes[parameter]!.layout);
 					objects.set(key, node);
 					for (let field = 0; field < nodes[node]!.layout.keys.length; field++)
-						include(node, field, inputMask(site.caller, object.allocation, field));
+						include(
+							node,
+							field,
+							inputMask(site.caller, object.allocation, field),
+							inputRange(site.caller, object.allocation, field),
+						);
 					stores(node, site.caller, object.uses);
 				}
 				join(node, parameter);
 			}
 	}
-	const widths = nodes.map((_, index) =>
-		Object.freeze(
-			nodes[root(index)]!.masks.map((mask): CoreRecordStorageField =>
-				Object.freeze({
+	const widthsByRoot = new Map<number, ReadonlyArray<CoreRecordStorageField>>();
+	const widths = nodes.map((_, index) => {
+		const component = root(index);
+		const cached = widthsByRoot.get(component);
+		if (cached !== undefined) return cached;
+		const storage = nodes[component]!;
+		const fields = Object.freeze(
+			storage.masks.map((mask, field): CoreRecordStorageField => {
+				const range =
+					mask === COMPILER_VALUE_KIND_NUMBER ? storage.ranges[field] : undefined;
+				return Object.freeze({
 					kindMask: mask || COMPILER_VALUE_KIND_TOP,
+					...(range === undefined || range === null
+						? {}
+						: { integerRange: Object.freeze({ ...range }) }),
 					representation:
 						mask === COMPILER_VALUE_KIND_NUMBER
-							? "f64"
+							? compilerIntegerRangeIsInt32(range ?? undefined)
+								? "i32"
+								: "f64"
 							: mask === COMPILER_VALUE_KIND_BOOLEAN
 								? "boolean"
 								: mask === COMPILER_VALUE_KIND_STRING
 									? "string"
 									: "boxed",
-				}),
-			),
-		),
-	);
+				});
+			}),
+		);
+		widthsByRoot.set(component, fields);
+		return fields;
+	});
 	const selected = new CoreRecordStorageWidthIndex(
 		new Map([...results].map(([key, node]) => [key, widths[node]!])),
 		new Map(

@@ -4675,11 +4675,13 @@ function recordSlot(site: NativeRecordSite, offset: number): string {
 function recordBoxed(site: NativeRecordSite, field: number): string {
 	const value = recordSlot(site, field);
 	const representation = site.storage[field]!.representation;
-	return representation === "number"
-		? `mal_ops_number_value(${value})`
-		: representation === "boolean"
-			? `mal_value_new_boolean(${value})`
-			: value;
+	return representation === "int32"
+		? `mal_value_from_i32(${value})`
+		: representation === "number"
+			? `mal_ops_number_value(${value})`
+			: representation === "boolean"
+				? `mal_value_new_boolean(${value})`
+				: value;
 }
 
 function recordObject(site: NativeRecordSite): string {
@@ -8567,6 +8569,18 @@ function emitInstruction(
 					? decoded.kind
 					: "boxed";
 	};
+	const recordStoredValue = (
+		field: NativeRecordField,
+		source: RegisterRep,
+		value: string,
+	): string => {
+		if (field.representation !== "int32")
+			return convertedValue(source, field.representation, value);
+		if (source === "int32") return value;
+		if (source === "number") return `((i32) ${value})`;
+		if (source === "boxed") return `((i32) mal_ops_number_as_f64(${value}))`;
+		throw new Error(`Unsupported native record integer store from ${source}`);
+	};
 	const callValue = (
 		dst: number,
 		value: string,
@@ -9772,7 +9786,7 @@ function emitInstruction(
 			...lines,
 			...context.recordForward.map(
 				(storage, field) =>
-					`*rf${field} = ${convertedValue("boxed", storage.representation, `mal_object_field_load_shaped(mal_value_to_object(${boxed(instruction.dst)}), ${field})`)};`,
+					`*rf${field} = ${recordStoredValue(storage, "boxed", `mal_object_field_load_shaped(mal_value_to_object(${boxed(instruction.dst)}), ${field})`)};`,
 			),
 			`r${instruction.dst} = MAL_VALUE_EMPTY;`,
 		];
@@ -9785,7 +9799,7 @@ function emitInstruction(
 		return [
 			...instruction.valueRegisters.map(
 				(register, field) =>
-					`${recordSlot(site, field)} = ${convertedValue(reps[register]!, site.storage[field]!.representation, `r${register}`)};`,
+					`${recordSlot(site, field)} = ${recordStoredValue(site.storage[field]!, reps[register]!, inputValue(register))};`,
 			),
 			`${recordObject(site)} = MAL_VALUE_EMPTY;`,
 			...(site.producer === undefined
@@ -9803,7 +9817,7 @@ function emitInstruction(
 		return [
 			...instruction.valueRegisters.map(
 				(register, index) =>
-					`*rf${fields[index]!} = ${convertedValue(reps[register]!, storage[fields[index]!]!.representation, `r${register}`)};`,
+					`*rf${fields[index]!} = ${recordStoredValue(storage[fields[index]!]!, reps[register]!, inputValue(register))};`,
 			),
 			// A field this literal lacks reads as undefined, since no prototype has its key.
 			...Array.from({ length: count }, (_, field) => field)
@@ -9827,7 +9841,7 @@ function emitInstruction(
 			instruction.opcode === "LOAD_PROPERTY_STATIC" ||
 			instruction.opcode === "LOAD_PROPERTY_STATIC_KNOWN_OWN_SLOT"
 				? `r${instruction.dst} = ${convertedValue(site.storage[field]!.representation, reps[instruction.dst]!, slot)};`
-				: `${slot} = ${convertedValue(reps[instruction.value]!, site.storage[field]!.representation, `r${instruction.value}`)};`;
+				: `${slot} = ${recordStoredValue(site.storage[field]!, reps[instruction.value]!, inputValue(instruction.value))};`;
 		if (site.object === undefined) return [virtual];
 		// Once an observer created the object, it is the record: accesses go through it.
 		const ordinary = emitGenericInstruction();
