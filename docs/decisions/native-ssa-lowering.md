@@ -50,13 +50,18 @@ they do not share storage. Shape-union fields include undefined when absent;
 escaped return values remain separate from the fresh-record storage path. Each
 field keeps its full kind mask alongside its representation, including boxed
 partial unions. The proof binds both the program revision and the exact selected
-storage-sharing uses, and survives certified plan copies. Native lowering carries these fields through artifacts and image relocation. C
-entries take a typed pointer per field, including borrowed parameters and selected
+storage-sharing uses, and survives certified plan copies. Native lowering carries these fields through
+artifacts and image relocation. C entries take a typed pointer per field, including borrowed parameters and selected
 forwards. Numeric and Boolean fields use scalar locals; boxed unions without heap
 kinds also stay outside GC roots. Heap-capable fields remain rooted, and observers
 box scalar fields when materializing the object. Accesses after materialization
-continue through the real object. Coroutine callers retain their ordinary object
-transport and existing suspension snapshots.
+continue through the real object. A borrowed parameter needs the producer's realm
+and a union's shape index only when it has record observers; parameters without
+observers still share the object cell so earlier materialization and mutation
+remain visible. Callers retain
+the producer whenever their own observer, an observing callee or an ordinary-call
+fallback needs it. Coroutine callers retain their ordinary object transport and
+existing suspension snapshots.
 
 Constants and source resources are finalized jointly over both targets; a
 constant used only by the native body must survive compaction. Captures, profiling

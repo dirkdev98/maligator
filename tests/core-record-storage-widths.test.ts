@@ -8,9 +8,11 @@ import {
 	coreRecordStorageWidthProofIsCurrent,
 	analyzeCoreRecordStorageWidths,
 } from "../src/compiler/core/core-record-storage-widths.ts";
+import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
 import { parseModule, parseScript } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { optimizeSemanticProgramToCore } from "../src/compiler/pipeline/compile-core-common.ts";
+import { compileEntrypoint } from "../src/compiler/pipeline/compile-program.ts";
 import {
 	compilerProgramFactsFromConfig,
 	programClosureCertificate,
@@ -39,6 +41,10 @@ import {
 	validateNativeDirectEntry,
 	validateNativeRecordCalls,
 } from "../src/compiler/target/program-image.ts";
+import {
+	emitCompiledFunction,
+	directCompiledEntryKey,
+} from "../src/compiler/target/render-native-c.ts";
 import { verifyNativeExecutionProgram } from "../src/compiler/target/verify-native-execution.ts";
 import { mergeProgramImages } from "../src/test262/program-image-merge.ts";
 import { coreFunctionNamed } from "./helpers/core-inspection.ts";
@@ -329,11 +335,124 @@ describe("record storage C ABI", () => {
 		expect(source).toMatch(/bool __record_call_\d+_2 = false;/);
 		expect(source).not.toMatch(/mal_ops_number_as_f64\(__record_call_/);
 		expect(source).not.toMatch(/mal_value_to_boolean\(__record_call_/);
+		expect(source).toContain("MalValue *rp0_3");
+		expect(source).not.toContain("MalValue *rp0_4");
 		const split = emitProgramTranslationUnits(image, { compiled: true });
 		expect(split.map((unit) => unit.source).join("\n")).toContain("double *rp0_0");
 		expect(deserializeCompilerArtifact(serializeCompilerArtifact(image)).native).toEqual(
 			image.native,
 		);
+	});
+
+	it("keeps producer storage for observing parameters in the native integration fixture", () => {
+		const image = lowerNativeStorage(
+			compileEntrypoint(
+				new URL("./local/record-result-entries.mjs", import.meta.url).pathname,
+				{
+					buildConfig: resolveBuildConfig({ engine: { realms: true } }),
+					stripTypes: stripCompactTypes,
+				},
+			),
+			"precise",
+		);
+		const entries = new Map(
+			image.native.functions.flatMap((fn) =>
+				fn.directEntries.map(
+					(entry) => [directCompiledEntryKey(fn.functionIndex, entry.id), entry] as const,
+				),
+			),
+		);
+		for (const [name, observed, pointers] of [
+			["hold", true, 5],
+			["stretch", false, 4],
+			["updateBundle", false, 4],
+			["decodedWeight", false, 5],
+		] as const) {
+			const fn = image.native.functions.find(
+				(fn) =>
+					String.fromCharCode(
+						...(image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+					) === name,
+			)!;
+			const entry = fn.directEntries.find((entry) => entry.recordParameters)!;
+			const parameter = entry.recordParameters![0]!;
+			expect(parameter.observerIps.length > 0).toBe(observed);
+			const emitted = emitCompiledFunction(
+				fn,
+				fn.functionIndex,
+				"",
+				false,
+				"static",
+				new Set(),
+				[],
+				entries,
+				false,
+				new Set(),
+				image.runtime.stringConstants,
+			)!;
+			const abi = emitted.directEntries.find((candidate) => candidate.id === entry.id)!
+				.recordParameters![0]!;
+			expect(abi.representations).toHaveLength(pointers);
+			if (name === "hold") {
+				const shaped = {
+					...entry,
+					recordParameters: [{ ...parameter, shapes: [[0, 1, 2]] }],
+				};
+				const shapedFunction = {
+					...fn,
+					directEntries: fn.directEntries.map((candidate) =>
+						candidate === entry ? shaped : candidate,
+					),
+				};
+				const shapedC = emitCompiledFunction(
+					shapedFunction,
+					fn.functionIndex,
+					"",
+					false,
+					"static",
+					new Set(),
+					[],
+					entries,
+					false,
+					new Set(),
+					image.runtime.stringConstants,
+				)!.directEntries.find((candidate) => candidate.id === entry.id)!;
+				expect(shapedC.recordParameters![0]!.representations).toHaveLength(6);
+				expect(shapedC.source).toContain("mal_value_to_i32((*rp0_3))");
+				expect(shapedC.source).toContain("mal_vm_materialize_record(vm, (*rp0_5)");
+			}
+		}
+	});
+
+	it("materializes before a borrowed call whose native entry was not emitted", () => {
+		const { image, named } = nativeImage(borrowed);
+		const entries = new Map(
+			image.native.functions.flatMap((fn) =>
+				fn.directEntries.map(
+					(entry) => [directCompiledEntryKey(fn.functionIndex, entry.id), entry] as const,
+				),
+			),
+		);
+		const run = named("run");
+		const emit = () =>
+			emitCompiledFunction(
+				run,
+				run.functionIndex,
+				"",
+				false,
+				"static",
+				new Set(image.native.functions.map((fn) => fn.functionIndex)),
+				[],
+				entries,
+				false,
+				new Set(),
+				image.runtime.stringConstants,
+			)!;
+		const before = emit();
+		expect(before.source).not.toContain("mal_vm_materialize_record(");
+		for (const entry of named("edit").directEntries)
+			entries.delete(directCompiledEntryKey(named("edit").functionIndex, entry.id));
+		expect(emit().source).toContain("mal_vm_materialize_record(");
 	});
 
 	it("retains boxed scalar unions outside GC roots while heap fields remain rooted", () => {

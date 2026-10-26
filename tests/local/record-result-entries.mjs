@@ -405,6 +405,20 @@ function decodedWeights(operands) {
 	return total;
 }
 
+const keptDecodedParameters = [];
+function keepDecodedWeight(decoded) {
+	let weight = decoded.kind.length;
+	for (let step = 0; step < 1; step++)
+		weight += (decoded.register ?? 0) + (decoded.index ?? 0);
+	keptDecodedParameters.push(decoded);
+	return weight + (decoded.value === undefined ? 0 : 1000);
+}
+function keepDecodedWeights(operands) {
+	let total = 0;
+	for (const operand of operands) total += keepDecodedWeight(decode(operand));
+	return total;
+}
+
 // A callee can throw after writing to its caller's storage.
 function strictWidth(span) {
 	span.digits = -span.digits;
@@ -515,6 +529,20 @@ function spanSums(count) {
 	return total;
 }
 
+function observedThenStretched(text) {
+	let total = 0;
+	for (let index = 0; index < text.length;) {
+		const token = scan(text, index);
+		held.push(token);
+		const before = token.end;
+		total += stretch(token, 2);
+		check(held[held.length - 1], token, "earlier observer identity");
+		check(held[held.length - 1].end, before + 2, "borrowed write after observation");
+		index = before + 1;
+	}
+	return total;
+}
+
 const text = "a1 bb22 ccc333 dddd4444 ".repeat(20);
 check(tokenLengths(text), 600, "token lengths");
 check(digitCount(text), 200, "digit count");
@@ -611,6 +639,23 @@ check(
 	"try-b@10,try-dd@24,try-g@10",
 	"handed-on records",
 );
+check(
+	observedThenStretched("ab cd"),
+	8,
+	"observed record into a non-observing parameter",
+);
+
+check(
+	keepDecodedWeights([3, -1, -2, -4]),
+	decodedWeights([3, -1, -2, -4]),
+	"observing union parameter values",
+);
+check(
+	keptDecodedParameters.map((record) => Object.keys(record).join(",")).join(";"),
+	"kind,register;kind;value,kind;kind,index",
+	"observing union parameter shapes",
+);
+
 function recordStoragePulse() {
 	if (typeof globalThis.gc === "function") globalThis.gc();
 }

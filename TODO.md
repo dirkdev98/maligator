@@ -147,8 +147,11 @@ The independent target boundary and current storage contract are recorded in
       The native ABI carries typed pointers through artifacts, relocation, split
       units, forwards and materialization. Numeric and Boolean fields use scalar
       locals; boxed unions without heap kinds also omit GC roots. Heap fields stay
-      rooted, and materialized records retain ordinary object access. The scanner
-      workload's whole C is now 111,548 bytes, down from 115,075 before returned-field
+      rooted, and materialized records retain ordinary object access. Parameters
+      without observers omit the producer realm and union-shape pointers; callers
+      omit the producer root when neither a caller/callee observer nor backend
+      fallback needs materialization. The scanner workload's whole C is now 111,548
+      bytes, down from 115,075 before returned-field
       feedback and 111,795 before typed fields. Point-sensitive mutation/escape
       proofs, coroutine record transport and integer field widths remain. The
       scanner still calls `mal_builtin_string_char_code_at_known` twice per character
