@@ -25,6 +25,10 @@ function rebaseNativeStorage(
 		? undefined
 		: {
 				...storage,
+				stringComparisons: storage.stringComparisons.map((plan) => ({
+					...plan,
+					operand: rebaseVmValueOperand(plan.operand, stringBase),
+				})),
 				captures: {
 					...storage.captures,
 					owners: storage.captures.owners.map((owner) => ({

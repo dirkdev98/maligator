@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
 import { compileSemanticProgramToProgramImage } from "../src/compiler/pipeline/compile-core.ts";
+import {
+	deserializeCompilerArtifact,
+	serializeCompilerArtifact,
+} from "../src/compiler/target/compiler-artifact-codec.ts";
 import { emitProgramImage } from "../src/compiler/target/emit-program-image.ts";
 import type { ProgramImage, NativePlan } from "../src/compiler/target/program-image.ts";
 import type {
@@ -15,6 +19,7 @@ import {
 import { mergeProgramImages } from "../src/test262/program-image-merge.ts";
 import { testPropertyCacheCount } from "./helpers/program-image.ts";
 import { testProgramImage, withNativeFunctionPlan } from "./helpers/program-image.ts";
+import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 function vmFunction(instructions: Array<BytecodeInstruction>): BytecodeFunction {
 	return {
@@ -73,6 +78,48 @@ function image(
 }
 
 describe("Test262 VM image merger", () => {
+	it.each([
+		'function target(input){return Object.is(input,"ready");}',
+		'function target(input){return Object.is("ready",input);}',
+		'function target(input,flag){const text=flag?"ready":"other";return Object.is(input,text);}',
+		'function* target(input){yield 0;return Object.is(input,"ready");}',
+	])("rebases SameValue String-length operands in %s", (definition) => {
+		for (const locked of [false, true]) {
+			const prefix = inspectStaticValueFunction(
+				'function prefix(){return "different length padding";}globalThis.prefix=prefix;',
+				"prefix",
+				{ locked },
+			).image;
+			const out = inspectStaticValueFunction(
+				`${definition}globalThis.target=target;`,
+				"target",
+				{ locked },
+			);
+			const original = out.native.storage!.stringComparisons;
+			expect(original.length).toBeGreaterThan(0);
+			const operands = original.map((plan) => plan.operand);
+			const { image: merged, functionBases } = mergeProgramImages([prefix, out.image]);
+			expect(() => emitProgramImage(merged, {})).not.toThrow();
+			const restored =
+				merged.native.functions[functionBases[1]! + out.native.functionIndex]!;
+			for (const [index, plan] of restored.storage!.stringComparisons.entries()) {
+				const source = decodeVmValueOperand(original[index]!.operand);
+				const result = decodeVmValueOperand(plan.operand);
+				if (source.kind === "string") {
+					expect(result.kind).toBe("string");
+					if (result.kind !== "string") throw new Error("Missing rebased String operand");
+					expect(result.index).toBe(source.index + prefix.runtime.stringConstants.length);
+					expect(merged.runtime.stringConstants[result.index]).toEqual(
+						out.image.runtime.stringConstants[source.index],
+					);
+				} else expect(plan.operand).toBe(original[index]!.operand);
+			}
+			expect(original.map((plan) => plan.operand)).toEqual(operands);
+			expect(deserializeCompilerArtifact(serializeCompilerArtifact(merged))).toEqual(
+				merged,
+			);
+		}
+	});
 	it("relocates named probe constants while preserving local cache rows in both layouts", () => {
 		const instructions: Array<BytecodeInstruction> = [
 			{
