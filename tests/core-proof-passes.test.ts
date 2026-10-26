@@ -58,6 +58,69 @@ const context: CoreCompilationContext = {
 };
 
 describe("Core local proofs and representations", () => {
+	it("keeps numeric loop proofs stable when their catch predecessor becomes unreachable", () => {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program);
+		const entry = builder.createBlock();
+		const loop = builder.createBlock([{}]);
+		const handler = builder.createBlock([{ role: "exception" }, {}]);
+		const counter = builder.blockParameterValue(loop, 0);
+		const caughtCounter = builder.blockParameterValue(handler, 1);
+		const zero = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 0 },
+		})[0]!;
+		const one = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 1 },
+		})[0]!;
+		const sum = builder.appendInstruction(loop, "binary", [counter, one], {
+			attributes: { operator: "+" },
+		})[0]!;
+		const next = builder.appendInstruction(loop, "binary", [sum, zero], {
+			attributes: { operator: "|" },
+		})[0]!;
+		const operations = builder.bodyInstructionIds(loop);
+		builder.setHandler(loop, handler, [counter]);
+		builder.setTerminator(entry, {
+			kind: "jump",
+			edge: { block: loop, arguments: [zero] },
+		});
+		builder.setTerminator(loop, {
+			kind: "jump",
+			edge: { block: loop, arguments: [next] },
+		});
+		builder.setTerminator(handler, {
+			kind: "jump",
+			edge: { block: loop, arguments: [caughtCounter] },
+		});
+		const fn = program.function(builder.finish(entry).function);
+		const report = new CoreOptimizationReportBuilder(program);
+		const analyses = new CoreAnalysisManager(program, context, report);
+		const passes = CORE_PROOF_PASSES.filter(
+			({ name }) => name === "primitive-effect-refinement",
+		).map((pass) => ({
+			...pass,
+			budget: { maxWorkItems: 30, maxEdits: 100, exhaustion: "error" as const },
+		}));
+		const scheduler = new CoreFunctionPassScheduler(
+			program,
+			context,
+			analyses,
+			report,
+			fn.id,
+			{ verification: "per-pass" },
+		);
+		const changes = scheduler.runComponent("proofs", passes);
+		expect(buildCoreControlFlow(program, fn.id).reachable.has(handler)).toBe(false);
+		for (const instruction of operations)
+			expect(fn.instructionEffectRefinement(instruction)?.effects.mayThrow).toBe(false);
+		expect(
+			analyses
+				.get(CORE_LOCAL_VALUE_KIND_ANALYSIS, { scope: "function", function: fn.id })
+				.kindMask(counter),
+		).toBe(COMPILER_VALUE_KIND_NUMBER);
+		expect(scheduler.runComponent("proofs", passes, changes)).toEqual([]);
+	});
+
 	it("keeps independent proven fields scalar until a shaped allocation boundary", () => {
 		const program = new CoreProgram(coreOpcodeRegistry, {
 			stringConstants: [[120], [102], [116], [112]],

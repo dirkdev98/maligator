@@ -3,6 +3,7 @@ import { resolveBuildConfig } from "../src/build-config.ts";
 import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
 import { CoreFunctionBuilder } from "../src/compiler/core/core-builder.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
+import { analyzeCoreCalleeTargets } from "../src/compiler/core/core-ir-call-targets.ts";
 import {
 	buildCoreControlFlow,
 	coreCanonicalValueRoots,
@@ -13,16 +14,73 @@ import {
 	buildCoreLocalFactIndex,
 } from "../src/compiler/core/core-ir-provenance.ts";
 import { analyzeCoreValueClasses } from "../src/compiler/core/core-ir-value-classes.ts";
-import { analyzeCoreValueKinds } from "../src/compiler/core/core-ir-value-kinds.ts";
+import {
+	analyzeCoreValueKinds,
+	coreValueKindDemand,
+} from "../src/compiler/core/core-ir-value-kinds.ts";
 import { coreInstructionId } from "../src/compiler/core/core-ir.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import { CoreProgram } from "../src/compiler/core/core-store.ts";
 import { compilerProgramFactsFromConfig } from "../src/compiler/shared/compiler-facts.ts";
-import { COMPILER_VALUE_KIND_NUMBER } from "../src/compiler/shared/compiler-value-kinds.ts";
+import {
+	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_TOP,
+} from "../src/compiler/shared/compiler-value-kinds.ts";
 import { inspectCoreBlockParameters } from "./helpers/core-inspection.ts";
 import { programAnalysisContext } from "./helpers/core-program-analysis.ts";
 
 describe("integer proof demand", () => {
+	it.each([false, true])(
+		"includes unknown predecessor values only when reachable=%s in full and demanded kinds",
+		(reachable) => {
+			const program = new CoreProgram(coreOpcodeRegistry);
+			const builder = new CoreFunctionBuilder(program, { parameterCount: 2 });
+			const entry = builder.createBlock([{}, {}]);
+			const live = builder.createBlock();
+			const other = builder.createBlock([{}]);
+			const merge = builder.createBlock([{}]);
+			const joined = builder.blockParameterValue(merge, 0);
+			const one = builder.appendInstruction(entry, "createNumber", [], {
+				attributes: { value: 1 },
+			})[0]!;
+			builder.setTerminator(
+				entry,
+				reachable
+					? {
+							kind: "branch",
+							condition: builder.blockParameterValue(entry, 0),
+							consequent: { block: live, arguments: [] },
+							alternate: {
+								block: other,
+								arguments: [builder.blockParameterValue(entry, 1)],
+							},
+						}
+					: { kind: "jump", edge: { block: live, arguments: [] } },
+			);
+			builder.setTerminator(live, {
+				kind: "jump",
+				edge: { block: merge, arguments: [one] },
+			});
+			builder.setTerminator(other, {
+				kind: "jump",
+				edge: { block: merge, arguments: [builder.blockParameterValue(other, 0)] },
+			});
+			builder.setTerminator(merge, { kind: "return", value: joined });
+			const fn = program.function(builder.finish(entry).function);
+			const cfg = buildCoreControlFlow(program, fn.id);
+			const expected = reachable ? COMPILER_VALUE_KIND_TOP : COMPILER_VALUE_KIND_NUMBER;
+			expect(analyzeCoreValueKinds(fn, cfg).kindMask(joined)).toBe(expected);
+			expect(
+				coreValueKindDemand(
+					fn,
+					() => cfg,
+					analyzeCoreCalleeTargets(program),
+					true,
+				)(joined),
+			).toBe(expected);
+		},
+	);
+
 	it("queries one long dependency chain without solving unrelated values or rereading edits", () => {
 		const program = new CoreProgram(coreOpcodeRegistry);
 		const builder = new CoreFunctionBuilder(program);

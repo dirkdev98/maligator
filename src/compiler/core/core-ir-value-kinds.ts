@@ -980,19 +980,17 @@ function solveCoreValueKinds(
 	for (let index = 0; index < fn.parameterCount; index++) {
 		formalParameters[fn.kernel.functionParameter(index)] = index;
 	}
-	const filteredIncoming =
-		inputs?.controlEdges === undefined
-			? undefined
-			: new Map<CoreBlockId, ReadonlyArray<CoreControlEdge>>();
+	const filteredIncoming = new Map<CoreBlockId, ReadonlyArray<CoreControlEdge>>();
 	const addParameter = (block: CoreBlockId, index: number): void => {
-		let incoming = cfg.predecessors[block] ?? [];
-		if (filteredIncoming !== undefined) {
-			const known = filteredIncoming.get(block);
-			if (known !== undefined) incoming = known;
-			else {
-				incoming = incoming.filter((edge) => inputs!.controlEdges!.has(edge));
-				filteredIncoming.set(block, incoming);
-			}
+		let incoming = filteredIncoming.get(block);
+		if (incoming === undefined) {
+			// A no-throw proof can retire a catch edge before its outgoing edges are removed.
+			incoming = (cfg.predecessors[block] ?? []).filter(
+				(edge) =>
+					cfg.reachable.has(edge.from) &&
+					(inputs?.controlEdges === undefined || inputs.controlEdges.has(edge)),
+			);
+			filteredIncoming.set(block, incoming);
 		}
 		const parameterStart = fn.kernel.blockParameterStart(block);
 		const row = parameterStart + index;
@@ -1531,7 +1529,10 @@ export function coreValueKindDemand(
 				fixed.set(value, COMPILER_VALUE_KIND_TOP);
 				return;
 			}
-			const incoming = control().predecessors[block] ?? [];
+			const cfg = control();
+			const incoming = (cfg.predecessors[block] ?? []).filter((edge) =>
+				cfg.reachable.has(edge.from),
+			);
 			if (incoming.length === 0) {
 				fixed.set(value, COMPILER_VALUE_KIND_TOP);
 				return;
