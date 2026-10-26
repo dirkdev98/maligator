@@ -11,7 +11,10 @@ import {
 	CORE_CALL_RESULT_KIND_ATTRIBUTE,
 	CORE_NORMAL_RESULT_INTEGER_RANGE_ATTRIBUTE,
 	CORE_RECORD_FIELD_KIND_ATTRIBUTE,
+	CORE_KNOWN_OWN_SLOT_ATTRIBUTE,
 } from "./core-internal-attributes.ts";
+import { coreAttributeValuesEqual } from "./core-ir-equality.ts";
+import type { CoreKnownOwnSlotCandidate } from "./core-ir-shape-provenance.ts";
 import { coreFactId } from "./core-ir.ts";
 import type {
 	AppendCoreInstructionOptions,
@@ -568,6 +571,52 @@ export class CoreEditor {
 		this.#touchBlock(this.function.instructionBlock(instruction));
 		this.#touchValues(inputs);
 		this.#markForOperation(instruction, descriptor, refinement);
+		this.#edits++;
+	}
+
+	// Guarded lowering candidates cannot refine the operation's effects.
+	setKnownOwnSlotHint(
+		instruction: CoreInstructionId,
+		candidates: ReadonlyArray<CoreKnownOwnSlotCandidate> | undefined,
+	): void {
+		this.#assertActive();
+		const fn = this.function;
+		const opcode = fn.instructionOpcodeName(instruction);
+		if (opcode !== "loadPropertyStatic" && opcode !== "storePropertyStatic")
+			throw new Error("Own-slot hints require a static property access");
+		if (
+			candidates !== undefined &&
+			(candidates.length === 0 ||
+				candidates.some(
+					(candidate) =>
+						!Number.isSafeInteger(candidate.shapeFunctionIndex) ||
+						candidate.shapeFunctionIndex < 0 ||
+						!Number.isSafeInteger(candidate.shapeInstruction) ||
+						candidate.shapeInstruction < 0 ||
+						!Number.isSafeInteger(candidate.slot) ||
+						candidate.slot < 0,
+				))
+		)
+			throw new Error("Invalid own-slot candidates");
+		const hint =
+			candidates === undefined
+				? undefined
+				: { candidates: candidates.map((candidate) => ({ ...candidate })) };
+		const current = fn.instructionAttributes(instruction);
+		if (
+			coreAttributeValuesEqual(
+				current[CORE_KNOWN_OWN_SLOT_ATTRIBUTE] ?? null,
+				hint ?? null,
+			)
+		)
+			return;
+		const attributes = { ...current };
+		if (hint === undefined) delete attributes[CORE_KNOWN_OWN_SLOT_ATTRIBUTE];
+		else attributes[CORE_KNOWN_OWN_SLOT_ATTRIBUTE] = hint;
+		fn._setInstructionAttributes(this.#mutation, instruction, attributes);
+		this.#instructions.add(instruction);
+		this.#touchBlock(fn.instructionBlock(instruction));
+		this.#domains.add("specializationInputs");
 		this.#edits++;
 	}
 

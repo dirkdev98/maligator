@@ -27,6 +27,7 @@ import {
 	CORE_LOCAL_SHAPE_PROVENANCE_ANALYSIS,
 	CORE_EXACT_OWN_SLOT_ATTRIBUTE,
 } from "../src/compiler/core/core-ir-shape-provenance.ts";
+import { CORE_LOCAL_VALUE_KIND_ANALYSIS } from "../src/compiler/core/core-ir-value-kinds.ts";
 import {
 	CORE_NO_EFFECTS,
 	CoreOpcodeRegistry,
@@ -1396,6 +1397,18 @@ describe("Core local memory, provenance, and escape optimization", () => {
 		const pass = CORE_MEMORY_PASSES.find(
 			({ name }) => name === "annotate-known-own-slots",
 		)!;
+		const before = fn.versions;
+		const operands = fn.kernel.instructionOperandStart(load);
+		const request = { scope: "function", function: fn.id } as const;
+		const control = analyses.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request);
+		const cfg = control.exceptional();
+		const memory = analyses.get(CORE_LOCAL_MEMORY_VERSIONS_ANALYSIS, request);
+		const kinds = analyses.get(CORE_LOCAL_VALUE_KIND_ANALYSIS, request);
+		const proofs = analyses.get(CORE_LOCAL_STACK_OBJECT_PROOFS_ANALYSIS, request);
+		const candidates = analyses.get(
+			CORE_LOCAL_SPECIALIZATION_CANDIDATES_ANALYSIS,
+			request,
+		);
 		const changes = new CoreFunctionPassScheduler(
 			core,
 			context,
@@ -1403,9 +1416,46 @@ describe("Core local memory, provenance, and escape optimization", () => {
 			report,
 			fn.id,
 		).runComponent("memory", [pass]);
-		expect(changes.some(({ facts }) => facts.includes(proof))).toBe(true);
+		expect(changes).toHaveLength(1);
+		expect(changes[0]!.domains).toEqual(["specializationInputs"]);
+		expect(changes[0]!.facts).toEqual([]);
+		expect(fn.versions).toEqual({
+			...before,
+			specializationInputs: before.specializationInputs + 1,
+		});
+		expect(fn.kernel.instructionOperandStart(load)).toBe(operands);
+		expect(analyses.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, request)).toBe(control);
+		expect(control.exceptional()).toBe(cfg);
+		expect(analyses.get(CORE_LOCAL_MEMORY_VERSIONS_ANALYSIS, request)).toBe(memory);
+		expect(analyses.get(CORE_LOCAL_VALUE_KIND_ANALYSIS, request)).toBe(kinds);
+		expect(analyses.get(CORE_LOCAL_STACK_OBJECT_PROOFS_ANALYSIS, request)).toBe(proofs);
+		expect(analyses.get(CORE_LOCAL_SPECIALIZATION_CANDIDATES_ANALYSIS, request)).not.toBe(
+			candidates,
+		);
 		expect(fn.instructionEffectRefinement(load)?.proof).toBe(proof);
 		expect(fn.instructionAttributes(load).knownOwnSlot).toBeDefined();
+		const hint = fn.instructionAttributes(load).knownOwnSlot;
+		const clear = CoreEditor.open(core, fn.id);
+		clear.setKnownOwnSlotHint(load, undefined);
+		expect(clear.commit().domains).toEqual(["specializationInputs"]);
+		expect(fn.instructionAttributes(load).knownOwnSlot).toBeUndefined();
+		const allocation = inspectCoreValueDefinition(fn, object);
+		if (allocation.kind !== "instruction") throw new Error("Expected object allocation");
+		const input = [
+			{ shapeFunctionIndex: fn.id, shapeInstruction: allocation.instruction, slot: 0 },
+		];
+		const restore = CoreEditor.open(core, fn.id);
+		expect(() => restore.setKnownOwnSlotHint(load, [])).toThrow(
+			"Invalid own-slot candidates",
+		);
+		restore.setKnownOwnSlotHint(load, input);
+		restore.commit();
+		input[0]!.slot = 1;
+		expect(fn.instructionAttributes(load).knownOwnSlot).toEqual(hint);
+		const same = CoreEditor.open(core, fn.id);
+		same.setKnownOwnSlotHint(load, [{ ...input[0]!, slot: 0 }]);
+		expect(same.commit().edits).toBe(0);
+		expect(fn.instructionEffectRefinement(load)?.proof).toBe(proof);
 	});
 
 	it.each(["named", "unknown"] as const)(

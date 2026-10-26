@@ -18,6 +18,7 @@ import {
 	CORE_CONTAINED_FIXED_TYPED_ARRAY_LENGTH_ATTRIBUTE,
 	CORE_EXACT_COLLECTION_RECEIVER_ATTRIBUTE,
 	CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE,
+	CORE_KNOWN_OWN_SLOT_ATTRIBUTE,
 } from "./core-internal-attributes.ts";
 import {
 	CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
@@ -51,7 +52,6 @@ import type {
 } from "./core-ir-provenance.ts";
 import {
 	CORE_EXACT_OWN_SLOT_ATTRIBUTE,
-	CORE_KNOWN_OWN_SLOT_ATTRIBUTE,
 	CORE_LOCAL_SHAPE_PROVENANCE_ANALYSIS,
 } from "./core-ir-shape-provenance.ts";
 import {
@@ -717,7 +717,7 @@ const annotateKnownOwnSlots: CoreFunctionPass = {
 	},
 	requiredAnalyses: [CORE_LOCAL_SHAPE_PROVENANCE_ANALYSIS],
 	wakesOn: ["body", "memoryEffects"],
-	changes: { cfg: false, calls: false, facts: true, representations: false },
+	changes: { cfg: false, calls: false, facts: false, representations: false },
 	budget: PROVENANCE_BUDGET,
 	run(context) {
 		const { program, item } = context;
@@ -761,20 +761,8 @@ const annotateKnownOwnSlots: CoreFunctionPass = {
 				)
 			)
 				continue;
-			const nextAttributes = { ...attributes };
-			delete nextAttributes[CORE_KNOWN_OWN_SLOT_ATTRIBUTE];
-			if (next !== undefined) nextAttributes[CORE_KNOWN_OWN_SLOT_ATTRIBUTE] = next;
 			editor ??= CoreEditor.open(program, item.function);
-			editor.replaceInstruction(
-				instruction,
-				opcode,
-				materializeInstructionOperands(fn, instruction),
-				{
-					attributes: nextAttributes,
-					sourcePosition: fn.instructionSourcePosition(instruction),
-					effectRefinement: fn.instructionEffectRefinement(instruction),
-				},
-			);
+			editor.setKnownOwnSlotHint(instruction, next?.candidates);
 		}
 		return editor?.commit();
 	},

@@ -115,6 +115,11 @@ return-kind worklist. CFG, call targets, effects, provenance and memory versions
 remain reusable. Ordinary fact edits, including effect-only proofs, do not dirty
 the return-kind worklist.
 
+Own-slot candidate hints change only specialization inputs. They preserve operand
+storage, effect proofs and structural analyses while invalidating specialization
+admission and its lazy details. A hint can select guarded lowering; it cannot refine
+the access's effects or change its normal-result contract.
+
 ### Sealed boundary
 
 Sealing ends Core construction and optimization and returns a read-only
