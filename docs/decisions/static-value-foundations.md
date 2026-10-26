@@ -787,6 +787,11 @@ storage bounds. Closed shape ordinals have their own int32 ABI.
 Rooted local-object scalarization also joins integer and floating writers into
 double field storage, using numeric widening on incoming edges. It retains signed
 zero and wide Number values without an unsupported boxed-to-scalar move.
+Conditional own-slot call summaries also admit scalar operators whose effect
+proofs exclude writes, suspension and user-code reentry. Residual reads, throws
+and collection remain conservative. Every access must resolve to an own data slot
+before a caller uses that summary; removing an operator's effect proof withdraws
+it even when the function body is unchanged.
 
 Own-field observations publish initial integer bounds through the same
 normal-result contract as calls. One function worklist converges scalar returns

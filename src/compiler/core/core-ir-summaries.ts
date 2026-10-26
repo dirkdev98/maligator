@@ -357,7 +357,17 @@ function conditionalOwnSlotEffects(
 				(attributes.operator === "typeof" ||
 					attributes.operator === "!" ||
 					attributes.operator === "void"));
-		if (!OWN_SLOT_LEAF_OPERATIONS.has(opcode) && !noncoerciveOperator) return undefined;
+		const provedPrimitiveOperator =
+			(opcode === "unary" || opcode === "binary") &&
+			!effects.callsUserCode &&
+			!effects.maySuspend &&
+			effects.writes.length === 0;
+		if (
+			!OWN_SLOT_LEAF_OPERATIONS.has(opcode) &&
+			!noncoerciveOperator &&
+			!provedPrimitiveOperator
+		)
+			return undefined;
 		if (noncoerciveOperator) {
 			residualEffects = joinEffectSummaries(residualEffects, {
 				...NO_EFFECT_SUMMARY,

@@ -37,20 +37,26 @@ describe("conditional own-slot call effects", () => {
 				if (mode === "separate calls") {
 					const name = (index: number) =>
 						String.fromCharCode(...(programImage.runtime.stringConstants[index] ?? []));
-					const caller = programImage.native.functions.find(
-						(fn) => name(fn.body.nameStringIndex) === "untouched",
-					)!;
-					expect(caller).toBeDefined();
-					expect(
-						caller.body.instructions.some((instruction) => instruction.opcode === "CALL"),
-					).toBe(true);
-					expect(
-						caller.body.instructions.some(
-							(instruction) =>
-								instruction.opcode === "LOAD_PROPERTY_STATIC" &&
-								name(instruction.stringIndex) === "x",
-						),
-					).toBe(false);
+					for (const callerName of ["untouched", "primitiveUntouched"]) {
+						const caller = programImage.native.functions.find(
+							(fn) => name(fn.body.nameStringIndex) === callerName,
+						)!;
+						expect(caller).toBeDefined();
+						expect(
+							caller.body.instructions.some(
+								(instruction) => instruction.opcode === "CALL",
+							),
+						).toBe(true);
+						expect(
+							caller.body.instructions.some(
+								(instruction) =>
+									instruction.opcode.startsWith("LOAD_PROPERTY_STATIC") &&
+									"stringIndex" in instruction &&
+									typeof instruction.stringIndex === "number" &&
+									name(instruction.stringIndex) === "x",
+							),
+						).toBe(false);
+					}
 				}
 				for (const binary of [compiled, interpreted])
 					assertExactLines(

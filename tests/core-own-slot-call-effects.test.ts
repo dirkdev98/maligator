@@ -11,6 +11,7 @@ import { coreOpcodeRegistry } from "../src/compiler/core/core-ir-opcodes.ts";
 import { coreInstructionEffects } from "../src/compiler/core/core-ir-opcodes.ts";
 import { buildCoreProvenance } from "../src/compiler/core/core-ir-provenance.ts";
 import { verifyCoreProgram } from "../src/compiler/core/core-ir-verifier.ts";
+import { CORE_NO_EFFECTS } from "../src/compiler/core/core-ir.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import { forwardCoreOwnSlotCallLoads } from "../src/compiler/core/core-own-slot-call-loads.ts";
 import { CORE_PROGRAM_SUMMARIES_ANALYSIS } from "../src/compiler/core/core-program-flow-analysis.ts";
@@ -116,6 +117,75 @@ function appendWriter(program: CoreProgram, receiver = false) {
 }
 
 describe("conditional own-slot call effects", () => {
+	it.each(["value&255", "-value", "value+1", "value<9"])(
+		"forwards an untouched slot across a helper with proved primitive effects (%s)",
+		(expression) => {
+			const core = optimizeSemanticProgramToCore(
+				analyzeSourceAndRunSemanticAnalysis(
+					`function untouched(){const write=(o)=>{for(let value=0;value<3;value++){o.y=${expression};}};const o={x:11,y:0};write(o);return o.x;}globalThis.result=untouched();`,
+					"/entry.js",
+				),
+				{
+					facts: programAnalysisContext().facts,
+					optimization: "development",
+					coreOptimizationBenchmarkAblation: { family: "inlining-cross-call" },
+					coreVerification: "per-pass",
+				},
+				(_phase, run) => run(),
+			);
+			const caller = coreFunctionNamed(core.program, "untouched")!;
+			expect(
+				[...caller.instructionIds()].some(
+					(instruction) =>
+						caller.instructionKind(instruction) === "operation" &&
+						caller.instructionOpcodeName(instruction) === "call",
+				),
+			).toBe(true);
+			expect(
+				[...caller.instructionIds()].some(
+					(instruction) =>
+						caller.instructionKind(instruction) === "operation" &&
+						caller.instructionOpcodeName(instruction) === "loadPropertyStatic",
+				),
+			).toBe(false);
+		},
+	);
+	it("withdraws forwarding after a primitive effect proof is removed", () => {
+		const { program, analyses, summaries } = ownSlotProgram();
+		const writer = appendWriter(program);
+		const edit = CoreEditor.open(program, writer.fn.id);
+		const numeric = edit.insertInstruction(
+			writer.entry,
+			writer.store,
+			"unary",
+			[writer.fn.kernel.functionParameter(1)],
+			{ attributes: { operator: "+" } },
+		).instruction;
+		const proof = edit.addFact({
+			kind: "test-primitive-effects",
+			value: true,
+			claims: [{ kind: "effect", instruction: numeric, effects: CORE_NO_EFFECTS }],
+			validity: { kind: "summary", digest: "numeric-parameter" },
+			obligations: [],
+			origin: "test",
+		});
+		edit.setInstructionEffectRefinement(numeric, { effects: CORE_NO_EFFECTS, proof });
+		edit.commit();
+		expect(summaries().summary(writer.fn.id)!.conditionalOwnSlotEffects).toBeDefined();
+		const first = appendFieldCaller(program, writer.fn.id);
+		expect(forwardCoreOwnSlotCallLoads(program, analyses)).toEqual([first.fn.id]);
+		const bodyVersion = writer.fn.version("body");
+		const withdraw = CoreEditor.open(program, writer.fn.id);
+		withdraw.clearInstructionEffectRefinement(numeric);
+		withdraw.removeFact(proof);
+		withdraw.commit();
+		expect(writer.fn.version("body")).toBe(bodyVersion);
+		expect(summaries().summary(writer.fn.id)!.conditionalOwnSlotEffects).toBeUndefined();
+		const next = appendFieldCaller(program, writer.fn.id);
+		forwardCoreOwnSlotCallLoads(program, analyses);
+		expect(next.fn.isInstructionLive(next.load)).toBe(true);
+		verifyCoreProgram(program, { stage: "pre-target" }, programAnalysisContext());
+	});
 	it("forwards the untouched field while retaining the call, allocation and written-field load", () => {
 		const { program, analyses } = ownSlotProgram();
 		const writer = appendWriter(program);
