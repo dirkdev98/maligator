@@ -319,6 +319,14 @@ Unobserved final call outputs need no native root or post-call publication. Ever
 definition must return its final value before assigning that destination; source
 GC maps remain complete, and borrowed helper storage, rest-call state and reused
 inputs keep their roots. Scheduling barriers alone do not extend result lifetimes.
+Private-container lifetime checks consume the full value-kind union: excluding
+Object and Symbol proves that a field cannot be held weakly. This admits nullable
+and optional primitive fields to own-slot write refinement, scalar replacement and
+allocation sinking, and omits `rootUse` for overwritten primitive occupants.
+Objects and all Symbol alternatives retain their lifetime barriers; the kind mask
+does not distinguish registered Symbols. This follows
+[CanBeHeldWeakly](https://tc39.es/ecma262/multipage/executable-code-and-execution-contexts.html#sec-canbeheldweakly)
+and leaves ordinary GC roots for values that remain live through later reads.
 Typeof comparisons consume the operand kind independently of effects and use direct
 category predicates. An object comparison on a primitive union can only match
 through null; an Object-or-null union needs only the callability test, while other

@@ -338,6 +338,16 @@ export function compilerValueKindMaskIsSubset(
 	return value !== 0 && (value & ~allowed) === 0;
 }
 
+// A kind mask cannot distinguish registered Symbols from weakly holdable Symbols.
+export function compilerValueKindCannotBeHeldWeakly(
+	mask: CompilerValueKindMask,
+): boolean {
+	return compilerValueKindMaskIsSubset(
+		mask,
+		COMPILER_VALUE_KIND_TOP & ~(COMPILER_VALUE_KIND_OBJECT | COMPILER_VALUE_KIND_SYMBOL),
+	);
+}
+
 export function compilerBuiltinInputKindsAreValid(
 	masks: ReadonlyArray<CompilerValueKindMask>,
 	operandCount: number,

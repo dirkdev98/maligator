@@ -190,4 +190,63 @@ const thrown = exceptional(token);
 check(thrown[0], 11);
 check(thrown[1], token);
 check(exceptional(0)[1], 0);
+
+function primitiveUnionLifetime(flag, suffix, callback) {
+	const oldValue = flag ? 17 : "old:" + suffix;
+	const object = { value: oldValue };
+	callback();
+	object.value = flag ? undefined : "live:" + suffix;
+	callback();
+	return object.value;
+}
+function bigintUnionLifetime(flag, callback) {
+	const object = { value: flag ? 12345678901234567890n : null };
+	callback();
+	object.value = flag ? undefined : 98765432109876543210n;
+	callback();
+	return object.value;
+}
+function collectUnionFields() {
+	if (typeof collect === "function") collect();
+}
+check(primitiveUnionLifetime(false, "payload", collectUnionFields), "live:payload");
+check(primitiveUnionLifetime(true, "payload", collectUnionFields), undefined);
+check(bigintUnionLifetime(false, collectUnionFields), 98765432109876543210n);
+check(bigintUnionLifetime(true, collectUnionFields), undefined);
+let unionCoercions = 0;
+let unionCallbacks = 0;
+const unionSuffix = {
+	toString() {
+		unionCoercions++;
+		return "converted";
+	},
+};
+check(
+	primitiveUnionLifetime(false, unionSuffix, () => unionCallbacks++),
+	"live:converted",
+);
+check(unionCoercions, 2);
+check(unionCallbacks, 2);
+for (const failAt of [1, 2]) {
+	unionCoercions = 0;
+	unionCallbacks = 0;
+	const failure = { marker: "union coercion" };
+	try {
+		primitiveUnionLifetime(
+			false,
+			{
+				toString() {
+					if (++unionCoercions === failAt) throw failure;
+					return "converted";
+				},
+			},
+			() => unionCallbacks++,
+		);
+		throw new Error("missing coercion failure");
+	} catch (error) {
+		check(error, failure);
+	}
+	check(unionCoercions, failAt);
+	check(unionCallbacks, failAt - 1);
+}
 console.log("own-slot-call-effects PASS");

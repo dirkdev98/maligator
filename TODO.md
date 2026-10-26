@@ -160,8 +160,12 @@ The independent target boundary and current storage contract are recorded in
       locals; integer field bounds join every virtual writer and select i32 only
       when the full storage lifetime excludes negative zero and fits signed int32.
       Boxed unions without heap kinds also omit GC roots. Heap fields stay rooted,
-      and materialized records retain ordinary object access. Parameters
-      without observers omit the producer realm and union-shape pointers. Shape
+      and materialized records retain ordinary object access. Field values
+      whose kind unions exclude Object and Symbol no longer extend overwritten
+      field lifetimes; own-slot refinement, scalar replacement and allocation
+      sinking consume the same weak-holdability bound. Object and Symbol unions
+      keep lifetime barriers, and fields used after a safepoint keep their GC roots.
+      Parameters without observers omit the producer realm and union-shape pointers. Shape
       ordinals use i32 storage throughout the C ABI and materialization. Callers
       omit the producer root when neither a caller/callee observer nor backend
       fallback needs materialization. The scanner workload's whole C is now 111,548

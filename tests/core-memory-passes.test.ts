@@ -49,6 +49,12 @@ import { optimizeSemanticProgramToCore } from "../src/compiler/pipeline/compile-
 import { compileEntrypoint } from "../src/compiler/pipeline/compile-program.ts";
 import { builtinWorldAssumptions } from "../src/compiler/shared/builtin-assumptions.ts";
 import { conservativeCompilerProgramFacts } from "../src/compiler/shared/compiler-facts.ts";
+import {
+	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_UNDEFINED,
+	COMPILER_VALUE_KIND_OBJECT,
+	COMPILER_VALUE_KIND_SYMBOL,
+} from "../src/compiler/shared/compiler-value-kinds.ts";
 import { knownOperationCall } from "../src/compiler/shared/known-operations.ts";
 import {
 	inspectCoreBlockParameters,
@@ -1406,6 +1412,47 @@ describe("Core local memory, provenance, and escape optimization", () => {
 					callsUserCode: false,
 				});
 			else expect(fn.instructionEffectRefinement(load)).toBeUndefined();
+		},
+	);
+
+	it.each([
+		[COMPILER_VALUE_KIND_NUMBER | COMPILER_VALUE_KIND_UNDEFINED, true],
+		[COMPILER_VALUE_KIND_OBJECT | COMPILER_VALUE_KIND_UNDEFINED, false],
+		[COMPILER_VALUE_KIND_SYMBOL | COMPILER_VALUE_KIND_UNDEFINED, false],
+	] as const)(
+		"refines an own-slot write for normal-result mask %i only when lifetime-safe (%s)",
+		(mask, refined) => {
+			const core = program();
+			const builder = new CoreFunctionBuilder(core, { parameterCount: 1 });
+			const entry = builder.createBlock([{}]);
+			const receiver = builder.appendInstruction(entry, "createUndefined", [])[0]!;
+			const value = builder.appendInstruction(entry, "call", [
+				builder.blockParameterValue(entry, 0),
+				receiver,
+			])[0]!;
+			const producer = builder.bodyInstructionIds(entry).at(-1)!;
+			const object = builder.appendInstruction(entry, "createObjectShaped", [value], {
+				attributes: { keyStringIndices: [0] },
+			})[0]!;
+			builder.appendInstruction(entry, "storePropertyStatic", [object, value], {
+				attributes: { stringIndex: 0 },
+			});
+			const write = builder.bodyInstructionIds(entry).at(-1)!;
+			builder.setTerminator(entry, { kind: "return", value });
+			const fn = core.function(builder.finish(entry).function);
+			const editor = CoreEditor.open(core, fn.id);
+			editor.setNormalResultFacts(producer, { mask });
+			const initial = editor.commit();
+			const report = new CoreOptimizationReportBuilder(core);
+			const analyses = new CoreAnalysisManager(core, context, report);
+			const pass = CORE_MEMORY_PASSES.find(
+				({ name }) => name === "refine-contained-own-slot-accesses",
+			)!;
+			new CoreFunctionPassScheduler(core, context, analyses, report, fn.id, {
+				optionalMaxRunsPerWorkItem: 1,
+			}).runComponent("memory", [pass], [initial]);
+			expect(fn.instructionEffectRefinement(write) !== undefined).toBe(refined);
+			expect(fn.instructionEffectRefinement(producer)).toBeUndefined();
 		},
 	);
 

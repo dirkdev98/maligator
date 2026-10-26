@@ -1,3 +1,4 @@
+import { compilerValueKindCannotBeHeldWeakly } from "../shared/compiler-value-kinds.ts";
 import {
 	foldLiteralArrayLengths,
 	prepareFreshArrayValues,
@@ -47,7 +48,6 @@ import type {
 	CoreLocalFactBundle,
 	CoreLocalFactIndex,
 	CoreNamedAllocationLayout,
-	CoreProvenance,
 } from "./core-ir-provenance.ts";
 import {
 	CORE_EXACT_OWN_SLOT_ATTRIBUTE,
@@ -890,9 +890,9 @@ const refineContainedOwnSlotAccesses: CoreFunctionPass = {
 			if (mode === "write") {
 				const cannotBeHeldWeakly = (value: CoreValueId): boolean =>
 					provenance.cannotBeHeldWeakly(value) ||
-					(kinds ??= context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS)).scalarKind(
-						value,
-					) !== undefined;
+					compilerValueKindCannotBeHeldWeakly(
+						(kinds ??= context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS)).kindMask(value),
+					);
 				const initial =
 					exact.layout.kind === "named-slots"
 						? exact.layout.initialValues[exact.slot]
@@ -1610,7 +1610,7 @@ function scalarizeRootedLayout(
 	program: CoreProgram,
 	fn: CoreFunctionStore,
 	layout: CoreNamedAllocationLayout,
-	provenance: CoreProvenance,
+	cannotBeHeldWeakly: (value: CoreValueId) => boolean,
 	control: CoreControlFlow,
 	aliases: ReadonlySet<CoreValueId>,
 	operationUses: ReadonlyArray<{
@@ -1781,7 +1781,7 @@ function scalarizeRootedLayout(
 	const hasWeaklyHoldableOccupant = [
 		...layout.initialValues,
 		...stores.map(({ value }) => value),
-	].some((value) => !provenance.cannotBeHeldWeakly(value));
+	].some((value) => !cannotBeHeldWeakly(value));
 	if (hasWeaklyHoldableOccupant) {
 		const accesses = new Set([
 			...stores.map(({ instruction }) => instruction),
@@ -1899,7 +1899,7 @@ function scalarizeRootedLayout(
 				...new Set(
 					[...current.values()].map(resolve).filter(
 						(value) =>
-							!provenance.cannotBeHeldWeakly(value) &&
+							!cannotBeHeldWeakly(value) &&
 							(effects.maySuspend ||
 								!(() => {
 									const operandStart = fn.kernel.instructionOperandStart(instruction);
@@ -2015,7 +2015,14 @@ const scalarizeRootedContainedObjects: CoreFunctionPass = {
 		},
 	},
 	requiredAnalyses: [CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, CORE_LOCAL_FACT_BUNDLE_ANALYSIS],
-	wakesOn: ["body", "cfg", "exceptionFlow", "memoryEffects", "representations"],
+	wakesOn: [
+		"body",
+		"cfg",
+		"exceptionFlow",
+		"memoryEffects",
+		"normalResults",
+		"representations",
+	],
 	changes: { cfg: true, calls: true, facts: true, representations: false },
 	budget: PROVENANCE_BUDGET,
 	run(context) {
@@ -2024,6 +2031,9 @@ const scalarizeRootedContainedObjects: CoreFunctionPass = {
 		const facts = context.analysis(CORE_LOCAL_FACT_BUNDLE_ANALYSIS);
 		const provenance = facts.provenance;
 		const control = context.analysis(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS).exceptional();
+		const cannotBeHeldWeakly = (value: CoreValueId): boolean =>
+			provenance.cannotBeHeldWeakly(value) ||
+			compilerValueKindCannotBeHeldWeakly(facts.valueKinds.kindMask(value));
 		for (const layout of provenance.layouts) {
 			if (layout.kind !== "named-slots") continue;
 			if (provenance.allocationOf(layout.result) !== layout) continue;
@@ -2034,7 +2044,7 @@ const scalarizeRootedContainedObjects: CoreFunctionPass = {
 				program,
 				fn,
 				layout,
-				provenance,
+				cannotBeHeldWeakly,
 				control,
 				new Set(aliases),
 				facts.index.uses.get(root) ?? [],
@@ -2382,7 +2392,11 @@ const sinkConditionalObjectAllocations: CoreFunctionPass = {
 			}
 			// Keeping object or symbol fields live longer can change weak-reference observations.
 			for (let index = scalarStart; index < operandCount; index++) {
-				if (kinds.scalarKind(fn.kernel.operandAt(operandStart + index)) === undefined) {
+				if (
+					!compilerValueKindCannotBeHeldWeakly(
+						kinds.kindMask(fn.kernel.operandAt(operandStart + index)),
+					)
+				) {
 					eligible = false;
 					break;
 				}
@@ -2402,8 +2416,12 @@ const sinkConditionalObjectAllocations: CoreFunctionPass = {
 					if (
 						fn.instructionEffectRefinement(next) !== undefined ||
 						factInstructions.has(next) ||
-						kinds.scalarKind(instructionOperandAt(fn, next, 1)!) === undefined ||
-						kinds.scalarKind(instructionOperandAt(fn, next, 2)!) === undefined
+						!compilerValueKindCannotBeHeldWeakly(
+							kinds.kindMask(instructionOperandAt(fn, next, 1)!),
+						) ||
+						!compilerValueKindCannotBeHeldWeakly(
+							kinds.kindMask(instructionOperandAt(fn, next, 2)!),
+						)
 					)
 						eligible = false;
 				}
@@ -2457,8 +2475,9 @@ const scalarReplaceContainedAggregates: CoreFunctionPass = {
 		const lifetimeIndependent = (value: CoreValueId): boolean => {
 			if (
 				provenance().cannotBeHeldWeakly(value) ||
-				(kinds ??= context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS)).scalarKind(value) !==
-					undefined
+				compilerValueKindCannotBeHeldWeakly(
+					(kinds ??= context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS)).kindMask(value),
+				)
 			)
 				return true;
 			const root = facts().roots.get(value) ?? value;
