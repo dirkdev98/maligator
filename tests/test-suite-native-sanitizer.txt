@@ -236,6 +236,7 @@ tests/native/number-record-layouts.test.ts
 tests/native/string-span-identity.test.ts
 tests/native/string-span-concat.test.ts
 tests/native/own-slot-collections.test.ts
+tests/native/own-slot-call-effects.test.ts
 tests/native/string-span-replace.test.ts
 tests/native/string-span-search-primitives.test.ts
 tests/native/record-field-kinds.test.ts

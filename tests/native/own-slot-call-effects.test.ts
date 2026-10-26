@@ -11,6 +11,13 @@ import {
 	STRESS_ENV,
 } from "../../src/test-harness.ts";
 
+const verificationEnv = {
+	MAL_HOST_GC: "1",
+	...(process.env.MAL_ASAN === "1" || process.env.MAL_UBSAN === "1"
+		? { MAL_GC_VERIFY: "1" }
+		: STRESS_ENV),
+};
+
 describe("conditional own-slot call effects", () => {
 	it.each(["production", "separate calls"] as const)(
 		"preserves slot effects and observations under GC stress with %s",
@@ -59,10 +66,9 @@ describe("conditional own-slot call effects", () => {
 					}
 				}
 				for (const binary of [compiled, interpreted])
-					assertExactLines(
-						runToStdout(binary, { env: { MAL_HOST_GC: "1", ...STRESS_ENV } }),
-						["own-slot-call-effects PASS"],
-					);
+					assertExactLines(runToStdout(binary, { env: verificationEnv }), [
+						"own-slot-call-effects PASS",
+					]);
 			} finally {
 				rmSync(outDir, { recursive: true, force: true });
 			}
