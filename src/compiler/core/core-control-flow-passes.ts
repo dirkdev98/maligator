@@ -1,3 +1,4 @@
+import { compilerIntegerRangeIsInt32 } from "../shared/integer-range.ts";
 import type { CompilerIntegerRange } from "../shared/integer-range.ts";
 import { CoreEditor } from "./core-editor.ts";
 import { CORE_FUNCTION_HAS_BACKEDGES } from "./core-function-features.ts";
@@ -314,21 +315,22 @@ function hasRelationalConstantComparison(fn: CoreFunctionStore): boolean {
 }
 
 function hasLoopScalarRepresentationConsumer(fn: CoreFunctionStore): boolean {
-	let boxedParameter = false;
+	let numericParameter = false;
 	for (const block of fn.blockIds()) {
 		const start = fn.kernel.blockParameterStart(block);
 		const count = fn.kernel.blockParameterCount(block);
 		for (let index = 0; index < count; index++) {
-			if (
-				fn.valueRepresentation(fn.kernel.blockParameterValue(start + index)) === "boxed"
-			) {
-				boxedParameter = true;
+			const representation = fn.valueRepresentation(
+				fn.kernel.blockParameterValue(start + index),
+			);
+			if (representation === "boxed" || representation === "f64") {
+				numericParameter = true;
 				break;
 			}
 		}
-		if (boxedParameter) break;
+		if (numericParameter) break;
 	}
-	if (!boxedParameter) return false;
+	if (!numericParameter) return false;
 	for (const instruction of fn.instructionIds()) {
 		if (fn.instructionKind(instruction) !== "operation") continue;
 		const opcode = fn.instructionOpcodeName(instruction);
@@ -1118,6 +1120,9 @@ const LOOP_SCALAR_CONSUMERS: ReadonlySet<string> = new Set([
 	"storePropertyStatic",
 	"storeCaptured",
 	"throwIfTdz",
+	"yield",
+	"terminalYield",
+	"await",
 ]);
 
 const LOOP_SCALAR_PRODUCERS: ReadonlySet<string> = new Set([
@@ -1129,143 +1134,167 @@ const LOOP_SCALAR_PRODUCERS: ReadonlySet<string> = new Set([
 	"typeofCompare",
 ]);
 
+function valueWebs(capacity: number) {
+	const parents = new Uint32Array(capacity);
+	for (let index = 0; index < capacity; index++) parents[index] = index;
+	const ranks = new Uint8Array(capacity);
+	const root = (value: number): number => {
+		let current = value;
+		while (parents[current] !== current) current = parents[current]!;
+		while (parents[value] !== current) {
+			const next = parents[value]!;
+			parents[value] = current;
+			value = next;
+		}
+		return current;
+	};
+	return {
+		root,
+		connect(left: CoreValueId, right: CoreValueId) {
+			let a = root(left);
+			let b = root(right);
+			if (a === b) return;
+			if (ranks[a]! < ranks[b]!) [a, b] = [b, a];
+			parents[b] = a;
+			if (ranks[a] === ranks[b]) ranks[a] = ranks[a]! + 1;
+		},
+	};
+}
+
 const selectLoopScalarRepresentations: CoreFunctionPass = {
 	name: "loop-scalar-representation-selection",
 	stage: "control-flow",
 	requiredFunctionFeatures: CORE_FUNCTION_HAS_BACKEDGES,
 	requiredFunctionOpcodesAny: ["binary", "unary"],
 	admission: {
-		predicate: "boxed loop parameter with an induction update operation",
+		predicate: "boxed or floating loop parameter with an induction update operation",
 		hasOpportunity({ program, function: functionId }) {
 			return hasLoopScalarRepresentationConsumer(program.function(functionId));
 		},
 	},
-	requiredAnalyses: [
-		CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
-		CORE_LOOP_INDUCTION_ANALYSIS,
-		CORE_LOCAL_VALUE_KIND_ANALYSIS,
-	],
+	requiredAnalyses: [CORE_LOOP_INDUCTION_ANALYSIS, CORE_LOCAL_VALUE_KIND_ANALYSIS],
 	wakesOn: ["body", "cfg", "representations"],
 	changes: { ...CONTROL_FLOW_CHANGES, representations: true },
 	budget: CONTROL_FLOW_BUDGET,
 	run(context) {
 		const { program, item } = context;
 		const fn = program.function(item.function);
-		const inductions = context.analysis(CORE_LOOP_INDUCTION_ANALYSIS).inductions;
+		const ranges = context.analysis(CORE_LOOP_INDUCTION_ANALYSIS);
+		const { inductions } = ranges;
 		if (inductions.length === 0) return undefined;
-		const cfg = context.analysis(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS).exceptional();
 		const kinds = context.analysis(CORE_LOCAL_VALUE_KIND_ANALYSIS);
 		const inductionValues = new Set(
 			inductions.flatMap(({ value, initial, update }) => [value, initial, update]),
 		);
+		const numericCache = new Uint8Array(fn.valueCapacity);
 		const numeric = (value: CoreValueId): boolean => {
-			if (inductionValues.has(value)) return true;
-			const scalar = kinds.scalarKind(value);
-			return scalar === "number";
+			if (numericCache[value] === 0)
+				numericCache[value] =
+					inductionValues.has(value) || kinds.scalarKind(value) === "number" ? 2 : 1;
+			return numericCache[value] === 2;
 		};
-		const neighbors = Array.from(
-			{ length: fn.valueCapacity },
-			() => new Set<CoreValueId>(),
-		);
-		const connect = (left: CoreValueId, right: CoreValueId): void => {
-			neighbors[left]!.add(right);
-			neighbors[right]!.add(left);
+		const discovery = valueWebs(fn.valueCapacity);
+		const storage = valueWebs(fn.valueCapacity);
+		const connect = (left: CoreValueId, right: CoreValueId, identity: boolean): void => {
+			if (!numeric(left) || !numeric(right)) return;
+			discovery.connect(left, right);
+			// A shared literal is rematerializable; it must not tie unrelated storage widths.
+			if (
+				identity &&
+				numberConstant(fn, left) === undefined &&
+				numberConstant(fn, right) === undefined
+			)
+				storage.connect(left, right);
 		};
-		for (let blockIndex = 0; blockIndex < fn.blockCapacity; blockIndex++) {
-			const block = coreBlockId(blockIndex);
-			if (fn.kernel.blockLive(block) === 0) continue;
-			const incoming = (cfg.predecessors[block] ?? []).filter(
-				({ kind }) => kind === "ordinary",
-			);
-			const parameterStart = fn.kernel.blockParameterStart(block);
-			const parameterCount = fn.kernel.blockParameterCount(block);
-			for (let index = 0; index < parameterCount; index++) {
-				const parameter = fn.kernel.blockParameterValue(parameterStart + index);
-				for (const edge of incoming) {
-					const argument = edge.arguments[index];
-					if (argument !== undefined) connect(parameter, argument);
-				}
-			}
-			const handlerBlock = fn.kernel.blockHandlerBlock(block);
-			if (handlerBlock !== undefined) {
-				const handlerParameterStart = fn.kernel.blockParameterStart(handlerBlock);
-				const handlerParameterCount = fn.kernel.blockParameterCount(handlerBlock);
-				const argumentStart = fn.kernel.blockHandlerArgumentStart(block);
-				const argumentCount = fn.kernel.blockHandlerArgumentCount(block);
-				for (let index = 0; index < argumentCount; index++) {
-					if (index + 1 < handlerParameterCount) {
-						connect(
-							fn.kernel.blockParameterValue(handlerParameterStart + index + 1),
-							fn.kernel.handlerArgumentAt(argumentStart + index),
+		const edges = (
+			visit: (argument: CoreValueId, target: CoreValueId, handler: boolean) => void,
+		) => {
+			for (const block of fn.blockIds()) {
+				const terminator = fn.blockTerminator(block);
+				const start = fn.kernel.terminatorEdgeStart(terminator);
+				const count = fn.kernel.terminatorEdgeCount(terminator);
+				for (let offset = 0; offset < count; offset++) {
+					const row = start + offset;
+					const target = fn.kernel.terminatorEdgeBlock(row);
+					const parameters = fn.kernel.blockParameterStart(target);
+					const arguments_ = fn.kernel.terminatorEdgeArgumentStart(row);
+					for (let index = 0; index < fn.kernel.terminatorEdgeArgumentCount(row); index++)
+						visit(
+							fn.kernel.operandAt(arguments_ + index),
+							fn.kernel.blockParameterValue(parameters + index),
+							false,
 						);
-					}
 				}
+				const handler = fn.kernel.blockHandlerBlock(block);
+				if (handler === undefined) continue;
+				const parameters = fn.kernel.blockParameterStart(handler);
+				const arguments_ = fn.kernel.blockHandlerArgumentStart(block);
+				for (let index = 0; index < fn.kernel.blockHandlerArgumentCount(block); index++)
+					visit(
+						fn.kernel.handlerArgumentAt(arguments_ + index),
+						fn.kernel.blockParameterValue(parameters + index + 1),
+						true,
+					);
 			}
-			const terminator = fn.blockTerminator(block);
-			for (
-				let cursor = fn.kernel.blockFirstInstruction(block);
-				cursor >= 0 && cursor !== terminator;
-				cursor = fn.kernel.instructionNext(coreInstructionId(cursor))
-			) {
-				const instruction = coreInstructionId(cursor);
-				const opcode = fn.instructionOpcodeName(instruction);
-				if (!LOOP_SCALAR_OPERATIONS.has(opcode)) continue;
-				const operandStart = fn.kernel.instructionOperandStart(instruction);
-				const operandCount = fn.kernel.instructionOperandCount(instruction);
-				const resultStart = fn.kernel.instructionResultStart(instruction);
-				const resultCount = fn.kernel.instructionResultCount(instruction);
-				if (
-					opcode === "move" &&
-					operandCount === 1 &&
-					resultCount === 1 &&
-					fn.valueRepresentation(fn.kernel.operandAt(operandStart)) !==
-						fn.valueRepresentation(fn.kernel.resultAt(resultStart))
-				)
-					continue;
-				let firstConnected: CoreValueId | undefined;
-				for (let index = 0; index < operandCount + resultCount; index++) {
-					const value =
-						index < operandCount
-							? fn.kernel.operandAt(operandStart + index)
-							: fn.kernel.resultAt(resultStart + index - operandCount);
-					if (!numeric(value)) continue;
-					if (firstConnected === undefined) firstConnected = value;
-					else connect(firstConnected, value);
-				}
-			}
-		}
-		const selected = new Set<CoreValueId>();
-		const pending: Array<CoreValueId> = [];
-		const add = (value: CoreValueId): void => {
-			if (selected.has(value) || !numeric(value)) return;
-			selected.add(value);
-			pending.push(value);
 		};
-		for (const induction of inductions) {
-			add(induction.value);
-			add(induction.initial);
-			add(induction.update);
+		edges((argument, target) => connect(argument, target, true));
+		for (const instruction of fn.instructionIds()) {
+			if (fn.instructionKind(instruction) !== "operation") continue;
+			const opcode = fn.instructionOpcodeName(instruction);
+			if (!LOOP_SCALAR_OPERATIONS.has(opcode)) continue;
+			const operandStart = fn.kernel.instructionOperandStart(instruction);
+			const operandCount = fn.kernel.instructionOperandCount(instruction);
+			const resultStart = fn.kernel.instructionResultStart(instruction);
+			const resultCount = fn.kernel.instructionResultCount(instruction);
+			if (
+				opcode === "move" &&
+				operandCount === 1 &&
+				resultCount === 1 &&
+				fn.valueRepresentation(fn.kernel.operandAt(operandStart)) !==
+					fn.valueRepresentation(fn.kernel.resultAt(resultStart))
+			)
+				continue;
+			let first: CoreValueId | undefined;
+			for (let index = 0; index < operandCount + resultCount; index++) {
+				const value =
+					index < operandCount
+						? fn.kernel.operandAt(operandStart + index)
+						: fn.kernel.resultAt(resultStart + index - operandCount);
+				if (!numeric(value)) continue;
+				if (first === undefined) first = value;
+				else connect(first, value, opcode === "move");
+			}
 		}
-		for (let cursor = 0; cursor < pending.length; cursor++) {
-			for (const neighbor of neighbors[pending[cursor]!]!) add(neighbor);
-		}
+		const inductionRoots = new Set([...inductionValues].map(discovery.root));
+		const selected = [...fn.valueIds()].filter(
+			(value) => inductionRoots.has(discovery.root(value)) && numeric(value),
+		);
+		const blocked = new Set<number>();
+		const representations = new Map<number, CoreRepresentation>();
 		for (const value of selected) {
+			const root = storage.root(value);
+			if (numberConstant(fn, value) !== undefined) continue;
+			// Storage is shared across all observations, including the loop's final update.
+			const integer =
+				kinds.exactScalar(value) === "int32" ||
+				compilerIntegerRangeIsInt32(ranges.range(value));
+			if (!representations.has(root) || !integer)
+				representations.set(root, integer ? "i32" : "f64");
 			const definition = definitionInstruction(fn, value);
 			if (
 				definition !== undefined &&
 				!LOOP_SCALAR_PRODUCERS.has(fn.instructionOpcodeName(definition))
 			)
-				return undefined;
+				blocked.add(root);
 			for (
 				let use = fn.kernel.valueFirstUse(value);
 				use >= 0;
 				use = fn.kernel.useNext(use)
 			) {
 				const instruction = fn.kernel.useInstruction(use);
-				const operand = fn.kernel.useOperand(use);
 				if (fn.instructionKind(instruction) !== "operation") continue;
 				const opcode = fn.instructionOpcodeName(instruction);
-				// The target boxes numeric arguments at the ordinary JavaScript call boundary.
+				const operand = fn.kernel.useOperand(use);
 				const callArgument =
 					(opcode === "call" && operand >= 2) || (opcode === "callKnown" && operand >= 1);
 				if (
@@ -1273,109 +1302,151 @@ const selectLoopScalarRepresentations: CoreFunctionPass = {
 					!LOOP_SCALAR_CONSUMERS.has(opcode) &&
 					!callArgument
 				)
-					return undefined;
+					blocked.add(root);
 			}
 		}
-		const representation: CoreRepresentation = [...selected].every(
-			(value) => kinds.exactScalar(value) === "int32",
-		)
-			? "i32"
-			: "f64";
-		const plannedRepresentation = (value: CoreValueId): CoreRepresentation =>
-			selected.has(value) ? representation : fn.valueRepresentation(value);
-		for (let blockIndex = 0; blockIndex < fn.blockCapacity; blockIndex++) {
-			const block = coreBlockId(blockIndex);
-			if (fn.kernel.blockLive(block) === 0) continue;
-			const terminator = fn.blockTerminator(block);
-			const edgeStart = fn.kernel.terminatorEdgeStart(terminator);
-			const edgeCount = fn.kernel.terminatorEdgeCount(terminator);
-			for (let edgeOffset = 0; edgeOffset < edgeCount; edgeOffset++) {
-				const edgeRow = edgeStart + edgeOffset;
-				const targetBlock = fn.kernel.terminatorEdgeBlock(edgeRow);
-				const targetStart = fn.kernel.blockParameterStart(targetBlock);
-				const targetCount = fn.kernel.blockParameterCount(targetBlock);
-				const argumentStart = fn.kernel.terminatorEdgeArgumentStart(edgeRow);
-				const argumentCount = fn.kernel.terminatorEdgeArgumentCount(edgeRow);
-				for (let index = 0; index < argumentCount; index++) {
-					if (index >= targetCount) continue;
-					const argument = fn.kernel.operandAt(argumentStart + index);
-					const target = fn.kernel.blockParameterValue(targetStart + index);
-					const sourceRepresentation = plannedRepresentation(argument);
-					const targetRepresentation = plannedRepresentation(target);
-					if (
-						sourceRepresentation !== targetRepresentation &&
-						targetRepresentation !== "boxed" &&
-						!(sourceRepresentation === "i32" && targetRepresentation === "f64")
-					)
-						return undefined;
+		const planned = (value: CoreValueId): CoreRepresentation => {
+			const root = storage.root(value);
+			return (
+				(!blocked.has(root) && representations.get(root)) || fn.valueRepresentation(value)
+			);
+		};
+		const literalFits = (
+			value: CoreValueId,
+			representation: CoreRepresentation,
+		): boolean => {
+			const literal = numberConstant(fn, value);
+			return (
+				literal !== undefined &&
+				(representation === "f64" ||
+					(representation === "i32" &&
+						Number.isInteger(literal) &&
+						!Object.is(literal, -0) &&
+						literal >= -0x8000_0000 &&
+						literal <= 0x7fff_ffff))
+			);
+		};
+		let changed: boolean;
+		do {
+			changed = false;
+			const reconcile = (
+				source: CoreValueId,
+				target: CoreValueId,
+				handler: boolean,
+				move = false,
+			): void => {
+				const from = planned(source);
+				const to = planned(target);
+				if (
+					from === to ||
+					literalFits(source, to) ||
+					(!handler && (to === "boxed" || (from === "i32" && to === "f64"))) ||
+					(move &&
+						from === fn.valueRepresentation(source) &&
+						to === fn.valueRepresentation(target))
+				)
+					return;
+				for (const value of [target, source]) {
+					if (planned(value) === fn.valueRepresentation(value)) continue;
+					blocked.add(storage.root(value));
+					changed = true;
+					break;
 				}
+			};
+			edges(reconcile);
+			for (const value of selected) {
+				const definition = definitionInstruction(fn, value);
+				if (definition !== undefined && fn.instructionOpcodeName(definition) === "move")
+					reconcile(instructionOperand(fn, definition, 0)!, value, false, true);
 			}
-			const handlerBlock = fn.kernel.blockHandlerBlock(block);
-			if (handlerBlock === undefined) continue;
-			const parameterStart = fn.kernel.blockParameterStart(handlerBlock);
-			const parameterCount = fn.kernel.blockParameterCount(handlerBlock);
-			const argumentStart = fn.kernel.blockHandlerArgumentStart(block);
-			const argumentCount = fn.kernel.blockHandlerArgumentCount(block);
-			for (let index = 0; index < argumentCount; index++) {
-				const argument = fn.kernel.handlerArgumentAt(argumentStart + index);
-				if (
-					index + 1 < parameterCount &&
-					plannedRepresentation(argument) !==
-						plannedRepresentation(
-							fn.kernel.blockParameterValue(parameterStart + index + 1),
-						)
-				)
-					return undefined;
-			}
-		}
-		for (const value of selected) {
-			const definition = definitionInstruction(fn, value);
-			if (definition !== undefined && fn.instructionOpcodeName(definition) === "move") {
-				const source = instructionOperand(fn, definition, 0);
-				if (
-					source !== undefined &&
-					!selected.has(source) &&
-					fn.valueRepresentation(source) !== representation
-				)
-					return undefined;
-			}
-		}
-		const candidates = [...selected].filter(
-			(value) => fn.valueRepresentation(value) !== representation,
+		} while (changed);
+		const candidates = selected.filter(
+			(value) => fn.valueRepresentation(value) !== planned(value),
 		);
 		if (candidates.length === 0) return undefined;
 		const editor = CoreEditor.open(program, item.function);
-		for (const value of candidates) editor.setValueRepresentation(value, representation);
-		for (let blockIndex = 0; blockIndex < fn.blockCapacity; blockIndex++) {
-			const block = coreBlockId(blockIndex);
-			if (fn.kernel.blockLive(block) === 0) continue;
+		for (const value of candidates) editor.setValueRepresentation(value, planned(value));
+		const materialize = (
+			block: CoreBlockId,
+			before: CoreInstructionId,
+			source: CoreValueId,
+			representation: CoreRepresentation,
+		): CoreValueId => {
+			const literal = numberConstant(fn, source);
+			return editor.insertInstruction(
+				block,
+				before,
+				literal === undefined
+					? "move"
+					: representation === "i32"
+						? "createNumber"
+						: "createF64",
+				literal === undefined ? [source] : [],
+				{
+					outputRepresentations: [representation],
+					...(literal === undefined ? {} : { attributes: { value: literal } }),
+				},
+			).outputs[0]!;
+		};
+		for (const value of selected) {
+			const definition = definitionInstruction(fn, value);
+			if (definition === undefined || fn.instructionOpcodeName(definition) !== "move")
+				continue;
+			const source = instructionOperand(fn, definition, 0)!;
+			if (planned(source) === planned(value) || !literalFits(source, planned(value)))
+				continue;
+			editor.replaceInstruction(
+				definition,
+				planned(value) === "f64" ? "createF64" : "createNumber",
+				[],
+				{
+					attributes: { value: numberConstant(fn, source)! },
+					sourcePosition: fn.instructionSourcePosition(definition),
+				},
+			);
+		}
+		for (const block of fn.blockIds()) {
 			let bridged = false;
 			const terminator = fn.blockTerminator(block);
 			const replacement = mapTerminatorEdges(fn, terminator, (edge) => {
 				const parameterStart = fn.kernel.blockParameterStart(edge.block);
-				const parameterCount = fn.kernel.blockParameterCount(edge.block);
-				const arguments_ = edge.arguments.map((argument, index) => {
-					const target =
-						index < parameterCount
-							? fn.kernel.blockParameterValue(parameterStart + index)
-							: undefined;
-					if (
-						target === undefined ||
-						plannedRepresentation(argument) === plannedRepresentation(target)
-					)
-						return argument;
-					bridged = true;
-					return editor.insertInstruction(
-						block,
-						fn.blockTerminator(block),
-						"move",
-						[argument],
-						{ outputRepresentations: [plannedRepresentation(target)] },
-					).outputs[0]!;
-				});
-				return { block: edge.block, arguments: arguments_ };
+				return {
+					block: edge.block,
+					arguments: edge.arguments.map((argument, index) => {
+						const target = fn.kernel.blockParameterValue(parameterStart + index);
+						if (planned(argument) === planned(target)) return argument;
+						bridged = true;
+						return materialize(block, terminator, argument, planned(target));
+					}),
+				};
 			});
 			if (bridged) editor.replaceTerminator(block, replacement);
+			const handler = fn.kernel.blockHandlerBlock(block);
+			if (handler === undefined) continue;
+			const parameters = fn.kernel.blockParameterStart(handler);
+			const start = fn.kernel.blockHandlerArgumentStart(block);
+			const arguments_ = Array.from(
+				{ length: fn.kernel.blockHandlerArgumentCount(block) },
+				(_, index) => fn.kernel.handlerArgumentAt(start + index),
+			);
+			let handlerBridged = false;
+			for (let index = 0; index < arguments_.length; index++) {
+				const argument = arguments_[index]!;
+				const representation = planned(
+					fn.kernel.blockParameterValue(parameters + index + 1),
+				);
+				if (planned(argument) === representation) continue;
+				handlerBridged = true;
+				// Exception arguments must be available before the protected block starts.
+				const definition = definitionInstruction(fn, argument)!;
+				arguments_[index] = materialize(
+					fn.instructionBlock(definition),
+					definition,
+					argument,
+					representation,
+				);
+			}
+			if (handlerBridged) editor.setHandler(block, handler, arguments_);
 		}
 		return editor.commit();
 	},

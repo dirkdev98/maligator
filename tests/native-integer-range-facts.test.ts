@@ -16,6 +16,7 @@ import {
 	serializeCompilerArtifact,
 } from "../src/compiler/target/compiler-artifact-codec.ts";
 import { nativeVariantContract } from "../src/compiler/target/lower-native-storage.ts";
+import { nativeInt32ArithmeticExpression } from "../src/compiler/target/native-scalar-operators.ts";
 import { inspectStaticValueFunction } from "./helpers/static-values.ts";
 
 describe("native integer ranges", () => {
@@ -254,5 +255,55 @@ describe("native integer ranges", () => {
 						}
 		expect(answered).toBeGreaterThan(0);
 		expect(unknown).toBeGreaterThan(0);
+	});
+});
+
+describe("integer loop emission", () => {
+	it("requires both operand proofs and keeps signed division and remainder outside integer kernels", () => {
+		for (const operator of ["+", "-", "*"]) {
+			expect(
+				nativeInt32ArithmeticExpression(operator, "left", undefined),
+			).toBeUndefined();
+			expect(
+				nativeInt32ArithmeticExpression(operator, undefined, "right"),
+			).toBeUndefined();
+		}
+		for (const operator of ["/", "%", "**"])
+			expect(nativeInt32ArithmeticExpression(operator, "left", "right")).toBeUndefined();
+	});
+
+	it.each([false, true])(
+		"carries integer update proofs through canonical and suspended bodies, suspended=%s",
+		(suspended) => {
+			const out = inspectStaticValueFunction(
+				`function${suspended ? "*" : ""} compute(gate){let sum=0.5;for(let i=0;i<16;i++){${suspended ? "yield i;" : ""}gate(i);sum+=i;}return sum;}globalThis.compute=compute;`,
+				"compute",
+			);
+			const ip = out.native.body.instructions.findIndex(
+				(op) => op.opcode === "UNARY" && op.operator === "increment",
+			);
+			const update = out.native.body.instructions[ip]!;
+			if (update.opcode !== "UNARY") throw new Error("Missing loop update");
+			expect(out.native.registerRepresentations[update.dst]).toBe("int32");
+			expect(instructionResultIntegerRange(out.native.facts?.[ip], update.dst)).toEqual(
+				COMPILER_INT32_RANGE,
+			);
+			expect(instructionInputIsInt32(out.native.facts?.[ip], update.src)).toBe(true);
+			expect(out.c.source).not.toContain("MAL_UNARY_INCREMENT");
+			expect(out.c.source).not.toContain("mal_ops_number_to_i32(");
+			expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
+				out.image,
+			);
+		},
+	);
+
+	it("preserves integer kernels in a boxed fast entry", () => {
+		const out = inspectStaticValueFunction(
+			"function compute(flag,gate){let sum=0.5;for(let i=0;i<16;i++){const next=i+1;if(flag)return next;gate(i);sum+=i;}return sum;}globalThis.compute=compute;",
+			"compute",
+		);
+		expect(out.c.source).toContain("mal_compiled_1_try(");
+		expect(out.c.source).toContain("mal_value_from_i32((i32) (");
+		expect(out.c.source).not.toContain("MAL_UNARY_INCREMENT");
 	});
 });

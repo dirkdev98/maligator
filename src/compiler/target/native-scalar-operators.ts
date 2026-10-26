@@ -181,6 +181,40 @@ export function nativeReflexiveEqualityExpression(
 	return equal ? (nan === "false" ? "true" : `!(${nan})`) : nan;
 }
 
+// The caller proves the mathematical result fits int32, including exclusion of -0.
+export function nativeInt32ArithmeticExpression(
+	operator: string,
+	left: string | undefined,
+	right: string | undefined,
+): string | undefined {
+	return left !== undefined &&
+		right !== undefined &&
+		(operator === "+" || operator === "-" || operator === "*")
+		? `(${left}) ${operator} (${right})`
+		: undefined;
+}
+
+// A result proof must exclude signed overflow and negative zero before using C arithmetic.
+export function nativeInt32UnaryExpression(
+	operator: string,
+	input: string | undefined,
+): string | undefined {
+	if (input === undefined) return undefined;
+	switch (operator) {
+		case "increment":
+			return `(${input}) + 1`;
+		case "decrement":
+			return `(${input}) - 1`;
+		case "-":
+			return `-(${input})`;
+		case "+":
+		case "tonumeric":
+			return input;
+		default:
+			return undefined;
+	}
+}
+
 // Scalar views preserve the Number operands; only these interval proofs permit unsigned conversion.
 export function nativeUnsignedRemainderExpression(
 	left: string,
@@ -189,6 +223,7 @@ export function nativeUnsignedRemainderExpression(
 	divisor: CompilerIntegerRange | undefined,
 	leftScalar = left,
 	rightScalar = right,
+	result: "number" | "int32" = "number",
 ): string | undefined {
 	if (
 		dividend === undefined ||
@@ -199,7 +234,7 @@ export function nativeUnsignedRemainderExpression(
 		divisor.maximum > 0xffff_ffff
 	)
 		return undefined;
-	return `(f64) ((u32) (${leftScalar}) % (u32) (${rightScalar}))`;
+	return `(${result === "int32" ? "i32" : "f64"}) ((u32) (${leftScalar}) % (u32) (${rightScalar}))`;
 }
 
 // Guards license primitive Number conversion; a fallback must retain the original operands.

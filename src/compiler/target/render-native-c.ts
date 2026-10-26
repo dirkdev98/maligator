@@ -130,6 +130,8 @@ import {
 	nativeBinaryNumberInputs,
 	nativePrimitiveNumberExpression,
 	nativeUnsignedRemainderExpression,
+	nativeInt32ArithmeticExpression,
+	nativeInt32UnaryExpression,
 	nativeReflexiveEqualityExpression,
 	nativeEqualityExpression,
 	nativeTypeofComparisonExpression,
@@ -3732,8 +3734,21 @@ function renderScalarExpression(
 			: instructionInputIsInt32(facts, local)
 				? `((i32) ${number(local)})`
 				: `mal_ops_number_to_i32(${number(local)})`;
+	const resultIsInt32 = (dst: number) =>
+		reps[dst] === "int32" ||
+		compilerIntegerRangeIsInt32(instructionResultIntegerRange(facts, dst));
+	const exactInteger = (local: number) =>
+		reps[local] === "int32" || instructionInputIsInt32(facts, local)
+			? int32(local)
+			: undefined;
 	const numberResult = (dst: number, expression: string) =>
-		reps[dst] === "boxed" ? `mal_ops_number_value(${expression})` : expression;
+		resultIsInt32(dst)
+			? reps[dst] === "boxed"
+				? `mal_value_from_i32((i32) (${expression}))`
+				: `(i32) (${expression})`
+			: reps[dst] === "boxed"
+				? `mal_ops_number_value(${expression})`
+				: expression;
 	const booleanResult = (dst: number, expression: string) =>
 		reps[dst] === "boxed" ? `mal_value_new_boolean(${expression})` : expression;
 	const kind = (local: number) =>
@@ -3892,6 +3907,10 @@ function renderScalarExpression(
 					: reps[op.dst] === "boxed"
 						? `mal_value_from_i32(~${int32(op.src)})`
 						: `(f64) (~${int32(op.src)})`;
+			if (resultIsInt32(op.dst)) {
+				const expression = nativeInt32UnaryExpression(op.operator, exactInteger(op.src));
+				if (expression !== undefined) return numberResult(op.dst, expression);
+			}
 			if (op.operator === "increment" || op.operator === "decrement")
 				return numberResult(
 					op.dst,
@@ -3982,6 +4001,26 @@ function renderScalarExpression(
 					op.dst,
 					`${operand(op.left)} ${NATIVE_COMPARE[op.operator]} ${operand(op.right)}`,
 				);
+			if (resultIsInt32(op.dst)) {
+				const expression =
+					nativeInt32ArithmeticExpression(
+						op.operator,
+						exactInteger(op.left),
+						exactInteger(op.right),
+					) ??
+					(op.operator === "%"
+						? nativeUnsignedRemainderExpression(
+								number(op.left),
+								number(op.right),
+								instructionInputIntegerRange(facts, op.left),
+								instructionInputIntegerRange(facts, op.right),
+								isNumericRep(reps[op.left]!) ? `r${op.left}` : number(op.left),
+								isNumericRep(reps[op.right]!) ? `r${op.right}` : number(op.right),
+								"int32",
+							)
+						: undefined);
+				if (expression !== undefined) return numberResult(op.dst, expression);
+			}
 			const expression = nativeNumberExpr(
 				op.operator,
 				number(op.left),
@@ -8482,8 +8521,19 @@ function emitInstruction(
 			`r${dst} = ${callValue(dst, value)};`,
 		];
 	};
+	const resultIsInt32 = (dst: number): boolean =>
+		reps[dst] === "int32" ||
+		compilerIntegerRangeIsInt32(instructionResultIntegerRange(context.facts, dst));
 	const storeNumber = (dst: number, expression: string): string =>
-		`r${dst} = ${reps[dst] === "number" ? expression : reps[dst] === "int32" ? `mal_ops_number_to_i32(${expression})` : profileCall("boxing", `mal_ops_number_value(${expression})`)};`;
+		`r${dst} = ${
+			reps[dst] === "number"
+				? expression
+				: resultIsInt32(dst)
+					? reps[dst] === "int32"
+						? `(i32) (${expression})`
+						: profileCall("boxing", `mal_value_from_i32((i32) (${expression}))`)
+					: profileCall("boxing", `mal_ops_number_value(${expression})`)
+		};`;
 	const storeMathNumber = (dst: number, operation: string, expression: string): string =>
 		builtinResultIsInt32(operation)
 			? `r${dst} = ${reps[dst] === "number" ? expression : reps[dst] === "int32" ? `(i32)(${expression})` : profileCall("boxing", `mal_value_from_i32((i32)(${expression}))`)};`
@@ -8623,6 +8673,10 @@ function emitInstruction(
 		}
 		return decoded.kind === "number" ? String(decoded.value) : null;
 	};
+	const exactInt32Operand = (operand: number): string | undefined =>
+		operandRep(operand) === "int32" || instructionInputIsInt32(context.facts, operand)
+			? (nativeInt32Operand(operand) ?? undefined)
+			: undefined;
 	const nativeBooleanOperand = (operand: number): string | null => {
 		const decoded = decodeVmValueOperand(operand);
 		if (decoded.kind === "register") {
@@ -11542,6 +11596,29 @@ function emitInstruction(
 				isNumericRep(reps[left]!) || operandKind(left) === COMPILER_VALUE_KIND_NUMBER;
 			const rightIsNum =
 				isNumericRep(reps[right]!) || operandKind(right) === COMPILER_VALUE_KIND_NUMBER;
+			if (resultIsInt32(dst) && leftIsNum && rightIsNum) {
+				const expression =
+					nativeInt32ArithmeticExpression(
+						operator,
+						exactInt32Operand(left),
+						exactInt32Operand(right),
+					) ??
+					(operator === "%"
+						? nativeUnsignedRemainderExpression(
+								nativeNumberOperand(left)!,
+								nativeNumberOperand(right)!,
+								instructionInputIntegerRange(context.facts, left),
+								instructionInputIntegerRange(context.facts, right),
+								scalarNumber(left) ?? nativeNumberOperand(left)!,
+								scalarNumber(right) ?? nativeNumberOperand(right)!,
+								"int32",
+							)
+						: undefined);
+				if (expression !== undefined) {
+					elideFramePosition();
+					return [storeNumber(dst, expression)];
+				}
+			}
 			const numbersPossible =
 				((operandKind(left) ?? COMPILER_VALUE_KIND_TOP) & COMPILER_VALUE_KIND_NUMBER) !==
 					0 &&
@@ -11908,20 +11985,24 @@ function emitInstruction(
 				];
 			}
 			if (reps[dst] === "int32") {
-				if (
-					!leftIsNum ||
-					!rightIsNum ||
-					!["&", "|", "^", "<<", ">>"].includes(operator)
-				) {
-					return null;
-				}
-				const expr = nativeInt32Expr(
+				if (!leftIsNum || !rightIsNum) return null;
+				const integer = nativeInt32Expr(
 					operator,
 					nativeInt32Operand(left)!,
 					nativeInt32Operand(right)!,
 				);
+				const expression =
+					integer ??
+					nativeNumberExpr(
+						operator,
+						typedNumber(left),
+						typedNumber(right),
+						context.facts?.inputIntegerRanges,
+						scalarNumber(left),
+						scalarNumber(right),
+					);
 				elideFramePosition();
-				return expr === null ? null : [`r${dst} = ${expr};`];
+				return expression === null ? null : [storeNumber(dst, expression)];
 			}
 			if (reps[dst] === "number") {
 				// Bail defensively if the lattice invariant ever breaks.
@@ -12342,6 +12423,13 @@ function emitInstruction(
 									: null;
 				if (expression !== null) return [storeNumber(dst, expression)];
 			}
+			if (resultIsInt32(dst)) {
+				const expression = nativeInt32UnaryExpression(operator, exactInt32Operand(src));
+				if (expression !== undefined) {
+					elideFramePosition();
+					return [storeNumber(dst, expression)];
+				}
+			}
 			if (isNumericRep(reps[src]!) && operator !== "!") {
 				if (operator === "~") {
 					const expression = `~${nativeInt32Operand(src)!}`;
@@ -12364,7 +12452,7 @@ function emitInstruction(
 							: operator === "+" || operator === "tonumeric"
 								? num(src)
 								: null;
-				if (expression !== null && reps[dst] !== "boolean" && reps[dst] !== "int32")
+				if (expression !== null && reps[dst] !== "boolean")
 					return [storeNumber(dst, expression)];
 			}
 			if (isNumericRep(reps[dst]!)) {

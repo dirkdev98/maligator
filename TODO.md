@@ -81,17 +81,15 @@ hot consumer needs a stronger proof. An analysis contract may land before its
 consumer with precision, invalidation, and cost tests; it is not a runtime speedup
 until the consumer admits real sites and measurements establish a benefit.
 
-- [ ] Decouple `loop-scalar-representation-selection` storage webs. Flow scalar
-      selection now narrows already-floating exact integer producers with their
-      boxed web; stopped-pass lowering covers ordinary and exception edges, and
-      Core rejects implicit narrowing or reinterpretation moves. Loop selection
-      still picks one representation for every value connected through any arithmetic operand,
-      so `s += i` keeps `i` in f64, and one CSE'd `0` joins unrelated loops.
-      Choosing per storage web (block parameters and moves) with induction ranges
-      made counters i32, but the C renderer then converted back and forth
-      (`mal_ops_number_to_i32`, `(u32)((f64) r)` remainders, f64 increments) and
-      the allocation phase went from 22 to 41 ms. Integer counters need
-      int-aware rendering of those operations together with the selection.
+- [x] Decouple `loop-scalar-representation-selection` storage webs. Phi arguments
+      and identity moves share width decisions; arithmetic discovery does not force
+      a floating accumulator and its counter into the same representation. Whole-value
+      induction ranges include the final update. Shared constants keep their original
+      storage and are rematerialized at typed boundaries, including exception arguments.
+      Signed arithmetic and updates retain integer views in full bodies, scalar
+      expressions and eligible fast entries; floating operands and unsafe signed
+      remainder/division retain Number semantics. Suspension boundaries box scalar
+      observations. Loops with exceptional control remain outside induction admission.
 
 ## Native SSA storage
 

@@ -12,12 +12,14 @@ import {
 } from "../shared/compiler-value-kinds.ts";
 import {
 	instructionInputIsInt32,
+	instructionResultIntegerRange,
 	instructionInputIntegerRange,
 	instructionInputKind,
 } from "../shared/instruction-facts.ts";
 import type { CompilerIntegerRange } from "../shared/integer-range.ts";
 import {
 	compilerIntegerRangeComparison,
+	compilerIntegerRangeIsInt32,
 	compilerIntegerRangeTruthiness,
 } from "../shared/integer-range.ts";
 import { emitIntrinsic } from "./emit-program-image.ts";
@@ -26,6 +28,8 @@ import {
 	nativeBinaryNumberInputs,
 	nativePrimitiveNumberExpression,
 	nativeUnsignedRemainderExpression,
+	nativeInt32ArithmeticExpression,
+	nativeInt32UnaryExpression,
 	nativeReflexiveEqualityExpression,
 	nativeEqualityExpression,
 	nativeTypeofComparisonExpression,
@@ -493,6 +497,7 @@ function int32ResultRegisters(
 interface FastNumbers {
 	readonly kind: (register: number) => number;
 	readonly isInt32: (register: number) => boolean;
+	readonly resultIsInt32: (register: number) => boolean;
 	readonly range: (register: number) => CompilerIntegerRange | undefined;
 	readonly constants: ReadonlyMap<number, number>;
 	readonly literal: (value: number) => string;
@@ -550,6 +555,22 @@ function int32(values: FastNumbers, register: number): string {
 			? `((i32) ${number(values, register)})`
 			: `mal_ops_number_value_to_i32(f${register})`
 		: `((i32) ${constant | 0})`;
+}
+
+function exactInteger(values: FastNumbers, register: number): string | undefined {
+	const constant = values.constants.get(register);
+	return values.isInt32(register) ||
+		(constant !== undefined &&
+			Number.isInteger(constant) &&
+			!Object.is(constant, -0) &&
+			constant >= -0x8000_0000 &&
+			constant <= 0x7fff_ffff)
+		? int32(values, register)
+		: undefined;
+}
+
+function storeNumber(values: FastNumbers, dst: number, expression: string): string {
+	return `f${dst} = ${values.resultIsInt32(dst) ? `mal_value_from_i32((i32) (${expression}))` : `mal_ops_number_value(${expression})`};`;
 }
 
 const NUMBER_COMPARISONS: ReadonlySet<string> = new Set(["<", "<=", ">", ">="]);
@@ -635,6 +656,27 @@ function fastBinary(
 		mask(register) === COMPILER_VALUE_KIND_NUMBER
 			? int32(values, register)
 			: `mal_ops_number_to_i32(${numeric(register)})`;
+	if (values.resultIsInt32(dst)) {
+		const expression =
+			nativeInt32ArithmeticExpression(
+				operator,
+				exactInteger(values, left),
+				exactInteger(values, right),
+			) ??
+			(operator === "%"
+				? nativeUnsignedRemainderExpression(
+						numeric(left),
+						numeric(right),
+						values.range(left),
+						values.range(right),
+						numeric(left),
+						numeric(right),
+						"int32",
+					)
+				: undefined);
+		if (expression !== undefined)
+			return `${guard} ${storeNumber(values, dst, expression)}`;
+	}
 	if (NUMBER_COMPARISONS.has(operator))
 		return `${guard} f${dst} = mal_value_new_boolean(${numeric(left)} ${operator} ${numeric(right)});`;
 	if (INT32_OPERATORS.has(operator))
@@ -646,7 +688,7 @@ function fastBinary(
 	if (operator === ">>>")
 		return `${guard} f${dst} = mal_ops_number_value((f64) ((u32) ${integer(left)} >> ((u32) ${integer(right)} & 31u)));`;
 	if (NUMBER_OPERATORS.has(operator))
-		return `${guard} f${dst} = mal_ops_number_value(${numeric(left)} ${operator} ${numeric(right)});`;
+		return `${guard} ${storeNumber(values, dst, `${numeric(left)} ${operator} ${numeric(right)}`)}`;
 	if (operator === "%") {
 		const expression =
 			nativeUnsignedRemainderExpression(
@@ -655,7 +697,7 @@ function fastBinary(
 				values.range(left),
 				values.range(right),
 			) ?? `fmod(${numeric(left)}, ${numeric(right)})`;
-		return `${guard} f${dst} = mal_ops_number_value(${expression});`;
+		return `${guard} ${storeNumber(values, dst, expression)}`;
 	}
 	if (operator === "**")
 		return `${guard} f${dst} = mal_ops_number_value(mal_number_exponentiate(${numeric(left)}, ${numeric(right)}));`;
@@ -678,6 +720,11 @@ function fastUnary(
 	const numeric = converts
 		? nativePrimitiveNumberExpression(`f${src}`, values.kind(src))
 		: number(values, src);
+	if (values.resultIsInt32(dst)) {
+		const expression = nativeInt32UnaryExpression(operator, exactInteger(values, src));
+		if (expression !== undefined)
+			return `${guard} ${storeNumber(values, dst, expression)}`;
+	}
 	switch (operator) {
 		case "!": {
 			const constant =
@@ -688,7 +735,7 @@ function fastUnary(
 				: `f${dst} = ${constant ? "MAL_VALUE_FALSE" : "MAL_VALUE_TRUE"};`;
 		}
 		case "-":
-			return `${guard} f${dst} = mal_ops_number_value(-${numeric});`;
+			return `${guard} ${storeNumber(values, dst, `-${numeric}`)}`;
 		case "+":
 		case "tonumeric":
 			return converts
@@ -697,9 +744,9 @@ function fastUnary(
 		case "~":
 			return `${guard} f${dst} = mal_value_from_i32(~${converts ? `mal_ops_number_to_i32(${numeric})` : int32(values, src)});`;
 		case "increment":
-			return `${guard} f${dst} = mal_ops_number_value(${numeric} + 1.0);`;
+			return `${guard} ${storeNumber(values, dst, `${numeric} + 1.0`)}`;
 		case "decrement":
-			return `${guard} f${dst} = mal_ops_number_value(${numeric} - 1.0);`;
+			return `${guard} ${storeNumber(values, dst, `${numeric} - 1.0`)}`;
 		default:
 			return undefined;
 	}
@@ -718,6 +765,10 @@ function fastInstruction(
 ): string | undefined {
 	const masks = input.facts?.[ip]?.inputKindMasks;
 	const values: FastNumbers = {
+		resultIsInt32: (register) =>
+			compilerIntegerRangeIsInt32(
+				instructionResultIntegerRange(input.facts?.[ip], register),
+			),
 		range: (register) => instructionInputIntegerRange(input.facts?.[ip], register),
 		isInt32: (register) => instructionInputIsInt32(input.facts?.[ip], register),
 		kind(register) {

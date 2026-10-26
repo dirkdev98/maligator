@@ -17,6 +17,18 @@ selects int32, its already-floating exact integer producers narrow with the boxe
 members. Wider numeric webs keep existing integer producers and use widening
 moves. Core verifies these boundaries before target allocation, including handler
 arguments, so a later cleanup pass is not needed to repair an invalid move.
+Loop scalar selection discovers related numeric values through arithmetic but
+chooses storage width per phi/move web. Whole-value induction ranges include the
+final update; arithmetic results use their own ranges. Shared literals are
+rematerialized at conversion boundaries rather than coupling unrelated loops.
+Exception-argument constants are copied beside their original definitions to
+remain available before the protected block starts. Exceptional loops remain
+outside induction admission. Exact int32 results publish range facts to both
+targets; full bodies, scalar expressions and eligible boxed fast entries consume
+those proofs for integer arithmetic and updates. Floating operands retain Number
+arithmetic, and signed division/remainder retain their JavaScript edge semantics.
+Yield and await box numeric observations and preserve scalar suspension storage.
+
 Constants and source resources are finalized jointly over both targets; a
 constant used only by the native body must survive compaction. Captures, profiling
 sites, test batch relocation, and compiler artifacts preserve both bodies.

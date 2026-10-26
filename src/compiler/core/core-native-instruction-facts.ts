@@ -178,8 +178,14 @@ function instructionIntegerRanges(
 			opcode === "mathUnaryNumber" ||
 			opcode === "mathBinaryNumber") &&
 			boundBuiltinConsumers.has(builtinOperation as string));
+	const integerResult =
+		fn.kernel.instructionResultCount(instruction) === 1 &&
+		fn.valueRepresentation(
+			fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)),
+		) === "i32";
 	const integer =
 		bounds ||
+		(integerResult && (opcode === "unary" || opcode === "binary")) ||
 		opcode === "call" ||
 		(opcode === "unary" && operator === "~") ||
 		(opcode === "binary" && integerBinaryConsumers.has(operator as string)) ||
@@ -302,7 +308,10 @@ export function coreInstructionFacts(
 	);
 	const resultRange =
 		results.length === 1 && results[0] === COMPILER_VALUE_KIND_NUMBER
-			? coreCallResultIntegerRange(fn, instruction)
+			? (coreCallResultIntegerRange(fn, instruction) ??
+				(fn.valueRepresentation(kernel.resultAt(output)) === "i32"
+					? COMPILER_INT32_RANGE
+					: undefined))
 			: undefined;
 	const resultIntegerRanges =
 		resultRange === undefined

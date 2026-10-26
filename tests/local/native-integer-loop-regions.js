@@ -2,6 +2,75 @@ function check(condition, message) {
 	if (!condition) throw new Error(`FAIL ${message}`);
 }
 
+function mixedStorage(callback) {
+	let sum = 0.5;
+	for (let index = 0; index < 16; index++) {
+		callback(index);
+		sum += index;
+	}
+	return sum;
+}
+
+function sharedStorage(callback) {
+	let sum = 0;
+	for (let index = 0; index < 16; index++) {
+		callback(index);
+		sum += index / 2;
+	}
+	for (let fraction = 0; fraction < 3.5; fraction += 0.5) {
+		callback(fraction);
+		sum += fraction;
+	}
+	return sum;
+}
+
+function moduloStorage(callback) {
+	let sum = 0;
+	for (let index = 0; index < 32; index++) {
+		callback(index);
+		sum += (index * 3 + 1) % 7;
+	}
+	return sum;
+}
+
+function boundaryStorage(start, bound, step, callback) {
+	let index = start;
+	for (; index < bound; index += step) callback(index);
+	return index;
+}
+
+function negativeZeroStorage(callback) {
+	let sum = -0;
+	for (let index = 0; index < 4; index++) {
+		callback(index);
+		sum *= index;
+	}
+	return sum;
+}
+
+function caughtStorage(callback) {
+	let sum = 0.5;
+	for (let index = 0; index < 16; index++) {
+		try {
+			callback(index);
+			sum += index;
+		} catch (error) {
+			return [index, sum, error];
+		}
+	}
+	return sum;
+}
+
+function* suspendedStorage(callback) {
+	let sum = 0.5;
+	for (let index = 0; index < 4; index++) {
+		yield index;
+		callback(index);
+		sum += index;
+	}
+	return sum;
+}
+
 function collatzSteps(start) {
 	let steps = 0;
 	let value = start;
@@ -200,5 +269,58 @@ let total = 0;
 for (let start = 1; start < 3_000; start++)
 	total = (total + collatzSteps(start)) % 1_000_007;
 check(total === 215015, "collatz sum");
+
+const storageEvents = [];
+function observeStorage(value) {
+	storageEvents.push(value);
+	if (typeof globalThis.gc === "function") globalThis.gc();
+}
+check(mixedStorage(observeStorage) === 120.5, "mixed scalar storage");
+check(sharedStorage(observeStorage) === 70.5, "shared scalar constant");
+check(moduloStorage(observeStorage) === 92, "integer modulo chain");
+check(Object.is(negativeZeroStorage(observeStorage), -0), "floating negative zero");
+check(
+	boundaryStorage(2147483646, 2147483648, 1, observeStorage) === 2147483648,
+	"final update outside int32",
+);
+check(
+	boundaryStorage(-2147483649, -2147483647, 1, observeStorage) === -2147483647,
+	"initial value outside int32",
+);
+check(boundaryStorage(0, 3.5, 0.5, observeStorage) === 3.5, "fractional update");
+let boundCoercions = 0;
+check(
+	boundaryStorage(
+		0,
+		{
+			valueOf() {
+				boundCoercions++;
+				return 3;
+			},
+		},
+		1,
+		observeStorage,
+	) === 3 && boundCoercions === 4,
+	"coercive loop bound",
+);
+const storageFailure = { marker: "storage failure" };
+const caughtStorageResult = caughtStorage((value) => {
+	observeStorage(value);
+	if (value === 3) throw storageFailure;
+});
+check(
+	caughtStorageResult[0] === 3 &&
+		caughtStorageResult[1] === 3.5 &&
+		caughtStorageResult[2] === storageFailure,
+	"exceptional scalar observations",
+);
+const storageGenerator = suspendedStorage(observeStorage);
+for (let index = 0; index < 4; index++) {
+	const result = storageGenerator.next();
+	check(result.value === index && !result.done, "suspended integer counter");
+}
+const storageFinal = storageGenerator.next();
+check(storageFinal.done && storageFinal.value === 6.5, "suspended floating accumulator");
+check(storageEvents.length === 97, "callback observations");
 
 console.log("native-integer-loop-regions PASS");

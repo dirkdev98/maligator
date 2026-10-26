@@ -557,6 +557,19 @@ export function analyzeCoreLoopInductions(
 				if (
 					range === undefined &&
 					definition !== undefined &&
+					fn.instructionOpcodeName(definition) === "unary"
+				) {
+					const input = operand(fn, definition, 0)!;
+					const operator = fn.instructionAttributes(definition).operator;
+					if (
+						(operator === "+" || operator === "tonumeric") &&
+						numericRepresentation(input) !== undefined
+					)
+						range = query(input, block, budget);
+				}
+				if (
+					range === undefined &&
+					definition !== undefined &&
 					fn.instructionOpcodeName(definition) === "binary"
 				) {
 					const left = operand(fn, definition, 0)!;
