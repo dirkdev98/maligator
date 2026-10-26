@@ -80,6 +80,33 @@ describe("normal record field integer ranges", () => {
 		const out = inspect("value|0");
 		expect(out.c.source).toContain("mal_number_remainder(");
 	});
+	it.each([
+		"const n=record.n;record.n='changed';hook(record);return n%10;",
+		"record.tag=99;hook();return record.n%10;",
+	])("uses the initial field interval at its read despite %s", (reader) => {
+		const out = inspect("value&255", { reader });
+		const { op, facts } = field(out);
+		expect(instructionResultIntegerRange(facts, op.dst)).toEqual(bounded(0, 255));
+		expect(out.c.source).not.toContain("mal_number_remainder(");
+		expect(deserializeCompilerArtifact(serializeCompilerArtifact(out.image))).toEqual(
+			out.image,
+		);
+	});
+	it.each(["function", "function*", "async function", "async function*"])(
+		"keeps a previously read field interval after mutation in a %s",
+		(declaration) => {
+			const suspension =
+				(declaration.includes("*") ? "yield 0;" : "") +
+				(declaration.startsWith("async") ? "await 0;" : "");
+			const out = inspect("value&255", {
+				declaration,
+				reader: `const n=record.n;record.n='changed';${suspension}hook(record);return n%10;`,
+			});
+			const { op, facts } = field(out);
+			expect(instructionResultIntegerRange(facts, op.dst)).toEqual(bounded(0, 255));
+			expect(out.c.source).not.toContain("mal_number_remainder(");
+		},
+	);
 	it.each(["make(...[value,hook])", "new make(value,hook)", "new make(...[value,hook])"])(
 		"carries fields through %s",
 		(call) => {

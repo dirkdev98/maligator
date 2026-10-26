@@ -108,7 +108,7 @@ import {
 } from "./core-read-accessor-expansion.ts";
 import type { CoreReadAccessorWork } from "./core-read-accessor-expansion.ts";
 import {
-	coreReadOnlyRecordFields,
+	coreInitialRecordFieldReads,
 	coreRecordFieldReadKind,
 	coreRecordFieldReadIntegerRange,
 	coreReturnedRecordKinds,
@@ -4396,7 +4396,14 @@ function discoverProgramNormalResultFacts(
 	const readsFor = (functionId: CoreFunctionId) => {
 		let reads = recordReads.get(functionId);
 		if (reads === undefined) {
-			reads = coreReadOnlyRecordFields(program.function(functionId));
+			reads = coreInitialRecordFieldReads(program.function(functionId), () =>
+				analyses
+					.get(CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, {
+						scope: "function",
+						function: functionId,
+					})
+					.exceptional(),
+			);
 			recordReads.set(functionId, reads);
 		}
 		return reads;

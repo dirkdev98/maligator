@@ -142,9 +142,11 @@ The independent target boundary and current storage contract are recorded in
       own-field kind summaries through exact call chains, finite callee sets,
       recursive forwarding, spread/rest and constructor completions. Field-only
       changes wake callers without rebuilding the any-script scalar aggregate.
-      Read-only call results now project own fields through that worklist, closing
-      parameter/field cycles. Every accessed key must be own, and writes, escapes,
-      dynamic keys or handler transport reject the proof. Normal-result publication
+      Call results now project initial own fields through that worklist, closing
+      parameter/field cycles. Reads retain facts before later writes and escapes;
+      known own sibling writes preserve untouched fields. A bounded CFG/use walk
+      accounts for backedges, possible getters/setters and fresh producer lifetimes.
+      Handler transport still rejects the proof. Normal-result publication
       feeds local representations and native predicates without requiring pure
       effects. Certified storage widths now join every virtual writer across
       producers, callers, borrowed parameters, caller-owned literals and forwards.
@@ -159,8 +161,8 @@ The independent target boundary and current storage contract are recorded in
       omit the producer root when neither a caller/callee observer nor backend
       fallback needs materialization. The scanner workload's whole C is now 111,548
       bytes, down from 115,075 before returned-field
-      feedback and 111,795 before typed fields. Point-sensitive mutation/escape
-      proofs and coroutine record transport remain. Read-only own-field observations
+      feedback and 111,795 before typed fields. Facts after compatible writes,
+      parameter-relative call effects and coroutine record transport remain. Own-field observations
       also carry initial integer bounds through the normal-result worklist, including
       finite targets, recursive forwarding and suspension. Growing fields widen
       independently of bounded siblings. The scanner still calls

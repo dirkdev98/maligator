@@ -244,7 +244,7 @@ numeric Math operations. Floor, ceil, trunc and round reuse a proved integer inp
 inside the numeric kernel; a mutable callee retains its guard and ordinary miss.
 Their exact builtin operations also preserve the input's integer proof and interval
 in Core, including unsigned values outside int32 storage. These normal-result bounds
-reach selected entries, caller results and read-only returned fields; an ordinary
+reach selected entries, caller results and proved initial field reads; an ordinary
 call hint or a guarded kernel alone never constrains the miss result.
 Native result tables use the semantic integer proof even when physical storage
 is floating or boxed.
@@ -785,13 +785,20 @@ split declarations and materialization carry the same field contract. After an
 observation, accesses use the materialized object and may no longer assume those
 storage bounds. Closed shape ordinals have their own int32 ABI.
 
-Read-only own-field observations publish initial integer bounds through the same
+Own-field observations publish initial integer bounds through the same
 normal-result contract as calls. One function worklist converges scalar returns
 and fresh-record fields together, keeping an unsolved field distinct from an
 unknown field. A growing recursive field widens independently of bounded siblings.
-Writes, escapes, handler transport and possible prototype getter reads withdraw
-the observation proof. Producer effects remain independent; generators and async
-functions retain their suspension, exception and root obligations.
+Each read has its own proof: later writes and escapes cannot change a value already
+read, and sibling writes preserve untouched fields only when their keys are own.
+A bounded reverse walk over record uses and predecessor blocks rejects any path
+with an earlier escape, write to the observed field, or possible getter/setter.
+Loop backedges participate; reexecuting the producer starts a fresh lifetime.
+Repeated private reads of one field need no CFG. Handler transport remains outside
+this proof, and cached CFG-dependent reads track effect changes to exceptional paths.
+Producer effects remain independent; generators and async functions retain their
+suspension, exception and root obligations. Loaded String values keep their roots
+even after the record no longer contains them.
 
 Function-scoped fact tables carry one versioned proof and use dense instruction
 indices. Register facts reference the existing operand list, with an explicit

@@ -165,7 +165,10 @@ export interface CoreProgramFlowValueKindSemantics<Analysis> {
 		inputs: CoreProgramFlowValueKindInputs,
 	): Analysis;
 	latticeMask(analysis: Analysis, value: CoreValueId): number;
-	recordReads(fn: CoreFunctionStore): ReadonlyMap<CoreInstructionId, CoreRecordFieldRead>;
+	recordReads(
+		fn: CoreFunctionStore,
+		control: () => CoreControlFlow,
+	): ReadonlyMap<CoreInstructionId, CoreRecordFieldRead>;
 	returnRecord(
 		program: CoreProgram,
 		fn: CoreFunctionStore,
@@ -2367,7 +2370,7 @@ export class CoreProgramFlowEngine {
 					}
 					let recordReads = recordReadIndices.get(functionId);
 					if (recordReads === undefined) {
-						recordReads = semantics.recordReads(fn);
+						recordReads = semantics.recordReads(fn, () => controlFlow(functionId));
 						recordReadIndices.set(functionId, recordReads);
 					}
 					const returnedRecords = new Map<CoreInstructionId, CoreRecordValueKind>();

@@ -4,9 +4,10 @@ import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.ts";
 import { CORE_RECORD_FIELD_KIND_ATTRIBUTE } from "../src/compiler/core/core-internal-attributes.ts";
+import { buildCoreControlFlow } from "../src/compiler/core/core-ir-control-flow.ts";
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import { CORE_PROGRAM_VALUE_KIND_ANALYSIS } from "../src/compiler/core/core-program-flow-analysis.ts";
-import { coreReadOnlyRecordFields } from "../src/compiler/core/core-record-value-kinds.ts";
+import { coreInitialRecordFieldReads } from "../src/compiler/core/core-record-value-kinds.ts";
 import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
 import { parseModule } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
@@ -53,6 +54,18 @@ function readKind(producer: string, reader = "return value.n;", call = "make(inp
 }
 
 describe("fresh record field observations", () => {
+	it("keeps repeated reads of one private field independent of CFG construction", () => {
+		const out = flow(
+			"function make(){return {n:1};}function read(){const r=make();return r.n+r.n;}globalThis.result=read();",
+		);
+		let requested = false;
+		const reads = coreInitialRecordFieldReads(out.named("read"), () => {
+			requested = true;
+			throw new Error("Unexpected CFG demand");
+		});
+		expect(reads.size).toBe(2);
+		expect(requested).toBe(false);
+	});
 	it.each([
 		["+input", COMPILER_VALUE_KIND_NUMBER],
 		['"text"', COMPILER_VALUE_KIND_STRING],
@@ -69,6 +82,26 @@ describe("fresh record field observations", () => {
 			readKind("return {n:+input};", "const alias=value;observe();return alias.n;"),
 		).toBe(COMPILER_VALUE_KIND_NUMBER);
 	});
+	it.each([
+		"const n=value.n;value.n='changed';return n;",
+		"const n=value.n;observe(value);return n;",
+		"const n=value.n;value.missing;return n;",
+		"value.tag='changed';observe();return value.n;",
+		"if(input){observe(value);return 0;}return value.n;",
+		"for(let i=0;i<3;i++){value.tag=i;}return value.n;",
+	])("keeps the initial field proof at a read unaffected by %s", (reader) => {
+		expect(readKind("return {n:1,tag:0};", reader)).toBe(COMPILER_VALUE_KIND_NUMBER);
+	});
+	it.each([
+		"value.missing=1;return value.n;",
+		"if(input)value.n='changed';return value.n;",
+		"for(let i=0;i<2;i++){const n=value.n;observe(value);if(i)return n;}return 0;",
+	])(
+		"keeps possible setters and backedge mutations outside initial facts (%s)",
+		(reader) => {
+			expect(readKind("return {n:1,tag:0};", reader)).toBe(COMPILER_VALUE_KIND_TOP);
+		},
+	);
 
 	it.each([
 		"make(...[input])",
@@ -199,7 +232,11 @@ describe("fresh record field observations", () => {
 			`function make(){return {n:1};}function read(){const value=make();value.n;return 1;}globalThis.result=read();`,
 		);
 		const fn = out.named("read");
-		const [read] = [...coreReadOnlyRecordFields(fn).keys()];
+		const [read] = [
+			...coreInitialRecordFieldReads(fn, () =>
+				buildCoreControlFlow(out.program, fn.id),
+			).keys(),
+		];
 		expect(read).toBeDefined();
 		const value = fn.kernel.resultAt(fn.kernel.instructionResultStart(read!));
 		expect(() => out.read().values(fn.id).latticeMask(value)).toThrow(
@@ -212,7 +249,9 @@ describe("fresh record field observations", () => {
 			`function make(){return {n:1};}function read(){const value=make();return value.n;}globalThis.result=read();`,
 		);
 		const fn = out.named("read");
-		const before = coreReadOnlyRecordFields(fn);
+		const before = coreInitialRecordFieldReads(fn, () =>
+			buildCoreControlFlow(out.program, fn.id),
+		);
 		expect(before.size).toBe(1);
 		const read = [...before.keys()][0]!;
 		const value = fn.kernel.operandAt(fn.kernel.instructionOperandStart(read));
@@ -224,15 +263,27 @@ describe("fresh record field observations", () => {
 			[value],
 			{ attributes: { operator: "+" } },
 		);
-		expect(coreReadOnlyRecordFields(fn).size).toBe(0);
+		expect(
+			coreInitialRecordFieldReads(fn, () => buildCoreControlFlow(out.program, fn.id))
+				.size,
+		).toBe(0);
 		editor.commit();
-		expect(coreReadOnlyRecordFields(fn).size).toBe(0);
+		expect(
+			coreInitialRecordFieldReads(fn, () => buildCoreControlFlow(out.program, fn.id))
+				.size,
+		).toBe(0);
 		expect(before.size).toBe(1);
 		const restore = CoreEditor.open(out.program, fn.id);
 		restore.removeInstruction(coercion.instruction);
-		expect(coreReadOnlyRecordFields(fn).size).toBe(1);
+		expect(
+			coreInitialRecordFieldReads(fn, () => buildCoreControlFlow(out.program, fn.id))
+				.size,
+		).toBe(1);
 		restore.commit();
-		expect(coreReadOnlyRecordFields(fn).size).toBe(1);
+		expect(
+			coreInitialRecordFieldReads(fn, () => buildCoreControlFlow(out.program, fn.id))
+				.size,
+		).toBe(1);
 	});
 
 	it("publishes a String field kind independently of opaque effects for concatenation", () => {
@@ -252,6 +303,21 @@ describe("fresh record field observations", () => {
 		expect(out.c.source).not.toContain("mal_ops_is_number(");
 	});
 
+	it("keeps a String field value read before its record mutates and escapes", () => {
+		const out = inspectStaticValueFunction(
+			`const make=function make(flag,gate){for(let i=0;i<3;i++)gate(i);return {label:flag?"left":"right"};};function compute(flag,gate){const result=make(flag,gate);const label=result.label;result.label=0;gate(result);return label+":";}globalThis.compute=compute;`,
+			"compute",
+		);
+		expect(
+			out.core.some(
+				(op) =>
+					op.opcode === "loadPropertyStatic" &&
+					op.attributes[CORE_RECORD_FIELD_KIND_ATTRIBUTE] === COMPILER_VALUE_KIND_STRING,
+			),
+		).toBe(true);
+		expect(out.c.source).toContain("mal_vm_concat_strings_known(");
+		expect(out.c.source).not.toContain("mal_ops_is_number(");
+	});
 	it.each(["function", "function*", "async function", "async function*"])(
 		"retains the nullable String field union in the %s entry",
 		(declaration) => {

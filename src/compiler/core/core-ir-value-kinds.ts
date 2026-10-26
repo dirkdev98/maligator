@@ -80,7 +80,7 @@ import type {
 import type { CoreRecordValueKind } from "./core-record-value-kinds.ts";
 import {
 	coreRecordReturnKindInputs,
-	coreReadOnlyRecordFields,
+	coreInitialRecordFieldReads,
 	coreReturnedRecordKinds,
 } from "./core-record-value-kinds.ts";
 import { coreExactArrayFromCallResult } from "./core-static-values.ts";
@@ -1439,8 +1439,8 @@ export const CORE_PROGRAM_FLOW_VALUE_KIND_SEMANTICS: CoreProgramFlowValueKindSem
 		latticeMask(analysis: CoreProgramFunctionValueKinds, value: CoreValueId) {
 			return analysis.latticeMask(value);
 		},
-		recordReads(fn: CoreFunctionStore) {
-			return coreReadOnlyRecordFields(fn);
+		recordReads(fn: CoreFunctionStore, control: () => CoreControlFlow) {
+			return coreInitialRecordFieldReads(fn, control);
 		},
 		returnRecord(
 			_program: CoreProgram,
@@ -1499,7 +1499,7 @@ export function coreValueKindDemand(
 		inputCounts: [],
 		inputs: [],
 	};
-	let recordReads: ReturnType<typeof coreReadOnlyRecordFields> | undefined;
+	let recordReads: ReturnType<typeof coreInitialRecordFieldReads> | undefined;
 	const parameters = new Set<CoreValueId>();
 	for (let index = 0; index < fn.parameterCount; index++)
 		parameters.add(fn.kernel.functionParameter(index));
@@ -1550,7 +1550,9 @@ export function coreValueKindDemand(
 					const producer =
 						fn.instructionOpcodeName(instruction) === "loadPropertyStatic" ||
 						fn.instructionOpcodeName(instruction) === "loadProperty"
-							? (recordReads ??= coreReadOnlyRecordFields(fn)).get(instruction)?.producer
+							? (recordReads ??= coreInitialRecordFieldReads(fn, control)).get(
+									instruction,
+								)?.producer
 							: undefined;
 					const site = targets.site(fn.id, producer ?? instruction);
 					if (site === undefined) return undefined;

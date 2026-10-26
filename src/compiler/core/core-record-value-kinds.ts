@@ -3,7 +3,7 @@ import { compilerIntegerRangesEqual } from "../shared/integer-range.ts";
 import type { CompilerIntegerRange } from "../shared/integer-range.ts";
 import type { CoreControlFlow } from "./core-ir-control-flow.ts";
 import { coreInstructionId } from "./core-ir.ts";
-import type { CoreInstructionId, CoreValueId } from "./core-ir.ts";
+import type { CoreBlockId, CoreInstructionId, CoreValueId } from "./core-ir.ts";
 import type { CoreFunctionStore } from "./core-store.ts";
 
 export interface CoreRecordFieldKind {
@@ -241,7 +241,7 @@ export function coreReturnedRecordKinds(
 export interface CoreRecordFieldRead {
 	readonly producer: CoreInstructionId;
 	readonly key: number;
-	/** Every read must be own: a prototype getter could publish or mutate the record. */
+	/** Earlier reads and sibling writes must be own, so getters and setters cannot escape the record. */
 	readonly requiredKeys: ReadonlyArray<number>;
 }
 
@@ -271,20 +271,57 @@ export function coreRecordFieldReadIntegerRange(
 
 interface CoreRecordFieldReadIndex {
 	readonly featureVersion: number;
+	readonly memoryEffectVersion?: number;
 	readonly reads: ReadonlyMap<CoreInstructionId, CoreRecordFieldRead>;
 }
 
 const recordFieldReadIndices = new WeakMap<CoreFunctionStore, CoreRecordFieldReadIndex>();
+const MAXIMUM_RECORD_READ_PREFIX_WORK = 256;
 
-export function coreReadOnlyRecordFields(
+export function coreInitialRecordFieldReads(
 	fn: CoreFunctionStore,
+	control: () => CoreControlFlow,
 ): ReadonlyMap<CoreInstructionId, CoreRecordFieldRead> {
 	// Edits are visible before their body/control-flow versions advance at commit.
 	const featureVersion = fn.hasActiveEditor ? undefined : fn.featureVersion;
 	const cached = recordFieldReadIndices.get(fn);
-	if (featureVersion !== undefined && cached?.featureVersion === featureVersion)
+	if (
+		featureVersion !== undefined &&
+		cached?.featureVersion === featureVersion &&
+		(cached.memoryEffectVersion === undefined ||
+			cached.memoryEffectVersion === fn.version("memoryEffects"))
+	)
 		return cached.reads;
 	const result = new Map<CoreInstructionId, CoreRecordFieldRead>();
+	let cfg: CoreControlFlow | undefined;
+	let positions: Map<CoreInstructionId, number> | undefined;
+	const position = (instruction: CoreInstructionId): number => {
+		if (positions === undefined) {
+			positions = new Map();
+			let index = 0;
+			for (const block of fn.blockIds()) {
+				for (const op of fn.bodyInstructionIds(block)) positions.set(op, index++);
+				positions.set(fn.blockTerminator(block), index++);
+			}
+		}
+		return positions.get(instruction)!;
+	};
+	const propertyKey = (instruction: CoreInstructionId): number | undefined => {
+		const opcode = fn.instructionOpcodeName(instruction);
+		let key =
+			opcode === "loadPropertyStatic" || opcode === "storePropertyStatic"
+				? fn.instructionAttributes(instruction).stringIndex
+				: undefined;
+		if (opcode === "loadProperty" || opcode === "storeProperty") {
+			const literal = coreReturnedValueDefinition(
+				fn,
+				fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction) + 1),
+			);
+			if (literal !== undefined && fn.instructionOpcodeName(literal) === "createString")
+				key = fn.instructionAttributes(literal).stringIndex;
+		}
+		return typeof key === "number" ? key : undefined;
+	};
 	for (const producer of fn.instructionIds()) {
 		if (
 			fn.instructionKind(producer) !== "operation" ||
@@ -298,6 +335,8 @@ export function coreReadOnlyRecordFields(
 		const pending = [fn.kernel.resultAt(fn.kernel.instructionResultStart(producer))];
 		const seen = new Set<CoreValueId>();
 		const reads = new Map<CoreInstructionId, number>();
+		const writes = new Map<CoreInstructionId, number>();
+		const barriers = new Set<CoreInstructionId>();
 		let valid = true;
 		while (pending.length > 0 && valid) {
 			const value = pending.pop()!;
@@ -315,8 +354,8 @@ export function coreReadOnlyRecordFields(
 				if (fn.kernel.useLive(use) === 0) continue;
 				const instruction = fn.kernel.useInstruction(use);
 				if (fn.instructionKind(instruction) !== "operation") {
-					valid = false;
-					break;
+					barriers.add(instruction);
+					continue;
 				}
 				const opcode = fn.instructionOpcodeName(instruction);
 				const operator = fn.instructionAttributes(instruction).operator;
@@ -336,37 +375,84 @@ export function coreReadOnlyRecordFields(
 					pending.push(fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)));
 					continue;
 				}
-				let key =
-					opcode === "loadPropertyStatic"
-						? fn.instructionAttributes(instruction).stringIndex
-						: undefined;
-				if (
-					opcode === "loadProperty" &&
-					fn.kernel.instructionOperandCount(instruction) === 2
-				) {
-					const literal = coreReturnedValueDefinition(
-						fn,
-						fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction) + 1),
-					);
-					if (
-						literal !== undefined &&
-						fn.instructionOpcodeName(literal) === "createString"
-					)
-						key = fn.instructionAttributes(literal).stringIndex;
+				const key = propertyKey(instruction);
+				if (fn.kernel.useOperand(use) !== 0 || key === undefined) {
+					barriers.add(instruction);
+					continue;
 				}
-				if (fn.kernel.useOperand(use) !== 0 || typeof key !== "number") {
-					valid = false;
-					break;
-				}
-				reads.set(instruction, key);
+				if (opcode === "storePropertyStatic" || opcode === "storeProperty")
+					writes.set(instruction, key);
+				else reads.set(instruction, key);
 			}
 		}
 		if (!valid || reads.size === 0) continue;
-		const requiredKeys = Object.freeze([...new Set(reads.values())]);
-		for (const [instruction, key] of reads)
-			result.set(instruction, Object.freeze({ producer, key, requiredKeys }));
+		const keys = new Set(reads.values());
+		if (barriers.size === 0 && writes.size === 0 && keys.size === 1) {
+			const requiredKeys = Object.freeze([...keys]);
+			for (const [instruction, key] of reads)
+				result.set(instruction, Object.freeze({ producer, key, requiredKeys }));
+			continue;
+		}
+		cfg ??= control();
+		const producerBlock = fn.instructionBlock(producer);
+		const producerPosition = position(producer);
+		const events = new Map<CoreBlockId, Array<CoreInstructionId>>();
+		for (const instruction of new Set([...reads.keys(), ...writes.keys(), ...barriers])) {
+			const block = fn.instructionBlock(instruction);
+			let row = events.get(block);
+			if (row === undefined) events.set(block, (row = []));
+			row.push(instruction);
+		}
+		for (const row of events.values()) row.sort((a, b) => position(b) - position(a));
+		for (const [instruction, key] of reads) {
+			const block = fn.instructionBlock(instruction);
+			if (!cfg.reachable.has(block) || !cfg.dominates(producerBlock, block)) continue;
+			const requiredKeys = new Set([key]);
+			const pending = [{ block, limit: position(instruction) }];
+			const fullBlocks = new Set<CoreBlockId>();
+			let remaining = MAXIMUM_RECORD_READ_PREFIX_WORK;
+			let valid = true;
+			// Reexecuting the producer starts a fresh object lifetime, including on a backedge.
+			while (pending.length > 0 && valid) {
+				const { block, limit } = pending.pop()!;
+				if (--remaining < 0) {
+					valid = false;
+					break;
+				}
+				for (const event of events.get(block) ?? []) {
+					const at = position(event);
+					if (at >= limit) continue;
+					if (block === producerBlock && at <= producerPosition) break;
+					if (--remaining < 0 || barriers.has(event) || writes.get(event) === key) {
+						valid = false;
+						break;
+					}
+					const priorKey = reads.get(event) ?? writes.get(event);
+					if (priorKey !== undefined) requiredKeys.add(priorKey);
+				}
+				if (!valid || block === producerBlock) continue;
+				for (const edge of cfg.predecessors[block] ?? []) {
+					if (!cfg.reachable.has(edge.from) || fullBlocks.has(edge.from)) continue;
+					fullBlocks.add(edge.from);
+					pending.push({ block: edge.from, limit: Infinity });
+				}
+			}
+			if (valid)
+				result.set(
+					instruction,
+					Object.freeze({
+						producer,
+						key,
+						requiredKeys: Object.freeze([...requiredKeys]),
+					}),
+				);
+		}
 	}
 	if (featureVersion !== undefined)
-		recordFieldReadIndices.set(fn, { featureVersion, reads: result });
+		recordFieldReadIndices.set(fn, {
+			featureVersion,
+			...(cfg === undefined ? {} : { memoryEffectVersion: fn.version("memoryEffects") }),
+			reads: result,
+		});
 	return result;
 }

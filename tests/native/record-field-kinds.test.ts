@@ -47,7 +47,12 @@ describe("fresh record field kind observations", () => {
 						),
 					).toBe(false);
 				}
-				for (const name of ["readEscaped", "readGetterMutated", "readPublic"]) {
+				for (const name of [
+					"readEscaped",
+					"readGetterMutated",
+					"readPublic",
+					"readAfterInheritedWrite",
+				]) {
 					expect(named(name)).toBeDefined();
 					expect(
 						named(name).body.instructions.some(
@@ -57,6 +62,14 @@ describe("fresh record field kind observations", () => {
 				}
 				for (const [name, range] of [
 					["readBounded", { ...COMPILER_INT32_RANGE, minimum: 0, maximum: 255 }],
+					["readBeforeFieldWrite", { ...COMPILER_INT32_RANGE, minimum: 0, maximum: 255 }],
+					["readSiblingWritten", { ...COMPILER_INT32_RANGE, minimum: 0, maximum: 255 }],
+					[
+						"readBeforeRecordGetter",
+						{ ...COMPILER_INT32_RANGE, minimum: 0, maximum: 255 },
+					],
+					["readFreshLoop", { ...COMPILER_INT32_RANGE, minimum: 0, maximum: 255 }],
+					["pointSuspended", { ...COMPILER_INT32_RANGE, minimum: 0, maximum: 255 }],
 					["readBoundedUnsigned", COMPILER_UINT32_RANGE],
 					["boundedSuspended", COMPILER_INT32_RANGE],
 					["boundedAwaited", { ...COMPILER_INT32_RANGE, minimum: 0, maximum: 255 }],

@@ -200,11 +200,70 @@ function readBoundedEscaped(value, callback) {
 	callback(record);
 	return record.small;
 }
+function readBeforeFieldWrite(value, callback) {
+	const record = makeBoundedRecord(value, observe);
+	const small = record.small;
+	const label = record.label;
+	record.small = "changed";
+	callback(record);
+	return `${small % 10}:${label}`;
+}
+function readStringBeforeEscape(value, callback) {
+	const record = makeRecord(value, observe);
+	const label = record.label;
+	record.label = 0;
+	callback(record);
+	return label + ":";
+}
+function readSiblingWritten(value, callback) {
+	const record = makeBoundedRecord(value, observe);
+	record.signed = "changed";
+	callback();
+	return record.small % 10;
+}
+function readBeforeRecordGetter(value) {
+	const record = makeBoundedRecord(value, observe);
+	const small = record.small;
+	record.recordFieldPointProbe;
+	return small % 10;
+}
+function readAfterInheritedWrite(value) {
+	const record = makeBoundedRecord(value, observe);
+	record.recordFieldSetterProbe = 1;
+	return typeof record.small;
+}
+function readEscapedLoop(value, callback) {
+	const record = makeBoundedRecord(value, observe);
+	let last;
+	for (let step = 0; step < 2; step++) {
+		last = record.small;
+		callback(record, step);
+	}
+	return last;
+}
+function readFreshLoop(value, callback) {
+	let total = 0;
+	for (let step = 0; step < 2; step++) {
+		const record = makeBoundedRecord(value, observe);
+		const small = record.small;
+		callback(record, step);
+		total += small % 10;
+	}
+	return total;
+}
 function* boundedSuspended(value, callback) {
 	const record = makeBoundedRecord(value, callback);
 	yield record.label;
 	callback("bounded resume");
 	return record.signed % 10;
+}
+function* pointSuspended(value, callback) {
+	const record = makeBoundedRecord(value, observe);
+	const small = record.small;
+	record.small = "changed";
+	yield record.label;
+	callback(record);
+	return small % 10;
 }
 async function boundedAwaited(value, callback) {
 	const record = makeBoundedRecord(value, callback);
@@ -223,7 +282,15 @@ Object.assign(globalThis, {
 	readBounded,
 	readBoundedUnsigned,
 	readBoundedEscaped,
+	readBeforeFieldWrite,
+	readStringBeforeEscape,
+	readSiblingWritten,
+	readBeforeRecordGetter,
+	readAfterInheritedWrite,
+	readEscapedLoop,
+	readFreshLoop,
 	boundedSuspended,
+	pointSuspended,
 	boundedAwaited,
 	boundedAsyncSuspended,
 });
@@ -244,10 +311,92 @@ for (const value of [
 ]) {
 	check(readBounded(value, observe), (value & 255) % 10, "bounded field remainder");
 	check(readBoundedUnsigned(value, observe), value >>> 0, "unsigned field value");
+	check(
+		readBeforeFieldWrite(value, (record) => {
+			observe("field write");
+			record.label = "observed";
+		}),
+		`${(value & 255) % 10}:bounded`,
+		"initial fields before mutation and escape",
+	);
+	check(
+		readSiblingWritten(value, observe),
+		(value & 255) % 10,
+		"unmodified sibling field",
+	);
+	check(
+		readStringBeforeEscape(value, (record) => {
+			record.label = null;
+			observe("saved heap string");
+		}),
+		"xx:",
+		"saved String field survives mutation and GC",
+	);
 	const iterator = boundedSuspended(value, observe);
 	check(iterator.next().value, "bounded", "bounded suspended heap field");
 	observe("bounded between");
 	check(iterator.next().value, (value | 0) % 10, "signed suspended field remainder");
+	const pointIterator = pointSuspended(value, (record) => {
+		record.label = "observed";
+		observe("point resume");
+	});
+	check(pointIterator.next().value, "bounded", "initial field read precedes suspension");
+	observe("point between");
+	check(
+		pointIterator.next().value,
+		(value & 255) % 10,
+		"initial field interval survives suspension and mutation",
+	);
+}
+const keptPointRecords = [];
+check(
+	readEscapedLoop(3, (record) => {
+		observe("loop escape");
+		record.small = "loop";
+	}),
+	"loop",
+	"backedge sees escaped mutation",
+);
+check(
+	readFreshLoop(3, (record, step) => {
+		keptPointRecords.push(record);
+		record.small = `step${step}`;
+		observe("fresh loop escape");
+	}),
+	6,
+	"fresh records reset the initial field proof",
+);
+observe("retained point records");
+check(keptPointRecords[0] === keptPointRecords[1], false, "fresh loop object identity");
+check(keptPointRecords[0].small, "step0", "first retained loop object");
+check(keptPointRecords[1].small, "step1", "second retained loop object");
+if (Object.isExtensible(Object.prototype)) {
+	Object.defineProperty(Object.prototype, "recordFieldPointProbe", {
+		configurable: true,
+		get() {
+			observe("point getter");
+			this.small = "getter";
+			return 0;
+		},
+	});
+	Object.defineProperty(Object.prototype, "recordFieldSetterProbe", {
+		configurable: true,
+		set(value) {
+			observe(value);
+			this.small = "setter";
+		},
+	});
+	try {
+		check(readBeforeRecordGetter(3), 3, "initial value precedes prototype getter");
+		check(
+			readAfterInheritedWrite(3),
+			"string",
+			"inherited setter invalidates later reads",
+		);
+	} finally {
+		delete Object.prototype.recordFieldPointProbe;
+		delete Object.prototype.recordFieldSetterProbe;
+	}
 }
 check(
 	readBoundedEscaped(-1, (record) => {
