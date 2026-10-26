@@ -150,7 +150,10 @@ The independent target boundary and current storage contract are recorded in
       accounts for backedges, possible getters/setters and fresh producer lifetimes.
       Handler transport still rejects the proof. Normal-result publication
       feeds local representations and native predicates without requiring pure
-      effects. Certified storage widths now join every virtual writer across
+      effects. Publication now changes only normal-result facts and specialization
+      inputs, preserving structural, call and memory analyses while waking local
+      kind/range consumers and the program return-kind worklist.
+      Certified storage widths now join every virtual writer across
       producers, callers, borrowed parameters, caller-owned literals and forwards.
       The native ABI carries typed pointers through artifacts, relocation, split
       units, forwards and materialization. Numeric and Boolean fields use scalar

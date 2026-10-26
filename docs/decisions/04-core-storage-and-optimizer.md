@@ -98,6 +98,7 @@ Function version domains are at least:
 - calls;
 - memory and effects;
 - facts;
+- normal-result kinds and integer bounds;
 - representations;
 - specialization-plan inputs.
 
@@ -106,6 +107,13 @@ reachability, call graph, program data and constant tables, published summaries,
 specialization-plan inputs. A `CoreChangeSet` identifies the changed functions,
 blocks, instructions, values, facts, edges, calls, and exact version domains. An edit
 to one function leaves every version of unrelated functions unchanged.
+
+Publishing a call result or initial own-field read changes its normal-result facts
+and specialization inputs without replacing the instruction's operands or effect
+proof. The `normalResults` domain wakes local kind/range consumers and the program's
+return-kind worklist. CFG, call targets, effects, provenance and memory versions
+remain reusable. Ordinary fact edits, including effect-only proofs, do not dirty
+the return-kind worklist.
 
 ### Sealed boundary
 

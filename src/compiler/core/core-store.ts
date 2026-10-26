@@ -51,6 +51,7 @@ export type CoreChangeDomain =
 	| "calls"
 	| "memoryEffects"
 	| "facts"
+	| "normalResults"
 	| "representations"
 	| "specializationInputs";
 
@@ -73,6 +74,7 @@ export const CORE_PROGRAM_FLOW_MEMORY = 1 << 4;
 export const CORE_PROGRAM_FLOW_FACTS = 1 << 5;
 export const CORE_PROGRAM_FLOW_REPRESENTATIONS = 1 << 6;
 export const CORE_PROGRAM_FLOW_SPECIALIZATION = 1 << 7;
+export const CORE_PROGRAM_FLOW_NORMAL_RESULTS = 1 << 8;
 
 function programFlowDomainBit(domain: CoreChangeDomain): CoreProgramFlowDomainMask {
 	switch (domain) {
@@ -88,6 +90,8 @@ function programFlowDomainBit(domain: CoreChangeDomain): CoreProgramFlowDomainMa
 			return CORE_PROGRAM_FLOW_MEMORY;
 		case "facts":
 			return CORE_PROGRAM_FLOW_FACTS;
+		case "normalResults":
+			return CORE_PROGRAM_FLOW_NORMAL_RESULTS;
 		case "representations":
 			return CORE_PROGRAM_FLOW_REPRESENTATIONS;
 		case "specializationInputs":
@@ -102,6 +106,7 @@ export interface CoreFunctionVersions {
 	readonly calls: number;
 	readonly memoryEffects: number;
 	readonly facts: number;
+	readonly normalResults: number;
 	readonly representations: number;
 	readonly specializationInputs: number;
 }
@@ -117,6 +122,7 @@ export function coreFunctionVersionsAreCurrent(
 		snapshot.calls === fn.version("calls") &&
 		snapshot.memoryEffects === fn.version("memoryEffects") &&
 		snapshot.facts === fn.version("facts") &&
+		snapshot.normalResults === fn.version("normalResults") &&
 		snapshot.representations === fn.version("representations") &&
 		snapshot.specializationInputs === fn.version("specializationInputs")
 	);
@@ -313,6 +319,7 @@ const FUNCTION_DOMAINS: ReadonlyArray<CoreChangeDomain> = [
 	"calls",
 	"memoryEffects",
 	"facts",
+	"normalResults",
 	"representations",
 	"specializationInputs",
 ];
@@ -613,6 +620,7 @@ export class CoreFunctionStore {
 		calls: 0,
 		memoryEffects: 0,
 		facts: 0,
+		normalResults: 0,
 		representations: 0,
 		specializationInputs: 0,
 	};
@@ -1880,6 +1888,16 @@ export class CoreFunctionStore {
 		this._replaceOperands(mutation, instruction, operands);
 	}
 
+	_setInstructionAttributes(
+		mutation: CoreStoreMutation,
+		instruction: CoreInstructionId,
+		attributes: CoreInstructionAttributes,
+	): void {
+		this.#assertEditing(mutation);
+		this.#requireInstruction(instruction);
+		this.#instructionPayload[instruction] = freezeAttributes(attributes);
+	}
+
 	_setInstructionEffectRefinement(
 		mutation: CoreStoreMutation,
 		instruction: CoreInstructionId,
@@ -2767,6 +2785,7 @@ export class CoreProgram {
 		calls: 0,
 		memoryEffects: 0,
 		facts: 0,
+		normalResults: 0,
 		representations: 0,
 		specializationInputs: 0,
 	};

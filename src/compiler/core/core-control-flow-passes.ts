@@ -1056,7 +1056,7 @@ const foldPathComparisons: CoreFunctionPass = {
 		},
 	},
 	requiredAnalyses: [CORE_LOOP_INDUCTION_ANALYSIS],
-	wakesOn: ["body", "cfg", "representations"],
+	wakesOn: ["body", "cfg", "normalResults", "representations"],
 	changes: { ...CONTROL_FLOW_CHANGES, facts: true },
 	budget: CONTROL_FLOW_BUDGET,
 	run(context) {
@@ -1173,7 +1173,7 @@ const selectLoopScalarRepresentations: CoreFunctionPass = {
 		},
 	},
 	requiredAnalyses: [CORE_LOOP_INDUCTION_ANALYSIS, CORE_LOCAL_VALUE_KIND_ANALYSIS],
-	wakesOn: ["body", "cfg", "representations"],
+	wakesOn: ["body", "cfg", "normalResults", "representations"],
 	changes: { ...CONTROL_FLOW_CHANGES, representations: true },
 	budget: CONTROL_FLOW_BUDGET,
 	run(context) {
@@ -1463,7 +1463,7 @@ const reduceBoundedRemainders: CoreFunctionPass = {
 		},
 	},
 	requiredAnalyses: [CORE_LOOP_INDUCTION_ANALYSIS, CORE_LOCAL_VALUE_KIND_ANALYSIS],
-	wakesOn: ["body", "cfg", "representations"],
+	wakesOn: ["body", "cfg", "normalResults", "representations"],
 	changes: { ...CONTROL_FLOW_CHANGES, cfg: false, facts: true },
 	budget: CONTROL_FLOW_BUDGET,
 	run(context) {

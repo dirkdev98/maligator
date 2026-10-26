@@ -18,6 +18,7 @@ import {
 } from "./core-array-iteration.ts";
 import { coreConstructorSlotReserve } from "./core-constructor-layout.ts";
 import { CoreEditor } from "./core-editor.ts";
+import type { CoreNormalResultFacts } from "./core-editor.ts";
 import {
 	coreCaptureOwners,
 	coreCreatesFunctions,
@@ -85,7 +86,6 @@ import type {
 	CoreInstructionId,
 	CoreRepresentation,
 	CoreValueId,
-	CoreAttributeValue,
 } from "./core-ir.ts";
 import { coreInstructionId } from "./core-ir.ts";
 import { coreArgumentObservation } from "./core-native-entry-analysis.ts";
@@ -4018,10 +4018,8 @@ type CoreValueKindFold =
 			readonly preferred: number;
 	  };
 
-interface CoreNormalResultFact {
+interface CoreNormalResultFact extends CoreNormalResultFacts {
 	readonly instruction: CoreInstructionId;
-	readonly mask: number;
-	readonly integerRange?: CompilerIntegerRange;
 }
 
 export type CoreCrossCallCallerPreparation = (
@@ -5176,64 +5174,20 @@ export function runCoreCrossCallTransforms(
 		])) {
 			const fn = program.function(functionId);
 			const editor = CoreEditor.open(program, functionId);
-			for (const { instruction, mask, integerRange } of callKindsByCaller.get(
-				functionId,
-			) ?? []) {
+			for (const fact of callKindsByCaller.get(functionId) ?? []) {
+				const { instruction } = fact;
 				if (!fn.isInstructionLive(instruction)) continue;
-				const opcode = fn.instructionOpcodeName(instruction);
 				if (
 					fn.registry.byId(fn.instructionOpcode(instruction)).callTransfer?.result !==
 					"call-completion"
 				)
 					continue;
-				const start = fn.kernel.instructionOperandStart(instruction);
-				const attributes: Record<string, CoreAttributeValue> = {
-					...fn.instructionAttributes(instruction),
-					[CORE_CALL_RESULT_KIND_ATTRIBUTE]: mask,
-				};
-				if (integerRange === undefined)
-					delete attributes[CORE_NORMAL_RESULT_INTEGER_RANGE_ATTRIBUTE];
-				else attributes[CORE_NORMAL_RESULT_INTEGER_RANGE_ATTRIBUTE] = { ...integerRange };
-				editor.replaceInstruction(
-					instruction,
-					opcode,
-					Array.from(
-						{ length: fn.kernel.instructionOperandCount(instruction) },
-						(_, index) => fn.kernel.operandAt(start + index),
-					),
-					{
-						attributes,
-						sourcePosition: fn.instructionSourcePosition(instruction),
-						effectRefinement: fn.instructionEffectRefinement(instruction),
-					},
-				);
+				editor.setNormalResultFacts(instruction, fact);
 				callResultKindFacts++;
 			}
-			for (const { instruction, mask, integerRange } of recordKindsByCaller.get(
-				functionId,
-			) ?? []) {
-				if (!fn.isInstructionLive(instruction)) continue;
-				const start = fn.kernel.instructionOperandStart(instruction);
-				const attributes: Record<string, CoreAttributeValue> = {
-					...fn.instructionAttributes(instruction),
-					[CORE_RECORD_FIELD_KIND_ATTRIBUTE]: mask,
-				};
-				if (integerRange === undefined)
-					delete attributes[CORE_NORMAL_RESULT_INTEGER_RANGE_ATTRIBUTE];
-				else attributes[CORE_NORMAL_RESULT_INTEGER_RANGE_ATTRIBUTE] = { ...integerRange };
-				editor.replaceInstruction(
-					instruction,
-					fn.instructionOpcodeName(instruction),
-					Array.from(
-						{ length: fn.kernel.instructionOperandCount(instruction) },
-						(_, index) => fn.kernel.operandAt(start + index),
-					),
-					{
-						attributes,
-						sourcePosition: fn.instructionSourcePosition(instruction),
-						effectRefinement: fn.instructionEffectRefinement(instruction),
-					},
-				);
+			for (const fact of recordKindsByCaller.get(functionId) ?? []) {
+				if (!fn.isInstructionLive(fact.instruction)) continue;
+				editor.setNormalResultFacts(fact.instruction, fact);
 			}
 			const identities = callIdentitiesByCaller.get(functionId);
 			if (identities !== undefined) {

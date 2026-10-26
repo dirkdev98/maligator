@@ -1,3 +1,17 @@
+import {
+	compilerValueKindMaskIsValid,
+	COMPILER_VALUE_KIND_NUMBER,
+} from "../shared/compiler-value-kinds.ts";
+import {
+	compilerIntegerRangeIsValid,
+	compilerIntegerRangesEqual,
+} from "../shared/integer-range.ts";
+import type { CompilerIntegerRange } from "../shared/integer-range.ts";
+import {
+	CORE_CALL_RESULT_KIND_ATTRIBUTE,
+	CORE_NORMAL_RESULT_INTEGER_RANGE_ATTRIBUTE,
+	CORE_RECORD_FIELD_KIND_ATTRIBUTE,
+} from "./core-internal-attributes.ts";
 import { coreFactId } from "./core-ir.ts";
 import type {
 	AppendCoreInstructionOptions,
@@ -11,6 +25,7 @@ import type {
 	CoreFunctionMetadata,
 	CoreFunctionOptions,
 	CoreInstructionId,
+	CoreInstructionAttributes,
 	CoreOpcodeDescriptor,
 	CoreRepresentation,
 	CoreTerminatorInput,
@@ -33,6 +48,11 @@ import type {
 export interface CoreInsertedInstruction {
 	readonly instruction: CoreInstructionId;
 	readonly outputs: ReadonlyArray<CoreValueId>;
+}
+
+export interface CoreNormalResultFacts {
+	readonly mask: number;
+	readonly integerRange?: CompilerIntegerRange;
 }
 
 function arityAccepts(
@@ -551,6 +571,62 @@ export class CoreEditor {
 		this.#edits++;
 	}
 
+	// Normal completion constrains the value without certifying the operation's effects.
+	setNormalResultFacts(
+		instruction: CoreInstructionId,
+		facts: CoreNormalResultFacts | undefined,
+	): void {
+		this.#assertActive();
+		const fn = this.function;
+		if (
+			fn.instructionKind(instruction) !== "operation" ||
+			fn.kernel.instructionResultCount(instruction) !== 1
+		)
+			throw new Error("Normal-result facts require a single-result operation");
+		const opcode = fn.instructionOpcodeName(instruction);
+		let key: string | undefined;
+		if (opcode === "loadProperty" || opcode === "loadPropertyStatic")
+			key = CORE_RECORD_FIELD_KIND_ATTRIBUTE;
+		else if (
+			this.program.registry.byId(fn.instructionOpcode(instruction)).callTransfer
+				?.result === "call-completion"
+		)
+			key = CORE_CALL_RESULT_KIND_ATTRIBUTE;
+		if (key === undefined)
+			throw new Error("Normal-result facts require a call or property read");
+		if (
+			facts !== undefined &&
+			(!compilerValueKindMaskIsValid(facts.mask) ||
+				(facts.integerRange !== undefined &&
+					(facts.mask !== COMPILER_VALUE_KIND_NUMBER ||
+						!compilerIntegerRangeIsValid(facts.integerRange))))
+		)
+			throw new Error("Invalid normal-result facts");
+		const current = fn.instructionAttributes(instruction);
+		const range = current[CORE_NORMAL_RESULT_INTEGER_RANGE_ATTRIBUTE];
+		if (
+			current[key] === facts?.mask &&
+			(range === undefined || compilerIntegerRangeIsValid(range)) &&
+			compilerIntegerRangesEqual(range, facts?.integerRange)
+		)
+			return;
+		const attributes: Record<string, CoreInstructionAttributes[string]> = { ...current };
+		if (facts === undefined) delete attributes[key];
+		else attributes[key] = facts.mask;
+		if (facts?.integerRange === undefined)
+			delete attributes[CORE_NORMAL_RESULT_INTEGER_RANGE_ATTRIBUTE];
+		else
+			attributes[CORE_NORMAL_RESULT_INTEGER_RANGE_ATTRIBUTE] = { ...facts.integerRange };
+		fn._setInstructionAttributes(this.#mutation, instruction, attributes);
+		this.#instructions.add(instruction);
+		this.#touchBlock(fn.instructionBlock(instruction));
+		this.#touchInstructionResults(instruction);
+		this.#domains.add("facts");
+		this.#domains.add("normalResults");
+		this.#domains.add("specializationInputs");
+		this.#edits++;
+	}
+
 	setInstructionEffectRefinement(
 		instruction: CoreInstructionId,
 		refinement: CoreEffectRefinement,
@@ -1024,6 +1100,7 @@ export class CoreEditor {
 					this.#programDomains.add("specializationInputs");
 					break;
 				case "body":
+				case "normalResults":
 				case "cfg":
 				case "exceptionFlow":
 				case "memoryEffects":

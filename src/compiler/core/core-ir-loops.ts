@@ -700,7 +700,14 @@ export const CORE_LOOP_INDUCTION_ANALYSIS: CoreAnalysisDefinition<CoreLoopInduct
 	{
 		key: "loop-induction-and-path-ranges",
 		scope: "function",
-		functionDependencies: ["body", "cfg", "exceptionFlow", "representations"],
+		functionDependencies: [
+			"body",
+			"cfg",
+			"exceptionFlow",
+			"memoryEffects",
+			"normalResults",
+			"representations",
+		],
 		compute({ program, request, get }) {
 			if (request.scope !== "function") throw new Error("Expected function analysis");
 			const fn = program.function(request.function);

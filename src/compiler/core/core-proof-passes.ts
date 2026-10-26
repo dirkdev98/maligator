@@ -404,7 +404,7 @@ const normalizeNumericNullishJoins: CoreFunctionPass = {
 		},
 	},
 	requiredAnalyses: [CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, CORE_LOCAL_VALUE_KIND_ANALYSIS],
-	wakesOn: ["body", "cfg", "representations"],
+	wakesOn: ["body", "cfg", "normalResults", "representations"],
 	changes: { cfg: true, calls: true, facts: false, representations: true },
 	budget: PROOF_BUDGET,
 	run(context) {

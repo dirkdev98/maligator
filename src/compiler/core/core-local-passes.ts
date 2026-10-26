@@ -1242,7 +1242,7 @@ const foldValueKindObservations: CoreFunctionPass = {
 	stage: "canonicalize",
 	requiredFunctionOpcodesAny: ["unary", "binary", "typeofCompare", "callKnown"],
 	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS, CORE_LOOP_INDUCTION_ANALYSIS],
-	wakesOn: ["body", "cfg", "representations"],
+	wakesOn: ["body", "cfg", "normalResults", "representations"],
 	changes: LOCAL_CHANGES,
 	budget: LOCAL_BUDGET,
 	run(context) {
@@ -1287,7 +1287,7 @@ const foldPrimitiveCoercions: CoreFunctionPass = {
 	stage: "canonicalize",
 	requiredFunctionOpcodesAny: ["requireCoercible", "toPropertyKey"],
 	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS, CORE_LOOP_INDUCTION_ANALYSIS],
-	wakesOn: ["body", "cfg", "representations"],
+	wakesOn: ["body", "cfg", "normalResults", "representations"],
 	changes: LOCAL_CHANGES,
 	budget: LOCAL_BUDGET,
 	run(context) {
@@ -1443,7 +1443,7 @@ const rewriteNumericIdentities: CoreFunctionPass = {
 		},
 	},
 	requiredAnalyses: [CORE_LOCAL_VALUE_KIND_ANALYSIS],
-	wakesOn: ["body", "cfg", "representations"],
+	wakesOn: ["body", "cfg", "normalResults", "representations"],
 	changes: LOCAL_CHANGES,
 	budget: LOCAL_BUDGET,
 	run(context) {
@@ -1543,7 +1543,7 @@ const foldRedundantTdzChecks: CoreFunctionPass = {
 	stage: "canonicalize",
 	requiredFunctionOpcodesAny: ["throwIfTdz"],
 	requiredAnalyses: [CORE_CONTROL_FLOW_BUNDLE_ANALYSIS, CORE_LOCAL_VALUE_KIND_ANALYSIS],
-	wakesOn: ["body", "cfg", "memoryEffects", "representations"],
+	wakesOn: ["body", "cfg", "memoryEffects", "normalResults", "representations"],
 	changes: LOCAL_CHANGES,
 	budget: LOCAL_BUDGET,
 	run(context) {

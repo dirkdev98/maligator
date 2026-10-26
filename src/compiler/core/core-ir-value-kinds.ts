@@ -1237,7 +1237,14 @@ export const CORE_LOCAL_VALUE_KIND_ANALYSIS: CoreAnalysisDefinition<CoreValueKin
 		key: "local-value-kinds",
 		scope: "function",
 		owner: CORE_OPTIMIZATION_OWNER.localValueKinds,
-		functionDependencies: ["body", "cfg", "representations"],
+		functionDependencies: [
+			"body",
+			"cfg",
+			"exceptionFlow",
+			"memoryEffects",
+			"normalResults",
+			"representations",
+		],
 		contextIdentity: (context) => context,
 		compute({ program, context, request, get, runOwner, recordResult }) {
 			if (request.scope !== "function") throw new Error("Expected function analysis");
