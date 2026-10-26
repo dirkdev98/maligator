@@ -717,7 +717,7 @@ const annotateKnownOwnSlots: CoreFunctionPass = {
 	},
 	requiredAnalyses: [CORE_LOCAL_SHAPE_PROVENANCE_ANALYSIS],
 	wakesOn: ["body", "memoryEffects"],
-	changes: { cfg: false, calls: false, facts: false, representations: false },
+	changes: { cfg: false, calls: false, facts: true, representations: false },
 	budget: PROVENANCE_BUDGET,
 	run(context) {
 		const { program, item } = context;

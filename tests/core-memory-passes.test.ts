@@ -1364,6 +1364,50 @@ describe("Core local memory, provenance, and escape optimization", () => {
 		expect(opcodes).not.toContain("createObjectShaped");
 	});
 
+	it("preserves an existing effect proof when annotating an own-slot hint", () => {
+		const core = program();
+		const builder = new CoreFunctionBuilder(core);
+		const entry = builder.createBlock();
+		const value = builder.appendInstruction(entry, "createNumber", [], {
+			attributes: { value: 1 },
+		})[0]!;
+		const object = builder.appendInstruction(entry, "createObjectShaped", [value], {
+			attributes: { keyStringIndices: [0] },
+		})[0]!;
+		const loaded = builder.appendInstruction(entry, "loadPropertyStatic", [object], {
+			attributes: { stringIndex: 0 },
+		})[0]!;
+		const load = builder.bodyInstructionIds(entry).at(-1)!;
+		builder.setTerminator(entry, { kind: "return", value: loaded });
+		const fn = core.function(builder.finish(entry).function);
+		const editor = CoreEditor.open(core, fn.id);
+		const proof = editor.addFact({
+			kind: "own-slot-test",
+			value: true,
+			claims: [{ kind: "effect", instruction: load, effects: CORE_NO_EFFECTS }],
+			validity: { kind: "summary", digest: "own-slot-test" },
+			obligations: [],
+			origin: "test",
+		});
+		editor.setInstructionEffectRefinement(load, { proof, effects: CORE_NO_EFFECTS });
+		editor.commit();
+		const report = new CoreOptimizationReportBuilder(core);
+		const analyses = new CoreAnalysisManager(core, context, report);
+		const pass = CORE_MEMORY_PASSES.find(
+			({ name }) => name === "annotate-known-own-slots",
+		)!;
+		const changes = new CoreFunctionPassScheduler(
+			core,
+			context,
+			analyses,
+			report,
+			fn.id,
+		).runComponent("memory", [pass]);
+		expect(changes.some(({ facts }) => facts.includes(proof))).toBe(true);
+		expect(fn.instructionEffectRefinement(load)?.proof).toBe(proof);
+		expect(fn.instructionAttributes(load).knownOwnSlot).toBeDefined();
+	});
+
 	it.each(["named", "unknown"] as const)(
 		"only requests relevant property proofs for a %s receiver",
 		(receiver) => {
