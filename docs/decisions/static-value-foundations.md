@@ -283,6 +283,14 @@ calls. These intervals exclude NaN and negative zero: two bounded operands, or o
 nonzero bounded operand, permit ordinary numeric equality. A single zero-capable
 bound retains the unbounded operand's sign test. Disjoint intervals can fold the
 result while retaining effectful argument producers and normal-return calls.
+Strict equality and SameValue share native operand-domain rendering. A common
+domain limited to canonical identity words permits word equality; known Number,
+String or BigInt operands leave a type test only on an unknown counterpart.
+String and BigInt comparisons retain content equality. Scalar comparison views
+also preserve String pointers, and frameless entries consume their constant kinds.
+Noncoercing comparisons can be delayed into expressions while their inputs remain
+available; boxed leaves stay materialized before call and field-store preludes.
+Loose equality keeps its coercion semantics and ordinary fallback.
 Call result bounds reach scalar selection, variant overlays and artifact transport.
 After checking completion, callers decode int32-bounded results with an ordinary C
 cast; argument transports retain their own conversion semantics. Unsigned C remainder

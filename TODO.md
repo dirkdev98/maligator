@@ -126,6 +126,8 @@ The independent target boundary and current storage contract are recorded in
       its miss retains arbitrary results, throwing and root publication.
       SameValue also consumes each operand's interval, preserving only the NaN and
       signed-zero handling still required by the unbounded operand.
+      Strict equality and SameValue now share partial kind and scalar consumers;
+      noncoercing comparisons can form expressions within their root-safe windows.
 - [ ] Give record entries typed fields. Record entries return fields boxed, so a
       caller's `token.end` stays boxed, `index = token.end + 1` gives the producer a
       boxed parameter, and the scanning loop in `returned-records` runs generic

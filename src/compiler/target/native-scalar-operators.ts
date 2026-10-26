@@ -4,6 +4,7 @@ import {
 	COMPILER_VALUE_KIND_BOOLEAN,
 	COMPILER_VALUE_KIND_STRING,
 	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_BIGINT,
 	COMPILER_VALUE_KIND_TOP,
 	COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE,
 	COMPILER_NUMERIC_BINARY_OPERATORS,
@@ -14,8 +15,9 @@ import type { CompilerValueKindMask } from "../shared/compiler-value-kinds.ts";
 import type { CompilerIntegerRange } from "../shared/integer-range.ts";
 import { compilerIntegerRangeComparison } from "../shared/integer-range.ts";
 
-// Scalar views are noncoercing Number/Boolean reads; integer pairs exclude negative zero.
-export function nativeSameValueExpression(
+// Scalar views are noncoercing Number/Boolean/String reads; integer pairs exclude negative zero.
+export function nativeEqualityExpression(
+	semantics: "strict" | "same-value",
 	left: string,
 	right: string,
 	leftKind: CompilerValueKindMask = COMPILER_VALUE_KIND_TOP,
@@ -26,8 +28,18 @@ export function nativeSameValueExpression(
 	leftRange?: CompilerIntegerRange,
 	rightRange?: CompilerIntegerRange,
 ): string {
-	if (left === right) return "true";
-	if ((leftKind & rightKind) === 0) return "false";
+	const common = leftKind & rightKind;
+	if (left === right)
+		return semantics === "same-value"
+			? "true"
+			: nativeReflexiveEqualityExpression(
+					"===",
+					left,
+					common === COMPILER_VALUE_KIND_NUMBER ? leftScalar : undefined,
+					common,
+					integerPair || leftRange !== undefined || rightRange !== undefined,
+				)!;
+	if (common === 0) return "false";
 	if (
 		leftKind === rightKind &&
 		(leftKind === COMPILER_VALUE_KIND_UNDEFINED || leftKind === COMPILER_VALUE_KIND_NULL)
@@ -36,27 +48,86 @@ export function nativeSameValueExpression(
 	const compared = compilerIntegerRangeComparison("===", leftRange, rightRange);
 	if (compared !== undefined) return String(compared);
 	if (
-		leftKind === COMPILER_VALUE_KIND_NUMBER &&
+		leftKind === COMPILER_VALUE_KIND_BOOLEAN &&
 		rightKind === leftKind &&
 		leftScalar !== undefined &&
 		rightScalar !== undefined
+	)
+		return `${leftScalar} == ${rightScalar}`;
+	if (
+		(common &
+			(COMPILER_VALUE_KIND_NUMBER |
+				COMPILER_VALUE_KIND_STRING |
+				COMPILER_VALUE_KIND_BIGINT)) ===
+		0
+	)
+		return `${left} == ${right}`;
+	if (
+		leftKind === COMPILER_VALUE_KIND_NUMBER ||
+		rightKind === COMPILER_VALUE_KIND_NUMBER
 	) {
+		const a = leftScalar ?? `mal_ops_number_as_f64(${left})`;
+		const b = rightScalar ?? `mal_ops_number_as_f64(${right})`;
+		let equal: string;
 		if (
+			semantics === "strict" ||
 			integerPair ||
 			(leftRange !== undefined && rightRange !== undefined) ||
 			(leftRange !== undefined && (leftRange.minimum > 0 || leftRange.maximum < 0)) ||
 			(rightRange !== undefined && (rightRange.minimum > 0 || rightRange.maximum < 0))
 		)
-			return `${leftScalar} == ${rightScalar}`;
-		if (leftRange !== undefined)
-			return `(${leftScalar} == ${rightScalar} && (${leftScalar} != 0.0 || !signbit(${rightScalar})))`;
-		if (rightRange !== undefined)
-			return `(${leftScalar} == ${rightScalar} && (${rightScalar} != 0.0 || !signbit(${leftScalar})))`;
-		return `(${leftScalar} == ${rightScalar} ? (${leftScalar} != 0.0 || !!signbit(${leftScalar}) == !!signbit(${rightScalar})) : (isnan(${leftScalar}) && isnan(${rightScalar})))`;
+			equal = `${a} == ${b}`;
+		else if (leftRange !== undefined)
+			equal = `(${a} == ${b} && (${a} != 0.0 || !signbit(${b})))`;
+		else if (rightRange !== undefined)
+			equal = `(${a} == ${b} && (${b} != 0.0 || !signbit(${a})))`;
+		else
+			equal = `(${a} == ${b} ? (${a} != 0.0 || !!signbit(${a}) == !!signbit(${b})) : (isnan(${a}) && isnan(${b})))`;
+		const guard =
+			leftKind !== COMPILER_VALUE_KIND_NUMBER
+				? `mal_ops_is_number(${left})`
+				: rightKind !== COMPILER_VALUE_KIND_NUMBER
+					? `mal_ops_is_number(${right})`
+					: undefined;
+		return guard === undefined ? equal : `(${guard} && (${equal}))`;
 	}
-	if (leftKind === COMPILER_VALUE_KIND_BOOLEAN && rightKind === leftKind)
-		return `${leftScalar ?? `mal_value_to_boolean(${left})`} == ${rightScalar ?? `mal_value_to_boolean(${right})`}`;
-	return `mal_ops_same_value(${left}, ${right})`;
+	if (
+		leftKind === COMPILER_VALUE_KIND_STRING ||
+		rightKind === COMPILER_VALUE_KIND_STRING
+	) {
+		const a =
+			leftKind === COMPILER_VALUE_KIND_STRING && leftScalar !== undefined
+				? leftScalar
+				: `mal_value_to_string(${left})`;
+		const b =
+			rightKind === COMPILER_VALUE_KIND_STRING && rightScalar !== undefined
+				? rightScalar
+				: `mal_value_to_string(${right})`;
+		const equal = `mal_string_equals(${a}, ${b})`;
+		const guard =
+			leftKind !== COMPILER_VALUE_KIND_STRING
+				? `mal_value_is_string(${left})`
+				: rightKind !== COMPILER_VALUE_KIND_STRING
+					? `mal_value_is_string(${right})`
+					: undefined;
+		return guard === undefined ? equal : `(${guard} && ${equal})`;
+	}
+	if (
+		leftKind === COMPILER_VALUE_KIND_BIGINT ||
+		rightKind === COMPILER_VALUE_KIND_BIGINT
+	) {
+		const equal = `mal_bigint_value(mal_value_to_bigint(${left})) == mal_bigint_value(mal_value_to_bigint(${right}))`;
+		const guard =
+			leftKind !== COMPILER_VALUE_KIND_BIGINT
+				? `mal_value_is_bigint(${left})`
+				: rightKind !== COMPILER_VALUE_KIND_BIGINT
+					? `mal_value_is_bigint(${right})`
+					: undefined;
+		return guard === undefined ? equal : `(${guard} && (${equal}))`;
+	}
+	return semantics === "same-value" && (common & COMPILER_VALUE_KIND_NUMBER) !== 0
+		? `mal_ops_same_value(${left}, ${right})`
+		: `mal_ops_strict_equal_boxed(${left}, ${right})`;
 }
 
 export function nativeReflexiveEqualityExpression(

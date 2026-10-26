@@ -169,6 +169,40 @@ function identityDisjoint(value, callback) {
 	collectGarbage();
 	return Object.is(result, (value & 255) + 1024);
 }
+function partialEquality(value, other) {
+	const boolean = !!value,
+		number = +value,
+		string = ":" + value,
+		bigint = 1n;
+	collectGarbage();
+	return [
+		boolean === other,
+		boolean !== other,
+		number === other,
+		number !== other,
+		string === other,
+		string !== other,
+		bigint === other,
+		bigint !== other,
+		Object.is(boolean, other),
+		Object.is(number, other),
+		Object.is(string, other),
+		Object.is(bigint, other),
+	].join(",");
+}
+function looseEquality(value, other) {
+	return [
+		!!value == other,
+		!!value != other,
+		":" + value == other,
+		":" + value != other,
+	].join(",");
+}
+function identityEquality(value, other) {
+	if (typeof value === "object" || typeof value === "symbol")
+		return [value === other, value !== other, Object.is(value, other)].join(",");
+	return "skip";
+}
 function identityStrict(value, callback) {
 	const result = identity(value, callback);
 	collectGarbage();
@@ -275,6 +309,9 @@ globalThis.identityPrefix = identityPrefix;
 globalThis.identityTextPrefix = identityTextPrefix;
 globalThis.identitySame = identitySame;
 globalThis.identityDisjoint = identityDisjoint;
+globalThis.partialEquality = partialEquality;
+globalThis.looseEquality = looseEquality;
+globalThis.identityEquality = identityEquality;
 globalThis.identityStrict = identityStrict;
 globalThis.identitySameChain = identitySameChain;
 globalThis.identitySamePrefix = identitySamePrefix;
@@ -340,7 +377,31 @@ const inputs = [
 		},
 	},
 ];
+const freshBigint = BigInt({
+	[Symbol.toPrimitive]() {
+		return "1";
+	},
+});
 for (const value of inputs) {
+	for (const other of [
+		true,
+		false,
+		0,
+		-0,
+		NaN,
+		freshBigint,
+		":0",
+		":1",
+		null,
+		undefined,
+		value,
+	]) {
+		console.log(
+			capture(() => partialEquality(value, other)),
+			capture(() => looseEquality(value, other)),
+			capture(() => identityEquality(value, other)),
+		);
+	}
 	console.log(
 		capture(() => compute(value, hook)),
 		capture(() => concat(value, hook)),
@@ -403,6 +464,10 @@ for (const value of inputs) {
 			return String(second.value) + "," + iterator.next().value;
 		}),
 	);
+}
+for (const text of ["x".repeat(256), "😀é\0".repeat(64)]) {
+	const other = (":" + text + "z").slice(0, -1);
+	console.log(capture(() => partialEquality(text, other)));
 }
 for (const value of [
 	0, -0, -1, 255, 65536, 2147483647, 2147483648, 4294967295, 4294967296, 9007199254740991,

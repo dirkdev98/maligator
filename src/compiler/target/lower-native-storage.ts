@@ -786,17 +786,13 @@ function pureScalarOperation(
 						(reps[op.dst] === "int32" && op.operator === "~")))
 			);
 		case "BINARY":
+			if (booleanResult(op.dst) && (op.operator === "===" || op.operator === "!=="))
+				return true;
 			if (plan?.kind === "unsigned-arithmetic")
 				return (
 					(numberResult(op.dst) || reps[op.dst] === "int32") &&
 					["+", "-", "*", "%"].includes(op.operator)
 				);
-			if (
-				booleanResult(op.dst) &&
-				reps[op.left] === "boolean" &&
-				reps[op.right] === "boolean"
-			)
-				return ["===", "!=="].includes(op.operator);
 			return (
 				numericInput(op.left, 0) &&
 				numericInput(op.right, 1) &&
@@ -810,6 +806,14 @@ function pureScalarOperation(
 		case "MATH_UNARY_NUMBER":
 			return (
 				reps[op.dst] === "number" && ["number", "int32", "boxed"].includes(reps[op.src]!)
+			);
+		case "CALL_KNOWN":
+			return (
+				op.operation === "Object.is" &&
+				!op.construct &&
+				op.argumentMode === undefined &&
+				(op.specialized === undefined || op.specialized === op.operation) &&
+				booleanResult(op.dst)
 			);
 		case "MATH_BINARY_NUMBER":
 			return (

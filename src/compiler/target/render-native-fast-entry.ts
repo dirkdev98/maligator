@@ -28,7 +28,7 @@ import {
 	nativePrimitiveNumberExpression,
 	nativeUnsignedRemainderExpression,
 	nativeReflexiveEqualityExpression,
-	nativeSameValueExpression,
+	nativeEqualityExpression,
 } from "./native-scalar-operators.ts";
 import {
 	nativeInstructionSourceRanges,
@@ -522,6 +522,26 @@ function number(values: FastNumbers, register: number): string {
 		: values.literal(constant);
 }
 
+function equalityScalar(
+	values: FastNumbers,
+	operand: number,
+	boxed: string,
+): string | undefined {
+	switch (values.kind(operand)) {
+		case COMPILER_VALUE_KIND_NUMBER: {
+			if (operand >= 0) return number(values, operand);
+			const decoded = decodeVmValueOperand(operand);
+			return decoded.kind === "number" ? values.literal(decoded.value) : undefined;
+		}
+		case COMPILER_VALUE_KIND_BOOLEAN:
+			return `mal_value_to_boolean(${boxed})`;
+		case COMPILER_VALUE_KIND_STRING:
+			return `mal_value_to_string(${boxed})`;
+		default:
+			return undefined;
+	}
+}
+
 function int32(values: FastNumbers, register: number): string {
 	const constant = values.constants.get(register);
 	return constant === undefined
@@ -562,11 +582,22 @@ function fastBinary(
 		const constant = values.stringComparison;
 		const equal =
 			constant === undefined
-				? `mal_ops_strict_equal_boxed(f${left}, f${right})`
+				? nativeEqualityExpression(
+						"strict",
+						`f${left}`,
+						`f${right}`,
+						values.kind(left),
+						values.kind(right),
+						equalityScalar(values, left, `f${left}`),
+						equalityScalar(values, right, `f${right}`),
+						values.isInt32(left) && values.isInt32(right),
+						values.range(left),
+						values.range(right),
+					)
 				: constant.kind === "strings"
 					? `mal_string_equals_constant_length(mal_value_to_string(f${constant.register === right ? left : right}), mal_value_to_string(f${constant.register}), ${constant.length})`
 					: `mal_ops_strict_equal_string_constant(f${constant.register === right ? left : right}, f${constant.register}, ${constant.length})`;
-		return `f${dst} = mal_value_new_boolean(${operator === "!==" ? "!" : ""}${equal});`;
+		return `f${dst} = mal_value_new_boolean(${operator === "!==" ? `!(${equal})` : equal});`;
 	}
 	if (operator === "==" || operator === "!=") {
 		const numberFailure = numbers(values, left, right);
@@ -688,6 +719,7 @@ function fastInstruction(
 		range: (register) => instructionInputIntegerRange(input.facts?.[ip], register),
 		isInt32: (register) => instructionInputIsInt32(input.facts?.[ip], register),
 		kind(register) {
+			if (constants.has(register)) return COMPILER_VALUE_KIND_NUMBER;
 			if (register < 0) {
 				const decoded = decodeVmValueOperand(register);
 				switch (decoded.kind) {
@@ -884,20 +916,14 @@ function fastSameValue(
 	const a = left === undefined ? "MAL_VALUE_UNDEFINED" : value(left);
 	const b = right === undefined ? "MAL_VALUE_UNDEFINED" : value(right);
 	if (a === undefined || b === undefined) return undefined;
-	const numeric = (operand: number | undefined): string | undefined => {
-		if (operand === undefined || values.kind(operand) !== COMPILER_VALUE_KIND_NUMBER)
-			return undefined;
-		if (operand >= 0) return number(values, operand);
-		const decoded = decodeVmValueOperand(operand);
-		return decoded.kind === "number" ? values.literal(decoded.value) : undefined;
-	};
-	return nativeSameValueExpression(
+	return nativeEqualityExpression(
+		"same-value",
 		a,
 		b,
 		left === undefined ? COMPILER_VALUE_KIND_UNDEFINED : values.kind(left),
 		right === undefined ? COMPILER_VALUE_KIND_UNDEFINED : values.kind(right),
-		numeric(left),
-		numeric(right),
+		left === undefined ? undefined : equalityScalar(values, left, a),
+		right === undefined ? undefined : equalityScalar(values, right, b),
 		left !== undefined &&
 			right !== undefined &&
 			values.isInt32(left) &&

@@ -19,6 +19,24 @@ function boolean(left, right) {
 function disjoint(left, right) {
 	return Object.is(+left, !!right);
 }
+function partialBoolean(left, right) {
+	return Object.is(!!left, right);
+}
+function partialNumber(left, right) {
+	return Object.is(+left, right);
+}
+function partialString(left, right) {
+	return Object.is(":" + left, right);
+}
+function partialBigint(left, right) {
+	return Object.is(1n, right);
+}
+function partialObject(left, right) {
+	return Object.is({ left }, right);
+}
+function partialWord(left, right) {
+	return Object.is(left ? null : false, right);
+}
 function positiveLeft(left, right) {
 	return Object.is((left >>> 0) + 1, +right);
 }
@@ -66,6 +84,12 @@ Object.assign(globalThis, {
 	integer,
 	boolean,
 	disjoint,
+	partialBoolean,
+	partialNumber,
+	partialString,
+	partialBigint,
+	partialObject,
+	partialWord,
 	missing,
 	one,
 	extra,
@@ -116,6 +140,17 @@ for (const left of values) {
 	for (const right of values) {
 		check(same(left, right) === original(left, right), "boxed comparison");
 		check(boolean(left, right) === original(!!left, !!right), "Boolean comparison");
+		check(partialBoolean(left, right) === original(!!left, right), "partial Boolean");
+		check(partialBigint(left, right) === original(1n, right), "partial BigInt");
+		check(partialObject(left, right) === false, "partial Object");
+		check(
+			partialWord(left, right) === original(left ? null : false, right),
+			"partial word union",
+		);
+		if (typeof left === "number") {
+			check(partialNumber(left, right) === original(+left, right), "partial Number");
+			check(partialString(left, right) === original(":" + left, right), "partial String");
+		}
 		if (typeof left === "number" && typeof right === "number") {
 			check(numeric(left, right) === original(+left, +right), "numeric comparison");
 			check(integer(left, right) === original(left | 0, right | 0), "integer comparison");
@@ -185,6 +220,12 @@ try {
 			"replacement result remains arbitrary",
 		);
 		for (const invoke of [
+			partialBoolean,
+			partialNumber,
+			partialString,
+			partialBigint,
+			partialObject,
+			partialWord,
 			positiveLeft,
 			positiveRight,
 			widePair,

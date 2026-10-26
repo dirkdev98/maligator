@@ -13,6 +13,7 @@ import {
 	COMPILER_VALUE_KIND_TO_NUMBER_PRIMITIVE,
 	COMPILER_VALUE_KIND_BIGINT,
 	COMPILER_VALUE_KIND_NULL,
+	COMPILER_VALUE_KIND_UNDEFINED,
 } from "../src/compiler/shared/compiler-value-kinds.ts";
 import type { InstructionFacts } from "../src/compiler/shared/instruction-facts.ts";
 import {
@@ -39,6 +40,10 @@ const NONCOLLECTING_HELPERS = new Set([
 	"mal_value_is_null",
 	"mal_value_is_boolean",
 	"mal_value_is_string",
+	"mal_value_is_bigint",
+	"mal_value_to_bigint",
+	"mal_bigint_value",
+	"mal_string_equals",
 	"mal_vm_property_try_load_static",
 	"mal_vm_property_try_load_length_static",
 	"mal_vm_global_data_property_cached",
@@ -94,6 +99,54 @@ function body(
 
 const OWN_TRY = "mal_compiled_0_try";
 const LENGTH_STRING_INDEX = 7;
+
+it.each([
+	COMPILER_VALUE_KIND_NUMBER,
+	COMPILER_VALUE_KIND_BOOLEAN,
+	COMPILER_VALUE_KIND_STRING,
+	COMPILER_VALUE_KIND_BIGINT,
+	COMPILER_VALUE_KIND_OBJECT,
+	COMPILER_VALUE_KIND_SYMBOL,
+	COMPILER_VALUE_KIND_NULL,
+	COMPILER_VALUE_KIND_UNDEFINED,
+	COMPILER_VALUE_KIND_BOOLEAN | COMPILER_VALUE_KIND_NULL | COMPILER_VALUE_KIND_OBJECT,
+])("uses a partial kind %s without collecting in equality entries", (kind) => {
+	for (const sameValue of [false, true])
+		for (const reverse of [false, true])
+			for (const exported of [false, true]) {
+				const left = reverse ? 1 : 0,
+					right = reverse ? 0 : 1;
+				const fn = body([
+					sameValue
+						? {
+								opcode: "CALL_KNOWN",
+								operation: "Object.is",
+								thisValue: 0,
+								arguments: [left, right],
+								argumentCount: 2,
+								dst: 2,
+							}
+						: { opcode: "BINARY", operator: "===", left, right, dst: 2 },
+					{ opcode: "RETURN", value: 2 },
+				]);
+				const lines = fastEntry(fn, undefined, exported, undefined, [
+					{
+						registers: [2, 0, 1],
+						inputOffset: 1,
+						inputKindMasks: [kind, COMPILER_VALUE_KIND_TOP],
+						resultKindMasks: [COMPILER_VALUE_KIND_BOOLEAN],
+					},
+				])!;
+				expect(lines).toBeDefined();
+				expect(unexpectedHelpers(lines)).toEqual([]);
+				expect(lines.join("\n")).not.toContain("mal_ops_same_value(");
+				expect(lines.join("\n")).not.toContain("mal_ops_strict_equal_boxed(");
+				if (kind === COMPILER_VALUE_KIND_STRING) {
+					expect(lines.join("\n")).toContain("mal_value_is_string(f1)");
+					expect(lines.join("\n")).not.toContain("mal_value_is_string(f0)");
+				}
+			}
+});
 
 it.each([false, true])(
 	"uses a partial range in frameless SameValue, exported=%s",

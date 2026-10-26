@@ -133,7 +133,7 @@ import {
 	nativePrimitiveNumberExpression,
 	nativeUnsignedRemainderExpression,
 	nativeReflexiveEqualityExpression,
-	nativeSameValueExpression,
+	nativeEqualityExpression,
 } from "./native-scalar-operators.ts";
 import {
 	nativeInstructionSourceRanges,
@@ -3731,6 +3731,36 @@ function renderScalarExpression(
 		reps[dst] === "boxed" ? `mal_ops_number_value(${expression})` : expression;
 	const booleanResult = (dst: number, expression: string) =>
 		reps[dst] === "boxed" ? `mal_value_new_boolean(${expression})` : expression;
+	const kind = (local: number) =>
+		isNumericRep(reps[local]!)
+			? COMPILER_VALUE_KIND_NUMBER
+			: reps[local] === "boolean"
+				? COMPILER_VALUE_KIND_BOOLEAN
+				: reps[local] === "string"
+					? COMPILER_VALUE_KIND_STRING
+					: (instructionInputKind(facts, local) ?? COMPILER_VALUE_KIND_TOP);
+	const boxed = (local: number) =>
+		reps[local] === "int32"
+			? `mal_value_from_i32(r${local})`
+			: reps[local] === "number"
+				? `mal_ops_number_value(r${local})`
+				: reps[local] === "boolean"
+					? `mal_value_new_boolean(r${local})`
+					: reps[local] === "string"
+						? `mal_value_from_string(r${local})`
+						: `r${local}`;
+	const scalar = (local: number) =>
+		kind(local) === COMPILER_VALUE_KIND_NUMBER
+			? number(local)
+			: kind(local) === COMPILER_VALUE_KIND_BOOLEAN
+				? reps[local] === "boolean"
+					? `r${local}`
+					: `mal_value_to_boolean(r${local})`
+				: kind(local) === COMPILER_VALUE_KIND_STRING
+					? reps[local] === "string"
+						? `r${local}`
+						: `mal_value_to_string(r${local})`
+					: undefined;
 	switch (op.opcode) {
 		case "CREATE_UNDEFINED":
 			return "MAL_VALUE_UNDEFINED";
@@ -3755,6 +3785,88 @@ function renderScalarExpression(
 				: String(op.value);
 		case "MOVE":
 			return `r${op.src}`;
+		case "CALL_KNOWN": {
+			if (
+				op.operation !== "Object.is" ||
+				op.construct ||
+				op.argumentMode !== undefined ||
+				(op.specialized !== undefined && op.specialized !== op.operation)
+			)
+				throw new Error("Invalid native equality expression");
+			const a =
+				op.arguments[0] === undefined
+					? ({ kind: "undefined" } as const)
+					: decodeVmValueOperand(op.arguments[0]);
+			const b =
+				op.arguments[1] === undefined
+					? ({ kind: "undefined" } as const)
+					: decodeVmValueOperand(op.arguments[1]);
+			const value = (operand: ReturnType<typeof decodeVmValueOperand>): string => {
+				switch (operand.kind) {
+					case "register":
+						return boxed(operand.register);
+					case "undefined":
+						return "MAL_VALUE_UNDEFINED";
+					case "null":
+						return "MAL_VALUE_NULL";
+					case "boolean":
+						return operand.value ? "MAL_VALUE_TRUE" : "MAL_VALUE_FALSE";
+					case "number":
+						return `mal_ops_number_value(${cF64Literal(operand.value)})`;
+					case "string":
+						return relocation.stringValue(operand.index);
+				}
+			};
+			const kindOf = (
+				operand: ReturnType<typeof decodeVmValueOperand>,
+			): CompilerValueKindMask => {
+				switch (operand.kind) {
+					case "register":
+						return kind(operand.register);
+					case "undefined":
+						return COMPILER_VALUE_KIND_UNDEFINED;
+					case "null":
+						return COMPILER_VALUE_KIND_NULL;
+					case "boolean":
+						return COMPILER_VALUE_KIND_BOOLEAN;
+					case "number":
+						return COMPILER_VALUE_KIND_NUMBER;
+					case "string":
+						return COMPILER_VALUE_KIND_STRING;
+				}
+			};
+			const scalarOf = (
+				operand: ReturnType<typeof decodeVmValueOperand>,
+			): string | undefined => {
+				if (operand.kind === "register") return scalar(operand.register);
+				if (operand.kind === "number") return cF64Literal(operand.value);
+				if (operand.kind === "boolean") return String(operand.value);
+				if (operand.kind === "string") return `mal_value_to_string(${value(operand)})`;
+				return undefined;
+			};
+			return booleanResult(
+				op.dst,
+				nativeEqualityExpression(
+					"same-value",
+					value(a),
+					value(b),
+					kindOf(a),
+					kindOf(b),
+					scalarOf(a),
+					scalarOf(b),
+					a.kind === "register" &&
+						b.kind === "register" &&
+						reps[a.register] === "int32" &&
+						reps[b.register] === "int32",
+					a.kind === "register"
+						? instructionInputIntegerRange(facts, a.register)
+						: undefined,
+					b.kind === "register"
+						? instructionInputIntegerRange(facts, b.register)
+						: undefined,
+				),
+			);
+		}
 		case "UNARY": {
 			if (op.operator === "!")
 				return booleanResult(
@@ -3787,6 +3899,21 @@ function renderScalarExpression(
 				instructionInputIntegerRange(facts, op.right),
 			);
 			if (compared !== undefined) return booleanResult(op.dst, String(compared));
+			if (op.operator === "===" || op.operator === "!==") {
+				const equal = nativeEqualityExpression(
+					"strict",
+					boxed(op.left),
+					boxed(op.right),
+					kind(op.left),
+					kind(op.right),
+					scalar(op.left),
+					scalar(op.right),
+					reps[op.left] === "int32" && reps[op.right] === "int32",
+					instructionInputIntegerRange(facts, op.left),
+					instructionInputIntegerRange(facts, op.right),
+				);
+				return booleanResult(op.dst, op.operator === "!==" ? `!(${equal})` : equal);
+			}
 			if (op.left === op.right) {
 				const kind =
 					instructionInputKind(facts, op.left) ??
@@ -8485,6 +8612,14 @@ function emitInstruction(
 		}
 		return decoded.kind === "boolean" ? (decoded.value ? "true" : "false") : null;
 	};
+	const nativeStringOperand = (operand: number, provenString = false): string | null => {
+		const decoded = decodeVmValueOperand(operand);
+		if (decoded.kind === "register" && reps[decoded.register] === "string")
+			return inputValue(decoded.register);
+		return provenString || decoded.kind === "string" || operandIsString(operand)
+			? `mal_value_to_string(${boxedOperand(operand)})`
+			: null;
+	};
 	const operandTruthy = (operand: number): string => {
 		const decoded = decodeVmValueOperand(operand);
 		switch (decoded.kind) {
@@ -11892,7 +12027,7 @@ function emitInstruction(
 				const other = stringComparison.register === right ? left : right;
 				const equal = profileCall(
 					"string",
-					`mal_string_equals_constant_length(mal_value_to_string(${boxed(other)}), mal_value_to_string(${boxed(stringComparison.register)}), ${stringComparison.length})`,
+					`mal_string_equals_constant_length(${nativeStringOperand(other, true)}, ${nativeStringOperand(stringComparison.register, true)}, ${stringComparison.length})`,
 				);
 				elideFramePosition();
 				return [storeBoolean(dst, operator === "!==" ? `!${equal}` : equal)];
@@ -11908,8 +12043,8 @@ function emitInstruction(
 					(reps[left] === "string" || inputKinds?.[0] === COMPILER_VALUE_KIND_STRING) &&
 					(reps[right] === "string" || inputKinds?.[1] === COMPILER_VALUE_KIND_STRING)
 				) {
-					const a = `mal_value_to_string(${boxed(left)})`,
-						b = `mal_value_to_string(${boxed(right)})`;
+					const a = nativeStringOperand(left)!,
+						b = nativeStringOperand(right)!;
 					elideFramePosition();
 					if (!RELATIONAL_COMPARE.has(operator)) {
 						const equal = profileCall("string", `mal_string_equals(${a}, ${b})`);
@@ -11928,6 +12063,32 @@ function emitInstruction(
 					];
 				}
 			}
+			if (operator === "===" || operator === "!==") {
+				const constant = context.stringComparisons?.get(ip);
+				const equal =
+					constant === undefined
+						? nativeEqualityExpression(
+								"strict",
+								boxed(left),
+								boxed(right),
+								operandKind(left),
+								operandKind(right),
+								nativeNumberOperand(left) ??
+									nativeBooleanOperand(left) ??
+									nativeStringOperand(left) ??
+									undefined,
+								nativeNumberOperand(right) ??
+									nativeBooleanOperand(right) ??
+									nativeStringOperand(right) ??
+									undefined,
+								reps[left] === "int32" && reps[right] === "int32",
+								instructionInputIntegerRange(context.facts, left),
+								instructionInputIntegerRange(context.facts, right),
+							)
+						: `mal_ops_strict_equal_string_constant(${boxed(constant.register === right ? left : right)}, ${boxed(constant.register)}, ${constant.length})`;
+				elideFramePosition();
+				return [storeBoolean(dst, operator === "!==" ? `!(${equal})` : equal)];
+			}
 			const slow = (): string => profileCall("binary", reentrantValue(binaryValue()));
 			const bothBoxed = !leftIsNum && !rightIsNum;
 			const numberGuard = leftIsNum
@@ -11938,14 +12099,6 @@ function emitInstruction(
 					? `mal_ops_is_number(${boxed(left)})`
 					: `mal_ops_is_number(${boxed(left)}) && mal_ops_is_number(${boxed(right)})`;
 			if (compare !== undefined) {
-				if (bothBoxed && (operator === "===" || operator === "!==")) {
-					const constant = context.stringComparisons?.get(ip);
-					const equal =
-						constant === undefined
-							? `mal_ops_strict_equal_boxed(${boxed(left)}, ${boxed(right)})`
-							: `mal_ops_strict_equal_string_constant(${boxed(constant.register === right ? left : right)}, ${boxed(constant.register)}, ${constant.length})`;
-					return [storeBoolean(dst, operator === "!==" ? `!${equal}` : equal)];
-				}
 				const completionCheck = canThrow ? throwCheck() : undefined;
 				const compareCheck = completionCheck === undefined ? [] : [completionCheck];
 				if (
@@ -11960,15 +12113,6 @@ function emitInstruction(
 					if (guard === "") {
 						elideFramePosition();
 						return [storeBoolean(dst, fastBool)];
-					}
-					// With one side a number, a strict comparison against a non-number is unequal.
-					if (!bothBoxed && (operator === "===" || operator === "!==")) {
-						const strict =
-							operator === "==="
-								? `${numberGuard} && ${fastBool}`
-								: `!(${numberGuard}) || ${fastBool}`;
-						elideFramePosition();
-						return [storeBoolean(dst, strict)];
 					}
 					if (canThrow) {
 						return [
@@ -13071,18 +13215,23 @@ function emitInstruction(
 				return [
 					storeBoolean(
 						instruction.dst,
-						nativeSameValueExpression(
+						nativeEqualityExpression(
+							"same-value",
 							left === undefined ? "MAL_VALUE_UNDEFINED" : boxedOperand(left),
 							right === undefined ? "MAL_VALUE_UNDEFINED" : boxedOperand(right),
 							left === undefined ? COMPILER_VALUE_KIND_UNDEFINED : operandKind(left),
 							right === undefined ? COMPILER_VALUE_KIND_UNDEFINED : operandKind(right),
 							left === undefined
 								? undefined
-								: (nativeNumberOperand(left) ?? nativeBooleanOperand(left) ?? undefined),
+								: (nativeNumberOperand(left) ??
+										nativeBooleanOperand(left) ??
+										nativeStringOperand(left) ??
+										undefined),
 							right === undefined
 								? undefined
 								: (nativeNumberOperand(right) ??
 										nativeBooleanOperand(right) ??
+										nativeStringOperand(right) ??
 										undefined),
 							left !== undefined &&
 								right !== undefined &&
@@ -13553,17 +13702,24 @@ function emitInstruction(
 			const guardedBuiltinOperation = callPlan?.guardedBuiltinCall?.operation;
 			if (guardedBuiltinOperation === "Object.is") {
 				const [left, right] = args;
-				const test = nativeSameValueExpression(
+				const test = nativeEqualityExpression(
+					"same-value",
 					left === undefined ? "MAL_VALUE_UNDEFINED" : boxedOperand(left),
 					right === undefined ? "MAL_VALUE_UNDEFINED" : boxedOperand(right),
 					left === undefined ? COMPILER_VALUE_KIND_UNDEFINED : operandKind(left),
 					right === undefined ? COMPILER_VALUE_KIND_UNDEFINED : operandKind(right),
 					left === undefined
 						? undefined
-						: (nativeNumberOperand(left) ?? nativeBooleanOperand(left) ?? undefined),
+						: (nativeNumberOperand(left) ??
+								nativeBooleanOperand(left) ??
+								nativeStringOperand(left) ??
+								undefined),
 					right === undefined
 						? undefined
-						: (nativeNumberOperand(right) ?? nativeBooleanOperand(right) ?? undefined),
+						: (nativeNumberOperand(right) ??
+								nativeBooleanOperand(right) ??
+								nativeStringOperand(right) ??
+								undefined),
 					left !== undefined &&
 						right !== undefined &&
 						operandRep(left) === "int32" &&
