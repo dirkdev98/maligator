@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { runtimeGapBuildConfig } from "../scripts/runtime-gap-build-config.ts";
 import { CoreAnalysisManager } from "../src/compiler/core/core-analysis-manager.ts";
 import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import { lowerSemanticProgramToCore } from "../src/compiler/core/core-frontend.ts";
@@ -6,8 +7,10 @@ import { CORE_RECORD_FIELD_KIND_ATTRIBUTE } from "../src/compiler/core/core-inte
 import { CoreOptimizationReportBuilder } from "../src/compiler/core/core-optimization-report.ts";
 import { CORE_PROGRAM_VALUE_KIND_ANALYSIS } from "../src/compiler/core/core-program-flow-analysis.ts";
 import { coreReadOnlyRecordFields } from "../src/compiler/core/core-record-value-kinds.ts";
+import { stripCompactTypes } from "../src/compiler/frontend/compact-type-strip.ts";
 import { parseModule } from "../src/compiler/frontend/parser.ts";
 import { analyzeSourceAndRunSemanticAnalysis } from "../src/compiler/frontend/semantic-analysis.ts";
+import { compileEntrypoint } from "../src/compiler/pipeline/compile-program.ts";
 import {
 	COMPILER_VALUE_KIND_NUMBER,
 	COMPILER_VALUE_KIND_STRING,
@@ -115,6 +118,48 @@ describe("fresh record field observations", () => {
 		]);
 		for (const { mask } of out.read().summary(out.named("scan").id).returnRecord!)
 			expect(mask).toBe(COMPILER_VALUE_KIND_NUMBER);
+	});
+
+	it("selects numeric scanner and caller entries through the returned-field feedback loop", () => {
+		let fieldKinds: ReadonlyArray<number> = [];
+		const image = compileEntrypoint(
+			new URL("../bench/runtime-gap/cases/returned-records.mjs", import.meta.url)
+				.pathname,
+			{
+				buildConfig: runtimeGapBuildConfig(),
+				stripTypes: stripCompactTypes,
+				afterCoreOptimization(program) {
+					fieldKinds = coreOperations(coreFunctionNamed(program, "tokenWeight")!).flatMap(
+						({ attributes }) => {
+							const kind = attributes[CORE_RECORD_FIELD_KIND_ATTRIBUTE];
+							return typeof kind === "number" ? [kind] : [];
+						},
+					);
+				},
+			},
+		);
+		expect(fieldKinds.length).toBeGreaterThan(0);
+		expect(fieldKinds.every((kind) => kind === COMPILER_VALUE_KIND_NUMBER)).toBe(true);
+		const named = (name: string) =>
+			image.native.functions.find(
+				(fn) =>
+					String.fromCharCode(
+						...(image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+					) === name,
+			)!;
+		expect(
+			named("nextToken").directEntries?.some(
+				(entry) =>
+					entry.resultFields !== undefined &&
+					entry.parameterRepresentations[1] === "number",
+			),
+		).toBe(true);
+		expect(
+			named("tokenWeight").directEntries?.some(
+				(entry) => entry.resultRepresentation === "number",
+			),
+		).toBe(true);
+		expect(named("tokenWeight").recordCalls?.length).toBeGreaterThan(0);
 	});
 
 	it("invalidates readers when an own key disappears while the return stays Object", () => {

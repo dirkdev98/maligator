@@ -143,13 +143,13 @@ The independent target boundary and current storage contract are recorded in
       dynamic keys or handler transport reject the proof. Normal-result publication
       feeds local representations and native predicates without requiring pure
       effects. Typed layouts and point-sensitive mutation/escape proofs remain.
-      Virtual record entries still pass boxed fields. Their reads and parameter
-      representations need to consume the field summaries too: the scanning loop
-      in `returned-records` still runs generic arithmetic: 90.8 ns/op against Node's 9.6 (118.4 before record entries, on the
-      mjq host). The field kinds depend on the producer's parameter kinds and back,
-      so the new record dimension must drive entry and caller storage together. Typed fields alone buy
-      little there: forcing a numeric index with `| 0` took a local run from 44 to
-      37.6 ns/op against Node's 6.3. Most of the rest is the scanner calling
+      The certified `returned-records` workload now selects a numeric scanner
+      index and caller result, shrinking whole C from 115,075 to 111,795 bytes.
+      Its record entry still returns `MalValue *` fields, which the caller unboxes
+      into scalar locals. Storage kinds must account for virtual writes and borrowed
+      record parameters, while initial field facts remain independent of later
+      mutations. Migrate forwards, parameter passing, materialization, fallbacks and
+      GC storage together. The scanner still calls
       `mal_builtin_string_char_code_at_known` twice per character on a boxed string
       parameter.
 - [ ] Admit more record calls. Not admitted yet: calls through instance-method hints,
