@@ -42,6 +42,7 @@ import {
 import type { CoreInstanceMethodHints } from "./core-instance-method-hints.ts";
 import {
 	CORE_CALL_RESULT_KIND_ATTRIBUTE,
+	CORE_RECORD_FIELD_KIND_ATTRIBUTE,
 	CORE_CALL_RESULT_INTEGER_RANGE_ATTRIBUTE,
 	CORE_GUARDED_INLINE_FALLBACK_ATTRIBUTE,
 } from "./core-internal-attributes.ts";
@@ -106,6 +107,12 @@ import {
 	EMPTY_CORE_READ_ACCESSOR_WORK,
 } from "./core-read-accessor-expansion.ts";
 import type { CoreReadAccessorWork } from "./core-read-accessor-expansion.ts";
+import {
+	coreReadOnlyRecordFields,
+	coreRecordFieldReadKind,
+	joinCoreRecordValueKinds,
+} from "./core-record-value-kinds.ts";
+import type { CoreRecordValueKind } from "./core-record-value-kinds.ts";
 import { specializeCoreStaticArguments } from "./core-static-value-calls.ts";
 import type { CoreChangeSet, CoreFunctionStore, CoreProgram } from "./core-store.ts";
 import { coreSynchronousCallbackConsumer } from "./core-synchronous-callbacks.ts";
@@ -4525,6 +4532,60 @@ function discoverProgramCallResultKinds(
 	return results;
 }
 
+function discoverProgramRecordFieldKinds(
+	program: CoreProgram,
+	flow: CoreProgramFlowState,
+	readValueKinds: () => CoreProgramValueKindState,
+): ReadonlyMap<
+	CoreFunctionId,
+	ReadonlyArray<Pick<CoreCallResultFact, "instruction" | "mask">>
+> {
+	const result = new Map<
+		CoreFunctionId,
+		Array<Pick<CoreCallResultFact, "instruction" | "mask">>
+	>();
+	let kinds: CoreProgramValueKindState | undefined;
+	for (const functionId of flow.reachability.liveFunctions) {
+		const fn = program.function(functionId);
+		const returnedRecords = new Map<CoreInstructionId, CoreRecordValueKind>();
+		for (const [instruction, read] of coreReadOnlyRecordFields(fn)) {
+			const producer = flow.targets.site(functionId, read.producer);
+			if (
+				producer === undefined ||
+				producer.targets.opaque ||
+				producer.targets.anyScript ||
+				producer.targets.functions.length === 0
+			)
+				continue;
+			kinds ??= readValueKinds();
+			let record = returnedRecords.get(read.producer);
+			if (!returnedRecords.has(read.producer)) {
+				record = null;
+				for (const callee of producer.targets.functions) {
+					const returned = kinds.summary(callee);
+					record = joinCoreRecordValueKinds(
+						record,
+						returned.returnKind === 0 ? null : returned.returnRecord,
+					);
+					if (record === undefined) break;
+				}
+				returnedRecords.set(read.producer, record);
+			}
+			const mask = coreRecordFieldReadKind(read, record, COMPILER_VALUE_KIND_TOP);
+			if (
+				!compilerValueKindMaskIsValid(mask) ||
+				fn.instructionAttributes(instruction)[CORE_RECORD_FIELD_KIND_ATTRIBUTE] === mask
+			)
+				continue;
+			let facts = result.get(functionId);
+			if (facts === undefined) result.set(functionId, (facts = []));
+			facts.push({ instruction, mask });
+		}
+	}
+
+	return result;
+}
+
 function discoverProgramCallResultIdentities(
 	program: CoreProgram,
 	analyses: CoreAnalysisManager,
@@ -4958,11 +5019,21 @@ export function runCoreCrossCallTransforms(
 		flow,
 		callKindsByCaller,
 	);
-	if (callKindsByCaller.size > 0 || callIdentitiesByCaller.size > 0) {
+	const recordKindsByCaller = discoverProgramRecordFieldKinds(
+		program,
+		flow,
+		readValueKinds,
+	);
+	if (
+		callKindsByCaller.size > 0 ||
+		callIdentitiesByCaller.size > 0 ||
+		recordKindsByCaller.size > 0
+	) {
 		const finishCallers: Array<() => CoreCrossCallFunctionOptimizationResult> = [];
 		for (const functionId of new Set([
 			...callKindsByCaller.keys(),
 			...callIdentitiesByCaller.keys(),
+			...recordKindsByCaller.keys(),
 		])) {
 			const fn = program.function(functionId);
 			const editor = CoreEditor.open(program, functionId);
@@ -4999,6 +5070,26 @@ export function runCoreCrossCallTransforms(
 				);
 				callResultKindFacts++;
 			}
+			for (const { instruction, mask } of recordKindsByCaller.get(functionId) ?? []) {
+				if (!fn.isInstructionLive(instruction)) continue;
+				const start = fn.kernel.instructionOperandStart(instruction);
+				editor.replaceInstruction(
+					instruction,
+					fn.instructionOpcodeName(instruction),
+					Array.from(
+						{ length: fn.kernel.instructionOperandCount(instruction) },
+						(_, index) => fn.kernel.operandAt(start + index),
+					),
+					{
+						attributes: {
+							...fn.instructionAttributes(instruction),
+							[CORE_RECORD_FIELD_KIND_ATTRIBUTE]: mask,
+						},
+						sourcePosition: fn.instructionSourcePosition(instruction),
+						effectRefinement: fn.instructionEffectRefinement(instruction),
+					},
+				);
+			}
 			const identities = callIdentitiesByCaller.get(functionId);
 			if (identities !== undefined) {
 				const replacements = new Map<CoreValueId, CoreValueId>();
@@ -5027,7 +5118,7 @@ export function runCoreCrossCallTransforms(
 			}
 			callerEditSessions++;
 			callerLocalOptimizations++;
-			finishCallers.push(prepareCaller("call-result-facts", functionId, editor));
+			finishCallers.push(prepareCaller("normal-result-facts", functionId, editor));
 		}
 		for (const finish of finishCallers) {
 			const optimized = finish();

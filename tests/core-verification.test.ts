@@ -5,6 +5,7 @@ import { CoreEditor } from "../src/compiler/core/core-editor.ts";
 import { formatCoreFunction } from "../src/compiler/core/core-format.ts";
 import {
 	CORE_CALL_RESULT_KIND_ATTRIBUTE,
+	CORE_RECORD_FIELD_KIND_ATTRIBUTE,
 	CORE_CALL_RESULT_INTEGER_RANGE_ATTRIBUTE,
 } from "../src/compiler/core/core-internal-attributes.ts";
 import {
@@ -25,6 +26,41 @@ import {
 	inspectCoreInstructionResults,
 } from "./helpers/core-inspection.ts";
 import { programAnalysisContext } from "./helpers/core-program-analysis.ts";
+
+describe("record field kind metadata", () => {
+	it.each([0, 255, 256, -1, NaN, "number"])(
+		"rejects invalid record field mask %s",
+		(mask) => {
+			const program = new CoreProgram(coreOpcodeRegistry, { stringConstants: [[110]] });
+			const builder = new CoreFunctionBuilder(program);
+			const block = builder.createBlock();
+			const [value] = builder.appendInstruction(block, "createNumber", [], {
+				attributes: { value: 1 },
+			});
+			const [object] = builder.appendInstruction(block, "createObjectShaped", [value!], {
+				attributes: { keyStringIndices: [0] },
+			});
+			const [read] = builder.appendInstruction(block, "loadPropertyStatic", [object!], {
+				attributes: { stringIndex: 0, [CORE_RECORD_FIELD_KIND_ATTRIBUTE]: mask },
+			});
+			builder.setTerminator(block, { kind: "return", value: read! });
+			builder.finish(block);
+			expect(() => verifyCoreProgram(program)).toThrow(/Invalid record field kind proof/);
+		},
+	);
+
+	it("rejects a record field fact on a non-read instruction", () => {
+		const program = new CoreProgram(coreOpcodeRegistry);
+		const builder = new CoreFunctionBuilder(program);
+		const block = builder.createBlock();
+		const [value] = builder.appendInstruction(block, "createNumber", [], {
+			attributes: { value: 1, [CORE_RECORD_FIELD_KIND_ATTRIBUTE]: 8 },
+		});
+		builder.setTerminator(block, { kind: "return", value: value! });
+		builder.finish(block);
+		expect(() => verifyCoreProgram(program)).toThrow(/Invalid record field kind proof/);
+	});
+});
 
 function validBranchProgram() {
 	const program = new CoreProgram(coreOpcodeRegistry);

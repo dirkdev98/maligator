@@ -486,7 +486,7 @@ describe("Core optimizer infrastructure", () => {
 
 		expect(() => open(0)).toThrow("already has a cross-call session in wave 0");
 		expect(() => open(1)).not.toThrow();
-		for (const session of ["call-result-facts", "capture-liveness"] as const) {
+		for (const session of ["normal-result-facts", "capture-liveness"] as const) {
 			expect(() => open(session)).not.toThrow();
 			expect(() => open(session)).toThrow(
 				`already has a cross-call session in ${session}`,

@@ -27,6 +27,7 @@ import {
 	COMPILER_VALUE_KIND_UNDEFINED,
 	compilerValueKindMaskIsSubset,
 	compilerValueKindMaskIsValid,
+	compilerTypeofComparison,
 } from "../shared/compiler-value-kinds.ts";
 import type {
 	CompilerOperatorInputKindMasks,
@@ -43,6 +44,7 @@ import { coreClosedGlobalSlotMembership } from "./core-compilation.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import {
 	CORE_CALL_RESULT_KIND_ATTRIBUTE,
+	CORE_RECORD_FIELD_KIND_ATTRIBUTE,
 	CORE_CALL_RESULT_INTEGER_RANGE_ATTRIBUTE,
 	CORE_EXACT_TYPED_ARRAY_KIND_ATTRIBUTE,
 } from "./core-internal-attributes.ts";
@@ -77,6 +79,7 @@ import type {
 import type { CoreRecordValueKind } from "./core-record-value-kinds.ts";
 import {
 	coreRecordReturnKindInputs,
+	coreReadOnlyRecordFields,
 	coreReturnedRecordKinds,
 } from "./core-record-value-kinds.ts";
 import { coreExactArrayFromCallResult } from "./core-static-values.ts";
@@ -191,6 +194,18 @@ function callResultKind(
 	)
 		return undefined;
 	const mask = fn.instructionAttributes(instruction)[CORE_CALL_RESULT_KIND_ATTRIBUTE];
+	return typeof mask === "number" && compilerValueKindMaskIsValid(mask)
+		? mask
+		: undefined;
+}
+
+function recordFieldKind(
+	fn: CoreFunctionStore,
+	instruction: CoreInstructionId,
+): CompilerValueKindMask | undefined {
+	const opcode = fn.instructionOpcodeName(instruction);
+	if (opcode !== "loadProperty" && opcode !== "loadPropertyStatic") return undefined;
+	const mask = fn.instructionAttributes(instruction)[CORE_RECORD_FIELD_KIND_ATTRIBUTE];
 	return typeof mask === "number" && compilerValueKindMaskIsValid(mask)
 		? mask
 		: undefined;
@@ -717,7 +732,7 @@ function addOperationTransfer(
 		masks[output] = masks[output]! | inputs.receiverMask;
 		return;
 	}
-	const callMask = callResultKind(fn, instruction);
+	const callMask = callResultKind(fn, instruction) ?? recordFieldKind(fn, instruction);
 	const contextual = inputs?.operationResultMask?.(instruction, output);
 	const supplied =
 		callMask === undefined
@@ -1394,6 +1409,9 @@ export const CORE_PROGRAM_FLOW_VALUE_KIND_SEMANTICS: CoreProgramFlowValueKindSem
 		latticeMask(analysis: CoreProgramFunctionValueKinds, value: CoreValueId) {
 			return analysis.latticeMask(value);
 		},
+		recordReads(fn: CoreFunctionStore) {
+			return coreReadOnlyRecordFields(fn);
+		},
 		returnRecord(
 			_program: CoreProgram,
 			fn: CoreFunctionStore,
@@ -1451,6 +1469,7 @@ export function coreValueKindDemand(
 		inputCounts: [],
 		inputs: [],
 	};
+	let recordReads: ReturnType<typeof coreReadOnlyRecordFields> | undefined;
 	const parameters = new Set<CoreValueId>();
 	for (let index = 0; index < fn.parameterCount; index++)
 		parameters.add(fn.kernel.functionParameter(index));
@@ -1491,13 +1510,19 @@ export function coreValueKindDemand(
 			let demand = false;
 			addOperationTransfer(transfers, masks, fn, instruction, value, {
 				operationResultMask(instruction) {
-					const callKind = callResultKind(fn, instruction);
+					const callKind =
+						callResultKind(fn, instruction) ?? recordFieldKind(fn, instruction);
 					if (callKind !== undefined) return callKind;
 					if (fn.instructionOpcodeName(instruction) === "loadThis") {
 						demand = !externallyReachable;
 						return COMPILER_VALUE_KIND_TOP;
 					}
-					const site = targets.site(fn.id, instruction);
+					const producer =
+						fn.instructionOpcodeName(instruction) === "loadPropertyStatic" ||
+						fn.instructionOpcodeName(instruction) === "loadProperty"
+							? (recordReads ??= coreReadOnlyRecordFields(fn)).get(instruction)?.producer
+							: undefined;
+					const site = targets.site(fn.id, producer ?? instruction);
 					if (site === undefined) return undefined;
 					demand =
 						!site.targets.opaque &&
@@ -1555,15 +1580,23 @@ export function coreValueKindDemand(
 	};
 }
 
-function exactPrimitiveTypeof(mask: number): string | undefined {
-	if (mask === COMPILER_VALUE_KIND_UNDEFINED) return "undefined";
-	if (mask === COMPILER_VALUE_KIND_NULL) return "object";
-	if (mask === COMPILER_VALUE_KIND_BOOLEAN) return "boolean";
-	if (mask === COMPILER_VALUE_KIND_NUMBER) return "number";
-	if (mask === COMPILER_VALUE_KIND_STRING) return "string";
-	if (mask === COMPILER_VALUE_KIND_BIGINT) return "bigint";
-	if (mask === COMPILER_VALUE_KIND_SYMBOL) return "symbol";
-	return undefined;
+function coreTypeofComparison(
+	mask: CompilerValueKindMask,
+	expected: string,
+): boolean | undefined {
+	switch (expected) {
+		case "undefined":
+		case "object":
+		case "boolean":
+		case "number":
+		case "string":
+		case "symbol":
+		case "bigint":
+		case "function":
+			return compilerTypeofComparison(mask, expected);
+		default:
+			return false;
+	}
 }
 
 function coreStringConstant(
@@ -1609,10 +1642,12 @@ export function coreValueKindObservation(
 		const input = operand(0);
 		const expected = fn.instructionAttributes(instruction).expected;
 		if (input === undefined || typeof expected !== "string") return undefined;
-		const actual = exactPrimitiveTypeof(kindMask(input));
-		if (actual === undefined) return undefined;
-		const equal = actual === expected;
-		return fn.instructionAttributes(instruction).negated === true ? !equal : equal;
+		const equal = coreTypeofComparison(kindMask(input), expected);
+		return equal === undefined
+			? undefined
+			: fn.instructionAttributes(instruction).negated === true
+				? !equal
+				: equal;
 	}
 	if (opcode === "unary" && fn.instructionAttributes(instruction).operator === "!") {
 		const input = operand(0);
@@ -1761,8 +1796,7 @@ export function coreValueKindObservation(
 				: fn.kernel.operandAt(fn.kernel.instructionOperandStart(definition));
 		const expected = coreStringConstant(program, fn, other);
 		if (input === undefined || expected === undefined) return undefined;
-		const actual = exactPrimitiveTypeof(kindMask(input));
-		return actual === undefined ? undefined : actual === expected;
+		return coreTypeofComparison(kindMask(input), expected);
 	};
 	const leftKind = kindMask(left);
 	const singleton = (mask: number) =>

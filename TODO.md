@@ -138,15 +138,16 @@ The independent target boundary and current storage contract are recorded in
       own-field kind summaries through exact call chains, finite callee sets,
       recursive forwarding, spread/rest and constructor completions. Field-only
       changes wake callers without rebuilding the any-script scalar aggregate.
-      These are producer facts, not a mutation/escape proof for later reads; typed
-      layouts and caller property facts still need to consume them.
-      Record entries return fields boxed, so a
-      caller's `token.end` stays boxed, `index = token.end + 1` gives the producer a
-      boxed parameter, and the scanning loop in `returned-records` runs generic
-      arithmetic: 90.8 ns/op against Node's 9.6 (118.4 before record entries, on the
+      Read-only call results now project own fields through that worklist, closing
+      parameter/field cycles. Every accessed key must be own, and writes, escapes,
+      dynamic keys or handler transport reject the proof. Normal-result publication
+      feeds local representations and native predicates without requiring pure
+      effects. Typed layouts and point-sensitive mutation/escape proofs remain.
+      Virtual record entries still pass boxed fields. Their reads and parameter
+      representations need to consume the field summaries too: the scanning loop
+      in `returned-records` still runs generic arithmetic: 90.8 ns/op against Node's 9.6 (118.4 before record entries, on the
       mjq host). The field kinds depend on the producer's parameter kinds and back,
-      so they need a record dimension in the program value-kind flow and a consumer
-      that turns it into entry and caller representations. Typed fields alone buy
+      so the new record dimension must drive entry and caller storage together. Typed fields alone buy
       little there: forcing a numeric index with `| 0` took a local run from 44 to
       37.6 ns/op against Node's 6.3. Most of the rest is the scanner calling
       `mal_builtin_string_char_code_at_known` twice per character on a boxed string

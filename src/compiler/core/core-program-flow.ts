@@ -14,8 +14,12 @@ import type { CoreOptimizationReportBuilder } from "./core-optimization-report.t
 import {
 	sameCoreRecordValueKind,
 	joinCoreRecordValueKinds,
+	coreRecordFieldReadKind,
 } from "./core-record-value-kinds.ts";
-import type { CoreRecordValueKind } from "./core-record-value-kinds.ts";
+import type {
+	CoreRecordValueKind,
+	CoreRecordFieldRead,
+} from "./core-record-value-kinds.ts";
 import {
 	CORE_PROGRAM_FLOW_BODY,
 	CORE_PROGRAM_FLOW_CALLS,
@@ -161,6 +165,7 @@ export interface CoreProgramFlowValueKindSemantics<Analysis> {
 		inputs: CoreProgramFlowValueKindInputs,
 	): Analysis;
 	latticeMask(analysis: Analysis, value: CoreValueId): number;
+	recordReads(fn: CoreFunctionStore): ReadonlyMap<CoreInstructionId, CoreRecordFieldRead>;
 	returnRecord(
 		program: CoreProgram,
 		fn: CoreFunctionStore,
@@ -2206,6 +2211,10 @@ export class CoreProgramFlowEngine {
 			CoreFunctionId,
 			ReadonlyMap<CoreInstructionId, ReturnType<Targets["outgoing"]>[number]>
 		>();
+		const recordReadIndices = new Map<
+			CoreFunctionId,
+			ReadonlyMap<CoreInstructionId, CoreRecordFieldRead>
+		>();
 		let aggregateRecomputations = 0;
 		let exactReverseCallerVisits = 0;
 		let wildcardReverseCallerVisits = 0;
@@ -2356,6 +2365,34 @@ export class CoreProgramFlowEngine {
 						byInstruction = new Map(sites.map((site) => [site.instruction, site]));
 						callSiteIndices.set(functionId, byInstruction);
 					}
+					let recordReads = recordReadIndices.get(functionId);
+					if (recordReads === undefined) {
+						recordReads = semantics.recordReads(fn);
+						recordReadIndices.set(functionId, recordReads);
+					}
+					const returnedRecords = new Map<CoreInstructionId, CoreRecordValueKind>();
+					const recordResult = (instruction: CoreInstructionId): CoreRecordValueKind => {
+						if (returnedRecords.has(instruction)) return returnedRecords.get(instruction);
+						const site = byInstruction.get(instruction);
+						if (
+							site === undefined ||
+							site.targets.opaque ||
+							site.targets.anyScript ||
+							site.targets.functions.length === 0
+						)
+							return undefined;
+						let record: CoreRecordValueKind = null;
+						for (const callee of site.targets.functions) {
+							const returned = summaries.get(callee)!;
+							record = joinCoreRecordValueKinds(
+								record,
+								returned.returnKind === 0 ? null : returned.returnRecord,
+							);
+							if (record === undefined) break;
+						}
+						returnedRecords.set(instruction, record);
+						return record;
+					};
 					const cfg = controlFlow(functionId);
 					let demandedValues = demands.get(functionId);
 					if (demandedValues === undefined) {
@@ -2390,7 +2427,15 @@ export class CoreProgramFlowEngine {
 						receiverMask: summary.receiverKind,
 						operationResultMask(instruction) {
 							const site = byInstruction.get(instruction);
-							if (site === undefined) return undefined;
+							if (site === undefined) {
+								const read = recordReads.get(instruction);
+								if (read === undefined) return undefined;
+								return coreRecordFieldReadKind(
+									read,
+									recordResult(read.producer),
+									semantics.top,
+								);
+							}
 							if (
 								site.targets.opaque ||
 								(!targets.sourceClosed && site.targets.anyScript)
@@ -2427,26 +2472,7 @@ export class CoreProgramFlowEngine {
 					const returnRecord =
 						returnKind === 0
 							? undefined
-							: semantics.returnRecord(this.#program, fn, cfg, values, (instruction) => {
-									const site = byInstruction.get(instruction);
-									if (
-										site === undefined ||
-										site.targets.opaque ||
-										site.targets.anyScript ||
-										site.targets.functions.length === 0
-									)
-										return undefined;
-									let record: CoreRecordValueKind = null;
-									for (const callee of site.targets.functions) {
-										const returned = summaries.get(callee)!;
-										record = joinCoreRecordValueKinds(
-											record,
-											returned.returnKind === 0 ? null : returned.returnRecord,
-										);
-										if (record === undefined) break;
-									}
-									return record;
-								});
+							: semantics.returnRecord(this.#program, fn, cfg, values, recordResult);
 					if (
 						returnKind !== summary.returnKind ||
 						!sameCoreRecordValueKind(returnRecord, summary.returnRecord)

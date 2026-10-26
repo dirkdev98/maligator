@@ -19,6 +19,7 @@ import { isStringCollationPlan } from "../shared/string-collation-plan.ts";
 import type { CoreCompilationContext } from "./core-compilation.ts";
 import {
 	CORE_CALL_RESULT_KIND_ATTRIBUTE,
+	CORE_RECORD_FIELD_KIND_ATTRIBUTE,
 	CORE_CALL_RESULT_INTEGER_RANGE_ATTRIBUTE,
 	CORE_EXACT_SCALAR_AFTER_TDZ_ATTRIBUTE,
 } from "./core-internal-attributes.ts";
@@ -412,6 +413,16 @@ function verifyInstructionRows(
 					!compilerValueKindMaskIsValid(callKind))
 			)
 				fail("Invalid call result kind proof");
+			const fieldKind = attributes[CORE_RECORD_FIELD_KIND_ATTRIBUTE];
+			if (
+				fieldKind !== undefined &&
+				((descriptor.opcode !== "loadProperty" &&
+					descriptor.opcode !== "loadPropertyStatic") ||
+					resultCount !== 1 ||
+					typeof fieldKind !== "number" ||
+					!compilerValueKindMaskIsValid(fieldKind))
+			)
+				fail("Invalid record field kind proof");
 			const callRange = attributes[CORE_CALL_RESULT_INTEGER_RANGE_ATTRIBUTE];
 			if (
 				callRange !== undefined &&

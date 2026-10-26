@@ -34,9 +34,15 @@ returned literals. The existing call worklist joins common own keys, propagates
 field-only changes through finite targets and recursive forwarding, and keeps an
 empty normal-return set distinct from unknown fields. Mutated or escaped producers
 withdraw that contract. Missing keys do not prove undefined, since prototypes may
-supply them. These summaries do not yet change record layouts or property-load
-representations: a consumer must establish mutation and escape validity at the
-read before using an initial field kind.
+supply them. Read-only call results project these fields through the same worklist,
+including parameter/returned-field cycles. The consumer follows aliases and rejects writes,
+escapes, dynamic keys and handler transport. Every read key must be own: an inherited
+getter could publish or mutate the receiver before a later read. Proven masks are
+published independently of effects at the normal-result boundary, so local scalar
+selection and native variants consume them without dropping coercion, completion
+or GC behavior. Partial field unions stay boxed and reach C predicates. Typed
+record layouts and point-sensitive proofs for mutating or escaping records remain
+unfinished.
 
 Constants and source resources are finalized jointly over both targets; a
 constant used only by the native body must survive compaction. Captures, profiling

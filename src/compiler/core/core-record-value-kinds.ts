@@ -180,3 +180,126 @@ export function coreReturnedRecordKinds(
 	}
 	return result;
 }
+
+export interface CoreRecordFieldRead {
+	readonly producer: CoreInstructionId;
+	readonly key: number;
+	/** Every read must be own: a prototype getter could publish or mutate the record. */
+	readonly requiredKeys: ReadonlyArray<number>;
+}
+
+export function coreRecordFieldReadKind(
+	read: CoreRecordFieldRead,
+	record: CoreRecordValueKind,
+	top: number,
+): number {
+	if (record === null) return 0;
+	if (
+		record === undefined ||
+		read.requiredKeys.some((key) => !record.some((field) => field.key === key))
+	)
+		return top;
+	return record.find((field) => field.key === read.key)!.mask;
+}
+
+interface CoreRecordFieldReadIndex {
+	readonly featureVersion: number;
+	readonly reads: ReadonlyMap<CoreInstructionId, CoreRecordFieldRead>;
+}
+
+const recordFieldReadIndices = new WeakMap<CoreFunctionStore, CoreRecordFieldReadIndex>();
+
+export function coreReadOnlyRecordFields(
+	fn: CoreFunctionStore,
+): ReadonlyMap<CoreInstructionId, CoreRecordFieldRead> {
+	// Edits are visible before their body/control-flow versions advance at commit.
+	const featureVersion = fn.hasActiveEditor ? undefined : fn.featureVersion;
+	const cached = recordFieldReadIndices.get(fn);
+	if (featureVersion !== undefined && cached?.featureVersion === featureVersion)
+		return cached.reads;
+	const result = new Map<CoreInstructionId, CoreRecordFieldRead>();
+	for (const producer of fn.instructionIds()) {
+		if (
+			fn.instructionKind(producer) !== "operation" ||
+			fn.kernel.instructionResultCount(producer) !== 1
+		)
+			continue;
+		const completion = fn.registry.byId(fn.instructionOpcode(producer)).callTransfer
+			?.result;
+		if (completion !== "call-completion" && completion !== "construct-completion")
+			continue;
+		const pending = [fn.kernel.resultAt(fn.kernel.instructionResultStart(producer))];
+		const seen = new Set<CoreValueId>();
+		const reads = new Map<CoreInstructionId, number>();
+		let valid = true;
+		while (pending.length > 0 && valid) {
+			const value = pending.pop()!;
+			if (seen.has(value)) continue;
+			seen.add(value);
+			if (fn.kernel.valueHandlerUseCount(value) > 0) {
+				valid = false;
+				break;
+			}
+			for (
+				let use = fn.kernel.valueFirstUse(value);
+				use >= 0;
+				use = fn.kernel.useNext(use)
+			) {
+				if (fn.kernel.useLive(use) === 0) continue;
+				const instruction = fn.kernel.useInstruction(use);
+				if (fn.instructionKind(instruction) !== "operation") {
+					valid = false;
+					break;
+				}
+				const opcode = fn.instructionOpcodeName(instruction);
+				const operator = fn.instructionAttributes(instruction).operator;
+				if (
+					[
+						"rootUse",
+						"throwIfTdz",
+						"requireCoercible",
+						"typeofCompare",
+						"isEmpty",
+					].includes(opcode) ||
+					(opcode === "unary" && (operator === "!" || operator === "typeof")) ||
+					(opcode === "binary" && (operator === "===" || operator === "!=="))
+				)
+					continue;
+				if (opcode === "move") {
+					pending.push(fn.kernel.resultAt(fn.kernel.instructionResultStart(instruction)));
+					continue;
+				}
+				let key =
+					opcode === "loadPropertyStatic"
+						? fn.instructionAttributes(instruction).stringIndex
+						: undefined;
+				if (
+					opcode === "loadProperty" &&
+					fn.kernel.instructionOperandCount(instruction) === 2
+				) {
+					const literal = coreReturnedValueDefinition(
+						fn,
+						fn.kernel.operandAt(fn.kernel.instructionOperandStart(instruction) + 1),
+					);
+					if (
+						literal !== undefined &&
+						fn.instructionOpcodeName(literal) === "createString"
+					)
+						key = fn.instructionAttributes(literal).stringIndex;
+				}
+				if (fn.kernel.useOperand(use) !== 0 || typeof key !== "number") {
+					valid = false;
+					break;
+				}
+				reads.set(instruction, key);
+			}
+		}
+		if (!valid || reads.size === 0) continue;
+		const requiredKeys = Object.freeze([...new Set(reads.values())]);
+		for (const [instruction, key] of reads)
+			result.set(instruction, Object.freeze({ producer, key, requiredKeys }));
+	}
+	if (featureVersion !== undefined)
+		recordFieldReadIndices.set(fn, { featureVersion, reads: result });
+	return result;
+}

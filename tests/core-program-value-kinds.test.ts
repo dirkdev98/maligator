@@ -395,10 +395,10 @@ globalThis.result = isNumber();`;
 				},
 			},
 		);
-		const constants = coreOperations(coreFunctionNamed(optimized!, "isNumber")!).filter(
-			({ opcode }) => opcode === "createBoolean",
-		);
-		expect(constants).toEqual([]);
+		const operations = coreOperations(coreFunctionNamed(optimized!, "isNumber")!);
+		const constants = operations.filter(({ opcode }) => opcode === "createBoolean");
+		expect(constants.map(({ attributes }) => attributes.value)).toEqual([false]);
+		expect(operations.some(({ opcode }) => opcode === "typeofCompare")).toBe(false);
 	});
 
 	it("keeps parameter observations when open-world callers may add other kinds", () => {

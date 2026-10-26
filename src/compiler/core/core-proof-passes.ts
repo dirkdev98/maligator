@@ -6,6 +6,7 @@ import {
 import { effectSummariesEqual } from "../shared/effect-summary.ts";
 import { scalarBuiltinInvocationEffects } from "../shared/scalar-builtin-effects.ts";
 import { CoreEditor } from "./core-editor.ts";
+import { CORE_RECORD_FIELD_KIND_ATTRIBUTE } from "./core-internal-attributes.ts";
 import {
 	CORE_CONTROL_FLOW_BUNDLE_ANALYSIS,
 	coreValueControlFlowUseMask,
@@ -817,6 +818,9 @@ function scalarProducer(fn: CoreFunctionStore, instruction: CoreInstructionId): 
 		fn.registry.byId(fn.instructionOpcode(instruction)).callTransfer?.result ===
 			"call-completion" ||
 		SCALAR_PRODUCERS.has(opcode) ||
+		((opcode === "loadProperty" || opcode === "loadPropertyStatic") &&
+			fn.instructionAttributes(instruction)[CORE_RECORD_FIELD_KIND_ATTRIBUTE] !==
+				undefined) ||
 		(opcode === "loadProperty" &&
 			fn.instructionAttributes(instruction).containedFixedTypedArrayInBounds === true) ||
 		(opcode === "loadPropertyStatic" &&
