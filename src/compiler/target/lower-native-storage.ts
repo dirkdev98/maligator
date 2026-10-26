@@ -2243,7 +2243,7 @@ export function validateNativeStorage(
 				const expected = selected.stringComparisons[index]!;
 				return (
 					plan.instructionIp !== expected.instructionIp ||
-					plan.register !== expected.register ||
+					plan.operand !== expected.operand ||
 					plan.length !== expected.length ||
 					plan.kind !== expected.kind
 				);

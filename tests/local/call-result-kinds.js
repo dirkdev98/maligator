@@ -198,6 +198,16 @@ function looseEquality(value, other) {
 		":" + value != other,
 	].join(",");
 }
+function literalEquality(value, flag) {
+	const text = flag ? "ready" : "other";
+	return [
+		Object.is(value, "ready"),
+		Object.is("ready", value),
+		Object.is(value, text),
+		Object.is(":" + value, ":ready"),
+		Object.is(value, "\ud83d\ude00"),
+	].join(",");
+}
 function identityEquality(value, other) {
 	if (typeof value === "object" || typeof value === "symbol")
 		return [value === other, value !== other, Object.is(value, other)].join(",");
@@ -310,6 +320,7 @@ globalThis.identityTextPrefix = identityTextPrefix;
 globalThis.identitySame = identitySame;
 globalThis.identityDisjoint = identityDisjoint;
 globalThis.partialEquality = partialEquality;
+globalThis.literalEquality = literalEquality;
 globalThis.looseEquality = looseEquality;
 globalThis.identityEquality = identityEquality;
 globalThis.identityStrict = identityStrict;
@@ -469,6 +480,30 @@ for (const text of ["x".repeat(256), "😀é\0".repeat(64)]) {
 	const other = (":" + text + "z").slice(0, -1);
 	console.log(capture(() => partialEquality(text, other)));
 }
+for (const value of [
+	"ready",
+	"other",
+	"read",
+	"readys",
+	["rea", "dy"].join(""),
+	"\ud83d\ude00",
+	new String("ready"),
+	0,
+	-0,
+	NaN,
+	null,
+	undefined,
+	1n,
+	Symbol(),
+	{
+		toString() {
+			collectGarbage();
+			return "ready";
+		},
+	},
+])
+	for (const flag of [false, true])
+		console.log(capture(() => literalEquality(value, flag)));
 for (const value of [
 	0, -0, -1, 255, 65536, 2147483647, 2147483648, 4294967295, 4294967296, 9007199254740991,
 ]) {

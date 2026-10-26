@@ -128,6 +128,8 @@ The independent target boundary and current storage contract are recorded in
       signed-zero handling still required by the unbounded operand.
       Strict equality and SameValue now share partial kind and scalar consumers;
       noncoercing comparisons can form expressions within their root-safe windows.
+      Immediate and joined literal lengths also select SameValue String kernels
+      across full, delayed, frameless and resumable paths, including guarded hits.
 - [ ] Give record entries typed fields. Record entries return fields boxed, so a
       caller's `token.end` stays boxed, `index = token.end + 1` gives the producer a
       boxed parameter, and the scanning loop in `returned-records` runs generic

@@ -141,6 +141,7 @@ import {
 } from "./native-source-map.ts";
 import type { NativeSourceRange } from "./native-source-map.ts";
 import type { NativeSpanConsumer } from "./native-span-continuation.ts";
+import { nativeStringComparisonExpression } from "./native-string-comparisons.ts";
 import type { NativeStringComparisonPlan } from "./native-string-comparisons.ts";
 import { nativeValueConversion } from "./native-value-transport.ts";
 import type { NativeValueConversion } from "./native-value-transport.ts";
@@ -3847,25 +3848,31 @@ function renderScalarExpression(
 			};
 			return booleanResult(
 				op.dst,
-				nativeEqualityExpression(
-					"same-value",
+				nativeStringComparisonExpression(
+					stringComparison,
+					op.arguments[0]!,
 					value(a),
 					value(b),
-					kindOf(a),
-					kindOf(b),
-					scalarOf(a),
-					scalarOf(b),
-					a.kind === "register" &&
-						b.kind === "register" &&
-						reps[a.register] === "int32" &&
-						reps[b.register] === "int32",
-					a.kind === "register"
-						? instructionInputIntegerRange(facts, a.register)
-						: undefined,
-					b.kind === "register"
-						? instructionInputIntegerRange(facts, b.register)
-						: undefined,
-				),
+				) ??
+					nativeEqualityExpression(
+						"same-value",
+						value(a),
+						value(b),
+						kindOf(a),
+						kindOf(b),
+						scalarOf(a),
+						scalarOf(b),
+						a.kind === "register" &&
+							b.kind === "register" &&
+							reps[a.register] === "int32" &&
+							reps[b.register] === "int32",
+						a.kind === "register"
+							? instructionInputIntegerRange(facts, a.register)
+							: undefined,
+						b.kind === "register"
+							? instructionInputIntegerRange(facts, b.register)
+							: undefined,
+					),
 			);
 		}
 		case "UNARY": {
@@ -3901,24 +3908,25 @@ function renderScalarExpression(
 			);
 			if (compared !== undefined) return booleanResult(op.dst, String(compared));
 			if (op.operator === "===" || op.operator === "!==") {
-				const constant = stringComparison;
 				const equal =
-					constant === undefined
-						? nativeEqualityExpression(
-								"strict",
-								boxed(op.left),
-								boxed(op.right),
-								kind(op.left),
-								kind(op.right),
-								scalar(op.left),
-								scalar(op.right),
-								reps[op.left] === "int32" && reps[op.right] === "int32",
-								instructionInputIntegerRange(facts, op.left),
-								instructionInputIntegerRange(facts, op.right),
-							)
-						: constant.kind === "strings"
-							? `mal_string_equals_constant_length(mal_value_to_string(${boxed(constant.register === op.right ? op.left : op.right)}), mal_value_to_string(${boxed(constant.register)}), ${constant.length})`
-							: `mal_ops_strict_equal_string_constant(${boxed(constant.register === op.right ? op.left : op.right)}, ${boxed(constant.register)}, ${constant.length})`;
+					nativeStringComparisonExpression(
+						stringComparison,
+						op.left,
+						boxed(op.left),
+						boxed(op.right),
+					) ??
+					nativeEqualityExpression(
+						"strict",
+						boxed(op.left),
+						boxed(op.right),
+						kind(op.left),
+						kind(op.right),
+						scalar(op.left),
+						scalar(op.right),
+						reps[op.left] === "int32" && reps[op.right] === "int32",
+						instructionInputIntegerRange(facts, op.left),
+						instructionInputIntegerRange(facts, op.right),
+					);
 				return booleanResult(op.dst, op.operator === "!==" ? `!(${equal})` : equal);
 			}
 			if (op.left === op.right) {
@@ -12037,10 +12045,14 @@ function emitInstruction(
 			}
 			const stringComparison = context.stringComparisons?.get(ip);
 			if (stringComparison?.kind === "strings") {
-				const other = stringComparison.register === right ? left : right;
 				const equal = profileCall(
 					"string",
-					`mal_string_equals_constant_length(${nativeStringOperand(other, true)}, ${nativeStringOperand(stringComparison.register, true)}, ${stringComparison.length})`,
+					nativeStringComparisonExpression(
+						stringComparison,
+						left,
+						boxed(left),
+						boxed(right),
+					)!,
 				);
 				elideFramePosition();
 				return [storeBoolean(dst, operator === "!==" ? `!${equal}` : equal)];
@@ -12077,28 +12089,31 @@ function emitInstruction(
 				}
 			}
 			if (operator === "===" || operator === "!==") {
-				const constant = context.stringComparisons?.get(ip);
 				const equal =
-					constant === undefined
-						? nativeEqualityExpression(
-								"strict",
-								boxed(left),
-								boxed(right),
-								operandKind(left),
-								operandKind(right),
-								nativeNumberOperand(left) ??
-									nativeBooleanOperand(left) ??
-									nativeStringOperand(left) ??
-									undefined,
-								nativeNumberOperand(right) ??
-									nativeBooleanOperand(right) ??
-									nativeStringOperand(right) ??
-									undefined,
-								reps[left] === "int32" && reps[right] === "int32",
-								instructionInputIntegerRange(context.facts, left),
-								instructionInputIntegerRange(context.facts, right),
-							)
-						: `mal_ops_strict_equal_string_constant(${boxed(constant.register === right ? left : right)}, ${boxed(constant.register)}, ${constant.length})`;
+					nativeStringComparisonExpression(
+						stringComparison,
+						left,
+						boxed(left),
+						boxed(right),
+					) ??
+					nativeEqualityExpression(
+						"strict",
+						boxed(left),
+						boxed(right),
+						operandKind(left),
+						operandKind(right),
+						nativeNumberOperand(left) ??
+							nativeBooleanOperand(left) ??
+							nativeStringOperand(left) ??
+							undefined,
+						nativeNumberOperand(right) ??
+							nativeBooleanOperand(right) ??
+							nativeStringOperand(right) ??
+							undefined,
+						reps[left] === "int32" && reps[right] === "int32",
+						instructionInputIntegerRange(context.facts, left),
+						instructionInputIntegerRange(context.facts, right),
+					);
 				elideFramePosition();
 				return [storeBoolean(dst, operator === "!==" ? `!(${equal})` : equal)];
 			}
@@ -13228,35 +13243,41 @@ function emitInstruction(
 				return [
 					storeBoolean(
 						instruction.dst,
-						nativeEqualityExpression(
-							"same-value",
+						nativeStringComparisonExpression(
+							context.stringComparisons?.get(ip),
+							left!,
 							left === undefined ? "MAL_VALUE_UNDEFINED" : boxedOperand(left),
 							right === undefined ? "MAL_VALUE_UNDEFINED" : boxedOperand(right),
-							left === undefined ? COMPILER_VALUE_KIND_UNDEFINED : operandKind(left),
-							right === undefined ? COMPILER_VALUE_KIND_UNDEFINED : operandKind(right),
-							left === undefined
-								? undefined
-								: (nativeNumberOperand(left) ??
-										nativeBooleanOperand(left) ??
-										nativeStringOperand(left) ??
-										undefined),
-							right === undefined
-								? undefined
-								: (nativeNumberOperand(right) ??
-										nativeBooleanOperand(right) ??
-										nativeStringOperand(right) ??
-										undefined),
-							left !== undefined &&
-								right !== undefined &&
-								operandRep(left) === "int32" &&
-								operandRep(right) === "int32",
-							left === undefined
-								? undefined
-								: instructionInputIntegerRange(context.facts, left),
-							right === undefined
-								? undefined
-								: instructionInputIntegerRange(context.facts, right),
-						),
+						) ??
+							nativeEqualityExpression(
+								"same-value",
+								left === undefined ? "MAL_VALUE_UNDEFINED" : boxedOperand(left),
+								right === undefined ? "MAL_VALUE_UNDEFINED" : boxedOperand(right),
+								left === undefined ? COMPILER_VALUE_KIND_UNDEFINED : operandKind(left),
+								right === undefined ? COMPILER_VALUE_KIND_UNDEFINED : operandKind(right),
+								left === undefined
+									? undefined
+									: (nativeNumberOperand(left) ??
+											nativeBooleanOperand(left) ??
+											nativeStringOperand(left) ??
+											undefined),
+								right === undefined
+									? undefined
+									: (nativeNumberOperand(right) ??
+											nativeBooleanOperand(right) ??
+											nativeStringOperand(right) ??
+											undefined),
+								left !== undefined &&
+									right !== undefined &&
+									operandRep(left) === "int32" &&
+									operandRep(right) === "int32",
+								left === undefined
+									? undefined
+									: instructionInputIntegerRange(context.facts, left),
+								right === undefined
+									? undefined
+									: instructionInputIntegerRange(context.facts, right),
+							),
 					),
 				];
 			}
@@ -13715,35 +13736,42 @@ function emitInstruction(
 			const guardedBuiltinOperation = callPlan?.guardedBuiltinCall?.operation;
 			if (guardedBuiltinOperation === "Object.is") {
 				const [left, right] = args;
-				const test = nativeEqualityExpression(
-					"same-value",
-					left === undefined ? "MAL_VALUE_UNDEFINED" : boxedOperand(left),
-					right === undefined ? "MAL_VALUE_UNDEFINED" : boxedOperand(right),
-					left === undefined ? COMPILER_VALUE_KIND_UNDEFINED : operandKind(left),
-					right === undefined ? COMPILER_VALUE_KIND_UNDEFINED : operandKind(right),
-					left === undefined
-						? undefined
-						: (nativeNumberOperand(left) ??
-								nativeBooleanOperand(left) ??
-								nativeStringOperand(left) ??
-								undefined),
-					right === undefined
-						? undefined
-						: (nativeNumberOperand(right) ??
-								nativeBooleanOperand(right) ??
-								nativeStringOperand(right) ??
-								undefined),
-					left !== undefined &&
-						right !== undefined &&
-						operandRep(left) === "int32" &&
-						operandRep(right) === "int32",
-					left === undefined
-						? undefined
-						: instructionInputIntegerRange(context.facts, left),
-					right === undefined
-						? undefined
-						: instructionInputIntegerRange(context.facts, right),
-				);
+				const test =
+					nativeStringComparisonExpression(
+						context.stringComparisons?.get(ip),
+						left!,
+						left === undefined ? "MAL_VALUE_UNDEFINED" : boxedOperand(left),
+						right === undefined ? "MAL_VALUE_UNDEFINED" : boxedOperand(right),
+					) ??
+					nativeEqualityExpression(
+						"same-value",
+						left === undefined ? "MAL_VALUE_UNDEFINED" : boxedOperand(left),
+						right === undefined ? "MAL_VALUE_UNDEFINED" : boxedOperand(right),
+						left === undefined ? COMPILER_VALUE_KIND_UNDEFINED : operandKind(left),
+						right === undefined ? COMPILER_VALUE_KIND_UNDEFINED : operandKind(right),
+						left === undefined
+							? undefined
+							: (nativeNumberOperand(left) ??
+									nativeBooleanOperand(left) ??
+									nativeStringOperand(left) ??
+									undefined),
+						right === undefined
+							? undefined
+							: (nativeNumberOperand(right) ??
+									nativeBooleanOperand(right) ??
+									nativeStringOperand(right) ??
+									undefined),
+						left !== undefined &&
+							right !== undefined &&
+							operandRep(left) === "int32" &&
+							operandRep(right) === "int32",
+						left === undefined
+							? undefined
+							: instructionInputIntegerRange(context.facts, left),
+						right === undefined
+							? undefined
+							: instructionInputIntegerRange(context.facts, right),
+					);
 				return [
 					`if (mal_builtin_object_is_callee_matches(${boxedOperand(instruction.callee)})) {`,
 					storeBoolean(instruction.dst, test),

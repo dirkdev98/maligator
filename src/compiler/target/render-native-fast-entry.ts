@@ -35,6 +35,7 @@ import {
 	shiftNativeSourceRanges,
 } from "./native-source-map.ts";
 import type { NativeSourceRange } from "./native-source-map.ts";
+import { nativeStringComparisonExpression } from "./native-string-comparisons.ts";
 import type { NativeStringComparisonPlan } from "./native-string-comparisons.ts";
 import type {
 	NativeDirectEntryPlan,
@@ -579,24 +580,25 @@ function fastBinary(
 			return `f${dst} = mal_value_new_boolean(${expression});`;
 	}
 	if (operator === "===" || operator === "!==") {
-		const constant = values.stringComparison;
 		const equal =
-			constant === undefined
-				? nativeEqualityExpression(
-						"strict",
-						`f${left}`,
-						`f${right}`,
-						values.kind(left),
-						values.kind(right),
-						equalityScalar(values, left, `f${left}`),
-						equalityScalar(values, right, `f${right}`),
-						values.isInt32(left) && values.isInt32(right),
-						values.range(left),
-						values.range(right),
-					)
-				: constant.kind === "strings"
-					? `mal_string_equals_constant_length(mal_value_to_string(f${constant.register === right ? left : right}), mal_value_to_string(f${constant.register}), ${constant.length})`
-					: `mal_ops_strict_equal_string_constant(f${constant.register === right ? left : right}, f${constant.register}, ${constant.length})`;
+			nativeStringComparisonExpression(
+				values.stringComparison,
+				left,
+				`f${left}`,
+				`f${right}`,
+			) ??
+			nativeEqualityExpression(
+				"strict",
+				`f${left}`,
+				`f${right}`,
+				values.kind(left),
+				values.kind(right),
+				equalityScalar(values, left, `f${left}`),
+				equalityScalar(values, right, `f${right}`),
+				values.isInt32(left) && values.isInt32(right),
+				values.range(left),
+				values.range(right),
+			);
 		return `f${dst} = mal_value_new_boolean(${operator === "!==" ? `!(${equal})` : equal});`;
 	}
 	if (operator === "==" || operator === "!=") {
@@ -916,6 +918,8 @@ function fastSameValue(
 	const a = left === undefined ? "MAL_VALUE_UNDEFINED" : value(left);
 	const b = right === undefined ? "MAL_VALUE_UNDEFINED" : value(right);
 	if (a === undefined || b === undefined) return undefined;
+	const constant = nativeStringComparisonExpression(values.stringComparison, left!, a, b);
+	if (constant !== undefined) return constant;
 	return nativeEqualityExpression(
 		"same-value",
 		a,

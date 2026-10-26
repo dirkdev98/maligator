@@ -56,10 +56,74 @@ function joined(alternative: number) {
 }
 
 describe("planned String comparison lengths", () => {
+	it.each([
+		'function target(value){return Object.is(value,"ready");}',
+		'function target(value){return Object.is("ready",value);}',
+		'function target(value,flag){const text=flag?"ready":"other";return Object.is(value,text);}',
+		'function target(value){return Object.is(":"+value,"ready");}',
+		'function* target(value){yield 0;return Object.is(value,"ready");}',
+		'function target(value){return Object.is(value,"ready")?1:2;}',
+	])("uses validated lengths in SameValue entries for %s", (definition) => {
+		for (const locked of [false, true]) {
+			const out = inspectStaticValueFunction(
+				`${definition}globalThis.target=target;`,
+				"target",
+				{ locked },
+			);
+			expect(out.native.storage!.stringComparisons).toContainEqual(
+				expect.objectContaining({ length: 5 }),
+			);
+			expect(out.c.source).toMatch(
+				/mal_(?:ops_strict_equal_string_constant|string_equals_constant_length)\(/,
+			);
+			expect(out.c.source).not.toContain("mal_ops_same_value(");
+			if (!locked) {
+				expect(out.c.source).toContain("mal_builtin_object_is_callee_matches(");
+				expect(out.c.source).toContain("mal_vm_call_cached(");
+			}
+			const restored = deserializeCompilerArtifact(serializeCompilerArtifact(out.image));
+			expect(
+				restored.native.functions[out.native.functionIndex]!.storage!.stringComparisons,
+			).toEqual(out.native.storage!.stringComparisons);
+			expect(() =>
+				validateNativeStorage(
+					{
+						...out.native,
+						storage: {
+							...out.native.storage!,
+							stringComparisons: out.native.storage!.stringComparisons.map((plan) => ({
+								...plan,
+								operand: 0,
+							})),
+						},
+					},
+					new Map(),
+					out.image.runtime.stringConstants,
+				),
+			).toThrow();
+		}
+	});
+	it.each([
+		"function target(value){return Object.is(value);}",
+		"function target(values){return Object.is(...values);}",
+		'function target(value){return new Object.is(value,"ready");}',
+		'function target(value){return Object.is(+value,"ready");}',
+		'function target(value){return other(value,"ready");}',
+	])("keeps inapplicable SameValue lengths out of %s", (definition) => {
+		for (const locked of [false, true]) {
+			const out = inspectStaticValueFunction(
+				`${definition}globalThis.target=target;`,
+				"target",
+				{ locked },
+			);
+			expect(out.native.storage!.stringComparisons).toEqual([]);
+		}
+	});
+
 	it("joins equal UTF-16 lengths through different literals and a copy", () => {
 		const native = joined(2);
 		expect(native.storage!.stringComparisons).toEqual([
-			{ instructionIp: 6, register: 3, length: 5, kind: "boxed" },
+			{ instructionIp: 6, operand: 3, length: 5, kind: "boxed" },
 		]);
 		expect(() => validateNativeStorage(native, new Map(), strings)).not.toThrow();
 		const c = emitCompiledFunction(native, 0, "", false)!.source;
@@ -81,7 +145,7 @@ describe("planned String comparison lengths", () => {
 			{ opcode: "RETURN", value: 4 },
 		]);
 		expect(native.storage!.stringComparisons).toEqual([
-			{ instructionIp: 2, register: 3, length: 5, kind: "boxed" },
+			{ instructionIp: 2, operand: 3, length: 5, kind: "boxed" },
 		]);
 		const emitted = emitCompiledFunction(native, 0, "", false)!.source;
 		expect(emitted).toContain("mal_vm_op_to_property_key(");
@@ -99,7 +163,7 @@ describe("planned String comparison lengths", () => {
 		]);
 		expect(native.storage!.controlFlow?.unreachableIps).toContain(2);
 		expect(native.storage!.stringComparisons).toEqual([
-			{ instructionIp: 5, register: 3, length: 5, kind: "boxed" },
+			{ instructionIp: 5, operand: 3, length: 5, kind: "boxed" },
 		]);
 	});
 	it("rejects a parameter whose literal assignment can be bypassed", () => {
@@ -135,7 +199,7 @@ describe("planned String comparison lengths", () => {
 		]);
 		expect(native.storage!.stringComparisons).toContainEqual({
 			instructionIp: 1,
-			register: 2,
+			operand: 2,
 			length: 5,
 			kind: "boxed",
 		});
@@ -157,7 +221,7 @@ describe("planned String comparison lengths", () => {
 					storage: {
 						...native.storage!,
 						stringComparisons: [
-							{ instructionIp: 6, register: 3, length: 4, kind: "boxed" },
+							{ instructionIp: 6, operand: 3, length: 4, kind: "boxed" },
 						],
 					},
 				},

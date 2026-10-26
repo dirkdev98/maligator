@@ -37,6 +37,26 @@ function partialObject(left, right) {
 function partialWord(left, right) {
 	return Object.is(left ? null : false, right);
 }
+function literalRight(value) {
+	return Object.is(value, "ready");
+}
+function literalLeft(value) {
+	return Object.is("ready", value);
+}
+function literalJoined(value, flag) {
+	const text = flag ? "ready" : "other";
+	return Object.is(value, text);
+}
+function literalString(value) {
+	return Object.is(":" + value, ":ready");
+}
+function literalExtra(value, effect) {
+	return Object.is(value, "ready", effect());
+}
+function* literalSuspended(value) {
+	yield 0;
+	return Object.is(value, "ready");
+}
 function positiveLeft(left, right) {
 	return Object.is((left >>> 0) + 1, +right);
 }
@@ -90,6 +110,12 @@ Object.assign(globalThis, {
 	partialBigint,
 	partialObject,
 	partialWord,
+	literalRight,
+	literalLeft,
+	literalJoined,
+	literalString,
+	literalExtra,
+	literalSuspended,
 	missing,
 	one,
 	extra,
@@ -188,6 +214,30 @@ for (const left of values) {
 }
 check(missing(), "two missing arguments");
 check(coercions === 0, "SameValue never coerces");
+for (const value of [
+	...values,
+	"ready",
+	"other",
+	"read",
+	"readys",
+	["rea", "dy"].join(""),
+	new String("ready"),
+	"\ud83d\ude00",
+]) {
+	check(literalRight(value) === original(value, "ready"), "literal right length");
+	check(literalLeft(value) === original("ready", value), "literal left length");
+	for (const flag of [false, true])
+		check(
+			literalJoined(value, flag) === original(value, flag ? "ready" : "other"),
+			"joined literal length",
+		);
+	const iterator = literalSuspended(value);
+	check(iterator.next().value === 0, "literal suspension");
+	if (typeof gc === "function") gc();
+	check(iterator.next().value === original(value, "ready"), "resumed literal length");
+}
+check(literalString("ready") && !literalString("other"), "two String lengths");
+check(coercions === 0, "literal comparisons never coerce");
 
 const marker = {};
 let events = [];
@@ -210,6 +260,16 @@ try {
 		"captured callee survives argument mutation",
 	);
 	check(events.join() === "get,extra", "lookup precedes extra argument");
+	originalObject.defineProperty(originalObject, "is", {
+		...descriptor,
+		value: original,
+	});
+	check(
+		literalExtra("ready", () => {
+			originalObject.is = () => marker;
+		}) === true,
+		"literal plan uses callee captured before extra argument",
+	);
 	for (const result of [marker, null, 0, 1n, Symbol(), undefined, "changed"]) {
 		originalObject.is = function () {
 			check(this === originalObject, "replacement receiver");
@@ -226,6 +286,10 @@ try {
 			partialBigint,
 			partialObject,
 			partialWord,
+			literalRight,
+			literalLeft,
+			literalJoined,
+			literalString,
 			positiveLeft,
 			positiveRight,
 			widePair,
@@ -294,6 +358,10 @@ try {
 	originalObject.is = () => marker;
 	if (typeof gc === "function") gc();
 	check(iterator.next(NaN).value === true, "captured callee survives suspension");
+	const literalIterator = literalSuspended("ready");
+	check(literalIterator.next().value === 0, "fallback literal suspension");
+	if (typeof gc === "function") gc();
+	check(literalIterator.next().value === marker, "resumed literal fallback result");
 	originalObject.is = () => {
 		throw marker;
 	};
