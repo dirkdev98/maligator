@@ -348,8 +348,15 @@ describe("emit-program-image instruction packing", () => {
 			{ compiled: true },
 			image.runtime.functions.length,
 		);
+		const standalone = emitProgramImage(image, { compiled: true });
+		for (const name of ["caller", "middle", "later"])
+			expect(standalone).toMatch(
+				new RegExp(
+					`\\bbool mal_compiled_${namedFunctionIndex(image, name)}_try\\([^\\n]+\\) \\{`,
+				),
+			);
 		for (const sources of [
-			[emitProgramImage(image, { compiled: true })],
+			[standalone],
 			[emitBatch([image], { compiled: true })],
 			[shared.body, shared.shared],
 			emitProgramTranslationUnitSources(image, { compiled: true }),

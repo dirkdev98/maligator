@@ -1093,7 +1093,10 @@ function emitNativeFunctions(
 		for (const functionIndex of site.functions)
 			(closureParticipation[functionIndex] ??= []).push(key);
 	const cached: Array<{ key: string; emitted: CompiledFunction | null } | undefined> = [];
-	const renderFunction = createNativeFunctionRenderer();
+	const fastTryLookups: Array<Set<number> | undefined> = [];
+	const renderFunction = createNativeFunctionRenderer((caller, target) => {
+		(fastTryLookups[caller] ??= new Set()).add(target);
+	});
 	const strictCompiledTargets = new Set(
 		image.runtime.functions.flatMap((fn, index) => (fn.strict ? [index] : [])),
 	);
@@ -1111,6 +1114,7 @@ function emitNativeFunctions(
 		availability: NativeCompilationAvailability,
 	): CompiledFunction | null => {
 		if (!options.useCompiled) return null;
+		fastTryLookups[functionIndex]?.clear();
 		const emitted = renderFunction(
 			image.native.functions[functionIndex]!,
 			functionIndex,
@@ -1167,18 +1171,14 @@ function emitNativeFunctions(
 		};
 	};
 
-	const emit = (
+	const availabilityKey = (
 		functionIndex: number,
 		availability: NativeCompilationAvailability,
-	): CompiledFunction | null => {
+	): string => {
 		const referenced = references[functionIndex]!;
 		let key = "";
 		for (const target of referenced.targets)
-			key += availability.fastTryTargets.has(target)
-				? "2"
-				: availability.directCompiledTargets.has(target)
-					? "1"
-					: "0";
+			key += availability.directCompiledTargets.has(target) ? "1" : "0";
 		for (const entry of referenced.entries)
 			key += availability.directCompiledEntries.get(entry)?.leaf
 				? "2"
@@ -1187,10 +1187,24 @@ function emitNativeFunctions(
 					: "0";
 		for (const closure of closureParticipation[functionIndex] ?? [])
 			key += availability.directClosures.has(closure) ? "1" : "0";
+		key += ":";
+		for (const target of fastTryLookups[functionIndex] ?? [])
+			key += availability.fastTryTargets.has(target) ? "1" : "0";
+		return key;
+	};
+	const emit = (
+		functionIndex: number,
+		availability: NativeCompilationAvailability,
+	): CompiledFunction | null => {
+		const key = availabilityKey(functionIndex, availability);
 		const previous = cached[functionIndex];
 		if (previous?.key === key) return previous.emitted;
 		const emitted = render(functionIndex, availability);
-		cached[functionIndex] = { key, emitted };
+		// Fast admission can discover more callees after an earlier one becomes available.
+		cached[functionIndex] = {
+			key: availabilityKey(functionIndex, availability),
+			emitted,
+		};
 		return emitted;
 	};
 

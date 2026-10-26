@@ -2580,6 +2580,7 @@ function emitCompiledVariant(
 	splitPolicy: NativeSplitPolicy = DEFAULT_NATIVE_SPLIT_POLICY,
 	fastTryTargets: ReadonlySet<number> = new Set(),
 	directClosures: ReadonlyMap<string, NativeDirectClosureEnvironment> = new Map(),
+	onFastTryLookup?: (target: number) => void,
 ): CompiledFunction | null {
 	// Generators and async functions suspend mid-body: they lower to a resumable C
 	// function (a heap register frame + entry dispatch to the saved resume point)
@@ -3495,6 +3496,7 @@ function emitCompiledVariant(
 					calleeTry: (ip, callee) => {
 						const plan = nativeContract.instructions[ip];
 						const target = plan?.kind === "call" ? plan.directFunctionIndex : undefined;
+						if (target !== undefined) onFastTryLookup?.(target);
 						return target !== undefined && fastTryTargets.has(target)
 							? {
 									symbol: `mal_compiled_${relocation.stem(target)}${suffix}_try`,
@@ -4193,7 +4195,10 @@ export function emitCompiledFunction(
 }
 
 // The image is immutable during one emission; a fresh renderer rechecks later image mutations.
-export function createNativeFunctionRenderer(): typeof emitCompiledFunction {
+// Lookups include missing callees that can block fast admission.
+export function createNativeFunctionRenderer(
+	onFastTryLookup?: (caller: number, target: number) => void,
+): typeof emitCompiledFunction {
 	const analyses = new Map<
 		number,
 		{
@@ -4255,6 +4260,9 @@ export function createNativeFunctionRenderer(): typeof emitCompiledFunction {
 			reductionEntries,
 			fastTryTargets,
 			directClosures,
+			onFastTryLookup === undefined
+				? undefined
+				: (target) => onFastTryLookup(index, target),
 		);
 	};
 }
@@ -4279,6 +4287,7 @@ function renderCompiledFunction(
 	reductionEntries: ReadonlySet<string> = new Set(),
 	fastTryTargets: ReadonlySet<number> = new Set(),
 	directClosures: ReadonlyMap<string, NativeDirectClosureEnvironment> = new Map(),
+	onFastTryLookup?: (target: number) => void,
 ): CompiledFunction | null {
 	const fn = native.body;
 	const canonical = emitCompiledVariant(
@@ -4300,6 +4309,7 @@ function renderCompiledFunction(
 		splitPolicy,
 		fastTryTargets,
 		directClosures,
+		onFastTryLookup,
 	);
 	if (canonical === null) return null;
 	const name = relocatable === false ? index : relocatable.symbolStem;
@@ -4328,6 +4338,7 @@ function renderCompiledFunction(
 			splitPolicy,
 			fastTryTargets,
 			directClosures,
+			onFastTryLookup,
 		);
 		if (emitted === null) return [];
 		let leafSourceMap: ReadonlyArray<NativeSourceRange> = [];

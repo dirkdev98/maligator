@@ -103,7 +103,9 @@ The independent target boundary and current storage contract are recorded in
       starts from planned canonical entries, typed entries and private closure
       environments, withdrawing unavailable or oversized bodies before publishing
       C. Frameless paths still require a base proof, and cache identities include
-      the numeric-sort leaf contract independently of entry presence. Normal result-kind
+      the numeric-sort leaf contract independently of entry presence. Rendered
+      bodies subscribe only to fast-callee availability queried during admission,
+      including unavailable callees. Normal result-kind
       bounds from complete script callee sets now reach Core and native storage.
       Calls whose Number result depends on a guarded typed entry still need scalar
       transport along that admitted branch when the canonical result remains boxed.

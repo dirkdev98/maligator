@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { resolveBuildConfig } from "../src/build-config.ts";
+import { compileEntrypoint } from "../src/compiler/pipeline/compile-program.ts";
 import {
 	createNativeFunctionRenderer,
 	directCompiledEntryKey,
@@ -43,6 +45,53 @@ const cases = [
 ] as const;
 
 describe("native rendering analysis lifetime", () => {
+	it("reports unavailable fast callees so later availability can reopen admission", () => {
+		const image = compileEntrypoint(
+			new URL("./local/frameless-forward-call.js", import.meta.url).pathname,
+			{
+				buildConfig: resolveBuildConfig({
+					engine: { primordials: "locked", eval: false, realms: false },
+				}),
+				coreOptimizationBenchmarkAblation: { family: "inlining-cross-call" },
+			},
+		);
+		const native = image.native.functions.find(
+			(fn) =>
+				String.fromCharCode(
+					...(image.runtime.stringConstants[fn.body.nameStringIndex] ?? []),
+				) === "caller",
+		)!;
+		const target = native.instructions.find((plan) => plan?.kind === "call");
+		expect(target?.kind).toBe("call");
+		if (target?.kind !== "call" || target.directFunctionIndex === undefined)
+			throw new Error("Missing direct callee");
+		const callee = target.directFunctionIndex;
+		const lookups = new Set<string>();
+		const render = createNativeFunctionRenderer((caller, target) =>
+			lookups.add(`${caller}:${target}`),
+		);
+		const args: Parameters<typeof emitCompiledFunction> = [
+			native,
+			native.functionIndex,
+			"",
+			false,
+			"static",
+			new Set([callee]),
+			[],
+			new Map(),
+			false,
+			new Set(),
+			image.runtime.stringConstants,
+		];
+		for (const available of [false, true, false]) {
+			args[16] = available ? new Set([callee]) : new Set();
+			lookups.clear();
+			const emitted = render(...args);
+			expect(lookups).toEqual(new Set([`${native.functionIndex}:${callee}`]));
+			expect(emitted?.trySymbol !== undefined).toBe(available);
+		}
+	});
+
 	it.each(cases)(
 		"preserves fresh-render output across repeated %s emissions",
 		(name, source, regionKind) => {
